@@ -1,0 +1,39 @@
+{
+  "name": "cogent-engine",
+  "version": "1.0.0",
+  "description": "NPM package for compiling and deploying the CogentEngine LLM library with WASM.",
+  "main": "dist/esm/index.js",
+  "types": "dist/types/index.d.ts",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "default": "./dist/esm/index.js"
+    },
+    "./wasm/*": "./dist/wasm/*"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "clean": "node ./scripts/clean.mjs",
+    "build": "npm run build:wasm && npm run build:ts",
+    "rebuild": "npm run clean && npm run build",
+    "build:wasm": "node ./scripts/build-wasm.mjs",
+    "build:ts": "tsc -p tsconfig.json"
+  },
+  "keywords": [
+    "wasm",
+    "llm",
+    "emscripten",
+    "cogent"
+  ],
+  "author": "Constant",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "@types/node": "^20.10.0"
+  }
+}

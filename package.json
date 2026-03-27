@@ -1,0 +1,18 @@
+{
+  "name": "cogent-engine-monorepo",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build:package",
+    "build:package": "npm --workspace packages/cogent-engine run build",
+    "rebuild:package": "npm --workspace packages/cogent-engine run rebuild",
+    "clean:package": "npm --workspace packages/cogent-engine run clean",
+    "demo:install": "npm install --workspace apps/threejs",
+    "demo:dev": "npm run build:package && npm --workspace apps/threejs run dev",
+    "demo:build": "npm run build:package && npm --workspace apps/threejs run build"
+  }
+}

@@ -1,0 +1,100 @@
+:root {
+  font-family: "Space Grotesk", "Segoe UI", sans-serif;
+  color: #f0f4f8;
+  background: radial-gradient(circle at 20% 10%, #0e2a47, #04060f 58%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+#app {
+  position: relative;
+  min-height: 100vh;
+}
+
+canvas {
+  display: block;
+}
+
+.panel {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  width: min(420px, calc(100vw - 40px));
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 16px;
+  background: rgba(5, 10, 18, 0.75);
+  backdrop-filter: blur(14px);
+}
+
+.panel h1 {
+  margin: 0 0 12px;
+  font-size: 18px;
+  letter-spacing: 0.03em;
+}
+
+.row {
+  margin-bottom: 10px;
+}
+
+.row label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.row input,
+.row textarea,
+.row button {
+  width: 100%;
+  border: 0;
+  border-radius: 10px;
+  padding: 10px;
+  font-size: 14px;
+}
+
+.row input,
+.row textarea {
+  color: #f0f4f8;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.row textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+
+.row button {
+  background: linear-gradient(90deg, #03a9f4, #2f6df3);
+  color: #f8fbff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.row button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.status {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #8fd8ff;
+}
+
+.response {
+  margin-top: 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  max-height: 150px;
+  overflow: auto;
+  color: #d8ecff;
+}

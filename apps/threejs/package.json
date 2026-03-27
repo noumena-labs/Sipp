@@ -1,0 +1,18 @@
+{
+  "name": "cogent-engine-threejs-demo",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "cogent-engine": "file:../../packages/cogent-engine",
+    "three": "^0.176.0"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}

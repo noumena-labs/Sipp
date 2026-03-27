@@ -1,0 +1,136 @@
+if(DEFINED CE_EMSCRIPTEN_AUTO_TOOLCHAIN_INCLUDED)
+    return()
+endif()
+set(CE_EMSCRIPTEN_AUTO_TOOLCHAIN_INCLUDED TRUE)
+
+set(_ce_emsdk_roots)
+
+foreach(_ce_var EMSDK)
+    if(DEFINED ${_ce_var} AND NOT "${${_ce_var}}" STREQUAL "")
+        list(APPEND _ce_emsdk_roots "${${_ce_var}}")
+    endif()
+endforeach()
+
+foreach(_ce_env EMSDK)
+    if(DEFINED ENV{${_ce_env}} AND NOT "$ENV{${_ce_env}}" STREQUAL "")
+        list(APPEND _ce_emsdk_roots "$ENV{${_ce_env}}")
+    endif()
+endforeach()
+
+if(DEFINED EMSCRIPTEN_ROOT_PATH AND NOT "${EMSCRIPTEN_ROOT_PATH}" STREQUAL "")
+    get_filename_component(_ce_emsdk_from_root "${EMSCRIPTEN_ROOT_PATH}/../.." ABSOLUTE)
+    list(APPEND _ce_emsdk_roots "${_ce_emsdk_from_root}")
+endif()
+
+if(DEFINED ENV{EMSCRIPTEN} AND NOT "$ENV{EMSCRIPTEN}" STREQUAL "")
+    get_filename_component(_ce_emsdk_from_env_emscripten "$ENV{EMSCRIPTEN}/../.." ABSOLUTE)
+    list(APPEND _ce_emsdk_roots "${_ce_emsdk_from_env_emscripten}")
+endif()
+
+find_program(_ce_emcc_executable NAMES emcc.bat emcc)
+if(_ce_emcc_executable)
+    get_filename_component(_ce_emcc_dir "${_ce_emcc_executable}" DIRECTORY)
+    get_filename_component(_ce_emsdk_from_emcc "${_ce_emcc_dir}/../.." ABSOLUTE)
+    list(APPEND _ce_emsdk_roots "${_ce_emsdk_from_emcc}")
+endif()
+
+if(WIN32)
+    list(APPEND _ce_emsdk_roots "C:/emsdk" "D:/emsdk")
+    if(DEFINED ENV{USERPROFILE} AND NOT "$ENV{USERPROFILE}" STREQUAL "")
+        list(APPEND _ce_emsdk_roots "$ENV{USERPROFILE}/emsdk")
+    endif()
+else()
+    if(DEFINED ENV{HOME} AND NOT "$ENV{HOME}" STREQUAL "")
+        list(APPEND _ce_emsdk_roots "$ENV{HOME}/emsdk")
+    endif()
+endif()
+
+list(REMOVE_DUPLICATES _ce_emsdk_roots)
+
+unset(_ce_toolchain_file)
+unset(_ce_emscripten_root)
+unset(_ce_emsdk_root)
+
+foreach(_ce_candidate_root IN LISTS _ce_emsdk_roots)
+    if("${_ce_candidate_root}" STREQUAL "")
+        continue()
+    endif()
+
+    file(TO_CMAKE_PATH "${_ce_candidate_root}" _ce_candidate_root)
+    set(_ce_candidate_emscripten_root "${_ce_candidate_root}/upstream/emscripten")
+    set(_ce_candidate_toolchain_file "${_ce_candidate_emscripten_root}/cmake/Modules/Platform/Emscripten.cmake")
+
+    if(EXISTS "${_ce_candidate_toolchain_file}")
+        set(_ce_toolchain_file "${_ce_candidate_toolchain_file}")
+        set(_ce_emscripten_root "${_ce_candidate_emscripten_root}")
+        set(_ce_emsdk_root "${_ce_candidate_root}")
+        break()
+    endif()
+endforeach()
+
+if(NOT _ce_toolchain_file)
+    message(FATAL_ERROR
+        "Unable to locate the Emscripten toolchain. Set EMSDK, set EMSCRIPTEN, add emcc to PATH, or install emsdk in a standard location."
+    )
+endif()
+
+set(EMSDK "${_ce_emsdk_root}" CACHE PATH "Detected Emscripten SDK root" FORCE)
+set(EMSCRIPTEN_ROOT_PATH "${_ce_emscripten_root}" CACHE PATH "Detected Emscripten root" FORCE)
+
+set(ENV{EMSDK} "${EMSDK}")
+set(ENV{EMSCRIPTEN} "${EMSCRIPTEN_ROOT_PATH}")
+
+if(EXISTS "${EMSDK}/.emscripten")
+    set(ENV{EM_CONFIG} "${EMSDK}/.emscripten")
+endif()
+
+set(_ce_python_candidates)
+
+if(WIN32)
+    file(GLOB _ce_emsdk_python_dirs LIST_DIRECTORIES TRUE "${EMSDK}/python/*")
+    foreach(_ce_python_dir IN LISTS _ce_emsdk_python_dirs)
+        if(EXISTS "${_ce_python_dir}/python.exe")
+            list(APPEND _ce_python_candidates "${_ce_python_dir}/python.exe")
+        endif()
+    endforeach()
+else()
+    file(GLOB _ce_emsdk_python_dirs LIST_DIRECTORIES TRUE "${EMSDK}/python/*")
+    foreach(_ce_python_dir IN LISTS _ce_emsdk_python_dirs)
+        if(EXISTS "${_ce_python_dir}/bin/python3")
+            list(APPEND _ce_python_candidates "${_ce_python_dir}/bin/python3")
+        elseif(EXISTS "${_ce_python_dir}/bin/python")
+            list(APPEND _ce_python_candidates "${_ce_python_dir}/bin/python")
+        endif()
+    endforeach()
+endif()
+
+list(LENGTH _ce_python_candidates _ce_python_candidate_count)
+if(_ce_python_candidate_count GREATER 0)
+    list(GET _ce_python_candidates 0 _ce_detected_python3)
+    get_filename_component(_ce_detected_python3_dir "${_ce_detected_python3}" DIRECTORY)
+
+    unset(Python3_EXECUTABLE CACHE)
+    unset(Python_EXECUTABLE CACHE)
+    unset(Python3_ROOT_DIR CACHE)
+
+    set(Python3_EXECUTABLE "${_ce_detected_python3}" CACHE FILEPATH "Preferred Python 3 interpreter" FORCE)
+    set(Python_EXECUTABLE "${_ce_detected_python3}" CACHE FILEPATH "Preferred Python interpreter" FORCE)
+    set(Python3_ROOT_DIR "${_ce_detected_python3_dir}" CACHE PATH "Preferred Python 3 root directory" FORCE)
+    set(Python3_FIND_STRATEGY LOCATION CACHE STRING "Prefer explicit interpreter locations" FORCE)
+    set(Python3_FIND_REGISTRY NEVER CACHE STRING "Do not prefer registry Python installations" FORCE)
+    set(Python3_FIND_UNVERSIONED_NAMES FIRST CACHE STRING "Prefer unversioned Python executable names" FORCE)
+
+    if(WIN32)
+        set(_ce_path_sep ";")
+    else()
+        set(_ce_path_sep ":")
+    endif()
+
+    if(DEFINED ENV{PATH} AND NOT "$ENV{PATH}" STREQUAL "")
+        set(ENV{PATH} "${_ce_detected_python3_dir}${_ce_path_sep}$ENV{PATH}")
+    else()
+        set(ENV{PATH} "${_ce_detected_python3_dir}")
+    endif()
+endif()
+
+include("${_ce_toolchain_file}")

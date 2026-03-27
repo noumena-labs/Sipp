@@ -1,0 +1,4 @@
+[submodule "packages/cogent-engine/third_party/llama.cpp"]
+	path = packages/cogent-engine/third_party/llama.cpp
+	url = git@github.com:mtion-tv/llama.cpp.git
+	branch = constant/dev2

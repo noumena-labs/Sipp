@@ -1,0 +1,263 @@
+# ======================================================================================
+# Emscripten Configuration Module for CogentEngine
+# ======================================================================================
+# This file centralizes all Emscripten-specific settings to avoid duplication
+# and ensure consistency across all WASM targets.
+# ======================================================================================
+
+if(NOT EMSCRIPTEN)
+    return()
+endif()
+
+# ======================================================================================
+# Configuration Options (set these before including this file or via CMakeSettings.json)
+# ======================================================================================
+option(CE_WASM_PTHREADS     "Enable pthreads support in WASM builds"           OFF)
+option(CE_WASM_DEBUG        "Enable debug mode (assertions, symbols)"          OFF)
+option(CE_WASM_AGGRESSIVE_OPT "Use -Ofast instead of -O3 (may affect precision)" OFF)
+option(CE_SUPPRESS_LLAMA_LOGS "Suppress llama.cpp info/debug logs in production" ON)
+option(CE_WASM_ES_MODULE    "Build as modularized ES module for JS package managers" OFF)
+option(CE_WASM_FILESYSTEM   "Enable Emscripten virtual filesystem support"     ON)
+
+set(CE_WASM_INITIAL_MEMORY "512MB" CACHE STRING "Initial WASM memory")
+set(CE_WASM_MAXIMUM_MEMORY "4096MB" CACHE STRING "Maximum WASM memory")
+set(CE_WASM_STACK_SIZE "16MB" CACHE STRING "WASM stack size")
+set(CE_WASM_PTHREAD_STACK_SIZE "2MB" CACHE STRING "Default pthread stack size")
+set(CE_WASM_PTHREAD_POOL_SIZE "4" CACHE STRING "Pthread pool size")
+
+# ======================================================================================
+# GGML Backend Configuration for Emscripten
+# ======================================================================================
+# Disable native CPU features not available in WASM
+set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
+set(GGML_AMX OFF CACHE BOOL "" FORCE)
+set(GGML_AVX OFF CACHE BOOL "" FORCE)
+set(GGML_AVX2 OFF CACHE BOOL "" FORCE)
+set(GGML_AVX512 OFF CACHE BOOL "" FORCE)
+set(GGML_FMA OFF CACHE BOOL "" FORCE)
+set(GGML_F16C OFF CACHE BOOL "" FORCE)
+set(GGML_SSE3 OFF CACHE BOOL "" FORCE)
+set(GGML_SSE41 OFF CACHE BOOL "" FORCE)
+
+# Enable WASM SIMD
+set(GGML_WASM_SIMD ON CACHE BOOL "" FORCE)
+
+# ======================================================================================
+# Threading Configuration
+# ======================================================================================
+if(CE_WASM_PTHREADS)
+    set(CMAKE_THREAD_LIBS_INIT "-lpthread")
+    set(CMAKE_HAVE_THREADS_LIBRARY 1)
+    set(CMAKE_USE_WIN32_THREADS_INIT 0)
+    set(CMAKE_USE_PTHREADS_INIT 1)
+    set(THREADS_PREFER_PTHREAD_FLAG ON)
+    
+    set(_CE_PTHREAD_COMPILE_FLAGS
+        -pthread
+        -sUSE_PTHREADS=1
+    )
+    set(_CE_PTHREAD_LINK_FLAGS
+        -pthread
+        -sUSE_PTHREADS=1
+        -sPTHREAD_POOL_SIZE=${CE_WASM_PTHREAD_POOL_SIZE}
+        -sDEFAULT_PTHREAD_STACK_SIZE=${CE_WASM_PTHREAD_STACK_SIZE}
+        # CRITICAL: Proxy main() to a worker thread so browser main thread stays responsive
+        # This prevents WebGPU synchronization from blocking the UI
+        -sPROXY_TO_PTHREAD=1
+    )
+    add_compile_definitions(GGML_PTHREADS=1)
+    add_compile_definitions(CE_WASM_PTHREAD_POOL_SIZE=${CE_WASM_PTHREAD_POOL_SIZE})
+else()
+    set(_CE_PTHREAD_COMPILE_FLAGS)
+    set(_CE_PTHREAD_LINK_FLAGS)
+    add_compile_definitions(GGML_PTHREADS=0)
+    add_compile_definitions(CE_WASM_PTHREAD_POOL_SIZE=1)
+endif()
+
+if(CE_SUPPRESS_LLAMA_LOGS)
+    add_compile_definitions(CE_SUPPRESS_LLAMA_LOGS=1)
+endif()
+
+# ======================================================================================
+# Optimization Configuration
+# ======================================================================================
+if(CE_WASM_DEBUG)
+    set(_CE_OPT_FLAGS -g -O0)
+    set(_CE_DEBUG_FLAGS -sASSERTIONS=2)
+else()
+    if(CE_WASM_AGGRESSIVE_OPT)
+        # Equivalent to -Ofast but without deprecated warning and compatible with ggml.
+        # -Ofast = -O3 + -ffast-math, but -ffast-math includes -ffinite-math-only which
+        # breaks ggml's NaN/Inf checks. So we use -O3 + individual fast-math flags,
+        # excluding -ffinite-math-only.
+        # See: https://github.com/ggml-org/llama.cpp/pull/7154
+        set(_CE_OPT_FLAGS
+            -g0
+            -O3
+            # Fast-math components (excluding -ffinite-math-only for ggml compatibility)
+            -fno-math-errno
+            -funsafe-math-optimizations
+            -fno-trapping-math
+            -fassociative-math
+            -freciprocal-math
+            -fno-signed-zeros
+            -fno-rounding-math
+            -ffp-contract=fast
+            # Other
+            -DNDEBUG
+        )
+    else()
+        set(_CE_OPT_FLAGS -g0 -O3 -DNDEBUG)
+    endif()
+    set(_CE_DEBUG_FLAGS)
+endif()
+
+# ======================================================================================
+# Common Emscripten Compile Flags
+# ======================================================================================
+# These are compile-time only flags
+set(CE_WASM_COMPILE_FLAGS
+    # Optimization
+    ${_CE_OPT_FLAGS}
+    ${_CE_DEBUG_FLAGS}
+    
+    # Threading
+    ${_CE_PTHREAD_COMPILE_FLAGS}
+    
+    # WebAssembly features
+    -msimd128
+    -fwasm-exceptions
+    -mbulk-memory
+    -mnontrapping-fptoint
+    
+    # RTTI and LTO
+    -frtti
+    -flto=full
+)
+
+# ======================================================================================
+# Common Emscripten Link Flags
+# ======================================================================================
+# These are link-time flags (many -s options only matter at link time)
+set(CE_WASM_LINK_FLAGS
+    # Optimization (must match compile)
+    ${_CE_OPT_FLAGS}
+    ${_CE_DEBUG_FLAGS}
+    
+    # Threading
+    ${_CE_PTHREAD_LINK_FLAGS}
+    
+    # Exception handling
+    -fwasm-exceptions
+    
+    # LTO
+    -flto=full
+    
+    # Environment & Memory
+    -sENVIRONMENT=web,worker
+    -sWASM=1
+    -sWASM_BIGINT=0
+    -sMEMORY64=0
+    -sSUPPORT_LONGJMP=wasm
+    -sINITIAL_MEMORY=${CE_WASM_INITIAL_MEMORY}
+    -sMAXIMUM_MEMORY=${CE_WASM_MAXIMUM_MEMORY}
+    -sALLOW_MEMORY_GROWTH=1
+    -sSTACK_SIZE=${CE_WASM_STACK_SIZE}
+    
+    # Runtime
+    -sNO_EXIT_RUNTIME=1
+    
+    # WebGPU support
+    -sOFFSCREENCANVAS_SUPPORT=1
+)
+
+if(CE_WASM_FILESYSTEM)
+    list(APPEND CE_WASM_LINK_FLAGS -sFORCE_FILESYSTEM=1)
+endif()
+
+if(CE_WASM_DEBUG)
+    list(APPEND CE_WASM_LINK_FLAGS -sSTACK_OVERFLOW_CHECK=2)
+else()
+    list(APPEND CE_WASM_LINK_FLAGS -sSTACK_OVERFLOW_CHECK=0)
+endif()
+
+# ======================================================================================
+# ES Module Configuration (for JS package manager compatibility)
+# ======================================================================================
+if(CE_WASM_ES_MODULE)
+    list(APPEND CE_WASM_LINK_FLAGS
+        -sMODULARIZE=1
+        -sEXPORT_ES6=1
+        -sSINGLE_FILE=0
+    )
+endif()
+
+# ======================================================================================
+# WebGPU Port Configuration
+# ======================================================================================
+if(NOT EMDAWNWEBGPU_DIR)
+    set(_ce_emdawnwebgpu_candidates
+        "${CMAKE_SOURCE_DIR}/../Libs/emdawnwebgpu_pkg"
+    )
+
+    if(DEFINED EMSCRIPTEN_ROOT_PATH AND EMSCRIPTEN_ROOT_PATH)
+        list(APPEND _ce_emdawnwebgpu_candidates
+            "${EMSCRIPTEN_ROOT_PATH}/cache/ports/emdawnwebgpu/emdawnwebgpu_pkg"
+        )
+    endif()
+
+    if(DEFINED EMSDK AND EMSDK)
+        list(APPEND _ce_emdawnwebgpu_candidates
+            "${EMSDK}/upstream/emscripten/cache/ports/emdawnwebgpu/emdawnwebgpu_pkg"
+        )
+    endif()
+
+    foreach(_ce_emdawnwebgpu_candidate IN LISTS _ce_emdawnwebgpu_candidates)
+        if(EXISTS "${_ce_emdawnwebgpu_candidate}/emdawnwebgpu.port.py")
+            set(EMDAWNWEBGPU_DIR "${_ce_emdawnwebgpu_candidate}" CACHE PATH "Path to the emdawnwebgpu port package" FORCE)
+            break()
+        endif()
+    endforeach()
+endif()
+
+if(EMDAWNWEBGPU_DIR)
+    set(CE_WEBGPU_PORT "--use-port=${EMDAWNWEBGPU_DIR}/emdawnwebgpu.port.py")
+else()
+    set(CE_WEBGPU_PORT "--use-port=emdawnwebgpu")
+endif()
+
+# Add WebGPU port to compile and link flags
+list(APPEND CE_WASM_COMPILE_FLAGS ${CE_WEBGPU_PORT})
+list(APPEND CE_WASM_LINK_FLAGS ${CE_WEBGPU_PORT})
+
+# ======================================================================================
+# Helper Function: Apply Emscripten flags to a target
+# ======================================================================================
+function(ce_apply_emscripten_flags TARGET_NAME)
+    if(NOT EMSCRIPTEN)
+        return()
+    endif()
+    
+    target_compile_options(${TARGET_NAME} PRIVATE ${CE_WASM_COMPILE_FLAGS})
+    target_link_options(${TARGET_NAME} PRIVATE ${CE_WASM_LINK_FLAGS})
+endfunction()
+
+# ======================================================================================
+# Status Output
+# ======================================================================================
+message(STATUS "")
+message(STATUS "=== CogentEngine Emscripten Configuration ===")
+message(STATUS "  Pthreads:           ${CE_WASM_PTHREADS}")
+message(STATUS "  Debug mode:         ${CE_WASM_DEBUG}")
+message(STATUS "  Aggressive opt:     ${CE_WASM_AGGRESSIVE_OPT}")
+message(STATUS "  ES Module:          ${CE_WASM_ES_MODULE}")
+message(STATUS "  Filesystem:         ${CE_WASM_FILESYSTEM}")
+message(STATUS "  Initial memory:     ${CE_WASM_INITIAL_MEMORY}")
+message(STATUS "  Maximum memory:     ${CE_WASM_MAXIMUM_MEMORY}")
+message(STATUS "  Stack size:         ${CE_WASM_STACK_SIZE}")
+if(CE_WASM_PTHREADS)
+    message(STATUS "  Pthread pool:       ${CE_WASM_PTHREAD_POOL_SIZE}")
+    message(STATUS "  Pthread stack:      ${CE_WASM_PTHREAD_STACK_SIZE}")
+endif()
+message(STATUS "  WebGPU port:        ${CE_WEBGPU_PORT}")
+message(STATUS "")
