@@ -7,8 +7,6 @@ const projectRoot = path.resolve(scriptDir, '..');
 
 const cleanTargets = [
   path.join(projectRoot, 'build'),
-  path.join(projectRoot, 'build-probe'),
-  path.join(projectRoot, 'build-probe2'),
   path.join(projectRoot, 'dist', 'esm'),
   path.join(projectRoot, 'dist', 'types'),
   path.join(projectRoot, 'dist', 'wasm'),

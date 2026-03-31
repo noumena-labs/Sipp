@@ -2,17 +2,19 @@
   "name": "cogent-engine-monorepo",
   "private": true,
   "version": "1.0.0",
+  "packageManager": "bun@1.3.11",
   "workspaces": [
     "packages/*",
     "apps/*"
   ],
   "scripts": {
-    "build": "npm run build:package",
-    "build:package": "npm --workspace packages/cogent-engine run build",
-    "rebuild:package": "npm --workspace packages/cogent-engine run rebuild",
-    "clean:package": "npm --workspace packages/cogent-engine run clean",
-    "demo:install": "npm install --workspace apps/threejs",
-    "demo:dev": "npm run build:package && npm --workspace apps/threejs run dev",
-    "demo:build": "npm run build:package && npm --workspace apps/threejs run build"
+    "build": "bun run build:package",
+    "build:package": "bun run --filter=cogent-engine build",
+    "rebuild:package": "bun run --filter=cogent-engine rebuild",
+    "clean:package": "bun run --filter=cogent-engine clean",
+    "bench:bun": "bun run --filter=cogent-engine bench:bun",
+    "demo:install": "bun install",
+    "demo:dev": "bun run build:package && bun run --filter=cogent-engine-threejs-demo dev",
+    "demo:build": "bun run build:package && bun run --filter=cogent-engine-threejs-demo build"
   }
 }

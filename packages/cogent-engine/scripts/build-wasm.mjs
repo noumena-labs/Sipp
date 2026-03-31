@@ -6,12 +6,17 @@ import { fileURLToPath } from 'node:url';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, '..');
-const buildDir = path.join(projectRoot, 'build');
-const buildDistDir = path.join(buildDir, 'dist');
-const packageWasmDir = path.join(projectRoot, 'dist', 'wasm');
 const wasmTargetName = 'CogentEngine';
 const isWindows = process.platform === 'win32';
 const supportedGenerators = new Set(['Ninja', 'NMake Makefiles', 'Unix Makefiles']);
+const buildLabel = '[build-wasm]';
+const buildDirName = 'build';
+const artifactPrefix = 'cogent-engine-wasm';
+const buildDir = path.join(projectRoot, buildDirName);
+const buildDistDir = path.join(buildDir, 'dist');
+const packageWasmDir = path.join(projectRoot, 'dist', 'wasm');
+const enableJspi = true;
+const emscriptenEnvironment = 'web,worker';
 
 let activeChildProcess = null;
 let signalHandlersInstalled = false;
@@ -311,7 +316,7 @@ function hasIncompleteBuildDirectory() {
 // next run causes misleading follow-up failures, so start from a clean build directory.
 function removeInvalidBuildDirectory(expectedGenerator) {
   if (hasIncompleteBuildDirectory()) {
-    console.log('[build-wasm] removing incomplete build directory');
+    console.log(`${buildLabel} removing incomplete build directory`);
     rmSync(buildDir, { recursive: true, force: true });
     return;
   }
@@ -338,7 +343,7 @@ function removeInvalidBuildDirectory(expectedGenerator) {
   }
 
   if (reasons.length > 0) {
-    console.log(`[build-wasm] removing stale build directory (${reasons.join(', ')})`);
+    console.log(`${buildLabel} removing stale build directory (${reasons.join(', ')})`);
     rmSync(buildDir, { recursive: true, force: true });
   }
 }
@@ -402,7 +407,7 @@ async function runCommand(executable, args) {
   const env = { ...process.env };
   prependPathEntry(env, activeMakeProgramDir);
 
-  console.log(`[build-wasm] run: ${executable} ${args.join(' ')}`);
+  console.log(`${buildLabel} run: ${executable} ${args.join(' ')}`);
 
   installSignalHandlers();
 
@@ -468,7 +473,7 @@ async function copyWasmArtifacts() {
     const sourcePath = path.join(buildDistDir, artifactName);
     const targetPath = path.join(
       packageWasmDir,
-      `cogent-engine-wasm${artifactName.slice('CogentEngine'.length)}`
+      `${artifactPrefix}${artifactName.slice('CogentEngine'.length)}`
     );
 
     await copyFile(sourcePath, targetPath);
@@ -486,13 +491,15 @@ const cmakeConfigureArgs = [
   '-S',
   '.',
   '-B',
-  'build',
+  buildDirName,
   '-G',
   buildConfig.generator,
   '-DCMAKE_BUILD_TYPE=Release',
   `-DCMAKE_TOOLCHAIN_FILE=${toolchainPath}`,
   '-DCE_WASM_ES_MODULE=ON',
   '-DCE_WASM_AGGRESSIVE_OPT=ON',
+  `-DCE_WASM_USE_JSPI=${enableJspi ? 'ON' : 'OFF'}`,
+  `-DCE_WASM_ENVIRONMENT=${emscriptenEnvironment}`,
   '-DLLAMA_WASM_MEM64=OFF',
   '-DLLAMA_BUILD_HTML=OFF'
 ];
@@ -508,10 +515,10 @@ if (emdawnwebgpuDir) {
 }
 
 console.log(
-  `[build-wasm] generator=${buildConfig.generator}` +
+  `${buildLabel} generator=${buildConfig.generator}` +
     (buildConfig.makeProgram ? ` make_program=${buildConfig.makeProgram}` : '')
 );
 
 await runCommand(cmakeExecutable, cmakeConfigureArgs);
-await runCommand(cmakeExecutable, ['--build', 'build', '--config', 'Release', '--target', wasmTargetName]);
+await runCommand(cmakeExecutable, ['--build', buildDirName, '--config', 'Release', '--target', wasmTargetName]);
 await copyWasmArtifacts();

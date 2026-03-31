@@ -55,27 +55,33 @@ foreach(_ggml_target ggml ggml-base ggml-cpu ggml-webgpu)
     endif()
 endforeach()
 
-# Link flags for ES Module build
-target_link_options(CogentEngine PRIVATE
+set(CE_WASM_EXPORTED_FUNCTIONS
+    "['_CE_Unity_Init','_CE_Unity_Close','_CE_Unity_Prompt','_CE_Unity_FreeString','_CE_Unity_GetLastPromptPerfJson']"
+)
+
+set(CE_WASM_RUNTIME_METHODS "['ccall','FS','UTF8ToString']")
+
+set(CE_WASM_TARGET_LINK_OPTIONS
     ${CE_WASM_LINK_FLAGS}
-    
-    # JSPI for async support
-    -sJSPI=1
-    -sJSPI_IMPORTS=['emscripten_sleep']
-    -sJSPI_EXPORTS=['_main_thread','CE_Unity_Init','CE_Unity_Prompt','CE_Unity_PromptAsync','CE_Unity_PlanRoutine','CE_Unity_Close']
-    
-    # Exported C functions
-    -sEXPORTED_FUNCTIONS=['_malloc','_free','_CE_Unity_Init','_CE_Unity_Close','_CE_Unity_Prompt','_CE_Unity_PromptAsync','_CE_Unity_SubmitActions','_CE_Unity_SubmitThings','_CE_Unity_SubmitLocation','_CE_Unity_SubmitGoals','_CE_Unity_SubmitAgentState','_CE_Unity_PlanRoutine','_CE_Unity_PlanRoutineAsync','_CE_Unity_FreePlan','_CE_Unity_FreeString','_CE_Unity_GetVersion','_CE_Unity_IsInitialized','_CE_Unity_HeapAlloc','_CE_Unity_HeapFree','_CE_Unity_SizeOfActionFFI','_CE_Unity_SizeOfGoalFFI','_CE_Unity_SizeOfThingFFI','_CE_Unity_SizeOfAgentStateFFI','_CE_Unity_SizeOfLocationFFI','_CE_Unity_SizeOfPhaseFFI','_CE_Unity_SizeOfExecutionPlanFFI','_CE_Unity_Offset_ActionFFI_Id','_CE_Unity_Offset_ActionFFI_Name','_CE_Unity_Offset_ActionFFI_Description','_CE_Unity_Offset_GoalFFI_Id','_CE_Unity_Offset_GoalFFI_Name','_CE_Unity_Offset_GoalFFI_Description','_CE_Unity_Offset_GoalFFI_Priority','_CE_Unity_Offset_ThingFFI_Id','_CE_Unity_Offset_ThingFFI_Name','_CE_Unity_Offset_ThingFFI_Description','_CE_Unity_Offset_ThingFFI_DistanceToAgent','_CE_Unity_Offset_ThingFFI_Actions','_CE_Unity_Offset_ThingFFI_ActionsCount','_CE_Unity_Offset_AgentStateFFI_Name','_CE_Unity_Offset_AgentStateFFI_Persona','_CE_Unity_Offset_AgentStateFFI_ActiveAction','_CE_Unity_Offset_AgentStateFFI_ActiveThing','_CE_Unity_Offset_LocationFFI_LocationCompressed','_CE_Unity_Offset_PhaseFFI_Step','_CE_Unity_Offset_PhaseFFI_Action','_CE_Unity_Offset_PhaseFFI_Thing','_CE_Unity_Offset_ExecutionPlanFFI_AgentId','_CE_Unity_Offset_ExecutionPlanFFI_Phases','_CE_Unity_Offset_ExecutionPlanFFI_PhasesCount']
-    
-    # Exported runtime methods
-    -sEXPORTED_RUNTIME_METHODS=['ccall','FS','UTF8ToString','stringToUTF8','lengthBytesUTF8','HEAP8','HEAPU8']
-    
+    -sEXPORTED_FUNCTIONS=${CE_WASM_EXPORTED_FUNCTIONS}
+    -sEXPORTED_RUNTIME_METHODS=${CE_WASM_RUNTIME_METHODS}
     -sALLOW_TABLE_GROWTH=1
     -sMODULARIZE=1
     -sEXPORT_ES6=1
     -sEXPORT_NAME='CogentEngineModule'
     -sSINGLE_FILE=0
 )
+
+if(CE_WASM_USE_JSPI)
+    list(APPEND CE_WASM_TARGET_LINK_OPTIONS
+        -sJSPI=1
+        -sJSPI_IMPORTS=['emscripten_sleep']
+        -sJSPI_EXPORTS=['_main_thread','CE_Unity_Init','CE_Unity_Prompt','CE_Unity_Close']
+    )
+endif()
+
+# Link flags for ES Module build
+target_link_options(CogentEngine PRIVATE ${CE_WASM_TARGET_LINK_OPTIONS})
 
 set_target_properties(CogentEngine PROPERTIES
     OUTPUT_NAME "CogentEngine"

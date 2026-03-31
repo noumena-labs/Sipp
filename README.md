@@ -1,10 +1,10 @@
 # cogent-engine monorepo
 
-Standalone monorepo for the `cogent-engine` npm package and the Three.js demo.
+Standalone monorepo for the `cogent-engine` package and the Three.js demo.
 
 ## Workspace layout
 
-- `packages/cogent-engine`: npm package and native/WebAssembly bridge
+- `packages/cogent-engine`: package and native/WebAssembly bridge
 - `packages/cogent-engine/third_party/llama.cpp`: pinned `llama.cpp` submodule
 - `apps/threejs`: Three.js demo app
 
@@ -26,26 +26,35 @@ git submodule update --init --recursive
 ## Install
 
 ```bash
-npm install
+bun install
 ```
 
 ## Build package
 
 ```bash
-npm run build
+bun run build
 ```
 
 ## Rebuild package from clean state
 
 ```bash
-npm run rebuild:package
+bun run rebuild:package
 ```
+
+## Benchmark Inference
+
+```bash
+bun run bench:bun --model ./Qwen3.5-0.8B-Q4_0.gguf --tokens 16 --warmup 1 --runs 3
+```
+
+This benchmarks the Bun-hosted runtime path: model file read, WASM module init, model load into MEMFS, engine init, first prompt, hot fresh-context prompts, and hot reused-context prompts.
 
 ## Run demo
 
 ```bash
-npm run demo:install
-npm run demo:dev
+bun run demo:install
+bun run demo:dev
 ```
 
-`demo:dev` automatically builds `packages/cogent-engine` first.
+`demo:dev` automatically builds `packages/cogent-engine` first. The Three.js app now
+includes the browser benchmark harness for the real browser-hosted inference path.

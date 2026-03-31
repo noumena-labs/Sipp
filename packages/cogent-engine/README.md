@@ -1,10 +1,10 @@
 # cogent-engine
 
-`cogent-engine` is a browser-focused npm package that compiles CogentEngine C++ + `llama.cpp` to WebAssembly and exposes a typed TypeScript API.
+`cogent-engine` is a browser-focused package that compiles an inference-only CogentEngine C++ runtime plus `llama.cpp` to WebAssembly and exposes a typed TypeScript API.
 
 Source layout in this package:
 
-- `native/` C++ bridge/manager/wasm exports
+- `native/` C++ inference runtime, bridge, and wasm exports
 - `src/` TypeScript runtime wrapper
 - `third_party/llama.cpp/` vendored `llama.cpp`
 - `scripts/` build and clean scripts
@@ -12,7 +12,7 @@ Source layout in this package:
 
 ## Prerequisites
 
-- Node.js 20+ and npm
+- Bun 1.3+
 - Emscripten SDK (`emcmake`, `emcc`) in `PATH`
 - CMake 3.20+ and at least one CMake generator tool (`ninja`, `nmake`, or `make`)
 
@@ -28,23 +28,29 @@ source /path/to/emsdk/emsdk_env.sh
 
 ## Complete Compile (From Source)
 
-From `packages/cogent-engine/`:
+From the monorepo root:
 
 ```bash
-npm install
-npm run build
+bun install
+bun run build:package
+```
+
+Or from `packages/cogent-engine/` after the workspace has already been installed:
+
+```bash
+bun run build
 ```
 
 For a full clean rebuild:
 
 ```bash
-npm run rebuild
+bun run rebuild
 ```
 
 What this does:
 
-- `npm run build:wasm` compiles `native/` + `third_party/llama.cpp` with Emscripten and writes runtime artifacts to `dist/wasm`
-- `npm run build:ts` compiles TypeScript wrapper code to `dist/esm` and declarations to `dist/types`
+- `bun run build:wasm` compiles `native/` + `third_party/llama.cpp` with Emscripten and writes runtime artifacts to `dist/wasm`
+- `bun run build:ts` compiles TypeScript wrapper code to `dist/esm` and declarations to `dist/types`
 - `build:wasm` auto-selects a CMake generator, or you can force one via `CMAKE_GENERATOR`
 
 Why first builds are slow:
@@ -55,14 +61,14 @@ Why first builds are slow:
 
 ```bash
 # example
-CMAKE_GENERATOR=Ninja npm run build:wasm
+CMAKE_GENERATOR=Ninja bun run build:wasm
 ```
 
 ```powershell
 # Windows PowerShell example with explicit Ninja path
 $env:CMAKE_GENERATOR="Ninja"
 $env:CMAKE_MAKE_PROGRAM="C:\\Users\\<you>\\Documents\\emsdk\\ninja\\<version>\\ninja.exe"
-npm run build:wasm
+bun run build:wasm
 ```
 
 Build outputs:
@@ -78,33 +84,53 @@ Use this when you want a full rebuild from scratch:
 ```bash
 # Windows PowerShell
 Remove-Item -Recurse -Force build, dist\wasm -ErrorAction SilentlyContinue
-npm run build
+bun run build
 ```
 
 ```bash
 # macOS / Linux
 rm -rf build dist/wasm
-npm run build
+bun run build
 ```
 
 Or use the package script:
 
 ```bash
-npm run clean
-npm run build
+bun run clean
+bun run build
 ```
 
 ## Faster Iteration
 
-- TS-only changes: `npm run build:ts`
-- C++/WASM changes: `npm run build:wasm`
+- TS-only changes: `bun run build:ts`
+- C++/WASM changes: `bun run build:wasm`
+
+## Bun Benchmark
+
+From `packages/cogent-engine/`:
+
+```bash
+bun run bench:bun --model ../../Qwen3.5-0.8B-Q4_0.gguf --tokens 16 --warmup 1 --runs 3
+```
+
+The benchmark measures:
+
+- model file read time
+- WASM module initialization
+- model copy into MEMFS
+- engine initialization
+- cold prompt latency
+- hot prompt latency with fresh contexts
+- hot prompt latency with a reused context
+
+It also reports native `llama.cpp` perf counters for prompt eval, decode eval, and sampling.
 
 ## How To Use In An App
 
 Install from local path during development:
 
 ```bash
-npm install ../packages/cogent-engine
+bun add ../packages/cogent-engine
 ```
 
 Then import and run:
@@ -152,9 +178,9 @@ A Vite + Three.js demo lives in `../../apps/threejs`.
 
 ```bash
 cd ../../
-npm run build
-npm run demo:install
-npm run demo:dev
+bun run build
+bun run demo:install
+bun run demo:dev
 ```
 
 Open the Vite URL, click runtime init, load a local or remote `.gguf` model, then run inference.

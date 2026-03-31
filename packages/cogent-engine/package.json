@@ -1,7 +1,7 @@
 {
   "name": "cogent-engine",
   "version": "1.0.0",
-  "description": "NPM package for compiling and deploying the CogentEngine LLM library with WASM.",
+  "description": "Browser-focused inference runtime for llama.cpp compiled to WebAssembly.",
   "main": "dist/esm/index.js",
   "types": "dist/types/index.d.ts",
   "type": "module",
@@ -18,11 +18,12 @@
     "README.md"
   ],
   "scripts": {
-    "clean": "node ./scripts/clean.mjs",
-    "build": "npm run build:wasm && npm run build:ts",
-    "rebuild": "npm run clean && npm run build",
-    "build:wasm": "node ./scripts/build-wasm.mjs",
-    "build:ts": "tsc -p tsconfig.json"
+    "clean": "bun ./scripts/clean.mjs",
+    "build": "bun run build:wasm && bun run build:ts",
+    "rebuild": "bun run clean && bun run build",
+    "build:wasm": "bun ./scripts/build-wasm.mjs",
+    "build:ts": "bunx --bun tsc -p tsconfig.json",
+    "bench:bun": "bun ./benchmarks/benchmark-bun.ts"
   },
   "keywords": [
     "wasm",

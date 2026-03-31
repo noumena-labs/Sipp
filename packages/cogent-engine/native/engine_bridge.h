@@ -1,23 +1,13 @@
 #pragma once
 
-#include "ffi_types.h"
+#include <string>
 
-extern "C" {
+#include "ffi_types.h"
 
 int CE_InitPlugin(const char* model_path);
 void CE_ClosePlugin();
-
-int CE_SubmitActions(const char* agent_id, const ActionFFI actions[], int size);
-int CE_SubmitThings(const char* agent_id, const ThingFFI things[], int size);
-int CE_SubmitLocation(const char* agent_id, const LocationFFI* location);
-int CE_SubmitGoals(const char* agent_id, const GoalFFI goals[], int size);
-int CE_SubmitAgentState(const char* agent_id, const AgentStateFFI* state);
-
-void CE_ProcessPromptQueryAsync(const char* context_key, const char* prompt,
-                                int n_tokens_predict, CE_StringCallback callback,
-                                CE_StringCallback stream);
-
-void CE_PlanRoutineAsync(const char* agent_id, int steps, CE_PlanCallback callback);
-void CE_FreePlan(ExecutionPlanFFI* plan);
-
-}
+int CE_GetLastPromptPerf(CE_PromptPerfMetrics* out_metrics);
+std::string CE_ProcessPromptQuery(
+    const char* context_key,
+    const char* prompt,
+    int n_tokens_predict);

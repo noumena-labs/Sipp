@@ -1,5 +1,4 @@
-import { MemoryManager } from './memory-manager.js';
-import { Action, Goal, Thing, AgentState, LocationInfo, ExecutionPlan } from './types.js';
+import { PromptGenerationOptions, PromptPerformanceStats } from './types.js';
 
 interface FsStream {
   fd: number;
@@ -19,13 +18,6 @@ interface EmscriptenFs {
 interface EngineModule {
   FS: EmscriptenFs;
   _CE_Unity_FreeString(ptr: number): void;
-  _CE_Unity_FreePlan(ptr: number): void;
-  _malloc(size: number): number;
-  _free(ptr: number): void;
-  lengthBytesUTF8(text: string): number;
-  stringToUTF8(text: string, outPtr: number, maxBytesToWrite: number): void;
-  HEAP8: Int8Array;
-  HEAPU8: Uint8Array;
   ccall(ident: string, returnType: string | null, argTypes: string[], args: unknown[], opts?: { async?: boolean }): Promise<number> | number;
   UTF8ToString(ptr: number): string;
 }
@@ -125,7 +117,7 @@ export class CogentEngine {
       return new Set([window.location.origin]);
     }
 
-    throw new Error('trustedOrigins must be provided when window.location.origin is unavailable.');
+    return new Set();
   }
 
   private resolveMaxModelBytes(): number {
@@ -144,6 +136,15 @@ export class CogentEngine {
       throw new Error(`nTokens must be between 1 and ${MAX_PROMPT_TOKENS}.`);
     }
     return nTokens;
+  }
+
+  private resolvePromptTokenCount(
+    input: number | PromptGenerationOptions | undefined
+  ): number {
+    if (typeof input === 'number' || input === undefined) {
+      return this.normalizeTokenCount(input ?? 128);
+    }
+    return this.normalizeTokenCount(input.nTokens ?? 128);
   }
 
   private getLoadedModule(): EngineModule {
@@ -172,6 +173,14 @@ export class CogentEngine {
       this.removeFileIfExists(module, this.loadedModelPath);
     }
     this.loadedModelPath = path;
+  }
+
+  private prepareModelPath(module: EngineModule, destFileName: string): string {
+    const safeName = normalizeModelFileName(destFileName);
+    const modelPath = `/models/${safeName}`;
+    this.ensureModelsDir(module);
+    this.removeFileIfExists(module, modelPath);
+    return modelPath;
   }
 
   private async importModuleFactory(moduleUrl: string): Promise<(options: EngineModuleOptions) => Promise<EngineModule>> {
@@ -332,18 +341,14 @@ export class CogentEngine {
     } = {}
   ): Promise<string> {
     const module = await this.ensureModule();
-    const safeName = normalizeModelFileName(destFileName);
-    const path = `/models/${safeName}`;
+    const modelPath = this.prepareModelPath(module, destFileName);
     const maxModelBytes = this.resolveMaxModelBytes();
     const expectedBytes = options.expectedBytes ?? 0;
-
-    this.ensureModelsDir(module);
-    this.removeFileIfExists(module, path);
 
     try {
       await this.writeModelStream(
         module,
-        path,
+        modelPath,
         stream,
         maxModelBytes,
         expectedBytes,
@@ -351,12 +356,12 @@ export class CogentEngine {
         options.signal
       );
     } catch (error) {
-      this.removeFileIfExists(module, path);
+      this.removeFileIfExists(module, modelPath);
       throw new Error(`Failed while streaming model: ${asErrorMessage(error)}`);
     }
 
-    this.commitLoadedModelPath(module, path);
-    return path;
+    this.commitLoadedModelPath(module, modelPath);
+    return modelPath;
   }
 
   public async loadModelFromFile(
@@ -369,8 +374,7 @@ export class CogentEngine {
       throw new Error('Model file is empty.');
     }
 
-    const safeName = normalizeModelFileName(destFileName);
-    return this.loadModelFromReadableStream(file.stream(), safeName, {
+    return this.loadModelFromReadableStream(file.stream(), destFileName, {
       expectedBytes: file.size,
       onProgress,
       signal
@@ -390,13 +394,10 @@ export class CogentEngine {
       throw new Error(`Model exceeds configured maxModelBytes (${maxModelBytes} bytes).`);
     }
 
-    const safeName = normalizeModelFileName(destFileName);
-    this.ensureModelsDir(module);
-    const path = `/models/${safeName}`;
-    this.removeFileIfExists(module, path);
-    module.FS.writeFile(path, buffer);
-    this.commitLoadedModelPath(module, path);
-    return path;
+    const modelPath = this.prepareModelPath(module, destFileName);
+    module.FS.writeFile(modelPath, buffer);
+    this.commitLoadedModelPath(module, modelPath);
+    return modelPath;
   }
 
   /**
@@ -433,9 +434,13 @@ export class CogentEngine {
   /**
    * Submit a generation prompt.
    */
-  public async prompt(contextKey: string, promptText: string, nTokens: number = 128): Promise<string> {
+  public async prompt(
+    contextKey: string,
+    promptText: string,
+    options: number | PromptGenerationOptions = 128
+  ): Promise<string> {
     const module = this.getReadyEngineModule();
-    const tokenCount = this.normalizeTokenCount(nTokens);
+    const tokenCount = this.resolvePromptTokenCount(options);
     const ptr = await module.ccall(
       'CE_Unity_Prompt',
       'number',
@@ -455,118 +460,25 @@ export class CogentEngine {
     }
   }
 
-  public submitActions(agentId: string, actions: Action[]) {
+  public getLastPromptPerformance(): PromptPerformanceStats | null {
     const module = this.getReadyEngineModule();
-    const mem = new MemoryManager(module);
-    const agentIdPtr = mem.writeString(agentId);
-    const actionsPtr = mem.writeActionArray(actions);
-    try {
-      const status = module.ccall(
-        'CE_Unity_SubmitActions',
-        'number',
-        ['number', 'number', 'number'],
-        [agentIdPtr, actionsPtr, actions.length]
-      ) as number;
-      if (status !== 0) {
-        throw new Error(`CE_Unity_SubmitActions failed with status ${status}`);
-      }
-    } finally {
-      mem.freeAllocations();
+    const ptrResult = module.ccall('CE_Unity_GetLastPromptPerfJson', 'number', [], []);
+    if (ptrResult instanceof Promise) {
+      throw new Error('Unexpected async result while reading prompt performance stats.');
     }
-  }
+    const ptr = ptrResult;
 
-  public submitThings(agentId: string, things: Thing[]) {
-    const module = this.getReadyEngineModule();
-    const mem = new MemoryManager(module);
-    const agentIdPtr = mem.writeString(agentId);
-    const thingsPtr = mem.writeThingArray(things);
-    try {
-      const status = module.ccall(
-        'CE_Unity_SubmitThings',
-        'number',
-        ['number', 'number', 'number'],
-        [agentIdPtr, thingsPtr, things.length]
-      ) as number;
-      if (status !== 0) {
-        throw new Error(`CE_Unity_SubmitThings failed with status ${status}`);
-      }
-    } finally {
-      mem.freeAllocations();
-    }
-  }
-
-  public submitGoals(agentId: string, goals: Goal[]) {
-    const module = this.getReadyEngineModule();
-    const mem = new MemoryManager(module);
-    const agentIdPtr = mem.writeString(agentId);
-    const goalsPtr = mem.writeGoalArray(goals);
-    try {
-      const status = module.ccall(
-        'CE_Unity_SubmitGoals',
-        'number',
-        ['number', 'number', 'number'],
-        [agentIdPtr, goalsPtr, goals.length]
-      ) as number;
-      if (status !== 0) {
-        throw new Error(`CE_Unity_SubmitGoals failed with status ${status}`);
-      }
-    } finally {
-      mem.freeAllocations();
-    }
-  }
-
-  public submitAgentState(agentId: string, state: AgentState) {
-    const module = this.getReadyEngineModule();
-    const mem = new MemoryManager(module);
-    const agentIdPtr = mem.writeString(agentId);
-    const statePtr = mem.writeAgentState(state);
-    try {
-      const status = module.ccall(
-        'CE_Unity_SubmitAgentState',
-        'number',
-        ['number', 'number'],
-        [agentIdPtr, statePtr]
-      ) as number;
-      if (status !== 0) {
-        throw new Error(`CE_Unity_SubmitAgentState failed with status ${status}`);
-      }
-    } finally {
-      mem.freeAllocations();
-    }
-  }
-
-  public submitLocation(agentId: string, location: LocationInfo) {
-    const module = this.getReadyEngineModule();
-    const mem = new MemoryManager(module);
-    const agentIdPtr = mem.writeString(agentId);
-    const locPtr = mem.writeLocation(location);
-    try {
-      const status = module.ccall(
-        'CE_Unity_SubmitLocation',
-        'number',
-        ['number', 'number'],
-        [agentIdPtr, locPtr]
-      ) as number;
-      if (status !== 0) {
-        throw new Error(`CE_Unity_SubmitLocation failed with status ${status}`);
-      }
-    } finally {
-      mem.freeAllocations();
-    }
-  }
-
-  public async planRoutine(agentId: string, steps: number): Promise<ExecutionPlan | null> {
-    const module = this.getReadyEngineModule();
-    const ptr = await module.ccall('CE_Unity_PlanRoutine', 'number', ['string', 'number'], [agentId, steps], { async: true });
     if (!ptr) {
       return null;
     }
 
-    const mem = new MemoryManager(module);
     try {
-      return mem.readExecutionPlan(ptr);
+      const raw = module.UTF8ToString(ptr);
+      return JSON.parse(raw) as PromptPerformanceStats;
+    } catch (error) {
+      throw new Error(`Failed to parse prompt performance stats: ${asErrorMessage(error)}`);
     } finally {
-      module._CE_Unity_FreePlan(ptr);
+      module._CE_Unity_FreeString(ptr);
     }
   }
 }

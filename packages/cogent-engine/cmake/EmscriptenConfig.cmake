@@ -18,12 +18,14 @@ option(CE_WASM_AGGRESSIVE_OPT "Use -Ofast instead of -O3 (may affect precision)"
 option(CE_SUPPRESS_LLAMA_LOGS "Suppress llama.cpp info/debug logs in production" ON)
 option(CE_WASM_ES_MODULE    "Build as modularized ES module for JS package managers" OFF)
 option(CE_WASM_FILESYSTEM   "Enable Emscripten virtual filesystem support"     ON)
+option(CE_WASM_USE_JSPI     "Enable JSPI-based async exports"                  ON)
 
 set(CE_WASM_INITIAL_MEMORY "512MB" CACHE STRING "Initial WASM memory")
 set(CE_WASM_MAXIMUM_MEMORY "4096MB" CACHE STRING "Maximum WASM memory")
 set(CE_WASM_STACK_SIZE "16MB" CACHE STRING "WASM stack size")
 set(CE_WASM_PTHREAD_STACK_SIZE "2MB" CACHE STRING "Default pthread stack size")
 set(CE_WASM_PTHREAD_POOL_SIZE "4" CACHE STRING "Pthread pool size")
+set(CE_WASM_ENVIRONMENT "web,worker" CACHE STRING "Emscripten environment list")
 
 # ======================================================================================
 # GGML Backend Configuration for Emscripten
@@ -76,6 +78,12 @@ endif()
 
 if(CE_SUPPRESS_LLAMA_LOGS)
     add_compile_definitions(CE_SUPPRESS_LLAMA_LOGS=1)
+endif()
+
+if(CE_WASM_USE_JSPI)
+    add_compile_definitions(CE_WASM_USE_JSPI=1)
+else()
+    add_compile_definitions(CE_WASM_USE_JSPI=0)
 endif()
 
 # ======================================================================================
@@ -154,7 +162,7 @@ set(CE_WASM_LINK_FLAGS
     -flto=full
     
     # Environment & Memory
-    -sENVIRONMENT=web,worker
+    -sENVIRONMENT=${CE_WASM_ENVIRONMENT}
     -sWASM=1
     -sWASM_BIGINT=0
     -sMEMORY64=0
@@ -252,6 +260,8 @@ message(STATUS "  Debug mode:         ${CE_WASM_DEBUG}")
 message(STATUS "  Aggressive opt:     ${CE_WASM_AGGRESSIVE_OPT}")
 message(STATUS "  ES Module:          ${CE_WASM_ES_MODULE}")
 message(STATUS "  Filesystem:         ${CE_WASM_FILESYSTEM}")
+message(STATUS "  JSPI:               ${CE_WASM_USE_JSPI}")
+message(STATUS "  Environment:        ${CE_WASM_ENVIRONMENT}")
 message(STATUS "  Initial memory:     ${CE_WASM_INITIAL_MEMORY}")
 message(STATUS "  Maximum memory:     ${CE_WASM_MAXIMUM_MEMORY}")
 message(STATUS "  Stack size:         ${CE_WASM_STACK_SIZE}")
