@@ -1,5 +1,6 @@
 const statusNode = document.getElementById('status');
 const outputNode = document.getElementById('output');
+const resumeButtonNode = document.getElementById('resume');
 
 const state = {
   done: false,
@@ -7,9 +8,13 @@ const state = {
   error: null,
   startedAt: Date.now(),
   finishedAt: null,
+  pauseBeforeRun: false,
+  waitingForResume: false,
 };
 
 window.__webgpuTestRunner = state;
+
+let resumeRun = null;
 
 function appendOutput(stream, chunk) {
   const text = String(chunk ?? '');
@@ -46,6 +51,11 @@ function finalize(exitCode, error) {
   state.exitCode = Number.isFinite(exitCode) ? Number(exitCode) : 1;
   state.error = error ? stringifyError(error) : null;
   state.finishedAt = Date.now();
+  state.waitingForResume = false;
+
+  if (resumeButtonNode) {
+    resumeButtonNode.hidden = true;
+  }
 
   if (state.error) {
     statusNode.textContent = `Run failed with exit code ${state.exitCode}.`;
@@ -62,6 +72,7 @@ function readArguments() {
   const params = new URLSearchParams(window.location.search);
   const modulePath = params.get('module');
   const rawArgs = params.get('args');
+  const pauseBeforeRun = params.get('pauseBeforeRun') === '1';
   const args = rawArgs ? JSON.parse(rawArgs) : [];
 
   if (!modulePath) {
@@ -75,7 +86,55 @@ function readArguments() {
   return {
     modulePath,
     args,
+    pauseBeforeRun,
   };
+}
+
+function resumeExecution() {
+  if (!resumeRun) {
+    return false;
+  }
+
+  const callback = resumeRun;
+  resumeRun = null;
+  state.waitingForResume = false;
+
+  if (resumeButtonNode) {
+    resumeButtonNode.hidden = true;
+  }
+
+  statusNode.textContent = 'Debugger attached. Starting wasm run...';
+  console.log('[webgpu-test-runner] resuming wasm run');
+  callback();
+  return true;
+}
+
+window.__webgpuTestRunner.resume = resumeExecution;
+
+if (resumeButtonNode) {
+  resumeButtonNode.addEventListener('click', () => {
+    resumeExecution();
+  });
+}
+
+function waitForResumeIfNeeded(pauseBeforeRun) {
+  if (!pauseBeforeRun) {
+    return Promise.resolve();
+  }
+
+  state.pauseBeforeRun = true;
+  state.waitingForResume = true;
+  statusNode.textContent = 'Waiting for debugger attach. Set breakpoints, then click Resume Wasm Run.';
+
+  if (resumeButtonNode) {
+    resumeButtonNode.hidden = false;
+  }
+
+  console.log('[webgpu-test-runner] waiting for debugger attach; click Resume Wasm Run or call window.__webgpuTestRunner.resume()');
+
+  return new Promise((resolve) => {
+    resumeRun = resolve;
+  });
 }
 
 window.addEventListener('error', (event) => {
@@ -95,7 +154,7 @@ window.addEventListener('unhandledrejection', (event) => {
 });
 
 async function main() {
-  const { modulePath, args } = readArguments();
+  const { modulePath, args, pauseBeforeRun } = readArguments();
   if (!('gpu' in navigator)) {
     throw new Error('navigator.gpu is unavailable. Launch Chromium with WebGPU enabled.');
   }
@@ -131,6 +190,7 @@ async function main() {
   };
 
   const moduleInstance = await moduleFactory(moduleOptions);
+  await waitForResumeIfNeeded(pauseBeforeRun);
 
   try {
     await Promise.resolve(moduleInstance.callMain(args));

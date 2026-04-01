@@ -90,8 +90,12 @@ endif()
 # Optimization Configuration
 # ======================================================================================
 if(CE_WASM_DEBUG)
-    set(_CE_OPT_FLAGS -g -O0)
-    set(_CE_DEBUG_FLAGS -sASSERTIONS=2)
+    set(_CE_OPT_FLAGS -g3 -O0)
+    set(_CE_DEBUG_COMPILE_FLAGS)
+    set(_CE_DEBUG_LINK_FLAGS
+        -sASSERTIONS=2
+    )
+    set(_CE_LTO_FLAGS)
 else()
     if(CE_WASM_AGGRESSIVE_OPT)
         # Equivalent to -Ofast but without deprecated warning and compatible with ggml.
@@ -117,7 +121,9 @@ else()
     else()
         set(_CE_OPT_FLAGS -g0 -O3 -DNDEBUG)
     endif()
-    set(_CE_DEBUG_FLAGS)
+    set(_CE_DEBUG_COMPILE_FLAGS)
+    set(_CE_DEBUG_LINK_FLAGS)
+    set(_CE_LTO_FLAGS -flto=full)
 endif()
 
 # ======================================================================================
@@ -127,7 +133,7 @@ endif()
 set(CE_WASM_COMPILE_FLAGS
     # Optimization
     ${_CE_OPT_FLAGS}
-    ${_CE_DEBUG_FLAGS}
+    ${_CE_DEBUG_COMPILE_FLAGS}
     
     # Threading
     ${_CE_PTHREAD_COMPILE_FLAGS}
@@ -140,7 +146,7 @@ set(CE_WASM_COMPILE_FLAGS
     
     # RTTI and LTO
     -frtti
-    -flto=full
+    ${_CE_LTO_FLAGS}
 )
 
 # ======================================================================================
@@ -150,7 +156,7 @@ set(CE_WASM_COMPILE_FLAGS
 set(CE_WASM_LINK_FLAGS
     # Optimization (must match compile)
     ${_CE_OPT_FLAGS}
-    ${_CE_DEBUG_FLAGS}
+    ${_CE_DEBUG_LINK_FLAGS}
     
     # Threading
     ${_CE_PTHREAD_LINK_FLAGS}
@@ -159,7 +165,7 @@ set(CE_WASM_LINK_FLAGS
     -fwasm-exceptions
     
     # LTO
-    -flto=full
+    ${_CE_LTO_FLAGS}
     
     # Environment & Memory
     -sENVIRONMENT=${CE_WASM_ENVIRONMENT}

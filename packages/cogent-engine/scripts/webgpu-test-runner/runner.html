@@ -39,11 +39,28 @@
         white-space: pre-wrap;
         word-break: break-word;
       }
+
+      button {
+        margin: 0 0 12px;
+        padding: 10px 16px;
+        border: 0;
+        border-radius: 999px;
+        background: #4f8cff;
+        color: #07111f;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      button[hidden] {
+        display: none;
+      }
     </style>
   </head>
   <body>
     <h1>test-backend-ops WebGPU Runner</h1>
     <p id="status">Starting browser-hosted wasm runner...</p>
+    <button id="resume" hidden>Resume Wasm Run</button>
     <pre id="output"></pre>
     <script type="module" src="./runner.mjs"></script>
   </body>

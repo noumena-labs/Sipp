@@ -125,6 +125,63 @@ The benchmark measures:
 
 It also reports native `llama.cpp` perf counters for prompt eval, decode eval, and sampling.
 
+## WebGPU Backend-Ops Runner
+
+The package includes a browser-hosted WebGPU runner for the vendored `llama.cpp` `test-backend-ops` target.
+
+Install Chromium for Playwright once before using these commands:
+
+```bash
+bunx playwright install chromium
+```
+
+From the monorepo root:
+
+```bash
+bun run test:backend-ops:webgpu -- --list-ops
+bun run test:backend-ops:webgpu:op -- GET_ROWS
+bun run test:backend-ops:webgpu:op -- GET_ROWS,SET_ROWS --mode support --output csv
+bun run test:backend-ops:webgpu:op -- "Get Rows" --filter "type=f32"
+```
+
+What the op wrapper does:
+
+- maps friendly op names like `get-rows`, `Get Rows`, or `GET_ROWS` onto the upstream `-o GET_ROWS` selector
+- defaults to WebGPU by relying on the underlying runner's automatic `-b WebGPU` injection
+- forwards modes to upstream `test-backend-ops`: `test`, `support`, `perf`, and `grad`
+- forwards parameter regex filtering through `-p`
+
+If you need the full upstream CLI surface, keep using the raw passthrough command:
+
+```bash
+bun run test:backend-ops:webgpu -- test -o MUL_MAT -p "type=f16"
+```
+
+## Debugging WebGPU Backend-Ops Wasm
+
+Use the debug wrapper to build `test-backend-ops` in `Debug` with `CE_WASM_DEBUG=ON` and bundled DWARF symbols inside the generated wasm:
+
+```bash
+bun run test:backend-ops:webgpu:debug -- GET_ROWS
+```
+
+The debug command:
+
+- uses a dedicated build directory: `build-test-backend-ops-webgpu-debug`
+- configures CMake with `CMAKE_BUILD_TYPE=Debug`
+- enables debugger-friendly Emscripten flags such as `-g3` and assertions
+- launches headed Chromium on remote debug port `9222`
+- pauses before `callMain()` so you can attach a debugger first
+
+VS Code workflow from the repo root:
+
+1. Run the `Attach backend-ops WebGPU Debug` launch configuration.
+2. Wait for Chromium to open the runner page and pause.
+3. Set breakpoints in the wasm-backed sources you want to inspect.
+4. Click `Resume Wasm Run` in the browser page to start the selected backend-op run.
+
+The repository also includes `.vscode/tasks.json` and `.vscode/launch.json` to automate this attach flow.
+
 ## How To Use In An App
 
 Install from local path during development:

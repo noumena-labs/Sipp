@@ -1,5 +1,19 @@
 import { chromium } from 'playwright';
 
+function getRemoteDebuggingPort() {
+  const rawPort = process.env.CE_WEBGPU_REMOTE_DEBUG_PORT?.trim();
+  if (!rawPort) {
+    return null;
+  }
+
+  const parsedPort = Number.parseInt(rawPort, 10);
+  if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
+    throw new Error(`Invalid CE_WEBGPU_REMOTE_DEBUG_PORT value: ${rawPort}`);
+  }
+
+  return parsedPort;
+}
+
 function getRunnerUrl() {
   const runnerUrl = process.argv[2];
   if (!runnerUrl) {
@@ -25,10 +39,17 @@ function mirrorConsoleMessage(message) {
 
 function getBrowserLaunchPlans() {
   const mode = (process.env.CE_WEBGPU_BROWSER_MODE ?? 'auto').trim().toLowerCase();
+  const remoteDebuggingPort = getRemoteDebuggingPort();
+  const browserArgs = ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist'];
+
+  if (remoteDebuggingPort) {
+    browserArgs.push(`--remote-debugging-port=${remoteDebuggingPort}`, '--remote-debugging-address=127.0.0.1');
+  }
+
   const baseOptions = {
     channel: 'chromium',
     timeout: 30000,
-    args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist'],
+    args: browserArgs,
   };
 
   if (mode === 'headless') {
@@ -68,6 +89,7 @@ async function launchBrowser() {
 
 async function main() {
   const runnerUrl = getRunnerUrl();
+  const remoteDebuggingPort = getRemoteDebuggingPort();
   const browser = await launchBrowser();
   let page = null;
   let exitCode = 0;
@@ -80,6 +102,11 @@ async function main() {
     });
 
     await page.goto(runnerUrl, { waitUntil: 'domcontentloaded' });
+
+    if (remoteDebuggingPort) {
+      console.log(`[webgpu-browser-harness] debugger ready on port ${remoteDebuggingPort}`);
+    }
+
     await page.waitForFunction(() => window.__webgpuTestRunner?.done === true, null, { timeout: 0 });
 
     const result = await page.evaluate(() => window.__webgpuTestRunner);

@@ -1,0 +1,22 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Attach backend-ops WebGPU Debug",
+      "type": "pwa-chrome",
+      "request": "attach",
+      "address": "127.0.0.1",
+      "port": 9222,
+      "webRoot": "${workspaceFolder}",
+      "preLaunchTask": "backend-ops:webgpu:debug"
+    },
+    {
+      "name": "Attach existing backend-ops WebGPU Debug",
+      "type": "pwa-chrome",
+      "request": "attach",
+      "address": "127.0.0.1",
+      "port": 9222,
+      "webRoot": "${workspaceFolder}"
+    }
+  ]
+}

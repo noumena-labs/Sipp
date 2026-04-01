@@ -1,0 +1,60 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "backend-ops:webgpu:debug",
+      "type": "shell",
+      "command": "bun",
+      "args": [
+        "run",
+        "test:backend-ops:webgpu:debug",
+        "--",
+        "${input:backendOpsOp}",
+        "--mode",
+        "${input:backendOpsMode}"
+      ],
+      "isBackground": true,
+      "problemMatcher": [
+        {
+          "owner": "custom",
+          "pattern": [
+            {
+              "regexp": "^(.*)$",
+              "message": 1
+            }
+          ],
+          "background": {
+            "activeOnStart": true,
+            "beginsPattern": "^.*\\[test-backend-ops:webgpu:debug\\] run:",
+            "endsPattern": "^.*\\[webgpu-browser-harness\\] debugger ready on port 9222$"
+          }
+        }
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    }
+  ],
+  "inputs": [
+    {
+      "id": "backendOpsOp",
+      "type": "promptString",
+      "description": "GGML op selector",
+      "default": "GET_ROWS"
+    },
+    {
+      "id": "backendOpsMode",
+      "type": "pickString",
+      "description": "backend-ops mode",
+      "options": [
+        "test",
+        "support",
+        "perf",
+        "grad"
+      ],
+      "default": "test"
+    }
+  ]
+}

@@ -7,7 +7,13 @@ import { fileURLToPath } from 'node:url';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, '..');
-const buildDirName = 'build-test-backend-ops-webgpu';
+const defaultBuildLabel = '[test-backend-ops:webgpu]';
+const buildLabel = process.env.CE_TEST_BACKEND_OPS_BUILD_LABEL?.trim() || defaultBuildLabel;
+const buildType = process.env.CE_TEST_BACKEND_OPS_BUILD_TYPE?.trim() || 'Release';
+const isDebugBuild = buildType.toLowerCase() === 'debug';
+const buildDirName =
+  process.env.CE_TEST_BACKEND_OPS_BUILD_DIR_NAME?.trim() ||
+  (isDebugBuild ? 'build-test-backend-ops-webgpu-debug' : 'build-test-backend-ops-webgpu');
 const buildDir = path.join(projectRoot, buildDirName);
 const buildOutputDir = path.join(buildDir, 'bin');
 const runnerDir = path.join(scriptDir, 'webgpu-test-runner');
@@ -17,15 +23,25 @@ const moduleFileName = `${testTargetName}.js`;
 const wasmFileName = `${testTargetName}.wasm`;
 const isWindows = process.platform === 'win32';
 const supportedGenerators = new Set(['Ninja', 'NMake Makefiles', 'Unix Makefiles']);
-const buildLabel = '[test-backend-ops:webgpu]';
 const enableJspi = true;
 const emscriptenEnvironment = 'web,worker';
+const enableAggressiveOpt = !isDebugBuild && readBooleanEnv('CE_TEST_BACKEND_OPS_AGGRESSIVE_OPT', true);
+const pauseBeforeRun = readBooleanEnv('CE_WEBGPU_PAUSE_BEFORE_RUN', false);
 
 let activeChildProcess = null;
 let signalHandlersInstalled = false;
 let activeMakeProgramDir = null;
 let cachedCmakeExecutable = null;
 let cachedNodeExecutable = null;
+
+function readBooleanEnv(name, fallback = false) {
+  const value = process.env[name]?.trim().toLowerCase();
+  if (!value) {
+    return fallback;
+  }
+
+  return value === '1' || value === 'true' || value === 'yes' || value === 'on';
+}
 
 function printHelp() {
   console.log(`Usage: bun ./scripts/test-backend-ops-webgpu.mjs [test-backend-ops args]
@@ -38,6 +54,7 @@ Examples:
 Notes:
   - The runner injects -b WebGPU unless you pass -b yourself.
   - Chromium must be installed for Playwright. Run "bunx playwright install chromium" if needed.
+  - Wrapper scripts can override build behavior with CE_TEST_BACKEND_OPS_BUILD_TYPE and related env vars.
 `);
 }
 
@@ -370,6 +387,8 @@ function removeInvalidBuildDirectory(expectedGenerator) {
 
   const cacheText = readFileSync(cachePath, 'utf8');
   const cachedGenerator = getCacheEntry(cacheText, 'CMAKE_GENERATOR');
+  const cachedBuildType = getCacheEntry(cacheText, 'CMAKE_BUILD_TYPE');
+  const cachedDebug = getCacheEntry(cacheText, 'CE_WASM_DEBUG');
   const reasons = [];
 
   if (cacheText.includes('CMAKE_MAKE_PROGRAM:FILEPATH=CMAKE_MAKE_PROGRAM-NOTFOUND')) {
@@ -382,6 +401,18 @@ function removeInvalidBuildDirectory(expectedGenerator) {
 
   if (expectedGenerator && cachedGenerator && cachedGenerator !== expectedGenerator) {
     reasons.push(`generator=${cachedGenerator}`);
+  }
+
+  if (cachedBuildType && cachedBuildType !== buildType) {
+    reasons.push(`build_type=${cachedBuildType}`);
+  }
+
+  if (isDebugBuild && cachedDebug !== 'ON') {
+    reasons.push(`CE_WASM_DEBUG=${cachedDebug ?? 'OFF'}`);
+  }
+
+  if (!isDebugBuild && cachedDebug === 'ON') {
+    reasons.push('CE_WASM_DEBUG=ON');
   }
 
   if (!cacheText.includes('CE_BUILD_WEBGPU_TEST_BACKEND_OPS:BOOL=ON')) {
@@ -445,8 +476,8 @@ function installSignalHandlers() {
   signalHandlersInstalled = true;
 }
 
-async function runCommand(executable, args) {
-  const env = { ...process.env };
+async function runCommand(executable, args, envOverrides = {}) {
+  const env = { ...process.env, ...envOverrides };
   prependPathEntry(env, activeMakeProgramDir);
 
   console.log(`${buildLabel} run: ${executable} ${args.join(' ')}`);
@@ -495,8 +526,8 @@ async function runCommand(executable, args) {
   }
 }
 
-async function runCommandWithExitCode(executable, args) {
-  const env = { ...process.env };
+async function runCommandWithExitCode(executable, args, envOverrides = {}) {
+  const env = { ...process.env, ...envOverrides };
   prependPathEntry(env, activeMakeProgramDir);
 
   console.log(`${buildLabel} run: ${executable} ${args.join(' ')}`);
@@ -544,6 +575,10 @@ function getMimeType(filePath) {
     case '.mjs':
       return 'text/javascript; charset=utf-8';
     case '.wasm':
+      return 'application/wasm';
+    case '.map':
+      return 'application/json; charset=utf-8';
+    case '.debug':
       return 'application/wasm';
     case '.json':
       return 'application/json; charset=utf-8';
@@ -649,9 +684,20 @@ async function runBrowserHarness(forwardedArgs) {
     const runnerUrl = new URL('/__runner__/runner.html', origin);
     runnerUrl.searchParams.set('module', `/${moduleFileName}`);
     runnerUrl.searchParams.set('args', JSON.stringify(forwardedArgs));
+    runnerUrl.searchParams.set('pauseBeforeRun', pauseBeforeRun ? '1' : '0');
 
     const nodeExecutable = resolveNodeExecutable();
-    return await runCommandWithExitCode(nodeExecutable, [browserHarnessScript, runnerUrl.href]);
+    const browserHarnessEnv = {};
+
+    if (process.env.CE_WEBGPU_BROWSER_MODE?.trim()) {
+      browserHarnessEnv.CE_WEBGPU_BROWSER_MODE = process.env.CE_WEBGPU_BROWSER_MODE.trim();
+    }
+
+    if (process.env.CE_WEBGPU_REMOTE_DEBUG_PORT?.trim()) {
+      browserHarnessEnv.CE_WEBGPU_REMOTE_DEBUG_PORT = process.env.CE_WEBGPU_REMOTE_DEBUG_PORT.trim();
+    }
+
+    return await runCommandWithExitCode(nodeExecutable, [browserHarnessScript, runnerUrl.href], browserHarnessEnv);
   } finally {
     await stopStaticServer(server).catch(() => {});
   }
@@ -672,11 +718,12 @@ const cmakeConfigureArgs = [
   buildDirName,
   '-G',
   buildConfig.generator,
-  '-DCMAKE_BUILD_TYPE=Release',
+  `-DCMAKE_BUILD_TYPE=${buildType}`,
   `-DCMAKE_TOOLCHAIN_FILE=${toolchainPath}`,
   '-DCE_BUILD_WEBGPU_TEST_BACKEND_OPS=ON',
   '-DCE_WASM_ES_MODULE=ON',
-  '-DCE_WASM_AGGRESSIVE_OPT=ON',
+  `-DCE_WASM_DEBUG=${isDebugBuild ? 'ON' : 'OFF'}`,
+  `-DCE_WASM_AGGRESSIVE_OPT=${enableAggressiveOpt ? 'ON' : 'OFF'}`,
   `-DCE_WASM_USE_JSPI=${enableJspi ? 'ON' : 'OFF'}`,
   `-DCE_WASM_ENVIRONMENT=${emscriptenEnvironment}`,
   '-DGGML_WEBGPU=ON',
@@ -696,12 +743,12 @@ if (emdawnwebgpuDir) {
 }
 
 console.log(
-  `${buildLabel} generator=${buildConfig.generator}` +
+  `${buildLabel} build_type=${buildType} generator=${buildConfig.generator}` +
     (buildConfig.makeProgram ? ` make_program=${buildConfig.makeProgram}` : '')
 );
 
 await runCommand(cmakeExecutable, cmakeConfigureArgs);
-await runCommand(cmakeExecutable, ['--build', buildDirName, '--config', 'Release', '--target', testTargetName]);
+await runCommand(cmakeExecutable, ['--build', buildDirName, '--config', buildType, '--target', testTargetName]);
 await ensureBuildArtifacts();
 
 const exitCode = await runBrowserHarness(forwardedArgs);
