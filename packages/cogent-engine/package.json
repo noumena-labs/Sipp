@@ -22,6 +22,7 @@
     "build": "bun run build:wasm && bun run build:ts",
     "rebuild": "bun run clean && bun run build",
     "build:wasm": "bun ./scripts/build-wasm.mjs",
+    "test:backend-ops:webgpu": "bun ./scripts/test-backend-ops-webgpu.mjs",
     "build:ts": "bunx --bun tsc -p tsconfig.json",
     "bench:bun": "bun ./benchmarks/benchmark-bun.ts"
   },
@@ -35,6 +36,7 @@
   "license": "MIT",
   "devDependencies": {
     "typescript": "^5.3.3",
-    "@types/node": "^20.10.0"
+    "@types/node": "^20.10.0",
+    "playwright": "^1.56.1"
   }
 }

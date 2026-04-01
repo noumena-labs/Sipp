@@ -12,6 +12,7 @@
     "build:package": "bun run --filter=cogent-engine build",
     "rebuild:package": "bun run --filter=cogent-engine rebuild",
     "clean:package": "bun run --filter=cogent-engine clean",
+    "test:backend-ops:webgpu": "bun run --filter=cogent-engine test:backend-ops:webgpu",
     "bench:bun": "bun run --filter=cogent-engine bench:bun",
     "demo:install": "bun install",
     "demo:dev": "bun run build:package && bun run --filter=cogent-engine-threejs-demo dev",

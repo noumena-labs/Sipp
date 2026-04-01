@@ -234,9 +234,9 @@ else()
     set(CE_WEBGPU_PORT "--use-port=emdawnwebgpu")
 endif()
 
-# Add WebGPU port to compile and link flags
-list(APPEND CE_WASM_COMPILE_FLAGS ${CE_WEBGPU_PORT})
-list(APPEND CE_WASM_LINK_FLAGS ${CE_WEBGPU_PORT})
+# The ggml-webgpu target injects the emdawnwebgpu port itself. Keep discovery here
+# for status output and downstream checks, but do not append the port globally or
+# Emscripten will reject the duplicated port registration.
 
 # ======================================================================================
 # Helper Function: Apply Emscripten flags to a target

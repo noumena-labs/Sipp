@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>test-backend-ops WebGPU Runner</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Consolas, Monaco, monospace;
+      }
+
+      body {
+        margin: 0;
+        padding: 16px;
+        background: #10141b;
+        color: #dce4ef;
+      }
+
+      h1 {
+        margin: 0 0 12px;
+        font-size: 16px;
+        font-weight: 600;
+      }
+
+      p {
+        margin: 0 0 12px;
+        color: #9db0c7;
+      }
+
+      pre {
+        margin: 0;
+        padding: 12px;
+        min-height: 200px;
+        overflow: auto;
+        border-radius: 8px;
+        background: #0a0d12;
+        border: 1px solid #293444;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>test-backend-ops WebGPU Runner</h1>
+    <p id="status">Starting browser-hosted wasm runner...</p>
+    <pre id="output"></pre>
+    <script type="module" src="./runner.mjs"></script>
+  </body>
+</html>

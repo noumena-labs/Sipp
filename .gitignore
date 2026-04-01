@@ -8,6 +8,7 @@ build-probe/
 build-probe2/
 dist/
 packages/*/build/
+packages/*/build-*/
 packages/*/dist/
 packages/*/build-probe/
 packages/*/build-probe2/

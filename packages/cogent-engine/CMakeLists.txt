@@ -20,9 +20,49 @@ set(CMAKE_C_SCAN_FOR_MODULES OFF)
 
 add_compile_options(${CE_WASM_COMPILE_FLAGS})
 
+option(CE_BUILD_WEBGPU_TEST_BACKEND_OPS "Build llama.cpp test-backend-ops for browser-hosted WebGPU execution" OFF)
+
+function(ce_apply_emscripten_cli_target TARGET_NAME EXPORT_NAME)
+  if (NOT EMSCRIPTEN OR NOT TARGET ${TARGET_NAME})
+    return()
+  endif()
+
+  set(_ce_cli_link_options ${CE_WASM_LINK_FLAGS})
+  list(REMOVE_ITEM _ce_cli_link_options -sNO_EXIT_RUNTIME=1)
+  list(APPEND _ce_cli_link_options
+      -sEXIT_RUNTIME=1
+      -sINVOKE_RUN=0
+      -sALLOW_TABLE_GROWTH=1
+      -sMODULARIZE=1
+      -sEXPORT_ES6=1
+      -sSINGLE_FILE=0
+      "-sEXPORT_NAME='${EXPORT_NAME}'"
+      "-sEXPORTED_RUNTIME_METHODS=['callMain','FS']")
+
+  if(CE_WASM_USE_JSPI)
+    list(APPEND _ce_cli_link_options
+        -sJSPI=1
+        "-sJSPI_IMPORTS=['emscripten_sleep']"
+        "-sJSPI_EXPORTS=['_main']")
+  endif()
+
+  target_link_options(${TARGET_NAME} PRIVATE ${_ce_cli_link_options})
+  set_target_properties(${TARGET_NAME} PROPERTIES
+      OUTPUT_NAME "${TARGET_NAME}"
+      SUFFIX ".js"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
+endfunction()
+
 # llama.cpp subproject
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libs" FORCE)
 set(LLAMA_WASM_MEM64 OFF CACHE BOOL "Use wasm32 memory model for cogent-engine" FORCE)
+if(CE_BUILD_WEBGPU_TEST_BACKEND_OPS)
+  set(GGML_WEBGPU ON CACHE BOOL "Enable WebGPU backend for test-backend-ops" FORCE)
+  set(LLAMA_BUILD_COMMON ON CACHE BOOL "Build llama.cpp common utils for tests" FORCE)
+  set(LLAMA_BUILD_TESTS ON CACHE BOOL "Build llama.cpp tests" FORCE)
+  set(LLAMA_OPENSSL OFF CACHE BOOL "Disable OpenSSL for Emscripten test builds" FORCE)
+  set(LLAMA_BUILD_HTML OFF CACHE BOOL "Build JS artifacts for browser-hosted wasm tests" FORCE)
+endif()
 # Ensure ggml selects wasm-specific code paths instead of generic CPU fallback.
 if(EMSCRIPTEN)
   set(CMAKE_SYSTEM_PROCESSOR "wasm32")
@@ -36,6 +76,14 @@ foreach(t ggml ggml-cpu)
     target_compile_options(${t} PRIVATE -UGGML_USE_OPENMP)
   endif()
 endforeach()
+
+if(CE_BUILD_WEBGPU_TEST_BACKEND_OPS)
+  if(NOT TARGET test-backend-ops)
+    message(FATAL_ERROR "CE_BUILD_WEBGPU_TEST_BACKEND_OPS requires the llama.cpp test-backend-ops target to be available")
+  endif()
+
+  ce_apply_emscripten_cli_target(test-backend-ops TestBackendOpsModule)
+endif()
 
 # Plugin Sources
 set(PLUGIN_SOURCES
