@@ -193,8 +193,12 @@ async function main() {
   await waitForResumeIfNeeded(pauseBeforeRun);
 
   try {
-    await Promise.resolve(moduleInstance.callMain(args));
-    finalize(0, null);
+    const callMainResult = await Promise.resolve(moduleInstance.callMain(args));
+
+    if (!state.done) {
+      const exitCode = Number.isFinite(callMainResult) ? Number(callMainResult) : 0;
+      finalize(exitCode, exitCode === 0 ? null : `Program exited with code ${exitCode}.`);
+    }
   } catch (error) {
     if (state.done) {
       return;

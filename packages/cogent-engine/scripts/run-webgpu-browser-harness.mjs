@@ -37,6 +37,10 @@ function mirrorConsoleMessage(message) {
   process.stdout.write(`${text}\n`);
 }
 
+function handlePageError(error) {
+  process.stderr.write(`${error.stack ?? error.message}\n`);
+}
+
 function getBrowserLaunchPlans() {
   const mode = (process.env.CE_WEBGPU_BROWSER_MODE ?? 'auto').trim().toLowerCase();
   const remoteDebuggingPort = getRemoteDebuggingPort();
@@ -97,9 +101,7 @@ async function main() {
   try {
     page = await browser.newPage();
     page.on('console', mirrorConsoleMessage);
-    page.on('pageerror', (error) => {
-      process.stderr.write(`${error.stack ?? error.message}\n`);
-    });
+    page.on('pageerror', handlePageError);
 
     await page.goto(runnerUrl, { waitUntil: 'domcontentloaded' });
 
@@ -110,6 +112,8 @@ async function main() {
     await page.waitForFunction(() => window.__webgpuTestRunner?.done === true, null, { timeout: 0 });
 
     const result = await page.evaluate(() => window.__webgpuTestRunner);
+    page.off('pageerror', handlePageError);
+
     if (!result || typeof result.exitCode !== 'number') {
       throw new Error('The browser harness did not report a valid exit code.');
     }
@@ -121,6 +125,7 @@ async function main() {
     exitCode = result.exitCode;
   } finally {
     if (page) {
+      page.off('pageerror', handlePageError);
       await page.close().catch(() => {});
     }
 

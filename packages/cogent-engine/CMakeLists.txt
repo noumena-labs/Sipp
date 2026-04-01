@@ -28,9 +28,7 @@ function(ce_apply_emscripten_cli_target TARGET_NAME EXPORT_NAME)
   endif()
 
   set(_ce_cli_link_options ${CE_WASM_LINK_FLAGS})
-  list(REMOVE_ITEM _ce_cli_link_options -sNO_EXIT_RUNTIME=1)
   list(APPEND _ce_cli_link_options
-      -sEXIT_RUNTIME=1
       -sINVOKE_RUN=0
       -sALLOW_TABLE_GROWTH=1
       -sMODULARIZE=1
