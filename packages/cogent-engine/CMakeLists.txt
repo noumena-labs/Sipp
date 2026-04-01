@@ -39,9 +39,11 @@ endforeach()
 
 # Plugin Sources
 set(PLUGIN_SOURCES
-    ${CMAKE_SOURCE_DIR}/native/engine_manager.cpp
-    ${CMAKE_SOURCE_DIR}/native/engine_bridge.cpp
-    ${CMAKE_SOURCE_DIR}/native/wasm_exports.cpp
+    ${CMAKE_SOURCE_DIR}/native/runtime/inference_runtime.cpp
+    ${CMAKE_SOURCE_DIR}/native/runtime/session/session_store.cpp
+    ${CMAKE_SOURCE_DIR}/native/runtime/llama/llama_utils.cpp
+    ${CMAKE_SOURCE_DIR}/native/api/engine_bridge.cpp
+    ${CMAKE_SOURCE_DIR}/native/api/wasm_exports.cpp
 )
 
 add_executable(CogentEngine ${PLUGIN_SOURCES})
@@ -56,7 +58,7 @@ foreach(_ggml_target ggml ggml-base ggml-cpu ggml-webgpu)
 endforeach()
 
 set(CE_WASM_EXPORTED_FUNCTIONS
-    "['_CE_Unity_Init','_CE_Unity_Close','_CE_Unity_Prompt','_CE_Unity_FreeString','_CE_Unity_GetLastPromptPerfJson']"
+    "['_CE_Init','_CE_Close','_CE_Prompt','_CE_FreeString','_CE_GetLastPromptPerfJson']"
 )
 
 set(CE_WASM_RUNTIME_METHODS "['ccall','FS','UTF8ToString']")
@@ -76,7 +78,7 @@ if(CE_WASM_USE_JSPI)
     list(APPEND CE_WASM_TARGET_LINK_OPTIONS
         -sJSPI=1
         -sJSPI_IMPORTS=['emscripten_sleep']
-        -sJSPI_EXPORTS=['_main_thread','CE_Unity_Init','CE_Unity_Prompt','CE_Unity_Close']
+        -sJSPI_EXPORTS=['_main_thread','CE_Init','CE_Prompt','CE_Close']
     )
 endif()
 

@@ -1,6 +1,6 @@
 /////////////////////////////////////////////////////////////////////////////////////////////////
 //
-// engine_manager.h
+// inference_runtime.h
 //
 // - Inference-only runtime over llama.cpp.
 // - Owns model lifetime, context reuse, and text generation.
@@ -23,17 +23,13 @@
 #define COGENTENGINE_INTERFACE_EXPORT
 #endif
 
-#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <mutex>
 #include <string>
-#include <unordered_map>
-#include <vector>
 
-#include "llama.h"
+#include "runtime/session/session_store.h"
 
-struct llama_context;
 struct llama_model;
 struct llama_sampler;
 
@@ -50,27 +46,10 @@ struct PromptPerfStats {
   int32_t output_token_count = 0;
 };
 
-struct ContextState {
-  struct llama_context* ctx = nullptr;
-  std::vector<llama_token> current_kv_tokens;  // CPU mirror of the prompt state
-  int n_past = 0;
-};
-
-class COGENTENGINE_INTERFACE_EXPORT CogentEngineManager {
-private:
-  std::unordered_map<std::string, ContextState> context_states_;
-  std::vector<std::string> context_usage_order_;
-  static constexpr size_t kMaxCachedContexts = 8;
-
-  llama_model* primary_model_ = nullptr;
-  llama_sampler* sampler_ = nullptr;
-  PromptPerfStats last_prompt_perf_;
-  bool has_last_prompt_perf_ = false;
-  mutable std::mutex operation_mutex_;
-
+class COGENTENGINE_INTERFACE_EXPORT InferenceRuntime {
 public:
-  explicit CogentEngineManager(std::string model_path, int gpu_layers_n = 99);
-  ~CogentEngineManager();
+  explicit InferenceRuntime(std::string model_path, int gpu_layers_n = 99);
+  ~InferenceRuntime();
 
   bool IsReady() const;
   bool TryGetLastPromptPerf(PromptPerfStats& out) const;
@@ -83,9 +62,13 @@ public:
 
 private:
   bool EnsureContextSpace(ContextState& state, int new_tokens_needed, int n_ctx);
-  void TouchContextKey(const std::string& context_key);
-  void ReleaseContextState(const std::string& context_key);
-  void EnforceContextLimit();
+
+  llama_model* primary_model_ = nullptr;
+  llama_sampler* sampler_ = nullptr;
+  PromptPerfStats last_prompt_perf_;
+  bool has_last_prompt_perf_ = false;
+  SessionStore session_store_;
+  mutable std::mutex operation_mutex_;
 };
 
 }  // namespace noumena::cogentengine

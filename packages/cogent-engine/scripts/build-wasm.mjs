@@ -148,7 +148,7 @@ function resolveEmsdkRoot() {
   return collectEmsdkRoots()[0] ?? null;
 }
 
-// Match the original Unity build by reusing the cached Dawn WebGPU port when it exists.
+// Match the legacy standalone build by reusing the cached Dawn WebGPU port when it exists.
 function resolveEmdawnwebgpuDir(emsdkRoot) {
   const candidates = [process.env.EMDAWNWEBGPU_DIR?.trim()];
 

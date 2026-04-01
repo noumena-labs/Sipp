@@ -10,6 +10,12 @@ Source layout in this package:
 - `scripts/` build and clean scripts
 - `cmake/` shared Emscripten configuration
 
+## Design Docs
+
+- `docs/inference-runtime-v2-design.md` -> detailed target architecture, data structures, algorithms, implementation phases, and reference bibliography
+- `docs/inference-runtime-v2-implementation-guide.md` -> concrete execution checklist, file targets, verification gates, and per-phase working order
+- `docs/inference-architecture-draft.md` -> short overview that now points to the detailed design
+
 ## Prerequisites
 
 - Bun 1.3+
