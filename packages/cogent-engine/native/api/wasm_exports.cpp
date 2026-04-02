@@ -19,7 +19,7 @@ bool is_valid_prediction_tokens(int token_count) {
 }
 
 bool g_isEngineInitialized = false;
-std::mutex g_unityApiMutex;
+std::mutex g_apiMutex;
 
 char* duplicate_heap_string(const std::string& value) {
   char* out = static_cast<char*>(std::malloc(value.size() + 1));
@@ -50,8 +50,8 @@ std::string prompt_perf_to_json(const CE_PromptPerfMetrics& metrics) {
 extern "C" {
 
 EMSCRIPTEN_KEEPALIVE
-int CE_Unity_Init(const char* model_path) {
-  std::lock_guard<std::mutex> lock(g_unityApiMutex);
+int CE_Init(const char* model_path) {
+  std::lock_guard<std::mutex> lock(g_apiMutex);
 
   if (g_isEngineInitialized) {
     return kStatusFailure;
@@ -71,8 +71,8 @@ int CE_Unity_Init(const char* model_path) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-void CE_Unity_Close() {
-  std::lock_guard<std::mutex> lock(g_unityApiMutex);
+void CE_Close() {
+  std::lock_guard<std::mutex> lock(g_apiMutex);
 
   if (!g_isEngineInitialized) {
     return;
@@ -83,8 +83,8 @@ void CE_Unity_Close() {
 }
 
 EMSCRIPTEN_KEEPALIVE
-char* CE_Unity_GetLastPromptPerfJson() {
-  std::lock_guard<std::mutex> lock(g_unityApiMutex);
+char* CE_GetLastPromptPerfJson() {
+  std::lock_guard<std::mutex> lock(g_apiMutex);
 
   if (!g_isEngineInitialized) {
     return nullptr;
@@ -99,8 +99,8 @@ char* CE_Unity_GetLastPromptPerfJson() {
 }
 
 EMSCRIPTEN_KEEPALIVE
-char* CE_Unity_Prompt(const char* context_key, const char* prompt, int n_tokens) {
-  std::lock_guard<std::mutex> lock(g_unityApiMutex);
+char* CE_Prompt(const char* context_key, const char* prompt, int n_tokens) {
+  std::lock_guard<std::mutex> lock(g_apiMutex);
   if (!g_isEngineInitialized || !is_valid_prediction_tokens(n_tokens)) {
     return nullptr;
   }
@@ -109,7 +109,7 @@ char* CE_Unity_Prompt(const char* context_key, const char* prompt, int n_tokens)
 }
 
 EMSCRIPTEN_KEEPALIVE
-void CE_Unity_FreeString(char* str) {
+void CE_FreeString(char* str) {
   if (str) {
     std::free(str);
   }

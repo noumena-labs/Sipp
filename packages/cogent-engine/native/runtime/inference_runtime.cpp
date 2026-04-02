@@ -1,18 +1,19 @@
 /////////////////////////////////////////////////////////////////////////////////////////////////
 //
-// engine_manager.cpp
+// inference_runtime.cpp
 //
 // - Inference-only runtime over llama.cpp.
 // - Owns model lifetime, context reuse, and text generation.
 //
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "engine_manager.h"
+#include "runtime/inference_runtime.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cctype>
-#include <thread>
+
+#include "runtime/llama/llama_utils.h"
 
 namespace {
 
@@ -20,85 +21,11 @@ constexpr int kDefaultRetainedPromptTokens = 100;
 constexpr char kDefaultPromptContextKey[] = "__primary_prompt__";
 constexpr int kMaxPredictionTokens = 2048;
 
-std::vector<llama_token> common_tokenize(
-    const struct llama_vocab* vocab,
-    const std::string& text,
-    bool add_special,
-    bool parse_special) {
-  int n_tokens = static_cast<int>(text.length()) + 2 * static_cast<int>(add_special);
-  std::vector<llama_token> result(n_tokens);
-  n_tokens = llama_tokenize(
-      vocab,
-      text.data(),
-      text.length(),
-      result.data(),
-      result.size(),
-      add_special,
-      parse_special);
-  if (n_tokens < 0) {
-    result.resize(-n_tokens);
-    const int check = llama_tokenize(
-        vocab,
-        text.data(),
-        text.length(),
-        result.data(),
-        result.size(),
-        add_special,
-        parse_special);
-    GGML_ASSERT(check == -n_tokens);
-  } else {
-    result.resize(n_tokens);
-  }
-  return result;
-}
-
-void common_batch_clear(struct llama_batch& batch) {
-  batch.n_tokens = 0;
-}
-
-void common_batch_add(
-    struct llama_batch& batch,
-    llama_token id,
-    llama_pos pos,
-    const std::vector<llama_seq_id>& seq_ids,
-    bool logits) {
-  GGML_ASSERT(batch.seq_id[batch.n_tokens] && "llama_batch size exceeded");
-
-  batch.token[batch.n_tokens] = id;
-  batch.pos[batch.n_tokens] = pos;
-  batch.n_seq_id[batch.n_tokens] = seq_ids.size();
-  for (size_t i = 0; i < seq_ids.size(); ++i) {
-    batch.seq_id[batch.n_tokens][i] = seq_ids[i];
-  }
-  batch.logits[batch.n_tokens] = logits;
-  batch.n_tokens++;
-}
-
-void log_callback_default(enum ggml_log_level level, const char* text, void* user_data) {
-  (void) text;
-  (void) level;
-  (void) user_data;
-}
-
-int default_thread_count() {
-#if defined(__EMSCRIPTEN__)
-  #if defined(GGML_PTHREADS) && GGML_PTHREADS
-    #if defined(CE_WASM_PTHREAD_POOL_SIZE)
-      return std::clamp(CE_WASM_PTHREAD_POOL_SIZE, 1, 8);
-    #else
-      return 2;
-    #endif
-  #else
-    return 1;
-  #endif
-#else
-  return std::clamp(static_cast<int>(std::thread::hardware_concurrency()), 1, 8);
-#endif
-}
-
 }  // namespace
 
-bool noumena::cogentengine::CogentEngineManager::EnsureContextSpace(
+namespace noumena::cogentengine {
+
+bool InferenceRuntime::EnsureContextSpace(
     ContextState& state,
     int new_tokens_needed,
     int n_ctx) {
@@ -165,16 +92,17 @@ bool noumena::cogentengine::CogentEngineManager::EnsureContextSpace(
   return true;
 }
 
-noumena::cogentengine::CogentEngineManager::CogentEngineManager(
+InferenceRuntime::InferenceRuntime(
     std::string model_path,
-    int gpu_layers_n) {
+    int gpu_layers_n)
+    : session_store_(8) {
   if (model_path.empty()) {
     fprintf(stderr, "%s: error: model path is required\n", __func__);
     return;
   }
 
 #if defined(NDEBUG) || defined(CE_SUPPRESS_LLAMA_LOGS)
-  llama_log_set(log_callback_default, nullptr);
+  llama_log_set(llama_utils::LogCallbackDefault, nullptr);
 #endif
 
   ggml_backend_load_all();
@@ -205,15 +133,12 @@ noumena::cogentengine::CogentEngineManager::CogentEngineManager(
   llama_sampler_chain_add(sampler_, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 }
 
-noumena::cogentengine::CogentEngineManager::~CogentEngineManager() {
+InferenceRuntime::~InferenceRuntime() {
   if (sampler_ != nullptr) {
     llama_sampler_free(sampler_);
   }
 
-  for (auto const& [key, state] : context_states_) {
-    (void) key;
-    llama_free(state.ctx);
-  }
+  session_store_.Clear();
 
   if (primary_model_ != nullptr) {
     llama_model_free(primary_model_);
@@ -222,12 +147,12 @@ noumena::cogentengine::CogentEngineManager::~CogentEngineManager() {
   llama_backend_free();
 }
 
-bool noumena::cogentengine::CogentEngineManager::IsReady() const {
+bool InferenceRuntime::IsReady() const {
   std::lock_guard<std::mutex> lock(operation_mutex_);
   return primary_model_ != nullptr && sampler_ != nullptr;
 }
 
-bool noumena::cogentengine::CogentEngineManager::TryGetLastPromptPerf(
+bool InferenceRuntime::TryGetLastPromptPerf(
     PromptPerfStats& out) const {
   std::lock_guard<std::mutex> lock(operation_mutex_);
   if (!has_last_prompt_perf_) {
@@ -238,49 +163,7 @@ bool noumena::cogentengine::CogentEngineManager::TryGetLastPromptPerf(
   return true;
 }
 
-void noumena::cogentengine::CogentEngineManager::TouchContextKey(
-    const std::string& context_key) {
-  auto it = std::find(context_usage_order_.begin(), context_usage_order_.end(), context_key);
-  if (it != context_usage_order_.end()) {
-    context_usage_order_.erase(it);
-  }
-  context_usage_order_.push_back(context_key);
-}
-
-void noumena::cogentengine::CogentEngineManager::ReleaseContextState(
-    const std::string& context_key) {
-  auto ctx_it = context_states_.find(context_key);
-  if (ctx_it != context_states_.end()) {
-    if (ctx_it->second.ctx != nullptr) {
-      llama_free(ctx_it->second.ctx);
-    }
-    context_states_.erase(ctx_it);
-  }
-
-  auto order_it = std::find(context_usage_order_.begin(), context_usage_order_.end(), context_key);
-  if (order_it != context_usage_order_.end()) {
-    context_usage_order_.erase(order_it);
-  }
-}
-
-void noumena::cogentengine::CogentEngineManager::EnforceContextLimit() {
-  while (context_states_.size() >= kMaxCachedContexts && !context_usage_order_.empty()) {
-    const std::string evict_key = context_usage_order_.front();
-    context_usage_order_.erase(context_usage_order_.begin());
-
-    auto it = context_states_.find(evict_key);
-    if (it == context_states_.end()) {
-      continue;
-    }
-
-    if (it->second.ctx != nullptr) {
-      llama_free(it->second.ctx);
-    }
-    context_states_.erase(it);
-  }
-}
-
-std::string noumena::cogentengine::CogentEngineManager::Prompt(
+std::string InferenceRuntime::Prompt(
     std::string model_context_key,
     std::string prompt,
     int n_tokens_predict,
@@ -331,33 +214,33 @@ std::string noumena::cogentengine::CogentEngineManager::Prompt(
     formatted_prompt = "<|im_start|>user\n" + formatted_prompt +
                        "\n<|im_end|>\n<|im_start|>assistant\n";
   }
-  std::vector<llama_token> new_tokens = common_tokenize(vocab, formatted_prompt, false, true);
+  std::vector<llama_token> new_tokens =
+      llama_utils::Tokenize(vocab, formatted_prompt, false, true);
 
-  auto context_it = context_states_.find(model_context_key);
-  if (context_it == context_states_.end()) {
-    EnforceContextLimit();
+  ContextState* state = session_store_.Find(model_context_key);
+  if (state == nullptr) {
+    session_store_.EnforceLimitBeforeInsert();
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = std::min(4096 * 2, llama_model_n_ctx_train(primary_model_));
     ctx_params.n_batch = 256;
     ctx_params.no_perf = false;
     ctx_params.n_seq_max = 1;
-    ctx_params.n_threads = default_thread_count();
+    ctx_params.n_threads = llama_utils::DefaultThreadCount();
 
-    ContextState state;
-    state.ctx = llama_init_from_model(primary_model_, ctx_params);
-    if (state.ctx == nullptr) {
+    ContextState new_state;
+    new_state.ctx = llama_init_from_model(primary_model_, ctx_params);
+    if (new_state.ctx == nullptr) {
       return "";
     }
-    state.n_past = 0;
-    context_it = context_states_.emplace(model_context_key, std::move(state)).first;
+    new_state.n_past = 0;
+    state = &session_store_.Emplace(model_context_key, std::move(new_state));
   }
 
-  TouchContextKey(model_context_key);
-  ContextState& state = context_it->second;
-  llama_context* ctx = state.ctx;
+  session_store_.Touch(model_context_key);
+  llama_context* ctx = state->ctx;
   if (ctx == nullptr) {
-    ReleaseContextState(model_context_key);
+    session_store_.Remove(model_context_key);
     return "";
   }
 
@@ -367,9 +250,9 @@ std::string noumena::cogentengine::CogentEngineManager::Prompt(
   const bool allow_partial_kv = !(is_recurrent || is_hybrid);
 
   size_t match_len = 0;
-  const size_t min_len = std::min(state.current_kv_tokens.size(), new_tokens.size());
+  const size_t min_len = std::min(state->current_kv_tokens.size(), new_tokens.size());
   for (size_t i = 0; i < min_len; ++i) {
-    if (state.current_kv_tokens[i] != new_tokens[i]) {
+    if (state->current_kv_tokens[i] != new_tokens[i]) {
       break;
     }
     match_len++;
@@ -379,23 +262,23 @@ std::string noumena::cogentengine::CogentEngineManager::Prompt(
   const int tokens_to_add = static_cast<int>(new_tokens.size() - match_len);
   const int total_needed = tokens_to_add + n_tokens_predict;
 
-  if (!EnsureContextSpace(state, total_needed, n_ctx)) {
+  if (!EnsureContextSpace(*state, total_needed, n_ctx)) {
     return "Error: Context full and input too large to shift.";
   }
 
-  if (match_len < state.current_kv_tokens.size()) {
+  if (match_len < state->current_kv_tokens.size()) {
     if (!allow_partial_kv) {
       llama_memory_seq_rm(mem, 0, 0, -1);
-      state.current_kv_tokens.clear();
-      state.n_past = 0;
+      state->current_kv_tokens.clear();
+      state->n_past = 0;
       match_len = 0;
     } else {
       if (!llama_memory_seq_rm(mem, 0, match_len, -1)) {
         fprintf(stderr, "failed to remove tokens from memory\n");
         return "";
       }
-      state.current_kv_tokens.resize(match_len);
-      state.n_past = static_cast<int>(match_len);
+      state->current_kv_tokens.resize(match_len);
+      state->n_past = static_cast<int>(match_len);
     }
   }
 
@@ -410,8 +293,8 @@ std::string noumena::cogentengine::CogentEngineManager::Prompt(
   if (match_len == new_tokens.size() && match_len > 0) {
     if (!allow_partial_kv) {
       llama_memory_seq_rm(mem, 0, 0, -1);
-      state.current_kv_tokens.clear();
-      state.n_past = 0;
+      state->current_kv_tokens.clear();
+      state->n_past = 0;
       match_len = 0;
     } else {
       if (!llama_memory_seq_rm(mem, 0, match_len - 1, -1)) {
@@ -419,8 +302,8 @@ std::string noumena::cogentengine::CogentEngineManager::Prompt(
         llama_batch_free(batch);
         return "";
       }
-      state.current_kv_tokens.resize(match_len - 1);
-      state.n_past = static_cast<int>(match_len - 1);
+      state->current_kv_tokens.resize(match_len - 1);
+      state->n_past = static_cast<int>(match_len - 1);
       match_len--;
     }
   }
@@ -429,7 +312,7 @@ std::string noumena::cogentengine::CogentEngineManager::Prompt(
     const int batch_pos = static_cast<int>(i);
     const bool logits = (i == new_tokens.size() - 1);
 
-    common_batch_add(batch, new_tokens[i], batch_pos, {0}, logits);
+    llama_utils::BatchAdd(batch, new_tokens[i], batch_pos, {0}, logits);
 
     if (batch.n_tokens >= n_batch) {
       if (llama_decode(ctx, batch) != 0) {
@@ -437,8 +320,8 @@ std::string noumena::cogentengine::CogentEngineManager::Prompt(
         llama_batch_free(batch);
         return "";
       }
-      state.n_past += batch.n_tokens;
-      common_batch_clear(batch);
+      state->n_past += batch.n_tokens;
+      llama_utils::BatchClear(batch);
     }
   }
 
@@ -448,14 +331,14 @@ std::string noumena::cogentengine::CogentEngineManager::Prompt(
       llama_batch_free(batch);
       return "";
     }
-    state.n_past += batch.n_tokens;
+    state->n_past += batch.n_tokens;
   }
 
-  state.current_kv_tokens = new_tokens;
+  state->current_kv_tokens = new_tokens;
 
   std::string response;
   response.reserve(n_tokens_predict * 4);
-  common_batch_clear(batch);
+  llama_utils::BatchClear(batch);
   int output_token_count = 0;
 
   for (int i = 0; i < n_tokens_predict; ++i) {
@@ -477,15 +360,15 @@ std::string noumena::cogentengine::CogentEngineManager::Prompt(
       onTokenReceived(std::string(buf, n));
     }
 
-    common_batch_clear(batch);
-    common_batch_add(batch, tok, state.n_past, {0}, true);
+    llama_utils::BatchClear(batch);
+    llama_utils::BatchAdd(batch, tok, state->n_past, {0}, true);
 
     if (llama_decode(ctx, batch) != 0) {
       break;
     }
 
-    state.n_past++;
-    state.current_kv_tokens.push_back(tok);
+    state->n_past++;
+    state->current_kv_tokens.push_back(tok);
   }
 
   llama_batch_free(batch);
@@ -509,3 +392,5 @@ std::string noumena::cogentengine::CogentEngineManager::Prompt(
 
   return response;
 }
+
+}  // namespace noumena::cogentengine

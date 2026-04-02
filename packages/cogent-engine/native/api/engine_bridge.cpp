@@ -1,11 +1,12 @@
 #include "engine_bridge.h"
-#include "engine_manager.h"
 
 #include <memory>
 #include <mutex>
 #include <string>
 
-using noumena::cogentengine::CogentEngineManager;
+#include "runtime/inference_runtime.h"
+
+using noumena::cogentengine::InferenceRuntime;
 
 namespace {
 
@@ -13,34 +14,34 @@ constexpr int kDefaultGpuLayers = 99;
 constexpr int kStatusError = -1;
 
 std::mutex g_engineMutex;
-std::shared_ptr<CogentEngineManager> g_engineManager;
+std::shared_ptr<InferenceRuntime> g_engineRuntime;
 
-std::shared_ptr<CogentEngineManager> acquire_engine_manager() {
+std::shared_ptr<InferenceRuntime> acquire_engine_runtime() {
   std::lock_guard<std::mutex> lock(g_engineMutex);
-  return g_engineManager;
+  return g_engineRuntime;
 }
 
 }  // namespace
 
 int CE_InitPlugin(const char* model_path) {
   std::lock_guard<std::mutex> lock(g_engineMutex);
-  if (model_path == nullptr || model_path[0] == '\0' || g_engineManager) {
+  if (model_path == nullptr || model_path[0] == '\0' || g_engineRuntime) {
     return kStatusError;
   }
 
-  auto manager =
-      std::make_shared<CogentEngineManager>(model_path, kDefaultGpuLayers);
-  if (!manager || !manager->IsReady()) {
+  auto runtime =
+      std::make_shared<InferenceRuntime>(model_path, kDefaultGpuLayers);
+  if (!runtime || !runtime->IsReady()) {
     return kStatusError;
   }
 
-  g_engineManager = std::move(manager);
+  g_engineRuntime = std::move(runtime);
   return 0;
 }
 
 void CE_ClosePlugin() {
   std::lock_guard<std::mutex> lock(g_engineMutex);
-  g_engineManager.reset();
+  g_engineRuntime.reset();
 }
 
 int CE_GetLastPromptPerf(CE_PromptPerfMetrics* out_metrics) {
@@ -48,13 +49,13 @@ int CE_GetLastPromptPerf(CE_PromptPerfMetrics* out_metrics) {
     return kStatusError;
   }
 
-  auto manager = acquire_engine_manager();
-  if (!manager) {
+  auto runtime = acquire_engine_runtime();
+  if (!runtime) {
     return kStatusError;
   }
 
   noumena::cogentengine::PromptPerfStats perf_stats;
-  if (!manager->TryGetLastPromptPerf(perf_stats)) {
+  if (!runtime->TryGetLastPromptPerf(perf_stats)) {
     return kStatusError;
   }
 
@@ -73,12 +74,12 @@ std::string CE_ProcessPromptQuery(
     const char* context_key,
     const char* prompt,
     int n_tokens_predict) {
-  auto manager = acquire_engine_manager();
-  if (!manager) {
+  auto runtime = acquire_engine_runtime();
+  if (!runtime) {
     return {};
   }
 
-  return manager->Prompt(
+  return runtime->Prompt(
       context_key ? context_key : "",
       prompt ? prompt : "",
       n_tokens_predict);

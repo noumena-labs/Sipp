@@ -17,7 +17,7 @@ interface EmscriptenFs {
 
 interface EngineModule {
   FS: EmscriptenFs;
-  _CE_Unity_FreeString(ptr: number): void;
+  _CE_FreeString(ptr: number): void;
   ccall(ident: string, returnType: string | null, argTypes: string[], args: unknown[], opts?: { async?: boolean }): Promise<number> | number;
   UTF8ToString(ptr: number): string;
 }
@@ -408,7 +408,7 @@ export class CogentEngine {
     if (!modelPath || modelPath.trim().length === 0) {
       throw new Error('modelPath must not be empty.');
     }
-    const result = await module.ccall('CE_Unity_Init', 'number', ['string'], [modelPath], { async: true });
+    const result = await module.ccall('CE_Init', 'number', ['string'], [modelPath], { async: true });
     if (result !== 0) {
       this.engineInitialized = false;
       throw new Error(`Failed to initialize engine. Code: ${result}`);
@@ -424,7 +424,7 @@ export class CogentEngine {
     if (!module) {
       return;
     }
-    module.ccall('CE_Unity_Close', null, [], []);
+    module.ccall('CE_Close', null, [], []);
     this.engineInitialized = false;
     this.loadedModelPath = null;
     this.module = null;
@@ -442,7 +442,7 @@ export class CogentEngine {
     const module = this.getReadyEngineModule();
     const tokenCount = this.resolvePromptTokenCount(options);
     const ptr = await module.ccall(
-      'CE_Unity_Prompt',
+      'CE_Prompt',
       'number',
       ['string', 'string', 'number'],
       [contextKey, promptText, tokenCount],
@@ -456,13 +456,13 @@ export class CogentEngine {
     try {
       return module.UTF8ToString(ptr);
     } finally {
-      module._CE_Unity_FreeString(ptr);
+      module._CE_FreeString(ptr);
     }
   }
 
   public getLastPromptPerformance(): PromptPerformanceStats | null {
     const module = this.getReadyEngineModule();
-    const ptrResult = module.ccall('CE_Unity_GetLastPromptPerfJson', 'number', [], []);
+    const ptrResult = module.ccall('CE_GetLastPromptPerfJson', 'number', [], []);
     if (ptrResult instanceof Promise) {
       throw new Error('Unexpected async result while reading prompt performance stats.');
     }
@@ -478,7 +478,7 @@ export class CogentEngine {
     } catch (error) {
       throw new Error(`Failed to parse prompt performance stats: ${asErrorMessage(error)}`);
     } finally {
-      module._CE_Unity_FreeString(ptr);
+      module._CE_FreeString(ptr);
     }
   }
 }
