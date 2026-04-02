@@ -3,12 +3,14 @@
   "configurations": [
     {
       "name": "Attach backend-ops WebGPU Debug",
-      "type": "chrome",
+      "type": "pwa-chrome",
       "request": "attach",
       "address": "127.0.0.1",
       "port": 9222,
       "urlFilter": "http://127.0.0.1:*/__runner__/runner.html*",
-      "webRoot": "${workspaceFolder}",
+      "webRoot": "${workspaceFolder}/packages/cogent-engine",
+      "enableDWARF": true,
+      "trace": true,
       "sourceMapPathOverrides": {
         "../../third_party/*": "${workspaceFolder}/packages/cogent-engine/third_party/*",
         "../../src/*": "${workspaceFolder}/packages/cogent-engine/src/*",
@@ -23,12 +25,14 @@
     },
     {
       "name": "Attach backend-ops WebGPU Debug (Custom)",
-      "type": "chrome",
+      "type": "pwa-chrome",
       "request": "attach",
       "address": "127.0.0.1",
       "port": 9222,
       "urlFilter": "http://127.0.0.1:*/__runner__/runner.html*",
-      "webRoot": "${workspaceFolder}",
+      "webRoot": "${workspaceFolder}/packages/cogent-engine",
+      "enableDWARF": true,
+      "trace": true,
       "sourceMapPathOverrides": {
         "../../third_party/*": "${workspaceFolder}/packages/cogent-engine/third_party/*",
         "../../src/*": "${workspaceFolder}/packages/cogent-engine/src/*",
@@ -43,12 +47,14 @@
     },
     {
       "name": "Attach existing backend-ops WebGPU Debug",
-      "type": "chrome",
+      "type": "pwa-chrome",
       "request": "attach",
       "address": "127.0.0.1",
       "port": 9222,
       "urlFilter": "http://127.0.0.1:*/__runner__/runner.html*",
-      "webRoot": "${workspaceFolder}",
+      "webRoot": "${workspaceFolder}/packages/cogent-engine",
+      "enableDWARF": true,
+      "trace": true,
       "sourceMapPathOverrides": {
         "../../third_party/*": "${workspaceFolder}/packages/cogent-engine/third_party/*",
         "../../src/*": "${workspaceFolder}/packages/cogent-engine/src/*",
