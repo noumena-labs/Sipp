@@ -135,7 +135,8 @@ if(CE_WASM_DEBUG)
         ${_CE_DEBUG_PATH_REMAP_FLAGS}
     )
     set(_CE_DEBUG_LINK_FLAGS
-        -g0
+        # Keep DWARF in the final linked wasm so VS Code can load C/C++ sources.
+        -g3
         -sASSERTIONS=2
         -gsource-map
         "--source-map-base=./"
