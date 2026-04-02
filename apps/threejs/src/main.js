@@ -163,6 +163,112 @@ function metricCard(label, value, tone = 'default') {
   `;
 }
 
+function detectWebGlSupport() {
+  const canvas = document.createElement('canvas');
+
+  try {
+    const webgl2 = canvas.getContext('webgl2', { failIfMajorPerformanceCaveat: true });
+    if (webgl2) {
+      return { supported: true, contextName: 'webgl2' };
+    }
+
+    const webgl = canvas.getContext('webgl', { failIfMajorPerformanceCaveat: true })
+      || canvas.getContext('experimental-webgl', { failIfMajorPerformanceCaveat: true });
+    if (webgl) {
+      return { supported: true, contextName: 'webgl' };
+    }
+
+    return { supported: false, contextName: null };
+  } catch (error) {
+    return {
+      supported: false,
+      contextName: null,
+      error: errorMessage(error),
+    };
+  }
+}
+
+function createGraphicsRuntime(targetApp) {
+  const webGlSupport = detectWebGlSupport();
+  if (!webGlSupport.supported) {
+    return {
+      available: false,
+      message: webGlSupport.error
+        ? `disabled: ${webGlSupport.error}`
+        : 'disabled: browser WebGL is unavailable',
+      renderer: null,
+      scene: null,
+      camera: null,
+      knot: null,
+      shell: null,
+    };
+  }
+
+  try {
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    targetApp.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color('#050814');
+    scene.fog = new THREE.Fog('#050814', 6, 14);
+
+    const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(0, 0.6, 4.2);
+
+    const hemiLight = new THREE.HemisphereLight('#9dd7ff', '#091320', 1.2);
+    scene.add(hemiLight);
+
+    const keyLight = new THREE.DirectionalLight('#52b8ff', 1.8);
+    keyLight.position.set(3, 2, 2);
+    scene.add(keyLight);
+
+    const knot = new THREE.Mesh(
+      new THREE.TorusKnotGeometry(0.72, 0.24, 220, 32),
+      new THREE.MeshStandardMaterial({
+        color: '#1e7cff',
+        emissive: '#16306b',
+        emissiveIntensity: 0.6,
+        metalness: 0.25,
+        roughness: 0.22,
+      })
+    );
+    scene.add(knot);
+
+    const shell = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(1.75, 3),
+      new THREE.MeshBasicMaterial({
+        color: '#1f55a2',
+        transparent: true,
+        opacity: 0.14,
+        wireframe: true,
+      })
+    );
+    scene.add(shell);
+
+    return {
+      available: true,
+      message: 'active',
+      renderer,
+      scene,
+      camera,
+      knot,
+      shell,
+    };
+  } catch (error) {
+    return {
+      available: false,
+      message: `disabled: ${errorMessage(error)}`,
+      renderer: null,
+      scene: null,
+      camera: null,
+      knot: null,
+      shell: null,
+    };
+  }
+}
+
 function summarize(values) {
   const sorted = [...values].sort((left, right) => left - right);
   const total = sorted.reduce((acc, value) => acc + value, 0);
@@ -444,13 +550,16 @@ function setStatus(message) {
 }
 
 function applyResponseColor(text) {
+  if (!graphics.knot) {
+    return;
+  }
   let hash = 0;
   for (let i = 0; i < text.length; i += 1) {
     hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
   }
   const hue = hash % 360;
-  knot.material.color.setHSL(hue / 360, 0.8, 0.55);
-  knot.material.emissive.setHSL(hue / 360, 0.7, 0.22);
+  graphics.knot.material.color.setHSL(hue / 360, 0.8, 0.55);
+  graphics.knot.material.emissive.setHSL(hue / 360, 0.7, 0.22);
 }
 
 function setBusy(isBusy) {
@@ -593,6 +702,18 @@ async function collectEnvironmentInfo(force = false) {
   return info;
 }
 
+async function ensureBrowserWebGpuReady() {
+  const info = await collectEnvironmentInfo();
+  if (!info.hasNavigatorGpu) {
+    throw new Error('WebGPU is unavailable in this browser session, so browser inference cannot start.');
+  }
+  if (!info.adapterAvailable) {
+    const reason = info.adapterError || info.adapterLabel || 'requestAdapter() did not produce an adapter.';
+    throw new Error(`WebGPU adapter unavailable: ${reason}`);
+  }
+  return info;
+}
+
 function renderEnvironmentInfo(info) {
   const cards = [
     metricCard('Browser', info.browserLabel),
@@ -600,6 +721,11 @@ function renderEnvironmentInfo(info) {
     metricCard('Threads', info.hardwareConcurrency == null ? 'n/a' : String(info.hardwareConcurrency)),
     metricCard('Device Memory', info.deviceMemory == null ? 'n/a' : `${info.deviceMemory} GiB`),
     metricCard('COI', info.crossOriginIsolated ? 'enabled' : 'disabled', info.crossOriginIsolated ? 'ok' : 'warn'),
+    metricCard(
+      '3D Background',
+      graphics.available ? 'WebGL active' : graphics.message,
+      graphics.available ? 'ok' : 'warn'
+    ),
     metricCard(
       'WebGPU',
       info.adapterAvailable
@@ -886,47 +1012,11 @@ const downloadReportBtn = document.querySelector('#downloadReportBtn');
   runBenchmarkBtn,
 ].forEach(registerActionButton);
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setSize(window.innerWidth, window.innerHeight);
-app.appendChild(renderer.domElement);
+const graphics = createGraphicsRuntime(app);
 
-const scene = new THREE.Scene();
-scene.background = new THREE.Color('#050814');
-scene.fog = new THREE.Fog('#050814', 6, 14);
-
-const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 100);
-camera.position.set(0, 0.6, 4.2);
-
-const hemiLight = new THREE.HemisphereLight('#9dd7ff', '#091320', 1.2);
-scene.add(hemiLight);
-
-const keyLight = new THREE.DirectionalLight('#52b8ff', 1.8);
-keyLight.position.set(3, 2, 2);
-scene.add(keyLight);
-
-const knot = new THREE.Mesh(
-  new THREE.TorusKnotGeometry(0.72, 0.24, 220, 32),
-  new THREE.MeshStandardMaterial({
-    color: '#1e7cff',
-    emissive: '#16306b',
-    emissiveIntensity: 0.6,
-    metalness: 0.25,
-    roughness: 0.22,
-  })
-);
-scene.add(knot);
-
-const shell = new THREE.Mesh(
-  new THREE.IcosahedronGeometry(1.75, 3),
-  new THREE.MeshBasicMaterial({
-    color: '#1f55a2',
-    transparent: true,
-    opacity: 0.14,
-    wireframe: true,
-  })
-);
-scene.add(shell);
+if (!graphics.available) {
+  statusEl.textContent = 'Status: WebGL unavailable; running benchmark UI without the 3D background.';
+}
 
 initRuntimeBtn.addEventListener('click', async () => {
   setBusy(true);
@@ -948,7 +1038,7 @@ loadModelBtn.addEventListener('click', async () => {
   setStatus('loading model...');
 
   try {
-    await collectEnvironmentInfo();
+    await ensureBrowserWebGpuReady();
     const result = await loadAndInitCurrentEngine('manual load');
     const sourceLabel = result.modelSource.type === 'file'
       ? `${result.modelSource.label} (${formatMiB(result.modelSource.sizeBytes)})`
@@ -999,7 +1089,8 @@ runPromptBtn.addEventListener('click', async () => {
     renderResponseMetrics({ text, ttftMs }, wallMs, perf);
     sceneEnergyTarget = Math.min(2.2, Math.max(0.55, text.length / 140));
     applyResponseColor(text);
-    setStatus(`single inference complete in ${formatMs(wallMs)}`);
+    const graphicsSuffix = graphics.available ? '' : ' (3D background disabled)';
+    setStatus(`single inference complete in ${formatMs(wallMs)}${graphicsSuffix}`);
   } catch (error) {
     setStatus(`single inference failed: ${errorMessage(error)}`);
   } finally {
@@ -1012,6 +1103,7 @@ runBenchmarkBtn.addEventListener('click', async () => {
   setStatus('starting browser benchmark...');
 
   try {
+    await ensureBrowserWebGpuReady();
     const report = await runBrowserBenchmark();
     lastBenchmarkReport = report;
     syncReportDownloadState();
@@ -1057,9 +1149,12 @@ downloadReportBtn.addEventListener('click', () => {
 });
 
 function handleResize() {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  if (!graphics.camera || !graphics.renderer) {
+    return;
+  }
+  graphics.camera.aspect = window.innerWidth / window.innerHeight;
+  graphics.camera.updateProjectionMatrix();
+  graphics.renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
 window.addEventListener('resize', handleResize);
@@ -1084,11 +1179,15 @@ function disposeDemo() {
     animationFrameId = 0;
   }
 
-  knot.geometry.dispose();
-  disposeMaterial(knot.material);
-  shell.geometry.dispose();
-  disposeMaterial(shell.material);
-  renderer.dispose();
+  if (graphics.knot) {
+    graphics.knot.geometry.dispose();
+    disposeMaterial(graphics.knot.material);
+  }
+  if (graphics.shell) {
+    graphics.shell.geometry.dispose();
+    disposeMaterial(graphics.shell.material);
+  }
+  graphics.renderer?.dispose();
   engine.close();
 }
 
@@ -1098,14 +1197,17 @@ if (import.meta.hot) {
 }
 
 function animate() {
+  if (!graphics.renderer || !graphics.scene || !graphics.camera || !graphics.knot || !graphics.shell) {
+    return;
+  }
   sceneEnergy += (sceneEnergyTarget - sceneEnergy) * 0.03;
-  knot.rotation.x += 0.0035 * sceneEnergy;
-  knot.rotation.y += 0.0056 * sceneEnergy;
-  shell.rotation.y -= 0.0024 * sceneEnergy;
-  shell.rotation.z += 0.0008 * sceneEnergy;
-  knot.material.emissiveIntensity = 0.45 + sceneEnergy * 0.35;
+  graphics.knot.rotation.x += 0.0035 * sceneEnergy;
+  graphics.knot.rotation.y += 0.0056 * sceneEnergy;
+  graphics.shell.rotation.y -= 0.0024 * sceneEnergy;
+  graphics.shell.rotation.z += 0.0008 * sceneEnergy;
+  graphics.knot.material.emissiveIntensity = 0.45 + sceneEnergy * 0.35;
 
-  renderer.render(scene, camera);
+  graphics.renderer.render(graphics.scene, graphics.camera);
   animationFrameId = requestAnimationFrame(animate);
 }
 
