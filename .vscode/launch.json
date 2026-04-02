@@ -3,20 +3,62 @@
   "configurations": [
     {
       "name": "Attach backend-ops WebGPU Debug",
-      "type": "pwa-chrome",
+      "type": "chrome",
       "request": "attach",
       "address": "127.0.0.1",
       "port": 9222,
+      "urlFilter": "http://127.0.0.1:*/__runner__/runner.html*",
       "webRoot": "${workspaceFolder}",
+      "sourceMapPathOverrides": {
+        "../../third_party/*": "${workspaceFolder}/packages/cogent-engine/third_party/*",
+        "../../src/*": "${workspaceFolder}/packages/cogent-engine/src/*",
+        "../../native/*": "${workspaceFolder}/packages/cogent-engine/native/*",
+        "../../scripts/*": "${workspaceFolder}/packages/cogent-engine/scripts/*",
+        "/third_party/*": "${workspaceFolder}/packages/cogent-engine/third_party/*",
+        "/src/*": "${workspaceFolder}/packages/cogent-engine/src/*",
+        "/native/*": "${workspaceFolder}/packages/cogent-engine/native/*",
+        "/scripts/*": "${workspaceFolder}/packages/cogent-engine/scripts/*"
+      },
       "preLaunchTask": "backend-ops:webgpu:debug"
     },
     {
-      "name": "Attach existing backend-ops WebGPU Debug",
-      "type": "pwa-chrome",
+      "name": "Attach backend-ops WebGPU Debug (Custom)",
+      "type": "chrome",
       "request": "attach",
       "address": "127.0.0.1",
       "port": 9222,
-      "webRoot": "${workspaceFolder}"
+      "urlFilter": "http://127.0.0.1:*/__runner__/runner.html*",
+      "webRoot": "${workspaceFolder}",
+      "sourceMapPathOverrides": {
+        "../../third_party/*": "${workspaceFolder}/packages/cogent-engine/third_party/*",
+        "../../src/*": "${workspaceFolder}/packages/cogent-engine/src/*",
+        "../../native/*": "${workspaceFolder}/packages/cogent-engine/native/*",
+        "../../scripts/*": "${workspaceFolder}/packages/cogent-engine/scripts/*",
+        "/third_party/*": "${workspaceFolder}/packages/cogent-engine/third_party/*",
+        "/src/*": "${workspaceFolder}/packages/cogent-engine/src/*",
+        "/native/*": "${workspaceFolder}/packages/cogent-engine/native/*",
+        "/scripts/*": "${workspaceFolder}/packages/cogent-engine/scripts/*"
+      },
+      "preLaunchTask": "backend-ops:webgpu:debug:custom"
+    },
+    {
+      "name": "Attach existing backend-ops WebGPU Debug",
+      "type": "chrome",
+      "request": "attach",
+      "address": "127.0.0.1",
+      "port": 9222,
+      "urlFilter": "http://127.0.0.1:*/__runner__/runner.html*",
+      "webRoot": "${workspaceFolder}",
+      "sourceMapPathOverrides": {
+        "../../third_party/*": "${workspaceFolder}/packages/cogent-engine/third_party/*",
+        "../../src/*": "${workspaceFolder}/packages/cogent-engine/src/*",
+        "../../native/*": "${workspaceFolder}/packages/cogent-engine/native/*",
+        "../../scripts/*": "${workspaceFolder}/packages/cogent-engine/scripts/*",
+        "/third_party/*": "${workspaceFolder}/packages/cogent-engine/third_party/*",
+        "/src/*": "${workspaceFolder}/packages/cogent-engine/src/*",
+        "/native/*": "${workspaceFolder}/packages/cogent-engine/native/*",
+        "/scripts/*": "${workspaceFolder}/packages/cogent-engine/scripts/*"
+      }
     }
   ]
 }

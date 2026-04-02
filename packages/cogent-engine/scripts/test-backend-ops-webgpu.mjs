@@ -584,6 +584,17 @@ function getMimeType(filePath) {
       return 'application/json; charset=utf-8';
     case '.css':
       return 'text/css; charset=utf-8';
+    case '.c':
+    case '.cc':
+    case '.cpp':
+    case '.cxx':
+    case '.h':
+    case '.hh':
+    case '.hpp':
+    case '.hxx':
+    case '.inc':
+    case '.inl':
+      return 'text/plain; charset=utf-8';
     default:
       return 'application/octet-stream';
   }
@@ -602,6 +613,27 @@ function resolveStaticFile(rootDir, requestPath) {
   return candidatePath;
 }
 
+function resolveDebugRequestFile(requestPath) {
+  if (requestPath.startsWith('/__runner__/')) {
+    return resolveStaticFile(runnerDir, requestPath.slice('/__runner__/'.length));
+  }
+
+  const candidatePaths = [];
+
+  if (emsdkRoot && requestPath.startsWith('/emsdk/upstream/')) {
+    candidatePaths.push(resolveStaticFile(emsdkRoot, requestPath.slice('/emsdk/'.length)));
+  }
+
+  if (emsdkRoot && requestPath.startsWith('/emsdk/emscripten/')) {
+    candidatePaths.push(resolveStaticFile(path.join(emsdkRoot, 'upstream'), requestPath.slice('/emsdk/'.length)));
+  }
+
+  candidatePaths.push(resolveStaticFile(buildOutputDir, requestPath));
+  candidatePaths.push(resolveStaticFile(projectRoot, requestPath));
+
+  return candidatePaths.find((candidatePath) => candidatePath && existsSync(candidatePath)) ?? null;
+}
+
 async function startStaticServer() {
   const server = http.createServer(async (request, response) => {
     try {
@@ -615,12 +647,7 @@ async function startStaticServer() {
       response.setHeader('Pragma', 'no-cache');
       response.setHeader('Expires', '0');
 
-      let filePath = null;
-      if (requestPath.startsWith('/__runner__/')) {
-        filePath = resolveStaticFile(runnerDir, requestPath.slice('/__runner__/'.length));
-      } else {
-        filePath = resolveStaticFile(buildOutputDir, requestPath);
-      }
+      const filePath = resolveDebugRequestFile(requestPath);
 
       if (!filePath || !existsSync(filePath)) {
         response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });

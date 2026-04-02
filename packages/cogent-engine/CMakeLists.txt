@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
 project(CogentEngineWeb CXX)
 
+set(CMAKE_CXX_FLAGS_DEBUG "" CACHE STRING "" FORCE)
+set(CMAKE_C_FLAGS_DEBUG "" CACHE STRING "" FORCE)
+set(CMAKE_CXX_FLAGS_RELEASE "" CACHE STRING "" FORCE)
+set(CMAKE_C_FLAGS_RELEASE "" CACHE STRING "" FORCE)
+
 if (NOT EMSCRIPTEN)
   message(FATAL_ERROR "This project must be built with Emscripten!")
 endif()

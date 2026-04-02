@@ -170,8 +170,11 @@ The debug command:
 - uses a dedicated build directory: `build-test-backend-ops-webgpu-debug`
 - configures CMake with `CMAKE_BUILD_TYPE=Debug`
 - enables debugger-friendly Emscripten flags such as `-g3` and assertions
+- normalizes Windows source-path drive-letter casing in DWARF to improve VS Code breakpoint binding
 - launches headed Chromium on remote debug port `9222`
 - pauses before `callMain()` so you can attach a debugger first
+
+Before using C++ breakpoints in VS Code, install the `WebAssembly DWARF Debugging` extension: `ms-vscode.wasm-dwarf-debugging`.
 
 VS Code workflow from the repo root:
 
@@ -179,6 +182,8 @@ VS Code workflow from the repo root:
 2. Wait for Chromium to open the runner page and pause.
 3. Set breakpoints in the wasm-backed sources you want to inspect.
 4. Click `Resume Wasm Run` in the browser page to start the selected backend-op run.
+
+If a C++ breakpoint stays gray-hollow in VS Code on Windows, rebuild the debug target after these settings changes so the wasm DWARF paths are regenerated with canonical drive-letter casing.
 
 The repository also includes `.vscode/tasks.json` and `.vscode/launch.json` to automate this attach flow.
 

@@ -6,30 +6,79 @@
       "type": "shell",
       "command": "bun",
       "args": [
-        "run",
-        "test:backend-ops:webgpu:debug",
-        "--",
+        "./packages/cogent-engine/scripts/test-backend-ops-webgpu-op.mjs",
+        "--debug",
+        "GET_ROWS",
+        "--mode",
+        "test"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true,
+      "runOptions": {
+        "instanceLimit": 1,
+        "instancePolicy": "terminateOldest"
+      },
+      "problemMatcher": {
+        "owner": "custom",
+        "fileLocation": "absolute",
+        "pattern": [
+          {
+            "regexp": "^(___BACKGROUND_TASK_ONLY___)$",
+            "kind": "file",
+            "file": 1,
+            "message": 1
+          }
+        ],
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*\\[test-backend-ops:webgpu:debug\\] run:",
+          "endsPattern": "^.*(?:\\[webgpu-browser-harness\\] debugger ready on port 9222|\\[webgpu-test-runner\\] waiting for debugger attach).*$"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "backend-ops:webgpu:debug:custom",
+      "type": "shell",
+      "command": "bun",
+      "args": [
+        "./packages/cogent-engine/scripts/test-backend-ops-webgpu-op.mjs",
+        "--debug",
         "${input:backendOpsOp}",
         "--mode",
         "${input:backendOpsMode}"
       ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
       "isBackground": true,
-      "problemMatcher": [
-        {
-          "owner": "custom",
-          "pattern": [
-            {
-              "regexp": "^(.*)$",
-              "message": 1
-            }
-          ],
-          "background": {
-            "activeOnStart": true,
-            "beginsPattern": "^.*\\[test-backend-ops:webgpu:debug\\] run:",
-            "endsPattern": "^.*\\[webgpu-browser-harness\\] debugger ready on port 9222$"
+      "runOptions": {
+        "instanceLimit": 1,
+        "instancePolicy": "terminateOldest"
+      },
+      "problemMatcher": {
+        "owner": "custom",
+        "fileLocation": "absolute",
+        "pattern": [
+          {
+            "regexp": "^(___BACKGROUND_TASK_ONLY___)$",
+            "kind": "file",
+            "file": 1,
+            "message": 1
           }
+        ],
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*\\[test-backend-ops:webgpu:debug\\] run:",
+          "endsPattern": "^.*(?:\\[webgpu-browser-harness\\] debugger ready on port 9222|\\[webgpu-test-runner\\] waiting for debugger attach).*$"
         }
-      ],
+      },
       "presentation": {
         "reveal": "always",
         "panel": "dedicated",

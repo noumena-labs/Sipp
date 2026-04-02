@@ -90,10 +90,56 @@ endif()
 # Optimization Configuration
 # ======================================================================================
 if(CE_WASM_DEBUG)
-    set(_CE_OPT_FLAGS -g3 -O0)
-    set(_CE_DEBUG_COMPILE_FLAGS)
+    set(_CE_DEBUG_PATH_REMAP_FLAGS)
+
+    if(CMAKE_HOST_WIN32)
+        file(TO_CMAKE_PATH "${CMAKE_SOURCE_DIR}" _ce_source_root_cmake)
+        file(TO_NATIVE_PATH "${CMAKE_SOURCE_DIR}" _ce_source_root_native)
+        set(_ce_source_root_cmake_lower "${_ce_source_root_cmake}")
+        set(_ce_source_root_native_lower "${_ce_source_root_native}")
+
+        if(_ce_source_root_cmake_lower MATCHES "^[A-Z]:")
+            string(SUBSTRING "${_ce_source_root_cmake_lower}" 0 1 _ce_source_drive)
+            string(TOLOWER "${_ce_source_drive}" _ce_source_drive_lower)
+            string(SUBSTRING "${_ce_source_root_cmake_lower}" 1 -1 _ce_source_suffix)
+            set(_ce_source_root_cmake_lower "${_ce_source_drive_lower}${_ce_source_suffix}")
+        endif()
+
+        if(_ce_source_root_native_lower MATCHES "^[A-Z]:")
+            string(SUBSTRING "${_ce_source_root_native_lower}" 0 1 _ce_source_drive)
+            string(TOLOWER "${_ce_source_drive}" _ce_source_drive_lower)
+            string(SUBSTRING "${_ce_source_root_native_lower}" 1 -1 _ce_source_suffix)
+            set(_ce_source_root_native_lower "${_ce_source_drive_lower}${_ce_source_suffix}")
+        endif()
+
+        if(NOT _ce_source_root_cmake STREQUAL _ce_source_root_cmake_lower)
+            list(APPEND _CE_DEBUG_PATH_REMAP_FLAGS
+                "-ffile-prefix-map=${_ce_source_root_cmake}=${_ce_source_root_cmake_lower}"
+                "-fdebug-prefix-map=${_ce_source_root_cmake}=${_ce_source_root_cmake_lower}"
+                "-fmacro-prefix-map=${_ce_source_root_cmake}=${_ce_source_root_cmake_lower}"
+            )
+        endif()
+
+        if(NOT _ce_source_root_native STREQUAL _ce_source_root_native_lower)
+            list(APPEND _CE_DEBUG_PATH_REMAP_FLAGS
+                "-ffile-prefix-map=${_ce_source_root_native}=${_ce_source_root_native_lower}"
+                "-fdebug-prefix-map=${_ce_source_root_native}=${_ce_source_root_native_lower}"
+                "-fmacro-prefix-map=${_ce_source_root_native}=${_ce_source_root_native_lower}"
+            )
+        endif()
+    endif()
+
+    set(_CE_OPT_FLAGS -O0)
+    set(_CE_DEBUG_COMPILE_FLAGS
+        -g3
+        ${_CE_DEBUG_PATH_REMAP_FLAGS}
+    )
     set(_CE_DEBUG_LINK_FLAGS
+        -g0
         -sASSERTIONS=2
+        -gsource-map
+        "--source-map-base=./"
+        ${_CE_DEBUG_PATH_REMAP_FLAGS}
     )
     set(_CE_LTO_FLAGS)
 else()
@@ -104,7 +150,6 @@ else()
         # excluding -ffinite-math-only.
         # See: https://github.com/ggml-org/llama.cpp/pull/7154
         set(_CE_OPT_FLAGS
-            -g0
             -O3
             # Fast-math components (excluding -ffinite-math-only for ggml compatibility)
             -fno-math-errno
@@ -119,10 +164,10 @@ else()
             -DNDEBUG
         )
     else()
-        set(_CE_OPT_FLAGS -g0 -O3 -DNDEBUG)
+        set(_CE_OPT_FLAGS -O3 -DNDEBUG)
     endif()
-    set(_CE_DEBUG_COMPILE_FLAGS)
-    set(_CE_DEBUG_LINK_FLAGS)
+    set(_CE_DEBUG_COMPILE_FLAGS -g0)
+    set(_CE_DEBUG_LINK_FLAGS -g0)
     set(_CE_LTO_FLAGS -flto=full)
 endif()
 
