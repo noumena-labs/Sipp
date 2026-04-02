@@ -109,10 +109,10 @@ foreach(_ggml_target ggml ggml-base ggml-cpu ggml-webgpu)
 endforeach()
 
 set(CE_WASM_EXPORTED_FUNCTIONS
-    "['_CE_Init','_CE_Close','_CE_Prompt','_CE_FreeString','_CE_GetLastPromptPerfJson']"
+    "['_CE_Init','_CE_Close','_CE_StreamPrompt','_CE_FreeString','_CE_GetLastPromptPerfJson']"
 )
 
-set(CE_WASM_RUNTIME_METHODS "['ccall','FS','UTF8ToString']")
+set(CE_WASM_RUNTIME_METHODS "['ccall','FS','UTF8ToString','addFunction','removeFunction']")
 
 set(CE_WASM_TARGET_LINK_OPTIONS
     ${CE_WASM_LINK_FLAGS}
@@ -128,8 +128,7 @@ set(CE_WASM_TARGET_LINK_OPTIONS
 if(CE_WASM_USE_JSPI)
     list(APPEND CE_WASM_TARGET_LINK_OPTIONS
         -sJSPI=1
-        -sJSPI_IMPORTS=['emscripten_sleep']
-        -sJSPI_EXPORTS=['_main_thread','CE_Init','CE_Prompt','CE_Close']
+        -sJSPI_EXPORTS=['_main_thread','CE_Init','CE_StreamPrompt','CE_Close']
     )
 endif()
 

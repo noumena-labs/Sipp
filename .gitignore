@@ -17,3 +17,4 @@ packages/*/a.out.wasm
 
 *.log
 .DS_Store
+*.gguf

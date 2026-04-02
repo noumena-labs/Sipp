@@ -2,7 +2,8 @@
 
 This demo now doubles as the browser benchmark harness for `cogent-engine`.
 It runs the browser-hosted inference path and reports runtime init, model load,
-engine init, cold prompt, hot fresh-context, and hot reused-context timings.
+engine init, and TensorRT-style serving metrics such as TTFT, TPOT, ITL, E2EL,
+request throughput, output token throughput, and total token throughput.
 
 ## Run
 

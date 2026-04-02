@@ -1,22 +1,33 @@
-import { mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { CogentEngine, getBundledRuntimeUrls } from '../dist/esm/index.js';
+import type {
+  FlashAttentionMode,
+  InferenceInitConfig,
+  PromptFormatMode,
+  PromptPerformanceStats,
+} from '../src/types.js';
 
-interface PromptPerformanceStats {
-  totalMs: number;
-  promptEvalMs: number;
-  decodeEvalMs: number;
-  sampleMs: number;
-  promptEvalTokens: number;
-  decodeEvalCount: number;
-  sampleCount: number;
-  outputTokenCount: number;
-}
+// Benchmark metric glossary:
+// - TTFT: time to first token. Measured from request start until the first streamed token callback.
+// - TPOT: time per output token after the first token. For one request:
+//         (E2EL - TTFT) / (output_tokens - 1).
+// - ITL: inter-token latency. The actual token-to-token gaps observed between streamed token callbacks.
+// - E2EL: end-to-end latency. Request start until the final streamed token has been received.
+// - Request throughput: successful requests / benchmark duration.
+// - Output token throughput: generated output tokens / benchmark duration.
+// - Total token throughput: (logical input tokens + output tokens) / benchmark duration.
+// - Logical input tokens: full prompt token count for the request after prompt formatting.
+// - Effective prompt-eval tokens: tokens the model actually evaluated during prefill.
+//   This can be lower than logical input tokens when KV/prefix reuse is hit.
+// - promptEvalMs: native llama.cpp prefill time.
+// - decodeEvalMs: native llama.cpp decode time for generated tokens.
+// - sampleMs: native sampler-chain time spent choosing output tokens from logits.
 
-type BenchmarkPresetName = 'single' | 'default';
+type BenchmarkPresetName = 'default' | 'single';
 type PromptBucket = 'short' | 'medium' | 'long' | 'custom';
 type OutputBucket = 'short' | 'medium' | 'long';
 
@@ -30,42 +41,72 @@ interface BenchmarkOptions {
   jsonPath?: string;
   artifactLabel?: string;
   quantizationLabel?: string;
+  promptFormat: PromptFormatMode;
+  initConfig: InferenceInitConfig;
 }
 
 interface BenchmarkSummary {
-  minMs: number;
-  medianMs: number;
   meanMs: number;
-  p95Ms: number;
+  medianMs: number;
+  p99Ms: number;
+  minMs: number;
   maxMs: number;
-}
-
-interface DerivedRunMetrics {
-  ttftMs: number | null;
-  promptTokensPerSecond: number | null;
-  decodeTokensPerSecond: number | null;
 }
 
 interface BenchmarkRun {
   label: string;
   contextKey: string;
+  // E2EL for a single request.
   wallMs: number;
+  // TTFT for a single request.
+  ttftMs: number | null;
+  // TPOT for a single request.
+  tpotMs: number | null;
+  // All observed inter-token gaps for this request.
+  itlMsValues: number[];
+  // Logical input size after prompt formatting/tokenization.
+  inputTokenCount: number | null;
+  // Native effective prefill work reported by llama.cpp perf counters.
+  promptEvalTokenCount: number | null;
+  // Generated output token count for this request.
+  outputTokenCount: number | null;
   outputLength: number;
   outputPreview: string;
   perf: PromptPerformanceStats | null;
-  derived: DerivedRunMetrics;
 }
 
-interface BenchmarkGroupSummary {
-  wall: BenchmarkSummary;
+interface ServingBenchmarkSummary {
+  successfulRequests: number;
+  benchmarkDurationMs: number;
+  totalInputTokens: number;
+  totalGeneratedTokens: number;
+  // Aggregate metrics aligned with TensorRT-LLM style reporting.
+  requestThroughputRps: number | null;
+  outputTokenThroughputTps: number | null;
+  totalTokenThroughputTps: number | null;
+  ttftMs: BenchmarkSummary | null;
+  tpotMs: BenchmarkSummary | null;
+  itlMs: BenchmarkSummary | null;
+  e2elMs: BenchmarkSummary;
+}
+
+interface RuntimeBenchmarkSummary {
+  // Runtime-side diagnostics. These are useful for root-cause analysis but are not
+  // the main serving metrics because they exclude JS/Wasm/host overhead.
+  avgLogicalInputTokenCount: number | null;
+  avgPromptEvalTokens: number | null;
   avgTotalMs: number | null;
   avgPromptEvalMs: number | null;
   avgDecodeEvalMs: number | null;
   avgSampleMs: number | null;
-  avgPromptEvalTokens: number | null;
   avgOutputTokenCount: number | null;
-  promptTokensPerSecond: number | null;
-  decodeTokensPerSecond: number | null;
+  promptEvalTokensPerSecond: number | null;
+  outputTokensPerSecond: number | null;
+}
+
+interface BenchmarkGroupSummary {
+  serving: ServingBenchmarkSummary;
+  runtime: RuntimeBenchmarkSummary;
 }
 
 interface BenchmarkGroupResult {
@@ -73,13 +114,12 @@ interface BenchmarkGroupResult {
   label: string;
   warmupRuns: number;
   measuredRuns: number;
+  benchmarkDurationMs: number;
   summary: BenchmarkGroupSummary;
   runs: BenchmarkRun[];
 }
 
 interface ScenarioRuntimeMetrics {
-  initModuleMs: number;
-  loadModelIntoMemfsMs: number;
   initEngineMs: number;
 }
 
@@ -92,6 +132,7 @@ interface BenchmarkScenarioDefinition {
   promptWords: number;
   outputTokenLimit: number;
   outputBucket: OutputBucket;
+  promptFormat: PromptFormatMode;
   contextBucket: 'single-request';
   concurrency: 1;
 }
@@ -112,11 +153,12 @@ interface RuntimeMemoryUsage {
 }
 
 interface BenchmarkReport {
-  schemaVersion: 'cogent.benchmark.bun.v1';
+  schemaVersion: 'cogent.benchmark.bun.v4';
   generatedAt: string;
   benchmark: {
     script: string;
     preset: BenchmarkPresetName;
+    promptFormat: PromptFormatMode;
     warmupRuns: number;
     measuredRuns: number;
     scenarioCount: number;
@@ -140,10 +182,11 @@ interface BenchmarkReport {
     modelBytes: number;
   };
   runtime: {
+    initConfig: InferenceInitConfig;
     readModelMs: number;
-    scenarioInitSummary: {
-      initModuleMs: BenchmarkSummary;
-      loadModelIntoMemfsMs: BenchmarkSummary;
+    initModuleMs: number;
+    loadModelIntoMemfsMs: number;
+    initEngineSummary: {
       initEngineMs: BenchmarkSummary;
     };
   };
@@ -152,16 +195,15 @@ interface BenchmarkReport {
   limitations: string[];
 }
 
-const DEFAULT_PROMPT = 'Write one sentence about measuring inference performance.';
-const MEDIUM_PROMPT =
-  'Summarize a browser-hosted LLM runtime benchmark plan. Mention cold start, warm prompt latency, prompt evaluation throughput, decode throughput, and why reused-context measurement matters.';
+const SHORT_PROMPT = 'Write one sentence about measuring inference performance.';
 const LONG_PROMPT = [
   'You are evaluating a browser-hosted inference runtime built with TypeScript, WebAssembly, and llama.cpp.',
-  'Describe how you would benchmark cold start, module initialization, model load, engine initialization, prompt evaluation throughput, decode throughput, and reused-context performance.',
-  'Keep the answer concise but cover why prompt length and output length should be swept separately.',
+  'Describe how you would benchmark cold start, module initialization, model load, engine initialization, prompt evaluation throughput, decode throughput, reused-context performance, and TTFT.',
+  'Keep the answer concise but explain why prompt length and output length should be swept separately.',
 ].join(' ');
 
-const DEFAULT_TOKENS = 16;
+const DEFAULT_SHORT_OUTPUT_TOKENS = 16;
+const DEFAULT_LONG_OUTPUT_TOKENS = 128;
 const DEFAULT_WARMUP_RUNS = 1;
 const DEFAULT_MEASURED_RUNS = 3;
 const OUTPUT_PREVIEW_LIMIT = 120;
@@ -174,30 +216,42 @@ const repoRoot = path.resolve(packageRoot, '..', '..');
 
 const DEFAULT_PRESET_CASES = [
   {
-    id: 'short-short',
-    label: 'Short Prompt / Short Output',
-    prompt: DEFAULT_PROMPT,
-    outputTokenLimit: 16,
+    id: 'siso',
+    label: 'Short Input / Short Output',
+    prompt: SHORT_PROMPT,
+    outputTokenLimit: DEFAULT_SHORT_OUTPUT_TOKENS,
   },
   {
-    id: 'medium-short',
-    label: 'Medium Prompt / Short Output',
-    prompt: MEDIUM_PROMPT,
-    outputTokenLimit: 16,
+    id: 'silo',
+    label: 'Short Input / Long Output',
+    prompt: SHORT_PROMPT,
+    outputTokenLimit: DEFAULT_LONG_OUTPUT_TOKENS,
   },
   {
-    id: 'long-short',
-    label: 'Long Prompt / Short Output',
+    id: 'liso',
+    label: 'Long Input / Short Output',
     prompt: LONG_PROMPT,
-    outputTokenLimit: 16,
+    outputTokenLimit: DEFAULT_SHORT_OUTPUT_TOKENS,
   },
   {
-    id: 'medium-medium',
-    label: 'Medium Prompt / Medium Output',
-    prompt: MEDIUM_PROMPT,
-    outputTokenLimit: 64,
+    id: 'lilo',
+    label: 'Long Input / Long Output',
+    prompt: LONG_PROMPT,
+    outputTokenLimit: DEFAULT_LONG_OUTPUT_TOKENS,
   },
 ] as const;
+
+function nowMs(): number {
+  return performance.now();
+}
+
+function round(value: number): number {
+  return Number(value.toFixed(3));
+}
+
+function formatBytes(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
+}
 
 function parseOptionalPositiveInt(flagName: string, rawValue: string | undefined): number | undefined {
   if (rawValue == null) {
@@ -211,16 +265,64 @@ function parseOptionalPositiveInt(flagName: string, rawValue: string | undefined
   return value;
 }
 
+function parseOptionalNonNegativeInt(flagName: string, rawValue: string | undefined): number | undefined {
+  if (rawValue == null) {
+    return undefined;
+  }
+
+  const value = Number.parseInt(rawValue, 10);
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`Expected a non-negative integer for ${flagName}, got "${rawValue}".`);
+  }
+  return value;
+}
+
 function parsePositiveInt(flagName: string, rawValue: string | undefined, fallback: number): number {
   return parseOptionalPositiveInt(flagName, rawValue) ?? fallback;
 }
 
+function parseNonNegativeInt(flagName: string, rawValue: string | undefined, fallback: number): number {
+  return parseOptionalNonNegativeInt(flagName, rawValue) ?? fallback;
+}
+
 function parsePreset(rawPreset: string | undefined): BenchmarkPresetName {
   const preset = (rawPreset ?? 'default').trim();
-  if (preset === 'single' || preset === 'default') {
+  if (preset === 'default' || preset === 'single') {
     return preset;
   }
   throw new Error(`Unsupported preset "${preset}". Use "default" or "single".`);
+}
+
+function parsePromptFormat(rawValue: string | undefined): PromptFormatMode {
+  const value = (rawValue ?? 'auto-chat').trim();
+  if (value === 'auto-chat' || value === 'raw') {
+    return value;
+  }
+  throw new Error(`Unsupported prompt format "${value}". Use "auto-chat" or "raw".`);
+}
+
+function parseFlashAttention(rawValue: string | undefined): FlashAttentionMode | undefined {
+  if (rawValue == null) {
+    return undefined;
+  }
+  const value = rawValue.trim();
+  if (value === 'auto' || value === 'enabled' || value === 'disabled') {
+    return value;
+  }
+  throw new Error(`Unsupported flash attention mode "${value}". Use "auto", "enabled", or "disabled".`);
+}
+
+function parseOptionalBoolean(flagName: string, rawValue: string | undefined): boolean | undefined {
+  if (rawValue == null) {
+    return undefined;
+  }
+  if (rawValue === 'true') {
+    return true;
+  }
+  if (rawValue === 'false') {
+    return false;
+  }
+  throw new Error(`Expected "true" or "false" for ${flagName}, got "${rawValue}".`);
 }
 
 function resolveModelPath(rawPath: string | undefined): string {
@@ -281,11 +383,28 @@ function parseArgs(argv: string[]): BenchmarkOptions {
     preset,
     prompt,
     tokensOverride: parseOptionalPositiveInt('--tokens', options.get('tokens')),
-    warmupRuns: parsePositiveInt('--warmup', options.get('warmup'), DEFAULT_WARMUP_RUNS),
+    warmupRuns: parseNonNegativeInt('--warmup', options.get('warmup'), DEFAULT_WARMUP_RUNS),
     measuredRuns: parsePositiveInt('--runs', options.get('runs'), DEFAULT_MEASURED_RUNS),
     jsonPath: options.get('json'),
     artifactLabel: options.get('artifact-label'),
     quantizationLabel: options.get('quantization'),
+    promptFormat: parsePromptFormat(options.get('prompt-format')),
+    initConfig: {
+      nCtx: parseOptionalPositiveInt('--ctx', options.get('ctx')),
+      nBatch: parseOptionalPositiveInt('--batch', options.get('batch')),
+      nUbatch: parseOptionalPositiveInt('--ubatch', options.get('ubatch')),
+      nSeqMax: parseOptionalPositiveInt('--seq-max', options.get('seq-max')),
+      nThreads: parseOptionalPositiveInt('--threads', options.get('threads')),
+      nThreadsBatch: parseOptionalPositiveInt('--threads-batch', options.get('threads-batch')),
+      nGpuLayers: parseOptionalNonNegativeInt('--gpu-layers', options.get('gpu-layers')),
+      flashAttention: parseFlashAttention(options.get('flash-attention')),
+      kvUnified: parseOptionalBoolean('--kv-unified', options.get('kv-unified')),
+      maxCachedSessions: parseOptionalPositiveInt('--max-cached-sessions', options.get('max-cached-sessions')),
+      retainedPrefixTokens: parseOptionalNonNegativeInt(
+        '--retained-prefix-tokens',
+        options.get('retained-prefix-tokens')
+      ),
+    },
   };
 }
 
@@ -293,53 +412,58 @@ function printHelp(): void {
   console.log(`Usage: bun ./benchmarks/benchmark-bun.ts [options]
 
 Options:
-  --model <path>            Path to a GGUF model file
-  --preset <name>           Benchmark preset: default | single (default: default)
-  --prompt <text>           Prompt text for --preset single
-  --tokens <n>              Max generation tokens per run or preset override
-  --warmup <n>              Warmup runs per benchmark group (default: ${DEFAULT_WARMUP_RUNS})
-  --runs <n>                Measured runs per benchmark group (default: ${DEFAULT_MEASURED_RUNS})
-  --artifact-label <text>   Optional artifact label override
-  --quantization <text>     Optional quantization label override
-  --json <path>             Optional JSON output path
-  --help                    Show this message
+  --model <path>                   Path to a GGUF model file
+  --preset <name>                  Benchmark preset: default | single (default: default)
+  --prompt <text>                  Prompt text for --preset single
+  --tokens <n>                     Max generation tokens per run or preset override
+  --prompt-format <mode>           auto-chat | raw (default: auto-chat)
+  --warmup <n>                     Warmup runs per benchmark group (default: ${DEFAULT_WARMUP_RUNS})
+  --runs <n>                       Measured runs per benchmark group (default: ${DEFAULT_MEASURED_RUNS})
+  --ctx <n>                        Optional llama context size
+  --batch <n>                      Optional llama logical batch size
+  --ubatch <n>                     Optional llama physical batch size
+  --seq-max <n>                    Optional llama max sequence count
+  --threads <n>                    Optional generation thread count
+  --threads-batch <n>              Optional batch thread count
+  --gpu-layers <n>                 Optional GPU layer count
+  --flash-attention <mode>         auto | enabled | disabled
+  --kv-unified <true|false>        Optional KV unified buffer setting
+  --max-cached-sessions <n>        Optional session cache limit
+  --retained-prefix-tokens <n>     Optional retained prefix tokens during KV trimming
+  --artifact-label <text>          Optional artifact label override
+  --quantization <text>            Optional quantization label override
+  --json <path>                    Optional JSON output path
+  --help                           Show this message
 
 Presets:
-  default  Standard matrix: short/medium/long prompt buckets plus medium-output sweep.
+  default  Four benchmark quadrants: SISO, SILO, LISO, LILO.
   single   One prompt with cold, hot fresh-context, and hot reused-context groups.
 `);
 }
 
-function nowMs(): number {
-  return performance.now();
-}
-
-async function measureAsync<T>(label: string, fn: () => Promise<T> | T): Promise<{ label: string; ms: number; value: T }> {
+async function measureAsync<T>(fn: () => Promise<T> | T): Promise<{ ms: number; value: T }> {
   const start = nowMs();
   const value = await fn();
-  return { label, ms: nowMs() - start, value };
-}
-
-function formatBytes(bytes: number): string {
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
-}
-
-function round(value: number): number {
-  return Number(value.toFixed(3));
+  return { ms: round(nowMs() - start), value };
 }
 
 function summarize(values: number[]): BenchmarkSummary {
   const sorted = [...values].sort((left, right) => left - right);
   const total = sorted.reduce((acc, value) => acc + value, 0);
-  const percentileIndex = Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1);
+  const percentileIndex = Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.99) - 1);
 
   return {
-    minMs: round(sorted[0]),
-    medianMs: round(sorted[Math.floor(sorted.length / 2)]),
     meanMs: round(total / sorted.length),
-    p95Ms: round(sorted[percentileIndex]),
+    medianMs: round(sorted[Math.floor(sorted.length / 2)]),
+    p99Ms: round(sorted[percentileIndex]),
+    minMs: round(sorted[0]),
     maxMs: round(sorted[sorted.length - 1]),
   };
+}
+
+function summarizeOptional(values: Array<number | null>): BenchmarkSummary | null {
+  const filtered = values.filter((value): value is number => value != null && Number.isFinite(value));
+  return filtered.length === 0 ? null : summarize(filtered);
 }
 
 function averagePerfMetric(
@@ -377,6 +501,7 @@ function summarizeThroughput(
 }
 
 function promptTokensPerSecond(perf: PromptPerformanceStats): number | null {
+  // Effective prefill throughput based on llama.cpp perf counters, not end-to-end wall time.
   if (perf.promptEvalMs <= 0 || perf.promptEvalTokens <= 0) {
     return null;
   }
@@ -384,6 +509,7 @@ function promptTokensPerSecond(perf: PromptPerformanceStats): number | null {
 }
 
 function decodeTokensPerSecond(perf: PromptPerformanceStats): number | null {
+  // Effective decode throughput based on llama.cpp perf counters, not end-to-end wall time.
   if (perf.decodeEvalMs <= 0 || perf.outputTokenCount <= 0) {
     return null;
   }
@@ -404,28 +530,43 @@ async function initializeScenarioEngine(
   runtimeUrls: ReturnType<typeof getBundledRuntimeUrls>,
   modelBytes: Uint8Array,
   fileName: string
-): Promise<{ engine: CogentEngine; runtime: ScenarioRuntimeMetrics }> {
+): Promise<{
+  engine: CogentEngine;
+  modelPath: string;
+  initModuleMs: number;
+  loadModelIntoMemfsMs: number;
+}> {
   const engine = new CogentEngine(runtimeUrls);
 
   try {
-    const initModule = await measureAsync('initModule', () => engine.initModule());
-    const loadModel = await measureAsync('loadModelFromBuffer', () =>
-      engine.loadModelFromBuffer(modelBytes, fileName)
-    );
-    const initEngine = await measureAsync('initEngine', () => engine.initEngine(loadModel.value));
+    // Load the Wasm module and copy the model into MEMFS once for the whole benchmark.
+    // Recreating the module per scenario makes peak memory depend on host GC timing.
+    const initModule = await measureAsync(() => engine.initModule());
+    const loadModel = await measureAsync(() => engine.loadModelFromBuffer(modelBytes, fileName));
 
     return {
       engine,
-      runtime: {
-        initModuleMs: round(initModule.ms),
-        loadModelIntoMemfsMs: round(loadModel.ms),
-        initEngineMs: round(initEngine.ms),
-      },
+      modelPath: loadModel.value,
+      initModuleMs: initModule.ms,
+      loadModelIntoMemfsMs: loadModel.ms,
     };
   } catch (error) {
     engine.close();
     throw error;
   }
+}
+
+async function reinitializeScenarioEngine(
+  engine: CogentEngine,
+  modelPath: string,
+  initConfig: InferenceInitConfig
+): Promise<ScenarioRuntimeMetrics> {
+  // Scenario isolation comes from rebuilding the native inference runtime, not from
+  // recreating the JS/Wasm module and re-copying the model on every case.
+  const initEngine = await measureAsync(() => engine.initEngine(modelPath, initConfig));
+  return {
+    initEngineMs: initEngine.ms,
+  };
 }
 
 function classifyPromptBucket(prompt: string): PromptBucket {
@@ -483,8 +624,8 @@ function deriveArtifactLabel(fileName: string, quantizationLabel: string | null)
 
 function buildScenarios(options: BenchmarkOptions): BenchmarkScenarioDefinition[] {
   if (options.preset === 'single') {
-    const prompt = options.prompt ?? DEFAULT_PROMPT;
-    const outputTokenLimit = options.tokensOverride ?? DEFAULT_TOKENS;
+    const prompt = options.prompt ?? SHORT_PROMPT;
+    const outputTokenLimit = options.tokensOverride ?? DEFAULT_SHORT_OUTPUT_TOKENS;
 
     return [
       {
@@ -496,6 +637,7 @@ function buildScenarios(options: BenchmarkOptions): BenchmarkScenarioDefinition[
         promptWords: countWords(prompt),
         outputTokenLimit,
         outputBucket: classifyOutputBucket(outputTokenLimit),
+        promptFormat: options.promptFormat,
         contextBucket: 'single-request',
         concurrency: 1,
       },
@@ -513,48 +655,52 @@ function buildScenarios(options: BenchmarkOptions): BenchmarkScenarioDefinition[
       promptWords: countWords(scenario.prompt),
       outputTokenLimit,
       outputBucket: classifyOutputBucket(outputTokenLimit),
+      promptFormat: options.promptFormat,
       contextBucket: 'single-request',
       concurrency: 1,
     };
   });
 }
 
-function deriveRunMetrics(perf: PromptPerformanceStats | null): DerivedRunMetrics {
-  if (!perf) {
-    return {
-      ttftMs: null,
-      promptTokensPerSecond: null,
-      decodeTokensPerSecond: null,
-    };
-  }
-
-  return {
-    ttftMs: null,
-    promptTokensPerSecond: promptTokensPerSecond(perf),
-    decodeTokensPerSecond: decodeTokensPerSecond(perf),
-  };
-}
-
 async function runPromptBenchmark(
   engine: CogentEngine,
   labelPrefix: string,
   prompt: string,
+  promptFormat: PromptFormatMode,
   tokens: number,
   warmupRuns: number,
   measuredRuns: number,
   contextKeyFactory: (index: number) => string
-): Promise<BenchmarkRun[]> {
+): Promise<{ benchmarkDurationMs: number; runs: BenchmarkRun[] }> {
   for (let i = 0; i < warmupRuns; i++) {
-    await engine.prompt(contextKeyFactory(i), prompt, tokens);
+    await engine.streamPrompt(contextKeyFactory(i), prompt, {
+      nTokens: tokens,
+      promptFormat,
+    });
   }
 
   const runs: BenchmarkRun[] = [];
+  const benchmarkStart = nowMs();
   for (let i = 0; i < measuredRuns; i++) {
     const label = `${labelPrefix}-${i + 1}`;
     const contextKey = contextKeyFactory(i + warmupRuns);
     const start = nowMs();
-    const output = await engine.prompt(contextKey, prompt, tokens);
-    const wallMs = nowMs() - start;
+    let ttftMs: number | null = null;
+    const tokenEventTimes: number[] = [];
+
+    const output = await engine.streamPrompt(contextKey, prompt, {
+      nTokens: tokens,
+      promptFormat,
+      onToken: () => {
+        const elapsedMs = round(nowMs() - start);
+        tokenEventTimes.push(elapsedMs);
+        if (ttftMs == null) {
+          ttftMs = elapsedMs;
+        }
+      },
+    });
+
+    const wallMs = round(nowMs() - start);
     const perf = engine.getLastPromptPerformance();
     if (output.length === 0 && perf == null) {
       throw new Error(
@@ -562,33 +708,85 @@ async function runPromptBenchmark(
       );
     }
 
+    // Prefer the native output token counter when available, but fall back to the
+    // observed stream callback count so the benchmark still works if perf payloads
+    // are unavailable or partially missing.
+    const outputTokenCount = perf?.outputTokenCount ?? tokenEventTimes.length;
+    const itlMsValues: number[] = [];
+    for (let tokenIndex = 1; tokenIndex < tokenEventTimes.length; tokenIndex++) {
+      itlMsValues.push(round(tokenEventTimes[tokenIndex] - tokenEventTimes[tokenIndex - 1]));
+    }
+
+    // TensorRT-LLM-style TPOT: average time per output token after the first token.
+    const tpotMs =
+      ttftMs != null && outputTokenCount > 1
+        ? round((wallMs - ttftMs) / (outputTokenCount - 1))
+        : null;
+
     runs.push({
       label,
       contextKey,
-      wallMs: round(wallMs),
+      wallMs,
+      ttftMs,
+      tpotMs,
+      itlMsValues,
+      inputTokenCount: perf?.inputTokenCount ?? null,
+      promptEvalTokenCount: perf?.promptEvalTokens ?? null,
+      outputTokenCount,
       outputLength: output.length,
       outputPreview: output.slice(0, OUTPUT_PREVIEW_LIMIT).replace(/\s+/g, ' ').trim(),
       perf,
-      derived: deriveRunMetrics(perf),
     });
   }
 
-  return runs;
+  return {
+    benchmarkDurationMs: round(nowMs() - benchmarkStart),
+    runs,
+  };
 }
 
-function summarizeGroup(runs: BenchmarkRun[]): BenchmarkGroupSummary {
+function summarizeGroup(
+  runs: BenchmarkRun[],
+  benchmarkDurationMs: number
+): BenchmarkGroupSummary {
   const perfRuns = runs.map((run) => run.perf);
+  const totalInputTokens = runs.reduce((acc, run) => acc + (run.inputTokenCount ?? 0), 0);
+  const totalGeneratedTokens = runs.reduce((acc, run) => acc + (run.outputTokenCount ?? 0), 0);
+  const totalItls = runs.flatMap((run) => run.itlMsValues);
+  // Throughput metrics use the actual measured wall-clock group duration, not the
+  // sum of request latencies. This matches standard serving benchmark reporting.
+  const benchmarkDurationSeconds = benchmarkDurationMs > 0 ? benchmarkDurationMs / 1000 : 0;
 
   return {
-    wall: summarize(runs.map((run) => run.wallMs)),
-    avgTotalMs: averagePerfMetric(perfRuns, (perf) => perf.totalMs),
-    avgPromptEvalMs: averagePerfMetric(perfRuns, (perf) => perf.promptEvalMs),
-    avgDecodeEvalMs: averagePerfMetric(perfRuns, (perf) => perf.decodeEvalMs),
-    avgSampleMs: averagePerfMetric(perfRuns, (perf) => perf.sampleMs),
-    avgPromptEvalTokens: averagePerfMetric(perfRuns, (perf) => perf.promptEvalTokens),
-    avgOutputTokenCount: averagePerfMetric(perfRuns, (perf) => perf.outputTokenCount),
-    promptTokensPerSecond: summarizeThroughput(perfRuns, promptTokensPerSecond),
-    decodeTokensPerSecond: summarizeThroughput(perfRuns, decodeTokensPerSecond),
+    serving: {
+      successfulRequests: runs.length,
+      benchmarkDurationMs,
+      totalInputTokens,
+      totalGeneratedTokens,
+      requestThroughputRps:
+        benchmarkDurationSeconds > 0 ? round(runs.length / benchmarkDurationSeconds) : null,
+      outputTokenThroughputTps:
+        benchmarkDurationSeconds > 0 ? round(totalGeneratedTokens / benchmarkDurationSeconds) : null,
+      totalTokenThroughputTps:
+        benchmarkDurationSeconds > 0
+          ? round((totalInputTokens + totalGeneratedTokens) / benchmarkDurationSeconds)
+          : null,
+      ttftMs: summarizeOptional(runs.map((run) => run.ttftMs)),
+      tpotMs: summarizeOptional(runs.map((run) => run.tpotMs)),
+      itlMs: summarizeOptional(totalItls),
+      e2elMs: summarize(runs.map((run) => run.wallMs)),
+    },
+    runtime: {
+      avgLogicalInputTokenCount: averagePerfMetric(perfRuns, (perf) => perf.inputTokenCount),
+      avgPromptEvalTokens: averagePerfMetric(perfRuns, (perf) => perf.promptEvalTokens),
+      avgTotalMs: averagePerfMetric(perfRuns, (perf) => perf.totalMs),
+      avgPromptEvalMs: averagePerfMetric(perfRuns, (perf) => perf.promptEvalMs),
+      avgDecodeEvalMs: averagePerfMetric(perfRuns, (perf) => perf.decodeEvalMs),
+      avgSampleMs: averagePerfMetric(perfRuns, (perf) => perf.sampleMs),
+      avgOutputTokenCount: averagePerfMetric(perfRuns, (perf) => perf.outputTokenCount),
+      promptEvalTokensPerSecond: summarizeThroughput(perfRuns, promptTokensPerSecond),
+      outputTokensPerSecond: summarizeThroughput(perfRuns, decodeTokensPerSecond),
+    },
   };
 }
 
@@ -597,6 +795,7 @@ function createGroupResult(
   label: string,
   warmupRuns: number,
   measuredRuns: number,
+  benchmarkDurationMs: number,
   runs: BenchmarkRun[]
 ): BenchmarkGroupResult {
   return {
@@ -604,7 +803,8 @@ function createGroupResult(
     label,
     warmupRuns,
     measuredRuns,
-    summary: summarizeGroup(runs),
+    benchmarkDurationMs,
+    summary: summarizeGroup(runs, benchmarkDurationMs),
     runs,
   };
 }
@@ -620,6 +820,7 @@ async function runScenarioBenchmark(
     engine,
     `${scenario.id}-cold`,
     scenario.prompt,
+    scenario.promptFormat,
     scenario.outputTokenLimit,
     0,
     1,
@@ -630,6 +831,7 @@ async function runScenarioBenchmark(
     engine,
     `${scenario.id}-hot-fresh`,
     scenario.prompt,
+    scenario.promptFormat,
     scenario.outputTokenLimit,
     warmupRuns,
     measuredRuns,
@@ -640,6 +842,7 @@ async function runScenarioBenchmark(
     engine,
     `${scenario.id}-hot-reuse`,
     scenario.prompt,
+    scenario.promptFormat,
     scenario.outputTokenLimit,
     warmupRuns,
     measuredRuns,
@@ -649,61 +852,96 @@ async function runScenarioBenchmark(
   return {
     definition: scenario,
     runtime,
-    coldPrompt: createGroupResult('coldPrompt', 'Cold Prompt', 0, 1, coldPrompt),
+    coldPrompt: createGroupResult(
+      'coldPrompt',
+      'Cold Prompt',
+      0,
+      1,
+      coldPrompt.benchmarkDurationMs,
+      coldPrompt.runs
+    ),
     hotFreshContext: createGroupResult(
       'hotFreshContext',
       'Hot Prompt: Fresh Context',
       warmupRuns,
       measuredRuns,
-      hotFreshContext
+      hotFreshContext.benchmarkDurationMs,
+      hotFreshContext.runs
     ),
     hotReuseContext: createGroupResult(
       'hotReuseContext',
       'Hot Prompt: Reused Context',
       warmupRuns,
       measuredRuns,
-      hotReuseContext
+      hotReuseContext.benchmarkDurationMs,
+      hotReuseContext.runs
     ),
   };
 }
 
 function printGroupResult(group: BenchmarkGroupResult): void {
-  const summary = group.summary;
+  const { serving, runtime } = group.summary;
 
   console.log(`\n  ${group.label}`);
+  console.log(`    Successful requests:             ${serving.successfulRequests}`);
+  console.log(`    Benchmark duration (s):          ${round(serving.benchmarkDurationMs / 1000)}`);
+  console.log(`    Total input tokens:              ${serving.totalInputTokens}`);
+  console.log(`    Total generated tokens:          ${serving.totalGeneratedTokens}`);
   console.log(
-    `    wall ms          min=${summary.wall.minMs} median=${summary.wall.medianMs} mean=${summary.wall.meanMs} p95=${summary.wall.p95Ms} max=${summary.wall.maxMs}`
+    `    Request throughput (req/s):      ${serving.requestThroughputRps == null ? 'n/a' : serving.requestThroughputRps}`
   );
-
-  if (summary.promptTokensPerSecond != null) {
-    console.log(`    prompt tok/s     avg=${summary.promptTokensPerSecond}`);
+  console.log(
+    `    Output token throughput (tok/s): ${serving.outputTokenThroughputTps == null ? 'n/a' : serving.outputTokenThroughputTps}`
+  );
+  console.log(
+    `    Total token throughput (tok/s):  ${serving.totalTokenThroughputTps == null ? 'n/a' : serving.totalTokenThroughputTps}`
+  );
+  if (serving.ttftMs) {
+    console.log(`    Mean TTFT (ms):                  ${serving.ttftMs.meanMs}`);
+    console.log(`    Median TTFT (ms):                ${serving.ttftMs.medianMs}`);
+    console.log(`    P99 TTFT (ms):                   ${serving.ttftMs.p99Ms}`);
   }
-
-  if (summary.decodeTokensPerSecond != null) {
-    console.log(`    decode tok/s     avg=${summary.decodeTokensPerSecond}`);
+  if (serving.tpotMs) {
+    console.log(`    Mean TPOT (ms):                  ${serving.tpotMs.meanMs}`);
+    console.log(`    Median TPOT (ms):                ${serving.tpotMs.medianMs}`);
+    console.log(`    P99 TPOT (ms):                   ${serving.tpotMs.p99Ms}`);
   }
+  if (serving.itlMs) {
+    console.log(`    Mean ITL (ms):                   ${serving.itlMs.meanMs}`);
+    console.log(`    Median ITL (ms):                 ${serving.itlMs.medianMs}`);
+    console.log(`    P99 ITL (ms):                    ${serving.itlMs.p99Ms}`);
+  }
+  console.log(`    Mean E2EL (ms):                  ${serving.e2elMs.meanMs}`);
+  console.log(`    Median E2EL (ms):                ${serving.e2elMs.medianMs}`);
+  console.log(`    P99 E2EL (ms):                   ${serving.e2elMs.p99Ms}`);
 
   if (
-    summary.avgTotalMs != null &&
-    summary.avgPromptEvalMs != null &&
-    summary.avgDecodeEvalMs != null &&
-    summary.avgSampleMs != null &&
-    summary.avgOutputTokenCount != null
+    runtime.avgTotalMs != null &&
+    runtime.avgPromptEvalMs != null &&
+    runtime.avgDecodeEvalMs != null &&
+    runtime.avgSampleMs != null &&
+    runtime.avgLogicalInputTokenCount != null &&
+    runtime.avgPromptEvalTokens != null &&
+    runtime.avgOutputTokenCount != null
   ) {
     console.log(
-      `    native perf      total_ms=${summary.avgTotalMs} prompt_eval_ms=${summary.avgPromptEvalMs} decode_eval_ms=${summary.avgDecodeEvalMs} sample_ms=${summary.avgSampleMs} output_tokens=${summary.avgOutputTokenCount}`
+      `    Runtime counters:                total_ms=${runtime.avgTotalMs} prompt_eval_ms=${runtime.avgPromptEvalMs} decode_eval_ms=${runtime.avgDecodeEvalMs} sample_ms=${runtime.avgSampleMs} input_tokens=${runtime.avgLogicalInputTokenCount} effective_prompt_tokens=${runtime.avgPromptEvalTokens} output_tokens=${runtime.avgOutputTokenCount}`
     );
+  }
+  if (runtime.promptEvalTokensPerSecond != null) {
+    console.log(`    Prompt eval tok/s:               ${runtime.promptEvalTokensPerSecond}`);
+  }
+  if (runtime.outputTokensPerSecond != null) {
+    console.log(`    Decode tok/s:                    ${runtime.outputTokensPerSecond}`);
   }
 }
 
 function printScenarioResult(result: BenchmarkScenarioResult): void {
   const definition = result.definition;
   console.log(`\nScenario: ${definition.label}`);
+  console.log(`  init engine=${result.runtime.initEngineMs} ms`);
   console.log(
-    `  init module=${result.runtime.initModuleMs} ms load model=${result.runtime.loadModelIntoMemfsMs} ms init engine=${result.runtime.initEngineMs} ms`
-  );
-  console.log(
-    `  prompt bucket=${definition.promptBucket} chars=${definition.promptChars} words=${definition.promptWords}`
+    `  prompt bucket=${definition.promptBucket} chars=${definition.promptChars} words=${definition.promptWords} format=${definition.promptFormat}`
   );
   console.log(
     `  output bucket=${definition.outputBucket} token_limit=${definition.outputTokenLimit} concurrency=${definition.concurrency}`
@@ -730,17 +968,28 @@ async function main(): Promise<void> {
   const artifactLabel = options.artifactLabel ?? deriveArtifactLabel(fileName, quantizationLabel);
 
   console.log('Bun inference benchmark');
-  console.log(`  preset     ${options.preset}`);
-  console.log(`  scenarios   ${scenarios.length}`);
-  console.log(`  model      ${options.modelPath}`);
-  console.log(`  artifact   ${artifactLabel}`);
-  console.log(`  quant      ${quantizationLabel ?? 'unknown'}`);
-  console.log(`  warmup     ${options.warmupRuns}`);
-  console.log(`  runs       ${options.measuredRuns}`);
+  console.log(`  preset      ${options.preset}`);
+  console.log(`  scenarios    ${scenarios.length}`);
+  console.log(`  model       ${options.modelPath}`);
+  console.log(`  artifact    ${artifactLabel}`);
+  console.log(`  quant       ${quantizationLabel ?? 'unknown'}`);
+  console.log(`  format      ${options.promptFormat}`);
+  console.log(`  warmup      ${options.warmupRuns}`);
+  console.log(`  runs        ${options.measuredRuns}`);
 
-  let report: BenchmarkReport | null = null;
+  const requestsPerScenario = 1 + 2 * (options.warmupRuns + options.measuredRuns);
+  const totalPlannedRequests = scenarios.length * requestsPerScenario;
+  const totalPlannedOutputTokens = scenarios.reduce(
+    (acc, scenario) => acc + scenario.outputTokenLimit * requestsPerScenario,
+    0
+  );
+  console.log(`  requests    ${totalPlannedRequests}`);
+  console.log(`  max tokens  ${totalPlannedOutputTokens}`);
+  if (totalPlannedOutputTokens >= 2000) {
+    console.log('  note        long benchmark; this can take several minutes on a local Wasm/CPU path');
+  }
 
-  const readModel = await measureAsync('readModel', async () => {
+  const readModel = await measureAsync(async () => {
     const file = Bun.file(options.modelPath);
     const bytes = new Uint8Array(await file.arrayBuffer());
     return {
@@ -749,22 +998,26 @@ async function main(): Promise<void> {
     };
   });
 
-  const modelBytes = readModel.value.bytes;
-  console.log(`\nRuntime`);
-  console.log(`  model read ms    ${round(readModel.ms)}`);
+  let modelBytes = readModel.value.bytes;
+  const startup = await initializeScenarioEngine(runtimeUrls, modelBytes, fileName);
+  modelBytes = new Uint8Array(0);
+
+  console.log('\nRuntime');
+  console.log(`  model read ms    ${readModel.ms}`);
+  console.log(`  init module ms   ${startup.initModuleMs}`);
+  console.log(`  memfs load ms    ${startup.loadModelIntoMemfsMs}`);
   console.log(`  model size       ${formatBytes(readModel.value.size)}`);
 
   const scenarioResults: BenchmarkScenarioResult[] = [];
-  for (const scenario of scenarios) {
-    const { engine, runtime } = await initializeScenarioEngine(
-      runtimeUrls,
-      modelBytes,
-      fileName
-    );
-
-    try {
+  try {
+    for (const scenario of scenarios) {
+      const runtime = await reinitializeScenarioEngine(
+        startup.engine,
+        startup.modelPath,
+        options.initConfig
+      );
       const scenarioResult = await runScenarioBenchmark(
-        engine,
+        startup.engine,
         scenario,
         runtime,
         options.warmupRuns,
@@ -772,9 +1025,9 @@ async function main(): Promise<void> {
       );
       printScenarioResult(scenarioResult);
       scenarioResults.push(scenarioResult);
-    } finally {
-      engine.close();
     }
+  } finally {
+    startup.engine.close();
   }
 
   const maybeNavigator =
@@ -782,12 +1035,13 @@ async function main(): Promise<void> {
       ? (navigator as { gpu?: unknown; userAgent?: string })
       : null;
 
-  report = {
-    schemaVersion: 'cogent.benchmark.bun.v1',
+  const report: BenchmarkReport = {
+    schemaVersion: 'cogent.benchmark.bun.v4',
     generatedAt: new Date().toISOString(),
     benchmark: {
       script: 'packages/cogent-engine/benchmarks/benchmark-bun.ts',
       preset: options.preset,
+      promptFormat: options.promptFormat,
       warmupRuns: options.warmupRuns,
       measuredRuns: options.measuredRuns,
       scenarioCount: scenarioResults.length,
@@ -811,12 +1065,11 @@ async function main(): Promise<void> {
       modelBytes: readModel.value.size,
     },
     runtime: {
-      readModelMs: round(readModel.ms),
-      scenarioInitSummary: {
-        initModuleMs: summarize(scenarioResults.map((scenario) => scenario.runtime.initModuleMs)),
-        loadModelIntoMemfsMs: summarize(
-          scenarioResults.map((scenario) => scenario.runtime.loadModelIntoMemfsMs)
-        ),
+      initConfig: options.initConfig,
+      readModelMs: readModel.ms,
+      initModuleMs: startup.initModuleMs,
+      loadModelIntoMemfsMs: startup.loadModelIntoMemfsMs,
+      initEngineSummary: {
         initEngineMs: summarize(scenarioResults.map((scenario) => scenario.runtime.initEngineMs)),
       },
     },
@@ -824,18 +1077,16 @@ async function main(): Promise<void> {
     scenarios: scenarioResults,
     limitations: [
       'This Bun track is authoritative for Wasm host/runtime overhead, not browser WebGPU kernel behavior.',
-      'TTFT is not measured separately in the current non-streaming API and is reported as null.',
+      'TTFT is measured from the first streamed token callback exposed by the runtime.',
+      'TPOT is computed per request as (E2EL - TTFT) / (output tokens - 1), while ITL is computed from token-to-token callback intervals.',
+      'Logical input tokens and effective prompt-eval tokens are reported separately so context reuse does not distort headline throughput metrics.',
       'Concurrency is fixed at 1 until the slot scheduler phases are implemented.',
-      'Each scenario uses a fresh engine instance so context allocation from one case does not poison the next case.',
+      'The Emscripten module and MEMFS model are loaded once per benchmark run; each scenario reinitializes only the native inference engine.',
     ],
   };
 
   if (options.jsonPath) {
     await writeJsonReport(options.jsonPath, report);
-  }
-
-  if (!report) {
-    throw new Error('Benchmark did not produce a report.');
   }
 }
 

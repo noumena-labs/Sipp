@@ -1,4 +1,11 @@
-import { PromptGenerationOptions, PromptPerformanceStats } from './types.js';
+import { normalizeInitConfig } from './config.js';
+import { formatPromptText } from './prompt-format.js';
+import {
+  InferenceInitConfig,
+  PromptGenerationOptions,
+  PromptPerformanceStats,
+  PromptStreamOptions,
+} from './types.js';
 
 interface FsStream {
   fd: number;
@@ -18,13 +25,21 @@ interface EmscriptenFs {
 interface EngineModule {
   FS: EmscriptenFs;
   _CE_FreeString(ptr: number): void;
+  addFunction(func: (...args: number[]) => void, signature: string): number;
   ccall(ident: string, returnType: string | null, argTypes: string[], args: unknown[], opts?: { async?: boolean }): Promise<number> | number;
-  UTF8ToString(ptr: number): string;
+  removeFunction(ptr: number): void;
+  UTF8ToString(ptr: number, maxBytesToRead?: number): string;
 }
 
 interface EngineModuleOptions {
   locateFile?: (path: string, prefix?: string) => string;
   [key: string]: unknown;
+}
+
+interface ActivePromptStream {
+  chunks: string[];
+  onToken?: (token: string) => void;
+  callbackError: unknown;
 }
 
 export interface CogentConfig {
@@ -38,6 +53,7 @@ export interface CogentConfig {
 
 const MAX_PROMPT_TOKENS = 2048;
 const DEFAULT_MAX_MODEL_BYTES = 2 * 1024 * 1024 * 1024;
+const DEFAULT_PROMPT_FORMAT = 'auto-chat';
 
 function normalizeModelFileName(fileName: string): string {
   const trimmed = fileName.trim();
@@ -62,6 +78,8 @@ export class CogentEngine {
   private initPromise: Promise<void> | null = null;
   private engineInitialized = false;
   private loadedModelPath: string | null = null;
+  private streamCallbackPtr: number | null = null;
+  private activePromptStream: ActivePromptStream | null = null;
 
   constructor(private config: CogentConfig = {}) {}
 
@@ -147,6 +165,15 @@ export class CogentEngine {
     return this.normalizeTokenCount(input.nTokens ?? 128);
   }
 
+  private resolvePromptFormat(
+    input: PromptGenerationOptions | PromptStreamOptions | number | undefined
+  ): 'auto-chat' | 'raw' {
+    if (typeof input === 'number' || input === undefined) {
+      return DEFAULT_PROMPT_FORMAT;
+    }
+    return input.promptFormat ?? DEFAULT_PROMPT_FORMAT;
+  }
+
   private getLoadedModule(): EngineModule {
     if (!this.module) {
       throw new Error('Module is not initialized. Call initModule() first.');
@@ -157,9 +184,45 @@ export class CogentEngine {
   private getReadyEngineModule(): EngineModule {
     const module = this.getLoadedModule();
     if (!this.engineInitialized) {
-      throw new Error('Engine is not initialized. Call initEngine(modelPath) first.');
+      throw new Error('Engine is not initialized. Call initEngine(modelPath, config?) first.');
     }
     return module;
+  }
+
+  private releaseStreamCallback(module: EngineModule): void {
+    if (this.streamCallbackPtr == null) {
+      return;
+    }
+    module.removeFunction(this.streamCallbackPtr);
+    this.streamCallbackPtr = null;
+  }
+
+  private ensureStreamCallback(module: EngineModule): number {
+    if (this.streamCallbackPtr != null) {
+      return this.streamCallbackPtr;
+    }
+
+    // Keep one Wasm->JS callback bridge for the lifetime of the loaded module.
+    // Re-registering addFunction/removeFunction on every request adds avoidable
+    // churn in the hot path and was unstable under Bun/Windows long benchmark runs.
+    // The current runtime is single-request anyway, so a persistent bridge is the
+    // correct transport shape for Phase 1 and a cleaner base for later phases.
+    this.streamCallbackPtr = module.addFunction((ptr: number, length: number) => {
+      const activeStream = this.activePromptStream;
+      if (!activeStream || activeStream.callbackError != null) {
+        return;
+      }
+
+      try {
+        const token = module.UTF8ToString(ptr, length);
+        activeStream.chunks.push(token);
+        activeStream.onToken?.(token);
+      } catch (error) {
+        activeStream.callbackError = error;
+      }
+    }, 'vii');
+
+    return this.streamCallbackPtr;
   }
 
   private removeFileIfExists(module: EngineModule, path: string): void {
@@ -403,12 +466,53 @@ export class CogentEngine {
   /**
    * Initialize engine state with a model path in MEMFS.
    */
-  public async initEngine(modelPath: string): Promise<void> {
+  public async initEngine(
+    modelPath: string,
+    config?: InferenceInitConfig
+  ): Promise<void> {
     const module = await this.ensureModule();
     if (!modelPath || modelPath.trim().length === 0) {
       throw new Error('modelPath must not be empty.');
     }
-    const result = await module.ccall('CE_Init', 'number', ['string'], [modelPath], { async: true });
+    if (this.engineInitialized) {
+      module.ccall('CE_Close', null, [], []);
+      this.engineInitialized = false;
+    }
+
+    const normalizedConfig = normalizeInitConfig(config);
+    const result = await module.ccall(
+      'CE_Init',
+      'number',
+      [
+        'string',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+      ],
+      [
+        modelPath,
+        normalizedConfig.nCtx,
+        normalizedConfig.nBatch,
+        normalizedConfig.nUbatch,
+        normalizedConfig.nSeqMax,
+        normalizedConfig.nThreads,
+        normalizedConfig.nThreadsBatch,
+        normalizedConfig.nGpuLayers,
+        normalizedConfig.flashAttention,
+        normalizedConfig.kvUnified,
+        normalizedConfig.maxCachedSessions,
+        normalizedConfig.retainedPrefixTokens,
+      ],
+      { async: true }
+    );
     if (result !== 0) {
       this.engineInitialized = false;
       throw new Error(`Failed to initialize engine. Code: ${result}`);
@@ -425,6 +529,8 @@ export class CogentEngine {
       return;
     }
     module.ccall('CE_Close', null, [], []);
+    this.releaseStreamCallback(module);
+    this.activePromptStream = null;
     this.engineInitialized = false;
     this.loadedModelPath = null;
     this.module = null;
@@ -434,30 +540,58 @@ export class CogentEngine {
   /**
    * Submit a generation prompt.
    */
+  public async streamPrompt(
+    contextKey: string,
+    promptText: string,
+    options: number | PromptStreamOptions = 128
+  ): Promise<string> {
+    const module = this.getReadyEngineModule();
+    if (this.activePromptStream != null) {
+      throw new Error('Concurrent streamPrompt() calls are not supported yet.');
+    }
+
+    const tokenCount = this.resolvePromptTokenCount(options);
+    const promptFormat = this.resolvePromptFormat(options);
+    const formattedPrompt = formatPromptText(promptText, promptFormat);
+    const onToken = typeof options === 'object' ? options.onToken : undefined;
+    const activeStream: ActivePromptStream = {
+      chunks: [],
+      onToken,
+      callbackError: null,
+    };
+    this.activePromptStream = activeStream;
+    const callbackPtr = this.ensureStreamCallback(module);
+
+    try {
+      const result = await module.ccall(
+        'CE_StreamPrompt',
+        'number',
+        ['string', 'string', 'number', 'number'],
+        [contextKey, formattedPrompt, tokenCount, callbackPtr],
+        { async: true }
+      );
+
+      if (result !== 0) {
+        throw new Error(`Prompt failed. Code: ${result}`);
+      }
+      if (activeStream.callbackError != null) {
+        throw activeStream.callbackError;
+      }
+
+      return activeStream.chunks.join('');
+    } finally {
+      if (this.activePromptStream === activeStream) {
+        this.activePromptStream = null;
+      }
+    }
+  }
+
   public async prompt(
     contextKey: string,
     promptText: string,
     options: number | PromptGenerationOptions = 128
   ): Promise<string> {
-    const module = this.getReadyEngineModule();
-    const tokenCount = this.resolvePromptTokenCount(options);
-    const ptr = await module.ccall(
-      'CE_Prompt',
-      'number',
-      ['string', 'string', 'number'],
-      [contextKey, promptText, tokenCount],
-      { async: true }
-    );
-
-    if (!ptr) {
-      throw new Error('Prompt failed or returned null');
-    }
-
-    try {
-      return module.UTF8ToString(ptr);
-    } finally {
-      module._CE_FreeString(ptr);
-    }
+    return this.streamPrompt(contextKey, promptText, options);
   }
 
   public getLastPromptPerformance(): PromptPerformanceStats | null {

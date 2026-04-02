@@ -11,15 +11,22 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cctype>
 
 #include "runtime/llama/llama_utils.h"
 
 namespace {
 
-constexpr int kDefaultRetainedPromptTokens = 100;
 constexpr char kDefaultPromptContextKey[] = "__primary_prompt__";
 constexpr int kMaxPredictionTokens = 2048;
+
+noumena::cogentengine::InferenceRuntimeConfig normalize_config(
+    noumena::cogentengine::InferenceRuntimeConfig config) {
+  config.n_seq_max = std::max<int32_t>(1, config.n_seq_max);
+  config.gpu_layers = std::max<int32_t>(0, config.gpu_layers);
+  config.max_cached_sessions = std::max<int32_t>(1, config.max_cached_sessions);
+  config.retained_prefix_tokens = std::max<int32_t>(0, config.retained_prefix_tokens);
+  return config;
+}
 
 }  // namespace
 
@@ -46,7 +53,7 @@ bool InferenceRuntime::EnsureContextSpace(
     return true;
   }
 
-  const int n_keep = std::min(kDefaultRetainedPromptTokens, state.n_past);
+  const int n_keep = std::min(config_.retained_prefix_tokens, state.n_past);
   const int required_discard = state.n_past + new_tokens_needed - n_ctx;
   const int max_discard = std::max(0, state.n_past - n_keep);
   const int n_discard = std::clamp(required_discard, 0, max_discard);
@@ -94,8 +101,9 @@ bool InferenceRuntime::EnsureContextSpace(
 
 InferenceRuntime::InferenceRuntime(
     std::string model_path,
-    int gpu_layers_n)
-    : session_store_(8) {
+    InferenceRuntimeConfig config)
+    : config_(normalize_config(config)),
+      session_store_(static_cast<size_t>(config_.max_cached_sessions)) {
   if (model_path.empty()) {
     fprintf(stderr, "%s: error: model path is required\n", __func__);
     return;
@@ -108,7 +116,7 @@ InferenceRuntime::InferenceRuntime(
   ggml_backend_load_all();
 
   llama_model_params model_params = llama_model_default_params();
-  model_params.n_gpu_layers = gpu_layers_n;
+  model_params.n_gpu_layers = config_.gpu_layers;
   model_params.use_mlock = false;
 #if defined(__EMSCRIPTEN__)
   model_params.use_mmap = false;
@@ -133,6 +141,41 @@ InferenceRuntime::InferenceRuntime(
   llama_sampler_chain_add(sampler_, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 }
 
+llama_context* InferenceRuntime::CreateContext() const {
+  if (primary_model_ == nullptr) {
+    return nullptr;
+  }
+
+  llama_context_params ctx_params = llama_context_default_params();
+  ctx_params.n_ctx =
+      config_.n_ctx > 0
+          ? static_cast<uint32_t>(config_.n_ctx)
+          : static_cast<uint32_t>(std::min(4096 * 2, llama_model_n_ctx_train(primary_model_)));
+  ctx_params.n_batch =
+      config_.n_batch > 0 ? static_cast<uint32_t>(config_.n_batch) : 256u;
+  if (config_.n_ubatch > 0) {
+    ctx_params.n_ubatch = static_cast<uint32_t>(config_.n_ubatch);
+  } else if (ctx_params.n_ubatch > ctx_params.n_batch) {
+    ctx_params.n_ubatch = ctx_params.n_batch;
+  }
+  ctx_params.n_seq_max = static_cast<uint32_t>(config_.n_seq_max);
+  ctx_params.n_threads =
+      config_.n_threads > 0 ? config_.n_threads : llama_utils::DefaultThreadCount();
+  ctx_params.n_threads_batch =
+      config_.n_threads_batch > 0 ? config_.n_threads_batch : ctx_params.n_threads;
+  ctx_params.no_perf = false;
+
+  if (config_.flash_attention >= 0) {
+    ctx_params.flash_attn_type =
+        static_cast<llama_flash_attn_type>(config_.flash_attention);
+  }
+  if (config_.kv_unified >= 0) {
+    ctx_params.kv_unified = config_.kv_unified != 0;
+  }
+
+  return llama_init_from_model(primary_model_, ctx_params);
+}
+
 InferenceRuntime::~InferenceRuntime() {
   if (sampler_ != nullptr) {
     llama_sampler_free(sampler_);
@@ -152,8 +195,7 @@ bool InferenceRuntime::IsReady() const {
   return primary_model_ != nullptr && sampler_ != nullptr;
 }
 
-bool InferenceRuntime::TryGetLastPromptPerf(
-    PromptPerfStats& out) const {
+bool InferenceRuntime::TryGetLastPromptPerf(PromptPerfStats& out) const {
   std::lock_guard<std::mutex> lock(operation_mutex_);
   if (!has_last_prompt_perf_) {
     return false;
@@ -163,75 +205,38 @@ bool InferenceRuntime::TryGetLastPromptPerf(
   return true;
 }
 
-std::string InferenceRuntime::Prompt(
+bool InferenceRuntime::Prompt(
     std::string model_context_key,
     std::string prompt,
     int n_tokens_predict,
-    std::function<void(std::string)> onTokenReceived) {
+    TokenCallback on_token_received) {
   std::lock_guard<std::mutex> lock(operation_mutex_);
   has_last_prompt_perf_ = false;
 
   if (primary_model_ == nullptr || sampler_ == nullptr) {
-    return "";
+    return false;
   }
   if (n_tokens_predict <= 0 || n_tokens_predict > kMaxPredictionTokens) {
-    return "";
+    return false;
   }
   if (model_context_key.empty()) {
     model_context_key = kDefaultPromptContextKey;
   }
 
   const llama_vocab* vocab = llama_model_get_vocab(primary_model_);
-
-  std::string normalized_prompt = prompt;
-  size_t pos = 0;
-  while ((pos = normalized_prompt.find("\r\n", pos)) != std::string::npos) {
-    normalized_prompt.replace(pos, 2, "\n");
-    pos += 1;
+  std::vector<llama_token> new_tokens = llama_utils::Tokenize(vocab, prompt, false, true);
+  if (new_tokens.empty()) {
+    return true;
   }
-  while ((pos = normalized_prompt.find('\r')) != std::string::npos) {
-    normalized_prompt.replace(pos, 1, "\n");
-  }
-
-  auto ltrim = [](std::string& value) {
-    size_t start = 0;
-    while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start]))) {
-      ++start;
-    }
-    if (start > 0) {
-      value.erase(0, start);
-    }
-  };
-
-  std::string formatted_prompt = normalized_prompt;
-  ltrim(formatted_prompt);
-
-  const bool is_chat_formatted = formatted_prompt.starts_with("<|im_start|>") ||
-                                 formatted_prompt.starts_with("<|startoftext|>") ||
-                                 formatted_prompt.starts_with("<|begin_of_text|>");
-
-  if (!is_chat_formatted) {
-    formatted_prompt = "<|im_start|>user\n" + formatted_prompt +
-                       "\n<|im_end|>\n<|im_start|>assistant\n";
-  }
-  std::vector<llama_token> new_tokens =
-      llama_utils::Tokenize(vocab, formatted_prompt, false, true);
 
   ContextState* state = session_store_.Find(model_context_key);
   if (state == nullptr) {
     session_store_.EnforceLimitBeforeInsert();
 
-    llama_context_params ctx_params = llama_context_default_params();
-    ctx_params.n_ctx = std::min(4096 * 2, llama_model_n_ctx_train(primary_model_));
-    ctx_params.n_batch = 256;
-    ctx_params.no_perf = false;
-    ctx_params.n_seq_max = 1;
-    ctx_params.n_threads = llama_utils::DefaultThreadCount();
-
     ContextState new_state;
-    new_state.ctx = llama_init_from_model(primary_model_, ctx_params);
+    new_state.ctx = CreateContext();
     if (new_state.ctx == nullptr) {
-      return "";
+      return false;
     }
     new_state.n_past = 0;
     state = &session_store_.Emplace(model_context_key, std::move(new_state));
@@ -241,7 +246,7 @@ std::string InferenceRuntime::Prompt(
   llama_context* ctx = state->ctx;
   if (ctx == nullptr) {
     session_store_.Remove(model_context_key);
-    return "";
+    return false;
   }
 
   llama_memory_t mem = llama_get_memory(ctx);
@@ -263,7 +268,7 @@ std::string InferenceRuntime::Prompt(
   const int total_needed = tokens_to_add + n_tokens_predict;
 
   if (!EnsureContextSpace(*state, total_needed, n_ctx)) {
-    return "Error: Context full and input too large to shift.";
+    return false;
   }
 
   if (match_len < state->current_kv_tokens.size()) {
@@ -275,7 +280,7 @@ std::string InferenceRuntime::Prompt(
     } else {
       if (!llama_memory_seq_rm(mem, 0, match_len, -1)) {
         fprintf(stderr, "failed to remove tokens from memory\n");
-        return "";
+        return false;
       }
       state->current_kv_tokens.resize(match_len);
       state->n_past = static_cast<int>(match_len);
@@ -287,8 +292,11 @@ std::string InferenceRuntime::Prompt(
   llama_perf_sampler_reset(sampler_);
   const auto total_start = std::chrono::steady_clock::now();
 
-  const int n_batch = llama_n_batch(ctx);
-  llama_batch batch = llama_batch_init(n_batch, 0, 1);
+  const int n_batch = static_cast<int>(llama_n_batch(ctx));
+  llama_batch batch = llama_batch_init(
+      n_batch,
+      0,
+      static_cast<int32_t>(std::max<uint32_t>(1, llama_n_seq_max(ctx))));
 
   if (match_len == new_tokens.size() && match_len > 0) {
     if (!allow_partial_kv) {
@@ -300,7 +308,7 @@ std::string InferenceRuntime::Prompt(
       if (!llama_memory_seq_rm(mem, 0, match_len - 1, -1)) {
         fprintf(stderr, "failed to remove last token from memory for re-evaluation\n");
         llama_batch_free(batch);
-        return "";
+        return false;
       }
       state->current_kv_tokens.resize(match_len - 1);
       state->n_past = static_cast<int>(match_len - 1);
@@ -312,13 +320,13 @@ std::string InferenceRuntime::Prompt(
     const int batch_pos = static_cast<int>(i);
     const bool logits = (i == new_tokens.size() - 1);
 
-    llama_utils::BatchAdd(batch, new_tokens[i], batch_pos, {0}, logits);
+    llama_utils::BatchAdd(batch, new_tokens[i], batch_pos, 0, logits);
 
     if (batch.n_tokens >= n_batch) {
       if (llama_decode(ctx, batch) != 0) {
         fprintf(stderr, "%s : failed to eval prompt\n", __func__);
         llama_batch_free(batch);
-        return "";
+        return false;
       }
       state->n_past += batch.n_tokens;
       llama_utils::BatchClear(batch);
@@ -329,15 +337,13 @@ std::string InferenceRuntime::Prompt(
     if (llama_decode(ctx, batch) != 0) {
       fprintf(stderr, "%s : failed to eval prompt final\n", __func__);
       llama_batch_free(batch);
-      return "";
+      return false;
     }
     state->n_past += batch.n_tokens;
   }
 
   state->current_kv_tokens = new_tokens;
 
-  std::string response;
-  response.reserve(n_tokens_predict * 4);
   llama_utils::BatchClear(batch);
   int output_token_count = 0;
 
@@ -353,15 +359,14 @@ std::string InferenceRuntime::Prompt(
     if (n < 0) {
       break;
     }
-    response.append(buf, n);
     output_token_count++;
 
-    if (onTokenReceived) {
-      onTokenReceived(std::string(buf, n));
+    if (on_token_received) {
+      on_token_received(buf, n);
     }
 
     llama_utils::BatchClear(batch);
-    llama_utils::BatchAdd(batch, tok, state->n_past, {0}, true);
+    llama_utils::BatchAdd(batch, tok, state->n_past, 0, true);
 
     if (llama_decode(ctx, batch) != 0) {
       break;
@@ -383,6 +388,7 @@ std::string InferenceRuntime::Prompt(
       .prompt_eval_ms = ctx_perf.t_p_eval_ms,
       .decode_eval_ms = ctx_perf.t_eval_ms,
       .sample_ms = sampler_perf.t_sample_ms,
+      .input_token_count = static_cast<int32_t>(new_tokens.size()),
       .prompt_eval_tokens = ctx_perf.n_p_eval,
       .decode_eval_count = ctx_perf.n_eval,
       .sample_count = sampler_perf.n_sample,
@@ -390,7 +396,7 @@ std::string InferenceRuntime::Prompt(
   };
   has_last_prompt_perf_ = true;
 
-  return response;
+  return true;
 }
 
 }  // namespace noumena::cogentengine

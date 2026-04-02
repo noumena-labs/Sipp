@@ -10,7 +10,6 @@
 
 #include <string>
 #include <vector>
-
 #include "llama.h"
 
 namespace noumena::cogentengine::llama_utils {
@@ -27,7 +26,7 @@ void BatchAdd(
     struct llama_batch& batch,
     llama_token id,
     llama_pos pos,
-    const std::vector<llama_seq_id>& seq_ids,
+    llama_seq_id seq_id,
     bool logits);
 
 void LogCallbackDefault(enum ggml_log_level level, const char* text, void* user_data);

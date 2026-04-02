@@ -10,11 +10,28 @@
 
 #include <stdint.h>
 
+typedef void (*CE_TokenCallback)(const char* token_piece, int32_t token_length);
+
+typedef struct CE_InitConfig {
+  int32_t n_ctx;
+  int32_t n_batch;
+  int32_t n_ubatch;
+  int32_t n_seq_max;
+  int32_t n_threads;
+  int32_t n_threads_batch;
+  int32_t gpu_layers;
+  int32_t flash_attention;
+  int32_t kv_unified;
+  int32_t max_cached_sessions;
+  int32_t retained_prefix_tokens;
+} CE_InitConfig;
+
 typedef struct CE_PromptPerfMetrics {
   double total_ms;
   double prompt_eval_ms;
   double decode_eval_ms;
   double sample_ms;
+  int32_t input_token_count;
   int32_t prompt_eval_tokens;
   int32_t decode_eval_count;
   int32_t sample_count;

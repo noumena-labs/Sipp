@@ -2,6 +2,16 @@ import * as THREE from 'three';
 import { CogentEngine, getBundledRuntimeUrls } from 'cogent-engine';
 import './style.css';
 
+// Browser benchmark metric glossary:
+// - TTFT: request start until the first streamed token callback.
+// - TPOT: average time per generated token after the first token.
+// - ITL: token-to-token gaps measured from streamed token callbacks.
+// - E2EL: full request latency until the final streamed token is received.
+// - Request/output/total throughput: aggregate serving metrics over the measured group.
+// - Logical input tokens vs effective prompt-eval tokens:
+//   logical input size is the full request prompt size, while effective prompt-eval
+//   work is what llama.cpp actually had to prefill after any context reuse.
+
 const app = document.querySelector('#app');
 app.innerHTML = `
   <div class="panel">
@@ -122,6 +132,19 @@ function formatMiB(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
 }
 
+function formatBytes(bytes) {
+  if (bytes == null || !Number.isFinite(bytes) || bytes < 0) {
+    return 'n/a';
+  }
+  if (bytes >= 1024 * 1024) {
+    return formatMiB(bytes);
+  }
+  if (bytes >= 1024) {
+    return `${(bytes / 1024).toFixed(2)} KiB`;
+  }
+  return `${bytes} B`;
+}
+
 function escapeHtml(value) {
   return value
     .replaceAll('&', '&amp;')
@@ -143,15 +166,20 @@ function metricCard(label, value, tone = 'default') {
 function summarize(values) {
   const sorted = [...values].sort((left, right) => left - right);
   const total = sorted.reduce((acc, value) => acc + value, 0);
-  const percentileIndex = Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1);
+  const percentileIndex = Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.99) - 1);
 
   return {
-    minMs: round(sorted[0]),
-    medianMs: round(sorted[Math.floor(sorted.length / 2)]),
     meanMs: round(total / sorted.length),
-    p95Ms: round(sorted[percentileIndex]),
+    medianMs: round(sorted[Math.floor(sorted.length / 2)]),
+    p99Ms: round(sorted[percentileIndex]),
+    minMs: round(sorted[0]),
     maxMs: round(sorted[sorted.length - 1]),
   };
+}
+
+function summarizeOptional(values) {
+  const filtered = values.filter((value) => value != null && Number.isFinite(value));
+  return filtered.length === 0 ? null : summarize(filtered);
 }
 
 function averagePerfMetric(perfRuns, metric) {
@@ -159,6 +187,25 @@ function averagePerfMetric(perfRuns, metric) {
     .filter((perf) => perf !== null)
     .map(metric)
     .filter((value) => Number.isFinite(value) && value >= 0);
+
+  if (values.length === 0) {
+    return null;
+  }
+
+  const total = values.reduce((acc, value) => acc + value, 0);
+  return round(total / values.length);
+}
+
+function summarizePromptThroughput(perfRuns) {
+  const values = perfRuns
+    .filter((perf) => perf !== null)
+    .map((perf) => {
+      if (perf.promptEvalMs <= 0 || perf.promptEvalTokens <= 0) {
+        return 0;
+      }
+      return (perf.promptEvalTokens * 1000) / perf.promptEvalMs;
+    })
+    .filter((value) => value > 0);
 
   if (values.length === 0) {
     return null;
@@ -187,28 +234,109 @@ function summarizeThroughput(perfRuns) {
   return round(total / values.length);
 }
 
-function summarizeRunGroup(runs) {
+function maxNullable(values) {
+  const filtered = values.filter((value) => value != null && Number.isFinite(value));
+  if (filtered.length === 0) {
+    return null;
+  }
+  return Math.max(...filtered);
+}
+
+async function captureBrowserMemorySnapshot(label) {
+  const snapshot = {
+    label,
+    capturedAt: new Date().toISOString(),
+    source: 'unavailable',
+    usedJsHeapBytes: null,
+    totalJsHeapBytes: null,
+    jsHeapLimitBytes: null,
+    userAgentBytes: null,
+    error: null,
+  };
+
+  if (typeof performance !== 'undefined' && performance.memory) {
+    snapshot.source = 'performance.memory';
+    snapshot.usedJsHeapBytes = performance.memory.usedJSHeapSize ?? null;
+    snapshot.totalJsHeapBytes = performance.memory.totalJSHeapSize ?? null;
+    snapshot.jsHeapLimitBytes = performance.memory.jsHeapSizeLimit ?? null;
+  }
+
+  if (typeof performance !== 'undefined' && typeof performance.measureUserAgentSpecificMemory === 'function') {
+    try {
+      const uaMemory = await performance.measureUserAgentSpecificMemory();
+      snapshot.userAgentBytes = uaMemory.bytes ?? null;
+      snapshot.source =
+        snapshot.source === 'performance.memory'
+          ? 'performance.memory + measureUserAgentSpecificMemory'
+          : 'measureUserAgentSpecificMemory';
+    } catch (error) {
+      snapshot.error = errorMessage(error);
+    }
+  }
+
+  return snapshot;
+}
+
+function summarizeMemorySnapshots(memorySnapshots) {
+  return {
+    snapshotCount: memorySnapshots.length,
+    maxUsedJsHeapBytes: maxNullable(memorySnapshots.map((snapshot) => snapshot.usedJsHeapBytes)),
+    maxTotalJsHeapBytes: maxNullable(memorySnapshots.map((snapshot) => snapshot.totalJsHeapBytes)),
+    maxUserAgentBytes: maxNullable(memorySnapshots.map((snapshot) => snapshot.userAgentBytes)),
+    finalSnapshot: memorySnapshots.length > 0 ? memorySnapshots[memorySnapshots.length - 1] : null,
+  };
+}
+
+function summarizeRunGroup(runs, benchmarkDurationMs) {
   const perfRuns = runs.map((run) => run.perf);
+  const totalInputTokens = runs.reduce((acc, run) => acc + (run.inputTokenCount ?? 0), 0);
+  const totalGeneratedTokens = runs.reduce((acc, run) => acc + (run.outputTokenCount ?? 0), 0);
+  const allItls = runs.flatMap((run) => run.itlMsValues);
+  const benchmarkDurationSeconds = benchmarkDurationMs > 0 ? benchmarkDurationMs / 1000 : 0;
 
   return {
-    wall: summarize(runs.map((run) => run.wallMs)),
-    decodeTokensPerSecond: summarizeThroughput(perfRuns),
-    avgPromptEvalMs: averagePerfMetric(perfRuns, (perf) => perf.promptEvalMs),
-    avgDecodeEvalMs: averagePerfMetric(perfRuns, (perf) => perf.decodeEvalMs),
-    avgSampleMs: averagePerfMetric(perfRuns, (perf) => perf.sampleMs),
-    avgOutputTokenCount: averagePerfMetric(perfRuns, (perf) => perf.outputTokenCount),
+    serving: {
+      successfulRequests: runs.length,
+      benchmarkDurationMs,
+      totalInputTokens,
+      totalGeneratedTokens,
+      requestThroughputRps:
+        benchmarkDurationSeconds > 0 ? round(runs.length / benchmarkDurationSeconds) : null,
+      outputTokenThroughputTps:
+        benchmarkDurationSeconds > 0 ? round(totalGeneratedTokens / benchmarkDurationSeconds) : null,
+      totalTokenThroughputTps:
+        benchmarkDurationSeconds > 0
+          ? round((totalInputTokens + totalGeneratedTokens) / benchmarkDurationSeconds)
+          : null,
+      ttftMs: summarizeOptional(runs.map((run) => run.ttftMs)),
+      tpotMs: summarizeOptional(runs.map((run) => run.tpotMs)),
+      itlMs: summarizeOptional(allItls),
+      e2elMs: summarize(runs.map((run) => run.wallMs)),
+    },
+    runtime: {
+      avgLogicalInputTokenCount: averagePerfMetric(perfRuns, (perf) => perf.inputTokenCount),
+      avgPromptEvalTokens: averagePerfMetric(perfRuns, (perf) => perf.promptEvalTokens),
+      avgPromptEvalMs: averagePerfMetric(perfRuns, (perf) => perf.promptEvalMs),
+      avgDecodeEvalMs: averagePerfMetric(perfRuns, (perf) => perf.decodeEvalMs),
+      avgSampleMs: averagePerfMetric(perfRuns, (perf) => perf.sampleMs),
+      avgOutputTokenCount: averagePerfMetric(perfRuns, (perf) => perf.outputTokenCount),
+      promptTokensPerSecond: summarizePromptThroughput(perfRuns),
+      decodeTokensPerSecond: summarizeThroughput(perfRuns),
+    },
   };
 }
 
 function benchmarkSection(title, group) {
-  const summary = group.summary;
+  const { serving, runtime } = group.summary;
   const metrics = [
-    metricCard('Wall Median', `${summary.wall.medianMs} ms`),
-    metricCard('Wall Mean', `${summary.wall.meanMs} ms`),
-    metricCard('Decode tok/s', summary.decodeTokensPerSecond == null ? 'n/a' : String(summary.decodeTokensPerSecond)),
-    metricCard('Prompt Eval', summary.avgPromptEvalMs == null ? 'n/a' : `${summary.avgPromptEvalMs} ms`),
-    metricCard('Decode Eval', summary.avgDecodeEvalMs == null ? 'n/a' : `${summary.avgDecodeEvalMs} ms`),
-    metricCard('Sample', summary.avgSampleMs == null ? 'n/a' : `${summary.avgSampleMs} ms`),
+    metricCard('Req/s', serving.requestThroughputRps == null ? 'n/a' : String(serving.requestThroughputRps)),
+    metricCard('Output tok/s', serving.outputTokenThroughputTps == null ? 'n/a' : String(serving.outputTokenThroughputTps)),
+    metricCard('Total tok/s', serving.totalTokenThroughputTps == null ? 'n/a' : String(serving.totalTokenThroughputTps)),
+    metricCard('Mean TTFT', serving.ttftMs == null ? 'n/a' : `${serving.ttftMs.meanMs} ms`),
+    metricCard('Mean TPOT', serving.tpotMs == null ? 'n/a' : `${serving.tpotMs.meanMs} ms`),
+    metricCard('Mean ITL', serving.itlMs == null ? 'n/a' : `${serving.itlMs.meanMs} ms`),
+    metricCard('Mean E2EL', `${serving.e2elMs.meanMs} ms`),
+    metricCard('Prompt Eval tok/s', runtime.promptTokensPerSecond == null ? 'n/a' : String(runtime.promptTokensPerSecond)),
   ].join('');
 
   const preview = group.runs[0]?.outputPreview?.trim() || '(empty response)';
@@ -218,13 +346,61 @@ function benchmarkSection(title, group) {
       <h3>${escapeHtml(title)}</h3>
       <div class="metric-grid metric-grid-compact">${metrics}</div>
       <p class="result-detail">
-        min=${summary.wall.minMs} ms
-        median=${summary.wall.medianMs} ms
-        mean=${summary.wall.meanMs} ms
-        p95=${summary.wall.p95Ms} ms
-        max=${summary.wall.maxMs} ms
+        requests=${serving.successfulRequests}
+        duration=${round(serving.benchmarkDurationMs / 1000)} s
+        input_tokens=${serving.totalInputTokens}
+        output_tokens=${serving.totalGeneratedTokens}
       </p>
+      <p class="result-detail">
+        e2el median=${serving.e2elMs.medianMs} ms
+        p99=${serving.e2elMs.p99Ms} ms
+        min=${serving.e2elMs.minMs} ms
+        max=${serving.e2elMs.maxMs} ms
+      </p>
+      ${serving.ttftMs == null ? '' : `<p class="result-detail">ttft median=${serving.ttftMs.medianMs} ms p99=${serving.ttftMs.p99Ms} ms</p>`}
+      ${serving.tpotMs == null ? '' : `<p class="result-detail">tpot median=${serving.tpotMs.medianMs} ms p99=${serving.tpotMs.p99Ms} ms</p>`}
+      ${serving.itlMs == null ? '' : `<p class="result-detail">itl median=${serving.itlMs.medianMs} ms p99=${serving.itlMs.p99Ms} ms</p>`}
       <p class="result-preview">${escapeHtml(preview)}</p>
+    </article>
+  `;
+}
+
+function memorySnapshotSection(memory) {
+  if (!memory || memory.summary.snapshotCount === 0) {
+    return '';
+  }
+
+  const summaryCards = [
+    metricCard('Snapshots', String(memory.summary.snapshotCount)),
+    metricCard('JS Heap Peak', formatBytes(memory.summary.maxUsedJsHeapBytes)),
+    metricCard('JS Heap Total Peak', formatBytes(memory.summary.maxTotalJsHeapBytes)),
+    metricCard('UA Memory Peak', formatBytes(memory.summary.maxUserAgentBytes)),
+  ].join('');
+
+  const snapshotLines = memory.snapshots
+    .map((snapshot) => {
+      const parts = [
+        snapshot.label,
+        `source=${snapshot.source}`,
+        `used_js_heap=${formatBytes(snapshot.usedJsHeapBytes)}`,
+        `total_js_heap=${formatBytes(snapshot.totalJsHeapBytes)}`,
+        `js_heap_limit=${formatBytes(snapshot.jsHeapLimitBytes)}`,
+        `ua_memory=${formatBytes(snapshot.userAgentBytes)}`,
+      ];
+
+      if (snapshot.error) {
+        parts.push(`error=${snapshot.error}`);
+      }
+
+      return `<p class="result-detail">${escapeHtml(parts.join(' | '))}</p>`;
+    })
+    .join('');
+
+  return `
+    <article class="result-card">
+      <h3>Memory Snapshots</h3>
+      <div class="metric-grid metric-grid-compact">${summaryCards}</div>
+      ${snapshotLines}
     </article>
   `;
 }
@@ -245,11 +421,14 @@ function renderBenchmarkReport(report) {
       ${metricCard('Model Source', report.modelSource.label)}
       ${metricCard('Prompt Length', `${report.config.prompt.length} chars`)}
       ${metricCard('WebGPU', webGpuLabel, webGpuTone)}
+      ${metricCard('JS Heap Peak', formatBytes(report.memory.summary.maxUsedJsHeapBytes))}
+      ${metricCard('UA Memory Peak', formatBytes(report.memory.summary.maxUserAgentBytes))}
     </div>
     <div class="result-stack">
       ${benchmarkSection('Cold Prompt', report.coldPrompt)}
       ${benchmarkSection('Hot Prompt: Fresh Context', report.hotFreshContext)}
       ${benchmarkSection('Hot Prompt: Reused Context', report.hotReuseContext)}
+      ${memorySnapshotSection(report.memory)}
     </div>
   `;
 }
@@ -307,9 +486,17 @@ function parseMeasuredRuns() {
 }
 
 function renderResponseMetrics(response, wallMs, perf) {
+  const ttftLabel = response.ttftMs == null ? 'n/a' : formatMs(response.ttftMs);
   const cards = [
     metricCard('Wall', formatMs(wallMs)),
-    metricCard('Chars', String(response.length)),
+    metricCard('TTFT', ttftLabel),
+    metricCard('Chars', String(response.text.length)),
+    metricCard(
+      'Prompt tok/s',
+      perf && perf.promptEvalMs > 0 && perf.promptEvalTokens > 0
+        ? String(round((perf.promptEvalTokens * 1000) / perf.promptEvalMs))
+        : 'n/a'
+    ),
     metricCard(
       'Decode tok/s',
       perf && perf.decodeEvalMs > 0 && perf.outputTokenCount > 0
@@ -322,7 +509,7 @@ function renderResponseMetrics(response, wallMs, perf) {
   ];
 
   responseMetaEl.innerHTML = cards.join('');
-  responseEl.textContent = response;
+  responseEl.textContent = response.text;
 }
 
 function resetEngine() {
@@ -509,29 +696,57 @@ async function loadAndInitCurrentEngine(statusPrefix) {
 async function runPromptGroup(targetEngine, groupLabel, prompt, tokenCount, warmupRuns, measuredRuns, contextKeyFactory) {
   for (let i = 0; i < warmupRuns; i += 1) {
     setStatus(`${groupLabel}: warmup ${i + 1}/${warmupRuns}`);
-    await targetEngine.prompt(contextKeyFactory(i), prompt, tokenCount);
+    await targetEngine.streamPrompt(contextKeyFactory(i), prompt, tokenCount);
   }
 
   const runs = [];
+  const benchmarkStart = performance.now();
   for (let i = 0; i < measuredRuns; i += 1) {
     setStatus(`${groupLabel}: run ${i + 1}/${measuredRuns}`);
     const start = performance.now();
-    const output = await targetEngine.prompt(contextKeyFactory(i + warmupRuns), prompt, tokenCount);
+    let ttftMs = null;
+    const tokenEventTimes = [];
+    const output = await targetEngine.streamPrompt(contextKeyFactory(i + warmupRuns), prompt, {
+      nTokens: tokenCount,
+      onToken: () => {
+        const elapsedMs = round(performance.now() - start);
+        tokenEventTimes.push(elapsedMs);
+        if (ttftMs == null) {
+          ttftMs = elapsedMs;
+        }
+      },
+    });
     const wallMs = round(performance.now() - start);
     const perf = targetEngine.getLastPromptPerformance();
+    const outputTokenCount = perf?.outputTokenCount ?? tokenEventTimes.length;
+    const itlMsValues = [];
+    for (let tokenIndex = 1; tokenIndex < tokenEventTimes.length; tokenIndex += 1) {
+      itlMsValues.push(round(tokenEventTimes[tokenIndex] - tokenEventTimes[tokenIndex - 1]));
+    }
+    const tpotMs =
+      ttftMs != null && outputTokenCount > 1
+        ? round((wallMs - ttftMs) / (outputTokenCount - 1))
+        : null;
 
     runs.push({
       label: `${groupLabel}-${i + 1}`,
       wallMs,
+      ttftMs,
+      tpotMs,
+      itlMsValues,
+      inputTokenCount: perf?.inputTokenCount ?? null,
+      outputTokenCount,
       outputLength: output.length,
       outputPreview: output.slice(0, 160).replace(/\s+/g, ' ').trim(),
       perf,
     });
   }
 
+  const benchmarkDurationMs = round(performance.now() - benchmarkStart);
   return {
+    benchmarkDurationMs,
     runs,
-    summary: summarizeRunGroup(runs),
+    summary: summarizeRunGroup(runs, benchmarkDurationMs),
   };
 }
 
@@ -544,18 +759,23 @@ async function runBrowserBenchmark() {
   const tokenCount = parseTokenCount();
   const warmupRuns = parseWarmupRuns();
   const measuredRuns = parseMeasuredRuns();
+  const memorySnapshots = [];
 
   resetEngine();
+  memorySnapshots.push(await captureBrowserMemorySnapshot('after-reset'));
   await collectEnvironmentInfo();
 
   setStatus('benchmark: initializing runtime...');
   const initModuleMs = await initRuntimeCurrentEngine();
+  memorySnapshots.push(await captureBrowserMemorySnapshot('after-init-module'));
 
   const loadResult = await loadModelIntoEngine(engine, 'benchmark');
+  memorySnapshots.push(await captureBrowserMemorySnapshot('after-model-load'));
   setStatus('benchmark: initializing engine...');
   const { ms: initEngineMs } = await measureAsync(() => engine.initEngine(loadResult.modelPath));
   engineReady = true;
   lastLoadedModelSource = loadResult.modelSource;
+  memorySnapshots.push(await captureBrowserMemorySnapshot('after-engine-init'));
 
   const coldPrompt = await runPromptGroup(
     engine,
@@ -566,6 +786,7 @@ async function runBrowserBenchmark() {
     1,
     () => 'browser-bench-cold'
   );
+  memorySnapshots.push(await captureBrowserMemorySnapshot('after-cold-prompt'));
 
   const hotFreshContext = await runPromptGroup(
     engine,
@@ -576,6 +797,7 @@ async function runBrowserBenchmark() {
     measuredRuns,
     (index) => `browser-bench-fresh-${index}`
   );
+  memorySnapshots.push(await captureBrowserMemorySnapshot('after-hot-fresh-context'));
 
   const hotReuseContext = await runPromptGroup(
     engine,
@@ -586,6 +808,7 @@ async function runBrowserBenchmark() {
     measuredRuns,
     () => 'browser-bench-reuse'
   );
+  memorySnapshots.push(await captureBrowserMemorySnapshot('after-hot-reused-context'));
 
   const sampleOutput =
     hotReuseContext.runs[0]?.outputPreview ||
@@ -598,6 +821,7 @@ async function runBrowserBenchmark() {
   }
 
   return {
+    schemaVersion: 'cogent.benchmark.browser.v2',
     generatedAt: new Date().toISOString(),
     environment: environmentInfo,
     modelSource: {
@@ -617,6 +841,10 @@ async function runBrowserBenchmark() {
       initModuleMs,
       loadModelMs: loadResult.loadModelMs,
       initEngineMs,
+    },
+    memory: {
+      snapshots: memorySnapshots,
+      summary: summarizeMemorySnapshots(memorySnapshots),
     },
     coldPrompt,
     hotFreshContext,
@@ -754,13 +982,23 @@ runPromptBtn.addEventListener('click', async () => {
 
     const tokenCount = parseTokenCount();
     const start = performance.now();
-    const response = await engine.prompt('browser-single', prompt, tokenCount);
+    let ttftMs = null;
+    responseEl.textContent = '';
+    const text = await engine.streamPrompt('browser-single', prompt, {
+      nTokens: tokenCount,
+      onToken: (token) => {
+        if (ttftMs == null) {
+          ttftMs = round(performance.now() - start);
+        }
+        responseEl.textContent += token;
+      },
+    });
     const wallMs = performance.now() - start;
     const perf = engine.getLastPromptPerformance();
 
-    renderResponseMetrics(response, wallMs, perf);
-    sceneEnergyTarget = Math.min(2.2, Math.max(0.55, response.length / 140));
-    applyResponseColor(response);
+    renderResponseMetrics({ text, ttftMs }, wallMs, perf);
+    sceneEnergyTarget = Math.min(2.2, Math.max(0.55, text.length / 140));
+    applyResponseColor(text);
     setStatus(`single inference complete in ${formatMs(wallMs)}`);
   } catch (error) {
     setStatus(`single inference failed: ${errorMessage(error)}`);
