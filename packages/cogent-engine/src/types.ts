@@ -25,6 +25,21 @@ export interface PromptStreamOptions extends PromptGenerationOptions {
   onToken?: (token: string) => void;
 }
 
+export interface GenerateRequest {
+  contextKey: string;
+  promptText: string;
+  maxOutputTokens: number;
+  promptFormat: PromptFormatMode;
+}
+
+export interface GenerateResponse {
+  requestId: number;
+  completed: boolean;
+  failed: boolean;
+  outputText: string;
+  errorMessage?: string | null;
+}
+
 export interface PromptPerformanceStats {
   totalMs: number;
   promptEvalMs: number;

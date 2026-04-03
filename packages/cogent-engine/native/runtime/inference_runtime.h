@@ -15,6 +15,8 @@
 #include <string>
 
 #include "runtime/config/inference_config.h"
+#include "runtime/request/request_queue.h"
+#include "runtime/scheduler/slot_scheduler.h"
 #include "runtime/session/session_store.h"
 
 struct llama_model;
@@ -48,9 +50,19 @@ public:
   bool Prompt(std::string context_key, std::string prompt, int n_tokens_predict,
               TokenCallback on_token_received = {});
 
+  GenerateRequestId EnqueueRequest(std::string context_key, std::string prompt,
+                                   int n_tokens_predict,
+                                   TokenCallback on_token_received = {});
+  bool RunUntilRequestCompletes(GenerateRequestId request_id,
+                                GenerateResponse &out_response);
+
 private:
   bool EnsureContextSpace(ContextState &state, int new_tokens_needed,
                           int n_ctx);
+  bool ExecutePromptTokensLocked(const std::string &context_key,
+                                 const std::vector<llama_token> &prompt_tokens,
+                                 int n_tokens_predict,
+                                 TokenCallback on_token_received);
   llama_context *CreateContext() const;
 
   InferenceRuntimeConfig config_;
@@ -59,6 +71,9 @@ private:
   PromptPerfStats last_prompt_perf_;
   bool has_last_prompt_perf_ = false;
   SessionStore session_store_;
+  RequestQueue request_queue_;
+  SlotScheduler slot_scheduler_;
+  GenerateRequestId next_request_id_ = 1;
   mutable std::mutex operation_mutex_;
 };
 

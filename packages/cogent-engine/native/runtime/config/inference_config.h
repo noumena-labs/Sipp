@@ -2,7 +2,7 @@
 //
 // inference_config.h
 //
-// - Shared Phase 1 runtime configuration surface.
+// - Shared runtime configuration surface.
 // - Keep this aligned with src/types.ts and native/api/ffi_types.h.
 //
 /////////////////////////////////////////////////////////////////////////////////////////////////

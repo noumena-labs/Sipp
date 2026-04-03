@@ -2,6 +2,8 @@ import { normalizeInitConfig } from './config.js';
 import { formatPromptText } from './prompt-format.js';
 import {
   BackendInfo,
+  GenerateRequest,
+  GenerateResponse,
   InferenceInitConfig,
   PromptGenerationOptions,
   PromptPerformanceStats,
@@ -173,6 +175,47 @@ export class CogentEngine {
       return DEFAULT_PROMPT_FORMAT;
     }
     return input.promptFormat ?? DEFAULT_PROMPT_FORMAT;
+  }
+
+  private buildGenerateRequest(
+    contextKey: string,
+    promptText: string,
+    options: number | PromptGenerationOptions | PromptStreamOptions
+  ): GenerateRequest {
+    const promptFormat = this.resolvePromptFormat(options);
+    return {
+      contextKey,
+      promptText: formatPromptText(promptText, promptFormat),
+      maxOutputTokens: this.resolvePromptTokenCount(options),
+      promptFormat,
+    };
+  }
+
+  private async runQueuedGenerateRequest(
+    request: GenerateRequest
+  ): Promise<GenerateResponse> {
+    const module = this.getReadyEngineModule();
+    const callbackPtr = this.ensureStreamCallback(module);
+    const ptr = await module.ccall(
+      'CE_RunQueuedPromptJson',
+      'number',
+      ['string', 'string', 'number', 'number'],
+      [request.contextKey, request.promptText, request.maxOutputTokens, callbackPtr],
+      { async: true }
+    );
+
+    if (!ptr) {
+      throw new Error('Queued prompt returned no response payload.');
+    }
+
+    try {
+      const raw = module.UTF8ToString(ptr);
+      return JSON.parse(raw) as GenerateResponse;
+    } catch (error) {
+      throw new Error(`Failed to parse queued generate response: ${asErrorMessage(error)}`);
+    } finally {
+      module._CE_FreeString(ptr);
+    }
   }
 
   private getLoadedModule(): EngineModule {
@@ -542,14 +585,12 @@ export class CogentEngine {
     promptText: string,
     options: number | PromptStreamOptions = 128
   ): Promise<string> {
-    const module = this.getReadyEngineModule();
+    this.getReadyEngineModule();
     if (this.activePromptStream != null) {
       throw new Error('Concurrent streamPrompt() calls are not supported yet.');
     }
 
-    const tokenCount = this.resolvePromptTokenCount(options);
-    const promptFormat = this.resolvePromptFormat(options);
-    const formattedPrompt = formatPromptText(promptText, promptFormat);
+    const request = this.buildGenerateRequest(contextKey, promptText, options);
     const onToken = typeof options === 'object' ? options.onToken : undefined;
     const activeStream: ActivePromptStream = {
       chunks: [],
@@ -557,25 +598,17 @@ export class CogentEngine {
       callbackError: null,
     };
     this.activePromptStream = activeStream;
-    const callbackPtr = this.ensureStreamCallback(module);
 
     try {
-      const result = await module.ccall(
-        'CE_StreamPrompt',
-        'number',
-        ['string', 'string', 'number', 'number'],
-        [contextKey, formattedPrompt, tokenCount, callbackPtr],
-        { async: true }
-      );
-
-      if (result !== 0) {
-        throw new Error(`Prompt failed. Code: ${result}`);
-      }
+      const response = await this.runQueuedGenerateRequest(request);
       if (activeStream.callbackError != null) {
         throw activeStream.callbackError;
       }
+      if (response.failed) {
+        throw new Error(response.errorMessage ?? 'Queued prompt failed.');
+      }
 
-      return activeStream.chunks.join('');
+      return response.outputText;
     } finally {
       if (this.activePromptStream === activeStream) {
         this.activePromptStream = null;

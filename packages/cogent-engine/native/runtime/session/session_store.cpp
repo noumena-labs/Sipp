@@ -15,18 +15,33 @@ namespace noumena::cogentengine {
 SessionStore::SessionStore(size_t max_cached_contexts)
     : max_cached_contexts_(max_cached_contexts) {}
 
-SessionStore::~SessionStore() {
-  Clear();
-}
+SessionStore::~SessionStore() { Clear(); }
 
-ContextState* SessionStore::Find(const std::string& context_key) {
+ContextState *SessionStore::Find(const std::string &context_key) {
   auto it = context_states_.find(context_key);
   return it == context_states_.end() ? nullptr : &it->second;
 }
 
-ContextState& SessionStore::Emplace(const std::string& context_key, ContextState state) {
-  auto [it, inserted] =
-      context_states_.emplace(context_key, std::move(state));
+ContextState &SessionStore::GetOrCreateSession(
+    const std::string &context_key,
+    const std::function<llama_context *()> &create_context) {
+  if (ContextState *existing = Find(context_key)) {
+    Touch(context_key);
+    return *existing;
+  }
+
+  EnforceLimitBeforeInsert();
+
+  ContextState new_state;
+  new_state.ctx = create_context ? create_context() : nullptr;
+  ContextState &stored_state = Emplace(context_key, std::move(new_state));
+  Touch(context_key);
+  return stored_state;
+}
+
+ContextState &SessionStore::Emplace(const std::string &context_key,
+                                    ContextState state) {
+  auto [it, inserted] = context_states_.emplace(context_key, std::move(state));
   if (!inserted) {
     if (it->second.ctx != nullptr) {
       llama_free(it->second.ctx);
@@ -36,15 +51,16 @@ ContextState& SessionStore::Emplace(const std::string& context_key, ContextState
   return it->second;
 }
 
-void SessionStore::Touch(const std::string& context_key) {
-  auto it = std::find(context_usage_order_.begin(), context_usage_order_.end(), context_key);
+void SessionStore::Touch(const std::string &context_key) {
+  auto it = std::find(context_usage_order_.begin(), context_usage_order_.end(),
+                      context_key);
   if (it != context_usage_order_.end()) {
     context_usage_order_.erase(it);
   }
   context_usage_order_.push_back(context_key);
 }
 
-void SessionStore::Remove(const std::string& context_key) {
+void SessionStore::Remove(const std::string &context_key) {
   auto ctx_it = context_states_.find(context_key);
   if (ctx_it != context_states_.end()) {
     if (ctx_it->second.ctx != nullptr) {
@@ -53,14 +69,16 @@ void SessionStore::Remove(const std::string& context_key) {
     context_states_.erase(ctx_it);
   }
 
-  auto order_it = std::find(context_usage_order_.begin(), context_usage_order_.end(), context_key);
+  auto order_it = std::find(context_usage_order_.begin(),
+                            context_usage_order_.end(), context_key);
   if (order_it != context_usage_order_.end()) {
     context_usage_order_.erase(order_it);
   }
 }
 
 void SessionStore::EnforceLimitBeforeInsert() {
-  while (context_states_.size() >= max_cached_contexts_ && !context_usage_order_.empty()) {
+  while (context_states_.size() >= max_cached_contexts_ &&
+         !context_usage_order_.empty()) {
     const std::string evict_key = context_usage_order_.front();
     context_usage_order_.erase(context_usage_order_.begin());
 
@@ -77,8 +95,8 @@ void SessionStore::EnforceLimitBeforeInsert() {
 }
 
 void SessionStore::Clear() {
-  for (auto& [key, state] : context_states_) {
-    (void) key;
+  for (auto &[key, state] : context_states_) {
+    (void)key;
     if (state.ctx != nullptr) {
       llama_free(state.ctx);
     }
@@ -88,4 +106,4 @@ void SessionStore::Clear() {
   context_usage_order_.clear();
 }
 
-}  // namespace noumena::cogentengine
+} // namespace noumena::cogentengine

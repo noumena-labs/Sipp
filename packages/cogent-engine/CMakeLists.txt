@@ -91,6 +91,8 @@ endif()
 # Plugin Sources
 set(PLUGIN_SOURCES
     ${CMAKE_SOURCE_DIR}/native/runtime/inference_runtime.cpp
+    ${CMAKE_SOURCE_DIR}/native/runtime/request/request_queue.cpp
+    ${CMAKE_SOURCE_DIR}/native/runtime/scheduler/slot_scheduler.cpp
     ${CMAKE_SOURCE_DIR}/native/runtime/session/session_store.cpp
     ${CMAKE_SOURCE_DIR}/native/runtime/llama/llama_utils.cpp
     ${CMAKE_SOURCE_DIR}/native/api/engine_bridge.cpp
@@ -109,7 +111,7 @@ foreach(_ggml_target ggml ggml-base ggml-cpu ggml-webgpu)
 endforeach()
 
 set(CE_WASM_EXPORTED_FUNCTIONS
-    "['_CE_Init','_CE_Close','_CE_StreamPrompt','_CE_FreeString','_CE_GetLastPromptPerfJson','_CE_GetBackendInfoJson']"
+    "['_CE_Init','_CE_Close','_CE_StreamPrompt','_CE_RunQueuedPromptJson','_CE_FreeString','_CE_GetLastPromptPerfJson','_CE_GetBackendInfoJson']"
 )
 
 set(CE_WASM_RUNTIME_METHODS "['ccall','FS','UTF8ToString','addFunction','removeFunction']")
@@ -128,12 +130,13 @@ set(CE_WASM_TARGET_LINK_OPTIONS
 if(CE_WASM_USE_JSPI)
     list(APPEND CE_WASM_TARGET_LINK_OPTIONS
         -sJSPI=1
-        # CE_Init and CE_StreamPrompt may suspend on the browser WebGPU path.
+        # CE_Init, CE_StreamPrompt, and CE_RunQueuedPromptJson may suspend on
+        # the browser WebGPU path.
         # CE_GetBackendInfoJson can also suspend because querying ggml-webgpu
         # devices may force adapter/device creation under emdawnwebgpu.
         # CE_Close is intentionally not exported as a JSPI function because the
         # TS wrapper calls it synchronously during teardown/reinit.
-        -sJSPI_EXPORTS=['_main_thread','CE_Init','CE_StreamPrompt','CE_GetBackendInfoJson']
+        -sJSPI_EXPORTS=['_main_thread','CE_Init','CE_StreamPrompt','CE_RunQueuedPromptJson','CE_GetBackendInfoJson']
     )
 endif()
 

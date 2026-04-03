@@ -138,6 +138,33 @@ int CE_StreamPrompt(const char *context_key, const char *prompt, int n_tokens,
 }
 
 EMSCRIPTEN_KEEPALIVE
+char *CE_RunQueuedPromptJson(const char *context_key, const char *prompt,
+                             int n_tokens, CE_TokenCallback on_token) {
+  std::lock_guard<std::mutex> lock(g_apiMutex);
+  if (!g_isEngineInitialized) {
+    return duplicate_heap_string(
+        "{\"requestId\":0,\"completed\":false,\"failed\":true,"
+        "\"outputText\":\"\",\"errorMessage\":\"Engine is not initialized.\"}");
+  }
+  if (prompt == nullptr || !is_valid_prediction_tokens(n_tokens) ||
+      on_token == nullptr) {
+    return duplicate_heap_string(
+        "{\"requestId\":0,\"completed\":false,\"failed\":true,"
+        "\"outputText\":\"\",\"errorMessage\":\"Invalid prompt arguments.\"}");
+  }
+
+  const CE_RequestId request_id =
+      CE_EnqueuePromptQuery(context_key, prompt, n_tokens, on_token);
+  if (request_id == 0) {
+    return duplicate_heap_string(
+        "{\"requestId\":0,\"completed\":false,\"failed\":true,"
+        "\"outputText\":\"\",\"errorMessage\":\"Failed to enqueue request.\"}");
+  }
+
+  return duplicate_heap_string(CE_RunQueuedPromptJsonString(request_id));
+}
+
+EMSCRIPTEN_KEEPALIVE
 void CE_FreeString(char *str) {
   if (str) {
     std::free(str);

@@ -9,6 +9,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -29,6 +30,9 @@ public:
   ~SessionStore();
 
   ContextState* Find(const std::string& context_key);
+  ContextState& GetOrCreateSession(
+      const std::string& context_key,
+      const std::function<llama_context*()>& create_context);
   ContextState& Emplace(const std::string& context_key, ContextState state);
   void Touch(const std::string& context_key);
   void Remove(const std::string& context_key);

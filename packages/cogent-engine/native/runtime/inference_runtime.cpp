@@ -99,136 +99,20 @@ bool InferenceRuntime::EnsureContextSpace(ContextState &state,
   return true;
 }
 
-InferenceRuntime::InferenceRuntime(std::string model_path,
-                                   InferenceRuntimeConfig config)
-    : config_(normalize_config(config)),
-      session_store_(static_cast<size_t>(config_.max_cached_sessions)) {
-  if (model_path.empty()) {
-    fprintf(stderr, "%s: error: model path is required\n", __func__);
-    return;
-  }
-
-#if defined(NDEBUG) || defined(CE_SUPPRESS_LLAMA_LOGS)
-  llama_log_set(llama_utils::LogCallbackDefault, nullptr);
-#endif
-
-  ggml_backend_load_all();
-
-  llama_model_params model_params = llama_model_default_params();
-  model_params.n_gpu_layers = config_.gpu_layers;
-  model_params.use_mlock = false;
-#if defined(__EMSCRIPTEN__)
-  model_params.use_mmap = false;
-#else
-  model_params.use_mmap = true;
-#endif
-
-  primary_model_ = llama_model_load_from_file(model_path.c_str(), model_params);
-  if (primary_model_ == nullptr) {
-    fprintf(stderr, "%s: error: unable to load model\n", __func__);
-    return;
-  }
-
-  auto sparams = llama_sampler_chain_default_params();
-  sparams.no_perf = false;
-  sampler_ = llama_sampler_chain_init(sparams);
-
-  llama_sampler_chain_add(sampler_,
-                          llama_sampler_init_penalties(64, 1.05f, 0.0f, 0.0f));
-  llama_sampler_chain_add(sampler_, llama_sampler_init_top_k(40));
-  llama_sampler_chain_add(sampler_, llama_sampler_init_top_p(0.8f, 1));
-  llama_sampler_chain_add(sampler_, llama_sampler_init_temp(0.7f));
-  llama_sampler_chain_add(sampler_,
-                          llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
-}
-
-llama_context *InferenceRuntime::CreateContext() const {
-  if (primary_model_ == nullptr) {
-    return nullptr;
-  }
-
-  llama_context_params ctx_params = llama_context_default_params();
-  ctx_params.n_ctx =
-      config_.n_ctx > 0
-          ? static_cast<uint32_t>(config_.n_ctx)
-          : static_cast<uint32_t>(
-                std::min(4096 * 2, llama_model_n_ctx_train(primary_model_)));
-  ctx_params.n_batch =
-      config_.n_batch > 0 ? static_cast<uint32_t>(config_.n_batch) : 256u;
-  if (config_.n_ubatch > 0) {
-    ctx_params.n_ubatch = static_cast<uint32_t>(config_.n_ubatch);
-  } else if (ctx_params.n_ubatch > ctx_params.n_batch) {
-    ctx_params.n_ubatch = ctx_params.n_batch;
-  }
-  ctx_params.n_seq_max = static_cast<uint32_t>(config_.n_seq_max);
-  ctx_params.n_threads = config_.n_threads > 0
-                             ? config_.n_threads
-                             : llama_utils::DefaultThreadCount();
-  ctx_params.n_threads_batch = config_.n_threads_batch > 0
-                                   ? config_.n_threads_batch
-                                   : ctx_params.n_threads;
-  ctx_params.no_perf = false;
-
-  if (config_.flash_attention >= 0) {
-    ctx_params.flash_attn_type =
-        static_cast<llama_flash_attn_type>(config_.flash_attention);
-  }
-  if (config_.kv_unified >= 0) {
-    ctx_params.kv_unified = config_.kv_unified != 0;
-  }
-
-  return llama_init_from_model(primary_model_, ctx_params);
-}
-
-InferenceRuntime::~InferenceRuntime() {
-  if (sampler_ != nullptr) {
-    llama_sampler_free(sampler_);
-  }
-
-  session_store_.Clear();
-
-  if (primary_model_ != nullptr) {
-    llama_model_free(primary_model_);
-  }
-
-  llama_backend_free();
-}
-
-bool InferenceRuntime::IsReady() const {
-  std::lock_guard<std::mutex> lock(operation_mutex_);
-  return primary_model_ != nullptr && sampler_ != nullptr;
-}
-
-bool InferenceRuntime::TryGetLastPromptPerf(PromptPerfStats &out) const {
-  std::lock_guard<std::mutex> lock(operation_mutex_);
-  if (!has_last_prompt_perf_) {
-    return false;
-  }
-
-  out = last_prompt_perf_;
-  return true;
-}
-
-bool InferenceRuntime::Prompt(std::string model_context_key, std::string prompt,
-                              int n_tokens_predict,
-                              TokenCallback on_token_received) {
-  std::lock_guard<std::mutex> lock(operation_mutex_);
-  has_last_prompt_perf_ = false;
-
+bool InferenceRuntime::ExecutePromptTokensLocked(
+    const std::string &context_key,
+    const std::vector<llama_token> &prompt_tokens, int n_tokens_predict,
+    TokenCallback on_token_received) {
   if (primary_model_ == nullptr || sampler_ == nullptr) {
     return false;
   }
   if (n_tokens_predict <= 0 || n_tokens_predict > kMaxPredictionTokens) {
     return false;
   }
-  if (model_context_key.empty()) {
-    model_context_key = kDefaultPromptContextKey;
-  }
 
-  const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
-  std::vector<llama_token> new_tokens =
-      llama_utils::Tokenize(vocab, prompt, false, true);
-  if (new_tokens.empty()) {
+  std::string model_context_key =
+      context_key.empty() ? kDefaultPromptContextKey : context_key;
+  if (prompt_tokens.empty()) {
     return true;
   }
 
@@ -252,6 +136,8 @@ bool InferenceRuntime::Prompt(std::string model_context_key, std::string prompt,
     return false;
   }
 
+  const std::vector<llama_token> &new_tokens = prompt_tokens;
+  const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
   llama_memory_t mem = llama_get_memory(ctx);
   const bool is_recurrent = llama_model_is_recurrent(primary_model_);
   const bool is_hybrid = llama_model_is_hybrid(primary_model_);
@@ -402,6 +288,253 @@ bool InferenceRuntime::Prompt(std::string model_context_key, std::string prompt,
   has_last_prompt_perf_ = true;
 
   return true;
+}
+
+InferenceRuntime::InferenceRuntime(std::string model_path,
+                                   InferenceRuntimeConfig config)
+    : config_(normalize_config(config)),
+      session_store_(static_cast<size_t>(config_.max_cached_sessions)) {
+  if (model_path.empty()) {
+    fprintf(stderr, "%s: error: model path is required\n", __func__);
+    return;
+  }
+
+#if defined(NDEBUG) || defined(CE_SUPPRESS_LLAMA_LOGS)
+  llama_log_set(llama_utils::LogCallbackDefault, nullptr);
+#endif
+
+  ggml_backend_load_all();
+
+  llama_model_params model_params = llama_model_default_params();
+  model_params.n_gpu_layers = config_.gpu_layers;
+  model_params.use_mlock = false;
+#if defined(__EMSCRIPTEN__)
+  model_params.use_mmap = false;
+#else
+  model_params.use_mmap = true;
+#endif
+
+  primary_model_ = llama_model_load_from_file(model_path.c_str(), model_params);
+  if (primary_model_ == nullptr) {
+    fprintf(stderr, "%s: error: unable to load model\n", __func__);
+    return;
+  }
+
+  auto sparams = llama_sampler_chain_default_params();
+  sparams.no_perf = false;
+  sampler_ = llama_sampler_chain_init(sparams);
+
+  llama_sampler_chain_add(sampler_,
+                          llama_sampler_init_penalties(64, 1.05f, 0.0f, 0.0f));
+  llama_sampler_chain_add(sampler_, llama_sampler_init_top_k(40));
+  llama_sampler_chain_add(sampler_, llama_sampler_init_top_p(0.8f, 1));
+  llama_sampler_chain_add(sampler_, llama_sampler_init_temp(0.7f));
+  llama_sampler_chain_add(sampler_,
+                          llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
+
+  slot_scheduler_.SetContextFactory(
+      [this]() -> llama_context * { return CreateContext(); });
+  slot_scheduler_.Resize(
+      static_cast<std::size_t>(std::max<int32_t>(1, config_.n_seq_max)));
+}
+
+llama_context *InferenceRuntime::CreateContext() const {
+  if (primary_model_ == nullptr) {
+    return nullptr;
+  }
+
+  llama_context_params ctx_params = llama_context_default_params();
+  ctx_params.n_ctx =
+      config_.n_ctx > 0
+          ? static_cast<uint32_t>(config_.n_ctx)
+          : static_cast<uint32_t>(
+                std::min(4096 * 2, llama_model_n_ctx_train(primary_model_)));
+  ctx_params.n_batch =
+      config_.n_batch > 0 ? static_cast<uint32_t>(config_.n_batch) : 256u;
+  if (config_.n_ubatch > 0) {
+    ctx_params.n_ubatch = static_cast<uint32_t>(config_.n_ubatch);
+  } else if (ctx_params.n_ubatch > ctx_params.n_batch) {
+    ctx_params.n_ubatch = ctx_params.n_batch;
+  }
+  ctx_params.n_seq_max = static_cast<uint32_t>(config_.n_seq_max);
+  ctx_params.n_threads = config_.n_threads > 0
+                             ? config_.n_threads
+                             : llama_utils::DefaultThreadCount();
+  ctx_params.n_threads_batch = config_.n_threads_batch > 0
+                                   ? config_.n_threads_batch
+                                   : ctx_params.n_threads;
+  ctx_params.no_perf = false;
+
+  if (config_.flash_attention >= 0) {
+    ctx_params.flash_attn_type =
+        static_cast<llama_flash_attn_type>(config_.flash_attention);
+  }
+  if (config_.kv_unified >= 0) {
+    ctx_params.kv_unified = config_.kv_unified != 0;
+  }
+
+  return llama_init_from_model(primary_model_, ctx_params);
+}
+
+InferenceRuntime::~InferenceRuntime() {
+  if (sampler_ != nullptr) {
+    llama_sampler_free(sampler_);
+  }
+
+  session_store_.Clear();
+
+  if (primary_model_ != nullptr) {
+    llama_model_free(primary_model_);
+  }
+
+  llama_backend_free();
+}
+
+bool InferenceRuntime::IsReady() const {
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+  return primary_model_ != nullptr && sampler_ != nullptr;
+}
+
+bool InferenceRuntime::TryGetLastPromptPerf(PromptPerfStats &out) const {
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+  if (!has_last_prompt_perf_) {
+    return false;
+  }
+
+  out = last_prompt_perf_;
+  return true;
+}
+
+GenerateRequestId
+InferenceRuntime::EnqueueRequest(std::string context_key, std::string prompt,
+                                 int n_tokens_predict,
+                                 TokenCallback on_token_received) {
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+
+  if (primary_model_ == nullptr || sampler_ == nullptr) {
+    return 0;
+  }
+  if (n_tokens_predict <= 0 || n_tokens_predict > kMaxPredictionTokens) {
+    return 0;
+  }
+  if (context_key.empty()) {
+    context_key = kDefaultPromptContextKey;
+  }
+
+  GenerateRequest request;
+  request.id = next_request_id_++;
+  request.context_key = std::move(context_key);
+  request.prompt_text = std::move(prompt);
+  request.max_output_tokens = n_tokens_predict;
+  request.on_token_received = std::move(on_token_received);
+
+  const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
+  request.prompt_tokens =
+      llama_utils::Tokenize(vocab, request.prompt_text, false, true);
+
+  if (!request_queue_.Push(std::move(request))) {
+    return 0;
+  }
+
+  return next_request_id_ - 1;
+}
+
+bool InferenceRuntime::RunUntilRequestCompletes(
+    GenerateRequestId request_id, GenerateResponse &out_response) {
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+
+  out_response = {};
+  has_last_prompt_perf_ = false;
+
+  if (request_id == 0 || primary_model_ == nullptr || sampler_ == nullptr) {
+    return false;
+  }
+
+  while (true) {
+    if (auto completed = request_queue_.TakeCompletedResponse(request_id);
+        completed.has_value()) {
+      out_response = std::move(*completed);
+      return out_response.status == GenerateResponseStatus::Completed;
+    }
+
+    GenerateRequest *target_request = request_queue_.FindMutable(request_id);
+    if (target_request == nullptr) {
+      return false;
+    }
+
+    slot_scheduler_.Tick(request_queue_, session_store_);
+
+    if (auto completed = request_queue_.TakeCompletedResponse(request_id);
+        completed.has_value()) {
+      out_response = std::move(*completed);
+      return out_response.status == GenerateResponseStatus::Completed;
+    }
+
+    SlotState *active_slot = slot_scheduler_.FindFirstActiveSlot();
+    if (active_slot == nullptr) {
+      return false;
+    }
+
+    GenerateRequest *active_request = active_slot->request;
+    if (active_request == nullptr) {
+      active_slot->phase = SlotPhase::Failed;
+      active_slot->terminal_error_message = "Active slot lost request state.";
+      slot_scheduler_.FinalizeCompletedSlots(request_queue_);
+      continue;
+    }
+
+    const bool success = ExecutePromptTokensLocked(
+        active_request->context_key, active_request->prompt_tokens,
+        active_request->max_output_tokens,
+        [this, active_slot](const char *token_piece, int32_t token_length) {
+          if (token_piece == nullptr || token_length <= 0) {
+            return;
+          }
+          active_slot->buffered_output_text.append(
+              token_piece, static_cast<std::size_t>(token_length));
+          slot_scheduler_.EmitBufferedTokenPiece(*active_slot);
+        });
+
+    if (success) {
+      active_request->lifecycle = GenerateRequestLifecycle::Completed;
+      active_slot->generated_tokens.resize(static_cast<std::size_t>(
+          std::max(0, last_prompt_perf_.output_token_count)));
+      active_slot->phase = SlotPhase::Completed;
+    } else {
+      active_request->lifecycle = GenerateRequestLifecycle::Failed;
+      active_slot->terminal_error_message = "Queued request execution failed.";
+      active_slot->phase = SlotPhase::Failed;
+    }
+
+    slot_scheduler_.FinalizeCompletedSlots(request_queue_);
+  }
+}
+
+bool InferenceRuntime::Prompt(std::string model_context_key, std::string prompt,
+                              int n_tokens_predict,
+                              TokenCallback on_token_received) {
+  // Phase 2 note:
+  // - This is still the live Phase 1 execution path.
+  // - Once request queue ownership is implemented, keep Prompt(...) as the
+  //   synchronous wrapper that enqueues a request and waits for completion.
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+  has_last_prompt_perf_ = false;
+
+  if (primary_model_ == nullptr || sampler_ == nullptr) {
+    return false;
+  }
+  if (n_tokens_predict <= 0 || n_tokens_predict > kMaxPredictionTokens) {
+    return false;
+  }
+  if (model_context_key.empty()) {
+    model_context_key = kDefaultPromptContextKey;
+  }
+
+  const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
+  std::vector<llama_token> new_tokens =
+      llama_utils::Tokenize(vocab, prompt, false, true);
+  return ExecutePromptTokensLocked(model_context_key, new_tokens,
+                                   n_tokens_predict, on_token_received);
 }
 
 } // namespace noumena::cogentengine

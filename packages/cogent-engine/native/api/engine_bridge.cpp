@@ -67,6 +67,31 @@ std::string json_escape(const char *value) {
 
 std::string json_bool(bool value) { return value ? "true" : "false"; }
 
+std::string generate_response_to_json(
+    const noumena::cogentengine::GenerateResponse &response) {
+  std::ostringstream out;
+  out << "{"
+      << "\"requestId\":" << response.request_id << ","
+      << "\"completed\":"
+      << json_bool(response.status ==
+                   noumena::cogentengine::GenerateResponseStatus::Completed)
+      << ","
+      << "\"failed\":"
+      << json_bool(response.status ==
+                   noumena::cogentengine::GenerateResponseStatus::Failed)
+      << ","
+      << "\"outputText\":\"" << json_escape(response.output_text.c_str())
+      << "\","
+      << "\"errorMessage\":";
+  if (!response.error_message.empty()) {
+    out << "\"" << json_escape(response.error_message.c_str()) << "\"";
+  } else {
+    out << "null";
+  }
+  out << "}";
+  return out.str();
+}
+
 std::shared_ptr<InferenceRuntime> acquire_engine_runtime() {
   std::lock_guard<std::mutex> lock(g_engineMutex);
   return g_engineRuntime;
@@ -216,6 +241,46 @@ const char *CE_GetBackendInfoJsonString() {
   out << "]}";
   info_json = out.str();
   return info_json.c_str();
+}
+
+CE_RequestId CE_EnqueuePromptQuery(const char *context_key, const char *prompt,
+                                   int n_tokens_predict,
+                                   CE_TokenCallback on_token) {
+  auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    return 0;
+  }
+
+  return runtime->EnqueueRequest(
+      context_key ? context_key : "", prompt ? prompt : "", n_tokens_predict,
+      [on_token](const char *token_piece, int32_t token_length) {
+        if (on_token != nullptr) {
+          on_token(token_piece, token_length);
+        }
+      });
+}
+
+std::string CE_RunQueuedPromptJsonString(CE_RequestId request_id) {
+  noumena::cogentengine::GenerateResponse response{};
+  response.request_id = request_id;
+
+  auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    response.status = noumena::cogentengine::GenerateResponseStatus::Failed;
+    response.error_message = "Engine is not initialized.";
+    return generate_response_to_json(response);
+  }
+
+  const bool success = runtime->RunUntilRequestCompletes(request_id, response);
+  if (!success &&
+      response.status != noumena::cogentengine::GenerateResponseStatus::Failed &&
+      response.status !=
+          noumena::cogentengine::GenerateResponseStatus::Completed) {
+    response.status = noumena::cogentengine::GenerateResponseStatus::Failed;
+    response.error_message = "Queued request execution failed.";
+  }
+
+  return generate_response_to_json(response);
 }
 
 int CE_StreamPromptQuery(const char *context_key, const char *prompt,
