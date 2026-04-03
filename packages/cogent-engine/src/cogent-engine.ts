@@ -1,6 +1,7 @@
 import { normalizeInitConfig } from './config.js';
 import { formatPromptText } from './prompt-format.js';
 import {
+  BackendInfo,
   InferenceInitConfig,
   PromptGenerationOptions,
   PromptPerformanceStats,
@@ -81,7 +82,7 @@ export class CogentEngine {
   private streamCallbackPtr: number | null = null;
   private activePromptStream: ActivePromptStream | null = null;
 
-  constructor(private config: CogentConfig = {}) {}
+  constructor(private config: CogentConfig = {}) { }
 
   private resolveWasmUrls(): { moduleUrl: string; wasmUrl: string } {
     const moduleUrl = this.config.moduleUrl?.trim();
@@ -198,15 +199,11 @@ export class CogentEngine {
   }
 
   private ensureStreamCallback(module: EngineModule): number {
+
     if (this.streamCallbackPtr != null) {
       return this.streamCallbackPtr;
     }
 
-    // Keep one Wasm->JS callback bridge for the lifetime of the loaded module.
-    // Re-registering addFunction/removeFunction on every request adds avoidable
-    // churn in the hot path and was unstable under Bun/Windows long benchmark runs.
-    // The current runtime is single-request anyway, so a persistent bridge is the
-    // correct transport shape for Phase 1 and a cleaner base for later phases.
     this.streamCallbackPtr = module.addFunction((ptr: number, length: number) => {
       const activeStream = this.activePromptStream;
       if (!activeStream || activeStream.callbackError != null) {
@@ -611,6 +608,29 @@ export class CogentEngine {
       return JSON.parse(raw) as PromptPerformanceStats;
     } catch (error) {
       throw new Error(`Failed to parse prompt performance stats: ${asErrorMessage(error)}`);
+    } finally {
+      module._CE_FreeString(ptr);
+    }
+  }
+
+  public async getBackendInfo(): Promise<BackendInfo | null> {
+    const module = this.getLoadedModule();
+    // WebGPU backend enumeration is not a pure metadata read on the web path.
+    // ggml-webgpu may need to touch emdawnwebgpu adapter/device creation while
+    // building its backend/device list, which can suspend under JSPI.
+    const ptr = await module.ccall('CE_GetBackendInfoJson', 'number', [], [], {
+      async: true,
+    });
+
+    if (!ptr) {
+      return null;
+    }
+
+    try {
+      const raw = module.UTF8ToString(ptr);
+      return JSON.parse(raw) as BackendInfo;
+    } catch (error) {
+      throw new Error(`Failed to parse backend info: ${asErrorMessage(error)}`);
     } finally {
       module._CE_FreeString(ptr);
     }

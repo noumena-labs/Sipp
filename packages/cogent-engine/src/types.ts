@@ -1,5 +1,6 @@
-export type FlashAttentionMode = 'auto' | 'enabled' | 'disabled';
-export type PromptFormatMode = 'auto-chat' | 'raw';
+export type FlashAttentionMode = "auto" | "enabled" | "disabled";
+export type PromptFormatMode = "auto-chat" | "raw";
+export type BackendDeviceType = "cpu" | "gpu" | "igpu" | "accel" | "unknown";
 
 export interface InferenceInitConfig {
   nCtx?: number;
@@ -34,4 +35,37 @@ export interface PromptPerformanceStats {
   decodeEvalCount: number;
   sampleCount: number;
   outputTokenCount: number;
+}
+
+export interface BackendDeviceCapabilities {
+  async: boolean;
+  hostBuffer: boolean;
+  bufferFromHostPtr: boolean;
+  events: boolean;
+}
+
+export interface BackendDeviceInfo {
+  name: string;
+  description: string;
+  type: BackendDeviceType;
+  backendName: string;
+  deviceId: string | null;
+  memoryFreeBytes: number;
+  memoryTotalBytes: number;
+  capabilities: BackendDeviceCapabilities;
+}
+
+export interface BackendRegistryInfo {
+  name: string;
+  deviceCount: number;
+}
+
+export interface BackendInfo {
+  webgpuCompiled: boolean;
+  webgpuRegistered: boolean;
+  webgpuDeviceCount: number;
+  gpuOffloadSupported: boolean;
+  engineInitialized: boolean;
+  availableBackends: BackendRegistryInfo[];
+  devices: BackendDeviceInfo[];
 }

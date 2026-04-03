@@ -59,8 +59,8 @@ endfunction()
 # llama.cpp subproject
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libs" FORCE)
 set(LLAMA_WASM_MEM64 OFF CACHE BOOL "Use wasm32 memory model for cogent-engine" FORCE)
+set(GGML_WEBGPU ON CACHE BOOL "Enable WebGPU backend for CogentEngine browser builds" FORCE)
 if(CE_BUILD_WEBGPU_TEST_BACKEND_OPS)
-  set(GGML_WEBGPU ON CACHE BOOL "Enable WebGPU backend for test-backend-ops" FORCE)
   set(LLAMA_BUILD_COMMON ON CACHE BOOL "Build llama.cpp common utils for tests" FORCE)
   set(LLAMA_BUILD_TESTS ON CACHE BOOL "Build llama.cpp tests" FORCE)
   set(LLAMA_OPENSSL OFF CACHE BOOL "Disable OpenSSL for Emscripten test builds" FORCE)
@@ -109,7 +109,7 @@ foreach(_ggml_target ggml ggml-base ggml-cpu ggml-webgpu)
 endforeach()
 
 set(CE_WASM_EXPORTED_FUNCTIONS
-    "['_CE_Init','_CE_Close','_CE_StreamPrompt','_CE_FreeString','_CE_GetLastPromptPerfJson']"
+    "['_CE_Init','_CE_Close','_CE_StreamPrompt','_CE_FreeString','_CE_GetLastPromptPerfJson','_CE_GetBackendInfoJson']"
 )
 
 set(CE_WASM_RUNTIME_METHODS "['ccall','FS','UTF8ToString','addFunction','removeFunction']")
@@ -128,7 +128,12 @@ set(CE_WASM_TARGET_LINK_OPTIONS
 if(CE_WASM_USE_JSPI)
     list(APPEND CE_WASM_TARGET_LINK_OPTIONS
         -sJSPI=1
-        -sJSPI_EXPORTS=['_main_thread','CE_Init','CE_StreamPrompt','CE_Close']
+        # CE_Init and CE_StreamPrompt may suspend on the browser WebGPU path.
+        # CE_GetBackendInfoJson can also suspend because querying ggml-webgpu
+        # devices may force adapter/device creation under emdawnwebgpu.
+        # CE_Close is intentionally not exported as a JSPI function because the
+        # TS wrapper calls it synchronously during teardown/reinit.
+        -sJSPI_EXPORTS=['_main_thread','CE_Init','CE_StreamPrompt','CE_GetBackendInfoJson']
     )
 endif()
 

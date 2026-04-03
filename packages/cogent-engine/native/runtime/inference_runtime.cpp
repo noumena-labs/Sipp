@@ -19,23 +19,22 @@ namespace {
 constexpr char kDefaultPromptContextKey[] = "__primary_prompt__";
 constexpr int kMaxPredictionTokens = 2048;
 
-noumena::cogentengine::InferenceRuntimeConfig normalize_config(
-    noumena::cogentengine::InferenceRuntimeConfig config) {
+noumena::cogentengine::InferenceRuntimeConfig
+normalize_config(noumena::cogentengine::InferenceRuntimeConfig config) {
   config.n_seq_max = std::max<int32_t>(1, config.n_seq_max);
   config.gpu_layers = std::max<int32_t>(0, config.gpu_layers);
   config.max_cached_sessions = std::max<int32_t>(1, config.max_cached_sessions);
-  config.retained_prefix_tokens = std::max<int32_t>(0, config.retained_prefix_tokens);
+  config.retained_prefix_tokens =
+      std::max<int32_t>(0, config.retained_prefix_tokens);
   return config;
 }
 
-}  // namespace
+} // namespace
 
 namespace noumena::cogentengine {
 
-bool InferenceRuntime::EnsureContextSpace(
-    ContextState& state,
-    int new_tokens_needed,
-    int n_ctx) {
+bool InferenceRuntime::EnsureContextSpace(ContextState &state,
+                                          int new_tokens_needed, int n_ctx) {
   if (state.ctx == nullptr || n_ctx <= 0) {
     return false;
   }
@@ -76,7 +75,8 @@ bool InferenceRuntime::EnsureContextSpace(
   llama_memory_seq_add(mem, 0, n_keep + n_discard, -1, -n_discard);
 
   if (static_cast<int>(state.current_kv_tokens.size()) > n_keep) {
-    const int erase_end = std::min<int>(n_keep + n_discard, state.current_kv_tokens.size());
+    const int erase_end =
+        std::min<int>(n_keep + n_discard, state.current_kv_tokens.size());
     const auto it_start = state.current_kv_tokens.begin() + n_keep;
     const auto it_end = state.current_kv_tokens.begin() + erase_end;
     state.current_kv_tokens.erase(it_start, it_end);
@@ -99,9 +99,8 @@ bool InferenceRuntime::EnsureContextSpace(
   return true;
 }
 
-InferenceRuntime::InferenceRuntime(
-    std::string model_path,
-    InferenceRuntimeConfig config)
+InferenceRuntime::InferenceRuntime(std::string model_path,
+                                   InferenceRuntimeConfig config)
     : config_(normalize_config(config)),
       session_store_(static_cast<size_t>(config_.max_cached_sessions)) {
   if (model_path.empty()) {
@@ -134,14 +133,16 @@ InferenceRuntime::InferenceRuntime(
   sparams.no_perf = false;
   sampler_ = llama_sampler_chain_init(sparams);
 
-  llama_sampler_chain_add(sampler_, llama_sampler_init_penalties(64, 1.05f, 0.0f, 0.0f));
+  llama_sampler_chain_add(sampler_,
+                          llama_sampler_init_penalties(64, 1.05f, 0.0f, 0.0f));
   llama_sampler_chain_add(sampler_, llama_sampler_init_top_k(40));
   llama_sampler_chain_add(sampler_, llama_sampler_init_top_p(0.8f, 1));
   llama_sampler_chain_add(sampler_, llama_sampler_init_temp(0.7f));
-  llama_sampler_chain_add(sampler_, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
+  llama_sampler_chain_add(sampler_,
+                          llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 }
 
-llama_context* InferenceRuntime::CreateContext() const {
+llama_context *InferenceRuntime::CreateContext() const {
   if (primary_model_ == nullptr) {
     return nullptr;
   }
@@ -150,7 +151,8 @@ llama_context* InferenceRuntime::CreateContext() const {
   ctx_params.n_ctx =
       config_.n_ctx > 0
           ? static_cast<uint32_t>(config_.n_ctx)
-          : static_cast<uint32_t>(std::min(4096 * 2, llama_model_n_ctx_train(primary_model_)));
+          : static_cast<uint32_t>(
+                std::min(4096 * 2, llama_model_n_ctx_train(primary_model_)));
   ctx_params.n_batch =
       config_.n_batch > 0 ? static_cast<uint32_t>(config_.n_batch) : 256u;
   if (config_.n_ubatch > 0) {
@@ -159,10 +161,12 @@ llama_context* InferenceRuntime::CreateContext() const {
     ctx_params.n_ubatch = ctx_params.n_batch;
   }
   ctx_params.n_seq_max = static_cast<uint32_t>(config_.n_seq_max);
-  ctx_params.n_threads =
-      config_.n_threads > 0 ? config_.n_threads : llama_utils::DefaultThreadCount();
-  ctx_params.n_threads_batch =
-      config_.n_threads_batch > 0 ? config_.n_threads_batch : ctx_params.n_threads;
+  ctx_params.n_threads = config_.n_threads > 0
+                             ? config_.n_threads
+                             : llama_utils::DefaultThreadCount();
+  ctx_params.n_threads_batch = config_.n_threads_batch > 0
+                                   ? config_.n_threads_batch
+                                   : ctx_params.n_threads;
   ctx_params.no_perf = false;
 
   if (config_.flash_attention >= 0) {
@@ -195,7 +199,7 @@ bool InferenceRuntime::IsReady() const {
   return primary_model_ != nullptr && sampler_ != nullptr;
 }
 
-bool InferenceRuntime::TryGetLastPromptPerf(PromptPerfStats& out) const {
+bool InferenceRuntime::TryGetLastPromptPerf(PromptPerfStats &out) const {
   std::lock_guard<std::mutex> lock(operation_mutex_);
   if (!has_last_prompt_perf_) {
     return false;
@@ -205,11 +209,9 @@ bool InferenceRuntime::TryGetLastPromptPerf(PromptPerfStats& out) const {
   return true;
 }
 
-bool InferenceRuntime::Prompt(
-    std::string model_context_key,
-    std::string prompt,
-    int n_tokens_predict,
-    TokenCallback on_token_received) {
+bool InferenceRuntime::Prompt(std::string model_context_key, std::string prompt,
+                              int n_tokens_predict,
+                              TokenCallback on_token_received) {
   std::lock_guard<std::mutex> lock(operation_mutex_);
   has_last_prompt_perf_ = false;
 
@@ -223,13 +225,14 @@ bool InferenceRuntime::Prompt(
     model_context_key = kDefaultPromptContextKey;
   }
 
-  const llama_vocab* vocab = llama_model_get_vocab(primary_model_);
-  std::vector<llama_token> new_tokens = llama_utils::Tokenize(vocab, prompt, false, true);
+  const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
+  std::vector<llama_token> new_tokens =
+      llama_utils::Tokenize(vocab, prompt, false, true);
   if (new_tokens.empty()) {
     return true;
   }
 
-  ContextState* state = session_store_.Find(model_context_key);
+  ContextState *state = session_store_.Find(model_context_key);
   if (state == nullptr) {
     session_store_.EnforceLimitBeforeInsert();
 
@@ -243,7 +246,7 @@ bool InferenceRuntime::Prompt(
   }
 
   session_store_.Touch(model_context_key);
-  llama_context* ctx = state->ctx;
+  llama_context *ctx = state->ctx;
   if (ctx == nullptr) {
     session_store_.Remove(model_context_key);
     return false;
@@ -255,7 +258,8 @@ bool InferenceRuntime::Prompt(
   const bool allow_partial_kv = !(is_recurrent || is_hybrid);
 
   size_t match_len = 0;
-  const size_t min_len = std::min(state->current_kv_tokens.size(), new_tokens.size());
+  const size_t min_len =
+      std::min(state->current_kv_tokens.size(), new_tokens.size());
   for (size_t i = 0; i < min_len; ++i) {
     if (state->current_kv_tokens[i] != new_tokens[i]) {
       break;
@@ -294,8 +298,7 @@ bool InferenceRuntime::Prompt(
 
   const int n_batch = static_cast<int>(llama_n_batch(ctx));
   llama_batch batch = llama_batch_init(
-      n_batch,
-      0,
+      n_batch, 0,
       static_cast<int32_t>(std::max<uint32_t>(1, llama_n_seq_max(ctx))));
 
   if (match_len == new_tokens.size() && match_len > 0) {
@@ -306,7 +309,8 @@ bool InferenceRuntime::Prompt(
       match_len = 0;
     } else {
       if (!llama_memory_seq_rm(mem, 0, match_len - 1, -1)) {
-        fprintf(stderr, "failed to remove last token from memory for re-evaluation\n");
+        fprintf(stderr,
+                "failed to remove last token from memory for re-evaluation\n");
         llama_batch_free(batch);
         return false;
       }
@@ -384,7 +388,8 @@ bool InferenceRuntime::Prompt(
 
   last_prompt_perf_ = PromptPerfStats{
       .total_ms =
-          std::chrono::duration<double, std::milli>(total_end - total_start).count(),
+          std::chrono::duration<double, std::milli>(total_end - total_start)
+              .count(),
       .prompt_eval_ms = ctx_perf.t_p_eval_ms,
       .decode_eval_ms = ctx_perf.t_eval_ms,
       .sample_ms = sampler_perf.t_sample_ms,
@@ -399,4 +404,4 @@ bool InferenceRuntime::Prompt(
   return true;
 }
 
-}  // namespace noumena::cogentengine
+} // namespace noumena::cogentengine

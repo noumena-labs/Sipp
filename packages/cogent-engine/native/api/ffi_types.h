@@ -10,7 +10,7 @@
 
 #include <stdint.h>
 
-typedef void (*CE_TokenCallback)(const char* token_piece, int32_t token_length);
+typedef void (*CE_TokenCallback)(const char *token_piece, int32_t token_length);
 
 typedef struct CE_InitConfig {
   int32_t n_ctx;

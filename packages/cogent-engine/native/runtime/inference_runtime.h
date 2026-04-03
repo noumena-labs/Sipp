@@ -14,26 +14,13 @@
 #include <mutex>
 #include <string>
 
+#include "runtime/config/inference_config.h"
 #include "runtime/session/session_store.h"
 
 struct llama_model;
 struct llama_sampler;
 
 namespace noumena::cogentengine {
-
-struct InferenceRuntimeConfig {
-  int32_t n_ctx = 0;
-  int32_t n_batch = 0;
-  int32_t n_ubatch = 0;
-  int32_t n_seq_max = 1;
-  int32_t n_threads = 0;
-  int32_t n_threads_batch = 0;
-  int32_t gpu_layers = 99;
-  int32_t flash_attention = -1;
-  int32_t kv_unified = -1;
-  int32_t max_cached_sessions = 8;
-  int32_t retained_prefix_tokens = 100;
-};
 
 struct PromptPerfStats {
   double total_ms = 0.0;

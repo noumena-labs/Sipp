@@ -1,5 +1,5 @@
 {
-  "name": "cogent-engine-threejs-demo",
+  "name": "cogent-engine-benchmark-app",
   "private": true,
   "version": "0.0.1",
   "type": "module",
@@ -9,8 +9,7 @@
     "preview": "bunx --bun vite preview"
   },
   "dependencies": {
-    "cogent-engine": "workspace:*",
-    "three": "^0.176.0"
+    "cogent-engine": "workspace:*"
   },
   "devDependencies": {
     "vite": "^5.4.0"

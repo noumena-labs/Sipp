@@ -14,6 +14,7 @@ Source layout in this package:
 
 - `docs/inference-runtime-v2-design.md` -> detailed target architecture, data structures, algorithms, implementation phases, and reference bibliography
 - `docs/inference-runtime-v2-implementation-guide.md` -> concrete execution checklist, file targets, verification gates, and per-phase working order
+- `docs/phase-1-implementation-workplan.md` -> step-by-step manual Phase 1 handoff with exact function order, references, and "what next" guidance
 - `docs/inference-architecture-draft.md` -> short overview that now points to the detailed design
 
 ## Prerequisites
@@ -285,15 +286,14 @@ const engine = new CogentEngine({
 });
 ```
 
-## Three.js Demo
+## Browser Benchmark App
 
-A Vite + Three.js demo lives in `../../apps/threejs`.
+A browser benchmark app lives in `../../apps/benchmark`.
 
 ```bash
 cd ../../
-bun run build
-bun run demo:install
-bun run demo:dev
+bun install
+bun run benchmark:dev
 ```
 
-Open the Vite URL, click runtime init, load a local or remote `.gguf` model, then run inference.
+Open the Vite URL, initialize the runtime, load a local or remote `.gguf` model, then run the browser benchmark.

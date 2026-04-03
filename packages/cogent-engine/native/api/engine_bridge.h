@@ -7,6 +7,7 @@
 int CE_InitPlugin(const char* model_path, const CE_InitConfig* config);
 void CE_ClosePlugin();
 int CE_GetLastPromptPerf(CE_PromptPerfMetrics* out_metrics);
+const char* CE_GetBackendInfoJsonString();
 int CE_StreamPromptQuery(
     const char* context_key,
     const char* prompt,

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import { CogentEngine, getBundledRuntimeUrls } from '../dist/esm/index.js';
 import type {
+  BackendInfo,
   FlashAttentionMode,
   InferenceInitConfig,
   PromptFormatMode,
@@ -153,7 +154,7 @@ interface RuntimeMemoryUsage {
 }
 
 interface BenchmarkReport {
-  schemaVersion: 'cogent.benchmark.bun.v4';
+  schemaVersion: 'cogent.benchmark.bun.v5';
   generatedAt: string;
   benchmark: {
     script: string;
@@ -181,6 +182,7 @@ interface BenchmarkReport {
     quantizationLabel: string | null;
     modelBytes: number;
   };
+  backend: BenchmarkBackendProfile;
   runtime: {
     initConfig: InferenceInitConfig;
     readModelMs: number;
@@ -193,6 +195,38 @@ interface BenchmarkReport {
   memory: RuntimeMemoryUsage;
   scenarios: BenchmarkScenarioResult[];
   limitations: string[];
+}
+
+type RequestedExecutionMode = 'cpu-only' | 'gpu-offload';
+type InferredExecutionBackend = 'cpu' | 'webgpu' | 'unknown';
+type RuntimeBackendStatus =
+  | 'not-compiled'
+  | 'compiled-not-registered'
+  | 'registered-no-devices'
+  | 'webgpu-ready'
+  | 'unknown';
+
+interface BenchmarkBackendProfile {
+  // Requested mode comes from benchmark initConfig. Inferred backend is conservative:
+  // it reports the execution path the runtime environment makes plausible today,
+  // not an exact layer-by-layer placement report inside llama.cpp.
+  requestedExecutionMode: RequestedExecutionMode;
+  requestedGpuLayers: number | null;
+  inferredExecutionBackend: InferredExecutionBackend;
+  runtimeBackendStatus: RuntimeBackendStatus;
+  gpuOffloadSupported: boolean | null;
+  availableBackends: string[];
+  backendRegistries: BackendInfo['availableBackends'];
+  runtimeDeviceCount: number;
+  runtimeAcceleratorDeviceCount: number;
+  runtimeDeviceLabels: string[];
+  runtimeDevices: BackendInfo['devices'];
+  hostAdapter: {
+    apiAvailable: boolean;
+    adapterAvailable: boolean;
+    adapterLabel: string | null;
+  };
+  notes: string[];
 }
 
 const SHORT_PROMPT = 'Write one sentence about measuring inference performance.';
@@ -523,6 +557,94 @@ function captureMemoryUsage(): RuntimeMemoryUsage {
     heapUsedBytes: usage.heapUsed,
     externalBytes: usage.external,
     arrayBuffersBytes: usage.arrayBuffers,
+  };
+}
+
+function formatRuntimeDeviceLabel(device: BackendInfo['devices'][number]): string {
+  const detail = device.description || device.name || device.backendName || device.type;
+  return `${device.backendName}:${detail}`;
+}
+
+function inferRequestedExecutionMode(initConfig: InferenceInitConfig): RequestedExecutionMode {
+  return initConfig.nGpuLayers === 0 ? 'cpu-only' : 'gpu-offload';
+}
+
+function inferRuntimeBackendStatus(runtimeBackend: BackendInfo | null): RuntimeBackendStatus {
+  if (runtimeBackend == null) {
+    return 'unknown';
+  }
+  if (!runtimeBackend.webgpuCompiled) {
+    return 'not-compiled';
+  }
+  if (!runtimeBackend.webgpuRegistered) {
+    return 'compiled-not-registered';
+  }
+  if (runtimeBackend.webgpuDeviceCount <= 0) {
+    return 'registered-no-devices';
+  }
+  return 'webgpu-ready';
+}
+
+function inferExecutionBackend(
+  requestedExecutionMode: RequestedExecutionMode,
+  runtimeBackend: BackendInfo | null
+): InferredExecutionBackend {
+  if (runtimeBackend == null) {
+    return 'unknown';
+  }
+  if (
+    requestedExecutionMode === 'gpu-offload' &&
+    runtimeBackend.webgpuRegistered &&
+    runtimeBackend.webgpuDeviceCount > 0 &&
+    runtimeBackend.gpuOffloadSupported
+  ) {
+    return 'webgpu';
+  }
+  return 'cpu';
+}
+
+function buildBenchmarkBackendProfile(
+  runtimeBackend: BackendInfo | null,
+  initConfig: InferenceInitConfig,
+  hostAdapter: {
+    apiAvailable: boolean;
+    adapterAvailable: boolean;
+    adapterLabel: string | null;
+  }
+): BenchmarkBackendProfile {
+  const requestedExecutionMode = inferRequestedExecutionMode(initConfig);
+  const runtimeDevices = runtimeBackend?.devices ?? [];
+  const acceleratorDevices = runtimeDevices.filter((device) => device.type !== 'cpu');
+  const notes: string[] = [];
+
+  if (requestedExecutionMode === 'cpu-only') {
+    notes.push('GPU offload was disabled explicitly by initConfig.nGpuLayers = 0.');
+  } else if (!runtimeBackend?.webgpuCompiled) {
+    notes.push('The package build did not include ggml-webgpu.');
+  } else if (!runtimeBackend.webgpuRegistered) {
+    notes.push('ggml-webgpu was compiled, but the runtime did not register a usable WebGPU backend.');
+  } else if (runtimeBackend.webgpuDeviceCount <= 0) {
+    notes.push('ggml-webgpu was registered, but it reported no runtime devices.');
+  }
+
+  if (runtimeDevices.length === 0) {
+    notes.push('No ggml runtime devices were reported by the engine.');
+  }
+
+  return {
+    requestedExecutionMode,
+    requestedGpuLayers: initConfig.nGpuLayers ?? null,
+    inferredExecutionBackend: inferExecutionBackend(requestedExecutionMode, runtimeBackend),
+    runtimeBackendStatus: inferRuntimeBackendStatus(runtimeBackend),
+    gpuOffloadSupported: runtimeBackend?.gpuOffloadSupported ?? null,
+    availableBackends: runtimeBackend?.availableBackends.map((backend) => backend.name) ?? [],
+    backendRegistries: runtimeBackend?.availableBackends ?? [],
+    runtimeDeviceCount: runtimeDevices.length,
+    runtimeAcceleratorDeviceCount: acceleratorDevices.length,
+    runtimeDeviceLabels: runtimeDevices.map(formatRuntimeDeviceLabel),
+    runtimeDevices,
+    hostAdapter,
+    notes,
   };
 }
 
@@ -952,6 +1074,20 @@ function printScenarioResult(result: BenchmarkScenarioResult): void {
   printGroupResult(result.hotReuseContext);
 }
 
+function printBackendProfile(backend: BenchmarkBackendProfile): void {
+  console.log('\nBackend');
+  console.log(`  requested execution  ${backend.requestedExecutionMode}`);
+  console.log(`  requested gpu layers ${backend.requestedGpuLayers == null ? 'default' : backend.requestedGpuLayers}`);
+  console.log(`  inferred backend     ${backend.inferredExecutionBackend}`);
+  console.log(`  runtime status       ${backend.runtimeBackendStatus}`);
+  console.log(`  gpu offload support  ${backend.gpuOffloadSupported == null ? 'unknown' : backend.gpuOffloadSupported}`);
+  console.log(`  registered backends  ${backend.availableBackends.length === 0 ? 'none' : backend.availableBackends.join(', ')}`);
+  console.log(`  runtime devices      ${backend.runtimeDeviceLabels.length === 0 ? 'none' : backend.runtimeDeviceLabels.join(' | ')}`);
+  if (backend.notes.length > 0) {
+    console.log(`  notes                ${backend.notes.join(' | ')}`);
+  }
+}
+
 async function writeJsonReport(jsonPath: string, report: BenchmarkReport): Promise<void> {
   const resolvedPath = path.isAbsolute(jsonPath) ? jsonPath : path.resolve(process.cwd(), jsonPath);
   await mkdir(path.dirname(resolvedPath), { recursive: true });
@@ -1001,12 +1137,19 @@ async function main(): Promise<void> {
   let modelBytes = readModel.value.bytes;
   const startup = await initializeScenarioEngine(runtimeUrls, modelBytes, fileName);
   modelBytes = new Uint8Array(0);
+  const runtimeBackend = await startup.engine.getBackendInfo();
+  const backendProfile = buildBenchmarkBackendProfile(runtimeBackend, options.initConfig, {
+    apiAvailable: false,
+    adapterAvailable: false,
+    adapterLabel: null,
+  });
 
   console.log('\nRuntime');
   console.log(`  model read ms    ${readModel.ms}`);
   console.log(`  init module ms   ${startup.initModuleMs}`);
   console.log(`  memfs load ms    ${startup.loadModelIntoMemfsMs}`);
   console.log(`  model size       ${formatBytes(readModel.value.size)}`);
+  printBackendProfile(backendProfile);
 
   const scenarioResults: BenchmarkScenarioResult[] = [];
   try {
@@ -1036,7 +1179,7 @@ async function main(): Promise<void> {
       : null;
 
   const report: BenchmarkReport = {
-    schemaVersion: 'cogent.benchmark.bun.v4',
+    schemaVersion: 'cogent.benchmark.bun.v5',
     generatedAt: new Date().toISOString(),
     benchmark: {
       script: 'packages/cogent-engine/benchmarks/benchmark-bun.ts',
@@ -1064,6 +1207,7 @@ async function main(): Promise<void> {
       quantizationLabel,
       modelBytes: readModel.value.size,
     },
+    backend: backendProfile,
     runtime: {
       initConfig: options.initConfig,
       readModelMs: readModel.ms,
@@ -1077,6 +1221,7 @@ async function main(): Promise<void> {
     scenarios: scenarioResults,
     limitations: [
       'This Bun track is authoritative for Wasm host/runtime overhead, not browser WebGPU kernel behavior.',
+      'The backend section reports runtime backend availability and requested execution mode, not a browser-selected WebGPU adapter.',
       'TTFT is measured from the first streamed token callback exposed by the runtime.',
       'TPOT is computed per request as (E2EL - TTFT) / (output tokens - 1), while ITL is computed from token-to-token callback intervals.',
       'Logical input tokens and effective prompt-eval tokens are reported separately so context reuse does not distort headline throughput metrics.',
