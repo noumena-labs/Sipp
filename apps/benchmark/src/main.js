@@ -47,6 +47,24 @@ const DEFAULT_BENCHMARK_SCENARIOS = [
   },
 ];
 
+const DEFAULT_MIXED_LOAD_DEFINITION = {
+  id: 'mixed-lilo-vs-siso',
+  label: 'Mixed Load: LILO Background vs SISO Foreground',
+  background: {
+    id: 'mixed-background-lilo',
+    label: 'Background Long Input / Long Output',
+    prompt: LONG_PROMPT,
+    outputTokenLimit: DEFAULT_LONG_OUTPUT_TOKENS,
+  },
+  foreground: {
+    id: 'mixed-foreground-siso',
+    label: 'Foreground Short Input / Short Output',
+    prompt: SHORT_PROMPT,
+    outputTokenLimit: DEFAULT_SHORT_OUTPUT_TOKENS,
+  },
+  concurrency: 2,
+};
+
 const app = document.querySelector('#app');
 app.innerHTML = `
   <div class="shell">
@@ -118,6 +136,24 @@ app.innerHTML = `
               <input id="benchmarkRuns" type="number" min="1" max="10" value="3" />
             </div>
           </div>
+          <div class="field-grid field-grid-compact">
+            <div class="row">
+              <label for="prefillChunkSize">Prefill Chunk</label>
+              <input id="prefillChunkSize" type="number" min="0" max="512" value="0" />
+            </div>
+            <div class="row">
+              <label for="schedulerPolicy">Scheduler Policy</label>
+              <select id="schedulerPolicy">
+                <option value="latency-first">latency-first</option>
+                <option value="balanced" selected>balanced</option>
+                <option value="throughput-first">throughput-first</option>
+              </select>
+            </div>
+            <div class="row">
+              <label for="decodeTokenReserve">Decode Reserve</label>
+              <input id="decodeTokenReserve" type="number" min="0" max="64" value="1" />
+            </div>
+          </div>
           <div class="button-row">
             <button id="runPromptBtn" type="button">Run Single Inference</button>
             <button id="runBenchmarkBtn" type="button">Run Full Browser Benchmark</button>
@@ -151,7 +187,8 @@ app.innerHTML = `
           <div id="benchmarkResults" class="benchmark-results">
             <p class="hint">
               Run the browser benchmark to execute the standard four-case matrix:
-              SISO, SILO, LISO, and LILO, each with cold, hot-fresh, and hot-reuse measurements.
+              SISO, SILO, LISO, and LILO, each with cold, hot-fresh, and hot-reuse measurements,
+              plus one mixed-load fairness run with a LILO background request and a SISO foreground request.
             </p>
           </div>
         </section>
@@ -229,6 +266,42 @@ function buildBenchmarkScenarios() {
     outputTokenLimit: scenario.outputTokenLimit,
     outputBucket: classifyOutputBucket(scenario.outputTokenLimit),
   }));
+}
+
+function buildMixedLoadDefinition() {
+  return {
+    id: DEFAULT_MIXED_LOAD_DEFINITION.id,
+    label: DEFAULT_MIXED_LOAD_DEFINITION.label,
+    background: {
+      ...DEFAULT_MIXED_LOAD_DEFINITION.background,
+      promptBucket: classifyPromptBucket(DEFAULT_MIXED_LOAD_DEFINITION.background.prompt),
+      promptChars: DEFAULT_MIXED_LOAD_DEFINITION.background.prompt.length,
+      promptWords: countWords(DEFAULT_MIXED_LOAD_DEFINITION.background.prompt),
+      outputBucket: classifyOutputBucket(DEFAULT_MIXED_LOAD_DEFINITION.background.outputTokenLimit),
+      promptFormat: 'auto-chat',
+      contextBucket: 'single-request',
+      concurrency: 1,
+    },
+    foreground: {
+      ...DEFAULT_MIXED_LOAD_DEFINITION.foreground,
+      promptBucket: classifyPromptBucket(DEFAULT_MIXED_LOAD_DEFINITION.foreground.prompt),
+      promptChars: DEFAULT_MIXED_LOAD_DEFINITION.foreground.prompt.length,
+      promptWords: countWords(DEFAULT_MIXED_LOAD_DEFINITION.foreground.prompt),
+      outputBucket: classifyOutputBucket(DEFAULT_MIXED_LOAD_DEFINITION.foreground.outputTokenLimit),
+      promptFormat: 'auto-chat',
+      contextBucket: 'single-request',
+      concurrency: 1,
+    },
+    concurrency: DEFAULT_MIXED_LOAD_DEFINITION.concurrency,
+  };
+}
+
+function buildPhase4BenchmarkInitConfig(initConfig = {}) {
+  return {
+    ...initConfig,
+    nSeqMax: Math.max(initConfig.nSeqMax ?? 1, 2),
+    maxCachedSessions: Math.max(initConfig.maxCachedSessions ?? 8, 2),
+  };
 }
 
 function escapeHtml(value) {
@@ -406,6 +479,13 @@ function summarizeRunGroup(runs, benchmarkDurationMs) {
       avgDecodeEvalMs: averagePerfMetric(perfRuns, (perf) => perf.decodeEvalMs),
       avgSampleMs: averagePerfMetric(perfRuns, (perf) => perf.sampleMs),
       avgOutputTokenCount: averagePerfMetric(perfRuns, (perf) => perf.outputTokenCount),
+      avgQueueDelayMs: averagePerfMetric(perfRuns, (perf) => perf.queueDelayMs),
+      avgTailItlMs: averagePerfMetric(perfRuns, (perf) => perf.tailItlMs),
+      avgSchedulerTickCount: averagePerfMetric(perfRuns, (perf) => perf.schedulerTickCount),
+      avgBatchParticipationCount: averagePerfMetric(perfRuns, (perf) => perf.batchParticipationCount),
+      avgDecodeFirstTickCount: averagePerfMetric(perfRuns, (perf) => perf.decodeFirstTickCount),
+      avgChunkedPrefillTickCount: averagePerfMetric(perfRuns, (perf) => perf.chunkedPrefillTickCount),
+      avgMixedWorkloadTickCount: averagePerfMetric(perfRuns, (perf) => perf.mixedWorkloadTickCount),
       promptTokensPerSecond: summarizePromptThroughput(perfRuns),
       decodeTokensPerSecond: summarizeDecodeThroughput(perfRuns),
     },
@@ -528,6 +608,8 @@ function benchmarkSection(title, group) {
     metricCard('Mean TPOT', serving.tpotMs == null ? 'n/a' : `${serving.tpotMs.meanMs} ms`),
     metricCard('Mean ITL', serving.itlMs == null ? 'n/a' : `${serving.itlMs.meanMs} ms`),
     metricCard('Mean E2EL', `${serving.e2elMs.meanMs} ms`),
+    metricCard('Queue Delay', runtime.avgQueueDelayMs == null ? 'n/a' : `${runtime.avgQueueDelayMs} ms`),
+    metricCard('Tail ITL', runtime.avgTailItlMs == null ? 'n/a' : `${runtime.avgTailItlMs} ms`),
     metricCard('Prompt Eval tok/s', runtime.promptTokensPerSecond == null ? 'n/a' : String(runtime.promptTokensPerSecond)),
   ].join('');
 
@@ -552,6 +634,13 @@ function benchmarkSection(title, group) {
       ${serving.ttftMs == null ? '' : `<p class="result-detail">ttft median=${serving.ttftMs.medianMs} ms p99=${serving.ttftMs.p99Ms} ms</p>`}
       ${serving.tpotMs == null ? '' : `<p class="result-detail">tpot median=${serving.tpotMs.medianMs} ms p99=${serving.tpotMs.p99Ms} ms</p>`}
       ${serving.itlMs == null ? '' : `<p class="result-detail">itl median=${serving.itlMs.medianMs} ms p99=${serving.itlMs.p99Ms} ms</p>`}
+      <p class="result-detail">
+        scheduler_ticks=${runtime.avgSchedulerTickCount == null ? 'n/a' : runtime.avgSchedulerTickCount}
+        batch_participation=${runtime.avgBatchParticipationCount == null ? 'n/a' : runtime.avgBatchParticipationCount}
+        decode_first_ticks=${runtime.avgDecodeFirstTickCount == null ? 'n/a' : runtime.avgDecodeFirstTickCount}
+        chunked_prefill_ticks=${runtime.avgChunkedPrefillTickCount == null ? 'n/a' : runtime.avgChunkedPrefillTickCount}
+        mixed_workload_ticks=${runtime.avgMixedWorkloadTickCount == null ? 'n/a' : runtime.avgMixedWorkloadTickCount}
+      </p>
       <p class="result-preview">${escapeHtml(preview)}</p>
     </article>
   `;
@@ -576,6 +665,48 @@ function scenarioSection(result) {
         ${benchmarkSection('Cold Prompt', result.coldPrompt)}
         ${benchmarkSection('Hot Prompt: Fresh Context', result.hotFreshContext)}
         ${benchmarkSection('Hot Prompt: Reused Context', result.hotReuseContext)}
+      </div>
+    </section>
+  `;
+}
+
+function mixedLoadSection(result) {
+  if (!result) {
+    return '';
+  }
+
+  if (result.unsupported) {
+    return `
+      <section class="result-card">
+        <h3>${escapeHtml(result.definition.label)}</h3>
+        <div class="metric-grid">
+          ${metricCard('Background', result.definition.background.label)}
+          ${metricCard('Foreground', result.definition.foreground.label)}
+          ${metricCard('Concurrency', String(result.definition.concurrency))}
+          ${metricCard('Status', 'Skipped', 'warn')}
+        </div>
+        <p class="result-detail">
+          ${escapeHtml(
+            result.reason ||
+              'Mixed-load benchmark was skipped because the loaded engine instance does not support queued requests.'
+          )}
+        </p>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="result-card">
+      <h3>${escapeHtml(result.definition.label)}</h3>
+      <div class="metric-grid">
+        ${metricCard('Background', result.definition.background.label)}
+        ${metricCard('Foreground', result.definition.foreground.label)}
+        ${metricCard('Concurrency', String(result.definition.concurrency))}
+        ${metricCard('Engine Init', formatMs(result.runtime.initEngineMs))}
+      </div>
+      <div class="result-stack">
+        ${benchmarkSection(result.foreground.label, result.foreground)}
+        ${benchmarkSection(result.background.label, result.background)}
       </div>
     </section>
   `;
@@ -638,6 +769,9 @@ function renderBenchmarkReport(report) {
       ${metricCard('Model Source', report.modelSource.label)}
       ${metricCard('Scenario Count', String(report.benchmark.scenarioCount))}
       ${metricCard('Benchmark Matrix', 'SISO / SILO / LISO / LILO')}
+      ${metricCard('Prefill Chunk', String(report.runtime.initConfig?.prefillChunkSize ?? 0))}
+      ${metricCard('Scheduler Policy', report.runtime.initConfig?.schedulerPolicy ?? 'balanced')}
+      ${metricCard('Decode Reserve', String(report.runtime.initConfig?.decodeTokenReserve ?? 1))}
       ${metricCard('WebGPU', webGpuLabel, webGpuTone)}
       ${metricCard('Runtime Backend', describeRuntimeBackend(report.runtimeBackend), report.runtimeBackend?.webgpuRegistered ? 'ok' : 'warn')}
       ${metricCard('Execution Backend', backend.inferredExecutionBackend)}
@@ -648,6 +782,7 @@ function renderBenchmarkReport(report) {
     </div>
     <div class="result-stack">
       ${report.scenarios.map((scenario) => scenarioSection(scenario)).join('')}
+      ${mixedLoadSection(report.mixedLoad)}
       ${memorySnapshotSection(report.memory)}
     </div>
   `;
@@ -663,6 +798,8 @@ function renderResponseMetrics(response, wallMs, perf) {
     metricCard('Wall', formatMs(wallMs)),
     metricCard('TTFT', response.ttftMs == null ? 'n/a' : formatMs(response.ttftMs)),
     metricCard('TPOT', tpotMs == null ? 'n/a' : formatMs(tpotMs)),
+    metricCard('Queue Delay', perf ? formatMs(perf.queueDelayMs) : 'n/a'),
+    metricCard('Tail ITL', perf ? formatMs(perf.tailItlMs) : 'n/a'),
     metricCard('Output Tokens', perf ? String(perf.outputTokenCount) : 'n/a'),
     metricCard('Logical Input Tokens', perf ? String(perf.inputTokenCount) : 'n/a'),
     metricCard('Effective Prompt Tokens', perf ? String(perf.promptEvalTokens) : 'n/a'),
@@ -703,6 +840,15 @@ function parseMeasuredRuns() {
   return parsePositiveInt(benchmarkRunsEl, 3);
 }
 
+function parseSchedulerPolicyMode() {
+  const value = schedulerPolicyEl.value;
+  if (value === 'latency-first' || value === 'balanced' || value === 'throughput-first') {
+    return value;
+  }
+  schedulerPolicyEl.value = 'balanced';
+  return 'balanced';
+}
+
 function readBenchmarkConfigFromUi() {
   const prompt = promptTextEl.value.trim();
   if (!prompt) {
@@ -714,6 +860,11 @@ function readBenchmarkConfigFromUi() {
     tokenCount: parseTokenCount(),
     warmupRuns: parseWarmupRuns(),
     measuredRuns: parseMeasuredRuns(),
+    initConfig: {
+      prefillChunkSize: parseNonNegativeInt(prefillChunkSizeEl, 0),
+      schedulerPolicy: parseSchedulerPolicyMode(),
+      decodeTokenReserve: parseNonNegativeInt(decodeTokenReserveEl, 1),
+    },
   };
 }
 
@@ -729,6 +880,15 @@ function applyBenchmarkConfigToUi(config = {}) {
   }
   if (typeof config.measuredRuns === 'number') {
     benchmarkRunsEl.value = String(config.measuredRuns);
+  }
+  if (typeof config.initConfig?.prefillChunkSize === 'number') {
+    prefillChunkSizeEl.value = String(config.initConfig.prefillChunkSize);
+  }
+  if (typeof config.initConfig?.schedulerPolicy === 'string') {
+    schedulerPolicyEl.value = config.initConfig.schedulerPolicy;
+  }
+  if (typeof config.initConfig?.decodeTokenReserve === 'number') {
+    decodeTokenReserveEl.value = String(config.initConfig.decodeTokenReserve);
   }
 }
 
@@ -1140,11 +1300,184 @@ async function runScenarioBenchmark(targetEngine, scenario, modelPath, warmupRun
   };
 }
 
+async function runQueuedMixedLoadPair(targetEngine, definition, runIndex) {
+  const backgroundContextKey = `${definition.background.id}-mixed-${runIndex}`;
+  const foregroundContextKey = `${definition.foreground.id}-mixed-${runIndex}`;
+
+  const backgroundStart = performance.now();
+  let backgroundTtftMs = null;
+  const backgroundTokenEventTimes = [];
+  const backgroundRequestId = await targetEngine.queuePrompt(
+    backgroundContextKey,
+    definition.background.prompt,
+    {
+      nTokens: definition.background.outputTokenLimit,
+      promptFormat: definition.background.promptFormat,
+      onToken: () => {
+        const elapsedMs = round(performance.now() - backgroundStart);
+        backgroundTokenEventTimes.push(elapsedMs);
+        if (backgroundTtftMs == null) {
+          backgroundTtftMs = elapsedMs;
+        }
+      },
+    }
+  );
+
+  const foregroundStart = performance.now();
+  let foregroundTtftMs = null;
+  const foregroundTokenEventTimes = [];
+  const foregroundRequestId = await targetEngine.queuePrompt(
+    foregroundContextKey,
+    definition.foreground.prompt,
+    {
+      nTokens: definition.foreground.outputTokenLimit,
+      promptFormat: definition.foreground.promptFormat,
+      onToken: () => {
+        const elapsedMs = round(performance.now() - foregroundStart);
+        foregroundTokenEventTimes.push(elapsedMs);
+        if (foregroundTtftMs == null) {
+          foregroundTtftMs = elapsedMs;
+        }
+      },
+    }
+  );
+
+  const foregroundResponse = await targetEngine.runQueuedRequest(foregroundRequestId);
+  const foregroundWallMs = round(performance.now() - foregroundStart);
+  const backgroundResponse = await targetEngine.runQueuedRequest(backgroundRequestId);
+  const backgroundWallMs = round(performance.now() - backgroundStart);
+
+  const toRun = (label, contextKey, wallMs, ttftMs, tokenEventTimes, response) => {
+    const perf = response.perf ?? null;
+    const outputTokenCount = perf?.outputTokenCount ?? tokenEventTimes.length;
+    const itlMsValues = [];
+    for (let tokenIndex = 1; tokenIndex < tokenEventTimes.length; tokenIndex += 1) {
+      itlMsValues.push(round(tokenEventTimes[tokenIndex] - tokenEventTimes[tokenIndex - 1]));
+    }
+    const effectiveTtftMs = ttftMs ?? perf?.ttftMs ?? null;
+    const tpotMs =
+      effectiveTtftMs != null && outputTokenCount > 1
+        ? round((wallMs - effectiveTtftMs) / (outputTokenCount - 1))
+        : null;
+
+    return {
+      label,
+      contextKey,
+      wallMs,
+      ttftMs: effectiveTtftMs,
+      tpotMs,
+      itlMsValues,
+      inputTokenCount: perf?.inputTokenCount ?? null,
+      outputTokenCount,
+      outputLength: response.outputText.length,
+      outputPreview: response.outputText.slice(0, 160).replace(/\s+/g, ' ').trim(),
+      perf,
+    };
+  };
+
+  return {
+    backgroundRun: toRun(
+      `${definition.id}-background-${runIndex + 1}`,
+      backgroundContextKey,
+      backgroundWallMs,
+      backgroundTtftMs,
+      backgroundTokenEventTimes,
+      backgroundResponse
+    ),
+    foregroundRun: toRun(
+      `${definition.id}-foreground-${runIndex + 1}`,
+      foregroundContextKey,
+      foregroundWallMs,
+      foregroundTtftMs,
+      foregroundTokenEventTimes,
+      foregroundResponse
+    ),
+  };
+}
+
+async function runMixedLoadBenchmark(targetEngine, definition, modelPath, warmupRuns, measuredRuns, initConfig) {
+  setStatus(`${definition.label}: initializing engine...`);
+  const { ms: initEngineMs } = await measureAsync(() =>
+    targetEngine.initEngine(modelPath, buildPhase4BenchmarkInitConfig(initConfig))
+  );
+  engineReady = true;
+
+  for (let i = 0; i < warmupRuns; i += 1) {
+    setStatus(`${definition.label}: warmup ${i + 1}/${warmupRuns}`);
+    await runQueuedMixedLoadPair(targetEngine, definition, i);
+  }
+
+  const foregroundRuns = [];
+  const backgroundRuns = [];
+  const benchmarkStart = performance.now();
+  for (let i = 0; i < measuredRuns; i += 1) {
+    setStatus(`${definition.label}: run ${i + 1}/${measuredRuns}`);
+    const pair = await runQueuedMixedLoadPair(targetEngine, definition, i + warmupRuns);
+    backgroundRuns.push(pair.backgroundRun);
+    foregroundRuns.push(pair.foregroundRun);
+  }
+
+  const benchmarkDurationMs = round(performance.now() - benchmarkStart);
+  return {
+    definition,
+    runtime: {
+      initEngineMs,
+    },
+    foreground: createGroupResult(
+      'hotFreshContext',
+      `${definition.foreground.label} Under Mixed Load`,
+      warmupRuns,
+      measuredRuns,
+      {
+        benchmarkDurationMs,
+        runs: foregroundRuns,
+        summary: summarizeRunGroup(foregroundRuns, benchmarkDurationMs),
+      }
+    ),
+    background: createGroupResult(
+      'hotFreshContext',
+      `${definition.background.label} Under Mixed Load`,
+      warmupRuns,
+      measuredRuns,
+      {
+        benchmarkDurationMs,
+        runs: backgroundRuns,
+        summary: summarizeRunGroup(backgroundRuns, benchmarkDurationMs),
+      }
+    ),
+  };
+}
+
+function supportsQueuedRequestApi(targetEngine) {
+  return (
+    targetEngine != null &&
+    typeof targetEngine.queuePrompt === 'function' &&
+    typeof targetEngine.runQueuedRequest === 'function'
+  );
+}
+
+function createUnsupportedMixedLoadResult(definition, reason) {
+  return {
+    definition,
+    unsupported: true,
+    reason,
+    runtime: {
+      initEngineMs: null,
+    },
+  };
+}
+
 async function runBrowserBenchmark(config = {}) {
   applyBenchmarkConfigToUi(config);
-  const warmupRuns = typeof config.warmupRuns === 'number' ? config.warmupRuns : parseWarmupRuns();
-  const measuredRuns = typeof config.measuredRuns === 'number' ? config.measuredRuns : parseMeasuredRuns();
+  const uiConfig = readBenchmarkConfigFromUi();
+  const warmupRuns = typeof config.warmupRuns === 'number' ? config.warmupRuns : uiConfig.warmupRuns;
+  const measuredRuns = typeof config.measuredRuns === 'number' ? config.measuredRuns : uiConfig.measuredRuns;
   const scenarios = buildBenchmarkScenarios();
+  const mixedLoadDefinition = buildMixedLoadDefinition();
+  const effectiveInitConfig = buildPhase4BenchmarkInitConfig({
+    ...uiConfig.initConfig,
+    ...(config.initConfig ?? {}),
+  });
   const memorySnapshots = [];
   const selectedModel = getCurrentModelSelection();
 
@@ -1192,15 +1525,34 @@ async function runBrowserBenchmark(config = {}) {
       loadResult.modelPath,
       warmupRuns,
       measuredRuns,
-      config.initConfig
+      effectiveInitConfig
     );
     scenarioResults.push(result);
     await refreshRuntimeBackendInfo();
     memorySnapshots.push(await captureBrowserMemorySnapshot(`after-${scenario.id}`));
   }
 
+  let mixedLoad;
+  if (supportsQueuedRequestApi(engine)) {
+    mixedLoad = await runMixedLoadBenchmark(
+      engine,
+      mixedLoadDefinition,
+      loadResult.modelPath,
+      warmupRuns,
+      measuredRuns,
+      effectiveInitConfig
+    );
+    await refreshRuntimeBackendInfo();
+    memorySnapshots.push(await captureBrowserMemorySnapshot('after-mixed-load'));
+  } else {
+    mixedLoad = createUnsupportedMixedLoadResult(
+      mixedLoadDefinition,
+      'The loaded benchmark page is using an engine bundle without queuePrompt()/runQueuedRequest(). Hard refresh the page and restart the benchmark dev server to enable the Phase 4 mixed-load fairness run.'
+    );
+  }
+
   const report = {
-    schemaVersion: 'cogent.benchmark.browser.v4',
+    schemaVersion: 'cogent.benchmark.browser.v5',
     generatedAt: new Date().toISOString(),
     benchmark: {
       preset: 'default',
@@ -1222,8 +1574,14 @@ async function runBrowserBenchmark(config = {}) {
     runtime: {
       initModuleMs,
       loadModelMs: loadResult.loadModelMs,
+      initConfig: effectiveInitConfig,
       initEngineSummary: {
-        initEngineMs: summarize(scenarioResults.map((scenario) => scenario.runtime.initEngineMs)),
+        initEngineMs: summarize([
+          ...scenarioResults.map((scenario) => scenario.runtime.initEngineMs),
+          ...(typeof mixedLoad?.runtime?.initEngineMs === 'number'
+            ? [mixedLoad.runtime.initEngineMs]
+            : []),
+        ]),
       },
     },
     memory: {
@@ -1231,6 +1589,7 @@ async function runBrowserBenchmark(config = {}) {
       summary: summarizeMemorySnapshots(memorySnapshots),
     },
     scenarios: scenarioResults,
+    mixedLoad,
   };
 
   lastBenchmarkReport = report;
@@ -1302,6 +1661,9 @@ const promptTextEl = document.querySelector('#promptText');
 const tokenCountEl = document.querySelector('#tokenCount');
 const warmupRunsEl = document.querySelector('#warmupRuns');
 const benchmarkRunsEl = document.querySelector('#benchmarkRuns');
+const prefillChunkSizeEl = document.querySelector('#prefillChunkSize');
+const schedulerPolicyEl = document.querySelector('#schedulerPolicy');
+const decodeTokenReserveEl = document.querySelector('#decodeTokenReserve');
 const initRuntimeBtn = document.querySelector('#initRuntimeBtn');
 const loadModelBtn = document.querySelector('#loadModelBtn');
 const runPromptBtn = document.querySelector('#runPromptBtn');
@@ -1348,7 +1710,7 @@ loadModelBtn.addEventListener('click', async () => {
 
   try {
     await ensureBrowserWebGpuReady();
-    const result = await loadAndInitCurrentEngine('manual load');
+    const result = await loadAndInitCurrentEngine('manual load', readBenchmarkConfigFromUi().initConfig);
     const sourceLabel = result.modelSource.type === 'file'
       ? `${result.modelSource.label} (${formatMiB(result.modelSource.sizeBytes)})`
       : result.modelSource.label;
