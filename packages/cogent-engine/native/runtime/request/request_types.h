@@ -53,6 +53,10 @@ struct GenerateRequest {
   int32_t decode_first_tick_count = 0;
   int32_t chunked_prefill_tick_count = 0;
   int32_t mixed_workload_tick_count = 0;
+  int32_t lcp_reuse_tokens = 0;
+  int32_t prefix_cache_restore_tokens = 0;
+  int32_t prefix_cache_hit_count = 0;
+  int32_t prefix_cache_store_count = 0;
 };
 
 } // namespace noumena::cogentengine

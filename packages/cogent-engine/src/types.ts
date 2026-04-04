@@ -16,6 +16,8 @@ export interface InferenceInitConfig {
   maxCachedSessions?: number;
   retainedPrefixTokens?: number;
   prefillChunkSize?: number;
+  prefixCacheIntervalTokens?: number;
+  maxPrefixCacheEntries?: number;
   schedulerPolicy?: SchedulerPolicyMode;
   decodeTokenReserve?: number;
   adaptivePrefillChunking?: boolean;
@@ -68,6 +70,10 @@ export interface PromptPerformanceStats {
   decodeFirstTickCount: number;
   chunkedPrefillTickCount: number;
   mixedWorkloadTickCount: number;
+  lcpReuseTokens: number;
+  prefixCacheRestoreTokens: number;
+  prefixCacheHitCount: number;
+  prefixCacheStoreCount: number;
 }
 
 export interface BackendDeviceCapabilities {

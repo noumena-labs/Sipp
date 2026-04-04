@@ -55,6 +55,12 @@ std::string prompt_perf_to_json(const CE_PromptPerfMetrics &metrics) {
       << "\"chunkedPrefillTickCount\":" << metrics.chunked_prefill_tick_count
       << ","
       << "\"mixedWorkloadTickCount\":" << metrics.mixed_workload_tick_count
+      << ","
+      << "\"lcpReuseTokens\":" << metrics.lcp_reuse_tokens << ","
+      << "\"prefixCacheRestoreTokens\":" << metrics.prefix_cache_restore_tokens
+      << ","
+      << "\"prefixCacheHitCount\":" << metrics.prefix_cache_hit_count << ","
+      << "\"prefixCacheStoreCount\":" << metrics.prefix_cache_store_count
       << "}";
   return out.str();
 }
@@ -68,6 +74,7 @@ int CE_Init(const char *model_path, int n_ctx, int n_batch, int n_ubatch,
             int n_seq_max, int n_threads, int n_threads_batch, int gpu_layers,
             int flash_attention, int kv_unified, int max_cached_sessions,
             int retained_prefix_tokens, int prefill_chunk_size,
+            int prefix_cache_interval_tokens, int max_prefix_cache_entries,
             int scheduler_policy, int decode_token_reserve,
             int adaptive_prefill_chunking) {
   std::lock_guard<std::mutex> lock(g_apiMutex);
@@ -94,6 +101,8 @@ int CE_Init(const char *model_path, int n_ctx, int n_batch, int n_ubatch,
       .max_cached_sessions = max_cached_sessions,
       .retained_prefix_tokens = retained_prefix_tokens,
       .prefill_chunk_size = prefill_chunk_size,
+      .prefix_cache_interval_tokens = prefix_cache_interval_tokens,
+      .max_prefix_cache_entries = max_prefix_cache_entries,
       .scheduler_policy = scheduler_policy,
       .decode_token_reserve = decode_token_reserve,
       .adaptive_prefill_chunking = adaptive_prefill_chunking,

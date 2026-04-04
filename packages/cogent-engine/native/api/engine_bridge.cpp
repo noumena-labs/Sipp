@@ -91,6 +91,12 @@ std::string prompt_perf_to_json(
       << "\"chunkedPrefillTickCount\":" << perf.chunked_prefill_tick_count
       << ","
       << "\"mixedWorkloadTickCount\":" << perf.mixed_workload_tick_count
+      << ","
+      << "\"lcpReuseTokens\":" << perf.lcp_reuse_tokens << ","
+      << "\"prefixCacheRestoreTokens\":" << perf.prefix_cache_restore_tokens
+      << ","
+      << "\"prefixCacheHitCount\":" << perf.prefix_cache_hit_count << ","
+      << "\"prefixCacheStoreCount\":" << perf.prefix_cache_store_count
       << "}";
   return out.str();
 }
@@ -152,6 +158,12 @@ int CE_InitPlugin(const char *model_path, const CE_InitConfig *config) {
                                                 : 100;
     runtime_config.prefill_chunk_size =
         config->prefill_chunk_size >= 0 ? config->prefill_chunk_size : 0;
+    runtime_config.prefix_cache_interval_tokens =
+        config->prefix_cache_interval_tokens > 0
+            ? config->prefix_cache_interval_tokens
+            : 128;
+    runtime_config.max_prefix_cache_entries =
+        config->max_prefix_cache_entries > 0 ? config->max_prefix_cache_entries : 32;
     runtime_config.scheduler_policy.mode =
         config->scheduler_policy <= 0
             ? noumena::cogentengine::SchedulerPolicyMode::LatencyFirst
@@ -215,6 +227,11 @@ int CE_GetLastPromptPerf(CE_PromptPerfMetrics *out_metrics) {
       perf_stats.chunked_prefill_tick_count;
   out_metrics->mixed_workload_tick_count =
       perf_stats.mixed_workload_tick_count;
+  out_metrics->lcp_reuse_tokens = perf_stats.lcp_reuse_tokens;
+  out_metrics->prefix_cache_restore_tokens =
+      perf_stats.prefix_cache_restore_tokens;
+  out_metrics->prefix_cache_hit_count = perf_stats.prefix_cache_hit_count;
+  out_metrics->prefix_cache_store_count = perf_stats.prefix_cache_store_count;
   return 0;
 }
 

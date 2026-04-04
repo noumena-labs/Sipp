@@ -34,6 +34,8 @@ public:
   void BindSharedContext(struct llama_context *shared_context);
 
   SequenceState *Find(const std::string &context_key);
+  size_t ComputeLcpReuse(const SequenceState &sequence_state,
+                         const std::vector<llama_token> &incoming_tokens) const;
   SequenceState &GetOrCreateSession(const std::string &context_key);
   SequenceState &Emplace(const std::string &context_key, SequenceState state);
   void Touch(const std::string &context_key);

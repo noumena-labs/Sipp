@@ -13,6 +13,8 @@ export interface NormalizedInitConfig {
   maxCachedSessions: number;
   retainedPrefixTokens: number;
   prefillChunkSize: number;
+  prefixCacheIntervalTokens: number;
+  maxPrefixCacheEntries: number;
   schedulerPolicy: number;
   decodeTokenReserve: number;
   adaptivePrefillChunking: number;
@@ -80,6 +82,16 @@ export function normalizeInitConfig(config: InferenceInitConfig | undefined): No
     maxCachedSessions: normalizeInteger('maxCachedSessions', config?.maxCachedSessions, 1),
     retainedPrefixTokens: normalizeInteger('retainedPrefixTokens', config?.retainedPrefixTokens, 0),
     prefillChunkSize: normalizeInteger('prefillChunkSize', config?.prefillChunkSize, 0),
+    prefixCacheIntervalTokens: normalizeInteger(
+      'prefixCacheIntervalTokens',
+      config?.prefixCacheIntervalTokens,
+      1
+    ),
+    maxPrefixCacheEntries: normalizeInteger(
+      'maxPrefixCacheEntries',
+      config?.maxPrefixCacheEntries,
+      1
+    ),
     schedulerPolicy: normalizeSchedulerPolicy(config?.schedulerPolicy),
     decodeTokenReserve: normalizeInteger('decodeTokenReserve', config?.decodeTokenReserve, 0),
     adaptivePrefillChunking: normalizeOptionalBoolean(config?.adaptivePrefillChunking),

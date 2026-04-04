@@ -494,6 +494,8 @@ export class CogentEngine {
         'number',
         'number',
         'number',
+        'number',
+        'number',
       ],
       [
         modelPath,
@@ -509,6 +511,8 @@ export class CogentEngine {
         normalizedConfig.maxCachedSessions,
         normalizedConfig.retainedPrefixTokens,
         normalizedConfig.prefillChunkSize,
+        normalizedConfig.prefixCacheIntervalTokens,
+        normalizedConfig.maxPrefixCacheEntries,
         normalizedConfig.schedulerPolicy,
         normalizedConfig.decodeTokenReserve,
         normalizedConfig.adaptivePrefillChunking,

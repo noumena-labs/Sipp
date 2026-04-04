@@ -94,6 +94,8 @@ set(PLUGIN_SOURCES
     ${CMAKE_SOURCE_DIR}/native/runtime/request/request_queue.cpp
     ${CMAKE_SOURCE_DIR}/native/runtime/scheduler/batch_planner.cpp
     ${CMAKE_SOURCE_DIR}/native/runtime/scheduler/slot_scheduler.cpp
+    ${CMAKE_SOURCE_DIR}/native/runtime/session/prefix_state_cache.cpp
+    ${CMAKE_SOURCE_DIR}/native/runtime/session/prefix_cache_policy.cpp
     ${CMAKE_SOURCE_DIR}/native/runtime/session/session_store.cpp
     ${CMAKE_SOURCE_DIR}/native/runtime/llama/llama_batch_builder.cpp
     ${CMAKE_SOURCE_DIR}/native/runtime/llama/llama_utils.cpp

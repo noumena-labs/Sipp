@@ -28,6 +28,8 @@ struct InferenceRuntimeConfig {
   int32_t max_cached_sessions = 8;
   int32_t retained_prefix_tokens = 100;
   int32_t prefill_chunk_size = 0;
+  int32_t prefix_cache_interval_tokens = 128;
+  int32_t max_prefix_cache_entries = 32;
   SchedulerPolicyConfig scheduler_policy{};
 };
 

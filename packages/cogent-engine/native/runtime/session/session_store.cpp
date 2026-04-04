@@ -31,6 +31,21 @@ SequenceState *SessionStore::Find(const std::string &context_key) {
   return it == context_states_.end() ? nullptr : &it->second;
 }
 
+size_t SessionStore::ComputeLcpReuse(
+    const SequenceState &sequence_state,
+    const std::vector<llama_token> &incoming_tokens) const {
+  const size_t shared_length = std::min(sequence_state.current_kv_tokens.size(),
+                                        incoming_tokens.size());
+  size_t match_length = 0;
+  for (; match_length < shared_length; ++match_length) {
+    if (sequence_state.current_kv_tokens[match_length] !=
+        incoming_tokens[match_length]) {
+      break;
+    }
+  }
+  return match_length;
+}
+
 SequenceState &SessionStore::GetOrCreateSession(const std::string &context_key) {
   if (SequenceState *existing = Find(context_key)) {
     Touch(context_key);

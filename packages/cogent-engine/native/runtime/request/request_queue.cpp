@@ -30,6 +30,10 @@ bool RequestQueue::Push(GenerateRequest request) {
   request.decode_first_tick_count = 0;
   request.chunked_prefill_tick_count = 0;
   request.mixed_workload_tick_count = 0;
+  request.lcp_reuse_tokens = 0;
+  request.prefix_cache_restore_tokens = 0;
+  request.prefix_cache_hit_count = 0;
+  request.prefix_cache_store_count = 0;
   requests_.emplace(request_id, std::move(request));
   pending_request_ids_.push_back(request_id);
   return true;

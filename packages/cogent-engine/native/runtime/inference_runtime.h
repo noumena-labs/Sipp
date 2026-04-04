@@ -20,6 +20,8 @@
 #include "runtime/request/request_queue.h"
 #include "runtime/scheduler/batch_planner.h"
 #include "runtime/scheduler/slot_scheduler.h"
+#include "runtime/session/prefix_cache_policy.h"
+#include "runtime/session/prefix_state_cache.h"
 #include "runtime/session/session_store.h"
 
 struct llama_model;
@@ -50,6 +52,17 @@ public:
 private:
   bool EnsureContextSpace(SequenceState &state, int new_tokens_needed,
                           int n_ctx);
+  bool PrepareSequenceForPromptLocked(const std::string &context_key,
+                                      const std::vector<llama_token> &prompt_tokens,
+                                      int n_tokens_predict,
+                                      SequenceState &state,
+                                      GenerateRequest *request,
+                                      std::size_t &out_prefill_cursor);
+  void MaybeStorePrefixCacheEntryLocked(const std::string &context_key,
+                                        const SequenceState &state,
+                                        std::size_t token_count,
+                                        std::size_t terminal_token_count,
+                                        GenerateRequest *request);
   bool ExecutePromptTokensLocked(const std::string &context_key,
                                  const std::vector<llama_token> &prompt_tokens,
                                  int n_tokens_predict,
@@ -75,7 +88,10 @@ private:
   LlamaBatchBuilder shared_batch_builder_;
   SharedBatchRuntimeStats shared_batch_stats_;
   SchedulerPerfCounters scheduler_perf_counters_;
+  PrefixStateCache prefix_state_cache_;
+  PrefixCachePolicy prefix_cache_policy_;
   GenerateRequestId next_request_id_ = 1;
+  std::uint64_t model_fingerprint_ = 0;
   mutable std::mutex operation_mutex_;
 };
 

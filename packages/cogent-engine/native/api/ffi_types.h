@@ -26,6 +26,8 @@ typedef struct CE_InitConfig {
   int32_t max_cached_sessions;
   int32_t retained_prefix_tokens;
   int32_t prefill_chunk_size;
+  int32_t prefix_cache_interval_tokens;
+  int32_t max_prefix_cache_entries;
   int32_t scheduler_policy;
   int32_t decode_token_reserve;
   int32_t adaptive_prefill_chunking;
@@ -51,4 +53,8 @@ typedef struct CE_PromptPerfMetrics {
   int32_t decode_first_tick_count;
   int32_t chunked_prefill_tick_count;
   int32_t mixed_workload_tick_count;
+  int32_t lcp_reuse_tokens;
+  int32_t prefix_cache_restore_tokens;
+  int32_t prefix_cache_hit_count;
+  int32_t prefix_cache_store_count;
 } CE_PromptPerfMetrics;

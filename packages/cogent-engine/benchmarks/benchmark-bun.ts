@@ -109,6 +109,10 @@ interface RuntimeBenchmarkSummary {
   avgDecodeFirstTickCount: number | null;
   avgChunkedPrefillTickCount: number | null;
   avgMixedWorkloadTickCount: number | null;
+  avgLcpReuseTokens: number | null;
+  avgPrefixCacheRestoreTokens: number | null;
+  avgPrefixCacheHitCount: number | null;
+  avgPrefixCacheStoreCount: number | null;
   promptEvalTokensPerSecond: number | null;
   outputTokensPerSecond: number | null;
 }
@@ -1185,6 +1189,13 @@ function summarizeGroup(
         perfRuns,
         (perf) => perf.mixedWorkloadTickCount
       ),
+      avgLcpReuseTokens: averagePerfMetric(perfRuns, (perf) => perf.lcpReuseTokens),
+      avgPrefixCacheRestoreTokens: averagePerfMetric(
+        perfRuns,
+        (perf) => perf.prefixCacheRestoreTokens
+      ),
+      avgPrefixCacheHitCount: averagePerfMetric(perfRuns, (perf) => perf.prefixCacheHitCount),
+      avgPrefixCacheStoreCount: averagePerfMetric(perfRuns, (perf) => perf.prefixCacheStoreCount),
       promptEvalTokensPerSecond: summarizeThroughput(perfRuns, promptTokensPerSecond),
       outputTokensPerSecond: summarizeThroughput(perfRuns, decodeTokensPerSecond),
     },
@@ -1355,6 +1366,20 @@ function printGroupResult(group: BenchmarkGroupResult): void {
   }
   if (runtime.avgMixedWorkloadTickCount != null) {
     console.log(`    Avg mixed-workload ticks:        ${runtime.avgMixedWorkloadTickCount}`);
+  }
+  if (runtime.avgLcpReuseTokens != null) {
+    console.log(`    Avg LCP reuse tokens:            ${runtime.avgLcpReuseTokens}`);
+  }
+  if (runtime.avgPrefixCacheRestoreTokens != null) {
+    console.log(
+      `    Avg prefix-cache restore tokens: ${runtime.avgPrefixCacheRestoreTokens}`
+    );
+  }
+  if (runtime.avgPrefixCacheHitCount != null) {
+    console.log(`    Avg prefix-cache hits:           ${runtime.avgPrefixCacheHitCount}`);
+  }
+  if (runtime.avgPrefixCacheStoreCount != null) {
+    console.log(`    Avg prefix-cache stores:         ${runtime.avgPrefixCacheStoreCount}`);
   }
 }
 

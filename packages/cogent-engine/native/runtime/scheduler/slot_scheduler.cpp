@@ -412,6 +412,11 @@ void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue,
           request.chunked_prefill_tick_count;
       response.perf.mixed_workload_tick_count =
           request.mixed_workload_tick_count;
+      response.perf.lcp_reuse_tokens = request.lcp_reuse_tokens;
+      response.perf.prefix_cache_restore_tokens =
+          request.prefix_cache_restore_tokens;
+      response.perf.prefix_cache_hit_count = request.prefix_cache_hit_count;
+      response.perf.prefix_cache_store_count = request.prefix_cache_store_count;
     }
     if (slot.phase == SlotPhase::Failed) {
       response.error_message = slot.terminal_error_message.empty()
@@ -506,6 +511,11 @@ void SlotScheduler::FailActiveRequest(RequestQueue &request_queue,
         request.chunked_prefill_tick_count;
     response.perf.mixed_workload_tick_count =
         request.mixed_workload_tick_count;
+    response.perf.lcp_reuse_tokens = request.lcp_reuse_tokens;
+    response.perf.prefix_cache_restore_tokens =
+        request.prefix_cache_restore_tokens;
+    response.perf.prefix_cache_hit_count = request.prefix_cache_hit_count;
+    response.perf.prefix_cache_store_count = request.prefix_cache_store_count;
   }
   if (slot.session != nullptr) {
     session_store.Unpin(*slot.session);
