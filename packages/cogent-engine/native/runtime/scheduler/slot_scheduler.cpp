@@ -9,7 +9,17 @@
 #include "runtime/scheduler/slot_scheduler.h"
 
 #include <algorithm>
+#include <chrono>
 #include <utility>
+
+namespace {
+
+double duration_ms(std::chrono::steady_clock::time_point start,
+                   std::chrono::steady_clock::time_point end) {
+  return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
+} // namespace
 
 namespace noumena::cogentengine {
 
@@ -95,6 +105,132 @@ std::vector<SlotState *> SlotScheduler::SelectRunnableSlots() {
   }
 
   return runnable_slots;
+}
+
+std::vector<SlotState *> SlotScheduler::SelectDecodeReadySlots() {
+  std::vector<SlotState *> decode_slots;
+  decode_slots.reserve(slots_.size());
+
+  // Phase 4 algorithm steps:
+  // 1. Admit only slots that are already decode-ready for this tick.
+  // 2. Exclude slots that still have buffered text waiting to be emitted,
+  //    because those slots should not consume additional decode budget yet.
+  // 3. Keep ordering deterministic by preserving slot order.
+  for (SlotState &slot : slots_) {
+    if (slot.request == nullptr || slot.session == nullptr) {
+      continue;
+    }
+    if (slot.phase != SlotPhase::Decode) {
+      continue;
+    }
+    if (!slot.buffered_output_text.empty()) {
+      continue;
+    }
+    decode_slots.push_back(&slot);
+  }
+
+  return decode_slots;
+}
+
+std::vector<SlotState *> SlotScheduler::SelectPrefillReadySlots() {
+  std::vector<SlotState *> prefill_slots;
+  prefill_slots.reserve(slots_.size());
+
+  // Phase 4 algorithm steps:
+  // 1. Admit only slots that still have prompt tokens left to prefill.
+  // 2. Keep selection free of fairness heuristics; chunking and reservation
+  //    policy belong in the tick budget and batch planner.
+  // 3. Preserve slot order so later policy behavior is explainable.
+  for (SlotState &slot : slots_) {
+    if (slot.request == nullptr || slot.session == nullptr) {
+      continue;
+    }
+    if (slot.phase != SlotPhase::Prefill) {
+      continue;
+    }
+    if (slot.prefill_cursor >= slot.request->prompt_tokens.size()) {
+      continue;
+    }
+    prefill_slots.push_back(&slot);
+  }
+
+  return prefill_slots;
+}
+
+SchedulerTickBudget
+SlotScheduler::BuildTickBudget(const SchedulerPolicyConfig &policy,
+                               int32_t decode_ready_count,
+                               int32_t prefill_ready_count,
+                               int32_t max_batch_tokens,
+                               int32_t prefill_chunk_size) {
+  SchedulerTickBudget budget;
+  budget.total_token_budget = std::max(0, max_batch_tokens);
+  budget.decode_first = decode_ready_count > 0;
+
+  // Phase 4 algorithm steps:
+  // 1. Start from the shared runtime token budget for a tick.
+  // 2. Reserve decode tokens first so short decode-heavy requests are not
+  //    starved by one long prompt prefill.
+  // 3. Clamp the decode reservation to the actual total budget.
+  // 4. Leave adaptive chunk sizing for later; for now, the remaining budget
+  //    becomes the prefill budget.
+  // 5. If chunking is disabled, the prefill planner may still consume the
+  //    remaining budget densely, but decode reservation must remain explicit.
+  if (budget.total_token_budget <= 0) {
+    return budget;
+  }
+
+  const int32_t clamped_decode_ready =
+      std::max<int32_t>(0, decode_ready_count);
+  const int32_t clamped_prefill_ready =
+      std::max<int32_t>(0, prefill_ready_count);
+
+  int32_t reserved_decode_tokens = 0;
+  switch (policy.mode) {
+  case SchedulerPolicyMode::LatencyFirst:
+    reserved_decode_tokens =
+        clamped_decode_ready > 0
+            ? std::max(policy.decode_token_reserve, clamped_decode_ready)
+            : 0;
+    break;
+  case SchedulerPolicyMode::Balanced:
+    reserved_decode_tokens =
+        clamped_decode_ready > 0
+            ? std::max(policy.decode_token_reserve,
+                       std::min(clamped_decode_ready,
+                                std::max<int32_t>(1, budget.total_token_budget / 2)))
+            : 0;
+    break;
+  case SchedulerPolicyMode::ThroughputFirst:
+    reserved_decode_tokens =
+        clamped_decode_ready > 0 ? std::max<int32_t>(1, policy.decode_token_reserve) : 0;
+    break;
+  }
+
+  budget.reserved_decode_tokens =
+      std::clamp(reserved_decode_tokens, 0, budget.total_token_budget);
+  budget.reserved_prefill_tokens = clamped_prefill_ready > 0
+                                       ? std::max(
+                                             0, budget.total_token_budget -
+                                                    budget.reserved_decode_tokens)
+                                       : 0;
+
+  if (clamped_decode_ready <= 0) {
+    budget.reserved_decode_tokens = 0;
+  }
+
+  if (clamped_prefill_ready > 0 && budget.reserved_prefill_tokens <= 0 &&
+      budget.total_token_budget > 0 && budget.reserved_decode_tokens >= budget.total_token_budget) {
+    budget.reserved_decode_tokens = std::max(0, budget.total_token_budget - 1);
+    budget.reserved_prefill_tokens = budget.total_token_budget - budget.reserved_decode_tokens;
+  }
+
+  if (prefill_chunk_size <= 0 && clamped_prefill_ready > 0) {
+    budget.reserved_prefill_tokens =
+        std::max(0, budget.total_token_budget - budget.reserved_decode_tokens);
+  }
+
+  return budget;
 }
 
 void SlotScheduler::Tick(RequestQueue &request_queue,
@@ -235,6 +371,48 @@ void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue,
                           ? GenerateResponseStatus::Completed
                           : GenerateResponseStatus::Failed;
     response.output_text = std::move(slot.output_text);
+    if (slot.request != nullptr) {
+      GenerateRequest &request = *slot.request;
+      request.completed_at = std::chrono::steady_clock::now();
+      request.has_completed_at = true;
+
+      response.perf.queue_delay_ms =
+          request.has_admitted_at
+              ? duration_ms(request.enqueued_at, request.admitted_at)
+              : 0.0;
+      response.perf.ttft_ms =
+          request.has_first_token_at
+              ? duration_ms(request.enqueued_at, request.first_token_at)
+              : 0.0;
+      response.perf.mean_itl_ms =
+          request.emitted_token_count > 1
+              ? request.accumulated_itl_ms /
+                    static_cast<double>(request.emitted_token_count - 1)
+              : 0.0;
+      response.perf.tail_itl_ms = request.tail_itl_ms;
+      response.perf.e2e_ms =
+          duration_ms(request.enqueued_at, request.completed_at);
+      response.perf.total_ms = response.perf.e2e_ms;
+      response.perf.input_token_count =
+          static_cast<int32_t>(request.prompt_tokens.size());
+      response.perf.output_token_count =
+          slot.generated_tokens.empty()
+              ? request.emitted_token_count
+              : static_cast<int32_t>(slot.generated_tokens.size());
+      response.perf.scheduler_tick_count =
+          static_cast<int32_t>(slot.scheduler_tick_count);
+      response.perf.batch_participation_count =
+          static_cast<int32_t>(slot.batch_participation_count);
+      response.perf.decode_eval_count =
+          static_cast<int32_t>(slot.decode_step_count);
+      response.perf.sample_count = response.perf.output_token_count;
+      response.perf.decode_first_tick_count =
+          request.decode_first_tick_count;
+      response.perf.chunked_prefill_tick_count =
+          request.chunked_prefill_tick_count;
+      response.perf.mixed_workload_tick_count =
+          request.mixed_workload_tick_count;
+    }
     if (slot.phase == SlotPhase::Failed) {
       response.error_message = slot.terminal_error_message.empty()
                                    ? "Request failed."
@@ -257,6 +435,22 @@ void SlotScheduler::EmitBufferedTokenPiece(SlotState &slot) {
   GenerateRequest *request = slot.request;
   slot.output_text.append(slot.buffered_output_text);
 
+  if (request != nullptr) {
+    const auto now = std::chrono::steady_clock::now();
+    if (!request->has_first_token_at) {
+      request->first_token_at = now;
+      request->has_first_token_at = true;
+    } else if (request->has_last_token_at) {
+      const double itl_ms = duration_ms(request->last_token_at, now);
+      request->accumulated_itl_ms += itl_ms;
+      request->tail_itl_ms = std::max(request->tail_itl_ms, itl_ms);
+    }
+
+    request->last_token_at = now;
+    request->has_last_token_at = true;
+    request->emitted_token_count++;
+  }
+
   if (request != nullptr && request->on_token_received) {
     request->on_token_received(
         slot.buffered_output_text.c_str(),
@@ -274,6 +468,45 @@ void SlotScheduler::FailActiveRequest(RequestQueue &request_queue,
   response.request_id = slot.request_id;
   response.status = GenerateResponseStatus::Failed;
   response.error_message = std::move(error_message);
+  if (slot.request != nullptr) {
+    GenerateRequest &request = *slot.request;
+    request.completed_at = std::chrono::steady_clock::now();
+    request.has_completed_at = true;
+    response.perf.queue_delay_ms =
+        request.has_admitted_at
+            ? duration_ms(request.enqueued_at, request.admitted_at)
+            : 0.0;
+    response.perf.ttft_ms =
+        request.has_first_token_at
+            ? duration_ms(request.enqueued_at, request.first_token_at)
+            : 0.0;
+    response.perf.mean_itl_ms =
+        request.emitted_token_count > 1
+            ? request.accumulated_itl_ms /
+                  static_cast<double>(request.emitted_token_count - 1)
+            : 0.0;
+    response.perf.tail_itl_ms = request.tail_itl_ms;
+    response.perf.e2e_ms = duration_ms(request.enqueued_at, request.completed_at);
+    response.perf.total_ms = response.perf.e2e_ms;
+    response.perf.input_token_count =
+        static_cast<int32_t>(request.prompt_tokens.size());
+    response.perf.output_token_count =
+        slot.generated_tokens.empty()
+            ? request.emitted_token_count
+            : static_cast<int32_t>(slot.generated_tokens.size());
+    response.perf.scheduler_tick_count =
+        static_cast<int32_t>(slot.scheduler_tick_count);
+    response.perf.batch_participation_count =
+        static_cast<int32_t>(slot.batch_participation_count);
+    response.perf.decode_eval_count =
+        static_cast<int32_t>(slot.decode_step_count);
+    response.perf.sample_count = response.perf.output_token_count;
+    response.perf.decode_first_tick_count = request.decode_first_tick_count;
+    response.perf.chunked_prefill_tick_count =
+        request.chunked_prefill_tick_count;
+    response.perf.mixed_workload_tick_count =
+        request.mixed_workload_tick_count;
+  }
   if (slot.session != nullptr) {
     session_store.Unpin(*slot.session);
   }

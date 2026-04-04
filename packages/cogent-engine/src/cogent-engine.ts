@@ -3,6 +3,7 @@ import { formatPromptText } from './prompt-format.js';
 import {
   BackendInfo,
   GenerateRequest,
+  GenerateRequestId,
   GenerateResponse,
   InferenceInitConfig,
   PromptGenerationOptions,
@@ -37,12 +38,6 @@ interface EngineModule {
 interface EngineModuleOptions {
   locateFile?: (path: string, prefix?: string) => string;
   [key: string]: unknown;
-}
-
-interface ActivePromptStream {
-  chunks: string[];
-  onToken?: (token: string) => void;
-  callbackError: unknown;
 }
 
 export interface CogentConfig {
@@ -81,8 +76,8 @@ export class CogentEngine {
   private initPromise: Promise<void> | null = null;
   private engineInitialized = false;
   private loadedModelPath: string | null = null;
-  private streamCallbackPtr: number | null = null;
-  private activePromptStream: ActivePromptStream | null = null;
+  private queuedPromptCallbackPtrs = new Map<GenerateRequestId, number>();
+  private queuedPromptCallbackErrors = new Map<GenerateRequestId, unknown>();
 
   constructor(private config: CogentConfig = {}) { }
 
@@ -191,33 +186,6 @@ export class CogentEngine {
     };
   }
 
-  private async runQueuedGenerateRequest(
-    request: GenerateRequest
-  ): Promise<GenerateResponse> {
-    const module = this.getReadyEngineModule();
-    const callbackPtr = this.ensureStreamCallback(module);
-    const ptr = await module.ccall(
-      'CE_RunQueuedPromptJson',
-      'number',
-      ['string', 'string', 'number', 'number'],
-      [request.contextKey, request.promptText, request.maxOutputTokens, callbackPtr],
-      { async: true }
-    );
-
-    if (!ptr) {
-      throw new Error('Queued prompt returned no response payload.');
-    }
-
-    try {
-      const raw = module.UTF8ToString(ptr);
-      return JSON.parse(raw) as GenerateResponse;
-    } catch (error) {
-      throw new Error(`Failed to parse queued generate response: ${asErrorMessage(error)}`);
-    } finally {
-      module._CE_FreeString(ptr);
-    }
-  }
-
   private getLoadedModule(): EngineModule {
     if (!this.module) {
       throw new Error('Module is not initialized. Call initModule() first.');
@@ -233,36 +201,22 @@ export class CogentEngine {
     return module;
   }
 
-  private releaseStreamCallback(module: EngineModule): void {
-    if (this.streamCallbackPtr == null) {
+  private releaseQueuedPromptCallback(module: EngineModule, requestId: GenerateRequestId): void {
+    const callbackPtr = this.queuedPromptCallbackPtrs.get(requestId);
+    if (callbackPtr == null) {
       return;
     }
-    module.removeFunction(this.streamCallbackPtr);
-    this.streamCallbackPtr = null;
+    module.removeFunction(callbackPtr);
+    this.queuedPromptCallbackPtrs.delete(requestId);
+    this.queuedPromptCallbackErrors.delete(requestId);
   }
 
-  private ensureStreamCallback(module: EngineModule): number {
-
-    if (this.streamCallbackPtr != null) {
-      return this.streamCallbackPtr;
+  private releaseAllQueuedPromptCallbacks(module: EngineModule): void {
+    for (const callbackPtr of this.queuedPromptCallbackPtrs.values()) {
+      module.removeFunction(callbackPtr);
     }
-
-    this.streamCallbackPtr = module.addFunction((ptr: number, length: number) => {
-      const activeStream = this.activePromptStream;
-      if (!activeStream || activeStream.callbackError != null) {
-        return;
-      }
-
-      try {
-        const token = module.UTF8ToString(ptr, length);
-        activeStream.chunks.push(token);
-        activeStream.onToken?.(token);
-      } catch (error) {
-        activeStream.callbackError = error;
-      }
-    }, 'vii');
-
-    return this.streamCallbackPtr;
+    this.queuedPromptCallbackPtrs.clear();
+    this.queuedPromptCallbackErrors.clear();
   }
 
   private removeFileIfExists(module: EngineModule, path: string): void {
@@ -536,6 +490,10 @@ export class CogentEngine {
         'number',
         'number',
         'number',
+        'number',
+        'number',
+        'number',
+        'number',
       ],
       [
         modelPath,
@@ -550,6 +508,10 @@ export class CogentEngine {
         normalizedConfig.kvUnified,
         normalizedConfig.maxCachedSessions,
         normalizedConfig.retainedPrefixTokens,
+        normalizedConfig.prefillChunkSize,
+        normalizedConfig.schedulerPolicy,
+        normalizedConfig.decodeTokenReserve,
+        normalizedConfig.adaptivePrefillChunking,
       ],
       { async: true }
     );
@@ -569,12 +531,112 @@ export class CogentEngine {
       return;
     }
     module.ccall('CE_Close', null, [], []);
-    this.releaseStreamCallback(module);
-    this.activePromptStream = null;
+    this.releaseAllQueuedPromptCallbacks(module);
     this.engineInitialized = false;
     this.loadedModelPath = null;
     this.module = null;
     this.initPromise = null;
+  }
+
+  public async queuePrompt(
+    contextKey: string,
+    promptText: string,
+    options: number | PromptStreamOptions = 128
+  ): Promise<GenerateRequestId> {
+    const module = this.getReadyEngineModule();
+    const request = this.buildGenerateRequest(contextKey, promptText, options);
+    const onToken = typeof options === 'object' ? options.onToken : undefined;
+
+    let requestId: GenerateRequestId = 0;
+    const callbackPtr =
+      onToken == null
+        ? 0
+        : module.addFunction((ptr: number, length: number) => {
+            try {
+              onToken(module.UTF8ToString(ptr, length));
+            } catch (error) {
+              if (requestId !== 0) {
+                this.queuedPromptCallbackErrors.set(requestId, error);
+              }
+            }
+          }, 'vii');
+
+    const requestIdResult = module.ccall(
+      'CE_EnqueuePrompt',
+      'number',
+      ['string', 'string', 'number', 'number'],
+      [request.contextKey, request.promptText, request.maxOutputTokens, callbackPtr]
+    );
+    if (requestIdResult instanceof Promise) {
+      if (callbackPtr !== 0) {
+        module.removeFunction(callbackPtr);
+      }
+      throw new Error('Unexpected async result while enqueuing a request.');
+    }
+
+    requestId = requestIdResult as GenerateRequestId;
+    if (!requestId) {
+      if (callbackPtr !== 0) {
+        module.removeFunction(callbackPtr);
+      }
+      throw new Error('Failed to enqueue request.');
+    }
+
+    if (callbackPtr !== 0) {
+      this.queuedPromptCallbackPtrs.set(requestId, callbackPtr);
+    }
+
+    return requestId;
+  }
+
+  public async runQueuedRequest(requestId: GenerateRequestId): Promise<GenerateResponse> {
+    const module = this.getReadyEngineModule();
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new Error('requestId must be a positive integer.');
+    }
+
+    const ptr = await module.ccall(
+      'CE_RunQueuedRequestJson',
+      'number',
+      ['number'],
+      [requestId],
+      { async: true }
+    );
+
+    if (!ptr) {
+      this.releaseQueuedPromptCallback(module, requestId);
+      throw new Error('Queued request returned no response payload.');
+    }
+
+    try {
+      const raw = module.UTF8ToString(ptr);
+      const response = JSON.parse(raw) as GenerateResponse;
+      const callbackError = this.queuedPromptCallbackErrors.get(requestId);
+      if (callbackError != null) {
+        throw callbackError;
+      }
+      return response;
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new Error(`Failed to parse queued generate response: ${asErrorMessage(error)}`);
+      }
+      throw error;
+    } finally {
+      module._CE_FreeString(ptr);
+      this.releaseQueuedPromptCallback(module, requestId);
+    }
+  }
+
+  private async runQueuedGenerateRequest(
+    request: GenerateRequest,
+    onToken?: (token: string) => void
+  ): Promise<GenerateResponse> {
+    const requestId = await this.queuePrompt(request.contextKey, request.promptText, {
+      nTokens: request.maxOutputTokens,
+      promptFormat: request.promptFormat,
+      onToken,
+    });
+    return this.runQueuedRequest(requestId);
   }
 
   /**
@@ -585,35 +647,13 @@ export class CogentEngine {
     promptText: string,
     options: number | PromptStreamOptions = 128
   ): Promise<string> {
-    this.getReadyEngineModule();
-    if (this.activePromptStream != null) {
-      throw new Error('Concurrent streamPrompt() calls are not supported yet.');
-    }
-
     const request = this.buildGenerateRequest(contextKey, promptText, options);
     const onToken = typeof options === 'object' ? options.onToken : undefined;
-    const activeStream: ActivePromptStream = {
-      chunks: [],
-      onToken,
-      callbackError: null,
-    };
-    this.activePromptStream = activeStream;
-
-    try {
-      const response = await this.runQueuedGenerateRequest(request);
-      if (activeStream.callbackError != null) {
-        throw activeStream.callbackError;
-      }
-      if (response.failed) {
-        throw new Error(response.errorMessage ?? 'Queued prompt failed.');
-      }
-
-      return response.outputText;
-    } finally {
-      if (this.activePromptStream === activeStream) {
-        this.activePromptStream = null;
-      }
+    const response = await this.runQueuedGenerateRequest(request, onToken);
+    if (response.failed) {
+      throw new Error(response.errorMessage ?? 'Queued prompt failed.');
     }
+    return response.outputText;
   }
 
   public async prompt(

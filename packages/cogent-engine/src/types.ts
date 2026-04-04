@@ -1,6 +1,7 @@
 export type FlashAttentionMode = "auto" | "enabled" | "disabled";
 export type PromptFormatMode = "auto-chat" | "raw";
 export type BackendDeviceType = "cpu" | "gpu" | "igpu" | "accel" | "unknown";
+export type SchedulerPolicyMode = "latency-first" | "balanced" | "throughput-first";
 
 export interface InferenceInitConfig {
   nCtx?: number;
@@ -14,6 +15,10 @@ export interface InferenceInitConfig {
   kvUnified?: boolean;
   maxCachedSessions?: number;
   retainedPrefixTokens?: number;
+  prefillChunkSize?: number;
+  schedulerPolicy?: SchedulerPolicyMode;
+  decodeTokenReserve?: number;
+  adaptivePrefillChunking?: boolean;
 }
 
 export interface PromptGenerationOptions {
@@ -24,6 +29,8 @@ export interface PromptGenerationOptions {
 export interface PromptStreamOptions extends PromptGenerationOptions {
   onToken?: (token: string) => void;
 }
+
+export type GenerateRequestId = number;
 
 export interface GenerateRequest {
   contextKey: string;
@@ -38,6 +45,7 @@ export interface GenerateResponse {
   failed: boolean;
   outputText: string;
   errorMessage?: string | null;
+  perf?: PromptPerformanceStats;
 }
 
 export interface PromptPerformanceStats {
@@ -45,11 +53,21 @@ export interface PromptPerformanceStats {
   promptEvalMs: number;
   decodeEvalMs: number;
   sampleMs: number;
+  queueDelayMs: number;
+  ttftMs: number;
+  meanItlMs: number;
+  tailItlMs: number;
+  e2elMs: number;
   inputTokenCount: number;
   promptEvalTokens: number;
   decodeEvalCount: number;
   sampleCount: number;
   outputTokenCount: number;
+  schedulerTickCount: number;
+  batchParticipationCount: number;
+  decodeFirstTickCount: number;
+  chunkedPrefillTickCount: number;
+  mixedWorkloadTickCount: number;
 }
 
 export interface BackendDeviceCapabilities {

@@ -25,6 +25,10 @@ typedef struct CE_InitConfig {
   int32_t kv_unified;
   int32_t max_cached_sessions;
   int32_t retained_prefix_tokens;
+  int32_t prefill_chunk_size;
+  int32_t scheduler_policy;
+  int32_t decode_token_reserve;
+  int32_t adaptive_prefill_chunking;
 } CE_InitConfig;
 
 typedef struct CE_PromptPerfMetrics {
@@ -32,9 +36,19 @@ typedef struct CE_PromptPerfMetrics {
   double prompt_eval_ms;
   double decode_eval_ms;
   double sample_ms;
+  double queue_delay_ms;
+  double ttft_ms;
+  double mean_itl_ms;
+  double tail_itl_ms;
+  double e2e_ms;
   int32_t input_token_count;
   int32_t prompt_eval_tokens;
   int32_t decode_eval_count;
   int32_t sample_count;
   int32_t output_token_count;
+  int32_t scheduler_tick_count;
+  int32_t batch_participation_count;
+  int32_t decode_first_tick_count;
+  int32_t chunked_prefill_tick_count;
+  int32_t mixed_workload_tick_count;
 } CE_PromptPerfMetrics;

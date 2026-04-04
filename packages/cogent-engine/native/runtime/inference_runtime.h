@@ -16,6 +16,7 @@
 
 #include "runtime/config/inference_config.h"
 #include "runtime/llama/llama_batch_builder.h"
+#include "runtime/metrics/perf_counters.h"
 #include "runtime/request/request_queue.h"
 #include "runtime/scheduler/batch_planner.h"
 #include "runtime/scheduler/slot_scheduler.h"
@@ -25,25 +26,6 @@ struct llama_model;
 struct llama_sampler;
 
 namespace noumena::cogentengine {
-
-struct PromptPerfStats {
-  double total_ms = 0.0;
-  double prompt_eval_ms = 0.0;
-  double decode_eval_ms = 0.0;
-  double sample_ms = 0.0;
-  int32_t input_token_count = 0;
-  int32_t prompt_eval_tokens = 0;
-  int32_t decode_eval_count = 0;
-  int32_t sample_count = 0;
-  int32_t output_token_count = 0;
-};
-
-struct SharedBatchRuntimeStats {
-  std::uint64_t tick_count = 0;
-  std::uint64_t total_occupied_slots = 0;
-  std::uint64_t total_prefill_tokens = 0;
-  std::uint64_t total_decode_tokens = 0;
-};
 
 class InferenceRuntime {
 public:
@@ -72,8 +54,12 @@ private:
                                  const std::vector<llama_token> &prompt_tokens,
                                  int n_tokens_predict,
                                  TokenCallback on_token_received);
+  bool ExecuteSingleSlotRequestLocked(SlotState &slot);
   bool RunSharedBatchTickLocked();
+  bool RunPolicyBatchTickLocked();
   void UpdateSharedBatchMetricsLocked(const SharedBatchPlan &plan);
+  void UpdateSchedulerPerfCountersLocked(const SharedBatchPlan &plan,
+                                         const SchedulerTickBudget &budget);
   llama_context *CreateContext() const;
 
   InferenceRuntimeConfig config_;
@@ -88,6 +74,7 @@ private:
   BatchPlanner batch_planner_;
   LlamaBatchBuilder shared_batch_builder_;
   SharedBatchRuntimeStats shared_batch_stats_;
+  SchedulerPerfCounters scheduler_perf_counters_;
   GenerateRequestId next_request_id_ = 1;
   mutable std::mutex operation_mutex_;
 };

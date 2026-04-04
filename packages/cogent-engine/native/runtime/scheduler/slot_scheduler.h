@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "runtime/config/scheduler_policy.h"
 #include "runtime/request/request_queue.h"
 #include "runtime/scheduler/batch_planner.h"
 #include "runtime/scheduler/slot_state.h"
@@ -24,6 +25,13 @@ public:
   void Resize(std::size_t slot_count);
   SlotState *FindFirstActiveSlot();
   std::vector<SlotState *> SelectRunnableSlots();
+  std::vector<SlotState *> SelectDecodeReadySlots();
+  std::vector<SlotState *> SelectPrefillReadySlots();
+  SchedulerTickBudget BuildTickBudget(const SchedulerPolicyConfig &policy,
+                                      int32_t decode_ready_count,
+                                      int32_t prefill_ready_count,
+                                      int32_t max_batch_tokens,
+                                      int32_t prefill_chunk_size);
   void Tick(RequestQueue &request_queue, SessionStore &session_store);
   bool AdmitPendingRequests(RequestQueue &request_queue,
                             SessionStore &session_store);

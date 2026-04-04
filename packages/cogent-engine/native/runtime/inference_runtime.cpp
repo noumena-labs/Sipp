@@ -26,6 +26,9 @@ normalize_config(noumena::cogentengine::InferenceRuntimeConfig config) {
   config.max_cached_sessions = std::max<int32_t>(1, config.max_cached_sessions);
   config.retained_prefix_tokens =
       std::max<int32_t>(0, config.retained_prefix_tokens);
+  config.prefill_chunk_size = std::max<int32_t>(0, config.prefill_chunk_size);
+  config.scheduler_policy.decode_token_reserve =
+      std::max<int32_t>(0, config.scheduler_policy.decode_token_reserve);
   return config;
 }
 
@@ -228,10 +231,17 @@ bool InferenceRuntime::ExecutePromptTokensLocked(
     state->n_past += batch.n_tokens;
   }
 
+  llama_synchronize(ctx);
+
   state->current_kv_tokens = new_tokens;
 
   llama_utils::BatchClear(batch);
   int output_token_count = 0;
+  bool has_first_token_time = false;
+  std::chrono::steady_clock::time_point first_token_time{};
+  std::chrono::steady_clock::time_point last_token_time{};
+  double accumulated_itl_ms = 0.0;
+  double tail_itl_ms = 0.0;
 
   for (int i = 0; i < n_tokens_predict; ++i) {
     const llama_token tok = llama_sampler_sample(sampler_, ctx, -1);
@@ -247,6 +257,19 @@ bool InferenceRuntime::ExecutePromptTokensLocked(
     }
     output_token_count++;
 
+    const auto token_time = std::chrono::steady_clock::now();
+    if (!has_first_token_time) {
+      first_token_time = token_time;
+      has_first_token_time = true;
+    } else {
+      const double itl_ms =
+          std::chrono::duration<double, std::milli>(token_time - last_token_time)
+              .count();
+      accumulated_itl_ms += itl_ms;
+      tail_itl_ms = std::max(tail_itl_ms, itl_ms);
+    }
+    last_token_time = token_time;
+
     if (on_token_received) {
       on_token_received(buf, n);
     }
@@ -257,6 +280,8 @@ bool InferenceRuntime::ExecutePromptTokensLocked(
     if (llama_decode(ctx, batch) != 0) {
       break;
     }
+
+    llama_synchronize(ctx);
 
     state->n_past++;
     state->current_kv_tokens.push_back(tok);
@@ -275,24 +300,167 @@ bool InferenceRuntime::ExecutePromptTokensLocked(
       .prompt_eval_ms = ctx_perf.t_p_eval_ms,
       .decode_eval_ms = ctx_perf.t_eval_ms,
       .sample_ms = sampler_perf.t_sample_ms,
+      .queue_delay_ms = 0.0,
+      .ttft_ms =
+          has_first_token_time
+              ? std::chrono::duration<double, std::milli>(first_token_time -
+                                                          total_start)
+                    .count()
+              : 0.0,
+      .mean_itl_ms =
+          output_token_count > 1
+              ? accumulated_itl_ms / static_cast<double>(output_token_count - 1)
+              : 0.0,
+      .tail_itl_ms = tail_itl_ms,
+      .e2e_ms =
+          std::chrono::duration<double, std::milli>(total_end - total_start)
+              .count(),
       .input_token_count = static_cast<int32_t>(new_tokens.size()),
       .prompt_eval_tokens = ctx_perf.n_p_eval,
       .decode_eval_count = ctx_perf.n_eval,
       .sample_count = sampler_perf.n_sample,
       .output_token_count = output_token_count,
+      .scheduler_tick_count = 0,
+      .batch_participation_count = 0,
+      .decode_first_tick_count = 0,
+      .chunked_prefill_tick_count = 0,
+      .mixed_workload_tick_count = 0,
   };
   has_last_prompt_perf_ = true;
 
   return true;
 }
 
-bool InferenceRuntime::RunSharedBatchTickLocked() {
+bool InferenceRuntime::ExecuteSingleSlotRequestLocked(SlotState &slot) {
+  if (slot.request == nullptr || slot.session == nullptr) {
+    slot.terminal_error_message = "Single-slot execution lost request state.";
+    slot.phase = SlotPhase::Failed;
+    return true;
+  }
+
+  GenerateRequest &request = *slot.request;
+  request.lifecycle = GenerateRequestLifecycle::Running;
+  request.emitted_token_count = 0;
+  request.accumulated_itl_ms = 0.0;
+  request.tail_itl_ms = 0.0;
+  request.has_first_token_at = false;
+  request.has_last_token_at = false;
+
+  std::string output_text;
+  const auto request_start = std::chrono::steady_clock::now();
+
+  const bool success = ExecutePromptTokensLocked(
+      request.context_key, request.prompt_tokens, request.max_output_tokens,
+      [&](const char *token_piece, int32_t token_length) {
+        const auto now = std::chrono::steady_clock::now();
+        if (!request.has_first_token_at) {
+          request.first_token_at = now;
+          request.has_first_token_at = true;
+        } else if (request.has_last_token_at) {
+          const double itl_ms =
+              std::chrono::duration<double, std::milli>(now -
+                                                        request.last_token_at)
+                  .count();
+          request.accumulated_itl_ms += itl_ms;
+          request.tail_itl_ms = std::max(request.tail_itl_ms, itl_ms);
+        }
+
+        request.last_token_at = now;
+        request.has_last_token_at = true;
+        request.emitted_token_count++;
+        output_text.append(token_piece, static_cast<std::size_t>(token_length));
+
+        if (request.on_token_received) {
+          request.on_token_received(token_piece, token_length);
+        }
+      });
+
+  slot.scheduler_tick_count++;
+  slot.batch_participation_count++;
+  slot.decode_step_count = static_cast<std::size_t>(last_prompt_perf_.decode_eval_count);
+  slot.output_text = std::move(output_text);
+
+  request.completed_at = std::chrono::steady_clock::now();
+  request.has_completed_at = true;
+
+  last_prompt_perf_.queue_delay_ms =
+      request.has_admitted_at
+          ? std::chrono::duration<double, std::milli>(request.admitted_at -
+                                                      request.enqueued_at)
+                .count()
+          : 0.0;
+  last_prompt_perf_.ttft_ms =
+      request.has_first_token_at
+          ? std::chrono::duration<double, std::milli>(request.first_token_at -
+                                                      request.enqueued_at)
+                .count()
+          : 0.0;
+  last_prompt_perf_.mean_itl_ms =
+      request.emitted_token_count > 1
+          ? request.accumulated_itl_ms /
+                static_cast<double>(request.emitted_token_count - 1)
+          : 0.0;
+  last_prompt_perf_.tail_itl_ms = request.tail_itl_ms;
+  last_prompt_perf_.e2e_ms =
+      std::chrono::duration<double, std::milli>(request.completed_at -
+                                                request.enqueued_at)
+          .count();
+  last_prompt_perf_.scheduler_tick_count =
+      static_cast<int32_t>(slot.scheduler_tick_count);
+  last_prompt_perf_.batch_participation_count =
+      static_cast<int32_t>(slot.batch_participation_count);
+  last_prompt_perf_.decode_first_tick_count = 0;
+  last_prompt_perf_.chunked_prefill_tick_count = 0;
+  last_prompt_perf_.mixed_workload_tick_count = 0;
+  last_prompt_perf_.total_ms =
+      std::max(last_prompt_perf_.total_ms,
+               std::chrono::duration<double, std::milli>(request.completed_at -
+                                                         request_start)
+                   .count());
+
+  if (!success) {
+    slot.terminal_error_message = "Single-slot execution failed.";
+    slot.phase = SlotPhase::Failed;
+    request.lifecycle = GenerateRequestLifecycle::Failed;
+    return true;
+  }
+
+  slot.phase = SlotPhase::Completed;
+  request.lifecycle = GenerateRequestLifecycle::Completed;
+  return true;
+}
+
+bool InferenceRuntime::RunPolicyBatchTickLocked() {
   if (primary_model_ == nullptr || shared_context_ == nullptr ||
       sampler_ == nullptr) {
     return false;
   }
 
-  std::vector<SlotState *> runnable_slots = slot_scheduler_.SelectRunnableSlots();
+  auto combine_slots = [](const std::vector<SlotState *> &left,
+                          const std::vector<SlotState *> &right) {
+    std::vector<SlotState *> combined;
+    combined.reserve(left.size() + right.size());
+    for (SlotState *slot : left) {
+      if (slot != nullptr &&
+          std::find(combined.begin(), combined.end(), slot) == combined.end()) {
+        combined.push_back(slot);
+      }
+    }
+    for (SlotState *slot : right) {
+      if (slot != nullptr &&
+          std::find(combined.begin(), combined.end(), slot) == combined.end()) {
+        combined.push_back(slot);
+      }
+    }
+    return combined;
+  };
+
+  std::vector<SlotState *> decode_ready_slots =
+      slot_scheduler_.SelectDecodeReadySlots();
+  std::vector<SlotState *> prefill_ready_slots =
+      slot_scheduler_.SelectPrefillReadySlots();
+  std::vector<SlotState *> runnable_slots =
+      combine_slots(decode_ready_slots, prefill_ready_slots);
   if (runnable_slots.empty()) {
     return false;
   }
@@ -399,16 +567,75 @@ bool InferenceRuntime::RunSharedBatchTickLocked() {
     llama_perf_sampler_reset(slot->sampler);
   }
 
-  std::vector<SlotState *> live_runnable_slots = slot_scheduler_.SelectRunnableSlots();
+  std::vector<SlotState *> live_decode_ready_slots =
+      slot_scheduler_.SelectDecodeReadySlots();
+  std::vector<SlotState *> live_prefill_ready_slots =
+      slot_scheduler_.SelectPrefillReadySlots();
+  std::vector<SlotState *> live_runnable_slots =
+      combine_slots(live_decode_ready_slots, live_prefill_ready_slots);
   if (live_runnable_slots.empty()) {
     return false;
   }
 
+  if (live_runnable_slots.size() == 1) {
+    return ExecuteSingleSlotRequestLocked(*live_runnable_slots.front());
+  }
+
   const int32_t batch_token_budget = config_.n_batch > 0 ? config_.n_batch : 256;
-  SharedBatchPlan plan =
-      batch_planner_.BuildSharedBatch(live_runnable_slots, batch_token_budget);
+  const SchedulerTickBudget tick_budget = slot_scheduler_.BuildTickBudget(
+      config_.scheduler_policy,
+      static_cast<int32_t>(live_decode_ready_slots.size()),
+      static_cast<int32_t>(live_prefill_ready_slots.size()), batch_token_budget,
+      config_.prefill_chunk_size);
+  SharedBatchPlan plan = batch_planner_.BuildPolicyBatch(
+      live_decode_ready_slots, live_prefill_ready_slots, tick_budget,
+      config_.prefill_chunk_size);
   if (plan.Empty()) {
     return false;
+  }
+
+  {
+    std::vector<GenerateRequest *> tick_requests;
+    tick_requests.reserve(plan.contributions.size());
+    std::vector<GenerateRequest *> decode_requests;
+    std::vector<GenerateRequest *> prefill_requests;
+
+    const auto mark_request = [](std::vector<GenerateRequest *> &requests,
+                                 GenerateRequest *request) {
+      if (request == nullptr ||
+          std::find(requests.begin(), requests.end(), request) != requests.end()) {
+        return;
+      }
+      requests.push_back(request);
+    };
+
+    for (const BatchContribution &contribution : plan.contributions) {
+      if (contribution.slot == nullptr || contribution.slot->request == nullptr) {
+        continue;
+      }
+      mark_request(tick_requests, contribution.slot->request);
+      if (contribution.kind == BatchContributionKind::Decode) {
+        mark_request(decode_requests, contribution.slot->request);
+      } else if (contribution.kind == BatchContributionKind::Prefill) {
+        mark_request(prefill_requests, contribution.slot->request);
+      }
+    }
+
+    if (plan.prefill_token_count > 0 && plan.decode_token_count > 0) {
+      for (GenerateRequest *request : tick_requests) {
+        request->mixed_workload_tick_count++;
+      }
+    }
+    if (tick_budget.EffectiveDecodeBudget() > 0) {
+      for (GenerateRequest *request : decode_requests) {
+        request->decode_first_tick_count++;
+      }
+    }
+    if (config_.prefill_chunk_size > 0) {
+      for (GenerateRequest *request : prefill_requests) {
+        request->chunked_prefill_tick_count++;
+      }
+    }
   }
 
   shared_batch_builder_.EnsureCapacity(batch_token_budget,
@@ -462,6 +689,8 @@ bool InferenceRuntime::RunSharedBatchTickLocked() {
     }
     return false;
   }
+
+  llama_synchronize(shared_context_);
 
   for (const BatchContribution &contribution : plan.contributions) {
     if (contribution.slot == nullptr || contribution.slot->session == nullptr) {
@@ -558,7 +787,12 @@ bool InferenceRuntime::RunSharedBatchTickLocked() {
   last_prompt_perf_.sample_ms += tick_sample_ms;
 
   UpdateSharedBatchMetricsLocked(plan);
+  UpdateSchedulerPerfCountersLocked(plan, tick_budget);
   return true;
+}
+
+bool InferenceRuntime::RunSharedBatchTickLocked() {
+  return RunPolicyBatchTickLocked();
 }
 
 void InferenceRuntime::UpdateSharedBatchMetricsLocked(
@@ -574,6 +808,26 @@ void InferenceRuntime::UpdateSharedBatchMetricsLocked(
       static_cast<std::uint64_t>(std::max(0, plan.prefill_token_count));
   shared_batch_stats_.total_decode_tokens +=
       static_cast<std::uint64_t>(std::max(0, plan.decode_token_count));
+}
+
+void InferenceRuntime::UpdateSchedulerPerfCountersLocked(
+    const SharedBatchPlan &plan, const SchedulerTickBudget &budget) {
+  // Phase 4 algorithm steps:
+  // 1. Record whether this tick used explicit decode reservation.
+  // 2. Record whether chunked prefill was active.
+  // 3. Record whether the tick mixed decode and prefill contributions.
+  // 4. Later, attach real queue delay, TTFT, ITL, and tail ITL once the
+  //    request lifecycle carries precise timestamps.
+  scheduler_perf_counters_.tick_count++;
+  if (budget.EffectiveDecodeBudget() > 0 && plan.decode_token_count > 0) {
+    scheduler_perf_counters_.decode_first_tick_count++;
+  }
+  if (config_.prefill_chunk_size > 0 && plan.prefill_token_count > 0) {
+    scheduler_perf_counters_.chunked_prefill_tick_count++;
+  }
+  if (plan.decode_token_count > 0 && plan.prefill_token_count > 0) {
+    scheduler_perf_counters_.mixed_workload_tick_count++;
+  }
 }
 
 InferenceRuntime::InferenceRuntime(std::string model_path,
@@ -600,6 +854,14 @@ InferenceRuntime::InferenceRuntime(std::string model_path,
 #else
   model_params.use_mmap = true;
 #endif
+
+  ggml_backend_dev_t cpu_only_devices[2] = {nullptr, nullptr};
+  if (config_.gpu_layers == 0) {
+    cpu_only_devices[0] = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (cpu_only_devices[0] != nullptr) {
+      model_params.devices = cpu_only_devices;
+    }
+  }
 
   primary_model_ = llama_model_load_from_file(model_path.c_str(), model_params);
   if (primary_model_ == nullptr) {
@@ -746,6 +1008,35 @@ bool InferenceRuntime::RunUntilRequestCompletes(
   out_response = {};
   has_last_prompt_perf_ = false;
 
+  const auto commit_completed_perf = [this](const GenerateResponse &response) {
+    const PromptPerfStats accumulated_perf = last_prompt_perf_;
+    last_prompt_perf_ = response.perf;
+    last_prompt_perf_.total_ms = accumulated_perf.total_ms > 0.0
+                                     ? accumulated_perf.total_ms
+                                     : std::max(response.perf.total_ms,
+                                                response.perf.e2e_ms);
+    last_prompt_perf_.prompt_eval_ms = accumulated_perf.prompt_eval_ms;
+    last_prompt_perf_.decode_eval_ms = accumulated_perf.decode_eval_ms;
+    last_prompt_perf_.sample_ms = accumulated_perf.sample_ms;
+    last_prompt_perf_.prompt_eval_tokens = accumulated_perf.prompt_eval_tokens;
+    last_prompt_perf_.decode_eval_count =
+        std::max(last_prompt_perf_.decode_eval_count,
+                 accumulated_perf.decode_eval_count);
+    last_prompt_perf_.sample_count =
+        std::max(last_prompt_perf_.sample_count, accumulated_perf.sample_count);
+    last_prompt_perf_.output_token_count =
+        std::max(last_prompt_perf_.output_token_count,
+                 accumulated_perf.output_token_count);
+    has_last_prompt_perf_ = true;
+
+    scheduler_perf_counters_.accumulated_queue_delay_ms +=
+        response.perf.queue_delay_ms;
+    scheduler_perf_counters_.accumulated_ttft_ms += response.perf.ttft_ms;
+    scheduler_perf_counters_.max_tail_itl_ms =
+        std::max(scheduler_perf_counters_.max_tail_itl_ms,
+                 response.perf.tail_itl_ms);
+  };
+
   if (request_id == 0 || primary_model_ == nullptr || shared_context_ == nullptr ||
       sampler_ == nullptr) {
     return false;
@@ -755,6 +1046,7 @@ bool InferenceRuntime::RunUntilRequestCompletes(
     if (auto completed = request_queue_.TakeCompletedResponse(request_id);
         completed.has_value()) {
       out_response = std::move(*completed);
+      commit_completed_perf(out_response);
       return out_response.status == GenerateResponseStatus::Completed;
     }
 
@@ -770,10 +1062,11 @@ bool InferenceRuntime::RunUntilRequestCompletes(
     if (auto completed = request_queue_.TakeCompletedResponse(request_id);
         completed.has_value()) {
       out_response = std::move(*completed);
+      commit_completed_perf(out_response);
       return out_response.status == GenerateResponseStatus::Completed;
     }
 
-    const bool tick_executed = RunSharedBatchTickLocked();
+    const bool tick_executed = RunPolicyBatchTickLocked();
     if (!tick_executed) {
       SlotState *active_slot = slot_scheduler_.FindFirstActiveSlot();
       if (active_slot == nullptr) {

@@ -38,11 +38,24 @@ std::string prompt_perf_to_json(const CE_PromptPerfMetrics &metrics) {
       << "\"promptEvalMs\":" << metrics.prompt_eval_ms << ","
       << "\"decodeEvalMs\":" << metrics.decode_eval_ms << ","
       << "\"sampleMs\":" << metrics.sample_ms << ","
+      << "\"queueDelayMs\":" << metrics.queue_delay_ms << ","
+      << "\"ttftMs\":" << metrics.ttft_ms << ","
+      << "\"meanItlMs\":" << metrics.mean_itl_ms << ","
+      << "\"tailItlMs\":" << metrics.tail_itl_ms << ","
+      << "\"e2elMs\":" << metrics.e2e_ms << ","
       << "\"inputTokenCount\":" << metrics.input_token_count << ","
       << "\"promptEvalTokens\":" << metrics.prompt_eval_tokens << ","
       << "\"decodeEvalCount\":" << metrics.decode_eval_count << ","
       << "\"sampleCount\":" << metrics.sample_count << ","
-      << "\"outputTokenCount\":" << metrics.output_token_count << "}";
+      << "\"outputTokenCount\":" << metrics.output_token_count << ","
+      << "\"schedulerTickCount\":" << metrics.scheduler_tick_count << ","
+      << "\"batchParticipationCount\":" << metrics.batch_participation_count
+      << ","
+      << "\"decodeFirstTickCount\":" << metrics.decode_first_tick_count << ","
+      << "\"chunkedPrefillTickCount\":" << metrics.chunked_prefill_tick_count
+      << ","
+      << "\"mixedWorkloadTickCount\":" << metrics.mixed_workload_tick_count
+      << "}";
   return out.str();
 }
 
@@ -54,7 +67,9 @@ EMSCRIPTEN_KEEPALIVE
 int CE_Init(const char *model_path, int n_ctx, int n_batch, int n_ubatch,
             int n_seq_max, int n_threads, int n_threads_batch, int gpu_layers,
             int flash_attention, int kv_unified, int max_cached_sessions,
-            int retained_prefix_tokens) {
+            int retained_prefix_tokens, int prefill_chunk_size,
+            int scheduler_policy, int decode_token_reserve,
+            int adaptive_prefill_chunking) {
   std::lock_guard<std::mutex> lock(g_apiMutex);
 
   if (!model_path || std::strlen(model_path) == 0) {
@@ -78,6 +93,10 @@ int CE_Init(const char *model_path, int n_ctx, int n_batch, int n_ubatch,
       .kv_unified = kv_unified,
       .max_cached_sessions = max_cached_sessions,
       .retained_prefix_tokens = retained_prefix_tokens,
+      .prefill_chunk_size = prefill_chunk_size,
+      .scheduler_policy = scheduler_policy,
+      .decode_token_reserve = decode_token_reserve,
+      .adaptive_prefill_chunking = adaptive_prefill_chunking,
   };
 
   const int init_status = CE_InitPlugin(model_path, &config);
@@ -135,6 +154,39 @@ int CE_StreamPrompt(const char *context_key, const char *prompt, int n_tokens,
     return kStatusInvalidArguments;
   }
   return CE_StreamPromptQuery(context_key, prompt, n_tokens, on_token);
+}
+
+EMSCRIPTEN_KEEPALIVE
+CE_RequestId CE_EnqueuePrompt(const char *context_key, const char *prompt,
+                              int n_tokens, CE_TokenCallback on_token) {
+  std::lock_guard<std::mutex> lock(g_apiMutex);
+  if (!g_isEngineInitialized) {
+    return 0;
+  }
+  if (prompt == nullptr || !is_valid_prediction_tokens(n_tokens)) {
+    return 0;
+  }
+
+  return CE_EnqueuePromptQuery(context_key, prompt, n_tokens, on_token);
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_RunQueuedRequestJson(CE_RequestId request_id) {
+  std::lock_guard<std::mutex> lock(g_apiMutex);
+  if (!g_isEngineInitialized) {
+    return duplicate_heap_string(
+        "{\"requestId\":0,\"completed\":false,\"failed\":true,"
+        "\"outputText\":\"\",\"errorMessage\":\"Engine is not initialized.\","
+        "\"perf\":null}");
+  }
+  if (request_id == 0) {
+    return duplicate_heap_string(
+        "{\"requestId\":0,\"completed\":false,\"failed\":true,"
+        "\"outputText\":\"\",\"errorMessage\":\"Invalid request id.\","
+        "\"perf\":null}");
+  }
+
+  return duplicate_heap_string(CE_RunQueuedPromptJsonString(request_id));
 }
 
 EMSCRIPTEN_KEEPALIVE

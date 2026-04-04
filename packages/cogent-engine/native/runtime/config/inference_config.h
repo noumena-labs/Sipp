@@ -11,6 +11,8 @@
 
 #include <cstdint>
 
+#include "runtime/config/scheduler_policy.h"
+
 namespace noumena::cogentengine {
 
 struct InferenceRuntimeConfig {
@@ -25,6 +27,8 @@ struct InferenceRuntimeConfig {
   int32_t kv_unified = -1;
   int32_t max_cached_sessions = 8;
   int32_t retained_prefix_tokens = 100;
+  int32_t prefill_chunk_size = 0;
+  SchedulerPolicyConfig scheduler_policy{};
 };
 
 } // namespace noumena::cogentengine

@@ -8,6 +8,8 @@
 
 #include "runtime/request/request_queue.h"
 
+#include <chrono>
+
 namespace noumena::cogentengine {
 
 bool RequestQueue::Push(GenerateRequest request) {
@@ -17,6 +19,17 @@ bool RequestQueue::Push(GenerateRequest request) {
   }
 
   request.lifecycle = GenerateRequestLifecycle::Pending;
+  request.enqueued_at = std::chrono::steady_clock::now();
+  request.has_admitted_at = false;
+  request.has_first_token_at = false;
+  request.has_last_token_at = false;
+  request.has_completed_at = false;
+  request.emitted_token_count = 0;
+  request.accumulated_itl_ms = 0.0;
+  request.tail_itl_ms = 0.0;
+  request.decode_first_tick_count = 0;
+  request.chunked_prefill_tick_count = 0;
+  request.mixed_workload_tick_count = 0;
   requests_.emplace(request_id, std::move(request));
   pending_request_ids_.push_back(request_id);
   return true;
@@ -32,6 +45,8 @@ std::optional<GenerateRequestId> RequestQueue::TryPopNext() {
 
   if (GenerateRequest *request = FindMutable(request_id)) {
     request->lifecycle = GenerateRequestLifecycle::Admitted;
+    request->admitted_at = std::chrono::steady_clock::now();
+    request->has_admitted_at = true;
   }
 
   return request_id;

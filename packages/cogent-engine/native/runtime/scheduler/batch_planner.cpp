@@ -114,6 +114,123 @@ BatchPlanner::BuildSharedBatch(const std::vector<SlotState *> &runnable_slots,
   return plan;
 }
 
+SharedBatchPlan BatchPlanner::BuildPolicyBatch(
+    const std::vector<SlotState *> &decode_slots,
+    const std::vector<SlotState *> &prefill_slots,
+    const SchedulerTickBudget &budget,
+    int32_t prefill_chunk_size) const {
+  SharedBatchPlan plan;
+  if (budget.total_token_budget <= 0) {
+    return plan;
+  }
+
+  plan.contributions.reserve(
+      static_cast<std::size_t>(std::max<int32_t>(1, budget.total_token_budget)));
+
+  int32_t remaining_decode_budget = budget.EffectiveDecodeBudget();
+  int32_t remaining_prefill_budget = budget.EffectivePrefillBudget();
+
+  // Phase 4 algorithm steps:
+  // 1. Spend decode reservation first so decode-ready slots are not delayed
+  //    behind long prompt-prefill work.
+  // 2. Admit at most one decode contribution per slot for the first Phase 4
+  //    policy pass.
+  // 3. Spend only the remaining budget on prefill work.
+  // 4. Clamp each prefill slot to prefill_chunk_size when chunking is enabled.
+  // 5. Keep contribution order explicit; later metrics and fairness analysis
+  //    depend on knowing whether decode or prefill consumed the tick.
+  for (SlotState *slot : decode_slots) {
+    if (remaining_decode_budget <= 0 || slot == nullptr ||
+        slot->request == nullptr || slot->generated_tokens.empty()) {
+      continue;
+    }
+
+    BatchContribution contribution;
+    contribution.slot = slot;
+    contribution.kind = BatchContributionKind::Decode;
+    contribution.token = slot->generated_tokens.back();
+    contribution.position =
+        static_cast<int32_t>(slot->request->prompt_tokens.size() +
+                             slot->generated_tokens.size() - 1);
+    contribution.request_logits = false;
+    plan.contributions.push_back(contribution);
+    plan.decode_token_count++;
+    remaining_decode_budget--;
+  }
+
+  for (SlotState *slot : prefill_slots) {
+    if (remaining_prefill_budget <= 0 || slot == nullptr ||
+        slot->request == nullptr) {
+      continue;
+    }
+
+    const auto &prompt_tokens = slot->request->prompt_tokens;
+    if (slot->prefill_cursor >= prompt_tokens.size()) {
+      continue;
+    }
+
+    const std::size_t slot_contribution_start = plan.contributions.size();
+    const int32_t slot_chunk_budget =
+        prefill_chunk_size > 0
+            ? std::min<int32_t>(prefill_chunk_size, remaining_prefill_budget)
+            : remaining_prefill_budget;
+
+    int32_t remaining_slot_budget = slot_chunk_budget;
+    for (std::size_t token_index = slot->prefill_cursor;
+         token_index < prompt_tokens.size() && remaining_slot_budget > 0;
+         ++token_index) {
+      BatchContribution contribution;
+      contribution.slot = slot;
+      contribution.kind = BatchContributionKind::Prefill;
+      contribution.token = prompt_tokens[token_index];
+      contribution.position = static_cast<int32_t>(token_index);
+      contribution.request_logits = false;
+      plan.contributions.push_back(contribution);
+      plan.prefill_token_count++;
+      remaining_slot_budget--;
+      remaining_prefill_budget--;
+      if (remaining_prefill_budget <= 0) {
+        break;
+      }
+    }
+
+    if (plan.contributions.size() > slot_contribution_start) {
+      plan.contributions.back().request_logits = false;
+    }
+  }
+
+  int32_t selected_logit_index = -1;
+  for (std::size_t i = 0; i < plan.contributions.size(); ++i) {
+    if (plan.contributions[i].kind == BatchContributionKind::Decode) {
+      selected_logit_index = static_cast<int32_t>(i);
+      break;
+    }
+  }
+  if (selected_logit_index < 0 && !plan.contributions.empty()) {
+    selected_logit_index =
+        static_cast<int32_t>(plan.contributions.size() - 1);
+  }
+  if (selected_logit_index >= 0) {
+    plan.contributions[static_cast<std::size_t>(selected_logit_index)]
+        .request_logits = true;
+  }
+
+  std::vector<const SlotState *> occupied_slots;
+  occupied_slots.reserve(plan.contributions.size());
+  for (const auto &contribution : plan.contributions) {
+    if (contribution.slot == nullptr) {
+      continue;
+    }
+    if (std::find(occupied_slots.begin(), occupied_slots.end(),
+                  contribution.slot) == occupied_slots.end()) {
+      occupied_slots.push_back(contribution.slot);
+    }
+  }
+  plan.occupied_slot_count = static_cast<int32_t>(occupied_slots.size());
+
+  return plan;
+}
+
 void BatchPlanner::ApplyDecodeResults(const SharedBatchPlan &plan) const {
   for (const auto &contribution : plan.contributions) {
     SlotState *slot = contribution.slot;

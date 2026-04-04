@@ -67,6 +67,34 @@ std::string json_escape(const char *value) {
 
 std::string json_bool(bool value) { return value ? "true" : "false"; }
 
+std::string prompt_perf_to_json(
+    const noumena::cogentengine::PromptPerfStats &perf) {
+  std::ostringstream out;
+  out << "{"
+      << "\"totalMs\":" << perf.total_ms << ","
+      << "\"promptEvalMs\":" << perf.prompt_eval_ms << ","
+      << "\"decodeEvalMs\":" << perf.decode_eval_ms << ","
+      << "\"sampleMs\":" << perf.sample_ms << ","
+      << "\"queueDelayMs\":" << perf.queue_delay_ms << ","
+      << "\"ttftMs\":" << perf.ttft_ms << ","
+      << "\"meanItlMs\":" << perf.mean_itl_ms << ","
+      << "\"tailItlMs\":" << perf.tail_itl_ms << ","
+      << "\"e2elMs\":" << perf.e2e_ms << ","
+      << "\"inputTokenCount\":" << perf.input_token_count << ","
+      << "\"promptEvalTokens\":" << perf.prompt_eval_tokens << ","
+      << "\"decodeEvalCount\":" << perf.decode_eval_count << ","
+      << "\"sampleCount\":" << perf.sample_count << ","
+      << "\"outputTokenCount\":" << perf.output_token_count << ","
+      << "\"schedulerTickCount\":" << perf.scheduler_tick_count << ","
+      << "\"batchParticipationCount\":" << perf.batch_participation_count << ","
+      << "\"decodeFirstTickCount\":" << perf.decode_first_tick_count << ","
+      << "\"chunkedPrefillTickCount\":" << perf.chunked_prefill_tick_count
+      << ","
+      << "\"mixedWorkloadTickCount\":" << perf.mixed_workload_tick_count
+      << "}";
+  return out.str();
+}
+
 std::string generate_response_to_json(
     const noumena::cogentengine::GenerateResponse &response) {
   std::ostringstream out;
@@ -88,7 +116,7 @@ std::string generate_response_to_json(
   } else {
     out << "null";
   }
-  out << "}";
+  out << ",\"perf\":" << prompt_perf_to_json(response.perf) << "}";
   return out.str();
 }
 
@@ -122,6 +150,19 @@ int CE_InitPlugin(const char *model_path, const CE_InitConfig *config) {
     runtime_config.retained_prefix_tokens = config->retained_prefix_tokens >= 0
                                                 ? config->retained_prefix_tokens
                                                 : 100;
+    runtime_config.prefill_chunk_size =
+        config->prefill_chunk_size >= 0 ? config->prefill_chunk_size : 0;
+    runtime_config.scheduler_policy.mode =
+        config->scheduler_policy <= 0
+            ? noumena::cogentengine::SchedulerPolicyMode::LatencyFirst
+            : (config->scheduler_policy == 2
+                   ? noumena::cogentengine::SchedulerPolicyMode::
+                         ThroughputFirst
+                   : noumena::cogentengine::SchedulerPolicyMode::Balanced);
+    runtime_config.scheduler_policy.decode_token_reserve =
+        config->decode_token_reserve >= 0 ? config->decode_token_reserve : 1;
+    runtime_config.scheduler_policy.enable_adaptive_prefill_chunking =
+        config->adaptive_prefill_chunking > 0;
   }
 
   auto runtime = std::make_shared<InferenceRuntime>(model_path, runtime_config);
@@ -157,11 +198,23 @@ int CE_GetLastPromptPerf(CE_PromptPerfMetrics *out_metrics) {
   out_metrics->prompt_eval_ms = perf_stats.prompt_eval_ms;
   out_metrics->decode_eval_ms = perf_stats.decode_eval_ms;
   out_metrics->sample_ms = perf_stats.sample_ms;
+  out_metrics->queue_delay_ms = perf_stats.queue_delay_ms;
+  out_metrics->ttft_ms = perf_stats.ttft_ms;
+  out_metrics->mean_itl_ms = perf_stats.mean_itl_ms;
+  out_metrics->tail_itl_ms = perf_stats.tail_itl_ms;
+  out_metrics->e2e_ms = perf_stats.e2e_ms;
   out_metrics->input_token_count = perf_stats.input_token_count;
   out_metrics->prompt_eval_tokens = perf_stats.prompt_eval_tokens;
   out_metrics->decode_eval_count = perf_stats.decode_eval_count;
   out_metrics->sample_count = perf_stats.sample_count;
   out_metrics->output_token_count = perf_stats.output_token_count;
+  out_metrics->scheduler_tick_count = perf_stats.scheduler_tick_count;
+  out_metrics->batch_participation_count = perf_stats.batch_participation_count;
+  out_metrics->decode_first_tick_count = perf_stats.decode_first_tick_count;
+  out_metrics->chunked_prefill_tick_count =
+      perf_stats.chunked_prefill_tick_count;
+  out_metrics->mixed_workload_tick_count =
+      perf_stats.mixed_workload_tick_count;
   return 0;
 }
 

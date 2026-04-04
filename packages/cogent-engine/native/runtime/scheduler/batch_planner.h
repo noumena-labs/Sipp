@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "llama.h"
+#include "runtime/config/scheduler_policy.h"
 #include "runtime/scheduler/slot_state.h"
 
 namespace noumena::cogentengine {
@@ -42,6 +43,10 @@ class BatchPlanner {
 public:
   SharedBatchPlan BuildSharedBatch(const std::vector<SlotState *> &runnable_slots,
                                    int32_t max_batch_tokens) const;
+  SharedBatchPlan BuildPolicyBatch(const std::vector<SlotState *> &decode_slots,
+                                   const std::vector<SlotState *> &prefill_slots,
+                                   const SchedulerTickBudget &budget,
+                                   int32_t prefill_chunk_size) const;
   void ApplyDecodeResults(const SharedBatchPlan &plan) const;
 };
 
