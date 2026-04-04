@@ -2,14 +2,14 @@
 //
 // session_store.h
 //
-// - Owns reusable llama contexts and their LRU eviction state.
+// - Owns reusable logical sequence state and its LRU eviction state.
 //
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 #pragma once
 
 #include <cstddef>
-#include <functional>
+#include <deque>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -18,31 +18,42 @@
 
 namespace noumena::cogentengine {
 
-struct ContextState {
-  struct llama_context* ctx = nullptr;
+struct SequenceState {
+  llama_seq_id seq_id = -1;
   std::vector<llama_token> current_kv_tokens;
   int n_past = 0;
+  std::size_t pin_count = 0;
 };
 
 class SessionStore {
 public:
-  explicit SessionStore(size_t max_cached_contexts = 8);
+  explicit SessionStore(size_t max_cached_contexts = 8,
+                        size_t max_sequences = 1);
   ~SessionStore();
 
-  ContextState* Find(const std::string& context_key);
-  ContextState& GetOrCreateSession(
-      const std::string& context_key,
-      const std::function<llama_context*()>& create_context);
-  ContextState& Emplace(const std::string& context_key, ContextState state);
-  void Touch(const std::string& context_key);
-  void Remove(const std::string& context_key);
+  void BindSharedContext(struct llama_context *shared_context);
+
+  SequenceState *Find(const std::string &context_key);
+  SequenceState &GetOrCreateSession(const std::string &context_key);
+  SequenceState &Emplace(const std::string &context_key, SequenceState state);
+  void Touch(const std::string &context_key);
+  void Pin(SequenceState &sequence_state);
+  void Unpin(SequenceState &sequence_state);
+  void Remove(const std::string &context_key);
   void EnforceLimitBeforeInsert();
   void Clear();
 
 private:
-  std::unordered_map<std::string, ContextState> context_states_;
+  void ClearSequenceMemory(llama_seq_id seq_id) const;
+  llama_seq_id AcquireSeqId();
+  void ReleaseSeqId(llama_seq_id seq_id);
+
+  std::unordered_map<std::string, SequenceState> context_states_;
   std::vector<std::string> context_usage_order_;
+  std::deque<llama_seq_id> free_seq_ids_;
+  struct llama_context *shared_context_ = nullptr;
   size_t max_cached_contexts_ = 8;
+  size_t max_sequences_ = 1;
 };
 
-}  // namespace noumena::cogentengine
+} // namespace noumena::cogentengine

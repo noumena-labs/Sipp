@@ -13,16 +13,19 @@
 
 namespace noumena::cogentengine {
 
-void SlotScheduler::SetContextFactory(ContextFactory context_factory) {
-  context_factory_ = std::move(context_factory);
-}
-
 void SlotState::ResetToIdle() {
+  if (sampler != nullptr) {
+    llama_sampler_free(sampler);
+  }
   phase = SlotPhase::Idle;
+  seq_id = -1;
   request_id = 0;
   request = nullptr;
   session = nullptr;
   prefill_cursor = 0;
+  decode_step_count = 0;
+  batch_participation_count = 0;
+  scheduler_tick_count = 0;
   generated_tokens.clear();
   output_text.clear();
   buffered_output_text.clear();
@@ -31,12 +34,16 @@ void SlotState::ResetToIdle() {
 }
 
 void SlotState::AttachRequest(GenerateRequest &request_ref,
-                              ContextState &session_ref) {
+                              SequenceState &session_ref) {
+  seq_id = session_ref.seq_id;
   request_id = request_ref.id;
   request = &request_ref;
   session = &session_ref;
   phase = SlotPhase::Admitted;
   prefill_cursor = 0;
+  decode_step_count = 0;
+  batch_participation_count = 0;
+  scheduler_tick_count = 0;
   generated_tokens.clear();
   output_text.clear();
   buffered_output_text.clear();
@@ -47,11 +54,13 @@ void SlotScheduler::Resize(std::size_t slot_count) {
   slots_.resize(slot_count);
   for (std::size_t i = 0; i < slots_.size(); ++i) {
     slots_[i].slot_id = i;
+    slots_[i].seq_id = static_cast<llama_seq_id>(i);
     if (slots_[i].phase == SlotPhase::Idle && slots_[i].request == nullptr) {
       continue;
     }
     slots_[i].ResetToIdle();
     slots_[i].slot_id = i;
+    slots_[i].seq_id = static_cast<llama_seq_id>(i);
   }
 }
 
@@ -65,11 +74,34 @@ SlotState *SlotScheduler::FindFirstActiveSlot() {
   return active_slot_it == slots_.end() ? nullptr : &(*active_slot_it);
 }
 
+std::vector<SlotState *> SlotScheduler::SelectRunnableSlots() {
+  std::vector<SlotState *> runnable_slots;
+  runnable_slots.reserve(slots_.size());
+
+  for (SlotState &slot : slots_) {
+    if (slot.request == nullptr || slot.session == nullptr ||
+        slot.session->seq_id < 0) {
+      continue;
+    }
+    if (slot.phase != SlotPhase::Prefill && slot.phase != SlotPhase::Decode &&
+        slot.phase != SlotPhase::Streaming) {
+      continue;
+    }
+
+    // - Dense-prefill ordering and decode reservation policy belong in
+    //   BatchPlanner.
+    // - This selector stays focused on "which slots are runnable at all".
+    runnable_slots.push_back(&slot);
+  }
+
+  return runnable_slots;
+}
+
 void SlotScheduler::Tick(RequestQueue &request_queue,
                          SessionStore &session_store) {
   AdmitPendingRequests(request_queue, session_store);
   AdvanceActiveSlot();
-  FinalizeCompletedSlots(request_queue);
+  FinalizeCompletedSlots(request_queue, session_store);
 }
 
 bool SlotScheduler::AdmitPendingRequests(RequestQueue &request_queue,
@@ -93,11 +125,8 @@ bool SlotScheduler::AdmitPendingRequests(RequestQueue &request_queue,
     return false;
   }
 
-  ContextState &session = session_store.GetOrCreateSession(
-      request->context_key, [this]() -> llama_context * {
-        return context_factory_ ? context_factory_() : nullptr;
-      });
-  if (session.ctx == nullptr) {
+  SequenceState &session = session_store.GetOrCreateSession(request->context_key);
+  if (session.seq_id < 0) {
     session_store.Remove(request->context_key);
 
     GenerateResponse response;
@@ -108,6 +137,7 @@ bool SlotScheduler::AdmitPendingRequests(RequestQueue &request_queue,
     return false;
   }
 
+  session_store.Pin(session);
   idle_slot_it->AttachRequest(*request, session);
   idle_slot_it->phase = SlotPhase::Prefill;
   return true;
@@ -120,10 +150,11 @@ bool SlotScheduler::AdvanceActiveSlot() {
   }
 
   SlotState &slot = *active_slot;
+  slot.scheduler_tick_count++;
   GenerateRequest *request = slot.request;
-  ContextState *session = slot.session;
+  SequenceState *session = slot.session;
 
-  if (request == nullptr || session == nullptr || session->ctx == nullptr) {
+  if (request == nullptr || session == nullptr || session->seq_id < 0) {
     if (request != nullptr) {
       request->lifecycle = GenerateRequestLifecycle::Failed;
     }
@@ -191,7 +222,8 @@ bool SlotScheduler::AdvanceActiveSlot() {
   return false;
 }
 
-void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue) {
+void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue,
+                                          SessionStore &session_store) {
   for (SlotState &slot : slots_) {
     if (slot.phase != SlotPhase::Completed && slot.phase != SlotPhase::Failed) {
       continue;
@@ -209,6 +241,9 @@ void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue) {
                                    : slot.terminal_error_message;
     }
 
+    if (slot.session != nullptr) {
+      session_store.Unpin(*slot.session);
+    }
     request_queue.MarkCompleted(std::move(response));
     slot.ResetToIdle();
   }
@@ -232,12 +267,16 @@ void SlotScheduler::EmitBufferedTokenPiece(SlotState &slot) {
 }
 
 void SlotScheduler::FailActiveRequest(RequestQueue &request_queue,
+                                      SessionStore &session_store,
                                       SlotState &slot,
                                       std::string error_message) {
   GenerateResponse response;
   response.request_id = slot.request_id;
   response.status = GenerateResponseStatus::Failed;
   response.error_message = std::move(error_message);
+  if (slot.session != nullptr) {
+    session_store.Unpin(*slot.session);
+  }
   request_queue.MarkCompleted(std::move(response));
   slot.ResetToIdle();
 }

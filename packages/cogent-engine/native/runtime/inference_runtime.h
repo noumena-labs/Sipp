@@ -15,7 +15,9 @@
 #include <string>
 
 #include "runtime/config/inference_config.h"
+#include "runtime/llama/llama_batch_builder.h"
 #include "runtime/request/request_queue.h"
+#include "runtime/scheduler/batch_planner.h"
 #include "runtime/scheduler/slot_scheduler.h"
 #include "runtime/session/session_store.h"
 
@@ -34,6 +36,13 @@ struct PromptPerfStats {
   int32_t decode_eval_count = 0;
   int32_t sample_count = 0;
   int32_t output_token_count = 0;
+};
+
+struct SharedBatchRuntimeStats {
+  std::uint64_t tick_count = 0;
+  std::uint64_t total_occupied_slots = 0;
+  std::uint64_t total_prefill_tokens = 0;
+  std::uint64_t total_decode_tokens = 0;
 };
 
 class InferenceRuntime {
@@ -57,22 +66,28 @@ public:
                                 GenerateResponse &out_response);
 
 private:
-  bool EnsureContextSpace(ContextState &state, int new_tokens_needed,
+  bool EnsureContextSpace(SequenceState &state, int new_tokens_needed,
                           int n_ctx);
   bool ExecutePromptTokensLocked(const std::string &context_key,
                                  const std::vector<llama_token> &prompt_tokens,
                                  int n_tokens_predict,
                                  TokenCallback on_token_received);
+  bool RunSharedBatchTickLocked();
+  void UpdateSharedBatchMetricsLocked(const SharedBatchPlan &plan);
   llama_context *CreateContext() const;
 
   InferenceRuntimeConfig config_;
   llama_model *primary_model_ = nullptr;
+  llama_context *shared_context_ = nullptr;
   llama_sampler *sampler_ = nullptr;
   PromptPerfStats last_prompt_perf_;
   bool has_last_prompt_perf_ = false;
   SessionStore session_store_;
   RequestQueue request_queue_;
   SlotScheduler slot_scheduler_;
+  BatchPlanner batch_planner_;
+  LlamaBatchBuilder shared_batch_builder_;
+  SharedBatchRuntimeStats shared_batch_stats_;
   GenerateRequestId next_request_id_ = 1;
   mutable std::mutex operation_mutex_;
 };

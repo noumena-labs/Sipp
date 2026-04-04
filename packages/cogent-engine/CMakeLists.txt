@@ -92,8 +92,10 @@ endif()
 set(PLUGIN_SOURCES
     ${CMAKE_SOURCE_DIR}/native/runtime/inference_runtime.cpp
     ${CMAKE_SOURCE_DIR}/native/runtime/request/request_queue.cpp
+    ${CMAKE_SOURCE_DIR}/native/runtime/scheduler/batch_planner.cpp
     ${CMAKE_SOURCE_DIR}/native/runtime/scheduler/slot_scheduler.cpp
     ${CMAKE_SOURCE_DIR}/native/runtime/session/session_store.cpp
+    ${CMAKE_SOURCE_DIR}/native/runtime/llama/llama_batch_builder.cpp
     ${CMAKE_SOURCE_DIR}/native/runtime/llama/llama_utils.cpp
     ${CMAKE_SOURCE_DIR}/native/api/engine_bridge.cpp
     ${CMAKE_SOURCE_DIR}/native/api/wasm_exports.cpp
