@@ -32,9 +32,11 @@ typedef struct CE_InitConfig {
   int32_t scheduler_policy;
   int32_t decode_token_reserve;
   int32_t adaptive_prefill_chunking;
+  int32_t enable_runtime_observability;
+  int32_t enable_backend_profiling;
 } CE_InitConfig;
 
-typedef struct CE_PromptPerfMetrics {
+typedef struct CE_RuntimeObservabilityMetrics {
   double total_ms;
   double prompt_eval_ms;
   double decode_eval_ms;
@@ -58,4 +60,4 @@ typedef struct CE_PromptPerfMetrics {
   int32_t prefix_cache_restore_tokens;
   int32_t prefix_cache_hit_count;
   int32_t prefix_cache_store_count;
-} CE_PromptPerfMetrics;
+} CE_RuntimeObservabilityMetrics;

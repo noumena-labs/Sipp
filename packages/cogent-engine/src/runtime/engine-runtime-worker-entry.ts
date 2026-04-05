@@ -2,7 +2,7 @@ import { CogentConfig } from '../cogent-config.js';
 import { MainThreadEngineRuntime } from './engine-runtime-main-thread.js';
 import {
   GenerateRequestId,
-  TransportInfo,
+  TransportObservability,
 } from '../types.js';
 import {
   WorkerRequestMessage,
@@ -10,7 +10,7 @@ import {
   WorkerSerializableCogentConfig,
   WorkerLoadModelResult,
   WorkerRunQueuedRequestResult,
-  WorkerBackendInfoResult,
+  WorkerBackendObservabilityResult,
 } from './engine-runtime-worker-protocol.js';
 
 interface BufferedTokenState {
@@ -27,19 +27,19 @@ let workerConfig: WorkerSerializableCogentConfig | null = null;
 const requestAbortControllers = new Map<GenerateRequestId, AbortController>();
 const bufferedTokens = new Map<GenerateRequestId, BufferedTokenState>();
 
-const transportInfo: TransportInfo = {
+const transportObservability: TransportObservability = {
   executionMode: 'worker',
   workerBacked: true,
-  backpressureEnabled: true,
-  maxBufferedTokenCount: DEFAULT_MAX_BUFFERED_TOKENS,
+  enabled: false,
+  bufferedTokenLimit: DEFAULT_MAX_BUFFERED_TOKENS,
   flushIntervalMs: DEFAULT_FLUSH_INTERVAL_MS,
   flushCount: 0,
   coalescedTokenCount: 0,
   maxObservedBufferedTokenCount: 0,
 };
 
-function cloneTransportInfo(): TransportInfo {
-  return { ...transportInfo };
+function cloneTransportObservability(): TransportObservability {
+  return { ...transportObservability };
 }
 
 function toErrorMessage(error: unknown): string {
@@ -74,12 +74,14 @@ function flushBufferedTokens(requestId: GenerateRequestId): void {
     bufferedTokenCount: state.tokenCount,
   };
   self.postMessage(payload);
-  transportInfo.flushCount += 1;
-  transportInfo.coalescedTokenCount += state.tokenCount;
-  transportInfo.maxObservedBufferedTokenCount = Math.max(
-    transportInfo.maxObservedBufferedTokenCount,
-    state.tokenCount
-  );
+  if (transportObservability.enabled) {
+    transportObservability.flushCount += 1;
+    transportObservability.coalescedTokenCount += state.tokenCount;
+    transportObservability.maxObservedBufferedTokenCount = Math.max(
+      transportObservability.maxObservedBufferedTokenCount,
+      state.tokenCount
+    );
+  }
   state.text = '';
   state.tokenCount = 0;
 }
@@ -98,7 +100,7 @@ function bufferTokenPiece(requestId: GenerateRequestId, token: string): void {
   state.text += token;
   state.tokenCount += 1;
 
-  if (state.tokenCount >= transportInfo.maxBufferedTokenCount) {
+  if (state.tokenCount >= transportObservability.bufferedTokenLimit) {
     flushBufferedTokens(requestId);
     return;
   }
@@ -106,7 +108,7 @@ function bufferTokenPiece(requestId: GenerateRequestId, token: string): void {
   if (state.timer == null) {
     state.timer = self.setTimeout(() => {
       flushBufferedTokens(requestId);
-    }, transportInfo.flushIntervalMs);
+    }, transportObservability.flushIntervalMs);
   }
 }
 
@@ -120,9 +122,9 @@ function releaseRequestResources(requestId: GenerateRequestId): void {
 }
 
 function buildEngineConfig(config: WorkerSerializableCogentConfig): CogentConfig {
-  transportInfo.maxBufferedTokenCount =
+  transportObservability.bufferedTokenLimit =
     config.workerMaxBufferedTokens ?? DEFAULT_MAX_BUFFERED_TOKENS;
-  transportInfo.flushIntervalMs =
+  transportObservability.flushIntervalMs =
     config.workerTokenFlushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS;
 
   return {
@@ -161,7 +163,7 @@ async function handleLoadModelUrl(
   return {
     modelPath,
     modelLoadInfo: runtime.getLastModelLoadInfo(),
-    transportInfo: cloneTransportInfo(),
+    transportObservability: cloneTransportObservability(),
   };
 }
 
@@ -185,7 +187,7 @@ async function handleLoadModelFile(
   return {
     modelPath,
     modelLoadInfo: runtime.getLastModelLoadInfo(),
-    transportInfo: cloneTransportInfo(),
+    transportObservability: cloneTransportObservability(),
   };
 }
 
@@ -200,7 +202,7 @@ async function handleLoadModelBuffer(
   return {
     modelPath,
     modelLoadInfo: runtime.getLastModelLoadInfo(),
-    transportInfo: cloneTransportInfo(),
+    transportObservability: cloneTransportObservability(),
   };
 }
 
@@ -234,8 +236,8 @@ async function handleRunQueuedRequest(
     flushBufferedTokens(message.requestId);
     return {
       response,
-      lastPromptPerformance: runtime.getLastPromptPerformance(),
-      transportInfo: cloneTransportInfo(),
+      runtimeObservability: runtime.getRuntimeObservability(),
+      transportObservability: cloneTransportObservability(),
     };
   } finally {
     releaseRequestResources(message.requestId);
@@ -251,16 +253,16 @@ async function handleCancelRequest(
   return cancelled;
 }
 
-async function handleGetBackendInfo(): Promise<WorkerBackendInfoResult> {
+async function handleGetBackendObservability(): Promise<WorkerBackendObservabilityResult> {
   const runtime = ensureEngine();
   return {
-    backendInfo: await runtime.getBackendInfo(),
-    transportInfo: cloneTransportInfo(),
+    backendObservability: await runtime.getBackendObservability(),
+    transportObservability: cloneTransportObservability(),
   };
 }
 
-async function handleGetTransportInfo(): Promise<TransportInfo> {
-  return cloneTransportInfo();
+async function handleGetTransportObservability(): Promise<TransportObservability> {
+  return cloneTransportObservability();
 }
 
 async function handleGetLastModelLoadInfo() {
@@ -297,6 +299,8 @@ self.onmessage = async (event: MessageEvent<WorkerRequestMessage>) => {
         break;
       case 'init-engine':
         value = await ensureEngine().initEngine(message.modelPath, message.config);
+        transportObservability.enabled = message.config?.enableRuntimeObservability === true
+          || message.config?.enableBackendProfiling === true;
         break;
       case 'queue-prompt':
         value = await handleQueuePrompt(message);
@@ -307,11 +311,11 @@ self.onmessage = async (event: MessageEvent<WorkerRequestMessage>) => {
       case 'cancel-request':
         value = await handleCancelRequest(message);
         break;
-      case 'get-backend-info':
-        value = await handleGetBackendInfo();
+      case 'get-backend-observability':
+        value = await handleGetBackendObservability();
         break;
-      case 'get-transport-info':
-        value = await handleGetTransportInfo();
+      case 'get-transport-observability':
+        value = await handleGetTransportObservability();
         break;
       case 'get-last-model-load-info':
         value = await handleGetLastModelLoadInfo();

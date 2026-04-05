@@ -7,7 +7,7 @@ import {
 } from '../storage/browser-model-cache.js';
 import { formatPromptText } from '../core/prompt-format.js';
 import {
-  BackendInfo,
+  BackendObservability,
   EngineExecutionMode,
   GenerateRequest,
   GenerateRequestId,
@@ -16,9 +16,9 @@ import {
   ModelLoadInfo,
   ModelLoadSourceKind,
   ModelLoadReuseMode,
-  PromptPerformanceStats,
   PromptOptions,
-  TransportInfo,
+  RuntimeObservabilityMetrics,
+  TransportObservability,
 } from '../types.js';
 import { EngineRuntime } from './engine-runtime.js';
 
@@ -96,11 +96,13 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private queuedPromptCallbackPtrs = new Map<GenerateRequestId, number>();
   private queuedPromptCallbackErrors = new Map<GenerateRequestId, unknown>();
   private lastModelLoadInfo: ModelLoadInfo | null = null;
-  private readonly transportInfo: TransportInfo = {
+  private runtimeObservabilityEnabled = false;
+  private backendProfilingEnabled = false;
+  private readonly transportObservability: TransportObservability = {
     executionMode: 'main-thread',
     workerBacked: false,
-    backpressureEnabled: false,
-    maxBufferedTokenCount: 0,
+    enabled: false,
+    bufferedTokenLimit: 0,
     flushIntervalMs: 0,
     flushCount: 0,
     coalescedTokenCount: 0,
@@ -208,8 +210,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return this.lastModelLoadInfo;
   }
 
-  public getTransportInfo(): TransportInfo {
-    return { ...this.transportInfo };
+  public getTransportObservability(): TransportObservability {
+    return { ...this.transportObservability };
   }
 
   private normalizeTokenCount(nTokens: number): number {
@@ -680,11 +682,17 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     }
 
     const normalizedConfig = normalizeInitConfig(config);
+    this.runtimeObservabilityEnabled =
+      normalizedConfig.enableRuntimeObservability > 0;
+    this.backendProfilingEnabled = normalizedConfig.enableBackendProfiling > 0;
+    this.transportObservability.enabled = this.runtimeObservabilityEnabled;
     const result = await module.ccall(
       'CE_Init',
       'number',
       [
         'string',
+        'number',
+        'number',
         'number',
         'number',
         'number',
@@ -722,6 +730,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         normalizedConfig.schedulerPolicy,
         normalizedConfig.decodeTokenReserve,
         normalizedConfig.adaptivePrefillChunking,
+        normalizedConfig.enableRuntimeObservability,
+        normalizedConfig.enableBackendProfiling,
       ],
       { async: true }
     );
@@ -744,6 +754,9 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.releaseAllQueuedPromptCallbacks(module);
     this.engineInitialized = false;
     this.loadedModelPath = null;
+    this.runtimeObservabilityEnabled = false;
+    this.backendProfilingEnabled = false;
+    this.transportObservability.enabled = false;
     this.module = null;
     this.initPromise = null;
   }
@@ -918,11 +931,15 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return response.outputText;
   }
 
-  public getLastPromptPerformance(): PromptPerformanceStats | null {
+  public getRuntimeObservability(): RuntimeObservabilityMetrics | null {
+    if (!this.runtimeObservabilityEnabled) {
+      return null;
+    }
+
     const module = this.getReadyEngineModule();
-    const ptrResult = module.ccall('CE_GetLastPromptPerfJson', 'number', [], []);
+    const ptrResult = module.ccall('CE_GetRuntimeObservabilityJson', 'number', [], []);
     if (ptrResult instanceof Promise) {
-      throw new Error('Unexpected async result while reading prompt performance stats.');
+      throw new Error('Unexpected async result while reading runtime observability.');
     }
     const ptr = ptrResult;
 
@@ -932,20 +949,17 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
     try {
       const raw = module.UTF8ToString(ptr);
-      return JSON.parse(raw) as PromptPerformanceStats;
+      return JSON.parse(raw) as RuntimeObservabilityMetrics;
     } catch (error) {
-      throw new Error(`Failed to parse prompt performance stats: ${asErrorMessage(error)}`);
+      throw new Error(`Failed to parse runtime observability: ${asErrorMessage(error)}`);
     } finally {
       module._CE_FreeString(ptr);
     }
   }
 
-  public async getBackendInfo(): Promise<BackendInfo | null> {
+  public async getBackendObservability(): Promise<BackendObservability | null> {
     const module = this.getLoadedModule();
-    // WebGPU backend enumeration is not a pure metadata read on the web path.
-    // ggml-webgpu may need to touch emdawnwebgpu adapter/device creation while
-    // building its backend/device list, which can suspend under JSPI.
-    const ptr = await module.ccall('CE_GetBackendInfoJson', 'number', [], [], {
+    const ptr = await module.ccall('CE_GetBackendObservabilityJson', 'number', [], [], {
       async: true,
     });
 
@@ -955,9 +969,11 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
     try {
       const raw = module.UTF8ToString(ptr);
-      return JSON.parse(raw) as BackendInfo;
+      const parsed = JSON.parse(raw) as BackendObservability;
+      parsed.profilingEnabled = this.backendProfilingEnabled;
+      return parsed;
     } catch (error) {
-      throw new Error(`Failed to parse backend info: ${asErrorMessage(error)}`);
+      throw new Error(`Failed to parse backend observability: ${asErrorMessage(error)}`);
     } finally {
       module._CE_FreeString(ptr);
     }

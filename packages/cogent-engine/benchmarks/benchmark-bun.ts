@@ -5,11 +5,11 @@ import { fileURLToPath } from 'node:url';
 
 import { CogentEngine, getBundledRuntimeUrls } from '../dist/esm/index.js';
 import type {
-  BackendInfo,
+  BackendObservability,
   FlashAttentionMode,
   InferenceInitConfig,
   PromptFormatMode,
-  PromptPerformanceStats,
+  RuntimeObservabilityMetrics,
   SchedulerPolicyMode,
 } from '../src/types.js';
 
@@ -74,7 +74,7 @@ interface BenchmarkRun {
   outputTokenCount: number | null;
   outputLength: number;
   outputPreview: string;
-  perf: PromptPerformanceStats | null;
+  runtimeObservability: RuntimeObservabilityMetrics | null;
 }
 
 interface ServingBenchmarkSummary {
@@ -181,7 +181,7 @@ interface RuntimeMemoryUsage {
 }
 
 interface BenchmarkReport {
-  schemaVersion: 'cogent.benchmark.bun.v6';
+  schemaVersion: 'cogent.benchmark.bun.v7';
   generatedAt: string;
   benchmark: {
     script: string;
@@ -244,11 +244,11 @@ interface BenchmarkBackendProfile {
   runtimeBackendStatus: RuntimeBackendStatus;
   gpuOffloadSupported: boolean | null;
   availableBackends: string[];
-  backendRegistries: BackendInfo['availableBackends'];
+  backendRegistries: BackendObservability['availableBackends'];
   runtimeDeviceCount: number;
   runtimeAcceleratorDeviceCount: number;
   runtimeDeviceLabels: string[];
-  runtimeDevices: BackendInfo['devices'];
+  runtimeDevices: BackendObservability['devices'];
   hostAdapter: {
     apiAvailable: boolean;
     adapterAvailable: boolean;
@@ -558,12 +558,12 @@ function summarizeOptional(values: Array<number | null>): BenchmarkSummary | nul
   return filtered.length === 0 ? null : summarize(filtered);
 }
 
-function averagePerfMetric(
-  perfRuns: Array<PromptPerformanceStats | null>,
-  metric: (perf: PromptPerformanceStats) => number
+function averageRuntimeObservabilityMetric(
+  observabilityRuns: Array<RuntimeObservabilityMetrics | null>,
+  metric: (metrics: RuntimeObservabilityMetrics) => number
 ): number | null {
-  const values = perfRuns
-    .filter((perf): perf is PromptPerformanceStats => perf !== null)
+  const values = observabilityRuns
+    .filter((metrics): metrics is RuntimeObservabilityMetrics => metrics !== null)
     .map(metric)
     .filter((value) => Number.isFinite(value) && value >= 0);
 
@@ -576,11 +576,11 @@ function averagePerfMetric(
 }
 
 function summarizeThroughput(
-  perfRuns: Array<PromptPerformanceStats | null>,
-  metric: (perf: PromptPerformanceStats) => number | null
+  observabilityRuns: Array<RuntimeObservabilityMetrics | null>,
+  metric: (metrics: RuntimeObservabilityMetrics) => number | null
 ): number | null {
-  const values = perfRuns
-    .filter((perf): perf is PromptPerformanceStats => perf !== null)
+  const values = observabilityRuns
+    .filter((metrics): metrics is RuntimeObservabilityMetrics => metrics !== null)
     .map(metric)
     .filter((value): value is number => value != null && value > 0);
 
@@ -592,20 +592,20 @@ function summarizeThroughput(
   return round(total / values.length);
 }
 
-function promptTokensPerSecond(perf: PromptPerformanceStats): number | null {
+function promptTokensPerSecond(metrics: RuntimeObservabilityMetrics): number | null {
   // Effective prefill throughput based on llama.cpp perf counters, not end-to-end wall time.
-  if (perf.promptEvalMs <= 0 || perf.promptEvalTokens <= 0) {
+  if (metrics.promptEvalMs <= 0 || metrics.promptEvalTokens <= 0) {
     return null;
   }
-  return (perf.promptEvalTokens * 1000) / perf.promptEvalMs;
+  return (metrics.promptEvalTokens * 1000) / metrics.promptEvalMs;
 }
 
-function decodeTokensPerSecond(perf: PromptPerformanceStats): number | null {
+function decodeTokensPerSecond(metrics: RuntimeObservabilityMetrics): number | null {
   // Effective decode throughput based on llama.cpp perf counters, not end-to-end wall time.
-  if (perf.decodeEvalMs <= 0 || perf.outputTokenCount <= 0) {
+  if (metrics.decodeEvalMs <= 0 || metrics.outputTokenCount <= 0) {
     return null;
   }
-  return (perf.outputTokenCount * 1000) / perf.decodeEvalMs;
+  return (metrics.outputTokenCount * 1000) / metrics.decodeEvalMs;
 }
 
 function captureMemoryUsage(): RuntimeMemoryUsage {
@@ -618,7 +618,7 @@ function captureMemoryUsage(): RuntimeMemoryUsage {
   };
 }
 
-function formatRuntimeDeviceLabel(device: BackendInfo['devices'][number]): string {
+function formatRuntimeDeviceLabel(device: BackendObservability['devices'][number]): string {
   const detail = device.description || device.name || device.backendName || device.type;
   return `${device.backendName}:${detail}`;
 }
@@ -627,7 +627,7 @@ function inferRequestedExecutionMode(initConfig: InferenceInitConfig): Requested
   return initConfig.nGpuLayers === 0 ? 'cpu-only' : 'gpu-offload';
 }
 
-function inferRuntimeBackendStatus(runtimeBackend: BackendInfo | null): RuntimeBackendStatus {
+function inferRuntimeBackendStatus(runtimeBackend: BackendObservability | null): RuntimeBackendStatus {
   if (runtimeBackend == null) {
     return 'unknown';
   }
@@ -645,7 +645,7 @@ function inferRuntimeBackendStatus(runtimeBackend: BackendInfo | null): RuntimeB
 
 function inferExecutionBackend(
   requestedExecutionMode: RequestedExecutionMode,
-  runtimeBackend: BackendInfo | null
+  runtimeBackend: BackendObservability | null
 ): InferredExecutionBackend {
   if (runtimeBackend == null) {
     return 'unknown';
@@ -662,7 +662,7 @@ function inferExecutionBackend(
 }
 
 function buildBenchmarkBackendProfile(
-  runtimeBackend: BackendInfo | null,
+  runtimeBackend: BackendObservability | null,
   initConfig: InferenceInitConfig,
   hostAdapter: {
     apiAvailable: boolean;
@@ -881,6 +881,8 @@ function buildPhase4BenchmarkConfig(initConfig: InferenceInitConfig): InferenceI
     ...initConfig,
     nSeqMax: Math.max(initConfig.nSeqMax ?? 1, 2),
     maxCachedSessions: Math.max(initConfig.maxCachedSessions ?? 8, 2),
+    enableRuntimeObservability: true,
+    enableBackendProfiling: true,
   };
 }
 
@@ -923,17 +925,18 @@ async function runPromptBenchmark(
     });
 
     const wallMs = round(nowMs() - start);
-    const perf = engine.getLastPromptPerformance();
-    if (output.length === 0 && perf == null) {
+    const runtimeObservability = engine.getRuntimeObservability();
+    if (output.length === 0 && runtimeObservability == null) {
       throw new Error(
-        `Prompt run "${label}" returned empty output and no perf payload. The runtime likely failed to create or execute the request context.`
+        `Prompt run "${label}" returned empty output and no runtime observability payload. The runtime likely failed to create or execute the request context.`
       );
     }
 
     // Prefer the native output token counter when available, but fall back to the
     // observed stream callback count so the benchmark still works if perf payloads
     // are unavailable or partially missing.
-    const outputTokenCount = perf?.outputTokenCount ?? tokenEventTimes.length;
+    const outputTokenCount =
+      runtimeObservability?.outputTokenCount ?? tokenEventTimes.length;
     const itlMsValues: number[] = [];
     for (let tokenIndex = 1; tokenIndex < tokenEventTimes.length; tokenIndex++) {
       itlMsValues.push(round(tokenEventTimes[tokenIndex] - tokenEventTimes[tokenIndex - 1]));
@@ -952,12 +955,12 @@ async function runPromptBenchmark(
       ttftMs,
       tpotMs,
       itlMsValues,
-      inputTokenCount: perf?.inputTokenCount ?? null,
-      promptEvalTokenCount: perf?.promptEvalTokens ?? null,
+      inputTokenCount: runtimeObservability?.inputTokenCount ?? null,
+      promptEvalTokenCount: runtimeObservability?.promptEvalTokens ?? null,
       outputTokenCount,
       outputLength: output.length,
       outputPreview: output.slice(0, OUTPUT_PREVIEW_LIMIT).replace(/\s+/g, ' ').trim(),
-      perf,
+      runtimeObservability,
     });
   }
 
@@ -1022,14 +1025,15 @@ async function runQueuedMixedLoadPair(
     tokenEventTimes: number[],
     response: Awaited<ReturnType<CogentEngine['runQueuedRequest']>>
   ): BenchmarkRun => {
-    const perf = response.perf ?? null;
-    const outputTokenCount = perf?.outputTokenCount ?? tokenEventTimes.length;
+    const runtimeObservability = response.runtimeObservability ?? null;
+    const outputTokenCount =
+      runtimeObservability?.outputTokenCount ?? tokenEventTimes.length;
     const itlMsValues: number[] = [];
     for (let tokenIndex = 1; tokenIndex < tokenEventTimes.length; tokenIndex += 1) {
       itlMsValues.push(round(tokenEventTimes[tokenIndex] - tokenEventTimes[tokenIndex - 1]));
     }
 
-    const effectiveTtftMs = ttftMs ?? perf?.ttftMs ?? null;
+    const effectiveTtftMs = ttftMs ?? runtimeObservability?.ttftMs ?? null;
     const tpotMs =
       effectiveTtftMs != null && outputTokenCount > 1
         ? round((wallMs - effectiveTtftMs) / (outputTokenCount - 1))
@@ -1042,15 +1046,15 @@ async function runQueuedMixedLoadPair(
       ttftMs: effectiveTtftMs,
       tpotMs,
       itlMsValues,
-      inputTokenCount: perf?.inputTokenCount ?? null,
-      promptEvalTokenCount: perf?.promptEvalTokens ?? null,
+      inputTokenCount: runtimeObservability?.inputTokenCount ?? null,
+      promptEvalTokenCount: runtimeObservability?.promptEvalTokens ?? null,
       outputTokenCount,
       outputLength: response.outputText.length,
       outputPreview: response.outputText
         .slice(0, OUTPUT_PREVIEW_LIMIT)
         .replace(/\s+/g, ' ')
         .trim(),
-      perf,
+      runtimeObservability,
     };
   };
 
@@ -1135,7 +1139,7 @@ function summarizeGroup(
   runs: BenchmarkRun[],
   benchmarkDurationMs: number
 ): BenchmarkGroupSummary {
-  const perfRuns = runs.map((run) => run.perf);
+  const observabilityRuns = runs.map((run) => run.runtimeObservability);
   const totalInputTokens = runs.reduce((acc, run) => acc + (run.inputTokenCount ?? 0), 0);
   const totalGeneratedTokens = runs.reduce((acc, run) => acc + (run.outputTokenCount ?? 0), 0);
   const totalItls = runs.flatMap((run) => run.itlMsValues);
@@ -1163,41 +1167,86 @@ function summarizeGroup(
       e2elMs: summarize(runs.map((run) => run.wallMs)),
     },
     runtime: {
-      avgLogicalInputTokenCount: averagePerfMetric(perfRuns, (perf) => perf.inputTokenCount),
-      avgPromptEvalTokens: averagePerfMetric(perfRuns, (perf) => perf.promptEvalTokens),
-      avgTotalMs: averagePerfMetric(perfRuns, (perf) => perf.totalMs),
-      avgPromptEvalMs: averagePerfMetric(perfRuns, (perf) => perf.promptEvalMs),
-      avgDecodeEvalMs: averagePerfMetric(perfRuns, (perf) => perf.decodeEvalMs),
-      avgSampleMs: averagePerfMetric(perfRuns, (perf) => perf.sampleMs),
-      avgOutputTokenCount: averagePerfMetric(perfRuns, (perf) => perf.outputTokenCount),
-      avgQueueDelayMs: averagePerfMetric(perfRuns, (perf) => perf.queueDelayMs),
-      avgTailItlMs: averagePerfMetric(perfRuns, (perf) => perf.tailItlMs),
-      avgSchedulerTickCount: averagePerfMetric(perfRuns, (perf) => perf.schedulerTickCount),
-      avgBatchParticipationCount: averagePerfMetric(
-        perfRuns,
-        (perf) => perf.batchParticipationCount
+      avgLogicalInputTokenCount: averageRuntimeObservabilityMetric(
+        observabilityRuns,
+        (metrics) => metrics.inputTokenCount
       ),
-      avgDecodeFirstTickCount: averagePerfMetric(
-        perfRuns,
-        (perf) => perf.decodeFirstTickCount
+      avgPromptEvalTokens: averageRuntimeObservabilityMetric(
+        observabilityRuns,
+        (metrics) => metrics.promptEvalTokens
       ),
-      avgChunkedPrefillTickCount: averagePerfMetric(
-        perfRuns,
-        (perf) => perf.chunkedPrefillTickCount
+      avgTotalMs: averageRuntimeObservabilityMetric(
+        observabilityRuns,
+        (metrics) => metrics.totalMs
       ),
-      avgMixedWorkloadTickCount: averagePerfMetric(
-        perfRuns,
-        (perf) => perf.mixedWorkloadTickCount
+      avgPromptEvalMs: averageRuntimeObservabilityMetric(
+        observabilityRuns,
+        (metrics) => metrics.promptEvalMs
       ),
-      avgLcpReuseTokens: averagePerfMetric(perfRuns, (perf) => perf.lcpReuseTokens),
-      avgPrefixCacheRestoreTokens: averagePerfMetric(
-        perfRuns,
-        (perf) => perf.prefixCacheRestoreTokens
+      avgDecodeEvalMs: averageRuntimeObservabilityMetric(
+        observabilityRuns,
+        (metrics) => metrics.decodeEvalMs
       ),
-      avgPrefixCacheHitCount: averagePerfMetric(perfRuns, (perf) => perf.prefixCacheHitCount),
-      avgPrefixCacheStoreCount: averagePerfMetric(perfRuns, (perf) => perf.prefixCacheStoreCount),
-      promptEvalTokensPerSecond: summarizeThroughput(perfRuns, promptTokensPerSecond),
-      outputTokensPerSecond: summarizeThroughput(perfRuns, decodeTokensPerSecond),
+      avgSampleMs: averageRuntimeObservabilityMetric(
+        observabilityRuns,
+        (metrics) => metrics.sampleMs
+      ),
+      avgOutputTokenCount: averageRuntimeObservabilityMetric(
+        observabilityRuns,
+        (metrics) => metrics.outputTokenCount
+      ),
+      avgQueueDelayMs: averageRuntimeObservabilityMetric(
+        observabilityRuns,
+        (metrics) => metrics.queueDelayMs
+      ),
+      avgTailItlMs: averageRuntimeObservabilityMetric(
+        observabilityRuns,
+        (metrics) => metrics.tailItlMs
+      ),
+      avgSchedulerTickCount: averageRuntimeObservabilityMetric(
+        observabilityRuns,
+        (metrics) => metrics.schedulerTickCount
+      ),
+      avgBatchParticipationCount: averageRuntimeObservabilityMetric(
+        observabilityRuns,
+        (metrics) => metrics.batchParticipationCount
+      ),
+      avgDecodeFirstTickCount: averageRuntimeObservabilityMetric(
+        observabilityRuns,
+        (metrics) => metrics.decodeFirstTickCount
+      ),
+      avgChunkedPrefillTickCount: averageRuntimeObservabilityMetric(
+        observabilityRuns,
+        (metrics) => metrics.chunkedPrefillTickCount
+      ),
+      avgMixedWorkloadTickCount: averageRuntimeObservabilityMetric(
+        observabilityRuns,
+        (metrics) => metrics.mixedWorkloadTickCount
+      ),
+      avgLcpReuseTokens: averageRuntimeObservabilityMetric(
+        observabilityRuns,
+        (metrics) => metrics.lcpReuseTokens
+      ),
+      avgPrefixCacheRestoreTokens: averageRuntimeObservabilityMetric(
+        observabilityRuns,
+        (metrics) => metrics.prefixCacheRestoreTokens
+      ),
+      avgPrefixCacheHitCount: averageRuntimeObservabilityMetric(
+        observabilityRuns,
+        (metrics) => metrics.prefixCacheHitCount
+      ),
+      avgPrefixCacheStoreCount: averageRuntimeObservabilityMetric(
+        observabilityRuns,
+        (metrics) => metrics.prefixCacheStoreCount
+      ),
+      promptEvalTokensPerSecond: summarizeThroughput(
+        observabilityRuns,
+        promptTokensPerSecond
+      ),
+      outputTokensPerSecond: summarizeThroughput(
+        observabilityRuns,
+        decodeTokensPerSecond
+      ),
     },
   };
 }
@@ -1489,7 +1538,7 @@ async function main(): Promise<void> {
           nGpuLayers: 0,
         }
       : effectiveInitConfig;
-  const runtimeBackend = await startup.engine.getBackendInfo();
+  const runtimeBackend = await startup.engine.getBackendObservability();
   const backendProfile = buildBenchmarkBackendProfile(runtimeBackend, runtimeInitConfig, {
     apiAvailable: false,
     adapterAvailable: false,
@@ -1543,7 +1592,7 @@ async function main(): Promise<void> {
   }
 
   const report: BenchmarkReport = {
-    schemaVersion: 'cogent.benchmark.bun.v6',
+    schemaVersion: 'cogent.benchmark.bun.v7',
     generatedAt: new Date().toISOString(),
     benchmark: {
       script: 'packages/cogent-engine/benchmarks/benchmark-bun.ts',

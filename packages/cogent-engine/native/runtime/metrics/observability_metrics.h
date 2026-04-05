@@ -1,10 +1,9 @@
 /////////////////////////////////////////////////////////////////////////////////////////////////
 //
-// perf_counters.h
+// observability_metrics.h
 //
-// - Runtime perf counter DTOs.
-// - Phase 4 adds scheduler-facing latency/fairness counters here before they
-//   are exposed through the benchmark surface.
+// - Runtime observability DTOs.
+// - These metrics are optional and should stay outside the core inference contract.
 //
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -14,7 +13,7 @@
 
 namespace noumena::cogentengine {
 
-struct PromptPerfStats {
+struct RuntimeObservabilityMetrics {
   double total_ms = 0.0;
   double prompt_eval_ms = 0.0;
   double decode_eval_ms = 0.0;
@@ -40,14 +39,14 @@ struct PromptPerfStats {
   int32_t prefix_cache_store_count = 0;
 };
 
-struct SharedBatchRuntimeStats {
+struct SharedBatchObservabilityMetrics {
   std::uint64_t tick_count = 0;
   std::uint64_t total_occupied_slots = 0;
   std::uint64_t total_prefill_tokens = 0;
   std::uint64_t total_decode_tokens = 0;
 };
 
-struct SchedulerPerfCounters {
+struct SchedulerObservabilityMetrics {
   std::uint64_t tick_count = 0;
   std::uint64_t decode_first_tick_count = 0;
   std::uint64_t chunked_prefill_tick_count = 0;

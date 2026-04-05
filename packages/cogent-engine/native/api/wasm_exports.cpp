@@ -31,7 +31,8 @@ char *duplicate_heap_string(const std::string &value) {
   return out;
 }
 
-std::string prompt_perf_to_json(const CE_PromptPerfMetrics &metrics) {
+std::string runtime_observability_to_json(
+    const CE_RuntimeObservabilityMetrics &metrics) {
   std::ostringstream out;
   out << "{"
       << "\"totalMs\":" << metrics.total_ms << ","
@@ -76,7 +77,8 @@ int CE_Init(const char *model_path, int n_ctx, int n_batch, int n_ubatch,
             int retained_prefix_tokens, int prefill_chunk_size,
             int prefix_cache_interval_tokens, int max_prefix_cache_entries,
             int scheduler_policy, int decode_token_reserve,
-            int adaptive_prefill_chunking) {
+            int adaptive_prefill_chunking, int enable_runtime_observability,
+            int enable_backend_profiling) {
   std::lock_guard<std::mutex> lock(g_apiMutex);
 
   if (!model_path || std::strlen(model_path) == 0) {
@@ -106,6 +108,8 @@ int CE_Init(const char *model_path, int n_ctx, int n_batch, int n_ubatch,
       .scheduler_policy = scheduler_policy,
       .decode_token_reserve = decode_token_reserve,
       .adaptive_prefill_chunking = adaptive_prefill_chunking,
+      .enable_runtime_observability = enable_runtime_observability,
+      .enable_backend_profiling = enable_backend_profiling,
   };
 
   const int init_status = CE_InitPlugin(model_path, &config);
@@ -130,25 +134,25 @@ void CE_Close() {
 }
 
 EMSCRIPTEN_KEEPALIVE
-char *CE_GetLastPromptPerfJson() {
+char *CE_GetRuntimeObservabilityJson() {
   std::lock_guard<std::mutex> lock(g_apiMutex);
 
   if (!g_isEngineInitialized) {
     return nullptr;
   }
 
-  CE_PromptPerfMetrics metrics{};
-  if (CE_GetLastPromptPerf(&metrics) != 0) {
+  CE_RuntimeObservabilityMetrics metrics{};
+  if (CE_GetRuntimeObservability(&metrics) != 0) {
     return nullptr;
   }
 
-  return duplicate_heap_string(prompt_perf_to_json(metrics));
+  return duplicate_heap_string(runtime_observability_to_json(metrics));
 }
 
 EMSCRIPTEN_KEEPALIVE
-char *CE_GetBackendInfoJson() {
+char *CE_GetBackendObservabilityJson() {
   std::lock_guard<std::mutex> lock(g_apiMutex);
-  return duplicate_heap_string(CE_GetBackendInfoJsonString());
+  return duplicate_heap_string(CE_GetBackendObservabilityJsonString());
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -173,14 +177,14 @@ char *CE_RunQueuedRequestJson(CE_RequestId request_id) {
         "{\"requestId\":0,\"completed\":false,\"failed\":true,"
         "\"cancelled\":false,"
         "\"outputText\":\"\",\"errorMessage\":\"Engine is not initialized.\","
-        "\"perf\":null}");
+        "\"runtimeObservability\":null}");
   }
   if (request_id == 0) {
     return duplicate_heap_string(
         "{\"requestId\":0,\"completed\":false,\"failed\":true,"
         "\"cancelled\":false,"
         "\"outputText\":\"\",\"errorMessage\":\"Invalid request id.\","
-        "\"perf\":null}");
+        "\"runtimeObservability\":null}");
   }
 
   return duplicate_heap_string(CE_RunQueuedRequestJsonString(request_id));

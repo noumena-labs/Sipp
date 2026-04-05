@@ -379,47 +379,52 @@ void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue,
       request.completed_at = std::chrono::steady_clock::now();
       request.has_completed_at = true;
 
-      response.perf.queue_delay_ms =
+      response.runtime_observability.queue_delay_ms =
           request.has_admitted_at
               ? duration_ms(request.enqueued_at, request.admitted_at)
               : 0.0;
-      response.perf.ttft_ms =
+      response.runtime_observability.ttft_ms =
           request.has_first_token_at
               ? duration_ms(request.enqueued_at, request.first_token_at)
               : 0.0;
-      response.perf.mean_itl_ms =
+      response.runtime_observability.mean_itl_ms =
           request.emitted_token_count > 1
               ? request.accumulated_itl_ms /
                     static_cast<double>(request.emitted_token_count - 1)
               : 0.0;
-      response.perf.tail_itl_ms = request.tail_itl_ms;
-      response.perf.e2e_ms =
+      response.runtime_observability.tail_itl_ms = request.tail_itl_ms;
+      response.runtime_observability.e2e_ms =
           duration_ms(request.enqueued_at, request.completed_at);
-      response.perf.total_ms = response.perf.e2e_ms;
-      response.perf.input_token_count =
+      response.runtime_observability.total_ms =
+          response.runtime_observability.e2e_ms;
+      response.runtime_observability.input_token_count =
           static_cast<int32_t>(request.prompt_tokens.size());
-      response.perf.output_token_count =
+      response.runtime_observability.output_token_count =
           slot.generated_tokens.empty()
               ? request.emitted_token_count
               : static_cast<int32_t>(slot.generated_tokens.size());
-      response.perf.scheduler_tick_count =
+      response.runtime_observability.scheduler_tick_count =
           static_cast<int32_t>(slot.scheduler_tick_count);
-      response.perf.batch_participation_count =
+      response.runtime_observability.batch_participation_count =
           static_cast<int32_t>(slot.batch_participation_count);
-      response.perf.decode_eval_count =
+      response.runtime_observability.decode_eval_count =
           static_cast<int32_t>(slot.decode_step_count);
-      response.perf.sample_count = response.perf.output_token_count;
-      response.perf.decode_first_tick_count =
+      response.runtime_observability.sample_count =
+          response.runtime_observability.output_token_count;
+      response.runtime_observability.decode_first_tick_count =
           request.decode_first_tick_count;
-      response.perf.chunked_prefill_tick_count =
+      response.runtime_observability.chunked_prefill_tick_count =
           request.chunked_prefill_tick_count;
-      response.perf.mixed_workload_tick_count =
+      response.runtime_observability.mixed_workload_tick_count =
           request.mixed_workload_tick_count;
-      response.perf.lcp_reuse_tokens = request.lcp_reuse_tokens;
-      response.perf.prefix_cache_restore_tokens =
+      response.runtime_observability.lcp_reuse_tokens =
+          request.lcp_reuse_tokens;
+      response.runtime_observability.prefix_cache_restore_tokens =
           request.prefix_cache_restore_tokens;
-      response.perf.prefix_cache_hit_count = request.prefix_cache_hit_count;
-      response.perf.prefix_cache_store_count = request.prefix_cache_store_count;
+      response.runtime_observability.prefix_cache_hit_count =
+          request.prefix_cache_hit_count;
+      response.runtime_observability.prefix_cache_store_count =
+          request.prefix_cache_store_count;
     }
     if (response.status == GenerateResponseStatus::Cancelled) {
       response.error_message = "Request cancelled.";
@@ -490,45 +495,52 @@ void SlotScheduler::FailActiveRequest(RequestQueue &request_queue,
     GenerateRequest &request = *slot.request;
     request.completed_at = std::chrono::steady_clock::now();
     request.has_completed_at = true;
-    response.perf.queue_delay_ms =
+    response.runtime_observability.queue_delay_ms =
         request.has_admitted_at
             ? duration_ms(request.enqueued_at, request.admitted_at)
             : 0.0;
-    response.perf.ttft_ms =
+    response.runtime_observability.ttft_ms =
         request.has_first_token_at
             ? duration_ms(request.enqueued_at, request.first_token_at)
             : 0.0;
-    response.perf.mean_itl_ms =
+    response.runtime_observability.mean_itl_ms =
         request.emitted_token_count > 1
             ? request.accumulated_itl_ms /
                   static_cast<double>(request.emitted_token_count - 1)
             : 0.0;
-    response.perf.tail_itl_ms = request.tail_itl_ms;
-    response.perf.e2e_ms = duration_ms(request.enqueued_at, request.completed_at);
-    response.perf.total_ms = response.perf.e2e_ms;
-    response.perf.input_token_count =
+    response.runtime_observability.tail_itl_ms = request.tail_itl_ms;
+    response.runtime_observability.e2e_ms =
+        duration_ms(request.enqueued_at, request.completed_at);
+    response.runtime_observability.total_ms =
+        response.runtime_observability.e2e_ms;
+    response.runtime_observability.input_token_count =
         static_cast<int32_t>(request.prompt_tokens.size());
-    response.perf.output_token_count =
+    response.runtime_observability.output_token_count =
         slot.generated_tokens.empty()
             ? request.emitted_token_count
             : static_cast<int32_t>(slot.generated_tokens.size());
-    response.perf.scheduler_tick_count =
+    response.runtime_observability.scheduler_tick_count =
         static_cast<int32_t>(slot.scheduler_tick_count);
-    response.perf.batch_participation_count =
+    response.runtime_observability.batch_participation_count =
         static_cast<int32_t>(slot.batch_participation_count);
-    response.perf.decode_eval_count =
+    response.runtime_observability.decode_eval_count =
         static_cast<int32_t>(slot.decode_step_count);
-    response.perf.sample_count = response.perf.output_token_count;
-    response.perf.decode_first_tick_count = request.decode_first_tick_count;
-    response.perf.chunked_prefill_tick_count =
+    response.runtime_observability.sample_count =
+        response.runtime_observability.output_token_count;
+    response.runtime_observability.decode_first_tick_count =
+        request.decode_first_tick_count;
+    response.runtime_observability.chunked_prefill_tick_count =
         request.chunked_prefill_tick_count;
-    response.perf.mixed_workload_tick_count =
+    response.runtime_observability.mixed_workload_tick_count =
         request.mixed_workload_tick_count;
-    response.perf.lcp_reuse_tokens = request.lcp_reuse_tokens;
-    response.perf.prefix_cache_restore_tokens =
+    response.runtime_observability.lcp_reuse_tokens =
+        request.lcp_reuse_tokens;
+    response.runtime_observability.prefix_cache_restore_tokens =
         request.prefix_cache_restore_tokens;
-    response.perf.prefix_cache_hit_count = request.prefix_cache_hit_count;
-    response.perf.prefix_cache_store_count = request.prefix_cache_store_count;
+    response.runtime_observability.prefix_cache_hit_count =
+        request.prefix_cache_hit_count;
+    response.runtime_observability.prefix_cache_store_count =
+        request.prefix_cache_store_count;
   }
   if (slot.session != nullptr) {
     session_store.Unpin(*slot.session);

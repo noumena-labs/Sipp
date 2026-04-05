@@ -16,7 +16,7 @@
 
 #include "runtime/config/inference_config.h"
 #include "runtime/llama/llama_batch_builder.h"
-#include "runtime/metrics/perf_counters.h"
+#include "runtime/metrics/observability_metrics.h"
 #include "runtime/request/request_queue.h"
 #include "runtime/scheduler/batch_planner.h"
 #include "runtime/scheduler/slot_scheduler.h"
@@ -38,7 +38,9 @@ public:
   ~InferenceRuntime();
 
   bool IsReady() const;
-  bool TryGetLastPromptPerf(PromptPerfStats &out) const;
+  bool TryGetRuntimeObservability(RuntimeObservabilityMetrics &out) const;
+  bool RuntimeObservabilityEnabled() const;
+  bool BackendProfilingEnabled() const;
 
   bool Prompt(std::string context_key, std::string prompt, int n_tokens_predict,
               TokenCallback on_token_received = {});
@@ -72,23 +74,23 @@ private:
   bool RunSharedBatchTickLocked();
   bool RunPolicyBatchTickLocked();
   void UpdateSharedBatchMetricsLocked(const SharedBatchPlan &plan);
-  void UpdateSchedulerPerfCountersLocked(const SharedBatchPlan &plan,
-                                         const SchedulerTickBudget &budget);
+  void UpdateSchedulerObservabilityLocked(const SharedBatchPlan &plan,
+                                          const SchedulerTickBudget &budget);
   llama_context *CreateContext() const;
 
   InferenceRuntimeConfig config_;
   llama_model *primary_model_ = nullptr;
   llama_context *shared_context_ = nullptr;
   llama_sampler *sampler_ = nullptr;
-  PromptPerfStats last_prompt_perf_;
-  bool has_last_prompt_perf_ = false;
+  RuntimeObservabilityMetrics last_runtime_observability_;
+  bool has_last_runtime_observability_ = false;
   SessionStore session_store_;
   RequestQueue request_queue_;
   SlotScheduler slot_scheduler_;
   BatchPlanner batch_planner_;
   LlamaBatchBuilder shared_batch_builder_;
-  SharedBatchRuntimeStats shared_batch_stats_;
-  SchedulerPerfCounters scheduler_perf_counters_;
+  SharedBatchObservabilityMetrics shared_batch_observability_;
+  SchedulerObservabilityMetrics scheduler_observability_;
   PrefixStateCache prefix_state_cache_;
   PrefixCachePolicy prefix_cache_policy_;
   GenerateRequestId next_request_id_ = 1;

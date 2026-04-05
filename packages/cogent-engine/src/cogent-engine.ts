@@ -3,14 +3,14 @@ import { MainThreadEngineRuntime } from './runtime/engine-runtime-main-thread.js
 import { EngineRuntime } from './runtime/engine-runtime.js';
 import { WorkerEngineRuntime } from './runtime/engine-runtime-worker.js';
 import {
-  BackendInfo,
+  BackendObservability,
   GenerateRequestId,
   GenerateResponse,
   InferenceInitConfig,
   ModelLoadInfo,
-  PromptPerformanceStats,
   PromptOptions,
-  TransportInfo,
+  RuntimeObservabilityMetrics,
+  TransportObservability,
 } from './types.js';
 
 function shouldUseWorker(config: CogentConfig): boolean {
@@ -47,8 +47,8 @@ export class CogentEngine {
     return this.runtime.getLastModelLoadInfo();
   }
 
-  public getTransportInfo(): TransportInfo {
-    return this.runtime.getTransportInfo();
+  public getTransportObservability(): TransportObservability {
+    return this.runtime.getTransportObservability();
   }
 
   public async initModule(): Promise<void> {
@@ -127,11 +127,11 @@ export class CogentEngine {
     return this.runtime.submitPrompt(contextKey, promptText, options);
   }
 
-  public getLastPromptPerformance(): PromptPerformanceStats | null {
-    return this.runtime.getLastPromptPerformance();
+  public getRuntimeObservability(): RuntimeObservabilityMetrics | null {
+    return this.runtime.getRuntimeObservability();
   }
 
-  public async getBackendInfo(): Promise<BackendInfo | null> {
-    return this.runtime.getBackendInfo();
+  public async getBackendObservability(): Promise<BackendObservability | null> {
+    return this.runtime.getBackendObservability();
   }
 }

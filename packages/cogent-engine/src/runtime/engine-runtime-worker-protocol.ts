@@ -1,12 +1,12 @@
 import {
-  BackendInfo,
+  BackendObservability,
   GenerateRequestId,
   GenerateResponse,
   InferenceInitConfig,
   ModelLoadInfo,
-  PromptPerformanceStats,
   PromptOptions,
-  TransportInfo,
+  RuntimeObservabilityMetrics,
+  TransportObservability,
 } from '../types.js';
 
 export interface WorkerSerializableCogentConfig {
@@ -79,11 +79,11 @@ export type WorkerRequestMessage =
       requestId: GenerateRequestId;
     }
   | {
-      kind: 'get-backend-info';
+      kind: 'get-backend-observability';
       callId: number;
     }
   | {
-      kind: 'get-transport-info';
+      kind: 'get-transport-observability';
       callId: number;
     }
   | {
@@ -122,16 +122,16 @@ export type WorkerResponseMessage =
 export interface WorkerLoadModelResult {
   modelPath: string;
   modelLoadInfo: ModelLoadInfo | null;
-  transportInfo: TransportInfo;
+  transportObservability: TransportObservability;
 }
 
 export interface WorkerRunQueuedRequestResult {
   response: GenerateResponse;
-  lastPromptPerformance: PromptPerformanceStats | null;
-  transportInfo: TransportInfo;
+  runtimeObservability: RuntimeObservabilityMetrics | null;
+  transportObservability: TransportObservability;
 }
 
-export interface WorkerBackendInfoResult {
-  backendInfo: BackendInfo | null;
-  transportInfo: TransportInfo;
+export interface WorkerBackendObservabilityResult {
+  backendObservability: BackendObservability | null;
+  transportObservability: TransportObservability;
 }

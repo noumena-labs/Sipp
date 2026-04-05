@@ -22,6 +22,8 @@ export interface NormalizedInitConfig {
   schedulerPolicy: number;
   decodeTokenReserve: number;
   adaptivePrefillChunking: number;
+  enableRuntimeObservability: number;
+  enableBackendProfiling: number;
 }
 
 const DEFAULT_VALUE = 0;
@@ -52,6 +54,10 @@ function normalizeOptionalBoolean(value: boolean | undefined): number {
   return value ? 1 : 0;
 }
 
+function normalizeRequiredBoolean(value: boolean | undefined): number {
+  return value ? 1 : 0;
+}
+
 function normalizeFlashAttention(value: FlashAttentionMode | undefined): number {
   if (value == null || value === 'auto') {
     return DEFAULT_FLASH_ATTENTION;
@@ -70,6 +76,12 @@ function normalizeSchedulerPolicy(value: SchedulerPolicyMode | undefined): numbe
 }
 
 export function normalizeInitConfig(config: InferenceInitConfig | undefined): NormalizedInitConfig {
+  const enableBackendProfiling = normalizeRequiredBoolean(
+    config?.enableBackendProfiling
+  );
+  const enableRuntimeObservability =
+    enableBackendProfiling || normalizeRequiredBoolean(config?.enableRuntimeObservability);
+
   return {
     nCtx: normalizeInteger('nCtx', config?.nCtx, 1),
     nBatch: normalizeInteger('nBatch', config?.nBatch, 1),
@@ -99,5 +111,7 @@ export function normalizeInitConfig(config: InferenceInitConfig | undefined): No
     schedulerPolicy: normalizeSchedulerPolicy(config?.schedulerPolicy),
     decodeTokenReserve: normalizeInteger('decodeTokenReserve', config?.decodeTokenReserve, 0),
     adaptivePrefillChunking: normalizeOptionalBoolean(config?.adaptivePrefillChunking),
+    enableRuntimeObservability,
+    enableBackendProfiling,
   };
 }

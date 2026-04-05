@@ -31,6 +31,8 @@ struct InferenceRuntimeConfig {
   int32_t prefix_cache_interval_tokens = 128;
   int32_t max_prefix_cache_entries = 32;
   SchedulerPolicyConfig scheduler_policy{};
+  int32_t enable_runtime_observability = 0;
+  int32_t enable_backend_profiling = 0;
 };
 
 } // namespace noumena::cogentengine

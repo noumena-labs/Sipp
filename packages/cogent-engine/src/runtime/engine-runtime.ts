@@ -1,14 +1,14 @@
 import { CogentConfig } from '../cogent-config.js';
 import {
-  BackendInfo,
+  BackendObservability,
   EngineExecutionMode,
   GenerateRequestId,
   GenerateResponse,
   InferenceInitConfig,
   ModelLoadInfo,
-  PromptPerformanceStats,
   PromptOptions,
-  TransportInfo,
+  RuntimeObservabilityMetrics,
+  TransportObservability,
 } from '../types.js';
 
 export type { CogentConfig };
@@ -16,7 +16,7 @@ export type { CogentConfig };
 export interface EngineRuntime {
   getExecutionMode(): EngineExecutionMode;
   getLastModelLoadInfo(): ModelLoadInfo | null;
-  getTransportInfo(): TransportInfo;
+  getTransportObservability(): TransportObservability;
   initModule(): Promise<void>;
   loadModelFromUrl(
     url: string,
@@ -57,6 +57,6 @@ export interface EngineRuntime {
     promptText: string,
     options?: number | PromptOptions
   ): Promise<string>;
-  getLastPromptPerformance(): PromptPerformanceStats | null;
-  getBackendInfo(): Promise<BackendInfo | null>;
+  getRuntimeObservability(): RuntimeObservabilityMetrics | null;
+  getBackendObservability(): Promise<BackendObservability | null>;
 }

@@ -67,36 +67,36 @@ std::string json_escape(const char *value) {
 
 std::string json_bool(bool value) { return value ? "true" : "false"; }
 
-std::string prompt_perf_to_json(
-    const noumena::cogentengine::PromptPerfStats &perf) {
+std::string runtime_observability_to_json(
+    const noumena::cogentengine::RuntimeObservabilityMetrics &metrics) {
   std::ostringstream out;
   out << "{"
-      << "\"totalMs\":" << perf.total_ms << ","
-      << "\"promptEvalMs\":" << perf.prompt_eval_ms << ","
-      << "\"decodeEvalMs\":" << perf.decode_eval_ms << ","
-      << "\"sampleMs\":" << perf.sample_ms << ","
-      << "\"queueDelayMs\":" << perf.queue_delay_ms << ","
-      << "\"ttftMs\":" << perf.ttft_ms << ","
-      << "\"meanItlMs\":" << perf.mean_itl_ms << ","
-      << "\"tailItlMs\":" << perf.tail_itl_ms << ","
-      << "\"e2elMs\":" << perf.e2e_ms << ","
-      << "\"inputTokenCount\":" << perf.input_token_count << ","
-      << "\"promptEvalTokens\":" << perf.prompt_eval_tokens << ","
-      << "\"decodeEvalCount\":" << perf.decode_eval_count << ","
-      << "\"sampleCount\":" << perf.sample_count << ","
-      << "\"outputTokenCount\":" << perf.output_token_count << ","
-      << "\"schedulerTickCount\":" << perf.scheduler_tick_count << ","
-      << "\"batchParticipationCount\":" << perf.batch_participation_count << ","
-      << "\"decodeFirstTickCount\":" << perf.decode_first_tick_count << ","
-      << "\"chunkedPrefillTickCount\":" << perf.chunked_prefill_tick_count
+      << "\"totalMs\":" << metrics.total_ms << ","
+      << "\"promptEvalMs\":" << metrics.prompt_eval_ms << ","
+      << "\"decodeEvalMs\":" << metrics.decode_eval_ms << ","
+      << "\"sampleMs\":" << metrics.sample_ms << ","
+      << "\"queueDelayMs\":" << metrics.queue_delay_ms << ","
+      << "\"ttftMs\":" << metrics.ttft_ms << ","
+      << "\"meanItlMs\":" << metrics.mean_itl_ms << ","
+      << "\"tailItlMs\":" << metrics.tail_itl_ms << ","
+      << "\"e2elMs\":" << metrics.e2e_ms << ","
+      << "\"inputTokenCount\":" << metrics.input_token_count << ","
+      << "\"promptEvalTokens\":" << metrics.prompt_eval_tokens << ","
+      << "\"decodeEvalCount\":" << metrics.decode_eval_count << ","
+      << "\"sampleCount\":" << metrics.sample_count << ","
+      << "\"outputTokenCount\":" << metrics.output_token_count << ","
+      << "\"schedulerTickCount\":" << metrics.scheduler_tick_count << ","
+      << "\"batchParticipationCount\":" << metrics.batch_participation_count << ","
+      << "\"decodeFirstTickCount\":" << metrics.decode_first_tick_count << ","
+      << "\"chunkedPrefillTickCount\":" << metrics.chunked_prefill_tick_count
       << ","
-      << "\"mixedWorkloadTickCount\":" << perf.mixed_workload_tick_count
+      << "\"mixedWorkloadTickCount\":" << metrics.mixed_workload_tick_count
       << ","
-      << "\"lcpReuseTokens\":" << perf.lcp_reuse_tokens << ","
-      << "\"prefixCacheRestoreTokens\":" << perf.prefix_cache_restore_tokens
+      << "\"lcpReuseTokens\":" << metrics.lcp_reuse_tokens << ","
+      << "\"prefixCacheRestoreTokens\":" << metrics.prefix_cache_restore_tokens
       << ","
-      << "\"prefixCacheHitCount\":" << perf.prefix_cache_hit_count << ","
-      << "\"prefixCacheStoreCount\":" << perf.prefix_cache_store_count
+      << "\"prefixCacheHitCount\":" << metrics.prefix_cache_hit_count << ","
+      << "\"prefixCacheStoreCount\":" << metrics.prefix_cache_store_count
       << "}";
   return out.str();
 }
@@ -126,7 +126,8 @@ std::string generate_response_to_json(
   } else {
     out << "null";
   }
-  out << ",\"perf\":" << prompt_perf_to_json(response.perf) << "}";
+  out << ",\"runtimeObservability\":"
+      << runtime_observability_to_json(response.runtime_observability) << "}";
   return out.str();
 }
 
@@ -179,6 +180,10 @@ int CE_InitPlugin(const char *model_path, const CE_InitConfig *config) {
         config->decode_token_reserve >= 0 ? config->decode_token_reserve : 1;
     runtime_config.scheduler_policy.enable_adaptive_prefill_chunking =
         config->adaptive_prefill_chunking > 0;
+    runtime_config.enable_runtime_observability =
+        config->enable_runtime_observability > 0 ? 1 : 0;
+    runtime_config.enable_backend_profiling =
+        config->enable_backend_profiling > 0 ? 1 : 0;
   }
 
   auto runtime = std::make_shared<InferenceRuntime>(model_path, runtime_config);
@@ -195,7 +200,7 @@ void CE_ClosePlugin() {
   g_engineRuntime.reset();
 }
 
-int CE_GetLastPromptPerf(CE_PromptPerfMetrics *out_metrics) {
+int CE_GetRuntimeObservability(CE_RuntimeObservabilityMetrics *out_metrics) {
   if (out_metrics == nullptr) {
     return kStatusError;
   }
@@ -205,45 +210,53 @@ int CE_GetLastPromptPerf(CE_PromptPerfMetrics *out_metrics) {
     return kStatusError;
   }
 
-  noumena::cogentengine::PromptPerfStats perf_stats;
-  if (!runtime->TryGetLastPromptPerf(perf_stats)) {
+  noumena::cogentengine::RuntimeObservabilityMetrics runtime_observability;
+  if (!runtime->TryGetRuntimeObservability(runtime_observability)) {
     return kStatusError;
   }
 
-  out_metrics->total_ms = perf_stats.total_ms;
-  out_metrics->prompt_eval_ms = perf_stats.prompt_eval_ms;
-  out_metrics->decode_eval_ms = perf_stats.decode_eval_ms;
-  out_metrics->sample_ms = perf_stats.sample_ms;
-  out_metrics->queue_delay_ms = perf_stats.queue_delay_ms;
-  out_metrics->ttft_ms = perf_stats.ttft_ms;
-  out_metrics->mean_itl_ms = perf_stats.mean_itl_ms;
-  out_metrics->tail_itl_ms = perf_stats.tail_itl_ms;
-  out_metrics->e2e_ms = perf_stats.e2e_ms;
-  out_metrics->input_token_count = perf_stats.input_token_count;
-  out_metrics->prompt_eval_tokens = perf_stats.prompt_eval_tokens;
-  out_metrics->decode_eval_count = perf_stats.decode_eval_count;
-  out_metrics->sample_count = perf_stats.sample_count;
-  out_metrics->output_token_count = perf_stats.output_token_count;
-  out_metrics->scheduler_tick_count = perf_stats.scheduler_tick_count;
-  out_metrics->batch_participation_count = perf_stats.batch_participation_count;
-  out_metrics->decode_first_tick_count = perf_stats.decode_first_tick_count;
+  out_metrics->total_ms = runtime_observability.total_ms;
+  out_metrics->prompt_eval_ms = runtime_observability.prompt_eval_ms;
+  out_metrics->decode_eval_ms = runtime_observability.decode_eval_ms;
+  out_metrics->sample_ms = runtime_observability.sample_ms;
+  out_metrics->queue_delay_ms = runtime_observability.queue_delay_ms;
+  out_metrics->ttft_ms = runtime_observability.ttft_ms;
+  out_metrics->mean_itl_ms = runtime_observability.mean_itl_ms;
+  out_metrics->tail_itl_ms = runtime_observability.tail_itl_ms;
+  out_metrics->e2e_ms = runtime_observability.e2e_ms;
+  out_metrics->input_token_count = runtime_observability.input_token_count;
+  out_metrics->prompt_eval_tokens = runtime_observability.prompt_eval_tokens;
+  out_metrics->decode_eval_count = runtime_observability.decode_eval_count;
+  out_metrics->sample_count = runtime_observability.sample_count;
+  out_metrics->output_token_count = runtime_observability.output_token_count;
+  out_metrics->scheduler_tick_count = runtime_observability.scheduler_tick_count;
+  out_metrics->batch_participation_count =
+      runtime_observability.batch_participation_count;
+  out_metrics->decode_first_tick_count =
+      runtime_observability.decode_first_tick_count;
   out_metrics->chunked_prefill_tick_count =
-      perf_stats.chunked_prefill_tick_count;
+      runtime_observability.chunked_prefill_tick_count;
   out_metrics->mixed_workload_tick_count =
-      perf_stats.mixed_workload_tick_count;
-  out_metrics->lcp_reuse_tokens = perf_stats.lcp_reuse_tokens;
+      runtime_observability.mixed_workload_tick_count;
+  out_metrics->lcp_reuse_tokens = runtime_observability.lcp_reuse_tokens;
   out_metrics->prefix_cache_restore_tokens =
-      perf_stats.prefix_cache_restore_tokens;
-  out_metrics->prefix_cache_hit_count = perf_stats.prefix_cache_hit_count;
-  out_metrics->prefix_cache_store_count = perf_stats.prefix_cache_store_count;
+      runtime_observability.prefix_cache_restore_tokens;
+  out_metrics->prefix_cache_hit_count =
+      runtime_observability.prefix_cache_hit_count;
+  out_metrics->prefix_cache_store_count =
+      runtime_observability.prefix_cache_store_count;
   return 0;
 }
 
-const char *CE_GetBackendInfoJsonString() {
+const char *CE_GetBackendObservabilityJsonString() {
   static std::string info_json;
+  const auto runtime = acquire_engine_runtime();
+  const bool profiling_enabled =
+      runtime != nullptr && runtime->BackendProfilingEnabled();
 
   std::ostringstream out;
   out << "{";
+  out << "\"profilingEnabled\":" << json_bool(profiling_enabled) << ",";
 #ifdef GGML_USE_WEBGPU
   out << "\"webgpuCompiled\":true,";
 #else
@@ -259,57 +272,61 @@ const char *CE_GetBackendInfoJsonString() {
   out << "\"gpuOffloadSupported\":";
   out << (llama_supports_gpu_offload() ? "true" : "false") << ",";
   out << "\"engineInitialized\":";
-  out << (acquire_engine_runtime() ? "true" : "false") << ",";
+  out << (runtime ? "true" : "false") << ",";
   out << "\"availableBackends\":[";
 
-  const size_t backend_count = ggml_backend_reg_count();
-  for (size_t i = 0; i < backend_count; ++i) {
-    if (i > 0) {
-      out << ",";
-    }
+  if (profiling_enabled) {
+    const size_t backend_count = ggml_backend_reg_count();
+    for (size_t i = 0; i < backend_count; ++i) {
+      if (i > 0) {
+        out << ",";
+      }
 
-    ggml_backend_reg_t reg = ggml_backend_reg_get(i);
-    out << "{"
-        << "\"name\":\"" << json_escape(ggml_backend_reg_name(reg)) << "\","
-        << "\"deviceCount\":" << ggml_backend_reg_dev_count(reg) << "}";
+      ggml_backend_reg_t reg = ggml_backend_reg_get(i);
+      out << "{"
+          << "\"name\":\"" << json_escape(ggml_backend_reg_name(reg)) << "\","
+          << "\"deviceCount\":" << ggml_backend_reg_dev_count(reg) << "}";
+    }
   }
 
   out << "],";
   out << "\"devices\":[";
 
-  const size_t device_count = ggml_backend_dev_count();
-  for (size_t i = 0; i < device_count; ++i) {
-    if (i > 0) {
-      out << ",";
-    }
+  if (profiling_enabled) {
+    const size_t device_count = ggml_backend_dev_count();
+    for (size_t i = 0; i < device_count; ++i) {
+      if (i > 0) {
+        out << ",";
+      }
 
-    ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-    ggml_backend_dev_props props{};
-    ggml_backend_dev_get_props(dev, &props);
-    const ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+      ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+      ggml_backend_dev_props props{};
+      ggml_backend_dev_get_props(dev, &props);
+      const ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
 
-    out << "{"
-        << "\"name\":\"" << json_escape(props.name) << "\","
-        << "\"description\":\"" << json_escape(props.description) << "\","
-        << "\"type\":\"" << backend_dev_type_name(props.type) << "\","
-        << "\"backendName\":\""
-        << json_escape(reg ? ggml_backend_reg_name(reg) : "") << "\","
-        << "\"deviceId\":";
-    if (props.device_id != nullptr && props.device_id[0] != '\0') {
-      out << "\"" << json_escape(props.device_id) << "\"";
-    } else {
-      out << "null";
+      out << "{"
+          << "\"name\":\"" << json_escape(props.name) << "\","
+          << "\"description\":\"" << json_escape(props.description) << "\","
+          << "\"type\":\"" << backend_dev_type_name(props.type) << "\","
+          << "\"backendName\":\""
+          << json_escape(reg ? ggml_backend_reg_name(reg) : "") << "\","
+          << "\"deviceId\":";
+      if (props.device_id != nullptr && props.device_id[0] != '\0') {
+        out << "\"" << json_escape(props.device_id) << "\"";
+      } else {
+        out << "null";
+      }
+      out << ","
+          << "\"memoryFreeBytes\":" << props.memory_free << ","
+          << "\"memoryTotalBytes\":" << props.memory_total << ","
+          << "\"capabilities\":{"
+          << "\"async\":" << json_bool(props.caps.async) << ","
+          << "\"hostBuffer\":" << json_bool(props.caps.host_buffer) << ","
+          << "\"bufferFromHostPtr\":"
+          << json_bool(props.caps.buffer_from_host_ptr) << ","
+          << "\"events\":" << json_bool(props.caps.events) << "}"
+          << "}";
     }
-    out << ","
-        << "\"memoryFreeBytes\":" << props.memory_free << ","
-        << "\"memoryTotalBytes\":" << props.memory_total << ","
-        << "\"capabilities\":{"
-        << "\"async\":" << json_bool(props.caps.async) << ","
-        << "\"hostBuffer\":" << json_bool(props.caps.host_buffer) << ","
-        << "\"bufferFromHostPtr\":"
-        << json_bool(props.caps.buffer_from_host_ptr) << ","
-        << "\"events\":" << json_bool(props.caps.events) << "}"
-        << "}";
   }
 
   out << "]}";

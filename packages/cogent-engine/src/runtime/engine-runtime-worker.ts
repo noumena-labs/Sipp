@@ -1,14 +1,14 @@
 import { CogentConfig } from '../cogent-config.js';
 import {
-  BackendInfo,
+  BackendObservability,
   EngineExecutionMode,
   GenerateRequestId,
   GenerateResponse,
   InferenceInitConfig,
   ModelLoadInfo,
-  PromptPerformanceStats,
   PromptOptions,
-  TransportInfo,
+  RuntimeObservabilityMetrics,
+  TransportObservability,
 } from '../types.js';
 import { EngineRuntime } from './engine-runtime.js';
 import {
@@ -17,7 +17,7 @@ import {
   WorkerSerializableCogentConfig,
   WorkerLoadModelResult,
   WorkerRunQueuedRequestResult,
-  WorkerBackendInfoResult,
+  WorkerBackendObservabilityResult,
 } from './engine-runtime-worker-protocol.js';
 
 interface PendingWorkerCall {
@@ -72,13 +72,13 @@ export class WorkerEngineRuntime implements EngineRuntime {
   >();
   private readonly queuedTokenErrors = new Map<GenerateRequestId, unknown>();
   private readonly queuedSignals = new Map<GenerateRequestId, AbortSignal>();
-  private lastPromptPerformance: PromptPerformanceStats | null = null;
+  private runtimeObservability: RuntimeObservabilityMetrics | null = null;
   private lastModelLoadInfo: ModelLoadInfo | null = null;
-  private transportInfo: TransportInfo = {
+  private transportObservability: TransportObservability = {
     executionMode: 'worker',
     workerBacked: true,
-    backpressureEnabled: true,
-    maxBufferedTokenCount: 0,
+    enabled: false,
+    bufferedTokenLimit: 0,
     flushIntervalMs: 0,
     flushCount: 0,
     coalescedTokenCount: 0,
@@ -95,8 +95,8 @@ export class WorkerEngineRuntime implements EngineRuntime {
     return this.lastModelLoadInfo;
   }
 
-  public getTransportInfo(): TransportInfo {
-    return { ...this.transportInfo };
+  public getTransportObservability(): TransportObservability {
+    return { ...this.transportObservability };
   }
 
   public async initModule(): Promise<void> {
@@ -123,7 +123,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
       onProgress
     )) as WorkerLoadModelResult;
     this.lastModelLoadInfo = result.modelLoadInfo;
-    this.transportInfo = result.transportInfo;
+    this.transportObservability = result.transportObservability;
     return result.modelPath;
   }
 
@@ -147,7 +147,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
       onProgress
     )) as WorkerLoadModelResult;
     this.lastModelLoadInfo = result.modelLoadInfo;
-    this.transportInfo = result.transportInfo;
+    this.transportObservability = result.transportObservability;
     return result.modelPath;
   }
 
@@ -301,8 +301,8 @@ export class WorkerEngineRuntime implements EngineRuntime {
         kind: 'run-queued-request',
         requestId,
       })) as WorkerRunQueuedRequestResult;
-      this.lastPromptPerformance = result.lastPromptPerformance;
-      this.transportInfo = result.transportInfo;
+      this.runtimeObservability = result.runtimeObservability;
+      this.transportObservability = result.transportObservability;
 
       const tokenError = this.queuedTokenErrors.get(requestId);
       if (tokenError != null) {
@@ -336,19 +336,19 @@ export class WorkerEngineRuntime implements EngineRuntime {
     return response.outputText;
   }
 
-  public getLastPromptPerformance(): PromptPerformanceStats | null {
-    return this.lastPromptPerformance;
+  public getRuntimeObservability(): RuntimeObservabilityMetrics | null {
+    return this.runtimeObservability;
   }
 
-  public async getBackendInfo(): Promise<BackendInfo | null> {
+  public async getBackendObservability(): Promise<BackendObservability | null> {
     await this.ensureWorkerInitialized();
     const result = (await this.callWorker<
-      Extract<WorkerRequestMessage, { kind: 'get-backend-info' }>
+      Extract<WorkerRequestMessage, { kind: 'get-backend-observability' }>
     >({
-      kind: 'get-backend-info',
-    })) as WorkerBackendInfoResult;
-    this.transportInfo = result.transportInfo;
-    return result.backendInfo;
+      kind: 'get-backend-observability',
+    })) as WorkerBackendObservabilityResult;
+    this.transportObservability = result.transportObservability;
+    return result.backendObservability;
   }
 
   private async ensureWorkerInitialized(): Promise<void> {
@@ -368,9 +368,8 @@ export class WorkerEngineRuntime implements EngineRuntime {
         config: toWorkerSerializableConfig(this.config),
       });
       this.workerInitialized = true;
-      this.transportInfo.executionMode = 'worker';
-      this.transportInfo.workerBacked = true;
-      this.transportInfo.backpressureEnabled = true;
+      this.transportObservability.executionMode = 'worker';
+      this.transportObservability.workerBacked = true;
     }
   }
 
@@ -426,7 +425,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
       destFileName,
     })) as WorkerLoadModelResult;
     this.lastModelLoadInfo = result.modelLoadInfo;
-    this.transportInfo = result.transportInfo;
+    this.transportObservability = result.transportObservability;
     return result.modelPath;
   }
 

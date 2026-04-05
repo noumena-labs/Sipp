@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <string>
 
-#include "runtime/metrics/perf_counters.h"
+#include "runtime/metrics/observability_metrics.h"
 #include "runtime/request/request_types.h"
 
 namespace noumena::cogentengine {
@@ -28,7 +28,7 @@ struct GenerateResponse {
   GenerateResponseStatus status = GenerateResponseStatus::Pending;
   std::string output_text;
   std::string error_message;
-  PromptPerfStats perf;
+  RuntimeObservabilityMetrics runtime_observability;
 };
 
 } // namespace noumena::cogentengine
