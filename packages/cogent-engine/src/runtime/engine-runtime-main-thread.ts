@@ -39,7 +39,11 @@ interface EmscriptenFs {
 
 interface EngineModule {
   FS: EmscriptenFs;
+  HEAP32: Int32Array;
+  HEAPF64: Float64Array;
   _CE_FreeString(ptr: number): void;
+  _free(ptr: number): void;
+  _malloc(size: number): number;
   addFunction(func: (...args: number[]) => number, signature: string): number;
   ccall(ident: string, returnType: string | null, argTypes: string[], args: unknown[], opts?: { async?: boolean }): Promise<number> | number;
   removeFunction(ptr: number): void;
@@ -50,6 +54,17 @@ const MAX_PROMPT_TOKENS = 2048;
 const DEFAULT_MAX_MODEL_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_PROMPT_FORMAT = 'auto-chat';
 const DEFAULT_PERSISTENT_CACHE_NAMESPACE = 'cogent-engine-model-cache';
+const REQUEST_STEP_RESULT_INVALID = -1;
+const REQUEST_STEP_RESULT_FATAL_NO_PROGRESS = -2;
+const REQUEST_STEP_RESULT_WAITING = 0;
+const REQUEST_STEP_RESULT_PROGRESSED = 1;
+const REQUEST_STEP_RESULT_TERMINAL = 2;
+const COMPLETED_REQUEST_STATUS_PENDING = 0;
+const COMPLETED_REQUEST_STATUS_COMPLETED = 1;
+const COMPLETED_REQUEST_STATUS_CANCELLED = 2;
+const COMPLETED_REQUEST_STATUS_FAILED = 3;
+const RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES = 128;
+const RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT = 9;
 
 interface ModelStreamSink {
   write(chunk: Uint8Array): Promise<void>;
@@ -93,7 +108,12 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private initPromise: Promise<void> | null = null;
   private engineInitialized = false;
   private loadedModelPath: string | null = null;
+  private queuedPromptCallbacks = new Map<
+    GenerateRequestId,
+    ((token: string) => void) | undefined
+  >();
   private queuedPromptCallbackPtrs = new Map<GenerateRequestId, number>();
+  private queuedPromptTokenBuffers = new Map<GenerateRequestId, string[]>();
   private queuedPromptCallbackErrors = new Map<GenerateRequestId, unknown>();
   private lastModelLoadInfo: ModelLoadInfo | null = null;
   private runtimeObservabilityEnabled = false;
@@ -273,10 +293,11 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
   private releaseQueuedPromptCallback(module: EngineModule, requestId: GenerateRequestId): void {
     const callbackPtr = this.queuedPromptCallbackPtrs.get(requestId);
-    if (callbackPtr == null) {
-      return;
+    if (callbackPtr != null) {
+      module.removeFunction(callbackPtr);
     }
-    module.removeFunction(callbackPtr);
+    this.queuedPromptCallbacks.delete(requestId);
+    this.queuedPromptTokenBuffers.delete(requestId);
     this.queuedPromptCallbackPtrs.delete(requestId);
     this.queuedPromptCallbackErrors.delete(requestId);
   }
@@ -285,8 +306,195 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     for (const callbackPtr of this.queuedPromptCallbackPtrs.values()) {
       module.removeFunction(callbackPtr);
     }
+    this.queuedPromptCallbacks.clear();
+    this.queuedPromptTokenBuffers.clear();
     this.queuedPromptCallbackPtrs.clear();
     this.queuedPromptCallbackErrors.clear();
+  }
+
+  private bufferQueuedTokenPiece(requestId: GenerateRequestId, token: string): void {
+    const buffered = this.queuedPromptTokenBuffers.get(requestId);
+    if (buffered != null) {
+      buffered.push(token);
+      return;
+    }
+    this.queuedPromptTokenBuffers.set(requestId, [token]);
+  }
+
+  private flushQueuedTokenPieces(requestId: GenerateRequestId): void {
+    const onToken = this.queuedPromptCallbacks.get(requestId);
+    const bufferedPieces = this.queuedPromptTokenBuffers.get(requestId);
+    if (onToken == null || bufferedPieces == null || bufferedPieces.length === 0) {
+      if (bufferedPieces != null) {
+        bufferedPieces.length = 0;
+      }
+      return;
+    }
+
+    while (bufferedPieces.length > 0) {
+      const piece = bufferedPieces.shift();
+      if (piece == null) {
+        continue;
+      }
+      try {
+        onToken(piece);
+      } catch (error) {
+        this.queuedPromptCallbackErrors.set(requestId, error);
+        break;
+      }
+    }
+  }
+
+  private waitForNextSchedulerStep(): Promise<void> {
+    return new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
+
+  private callNumber(
+    module: EngineModule,
+    ident: string,
+    argTypes: string[] = [],
+    args: unknown[] = []
+  ): number {
+    const result = module.ccall(ident, 'number', argTypes, args);
+    if (result instanceof Promise) {
+      throw new Error(`Unexpected async result while calling ${ident}.`);
+    }
+    return result;
+  }
+
+  private async callNumberAsync(
+    module: EngineModule,
+    ident: string,
+    argTypes: string[] = [],
+    args: unknown[] = []
+  ): Promise<number> {
+    const result = module.ccall(ident, 'number', argTypes, args, {
+      async: true,
+    });
+    return result instanceof Promise ? result : result;
+  }
+
+  private readRuntimeObservabilityFromModule(
+    module: EngineModule
+  ): RuntimeObservabilityMetrics | null {
+    const metricsPtr = module._malloc(RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES);
+    if (!metricsPtr) {
+      throw new Error('Failed to allocate runtime observability buffer.');
+    }
+
+    try {
+      const status = this.callNumber(module, 'CE_GetRuntimeObservability', ['number'], [metricsPtr]);
+      if (status !== 0) {
+        return null;
+      }
+
+      const f64Offset = metricsPtr >> 3;
+      const i32Offset = (metricsPtr + RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT * 8) >> 2;
+
+      return {
+        totalMs: module.HEAPF64[f64Offset],
+        promptEvalMs: module.HEAPF64[f64Offset + 1],
+        decodeEvalMs: module.HEAPF64[f64Offset + 2],
+        sampleMs: module.HEAPF64[f64Offset + 3],
+        queueDelayMs: module.HEAPF64[f64Offset + 4],
+        ttftMs: module.HEAPF64[f64Offset + 5],
+        meanItlMs: module.HEAPF64[f64Offset + 6],
+        tailItlMs: module.HEAPF64[f64Offset + 7],
+        e2elMs: module.HEAPF64[f64Offset + 8],
+        inputTokenCount: module.HEAP32[i32Offset],
+        promptEvalTokens: module.HEAP32[i32Offset + 1],
+        decodeEvalCount: module.HEAP32[i32Offset + 2],
+        sampleCount: module.HEAP32[i32Offset + 3],
+        outputTokenCount: module.HEAP32[i32Offset + 4],
+        schedulerTickCount: module.HEAP32[i32Offset + 5],
+        batchParticipationCount: module.HEAP32[i32Offset + 6],
+        decodeFirstTickCount: module.HEAP32[i32Offset + 7],
+        chunkedPrefillTickCount: module.HEAP32[i32Offset + 8],
+        mixedWorkloadTickCount: module.HEAP32[i32Offset + 9],
+        lcpReuseTokens: module.HEAP32[i32Offset + 10],
+        prefixCacheRestoreTokens: module.HEAP32[i32Offset + 11],
+        prefixCacheHitCount: module.HEAP32[i32Offset + 12],
+        prefixCacheStoreCount: module.HEAP32[i32Offset + 13],
+      };
+    } finally {
+      module._free(metricsPtr);
+    }
+  }
+
+  private copyCompletedRequestText(
+    module: EngineModule,
+    requestId: GenerateRequestId,
+    sizeFunction: string,
+    copyFunction: string,
+    fieldName: string
+  ): string {
+    const byteLength = this.callNumber(module, sizeFunction, ['number'], [requestId]);
+    if (byteLength < 0) {
+      throw new Error(`Failed to read queued request ${fieldName} size.`);
+    }
+    if (byteLength === 0) {
+      return '';
+    }
+
+    const bufferPtr = module._malloc(byteLength + 1);
+    if (!bufferPtr) {
+      throw new Error(`Failed to allocate queued request ${fieldName} buffer.`);
+    }
+
+    try {
+      const copied = this.callNumber(module, copyFunction, ['number', 'number', 'number'], [
+        requestId,
+        bufferPtr,
+        byteLength + 1,
+      ]);
+      if (copied !== byteLength) {
+        throw new Error(`Failed to copy queued request ${fieldName}.`);
+      }
+      return module.UTF8ToString(bufferPtr, byteLength);
+    } finally {
+      module._free(bufferPtr);
+    }
+  }
+
+  private takeCompletedResponse(
+    module: EngineModule,
+    requestId: GenerateRequestId
+  ): GenerateResponse {
+    const status = this.callNumber(module, 'CE_GetCompletedRequestStatus', ['number'], [requestId]);
+    if (status === COMPLETED_REQUEST_STATUS_PENDING) {
+      throw new Error('Queued request reached a terminal step without a completed response.');
+    }
+
+    const outputText = this.copyCompletedRequestText(
+      module,
+      requestId,
+      'CE_GetCompletedRequestOutputSize',
+      'CE_CopyCompletedRequestOutput',
+      'output'
+    );
+    const errorText = this.copyCompletedRequestText(
+      module,
+      requestId,
+      'CE_GetCompletedRequestErrorSize',
+      'CE_CopyCompletedRequestError',
+      'error'
+    );
+    const consumed = this.callNumber(module, 'CE_ConsumeCompletedRequest', ['number'], [requestId]);
+    if (!consumed) {
+      throw new Error('Failed to consume completed queued request response.');
+    }
+
+    return {
+      requestId,
+      completed: status === COMPLETED_REQUEST_STATUS_COMPLETED,
+      failed: status === COMPLETED_REQUEST_STATUS_FAILED,
+      cancelled: status === COMPLETED_REQUEST_STATUS_CANCELLED,
+      outputText,
+      errorMessage: errorText.length > 0 ? errorText : null,
+      runtimeObservability: this.readRuntimeObservabilityFromModule(module),
+    };
   }
 
   private removeFileIfExists(module: EngineModule, path: string): void {
@@ -801,13 +1009,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
             if (signal?.aborted) {
               return 1;
             }
-            try {
-              onToken?.(module.UTF8ToString(ptr, length));
-            } catch (error) {
-              if (requestId !== 0) {
-                this.queuedPromptCallbackErrors.set(requestId, error);
-              }
-              return 1;
+            if (onToken != null && requestId !== 0) {
+              this.bufferQueuedTokenPiece(requestId, module.UTF8ToString(ptr, length));
             }
             return signal?.aborted ? 1 : 0;
           }, 'iii');
@@ -834,6 +1037,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     }
 
     if (callbackPtr !== 0) {
+      this.queuedPromptCallbacks.set(requestId, onToken);
+      this.queuedPromptTokenBuffers.set(requestId, []);
       this.queuedPromptCallbackPtrs.set(requestId, callbackPtr);
     }
 
@@ -853,52 +1058,75 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       throw createAbortError('Prompt was aborted before execution started.');
     }
 
+    let abortRequested = false;
     const abortListener =
       options?.signal == null
         ? null
         : () => {
+            abortRequested = true;
             void this.cancelQueuedRequest(requestId);
           };
     if (abortListener != null) {
       options?.signal?.addEventListener('abort', abortListener, { once: true });
     }
-    let ptr = 0;
 
     try {
-      ptr = await module.ccall(
-        'CE_RunQueuedRequestJson',
-        'number',
-        ['number'],
-        [requestId],
-        { async: true }
-      );
-
-      if (!ptr) {
-        this.releaseQueuedPromptCallback(module, requestId);
-        throw new Error('Queued request returned no response payload.');
+      const resetStatus = this.callNumber(module, 'CE_ResetRuntimeObservability');
+      if (resetStatus !== 0) {
+        throw new Error('Failed to reset runtime observability before queued execution.');
       }
 
-      const raw = module.UTF8ToString(ptr);
-      const response = JSON.parse(raw) as GenerateResponse;
-      const callbackError = this.queuedPromptCallbackErrors.get(requestId);
-      if (callbackError != null) {
-        throw callbackError;
+      let callbackFailure: unknown = null;
+      while (true) {
+        const stepResult = await this.callNumberAsync(
+          module,
+          'CE_RunRequestStep',
+          ['number'],
+          [requestId]
+        );
+        this.flushQueuedTokenPieces(requestId);
+
+        const callbackError = this.queuedPromptCallbackErrors.get(requestId);
+        if (callbackError != null && callbackFailure == null) {
+          callbackFailure = callbackError;
+          await this.cancelQueuedRequest(requestId);
+        }
+
+        if (stepResult === REQUEST_STEP_RESULT_TERMINAL) {
+          break;
+        }
+        if (stepResult === REQUEST_STEP_RESULT_INVALID) {
+          throw new Error('Queued request became invalid during execution.');
+        }
+        if (stepResult === REQUEST_STEP_RESULT_FATAL_NO_PROGRESS) {
+          throw new Error('Queued request execution failed to make progress.');
+        }
+        if (stepResult === REQUEST_STEP_RESULT_WAITING) {
+          await this.waitForNextSchedulerStep();
+          continue;
+        }
+        if (stepResult !== REQUEST_STEP_RESULT_PROGRESSED) {
+          throw new Error(`Queued request returned unknown step result ${stepResult}.`);
+        }
       }
-      if (response.cancelled || options?.signal?.aborted) {
+
+      this.flushQueuedTokenPieces(requestId);
+      const response = this.takeCompletedResponse(module, requestId);
+      const finalCallbackError = this.queuedPromptCallbackErrors.get(requestId);
+      if (finalCallbackError != null) {
+        throw finalCallbackError;
+      }
+      if (callbackFailure != null) {
+        throw callbackFailure;
+      }
+      if (response.cancelled || abortRequested || options?.signal?.aborted) {
         throw createAbortError(response.errorMessage ?? 'Queued request cancelled.');
       }
+
       return response;
-    } catch (error) {
-      if (error instanceof SyntaxError) {
-        throw new Error(`Failed to parse queued generate response: ${asErrorMessage(error)}`);
-      }
-      throw error;
     } finally {
       if (abortListener != null) {
         options?.signal?.removeEventListener('abort', abortListener);
-      }
-      if (ptr) {
-        module._CE_FreeString(ptr);
       }
       this.releaseQueuedPromptCallback(module, requestId);
     }
@@ -937,24 +1165,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     }
 
     const module = this.getReadyEngineModule();
-    const ptrResult = module.ccall('CE_GetRuntimeObservabilityJson', 'number', [], []);
-    if (ptrResult instanceof Promise) {
-      throw new Error('Unexpected async result while reading runtime observability.');
-    }
-    const ptr = ptrResult;
-
-    if (!ptr) {
-      return null;
-    }
-
-    try {
-      const raw = module.UTF8ToString(ptr);
-      return JSON.parse(raw) as RuntimeObservabilityMetrics;
-    } catch (error) {
-      throw new Error(`Failed to parse runtime observability: ${asErrorMessage(error)}`);
-    } finally {
-      module._CE_FreeString(ptr);
-    }
+    return this.readRuntimeObservabilityFromModule(module);
   }
 
   public async getBackendObservability(): Promise<BackendObservability | null> {

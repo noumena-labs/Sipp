@@ -50,10 +50,23 @@ export type WorkerRequestMessage =
       destFileName: string;
     }
   | {
-      kind: 'load-model-buffer';
+      kind: 'load-model-stream-start';
       callId: number;
-      buffer: Uint8Array;
       destFileName: string;
+      expectedBytes?: number;
+    }
+  | {
+      kind: 'load-model-stream-chunk';
+      callId: number;
+      chunk: ArrayBuffer;
+    }
+  | {
+      kind: 'load-model-stream-end';
+      callId: number;
+    }
+  | {
+      kind: 'cancel-model-load';
+      callId: number;
     }
   | {
       kind: 'init-engine';
@@ -111,6 +124,10 @@ export type WorkerResponseMessage =
       kind: 'load-progress';
       callId: number;
       progressPct: number;
+    }
+  | {
+      kind: 'load-stream-ack';
+      callId: number;
     }
   | {
       kind: 'token';

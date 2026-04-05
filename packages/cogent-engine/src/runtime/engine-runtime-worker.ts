@@ -62,6 +62,10 @@ export class WorkerEngineRuntime implements EngineRuntime {
   private workerInitialized = false;
   private nextCallId = 1;
   private readonly pendingWorkerCalls = new Map<number, PendingWorkerCall>();
+  private readonly pendingStreamChunkAcks = new Map<
+    number,
+    { resolve: () => void; reject: (error: unknown) => void }
+  >();
   private readonly queuedTokenCallbacks = new Map<
     GenerateRequestId,
     (token: string) => void
@@ -114,12 +118,17 @@ export class WorkerEngineRuntime implements EngineRuntime {
       throw createAbortError('Model load aborted.');
     }
 
-    const result = (await this.callWorker<Extract<WorkerRequestMessage, { kind: 'load-model-url' }>>(
+    const callId = this.nextCallId++;
+    const result = (await this.callWorkerWithAbort<
+      Extract<WorkerRequestMessage, { kind: 'load-model-url' }>
+    >(
+      callId,
       {
         kind: 'load-model-url',
         url,
         destFileName,
       },
+      signal,
       onProgress
     )) as WorkerLoadModelResult;
     this.lastModelLoadInfo = result.modelLoadInfo;
@@ -138,12 +147,17 @@ export class WorkerEngineRuntime implements EngineRuntime {
       throw createAbortError('Model load aborted.');
     }
 
-    const result = (await this.callWorker<Extract<WorkerRequestMessage, { kind: 'load-model-file' }>>(
+    const callId = this.nextCallId++;
+    const result = (await this.callWorkerWithAbort<
+      Extract<WorkerRequestMessage, { kind: 'load-model-file' }>
+    >(
+      callId,
       {
         kind: 'load-model-file',
         file,
         destFileName,
       },
+      signal,
       onProgress
     )) as WorkerLoadModelResult;
     this.lastModelLoadInfo = result.modelLoadInfo;
@@ -160,40 +174,65 @@ export class WorkerEngineRuntime implements EngineRuntime {
       signal?: AbortSignal;
     } = {}
   ): Promise<string> {
-    const chunks: Uint8Array[] = [];
+    await this.ensureWorkerInitialized();
+    if (options.signal?.aborted) {
+      throw createAbortError('Model load aborted.');
+    }
+
+    const callId = this.nextCallId++;
     const reader = stream.getReader();
-    let totalBytes = 0;
+    const loadPromise = this.callWorkerWithAbort<
+      Extract<WorkerRequestMessage, { kind: 'load-model-stream-start' }>
+    >(
+      callId,
+      {
+        kind: 'load-model-stream-start',
+        destFileName,
+        expectedBytes: options.expectedBytes,
+      },
+      options.signal,
+      options.onProgress
+    ) as Promise<WorkerLoadModelResult>;
+
     try {
       while (true) {
         if (options.signal?.aborted) {
           throw createAbortError('Model load aborted.');
         }
-        const { done, value } = await reader.read();
+        const { done, value } = await Promise.race([
+          reader.read(),
+          loadPromise.then(() => ({ done: true, value: undefined as Uint8Array | undefined })),
+        ]);
         if (done) {
           break;
         }
         if (value == null || value.byteLength === 0) {
           continue;
         }
-        chunks.push(value);
-        totalBytes += value.byteLength;
-        if (options.expectedBytes && options.onProgress) {
-          options.onProgress(Math.round((totalBytes / options.expectedBytes) * 100));
-        }
+        await this.sendStreamChunk(callId, value);
       }
+
+      this.postWorkerMessage({
+        kind: 'load-model-stream-end',
+        callId,
+      });
+
+      const result = await loadPromise;
+      this.lastModelLoadInfo = result.modelLoadInfo;
+      this.transportObservability = result.transportObservability;
+      return result.modelPath;
+    } catch (error) {
+      this.sendModelLoadCancel(callId);
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw error;
+      }
+      if (options.signal?.aborted) {
+        throw createAbortError('Model load aborted.');
+      }
+      throw error;
     } finally {
       reader.releaseLock();
     }
-
-    const buffer = new Uint8Array(totalBytes);
-    let offset = 0;
-    for (const chunk of chunks) {
-      buffer.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-
-    const modelPath = await this.callWorkerLoadBuffer(buffer, destFileName);
-    return modelPath;
   }
 
   public loadModelFromBuffer(buffer: Uint8Array, destFileName = 'model.gguf'): string {
@@ -215,20 +254,10 @@ export class WorkerEngineRuntime implements EngineRuntime {
   }
 
   public close(): void {
-    if (this.worker == null) {
-      return;
+    if (this.worker != null) {
+      this.worker.terminate();
     }
-    this.worker.terminate();
-    this.worker = null;
-    this.workerInitialized = false;
-    for (const call of this.pendingWorkerCalls.values()) {
-      call.reject(new Error('Worker runtime was closed.'));
-    }
-    this.pendingWorkerCalls.clear();
-    this.queuedTokenCallbacks.clear();
-    this.pendingQueuedTokenCallbacks.clear();
-    this.queuedTokenErrors.clear();
-    this.queuedSignals.clear();
+    this.resetWorkerState(new Error('Worker runtime was closed.'));
   }
 
   public async cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean> {
@@ -250,17 +279,23 @@ export class WorkerEngineRuntime implements EngineRuntime {
     const callId = this.nextCallId++;
     this.pendingQueuedTokenCallbacks.set(callId, onToken);
 
-    const requestId = (await this.callWorkerWithId<
-      Extract<WorkerRequestMessage, { kind: 'queue-prompt' }>
-    >(callId, {
-      kind: 'queue-prompt',
-      contextKey,
-      promptText,
-      options: {
-        nTokens: typeof options === 'number' ? options : options.nTokens,
-        promptFormat: typeof options === 'number' ? undefined : options.promptFormat,
-      },
-    })) as GenerateRequestId;
+    let requestId: GenerateRequestId;
+    try {
+      requestId = (await this.callWorkerWithId<
+        Extract<WorkerRequestMessage, { kind: 'queue-prompt' }>
+      >(callId, {
+        kind: 'queue-prompt',
+        contextKey,
+        promptText,
+        options: {
+          nTokens: typeof options === 'number' ? options : options.nTokens,
+          promptFormat: typeof options === 'number' ? undefined : options.promptFormat,
+        },
+      })) as GenerateRequestId;
+    } catch (error) {
+      this.pendingQueuedTokenCallbacks.delete(callId);
+      throw error;
+    }
 
     const pendingCallback = this.pendingQueuedTokenCallbacks.get(callId);
     this.pendingQueuedTokenCallbacks.delete(callId);
@@ -351,6 +386,53 @@ export class WorkerEngineRuntime implements EngineRuntime {
     return result.backendObservability;
   }
 
+  private resetWorkerState(error: unknown): void {
+    this.worker = null;
+    this.workerInitialized = false;
+    for (const call of this.pendingWorkerCalls.values()) {
+      call.reject(error);
+    }
+    this.pendingWorkerCalls.clear();
+    for (const pendingAck of this.pendingStreamChunkAcks.values()) {
+      pendingAck.reject(error);
+    }
+    this.pendingStreamChunkAcks.clear();
+    this.queuedTokenCallbacks.clear();
+    this.pendingQueuedTokenCallbacks.clear();
+    this.queuedTokenErrors.clear();
+    this.queuedSignals.clear();
+  }
+
+  private failWorker(error: unknown): void {
+    if (this.worker != null) {
+      this.worker.onmessage = null;
+      this.worker.onerror = null;
+      this.worker.onmessageerror = null;
+      this.worker.terminate();
+    }
+    this.resetWorkerState(error);
+  }
+
+  private postWorkerMessage(
+    message: WorkerRequestMessage,
+    transferables: Transferable[] = []
+  ): void {
+    if (this.worker == null) {
+      throw new Error('Worker runtime is not available.');
+    }
+    this.worker.postMessage(message, transferables);
+  }
+
+  private sendModelLoadCancel(callId: number): void {
+    if (this.worker == null) {
+      return;
+    }
+    this.postWorkerMessage({
+      kind: 'cancel-model-load',
+      callId,
+    });
+  }
+
   private async ensureWorkerInitialized(): Promise<void> {
     if (this.worker == null) {
       const workerUrl =
@@ -359,6 +441,12 @@ export class WorkerEngineRuntime implements EngineRuntime {
       this.worker = new Worker(workerUrl, { type: 'module' });
       this.worker.onmessage = (event: MessageEvent<WorkerResponseMessage>) => {
         this.handleWorkerMessage(event.data);
+      };
+      this.worker.onerror = (event: ErrorEvent) => {
+        this.failWorker(new Error(event.message || 'Worker runtime crashed.'));
+      };
+      this.worker.onmessageerror = () => {
+        this.failWorker(new Error('Worker runtime failed to deserialize a message.'));
       };
     }
 
@@ -388,13 +476,40 @@ export class WorkerEngineRuntime implements EngineRuntime {
       return;
     }
 
-    const pendingCall = this.pendingWorkerCalls.get(message.callId);
-    if (!pendingCall) {
+    if (message.kind === 'load-stream-ack') {
+      const pendingAck = this.pendingStreamChunkAcks.get(message.callId);
+      if (!pendingAck) {
+        return;
+      }
+      this.pendingStreamChunkAcks.delete(message.callId);
+      pendingAck.resolve();
       return;
     }
 
+    const pendingCall = this.pendingWorkerCalls.get(message.callId);
     if (message.kind === 'load-progress') {
-      pendingCall.onProgress?.(message.progressPct);
+      pendingCall?.onProgress?.(message.progressPct);
+      return;
+    }
+
+    const error =
+      message.kind !== 'reject'
+        ? null
+        : message.errorName === 'AbortError'
+          ? createAbortError(message.message)
+          : Object.assign(new Error(message.message), {
+              name: message.errorName ?? 'Error',
+            });
+
+    if (error != null) {
+      const pendingAck = this.pendingStreamChunkAcks.get(message.callId);
+      if (pendingAck != null) {
+        this.pendingStreamChunkAcks.delete(message.callId);
+        pendingAck.reject(error);
+      }
+    }
+
+    if (!pendingCall) {
       return;
     }
 
@@ -404,29 +519,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
       return;
     }
 
-    const error =
-      message.errorName === 'AbortError'
-        ? createAbortError(message.message)
-        : Object.assign(new Error(message.message), {
-            name: message.errorName ?? 'Error',
-          });
-    pendingCall.reject(error);
-  }
-
-  private async callWorkerLoadBuffer(
-    buffer: Uint8Array,
-    destFileName: string
-  ): Promise<string> {
-    const result = (await this.callWorker<
-      Extract<WorkerRequestMessage, { kind: 'load-model-buffer' }>
-    >({
-      kind: 'load-model-buffer',
-      buffer,
-      destFileName,
-    })) as WorkerLoadModelResult;
-    this.lastModelLoadInfo = result.modelLoadInfo;
-    this.transportObservability = result.transportObservability;
-    return result.modelPath;
+    pendingCall.reject(error ?? new Error('Worker call failed.'));
   }
 
   private async callWorker<T extends WorkerRequestMessage>(
@@ -451,18 +544,70 @@ export class WorkerEngineRuntime implements EngineRuntime {
       callId,
     } as T;
 
-    const transferables: Transferable[] = [];
-    if (request.kind === 'load-model-buffer') {
-      transferables.push(request.buffer.buffer);
-    }
-
     return new Promise<unknown>((resolve, reject) => {
       this.pendingWorkerCalls.set(callId, {
         resolve,
         reject,
         onProgress,
       });
-      this.worker!.postMessage(request, transferables);
+      this.postWorkerMessage(request);
+    });
+  }
+
+  private async callWorkerWithAbort<T extends WorkerRequestMessage>(
+    callId: number,
+    message: WithoutCallId<T>,
+    signal?: AbortSignal,
+    onProgress?: (pct: number) => void
+  ): Promise<unknown> {
+    if (signal?.aborted) {
+      throw createAbortError('Model load aborted.');
+    }
+
+    const abortListener =
+      signal == null
+        ? null
+        : () => {
+            this.sendModelLoadCancel(callId);
+          };
+    if (abortListener != null) {
+      signal?.addEventListener('abort', abortListener, { once: true });
+    }
+
+    try {
+      return await this.callWorkerWithId(callId, message, onProgress);
+    } finally {
+      if (abortListener != null) {
+        signal?.removeEventListener('abort', abortListener);
+      }
+    }
+  }
+
+  private async sendStreamChunk(
+    callId: number,
+    chunk: Uint8Array
+  ): Promise<void> {
+    if (this.pendingStreamChunkAcks.has(callId)) {
+      throw new Error(`Load stream ${callId} already has a pending chunk acknowledgement.`);
+    }
+
+    const transferableChunk = chunk.slice().buffer;
+
+    return new Promise<void>((resolve, reject) => {
+      this.pendingStreamChunkAcks.set(callId, { resolve, reject });
+      try {
+        this.postWorkerMessage(
+          {
+            kind: 'load-model-stream-chunk',
+            callId,
+            chunk: transferableChunk,
+          },
+          [transferableChunk]
+        );
+      } catch (error) {
+        this.pendingStreamChunkAcks.delete(callId);
+        reject(error);
+      }
     });
   }
 }
