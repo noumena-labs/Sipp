@@ -1,5 +1,6 @@
 #include "engine_bridge.h"
 
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -15,6 +16,10 @@ using noumena::cogentengine::InferenceRuntime;
 namespace {
 
 constexpr int kStatusError = -1;
+constexpr int kCompletedRequestStatusPending = 0;
+constexpr int kCompletedRequestStatusCompleted = 1;
+constexpr int kCompletedRequestStatusCancelled = 2;
+constexpr int kCompletedRequestStatusFailed = 3;
 
 std::mutex g_engineMutex;
 std::shared_ptr<InferenceRuntime> g_engineRuntime;
@@ -136,6 +141,48 @@ std::shared_ptr<InferenceRuntime> acquire_engine_runtime() {
   return g_engineRuntime;
 }
 
+int completed_status_to_code(
+    noumena::cogentengine::GenerateResponseStatus status) {
+  switch (status) {
+  case noumena::cogentengine::GenerateResponseStatus::Pending:
+    return kCompletedRequestStatusPending;
+  case noumena::cogentengine::GenerateResponseStatus::Completed:
+    return kCompletedRequestStatusCompleted;
+  case noumena::cogentengine::GenerateResponseStatus::Cancelled:
+    return kCompletedRequestStatusCancelled;
+  case noumena::cogentengine::GenerateResponseStatus::Failed:
+    return kCompletedRequestStatusFailed;
+  }
+  return kCompletedRequestStatusPending;
+}
+
+bool try_get_completed_response(CE_RequestId request_id,
+                                noumena::cogentengine::GenerateResponse &out) {
+  auto runtime = acquire_engine_runtime();
+  if (!runtime || request_id == 0) {
+    return false;
+  }
+  return runtime->TryPeekCompletedResponse(request_id, out);
+}
+
+int copy_completed_field(char *buffer, int32_t capacity,
+                         const std::string &value) {
+  if (buffer == nullptr || capacity <= 0) {
+    return kStatusError;
+  }
+
+  const std::size_t byte_count = value.size();
+  if (static_cast<std::size_t>(capacity) <= byte_count) {
+    return kStatusError;
+  }
+
+  if (byte_count > 0) {
+    std::memcpy(buffer, value.data(), byte_count);
+  }
+  buffer[byte_count] = '\0';
+  return static_cast<int>(byte_count);
+}
+
 } // namespace
 
 int CE_InitPlugin(const char *model_path, const CE_InitConfig *config) {
@@ -246,6 +293,77 @@ int CE_GetRuntimeObservability(CE_RuntimeObservabilityMetrics *out_metrics) {
   out_metrics->prefix_cache_store_count =
       runtime_observability.prefix_cache_store_count;
   return 0;
+}
+
+int CE_ResetRuntimeObservability() {
+  auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    return kStatusError;
+  }
+
+  runtime->ResetRuntimeObservability();
+  return 0;
+}
+
+int CE_RunRequestStep(CE_RequestId request_id) {
+  auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    return static_cast<int>(
+        noumena::cogentengine::RequestStepResult::Invalid);
+  }
+
+  return static_cast<int>(runtime->RunRequestStep(request_id));
+}
+
+int CE_GetCompletedRequestStatus(CE_RequestId request_id) {
+  noumena::cogentengine::GenerateResponse response{};
+  if (!try_get_completed_response(request_id, response)) {
+    return kCompletedRequestStatusPending;
+  }
+
+  return completed_status_to_code(response.status);
+}
+
+int CE_GetCompletedRequestOutputSize(CE_RequestId request_id) {
+  noumena::cogentengine::GenerateResponse response{};
+  if (!try_get_completed_response(request_id, response)) {
+    return kStatusError;
+  }
+  return static_cast<int>(response.output_text.size());
+}
+
+int CE_CopyCompletedRequestOutput(CE_RequestId request_id, char *buffer,
+                                  int32_t capacity) {
+  noumena::cogentengine::GenerateResponse response{};
+  if (!try_get_completed_response(request_id, response)) {
+    return kStatusError;
+  }
+  return copy_completed_field(buffer, capacity, response.output_text);
+}
+
+int CE_GetCompletedRequestErrorSize(CE_RequestId request_id) {
+  noumena::cogentengine::GenerateResponse response{};
+  if (!try_get_completed_response(request_id, response)) {
+    return kStatusError;
+  }
+  return static_cast<int>(response.error_message.size());
+}
+
+int CE_CopyCompletedRequestError(CE_RequestId request_id, char *buffer,
+                                 int32_t capacity) {
+  noumena::cogentengine::GenerateResponse response{};
+  if (!try_get_completed_response(request_id, response)) {
+    return kStatusError;
+  }
+  return copy_completed_field(buffer, capacity, response.error_message);
+}
+
+int CE_ConsumeCompletedRequest(CE_RequestId request_id) {
+  auto runtime = acquire_engine_runtime();
+  if (!runtime || request_id == 0) {
+    return 0;
+  }
+  return runtime->ConsumeCompletedResponse(request_id) ? 1 : 0;
 }
 
 const char *CE_GetBackendObservabilityJsonString() {
@@ -375,7 +493,9 @@ std::string CE_RunQueuedRequestJsonString(CE_RequestId request_id) {
   if (!success &&
       response.status != noumena::cogentengine::GenerateResponseStatus::Failed &&
       response.status !=
-          noumena::cogentengine::GenerateResponseStatus::Completed) {
+          noumena::cogentengine::GenerateResponseStatus::Completed &&
+      response.status !=
+          noumena::cogentengine::GenerateResponseStatus::Cancelled) {
     response.status = noumena::cogentengine::GenerateResponseStatus::Failed;
     response.error_message = "Queued request execution failed.";
   }

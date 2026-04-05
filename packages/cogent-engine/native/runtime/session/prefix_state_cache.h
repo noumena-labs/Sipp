@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <list>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -54,7 +55,9 @@ struct PrefixCacheLookupKeyHasher {
 
 class PrefixStateCache {
 public:
-  explicit PrefixStateCache(std::size_t max_entries = 32);
+  explicit PrefixStateCache(
+      std::size_t max_entries = 32,
+      std::size_t max_total_bytes = 256ull * 1024ull * 1024ull);
 
   void set_max_entries(std::size_t max_entries);
 
@@ -73,14 +76,25 @@ public:
   void Clear();
 
 private:
-  void EnforceLimit();
-  void RebuildLookupBuckets();
+  using EntryList = std::list<PrefixCacheEntry>;
+  using EntryIterator = EntryList::iterator;
 
-  std::vector<PrefixCacheEntry> entries_;
-  std::unordered_map<PrefixCacheLookupKey, std::vector<std::size_t>,
+  void EnforceLimit();
+  EntryIterator FindExistingEntry(
+      std::uint64_t model_fingerprint, const std::string &context_key,
+      const std::vector<llama_token> &tokens, std::size_t token_count,
+      std::uint64_t prefix_hash);
+  void AddToLookupBucket(const EntryIterator &entry_it);
+  void RemoveFromLookupBucket(const EntryIterator &entry_it);
+  void RemoveEntry(const EntryIterator &entry_it);
+
+  EntryList entries_;
+  std::unordered_map<PrefixCacheLookupKey, std::vector<EntryIterator>,
                      PrefixCacheLookupKeyHasher>
       lookup_buckets_;
   std::size_t max_entries_ = 32;
+  std::size_t max_total_bytes_ = 256ull * 1024ull * 1024ull;
+  std::size_t total_approx_bytes_ = 0;
 };
 
 } // namespace noumena::cogentengine

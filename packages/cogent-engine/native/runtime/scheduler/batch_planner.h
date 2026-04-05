@@ -41,8 +41,6 @@ struct SharedBatchPlan {
 
 class BatchPlanner {
 public:
-  SharedBatchPlan BuildSharedBatch(const std::vector<SlotState *> &runnable_slots,
-                                   int32_t max_batch_tokens) const;
   SharedBatchPlan BuildPolicyBatch(const std::vector<SlotState *> &decode_slots,
                                    const std::vector<SlotState *> &prefill_slots,
                                    const SchedulerTickBudget &budget,

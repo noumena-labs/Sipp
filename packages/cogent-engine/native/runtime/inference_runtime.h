@@ -13,6 +13,7 @@
 #include <functional>
 #include <mutex>
 #include <string>
+#include <unordered_set>
 
 #include "runtime/config/inference_config.h"
 #include "runtime/llama/llama_batch_builder.h"
@@ -29,6 +30,14 @@ struct llama_sampler;
 
 namespace noumena::cogentengine {
 
+enum class RequestStepResult : std::int32_t {
+  Invalid = -1,
+  FatalNoProgress = -2,
+  Waiting = 0,
+  Progressed = 1,
+  Terminal = 2,
+};
+
 class InferenceRuntime {
 public:
   using TokenCallback = std::function<bool(const char *, int32_t)>;
@@ -41,6 +50,7 @@ public:
   bool TryGetRuntimeObservability(RuntimeObservabilityMetrics &out) const;
   bool RuntimeObservabilityEnabled() const;
   bool BackendProfilingEnabled() const;
+  void ResetRuntimeObservability();
 
   bool Prompt(std::string context_key, std::string prompt, int n_tokens_predict,
               TokenCallback on_token_received = {});
@@ -49,6 +59,10 @@ public:
                                    int n_tokens_predict,
                                    TokenCallback on_token_received = {});
   bool CancelRequest(GenerateRequestId request_id);
+  RequestStepResult RunRequestStep(GenerateRequestId request_id);
+  bool TryPeekCompletedResponse(GenerateRequestId request_id,
+                                GenerateResponse &out_response) const;
+  bool ConsumeCompletedResponse(GenerateRequestId request_id);
   bool RunUntilRequestCompletes(GenerateRequestId request_id,
                                 GenerateResponse &out_response);
 
@@ -66,16 +80,17 @@ private:
                                         std::size_t token_count,
                                         std::size_t terminal_token_count,
                                         GenerateRequest *request);
-  bool ExecutePromptTokensLocked(const std::string &context_key,
-                                 const std::vector<llama_token> &prompt_tokens,
-                                 int n_tokens_predict,
-                                 TokenCallback on_token_received);
-  bool ExecuteSingleSlotRequestLocked(SlotState &slot);
   bool RunSharedBatchTickLocked();
   bool RunPolicyBatchTickLocked();
+  int32_t ResolvePrefillChunkSizeLocked(
+      const SchedulerTickBudget &tick_budget, int32_t decode_ready_count,
+      int32_t prefill_ready_count) const;
   void UpdateSharedBatchMetricsLocked(const SharedBatchPlan &plan);
   void UpdateSchedulerObservabilityLocked(const SharedBatchPlan &plan,
-                                          const SchedulerTickBudget &budget);
+                                          const SchedulerTickBudget &budget,
+                                          int32_t effective_prefill_chunk_size);
+  void CommitCompletedObservabilityLocked(GenerateRequestId request_id,
+                                          const GenerateResponse &response);
   llama_context *CreateContext() const;
 
   InferenceRuntimeConfig config_;
@@ -95,6 +110,7 @@ private:
   PrefixCachePolicy prefix_cache_policy_;
   GenerateRequestId next_request_id_ = 1;
   std::uint64_t model_fingerprint_ = 0;
+  std::unordered_set<GenerateRequestId> committed_observability_request_ids_;
   mutable std::mutex operation_mutex_;
 };
 

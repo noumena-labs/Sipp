@@ -261,316 +261,6 @@ void InferenceRuntime::MaybeStorePrefixCacheEntryLocked(
   }
 }
 
-bool InferenceRuntime::ExecutePromptTokensLocked(
-    const std::string &context_key,
-    const std::vector<llama_token> &prompt_tokens, int n_tokens_predict,
-    TokenCallback on_token_received) {
-  if (primary_model_ == nullptr || shared_context_ == nullptr ||
-      sampler_ == nullptr) {
-    return false;
-  }
-  if (n_tokens_predict <= 0 || n_tokens_predict > kMaxPredictionTokens) {
-    return false;
-  }
-
-  std::string model_context_key =
-      context_key.empty() ? kDefaultPromptContextKey : context_key;
-  if (prompt_tokens.empty()) {
-    return true;
-  }
-
-  SequenceState *state = session_store_.Find(model_context_key);
-  if (state == nullptr) {
-    state = &session_store_.GetOrCreateSession(model_context_key);
-  }
-
-  session_store_.Touch(model_context_key);
-  if (state == nullptr || state->seq_id < 0) {
-    session_store_.Remove(model_context_key);
-    return false;
-  }
-
-  GenerateRequest perf_request{};
-  const std::vector<llama_token> &new_tokens = prompt_tokens;
-  const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
-  llama_context *ctx = shared_context_;
-  std::size_t match_len = 0;
-  if (!PrepareSequenceForPromptLocked(model_context_key, new_tokens,
-                                      n_tokens_predict, *state, &perf_request,
-                                      match_len)) {
-    return false;
-  }
-
-  if (config_.enable_runtime_observability > 0) {
-    llama_perf_context_reset(ctx);
-    llama_perf_sampler_reset(sampler_);
-  }
-  llama_sampler_reset(sampler_);
-  const auto total_start = std::chrono::steady_clock::now();
-
-  const int n_batch = static_cast<int>(llama_n_batch(ctx));
-  llama_batch batch = llama_batch_init(
-      n_batch, 0,
-      static_cast<int32_t>(std::max<uint32_t>(1, llama_n_seq_max(ctx))));
-
-  for (size_t i = match_len; i < new_tokens.size(); ++i) {
-    const int batch_pos = static_cast<int>(i);
-    const bool logits = (i == new_tokens.size() - 1);
-
-    llama_utils::BatchAdd(batch, new_tokens[i], batch_pos, state->seq_id,
-                          logits);
-
-    if (batch.n_tokens >= n_batch) {
-      if (llama_decode(ctx, batch) != 0) {
-        fprintf(stderr, "%s : failed to eval prompt\n", __func__);
-        llama_batch_free(batch);
-        return false;
-      }
-      state->n_past += batch.n_tokens;
-      llama_utils::BatchClear(batch);
-    }
-  }
-
-  if (batch.n_tokens > 0) {
-    if (llama_decode(ctx, batch) != 0) {
-      fprintf(stderr, "%s : failed to eval prompt final\n", __func__);
-      llama_batch_free(batch);
-      return false;
-    }
-    state->n_past += batch.n_tokens;
-  }
-
-  llama_synchronize(ctx);
-
-  state->current_kv_tokens = new_tokens;
-  MaybeStorePrefixCacheEntryLocked(model_context_key, *state,
-                                   state->current_kv_tokens.size(),
-                                   state->current_kv_tokens.size(),
-                                   config_.enable_runtime_observability > 0
-                                       ? &perf_request
-                                       : nullptr);
-
-  llama_utils::BatchClear(batch);
-  int output_token_count = 0;
-  bool has_first_token_time = false;
-  std::chrono::steady_clock::time_point first_token_time{};
-  std::chrono::steady_clock::time_point last_token_time{};
-  double accumulated_itl_ms = 0.0;
-  double tail_itl_ms = 0.0;
-
-  for (int i = 0; i < n_tokens_predict; ++i) {
-    const llama_token tok = llama_sampler_sample(sampler_, ctx, -1);
-
-    if (llama_vocab_is_eog(vocab, tok)) {
-      break;
-    }
-
-    char buf[128];
-    const int n = llama_token_to_piece(vocab, tok, buf, sizeof(buf), 0, true);
-    if (n < 0) {
-      break;
-    }
-    output_token_count++;
-
-    const auto token_time = std::chrono::steady_clock::now();
-    if (!has_first_token_time) {
-      first_token_time = token_time;
-      has_first_token_time = true;
-    } else {
-      const double itl_ms =
-          std::chrono::duration<double, std::milli>(token_time - last_token_time)
-              .count();
-      accumulated_itl_ms += itl_ms;
-      tail_itl_ms = std::max(tail_itl_ms, itl_ms);
-    }
-    last_token_time = token_time;
-
-    if (on_token_received) {
-      if (!on_token_received(buf, n)) {
-        break;
-      }
-    }
-
-    llama_utils::BatchClear(batch);
-    llama_utils::BatchAdd(batch, tok, state->n_past, state->seq_id, true);
-
-    if (llama_decode(ctx, batch) != 0) {
-      break;
-    }
-
-    llama_synchronize(ctx);
-
-    state->n_past++;
-    state->current_kv_tokens.push_back(tok);
-  }
-
-  llama_batch_free(batch);
-  MaybeStorePrefixCacheEntryLocked(model_context_key, *state,
-                                   state->current_kv_tokens.size(),
-                                   state->current_kv_tokens.size(),
-                                   config_.enable_runtime_observability > 0
-                                       ? &perf_request
-                                       : nullptr);
-
-  const auto total_end = std::chrono::steady_clock::now();
-  if (config_.enable_runtime_observability > 0) {
-    const auto ctx_perf = llama_perf_context(ctx);
-    const auto sampler_perf = llama_perf_sampler(sampler_);
-
-    last_runtime_observability_ = RuntimeObservabilityMetrics{
-        .total_ms =
-            std::chrono::duration<double, std::milli>(total_end - total_start)
-                .count(),
-        .prompt_eval_ms = ctx_perf.t_p_eval_ms,
-        .decode_eval_ms = ctx_perf.t_eval_ms,
-        .sample_ms = sampler_perf.t_sample_ms,
-        .queue_delay_ms = 0.0,
-        .ttft_ms =
-            has_first_token_time
-                ? std::chrono::duration<double, std::milli>(first_token_time -
-                                                            total_start)
-                      .count()
-                : 0.0,
-        .mean_itl_ms =
-            output_token_count > 1
-                ? accumulated_itl_ms / static_cast<double>(output_token_count - 1)
-                : 0.0,
-        .tail_itl_ms = tail_itl_ms,
-        .e2e_ms =
-            std::chrono::duration<double, std::milli>(total_end - total_start)
-                .count(),
-        .input_token_count = static_cast<int32_t>(new_tokens.size()),
-        .prompt_eval_tokens = ctx_perf.n_p_eval,
-        .decode_eval_count = ctx_perf.n_eval,
-        .sample_count = sampler_perf.n_sample,
-        .output_token_count = output_token_count,
-        .scheduler_tick_count = 0,
-        .batch_participation_count = 0,
-        .decode_first_tick_count = 0,
-        .chunked_prefill_tick_count = 0,
-        .mixed_workload_tick_count = 0,
-        .lcp_reuse_tokens = perf_request.lcp_reuse_tokens,
-        .prefix_cache_restore_tokens = perf_request.prefix_cache_restore_tokens,
-        .prefix_cache_hit_count = perf_request.prefix_cache_hit_count,
-        .prefix_cache_store_count = perf_request.prefix_cache_store_count,
-    };
-    has_last_runtime_observability_ = true;
-  }
-
-  return true;
-}
-
-bool InferenceRuntime::ExecuteSingleSlotRequestLocked(SlotState &slot) {
-  if (slot.request == nullptr || slot.session == nullptr) {
-    slot.terminal_error_message = "Single-slot execution lost request state.";
-    slot.phase = SlotPhase::Failed;
-    return true;
-  }
-
-  GenerateRequest &request = *slot.request;
-  request.lifecycle = GenerateRequestLifecycle::Running;
-  request.emitted_token_count = 0;
-  request.accumulated_itl_ms = 0.0;
-  request.tail_itl_ms = 0.0;
-  request.has_first_token_at = false;
-  request.has_last_token_at = false;
-
-  std::string output_text;
-  const auto request_start = std::chrono::steady_clock::now();
-
-  const bool success = ExecutePromptTokensLocked(
-      request.context_key, request.prompt_tokens, request.max_output_tokens,
-      [&](const char *token_piece, int32_t token_length) {
-        const auto now = std::chrono::steady_clock::now();
-        if (!request.has_first_token_at) {
-          request.first_token_at = now;
-          request.has_first_token_at = true;
-        } else if (request.has_last_token_at) {
-          const double itl_ms =
-              std::chrono::duration<double, std::milli>(now -
-                                                        request.last_token_at)
-                  .count();
-          request.accumulated_itl_ms += itl_ms;
-          request.tail_itl_ms = std::max(request.tail_itl_ms, itl_ms);
-        }
-
-        request.last_token_at = now;
-        request.has_last_token_at = true;
-        request.emitted_token_count++;
-        output_text.append(token_piece, static_cast<std::size_t>(token_length));
-
-        if (request.on_token_received) {
-          if (!request.on_token_received(token_piece, token_length)) {
-            request.cancel_requested = true;
-            return false;
-          }
-        }
-        return true;
-      });
-
-  slot.scheduler_tick_count++;
-  slot.batch_participation_count++;
-  slot.decode_step_count =
-      static_cast<std::size_t>(last_runtime_observability_.decode_eval_count);
-  slot.output_text = std::move(output_text);
-
-  request.completed_at = std::chrono::steady_clock::now();
-  request.has_completed_at = true;
-
-  last_runtime_observability_.queue_delay_ms =
-      request.has_admitted_at
-          ? std::chrono::duration<double, std::milli>(request.admitted_at -
-                                                      request.enqueued_at)
-                .count()
-          : 0.0;
-  last_runtime_observability_.ttft_ms =
-      request.has_first_token_at
-          ? std::chrono::duration<double, std::milli>(request.first_token_at -
-                                                      request.enqueued_at)
-                .count()
-          : 0.0;
-  last_runtime_observability_.mean_itl_ms =
-      request.emitted_token_count > 1
-          ? request.accumulated_itl_ms /
-                static_cast<double>(request.emitted_token_count - 1)
-          : 0.0;
-  last_runtime_observability_.tail_itl_ms = request.tail_itl_ms;
-  last_runtime_observability_.e2e_ms =
-      std::chrono::duration<double, std::milli>(request.completed_at -
-                                                request.enqueued_at)
-          .count();
-  last_runtime_observability_.scheduler_tick_count =
-      static_cast<int32_t>(slot.scheduler_tick_count);
-  last_runtime_observability_.batch_participation_count =
-      static_cast<int32_t>(slot.batch_participation_count);
-  last_runtime_observability_.decode_first_tick_count = 0;
-  last_runtime_observability_.chunked_prefill_tick_count = 0;
-  last_runtime_observability_.mixed_workload_tick_count = 0;
-  last_runtime_observability_.total_ms =
-      std::max(last_runtime_observability_.total_ms,
-               std::chrono::duration<double, std::milli>(request.completed_at -
-                                                         request_start)
-                   .count());
-  request.lcp_reuse_tokens = last_runtime_observability_.lcp_reuse_tokens;
-  request.prefix_cache_restore_tokens =
-      last_runtime_observability_.prefix_cache_restore_tokens;
-  request.prefix_cache_hit_count =
-      last_runtime_observability_.prefix_cache_hit_count;
-  request.prefix_cache_store_count =
-      last_runtime_observability_.prefix_cache_store_count;
-
-  if (!success) {
-    slot.terminal_error_message = "Single-slot execution failed.";
-    slot.phase = SlotPhase::Failed;
-    request.lifecycle = GenerateRequestLifecycle::Failed;
-    return true;
-  }
-
-  slot.phase = SlotPhase::Completed;
-  request.lifecycle = GenerateRequestLifecycle::Completed;
-  return true;
-}
-
 bool InferenceRuntime::RunPolicyBatchTickLocked() {
   if (primary_model_ == nullptr || shared_context_ == nullptr ||
       sampler_ == nullptr) {
@@ -667,19 +357,18 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     return false;
   }
 
-  if (live_runnable_slots.size() == 1) {
-    return ExecuteSingleSlotRequestLocked(*live_runnable_slots.front());
-  }
-
   const int32_t batch_token_budget = config_.n_batch > 0 ? config_.n_batch : 256;
   const SchedulerTickBudget tick_budget = slot_scheduler_.BuildTickBudget(
       config_.scheduler_policy,
       static_cast<int32_t>(live_decode_ready_slots.size()),
       static_cast<int32_t>(live_prefill_ready_slots.size()), batch_token_budget,
       config_.prefill_chunk_size);
+  const int32_t effective_prefill_chunk_size = ResolvePrefillChunkSizeLocked(
+      tick_budget, static_cast<int32_t>(live_decode_ready_slots.size()),
+      static_cast<int32_t>(live_prefill_ready_slots.size()));
   SharedBatchPlan plan = batch_planner_.BuildPolicyBatch(
       live_decode_ready_slots, live_prefill_ready_slots, tick_budget,
-      config_.prefill_chunk_size);
+      effective_prefill_chunk_size);
   if (plan.Empty()) {
     return false;
   }
@@ -721,7 +410,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
         request->decode_first_tick_count++;
       }
     }
-    if (config_.prefill_chunk_size > 0) {
+    if (effective_prefill_chunk_size > 0) {
       for (GenerateRequest *request : prefill_requests) {
         request->chunked_prefill_tick_count++;
       }
@@ -934,13 +623,40 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     last_runtime_observability_.sample_ms += tick_sample_ms;
 
     UpdateSharedBatchMetricsLocked(plan);
-    UpdateSchedulerObservabilityLocked(plan, tick_budget);
+    UpdateSchedulerObservabilityLocked(plan, tick_budget,
+                                       effective_prefill_chunk_size);
   }
   return true;
 }
 
 bool InferenceRuntime::RunSharedBatchTickLocked() {
   return RunPolicyBatchTickLocked();
+}
+
+int32_t InferenceRuntime::ResolvePrefillChunkSizeLocked(
+    const SchedulerTickBudget &tick_budget, int32_t decode_ready_count,
+    int32_t prefill_ready_count) const {
+  const int32_t configured_chunk_size = std::max(0, config_.prefill_chunk_size);
+  if (!config_.scheduler_policy.enable_adaptive_prefill_chunking ||
+      prefill_ready_count <= 0) {
+    return configured_chunk_size;
+  }
+
+  if (decode_ready_count <= 0 && configured_chunk_size <= 0) {
+    return 0;
+  }
+
+  const int32_t prefill_budget = tick_budget.EffectivePrefillBudget();
+  if (prefill_budget <= 0) {
+    return configured_chunk_size;
+  }
+
+  const int32_t fair_share =
+      std::max<int32_t>(1, prefill_budget / std::max<int32_t>(1, prefill_ready_count));
+  if (configured_chunk_size > 0) {
+    return std::min(configured_chunk_size, fair_share);
+  }
+  return fair_share;
 }
 
 void InferenceRuntime::UpdateSharedBatchMetricsLocked(
@@ -959,7 +675,8 @@ void InferenceRuntime::UpdateSharedBatchMetricsLocked(
 }
 
 void InferenceRuntime::UpdateSchedulerObservabilityLocked(
-    const SharedBatchPlan &plan, const SchedulerTickBudget &budget) {
+    const SharedBatchPlan &plan, const SchedulerTickBudget &budget,
+    int32_t effective_prefill_chunk_size) {
   // Phase 4 algorithm steps:
   // 1. Record whether this tick used explicit decode reservation.
   // 2. Record whether chunked prefill was active.
@@ -970,12 +687,60 @@ void InferenceRuntime::UpdateSchedulerObservabilityLocked(
   if (budget.EffectiveDecodeBudget() > 0 && plan.decode_token_count > 0) {
     scheduler_observability_.decode_first_tick_count++;
   }
-  if (config_.prefill_chunk_size > 0 && plan.prefill_token_count > 0) {
+  if (effective_prefill_chunk_size > 0 && plan.prefill_token_count > 0) {
     scheduler_observability_.chunked_prefill_tick_count++;
   }
   if (plan.decode_token_count > 0 && plan.prefill_token_count > 0) {
     scheduler_observability_.mixed_workload_tick_count++;
   }
+}
+
+void InferenceRuntime::CommitCompletedObservabilityLocked(
+    GenerateRequestId request_id, const GenerateResponse &response) {
+  if (request_id == 0 ||
+      committed_observability_request_ids_.contains(request_id)) {
+    return;
+  }
+  committed_observability_request_ids_.insert(request_id);
+
+  if (config_.enable_runtime_observability == 0) {
+    return;
+  }
+
+  const RuntimeObservabilityMetrics accumulated_runtime_observability =
+      last_runtime_observability_;
+  last_runtime_observability_ = response.runtime_observability;
+  last_runtime_observability_.total_ms =
+      accumulated_runtime_observability.total_ms > 0.0
+          ? accumulated_runtime_observability.total_ms
+          : std::max(response.runtime_observability.total_ms,
+                     response.runtime_observability.e2e_ms);
+  last_runtime_observability_.prompt_eval_ms =
+      accumulated_runtime_observability.prompt_eval_ms;
+  last_runtime_observability_.decode_eval_ms =
+      accumulated_runtime_observability.decode_eval_ms;
+  last_runtime_observability_.sample_ms =
+      accumulated_runtime_observability.sample_ms;
+  last_runtime_observability_.prompt_eval_tokens =
+      accumulated_runtime_observability.prompt_eval_tokens;
+  last_runtime_observability_.decode_eval_count = std::max(
+      last_runtime_observability_.decode_eval_count,
+      accumulated_runtime_observability.decode_eval_count);
+  last_runtime_observability_.sample_count = std::max(
+      last_runtime_observability_.sample_count,
+      accumulated_runtime_observability.sample_count);
+  last_runtime_observability_.output_token_count = std::max(
+      last_runtime_observability_.output_token_count,
+      accumulated_runtime_observability.output_token_count);
+  has_last_runtime_observability_ = true;
+
+  scheduler_observability_.accumulated_queue_delay_ms +=
+      response.runtime_observability.queue_delay_ms;
+  scheduler_observability_.accumulated_ttft_ms +=
+      response.runtime_observability.ttft_ms;
+  scheduler_observability_.max_tail_itl_ms =
+      std::max(scheduler_observability_.max_tail_itl_ms,
+               response.runtime_observability.tail_itl_ms);
 }
 
 InferenceRuntime::InferenceRuntime(std::string model_path,
@@ -1135,6 +900,15 @@ bool InferenceRuntime::BackendProfilingEnabled() const {
   return config_.enable_backend_profiling > 0;
 }
 
+void InferenceRuntime::ResetRuntimeObservability() {
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+  last_runtime_observability_ = {};
+  has_last_runtime_observability_ = false;
+  shared_batch_observability_ = {};
+  scheduler_observability_ = {};
+  committed_observability_request_ids_.clear();
+}
+
 GenerateRequestId
 InferenceRuntime::EnqueueRequest(std::string context_key, std::string prompt,
                                  int n_tokens_predict,
@@ -1154,13 +928,12 @@ InferenceRuntime::EnqueueRequest(std::string context_key, std::string prompt,
   GenerateRequest request;
   request.id = next_request_id_++;
   request.context_key = std::move(context_key);
-  request.prompt_text = std::move(prompt);
   request.max_output_tokens = n_tokens_predict;
   request.on_token_received = std::move(on_token_received);
 
   const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
   request.prompt_tokens =
-      llama_utils::Tokenize(vocab, request.prompt_text, false, true);
+      llama_utils::Tokenize(vocab, prompt, false, true);
 
   if (!request_queue_.Push(std::move(request))) {
     return 0;
@@ -1177,126 +950,132 @@ bool InferenceRuntime::CancelRequest(GenerateRequestId request_id) {
   return request_queue_.Cancel(request_id, "Request cancelled.");
 }
 
-bool InferenceRuntime::RunUntilRequestCompletes(
-    GenerateRequestId request_id, GenerateResponse &out_response) {
+RequestStepResult InferenceRuntime::RunRequestStep(GenerateRequestId request_id) {
   std::lock_guard<std::mutex> lock(operation_mutex_);
-
-  out_response = {};
-  has_last_runtime_observability_ = false;
-
-  const auto commit_completed_observability =
-      [this](const GenerateResponse &response) {
-    if (config_.enable_runtime_observability == 0) {
-      return;
-    }
-    const RuntimeObservabilityMetrics accumulated_runtime_observability =
-        last_runtime_observability_;
-    last_runtime_observability_ = response.runtime_observability;
-    last_runtime_observability_.total_ms =
-        accumulated_runtime_observability.total_ms > 0.0
-            ? accumulated_runtime_observability.total_ms
-            : std::max(response.runtime_observability.total_ms,
-                       response.runtime_observability.e2e_ms);
-    last_runtime_observability_.prompt_eval_ms =
-        accumulated_runtime_observability.prompt_eval_ms;
-    last_runtime_observability_.decode_eval_ms =
-        accumulated_runtime_observability.decode_eval_ms;
-    last_runtime_observability_.sample_ms =
-        accumulated_runtime_observability.sample_ms;
-    last_runtime_observability_.prompt_eval_tokens =
-        accumulated_runtime_observability.prompt_eval_tokens;
-    last_runtime_observability_.decode_eval_count = std::max(
-        last_runtime_observability_.decode_eval_count,
-        accumulated_runtime_observability.decode_eval_count);
-    last_runtime_observability_.sample_count = std::max(
-        last_runtime_observability_.sample_count,
-        accumulated_runtime_observability.sample_count);
-    last_runtime_observability_.output_token_count = std::max(
-        last_runtime_observability_.output_token_count,
-        accumulated_runtime_observability.output_token_count);
-    has_last_runtime_observability_ = true;
-
-    scheduler_observability_.accumulated_queue_delay_ms +=
-        response.runtime_observability.queue_delay_ms;
-    scheduler_observability_.accumulated_ttft_ms +=
-        response.runtime_observability.ttft_ms;
-    scheduler_observability_.max_tail_itl_ms =
-        std::max(scheduler_observability_.max_tail_itl_ms,
-                 response.runtime_observability.tail_itl_ms);
-  };
 
   if (request_id == 0 || primary_model_ == nullptr || shared_context_ == nullptr ||
       sampler_ == nullptr) {
+    return RequestStepResult::Invalid;
+  }
+
+  if (const GenerateResponse *completed =
+          request_queue_.PeekCompletedResponse(request_id);
+      completed != nullptr) {
+    CommitCompletedObservabilityLocked(request_id, *completed);
+    return RequestStepResult::Terminal;
+  }
+
+  GenerateRequest *target_request = request_queue_.FindMutable(request_id);
+  if (target_request == nullptr) {
+    return RequestStepResult::Invalid;
+  }
+
+  bool admitted_any = false;
+  while (slot_scheduler_.AdmitPendingRequests(request_queue_, session_store_)) {
+    admitted_any = true;
+  }
+
+  if (const GenerateResponse *completed =
+          request_queue_.PeekCompletedResponse(request_id);
+      completed != nullptr) {
+    CommitCompletedObservabilityLocked(request_id, *completed);
+    return RequestStepResult::Terminal;
+  }
+
+  const bool tick_executed = RunPolicyBatchTickLocked();
+  if (!tick_executed) {
+    if (target_request->lifecycle == GenerateRequestLifecycle::Pending ||
+        target_request->lifecycle == GenerateRequestLifecycle::Admitted) {
+      return admitted_any ? RequestStepResult::Progressed
+                          : RequestStepResult::Waiting;
+    }
+
+    SlotState *active_slot = slot_scheduler_.FindFirstActiveSlot();
+    if (active_slot == nullptr) {
+      return RequestStepResult::FatalNoProgress;
+    }
+    if (active_slot->phase != SlotPhase::Failed &&
+        active_slot->phase != SlotPhase::Completed) {
+      active_slot->terminal_error_message =
+          "Shared batch tick could not make progress.";
+      active_slot->phase = SlotPhase::Failed;
+    }
+  }
+
+  slot_scheduler_.FinalizeCompletedSlots(request_queue_, session_store_);
+
+  if (const GenerateResponse *completed =
+          request_queue_.PeekCompletedResponse(request_id);
+      completed != nullptr) {
+    CommitCompletedObservabilityLocked(request_id, *completed);
+    return RequestStepResult::Terminal;
+  }
+
+  return (tick_executed || admitted_any) ? RequestStepResult::Progressed
+                                         : RequestStepResult::Waiting;
+}
+
+bool InferenceRuntime::TryPeekCompletedResponse(GenerateRequestId request_id,
+                                                GenerateResponse &out_response) const {
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+  const GenerateResponse *response = request_queue_.PeekCompletedResponse(request_id);
+  if (response == nullptr) {
     return false;
+  }
+  out_response = *response;
+  return true;
+}
+
+bool InferenceRuntime::ConsumeCompletedResponse(GenerateRequestId request_id) {
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+  committed_observability_request_ids_.erase(request_id);
+  return request_queue_.ConsumeCompletedResponse(request_id);
+}
+
+bool InferenceRuntime::RunUntilRequestCompletes(
+    GenerateRequestId request_id, GenerateResponse &out_response) {
+  out_response = {};
+  {
+    std::lock_guard<std::mutex> lock(operation_mutex_);
+    has_last_runtime_observability_ = false;
   }
 
   while (true) {
-    if (auto completed = request_queue_.TakeCompletedResponse(request_id);
-        completed.has_value()) {
-      out_response = std::move(*completed);
-      commit_completed_observability(out_response);
-      return out_response.status == GenerateResponseStatus::Completed;
-    }
-
-    GenerateRequest *target_request = request_queue_.FindMutable(request_id);
-    if (target_request == nullptr) {
+    const RequestStepResult step_result = RunRequestStep(request_id);
+    if (step_result == RequestStepResult::Invalid ||
+        step_result == RequestStepResult::FatalNoProgress) {
       return false;
     }
-
-    while (
-        slot_scheduler_.AdmitPendingRequests(request_queue_, session_store_)) {
+    if (step_result != RequestStepResult::Terminal) {
+      continue;
     }
-
-    if (auto completed = request_queue_.TakeCompletedResponse(request_id);
-        completed.has_value()) {
-      out_response = std::move(*completed);
-      commit_completed_observability(out_response);
-      return out_response.status == GenerateResponseStatus::Completed;
+    if (!TryPeekCompletedResponse(request_id, out_response)) {
+      return false;
     }
-
-    const bool tick_executed = RunPolicyBatchTickLocked();
-    if (!tick_executed) {
-      SlotState *active_slot = slot_scheduler_.FindFirstActiveSlot();
-      if (active_slot == nullptr) {
-        return false;
-      }
-      if (active_slot->phase != SlotPhase::Failed &&
-          active_slot->phase != SlotPhase::Completed) {
-        active_slot->terminal_error_message =
-            "Shared batch tick could not make progress.";
-        active_slot->phase = SlotPhase::Failed;
-      }
+    const bool consumed = ConsumeCompletedResponse(request_id);
+    if (!consumed) {
+      return false;
     }
-
-    slot_scheduler_.FinalizeCompletedSlots(request_queue_, session_store_);
+    return out_response.status == GenerateResponseStatus::Completed;
   }
 }
 
 bool InferenceRuntime::Prompt(std::string model_context_key, std::string prompt,
                               int n_tokens_predict,
                               TokenCallback on_token_received) {
-  // Phase 2 note:
-  // - This is still the live Phase 1 execution path.
-  // - Once request queue ownership is implemented, keep Prompt(...) as the
-  //   synchronous wrapper that enqueues a request and waits for completion.
-  std::lock_guard<std::mutex> lock(operation_mutex_);
-  has_last_runtime_observability_ = false;
-
-  if (primary_model_ == nullptr || sampler_ == nullptr) {
-    return false;
-  }
-  if (n_tokens_predict <= 0 || n_tokens_predict > kMaxPredictionTokens) {
-    return false;
-  }
   if (model_context_key.empty()) {
     model_context_key = kDefaultPromptContextKey;
   }
 
-  const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
-  std::vector<llama_token> new_tokens =
-      llama_utils::Tokenize(vocab, prompt, false, true);
-  return ExecutePromptTokensLocked(model_context_key, new_tokens,
-                                   n_tokens_predict, on_token_received);
+  const GenerateRequestId request_id = EnqueueRequest(
+      std::move(model_context_key), std::move(prompt), n_tokens_predict,
+      std::move(on_token_received));
+  if (request_id == 0) {
+    return false;
+  }
+
+  GenerateResponse response;
+  return RunUntilRequestCompletes(request_id, response);
 }
 
 } // namespace noumena::cogentengine

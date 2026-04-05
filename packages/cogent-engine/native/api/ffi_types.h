@@ -10,7 +10,10 @@
 
 #include <stdint.h>
 
-typedef uint64_t CE_RequestId;
+// JS/Wasm interop calls these functions through `ccall`, so request ids must
+// stay in a JS-safe scalar ABI. Do not widen this to uint64_t without also
+// changing the exported calling convention.
+typedef uint32_t CE_RequestId;
 typedef int32_t (*CE_TokenCallback)(const char *token_piece,
                                     int32_t token_length);
 
@@ -61,3 +64,10 @@ typedef struct CE_RuntimeObservabilityMetrics {
   int32_t prefix_cache_hit_count;
   int32_t prefix_cache_store_count;
 } CE_RuntimeObservabilityMetrics;
+
+#ifdef __cplusplus
+static_assert(sizeof(CE_RequestId) == 4,
+              "CE_RequestId must stay 32-bit for JS/Wasm FFI calls.");
+static_assert(sizeof(CE_RuntimeObservabilityMetrics) == 128,
+              "CE_RuntimeObservabilityMetrics layout changed. Update the TS FFI reader.");
+#endif

@@ -12,13 +12,14 @@
 
 namespace noumena::cogentengine {
 
-PrefixStateCache::PrefixStateCache(std::size_t max_entries)
-    : max_entries_(std::max<std::size_t>(1, max_entries)) {}
+PrefixStateCache::PrefixStateCache(std::size_t max_entries,
+                                   std::size_t max_total_bytes)
+    : max_entries_(std::max<std::size_t>(1, max_entries)),
+      max_total_bytes_(std::max<std::size_t>(1, max_total_bytes)) {}
 
 void PrefixStateCache::set_max_entries(std::size_t max_entries) {
   max_entries_ = std::max<std::size_t>(1, max_entries);
   EnforceLimit();
-  RebuildLookupBuckets();
 }
 
 const PrefixCacheEntry *PrefixStateCache::FindBestPrefix(
@@ -46,11 +47,8 @@ const PrefixCacheEntry *PrefixStateCache::FindBestPrefix(
     }
 
     PrefixCacheEntry *best_entry = nullptr;
-    for (const std::size_t entry_index : bucket_it->second) {
-      if (entry_index >= entries_.size()) {
-        continue;
-      }
-      PrefixCacheEntry &entry = entries_[entry_index];
+    for (const EntryIterator &entry_it : bucket_it->second) {
+      PrefixCacheEntry &entry = *entry_it;
       if (entry.prefix_tokens.size() != candidate.token_count) {
         continue;
       }
@@ -108,30 +106,9 @@ bool PrefixStateCache::StorePrefixState(
     return false;
   }
 
-  auto existing_it = entries_.end();
-  const PrefixCacheLookupKey lookup_key{
-      .model_fingerprint = model_fingerprint,
-      .token_count = token_count,
-      .prefix_hash = prefix_hash,
-  };
-  if (auto bucket_it = lookup_buckets_.find(lookup_key);
-      bucket_it != lookup_buckets_.end()) {
-    for (const std::size_t entry_index : bucket_it->second) {
-      if (entry_index >= entries_.size()) {
-        continue;
-      }
-      auto candidate_it = entries_.begin() + static_cast<std::ptrdiff_t>(entry_index);
-      if (candidate_it->context_key != context_key ||
-          candidate_it->prefix_tokens.size() != token_count) {
-        continue;
-      }
-      if (std::equal(candidate_it->prefix_tokens.begin(),
-                     candidate_it->prefix_tokens.end(), tokens.begin())) {
-        existing_it = candidate_it;
-        break;
-      }
-    }
-  }
+  EntryIterator existing_it = FindExistingEntry(model_fingerprint, context_key,
+                                                tokens, token_count,
+                                                prefix_hash);
 
   PrefixCacheEntry entry;
   entry.model_fingerprint = model_fingerprint;
@@ -147,23 +124,29 @@ bool PrefixStateCache::StorePrefixState(
   entry.last_used = std::chrono::steady_clock::now();
 
   if (existing_it != entries_.end()) {
+    total_approx_bytes_ -= existing_it->approx_bytes;
     *existing_it = std::move(entry);
+    total_approx_bytes_ += existing_it->approx_bytes;
   } else {
     entries_.push_back(std::move(entry));
+    const EntryIterator inserted_it = std::prev(entries_.end());
+    total_approx_bytes_ += inserted_it->approx_bytes;
+    AddToLookupBucket(inserted_it);
   }
 
   EnforceLimit();
-  RebuildLookupBuckets();
   return true;
 }
 
 void PrefixStateCache::Clear() {
   entries_.clear();
   lookup_buckets_.clear();
+  total_approx_bytes_ = 0;
 }
 
 void PrefixStateCache::EnforceLimit() {
-  while (entries_.size() > max_entries_) {
+  while (entries_.size() > max_entries_ ||
+         total_approx_bytes_ > max_total_bytes_) {
     const auto evict_it = std::min_element(
         entries_.begin(), entries_.end(),
         [](const PrefixCacheEntry &left, const PrefixCacheEntry &right) {
@@ -178,22 +161,74 @@ void PrefixStateCache::EnforceLimit() {
     if (evict_it == entries_.end()) {
       break;
     }
-    entries_.erase(evict_it);
+    RemoveEntry(evict_it);
   }
 }
 
-void PrefixStateCache::RebuildLookupBuckets() {
-  lookup_buckets_.clear();
-  lookup_buckets_.reserve(entries_.size());
-  for (std::size_t index = 0; index < entries_.size(); ++index) {
-    const PrefixCacheEntry &entry = entries_[index];
-    const PrefixCacheLookupKey lookup_key{
-        .model_fingerprint = entry.model_fingerprint,
-        .token_count = entry.token_count,
-        .prefix_hash = entry.prefix_hash,
-    };
-    lookup_buckets_[lookup_key].push_back(index);
+PrefixStateCache::EntryIterator PrefixStateCache::FindExistingEntry(
+    std::uint64_t model_fingerprint, const std::string &context_key,
+    const std::vector<llama_token> &tokens, std::size_t token_count,
+    std::uint64_t prefix_hash) {
+  const PrefixCacheLookupKey lookup_key{
+      .model_fingerprint = model_fingerprint,
+      .token_count = token_count,
+      .prefix_hash = prefix_hash,
+  };
+  const auto bucket_it = lookup_buckets_.find(lookup_key);
+  if (bucket_it == lookup_buckets_.end()) {
+    return entries_.end();
   }
+
+  for (const EntryIterator &entry_it : bucket_it->second) {
+    if (entry_it->context_key != context_key ||
+        entry_it->prefix_tokens.size() != token_count) {
+      continue;
+    }
+    if (std::equal(entry_it->prefix_tokens.begin(), entry_it->prefix_tokens.end(),
+                   tokens.begin())) {
+      return entry_it;
+    }
+  }
+
+  return entries_.end();
+}
+
+void PrefixStateCache::AddToLookupBucket(const EntryIterator &entry_it) {
+  const PrefixCacheLookupKey lookup_key{
+      .model_fingerprint = entry_it->model_fingerprint,
+      .token_count = entry_it->token_count,
+      .prefix_hash = entry_it->prefix_hash,
+  };
+  lookup_buckets_[lookup_key].push_back(entry_it);
+}
+
+void PrefixStateCache::RemoveFromLookupBucket(const EntryIterator &entry_it) {
+  const PrefixCacheLookupKey lookup_key{
+      .model_fingerprint = entry_it->model_fingerprint,
+      .token_count = entry_it->token_count,
+      .prefix_hash = entry_it->prefix_hash,
+  };
+  const auto bucket_it = lookup_buckets_.find(lookup_key);
+  if (bucket_it == lookup_buckets_.end()) {
+    return;
+  }
+
+  auto &bucket = bucket_it->second;
+  bucket.erase(
+      std::remove_if(bucket.begin(), bucket.end(),
+                     [&entry_it](const EntryIterator &candidate) {
+                       return candidate == entry_it;
+                     }),
+      bucket.end());
+  if (bucket.empty()) {
+    lookup_buckets_.erase(bucket_it);
+  }
+}
+
+void PrefixStateCache::RemoveEntry(const EntryIterator &entry_it) {
+  total_approx_bytes_ -= entry_it->approx_bytes;
+  RemoveFromLookupBucket(entry_it);
+  entries_.erase(entry_it);
 }
 
 } // namespace noumena::cogentengine

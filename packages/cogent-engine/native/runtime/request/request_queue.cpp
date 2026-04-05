@@ -42,23 +42,45 @@ bool RequestQueue::Push(GenerateRequest request) {
 }
 
 std::optional<GenerateRequestId> RequestQueue::TryPopNext() {
-  if (pending_request_ids_.empty()) {
-    return std::nullopt;
+  return TryPopNextAdmissible(
+      [](const GenerateRequest &) { return true; });
+}
+
+std::optional<GenerateRequestId> RequestQueue::TryPopNextAdmissible(
+    const std::function<bool(const GenerateRequest &)> &predicate) {
+  auto pending_it = pending_request_ids_.begin();
+  while (pending_it != pending_request_ids_.end()) {
+    const GenerateRequestId request_id = *pending_it;
+    const GenerateRequest *request = Find(request_id);
+    if (request == nullptr) {
+      pending_it = pending_request_ids_.erase(pending_it);
+      continue;
+    }
+    if (!predicate(*request)) {
+      ++pending_it;
+      continue;
+    }
+
+    pending_request_ids_.erase(pending_it);
+
+    if (GenerateRequest *mutable_request = FindMutable(request_id)) {
+      mutable_request->lifecycle = GenerateRequestLifecycle::Admitted;
+      mutable_request->admitted_at = std::chrono::steady_clock::now();
+      mutable_request->has_admitted_at = true;
+    }
+
+    return request_id;
   }
 
-  const GenerateRequestId request_id = pending_request_ids_.front();
-  pending_request_ids_.pop_front();
-
-  if (GenerateRequest *request = FindMutable(request_id)) {
-    request->lifecycle = GenerateRequestLifecycle::Admitted;
-    request->admitted_at = std::chrono::steady_clock::now();
-    request->has_admitted_at = true;
-  }
-
-  return request_id;
+  return std::nullopt;
 }
 
 GenerateRequest *RequestQueue::FindMutable(GenerateRequestId request_id) {
+  auto it = requests_.find(request_id);
+  return it == requests_.end() ? nullptr : &it->second;
+}
+
+const GenerateRequest *RequestQueue::Find(GenerateRequestId request_id) const {
   auto it = requests_.find(request_id);
   return it == requests_.end() ? nullptr : &it->second;
 }
@@ -105,17 +127,21 @@ void RequestQueue::MarkCompleted(GenerateResponse response) {
   completed_responses_[response.request_id] = std::move(response);
 }
 
-std::optional<GenerateResponse>
-RequestQueue::TakeCompletedResponse(GenerateRequestId request_id) {
+const GenerateResponse *
+RequestQueue::PeekCompletedResponse(GenerateRequestId request_id) const {
+  auto response_it = completed_responses_.find(request_id);
+  return response_it == completed_responses_.end() ? nullptr : &response_it->second;
+}
+
+bool RequestQueue::ConsumeCompletedResponse(GenerateRequestId request_id) {
   auto response_it = completed_responses_.find(request_id);
   if (response_it == completed_responses_.end()) {
-    return std::nullopt;
+    return false;
   }
 
-  GenerateResponse response = std::move(response_it->second);
   completed_responses_.erase(response_it);
   requests_.erase(request_id);
-  return response;
+  return true;
 }
 
 void RequestQueue::Clear() {

@@ -9,6 +9,7 @@
 #pragma once
 
 #include <deque>
+#include <functional>
 #include <optional>
 #include <unordered_map>
 
@@ -21,11 +22,14 @@ class RequestQueue {
 public:
   bool Push(GenerateRequest request);
   std::optional<GenerateRequestId> TryPopNext();
+  std::optional<GenerateRequestId>
+  TryPopNextAdmissible(const std::function<bool(const GenerateRequest &)> &predicate);
   GenerateRequest *FindMutable(GenerateRequestId request_id);
+  const GenerateRequest *Find(GenerateRequestId request_id) const;
   bool Cancel(GenerateRequestId request_id, std::string error_message);
   void MarkCompleted(GenerateResponse response);
-  std::optional<GenerateResponse>
-  TakeCompletedResponse(GenerateRequestId request_id);
+  const GenerateResponse *PeekCompletedResponse(GenerateRequestId request_id) const;
+  bool ConsumeCompletedResponse(GenerateRequestId request_id);
   void Clear();
 
 private:

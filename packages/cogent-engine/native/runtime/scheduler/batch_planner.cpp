@@ -14,106 +14,6 @@ namespace noumena::cogentengine {
 
 bool SharedBatchPlan::Empty() const { return contributions.empty(); }
 
-SharedBatchPlan
-BatchPlanner::BuildSharedBatch(const std::vector<SlotState *> &runnable_slots,
-                               int32_t max_batch_tokens) const {
-  SharedBatchPlan plan;
-  if (max_batch_tokens <= 0 || runnable_slots.empty()) {
-    return plan;
-  }
-
-  plan.contributions.reserve(
-      static_cast<std::size_t>(std::max<int32_t>(1, max_batch_tokens)));
-
-  std::vector<const SlotState *> occupied_slots;
-  occupied_slots.reserve(runnable_slots.size());
-
-  const auto mark_slot_occupied = [&](const SlotState *slot) {
-    if (slot == nullptr) {
-      return;
-    }
-    if (std::find(occupied_slots.begin(), occupied_slots.end(), slot) ==
-        occupied_slots.end()) {
-      occupied_slots.push_back(slot);
-    }
-  };
-
-  int32_t remaining_budget = max_batch_tokens;
-
-  // Pass 1: dense prefill.
-  // Consume as many prompt tokens as possible for prefill-ready slots before
-  // spending the remaining budget on decode-ready slots.
-  for (SlotState *slot : runnable_slots) {
-    if (remaining_budget <= 0 || slot == nullptr || slot->request == nullptr) {
-      break;
-    }
-    if (slot->phase != SlotPhase::Prefill) {
-      continue;
-    }
-
-    const auto &prompt_tokens = slot->request->prompt_tokens;
-    if (slot->prefill_cursor >= prompt_tokens.size()) {
-      continue;
-    }
-
-    const std::size_t slot_contribution_start = plan.contributions.size();
-    for (std::size_t token_index = slot->prefill_cursor;
-         token_index < prompt_tokens.size() && remaining_budget > 0;
-         ++token_index) {
-      BatchContribution contribution;
-      contribution.slot = slot;
-      contribution.kind = BatchContributionKind::Prefill;
-      contribution.token = prompt_tokens[token_index];
-      contribution.position = static_cast<int32_t>(token_index);
-      contribution.request_logits = false;
-      plan.contributions.push_back(contribution);
-      plan.prefill_token_count++;
-      remaining_budget--;
-    }
-
-    if (plan.contributions.size() > slot_contribution_start) {
-      // Request logits for the last prompt token contributed for this slot in
-      // the current tick so decode can continue once the prefill contribution
-      // has been applied.
-      plan.contributions.back().request_logits = true;
-      mark_slot_occupied(slot);
-    }
-  }
-
-  // Pass 2: decode-ready slots.
-  // Keep the first Phase 3 planner deterministic by admitting at most one
-  // decode contribution per slot per tick.
-  for (SlotState *slot : runnable_slots) {
-    if (remaining_budget <= 0 || slot == nullptr || slot->request == nullptr) {
-      break;
-    }
-    if (slot->phase != SlotPhase::Decode &&
-        slot->phase != SlotPhase::Streaming) {
-      continue;
-    }
-    if (!slot->buffered_output_text.empty() || slot->generated_tokens.empty()) {
-      continue;
-    }
-
-    BatchContribution contribution;
-    contribution.slot = slot;
-    contribution.kind = BatchContributionKind::Decode;
-    contribution.token = slot->generated_tokens.back();
-    contribution.position =
-        static_cast<int32_t>(slot->request->prompt_tokens.size() +
-                             slot->generated_tokens.size() - 1);
-    contribution.request_logits = true;
-    plan.contributions.push_back(contribution);
-    plan.decode_token_count++;
-    remaining_budget--;
-    mark_slot_occupied(slot);
-  }
-
-  plan.occupied_slot_count = static_cast<int32_t>(occupied_slots.size());
-
-  return plan;
-}
-
 SharedBatchPlan BatchPlanner::BuildPolicyBatch(
     const std::vector<SlotState *> &decode_slots,
     const std::vector<SlotState *> &prefill_slots,
@@ -152,7 +52,7 @@ SharedBatchPlan BatchPlanner::BuildPolicyBatch(
     contribution.position =
         static_cast<int32_t>(slot->request->prompt_tokens.size() +
                              slot->generated_tokens.size() - 1);
-    contribution.request_logits = false;
+    contribution.request_logits = true;
     plan.contributions.push_back(contribution);
     plan.decode_token_count++;
     remaining_decode_budget--;
@@ -195,24 +95,12 @@ SharedBatchPlan BatchPlanner::BuildPolicyBatch(
     }
 
     if (plan.contributions.size() > slot_contribution_start) {
-      plan.contributions.back().request_logits = false;
+      const std::size_t contributed_count =
+          plan.contributions.size() - slot_contribution_start;
+      const bool completed_prompt =
+          slot->prefill_cursor + contributed_count >= prompt_tokens.size();
+      plan.contributions.back().request_logits = completed_prompt;
     }
-  }
-
-  int32_t selected_logit_index = -1;
-  for (std::size_t i = 0; i < plan.contributions.size(); ++i) {
-    if (plan.contributions[i].kind == BatchContributionKind::Decode) {
-      selected_logit_index = static_cast<int32_t>(i);
-      break;
-    }
-  }
-  if (selected_logit_index < 0 && !plan.contributions.empty()) {
-    selected_logit_index =
-        static_cast<int32_t>(plan.contributions.size() - 1);
-  }
-  if (selected_logit_index >= 0) {
-    plan.contributions[static_cast<std::size_t>(selected_logit_index)]
-        .request_logits = true;
   }
 
   std::vector<const SlotState *> occupied_slots;

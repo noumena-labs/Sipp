@@ -18,7 +18,9 @@
 
 namespace noumena::cogentengine {
 
-using GenerateRequestId = std::uint64_t;
+// Request ids cross the browser FFI boundary through Emscripten `ccall`.
+// Keep them 32-bit so multi-argument exported calls preserve argument layout.
+using GenerateRequestId = std::uint32_t;
 using GenerateTokenCallback = std::function<bool(const char *, int32_t)>;
 
 enum class GenerateRequestLifecycle : std::uint8_t {
@@ -34,7 +36,6 @@ enum class GenerateRequestLifecycle : std::uint8_t {
 struct GenerateRequest {
   GenerateRequestId id = 0;
   std::string context_key;
-  std::string prompt_text;
   std::vector<llama_token> prompt_tokens;
   int32_t max_output_tokens = 0;
   GenerateTokenCallback on_token_received;

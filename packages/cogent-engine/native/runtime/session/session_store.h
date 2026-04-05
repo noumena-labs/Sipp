@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <deque>
+#include <list>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -34,25 +35,37 @@ public:
   void BindSharedContext(struct llama_context *shared_context);
 
   SequenceState *Find(const std::string &context_key);
+  const SequenceState *Find(const std::string &context_key) const;
   size_t ComputeLcpReuse(const SequenceState &sequence_state,
                          const std::vector<llama_token> &incoming_tokens) const;
+  bool CanAdmit(const std::string &context_key) const;
   SequenceState &GetOrCreateSession(const std::string &context_key);
   SequenceState &Emplace(const std::string &context_key, SequenceState state);
   void Touch(const std::string &context_key);
-  void Pin(SequenceState &sequence_state);
-  void Unpin(SequenceState &sequence_state);
+  void Pin(const std::string &context_key);
+  void Unpin(const std::string &context_key);
   void Remove(const std::string &context_key);
   void EnforceLimitBeforeInsert();
   void Clear();
 
 private:
+  struct SessionEntry {
+    SequenceState state;
+    std::list<std::string>::iterator evictable_it;
+    bool is_evictable = false;
+  };
+
   void ClearSequenceMemory(llama_seq_id seq_id) const;
   llama_seq_id AcquireSeqId();
   void ReleaseSeqId(llama_seq_id seq_id);
+  void MarkEvictable(const std::string &context_key, SessionEntry &entry);
+  void MarkPinned(const std::string &context_key, SessionEntry &entry);
+  bool HasEvictableSession() const;
 
-  std::unordered_map<std::string, SequenceState> context_states_;
-  std::vector<std::string> context_usage_order_;
+  std::unordered_map<std::string, SessionEntry> context_states_;
+  std::list<std::string> evictable_context_keys_;
   std::deque<llama_seq_id> free_seq_ids_;
+  std::vector<bool> seq_id_available_;
   struct llama_context *shared_context_ = nullptr;
   size_t max_cached_contexts_ = 8;
   size_t max_sequences_ = 1;
