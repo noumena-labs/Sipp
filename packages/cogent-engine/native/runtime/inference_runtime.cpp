@@ -913,8 +913,7 @@ GenerateRequestId
 InferenceRuntime::EnqueueRequest(std::string context_key, std::string prompt,
                                  int n_tokens_predict,
                                  TokenCallback on_token_received) {
-  std::lock_guard<std::mutex> lock(operation_mutex_);
-
+  // Fast-fail without lock (model pointer is immutable after construction).
   if (primary_model_ == nullptr || sampler_ == nullptr) {
     return 0;
   }
@@ -925,15 +924,26 @@ InferenceRuntime::EnqueueRequest(std::string context_key, std::string prompt,
     context_key = kDefaultPromptContextKey;
   }
 
+  // Tokenize OUTSIDE the lock – this is the expensive part and does not
+  // mutate any runtime state.  primary_model_ is write-once (set in the
+  // constructor, cleared only in the destructor) so the vocab read is safe.
+  const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
+  auto prompt_tokens = llama_utils::Tokenize(vocab, prompt, false, true);
+
+  // Lock only for the brief queue mutation.
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+
+  // Re-check under lock in case of concurrent shutdown.
+  if (primary_model_ == nullptr || sampler_ == nullptr) {
+    return 0;
+  }
+
   GenerateRequest request;
   request.id = next_request_id_++;
   request.context_key = std::move(context_key);
   request.max_output_tokens = n_tokens_predict;
   request.on_token_received = std::move(on_token_received);
-
-  const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
-  request.prompt_tokens =
-      llama_utils::Tokenize(vocab, prompt, false, true);
+  request.prompt_tokens = std::move(prompt_tokens);
 
   if (!request_queue_.Push(std::move(request))) {
     return 0;
