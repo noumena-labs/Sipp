@@ -5,7 +5,7 @@
   "packageManager": "bun@1.3.11",
   "workspaces": [
     "packages/*",
-    "apps/*"
+    "apps/benchmark"
   ],
   "scripts": {
     "build": "bun run build:package",
@@ -16,8 +16,12 @@
     "test:backend-ops:webgpu:op": "bun run --filter=cogent-engine test:backend-ops:webgpu:op",
     "test:backend-ops:webgpu:debug": "bun run --filter=cogent-engine test:backend-ops:webgpu:debug",
     "bench:bun": "bun run --filter=cogent-engine bench:bun",
-    "demo:install": "bun install",
-    "demo:dev": "bun run build:package && bun run --filter=cogent-engine-threejs-demo dev",
-    "demo:build": "bun run build:package && bun run --filter=cogent-engine-threejs-demo build"
+    "benchmark:dev": "bun run build:package && bun run --filter=cogent-engine-benchmark-app dev",
+    "benchmark:build": "bun run build:package && bun run --filter=cogent-engine-benchmark-app build",
+    "benchmark:preview": "bun run --filter=cogent-engine-benchmark-app preview",
+    "bench:browser": "bun ./scripts/benchmark-browser.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.54.2"
   }
 }

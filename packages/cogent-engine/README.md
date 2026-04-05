@@ -14,6 +14,7 @@ Source layout in this package:
 
 - `docs/inference-runtime-v2-design.md` -> detailed target architecture, data structures, algorithms, implementation phases, and reference bibliography
 - `docs/inference-runtime-v2-implementation-guide.md` -> concrete execution checklist, file targets, verification gates, and per-phase working order
+- `docs/phase-1-implementation-workplan.md` -> step-by-step manual Phase 1 handoff with exact function order, references, and "what next" guidance
 - `docs/inference-architecture-draft.md` -> short overview that now points to the detailed design
 
 ## Prerequisites
@@ -116,7 +117,7 @@ bun run build
 From `packages/cogent-engine/`:
 
 ```bash
-bun run bench:bun --model ../../Qwen3.5-0.8B-Q4_0.gguf --tokens 16 --warmup 1 --runs 3
+bun run bench:bun --model ../../Qwen3.5-0.8B-Q4_0.gguf --json ./benchmarks/latest-bun.json
 ```
 
 The benchmark measures:
@@ -125,11 +126,43 @@ The benchmark measures:
 - WASM module initialization
 - model copy into MEMFS
 - engine initialization
+- TTFT from the first streamed token callback
+- TPOT from `(E2EL - TTFT) / (output_tokens - 1)`
+- ITL from token-to-token callback intervals
+- E2EL from request start to final streamed token completion
+- request throughput, output token throughput, and total token throughput
 - cold prompt latency
 - hot prompt latency with fresh contexts
 - hot prompt latency with a reused context
 
-It also reports native `llama.cpp` perf counters for prompt eval, decode eval, and sampling.
+It also reports native `llama.cpp` perf counters for prompt eval, decode eval, and sampling, and saves a structured report with:
+
+- benchmark preset and scenario metadata
+- artifact label and inferred quantization label
+- init config and prompt format
+- Bun runtime metadata
+- per-scenario cold, hot fresh-context, and hot reused-context groups
+- SISO, SILO, LISO, and LILO as the default matrix
+- TensorRT-style serving metrics as the primary summary
+- prompt-eval and decode throughput as secondary runtime diagnostics
+- logical input tokens and effective prompt-eval tokens reported separately
+
+By default, `bench:bun` runs the standard matrix. Use `--preset single --prompt "..." --tokens 32` when you want one custom prompt instead.
+
+You can also sweep the Phase 1 init config directly from the benchmark:
+
+```bash
+bun run bench:bun \
+  --model ../../Qwen3.5-0.8B-Q4_0.gguf \
+  --ctx 4096 \
+  --batch 256 \
+  --ubatch 256 \
+  --threads 4 \
+  --threads-batch 4 \
+  --gpu-layers 99 \
+  --flash-attention auto \
+  --kv-unified true
+```
 
 ## WebGPU Backend-Ops Runner
 
@@ -210,11 +243,24 @@ const engine = new CogentEngine(getBundledRuntimeUrls());
 await engine.initModule();
 
 const modelPath = await engine.loadModelFromUrl("/models/model.gguf");
-await engine.initEngine(modelPath);
+await engine.initEngine(modelPath, {
+  nCtx: 4096,
+  nBatch: 256,
+  nUbatch: 256,
+  nGpuLayers: 99,
+  flashAttention: "auto",
+});
 
-const response = await engine.prompt("demo", "Say hello in one sentence.", 64);
+const response = await engine.streamPrompt("demo", "Say hello in one sentence.", {
+  nTokens: 64,
+  onToken: (token) => {
+    process.stdout.write(token);
+  },
+});
 console.log(response);
 ```
+
+`prompt()` still exists as the convenience wrapper over the streaming path when you only want the final string.
 
 `getBundledRuntimeUrls()` is the clean default when you want to use the runtime assets packaged with `cogent-engine`.
 
@@ -240,15 +286,14 @@ const engine = new CogentEngine({
 });
 ```
 
-## Three.js Demo
+## Browser Benchmark App
 
-A Vite + Three.js demo lives in `../../apps/threejs`.
+A browser benchmark app lives in `../../apps/benchmark`.
 
 ```bash
 cd ../../
-bun run build
-bun run demo:install
-bun run demo:dev
+bun install
+bun run benchmark:dev
 ```
 
-Open the Vite URL, click runtime init, load a local or remote `.gguf` model, then run inference.
+Open the Vite URL, initialize the runtime, load a local or remote `.gguf` model, then run the browser benchmark.

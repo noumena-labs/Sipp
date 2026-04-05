@@ -1,0 +1,68 @@
+import { FlashAttentionMode, InferenceInitConfig } from './types.js';
+
+export interface NormalizedInitConfig {
+  nCtx: number;
+  nBatch: number;
+  nUbatch: number;
+  nSeqMax: number;
+  nThreads: number;
+  nThreadsBatch: number;
+  nGpuLayers: number;
+  flashAttention: number;
+  kvUnified: number;
+  maxCachedSessions: number;
+  retainedPrefixTokens: number;
+}
+
+const DEFAULT_VALUE = 0;
+const DEFAULT_GPU_LAYERS = -1;
+const DEFAULT_FLASH_ATTENTION = -1;
+const DEFAULT_KV_UNIFIED = -1;
+
+function normalizeInteger(
+  fieldName: string,
+  value: number | undefined,
+  minimum: number,
+  allowDefault = true
+): number {
+  if (value == null) {
+    return allowDefault ? DEFAULT_VALUE : minimum;
+  }
+  if (!Number.isInteger(value) || value < minimum) {
+    throw new Error(`"${fieldName}" must be an integer >= ${minimum}.`);
+  }
+  return value;
+}
+
+function normalizeOptionalBoolean(value: boolean | undefined): number {
+  if (value == null) {
+    return DEFAULT_KV_UNIFIED;
+  }
+  return value ? 1 : 0;
+}
+
+function normalizeFlashAttention(value: FlashAttentionMode | undefined): number {
+  if (value == null || value === 'auto') {
+    return DEFAULT_FLASH_ATTENTION;
+  }
+  return value === 'enabled' ? 1 : 0;
+}
+
+export function normalizeInitConfig(config: InferenceInitConfig | undefined): NormalizedInitConfig {
+  return {
+    nCtx: normalizeInteger('nCtx', config?.nCtx, 1),
+    nBatch: normalizeInteger('nBatch', config?.nBatch, 1),
+    nUbatch: normalizeInteger('nUbatch', config?.nUbatch, 1),
+    nSeqMax: normalizeInteger('nSeqMax', config?.nSeqMax, 1),
+    nThreads: normalizeInteger('nThreads', config?.nThreads, 1),
+    nThreadsBatch: normalizeInteger('nThreadsBatch', config?.nThreadsBatch, 1),
+    nGpuLayers:
+      config?.nGpuLayers == null
+        ? DEFAULT_GPU_LAYERS
+        : normalizeInteger('nGpuLayers', config.nGpuLayers, 0, false),
+    flashAttention: normalizeFlashAttention(config?.flashAttention),
+    kvUnified: normalizeOptionalBoolean(config?.kvUnified),
+    maxCachedSessions: normalizeInteger('maxCachedSessions', config?.maxCachedSessions, 1),
+    retainedPrefixTokens: normalizeInteger('retainedPrefixTokens', config?.retainedPrefixTokens, 0),
+  };
+}

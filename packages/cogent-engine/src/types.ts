@@ -1,5 +1,28 @@
+export type FlashAttentionMode = "auto" | "enabled" | "disabled";
+export type PromptFormatMode = "auto-chat" | "raw";
+export type BackendDeviceType = "cpu" | "gpu" | "igpu" | "accel" | "unknown";
+
+export interface InferenceInitConfig {
+  nCtx?: number;
+  nBatch?: number;
+  nUbatch?: number;
+  nSeqMax?: number;
+  nThreads?: number;
+  nThreadsBatch?: number;
+  nGpuLayers?: number;
+  flashAttention?: FlashAttentionMode;
+  kvUnified?: boolean;
+  maxCachedSessions?: number;
+  retainedPrefixTokens?: number;
+}
+
 export interface PromptGenerationOptions {
   nTokens?: number;
+  promptFormat?: PromptFormatMode;
+}
+
+export interface PromptStreamOptions extends PromptGenerationOptions {
+  onToken?: (token: string) => void;
 }
 
 export interface PromptPerformanceStats {
@@ -7,8 +30,42 @@ export interface PromptPerformanceStats {
   promptEvalMs: number;
   decodeEvalMs: number;
   sampleMs: number;
+  inputTokenCount: number;
   promptEvalTokens: number;
   decodeEvalCount: number;
   sampleCount: number;
   outputTokenCount: number;
+}
+
+export interface BackendDeviceCapabilities {
+  async: boolean;
+  hostBuffer: boolean;
+  bufferFromHostPtr: boolean;
+  events: boolean;
+}
+
+export interface BackendDeviceInfo {
+  name: string;
+  description: string;
+  type: BackendDeviceType;
+  backendName: string;
+  deviceId: string | null;
+  memoryFreeBytes: number;
+  memoryTotalBytes: number;
+  capabilities: BackendDeviceCapabilities;
+}
+
+export interface BackendRegistryInfo {
+  name: string;
+  deviceCount: number;
+}
+
+export interface BackendInfo {
+  webgpuCompiled: boolean;
+  webgpuRegistered: boolean;
+  webgpuDeviceCount: number;
+  gpuOffloadSupported: boolean;
+  engineInitialized: boolean;
+  availableBackends: BackendRegistryInfo[];
+  devices: BackendDeviceInfo[];
 }
