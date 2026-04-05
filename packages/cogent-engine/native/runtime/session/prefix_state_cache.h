@@ -95,6 +95,11 @@ private:
   std::size_t max_entries_ = 32;
   std::size_t max_total_bytes_ = 256ull * 1024ull * 1024ull;
   std::size_t total_approx_bytes_ = 0;
+  // Reusable scratch buffer for KV state serialization.  Avoids repeated
+  // large malloc/mmap syscalls on the hot path – the buffer only grows,
+  // never shrinks, so subsequent snapshots of equal-or-smaller sequences
+  // allocate zero bytes from the system allocator.
+  std::vector<std::uint8_t> reusable_snapshot_buffer_;
 };
 
 } // namespace noumena::cogentengine

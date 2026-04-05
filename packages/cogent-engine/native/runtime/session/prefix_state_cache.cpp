@@ -99,9 +99,14 @@ bool PrefixStateCache::StorePrefixState(
     return false;
   }
 
-  std::vector<std::uint8_t> state_bytes(prefix_state_size);
-  const std::size_t copied = llama_state_seq_get_data(context, state_bytes.data(),
-                                                      state_bytes.size(), seq_id);
+  // Reuse the class-level scratch buffer to avoid repeated large
+  // malloc/mmap syscalls.  resize() is a no-op when the buffer is
+  // already large enough, so after the first snapshot of a given size
+  // all subsequent same-or-smaller snapshots allocate zero bytes.
+  reusable_snapshot_buffer_.resize(prefix_state_size);
+  const std::size_t copied = llama_state_seq_get_data(
+      context, reusable_snapshot_buffer_.data(),
+      reusable_snapshot_buffer_.size(), seq_id);
   if (copied != prefix_state_size) {
     return false;
   }
@@ -110,24 +115,36 @@ bool PrefixStateCache::StorePrefixState(
                                                 tokens, token_count,
                                                 prefix_hash);
 
-  PrefixCacheEntry entry;
-  entry.model_fingerprint = model_fingerprint;
-  entry.context_key = context_key;
-  entry.token_count = token_count;
-  entry.prefix_hash = prefix_hash;
-  entry.retention_priority = retention_priority;
-  entry.hit_count = existing_it != entries_.end() ? existing_it->hit_count : 0;
-  entry.approx_bytes =
-      state_bytes.size() + token_count * sizeof(llama_token);
-  entry.prefix_tokens.assign(tokens.begin(), tokens.begin() + token_count);
-  entry.state_bytes = std::move(state_bytes);
-  entry.last_used = std::chrono::steady_clock::now();
-
   if (existing_it != entries_.end()) {
+    // Update in-place: swap the old entry's buffer into the scratch slot
+    // so it can be reused on the next call (buffer recycling loop).
     total_approx_bytes_ -= existing_it->approx_bytes;
-    *existing_it = std::move(entry);
+    existing_it->retention_priority = retention_priority;
+    existing_it->approx_bytes =
+        prefix_state_size + token_count * sizeof(llama_token);
+    existing_it->prefix_tokens.assign(tokens.begin(),
+                                      tokens.begin() + token_count);
+    std::swap(existing_it->state_bytes, reusable_snapshot_buffer_);
+    existing_it->last_used = std::chrono::steady_clock::now();
     total_approx_bytes_ += existing_it->approx_bytes;
   } else {
+    PrefixCacheEntry entry;
+    entry.model_fingerprint = model_fingerprint;
+    entry.context_key = context_key;
+    entry.token_count = token_count;
+    entry.prefix_hash = prefix_hash;
+    entry.retention_priority = retention_priority;
+    entry.hit_count = 0;
+    entry.approx_bytes =
+        prefix_state_size + token_count * sizeof(llama_token);
+    entry.prefix_tokens.assign(tokens.begin(), tokens.begin() + token_count);
+    // Move the scratch buffer into the new entry.  The scratch will be
+    // re-allocated on the next call, but that is unavoidable for truly
+    // new entries.  If an eviction happens below, we could capture the
+    // evicted entry's buffer, but that adds complexity for a rare path.
+    entry.state_bytes = std::move(reusable_snapshot_buffer_);
+    entry.last_used = std::chrono::steady_clock::now();
+
     entries_.push_back(std::move(entry));
     const EntryIterator inserted_it = std::prev(entries_.end());
     total_approx_bytes_ += inserted_it->approx_bytes;

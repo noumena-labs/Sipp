@@ -493,7 +493,19 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
 
   batch_planner_.ApplyDecodeResults(plan);
 
-  {
+  // Stall-free prefix caching: only store snapshots when there are no
+  // active decode slots competing for the lock.  When decode and prefill
+  // are interleaved in the same tick, the KV state serialization would
+  // stall token generation for all active users.  By deferring the
+  // snapshot, we trade a potential cache miss on a future request for
+  // smooth, uninterrupted decode latency now.
+  //
+  // Reference: Sarathi-Serve (OSDI '24, arXiv:2403.02310) establishes
+  // that protecting decode latency over prefill efficiency is the correct
+  // trade-off in user-facing LLM serving systems.
+  const bool has_decode_pressure = !live_decode_ready_slots.empty();
+
+  if (!has_decode_pressure) {
     std::vector<SlotState *> prefix_cache_slots;
     prefix_cache_slots.reserve(plan.contributions.size());
     for (const BatchContribution &contribution : plan.contributions) {
