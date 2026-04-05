@@ -1,0 +1,62 @@
+import { CogentConfig } from '../cogent-config.js';
+import {
+  BackendInfo,
+  EngineExecutionMode,
+  GenerateRequestId,
+  GenerateResponse,
+  InferenceInitConfig,
+  ModelLoadInfo,
+  PromptPerformanceStats,
+  PromptOptions,
+  TransportInfo,
+} from '../types.js';
+
+export type { CogentConfig };
+
+export interface EngineRuntime {
+  getExecutionMode(): EngineExecutionMode;
+  getLastModelLoadInfo(): ModelLoadInfo | null;
+  getTransportInfo(): TransportInfo;
+  initModule(): Promise<void>;
+  loadModelFromUrl(
+    url: string,
+    destFileName?: string,
+    onProgress?: (pct: number) => void,
+    signal?: AbortSignal
+  ): Promise<string>;
+  loadModelFromFile(
+    file: File,
+    destFileName?: string,
+    onProgress?: (pct: number) => void,
+    signal?: AbortSignal
+  ): Promise<string>;
+  loadModelFromReadableStream(
+    stream: ReadableStream<Uint8Array>,
+    destFileName?: string,
+    options?: {
+      expectedBytes?: number;
+      onProgress?: (pct: number) => void;
+      signal?: AbortSignal;
+    }
+  ): Promise<string>;
+  loadModelFromBuffer(buffer: Uint8Array, destFileName?: string): string;
+  initEngine(modelPath: string, config?: InferenceInitConfig): Promise<void>;
+  close(): void;
+  cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean>;
+  queuePrompt(
+    contextKey: string,
+    promptText: string,
+    options?: number | PromptOptions
+  ): Promise<GenerateRequestId>;
+  runQueuedRequest(
+    requestId: GenerateRequestId,
+    options?: { signal?: AbortSignal }
+  ): Promise<GenerateResponse>;
+  submitPrompt(
+    contextKey: string,
+    promptText: string,
+    options?: number | PromptOptions
+  ): Promise<string>;
+  getLastPromptPerformance(): PromptPerformanceStats | null;
+  getBackendInfo(): Promise<BackendInfo | null>;
+}

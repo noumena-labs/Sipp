@@ -31,7 +31,7 @@ namespace noumena::cogentengine {
 
 class InferenceRuntime {
 public:
-  using TokenCallback = std::function<void(const char *, int32_t)>;
+  using TokenCallback = std::function<bool(const char *, int32_t)>;
 
   explicit InferenceRuntime(std::string model_path,
                             InferenceRuntimeConfig config = {});
@@ -46,6 +46,7 @@ public:
   GenerateRequestId EnqueueRequest(std::string context_key, std::string prompt,
                                    int n_tokens_predict,
                                    TokenCallback on_token_received = {});
+  bool CancelRequest(GenerateRequestId request_id);
   bool RunUntilRequestCompletes(GenerateRequestId request_id,
                                 GenerateResponse &out_response);
 

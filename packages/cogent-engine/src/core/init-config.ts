@@ -1,4 +1,8 @@
-import { FlashAttentionMode, InferenceInitConfig, SchedulerPolicyMode } from './types.js';
+import {
+  FlashAttentionMode,
+  InferenceInitConfig,
+  SchedulerPolicyMode,
+} from '../types.js';
 
 export interface NormalizedInitConfig {
   nCtx: number;

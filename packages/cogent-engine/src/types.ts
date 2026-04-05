@@ -2,6 +2,14 @@ export type FlashAttentionMode = "auto" | "enabled" | "disabled";
 export type PromptFormatMode = "auto-chat" | "raw";
 export type BackendDeviceType = "cpu" | "gpu" | "igpu" | "accel" | "unknown";
 export type SchedulerPolicyMode = "latency-first" | "balanced" | "throughput-first";
+export type EngineExecutionMode = "main-thread" | "worker";
+export type ModelLoadSourceKind = "url" | "file" | "buffer";
+export type ModelLoadReuseMode =
+  | "network"
+  | "file-read"
+  | "persistent-cache"
+  | "page-local-reuse"
+  | "buffer";
 
 export interface InferenceInitConfig {
   nCtx?: number;
@@ -23,12 +31,10 @@ export interface InferenceInitConfig {
   adaptivePrefillChunking?: boolean;
 }
 
-export interface PromptGenerationOptions {
+export interface PromptOptions {
   nTokens?: number;
   promptFormat?: PromptFormatMode;
-}
-
-export interface PromptStreamOptions extends PromptGenerationOptions {
+  signal?: AbortSignal;
   onToken?: (token: string) => void;
 }
 
@@ -45,6 +51,7 @@ export interface GenerateResponse {
   requestId: number;
   completed: boolean;
   failed: boolean;
+  cancelled: boolean;
   outputText: string;
   errorMessage?: string | null;
   perf?: PromptPerformanceStats;
@@ -107,4 +114,27 @@ export interface BackendInfo {
   engineInitialized: boolean;
   availableBackends: BackendRegistryInfo[];
   devices: BackendDeviceInfo[];
+}
+
+export interface ModelLoadInfo {
+  sourceKind: ModelLoadSourceKind;
+  reuseMode: ModelLoadReuseMode;
+  modelPath: string;
+  fileName: string;
+  byteLength: number | null;
+  persistentCacheEnabled: boolean;
+  persistentCacheKey: string | null;
+  persistentCacheHit: boolean;
+  persistentCacheStored: boolean;
+}
+
+export interface TransportInfo {
+  executionMode: EngineExecutionMode;
+  workerBacked: boolean;
+  backpressureEnabled: boolean;
+  maxBufferedTokenCount: number;
+  flushIntervalMs: number;
+  flushCount: number;
+  coalescedTokenCount: number;
+  maxObservedBufferedTokenCount: number;
 }

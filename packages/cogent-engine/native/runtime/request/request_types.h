@@ -19,7 +19,7 @@
 namespace noumena::cogentengine {
 
 using GenerateRequestId = std::uint64_t;
-using GenerateTokenCallback = std::function<void(const char *, int32_t)>;
+using GenerateTokenCallback = std::function<bool(const char *, int32_t)>;
 
 enum class GenerateRequestLifecycle : std::uint8_t {
   Pending = 0,
@@ -27,6 +27,7 @@ enum class GenerateRequestLifecycle : std::uint8_t {
   Running,
   Streaming,
   Completed,
+  Cancelled,
   Failed,
 };
 
@@ -57,6 +58,7 @@ struct GenerateRequest {
   int32_t prefix_cache_restore_tokens = 0;
   int32_t prefix_cache_hit_count = 0;
   int32_t prefix_cache_store_count = 0;
+  bool cancel_requested = false;
 };
 
 } // namespace noumena::cogentengine

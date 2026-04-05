@@ -895,7 +895,7 @@ async function runPromptBenchmark(
   contextKeyFactory: (index: number) => string
 ): Promise<{ benchmarkDurationMs: number; runs: BenchmarkRun[] }> {
   for (let i = 0; i < warmupRuns; i++) {
-    await engine.streamPrompt(contextKeyFactory(i), prompt, {
+    await engine.submitPrompt(contextKeyFactory(i), prompt, {
       nTokens: tokens,
       promptFormat,
     });
@@ -910,7 +910,7 @@ async function runPromptBenchmark(
     let ttftMs: number | null = null;
     const tokenEventTimes: number[] = [];
 
-    const output = await engine.streamPrompt(contextKey, prompt, {
+    const output = await engine.submitPrompt(contextKey, prompt, {
       nTokens: tokens,
       promptFormat,
       onToken: () => {

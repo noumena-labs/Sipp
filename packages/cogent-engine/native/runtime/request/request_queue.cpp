@@ -8,6 +8,7 @@
 
 #include "runtime/request/request_queue.h"
 
+#include <algorithm>
 #include <chrono>
 
 namespace noumena::cogentengine {
@@ -34,6 +35,7 @@ bool RequestQueue::Push(GenerateRequest request) {
   request.prefix_cache_restore_tokens = 0;
   request.prefix_cache_hit_count = 0;
   request.prefix_cache_store_count = 0;
+  request.cancel_requested = false;
   requests_.emplace(request_id, std::move(request));
   pending_request_ids_.push_back(request_id);
   return true;
@@ -61,12 +63,43 @@ GenerateRequest *RequestQueue::FindMutable(GenerateRequestId request_id) {
   return it == requests_.end() ? nullptr : &it->second;
 }
 
+bool RequestQueue::Cancel(GenerateRequestId request_id, std::string error_message) {
+  GenerateRequest *request = FindMutable(request_id);
+  if (request == nullptr) {
+    return false;
+  }
+
+  request->cancel_requested = true;
+  if (request->lifecycle == GenerateRequestLifecycle::Pending) {
+    pending_request_ids_.erase(
+        std::remove(pending_request_ids_.begin(), pending_request_ids_.end(),
+                    request_id),
+        pending_request_ids_.end());
+
+    request->lifecycle = GenerateRequestLifecycle::Cancelled;
+    request->completed_at = std::chrono::steady_clock::now();
+    request->has_completed_at = true;
+
+    GenerateResponse response;
+    response.request_id = request_id;
+    response.status = GenerateResponseStatus::Cancelled;
+    response.error_message = std::move(error_message);
+    completed_responses_[request_id] = std::move(response);
+    return true;
+  }
+
+  return true;
+}
+
 void RequestQueue::MarkCompleted(GenerateResponse response) {
   GenerateRequest *request = FindMutable(response.request_id);
   if (request != nullptr) {
-    request->lifecycle = response.status == GenerateResponseStatus::Completed
-                             ? GenerateRequestLifecycle::Completed
-                             : GenerateRequestLifecycle::Failed;
+    request->lifecycle =
+        response.status == GenerateResponseStatus::Completed
+            ? GenerateRequestLifecycle::Completed
+            : (response.status == GenerateResponseStatus::Cancelled
+                   ? GenerateRequestLifecycle::Cancelled
+                   : GenerateRequestLifecycle::Failed);
   }
 
   completed_responses_[response.request_id] = std::move(response);

@@ -152,20 +152,6 @@ char *CE_GetBackendInfoJson() {
 }
 
 EMSCRIPTEN_KEEPALIVE
-int CE_StreamPrompt(const char *context_key, const char *prompt, int n_tokens,
-                    CE_TokenCallback on_token) {
-  std::lock_guard<std::mutex> lock(g_apiMutex);
-  if (!g_isEngineInitialized) {
-    return kStatusNotInitialized;
-  }
-  if (prompt == nullptr || !is_valid_prediction_tokens(n_tokens) ||
-      on_token == nullptr) {
-    return kStatusInvalidArguments;
-  }
-  return CE_StreamPromptQuery(context_key, prompt, n_tokens, on_token);
-}
-
-EMSCRIPTEN_KEEPALIVE
 CE_RequestId CE_EnqueuePrompt(const char *context_key, const char *prompt,
                               int n_tokens, CE_TokenCallback on_token) {
   std::lock_guard<std::mutex> lock(g_apiMutex);
@@ -185,44 +171,28 @@ char *CE_RunQueuedRequestJson(CE_RequestId request_id) {
   if (!g_isEngineInitialized) {
     return duplicate_heap_string(
         "{\"requestId\":0,\"completed\":false,\"failed\":true,"
+        "\"cancelled\":false,"
         "\"outputText\":\"\",\"errorMessage\":\"Engine is not initialized.\","
         "\"perf\":null}");
   }
   if (request_id == 0) {
     return duplicate_heap_string(
         "{\"requestId\":0,\"completed\":false,\"failed\":true,"
+        "\"cancelled\":false,"
         "\"outputText\":\"\",\"errorMessage\":\"Invalid request id.\","
         "\"perf\":null}");
   }
 
-  return duplicate_heap_string(CE_RunQueuedPromptJsonString(request_id));
+  return duplicate_heap_string(CE_RunQueuedRequestJsonString(request_id));
 }
 
 EMSCRIPTEN_KEEPALIVE
-char *CE_RunQueuedPromptJson(const char *context_key, const char *prompt,
-                             int n_tokens, CE_TokenCallback on_token) {
+int CE_CancelQueuedRequest(CE_RequestId request_id) {
   std::lock_guard<std::mutex> lock(g_apiMutex);
-  if (!g_isEngineInitialized) {
-    return duplicate_heap_string(
-        "{\"requestId\":0,\"completed\":false,\"failed\":true,"
-        "\"outputText\":\"\",\"errorMessage\":\"Engine is not initialized.\"}");
+  if (!g_isEngineInitialized || request_id == 0) {
+    return 0;
   }
-  if (prompt == nullptr || !is_valid_prediction_tokens(n_tokens) ||
-      on_token == nullptr) {
-    return duplicate_heap_string(
-        "{\"requestId\":0,\"completed\":false,\"failed\":true,"
-        "\"outputText\":\"\",\"errorMessage\":\"Invalid prompt arguments.\"}");
-  }
-
-  const CE_RequestId request_id =
-      CE_EnqueuePromptQuery(context_key, prompt, n_tokens, on_token);
-  if (request_id == 0) {
-    return duplicate_heap_string(
-        "{\"requestId\":0,\"completed\":false,\"failed\":true,"
-        "\"outputText\":\"\",\"errorMessage\":\"Failed to enqueue request.\"}");
-  }
-
-  return duplicate_heap_string(CE_RunQueuedPromptJsonString(request_id));
+  return CE_CancelQueuedPromptQuery(request_id);
 }
 
 EMSCRIPTEN_KEEPALIVE

@@ -22,6 +22,7 @@ public:
   bool Push(GenerateRequest request);
   std::optional<GenerateRequestId> TryPopNext();
   GenerateRequest *FindMutable(GenerateRequestId request_id);
+  bool Cancel(GenerateRequestId request_id, std::string error_message);
   void MarkCompleted(GenerateResponse response);
   std::optional<GenerateResponse>
   TakeCompletedResponse(GenerateRequestId request_id);

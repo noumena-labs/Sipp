@@ -1,4 +1,4 @@
-import { PromptFormatMode } from './types.js';
+import { PromptFormatMode } from '../types.js';
 
 const CHAT_PREFIXES = ['<|im_start|>', '<|startoftext|>', '<|begin_of_text|>'];
 

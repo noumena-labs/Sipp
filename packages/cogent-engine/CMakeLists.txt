@@ -115,7 +115,7 @@ foreach(_ggml_target ggml ggml-base ggml-cpu ggml-webgpu)
 endforeach()
 
 set(CE_WASM_EXPORTED_FUNCTIONS
-    "['_CE_Init','_CE_Close','_CE_StreamPrompt','_CE_EnqueuePrompt','_CE_RunQueuedRequestJson','_CE_RunQueuedPromptJson','_CE_FreeString','_CE_GetLastPromptPerfJson','_CE_GetBackendInfoJson']"
+    "['_CE_Init','_CE_Close','_CE_EnqueuePrompt','_CE_CancelQueuedRequest','_CE_RunQueuedRequestJson','_CE_FreeString','_CE_GetLastPromptPerfJson','_CE_GetBackendInfoJson']"
 )
 
 set(CE_WASM_RUNTIME_METHODS "['ccall','FS','UTF8ToString','addFunction','removeFunction']")
@@ -134,14 +134,13 @@ set(CE_WASM_TARGET_LINK_OPTIONS
 if(CE_WASM_USE_JSPI)
     list(APPEND CE_WASM_TARGET_LINK_OPTIONS
         -sJSPI=1
-        # CE_Init, CE_StreamPrompt, CE_RunQueuedRequestJson, and
-        # CE_RunQueuedPromptJson may suspend on
-        # the browser WebGPU path.
+        # CE_Init and CE_RunQueuedRequestJson may suspend on the browser
+        # WebGPU path.
         # CE_GetBackendInfoJson can also suspend because querying ggml-webgpu
         # devices may force adapter/device creation under emdawnwebgpu.
         # CE_Close is intentionally not exported as a JSPI function because the
         # TS wrapper calls it synchronously during teardown/reinit.
-        -sJSPI_EXPORTS=['_main_thread','CE_Init','CE_StreamPrompt','CE_RunQueuedRequestJson','CE_RunQueuedPromptJson','CE_GetBackendInfoJson']
+        -sJSPI_EXPORTS=['_main_thread','CE_Init','CE_RunQueuedRequestJson','CE_GetBackendInfoJson']
     )
 endif()
 

@@ -25,7 +25,7 @@
     "test:backend-ops:webgpu": "bun ./scripts/test-backend-ops-webgpu.mjs",
     "test:backend-ops:webgpu:op": "bun ./scripts/test-backend-ops-webgpu-op.mjs",
     "test:backend-ops:webgpu:debug": "bun ./scripts/test-backend-ops-webgpu-op.mjs --debug",
-    "build:ts": "bunx --bun tsc -p tsconfig.json",
+    "build:ts": "bun ./scripts/clean-ts-dist.mjs && bunx --bun tsc -p tsconfig.json",
     "bench:bun": "bun ./benchmarks/benchmark-bun.ts"
   },
   "keywords": [

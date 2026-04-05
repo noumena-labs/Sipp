@@ -11,7 +11,8 @@
 #include <stdint.h>
 
 typedef uint64_t CE_RequestId;
-typedef void (*CE_TokenCallback)(const char *token_piece, int32_t token_length);
+typedef int32_t (*CE_TokenCallback)(const char *token_piece,
+                                    int32_t token_length);
 
 typedef struct CE_InitConfig {
   int32_t n_ctx;

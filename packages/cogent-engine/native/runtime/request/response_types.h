@@ -19,6 +19,7 @@ namespace noumena::cogentengine {
 enum class GenerateResponseStatus : std::uint8_t {
   Pending = 0,
   Completed,
+  Cancelled,
   Failed,
 };
 

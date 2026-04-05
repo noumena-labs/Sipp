@@ -367,9 +367,12 @@ void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue,
 
     GenerateResponse response;
     response.request_id = slot.request_id;
-    response.status = slot.phase == SlotPhase::Completed
-                          ? GenerateResponseStatus::Completed
-                          : GenerateResponseStatus::Failed;
+    response.status =
+        slot.request != nullptr && slot.request->cancel_requested
+            ? GenerateResponseStatus::Cancelled
+            : (slot.phase == SlotPhase::Completed
+                   ? GenerateResponseStatus::Completed
+                   : GenerateResponseStatus::Failed);
     response.output_text = std::move(slot.output_text);
     if (slot.request != nullptr) {
       GenerateRequest &request = *slot.request;
@@ -418,10 +421,12 @@ void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue,
       response.perf.prefix_cache_hit_count = request.prefix_cache_hit_count;
       response.perf.prefix_cache_store_count = request.prefix_cache_store_count;
     }
-    if (slot.phase == SlotPhase::Failed) {
-      response.error_message = slot.terminal_error_message.empty()
-                                   ? "Request failed."
-                                   : slot.terminal_error_message;
+    if (response.status == GenerateResponseStatus::Cancelled) {
+      response.error_message = "Request cancelled.";
+    } else if (slot.phase == SlotPhase::Failed) {
+      response.error_message =
+          slot.terminal_error_message.empty() ? "Request failed."
+                                              : slot.terminal_error_message;
     }
 
     if (slot.session != nullptr) {
@@ -457,9 +462,11 @@ void SlotScheduler::EmitBufferedTokenPiece(SlotState &slot) {
   }
 
   if (request != nullptr && request->on_token_received) {
-    request->on_token_received(
+    if (!request->on_token_received(
         slot.buffered_output_text.c_str(),
-        static_cast<int32_t>(slot.buffered_output_text.size()));
+        static_cast<int32_t>(slot.buffered_output_text.size()))) {
+      request->cancel_requested = true;
+    }
   }
 
   slot.buffered_output_text.clear();
@@ -471,8 +478,14 @@ void SlotScheduler::FailActiveRequest(RequestQueue &request_queue,
                                       std::string error_message) {
   GenerateResponse response;
   response.request_id = slot.request_id;
-  response.status = GenerateResponseStatus::Failed;
-  response.error_message = std::move(error_message);
+  response.status =
+      slot.request != nullptr && slot.request->cancel_requested
+          ? GenerateResponseStatus::Cancelled
+          : GenerateResponseStatus::Failed;
+  response.error_message =
+      response.status == GenerateResponseStatus::Cancelled
+          ? "Request cancelled."
+          : std::move(error_message);
   if (slot.request != nullptr) {
     GenerateRequest &request = *slot.request;
     request.completed_at = std::chrono::steady_clock::now();

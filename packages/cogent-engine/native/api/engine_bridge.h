@@ -13,9 +13,5 @@ CE_RequestId CE_EnqueuePromptQuery(
     const char* prompt,
     int n_tokens_predict,
     CE_TokenCallback on_token);
-std::string CE_RunQueuedPromptJsonString(CE_RequestId request_id);
-int CE_StreamPromptQuery(
-    const char* context_key,
-    const char* prompt,
-    int n_tokens_predict,
-    CE_TokenCallback on_token);
+int CE_CancelQueuedPromptQuery(CE_RequestId request_id);
+std::string CE_RunQueuedRequestJsonString(CE_RequestId request_id);

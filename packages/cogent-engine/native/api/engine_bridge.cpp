@@ -114,6 +114,10 @@ std::string generate_response_to_json(
       << json_bool(response.status ==
                    noumena::cogentengine::GenerateResponseStatus::Failed)
       << ","
+      << "\"cancelled\":"
+      << json_bool(response.status ==
+                   noumena::cogentengine::GenerateResponseStatus::Cancelled)
+      << ","
       << "\"outputText\":\"" << json_escape(response.output_text.c_str())
       << "\","
       << "\"errorMessage\":";
@@ -325,12 +329,21 @@ CE_RequestId CE_EnqueuePromptQuery(const char *context_key, const char *prompt,
       context_key ? context_key : "", prompt ? prompt : "", n_tokens_predict,
       [on_token](const char *token_piece, int32_t token_length) {
         if (on_token != nullptr) {
-          on_token(token_piece, token_length);
+          return on_token(token_piece, token_length) == 0;
         }
+        return true;
       });
 }
 
-std::string CE_RunQueuedPromptJsonString(CE_RequestId request_id) {
+int CE_CancelQueuedPromptQuery(CE_RequestId request_id) {
+  auto runtime = acquire_engine_runtime();
+  if (!runtime || request_id == 0) {
+    return 0;
+  }
+  return runtime->CancelRequest(request_id) ? 1 : 0;
+}
+
+std::string CE_RunQueuedRequestJsonString(CE_RequestId request_id) {
   noumena::cogentengine::GenerateResponse response{};
   response.request_id = request_id;
 
@@ -351,21 +364,4 @@ std::string CE_RunQueuedPromptJsonString(CE_RequestId request_id) {
   }
 
   return generate_response_to_json(response);
-}
-
-int CE_StreamPromptQuery(const char *context_key, const char *prompt,
-                         int n_tokens_predict, CE_TokenCallback on_token) {
-  auto runtime = acquire_engine_runtime();
-  if (!runtime) {
-    return kStatusError;
-  }
-
-  const bool success = runtime->Prompt(
-      context_key ? context_key : "", prompt ? prompt : "", n_tokens_predict,
-      [on_token](const char *token_piece, int32_t token_length) {
-        if (on_token != nullptr) {
-          on_token(token_piece, token_length);
-        }
-      });
-  return success ? 0 : kStatusError;
 }

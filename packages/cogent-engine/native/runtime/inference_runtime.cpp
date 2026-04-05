@@ -375,7 +375,9 @@ bool InferenceRuntime::ExecutePromptTokensLocked(
     last_token_time = token_time;
 
     if (on_token_received) {
-      on_token_received(buf, n);
+      if (!on_token_received(buf, n)) {
+        break;
+      }
     }
 
     llama_utils::BatchClear(batch);
@@ -483,8 +485,12 @@ bool InferenceRuntime::ExecuteSingleSlotRequestLocked(SlotState &slot) {
         output_text.append(token_piece, static_cast<std::size_t>(token_length));
 
         if (request.on_token_received) {
-          request.on_token_received(token_piece, token_length);
+          if (!request.on_token_received(token_piece, token_length)) {
+            request.cancel_requested = true;
+            return false;
+          }
         }
+        return true;
       });
 
   slot.scheduler_tick_count++;
@@ -706,8 +712,15 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
                                        std::max<int32_t>(1, config_.n_seq_max));
   shared_batch_builder_.Reset();
 
-  std::vector<const BatchContribution *> logits_contributions;
+  struct PendingLogitsContribution {
+    const BatchContribution *contribution = nullptr;
+    int32_t batch_token_index = -1;
+  };
+
+  std::vector<PendingLogitsContribution> logits_contributions;
   logits_contributions.reserve(plan.contributions.size());
+
+  int32_t batch_token_index = 0;
 
   for (const BatchContribution &contribution : plan.contributions) {
     if (contribution.slot == nullptr || contribution.slot->seq_id < 0) {
@@ -733,8 +746,11 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     }
 
     if (contribution.request_logits) {
-      logits_contributions.push_back(&contribution);
+      logits_contributions.push_back(
+          PendingLogitsContribution{&contribution, batch_token_index});
     }
+
+    batch_token_index++;
   }
 
   llama_perf_context_reset(shared_context_);
@@ -792,19 +808,20 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     }
   }
 
-  int32_t logit_index = 0;
-  for (const BatchContribution *logit_contribution : logits_contributions) {
+  for (const PendingLogitsContribution &pending_logits :
+       logits_contributions) {
+    const BatchContribution *logit_contribution = pending_logits.contribution;
     if (logit_contribution == nullptr || logit_contribution->slot == nullptr ||
         logit_contribution->slot->request == nullptr ||
-        logit_contribution->slot->sampler == nullptr) {
-      logit_index++;
+        logit_contribution->slot->sampler == nullptr ||
+        pending_logits.batch_token_index < 0) {
       continue;
     }
 
     SlotState &slot = *logit_contribution->slot;
     GenerateRequest &slot_request = *slot.request;
-    const llama_token next_token =
-        llama_sampler_sample(slot.sampler, shared_context_, logit_index++);
+    const llama_token next_token = llama_sampler_sample(
+        slot.sampler, shared_context_, pending_logits.batch_token_index);
 
     if (llama_vocab_is_eog(vocab, next_token)) {
       slot.phase = SlotPhase::Completed;
@@ -829,6 +846,13 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     slot.phase = SlotPhase::Streaming;
     slot_request.lifecycle = GenerateRequestLifecycle::Streaming;
     slot_scheduler_.EmitBufferedTokenPiece(slot);
+
+    if (slot_request.cancel_requested) {
+      slot.terminal_error_message = "Request cancelled.";
+      slot.phase = SlotPhase::Failed;
+      slot_request.lifecycle = GenerateRequestLifecycle::Cancelled;
+      continue;
+    }
 
     if (slot_request.max_output_tokens > 0 &&
         static_cast<int32_t>(slot.generated_tokens.size()) >=
@@ -1108,6 +1132,14 @@ InferenceRuntime::EnqueueRequest(std::string context_key, std::string prompt,
   }
 
   return next_request_id_ - 1;
+}
+
+bool InferenceRuntime::CancelRequest(GenerateRequestId request_id) {
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+  if (request_id == 0) {
+    return false;
+  }
+  return request_queue_.Cancel(request_id, "Request cancelled.");
 }
 
 bool InferenceRuntime::RunUntilRequestCompletes(

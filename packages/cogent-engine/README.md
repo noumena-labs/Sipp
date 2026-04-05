@@ -251,7 +251,7 @@ await engine.initEngine(modelPath, {
   flashAttention: "auto",
 });
 
-const response = await engine.streamPrompt("demo", "Say hello in one sentence.", {
+const response = await engine.submitPrompt("demo", "Say hello in one sentence.", {
   nTokens: 64,
   onToken: (token) => {
     process.stdout.write(token);
@@ -260,7 +260,12 @@ const response = await engine.streamPrompt("demo", "Say hello in one sentence.",
 console.log(response);
 ```
 
-`prompt()` still exists as the convenience wrapper over the streaming path when you only want the final string.
+`submitPrompt()` is the high-level API when you want streamed token callbacks and the final output string.
+
+If you need explicit request handles for scheduling, cancellation, or mixed-load control, use:
+
+- `queuePrompt(...)`
+- `runQueuedRequest(...)`
 
 `getBundledRuntimeUrls()` is the clean default when you want to use the runtime assets packaged with `cogent-engine`.
 
