@@ -173,6 +173,33 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
     return false;
   }
 
+  // EnsureContextSpace may have shrunk the KV cache (tail truncation) or evict
+  // tokens from the middle (shifting the sequence). Either action invalidates 
+  // our previously calculated match_len if the mutated state no longer matches 
+  // the prompt. Re-compute the true longest common prefix length to guarantee 
+  // that we don't accidentally skip prefilling tokens that were just evicted.
+  match_len = 0;
+  for (std::size_t i = 0;
+       i < std::min(state.current_kv_tokens.size(), prompt_tokens.size());
+       ++i) {
+    if (state.current_kv_tokens[i] == prompt_tokens[i]) {
+      match_len++;
+    } else {
+      break;
+    }
+  }
+
+  // Sync diagnostic counters with the post-eviction match_len so that
+  // observability metrics reflect the actual reuse, not the stale
+  // pre-eviction value.
+  if (request != nullptr) {
+    if (restored_from_prefix_cache) {
+      request->prefix_cache_restore_tokens = static_cast<int32_t>(match_len);
+    } else {
+      request->lcp_reuse_tokens = static_cast<int32_t>(match_len);
+    }
+  }
+
   llama_memory_t mem = llama_get_memory(shared_context_);
   const bool is_recurrent = llama_model_is_recurrent(primary_model_);
   const bool is_hybrid = llama_model_is_hybrid(primary_model_);
@@ -308,6 +335,9 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
         slot->terminal_error_message =
             "Runnable slot lost request or sequence state.";
         slot->phase = SlotPhase::Failed;
+        if (slot->request != nullptr) {
+          slot->request->lifecycle = GenerateRequestLifecycle::Failed;
+        }
       }
       continue;
     }
@@ -317,6 +347,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       if (slot->sampler == nullptr) {
         slot->terminal_error_message = "Failed to clone per-slot sampler.";
         slot->phase = SlotPhase::Failed;
+        slot->request->lifecycle = GenerateRequestLifecycle::Failed;
         continue;
       }
     }
@@ -332,6 +363,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
                                           &request, prefill_cursor)) {
         slot->terminal_error_message = "Failed to prepare sequence for prompt reuse.";
         slot->phase = SlotPhase::Failed;
+        request.lifecycle = GenerateRequestLifecycle::Failed;
         continue;
       }
 
@@ -1005,7 +1037,20 @@ RequestStepResult InferenceRuntime::RunRequestStep(GenerateRequestId request_id)
   }
 
   const bool tick_executed = RunPolicyBatchTickLocked();
+
+  // Ensure terminal slots (Completed/Failed) are always moved to the request_queue,
+  // especially if RunPolicyBatchTickLocked failed early due to slot setup errors.
+  slot_scheduler_.FinalizeCompletedSlots(request_queue_, session_store_);
+
   if (!tick_executed) {
+    // If the request we are tracking just finished (possibly failed), return Terminal.
+    if (const GenerateResponse *completed =
+            request_queue_.PeekCompletedResponse(request_id);
+        completed != nullptr) {
+      CommitCompletedObservabilityLocked(request_id, *completed);
+      return RequestStepResult::Terminal;
+    }
+
     if (target_request->lifecycle == GenerateRequestLifecycle::Pending ||
         target_request->lifecycle == GenerateRequestLifecycle::Admitted) {
       return admitted_any ? RequestStepResult::Progressed
@@ -1022,9 +1067,10 @@ RequestStepResult InferenceRuntime::RunRequestStep(GenerateRequestId request_id)
           "Shared batch tick could not make progress.";
       active_slot->phase = SlotPhase::Failed;
     }
-  }
 
-  slot_scheduler_.FinalizeCompletedSlots(request_queue_, session_store_);
+    // Finalize again in case the cleanup logic above marked a slot as Failed.
+    slot_scheduler_.FinalizeCompletedSlots(request_queue_, session_store_);
+  }
 
   if (const GenerateResponse *completed =
           request_queue_.PeekCompletedResponse(request_id);
