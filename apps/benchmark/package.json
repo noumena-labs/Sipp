@@ -9,9 +9,15 @@
     "preview": "bunx --bun vite preview"
   },
   "dependencies": {
-    "cogent-engine": "workspace:*"
+    "cogent-engine": "workspace:*",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
   },
   "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^4.3",
+    "typescript": "^6.0.2",
     "vite": "^5.4.0"
   }
 }

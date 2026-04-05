@@ -3,6 +3,8 @@
 This app is the browser benchmark harness for `cogent-engine`.
 It is intentionally benchmark-focused: no Three.js scene, no decorative WebGL layer,
 and no unrelated demo behavior.
+Benchmark runs explicitly enable runtime observability and backend profiling so the
+exported report can include serving metrics, transport observability, and backend summaries.
 
 It supports:
 
@@ -29,10 +31,12 @@ bun run benchmark:build
 The page exposes a stable automation API:
 
 - `window.__cogentBench.getEnvironment()`
-- `window.__cogentBench.getRuntimeBackend()`
+- `window.__cogentBench.getRuntimeObservability()`
+- `window.__cogentBench.getTransportObservability()`
+- `window.__cogentBench.getBackendObservability()`
 - `window.__cogentBench.initRuntime()`
 - `window.__cogentBench.loadConfiguredModelAndInitEngine()`
-- `window.__cogentBench.runSinglePrompt(config?)`
+- `window.__cogentBench.submitPrompt(config?)`
 - `window.__cogentBench.runBenchmark(config?)`
 - `window.__cogentBench.getLastReport()`
 
