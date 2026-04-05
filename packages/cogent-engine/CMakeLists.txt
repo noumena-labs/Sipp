@@ -118,7 +118,7 @@ set(CE_WASM_EXPORTED_FUNCTIONS
     "['_CE_Init','_CE_Close','_CE_EnqueuePrompt','_CE_CancelQueuedRequest','_CE_RunQueuedRequestJson','_CE_RunRequestStep','_CE_GetCompletedRequestStatus','_CE_GetCompletedRequestOutputSize','_CE_CopyCompletedRequestOutput','_CE_GetCompletedRequestErrorSize','_CE_CopyCompletedRequestError','_CE_ConsumeCompletedRequest','_CE_FreeString','_CE_GetRuntimeObservability','_CE_ResetRuntimeObservability','_CE_GetRuntimeObservabilityJson','_CE_GetBackendObservabilityJson','_malloc','_free']"
 )
 
-set(CE_WASM_RUNTIME_METHODS "['ccall','FS','UTF8ToString','addFunction','removeFunction']")
+set(CE_WASM_RUNTIME_METHODS "['ccall','FS','UTF8ToString','addFunction','removeFunction','getValue','setValue','HEAP32','HEAPF64']")
 
 set(CE_WASM_TARGET_LINK_OPTIONS
     ${CE_WASM_LINK_FLAGS}
