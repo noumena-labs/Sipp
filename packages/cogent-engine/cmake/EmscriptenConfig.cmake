@@ -153,10 +153,9 @@ else()
         set(_CE_OPT_FLAGS
             -O3
             # Fast-math components (excluding -ffinite-math-only for ggml compatibility)
+            #   Excluding -funsafe-math-optimizations and -fassociative-math for f16 correctness
             -fno-math-errno
-            -funsafe-math-optimizations
             -fno-trapping-math
-            -fassociative-math
             -freciprocal-math
             -fno-signed-zeros
             -fno-rounding-math
