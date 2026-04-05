@@ -368,31 +368,6 @@ async function handleGetBackendObservability(): Promise<WorkerBackendObservabili
   };
 }
 
-async function handleGetTransportObservability(): Promise<TransportObservability> {
-  return cloneTransportObservability();
-}
-
-async function handleGetLastModelLoadInfo() {
-  return ensureEngine().getLastModelLoadInfo();
-}
-
-async function handleClose(): Promise<void> {
-  for (const callId of activeModelLoads.keys()) {
-    abortModelLoad(callId);
-  }
-  activeModelLoads.clear();
-  if (engine != null) {
-    engine.close();
-  }
-  engine = null;
-  for (const requestId of bufferedTokens.keys()) {
-    releaseRequestResources(requestId);
-  }
-  for (const requestId of requestAbortControllers.keys()) {
-    releaseRequestResources(requestId);
-  }
-}
-
 self.onmessage = async (event: MessageEvent<WorkerRequestMessage>) => {
   const message = event.data;
   try {
@@ -435,15 +410,6 @@ self.onmessage = async (event: MessageEvent<WorkerRequestMessage>) => {
         break;
       case 'get-backend-observability':
         value = await handleGetBackendObservability();
-        break;
-      case 'get-transport-observability':
-        value = await handleGetTransportObservability();
-        break;
-      case 'get-last-model-load-info':
-        value = await handleGetLastModelLoadInfo();
-        break;
-      case 'close':
-        value = await handleClose();
         break;
       default:
         throw new Error('Unknown worker request kind.');

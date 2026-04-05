@@ -36,9 +36,6 @@ public:
   void FinalizeCompletedSlots(RequestQueue &request_queue,
                               SessionStore &session_store);
   void EmitBufferedTokenPiece(SlotState &slot);
-  void FailActiveRequest(RequestQueue &request_queue, SessionStore &session_store,
-                         SlotState &slot,
-                         std::string error_message);
 
 private:
   std::vector<SlotState> slots_;

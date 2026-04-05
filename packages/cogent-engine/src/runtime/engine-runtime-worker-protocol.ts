@@ -94,18 +94,6 @@ export type WorkerRequestMessage =
   | {
       kind: 'get-backend-observability';
       callId: number;
-    }
-  | {
-      kind: 'get-transport-observability';
-      callId: number;
-    }
-  | {
-      kind: 'get-last-model-load-info';
-      callId: number;
-    }
-  | {
-      kind: 'close';
-      callId: number;
     };
 
 export type WorkerResponseMessage =

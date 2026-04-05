@@ -31,4 +31,3 @@ int CE_CancelQueuedPromptQuery(CE_RequestId request_id);
 #endif
 
 const char* CE_GetBackendObservabilityJsonString();
-std::string CE_RunQueuedRequestJsonString(CE_RequestId request_id);

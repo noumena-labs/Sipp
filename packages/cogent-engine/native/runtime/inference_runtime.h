@@ -52,8 +52,6 @@ public:
   bool BackendProfilingEnabled() const;
   void ResetRuntimeObservability();
 
-  bool Prompt(std::string context_key, std::string prompt, int n_tokens_predict,
-              TokenCallback on_token_received = {});
 
   GenerateRequestId EnqueueRequest(std::string context_key, std::string prompt,
                                    int n_tokens_predict,
@@ -63,8 +61,6 @@ public:
   bool TryPeekCompletedResponse(GenerateRequestId request_id,
                                 GenerateResponse &out_response) const;
   bool ConsumeCompletedResponse(GenerateRequestId request_id);
-  bool RunUntilRequestCompletes(GenerateRequestId request_id,
-                                GenerateResponse &out_response);
 
 private:
   bool EnsureContextSpace(SequenceState &state, int new_tokens_needed,
@@ -80,7 +76,7 @@ private:
                                         std::size_t token_count,
                                         std::size_t terminal_token_count,
                                         GenerateRequest *request);
-  bool RunSharedBatchTickLocked();
+
   bool RunPolicyBatchTickLocked();
   int32_t ResolvePrefillChunkSizeLocked(
       const SchedulerTickBudget &tick_budget, int32_t decode_ready_count,

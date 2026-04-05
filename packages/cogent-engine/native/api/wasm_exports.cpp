@@ -31,40 +31,6 @@ char *duplicate_heap_string(const std::string &value) {
   return out;
 }
 
-std::string runtime_observability_to_json(
-    const CE_RuntimeObservabilityMetrics &metrics) {
-  std::ostringstream out;
-  out << "{"
-      << "\"totalMs\":" << metrics.total_ms << ","
-      << "\"promptEvalMs\":" << metrics.prompt_eval_ms << ","
-      << "\"decodeEvalMs\":" << metrics.decode_eval_ms << ","
-      << "\"sampleMs\":" << metrics.sample_ms << ","
-      << "\"queueDelayMs\":" << metrics.queue_delay_ms << ","
-      << "\"ttftMs\":" << metrics.ttft_ms << ","
-      << "\"meanItlMs\":" << metrics.mean_itl_ms << ","
-      << "\"tailItlMs\":" << metrics.tail_itl_ms << ","
-      << "\"e2elMs\":" << metrics.e2e_ms << ","
-      << "\"inputTokenCount\":" << metrics.input_token_count << ","
-      << "\"promptEvalTokens\":" << metrics.prompt_eval_tokens << ","
-      << "\"decodeEvalCount\":" << metrics.decode_eval_count << ","
-      << "\"sampleCount\":" << metrics.sample_count << ","
-      << "\"outputTokenCount\":" << metrics.output_token_count << ","
-      << "\"schedulerTickCount\":" << metrics.scheduler_tick_count << ","
-      << "\"batchParticipationCount\":" << metrics.batch_participation_count
-      << ","
-      << "\"decodeFirstTickCount\":" << metrics.decode_first_tick_count << ","
-      << "\"chunkedPrefillTickCount\":" << metrics.chunked_prefill_tick_count
-      << ","
-      << "\"mixedWorkloadTickCount\":" << metrics.mixed_workload_tick_count
-      << ","
-      << "\"lcpReuseTokens\":" << metrics.lcp_reuse_tokens << ","
-      << "\"prefixCacheRestoreTokens\":" << metrics.prefix_cache_restore_tokens
-      << ","
-      << "\"prefixCacheHitCount\":" << metrics.prefix_cache_hit_count << ","
-      << "\"prefixCacheStoreCount\":" << metrics.prefix_cache_store_count
-      << "}";
-  return out.str();
-}
 
 } // namespace
 
@@ -133,21 +99,6 @@ void CE_Close() {
   g_isEngineInitialized = false;
 }
 
-EMSCRIPTEN_KEEPALIVE
-char *CE_GetRuntimeObservabilityJson() {
-  std::lock_guard<std::mutex> lock(g_apiMutex);
-
-  if (!g_isEngineInitialized) {
-    return nullptr;
-  }
-
-  CE_RuntimeObservabilityMetrics metrics{};
-  if (CE_GetRuntimeObservability(&metrics) != 0) {
-    return nullptr;
-  }
-
-  return duplicate_heap_string(runtime_observability_to_json(metrics));
-}
 
 EMSCRIPTEN_KEEPALIVE
 char *CE_GetBackendObservabilityJson() {
@@ -169,26 +120,6 @@ CE_RequestId CE_EnqueuePrompt(const char *context_key, const char *prompt,
   return CE_EnqueuePromptQuery(context_key, prompt, n_tokens, on_token);
 }
 
-EMSCRIPTEN_KEEPALIVE
-char *CE_RunQueuedRequestJson(CE_RequestId request_id) {
-  std::lock_guard<std::mutex> lock(g_apiMutex);
-  if (!g_isEngineInitialized) {
-    return duplicate_heap_string(
-        "{\"requestId\":0,\"completed\":false,\"failed\":true,"
-        "\"cancelled\":false,"
-        "\"outputText\":\"\",\"errorMessage\":\"Engine is not initialized.\","
-        "\"runtimeObservability\":null}");
-  }
-  if (request_id == 0) {
-    return duplicate_heap_string(
-        "{\"requestId\":0,\"completed\":false,\"failed\":true,"
-        "\"cancelled\":false,"
-        "\"outputText\":\"\",\"errorMessage\":\"Invalid request id.\","
-        "\"runtimeObservability\":null}");
-  }
-
-  return duplicate_heap_string(CE_RunQueuedRequestJsonString(request_id));
-}
 
 EMSCRIPTEN_KEEPALIVE
 int CE_CancelQueuedRequest(CE_RequestId request_id) {

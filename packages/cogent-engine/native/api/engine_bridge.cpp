@@ -72,69 +72,6 @@ std::string json_escape(const char *value) {
 
 std::string json_bool(bool value) { return value ? "true" : "false"; }
 
-std::string runtime_observability_to_json(
-    const noumena::cogentengine::RuntimeObservabilityMetrics &metrics) {
-  std::ostringstream out;
-  out << "{"
-      << "\"totalMs\":" << metrics.total_ms << ","
-      << "\"promptEvalMs\":" << metrics.prompt_eval_ms << ","
-      << "\"decodeEvalMs\":" << metrics.decode_eval_ms << ","
-      << "\"sampleMs\":" << metrics.sample_ms << ","
-      << "\"queueDelayMs\":" << metrics.queue_delay_ms << ","
-      << "\"ttftMs\":" << metrics.ttft_ms << ","
-      << "\"meanItlMs\":" << metrics.mean_itl_ms << ","
-      << "\"tailItlMs\":" << metrics.tail_itl_ms << ","
-      << "\"e2elMs\":" << metrics.e2e_ms << ","
-      << "\"inputTokenCount\":" << metrics.input_token_count << ","
-      << "\"promptEvalTokens\":" << metrics.prompt_eval_tokens << ","
-      << "\"decodeEvalCount\":" << metrics.decode_eval_count << ","
-      << "\"sampleCount\":" << metrics.sample_count << ","
-      << "\"outputTokenCount\":" << metrics.output_token_count << ","
-      << "\"schedulerTickCount\":" << metrics.scheduler_tick_count << ","
-      << "\"batchParticipationCount\":" << metrics.batch_participation_count << ","
-      << "\"decodeFirstTickCount\":" << metrics.decode_first_tick_count << ","
-      << "\"chunkedPrefillTickCount\":" << metrics.chunked_prefill_tick_count
-      << ","
-      << "\"mixedWorkloadTickCount\":" << metrics.mixed_workload_tick_count
-      << ","
-      << "\"lcpReuseTokens\":" << metrics.lcp_reuse_tokens << ","
-      << "\"prefixCacheRestoreTokens\":" << metrics.prefix_cache_restore_tokens
-      << ","
-      << "\"prefixCacheHitCount\":" << metrics.prefix_cache_hit_count << ","
-      << "\"prefixCacheStoreCount\":" << metrics.prefix_cache_store_count
-      << "}";
-  return out.str();
-}
-
-std::string generate_response_to_json(
-    const noumena::cogentengine::GenerateResponse &response) {
-  std::ostringstream out;
-  out << "{"
-      << "\"requestId\":" << response.request_id << ","
-      << "\"completed\":"
-      << json_bool(response.status ==
-                   noumena::cogentengine::GenerateResponseStatus::Completed)
-      << ","
-      << "\"failed\":"
-      << json_bool(response.status ==
-                   noumena::cogentengine::GenerateResponseStatus::Failed)
-      << ","
-      << "\"cancelled\":"
-      << json_bool(response.status ==
-                   noumena::cogentengine::GenerateResponseStatus::Cancelled)
-      << ","
-      << "\"outputText\":\"" << json_escape(response.output_text.c_str())
-      << "\","
-      << "\"errorMessage\":";
-  if (!response.error_message.empty()) {
-    out << "\"" << json_escape(response.error_message.c_str()) << "\"";
-  } else {
-    out << "null";
-  }
-  out << ",\"runtimeObservability\":"
-      << runtime_observability_to_json(response.runtime_observability) << "}";
-  return out.str();
-}
 
 std::shared_ptr<InferenceRuntime> acquire_engine_runtime() {
   std::lock_guard<std::mutex> lock(g_engineMutex);
@@ -476,29 +413,4 @@ int CE_CancelQueuedPromptQuery(CE_RequestId request_id) {
     return 0;
   }
   return runtime->CancelRequest(request_id) ? 1 : 0;
-}
-
-std::string CE_RunQueuedRequestJsonString(CE_RequestId request_id) {
-  noumena::cogentengine::GenerateResponse response{};
-  response.request_id = request_id;
-
-  auto runtime = acquire_engine_runtime();
-  if (!runtime) {
-    response.status = noumena::cogentengine::GenerateResponseStatus::Failed;
-    response.error_message = "Engine is not initialized.";
-    return generate_response_to_json(response);
-  }
-
-  const bool success = runtime->RunUntilRequestCompletes(request_id, response);
-  if (!success &&
-      response.status != noumena::cogentengine::GenerateResponseStatus::Failed &&
-      response.status !=
-          noumena::cogentengine::GenerateResponseStatus::Completed &&
-      response.status !=
-          noumena::cogentengine::GenerateResponseStatus::Cancelled) {
-    response.status = noumena::cogentengine::GenerateResponseStatus::Failed;
-    response.error_message = "Queued request execution failed.";
-  }
-
-  return generate_response_to_json(response);
 }

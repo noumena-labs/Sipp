@@ -673,9 +673,6 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   return true;
 }
 
-bool InferenceRuntime::RunSharedBatchTickLocked() {
-  return RunPolicyBatchTickLocked();
-}
 
 int32_t InferenceRuntime::ResolvePrefillChunkSizeLocked(
     const SchedulerTickBudget &tick_budget, int32_t decode_ready_count,
@@ -1098,52 +1095,6 @@ bool InferenceRuntime::ConsumeCompletedResponse(GenerateRequestId request_id) {
   std::lock_guard<std::mutex> lock(operation_mutex_);
   committed_observability_request_ids_.erase(request_id);
   return request_queue_.ConsumeCompletedResponse(request_id);
-}
-
-bool InferenceRuntime::RunUntilRequestCompletes(
-    GenerateRequestId request_id, GenerateResponse &out_response) {
-  out_response = {};
-  {
-    std::lock_guard<std::mutex> lock(operation_mutex_);
-    has_last_runtime_observability_ = false;
-  }
-
-  while (true) {
-    const RequestStepResult step_result = RunRequestStep(request_id);
-    if (step_result == RequestStepResult::Invalid ||
-        step_result == RequestStepResult::FatalNoProgress) {
-      return false;
-    }
-    if (step_result != RequestStepResult::Terminal) {
-      continue;
-    }
-    if (!TryPeekCompletedResponse(request_id, out_response)) {
-      return false;
-    }
-    const bool consumed = ConsumeCompletedResponse(request_id);
-    if (!consumed) {
-      return false;
-    }
-    return out_response.status == GenerateResponseStatus::Completed;
-  }
-}
-
-bool InferenceRuntime::Prompt(std::string model_context_key, std::string prompt,
-                              int n_tokens_predict,
-                              TokenCallback on_token_received) {
-  if (model_context_key.empty()) {
-    model_context_key = kDefaultPromptContextKey;
-  }
-
-  const GenerateRequestId request_id = EnqueueRequest(
-      std::move(model_context_key), std::move(prompt), n_tokens_predict,
-      std::move(on_token_received));
-  if (request_id == 0) {
-    return false;
-  }
-
-  GenerateResponse response;
-  return RunUntilRequestCompletes(request_id, response);
 }
 
 } // namespace noumena::cogentengine
