@@ -58,7 +58,7 @@ endfunction()
 
 # llama.cpp subproject
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libs" FORCE)
-set(LLAMA_WASM_MEM64 OFF CACHE BOOL "Use wasm32 memory model for cogent-engine" FORCE)
+set(LLAMA_WASM_MEM64 ON CACHE BOOL "Use wasm64 memory model for cogent-engine" FORCE)
 set(GGML_WEBGPU ON CACHE BOOL "Enable WebGPU backend for CogentEngine browser builds" FORCE)
 if(CE_BUILD_WEBGPU_TEST_BACKEND_OPS)
   set(LLAMA_BUILD_COMMON ON CACHE BOOL "Build llama.cpp common utils for tests" FORCE)
@@ -118,7 +118,7 @@ set(CE_WASM_EXPORTED_FUNCTIONS
     "['_CE_Init','_CE_Close','_CE_EnqueuePrompt','_CE_CancelQueuedRequest','_CE_RunRequestStep','_CE_GetCompletedRequestStatus','_CE_GetCompletedRequestOutputSize','_CE_CopyCompletedRequestOutput','_CE_GetCompletedRequestErrorSize','_CE_CopyCompletedRequestError','_CE_ConsumeCompletedRequest','_CE_FreeString','_CE_GetRuntimeObservability','_CE_ResetRuntimeObservability','_CE_GetBackendObservabilityJson','_malloc','_free']"
 )
 
-set(CE_WASM_RUNTIME_METHODS "['ccall','FS','UTF8ToString','addFunction','removeFunction','getValue','setValue','HEAP32','HEAPF64']")
+set(CE_WASM_RUNTIME_METHODS "['ccall','FS','WORKERFS','UTF8ToString','addFunction','removeFunction','getValue','setValue','HEAP32','HEAPF64']")
 
 set(CE_WASM_TARGET_LINK_OPTIONS
     ${CE_WASM_LINK_FLAGS}

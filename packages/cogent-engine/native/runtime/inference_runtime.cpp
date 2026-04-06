@@ -14,6 +14,7 @@
 #include <functional>
 
 #include "runtime/llama/llama_utils.h"
+#include "runtime/config/scheduler_policy.h"
 
 namespace {
 

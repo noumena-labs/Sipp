@@ -21,7 +21,7 @@ option(CE_WASM_FILESYSTEM   "Enable Emscripten virtual filesystem support"     O
 option(CE_WASM_USE_JSPI     "Enable JSPI-based async exports"                  ON)
 
 set(CE_WASM_INITIAL_MEMORY "512MB" CACHE STRING "Initial WASM memory")
-set(CE_WASM_MAXIMUM_MEMORY "4096MB" CACHE STRING "Maximum WASM memory")
+set(CE_WASM_MAXIMUM_MEMORY "16384MB" CACHE STRING "Maximum WASM memory")
 set(CE_WASM_STACK_SIZE "16MB" CACHE STRING "WASM stack size")
 set(CE_WASM_PTHREAD_STACK_SIZE "2MB" CACHE STRING "Default pthread stack size")
 set(CE_WASM_PTHREAD_POOL_SIZE "4" CACHE STRING "Pthread pool size")
@@ -188,6 +188,7 @@ set(CE_WASM_COMPILE_FLAGS
     -fwasm-exceptions
     -mbulk-memory
     -mnontrapping-fptoint
+    -sMEMORY64=1
     
     # RTTI and LTO
     -frtti
@@ -215,8 +216,8 @@ set(CE_WASM_LINK_FLAGS
     # Environment & Memory
     -sENVIRONMENT=${CE_WASM_ENVIRONMENT}
     -sWASM=1
-    -sWASM_BIGINT=0
-    -sMEMORY64=0
+    -sWASM_BIGINT=1
+    -sMEMORY64=1
     -sSUPPORT_LONGJMP=wasm
     -sINITIAL_MEMORY=${CE_WASM_INITIAL_MEMORY}
     -sMAXIMUM_MEMORY=${CE_WASM_MAXIMUM_MEMORY}
@@ -231,7 +232,7 @@ set(CE_WASM_LINK_FLAGS
 )
 
 if(CE_WASM_FILESYSTEM)
-    list(APPEND CE_WASM_LINK_FLAGS -sFORCE_FILESYSTEM=1)
+    list(APPEND CE_WASM_LINK_FLAGS -sFORCE_FILESYSTEM=1 -lworkerfs.js)
 endif()
 
 if(CE_WASM_DEBUG)

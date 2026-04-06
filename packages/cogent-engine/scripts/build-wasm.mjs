@@ -500,7 +500,7 @@ const cmakeConfigureArgs = [
   '-DCE_WASM_AGGRESSIVE_OPT=ON',
   `-DCE_WASM_USE_JSPI=${enableJspi ? 'ON' : 'OFF'}`,
   `-DCE_WASM_ENVIRONMENT=${emscriptenEnvironment}`,
-  '-DLLAMA_WASM_MEM64=OFF',
+  '-DLLAMA_WASM_MEM64=ON',
   '-DLLAMA_BUILD_HTML=OFF'
 ];
 
