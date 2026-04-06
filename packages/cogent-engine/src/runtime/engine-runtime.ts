@@ -40,6 +40,16 @@ export interface EngineRuntime {
     }
   ): Promise<string>;
   loadModelFromBuffer(buffer: Uint8Array, destFileName?: string): string;
+  loadModelFromFileShards(
+    files: File[],
+    onProgress?: (pct: number) => void,
+    signal?: AbortSignal
+  ): Promise<string>;
+  loadModelFromUrls(
+    urls: string[],
+    onProgress?: (pct: number) => void,
+    signal?: AbortSignal
+  ): Promise<string>;
   initEngine(modelPath: string, config?: InferenceInitConfig): Promise<void>;
   close(): void;
   cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean>;

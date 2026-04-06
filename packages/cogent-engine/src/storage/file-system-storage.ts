@@ -1,0 +1,124 @@
+/**
+ * FileSystemStorage provides an abstraction for the Origin Private File System (OPFS),
+ * allowing large assets to be streamed directly to browser-managed persistent storage.
+ *
+ * This enables zero-copy loading of models >2GB from URLs by:
+ * 1. Streaming the download directly to a file on disk.
+ * 2. Retrieving a native File handle from the stored file.
+ * 3. Mounting that File into the WASM filesystem via WORKERFS.
+ */
+export class FileSystemStorage {
+  private root: FileSystemDirectoryHandle | null = null;
+  private readonly dirName = 'cogent-models';
+
+  /**
+   * Check if OPFS is supported in the current environment.
+   */
+  public static isSupported(): boolean {
+    return (
+      typeof navigator !== 'undefined' &&
+      typeof navigator.storage !== 'undefined' &&
+      typeof navigator.storage.getDirectory === 'function'
+    );
+  }
+
+  private async ensureRoot(): Promise<FileSystemDirectoryHandle> {
+    if (this.root) return this.root;
+    const opfsRoot = await navigator.storage.getDirectory();
+    this.root = await opfsRoot.getDirectoryHandle(this.dirName, { create: true });
+    return this.root;
+  }
+
+  /**
+   * Get a File handle for an existing file in storage.
+   */
+  public async getFile(fileName: string): Promise<File | null> {
+    try {
+      const root = await this.ensureRoot();
+      const handle = await root.getFileHandle(fileName);
+      return await handle.getFile();
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * Stream a web response body directly to OPFS.
+   */
+  public async streamToDisk(
+    fileName: string,
+    stream: ReadableStream<Uint8Array>,
+    onProgress?: (bytes: number) => void,
+    signal?: AbortSignal
+  ): Promise<File> {
+    const root = await this.ensureRoot();
+    const handle = await root.getFileHandle(fileName, { create: true });
+
+    // We use createWritable() which returns a FileSystemWritableFileStream.
+    // In some browsers (Firefox), this might be behind a flag or limited.
+    // Use the modern piping API if possible.
+    const writable = await handle.createWritable();
+    
+    try {
+      let bytesWritten = 0;
+      const progressTransformer = new TransformStream({
+        transform(chunk, controller) {
+          bytesWritten += chunk.byteLength;
+          if (onProgress) onProgress(bytesWritten);
+          controller.enqueue(chunk);
+        }
+      });
+
+      if (signal) {
+        signal.addEventListener('abort', () => {
+          writable.abort();
+        });
+      }
+
+      await stream.pipeThrough(progressTransformer).pipeTo(writable);
+      return await handle.getFile();
+    } catch (e) {
+      // Cleanup on failure
+      try { await writable.abort(); } catch {}
+      throw e;
+    }
+  }
+
+  /**
+   * Delete a file from storage.
+   */
+  public async deleteFile(fileName: string): Promise<void> {
+    try {
+      const root = await this.ensureRoot();
+      await root.removeEntry(fileName);
+    } catch (e) {}
+  }
+
+  /**
+   * List all cached model files.
+   */
+  public async listFiles(): Promise<string[]> {
+    try {
+      const root = await this.ensureRoot();
+      const names: string[] = [];
+      // @ts-ignore - async iterator on entries()
+      for await (const name of root.keys()) {
+        names.push(name);
+      }
+      return names;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /**
+   * Clear all cached files.
+   */
+  public async clear(): Promise<void> {
+    try {
+      const opfsRoot = await navigator.storage.getDirectory();
+      await opfsRoot.removeEntry(this.dirName, { recursive: true });
+      this.root = null;
+    } catch (e) {}
+  }
+}

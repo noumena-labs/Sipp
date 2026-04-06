@@ -89,6 +89,22 @@ export class CogentEngine {
     return this.runtime.loadModelFromBuffer(buffer, destFileName);
   }
 
+  public async loadModelFromFileShards(
+    files: File[],
+    onProgress?: (pct: number) => void,
+    signal?: AbortSignal
+  ): Promise<string> {
+    return this.runtime.loadModelFromFileShards(files, onProgress, signal);
+  }
+
+  public async loadModelFromUrls(
+    urls: string[],
+    onProgress?: (pct: number) => void,
+    signal?: AbortSignal
+  ): Promise<string> {
+    return this.runtime.loadModelFromUrls(urls, onProgress, signal);
+  }
+
   public async initEngine(
     modelPath: string,
     config?: InferenceInitConfig

@@ -241,6 +241,28 @@ export class WorkerEngineRuntime implements EngineRuntime {
     );
   }
 
+  public async loadModelFromFileShards(
+    files: File[],
+    onProgress?: (pct: number) => void,
+    signal?: AbortSignal
+  ): Promise<string> {
+    // For worker mode, load each shard individually via the worker's file transfer protocol.
+    // This is a simplified implementation — it loads shards sequentially via the main thread.
+    throw new Error(
+      'loadModelFromFileShards() is not yet available in worker runtime. Use main-thread runtime for split model support.'
+    );
+  }
+
+  public async loadModelFromUrls(
+    urls: string[],
+    onProgress?: (pct: number) => void,
+    signal?: AbortSignal
+  ): Promise<string> {
+    throw new Error(
+      'loadModelFromUrls() is not yet available in worker runtime. Use main-thread runtime for split model support.'
+    );
+  }
+
   public async initEngine(
     modelPath: string,
     config?: InferenceInitConfig

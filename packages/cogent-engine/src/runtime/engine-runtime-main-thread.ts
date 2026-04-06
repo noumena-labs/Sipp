@@ -1,10 +1,6 @@
+import { FileSystemStorage } from '../storage/file-system-storage.js';
 import { CogentConfig, EngineModuleOptions } from '../cogent-config.js';
 import { normalizeInitConfig } from '../core/init-config.js';
-import {
-  BrowserModelCache,
-  BrowserModelCacheWriter,
-  ModelCacheSourceDescriptor,
-} from '../storage/browser-model-cache.js';
 import { formatPromptText } from '../core/prompt-format.js';
 import {
   BackendObservability,
@@ -35,25 +31,30 @@ interface EmscriptenFs {
   open(path: string, flags: string): FsStream;
   write(stream: FsStream, buffer: Uint8Array, offset: number, length: number, position: number): number;
   close(stream: FsStream): void;
+  mount(type: any, opts: any, mountpoint: string): void;
+  unmount(mountpoint: string): void;
 }
 
 interface EngineModule {
   FS: EmscriptenFs;
+  WORKERFS: any;
   HEAP32: Int32Array;
   HEAPF64: Float64Array;
-  _CE_FreeString(ptr: number): void;
-  _free(ptr: number): void;
-  _malloc(size: number): number;
-  addFunction(func: (...args: number[]) => number, signature: string): number;
-  ccall(ident: string, returnType: string | null, argTypes: string[], args: unknown[], opts?: { async?: boolean }): Promise<number> | number;
-  removeFunction(ptr: number): void;
-  UTF8ToString(ptr: number, maxBytesToRead?: number): string;
+  HEAP64: BigInt64Array;
+  HEAPU64: BigUint64Array;
+  _CE_FreeString(ptr: number | bigint): void;
+  _free(ptr: number | bigint): void;
+  _malloc(size: number | bigint): number | bigint;
+  addFunction(func: (...args: any[]) => any, signature: string): number | bigint;
+  ccall(ident: string, returnType: string | null, argTypes: string[], args: any[], opts?: { async?: boolean }): Promise<any> | any;
+  removeFunction(ptr: number | bigint): void;
+  UTF8ToString(ptr: number | bigint, maxBytesToRead?: number): string;
 }
 
 const MAX_PROMPT_TOKENS = 2048;
-const DEFAULT_MAX_MODEL_BYTES = 2 * 1024 * 1024 * 1024;
+const DEFAULT_MAX_MODEL_BYTES = 8 * 1024 * 1024 * 1024;
 const DEFAULT_PROMPT_FORMAT = 'auto-chat';
-const DEFAULT_PERSISTENT_CACHE_NAMESPACE = 'cogent-engine-model-cache';
+const MEMFS_FILE_SIZE_LIMIT = 2 * 1024 * 1024 * 1024 - 1024 * 1024; // ~2GB
 const REQUEST_STEP_RESULT_INVALID = -1;
 const REQUEST_STEP_RESULT_FATAL_NO_PROGRESS = -2;
 const REQUEST_STEP_RESULT_WAITING = 0;
@@ -66,11 +67,6 @@ const COMPLETED_REQUEST_STATUS_FAILED = 3;
 const RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES = 128;
 const RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT = 9;
 
-interface ModelStreamSink {
-  write(chunk: Uint8Array): Promise<void>;
-  close(finalSizeBytes: number): Promise<void>;
-  abort(): Promise<void>;
-}
 
 function createAbortError(message = 'The operation was aborted.'): Error {
   if (typeof DOMException === 'function') {
@@ -107,12 +103,14 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private module: EngineModule | null = null;
   private initPromise: Promise<void> | null = null;
   private engineInitialized = false;
-  private loadedModelPath: string | null = null;
+  private loadedModelPaths: string[] = [];
+  private workerFsMountPath: string | null = null;
+  private readonly opfs = new FileSystemStorage();
   private queuedPromptCallbacks = new Map<
     GenerateRequestId,
     ((token: string) => void) | undefined
   >();
-  private queuedPromptCallbackPtrs = new Map<GenerateRequestId, number>();
+  private queuedPromptCallbackPtrs = new Map<GenerateRequestId, number | bigint>();
   private queuedPromptTokenBuffers = new Map<GenerateRequestId, string[]>();
   private queuedPromptCallbackErrors = new Map<GenerateRequestId, unknown>();
   private lastModelLoadInfo: ModelLoadInfo | null = null;
@@ -128,20 +126,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     coalescedTokenCount: 0,
     maxObservedBufferedTokenCount: 0,
   };
-  private readonly persistentModelCache: BrowserModelCache;
-
-  constructor(private config: CogentConfig = {}) {
-    this.persistentModelCache = new BrowserModelCache({
-      enabled: config.persistentModelCache?.enabled ?? true,
-      namespace:
-        config.persistentModelCache?.namespace ??
-        DEFAULT_PERSISTENT_CACHE_NAMESPACE,
-      cacheLocalFiles: config.persistentModelCache?.cacheLocalFiles ?? false,
-      maxEntryBytes:
-        config.persistentModelCache?.maxEntryBytes ??
-        this.resolveMaxModelBytes(),
-    });
-  }
+  constructor(private config: CogentConfig = {}) { }
 
   private resolveWasmUrls(): { moduleUrl: string; wasmUrl: string } {
     const moduleUrl = this.config.moduleUrl?.trim();
@@ -204,18 +189,6 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       throw new Error('"maxModelBytes" must be a positive integer.');
     }
     return maxModelBytes;
-  }
-
-  private buildModelCacheSource(
-    kind: ModelLoadSourceKind,
-    identity: string,
-    fileName: string
-  ): ModelCacheSourceDescriptor {
-    return {
-      kind,
-      identity,
-      fileName: normalizeModelFileName(fileName),
-    };
   }
 
   private setLastModelLoadInfo(info: ModelLoadInfo): void {
@@ -361,7 +334,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     if (result instanceof Promise) {
       throw new Error(`Unexpected async result while calling ${ident}.`);
     }
-    return result;
+    return Number(result);
   }
 
   private async callNumberAsync(
@@ -373,25 +346,27 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     const result = module.ccall(ident, 'number', argTypes, args, {
       async: true,
     });
-    return result instanceof Promise ? result : result;
+    return Number(await result);
   }
+
 
   private readRuntimeObservabilityFromModule(
     module: EngineModule
   ): RuntimeObservabilityMetrics | null {
-    const metricsPtr = module._malloc(RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES);
+    const metricsPtr = Number(module._malloc(RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES));
     if (!metricsPtr) {
       throw new Error('Failed to allocate runtime observability buffer.');
     }
 
     try {
-      const status = this.callNumber(module, 'CE_GetRuntimeObservability', ['number'], [metricsPtr]);
+      const status = this.callNumber(module, 'CE_GetRuntimeObservability', ['pointer'], [metricsPtr]);
       if (status !== 0) {
         return null;
       }
 
-      const f64Offset = metricsPtr >> 3;
-      const i32Offset = (metricsPtr + RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT * 8) >> 2;
+      // Integer division for typed array index: ptr must be aligned.
+      const f64Offset = (metricsPtr / 8) | 0;
+      const i32Offset = ((metricsPtr + RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT * 8) / 4) | 0;
 
       return {
         totalMs: module.HEAPF64[f64Offset],
@@ -438,13 +413,14 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       return '';
     }
 
-    const bufferPtr = module._malloc(byteLength + 1);
-    if (!bufferPtr) {
+    const rawBufferPtr = module._malloc(byteLength + 1);
+    if (!rawBufferPtr) {
       throw new Error(`Failed to allocate queued request ${fieldName} buffer.`);
     }
+    const bufferPtr = Number(rawBufferPtr);
 
     try {
-      const copied = this.callNumber(module, copyFunction, ['number', 'number', 'number'], [
+      const copied = this.callNumber(module, copyFunction, ['number', 'pointer', 'number'], [
         requestId,
         bufferPtr,
         byteLength + 1,
@@ -503,11 +479,27 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     }
   }
 
-  private commitLoadedModelPath(module: EngineModule, path: string): void {
-    if (this.loadedModelPath && this.loadedModelPath !== path) {
-      this.removeFileIfExists(module, this.loadedModelPath);
+  private removeAllLoadedModelFiles(module: EngineModule): void {
+    for (const p of this.loadedModelPaths) {
+      // Don't try to unlink files inside a WORKERFS mount point.
+      // They will be "cleaned up" when the mount is unmounted.
+      if (this.workerFsMountPath && p.startsWith(this.workerFsMountPath)) {
+        continue;
+      }
+      this.removeFileIfExists(module, p);
     }
-    this.loadedModelPath = path;
+    this.loadedModelPaths = [];
+  }
+
+  private commitLoadedModelPaths(module: EngineModule, paths: string[]): void {
+    // Clean up any previously loaded model files that aren't in the new set
+    const newSet = new Set(paths);
+    for (const p of this.loadedModelPaths) {
+      if (!newSet.has(p)) {
+        this.removeFileIfExists(module, p);
+      }
+    }
+    this.loadedModelPaths = [...paths];
   }
 
   private prepareModelPath(module: EngineModule, destFileName: string): string {
@@ -576,135 +568,13 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     }
   }
 
-  private async writeModelStream(
-    module: EngineModule,
-    path: string,
-    stream: ReadableStream<Uint8Array>,
-    maxModelBytes: number,
-    expectedBytes: number,
-    onProgress?: (pct: number) => void,
-    signal?: AbortSignal,
-    sink?: ModelStreamSink
-  ): Promise<number> {
-    if (expectedBytes > 0 && expectedBytes > maxModelBytes) {
-      throw new Error(`Model exceeds configured maxModelBytes (${maxModelBytes} bytes).`);
-    }
-
-    const fileStream = module.FS.open(path, 'w+');
-    if (!Number.isFinite(fileStream.position)) {
-      fileStream.position = 0;
-    }
-
-    let receivedLength = 0;
-    const reader = stream.getReader();
-
-    try {
-      while (true) {
-        if (signal?.aborted) {
-          throw new Error('Model load aborted.');
-        }
-
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
-        }
-        if (!value || value.length === 0) {
-          continue;
-        }
-
-        receivedLength += value.length;
-        if (receivedLength > maxModelBytes) {
-          throw new Error(`Model exceeds configured maxModelBytes (${maxModelBytes} bytes).`);
-        }
-
-        module.FS.write(fileStream, value, 0, value.length, fileStream.position);
-        fileStream.position += value.length;
-        if (sink) {
-          await sink.write(value);
-        }
-
-        if (expectedBytes > 0 && onProgress) {
-          onProgress(Math.round((receivedLength / expectedBytes) * 100));
-        }
-      }
-    } finally {
-      module.FS.close(fileStream);
-      reader.releaseLock();
-    }
-
-    if (receivedLength === 0) {
-      throw new Error('Model file is empty.');
-    }
-
-    if (sink) {
-      await sink.close(receivedLength);
-    }
-
-    return receivedLength;
-  }
-
-  private async loadModelFromReadableStreamInternal(
-    stream: ReadableStream<Uint8Array>,
-    destFileName: string,
-    source: ModelCacheSourceDescriptor,
-    reuseMode: ModelLoadReuseMode,
-    options: {
-      expectedBytes?: number;
-      onProgress?: (pct: number) => void;
-      signal?: AbortSignal;
-      persistentCacheHit?: boolean;
-      persistentCacheKey?: string | null;
-      persistentCacheWriter?: BrowserModelCacheWriter | null;
-    } = {}
-  ): Promise<string> {
-    const module = await this.ensureModule();
-    const modelPath = this.prepareModelPath(module, destFileName);
-    const maxModelBytes = this.resolveMaxModelBytes();
-    const expectedBytes = options.expectedBytes ?? 0;
-    const persistentCacheEnabled =
-      options.persistentCacheHit === true ||
-      options.persistentCacheWriter != null ||
-      this.persistentModelCache.isEnabledForSource(source);
-
-    try {
-      const finalBytes = await this.writeModelStream(
-        module,
-        modelPath,
-        stream,
-        maxModelBytes,
-        expectedBytes,
-        options.onProgress,
-        options.signal,
-        options.persistentCacheWriter ?? undefined
-      );
-
-      this.commitLoadedModelPath(module, modelPath);
-      this.setLastModelLoadInfo({
-        sourceKind: source.kind,
-        reuseMode,
-        modelPath,
-        fileName: source.fileName,
-        byteLength: finalBytes,
-        persistentCacheEnabled,
-        persistentCacheKey: options.persistentCacheKey ?? null,
-        persistentCacheHit: options.persistentCacheHit === true,
-        persistentCacheStored: options.persistentCacheWriter != null,
-      });
-      return modelPath;
-    } catch (error) {
-      this.removeFileIfExists(module, modelPath);
-      if (options.persistentCacheWriter != null) {
-        await options.persistentCacheWriter.abort();
-      }
-      if (isAbortError(error) || options.signal?.aborted) {
-        throw createAbortError('Model load aborted.');
-      }
-      throw new Error(`Failed while streaming model: ${asErrorMessage(error)}`);
-    }
-  }
 
   /**
-   * Load a GGUF model into MEMFS from a URL.
+   * Load a GGUF model from a URL.
+   * 
+   * This streams the model directly to OPFS (Persistent Storage) if supported,
+   * then mounts it into the WASM filesystem via WORKERFS. This is zero-copy
+   * and handles files >2GB.
    */
   public async loadModelFromUrl(
     url: string,
@@ -712,65 +582,14 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     onProgress?: (pct: number) => void,
     signal?: AbortSignal
   ): Promise<string> {
-    const source = this.buildModelCacheSource(
-      'url',
-      this.parseConfiguredUrl(url, 'modelUrl').toString(),
-      destFileName
-    );
-    const restored = await this.persistentModelCache.restore(source);
-    if (restored != null) {
-      return this.loadModelFromReadableStreamInternal(
-        restored.stream,
-        destFileName,
-        source,
-        'persistent-cache',
-        {
-          expectedBytes: restored.byteLength,
-          onProgress,
-          signal,
-          persistentCacheHit: true,
-          persistentCacheKey: restored.persistentCacheKey,
-        }
-      );
-    }
-
-    const maxModelBytes = this.resolveMaxModelBytes();
-    const response = await fetch(url, { signal });
-    if (!response.ok) {
-      throw new Error(`Failed to fetch model: ${response.status} ${response.statusText}`);
-    }
-    if (!response.body) {
-      throw new Error('Model response body is empty.');
-    }
-
-    const contentLength = Number.parseInt(response.headers.get('Content-Length') ?? '0', 10) || 0;
-    if (contentLength <= 0 && !this.config.allowUnknownContentLength) {
-      throw new Error('Model response must include a valid Content-Length header.');
-    }
-    if (contentLength > maxModelBytes) {
-      throw new Error(`Model exceeds configured maxModelBytes (${maxModelBytes} bytes).`);
-    }
-
-    const persistentCacheWriter =
-      contentLength <= maxModelBytes
-        ? await this.persistentModelCache.createWriter(source)
-        : null;
-
-    return this.loadModelFromReadableStreamInternal(
-      response.body,
-      destFileName,
-      source,
-      'network',
-      {
-        expectedBytes: contentLength,
-        onProgress,
-        signal,
-        persistentCacheKey: persistentCacheWriter?.persistentCacheKey ?? null,
-        persistentCacheWriter,
-      }
-    );
+    return this.loadModelFromUrls([url], onProgress, signal);
   }
 
+  /**
+   * Load a model from a ReadableStream.
+   * 
+   * The stream is piped to OPFS then zero-copy mounted.
+   */
   public async loadModelFromReadableStream(
     stream: ReadableStream<Uint8Array>,
     destFileName: string = 'model.gguf',
@@ -780,67 +599,123 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       signal?: AbortSignal;
     } = {}
   ): Promise<string> {
-    const source = this.buildModelCacheSource(
-      'buffer',
-      `stream:${destFileName}:${options.expectedBytes ?? 0}`,
-      destFileName
-    );
+    const module = await this.ensureModule();
+    const opfsEnabled = FileSystemStorage.isSupported() && this.config.persistentModelCache?.enabled !== false;
 
-    return this.loadModelFromReadableStreamInternal(
-      stream,
-      destFileName,
-      source,
-      'buffer',
-      options
-    );
-  }
-
-  public async loadModelFromFile(
-    file: File,
-    destFileName: string = file.name || 'model.gguf',
-    onProgress?: (pct: number) => void,
-    signal?: AbortSignal
-  ): Promise<string> {
-    if (file.size <= 0) {
-      throw new Error('Model file is empty.');
+    let modelFile: Blob;
+    if (opfsEnabled) {
+      modelFile = await this.opfs.streamToDisk(
+        destFileName,
+        stream,
+        options.onProgress,
+        options.signal
+      );
+    } else {
+      // Fallback for environments without OPFS
+      const reader = stream.getReader();
+      const chunks: Uint8Array[] = [];
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+      modelFile = new Blob(chunks as any);
     }
 
-    const source = this.buildModelCacheSource(
-      'file',
-      `${file.name}:${file.size}:${file.lastModified}`,
-      destFileName
-    );
-    const restored = await this.persistentModelCache.restore(source);
-    if (restored != null) {
-      return this.loadModelFromReadableStreamInternal(
-        restored.stream,
-        destFileName,
-        source,
-        'persistent-cache',
-        {
-          expectedBytes: restored.byteLength,
-          onProgress,
-          signal,
-          persistentCacheHit: true,
-          persistentCacheKey: restored.persistentCacheKey,
-        }
+    const modelPath = await this.mountModelFiles(module, [modelFile]);
+
+    this.setLastModelLoadInfo({
+      sourceKind: 'buffer',
+      reuseMode: 'buffer',
+      modelPath,
+      fileName: destFileName,
+      byteLength: modelFile.size,
+      persistentCacheEnabled: FileSystemStorage.isSupported(),
+      persistentCacheKey: null,
+      persistentCacheHit: false,
+      persistentCacheStored: FileSystemStorage.isSupported(),
+    });
+
+    return modelPath;
+  }
+
+  /**
+   * Internal helper to mount one or more Blob/File objects into the WASM filesystem
+   * using the zero-copy WORKERFS driver.
+   *
+   * @param module The Emscripten module instance.
+   * @param files Array of Blob or File objects to mount.
+   * @param mountDir The path in the virtual filesystem where files will be mounted.
+   * @returns The virtual path to the first file in the set.
+   */
+  private async mountModelFiles(
+    module: EngineModule,
+    files: Blob[],
+    mountDir = '/workerfs_model'
+  ): Promise<string> {
+    const fs = module.FS;
+
+    // Ensure mount directory exists
+    if (!fs.analyzePath(mountDir).exists) {
+      fs.mkdir(mountDir);
+    } else if (this.workerFsMountPath) {
+      // If we already have something mounted, unmount first
+      try {
+        fs.unmount(this.workerFsMountPath);
+      } catch (e) { }
+    }
+
+    if (!module.WORKERFS) {
+      throw new Error(
+        'WORKERFS is not available in the Emscripten module. ' +
+        'Ensure the module was linked with -lworkerfs.js and WORKERFS is exported.'
       );
     }
 
-    const persistentCacheWriter = await this.persistentModelCache.createWriter(source);
-    return this.loadModelFromReadableStreamInternal(
-      file.stream(),
-      destFileName,
-      source,
-      'file-read',
-      {
-        expectedBytes: file.size,
-        onProgress,
-        signal,
-        persistentCacheKey: persistentCacheWriter?.persistentCacheKey ?? null,
-        persistentCacheWriter,
-      }
-    );
+    fs.mount(module.WORKERFS, { files }, mountDir);
+    this.workerFsMountPath = mountDir;
+
+    // Path in WORKERFS is /mountDir/fileName
+    const firstFileName = (files[0] as any).name || 'model.gguf';
+    const firstModelPath = `${mountDir}/${firstFileName}`;
+
+    this.commitLoadedModelPaths(module, files.map(f => `${mountDir}/${(f as any).name || 'model.gguf'}`));
+
+    return firstModelPath;
+  }
+
+  /**
+   * Load a model from a local File object.
+   *
+   * This uses WORKERFS for zero-copy, low-RAM loading, bypassing any 2GB MEMFS size limits.
+   */
+  public async loadModelFromFile(
+    file: File,
+    destFileName?: string,
+    onProgress?: (pct: number) => void,
+    signal?: AbortSignal
+  ): Promise<string> {
+    const module = await this.ensureModule();
+
+    if (onProgress) {
+      onProgress(100); // WORKERFS mount is instant
+    }
+
+    const modelPath = await this.mountModelFiles(module, [file]);
+
+    this.setLastModelLoadInfo({
+      sourceKind: 'file',
+      reuseMode: 'file-read',
+      modelPath,
+      fileName: normalizeModelFileName(destFileName || file.name),
+      byteLength: file.size,
+      persistentCacheEnabled: false,
+      persistentCacheKey: null,
+      persistentCacheHit: false,
+      persistentCacheStored: false,
+    });
+
+    return modelPath;
   }
 
   /**
@@ -858,7 +733,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
     const modelPath = this.prepareModelPath(module, destFileName);
     module.FS.writeFile(modelPath, buffer);
-    this.commitLoadedModelPath(module, modelPath);
+    this.commitLoadedModelPaths(module, [modelPath]);
     this.setLastModelLoadInfo({
       sourceKind: 'buffer',
       reuseMode: 'buffer',
@@ -871,6 +746,172 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       persistentCacheStored: false,
     });
     return modelPath;
+  }
+
+  /**
+   * Load a split GGUF model from an array of File objects.
+   *
+   * Use `gguf-split` to split a large model into shards (<2GB each) so that
+   * each shard fits within the MEMFS file-size limit. llama.cpp natively
+   * detects the split naming convention (e.g. `model-00001-of-00010.gguf`)
+   * and loads all shards automatically when given the first shard's path.
+   *
+   * @param files Array of File objects, one per shard, in order.
+   * @param onProgress Optional progress callback (0–100 across all shards).
+   * @param signal Optional AbortSignal.
+   * @returns The MEMFS path to the first shard (pass this to initEngine).
+   */
+  public async loadModelFromFileShards(
+    files: File[],
+    onProgress?: (pct: number) => void,
+    signal?: AbortSignal
+  ): Promise<string> {
+    if (!files || files.length === 0) {
+      throw new Error('No shard files provided.');
+    }
+    if (files.length === 1) {
+      return this.loadModelFromFile(files[0], files[0].name, onProgress, signal);
+    }
+
+    const module = await this.ensureModule();
+    const maxModelBytes = this.resolveMaxModelBytes();
+    this.ensureModelsDir(module);
+
+    const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
+    if (totalBytes <= 0) {
+      throw new Error('Model shards are empty.');
+    }
+    if (totalBytes > maxModelBytes) {
+      throw new Error(`Total model size (${totalBytes} bytes) exceeds configured maxModelBytes (${maxModelBytes} bytes).`);
+    }
+
+    try {
+      // Mount all shards at once as a single WORKERFS directory
+      const modelPath = await this.mountModelFiles(module, files);
+
+      this.commitLoadedModelPaths(module, files.map(f => `/workerfs_model/${f.name}`));
+      this.setLastModelLoadInfo({
+        sourceKind: 'file',
+        reuseMode: 'file-read',
+        modelPath,
+        fileName: normalizeModelFileName(files[0].name),
+        byteLength: totalBytes,
+        persistentCacheEnabled: false,
+        persistentCacheKey: null,
+        persistentCacheHit: false,
+        persistentCacheStored: false,
+      });
+
+      if (onProgress) onProgress(100);
+      return modelPath;
+    } catch (error) {
+      if (isAbortError(error) || signal?.aborted) {
+        throw createAbortError('Model load aborted.');
+      }
+      throw new Error(`Failed while loading model shards: ${asErrorMessage(error)}`);
+    }
+  }
+
+  /**
+   * Load a split GGUF model from an array of URLs.
+   */
+  public async loadModelFromUrls(
+    urls: string[],
+    onProgress?: (pct: number) => void,
+    signal?: AbortSignal
+  ): Promise<string> {
+    if (!urls || urls.length === 0) {
+      throw new Error('No shard URLs provided.');
+    }
+
+    const module = await this.ensureModule();
+    const opfsSupported = FileSystemStorage.isSupported() && this.config.persistentModelCache?.enabled !== false;
+
+    const shardBlobs: Blob[] = [];
+    let bytesLoadedSoFar = 0;
+
+    // Step 1: Resolve metadata for all shards
+    const shardMeta: { url: string; fileName: string; contentLength: number }[] = [];
+    for (const url of urls) {
+      const parsed = this.parseConfiguredUrl(url, 'modelUrl');
+      const fileName = normalizeModelFileName(parsed.pathname.split('/').pop() || 'model.gguf');
+      try {
+        const headResp = await fetch(url, { method: 'HEAD', signal });
+        const cl = Number.parseInt(headResp.headers.get('Content-Length') ?? '0', 10) || 0;
+        shardMeta.push({ url, fileName, contentLength: cl });
+      } catch {
+        shardMeta.push({ url, fileName, contentLength: 0 });
+      }
+    }
+
+    const totalBytes = shardMeta.reduce((sum, s) => sum + s.contentLength, 0);
+
+    // Step 2: Fetch or Retrieve each shard
+    try {
+      for (const shard of shardMeta) {
+        if (signal?.aborted) throw createAbortError();
+
+        // Check OPFS cache
+        const cachedFile = opfsSupported ? await this.opfs.getFile(shard.fileName) : null;
+        if (cachedFile && (shard.contentLength === 0 || cachedFile.size === shard.contentLength)) {
+          shardBlobs.push(cachedFile);
+          bytesLoadedSoFar += cachedFile.size;
+          if (onProgress && totalBytes > 0) {
+            onProgress(Math.round((bytesLoadedSoFar / totalBytes) * 100));
+          }
+          continue;
+        }
+
+        // Cache miss: Download
+        const response = await fetch(shard.url, { signal });
+        if (!response.ok) throw new Error(`HTTP ${response.status} for ${shard.fileName}`);
+        if (!response.body) throw new Error(`Empty body for ${shard.fileName}`);
+
+        const shardStart = bytesLoadedSoFar;
+        let finalShardBlob: Blob;
+
+        if (opfsSupported) {
+          finalShardBlob = await this.opfs.streamToDisk(
+            shard.fileName,
+            response.body,
+            (written) => {
+              if (onProgress && totalBytes > 0) {
+                onProgress(Math.round(((shardStart + written) / totalBytes) * 100));
+              }
+            },
+            signal
+          );
+        } else {
+          const buffer = await response.arrayBuffer();
+          finalShardBlob = new Blob([buffer]);
+          bytesLoadedSoFar += finalShardBlob.size;
+          if (onProgress && totalBytes > 0) {
+            onProgress(Math.round((bytesLoadedSoFar / totalBytes) * 100));
+          }
+        }
+
+        shardBlobs.push(finalShardBlob);
+      }
+
+      const modelPath = await this.mountModelFiles(module, shardBlobs);
+
+      this.setLastModelLoadInfo({
+        sourceKind: 'url',
+        reuseMode: 'network',
+        modelPath,
+        fileName: shardMeta[0].fileName,
+        byteLength: shardBlobs.reduce((sum, b) => sum + b.size, 0),
+        persistentCacheEnabled: opfsSupported,
+        persistentCacheKey: urls.join(','),
+        persistentCacheHit: false,
+        persistentCacheStored: opfsSupported,
+      });
+
+      return modelPath;
+    } catch (e) {
+      if (isAbortError(e)) throw createAbortError();
+      throw new Error(`Model load from URLs failed: ${asErrorMessage(e)}`);
+    }
   }
 
   /**
@@ -948,6 +989,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       throw new Error(`Failed to initialize engine. Code: ${result}`);
     }
     this.engineInitialized = true;
+
+    this.removeAllLoadedModelFiles(module);
   }
 
   /**
@@ -959,9 +1002,20 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       return;
     }
     module.ccall('CE_Close', null, [], []);
+
+    if (this.workerFsMountPath) {
+      try {
+        module.FS.unmount(this.workerFsMountPath);
+      } catch (e) {
+        // Ignore
+      }
+      this.workerFsMountPath = null;
+    }
+
     this.releaseAllQueuedPromptCallbacks(module);
     this.engineInitialized = false;
-    this.loadedModelPath = null;
+    this.loadedModelPaths = [];
+    this.workerFsMountPath = null;
     this.runtimeObservabilityEnabled = false;
     this.backendProfilingEnabled = false;
     this.transportObservability.enabled = false;
@@ -1005,21 +1059,21 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     const callbackPtr =
       onToken == null && signal == null
         ? 0
-        : module.addFunction((ptr: number, length: number) => {
-            if (signal?.aborted) {
-              return 1;
-            }
-            if (onToken != null && requestId !== 0) {
-              this.bufferQueuedTokenPiece(requestId, module.UTF8ToString(ptr, length));
-            }
-            return signal?.aborted ? 1 : 0;
-          }, 'iii');
+        : module.addFunction((rawPtr: bigint, length: number) => {
+          if (signal?.aborted) {
+            return 1;
+          }
+          if (onToken != null && requestId !== 0) {
+            this.bufferQueuedTokenPiece(requestId, module.UTF8ToString(Number(rawPtr), length));
+          }
+          return signal?.aborted ? 1 : 0;
+        }, 'ipi');
 
     const requestIdResult = module.ccall(
       'CE_EnqueuePrompt',
       'number',
-      ['string', 'string', 'number', 'number'],
-      [request.contextKey, request.promptText, request.maxOutputTokens, callbackPtr]
+      ['string', 'string', 'number', 'pointer'],
+      [request.contextKey, request.promptText, request.maxOutputTokens, Number(callbackPtr)]
     );
     if (requestIdResult instanceof Promise) {
       if (callbackPtr !== 0) {
@@ -1063,9 +1117,9 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       options?.signal == null
         ? null
         : () => {
-            abortRequested = true;
-            void this.cancelQueuedRequest(requestId);
-          };
+          abortRequested = true;
+          void this.cancelQueuedRequest(requestId);
+        };
     if (abortListener != null) {
       options?.signal?.addEventListener('abort', abortListener, { once: true });
     }
@@ -1170,9 +1224,12 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
   public async getBackendObservability(): Promise<BackendObservability | null> {
     const module = this.getLoadedModule();
-    const ptr = await module.ccall('CE_GetBackendObservabilityJson', 'number', [], [], {
+    const rawPtr = await module.ccall('CE_GetBackendObservabilityJson', 'pointer', [], [], {
       async: true,
     });
+
+    // ccall with 'pointer' return type already converts BigInt → Number.
+    const ptr = rawPtr as number;
 
     if (!ptr) {
       return null;
@@ -1186,7 +1243,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     } catch (error) {
       throw new Error(`Failed to parse backend observability: ${asErrorMessage(error)}`);
     } finally {
-      module._CE_FreeString(ptr);
+      module._CE_FreeString(BigInt(ptr));
     }
   }
 }
