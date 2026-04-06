@@ -16,8 +16,5 @@ export interface CogentConfig {
   workerTokenFlushIntervalMs?: number;
   persistentModelCache?: {
     enabled?: boolean;
-    namespace?: string;
-    cacheLocalFiles?: boolean;
-    maxEntryBytes?: number;
   };
 }

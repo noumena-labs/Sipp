@@ -103,7 +103,7 @@ class MockMainThreadModule {
   private handleCall(ident: string, args: unknown[]): number {
     switch (ident) {
       case 'CE_EnqueuePrompt':
-        this.queuedCallbackPtr = args[3] as number;
+        this.queuedCallbackPtr = Number(args[3]);
         return this.requestId;
       case 'CE_ResetRuntimeObservability':
         return 0;
@@ -185,8 +185,8 @@ class MockMainThreadModule {
   }
 
   private writeRuntimeObservability(ptr: number): void {
-    const f64Offset = ptr >> 3;
-    const i32Offset = (ptr + 9 * 8) >> 2;
+    const f64Offset = (ptr >> 3);
+    const i32Offset = ((ptr + 9 * 8) >> 2);
     const doubles = [12.5, 3.5, 4.5, 1.5, 2.5, 6.5, 0.5, 0.75, 12.5];
     const ints = [9, 7, 2, 2, 2, 3, 3, 1, 1, 0, 4, 0, 0, 1];
 
