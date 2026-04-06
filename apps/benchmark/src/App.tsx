@@ -318,7 +318,8 @@ export default function App() {
           config.warmupRuns,
           config.measuredRuns,
           effectiveInitConfig,
-          setStatus
+          setStatus,
+          isEngineInitialized
         );
         totalInitEngineMs += (mLoadResult.runtime.initEngineMs || 0);
         setMixedLoadResult(mLoadResult);

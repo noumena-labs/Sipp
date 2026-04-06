@@ -399,10 +399,15 @@ export async function runMixedLoadBenchmark(
   warmupRuns: number,
   measuredRuns: number,
   initConfig: any,
-  setStatus: (s: string) => void
+  setStatus: (s: string) => void,
+  skipInitEngine?: boolean
 ): Promise<import('./types').MixedLoadResult> {
-  setStatus(`${definition.label}: initializing engine...`);
-  const { ms: initEngineMs } = await measureAsync(() => targetEngine.initEngine(modelPath, initConfig));
+  let initEngineMs = 0;
+  if (!skipInitEngine) {
+    setStatus(`${definition.label}: initializing engine...`);
+    const { ms } = await measureAsync(() => targetEngine.initEngine(modelPath, initConfig));
+    initEngineMs = ms;
+  }
 
   for (let i = 0; i < warmupRuns; i++) {
     setStatus(`${definition.label}: warmup ${i + 1}/${warmupRuns}`);
