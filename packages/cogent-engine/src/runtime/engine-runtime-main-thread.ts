@@ -10,27 +10,17 @@ import {
   GenerateResponse,
   InferenceInitConfig,
   ModelLoadInfo,
-  ModelLoadSourceKind,
-  ModelLoadReuseMode,
   PromptOptions,
   RuntimeObservabilityMetrics,
   TransportObservability,
 } from '../types.js';
 import { EngineRuntime } from './engine-runtime.js';
 
-interface FsStream {
-  fd: number;
-  position: number;
-}
-
 interface EmscriptenFs {
   analyzePath(path: string): { exists: boolean };
   mkdir(path: string): void;
   writeFile(path: string, data: Uint8Array): void;
   unlink(path: string): void;
-  open(path: string, flags: string): FsStream;
-  write(stream: FsStream, buffer: Uint8Array, offset: number, length: number, position: number): number;
-  close(stream: FsStream): void;
   mount(type: any, opts: any, mountpoint: string): void;
   unmount(mountpoint: string): void;
 }
@@ -40,9 +30,6 @@ interface EngineModule {
   WORKERFS: any;
   HEAP32: Int32Array;
   HEAPF64: Float64Array;
-  HEAP64: BigInt64Array;
-  HEAPU64: BigUint64Array;
-  _CE_FreeString(ptr: number | bigint): void;
   _free(ptr: number | bigint): void;
   _malloc(size: number | bigint): number | bigint;
   addFunction(func: (...args: any[]) => any, signature: string): number | bigint;
@@ -57,7 +44,6 @@ type HeaderLookup = { get(name: string): string | null };
 const MAX_PROMPT_TOKENS = 2048;
 const DEFAULT_MAX_MODEL_BYTES = 8 * 1024 * 1024 * 1024;
 const DEFAULT_PROMPT_FORMAT = 'auto-chat';
-const MEMFS_FILE_SIZE_LIMIT = 2 * 1024 * 1024 * 1024 - 1024 * 1024; // ~2GB
 const REQUEST_STEP_RESULT_INVALID = -1;
 const REQUEST_STEP_RESULT_FATAL_NO_PROGRESS = -2;
 const REQUEST_STEP_RESULT_WAITING = 0;

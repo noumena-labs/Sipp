@@ -57,16 +57,22 @@ function toWorkerSerializableConfig(config: CogentConfig): WorkerSerializableCog
     );
   }
 
+  const persistentModelCache =
+    config.persistentModelCache == null
+      ? undefined
+      : {
+          enabled: config.persistentModelCache.enabled,
+        };
+
   return {
     moduleUrl: config.moduleUrl,
     wasmUrl: config.wasmUrl,
     moduleOptions: config.moduleOptions,
     maxModelBytes: config.maxModelBytes,
     trustedOrigins: config.trustedOrigins,
-    allowUnknownContentLength: config.allowUnknownContentLength,
     workerMaxBufferedTokens: config.workerMaxBufferedTokens,
     workerTokenFlushIntervalMs: config.workerTokenFlushIntervalMs,
-    persistentModelCache: config.persistentModelCache,
+    persistentModelCache,
   };
 }
 

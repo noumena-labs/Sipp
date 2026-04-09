@@ -15,14 +15,10 @@ export interface WorkerSerializableCogentConfig {
   moduleOptions?: Record<string, unknown>;
   maxModelBytes?: number;
   trustedOrigins?: string[];
-  allowUnknownContentLength?: boolean;
   workerMaxBufferedTokens?: number;
   workerTokenFlushIntervalMs?: number;
   persistentModelCache?: {
     enabled?: boolean;
-    namespace?: string;
-    cacheLocalFiles?: boolean;
-    maxEntryBytes?: number;
   };
 }
 

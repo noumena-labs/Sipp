@@ -64,8 +64,6 @@ class MockMainThreadModule {
         : COMPLETED_REQUEST_STATUS_CANCELLED;
   }
 
-  public _CE_FreeString(_ptr: number): void {}
-
   public _free(_ptr: number): void {}
 
   public _malloc(size: number): number {

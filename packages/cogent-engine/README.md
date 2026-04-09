@@ -275,6 +275,18 @@ If you need explicit request handles for scheduling, cancellation, or mixed-load
 `moduleUrl` and `wasmUrl` are still available for advanced cases where you want to host the runtime assets somewhere else.
 By default, only same-origin module/wasm URLs are allowed.
 
+`persistentModelCache` currently supports one public option only:
+
+```ts
+const engine = new CogentEngine({
+  persistentModelCache: {
+    enabled: true,
+  },
+});
+```
+
+No namespace, salt, or size-limit cache controls are part of the supported public API yet.
+
 If you host wasm assets on CDN/static storage:
 
 ```ts
@@ -282,15 +294,6 @@ const engine = new CogentEngine({
   moduleUrl: "https://cdn.example.com/cogent-engine-wasm.js",
   wasmUrl: "https://cdn.example.com/cogent-engine-wasm.wasm",
   trustedOrigins: ["https://cdn.example.com"],
-});
-```
-
-`loadModelFromUrl()` requires a valid `Content-Length` header by default. If your host cannot provide one, enable it explicitly:
-
-```ts
-const engine = new CogentEngine({
-  ...getBundledRuntimeUrls(),
-  allowUnknownContentLength: true,
 });
 ```
 

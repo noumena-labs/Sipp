@@ -141,6 +141,44 @@ test('WorkerEngineRuntime rejects pending calls on worker crash and recreates th
   }
 });
 
+test('WorkerEngineRuntime only serializes persistentModelCache.enabled to the worker', async () => {
+  const restoreWorker = installMockWorker();
+  try {
+    let initConfig: { persistentModelCache?: { enabled?: boolean } } | null = null;
+    MockWorker.handlerFactory = () => (worker, message) => {
+      if (message.kind === 'init-module') {
+        initConfig = message.config;
+        worker.emit({
+          kind: 'resolve',
+          callId: message.callId,
+          value: undefined,
+        });
+      }
+    };
+
+    const runtime = new WorkerEngineRuntime({
+      persistentModelCache: {
+        enabled: true,
+        namespace: 'leak-me',
+        cacheLocalFiles: true,
+        maxEntryBytes: 123,
+      } as never,
+    } as never);
+
+    await runtime.initModule();
+
+    if (initConfig == null) {
+      throw new Error('Expected init-module config to be captured.');
+    }
+    const capturedConfig = initConfig as { persistentModelCache?: { enabled?: boolean } };
+    assert.deepEqual(capturedConfig.persistentModelCache, {
+      enabled: true,
+    });
+  } finally {
+    restoreWorker();
+  }
+});
+
 test('WorkerEngineRuntime streams model chunks through the worker protocol without buffering a whole model', async () => {
   const restoreWorker = installMockWorker();
   try {

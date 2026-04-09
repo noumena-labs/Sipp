@@ -9,7 +9,6 @@ export interface CogentConfig {
   moduleOptions?: EngineModuleOptions;
   maxModelBytes?: number;
   trustedOrigins?: string[];
-  allowUnknownContentLength?: boolean;
   executionMode?: 'auto' | 'worker' | 'main-thread';
   workerUrl?: string;
   workerMaxBufferedTokens?: number;
