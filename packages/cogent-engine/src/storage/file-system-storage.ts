@@ -58,6 +58,12 @@ export class FileSystemStorage {
     // In some browsers (Firefox), this might be behind a flag or limited.
     // Use the modern piping API if possible.
     const writable = await handle.createWritable();
+    const abortListener =
+      signal == null
+        ? null
+        : () => {
+            void writable.abort();
+          };
     
     try {
       let bytesWritten = 0;
@@ -69,10 +75,8 @@ export class FileSystemStorage {
         }
       });
 
-      if (signal) {
-        signal.addEventListener('abort', () => {
-          writable.abort();
-        });
+      if (abortListener != null) {
+        signal?.addEventListener('abort', abortListener, { once: true });
       }
 
       await stream.pipeThrough(progressTransformer).pipeTo(writable);
@@ -80,7 +84,14 @@ export class FileSystemStorage {
     } catch (e) {
       // Cleanup on failure
       try { await writable.abort(); } catch {}
+      try {
+        await root.removeEntry(fileName);
+      } catch {}
       throw e;
+    } finally {
+      if (abortListener != null) {
+        signal?.removeEventListener('abort', abortListener);
+      }
     }
   }
 

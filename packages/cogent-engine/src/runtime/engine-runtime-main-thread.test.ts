@@ -34,7 +34,9 @@ class MockMainThreadModule {
   public insideNativeStep = false;
   public cancelCallCount = 0;
   public consumeCallCount = 0;
+  public closeCallCount = 0;
   public removedFunctionPtrs: number[] = [];
+  public initResult = 0;
 
   private readonly heapU8: Uint8Array;
   private readonly functionTable = new Map<number, (...args: number[]) => number>();
@@ -120,6 +122,11 @@ class MockMainThreadModule {
       case 'CE_CancelQueuedRequest':
         this.cancelCallCount += 1;
         return 1;
+      case 'CE_Close':
+        this.closeCallCount += 1;
+        return 0;
+      case 'CE_Init':
+        return this.initResult;
       case 'CE_GetCompletedRequestStatus':
         return this.completedStatus;
       case 'CE_GetCompletedRequestOutputSize':
@@ -217,12 +224,14 @@ function getQueuedPromptState(
   buffers: number;
   callbackPtrs: number;
   callbackErrors: number;
+  activeRuns: number;
 } {
   const runtimeState = runtime as unknown as {
     queuedPromptCallbacks: Map<number, unknown>;
     queuedPromptTokenBuffers: Map<number, unknown>;
     queuedPromptCallbackPtrs: Map<number, unknown>;
     queuedPromptCallbackErrors: Map<number, unknown>;
+    activeQueuedRequestRuns: Set<number>;
   };
 
   return {
@@ -230,6 +239,7 @@ function getQueuedPromptState(
     buffers: runtimeState.queuedPromptTokenBuffers.size,
     callbackPtrs: runtimeState.queuedPromptCallbackPtrs.size,
     callbackErrors: runtimeState.queuedPromptCallbackErrors.size,
+    activeRuns: runtimeState.activeQueuedRequestRuns.size,
   };
 }
 
@@ -511,6 +521,7 @@ test('MainThreadEngineRuntime releases queued callback state when cancelling bef
     buffers: 0,
     callbackPtrs: 0,
     callbackErrors: 0,
+    activeRuns: 0,
   });
   assert.deepEqual(module.removedFunctionPtrs, [1]);
   assert.equal(module.consumeCallCount, 1);
@@ -551,9 +562,160 @@ test('MainThreadEngineRuntime queue/cancel churn leaves no queued callback resid
     buffers: 0,
     callbackPtrs: 0,
     callbackErrors: 0,
+    activeRuns: 0,
   });
   assert.equal(module.removedFunctionPtrs.length, churnCount);
   assert.equal(module.consumeCallCount, churnCount + 1);
+});
+
+test('MainThreadEngineRuntime close clears queued lifecycle state and stale model metadata', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success');
+  attachReadyModule(runtime, module);
+
+  const requestId = await runtime.queuePrompt('ctx-close', 'prompt', {
+    nTokens: 16,
+    onToken: () => {},
+  });
+  const runtimeState = runtime as unknown as {
+    activeQueuedRequestRuns: Set<number>;
+    lastModelLoadInfo: object | null;
+    transportObservability: {
+      enabled: boolean;
+      flushCount: number;
+      coalescedTokenCount: number;
+    };
+  };
+  runtimeState.activeQueuedRequestRuns.add(requestId);
+  runtimeState.lastModelLoadInfo = {
+    sourceKind: 'buffer',
+    reuseMode: 'buffer',
+    modelPath: '/models/model.gguf',
+    fileName: 'model.gguf',
+    byteLength: 4,
+    persistentCacheEnabled: false,
+    persistentCacheKey: null,
+    persistentCacheHit: false,
+    persistentCacheStored: false,
+  };
+  runtimeState.transportObservability.enabled = true;
+  runtimeState.transportObservability.flushCount = 3;
+  runtimeState.transportObservability.coalescedTokenCount = 4;
+
+  runtime.close();
+
+  assert.equal(module.closeCallCount, 1);
+  assert.deepEqual(module.removedFunctionPtrs, [1]);
+  assert.deepEqual(getQueuedPromptState(runtime), {
+    callbacks: 0,
+    buffers: 0,
+    callbackPtrs: 0,
+    callbackErrors: 0,
+    activeRuns: 0,
+  });
+  assert.equal(runtime.getLastModelLoadInfo(), null);
+  assert.deepEqual(runtime.getTransportObservability(), {
+    executionMode: 'main-thread',
+    workerBacked: false,
+    enabled: false,
+    bufferedTokenLimit: 0,
+    flushIntervalMs: 0,
+    flushCount: 0,
+    coalescedTokenCount: 0,
+    maxObservedBufferedTokenCount: 0,
+  });
+});
+
+test('MainThreadEngineRuntime clears stale lifecycle state when reinit fails', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success');
+  attachReadyModule(runtime, module);
+  module.initResult = 7;
+
+  const requestId = await runtime.queuePrompt('ctx-reinit-fail', 'prompt', {
+    nTokens: 16,
+    onToken: () => {},
+  });
+  const runtimeState = runtime as unknown as {
+    activeQueuedRequestRuns: Set<number>;
+    runtimeObservabilityEnabled: boolean;
+    backendProfilingEnabled: boolean;
+    engineInitialized: boolean;
+    transportObservability: {
+      enabled: boolean;
+      flushCount: number;
+    };
+  };
+  runtimeState.activeQueuedRequestRuns.add(requestId);
+
+  await assert.rejects(
+    runtime.initEngine('/models/failing-model.gguf', {
+      enableRuntimeObservability: true,
+      enableBackendProfiling: true,
+    }),
+    /Code: 7/
+  );
+
+  assert.equal(module.closeCallCount, 1);
+  assert.deepEqual(module.removedFunctionPtrs, [1]);
+  assert.deepEqual(getQueuedPromptState(runtime), {
+    callbacks: 0,
+    buffers: 0,
+    callbackPtrs: 0,
+    callbackErrors: 0,
+    activeRuns: 0,
+  });
+  assert.equal(runtimeState.engineInitialized, false);
+  assert.equal(runtimeState.runtimeObservabilityEnabled, false);
+  assert.equal(runtimeState.backendProfilingEnabled, false);
+  assert.equal(runtimeState.transportObservability.enabled, false);
+  assert.equal(runtimeState.transportObservability.flushCount, 0);
+});
+
+test('MainThreadEngineRuntime aborts non-OPFS stream loads without mounting partial files', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success');
+  attachReadyModule(runtime, module);
+
+  const originalIsSupported = FileSystemStorage.isSupported;
+  try {
+    (FileSystemStorage as unknown as { isSupported: () => boolean }).isSupported = () => false;
+
+    let releaseSecondRead!: () => void;
+    const secondReadGate = new Promise<void>((resolve) => {
+      releaseSecondRead = resolve;
+    });
+    let chunkIndex = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (chunkIndex === 0) {
+          chunkIndex += 1;
+          controller.enqueue(Uint8Array.from([1]));
+          return;
+        }
+
+        await secondReadGate;
+        controller.close();
+      },
+    });
+    const abortController = new AbortController();
+    const loadPromise = runtime.loadModelFromReadableStream(stream, 'model.gguf', {
+      signal: abortController.signal,
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    abortController.abort();
+    releaseSecondRead();
+
+    await assert.rejects(
+      loadPromise,
+      (error: unknown) => error instanceof Error && error.name === 'AbortError'
+    );
+    assert.equal(module.mountCalls.length, 0);
+  } finally {
+    (FileSystemStorage as unknown as { isSupported: () => boolean }).isSupported = originalIsSupported;
+  }
 });
 
 test('MainThreadEngineRuntime preserves shard filenames when loading split model URLs without OPFS', async () => {

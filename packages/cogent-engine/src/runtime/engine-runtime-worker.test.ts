@@ -78,12 +78,14 @@ function getWorkerQueuedState(
   pendingCallbacks: number;
   queuedErrors: number;
   queuedSignals: number;
+  activeRuns: number;
 } {
   const runtimeState = runtime as unknown as {
     queuedTokenCallbacks: Map<number, unknown>;
     pendingQueuedTokenCallbacks: Map<number, unknown>;
     queuedTokenErrors: Map<number, unknown>;
     queuedSignals: Map<number, unknown>;
+    activeQueuedRequestRuns: Set<number>;
   };
 
   return {
@@ -91,6 +93,7 @@ function getWorkerQueuedState(
     pendingCallbacks: runtimeState.pendingQueuedTokenCallbacks.size,
     queuedErrors: runtimeState.queuedTokenErrors.size,
     queuedSignals: runtimeState.queuedSignals.size,
+    activeRuns: runtimeState.activeQueuedRequestRuns.size,
   };
 }
 
@@ -374,6 +377,7 @@ test('WorkerEngineRuntime releases queued callback state when cancelling before 
       pendingCallbacks: 0,
       queuedErrors: 0,
       queuedSignals: 0,
+      activeRuns: 0,
     });
   } finally {
     restoreWorker();
@@ -465,7 +469,143 @@ test('WorkerEngineRuntime queue/cancel churn leaves no queued state residue and 
       pendingCallbacks: 0,
       queuedErrors: 0,
       queuedSignals: 0,
+      activeRuns: 0,
     });
+  } finally {
+    restoreWorker();
+  }
+});
+
+test('WorkerEngineRuntime close resets stale lifecycle state and cached metadata', async () => {
+  const restoreWorker = installMockWorker();
+  try {
+    MockWorker.handlerFactory = () => (worker, message) => {
+      if (message.kind === 'init-module') {
+        worker.emit({
+          kind: 'resolve',
+          callId: message.callId,
+          value: undefined,
+        });
+      }
+    };
+
+    const runtime = new WorkerEngineRuntime({});
+    await runtime.initModule();
+
+    const runtimeState = runtime as unknown as {
+      queuedTokenCallbacks: Map<number, unknown>;
+      pendingQueuedTokenCallbacks: Map<number, unknown>;
+      queuedTokenErrors: Map<number, unknown>;
+      queuedSignals: Map<number, unknown>;
+      activeQueuedRequestRuns: Set<number>;
+      runtimeObservability: object | null;
+      lastModelLoadInfo: object | null;
+      transportObservability: {
+        enabled: boolean;
+        flushCount: number;
+        coalescedTokenCount: number;
+      };
+    };
+    runtimeState.queuedTokenCallbacks.set(11, () => {});
+    runtimeState.pendingQueuedTokenCallbacks.set(12, () => {});
+    runtimeState.queuedTokenErrors.set(11, new Error('token failure'));
+    runtimeState.queuedSignals.set(11, new AbortController().signal);
+    runtimeState.activeQueuedRequestRuns.add(11);
+    runtimeState.runtimeObservability = { outputTokenCount: 2 };
+    runtimeState.lastModelLoadInfo = {
+      sourceKind: 'buffer',
+      reuseMode: 'buffer',
+      modelPath: '/models/model.gguf',
+      fileName: 'model.gguf',
+      byteLength: 4,
+      persistentCacheEnabled: false,
+      persistentCacheKey: null,
+      persistentCacheHit: false,
+      persistentCacheStored: false,
+    };
+    runtimeState.transportObservability.enabled = true;
+    runtimeState.transportObservability.flushCount = 4;
+    runtimeState.transportObservability.coalescedTokenCount = 7;
+
+    runtime.close();
+
+    assert.equal(MockWorker.instances[0].terminated, true);
+    assert.deepEqual(getWorkerQueuedState(runtime), {
+      queuedCallbacks: 0,
+      pendingCallbacks: 0,
+      queuedErrors: 0,
+      queuedSignals: 0,
+      activeRuns: 0,
+    });
+    assert.equal(runtime.getRuntimeObservability(), null);
+    assert.equal(runtime.getLastModelLoadInfo(), null);
+    assert.deepEqual(runtime.getTransportObservability(), {
+      executionMode: 'worker',
+      workerBacked: true,
+      enabled: false,
+      bufferedTokenLimit: 0,
+      flushIntervalMs: 0,
+      flushCount: 0,
+      coalescedTokenCount: 0,
+      maxObservedBufferedTokenCount: 0,
+    });
+  } finally {
+    restoreWorker();
+  }
+});
+
+test('WorkerEngineRuntime clears local queued lifecycle state before initEngine reinit', async () => {
+  const restoreWorker = installMockWorker();
+  try {
+    MockWorker.handlerFactory = () => (worker, message) => {
+      switch (message.kind) {
+        case 'init-module':
+          worker.emit({
+            kind: 'resolve',
+            callId: message.callId,
+            value: undefined,
+          });
+          break;
+        case 'init-engine':
+          worker.emit({
+            kind: 'reject',
+            callId: message.callId,
+            message: 'init failed',
+            errorName: 'Error',
+          });
+          break;
+        default:
+          throw new Error(`Unexpected worker message: ${message.kind}`);
+      }
+    };
+
+    const runtime = new WorkerEngineRuntime({});
+    await runtime.initModule();
+    const runtimeState = runtime as unknown as {
+      queuedTokenCallbacks: Map<number, unknown>;
+      pendingQueuedTokenCallbacks: Map<number, unknown>;
+      queuedTokenErrors: Map<number, unknown>;
+      queuedSignals: Map<number, unknown>;
+      activeQueuedRequestRuns: Set<number>;
+      runtimeObservability: object | null;
+    };
+    runtimeState.queuedTokenCallbacks.set(21, () => {});
+    runtimeState.pendingQueuedTokenCallbacks.set(22, () => {});
+    runtimeState.queuedTokenErrors.set(21, new Error('token failure'));
+    runtimeState.queuedSignals.set(21, new AbortController().signal);
+    runtimeState.activeQueuedRequestRuns.add(21);
+    runtimeState.runtimeObservability = { outputTokenCount: 2 };
+
+    await assert.rejects(runtime.initEngine('/models/failing-model.gguf'), /init failed/);
+
+    assert.deepEqual(getWorkerQueuedState(runtime), {
+      queuedCallbacks: 0,
+      pendingCallbacks: 0,
+      queuedErrors: 0,
+      queuedSignals: 0,
+      activeRuns: 0,
+    });
+    assert.equal(runtime.getRuntimeObservability(), null);
   } finally {
     restoreWorker();
   }

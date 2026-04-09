@@ -161,6 +161,19 @@ function releaseRequestResources(requestId: GenerateRequestId): void {
   requestAbortControllers.delete(requestId);
 }
 
+function releaseAllRequestResources(): void {
+  for (const requestId of bufferedTokens.keys()) {
+    releaseRequestResources(requestId);
+  }
+  runningRequestIds.clear();
+}
+
+function abortAllModelLoads(): void {
+  for (const callId of activeModelLoads.keys()) {
+    abortModelLoad(callId);
+  }
+}
+
 function buildEngineConfig(config: WorkerSerializableCogentConfig): CogentConfig {
   transportObservability.bufferedTokenLimit =
     config.workerMaxBufferedTokens ?? DEFAULT_MAX_BUFFERED_TOKENS;
@@ -464,6 +477,8 @@ self.onmessage = async (event: MessageEvent<WorkerRequestMessage>) => {
         handleCancelModelLoad(message);
         return;
       case 'init-engine':
+        abortAllModelLoads();
+        releaseAllRequestResources();
         value = await ensureEngine().initEngine(message.modelPath, message.config);
         transportObservability.enabled = message.config?.enableRuntimeObservability === true
           || message.config?.enableBackendProfiling === true;

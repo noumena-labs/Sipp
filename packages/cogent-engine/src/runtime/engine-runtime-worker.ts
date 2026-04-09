@@ -37,6 +37,19 @@ function createAbortError(message = 'The operation was aborted.'): Error {
   return error;
 }
 
+function createDefaultTransportObservability(): TransportObservability {
+  return {
+    executionMode: 'worker',
+    workerBacked: true,
+    enabled: false,
+    bufferedTokenLimit: 0,
+    flushIntervalMs: 0,
+    flushCount: 0,
+    coalescedTokenCount: 0,
+    maxObservedBufferedTokenCount: 0,
+  };
+}
+
 function toWorkerSerializableConfig(config: CogentConfig): WorkerSerializableCogentConfig {
   if (typeof config.moduleOptions?.locateFile === 'function') {
     throw new Error(
@@ -79,16 +92,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
   private readonly activeQueuedRequestRuns = new Set<GenerateRequestId>();
   private runtimeObservability: RuntimeObservabilityMetrics | null = null;
   private lastModelLoadInfo: ModelLoadInfo | null = null;
-  private transportObservability: TransportObservability = {
-    executionMode: 'worker',
-    workerBacked: true,
-    enabled: false,
-    bufferedTokenLimit: 0,
-    flushIntervalMs: 0,
-    flushCount: 0,
-    coalescedTokenCount: 0,
-    maxObservedBufferedTokenCount: 0,
-  };
+  private transportObservability: TransportObservability = createDefaultTransportObservability();
 
   constructor(private readonly config: CogentConfig = {}) {}
 
@@ -301,6 +305,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
     config?: InferenceInitConfig
   ): Promise<void> {
     await this.ensureWorkerInitialized();
+    this.resetQueuedRequestLifecycleState();
     await this.callWorker<Extract<WorkerRequestMessage, { kind: 'init-engine' }>>({
       kind: 'init-engine',
       modelPath,
@@ -319,6 +324,15 @@ export class WorkerEngineRuntime implements EngineRuntime {
     this.queuedTokenCallbacks.delete(requestId);
     this.queuedTokenErrors.delete(requestId);
     this.queuedSignals.delete(requestId);
+  }
+
+  private resetQueuedRequestLifecycleState(): void {
+    this.queuedTokenCallbacks.clear();
+    this.pendingQueuedTokenCallbacks.clear();
+    this.queuedTokenErrors.clear();
+    this.queuedSignals.clear();
+    this.activeQueuedRequestRuns.clear();
+    this.runtimeObservability = null;
   }
 
   public async cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean> {
@@ -466,6 +480,10 @@ export class WorkerEngineRuntime implements EngineRuntime {
     this.pendingQueuedTokenCallbacks.clear();
     this.queuedTokenErrors.clear();
     this.queuedSignals.clear();
+    this.activeQueuedRequestRuns.clear();
+    this.runtimeObservability = null;
+    this.lastModelLoadInfo = null;
+    this.transportObservability = createDefaultTransportObservability();
   }
 
   private failWorker(error: unknown): void {

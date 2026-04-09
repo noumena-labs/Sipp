@@ -70,6 +70,16 @@ const COMPLETED_REQUEST_STATUS_FAILED = 3;
 const RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES = 128;
 const RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT = 9;
 
+const DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY: TransportObservability = {
+  executionMode: 'main-thread',
+  workerBacked: false,
+  enabled: false,
+  bufferedTokenLimit: 0,
+  flushIntervalMs: 0,
+  flushCount: 0,
+  coalescedTokenCount: 0,
+  maxObservedBufferedTokenCount: 0,
+};
 
 function createAbortError(message = 'The operation was aborted.'): Error {
   if (typeof DOMException === 'function') {
@@ -130,15 +140,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private lastModelLoadInfo: ModelLoadInfo | null = null;
   private runtimeObservabilityEnabled = false;
   private backendProfilingEnabled = false;
-  private readonly transportObservability: TransportObservability = {
-    executionMode: 'main-thread',
-    workerBacked: false,
-    enabled: false,
-    bufferedTokenLimit: 0,
-    flushIntervalMs: 0,
-    flushCount: 0,
-    coalescedTokenCount: 0,
-    maxObservedBufferedTokenCount: 0,
+  private transportObservability: TransportObservability = {
+    ...DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY,
   };
   constructor(private config: CogentConfig = {}) { }
 
@@ -321,6 +324,16 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.queuedPromptTokenBuffers.clear();
     this.queuedPromptCallbackPtrs.clear();
     this.queuedPromptCallbackErrors.clear();
+    this.activeQueuedRequestRuns.clear();
+  }
+
+  private resetRuntimeLifecycleState(): void {
+    this.activeQueuedRequestRuns.clear();
+    this.runtimeObservabilityEnabled = false;
+    this.backendProfilingEnabled = false;
+    this.transportObservability = {
+      ...DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY,
+    };
   }
 
   private bufferQueuedTokenPiece(requestId: GenerateRequestId, token: string): void {
@@ -721,10 +734,41 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       // Fallback for environments without OPFS
       const reader = stream.getReader();
       const chunks: Uint8Array[] = [];
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
+      const abortListener =
+        options.signal == null
+          ? null
+          : () => {
+              void reader.cancel(createAbortError('Model load aborted.'));
+            };
+      if (abortListener != null) {
+        options.signal?.addEventListener('abort', abortListener, { once: true });
+      }
+      try {
+        while (true) {
+          if (options.signal?.aborted) {
+            throw createAbortError('Model load aborted.');
+          }
+          const { done, value } = await reader.read();
+          if (done) {
+            if (options.signal?.aborted) {
+              throw createAbortError('Model load aborted.');
+            }
+            break;
+          }
+          if (value != null) {
+            chunks.push(value);
+          }
+        }
+      } catch (error) {
+        if (isAbortError(error) || options.signal?.aborted) {
+          throw createAbortError('Model load aborted.');
+        }
+        throw error;
+      } finally {
+        if (abortListener != null) {
+          options.signal?.removeEventListener('abort', abortListener);
+        }
+        reader.releaseLock();
       }
       modelFile = this.createMountableModelFile(new Blob(chunks as any), destFileName);
     }
@@ -1043,8 +1087,10 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       throw new Error('modelPath must not be empty.');
     }
     if (this.engineInitialized) {
+      this.releaseAllQueuedPromptCallbacks(module);
       module.ccall('CE_Close', null, [], []);
       this.engineInitialized = false;
+      this.resetRuntimeLifecycleState();
     }
 
     const normalizedConfig = normalizeInitConfig(config);
@@ -1103,6 +1149,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     );
     if (result !== 0) {
       this.engineInitialized = false;
+      this.resetRuntimeLifecycleState();
       throw new Error(`Failed to initialize engine. Code: ${result}`);
     }
     this.engineInitialized = true;
@@ -1133,9 +1180,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.engineInitialized = false;
     this.loadedModelPaths = [];
     this.workerFsMountPath = null;
-    this.runtimeObservabilityEnabled = false;
-    this.backendProfilingEnabled = false;
-    this.transportObservability.enabled = false;
+    this.resetRuntimeLifecycleState();
+    this.lastModelLoadInfo = null;
     this.module = null;
     this.initPromise = null;
   }
