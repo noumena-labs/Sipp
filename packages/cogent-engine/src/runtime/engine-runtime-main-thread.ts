@@ -341,17 +341,26 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       return;
     }
 
-    while (bufferedPieces.length > 0) {
-      const piece = bufferedPieces.shift();
-      if (piece == null) {
-        continue;
-      }
+    let readIndex = 0;
+    while (readIndex < bufferedPieces.length) {
+      const piece = bufferedPieces[readIndex];
       try {
         onToken(piece);
       } catch (error) {
         this.queuedPromptCallbackErrors.set(requestId, error);
+        const remainingStart = readIndex + 1;
+        const remainingCount = bufferedPieces.length - remainingStart;
+        if (remainingCount > 0) {
+          bufferedPieces.copyWithin(0, remainingStart);
+        }
+        bufferedPieces.length = Math.max(remainingCount, 0);
         break;
       }
+      readIndex += 1;
+    }
+
+    if (readIndex >= bufferedPieces.length) {
+      bufferedPieces.length = 0;
     }
   }
 

@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include <deque>
 #include <functional>
+#include <list>
 #include <optional>
 #include <unordered_map>
 
@@ -33,8 +33,12 @@ public:
   void Clear();
 
 private:
+  void RemovePendingRequestId(GenerateRequestId request_id);
+
   std::unordered_map<GenerateRequestId, GenerateRequest> requests_;
-  std::deque<GenerateRequestId> pending_request_ids_;
+  std::list<GenerateRequestId> pending_request_ids_;
+  std::unordered_map<GenerateRequestId, std::list<GenerateRequestId>::iterator>
+      pending_request_positions_;
   std::unordered_map<GenerateRequestId, GenerateResponse> completed_responses_;
 };
 

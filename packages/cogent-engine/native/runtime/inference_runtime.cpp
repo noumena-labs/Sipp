@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <chrono>
 #include <functional>
+#include <unordered_set>
 
 #include "runtime/llama/llama_utils.h"
 #include "runtime/config/scheduler_policy.h"
@@ -299,15 +300,15 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
                           const std::vector<SlotState *> &right) {
     std::vector<SlotState *> combined;
     combined.reserve(left.size() + right.size());
+    std::unordered_set<SlotState *> seen;
+    seen.reserve(left.size() + right.size());
     for (SlotState *slot : left) {
-      if (slot != nullptr &&
-          std::find(combined.begin(), combined.end(), slot) == combined.end()) {
+      if (slot != nullptr && seen.insert(slot).second) {
         combined.push_back(slot);
       }
     }
     for (SlotState *slot : right) {
-      if (slot != nullptr &&
-          std::find(combined.begin(), combined.end(), slot) == combined.end()) {
+      if (slot != nullptr && seen.insert(slot).second) {
         combined.push_back(slot);
       }
     }
@@ -410,12 +411,21 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     std::vector<GenerateRequest *> tick_requests;
     tick_requests.reserve(plan.contributions.size());
     std::vector<GenerateRequest *> decode_requests;
+    decode_requests.reserve(plan.contributions.size());
     std::vector<GenerateRequest *> prefill_requests;
+    prefill_requests.reserve(plan.contributions.size());
+    std::unordered_set<GenerateRequest *> tick_request_set;
+    tick_request_set.reserve(plan.contributions.size());
+    std::unordered_set<GenerateRequest *> decode_request_set;
+    decode_request_set.reserve(plan.contributions.size());
+    std::unordered_set<GenerateRequest *> prefill_request_set;
+    prefill_request_set.reserve(plan.contributions.size());
 
-    const auto mark_request = [](std::vector<GenerateRequest *> &requests,
-                                 GenerateRequest *request) {
-      if (request == nullptr ||
-          std::find(requests.begin(), requests.end(), request) != requests.end()) {
+    const auto mark_request = [](
+                                  std::vector<GenerateRequest *> &requests,
+                                  std::unordered_set<GenerateRequest *> &seen,
+                                  GenerateRequest *request) {
+      if (request == nullptr || !seen.insert(request).second) {
         return;
       }
       requests.push_back(request);
@@ -425,11 +435,13 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       if (contribution.slot == nullptr || contribution.slot->request == nullptr) {
         continue;
       }
-      mark_request(tick_requests, contribution.slot->request);
+      mark_request(tick_requests, tick_request_set, contribution.slot->request);
       if (contribution.kind == BatchContributionKind::Decode) {
-        mark_request(decode_requests, contribution.slot->request);
+        mark_request(decode_requests, decode_request_set,
+                     contribution.slot->request);
       } else if (contribution.kind == BatchContributionKind::Prefill) {
-        mark_request(prefill_requests, contribution.slot->request);
+        mark_request(prefill_requests, prefill_request_set,
+                     contribution.slot->request);
       }
     }
 
@@ -541,14 +553,15 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   if (!has_decode_pressure) {
     std::vector<SlotState *> prefix_cache_slots;
     prefix_cache_slots.reserve(plan.contributions.size());
+    std::unordered_set<SlotState *> prefix_cache_slot_set;
+    prefix_cache_slot_set.reserve(plan.contributions.size());
     for (const BatchContribution &contribution : plan.contributions) {
       if (contribution.kind != BatchContributionKind::Prefill ||
           contribution.slot == nullptr || contribution.slot->request == nullptr ||
           contribution.slot->session == nullptr) {
         continue;
       }
-      if (std::find(prefix_cache_slots.begin(), prefix_cache_slots.end(),
-                    contribution.slot) != prefix_cache_slots.end()) {
+      if (!prefix_cache_slot_set.insert(contribution.slot).second) {
         continue;
       }
       prefix_cache_slots.push_back(contribution.slot);

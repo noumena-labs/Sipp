@@ -9,6 +9,7 @@
 #include "runtime/scheduler/batch_planner.h"
 
 #include <algorithm>
+#include <unordered_set>
 
 namespace noumena::cogentengine {
 
@@ -103,16 +104,13 @@ SharedBatchPlan BatchPlanner::BuildPolicyBatch(
     }
   }
 
-  std::vector<const SlotState *> occupied_slots;
+  std::unordered_set<const SlotState *> occupied_slots;
   occupied_slots.reserve(plan.contributions.size());
   for (const auto &contribution : plan.contributions) {
     if (contribution.slot == nullptr) {
       continue;
     }
-    if (std::find(occupied_slots.begin(), occupied_slots.end(),
-                  contribution.slot) == occupied_slots.end()) {
-      occupied_slots.push_back(contribution.slot);
-    }
+    occupied_slots.insert(contribution.slot);
   }
   plan.occupied_slot_count = static_cast<int32_t>(occupied_slots.size());
 

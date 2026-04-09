@@ -8,10 +8,18 @@
 
 #include "runtime/request/request_queue.h"
 
-#include <algorithm>
 #include <chrono>
 
 namespace noumena::cogentengine {
+
+void RequestQueue::RemovePendingRequestId(GenerateRequestId request_id) {
+  const auto pending_it = pending_request_positions_.find(request_id);
+  if (pending_it == pending_request_positions_.end()) {
+    return;
+  }
+  pending_request_ids_.erase(pending_it->second);
+  pending_request_positions_.erase(pending_it);
+}
 
 bool RequestQueue::Push(GenerateRequest request) {
   const GenerateRequestId request_id = request.id;
@@ -38,6 +46,7 @@ bool RequestQueue::Push(GenerateRequest request) {
   request.cancel_requested = false;
   requests_.emplace(request_id, std::move(request));
   pending_request_ids_.push_back(request_id);
+  pending_request_positions_[request_id] = std::prev(pending_request_ids_.end());
   return true;
 }
 
@@ -53,6 +62,7 @@ std::optional<GenerateRequestId> RequestQueue::TryPopNextAdmissible(
     const GenerateRequestId request_id = *pending_it;
     const GenerateRequest *request = Find(request_id);
     if (request == nullptr) {
+      pending_request_positions_.erase(request_id);
       pending_it = pending_request_ids_.erase(pending_it);
       continue;
     }
@@ -61,6 +71,7 @@ std::optional<GenerateRequestId> RequestQueue::TryPopNextAdmissible(
       continue;
     }
 
+    pending_request_positions_.erase(request_id);
     pending_request_ids_.erase(pending_it);
 
     if (GenerateRequest *mutable_request = FindMutable(request_id)) {
@@ -93,10 +104,7 @@ bool RequestQueue::Cancel(GenerateRequestId request_id, std::string error_messag
 
   request->cancel_requested = true;
   if (request->lifecycle == GenerateRequestLifecycle::Pending) {
-    pending_request_ids_.erase(
-        std::remove(pending_request_ids_.begin(), pending_request_ids_.end(),
-                    request_id),
-        pending_request_ids_.end());
+    RemovePendingRequestId(request_id);
 
     request->lifecycle = GenerateRequestLifecycle::Cancelled;
     request->completed_at = std::chrono::steady_clock::now();
@@ -116,6 +124,7 @@ bool RequestQueue::Cancel(GenerateRequestId request_id, std::string error_messag
 void RequestQueue::MarkCompleted(GenerateResponse response) {
   GenerateRequest *request = FindMutable(response.request_id);
   if (request != nullptr) {
+    RemovePendingRequestId(response.request_id);
     request->lifecycle =
         response.status == GenerateResponseStatus::Completed
             ? GenerateRequestLifecycle::Completed
@@ -139,6 +148,7 @@ bool RequestQueue::ConsumeCompletedResponse(GenerateRequestId request_id) {
     return false;
   }
 
+  RemovePendingRequestId(request_id);
   completed_responses_.erase(response_it);
   requests_.erase(request_id);
   return true;
@@ -147,6 +157,7 @@ bool RequestQueue::ConsumeCompletedResponse(GenerateRequestId request_id) {
 void RequestQueue::Clear() {
   requests_.clear();
   pending_request_ids_.clear();
+  pending_request_positions_.clear();
   completed_responses_.clear();
 }
 

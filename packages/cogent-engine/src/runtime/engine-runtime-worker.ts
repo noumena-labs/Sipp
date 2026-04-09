@@ -50,6 +50,14 @@ function createDefaultTransportObservability(): TransportObservability {
   };
 }
 
+function toTransferableChunkBuffer(chunk: Uint8Array): ArrayBuffer {
+  const { buffer, byteOffset, byteLength } = chunk;
+  if (buffer instanceof ArrayBuffer && byteOffset === 0 && byteLength === buffer.byteLength) {
+    return buffer;
+  }
+  return chunk.slice().buffer;
+}
+
 function toWorkerSerializableConfig(config: CogentConfig): WorkerSerializableCogentConfig {
   if (typeof config.moduleOptions?.locateFile === 'function') {
     throw new Error(
@@ -680,7 +688,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
       throw new Error(`Load stream ${callId} already has a pending chunk acknowledgement.`);
     }
 
-    const transferableChunk = chunk.slice().buffer;
+    const transferableChunk = toTransferableChunkBuffer(chunk);
 
     return new Promise<void>((resolve, reject) => {
       this.pendingStreamChunkAcks.set(callId, { resolve, reject });
