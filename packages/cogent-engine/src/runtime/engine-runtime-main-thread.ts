@@ -113,6 +113,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private queuedPromptCallbackPtrs = new Map<GenerateRequestId, number | bigint>();
   private queuedPromptTokenBuffers = new Map<GenerateRequestId, string[]>();
   private queuedPromptCallbackErrors = new Map<GenerateRequestId, unknown>();
+  private activeQueuedRequestRuns = new Set<GenerateRequestId>();
   private lastModelLoadInfo: ModelLoadInfo | null = null;
   private runtimeObservabilityEnabled = false;
   private backendProfilingEnabled = false;
@@ -273,6 +274,30 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.queuedPromptTokenBuffers.delete(requestId);
     this.queuedPromptCallbackPtrs.delete(requestId);
     this.queuedPromptCallbackErrors.delete(requestId);
+  }
+
+  private consumeCompletedResponseIfPresent(
+    module: EngineModule,
+    requestId: GenerateRequestId
+  ): boolean {
+    const status = this.callNumber(module, 'CE_GetCompletedRequestStatus', ['number'], [requestId]);
+    if (status === COMPLETED_REQUEST_STATUS_PENDING) {
+      return false;
+    }
+
+    const consumed = this.callNumber(module, 'CE_ConsumeCompletedRequest', ['number'], [requestId]);
+    if (!consumed) {
+      throw new Error('Failed to consume completed queued request response.');
+    }
+    return true;
+  }
+
+  private releaseCancelledQueuedRequestState(
+    module: EngineModule,
+    requestId: GenerateRequestId
+  ): void {
+    this.consumeCompletedResponseIfPresent(module, requestId);
+    this.releaseQueuedPromptCallback(module, requestId);
   }
 
   private releaseAllQueuedPromptCallbacks(module: EngineModule): void {
@@ -1035,10 +1060,11 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       ['number'],
       [requestId]
     );
-    if (result instanceof Promise) {
-      return Boolean(await result);
+    const cancelled = result instanceof Promise ? Boolean(await result) : Boolean(result);
+    if (cancelled && !this.activeQueuedRequestRuns.has(requestId)) {
+      this.releaseCancelledQueuedRequestState(module, requestId);
     }
-    return Boolean(result);
+    return cancelled;
   }
 
   public async queuePrompt(
@@ -1112,6 +1138,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       throw createAbortError('Prompt was aborted before execution started.');
     }
 
+    this.activeQueuedRequestRuns.add(requestId);
     let abortRequested = false;
     const abortListener =
       options?.signal == null
@@ -1183,6 +1210,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         options?.signal?.removeEventListener('abort', abortListener);
       }
       this.releaseQueuedPromptCallback(module, requestId);
+      this.activeQueuedRequestRuns.delete(requestId);
     }
   }
 

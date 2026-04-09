@@ -528,7 +528,7 @@ test('MainThreadEngineRuntime queue/cancel churn leaves no queued callback resid
     callbackErrors: 0,
   });
   assert.equal(module.removedFunctionPtrs.length, churnCount);
-  assert.equal(module.consumeCallCount, churnCount);
+  assert.equal(module.consumeCallCount, churnCount + 1);
 });
 
 test('MainThreadEngineRuntime preserves shard filenames when loading split model URLs without OPFS', async () => {

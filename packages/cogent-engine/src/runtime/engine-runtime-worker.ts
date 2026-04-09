@@ -76,6 +76,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
   >();
   private readonly queuedTokenErrors = new Map<GenerateRequestId, unknown>();
   private readonly queuedSignals = new Map<GenerateRequestId, AbortSignal>();
+  private readonly activeQueuedRequestRuns = new Set<GenerateRequestId>();
   private runtimeObservability: RuntimeObservabilityMetrics | null = null;
   private lastModelLoadInfo: ModelLoadInfo | null = null;
   private transportObservability: TransportObservability = {
@@ -282,12 +283,22 @@ export class WorkerEngineRuntime implements EngineRuntime {
     this.resetWorkerState(new Error('Worker runtime was closed.'));
   }
 
+  private releaseQueuedRequestState(requestId: GenerateRequestId): void {
+    this.queuedTokenCallbacks.delete(requestId);
+    this.queuedTokenErrors.delete(requestId);
+    this.queuedSignals.delete(requestId);
+  }
+
   public async cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean> {
     await this.ensureWorkerInitialized();
-    return (await this.callWorker<Extract<WorkerRequestMessage, { kind: 'cancel-request' }>>({
+    const cancelled = (await this.callWorker<Extract<WorkerRequestMessage, { kind: 'cancel-request' }>>({
       kind: 'cancel-request',
       requestId,
     })) as boolean;
+    if (cancelled && !this.activeQueuedRequestRuns.has(requestId)) {
+      this.releaseQueuedRequestState(requestId);
+    }
+    return cancelled;
   }
 
   public async queuePrompt(
@@ -341,6 +352,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
       throw createAbortError('Queued request cancelled.');
     }
 
+    this.activeQueuedRequestRuns.add(requestId);
     const abortListener =
       signal == null
         ? null
@@ -373,9 +385,8 @@ export class WorkerEngineRuntime implements EngineRuntime {
       if (abortListener != null) {
         signal?.removeEventListener('abort', abortListener);
       }
-      this.queuedTokenCallbacks.delete(requestId);
-      this.queuedTokenErrors.delete(requestId);
-      this.queuedSignals.delete(requestId);
+      this.releaseQueuedRequestState(requestId);
+      this.activeQueuedRequestRuns.delete(requestId);
     }
   }
 

@@ -30,6 +30,7 @@ const DEFAULT_FLUSH_INTERVAL_MS = 16;
 let engine: MainThreadEngineRuntime | null = null;
 const requestAbortControllers = new Map<GenerateRequestId, AbortController>();
 const bufferedTokens = new Map<GenerateRequestId, BufferedTokenState>();
+const runningRequestIds = new Set<GenerateRequestId>();
 const activeModelLoads = new Map<number, ActiveModelLoadState>();
 
 const transportObservability: TransportObservability = {
@@ -338,6 +339,7 @@ async function handleRunQueuedRequest(
   message: Extract<WorkerRequestMessage, { kind: 'run-queued-request' }>
 ): Promise<WorkerRunQueuedRequestResult> {
   const runtime = ensureEngine();
+  runningRequestIds.add(message.requestId);
   try {
     const response = await runtime.runQueuedRequest(message.requestId);
     flushBufferedTokens(message.requestId);
@@ -348,6 +350,7 @@ async function handleRunQueuedRequest(
     };
   } finally {
     releaseRequestResources(message.requestId);
+    runningRequestIds.delete(message.requestId);
   }
 }
 
@@ -357,6 +360,9 @@ async function handleCancelRequest(
   const runtime = ensureEngine();
   requestAbortControllers.get(message.requestId)?.abort();
   const cancelled = await runtime.cancelQueuedRequest(message.requestId);
+  if (cancelled && !runningRequestIds.has(message.requestId)) {
+    releaseRequestResources(message.requestId);
+  }
   return cancelled;
 }
 
