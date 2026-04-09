@@ -51,6 +51,8 @@ interface EngineModule {
   UTF8ToString(ptr: number | bigint, maxBytesToRead?: number): string;
 }
 
+type MountableModelFile = Blob & { name?: string };
+
 const MAX_PROMPT_TOKENS = 2048;
 const DEFAULT_MAX_MODEL_BYTES = 8 * 1024 * 1024 * 1024;
 const DEFAULT_PROMPT_FORMAT = 'auto-chat';
@@ -504,6 +506,28 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     }
   }
 
+  private createMountableModelFile(blob: Blob, fileName: string): MountableModelFile {
+    const normalizedFileName = normalizeModelFileName(fileName);
+    const existingName = (blob as MountableModelFile).name;
+    if (existingName === normalizedFileName) {
+      return blob as MountableModelFile;
+    }
+
+    if (typeof File === 'function') {
+      return new File([blob], normalizedFileName, {
+        type: blob.type,
+      }) as MountableModelFile;
+    }
+
+    const copiedBlob = blob.slice(0, blob.size, blob.type) as MountableModelFile;
+    Object.defineProperty(copiedBlob, 'name', {
+      configurable: true,
+      value: normalizedFileName,
+      writable: false,
+    });
+    return copiedBlob;
+  }
+
   private removeAllLoadedModelFiles(module: EngineModule): void {
     for (const p of this.loadedModelPaths) {
       // Don't try to unlink files inside a WORKERFS mount point.
@@ -644,7 +668,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         if (done) break;
         chunks.push(value);
       }
-      modelFile = new Blob(chunks as any);
+      modelFile = this.createMountableModelFile(new Blob(chunks as any), destFileName);
     }
 
     const modelPath = await this.mountModelFiles(module, [modelFile]);
@@ -675,7 +699,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
    */
   private async mountModelFiles(
     module: EngineModule,
-    files: Blob[],
+    files: MountableModelFile[],
     mountDir = '/workerfs_model'
   ): Promise<string> {
     const fs = module.FS;
@@ -701,10 +725,10 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.workerFsMountPath = mountDir;
 
     // Path in WORKERFS is /mountDir/fileName
-    const firstFileName = (files[0] as any).name || 'model.gguf';
+    const firstFileName = files[0].name || 'model.gguf';
     const firstModelPath = `${mountDir}/${firstFileName}`;
 
-    this.commitLoadedModelPaths(module, files.map(f => `${mountDir}/${(f as any).name || 'model.gguf'}`));
+    this.commitLoadedModelPaths(module, files.map((file) => `${mountDir}/${file.name || 'model.gguf'}`));
 
     return firstModelPath;
   }
@@ -852,7 +876,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     const module = await this.ensureModule();
     const opfsSupported = FileSystemStorage.isSupported() && this.config.persistentModelCache?.enabled !== false;
 
-    const shardBlobs: Blob[] = [];
+    const shardBlobs: MountableModelFile[] = [];
     let bytesLoadedSoFar = 0;
 
     // Step 1: Resolve metadata for all shards
@@ -879,7 +903,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         // Check OPFS cache
         const cachedFile = opfsSupported ? await this.opfs.getFile(shard.fileName) : null;
         if (cachedFile && (shard.contentLength === 0 || cachedFile.size === shard.contentLength)) {
-          shardBlobs.push(cachedFile);
+          shardBlobs.push(this.createMountableModelFile(cachedFile, shard.fileName));
           bytesLoadedSoFar += cachedFile.size;
           if (onProgress && totalBytes > 0) {
             onProgress(Math.round((bytesLoadedSoFar / totalBytes) * 100));
@@ -893,10 +917,10 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         if (!response.body) throw new Error(`Empty body for ${shard.fileName}`);
 
         const shardStart = bytesLoadedSoFar;
-        let finalShardBlob: Blob;
+        let finalShardBlob: MountableModelFile;
 
         if (opfsSupported) {
-          finalShardBlob = await this.opfs.streamToDisk(
+          finalShardBlob = this.createMountableModelFile(await this.opfs.streamToDisk(
             shard.fileName,
             response.body,
             (written) => {
@@ -905,10 +929,10 @@ export class MainThreadEngineRuntime implements EngineRuntime {
               }
             },
             signal
-          );
+          ), shard.fileName);
         } else {
           const buffer = await response.arrayBuffer();
-          finalShardBlob = new Blob([buffer]);
+          finalShardBlob = this.createMountableModelFile(new Blob([buffer]), shard.fileName);
           bytesLoadedSoFar += finalShardBlob.size;
           if (onProgress && totalBytes > 0) {
             onProgress(Math.round((bytesLoadedSoFar / totalBytes) * 100));
