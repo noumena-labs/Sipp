@@ -240,6 +240,62 @@ async function handleLoadModelFile(
   }
 }
 
+async function handleLoadModelFileShards(
+  message: Extract<WorkerRequestMessage, { kind: 'load-model-file-shards' }>
+): Promise<WorkerLoadModelResult> {
+  const runtime = ensureEngine();
+  const abortController = new AbortController();
+  activeModelLoads.set(message.callId, {
+    abortController,
+    streamController: null,
+  });
+  try {
+    const modelPath = await runtime.loadModelFromFileShards(
+      message.files,
+      (progressPct) => {
+        postLoadProgress(message.callId, progressPct);
+      },
+      abortController.signal
+    );
+
+    return {
+      modelPath,
+      modelLoadInfo: runtime.getLastModelLoadInfo(),
+      transportObservability: cloneTransportObservability(),
+    };
+  } finally {
+    releaseModelLoad(message.callId);
+  }
+}
+
+async function handleLoadModelUrls(
+  message: Extract<WorkerRequestMessage, { kind: 'load-model-urls' }>
+): Promise<WorkerLoadModelResult> {
+  const runtime = ensureEngine();
+  const abortController = new AbortController();
+  activeModelLoads.set(message.callId, {
+    abortController,
+    streamController: null,
+  });
+  try {
+    const modelPath = await runtime.loadModelFromUrls(
+      message.urls,
+      (progressPct) => {
+        postLoadProgress(message.callId, progressPct);
+      },
+      abortController.signal
+    );
+
+    return {
+      modelPath,
+      modelLoadInfo: runtime.getLastModelLoadInfo(),
+      transportObservability: cloneTransportObservability(),
+    };
+  } finally {
+    releaseModelLoad(message.callId);
+  }
+}
+
 async function handleLoadModelStreamStart(
   message: Extract<WorkerRequestMessage, { kind: 'load-model-stream-start' }>
 ): Promise<WorkerLoadModelResult> {
@@ -387,6 +443,12 @@ self.onmessage = async (event: MessageEvent<WorkerRequestMessage>) => {
         break;
       case 'load-model-file':
         value = await handleLoadModelFile(message);
+        break;
+      case 'load-model-file-shards':
+        value = await handleLoadModelFileShards(message);
+        break;
+      case 'load-model-urls':
+        value = await handleLoadModelUrls(message);
         break;
       case 'load-model-stream-start':
         value = await handleLoadModelStreamStart(message);

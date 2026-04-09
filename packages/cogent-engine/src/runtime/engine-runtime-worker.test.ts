@@ -475,15 +475,56 @@ test('WorkerEngineRuntime supports split model file shards in worker mode', asyn
   const restoreWorker = installMockWorker();
   try {
     MockWorker.handlerFactory = () => (worker, message) => {
-      if (message.kind === 'init-module') {
-        worker.emit({
-          kind: 'resolve',
-          callId: message.callId,
-          value: undefined,
-        });
-        return;
+      switch (message.kind) {
+        case 'init-module':
+          worker.emit({
+            kind: 'resolve',
+            callId: message.callId,
+            value: undefined,
+          });
+          return;
+        case 'load-model-file-shards': {
+          assert.deepEqual(
+            message.files.map((file) => file.name),
+            [
+              'model-00001-of-00002.gguf',
+              'model-00002-of-00002.gguf',
+            ]
+          );
+          const result: WorkerLoadModelResult = {
+            modelPath: '/models/model-00001-of-00002.gguf',
+            modelLoadInfo: {
+              sourceKind: 'file',
+              reuseMode: 'file-read',
+              modelPath: '/models/model-00001-of-00002.gguf',
+              fileName: 'model-00001-of-00002.gguf',
+              byteLength: 2,
+              persistentCacheEnabled: false,
+              persistentCacheKey: null,
+              persistentCacheHit: false,
+              persistentCacheStored: false,
+            },
+            transportObservability: {
+              executionMode: 'worker',
+              workerBacked: true,
+              enabled: false,
+              bufferedTokenLimit: 0,
+              flushIntervalMs: 0,
+              flushCount: 0,
+              coalescedTokenCount: 0,
+              maxObservedBufferedTokenCount: 0,
+            },
+          };
+          worker.emit({
+            kind: 'resolve',
+            callId: message.callId,
+            value: result,
+          });
+          return;
+        }
+        default:
+          throw new Error(`Unexpected worker message: ${message.kind}`);
       }
-      throw new Error(`Unexpected worker message: ${message.kind}`);
     };
 
     const runtime = new WorkerEngineRuntime({});
@@ -504,15 +545,53 @@ test('WorkerEngineRuntime supports split model URL loading in worker mode', asyn
   const restoreWorker = installMockWorker();
   try {
     MockWorker.handlerFactory = () => (worker, message) => {
-      if (message.kind === 'init-module') {
-        worker.emit({
-          kind: 'resolve',
-          callId: message.callId,
-          value: undefined,
-        });
-        return;
+      switch (message.kind) {
+        case 'init-module':
+          worker.emit({
+            kind: 'resolve',
+            callId: message.callId,
+            value: undefined,
+          });
+          return;
+        case 'load-model-urls': {
+          assert.deepEqual(message.urls, [
+            'https://example.com/model-00001-of-00002.gguf',
+            'https://example.com/model-00002-of-00002.gguf',
+          ]);
+          const result: WorkerLoadModelResult = {
+            modelPath: '/models/model-00001-of-00002.gguf',
+            modelLoadInfo: {
+              sourceKind: 'url',
+              reuseMode: 'network',
+              modelPath: '/models/model-00001-of-00002.gguf',
+              fileName: 'model-00001-of-00002.gguf',
+              byteLength: 2,
+              persistentCacheEnabled: true,
+              persistentCacheKey: 'cache-key-1,cache-key-2',
+              persistentCacheHit: false,
+              persistentCacheStored: true,
+            },
+            transportObservability: {
+              executionMode: 'worker',
+              workerBacked: true,
+              enabled: false,
+              bufferedTokenLimit: 0,
+              flushIntervalMs: 0,
+              flushCount: 0,
+              coalescedTokenCount: 0,
+              maxObservedBufferedTokenCount: 0,
+            },
+          };
+          worker.emit({
+            kind: 'resolve',
+            callId: message.callId,
+            value: result,
+          });
+          return;
+        }
+        default:
+          throw new Error(`Unexpected worker message: ${message.kind}`);
       }
-      throw new Error(`Unexpected worker message: ${message.kind}`);
     };
 
     const runtime = new WorkerEngineRuntime({});

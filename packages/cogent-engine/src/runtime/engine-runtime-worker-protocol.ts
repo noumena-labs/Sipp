@@ -50,6 +50,16 @@ export type WorkerRequestMessage =
       destFileName: string;
     }
   | {
+      kind: 'load-model-file-shards';
+      callId: number;
+      files: File[];
+    }
+  | {
+      kind: 'load-model-urls';
+      callId: number;
+      urls: string[];
+    }
+  | {
       kind: 'load-model-stream-start';
       callId: number;
       destFileName: string;

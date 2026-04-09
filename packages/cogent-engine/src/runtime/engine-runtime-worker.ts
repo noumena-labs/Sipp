@@ -247,11 +247,26 @@ export class WorkerEngineRuntime implements EngineRuntime {
     onProgress?: (pct: number) => void,
     signal?: AbortSignal
   ): Promise<string> {
-    // For worker mode, load each shard individually via the worker's file transfer protocol.
-    // This is a simplified implementation — it loads shards sequentially via the main thread.
-    throw new Error(
-      'loadModelFromFileShards() is not yet available in worker runtime. Use main-thread runtime for split model support.'
-    );
+    await this.ensureWorkerInitialized();
+    if (signal?.aborted) {
+      throw createAbortError('Model load aborted.');
+    }
+
+    const callId = this.nextCallId++;
+    const result = (await this.callWorkerWithAbort<
+      Extract<WorkerRequestMessage, { kind: 'load-model-file-shards' }>
+    >(
+      callId,
+      {
+        kind: 'load-model-file-shards',
+        files,
+      },
+      signal,
+      onProgress
+    )) as WorkerLoadModelResult;
+    this.lastModelLoadInfo = result.modelLoadInfo;
+    this.transportObservability = result.transportObservability;
+    return result.modelPath;
   }
 
   public async loadModelFromUrls(
@@ -259,9 +274,26 @@ export class WorkerEngineRuntime implements EngineRuntime {
     onProgress?: (pct: number) => void,
     signal?: AbortSignal
   ): Promise<string> {
-    throw new Error(
-      'loadModelFromUrls() is not yet available in worker runtime. Use main-thread runtime for split model support.'
-    );
+    await this.ensureWorkerInitialized();
+    if (signal?.aborted) {
+      throw createAbortError('Model load aborted.');
+    }
+
+    const callId = this.nextCallId++;
+    const result = (await this.callWorkerWithAbort<
+      Extract<WorkerRequestMessage, { kind: 'load-model-urls' }>
+    >(
+      callId,
+      {
+        kind: 'load-model-urls',
+        urls,
+      },
+      signal,
+      onProgress
+    )) as WorkerLoadModelResult;
+    this.lastModelLoadInfo = result.modelLoadInfo;
+    this.transportObservability = result.transportObservability;
+    return result.modelPath;
   }
 
   public async initEngine(
