@@ -39,7 +39,6 @@ struct SlotState {
   std::size_t prefill_cursor = 0;
   std::size_t decode_step_count = 0;
   std::size_t batch_participation_count = 0;
-  std::size_t scheduler_tick_count = 0;
   std::vector<llama_token> generated_tokens;
   std::string output_text;
   std::string buffered_output_text;

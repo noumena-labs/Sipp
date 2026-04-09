@@ -18,6 +18,8 @@ int CE_GetCompletedRequestOutputSize(CE_RequestId request_id);
 int CE_CopyCompletedRequestOutput(CE_RequestId request_id, char* buffer, int32_t capacity);
 int CE_GetCompletedRequestErrorSize(CE_RequestId request_id);
 int CE_CopyCompletedRequestError(CE_RequestId request_id, char* buffer, int32_t capacity);
+int CE_GetCompletedRequestRuntimeObservability(CE_RequestId request_id,
+                                               CE_RuntimeObservabilityMetrics* out_metrics);
 int CE_ConsumeCompletedRequest(CE_RequestId request_id);
 CE_RequestId CE_EnqueuePromptQuery(
     const char* context_key,

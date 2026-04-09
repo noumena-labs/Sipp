@@ -13,7 +13,6 @@ export interface RuntimeObservabilityMetrics {
   decodeEvalCount: number;
   sampleCount: number;
   outputTokenCount: number;
-  schedulerTickCount: number;
   batchParticipationCount: number;
   decodeFirstTickCount: number;
   chunkedPrefillTickCount: number;

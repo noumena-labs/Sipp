@@ -106,7 +106,6 @@ interface RuntimeBenchmarkSummary {
   avgOutputTokenCount: number | null;
   avgQueueDelayMs: number | null;
   avgTailItlMs: number | null;
-  avgSchedulerTickCount: number | null;
   avgBatchParticipationCount: number | null;
   avgDecodeFirstTickCount: number | null;
   avgChunkedPrefillTickCount: number | null;
@@ -1331,16 +1330,6 @@ function collectGroupWarnings(group: BenchmarkGroupResult, label: string): strin
     );
   }
 
-  const observabilityRuns = group.runs
-    .map((run) => run.runtimeObservability)
-    .filter((metrics): metrics is RuntimeObservabilityMetrics => metrics !== null);
-  if (
-    observabilityRuns.length > 0 &&
-    observabilityRuns.every((metrics) => metrics.schedulerTickCount === 0)
-  ) {
-    warnings.push(`${label}: all completed runs reported scheduler_tick_count=0.`);
-  }
-
   return warnings;
 }
 
@@ -1446,10 +1435,6 @@ function summarizeGroup(
       avgTailItlMs: averageRuntimeObservabilityMetric(
         observabilityRuns,
         (metrics) => metrics.tailItlMs
-      ),
-      avgSchedulerTickCount: averageRuntimeObservabilityMetric(
-        observabilityRuns,
-        (metrics) => metrics.schedulerTickCount
       ),
       avgBatchParticipationCount: averageRuntimeObservabilityMetric(
         observabilityRuns,
@@ -1683,9 +1668,6 @@ function printGroupResult(group: BenchmarkGroupResult): void {
   }
   if (runtime.avgTailItlMs != null) {
     console.log(`    Avg tail ITL (ms):               ${runtime.avgTailItlMs}`);
-  }
-  if (runtime.avgSchedulerTickCount != null) {
-    console.log(`    Avg scheduler ticks:             ${runtime.avgSchedulerTickCount}`);
   }
   if (runtime.avgBatchParticipationCount != null) {
     console.log(`    Avg batch participations:        ${runtime.avgBatchParticipationCount}`);

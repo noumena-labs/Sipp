@@ -138,6 +138,9 @@ class MockMainThreadModule {
       case 'CE_GetRuntimeObservability':
         this.writeRuntimeObservability(args[0] as number);
         return 0;
+      case 'CE_GetCompletedRequestRuntimeObservability':
+        this.writeRuntimeObservability(args[1] as number);
+        return 0;
       default:
         throw new Error(`Unexpected ccall: ${ident}`);
     }
@@ -196,7 +199,7 @@ class MockMainThreadModule {
     const f64Offset = (ptr >> 3);
     const i32Offset = ((ptr + 9 * 8) >> 2);
     const doubles = [12.5, 3.5, 4.5, 1.5, 2.5, 6.5, 0.5, 0.75, 12.5];
-    const ints = [9, 7, 2, 2, 2, 3, 3, 1, 1, 0, 4, 0, 0, 1];
+    const ints = [9, 7, 2, 2, 2, 3, 1, 1, 0, 4, 0, 0, 1];
 
     for (let index = 0; index < doubles.length; index += 1) {
       this.HEAPF64[f64Offset + index] = doubles[index];
@@ -232,11 +235,11 @@ function getQueuedPromptState(
 
 function createMockRuntimeObservability(
   outputTokenCount: number,
-  schedulerTickCount = 4
+  batchParticipationCount = 3
 ): { doubles: number[]; ints: number[] } {
   return {
     doubles: [12.5, 3.5, 4.5, 1.5, 2.5, 6.5, 0.5, 0.75, 12.5],
-    ints: [9, 7, outputTokenCount, outputTokenCount, outputTokenCount, schedulerTickCount, 3, 1, 1, 0, 4, 0, 0, 1],
+    ints: [9, 7, outputTokenCount, outputTokenCount, outputTokenCount, batchParticipationCount, 1, 1, 0, 4, 0, 0, 1],
   };
 }
 
@@ -264,7 +267,11 @@ class MockConcurrentObservabilityModule {
   >();
   private readonly completed = new Map<
     number,
-    { outputText: string; errorText: string }
+    {
+      outputText: string;
+      errorText: string;
+      runtimeObservability: { doubles: number[]; ints: number[] };
+    }
   >();
   private currentObservability = createMockRuntimeObservability(0, 0);
 
@@ -312,17 +319,21 @@ class MockConcurrentObservabilityModule {
     requestId: number,
     outputText: string,
     outputTokenCount: number,
-    schedulerTickCount: number,
+    batchParticipationCount: number,
     updateObservability = true
   ): void {
     this.completed.set(requestId, {
       outputText,
       errorText: '',
+      runtimeObservability: createMockRuntimeObservability(
+        outputTokenCount,
+        batchParticipationCount
+      ),
     });
     if (updateObservability) {
       this.currentObservability = createMockRuntimeObservability(
         outputTokenCount,
-        schedulerTickCount
+        batchParticipationCount
       );
     }
     this.ensureStepDeferred(requestId).resolve(REQUEST_STEP_RESULT_TERMINAL);
@@ -356,6 +367,13 @@ class MockConcurrentObservabilityModule {
           args[1] as number
         );
         return this.completed.get(requestId)?.errorText.length ?? 0;
+      case 'CE_GetCompletedRequestRuntimeObservability':
+        this.writeRuntimeObservabilityFrom(
+          this.completed.get(requestId)?.runtimeObservability ??
+            createMockRuntimeObservability(0, 0),
+          args[1] as number
+        );
+        return 0;
       case 'CE_ConsumeCompletedRequest':
         this.completed.delete(requestId);
         return 1;
@@ -391,13 +409,20 @@ class MockConcurrentObservabilityModule {
   }
 
   private writeRuntimeObservability(ptr: number): void {
+    this.writeRuntimeObservabilityFrom(this.currentObservability, ptr);
+  }
+
+  private writeRuntimeObservabilityFrom(
+    observability: { doubles: number[]; ints: number[] },
+    ptr: number
+  ): void {
     const f64Offset = ptr >> 3;
     const i32Offset = (ptr + 9 * 8) >> 2;
-    for (let index = 0; index < this.currentObservability.doubles.length; index += 1) {
-      this.HEAPF64[f64Offset + index] = this.currentObservability.doubles[index];
+    for (let index = 0; index < observability.doubles.length; index += 1) {
+      this.HEAPF64[f64Offset + index] = observability.doubles[index];
     }
-    for (let index = 0; index < this.currentObservability.ints.length; index += 1) {
-      this.HEAP32[i32Offset + index] = this.currentObservability.ints[index];
+    for (let index = 0; index < observability.ints.length; index += 1) {
+      this.HEAP32[i32Offset + index] = observability.ints[index];
     }
   }
 }
@@ -661,7 +686,7 @@ test('MainThreadEngineRuntime keeps runtime observability isolated across concur
   const firstResponse = await firstPromise;
 
   assert.equal(secondResponse.runtimeObservability?.outputTokenCount, 2);
-  assert.equal(secondResponse.runtimeObservability?.schedulerTickCount, 20);
+  assert.equal(secondResponse.runtimeObservability?.batchParticipationCount, 20);
   assert.equal(firstResponse.runtimeObservability?.outputTokenCount, 1);
-  assert.equal(firstResponse.runtimeObservability?.schedulerTickCount, 10);
+  assert.equal(firstResponse.runtimeObservability?.batchParticipationCount, 10);
 });

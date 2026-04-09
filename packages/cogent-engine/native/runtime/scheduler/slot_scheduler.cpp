@@ -35,7 +35,6 @@ void SlotState::ResetToIdle() {
   prefill_cursor = 0;
   decode_step_count = 0;
   batch_participation_count = 0;
-  scheduler_tick_count = 0;
   generated_tokens.clear();
   output_text.clear();
   buffered_output_text.clear();
@@ -53,7 +52,6 @@ void SlotState::AttachRequest(GenerateRequest &request_ref,
   prefill_cursor = 0;
   decode_step_count = 0;
   batch_participation_count = 0;
-  scheduler_tick_count = 0;
   generated_tokens.clear();
   output_text.clear();
   buffered_output_text.clear();
@@ -297,8 +295,6 @@ void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue,
           slot.generated_tokens.empty()
               ? request.emitted_token_count
               : static_cast<int32_t>(slot.generated_tokens.size());
-      response.runtime_observability.scheduler_tick_count =
-          static_cast<int32_t>(slot.scheduler_tick_count);
       response.runtime_observability.batch_participation_count =
           static_cast<int32_t>(slot.batch_participation_count);
       response.runtime_observability.decode_eval_count =

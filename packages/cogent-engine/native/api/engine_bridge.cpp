@@ -120,6 +120,40 @@ int copy_completed_field(char *buffer, int32_t capacity,
   return static_cast<int>(byte_count);
 }
 
+void copy_runtime_observability(
+    const noumena::cogentengine::RuntimeObservabilityMetrics &runtime_observability,
+    CE_RuntimeObservabilityMetrics *out_metrics) {
+  out_metrics->total_ms = runtime_observability.total_ms;
+  out_metrics->prompt_eval_ms = runtime_observability.prompt_eval_ms;
+  out_metrics->decode_eval_ms = runtime_observability.decode_eval_ms;
+  out_metrics->sample_ms = runtime_observability.sample_ms;
+  out_metrics->queue_delay_ms = runtime_observability.queue_delay_ms;
+  out_metrics->ttft_ms = runtime_observability.ttft_ms;
+  out_metrics->mean_itl_ms = runtime_observability.mean_itl_ms;
+  out_metrics->tail_itl_ms = runtime_observability.tail_itl_ms;
+  out_metrics->e2e_ms = runtime_observability.e2e_ms;
+  out_metrics->input_token_count = runtime_observability.input_token_count;
+  out_metrics->prompt_eval_tokens = runtime_observability.prompt_eval_tokens;
+  out_metrics->decode_eval_count = runtime_observability.decode_eval_count;
+  out_metrics->sample_count = runtime_observability.sample_count;
+  out_metrics->output_token_count = runtime_observability.output_token_count;
+  out_metrics->batch_participation_count =
+      runtime_observability.batch_participation_count;
+  out_metrics->decode_first_tick_count =
+      runtime_observability.decode_first_tick_count;
+  out_metrics->chunked_prefill_tick_count =
+      runtime_observability.chunked_prefill_tick_count;
+  out_metrics->mixed_workload_tick_count =
+      runtime_observability.mixed_workload_tick_count;
+  out_metrics->lcp_reuse_tokens = runtime_observability.lcp_reuse_tokens;
+  out_metrics->prefix_cache_restore_tokens =
+      runtime_observability.prefix_cache_restore_tokens;
+  out_metrics->prefix_cache_hit_count =
+      runtime_observability.prefix_cache_hit_count;
+  out_metrics->prefix_cache_store_count =
+      runtime_observability.prefix_cache_store_count;
+}
+
 } // namespace
 
 int CE_InitPlugin(const char *model_path, const CE_InitConfig *config) {
@@ -199,36 +233,7 @@ int CE_GetRuntimeObservability(CE_RuntimeObservabilityMetrics *out_metrics) {
     return kStatusError;
   }
 
-  out_metrics->total_ms = runtime_observability.total_ms;
-  out_metrics->prompt_eval_ms = runtime_observability.prompt_eval_ms;
-  out_metrics->decode_eval_ms = runtime_observability.decode_eval_ms;
-  out_metrics->sample_ms = runtime_observability.sample_ms;
-  out_metrics->queue_delay_ms = runtime_observability.queue_delay_ms;
-  out_metrics->ttft_ms = runtime_observability.ttft_ms;
-  out_metrics->mean_itl_ms = runtime_observability.mean_itl_ms;
-  out_metrics->tail_itl_ms = runtime_observability.tail_itl_ms;
-  out_metrics->e2e_ms = runtime_observability.e2e_ms;
-  out_metrics->input_token_count = runtime_observability.input_token_count;
-  out_metrics->prompt_eval_tokens = runtime_observability.prompt_eval_tokens;
-  out_metrics->decode_eval_count = runtime_observability.decode_eval_count;
-  out_metrics->sample_count = runtime_observability.sample_count;
-  out_metrics->output_token_count = runtime_observability.output_token_count;
-  out_metrics->scheduler_tick_count = runtime_observability.scheduler_tick_count;
-  out_metrics->batch_participation_count =
-      runtime_observability.batch_participation_count;
-  out_metrics->decode_first_tick_count =
-      runtime_observability.decode_first_tick_count;
-  out_metrics->chunked_prefill_tick_count =
-      runtime_observability.chunked_prefill_tick_count;
-  out_metrics->mixed_workload_tick_count =
-      runtime_observability.mixed_workload_tick_count;
-  out_metrics->lcp_reuse_tokens = runtime_observability.lcp_reuse_tokens;
-  out_metrics->prefix_cache_restore_tokens =
-      runtime_observability.prefix_cache_restore_tokens;
-  out_metrics->prefix_cache_hit_count =
-      runtime_observability.prefix_cache_hit_count;
-  out_metrics->prefix_cache_store_count =
-      runtime_observability.prefix_cache_store_count;
+  copy_runtime_observability(runtime_observability, out_metrics);
   return 0;
 }
 
@@ -293,6 +298,21 @@ int CE_CopyCompletedRequestError(CE_RequestId request_id, char *buffer,
     return kStatusError;
   }
   return copy_completed_field(buffer, capacity, response.error_message);
+}
+
+int CE_GetCompletedRequestRuntimeObservability(
+    CE_RequestId request_id, CE_RuntimeObservabilityMetrics *out_metrics) {
+  if (out_metrics == nullptr) {
+    return kStatusError;
+  }
+
+  noumena::cogentengine::GenerateResponse response{};
+  if (!try_get_completed_response(request_id, response)) {
+    return kStatusError;
+  }
+
+  copy_runtime_observability(response.runtime_observability, out_metrics);
+  return 0;
 }
 
 int CE_ConsumeCompletedRequest(CE_RequestId request_id) {

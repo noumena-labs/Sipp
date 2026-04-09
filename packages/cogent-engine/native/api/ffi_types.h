@@ -54,7 +54,6 @@ typedef struct CE_RuntimeObservabilityMetrics {
   int32_t decode_eval_count;
   int32_t sample_count;
   int32_t output_token_count;
-  int32_t scheduler_tick_count;
   int32_t batch_participation_count;
   int32_t decode_first_tick_count;
   int32_t chunked_prefill_tick_count;

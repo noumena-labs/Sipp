@@ -391,13 +391,27 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private readRuntimeObservabilityFromModule(
     module: EngineModule
   ): RuntimeObservabilityMetrics | null {
+    return this.readRuntimeObservabilityViaCall(
+      module,
+      'CE_GetRuntimeObservability',
+      ['pointer'],
+      []
+    );
+  }
+
+  private readRuntimeObservabilityViaCall(
+    module: EngineModule,
+    ident: string,
+    argTypes: string[],
+    args: unknown[]
+  ): RuntimeObservabilityMetrics | null {
     const metricsPtr = Number(module._malloc(RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES));
     if (!metricsPtr) {
       throw new Error('Failed to allocate runtime observability buffer.');
     }
 
     try {
-      const status = this.callNumber(module, 'CE_GetRuntimeObservability', ['pointer'], [metricsPtr]);
+      const status = this.callNumber(module, ident, [...argTypes, 'pointer'], [...args, metricsPtr]);
       if (status !== 0) {
         return null;
       }
@@ -421,19 +435,30 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         decodeEvalCount: module.HEAP32[i32Offset + 2],
         sampleCount: module.HEAP32[i32Offset + 3],
         outputTokenCount: module.HEAP32[i32Offset + 4],
-        schedulerTickCount: module.HEAP32[i32Offset + 5],
-        batchParticipationCount: module.HEAP32[i32Offset + 6],
-        decodeFirstTickCount: module.HEAP32[i32Offset + 7],
-        chunkedPrefillTickCount: module.HEAP32[i32Offset + 8],
-        mixedWorkloadTickCount: module.HEAP32[i32Offset + 9],
-        lcpReuseTokens: module.HEAP32[i32Offset + 10],
-        prefixCacheRestoreTokens: module.HEAP32[i32Offset + 11],
-        prefixCacheHitCount: module.HEAP32[i32Offset + 12],
-        prefixCacheStoreCount: module.HEAP32[i32Offset + 13],
+        batchParticipationCount: module.HEAP32[i32Offset + 5],
+        decodeFirstTickCount: module.HEAP32[i32Offset + 6],
+        chunkedPrefillTickCount: module.HEAP32[i32Offset + 7],
+        mixedWorkloadTickCount: module.HEAP32[i32Offset + 8],
+        lcpReuseTokens: module.HEAP32[i32Offset + 9],
+        prefixCacheRestoreTokens: module.HEAP32[i32Offset + 10],
+        prefixCacheHitCount: module.HEAP32[i32Offset + 11],
+        prefixCacheStoreCount: module.HEAP32[i32Offset + 12],
       };
     } finally {
       module._free(metricsPtr);
     }
+  }
+
+  private readCompletedRequestRuntimeObservability(
+    module: EngineModule,
+    requestId: GenerateRequestId
+  ): RuntimeObservabilityMetrics | null {
+    return this.readRuntimeObservabilityViaCall(
+      module,
+      'CE_GetCompletedRequestRuntimeObservability',
+      ['number'],
+      [requestId]
+    );
   }
 
   private copyCompletedRequestText(
@@ -495,6 +520,10 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       'CE_CopyCompletedRequestError',
       'error'
     );
+    const runtimeObservability = this.readCompletedRequestRuntimeObservability(
+      module,
+      requestId
+    );
     const consumed = this.callNumber(module, 'CE_ConsumeCompletedRequest', ['number'], [requestId]);
     if (!consumed) {
       throw new Error('Failed to consume completed queued request response.');
@@ -507,7 +536,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       cancelled: status === COMPLETED_REQUEST_STATUS_CANCELLED,
       outputText,
       errorMessage: errorText.length > 0 ? errorText : null,
-      runtimeObservability: this.readRuntimeObservabilityFromModule(module),
+      runtimeObservability,
     };
   }
 
