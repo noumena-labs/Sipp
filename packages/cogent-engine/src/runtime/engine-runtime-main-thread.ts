@@ -1243,7 +1243,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     } catch (error) {
       throw new Error(`Failed to parse backend observability: ${asErrorMessage(error)}`);
     } finally {
-      module._CE_FreeString(BigInt(ptr));
+      module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
     }
   }
 }

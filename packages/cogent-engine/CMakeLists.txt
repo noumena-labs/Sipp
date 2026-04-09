@@ -58,7 +58,7 @@ endfunction()
 
 # llama.cpp subproject
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libs" FORCE)
-set(LLAMA_WASM_MEM64 ON CACHE BOOL "Use wasm64 memory model for cogent-engine" FORCE)
+set(LLAMA_WASM_MEM64 ${CE_WASM_MEM64} CACHE BOOL "Use wasm64 memory model for cogent-engine" FORCE)
 set(GGML_WEBGPU ON CACHE BOOL "Enable WebGPU backend for CogentEngine browser builds" FORCE)
 if(CE_BUILD_WEBGPU_TEST_BACKEND_OPS)
   set(LLAMA_BUILD_COMMON ON CACHE BOOL "Build llama.cpp common utils for tests" FORCE)

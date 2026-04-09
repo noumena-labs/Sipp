@@ -71,6 +71,29 @@ function installMockWorker(): () => void {
   };
 }
 
+function getWorkerQueuedState(
+  runtime: WorkerEngineRuntime
+): {
+  queuedCallbacks: number;
+  pendingCallbacks: number;
+  queuedErrors: number;
+  queuedSignals: number;
+} {
+  const runtimeState = runtime as unknown as {
+    queuedTokenCallbacks: Map<number, unknown>;
+    pendingQueuedTokenCallbacks: Map<number, unknown>;
+    queuedTokenErrors: Map<number, unknown>;
+    queuedSignals: Map<number, unknown>;
+  };
+
+  return {
+    queuedCallbacks: runtimeState.queuedTokenCallbacks.size,
+    pendingCallbacks: runtimeState.pendingQueuedTokenCallbacks.size,
+    queuedErrors: runtimeState.queuedTokenErrors.size,
+    queuedSignals: runtimeState.queuedSignals.size,
+  };
+}
+
 test('WorkerEngineRuntime rejects pending calls on worker crash and recreates the worker', async () => {
   const restoreWorker = installMockWorker();
   try {
@@ -294,6 +317,213 @@ test('WorkerEngineRuntime sends cancel-model-load for aborted streamed loads and
     );
 
     releaseSecondRead();
+  } finally {
+    restoreWorker();
+  }
+});
+
+test('WorkerEngineRuntime releases queued callback state when cancelling before execution', async () => {
+  const restoreWorker = installMockWorker();
+  try {
+    MockWorker.handlerFactory = () => {
+      let nextRequestId = 11;
+      return (worker, message) => {
+        switch (message.kind) {
+          case 'init-module':
+            worker.emit({
+              kind: 'resolve',
+              callId: message.callId,
+              value: undefined,
+            });
+            break;
+          case 'queue-prompt':
+            worker.emit({
+              kind: 'resolve',
+              callId: message.callId,
+              value: nextRequestId++,
+            });
+            break;
+          case 'cancel-request':
+            worker.emit({
+              kind: 'resolve',
+              callId: message.callId,
+              value: true,
+            });
+            break;
+          default:
+            throw new Error(`Unexpected worker message: ${message.kind}`);
+        }
+      };
+    };
+
+    const runtime = new WorkerEngineRuntime({});
+    await runtime.initModule();
+
+    const abortController = new AbortController();
+    const requestId = await runtime.queuePrompt('ctx', 'prompt', {
+      nTokens: 16,
+      signal: abortController.signal,
+      onToken: () => {},
+    });
+
+    const cancelled = await runtime.cancelQueuedRequest(requestId);
+
+    assert.equal(cancelled, true);
+    assert.deepEqual(getWorkerQueuedState(runtime), {
+      queuedCallbacks: 0,
+      pendingCallbacks: 0,
+      queuedErrors: 0,
+      queuedSignals: 0,
+    });
+  } finally {
+    restoreWorker();
+  }
+});
+
+test('WorkerEngineRuntime queue/cancel churn leaves no queued state residue and still supports a smoke prompt', async () => {
+  const restoreWorker = installMockWorker();
+  try {
+    MockWorker.handlerFactory = () => {
+      let nextRequestId = 21;
+      return (worker, message) => {
+        switch (message.kind) {
+          case 'init-module':
+            worker.emit({
+              kind: 'resolve',
+              callId: message.callId,
+              value: undefined,
+            });
+            break;
+          case 'queue-prompt':
+            worker.emit({
+              kind: 'resolve',
+              callId: message.callId,
+              value: nextRequestId++,
+            });
+            break;
+          case 'cancel-request':
+            worker.emit({
+              kind: 'resolve',
+              callId: message.callId,
+              value: true,
+            });
+            break;
+          case 'run-queued-request':
+            worker.emit({
+              kind: 'resolve',
+              callId: message.callId,
+              value: {
+                response: {
+                  requestId: message.requestId,
+                  completed: true,
+                  failed: false,
+                  cancelled: false,
+                  outputText: 'worker smoke output',
+                  errorMessage: null,
+                  runtimeObservability: null,
+                },
+                runtimeObservability: null,
+                transportObservability: {
+                  executionMode: 'worker',
+                  workerBacked: true,
+                  enabled: false,
+                  bufferedTokenLimit: 0,
+                  flushIntervalMs: 0,
+                  flushCount: 0,
+                  coalescedTokenCount: 0,
+                  maxObservedBufferedTokenCount: 0,
+                },
+              },
+            });
+            break;
+          default:
+            throw new Error(`Unexpected worker message: ${message.kind}`);
+        }
+      };
+    };
+
+    const runtime = new WorkerEngineRuntime({});
+    await runtime.initModule();
+
+    const churnCount = 5;
+    for (let index = 0; index < churnCount; index += 1) {
+      const abortController = new AbortController();
+      const requestId = await runtime.queuePrompt(`ctx-${index}`, 'prompt', {
+        nTokens: 16,
+        signal: abortController.signal,
+        onToken: () => {},
+      });
+      const cancelled = await runtime.cancelQueuedRequest(requestId);
+      assert.equal(cancelled, true);
+    }
+
+    const smokeOutput = await runtime.submitPrompt('ctx-smoke', 'prompt', 8);
+    assert.equal(smokeOutput, 'worker smoke output');
+
+    assert.deepEqual(getWorkerQueuedState(runtime), {
+      queuedCallbacks: 0,
+      pendingCallbacks: 0,
+      queuedErrors: 0,
+      queuedSignals: 0,
+    });
+  } finally {
+    restoreWorker();
+  }
+});
+
+test('WorkerEngineRuntime supports split model file shards in worker mode', async () => {
+  const restoreWorker = installMockWorker();
+  try {
+    MockWorker.handlerFactory = () => (worker, message) => {
+      if (message.kind === 'init-module') {
+        worker.emit({
+          kind: 'resolve',
+          callId: message.callId,
+          value: undefined,
+        });
+        return;
+      }
+      throw new Error(`Unexpected worker message: ${message.kind}`);
+    };
+
+    const runtime = new WorkerEngineRuntime({});
+    await runtime.initModule();
+
+    const modelPath = await runtime.loadModelFromFileShards([
+      new File([Uint8Array.from([1])], 'model-00001-of-00002.gguf'),
+      new File([Uint8Array.from([2])], 'model-00002-of-00002.gguf'),
+    ]);
+
+    assert.equal(modelPath, '/models/model-00001-of-00002.gguf');
+  } finally {
+    restoreWorker();
+  }
+});
+
+test('WorkerEngineRuntime supports split model URL loading in worker mode', async () => {
+  const restoreWorker = installMockWorker();
+  try {
+    MockWorker.handlerFactory = () => (worker, message) => {
+      if (message.kind === 'init-module') {
+        worker.emit({
+          kind: 'resolve',
+          callId: message.callId,
+          value: undefined,
+        });
+        return;
+      }
+      throw new Error(`Unexpected worker message: ${message.kind}`);
+    };
+
+    const runtime = new WorkerEngineRuntime({});
+    await runtime.initModule();
+
+    const modelPath = await runtime.loadModelFromUrls([
+      'https://example.com/model-00001-of-00002.gguf',
+      'https://example.com/model-00002-of-00002.gguf',
+    ]);
+
+    assert.equal(modelPath, '/models/model-00001-of-00002.gguf');
   } finally {
     restoreWorker();
   }

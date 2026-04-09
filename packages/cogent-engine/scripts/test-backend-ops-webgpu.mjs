@@ -395,8 +395,9 @@ function removeInvalidBuildDirectory(expectedGenerator) {
     reasons.push('CMAKE_MAKE_PROGRAM-NOTFOUND');
   }
 
-  if (cacheText.includes('LLAMA_WASM_MEM64:BOOL=ON')) {
-    reasons.push('LLAMA_WASM_MEM64=ON');
+  const cachedMemory64 = getCacheEntry(cacheText, 'CE_WASM_MEM64') ?? getCacheEntry(cacheText, 'LLAMA_WASM_MEM64');
+  if (cachedMemory64 === 'ON') {
+    reasons.push(`LLAMA_WASM_MEM64=${cachedMemory64}`);
   }
 
   if (expectedGenerator && cachedGenerator && cachedGenerator !== expectedGenerator) {
@@ -755,7 +756,7 @@ const cmakeConfigureArgs = [
   `-DCE_WASM_ENVIRONMENT=${emscriptenEnvironment}`,
   '-DGGML_WEBGPU=ON',
   '-DLLAMA_OPENSSL=OFF',
-  '-DLLAMA_WASM_MEM64=OFF',
+  '-DCE_WASM_MEM64=OFF',
   '-DLLAMA_BUILD_HTML=OFF',
 ];
 

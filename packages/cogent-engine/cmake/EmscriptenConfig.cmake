@@ -19,6 +19,7 @@ option(CE_SUPPRESS_LLAMA_LOGS "Suppress llama.cpp info/debug logs in production"
 option(CE_WASM_ES_MODULE    "Build as modularized ES module for JS package managers" OFF)
 option(CE_WASM_FILESYSTEM   "Enable Emscripten virtual filesystem support"     ON)
 option(CE_WASM_USE_JSPI     "Enable JSPI-based async exports"                  ON)
+option(CE_WASM_MEM64        "Enable wasm64 memory model"                       ON)
 
 set(CE_WASM_INITIAL_MEMORY "512MB" CACHE STRING "Initial WASM memory")
 set(CE_WASM_MAXIMUM_MEMORY "16384MB" CACHE STRING "Maximum WASM memory")
@@ -74,6 +75,14 @@ else()
     set(_CE_PTHREAD_LINK_FLAGS)
     add_compile_definitions(GGML_PTHREADS=0)
     add_compile_definitions(CE_WASM_PTHREAD_POOL_SIZE=1)
+endif()
+
+if(CE_WASM_MEM64)
+    set(_CE_MEMORY_MODEL_COMPILE_FLAGS -sMEMORY64=1)
+    set(_CE_MEMORY_MODEL_LINK_FLAGS -sMEMORY64=1)
+else()
+    set(_CE_MEMORY_MODEL_COMPILE_FLAGS -sMEMORY64=0)
+    set(_CE_MEMORY_MODEL_LINK_FLAGS -sMEMORY64=0)
 endif()
 
 if(CE_SUPPRESS_LLAMA_LOGS)
@@ -188,7 +197,7 @@ set(CE_WASM_COMPILE_FLAGS
     -fwasm-exceptions
     -mbulk-memory
     -mnontrapping-fptoint
-    -sMEMORY64=1
+    ${_CE_MEMORY_MODEL_COMPILE_FLAGS}
     
     # RTTI and LTO
     -frtti
@@ -217,7 +226,7 @@ set(CE_WASM_LINK_FLAGS
     -sENVIRONMENT=${CE_WASM_ENVIRONMENT}
     -sWASM=1
     -sWASM_BIGINT=1
-    -sMEMORY64=1
+    ${_CE_MEMORY_MODEL_LINK_FLAGS}
     -sSUPPORT_LONGJMP=wasm
     -sINITIAL_MEMORY=${CE_WASM_INITIAL_MEMORY}
     -sMAXIMUM_MEMORY=${CE_WASM_MAXIMUM_MEMORY}
@@ -313,6 +322,7 @@ message(STATUS "  Aggressive opt:     ${CE_WASM_AGGRESSIVE_OPT}")
 message(STATUS "  ES Module:          ${CE_WASM_ES_MODULE}")
 message(STATUS "  Filesystem:         ${CE_WASM_FILESYSTEM}")
 message(STATUS "  JSPI:               ${CE_WASM_USE_JSPI}")
+message(STATUS "  Memory64:           ${CE_WASM_MEM64}")
 message(STATUS "  Environment:        ${CE_WASM_ENVIRONMENT}")
 message(STATUS "  Initial memory:     ${CE_WASM_INITIAL_MEMORY}")
 message(STATUS "  Maximum memory:     ${CE_WASM_MAXIMUM_MEMORY}")

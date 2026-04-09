@@ -57,6 +57,7 @@ bun run rebuild
 What this does:
 
 - `bun run build:wasm` compiles `native/` + `third_party/llama.cpp` with Emscripten and writes runtime artifacts to `dist/wasm`
+- `bun run build:wasm:bun` compiles a Bun-specific mem32 runtime and writes it to `dist/wasm-bun`
 - `bun run build:ts` compiles TypeScript wrapper code to `dist/esm` and declarations to `dist/types`
 - `build:wasm` auto-selects a CMake generator, or you can force one via `CMAKE_GENERATOR`
 
@@ -83,6 +84,7 @@ Build outputs:
 - `dist/esm` -> JS API entrypoints
 - `dist/types` -> `.d.ts` files
 - `dist/wasm` -> `cogent-engine-wasm.js` + `cogent-engine-wasm.wasm`
+- `dist/wasm-bun` -> Bun-compatible `cogent-engine-wasm.js` + `cogent-engine-wasm.wasm`
 
 ## Clean Rebuild
 
@@ -117,6 +119,7 @@ bun run build
 From `packages/cogent-engine/`:
 
 ```bash
+bun run build:wasm:bun
 bun run bench:bun --model ../../Qwen3.5-0.8B-Q4_0.gguf --json ./benchmarks/latest-bun.json
 ```
 

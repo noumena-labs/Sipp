@@ -9,19 +9,41 @@ const projectRoot = path.resolve(scriptDir, '..');
 const wasmTargetName = 'CogentEngine';
 const isWindows = process.platform === 'win32';
 const supportedGenerators = new Set(['Ninja', 'NMake Makefiles', 'Unix Makefiles']);
-const buildLabel = '[build-wasm]';
-const buildDirName = 'build';
+const buildLabel = process.env.CE_WASM_BUILD_LABEL?.trim() || '[build-wasm]';
+const buildDirName = process.env.CE_WASM_BUILD_DIR_NAME?.trim() || 'build';
 const artifactPrefix = 'cogent-engine-wasm';
 const buildDir = path.join(projectRoot, buildDirName);
 const buildDistDir = path.join(buildDir, 'dist');
-const packageWasmDir = path.join(projectRoot, 'dist', 'wasm');
+const packageWasmSubdir = process.env.CE_WASM_OUTPUT_SUBDIR?.trim() || 'wasm';
+const packageWasmDir = path.join(projectRoot, 'dist', packageWasmSubdir);
 const enableJspi = true;
 const emscriptenEnvironment = 'web,worker';
+const enableMemory64 = readBooleanEnv('CE_WASM_MEM64', true);
+const initialMemory = process.env.CE_WASM_INITIAL_MEMORY?.trim();
+const maximumMemory = process.env.CE_WASM_MAXIMUM_MEMORY?.trim();
+const stackSize = process.env.CE_WASM_STACK_SIZE?.trim();
 
 let activeChildProcess = null;
 let signalHandlersInstalled = false;
 let activeMakeProgramDir = null;
 let cachedCmakeExecutable = null;
+
+function readBooleanEnv(name, fallback = false) {
+  const rawValue = process.env[name]?.trim().toLowerCase();
+  if (!rawValue) {
+    return fallback;
+  }
+
+  if (['1', 'true', 'yes', 'on'].includes(rawValue)) {
+    return true;
+  }
+
+  if (['0', 'false', 'no', 'off'].includes(rawValue)) {
+    return false;
+  }
+
+  throw new Error(`Invalid boolean value for ${name}: ${process.env[name]}`);
+}
 
 function normalizeHostPath(inputPath) {
   if (!inputPath || !isWindows) {
@@ -334,8 +356,9 @@ function removeInvalidBuildDirectory(expectedGenerator) {
     reasons.push('CMAKE_MAKE_PROGRAM-NOTFOUND');
   }
 
-  if (cacheText.includes('LLAMA_WASM_MEM64:BOOL=ON')) {
-    reasons.push('LLAMA_WASM_MEM64=ON');
+  const cachedMemory64 = getCacheEntry(cacheText, 'CE_WASM_MEM64') ?? getCacheEntry(cacheText, 'LLAMA_WASM_MEM64');
+  if (cachedMemory64 && (cachedMemory64 === 'ON') !== enableMemory64) {
+    reasons.push(`LLAMA_WASM_MEM64=${cachedMemory64}`);
   }
 
   if (expectedGenerator && cachedGenerator && cachedGenerator !== expectedGenerator) {
@@ -500,7 +523,7 @@ const cmakeConfigureArgs = [
   '-DCE_WASM_AGGRESSIVE_OPT=ON',
   `-DCE_WASM_USE_JSPI=${enableJspi ? 'ON' : 'OFF'}`,
   `-DCE_WASM_ENVIRONMENT=${emscriptenEnvironment}`,
-  '-DLLAMA_WASM_MEM64=ON',
+  `-DCE_WASM_MEM64=${enableMemory64 ? 'ON' : 'OFF'}`,
   '-DLLAMA_BUILD_HTML=OFF'
 ];
 
@@ -514,8 +537,20 @@ if (emdawnwebgpuDir) {
   cmakeConfigureArgs.push(`-DEMDAWNWEBGPU_DIR=${emdawnwebgpuDir}`);
 }
 
+if (initialMemory) {
+  cmakeConfigureArgs.push(`-DCE_WASM_INITIAL_MEMORY=${initialMemory}`);
+}
+
+if (maximumMemory) {
+  cmakeConfigureArgs.push(`-DCE_WASM_MAXIMUM_MEMORY=${maximumMemory}`);
+}
+
+if (stackSize) {
+  cmakeConfigureArgs.push(`-DCE_WASM_STACK_SIZE=${stackSize}`);
+}
+
 console.log(
-  `${buildLabel} generator=${buildConfig.generator}` +
+  `${buildLabel} generator=${buildConfig.generator} mem64=${enableMemory64 ? 'on' : 'off'} output=dist/${packageWasmSubdir}` +
     (buildConfig.makeProgram ? ` make_program=${buildConfig.makeProgram}` : '')
 );
 

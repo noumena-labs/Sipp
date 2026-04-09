@@ -3,7 +3,7 @@ import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { CogentEngine, getBundledRuntimeUrls } from '../dist/esm/index.js';
+import { CogentEngine, getBundledBunRuntimeUrls } from '../dist/esm/index.js';
 import type {
   BackendObservability,
   FlashAttentionMode,
@@ -40,6 +40,8 @@ interface BenchmarkOptions {
   tokensOverride?: number;
   warmupRuns: number;
   measuredRuns: number;
+  cancelChurnRuns: number;
+  cancelChurnTokens: number;
   jsonPath?: string;
   artifactLabel?: string;
   quantizationLabel?: string;
@@ -117,9 +119,22 @@ interface RuntimeBenchmarkSummary {
   outputTokensPerSecond: number | null;
 }
 
+interface DerivedBenchmarkSummary {
+  avgHostOverheadMs: number | null;
+  avgPromptReuseTokens: number | null;
+  avgPromptReuseRatio: number | null;
+}
+
 interface BenchmarkGroupSummary {
   serving: ServingBenchmarkSummary;
   runtime: RuntimeBenchmarkSummary;
+  derived: DerivedBenchmarkSummary;
+}
+
+interface MemorySnapshotSummary {
+  before: RuntimeMemoryUsage;
+  after: RuntimeMemoryUsage;
+  delta: RuntimeMemoryUsage;
 }
 
 interface BenchmarkGroupResult {
@@ -129,6 +144,7 @@ interface BenchmarkGroupResult {
   measuredRuns: number;
   benchmarkDurationMs: number;
   summary: BenchmarkGroupSummary;
+  memory: MemorySnapshotSummary | null;
   runs: BenchmarkRun[];
 }
 
@@ -180,8 +196,26 @@ interface RuntimeMemoryUsage {
   arrayBuffersBytes: number;
 }
 
+interface QueueCancelChurnResult {
+  iterations: number;
+  tokenLimit: number;
+  benchmarkDurationMs: number;
+  enqueueLatencyMs: BenchmarkSummary | null;
+  cancelLatencyMs: BenchmarkSummary | null;
+  cancelledCount: number;
+  memory: MemorySnapshotSummary;
+  smokePrompt: {
+    wallMs: number | null;
+    outputLength: number;
+    runtimeObservabilityAvailable: boolean;
+    failed: boolean;
+    errorMessage: string | null;
+  };
+  warnings: string[];
+}
+
 interface BenchmarkReport {
-  schemaVersion: 'cogent.benchmark.bun.v7';
+  schemaVersion: 'cogent.benchmark.bun.v8';
   generatedAt: string;
   benchmark: {
     script: string;
@@ -189,6 +223,8 @@ interface BenchmarkReport {
     promptFormat: PromptFormatMode;
     warmupRuns: number;
     measuredRuns: number;
+    cancelChurnRuns: number;
+    cancelChurnTokens: number;
     scenarioCount: number;
   };
   environment: {
@@ -222,6 +258,8 @@ interface BenchmarkReport {
   memory: RuntimeMemoryUsage;
   scenarios: BenchmarkScenarioResult[];
   mixedLoad: MixedLoadBenchmarkResult | null;
+  queueCancelChurn: QueueCancelChurnResult | null;
+  warnings: string[];
   limitations: string[];
 }
 
@@ -268,6 +306,9 @@ const DEFAULT_SHORT_OUTPUT_TOKENS = 16;
 const DEFAULT_LONG_OUTPUT_TOKENS = 128;
 const DEFAULT_WARMUP_RUNS = 1;
 const DEFAULT_MEASURED_RUNS = 3;
+const DEFAULT_CANCEL_CHURN_RUNS = 250;
+const DEFAULT_CANCEL_CHURN_TOKENS = 16;
+const CANCEL_CHURN_MEMORY_WARNING_BYTES = 8 * 1024 * 1024;
 const OUTPUT_PREVIEW_LIMIT = 120;
 const QUANTIZATION_SUFFIX_PATTERN =
   /(?:[-_.])((?:IQ\d+(?:_[A-Z0-9]+)*)|(?:Q\d+(?:_[A-Z0-9]+)*)|(?:BF16|F16|F32|FP16|FP32))$/i;
@@ -460,6 +501,16 @@ function parseArgs(argv: string[]): BenchmarkOptions {
     tokensOverride: parseOptionalPositiveInt('--tokens', options.get('tokens')),
     warmupRuns: parseNonNegativeInt('--warmup', options.get('warmup'), DEFAULT_WARMUP_RUNS),
     measuredRuns: parsePositiveInt('--runs', options.get('runs'), DEFAULT_MEASURED_RUNS),
+    cancelChurnRuns: parseNonNegativeInt(
+      '--cancel-churn-runs',
+      options.get('cancel-churn-runs'),
+      DEFAULT_CANCEL_CHURN_RUNS
+    ),
+    cancelChurnTokens: parsePositiveInt(
+      '--cancel-churn-tokens',
+      options.get('cancel-churn-tokens'),
+      DEFAULT_CANCEL_CHURN_TOKENS
+    ),
     jsonPath: options.get('json'),
     artifactLabel: options.get('artifact-label'),
     quantizationLabel: options.get('quantization'),
@@ -507,6 +558,8 @@ Options:
   --prompt-format <mode>           auto-chat | raw (default: auto-chat)
   --warmup <n>                     Warmup runs per benchmark group (default: ${DEFAULT_WARMUP_RUNS})
   --runs <n>                       Measured runs per benchmark group (default: ${DEFAULT_MEASURED_RUNS})
+  --cancel-churn-runs <n>          Queue/cancel churn iterations after scenarios (default: ${DEFAULT_CANCEL_CHURN_RUNS})
+  --cancel-churn-tokens <n>        Token limit used for churn requests and smoke prompt (default: ${DEFAULT_CANCEL_CHURN_TOKENS})
   --ctx <n>                        Optional llama context size
   --batch <n>                      Optional llama logical batch size
   --ubatch <n>                     Optional llama physical batch size
@@ -618,6 +671,32 @@ function captureMemoryUsage(): RuntimeMemoryUsage {
   };
 }
 
+function diffMemoryUsage(
+  before: RuntimeMemoryUsage,
+  after: RuntimeMemoryUsage
+): RuntimeMemoryUsage {
+  return {
+    rssBytes: after.rssBytes - before.rssBytes,
+    heapUsedBytes: after.heapUsedBytes - before.heapUsedBytes,
+    externalBytes: after.externalBytes - before.externalBytes,
+    arrayBuffersBytes: after.arrayBuffersBytes - before.arrayBuffersBytes,
+  };
+}
+
+function averageBenchmarkRunMetric(
+  runs: BenchmarkRun[],
+  metric: (run: BenchmarkRun) => number | null
+): number | null {
+  const values = runs
+    .map(metric)
+    .filter((value): value is number => value != null && Number.isFinite(value));
+  if (values.length === 0) {
+    return null;
+  }
+  const total = values.reduce((acc, value) => acc + value, 0);
+  return round(total / values.length);
+}
+
 function formatRuntimeDeviceLabel(device: BackendObservability['devices'][number]): string {
   const detail = device.description || device.name || device.backendName || device.type;
   return `${device.backendName}:${detail}`;
@@ -707,7 +786,7 @@ function buildBenchmarkBackendProfile(
 }
 
 async function initializeScenarioEngine(
-  runtimeUrls: ReturnType<typeof getBundledRuntimeUrls>,
+  runtimeUrls: ReturnType<typeof getBundledBunRuntimeUrls>,
   modelBytes: Uint8Array,
   fileName: string
 ): Promise<{
@@ -738,11 +817,13 @@ async function initializeScenarioEngine(
 
 async function reinitializeScenarioEngine(
   engine: CogentEngine,
-  modelPath: string,
+  modelBytes: Uint8Array,
+  fileName: string,
   initConfig: InferenceInitConfig
 ): Promise<ScenarioRuntimeMetrics> {
-  // Scenario isolation comes from rebuilding the native inference runtime, not from
-  // recreating the JS/Wasm module and re-copying the model on every case.
+  // The native runtime releases loaded model files after init, so reinitialization
+  // needs to restore the model into MEMFS before rebuilding engine state.
+  const modelPath = engine.loadModelFromBuffer(modelBytes, fileName);
   const initEngine = await measureAsync(() => engine.initEngine(modelPath, initConfig));
   return {
     initEngineMs: initEngine.ms,
@@ -895,7 +976,8 @@ async function runPromptBenchmark(
   warmupRuns: number,
   measuredRuns: number,
   contextKeyFactory: (index: number) => string
-): Promise<{ benchmarkDurationMs: number; runs: BenchmarkRun[] }> {
+) : Promise<{ benchmarkDurationMs: number; memory: MemorySnapshotSummary; runs: BenchmarkRun[] }> {
+  const memoryBefore = captureMemoryUsage();
   for (let i = 0; i < warmupRuns; i++) {
     await engine.submitPrompt(contextKeyFactory(i), prompt, {
       nTokens: tokens,
@@ -964,8 +1046,14 @@ async function runPromptBenchmark(
     });
   }
 
+  const memoryAfter = captureMemoryUsage();
   return {
     benchmarkDurationMs: round(nowMs() - benchmarkStart),
+    memory: {
+      before: memoryBefore,
+      after: memoryAfter,
+      delta: diffMemoryUsage(memoryBefore, memoryAfter),
+    },
     runs,
   };
 }
@@ -1135,6 +1223,162 @@ async function runMixedLoadBenchmark(
   };
 }
 
+async function runQueueCancelChurn(
+  engine: CogentEngine,
+  promptFormat: PromptFormatMode,
+  iterations: number,
+  tokenLimit: number
+): Promise<QueueCancelChurnResult | null> {
+  if (iterations <= 0) {
+    return null;
+  }
+
+  const memoryBefore = captureMemoryUsage();
+  const enqueueLatenciesMs: number[] = [];
+  const cancelLatenciesMs: number[] = [];
+  let cancelledCount = 0;
+  const benchmarkStart = nowMs();
+
+  for (let index = 0; index < iterations; index += 1) {
+    const enqueue = await measureAsync(() =>
+      engine.queuePrompt(`cancel-churn-${index}`, SHORT_PROMPT, {
+        nTokens: tokenLimit,
+        promptFormat,
+        onToken: () => {},
+      })
+    );
+    enqueueLatenciesMs.push(enqueue.ms);
+
+    const cancel = await measureAsync(() =>
+      engine.cancelQueuedRequest(enqueue.value)
+    );
+    cancelLatenciesMs.push(cancel.ms);
+    if (cancel.value) {
+      cancelledCount++;
+    }
+  }
+
+  let smokeWallMs: number | null = null;
+  let smokeOutputLength = 0;
+  let smokeRuntimeObservabilityAvailable = false;
+  let smokeErrorMessage: string | null = null;
+  let smokeFailed = false;
+
+  const smokeStart = nowMs();
+  try {
+    const output = await engine.submitPrompt('cancel-churn-smoke', SHORT_PROMPT, {
+      nTokens: tokenLimit,
+      promptFormat,
+    });
+    smokeWallMs = round(nowMs() - smokeStart);
+    smokeOutputLength = output.length;
+    smokeRuntimeObservabilityAvailable = engine.getRuntimeObservability() != null;
+  } catch (error) {
+    smokeWallMs = round(nowMs() - smokeStart);
+    smokeFailed = true;
+    smokeErrorMessage = error instanceof Error ? error.message : String(error);
+  }
+
+  const memoryAfter = captureMemoryUsage();
+  const memory = {
+    before: memoryBefore,
+    after: memoryAfter,
+    delta: diffMemoryUsage(memoryBefore, memoryAfter),
+  };
+
+  const warnings: string[] = [];
+  if (!smokeRuntimeObservabilityAvailable) {
+    warnings.push('queueCancelChurn: smoke-after-churn prompt returned no runtime observability payload.');
+  }
+  if (smokeFailed) {
+    warnings.push(
+      `queueCancelChurn: smoke-after-churn prompt failed${smokeErrorMessage ? `: ${smokeErrorMessage}` : '.'}`
+    );
+  }
+  if (memory.delta.rssBytes > CANCEL_CHURN_MEMORY_WARNING_BYTES) {
+    warnings.push(
+      `queueCancelChurn: rss grew by ${formatBytes(memory.delta.rssBytes)} after churn.`
+    );
+  }
+
+  return {
+    iterations,
+    tokenLimit,
+    benchmarkDurationMs: round(nowMs() - benchmarkStart),
+    enqueueLatencyMs: summarizeOptional(enqueueLatenciesMs),
+    cancelLatencyMs: summarizeOptional(cancelLatenciesMs),
+    cancelledCount,
+    memory,
+    smokePrompt: {
+      wallMs: smokeWallMs,
+      outputLength: smokeOutputLength,
+      runtimeObservabilityAvailable: smokeRuntimeObservabilityAvailable,
+      failed: smokeFailed,
+      errorMessage: smokeErrorMessage,
+    },
+    warnings,
+  };
+}
+
+function collectGroupWarnings(group: BenchmarkGroupResult, label: string): string[] {
+  const warnings: string[] = [];
+  const missingObservabilityCount = group.runs.filter(
+    (run) => run.runtimeObservability == null
+  ).length;
+  if (missingObservabilityCount > 0) {
+    warnings.push(
+      `${label}: ${missingObservabilityCount}/${group.runs.length} runs were missing runtime observability payloads.`
+    );
+  }
+
+  const observabilityRuns = group.runs
+    .map((run) => run.runtimeObservability)
+    .filter((metrics): metrics is RuntimeObservabilityMetrics => metrics !== null);
+  if (
+    observabilityRuns.length > 0 &&
+    observabilityRuns.every((metrics) => metrics.schedulerTickCount === 0)
+  ) {
+    warnings.push(`${label}: all completed runs reported scheduler_tick_count=0.`);
+  }
+
+  return warnings;
+}
+
+function collectBenchmarkWarnings(
+  scenarioResults: BenchmarkScenarioResult[],
+  mixedLoadResult: MixedLoadBenchmarkResult | null,
+  queueCancelChurn: QueueCancelChurnResult | null
+): string[] {
+  const warnings: string[] = [];
+
+  for (const scenario of scenarioResults) {
+    warnings.push(
+      ...collectGroupWarnings(scenario.coldPrompt, `${scenario.definition.id}/coldPrompt`),
+      ...collectGroupWarnings(
+        scenario.hotFreshContext,
+        `${scenario.definition.id}/hotFreshContext`
+      ),
+      ...collectGroupWarnings(
+        scenario.hotReuseContext,
+        `${scenario.definition.id}/hotReuseContext`
+      )
+    );
+  }
+
+  if (mixedLoadResult != null) {
+    warnings.push(
+      ...collectGroupWarnings(mixedLoadResult.foreground, `${mixedLoadResult.definition.id}/foreground`),
+      ...collectGroupWarnings(mixedLoadResult.background, `${mixedLoadResult.definition.id}/background`)
+    );
+  }
+
+  if (queueCancelChurn != null) {
+    warnings.push(...queueCancelChurn.warnings);
+  }
+
+  return warnings;
+}
+
 function summarizeGroup(
   runs: BenchmarkRun[],
   benchmarkDurationMs: number
@@ -1248,6 +1492,31 @@ function summarizeGroup(
         decodeTokensPerSecond
       ),
     },
+    derived: {
+      avgHostOverheadMs: averageBenchmarkRunMetric(runs, (run) => {
+        const runtimeTotalMs = run.runtimeObservability?.totalMs ?? null;
+        if (runtimeTotalMs == null || runtimeTotalMs < 0) {
+          return null;
+        }
+        return run.wallMs - runtimeTotalMs;
+      }),
+      avgPromptReuseTokens: averageBenchmarkRunMetric(runs, (run) => {
+        if (run.inputTokenCount == null || run.promptEvalTokenCount == null) {
+          return null;
+        }
+        return Math.max(0, run.inputTokenCount - run.promptEvalTokenCount);
+      }),
+      avgPromptReuseRatio: averageBenchmarkRunMetric(runs, (run) => {
+        if (
+          run.inputTokenCount == null ||
+          run.promptEvalTokenCount == null ||
+          run.inputTokenCount <= 0
+        ) {
+          return null;
+        }
+        return Math.max(0, run.inputTokenCount - run.promptEvalTokenCount) / run.inputTokenCount;
+      }),
+    },
   };
 }
 
@@ -1257,7 +1526,8 @@ function createGroupResult(
   warmupRuns: number,
   measuredRuns: number,
   benchmarkDurationMs: number,
-  runs: BenchmarkRun[]
+  runs: BenchmarkRun[],
+  memory: MemorySnapshotSummary | null = null
 ): BenchmarkGroupResult {
   return {
     id,
@@ -1266,6 +1536,7 @@ function createGroupResult(
     measuredRuns,
     benchmarkDurationMs,
     summary: summarizeGroup(runs, benchmarkDurationMs),
+    memory,
     runs,
   };
 }
@@ -1319,7 +1590,8 @@ async function runScenarioBenchmark(
       0,
       1,
       coldPrompt.benchmarkDurationMs,
-      coldPrompt.runs
+      coldPrompt.runs,
+      coldPrompt.memory
     ),
     hotFreshContext: createGroupResult(
       'hotFreshContext',
@@ -1327,7 +1599,8 @@ async function runScenarioBenchmark(
       warmupRuns,
       measuredRuns,
       hotFreshContext.benchmarkDurationMs,
-      hotFreshContext.runs
+      hotFreshContext.runs,
+      hotFreshContext.memory
     ),
     hotReuseContext: createGroupResult(
       'hotReuseContext',
@@ -1335,13 +1608,14 @@ async function runScenarioBenchmark(
       warmupRuns,
       measuredRuns,
       hotReuseContext.benchmarkDurationMs,
-      hotReuseContext.runs
+      hotReuseContext.runs,
+      hotReuseContext.memory
     ),
   };
 }
 
 function printGroupResult(group: BenchmarkGroupResult): void {
-  const { serving, runtime } = group.summary;
+  const { serving, runtime, derived } = group.summary;
 
   console.log(`\n  ${group.label}`);
   console.log(`    Successful requests:             ${serving.successfulRequests}`);
@@ -1395,6 +1669,15 @@ function printGroupResult(group: BenchmarkGroupResult): void {
   if (runtime.outputTokensPerSecond != null) {
     console.log(`    Decode tok/s:                    ${runtime.outputTokensPerSecond}`);
   }
+  if (derived.avgHostOverheadMs != null) {
+    console.log(`    Avg host overhead (ms):          ${derived.avgHostOverheadMs}`);
+  }
+  if (derived.avgPromptReuseTokens != null) {
+    console.log(`    Avg prompt reuse tokens:         ${derived.avgPromptReuseTokens}`);
+  }
+  if (derived.avgPromptReuseRatio != null) {
+    console.log(`    Avg prompt reuse ratio:          ${round(derived.avgPromptReuseRatio * 100)}%`);
+  }
   if (runtime.avgQueueDelayMs != null) {
     console.log(`    Avg queue delay (ms):            ${runtime.avgQueueDelayMs}`);
   }
@@ -1430,6 +1713,11 @@ function printGroupResult(group: BenchmarkGroupResult): void {
   if (runtime.avgPrefixCacheStoreCount != null) {
     console.log(`    Avg prefix-cache stores:         ${runtime.avgPrefixCacheStoreCount}`);
   }
+  if (group.memory != null) {
+    console.log(
+      `    Memory delta:                    rss=${formatBytes(group.memory.delta.rssBytes)} heap=${formatBytes(group.memory.delta.heapUsedBytes)} external=${formatBytes(group.memory.delta.externalBytes)}`
+    );
+  }
 }
 
 function printScenarioResult(result: BenchmarkScenarioResult): void {
@@ -1458,6 +1746,41 @@ function printMixedLoadResult(result: MixedLoadBenchmarkResult): void {
   printGroupResult(result.background);
 }
 
+function printQueueCancelChurnResult(result: QueueCancelChurnResult): void {
+  console.log('\nQueue/Cancel Churn');
+  console.log(`  iterations   ${result.iterations}`);
+  console.log(`  token limit  ${result.tokenLimit}`);
+  console.log(`  cancelled    ${result.cancelledCount}`);
+  console.log(`  duration (s) ${round(result.benchmarkDurationMs / 1000)}`);
+  if (result.enqueueLatencyMs != null) {
+    console.log(`  enqueue mean ${result.enqueueLatencyMs.meanMs} ms`);
+    console.log(`  enqueue p99  ${result.enqueueLatencyMs.p99Ms} ms`);
+  }
+  if (result.cancelLatencyMs != null) {
+    console.log(`  cancel mean  ${result.cancelLatencyMs.meanMs} ms`);
+    console.log(`  cancel p99   ${result.cancelLatencyMs.p99Ms} ms`);
+  }
+  console.log(
+    `  memory delta rss=${formatBytes(result.memory.delta.rssBytes)} heap=${formatBytes(result.memory.delta.heapUsedBytes)} external=${formatBytes(result.memory.delta.externalBytes)}`
+  );
+  console.log(
+    `  smoke prompt failed=${result.smokePrompt.failed} output_length=${result.smokePrompt.outputLength} runtime_observability=${result.smokePrompt.runtimeObservabilityAvailable}`
+  );
+  if (result.smokePrompt.errorMessage != null) {
+    console.log(`  smoke error  ${result.smokePrompt.errorMessage}`);
+  }
+}
+
+function printWarnings(warnings: string[]): void {
+  if (warnings.length === 0) {
+    return;
+  }
+  console.log('\nWarnings');
+  for (const warning of warnings) {
+    console.log(`  - ${warning}`);
+  }
+}
+
 function printBackendProfile(backend: BenchmarkBackendProfile): void {
   console.log('\nBackend');
   console.log(`  requested execution  ${backend.requestedExecutionMode}`);
@@ -1479,12 +1802,26 @@ async function writeJsonReport(jsonPath: string, report: BenchmarkReport): Promi
   console.log(`\nSaved JSON report to ${resolvedPath}`);
 }
 
+function ensureBundledBunRuntimeUrls(): ReturnType<typeof getBundledBunRuntimeUrls> {
+  const runtimeUrls = getBundledBunRuntimeUrls();
+  const modulePath = fileURLToPath(runtimeUrls.moduleUrl);
+  const wasmPath = fileURLToPath(runtimeUrls.wasmUrl);
+
+  if (!existsSync(modulePath) || !existsSync(wasmPath)) {
+    throw new Error(
+      `Missing Bun runtime artifacts. Run "bun run build:wasm:bun" first.\nExpected:\n- ${modulePath}\n- ${wasmPath}`
+    );
+  }
+
+  return runtimeUrls;
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(Bun.argv.slice(2));
   const scenarios = buildScenarios(options);
   const mixedLoadDefinition = buildMixedLoadDefinition(options.promptFormat);
   const effectiveInitConfig = buildPhase4BenchmarkConfig(options.initConfig);
-  const runtimeUrls = getBundledRuntimeUrls();
+  const runtimeUrls = ensureBundledBunRuntimeUrls();
   const fileName = path.basename(options.modelPath);
   const quantizationLabel = options.quantizationLabel ?? inferQuantizationLabel(fileName);
   const artifactLabel = options.artifactLabel ?? deriveArtifactLabel(fileName, quantizationLabel);
@@ -1498,6 +1835,8 @@ async function main(): Promise<void> {
   console.log(`  format      ${options.promptFormat}`);
   console.log(`  warmup      ${options.warmupRuns}`);
   console.log(`  runs        ${options.measuredRuns}`);
+  console.log(`  churn       ${options.cancelChurnRuns}`);
+  console.log(`  churn tok   ${options.cancelChurnTokens}`);
   console.log(`  prefill     ${effectiveInitConfig.prefillChunkSize ?? 0}`);
   console.log(`  policy      ${effectiveInitConfig.schedulerPolicy ?? 'balanced'}`);
   console.log(`  reserve     ${effectiveInitConfig.decodeTokenReserve ?? 1}`);
@@ -1524,9 +1863,8 @@ async function main(): Promise<void> {
     };
   });
 
-  let modelBytes = readModel.value.bytes;
+  const modelBytes = readModel.value.bytes;
   const startup = await initializeScenarioEngine(runtimeUrls, modelBytes, fileName);
-  modelBytes = new Uint8Array(0);
   const maybeNavigator =
     typeof navigator !== 'undefined'
       ? (navigator as { gpu?: unknown; userAgent?: string })
@@ -1554,11 +1892,13 @@ async function main(): Promise<void> {
 
   const scenarioResults: BenchmarkScenarioResult[] = [];
   let mixedLoadResult: MixedLoadBenchmarkResult | null = null;
+  let queueCancelChurnResult: QueueCancelChurnResult | null = null;
   try {
     for (const scenario of scenarios) {
       const runtime = await reinitializeScenarioEngine(
         startup.engine,
-        startup.modelPath,
+        modelBytes,
+        fileName,
         runtimeInitConfig
       );
       const scenarioResult = await runScenarioBenchmark(
@@ -1572,10 +1912,28 @@ async function main(): Promise<void> {
       scenarioResults.push(scenarioResult);
     }
 
+    const churnRuntime = await reinitializeScenarioEngine(
+      startup.engine,
+      modelBytes,
+      fileName,
+      runtimeInitConfig
+    );
+    void churnRuntime;
+    queueCancelChurnResult = await runQueueCancelChurn(
+      startup.engine,
+      options.promptFormat,
+      options.cancelChurnRuns,
+      options.cancelChurnTokens
+    );
+    if (queueCancelChurnResult != null) {
+      printQueueCancelChurnResult(queueCancelChurnResult);
+    }
+
     if (maybeNavigator?.gpu != null) {
       const mixedRuntime = await reinitializeScenarioEngine(
         startup.engine,
-        startup.modelPath,
+        modelBytes,
+        fileName,
         runtimeInitConfig
       );
       mixedLoadResult = await runMixedLoadBenchmark(
@@ -1591,8 +1949,15 @@ async function main(): Promise<void> {
     startup.engine.close();
   }
 
+  const warnings = collectBenchmarkWarnings(
+    scenarioResults,
+    mixedLoadResult,
+    queueCancelChurnResult
+  );
+  printWarnings(warnings);
+
   const report: BenchmarkReport = {
-    schemaVersion: 'cogent.benchmark.bun.v7',
+    schemaVersion: 'cogent.benchmark.bun.v8',
     generatedAt: new Date().toISOString(),
     benchmark: {
       script: 'packages/cogent-engine/benchmarks/benchmark-bun.ts',
@@ -1600,6 +1965,8 @@ async function main(): Promise<void> {
       promptFormat: options.promptFormat,
       warmupRuns: options.warmupRuns,
       measuredRuns: options.measuredRuns,
+      cancelChurnRuns: options.cancelChurnRuns,
+      cancelChurnTokens: options.cancelChurnTokens,
       scenarioCount: scenarioResults.length,
     },
     environment: {
@@ -1638,6 +2005,8 @@ async function main(): Promise<void> {
     memory: captureMemoryUsage(),
     scenarios: scenarioResults,
     mixedLoad: mixedLoadResult,
+    queueCancelChurn: queueCancelChurnResult,
+    warnings,
     limitations: [
       'This Bun track is authoritative for Wasm host/runtime overhead, not browser WebGPU kernel behavior.',
       'The backend section reports runtime backend availability and requested execution mode, not a browser-selected WebGPU adapter.',
