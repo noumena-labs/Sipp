@@ -40,10 +40,19 @@ interface EngineModule {
 
 type MountableModelFile = Blob & { name?: string };
 type HeaderLookup = { get(name: string): string | null };
+type UrlShardMetadata = {
+  url: string;
+  fileName: string;
+  contentLength: number;
+  cacheKey: string;
+};
 
 const MAX_PROMPT_TOKENS = 2048;
 const DEFAULT_MAX_MODEL_BYTES = 8 * 1024 * 1024 * 1024;
 const DEFAULT_PROMPT_FORMAT = 'auto-chat';
+const URL_METADATA_FETCH_CONCURRENCY = 4;
+const URL_DOWNLOAD_CONCURRENCY_OPFS = 4;
+const URL_DOWNLOAD_CONCURRENCY_MEMORY = 2;
 const REQUEST_STEP_RESULT_INVALID = -1;
 const REQUEST_STEP_RESULT_FATAL_NO_PROGRESS = -2;
 const REQUEST_STEP_RESULT_WAITING = 0;
@@ -106,6 +115,42 @@ function hashCacheIdentity(value: string): string {
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function createLinkedAbortController(signal?: AbortSignal): {
+  controller: AbortController;
+  signal: AbortSignal;
+  dispose: () => void;
+} {
+  const controller = new AbortController();
+  if (signal?.aborted) {
+    controller.abort();
+    return {
+      controller,
+      signal: controller.signal,
+      dispose: () => {},
+    };
+  }
+
+  const abortListener =
+    signal == null
+      ? null
+      : () => {
+          controller.abort();
+        };
+  if (abortListener != null) {
+    signal!.addEventListener('abort', abortListener, { once: true });
+  }
+
+  return {
+    controller,
+    signal: controller.signal,
+    dispose: () => {
+      if (abortListener != null) {
+        signal?.removeEventListener('abort', abortListener);
+      }
+    },
+  };
 }
 
 export class MainThreadEngineRuntime implements EngineRuntime {
@@ -395,6 +440,51 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return Number(await result);
   }
 
+  private async mapWithConcurrency<T, TResult>(
+    items: readonly T[],
+    concurrency: number,
+    mapper: (item: T, index: number) => Promise<TResult>,
+    onError?: (error: unknown) => void
+  ): Promise<TResult[]> {
+    if (items.length === 0) {
+      return [];
+    }
+
+    const results = new Array<TResult>(items.length);
+    const workerCount = Math.min(Math.max(1, concurrency), items.length);
+    let nextIndex = 0;
+    let firstError: unknown = null;
+
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (true) {
+        if (firstError != null) {
+          return;
+        }
+
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        if (currentIndex >= items.length) {
+          return;
+        }
+
+        try {
+          results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+        } catch (error) {
+          if (firstError == null) {
+            firstError = error;
+            onError?.(error);
+          }
+          throw error;
+        }
+      }
+    });
+
+    await Promise.allSettled(workers);
+    if (firstError != null) {
+      throw firstError;
+    }
+    return results;
+  }
 
   private readRuntimeObservabilityFromModule(
     module: EngineModule
@@ -625,6 +715,91 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return modelPath;
   }
 
+  private async readStreamToMountableModelFile(
+    stream: ReadableStream<Uint8Array>,
+    fileName: string,
+    onProgress?: (bytes: number) => void,
+    signal?: AbortSignal
+  ): Promise<MountableModelFile> {
+    const reader = stream.getReader();
+    const chunks: Uint8Array[] = [];
+    let bytesRead = 0;
+    const abortListener =
+      signal == null
+        ? null
+        : () => {
+            void reader.cancel(createAbortError('Model load aborted.'));
+          };
+    if (abortListener != null) {
+      signal!.addEventListener('abort', abortListener, { once: true });
+    }
+    try {
+      while (true) {
+        if (signal?.aborted) {
+          throw createAbortError('Model load aborted.');
+        }
+        const { done, value } = await reader.read();
+        if (done) {
+          if (signal?.aborted) {
+            throw createAbortError('Model load aborted.');
+          }
+          break;
+        }
+        if (value != null) {
+          chunks.push(value);
+          bytesRead += value.byteLength;
+          onProgress?.(bytesRead);
+        }
+      }
+    } catch (error) {
+      if (isAbortError(error) || signal?.aborted) {
+        throw createAbortError('Model load aborted.');
+      }
+      throw error;
+    } finally {
+      if (abortListener != null) {
+        signal!.removeEventListener('abort', abortListener);
+      }
+      reader.releaseLock();
+    }
+
+    return this.createMountableModelFile(new Blob(chunks as any), fileName);
+  }
+
+  private async resolveUrlShardMetadata(
+    urls: string[],
+    signal: AbortSignal
+  ): Promise<UrlShardMetadata[]> {
+    return this.mapWithConcurrency(
+      urls,
+      URL_METADATA_FETCH_CONCURRENCY,
+      async (url) => {
+        const parsed = this.parseConfiguredUrl(url, 'modelUrl');
+        const fileName = normalizeModelFileName(parsed.pathname.split('/').pop() || 'model.gguf');
+        try {
+          const headResp = await fetch(url, { method: 'HEAD', signal });
+          const cl = Number.parseInt(headResp.headers.get('Content-Length') ?? '0', 10) || 0;
+          return {
+            url,
+            fileName,
+            contentLength: cl,
+            cacheKey: this.buildPersistentCacheKey(url, fileName, headResp.headers),
+          };
+        } catch (error) {
+          if (isAbortError(error) || signal.aborted) {
+            throw createAbortError('Model load aborted.');
+          }
+          return {
+            url,
+            fileName,
+            contentLength: 0,
+            cacheKey: this.buildPersistentCacheKey(url, fileName),
+          };
+        }
+      }
+    );
+  }
+
   private async importModuleFactory(moduleUrl: string): Promise<(options: EngineModuleOptions) => Promise<EngineModule>> {
     const importedModule = await import(/* @vite-ignore */ moduleUrl);
     const createModule = importedModule.default;
@@ -726,46 +901,12 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         options.signal
       );
     } else {
-      // Fallback for environments without OPFS
-      const reader = stream.getReader();
-      const chunks: Uint8Array[] = [];
-      const abortListener =
-        options.signal == null
-          ? null
-          : () => {
-              void reader.cancel(createAbortError('Model load aborted.'));
-            };
-      if (abortListener != null) {
-        options.signal?.addEventListener('abort', abortListener, { once: true });
-      }
-      try {
-        while (true) {
-          if (options.signal?.aborted) {
-            throw createAbortError('Model load aborted.');
-          }
-          const { done, value } = await reader.read();
-          if (done) {
-            if (options.signal?.aborted) {
-              throw createAbortError('Model load aborted.');
-            }
-            break;
-          }
-          if (value != null) {
-            chunks.push(value);
-          }
-        }
-      } catch (error) {
-        if (isAbortError(error) || options.signal?.aborted) {
-          throw createAbortError('Model load aborted.');
-        }
-        throw error;
-      } finally {
-        if (abortListener != null) {
-          options.signal?.removeEventListener('abort', abortListener);
-        }
-        reader.releaseLock();
-      }
-      modelFile = this.createMountableModelFile(new Blob(chunks as any), destFileName);
+      modelFile = await this.readStreamToMountableModelFile(
+        stream,
+        destFileName,
+        undefined,
+        options.signal
+      );
     }
 
     const modelPath = await this.mountModelFiles(module, [modelFile]);
@@ -972,84 +1113,90 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
     const module = await this.ensureModule();
     const opfsSupported = FileSystemStorage.isSupported() && this.config.persistentModelCache?.enabled !== false;
+    const linkedAbort = createLinkedAbortController(signal);
+    const loadSignal = linkedAbort.signal;
+    const downloadConcurrency = opfsSupported
+      ? URL_DOWNLOAD_CONCURRENCY_OPFS
+      : URL_DOWNLOAD_CONCURRENCY_MEMORY;
 
-    const shardBlobs: MountableModelFile[] = [];
-    let bytesLoadedSoFar = 0;
-
-    // Step 1: Resolve metadata for all shards
-    const shardMeta: { url: string; fileName: string; contentLength: number; cacheKey: string }[] = [];
-    for (const url of urls) {
-      const parsed = this.parseConfiguredUrl(url, 'modelUrl');
-      const fileName = normalizeModelFileName(parsed.pathname.split('/').pop() || 'model.gguf');
-      try {
-        const headResp = await fetch(url, { method: 'HEAD', signal });
-        const cl = Number.parseInt(headResp.headers.get('Content-Length') ?? '0', 10) || 0;
-        shardMeta.push({
-          url,
-          fileName,
-          contentLength: cl,
-          cacheKey: this.buildPersistentCacheKey(url, fileName, headResp.headers),
-        });
-      } catch {
-        shardMeta.push({
-          url,
-          fileName,
-          contentLength: 0,
-          cacheKey: this.buildPersistentCacheKey(url, fileName),
-        });
-      }
-    }
-
-    const totalBytes = shardMeta.reduce((sum, s) => sum + s.contentLength, 0);
-
-    // Step 2: Fetch or Retrieve each shard
     try {
-      for (const shard of shardMeta) {
-        if (signal?.aborted) throw createAbortError();
+      const shardMeta = await this.resolveUrlShardMetadata(urls, loadSignal);
+      const totalBytes = shardMeta.reduce((sum, shard) => sum + shard.contentLength, 0);
+      const shardLoadedBytes = new Array<number>(shardMeta.length).fill(0);
+      let totalLoadedBytes = 0;
 
-        // Check OPFS cache
-        const cachedFile = opfsSupported ? await this.opfs.getFile(shard.cacheKey) : null;
-        if (cachedFile && (shard.contentLength === 0 || cachedFile.size === shard.contentLength)) {
-          shardBlobs.push(this.createMountableModelFile(cachedFile, shard.fileName));
-          bytesLoadedSoFar += cachedFile.size;
-          if (onProgress && totalBytes > 0) {
-            onProgress(Math.round((bytesLoadedSoFar / totalBytes) * 100));
-          }
-          continue;
+      const reportShardProgress = (index: number, loadedBytes: number) => {
+        const normalizedBytes = Math.max(0, loadedBytes);
+        const previousBytes = shardLoadedBytes[index];
+        if (normalizedBytes <= previousBytes) {
+          return;
         }
+        shardLoadedBytes[index] = normalizedBytes;
+        totalLoadedBytes += normalizedBytes - previousBytes;
+        if (onProgress != null && totalBytes > 0) {
+          onProgress(Math.min(100, Math.round((totalLoadedBytes / totalBytes) * 100)));
+        }
+      };
 
-        // Cache miss: Download
-        const response = await fetch(shard.url, { signal });
-        if (!response.ok) throw new Error(`HTTP ${response.status} for ${shard.fileName}`);
-        if (!response.body) throw new Error(`Empty body for ${shard.fileName}`);
+      const shardBlobs = await this.mapWithConcurrency(
+        shardMeta,
+        downloadConcurrency,
+        async (shard, index) => {
+          if (loadSignal.aborted) {
+            throw createAbortError('Model load aborted.');
+          }
 
-        const shardStart = bytesLoadedSoFar;
-        let finalShardBlob: MountableModelFile;
+          const cachedFile = opfsSupported ? await this.opfs.getFile(shard.cacheKey) : null;
+          if (cachedFile && (shard.contentLength === 0 || cachedFile.size === shard.contentLength)) {
+            reportShardProgress(index, cachedFile.size);
+            return this.createMountableModelFile(cachedFile, shard.fileName);
+          }
 
-        if (opfsSupported) {
-          finalShardBlob = this.createMountableModelFile(await this.opfs.streamToDisk(
-            shard.cacheKey,
+          const response = await fetch(shard.url, { signal: loadSignal });
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status} for ${shard.fileName}`);
+          }
+
+          if (opfsSupported) {
+            if (!response.body) {
+              throw new Error(`Empty body for ${shard.fileName}`);
+            }
+            const storedFile = await this.opfs.streamToDisk(
+              shard.cacheKey,
+              response.body,
+              (written) => {
+                reportShardProgress(index, written);
+              },
+              loadSignal
+            );
+            reportShardProgress(index, storedFile.size);
+            return this.createMountableModelFile(storedFile, shard.fileName);
+          }
+
+          if (!response.body) {
+            const buffer = await response.arrayBuffer();
+            reportShardProgress(index, buffer.byteLength);
+            return this.createMountableModelFile(new Blob([buffer]), shard.fileName);
+          }
+
+          return this.readStreamToMountableModelFile(
             response.body,
+            shard.fileName,
             (written) => {
-              if (onProgress && totalBytes > 0) {
-                onProgress(Math.round(((shardStart + written) / totalBytes) * 100));
-              }
+              reportShardProgress(index, written);
             },
-            signal
-          ), shard.fileName);
-        } else {
-          const buffer = await response.arrayBuffer();
-          finalShardBlob = this.createMountableModelFile(new Blob([buffer]), shard.fileName);
-          bytesLoadedSoFar += finalShardBlob.size;
-          if (onProgress && totalBytes > 0) {
-            onProgress(Math.round((bytesLoadedSoFar / totalBytes) * 100));
-          }
+            loadSignal
+          );
+        },
+        () => {
+          linkedAbort.controller.abort();
         }
-
-        shardBlobs.push(finalShardBlob);
-      }
+      );
 
       const modelPath = await this.mountModelFiles(module, shardBlobs);
+      if (onProgress != null && totalBytes === 0) {
+        onProgress(100);
+      }
 
       this.setLastModelLoadInfo({
         sourceKind: 'url',
@@ -1065,8 +1212,11 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
       return modelPath;
     } catch (e) {
-      if (isAbortError(e)) throw createAbortError();
+      linkedAbort.controller.abort();
+      if (isAbortError(e) || signal?.aborted || loadSignal.aborted) throw createAbortError();
       throw new Error(`Model load from URLs failed: ${asErrorMessage(e)}`);
+    } finally {
+      linkedAbort.dispose();
     }
   }
 

@@ -449,6 +449,16 @@ function attachReadyModule(
   runtimeState.runtimeObservabilityEnabled = true;
 }
 
+async function waitForCondition(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error('Timed out while waiting for condition.');
+}
+
 test('MainThreadEngineRuntime flushes queued tokens outside native steps and reads typed results', async () => {
   const runtime = new MainThreadEngineRuntime({});
   const module = new MockMainThreadModule('success');
@@ -737,7 +747,7 @@ test('MainThreadEngineRuntime preserves shard filenames when loading split model
       return {
         ok: true,
         status: 200,
-        body: {},
+        body: null,
         arrayBuffer: async () => Uint8Array.from([1, 2, 3, 4]).buffer,
       } as Response;
     }) as typeof fetch;
@@ -754,6 +764,160 @@ test('MainThreadEngineRuntime preserves shard filenames when loading split model
       'model-00001-of-00002.gguf',
       'model-00002-of-00002.gguf',
     ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    (FileSystemStorage as unknown as { isSupported: () => boolean }).isSupported = originalIsSupported;
+  }
+});
+
+test('MainThreadEngineRuntime bounds concurrent non-OPFS URL shard downloads and preserves order', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success');
+  attachReadyModule(runtime, module);
+
+  const originalFetch = globalThis.fetch;
+  const originalIsSupported = FileSystemStorage.isSupported;
+  const startedGets: string[] = [];
+  const releaseGetResponse = new Map<string, () => void>();
+  let activeGets = 0;
+  let maxActiveGets = 0;
+
+  try {
+    (FileSystemStorage as unknown as { isSupported: () => boolean }).isSupported = () => false;
+    globalThis.fetch = (async (url: string, init?: { method?: string }) => {
+      if (init?.method === 'HEAD') {
+        return {
+          headers: {
+            get: () => '4',
+          },
+        } as unknown as Response;
+      }
+
+      startedGets.push(url);
+      activeGets += 1;
+      maxActiveGets = Math.max(maxActiveGets, activeGets);
+
+      const ready = new Promise<void>((resolve) => {
+        releaseGetResponse.set(url, resolve);
+      });
+      await ready;
+      activeGets -= 1;
+
+      return {
+        ok: true,
+        status: 200,
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(Uint8Array.from([1, 2, 3, 4]));
+            controller.close();
+          },
+        }),
+      } as Response;
+    }) as typeof fetch;
+
+    const loadPromise = runtime.loadModelFromUrls([
+      'https://example.com/model-00001-of-00003.gguf',
+      'https://example.com/model-00002-of-00003.gguf',
+      'https://example.com/model-00003-of-00003.gguf',
+    ]);
+
+    await waitForCondition(() => startedGets.length === 2);
+
+    assert.deepEqual(startedGets, [
+      'https://example.com/model-00001-of-00003.gguf',
+      'https://example.com/model-00002-of-00003.gguf',
+    ]);
+    assert.equal(maxActiveGets, 2);
+
+    releaseGetResponse.get('https://example.com/model-00001-of-00003.gguf')?.();
+    await waitForCondition(() => startedGets.length === 3);
+
+    assert.deepEqual(startedGets, [
+      'https://example.com/model-00001-of-00003.gguf',
+      'https://example.com/model-00002-of-00003.gguf',
+      'https://example.com/model-00003-of-00003.gguf',
+    ]);
+
+    releaseGetResponse.get('https://example.com/model-00002-of-00003.gguf')?.();
+    releaseGetResponse.get('https://example.com/model-00003-of-00003.gguf')?.();
+
+    const modelPath = await loadPromise;
+    const mountedNames =
+      module.mountCalls.at(-1)?.files.map((file) => (file as { name?: string }).name || 'model.gguf') ?? [];
+
+    assert.equal(modelPath, '/workerfs_model/model-00001-of-00003.gguf');
+    assert.deepEqual(mountedNames, [
+      'model-00001-of-00003.gguf',
+      'model-00002-of-00003.gguf',
+      'model-00003-of-00003.gguf',
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    (FileSystemStorage as unknown as { isSupported: () => boolean }).isSupported = originalIsSupported;
+  }
+});
+
+test('MainThreadEngineRuntime aborts non-OPFS URL loads without mounting partial files', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success');
+  attachReadyModule(runtime, module);
+
+  const originalFetch = globalThis.fetch;
+  const originalIsSupported = FileSystemStorage.isSupported;
+
+  try {
+    (FileSystemStorage as unknown as { isSupported: () => boolean }).isSupported = () => false;
+
+    const readGates = new Map<string, Promise<void>>();
+    const releaseReads = new Map<string, () => void>();
+    globalThis.fetch = (async (url: string, init?: { method?: string }) => {
+      if (init?.method === 'HEAD') {
+        return {
+          headers: {
+            get: () => '4',
+          },
+        } as unknown as Response;
+      }
+
+      if (!readGates.has(url)) {
+        readGates.set(
+          url,
+          new Promise<void>((resolve) => {
+            releaseReads.set(url, resolve);
+          })
+        );
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        body: new ReadableStream<Uint8Array>({
+          async pull(controller) {
+            controller.enqueue(Uint8Array.from([1]));
+            await readGates.get(url);
+            controller.close();
+          },
+        }),
+      } as Response;
+    }) as typeof fetch;
+
+    const abortController = new AbortController();
+    const loadPromise = runtime.loadModelFromUrls([
+      'https://example.com/model-00001-of-00002.gguf',
+      'https://example.com/model-00002-of-00002.gguf',
+    ], undefined, abortController.signal);
+
+    await Promise.resolve();
+    await Promise.resolve();
+    abortController.abort();
+    releaseReads.get('https://example.com/model-00001-of-00002.gguf')?.();
+    releaseReads.get('https://example.com/model-00002-of-00002.gguf')?.();
+
+    await assert.rejects(
+      loadPromise,
+      (error: unknown) => error instanceof Error && error.name === 'AbortError'
+    );
+    assert.equal(module.mountCalls.length, 0);
   } finally {
     globalThis.fetch = originalFetch;
     (FileSystemStorage as unknown as { isSupported: () => boolean }).isSupported = originalIsSupported;
