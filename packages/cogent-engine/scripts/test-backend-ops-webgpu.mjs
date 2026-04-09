@@ -27,6 +27,7 @@ const enableJspi = true;
 const emscriptenEnvironment = 'web,worker';
 const enableAggressiveOpt = !isDebugBuild && readBooleanEnv('CE_TEST_BACKEND_OPS_AGGRESSIVE_OPT', true);
 const pauseBeforeRun = readBooleanEnv('CE_WEBGPU_PAUSE_BEFORE_RUN', false);
+const maximumMemory = process.env.CE_WASM_MAXIMUM_MEMORY?.trim() || '4096MB';
 
 let activeChildProcess = null;
 let signalHandlersInstalled = false;
@@ -41,6 +42,36 @@ function readBooleanEnv(name, fallback = false) {
   }
 
   return value === '1' || value === 'true' || value === 'yes' || value === 'on';
+}
+
+function parseMemorySizeBytes(rawValue) {
+  const normalizedValue = rawValue.trim().toUpperCase();
+  const match = normalizedValue.match(/^(\d+)(B|KB|MB|GB|TB)?$/);
+  if (!match) {
+    throw new Error(`Invalid memory size "${rawValue}". Use values like 4096MB or 4GB.`);
+  }
+
+  const amount = Number.parseInt(match[1], 10);
+  const unit = match[2] ?? 'B';
+  const multiplierByUnit = {
+    B: 1,
+    KB: 1024,
+    MB: 1024 ** 2,
+    GB: 1024 ** 3,
+    TB: 1024 ** 4,
+  };
+
+  return amount * multiplierByUnit[unit];
+}
+
+function validateMaximumMemorySetting(rawValue) {
+  const maximumAllowedBytes = 4 * 1024 ** 3;
+  const configuredBytes = parseMemorySizeBytes(rawValue);
+  if (configuredBytes > maximumAllowedBytes) {
+    throw new Error(
+      `CE_WASM_MAXIMUM_MEMORY=${rawValue} exceeds the wasm32 limit of 4GB. Use 4096MB for test-backend-ops WebGPU builds.`
+    );
+  }
 }
 
 function printHelp() {
@@ -400,6 +431,11 @@ function removeInvalidBuildDirectory(expectedGenerator) {
     reasons.push(`LLAMA_WASM_MEM64=${cachedMemory64}`);
   }
 
+  const cachedMaximumMemory = getCacheEntry(cacheText, 'CE_WASM_MAXIMUM_MEMORY');
+  if (cachedMaximumMemory && cachedMaximumMemory !== maximumMemory) {
+    reasons.push(`CE_WASM_MAXIMUM_MEMORY=${cachedMaximumMemory}`);
+  }
+
   if (expectedGenerator && cachedGenerator && cachedGenerator !== expectedGenerator) {
     reasons.push(`generator=${cachedGenerator}`);
   }
@@ -733,6 +769,7 @@ async function runBrowserHarness(forwardedArgs) {
 
 const forwardedArgs = parseForwardedArgs(Bun.argv.slice(2));
 const buildConfig = resolveBuildConfiguration();
+validateMaximumMemorySetting(maximumMemory);
 
 removeInvalidBuildDirectory(buildConfig.generator);
 activeMakeProgramDir = buildConfig.makeProgram ? path.dirname(buildConfig.makeProgram) : null;
@@ -754,6 +791,7 @@ const cmakeConfigureArgs = [
   `-DCE_WASM_AGGRESSIVE_OPT=${enableAggressiveOpt ? 'ON' : 'OFF'}`,
   `-DCE_WASM_USE_JSPI=${enableJspi ? 'ON' : 'OFF'}`,
   `-DCE_WASM_ENVIRONMENT=${emscriptenEnvironment}`,
+  `-DCE_WASM_MAXIMUM_MEMORY=${maximumMemory}`,
   '-DGGML_WEBGPU=ON',
   '-DLLAMA_OPENSSL=OFF',
   '-DCE_WASM_MEM64=OFF',
@@ -771,7 +809,7 @@ if (emdawnwebgpuDir) {
 }
 
 console.log(
-  `${buildLabel} build_type=${buildType} generator=${buildConfig.generator}` +
+  `${buildLabel} build_type=${buildType} generator=${buildConfig.generator} max_memory=${maximumMemory}` +
     (buildConfig.makeProgram ? ` make_program=${buildConfig.makeProgram}` : '')
 );
 

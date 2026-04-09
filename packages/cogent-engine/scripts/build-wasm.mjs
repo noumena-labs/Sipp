@@ -20,7 +20,8 @@ const enableJspi = true;
 const emscriptenEnvironment = 'web,worker';
 const enableMemory64 = readBooleanEnv('CE_WASM_MEM64', true);
 const initialMemory = process.env.CE_WASM_INITIAL_MEMORY?.trim();
-const maximumMemory = process.env.CE_WASM_MAXIMUM_MEMORY?.trim();
+const maximumMemory =
+  process.env.CE_WASM_MAXIMUM_MEMORY?.trim() || (enableMemory64 ? '16384MB' : '4096MB');
 const stackSize = process.env.CE_WASM_STACK_SIZE?.trim();
 
 let activeChildProcess = null;
@@ -43,6 +44,41 @@ function readBooleanEnv(name, fallback = false) {
   }
 
   throw new Error(`Invalid boolean value for ${name}: ${process.env[name]}`);
+}
+
+function parseMemorySizeBytes(rawValue) {
+  const normalizedValue = rawValue.trim().toUpperCase();
+  const match = normalizedValue.match(/^(\d+)(B|KB|MB|GB|TB)?$/);
+  if (!match) {
+    throw new Error(`Invalid memory size "${rawValue}". Use values like 4096MB or 4GB.`);
+  }
+
+  const amount = Number.parseInt(match[1], 10);
+  const unit = match[2] ?? 'B';
+  const multiplierByUnit = {
+    B: 1,
+    KB: 1024,
+    MB: 1024 ** 2,
+    GB: 1024 ** 3,
+    TB: 1024 ** 4,
+  };
+
+  return amount * multiplierByUnit[unit];
+}
+
+function validateMaximumMemorySetting(rawValue) {
+  if (enableMemory64) {
+    return;
+  }
+
+  const maximumAllowedBytes = 4 * 1024 ** 3;
+  const configuredBytes = parseMemorySizeBytes(rawValue);
+  if (configuredBytes > maximumAllowedBytes) {
+    throw new Error(
+      `CE_WASM_MAXIMUM_MEMORY=${rawValue} exceeds the wasm32 limit of 4GB. ` +
+        'Use 4096MB or enable CE_WASM_MEM64.'
+    );
+  }
 }
 
 function normalizeHostPath(inputPath) {
@@ -361,6 +397,11 @@ function removeInvalidBuildDirectory(expectedGenerator) {
     reasons.push(`LLAMA_WASM_MEM64=${cachedMemory64}`);
   }
 
+  const cachedMaximumMemory = getCacheEntry(cacheText, 'CE_WASM_MAXIMUM_MEMORY');
+  if (cachedMaximumMemory && cachedMaximumMemory !== maximumMemory) {
+    reasons.push(`CE_WASM_MAXIMUM_MEMORY=${cachedMaximumMemory}`);
+  }
+
   if (expectedGenerator && cachedGenerator && cachedGenerator !== expectedGenerator) {
     reasons.push(`generator=${cachedGenerator}`);
   }
@@ -504,6 +545,7 @@ async function copyWasmArtifacts() {
 }
 
 const buildConfig = resolveBuildConfiguration();
+validateMaximumMemorySetting(maximumMemory);
 removeInvalidBuildDirectory(buildConfig.generator);
 
 activeMakeProgramDir = buildConfig.makeProgram ? path.dirname(buildConfig.makeProgram) : null;
