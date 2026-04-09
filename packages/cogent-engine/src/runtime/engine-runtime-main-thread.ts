@@ -52,6 +52,7 @@ interface EngineModule {
 }
 
 type MountableModelFile = Blob & { name?: string };
+type HeaderLookup = { get(name: string): string | null };
 
 const MAX_PROMPT_TOKENS = 2048;
 const DEFAULT_MAX_MODEL_BYTES = 8 * 1024 * 1024 * 1024;
@@ -99,6 +100,16 @@ function asErrorMessage(error: unknown): string {
     return error.message;
   }
   return String(error);
+}
+
+function hashCacheIdentity(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let hash = 0x811c9dc5;
+  for (const byte of bytes) {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
 export class MainThreadEngineRuntime implements EngineRuntime {
@@ -528,6 +539,24 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return copiedBlob;
   }
 
+  private buildPersistentCacheKey(
+    rawUrl: string,
+    fileName: string,
+    headers?: HeaderLookup | null
+  ): string {
+    const canonicalUrl = this.parseConfiguredUrl(rawUrl, 'modelUrl').toString();
+    const etag = headers?.get('ETag')?.trim() ?? '';
+    const lastModified = headers?.get('Last-Modified')?.trim() ?? '';
+    const contentLength = headers?.get('Content-Length')?.trim() ?? '';
+    const identity = [
+      canonicalUrl,
+      etag,
+      lastModified,
+      contentLength,
+    ].join('\n');
+    return `${hashCacheIdentity(identity)}-${normalizeModelFileName(fileName)}`;
+  }
+
   private removeAllLoadedModelFiles(module: EngineModule): void {
     for (const p of this.loadedModelPaths) {
       // Don't try to unlink files inside a WORKERFS mount point.
@@ -880,16 +909,26 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     let bytesLoadedSoFar = 0;
 
     // Step 1: Resolve metadata for all shards
-    const shardMeta: { url: string; fileName: string; contentLength: number }[] = [];
+    const shardMeta: { url: string; fileName: string; contentLength: number; cacheKey: string }[] = [];
     for (const url of urls) {
       const parsed = this.parseConfiguredUrl(url, 'modelUrl');
       const fileName = normalizeModelFileName(parsed.pathname.split('/').pop() || 'model.gguf');
       try {
         const headResp = await fetch(url, { method: 'HEAD', signal });
         const cl = Number.parseInt(headResp.headers.get('Content-Length') ?? '0', 10) || 0;
-        shardMeta.push({ url, fileName, contentLength: cl });
+        shardMeta.push({
+          url,
+          fileName,
+          contentLength: cl,
+          cacheKey: this.buildPersistentCacheKey(url, fileName, headResp.headers),
+        });
       } catch {
-        shardMeta.push({ url, fileName, contentLength: 0 });
+        shardMeta.push({
+          url,
+          fileName,
+          contentLength: 0,
+          cacheKey: this.buildPersistentCacheKey(url, fileName),
+        });
       }
     }
 
@@ -901,7 +940,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         if (signal?.aborted) throw createAbortError();
 
         // Check OPFS cache
-        const cachedFile = opfsSupported ? await this.opfs.getFile(shard.fileName) : null;
+        const cachedFile = opfsSupported ? await this.opfs.getFile(shard.cacheKey) : null;
         if (cachedFile && (shard.contentLength === 0 || cachedFile.size === shard.contentLength)) {
           shardBlobs.push(this.createMountableModelFile(cachedFile, shard.fileName));
           bytesLoadedSoFar += cachedFile.size;
@@ -921,7 +960,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
         if (opfsSupported) {
           finalShardBlob = this.createMountableModelFile(await this.opfs.streamToDisk(
-            shard.fileName,
+            shard.cacheKey,
             response.body,
             (written) => {
               if (onProgress && totalBytes > 0) {
@@ -951,7 +990,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         fileName: shardMeta[0].fileName,
         byteLength: shardBlobs.reduce((sum, b) => sum + b.size, 0),
         persistentCacheEnabled: opfsSupported,
-        persistentCacheKey: urls.join(','),
+        persistentCacheKey: shardMeta.map((shard) => shard.cacheKey).join(','),
         persistentCacheHit: false,
         persistentCacheStored: opfsSupported,
       });

@@ -587,6 +587,7 @@ test('MainThreadEngineRuntime does not treat same-basename OPFS cache entries as
   const originalFetch = globalThis.fetch;
   const originalIsSupported = FileSystemStorage.isSupported;
   let getRequestCount = 0;
+  let requestedCacheKey: string | null = null;
 
   try {
     (FileSystemStorage as unknown as { isSupported: () => boolean }).isSupported = () => true;
@@ -599,8 +600,12 @@ test('MainThreadEngineRuntime does not treat same-basename OPFS cache entries as
         ) => Promise<File>;
       };
     };
-    runtimeState.opfs.getFile = async (fileName: string) =>
-      new File([Uint8Array.from([9, 9, 9, 9])], fileName);
+    runtimeState.opfs.getFile = async (fileName: string) => {
+      requestedCacheKey = fileName;
+      return fileName === 'model.gguf'
+        ? new File([Uint8Array.from([9, 9, 9, 9])], fileName)
+        : null;
+    };
     runtimeState.opfs.streamToDisk = async (fileName: string) =>
       new File([Uint8Array.from([1, 2, 3, 4])], fileName);
 
@@ -628,6 +633,7 @@ test('MainThreadEngineRuntime does not treat same-basename OPFS cache entries as
 
     await runtime.loadModelFromUrls(['https://fresh.example.com/model.gguf']);
 
+    assert.notEqual(requestedCacheKey, 'model.gguf');
     assert.equal(getRequestCount, 1);
   } finally {
     globalThis.fetch = originalFetch;
