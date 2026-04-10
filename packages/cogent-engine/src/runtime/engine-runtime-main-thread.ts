@@ -44,6 +44,9 @@ import {
   createDeferred,
 } from './runtime-shared.js';
 
+const SCHEDULER_PUMP_SYNC_BURST_LIMIT = 128;
+const SCHEDULER_PUMP_IDLE_STREAK_BEFORE_YIELD = 4;
+
 export class MainThreadEngineRuntime implements EngineRuntime {
   private module: EngineModule | null = null;
   private initPromise: Promise<void> | null = null;
@@ -343,6 +346,26 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     });
   }
 
+  private shouldYieldForResponsiveness(
+    burstTickCount: number
+  ): boolean {
+    return (
+      typeof window !== 'undefined' &&
+      typeof document !== 'undefined' &&
+      burstTickCount >= SCHEDULER_PUMP_SYNC_BURST_LIMIT
+    );
+  }
+
+  private shouldYieldSchedulerPump(
+    burstTickCount: number,
+    waitingStreak: number
+  ): boolean {
+    if (this.shouldYieldForResponsiveness(burstTickCount)) {
+      return true;
+    }
+    return waitingStreak >= SCHEDULER_PUMP_IDLE_STREAK_BEFORE_YIELD;
+  }
+
   private cleanupConsumedCompletionState(requestId: GenerateRequestId): void {
     const completion = this.queuedRequestCompletions.get(requestId);
     if (
@@ -475,6 +498,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
   private async runSchedulerPump(generation: number): Promise<void> {
     const module = this.getReadyEngineModule();
+    let burstTickCount = 0;
+    let waitingStreak = 0;
     while (generation === this.schedulerPumpGeneration) {
       this.settleCompletedQueuedRequests(module);
       if (this.activeQueuedRequestRuns.size === 0) {
@@ -525,7 +550,17 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         );
         return;
       }
+
+      burstTickCount += 1;
       if (stepResult === REQUEST_STEP_RESULT_WAITING && !settledAfterTick) {
+        waitingStreak += 1;
+      } else {
+        waitingStreak = 0;
+      }
+
+      if (this.shouldYieldSchedulerPump(burstTickCount, waitingStreak)) {
+        burstTickCount = 0;
+        waitingStreak = 0;
         await this.waitForNextSchedulerStep();
       }
     }

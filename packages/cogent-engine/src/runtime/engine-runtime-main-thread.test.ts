@@ -6,6 +6,7 @@ import { MainThreadEngineRuntime } from './engine-runtime-main-thread.js';
 
 const REQUEST_STEP_RESULT_PROGRESSED = 1;
 const REQUEST_STEP_RESULT_TERMINAL = 2;
+const REQUEST_STEP_RESULT_WAITING = 0;
 const COMPLETED_REQUEST_STATUS_PENDING = 0;
 const COMPLETED_REQUEST_STATUS_COMPLETED = 1;
 const COMPLETED_REQUEST_STATUS_CANCELLED = 2;
@@ -477,6 +478,137 @@ class MockConcurrentObservabilityModule {
   }
 }
 
+class MockWaitingBurstModule {
+  public readonly FS = {
+    analyzePath: () => ({ exists: false }),
+    mkdir: () => {},
+    writeFile: () => {},
+    unlink: () => {},
+    open: () => ({ fd: 0, position: 0 }),
+    write: () => 0,
+    close: () => {},
+    mount: () => {},
+    unmount: () => {},
+  };
+  public readonly WORKERFS = {};
+  public readonly HEAP32: Int32Array;
+  public readonly HEAPF64: Float64Array;
+  public runStepCallCount = 0;
+
+  private readonly heapU8: Uint8Array;
+  private nextHeapPtr = 1024;
+  private readonly requestId = 61;
+  private completedResponseAvailable = false;
+
+  constructor(private readonly waitingCountBeforeTerminal: number) {
+    const memory = new ArrayBuffer(16 * 1024);
+    this.heapU8 = new Uint8Array(memory);
+    this.HEAP32 = new Int32Array(memory);
+    this.HEAPF64 = new Float64Array(memory);
+  }
+
+  public _free(_ptr: number): void {}
+
+  public _malloc(size: number): number {
+    const alignedSize = (size + 7) & ~7;
+    const ptr = this.nextHeapPtr;
+    this.nextHeapPtr += alignedSize;
+    return ptr;
+  }
+
+  public addFunction(): number {
+    return 0;
+  }
+
+  public removeFunction(): void {}
+
+  public UTF8ToString(ptr: number, maxBytesToRead?: number): string {
+    const bytes: number[] = [];
+    const maxBytes = maxBytesToRead ?? this.heapU8.length - ptr;
+    for (let index = 0; index < maxBytes; index += 1) {
+      const byte = this.heapU8[ptr + index];
+      if (byte === 0) {
+        break;
+      }
+      bytes.push(byte);
+    }
+    return new TextDecoder().decode(new Uint8Array(bytes));
+  }
+
+  public ccall(
+    ident: string,
+    _returnType: string | null,
+    _argTypes: string[],
+    args: unknown[],
+    opts?: { async?: boolean }
+  ): Promise<number> | number {
+    const result = this.handleCall(ident, args);
+    return opts?.async ? Promise.resolve(result) : result;
+  }
+
+  private handleCall(ident: string, args: unknown[]): number {
+    const requestId = Number(args[0]);
+    switch (ident) {
+      case 'CE_EnqueuePrompt':
+        return this.requestId;
+      case 'CE_ResetRuntimeObservability':
+      case 'CE_Close':
+      case 'CE_Init':
+        return 0;
+      case 'CE_RunSchedulerTick':
+        this.runStepCallCount += 1;
+        if (this.runStepCallCount <= this.waitingCountBeforeTerminal) {
+          return REQUEST_STEP_RESULT_WAITING;
+        }
+        this.completedResponseAvailable = true;
+        return REQUEST_STEP_RESULT_TERMINAL;
+      case 'CE_GetCompletedRequestStatus':
+        if (requestId !== this.requestId || !this.completedResponseAvailable) {
+          return COMPLETED_REQUEST_STATUS_PENDING;
+        }
+        return COMPLETED_REQUEST_STATUS_COMPLETED;
+      case 'CE_GetCompletedRequestOutputSize':
+        return 'wait-burst-output'.length;
+      case 'CE_CopyCompletedRequestOutput':
+        this.writeCString('wait-burst-output', args[1] as number);
+        return 'wait-burst-output'.length;
+      case 'CE_GetCompletedRequestErrorSize':
+        return 0;
+      case 'CE_CopyCompletedRequestError':
+        return 0;
+      case 'CE_GetCompletedRequestRuntimeObservability':
+        this.writeRuntimeObservability(args[1] as number);
+        return 0;
+      case 'CE_GetRuntimeObservability':
+        this.writeRuntimeObservability(args[0] as number);
+        return 0;
+      case 'CE_ConsumeCompletedRequest':
+        this.completedResponseAvailable = false;
+        return 1;
+      default:
+        throw new Error(`Unexpected ccall: ${ident}`);
+    }
+  }
+
+  private writeCString(value: string, ptr: number): void {
+    const bytes = new TextEncoder().encode(value);
+    this.heapU8.set(bytes, ptr);
+    this.heapU8[ptr + bytes.length] = 0;
+  }
+
+  private writeRuntimeObservability(ptr: number): void {
+    const observability = createMockRuntimeObservability(1, 4);
+    const f64Offset = ptr >> 3;
+    const i32Offset = (ptr + 9 * 8) >> 2;
+    for (let index = 0; index < observability.doubles.length; index += 1) {
+      this.HEAPF64[f64Offset + index] = observability.doubles[index];
+    }
+    for (let index = 0; index < observability.ints.length; index += 1) {
+      this.HEAP32[i32Offset + index] = observability.ints[index];
+    }
+  }
+}
+
 function attachReadyModule(
   runtime: MainThreadEngineRuntime,
   module: MockMainThreadModule
@@ -777,6 +909,32 @@ test('MainThreadEngineRuntime lets a late runQueuedRequest() waiter observe an a
   assert.ok(stepCallsBeforeWaiter > 0);
   assert.equal(module.runStepCallCount, stepCallsBeforeWaiter);
   assert.equal(response.outputText, 'tok1tok2');
+});
+
+test('MainThreadEngineRuntime does not yield to setTimeout during short WAITING bursts', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockWaitingBurstModule(3);
+  attachReadyModule(runtime, module as unknown as MockMainThreadModule);
+
+  const originalSetTimeout = globalThis.setTimeout;
+  let zeroDelayTimeoutCount = 0;
+  globalThis.setTimeout = (((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+    if (timeout === 0) {
+      zeroDelayTimeoutCount += 1;
+    }
+    return originalSetTimeout(handler, timeout as number, ...(args as []));
+  }) as typeof setTimeout);
+
+  try {
+    const requestId = await runtime.queuePrompt('ctx-wait-burst', 'prompt', 16);
+    const response = await runtime.runQueuedRequest(requestId);
+
+    assert.equal(response.outputText, 'wait-burst-output');
+    assert.equal(module.runStepCallCount, 4);
+    assert.equal(zeroDelayTimeoutCount, 0);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+  }
 });
 
 test('MainThreadEngineRuntime shares one completed response across concurrent runQueuedRequest() waiters', async () => {
