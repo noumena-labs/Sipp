@@ -36,6 +36,13 @@ bool RequestQueue::Push(GenerateRequest request) {
   request.emitted_token_count = 0;
   request.accumulated_itl_ms = 0.0;
   request.tail_itl_ms = 0.0;
+  request.attributed_total_ms = 0.0;
+  request.attributed_prompt_eval_ms = 0.0;
+  request.attributed_decode_eval_ms = 0.0;
+  request.attributed_sample_ms = 0.0;
+  request.attributed_prompt_eval_tokens = 0;
+  request.attributed_decode_eval_count = 0;
+  request.attributed_sample_count = 0;
   request.decode_first_tick_count = 0;
   request.chunked_prefill_tick_count = 0;
   request.mixed_workload_tick_count = 0;
@@ -140,6 +147,15 @@ const GenerateResponse *
 RequestQueue::PeekCompletedResponse(GenerateRequestId request_id) const {
   auto response_it = completed_responses_.find(request_id);
   return response_it == completed_responses_.end() ? nullptr : &response_it->second;
+}
+
+std::vector<GenerateRequestId> RequestQueue::CompletedResponseIds() const {
+  std::vector<GenerateRequestId> request_ids;
+  request_ids.reserve(completed_responses_.size());
+  for (const auto &[request_id, _] : completed_responses_) {
+    request_ids.push_back(request_id);
+  }
+  return request_ids;
 }
 
 bool RequestQueue::ConsumeCompletedResponse(GenerateRequestId request_id) {

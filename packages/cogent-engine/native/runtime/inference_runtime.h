@@ -86,6 +86,7 @@ private:
   void UpdateSchedulerObservabilityLocked(const SharedBatchPlan &plan,
                                           const SchedulerTickBudget &budget,
                                           int32_t effective_prefill_chunk_size);
+  void CommitNewCompletedResponsesObservabilityLocked();
   void CommitCompletedObservabilityLocked(GenerateRequestId request_id,
                                           const GenerateResponse &response);
   llama_context *CreateContext() const;

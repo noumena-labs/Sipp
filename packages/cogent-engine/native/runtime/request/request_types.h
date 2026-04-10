@@ -52,6 +52,13 @@ struct GenerateRequest {
   int32_t emitted_token_count = 0;
   double accumulated_itl_ms = 0.0;
   double tail_itl_ms = 0.0;
+  double attributed_total_ms = 0.0;
+  double attributed_prompt_eval_ms = 0.0;
+  double attributed_decode_eval_ms = 0.0;
+  double attributed_sample_ms = 0.0;
+  int32_t attributed_prompt_eval_tokens = 0;
+  int32_t attributed_decode_eval_count = 0;
+  int32_t attributed_sample_count = 0;
   int32_t decode_first_tick_count = 0;
   int32_t chunked_prefill_tick_count = 0;
   int32_t mixed_workload_tick_count = 0;

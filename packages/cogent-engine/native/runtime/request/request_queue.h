@@ -13,6 +13,7 @@
 #include <list>
 #include <optional>
 #include <unordered_map>
+#include <vector>
 
 #include "runtime/request/request_types.h"
 #include "runtime/request/response_types.h"
@@ -30,6 +31,7 @@ public:
   bool Cancel(GenerateRequestId request_id, std::string error_message);
   void MarkCompleted(GenerateResponse response);
   const GenerateResponse *PeekCompletedResponse(GenerateRequestId request_id) const;
+  std::vector<GenerateRequestId> CompletedResponseIds() const;
   bool ConsumeCompletedResponse(GenerateRequestId request_id);
   std::size_t CompletedResponseCount() const;
   void Clear();

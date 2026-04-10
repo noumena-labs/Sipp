@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <chrono>
 #include <functional>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "runtime/llama/llama_utils.h"
@@ -45,6 +46,13 @@ normalize_config(noumena::cogentengine::InferenceRuntimeConfig config) {
     config.enable_runtime_observability = 1;
   }
   return config;
+}
+
+double proportional_share(double total, int32_t part, int32_t whole) {
+  if (total <= 0.0 || part <= 0 || whole <= 0) {
+    return 0.0;
+  }
+  return total * (static_cast<double>(part) / static_cast<double>(whole));
 }
 
 } // namespace
@@ -635,6 +643,115 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   const auto tick_end = std::chrono::steady_clock::now();
   if (config_.enable_runtime_observability > 0) {
     const auto ctx_perf = llama_perf_context(shared_context_);
+    const double tick_total_ms =
+        std::chrono::duration<double, std::milli>(tick_end - tick_start)
+            .count();
+
+    std::vector<GenerateRequest *> attributed_requests;
+    attributed_requests.reserve(plan.contributions.size());
+    std::unordered_set<GenerateRequest *> attributed_request_set;
+    attributed_request_set.reserve(plan.contributions.size());
+    std::unordered_map<GenerateRequest *, int32_t> prefill_token_counts;
+    std::unordered_map<GenerateRequest *, int32_t> decode_token_counts;
+    std::unordered_map<GenerateRequest *, int32_t> sample_counts;
+    std::unordered_map<GenerateRequest *, double> sample_ms_by_request;
+    prefill_token_counts.reserve(plan.contributions.size());
+    decode_token_counts.reserve(plan.contributions.size());
+    sample_counts.reserve(logits_contributions.size());
+    sample_ms_by_request.reserve(logits_contributions.size());
+
+    const auto ensure_attributed_request = [&](GenerateRequest *request) {
+      if (request == nullptr ||
+          !attributed_request_set.insert(request).second) {
+        return;
+      }
+      attributed_requests.push_back(request);
+    };
+
+    for (const BatchContribution &contribution : plan.contributions) {
+      if (contribution.slot == nullptr || contribution.slot->request == nullptr) {
+        continue;
+      }
+      GenerateRequest *request = contribution.slot->request;
+      ensure_attributed_request(request);
+      if (contribution.kind == BatchContributionKind::Prefill) {
+        prefill_token_counts[request]++;
+      } else if (contribution.kind == BatchContributionKind::Decode) {
+        decode_token_counts[request]++;
+      }
+    }
+
+    for (const PendingLogitsContribution &pending_logits :
+         logits_contributions) {
+      const BatchContribution *contribution = pending_logits.contribution;
+      if (contribution == nullptr || contribution->slot == nullptr ||
+          contribution->slot->request == nullptr) {
+        continue;
+      }
+
+      GenerateRequest *request = contribution->slot->request;
+      ensure_attributed_request(request);
+      sample_counts[request]++;
+      if (contribution->slot->sampler != nullptr) {
+        sample_ms_by_request[request] =
+            llama_perf_sampler(contribution->slot->sampler).t_sample_ms;
+      }
+    }
+
+    double tick_sample_ms = 0.0;
+    for (const auto &[_, request_sample_ms] : sample_ms_by_request) {
+      tick_sample_ms += request_sample_ms;
+    }
+
+    const int32_t total_prefill_tokens = plan.prefill_token_count;
+    const int32_t total_decode_tokens = plan.decode_token_count;
+    const int32_t total_sample_count =
+        static_cast<int32_t>(logits_contributions.size());
+    const int32_t total_work_units =
+        total_prefill_tokens + total_decode_tokens + total_sample_count;
+    const double tick_overhead_ms =
+        std::max(0.0, tick_total_ms - ctx_perf.t_p_eval_ms -
+                          ctx_perf.t_eval_ms - tick_sample_ms);
+
+    for (GenerateRequest *request : attributed_requests) {
+      if (request == nullptr) {
+        continue;
+      }
+
+      const int32_t request_prefill_tokens =
+          prefill_token_counts.contains(request) ? prefill_token_counts[request]
+                                                 : 0;
+      const int32_t request_decode_tokens =
+          decode_token_counts.contains(request) ? decode_token_counts[request]
+                                                : 0;
+      const int32_t request_sample_count =
+          sample_counts.contains(request) ? sample_counts[request] : 0;
+      const double request_sample_ms =
+          sample_ms_by_request.contains(request) ? sample_ms_by_request[request]
+                                                 : 0.0;
+      const int32_t request_work_units =
+          request_prefill_tokens + request_decode_tokens + request_sample_count;
+
+      const double prompt_share_ms =
+          proportional_share(ctx_perf.t_p_eval_ms, request_prefill_tokens,
+                             total_prefill_tokens);
+      const double decode_share_ms =
+          proportional_share(ctx_perf.t_eval_ms, request_decode_tokens,
+                             total_decode_tokens);
+      const double overhead_share_ms =
+          proportional_share(tick_overhead_ms, request_work_units,
+                             total_work_units);
+
+      request->attributed_prompt_eval_ms += prompt_share_ms;
+      request->attributed_decode_eval_ms += decode_share_ms;
+      request->attributed_sample_ms += request_sample_ms;
+      request->attributed_total_ms +=
+          prompt_share_ms + decode_share_ms + request_sample_ms +
+          overhead_share_ms;
+      request->attributed_prompt_eval_tokens += request_prefill_tokens;
+      request->attributed_decode_eval_count += request_decode_tokens;
+      request->attributed_sample_count += request_sample_count;
+    }
 
     if (!has_last_runtime_observability_) {
       last_runtime_observability_ = {};
@@ -647,15 +764,13 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       has_last_runtime_observability_ = true;
     }
 
-    last_runtime_observability_.total_ms +=
-        std::chrono::duration<double, std::milli>(tick_end - tick_start).count();
+    last_runtime_observability_.total_ms += tick_total_ms;
     last_runtime_observability_.prompt_eval_ms += ctx_perf.t_p_eval_ms;
     last_runtime_observability_.decode_eval_ms += ctx_perf.t_eval_ms;
     last_runtime_observability_.prompt_eval_tokens += plan.prefill_token_count;
     last_runtime_observability_.decode_eval_count += plan.decode_token_count;
     last_runtime_observability_.sample_count +=
         static_cast<int32_t>(logits_contributions.size());
-    double tick_sample_ms = 0.0;
     last_runtime_observability_.output_token_count = 0;
     last_runtime_observability_.lcp_reuse_tokens = 0;
     last_runtime_observability_.prefix_cache_restore_tokens = 0;
@@ -663,7 +778,6 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     last_runtime_observability_.prefix_cache_store_count = 0;
     for (SlotState *slot : live_runnable_slots) {
       if (slot != nullptr && slot->sampler != nullptr) {
-        tick_sample_ms += llama_perf_sampler(slot->sampler).t_sample_ms;
         last_runtime_observability_.output_token_count +=
             static_cast<int32_t>(slot->generated_tokens.size());
       }
@@ -796,6 +910,29 @@ void InferenceRuntime::CommitCompletedObservabilityLocked(
   scheduler_observability_.max_tail_itl_ms =
       std::max(scheduler_observability_.max_tail_itl_ms,
                response.runtime_observability.tail_itl_ms);
+}
+
+void InferenceRuntime::CommitNewCompletedResponsesObservabilityLocked() {
+  std::vector<GenerateRequestId> completed_request_ids =
+      request_queue_.CompletedResponseIds();
+  if (completed_request_ids.empty()) {
+    return;
+  }
+
+  std::sort(completed_request_ids.begin(), completed_request_ids.end());
+  for (GenerateRequestId request_id : completed_request_ids) {
+    if (request_id == 0 ||
+        committed_observability_request_ids_.contains(request_id)) {
+      continue;
+    }
+
+    const GenerateResponse *completed =
+        request_queue_.PeekCompletedResponse(request_id);
+    if (completed == nullptr) {
+      continue;
+    }
+    CommitCompletedObservabilityLocked(request_id, *completed);
+  }
 }
 
 InferenceRuntime::InferenceRuntime(std::string model_path,
@@ -1032,6 +1169,7 @@ RequestStepResult InferenceRuntime::RunSchedulerTick() {
   const bool tick_executed = RunPolicyBatchTickLocked();
 
   slot_scheduler_.FinalizeCompletedSlots(request_queue_, session_store_);
+  CommitNewCompletedResponsesObservabilityLocked();
   if (request_queue_.CompletedResponseCount() > completed_before) {
     return RequestStepResult::Progressed;
   }
@@ -1049,6 +1187,7 @@ RequestStepResult InferenceRuntime::RunSchedulerTick() {
           "Shared batch tick could not make progress.";
       active_slot->phase = SlotPhase::Failed;
       slot_scheduler_.FinalizeCompletedSlots(request_queue_, session_store_);
+      CommitNewCompletedResponsesObservabilityLocked();
       if (request_queue_.CompletedResponseCount() > completed_before) {
         return RequestStepResult::Progressed;
       }
@@ -1097,6 +1236,7 @@ RequestStepResult InferenceRuntime::RunRequestStep(GenerateRequestId request_id)
   // Ensure terminal slots (Completed/Failed) are always moved to the request_queue,
   // especially if RunPolicyBatchTickLocked failed early due to slot setup errors.
   slot_scheduler_.FinalizeCompletedSlots(request_queue_, session_store_);
+  CommitNewCompletedResponsesObservabilityLocked();
 
   if (!tick_executed) {
     // If the request we are tracking just finished (possibly failed), return Terminal.
@@ -1126,6 +1266,7 @@ RequestStepResult InferenceRuntime::RunRequestStep(GenerateRequestId request_id)
 
     // Finalize again in case the cleanup logic above marked a slot as Failed.
     slot_scheduler_.FinalizeCompletedSlots(request_queue_, session_store_);
+    CommitNewCompletedResponsesObservabilityLocked();
   }
 
   if (const GenerateResponse *completed =

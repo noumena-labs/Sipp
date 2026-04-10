@@ -288,9 +288,19 @@ void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue,
       response.runtime_observability.e2e_ms =
           duration_ms(request.enqueued_at, request.completed_at);
       response.runtime_observability.total_ms =
-          response.runtime_observability.e2e_ms;
+          request.attributed_total_ms > 0.0
+              ? request.attributed_total_ms
+              : response.runtime_observability.e2e_ms;
+      response.runtime_observability.prompt_eval_ms =
+          request.attributed_prompt_eval_ms;
+      response.runtime_observability.decode_eval_ms =
+          request.attributed_decode_eval_ms;
+      response.runtime_observability.sample_ms =
+          request.attributed_sample_ms;
       response.runtime_observability.input_token_count =
           static_cast<int32_t>(request.prompt_tokens.size());
+      response.runtime_observability.prompt_eval_tokens =
+          request.attributed_prompt_eval_tokens;
       response.runtime_observability.output_token_count =
           slot.generated_tokens.empty()
               ? request.emitted_token_count
@@ -298,9 +308,13 @@ void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue,
       response.runtime_observability.batch_participation_count =
           static_cast<int32_t>(slot.batch_participation_count);
       response.runtime_observability.decode_eval_count =
-          static_cast<int32_t>(slot.decode_step_count);
+          request.attributed_decode_eval_count > 0
+              ? request.attributed_decode_eval_count
+              : static_cast<int32_t>(slot.decode_step_count);
       response.runtime_observability.sample_count =
-          response.runtime_observability.output_token_count;
+          request.attributed_sample_count > 0
+              ? request.attributed_sample_count
+              : response.runtime_observability.output_token_count;
       response.runtime_observability.decode_first_tick_count =
           request.decode_first_tick_count;
       response.runtime_observability.chunked_prefill_tick_count =
