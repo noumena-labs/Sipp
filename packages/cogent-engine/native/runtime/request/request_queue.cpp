@@ -154,6 +154,10 @@ bool RequestQueue::ConsumeCompletedResponse(GenerateRequestId request_id) {
   return true;
 }
 
+std::size_t RequestQueue::CompletedResponseCount() const {
+  return completed_responses_.size();
+}
+
 void RequestQueue::Clear() {
   requests_.clear();
   pending_request_ids_.clear();

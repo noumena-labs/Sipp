@@ -9,7 +9,7 @@ import type {
   FlashAttentionMode,
   InferenceInitConfig,
   PromptFormatMode,
-  RuntimeObservabilityMetrics,
+  RequestObservabilityMetrics,
   SchedulerPolicyMode,
 } from '../src/types.js';
 
@@ -32,8 +32,8 @@ import type {
 type BenchmarkPresetName = 'default' | 'single';
 type PromptBucket = 'short' | 'medium' | 'long' | 'custom';
 type OutputBucket = 'short' | 'medium' | 'long';
-type CompletionDriverMode = 'caller-driven-runQueuedRequest';
-type SchedulerProgressApi = 'CE_RunRequestStep(requestId)';
+type CompletionDriverMode = 'runtime-owned-scheduler-pump';
+type SchedulerProgressApi = 'CE_RunSchedulerTick()';
 
 interface BenchmarkOptions {
   modelPath: string;
@@ -78,7 +78,7 @@ interface BenchmarkRun {
   outputTokenCount: number | null;
   outputLength: number;
   outputPreview: string;
-  runtimeObservability: RuntimeObservabilityMetrics | null;
+  requestObservability: RequestObservabilityMetrics | null;
 }
 
 interface ServingBenchmarkSummary {
@@ -208,7 +208,8 @@ interface QueueCancelChurnResult {
   smokePrompt: {
     wallMs: number | null;
     outputLength: number;
-    runtimeObservabilityAvailable: boolean;
+    requestObservabilityAvailable: boolean;
+    runtimeAggregateObservabilityAvailable: boolean;
     failed: boolean;
     errorMessage: string | null;
   };
@@ -223,7 +224,7 @@ interface CompletionDriverDiagnostics {
 }
 
 interface BenchmarkReport {
-  schemaVersion: 'cogent.benchmark.bun.v9';
+  schemaVersion: 'cogent.benchmark.bun.v11';
   generatedAt: string;
   benchmark: {
     script: string;
@@ -621,11 +622,11 @@ function summarizeOptional(values: Array<number | null>): BenchmarkSummary | nul
 }
 
 function averageRuntimeObservabilityMetric(
-  observabilityRuns: Array<RuntimeObservabilityMetrics | null>,
-  metric: (metrics: RuntimeObservabilityMetrics) => number
+  observabilityRuns: Array<RequestObservabilityMetrics | null>,
+  metric: (metrics: RequestObservabilityMetrics) => number
 ): number | null {
   const values = observabilityRuns
-    .filter((metrics): metrics is RuntimeObservabilityMetrics => metrics !== null)
+    .filter((metrics): metrics is RequestObservabilityMetrics => metrics !== null)
     .map(metric)
     .filter((value) => Number.isFinite(value) && value >= 0);
 
@@ -638,11 +639,11 @@ function averageRuntimeObservabilityMetric(
 }
 
 function summarizeThroughput(
-  observabilityRuns: Array<RuntimeObservabilityMetrics | null>,
-  metric: (metrics: RuntimeObservabilityMetrics) => number | null
+  observabilityRuns: Array<RequestObservabilityMetrics | null>,
+  metric: (metrics: RequestObservabilityMetrics) => number | null
 ): number | null {
   const values = observabilityRuns
-    .filter((metrics): metrics is RuntimeObservabilityMetrics => metrics !== null)
+    .filter((metrics): metrics is RequestObservabilityMetrics => metrics !== null)
     .map(metric)
     .filter((value): value is number => value != null && value > 0);
 
@@ -654,7 +655,7 @@ function summarizeThroughput(
   return round(total / values.length);
 }
 
-function promptTokensPerSecond(metrics: RuntimeObservabilityMetrics): number | null {
+function promptTokensPerSecond(metrics: RequestObservabilityMetrics): number | null {
   // Effective prefill throughput based on llama.cpp perf counters, not end-to-end wall time.
   if (metrics.promptEvalMs <= 0 || metrics.promptEvalTokens <= 0) {
     return null;
@@ -662,7 +663,7 @@ function promptTokensPerSecond(metrics: RuntimeObservabilityMetrics): number | n
   return (metrics.promptEvalTokens * 1000) / metrics.promptEvalMs;
 }
 
-function decodeTokensPerSecond(metrics: RuntimeObservabilityMetrics): number | null {
+function decodeTokensPerSecond(metrics: RequestObservabilityMetrics): number | null {
   // Effective decode throughput based on llama.cpp perf counters, not end-to-end wall time.
   if (metrics.decodeEvalMs <= 0 || metrics.outputTokenCount <= 0) {
     return null;
@@ -1020,7 +1021,7 @@ function installCompletionDriverDiagnostics(engine: CogentEngine): {
       argTypes?: string[],
       args?: unknown[]
     ) => {
-      if (ident === 'CE_RunRequestStep') {
+      if (ident === 'CE_RunSchedulerTick') {
         schedulerStepCallCount += 1;
       }
       return originalCallNumberAsync(module, ident, argTypes, args);
@@ -1032,8 +1033,8 @@ function installCompletionDriverDiagnostics(engine: CogentEngine): {
 
   return {
     snapshot: () => ({
-      completionDriver: 'caller-driven-runQueuedRequest',
-      schedulerProgressApi: 'CE_RunRequestStep(requestId)',
+      completionDriver: 'runtime-owned-scheduler-pump',
+      schedulerProgressApi: 'CE_RunSchedulerTick()',
       runQueuedRequestCallCount,
       schedulerStepCallCount,
     }),
@@ -1071,7 +1072,7 @@ async function runPromptBenchmark(
     let ttftMs: number | null = null;
     const tokenEventTimes: number[] = [];
 
-    const output = await engine.submitPrompt(contextKey, prompt, {
+    const requestId = await engine.queuePrompt(contextKey, prompt, {
       nTokens: tokens,
       promptFormat,
       onToken: () => {
@@ -1082,12 +1083,14 @@ async function runPromptBenchmark(
         }
       },
     });
+    const response = await engine.runQueuedRequest(requestId);
 
     const wallMs = round(nowMs() - start);
-    const runtimeObservability = engine.getRuntimeObservability();
-    if (output.length === 0 && runtimeObservability == null) {
+    const requestObservability =
+      response.requestObservability ?? response.runtimeObservability ?? null;
+    if (response.outputText.length === 0 && requestObservability == null) {
       throw new Error(
-        `Prompt run "${label}" returned empty output and no runtime observability payload. The runtime likely failed to create or execute the request context.`
+        `Prompt run "${label}" returned empty output and no request observability payload. The runtime likely failed to create or execute the request context.`
       );
     }
 
@@ -1095,7 +1098,7 @@ async function runPromptBenchmark(
     // observed stream callback count so the benchmark still works if perf payloads
     // are unavailable or partially missing.
     const outputTokenCount =
-      runtimeObservability?.outputTokenCount ?? tokenEventTimes.length;
+      requestObservability?.outputTokenCount ?? tokenEventTimes.length;
     const itlMsValues: number[] = [];
     for (let tokenIndex = 1; tokenIndex < tokenEventTimes.length; tokenIndex++) {
       itlMsValues.push(round(tokenEventTimes[tokenIndex] - tokenEventTimes[tokenIndex - 1]));
@@ -1114,12 +1117,12 @@ async function runPromptBenchmark(
       ttftMs,
       tpotMs,
       itlMsValues,
-      inputTokenCount: runtimeObservability?.inputTokenCount ?? null,
-      promptEvalTokenCount: runtimeObservability?.promptEvalTokens ?? null,
+      inputTokenCount: requestObservability?.inputTokenCount ?? null,
+      promptEvalTokenCount: requestObservability?.promptEvalTokens ?? null,
       outputTokenCount,
-      outputLength: output.length,
-      outputPreview: output.slice(0, OUTPUT_PREVIEW_LIMIT).replace(/\s+/g, ' ').trim(),
-      runtimeObservability,
+      outputLength: response.outputText.length,
+      outputPreview: response.outputText.slice(0, OUTPUT_PREVIEW_LIMIT).replace(/\s+/g, ' ').trim(),
+      requestObservability,
     });
   }
 
@@ -1190,15 +1193,16 @@ async function runQueuedMixedLoadPair(
     tokenEventTimes: number[],
     response: Awaited<ReturnType<CogentEngine['runQueuedRequest']>>
   ): BenchmarkRun => {
-    const runtimeObservability = response.runtimeObservability ?? null;
+    const requestObservability =
+      response.requestObservability ?? response.runtimeObservability ?? null;
     const outputTokenCount =
-      runtimeObservability?.outputTokenCount ?? tokenEventTimes.length;
+      requestObservability?.outputTokenCount ?? tokenEventTimes.length;
     const itlMsValues: number[] = [];
     for (let tokenIndex = 1; tokenIndex < tokenEventTimes.length; tokenIndex += 1) {
       itlMsValues.push(round(tokenEventTimes[tokenIndex] - tokenEventTimes[tokenIndex - 1]));
     }
 
-    const effectiveTtftMs = ttftMs ?? runtimeObservability?.ttftMs ?? null;
+    const effectiveTtftMs = ttftMs ?? requestObservability?.ttftMs ?? null;
     const tpotMs =
       effectiveTtftMs != null && outputTokenCount > 1
         ? round((wallMs - effectiveTtftMs) / (outputTokenCount - 1))
@@ -1211,15 +1215,15 @@ async function runQueuedMixedLoadPair(
       ttftMs: effectiveTtftMs,
       tpotMs,
       itlMsValues,
-      inputTokenCount: runtimeObservability?.inputTokenCount ?? null,
-      promptEvalTokenCount: runtimeObservability?.promptEvalTokens ?? null,
+      inputTokenCount: requestObservability?.inputTokenCount ?? null,
+      promptEvalTokenCount: requestObservability?.promptEvalTokens ?? null,
       outputTokenCount,
       outputLength: response.outputText.length,
       outputPreview: response.outputText
         .slice(0, OUTPUT_PREVIEW_LIMIT)
         .replace(/\s+/g, ' ')
         .trim(),
-      runtimeObservability,
+      requestObservability,
     };
   };
 
@@ -1337,19 +1341,24 @@ async function runQueueCancelChurn(
 
   let smokeWallMs: number | null = null;
   let smokeOutputLength = 0;
-  let smokeRuntimeObservabilityAvailable = false;
+  let smokeRequestObservabilityAvailable = false;
+  let smokeRuntimeAggregateObservabilityAvailable = false;
   let smokeErrorMessage: string | null = null;
   let smokeFailed = false;
 
   const smokeStart = nowMs();
   try {
-    const output = await engine.submitPrompt('cancel-churn-smoke', SHORT_PROMPT, {
+    const requestId = await engine.queuePrompt('cancel-churn-smoke', SHORT_PROMPT, {
       nTokens: tokenLimit,
       promptFormat,
     });
+    const response = await engine.runQueuedRequest(requestId);
     smokeWallMs = round(nowMs() - smokeStart);
-    smokeOutputLength = output.length;
-    smokeRuntimeObservabilityAvailable = engine.getRuntimeObservability() != null;
+    smokeOutputLength = response.outputText.length;
+    smokeRequestObservabilityAvailable =
+      (response.requestObservability ?? response.runtimeObservability ?? null) != null;
+    smokeRuntimeAggregateObservabilityAvailable =
+      engine.getRuntimeAggregateObservability() != null;
   } catch (error) {
     smokeWallMs = round(nowMs() - smokeStart);
     smokeFailed = true;
@@ -1364,8 +1373,11 @@ async function runQueueCancelChurn(
   };
 
   const warnings: string[] = [];
-  if (!smokeRuntimeObservabilityAvailable) {
-    warnings.push('queueCancelChurn: smoke-after-churn prompt returned no runtime observability payload.');
+  if (!smokeRequestObservabilityAvailable) {
+    warnings.push('queueCancelChurn: smoke-after-churn prompt returned no request observability payload.');
+  }
+  if (!smokeRuntimeAggregateObservabilityAvailable) {
+    warnings.push('queueCancelChurn: smoke-after-churn prompt returned no runtime aggregate observability snapshot.');
   }
   if (smokeFailed) {
     warnings.push(
@@ -1389,7 +1401,8 @@ async function runQueueCancelChurn(
     smokePrompt: {
       wallMs: smokeWallMs,
       outputLength: smokeOutputLength,
-      runtimeObservabilityAvailable: smokeRuntimeObservabilityAvailable,
+      requestObservabilityAvailable: smokeRequestObservabilityAvailable,
+      runtimeAggregateObservabilityAvailable: smokeRuntimeAggregateObservabilityAvailable,
       failed: smokeFailed,
       errorMessage: smokeErrorMessage,
     },
@@ -1400,11 +1413,11 @@ async function runQueueCancelChurn(
 function collectGroupWarnings(group: BenchmarkGroupResult, label: string): string[] {
   const warnings: string[] = [];
   const missingObservabilityCount = group.runs.filter(
-    (run) => run.runtimeObservability == null
+    (run) => run.requestObservability == null
   ).length;
   if (missingObservabilityCount > 0) {
     warnings.push(
-      `${label}: ${missingObservabilityCount}/${group.runs.length} runs were missing runtime observability payloads.`
+      `${label}: ${missingObservabilityCount}/${group.runs.length} runs were missing request observability payloads.`
     );
   }
 
@@ -1450,7 +1463,7 @@ function summarizeGroup(
   runs: BenchmarkRun[],
   benchmarkDurationMs: number
 ): BenchmarkGroupSummary {
-  const observabilityRuns = runs.map((run) => run.runtimeObservability);
+  const observabilityRuns = runs.map((run) => run.requestObservability);
   const totalInputTokens = runs.reduce((acc, run) => acc + (run.inputTokenCount ?? 0), 0);
   const totalGeneratedTokens = runs.reduce((acc, run) => acc + (run.outputTokenCount ?? 0), 0);
   const totalItls = runs.flatMap((run) => run.itlMsValues);
@@ -1557,7 +1570,7 @@ function summarizeGroup(
     },
     derived: {
       avgHostOverheadMs: averageBenchmarkRunMetric(runs, (run) => {
-        const runtimeTotalMs = run.runtimeObservability?.totalMs ?? null;
+        const runtimeTotalMs = run.requestObservability?.totalMs ?? null;
         if (runtimeTotalMs == null || runtimeTotalMs < 0) {
           return null;
         }
@@ -1824,7 +1837,7 @@ function printQueueCancelChurnResult(result: QueueCancelChurnResult): void {
     `  memory delta rss=${formatBytes(result.memory.delta.rssBytes)} heap=${formatBytes(result.memory.delta.heapUsedBytes)} external=${formatBytes(result.memory.delta.externalBytes)}`
   );
   console.log(
-    `  smoke prompt failed=${result.smokePrompt.failed} output_length=${result.smokePrompt.outputLength} runtime_observability=${result.smokePrompt.runtimeObservabilityAvailable}`
+    `  smoke prompt failed=${result.smokePrompt.failed} output_length=${result.smokePrompt.outputLength} request_observability=${result.smokePrompt.requestObservabilityAvailable} runtime_aggregate_observability=${result.smokePrompt.runtimeAggregateObservabilityAvailable}`
   );
   if (result.smokePrompt.errorMessage != null) {
     console.log(`  smoke error  ${result.smokePrompt.errorMessage}`);
@@ -2031,7 +2044,7 @@ async function main(): Promise<void> {
   printCompletionDriverDiagnostics(progressDriver);
 
   const report: BenchmarkReport = {
-    schemaVersion: 'cogent.benchmark.bun.v9',
+    schemaVersion: 'cogent.benchmark.bun.v11',
     generatedAt: new Date().toISOString(),
     benchmark: {
       script: 'packages/cogent-engine/benchmarks/benchmark-bun.ts',
@@ -2090,7 +2103,7 @@ async function main(): Promise<void> {
       'Logical input tokens and effective prompt-eval tokens are reported separately so context reuse does not distort headline throughput metrics.',
       'Serial scenario groups remain concurrency=1 baselines; the mixedLoad section is the Phase 4 concurrency=2 fairness check.',
       'The Emscripten module and MEMFS model are loaded once per benchmark run; each scenario reinitializes only the native inference engine.',
-      'This report records the current caller-driven completion model explicitly: runQueuedRequest() is still the host-side progress driver in Phase 4 P4-A.',
+      'This report records the runtime-owned completion model explicitly: the shared scheduler pump advances queued work, and runQueuedRequest() is waiter-only.',
       ...(maybeNavigator?.gpu == null
         ? [
             'Bun on this machine does not expose navigator.gpu, so the benchmark forces nGpuLayers=0 and runs CPU/Wasm only.',

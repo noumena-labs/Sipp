@@ -414,8 +414,7 @@ async function handleRunQueuedRequest(
     flushBufferedTokens(message.requestId);
     return {
       response,
-      runtimeObservability:
-        response.runtimeObservability ?? runtime.getRuntimeObservability(),
+      runtimeAggregateObservability: runtime.getRuntimeAggregateObservability(),
       transportObservability: cloneTransportObservability(),
     };
   } finally {

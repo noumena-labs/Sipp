@@ -49,6 +49,7 @@ class MockMainThreadModule {
   private nextRequestId = 7;
   private queuedCallbackPtr = 0;
   private runStepCount = 0;
+  private completedResponseAvailable = false;
 
   constructor(private readonly scenario: ScenarioKind) {
     const memory = new ArrayBuffer(16 * 1024);
@@ -116,11 +117,13 @@ class MockMainThreadModule {
         return this.nextRequestId++;
       case 'CE_ResetRuntimeObservability':
         return 0;
+      case 'CE_RunSchedulerTick':
       case 'CE_RunRequestStep':
         this.runStepCallCount += 1;
         return this.runRequestStep();
       case 'CE_CancelQueuedRequest':
         this.cancelCallCount += 1;
+        this.completedResponseAvailable = true;
         return 1;
       case 'CE_Close':
         this.closeCallCount += 1;
@@ -128,7 +131,9 @@ class MockMainThreadModule {
       case 'CE_Init':
         return this.initResult;
       case 'CE_GetCompletedRequestStatus':
-        return this.completedStatus;
+        return this.completedResponseAvailable
+          ? this.completedStatus
+          : COMPLETED_REQUEST_STATUS_PENDING;
       case 'CE_GetCompletedRequestOutputSize':
         return this.completedOutputText.length;
       case 'CE_CopyCompletedRequestOutput':
@@ -141,6 +146,7 @@ class MockMainThreadModule {
         return this.completedErrorText.length;
       case 'CE_ConsumeCompletedRequest':
         this.consumeCallCount += 1;
+        this.completedResponseAvailable = false;
         return 1;
       case 'CE_GetRuntimeObservability':
         this.writeRuntimeObservability(args[0] as number);
@@ -174,6 +180,7 @@ class MockMainThreadModule {
 
       emitToken('tok2');
       this.runStepCount += 1;
+      this.completedResponseAvailable = true;
       this.insideNativeStep = false;
       return REQUEST_STEP_RESULT_TERMINAL;
     }
@@ -186,6 +193,7 @@ class MockMainThreadModule {
     }
 
     this.runStepCount += 1;
+    this.completedResponseAvailable = true;
     this.insideNativeStep = false;
     return REQUEST_STEP_RESULT_TERMINAL;
   }
@@ -275,6 +283,9 @@ class MockConcurrentObservabilityModule {
     number,
     { promise: Promise<number>; resolve: (value: number) => void }
   >();
+  private schedulerTickDeferred:
+    | { promise: Promise<number>; resolve: (value: number) => void }
+    | null = null;
   private readonly completed = new Map<
     number,
     {
@@ -347,6 +358,11 @@ class MockConcurrentObservabilityModule {
       );
     }
     this.ensureStepDeferred(requestId).resolve(REQUEST_STEP_RESULT_TERMINAL);
+    if (this.schedulerTickDeferred != null) {
+      const deferred = this.schedulerTickDeferred;
+      this.schedulerTickDeferred = null;
+      deferred.resolve(REQUEST_STEP_RESULT_PROGRESSED);
+    }
   }
 
   private handleCall(ident: string, args: unknown[]): Promise<number> | number {
@@ -359,6 +375,11 @@ class MockConcurrentObservabilityModule {
         return 0;
       case 'CE_Init':
         return 0;
+      case 'CE_RunSchedulerTick':
+        if (this.completed.size > 0) {
+          return REQUEST_STEP_RESULT_PROGRESSED;
+        }
+        return this.ensureSchedulerTickDeferred().promise;
       case 'CE_RunRequestStep':
         return this.ensureStepDeferred(requestId).promise;
       case 'CE_GetCompletedRequestStatus':
@@ -414,6 +435,21 @@ class MockConcurrentObservabilityModule {
     const deferred = { promise, resolve };
     this.stepDeferreds.set(requestId, deferred);
     return deferred;
+  }
+
+  private ensureSchedulerTickDeferred(): {
+    promise: Promise<number>;
+    resolve: (value: number) => void;
+  } {
+    if (this.schedulerTickDeferred != null) {
+      return this.schedulerTickDeferred;
+    }
+    let resolve!: (value: number) => void;
+    const promise = new Promise<number>((promiseResolve) => {
+      resolve = promiseResolve;
+    });
+    this.schedulerTickDeferred = { promise, resolve };
+    return this.schedulerTickDeferred;
   }
 
   private writeCString(value: string, ptr: number): void {
@@ -504,10 +540,13 @@ test('MainThreadEngineRuntime flushes queued tokens outside native steps and rea
   assert.equal(requestId, 7);
   assert.deepEqual(callbackTokens, ['tok1', 'tok2']);
   assert.deepEqual(callbackPhases, [false, false]);
+  assert.equal(runtime.getRuntimeAggregateObservability()?.outputTokenCount, 2);
   assert.equal(response.completed, true);
   assert.equal(response.failed, false);
   assert.equal(response.cancelled, false);
   assert.equal(response.outputText, 'tok1tok2');
+  assert.equal(response.requestObservability?.promptEvalMs, 3.5);
+  assert.equal(response.requestObservability?.outputTokenCount, 2);
   assert.equal(response.runtimeObservability?.promptEvalMs, 3.5);
   assert.equal(response.runtimeObservability?.outputTokenCount, 2);
   assert.equal(module.consumeCallCount, 1);
@@ -1051,22 +1090,47 @@ test('MainThreadEngineRuntime does not treat same-basename OPFS cache entries as
   try {
     (FileSystemStorage as unknown as { isSupported: () => boolean }).isSupported = () => true;
     const runtimeState = runtime as unknown as {
-      opfs: {
-        getFile: (fileName: string) => Promise<File | null>;
-        streamToDisk: (
-          fileName: string,
+      browserModelCache: {
+        buildEntryKey: (identity: {
+          canonicalUrl: string;
+          fileName: string;
+          etag: string;
+          lastModified: string;
+          contentLength: number;
+        }) => string;
+        get: (identity: {
+          canonicalUrl: string;
+          fileName: string;
+          etag: string;
+          lastModified: string;
+          contentLength: number;
+        }) => Promise<{ key: string; file: File } | null>;
+        storeStream: (
+          identity: {
+            canonicalUrl: string;
+            fileName: string;
+            etag: string;
+            lastModified: string;
+            contentLength: number;
+          },
           stream: ReadableStream<Uint8Array>
-        ) => Promise<File>;
+        ) => Promise<{ key: string; file: File }>;
       };
     };
-    runtimeState.opfs.getFile = async (fileName: string) => {
-      requestedCacheKey = fileName;
-      return fileName === 'model.gguf'
-        ? new File([Uint8Array.from([9, 9, 9, 9])], fileName)
+    runtimeState.browserModelCache.get = async (identity) => {
+      const key = runtimeState.browserModelCache.buildEntryKey(identity);
+      requestedCacheKey = key;
+      return key === 'model.gguf'
+        ? { key, file: new File([Uint8Array.from([9, 9, 9, 9])], key) }
         : null;
     };
-    runtimeState.opfs.streamToDisk = async (fileName: string) =>
-      new File([Uint8Array.from([1, 2, 3, 4])], fileName);
+    runtimeState.browserModelCache.storeStream = async (identity) => {
+      const key = runtimeState.browserModelCache.buildEntryKey(identity);
+      return {
+        key,
+        file: new File([Uint8Array.from([1, 2, 3, 4])], key),
+      };
+    };
 
     globalThis.fetch = (async (_url: string, init?: { method?: string }) => {
       if (init?.method === 'HEAD') {

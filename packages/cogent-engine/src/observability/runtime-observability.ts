@@ -1,4 +1,4 @@
-export interface RuntimeObservabilityMetrics {
+interface ObservabilityMetricsBase {
   totalMs: number;
   promptEvalMs: number;
   decodeEvalMs: number;
@@ -22,3 +22,9 @@ export interface RuntimeObservabilityMetrics {
   prefixCacheHitCount: number;
   prefixCacheStoreCount: number;
 }
+
+export interface RequestObservabilityMetrics extends ObservabilityMetricsBase {}
+
+export interface RuntimeAggregateObservabilityMetrics extends ObservabilityMetricsBase {}
+
+export type RuntimeObservabilityMetrics = RuntimeAggregateObservabilityMetrics;

@@ -42,6 +42,66 @@ export class FileSystemStorage {
     }
   }
 
+  public async readText(fileName: string): Promise<string | null> {
+    const file = await this.getFile(fileName);
+    if (file == null) {
+      return null;
+    }
+    return await file.text();
+  }
+
+  public async writeText(fileName: string, contents: string): Promise<void> {
+    const root = await this.ensureRoot();
+    const handle = await root.getFileHandle(fileName, { create: true });
+    const writable = await handle.createWritable();
+    try {
+      await writable.write(contents);
+      await writable.close();
+    } catch (error) {
+      try {
+        await writable.abort();
+      } catch {}
+      try {
+        await root.removeEntry(fileName);
+      } catch {}
+      throw error;
+    }
+  }
+
+  public async estimate(): Promise<{
+    usageBytes: number | null;
+    quotaBytes: number | null;
+  }> {
+    if (
+      typeof navigator === 'undefined' ||
+      typeof navigator.storage?.estimate !== 'function'
+    ) {
+      return {
+        usageBytes: null,
+        quotaBytes: null,
+      };
+    }
+
+    try {
+      const estimate = await navigator.storage.estimate();
+      return {
+        usageBytes:
+          typeof estimate.usage === 'number' && Number.isFinite(estimate.usage)
+            ? estimate.usage
+            : null,
+        quotaBytes:
+          typeof estimate.quota === 'number' && Number.isFinite(estimate.quota)
+            ? estimate.quota
+            : null,
+      };
+    } catch {
+      return {
+        usageBytes: null,
+        quotaBytes: null,
+      };
+    }
+  }
+
   /**
    * Stream a web response body directly to OPFS.
    */

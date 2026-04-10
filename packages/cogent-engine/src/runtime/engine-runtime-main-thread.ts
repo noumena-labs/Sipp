@@ -1,4 +1,9 @@
 import { FileSystemStorage } from '../storage/file-system-storage.js';
+import {
+  BrowserModelCache,
+  BrowserModelCacheIdentity,
+  BrowserModelCacheLookupResult,
+} from '../storage/browser-model-cache.js';
 import { CogentConfig, EngineModuleOptions } from '../cogent-config.js';
 import { normalizeInitConfig } from '../core/init-config.js';
 import { formatPromptText } from '../core/prompt-format.js';
@@ -11,6 +16,8 @@ import {
   InferenceInitConfig,
   ModelLoadInfo,
   PromptOptions,
+  RequestObservabilityMetrics,
+  RuntimeAggregateObservabilityMetrics,
   RuntimeObservabilityMetrics,
   TransportObservability,
 } from '../types.js';
@@ -44,8 +51,19 @@ type UrlShardMetadata = {
   url: string;
   fileName: string;
   contentLength: number;
-  cacheKey: string;
+  cacheIdentity: BrowserModelCacheIdentity;
 };
+
+interface QueuedRequestCompletionState {
+  promise: Promise<GenerateResponse>;
+  resolve: (value: GenerateResponse) => void;
+  reject: (error: unknown) => void;
+  settled: boolean;
+  consumed: boolean;
+  waiterCount: number;
+  callbackError: unknown;
+  cancelRequested: boolean;
+}
 
 const MAX_PROMPT_TOKENS = 2048;
 const DEFAULT_MAX_MODEL_BYTES = 8 * 1024 * 1024 * 1024;
@@ -107,16 +125,6 @@ function asErrorMessage(error: unknown): string {
   return String(error);
 }
 
-function hashCacheIdentity(value: string): string {
-  const bytes = new TextEncoder().encode(value);
-  let hash = 0x811c9dc5;
-  for (const byte of bytes) {
-    hash ^= byte;
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(16).padStart(8, '0');
-}
-
 function createLinkedAbortController(signal?: AbortSignal): {
   controller: AbortController;
   signal: AbortSignal;
@@ -153,6 +161,20 @@ function createLinkedAbortController(signal?: AbortSignal): {
   };
 }
 
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
 export class MainThreadEngineRuntime implements EngineRuntime {
   private module: EngineModule | null = null;
   private initPromise: Promise<void> | null = null;
@@ -160,6 +182,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private loadedModelPaths: string[] = [];
   private workerFsMountPath: string | null = null;
   private readonly opfs = new FileSystemStorage();
+  private readonly browserModelCache = new BrowserModelCache(this.opfs);
   private queuedPromptCallbacks = new Map<
     GenerateRequestId,
     ((token: string) => void) | undefined
@@ -167,7 +190,15 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private queuedPromptCallbackPtrs = new Map<GenerateRequestId, number | bigint>();
   private queuedPromptTokenBuffers = new Map<GenerateRequestId, string[]>();
   private queuedPromptCallbackErrors = new Map<GenerateRequestId, unknown>();
+  private queuedPromptSignals = new Map<GenerateRequestId, AbortSignal>();
+  private queuedPromptSignalAbortListeners = new Map<GenerateRequestId, () => void>();
   private activeQueuedRequestRuns = new Set<GenerateRequestId>();
+  private queuedRequestCompletions = new Map<
+    GenerateRequestId,
+    QueuedRequestCompletionState
+  >();
+  private schedulerPumpPromise: Promise<void> | null = null;
+  private schedulerPumpGeneration = 0;
   private lastModelLoadInfo: ModelLoadInfo | null = null;
   private runtimeObservabilityEnabled = false;
   private backendProfilingEnabled = false;
@@ -317,10 +348,17 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     if (callbackPtr != null) {
       module.removeFunction(callbackPtr);
     }
+    const signal = this.queuedPromptSignals.get(requestId);
+    const abortListener = this.queuedPromptSignalAbortListeners.get(requestId);
+    if (signal != null && abortListener != null) {
+      signal.removeEventListener('abort', abortListener);
+    }
     this.queuedPromptCallbacks.delete(requestId);
     this.queuedPromptTokenBuffers.delete(requestId);
     this.queuedPromptCallbackPtrs.delete(requestId);
     this.queuedPromptCallbackErrors.delete(requestId);
+    this.queuedPromptSignals.delete(requestId);
+    this.queuedPromptSignalAbortListeners.delete(requestId);
   }
 
   private consumeCompletedResponseIfPresent(
@@ -355,10 +393,34 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.queuedPromptTokenBuffers.clear();
     this.queuedPromptCallbackPtrs.clear();
     this.queuedPromptCallbackErrors.clear();
+    for (const [requestId] of this.queuedPromptSignals) {
+      this.releaseQueuedPromptCallback(module, requestId);
+    }
     this.activeQueuedRequestRuns.clear();
   }
 
-  private resetRuntimeLifecycleState(): void {
+  private rejectQueuedRequestCompletions(error: unknown): void {
+    this.schedulerPumpGeneration += 1;
+    this.schedulerPumpPromise = null;
+    for (const [requestId, completionState] of this.queuedRequestCompletions) {
+      if (completionState.settled) {
+        continue;
+      }
+      completionState.settled = true;
+      completionState.reject(error);
+      this.activeQueuedRequestRuns.delete(requestId);
+    }
+    this.queuedRequestCompletions.clear();
+  }
+
+  private resetRuntimeLifecycleState(error?: unknown): void {
+    if (error != null) {
+      this.rejectQueuedRequestCompletions(error);
+    } else {
+      this.schedulerPumpGeneration += 1;
+      this.schedulerPumpPromise = null;
+      this.queuedRequestCompletions.clear();
+    }
     this.activeQueuedRequestRuns.clear();
     this.runtimeObservabilityEnabled = false;
     this.backendProfilingEnabled = false;
@@ -413,6 +475,194 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return new Promise((resolve) => {
       setTimeout(resolve, 0);
     });
+  }
+
+  private cleanupConsumedCompletionState(requestId: GenerateRequestId): void {
+    const completion = this.queuedRequestCompletions.get(requestId);
+    if (
+      completion != null &&
+      completion.settled &&
+      completion.consumed &&
+      completion.waiterCount === 0
+    ) {
+      this.queuedRequestCompletions.delete(requestId);
+    }
+  }
+
+  private getOrCreateQueuedRequestCompletion(
+    requestId: GenerateRequestId
+  ): QueuedRequestCompletionState {
+    const existing = this.queuedRequestCompletions.get(requestId);
+    if (existing != null) {
+      return existing;
+    }
+
+    const deferred = createDeferred<GenerateResponse>();
+    const completionState: QueuedRequestCompletionState = {
+      promise: deferred.promise,
+      resolve: deferred.resolve,
+      reject: deferred.reject,
+      settled: false,
+      consumed: false,
+      waiterCount: 0,
+      callbackError: undefined,
+      cancelRequested: false,
+    };
+    void completionState.promise.catch(() => {});
+    this.queuedRequestCompletions.set(requestId, completionState);
+    this.activeQueuedRequestRuns.add(requestId);
+    this.ensureSchedulerPumpRunning();
+    return completionState;
+  }
+
+  private settleCompletedQueuedRequest(
+    module: EngineModule,
+    requestId: GenerateRequestId,
+    completionState: QueuedRequestCompletionState
+  ): boolean {
+    if (completionState.settled) {
+      return false;
+    }
+    const status = this.callNumber(module, 'CE_GetCompletedRequestStatus', ['number'], [requestId]);
+    if (status === COMPLETED_REQUEST_STATUS_PENDING) {
+      return false;
+    }
+
+    try {
+      const response = this.takeCompletedResponse(module, requestId);
+      completionState.callbackError = this.queuedPromptCallbackErrors.get(requestId);
+      completionState.settled = true;
+      completionState.resolve(response);
+    } catch (error) {
+      completionState.settled = true;
+      completionState.reject(error);
+    } finally {
+      this.releaseQueuedPromptCallback(module, requestId);
+      this.activeQueuedRequestRuns.delete(requestId);
+      this.cleanupConsumedCompletionState(requestId);
+    }
+    return true;
+  }
+
+  private settleCompletedQueuedRequests(module: EngineModule): boolean {
+    let settledAny = false;
+    for (const [requestId, completionState] of this.queuedRequestCompletions) {
+      settledAny =
+        this.settleCompletedQueuedRequest(module, requestId, completionState) || settledAny;
+    }
+    return settledAny;
+  }
+
+  private requestCancellationForCallbackErrors(): void {
+    for (const [requestId, completionState] of this.queuedRequestCompletions) {
+      if (completionState.settled || completionState.cancelRequested) {
+        continue;
+      }
+      const callbackError = this.queuedPromptCallbackErrors.get(requestId);
+      if (callbackError == null) {
+        continue;
+      }
+      completionState.callbackError = callbackError;
+      completionState.cancelRequested = true;
+      void this.cancelQueuedRequest(requestId);
+    }
+  }
+
+  private flushAllQueuedTokenPieces(): void {
+    for (const requestId of this.queuedPromptTokenBuffers.keys()) {
+      this.flushQueuedTokenPieces(requestId);
+    }
+  }
+
+  private rejectPendingQueuedRequests(
+    module: EngineModule,
+    error: unknown
+  ): void {
+    for (const [requestId, completionState] of this.queuedRequestCompletions) {
+      if (completionState.settled) {
+        continue;
+      }
+      completionState.settled = true;
+      completionState.reject(error);
+      this.releaseQueuedPromptCallback(module, requestId);
+      this.activeQueuedRequestRuns.delete(requestId);
+      this.cleanupConsumedCompletionState(requestId);
+    }
+  }
+
+  private ensureSchedulerPumpRunning(): void {
+    if (this.schedulerPumpPromise != null || this.queuedRequestCompletions.size === 0) {
+      return;
+    }
+    const generation = this.schedulerPumpGeneration;
+    const pumpPromise = this.runSchedulerPump(generation);
+    this.schedulerPumpPromise = pumpPromise;
+    void pumpPromise.finally(() => {
+      if (this.schedulerPumpPromise === pumpPromise) {
+        this.schedulerPumpPromise = null;
+        if (this.engineInitialized && this.activeQueuedRequestRuns.size > 0) {
+          this.ensureSchedulerPumpRunning();
+        }
+      }
+    });
+  }
+
+  private async runSchedulerPump(generation: number): Promise<void> {
+    const module = this.getReadyEngineModule();
+    while (generation === this.schedulerPumpGeneration) {
+      this.settleCompletedQueuedRequests(module);
+      if (this.activeQueuedRequestRuns.size === 0) {
+        return;
+      }
+
+      let stepResult: number;
+      try {
+        stepResult = await this.callNumberAsync(module, 'CE_RunSchedulerTick');
+      } catch (error) {
+        if (generation !== this.schedulerPumpGeneration || !this.engineInitialized || this.module == null) {
+          return;
+        }
+        this.rejectPendingQueuedRequests(module, error);
+        return;
+      }
+
+      if (generation !== this.schedulerPumpGeneration) {
+        return;
+      }
+
+      this.flushAllQueuedTokenPieces();
+      this.requestCancellationForCallbackErrors();
+      const settledAfterTick = this.settleCompletedQueuedRequests(module);
+      if (this.activeQueuedRequestRuns.size === 0) {
+        return;
+      }
+
+      if (stepResult === REQUEST_STEP_RESULT_INVALID) {
+        this.rejectPendingQueuedRequests(module, new Error('Queued scheduler tick became invalid.'));
+        return;
+      }
+      if (stepResult === REQUEST_STEP_RESULT_FATAL_NO_PROGRESS) {
+        this.rejectPendingQueuedRequests(
+          module,
+          new Error('Queued request execution failed to make progress.')
+        );
+        return;
+      }
+      if (
+        stepResult !== REQUEST_STEP_RESULT_WAITING &&
+        stepResult !== REQUEST_STEP_RESULT_PROGRESSED &&
+        stepResult !== REQUEST_STEP_RESULT_TERMINAL
+      ) {
+        this.rejectPendingQueuedRequests(
+          module,
+          new Error(`Queued scheduler returned unknown step result ${stepResult}.`)
+        );
+        return;
+      }
+      if (stepResult === REQUEST_STEP_RESULT_WAITING && !settledAfterTick) {
+        await this.waitForNextSchedulerStep();
+      }
+    }
   }
 
   private callNumber(
@@ -488,7 +738,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
   private readRuntimeObservabilityFromModule(
     module: EngineModule
-  ): RuntimeObservabilityMetrics | null {
+  ): RuntimeAggregateObservabilityMetrics | null {
     return this.readRuntimeObservabilityViaCall(
       module,
       'CE_GetRuntimeObservability',
@@ -550,7 +800,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private readCompletedRequestRuntimeObservability(
     module: EngineModule,
     requestId: GenerateRequestId
-  ): RuntimeObservabilityMetrics | null {
+  ): RequestObservabilityMetrics | null {
     return this.readRuntimeObservabilityViaCall(
       module,
       'CE_GetCompletedRequestRuntimeObservability',
@@ -634,6 +884,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       cancelled: status === COMPLETED_REQUEST_STATUS_CANCELLED,
       outputText,
       errorMessage: errorText.length > 0 ? errorText : null,
+      requestObservability: runtimeObservability,
       runtimeObservability,
     };
   }
@@ -664,24 +915,6 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       writable: false,
     });
     return copiedBlob;
-  }
-
-  private buildPersistentCacheKey(
-    rawUrl: string,
-    fileName: string,
-    headers?: HeaderLookup | null
-  ): string {
-    const canonicalUrl = this.parseConfiguredUrl(rawUrl, 'modelUrl').toString();
-    const etag = headers?.get('ETag')?.trim() ?? '';
-    const lastModified = headers?.get('Last-Modified')?.trim() ?? '';
-    const contentLength = headers?.get('Content-Length')?.trim() ?? '';
-    const identity = [
-      canonicalUrl,
-      etag,
-      lastModified,
-      contentLength,
-    ].join('\n');
-    return `${hashCacheIdentity(identity)}-${normalizeModelFileName(fileName)}`;
   }
 
   private removeAllLoadedModelFiles(module: EngineModule): void {
@@ -775,6 +1008,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       URL_METADATA_FETCH_CONCURRENCY,
       async (url) => {
         const parsed = this.parseConfiguredUrl(url, 'modelUrl');
+        const canonicalUrl = parsed.toString();
         const fileName = normalizeModelFileName(parsed.pathname.split('/').pop() || 'model.gguf');
         try {
           const headResp = await fetch(url, { method: 'HEAD', signal });
@@ -783,7 +1017,13 @@ export class MainThreadEngineRuntime implements EngineRuntime {
             url,
             fileName,
             contentLength: cl,
-            cacheKey: this.buildPersistentCacheKey(url, fileName, headResp.headers),
+            cacheIdentity: {
+              canonicalUrl,
+              fileName,
+              etag: headResp.headers.get('ETag')?.trim() ?? '',
+              lastModified: headResp.headers.get('Last-Modified')?.trim() ?? '',
+              contentLength: cl,
+            },
           };
         } catch (error) {
           if (isAbortError(error) || signal.aborted) {
@@ -793,7 +1033,13 @@ export class MainThreadEngineRuntime implements EngineRuntime {
             url,
             fileName,
             contentLength: 0,
-            cacheKey: this.buildPersistentCacheKey(url, fileName),
+            cacheIdentity: {
+              canonicalUrl,
+              fileName,
+              etag: '',
+              lastModified: '',
+              contentLength: 0,
+            },
           };
         }
       }
@@ -917,10 +1163,10 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       modelPath,
       fileName: destFileName,
       byteLength: modelFile.size,
-      persistentCacheEnabled: FileSystemStorage.isSupported(),
+      persistentCacheEnabled: opfsEnabled,
       persistentCacheKey: null,
       persistentCacheHit: false,
-      persistentCacheStored: FileSystemStorage.isSupported(),
+      persistentCacheStored: opfsEnabled,
     });
 
     return modelPath;
@@ -1138,7 +1384,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         }
       };
 
-      const shardBlobs = await this.mapWithConcurrency(
+      const shardResults = await this.mapWithConcurrency(
         shardMeta,
         downloadConcurrency,
         async (shard, index) => {
@@ -1146,10 +1392,17 @@ export class MainThreadEngineRuntime implements EngineRuntime {
             throw createAbortError('Model load aborted.');
           }
 
-          const cachedFile = opfsSupported ? await this.opfs.getFile(shard.cacheKey) : null;
-          if (cachedFile && (shard.contentLength === 0 || cachedFile.size === shard.contentLength)) {
-            reportShardProgress(index, cachedFile.size);
-            return this.createMountableModelFile(cachedFile, shard.fileName);
+          const cachedEntry: BrowserModelCacheLookupResult | null = opfsSupported
+            ? await this.browserModelCache.get(shard.cacheIdentity)
+            : null;
+          if (cachedEntry != null) {
+            reportShardProgress(index, cachedEntry.file.size);
+            return {
+              file: this.createMountableModelFile(cachedEntry.file, shard.fileName),
+              cacheKey: cachedEntry.key,
+              cacheHit: true,
+              cacheStored: false,
+            };
           }
 
           const response = await fetch(shard.url, { signal: loadSignal });
@@ -1161,53 +1414,74 @@ export class MainThreadEngineRuntime implements EngineRuntime {
             if (!response.body) {
               throw new Error(`Empty body for ${shard.fileName}`);
             }
-            const storedFile = await this.opfs.streamToDisk(
-              shard.cacheKey,
+            const storedEntry = await this.browserModelCache.storeStream(
+              shard.cacheIdentity,
               response.body,
               (written) => {
                 reportShardProgress(index, written);
               },
               loadSignal
             );
-            reportShardProgress(index, storedFile.size);
-            return this.createMountableModelFile(storedFile, shard.fileName);
+            reportShardProgress(index, storedEntry.file.size);
+            return {
+              file: this.createMountableModelFile(storedEntry.file, shard.fileName),
+              cacheKey: storedEntry.key,
+              cacheHit: false,
+              cacheStored: true,
+            };
           }
 
           if (!response.body) {
             const buffer = await response.arrayBuffer();
             reportShardProgress(index, buffer.byteLength);
-            return this.createMountableModelFile(new Blob([buffer]), shard.fileName);
+            return {
+              file: this.createMountableModelFile(new Blob([buffer]), shard.fileName),
+              cacheKey: null,
+              cacheHit: false,
+              cacheStored: false,
+            };
           }
 
-          return this.readStreamToMountableModelFile(
-            response.body,
-            shard.fileName,
-            (written) => {
-              reportShardProgress(index, written);
-            },
-            loadSignal
-          );
+          return {
+            file: await this.readStreamToMountableModelFile(
+              response.body,
+              shard.fileName,
+              (written) => {
+                reportShardProgress(index, written);
+              },
+              loadSignal
+            ),
+            cacheKey: null,
+            cacheHit: false,
+            cacheStored: false,
+          };
         },
         () => {
           linkedAbort.controller.abort();
         }
       );
 
+      const shardBlobs = shardResults.map((result) => result.file);
       const modelPath = await this.mountModelFiles(module, shardBlobs);
       if (onProgress != null && totalBytes === 0) {
         onProgress(100);
       }
 
+      const cacheKeys = shardResults
+        .map((result, index) => result.cacheKey ?? this.browserModelCache.buildEntryKey(shardMeta[index].cacheIdentity));
+      const allCacheHits = opfsSupported && shardResults.every((result) => result.cacheHit);
+      const anyCacheStored = opfsSupported && shardResults.some((result) => result.cacheStored);
+
       this.setLastModelLoadInfo({
         sourceKind: 'url',
-        reuseMode: 'network',
+        reuseMode: allCacheHits ? 'persistent-cache' : 'network',
         modelPath,
         fileName: shardMeta[0].fileName,
         byteLength: shardBlobs.reduce((sum, b) => sum + b.size, 0),
         persistentCacheEnabled: opfsSupported,
-        persistentCacheKey: shardMeta.map((shard) => shard.cacheKey).join(','),
-        persistentCacheHit: false,
-        persistentCacheStored: opfsSupported,
+        persistentCacheKey: opfsSupported ? cacheKeys.join(',') : null,
+        persistentCacheHit: allCacheHits,
+        persistentCacheStored: anyCacheStored,
       });
 
       return modelPath;
@@ -1232,6 +1506,9 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       throw new Error('modelPath must not be empty.');
     }
     if (this.engineInitialized) {
+      this.rejectQueuedRequestCompletions(
+        new Error('Engine runtime was reset during reinitialization.')
+      );
       this.releaseAllQueuedPromptCallbacks(module);
       module.ccall('CE_Close', null, [], []);
       this.engineInitialized = false;
@@ -1294,7 +1571,9 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     );
     if (result !== 0) {
       this.engineInitialized = false;
-      this.resetRuntimeLifecycleState();
+      this.resetRuntimeLifecycleState(
+        new Error(`Engine runtime failed to initialize. Code: ${result}`)
+      );
       throw new Error(`Failed to initialize engine. Code: ${result}`);
     }
     this.engineInitialized = true;
@@ -1310,6 +1589,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     if (!module) {
       return;
     }
+    this.rejectQueuedRequestCompletions(new Error('Engine runtime was closed.'));
     module.ccall('CE_Close', null, [], []);
 
     if (this.workerFsMountPath) {
@@ -1344,10 +1624,22 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       [requestId]
     );
     const cancelled = result instanceof Promise ? Boolean(await result) : Boolean(result);
-    if (cancelled && !this.activeQueuedRequestRuns.has(requestId)) {
+    if (!cancelled) {
+      return false;
+    }
+
+    const completionState = this.queuedRequestCompletions.get(requestId);
+    if (completionState != null) {
+      completionState.cancelRequested = true;
+      if (this.settleCompletedQueuedRequest(module, requestId, completionState)) {
+        return true;
+      }
+    }
+
+    if (!this.activeQueuedRequestRuns.has(requestId)) {
       this.releaseCancelledQueuedRequestState(module, requestId);
     }
-    return cancelled;
+    return true;
   }
 
   public async queuePrompt(
@@ -1405,6 +1697,17 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       this.queuedPromptCallbackPtrs.set(requestId, callbackPtr);
     }
 
+    if (signal != null) {
+      const abortListener = () => {
+        void this.cancelQueuedRequest(requestId);
+      };
+      this.queuedPromptSignals.set(requestId, signal);
+      this.queuedPromptSignalAbortListeners.set(requestId, abortListener);
+      signal.addEventListener('abort', abortListener, { once: true });
+    }
+
+    this.getOrCreateQueuedRequestCompletion(requestId);
+
     return requestId;
   }
 
@@ -1412,7 +1715,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     requestId: GenerateRequestId,
     options?: { signal?: AbortSignal }
   ): Promise<GenerateResponse> {
-    const module = this.getReadyEngineModule();
+    this.getReadyEngineModule();
     if (!Number.isInteger(requestId) || requestId <= 0) {
       throw new Error('requestId must be a positive integer.');
     }
@@ -1421,79 +1724,35 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       throw createAbortError('Prompt was aborted before execution started.');
     }
 
-    this.activeQueuedRequestRuns.add(requestId);
-    let abortRequested = false;
+    const completionState = this.getOrCreateQueuedRequestCompletion(requestId);
     const abortListener =
       options?.signal == null
         ? null
         : () => {
-          abortRequested = true;
-          void this.cancelQueuedRequest(requestId);
-        };
+            void this.cancelQueuedRequest(requestId);
+          };
     if (abortListener != null) {
       options?.signal?.addEventListener('abort', abortListener, { once: true });
     }
 
+    completionState.consumed = true;
+    completionState.waiterCount += 1;
     try {
-      const resetStatus = this.callNumber(module, 'CE_ResetRuntimeObservability');
-      if (resetStatus !== 0) {
-        throw new Error('Failed to reset runtime observability before queued execution.');
+      const response = await completionState.promise;
+      const callbackError = completionState.callbackError;
+      if (callbackError != null) {
+        throw callbackError;
       }
-
-      let callbackFailure: unknown = null;
-      while (true) {
-        const stepResult = await this.callNumberAsync(
-          module,
-          'CE_RunRequestStep',
-          ['number'],
-          [requestId]
-        );
-        this.flushQueuedTokenPieces(requestId);
-
-        const callbackError = this.queuedPromptCallbackErrors.get(requestId);
-        if (callbackError != null && callbackFailure == null) {
-          callbackFailure = callbackError;
-          await this.cancelQueuedRequest(requestId);
-        }
-
-        if (stepResult === REQUEST_STEP_RESULT_TERMINAL) {
-          break;
-        }
-        if (stepResult === REQUEST_STEP_RESULT_INVALID) {
-          throw new Error('Queued request became invalid during execution.');
-        }
-        if (stepResult === REQUEST_STEP_RESULT_FATAL_NO_PROGRESS) {
-          throw new Error('Queued request execution failed to make progress.');
-        }
-        if (stepResult === REQUEST_STEP_RESULT_WAITING) {
-          await this.waitForNextSchedulerStep();
-          continue;
-        }
-        if (stepResult !== REQUEST_STEP_RESULT_PROGRESSED) {
-          throw new Error(`Queued request returned unknown step result ${stepResult}.`);
-        }
-      }
-
-      this.flushQueuedTokenPieces(requestId);
-      const response = this.takeCompletedResponse(module, requestId);
-      const finalCallbackError = this.queuedPromptCallbackErrors.get(requestId);
-      if (finalCallbackError != null) {
-        throw finalCallbackError;
-      }
-      if (callbackFailure != null) {
-        throw callbackFailure;
-      }
-      if (response.cancelled || abortRequested || options?.signal?.aborted) {
+      if (response.cancelled || options?.signal?.aborted) {
         throw createAbortError(response.errorMessage ?? 'Queued request cancelled.');
       }
-
       return response;
     } finally {
       if (abortListener != null) {
         options?.signal?.removeEventListener('abort', abortListener);
       }
-      this.releaseQueuedPromptCallback(module, requestId);
-      this.activeQueuedRequestRuns.delete(requestId);
+      completionState.waiterCount = Math.max(0, completionState.waiterCount - 1);
+      this.cleanupConsumedCompletionState(requestId);
     }
   }
 
@@ -1524,13 +1783,17 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return response.outputText;
   }
 
-  public getRuntimeObservability(): RuntimeObservabilityMetrics | null {
+  public getRuntimeAggregateObservability(): RuntimeAggregateObservabilityMetrics | null {
     if (!this.runtimeObservabilityEnabled) {
       return null;
     }
 
     const module = this.getReadyEngineModule();
     return this.readRuntimeObservabilityFromModule(module);
+  }
+
+  public getRuntimeObservability(): RuntimeAggregateObservabilityMetrics | null {
+    return this.getRuntimeAggregateObservability();
   }
 
   public async getBackendObservability(): Promise<BackendObservability | null> {

@@ -5,7 +5,7 @@ import {
   InferenceInitConfig,
   ModelLoadInfo,
   PromptOptions,
-  RuntimeObservabilityMetrics,
+  RuntimeAggregateObservabilityMetrics,
   TransportObservability,
 } from '../types.js';
 
@@ -138,7 +138,7 @@ export interface WorkerLoadModelResult {
 
 export interface WorkerRunQueuedRequestResult {
   response: GenerateResponse;
-  runtimeObservability: RuntimeObservabilityMetrics | null;
+  runtimeAggregateObservability: RuntimeAggregateObservabilityMetrics | null;
   transportObservability: TransportObservability;
 }
 

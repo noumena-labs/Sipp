@@ -7,7 +7,7 @@ import {
   InferenceInitConfig,
   ModelLoadInfo,
   PromptOptions,
-  RuntimeObservabilityMetrics,
+  RuntimeAggregateObservabilityMetrics,
   TransportObservability,
 } from '../types.js';
 import { EngineRuntime } from './engine-runtime.js';
@@ -24,6 +24,14 @@ interface PendingWorkerCall {
   resolve: (value: unknown) => void;
   reject: (error: unknown) => void;
   onProgress?: (pct: number) => void;
+}
+
+interface QueuedRequestCompletionState {
+  promise: Promise<WorkerRunQueuedRequestResult>;
+  settled: boolean;
+  consumed: boolean;
+  waiterCount: number;
+  callbackError: unknown;
 }
 
 type WithoutCallId<T> = T extends { callId: number } ? Omit<T, 'callId'> : never;
@@ -103,8 +111,13 @@ export class WorkerEngineRuntime implements EngineRuntime {
   >();
   private readonly queuedTokenErrors = new Map<GenerateRequestId, unknown>();
   private readonly queuedSignals = new Map<GenerateRequestId, AbortSignal>();
+  private readonly queuedSignalAbortListeners = new Map<GenerateRequestId, () => void>();
   private readonly activeQueuedRequestRuns = new Set<GenerateRequestId>();
-  private runtimeObservability: RuntimeObservabilityMetrics | null = null;
+  private readonly queuedRequestCompletions = new Map<
+    GenerateRequestId,
+    QueuedRequestCompletionState
+  >();
+  private runtimeAggregateObservability: RuntimeAggregateObservabilityMetrics | null = null;
   private lastModelLoadInfo: ModelLoadInfo | null = null;
   private transportObservability: TransportObservability = createDefaultTransportObservability();
 
@@ -334,19 +347,101 @@ export class WorkerEngineRuntime implements EngineRuntime {
     this.resetWorkerState(new Error('Worker runtime was closed.'));
   }
 
-  private releaseQueuedRequestState(requestId: GenerateRequestId): void {
+  private detachQueuedRequestSignal(requestId: GenerateRequestId): void {
+    const signal = this.queuedSignals.get(requestId);
+    const abortListener = this.queuedSignalAbortListeners.get(requestId);
+    if (signal != null && abortListener != null) {
+      signal.removeEventListener('abort', abortListener);
+    }
+    this.queuedSignals.delete(requestId);
+    this.queuedSignalAbortListeners.delete(requestId);
+  }
+
+  private releaseQueuedRequestExecutionState(requestId: GenerateRequestId): void {
     this.queuedTokenCallbacks.delete(requestId);
     this.queuedTokenErrors.delete(requestId);
-    this.queuedSignals.delete(requestId);
+    this.detachQueuedRequestSignal(requestId);
+  }
+
+  private cleanupConsumedCompletionState(requestId: GenerateRequestId): void {
+    const completion = this.queuedRequestCompletions.get(requestId);
+    if (
+      completion != null &&
+      completion.settled &&
+      completion.consumed &&
+      completion.waiterCount === 0
+    ) {
+      this.queuedRequestCompletions.delete(requestId);
+    }
+  }
+
+  private startQueuedRequestCompletion(requestId: GenerateRequestId): void {
+    if (this.queuedRequestCompletions.has(requestId)) {
+      return;
+    }
+
+    this.activeQueuedRequestRuns.add(requestId);
+    const promise = this.callWorker<
+      Extract<WorkerRequestMessage, { kind: 'run-queued-request' }>
+    >({
+      kind: 'run-queued-request',
+      requestId,
+    }) as Promise<WorkerRunQueuedRequestResult>;
+    void promise.catch(() => {});
+
+    const completionState: QueuedRequestCompletionState = {
+      promise,
+      settled: false,
+      consumed: false,
+      waiterCount: 0,
+      callbackError: undefined,
+    };
+    this.queuedRequestCompletions.set(requestId, completionState);
+
+    const observedCompletion = promise.then(
+      (result) => {
+        this.runtimeAggregateObservability = result.runtimeAggregateObservability;
+        this.transportObservability = result.transportObservability;
+      },
+      () => undefined
+    );
+    void observedCompletion.catch(() => {});
+
+    observedCompletion
+      .finally(() => {
+        completionState.settled = true;
+        completionState.callbackError = this.queuedTokenErrors.get(requestId);
+        this.releaseQueuedRequestExecutionState(requestId);
+        this.activeQueuedRequestRuns.delete(requestId);
+        this.cleanupConsumedCompletionState(requestId);
+      });
+  }
+
+  private attachQueuedRequestSignal(
+    requestId: GenerateRequestId,
+    signal?: AbortSignal
+  ): void {
+    if (signal == null) {
+      return;
+    }
+    const abortListener = () => {
+      void this.cancelQueuedRequest(requestId);
+    };
+    this.queuedSignals.set(requestId, signal);
+    this.queuedSignalAbortListeners.set(requestId, abortListener);
+    signal.addEventListener('abort', abortListener, { once: true });
   }
 
   private resetQueuedRequestLifecycleState(): void {
     this.queuedTokenCallbacks.clear();
     this.pendingQueuedTokenCallbacks.clear();
     this.queuedTokenErrors.clear();
-    this.queuedSignals.clear();
+    for (const requestId of this.queuedSignals.keys()) {
+      this.detachQueuedRequestSignal(requestId);
+    }
     this.activeQueuedRequestRuns.clear();
-    this.runtimeObservability = null;
+    this.queuedRequestCompletions.clear();
+    this.runtimeAggregateObservability = null;
   }
 
   public async cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean> {
@@ -356,7 +451,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
       requestId,
     })) as boolean;
     if (cancelled && !this.activeQueuedRequestRuns.has(requestId)) {
-      this.releaseQueuedRequestState(requestId);
+      this.releaseQueuedRequestExecutionState(requestId);
     }
     return cancelled;
   }
@@ -395,9 +490,8 @@ export class WorkerEngineRuntime implements EngineRuntime {
     if (pendingCallback) {
       this.queuedTokenCallbacks.set(requestId, pendingCallback);
     }
-    if (signal) {
-      this.queuedSignals.set(requestId, signal);
-    }
+    this.attachQueuedRequestSignal(requestId, signal);
+    this.startQueuedRequestCompletion(requestId);
     return requestId;
   }
 
@@ -412,7 +506,12 @@ export class WorkerEngineRuntime implements EngineRuntime {
       throw createAbortError('Queued request cancelled.');
     }
 
-    this.activeQueuedRequestRuns.add(requestId);
+    const completionState = this.queuedRequestCompletions.get(requestId);
+    if (completionState == null) {
+      throw new Error(`Queued request ${requestId} is not available.`);
+    }
+    completionState.consumed = true;
+    completionState.waiterCount += 1;
     const abortListener =
       signal == null
         ? null
@@ -424,16 +523,11 @@ export class WorkerEngineRuntime implements EngineRuntime {
     }
 
     try {
-      const result = (await this.callWorker<
-        Extract<WorkerRequestMessage, { kind: 'run-queued-request' }>
-      >({
-        kind: 'run-queued-request',
-        requestId,
-      })) as WorkerRunQueuedRequestResult;
-      this.runtimeObservability = result.runtimeObservability;
+      const result = await completionState.promise;
+      this.runtimeAggregateObservability = result.runtimeAggregateObservability;
       this.transportObservability = result.transportObservability;
 
-      const tokenError = this.queuedTokenErrors.get(requestId);
+      const tokenError = completionState.callbackError;
       if (tokenError != null) {
         throw tokenError;
       }
@@ -445,8 +539,8 @@ export class WorkerEngineRuntime implements EngineRuntime {
       if (abortListener != null) {
         signal?.removeEventListener('abort', abortListener);
       }
-      this.releaseQueuedRequestState(requestId);
-      this.activeQueuedRequestRuns.delete(requestId);
+      completionState.waiterCount = Math.max(0, completionState.waiterCount - 1);
+      this.cleanupConsumedCompletionState(requestId);
     }
   }
 
@@ -464,8 +558,12 @@ export class WorkerEngineRuntime implements EngineRuntime {
     return response.outputText;
   }
 
-  public getRuntimeObservability(): RuntimeObservabilityMetrics | null {
-    return this.runtimeObservability;
+  public getRuntimeAggregateObservability(): RuntimeAggregateObservabilityMetrics | null {
+    return this.runtimeAggregateObservability;
+  }
+
+  public getRuntimeObservability(): RuntimeAggregateObservabilityMetrics | null {
+    return this.getRuntimeAggregateObservability();
   }
 
   public async getBackendObservability(): Promise<BackendObservability | null> {
@@ -493,9 +591,12 @@ export class WorkerEngineRuntime implements EngineRuntime {
     this.queuedTokenCallbacks.clear();
     this.pendingQueuedTokenCallbacks.clear();
     this.queuedTokenErrors.clear();
-    this.queuedSignals.clear();
+    for (const requestId of this.queuedSignals.keys()) {
+      this.detachQueuedRequestSignal(requestId);
+    }
     this.activeQueuedRequestRuns.clear();
-    this.runtimeObservability = null;
+    this.queuedRequestCompletions.clear();
+    this.runtimeAggregateObservability = null;
     this.lastModelLoadInfo = null;
     this.transportObservability = createDefaultTransportObservability();
   }

@@ -1,4 +1,4 @@
-import type { RuntimeObservabilityMetrics } from '../observability/runtime-observability.js';
+import type { RequestObservabilityMetrics } from '../observability/runtime-observability.js';
 
 export type FlashAttentionMode = 'auto' | 'enabled' | 'disabled';
 export type PromptFormatMode = 'auto-chat' | 'raw';
@@ -57,7 +57,8 @@ export interface GenerateResponse {
   cancelled: boolean;
   outputText: string;
   errorMessage?: string | null;
-  runtimeObservability?: RuntimeObservabilityMetrics | null;
+  requestObservability?: RequestObservabilityMetrics | null;
+  runtimeObservability?: RequestObservabilityMetrics | null;
 }
 
 export interface ModelLoadInfo {

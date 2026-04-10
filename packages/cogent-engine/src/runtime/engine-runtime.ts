@@ -7,7 +7,7 @@ import {
   InferenceInitConfig,
   ModelLoadInfo,
   PromptOptions,
-  RuntimeObservabilityMetrics,
+  RuntimeAggregateObservabilityMetrics,
   TransportObservability,
 } from '../types.js';
 
@@ -67,6 +67,7 @@ export interface EngineRuntime {
     promptText: string,
     options?: number | PromptOptions
   ): Promise<string>;
-  getRuntimeObservability(): RuntimeObservabilityMetrics | null;
+  getRuntimeAggregateObservability(): RuntimeAggregateObservabilityMetrics | null;
+  getRuntimeObservability(): RuntimeAggregateObservabilityMetrics | null;
   getBackendObservability(): Promise<BackendObservability | null>;
 }

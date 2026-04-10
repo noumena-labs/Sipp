@@ -1015,6 +1015,51 @@ bool InferenceRuntime::CancelRequest(GenerateRequestId request_id) {
   return request_queue_.Cancel(request_id, "Request cancelled.");
 }
 
+RequestStepResult InferenceRuntime::RunSchedulerTick() {
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+
+  if (primary_model_ == nullptr || shared_context_ == nullptr ||
+      sampler_ == nullptr) {
+    return RequestStepResult::Invalid;
+  }
+
+  const std::size_t completed_before = request_queue_.CompletedResponseCount();
+  bool admitted_any = false;
+  while (slot_scheduler_.AdmitPendingRequests(request_queue_, session_store_)) {
+    admitted_any = true;
+  }
+
+  const bool tick_executed = RunPolicyBatchTickLocked();
+
+  slot_scheduler_.FinalizeCompletedSlots(request_queue_, session_store_);
+  if (request_queue_.CompletedResponseCount() > completed_before) {
+    return RequestStepResult::Progressed;
+  }
+
+  if (!tick_executed) {
+    SlotState *active_slot = slot_scheduler_.FindFirstActiveSlot();
+    if (active_slot == nullptr) {
+      return admitted_any ? RequestStepResult::Progressed
+                          : RequestStepResult::Waiting;
+    }
+
+    if (active_slot->phase != SlotPhase::Failed &&
+        active_slot->phase != SlotPhase::Completed) {
+      active_slot->terminal_error_message =
+          "Shared batch tick could not make progress.";
+      active_slot->phase = SlotPhase::Failed;
+      slot_scheduler_.FinalizeCompletedSlots(request_queue_, session_store_);
+      if (request_queue_.CompletedResponseCount() > completed_before) {
+        return RequestStepResult::Progressed;
+      }
+      return RequestStepResult::FatalNoProgress;
+    }
+  }
+
+  return (tick_executed || admitted_any) ? RequestStepResult::Progressed
+                                         : RequestStepResult::Waiting;
+}
+
 RequestStepResult InferenceRuntime::RunRequestStep(GenerateRequestId request_id) {
   std::lock_guard<std::mutex> lock(operation_mutex_);
 

@@ -9,7 +9,7 @@ import {
   InferenceInitConfig,
   ModelLoadInfo,
   PromptOptions,
-  RuntimeObservabilityMetrics,
+  RuntimeAggregateObservabilityMetrics,
   TransportObservability,
 } from './types.js';
 
@@ -143,8 +143,12 @@ export class CogentEngine {
     return this.runtime.submitPrompt(contextKey, promptText, options);
   }
 
-  public getRuntimeObservability(): RuntimeObservabilityMetrics | null {
-    return this.runtime.getRuntimeObservability();
+  public getRuntimeAggregateObservability(): RuntimeAggregateObservabilityMetrics | null {
+    return this.runtime.getRuntimeAggregateObservability();
+  }
+
+  public getRuntimeObservability(): RuntimeAggregateObservabilityMetrics | null {
+    return this.runtime.getRuntimeAggregateObservability();
   }
 
   public async getBackendObservability(): Promise<BackendObservability | null> {

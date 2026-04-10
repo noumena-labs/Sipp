@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <functional>
 #include <list>
 #include <optional>
@@ -30,6 +31,7 @@ public:
   void MarkCompleted(GenerateResponse response);
   const GenerateResponse *PeekCompletedResponse(GenerateRequestId request_id) const;
   bool ConsumeCompletedResponse(GenerateRequestId request_id);
+  std::size_t CompletedResponseCount() const;
   void Clear();
 
 private:

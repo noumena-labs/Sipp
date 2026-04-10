@@ -12,6 +12,7 @@ int CE_InitPlugin(const char* model_path, const CE_InitConfig* config);
 void CE_ClosePlugin();
 int CE_GetRuntimeObservability(CE_RuntimeObservabilityMetrics* out_metrics);
 int CE_ResetRuntimeObservability();
+int CE_RunSchedulerTick();
 int CE_RunRequestStep(CE_RequestId request_id);
 int CE_GetCompletedRequestStatus(CE_RequestId request_id);
 int CE_GetCompletedRequestOutputSize(CE_RequestId request_id);

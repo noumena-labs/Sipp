@@ -57,6 +57,7 @@ public:
                                    int n_tokens_predict,
                                    TokenCallback on_token_received = {});
   bool CancelRequest(GenerateRequestId request_id);
+  RequestStepResult RunSchedulerTick();
   RequestStepResult RunRequestStep(GenerateRequestId request_id);
   bool TryPeekCompletedResponse(GenerateRequestId request_id,
                                 GenerateResponse &out_response) const;

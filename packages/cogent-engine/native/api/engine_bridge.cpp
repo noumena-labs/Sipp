@@ -247,6 +247,16 @@ int CE_ResetRuntimeObservability() {
   return 0;
 }
 
+int CE_RunSchedulerTick() {
+  auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    return static_cast<int>(
+        noumena::cogentengine::RequestStepResult::Invalid);
+  }
+
+  return static_cast<int>(runtime->RunSchedulerTick());
+}
+
 int CE_RunRequestStep(CE_RequestId request_id) {
   auto runtime = acquire_engine_runtime();
   if (!runtime) {
