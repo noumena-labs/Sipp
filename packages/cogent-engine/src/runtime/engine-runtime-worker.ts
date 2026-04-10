@@ -18,15 +18,15 @@ import {
   WorkerRunQueuedRequestResult,
   WorkerBackendObservabilityResult,
 } from './engine-runtime-worker-protocol.js';
-import { createAbortError } from './runtime-shared.js';
+import { createAbortError } from '../utils/abort.js';
 import {
   createDefaultTransportObservability,
   PendingWorkerCall,
-  QueuedRequestCompletionState,
   toTransferableChunkBuffer,
   toWorkerSerializableConfig,
   WithoutCallId,
-} from './worker-runtime-shared.js';
+} from './worker-runtime-utils.js';
+import { RequestTracker } from './request-tracker.js';
 
 export class WorkerEngineRuntime implements EngineRuntime {
   private worker: Worker | null = null;
@@ -46,13 +46,8 @@ export class WorkerEngineRuntime implements EngineRuntime {
     ((token: string) => void) | undefined
   >();
   private readonly queuedTokenErrors = new Map<GenerateRequestId, unknown>();
-  private readonly queuedSignals = new Map<GenerateRequestId, AbortSignal>();
-  private readonly queuedSignalAbortListeners = new Map<GenerateRequestId, () => void>();
-  private readonly activeQueuedRequestRuns = new Set<GenerateRequestId>();
-  private readonly queuedRequestCompletions = new Map<
-    GenerateRequestId,
-    QueuedRequestCompletionState
-  >();
+  private readonly tracker = new RequestTracker<WorkerRunQueuedRequestResult>();
+  private lastWorkerTerminalError: unknown = null;
   private runtimeAggregateObservability: RuntimeAggregateObservabilityMetrics | null = null;
   private lastModelLoadInfo: ModelLoadInfo | null = null;
   private transportObservability: TransportObservability = createDefaultTransportObservability();
@@ -283,100 +278,83 @@ export class WorkerEngineRuntime implements EngineRuntime {
     this.resetWorkerState(new Error('Worker runtime was closed.'));
   }
 
-  private detachQueuedRequestSignal(requestId: GenerateRequestId): void {
-    const signal = this.queuedSignals.get(requestId);
-    const abortListener = this.queuedSignalAbortListeners.get(requestId);
-    if (signal != null && abortListener != null) {
-      signal.removeEventListener('abort', abortListener);
-    }
-    this.queuedSignals.delete(requestId);
-    this.queuedSignalAbortListeners.delete(requestId);
-  }
-
-  private releaseQueuedRequestExecutionState(requestId: GenerateRequestId): void {
+  private releaseTokenState(requestId: GenerateRequestId): void {
     this.queuedTokenCallbacks.delete(requestId);
     this.queuedTokenErrors.delete(requestId);
-    this.detachQueuedRequestSignal(requestId);
   }
 
-  private cleanupConsumedCompletionState(requestId: GenerateRequestId): void {
-    const completion = this.queuedRequestCompletions.get(requestId);
-    if (
-      completion != null &&
-      completion.settled &&
-      completion.consumed &&
-      completion.waiterCount === 0
-    ) {
-      this.queuedRequestCompletions.delete(requestId);
-    }
+  private finalizeRequest(
+    requestId: GenerateRequestId,
+    options: { deleteCompletion?: boolean } = {}
+  ): void {
+    this.releaseTokenState(requestId);
+    this.tracker.finalize(requestId, options);
   }
 
-  private startQueuedRequestCompletion(requestId: GenerateRequestId): void {
-    if (this.queuedRequestCompletions.has(requestId)) {
+  private ensureTracked(requestId: GenerateRequestId) {
+    return this.tracker.track(requestId);
+  }
+
+  private settleQueuedRequestCompletion(
+    requestId: GenerateRequestId,
+    result: WorkerRunQueuedRequestResult
+  ): void {
+    const tracked = this.ensureTracked(requestId);
+    if (tracked.settled) {
       return;
     }
 
-    this.activeQueuedRequestRuns.add(requestId);
-    const promise = this.callWorker<
-      Extract<WorkerRequestMessage, { kind: 'run-queued-request' }>
-    >({
-      kind: 'run-queued-request',
-      requestId,
-    }) as Promise<WorkerRunQueuedRequestResult>;
-    void promise.catch(() => {});
-
-    const completionState: QueuedRequestCompletionState = {
-      promise,
-      settled: false,
-      consumed: false,
-      waiterCount: 0,
-      callbackError: undefined,
-    };
-    this.queuedRequestCompletions.set(requestId, completionState);
-
-    const observedCompletion = promise.then(
-      (result) => {
-        this.runtimeAggregateObservability = result.runtimeAggregateObservability;
-        this.transportObservability = result.transportObservability;
-      },
-      () => undefined
-    );
-    void observedCompletion.catch(() => {});
-
-    observedCompletion
-      .finally(() => {
-        completionState.settled = true;
-        completionState.callbackError = this.queuedTokenErrors.get(requestId);
-        this.releaseQueuedRequestExecutionState(requestId);
-        this.activeQueuedRequestRuns.delete(requestId);
-        this.cleanupConsumedCompletionState(requestId);
-      });
+    this.runtimeAggregateObservability = result.runtimeAggregateObservability;
+    this.transportObservability = result.transportObservability;
+    tracked.callbackError = this.queuedTokenErrors.get(requestId);
+    this.tracker.resolve(requestId, result);
+    this.finalizeRequest(requestId, {
+      deleteCompletion: result.response.cancelled && !tracked.consumed,
+    });
   }
 
-  private attachQueuedRequestSignal(
+  private rejectQueuedRequestCompletion(
+    requestId: GenerateRequestId,
+    error: unknown,
+    options: { deleteCompletion?: boolean } = {}
+  ): void {
+    const tracked = this.tracker.get(requestId);
+    if (tracked == null || tracked.settled) {
+      return;
+    }
+    tracked.callbackError = this.queuedTokenErrors.get(requestId);
+    this.tracker.reject(requestId, error);
+    this.finalizeRequest(requestId, options);
+  }
+
+  private rejectAllTrackedRequests(error: unknown): void {
+    for (const requestId of this.tracker.allTrackedIds()) {
+      const tracked = this.tracker.get(requestId);
+      if (tracked != null && !tracked.settled) {
+        tracked.callbackError = this.queuedTokenErrors.get(requestId);
+      }
+      this.releaseTokenState(requestId);
+    }
+    this.tracker.rejectAll(error);
+  }
+
+  private attachSignal(
     requestId: GenerateRequestId,
     signal?: AbortSignal
   ): void {
     if (signal == null) {
       return;
     }
-    const abortListener = () => {
+    this.tracker.attachSignal(requestId, signal, () => {
       void this.cancelQueuedRequest(requestId);
-    };
-    this.queuedSignals.set(requestId, signal);
-    this.queuedSignalAbortListeners.set(requestId, abortListener);
-    signal.addEventListener('abort', abortListener, { once: true });
+    });
   }
 
   private resetQueuedRequestLifecycleState(): void {
+    this.rejectAllTrackedRequests(new Error('Queued request lifecycle was reset.'));
     this.queuedTokenCallbacks.clear();
     this.pendingQueuedTokenCallbacks.clear();
     this.queuedTokenErrors.clear();
-    for (const requestId of this.queuedSignals.keys()) {
-      this.detachQueuedRequestSignal(requestId);
-    }
-    this.activeQueuedRequestRuns.clear();
-    this.queuedRequestCompletions.clear();
     this.runtimeAggregateObservability = null;
   }
 
@@ -386,8 +364,8 @@ export class WorkerEngineRuntime implements EngineRuntime {
       kind: 'cancel-request',
       requestId,
     })) as boolean;
-    if (cancelled && !this.activeQueuedRequestRuns.has(requestId)) {
-      this.releaseQueuedRequestExecutionState(requestId);
+    if (cancelled && !this.tracker.hasActive(requestId)) {
+      this.finalizeRequest(requestId, { deleteCompletion: true });
     }
     return cancelled;
   }
@@ -426,8 +404,8 @@ export class WorkerEngineRuntime implements EngineRuntime {
     if (pendingCallback) {
       this.queuedTokenCallbacks.set(requestId, pendingCallback);
     }
-    this.attachQueuedRequestSignal(requestId, signal);
-    this.startQueuedRequestCompletion(requestId);
+    this.attachSignal(requestId, signal);
+    this.ensureTracked(requestId);
     return requestId;
   }
 
@@ -436,18 +414,21 @@ export class WorkerEngineRuntime implements EngineRuntime {
     options?: { signal?: AbortSignal }
   ): Promise<GenerateResponse> {
     await this.ensureWorkerInitialized();
-    const signal = options?.signal ?? this.queuedSignals.get(requestId);
-    if (signal?.aborted) {
+    if (options?.signal?.aborted) {
       await this.cancelQueuedRequest(requestId);
       throw createAbortError('Queued request cancelled.');
     }
 
-    const completionState = this.queuedRequestCompletions.get(requestId);
-    if (completionState == null) {
+    const tracked = this.tracker.get(requestId);
+    if (tracked == null) {
+      if (!this.workerInitialized || this.worker == null) {
+        throw this.lastWorkerTerminalError ?? new Error('Worker runtime was closed.');
+      }
       throw new Error(`Queued request ${requestId} is not available.`);
     }
-    completionState.consumed = true;
-    completionState.waiterCount += 1;
+    tracked.consumed = true;
+    tracked.waiterCount += 1;
+    const signal = options?.signal;
     const abortListener =
       signal == null
         ? null
@@ -459,11 +440,11 @@ export class WorkerEngineRuntime implements EngineRuntime {
     }
 
     try {
-      const result = await completionState.promise;
+      const result = await tracked.promise;
       this.runtimeAggregateObservability = result.runtimeAggregateObservability;
       this.transportObservability = result.transportObservability;
 
-      const tokenError = completionState.callbackError;
+      const tokenError = tracked.callbackError;
       if (tokenError != null) {
         throw tokenError;
       }
@@ -475,8 +456,8 @@ export class WorkerEngineRuntime implements EngineRuntime {
       if (abortListener != null) {
         signal?.removeEventListener('abort', abortListener);
       }
-      completionState.waiterCount = Math.max(0, completionState.waiterCount - 1);
-      this.cleanupConsumedCompletionState(requestId);
+      tracked.waiterCount = Math.max(0, tracked.waiterCount - 1);
+      this.tracker.cleanupIfConsumed(requestId);
     }
   }
 
@@ -516,6 +497,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
   private resetWorkerState(error: unknown): void {
     this.worker = null;
     this.workerInitialized = false;
+    this.lastWorkerTerminalError = error;
     for (const call of this.pendingWorkerCalls.values()) {
       call.reject(error);
     }
@@ -524,14 +506,10 @@ export class WorkerEngineRuntime implements EngineRuntime {
       pendingAck.reject(error);
     }
     this.pendingStreamChunkAcks.clear();
+    this.rejectAllTrackedRequests(error);
     this.queuedTokenCallbacks.clear();
     this.pendingQueuedTokenCallbacks.clear();
     this.queuedTokenErrors.clear();
-    for (const requestId of this.queuedSignals.keys()) {
-      this.detachQueuedRequestSignal(requestId);
-    }
-    this.activeQueuedRequestRuns.clear();
-    this.queuedRequestCompletions.clear();
     this.runtimeAggregateObservability = null;
     this.lastModelLoadInfo = null;
     this.transportObservability = createDefaultTransportObservability();
@@ -590,6 +568,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
         config: toWorkerSerializableConfig(this.config),
       });
       this.workerInitialized = true;
+      this.lastWorkerTerminalError = null;
       this.transportObservability.executionMode = 'worker';
       this.transportObservability.workerBacked = true;
     }
@@ -607,6 +586,24 @@ export class WorkerEngineRuntime implements EngineRuntime {
         this.queuedTokenErrors.set(message.requestId, error);
         void this.cancelQueuedRequest(message.requestId);
       }
+      return;
+    }
+
+    if (message.kind === 'request-complete') {
+      this.settleQueuedRequestCompletion(message.requestId, message.result);
+      return;
+    }
+
+    if (message.kind === 'request-failed') {
+      this.runtimeAggregateObservability = message.runtimeAggregateObservability;
+      this.transportObservability = message.transportObservability;
+      const error =
+        message.errorName === 'AbortError'
+          ? createAbortError(message.message)
+          : Object.assign(new Error(message.message), {
+              name: message.errorName ?? 'Error',
+            });
+      this.rejectQueuedRequestCompletion(message.requestId, error);
       return;
     }
 

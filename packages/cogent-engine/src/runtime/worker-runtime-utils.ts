@@ -8,14 +8,6 @@ export interface PendingWorkerCall {
   onProgress?: (pct: number) => void;
 }
 
-export interface QueuedRequestCompletionState {
-  promise: Promise<import('./engine-runtime-worker-protocol.js').WorkerRunQueuedRequestResult>;
-  settled: boolean;
-  consumed: boolean;
-  waiterCount: number;
-  callbackError: unknown;
-}
-
 export type WithoutCallId<T> = T extends { callId: number } ? Omit<T, 'callId'> : never;
 
 export function createDefaultTransportObservability(): TransportObservability {
@@ -28,6 +20,14 @@ export function createDefaultTransportObservability(): TransportObservability {
     flushCount: 0,
     coalescedTokenCount: 0,
     maxObservedBufferedTokenCount: 0,
+    tokenTransportPreference: 'auto',
+    activeTokenTransport: 'none',
+    tokenCallbackRegistrationCount: 0,
+    nativeCallbackTokenCount: 0,
+    runtimeEventDrainCount: 0,
+    runtimeEventTokenCount: 0,
+    runtimeEventTerminalCount: 0,
+    runtimeEventTextBytes: 0,
   };
 }
 
@@ -64,5 +64,6 @@ export function toWorkerSerializableConfig(
     workerMaxBufferedTokens: config.workerMaxBufferedTokens,
     workerTokenFlushIntervalMs: config.workerTokenFlushIntervalMs,
     persistentModelCache,
+    debugTokenTransport: config.debugTokenTransport,
   };
 }

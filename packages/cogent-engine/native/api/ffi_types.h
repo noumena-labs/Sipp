@@ -64,9 +64,35 @@ typedef struct CE_RuntimeObservabilityMetrics {
   int32_t prefix_cache_store_count;
 } CE_RuntimeObservabilityMetrics;
 
+typedef struct CE_SchedulerBurstResult {
+  int32_t ticks_executed;
+  int32_t progressed_ticks;
+  int32_t completed_response_count;
+  int32_t emitted_token_count;
+} CE_SchedulerBurstResult;
+
+typedef struct CE_RuntimeEvent {
+  CE_RequestId request_id;
+  int32_t kind;
+  int32_t status;
+  int32_t text_offset;
+  int32_t text_length;
+} CE_RuntimeEvent;
+
+typedef struct CE_RuntimeEventDrainResult {
+  int32_t event_count;
+  int32_t text_bytes;
+} CE_RuntimeEventDrainResult;
+
 #ifdef __cplusplus
 static_assert(sizeof(CE_RequestId) == 4,
               "CE_RequestId must stay 32-bit for JS/Wasm FFI calls.");
 static_assert(sizeof(CE_RuntimeObservabilityMetrics) == 128,
               "CE_RuntimeObservabilityMetrics layout changed. Update the TS FFI reader.");
+static_assert(sizeof(CE_SchedulerBurstResult) == 16,
+              "CE_SchedulerBurstResult layout changed. Update the TS FFI reader.");
+static_assert(sizeof(CE_RuntimeEvent) == 20,
+              "CE_RuntimeEvent layout changed. Update the TS FFI reader.");
+static_assert(sizeof(CE_RuntimeEventDrainResult) == 8,
+              "CE_RuntimeEventDrainResult layout changed. Update the TS FFI reader.");
 #endif

@@ -346,7 +346,8 @@ void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue,
   }
 }
 
-void SlotScheduler::EmitBufferedTokenPiece(SlotState &slot) {
+void SlotScheduler::EmitBufferedTokenPiece(RequestQueue &request_queue,
+                                           SlotState &slot) {
   if (slot.buffered_output_text.empty()) {
     return;
   }
@@ -368,6 +369,7 @@ void SlotScheduler::EmitBufferedTokenPiece(SlotState &slot) {
     request->last_token_at = now;
     request->has_last_token_at = true;
     request->emitted_token_count++;
+    request_queue.QueueTokenEvent(request->id, slot.buffered_output_text);
   }
 
   if (request != nullptr && request->on_token_received) {

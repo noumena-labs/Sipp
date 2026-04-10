@@ -21,6 +21,21 @@ void RequestQueue::RemovePendingRequestId(GenerateRequestId request_id) {
   pending_request_positions_.erase(pending_it);
 }
 
+void RequestQueue::QueueCompletedResponseId(GenerateRequestId request_id) {
+  if (request_id == 0 || !completed_responses_.contains(request_id)) {
+    return;
+  }
+  if (!queued_completed_response_ids_.insert(request_id).second) {
+    return;
+  }
+  completed_response_ready_ids_.push_back(request_id);
+  RuntimeEvent event;
+  event.kind = RuntimeEventKind::Terminal;
+  event.request_id = request_id;
+  event.status = completed_responses_.at(request_id).status;
+  runtime_events_.push_back(std::move(event));
+}
+
 bool RequestQueue::Push(GenerateRequest request) {
   const GenerateRequestId request_id = request.id;
   if (request_id == 0 || requests_.contains(request_id)) {
@@ -122,6 +137,7 @@ bool RequestQueue::Cancel(GenerateRequestId request_id, std::string error_messag
     response.status = GenerateResponseStatus::Cancelled;
     response.error_message = std::move(error_message);
     completed_responses_[request_id] = std::move(response);
+    QueueCompletedResponseId(request_id);
     return true;
   }
 
@@ -141,6 +157,7 @@ void RequestQueue::MarkCompleted(GenerateResponse response) {
   }
 
   completed_responses_[response.request_id] = std::move(response);
+  QueueCompletedResponseId(response.request_id);
 }
 
 const GenerateResponse *
@@ -158,6 +175,77 @@ std::vector<GenerateRequestId> RequestQueue::CompletedResponseIds() const {
   return request_ids;
 }
 
+std::vector<GenerateRequestId> RequestQueue::DrainCompletedResponseIds(
+    std::size_t max_count) {
+  std::vector<GenerateRequestId> request_ids;
+  const std::size_t drain_limit =
+      max_count == 0 ? completed_response_ready_ids_.size() : max_count;
+  request_ids.reserve(std::min(drain_limit, completed_response_ready_ids_.size()));
+
+  while (!completed_response_ready_ids_.empty() &&
+         request_ids.size() < drain_limit) {
+    const GenerateRequestId request_id = completed_response_ready_ids_.front();
+    completed_response_ready_ids_.pop_front();
+    queued_completed_response_ids_.erase(request_id);
+    if (!completed_responses_.contains(request_id)) {
+      continue;
+    }
+    request_ids.push_back(request_id);
+  }
+
+  return request_ids;
+}
+
+void RequestQueue::QueueTokenEvent(GenerateRequestId request_id, std::string text) {
+  if (request_id == 0 || text.empty()) {
+    return;
+  }
+
+  RuntimeEvent event;
+  event.kind = RuntimeEventKind::Token;
+  event.request_id = request_id;
+  event.text = std::move(text);
+  runtime_events_.push_back(std::move(event));
+}
+
+std::vector<RuntimeEvent> RequestQueue::DrainRuntimeEvents(std::size_t max_count,
+                                                           std::size_t max_text_bytes) {
+  std::vector<RuntimeEvent> events;
+  const std::size_t drain_limit = max_count == 0 ? runtime_events_.size() : max_count;
+  events.reserve(std::min(drain_limit, runtime_events_.size()));
+
+  std::size_t used_text_bytes = 0;
+  while (!runtime_events_.empty() && events.size() < drain_limit) {
+    RuntimeEvent &event = runtime_events_.front();
+    if (event.kind == RuntimeEventKind::Terminal &&
+        !completed_responses_.contains(event.request_id)) {
+      runtime_events_.pop_front();
+      continue;
+    }
+
+    const std::size_t required_text_bytes =
+        event.kind == RuntimeEventKind::Token ? event.text.size() + 1 : 0;
+    if (required_text_bytes > 0 &&
+        used_text_bytes + required_text_bytes > max_text_bytes) {
+      break;
+    }
+
+    used_text_bytes += required_text_bytes;
+    events.push_back(std::move(event));
+    runtime_events_.pop_front();
+  }
+
+  return events;
+}
+
+int32_t RequestQueue::TotalEmittedTokenCount() const {
+  int32_t total = 0;
+  for (const auto &[_, request] : requests_) {
+    total += std::max(0, request.emitted_token_count);
+  }
+  return total;
+}
+
 bool RequestQueue::ConsumeCompletedResponse(GenerateRequestId request_id) {
   auto response_it = completed_responses_.find(request_id);
   if (response_it == completed_responses_.end()) {
@@ -165,6 +253,7 @@ bool RequestQueue::ConsumeCompletedResponse(GenerateRequestId request_id) {
   }
 
   RemovePendingRequestId(request_id);
+  queued_completed_response_ids_.erase(request_id);
   completed_responses_.erase(response_it);
   requests_.erase(request_id);
   return true;
@@ -179,6 +268,9 @@ void RequestQueue::Clear() {
   pending_request_ids_.clear();
   pending_request_positions_.clear();
   completed_responses_.clear();
+  completed_response_ready_ids_.clear();
+  runtime_events_.clear();
+  queued_completed_response_ids_.clear();
 }
 
 } // namespace noumena::cogentengine

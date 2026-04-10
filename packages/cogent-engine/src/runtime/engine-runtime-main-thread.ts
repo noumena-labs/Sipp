@@ -20,35 +20,30 @@ import {
 import { EngineRuntime } from './engine-runtime.js';
 import { MainThreadModelLoader } from './main-thread-model-loader.js';
 import {
-  callModuleNumber,
-  callModuleNumberAsync,
   COMPLETED_REQUEST_STATUS_PENDING,
   DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY,
   DEFAULT_PROMPT_FORMAT,
-  EngineModule,
   MAX_PROMPT_TOKENS,
-  QueuedRequestCompletionState,
-  REQUEST_STEP_RESULT_FATAL_NO_PROGRESS,
-  REQUEST_STEP_RESULT_INVALID,
-  REQUEST_STEP_RESULT_PROGRESSED,
-  REQUEST_STEP_RESULT_TERMINAL,
-  REQUEST_STEP_RESULT_WAITING,
-} from './main-thread-runtime-shared.js';
+} from './main-thread-runtime-constants.js';
 import {
-  readRuntimeObservabilityFromModule,
-  takeCompletedResponse,
-} from './main-thread-runtime-observability.js';
+  QueuedRequestPumpStepResult,
+} from './queued-request-pump.js';
+import { RequestTracker } from './request-tracker.js';
 import {
-  asErrorMessage,
-  createAbortError,
-  createDeferred,
-} from './runtime-shared.js';
-
-const SCHEDULER_PUMP_SYNC_BURST_LIMIT = 128;
-const SCHEDULER_PUMP_IDLE_STREAK_BEFORE_YIELD = 4;
+  parseBackendObservabilityJson,
+  WasmBridge,
+} from '../wasm/wasm-bridge.js';
+import { EngineModule } from '../wasm/engine-module.js';
+import { createAbortError } from '../utils/abort.js';
+import { asErrorMessage } from '../utils/error.js';
+import {
+  QueuedRequestPumpMode,
+  QueuedRequestScheduler,
+} from './scheduler.js';
 
 export class MainThreadEngineRuntime implements EngineRuntime {
   private module: EngineModule | null = null;
+  private wasmBridge: WasmBridge | null = null;
   private initPromise: Promise<void> | null = null;
   private engineInitialized = false;
   private readonly opfs = new FileSystemStorage();
@@ -61,15 +56,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private queuedPromptCallbackPtrs = new Map<GenerateRequestId, number | bigint>();
   private queuedPromptTokenBuffers = new Map<GenerateRequestId, string[]>();
   private queuedPromptCallbackErrors = new Map<GenerateRequestId, unknown>();
-  private queuedPromptSignals = new Map<GenerateRequestId, AbortSignal>();
-  private queuedPromptSignalAbortListeners = new Map<GenerateRequestId, () => void>();
-  private activeQueuedRequestRuns = new Set<GenerateRequestId>();
-  private queuedRequestCompletions = new Map<
-    GenerateRequestId,
-    QueuedRequestCompletionState
-  >();
-  private schedulerPumpPromise: Promise<void> | null = null;
-  private schedulerPumpGeneration = 0;
+  private readonly tracker = new RequestTracker<GenerateResponse>();
+  private readonly scheduler: QueuedRequestScheduler;
   private lastModelLoadInfo: ModelLoadInfo | null = null;
   private runtimeObservabilityEnabled = false;
   private backendProfilingEnabled = false;
@@ -86,6 +74,18 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         this.lastModelLoadInfo = info;
       }
     );
+    this.scheduler = new QueuedRequestScheduler({
+      tracker: this.tracker,
+      queuedPromptCallbacks: this.queuedPromptCallbacks,
+      queuedPromptTokenBuffers: this.queuedPromptTokenBuffers,
+      queuedPromptCallbackErrors: this.queuedPromptCallbackErrors,
+      getTransportObservability: () => this.transportObservability,
+      getBridge: () => this.getReadyEngineBridge(),
+      finalizeRequest: (bridge, requestId, options) => {
+        this.finalizeRequest(bridge, requestId, options);
+      },
+      cancelQueuedRequest: (requestId) => this.cancelQueuedRequest(requestId),
+    });
   }
 
   private resolveWasmUrls(): { moduleUrl: string; wasmUrl: string } {
@@ -212,85 +212,120 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return module;
   }
 
-  private releaseQueuedPromptCallback(module: EngineModule, requestId: GenerateRequestId): void {
-    const callbackPtr = this.queuedPromptCallbackPtrs.get(requestId);
-    if (callbackPtr != null) {
-      module.removeFunction(callbackPtr);
+  private getLoadedWasmBridge(): WasmBridge {
+    if (this.wasmBridge == null) {
+      this.wasmBridge = new WasmBridge(this.getLoadedModule());
     }
-    const signal = this.queuedPromptSignals.get(requestId);
-    const abortListener = this.queuedPromptSignalAbortListeners.get(requestId);
-    if (signal != null && abortListener != null) {
-      signal.removeEventListener('abort', abortListener);
-    }
+    return this.wasmBridge;
+  }
+
+  private getReadyEngineBridge(): WasmBridge {
+    this.getReadyEngineModule();
+    return this.getLoadedWasmBridge();
+  }
+
+  private releaseTokenState(requestId: GenerateRequestId): void {
     this.queuedPromptCallbacks.delete(requestId);
     this.queuedPromptTokenBuffers.delete(requestId);
-    this.queuedPromptCallbackPtrs.delete(requestId);
     this.queuedPromptCallbackErrors.delete(requestId);
-    this.queuedPromptSignals.delete(requestId);
-    this.queuedPromptSignalAbortListeners.delete(requestId);
+  }
+
+  private releaseCallbackPtr(
+    bridge: WasmBridge,
+    requestId: GenerateRequestId
+  ): void {
+    const callbackPtr = this.queuedPromptCallbackPtrs.get(requestId);
+    if (callbackPtr != null) {
+      bridge.unregisterCallback(callbackPtr);
+    }
+    this.queuedPromptCallbackPtrs.delete(requestId);
+  }
+
+  private finalizeRequest(
+    bridge: WasmBridge | null,
+    requestId: GenerateRequestId,
+    options: {
+      consumeCompletedResponse?: boolean;
+      deleteCompletion?: boolean;
+    } = {}
+  ): void {
+    if (options.consumeCompletedResponse && bridge != null) {
+      this.consumeCompletedResponseIfPresent(bridge, requestId);
+    }
+    if (bridge != null) {
+      this.releaseCallbackPtr(bridge, requestId);
+    }
+    this.releaseTokenState(requestId);
+    this.tracker.finalize(requestId, options);
   }
 
   private consumeCompletedResponseIfPresent(
-    module: EngineModule,
+    bridge: WasmBridge,
     requestId: GenerateRequestId
   ): boolean {
-    const status = this.callNumber(module, 'CE_GetCompletedRequestStatus', ['number'], [requestId]);
+    const status = bridge.getCompletedRequestStatus(requestId);
     if (status === COMPLETED_REQUEST_STATUS_PENDING) {
       return false;
     }
-
-    const consumed = this.callNumber(module, 'CE_ConsumeCompletedRequest', ['number'], [requestId]);
-    if (!consumed) {
-      throw new Error('Failed to consume completed queued request response.');
-    }
-    return true;
+    return bridge.consumeCompletedResponseIfPresent(requestId);
   }
 
-  private releaseCancelledQueuedRequestState(
-    module: EngineModule,
-    requestId: GenerateRequestId
-  ): void {
-    this.consumeCompletedResponseIfPresent(module, requestId);
-    this.releaseQueuedPromptCallback(module, requestId);
+  private resolveTokenTransportPreference(): 'auto' | 'callbacks' | 'runtime-events' {
+    return this.config.debugTokenTransport ?? 'auto';
   }
 
-  private releaseAllQueuedPromptCallbacks(module: EngineModule): void {
-    for (const callbackPtr of this.queuedPromptCallbackPtrs.values()) {
-      module.removeFunction(callbackPtr);
-    }
-    this.queuedPromptCallbacks.clear();
-    this.queuedPromptTokenBuffers.clear();
-    this.queuedPromptCallbackPtrs.clear();
-    this.queuedPromptCallbackErrors.clear();
-    for (const [requestId] of this.queuedPromptSignals) {
-      this.releaseQueuedPromptCallback(module, requestId);
-    }
-    this.activeQueuedRequestRuns.clear();
-  }
+  private shouldUseNativeRuntimeEvents(
+    bridge: WasmBridge,
+    onToken: ((token: string) => void) | undefined
+  ): boolean {
+    const preference = this.resolveTokenTransportPreference();
+    this.transportObservability.tokenTransportPreference = preference;
 
-  private rejectQueuedRequestCompletions(error: unknown): void {
-    this.schedulerPumpGeneration += 1;
-    this.schedulerPumpPromise = null;
-    for (const [requestId, completionState] of this.queuedRequestCompletions) {
-      if (completionState.settled) {
-        continue;
+    if (onToken == null) {
+      this.transportObservability.activeTokenTransport = 'none';
+      return false;
+    }
+
+    if (preference === 'callbacks') {
+      this.transportObservability.activeTokenTransport = 'callbacks';
+      return false;
+    }
+
+    const runtimeEventsAvailable = bridge.supportsRuntimeEventDrain();
+    if (preference === 'runtime-events') {
+      if (!runtimeEventsAvailable) {
+        throw new Error(
+          'debugTokenTransport=runtime-events requires CE_DrainRuntimeEvents support in the loaded runtime module.'
+        );
       }
-      completionState.settled = true;
-      completionState.reject(error);
-      this.activeQueuedRequestRuns.delete(requestId);
+      this.transportObservability.activeTokenTransport = 'runtime-events';
+      return true;
     }
-    this.queuedRequestCompletions.clear();
+
+    this.transportObservability.activeTokenTransport = runtimeEventsAvailable
+      ? 'runtime-events'
+      : 'callbacks';
+    return runtimeEventsAvailable;
+  }
+
+  private rejectAllTrackedRequests(error: unknown, bridge: WasmBridge | null = null): void {
+    this.scheduler.reset();
+    for (const requestId of this.tracker.allTrackedIds()) {
+      if (bridge != null) {
+        this.releaseCallbackPtr(bridge, requestId);
+      }
+      this.releaseTokenState(requestId);
+    }
+    this.tracker.rejectAll(error);
   }
 
   private resetRuntimeLifecycleState(error?: unknown): void {
     if (error != null) {
-      this.rejectQueuedRequestCompletions(error);
+      this.rejectAllTrackedRequests(error);
     } else {
-      this.schedulerPumpGeneration += 1;
-      this.schedulerPumpPromise = null;
-      this.queuedRequestCompletions.clear();
+      this.scheduler.reset();
+      this.tracker.clear();
     }
-    this.activeQueuedRequestRuns.clear();
     this.runtimeObservabilityEnabled = false;
     this.backendProfilingEnabled = false;
     this.transportObservability = {
@@ -298,306 +333,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     };
   }
 
-  private bufferQueuedTokenPiece(requestId: GenerateRequestId, token: string): void {
-    const buffered = this.queuedPromptTokenBuffers.get(requestId);
-    if (buffered != null) {
-      buffered.push(token);
-      return;
-    }
-    this.queuedPromptTokenBuffers.set(requestId, [token]);
-  }
-
-  private flushQueuedTokenPieces(requestId: GenerateRequestId): void {
-    const onToken = this.queuedPromptCallbacks.get(requestId);
-    const bufferedPieces = this.queuedPromptTokenBuffers.get(requestId);
-    if (onToken == null || bufferedPieces == null || bufferedPieces.length === 0) {
-      if (bufferedPieces != null) {
-        bufferedPieces.length = 0;
-      }
-      return;
-    }
-
-    let readIndex = 0;
-    while (readIndex < bufferedPieces.length) {
-      const piece = bufferedPieces[readIndex];
-      try {
-        onToken(piece);
-      } catch (error) {
-        this.queuedPromptCallbackErrors.set(requestId, error);
-        const remainingStart = readIndex + 1;
-        const remainingCount = bufferedPieces.length - remainingStart;
-        if (remainingCount > 0) {
-          bufferedPieces.copyWithin(0, remainingStart);
-        }
-        bufferedPieces.length = Math.max(remainingCount, 0);
-        break;
-      }
-      readIndex += 1;
-    }
-
-    if (readIndex >= bufferedPieces.length) {
-      bufferedPieces.length = 0;
-    }
-  }
-
-  private waitForNextSchedulerStep(): Promise<void> {
-    return new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
-  }
-
-  private shouldYieldForResponsiveness(
-    burstTickCount: number
-  ): boolean {
-    return (
-      typeof window !== 'undefined' &&
-      typeof document !== 'undefined' &&
-      burstTickCount >= SCHEDULER_PUMP_SYNC_BURST_LIMIT
-    );
-  }
-
-  private shouldYieldSchedulerPump(
-    burstTickCount: number,
-    waitingStreak: number
-  ): boolean {
-    if (this.shouldYieldForResponsiveness(burstTickCount)) {
-      return true;
-    }
-    return waitingStreak >= SCHEDULER_PUMP_IDLE_STREAK_BEFORE_YIELD;
-  }
-
-  private cleanupConsumedCompletionState(requestId: GenerateRequestId): void {
-    const completion = this.queuedRequestCompletions.get(requestId);
-    if (
-      completion != null &&
-      completion.settled &&
-      completion.consumed &&
-      completion.waiterCount === 0
-    ) {
-      this.queuedRequestCompletions.delete(requestId);
-    }
-  }
-
-  private getOrCreateQueuedRequestCompletion(
-    requestId: GenerateRequestId
-  ): QueuedRequestCompletionState {
-    const existing = this.queuedRequestCompletions.get(requestId);
-    if (existing != null) {
-      return existing;
-    }
-
-    const deferred = createDeferred<GenerateResponse>();
-    const completionState: QueuedRequestCompletionState = {
-      promise: deferred.promise,
-      resolve: deferred.resolve,
-      reject: deferred.reject,
-      settled: false,
-      consumed: false,
-      waiterCount: 0,
-      callbackError: undefined,
-      cancelRequested: false,
-    };
-    void completionState.promise.catch(() => {});
-    this.queuedRequestCompletions.set(requestId, completionState);
-    this.activeQueuedRequestRuns.add(requestId);
-    this.ensureSchedulerPumpRunning();
-    return completionState;
-  }
-
-  private settleCompletedQueuedRequest(
-    module: EngineModule,
-    requestId: GenerateRequestId,
-    completionState: QueuedRequestCompletionState
-  ): boolean {
-    if (completionState.settled) {
-      return false;
-    }
-    const status = this.callNumber(module, 'CE_GetCompletedRequestStatus', ['number'], [requestId]);
-    if (status === COMPLETED_REQUEST_STATUS_PENDING) {
-      return false;
-    }
-
-    try {
-      const response = this.takeCompletedResponse(module, requestId);
-      completionState.callbackError = this.queuedPromptCallbackErrors.get(requestId);
-      completionState.settled = true;
-      completionState.resolve(response);
-    } catch (error) {
-      completionState.settled = true;
-      completionState.reject(error);
-    } finally {
-      this.releaseQueuedPromptCallback(module, requestId);
-      this.activeQueuedRequestRuns.delete(requestId);
-      this.cleanupConsumedCompletionState(requestId);
-    }
-    return true;
-  }
-
-  private settleCompletedQueuedRequests(module: EngineModule): boolean {
-    let settledAny = false;
-    for (const [requestId, completionState] of this.queuedRequestCompletions) {
-      settledAny =
-        this.settleCompletedQueuedRequest(module, requestId, completionState) || settledAny;
-    }
-    return settledAny;
-  }
-
-  private requestCancellationForCallbackErrors(): void {
-    for (const [requestId, completionState] of this.queuedRequestCompletions) {
-      if (completionState.settled || completionState.cancelRequested) {
-        continue;
-      }
-      const callbackError = this.queuedPromptCallbackErrors.get(requestId);
-      if (callbackError == null) {
-        continue;
-      }
-      completionState.callbackError = callbackError;
-      completionState.cancelRequested = true;
-      void this.cancelQueuedRequest(requestId);
-    }
-  }
-
-  private flushAllQueuedTokenPieces(): void {
-    for (const requestId of this.queuedPromptTokenBuffers.keys()) {
-      this.flushQueuedTokenPieces(requestId);
-    }
-  }
-
-  private rejectPendingQueuedRequests(
-    module: EngineModule,
-    error: unknown
-  ): void {
-    for (const [requestId, completionState] of this.queuedRequestCompletions) {
-      if (completionState.settled) {
-        continue;
-      }
-      completionState.settled = true;
-      completionState.reject(error);
-      this.releaseQueuedPromptCallback(module, requestId);
-      this.activeQueuedRequestRuns.delete(requestId);
-      this.cleanupConsumedCompletionState(requestId);
-    }
-  }
-
-  private ensureSchedulerPumpRunning(): void {
-    if (this.schedulerPumpPromise != null || this.queuedRequestCompletions.size === 0) {
-      return;
-    }
-    const generation = this.schedulerPumpGeneration;
-    const pumpPromise = this.runSchedulerPump(generation);
-    this.schedulerPumpPromise = pumpPromise;
-    void pumpPromise.finally(() => {
-      if (this.schedulerPumpPromise === pumpPromise) {
-        this.schedulerPumpPromise = null;
-        if (this.engineInitialized && this.activeQueuedRequestRuns.size > 0) {
-          this.ensureSchedulerPumpRunning();
-        }
-      }
-    });
-  }
-
-  private async runSchedulerPump(generation: number): Promise<void> {
-    const module = this.getReadyEngineModule();
-    let burstTickCount = 0;
-    let waitingStreak = 0;
-    while (generation === this.schedulerPumpGeneration) {
-      this.settleCompletedQueuedRequests(module);
-      if (this.activeQueuedRequestRuns.size === 0) {
-        return;
-      }
-
-      let stepResult: number;
-      try {
-        stepResult = await this.callNumberAsync(module, 'CE_RunSchedulerTick');
-      } catch (error) {
-        if (generation !== this.schedulerPumpGeneration || !this.engineInitialized || this.module == null) {
-          return;
-        }
-        this.rejectPendingQueuedRequests(module, error);
-        return;
-      }
-
-      if (generation !== this.schedulerPumpGeneration) {
-        return;
-      }
-
-      this.flushAllQueuedTokenPieces();
-      this.requestCancellationForCallbackErrors();
-      const settledAfterTick = this.settleCompletedQueuedRequests(module);
-      if (this.activeQueuedRequestRuns.size === 0) {
-        return;
-      }
-
-      if (stepResult === REQUEST_STEP_RESULT_INVALID) {
-        this.rejectPendingQueuedRequests(module, new Error('Queued scheduler tick became invalid.'));
-        return;
-      }
-      if (stepResult === REQUEST_STEP_RESULT_FATAL_NO_PROGRESS) {
-        this.rejectPendingQueuedRequests(
-          module,
-          new Error('Queued request execution failed to make progress.')
-        );
-        return;
-      }
-      if (
-        stepResult !== REQUEST_STEP_RESULT_WAITING &&
-        stepResult !== REQUEST_STEP_RESULT_PROGRESSED &&
-        stepResult !== REQUEST_STEP_RESULT_TERMINAL
-      ) {
-        this.rejectPendingQueuedRequests(
-          module,
-          new Error(`Queued scheduler returned unknown step result ${stepResult}.`)
-        );
-        return;
-      }
-
-      burstTickCount += 1;
-      if (stepResult === REQUEST_STEP_RESULT_WAITING && !settledAfterTick) {
-        waitingStreak += 1;
-      } else {
-        waitingStreak = 0;
-      }
-
-      if (this.shouldYieldSchedulerPump(burstTickCount, waitingStreak)) {
-        burstTickCount = 0;
-        waitingStreak = 0;
-        await this.waitForNextSchedulerStep();
-      }
-    }
-  }
-
-  private callNumber(
-    module: EngineModule,
-    ident: string,
-    argTypes: string[] = [],
-    args: unknown[] = []
-  ): number {
-    return callModuleNumber(module, ident, argTypes, args);
-  }
-
-  private async callNumberAsync(
-    module: EngineModule,
-    ident: string,
-    argTypes: string[] = [],
-    args: unknown[] = []
-  ): Promise<number> {
-    return callModuleNumberAsync(module, ident, argTypes, args);
-  }
-
-  private readRuntimeObservabilityFromModule(
-    module: EngineModule
-  ): RuntimeAggregateObservabilityMetrics | null {
-    return readRuntimeObservabilityFromModule(
-      module,
-      this.callNumber.bind(this)
-    );
-  }
-
-  private takeCompletedResponse(
-    module: EngineModule,
-    requestId: GenerateRequestId
-  ): GenerateResponse {
-    return takeCompletedResponse(module, requestId, this.callNumber.bind(this));
+  private ensureTracked(requestId: GenerateRequestId) {
+    return this.scheduler.track(requestId);
   }
 
   private async importModuleFactory(moduleUrl: string): Promise<(options: EngineModuleOptions) => Promise<EngineModule>> {
@@ -642,13 +379,30 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         };
 
         this.module = await createModule(moduleConfig);
+        this.wasmBridge = new WasmBridge(this.module);
       })().catch((error) => {
         this.initPromise = null;
         this.module = null;
+        this.wasmBridge = null;
         throw error;
       });
     }
     await this.initPromise;
+  }
+
+  public setQueuedRequestPumpMode(mode: QueuedRequestPumpMode): void {
+    this.scheduler.setPumpMode(mode);
+    if (mode === 'internal' && this.engineInitialized) {
+      this.scheduler.ensureRunning();
+    }
+  }
+
+  public hasActiveQueuedRequests(): boolean {
+    return this.scheduler.hasActiveRequests();
+  }
+
+  public async pumpQueuedRequestsOnce(): Promise<QueuedRequestPumpStepResult> {
+    return this.scheduler.pumpOnce();
   }
 
   public async loadModelFromUrl(
@@ -732,15 +486,16 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     config?: InferenceInitConfig
   ): Promise<void> {
     const module = await this.ensureModule();
+    const bridge = this.getLoadedWasmBridge();
     if (!modelPath || modelPath.trim().length === 0) {
       throw new Error('modelPath must not be empty.');
     }
     if (this.engineInitialized) {
-      this.rejectQueuedRequestCompletions(
-        new Error('Engine runtime was reset during reinitialization.')
+      this.rejectAllTrackedRequests(
+        new Error('Engine runtime was reset during reinitialization.'),
+        bridge
       );
-      this.releaseAllQueuedPromptCallbacks(module);
-      module.ccall('CE_Close', null, [], []);
+      bridge.close();
       this.engineInitialized = false;
       this.resetRuntimeLifecycleState();
     }
@@ -750,55 +505,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       normalizedConfig.enableRuntimeObservability > 0;
     this.backendProfilingEnabled = normalizedConfig.enableBackendProfiling > 0;
     this.transportObservability.enabled = this.runtimeObservabilityEnabled;
-    const result = await module.ccall(
-      'CE_Init',
-      'number',
-      [
-        'string',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-      ],
-      [
-        modelPath,
-        normalizedConfig.nCtx,
-        normalizedConfig.nBatch,
-        normalizedConfig.nUbatch,
-        normalizedConfig.nSeqMax,
-        normalizedConfig.nThreads,
-        normalizedConfig.nThreadsBatch,
-        normalizedConfig.nGpuLayers,
-        normalizedConfig.flashAttention,
-        normalizedConfig.kvUnified,
-        normalizedConfig.maxCachedSessions,
-        normalizedConfig.retainedPrefixTokens,
-        normalizedConfig.prefillChunkSize,
-        normalizedConfig.prefixCacheIntervalTokens,
-        normalizedConfig.maxPrefixCacheEntries,
-        normalizedConfig.schedulerPolicy,
-        normalizedConfig.decodeTokenReserve,
-        normalizedConfig.adaptivePrefillChunking,
-        normalizedConfig.enableRuntimeObservability,
-        normalizedConfig.enableBackendProfiling,
-      ],
-      { async: true }
-    );
+    const result = await bridge.initEngine(modelPath, normalizedConfig);
     if (result !== 0) {
       this.engineInitialized = false;
       this.resetRuntimeLifecycleState(
@@ -819,44 +526,42 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     if (!module) {
       return;
     }
-    this.rejectQueuedRequestCompletions(new Error('Engine runtime was closed.'));
-    module.ccall('CE_Close', null, [], []);
+    const bridge = this.wasmBridge ?? new WasmBridge(module);
+    this.rejectAllTrackedRequests(new Error('Engine runtime was closed.'), bridge);
+    bridge.close();
     this.modelLoader.cleanupAfterClose(module);
-    this.releaseAllQueuedPromptCallbacks(module);
     this.engineInitialized = false;
     this.resetRuntimeLifecycleState();
     this.lastModelLoadInfo = null;
     this.module = null;
+    this.wasmBridge = null;
     this.initPromise = null;
   }
 
   public async cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean> {
-    const module = this.getReadyEngineModule();
+    const bridge = this.getReadyEngineBridge();
     if (!Number.isInteger(requestId) || requestId <= 0) {
       return false;
     }
 
-    const result = module.ccall(
-      'CE_CancelQueuedRequest',
-      'number',
-      ['number'],
-      [requestId]
-    );
-    const cancelled = result instanceof Promise ? Boolean(await result) : Boolean(result);
+    const cancelled = await bridge.cancelQueuedRequest(requestId);
     if (!cancelled) {
       return false;
     }
 
-    const completionState = this.queuedRequestCompletions.get(requestId);
-    if (completionState != null) {
-      completionState.cancelRequested = true;
-      if (this.settleCompletedQueuedRequest(module, requestId, completionState)) {
+    const tracked = this.tracker.get(requestId);
+    if (tracked != null) {
+      tracked.cancelRequested = true;
+      if (this.scheduler.settleCompletedRequestIfPresent(bridge, requestId)) {
         return true;
       }
     }
 
-    if (!this.activeQueuedRequestRuns.has(requestId)) {
-      this.releaseCancelledQueuedRequestState(module, requestId);
+    if (!this.tracker.hasActive(requestId)) {
+      this.finalizeRequest(bridge, requestId, {
+        consumeCompletedResponse: true,
+        deleteCompletion: true,
+      });
     }
     return true;
   }
@@ -866,7 +571,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     promptText: string,
     options: number | PromptOptions = 128
   ): Promise<GenerateRequestId> {
-    const module = this.getReadyEngineModule();
+    const bridge = this.getReadyEngineBridge();
     const request = this.buildGenerateRequest(contextKey, promptText, options);
     const onToken = typeof options === 'object' ? options.onToken : undefined;
     const signal = typeof options === 'object' ? options.signal : undefined;
@@ -875,57 +580,62 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       throw createAbortError('Prompt was aborted before it was enqueued.');
     }
 
+    const useNativeRuntimeEvents = this.shouldUseNativeRuntimeEvents(bridge, onToken);
+
     let requestId: GenerateRequestId = 0;
     const callbackPtr =
-      onToken == null && signal == null
+      useNativeRuntimeEvents || (onToken == null && signal == null)
         ? 0
-        : module.addFunction((rawPtr: bigint, length: number) => {
-          if (signal?.aborted) {
-            return 1;
-          }
-          if (onToken != null && requestId !== 0) {
-            this.bufferQueuedTokenPiece(requestId, module.UTF8ToString(Number(rawPtr), length));
-          }
-          return signal?.aborted ? 1 : 0;
-        }, 'ipi');
+        : bridge.registerTokenCallback((token: string) => {
+            if (signal?.aborted) {
+              return 1;
+            }
+            if (onToken != null && requestId !== 0) {
+              this.scheduler.bufferTokenPiece(requestId, token);
+              this.transportObservability.nativeCallbackTokenCount =
+                (this.transportObservability.nativeCallbackTokenCount ?? 0) + 1;
+            }
+            return signal?.aborted ? 1 : 0;
+          });
 
-    const requestIdResult = module.ccall(
-      'CE_EnqueuePrompt',
-      'number',
-      ['string', 'string', 'number', 'pointer'],
-      [request.contextKey, request.promptText, request.maxOutputTokens, Number(callbackPtr)]
-    );
-    if (requestIdResult instanceof Promise) {
+    try {
+      requestId = bridge.enqueuePrompt(
+        request.contextKey,
+        request.promptText,
+        request.maxOutputTokens,
+        Number(callbackPtr)
+      );
+    } catch (error) {
       if (callbackPtr !== 0) {
-        module.removeFunction(callbackPtr);
+        bridge.unregisterCallback(callbackPtr);
       }
-      throw new Error('Unexpected async result while enqueuing a request.');
+      throw error;
     }
-
-    requestId = requestIdResult as GenerateRequestId;
     if (!requestId) {
       if (callbackPtr !== 0) {
-        module.removeFunction(callbackPtr);
+        bridge.unregisterCallback(callbackPtr);
       }
       throw new Error('Failed to enqueue request.');
     }
 
     if (callbackPtr !== 0) {
+      this.transportObservability.tokenCallbackRegistrationCount =
+        (this.transportObservability.tokenCallbackRegistrationCount ?? 0) + 1;
       this.queuedPromptCallbacks.set(requestId, onToken);
       this.queuedPromptTokenBuffers.set(requestId, []);
       this.queuedPromptCallbackPtrs.set(requestId, callbackPtr);
+    } else if (onToken != null) {
+      this.queuedPromptCallbacks.set(requestId, onToken);
+      this.queuedPromptTokenBuffers.set(requestId, []);
     }
 
     if (signal != null) {
-      const abortListener = () => {
+      this.tracker.attachSignal(requestId, signal, () => {
         void this.cancelQueuedRequest(requestId);
-      };
-      this.queuedPromptSignals.set(requestId, signal);
-      this.queuedPromptSignalAbortListeners.set(requestId, abortListener);
-      signal.addEventListener('abort', abortListener, { once: true });
+      });
     }
 
-    this.getOrCreateQueuedRequestCompletion(requestId);
+    this.ensureTracked(requestId);
 
     return requestId;
   }
@@ -934,7 +644,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     requestId: GenerateRequestId,
     options?: { signal?: AbortSignal }
   ): Promise<GenerateResponse> {
-    this.getReadyEngineModule();
+    this.getReadyEngineBridge();
     if (!Number.isInteger(requestId) || requestId <= 0) {
       throw new Error('requestId must be a positive integer.');
     }
@@ -943,35 +653,36 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       throw createAbortError('Prompt was aborted before execution started.');
     }
 
-    const completionState = this.getOrCreateQueuedRequestCompletion(requestId);
+    const tracked = this.ensureTracked(requestId);
+    const signal = options?.signal;
     const abortListener =
-      options?.signal == null
+      signal == null
         ? null
         : () => {
             void this.cancelQueuedRequest(requestId);
           };
     if (abortListener != null) {
-      options?.signal?.addEventListener('abort', abortListener, { once: true });
+      signal?.addEventListener('abort', abortListener, { once: true });
     }
 
-    completionState.consumed = true;
-    completionState.waiterCount += 1;
+    tracked.consumed = true;
+    tracked.waiterCount += 1;
     try {
-      const response = await completionState.promise;
-      const callbackError = completionState.callbackError;
+      const response = await tracked.promise;
+      const callbackError = tracked.callbackError;
       if (callbackError != null) {
         throw callbackError;
       }
-      if (response.cancelled || options?.signal?.aborted) {
+      if (response.cancelled || signal?.aborted) {
         throw createAbortError(response.errorMessage ?? 'Queued request cancelled.');
       }
       return response;
     } finally {
       if (abortListener != null) {
-        options?.signal?.removeEventListener('abort', abortListener);
+        signal?.removeEventListener('abort', abortListener);
       }
-      completionState.waiterCount = Math.max(0, completionState.waiterCount - 1);
-      this.cleanupConsumedCompletionState(requestId);
+      tracked.waiterCount = Math.max(0, tracked.waiterCount - 1);
+      this.tracker.cleanupIfConsumed(requestId);
     }
   }
 
@@ -1007,8 +718,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       return null;
     }
 
-    const module = this.getReadyEngineModule();
-    return this.readRuntimeObservabilityFromModule(module);
+    return this.getReadyEngineBridge().readRuntimeObservability();
   }
 
   public getRuntimeObservability(): RuntimeAggregateObservabilityMetrics | null {
@@ -1016,27 +726,17 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   }
 
   public async getBackendObservability(): Promise<BackendObservability | null> {
-    const module = this.getLoadedModule();
-    const rawPtr = await module.ccall('CE_GetBackendObservabilityJson', 'pointer', [], [], {
-      async: true,
-    });
-
-    // ccall with 'pointer' return type already converts BigInt → Number.
-    const ptr = rawPtr as number;
-
-    if (!ptr) {
+    const raw = await this.getLoadedWasmBridge().getBackendObservabilityJson();
+    if (raw == null) {
       return null;
     }
 
     try {
-      const raw = module.UTF8ToString(ptr);
-      const parsed = JSON.parse(raw) as BackendObservability;
+      const parsed = parseBackendObservabilityJson(raw);
       parsed.profilingEnabled = this.backendProfilingEnabled;
       return parsed;
     } catch (error) {
       throw new Error(`Failed to parse backend observability: ${asErrorMessage(error)}`);
-    } finally {
-      module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
     }
   }
 }

@@ -7,22 +7,22 @@ import {
 import { FileSystemStorage } from '../storage/file-system-storage.js';
 import {
   DEFAULT_MAX_MODEL_BYTES,
-  EngineModule,
   MountableModelFile,
   URL_DOWNLOAD_CONCURRENCY_MEMORY,
   URL_DOWNLOAD_CONCURRENCY_OPFS,
   URL_METADATA_FETCH_CONCURRENCY,
   UrlShardMetadata,
   createMountableModelFile,
-  mapWithConcurrency,
   normalizeModelFileName,
-} from './main-thread-runtime-shared.js';
+} from './main-thread-runtime-constants.js';
+import { EngineModule } from '../wasm/engine-module.js';
 import {
-  asErrorMessage,
   createAbortError,
   createLinkedAbortController,
   isAbortError,
-} from './runtime-shared.js';
+} from '../utils/abort.js';
+import { mapWithConcurrency } from '../utils/async.js';
+import { asErrorMessage } from '../utils/error.js';
 
 export class MainThreadModelLoader {
   private loadedModelPaths: string[] = [];

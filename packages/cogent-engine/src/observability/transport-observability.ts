@@ -9,4 +9,12 @@ export interface TransportObservability {
   flushCount: number;
   coalescedTokenCount: number;
   maxObservedBufferedTokenCount: number;
+  tokenTransportPreference?: 'auto' | 'callbacks' | 'runtime-events';
+  activeTokenTransport?: 'none' | 'callbacks' | 'runtime-events';
+  tokenCallbackRegistrationCount?: number;
+  nativeCallbackTokenCount?: number;
+  runtimeEventDrainCount?: number;
+  runtimeEventTokenCount?: number;
+  runtimeEventTerminalCount?: number;
+  runtimeEventTextBytes?: number;
 }

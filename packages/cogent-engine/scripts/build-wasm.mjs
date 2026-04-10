@@ -19,6 +19,7 @@ const packageWasmDir = path.join(projectRoot, 'dist', packageWasmSubdir);
 const enableJspi = true;
 const emscriptenEnvironment = 'web,worker';
 const enableMemory64 = readBooleanEnv('CE_WASM_MEM64', true);
+const ltoMode = process.env.CE_WASM_LTO_MODE?.trim().toUpperCase() || (isWindows ? 'THIN' : 'FULL');
 const initialMemory = process.env.CE_WASM_INITIAL_MEMORY?.trim();
 const maximumMemory =
   process.env.CE_WASM_MAXIMUM_MEMORY?.trim() || (enableMemory64 ? '16384MB' : '4096MB');
@@ -78,6 +79,12 @@ function validateMaximumMemorySetting(rawValue) {
       `CE_WASM_MAXIMUM_MEMORY=${rawValue} exceeds the wasm32 limit of 4GB. ` +
         'Use 4096MB or enable CE_WASM_MEM64.'
     );
+  }
+}
+
+function validateLtoMode(rawValue) {
+  if (!['OFF', 'THIN', 'FULL'].includes(rawValue)) {
+    throw new Error(`Invalid CE_WASM_LTO_MODE=${rawValue}. Use OFF, THIN, or FULL.`);
   }
 }
 
@@ -402,6 +409,11 @@ function removeInvalidBuildDirectory(expectedGenerator) {
     reasons.push(`CE_WASM_MAXIMUM_MEMORY=${cachedMaximumMemory}`);
   }
 
+  const cachedLtoMode = getCacheEntry(cacheText, 'CE_WASM_LTO_MODE');
+  if (cachedLtoMode && cachedLtoMode.toUpperCase() !== ltoMode) {
+    reasons.push(`CE_WASM_LTO_MODE=${cachedLtoMode}`);
+  }
+
   if (expectedGenerator && cachedGenerator && cachedGenerator !== expectedGenerator) {
     reasons.push(`generator=${cachedGenerator}`);
   }
@@ -546,6 +558,7 @@ async function copyWasmArtifacts() {
 
 const buildConfig = resolveBuildConfiguration();
 validateMaximumMemorySetting(maximumMemory);
+validateLtoMode(ltoMode);
 removeInvalidBuildDirectory(buildConfig.generator);
 
 activeMakeProgramDir = buildConfig.makeProgram ? path.dirname(buildConfig.makeProgram) : null;
@@ -566,6 +579,7 @@ const cmakeConfigureArgs = [
   `-DCE_WASM_USE_JSPI=${enableJspi ? 'ON' : 'OFF'}`,
   `-DCE_WASM_ENVIRONMENT=${emscriptenEnvironment}`,
   `-DCE_WASM_MEM64=${enableMemory64 ? 'ON' : 'OFF'}`,
+  `-DCE_WASM_LTO_MODE=${ltoMode}`,
   '-DLLAMA_BUILD_HTML=OFF'
 ];
 
@@ -592,7 +606,7 @@ if (stackSize) {
 }
 
 console.log(
-  `${buildLabel} generator=${buildConfig.generator} mem64=${enableMemory64 ? 'on' : 'off'} output=dist/${packageWasmSubdir}` +
+  `${buildLabel} generator=${buildConfig.generator} mem64=${enableMemory64 ? 'on' : 'off'} lto=${ltoMode.toLowerCase()} output=dist/${packageWasmSubdir}` +
     (buildConfig.makeProgram ? ` make_program=${buildConfig.makeProgram}` : '')
 );
 

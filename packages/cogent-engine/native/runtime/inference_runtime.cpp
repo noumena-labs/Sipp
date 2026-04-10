@@ -620,7 +620,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
                                      static_cast<std::size_t>(piece_length));
     slot.phase = SlotPhase::Streaming;
     slot_request.lifecycle = GenerateRequestLifecycle::Streaming;
-    slot_scheduler_.EmitBufferedTokenPiece(slot);
+    slot_scheduler_.EmitBufferedTokenPiece(request_queue_, slot);
 
     if (slot_request.cancel_requested) {
       slot.terminal_error_message = "Request cancelled.";
@@ -1154,6 +1154,82 @@ bool InferenceRuntime::CancelRequest(GenerateRequestId request_id) {
 
 RequestStepResult InferenceRuntime::RunSchedulerTick() {
   std::lock_guard<std::mutex> lock(operation_mutex_);
+  return RunSchedulerTickLocked();
+}
+
+SchedulerBurstResult InferenceRuntime::RunSchedulerBurst(
+    int32_t max_ticks, int32_t max_completed_responses,
+    int32_t max_emitted_tokens) {
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+
+  SchedulerBurstResult burst_result;
+  if (max_ticks <= 0 || primary_model_ == nullptr || shared_context_ == nullptr ||
+      sampler_ == nullptr) {
+    burst_result.status = RequestStepResult::Invalid;
+    return burst_result;
+  }
+
+  const int32_t clamped_max_completed =
+      std::max<int32_t>(0, max_completed_responses);
+  const int32_t clamped_max_emitted =
+      std::max<int32_t>(0, max_emitted_tokens);
+
+  for (int32_t tick_index = 0; tick_index < max_ticks; ++tick_index) {
+    const std::size_t completed_before = request_queue_.CompletedResponseCount();
+    const int32_t emitted_before = request_queue_.TotalEmittedTokenCount();
+    const RequestStepResult step_result = RunSchedulerTickLocked();
+    const std::size_t completed_after = request_queue_.CompletedResponseCount();
+    const int32_t emitted_after = request_queue_.TotalEmittedTokenCount();
+
+    burst_result.ticks_executed++;
+    if (completed_after > completed_before) {
+      burst_result.completed_response_count += static_cast<int32_t>(
+          completed_after - completed_before);
+    }
+    if (emitted_after > emitted_before) {
+      burst_result.emitted_token_count += emitted_after - emitted_before;
+    }
+    if (step_result == RequestStepResult::Progressed ||
+        step_result == RequestStepResult::Terminal) {
+      burst_result.progressed_ticks++;
+    }
+
+    if (step_result == RequestStepResult::Invalid ||
+        step_result == RequestStepResult::FatalNoProgress) {
+      burst_result.status = step_result;
+      return burst_result;
+    }
+
+    if (step_result == RequestStepResult::Waiting) {
+      burst_result.status =
+          burst_result.progressed_ticks > 0 ||
+                  burst_result.completed_response_count > 0
+              ? RequestStepResult::Progressed
+              : RequestStepResult::Waiting;
+      return burst_result;
+    }
+
+    if (clamped_max_completed > 0 &&
+        burst_result.completed_response_count >= clamped_max_completed) {
+      burst_result.status = RequestStepResult::Progressed;
+      return burst_result;
+    }
+    if (clamped_max_emitted > 0 &&
+        burst_result.emitted_token_count >= clamped_max_emitted) {
+      burst_result.status = RequestStepResult::Progressed;
+      return burst_result;
+    }
+  }
+
+  burst_result.status =
+      burst_result.progressed_ticks > 0 ||
+              burst_result.completed_response_count > 0
+          ? RequestStepResult::Progressed
+          : RequestStepResult::Waiting;
+  return burst_result;
+}
+
+RequestStepResult InferenceRuntime::RunSchedulerTickLocked() {
 
   if (primary_model_ == nullptr || shared_context_ == nullptr ||
       sampler_ == nullptr) {
@@ -1278,6 +1354,31 @@ RequestStepResult InferenceRuntime::RunRequestStep(GenerateRequestId request_id)
 
   return (tick_executed || admitted_any) ? RequestStepResult::Progressed
                                          : RequestStepResult::Waiting;
+}
+
+std::vector<GenerateRequestId>
+InferenceRuntime::DrainCompletedResponseIds(int32_t max_count) {
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+  if (max_count < 0) {
+    return {};
+  }
+
+  std::vector<GenerateRequestId> request_ids =
+      request_queue_.DrainCompletedResponseIds(
+          static_cast<std::size_t>(max_count));
+  std::sort(request_ids.begin(), request_ids.end());
+  return request_ids;
+}
+
+std::vector<RuntimeEvent> InferenceRuntime::DrainRuntimeEvents(
+    int32_t max_count, int32_t max_text_bytes) {
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+  const std::size_t clamped_max_count =
+      max_count <= 0 ? 0 : static_cast<std::size_t>(max_count);
+  const std::size_t clamped_max_text_bytes =
+      max_text_bytes <= 0 ? 0 : static_cast<std::size_t>(max_text_bytes);
+  return request_queue_.DrainRuntimeEvents(clamped_max_count,
+                                           clamped_max_text_bytes);
 }
 
 bool InferenceRuntime::TryPeekCompletedResponse(GenerateRequestId request_id,

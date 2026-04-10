@@ -5,12 +5,47 @@ import {
   WorkerRequestMessage,
   WorkerResponseMessage,
   WorkerLoadModelResult,
-  WorkerRunQueuedRequestResult,
   WorkerBackendObservabilityResult,
 } from './engine-runtime-worker-protocol.js';
 import { WorkerEntryState } from './worker-entry-state.js';
 
 const state = new WorkerEntryState();
+
+function startQueuedRequestCompletion(requestId: GenerateRequestId): void {
+  const runtime = state.ensureEngine();
+  state.markRequestRunning(requestId);
+  void runtime
+    .runQueuedRequest(requestId)
+    .then((response) => {
+      state.flushBufferedTokens(requestId);
+      const payload: WorkerResponseMessage = {
+        kind: 'request-complete',
+        requestId,
+        result: {
+          response,
+          runtimeAggregateObservability: runtime.getRuntimeAggregateObservability(),
+          transportObservability: state.cloneTransportObservability(),
+        },
+      };
+      self.postMessage(payload);
+    })
+    .catch((error) => {
+      state.flushBufferedTokens(requestId);
+      const payload: WorkerResponseMessage = {
+        kind: 'request-failed',
+        requestId,
+        message: state.toErrorMessage(error),
+        errorName: error instanceof Error ? error.name : undefined,
+        runtimeAggregateObservability: runtime.getRuntimeAggregateObservability(),
+        transportObservability: state.cloneTransportObservability(),
+      };
+      self.postMessage(payload);
+    })
+    .finally(() => {
+      state.releaseRequestResources(requestId);
+      state.unmarkRequestRunning(requestId);
+    });
+}
 
 async function handleInitModule(
   message: Extract<WorkerRequestMessage, { kind: 'init-module' }>
@@ -181,26 +216,9 @@ async function handleQueuePrompt(
     }
   );
   state.rememberRequestAbortController(requestId, abortController);
+  startQueuedRequestCompletion(requestId);
+  state.ensureSchedulerPumpRunning();
   return requestId;
-}
-
-async function handleRunQueuedRequest(
-  message: Extract<WorkerRequestMessage, { kind: 'run-queued-request' }>
-): Promise<WorkerRunQueuedRequestResult> {
-  const runtime = state.ensureEngine();
-  state.markRequestRunning(message.requestId);
-  try {
-    const response = await runtime.runQueuedRequest(message.requestId);
-    state.flushBufferedTokens(message.requestId);
-    return {
-      response,
-      runtimeAggregateObservability: runtime.getRuntimeAggregateObservability(),
-      transportObservability: state.cloneTransportObservability(),
-    };
-  } finally {
-    state.releaseRequestResources(message.requestId);
-    state.unmarkRequestRunning(message.requestId);
-  }
 }
 
 async function handleCancelRequest(
@@ -266,9 +284,6 @@ self.onmessage = async (event: MessageEvent<WorkerRequestMessage>) => {
         break;
       case 'queue-prompt':
         value = await handleQueuePrompt(message);
-        break;
-      case 'run-queued-request':
-        value = await handleRunQueuedRequest(message);
         break;
       case 'cancel-request':
         value = await handleCancelRequest(message);

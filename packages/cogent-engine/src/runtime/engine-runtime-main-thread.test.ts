@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import type { DetailedRequestObservabilityMetrics } from '../observability/runtime-observability-detail.js';
 import { FileSystemStorage } from '../storage/file-system-storage.js';
 import { MainThreadEngineRuntime } from './engine-runtime-main-thread.js';
 
@@ -10,8 +11,14 @@ const REQUEST_STEP_RESULT_WAITING = 0;
 const COMPLETED_REQUEST_STATUS_PENDING = 0;
 const COMPLETED_REQUEST_STATUS_COMPLETED = 1;
 const COMPLETED_REQUEST_STATUS_CANCELLED = 2;
+const RUNTIME_EVENT_KIND_TOKEN = 1;
+const RUNTIME_EVENT_KIND_TERMINAL = 2;
 
 type ScenarioKind = 'success' | 'callback-error';
+type TransportKind = 'callback' | 'event';
+type MockMainThreadModuleOptions = {
+  supportsRuntimeEventDrain?: boolean;
+};
 
 class MockMainThreadModule {
   public readonly mountCalls: Array<{ mountDir: string; files: Blob[] }> = [];
@@ -39,21 +46,33 @@ class MockMainThreadModule {
   public runStepCallCount = 0;
   public removedFunctionPtrs: number[] = [];
   public initResult = 0;
+  public lastQueuedCallbackPtr = 0;
 
   private readonly heapU8: Uint8Array;
   private readonly functionTable = new Map<number, (...args: number[]) => number>();
   private readonly completedOutputText: string;
   private readonly completedErrorText: string;
   private readonly completedStatus: number;
+  private readonly supportsRuntimeEventDrain: boolean;
   private nextHeapPtr = 1024;
   private nextFunctionPtr = 1;
   private nextRequestId = 7;
   private queuedCallbackPtr = 0;
   private runStepCount = 0;
   private completedResponseAvailable = false;
+  private readonly runtimeEvents: Array<{
+    requestId: number;
+    kind: number;
+    status: number;
+    text: string;
+  }> = [];
 
-  constructor(private readonly scenario: ScenarioKind) {
-    const memory = new ArrayBuffer(16 * 1024);
+  constructor(
+    private readonly scenario: ScenarioKind,
+    private readonly transport: TransportKind = 'callback',
+    options: MockMainThreadModuleOptions = {}
+  ) {
+    const memory = new ArrayBuffer(2 * 1024 * 1024);
     this.heapU8 = new Uint8Array(memory);
     this.HEAP32 = new Int32Array(memory);
     this.HEAPF64 = new Float64Array(memory);
@@ -65,6 +84,8 @@ class MockMainThreadModule {
       scenario === 'success'
         ? COMPLETED_REQUEST_STATUS_COMPLETED
         : COMPLETED_REQUEST_STATUS_CANCELLED;
+    this.supportsRuntimeEventDrain =
+      options.supportsRuntimeEventDrain ?? transport === 'event';
   }
 
   public _free(_ptr: number): void {}
@@ -111,13 +132,40 @@ class MockMainThreadModule {
     return opts?.async ? Promise.resolve(result) : result;
   }
 
+  public queueRuntimeTokenEvent(requestId: number, text: string): void {
+    this.runtimeEvents.push({
+      requestId,
+      kind: RUNTIME_EVENT_KIND_TOKEN,
+      status: COMPLETED_REQUEST_STATUS_PENDING,
+      text,
+    });
+  }
+
+  public queueRuntimeTerminalEvent(
+    requestId: number,
+    status = COMPLETED_REQUEST_STATUS_COMPLETED
+  ): void {
+    this.runtimeEvents.push({
+      requestId,
+      kind: RUNTIME_EVENT_KIND_TERMINAL,
+      status,
+      text: '',
+    });
+  }
+
   private handleCall(ident: string, args: unknown[]): number {
     switch (ident) {
       case 'CE_EnqueuePrompt':
         this.queuedCallbackPtr = Number(args[3]);
+        this.lastQueuedCallbackPtr = this.queuedCallbackPtr;
         return this.nextRequestId++;
       case 'CE_ResetRuntimeObservability':
         return 0;
+      case 'CE_DrainRuntimeEvents':
+        if (!this.supportsRuntimeEventDrain) {
+          throw new Error(`Unexpected ccall: ${ident}`);
+        }
+        return this.drainRuntimeEvents(args);
       case 'CE_RunSchedulerTick':
       case 'CE_RunRequestStep':
         this.runStepCallCount += 1;
@@ -164,6 +212,10 @@ class MockMainThreadModule {
     this.insideNativeStep = true;
     const callback = this.functionTable.get(this.queuedCallbackPtr);
     const emitToken = (text: string) => {
+      if (this.transport === 'event') {
+        this.queueRuntimeTokenEvent(this.nextRequestId - 1, text);
+        return;
+      }
       if (callback == null) {
         return;
       }
@@ -182,6 +234,9 @@ class MockMainThreadModule {
       emitToken('tok2');
       this.runStepCount += 1;
       this.completedResponseAvailable = true;
+      if (this.supportsRuntimeEventDrain) {
+        this.queueRuntimeTerminalEvent(this.nextRequestId - 1, this.completedStatus);
+      }
       this.insideNativeStep = false;
       return REQUEST_STEP_RESULT_TERMINAL;
     }
@@ -195,8 +250,53 @@ class MockMainThreadModule {
 
     this.runStepCount += 1;
     this.completedResponseAvailable = true;
+    if (this.supportsRuntimeEventDrain) {
+      this.queueRuntimeTerminalEvent(this.nextRequestId - 1, this.completedStatus);
+    }
     this.insideNativeStep = false;
     return REQUEST_STEP_RESULT_TERMINAL;
+  }
+
+  private drainRuntimeEvents(args: unknown[]): number {
+    const eventBufferPtr = Number(args[0]);
+    const eventCapacity = Number(args[1]);
+    const textBufferPtr = Number(args[2]);
+    const textCapacity = Number(args[3]);
+    const resultPtr = Number(args[4]);
+    const resultOffset = resultPtr >> 2;
+
+    if (eventCapacity <= 0) {
+      this.HEAP32[resultOffset] = 0;
+      this.HEAP32[resultOffset + 1] = 0;
+      return 0;
+    }
+
+    let drainedEvents = 0;
+    let usedTextBytes = 0;
+    while (drainedEvents < eventCapacity && this.runtimeEvents.length > 0) {
+      const event = this.runtimeEvents[0];
+      const textBytes = event.text.length > 0 ? event.text.length + 1 : 0;
+      if (textBytes > 0 && usedTextBytes + textBytes > textCapacity) {
+        break;
+      }
+
+      const eventOffset = (eventBufferPtr + drainedEvents * 20) >> 2;
+      this.HEAP32[eventOffset] = event.requestId;
+      this.HEAP32[eventOffset + 1] = event.kind;
+      this.HEAP32[eventOffset + 2] = event.status;
+      this.HEAP32[eventOffset + 3] = usedTextBytes;
+      this.HEAP32[eventOffset + 4] = event.text.length;
+      if (event.text.length > 0) {
+        this.writeCString(event.text, textBufferPtr + usedTextBytes);
+        usedTextBytes += event.text.length + 1;
+      }
+      this.runtimeEvents.shift();
+      drainedEvents += 1;
+    }
+
+    this.HEAP32[resultOffset] = drainedEvents;
+    this.HEAP32[resultOffset + 1] = usedTextBytes;
+    return 0;
   }
 
   private writeTempCString(value: string): number {
@@ -233,6 +333,7 @@ function getQueuedPromptState(
   buffers: number;
   callbackPtrs: number;
   callbackErrors: number;
+  completions: number;
   activeRuns: number;
 } {
   const runtimeState = runtime as unknown as {
@@ -240,7 +341,10 @@ function getQueuedPromptState(
     queuedPromptTokenBuffers: Map<number, unknown>;
     queuedPromptCallbackPtrs: Map<number, unknown>;
     queuedPromptCallbackErrors: Map<number, unknown>;
-    activeQueuedRequestRuns: Set<number>;
+    tracker: {
+      completions: Map<number, unknown>;
+      activeRuns: Set<number>;
+    };
   };
 
   return {
@@ -248,7 +352,8 @@ function getQueuedPromptState(
     buffers: runtimeState.queuedPromptTokenBuffers.size,
     callbackPtrs: runtimeState.queuedPromptCallbackPtrs.size,
     callbackErrors: runtimeState.queuedPromptCallbackErrors.size,
-    activeRuns: runtimeState.activeQueuedRequestRuns.size,
+    completions: runtimeState.tracker.completions.size,
+    activeRuns: runtimeState.tracker.activeRuns.size,
   };
 }
 
@@ -673,16 +778,108 @@ test('MainThreadEngineRuntime flushes queued tokens outside native steps and rea
   assert.deepEqual(callbackTokens, ['tok1', 'tok2']);
   assert.deepEqual(callbackPhases, [false, false]);
   assert.equal(runtime.getRuntimeAggregateObservability()?.outputTokenCount, 2);
+  assert.ok((runtime.getRuntimeAggregateObservability()?.tokensPerSecond ?? 0) > 0);
   assert.equal(response.completed, true);
   assert.equal(response.failed, false);
   assert.equal(response.cancelled, false);
   assert.equal(response.outputText, 'tok1tok2');
-  assert.equal(response.requestObservability?.promptEvalMs, 3.5);
-  assert.equal(response.requestObservability?.outputTokenCount, 2);
-  assert.equal(response.runtimeObservability?.promptEvalMs, 3.5);
-  assert.equal(response.runtimeObservability?.outputTokenCount, 2);
+  const requestObservability =
+    response.requestObservability as DetailedRequestObservabilityMetrics | null;
+  const runtimeObservability =
+    response.runtimeObservability as DetailedRequestObservabilityMetrics | null;
+  assert.equal(requestObservability?.promptEvalMs, 3.5);
+  assert.equal(requestObservability?.outputTokenCount, 2);
+  assert.ok((requestObservability?.tokensPerSecond ?? 0) > 0);
+  assert.equal(runtimeObservability?.promptEvalMs, 3.5);
+  assert.equal(runtimeObservability?.outputTokenCount, 2);
   assert.equal(module.consumeCallCount, 1);
   assert.deepEqual(module.removedFunctionPtrs, [1]);
+});
+
+test('MainThreadEngineRuntime skips callback pointers when native runtime event drain is available', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success', 'event');
+  attachReadyModule(runtime, module);
+
+  const tokens: string[] = [];
+  const requestId = await runtime.queuePrompt('ctx', 'prompt', {
+    nTokens: 16,
+    onToken: (token) => {
+      tokens.push(token);
+    },
+  });
+  const response = await runtime.runQueuedRequest(requestId);
+
+  assert.equal(requestId, 7);
+  assert.equal(module.lastQueuedCallbackPtr, 0);
+  assert.equal(response.outputText, 'tok1tok2');
+  assert.deepEqual(tokens, ['tok1', 'tok2']);
+  const transportObservability = runtime.getTransportObservability();
+  assert.equal(transportObservability.executionMode, 'main-thread');
+  assert.equal(transportObservability.workerBacked, false);
+  assert.equal(transportObservability.tokenTransportPreference, 'auto');
+  assert.equal(transportObservability.activeTokenTransport, 'runtime-events');
+  assert.equal(transportObservability.tokenCallbackRegistrationCount, 0);
+  assert.equal(transportObservability.nativeCallbackTokenCount, 0);
+  assert.ok((transportObservability.runtimeEventDrainCount ?? 0) > 0);
+  assert.equal(transportObservability.runtimeEventTokenCount, 2);
+  assert.equal(transportObservability.runtimeEventTerminalCount, 1);
+  assert.equal(transportObservability.runtimeEventTextBytes, 8);
+  runtime.close();
+});
+
+test('MainThreadEngineRuntime can force callback pointers even when runtime event drain is available', async () => {
+  const runtime = new MainThreadEngineRuntime({
+    debugTokenTransport: 'callbacks',
+  });
+  const module = new MockMainThreadModule('success', 'callback', {
+    supportsRuntimeEventDrain: true,
+  });
+  attachReadyModule(runtime, module);
+
+  const tokens: string[] = [];
+  const requestId = await runtime.queuePrompt('ctx', 'prompt', {
+    nTokens: 16,
+    onToken: (token) => {
+      tokens.push(token);
+    },
+  });
+  const response = await runtime.runQueuedRequest(requestId);
+
+  assert.equal(requestId, 7);
+  assert.equal(module.lastQueuedCallbackPtr, 1);
+  assert.equal(response.outputText, 'tok1tok2');
+  assert.deepEqual(tokens, ['tok1', 'tok2']);
+  const transportObservability = runtime.getTransportObservability();
+  assert.equal(transportObservability.executionMode, 'main-thread');
+  assert.equal(transportObservability.workerBacked, false);
+  assert.equal(transportObservability.tokenTransportPreference, 'callbacks');
+  assert.equal(transportObservability.activeTokenTransport, 'callbacks');
+  assert.equal(transportObservability.tokenCallbackRegistrationCount, 1);
+  assert.equal(transportObservability.nativeCallbackTokenCount, 2);
+  assert.ok((transportObservability.runtimeEventDrainCount ?? 0) > 0);
+  assert.equal(transportObservability.runtimeEventTokenCount, 0);
+  assert.equal(transportObservability.runtimeEventTerminalCount, 1);
+  assert.equal(transportObservability.runtimeEventTextBytes, 0);
+  runtime.close();
+});
+
+test('MainThreadEngineRuntime rejects forced runtime-events mode when the loaded runtime does not expose event drain', async () => {
+  const runtime = new MainThreadEngineRuntime({
+    debugTokenTransport: 'runtime-events',
+  });
+  const module = new MockMainThreadModule('success', 'callback', {
+    supportsRuntimeEventDrain: false,
+  });
+  attachReadyModule(runtime, module);
+
+  await assert.rejects(
+    runtime.queuePrompt('ctx', 'prompt', {
+      nTokens: 16,
+      onToken: () => {},
+    }),
+    /debugTokenTransport=runtime-events requires CE_DrainRuntimeEvents support/i
+  );
 });
 
 test('MainThreadEngineRuntime cancels terminal execution after callback failure and still consumes the response', async () => {
@@ -725,6 +922,7 @@ test('MainThreadEngineRuntime releases queued callback state when cancelling bef
     buffers: 0,
     callbackPtrs: 0,
     callbackErrors: 0,
+    completions: 0,
     activeRuns: 0,
   });
   assert.deepEqual(module.removedFunctionPtrs, [1]);
@@ -766,6 +964,7 @@ test('MainThreadEngineRuntime queue/cancel churn leaves no queued callback resid
     buffers: 0,
     callbackPtrs: 0,
     callbackErrors: 0,
+    completions: 0,
     activeRuns: 0,
   });
   assert.equal(module.removedFunctionPtrs.length, churnCount);
@@ -782,7 +981,9 @@ test('MainThreadEngineRuntime close clears queued lifecycle state and stale mode
     onToken: () => {},
   });
   const runtimeState = runtime as unknown as {
-    activeQueuedRequestRuns: Set<number>;
+    tracker: {
+      track: (requestId: number) => unknown;
+    };
     lastModelLoadInfo: object | null;
     transportObservability: {
       enabled: boolean;
@@ -790,7 +991,7 @@ test('MainThreadEngineRuntime close clears queued lifecycle state and stale mode
       coalescedTokenCount: number;
     };
   };
-  runtimeState.activeQueuedRequestRuns.add(requestId);
+  runtimeState.tracker.track(requestId);
   runtimeState.lastModelLoadInfo = {
     sourceKind: 'buffer',
     reuseMode: 'buffer',
@@ -815,6 +1016,7 @@ test('MainThreadEngineRuntime close clears queued lifecycle state and stale mode
     buffers: 0,
     callbackPtrs: 0,
     callbackErrors: 0,
+    completions: 0,
     activeRuns: 0,
   });
   assert.equal(runtime.getLastModelLoadInfo(), null);
@@ -827,6 +1029,14 @@ test('MainThreadEngineRuntime close clears queued lifecycle state and stale mode
     flushCount: 0,
     coalescedTokenCount: 0,
     maxObservedBufferedTokenCount: 0,
+    tokenTransportPreference: 'auto',
+    activeTokenTransport: 'none',
+    tokenCallbackRegistrationCount: 0,
+    nativeCallbackTokenCount: 0,
+    runtimeEventDrainCount: 0,
+    runtimeEventTokenCount: 0,
+    runtimeEventTerminalCount: 0,
+    runtimeEventTextBytes: 0,
   });
 });
 
@@ -841,7 +1051,9 @@ test('MainThreadEngineRuntime clears stale lifecycle state when reinit fails', a
     onToken: () => {},
   });
   const runtimeState = runtime as unknown as {
-    activeQueuedRequestRuns: Set<number>;
+    tracker: {
+      track: (requestId: number) => unknown;
+    };
     runtimeObservabilityEnabled: boolean;
     backendProfilingEnabled: boolean;
     engineInitialized: boolean;
@@ -850,7 +1062,7 @@ test('MainThreadEngineRuntime clears stale lifecycle state when reinit fails', a
       flushCount: number;
     };
   };
-  runtimeState.activeQueuedRequestRuns.add(requestId);
+  runtimeState.tracker.track(requestId);
 
   await assert.rejects(
     runtime.initEngine('/models/failing-model.gguf', {
@@ -867,6 +1079,7 @@ test('MainThreadEngineRuntime clears stale lifecycle state when reinit fails', a
     buffers: 0,
     callbackPtrs: 0,
     callbackErrors: 0,
+    completions: 0,
     activeRuns: 0,
   });
   assert.equal(runtimeState.engineInitialized, false);
@@ -892,6 +1105,32 @@ test('MainThreadEngineRuntime starts queued execution before runQueuedRequest() 
   await new Promise((resolve) => setTimeout(resolve, 10));
 
   assert.ok(module.runStepCallCount > 0);
+  assert.deepEqual(tokens, ['tok1', 'tok2']);
+});
+
+test('MainThreadEngineRuntime can run queued execution through an external scheduler pump controller', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success');
+  attachReadyModule(runtime, module);
+  runtime.setQueuedRequestPumpMode('external');
+
+  const tokens: string[] = [];
+  const requestId = await runtime.queuePrompt('ctx-external-pump', 'prompt', {
+    nTokens: 16,
+    onToken: (token) => {
+      tokens.push(token);
+    },
+  });
+
+  assert.equal(module.runStepCallCount, 0);
+
+  const waiter = runtime.runQueuedRequest(requestId);
+  while (runtime.hasActiveQueuedRequests()) {
+    await runtime.pumpQueuedRequestsOnce();
+  }
+
+  const response = await waiter;
+  assert.equal(response.outputText, 'tok1tok2');
   assert.deepEqual(tokens, ['tok1', 'tok2']);
 });
 
@@ -1341,8 +1580,12 @@ test('MainThreadEngineRuntime keeps runtime observability isolated across concur
   module.resolveTerminal(101, 'first', 1, 10, false);
   const firstResponse = await firstPromise;
 
-  assert.equal(secondResponse.runtimeObservability?.outputTokenCount, 2);
-  assert.equal(secondResponse.runtimeObservability?.batchParticipationCount, 20);
-  assert.equal(firstResponse.runtimeObservability?.outputTokenCount, 1);
-  assert.equal(firstResponse.runtimeObservability?.batchParticipationCount, 10);
+  const secondRuntimeObservability =
+    secondResponse.runtimeObservability as DetailedRequestObservabilityMetrics | null;
+  const firstRuntimeObservability =
+    firstResponse.runtimeObservability as DetailedRequestObservabilityMetrics | null;
+  assert.equal(secondRuntimeObservability?.outputTokenCount, 2);
+  assert.equal(secondRuntimeObservability?.batchParticipationCount, 20);
+  assert.equal(firstRuntimeObservability?.outputTokenCount, 1);
+  assert.equal(firstRuntimeObservability?.batchParticipationCount, 10);
 });

@@ -35,7 +35,7 @@ public:
                             SessionStore &session_store);
   void FinalizeCompletedSlots(RequestQueue &request_queue,
                               SessionStore &session_store);
-  void EmitBufferedTokenPiece(SlotState &slot);
+  void EmitBufferedTokenPiece(RequestQueue &request_queue, SlotState &slot);
 
 private:
   std::vector<SlotState> slots_;

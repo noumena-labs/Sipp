@@ -154,6 +154,31 @@ void copy_runtime_observability(
       runtime_observability.prefix_cache_store_count;
 }
 
+void copy_scheduler_burst_result(
+    const noumena::cogentengine::SchedulerBurstResult &burst_result,
+    CE_SchedulerBurstResult *out_result) {
+  if (out_result == nullptr) {
+    return;
+  }
+  out_result->ticks_executed = burst_result.ticks_executed;
+  out_result->progressed_ticks = burst_result.progressed_ticks;
+  out_result->completed_response_count = burst_result.completed_response_count;
+  out_result->emitted_token_count = burst_result.emitted_token_count;
+}
+
+void copy_runtime_event(const noumena::cogentengine::RuntimeEvent &runtime_event,
+                        int32_t text_offset, CE_RuntimeEvent *out_event) {
+  if (out_event == nullptr) {
+    return;
+  }
+
+  out_event->request_id = runtime_event.request_id;
+  out_event->kind = static_cast<int32_t>(runtime_event.kind);
+  out_event->status = completed_status_to_code(runtime_event.status);
+  out_event->text_offset = text_offset;
+  out_event->text_length = static_cast<int32_t>(runtime_event.text.size());
+}
+
 } // namespace
 
 int CE_InitPlugin(const char *model_path, const CE_InitConfig *config) {
@@ -257,6 +282,31 @@ int CE_RunSchedulerTick() {
   return static_cast<int>(runtime->RunSchedulerTick());
 }
 
+int CE_RunSchedulerBurst(int32_t max_ticks, int32_t max_completed_responses,
+                         int32_t max_emitted_tokens,
+                         CE_SchedulerBurstResult *out_result) {
+  if (out_result == nullptr) {
+    return static_cast<int>(
+        noumena::cogentengine::RequestStepResult::Invalid);
+  }
+
+  auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    out_result->ticks_executed = 0;
+    out_result->progressed_ticks = 0;
+    out_result->completed_response_count = 0;
+    out_result->emitted_token_count = 0;
+    return static_cast<int>(
+        noumena::cogentengine::RequestStepResult::Invalid);
+  }
+
+  const noumena::cogentengine::SchedulerBurstResult burst_result =
+      runtime->RunSchedulerBurst(max_ticks, max_completed_responses,
+                                 max_emitted_tokens);
+  copy_scheduler_burst_result(burst_result, out_result);
+  return static_cast<int>(burst_result.status);
+}
+
 int CE_RunRequestStep(CE_RequestId request_id) {
   auto runtime = acquire_engine_runtime();
   if (!runtime) {
@@ -274,6 +324,65 @@ int CE_GetCompletedRequestStatus(CE_RequestId request_id) {
   }
 
   return completed_status_to_code(response.status);
+}
+
+int CE_DrainCompletedRequestIds(CE_RequestId *buffer, int32_t capacity) {
+  if (capacity < 0 || (capacity > 0 && buffer == nullptr)) {
+    return kStatusError;
+  }
+
+  auto runtime = acquire_engine_runtime();
+  if (!runtime || capacity == 0) {
+    return 0;
+  }
+
+  const std::vector<CE_RequestId> request_ids =
+      runtime->DrainCompletedResponseIds(capacity);
+  for (std::size_t index = 0; index < request_ids.size(); ++index) {
+    buffer[index] = request_ids[index];
+  }
+  return static_cast<int>(request_ids.size());
+}
+
+int CE_DrainRuntimeEvents(CE_RuntimeEvent *event_buffer, int32_t event_capacity,
+                          char *text_buffer, int32_t text_capacity,
+                          CE_RuntimeEventDrainResult *out_result) {
+  if (out_result == nullptr || event_capacity < 0 || text_capacity < 0 ||
+      (event_capacity > 0 && event_buffer == nullptr) ||
+      (text_capacity > 0 && text_buffer == nullptr)) {
+    return kStatusError;
+  }
+
+  out_result->event_count = 0;
+  out_result->text_bytes = 0;
+
+  auto runtime = acquire_engine_runtime();
+  if (!runtime || event_capacity == 0) {
+    return 0;
+  }
+
+  const std::vector<noumena::cogentengine::RuntimeEvent> runtime_events =
+      runtime->DrainRuntimeEvents(event_capacity, text_capacity);
+
+  int32_t used_text_bytes = 0;
+  for (std::size_t index = 0; index < runtime_events.size(); ++index) {
+    const noumena::cogentengine::RuntimeEvent &runtime_event =
+        runtime_events[index];
+    int32_t text_offset = 0;
+    if (!runtime_event.text.empty()) {
+      text_offset = used_text_bytes;
+      const std::size_t text_length = runtime_event.text.size();
+      std::memcpy(text_buffer + used_text_bytes, runtime_event.text.data(),
+                  text_length);
+      used_text_bytes += static_cast<int32_t>(text_length);
+      text_buffer[used_text_bytes++] = '\0';
+    }
+    copy_runtime_event(runtime_event, text_offset, &event_buffer[index]);
+  }
+
+  out_result->event_count = static_cast<int32_t>(runtime_events.size());
+  out_result->text_bytes = used_text_bytes;
+  return 0;
 }
 
 int CE_GetCompletedRequestOutputSize(CE_RequestId request_id) {

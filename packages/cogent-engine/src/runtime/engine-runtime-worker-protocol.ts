@@ -20,6 +20,7 @@ export interface WorkerSerializableCogentConfig {
   persistentModelCache?: {
     enabled?: boolean;
   };
+  debugTokenTransport?: 'auto' | 'callbacks' | 'runtime-events';
 }
 
 export interface WorkerQueuedPromptOptions {
@@ -88,11 +89,6 @@ export type WorkerRequestMessage =
       options: WorkerQueuedPromptOptions;
     }
   | {
-      kind: 'run-queued-request';
-      callId: number;
-      requestId: GenerateRequestId;
-    }
-  | {
       kind: 'cancel-request';
       callId: number;
       requestId: GenerateRequestId;
@@ -128,6 +124,19 @@ export type WorkerResponseMessage =
       requestId: GenerateRequestId;
       text: string;
       bufferedTokenCount: number;
+    }
+  | {
+      kind: 'request-complete';
+      requestId: GenerateRequestId;
+      result: WorkerRunQueuedRequestResult;
+    }
+  | {
+      kind: 'request-failed';
+      requestId: GenerateRequestId;
+      message: string;
+      errorName?: string;
+      runtimeAggregateObservability: RuntimeAggregateObservabilityMetrics | null;
+      transportObservability: TransportObservability;
     };
 
 export interface WorkerLoadModelResult {

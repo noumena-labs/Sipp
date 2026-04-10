@@ -90,6 +90,40 @@ function installMockWorker(): () => void {
   };
 }
 
+function createWorkerTransportObservability() {
+  return {
+    executionMode: 'worker' as const,
+    workerBacked: true,
+    enabled: false,
+    bufferedTokenLimit: 0,
+    flushIntervalMs: 0,
+    flushCount: 0,
+    coalescedTokenCount: 0,
+    maxObservedBufferedTokenCount: 0,
+  };
+}
+
+function createWorkerQueuedResponse(
+  requestId: number,
+  response: {
+    completed: boolean;
+    failed: boolean;
+    cancelled: boolean;
+    outputText: string;
+    errorMessage: string | null;
+  }
+) {
+  return {
+    response: {
+      requestId,
+      ...response,
+      runtimeObservability: null,
+    },
+    runtimeAggregateObservability: null,
+    transportObservability: createWorkerTransportObservability(),
+  };
+}
+
 function getWorkerQueuedState(
   runtime: WorkerEngineRuntime
 ): {
@@ -97,22 +131,27 @@ function getWorkerQueuedState(
   pendingCallbacks: number;
   queuedErrors: number;
   queuedSignals: number;
+  completions: number;
   activeRuns: number;
 } {
   const runtimeState = runtime as unknown as {
     queuedTokenCallbacks: Map<number, unknown>;
     pendingQueuedTokenCallbacks: Map<number, unknown>;
     queuedTokenErrors: Map<number, unknown>;
-    queuedSignals: Map<number, unknown>;
-    activeQueuedRequestRuns: Set<number>;
+    tracker: {
+      signals: Map<number, unknown>;
+      completions: Map<number, unknown>;
+      activeRuns: Set<number>;
+    };
   };
 
   return {
     queuedCallbacks: runtimeState.queuedTokenCallbacks.size,
     pendingCallbacks: runtimeState.pendingQueuedTokenCallbacks.size,
     queuedErrors: runtimeState.queuedTokenErrors.size,
-    queuedSignals: runtimeState.queuedSignals.size,
-    activeRuns: runtimeState.activeQueuedRequestRuns.size,
+    queuedSignals: runtimeState.tracker.signals.size,
+    completions: runtimeState.tracker.completions.size,
+    activeRuns: runtimeState.tracker.activeRuns.size,
   };
 }
 
@@ -387,7 +426,6 @@ test('WorkerEngineRuntime releases queued callback state when cancelling before 
   try {
     MockWorker.handlerFactory = () => {
       let nextRequestId = 11;
-      let pendingRunCallId: number | null = null;
       return (worker, message) => {
         switch (message.kind) {
           case 'init-module':
@@ -404,44 +442,23 @@ test('WorkerEngineRuntime releases queued callback state when cancelling before 
               value: nextRequestId++,
             });
             break;
-          case 'run-queued-request':
-            pendingRunCallId = message.callId;
-            break;
           case 'cancel-request':
             worker.emit({
               kind: 'resolve',
               callId: message.callId,
               value: true,
             });
-            if (pendingRunCallId != null) {
-              worker.emit({
-                kind: 'resolve',
-                callId: pendingRunCallId,
-                value: {
-                  response: {
-                    requestId: 11,
-                    completed: false,
-                    failed: false,
-                    cancelled: true,
-                    outputText: '',
-                    errorMessage: 'Queued request cancelled.',
-                    runtimeObservability: null,
-                  },
-                  runtimeAggregateObservability: null,
-                  transportObservability: {
-                    executionMode: 'worker',
-                    workerBacked: true,
-                    enabled: false,
-                    bufferedTokenLimit: 0,
-                    flushIntervalMs: 0,
-                    flushCount: 0,
-                    coalescedTokenCount: 0,
-                    maxObservedBufferedTokenCount: 0,
-                  },
-                },
-              });
-              pendingRunCallId = null;
-            }
+            worker.emit({
+              kind: 'request-complete',
+              requestId: message.requestId,
+              result: createWorkerQueuedResponse(message.requestId, {
+                completed: false,
+                failed: false,
+                cancelled: true,
+                outputText: '',
+                errorMessage: 'Queued request cancelled.',
+              }),
+            });
             break;
           default:
             throw new Error(`Unexpected worker message: ${message.kind}`);
@@ -469,6 +486,7 @@ test('WorkerEngineRuntime releases queued callback state when cancelling before 
         state.pendingCallbacks === 0 &&
         state.queuedErrors === 0 &&
         state.queuedSignals === 0 &&
+        state.completions === 0 &&
         state.activeRuns === 0
       );
     });
@@ -477,6 +495,7 @@ test('WorkerEngineRuntime releases queued callback state when cancelling before 
       pendingCallbacks: 0,
       queuedErrors: 0,
       queuedSignals: 0,
+      completions: 0,
       activeRuns: 0,
     });
   } finally {
@@ -499,11 +518,27 @@ test('WorkerEngineRuntime queue/cancel churn leaves no queued state residue and 
             });
             break;
           case 'queue-prompt':
+            const requestId = nextRequestId++;
             worker.emit({
               kind: 'resolve',
               callId: message.callId,
-              value: nextRequestId++,
+              value: requestId,
             });
+            if (message.contextKey === 'ctx-smoke') {
+              queueMicrotask(() => {
+                worker.emit({
+                  kind: 'request-complete',
+                  requestId,
+                  result: createWorkerQueuedResponse(requestId, {
+                    completed: true,
+                    failed: false,
+                    cancelled: false,
+                    outputText: 'worker smoke output',
+                    errorMessage: null,
+                  }),
+                });
+              });
+            }
             break;
           case 'cancel-request':
             worker.emit({
@@ -511,33 +546,16 @@ test('WorkerEngineRuntime queue/cancel churn leaves no queued state residue and 
               callId: message.callId,
               value: true,
             });
-            break;
-          case 'run-queued-request':
             worker.emit({
-              kind: 'resolve',
-              callId: message.callId,
-              value: {
-                response: {
-                  requestId: message.requestId,
-                  completed: true,
-                  failed: false,
-                  cancelled: false,
-                  outputText: 'worker smoke output',
-                  errorMessage: null,
-                  runtimeObservability: null,
-                },
-                runtimeAggregateObservability: null,
-                transportObservability: {
-                  executionMode: 'worker',
-                  workerBacked: true,
-                  enabled: false,
-                  bufferedTokenLimit: 0,
-                  flushIntervalMs: 0,
-                  flushCount: 0,
-                  coalescedTokenCount: 0,
-                  maxObservedBufferedTokenCount: 0,
-                },
-              },
+              kind: 'request-complete',
+              requestId: message.requestId,
+              result: createWorkerQueuedResponse(message.requestId, {
+                completed: false,
+                failed: false,
+                cancelled: true,
+                outputText: '',
+                errorMessage: 'Queued request cancelled.',
+              }),
             });
             break;
           default:
@@ -569,6 +587,7 @@ test('WorkerEngineRuntime queue/cancel churn leaves no queued state residue and 
       pendingCallbacks: 0,
       queuedErrors: 0,
       queuedSignals: 0,
+      completions: 0,
       activeRuns: 0,
     });
   } finally {
@@ -596,8 +615,10 @@ test('WorkerEngineRuntime close resets stale lifecycle state and cached metadata
       queuedTokenCallbacks: Map<number, unknown>;
       pendingQueuedTokenCallbacks: Map<number, unknown>;
       queuedTokenErrors: Map<number, unknown>;
-      queuedSignals: Map<number, unknown>;
-      activeQueuedRequestRuns: Set<number>;
+      tracker: {
+        track: (requestId: number) => unknown;
+        signals: Map<number, unknown>;
+      };
       runtimeAggregateObservability: object | null;
       lastModelLoadInfo: object | null;
       transportObservability: {
@@ -609,8 +630,8 @@ test('WorkerEngineRuntime close resets stale lifecycle state and cached metadata
     runtimeState.queuedTokenCallbacks.set(11, () => {});
     runtimeState.pendingQueuedTokenCallbacks.set(12, () => {});
     runtimeState.queuedTokenErrors.set(11, new Error('token failure'));
-    runtimeState.queuedSignals.set(11, new AbortController().signal);
-    runtimeState.activeQueuedRequestRuns.add(11);
+    runtimeState.tracker.track(11);
+    runtimeState.tracker.signals.set(11, new AbortController().signal);
     runtimeState.runtimeAggregateObservability = { outputTokenCount: 2 };
     runtimeState.lastModelLoadInfo = {
       sourceKind: 'buffer',
@@ -635,6 +656,7 @@ test('WorkerEngineRuntime close resets stale lifecycle state and cached metadata
       pendingCallbacks: 0,
       queuedErrors: 0,
       queuedSignals: 0,
+      completions: 0,
       activeRuns: 0,
     });
     assert.equal(runtime.getRuntimeAggregateObservability(), null);
@@ -649,6 +671,14 @@ test('WorkerEngineRuntime close resets stale lifecycle state and cached metadata
       flushCount: 0,
       coalescedTokenCount: 0,
       maxObservedBufferedTokenCount: 0,
+      tokenTransportPreference: 'auto',
+      activeTokenTransport: 'none',
+      tokenCallbackRegistrationCount: 0,
+      nativeCallbackTokenCount: 0,
+      runtimeEventDrainCount: 0,
+      runtimeEventTokenCount: 0,
+      runtimeEventTerminalCount: 0,
+      runtimeEventTextBytes: 0,
     });
   } finally {
     restoreWorker();
@@ -686,15 +716,17 @@ test('WorkerEngineRuntime clears local queued lifecycle state before initEngine 
       queuedTokenCallbacks: Map<number, unknown>;
       pendingQueuedTokenCallbacks: Map<number, unknown>;
       queuedTokenErrors: Map<number, unknown>;
-      queuedSignals: Map<number, unknown>;
-      activeQueuedRequestRuns: Set<number>;
+      tracker: {
+        track: (requestId: number) => unknown;
+        signals: Map<number, unknown>;
+      };
       runtimeAggregateObservability: object | null;
     };
     runtimeState.queuedTokenCallbacks.set(21, () => {});
     runtimeState.pendingQueuedTokenCallbacks.set(22, () => {});
     runtimeState.queuedTokenErrors.set(21, new Error('token failure'));
-    runtimeState.queuedSignals.set(21, new AbortController().signal);
-    runtimeState.activeQueuedRequestRuns.add(21);
+    runtimeState.tracker.track(21);
+    runtimeState.tracker.signals.set(21, new AbortController().signal);
     runtimeState.runtimeAggregateObservability = { outputTokenCount: 2 };
 
     await assert.rejects(runtime.initEngine('/models/failing-model.gguf'), /init failed/);
@@ -704,6 +736,7 @@ test('WorkerEngineRuntime clears local queued lifecycle state before initEngine 
       pendingCallbacks: 0,
       queuedErrors: 0,
       queuedSignals: 0,
+      completions: 0,
       activeRuns: 0,
     });
     assert.equal(runtime.getRuntimeAggregateObservability(), null);
@@ -850,10 +883,10 @@ test('WorkerEngineRuntime supports split model URL loading in worker mode', asyn
   }
 });
 
-test('WorkerEngineRuntime shares one worker completion call across concurrent runQueuedRequest() waiters', async () => {
+test('WorkerEngineRuntime shares one pushed worker completion across concurrent runQueuedRequest() waiters', async () => {
   const restoreWorker = installMockWorker();
   try {
-    let runQueuedRequestCallCount = 0;
+    let requestCompleteCount = 0;
     MockWorker.handlerFactory = () => (worker, message) => {
       switch (message.kind) {
         case 'init-module':
@@ -869,35 +902,18 @@ test('WorkerEngineRuntime shares one worker completion call across concurrent ru
             callId: message.callId,
             value: 77,
           });
-          return;
-        case 'run-queued-request':
-          runQueuedRequestCallCount += 1;
           queueMicrotask(() => {
+            requestCompleteCount += 1;
             worker.emit({
-              kind: 'resolve',
-              callId: message.callId,
-              value: {
-                response: {
-                  requestId: message.requestId,
-                  completed: true,
-                  failed: false,
-                  cancelled: false,
-                  outputText: 'shared worker response',
-                  errorMessage: null,
-                  runtimeObservability: null,
-                },
-                runtimeAggregateObservability: null,
-                transportObservability: {
-                  executionMode: 'worker',
-                  workerBacked: true,
-                  enabled: false,
-                  bufferedTokenLimit: 0,
-                  flushIntervalMs: 0,
-                  flushCount: 0,
-                  coalescedTokenCount: 0,
-                  maxObservedBufferedTokenCount: 0,
-                },
-              },
+              kind: 'request-complete',
+              requestId: 77,
+              result: createWorkerQueuedResponse(77, {
+                completed: true,
+                failed: false,
+                cancelled: false,
+                outputText: 'shared worker response',
+                errorMessage: null,
+              }),
             });
           });
           return;
@@ -920,7 +936,11 @@ test('WorkerEngineRuntime shares one worker completion call across concurrent ru
 
     assert.equal(firstResponse.outputText, 'shared worker response');
     assert.equal(secondResponse.outputText, 'shared worker response');
-    assert.equal(runQueuedRequestCallCount, 1);
+    assert.equal(requestCompleteCount, 1);
+    assert.equal(
+      MockWorker.instances[0].messages.filter((message) => message.kind === 'queue-prompt').length,
+      1
+    );
   } finally {
     restoreWorker();
   }
@@ -945,8 +965,6 @@ test('WorkerEngineRuntime rejects outstanding queued waiters when close() is cal
             value: 88,
           });
           return;
-        case 'run-queued-request':
-          return;
         default:
           throw new Error(`Unexpected worker message: ${message.kind}`);
       }
@@ -957,11 +975,6 @@ test('WorkerEngineRuntime rejects outstanding queued waiters when close() is cal
 
     const requestId = await runtime.queuePrompt('ctx-close-waiter', 'prompt', 8);
     const waiter = runtime.runQueuedRequest(requestId);
-    await waitForCondition(() =>
-      MockWorker.instances[0].messages.some(
-        (message) => message.kind === 'run-queued-request'
-      )
-    );
 
     runtime.close();
 
@@ -993,8 +1006,6 @@ test('WorkerEngineRuntime rejects outstanding queued waiters when the worker cra
             value: 99,
           });
           return;
-        case 'run-queued-request':
-          return;
         default:
           throw new Error(`Unexpected worker message: ${message.kind}`);
       }
@@ -1005,11 +1016,6 @@ test('WorkerEngineRuntime rejects outstanding queued waiters when the worker cra
 
     const requestId = await runtime.queuePrompt('ctx-worker-crash', 'prompt', 8);
     const waiter = runtime.runQueuedRequest(requestId);
-    await waitForCondition(() =>
-      MockWorker.instances[0].messages.some(
-        (message) => message.kind === 'run-queued-request'
-      )
-    );
 
     MockWorker.instances[0].triggerError('worker exploded during queued execution');
 

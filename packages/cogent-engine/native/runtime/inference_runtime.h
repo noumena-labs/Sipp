@@ -38,6 +38,14 @@ enum class RequestStepResult : std::int32_t {
   Terminal = 2,
 };
 
+struct SchedulerBurstResult {
+  RequestStepResult status = RequestStepResult::Waiting;
+  int32_t ticks_executed = 0;
+  int32_t progressed_ticks = 0;
+  int32_t completed_response_count = 0;
+  int32_t emitted_token_count = 0;
+};
+
 class InferenceRuntime {
 public:
   using TokenCallback = std::function<bool(const char *, int32_t)>;
@@ -58,7 +66,13 @@ public:
                                    TokenCallback on_token_received = {});
   bool CancelRequest(GenerateRequestId request_id);
   RequestStepResult RunSchedulerTick();
+  SchedulerBurstResult RunSchedulerBurst(int32_t max_ticks,
+                                         int32_t max_completed_responses,
+                                         int32_t max_emitted_tokens);
   RequestStepResult RunRequestStep(GenerateRequestId request_id);
+  std::vector<GenerateRequestId> DrainCompletedResponseIds(int32_t max_count);
+  std::vector<RuntimeEvent> DrainRuntimeEvents(int32_t max_count,
+                                               int32_t max_text_bytes);
   bool TryPeekCompletedResponse(GenerateRequestId request_id,
                                 GenerateResponse &out_response) const;
   bool ConsumeCompletedResponse(GenerateRequestId request_id);
@@ -79,6 +93,7 @@ private:
                                         GenerateRequest *request);
 
   bool RunPolicyBatchTickLocked();
+  RequestStepResult RunSchedulerTickLocked();
   int32_t ResolvePrefillChunkSizeLocked(
       const SchedulerTickBudget &tick_budget, int32_t decode_ready_count,
       int32_t prefill_ready_count) const;

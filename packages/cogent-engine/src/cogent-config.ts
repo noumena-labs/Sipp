@@ -16,4 +16,5 @@ export interface CogentConfig {
   persistentModelCache?: {
     enabled?: boolean;
   };
+  debugTokenTransport?: 'auto' | 'callbacks' | 'runtime-events';
 }

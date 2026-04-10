@@ -2,7 +2,12 @@ import { CogentConfig } from '../cogent-config.js';
 import { MainThreadEngineRuntime } from './engine-runtime-main-thread.js';
 import { GenerateRequestId, TransportObservability } from '../types.js';
 import { WorkerResponseMessage, WorkerSerializableCogentConfig } from './engine-runtime-worker-protocol.js';
-import { createAbortError } from './runtime-shared.js';
+import {
+  DEFAULT_QUEUED_REQUEST_PUMP_IDLE_STREAK_BEFORE_YIELD,
+  DEFAULT_QUEUED_REQUEST_PUMP_SYNC_BURST_LIMIT,
+  runQueuedRequestPumpLoop,
+} from './queued-request-pump.js';
+import { createAbortError } from '../utils/abort.js';
 
 interface BufferedTokenState {
   text: string;
@@ -17,13 +22,14 @@ interface ActiveModelLoadState {
 
 const DEFAULT_MAX_BUFFERED_TOKENS = 8;
 const DEFAULT_FLUSH_INTERVAL_MS = 16;
-
 export class WorkerEntryState {
   private engine: MainThreadEngineRuntime | null = null;
   private readonly requestAbortControllers = new Map<GenerateRequestId, AbortController>();
   private readonly bufferedTokens = new Map<GenerateRequestId, BufferedTokenState>();
   private readonly runningRequestIds = new Set<GenerateRequestId>();
   private readonly activeModelLoads = new Map<number, ActiveModelLoadState>();
+  private schedulerPumpPromise: Promise<void> | null = null;
+  private schedulerPumpGeneration = 0;
   private readonly transportObservability: TransportObservability = {
     executionMode: 'worker',
     workerBacked: true,
@@ -33,6 +39,14 @@ export class WorkerEntryState {
     flushCount: 0,
     coalescedTokenCount: 0,
     maxObservedBufferedTokenCount: 0,
+    tokenTransportPreference: 'auto',
+    activeTokenTransport: 'none',
+    tokenCallbackRegistrationCount: 0,
+    nativeCallbackTokenCount: 0,
+    runtimeEventDrainCount: 0,
+    runtimeEventTokenCount: 0,
+    runtimeEventTerminalCount: 0,
+    runtimeEventTextBytes: 0,
   };
 
   public cloneTransportObservability(): TransportObservability {
@@ -57,6 +71,7 @@ export class WorkerEntryState {
     if (this.engine == null) {
       this.engine = new MainThreadEngineRuntime(this.buildEngineConfig(config));
     }
+    this.engine.setQueuedRequestPumpMode('external');
     await this.engine.initModule();
   }
 
@@ -67,10 +82,33 @@ export class WorkerEntryState {
   }
 
   public releaseAllRequestResources(): void {
+    this.stopSchedulerPump();
     for (const requestId of this.bufferedTokens.keys()) {
       this.releaseRequestResources(requestId);
     }
     this.runningRequestIds.clear();
+  }
+
+  public ensureSchedulerPumpRunning(): void {
+    if (this.schedulerPumpPromise != null || this.engine == null || !this.engine.hasActiveQueuedRequests()) {
+      return;
+    }
+
+    const generation = this.schedulerPumpGeneration;
+    const schedulerPumpPromise = this.runSchedulerPump(generation);
+    this.schedulerPumpPromise = schedulerPumpPromise;
+    void schedulerPumpPromise.finally(() => {
+      if (this.schedulerPumpPromise === schedulerPumpPromise) {
+        this.schedulerPumpPromise = null;
+        if (
+          generation === this.schedulerPumpGeneration &&
+          this.engine != null &&
+          this.engine.hasActiveQueuedRequests()
+        ) {
+          this.ensureSchedulerPumpRunning();
+        }
+      }
+    });
   }
 
   public setRuntimeObservabilityEnabled(enabled: boolean): void {
@@ -242,6 +280,30 @@ export class WorkerEntryState {
     }
     this.bufferedTokens.delete(requestId);
     this.requestAbortControllers.delete(requestId);
+  }
+
+  private stopSchedulerPump(): void {
+    this.schedulerPumpGeneration += 1;
+    this.schedulerPumpPromise = null;
+  }
+
+  private async waitForNextSchedulerStep(): Promise<void> {
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
+
+  private async runSchedulerPump(generation: number): Promise<void> {
+    const runtime = this.ensureEngine();
+    await runQueuedRequestPumpLoop({
+      isCurrentGeneration: () =>
+        generation === this.schedulerPumpGeneration && this.engine != null,
+      waitingStepResult: 0,
+      syncBurstLimit: DEFAULT_QUEUED_REQUEST_PUMP_SYNC_BURST_LIMIT,
+      idleStreakBeforeYield: DEFAULT_QUEUED_REQUEST_PUMP_IDLE_STREAK_BEFORE_YIELD,
+      runStep: () => runtime.pumpQueuedRequestsOnce(),
+      waitForNextSchedulerStep: () => this.waitForNextSchedulerStep(),
+    });
   }
 
   private buildEngineConfig(config: WorkerSerializableCogentConfig): CogentConfig {
