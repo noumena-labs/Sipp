@@ -2,7 +2,7 @@ import type {
   BenchmarkRun,
   GroupResult,
   GroupSummary,
-  RuntimeObservability,
+  RequestObservability,
   ScenarioDefinition,
   ScenarioResult,
   MemorySnapshot
@@ -30,11 +30,11 @@ function summarizeOptional(values: number[]) {
 }
 
 function averageRuntimeObservabilityMetric(
-  observabilityRuns: (RuntimeObservability | null)[],
-  metric: (m: RuntimeObservability) => number | undefined | null
+  observabilityRuns: (RequestObservability | null)[],
+  metric: (m: RequestObservability) => number | undefined | null
 ) {
   const values = observabilityRuns
-    .filter((metrics): metrics is RuntimeObservability => metrics !== null)
+    .filter((metrics): metrics is RequestObservability => metrics !== null)
     .map(metric)
     .filter((value): value is number => value != null && Number.isFinite(value) && value >= 0);
 
@@ -43,9 +43,9 @@ function averageRuntimeObservabilityMetric(
   return round(total / values.length);
 }
 
-function summarizePromptThroughput(observabilityRuns: (RuntimeObservability | null)[]) {
+function summarizePromptThroughput(observabilityRuns: (RequestObservability | null)[]) {
   const values = observabilityRuns
-    .filter((metrics): metrics is RuntimeObservability => metrics !== null)
+    .filter((metrics): metrics is RequestObservability => metrics !== null)
     .map((metrics) => {
       if (metrics.promptEvalMs <= 0 || metrics.promptEvalTokens <= 0) return 0;
       return (metrics.promptEvalTokens * 1000) / metrics.promptEvalMs;
@@ -57,9 +57,9 @@ function summarizePromptThroughput(observabilityRuns: (RuntimeObservability | nu
   return round(total / values.length);
 }
 
-function summarizeDecodeThroughput(observabilityRuns: (RuntimeObservability | null)[]) {
+function summarizeDecodeThroughput(observabilityRuns: (RequestObservability | null)[]) {
   const values = observabilityRuns
-    .filter((metrics): metrics is RuntimeObservability => metrics !== null)
+    .filter((metrics): metrics is RequestObservability => metrics !== null)
     .map((metrics) => {
       if (metrics.decodeEvalMs <= 0 || metrics.outputTokenCount <= 0) return 0;
       return (metrics.outputTokenCount * 1000) / metrics.decodeEvalMs;
@@ -72,7 +72,7 @@ function summarizeDecodeThroughput(observabilityRuns: (RuntimeObservability | nu
 }
 
 function summarizeRunGroup(runs: BenchmarkRun[], benchmarkDurationMs: number): GroupSummary {
-  const observabilityRuns = runs.map((run) => run.runtimeObservability);
+  const observabilityRuns = runs.map((run) => run.requestObservability);
   const totalInputTokens = runs.reduce((acc, run) => acc + (run.inputTokenCount ?? 0), 0);
   const totalGeneratedTokens = runs.reduce((acc, run) => acc + (run.outputTokenCount ?? 0), 0);
   const allItls = runs.flatMap((run) => run.itlMsValues);
@@ -101,7 +101,6 @@ function summarizeRunGroup(runs: BenchmarkRun[], benchmarkDurationMs: number): G
       avgOutputTokenCount: averageRuntimeObservabilityMetric(observabilityRuns, (m) => m.outputTokenCount),
       avgQueueDelayMs: averageRuntimeObservabilityMetric(observabilityRuns, (m) => m.queueDelayMs),
       avgTailItlMs: averageRuntimeObservabilityMetric(observabilityRuns, (m) => m.tailItlMs),
-      avgSchedulerTickCount: averageRuntimeObservabilityMetric(observabilityRuns, (m) => m.schedulerTickCount),
       avgBatchParticipationCount: averageRuntimeObservabilityMetric(observabilityRuns, (m) => m.batchParticipationCount),
       avgDecodeFirstTickCount: averageRuntimeObservabilityMetric(observabilityRuns, (m) => m.decodeFirstTickCount),
       avgChunkedPrefillTickCount: averageRuntimeObservabilityMetric(observabilityRuns, (m) => m.chunkedPrefillTickCount),
@@ -152,7 +151,7 @@ export async function runPromptGroup(
     let ttftMs: number | null = null;
     const tokenEventTimes: number[] = [];
     
-    const output = await targetEngine.submitPrompt(contextKeyFactory(i + warmupRuns), prompt, {
+    const requestId = await targetEngine.queuePrompt(contextKeyFactory(i + warmupRuns), prompt, {
       nTokens: tokenCount,
       onToken: () => {
         const elapsedMs = round(performance.now() - start);
@@ -160,11 +159,13 @@ export async function runPromptGroup(
         if (ttftMs == null) ttftMs = elapsedMs;
       },
     });
+    const response = await targetEngine.runQueuedRequest(requestId);
 
     const wallMs = round(performance.now() - start);
-    // @ts-ignore getRuntimeObservability exist but types may vary
-    const runtimeObservability = (targetEngine.getRuntimeObservability?.() as RuntimeObservability) || null;
-    const outputTokenCount = runtimeObservability?.outputTokenCount ?? tokenEventTimes.length;
+    const requestObservability =
+      // @ts-ignore compatibility alias on GenerateResponse
+      (response.requestObservability ?? response.runtimeObservability ?? null) as RequestObservability | null;
+    const outputTokenCount = requestObservability?.outputTokenCount ?? tokenEventTimes.length;
     const itlMsValues: number[] = [];
     for (let j = 1; j < tokenEventTimes.length; j++) {
       itlMsValues.push(round(tokenEventTimes[j] - tokenEventTimes[j - 1]));
@@ -177,11 +178,11 @@ export async function runPromptGroup(
       ttftMs,
       tpotMs,
       itlMsValues,
-      inputTokenCount: runtimeObservability?.inputTokenCount ?? null,
+      inputTokenCount: requestObservability?.inputTokenCount ?? null,
       outputTokenCount,
-      outputLength: output.length,
-      outputPreview: output.slice(0, 160).replace(/\s+/g, ' ').trim(),
-      runtimeObservability,
+      outputLength: response.outputText.length,
+      outputPreview: response.outputText.slice(0, 160).replace(/\s+/g, ' ').trim(),
+      requestObservability,
     });
   }
 
@@ -348,7 +349,7 @@ export async function runQueuedMixedLoadPair(
   const backgroundWallMs = round(performance.now() - backgroundStart);
 
   const toRun = (label: string, contextKey: string, wallMs: number, ttftMs: number | null, tokenEventTimes: number[], response: any) => {
-    const perf = response.perf ?? null;
+    const perf = (response.requestObservability ?? response.runtimeObservability ?? null) as RequestObservability | null;
     const outputTokenCount = perf?.outputTokenCount ?? tokenEventTimes.length;
     const itlMsValues: number[] = [];
     for (let i = 1; i < tokenEventTimes.length; i++) {
@@ -368,7 +369,7 @@ export async function runQueuedMixedLoadPair(
       outputTokenCount,
       outputLength: response.outputText.length,
       outputPreview: response.outputText.slice(0, 160).replace(/\s+/g, ' ').trim(),
-      runtimeObservability: perf,
+      requestObservability: perf,
     };
   };
 

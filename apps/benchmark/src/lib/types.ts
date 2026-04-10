@@ -21,7 +21,7 @@ export interface MetricSummary {
   maxMs: number;
 }
 
-export interface RuntimeObservability {
+export interface RequestObservability {
   inputTokenCount: number;
   outputTokenCount: number;
   promptEvalTokens: number;
@@ -30,7 +30,6 @@ export interface RuntimeObservability {
   sampleMs: number;
   queueDelayMs: number;
   tailItlMs: number;
-  schedulerTickCount: number;
   batchParticipationCount: number;
   decodeFirstTickCount: number;
   chunkedPrefillTickCount: number;
@@ -52,7 +51,7 @@ export interface BenchmarkRun {
   outputTokenCount: number;
   outputLength: number;
   outputPreview: string;
-  runtimeObservability: RuntimeObservability | null;
+  requestObservability: RequestObservability | null;
 }
 
 export interface GroupSummary {
@@ -78,7 +77,6 @@ export interface GroupSummary {
     avgOutputTokenCount: number | null;
     avgQueueDelayMs: number | null;
     avgTailItlMs: number | null;
-    avgSchedulerTickCount: number | null;
     avgBatchParticipationCount: number | null;
     avgDecodeFirstTickCount: number | null;
     avgChunkedPrefillTickCount: number | null;

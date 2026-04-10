@@ -203,7 +203,7 @@ export default function App() {
       let ttftMs: number | null = null;
       let outputTokenCount = 0;
       const tEvents: number[] = [];
-      const resText = await engine.submitPrompt('single-run-context', config.prompt, {
+      const requestId = await engine.queuePrompt('single-run-context', config.prompt, {
         nTokens: config.tokenCount,
         onToken: (token) => {
           setLastRunResponse(prev => prev + token);
@@ -212,14 +212,18 @@ export default function App() {
           if (ttftMs == null) ttftMs = eMs;
         }
       });
+      const response = await engine.runQueuedRequest(requestId);
       const wallMs = round(performance.now() - start);
-      // @ts-ignore
-      const perf = typeof engine.getRuntimeObservability === 'function' ? engine.getRuntimeObservability() : null;
+      const perf = response.requestObservability ?? response.runtimeObservability ?? null;
+      const runtimeAggregatePerf =
+        typeof engine.getRuntimeAggregateObservability === 'function'
+          ? engine.getRuntimeAggregateObservability()
+          : (typeof engine.getRuntimeObservability === 'function' ? engine.getRuntimeObservability() : null);
       outputTokenCount = perf?.outputTokenCount ?? tEvents.length;
       const tpotMs = ttftMs != null && outputTokenCount > 1 ? round((wallMs - ttftMs) / (outputTokenCount - 1)) : null;
       
-      setLastRunResponse(resText);
-      setLastRunMetrics({ wallMs, ttftMs, tpotMs, perf });
+      setLastRunResponse(response.outputText);
+      setLastRunMetrics({ wallMs, ttftMs, tpotMs, perf, runtimeAggregatePerf });
       setStatus('idle');
       
       // Perform memory snapshot after setting isBusy to false to prevent UI freeze
