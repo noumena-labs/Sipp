@@ -1,8 +1,6 @@
 import { FileSystemStorage } from '../storage/file-system-storage.js';
 import {
   BrowserModelCache,
-  BrowserModelCacheIdentity,
-  BrowserModelCacheLookupResult,
 } from '../storage/browser-model-cache.js';
 import { CogentConfig, EngineModuleOptions } from '../cogent-config.js';
 import { normalizeInitConfig } from '../core/init-config.js';
@@ -16,173 +14,43 @@ import {
   InferenceInitConfig,
   ModelLoadInfo,
   PromptOptions,
-  RequestObservabilityMetrics,
   RuntimeAggregateObservabilityMetrics,
-  RuntimeObservabilityMetrics,
   TransportObservability,
 } from '../types.js';
 import { EngineRuntime } from './engine-runtime.js';
-
-interface EmscriptenFs {
-  analyzePath(path: string): { exists: boolean };
-  mkdir(path: string): void;
-  writeFile(path: string, data: Uint8Array): void;
-  unlink(path: string): void;
-  mount(type: any, opts: any, mountpoint: string): void;
-  unmount(mountpoint: string): void;
-}
-
-interface EngineModule {
-  FS: EmscriptenFs;
-  WORKERFS: any;
-  HEAP32: Int32Array;
-  HEAPF64: Float64Array;
-  _free(ptr: number | bigint): void;
-  _malloc(size: number | bigint): number | bigint;
-  addFunction(func: (...args: any[]) => any, signature: string): number | bigint;
-  ccall(ident: string, returnType: string | null, argTypes: string[], args: any[], opts?: { async?: boolean }): Promise<any> | any;
-  removeFunction(ptr: number | bigint): void;
-  UTF8ToString(ptr: number | bigint, maxBytesToRead?: number): string;
-}
-
-type MountableModelFile = Blob & { name?: string };
-type HeaderLookup = { get(name: string): string | null };
-type UrlShardMetadata = {
-  url: string;
-  fileName: string;
-  contentLength: number;
-  cacheIdentity: BrowserModelCacheIdentity;
-};
-
-interface QueuedRequestCompletionState {
-  promise: Promise<GenerateResponse>;
-  resolve: (value: GenerateResponse) => void;
-  reject: (error: unknown) => void;
-  settled: boolean;
-  consumed: boolean;
-  waiterCount: number;
-  callbackError: unknown;
-  cancelRequested: boolean;
-}
-
-const MAX_PROMPT_TOKENS = 2048;
-const DEFAULT_MAX_MODEL_BYTES = 8 * 1024 * 1024 * 1024;
-const DEFAULT_PROMPT_FORMAT = 'auto-chat';
-const URL_METADATA_FETCH_CONCURRENCY = 4;
-const URL_DOWNLOAD_CONCURRENCY_OPFS = 4;
-const URL_DOWNLOAD_CONCURRENCY_MEMORY = 2;
-const REQUEST_STEP_RESULT_INVALID = -1;
-const REQUEST_STEP_RESULT_FATAL_NO_PROGRESS = -2;
-const REQUEST_STEP_RESULT_WAITING = 0;
-const REQUEST_STEP_RESULT_PROGRESSED = 1;
-const REQUEST_STEP_RESULT_TERMINAL = 2;
-const COMPLETED_REQUEST_STATUS_PENDING = 0;
-const COMPLETED_REQUEST_STATUS_COMPLETED = 1;
-const COMPLETED_REQUEST_STATUS_CANCELLED = 2;
-const COMPLETED_REQUEST_STATUS_FAILED = 3;
-const RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES = 128;
-const RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT = 9;
-
-const DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY: TransportObservability = {
-  executionMode: 'main-thread',
-  workerBacked: false,
-  enabled: false,
-  bufferedTokenLimit: 0,
-  flushIntervalMs: 0,
-  flushCount: 0,
-  coalescedTokenCount: 0,
-  maxObservedBufferedTokenCount: 0,
-};
-
-function createAbortError(message = 'The operation was aborted.'): Error {
-  if (typeof DOMException === 'function') {
-    return new DOMException(message, 'AbortError');
-  }
-  const error = new Error(message);
-  error.name = 'AbortError';
-  return error;
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'AbortError';
-}
-
-function normalizeModelFileName(fileName: string): string {
-  const trimmed = fileName.trim();
-  if (!trimmed) {
-    throw new Error('Model file name must not be empty.');
-  }
-  if (trimmed.includes('/') || trimmed.includes('\\') || trimmed.includes('..')) {
-    throw new Error(`Invalid model file name "${fileName}". Provide a simple file name, not a path.`);
-  }
-  return trimmed;
-}
-
-function asErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
-}
-
-function createLinkedAbortController(signal?: AbortSignal): {
-  controller: AbortController;
-  signal: AbortSignal;
-  dispose: () => void;
-} {
-  const controller = new AbortController();
-  if (signal?.aborted) {
-    controller.abort();
-    return {
-      controller,
-      signal: controller.signal,
-      dispose: () => {},
-    };
-  }
-
-  const abortListener =
-    signal == null
-      ? null
-      : () => {
-          controller.abort();
-        };
-  if (abortListener != null) {
-    signal!.addEventListener('abort', abortListener, { once: true });
-  }
-
-  return {
-    controller,
-    signal: controller.signal,
-    dispose: () => {
-      if (abortListener != null) {
-        signal?.removeEventListener('abort', abortListener);
-      }
-    },
-  };
-}
-
-function createDeferred<T>(): {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (error: unknown) => void;
-} {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((promiseResolve, promiseReject) => {
-    resolve = promiseResolve;
-    reject = promiseReject;
-  });
-  return { promise, resolve, reject };
-}
+import { MainThreadModelLoader } from './main-thread-model-loader.js';
+import {
+  callModuleNumber,
+  callModuleNumberAsync,
+  COMPLETED_REQUEST_STATUS_PENDING,
+  DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY,
+  DEFAULT_PROMPT_FORMAT,
+  EngineModule,
+  MAX_PROMPT_TOKENS,
+  QueuedRequestCompletionState,
+  REQUEST_STEP_RESULT_FATAL_NO_PROGRESS,
+  REQUEST_STEP_RESULT_INVALID,
+  REQUEST_STEP_RESULT_PROGRESSED,
+  REQUEST_STEP_RESULT_TERMINAL,
+  REQUEST_STEP_RESULT_WAITING,
+} from './main-thread-runtime-shared.js';
+import {
+  readRuntimeObservabilityFromModule,
+  takeCompletedResponse,
+} from './main-thread-runtime-observability.js';
+import {
+  asErrorMessage,
+  createAbortError,
+  createDeferred,
+} from './runtime-shared.js';
 
 export class MainThreadEngineRuntime implements EngineRuntime {
   private module: EngineModule | null = null;
   private initPromise: Promise<void> | null = null;
   private engineInitialized = false;
-  private loadedModelPaths: string[] = [];
-  private workerFsMountPath: string | null = null;
   private readonly opfs = new FileSystemStorage();
   private readonly browserModelCache = new BrowserModelCache(this.opfs);
+  private readonly modelLoader: MainThreadModelLoader;
   private queuedPromptCallbacks = new Map<
     GenerateRequestId,
     ((token: string) => void) | undefined
@@ -205,7 +73,17 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private transportObservability: TransportObservability = {
     ...DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY,
   };
-  constructor(private config: CogentConfig = {}) { }
+  constructor(private config: CogentConfig = {}) {
+    this.modelLoader = new MainThreadModelLoader(
+      this.config,
+      this.opfs,
+      this.browserModelCache,
+      this.parseConfiguredUrl.bind(this),
+      (info) => {
+        this.lastModelLoadInfo = info;
+      }
+    );
+  }
 
   private resolveWasmUrls(): { moduleUrl: string; wasmUrl: string } {
     const moduleUrl = this.config.moduleUrl?.trim();
@@ -260,18 +138,6 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     }
 
     return new Set();
-  }
-
-  private resolveMaxModelBytes(): number {
-    const maxModelBytes = this.config.maxModelBytes ?? DEFAULT_MAX_MODEL_BYTES;
-    if (!Number.isInteger(maxModelBytes) || maxModelBytes <= 0) {
-      throw new Error('"maxModelBytes" must be a positive integer.');
-    }
-    return maxModelBytes;
-  }
-
-  private setLastModelLoadInfo(info: ModelLoadInfo): void {
-    this.lastModelLoadInfo = info;
   }
 
   public getExecutionMode(): EngineExecutionMode {
@@ -671,11 +537,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     argTypes: string[] = [],
     args: unknown[] = []
   ): number {
-    const result = module.ccall(ident, 'number', argTypes, args);
-    if (result instanceof Promise) {
-      throw new Error(`Unexpected async result while calling ${ident}.`);
-    }
-    return Number(result);
+    return callModuleNumber(module, ident, argTypes, args);
   }
 
   private async callNumberAsync(
@@ -684,366 +546,23 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     argTypes: string[] = [],
     args: unknown[] = []
   ): Promise<number> {
-    const result = module.ccall(ident, 'number', argTypes, args, {
-      async: true,
-    });
-    return Number(await result);
-  }
-
-  private async mapWithConcurrency<T, TResult>(
-    items: readonly T[],
-    concurrency: number,
-    mapper: (item: T, index: number) => Promise<TResult>,
-    onError?: (error: unknown) => void
-  ): Promise<TResult[]> {
-    if (items.length === 0) {
-      return [];
-    }
-
-    const results = new Array<TResult>(items.length);
-    const workerCount = Math.min(Math.max(1, concurrency), items.length);
-    let nextIndex = 0;
-    let firstError: unknown = null;
-
-    const workers = Array.from({ length: workerCount }, async () => {
-      while (true) {
-        if (firstError != null) {
-          return;
-        }
-
-        const currentIndex = nextIndex;
-        nextIndex += 1;
-        if (currentIndex >= items.length) {
-          return;
-        }
-
-        try {
-          results[currentIndex] = await mapper(items[currentIndex], currentIndex);
-        } catch (error) {
-          if (firstError == null) {
-            firstError = error;
-            onError?.(error);
-          }
-          throw error;
-        }
-      }
-    });
-
-    await Promise.allSettled(workers);
-    if (firstError != null) {
-      throw firstError;
-    }
-    return results;
+    return callModuleNumberAsync(module, ident, argTypes, args);
   }
 
   private readRuntimeObservabilityFromModule(
     module: EngineModule
   ): RuntimeAggregateObservabilityMetrics | null {
-    return this.readRuntimeObservabilityViaCall(
+    return readRuntimeObservabilityFromModule(
       module,
-      'CE_GetRuntimeObservability',
-      ['pointer'],
-      []
+      this.callNumber.bind(this)
     );
-  }
-
-  private readRuntimeObservabilityViaCall(
-    module: EngineModule,
-    ident: string,
-    argTypes: string[],
-    args: unknown[]
-  ): RuntimeObservabilityMetrics | null {
-    const metricsPtr = Number(module._malloc(RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES));
-    if (!metricsPtr) {
-      throw new Error('Failed to allocate runtime observability buffer.');
-    }
-
-    try {
-      const status = this.callNumber(module, ident, [...argTypes, 'pointer'], [...args, metricsPtr]);
-      if (status !== 0) {
-        return null;
-      }
-
-      // Integer division for typed array index: ptr must be aligned.
-      const f64Offset = (metricsPtr / 8) | 0;
-      const i32Offset = ((metricsPtr + RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT * 8) / 4) | 0;
-
-      return {
-        totalMs: module.HEAPF64[f64Offset],
-        promptEvalMs: module.HEAPF64[f64Offset + 1],
-        decodeEvalMs: module.HEAPF64[f64Offset + 2],
-        sampleMs: module.HEAPF64[f64Offset + 3],
-        queueDelayMs: module.HEAPF64[f64Offset + 4],
-        ttftMs: module.HEAPF64[f64Offset + 5],
-        meanItlMs: module.HEAPF64[f64Offset + 6],
-        tailItlMs: module.HEAPF64[f64Offset + 7],
-        e2elMs: module.HEAPF64[f64Offset + 8],
-        inputTokenCount: module.HEAP32[i32Offset],
-        promptEvalTokens: module.HEAP32[i32Offset + 1],
-        decodeEvalCount: module.HEAP32[i32Offset + 2],
-        sampleCount: module.HEAP32[i32Offset + 3],
-        outputTokenCount: module.HEAP32[i32Offset + 4],
-        batchParticipationCount: module.HEAP32[i32Offset + 5],
-        decodeFirstTickCount: module.HEAP32[i32Offset + 6],
-        chunkedPrefillTickCount: module.HEAP32[i32Offset + 7],
-        mixedWorkloadTickCount: module.HEAP32[i32Offset + 8],
-        lcpReuseTokens: module.HEAP32[i32Offset + 9],
-        prefixCacheRestoreTokens: module.HEAP32[i32Offset + 10],
-        prefixCacheHitCount: module.HEAP32[i32Offset + 11],
-        prefixCacheStoreCount: module.HEAP32[i32Offset + 12],
-      };
-    } finally {
-      module._free(metricsPtr);
-    }
-  }
-
-  private readCompletedRequestRuntimeObservability(
-    module: EngineModule,
-    requestId: GenerateRequestId
-  ): RequestObservabilityMetrics | null {
-    return this.readRuntimeObservabilityViaCall(
-      module,
-      'CE_GetCompletedRequestRuntimeObservability',
-      ['number'],
-      [requestId]
-    );
-  }
-
-  private copyCompletedRequestText(
-    module: EngineModule,
-    requestId: GenerateRequestId,
-    sizeFunction: string,
-    copyFunction: string,
-    fieldName: string
-  ): string {
-    const byteLength = this.callNumber(module, sizeFunction, ['number'], [requestId]);
-    if (byteLength < 0) {
-      throw new Error(`Failed to read queued request ${fieldName} size.`);
-    }
-    if (byteLength === 0) {
-      return '';
-    }
-
-    const rawBufferPtr = module._malloc(byteLength + 1);
-    if (!rawBufferPtr) {
-      throw new Error(`Failed to allocate queued request ${fieldName} buffer.`);
-    }
-    const bufferPtr = Number(rawBufferPtr);
-
-    try {
-      const copied = this.callNumber(module, copyFunction, ['number', 'pointer', 'number'], [
-        requestId,
-        bufferPtr,
-        byteLength + 1,
-      ]);
-      if (copied !== byteLength) {
-        throw new Error(`Failed to copy queued request ${fieldName}.`);
-      }
-      return module.UTF8ToString(bufferPtr, byteLength);
-    } finally {
-      module._free(bufferPtr);
-    }
   }
 
   private takeCompletedResponse(
     module: EngineModule,
     requestId: GenerateRequestId
   ): GenerateResponse {
-    const status = this.callNumber(module, 'CE_GetCompletedRequestStatus', ['number'], [requestId]);
-    if (status === COMPLETED_REQUEST_STATUS_PENDING) {
-      throw new Error('Queued request reached a terminal step without a completed response.');
-    }
-
-    const outputText = this.copyCompletedRequestText(
-      module,
-      requestId,
-      'CE_GetCompletedRequestOutputSize',
-      'CE_CopyCompletedRequestOutput',
-      'output'
-    );
-    const errorText = this.copyCompletedRequestText(
-      module,
-      requestId,
-      'CE_GetCompletedRequestErrorSize',
-      'CE_CopyCompletedRequestError',
-      'error'
-    );
-    const runtimeObservability = this.readCompletedRequestRuntimeObservability(
-      module,
-      requestId
-    );
-    const consumed = this.callNumber(module, 'CE_ConsumeCompletedRequest', ['number'], [requestId]);
-    if (!consumed) {
-      throw new Error('Failed to consume completed queued request response.');
-    }
-
-    return {
-      requestId,
-      completed: status === COMPLETED_REQUEST_STATUS_COMPLETED,
-      failed: status === COMPLETED_REQUEST_STATUS_FAILED,
-      cancelled: status === COMPLETED_REQUEST_STATUS_CANCELLED,
-      outputText,
-      errorMessage: errorText.length > 0 ? errorText : null,
-      requestObservability: runtimeObservability,
-      runtimeObservability,
-    };
-  }
-
-  private removeFileIfExists(module: EngineModule, path: string): void {
-    if (module.FS.analyzePath(path).exists) {
-      module.FS.unlink(path);
-    }
-  }
-
-  private createMountableModelFile(blob: Blob, fileName: string): MountableModelFile {
-    const normalizedFileName = normalizeModelFileName(fileName);
-    const existingName = (blob as MountableModelFile).name;
-    if (existingName === normalizedFileName) {
-      return blob as MountableModelFile;
-    }
-
-    if (typeof File === 'function') {
-      return new File([blob], normalizedFileName, {
-        type: blob.type,
-      }) as MountableModelFile;
-    }
-
-    const copiedBlob = blob.slice(0, blob.size, blob.type) as MountableModelFile;
-    Object.defineProperty(copiedBlob, 'name', {
-      configurable: true,
-      value: normalizedFileName,
-      writable: false,
-    });
-    return copiedBlob;
-  }
-
-  private removeAllLoadedModelFiles(module: EngineModule): void {
-    for (const p of this.loadedModelPaths) {
-      // Don't try to unlink files inside a WORKERFS mount point.
-      // They will be "cleaned up" when the mount is unmounted.
-      if (this.workerFsMountPath && p.startsWith(this.workerFsMountPath)) {
-        continue;
-      }
-      this.removeFileIfExists(module, p);
-    }
-    this.loadedModelPaths = [];
-  }
-
-  private commitLoadedModelPaths(module: EngineModule, paths: string[]): void {
-    // Clean up any previously loaded model files that aren't in the new set
-    const newSet = new Set(paths);
-    for (const p of this.loadedModelPaths) {
-      if (!newSet.has(p)) {
-        this.removeFileIfExists(module, p);
-      }
-    }
-    this.loadedModelPaths = [...paths];
-  }
-
-  private prepareModelPath(module: EngineModule, destFileName: string): string {
-    const safeName = normalizeModelFileName(destFileName);
-    const modelPath = `/models/${safeName}`;
-    this.ensureModelsDir(module);
-    this.removeFileIfExists(module, modelPath);
-    return modelPath;
-  }
-
-  private async readStreamToMountableModelFile(
-    stream: ReadableStream<Uint8Array>,
-    fileName: string,
-    onProgress?: (bytes: number) => void,
-    signal?: AbortSignal
-  ): Promise<MountableModelFile> {
-    const reader = stream.getReader();
-    const chunks: Uint8Array[] = [];
-    let bytesRead = 0;
-    const abortListener =
-      signal == null
-        ? null
-        : () => {
-            void reader.cancel(createAbortError('Model load aborted.'));
-          };
-    if (abortListener != null) {
-      signal!.addEventListener('abort', abortListener, { once: true });
-    }
-    try {
-      while (true) {
-        if (signal?.aborted) {
-          throw createAbortError('Model load aborted.');
-        }
-        const { done, value } = await reader.read();
-        if (done) {
-          if (signal?.aborted) {
-            throw createAbortError('Model load aborted.');
-          }
-          break;
-        }
-        if (value != null) {
-          chunks.push(value);
-          bytesRead += value.byteLength;
-          onProgress?.(bytesRead);
-        }
-      }
-    } catch (error) {
-      if (isAbortError(error) || signal?.aborted) {
-        throw createAbortError('Model load aborted.');
-      }
-      throw error;
-    } finally {
-      if (abortListener != null) {
-        signal!.removeEventListener('abort', abortListener);
-      }
-      reader.releaseLock();
-    }
-
-    return this.createMountableModelFile(new Blob(chunks as any), fileName);
-  }
-
-  private async resolveUrlShardMetadata(
-    urls: string[],
-    signal: AbortSignal
-  ): Promise<UrlShardMetadata[]> {
-    return this.mapWithConcurrency(
-      urls,
-      URL_METADATA_FETCH_CONCURRENCY,
-      async (url) => {
-        const parsed = this.parseConfiguredUrl(url, 'modelUrl');
-        const canonicalUrl = parsed.toString();
-        const fileName = normalizeModelFileName(parsed.pathname.split('/').pop() || 'model.gguf');
-        try {
-          const headResp = await fetch(url, { method: 'HEAD', signal });
-          const cl = Number.parseInt(headResp.headers.get('Content-Length') ?? '0', 10) || 0;
-          return {
-            url,
-            fileName,
-            contentLength: cl,
-            cacheIdentity: {
-              canonicalUrl,
-              fileName,
-              etag: headResp.headers.get('ETag')?.trim() ?? '',
-              lastModified: headResp.headers.get('Last-Modified')?.trim() ?? '',
-              contentLength: cl,
-            },
-          };
-        } catch (error) {
-          if (isAbortError(error) || signal.aborted) {
-            throw createAbortError('Model load aborted.');
-          }
-          return {
-            url,
-            fileName,
-            contentLength: 0,
-            cacheIdentity: {
-              canonicalUrl,
-              fileName,
-              etag: '',
-              lastModified: '',
-              contentLength: 0,
-            },
-          };
-        }
-      }
-    );
+    return takeCompletedResponse(module, requestId, this.callNumber.bind(this));
   }
 
   private async importModuleFactory(moduleUrl: string): Promise<(options: EngineModuleOptions) => Promise<EngineModule>> {
@@ -1097,35 +616,22 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     await this.initPromise;
   }
 
-  private ensureModelsDir(module: EngineModule) {
-    const modelsPath = '/models';
-    if (!module.FS.analyzePath(modelsPath).exists) {
-      module.FS.mkdir(modelsPath);
-    }
-  }
-
-
-  /**
-   * Load a GGUF model from a URL.
-   * 
-   * This streams the model directly to OPFS (Persistent Storage) if supported,
-   * then mounts it into the WASM filesystem via WORKERFS. This is zero-copy
-   * and handles files >2GB.
-   */
   public async loadModelFromUrl(
     url: string,
     destFileName: string = 'model.gguf',
     onProgress?: (pct: number) => void,
     signal?: AbortSignal
   ): Promise<string> {
-    return this.loadModelFromUrls([url], onProgress, signal);
+    const module = await this.ensureModule();
+    return this.modelLoader.loadModelFromUrl(
+      module,
+      url,
+      destFileName,
+      onProgress,
+      signal
+    );
   }
 
-  /**
-   * Load a model from a ReadableStream.
-   * 
-   * The stream is piped to OPFS then zero-copy mounted.
-   */
   public async loadModelFromReadableStream(
     stream: ReadableStream<Uint8Array>,
     destFileName: string = 'model.gguf',
@@ -1136,92 +642,14 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     } = {}
   ): Promise<string> {
     const module = await this.ensureModule();
-    const opfsEnabled = FileSystemStorage.isSupported() && this.config.persistentModelCache?.enabled !== false;
-
-    let modelFile: Blob;
-    if (opfsEnabled) {
-      modelFile = await this.opfs.streamToDisk(
-        destFileName,
-        stream,
-        options.onProgress,
-        options.signal
-      );
-    } else {
-      modelFile = await this.readStreamToMountableModelFile(
-        stream,
-        destFileName,
-        undefined,
-        options.signal
-      );
-    }
-
-    const modelPath = await this.mountModelFiles(module, [modelFile]);
-
-    this.setLastModelLoadInfo({
-      sourceKind: 'buffer',
-      reuseMode: 'buffer',
-      modelPath,
-      fileName: destFileName,
-      byteLength: modelFile.size,
-      persistentCacheEnabled: opfsEnabled,
-      persistentCacheKey: null,
-      persistentCacheHit: false,
-      persistentCacheStored: opfsEnabled,
-    });
-
-    return modelPath;
+    return this.modelLoader.loadModelFromReadableStream(
+      module,
+      stream,
+      destFileName,
+      options
+    );
   }
 
-  /**
-   * Internal helper to mount one or more Blob/File objects into the WASM filesystem
-   * using the zero-copy WORKERFS driver.
-   *
-   * @param module The Emscripten module instance.
-   * @param files Array of Blob or File objects to mount.
-   * @param mountDir The path in the virtual filesystem where files will be mounted.
-   * @returns The virtual path to the first file in the set.
-   */
-  private async mountModelFiles(
-    module: EngineModule,
-    files: MountableModelFile[],
-    mountDir = '/workerfs_model'
-  ): Promise<string> {
-    const fs = module.FS;
-
-    // Ensure mount directory exists
-    if (!fs.analyzePath(mountDir).exists) {
-      fs.mkdir(mountDir);
-    } else if (this.workerFsMountPath) {
-      // If we already have something mounted, unmount first
-      try {
-        fs.unmount(this.workerFsMountPath);
-      } catch (e) { }
-    }
-
-    if (!module.WORKERFS) {
-      throw new Error(
-        'WORKERFS is not available in the Emscripten module. ' +
-        'Ensure the module was linked with -lworkerfs.js and WORKERFS is exported.'
-      );
-    }
-
-    fs.mount(module.WORKERFS, { files }, mountDir);
-    this.workerFsMountPath = mountDir;
-
-    // Path in WORKERFS is /mountDir/fileName
-    const firstFileName = files[0].name || 'model.gguf';
-    const firstModelPath = `${mountDir}/${firstFileName}`;
-
-    this.commitLoadedModelPaths(module, files.map((file) => `${mountDir}/${file.name || 'model.gguf'}`));
-
-    return firstModelPath;
-  }
-
-  /**
-   * Load a model from a local File object.
-   *
-   * This uses WORKERFS for zero-copy, low-RAM loading, bypassing any 2GB MEMFS size limits.
-   */
   public async loadModelFromFile(
     file: File,
     destFileName?: string,
@@ -1229,269 +657,36 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     signal?: AbortSignal
   ): Promise<string> {
     const module = await this.ensureModule();
-
-    if (onProgress) {
-      onProgress(100); // WORKERFS mount is instant
-    }
-
-    const modelPath = await this.mountModelFiles(module, [file]);
-
-    this.setLastModelLoadInfo({
-      sourceKind: 'file',
-      reuseMode: 'file-read',
-      modelPath,
-      fileName: normalizeModelFileName(destFileName || file.name),
-      byteLength: file.size,
-      persistentCacheEnabled: false,
-      persistentCacheKey: null,
-      persistentCacheHit: false,
-      persistentCacheStored: false,
-    });
-
-    return modelPath;
+    return this.modelLoader.loadModelFromFile(
+      module,
+      file,
+      destFileName,
+      onProgress,
+      signal
+    );
   }
 
-  /**
-   * Load a GGUF model from a local buffer into MEMFS.
-   */
   public loadModelFromBuffer(buffer: Uint8Array, destFileName: string = 'model.gguf'): string {
     const module = this.getLoadedModule();
-    const maxModelBytes = this.resolveMaxModelBytes();
-    if (buffer.byteLength === 0) {
-      throw new Error('Model buffer is empty.');
-    }
-    if (buffer.byteLength > maxModelBytes) {
-      throw new Error(`Model exceeds configured maxModelBytes (${maxModelBytes} bytes).`);
-    }
-
-    const modelPath = this.prepareModelPath(module, destFileName);
-    module.FS.writeFile(modelPath, buffer);
-    this.commitLoadedModelPaths(module, [modelPath]);
-    this.setLastModelLoadInfo({
-      sourceKind: 'buffer',
-      reuseMode: 'buffer',
-      modelPath,
-      fileName: normalizeModelFileName(destFileName),
-      byteLength: buffer.byteLength,
-      persistentCacheEnabled: false,
-      persistentCacheKey: null,
-      persistentCacheHit: false,
-      persistentCacheStored: false,
-    });
-    return modelPath;
+    return this.modelLoader.loadModelFromBuffer(module, buffer, destFileName);
   }
 
-  /**
-   * Load a split GGUF model from an array of File objects.
-   *
-   * Use `gguf-split` to split a large model into shards (<2GB each) so that
-   * each shard fits within the MEMFS file-size limit. llama.cpp natively
-   * detects the split naming convention (e.g. `model-00001-of-00010.gguf`)
-   * and loads all shards automatically when given the first shard's path.
-   *
-   * @param files Array of File objects, one per shard, in order.
-   * @param onProgress Optional progress callback (0–100 across all shards).
-   * @param signal Optional AbortSignal.
-   * @returns The MEMFS path to the first shard (pass this to initEngine).
-   */
   public async loadModelFromFileShards(
     files: File[],
     onProgress?: (pct: number) => void,
     signal?: AbortSignal
   ): Promise<string> {
-    if (!files || files.length === 0) {
-      throw new Error('No shard files provided.');
-    }
-    if (files.length === 1) {
-      return this.loadModelFromFile(files[0], files[0].name, onProgress, signal);
-    }
-
     const module = await this.ensureModule();
-    const maxModelBytes = this.resolveMaxModelBytes();
-    this.ensureModelsDir(module);
-
-    const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
-    if (totalBytes <= 0) {
-      throw new Error('Model shards are empty.');
-    }
-    if (totalBytes > maxModelBytes) {
-      throw new Error(`Total model size (${totalBytes} bytes) exceeds configured maxModelBytes (${maxModelBytes} bytes).`);
-    }
-
-    try {
-      // Mount all shards at once as a single WORKERFS directory
-      const modelPath = await this.mountModelFiles(module, files);
-
-      this.commitLoadedModelPaths(module, files.map(f => `/workerfs_model/${f.name}`));
-      this.setLastModelLoadInfo({
-        sourceKind: 'file',
-        reuseMode: 'file-read',
-        modelPath,
-        fileName: normalizeModelFileName(files[0].name),
-        byteLength: totalBytes,
-        persistentCacheEnabled: false,
-        persistentCacheKey: null,
-        persistentCacheHit: false,
-        persistentCacheStored: false,
-      });
-
-      if (onProgress) onProgress(100);
-      return modelPath;
-    } catch (error) {
-      if (isAbortError(error) || signal?.aborted) {
-        throw createAbortError('Model load aborted.');
-      }
-      throw new Error(`Failed while loading model shards: ${asErrorMessage(error)}`);
-    }
+    return this.modelLoader.loadModelFromFileShards(module, files, onProgress, signal);
   }
 
-  /**
-   * Load a split GGUF model from an array of URLs.
-   */
   public async loadModelFromUrls(
     urls: string[],
     onProgress?: (pct: number) => void,
     signal?: AbortSignal
   ): Promise<string> {
-    if (!urls || urls.length === 0) {
-      throw new Error('No shard URLs provided.');
-    }
-
     const module = await this.ensureModule();
-    const opfsSupported = FileSystemStorage.isSupported() && this.config.persistentModelCache?.enabled !== false;
-    const linkedAbort = createLinkedAbortController(signal);
-    const loadSignal = linkedAbort.signal;
-    const downloadConcurrency = opfsSupported
-      ? URL_DOWNLOAD_CONCURRENCY_OPFS
-      : URL_DOWNLOAD_CONCURRENCY_MEMORY;
-
-    try {
-      const shardMeta = await this.resolveUrlShardMetadata(urls, loadSignal);
-      const totalBytes = shardMeta.reduce((sum, shard) => sum + shard.contentLength, 0);
-      const shardLoadedBytes = new Array<number>(shardMeta.length).fill(0);
-      let totalLoadedBytes = 0;
-
-      const reportShardProgress = (index: number, loadedBytes: number) => {
-        const normalizedBytes = Math.max(0, loadedBytes);
-        const previousBytes = shardLoadedBytes[index];
-        if (normalizedBytes <= previousBytes) {
-          return;
-        }
-        shardLoadedBytes[index] = normalizedBytes;
-        totalLoadedBytes += normalizedBytes - previousBytes;
-        if (onProgress != null && totalBytes > 0) {
-          onProgress(Math.min(100, Math.round((totalLoadedBytes / totalBytes) * 100)));
-        }
-      };
-
-      const shardResults = await this.mapWithConcurrency(
-        shardMeta,
-        downloadConcurrency,
-        async (shard, index) => {
-          if (loadSignal.aborted) {
-            throw createAbortError('Model load aborted.');
-          }
-
-          const cachedEntry: BrowserModelCacheLookupResult | null = opfsSupported
-            ? await this.browserModelCache.get(shard.cacheIdentity)
-            : null;
-          if (cachedEntry != null) {
-            reportShardProgress(index, cachedEntry.file.size);
-            return {
-              file: this.createMountableModelFile(cachedEntry.file, shard.fileName),
-              cacheKey: cachedEntry.key,
-              cacheHit: true,
-              cacheStored: false,
-            };
-          }
-
-          const response = await fetch(shard.url, { signal: loadSignal });
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status} for ${shard.fileName}`);
-          }
-
-          if (opfsSupported) {
-            if (!response.body) {
-              throw new Error(`Empty body for ${shard.fileName}`);
-            }
-            const storedEntry = await this.browserModelCache.storeStream(
-              shard.cacheIdentity,
-              response.body,
-              (written) => {
-                reportShardProgress(index, written);
-              },
-              loadSignal
-            );
-            reportShardProgress(index, storedEntry.file.size);
-            return {
-              file: this.createMountableModelFile(storedEntry.file, shard.fileName),
-              cacheKey: storedEntry.key,
-              cacheHit: false,
-              cacheStored: true,
-            };
-          }
-
-          if (!response.body) {
-            const buffer = await response.arrayBuffer();
-            reportShardProgress(index, buffer.byteLength);
-            return {
-              file: this.createMountableModelFile(new Blob([buffer]), shard.fileName),
-              cacheKey: null,
-              cacheHit: false,
-              cacheStored: false,
-            };
-          }
-
-          return {
-            file: await this.readStreamToMountableModelFile(
-              response.body,
-              shard.fileName,
-              (written) => {
-                reportShardProgress(index, written);
-              },
-              loadSignal
-            ),
-            cacheKey: null,
-            cacheHit: false,
-            cacheStored: false,
-          };
-        },
-        () => {
-          linkedAbort.controller.abort();
-        }
-      );
-
-      const shardBlobs = shardResults.map((result) => result.file);
-      const modelPath = await this.mountModelFiles(module, shardBlobs);
-      if (onProgress != null && totalBytes === 0) {
-        onProgress(100);
-      }
-
-      const cacheKeys = shardResults
-        .map((result, index) => result.cacheKey ?? this.browserModelCache.buildEntryKey(shardMeta[index].cacheIdentity));
-      const allCacheHits = opfsSupported && shardResults.every((result) => result.cacheHit);
-      const anyCacheStored = opfsSupported && shardResults.some((result) => result.cacheStored);
-
-      this.setLastModelLoadInfo({
-        sourceKind: 'url',
-        reuseMode: allCacheHits ? 'persistent-cache' : 'network',
-        modelPath,
-        fileName: shardMeta[0].fileName,
-        byteLength: shardBlobs.reduce((sum, b) => sum + b.size, 0),
-        persistentCacheEnabled: opfsSupported,
-        persistentCacheKey: opfsSupported ? cacheKeys.join(',') : null,
-        persistentCacheHit: allCacheHits,
-        persistentCacheStored: anyCacheStored,
-      });
-
-      return modelPath;
-    } catch (e) {
-      linkedAbort.controller.abort();
-      if (isAbortError(e) || signal?.aborted || loadSignal.aborted) throw createAbortError();
-      throw new Error(`Model load from URLs failed: ${asErrorMessage(e)}`);
-    } finally {
-      linkedAbort.dispose();
-    }
+    return this.modelLoader.loadModelFromUrls(module, urls, onProgress, signal);
   }
 
   /**
@@ -1578,7 +773,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     }
     this.engineInitialized = true;
 
-    this.removeAllLoadedModelFiles(module);
+    this.modelLoader.cleanupAfterEngineInit(module);
   }
 
   /**
@@ -1591,20 +786,9 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     }
     this.rejectQueuedRequestCompletions(new Error('Engine runtime was closed.'));
     module.ccall('CE_Close', null, [], []);
-
-    if (this.workerFsMountPath) {
-      try {
-        module.FS.unmount(this.workerFsMountPath);
-      } catch (e) {
-        // Ignore
-      }
-      this.workerFsMountPath = null;
-    }
-
+    this.modelLoader.cleanupAfterClose(module);
     this.releaseAllQueuedPromptCallbacks(module);
     this.engineInitialized = false;
-    this.loadedModelPaths = [];
-    this.workerFsMountPath = null;
     this.resetRuntimeLifecycleState();
     this.lastModelLoadInfo = null;
     this.module = null;

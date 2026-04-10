@@ -1,0 +1,258 @@
+import { CogentConfig } from '../cogent-config.js';
+import { MainThreadEngineRuntime } from './engine-runtime-main-thread.js';
+import { GenerateRequestId, TransportObservability } from '../types.js';
+import { WorkerResponseMessage, WorkerSerializableCogentConfig } from './engine-runtime-worker-protocol.js';
+import { createAbortError } from './runtime-shared.js';
+
+interface BufferedTokenState {
+  text: string;
+  tokenCount: number;
+  timer: number | null;
+}
+
+interface ActiveModelLoadState {
+  abortController: AbortController;
+  streamController: ReadableStreamDefaultController<Uint8Array> | null;
+}
+
+const DEFAULT_MAX_BUFFERED_TOKENS = 8;
+const DEFAULT_FLUSH_INTERVAL_MS = 16;
+
+export class WorkerEntryState {
+  private engine: MainThreadEngineRuntime | null = null;
+  private readonly requestAbortControllers = new Map<GenerateRequestId, AbortController>();
+  private readonly bufferedTokens = new Map<GenerateRequestId, BufferedTokenState>();
+  private readonly runningRequestIds = new Set<GenerateRequestId>();
+  private readonly activeModelLoads = new Map<number, ActiveModelLoadState>();
+  private readonly transportObservability: TransportObservability = {
+    executionMode: 'worker',
+    workerBacked: true,
+    enabled: false,
+    bufferedTokenLimit: DEFAULT_MAX_BUFFERED_TOKENS,
+    flushIntervalMs: DEFAULT_FLUSH_INTERVAL_MS,
+    flushCount: 0,
+    coalescedTokenCount: 0,
+    maxObservedBufferedTokenCount: 0,
+  };
+
+  public cloneTransportObservability(): TransportObservability {
+    return { ...this.transportObservability };
+  }
+
+  public toErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+    return String(error);
+  }
+
+  public ensureEngine(): MainThreadEngineRuntime {
+    if (this.engine == null) {
+      throw new Error('Worker runtime is not initialized.');
+    }
+    return this.engine;
+  }
+
+  public async initModule(config: WorkerSerializableCogentConfig): Promise<void> {
+    if (this.engine == null) {
+      this.engine = new MainThreadEngineRuntime(this.buildEngineConfig(config));
+    }
+    await this.engine.initModule();
+  }
+
+  public abortAllModelLoads(): void {
+    for (const callId of this.activeModelLoads.keys()) {
+      this.abortModelLoad(callId);
+    }
+  }
+
+  public releaseAllRequestResources(): void {
+    for (const requestId of this.bufferedTokens.keys()) {
+      this.releaseRequestResources(requestId);
+    }
+    this.runningRequestIds.clear();
+  }
+
+  public setRuntimeObservabilityEnabled(enabled: boolean): void {
+    this.transportObservability.enabled = enabled;
+  }
+
+  public beginModelLoad(callId: number): AbortSignal {
+    const abortController = new AbortController();
+    this.activeModelLoads.set(callId, {
+      abortController,
+      streamController: null,
+    });
+    return abortController.signal;
+  }
+
+  public beginStreamModelLoad(
+    callId: number
+  ): {
+    signal: AbortSignal;
+    stream: ReadableStream<Uint8Array>;
+  } {
+    const abortController = new AbortController();
+    const loadState: ActiveModelLoadState = {
+      abortController,
+      streamController: null,
+    };
+    const stream = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        loadState.streamController = controller;
+      },
+    });
+    this.activeModelLoads.set(callId, loadState);
+    return {
+      signal: abortController.signal,
+      stream,
+    };
+  }
+
+  public releaseModelLoad(callId: number): void {
+    this.activeModelLoads.delete(callId);
+  }
+
+  public abortModelLoad(callId: number): void {
+    const loadState = this.activeModelLoads.get(callId);
+    if (loadState == null) {
+      return;
+    }
+    loadState.abortController.abort();
+    if (loadState.streamController != null) {
+      loadState.streamController.error(createAbortError('Model load aborted.'));
+      loadState.streamController = null;
+    }
+  }
+
+  public enqueueStreamChunk(callId: number, chunk: ArrayBuffer): void {
+    const loadState = this.activeModelLoads.get(callId);
+    if (loadState?.streamController == null) {
+      throw new Error(`No active model stream for call ${callId}.`);
+    }
+    loadState.streamController.enqueue(new Uint8Array(chunk));
+    const response: WorkerResponseMessage = {
+      kind: 'load-stream-ack',
+      callId,
+    };
+    self.postMessage(response);
+  }
+
+  public closeStreamModelLoad(callId: number): void {
+    const loadState = this.activeModelLoads.get(callId);
+    if (loadState?.streamController == null) {
+      return;
+    }
+    loadState.streamController.close();
+    loadState.streamController = null;
+  }
+
+  public postLoadProgress(callId: number, progressPct: number): void {
+    const progressMessage: WorkerResponseMessage = {
+      kind: 'load-progress',
+      callId,
+      progressPct,
+    };
+    self.postMessage(progressMessage);
+  }
+
+  public bufferTokenPiece(requestId: GenerateRequestId, token: string): void {
+    let state = this.bufferedTokens.get(requestId);
+    if (state == null) {
+      state = {
+        text: '',
+        tokenCount: 0,
+        timer: null,
+      };
+      this.bufferedTokens.set(requestId, state);
+    }
+
+    state.text += token;
+    state.tokenCount += 1;
+
+    if (state.tokenCount >= this.transportObservability.bufferedTokenLimit) {
+      this.flushBufferedTokens(requestId);
+      return;
+    }
+
+    if (state.timer == null) {
+      state.timer = self.setTimeout(() => {
+        this.flushBufferedTokens(requestId);
+      }, this.transportObservability.flushIntervalMs);
+    }
+  }
+
+  public flushBufferedTokens(requestId: GenerateRequestId): void {
+    const state = this.bufferedTokens.get(requestId);
+    if (state == null || state.text.length === 0) {
+      return;
+    }
+
+    if (state.timer != null) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+
+    const payload: WorkerResponseMessage = {
+      kind: 'token',
+      requestId,
+      text: state.text,
+      bufferedTokenCount: state.tokenCount,
+    };
+    self.postMessage(payload);
+    if (this.transportObservability.enabled) {
+      this.transportObservability.flushCount += 1;
+      this.transportObservability.coalescedTokenCount += state.tokenCount;
+      this.transportObservability.maxObservedBufferedTokenCount = Math.max(
+        this.transportObservability.maxObservedBufferedTokenCount,
+        state.tokenCount
+      );
+    }
+    state.text = '';
+    state.tokenCount = 0;
+  }
+
+  public rememberRequestAbortController(
+    requestId: GenerateRequestId,
+    abortController: AbortController
+  ): void {
+    this.requestAbortControllers.set(requestId, abortController);
+  }
+
+  public abortQueuedRequest(requestId: GenerateRequestId): void {
+    this.requestAbortControllers.get(requestId)?.abort();
+  }
+
+  public markRequestRunning(requestId: GenerateRequestId): void {
+    this.runningRequestIds.add(requestId);
+  }
+
+  public unmarkRequestRunning(requestId: GenerateRequestId): void {
+    this.runningRequestIds.delete(requestId);
+  }
+
+  public isRequestRunning(requestId: GenerateRequestId): boolean {
+    return this.runningRequestIds.has(requestId);
+  }
+
+  public releaseRequestResources(requestId: GenerateRequestId): void {
+    const state = this.bufferedTokens.get(requestId);
+    if (state?.timer != null) {
+      clearTimeout(state.timer);
+    }
+    this.bufferedTokens.delete(requestId);
+    this.requestAbortControllers.delete(requestId);
+  }
+
+  private buildEngineConfig(config: WorkerSerializableCogentConfig): CogentConfig {
+    this.transportObservability.bufferedTokenLimit =
+      config.workerMaxBufferedTokens ?? DEFAULT_MAX_BUFFERED_TOKENS;
+    this.transportObservability.flushIntervalMs =
+      config.workerTokenFlushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS;
+
+    return {
+      ...config,
+      executionMode: 'main-thread',
+    };
+  }
+}

@@ -14,83 +14,19 @@ import { EngineRuntime } from './engine-runtime.js';
 import {
   WorkerRequestMessage,
   WorkerResponseMessage,
-  WorkerSerializableCogentConfig,
   WorkerLoadModelResult,
   WorkerRunQueuedRequestResult,
   WorkerBackendObservabilityResult,
 } from './engine-runtime-worker-protocol.js';
-
-interface PendingWorkerCall {
-  resolve: (value: unknown) => void;
-  reject: (error: unknown) => void;
-  onProgress?: (pct: number) => void;
-}
-
-interface QueuedRequestCompletionState {
-  promise: Promise<WorkerRunQueuedRequestResult>;
-  settled: boolean;
-  consumed: boolean;
-  waiterCount: number;
-  callbackError: unknown;
-}
-
-type WithoutCallId<T> = T extends { callId: number } ? Omit<T, 'callId'> : never;
-
-function createAbortError(message = 'The operation was aborted.'): Error {
-  if (typeof DOMException === 'function') {
-    return new DOMException(message, 'AbortError');
-  }
-  const error = new Error(message);
-  error.name = 'AbortError';
-  return error;
-}
-
-function createDefaultTransportObservability(): TransportObservability {
-  return {
-    executionMode: 'worker',
-    workerBacked: true,
-    enabled: false,
-    bufferedTokenLimit: 0,
-    flushIntervalMs: 0,
-    flushCount: 0,
-    coalescedTokenCount: 0,
-    maxObservedBufferedTokenCount: 0,
-  };
-}
-
-function toTransferableChunkBuffer(chunk: Uint8Array): ArrayBuffer {
-  const { buffer, byteOffset, byteLength } = chunk;
-  if (buffer instanceof ArrayBuffer && byteOffset === 0 && byteLength === buffer.byteLength) {
-    return buffer;
-  }
-  return chunk.slice().buffer;
-}
-
-function toWorkerSerializableConfig(config: CogentConfig): WorkerSerializableCogentConfig {
-  if (typeof config.moduleOptions?.locateFile === 'function') {
-    throw new Error(
-      'Worker mode does not support moduleOptions.locateFile. Provide explicit moduleUrl/wasmUrl instead.'
-    );
-  }
-
-  const persistentModelCache =
-    config.persistentModelCache == null
-      ? undefined
-      : {
-          enabled: config.persistentModelCache.enabled,
-        };
-
-  return {
-    moduleUrl: config.moduleUrl,
-    wasmUrl: config.wasmUrl,
-    moduleOptions: config.moduleOptions,
-    maxModelBytes: config.maxModelBytes,
-    trustedOrigins: config.trustedOrigins,
-    workerMaxBufferedTokens: config.workerMaxBufferedTokens,
-    workerTokenFlushIntervalMs: config.workerTokenFlushIntervalMs,
-    persistentModelCache,
-  };
-}
+import { createAbortError } from './runtime-shared.js';
+import {
+  createDefaultTransportObservability,
+  PendingWorkerCall,
+  QueuedRequestCompletionState,
+  toTransferableChunkBuffer,
+  toWorkerSerializableConfig,
+  WithoutCallId,
+} from './worker-runtime-shared.js';
 
 export class WorkerEngineRuntime implements EngineRuntime {
   private worker: Worker | null = null;
