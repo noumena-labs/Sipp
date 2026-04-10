@@ -60,6 +60,25 @@ async function waitForCondition(predicate: () => boolean): Promise<void> {
   throw new Error('Timed out while waiting for condition.');
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(message));
+    }, ms);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
 function installMockWorker(): () => void {
   const originalWorker = globalThis.Worker;
   MockWorker.instances = [];
@@ -781,6 +800,178 @@ test('WorkerEngineRuntime supports split model URL loading in worker mode', asyn
     ]);
 
     assert.equal(modelPath, '/models/model-00001-of-00002.gguf');
+  } finally {
+    restoreWorker();
+  }
+});
+
+test('WorkerEngineRuntime shares one worker completion call across concurrent runQueuedRequest() waiters', async () => {
+  const restoreWorker = installMockWorker();
+  try {
+    let runQueuedRequestCallCount = 0;
+    MockWorker.handlerFactory = () => (worker, message) => {
+      switch (message.kind) {
+        case 'init-module':
+          worker.emit({
+            kind: 'resolve',
+            callId: message.callId,
+            value: undefined,
+          });
+          return;
+        case 'queue-prompt':
+          worker.emit({
+            kind: 'resolve',
+            callId: message.callId,
+            value: 77,
+          });
+          return;
+        case 'run-queued-request':
+          runQueuedRequestCallCount += 1;
+          queueMicrotask(() => {
+            worker.emit({
+              kind: 'resolve',
+              callId: message.callId,
+              value: {
+                response: {
+                  requestId: message.requestId,
+                  completed: true,
+                  failed: false,
+                  cancelled: false,
+                  outputText: 'shared worker response',
+                  errorMessage: null,
+                  runtimeObservability: null,
+                },
+                runtimeObservability: null,
+                transportObservability: {
+                  executionMode: 'worker',
+                  workerBacked: true,
+                  enabled: false,
+                  bufferedTokenLimit: 0,
+                  flushIntervalMs: 0,
+                  flushCount: 0,
+                  coalescedTokenCount: 0,
+                  maxObservedBufferedTokenCount: 0,
+                },
+              },
+            });
+          });
+          return;
+        default:
+          throw new Error(`Unexpected worker message: ${message.kind}`);
+      }
+    };
+
+    const runtime = new WorkerEngineRuntime({});
+    await runtime.initModule();
+
+    const requestId = await runtime.queuePrompt('ctx-shared-waiters', 'prompt', 8);
+    const firstPromise = runtime.runQueuedRequest(requestId);
+    const secondPromise = runtime.runQueuedRequest(requestId);
+
+    const [firstResponse, secondResponse] = await Promise.all([
+      withTimeout(firstPromise, 25, 'Timed out waiting for the first worker waiter.'),
+      withTimeout(secondPromise, 25, 'Timed out waiting for the second worker waiter.'),
+    ]);
+
+    assert.equal(firstResponse.outputText, 'shared worker response');
+    assert.equal(secondResponse.outputText, 'shared worker response');
+    assert.equal(runQueuedRequestCallCount, 1);
+  } finally {
+    restoreWorker();
+  }
+});
+
+test('WorkerEngineRuntime rejects outstanding queued waiters when close() is called', async () => {
+  const restoreWorker = installMockWorker();
+  try {
+    MockWorker.handlerFactory = () => (worker, message) => {
+      switch (message.kind) {
+        case 'init-module':
+          worker.emit({
+            kind: 'resolve',
+            callId: message.callId,
+            value: undefined,
+          });
+          return;
+        case 'queue-prompt':
+          worker.emit({
+            kind: 'resolve',
+            callId: message.callId,
+            value: 88,
+          });
+          return;
+        case 'run-queued-request':
+          return;
+        default:
+          throw new Error(`Unexpected worker message: ${message.kind}`);
+      }
+    };
+
+    const runtime = new WorkerEngineRuntime({});
+    await runtime.initModule();
+
+    const requestId = await runtime.queuePrompt('ctx-close-waiter', 'prompt', 8);
+    const waiter = runtime.runQueuedRequest(requestId);
+    await waitForCondition(() =>
+      MockWorker.instances[0].messages.some(
+        (message) => message.kind === 'run-queued-request'
+      )
+    );
+
+    runtime.close();
+
+    await assert.rejects(
+      withTimeout(waiter, 25, 'Timed out waiting for worker waiter rejection after close().'),
+      /closed/i
+    );
+  } finally {
+    restoreWorker();
+  }
+});
+
+test('WorkerEngineRuntime rejects outstanding queued waiters when the worker crashes mid-request', async () => {
+  const restoreWorker = installMockWorker();
+  try {
+    MockWorker.handlerFactory = () => (worker, message) => {
+      switch (message.kind) {
+        case 'init-module':
+          worker.emit({
+            kind: 'resolve',
+            callId: message.callId,
+            value: undefined,
+          });
+          return;
+        case 'queue-prompt':
+          worker.emit({
+            kind: 'resolve',
+            callId: message.callId,
+            value: 99,
+          });
+          return;
+        case 'run-queued-request':
+          return;
+        default:
+          throw new Error(`Unexpected worker message: ${message.kind}`);
+      }
+    };
+
+    const runtime = new WorkerEngineRuntime({});
+    await runtime.initModule();
+
+    const requestId = await runtime.queuePrompt('ctx-worker-crash', 'prompt', 8);
+    const waiter = runtime.runQueuedRequest(requestId);
+    await waitForCondition(() =>
+      MockWorker.instances[0].messages.some(
+        (message) => message.kind === 'run-queued-request'
+      )
+    );
+
+    MockWorker.instances[0].triggerError('worker exploded during queued execution');
+
+    await assert.rejects(
+      withTimeout(waiter, 25, 'Timed out waiting for worker waiter rejection after crash.'),
+      /worker exploded during queued execution/i
+    );
   } finally {
     restoreWorker();
   }

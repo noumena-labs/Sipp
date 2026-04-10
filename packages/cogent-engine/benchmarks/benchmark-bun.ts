@@ -32,6 +32,8 @@ import type {
 type BenchmarkPresetName = 'default' | 'single';
 type PromptBucket = 'short' | 'medium' | 'long' | 'custom';
 type OutputBucket = 'short' | 'medium' | 'long';
+type CompletionDriverMode = 'caller-driven-runQueuedRequest';
+type SchedulerProgressApi = 'CE_RunRequestStep(requestId)';
 
 interface BenchmarkOptions {
   modelPath: string;
@@ -213,8 +215,15 @@ interface QueueCancelChurnResult {
   warnings: string[];
 }
 
+interface CompletionDriverDiagnostics {
+  completionDriver: CompletionDriverMode;
+  schedulerProgressApi: SchedulerProgressApi;
+  runQueuedRequestCallCount: number;
+  schedulerStepCallCount: number | null;
+}
+
 interface BenchmarkReport {
-  schemaVersion: 'cogent.benchmark.bun.v8';
+  schemaVersion: 'cogent.benchmark.bun.v9';
   generatedAt: string;
   benchmark: {
     script: string;
@@ -250,6 +259,7 @@ interface BenchmarkReport {
     readModelMs: number;
     initModuleMs: number;
     loadModelIntoMemfsMs: number;
+    progressDriver: CompletionDriverDiagnostics;
     initEngineSummary: {
       initEngineMs: BenchmarkSummary;
     };
@@ -963,6 +973,74 @@ function buildPhase4BenchmarkConfig(initConfig: InferenceInitConfig): InferenceI
     maxCachedSessions: Math.max(initConfig.maxCachedSessions ?? 8, 2),
     enableRuntimeObservability: true,
     enableBackendProfiling: true,
+  };
+}
+
+function installCompletionDriverDiagnostics(engine: CogentEngine): {
+  snapshot: () => CompletionDriverDiagnostics;
+  dispose: () => void;
+} {
+  let runQueuedRequestCallCount = 0;
+  let schedulerStepCallCount: number | null = null;
+
+  const engineRef = engine as unknown as {
+    runtime?: {
+      runQueuedRequest?: CogentEngine['runQueuedRequest'];
+      callNumberAsync?: (
+        module: unknown,
+        ident: string,
+        argTypes?: string[],
+        args?: unknown[]
+      ) => Promise<number>;
+    };
+  };
+  const runtime = engineRef.runtime;
+  let disposeRunQueuedPatch = () => {};
+  if (runtime != null && typeof runtime.runQueuedRequest === 'function') {
+    const originalRunQueuedRequest = runtime.runQueuedRequest.bind(runtime);
+    runtime.runQueuedRequest = (async (
+      requestId: Parameters<CogentEngine['runQueuedRequest']>[0],
+      options?: Parameters<CogentEngine['runQueuedRequest']>[1]
+    ) => {
+      runQueuedRequestCallCount += 1;
+      return originalRunQueuedRequest(requestId, options);
+    }) as CogentEngine['runQueuedRequest'];
+    disposeRunQueuedPatch = () => {
+      runtime.runQueuedRequest = originalRunQueuedRequest;
+    };
+  }
+
+  let disposeRuntimePatch = () => {};
+  if (runtime != null && typeof runtime.callNumberAsync === 'function') {
+    schedulerStepCallCount = 0;
+    const originalCallNumberAsync = runtime.callNumberAsync.bind(runtime);
+    runtime.callNumberAsync = (async (
+      module: unknown,
+      ident: string,
+      argTypes?: string[],
+      args?: unknown[]
+    ) => {
+      if (ident === 'CE_RunRequestStep') {
+        schedulerStepCallCount += 1;
+      }
+      return originalCallNumberAsync(module, ident, argTypes, args);
+    }) as typeof runtime.callNumberAsync;
+    disposeRuntimePatch = () => {
+      runtime.callNumberAsync = originalCallNumberAsync;
+    };
+  }
+
+  return {
+    snapshot: () => ({
+      completionDriver: 'caller-driven-runQueuedRequest',
+      schedulerProgressApi: 'CE_RunRequestStep(requestId)',
+      runQueuedRequestCallCount,
+      schedulerStepCallCount,
+    }),
+    dispose: () => {
+      disposeRunQueuedPatch();
+      disposeRuntimePatch();
+    },
   };
 }
 
@@ -1763,6 +1841,16 @@ function printWarnings(warnings: string[]): void {
   }
 }
 
+function printCompletionDriverDiagnostics(diagnostics: CompletionDriverDiagnostics): void {
+  console.log('\nProgress Driver');
+  console.log(`  completion driver    ${diagnostics.completionDriver}`);
+  console.log(`  scheduler api        ${diagnostics.schedulerProgressApi}`);
+  console.log(`  runQueued calls      ${diagnostics.runQueuedRequestCallCount}`);
+  console.log(
+    `  scheduler step calls ${diagnostics.schedulerStepCallCount == null ? 'n/a' : diagnostics.schedulerStepCallCount}`
+  );
+}
+
 function printBackendProfile(backend: BenchmarkBackendProfile): void {
   console.log('\nBackend');
   console.log(`  requested execution  ${backend.requestedExecutionMode}`);
@@ -1847,6 +1935,7 @@ async function main(): Promise<void> {
 
   const modelBytes = readModel.value.bytes;
   const startup = await initializeScenarioEngine(runtimeUrls, modelBytes, fileName);
+  const completionDriverDiagnostics = installCompletionDriverDiagnostics(startup.engine);
   const maybeNavigator =
     typeof navigator !== 'undefined'
       ? (navigator as { gpu?: unknown; userAgent?: string })
@@ -1929,6 +2018,7 @@ async function main(): Promise<void> {
     }
   } finally {
     startup.engine.close();
+    completionDriverDiagnostics.dispose();
   }
 
   const warnings = collectBenchmarkWarnings(
@@ -1937,9 +2027,11 @@ async function main(): Promise<void> {
     queueCancelChurnResult
   );
   printWarnings(warnings);
+  const progressDriver = completionDriverDiagnostics.snapshot();
+  printCompletionDriverDiagnostics(progressDriver);
 
   const report: BenchmarkReport = {
-    schemaVersion: 'cogent.benchmark.bun.v8',
+    schemaVersion: 'cogent.benchmark.bun.v9',
     generatedAt: new Date().toISOString(),
     benchmark: {
       script: 'packages/cogent-engine/benchmarks/benchmark-bun.ts',
@@ -1975,6 +2067,7 @@ async function main(): Promise<void> {
       readModelMs: readModel.ms,
       initModuleMs: startup.initModuleMs,
       loadModelIntoMemfsMs: startup.loadModelIntoMemfsMs,
+      progressDriver,
       initEngineSummary: {
         initEngineMs: summarize(
           [
@@ -1997,6 +2090,7 @@ async function main(): Promise<void> {
       'Logical input tokens and effective prompt-eval tokens are reported separately so context reuse does not distort headline throughput metrics.',
       'Serial scenario groups remain concurrency=1 baselines; the mixedLoad section is the Phase 4 concurrency=2 fairness check.',
       'The Emscripten module and MEMFS model are loaded once per benchmark run; each scenario reinitializes only the native inference engine.',
+      'This report records the current caller-driven completion model explicitly: runQueuedRequest() is still the host-side progress driver in Phase 4 P4-A.',
       ...(maybeNavigator?.gpu == null
         ? [
             'Bun on this machine does not expose navigator.gpu, so the benchmark forces nGpuLayers=0 and runs CPU/Wasm only.',

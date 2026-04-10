@@ -35,6 +35,7 @@ class MockMainThreadModule {
   public cancelCallCount = 0;
   public consumeCallCount = 0;
   public closeCallCount = 0;
+  public runStepCallCount = 0;
   public removedFunctionPtrs: number[] = [];
   public initResult = 0;
 
@@ -116,6 +117,7 @@ class MockMainThreadModule {
       case 'CE_ResetRuntimeObservability':
         return 0;
       case 'CE_RunRequestStep':
+        this.runStepCallCount += 1;
         return this.runRequestStep();
       case 'CE_CancelQueuedRequest':
         this.cancelCallCount += 1;
@@ -353,6 +355,10 @@ class MockConcurrentObservabilityModule {
       case 'CE_ResetRuntimeObservability':
         this.currentObservability = createMockRuntimeObservability(0, 0);
         return 0;
+      case 'CE_Close':
+        return 0;
+      case 'CE_Init':
+        return 0;
       case 'CE_RunRequestStep':
         return this.ensureStepDeferred(requestId).promise;
       case 'CE_GetCompletedRequestStatus':
@@ -457,6 +463,25 @@ async function waitForCondition(predicate: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   throw new Error('Timed out while waiting for condition.');
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(message));
+    }, ms);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
 }
 
 test('MainThreadEngineRuntime flushes queued tokens outside native steps and reads typed results', async () => {
@@ -678,6 +703,91 @@ test('MainThreadEngineRuntime clears stale lifecycle state when reinit fails', a
   assert.equal(runtimeState.backendProfilingEnabled, false);
   assert.equal(runtimeState.transportObservability.enabled, false);
   assert.equal(runtimeState.transportObservability.flushCount, 0);
+});
+
+test('MainThreadEngineRuntime starts queued execution before runQueuedRequest() is awaited', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success');
+  attachReadyModule(runtime, module);
+
+  const tokens: string[] = [];
+  await runtime.queuePrompt('ctx-background-progress', 'prompt', {
+    nTokens: 16,
+    onToken: (token) => {
+      tokens.push(token);
+    },
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.ok(module.runStepCallCount > 0);
+  assert.deepEqual(tokens, ['tok1', 'tok2']);
+});
+
+test('MainThreadEngineRuntime lets a late runQueuedRequest() waiter observe an already-completed request', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success');
+  attachReadyModule(runtime, module);
+
+  const requestId = await runtime.queuePrompt('ctx-late-waiter', 'prompt', 16);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  const stepCallsBeforeWaiter = module.runStepCallCount;
+  const response = await runtime.runQueuedRequest(requestId);
+
+  assert.ok(stepCallsBeforeWaiter > 0);
+  assert.equal(module.runStepCallCount, stepCallsBeforeWaiter);
+  assert.equal(response.outputText, 'tok1tok2');
+});
+
+test('MainThreadEngineRuntime shares one completed response across concurrent runQueuedRequest() waiters', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockConcurrentObservabilityModule();
+  attachReadyModule(runtime, module as unknown as MockMainThreadModule);
+
+  const firstPromise = runtime.runQueuedRequest(303);
+  await Promise.resolve();
+  const secondPromise = runtime.runQueuedRequest(303);
+  await Promise.resolve();
+
+  module.resolveTerminal(303, 'shared-output', 2, 12);
+  const [firstResponse, secondResponse] = await Promise.all([
+    withTimeout(firstPromise, 25, 'Timed out waiting for first queued waiter.'),
+    withTimeout(secondPromise, 25, 'Timed out waiting for second queued waiter.'),
+  ]);
+
+  assert.equal(firstResponse.outputText, 'shared-output');
+  assert.equal(secondResponse.outputText, 'shared-output');
+});
+
+test('MainThreadEngineRuntime rejects outstanding queued waiters when close() is called', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockConcurrentObservabilityModule();
+  attachReadyModule(runtime, module as unknown as MockMainThreadModule);
+
+  const waiter = runtime.runQueuedRequest(404);
+  await Promise.resolve();
+  runtime.close();
+
+  await assert.rejects(
+    withTimeout(waiter, 25, 'Timed out waiting for queued waiter rejection after close().'),
+    /closed/i
+  );
+});
+
+test('MainThreadEngineRuntime rejects outstanding queued waiters when initEngine() reinitializes the runtime', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockConcurrentObservabilityModule();
+  attachReadyModule(runtime, module as unknown as MockMainThreadModule);
+
+  const waiter = runtime.runQueuedRequest(505);
+  await Promise.resolve();
+  await runtime.initEngine('/models/reinit.gguf');
+
+  await assert.rejects(
+    withTimeout(waiter, 25, 'Timed out waiting for queued waiter rejection after reinit.'),
+    /reinit|closed|reset/i
+  );
 });
 
 test('MainThreadEngineRuntime aborts non-OPFS stream loads without mounting partial files', async () => {
