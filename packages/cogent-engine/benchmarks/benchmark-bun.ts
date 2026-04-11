@@ -11,6 +11,7 @@ import type {
   PromptFormatMode,
   RequestObservabilityMetrics,
   SchedulerPolicyMode,
+  TransportObservability,
 } from '../src/types.js';
 
 // Benchmark metric glossary:
@@ -33,7 +34,11 @@ type BenchmarkPresetName = 'default' | 'single';
 type PromptBucket = 'short' | 'medium' | 'long' | 'custom';
 type OutputBucket = 'short' | 'medium' | 'long';
 type CompletionDriverMode = 'runtime-owned-scheduler-pump';
-type SchedulerProgressApi = 'CE_RunSchedulerTick()';
+type SchedulerProgressApi =
+  | 'CE_RunSchedulerTick()'
+  | 'CE_RunSchedulerBurst()'
+  | 'CE_RunSchedulerBurstWithDeadline()';
+type TokenTransportMode = 'auto' | 'runtime-events';
 
 interface BenchmarkOptions {
   modelPath: string;
@@ -48,6 +53,7 @@ interface BenchmarkOptions {
   artifactLabel?: string;
   quantizationLabel?: string;
   promptFormat: PromptFormatMode;
+  tokenTransport: TokenTransportMode;
   initConfig: InferenceInitConfig;
 }
 
@@ -224,12 +230,13 @@ interface CompletionDriverDiagnostics {
 }
 
 interface BenchmarkReport {
-  schemaVersion: 'cogent.benchmark.bun.v11';
+  schemaVersion: 'cogent.benchmark.bun.v12';
   generatedAt: string;
   benchmark: {
     script: string;
     preset: BenchmarkPresetName;
     promptFormat: PromptFormatMode;
+    tokenTransport: TokenTransportMode;
     warmupRuns: number;
     measuredRuns: number;
     cancelChurnRuns: number;
@@ -261,6 +268,7 @@ interface BenchmarkReport {
     initModuleMs: number;
     loadModelIntoMemfsMs: number;
     progressDriver: CompletionDriverDiagnostics;
+    transportObservability: TransportObservability;
     initEngineSummary: {
       initEngineMs: BenchmarkSummary;
     };
@@ -525,6 +533,7 @@ function parseArgs(argv: string[]): BenchmarkOptions {
     artifactLabel: options.get('artifact-label'),
     quantizationLabel: options.get('quantization'),
     promptFormat: parsePromptFormat(options.get('prompt-format')),
+    tokenTransport: parseTokenTransport(options.get('token-transport')),
     initConfig: {
       nCtx: parseOptionalPositiveInt('--ctx', options.get('ctx')),
       nBatch: parseOptionalPositiveInt('--batch', options.get('batch')),
@@ -557,6 +566,18 @@ function parseArgs(argv: string[]): BenchmarkOptions {
   };
 }
 
+function parseTokenTransport(rawValue: string | undefined): TokenTransportMode {
+  if (rawValue == null) {
+    return 'auto';
+  }
+  if (rawValue === 'auto' || rawValue === 'runtime-events') {
+    return rawValue;
+  }
+  throw new Error(
+    `Invalid --token-transport value "${rawValue}". Expected auto or runtime-events.`
+  );
+}
+
 function printHelp(): void {
   console.log(`Usage: bun ./benchmarks/benchmark-bun.ts [options]
 
@@ -566,6 +587,7 @@ Options:
   --prompt <text>                  Prompt text for --preset single
   --tokens <n>                     Max generation tokens per run or preset override
   --prompt-format <mode>           auto-chat | raw (default: auto-chat)
+  --token-transport <mode>         auto | runtime-events (default: auto)
   --warmup <n>                     Warmup runs per benchmark group (default: ${DEFAULT_WARMUP_RUNS})
   --runs <n>                       Measured runs per benchmark group (default: ${DEFAULT_MEASURED_RUNS})
   --cancel-churn-runs <n>          Queue/cancel churn iterations after scenarios (default: ${DEFAULT_CANCEL_CHURN_RUNS})
@@ -797,6 +819,7 @@ function buildBenchmarkBackendProfile(
 
 async function initializeScenarioEngine(
   runtimeUrls: ReturnType<typeof getBundledBunRuntimeUrls>,
+  tokenTransport: TokenTransportMode,
   modelBytes: Uint8Array,
   fileName: string
 ): Promise<{
@@ -805,7 +828,10 @@ async function initializeScenarioEngine(
   initModuleMs: number;
   loadModelIntoMemfsMs: number;
 }> {
-  const engine = new CogentEngine(runtimeUrls);
+  const engine = new CogentEngine({
+    ...runtimeUrls,
+    debugTokenTransport: tokenTransport,
+  });
 
   try {
     // Load the Wasm module and copy the model into MEMFS once for the whole benchmark.
@@ -983,6 +1009,7 @@ function installCompletionDriverDiagnostics(engine: CogentEngine): {
 } {
   let runQueuedRequestCallCount = 0;
   let schedulerStepCallCount: number | null = null;
+  let schedulerProgressApi: SchedulerProgressApi = 'CE_RunSchedulerTick()';
 
   const engineRef = engine as unknown as {
     runtime?: {
@@ -1021,8 +1048,18 @@ function installCompletionDriverDiagnostics(engine: CogentEngine): {
       argTypes?: string[],
       args?: unknown[]
     ) => {
-      if (ident === 'CE_RunSchedulerTick') {
+      if (
+        ident === 'CE_RunSchedulerTick' ||
+        ident === 'CE_RunSchedulerBurst' ||
+        ident === 'CE_RunSchedulerBurstWithDeadline'
+      ) {
         schedulerStepCallCount += 1;
+        schedulerProgressApi =
+          ident === 'CE_RunSchedulerBurstWithDeadline'
+            ? 'CE_RunSchedulerBurstWithDeadline()'
+            : ident === 'CE_RunSchedulerBurst'
+              ? 'CE_RunSchedulerBurst()'
+              : 'CE_RunSchedulerTick()';
       }
       return originalCallNumberAsync(module, ident, argTypes, args);
     }) as typeof runtime.callNumberAsync;
@@ -1034,7 +1071,7 @@ function installCompletionDriverDiagnostics(engine: CogentEngine): {
   return {
     snapshot: () => ({
       completionDriver: 'runtime-owned-scheduler-pump',
-      schedulerProgressApi: 'CE_RunSchedulerTick()',
+      schedulerProgressApi,
       runQueuedRequestCallCount,
       schedulerStepCallCount,
     }),
@@ -1864,6 +1901,18 @@ function printCompletionDriverDiagnostics(diagnostics: CompletionDriverDiagnosti
   );
 }
 
+function printTransportObservability(observability: TransportObservability): void {
+  console.log('\nToken Transport');
+  console.log(`  preference           ${observability.tokenTransportPreference ?? 'n/a'}`);
+  console.log(`  active mode          ${observability.activeTokenTransport ?? 'n/a'}`);
+  console.log(`  callback regs        ${observability.tokenCallbackRegistrationCount ?? 'n/a'}`);
+  console.log(`  native callback toks ${observability.nativeCallbackTokenCount ?? 'n/a'}`);
+  console.log(`  event drain calls    ${observability.runtimeEventDrainCount ?? 'n/a'}`);
+  console.log(`  event token count    ${observability.runtimeEventTokenCount ?? 'n/a'}`);
+  console.log(`  event terminal count ${observability.runtimeEventTerminalCount ?? 'n/a'}`);
+  console.log(`  event text bytes     ${observability.runtimeEventTextBytes ?? 'n/a'}`);
+}
+
 function printBackendProfile(backend: BenchmarkBackendProfile): void {
   console.log('\nBackend');
   console.log(`  requested execution  ${backend.requestedExecutionMode}`);
@@ -1916,6 +1965,7 @@ async function main(): Promise<void> {
   console.log(`  artifact    ${artifactLabel}`);
   console.log(`  quant       ${quantizationLabel ?? 'unknown'}`);
   console.log(`  format      ${options.promptFormat}`);
+  console.log(`  transport   ${options.tokenTransport}`);
   console.log(`  warmup      ${options.warmupRuns}`);
   console.log(`  runs        ${options.measuredRuns}`);
   console.log(`  churn       ${options.cancelChurnRuns}`);
@@ -1947,7 +1997,12 @@ async function main(): Promise<void> {
   });
 
   const modelBytes = readModel.value.bytes;
-  const startup = await initializeScenarioEngine(runtimeUrls, modelBytes, fileName);
+  const startup = await initializeScenarioEngine(
+    runtimeUrls,
+    options.tokenTransport,
+    modelBytes,
+    fileName
+  );
   const completionDriverDiagnostics = installCompletionDriverDiagnostics(startup.engine);
   const maybeNavigator =
     typeof navigator !== 'undefined'
@@ -1977,6 +2032,7 @@ async function main(): Promise<void> {
   const scenarioResults: BenchmarkScenarioResult[] = [];
   let mixedLoadResult: MixedLoadBenchmarkResult | null = null;
   let queueCancelChurnResult: QueueCancelChurnResult | null = null;
+  let transportObservability = startup.engine.getTransportObservability();
   try {
     for (const scenario of scenarios) {
       const runtime = await reinitializeScenarioEngine(
@@ -2030,6 +2086,7 @@ async function main(): Promise<void> {
       printMixedLoadResult(mixedLoadResult);
     }
   } finally {
+    transportObservability = startup.engine.getTransportObservability();
     startup.engine.close();
     completionDriverDiagnostics.dispose();
   }
@@ -2042,14 +2099,16 @@ async function main(): Promise<void> {
   printWarnings(warnings);
   const progressDriver = completionDriverDiagnostics.snapshot();
   printCompletionDriverDiagnostics(progressDriver);
+  printTransportObservability(transportObservability);
 
   const report: BenchmarkReport = {
-    schemaVersion: 'cogent.benchmark.bun.v11',
+    schemaVersion: 'cogent.benchmark.bun.v12',
     generatedAt: new Date().toISOString(),
     benchmark: {
       script: 'packages/cogent-engine/benchmarks/benchmark-bun.ts',
       preset: options.preset,
       promptFormat: options.promptFormat,
+      tokenTransport: options.tokenTransport,
       warmupRuns: options.warmupRuns,
       measuredRuns: options.measuredRuns,
       cancelChurnRuns: options.cancelChurnRuns,
@@ -2081,6 +2140,7 @@ async function main(): Promise<void> {
       initModuleMs: startup.initModuleMs,
       loadModelIntoMemfsMs: startup.loadModelIntoMemfsMs,
       progressDriver,
+      transportObservability,
       initEngineSummary: {
         initEngineMs: summarize(
           [

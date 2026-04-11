@@ -22,6 +22,8 @@ for (const file of files) {
   }
 }
 
+// NOTE: We use template literals for the HTML. 
+// We must ensure that the benchmarks data is correctly injected.
 const htmlTemplate = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -102,6 +104,7 @@ const htmlTemplate = `<!DOCTYPE html>
 
     <script>
         const benchmarks = ${JSON.stringify(benchmarks)};
+        const colors = ['#38bdf8', '#4ade80', '#fbbf24', '#f87171', '#c084fc', '#f472b6'];
         
         Chart.defaults.color = "#94a3b8";
         Chart.defaults.font.family = "'Inter', sans-serif";
@@ -126,20 +129,55 @@ const htmlTemplate = `<!DOCTYPE html>
             \`;
         }
 
+        function getMetric(summary, metricKey, property = 'meanMs') {
+            if (!summary) return 0;
+            const serving = summary.serving || {};
+            const runtime = summary.runtime || {};
+
+            const mapping = {
+                'ttftMs': ['appObservedTtftMs', 'ttftMs'],
+                'tpotMs': ['appObservedTpotMs', 'tpotMs'],
+                'itlMs': ['appObservedItlMs', 'itlMs'],
+                'throughput': ['outputTokenThroughputTps', 'tokensPerSecond'],
+                'nativeTtftMs': ['nativeTtftMs'],
+                'nativeMeanItlMs': ['nativeMeanItlMs']
+            };
+
+            const keys = mapping[metricKey] || [metricKey];
+            
+            for (const key of keys) {
+                if (serving[key] !== undefined) {
+                    if (property && typeof serving[key] === 'object' && serving[key] !== null) {
+                        return serving[key][property] || 0;
+                    }
+                    return serving[key];
+                }
+            }
+            
+            for (const key of keys) {
+                if (runtime[key] !== undefined) {
+                    if (property && typeof runtime[key] === 'object' && runtime[key] !== null) {
+                        return runtime[key][property] || 0;
+                    }
+                    return runtime[key];
+                }
+            }
+
+            return 0;
+        }
+
         // Generate options
         const runs = Object.keys(benchmarks).map(k => ({ file: k, data: benchmarks[k] }));
         runs.sort((a, b) => new Date(a.data.generatedAt) - new Date(b.data.generatedAt)); // chronological
 
         const runOptions = document.getElementById('runOptions');
-        runs.reverse().forEach(run => {
+        runs.slice().reverse().forEach(run => {
             const opt = document.createElement('option');
             opt.value = run.file;
             const d = new Date(run.data.generatedAt);
             opt.text = d.toLocaleString() + ' (' + run.file.split('-').pop().split('.')[0] + ')';
             runOptions.appendChild(opt);
         });
-        // Back to chronological for comparison plots
-        runs.reverse(); 
 
         function renderView(value) {
             chartInstances.forEach(c => c.destroy());
@@ -163,58 +201,65 @@ const htmlTemplate = `<!DOCTYPE html>
                 return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + '\\n' + d.toLocaleDateString();
             });
 
-            // Extract scenario specific metric natively across all runs
-            const getTrend = (scenarioId, metricObj, metricProperty) => {
+            const getTrend = (scenarioId, metricKey, mode = 'hotReuseContext', property = 'meanMs') => {
                 return runs.map(r => {
                     if (!r.data.scenarios) return 0;
                     const s = r.data.scenarios.find(sc => sc.definition.id === scenarioId);
-                    if (!s || !s.hotReuseContext || !s.hotReuseContext.summary) return 0;
-                    if (metricProperty) return s.hotReuseContext.summary.serving[metricObj][metricProperty];
-                    return s.hotReuseContext.summary.serving[metricObj];
+                    if (!s || !s[mode]) return 0;
+                    return getMetric(s[mode].summary, metricKey, property);
                 });
             };
 
-            dashboard.innerHTML += createPanel('Tokens Throughput Trend (Hot Reuse)', 'chart-trend-through');
-            dashboard.innerHTML += createPanel('Time to First Token Trend (Hot Reuse)', 'chart-trend-ttft');
-            dashboard.innerHTML += createPanel('Time per Output Token Trend (Hot Reuse)', 'chart-trend-tpot');
+            const allScenarioIds = new Set();
+            runs.forEach(r => {
+                if (r.data.scenarios) r.data.scenarios.forEach(s => allScenarioIds.add(s.definition.id));
+            });
+            const scenarioIds = Array.from(allScenarioIds);
+
+            dashboard.innerHTML += createPanel('Throughput Trend (Hot Reuse)', 'chart-trend-through');
+            dashboard.innerHTML += createPanel('TTFT Trend (Hot Reuse)', 'chart-trend-ttft');
 
             setTimeout(() => {
-                // Throughput Trends
                 chartInstances.push(new Chart(document.getElementById('chart-trend-through'), {
                     type: 'line',
                     data: {
                         labels: dateLabels,
-                        datasets: [
-                            { label: 'SISO Throughput', data: getTrend('siso', 'outputTokenThroughputTps'), borderColor: '#38bdf8', backgroundColor: '#38bdf8', borderWidth: 2, tension: 0.3, pointRadius: 5 },
-                            { label: 'SILO Throughput', data: getTrend('silo', 'outputTokenThroughputTps'), borderColor: '#4ade80', backgroundColor: '#4ade80', borderWidth: 2, tension: 0.3, pointRadius: 5 }
-                        ]
+                        datasets: scenarioIds.map((id, i) => ({
+                            label: \`\${id.toUpperCase()} (Observed)\`,
+                            data: getTrend(id, 'throughput'),
+                            borderColor: colors[i % colors.length],
+                            backgroundColor: colors[i % colors.length],
+                            borderWidth: 2, tension: 0.3, pointRadius: 4
+                        }))
                     },
                     options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' } }, scales: { y: { title: {display: true, text: 'Tokens / Sec'}, grid: {color:'rgba(255,255,255,0.05)'} } } }
                 }));
 
-                // TTFT Trends
+                const ttftDatasets = [];
+                scenarioIds.forEach((id, i) => {
+                    ttftDatasets.push({
+                        label: \`\${id.toUpperCase()} App\`,
+                        data: getTrend(id, 'ttftMs'),
+                        backgroundColor: colors[i % colors.length],
+                        borderRadius: 4
+                    });
+                    const nativeData = getTrend(id, 'nativeTtftMs');
+                    if (nativeData.some(v => v > 0)) {
+                        ttftDatasets.push({
+                            label: \`\${id.toUpperCase()} Native\`,
+                            data: nativeData,
+                            backgroundColor: colors[i % colors.length],
+                            borderWidth: 1,
+                            borderColor: '#fff',
+                            borderRadius: 4,
+                            borderDash: [2, 2]
+                        });
+                    }
+                });
+
                 chartInstances.push(new Chart(document.getElementById('chart-trend-ttft'), {
                     type: 'bar',
-                    data: {
-                        labels: dateLabels,
-                        datasets: [
-                            { label: 'SISO TTFT', data: getTrend('siso', 'ttftMs', 'meanMs'), backgroundColor: '#fbbf24', borderRadius: 4 },
-                            { label: 'SILO TTFT', data: getTrend('silo', 'ttftMs', 'meanMs'), backgroundColor: '#f87171', borderRadius: 4 }
-                        ]
-                    },
-                    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' } }, scales: { y: { title: {display: true, text: 'Milliseconds'}, grid: {color:'rgba(255,255,255,0.05)'} }, x: {grid: {display: false}} } }
-                }));
-
-                // TPOT Trends
-                chartInstances.push(new Chart(document.getElementById('chart-trend-tpot'), {
-                    type: 'bar',
-                    data: {
-                        labels: dateLabels,
-                        datasets: [
-                            { label: 'SISO TPOT', data: getTrend('siso', 'tpotMs', 'meanMs'), backgroundColor: '#c084fc', borderRadius: 4 },
-                            { label: 'SILO TPOT', data: getTrend('silo', 'tpotMs', 'meanMs'), backgroundColor: '#4ade80', borderRadius: 4 }
-                        ]
-                    },
+                    data: { labels: dateLabels, datasets: ttftDatasets },
                     options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' } }, scales: { y: { title: {display: true, text: 'Milliseconds'}, grid: {color:'rgba(255,255,255,0.05)'} }, x: {grid: {display: false}} } }
                 }));
             }, 0);
@@ -224,11 +269,9 @@ const htmlTemplate = `<!DOCTYPE html>
             const data = benchmarks[filename];
             if (!data) return;
             const dashboard = document.getElementById('dashboard');
-            
             const runDate = new Date(data.generatedAt).toLocaleString();
 
-            const createFullWidthMetricsPanel = () => {
-                return \`
+            dashboard.innerHTML += \`
                 <div class="glass-panel" style="grid-column: 1 / -1;">
                     <div class="panel-title">Summary & Environment - <span style="color:#38bdf8">\${runDate}</span></div>
                     <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 1.5rem;">
@@ -236,28 +279,26 @@ const htmlTemplate = `<!DOCTYPE html>
                         <div id="env-container"></div>
                     </div>
                 </div>
-                \`;
-            }
-            dashboard.innerHTML += createFullWidthMetricsPanel();
+            \`;
             
-            let sisoTPOT = "N/A";
-            let sisoThroughput = "N/A";
+            let bestThroughput = 0;
+            let bestTPOT = 0;
             if (data.scenarios) {
-                const siso = data.scenarios.find(s => s.definition.id === "siso");
-                if (siso && siso.hotReuseContext) {
-                    sisoTPOT = siso.hotReuseContext.summary.serving.tpotMs.meanMs;
-                    sisoThroughput = siso.hotReuseContext.summary.serving.outputTokenThroughputTps;
+                const primary = data.scenarios.find(s => s.definition.id === "siso") || data.scenarios[0];
+                if (primary && primary.hotReuseContext) {
+                    bestThroughput = getMetric(primary.hotReuseContext.summary, 'throughput');
+                    bestTPOT = getMetric(primary.hotReuseContext.summary, 'tpotMs');
                 }
             }
             
             document.getElementById('kpi-container').innerHTML = \`
                 <div class="kpi-grid">
                     <div class="kpi-card">
-                        <div class="kpi-val c-success">\${formatVal(sisoThroughput)} <span>tk/s</span></div>
+                        <div class="kpi-val c-success">\${formatVal(bestThroughput)} <span>tk/s</span></div>
                         <div class="kpi-label">Throughput (Hot)</div>
                     </div>
                     <div class="kpi-card">
-                        <div class="kpi-val c-warning">\${formatVal(sisoTPOT)} <span>ms</span></div>
+                        <div class="kpi-val c-warning">\${formatVal(bestTPOT)} <span>ms</span></div>
                         <div class="kpi-label">TPOT (Hot Reuse)</div>
                     </div>
                 </div>
@@ -270,31 +311,14 @@ const htmlTemplate = `<!DOCTYPE html>
                     <p>Model<span>\${data.modelSource ? data.modelSource.label : 'N/A'}</span></p>
                     <p>Browser<span>\${env.browserLabel ? env.browserLabel.split(' ')[0] : 'N/A'}</span></p>
                     <p>GPU Adapter<span>\${env.adapterVendor || ''} \${env.adapterArchitecture || 'N/A'}</span></p>
-                    <p>Execution Mode<span>\${backend.inferredExecutionBackend || 'N/A'}</span></p>
+                    <p>Backend<span>\${backend.inferredExecutionBackend || 'N/A'} (\${backend.runtimeBackendStatus || 'N/A'})</span></p>
                 </div>
             \`;
 
-            const scenariosLabels = data.scenarios ? data.scenarios.map(s => s.definition.label) : [];
-            
-            const getMetric = (scenarios, mode, metricObj, metricProperty) => {
-                return scenarios.map(s => {
-                    const m = s[mode];
-                    if (m && m.summary && m.summary.serving[metricObj]) {
-                        return m.summary.serving[metricObj][metricProperty];
-                    }
-                    return 0;
-                });
-            };
-
-            const getThroughput = (scenarios, mode) => {
-                return scenarios.map(s => {
-                    const m = s[mode];
-                    if (m && m.summary && m.summary.serving) return m.summary.serving.outputTokenThroughputTps;
-                    return 0;
-                });
-            };
-
             if (data.scenarios) {
+                const scenariosLabels = data.scenarios.map(s => s.definition.label);
+                const getModeSeries = (mode, metricKey) => data.scenarios.map(s => getMetric(s[mode] ? s[mode].summary : null, metricKey));
+
                 dashboard.innerHTML += createPanel('Time to First Token (TTFT)', 'chart-ttft');
                 dashboard.innerHTML += createPanel('Time per Output Token (TPOT)', 'chart-tpot');
                 dashboard.innerHTML += createPanel('Generation Throughput', 'chart-through');
@@ -306,12 +330,12 @@ const htmlTemplate = `<!DOCTYPE html>
                         data: {
                             labels: scenariosLabels,
                             datasets: [
-                                { label: 'Cold Context', data: getMetric(data.scenarios, 'coldPrompt', 'ttftMs', 'meanMs'), backgroundColor: '#38bdf8', borderRadius: 4 },
-                                { label: 'Hot Fresh Context', data: getMetric(data.scenarios, 'hotFreshContext', 'ttftMs', 'meanMs'), backgroundColor: '#fbbf24', borderRadius: 4 },
-                                { label: 'Hot Reuse Context', data: getMetric(data.scenarios, 'hotReuseContext', 'ttftMs', 'meanMs'), backgroundColor: '#4ade80', borderRadius: 4 }
+                                { label: 'Cold Context', data: getModeSeries('coldPrompt', 'ttftMs'), backgroundColor: '#38bdf8', borderRadius: 4 },
+                                { label: 'Hot Fresh', data: getModeSeries('hotFreshContext', 'ttftMs'), backgroundColor: '#fbbf24', borderRadius: 4 },
+                                { label: 'Hot Reuse', data: getModeSeries('hotReuseContext', 'ttftMs'), backgroundColor: '#4ade80', borderRadius: 4 }
                             ]
                         },
-                        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' } }, scales: { y: { beginAtZero: true, title: {display: true, text: 'Milliseconds'}, grid: {color:'rgba(255,255,255,0.05)'} }, x: {grid: {display: false}} } }
+                        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, grid: {color:'rgba(255,255,255,0.05)'} } } }
                     }));
 
                     chartInstances.push(new Chart(document.getElementById('chart-tpot'), {
@@ -319,12 +343,12 @@ const htmlTemplate = `<!DOCTYPE html>
                         data: {
                             labels: scenariosLabels,
                             datasets: [
-                                { label: 'Cold Context', data: getMetric(data.scenarios, 'coldPrompt', 'tpotMs', 'meanMs'), backgroundColor: '#38bdf8', borderRadius: 4 },
-                                { label: 'Hot Fresh Context', data: getMetric(data.scenarios, 'hotFreshContext', 'tpotMs', 'meanMs'), backgroundColor: '#fbbf24', borderRadius: 4 },
-                                { label: 'Hot Reuse Context', data: getMetric(data.scenarios, 'hotReuseContext', 'tpotMs', 'meanMs'), backgroundColor: '#4ade80', borderRadius: 4 }
+                                { label: 'Cold Context', data: getModeSeries('coldPrompt', 'tpotMs'), backgroundColor: '#38bdf8', borderRadius: 4 },
+                                { label: 'Hot Fresh', data: getModeSeries('hotFreshContext', 'tpotMs'), backgroundColor: '#fbbf24', borderRadius: 4 },
+                                { label: 'Hot Reuse', data: getModeSeries('hotReuseContext', 'tpotMs'), backgroundColor: '#4ade80', borderRadius: 4 }
                             ]
                         },
-                        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' } }, scales: { y: { beginAtZero: true, title: {display: true, text: 'Milliseconds'}, grid: {color:'rgba(255,255,255,0.05)'} }, x: {grid: {display: false}} } }
+                        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, grid: {color:'rgba(255,255,255,0.05)'} } } }
                     }));
 
                     chartInstances.push(new Chart(document.getElementById('chart-through'), {
@@ -332,29 +356,22 @@ const htmlTemplate = `<!DOCTYPE html>
                         data: {
                             labels: scenariosLabels,
                             datasets: [
-                                { label: 'Cold Context', data: getThroughput(data.scenarios, 'coldPrompt'), borderColor: '#38bdf8', backgroundColor: 'rgba(56, 189, 248, 0.2)', fill: true, tension: 0.3, pointRadius: 5 },
-                                { label: 'Hot Fresh Context', data: getThroughput(data.scenarios, 'hotFreshContext'), borderColor: '#fbbf24', backgroundColor: 'rgba(251, 191, 36, 0.2)', fill: true, tension: 0.3, pointRadius: 5 },
-                                { label: 'Hot Reuse Context', data: getThroughput(data.scenarios, 'hotReuseContext'), borderColor: '#4ade80', backgroundColor: 'rgba(74, 222, 128, 0.2)', fill: true, tension: 0.3, pointRadius: 5 }
+                                { label: 'Cold', data: getModeSeries('coldPrompt', 'throughput'), borderColor: '#38bdf8', tension: 0.3 },
+                                { label: 'Hot Fresh', data: getModeSeries('hotFreshContext', 'throughput'), borderColor: '#fbbf24', tension: 0.3 },
+                                { label: 'Hot Reuse', data: getModeSeries('hotReuseContext', 'throughput'), borderColor: '#4ade80', tension: 0.3 }
                             ]
                         },
-                        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' } }, scales: { y: { beginAtZero: true, title: {display: true, text: 'Tokens / Sec'}, grid: {color:'rgba(255,255,255,0.05)'} }, x: {grid: {display: false}} } }
+                        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, grid: {color:'rgba(255,255,255,0.05)'} } } }
                     }));
 
                     if (data.memory && data.memory.snapshots) {
-                        const memLabels = data.memory.snapshots.map(s => s.label);
-                        const jsHeapBytes = data.memory.snapshots.map(s => s.usedJsHeapBytes / (1024*1024));
-                        const userAgentBytes = data.memory.snapshots.map(s => s.userAgentBytes ? (s.userAgentBytes / (1024*1024)) : null);
-
                         chartInstances.push(new Chart(document.getElementById('chart-memory'), {
                             type: 'line',
                             data: {
-                                labels: memLabels,
-                                datasets: [
-                                    { label: 'JS Heap (MB)', data: jsHeapBytes, borderColor: '#f472b6', backgroundColor: '#f472b6', borderWidth: 2, tension: 0.3, pointRadius: 4 },
-                                    { label: 'Agent Specific (MB)', data: userAgentBytes, borderColor: '#c084fc', backgroundColor: '#c084fc', borderWidth: 2, tension: 0.3, borderDash: [5, 5], pointRadius: 4 }
-                                ]
+                                labels: data.memory.snapshots.map(s => s.label),
+                                datasets: [{ label: 'JS Heap (MB)', data: data.memory.snapshots.map(s => s.usedJsHeapBytes / (1024*1024)), borderColor: '#f472b6', tension: 0.3 }]
                             },
-                            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' } }, scales: { y: { beginAtZero: false, title: {display: true, text: 'Megabytes'}, grid: {color:'rgba(255,255,255,0.05)'} }, x: {grid: {display: false}} } }
+                            options: { responsive: true, maintainAspectRatio: false, scales: { y: { grid: {color:'rgba(255,255,255,0.05)'} } } }
                         }));
                     }
                 }, 0);
@@ -363,7 +380,6 @@ const htmlTemplate = `<!DOCTYPE html>
 
         // INIT
         if (runs.length > 0) {
-            // Default to Compare All if multiple exist
             if (runs.length > 1) {
                 renderView('COMPARE_ALL');
             } else {
@@ -373,10 +389,9 @@ const htmlTemplate = `<!DOCTYPE html>
         } else {
             document.getElementById('dashboard').innerHTML = '<div class="panel-title" style="grid-column: 1/-1; text-align:center;">No benchmark files found.</div>';
         }
-
     </script>
 </body>
-</html>\n`;
+</html>`;
 
 fs.writeFileSync(outFile, htmlTemplate);
 console.log('✅ Visualizer generated at ' + outFile);
