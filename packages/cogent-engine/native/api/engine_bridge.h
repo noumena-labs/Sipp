@@ -17,6 +17,11 @@ int CE_RunSchedulerBurst(int32_t max_ticks,
                          int32_t max_completed_responses,
                          int32_t max_emitted_tokens,
                          CE_SchedulerBurstResult* out_result);
+int CE_RunSchedulerBurstWithDeadline(int32_t max_ticks,
+                                     int32_t max_completed_responses,
+                                     int32_t max_emitted_tokens,
+                                     int32_t max_duration_us,
+                                     CE_SchedulerBurstResult* out_result);
 int CE_RunRequestStep(CE_RequestId request_id);
 int CE_GetCompletedRequestStatus(CE_RequestId request_id);
 int CE_DrainCompletedRequestIds(CE_RequestId* buffer, int32_t capacity);

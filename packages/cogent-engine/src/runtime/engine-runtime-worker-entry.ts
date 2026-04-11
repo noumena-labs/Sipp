@@ -1,6 +1,4 @@
-import {
-  GenerateRequestId,
-} from '../types.js';
+import { GenerateRequestId } from '../types.js';
 import {
   WorkerRequestMessage,
   WorkerResponseMessage,
@@ -10,42 +8,35 @@ import {
 import { WorkerEntryState } from './worker-entry-state.js';
 
 const state = new WorkerEntryState();
-
-function startQueuedRequestCompletion(requestId: GenerateRequestId): void {
+state.setRequestSettlementHandler((requestId, settlement) => {
   const runtime = state.ensureEngine();
-  state.markRequestRunning(requestId);
-  void runtime
-    .runQueuedRequest(requestId)
-    .then((response) => {
-      state.flushBufferedTokens(requestId);
-      const payload: WorkerResponseMessage = {
-        kind: 'request-complete',
-        requestId,
-        result: {
-          response,
-          runtimeAggregateObservability: runtime.getRuntimeAggregateObservability(),
-          transportObservability: state.cloneTransportObservability(),
-        },
-      };
-      self.postMessage(payload);
-    })
-    .catch((error) => {
-      state.flushBufferedTokens(requestId);
-      const payload: WorkerResponseMessage = {
-        kind: 'request-failed',
-        requestId,
-        message: state.toErrorMessage(error),
-        errorName: error instanceof Error ? error.name : undefined,
+  if ('response' in settlement && settlement.callbackError == null) {
+    const payload: WorkerResponseMessage = {
+      kind: 'request-complete',
+      requestId,
+      result: {
+        response: settlement.response,
         runtimeAggregateObservability: runtime.getRuntimeAggregateObservability(),
         transportObservability: state.cloneTransportObservability(),
-      };
-      self.postMessage(payload);
-    })
-    .finally(() => {
-      state.releaseRequestResources(requestId);
-      state.unmarkRequestRunning(requestId);
-    });
-}
+      },
+    };
+    self.postMessage(payload);
+    return;
+  }
+
+  const failure =
+    settlement.callbackError ??
+    ('error' in settlement ? settlement.error : new Error('Queued request failed.'));
+  const payload: WorkerResponseMessage = {
+    kind: 'request-failed',
+    requestId,
+    message: state.toErrorMessage(failure),
+    errorName: failure instanceof Error ? failure.name : undefined,
+    runtimeAggregateObservability: runtime.getRuntimeAggregateObservability(),
+    transportObservability: state.cloneTransportObservability(),
+  };
+  self.postMessage(payload);
+});
 
 async function handleInitModule(
   message: Extract<WorkerRequestMessage, { kind: 'init-module' }>
@@ -216,7 +207,7 @@ async function handleQueuePrompt(
     }
   );
   state.rememberRequestAbortController(requestId, abortController);
-  startQueuedRequestCompletion(requestId);
+  state.markRequestRunning(requestId);
   state.ensureSchedulerPumpRunning();
   return requestId;
 }

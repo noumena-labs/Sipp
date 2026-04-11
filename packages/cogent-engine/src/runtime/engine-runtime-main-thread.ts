@@ -401,6 +401,53 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return this.scheduler.hasActiveRequests();
   }
 
+  public getQueuedRequestSchedulerForExternalControl(): QueuedRequestScheduler {
+    return this.scheduler;
+  }
+
+  public takeSettledQueuedRequestForExternalControl(
+    requestId: GenerateRequestId
+  ):
+    | {
+        response: GenerateResponse;
+        callbackError: unknown;
+      }
+    | {
+        error: unknown;
+        callbackError: unknown;
+      }
+    | null {
+    const tracked = this.tracker.get(requestId);
+    if (tracked == null || !tracked.settled) {
+      return null;
+    }
+
+    tracked.consumed = true;
+    const callbackError = tracked.callbackError;
+    const settlement =
+      tracked.settlementState === 'resolved'
+        ? tracked.settledResult == null
+          ? {
+              error: new Error(
+                `Tracked queued request ${requestId} settled without a response.`
+              ),
+              callbackError,
+            }
+          : {
+              response: tracked.settledResult,
+              callbackError,
+            }
+        : {
+            error:
+              tracked.settledError ??
+              new Error(`Tracked queued request ${requestId} rejected without an error.`),
+            callbackError,
+          };
+
+    this.tracker.cleanupIfConsumed(requestId);
+    return settlement;
+  }
+
   public async pumpQueuedRequestsOnce(): Promise<QueuedRequestPumpStepResult> {
     return this.scheduler.pumpOnce();
   }

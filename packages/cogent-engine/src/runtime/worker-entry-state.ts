@@ -20,6 +20,16 @@ interface ActiveModelLoadState {
   streamController: ReadableStreamDefaultController<Uint8Array> | null;
 }
 
+type ExternalQueuedRequestSettlement =
+  | {
+      response: import('../types.js').GenerateResponse;
+      callbackError: unknown;
+    }
+  | {
+      error: unknown;
+      callbackError: unknown;
+    };
+
 const DEFAULT_MAX_BUFFERED_TOKENS = 8;
 const DEFAULT_FLUSH_INTERVAL_MS = 16;
 export class WorkerEntryState {
@@ -30,6 +40,11 @@ export class WorkerEntryState {
   private readonly activeModelLoads = new Map<number, ActiveModelLoadState>();
   private schedulerPumpPromise: Promise<void> | null = null;
   private schedulerPumpGeneration = 0;
+  private shouldYieldAfterTokenActivity = false;
+  private shouldYieldAfterTokenPost = false;
+  private requestSettlementHandler:
+    | ((requestId: GenerateRequestId, settlement: ExternalQueuedRequestSettlement) => void)
+    | null = null;
   private readonly transportObservability: TransportObservability = {
     executionMode: 'worker',
     workerBacked: true,
@@ -90,7 +105,11 @@ export class WorkerEntryState {
   }
 
   public ensureSchedulerPumpRunning(): void {
-    if (this.schedulerPumpPromise != null || this.engine == null || !this.engine.hasActiveQueuedRequests()) {
+    if (this.schedulerPumpPromise != null || this.engine == null) {
+      return;
+    }
+    const scheduler = this.engine.getQueuedRequestSchedulerForExternalControl();
+    if (!scheduler.hasActiveRequests()) {
       return;
     }
 
@@ -103,7 +122,9 @@ export class WorkerEntryState {
         if (
           generation === this.schedulerPumpGeneration &&
           this.engine != null &&
-          this.engine.hasActiveQueuedRequests()
+          this.engine
+            .getQueuedRequestSchedulerForExternalControl()
+            .hasActiveRequests()
         ) {
           this.ensureSchedulerPumpRunning();
         }
@@ -113,6 +134,14 @@ export class WorkerEntryState {
 
   public setRuntimeObservabilityEnabled(enabled: boolean): void {
     this.transportObservability.enabled = enabled;
+  }
+
+  public setRequestSettlementHandler(
+    handler:
+      | ((requestId: GenerateRequestId, settlement: ExternalQueuedRequestSettlement) => void)
+      | null
+  ): void {
+    this.requestSettlementHandler = handler;
   }
 
   public beginModelLoad(callId: number): AbortSignal {
@@ -195,6 +224,7 @@ export class WorkerEntryState {
   }
 
   public bufferTokenPiece(requestId: GenerateRequestId, token: string): void {
+    this.shouldYieldAfterTokenActivity = true;
     let state = this.bufferedTokens.get(requestId);
     if (state == null) {
       state = {
@@ -238,6 +268,7 @@ export class WorkerEntryState {
       bufferedTokenCount: state.tokenCount,
     };
     self.postMessage(payload);
+    this.shouldYieldAfterTokenPost = true;
     if (this.transportObservability.enabled) {
       this.transportObservability.flushCount += 1;
       this.transportObservability.coalescedTokenCount += state.tokenCount;
@@ -295,15 +326,58 @@ export class WorkerEntryState {
 
   private async runSchedulerPump(generation: number): Promise<void> {
     const runtime = this.ensureEngine();
+    const scheduler = runtime.getQueuedRequestSchedulerForExternalControl();
     await runQueuedRequestPumpLoop({
       isCurrentGeneration: () =>
         generation === this.schedulerPumpGeneration && this.engine != null,
       waitingStepResult: 0,
       syncBurstLimit: DEFAULT_QUEUED_REQUEST_PUMP_SYNC_BURST_LIMIT,
       idleStreakBeforeYield: DEFAULT_QUEUED_REQUEST_PUMP_IDLE_STREAK_BEFORE_YIELD,
-      runStep: () => runtime.pumpQueuedRequestsOnce(),
+      runStep: async () => {
+        const pumpStep = await scheduler.pumpOnce();
+        this.emitSettledQueuedRequests(runtime);
+        return {
+          ...pumpStep,
+          shouldYieldAfterStep:
+            pumpStep.shouldYieldAfterStep === true ||
+            this.consumeShouldYieldAfterTokenActivity() ||
+            this.consumeShouldYieldAfterTokenPost(),
+        };
+      },
       waitForNextSchedulerStep: () => this.waitForNextSchedulerStep(),
     });
+  }
+
+  private consumeShouldYieldAfterTokenActivity(): boolean {
+    const shouldYield = this.shouldYieldAfterTokenActivity;
+    this.shouldYieldAfterTokenActivity = false;
+    return shouldYield;
+  }
+
+  private consumeShouldYieldAfterTokenPost(): boolean {
+    const shouldYield = this.shouldYieldAfterTokenPost;
+    this.shouldYieldAfterTokenPost = false;
+    return shouldYield;
+  }
+
+  private emitSettledQueuedRequests(runtime: MainThreadEngineRuntime): void {
+    const handler = this.requestSettlementHandler;
+    if (handler == null || this.runningRequestIds.size === 0) {
+      return;
+    }
+
+    for (const requestId of Array.from(this.runningRequestIds)) {
+      const settlement =
+        runtime.takeSettledQueuedRequestForExternalControl(requestId);
+      if (settlement == null) {
+        continue;
+      }
+
+      this.flushBufferedTokens(requestId);
+      handler(requestId, settlement);
+      this.releaseRequestResources(requestId);
+      this.unmarkRequestRunning(requestId);
+    }
   }
 
   private buildEngineConfig(config: WorkerSerializableCogentConfig): CogentConfig {

@@ -307,6 +307,33 @@ int CE_RunSchedulerBurst(int32_t max_ticks, int32_t max_completed_responses,
   return static_cast<int>(burst_result.status);
 }
 
+int CE_RunSchedulerBurstWithDeadline(int32_t max_ticks,
+                                     int32_t max_completed_responses,
+                                     int32_t max_emitted_tokens,
+                                     int32_t max_duration_us,
+                                     CE_SchedulerBurstResult *out_result) {
+  if (out_result == nullptr) {
+    return static_cast<int>(
+        noumena::cogentengine::RequestStepResult::Invalid);
+  }
+
+  auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    out_result->ticks_executed = 0;
+    out_result->progressed_ticks = 0;
+    out_result->completed_response_count = 0;
+    out_result->emitted_token_count = 0;
+    return static_cast<int>(
+        noumena::cogentengine::RequestStepResult::Invalid);
+  }
+
+  const noumena::cogentengine::SchedulerBurstResult burst_result =
+      runtime->RunSchedulerBurst(max_ticks, max_completed_responses,
+                                 max_emitted_tokens, max_duration_us);
+  copy_scheduler_burst_result(burst_result, out_result);
+  return static_cast<int>(burst_result.status);
+}
+
 int CE_RunRequestStep(CE_RequestId request_id) {
   auto runtime = acquire_engine_runtime();
   if (!runtime) {

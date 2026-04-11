@@ -19,8 +19,16 @@ import {
 import { RequestTracker } from './request-tracker.js';
 import { WasmBridge } from '../wasm/wasm-bridge.js';
 
-const SCHEDULER_PUMP_NATIVE_BURST_TICK_LIMIT = 16;
-const SCHEDULER_PUMP_NATIVE_BURST_EMITTED_TOKEN_LIMIT = 1;
+// Start with a conservative multi-token burst so the runtime no longer
+// round-trips through JS after roughly every emitted token. This is intentionally
+// not the final adaptive policy; Phase 1 benchmarks should tune it further.
+const SCHEDULER_PUMP_NATIVE_BURST_TICK_LIMIT = 64;
+const SCHEDULER_PUMP_NATIVE_BURST_EMITTED_TOKEN_LIMIT = 32;
+const SCHEDULER_PUMP_INTERACTIVE_FIRST_TOKEN_TICK_LIMIT = 8;
+const SCHEDULER_PUMP_INTERACTIVE_FIRST_TOKEN_EMITTED_TOKEN_LIMIT = 1;
+const SCHEDULER_PUMP_INTERACTIVE_STREAMING_TICK_LIMIT = 16;
+const SCHEDULER_PUMP_INTERACTIVE_STREAMING_EMITTED_TOKEN_LIMIT = 8;
+const SCHEDULER_PUMP_INTERACTIVE_STREAMING_DURATION_US = 60_000;
 
 export type QueuedRequestPumpMode = 'internal' | 'external';
 
@@ -51,12 +59,16 @@ export class QueuedRequestScheduler {
   private queuedRequestPumpMode: QueuedRequestPumpMode = 'internal';
   private schedulerPumpPromise: Promise<void> | null = null;
   private schedulerPumpGeneration = 0;
+  private readonly requestsAwaitingFirstToken = new Set<GenerateRequestId>();
+  private readonly interactiveStreamingRequests = new Set<GenerateRequestId>();
 
-  public constructor(private readonly options: QueuedRequestSchedulerOptions) {}
+  public constructor(private readonly options: QueuedRequestSchedulerOptions) { }
 
   public reset(): void {
     this.schedulerPumpGeneration += 1;
     this.schedulerPumpPromise = null;
+    this.requestsAwaitingFirstToken.clear();
+    this.interactiveStreamingRequests.clear();
   }
 
   public setPumpMode(mode: QueuedRequestPumpMode): void {
@@ -73,6 +85,10 @@ export class QueuedRequestScheduler {
 
   public track(requestId: GenerateRequestId) {
     const tracked = this.options.tracker.track(requestId);
+    if (this.options.queuedPromptCallbacks.get(requestId) != null) {
+      this.requestsAwaitingFirstToken.add(requestId);
+      this.interactiveStreamingRequests.add(requestId);
+    }
     if (this.queuedRequestPumpMode === 'internal') {
       this.ensureRunning();
     }
@@ -169,6 +185,10 @@ export class QueuedRequestScheduler {
     if (readIndex >= bufferedPieces.length) {
       bufferedPieces.length = 0;
     }
+
+    if (readIndex > 0) {
+      this.requestsAwaitingFirstToken.delete(requestId);
+    }
   }
 
   private flushAllQueuedTokenPieces(): void {
@@ -199,10 +219,24 @@ export class QueuedRequestScheduler {
   private async runSchedulerProgress(
     bridge: WasmBridge
   ): Promise<{ stepResult: number; completedResponseCount: number }> {
+    const usingFirstTokenBurst = this.requestsAwaitingFirstToken.size > 0;
+    const usingInteractiveStreamingBurst =
+      !usingFirstTokenBurst && this.interactiveStreamingRequests.size > 0;
     return bridge.runSchedulerProgress(
-      SCHEDULER_PUMP_NATIVE_BURST_TICK_LIMIT,
+      usingFirstTokenBurst
+        ? SCHEDULER_PUMP_INTERACTIVE_FIRST_TOKEN_TICK_LIMIT
+        : usingInteractiveStreamingBurst
+          ? SCHEDULER_PUMP_INTERACTIVE_STREAMING_TICK_LIMIT
+          : SCHEDULER_PUMP_NATIVE_BURST_TICK_LIMIT,
       Math.max(1, this.options.tracker.activeCount),
-      SCHEDULER_PUMP_NATIVE_BURST_EMITTED_TOKEN_LIMIT
+      usingFirstTokenBurst
+        ? SCHEDULER_PUMP_INTERACTIVE_FIRST_TOKEN_EMITTED_TOKEN_LIMIT
+        : usingInteractiveStreamingBurst
+          ? SCHEDULER_PUMP_INTERACTIVE_STREAMING_EMITTED_TOKEN_LIMIT
+          : SCHEDULER_PUMP_NATIVE_BURST_EMITTED_TOKEN_LIMIT,
+      usingInteractiveStreamingBurst
+        ? { maxDurationUs: SCHEDULER_PUMP_INTERACTIVE_STREAMING_DURATION_US }
+        : undefined
     );
   }
 
@@ -225,11 +259,15 @@ export class QueuedRequestScheduler {
       tracked.callbackError =
         this.options.queuedPromptCallbackErrors.get(requestId);
       this.options.tracker.resolve(requestId, response);
+      this.requestsAwaitingFirstToken.delete(requestId);
+      this.interactiveStreamingRequests.delete(requestId);
       this.options.finalizeRequest(bridge, requestId, {
         deleteCompletion:
           (response.cancelled || tracked.cancelRequested) && !tracked.consumed,
       });
     } catch (error) {
+      this.requestsAwaitingFirstToken.delete(requestId);
+      this.interactiveStreamingRequests.delete(requestId);
       this.options.tracker.reject(requestId, error);
       this.options.finalizeRequest(bridge, requestId);
     }
@@ -261,7 +299,11 @@ export class QueuedRequestScheduler {
 
   private drainRuntimeEvents(
     bridge: WasmBridge
-  ): { terminalRequestIds: GenerateRequestId[]; tokenEventCount: number } | null {
+  ): {
+    terminalRequestIds: GenerateRequestId[];
+    tokenEventCount: number;
+    tokenRequestIds: GenerateRequestId[];
+  } | null {
     const drained = bridge.drainRuntimeEvents(
       Math.max(8, this.options.tracker.activeCount * 2)
     );
@@ -271,8 +313,10 @@ export class QueuedRequestScheduler {
 
     this.transportObservability.runtimeEventDrainCount =
       (this.transportObservability.runtimeEventDrainCount ?? 0) + 1;
+    const tokenRequestIds: GenerateRequestId[] = [];
     for (const tokenEvent of drained.tokenEvents) {
       this.bufferQueuedTokenPiece(tokenEvent.requestId, tokenEvent.token);
+      tokenRequestIds.push(tokenEvent.requestId);
     }
     this.transportObservability.runtimeEventTextBytes =
       (this.transportObservability.runtimeEventTextBytes ?? 0) + drained.textBytes;
@@ -286,6 +330,7 @@ export class QueuedRequestScheduler {
     return {
       terminalRequestIds: drained.terminalRequestIds,
       tokenEventCount: drained.tokenEvents.length,
+      tokenRequestIds,
     };
   }
 
@@ -312,6 +357,8 @@ export class QueuedRequestScheduler {
       if (tracked == null || tracked.settled) {
         continue;
       }
+      this.requestsAwaitingFirstToken.delete(requestId);
+      this.interactiveStreamingRequests.delete(requestId);
       this.options.tracker.reject(requestId, error);
       this.options.finalizeRequest(bridge, requestId, {
         deleteCompletion: true,
@@ -322,36 +369,31 @@ export class QueuedRequestScheduler {
   private async pumpQueuedRequestsStep(
     bridge: WasmBridge
   ): Promise<QueuedRequestPumpStepResult> {
-    const pendingEvents = this.drainRuntimeEvents(bridge);
-    this.flushAllQueuedTokenPieces();
-    this.requestCancellationForCallbackErrors();
-    let settledAny =
-      pendingEvents != null
-        ? this.settleCompletedQueuedRequestsByIds(
-            bridge,
-            pendingEvents.terminalRequestIds
-          )
-        : this.settleCompletedQueuedRequests(bridge);
     if (this.options.tracker.activeCount === 0) {
       return {
         hasActiveRequests: false,
         stepResult: null,
-        settledAny,
+        settledAny: false,
       };
     }
 
     const schedulerProgress = await this.runSchedulerProgress(bridge);
     const stepResult = schedulerProgress.stepResult;
     const drainedEvents = this.drainRuntimeEvents(bridge);
+    if (drainedEvents != null) {
+      for (const requestId of drainedEvents.tokenRequestIds) {
+        this.requestsAwaitingFirstToken.delete(requestId);
+      }
+    }
     this.flushAllQueuedTokenPieces();
     this.requestCancellationForCallbackErrors();
-    settledAny =
-      (drainedEvents != null
+    const settledAny =
+      drainedEvents != null
         ? this.settleCompletedQueuedRequestsByIds(
-            bridge,
-            drainedEvents.terminalRequestIds
-          )
-        : this.settleCompletedQueuedRequests(bridge)) || settledAny;
+          bridge,
+          drainedEvents.terminalRequestIds
+        )
+        : this.settleCompletedQueuedRequests(bridge);
     if (this.options.tracker.activeCount === 0) {
       return {
         hasActiveRequests: false,

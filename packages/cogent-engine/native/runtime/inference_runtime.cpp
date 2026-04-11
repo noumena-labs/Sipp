@@ -1159,7 +1159,7 @@ RequestStepResult InferenceRuntime::RunSchedulerTick() {
 
 SchedulerBurstResult InferenceRuntime::RunSchedulerBurst(
     int32_t max_ticks, int32_t max_completed_responses,
-    int32_t max_emitted_tokens) {
+    int32_t max_emitted_tokens, int32_t max_duration_us) {
   std::lock_guard<std::mutex> lock(operation_mutex_);
 
   SchedulerBurstResult burst_result;
@@ -1173,6 +1173,12 @@ SchedulerBurstResult InferenceRuntime::RunSchedulerBurst(
       std::max<int32_t>(0, max_completed_responses);
   const int32_t clamped_max_emitted =
       std::max<int32_t>(0, max_emitted_tokens);
+  const bool has_duration_deadline = max_duration_us > 0;
+  const auto deadline =
+      has_duration_deadline
+          ? std::chrono::steady_clock::now() +
+                std::chrono::microseconds(max_duration_us)
+          : std::chrono::steady_clock::time_point::max();
 
   for (int32_t tick_index = 0; tick_index < max_ticks; ++tick_index) {
     const std::size_t completed_before = request_queue_.CompletedResponseCount();
@@ -1217,6 +1223,15 @@ SchedulerBurstResult InferenceRuntime::RunSchedulerBurst(
     if (clamped_max_emitted > 0 &&
         burst_result.emitted_token_count >= clamped_max_emitted) {
       burst_result.status = RequestStepResult::Progressed;
+      return burst_result;
+    }
+    if (has_duration_deadline &&
+        std::chrono::steady_clock::now() >= deadline) {
+      burst_result.status =
+          burst_result.progressed_ticks > 0 ||
+                  burst_result.completed_response_count > 0
+              ? RequestStepResult::Progressed
+              : RequestStepResult::Waiting;
       return burst_result;
     }
   }

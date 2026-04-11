@@ -68,7 +68,8 @@ public:
   RequestStepResult RunSchedulerTick();
   SchedulerBurstResult RunSchedulerBurst(int32_t max_ticks,
                                          int32_t max_completed_responses,
-                                         int32_t max_emitted_tokens);
+                                         int32_t max_emitted_tokens,
+                                         int32_t max_duration_us = 0);
   RequestStepResult RunRequestStep(GenerateRequestId request_id);
   std::vector<GenerateRequestId> DrainCompletedResponseIds(int32_t max_count);
   std::vector<RuntimeEvent> DrainRuntimeEvents(int32_t max_count,

@@ -2,6 +2,7 @@ export interface QueuedRequestPumpStepResult {
   hasActiveRequests: boolean;
   stepResult: number | null;
   settledAny: boolean;
+  shouldYieldAfterStep?: boolean;
 }
 
 export const DEFAULT_QUEUED_REQUEST_PUMP_SYNC_BURST_LIMIT = 128;
@@ -46,6 +47,7 @@ export async function runQueuedRequestPumpLoop(options: {
       options.shouldYieldForResponsiveness?.(burstTickCount) ?? false;
     if (
       shouldYieldForResponsiveness ||
+      pumpStep.shouldYieldAfterStep === true ||
       burstTickCount >= syncBurstLimit ||
       waitingStreak >= idleStreakBeforeYield
     ) {

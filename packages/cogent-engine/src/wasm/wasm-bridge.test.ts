@@ -27,6 +27,7 @@ class MockWasmBridgeModule implements EngineModule {
   public freedPointers: number[] = [];
 
   public supportsBurst = true;
+  public supportsBurstWithDeadline = true;
   public supportsRuntimeEvents = true;
   public schedulerTickResult = REQUEST_STEP_RESULT_PROGRESSED;
   public schedulerBurstStatus = REQUEST_STEP_RESULT_PROGRESSED;
@@ -42,11 +43,20 @@ class MockWasmBridgeModule implements EngineModule {
   public completedConsumed = false;
   public backendJson = '{"adapter":"webgpu"}';
   public lastFreedBackendPtr = 0;
+  public lastBurstWithDeadlineArgs:
+    | {
+        maxTicks: number;
+        maxCompletedResponses: number;
+        maxEmittedTokens: number;
+        maxDurationUs: number;
+      }
+    | null = null;
   public runtimeEventBatch: Array<{
     requestId: number;
     kind: number;
     text: string;
   }> = [];
+  public closeCallCount = 0;
 
   private readonly heapU8: Uint8Array;
   private readonly functionTable = new Map<number, (...args: number[]) => number>();
@@ -126,6 +136,18 @@ class MockWasmBridgeModule implements EngineModule {
         }
         this.writeSchedulerBurstResult(args[3] as number);
         return this.schedulerBurstStatus;
+      case 'CE_RunSchedulerBurstWithDeadline':
+        if (!this.supportsBurstWithDeadline) {
+          throw new Error(`Unexpected ccall: ${ident}`);
+        }
+        this.lastBurstWithDeadlineArgs = {
+          maxTicks: Number(args[0]),
+          maxCompletedResponses: Number(args[1]),
+          maxEmittedTokens: Number(args[2]),
+          maxDurationUs: Number(args[3]),
+        };
+        this.writeSchedulerBurstResult(args[4] as number);
+        return this.schedulerBurstStatus;
       case 'CE_RunSchedulerTick':
         return this.schedulerTickResult;
       case 'CE_DrainRuntimeEvents':
@@ -158,6 +180,9 @@ class MockWasmBridgeModule implements EngineModule {
         return this.writeTempCString(this.backendJson);
       case 'CE_FreeString':
         this.lastFreedBackendPtr = Number(args[0]);
+        return 0;
+      case 'CE_Close':
+        this.closeCallCount += 1;
         return 0;
       default:
         throw new Error(`Unexpected ccall: ${ident}`);
@@ -228,6 +253,7 @@ class MockWasmBridgeModule implements EngineModule {
 test('WasmBridge falls back to single scheduler tick when burst API is unavailable', async () => {
   const module = new MockWasmBridgeModule();
   module.supportsBurst = false;
+  module.supportsBurstWithDeadline = false;
   module.schedulerTickResult = REQUEST_STEP_RESULT_PROGRESSED;
   const bridge = new WasmBridge(module);
 
@@ -235,6 +261,24 @@ test('WasmBridge falls back to single scheduler tick when burst API is unavailab
 
   assert.equal(result.stepResult, REQUEST_STEP_RESULT_PROGRESSED);
   assert.equal(result.completedResponseCount, 0);
+});
+
+test('WasmBridge prefers the deadline burst API when a duration budget is requested', async () => {
+  const module = new MockWasmBridgeModule();
+  const bridge = new WasmBridge(module);
+
+  const result = await bridge.runSchedulerProgress(16, 2, 8, {
+    maxDurationUs: 60_000,
+  });
+
+  assert.equal(result.stepResult, REQUEST_STEP_RESULT_PROGRESSED);
+  assert.equal(result.completedResponseCount, 2);
+  assert.deepEqual(module.lastBurstWithDeadlineArgs, {
+    maxTicks: 16,
+    maxCompletedResponses: 2,
+    maxEmittedTokens: 8,
+    maxDurationUs: 60_000,
+  });
 });
 
 test('WasmBridge drains runtime events into token and terminal batches', () => {
@@ -252,6 +296,28 @@ test('WasmBridge drains runtime events into token and terminal batches', () => {
     tokenEvents: [{ requestId: 7, token: 'tok1', textLength: 4 }],
     textBytes: 4,
   });
+});
+
+test('WasmBridge reuses burst and runtime-event buffers until close()', async () => {
+  const module = new MockWasmBridgeModule();
+  module.runtimeEventBatch = [
+    { requestId: 7, kind: RUNTIME_EVENT_KIND_TOKEN, text: 'tok1' },
+  ];
+  const bridge = new WasmBridge(module);
+
+  await bridge.runSchedulerProgress(64, 4, 32);
+  bridge.drainRuntimeEvents(8);
+  module.runtimeEventBatch = [
+    { requestId: 7, kind: RUNTIME_EVENT_KIND_TERMINAL, text: '' },
+  ];
+  bridge.drainRuntimeEvents(4);
+
+  assert.deepEqual(module.freedPointers, []);
+
+  bridge.close();
+
+  assert.equal(module.closeCallCount, 1);
+  assert.equal(module.freedPointers.length, 4);
 });
 
 test('WasmBridge consumes completed responses and reads request observability', () => {

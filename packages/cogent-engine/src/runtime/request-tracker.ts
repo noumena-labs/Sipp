@@ -13,6 +13,9 @@ export interface TrackedRequest<TResult> {
   resolve: (value: TResult) => void;
   reject: (error: unknown) => void;
   settled: boolean;
+  settlementState: 'pending' | 'resolved' | 'rejected';
+  settledResult: TResult | undefined;
+  settledError: unknown;
   consumed: boolean;
   waiterCount: number;
   callbackError: unknown;
@@ -66,6 +69,9 @@ export class RequestTracker<TResult> {
       resolve: deferred.resolve,
       reject: deferred.reject,
       settled: false,
+      settlementState: 'pending',
+      settledResult: undefined,
+      settledError: undefined,
       consumed: false,
       waiterCount: 0,
       callbackError: undefined,
@@ -88,6 +94,9 @@ export class RequestTracker<TResult> {
       return;
     }
     tracked.settled = true;
+    tracked.settlementState = 'resolved';
+    tracked.settledResult = result;
+    tracked.settledError = undefined;
     tracked.resolve(result);
   }
 
@@ -101,6 +110,9 @@ export class RequestTracker<TResult> {
       return;
     }
     tracked.settled = true;
+    tracked.settlementState = 'rejected';
+    tracked.settledResult = undefined;
+    tracked.settledError = error;
     tracked.reject(error);
   }
 
@@ -110,6 +122,9 @@ export class RequestTracker<TResult> {
       const tracked = this.completions.get(requestId);
       if (tracked != null && !tracked.settled) {
         tracked.settled = true;
+        tracked.settlementState = 'rejected';
+        tracked.settledResult = undefined;
+        tracked.settledError = error;
         tracked.reject(error);
       }
       this.releaseSignal(requestId);

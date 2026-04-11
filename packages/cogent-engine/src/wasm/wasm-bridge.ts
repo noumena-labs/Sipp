@@ -46,8 +46,15 @@ export type WasmSchedulerProgressResult = {
 
 export class WasmBridge {
   private schedulerBurstApiAvailable: boolean | null = null;
+  private schedulerBurstWithDeadlineApiAvailable: boolean | null = null;
   private completedRequestDrainApiAvailable: boolean | null = null;
   private runtimeEventDrainApiAvailable: boolean | null = null;
+  private reusableBurstResultPtr = 0;
+  private reusableRuntimeEventBufferPtr = 0;
+  private reusableRuntimeEventBufferCapacity = 0;
+  private reusableRuntimeEventTextBufferPtr = 0;
+  private reusableRuntimeEventTextBufferCapacity = 0;
+  private reusableRuntimeEventDrainResultPtr = 0;
 
   public constructor(private readonly module: EngineModule) {}
 
@@ -147,7 +154,11 @@ export class WasmBridge {
   }
 
   public close(): void {
-    this.module.ccall('CE_Close', null, [], []);
+    try {
+      this.module.ccall('CE_Close', null, [], []);
+    } finally {
+      this.releaseReusableBuffers();
+    }
   }
 
   public enqueuePrompt(
@@ -267,7 +278,7 @@ export class WasmBridge {
       return this.runtimeEventDrainApiAvailable;
     }
 
-    const resultPtr = this.allocate(RUNTIME_EVENT_DRAIN_RESULT_SIZE_BYTES);
+    const resultPtr = this.ensureRuntimeEventDrainResultBuffer();
     try {
       this.callNumber(
         'CE_DrainRuntimeEvents',
@@ -280,8 +291,6 @@ export class WasmBridge {
         throw error;
       }
       this.runtimeEventDrainApiAvailable = false;
-    } finally {
-      this.free(resultPtr);
     }
 
     return this.runtimeEventDrainApiAvailable;
@@ -290,8 +299,35 @@ export class WasmBridge {
   public async runSchedulerProgress(
     maxTicks: number,
     maxCompletedResponses: number,
-    maxEmittedTokens: number
+    maxEmittedTokens: number,
+    options: {
+      maxDurationUs?: number;
+    } = {}
   ): Promise<WasmSchedulerProgressResult> {
+    const maxDurationUs = Math.max(0, options.maxDurationUs ?? 0);
+    if (maxDurationUs > 0 && this.schedulerBurstWithDeadlineApiAvailable !== false) {
+      const resultPtr = this.ensureBurstResultBuffer();
+      try {
+        const stepResult = await this.callNumberAsync(
+          'CE_RunSchedulerBurstWithDeadline',
+          ['number', 'number', 'number', 'number', 'pointer'],
+          [maxTicks, maxCompletedResponses, maxEmittedTokens, maxDurationUs, resultPtr]
+        );
+        this.schedulerBurstWithDeadlineApiAvailable = true;
+        this.schedulerBurstApiAvailable = true;
+        const burstResult = this.readSchedulerBurstResult(resultPtr);
+        return {
+          stepResult,
+          completedResponseCount: burstResult.completedResponseCount,
+        };
+      } catch (error) {
+        if (!this.isMissingOptionalRuntimeApiError('CE_RunSchedulerBurstWithDeadline', error)) {
+          throw error;
+        }
+        this.schedulerBurstWithDeadlineApiAvailable = false;
+      }
+    }
+
     if (this.schedulerBurstApiAvailable === false) {
       return {
         stepResult: await this.callNumberAsync('CE_RunSchedulerTick'),
@@ -299,7 +335,7 @@ export class WasmBridge {
       };
     }
 
-    const resultPtr = this.allocate(SCHEDULER_BURST_RESULT_SIZE_BYTES);
+    const resultPtr = this.ensureBurstResultBuffer();
     try {
       const stepResult = await this.callNumberAsync(
         'CE_RunSchedulerBurst',
@@ -321,8 +357,6 @@ export class WasmBridge {
         stepResult: await this.callNumberAsync('CE_RunSchedulerTick'),
         completedResponseCount: 0,
       };
-    } finally {
-      this.free(resultPtr);
     }
   }
 
@@ -367,9 +401,9 @@ export class WasmBridge {
       return null;
     }
 
-    const eventBufferPtr = this.allocate(maxEventCount * RUNTIME_EVENT_SIZE_BYTES);
-    const textBufferPtr = this.allocate(textBufferSizeBytes);
-    const resultPtr = this.allocate(RUNTIME_EVENT_DRAIN_RESULT_SIZE_BYTES);
+    const eventBufferPtr = this.ensureRuntimeEventBuffer(maxEventCount);
+    const textBufferPtr = this.ensureRuntimeEventTextBuffer(textBufferSizeBytes);
+    const resultPtr = this.ensureRuntimeEventDrainResultBuffer();
 
     try {
       const status = this.callNumber(
@@ -422,10 +456,27 @@ export class WasmBridge {
       }
       this.runtimeEventDrainApiAvailable = false;
       return null;
-    } finally {
-      this.free(eventBufferPtr);
-      this.free(textBufferPtr);
-      this.free(resultPtr);
+    }
+  }
+
+  public releaseReusableBuffers(): void {
+    if (this.reusableBurstResultPtr !== 0) {
+      this.free(this.reusableBurstResultPtr);
+      this.reusableBurstResultPtr = 0;
+    }
+    if (this.reusableRuntimeEventBufferPtr !== 0) {
+      this.free(this.reusableRuntimeEventBufferPtr);
+      this.reusableRuntimeEventBufferPtr = 0;
+      this.reusableRuntimeEventBufferCapacity = 0;
+    }
+    if (this.reusableRuntimeEventTextBufferPtr !== 0) {
+      this.free(this.reusableRuntimeEventTextBufferPtr);
+      this.reusableRuntimeEventTextBufferPtr = 0;
+      this.reusableRuntimeEventTextBufferCapacity = 0;
+    }
+    if (this.reusableRuntimeEventDrainResultPtr !== 0) {
+      this.free(this.reusableRuntimeEventDrainResultPtr);
+      this.reusableRuntimeEventDrainResultPtr = 0;
     }
   }
 
@@ -457,6 +508,56 @@ export class WasmBridge {
       return error.message;
     }
     return String(error);
+  }
+
+  private ensureBurstResultBuffer(): number {
+    if (this.reusableBurstResultPtr === 0) {
+      this.reusableBurstResultPtr = this.allocate(SCHEDULER_BURST_RESULT_SIZE_BYTES);
+    }
+    return this.reusableBurstResultPtr;
+  }
+
+  private ensureRuntimeEventBuffer(maxEventCount: number): number {
+    const requiredCapacity = Math.max(1, maxEventCount) * RUNTIME_EVENT_SIZE_BYTES;
+    if (
+      this.reusableRuntimeEventBufferPtr !== 0 &&
+      this.reusableRuntimeEventBufferCapacity >= requiredCapacity
+    ) {
+      return this.reusableRuntimeEventBufferPtr;
+    }
+
+    if (this.reusableRuntimeEventBufferPtr !== 0) {
+      this.free(this.reusableRuntimeEventBufferPtr);
+    }
+    this.reusableRuntimeEventBufferPtr = this.allocate(requiredCapacity);
+    this.reusableRuntimeEventBufferCapacity = requiredCapacity;
+    return this.reusableRuntimeEventBufferPtr;
+  }
+
+  private ensureRuntimeEventTextBuffer(textBufferSizeBytes: number): number {
+    const requiredCapacity = Math.max(1, textBufferSizeBytes);
+    if (
+      this.reusableRuntimeEventTextBufferPtr !== 0 &&
+      this.reusableRuntimeEventTextBufferCapacity >= requiredCapacity
+    ) {
+      return this.reusableRuntimeEventTextBufferPtr;
+    }
+
+    if (this.reusableRuntimeEventTextBufferPtr !== 0) {
+      this.free(this.reusableRuntimeEventTextBufferPtr);
+    }
+    this.reusableRuntimeEventTextBufferPtr = this.allocate(requiredCapacity);
+    this.reusableRuntimeEventTextBufferCapacity = requiredCapacity;
+    return this.reusableRuntimeEventTextBufferPtr;
+  }
+
+  private ensureRuntimeEventDrainResultBuffer(): number {
+    if (this.reusableRuntimeEventDrainResultPtr === 0) {
+      this.reusableRuntimeEventDrainResultPtr = this.allocate(
+        RUNTIME_EVENT_DRAIN_RESULT_SIZE_BYTES
+      );
+    }
+    return this.reusableRuntimeEventDrainResultPtr;
   }
 
   private readSchedulerBurstResult(ptr: number): {
