@@ -125,6 +125,30 @@ bool InferenceRuntime::EnsureContextSpace(SequenceState &state,
   return true;
 }
 
+int32_t InferenceRuntime::ResolveInitialDecodeContextReservationLocked(
+    int32_t max_output_tokens) const {
+  if (max_output_tokens <= 0) {
+    return 0;
+  }
+
+  const int32_t configured_headroom =
+      std::max<int32_t>(1, config_.scheduler_policy.decode_token_reserve);
+  return std::min(max_output_tokens, configured_headroom);
+}
+
+bool InferenceRuntime::EnsureDecodeStepContextSpaceLocked(SlotState &slot) {
+  if (shared_context_ == nullptr || slot.session == nullptr) {
+    return false;
+  }
+
+  if (slot.generated_tokens.empty()) {
+    return true;
+  }
+
+  const int n_ctx = llama_n_ctx(shared_context_);
+  return EnsureContextSpace(*slot.session, 1, n_ctx);
+}
+
 bool InferenceRuntime::PrepareSequenceForPromptLocked(
     const std::string &context_key,
     const std::vector<llama_token> &prompt_tokens, int n_tokens_predict,
@@ -178,7 +202,9 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
 
   const int n_ctx = llama_n_ctx(shared_context_);
   const int tokens_to_add = static_cast<int>(prompt_tokens.size() - match_len);
-  const int total_needed = tokens_to_add + n_tokens_predict;
+  const int initial_decode_headroom =
+      ResolveInitialDecodeContextReservationLocked(n_tokens_predict);
+  const int total_needed = tokens_to_add + initial_decode_headroom;
   if (!EnsureContextSpace(state, total_needed, n_ctx)) {
     return false;
   }
@@ -391,6 +417,19 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
 
   std::vector<SlotState *> live_decode_ready_slots =
       slot_scheduler_.SelectDecodeReadySlots();
+  for (SlotState *slot : live_decode_ready_slots) {
+    if (slot == nullptr || slot->request == nullptr || slot->session == nullptr) {
+      continue;
+    }
+
+    if (!EnsureDecodeStepContextSpaceLocked(*slot)) {
+      slot->terminal_error_message =
+          "Failed to extend decode context headroom.";
+      slot->phase = SlotPhase::Failed;
+      slot->request->lifecycle = GenerateRequestLifecycle::Failed;
+    }
+  }
+  live_decode_ready_slots = slot_scheduler_.SelectDecodeReadySlots();
   std::vector<SlotState *> live_prefill_ready_slots =
       slot_scheduler_.SelectPrefillReadySlots();
   std::vector<SlotState *> live_runnable_slots =

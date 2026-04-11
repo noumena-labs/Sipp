@@ -81,6 +81,9 @@ public:
 private:
   bool EnsureContextSpace(SequenceState &state, int new_tokens_needed,
                           int n_ctx);
+  int32_t ResolveInitialDecodeContextReservationLocked(
+      int32_t max_output_tokens) const;
+  bool EnsureDecodeStepContextSpaceLocked(SlotState &slot);
   bool PrepareSequenceForPromptLocked(const std::string &context_key,
                                       const std::vector<llama_token> &prompt_tokens,
                                       int n_tokens_predict,

@@ -138,19 +138,21 @@ SlotScheduler::BuildTickBudget(const SchedulerPolicyConfig &policy,
                                int32_t prefill_ready_count,
                                int32_t max_batch_tokens,
                                int32_t prefill_chunk_size) {
+  (void)policy;
+  (void)prefill_chunk_size;
   SchedulerTickBudget budget;
   budget.total_token_budget = std::max(0, max_batch_tokens);
   budget.decode_first = decode_ready_count > 0;
 
-  // Phase 4 algorithm steps:
-  // 1. Start from the shared runtime token budget for a tick.
-  // 2. Reserve decode tokens first so short decode-heavy requests are not
-  //    starved by one long prompt prefill.
-  // 3. Clamp the decode reservation to the actual total budget.
-  // 4. Leave adaptive chunk sizing for later; for now, the remaining budget
-  //    becomes the prefill budget.
-  // 5. If chunking is disabled, the prefill planner may still consume the
-  //    remaining budget densely, but decode reservation must remain explicit.
+  // Phase 5B scheduler policy steps:
+  // 1. Reserve at most one decode token per decode-ready slot. The current
+  //    planner can only consume one decode contribution per slot per tick, so
+  //    reserving more decode budget than decode-ready slots only wastes batch
+  //    capacity and starves prefill without improving latency.
+  // 2. Leave at least one token of prefill room when prefill work is present
+  //    so prompt progress does not deadlock behind a decode-only reservation.
+  // 3. Spend the remainder on prefill, with chunking and fairness handled in
+  //    the batch planner.
   if (budget.total_token_budget <= 0) {
     return budget;
   }
@@ -159,51 +161,13 @@ SlotScheduler::BuildTickBudget(const SchedulerPolicyConfig &policy,
       std::max<int32_t>(0, decode_ready_count);
   const int32_t clamped_prefill_ready =
       std::max<int32_t>(0, prefill_ready_count);
-
-  int32_t reserved_decode_tokens = 0;
-  switch (policy.mode) {
-  case SchedulerPolicyMode::LatencyFirst:
-    reserved_decode_tokens =
-        clamped_decode_ready > 0
-            ? std::max(policy.decode_token_reserve, clamped_decode_ready)
-            : 0;
-    break;
-  case SchedulerPolicyMode::Balanced:
-    reserved_decode_tokens =
-        clamped_decode_ready > 0
-            ? std::max(policy.decode_token_reserve,
-                       std::min(clamped_decode_ready,
-                                std::max<int32_t>(1, budget.total_token_budget / 2)))
-            : 0;
-    break;
-  case SchedulerPolicyMode::ThroughputFirst:
-    reserved_decode_tokens =
-        clamped_decode_ready > 0 ? std::max<int32_t>(1, policy.decode_token_reserve) : 0;
-    break;
-  }
-
+  const int32_t prefill_floor = clamped_prefill_ready > 0 ? 1 : 0;
+  const int32_t decode_budget_ceiling =
+      std::max(0, budget.total_token_budget - prefill_floor);
   budget.reserved_decode_tokens =
-      std::clamp(reserved_decode_tokens, 0, budget.total_token_budget);
-  budget.reserved_prefill_tokens = clamped_prefill_ready > 0
-                                       ? std::max(
-                                             0, budget.total_token_budget -
-                                                    budget.reserved_decode_tokens)
-                                       : 0;
-
-  if (clamped_decode_ready <= 0) {
-    budget.reserved_decode_tokens = 0;
-  }
-
-  if (clamped_prefill_ready > 0 && budget.reserved_prefill_tokens <= 0 &&
-      budget.total_token_budget > 0 && budget.reserved_decode_tokens >= budget.total_token_budget) {
-    budget.reserved_decode_tokens = std::max(0, budget.total_token_budget - 1);
-    budget.reserved_prefill_tokens = budget.total_token_budget - budget.reserved_decode_tokens;
-  }
-
-  if (prefill_chunk_size <= 0 && clamped_prefill_ready > 0) {
-    budget.reserved_prefill_tokens =
-        std::max(0, budget.total_token_budget - budget.reserved_decode_tokens);
-  }
+      std::min(clamped_decode_ready, decode_budget_ceiling);
+  budget.reserved_prefill_tokens =
+      std::max(0, budget.total_token_budget - budget.reserved_decode_tokens);
 
   return budget;
 }

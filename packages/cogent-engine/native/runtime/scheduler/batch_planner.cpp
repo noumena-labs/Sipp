@@ -9,7 +9,45 @@
 #include "runtime/scheduler/batch_planner.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <unordered_set>
+
+namespace {
+
+int32_t resolve_prefill_slice_cap(
+    const noumena::cogentengine::SchedulerTickBudget &budget,
+    int32_t configured_prefill_chunk_size,
+    int32_t remaining_prefill_budget,
+    std::size_t active_prefill_slot_count,
+    bool has_decode_pressure) {
+  if (remaining_prefill_budget <= 0) {
+    return 0;
+  }
+
+  int32_t slice_cap = remaining_prefill_budget;
+
+  if (configured_prefill_chunk_size > 0) {
+    slice_cap = std::min(slice_cap, configured_prefill_chunk_size);
+  }
+
+  if (active_prefill_slot_count > 1) {
+    const int32_t fair_share = std::max<int32_t>(
+        1, remaining_prefill_budget /
+               static_cast<int32_t>(active_prefill_slot_count));
+    slice_cap = std::min(slice_cap, fair_share);
+  }
+
+  if (has_decode_pressure) {
+    const int32_t decode_pressure_slice_cap =
+        std::min(remaining_prefill_budget,
+                 std::max<int32_t>(8, budget.EffectiveDecodeBudget()));
+    slice_cap = std::min(slice_cap, decode_pressure_slice_cap);
+  }
+
+  return std::max<int32_t>(1, slice_cap);
+}
+
+} // namespace
 
 namespace noumena::cogentengine {
 
@@ -30,6 +68,7 @@ SharedBatchPlan BatchPlanner::BuildPolicyBatch(
 
   int32_t remaining_decode_budget = budget.EffectiveDecodeBudget();
   int32_t remaining_prefill_budget = budget.EffectivePrefillBudget();
+  const bool has_decode_pressure = !decode_slots.empty();
 
   // Phase 4 algorithm steps:
   // 1. Spend decode reservation first so decode-ready slots are not delayed
@@ -51,30 +90,54 @@ SharedBatchPlan BatchPlanner::BuildPolicyBatch(
     contribution.kind = BatchContributionKind::Decode;
     contribution.token = slot->generated_tokens.back();
     contribution.position =
-        static_cast<int32_t>(slot->request->prompt_tokens.size() +
-                             slot->generated_tokens.size() - 1);
+        slot->session != nullptr
+            ? slot->session->n_past
+            : static_cast<int32_t>(slot->request->prompt_tokens.size() +
+                                   slot->generated_tokens.size() - 1);
     contribution.request_logits = true;
     plan.contributions.push_back(contribution);
     plan.decode_token_count++;
     remaining_decode_budget--;
   }
 
+  std::vector<SlotState *> active_prefill_slots;
+  active_prefill_slots.reserve(prefill_slots.size());
   for (SlotState *slot : prefill_slots) {
-    if (remaining_prefill_budget <= 0 || slot == nullptr ||
-        slot->request == nullptr) {
+    if (slot == nullptr || slot->request == nullptr) {
+      continue;
+    }
+    if (slot->prefill_cursor >= slot->request->prompt_tokens.size()) {
+      continue;
+    }
+    active_prefill_slots.push_back(slot);
+  }
+
+  std::size_t next_prefill_slot_index = 0;
+  while (remaining_prefill_budget > 0 && !active_prefill_slots.empty()) {
+    if (next_prefill_slot_index >= active_prefill_slots.size()) {
+      next_prefill_slot_index = 0;
+    }
+
+    SlotState *slot = active_prefill_slots[next_prefill_slot_index];
+    if (slot == nullptr || slot->request == nullptr) {
+      active_prefill_slots.erase(
+          active_prefill_slots.begin() +
+          static_cast<std::ptrdiff_t>(next_prefill_slot_index));
       continue;
     }
 
     const auto &prompt_tokens = slot->request->prompt_tokens;
     if (slot->prefill_cursor >= prompt_tokens.size()) {
+      active_prefill_slots.erase(
+          active_prefill_slots.begin() +
+          static_cast<std::ptrdiff_t>(next_prefill_slot_index));
       continue;
     }
 
     const std::size_t slot_contribution_start = plan.contributions.size();
-    const int32_t slot_chunk_budget =
-        prefill_chunk_size > 0
-            ? std::min<int32_t>(prefill_chunk_size, remaining_prefill_budget)
-            : remaining_prefill_budget;
+    const int32_t slot_chunk_budget = resolve_prefill_slice_cap(
+        budget, prefill_chunk_size, remaining_prefill_budget,
+        active_prefill_slots.size(), has_decode_pressure);
 
     int32_t remaining_slot_budget = slot_chunk_budget;
     for (std::size_t token_index = slot->prefill_cursor;
@@ -102,6 +165,19 @@ SharedBatchPlan BatchPlanner::BuildPolicyBatch(
           slot->prefill_cursor + contributed_count >= prompt_tokens.size();
       plan.contributions.back().request_logits = completed_prompt;
     }
+
+    const bool slot_completed_prompt =
+        slot->prefill_cursor +
+            (plan.contributions.size() - slot_contribution_start) >=
+        prompt_tokens.size();
+    if (slot_completed_prompt) {
+      active_prefill_slots.erase(
+          active_prefill_slots.begin() +
+          static_cast<std::ptrdiff_t>(next_prefill_slot_index));
+      continue;
+    }
+
+    next_prefill_slot_index++;
   }
 
   std::unordered_set<const SlotState *> occupied_slots;
