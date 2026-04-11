@@ -71,11 +71,21 @@ function summarizeDecodeThroughput(observabilityRuns: (RequestObservability | nu
   return round(total / values.length);
 }
 
+function deriveNativeDecodeTokensPerSecond(
+  observability: RequestObservability | null
+): number | null {
+  if (observability == null) return null;
+  if (observability.decodeEvalMs <= 0 || observability.outputTokenCount <= 0) {
+    return null;
+  }
+  return round((observability.outputTokenCount * 1000) / observability.decodeEvalMs);
+}
+
 function summarizeRunGroup(runs: BenchmarkRun[], benchmarkDurationMs: number): GroupSummary {
   const observabilityRuns = runs.map((run) => run.requestObservability);
   const totalInputTokens = runs.reduce((acc, run) => acc + (run.inputTokenCount ?? 0), 0);
   const totalGeneratedTokens = runs.reduce((acc, run) => acc + (run.outputTokenCount ?? 0), 0);
-  const allItls = runs.flatMap((run) => run.itlMsValues);
+  const allAppObservedItls = runs.flatMap((run) => run.appObservedItlMsValues);
   const benchmarkDurationSeconds = benchmarkDurationMs > 0 ? benchmarkDurationMs / 1000 : 0;
 
   return {
@@ -87,12 +97,40 @@ function summarizeRunGroup(runs: BenchmarkRun[], benchmarkDurationMs: number): G
       requestThroughputRps: benchmarkDurationSeconds > 0 ? round(runs.length / benchmarkDurationSeconds) : null,
       outputTokenThroughputTps: benchmarkDurationSeconds > 0 ? round(totalGeneratedTokens / benchmarkDurationSeconds) : null,
       totalTokenThroughputTps: benchmarkDurationSeconds > 0 ? round((totalInputTokens + totalGeneratedTokens) / benchmarkDurationSeconds) : null,
-      ttftMs: summarizeOptional(runs.map((run) => run.ttftMs!).filter(Boolean)),
-      tpotMs: summarizeOptional(runs.map((run) => run.tpotMs!).filter(Boolean)),
-      itlMs: summarizeOptional(allItls),
+      appObservedTtftMs: summarizeOptional(
+        runs
+          .map((run) => run.appObservedTtftMs)
+          .filter((value): value is number => value != null)
+      ),
+      appObservedTpotMs: summarizeOptional(
+        runs
+          .map((run) => run.appObservedTpotMs)
+          .filter((value): value is number => value != null)
+      ),
+      appObservedItlMs: summarizeOptional(allAppObservedItls),
       e2elMs: summarize(runs.map((run) => run.wallMs)),
     },
     runtime: {
+      nativeTtftMs: summarizeOptional(
+        runs
+          .map((run) => run.nativeTtftMs)
+          .filter((value): value is number => value != null)
+      ),
+      nativeMeanItlMs: summarizeOptional(
+        runs
+          .map((run) => run.nativeMeanItlMs)
+          .filter((value): value is number => value != null)
+      ),
+      nativeTailItlMs: summarizeOptional(
+        runs
+          .map((run) => run.nativeTailItlMs)
+          .filter((value): value is number => value != null)
+      ),
+      nativeDecodeTokensPerSecond: summarizeOptional(
+        runs
+          .map((run) => run.nativeDecodeTokensPerSecond)
+          .filter((value): value is number => value != null)
+      ),
       avgLogicalInputTokenCount: averageRuntimeObservabilityMetric(observabilityRuns, (m) => m.inputTokenCount),
       avgPromptEvalTokens: averageRuntimeObservabilityMetric(observabilityRuns, (m) => m.promptEvalTokens),
       avgPromptEvalMs: averageRuntimeObservabilityMetric(observabilityRuns, (m) => m.promptEvalMs),
@@ -166,18 +204,25 @@ export async function runPromptGroup(
       // @ts-ignore compatibility alias on GenerateResponse
       (response.requestObservability ?? response.runtimeObservability ?? null) as RequestObservability | null;
     const outputTokenCount = requestObservability?.outputTokenCount ?? tokenEventTimes.length;
-    const itlMsValues: number[] = [];
+    const appObservedItlMsValues: number[] = [];
     for (let j = 1; j < tokenEventTimes.length; j++) {
-      itlMsValues.push(round(tokenEventTimes[j] - tokenEventTimes[j - 1]));
+      appObservedItlMsValues.push(round(tokenEventTimes[j] - tokenEventTimes[j - 1]));
     }
-    const tpotMs = ttftMs != null && outputTokenCount > 1 ? round((wallMs - ttftMs) / (outputTokenCount - 1)) : null;
+    const appObservedTpotMs =
+      ttftMs != null && outputTokenCount > 1
+        ? round((wallMs - ttftMs) / (outputTokenCount - 1))
+        : null;
 
     runs.push({
       label: `${groupLabel}-${i + 1}`,
       wallMs,
-      ttftMs,
-      tpotMs,
-      itlMsValues,
+      appObservedTtftMs: ttftMs,
+      appObservedTpotMs,
+      appObservedItlMsValues,
+      nativeTtftMs: requestObservability?.ttftMs ?? null,
+      nativeMeanItlMs: requestObservability?.meanItlMs ?? null,
+      nativeTailItlMs: requestObservability?.tailItlMs ?? null,
+      nativeDecodeTokensPerSecond: deriveNativeDecodeTokensPerSecond(requestObservability),
       inputTokenCount: requestObservability?.inputTokenCount ?? null,
       outputTokenCount,
       outputLength: response.outputText.length,
@@ -351,20 +396,26 @@ export async function runQueuedMixedLoadPair(
   const toRun = (label: string, contextKey: string, wallMs: number, ttftMs: number | null, tokenEventTimes: number[], response: any) => {
     const perf = (response.requestObservability ?? response.runtimeObservability ?? null) as RequestObservability | null;
     const outputTokenCount = perf?.outputTokenCount ?? tokenEventTimes.length;
-    const itlMsValues: number[] = [];
+    const appObservedItlMsValues: number[] = [];
     for (let i = 1; i < tokenEventTimes.length; i++) {
-      itlMsValues.push(round(tokenEventTimes[i] - tokenEventTimes[i - 1]));
+      appObservedItlMsValues.push(round(tokenEventTimes[i] - tokenEventTimes[i - 1]));
     }
-    const effectiveTtftMs = ttftMs ?? perf?.ttftMs ?? null;
-    const tpotMs = effectiveTtftMs != null && outputTokenCount > 1 ? round((wallMs - effectiveTtftMs) / (outputTokenCount - 1)) : null;
+    const appObservedTpotMs =
+      ttftMs != null && outputTokenCount > 1
+        ? round((wallMs - ttftMs) / (outputTokenCount - 1))
+        : null;
 
     return {
       label,
       contextKey,
       wallMs,
-      ttftMs: effectiveTtftMs,
-      tpotMs,
-      itlMsValues,
+      appObservedTtftMs: ttftMs,
+      appObservedTpotMs,
+      appObservedItlMsValues,
+      nativeTtftMs: perf?.ttftMs ?? null,
+      nativeMeanItlMs: perf?.meanItlMs ?? null,
+      nativeTailItlMs: perf?.tailItlMs ?? null,
+      nativeDecodeTokensPerSecond: deriveNativeDecodeTokensPerSecond(perf),
       inputTokenCount: perf?.inputTokenCount ?? null,
       outputTokenCount,
       outputLength: response.outputText.length,

@@ -29,6 +29,7 @@ export interface RequestObservability {
   decodeEvalMs: number;
   sampleMs: number;
   queueDelayMs: number;
+  meanItlMs?: number;
   tailItlMs: number;
   batchParticipationCount: number;
   decodeFirstTickCount: number;
@@ -39,14 +40,19 @@ export interface RequestObservability {
   prefixCacheHitCount: number;
   prefixCacheStoreCount: number;
   ttftMs?: number;
+  tokensPerSecond?: number | null;
 }
 
 export interface BenchmarkRun {
   label: string;
   wallMs: number;
-  ttftMs: number | null;
-  tpotMs: number | null;
-  itlMsValues: number[];
+  appObservedTtftMs: number | null;
+  appObservedTpotMs: number | null;
+  appObservedItlMsValues: number[];
+  nativeTtftMs: number | null;
+  nativeMeanItlMs: number | null;
+  nativeTailItlMs: number | null;
+  nativeDecodeTokensPerSecond: number | null;
   inputTokenCount: number | null;
   outputTokenCount: number;
   outputLength: number;
@@ -63,12 +69,16 @@ export interface GroupSummary {
     requestThroughputRps: number | null;
     outputTokenThroughputTps: number | null;
     totalTokenThroughputTps: number | null;
-    ttftMs: MetricSummary | null;
-    tpotMs: MetricSummary | null;
-    itlMs: MetricSummary | null;
+    appObservedTtftMs: MetricSummary | null;
+    appObservedTpotMs: MetricSummary | null;
+    appObservedItlMs: MetricSummary | null;
     e2elMs: MetricSummary;
   };
   runtime: {
+    nativeTtftMs: MetricSummary | null;
+    nativeMeanItlMs: MetricSummary | null;
+    nativeTailItlMs: MetricSummary | null;
+    nativeDecodeTokensPerSecond: MetricSummary | null;
     avgLogicalInputTokenCount: number | null;
     avgPromptEvalTokens: number | null;
     avgPromptEvalMs: number | null;
@@ -135,6 +145,11 @@ export interface ConfigOptions {
   tokenCount: number;
   warmupRuns: number;
   measuredRuns: number;
+  workerTransport: {
+    preset: 'default' | 'low-buffer' | 'no-buffer' | 'custom';
+    bufferedTokenLimit: number;
+    flushIntervalMs: number;
+  };
   initConfig: {
     prefillChunkSize: number;
     schedulerPolicy: string;
