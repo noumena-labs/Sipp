@@ -20,7 +20,7 @@ export interface WorkerSerializableCogentConfig {
   persistentModelCache?: {
     enabled?: boolean;
   };
-  debugTokenTransport?: 'auto' | 'callbacks' | 'runtime-events';
+  debugTokenTransport?: 'auto' | 'runtime-events';
 }
 
 export interface WorkerQueuedPromptOptions {

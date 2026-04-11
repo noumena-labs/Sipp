@@ -270,7 +270,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return bridge.consumeCompletedResponseIfPresent(requestId);
   }
 
-  private resolveTokenTransportPreference(): 'auto' | 'callbacks' | 'runtime-events' {
+  private resolveTokenTransportPreference(): 'auto' | 'runtime-events' {
     return this.config.debugTokenTransport ?? 'auto';
   }
 
@@ -283,11 +283,6 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
     if (onToken == null) {
       this.transportObservability.activeTokenTransport = 'none';
-      return false;
-    }
-
-    if (preference === 'callbacks') {
-      this.transportObservability.activeTokenTransport = 'callbacks';
       return false;
     }
 

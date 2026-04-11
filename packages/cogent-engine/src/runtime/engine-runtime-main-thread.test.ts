@@ -828,12 +828,10 @@ test('MainThreadEngineRuntime skips callback pointers when native runtime event 
   runtime.close();
 });
 
-test('MainThreadEngineRuntime can force callback pointers even when runtime event drain is available', async () => {
-  const runtime = new MainThreadEngineRuntime({
-    debugTokenTransport: 'callbacks',
-  });
+test('MainThreadEngineRuntime falls back to callback pointers when runtime event drain is unavailable', async () => {
+  const runtime = new MainThreadEngineRuntime({});
   const module = new MockMainThreadModule('success', 'callback', {
-    supportsRuntimeEventDrain: true,
+    supportsRuntimeEventDrain: false,
   });
   attachReadyModule(runtime, module);
 
@@ -853,13 +851,13 @@ test('MainThreadEngineRuntime can force callback pointers even when runtime even
   const transportObservability = runtime.getTransportObservability();
   assert.equal(transportObservability.executionMode, 'main-thread');
   assert.equal(transportObservability.workerBacked, false);
-  assert.equal(transportObservability.tokenTransportPreference, 'callbacks');
+  assert.equal(transportObservability.tokenTransportPreference, 'auto');
   assert.equal(transportObservability.activeTokenTransport, 'callbacks');
   assert.equal(transportObservability.tokenCallbackRegistrationCount, 1);
   assert.equal(transportObservability.nativeCallbackTokenCount, 2);
-  assert.ok((transportObservability.runtimeEventDrainCount ?? 0) > 0);
+  assert.equal(transportObservability.runtimeEventDrainCount, 0);
   assert.equal(transportObservability.runtimeEventTokenCount, 0);
-  assert.equal(transportObservability.runtimeEventTerminalCount, 1);
+  assert.equal(transportObservability.runtimeEventTerminalCount, 0);
   assert.equal(transportObservability.runtimeEventTextBytes, 0);
   runtime.close();
 });
