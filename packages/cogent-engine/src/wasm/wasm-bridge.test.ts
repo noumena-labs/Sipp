@@ -24,6 +24,7 @@ class MockWasmBridgeModule implements EngineModule {
   public readonly WORKERFS = {};
   public readonly HEAP32: Int32Array;
   public readonly HEAPF64: Float64Array;
+  public readonly HEAPU8: Uint8Array;
   public freedPointers: number[] = [];
 
   public supportsBurst = true;
@@ -66,6 +67,7 @@ class MockWasmBridgeModule implements EngineModule {
   public constructor() {
     const memory = new ArrayBuffer(1024 * 1024);
     this.heapU8 = new Uint8Array(memory);
+    this.HEAPU8 = this.heapU8;
     this.HEAP32 = new Int32Array(memory);
     this.HEAPF64 = new Float64Array(memory);
   }

@@ -12,6 +12,7 @@ export interface EngineModule {
   WORKERFS: any;
   HEAP32: Int32Array;
   HEAPF64: Float64Array;
+  HEAPU8: Uint8Array;
   _free(ptr: number | bigint): void;
   _malloc(size: number | bigint): number | bigint;
   addFunction(func: (...args: any[]) => any, signature: string): number | bigint;
