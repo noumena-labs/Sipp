@@ -37,6 +37,9 @@ typedef struct CE_InitConfig {
   int32_t adaptive_prefill_chunking;
   int32_t enable_runtime_observability;
   int32_t enable_backend_profiling;
+  const char *mmproj_path;
+  int32_t image_min_tokens;
+  int32_t image_max_tokens;
 } CE_InitConfig;
 
 typedef struct CE_RuntimeObservabilityMetrics {

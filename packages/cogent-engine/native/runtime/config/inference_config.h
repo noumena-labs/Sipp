@@ -10,6 +10,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 #include "runtime/config/scheduler_policy.h"
 
@@ -30,6 +31,9 @@ struct InferenceRuntimeConfig {
   int32_t prefill_chunk_size = 0;
   int32_t prefix_cache_interval_tokens = 128;
   int32_t max_prefix_cache_entries = 32;
+  std::string mmproj_path;
+  int32_t image_min_tokens = 0;
+  int32_t image_max_tokens = 0;
   SchedulerPolicyConfig scheduler_policy{};
   int32_t enable_runtime_observability = 0;
   int32_t enable_backend_profiling = 0;

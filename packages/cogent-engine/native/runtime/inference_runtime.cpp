@@ -12,9 +12,14 @@
 #include <algorithm>
 #include <chrono>
 #include <functional>
+#include <memory>
+#include <utility>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
+#include "mtmd-helper.h"
+#include "mtmd.h"
 #include "runtime/llama/llama_utils.h"
 #include "runtime/config/scheduler_policy.h"
 
@@ -23,6 +28,10 @@ namespace {
 constexpr char kDefaultPromptContextKey[] = "__primary_prompt__";
 constexpr int kMaxPredictionTokens = 2048;
 constexpr std::size_t kDefaultPrefixCacheIntervalTokens = 128;
+
+using BitmapPtr = std::unique_ptr<mtmd_bitmap, decltype(&mtmd_bitmap_free)>;
+using InputChunksPtr =
+    std::unique_ptr<mtmd_input_chunks, decltype(&mtmd_input_chunks_free)>;
 
 noumena::cogentengine::InferenceRuntimeConfig
 normalize_config(noumena::cogentengine::InferenceRuntimeConfig config) {
@@ -36,6 +45,8 @@ normalize_config(noumena::cogentengine::InferenceRuntimeConfig config) {
       std::max<int32_t>(1, config.prefix_cache_interval_tokens);
   config.max_prefix_cache_entries =
       std::max<int32_t>(1, config.max_prefix_cache_entries);
+  config.image_min_tokens = std::max<int32_t>(0, config.image_min_tokens);
+  config.image_max_tokens = std::max<int32_t>(0, config.image_max_tokens);
   config.scheduler_policy.decode_token_reserve =
       std::max<int32_t>(0, config.scheduler_policy.decode_token_reserve);
   config.enable_runtime_observability =
@@ -146,6 +157,10 @@ bool InferenceRuntime::EnsureDecodeStepContextSpaceLocked(SlotState &slot) {
   }
 
   const int n_ctx = llama_n_ctx(shared_context_);
+  if (slot.request != nullptr && slot.request->is_multimodal_turn &&
+      slot.session->n_past + 1 > n_ctx) {
+    return false;
+  }
   return EnsureContextSpace(*slot.session, 1, n_ctx);
 }
 
@@ -300,6 +315,9 @@ void InferenceRuntime::MaybeStorePrefixCacheEntryLocked(
     const std::string &context_key, const SequenceState &state,
     std::size_t token_count, std::size_t terminal_token_count,
     GenerateRequest *request) {
+  if (request != nullptr && request->is_multimodal_turn) {
+    return;
+  }
   if (shared_context_ == nullptr || state.seq_id < 0 ||
       token_count == 0 || token_count > state.current_kv_tokens.size()) {
     return;
@@ -322,6 +340,111 @@ void InferenceRuntime::MaybeStorePrefixCacheEntryLocked(
   if (request != nullptr) {
     request->prefix_cache_store_count++;
   }
+}
+
+bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
+                                                  const llama_vocab *vocab) {
+  if (shared_context_ == nullptr || mtmd_ctx_ == nullptr || vocab == nullptr ||
+      slot.request == nullptr || slot.session == nullptr ||
+      slot.sampler == nullptr) {
+    return false;
+  }
+
+  GenerateRequest &request = *slot.request;
+  SequenceState &session = *slot.session;
+  if (!request.multimodal.has_value()) {
+    return false;
+  }
+
+  const MultimodalPayload &multimodal = *request.multimodal;
+  std::vector<BitmapPtr> bitmaps;
+  bitmaps.reserve(multimodal.image_buffers.size());
+  std::vector<const mtmd_bitmap *> bitmap_ptrs;
+  bitmap_ptrs.reserve(multimodal.image_buffers.size());
+  for (const std::vector<std::uint8_t> &buffer : multimodal.image_buffers) {
+    mtmd_bitmap *bitmap =
+        mtmd_helper_bitmap_init_from_buf(mtmd_ctx_, buffer.data(), buffer.size());
+    if (bitmap == nullptr) {
+      request.multimodal.reset();
+      return false;
+    }
+    bitmaps.emplace_back(bitmap, &mtmd_bitmap_free);
+    bitmap_ptrs.push_back(bitmap);
+  }
+
+  mtmd_input_text text_input{};
+  text_input.text = request.original_prompt.c_str();
+  text_input.add_special = true;
+  text_input.parse_special = true;
+
+  InputChunksPtr chunks(mtmd_input_chunks_init(), &mtmd_input_chunks_free);
+  if (!chunks ||
+      mtmd_tokenize(mtmd_ctx_, chunks.get(), &text_input, bitmap_ptrs.data(),
+                    bitmap_ptrs.size()) != 0) {
+    request.multimodal.reset();
+    return false;
+  }
+
+  llama_memory_t memory = llama_get_memory(shared_context_);
+  if (!llama_memory_seq_rm(memory, session.seq_id, 0, -1)) {
+    request.multimodal.reset();
+    return false;
+  }
+  session.current_kv_tokens.clear();
+  session.n_past = 0;
+
+  llama_pos new_n_past = 0;
+  const int32_t eval_status = mtmd_helper_eval_chunks(
+      mtmd_ctx_, shared_context_, chunks.get(), 0, session.seq_id,
+      config_.n_batch > 0 ? config_.n_batch : 256, true, &new_n_past);
+  request.multimodal.reset();
+  if (eval_status != 0) {
+    return false;
+  }
+
+  session.n_past = static_cast<int>(new_n_past);
+  slot.prefill_cursor = request.prompt_tokens.size();
+
+  const llama_token next_token =
+      llama_sampler_sample(slot.sampler, shared_context_, -1);
+  if (llama_vocab_is_eog(vocab, next_token)) {
+    slot.phase = SlotPhase::Completed;
+    request.lifecycle = GenerateRequestLifecycle::Completed;
+    return true;
+  }
+
+  char piece_buffer[128];
+  const int piece_length = llama_token_to_piece(
+      vocab, next_token, piece_buffer, sizeof(piece_buffer), 0, true);
+  if (piece_length < 0) {
+    return false;
+  }
+
+  slot.generated_tokens.push_back(next_token);
+  slot.buffered_output_text.append(piece_buffer,
+                                   static_cast<std::size_t>(piece_length));
+  slot.phase = SlotPhase::Streaming;
+  request.lifecycle = GenerateRequestLifecycle::Streaming;
+  slot_scheduler_.EmitBufferedTokenPiece(request_queue_, slot);
+
+  if (request.cancel_requested) {
+    slot.terminal_error_message = "Request cancelled.";
+    slot.phase = SlotPhase::Failed;
+    request.lifecycle = GenerateRequestLifecycle::Cancelled;
+    return true;
+  }
+
+  if (request.max_output_tokens > 0 &&
+      static_cast<int32_t>(slot.generated_tokens.size()) >=
+          request.max_output_tokens) {
+    slot.phase = SlotPhase::Completed;
+    request.lifecycle = GenerateRequestLifecycle::Completed;
+  } else {
+    slot.phase = SlotPhase::Decode;
+    request.lifecycle = GenerateRequestLifecycle::Running;
+  }
+
+  return true;
 }
 
 bool InferenceRuntime::RunPolicyBatchTickLocked() {
@@ -392,6 +515,17 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     SequenceState &session = *slot->session;
 
     if (slot->phase == SlotPhase::Prefill && slot->prefill_cursor == 0) {
+      if (request.is_multimodal_turn) {
+        if (!RunMultimodalPrefillLocked(*slot, vocab)) {
+          slot->terminal_error_message =
+              "Failed to evaluate multimodal prompt.";
+          slot->phase = SlotPhase::Failed;
+          request.lifecycle = GenerateRequestLifecycle::Failed;
+          request.multimodal.reset();
+        }
+        continue;
+      }
+
       std::size_t prefill_cursor = 0;
       if (!PrepareSequenceForPromptLocked(request.context_key,
                                           request.prompt_tokens,
@@ -1028,6 +1162,28 @@ InferenceRuntime::InferenceRuntime(std::string model_path,
   }
   session_store_.BindSharedContext(shared_context_);
 
+  if (!config_.mmproj_path.empty()) {
+    mtmd_context_params mtmd_params = mtmd_context_params_default();
+    mtmd_params.use_gpu = config_.gpu_layers != 0;
+    mtmd_params.print_timings = false;
+    mtmd_params.n_threads = config_.n_threads > 0
+                                ? config_.n_threads
+                                : llama_utils::DefaultThreadCount();
+    if (config_.flash_attention >= 0) {
+      mtmd_params.flash_attn_type =
+          static_cast<llama_flash_attn_type>(config_.flash_attention);
+    }
+    if (config_.image_min_tokens > 0) {
+      mtmd_params.image_min_tokens = config_.image_min_tokens;
+    }
+    if (config_.image_max_tokens > 0) {
+      mtmd_params.image_max_tokens = config_.image_max_tokens;
+    }
+    mtmd_ctx_ =
+        mtmd_init_from_file(config_.mmproj_path.c_str(), primary_model_,
+                            mtmd_params);
+  }
+
   auto sparams = llama_sampler_chain_default_params();
   sparams.no_perf = config_.enable_runtime_observability == 0;
   sampler_ = llama_sampler_chain_init(sparams);
@@ -1091,6 +1247,10 @@ InferenceRuntime::~InferenceRuntime() {
   }
 
   session_store_.Clear();
+
+  if (mtmd_ctx_ != nullptr) {
+    mtmd_free(mtmd_ctx_);
+  }
 
   if (shared_context_ != nullptr) {
     llama_free(shared_context_);
@@ -1172,9 +1332,62 @@ InferenceRuntime::EnqueueRequest(std::string context_key, std::string prompt,
   GenerateRequest request;
   request.id = next_request_id_++;
   request.context_key = std::move(context_key);
+  request.original_prompt = std::move(prompt);
   request.max_output_tokens = n_tokens_predict;
   request.on_token_received = std::move(on_token_received);
   request.prompt_tokens = std::move(prompt_tokens);
+
+  if (!request_queue_.Push(std::move(request))) {
+    return 0;
+  }
+
+  return next_request_id_ - 1;
+}
+
+GenerateRequestId InferenceRuntime::EnqueueMultimodalRequest(
+    std::string context_key, std::string prompt, int n_tokens_predict,
+    std::vector<std::pair<const std::uint8_t *, std::size_t>> image_views,
+    TokenCallback on_token_received) {
+  if (primary_model_ == nullptr || sampler_ == nullptr || mtmd_ctx_ == nullptr ||
+      !mtmd_support_vision(mtmd_ctx_)) {
+    return 0;
+  }
+  if (n_tokens_predict <= 0 || n_tokens_predict > kMaxPredictionTokens) {
+    return 0;
+  }
+  if (image_views.empty()) {
+    return 0;
+  }
+  if (context_key.empty()) {
+    context_key = kDefaultPromptContextKey;
+  }
+
+  const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
+  auto prompt_tokens = llama_utils::Tokenize(vocab, prompt, false, true);
+  MultimodalPayload payload;
+  payload.image_buffers.reserve(image_views.size());
+  for (const auto &[image_data, image_size] : image_views) {
+    if (image_data == nullptr || image_size == 0) {
+      return 0;
+    }
+    payload.image_buffers.emplace_back(image_data, image_data + image_size);
+  }
+
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+  if (primary_model_ == nullptr || sampler_ == nullptr || mtmd_ctx_ == nullptr ||
+      !mtmd_support_vision(mtmd_ctx_)) {
+    return 0;
+  }
+
+  GenerateRequest request;
+  request.id = next_request_id_++;
+  request.context_key = std::move(context_key);
+  request.original_prompt = std::move(prompt);
+  request.prompt_tokens = std::move(prompt_tokens);
+  request.multimodal = std::move(payload);
+  request.max_output_tokens = n_tokens_predict;
+  request.on_token_received = std::move(on_token_received);
+  request.is_multimodal_turn = true;
 
   if (!request_queue_.Push(std::move(request))) {
     return 0;
@@ -1450,6 +1663,53 @@ bool InferenceRuntime::ConsumeCompletedResponse(GenerateRequestId request_id) {
   std::lock_guard<std::mutex> lock(operation_mutex_);
   committed_observability_request_ids_.erase(request_id);
   return request_queue_.ConsumeCompletedResponse(request_id);
+}
+
+const char *InferenceRuntime::GetMediaMarker() const {
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+  if (mtmd_ctx_ == nullptr || !mtmd_support_vision(mtmd_ctx_)) {
+    return nullptr;
+  }
+  return mtmd_default_marker();
+}
+
+const char *InferenceRuntime::GetChatTemplate() const {
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+  if (primary_model_ == nullptr) {
+    return nullptr;
+  }
+  const char *tmpl = llama_model_chat_template(primary_model_, nullptr);
+  return tmpl != nullptr && tmpl[0] != '\0' ? tmpl : nullptr;
+}
+
+std::string InferenceRuntime::ApplyChatTemplate(
+    const std::vector<llama_chat_message> &messages,
+    bool add_assistant) const {
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+  if (primary_model_ == nullptr) {
+    return {};
+  }
+
+  const char *tmpl = llama_model_chat_template(primary_model_, nullptr);
+  if (tmpl == nullptr || tmpl[0] == '\0') {
+    return {};
+  }
+
+  const int32_t required_size = llama_chat_apply_template(
+      tmpl, messages.data(), messages.size(), add_assistant, nullptr, 0);
+  if (required_size < 0) {
+    return {};
+  }
+
+  std::vector<char> buffer(static_cast<std::size_t>(required_size) + 1, '\0');
+  const int32_t actual_size = llama_chat_apply_template(
+      tmpl, messages.data(), messages.size(), add_assistant, buffer.data(),
+      static_cast<int32_t>(buffer.size()));
+  if (actual_size < 0) {
+    return {};
+  }
+
+  return std::string(buffer.data(), static_cast<std::size_t>(actual_size));
 }
 
 } // namespace noumena::cogentengine

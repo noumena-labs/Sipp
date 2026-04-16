@@ -14,6 +14,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_set>
+#include <utility>
 
 #include "runtime/config/inference_config.h"
 #include "runtime/llama/llama_batch_builder.h"
@@ -27,6 +28,7 @@
 
 struct llama_model;
 struct llama_sampler;
+struct mtmd_context;
 
 namespace noumena::cogentengine {
 
@@ -64,6 +66,10 @@ public:
   GenerateRequestId EnqueueRequest(std::string context_key, std::string prompt,
                                    int n_tokens_predict,
                                    TokenCallback on_token_received = {});
+  GenerateRequestId EnqueueMultimodalRequest(
+      std::string context_key, std::string prompt, int n_tokens_predict,
+      std::vector<std::pair<const std::uint8_t *, std::size_t>> image_views,
+      TokenCallback on_token_received = {});
   bool CancelRequest(GenerateRequestId request_id);
   RequestStepResult RunSchedulerTick();
   SchedulerBurstResult RunSchedulerBurst(int32_t max_ticks,
@@ -77,6 +83,11 @@ public:
   bool TryPeekCompletedResponse(GenerateRequestId request_id,
                                 GenerateResponse &out_response) const;
   bool ConsumeCompletedResponse(GenerateRequestId request_id);
+  const char *GetMediaMarker() const;
+  const char *GetChatTemplate() const;
+  std::string ApplyChatTemplate(
+      const std::vector<llama_chat_message> &messages,
+      bool add_assistant) const;
 
 private:
   bool EnsureContextSpace(SequenceState &state, int new_tokens_needed,
@@ -95,6 +106,8 @@ private:
                                         std::size_t token_count,
                                         std::size_t terminal_token_count,
                                         GenerateRequest *request);
+  bool RunMultimodalPrefillLocked(SlotState &slot,
+                                  const llama_vocab *vocab);
 
   bool RunPolicyBatchTickLocked();
   RequestStepResult RunSchedulerTickLocked();
@@ -114,6 +127,7 @@ private:
   llama_model *primary_model_ = nullptr;
   llama_context *shared_context_ = nullptr;
   llama_sampler *sampler_ = nullptr;
+  mtmd_context *mtmd_ctx_ = nullptr;
   RuntimeObservabilityMetrics last_runtime_observability_;
   bool has_last_runtime_observability_ = false;
   SessionStore session_store_;

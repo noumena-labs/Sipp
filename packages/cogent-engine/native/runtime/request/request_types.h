@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -33,10 +34,16 @@ enum class GenerateRequestLifecycle : std::uint8_t {
   Failed,
 };
 
+struct MultimodalPayload {
+  std::vector<std::vector<std::uint8_t>> image_buffers;
+};
+
 struct GenerateRequest {
   GenerateRequestId id = 0;
   std::string context_key;
+  std::string original_prompt;
   std::vector<llama_token> prompt_tokens;
+  std::optional<MultimodalPayload> multimodal;
   int32_t max_output_tokens = 0;
   GenerateTokenCallback on_token_received;
   GenerateRequestLifecycle lifecycle = GenerateRequestLifecycle::Pending;
@@ -66,6 +73,7 @@ struct GenerateRequest {
   int32_t prefix_cache_restore_tokens = 0;
   int32_t prefix_cache_hit_count = 0;
   int32_t prefix_cache_store_count = 0;
+  bool is_multimodal_turn = false;
   bool cancel_requested = false;
 };
 

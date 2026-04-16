@@ -22,31 +22,31 @@ bool is_valid_prediction_tokens(int token_count) {
 bool g_isEngineInitialized = false;
 std::mutex g_apiMutex;
 
-char *duplicate_heap_string(const std::string &value) {
-  char *out = static_cast<char *>(std::malloc(value.size() + 1));
+char *duplicate_heap_string(const char *value) {
+  const char *source = value != nullptr ? value : "";
+  const std::size_t length = std::strlen(source);
+  char *out = static_cast<char *>(std::malloc(length + 1));
   if (!out) {
     return nullptr;
   }
-  std::memcpy(out, value.c_str(), value.size() + 1);
+  std::memcpy(out, source, length + 1);
   return out;
 }
 
-
-} // namespace
-
-extern "C" {
-
-EMSCRIPTEN_KEEPALIVE
-int CE_Init(const char *model_path, int n_ctx, int n_batch, int n_ubatch,
-            int n_seq_max, int n_threads, int n_threads_batch, int gpu_layers,
-            int flash_attention, int kv_unified, int max_cached_sessions,
-            int retained_prefix_tokens, int prefill_chunk_size,
-            int prefix_cache_interval_tokens, int max_prefix_cache_entries,
-            int scheduler_policy, int decode_token_reserve,
-            int adaptive_prefill_chunking, int enable_runtime_observability,
-            int enable_backend_profiling) {
-  std::lock_guard<std::mutex> lock(g_apiMutex);
-
+int init_engine_locked(const char *model_path, int n_ctx, int n_batch,
+                       int n_ubatch, int n_seq_max, int n_threads,
+                       int n_threads_batch, int gpu_layers,
+                       int flash_attention, int kv_unified,
+                       int max_cached_sessions, int retained_prefix_tokens,
+                       int prefill_chunk_size,
+                       int prefix_cache_interval_tokens,
+                       int max_prefix_cache_entries, int scheduler_policy,
+                       int decode_token_reserve,
+                       int adaptive_prefill_chunking,
+                       int enable_runtime_observability,
+                       int enable_backend_profiling,
+                       const char *mmproj_path, int image_min_tokens,
+                       int image_max_tokens) {
   if (!model_path || std::strlen(model_path) == 0) {
     return kStatusInvalidArguments;
   }
@@ -76,6 +76,9 @@ int CE_Init(const char *model_path, int n_ctx, int n_batch, int n_ubatch,
       .adaptive_prefill_chunking = adaptive_prefill_chunking,
       .enable_runtime_observability = enable_runtime_observability,
       .enable_backend_profiling = enable_backend_profiling,
+      .mmproj_path = mmproj_path,
+      .image_min_tokens = image_min_tokens,
+      .image_max_tokens = image_max_tokens,
   };
 
   const int init_status = CE_InitPlugin(model_path, &config);
@@ -85,6 +88,51 @@ int CE_Init(const char *model_path, int n_ctx, int n_batch, int n_ubatch,
 
   g_isEngineInitialized = true;
   return 0;
+}
+
+} // namespace
+
+extern "C" {
+
+EMSCRIPTEN_KEEPALIVE
+int CE_Init(const char *model_path, int n_ctx, int n_batch, int n_ubatch,
+            int n_seq_max, int n_threads, int n_threads_batch, int gpu_layers,
+            int flash_attention, int kv_unified, int max_cached_sessions,
+            int retained_prefix_tokens, int prefill_chunk_size,
+            int prefix_cache_interval_tokens, int max_prefix_cache_entries,
+            int scheduler_policy, int decode_token_reserve,
+            int adaptive_prefill_chunking, int enable_runtime_observability,
+            int enable_backend_profiling) {
+  std::lock_guard<std::mutex> lock(g_apiMutex);
+  return init_engine_locked(
+      model_path, n_ctx, n_batch, n_ubatch, n_seq_max, n_threads,
+      n_threads_batch, gpu_layers, flash_attention, kv_unified,
+      max_cached_sessions, retained_prefix_tokens, prefill_chunk_size,
+      prefix_cache_interval_tokens, max_prefix_cache_entries,
+      scheduler_policy, decode_token_reserve, adaptive_prefill_chunking,
+      enable_runtime_observability, enable_backend_profiling, nullptr, 0, 0);
+}
+
+EMSCRIPTEN_KEEPALIVE
+int CE_InitWithMultimodal(
+    const char *model_path, int n_ctx, int n_batch, int n_ubatch,
+    int n_seq_max, int n_threads, int n_threads_batch, int gpu_layers,
+    int flash_attention, int kv_unified, int max_cached_sessions,
+    int retained_prefix_tokens, int prefill_chunk_size,
+    int prefix_cache_interval_tokens, int max_prefix_cache_entries,
+    int scheduler_policy, int decode_token_reserve,
+    int adaptive_prefill_chunking, int enable_runtime_observability,
+    int enable_backend_profiling, const char *mmproj_path,
+    int image_min_tokens, int image_max_tokens) {
+  std::lock_guard<std::mutex> lock(g_apiMutex);
+  return init_engine_locked(
+      model_path, n_ctx, n_batch, n_ubatch, n_seq_max, n_threads,
+      n_threads_batch, gpu_layers, flash_attention, kv_unified,
+      max_cached_sessions, retained_prefix_tokens, prefill_chunk_size,
+      prefix_cache_interval_tokens, max_prefix_cache_entries,
+      scheduler_policy, decode_token_reserve, adaptive_prefill_chunking,
+      enable_runtime_observability, enable_backend_profiling, mmproj_path,
+      image_min_tokens, image_max_tokens);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -107,6 +155,34 @@ char *CE_GetBackendObservabilityJson() {
 }
 
 EMSCRIPTEN_KEEPALIVE
+const char *CE_GetMediaMarker() {
+  std::lock_guard<std::mutex> lock(g_apiMutex);
+  if (!g_isEngineInitialized) {
+    return nullptr;
+  }
+  return CE_GetMediaMarkerString();
+}
+
+EMSCRIPTEN_KEEPALIVE
+const char *CE_GetChatTemplate() {
+  std::lock_guard<std::mutex> lock(g_apiMutex);
+  if (!g_isEngineInitialized) {
+    return nullptr;
+  }
+  return CE_GetChatTemplateString();
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_ApplyChatTemplate(const char *messages_json, int add_assistant) {
+  std::lock_guard<std::mutex> lock(g_apiMutex);
+  if (!g_isEngineInitialized) {
+    return duplicate_heap_string("");
+  }
+  return duplicate_heap_string(
+      CE_ApplyChatTemplateString(messages_json, add_assistant));
+}
+
+EMSCRIPTEN_KEEPALIVE
 CE_RequestId CE_EnqueuePrompt(const char *context_key, const char *prompt,
                               int n_tokens, CE_TokenCallback on_token) {
   std::lock_guard<std::mutex> lock(g_apiMutex);
@@ -118,6 +194,24 @@ CE_RequestId CE_EnqueuePrompt(const char *context_key, const char *prompt,
   }
 
   return CE_EnqueuePromptQuery(context_key, prompt, n_tokens, on_token);
+}
+
+EMSCRIPTEN_KEEPALIVE
+CE_RequestId CE_EnqueuePromptWithMedia(
+    const char *context_key, const char *prompt, int n_tokens, int n_images,
+    const uint8_t *images_flat_buffer, const int32_t *image_sizes,
+    CE_TokenCallback on_token) {
+  std::lock_guard<std::mutex> lock(g_apiMutex);
+  if (!g_isEngineInitialized) {
+    return 0;
+  }
+  if (prompt == nullptr || !is_valid_prediction_tokens(n_tokens)) {
+    return 0;
+  }
+
+  return CE_EnqueuePromptWithMediaQuery(context_key, prompt, n_tokens,
+                                        n_images, images_flat_buffer,
+                                        image_sizes, on_token);
 }
 
 

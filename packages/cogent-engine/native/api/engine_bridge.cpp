@@ -1,10 +1,15 @@
 #include "engine_bridge.h"
 
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <utility>
+#include <vector>
+
+#include <nlohmann/json.hpp>
 
 #include "ggml-backend.h"
 #include "ggml-webgpu.h"
@@ -20,9 +25,15 @@ constexpr int kCompletedRequestStatusPending = 0;
 constexpr int kCompletedRequestStatusCompleted = 1;
 constexpr int kCompletedRequestStatusCancelled = 2;
 constexpr int kCompletedRequestStatusFailed = 3;
+constexpr int kMaxPredictionTokens = 2048;
 
 std::mutex g_engineMutex;
 std::shared_ptr<InferenceRuntime> g_engineRuntime;
+using json = nlohmann::json;
+
+bool is_valid_prediction_tokens(int token_count) {
+  return token_count > 0 && token_count <= kMaxPredictionTokens;
+}
 
 const char *backend_dev_type_name(enum ggml_backend_dev_type type) {
   switch (type) {
@@ -76,6 +87,90 @@ std::string json_bool(bool value) { return value ? "true" : "false"; }
 std::shared_ptr<InferenceRuntime> acquire_engine_runtime() {
   std::lock_guard<std::mutex> lock(g_engineMutex);
   return g_engineRuntime;
+}
+
+const char *empty_c_string() {
+  static thread_local std::string empty;
+  empty.clear();
+  return empty.c_str();
+}
+
+bool validate_media_buffers(int32_t n_images, const uint8_t *images_flat_buffer,
+                            const int32_t *image_sizes,
+                            std::size_t &out_total_bytes) {
+  out_total_bytes = 0;
+  if (n_images < 0) {
+    return false;
+  }
+  if (n_images == 0) {
+    return true;
+  }
+  if (images_flat_buffer == nullptr || image_sizes == nullptr) {
+    return false;
+  }
+
+  std::size_t total_bytes = 0;
+  for (int32_t index = 0; index < n_images; ++index) {
+    const int32_t image_size = image_sizes[index];
+    if (image_size <= 0) {
+      return false;
+    }
+
+    const std::size_t size = static_cast<std::size_t>(image_size);
+    if (size > std::numeric_limits<std::size_t>::max() - total_bytes) {
+      return false;
+    }
+    total_bytes += size;
+  }
+
+  out_total_bytes = total_bytes;
+  return true;
+}
+
+bool parse_chat_messages_json(const char *messages_json,
+                              std::vector<std::string> &out_roles,
+                              std::vector<std::string> &out_contents,
+                              std::vector<llama_chat_message> &out_messages) {
+  out_roles.clear();
+  out_contents.clear();
+  out_messages.clear();
+  if (messages_json == nullptr || messages_json[0] == '\0') {
+    return false;
+  }
+
+  const json parsed = json::parse(messages_json, nullptr, false);
+  if (parsed.is_discarded() || !parsed.is_array()) {
+    return false;
+  }
+
+  out_roles.reserve(parsed.size());
+  out_contents.reserve(parsed.size());
+  out_messages.reserve(parsed.size());
+
+  for (const auto &message : parsed) {
+    if (!message.is_object()) {
+      return false;
+    }
+
+    const auto role_it = message.find("role");
+    const auto content_it = message.find("content");
+    if (role_it == message.end() || content_it == message.end() ||
+        !role_it->is_string() || !content_it->is_string()) {
+      return false;
+    }
+
+    out_roles.push_back(role_it->get<std::string>());
+    out_contents.push_back(content_it->get<std::string>());
+  }
+
+  for (std::size_t index = 0; index < out_roles.size(); ++index) {
+    out_messages.push_back(llama_chat_message{
+        .role = out_roles[index].c_str(),
+        .content = out_contents[index].c_str(),
+    });
+  }
+
+  return true;
 }
 
 int completed_status_to_code(
@@ -227,6 +322,12 @@ int CE_InitPlugin(const char *model_path, const CE_InitConfig *config) {
         config->enable_runtime_observability > 0 ? 1 : 0;
     runtime_config.enable_backend_profiling =
         config->enable_backend_profiling > 0 ? 1 : 0;
+    runtime_config.mmproj_path =
+        config->mmproj_path != nullptr ? config->mmproj_path : "";
+    runtime_config.image_min_tokens =
+        config->image_min_tokens > 0 ? config->image_min_tokens : 0;
+    runtime_config.image_max_tokens =
+        config->image_max_tokens > 0 ? config->image_max_tokens : 0;
   }
 
   auto runtime = std::make_shared<InferenceRuntime>(model_path, runtime_config);
@@ -571,6 +672,91 @@ CE_RequestId CE_EnqueuePromptQuery(const char *context_key, const char *prompt,
         }
         return true;
       });
+}
+
+CE_RequestId CE_EnqueuePromptWithMediaQuery(
+    const char *context_key, const char *prompt, int n_tokens_predict,
+    int32_t n_images, const uint8_t *images_flat_buffer,
+    const int32_t *image_sizes, CE_TokenCallback on_token) {
+  if (prompt == nullptr || !is_valid_prediction_tokens(n_tokens_predict)) {
+    return 0;
+  }
+  if (n_images < 0) {
+    return 0;
+  }
+  if (n_images == 0) {
+    return CE_EnqueuePromptQuery(context_key, prompt, n_tokens_predict,
+                                  on_token);
+  }
+
+  std::size_t total_media_bytes = 0;
+  if (!validate_media_buffers(n_images, images_flat_buffer, image_sizes,
+                              total_media_bytes)) {
+    return 0;
+  }
+  (void)total_media_bytes;
+
+  auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    return 0;
+  }
+
+  std::vector<std::pair<const std::uint8_t *, std::size_t>> image_views;
+  image_views.reserve(static_cast<std::size_t>(n_images));
+  std::size_t byte_offset = 0;
+  for (int32_t index = 0; index < n_images; ++index) {
+    const std::size_t image_size = static_cast<std::size_t>(image_sizes[index]);
+    image_views.emplace_back(images_flat_buffer + byte_offset, image_size);
+    byte_offset += image_size;
+  }
+
+  return runtime->EnqueueMultimodalRequest(
+      context_key ? context_key : "", prompt, n_tokens_predict,
+      std::move(image_views),
+      [on_token](const char *token_piece, int32_t token_length) {
+        if (on_token != nullptr) {
+          return on_token(token_piece, token_length) == 0;
+        }
+        return true;
+      });
+}
+
+const char *CE_GetMediaMarkerString() {
+  const auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    return nullptr;
+  }
+  const char *marker = runtime->GetMediaMarker();
+  return marker != nullptr ? marker : empty_c_string();
+}
+
+const char *CE_GetChatTemplateString() {
+  const auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    return nullptr;
+  }
+  const char *tmpl = runtime->GetChatTemplate();
+  return tmpl != nullptr ? tmpl : empty_c_string();
+}
+
+const char *CE_ApplyChatTemplateString(const char *messages_json,
+                                       int add_assistant) {
+  static thread_local std::string formatted_prompt;
+  std::vector<std::string> roles;
+  std::vector<std::string> contents;
+  std::vector<llama_chat_message> messages;
+  if (!parse_chat_messages_json(messages_json, roles, contents, messages)) {
+    return empty_c_string();
+  }
+
+  const auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    return empty_c_string();
+  }
+
+  formatted_prompt =
+      runtime->ApplyChatTemplate(messages, add_assistant != 0);
+  return formatted_prompt.c_str();
 }
 
 int CE_CancelQueuedPromptQuery(CE_RequestId request_id) {

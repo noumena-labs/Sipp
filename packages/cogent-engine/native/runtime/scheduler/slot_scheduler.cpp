@@ -123,6 +123,11 @@ std::vector<SlotState *> SlotScheduler::SelectPrefillReadySlots() {
     if (slot.phase != SlotPhase::Prefill) {
       continue;
     }
+    if (slot.request->is_multimodal_turn &&
+        slot.request->multimodal.has_value()) {
+      prefill_slots.push_back(&slot);
+      continue;
+    }
     if (slot.prefill_cursor >= slot.request->prompt_tokens.size()) {
       continue;
     }
@@ -302,8 +307,13 @@ void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue,
                                               : slot.terminal_error_message;
     }
 
-    if (slot.session != nullptr) {
-      session_store.Unpin(slot.request != nullptr ? slot.request->context_key : "");
+    if (slot.request != nullptr) {
+      const std::string context_key = slot.request->context_key;
+      const bool drop_multimodal_session = slot.request->is_multimodal_turn;
+      session_store.Unpin(context_key);
+      if (drop_multimodal_session) {
+        session_store.Remove(context_key);
+      }
     }
     request_queue.MarkCompleted(std::move(response));
     slot.ResetToIdle();
