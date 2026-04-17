@@ -103,10 +103,61 @@ set(PLUGIN_SOURCES
     ${CMAKE_SOURCE_DIR}/native/api/wasm_exports.cpp
 )
 
+# llama.cpp skips tools/mtmd entirely under EMSCRIPTEN, so compile the
+# library sources directly into the browser target and intentionally
+# exclude the desktop CLI/debug executables.
+set(CE_MTMD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp/tools/mtmd)
+set(CE_MTMD_MODEL_DIR ${CE_MTMD_DIR}/models)
+set(CE_MTMD_SOURCES
+    ${CE_MTMD_DIR}/mtmd.cpp
+    ${CE_MTMD_DIR}/mtmd-audio.cpp
+    ${CE_MTMD_DIR}/mtmd-image.cpp
+    ${CE_MTMD_DIR}/mtmd-helper.cpp
+    ${CE_MTMD_DIR}/clip.cpp
+    ${CE_MTMD_MODEL_DIR}/cogvlm.cpp
+    ${CE_MTMD_MODEL_DIR}/conformer.cpp
+    ${CE_MTMD_MODEL_DIR}/dotsocr.cpp
+    ${CE_MTMD_MODEL_DIR}/gemma4a.cpp
+    ${CE_MTMD_MODEL_DIR}/gemma4v.cpp
+    ${CE_MTMD_MODEL_DIR}/glm4v.cpp
+    ${CE_MTMD_MODEL_DIR}/hunyuanocr.cpp
+    ${CE_MTMD_MODEL_DIR}/internvl.cpp
+    ${CE_MTMD_MODEL_DIR}/kimivl.cpp
+    ${CE_MTMD_MODEL_DIR}/kimik25.cpp
+    ${CE_MTMD_MODEL_DIR}/nemotron-v2-vl.cpp
+    ${CE_MTMD_MODEL_DIR}/llama4.cpp
+    ${CE_MTMD_MODEL_DIR}/llava.cpp
+    ${CE_MTMD_MODEL_DIR}/minicpmv.cpp
+    ${CE_MTMD_MODEL_DIR}/paddleocr.cpp
+    ${CE_MTMD_MODEL_DIR}/pixtral.cpp
+    ${CE_MTMD_MODEL_DIR}/qwen2vl.cpp
+    ${CE_MTMD_MODEL_DIR}/qwen3vl.cpp
+    ${CE_MTMD_MODEL_DIR}/qwen3a.cpp
+    ${CE_MTMD_MODEL_DIR}/step3vl.cpp
+    ${CE_MTMD_MODEL_DIR}/siglip.cpp
+    ${CE_MTMD_MODEL_DIR}/whisper-enc.cpp
+    ${CE_MTMD_MODEL_DIR}/deepseekocr.cpp
+    ${CE_MTMD_MODEL_DIR}/mobilenetv5.cpp
+    ${CE_MTMD_MODEL_DIR}/youtuvl.cpp
+)
+
 add_executable(CogentEngine ${PLUGIN_SOURCES})
 
-target_include_directories(CogentEngine PRIVATE ${CMAKE_SOURCE_DIR}/native)
+target_sources(CogentEngine PRIVATE ${CE_MTMD_SOURCES})
+
+target_include_directories(CogentEngine PRIVATE
+    ${CMAKE_SOURCE_DIR}/native
+    ${CE_MTMD_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp/vendor
+)
 target_link_libraries(CogentEngine PRIVATE llama)
+
+if(NOT MSVC)
+    foreach(_ce_mtmd_source IN LISTS CE_MTMD_SOURCES)
+        set_source_files_properties(${_ce_mtmd_source} PROPERTIES COMPILE_OPTIONS "-Wno-cast-qual")
+    endforeach()
+endif()
 
 foreach(_ggml_target ggml ggml-base ggml-cpu ggml-webgpu)
     if(TARGET ${_ggml_target})
@@ -115,10 +166,11 @@ foreach(_ggml_target ggml ggml-base ggml-cpu ggml-webgpu)
 endforeach()
 
 set(CE_WASM_EXPORTED_FUNCTIONS
-    "['_CE_Init','_CE_Close','_CE_EnqueuePrompt','_CE_CancelQueuedRequest','_CE_RunSchedulerTick','_CE_RunSchedulerBurst','_CE_RunSchedulerBurstWithDeadline','_CE_RunRequestStep','_CE_GetCompletedRequestStatus','_CE_DrainCompletedRequestIds','_CE_DrainRuntimeEvents','_CE_GetCompletedRequestOutputSize','_CE_CopyCompletedRequestOutput','_CE_GetCompletedRequestErrorSize','_CE_CopyCompletedRequestError','_CE_GetCompletedRequestRuntimeObservability','_CE_ConsumeCompletedRequest','_CE_FreeString','_CE_GetRuntimeObservability','_CE_ResetRuntimeObservability','_CE_GetBackendObservabilityJson','_malloc','_free']"
+    "['_CE_Init','_CE_InitWithMultimodal','_CE_Close','_CE_EnqueuePrompt','_CE_EnqueuePromptWithMedia','_CE_CancelQueuedRequest','_CE_RunSchedulerTick','_CE_RunSchedulerBurst','_CE_RunSchedulerBurstWithDeadline','_CE_RunRequestStep','_CE_GetCompletedRequestStatus','_CE_DrainCompletedRequestIds','_CE_DrainRuntimeEvents','_CE_GetCompletedRequestOutputSize','_CE_CopyCompletedRequestOutput','_CE_GetCompletedRequestErrorSize','_CE_CopyCompletedRequestError','_CE_GetCompletedRequestRuntimeObservability','_CE_ConsumeCompletedRequest','_CE_FreeString','_CE_GetRuntimeObservability','_CE_ResetRuntimeObservability','_CE_GetBackendObservabilityJson','_CE_GetMediaMarker','_CE_GetChatTemplate','_CE_ApplyChatTemplate','_malloc','_free']"
 )
 
-set(CE_WASM_RUNTIME_METHODS "['ccall','FS','WORKERFS','UTF8ToString','addFunction','removeFunction','getValue','setValue','HEAP32','HEAPF64']")
+# HEAPU8 is needed for later binary media packing through the wasm bridge.
+set(CE_WASM_RUNTIME_METHODS "['ccall','FS','WORKERFS','UTF8ToString','addFunction','removeFunction','getValue','setValue','HEAP32','HEAPF64','HEAPU8']")
 
 set(CE_WASM_TARGET_LINK_OPTIONS
     ${CE_WASM_LINK_FLAGS}
@@ -134,14 +186,14 @@ set(CE_WASM_TARGET_LINK_OPTIONS
 if(CE_WASM_USE_JSPI)
     list(APPEND CE_WASM_TARGET_LINK_OPTIONS
         -sJSPI=1
-        # CE_Init, CE_RunSchedulerTick, CE_RunSchedulerBurst, and
+        # CE_Init, CE_InitWithMultimodal, CE_RunSchedulerTick, CE_RunSchedulerBurst, and
         # CE_RunSchedulerBurstWithDeadline,
         # CE_RunRequestStep may suspend on the browser WebGPU path.
         # CE_GetBackendObservabilityJson can also suspend because querying ggml-webgpu
         # devices may force adapter/device creation under emdawnwebgpu.
         # CE_Close is intentionally not exported as a JSPI function because the
         # TS wrapper calls it synchronously during teardown/reinit.
-        -sJSPI_EXPORTS=['_main_thread','CE_Init','CE_RunSchedulerTick','CE_RunSchedulerBurst','CE_RunSchedulerBurstWithDeadline','CE_RunRequestStep','CE_GetBackendObservabilityJson']
+        "-sJSPI_EXPORTS=['_main_thread','CE_Init','CE_InitWithMultimodal','CE_RunSchedulerTick','CE_RunSchedulerBurst','CE_RunSchedulerBurstWithDeadline','CE_RunRequestStep','CE_GetBackendObservabilityJson']"
     )
 endif()
 

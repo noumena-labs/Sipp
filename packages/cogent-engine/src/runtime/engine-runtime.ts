@@ -5,8 +5,11 @@ import {
   GenerateRequestId,
   GenerateResponse,
   InferenceInitConfig,
+  ModelBundleDescriptor,
   ModelLoadInfo,
   PromptOptions,
+  PreparedModelBundle,
+  PrepareModelBundleOptions,
   RuntimeAggregateObservabilityMetrics,
   TransportObservability,
 } from '../types.js';
@@ -50,8 +53,17 @@ export interface EngineRuntime {
     onProgress?: (pct: number) => void,
     signal?: AbortSignal
   ): Promise<string>;
-  initEngine(modelPath: string, config?: InferenceInitConfig): Promise<void>;
+  prepareModelBundle(
+    descriptor: ModelBundleDescriptor,
+    options?: PrepareModelBundleOptions
+  ): Promise<PreparedModelBundle>;
+  initEngine(
+    modelPathOrBundle: string | PreparedModelBundle,
+    config?: InferenceInitConfig
+  ): Promise<void>;
   close(): void;
+  getChatTemplate(): string | null;
+  getMediaMarker(): string | null;
   cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean>;
   queuePrompt(
     contextKey: string,

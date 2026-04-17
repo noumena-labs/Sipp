@@ -26,6 +26,7 @@ class MockWasmBridgeModule implements EngineModule {
   public readonly HEAPF64: Float64Array;
   public readonly HEAPU8: Uint8Array;
   public freedPointers: number[] = [];
+  public freedStringPointers: number[] = [];
 
   public supportsBurst = true;
   public supportsBurstWithDeadline = true;
@@ -43,7 +44,25 @@ class MockWasmBridgeModule implements EngineModule {
   public completedErrorText = '';
   public completedConsumed = false;
   public backendJson = '{"adapter":"webgpu"}';
+  public mediaMarker: string | null = null;
+  public chatTemplate: string | null = null;
+  public appliedChatTemplateText = '';
   public lastFreedBackendPtr = 0;
+  public lastInitCall:
+    | {
+        ident: string;
+        args: any[];
+      }
+    | null = null;
+  public lastMediaEnqueue:
+    | {
+        contextKey: string;
+        promptText: string;
+        maxOutputTokens: number;
+        callbackPtr: number;
+        images: Uint8Array[];
+      }
+    | null = null;
   public lastBurstWithDeadlineArgs:
     | {
         maxTicks: number;
@@ -180,8 +199,53 @@ class MockWasmBridgeModule implements EngineModule {
         return 1;
       case 'CE_GetBackendObservabilityJson':
         return this.writeTempCString(this.backendJson);
+      case 'CE_GetMediaMarker':
+        return this.mediaMarker == null ? 0 : this.writeTempCString(this.mediaMarker);
+      case 'CE_GetChatTemplate':
+        return this.chatTemplate == null ? 0 : this.writeTempCString(this.chatTemplate);
+      case 'CE_ApplyChatTemplate': {
+        if (this.chatTemplate == null) {
+          return 0;
+        }
+        const messages = JSON.parse(String(args[0])) as Array<{ role: string; content: string }>;
+        const fallbackText = messages
+          .map((message) => `${message.role}:${message.content}`)
+          .join('|');
+        return this.writeTempCString(
+          this.appliedChatTemplateText || `templated:${fallbackText}:${Number(args[1])}`
+        );
+      }
+      case 'CE_EnqueuePromptWithMedia': {
+        const contextKey = String(args[0]);
+        const promptText = String(args[1]);
+        const maxOutputTokens = Number(args[2]);
+        const imageCount = Number(args[3]);
+        const flatPtr = Number(args[4]);
+        const sizesPtr = Number(args[5]);
+        const callbackPtr = Number(args[6]);
+        const images: Uint8Array[] = [];
+        let offset = 0;
+        for (let index = 0; index < imageCount; index += 1) {
+          const byteLength = this.HEAP32[(sizesPtr >> 2) + index];
+          images.push(this.HEAPU8.slice(flatPtr + offset, flatPtr + offset + byteLength));
+          offset += byteLength;
+        }
+        this.lastMediaEnqueue = {
+          contextKey,
+          promptText,
+          maxOutputTokens,
+          callbackPtr,
+          images,
+        };
+        return 77;
+      }
+      case 'CE_Init':
+      case 'CE_InitWithMultimodal':
+        this.lastInitCall = { ident, args };
+        return 0;
       case 'CE_FreeString':
         this.lastFreedBackendPtr = Number(args[0]);
+        this.freedStringPointers.push(Number(args[0]));
         return 0;
       case 'CE_Close':
         this.closeCallCount += 1;
@@ -347,6 +411,98 @@ test('WasmBridge fetches backend observability JSON and frees the returned strin
 
   assert.equal(raw, module.backendJson);
   assert.notEqual(module.lastFreedBackendPtr, 0);
+});
+
+test('WasmBridge calls multimodal init when a projector path is configured', async () => {
+  const module = new MockWasmBridgeModule();
+  const bridge = new WasmBridge(module);
+
+  await bridge.initEngine('/models/model.gguf', {
+    nCtx: 4096,
+    nBatch: 256,
+    nUbatch: 256,
+    nSeqMax: 1,
+    nThreads: 2,
+    nThreadsBatch: 2,
+    nGpuLayers: 99,
+    flashAttention: -1,
+    kvUnified: -1,
+    maxCachedSessions: 8,
+    retainedPrefixTokens: 100,
+    prefillChunkSize: 0,
+    prefixCacheIntervalTokens: 128,
+    maxPrefixCacheEntries: 32,
+    schedulerPolicy: 1,
+    decodeTokenReserve: 1,
+    adaptivePrefillChunking: 0,
+    enableRuntimeObservability: 0,
+    enableBackendProfiling: 0,
+    multimodalProjectorPath: '/models/mmproj.gguf',
+    imageMinTokens: 64,
+    imageMaxTokens: 256,
+  });
+
+  assert.deepEqual(module.lastInitCall, {
+    ident: 'CE_InitWithMultimodal',
+    args: [
+      '/models/model.gguf',
+      4096,
+      256,
+      256,
+      1,
+      2,
+      2,
+      99,
+      -1,
+      -1,
+      8,
+      100,
+      0,
+      128,
+      32,
+      1,
+      1,
+      0,
+      0,
+      0,
+      '/models/mmproj.gguf',
+      64,
+      256,
+    ],
+  });
+});
+
+test('WasmBridge flattens media buffers and frees the native template string', () => {
+  const module = new MockWasmBridgeModule();
+  module.chatTemplate = 'template';
+  module.mediaMarker = '<__media__>';
+  module.appliedChatTemplateText = 'templated prompt';
+  const bridge = new WasmBridge(module);
+
+  assert.equal(bridge.getMediaMarker(), '<__media__>');
+  assert.equal(bridge.getChatTemplate(), 'template');
+  assert.equal(
+    bridge.applyChatTemplate([{ role: 'user', content: 'hello' }], true),
+    'templated prompt'
+  );
+
+  const requestId = bridge.enqueuePromptWithMedia(
+    'ctx',
+    'look <__media__>',
+    16,
+    [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5])],
+    9
+  );
+
+  assert.equal(requestId, 77);
+  assert.deepEqual(module.lastMediaEnqueue, {
+    contextKey: 'ctx',
+    promptText: 'look <__media__>',
+    maxOutputTokens: 16,
+    callbackPtr: 9,
+    images: [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5])],
+  });
+  assert.ok(module.freedStringPointers.length >= 1);
 });
 
 test('WasmBridge decodes token callbacks through the function table', () => {

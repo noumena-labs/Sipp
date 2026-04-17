@@ -32,6 +32,9 @@ export interface InferenceInitConfig {
   adaptivePrefillChunking?: boolean;
   enableRuntimeObservability?: boolean;
   enableBackendProfiling?: boolean;
+  multimodalProjectorPath?: string;
+  imageMinTokens?: number;
+  imageMaxTokens?: number;
 }
 
 export interface PromptOptions {
@@ -39,6 +42,7 @@ export interface PromptOptions {
   promptFormat?: PromptFormatMode;
   signal?: AbortSignal;
   onToken?: (token: string) => void;
+  media?: Uint8Array[];
 }
 
 export type GenerateRequestId = number;
@@ -48,6 +52,7 @@ export interface GenerateRequest {
   promptText: string;
   maxOutputTokens: number;
   promptFormat: PromptFormatMode;
+  media?: Uint8Array[];
 }
 
 export interface GenerateResponse {

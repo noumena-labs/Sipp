@@ -39,6 +39,36 @@ export function toTransferableChunkBuffer(chunk: Uint8Array): ArrayBuffer {
   return chunk.slice().buffer;
 }
 
+export function toTransferableMediaBuffers(media: Uint8Array[]): ArrayBuffer[] {
+  return media.map((item) => item.slice().buffer);
+}
+
+export function countOccurrences(value: string, needle: string): number {
+  if (needle.length === 0) {
+    return 0;
+  }
+
+  let count = 0;
+  let index = 0;
+  while (index <= value.length - needle.length) {
+    const found = value.indexOf(needle, index);
+    if (found < 0) {
+      break;
+    }
+    count += 1;
+    index = found + needle.length;
+  }
+
+  return count;
+}
+
+export function normalizeOptionalString(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0) {
+    return null;
+  }
+  return value;
+}
+
 export function toWorkerSerializableConfig(
   config: CogentConfig
 ): WorkerSerializableCogentConfig {

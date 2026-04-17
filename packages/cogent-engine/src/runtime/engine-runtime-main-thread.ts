@@ -4,7 +4,10 @@ import {
 } from '../storage/browser-model-cache.js';
 import { CogentConfig, EngineModuleOptions } from '../cogent-config.js';
 import { normalizeInitConfig } from '../core/init-config.js';
-import { formatPromptText } from '../core/prompt-format.js';
+import {
+  normalizePromptText,
+  resolveEffectivePromptFormat,
+} from '../core/prompt-format.js';
 import {
   BackendObservability,
   EngineExecutionMode,
@@ -12,8 +15,11 @@ import {
   GenerateRequestId,
   GenerateResponse,
   InferenceInitConfig,
+  ModelBundleDescriptor,
   ModelLoadInfo,
   PromptOptions,
+  PreparedModelBundle,
+  PrepareModelBundleOptions,
   RuntimeAggregateObservabilityMetrics,
   TransportObservability,
 } from '../types.js';
@@ -46,6 +52,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private wasmBridge: WasmBridge | null = null;
   private initPromise: Promise<void> | null = null;
   private engineInitialized = false;
+  private cachedMediaMarker: string | null = null;
+  private cachedChatTemplate: string | null = null;
   private readonly opfs = new FileSystemStorage();
   private readonly browserModelCache = new BrowserModelCache(this.opfs);
   private readonly modelLoader: MainThreadModelLoader;
@@ -183,17 +191,52 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return input.promptFormat ?? DEFAULT_PROMPT_FORMAT;
   }
 
+  private resolvePromptMedia(
+    input: PromptOptions | number | undefined
+  ): Uint8Array[] | undefined {
+    if (typeof input === 'number' || input === undefined || input.media == null) {
+      return undefined;
+    }
+    if (!Array.isArray(input.media)) {
+      throw new Error('media must be an array of Uint8Array instances.');
+    }
+    if (input.media.length === 0) {
+      return undefined;
+    }
+    if (input.media.some((image) => !(image instanceof Uint8Array))) {
+      throw new Error('media entries must be Uint8Array instances.');
+    }
+    return input.media;
+  }
+
+  private countMarkerOccurrences(promptText: string, marker: string): number {
+    const escapedMarker = marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return (promptText.match(new RegExp(escapedMarker, 'g')) ?? []).length;
+  }
+
   private buildGenerateRequest(
+    bridge: WasmBridge,
     contextKey: string,
     promptText: string,
     options: number | PromptOptions
   ): GenerateRequest {
-    const promptFormat = this.resolvePromptFormat(options);
+    const media = this.resolvePromptMedia(options);
+    const promptFormat = resolveEffectivePromptFormat(
+      this.resolvePromptFormat(options),
+      Boolean(media && media.length > 0)
+    );
+    const normalizedPromptText = normalizePromptText(promptText);
+    const formattedPromptText =
+      promptFormat === 'auto-chat' && media == null && this.cachedChatTemplate != null
+        ? bridge.applyChatTemplate([{ role: 'user', content: normalizedPromptText }], true) ||
+          normalizedPromptText
+        : normalizedPromptText;
     return {
       contextKey,
-      promptText: formatPromptText(promptText, promptFormat),
+      promptText: formattedPromptText,
       maxOutputTokens: this.resolvePromptTokenCount(options),
       promptFormat,
+      media,
     };
   }
 
@@ -323,6 +366,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     }
     this.runtimeObservabilityEnabled = false;
     this.backendProfilingEnabled = false;
+    this.cachedMediaMarker = null;
+    this.cachedChatTemplate = null;
     this.transportObservability = {
       ...DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY,
     };
@@ -520,15 +565,25 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return this.modelLoader.loadModelFromUrls(module, urls, onProgress, signal);
   }
 
+  public async prepareModelBundle(
+    descriptor: ModelBundleDescriptor,
+    options?: PrepareModelBundleOptions
+  ): Promise<PreparedModelBundle> {
+    const module = await this.ensureModule();
+    return this.modelLoader.prepareModelBundle(module, descriptor, options);
+  }
+
   /**
    * Initialize engine state with a model path in MEMFS.
    */
   public async initEngine(
-    modelPath: string,
+    modelPathOrBundle: string | PreparedModelBundle,
     config?: InferenceInitConfig
   ): Promise<void> {
     const module = await this.ensureModule();
     const bridge = this.getLoadedWasmBridge();
+    const modelPath =
+      typeof modelPathOrBundle === 'string' ? modelPathOrBundle : modelPathOrBundle.modelPath;
     if (!modelPath || modelPath.trim().length === 0) {
       throw new Error('modelPath must not be empty.');
     }
@@ -542,7 +597,16 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       this.resetRuntimeLifecycleState();
     }
 
-    const normalizedConfig = normalizeInitConfig(config);
+    const effectiveConfig =
+      typeof modelPathOrBundle === 'string' ||
+      this.hasExplicitProjectorPath(config) ||
+      modelPathOrBundle.multimodalProjectorPath == null
+        ? config
+        : {
+            ...config,
+            multimodalProjectorPath: modelPathOrBundle.multimodalProjectorPath,
+          };
+    const normalizedConfig = normalizeInitConfig(effectiveConfig);
     this.runtimeObservabilityEnabled =
       normalizedConfig.enableRuntimeObservability > 0;
     this.backendProfilingEnabled = normalizedConfig.enableBackendProfiling > 0;
@@ -556,8 +620,17 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       throw new Error(`Failed to initialize engine. Code: ${result}`);
     }
     this.engineInitialized = true;
+    this.cachedMediaMarker = bridge.getMediaMarker();
+    this.cachedChatTemplate = bridge.getChatTemplate();
 
     this.modelLoader.cleanupAfterEngineInit(module);
+  }
+
+  private hasExplicitProjectorPath(config: InferenceInitConfig | undefined): boolean {
+    return (
+      typeof config?.multimodalProjectorPath === 'string' &&
+      config.multimodalProjectorPath.trim().length > 0
+    );
   }
 
   /**
@@ -614,7 +687,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     options: number | PromptOptions = 128
   ): Promise<GenerateRequestId> {
     const bridge = this.getReadyEngineBridge();
-    const request = this.buildGenerateRequest(contextKey, promptText, options);
+    const request = this.buildGenerateRequest(bridge, contextKey, promptText, options);
     const onToken = typeof options === 'object' ? options.onToken : undefined;
     const signal = typeof options === 'object' ? options.signal : undefined;
 
@@ -641,12 +714,36 @@ export class MainThreadEngineRuntime implements EngineRuntime {
           });
 
     try {
-      requestId = bridge.enqueuePrompt(
-        request.contextKey,
-        request.promptText,
-        request.maxOutputTokens,
-        Number(callbackPtr)
-      );
+      if (request.media != null && request.media.length > 0) {
+        if (this.cachedMediaMarker == null) {
+          throw new Error(
+            'Loaded runtime does not expose a media marker for the current model.'
+          );
+        }
+        const markerCount = this.countMarkerOccurrences(
+          request.promptText,
+          this.cachedMediaMarker
+        );
+        if (markerCount !== request.media.length) {
+          throw new Error(
+            `Prompt contains ${markerCount} media marker(s) but ${request.media.length} image(s) were provided. Use "${this.cachedMediaMarker}" in your prompt to place each image.`
+          );
+        }
+        requestId = bridge.enqueuePromptWithMedia(
+          request.contextKey,
+          request.promptText,
+          request.maxOutputTokens,
+          request.media,
+          Number(callbackPtr)
+        );
+      } else {
+        requestId = bridge.enqueuePrompt(
+          request.contextKey,
+          request.promptText,
+          request.maxOutputTokens,
+          Number(callbackPtr)
+        );
+      }
     } catch (error) {
       if (callbackPtr !== 0) {
         bridge.unregisterCallback(callbackPtr);
@@ -736,15 +833,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     promptText: string,
     options: number | PromptOptions = 128
   ): Promise<string> {
-    const request = this.buildGenerateRequest(contextKey, promptText, options);
-    const onToken = typeof options === 'object' ? options.onToken : undefined;
     const signal = typeof options === 'object' ? options.signal : undefined;
-    const requestId = await this.queuePrompt(request.contextKey, request.promptText, {
-      nTokens: request.maxOutputTokens,
-      promptFormat: request.promptFormat,
-      onToken,
-      signal,
-    });
+    const requestId = await this.queuePrompt(contextKey, promptText, options);
     const response = await this.runQueuedRequest(requestId, { signal });
     if (response.cancelled) {
       throw createAbortError(response.errorMessage ?? 'Queued prompt cancelled.');
@@ -765,6 +855,14 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
   public getRuntimeObservability(): RuntimeAggregateObservabilityMetrics | null {
     return this.getRuntimeAggregateObservability();
+  }
+
+  public getMediaMarker(): string | null {
+    return this.cachedMediaMarker;
+  }
+
+  public getChatTemplate(): string | null {
+    return this.cachedChatTemplate;
   }
 
   public async getBackendObservability(): Promise<BackendObservability | null> {

@@ -5,8 +5,11 @@ import {
   GenerateRequestId,
   GenerateResponse,
   InferenceInitConfig,
+  ModelBundleDescriptor,
   ModelLoadInfo,
   PromptOptions,
+  PreparedModelBundle,
+  PrepareModelBundleOptions,
   RuntimeAggregateObservabilityMetrics,
   TransportObservability,
 } from '../types.js';
@@ -15,13 +18,18 @@ import {
   WorkerRequestMessage,
   WorkerResponseMessage,
   WorkerLoadModelResult,
+  WorkerPrepareModelBundleResult,
   WorkerRunQueuedRequestResult,
   WorkerBackendObservabilityResult,
+  WorkerRuntimeMetadata,
 } from './engine-runtime-worker-protocol.js';
 import { createAbortError } from '../utils/abort.js';
 import {
   createDefaultTransportObservability,
+  countOccurrences,
   PendingWorkerCall,
+  normalizeOptionalString,
+  toTransferableMediaBuffers,
   toTransferableChunkBuffer,
   toWorkerSerializableConfig,
   WithoutCallId,
@@ -48,6 +56,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
   private readonly queuedTokenErrors = new Map<GenerateRequestId, unknown>();
   private readonly tracker = new RequestTracker<WorkerRunQueuedRequestResult>();
   private lastWorkerTerminalError: unknown = null;
+  private cachedRuntimeMetadata: WorkerRuntimeMetadata | null = null;
   private runtimeAggregateObservability: RuntimeAggregateObservabilityMetrics | null = null;
   private lastModelLoadInfo: ModelLoadInfo | null = null;
   private transportObservability: TransportObservability = createDefaultTransportObservability();
@@ -258,17 +267,64 @@ export class WorkerEngineRuntime implements EngineRuntime {
     return result.modelPath;
   }
 
+  public async prepareModelBundle(
+    descriptor: ModelBundleDescriptor,
+    options?: PrepareModelBundleOptions
+  ): Promise<PreparedModelBundle> {
+    await this.ensureWorkerInitialized();
+    if (options?.signal?.aborted) {
+      throw createAbortError('Model load aborted.');
+    }
+
+    const callId = this.nextCallId++;
+    const result = (await this.callWorkerWithAbort<
+      Extract<WorkerRequestMessage, { kind: 'prepare-model-bundle' }>
+    >(
+      callId,
+      {
+        kind: 'prepare-model-bundle',
+        descriptor,
+      },
+      options?.signal
+    )) as WorkerPrepareModelBundleResult;
+    this.lastModelLoadInfo = result.bundle.modelLoadInfo;
+    this.transportObservability = result.transportObservability;
+    return result.bundle;
+  }
+
   public async initEngine(
-    modelPath: string,
+    modelPathOrBundle: string | PreparedModelBundle,
     config?: InferenceInitConfig
   ): Promise<void> {
     await this.ensureWorkerInitialized();
     this.resetQueuedRequestLifecycleState();
-    await this.callWorker<Extract<WorkerRequestMessage, { kind: 'init-engine' }>>({
+    this.cachedRuntimeMetadata = null;
+    const modelPath =
+      typeof modelPathOrBundle === 'string' ? modelPathOrBundle : modelPathOrBundle.modelPath;
+    const effectiveConfig =
+      typeof modelPathOrBundle === 'string' ||
+      this.hasExplicitProjectorPath(config) ||
+      modelPathOrBundle.multimodalProjectorPath == null
+        ? config
+        : {
+            ...config,
+            multimodalProjectorPath: modelPathOrBundle.multimodalProjectorPath,
+          };
+    const metadata = (await this.callWorker<
+      Extract<WorkerRequestMessage, { kind: 'init-engine' }>
+    >({
       kind: 'init-engine',
       modelPath,
-      config,
-    });
+      config: effectiveConfig,
+    })) as WorkerRuntimeMetadata;
+    this.cachedRuntimeMetadata = this.normalizeRuntimeMetadata(metadata);
+  }
+
+  private hasExplicitProjectorPath(config: InferenceInitConfig | undefined): boolean {
+    return (
+      typeof config?.multimodalProjectorPath === 'string' &&
+      config.multimodalProjectorPath.trim().length > 0
+    );
   }
 
   public close(): void {
@@ -378,22 +434,63 @@ export class WorkerEngineRuntime implements EngineRuntime {
     await this.ensureWorkerInitialized();
     const onToken = typeof options === 'object' ? options.onToken : undefined;
     const signal = typeof options === 'object' ? options.signal : undefined;
+    const media = typeof options === 'object' ? options.media : undefined;
     const callId = this.nextCallId++;
     this.pendingQueuedTokenCallbacks.set(callId, onToken);
+
+    const hasMedia = media != null && media.length > 0;
+    const promptFormat =
+      hasMedia
+        ? 'raw'
+        : typeof options === 'number'
+          ? undefined
+          : options.promptFormat;
+    if (hasMedia) {
+      const marker = this.getMediaMarker();
+      if (!marker) {
+        this.pendingQueuedTokenCallbacks.delete(callId);
+        throw new Error('Media prompts require cached media marker metadata.');
+      }
+      const markerCount = countOccurrences(promptText, marker);
+      if (markerCount !== media.length) {
+        this.pendingQueuedTokenCallbacks.delete(callId);
+        throw new Error(
+          `Prompt contains ${markerCount} media marker(s) but ${media.length} media attachment(s) were provided.`
+        );
+      }
+    }
+
+    const transferableMedia = hasMedia ? toTransferableMediaBuffers(media!) : undefined;
 
     let requestId: GenerateRequestId;
     try {
       requestId = (await this.callWorkerWithId<
-        Extract<WorkerRequestMessage, { kind: 'queue-prompt' }>
-      >(callId, {
-        kind: 'queue-prompt',
-        contextKey,
-        promptText,
-        options: {
-          nTokens: typeof options === 'number' ? options : options.nTokens,
-          promptFormat: typeof options === 'number' ? undefined : options.promptFormat,
-        },
-      })) as GenerateRequestId;
+        Extract<WorkerRequestMessage, { kind: 'queue-prompt' | 'queue-prompt-with-media' }>
+      >(
+        callId,
+        hasMedia
+          ? {
+              kind: 'queue-prompt-with-media',
+              contextKey,
+              promptText,
+              options: {
+                nTokens: typeof options === 'number' ? options : options.nTokens,
+                promptFormat,
+                media: transferableMedia,
+              },
+            }
+          : {
+              kind: 'queue-prompt',
+              contextKey,
+              promptText,
+              options: {
+                nTokens: typeof options === 'number' ? options : options.nTokens,
+                promptFormat,
+              },
+            },
+        undefined,
+        hasMedia ? transferableMedia ?? [] : []
+      )) as GenerateRequestId;
     } catch (error) {
       this.pendingQueuedTokenCallbacks.delete(callId);
       throw error;
@@ -407,6 +504,14 @@ export class WorkerEngineRuntime implements EngineRuntime {
     this.attachSignal(requestId, signal);
     this.ensureTracked(requestId);
     return requestId;
+  }
+
+  public getChatTemplate(): string | null {
+    return this.cachedRuntimeMetadata?.chatTemplate ?? null;
+  }
+
+  public getMediaMarker(): string | null {
+    return this.cachedRuntimeMetadata?.mediaMarker ?? null;
   }
 
   public async runQueuedRequest(
@@ -510,6 +615,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
     this.queuedTokenCallbacks.clear();
     this.pendingQueuedTokenCallbacks.clear();
     this.queuedTokenErrors.clear();
+    this.cachedRuntimeMetadata = null;
     this.runtimeAggregateObservability = null;
     this.lastModelLoadInfo = null;
     this.transportObservability = createDefaultTransportObservability();
@@ -655,16 +761,18 @@ export class WorkerEngineRuntime implements EngineRuntime {
 
   private async callWorker<T extends WorkerRequestMessage>(
     message: WithoutCallId<T>,
-    onProgress?: (pct: number) => void
+    onProgress?: (pct: number) => void,
+    transferables: Transferable[] = []
   ): Promise<unknown> {
     const callId = this.nextCallId++;
-    return this.callWorkerWithId(callId, message, onProgress);
+    return this.callWorkerWithId(callId, message, onProgress, transferables);
   }
 
   private async callWorkerWithId<T extends WorkerRequestMessage>(
     callId: number,
     message: WithoutCallId<T>,
-    onProgress?: (pct: number) => void
+    onProgress?: (pct: number) => void,
+    transferables: Transferable[] = []
   ): Promise<unknown> {
     if (this.worker == null) {
       throw new Error('Worker runtime is not available.');
@@ -681,7 +789,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
         reject,
         onProgress,
       });
-      this.postWorkerMessage(request);
+      this.postWorkerMessage(request, transferables);
     });
   }
 
@@ -689,7 +797,8 @@ export class WorkerEngineRuntime implements EngineRuntime {
     callId: number,
     message: WithoutCallId<T>,
     signal?: AbortSignal,
-    onProgress?: (pct: number) => void
+    onProgress?: (pct: number) => void,
+    transferables: Transferable[] = []
   ): Promise<unknown> {
     if (signal?.aborted) {
       throw createAbortError('Model load aborted.');
@@ -706,7 +815,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
     }
 
     try {
-      return await this.callWorkerWithId(callId, message, onProgress);
+      return await this.callWorkerWithId(callId, message, onProgress, transferables);
     } finally {
       if (abortListener != null) {
         signal?.removeEventListener('abort', abortListener);
@@ -740,5 +849,14 @@ export class WorkerEngineRuntime implements EngineRuntime {
         reject(error);
       }
     });
+  }
+
+  private normalizeRuntimeMetadata(
+    metadata: WorkerRuntimeMetadata | null | undefined
+  ): WorkerRuntimeMetadata {
+    return {
+      chatTemplate: normalizeOptionalString(metadata?.chatTemplate),
+      mediaMarker: normalizeOptionalString(metadata?.mediaMarker),
+    };
   }
 }

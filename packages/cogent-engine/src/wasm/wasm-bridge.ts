@@ -27,6 +27,11 @@ import {
 
 const RUNTIME_EVENT_DRAIN_TEXT_BUFFER_SIZE_BYTES = 64 * 1024;
 
+type ChatTemplateMessage = {
+  role: string;
+  content: string;
+};
+
 export type WasmRuntimeTokenEvent = {
   requestId: GenerateRequestId;
   token: string;
@@ -101,55 +106,110 @@ export class WasmBridge {
     modelPath: string,
     normalizedConfig: NormalizedInitConfig
   ): Promise<number> {
-    const result = await this.module.ccall(
-      'CE_Init',
-      'number',
-      [
-        'string',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-      ],
-      [
-        modelPath,
-        normalizedConfig.nCtx,
-        normalizedConfig.nBatch,
-        normalizedConfig.nUbatch,
-        normalizedConfig.nSeqMax,
-        normalizedConfig.nThreads,
-        normalizedConfig.nThreadsBatch,
-        normalizedConfig.nGpuLayers,
-        normalizedConfig.flashAttention,
-        normalizedConfig.kvUnified,
-        normalizedConfig.maxCachedSessions,
-        normalizedConfig.retainedPrefixTokens,
-        normalizedConfig.prefillChunkSize,
-        normalizedConfig.prefixCacheIntervalTokens,
-        normalizedConfig.maxPrefixCacheEntries,
-        normalizedConfig.schedulerPolicy,
-        normalizedConfig.decodeTokenReserve,
-        normalizedConfig.adaptivePrefillChunking,
-        normalizedConfig.enableRuntimeObservability,
-        normalizedConfig.enableBackendProfiling,
-      ],
-      { async: true }
-    );
+    const hasMultimodalConfig =
+      normalizedConfig.multimodalProjectorPath != null ||
+      normalizedConfig.imageMinTokens > 0 ||
+      normalizedConfig.imageMaxTokens > 0;
+    const ident = hasMultimodalConfig ? 'CE_InitWithMultimodal' : 'CE_Init';
+    const argTypes = hasMultimodalConfig
+      ? [
+          'string',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'string',
+          'number',
+          'number',
+        ]
+      : [
+          'string',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+        ];
+    const args = hasMultimodalConfig
+      ? [
+          modelPath,
+          normalizedConfig.nCtx,
+          normalizedConfig.nBatch,
+          normalizedConfig.nUbatch,
+          normalizedConfig.nSeqMax,
+          normalizedConfig.nThreads,
+          normalizedConfig.nThreadsBatch,
+          normalizedConfig.nGpuLayers,
+          normalizedConfig.flashAttention,
+          normalizedConfig.kvUnified,
+          normalizedConfig.maxCachedSessions,
+          normalizedConfig.retainedPrefixTokens,
+          normalizedConfig.prefillChunkSize,
+          normalizedConfig.prefixCacheIntervalTokens,
+          normalizedConfig.maxPrefixCacheEntries,
+          normalizedConfig.schedulerPolicy,
+          normalizedConfig.decodeTokenReserve,
+          normalizedConfig.adaptivePrefillChunking,
+          normalizedConfig.enableRuntimeObservability,
+          normalizedConfig.enableBackendProfiling,
+          normalizedConfig.multimodalProjectorPath ?? '',
+          normalizedConfig.imageMinTokens,
+          normalizedConfig.imageMaxTokens,
+        ]
+      : [
+          modelPath,
+          normalizedConfig.nCtx,
+          normalizedConfig.nBatch,
+          normalizedConfig.nUbatch,
+          normalizedConfig.nSeqMax,
+          normalizedConfig.nThreads,
+          normalizedConfig.nThreadsBatch,
+          normalizedConfig.nGpuLayers,
+          normalizedConfig.flashAttention,
+          normalizedConfig.kvUnified,
+          normalizedConfig.maxCachedSessions,
+          normalizedConfig.retainedPrefixTokens,
+          normalizedConfig.prefillChunkSize,
+          normalizedConfig.prefixCacheIntervalTokens,
+          normalizedConfig.maxPrefixCacheEntries,
+          normalizedConfig.schedulerPolicy,
+          normalizedConfig.decodeTokenReserve,
+          normalizedConfig.adaptivePrefillChunking,
+          normalizedConfig.enableRuntimeObservability,
+          normalizedConfig.enableBackendProfiling,
+        ];
+    const result = await this.module.ccall(ident, 'number', argTypes, args, {
+      async: true,
+    });
     return Number(result);
   }
 
@@ -177,6 +237,88 @@ export class WasmBridge {
       throw new Error('Unexpected async result while enqueuing a request.');
     }
     return requestId as GenerateRequestId;
+  }
+
+  public enqueuePromptWithMedia(
+    contextKey: string,
+    promptText: string,
+    maxOutputTokens: number,
+    media: Uint8Array[],
+    callbackPtr: number
+  ): GenerateRequestId {
+    const totalBytes = media.reduce((sum, image) => sum + image.byteLength, 0);
+    const flatPtr = this.allocate(Math.max(1, totalBytes));
+    const sizesPtr = this.allocate(Math.max(1, media.length * 4));
+
+    try {
+      let offset = 0;
+      for (let index = 0; index < media.length; index += 1) {
+        const image = media[index];
+        this.module.HEAPU8.set(image, flatPtr + offset);
+        this.module.HEAP32[(sizesPtr >> 2) + index] = image.byteLength;
+        offset += image.byteLength;
+      }
+
+      return this.callNumber(
+        'CE_EnqueuePromptWithMedia',
+        ['string', 'string', 'number', 'number', 'pointer', 'pointer', 'pointer'],
+        [contextKey, promptText, maxOutputTokens, media.length, flatPtr, sizesPtr, callbackPtr]
+      ) as GenerateRequestId;
+    } finally {
+      this.free(flatPtr);
+      this.free(sizesPtr);
+    }
+  }
+
+  public getMediaMarker(): string | null {
+    try {
+      const ptr = this.callNumber('CE_GetMediaMarker');
+      return ptr ? this.module.UTF8ToString(ptr) : null;
+    } catch (error) {
+      if (this.isMissingOptionalRuntimeApiError('CE_GetMediaMarker', error)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  public getChatTemplate(): string | null {
+    try {
+      const ptr = this.callNumber('CE_GetChatTemplate');
+      return ptr ? this.module.UTF8ToString(ptr) : null;
+    } catch (error) {
+      if (this.isMissingOptionalRuntimeApiError('CE_GetChatTemplate', error)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  public applyChatTemplate(
+    messages: ChatTemplateMessage[],
+    addAssistant: boolean
+  ): string {
+    try {
+      const ptr = this.callNumber(
+        'CE_ApplyChatTemplate',
+        ['string', 'number'],
+        [JSON.stringify(messages), addAssistant ? 1 : 0]
+      );
+      if (!ptr) {
+        return '';
+      }
+
+      try {
+        return this.module.UTF8ToString(ptr);
+      } finally {
+        this.module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
+      }
+    } catch (error) {
+      if (this.isMissingOptionalRuntimeApiError('CE_ApplyChatTemplate', error)) {
+        return '';
+      }
+      throw error;
+    }
   }
 
   public async cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean> {

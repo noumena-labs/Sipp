@@ -1,13 +1,18 @@
 import { CogentConfig } from '../cogent-config.js';
 import { MainThreadEngineRuntime } from './engine-runtime-main-thread.js';
 import { GenerateRequestId, TransportObservability } from '../types.js';
-import { WorkerResponseMessage, WorkerSerializableCogentConfig } from './engine-runtime-worker-protocol.js';
+import {
+  WorkerResponseMessage,
+  WorkerRuntimeMetadata,
+  WorkerSerializableCogentConfig,
+} from './engine-runtime-worker-protocol.js';
 import {
   DEFAULT_QUEUED_REQUEST_PUMP_IDLE_STREAK_BEFORE_YIELD,
   DEFAULT_QUEUED_REQUEST_PUMP_SYNC_BURST_LIMIT,
   runQueuedRequestPumpLoop,
 } from './queued-request-pump.js';
 import { createAbortError } from '../utils/abort.js';
+import { countOccurrences, normalizeOptionalString } from './worker-runtime-utils.js';
 
 interface BufferedTokenState {
   text: string;
@@ -34,6 +39,7 @@ const DEFAULT_MAX_BUFFERED_TOKENS = 8;
 const DEFAULT_FLUSH_INTERVAL_MS = 16;
 export class WorkerEntryState {
   private engine: MainThreadEngineRuntime | null = null;
+  private cachedRuntimeMetadata: WorkerRuntimeMetadata | null = null;
   private readonly requestAbortControllers = new Map<GenerateRequestId, AbortController>();
   private readonly bufferedTokens = new Map<GenerateRequestId, BufferedTokenState>();
   private readonly runningRequestIds = new Set<GenerateRequestId>();
@@ -90,6 +96,16 @@ export class WorkerEntryState {
     await this.engine.initModule();
   }
 
+  public async initEngine(
+    modelPath: string,
+    config?: import('../types.js').InferenceInitConfig
+  ): Promise<WorkerRuntimeMetadata> {
+    this.cachedRuntimeMetadata = null;
+    await this.ensureEngine().initEngine(modelPath, config);
+    this.cachedRuntimeMetadata = this.readRuntimeMetadata();
+    return { ...this.cachedRuntimeMetadata };
+  }
+
   public abortAllModelLoads(): void {
     for (const callId of this.activeModelLoads.keys()) {
       this.abortModelLoad(callId);
@@ -134,6 +150,13 @@ export class WorkerEntryState {
 
   public setRuntimeObservabilityEnabled(enabled: boolean): void {
     this.transportObservability.enabled = enabled;
+  }
+
+  public getRuntimeMetadata(): WorkerRuntimeMetadata {
+    if (this.cachedRuntimeMetadata == null) {
+      this.cachedRuntimeMetadata = this.readRuntimeMetadata();
+    }
+    return { ...this.cachedRuntimeMetadata };
   }
 
   public setRequestSettlementHandler(
@@ -203,6 +226,41 @@ export class WorkerEntryState {
       callId,
     };
     self.postMessage(response);
+  }
+
+  public queuePrompt(
+    contextKey: string,
+    promptText: string,
+    options: {
+      nTokens?: number;
+      promptFormat?: import('../types.js').PromptFormatMode;
+      media?: Uint8Array[];
+      signal?: AbortSignal;
+      onToken?: (token: string) => void;
+    }
+  ): Promise<GenerateRequestId> {
+    const runtime = this.ensureEngine();
+    const media = options.media != null && options.media.length > 0 ? options.media : undefined;
+    if (media != null) {
+      const marker = this.getRuntimeMetadata().mediaMarker;
+      if (!marker) {
+        throw new Error('Media prompts require cached media marker metadata.');
+      }
+      const markerCount = countOccurrences(promptText, marker);
+      if (markerCount !== media.length) {
+        throw new Error(
+          `Prompt contains ${markerCount} media marker(s) but ${media.length} media attachment(s) were provided.`
+        );
+      }
+    }
+    const queuedOptions = {
+      nTokens: options.nTokens,
+      promptFormat: media != null ? 'raw' : options.promptFormat,
+      signal: options.signal,
+      onToken: options.onToken,
+      ...(media != null ? { media } : {}),
+    } as import('../types.js').PromptOptions & { media?: Uint8Array[] };
+    return runtime.queuePrompt(contextKey, promptText, queuedOptions);
   }
 
   public closeStreamModelLoad(callId: number): void {
@@ -389,6 +447,16 @@ export class WorkerEntryState {
     return {
       ...config,
       executionMode: 'main-thread',
+    };
+  }
+
+  private readRuntimeMetadata(): WorkerRuntimeMetadata {
+    const runtime = this.ensureEngine();
+    const chatTemplate = normalizeOptionalString(runtime.getChatTemplate());
+    const mediaMarker = normalizeOptionalString(runtime.getMediaMarker());
+    return {
+      chatTemplate,
+      mediaMarker,
     };
   }
 }

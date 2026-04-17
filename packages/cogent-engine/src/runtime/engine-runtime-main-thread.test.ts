@@ -13,12 +13,65 @@ const COMPLETED_REQUEST_STATUS_COMPLETED = 1;
 const COMPLETED_REQUEST_STATUS_CANCELLED = 2;
 const RUNTIME_EVENT_KIND_TOKEN = 1;
 const RUNTIME_EVENT_KIND_TERMINAL = 2;
+const GGUF_MAGIC = 0x46554747;
+
+enum GgufValueType {
+  STRING = 8,
+}
 
 type ScenarioKind = 'success' | 'callback-error';
 type TransportKind = 'callback' | 'event';
 type MockMainThreadModuleOptions = {
   supportsRuntimeEventDrain?: boolean;
 };
+
+const ggufTextEncoder = new TextEncoder();
+
+function encodeUint32(value: number): Uint8Array {
+  const buffer = new ArrayBuffer(4);
+  new DataView(buffer).setUint32(0, value, true);
+  return new Uint8Array(buffer);
+}
+
+function encodeUint64(value: number): Uint8Array {
+  const buffer = new ArrayBuffer(8);
+  new DataView(buffer).setBigUint64(0, BigInt(value), true);
+  return new Uint8Array(buffer);
+}
+
+function encodeString(value: string): Uint8Array {
+  const bytes = ggufTextEncoder.encode(value);
+  return concatBytes(encodeUint64(bytes.length), bytes);
+}
+
+function encodeField(key: string, type: GgufValueType, value: Uint8Array): Uint8Array {
+  return concatBytes(encodeString(key), encodeUint32(type), value);
+}
+
+function buildGguf(fields: Array<{ key: string; type: GgufValueType; value: Uint8Array }>): Uint8Array {
+  return concatBytes(
+    encodeUint32(GGUF_MAGIC),
+    encodeUint32(3),
+    encodeUint64(0),
+    encodeUint64(fields.length),
+    ...fields.map((field) => encodeField(field.key, field.type, field.value))
+  );
+}
+
+function concatBytes(...parts: Uint8Array[]): Uint8Array {
+  const total = parts.reduce((sum, part) => sum + part.byteLength, 0);
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    output.set(part, offset);
+    offset += part.byteLength;
+  }
+  return output;
+}
+
+function toBlobPart(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
 
 class MockMainThreadModule {
   public readonly mountCalls: Array<{ mountDir: string; files: Blob[] }> = [];
@@ -39,6 +92,7 @@ class MockMainThreadModule {
 
   public readonly HEAP32: Int32Array;
   public readonly HEAPF64: Float64Array;
+  public readonly HEAPU8: Uint8Array;
   public insideNativeStep = false;
   public cancelCallCount = 0;
   public consumeCallCount = 0;
@@ -47,6 +101,14 @@ class MockMainThreadModule {
   public removedFunctionPtrs: number[] = [];
   public initResult = 0;
   public lastQueuedCallbackPtr = 0;
+  public mediaMarker: string | null = null;
+  public chatTemplate: string | null = null;
+  public appliedChatTemplateText = '';
+  public lastQueuedPromptText = '';
+  public lastQueuedEnqueueKind: 'text' | 'media' | null = null;
+  public lastQueuedMediaImages: Uint8Array[] = [];
+  public lastInitIdent: string | null = null;
+  public lastInitArgs: unknown[] | null = null;
 
   private readonly heapU8: Uint8Array;
   private readonly functionTable = new Map<number, (...args: number[]) => number>();
@@ -74,6 +136,7 @@ class MockMainThreadModule {
   ) {
     const memory = new ArrayBuffer(2 * 1024 * 1024);
     this.heapU8 = new Uint8Array(memory);
+    this.HEAPU8 = this.heapU8;
     this.HEAP32 = new Int32Array(memory);
     this.HEAPF64 = new Float64Array(memory);
     this.completedOutputText =
@@ -156,9 +219,30 @@ class MockMainThreadModule {
   private handleCall(ident: string, args: unknown[]): number {
     switch (ident) {
       case 'CE_EnqueuePrompt':
+        this.lastQueuedEnqueueKind = 'text';
+        this.lastQueuedPromptText = String(args[1]);
         this.queuedCallbackPtr = Number(args[3]);
         this.lastQueuedCallbackPtr = this.queuedCallbackPtr;
         return this.nextRequestId++;
+      case 'CE_EnqueuePromptWithMedia': {
+        this.lastQueuedEnqueueKind = 'media';
+        this.lastQueuedPromptText = String(args[1]);
+        this.queuedCallbackPtr = Number(args[6]);
+        this.lastQueuedCallbackPtr = this.queuedCallbackPtr;
+        const imageCount = Number(args[3]);
+        const flatPtr = Number(args[4]);
+        const sizesPtr = Number(args[5]);
+        this.lastQueuedMediaImages = [];
+        let offset = 0;
+        for (let index = 0; index < imageCount; index += 1) {
+          const imageSize = this.HEAP32[(sizesPtr >> 2) + index];
+          this.lastQueuedMediaImages.push(
+            this.HEAPU8.slice(flatPtr + offset, flatPtr + offset + imageSize)
+          );
+          offset += imageSize;
+        }
+        return this.nextRequestId++;
+      }
       case 'CE_ResetRuntimeObservability':
         return 0;
       case 'CE_DrainRuntimeEvents':
@@ -178,7 +262,26 @@ class MockMainThreadModule {
         this.closeCallCount += 1;
         return 0;
       case 'CE_Init':
+      case 'CE_InitWithMultimodal':
+        this.lastInitIdent = ident;
+        this.lastInitArgs = [...args];
         return this.initResult;
+      case 'CE_GetMediaMarker':
+        return this.mediaMarker == null ? 0 : this.writeTempCString(this.mediaMarker);
+      case 'CE_GetChatTemplate':
+        return this.chatTemplate == null ? 0 : this.writeTempCString(this.chatTemplate);
+      case 'CE_ApplyChatTemplate': {
+        if (this.chatTemplate == null) {
+          return 0;
+        }
+        const messages = JSON.parse(String(args[0])) as Array<{ role: string; content: string }>;
+        const content = messages.map((message) => message.content).join('|');
+        return this.writeTempCString(
+          this.appliedChatTemplateText || `templated:${content}:${Number(args[1])}`
+        );
+      }
+      case 'CE_FreeString':
+        return 0;
       case 'CE_GetCompletedRequestStatus':
         return this.completedResponseAvailable
           ? this.completedStatus
@@ -757,6 +860,54 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
   });
 }
 
+test('MainThreadEngineRuntime caches native metadata and formats auto-chat prompts via the loaded template', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success');
+  module.mediaMarker = '<__media__>';
+  module.chatTemplate = 'native-template';
+  module.appliedChatTemplateText = 'templated prompt';
+  (runtime as unknown as { module: MockMainThreadModule }).module = module;
+
+  await runtime.initEngine('/models/template.gguf');
+  const requestId = await runtime.queuePrompt('ctx', 'hello world', {
+    nTokens: 16,
+  });
+
+  assert.equal(requestId, 7);
+  assert.equal(runtime.getMediaMarker(), '<__media__>');
+  assert.equal(module.lastInitIdent, 'CE_Init');
+  assert.equal(module.lastQueuedEnqueueKind, 'text');
+  assert.equal(module.lastQueuedPromptText, 'templated prompt');
+});
+
+test('MainThreadEngineRuntime forces raw media prompts through the multimodal enqueue path and validates marker count', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success');
+  module.mediaMarker = '<__media__>';
+  module.chatTemplate = 'native-template';
+  module.appliedChatTemplateText = 'should not be used';
+  (runtime as unknown as { module: MockMainThreadModule }).module = module;
+
+  await runtime.initEngine('/models/vision.gguf');
+  const requestId = await runtime.queuePrompt('ctx', 'describe <__media__>', {
+    nTokens: 16,
+    media: [new Uint8Array([1, 2, 3])],
+  });
+
+  assert.equal(requestId, 7);
+  assert.equal(module.lastQueuedEnqueueKind, 'media');
+  assert.equal(module.lastQueuedPromptText, 'describe <__media__>');
+  assert.deepEqual(module.lastQueuedMediaImages, [new Uint8Array([1, 2, 3])]);
+
+  await assert.rejects(
+    runtime.queuePrompt('ctx', 'describe nothing', {
+      nTokens: 16,
+      media: [new Uint8Array([9])],
+    }),
+    /Prompt contains 0 media marker\(s\) but 1 image\(s\) were provided/
+  );
+});
+
 test('MainThreadEngineRuntime flushes queued tokens outside native steps and reads typed results', async () => {
   const runtime = new MainThreadEngineRuntime({});
   const module = new MockMainThreadModule('success');
@@ -1312,6 +1463,204 @@ test('MainThreadEngineRuntime preserves shard filenames when loading split model
     globalThis.fetch = originalFetch;
     (FileSystemStorage as unknown as { isSupported: () => boolean }).isSupported = originalIsSupported;
   }
+});
+
+test('MainThreadEngineRuntime prepares a discovered vision bundle and mounts model plus projector together', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success');
+  attachReadyModule(runtime, module);
+
+  const originalFetch = globalThis.fetch;
+  const originalIsSupported = FileSystemStorage.isSupported;
+
+  try {
+    (FileSystemStorage as unknown as { isSupported: () => boolean }).isSupported = () => false;
+    globalThis.fetch = (async (url: string, init?: { method?: string }) => {
+      if (url === 'https://huggingface.co/api/models/org/repo') {
+        return new Response(
+          JSON.stringify({
+            siblings: [
+              { rfilename: 'Qwen2-VL-2B-Instruct-Q4_K_M.gguf' },
+              { rfilename: 'mmproj-model-f16.gguf' },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+      if (init?.method === 'HEAD') {
+        return {
+          ok: true,
+          status: 200,
+          headers: {
+            get: () => '4',
+          },
+        } as unknown as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        body: null,
+        arrayBuffer: async () => Uint8Array.from([1, 2, 3, 4]).buffer,
+      } as Response;
+    }) as typeof fetch;
+
+    const bundle = await runtime.prepareModelBundle({
+      kind: 'url',
+      url: 'https://huggingface.co/org/repo/resolve/main/Qwen2-VL-2B-Instruct-Q4_K_M.gguf',
+    });
+    const mountedNames =
+      module.mountCalls.at(-1)?.files.map((file) => (file as { name?: string }).name || 'model.gguf') ?? [];
+
+    assert.equal(bundle.isVisionModel, true);
+    assert.equal(bundle.projectorStatus, 'discovered');
+    assert.equal(bundle.modelPath, '/workerfs_model/Qwen2-VL-2B-Instruct-Q4_K_M.gguf');
+    assert.equal(bundle.multimodalProjectorPath, '/workerfs_model/mmproj-model-f16.gguf');
+    assert.equal(runtime.getLastModelLoadInfo()?.modelPath, bundle.modelPath);
+    assert.deepEqual(mountedNames, [
+      'Qwen2-VL-2B-Instruct-Q4_K_M.gguf',
+      'mmproj-model-f16.gguf',
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    (FileSystemStorage as unknown as { isSupported: () => boolean }).isSupported = originalIsSupported;
+  }
+});
+
+test('MainThreadEngineRuntime auto-pairs local projector files and sorts shard names in prepared bundles', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success');
+  attachReadyModule(runtime, module);
+
+  const bundle = await runtime.prepareModelBundle({
+    kind: 'files',
+    files: [
+      new File([Uint8Array.from([2])], 'Qwen2-VL-2B-Instruct-00002-of-00002.gguf'),
+      new File([Uint8Array.from([9])], 'mmproj-model-f16.gguf'),
+      new File([Uint8Array.from([1])], 'Qwen2-VL-2B-Instruct-00001-of-00002.gguf'),
+    ],
+  });
+  const mountedNames =
+    module.mountCalls.at(-1)?.files.map((file) => (file as { name?: string }).name || 'model.gguf') ?? [];
+
+  assert.equal(bundle.projectorStatus, 'paired');
+  assert.equal(bundle.modelPath, '/workerfs_model/Qwen2-VL-2B-Instruct-00001-of-00002.gguf');
+  assert.equal(bundle.multimodalProjectorPath, '/workerfs_model/mmproj-model-f16.gguf');
+  assert.deepEqual(mountedNames, [
+    'Qwen2-VL-2B-Instruct-00001-of-00002.gguf',
+    'Qwen2-VL-2B-Instruct-00002-of-00002.gguf',
+    'mmproj-model-f16.gguf',
+  ]);
+});
+
+test('MainThreadEngineRuntime pairs a metadata-detected local projector even when the filename is generic', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success');
+  attachReadyModule(runtime, module);
+
+  const bundle = await runtime.prepareModelBundle({
+    kind: 'files',
+    files: [
+      new File(
+        [
+          toBlobPart(buildGguf([
+            {
+              key: 'general.type',
+              type: GgufValueType.STRING,
+              value: encodeString('model'),
+            },
+            {
+              key: 'general.architecture',
+              type: GgufValueType.STRING,
+              value: encodeString('qwen2vl'),
+            },
+          ])),
+        ],
+        'model-00002-of-00002.gguf'
+      ),
+      new File(
+        [
+          toBlobPart(buildGguf([
+            {
+              key: 'general.type',
+              type: GgufValueType.STRING,
+              value: encodeString('mmproj'),
+            },
+            {
+              key: 'general.architecture',
+              type: GgufValueType.STRING,
+              value: encodeString('clip'),
+            },
+          ])),
+        ],
+        'adapter.gguf'
+      ),
+      new File(
+        [
+          toBlobPart(buildGguf([
+            {
+              key: 'general.type',
+              type: GgufValueType.STRING,
+              value: encodeString('model'),
+            },
+            {
+              key: 'general.architecture',
+              type: GgufValueType.STRING,
+              value: encodeString('qwen2vl'),
+            },
+          ])),
+        ],
+        'model-00001-of-00002.gguf'
+      ),
+    ],
+  });
+  const mountedNames =
+    module.mountCalls.at(-1)?.files.map((file) => (file as { name?: string }).name || 'model.gguf') ?? [];
+
+  assert.equal(bundle.isVisionModel, true);
+  assert.equal(bundle.projectorStatus, 'paired');
+  assert.equal(bundle.modelArchitecture, 'qwen2vl');
+  assert.equal(bundle.multimodalProjectorPath, '/workerfs_model/adapter.gguf');
+  assert.deepEqual(mountedNames, [
+    'model-00001-of-00002.gguf',
+    'model-00002-of-00002.gguf',
+    'adapter.gguf',
+  ]);
+});
+
+test('MainThreadEngineRuntime initEngine(bundle) uses bundle projectors by default and respects explicit overrides', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success');
+  attachReadyModule(runtime, module);
+
+  const preparedBundle = {
+    sourceKind: 'url' as const,
+    modelPath: '/workerfs_model/model.gguf',
+    multimodalProjectorPath: '/workerfs_model/mmproj.gguf',
+    isVisionModel: true,
+    projectorStatus: 'explicit' as const,
+    modelName: 'model.gguf',
+    detectionMethod: 'filename' as const,
+    modelType: 'model',
+    modelArchitecture: 'qwen2vl',
+    modelLoadInfo: null,
+    projectorLoadInfo: null,
+  };
+
+  await runtime.initEngine(preparedBundle);
+  assert.equal(module.lastInitIdent, 'CE_InitWithMultimodal');
+  assert.equal(module.lastInitArgs?.[20], '/workerfs_model/mmproj.gguf');
+
+  await runtime.initEngine(preparedBundle, {
+    multimodalProjectorPath: '/override/mmproj.gguf',
+  });
+  assert.equal(module.lastInitArgs?.[20], '/override/mmproj.gguf');
+
+  await runtime.initEngine({
+    ...preparedBundle,
+    multimodalProjectorPath: null,
+    projectorStatus: 'missing',
+  });
+  assert.equal(module.lastInitIdent, 'CE_Init');
 });
 
 test('MainThreadEngineRuntime bounds concurrent non-OPFS URL shard downloads and preserves order', async () => {

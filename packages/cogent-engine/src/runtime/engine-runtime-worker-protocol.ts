@@ -3,8 +3,10 @@ import {
   GenerateRequestId,
   GenerateResponse,
   InferenceInitConfig,
+  ModelBundleDescriptor,
   ModelLoadInfo,
   PromptOptions,
+  PreparedModelBundle,
   RuntimeAggregateObservabilityMetrics,
   TransportObservability,
 } from '../types.js';
@@ -23,9 +25,15 @@ export interface WorkerSerializableCogentConfig {
   debugTokenTransport?: 'auto' | 'runtime-events';
 }
 
+export interface WorkerRuntimeMetadata {
+  chatTemplate: string | null;
+  mediaMarker: string | null;
+}
+
 export interface WorkerQueuedPromptOptions {
   nTokens?: number;
   promptFormat?: PromptOptions['promptFormat'];
+  media?: ArrayBuffer[];
 }
 
 export type WorkerRequestMessage =
@@ -57,6 +65,11 @@ export type WorkerRequestMessage =
       urls: string[];
     }
   | {
+      kind: 'prepare-model-bundle';
+      callId: number;
+      descriptor: ModelBundleDescriptor;
+    }
+  | {
       kind: 'load-model-stream-start';
       callId: number;
       destFileName: string;
@@ -83,6 +96,13 @@ export type WorkerRequestMessage =
     }
   | {
       kind: 'queue-prompt';
+      callId: number;
+      contextKey: string;
+      promptText: string;
+      options: WorkerQueuedPromptOptions;
+    }
+  | {
+      kind: 'queue-prompt-with-media';
       callId: number;
       contextKey: string;
       promptText: string;
@@ -142,6 +162,11 @@ export type WorkerResponseMessage =
 export interface WorkerLoadModelResult {
   modelPath: string;
   modelLoadInfo: ModelLoadInfo | null;
+  transportObservability: TransportObservability;
+}
+
+export interface WorkerPrepareModelBundleResult {
+  bundle: PreparedModelBundle;
   transportObservability: TransportObservability;
 }
 

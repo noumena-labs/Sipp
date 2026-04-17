@@ -22,6 +22,7 @@ class MockWorker {
   public onmessageerror: ((event: MessageEvent<unknown>) => void) | null = null;
   public terminated = false;
   public readonly messages: WorkerRequestMessage[] = [];
+  public readonly transferables: Transferable[][] = [];
 
   private readonly handler: WorkerMessageHandler;
 
@@ -30,8 +31,9 @@ class MockWorker {
     MockWorker.instances.push(this);
   }
 
-  public postMessage(message: WorkerRequestMessage): void {
+  public postMessage(message: WorkerRequestMessage, transferables: Transferable[] = []): void {
     this.messages.push(message);
+    this.transferables.push(transferables);
     queueMicrotask(() => {
       this.handler(this, message);
     });
@@ -103,6 +105,13 @@ function createWorkerTransportObservability() {
   };
 }
 
+function createWorkerRuntimeMetadata() {
+  return {
+    chatTemplate: 'llama3',
+    mediaMarker: '<__media__>',
+  };
+}
+
 function createWorkerQueuedResponse(
   requestId: number,
   response: {
@@ -154,6 +163,10 @@ function getWorkerQueuedState(
     activeRuns: runtimeState.tracker.activeRuns.size,
   };
 }
+
+type MediaPromptOptions = import('../types.js').PromptOptions & {
+  media?: Uint8Array[];
+};
 
 test('WorkerEngineRuntime rejects pending calls on worker crash and recreates the worker', async () => {
   const restoreWorker = installMockWorker();
@@ -746,6 +759,165 @@ test('WorkerEngineRuntime clears local queued lifecycle state before initEngine 
   }
 });
 
+test('WorkerEngineRuntime caches runtime metadata from initEngine and clears it on close', async () => {
+  const restoreWorker = installMockWorker();
+  try {
+    MockWorker.handlerFactory = () => (worker, message) => {
+      switch (message.kind) {
+        case 'init-module':
+          worker.emit({
+            kind: 'resolve',
+            callId: message.callId,
+            value: undefined,
+          });
+          return;
+        case 'init-engine':
+          worker.emit({
+            kind: 'resolve',
+            callId: message.callId,
+            value: createWorkerRuntimeMetadata(),
+          });
+          return;
+        default:
+          throw new Error(`Unexpected worker message: ${message.kind}`);
+      }
+    };
+
+    const runtime = new WorkerEngineRuntime({});
+    await runtime.initModule();
+    assert.equal(runtime.getChatTemplate(), null);
+    assert.equal(runtime.getMediaMarker(), null);
+
+    await runtime.initEngine('/models/model.gguf');
+
+    assert.equal(runtime.getChatTemplate(), 'llama3');
+    assert.equal(runtime.getMediaMarker(), '<__media__>');
+    assert.equal(MockWorker.instances[0].messages.some((message) => message.kind === 'init-engine'), true);
+
+    runtime.close();
+
+    assert.equal(runtime.getChatTemplate(), null);
+    assert.equal(runtime.getMediaMarker(), null);
+  } finally {
+    restoreWorker();
+  }
+});
+
+test('WorkerEngineRuntime sends transferable media buffers and forces raw mode for media prompts', async () => {
+  const restoreWorker = installMockWorker();
+  try {
+    MockWorker.handlerFactory = () => {
+      let nextRequestId = 201;
+      return (worker, message) => {
+        switch (message.kind) {
+          case 'init-module':
+            worker.emit({
+              kind: 'resolve',
+              callId: message.callId,
+              value: undefined,
+            });
+            return;
+          case 'init-engine':
+            worker.emit({
+              kind: 'resolve',
+              callId: message.callId,
+              value: createWorkerRuntimeMetadata(),
+            });
+            return;
+          case 'queue-prompt-with-media':
+            assert.equal(message.options.promptFormat, 'raw');
+            assert.ok(message.options.media != null);
+            assert.equal(message.options.media.length, 2);
+            assert.equal(message.promptText, 'first <__media__> second <__media__>');
+            worker.emit({
+              kind: 'resolve',
+              callId: message.callId,
+              value: nextRequestId++,
+            });
+            return;
+          default:
+            throw new Error(`Unexpected worker message: ${message.kind}`);
+        }
+      };
+    };
+
+    const runtime = new WorkerEngineRuntime({});
+    await runtime.initModule();
+    await runtime.initEngine('/models/model.gguf');
+
+    const requestId = await runtime.queuePrompt(
+      'ctx-media',
+      'first <__media__> second <__media__>',
+      {
+        nTokens: 16,
+        media: [Uint8Array.from([1, 2, 3]), Uint8Array.from([4, 5])],
+      } as MediaPromptOptions
+    );
+
+    const worker = MockWorker.instances[0];
+    const mediaMessageIndex = worker.messages.findIndex(
+      (message) => message.kind === 'queue-prompt-with-media'
+    );
+
+    assert.equal(requestId, 201);
+    assert.ok(mediaMessageIndex >= 0);
+    assert.equal(worker.transferables[mediaMessageIndex].length, 2);
+    assert.equal(worker.transferables[mediaMessageIndex][0] instanceof ArrayBuffer, true);
+    assert.equal(worker.transferables[mediaMessageIndex][1] instanceof ArrayBuffer, true);
+    assert.equal((worker.transferables[mediaMessageIndex][0] as ArrayBuffer).byteLength, 3);
+    assert.equal((worker.transferables[mediaMessageIndex][1] as ArrayBuffer).byteLength, 2);
+  } finally {
+    restoreWorker();
+  }
+});
+
+test('WorkerEngineRuntime rejects media prompts when the marker count does not match', async () => {
+  const restoreWorker = installMockWorker();
+  try {
+    MockWorker.handlerFactory = () => (worker, message) => {
+      switch (message.kind) {
+        case 'init-module':
+          worker.emit({
+            kind: 'resolve',
+            callId: message.callId,
+            value: undefined,
+          });
+          return;
+        case 'init-engine':
+          worker.emit({
+            kind: 'resolve',
+            callId: message.callId,
+            value: createWorkerRuntimeMetadata(),
+          });
+          return;
+        default:
+          throw new Error(`Unexpected worker message: ${message.kind}`);
+      }
+    };
+
+    const runtime = new WorkerEngineRuntime({});
+    await runtime.initModule();
+    await runtime.initEngine('/models/model.gguf');
+
+    await assert.rejects(
+      runtime.queuePrompt('ctx-media-mismatch', 'missing marker', {
+        nTokens: 16,
+        media: [Uint8Array.from([1, 2, 3])],
+      } as MediaPromptOptions),
+      /media marker\(s\).*media attachment\(s\)/i
+    );
+
+    assert.equal(
+      MockWorker.instances[0].messages.some(
+        (message) => message.kind === 'queue-prompt-with-media'
+      ),
+      false
+    );
+  } finally {
+    restoreWorker();
+  }
+});
+
 test('WorkerEngineRuntime supports split model file shards in worker mode', async () => {
   const restoreWorker = installMockWorker();
   try {
@@ -878,6 +1050,163 @@ test('WorkerEngineRuntime supports split model URL loading in worker mode', asyn
     ]);
 
     assert.equal(modelPath, '/models/model-00001-of-00002.gguf');
+  } finally {
+    restoreWorker();
+  }
+});
+
+test('WorkerEngineRuntime prepares model bundles through the worker protocol and caches model load info', async () => {
+  const restoreWorker = installMockWorker();
+  try {
+    MockWorker.handlerFactory = () => (worker, message) => {
+      switch (message.kind) {
+        case 'init-module':
+          worker.emit({
+            kind: 'resolve',
+            callId: message.callId,
+            value: undefined,
+          });
+          return;
+        case 'prepare-model-bundle':
+          assert.deepEqual(message.descriptor, {
+            kind: 'url',
+            url: 'https://example.com/Qwen2-VL-2B-Instruct-Q4_K_M.gguf',
+          });
+          worker.emit({
+            kind: 'resolve',
+            callId: message.callId,
+            value: {
+              bundle: {
+                sourceKind: 'url',
+                modelPath: '/models/model.gguf',
+                multimodalProjectorPath: '/models/mmproj.gguf',
+                isVisionModel: true,
+                projectorStatus: 'discovered',
+                modelName: 'Qwen2-VL-2B-Instruct-Q4_K_M.gguf',
+                detectionMethod: 'url',
+                modelType: null,
+                modelArchitecture: null,
+                modelLoadInfo: {
+                  sourceKind: 'url',
+                  reuseMode: 'network',
+                  modelPath: '/models/model.gguf',
+                  fileName: 'model.gguf',
+                  byteLength: 4,
+                  persistentCacheEnabled: false,
+                  persistentCacheKey: null,
+                  persistentCacheHit: false,
+                  persistentCacheStored: false,
+                },
+                projectorLoadInfo: {
+                  sourceKind: 'url',
+                  reuseMode: 'network',
+                  modelPath: '/models/mmproj.gguf',
+                  fileName: 'mmproj.gguf',
+                  byteLength: 4,
+                  persistentCacheEnabled: false,
+                  persistentCacheKey: null,
+                  persistentCacheHit: false,
+                  persistentCacheStored: false,
+                },
+              },
+              transportObservability: createWorkerTransportObservability(),
+            },
+          });
+          return;
+        default:
+          throw new Error(`Unexpected worker message: ${message.kind}`);
+      }
+    };
+
+    const runtime = new WorkerEngineRuntime({});
+    await runtime.initModule();
+
+    const bundle = await runtime.prepareModelBundle({
+      kind: 'url',
+      url: 'https://example.com/Qwen2-VL-2B-Instruct-Q4_K_M.gguf',
+    });
+
+    assert.equal(bundle.multimodalProjectorPath, '/models/mmproj.gguf');
+    assert.equal(bundle.projectorStatus, 'discovered');
+    assert.equal(runtime.getLastModelLoadInfo()?.modelPath, '/models/model.gguf');
+  } finally {
+    restoreWorker();
+  }
+});
+
+test('WorkerEngineRuntime initEngine(bundle) forwards bundle projectors unless explicitly overridden', async () => {
+  const restoreWorker = installMockWorker();
+  try {
+    const initMessages: Array<Extract<WorkerRequestMessage, { kind: 'init-engine' }>> = [];
+    MockWorker.handlerFactory = () => (worker, message) => {
+      switch (message.kind) {
+        case 'init-module':
+          worker.emit({
+            kind: 'resolve',
+            callId: message.callId,
+            value: undefined,
+          });
+          return;
+        case 'init-engine':
+          initMessages.push(message);
+          worker.emit({
+            kind: 'resolve',
+            callId: message.callId,
+            value: createWorkerRuntimeMetadata(),
+          });
+          return;
+        default:
+          throw new Error(`Unexpected worker message: ${message.kind}`);
+      }
+    };
+
+    const runtime = new WorkerEngineRuntime({});
+    await runtime.initModule();
+
+    const preparedBundle = {
+      sourceKind: 'url' as const,
+      modelPath: '/models/model.gguf',
+      multimodalProjectorPath: '/models/mmproj.gguf',
+      isVisionModel: true,
+      projectorStatus: 'explicit' as const,
+      modelName: 'model.gguf',
+      detectionMethod: 'filename' as const,
+      modelType: 'model',
+      modelArchitecture: 'qwen2vl',
+      modelLoadInfo: null,
+      projectorLoadInfo: null,
+    };
+
+    await runtime.initEngine(preparedBundle);
+    await runtime.initEngine(preparedBundle, {
+      multimodalProjectorPath: '/override/mmproj.gguf',
+    });
+    await runtime.initEngine({
+      ...preparedBundle,
+      multimodalProjectorPath: null,
+      projectorStatus: 'missing',
+    });
+
+    assert.deepEqual(
+      initMessages.map((message) => ({
+        modelPath: message.modelPath,
+        projectorPath: message.config?.multimodalProjectorPath ?? null,
+      })),
+      [
+        {
+          modelPath: '/models/model.gguf',
+          projectorPath: '/models/mmproj.gguf',
+        },
+        {
+          modelPath: '/models/model.gguf',
+          projectorPath: '/override/mmproj.gguf',
+        },
+        {
+          modelPath: '/models/model.gguf',
+          projectorPath: null,
+        },
+      ]
+    );
   } finally {
     restoreWorker();
   }

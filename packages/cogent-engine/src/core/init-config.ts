@@ -24,6 +24,9 @@ export interface NormalizedInitConfig {
   adaptivePrefillChunking: number;
   enableRuntimeObservability: number;
   enableBackendProfiling: number;
+  multimodalProjectorPath: string | null;
+  imageMinTokens: number;
+  imageMaxTokens: number;
 }
 
 const DEFAULT_VALUE = 0;
@@ -45,6 +48,20 @@ function normalizeInteger(
     throw new Error(`"${fieldName}" must be an integer >= ${minimum}.`);
   }
   return value;
+}
+
+function normalizeOptionalString(
+  fieldName: string,
+  value: string | undefined
+): string | null {
+  if (value == null) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new Error(`"${fieldName}" must not be empty.`);
+  }
+  return trimmed;
 }
 
 function normalizeOptionalBoolean(value: boolean | undefined): number {
@@ -81,6 +98,20 @@ export function normalizeInitConfig(config: InferenceInitConfig | undefined): No
   );
   const enableRuntimeObservability =
     enableBackendProfiling || normalizeRequiredBoolean(config?.enableRuntimeObservability);
+  const multimodalProjectorPath = normalizeOptionalString(
+    'multimodalProjectorPath',
+    config?.multimodalProjectorPath
+  );
+  const imageMinTokens = normalizeInteger('imageMinTokens', config?.imageMinTokens, 0);
+  const imageMaxTokens = normalizeInteger('imageMaxTokens', config?.imageMaxTokens, 0);
+  if (multimodalProjectorPath == null && (imageMinTokens > 0 || imageMaxTokens > 0)) {
+    throw new Error(
+      '"imageMinTokens" and "imageMaxTokens" require "multimodalProjectorPath".'
+    );
+  }
+  if (imageMinTokens > 0 && imageMaxTokens > 0 && imageMaxTokens < imageMinTokens) {
+    throw new Error('"imageMaxTokens" must be >= "imageMinTokens".');
+  }
 
   return {
     nCtx: normalizeInteger('nCtx', config?.nCtx, 1),
@@ -113,5 +144,8 @@ export function normalizeInitConfig(config: InferenceInitConfig | undefined): No
     adaptivePrefillChunking: normalizeOptionalBoolean(config?.adaptivePrefillChunking),
     enableRuntimeObservability,
     enableBackendProfiling,
+    multimodalProjectorPath,
+    imageMinTokens,
+    imageMaxTokens,
   };
 }

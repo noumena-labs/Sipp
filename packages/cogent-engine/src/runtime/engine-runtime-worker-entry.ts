@@ -4,6 +4,8 @@ import {
   WorkerResponseMessage,
   WorkerLoadModelResult,
   WorkerBackendObservabilityResult,
+  WorkerPrepareModelBundleResult,
+  WorkerRuntimeMetadata,
 } from './engine-runtime-worker-protocol.js';
 import { WorkerEntryState } from './worker-entry-state.js';
 
@@ -42,6 +44,17 @@ async function handleInitModule(
   message: Extract<WorkerRequestMessage, { kind: 'init-module' }>
 ): Promise<void> {
   await state.initModule(message.config);
+}
+
+async function handleInitEngine(
+  message: Extract<WorkerRequestMessage, { kind: 'init-engine' }>
+): Promise<WorkerRuntimeMetadata> {
+  const metadata = await state.initEngine(message.modelPath, message.config);
+  state.setRuntimeObservabilityEnabled(
+    message.config?.enableRuntimeObservability === true ||
+      message.config?.enableBackendProfiling === true
+  );
+  return metadata;
 }
 
 async function handleLoadModelUrl(
@@ -142,6 +155,24 @@ async function handleLoadModelUrls(
   }
 }
 
+async function handlePrepareModelBundle(
+  message: Extract<WorkerRequestMessage, { kind: 'prepare-model-bundle' }>
+): Promise<WorkerPrepareModelBundleResult> {
+  const runtime = state.ensureEngine();
+  const signal = state.beginModelLoad(message.callId);
+  try {
+    const bundle = await runtime.prepareModelBundle(message.descriptor, {
+      signal,
+    });
+    return {
+      bundle,
+      transportObservability: state.cloneTransportObservability(),
+    };
+  } finally {
+    state.releaseModelLoad(message.callId);
+  }
+}
+
 async function handleLoadModelStreamStart(
   message: Extract<WorkerRequestMessage, { kind: 'load-model-stream-start' }>
 ): Promise<WorkerLoadModelResult> {
@@ -192,14 +223,38 @@ function handleCancelModelLoad(
 async function handleQueuePrompt(
   message: Extract<WorkerRequestMessage, { kind: 'queue-prompt' }>
 ): Promise<GenerateRequestId> {
-  const runtime = state.ensureEngine();
   const abortController = new AbortController();
-  const requestId = await runtime.queuePrompt(
+  const requestId = await state.queuePrompt(
     message.contextKey,
     message.promptText,
     {
       nTokens: message.options.nTokens,
       promptFormat: message.options.promptFormat,
+      media: undefined,
+      signal: abortController.signal,
+      onToken: (token) => {
+        state.bufferTokenPiece(requestId, token);
+      },
+    }
+  );
+  state.rememberRequestAbortController(requestId, abortController);
+  state.markRequestRunning(requestId);
+  state.ensureSchedulerPumpRunning();
+  return requestId;
+}
+
+async function handleQueuePromptWithMedia(
+  message: Extract<WorkerRequestMessage, { kind: 'queue-prompt-with-media' }>
+): Promise<GenerateRequestId> {
+  const abortController = new AbortController();
+  const media = message.options.media?.map((buffer) => new Uint8Array(buffer)) ?? [];
+  const requestId = await state.queuePrompt(
+    message.contextKey,
+    message.promptText,
+    {
+      nTokens: message.options.nTokens,
+      promptFormat: message.options.promptFormat ?? 'raw',
+      media,
       signal: abortController.signal,
       onToken: (token) => {
         state.bufferTokenPiece(requestId, token);
@@ -252,6 +307,9 @@ self.onmessage = async (event: MessageEvent<WorkerRequestMessage>) => {
       case 'load-model-urls':
         value = await handleLoadModelUrls(message);
         break;
+      case 'prepare-model-bundle':
+        value = await handlePrepareModelBundle(message);
+        break;
       case 'load-model-stream-start':
         value = await handleLoadModelStreamStart(message);
         break;
@@ -267,14 +325,13 @@ self.onmessage = async (event: MessageEvent<WorkerRequestMessage>) => {
       case 'init-engine':
         state.abortAllModelLoads();
         state.releaseAllRequestResources();
-        value = await state.ensureEngine().initEngine(message.modelPath, message.config);
-        state.setRuntimeObservabilityEnabled(
-          message.config?.enableRuntimeObservability === true ||
-            message.config?.enableBackendProfiling === true
-        );
+        value = await handleInitEngine(message);
         break;
       case 'queue-prompt':
         value = await handleQueuePrompt(message);
+        break;
+      case 'queue-prompt-with-media':
+        value = await handleQueuePromptWithMedia(message);
         break;
       case 'cancel-request':
         value = await handleCancelRequest(message);

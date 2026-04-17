@@ -7,8 +7,11 @@ import {
   GenerateRequestId,
   GenerateResponse,
   InferenceInitConfig,
+  ModelBundleDescriptor,
   ModelLoadInfo,
   PromptOptions,
+  PreparedModelBundle,
+  PrepareModelBundleOptions,
   RuntimeAggregateObservabilityMetrics,
   TransportObservability,
 } from './types.js';
@@ -106,14 +109,29 @@ export class CogentEngine {
   }
 
   public async initEngine(
-    modelPath: string,
+    modelPathOrBundle: string | PreparedModelBundle,
     config?: InferenceInitConfig
   ): Promise<void> {
-    await this.runtime.initEngine(modelPath, config);
+    await this.runtime.initEngine(modelPathOrBundle, config);
+  }
+
+  public async prepareModelBundle(
+    descriptor: ModelBundleDescriptor,
+    options?: PrepareModelBundleOptions
+  ): Promise<PreparedModelBundle> {
+    return this.runtime.prepareModelBundle(descriptor, options);
   }
 
   public close(): void {
     this.runtime.close();
+  }
+
+  public getChatTemplate(): string | null {
+    return this.runtime.getChatTemplate();
+  }
+
+  public getMediaMarker(): string | null {
+    return this.runtime.getMediaMarker();
   }
 
   public async cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean> {
