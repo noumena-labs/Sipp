@@ -8,7 +8,7 @@ import type {
   MemorySnapshot
 } from './types';
 import { round, measureAsync } from './utils';
-import { CogentEngine } from 'cogent-engine';
+import { CogentEngine, type PreparedModelBundle } from 'cogent-engine';
 
 function summarize(values: number[]) {
   const sorted = [...values].sort((left, right) => left - right);
@@ -242,7 +242,7 @@ export async function runPromptGroup(
 export async function runScenarioBenchmark(
   targetEngine: CogentEngine,
   scenario: ScenarioDefinition,
-  modelPath: string,
+  modelPathOrBundle: string | PreparedModelBundle,
   warmupRuns: number,
   measuredRuns: number,
   initConfig: any,
@@ -252,7 +252,7 @@ export async function runScenarioBenchmark(
   let initEngineMs = 0;
   if (!skipInitEngine) {
     setStatus(`${scenario.label}: initializing engine...`);
-    const { ms } = await measureAsync(() => targetEngine.initEngine(modelPath, initConfig));
+    const { ms } = await measureAsync(() => targetEngine.initEngine(modelPathOrBundle, initConfig));
     initEngineMs = ms;
   }
 
@@ -447,7 +447,7 @@ export async function runQueuedMixedLoadPair(
 export async function runMixedLoadBenchmark(
   targetEngine: any,
   definition: import('./types').MixedLoadDefinition,
-  modelPath: string,
+  modelPathOrBundle: string | PreparedModelBundle,
   warmupRuns: number,
   measuredRuns: number,
   initConfig: any,
@@ -457,7 +457,7 @@ export async function runMixedLoadBenchmark(
   let initEngineMs = 0;
   if (!skipInitEngine) {
     setStatus(`${definition.label}: initializing engine...`);
-    const { ms } = await measureAsync(() => targetEngine.initEngine(modelPath, initConfig));
+    const { ms } = await measureAsync(() => targetEngine.initEngine(modelPathOrBundle, initConfig));
     initEngineMs = ms;
   }
 

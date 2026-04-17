@@ -43,3 +43,30 @@ export function maxNullable(values: (number | null | undefined)[]): number | nul
   }
   return Math.max(...filtered);
 }
+
+export function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+export function validateImageFile(file: File): { valid: boolean; error?: string } {
+  const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+  if (!validTypes.includes(file.type)) {
+    return { valid: false, error: `Invalid file type: ${file.type}. Supported: JPEG, PNG, WebP, GIF` };
+  }
+  const maxSize = 10 * 1024 * 1024;
+  if (file.size > maxSize) {
+    return { valid: false, error: `File too large: ${(file.size / 1024 / 1024).toFixed(1)}MB. Max: 10MB` };
+  }
+  return { valid: true };
+}
+
+export function parseDataUrl(dataUrl: string): { mimeType: string; base64: string } | null {
+  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) return null;
+  return { mimeType: match[1], base64: match[2] };
+}

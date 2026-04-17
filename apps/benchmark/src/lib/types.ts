@@ -140,6 +140,17 @@ export interface MemorySnapshot {
   error: string | null;
 }
 
+export interface ImageInput {
+  enabled: boolean;
+  source: 'url' | 'base64';
+  url: string;
+  base64: string;
+  mimeType: string;
+  fileName: string;
+  projectorUrl: string;
+  projectorFileName: string;
+}
+
 export interface ConfigOptions {
   prompt: string;
   tokenCount: number;
@@ -155,6 +166,7 @@ export interface ConfigOptions {
     schedulerPolicy: string;
     decodeTokenReserve: number;
   };
+  imageInput: ImageInput;
 }
 
 export interface MixedLoadDefinition {

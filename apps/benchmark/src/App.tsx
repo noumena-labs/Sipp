@@ -1,16 +1,130 @@
 import { useState, useEffect, useRef } from 'react';
-import { CogentEngine, getBundledRuntimeUrls } from 'cogent-engine';
+import {
+  CogentEngine,
+  getBundledRuntimeUrls,
+  type ModelBundleDescriptor,
+  type PreparedModelBundle,
+} from 'cogent-engine';
 import { MetricCard } from './components/MetricCard';
 import { runScenarioBenchmark, supportsQueuedRequestApi, runMixedLoadBenchmark, captureBrowserMemorySnapshot } from './lib/benchmark-runner';
 import type { ConfigOptions, EnvironmentInfo, ScenarioResult, MixedLoadResult, MemorySnapshot, RequestObservability } from './lib/types';
-import { formatMs, formatBytes, round } from './lib/utils';
+import { formatMs, formatBytes, round, fileToBase64, validateImageFile } from './lib/utils';
 import { buildBenchmarkScenarios, describeRuntimeBackend, buildMixedLoadDefinition, buildPhase4BenchmarkInitConfig, buildBenchmarkBackendProfile, summarizeMemorySnapshots } from './lib/helpers';
+import {
+  MODEL_REGISTRY,
+  getModelById,
+  getDefaultVariant,
+  getVariantPrimaryUrl,
+  isVisionModel,
+  formatSize,
+} from './lib/model-registry';
 
 const WORKER_TRANSPORT_PRESETS = {
   default: { bufferedTokenLimit: 8, flushIntervalMs: 16 },
   'low-buffer': { bufferedTokenLimit: 2, flushIntervalMs: 4 },
   'no-buffer': { bufferedTokenLimit: 1, flushIntervalMs: 0 },
 } as const;
+
+function getBundleSourceLabel(source: ModelBundleDescriptor | null): string {
+  if (source == null) {
+    return 'bundle';
+  }
+  switch (source.kind) {
+    case 'url':
+      return source.url;
+    case 'urls':
+      return source.urls[0] ?? 'model.gguf';
+    case 'file':
+      return source.file.name || 'local-file.gguf';
+    case 'files':
+      return source.files[0]?.name || 'local-file.gguf';
+  }
+}
+
+function buildLocalModelBundleDescriptor(
+  modelSource:
+    | { kind: 'url'; url: string }
+    | { kind: 'file'; file: File }
+    | { kind: 'files'; files: File[] },
+  projectorSource:
+    | { kind: 'url'; url: string }
+    | { kind: 'file'; file: File }
+    | null
+): ModelBundleDescriptor {
+  if (modelSource.kind === 'url') {
+    return {
+      kind: 'url',
+      url: modelSource.url,
+      projector: projectorSource ?? undefined,
+    };
+  }
+  if (modelSource.kind === 'file') {
+    return {
+      kind: 'file',
+      file: modelSource.file,
+      projector: projectorSource ?? undefined,
+    };
+  }
+  return {
+    kind: 'files',
+    files: modelSource.files,
+    projector: projectorSource ?? undefined,
+  };
+}
+
+function getPreparedBundleTone(bundle: PreparedModelBundle | null): string {
+  if (bundle == null) {
+    return 'rgba(90, 120, 170, 0.18)';
+  }
+
+  switch (bundle.projectorStatus) {
+    case 'missing':
+      return bundle.isVisionModel ? 'rgba(255, 180, 50, 0.18)' : 'rgba(90, 120, 170, 0.18)';
+    case 'not-required':
+      return 'rgba(90, 120, 170, 0.18)';
+    default:
+      return 'rgba(80, 200, 120, 0.15)';
+  }
+}
+
+function formatDetectionMethod(method: PreparedModelBundle['detectionMethod']): string {
+  switch (method) {
+    case 'gguf-metadata':
+      return 'GGUF metadata';
+    case 'filename':
+      return 'filename fallback';
+    case 'url':
+      return 'URL filename';
+    case 'hf-api':
+      return 'HuggingFace API';
+    default:
+      return 'heuristic';
+  }
+}
+
+function describePreparedBundle(bundle: PreparedModelBundle | null): string | null {
+  if (bundle == null) {
+    return null;
+  }
+
+  const architecture = bundle.modelArchitecture ? ` (${bundle.modelArchitecture})` : '';
+  const detection = formatDetectionMethod(bundle.detectionMethod);
+
+  switch (bundle.projectorStatus) {
+    case 'not-required':
+      return `Prepared bundle: text-only model${architecture}. Classified via ${detection}.`;
+    case 'explicit':
+      return `Prepared bundle: vision-capable model${architecture} with an explicit projector override. Classified via ${detection}.`;
+    case 'paired':
+      return `Prepared bundle: vision-capable model${architecture} with a local projector paired automatically. Classified via ${detection}.`;
+    case 'discovered':
+      return `Prepared bundle: vision-capable model${architecture} with projector auto-discovered from the source repository. Classified via ${detection}.`;
+    case 'missing':
+      return bundle.isVisionModel
+        ? `Prepared bundle: vision-capable model${architecture}, but no projector was resolved. Vision prompts will stay unavailable until you provide a matching mmproj.`
+        : `Prepared bundle: text-only model${architecture}. Classified via ${detection}.`;
+  }
+}
 
 export default function App() {
   const [engine, setEngine] = useState<CogentEngine | null>(null);
@@ -34,6 +148,9 @@ export default function App() {
   const [modelSourceInfo, setModelSourceInfo] = useState<any>(null);
   const [lastJsHeapHeapSnapshot, setLastJsHeapSnapshot] = useState<number | null>(null);
   const [includeDetailedMemory, setIncludeDetailedMemory] = useState(false);
+  const [projectorPath, setProjectorPath] = useState<string | null>(null);
+  const [preparedModelBundle, setPreparedModelBundle] = useState<PreparedModelBundle | null>(null);
+  const projectorFileInputRef = useRef<HTMLInputElement>(null);
 
   const [config, setConfig] = useState<ConfigOptions>({
     prompt: 'Describe how to benchmark browser-hosted inference.',
@@ -49,24 +166,40 @@ export default function App() {
       prefillChunkSize: 0,
       schedulerPolicy: 'balanced',
       decodeTokenReserve: 1,
+    },
+    imageInput: {
+      enabled: false,
+      source: 'url',
+      url: '',
+      base64: '',
+      mimeType: '',
+      fileName: '',
+      projectorUrl: '',
+      projectorFileName: '',
     }
   });
 
-  const [modelType, setModelType] = useState<'url' | 'file'>('url');
-  const [modelUrl, setModelUrl] = useState('https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_0.gguf');
+  const [modelType, setModelType] = useState<'registry' | 'url' | 'file'>('registry');
+  const [selectedRegistryId, setSelectedRegistryId] = useState(MODEL_REGISTRY[0].id);
+  const [modelUrl, setModelUrl] = useState(getVariantPrimaryUrl(getDefaultVariant(MODEL_REGISTRY[0])));
   const fileInputRef = useRef<HTMLInputElement>(null);
-
+  const selectedRegistryEntry = getModelById(selectedRegistryId) ?? MODEL_REGISTRY[0];
+  const selectedRegistryVariant = getDefaultVariant(selectedRegistryEntry);
   // Reset engine initialization if config or model changes
   useEffect(() => {
     setIsEngineInitialized(false);
+    setPreparedModelBundle(null);
+    setProjectorPath(null);
   }, [
     config.initConfig.prefillChunkSize,
     config.initConfig.schedulerPolicy,
     config.initConfig.decodeTokenReserve,
     config.workerTransport.bufferedTokenLimit,
     config.workerTransport.flushIntervalMs,
+    config.imageInput.projectorUrl,
     modelUrl,
-    modelType
+    modelType,
+    selectedRegistryId
   ]);
 
   useEffect(() => {
@@ -122,6 +255,8 @@ export default function App() {
     setActiveModelPath('');
     setLoadModelMs(0);
     setModelSourceInfo(null);
+    setPreparedModelBundle(null);
+    setProjectorPath(null);
     return () => {
       nextEngine.close();
     };
@@ -155,6 +290,114 @@ export default function App() {
     }));
   };
 
+  const resolveExplicitProjectorSource = () => {
+    const projectorFile = projectorFileInputRef.current?.files?.[0];
+    if (projectorFile) {
+      return {
+        kind: 'file' as const,
+        file: projectorFile,
+      };
+    }
+
+    const projectorUrl = config.imageInput.projectorUrl.trim();
+    if (projectorUrl.length > 0) {
+      return {
+        kind: 'url' as const,
+        url: projectorUrl,
+      };
+    }
+
+    return null;
+  };
+
+  const buildCurrentModelBundleDescriptor = (): ModelBundleDescriptor | null => {
+    if (modelType === 'registry') {
+      return {
+        ...selectedRegistryVariant.bundle,
+        projector: resolveExplicitProjectorSource() ?? selectedRegistryVariant.bundle.projector,
+      };
+    }
+
+    if (modelType === 'file') {
+      const modelFiles = Array.from(fileInputRef.current?.files ?? []);
+      if (modelFiles.length === 0) {
+        return null;
+      }
+      return buildLocalModelBundleDescriptor(
+        modelFiles.length === 1
+          ? { kind: 'file', file: modelFiles[0] }
+          : { kind: 'files', files: modelFiles },
+        resolveExplicitProjectorSource()
+      );
+    }
+
+    return buildLocalModelBundleDescriptor(
+      { kind: 'url', url: modelUrl },
+      resolveExplicitProjectorSource()
+    );
+  };
+
+  const prepareCurrentModelBundle = async (): Promise<PreparedModelBundle> => {
+    if (!engine) {
+      throw new Error('Engine is not available.');
+    }
+
+    const descriptor = buildCurrentModelBundleDescriptor();
+    if (!descriptor) {
+      throw new Error('No model bundle descriptor is available for the current selection.');
+    }
+
+    const prepared = await engine.prepareModelBundle(descriptor);
+    setPreparedModelBundle(prepared);
+    setActiveModelPath(prepared.modelPath);
+    setProjectorPath(prepared.multimodalProjectorPath);
+    return prepared;
+  };
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const validation = validateImageFile(file);
+    if (!validation.valid) {
+      setStatus(`Image error: ${validation.error}`);
+      return;
+    }
+    try {
+      const base64 = await fileToBase64(file);
+      const mimeType = file.type;
+      setConfig((current) => ({
+        ...current,
+        imageInput: {
+          ...current.imageInput,
+          enabled: true,
+          source: 'base64',
+          url: '',
+          base64,
+          mimeType,
+          fileName: file.name,
+        },
+      }));
+      setStatus('image loaded');
+    } catch (err) {
+      setStatus('Failed to load image');
+    }
+  };
+
+  const handleImageUrlChange = (url: string) => {
+    setConfig((current) => ({
+      ...current,
+      imageInput: {
+        ...current.imageInput,
+        enabled: !!url,
+        source: 'url',
+        url,
+        base64: '',
+        mimeType: 'image/jpeg',
+        fileName: '',
+      },
+    }));
+  };
+
   const handleInitRuntime = async () => {
     if (!engine) return;
     setIsBusy(true);
@@ -183,31 +426,51 @@ export default function App() {
         setIsModuleInitialized(true);
       }
 
-      setStatus('loading model...');
+      setStatus('preparing model bundle...');
       const startLoad = performance.now();
-      let finalModelPath = "";
-      let mSource: any = {};
-
-      if (modelType === 'file' && fileInputRef.current?.files?.[0]) {
-        const f = fileInputRef.current.files[0];
-        finalModelPath = await engine.loadModelFromFile(f, f.name || 'active-model.gguf', (pct) => setStatus(`reading model... ${pct}%`));
-        mSource = { type: 'file', label: f.name, sizeBytes: f.size };
-      } else {
-        finalModelPath = await engine.loadModelFromUrl(modelUrl, 'active-model.gguf', (pct) => setStatus(`downloading model... ${pct}%`));
-        mSource = { type: 'url', label: modelUrl, sizeBytes: null };
+      if (modelType === 'registry' && selectedRegistryEntry.capability === 'vision' && !config.imageInput.enabled) {
+        setConfig((current) => ({
+          ...current,
+          imageInput: {
+            ...current.imageInput,
+            enabled: true,
+            projectorUrl:
+              selectedRegistryVariant.bundle.projector?.kind === 'url'
+                ? selectedRegistryVariant.bundle.projector.url
+                : current.imageInput.projectorUrl,
+          },
+        }));
       }
+
+      const preparedBundle = await prepareCurrentModelBundle();
 
       const ms = round(performance.now() - startLoad);
       setLoadModelMs(ms);
-      setActiveModelPath(finalModelPath);
-      setModelSourceInfo(mSource);
+      setModelSourceInfo({
+        type: 'bundle',
+        label: preparedBundle.modelName || getBundleSourceLabel(buildCurrentModelBundleDescriptor()),
+        sizeBytes: null,
+      });
       setIsModelLoaded(true);
       
       setStatus('initializing engine...');
-      await engine.initEngine(finalModelPath, buildPhase4BenchmarkInitConfig(config.initConfig));
+      const initCfg = buildPhase4BenchmarkInitConfig(config.initConfig);
+      await engine.initEngine(preparedBundle, initCfg);
       setIsEngineInitialized(true);
 
-      setStatus('model loaded and engine initialized');
+      const bundleSummary = describePreparedBundle(preparedBundle);
+      const visionReady = engine.getMediaMarker() != null;
+      if (visionReady) {
+        setStatus(
+          bundleSummary != null
+            ? `${bundleSummary} Runtime media marker: ${engine.getMediaMarker()}.`
+            : `model loaded — vision ready (marker: ${engine.getMediaMarker()})`
+        );
+      } else if (bundleSummary != null) {
+        setStatus(bundleSummary);
+      } else {
+        setStatus('model loaded and engine initialized');
+      }
       
       const bInfo = await engine.getBackendObservability();
       setBackendInfo(bInfo);
@@ -235,23 +498,29 @@ export default function App() {
       }
       
       let finalModelPath = activeModelPath;
+      let modelInitTarget: string | PreparedModelBundle = finalModelPath;
       if (!isModelLoaded) {
-        setStatus('loading model first...');
-        if (modelType === 'file' && fileInputRef.current?.files?.[0]) {
-          const f = fileInputRef.current.files[0];
-          finalModelPath = await engine.loadModelFromFile(f, f.name || 'active-model.gguf', (pct) => setStatus(`reading model... ${pct}%`));
-        } else {
-          finalModelPath = await engine.loadModelFromUrl(modelUrl, 'active-model.gguf', (pct) => setStatus(`downloading model... ${pct}%`));
-        }
-        setIsModelLoaded(true);
+        const startLoad = performance.now();
+        setStatus('preparing model bundle first...');
+        const preparedBundle = await prepareCurrentModelBundle();
+        finalModelPath = preparedBundle.modelPath;
+        modelInitTarget = preparedBundle;
         setActiveModelPath(finalModelPath);
+        setModelSourceInfo({
+          type: 'bundle',
+          label: preparedBundle.modelName || getBundleSourceLabel(buildCurrentModelBundleDescriptor()),
+          sizeBytes: null,
+        });
+        setLoadModelMs(round(performance.now() - startLoad));
+        setIsModelLoaded(true);
       }
 
       setBackendInfo(await engine.getBackendObservability());
       
       if (!isEngineInitialized) {
         setStatus('initializing engine...');
-        await engine.initEngine(finalModelPath, buildPhase4BenchmarkInitConfig(config.initConfig));
+        const initCfg = buildPhase4BenchmarkInitConfig(config.initConfig);
+        await engine.initEngine(modelInitTarget, initCfg);
         setIsEngineInitialized(true);
       }
 
@@ -260,8 +529,43 @@ export default function App() {
       let ttftMs: number | null = null;
       let outputTokenCount = 0;
       const tEvents: number[] = [];
-      const requestId = await engine.queuePrompt('single-run-context', config.prompt, {
+      
+      // Build prompt with image if vision is enabled
+      let finalPrompt = config.prompt;
+      let finalMedia: Uint8Array[] | undefined = undefined;
+
+      if (config.imageInput.enabled) {
+        const marker = engine.getMediaMarker();
+        if (!marker) {
+          setStatus('⚠ Vision is enabled but the model bundle has no cached media marker.');
+          setIsBusy(false);
+          return;
+        }
+
+        let fetchUrl = '';
+        if (config.imageInput.source === 'base64' && config.imageInput.base64) {
+          fetchUrl = config.imageInput.base64;
+        } else if (config.imageInput.source === 'url' && config.imageInput.url) {
+          fetchUrl = config.imageInput.url;
+        }
+
+        if (fetchUrl) {
+          try {
+            const res = await fetch(fetchUrl);
+            const arrayBuf = await res.arrayBuffer();
+            finalMedia = [new Uint8Array(arrayBuf)];
+            finalPrompt = `${marker}\n${config.prompt}`;
+          } catch (e: any) {
+            setStatus(`Image fetch error: ${e.message}`);
+            setIsBusy(false);
+            return;
+          }
+        }
+      }
+      
+      const requestId = await engine.queuePrompt('single-run-context', finalPrompt, {
         nTokens: config.tokenCount,
+        media: finalMedia,
         onToken: (token) => {
           setLastRunResponse(prev => prev + token);
           const eMs = round(performance.now() - start);
@@ -338,22 +642,22 @@ export default function App() {
       setBackendInfo(await engine.getBackendObservability());
       
       let finalModelPath = activeModelPath;
+      let modelInitTarget: string | PreparedModelBundle = finalModelPath;
       let lMs = loadModelMs;
       let mSource = modelSourceInfo;
 
       if (!isModelLoaded) {
         const startLoad = performance.now();
-        if (modelType === 'file' && fileInputRef.current?.files?.[0]) {
-          const f = fileInputRef.current.files[0];
-          finalModelPath = await engine.loadModelFromFile(f, f.name || 'active-model.gguf', (pct) => setStatus(`reading model... ${pct}%`));
-          mSource = { type: 'file', label: f.name, sizeBytes: f.size };
-        } else {
-          finalModelPath = await engine.loadModelFromUrl(modelUrl, 'active-model.gguf', (pct) => setStatus(`downloading model... ${pct}%`));
-          mSource = { type: 'url', label: modelUrl, sizeBytes: null };
-        }
+        const preparedBundle = await prepareCurrentModelBundle();
+        finalModelPath = preparedBundle.modelPath;
+        modelInitTarget = preparedBundle;
+        mSource = {
+          type: 'bundle',
+          label: preparedBundle.modelName || getBundleSourceLabel(buildCurrentModelBundleDescriptor()),
+          sizeBytes: null,
+        };
         lMs = round(performance.now() - startLoad);
         setIsModelLoaded(true);
-        setActiveModelPath(finalModelPath);
         setModelSourceInfo(mSource);
         setLoadModelMs(lMs);
       }
@@ -365,6 +669,7 @@ export default function App() {
       const scenarios = buildBenchmarkScenarios(config.prompt, config.tokenCount);
       const results: ScenarioResult[] = [];
       let totalInitEngineMs = 0;
+      let engineInitializedForBenchmark = isEngineInitialized;
 
       for (const scenario of scenarios) {
         // Only initialize on first scenario if not already done, 
@@ -373,14 +678,15 @@ export default function App() {
         const res = await runScenarioBenchmark(
           engine,
           scenario,
-          finalModelPath,
+          modelInitTarget,
           config.warmupRuns,
           config.measuredRuns,
           effectiveInitConfig,
           setStatus,
-          isEngineInitialized // Pass whether to skip initial init
+          engineInitializedForBenchmark
         );
         setIsEngineInitialized(true);
+        engineInitializedForBenchmark = true;
         totalInitEngineMs += res.runtime.initEngineMs;
         results.push(res);
         setScenarioResults([...results]);
@@ -395,14 +701,15 @@ export default function App() {
         mLoadResult = await runMixedLoadBenchmark(
           engine,
           mixedLoadDef,
-          finalModelPath,
+          modelInitTarget,
           config.warmupRuns,
           config.measuredRuns,
           effectiveInitConfig,
           setStatus,
-          isEngineInitialized
+          engineInitializedForBenchmark
         );
         totalInitEngineMs += (mLoadResult.runtime.initEngineMs || 0);
+        engineInitializedForBenchmark = true;
         setMixedLoadResult(mLoadResult);
         setBackendInfo(await engine.getBackendObservability());
         memSnaps.push(await captureBrowserMemorySnapshot('after-mixed-load', includeDetailedMemory));
@@ -528,19 +835,97 @@ export default function App() {
             <div className="field-grid">
               <div className="row">
                 <label>
-                  <input type="radio" checked={modelType === 'url'} onChange={() => setModelType('url')} /> URL
+                  <input type="radio" checked={modelType === 'registry'} onChange={() => setModelType('registry')} /> Model Library
                 </label>
                 <label>
-                  <input type="radio" checked={modelType === 'file'} onChange={() => setModelType('file')} /> File
+                  <input type="radio" checked={modelType === 'url'} onChange={() => setModelType('url')} /> Custom URL
+                </label>
+                <label>
+                  <input type="radio" checked={modelType === 'file'} onChange={() => setModelType('file')} /> Local File
                 </label>
               </div>
               <div className="row">
-                {modelType === 'url' ? (
+                {modelType === 'registry' ? (
+                  <select
+                    value={selectedRegistryId}
+                    onChange={(e) => {
+                      const entry = getModelById(e.target.value);
+                      if (!entry) return;
+                      setSelectedRegistryId(entry.id);
+                      const variant = getDefaultVariant(entry);
+                      setModelUrl(getVariantPrimaryUrl(variant));
+                      const projector = variant.bundle.projector;
+                      if (isVisionModel(entry) && projector?.kind === 'url') {
+                        setConfig(c => ({
+                          ...c,
+                          imageInput: {
+                            ...c.imageInput,
+                            enabled: true,
+                            projectorUrl: projector.url,
+                          },
+                        }));
+                      } else {
+                        setConfig(c => ({
+                          ...c,
+                          imageInput: { ...c.imageInput, enabled: false, projectorUrl: '' },
+                        }));
+                      }
+                      setIsModelLoaded(false);
+                      setIsEngineInitialized(false);
+                      setProjectorPath(null);
+                      setPreparedModelBundle(null);
+                    }}
+                    style={{ flex: 1 }}
+                  >
+                    <optgroup label="Text Models">
+                      {MODEL_REGISTRY.filter(m => m.capability === 'text').map(m => (
+                        <option key={m.id} value={m.id}>
+                          {m.name} ({m.parameterCount}) — {formatSize(getDefaultVariant(m).sizeBytes)}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Vision Models (includes projector)">
+                      {MODEL_REGISTRY.filter(m => m.capability === 'vision').map(m => {
+                        const v = getDefaultVariant(m);
+                        return (
+                          <option key={m.id} value={m.id}>
+                            🖼 {m.name} ({m.parameterCount}) — {formatSize(v.sizeBytes + (v.projectorSizeBytes ?? 0))}
+                          </option>
+                        );
+                      })}
+                    </optgroup>
+                  </select>
+                ) : modelType === 'url' ? (
                   <input key="url-input" value={modelUrl} onChange={(e) => setModelUrl(e.target.value)} placeholder="https://.../model.gguf" />
                 ) : (
-                  <input key="file-input" type="file" accept=".gguf" ref={fileInputRef} />
+                  <input key="file-input" type="file" accept=".gguf" ref={fileInputRef} multiple />
                 )}
               </div>
+              {modelType === 'registry' && (() => {
+                const entry = getModelById(selectedRegistryId);
+                if (!entry) return null;
+                const variant = getDefaultVariant(entry);
+                return (
+                  <div className="row" style={{ fontSize: '0.85em', opacity: 0.7 }}>
+                    {isVisionModel(entry)
+                      ? `Catalog bundle: vision model with a known projector payload (${formatSize(variant.projectorSizeBytes ?? 0)})`
+                      : `Text-only model — ${variant.quant} quantization`}
+                  </div>
+                );
+              })()}
+              {preparedModelBundle != null && (
+                <div
+                  className="row"
+                  style={{
+                    padding: '8px 10px',
+                    borderRadius: '4px',
+                    background: getPreparedBundleTone(preparedModelBundle),
+                    fontSize: '0.85em',
+                  }}
+                >
+                  {describePreparedBundle(preparedModelBundle)}
+                </div>
+              )}
               <div className="button-row">
                 <button type="button" onClick={handleInitRuntime} disabled={isBusy}>Init Runtime</button>
                 <button type="button" onClick={handleLoadModel} disabled={isBusy}>Load Model</button>
@@ -654,11 +1039,99 @@ export default function App() {
                 />
               </div>
             </div>
-            <div className="button-row">
-              <button type="button" onClick={handleRunSinglePrompt} disabled={isBusy}>Run Single Inference</button>
-              <button type="button" onClick={handleRunBenchmark} disabled={isBusy}>Run Browser Benchmark</button>
-            </div>
           </section>
+
+          <section className="section">
+            <div className="section-header"><h2>Vision Input</h2></div>
+            {preparedModelBundle != null && (
+              <div
+                className="row"
+                style={{
+                  padding: '6px 10px',
+                  borderRadius: '4px',
+                  background: getPreparedBundleTone(preparedModelBundle),
+                  fontSize: '0.85em',
+                  marginBottom: '6px',
+                }}
+              >
+                {projectorPath != null
+                  ? `Prepared projector path: ${projectorPath}`
+                  : preparedModelBundle.projectorStatus === 'not-required'
+                    ? 'This bundle is text-only and does not require a projector.'
+                    : 'No projector has been prepared for the current bundle yet.'}
+              </div>
+            )}
+            <div className="row">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={config.imageInput.enabled}
+                  onChange={(e) => setConfig({ ...config, imageInput: { ...config.imageInput, enabled: e.target.checked } })}
+                />
+                Enable Vision
+              </label>
+            </div>
+            {config.imageInput.enabled && (
+              <>
+                <div className="row">
+                  <label>Image Source</label>
+                  <label>
+                    <input type="radio" checked={config.imageInput.source === 'url'} onChange={() => handleImageUrlChange(config.imageInput.url)} /> URL
+                  </label>
+                  <label>
+                    <input type="radio" checked={config.imageInput.source === 'base64'} onChange={() => setConfig(c => ({ ...c, imageInput: { ...c.imageInput, source: 'base64' } }))} /> File Upload
+                  </label>
+                </div>
+                <div className="row">
+                  {config.imageInput.source === 'url' ? (
+                    <input value={config.imageInput.url} onChange={(e) => handleImageUrlChange(e.target.value)} placeholder="https://.../image.jpg" />
+                  ) : (
+                    <input type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={handleImageUpload} />
+                  )}
+                </div>
+                {config.imageInput.enabled && (
+                  <div className="row">
+                    <small>
+                      {config.imageInput.source === 'base64'
+                        ? `Loaded: ${config.imageInput.fileName} (${config.imageInput.mimeType})`
+                        : config.imageInput.url
+                        ? 'URL set'
+                        : 'No image selected'}
+                    </small>
+                  </div>
+                )}
+                <div className="row" style={{ marginTop: '8px' }}>
+                  <label>Multimodal Projector (mmproj)</label>
+                </div>
+                <div className="row">
+                  <input
+                    value={config.imageInput.projectorUrl}
+                    onChange={(e) => setConfig(c => ({
+                      ...c,
+                      imageInput: { ...c.imageInput, projectorUrl: e.target.value },
+                    }))}
+                    placeholder="https://.../mmproj-model.gguf"
+                  />
+                </div>
+                <div className="row">
+                  <small>Or load from file:</small>
+                  <input type="file" accept=".gguf" ref={projectorFileInputRef} />
+                </div>
+                <div className="row">
+                  <small style={{ opacity: 0.7 }}>
+                    {projectorPath
+                      ? `Bundle projector prepared: ${projectorPath}`
+                      : 'No projector prepared yet'}
+                  </small>
+                </div>
+              </>
+            )}
+          </section>
+
+          <div className="button-row">
+            <button type="button" onClick={handleRunSinglePrompt} disabled={isBusy}>Run Single Inference</button>
+            <button type="button" onClick={handleRunBenchmark} disabled={isBusy}>Run Browser Benchmark</button>
+          </div>
 
           <p className="status">Status: {status}</p>
         </div>
