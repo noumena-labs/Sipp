@@ -5,6 +5,7 @@ import {
 import { CogentConfig, EngineModuleOptions } from '../cogent-config.js';
 import { normalizeInitConfig } from '../core/init-config.js';
 import {
+  buildChatTemplateUserMessage,
   normalizePromptText,
   resolveEffectivePromptFormat,
 } from '../core/prompt-format.js';
@@ -226,11 +227,22 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       Boolean(media && media.length > 0)
     );
     const normalizedPromptText = normalizePromptText(promptText);
-    const formattedPromptText =
-      promptFormat === 'auto-chat' && media == null && this.cachedChatTemplate != null
-        ? bridge.applyChatTemplate([{ role: 'user', content: normalizedPromptText }], true) ||
-          normalizedPromptText
-        : normalizedPromptText;
+    let formattedPromptText = normalizedPromptText;
+    if (promptFormat === 'auto-chat' && this.cachedChatTemplate != null) {
+      const chatMessage =
+        media != null && media.length > 0
+          ? buildChatTemplateUserMessage(normalizedPromptText, this.cachedMediaMarker)
+          : { role: 'user' as const, content: normalizedPromptText };
+      formattedPromptText = bridge.applyChatTemplate(
+        [chatMessage],
+        true
+      );
+      if (formattedPromptText.length === 0) {
+        throw new Error(
+          'Failed to apply the model chat template for this prompt. Use promptFormat="raw" to bypass native template formatting.'
+        );
+      }
+    }
     return {
       contextKey,
       promptText: formattedPromptText,

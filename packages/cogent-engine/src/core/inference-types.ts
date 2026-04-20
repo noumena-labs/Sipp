@@ -12,6 +12,18 @@ export type ModelLoadReuseMode =
   | 'page-local-reuse'
   | 'buffer';
 
+export interface SamplingConfig {
+  repeatLastN?: number;
+  repeatPenalty?: number;
+  frequencyPenalty?: number;
+  presencePenalty?: number;
+  topK?: number;
+  topP?: number;
+  minP?: number;
+  temperature?: number;
+  seed?: number;
+}
+
 export interface InferenceInitConfig {
   nCtx?: number;
   nBatch?: number;
@@ -33,8 +45,11 @@ export interface InferenceInitConfig {
   enableRuntimeObservability?: boolean;
   enableBackendProfiling?: boolean;
   multimodalProjectorPath?: string;
+  multimodalUseGpu?: boolean;
+  debugCompareMultimodalEmbeddings?: boolean;
   imageMinTokens?: number;
   imageMaxTokens?: number;
+  sampling?: SamplingConfig;
 }
 
 export interface PromptOptions {

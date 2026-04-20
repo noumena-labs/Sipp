@@ -255,7 +255,7 @@ export class WorkerEntryState {
     }
     const queuedOptions = {
       nTokens: options.nTokens,
-      promptFormat: media != null ? 'raw' : options.promptFormat,
+      promptFormat: options.promptFormat,
       signal: options.signal,
       onToken: options.onToken,
       ...(media != null ? { media } : {}),

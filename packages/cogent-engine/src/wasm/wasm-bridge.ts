@@ -27,9 +27,14 @@ import {
 
 const RUNTIME_EVENT_DRAIN_TEXT_BUFFER_SIZE_BYTES = 64 * 1024;
 
-type ChatTemplateMessage = {
+export type ChatTemplateContentPart = {
+  type: 'text' | 'media_marker';
+  text: string;
+};
+
+export type ChatTemplateMessage = {
   role: string;
-  content: string;
+  content: string | ChatTemplateContentPart[];
 };
 
 export type WasmRuntimeTokenEvent = {
@@ -136,9 +141,31 @@ export class WasmBridge {
           'string',
           'number',
           'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
         ]
       : [
           'string',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
+          'number',
           'number',
           'number',
           'number',
@@ -182,8 +209,19 @@ export class WasmBridge {
           normalizedConfig.enableRuntimeObservability,
           normalizedConfig.enableBackendProfiling,
           normalizedConfig.multimodalProjectorPath ?? '',
+          normalizedConfig.multimodalUseGpu,
+          normalizedConfig.debugCompareMultimodalEmbeddings,
           normalizedConfig.imageMinTokens,
           normalizedConfig.imageMaxTokens,
+          normalizedConfig.samplingRepeatLastN,
+          normalizedConfig.samplingRepeatPenalty,
+          normalizedConfig.samplingFrequencyPenalty,
+          normalizedConfig.samplingPresencePenalty,
+          normalizedConfig.samplingTopK,
+          normalizedConfig.samplingTopP,
+          normalizedConfig.samplingMinP,
+          normalizedConfig.samplingTemperature,
+          normalizedConfig.samplingSeed,
         ]
       : [
           modelPath,
@@ -206,6 +244,17 @@ export class WasmBridge {
           normalizedConfig.adaptivePrefillChunking,
           normalizedConfig.enableRuntimeObservability,
           normalizedConfig.enableBackendProfiling,
+          normalizedConfig.multimodalUseGpu,
+          normalizedConfig.debugCompareMultimodalEmbeddings,
+          normalizedConfig.samplingRepeatLastN,
+          normalizedConfig.samplingRepeatPenalty,
+          normalizedConfig.samplingFrequencyPenalty,
+          normalizedConfig.samplingPresencePenalty,
+          normalizedConfig.samplingTopK,
+          normalizedConfig.samplingTopP,
+          normalizedConfig.samplingMinP,
+          normalizedConfig.samplingTemperature,
+          normalizedConfig.samplingSeed,
         ];
     const result = await this.module.ccall(ident, 'number', argTypes, args, {
       async: true,
@@ -747,14 +796,15 @@ export class WasmBridge {
         decodeEvalCount: this.module.HEAP32[i32Offset + 2],
         sampleCount: this.module.HEAP32[i32Offset + 3],
         outputTokenCount: this.module.HEAP32[i32Offset + 4],
-        batchParticipationCount: this.module.HEAP32[i32Offset + 5],
-        decodeFirstTickCount: this.module.HEAP32[i32Offset + 6],
-        chunkedPrefillTickCount: this.module.HEAP32[i32Offset + 7],
-        mixedWorkloadTickCount: this.module.HEAP32[i32Offset + 8],
-        lcpReuseTokens: this.module.HEAP32[i32Offset + 9],
-        prefixCacheRestoreTokens: this.module.HEAP32[i32Offset + 10],
-        prefixCacheHitCount: this.module.HEAP32[i32Offset + 11],
-        prefixCacheStoreCount: this.module.HEAP32[i32Offset + 12],
+        firstSampledTokenId: this.module.HEAP32[i32Offset + 5],
+        batchParticipationCount: this.module.HEAP32[i32Offset + 6],
+        decodeFirstTickCount: this.module.HEAP32[i32Offset + 7],
+        chunkedPrefillTickCount: this.module.HEAP32[i32Offset + 8],
+        mixedWorkloadTickCount: this.module.HEAP32[i32Offset + 9],
+        lcpReuseTokens: this.module.HEAP32[i32Offset + 10],
+        prefixCacheRestoreTokens: this.module.HEAP32[i32Offset + 11],
+        prefixCacheHitCount: this.module.HEAP32[i32Offset + 12],
+        prefixCacheStoreCount: this.module.HEAP32[i32Offset + 13],
       });
     } finally {
       this.free(metricsPtr);

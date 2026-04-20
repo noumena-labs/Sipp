@@ -51,6 +51,7 @@ class MockWasmBridgeModule implements EngineModule {
   public lastInitCall:
     | {
         ident: string;
+        argTypes: string[];
         args: any[];
       }
     | null = null;
@@ -133,7 +134,7 @@ class MockWasmBridgeModule implements EngineModule {
     args: any[],
     opts?: { async?: boolean }
   ): Promise<any> | any {
-    const result = this.handleCall(ident, args);
+    const result = this.handleCall(ident, _argTypes, args);
     return opts?.async ? Promise.resolve(result) : result;
   }
 
@@ -149,7 +150,7 @@ class MockWasmBridgeModule implements EngineModule {
     return ptr;
   }
 
-  private handleCall(ident: string, args: any[]): number {
+  private handleCall(ident: string, argTypes: string[], args: any[]): number {
     switch (ident) {
       case 'CE_RunSchedulerBurst':
         if (!this.supportsBurst) {
@@ -207,9 +208,18 @@ class MockWasmBridgeModule implements EngineModule {
         if (this.chatTemplate == null) {
           return 0;
         }
-        const messages = JSON.parse(String(args[0])) as Array<{ role: string; content: string }>;
+        const messages = JSON.parse(String(args[0])) as Array<{
+          role: string;
+          content: string | Array<{ type: string; text: string }>;
+        }>;
         const fallbackText = messages
-          .map((message) => `${message.role}:${message.content}`)
+          .map((message) => {
+            const content =
+              typeof message.content === 'string'
+                ? message.content
+                : message.content.map((part) => `${part.type}:${part.text}`).join(',');
+            return `${message.role}:${content}`;
+          })
           .join('|');
         return this.writeTempCString(
           this.appliedChatTemplateText || `templated:${fallbackText}:${Number(args[1])}`
@@ -241,7 +251,7 @@ class MockWasmBridgeModule implements EngineModule {
       }
       case 'CE_Init':
       case 'CE_InitWithMultimodal':
-        this.lastInitCall = { ident, args };
+        this.lastInitCall = { ident, argTypes: [...argTypes], args };
         return 0;
       case 'CE_FreeString':
         this.lastFreedBackendPtr = Number(args[0]);
@@ -271,7 +281,7 @@ class MockWasmBridgeModule implements EngineModule {
 
   private writeRuntimeObservability(ptr: number): void {
     const doubles = [9, 8, 7, 6, 5, 4, 3, 2, 1];
-    const ints = [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 12];
+    const ints = [11, 10, 9, 8, 7, 1234, 6, 5, 4, 3, 2, 1, 0, 12];
     const f64Offset = ptr >> 3;
     const i32Offset = (ptr + 9 * 8) >> 2;
     for (let index = 0; index < doubles.length; index += 1) {
@@ -438,12 +448,59 @@ test('WasmBridge calls multimodal init when a projector path is configured', asy
     enableRuntimeObservability: 0,
     enableBackendProfiling: 0,
     multimodalProjectorPath: '/models/mmproj.gguf',
+    multimodalUseGpu: 0,
+    debugCompareMultimodalEmbeddings: 0,
     imageMinTokens: 64,
     imageMaxTokens: 256,
+    samplingRepeatLastN: 96,
+    samplingRepeatPenalty: 1.1,
+    samplingFrequencyPenalty: 0.2,
+    samplingPresencePenalty: 0.3,
+    samplingTopK: 24,
+    samplingTopP: 0.92,
+    samplingMinP: 0.08,
+    samplingTemperature: 0.55,
+    samplingSeed: 1337,
   });
 
   assert.deepEqual(module.lastInitCall, {
     ident: 'CE_InitWithMultimodal',
+    argTypes: [
+      'string',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'string',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+    ],
     args: [
       '/models/model.gguf',
       4096,
@@ -466,8 +523,19 @@ test('WasmBridge calls multimodal init when a projector path is configured', asy
       0,
       0,
       '/models/mmproj.gguf',
+      0,
+      0,
       64,
       256,
+      96,
+      1.1,
+      0.2,
+      0.3,
+      24,
+      0.92,
+      0.08,
+      0.55,
+      1337,
     ],
   });
 });
@@ -482,7 +550,18 @@ test('WasmBridge flattens media buffers and frees the native template string', (
   assert.equal(bridge.getMediaMarker(), '<__media__>');
   assert.equal(bridge.getChatTemplate(), 'template');
   assert.equal(
-    bridge.applyChatTemplate([{ role: 'user', content: 'hello' }], true),
+    bridge.applyChatTemplate(
+      [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'look ' },
+            { type: 'media_marker', text: '<__media__>' },
+          ],
+        },
+      ],
+      true
+    ),
     'templated prompt'
   );
 
@@ -531,5 +610,6 @@ test('WasmBridge reads aggregate runtime observability from the module heap', ()
 
   assert.equal(metrics?.totalMs, 9);
   assert.equal(metrics?.outputTokenCount, 7);
+  assert.equal(metrics?.firstSampledTokenId, 1234);
   assert.equal(metrics?.prefixCacheStoreCount, 12);
 });

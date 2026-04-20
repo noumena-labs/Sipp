@@ -11,17 +11,19 @@
 
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <functional>
 #include <memory>
-#include <utility>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
+#include "chat.h"
 #include "mtmd-helper.h"
 #include "mtmd.h"
-#include "runtime/llama/llama_utils.h"
 #include "runtime/config/scheduler_policy.h"
+#include "runtime/llama/llama_utils.h"
 
 namespace {
 
@@ -47,12 +49,24 @@ normalize_config(noumena::cogentengine::InferenceRuntimeConfig config) {
       std::max<int32_t>(1, config.max_prefix_cache_entries);
   config.image_min_tokens = std::max<int32_t>(0, config.image_min_tokens);
   config.image_max_tokens = std::max<int32_t>(0, config.image_max_tokens);
+  config.multimodal_use_gpu =
+      std::clamp<int32_t>(config.multimodal_use_gpu, -1, 1);
+  config.debug_compare_multimodal_embeddings =
+      config.debug_compare_multimodal_embeddings > 0 ? 1 : 0;
+  config.sampling_repeat_last_n =
+      std::max<int32_t>(0, config.sampling_repeat_last_n);
+  config.sampling_repeat_penalty =
+      std::max<float>(0.0f, config.sampling_repeat_penalty);
+  config.sampling_top_k = std::max<int32_t>(0, config.sampling_top_k);
+  config.sampling_top_p = std::max<float>(0.0f, config.sampling_top_p);
+  config.sampling_min_p = std::max<float>(0.0f, config.sampling_min_p);
+  config.sampling_temperature =
+      std::max<float>(0.0f, config.sampling_temperature);
   config.scheduler_policy.decode_token_reserve =
       std::max<int32_t>(0, config.scheduler_policy.decode_token_reserve);
   config.enable_runtime_observability =
       config.enable_runtime_observability > 0 ? 1 : 0;
-  config.enable_backend_profiling =
-      config.enable_backend_profiling > 0 ? 1 : 0;
+  config.enable_backend_profiling = config.enable_backend_profiling > 0 ? 1 : 0;
   if (config.enable_backend_profiling > 0) {
     config.enable_runtime_observability = 1;
   }
@@ -64,6 +78,13 @@ double proportional_share(double total, int32_t part, int32_t whole) {
     return 0.0;
   }
   return total * (static_cast<double>(part) / static_cast<double>(whole));
+}
+
+uint32_t resolve_sampling_seed(int32_t seed) {
+  if (seed < 0) {
+    return LLAMA_DEFAULT_SEED;
+  }
+  return static_cast<uint32_t>(seed);
 }
 
 } // namespace
@@ -176,23 +197,23 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
 
   const bool has_live_tokens = !state.current_kv_tokens.empty();
   const std::size_t live_match_len =
-      has_live_tokens ? session_store_.ComputeLcpReuse(state, prompt_tokens) : 0;
+      has_live_tokens ? session_store_.ComputeLcpReuse(state, prompt_tokens)
+                      : 0;
   std::size_t match_len = live_match_len;
   bool restored_from_prefix_cache = false;
 
   if (!has_live_tokens && !prompt_tokens.empty()) {
-    if (const PrefixCacheEntry *cached_prefix = prefix_state_cache_.FindBestPrefix(
-            model_fingerprint_, context_key, prompt_tokens,
-            prefix_cache_policy_);
+    if (const PrefixCacheEntry *cached_prefix =
+            prefix_state_cache_.FindBestPrefix(model_fingerprint_, context_key,
+                                               prompt_tokens,
+                                               prefix_cache_policy_);
         cached_prefix != nullptr) {
       llama_memory_t mem = llama_get_memory(shared_context_);
       llama_memory_seq_rm(mem, state.seq_id, 0, -1);
 
-      const std::size_t restored =
-          llama_state_seq_set_data(shared_context_,
-                                   cached_prefix->state_bytes.data(),
-                                   cached_prefix->state_bytes.size(),
-                                   state.seq_id);
+      const std::size_t restored = llama_state_seq_set_data(
+          shared_context_, cached_prefix->state_bytes.data(),
+          cached_prefix->state_bytes.size(), state.seq_id);
       if (restored == cached_prefix->state_bytes.size()) {
         state.current_kv_tokens = cached_prefix->prefix_tokens;
         state.n_past = static_cast<int>(cached_prefix->token_count);
@@ -225,9 +246,9 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
   }
 
   // EnsureContextSpace may have shrunk the KV cache (tail truncation) or evict
-  // tokens from the middle (shifting the sequence). Either action invalidates 
-  // our previously calculated match_len if the mutated state no longer matches 
-  // the prompt. Re-compute the true longest common prefix length to guarantee 
+  // tokens from the middle (shifting the sequence). Either action invalidates
+  // our previously calculated match_len if the mutated state no longer matches
+  // the prompt. Re-compute the true longest common prefix length to guarantee
   // that we don't accidentally skip prefilling tokens that were just evicted.
   match_len = 0;
   for (std::size_t i = 0;
@@ -318,8 +339,8 @@ void InferenceRuntime::MaybeStorePrefixCacheEntryLocked(
   if (request != nullptr && request->is_multimodal_turn) {
     return;
   }
-  if (shared_context_ == nullptr || state.seq_id < 0 ||
-      token_count == 0 || token_count > state.current_kv_tokens.size()) {
+  if (shared_context_ == nullptr || state.seq_id < 0 || token_count == 0 ||
+      token_count > state.current_kv_tokens.size()) {
     return;
   }
   if (!prefix_cache_policy_.ShouldStoreBoundary(token_count,
@@ -329,10 +350,9 @@ void InferenceRuntime::MaybeStorePrefixCacheEntryLocked(
 
   const std::uint64_t prefix_hash =
       prefix_cache_policy_.HashPrefix(state.current_kv_tokens, token_count);
-  if (!prefix_state_cache_.StorePrefixState(shared_context_, state.seq_id,
-                                            model_fingerprint_, context_key,
-                                            state.current_kv_tokens, token_count,
-                                            prefix_hash, token_count)) {
+  if (!prefix_state_cache_.StorePrefixState(
+          shared_context_, state.seq_id, model_fingerprint_, context_key,
+          state.current_kv_tokens, token_count, prefix_hash, token_count)) {
     return;
   }
 
@@ -362,8 +382,8 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
   std::vector<const mtmd_bitmap *> bitmap_ptrs;
   bitmap_ptrs.reserve(multimodal.image_buffers.size());
   for (const std::vector<std::uint8_t> &buffer : multimodal.image_buffers) {
-    mtmd_bitmap *bitmap =
-        mtmd_helper_bitmap_init_from_buf(mtmd_ctx_, buffer.data(), buffer.size());
+    mtmd_bitmap *bitmap = mtmd_helper_bitmap_init_from_buf(
+        mtmd_ctx_, buffer.data(), buffer.size());
     if (bitmap == nullptr) {
       request.multimodal.reset();
       return false;
@@ -372,15 +392,23 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
     bitmap_ptrs.push_back(bitmap);
   }
 
+  std::string prompt_text = request.original_prompt;
+  const char *media_marker = mtmd_default_marker();
+  if (media_marker != nullptr && media_marker[0] != '\0' &&
+      prompt_text.find(media_marker) == std::string::npos) {
+    for (std::size_t index = 0; index < bitmap_ptrs.size(); ++index) {
+      prompt_text.insert(0, media_marker);
+    }
+  }
+
   mtmd_input_text text_input{};
-  text_input.text = request.original_prompt.c_str();
-  text_input.add_special = true;
+  text_input.text = prompt_text.c_str();
+  text_input.add_special = session.n_past == 0;
   text_input.parse_special = true;
 
   InputChunksPtr chunks(mtmd_input_chunks_init(), &mtmd_input_chunks_free);
-  if (!chunks ||
-      mtmd_tokenize(mtmd_ctx_, chunks.get(), &text_input, bitmap_ptrs.data(),
-                    bitmap_ptrs.size()) != 0) {
+  if (!chunks || mtmd_tokenize(mtmd_ctx_, chunks.get(), &text_input,
+                               bitmap_ptrs.data(), bitmap_ptrs.size()) != 0) {
     request.multimodal.reset();
     return false;
   }
@@ -393,30 +421,53 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
   session.current_kv_tokens.clear();
   session.n_past = 0;
 
+  const auto prefill_start = std::chrono::steady_clock::now();
   llama_pos new_n_past = 0;
   const int32_t eval_status = mtmd_helper_eval_chunks(
       mtmd_ctx_, shared_context_, chunks.get(), 0, session.seq_id,
       config_.n_batch > 0 ? config_.n_batch : 256, true, &new_n_past);
+  const auto prefill_end = std::chrono::steady_clock::now();
   request.multimodal.reset();
   if (eval_status != 0) {
     return false;
   }
 
   session.n_past = static_cast<int>(new_n_past);
+  const double multimodal_prefill_ms =
+      std::chrono::duration<double, std::milli>(prefill_end - prefill_start)
+          .count();
+  request.attributed_prompt_eval_tokens += session.n_past;
+  request.attributed_prompt_eval_ms += multimodal_prefill_ms;
+  request.attributed_total_ms += multimodal_prefill_ms;
   slot.prefill_cursor = request.prompt_tokens.size();
+
+  // The multimodal prefill path runs on the same async backends as normal
+  // decode, so force completion before reading logits for the first sample.
+  llama_synchronize(shared_context_);
 
   const llama_token next_token =
       llama_sampler_sample(slot.sampler, shared_context_, -1);
+  llama_sampler_accept(slot.sampler, next_token);
+  request.attributed_sample_count++;
+  request.first_sampled_token_id = static_cast<int32_t>(next_token);
   if (llama_vocab_is_eog(vocab, next_token)) {
-    slot.phase = SlotPhase::Completed;
-    request.lifecycle = GenerateRequestLifecycle::Completed;
-    return true;
+    slot.terminal_error_message =
+        "Model ended generation immediately after multimodal prefill "
+        "(first sampled token was EOG).";
+    return false;
   }
 
   char piece_buffer[128];
-  const int piece_length = llama_token_to_piece(
-      vocab, next_token, piece_buffer, sizeof(piece_buffer), 0, true);
+  const int piece_length = llama_token_to_piece(vocab, next_token, piece_buffer,
+                                                sizeof(piece_buffer), 0, true);
   if (piece_length < 0) {
+    slot.terminal_error_message =
+        "Failed to convert the first multimodal sampled token to text.";
+    return false;
+  }
+  if (piece_length == 0) {
+    slot.terminal_error_message =
+        "First multimodal sampled token decoded to an empty text piece.";
     return false;
   }
 
@@ -488,8 +539,8 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   }
 
   for (SlotState *slot : runnable_slots) {
-    if (slot == nullptr || slot->request == nullptr || slot->session == nullptr ||
-        slot->seq_id < 0) {
+    if (slot == nullptr || slot->request == nullptr ||
+        slot->session == nullptr || slot->seq_id < 0) {
       if (slot != nullptr) {
         slot->terminal_error_message =
             "Runnable slot lost request or sequence state.";
@@ -517,8 +568,10 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     if (slot->phase == SlotPhase::Prefill && slot->prefill_cursor == 0) {
       if (request.is_multimodal_turn) {
         if (!RunMultimodalPrefillLocked(*slot, vocab)) {
-          slot->terminal_error_message =
-              "Failed to evaluate multimodal prompt.";
+          if (slot->terminal_error_message.empty()) {
+            slot->terminal_error_message =
+                "Failed to evaluate multimodal prompt.";
+          }
           slot->phase = SlotPhase::Failed;
           request.lifecycle = GenerateRequestLifecycle::Failed;
           request.multimodal.reset();
@@ -527,11 +580,11 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       }
 
       std::size_t prefill_cursor = 0;
-      if (!PrepareSequenceForPromptLocked(request.context_key,
-                                          request.prompt_tokens,
-                                          request.max_output_tokens, session,
-                                          &request, prefill_cursor)) {
-        slot->terminal_error_message = "Failed to prepare sequence for prompt reuse.";
+      if (!PrepareSequenceForPromptLocked(
+              request.context_key, request.prompt_tokens,
+              request.max_output_tokens, session, &request, prefill_cursor)) {
+        slot->terminal_error_message =
+            "Failed to prepare sequence for prompt reuse.";
         slot->phase = SlotPhase::Failed;
         request.lifecycle = GenerateRequestLifecycle::Failed;
         continue;
@@ -552,7 +605,8 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   std::vector<SlotState *> live_decode_ready_slots =
       slot_scheduler_.SelectDecodeReadySlots();
   for (SlotState *slot : live_decode_ready_slots) {
-    if (slot == nullptr || slot->request == nullptr || slot->session == nullptr) {
+    if (slot == nullptr || slot->request == nullptr ||
+        slot->session == nullptr) {
       continue;
     }
 
@@ -572,7 +626,8 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     return false;
   }
 
-  const int32_t batch_token_budget = config_.n_batch > 0 ? config_.n_batch : 256;
+  const int32_t batch_token_budget =
+      config_.n_batch > 0 ? config_.n_batch : 256;
   const SchedulerTickBudget tick_budget = slot_scheduler_.BuildTickBudget(
       config_.scheduler_policy,
       static_cast<int32_t>(live_decode_ready_slots.size()),
@@ -602,10 +657,9 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     std::unordered_set<GenerateRequest *> prefill_request_set;
     prefill_request_set.reserve(plan.contributions.size());
 
-    const auto mark_request = [](
-                                  std::vector<GenerateRequest *> &requests,
-                                  std::unordered_set<GenerateRequest *> &seen,
-                                  GenerateRequest *request) {
+    const auto mark_request = [](std::vector<GenerateRequest *> &requests,
+                                 std::unordered_set<GenerateRequest *> &seen,
+                                 GenerateRequest *request) {
       if (request == nullptr || !seen.insert(request).second) {
         return;
       }
@@ -613,7 +667,8 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     };
 
     for (const BatchContribution &contribution : plan.contributions) {
-      if (contribution.slot == nullptr || contribution.slot->request == nullptr) {
+      if (contribution.slot == nullptr ||
+          contribution.slot->request == nullptr) {
         continue;
       }
       mark_request(tick_requests, tick_request_set, contribution.slot->request);
@@ -662,15 +717,14 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       continue;
     }
 
-    const bool added = contribution.kind == BatchContributionKind::Prefill
-                           ? shared_batch_builder_.AddPrefillToken(
-                                 contribution.token, contribution.position,
-                                 contribution.slot->seq_id,
-                                 contribution.request_logits)
-                           : shared_batch_builder_.AddDecodeToken(
-                                 contribution.token, contribution.position,
-                                 contribution.slot->seq_id,
-                                 contribution.request_logits);
+    const bool added =
+        contribution.kind == BatchContributionKind::Prefill
+            ? shared_batch_builder_.AddPrefillToken(
+                  contribution.token, contribution.position,
+                  contribution.slot->seq_id, contribution.request_logits)
+            : shared_batch_builder_.AddDecodeToken(
+                  contribution.token, contribution.position,
+                  contribution.slot->seq_id, contribution.request_logits);
     if (!added) {
       if (contribution.slot != nullptr) {
         contribution.slot->terminal_error_message =
@@ -738,7 +792,8 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     prefix_cache_slot_set.reserve(plan.contributions.size());
     for (const BatchContribution &contribution : plan.contributions) {
       if (contribution.kind != BatchContributionKind::Prefill ||
-          contribution.slot == nullptr || contribution.slot->request == nullptr ||
+          contribution.slot == nullptr ||
+          contribution.slot->request == nullptr ||
           contribution.slot->session == nullptr) {
         continue;
       }
@@ -749,15 +804,14 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     }
 
     for (SlotState *slot : prefix_cache_slots) {
-      MaybeStorePrefixCacheEntryLocked(slot->request->context_key, *slot->session,
-                                       slot->session->current_kv_tokens.size(),
-                                       slot->request->prompt_tokens.size(),
-                                       slot->request);
+      MaybeStorePrefixCacheEntryLocked(
+          slot->request->context_key, *slot->session,
+          slot->session->current_kv_tokens.size(),
+          slot->request->prompt_tokens.size(), slot->request);
     }
   }
 
-  for (const PendingLogitsContribution &pending_logits :
-       logits_contributions) {
+  for (const PendingLogitsContribution &pending_logits : logits_contributions) {
     const BatchContribution *logit_contribution = pending_logits.contribution;
     if (logit_contribution == nullptr || logit_contribution->slot == nullptr ||
         logit_contribution->slot->request == nullptr ||
@@ -770,6 +824,10 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     GenerateRequest &slot_request = *slot.request;
     const llama_token next_token = llama_sampler_sample(
         slot.sampler, shared_context_, pending_logits.batch_token_index);
+    llama_sampler_accept(slot.sampler, next_token);
+    if (slot_request.first_sampled_token_id < 0) {
+      slot_request.first_sampled_token_id = static_cast<int32_t>(next_token);
+    }
 
     if (llama_vocab_is_eog(vocab, next_token)) {
       slot.phase = SlotPhase::Completed;
@@ -783,6 +841,13 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     if (piece_length < 0) {
       slot.terminal_error_message =
           "Failed to convert sampled token to text piece.";
+      slot.phase = SlotPhase::Failed;
+      slot_request.lifecycle = GenerateRequestLifecycle::Failed;
+      continue;
+    }
+    if (piece_length == 0 && slot_request.emitted_token_count == 0) {
+      slot.terminal_error_message =
+          "Leading sampled token decoded to an empty text piece.";
       slot.phase = SlotPhase::Failed;
       slot_request.lifecycle = GenerateRequestLifecycle::Failed;
       continue;
@@ -842,7 +907,8 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     };
 
     for (const BatchContribution &contribution : plan.contributions) {
-      if (contribution.slot == nullptr || contribution.slot->request == nullptr) {
+      if (contribution.slot == nullptr ||
+          contribution.slot->request == nullptr) {
         continue;
       }
       GenerateRequest *request = contribution.slot->request;
@@ -899,28 +965,24 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
                                                 : 0;
       const int32_t request_sample_count =
           sample_counts.contains(request) ? sample_counts[request] : 0;
-      const double request_sample_ms =
-          sample_ms_by_request.contains(request) ? sample_ms_by_request[request]
-                                                 : 0.0;
+      const double request_sample_ms = sample_ms_by_request.contains(request)
+                                           ? sample_ms_by_request[request]
+                                           : 0.0;
       const int32_t request_work_units =
           request_prefill_tokens + request_decode_tokens + request_sample_count;
 
-      const double prompt_share_ms =
-          proportional_share(ctx_perf.t_p_eval_ms, request_prefill_tokens,
-                             total_prefill_tokens);
-      const double decode_share_ms =
-          proportional_share(ctx_perf.t_eval_ms, request_decode_tokens,
-                             total_decode_tokens);
-      const double overhead_share_ms =
-          proportional_share(tick_overhead_ms, request_work_units,
-                             total_work_units);
+      const double prompt_share_ms = proportional_share(
+          ctx_perf.t_p_eval_ms, request_prefill_tokens, total_prefill_tokens);
+      const double decode_share_ms = proportional_share(
+          ctx_perf.t_eval_ms, request_decode_tokens, total_decode_tokens);
+      const double overhead_share_ms = proportional_share(
+          tick_overhead_ms, request_work_units, total_work_units);
 
       request->attributed_prompt_eval_ms += prompt_share_ms;
       request->attributed_decode_eval_ms += decode_share_ms;
       request->attributed_sample_ms += request_sample_ms;
-      request->attributed_total_ms +=
-          prompt_share_ms + decode_share_ms + request_sample_ms +
-          overhead_share_ms;
+      request->attributed_total_ms += prompt_share_ms + decode_share_ms +
+                                      request_sample_ms + overhead_share_ms;
       request->attributed_prompt_eval_tokens += request_prefill_tokens;
       request->attributed_decode_eval_count += request_decode_tokens;
       request->attributed_sample_count += request_sample_count;
@@ -945,14 +1007,20 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     last_runtime_observability_.sample_count +=
         static_cast<int32_t>(logits_contributions.size());
     last_runtime_observability_.output_token_count = 0;
+    last_runtime_observability_.first_sampled_token_id = -1;
     last_runtime_observability_.lcp_reuse_tokens = 0;
     last_runtime_observability_.prefix_cache_restore_tokens = 0;
     last_runtime_observability_.prefix_cache_hit_count = 0;
     last_runtime_observability_.prefix_cache_store_count = 0;
     for (SlotState *slot : live_runnable_slots) {
-      if (slot != nullptr && slot->sampler != nullptr) {
+      if (slot != nullptr && slot->request != nullptr) {
         last_runtime_observability_.output_token_count +=
-            static_cast<int32_t>(slot->generated_tokens.size());
+            slot->request->emitted_token_count;
+        if (last_runtime_observability_.first_sampled_token_id < 0 &&
+            slot->request->first_sampled_token_id >= 0) {
+          last_runtime_observability_.first_sampled_token_id =
+              slot->request->first_sampled_token_id;
+        }
       }
       if (slot != nullptr && slot->request != nullptr) {
         last_runtime_observability_.lcp_reuse_tokens +=
@@ -974,7 +1042,6 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   return true;
 }
 
-
 int32_t InferenceRuntime::ResolvePrefillChunkSizeLocked(
     const SchedulerTickBudget &tick_budget, int32_t decode_ready_count,
     int32_t prefill_ready_count) const {
@@ -993,8 +1060,8 @@ int32_t InferenceRuntime::ResolvePrefillChunkSizeLocked(
     return configured_chunk_size;
   }
 
-  const int32_t fair_share =
-      std::max<int32_t>(1, prefill_budget / std::max<int32_t>(1, prefill_ready_count));
+  const int32_t fair_share = std::max<int32_t>(
+      1, prefill_budget / std::max<int32_t>(1, prefill_ready_count));
   if (configured_chunk_size > 0) {
     return std::min(configured_chunk_size, fair_share);
   }
@@ -1065,15 +1132,15 @@ void InferenceRuntime::CommitCompletedObservabilityLocked(
       accumulated_runtime_observability.sample_ms;
   last_runtime_observability_.prompt_eval_tokens =
       accumulated_runtime_observability.prompt_eval_tokens;
-  last_runtime_observability_.decode_eval_count = std::max(
-      last_runtime_observability_.decode_eval_count,
-      accumulated_runtime_observability.decode_eval_count);
-  last_runtime_observability_.sample_count = std::max(
-      last_runtime_observability_.sample_count,
-      accumulated_runtime_observability.sample_count);
-  last_runtime_observability_.output_token_count = std::max(
-      last_runtime_observability_.output_token_count,
-      accumulated_runtime_observability.output_token_count);
+  last_runtime_observability_.decode_eval_count =
+      std::max(last_runtime_observability_.decode_eval_count,
+               accumulated_runtime_observability.decode_eval_count);
+  last_runtime_observability_.sample_count =
+      std::max(last_runtime_observability_.sample_count,
+               accumulated_runtime_observability.sample_count);
+  last_runtime_observability_.output_token_count =
+      std::max(last_runtime_observability_.output_token_count,
+               accumulated_runtime_observability.output_token_count);
   has_last_runtime_observability_ = true;
 
   scheduler_observability_.accumulated_queue_delay_ms +=
@@ -1111,16 +1178,17 @@ void InferenceRuntime::CommitNewCompletedResponsesObservabilityLocked() {
 InferenceRuntime::InferenceRuntime(std::string model_path,
                                    InferenceRuntimeConfig config)
     : config_(normalize_config(config)),
-      session_store_(static_cast<size_t>(config_.max_cached_sessions),
-                     static_cast<size_t>(std::max<int32_t>(1, config_.n_seq_max))),
+      session_store_(
+          static_cast<size_t>(config_.max_cached_sessions),
+          static_cast<size_t>(std::max<int32_t>(1, config_.n_seq_max))),
       prefix_state_cache_(static_cast<std::size_t>(
           std::max<int32_t>(1, config_.max_prefix_cache_entries))),
       prefix_cache_policy_(static_cast<std::size_t>(
           config_.prefix_cache_interval_tokens > 0
               ? config_.prefix_cache_interval_tokens
               : static_cast<int32_t>(kDefaultPrefixCacheIntervalTokens))),
-      model_fingerprint_(static_cast<std::uint64_t>(
-          std::hash<std::string>{}(model_path))) {
+      model_fingerprint_(
+          static_cast<std::uint64_t>(std::hash<std::string>{}(model_path))) {
   if (model_path.empty()) {
     fprintf(stderr, "%s: error: model path is required\n", __func__);
     return;
@@ -1143,7 +1211,8 @@ InferenceRuntime::InferenceRuntime(std::string model_path,
 
   ggml_backend_dev_t cpu_only_devices[2] = {nullptr, nullptr};
   if (config_.gpu_layers == 0) {
-    cpu_only_devices[0] = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    cpu_only_devices[0] =
+        ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     if (cpu_only_devices[0] != nullptr) {
       model_params.devices = cpu_only_devices;
     }
@@ -1155,6 +1224,17 @@ InferenceRuntime::InferenceRuntime(std::string model_path,
     return;
   }
 
+  if (const char *tmpl = llama_model_chat_template(primary_model_, nullptr);
+      tmpl != nullptr && tmpl[0] != '\0') {
+    try {
+      chat_templates_ = common_chat_templates_init(primary_model_, "");
+    } catch (const std::exception &error) {
+      fprintf(stderr,
+              "%s: warning: failed to initialize common chat template: %s\n",
+              __func__, error.what());
+    }
+  }
+
   shared_context_ = CreateContext();
   if (shared_context_ == nullptr) {
     fprintf(stderr, "%s: error: failed to create shared context\n", __func__);
@@ -1164,7 +1244,11 @@ InferenceRuntime::InferenceRuntime(std::string model_path,
 
   if (!config_.mmproj_path.empty()) {
     mtmd_context_params mtmd_params = mtmd_context_params_default();
-    mtmd_params.use_gpu = config_.gpu_layers != 0;
+    mtmd_params.use_gpu = config_.multimodal_use_gpu >= 0
+                              ? config_.multimodal_use_gpu != 0
+                              : config_.gpu_layers != 0;
+    mtmd_params.debug_compare_embeddings =
+        config_.debug_compare_multimodal_embeddings > 0;
     mtmd_params.print_timings = false;
     mtmd_params.n_threads = config_.n_threads > 0
                                 ? config_.n_threads
@@ -1179,22 +1263,35 @@ InferenceRuntime::InferenceRuntime(std::string model_path,
     if (config_.image_max_tokens > 0) {
       mtmd_params.image_max_tokens = config_.image_max_tokens;
     }
-    mtmd_ctx_ =
-        mtmd_init_from_file(config_.mmproj_path.c_str(), primary_model_,
-                            mtmd_params);
+    mtmd_ctx_ = mtmd_init_from_file(config_.mmproj_path.c_str(), primary_model_,
+                                    mtmd_params);
   }
 
   auto sparams = llama_sampler_chain_default_params();
   sparams.no_perf = config_.enable_runtime_observability == 0;
   sampler_ = llama_sampler_chain_init(sparams);
+  if (!sampler_) {
+    return;
+  }
 
+  llama_sampler_chain_add(sampler_, llama_sampler_init_penalties(
+                                        config_.sampling_repeat_last_n,
+                                        config_.sampling_repeat_penalty,
+                                        config_.sampling_frequency_penalty,
+                                        config_.sampling_presence_penalty));
   llama_sampler_chain_add(sampler_,
-                          llama_sampler_init_penalties(64, 1.05f, 0.0f, 0.0f));
-  llama_sampler_chain_add(sampler_, llama_sampler_init_top_k(40));
-  llama_sampler_chain_add(sampler_, llama_sampler_init_top_p(0.8f, 1));
-  llama_sampler_chain_add(sampler_, llama_sampler_init_temp(0.7f));
+                          llama_sampler_init_top_k(config_.sampling_top_k));
   llama_sampler_chain_add(sampler_,
-                          llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
+                          llama_sampler_init_top_p(config_.sampling_top_p, 1));
+  if (config_.sampling_min_p > 0.0f) {
+    llama_sampler_chain_add(
+        sampler_, llama_sampler_init_min_p(config_.sampling_min_p, 1));
+  }
+  llama_sampler_chain_add(
+      sampler_, llama_sampler_init_temp(config_.sampling_temperature));
+  llama_sampler_chain_add(
+      sampler_,
+      llama_sampler_init_dist(resolve_sampling_seed(config_.sampling_seed)));
 
   slot_scheduler_.Resize(
       static_cast<std::size_t>(std::max<int32_t>(1, config_.n_seq_max)));
@@ -1348,8 +1445,8 @@ GenerateRequestId InferenceRuntime::EnqueueMultimodalRequest(
     std::string context_key, std::string prompt, int n_tokens_predict,
     std::vector<std::pair<const std::uint8_t *, std::size_t>> image_views,
     TokenCallback on_token_received) {
-  if (primary_model_ == nullptr || sampler_ == nullptr || mtmd_ctx_ == nullptr ||
-      !mtmd_support_vision(mtmd_ctx_)) {
+  if (primary_model_ == nullptr || sampler_ == nullptr ||
+      mtmd_ctx_ == nullptr || !mtmd_support_vision(mtmd_ctx_)) {
     return 0;
   }
   if (n_tokens_predict <= 0 || n_tokens_predict > kMaxPredictionTokens) {
@@ -1374,8 +1471,8 @@ GenerateRequestId InferenceRuntime::EnqueueMultimodalRequest(
   }
 
   std::lock_guard<std::mutex> lock(operation_mutex_);
-  if (primary_model_ == nullptr || sampler_ == nullptr || mtmd_ctx_ == nullptr ||
-      !mtmd_support_vision(mtmd_ctx_)) {
+  if (primary_model_ == nullptr || sampler_ == nullptr ||
+      mtmd_ctx_ == nullptr || !mtmd_support_vision(mtmd_ctx_)) {
     return 0;
   }
 
@@ -1415,25 +1512,24 @@ SchedulerBurstResult InferenceRuntime::RunSchedulerBurst(
   std::lock_guard<std::mutex> lock(operation_mutex_);
 
   SchedulerBurstResult burst_result;
-  if (max_ticks <= 0 || primary_model_ == nullptr || shared_context_ == nullptr ||
-      sampler_ == nullptr) {
+  if (max_ticks <= 0 || primary_model_ == nullptr ||
+      shared_context_ == nullptr || sampler_ == nullptr) {
     burst_result.status = RequestStepResult::Invalid;
     return burst_result;
   }
 
   const int32_t clamped_max_completed =
       std::max<int32_t>(0, max_completed_responses);
-  const int32_t clamped_max_emitted =
-      std::max<int32_t>(0, max_emitted_tokens);
+  const int32_t clamped_max_emitted = std::max<int32_t>(0, max_emitted_tokens);
   const bool has_duration_deadline = max_duration_us > 0;
-  const auto deadline =
-      has_duration_deadline
-          ? std::chrono::steady_clock::now() +
-                std::chrono::microseconds(max_duration_us)
-          : std::chrono::steady_clock::time_point::max();
+  const auto deadline = has_duration_deadline
+                            ? std::chrono::steady_clock::now() +
+                                  std::chrono::microseconds(max_duration_us)
+                            : std::chrono::steady_clock::time_point::max();
 
   for (int32_t tick_index = 0; tick_index < max_ticks; ++tick_index) {
-    const std::size_t completed_before = request_queue_.CompletedResponseCount();
+    const std::size_t completed_before =
+        request_queue_.CompletedResponseCount();
     const int32_t emitted_before = request_queue_.TotalEmittedTokenCount();
     const RequestStepResult step_result = RunSchedulerTickLocked();
     const std::size_t completed_after = request_queue_.CompletedResponseCount();
@@ -1441,8 +1537,8 @@ SchedulerBurstResult InferenceRuntime::RunSchedulerBurst(
 
     burst_result.ticks_executed++;
     if (completed_after > completed_before) {
-      burst_result.completed_response_count += static_cast<int32_t>(
-          completed_after - completed_before);
+      burst_result.completed_response_count +=
+          static_cast<int32_t>(completed_after - completed_before);
     }
     if (emitted_after > emitted_before) {
       burst_result.emitted_token_count += emitted_after - emitted_before;
@@ -1459,11 +1555,10 @@ SchedulerBurstResult InferenceRuntime::RunSchedulerBurst(
     }
 
     if (step_result == RequestStepResult::Waiting) {
-      burst_result.status =
-          burst_result.progressed_ticks > 0 ||
-                  burst_result.completed_response_count > 0
-              ? RequestStepResult::Progressed
-              : RequestStepResult::Waiting;
+      burst_result.status = burst_result.progressed_ticks > 0 ||
+                                    burst_result.completed_response_count > 0
+                                ? RequestStepResult::Progressed
+                                : RequestStepResult::Waiting;
       return burst_result;
     }
 
@@ -1477,22 +1572,19 @@ SchedulerBurstResult InferenceRuntime::RunSchedulerBurst(
       burst_result.status = RequestStepResult::Progressed;
       return burst_result;
     }
-    if (has_duration_deadline &&
-        std::chrono::steady_clock::now() >= deadline) {
-      burst_result.status =
-          burst_result.progressed_ticks > 0 ||
-                  burst_result.completed_response_count > 0
-              ? RequestStepResult::Progressed
-              : RequestStepResult::Waiting;
+    if (has_duration_deadline && std::chrono::steady_clock::now() >= deadline) {
+      burst_result.status = burst_result.progressed_ticks > 0 ||
+                                    burst_result.completed_response_count > 0
+                                ? RequestStepResult::Progressed
+                                : RequestStepResult::Waiting;
       return burst_result;
     }
   }
 
-  burst_result.status =
-      burst_result.progressed_ticks > 0 ||
-              burst_result.completed_response_count > 0
-          ? RequestStepResult::Progressed
-          : RequestStepResult::Waiting;
+  burst_result.status = burst_result.progressed_ticks > 0 ||
+                                burst_result.completed_response_count > 0
+                            ? RequestStepResult::Progressed
+                            : RequestStepResult::Waiting;
   return burst_result;
 }
 
@@ -1542,11 +1634,12 @@ RequestStepResult InferenceRuntime::RunSchedulerTickLocked() {
                                          : RequestStepResult::Waiting;
 }
 
-RequestStepResult InferenceRuntime::RunRequestStep(GenerateRequestId request_id) {
+RequestStepResult
+InferenceRuntime::RunRequestStep(GenerateRequestId request_id) {
   std::lock_guard<std::mutex> lock(operation_mutex_);
 
-  if (request_id == 0 || primary_model_ == nullptr || shared_context_ == nullptr ||
-      sampler_ == nullptr) {
+  if (request_id == 0 || primary_model_ == nullptr ||
+      shared_context_ == nullptr || sampler_ == nullptr) {
     return RequestStepResult::Invalid;
   }
 
@@ -1576,13 +1669,15 @@ RequestStepResult InferenceRuntime::RunRequestStep(GenerateRequestId request_id)
 
   const bool tick_executed = RunPolicyBatchTickLocked();
 
-  // Ensure terminal slots (Completed/Failed) are always moved to the request_queue,
-  // especially if RunPolicyBatchTickLocked failed early due to slot setup errors.
+  // Ensure terminal slots (Completed/Failed) are always moved to the
+  // request_queue, especially if RunPolicyBatchTickLocked failed early due to
+  // slot setup errors.
   slot_scheduler_.FinalizeCompletedSlots(request_queue_, session_store_);
   CommitNewCompletedResponsesObservabilityLocked();
 
   if (!tick_executed) {
-    // If the request we are tracking just finished (possibly failed), return Terminal.
+    // If the request we are tracking just finished (possibly failed), return
+    // Terminal.
     if (const GenerateResponse *completed =
             request_queue_.PeekCompletedResponse(request_id);
         completed != nullptr) {
@@ -1637,8 +1732,9 @@ InferenceRuntime::DrainCompletedResponseIds(int32_t max_count) {
   return request_ids;
 }
 
-std::vector<RuntimeEvent> InferenceRuntime::DrainRuntimeEvents(
-    int32_t max_count, int32_t max_text_bytes) {
+std::vector<RuntimeEvent>
+InferenceRuntime::DrainRuntimeEvents(int32_t max_count,
+                                     int32_t max_text_bytes) {
   std::lock_guard<std::mutex> lock(operation_mutex_);
   const std::size_t clamped_max_count =
       max_count <= 0 ? 0 : static_cast<std::size_t>(max_count);
@@ -1648,10 +1744,11 @@ std::vector<RuntimeEvent> InferenceRuntime::DrainRuntimeEvents(
                                            clamped_max_text_bytes);
 }
 
-bool InferenceRuntime::TryPeekCompletedResponse(GenerateRequestId request_id,
-                                                GenerateResponse &out_response) const {
+bool InferenceRuntime::TryPeekCompletedResponse(
+    GenerateRequestId request_id, GenerateResponse &out_response) const {
   std::lock_guard<std::mutex> lock(operation_mutex_);
-  const GenerateResponse *response = request_queue_.PeekCompletedResponse(request_id);
+  const GenerateResponse *response =
+      request_queue_.PeekCompletedResponse(request_id);
   if (response == nullptr) {
     return false;
   }
@@ -1683,33 +1780,33 @@ const char *InferenceRuntime::GetChatTemplate() const {
 }
 
 std::string InferenceRuntime::ApplyChatTemplate(
-    const std::vector<llama_chat_message> &messages,
-    bool add_assistant) const {
+    const std::vector<common_chat_msg> &messages, bool add_assistant) const {
   std::lock_guard<std::mutex> lock(operation_mutex_);
-  if (primary_model_ == nullptr) {
+  if (primary_model_ == nullptr || messages.empty()) {
     return {};
   }
 
   const char *tmpl = llama_model_chat_template(primary_model_, nullptr);
-  if (tmpl == nullptr || tmpl[0] == '\0') {
+  if (tmpl == nullptr || tmpl[0] == '\0' || chat_templates_ == nullptr) {
     return {};
   }
 
-  const int32_t required_size = llama_chat_apply_template(
-      tmpl, messages.data(), messages.size(), add_assistant, nullptr, 0);
-  if (required_size < 0) {
-    return {};
+  const std::size_t split_index = messages.size() - 1;
+  std::vector<common_chat_msg> past_messages;
+  past_messages.reserve(split_index);
+  for (std::size_t index = 0; index < split_index; ++index) {
+    past_messages.push_back(messages[index]);
   }
 
-  std::vector<char> buffer(static_cast<std::size_t>(required_size) + 1, '\0');
-  const int32_t actual_size = llama_chat_apply_template(
-      tmpl, messages.data(), messages.size(), add_assistant, buffer.data(),
-      static_cast<int32_t>(buffer.size()));
-  if (actual_size < 0) {
+  try {
+    return common_chat_format_single(chat_templates_.get(), past_messages,
+                                     messages.back(), add_assistant,
+                                     /* use_jinja = */ true);
+  } catch (const std::exception &error) {
+    fprintf(stderr, "%s: warning: failed to apply common chat template: %s\n",
+            __func__, error.what());
     return {};
   }
-
-  return std::string(buffer.data(), static_cast<std::size_t>(actual_size));
 }
 
 } // namespace noumena::cogentengine

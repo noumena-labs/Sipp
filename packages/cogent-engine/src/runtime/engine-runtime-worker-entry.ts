@@ -253,7 +253,7 @@ async function handleQueuePromptWithMedia(
     message.promptText,
     {
       nTokens: message.options.nTokens,
-      promptFormat: message.options.promptFormat ?? 'raw',
+      promptFormat: message.options.promptFormat,
       media,
       signal: abortController.signal,
       onToken: (token) => {
