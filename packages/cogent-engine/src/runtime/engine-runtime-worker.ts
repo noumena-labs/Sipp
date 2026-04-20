@@ -207,7 +207,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
     }
   }
 
-  public loadModelFromBuffer(buffer: Uint8Array, destFileName = 'model.gguf'): string {
+  public loadModelFromBuffer(_buffer: Uint8Array, _destFileName = 'model.gguf'): string {
     throw new Error(
       'loadModelFromBuffer() is not available synchronously in worker runtime. Use loadModelFromFile() or loadModelFromUrl().'
     );
@@ -441,11 +441,9 @@ export class WorkerEngineRuntime implements EngineRuntime {
 
     const hasMedia = media != null && media.length > 0;
     const promptFormat =
-      hasMedia
-        ? 'raw'
-        : typeof options === 'number'
-          ? undefined
-          : options.promptFormat;
+      typeof options === 'number'
+        ? undefined
+        : options.promptFormat;
     if (hasMedia) {
       const marker = this.getMediaMarker();
       if (!marker) {

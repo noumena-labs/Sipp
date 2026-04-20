@@ -38,8 +38,19 @@ typedef struct CE_InitConfig {
   int32_t enable_runtime_observability;
   int32_t enable_backend_profiling;
   const char *mmproj_path;
+  int32_t multimodal_use_gpu;
+  int32_t debug_compare_multimodal_embeddings;
   int32_t image_min_tokens;
   int32_t image_max_tokens;
+  int32_t sampling_repeat_last_n;
+  float sampling_repeat_penalty;
+  float sampling_frequency_penalty;
+  float sampling_presence_penalty;
+  int32_t sampling_top_k;
+  float sampling_top_p;
+  float sampling_min_p;
+  float sampling_temperature;
+  int32_t sampling_seed;
 } CE_InitConfig;
 
 typedef struct CE_RuntimeObservabilityMetrics {
@@ -57,6 +68,7 @@ typedef struct CE_RuntimeObservabilityMetrics {
   int32_t decode_eval_count;
   int32_t sample_count;
   int32_t output_token_count;
+  int32_t first_sampled_token_id;
   int32_t batch_participation_count;
   int32_t decode_first_tick_count;
   int32_t chunked_prefill_tick_count;

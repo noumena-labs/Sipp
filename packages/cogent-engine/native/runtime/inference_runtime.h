@@ -11,11 +11,13 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_set>
 #include <utility>
 
+#include "chat.h"
 #include "runtime/config/inference_config.h"
 #include "runtime/llama/llama_batch_builder.h"
 #include "runtime/metrics/observability_metrics.h"
@@ -88,7 +90,7 @@ public:
   const char *GetMediaMarker() const;
   const char *GetChatTemplate() const;
   std::string ApplyChatTemplate(
-      const std::vector<llama_chat_message> &messages,
+      const std::vector<common_chat_msg> &messages,
       bool add_assistant) const;
 
 private:
@@ -130,6 +132,8 @@ private:
   llama_context *shared_context_ = nullptr;
   llama_sampler *sampler_ = nullptr;
   mtmd_context *mtmd_ctx_ = nullptr;
+  std::unique_ptr<common_chat_templates, common_chat_templates_deleter>
+      chat_templates_;
   RuntimeObservabilityMetrics last_runtime_observability_;
   bool has_last_runtime_observability_ = false;
   SessionStore session_store_;

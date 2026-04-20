@@ -28,6 +28,7 @@ struct RuntimeObservabilityMetrics {
   int32_t decode_eval_count = 0;
   int32_t sample_count = 0;
   int32_t output_token_count = 0;
+  int32_t first_sampled_token_id = -1;
   int32_t batch_participation_count = 0;
   int32_t decode_first_tick_count = 0;
   int32_t chunked_prefill_tick_count = 0;

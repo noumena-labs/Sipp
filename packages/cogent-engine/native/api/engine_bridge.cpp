@@ -1,6 +1,8 @@
 #include "engine_bridge.h"
 
+#include <algorithm>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -11,6 +13,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "chat.h"
 #include "ggml-backend.h"
 #include "ggml-webgpu.h"
 #include "llama.h"
@@ -128,11 +131,7 @@ bool validate_media_buffers(int32_t n_images, const uint8_t *images_flat_buffer,
 }
 
 bool parse_chat_messages_json(const char *messages_json,
-                              std::vector<std::string> &out_roles,
-                              std::vector<std::string> &out_contents,
-                              std::vector<llama_chat_message> &out_messages) {
-  out_roles.clear();
-  out_contents.clear();
+                              std::vector<common_chat_msg> &out_messages) {
   out_messages.clear();
   if (messages_json == nullptr || messages_json[0] == '\0') {
     return false;
@@ -142,32 +141,10 @@ bool parse_chat_messages_json(const char *messages_json,
   if (parsed.is_discarded() || !parsed.is_array()) {
     return false;
   }
-
-  out_roles.reserve(parsed.size());
-  out_contents.reserve(parsed.size());
-  out_messages.reserve(parsed.size());
-
-  for (const auto &message : parsed) {
-    if (!message.is_object()) {
-      return false;
-    }
-
-    const auto role_it = message.find("role");
-    const auto content_it = message.find("content");
-    if (role_it == message.end() || content_it == message.end() ||
-        !role_it->is_string() || !content_it->is_string()) {
-      return false;
-    }
-
-    out_roles.push_back(role_it->get<std::string>());
-    out_contents.push_back(content_it->get<std::string>());
-  }
-
-  for (std::size_t index = 0; index < out_roles.size(); ++index) {
-    out_messages.push_back(llama_chat_message{
-        .role = out_roles[index].c_str(),
-        .content = out_contents[index].c_str(),
-    });
+  try {
+    out_messages = common_chat_msgs_parse_oaicompat(parsed);
+  } catch (const std::exception &) {
+    return false;
   }
 
   return true;
@@ -232,6 +209,8 @@ void copy_runtime_observability(
   out_metrics->decode_eval_count = runtime_observability.decode_eval_count;
   out_metrics->sample_count = runtime_observability.sample_count;
   out_metrics->output_token_count = runtime_observability.output_token_count;
+  out_metrics->first_sampled_token_id =
+      runtime_observability.first_sampled_token_id;
   out_metrics->batch_participation_count =
       runtime_observability.batch_participation_count;
   out_metrics->decode_first_tick_count =
@@ -324,10 +303,37 @@ int CE_InitPlugin(const char *model_path, const CE_InitConfig *config) {
         config->enable_backend_profiling > 0 ? 1 : 0;
     runtime_config.mmproj_path =
         config->mmproj_path != nullptr ? config->mmproj_path : "";
+    runtime_config.multimodal_use_gpu = std::clamp(
+        config->multimodal_use_gpu,
+        static_cast<int32_t>(-1),
+        static_cast<int32_t>(1));
+    runtime_config.debug_compare_multimodal_embeddings =
+        config->debug_compare_multimodal_embeddings > 0 ? 1 : 0;
     runtime_config.image_min_tokens =
         config->image_min_tokens > 0 ? config->image_min_tokens : 0;
     runtime_config.image_max_tokens =
         config->image_max_tokens > 0 ? config->image_max_tokens : 0;
+    runtime_config.sampling_repeat_last_n =
+        config->sampling_repeat_last_n >= 0 ? config->sampling_repeat_last_n : 64;
+    runtime_config.sampling_repeat_penalty =
+        config->sampling_repeat_penalty >= 0.0f
+            ? config->sampling_repeat_penalty
+            : 1.05f;
+    runtime_config.sampling_frequency_penalty =
+        config->sampling_frequency_penalty;
+    runtime_config.sampling_presence_penalty =
+        config->sampling_presence_penalty;
+    runtime_config.sampling_top_k =
+        config->sampling_top_k >= 0 ? config->sampling_top_k : 40;
+    runtime_config.sampling_top_p =
+        config->sampling_top_p >= 0.0f ? config->sampling_top_p : 0.8f;
+    runtime_config.sampling_min_p =
+        config->sampling_min_p >= 0.0f ? config->sampling_min_p : 0.0f;
+    runtime_config.sampling_temperature =
+        config->sampling_temperature >= 0.0f
+            ? config->sampling_temperature
+            : 0.7f;
+    runtime_config.sampling_seed = config->sampling_seed;
   }
 
   auto runtime = std::make_shared<InferenceRuntime>(model_path, runtime_config);
@@ -746,10 +752,8 @@ const char *CE_GetChatTemplateString() {
 const char *CE_ApplyChatTemplateString(const char *messages_json,
                                        int add_assistant) {
   static thread_local std::string formatted_prompt;
-  std::vector<std::string> roles;
-  std::vector<std::string> contents;
-  std::vector<llama_chat_message> messages;
-  if (!parse_chat_messages_json(messages_json, roles, contents, messages)) {
+  std::vector<common_chat_msg> messages;
+  if (!parse_chat_messages_json(messages_json, messages)) {
     return empty_c_string();
   }
 

@@ -104,6 +104,11 @@ class MockMainThreadModule {
   public mediaMarker: string | null = null;
   public chatTemplate: string | null = null;
   public appliedChatTemplateText = '';
+  public returnEmptyAppliedChatTemplate = false;
+  public lastAppliedChatTemplateMessages: Array<{
+    role: string;
+    content: string | Array<{ type: string; text: string }>;
+  }> | null = null;
   public lastQueuedPromptText = '';
   public lastQueuedEnqueueKind: 'text' | 'media' | null = null;
   public lastQueuedMediaImages: Uint8Array[] = [];
@@ -274,8 +279,21 @@ class MockMainThreadModule {
         if (this.chatTemplate == null) {
           return 0;
         }
-        const messages = JSON.parse(String(args[0])) as Array<{ role: string; content: string }>;
-        const content = messages.map((message) => message.content).join('|');
+        const messages = JSON.parse(String(args[0])) as Array<{
+          role: string;
+          content: string | Array<{ type: string; text: string }>;
+        }>;
+        this.lastAppliedChatTemplateMessages = messages;
+        const content = messages
+          .map((message) =>
+            typeof message.content === 'string'
+              ? message.content
+              : message.content.map((part) => `${part.type}:${part.text}`).join(',')
+          )
+          .join('|');
+        if (this.returnEmptyAppliedChatTemplate) {
+          return 0;
+        }
         return this.writeTempCString(
           this.appliedChatTemplateText || `templated:${content}:${Number(args[1])}`
         );
@@ -418,7 +436,7 @@ class MockMainThreadModule {
     const f64Offset = (ptr >> 3);
     const i32Offset = ((ptr + 9 * 8) >> 2);
     const doubles = [12.5, 3.5, 4.5, 1.5, 2.5, 6.5, 0.5, 0.75, 12.5];
-    const ints = [9, 7, 2, 2, 2, 3, 1, 1, 0, 4, 0, 0, 1];
+    const ints = [9, 7, 2, 2, 2, 321, 3, 1, 1, 0, 4, 0, 0, 1];
 
     for (let index = 0; index < doubles.length; index += 1) {
       this.HEAPF64[f64Offset + index] = doubles[index];
@@ -466,7 +484,7 @@ function createMockRuntimeObservability(
 ): { doubles: number[]; ints: number[] } {
   return {
     doubles: [12.5, 3.5, 4.5, 1.5, 2.5, 6.5, 0.5, 0.75, 12.5],
-    ints: [9, 7, outputTokenCount, outputTokenCount, outputTokenCount, batchParticipationCount, 1, 1, 0, 4, 0, 0, 1],
+    ints: [9, 7, outputTokenCount, outputTokenCount, outputTokenCount, 321, batchParticipationCount, 1, 1, 0, 4, 0, 0, 1],
   };
 }
 
@@ -880,12 +898,12 @@ test('MainThreadEngineRuntime caches native metadata and formats auto-chat promp
   assert.equal(module.lastQueuedPromptText, 'templated prompt');
 });
 
-test('MainThreadEngineRuntime forces raw media prompts through the multimodal enqueue path and validates marker count', async () => {
+test('MainThreadEngineRuntime applies the native chat template for media prompts and validates marker count', async () => {
   const runtime = new MainThreadEngineRuntime({});
   const module = new MockMainThreadModule('success');
   module.mediaMarker = '<__media__>';
   module.chatTemplate = 'native-template';
-  module.appliedChatTemplateText = 'should not be used';
+  module.appliedChatTemplateText = 'templated <__media__> prompt';
   (runtime as unknown as { module: MockMainThreadModule }).module = module;
 
   await runtime.initEngine('/models/vision.gguf');
@@ -896,15 +914,42 @@ test('MainThreadEngineRuntime forces raw media prompts through the multimodal en
 
   assert.equal(requestId, 7);
   assert.equal(module.lastQueuedEnqueueKind, 'media');
-  assert.equal(module.lastQueuedPromptText, 'describe <__media__>');
+  assert.equal(module.lastQueuedPromptText, 'templated <__media__> prompt');
   assert.deepEqual(module.lastQueuedMediaImages, [new Uint8Array([1, 2, 3])]);
+  assert.deepEqual(module.lastAppliedChatTemplateMessages, [
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: 'describe ' },
+        { type: 'media_marker', text: '<__media__>' },
+      ],
+    },
+  ]);
 
+  module.appliedChatTemplateText = 'templated prompt without marker';
   await assert.rejects(
     runtime.queuePrompt('ctx', 'describe nothing', {
       nTokens: 16,
       media: [new Uint8Array([9])],
     }),
     /Prompt contains 0 media marker\(s\) but 1 image\(s\) were provided/
+  );
+});
+
+test('MainThreadEngineRuntime fails loudly when native auto-chat formatting returns an empty prompt', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success');
+  module.chatTemplate = 'native-template';
+  module.returnEmptyAppliedChatTemplate = true;
+  (runtime as unknown as { module: MockMainThreadModule }).module = module;
+
+  await runtime.initEngine('/models/template.gguf');
+
+  await assert.rejects(
+    runtime.queuePrompt('ctx', 'hello world', {
+      nTokens: 16,
+    }),
+    /Failed to apply the model chat template/i
   );
 });
 
@@ -1661,6 +1706,56 @@ test('MainThreadEngineRuntime initEngine(bundle) uses bundle projectors by defau
     projectorStatus: 'missing',
   });
   assert.equal(module.lastInitIdent, 'CE_Init');
+});
+
+test('MainThreadEngineRuntime forwards multimodalUseGpu independently from text GPU layers', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success');
+  attachReadyModule(runtime, module);
+
+  await runtime.initEngine('/models/vision.gguf', {
+    nGpuLayers: 99,
+    multimodalProjectorPath: '/models/mmproj.gguf',
+    multimodalUseGpu: false,
+  });
+
+  assert.equal(module.lastInitIdent, 'CE_InitWithMultimodal');
+  assert.equal(module.lastInitArgs?.[7], 99);
+  assert.equal(module.lastInitArgs?.[20], '/models/mmproj.gguf');
+  assert.equal(module.lastInitArgs?.[21], 0);
+});
+
+test('MainThreadEngineRuntime forwards configured decode sampling to native init', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success');
+  attachReadyModule(runtime, module);
+
+  await runtime.initEngine('/models/sampling.gguf', {
+    sampling: {
+      repeatLastN: 96,
+      repeatPenalty: 1.15,
+      frequencyPenalty: 0.2,
+      presencePenalty: 0.3,
+      topK: 24,
+      topP: 0.92,
+      minP: 0.08,
+      temperature: 0.55,
+      seed: 1337,
+    },
+  });
+
+  assert.equal(module.lastInitIdent, 'CE_Init');
+  assert.deepEqual(module.lastInitArgs?.slice(-9), [
+    96,
+    1.15,
+    0.2,
+    0.3,
+    24,
+    0.92,
+    0.08,
+    0.55,
+    1337,
+  ]);
 });
 
 test('MainThreadEngineRuntime bounds concurrent non-OPFS URL shard downloads and preserves order', async () => {

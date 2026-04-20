@@ -45,8 +45,15 @@ int init_engine_locked(const char *model_path, int n_ctx, int n_batch,
                        int adaptive_prefill_chunking,
                        int enable_runtime_observability,
                        int enable_backend_profiling,
-                       const char *mmproj_path, int image_min_tokens,
-                       int image_max_tokens) {
+                       const char *mmproj_path, int multimodal_use_gpu,
+                       int debug_compare_multimodal_embeddings,
+                       int image_min_tokens,
+                       int image_max_tokens, int sampling_repeat_last_n,
+                       float sampling_repeat_penalty,
+                       float sampling_frequency_penalty,
+                       float sampling_presence_penalty, int sampling_top_k,
+                       float sampling_top_p, float sampling_min_p,
+                       float sampling_temperature, int sampling_seed) {
   if (!model_path || std::strlen(model_path) == 0) {
     return kStatusInvalidArguments;
   }
@@ -77,8 +84,20 @@ int init_engine_locked(const char *model_path, int n_ctx, int n_batch,
       .enable_runtime_observability = enable_runtime_observability,
       .enable_backend_profiling = enable_backend_profiling,
       .mmproj_path = mmproj_path,
+      .multimodal_use_gpu = multimodal_use_gpu,
+      .debug_compare_multimodal_embeddings =
+          debug_compare_multimodal_embeddings,
       .image_min_tokens = image_min_tokens,
       .image_max_tokens = image_max_tokens,
+      .sampling_repeat_last_n = sampling_repeat_last_n,
+      .sampling_repeat_penalty = sampling_repeat_penalty,
+      .sampling_frequency_penalty = sampling_frequency_penalty,
+      .sampling_presence_penalty = sampling_presence_penalty,
+      .sampling_top_k = sampling_top_k,
+      .sampling_top_p = sampling_top_p,
+      .sampling_min_p = sampling_min_p,
+      .sampling_temperature = sampling_temperature,
+      .sampling_seed = sampling_seed,
   };
 
   const int init_status = CE_InitPlugin(model_path, &config);
@@ -102,7 +121,13 @@ int CE_Init(const char *model_path, int n_ctx, int n_batch, int n_ubatch,
             int prefix_cache_interval_tokens, int max_prefix_cache_entries,
             int scheduler_policy, int decode_token_reserve,
             int adaptive_prefill_chunking, int enable_runtime_observability,
-            int enable_backend_profiling) {
+            int enable_backend_profiling, int multimodal_use_gpu,
+            int debug_compare_multimodal_embeddings,
+            int sampling_repeat_last_n,
+            float sampling_repeat_penalty, float sampling_frequency_penalty,
+            float sampling_presence_penalty, int sampling_top_k,
+            float sampling_top_p, float sampling_min_p,
+            float sampling_temperature, int sampling_seed) {
   std::lock_guard<std::mutex> lock(g_apiMutex);
   return init_engine_locked(
       model_path, n_ctx, n_batch, n_ubatch, n_seq_max, n_threads,
@@ -110,7 +135,11 @@ int CE_Init(const char *model_path, int n_ctx, int n_batch, int n_ubatch,
       max_cached_sessions, retained_prefix_tokens, prefill_chunk_size,
       prefix_cache_interval_tokens, max_prefix_cache_entries,
       scheduler_policy, decode_token_reserve, adaptive_prefill_chunking,
-      enable_runtime_observability, enable_backend_profiling, nullptr, 0, 0);
+      enable_runtime_observability, enable_backend_profiling, nullptr,
+      multimodal_use_gpu, debug_compare_multimodal_embeddings, 0, 0,
+      sampling_repeat_last_n, sampling_repeat_penalty,
+      sampling_frequency_penalty, sampling_presence_penalty, sampling_top_k,
+      sampling_top_p, sampling_min_p, sampling_temperature, sampling_seed);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -123,7 +152,12 @@ int CE_InitWithMultimodal(
     int scheduler_policy, int decode_token_reserve,
     int adaptive_prefill_chunking, int enable_runtime_observability,
     int enable_backend_profiling, const char *mmproj_path,
-    int image_min_tokens, int image_max_tokens) {
+    int multimodal_use_gpu, int debug_compare_multimodal_embeddings,
+    int image_min_tokens, int image_max_tokens, int sampling_repeat_last_n,
+    float sampling_repeat_penalty, float sampling_frequency_penalty,
+    float sampling_presence_penalty, int sampling_top_k,
+    float sampling_top_p, float sampling_min_p,
+    float sampling_temperature, int sampling_seed) {
   std::lock_guard<std::mutex> lock(g_apiMutex);
   return init_engine_locked(
       model_path, n_ctx, n_batch, n_ubatch, n_seq_max, n_threads,
@@ -132,7 +166,11 @@ int CE_InitWithMultimodal(
       prefix_cache_interval_tokens, max_prefix_cache_entries,
       scheduler_policy, decode_token_reserve, adaptive_prefill_chunking,
       enable_runtime_observability, enable_backend_profiling, mmproj_path,
-      image_min_tokens, image_max_tokens);
+      multimodal_use_gpu, debug_compare_multimodal_embeddings,
+      image_min_tokens, image_max_tokens, sampling_repeat_last_n,
+      sampling_repeat_penalty, sampling_frequency_penalty,
+      sampling_presence_penalty, sampling_top_k, sampling_top_p,
+      sampling_min_p, sampling_temperature, sampling_seed);
 }
 
 EMSCRIPTEN_KEEPALIVE

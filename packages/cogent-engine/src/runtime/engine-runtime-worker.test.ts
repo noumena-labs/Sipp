@@ -803,7 +803,64 @@ test('WorkerEngineRuntime caches runtime metadata from initEngine and clears it 
   }
 });
 
-test('WorkerEngineRuntime sends transferable media buffers and forces raw mode for media prompts', async () => {
+test('WorkerEngineRuntime forwards decode sampling config through init-engine', async () => {
+  const restoreWorker = installMockWorker();
+  try {
+    let capturedConfig: WorkerRequestMessage | null = null;
+    MockWorker.handlerFactory = () => (worker, message) => {
+      switch (message.kind) {
+        case 'init-module':
+          worker.emit({
+            kind: 'resolve',
+            callId: message.callId,
+            value: undefined,
+          });
+          return;
+        case 'init-engine':
+          capturedConfig = message;
+          worker.emit({
+            kind: 'resolve',
+            callId: message.callId,
+            value: createWorkerRuntimeMetadata(),
+          });
+          return;
+        default:
+          throw new Error(`Unexpected worker message: ${message.kind}`);
+      }
+    };
+
+    const runtime = new WorkerEngineRuntime({});
+    await runtime.initModule();
+    await runtime.initEngine('/models/model.gguf', {
+      multimodalUseGpu: false,
+      sampling: {
+        repeatLastN: 96,
+        temperature: 0.55,
+        topP: 0.92,
+        seed: 1337,
+      },
+    });
+
+    const initMessage =
+      capturedConfig as Extract<WorkerRequestMessage, { kind: 'init-engine' }> | null;
+    assert.ok(initMessage != null);
+    assert.equal(initMessage.kind, 'init-engine');
+    assert.equal(initMessage.config?.multimodalUseGpu, false);
+    assert.deepEqual(
+      initMessage.config?.sampling,
+      {
+        repeatLastN: 96,
+        temperature: 0.55,
+        topP: 0.92,
+        seed: 1337,
+      }
+    );
+  } finally {
+    restoreWorker();
+  }
+});
+
+test('WorkerEngineRuntime sends transferable media buffers without discarding auto-chat mode for media prompts', async () => {
   const restoreWorker = installMockWorker();
   try {
     MockWorker.handlerFactory = () => {
@@ -825,7 +882,7 @@ test('WorkerEngineRuntime sends transferable media buffers and forces raw mode f
             });
             return;
           case 'queue-prompt-with-media':
-            assert.equal(message.options.promptFormat, 'raw');
+            assert.equal(message.options.promptFormat, undefined);
             assert.ok(message.options.media != null);
             assert.equal(message.options.media.length, 2);
             assert.equal(message.promptText, 'first <__media__> second <__media__>');

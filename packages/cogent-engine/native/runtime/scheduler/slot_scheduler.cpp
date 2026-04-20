@@ -201,6 +201,10 @@ bool SlotScheduler::AdmitPendingRequests(RequestQueue &request_queue,
     return false;
   }
 
+  if (request->is_multimodal_turn) {
+    session_store.Remove(request->context_key);
+  }
+
   SequenceState &session = session_store.GetOrCreateSession(request->context_key);
   if (session.seq_id < 0) {
     session_store.Remove(request->context_key);
@@ -271,9 +275,9 @@ void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue,
       response.runtime_observability.prompt_eval_tokens =
           request.attributed_prompt_eval_tokens;
       response.runtime_observability.output_token_count =
-          slot.generated_tokens.empty()
-              ? request.emitted_token_count
-              : static_cast<int32_t>(slot.generated_tokens.size());
+          request.emitted_token_count;
+      response.runtime_observability.first_sampled_token_id =
+          request.first_sampled_token_id;
       response.runtime_observability.batch_participation_count =
           static_cast<int32_t>(slot.batch_participation_count);
       response.runtime_observability.decode_eval_count =
@@ -283,7 +287,7 @@ void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue,
       response.runtime_observability.sample_count =
           request.attributed_sample_count > 0
               ? request.attributed_sample_count
-              : response.runtime_observability.output_token_count;
+              : static_cast<int32_t>(slot.generated_tokens.size());
       response.runtime_observability.decode_first_tick_count =
           request.decode_first_tick_count;
       response.runtime_observability.chunked_prefill_tick_count =

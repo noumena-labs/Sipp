@@ -16,6 +16,7 @@ interface DetailedObservabilityMetricsBase
   decodeEvalCount: number;
   sampleCount: number;
   batchParticipationCount: number;
+  firstSampledTokenId: number;
   decodeFirstTickCount: number;
   chunkedPrefillTickCount: number;
   mixedWorkloadTickCount: number;
