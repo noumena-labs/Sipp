@@ -16,8 +16,6 @@ import {
   CharacterAgent,
   ActionBus,
   parseCharacterConfig,
-  createLipsyncDriver,
-  createWebSpeechTextToSpeech,
 } from 'cogent-engine/character';
 ```
 
@@ -104,7 +102,7 @@ type AgentEvent =
 ```
 
 - `prose` chunks are already stripped of any in-band action tags and can be
-  concatenated verbatim for display or TTS.
+  concatenated verbatim for display.
 - `action` events carry validated, coerced args (per the action schema); args
   that fail validation are dropped with a `console.warn`.
 - `turn-end` is always the last event for a turn, even on abort or error.
@@ -204,48 +202,18 @@ rolling tail of the conversation is re-prefilled per turn.
 
 ---
 
-## 5. Voice & lipsync
-
-Three small adapters live under `voice/`:
-
-- `createWebSpeechTextToSpeech()` — a thin wrapper around
-  `window.speechSynthesis`. `isSupported` reports feature availability; every
-  method is a no-op in SSR / test environments.
-- `createWebSpeechSpeechToText()` — wrapper around the Web Speech
-  Recognition API, emitting `SpeechToTextEvent` values.
-- `createLipsyncDriver({ sampleRateHz?, oscillationHz? })` —
-  renderer-agnostic openness generator. `start()` begins emitting samples in
-  `[0, 1]` at the configured rate (default 30 Hz); `stop()` halts and emits a
-  trailing `0`. Subscribers register via `onOpenness(fn)`.
-
-The driver does **not** know what a viseme is; it produces a normalised
-signal, and the renderer binding translates it into whatever its avatar
-understands. In the three-vrm example we apply it to the `Aa` expression
-preset for VRM avatars and fall back to scaling the primitive `head` mesh
-along Y for the no-VRM case.
-
-Because Web Speech has no incremental synthesis API, the example app
-accumulates a turn's `prose` buffer and speaks it in a single utterance at
-`turn-end`. A future v2 can swap in a streaming TTS (Piper, espeak-ng +
-Web Audio) and drive the lipsync driver with real phoneme timings instead of
-the current band-limited pseudo-phoneme signal.
-
----
-
-## 6. Lifetime & disposal rules
+## 5. Lifetime & disposal rules
 
 - `ActionBus` has no dispose; drop it with the agent.
 - `CharacterAgent` holds no external resources of its own beyond its bus
   subscription — disposing the engine is sufficient on reload.
-- `LipsyncDriver.dispose()` clears its interval and drops all subscribers.
-  Call it on unmount.
-- Every `bus.on(...)` and `lipsync.onOpenness(...)` returns a disposer. Store
-  them and call them; leaked subscribers survive hot reloads in dev and will
+- Every `bus.on(...)` and `bus.onAny(...)` returns a disposer. Store them and
+  call them; leaked subscribers survive hot reloads in dev and will
   double-emit.
 
 ---
 
-## 7. Testing notes
+## 6. Testing notes
 
 - The harness ships its own test suite under
   `packages/cogent-engine/src/character/*.test.ts` (44 tests across 6 files).
@@ -260,13 +228,11 @@ the current band-limited pseudo-phoneme signal.
 
 ---
 
-## 8. Not in v1
+## 7. Not in v1
 
 - Tool-call style multi-round function execution (the action protocol is
   one-way: model → host).
-- Streaming TTS / real phoneme timings.
 - Vector memory, summarisation, salience.
-- Per-character voice overrides in `CharacterConfig` (host picks voice).
 - Multi-speaker or turn arbitration.
 
 These are all reachable extensions that do not require re-architecting the

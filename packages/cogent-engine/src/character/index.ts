@@ -56,12 +56,3 @@ export type {
   ChatTurn,
 } from './character-agent.js';
 export { CharacterAgent } from './character-agent.js';
-
-export type { TextToSpeech } from './voice/tts-web-speech.js';
-export { createWebSpeechTextToSpeech } from './voice/tts-web-speech.js';
-
-export type { SpeechToText, SpeechToTextEvent } from './voice/stt-web-speech.js';
-export { createWebSpeechSpeechToText } from './voice/stt-web-speech.js';
-
-export type { LipsyncDriver, LipsyncDriverOptions } from './voice/lipsync.js';
-export { createLipsyncDriver } from './voice/lipsync.js';

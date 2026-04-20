@@ -9,7 +9,7 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import { useEffect, useRef } from 'react';
-import type { ActionBus, LipsyncDriver } from 'cogent-engine/character';
+import type { ActionBus } from 'cogent-engine/character';
 import { createScene, type SceneHandle } from '../scene/scene';
 import { loadAvatar, type LoadedAvatar } from '../scene/vrm-loader';
 import { ThreeVRMBinding } from '../bindings/three-vrm-binding';
@@ -18,10 +18,9 @@ interface AvatarCanvasProps {
   readonly bus: ActionBus;
   readonly vrmUrl?: string;
   readonly status?: string;
-  readonly lipsync?: LipsyncDriver;
 }
 
-export function AvatarCanvas({ bus, vrmUrl, status, lipsync }: AvatarCanvasProps) {
+export function AvatarCanvas({ bus, vrmUrl, status }: AvatarCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -54,7 +53,7 @@ export function AvatarCanvas({ bus, vrmUrl, status, lipsync }: AvatarCanvasProps
       }
       avatar = loaded;
       sceneHandle.avatarRoot.add(loaded.root);
-      binding = new ThreeVRMBinding(bus, loaded, lipsync);
+      binding = new ThreeVRMBinding(bus, loaded);
       const offFrame = sceneHandle.onFrame((delta) => binding?.tick(delta));
       // Stash the off-frame on the binding so dispose can call it.
       (binding as unknown as { _off: () => void })._off = offFrame;
@@ -73,7 +72,7 @@ export function AvatarCanvas({ bus, vrmUrl, status, lipsync }: AvatarCanvasProps
       }
       sceneHandle?.dispose();
     };
-  }, [bus, vrmUrl, lipsync]);
+  }, [bus, vrmUrl]);
 
   return (
     <div className="avatar-canvas" ref={containerRef}>

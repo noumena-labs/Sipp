@@ -3,8 +3,7 @@
 A minimal three.js + React example that binds the `cogent-engine` character
 harness to a [VRM](https://vrm.dev/) avatar. It streams model output
 on-device via WebAssembly, parses inline `<action …/>` tags into scene
-gestures, and optionally speaks the response through Web Speech with
-lipsync.
+gestures, and renders the conversation in a minimal chat UI.
 
 This is an **example**, not a product. It is deliberately small so the
 plumbing is readable end-to-end.
@@ -49,8 +48,6 @@ Scripts:
   `character.json → assets.vrm`). If no VRM is provided or loading fails,
   the scene falls back to a **primitive capsule figure** with named
   `head`, `armL`, `armR` meshes so gestures still play.
-- **(Optional) Web Speech synthesis.** Chromium-based browsers work out of
-  the box. When unsupported, the TTS checkbox is disabled.
 
 ---
 
@@ -113,53 +110,23 @@ character.json ──► parseCharacterConfig ──► CharacterAgent
                                        three.js scene / VRM
 ```
 
-- `src/App.tsx` — wires engine + agent + bus + lipsync + TTS.
+ - `src/App.tsx` — wires engine + agent + bus + chat UI.
 - `src/scene/scene.ts` — three.js renderer, lighting, animation loop.
 - `src/scene/vrm-loader.ts` — GLTFLoader + `VRMLoaderPlugin` with a
   primitive fallback.
 - `src/bindings/three-vrm-binding.ts` — maps `ActionBus` events to VRM
   humanoid bones, expression presets, and lookAt.
-- `src/components/AvatarCanvas.tsx` — mounts the scene, wires resize,
-  forwards the `LipsyncDriver` into the binding.
+- `src/components/AvatarCanvas.tsx` — mounts the scene and wires resize.
 - `src/components/ChatPanel.tsx` — streaming chat bubbles with action chips.
-- `src/components/ControlsPanel.tsx` — character/model URL inputs + TTS
-  toggle.
-
----
-
-## Voice + lipsync
-
-The app creates a single `LipsyncDriver` and a single Web Speech TTS
-adapter at mount and keeps them alive across character reloads. When the
-"Speak responses" checkbox is on and the turn completes:
-
-1. Accumulated prose for the turn is gathered.
-2. `lipsync.start()` begins emitting openness samples at 30 Hz.
-3. `tts.speak(prose)` resolves when the utterance ends.
-4. `lipsync.stop()` closes the mouth.
-
-For VRM avatars the openness signal is applied to the `Aa` expression
-preset (widest-mouth viseme). For the primitive fallback it scales the
-`head` mesh along Y — cartoon-obvious, by design, because the primitive
-avatar is not meant to look realistic.
-
-Sending a new message or resetting memory cancels any in-flight TTS and
-stops the driver immediately.
+- `src/components/ControlsPanel.tsx` — character/model URL inputs and reset.
 
 ---
 
 ## Known limitations
 
-- **Single utterance per turn.** Web Speech has no incremental synthesis
-  API; chopping mid-turn produces awkward prosody, so the app speaks the
-  full turn's prose at `turn-end`. Swap in a streaming TTS for v2.
-- **Pseudo-phoneme lipsync.** The v1 openness signal is a band-limited
-  sine + jitter, not derived from real phoneme timings. Mouth shapes are
-  plausible but not accurate. Plug real phoneme boundaries into
-  `LipsyncDriver` for v2.
-- **No per-character voice override.** `CharacterConfig` doesn't yet carry
-  a `voice` section, so all characters use the browser default voice. This
-  is a deliberate v1 omission, not a bug.
+- **Text-only interaction.** The example intentionally omits speech input,
+  speech output, and lipsync while the core chat and action loop is kept
+  small and stable.
 - **Primitive fallback is ugly on purpose.** It exists to prove that
   gestures drive correctly without a VRM asset; ship a real `.vrm` for any
   demo you'd show someone.
@@ -175,9 +142,6 @@ stops the driver immediately.
   is `/character.json` resolved from `public/`.
 - **"Load failed: …"** — the model URL must return a `.gguf` file with
   permissive CORS. HuggingFace resolve URLs work if the repo is public.
-- **Avatar loaded but no mouth movement** — confirm the VRM has the `Aa`
-  expression preset. Some exporters only ship viseme presets under custom
-  names; `ThreeVRMBinding` can be extended to map them.
 - **Actions never fire** — the model may be too small to follow the grammar
   reliably. Try a bigger instruct model, or simplify the action schema.
 

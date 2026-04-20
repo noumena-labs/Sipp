@@ -14,7 +14,7 @@
 
 import * as THREE from 'three';
 import { VRMExpressionPresetName, VRMHumanBoneName } from '@pixiv/three-vrm';
-import type { ActionEvent, LipsyncDriver } from 'cogent-engine/character';
+import type { ActionEvent } from 'cogent-engine/character';
 import { ActionBus } from 'cogent-engine/character';
 import type { LoadedAvatar } from '../scene/vrm-loader';
 
@@ -40,29 +40,16 @@ export class ThreeVRMBinding {
   private readonly disposers: Array<() => void> = [];
   private active: ActiveAnimation | null = null;
   private currentMoodKey: VRMExpressionPresetName = VRMExpressionPresetName.Neutral;
-  private lipsyncOpenness = 0;
 
-  public constructor(
-    bus: ActionBus,
-    avatar: LoadedAvatar,
-    lipsync?: LipsyncDriver
-  ) {
+  public constructor(bus: ActionBus, avatar: LoadedAvatar) {
     this.bus = bus;
     this.avatar = avatar;
     this.disposers.push(this.bus.on('action', (event) => this.handleAction(event)));
-    if (lipsync) {
-      this.disposers.push(
-        lipsync.onOpenness((value) => {
-          this.lipsyncOpenness = value;
-        })
-      );
-    }
   }
 
   /** Per-frame update. Forward `deltaSeconds` from the scene loop. */
   public tick(deltaSeconds: number): void {
     this.avatar.update(deltaSeconds);
-    this.applyLipsync();
     if (!this.active) {
       return;
     }
@@ -72,21 +59,6 @@ export class ThreeVRMBinding {
     if (progress >= 1) {
       this.active.cleanup();
       this.active = null;
-    }
-  }
-
-  private applyLipsync(): void {
-    const vrm = this.avatar.vrm;
-    if (vrm && vrm.expressionManager) {
-      // `Aa` is the widest-mouth viseme preset; good enough for v1 lipsync.
-      vrm.expressionManager.setValue(VRMExpressionPresetName.Aa, this.lipsyncOpenness);
-      return;
-    }
-    // Primitive fallback: scale the head slightly along Y to hint at motion.
-    const head = this.avatar.root.getObjectByName('head');
-    if (head) {
-      const scale = 1 + this.lipsyncOpenness * 0.04;
-      head.scale.setY(scale);
     }
   }
 

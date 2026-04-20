@@ -13,8 +13,6 @@ import { CogentEngine, getBundledRuntimeUrls } from 'cogent-engine';
 import {
   ActionBus,
   CharacterAgent,
-  createLipsyncDriver,
-  createWebSpeechTextToSpeech,
   parseCharacterConfig,
   type CharacterConfig,
 } from 'cogent-engine/character';
@@ -42,22 +40,8 @@ export default function App() {
   // The bus is created once per app lifetime and reused across harness
   // reloads so the scene binding is stable.
   const bus = useMemo(() => new ActionBus(), []);
-  // Lipsync + TTS are also stable across reloads; the driver emits openness
-  // samples that the binding consumes regardless of which agent is live.
-  const lipsync = useMemo(() => createLipsyncDriver(), []);
-  const tts = useMemo(() => createWebSpeechTextToSpeech(), []);
-  const [ttsEnabled, setTtsEnabled] = useState(tts.isSupported);
   const abortRef = useRef<AbortController | null>(null);
   const previewRequestIdRef = useRef(0);
-
-  // Dispose the lipsync driver on unmount. Speech + bus have no explicit
-  // dispose hooks; stopping TTS on unmount is best-effort.
-  useEffect(() => {
-    return () => {
-      lipsync.dispose();
-      tts.stop();
-    };
-  }, [lipsync, tts]);
 
   // Bridge the agent's bus into the current harness when it changes so
   // scene bindings stay attached to whichever agent is live.
@@ -166,10 +150,6 @@ export default function App() {
       return;
     }
     abortRef.current?.abort();
-    // Cancel any in-flight TTS from the previous turn so the mouth doesn't
-    // linger open while the next response streams in.
-    tts.stop();
-    lipsync.stop();
     const controller = new AbortController();
     abortRef.current = controller;
 
@@ -217,18 +197,6 @@ export default function App() {
           if (event.errorMessage) {
             setStatus(`Turn error: ${event.errorMessage}`);
           }
-          // Speak the accumulated prose once the turn completes. We don't
-          // stream TTS mid-generation because Web Speech has no incremental
-          // API and chopping utterances produces awkward prosody.
-          const speakable = event.finalText.trim();
-          if (ttsEnabled && tts.isSupported && speakable.length > 0) {
-            lipsync.start();
-            try {
-              await tts.speak(speakable);
-            } finally {
-              lipsync.stop();
-            }
-          }
         }
       }
     } catch (error) {
@@ -237,13 +205,10 @@ export default function App() {
       setMessages((prev) =>
         prev.map((msg) => (msg.id === assistantId ? { ...msg, pending: false } : msg))
       );
-      lipsync.stop();
     }
   };
 
   const handleReset = (): void => {
-    tts.stop();
-    lipsync.stop();
     harness?.agent.clearMemory();
     setMessages([]);
     setStatus('Memory cleared.');
@@ -256,7 +221,6 @@ export default function App() {
       <AvatarCanvas
         bus={bus}
         vrmUrl={vrmUrl}
-        lipsync={lipsync}
         status={previewResolved ? undefined : 'Loading character preview…'}
       />
       <aside className="side-panel">
@@ -266,10 +230,7 @@ export default function App() {
           status={status}
           busy={busy}
           loaded={harness != null}
-          ttsEnabled={ttsEnabled}
-          ttsSupported={tts.isSupported}
           onLoad={handleLoad}
-          onToggleTts={setTtsEnabled}
           onReset={handleReset}
         />
         <ChatPanel messages={messages} onSend={handleSend} disabled={!harness || busy} />

@@ -17,10 +17,7 @@ interface ControlsPanelProps {
   readonly status: string;
   readonly busy: boolean;
   readonly loaded: boolean;
-  readonly ttsEnabled: boolean;
-  readonly ttsSupported: boolean;
   readonly onLoad: (args: { characterUrl: string; modelUrl: string }) => void;
-  readonly onToggleTts: (enabled: boolean) => void;
   readonly onReset?: () => void;
 }
 
@@ -30,10 +27,7 @@ export function ControlsPanel({
   status,
   busy,
   loaded,
-  ttsEnabled,
-  ttsSupported,
   onLoad,
-  onToggleTts,
   onReset,
 }: ControlsPanelProps) {
   const [cfg, setCfg] = useState(characterUrl);
@@ -81,23 +75,6 @@ export function ControlsPanel({
             </button>
           ) : null}
         </div>
-        <label
-          style={{
-            fontSize: 12,
-            color: ttsSupported ? '#8a94a8' : '#555',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={ttsEnabled && ttsSupported}
-            disabled={!ttsSupported}
-            onChange={(e) => onToggleTts(e.target.checked)}
-          />
-          Speak responses {ttsSupported ? '' : '(unsupported in this browser)'}
-        </label>
       </form>
       <div className="status-line">{status}</div>
     </div>
