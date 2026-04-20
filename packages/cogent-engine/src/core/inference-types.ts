@@ -64,6 +64,24 @@ export interface PromptOptions {
    * matching the grammar. Must be <= 64 KiB when UTF-8 encoded.
    */
   grammar?: string;
+  /**
+   * Structured chat messages. When provided, the runtime applies the
+   * model's native chat template (via llama.cpp's `applyChatTemplate`) to
+   * build the final prompt text, and `promptText` is ignored for
+   * formatting purposes. This is the correct way to feed a multi-turn
+   * conversation: the template emits the model's own role and turn-end
+   * tokens, which allows generation to stop naturally at EOS.
+   *
+   * Requires the loaded model to expose a chat template (see
+   * {@link EngineRuntime.getChatTemplate}). Incompatible with `media` in
+   * the current runtime.
+   */
+  messages?: ChatMessage[];
+}
+
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
 }
 
 export type GenerateRequestId = number;

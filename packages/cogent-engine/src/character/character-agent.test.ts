@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type {
+  ChatMessage,
   GenerateRequestId,
   GenerateResponse,
   PromptOptions,
@@ -293,58 +294,45 @@ test('clearMemory empties the sliding window', async () => {
   assert.equal(agent.getMemory().length, 0);
 });
 
-test('chat() requests raw prompt format so auto-chat does not re-wrap the transcript', async () => {
+test('chat() passes a well-formed messages array through to queuePrompt', async () => {
   const engine = createFakeEngine();
-  engine.enqueue({ tokens: ['ok'] });
+  engine.enqueue({ tokens: ['hi'] });
   const agent = new CharacterAgent(engine, buildConfig());
-  await collectEvents(agent.chat('hi'));
+  await collectEvents(agent.chat('hello'));
 
   const call = engine.queuePromptCalls[0];
+  assert.equal(call.promptText, '');
   assert.ok(typeof call.options === 'object' && call.options != null);
   const opts = call.options as PromptOptions;
-  assert.equal(opts.promptFormat, 'raw');
+  assert.ok(Array.isArray(opts.messages));
+  const messages = opts.messages as ChatMessage[];
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].role, 'system');
+  assert.ok(messages[0].content.includes('Aria'));
+  assert.equal(messages[1].role, 'user');
+  assert.equal(messages[1].content, 'hello');
+  // promptFormat should NOT be forced to 'raw' anymore; runtime picks it.
+  assert.equal(opts.promptFormat, undefined);
 });
 
-test('turn-end finalText strips trailing "\\nUser:" role-hijack drift', async () => {
+test('chat() includes prior turn history in the messages array', async () => {
   const engine = createFakeEngine();
-  engine.enqueue({ tokens: ['Hi there!', '\nUser: next question'] });
+  engine.enqueue({ tokens: ['first reply'] });
+  engine.enqueue({ tokens: ['second reply'] });
   const agent = new CharacterAgent(engine, buildConfig());
-  const events = await collectEvents(agent.chat('hello'));
-  const end = events[events.length - 1];
-  assert.ok(end.kind === 'turn-end');
-  assert.equal(end.finalText, 'Hi there!');
-});
+  await collectEvents(agent.chat('first question'));
+  await collectEvents(agent.chat('second question'));
 
-test('turn-end finalText strips trailing "\\n<persona>:" self-role drift', async () => {
-  const engine = createFakeEngine();
-  engine.enqueue({ tokens: ['Hello.', '\nAria: extra drift'] });
-  const agent = new CharacterAgent(engine, buildConfig());
-  const events = await collectEvents(agent.chat('hi'));
-  const end = events[events.length - 1];
-  assert.ok(end.kind === 'turn-end');
-  assert.equal(end.finalText, 'Hello.');
-});
-
-test('sanitised finalText is what gets written to memory, not the raw drift', async () => {
-  const engine = createFakeEngine();
-  engine.enqueue({ tokens: ['Clean reply.', '\nUser: sneaky injection'] });
-  const agent = new CharacterAgent(engine, buildConfig());
-  await collectEvents(agent.chat('hi'));
-  const memory = agent.getMemory();
-  assert.equal(memory.length, 2);
-  assert.equal(memory[1].role, 'assistant');
-  assert.equal(memory[1].content, 'Clean reply.');
-});
-
-test('sanitiser leaves prose without role markers untouched', async () => {
-  const engine = createFakeEngine();
-  engine.enqueue({ tokens: ['A normal reply with the word user in it, but no role marker.'] });
-  const agent = new CharacterAgent(engine, buildConfig());
-  const events = await collectEvents(agent.chat('hi'));
-  const end = events[events.length - 1];
-  assert.ok(end.kind === 'turn-end');
-  assert.equal(
-    end.finalText,
-    'A normal reply with the word user in it, but no role marker.'
-  );
+  const secondCall = engine.queuePromptCalls[1];
+  const opts = secondCall.options as PromptOptions;
+  const messages = opts.messages as ChatMessage[];
+  // system + (user/assistant from first turn) + current user
+  assert.equal(messages.length, 4);
+  assert.equal(messages[0].role, 'system');
+  assert.equal(messages[1].role, 'user');
+  assert.equal(messages[1].content, 'first question');
+  assert.equal(messages[2].role, 'assistant');
+  assert.equal(messages[2].content, 'first reply');
+  assert.equal(messages[3].role, 'user');
+  assert.equal(messages[3].content, 'second question');
 });

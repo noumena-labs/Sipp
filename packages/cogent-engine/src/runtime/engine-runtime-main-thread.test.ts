@@ -936,6 +936,69 @@ test('MainThreadEngineRuntime applies the native chat template for media prompts
   );
 });
 
+test('MainThreadEngineRuntime applies the native chat template when PromptOptions.messages is provided', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success');
+  module.chatTemplate = 'native-template';
+  module.appliedChatTemplateText = 'templated multi-turn prompt';
+  (runtime as unknown as { module: MockMainThreadModule }).module = module;
+
+  await runtime.initEngine('/models/template.gguf');
+  const requestId = await runtime.queuePrompt('ctx', '', {
+    nTokens: 16,
+    messages: [
+      { role: 'system', content: 'You are Aria.' },
+      { role: 'user', content: 'first question' },
+      { role: 'assistant', content: 'first reply' },
+      { role: 'user', content: 'second question' },
+    ],
+  });
+
+  assert.equal(requestId, 7);
+  assert.equal(module.lastQueuedEnqueueKind, 'text');
+  assert.equal(module.lastQueuedPromptText, 'templated multi-turn prompt');
+  assert.deepEqual(module.lastAppliedChatTemplateMessages, [
+    { role: 'system', content: 'You are Aria.' },
+    { role: 'user', content: 'first question' },
+    { role: 'assistant', content: 'first reply' },
+    { role: 'user', content: 'second question' },
+  ]);
+});
+
+test('MainThreadEngineRuntime rejects PromptOptions.messages when the model has no chat template', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success');
+  module.chatTemplate = '';
+  (runtime as unknown as { module: MockMainThreadModule }).module = module;
+
+  await runtime.initEngine('/models/no-template.gguf');
+  await assert.rejects(
+    runtime.queuePrompt('ctx', '', {
+      nTokens: 16,
+      messages: [{ role: 'user', content: 'hi' }],
+    }),
+    /loaded model does not expose a chat template/
+  );
+});
+
+test('MainThreadEngineRuntime rejects PromptOptions.messages combined with media attachments', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success');
+  module.mediaMarker = '<__media__>';
+  module.chatTemplate = 'native-template';
+  (runtime as unknown as { module: MockMainThreadModule }).module = module;
+
+  await runtime.initEngine('/models/vision.gguf');
+  await assert.rejects(
+    runtime.queuePrompt('ctx', '<__media__>', {
+      nTokens: 16,
+      messages: [{ role: 'user', content: 'hi' }],
+      media: [new Uint8Array([1])],
+    }),
+    /not currently compatible with media attachments/
+  );
+});
+
 test('MainThreadEngineRuntime fails loudly when native auto-chat formatting returns an empty prompt', async () => {
   const runtime = new MainThreadEngineRuntime({});
   const module = new MockMainThreadModule('success');

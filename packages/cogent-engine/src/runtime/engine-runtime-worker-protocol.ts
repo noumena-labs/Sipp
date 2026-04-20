@@ -1,5 +1,6 @@
 import {
   BackendObservability,
+  ChatMessage,
   GenerateRequestId,
   GenerateResponse,
   InferenceInitConfig,
@@ -35,6 +36,7 @@ export interface WorkerQueuedPromptOptions {
   promptFormat?: PromptOptions['promptFormat'];
   media?: ArrayBuffer[];
   grammar?: string;
+  messages?: ChatMessage[];
 }
 
 export type WorkerRequestMessage =

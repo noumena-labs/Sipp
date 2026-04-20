@@ -238,6 +238,7 @@ export class WorkerEntryState {
       signal?: AbortSignal;
       onToken?: (token: string) => void;
       grammar?: string;
+      messages?: import('../types.js').ChatMessage[];
     }
   ): Promise<GenerateRequestId> {
     const runtime = this.ensureEngine();
@@ -260,6 +261,7 @@ export class WorkerEntryState {
       signal: options.signal,
       onToken: options.onToken,
       grammar: options.grammar,
+      messages: options.messages,
       ...(media != null ? { media } : {}),
     } as import('../types.js').PromptOptions & { media?: Uint8Array[] };
     return runtime.queuePrompt(contextKey, promptText, queuedOptions);

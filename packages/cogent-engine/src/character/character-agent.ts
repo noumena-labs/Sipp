@@ -9,7 +9,12 @@
 //
 //////////////////////////////////////////////////////////////////////////////
 
-import type { GenerateRequestId, GenerateResponse, PromptOptions } from '../core/inference-types.js';
+import type {
+  ChatMessage,
+  GenerateRequestId,
+  GenerateResponse,
+  PromptOptions,
+} from '../core/inference-types.js';
 import { ActionBus, type CharacterEvent } from './action-bus.js';
 import { compileActionGrammar } from './action-grammar.js';
 import { StreamingActionParser, type ParsedEvent } from './action-parser.js';
@@ -135,30 +140,34 @@ export class CharacterAgent {
       this.eventBus.emit(event);
     };
 
-    const turnPrompt = this.buildTurnPrompt(trimmed);
+    const turnMessages = this.buildTurnMessages(trimmed);
 
     emit({ kind: 'turn-start', userMessage: trimmed });
 
     // Drive the engine in a detached async task so the async iterator can
     // begin delivering buffered events to the consumer immediately.
-    void this.runTurn(turnPrompt, trimmed, parser, emit, queue, options.signal);
+    void this.runTurn(turnMessages, trimmed, parser, emit, queue, options.signal);
 
     return queue;
   }
 
-  /** Builds the raw prompt text passed to `queuePrompt`. */
-  private buildTurnPrompt(userMessage: string): string {
-    const lines: string[] = [this.systemPrompt, ''];
+  /**
+   * Builds the chat-template messages passed to `queuePrompt`. The runtime
+   * feeds this array to llama.cpp's native chat template, which emits the
+   * correct role/EOS special tokens so the model stops at its own turn-end
+   * rather than hallucinating additional "User:" turns.
+   */
+  private buildTurnMessages(userMessage: string): ChatMessage[] {
+    const messages: ChatMessage[] = [{ role: 'system', content: this.systemPrompt }];
     for (const turn of this.turnHistory) {
-      lines.push(`${turn.role === 'user' ? 'User' : this.config.persona.name}: ${turn.content}`);
+      messages.push({ role: turn.role, content: turn.content });
     }
-    lines.push(`User: ${userMessage}`);
-    lines.push(`${this.config.persona.name}:`);
-    return lines.join('\n');
+    messages.push({ role: 'user', content: userMessage });
+    return messages;
   }
 
   private async runTurn(
-    promptText: string,
+    messages: ChatMessage[],
     userMessage: string,
     parser: StreamingActionParser,
     emit: (event: ChatEvent) => void,
@@ -185,16 +194,11 @@ export class CharacterAgent {
       const promptOptions: PromptOptions = {
         nTokens: this.maxOutputTokens,
         grammar: this.grammarSource,
-        // The agent hand-rolls the full transcript in `buildTurnPrompt`
-        // (system prompt + prior turns + next `User:` line). We therefore
-        // must bypass the engine's auto-chat template wrapping, which would
-        // otherwise inject the whole transcript as a single user message
-        // and cause the model to echo / paraphrase the system prompt.
-        promptFormat: 'raw',
+        messages,
         onToken,
         signal,
       };
-      requestId = await this.engine.queuePrompt(this.config.id, promptText, promptOptions);
+      requestId = await this.engine.queuePrompt(this.config.id, '', promptOptions);
       const response = await this.engine.runQueuedRequest(requestId, { signal });
       cancelled = response.cancelled;
       if (response.failed && response.errorMessage) {
@@ -221,49 +225,21 @@ export class CharacterAgent {
       emit(event);
     }
 
+    const finalText = accumulatedText.trim();
+
     if (!cancelled && !errorMessage) {
-      const cleaned = this.sanitizeProse(accumulatedText);
       this.pushTurnToMemory({ role: 'user', content: userMessage });
-      this.pushTurnToMemory({ role: 'assistant', content: cleaned });
+      this.pushTurnToMemory({ role: 'assistant', content: finalText });
     }
 
-    const cleanedFinal = this.sanitizeProse(accumulatedText);
     const endEvent = {
       kind: 'turn-end' as const,
-      finalText: cleanedFinal,
+      finalText,
       cancelled,
       ...(errorMessage ? { errorMessage } : {}),
     };
     emit(endEvent);
     queue.close();
-  }
-
-  /**
-   * Conservative post-turn sanitiser. Grammar-constrained output is usually
-   * clean, but if the model drifts into role-play of the user's next turn
-   * (e.g. "…done.\nUser: next question") we strip everything from the first
-   * hijack marker onward. This keeps contaminated output out of the memory
-   * window and out of the UI's final text.
-   *
-   * The sanitiser is anchored on newline + role marker to avoid clipping
-   * legitimate prose that happens to mention the word mid-sentence.
-   */
-  private sanitizeProse(text: string): string {
-    if (text.length === 0) {
-      return text;
-    }
-    const markers: string[] = ['\nUser:', `\n${this.config.persona.name}:`];
-    let earliest = -1;
-    for (const marker of markers) {
-      const idx = text.indexOf(marker);
-      if (idx !== -1 && (earliest === -1 || idx < earliest)) {
-        earliest = idx;
-      }
-    }
-    if (earliest === -1) {
-      return text;
-    }
-    return text.slice(0, earliest).trimEnd();
   }
 
   private pushTurnToMemory(turn: ChatTurn): void {
