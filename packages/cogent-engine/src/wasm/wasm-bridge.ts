@@ -27,6 +27,33 @@ import {
 
 const RUNTIME_EVENT_DRAIN_TEXT_BUFFER_SIZE_BYTES = 64 * 1024;
 
+/**
+ * Maximum accepted size of a GBNF grammar source (UTF-8 byte length).
+ * Enforced at the bridge boundary before any ccall to the native runtime.
+ */
+export const MAX_GRAMMAR_BYTES = 64 * 1024;
+
+function validateGrammarSize(grammar: string | undefined): void {
+  if (grammar == null) {
+    return;
+  }
+  // Fast path: if the string length in UTF-16 code units is under the limit,
+  // UTF-8 size is guaranteed to be under 4x that. We only need the precise
+  // byte length when close to the limit.
+  if (grammar.length <= MAX_GRAMMAR_BYTES) {
+    return;
+  }
+  const byteLength =
+    typeof TextEncoder !== 'undefined'
+      ? new TextEncoder().encode(grammar).byteLength
+      : grammar.length;
+  if (byteLength > MAX_GRAMMAR_BYTES) {
+    throw new Error(
+      `grammar exceeds maximum size of ${MAX_GRAMMAR_BYTES} bytes (got ${byteLength}).`
+    );
+  }
+}
+
 type ChatTemplateMessage = {
   role: string;
   content: string;
@@ -225,13 +252,16 @@ export class WasmBridge {
     contextKey: string,
     promptText: string,
     maxOutputTokens: number,
-    callbackPtr: number
+    callbackPtr: number,
+    grammar?: string
   ): GenerateRequestId {
+    validateGrammarSize(grammar);
+    const grammarArg = grammar ?? '';
     const requestId = this.module.ccall(
       'CE_EnqueuePrompt',
       'number',
-      ['string', 'string', 'number', 'pointer'],
-      [contextKey, promptText, maxOutputTokens, callbackPtr]
+      ['string', 'string', 'number', 'pointer', 'string'],
+      [contextKey, promptText, maxOutputTokens, callbackPtr, grammarArg]
     );
     if (requestId instanceof Promise) {
       throw new Error('Unexpected async result while enqueuing a request.');
@@ -244,8 +274,11 @@ export class WasmBridge {
     promptText: string,
     maxOutputTokens: number,
     media: Uint8Array[],
-    callbackPtr: number
+    callbackPtr: number,
+    grammar?: string
   ): GenerateRequestId {
+    validateGrammarSize(grammar);
+    const grammarArg = grammar ?? '';
     const totalBytes = media.reduce((sum, image) => sum + image.byteLength, 0);
     const flatPtr = this.allocate(Math.max(1, totalBytes));
     const sizesPtr = this.allocate(Math.max(1, media.length * 4));
@@ -261,8 +294,8 @@ export class WasmBridge {
 
       return this.callNumber(
         'CE_EnqueuePromptWithMedia',
-        ['string', 'string', 'number', 'number', 'pointer', 'pointer', 'pointer'],
-        [contextKey, promptText, maxOutputTokens, media.length, flatPtr, sizesPtr, callbackPtr]
+        ['string', 'string', 'number', 'number', 'pointer', 'pointer', 'pointer', 'string'],
+        [contextKey, promptText, maxOutputTokens, media.length, flatPtr, sizesPtr, callbackPtr, grammarArg]
       ) as GenerateRequestId;
     } finally {
       this.free(flatPtr);

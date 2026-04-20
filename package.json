@@ -5,7 +5,8 @@
   "packageManager": "bun@1.3.11",
   "workspaces": [
     "packages/*",
-    "apps/benchmark"
+    "apps/benchmark",
+    "apps/avatar"
   ],
   "scripts": {
     "build": "bun run build:package",
@@ -22,6 +23,9 @@
     "benchmark:dev": "bun run build:package && bun run --filter=cogent-engine-benchmark-app dev",
     "benchmark:build": "bun run build:package && bun run --filter=cogent-engine-benchmark-app build",
     "benchmark:preview": "bun run --filter=cogent-engine-benchmark-app preview",
+    "avatar:dev": "bun run build:package && bun run --filter=cogent-engine-avatar-app dev",
+    "avatar:build": "bun run build:package && bun run --filter=cogent-engine-avatar-app build",
+    "avatar:preview": "bun run --filter=cogent-engine-avatar-app preview",
     "bench:browser": "bun ./scripts/benchmark-browser.mjs"
   },
   "devDependencies": {

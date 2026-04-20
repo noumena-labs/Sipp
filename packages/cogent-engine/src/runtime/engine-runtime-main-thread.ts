@@ -209,6 +209,24 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return input.media;
   }
 
+  private resolvePromptGrammar(
+    input: PromptOptions | number | undefined
+  ): string | undefined {
+    if (typeof input === 'number' || input === undefined) {
+      return undefined;
+    }
+    if (input.grammar == null) {
+      return undefined;
+    }
+    if (typeof input.grammar !== 'string') {
+      throw new Error('grammar must be a string when provided.');
+    }
+    if (input.grammar.length === 0) {
+      return undefined;
+    }
+    return input.grammar;
+  }
+
   private countMarkerOccurrences(promptText: string, marker: string): number {
     const escapedMarker = marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return (promptText.match(new RegExp(escapedMarker, 'g')) ?? []).length;
@@ -237,6 +255,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       maxOutputTokens: this.resolvePromptTokenCount(options),
       promptFormat,
       media,
+      grammar: this.resolvePromptGrammar(options),
     };
   }
 
@@ -734,14 +753,16 @@ export class MainThreadEngineRuntime implements EngineRuntime {
           request.promptText,
           request.maxOutputTokens,
           request.media,
-          Number(callbackPtr)
+          Number(callbackPtr),
+          request.grammar
         );
       } else {
         requestId = bridge.enqueuePrompt(
           request.contextKey,
           request.promptText,
           request.maxOutputTokens,
-          Number(callbackPtr)
+          Number(callbackPtr),
+          request.grammar
         );
       }
     } catch (error) {

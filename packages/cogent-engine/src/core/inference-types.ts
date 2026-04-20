@@ -43,6 +43,12 @@ export interface PromptOptions {
   signal?: AbortSignal;
   onToken?: (token: string) => void;
   media?: Uint8Array[];
+  /**
+   * Optional GBNF grammar source applied to the sampler for this request.
+   * When provided, the native runtime constrains token sampling to strings
+   * matching the grammar. Must be <= 64 KiB when UTF-8 encoded.
+   */
+  grammar?: string;
 }
 
 export type GenerateRequestId = number;
@@ -53,6 +59,8 @@ export interface GenerateRequest {
   maxOutputTokens: number;
   promptFormat: PromptFormatMode;
   media?: Uint8Array[];
+  /** Optional GBNF grammar source (see {@link PromptOptions.grammar}). */
+  grammar?: string;
 }
 
 export interface GenerateResponse {

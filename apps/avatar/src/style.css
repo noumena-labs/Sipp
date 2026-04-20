@@ -1,0 +1,186 @@
+:root {
+  color-scheme: dark;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #0b0f17;
+  color: #e6e8ef;
+}
+
+#app {
+  display: grid;
+  grid-template-columns: 1fr 380px;
+  grid-template-rows: 1fr auto;
+  height: 100vh;
+  gap: 0;
+}
+
+.avatar-canvas {
+  grid-row: 1 / 3;
+  grid-column: 1;
+  position: relative;
+  background: radial-gradient(circle at 50% 30%, #1a2434 0%, #0b0f17 70%);
+  overflow: hidden;
+}
+
+.avatar-canvas canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.side-panel {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(10, 14, 22, 0.9);
+}
+
+.controls-panel {
+  padding: 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.controls-panel h2 {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8a94a8;
+}
+
+.controls-panel input[type='text'],
+.controls-panel input[type='url'] {
+  width: 100%;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  color: inherit;
+  font: inherit;
+}
+
+.controls-panel button {
+  padding: 8px 12px;
+  background: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+}
+
+.controls-panel button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.status-line {
+  font-size: 12px;
+  color: #8a94a8;
+  min-height: 14px;
+}
+
+.chat-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.chat-log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chat-entry {
+  max-width: 88%;
+  padding: 8px 12px;
+  border-radius: 10px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.chat-entry.user {
+  align-self: flex-end;
+  background: #3b82f6;
+  color: white;
+}
+
+.chat-entry.assistant {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.06);
+  color: #e6e8ef;
+}
+
+.chat-entry .action-chip {
+  display: inline-block;
+  margin: 2px 4px 2px 0;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(120, 180, 255, 0.18);
+  color: #a8c4ff;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+
+.chat-input {
+  padding: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  gap: 8px;
+}
+
+.chat-input input {
+  flex: 1;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  color: inherit;
+  font: inherit;
+}
+
+.chat-input button {
+  padding: 8px 16px;
+  background: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+}
+
+.chat-input button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.overlay {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 6px;
+  font-size: 12px;
+  color: #cfd6e4;
+  pointer-events: none;
+}

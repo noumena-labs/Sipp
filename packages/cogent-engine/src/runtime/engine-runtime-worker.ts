@@ -435,6 +435,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
     const onToken = typeof options === 'object' ? options.onToken : undefined;
     const signal = typeof options === 'object' ? options.signal : undefined;
     const media = typeof options === 'object' ? options.media : undefined;
+    const grammar = typeof options === 'object' ? options.grammar : undefined;
     const callId = this.nextCallId++;
     this.pendingQueuedTokenCallbacks.set(callId, onToken);
 
@@ -477,6 +478,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
                 nTokens: typeof options === 'number' ? options : options.nTokens,
                 promptFormat,
                 media: transferableMedia,
+                grammar,
               },
             }
           : {
@@ -486,6 +488,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
               options: {
                 nTokens: typeof options === 'number' ? options : options.nTokens,
                 promptFormat,
+                grammar,
               },
             },
         undefined,

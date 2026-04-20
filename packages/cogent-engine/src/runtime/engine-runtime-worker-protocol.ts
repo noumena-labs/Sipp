@@ -34,6 +34,7 @@ export interface WorkerQueuedPromptOptions {
   nTokens?: number;
   promptFormat?: PromptOptions['promptFormat'];
   media?: ArrayBuffer[];
+  grammar?: string;
 }
 
 export type WorkerRequestMessage =

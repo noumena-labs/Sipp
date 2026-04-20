@@ -65,11 +65,13 @@ public:
 
   GenerateRequestId EnqueueRequest(std::string context_key, std::string prompt,
                                    int n_tokens_predict,
-                                   TokenCallback on_token_received = {});
+                                   TokenCallback on_token_received = {},
+                                   std::string grammar = {});
   GenerateRequestId EnqueueMultimodalRequest(
       std::string context_key, std::string prompt, int n_tokens_predict,
       std::vector<std::pair<const std::uint8_t *, std::size_t>> image_views,
-      TokenCallback on_token_received = {});
+      TokenCallback on_token_received = {},
+      std::string grammar = {});
   bool CancelRequest(GenerateRequestId request_id);
   RequestStepResult RunSchedulerTick();
   SchedulerBurstResult RunSchedulerBurst(int32_t max_ticks,

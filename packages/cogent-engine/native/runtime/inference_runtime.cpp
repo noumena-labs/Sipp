@@ -502,9 +502,46 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     }
 
     if (slot->sampler == nullptr) {
-      slot->sampler = llama_sampler_clone(sampler_);
+      // When the request carries a GBNF grammar we cannot clone the shared
+      // sampler chain because the grammar sampler is stateful and must be
+      // constructed fresh per slot. Build a new chain that mirrors the shared
+      // sampler configuration but with llama_sampler_init_grammar prepended
+      // so decoded tokens are constrained by the grammar.
+      if (!slot->request->grammar.empty()) {
+        auto sparams = llama_sampler_chain_default_params();
+        sparams.no_perf = config_.enable_runtime_observability == 0;
+        slot->sampler = llama_sampler_chain_init(sparams);
+        if (slot->sampler != nullptr) {
+          const llama_vocab *grammar_vocab =
+              llama_model_get_vocab(primary_model_);
+          llama_sampler *grammar_sampler = llama_sampler_init_grammar(
+              grammar_vocab, slot->request->grammar.c_str(), "root");
+          if (grammar_sampler == nullptr) {
+            llama_sampler_free(slot->sampler);
+            slot->sampler = nullptr;
+          } else {
+            llama_sampler_chain_add(slot->sampler, grammar_sampler);
+            llama_sampler_chain_add(
+                slot->sampler,
+                llama_sampler_init_penalties(64, 1.05f, 0.0f, 0.0f));
+            llama_sampler_chain_add(slot->sampler,
+                                    llama_sampler_init_top_k(40));
+            llama_sampler_chain_add(slot->sampler,
+                                    llama_sampler_init_top_p(0.8f, 1));
+            llama_sampler_chain_add(slot->sampler,
+                                    llama_sampler_init_temp(0.7f));
+            llama_sampler_chain_add(
+                slot->sampler, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
+          }
+        }
+      } else {
+        slot->sampler = llama_sampler_clone(sampler_);
+      }
       if (slot->sampler == nullptr) {
-        slot->terminal_error_message = "Failed to clone per-slot sampler.";
+        slot->terminal_error_message =
+            slot->request->grammar.empty()
+                ? "Failed to clone per-slot sampler."
+                : "Failed to build per-slot grammar sampler.";
         slot->phase = SlotPhase::Failed;
         slot->request->lifecycle = GenerateRequestLifecycle::Failed;
         continue;
@@ -1303,7 +1340,8 @@ void InferenceRuntime::ResetRuntimeObservability() {
 GenerateRequestId
 InferenceRuntime::EnqueueRequest(std::string context_key, std::string prompt,
                                  int n_tokens_predict,
-                                 TokenCallback on_token_received) {
+                                 TokenCallback on_token_received,
+                                 std::string grammar) {
   // Fast-fail without lock (model pointer is immutable after construction).
   if (primary_model_ == nullptr || sampler_ == nullptr) {
     return 0;
@@ -1336,6 +1374,7 @@ InferenceRuntime::EnqueueRequest(std::string context_key, std::string prompt,
   request.max_output_tokens = n_tokens_predict;
   request.on_token_received = std::move(on_token_received);
   request.prompt_tokens = std::move(prompt_tokens);
+  request.grammar = std::move(grammar);
 
   if (!request_queue_.Push(std::move(request))) {
     return 0;
@@ -1347,7 +1386,8 @@ InferenceRuntime::EnqueueRequest(std::string context_key, std::string prompt,
 GenerateRequestId InferenceRuntime::EnqueueMultimodalRequest(
     std::string context_key, std::string prompt, int n_tokens_predict,
     std::vector<std::pair<const std::uint8_t *, std::size_t>> image_views,
-    TokenCallback on_token_received) {
+    TokenCallback on_token_received,
+    std::string grammar) {
   if (primary_model_ == nullptr || sampler_ == nullptr || mtmd_ctx_ == nullptr ||
       !mtmd_support_vision(mtmd_ctx_)) {
     return 0;
@@ -1388,6 +1428,7 @@ GenerateRequestId InferenceRuntime::EnqueueMultimodalRequest(
   request.max_output_tokens = n_tokens_predict;
   request.on_token_received = std::move(on_token_received);
   request.is_multimodal_turn = true;
+  request.grammar = std::move(grammar);
 
   if (!request_queue_.Push(std::move(request))) {
     return 0;

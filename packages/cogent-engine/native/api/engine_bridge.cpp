@@ -658,7 +658,8 @@ const char *CE_GetBackendObservabilityJsonString() {
 
 CE_RequestId CE_EnqueuePromptQuery(const char *context_key, const char *prompt,
                                    int n_tokens_predict,
-                                   CE_TokenCallback on_token) {
+                                   CE_TokenCallback on_token,
+                                   const char *grammar) {
   auto runtime = acquire_engine_runtime();
   if (!runtime) {
     return 0;
@@ -671,13 +672,15 @@ CE_RequestId CE_EnqueuePromptQuery(const char *context_key, const char *prompt,
           return on_token(token_piece, token_length) == 0;
         }
         return true;
-      });
+      },
+      grammar ? std::string(grammar) : std::string());
 }
 
 CE_RequestId CE_EnqueuePromptWithMediaQuery(
     const char *context_key, const char *prompt, int n_tokens_predict,
     int32_t n_images, const uint8_t *images_flat_buffer,
-    const int32_t *image_sizes, CE_TokenCallback on_token) {
+    const int32_t *image_sizes, CE_TokenCallback on_token,
+    const char *grammar) {
   if (prompt == nullptr || !is_valid_prediction_tokens(n_tokens_predict)) {
     return 0;
   }
@@ -686,7 +689,7 @@ CE_RequestId CE_EnqueuePromptWithMediaQuery(
   }
   if (n_images == 0) {
     return CE_EnqueuePromptQuery(context_key, prompt, n_tokens_predict,
-                                  on_token);
+                                  on_token, grammar);
   }
 
   std::size_t total_media_bytes = 0;
@@ -718,7 +721,8 @@ CE_RequestId CE_EnqueuePromptWithMediaQuery(
           return on_token(token_piece, token_length) == 0;
         }
         return true;
-      });
+      },
+      grammar ? std::string(grammar) : std::string());
 }
 
 const char *CE_GetMediaMarkerString() {

@@ -11,6 +11,11 @@
       "import": "./dist/esm/index.js",
       "default": "./dist/esm/index.js"
     },
+    "./character": {
+      "types": "./dist/types/character/index.d.ts",
+      "import": "./dist/esm/character/index.js",
+      "default": "./dist/esm/character/index.js"
+    },
     "./wasm/*": "./dist/wasm/*"
   },
   "files": [

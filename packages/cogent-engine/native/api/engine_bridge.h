@@ -41,7 +41,8 @@ CE_RequestId CE_EnqueuePromptQuery(
     const char* context_key,
     const char* prompt,
     int n_tokens_predict,
-    CE_TokenCallback on_token);
+    CE_TokenCallback on_token,
+    const char* grammar);
 CE_RequestId CE_EnqueuePromptWithMediaQuery(
     const char* context_key,
     const char* prompt,
@@ -49,7 +50,8 @@ CE_RequestId CE_EnqueuePromptWithMediaQuery(
     int32_t n_images,
     const uint8_t* images_flat_buffer,
     const int32_t* image_sizes,
-    CE_TokenCallback on_token);
+    CE_TokenCallback on_token,
+    const char* grammar);
 const char* CE_GetMediaMarkerString();
 const char* CE_GetChatTemplateString();
 const char* CE_ApplyChatTemplateString(const char* messages_json,
