@@ -183,3 +183,31 @@ test suite can't exercise the llama.cpp sampler path directly.
 5. **Reordering the sampler chain.** Grammar **must** run first. Running it
    after top-k/top-p can let the downstream samplers pick a disallowed
    token that the grammar would have rejected.
+6. **Using `_` in rule names.** llama.cpp's GBNF parser accepts only
+   `[a-zA-Z0-9-]` in rule identifiers, but our action-schema validator
+   intentionally permits `_` in user-supplied action/arg names (LLMs have
+   strong `snake_case` priors for function-calling). `compileActionGrammar`
+   bridges the gap by sanitising `_` → `-` **only** in rule-name fragments;
+   on-wire string literals like `name="set_mood"` and JSON arg keys like
+   `"duration_ms"` remain verbatim so the action-parser can round-trip them.
+   If two distinct identifiers collide after sanitisation (e.g. `set_mood`
+   and `set-mood`), the compiler throws `ActionSchemaError` at compile
+   time rather than producing an ambiguous grammar.
+
+---
+
+## 8. Identifier character sets — wire vs rule name
+
+Two different charsets coexist in the action-schema plumbing:
+
+| Surface | Charset | Enforced by |
+|---|---|---|
+| `ActionSpec.name`, `ActionArgSpec.name` (authoring / wire) | `[A-Za-z_][A-Za-z0-9_]*` | `IDENTIFIER_RE` in `action-schema.ts` |
+| GBNF rule-name fragments (internal) | `[A-Za-z][A-Za-z0-9-]*` | llama.cpp GBNF parser |
+
+The compiler keeps these two surfaces aligned by applying
+`sanitizeRuleIdent` (a simple `_ → -` substitution) **only** at the four
+rule-name construction sites in `action-grammar.ts`. Do not apply it to
+`rawStringLiteral(action.name)` (wire tag name) or `jsonStringLiteral(arg.name)`
+(JSON key) — those literals are consumed by `action-parser.ts`, which
+expects them byte-for-byte as the schema declared them.

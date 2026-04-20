@@ -22,6 +22,8 @@ import { AvatarCanvas } from './components/AvatarCanvas';
 import { ChatPanel, type ChatMessage } from './components/ChatPanel';
 import { ControlsPanel } from './components/ControlsPanel';
 
+const DEFAULT_CHARACTER_URL = '/character.json';
+
 interface LoadedHarness {
   readonly engine: CogentEngine;
   readonly agent: CharacterAgent;
@@ -29,11 +31,13 @@ interface LoadedHarness {
 }
 
 export default function App() {
-  const [characterUrl, setCharacterUrl] = useState('/character.json');
+  const [characterUrl, setCharacterUrl] = useState(DEFAULT_CHARACTER_URL);
   const [modelUrl, setModelUrl] = useState('');
   const [status, setStatus] = useState('Idle.');
   const [busy, setBusy] = useState(false);
   const [harness, setHarness] = useState<LoadedHarness | null>(null);
+  const [previewConfig, setPreviewConfig] = useState<CharacterConfig | null>(null);
+  const [previewResolved, setPreviewResolved] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // The bus is created once per app lifetime and reused across harness
   // reloads so the scene binding is stable.
@@ -44,6 +48,7 @@ export default function App() {
   const tts = useMemo(() => createWebSpeechTextToSpeech(), []);
   const [ttsEnabled, setTtsEnabled] = useState(tts.isSupported);
   const abortRef = useRef<AbortController | null>(null);
+  const previewRequestIdRef = useRef(0);
 
   // Dispose the lipsync driver on unmount. Speech + bus have no explicit
   // dispose hooks; stopping TTS on unmount is best-effort.
@@ -64,21 +69,68 @@ export default function App() {
     return dispose;
   }, [harness, bus]);
 
+  const fetchCharacterConfig = async (configUrl: string): Promise<CharacterConfig> => {
+    const res = await fetch(configUrl);
+    if (!res.ok) {
+      throw new Error(`character.json HTTP ${res.status}`);
+    }
+    const raw = await res.json();
+    return parseCharacterConfig(raw);
+  };
+
+  const loadPreviewConfig = async (
+    configUrl: string,
+    requestId: number
+  ): Promise<CharacterConfig> => {
+    try {
+      const config = await fetchCharacterConfig(configUrl);
+      if (requestId === previewRequestIdRef.current) {
+        setPreviewConfig(config);
+        setPreviewResolved(true);
+      }
+      return config;
+    } catch (error) {
+      if (requestId === previewRequestIdRef.current) {
+        setPreviewResolved(true);
+      }
+      throw error;
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const requestId = ++previewRequestIdRef.current;
+
+    void (async () => {
+      try {
+        await loadPreviewConfig(DEFAULT_CHARACTER_URL, requestId);
+      } catch (error) {
+        if (cancelled || requestId !== previewRequestIdRef.current) {
+          return;
+        }
+        setStatus(`Character preview failed: ${(error as Error).message}`);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const handleLoad = async (args: { characterUrl: string; modelUrl: string }): Promise<void> => {
     setCharacterUrl(args.characterUrl);
     setModelUrl(args.modelUrl);
     setBusy(true);
     setStatus('Fetching character.json…');
+    const previousHarness = harness;
+    const requestId = ++previewRequestIdRef.current;
+    let previewUpdated = false;
     try {
-      const res = await fetch(args.characterUrl);
-      if (!res.ok) {
-        throw new Error(`character.json HTTP ${res.status}`);
-      }
-      const raw = await res.json();
-      const config = parseCharacterConfig(raw);
+      const config = await loadPreviewConfig(args.characterUrl, requestId);
+      previewUpdated = true;
 
       setStatus('Initialising engine…');
-      const engine = new CogentEngine({...getBundledRuntimeUrls()});
+      const engine = new CogentEngine({ ...getBundledRuntimeUrls() });
       await engine.initModule();
 
       setStatus('Downloading model…');
@@ -92,14 +144,17 @@ export default function App() {
       await engine.initEngine(modelPath);
 
       const agent = new CharacterAgent(engine, config, { bus: new ActionBus() });
-      if (harness) {
-        harness.engine.close();
+      if (previousHarness) {
+        previousHarness.engine.close();
       }
       setHarness({ engine, agent, config });
       setMessages([]);
       setStatus(`Ready. Character: ${config.persona.name}.`);
     } catch (error) {
       console.error(error);
+      if (previewUpdated && previousHarness && requestId === previewRequestIdRef.current) {
+        setPreviewConfig(previousHarness.config);
+      }
       setStatus(`Load failed: ${(error as Error).message}`);
     } finally {
       setBusy(false);
@@ -195,7 +250,7 @@ export default function App() {
     setStatus('Memory cleared.');
   };
 
-  const vrmUrl = harness?.config.assets?.vrm;
+  const vrmUrl = previewConfig?.assets?.vrm;
 
   return (
     <>
@@ -203,7 +258,7 @@ export default function App() {
         bus={bus}
         vrmUrl={vrmUrl}
         lipsync={lipsync}
-        status={harness ? undefined : 'No character loaded.'}
+        status={previewResolved ? undefined : 'Loading character preview…'}
       />
       <aside className="side-panel">
         <ControlsPanel

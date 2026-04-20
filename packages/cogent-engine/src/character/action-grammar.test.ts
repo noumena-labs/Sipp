@@ -54,16 +54,52 @@ test('compileActionGrammar encodes action names as bare literals', () => {
 
 test('compileActionGrammar renders per-action args rules in declaration order', () => {
   const grammar = compileActionGrammar(SCHEMA);
-  // wave has a single numeric arg.
-  assert.match(grammar, /action-args-wave ::= "\{" "\\"duration_ms\\"" ":" arg-wave-duration_ms "\}"/);
-  assert.match(grammar, /arg-wave-duration_ms ::= json-number/);
+  // wave has a single numeric arg. Note that rule-name fragments are
+  // sanitised (_ -> -) even though the on-wire action/arg names retain `_`.
+  assert.match(grammar, /action-args-wave ::= "\{" "\\"duration_ms\\"" ":" arg-wave-duration-ms "\}"/);
+  assert.match(grammar, /arg-wave-duration-ms ::= json-number/);
   // set_mood has an enum followed by a boolean.
   assert.match(
     grammar,
-    /action-args-set_mood ::= "\{" "\\"mood\\"" ":" arg-set_mood-mood "," "\\"persist\\"" ":" arg-set_mood-persist "\}"/
+    /action-args-set-mood ::= "\{" "\\"mood\\"" ":" arg-set-mood-mood "," "\\"persist\\"" ":" arg-set-mood-persist "\}"/
   );
-  assert.match(grammar, /arg-set_mood-mood ::= "\\"happy\\"" \| "\\"sad\\""/);
-  assert.match(grammar, /arg-set_mood-persist ::= json-bool/);
+  assert.match(grammar, /arg-set-mood-mood ::= "\\"happy\\"" \| "\\"sad\\""/);
+  assert.match(grammar, /arg-set-mood-persist ::= json-bool/);
+});
+
+test('compileActionGrammar emits only GBNF-legal rule names', () => {
+  const grammar = compileActionGrammar(SCHEMA);
+  // llama.cpp's GBNF parser accepts only [a-zA-Z0-9-] in rule names. An
+  // earlier version of the compiler interpolated user identifiers verbatim,
+  // producing rules like `action-args-set_mood` that the parser rejected
+  // with `expecting newline or end at _mood | ...`. Guard that regression
+  // by scanning every rule LHS.
+  const ruleLhsRe = /^([A-Za-z][A-Za-z0-9-]*)\s*::=/;
+  const violations: string[] = [];
+  for (const line of grammar.split('\n')) {
+    const trimmed = line.trimStart();
+    if (trimmed === '' || !trimmed.includes('::=')) {
+      continue;
+    }
+    const match = ruleLhsRe.exec(trimmed);
+    if (match == null) {
+      violations.push(`Illegal rule LHS: ${JSON.stringify(trimmed.slice(0, 80))}`);
+    }
+  }
+  assert.deepEqual(violations, []);
+});
+
+test('compileActionGrammar rejects schemas whose names collide after sanitisation', () => {
+  assert.throws(
+    () =>
+      compileActionGrammar({
+        actions: [
+          { name: 'set_mood', args: [] },
+          { name: 'set-mood', args: [] },
+        ],
+      }),
+    (error) => error instanceof ActionSchemaError
+  );
 });
 
 test('compileActionGrammar omits args part when all actions are argless', () => {

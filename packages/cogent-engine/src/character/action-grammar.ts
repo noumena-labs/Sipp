@@ -32,6 +32,16 @@ export class ActionSchemaError extends Error {
 }
 
 /**
+ * GBNF rule names accept only `[a-zA-Z0-9-]`. User identifiers accept `_`, so
+ * we derive rule-name fragments by replacing `_` with `-`. We emit the
+ * user-supplied name verbatim only inside string literals (the on-wire
+ * `name="set_mood"` must round-trip unchanged to action-parser.ts).
+ */
+function sanitizeRuleIdent(identifier: string): string {
+  return identifier.replace(/_/g, '-');
+}
+
+/**
  * Generates a GBNF grammar that:
  *   - always starts at `root`;
  *   - accepts any interleaving of prose characters and action tags;
@@ -50,6 +60,35 @@ export function compileActionGrammar(schema: ActionSchema): string {
   const validationError = validateActionSchema(schema);
   if (validationError != null) {
     throw new ActionSchemaError(validationError);
+  }
+
+  // Detect identifiers that collide after rule-name sanitisation. Two distinct
+  // user-supplied names (e.g. "set_mood" and "set-mood") would both sanitise
+  // to the same GBNF rule fragment and produce an ambiguous grammar.
+  const seenActionRuleIdents = new Map<string, string>();
+  for (const action of schema.actions) {
+    const sanitised = sanitizeRuleIdent(action.name);
+    const prior = seenActionRuleIdents.get(sanitised);
+    if (prior != null && prior !== action.name) {
+      throw new ActionSchemaError(
+        `Action names "${prior}" and "${action.name}" collide after GBNF ` +
+          `rule-name sanitisation (both become "${sanitised}"). Rename one.`
+      );
+    }
+    seenActionRuleIdents.set(sanitised, action.name);
+
+    const seenArgRuleIdents = new Map<string, string>();
+    for (const arg of action.args) {
+      const sArg = sanitizeRuleIdent(arg.name);
+      const priorArg = seenArgRuleIdents.get(sArg);
+      if (priorArg != null && priorArg !== arg.name) {
+        throw new ActionSchemaError(
+          `Args "${priorArg}" and "${arg.name}" in action "${action.name}" ` +
+            `collide after GBNF rule-name sanitisation (both become "${sArg}"). Rename one.`
+        );
+      }
+      seenArgRuleIdents.set(sArg, arg.name);
+    }
   }
 
   const rules: string[] = [];
@@ -81,7 +120,7 @@ export function compileActionGrammar(schema: ActionSchema): string {
     rules.push('action-args-part ::= "" | ws "args=" action-args');
     const actionArgsAlts = schema.actions
       .filter((action) => action.args.length > 0)
-      .map((action) => `action-args-${action.name}`)
+      .map((action) => `action-args-${sanitizeRuleIdent(action.name)}`)
       .join(' | ');
     rules.push(`action-args ::= ${actionArgsAlts}`);
     for (const action of schema.actions) {
@@ -116,14 +155,14 @@ function renderActionArgsRule(action: ActionSpec): string {
     }
     parts.push(jsonStringLiteral(arg.name));
     parts.push('":"');
-    parts.push(`arg-${action.name}-${arg.name}`);
+    parts.push(`arg-${sanitizeRuleIdent(action.name)}-${sanitizeRuleIdent(arg.name)}`);
   }
   parts.push('"}"');
-  return `action-args-${action.name} ::= ${parts.join(' ')}`;
+  return `action-args-${sanitizeRuleIdent(action.name)} ::= ${parts.join(' ')}`;
 }
 
 function renderArgValueRule(action: ActionSpec, arg: ActionArgSpec): string {
-  const ruleName = `arg-${action.name}-${arg.name}`;
+  const ruleName = `arg-${sanitizeRuleIdent(action.name)}-${sanitizeRuleIdent(arg.name)}`;
   switch (arg.type) {
     case 'string':
       return `${ruleName} ::= json-string`;
