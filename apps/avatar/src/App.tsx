@@ -189,12 +189,9 @@ export default function App() {
     };
     setMessages((prev) => [...prev, userMessage, assistantMessage]);
 
-    let proseBuffer = '';
-
     try {
       for await (const event of harness.agent.chat(text, { signal: controller.signal })) {
         if (event.kind === 'prose') {
-          proseBuffer += event.text;
           setMessages((prev) =>
             prev.map((msg) =>
               msg.id === assistantId ? { ...msg, text: msg.text + event.text } : msg
@@ -212,8 +209,15 @@ export default function App() {
             )
           );
         } else if (event.kind === 'turn-end') {
+          // Replace the streamed prose with the agent's sanitised finalText
+          // so any trailing role-hijack drift (e.g. "\nUser: …") is cleaned
+          // from the UI after the fact. The sanitiser is a no-op in the
+          // common case where prose is already clean.
+          const cleaned = event.finalText;
           setMessages((prev) =>
-            prev.map((msg) => (msg.id === assistantId ? { ...msg, pending: false } : msg))
+            prev.map((msg) =>
+              msg.id === assistantId ? { ...msg, text: cleaned, pending: false } : msg
+            )
           );
           if (event.errorMessage) {
             setStatus(`Turn error: ${event.errorMessage}`);
@@ -221,7 +225,7 @@ export default function App() {
           // Speak the accumulated prose once the turn completes. We don't
           // stream TTS mid-generation because Web Speech has no incremental
           // API and chopping utterances produces awkward prosody.
-          const speakable = proseBuffer.trim();
+          const speakable = cleaned.trim();
           if (ttsEnabled && tts.isSupported && speakable.length > 0) {
             lipsync.start();
             try {

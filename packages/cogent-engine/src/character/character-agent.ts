@@ -185,6 +185,12 @@ export class CharacterAgent {
       const promptOptions: PromptOptions = {
         nTokens: this.maxOutputTokens,
         grammar: this.grammarSource,
+        // The agent hand-rolls the full transcript in `buildTurnPrompt`
+        // (system prompt + prior turns + next `User:` line). We therefore
+        // must bypass the engine's auto-chat template wrapping, which would
+        // otherwise inject the whole transcript as a single user message
+        // and cause the model to echo / paraphrase the system prompt.
+        promptFormat: 'raw',
         onToken,
         signal,
       };
@@ -216,18 +222,48 @@ export class CharacterAgent {
     }
 
     if (!cancelled && !errorMessage) {
+      const cleaned = this.sanitizeProse(accumulatedText);
       this.pushTurnToMemory({ role: 'user', content: userMessage });
-      this.pushTurnToMemory({ role: 'assistant', content: accumulatedText });
+      this.pushTurnToMemory({ role: 'assistant', content: cleaned });
     }
 
+    const cleanedFinal = this.sanitizeProse(accumulatedText);
     const endEvent = {
       kind: 'turn-end' as const,
-      finalText: accumulatedText,
+      finalText: cleanedFinal,
       cancelled,
       ...(errorMessage ? { errorMessage } : {}),
     };
     emit(endEvent);
     queue.close();
+  }
+
+  /**
+   * Conservative post-turn sanitiser. Grammar-constrained output is usually
+   * clean, but if the model drifts into role-play of the user's next turn
+   * (e.g. "…done.\nUser: next question") we strip everything from the first
+   * hijack marker onward. This keeps contaminated output out of the memory
+   * window and out of the UI's final text.
+   *
+   * The sanitiser is anchored on newline + role marker to avoid clipping
+   * legitimate prose that happens to mention the word mid-sentence.
+   */
+  private sanitizeProse(text: string): string {
+    if (text.length === 0) {
+      return text;
+    }
+    const markers: string[] = ['\nUser:', `\n${this.config.persona.name}:`];
+    let earliest = -1;
+    for (const marker of markers) {
+      const idx = text.indexOf(marker);
+      if (idx !== -1 && (earliest === -1 || idx < earliest)) {
+        earliest = idx;
+      }
+    }
+    if (earliest === -1) {
+      return text;
+    }
+    return text.slice(0, earliest).trimEnd();
   }
 
   private pushTurnToMemory(turn: ChatTurn): void {

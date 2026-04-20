@@ -292,3 +292,59 @@ test('clearMemory empties the sliding window', async () => {
   agent.clearMemory();
   assert.equal(agent.getMemory().length, 0);
 });
+
+test('chat() requests raw prompt format so auto-chat does not re-wrap the transcript', async () => {
+  const engine = createFakeEngine();
+  engine.enqueue({ tokens: ['ok'] });
+  const agent = new CharacterAgent(engine, buildConfig());
+  await collectEvents(agent.chat('hi'));
+
+  const call = engine.queuePromptCalls[0];
+  assert.ok(typeof call.options === 'object' && call.options != null);
+  const opts = call.options as PromptOptions;
+  assert.equal(opts.promptFormat, 'raw');
+});
+
+test('turn-end finalText strips trailing "\\nUser:" role-hijack drift', async () => {
+  const engine = createFakeEngine();
+  engine.enqueue({ tokens: ['Hi there!', '\nUser: next question'] });
+  const agent = new CharacterAgent(engine, buildConfig());
+  const events = await collectEvents(agent.chat('hello'));
+  const end = events[events.length - 1];
+  assert.ok(end.kind === 'turn-end');
+  assert.equal(end.finalText, 'Hi there!');
+});
+
+test('turn-end finalText strips trailing "\\n<persona>:" self-role drift', async () => {
+  const engine = createFakeEngine();
+  engine.enqueue({ tokens: ['Hello.', '\nAria: extra drift'] });
+  const agent = new CharacterAgent(engine, buildConfig());
+  const events = await collectEvents(agent.chat('hi'));
+  const end = events[events.length - 1];
+  assert.ok(end.kind === 'turn-end');
+  assert.equal(end.finalText, 'Hello.');
+});
+
+test('sanitised finalText is what gets written to memory, not the raw drift', async () => {
+  const engine = createFakeEngine();
+  engine.enqueue({ tokens: ['Clean reply.', '\nUser: sneaky injection'] });
+  const agent = new CharacterAgent(engine, buildConfig());
+  await collectEvents(agent.chat('hi'));
+  const memory = agent.getMemory();
+  assert.equal(memory.length, 2);
+  assert.equal(memory[1].role, 'assistant');
+  assert.equal(memory[1].content, 'Clean reply.');
+});
+
+test('sanitiser leaves prose without role markers untouched', async () => {
+  const engine = createFakeEngine();
+  engine.enqueue({ tokens: ['A normal reply with the word user in it, but no role marker.'] });
+  const agent = new CharacterAgent(engine, buildConfig());
+  const events = await collectEvents(agent.chat('hi'));
+  const end = events[events.length - 1];
+  assert.ok(end.kind === 'turn-end');
+  assert.equal(
+    end.finalText,
+    'A normal reply with the word user in it, but no role marker.'
+  );
+});
