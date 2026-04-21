@@ -60,8 +60,7 @@ endfunction()
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libs" FORCE)
 set(LLAMA_WASM_MEM64 ${CE_WASM_MEM64} CACHE BOOL "Use wasm64 memory model for cogent-engine" FORCE)
 set(GGML_WEBGPU ON CACHE BOOL "Enable WebGPU backend for CogentEngine browser builds" FORCE)
-# common provides chat.h / common_chat_msgs_parse_oaicompat used by engine_bridge.cpp.
-set(LLAMA_BUILD_COMMON ON CACHE BOOL "Build llama.cpp common for chat-template helpers" FORCE)
+set(LLAMA_BUILD_COMMON ON CACHE BOOL "Build llama.cpp common utils for CogentEngine" FORCE)
 if(CE_BUILD_WEBGPU_TEST_BACKEND_OPS)
   set(LLAMA_BUILD_TESTS ON CACHE BOOL "Build llama.cpp tests" FORCE)
   set(LLAMA_OPENSSL OFF CACHE BOOL "Disable OpenSSL for Emscripten test builds" FORCE)
@@ -150,9 +149,16 @@ target_include_directories(CogentEngine PRIVATE
     ${CMAKE_SOURCE_DIR}/native
     ${CE_MTMD_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp/common
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp/vendor
 )
-target_link_libraries(CogentEngine PRIVATE llama common)
+target_link_libraries(CogentEngine PRIVATE llama)
+if(TARGET llama-common)
+    target_link_libraries(CogentEngine PRIVATE llama-common)
+endif()
+if(TARGET common)
+    target_link_libraries(CogentEngine PRIVATE common)
+endif()
 
 if(NOT MSVC)
     foreach(_ce_mtmd_source IN LISTS CE_MTMD_SOURCES)
