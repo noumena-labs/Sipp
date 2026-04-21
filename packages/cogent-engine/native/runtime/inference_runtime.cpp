@@ -1284,9 +1284,8 @@ InferenceRuntime::InferenceRuntime(std::string model_path,
     mtmd_params.use_gpu = config_.multimodal_use_gpu >= 0
                               ? config_.multimodal_use_gpu != 0
                               : config_.gpu_layers != 0;
-    // NOTE: config_.debug_compare_multimodal_embeddings is currently a no-op;
-    // the vendored mtmd_context_params no longer exposes a debug_compare_embeddings
-    // field. Re-plumb when upstream reintroduces it.
+    // mtmd_params.debug_compare_embeddings =
+    //     config_.debug_compare_multimodal_embeddings > 0;
     mtmd_params.print_timings = false;
     mtmd_params.n_threads = config_.n_threads > 0
                                 ? config_.n_threads
