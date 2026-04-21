@@ -447,7 +447,6 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
 
   const llama_token next_token =
       llama_sampler_sample(slot.sampler, shared_context_, -1);
-  llama_sampler_accept(slot.sampler, next_token);
   request.attributed_sample_count++;
   request.first_sampled_token_id = static_cast<int32_t>(next_token);
   if (llama_vocab_is_eog(vocab, next_token)) {
@@ -861,7 +860,6 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     GenerateRequest &slot_request = *slot.request;
     const llama_token next_token = llama_sampler_sample(
         slot.sampler, shared_context_, pending_logits.batch_token_index);
-    llama_sampler_accept(slot.sampler, next_token);
     if (slot_request.first_sampled_token_id < 0) {
       slot_request.first_sampled_token_id = static_cast<int32_t>(next_token);
     }
