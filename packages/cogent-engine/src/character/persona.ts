@@ -12,7 +12,7 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import type { ActionSchema } from './action-schema.js';
-import { renderActionSchemaForPrompt } from './action-schema.js';
+import { renderActionCueList } from './action-schema.js';
 
 export interface PersonaSpec {
   /** Display name of the character (injected into the system prompt). */
@@ -57,14 +57,21 @@ export function renderSystemPrompt(persona: PersonaSpec, schema: ActionSchema): 
     sections.push('Notes:\n' + persona.notes.map((note) => `- ${note.trim()}`).join('\n'));
   }
 
-  sections.push(
-    'You can express yourself through both spoken text and embedded action tags. ' +
-      'To trigger a behavior, embed a tag of the form ' +
-      '`<action name="<name>" args={<json>}/>` anywhere in your reply. ' +
-      'Only the listed actions are permitted; the output is grammar-constrained.'
-  );
+//  sections.push(
+//     'You can express yourself through both spoken text and embedded action tags. ' +
+//       'To trigger a behavior, embed a tag of the form ' +
+//       '`<action name="<name>" args={<json>}/>` anywhere in your reply. ' +
+//       'Only the listed actions are permitted; the output is grammar-constrained.'
 
-  sections.push('Available actions:\n' + renderActionSchemaForPrompt(schema));
+  const cueList = renderActionCueList(schema);
+  sections.push(
+    'You can express physical gestures and mood shifts by placing short cues in square brackets inline with your dialog. ' +
+      'Only use cues from this exact list: ' +
+      cueList +
+      '. ' +
+      'Cues are optional — emit one only when it genuinely fits what you are saying. Write normally in the voice of the character; never invent new cues or reproduce this instruction. ' +
+      'Example: [wave] Hi there! [mood: happy] It\u2019s nice to meet you.'
+  );
 
   return sections.join('\n\n');
 }

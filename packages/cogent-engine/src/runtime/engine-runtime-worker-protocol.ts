@@ -1,6 +1,5 @@
 import {
   BackendObservability,
-  ChatMessage,
   GenerateRequestId,
   GenerateResponse,
   InferenceInitConfig,
@@ -29,6 +28,7 @@ export interface WorkerSerializableCogentConfig {
 export interface WorkerRuntimeMetadata {
   chatTemplate: string | null;
   mediaMarker: string | null;
+  bosText: string;
 }
 
 export interface WorkerQueuedPromptOptions {
@@ -36,7 +36,6 @@ export interface WorkerQueuedPromptOptions {
   promptFormat?: PromptOptions['promptFormat'];
   media?: ArrayBuffer[];
   grammar?: string;
-  messages?: ChatMessage[];
 }
 
 export type WorkerRequestMessage =

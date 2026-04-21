@@ -5,7 +5,6 @@ import {
 import { CogentConfig, EngineModuleOptions } from '../cogent-config.js';
 import { normalizeInitConfig } from '../core/init-config.js';
 import {
-  buildChatTemplateUserMessage,
   normalizePromptText,
   resolveEffectivePromptFormat,
 } from '../core/prompt-format.js';
@@ -55,6 +54,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private engineInitialized = false;
   private cachedMediaMarker: string | null = null;
   private cachedChatTemplate: string | null = null;
+  private cachedBosText: string = '';
   private readonly opfs = new FileSystemStorage();
   private readonly browserModelCache = new BrowserModelCache(this.opfs);
   private readonly modelLoader: MainThreadModelLoader;
@@ -185,7 +185,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
   private resolvePromptFormat(
     input: PromptOptions | number | undefined
-  ): 'auto-chat' | 'raw' {
+  ): 'raw' {
     if (typeof input === 'number' || input === undefined) {
       return DEFAULT_PROMPT_FORMAT;
     }
@@ -228,34 +228,6 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return input.grammar;
   }
 
-  private resolvePromptMessages(
-    input: PromptOptions | number | undefined
-  ): import('../types.js').ChatMessage[] | undefined {
-    if (typeof input === 'number' || input === undefined || input.messages == null) {
-      return undefined;
-    }
-    if (!Array.isArray(input.messages)) {
-      throw new Error('messages must be an array of ChatMessage objects.');
-    }
-    if (input.messages.length === 0) {
-      return undefined;
-    }
-    for (const m of input.messages) {
-      if (m == null || typeof m !== 'object') {
-        throw new Error('messages entries must be objects with {role, content}.');
-      }
-      if (m.role !== 'system' && m.role !== 'user' && m.role !== 'assistant') {
-        throw new Error(
-          `messages entries must have role of 'system', 'user', or 'assistant'; got '${String(m.role)}'.`
-        );
-      }
-      if (typeof m.content !== 'string') {
-        throw new Error('messages entries must have a string content.');
-      }
-    }
-    return input.messages;
-  }
-
   private countMarkerOccurrences(promptText: string, marker: string): number {
     const escapedMarker = marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return (promptText.match(new RegExp(escapedMarker, 'g')) ?? []).length;
@@ -267,61 +239,22 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     promptText: string,
     options: number | PromptOptions
   ): GenerateRequest {
+    void bridge;
     const media = this.resolvePromptMedia(options);
-    const messages = this.resolvePromptMessages(options);
     const promptFormat = resolveEffectivePromptFormat(
       this.resolvePromptFormat(options),
       Boolean(media && media.length > 0)
     );
     const normalizedPromptText = normalizePromptText(promptText);
-    let formattedPromptText = normalizedPromptText;
-    let effectivePromptFormat: typeof promptFormat = promptFormat;
-    if (messages != null) {
-      if (media != null && media.length > 0) {
-        throw new Error(
-          'PromptOptions.messages is not currently compatible with media attachments.'
-        );
-      }
-      if (this.cachedChatTemplate == null || this.cachedChatTemplate.length === 0) {
-        throw new Error(
-          'PromptOptions.messages was provided but the loaded model does not expose a chat template.'
-        );
-      }
-      formattedPromptText = bridge.applyChatTemplate(
-        messages.map((m) => ({ role: m.role, content: m.content })),
-        true
-      );
-      if (formattedPromptText.length === 0) {
-        throw new Error(
-          'Failed to apply the model chat template for the provided messages.'
-        );
-      }
-      // The bridge has already wrapped the conversation in the model's native
-      // template; feeding it through any further wrap would be incorrect.
-      effectivePromptFormat = 'raw';
-    } else if (promptFormat === 'auto-chat' && this.cachedChatTemplate != null) {
-      const chatMessage =
-        media != null && media.length > 0
-          ? buildChatTemplateUserMessage(normalizedPromptText, this.cachedMediaMarker)
-          : { role: 'user' as const, content: normalizedPromptText };
-      formattedPromptText = bridge.applyChatTemplate(
-        [chatMessage],
-        true
-      );
-      if (formattedPromptText.length === 0) {
-        throw new Error(
-          'Failed to apply the model chat template for this prompt. Use promptFormat="raw" to bypass native template formatting.'
-        );
-      }
-    }
-    return {
+    const request: GenerateRequest = {
       contextKey,
-      promptText: formattedPromptText,
+      promptText: normalizedPromptText,
       maxOutputTokens: this.resolvePromptTokenCount(options),
-      promptFormat: effectivePromptFormat,
+      promptFormat,
       media,
       grammar: this.resolvePromptGrammar(options),
     };
+    return request;
   }
 
   private getLoadedModule(): EngineModule {
@@ -452,6 +385,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.backendProfilingEnabled = false;
     this.cachedMediaMarker = null;
     this.cachedChatTemplate = null;
+    this.cachedBosText = '';
     this.transportObservability = {
       ...DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY,
     };
@@ -706,6 +640,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.engineInitialized = true;
     this.cachedMediaMarker = bridge.getMediaMarker();
     this.cachedChatTemplate = bridge.getChatTemplate();
+    this.cachedBosText = bridge.getBosText();
 
     this.modelLoader.cleanupAfterEngineInit(module);
   }
@@ -949,6 +884,10 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
   public getChatTemplate(): string | null {
     return this.cachedChatTemplate;
+  }
+
+  public getBosText(): string {
+    return this.cachedBosText;
   }
 
   public async getBackendObservability(): Promise<BackendObservability | null> {

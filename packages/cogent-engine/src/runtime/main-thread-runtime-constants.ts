@@ -12,7 +12,7 @@ export type UrlShardMetadata = {
 
 export const MAX_PROMPT_TOKENS = 2048;
 export const DEFAULT_MAX_MODEL_BYTES = 8 * 1024 * 1024 * 1024;
-export const DEFAULT_PROMPT_FORMAT = 'auto-chat';
+export const DEFAULT_PROMPT_FORMAT = 'raw';
 export const URL_METADATA_FETCH_CONCURRENCY = 4;
 export const URL_DOWNLOAD_CONCURRENCY_OPFS = 4;
 export const URL_DOWNLOAD_CONCURRENCY_MEMORY = 2;

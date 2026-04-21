@@ -54,6 +54,9 @@ CE_RequestId CE_EnqueuePromptWithMediaQuery(
     const char* grammar);
 const char* CE_GetMediaMarkerString();
 const char* CE_GetChatTemplateString();
+const char* CE_GetBosTextString();
+const char* CE_GetEosTextString();
+const char* CE_TokenToStringString(int32_t token_id);
 const char* CE_ApplyChatTemplateString(const char* messages_json,
                                        int add_assistant);
 int CE_CancelQueuedPromptQuery(CE_RequestId request_id);

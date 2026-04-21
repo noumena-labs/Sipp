@@ -211,6 +211,33 @@ const char *CE_GetChatTemplate() {
 }
 
 EMSCRIPTEN_KEEPALIVE
+char *CE_GetBosText() {
+  std::lock_guard<std::mutex> lock(g_apiMutex);
+  if (!g_isEngineInitialized) {
+    return duplicate_heap_string("");
+  }
+  return duplicate_heap_string(CE_GetBosTextString());
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_GetEosText() {
+  std::lock_guard<std::mutex> lock(g_apiMutex);
+  if (!g_isEngineInitialized) {
+    return duplicate_heap_string("");
+  }
+  return duplicate_heap_string(CE_GetEosTextString());
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_TokenToString(int32_t token_id) {
+  std::lock_guard<std::mutex> lock(g_apiMutex);
+  if (!g_isEngineInitialized) {
+    return duplicate_heap_string("");
+  }
+  return duplicate_heap_string(CE_TokenToStringString(token_id));
+}
+
+EMSCRIPTEN_KEEPALIVE
 char *CE_ApplyChatTemplate(const char *messages_json, int add_assistant) {
   std::lock_guard<std::mutex> lock(g_apiMutex);
   if (!g_isEngineInitialized) {

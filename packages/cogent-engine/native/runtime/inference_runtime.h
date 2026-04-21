@@ -89,6 +89,16 @@ public:
   bool ConsumeCompletedResponse(GenerateRequestId request_id);
   const char *GetMediaMarker() const;
   const char *GetChatTemplate() const;
+  // Returns the model's BOS token rendered as text (empty string if none).
+  std::string GetBosText() const;
+  // Returns the model's EOS token rendered as text (empty string if none).
+  std::string GetEosText() const;
+  // Renders an arbitrary token id to its textual piece. Empty if invalid.
+  std::string TokenToString(int32_t token_id) const;
+  // Applies the model's embedded chat template via llama.cpp's
+  // common_chat_format_single. Retained as a general-purpose native API for
+  // callers that want the library-native formatting path; the in-engine
+  // CharacterAgent uses its own custom template builder instead.
   std::string ApplyChatTemplate(
       const std::vector<common_chat_msg> &messages,
       bool add_assistant) const;

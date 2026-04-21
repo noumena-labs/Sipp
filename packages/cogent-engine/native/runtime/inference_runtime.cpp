@@ -1821,6 +1821,69 @@ const char *InferenceRuntime::GetChatTemplate() const {
   return tmpl != nullptr && tmpl[0] != '\0' ? tmpl : nullptr;
 }
 
+std::string InferenceRuntime::GetBosText() const {
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+  if (primary_model_ == nullptr) {
+    return {};
+  }
+  const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
+  if (vocab == nullptr) {
+    return {};
+  }
+  const llama_token bos = llama_vocab_bos(vocab);
+  if (bos == LLAMA_TOKEN_NULL) {
+    return {};
+  }
+  char buffer[128];
+  const int piece_length = llama_token_to_piece(vocab, bos, buffer,
+                                                sizeof(buffer), 0, true);
+  if (piece_length <= 0) {
+    return {};
+  }
+  return std::string(buffer, static_cast<std::size_t>(piece_length));
+}
+
+std::string InferenceRuntime::GetEosText() const {
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+  if (primary_model_ == nullptr) {
+    return {};
+  }
+  const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
+  if (vocab == nullptr) {
+    return {};
+  }
+  const llama_token eos = llama_vocab_eos(vocab);
+  if (eos == LLAMA_TOKEN_NULL) {
+    return {};
+  }
+  char buffer[128];
+  const int piece_length = llama_token_to_piece(vocab, eos, buffer,
+                                                sizeof(buffer), 0, true);
+  if (piece_length <= 0) {
+    return {};
+  }
+  return std::string(buffer, static_cast<std::size_t>(piece_length));
+}
+
+std::string InferenceRuntime::TokenToString(int32_t token_id) const {
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+  if (primary_model_ == nullptr || token_id < 0) {
+    return {};
+  }
+  const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
+  if (vocab == nullptr) {
+    return {};
+  }
+  char buffer[256];
+  const int piece_length = llama_token_to_piece(
+      vocab, static_cast<llama_token>(token_id), buffer, sizeof(buffer), 0,
+      true);
+  if (piece_length <= 0) {
+    return {};
+  }
+  return std::string(buffer, static_cast<std::size_t>(piece_length));
+}
+
 std::string InferenceRuntime::ApplyChatTemplate(
     const std::vector<common_chat_msg> &messages, bool add_assistant) const {
   std::lock_guard<std::mutex> lock(operation_mutex_);

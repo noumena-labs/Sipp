@@ -232,7 +232,6 @@ async function handleQueuePrompt(
       promptFormat: message.options.promptFormat,
       media: undefined,
       grammar: message.options.grammar,
-      messages: message.options.messages,
       signal: abortController.signal,
       onToken: (token) => {
         state.bufferTokenPiece(requestId, token);
@@ -258,7 +257,6 @@ async function handleQueuePromptWithMedia(
       promptFormat: message.options.promptFormat,
       media,
       grammar: message.options.grammar,
-      messages: message.options.messages,
       signal: abortController.signal,
       onToken: (token) => {
         state.bufferTokenPiece(requestId, token);

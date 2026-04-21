@@ -436,7 +436,6 @@ export class WorkerEngineRuntime implements EngineRuntime {
     const signal = typeof options === 'object' ? options.signal : undefined;
     const media = typeof options === 'object' ? options.media : undefined;
     const grammar = typeof options === 'object' ? options.grammar : undefined;
-    const messages = typeof options === 'object' ? options.messages : undefined;
     const callId = this.nextCallId++;
     this.pendingQueuedTokenCallbacks.set(callId, onToken);
 
@@ -478,7 +477,6 @@ export class WorkerEngineRuntime implements EngineRuntime {
                 promptFormat,
                 media: transferableMedia,
                 grammar,
-                messages,
               },
             }
           : {
@@ -489,7 +487,6 @@ export class WorkerEngineRuntime implements EngineRuntime {
                 nTokens: typeof options === 'number' ? options : options.nTokens,
                 promptFormat,
                 grammar,
-                messages,
               },
             },
         undefined,
@@ -516,6 +513,10 @@ export class WorkerEngineRuntime implements EngineRuntime {
 
   public getMediaMarker(): string | null {
     return this.cachedRuntimeMetadata?.mediaMarker ?? null;
+  }
+
+  public getBosText(): string {
+    return this.cachedRuntimeMetadata?.bosText ?? '';
   }
 
   public async runQueuedRequest(
@@ -861,6 +862,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
     return {
       chatTemplate: normalizeOptionalString(metadata?.chatTemplate),
       mediaMarker: normalizeOptionalString(metadata?.mediaMarker),
+      bosText: typeof metadata?.bosText === 'string' ? metadata.bosText : '',
     };
   }
 }

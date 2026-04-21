@@ -191,7 +191,16 @@ export default function App() {
         } else if (event.kind === 'turn-end') {
           setMessages((prev) =>
             prev.map((msg) =>
-              msg.id === assistantId ? { ...msg, pending: false } : msg
+              msg.id === assistantId
+                ? {
+                    ...msg,
+                    text:
+                      msg.text.trim().length === 0 && msg.actions.length === 0
+                        ? '[No visible response generated.]'
+                        : msg.text,
+                    pending: false,
+                  }
+                : msg
             )
           );
           if (event.errorMessage) {

@@ -64,6 +64,12 @@ export interface EngineRuntime {
   close(): void;
   getChatTemplate(): string | null;
   getMediaMarker(): string | null;
+  /**
+   * Returns the model's BOS token rendered as text, or '' if the model has
+   * no BOS token. Used by the character-agent custom template builder to
+   * emit the correct leading special token per model.
+   */
+  getBosText(): string;
   cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean>;
   queuePrompt(
     contextKey: string,

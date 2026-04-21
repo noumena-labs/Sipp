@@ -5,18 +5,25 @@
 // - Incremental parser that turns a stream of text chunks (as produced by
 //   the grammar defined in action-grammar.ts) into two kinds of events:
 //     * `{ kind: 'prose', text }` — a run of plain characters;
-//     * `{ kind: 'action', name, args }` — a fully parsed action tag.
+//     * `{ kind: 'action', name, args }` — a recognised bracketed cue.
 //
-// - Must be tolerant of chunk boundaries splitting in the middle of a tag.
+// - Must be tolerant of chunk boundaries splitting in the middle of a cue.
 //   Internal buffering is retained across calls to {@link consume}.
 //
+// - Cues are recognised by looking up the bracketed label in the cue map
+//   built from the character's ActionSchema. Unknown labels are surfaced
+//   verbatim as prose so the model's output is never silently dropped, but
+//   they never produce action events.
+//
 //////////////////////////////////////////////////////////////////////////////
+
+import { expandActionCues, type ActionCue, type ActionSchema } from './action-schema.js';
 
 export interface ActionEvent {
   readonly kind: 'action';
   readonly name: string;
   readonly args: Readonly<Record<string, unknown>>;
-  /** Raw tag text, useful for logs and testing. */
+  /** Raw cue text including the surrounding brackets — useful for logs. */
   readonly raw: string;
 }
 
@@ -28,9 +35,10 @@ export interface ProseEvent {
 export type ParsedEvent = ActionEvent | ProseEvent;
 
 /**
- * Error thrown when an action tag is syntactically malformed despite the
- * grammar — this is a defensive check; well-behaved grammar-constrained
- * output should never trigger it.
+ * Error thrown when a bracketed cue is structurally malformed — currently
+ * only produced by {@link parseActionCue}, which is a convenience helper
+ * for tests. The streaming parser never throws: unknown or malformed cues
+ * are surfaced as prose.
  */
 export class ActionParseError extends Error {
   public readonly raw: string;
@@ -42,90 +50,121 @@ export class ActionParseError extends Error {
   }
 }
 
-const TAG_PREFIX = '<action';
-const TAG_TERMINATOR = '/>';
+const CUE_OPEN = '[';
+const CUE_CLOSE = ']';
 
 /**
- * Stateful streaming parser. Instantiate once per turn and feed decoded text
- * chunks in order. Call {@link flush} at end-of-turn to surface any trailing
- * prose. The parser never emits a partial action — it waits for the full
- * `/>` terminator to arrive before emitting.
+ * Builds a label → cue lookup from an ActionSchema. Separated so callers
+ * that already computed the cue list can pass it directly via
+ * {@link StreamingActionParser.fromCues}.
+ */
+function buildCueMap(cues: readonly ActionCue[]): Map<string, ActionCue> {
+  const map = new Map<string, ActionCue>();
+  for (const cue of cues) {
+    map.set(cue.label, cue);
+  }
+  return map;
+}
+
+/**
+ * Stateful streaming parser. Instantiate once per turn and feed decoded
+ * text chunks in order. Call {@link flush} at end-of-turn to surface any
+ * trailing prose. The parser never emits a partial cue — it waits for the
+ * closing `]` to arrive before resolving.
  */
 export class StreamingActionParser {
   private buffer = '';
+  private readonly cueMap: Map<string, ActionCue>;
 
   /**
-   * Accepts a new chunk of text and returns zero or more events derived from
-   * what has been seen so far, in stream order. Any unfinished tag or the
-   * final sliver of prose that could be the start of a tag is retained in
-   * the internal buffer.
+   * Constructs a parser from an ActionSchema. The schema is expanded into
+   * the cue vocabulary that the parser will recognise.
+   */
+  public constructor(schema: ActionSchema) {
+    this.cueMap = buildCueMap(expandActionCues(schema));
+  }
+
+  /**
+   * Alternative constructor for callers (e.g. tests) that have already
+   * computed the cue list and want to avoid re-running schema validation.
+   */
+  public static fromCues(cues: readonly ActionCue[]): StreamingActionParser {
+    // Bypass the schema-based constructor by assigning directly.
+    const parser = Object.create(StreamingActionParser.prototype) as StreamingActionParser;
+    (parser as unknown as { buffer: string }).buffer = '';
+    (parser as unknown as { cueMap: Map<string, ActionCue> }).cueMap = buildCueMap(cues);
+    return parser;
+  }
+
+  /**
+   * Accepts a new chunk of text and returns zero or more events derived
+   * from what has been seen so far, in stream order. Any unfinished cue
+   * (open `[` without a matching `]`) is retained in the internal buffer.
    */
   public consume(chunk: string): ParsedEvent[] {
     if (chunk.length === 0) {
       return [];
     }
     this.buffer += chunk;
-    return this.drain(/*allowTrailingProse=*/ false);
+    return this.drain(/*flushing=*/ false);
   }
 
   /**
-   * Emits any remaining buffered prose once the stream is known to be
-   * complete. Call exactly once at end-of-turn.
+   * Emits any remaining buffered prose or unresolved cue material once the
+   * stream is known to be complete. Call exactly once at end-of-turn.
    *
-   * If an unterminated action tag is still pending when flush is called, it
-   * is surfaced as a prose event (verbatim) so that data is never silently
-   * dropped.
+   * If an unterminated cue is still pending, it is surfaced as prose
+   * verbatim (including the opening `[`) so nothing is silently dropped.
    */
   public flush(): ParsedEvent[] {
-    const events = this.drain(/*allowTrailingProse=*/ true);
+    const events = this.drain(/*flushing=*/ true);
     this.buffer = '';
     return events;
   }
 
-  private drain(allowTrailingProse: boolean): ParsedEvent[] {
+  private drain(flushing: boolean): ParsedEvent[] {
     const events: ParsedEvent[] = [];
 
     while (this.buffer.length > 0) {
-      const tagStart = this.buffer.indexOf(TAG_PREFIX);
+      const openIndex = this.buffer.indexOf(CUE_OPEN);
 
-      if (tagStart === -1) {
-        // No tag start anywhere in buffer. Flush prose, but keep the last
-        // few characters around in case they form the beginning of a tag in
-        // the next chunk (length of TAG_PREFIX - 1). On flush, dump all.
-        if (allowTrailingProse) {
-          this.appendProse(events, this.buffer);
-          this.buffer = '';
-        } else {
-          const safeLen = Math.max(0, this.buffer.length - (TAG_PREFIX.length - 1));
-          if (safeLen > 0) {
-            this.appendProse(events, this.buffer.slice(0, safeLen));
-            this.buffer = this.buffer.slice(safeLen);
-          }
-        }
+      if (openIndex === -1) {
+        // No `[` anywhere in the buffer — everything is prose.
+        this.appendProse(events, this.buffer);
+        this.buffer = '';
         break;
       }
 
-      // Prose prefix up to the tag starts.
-      if (tagStart > 0) {
-        this.appendProse(events, this.buffer.slice(0, tagStart));
-        this.buffer = this.buffer.slice(tagStart);
+      // Prose prefix up to the `[`.
+      if (openIndex > 0) {
+        this.appendProse(events, this.buffer.slice(0, openIndex));
+        this.buffer = this.buffer.slice(openIndex);
       }
 
-      // Buffer now starts with TAG_PREFIX. Look for the terminator.
-      const terminatorIndex = this.buffer.indexOf(TAG_TERMINATOR);
-      if (terminatorIndex === -1) {
-        // Tag incomplete; wait for more input, unless the stream is flushing.
-        if (allowTrailingProse) {
+      // Buffer now starts with `[`. Look for the matching `]`.
+      const closeIndex = this.buffer.indexOf(CUE_CLOSE, 1);
+      if (closeIndex === -1) {
+        // Cue incomplete — wait for more input unless flushing.
+        if (flushing) {
           this.appendProse(events, this.buffer);
           this.buffer = '';
         }
         break;
       }
 
-      const rawTag = this.buffer.slice(0, terminatorIndex + TAG_TERMINATOR.length);
-      this.buffer = this.buffer.slice(terminatorIndex + TAG_TERMINATOR.length);
+      const raw = this.buffer.slice(0, closeIndex + 1);
+      const label = this.buffer.slice(1, closeIndex);
+      this.buffer = this.buffer.slice(closeIndex + 1);
 
-      events.push(parseActionTag(rawTag));
+      const cue = this.cueMap.get(label);
+      if (cue != null) {
+        events.push({ kind: 'action', name: cue.name, args: { ...cue.args }, raw });
+      } else {
+        // Unknown cue — surface as prose so the text is not silently
+        // dropped. The grammar, when enabled, prevents this from
+        // happening at generation time.
+        this.appendProse(events, raw);
+      }
     }
 
     return events;
@@ -146,35 +185,21 @@ export class StreamingActionParser {
   }
 }
 
-const NAME_ATTR_RE = /<action\s+name="([^"]+)"(\s+args=(\{[\s\S]*?\}))?\s*\/>/;
-
 /**
- * Parses a fully buffered `<action .../>` tag. Separated out so tests can
- * exercise parsing independently of the streaming state machine.
+ * Resolves a fully buffered `[label]` string against a cue list. Separated
+ * out so tests can exercise label→event mapping independently of the
+ * streaming state machine. Throws {@link ActionParseError} when the input
+ * is not a well-formed `[...]` envelope; unknown labels also throw.
  */
-export function parseActionTag(raw: string): ActionEvent {
-  const match = NAME_ATTR_RE.exec(raw);
-  if (!match) {
-    throw new ActionParseError(`Malformed action tag: ${raw}`, raw);
+export function parseActionCue(raw: string, cues: readonly ActionCue[]): ActionEvent {
+  if (raw.length < 2 || raw[0] !== CUE_OPEN || raw[raw.length - 1] !== CUE_CLOSE) {
+    throw new ActionParseError(`Malformed action cue: ${JSON.stringify(raw)}`, raw);
   }
-  const name = match[1];
-  const argsJson = match[3];
-  let args: Record<string, unknown> = {};
-  if (argsJson) {
-    try {
-      args = JSON.parse(argsJson) as Record<string, unknown>;
-    } catch (error) {
-      throw new ActionParseError(
-        `Invalid JSON payload in action "${name}": ${(error as Error).message}`,
-        raw
-      );
-    }
-    if (args == null || typeof args !== 'object' || Array.isArray(args)) {
-      throw new ActionParseError(
-        `Action "${name}" args must be a JSON object, got ${JSON.stringify(args)}`,
-        raw
-      );
-    }
+  const label = raw.slice(1, -1);
+  const cueMap = buildCueMap(cues);
+  const cue = cueMap.get(label);
+  if (cue == null) {
+    throw new ActionParseError(`Unknown action cue: [${label}]`, raw);
   }
-  return { kind: 'action', name, args, raw };
+  return { kind: 'action', name: cue.name, args: { ...cue.args }, raw };
 }

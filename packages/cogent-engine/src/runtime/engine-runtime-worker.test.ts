@@ -109,6 +109,7 @@ function createWorkerRuntimeMetadata() {
   return {
     chatTemplate: 'llama3',
     mediaMarker: '<__media__>',
+    bosText: '<|begin_of_text|>',
   };
 }
 
@@ -860,7 +861,7 @@ test('WorkerEngineRuntime forwards decode sampling config through init-engine', 
   }
 });
 
-test('WorkerEngineRuntime sends transferable media buffers without discarding auto-chat mode for media prompts', async () => {
+test('WorkerEngineRuntime sends transferable media buffers for media prompts', async () => {
   const restoreWorker = installMockWorker();
   try {
     MockWorker.handlerFactory = () => {

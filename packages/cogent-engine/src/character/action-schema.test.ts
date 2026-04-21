@@ -2,7 +2,8 @@
 //
 // action-schema.test.ts
 //
-// - Exercises validateActionSchema and renderActionSchemaForPrompt.
+// - Exercises validateActionSchema, expandActionCues, and
+//   renderActionCueList.
 //
 //////////////////////////////////////////////////////////////////////////////
 
@@ -10,7 +11,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { ActionSchema } from './action-schema.js';
-import { renderActionSchemaForPrompt, validateActionSchema } from './action-schema.js';
+import {
+  expandActionCues,
+  renderActionCueList,
+  validateActionSchema,
+} from './action-schema.js';
 
 const WAVE_SCHEMA: ActionSchema = {
   actions: [
@@ -29,7 +34,7 @@ const WAVE_SCHEMA: ActionSchema = {
       ],
     },
     {
-      name: 'idle',
+      name: 'shake_head',
       args: [],
     },
   ],
@@ -72,9 +77,65 @@ test('validateActionSchema rejects enum args without values', () => {
   assert.match(String(error), /non-empty values/);
 });
 
-test('renderActionSchemaForPrompt produces a readable listing', () => {
-  const prose = renderActionSchemaForPrompt(WAVE_SCHEMA);
-  assert.match(prose, /wave\(duration_ms: number\) — Wave a hand\./);
-  assert.match(prose, /set_mood\(mood: "happy" \| "sad", persist: boolean\)/);
-  assert.match(prose, /idle\(\)/);
+test('expandActionCues produces one cue per enum value and a bare cue otherwise', () => {
+  const cues = expandActionCues(WAVE_SCHEMA);
+  // wave: first arg is a non-enum number → bare `[wave]` with empty args.
+  // set_mood: first arg is enum with two values → two cues.
+  // shake_head: no args → bare `[shake head]` with underscore converted.
+  assert.deepEqual(cues.map((cue) => cue.label), [
+    'wave',
+    'mood: happy',
+    'mood: sad',
+    'shake head',
+  ]);
+  const happy = cues.find((cue) => cue.label === 'mood: happy');
+  assert.ok(happy);
+  assert.equal(happy.name, 'set_mood');
+  assert.deepEqual(happy.args, { mood: 'happy' });
+});
+
+test('expandActionCues respects cueLabel and cueLabels overrides', () => {
+  const cues = expandActionCues({
+    actions: [
+      {
+        name: 'wave',
+        cueLabel: 'greet',
+        args: [],
+      },
+      {
+        name: 'intensity',
+        args: [
+          {
+            name: 'level',
+            type: 'enum',
+            values: ['low', 'high'],
+            cueLabels: { low: 'wave softly', high: 'wave energetically' },
+          },
+        ],
+      },
+    ],
+  });
+  assert.deepEqual(cues.map((cue) => cue.label), [
+    'greet',
+    'wave softly',
+    'wave energetically',
+  ]);
+});
+
+test('expandActionCues throws when two cues collapse to the same label', () => {
+  assert.throws(
+    () =>
+      expandActionCues({
+        actions: [
+          { name: 'wave', args: [] },
+          { name: 'wave_', cueLabel: 'wave', args: [] },
+        ],
+      }),
+    /collision/i
+  );
+});
+
+test('renderActionCueList emits bracketed, comma-separated labels', () => {
+  const text = renderActionCueList(WAVE_SCHEMA);
+  assert.equal(text, '[wave], [mood: happy], [mood: sad], [shake head]');
 });

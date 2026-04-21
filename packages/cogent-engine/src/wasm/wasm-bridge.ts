@@ -54,16 +54,6 @@ function validateGrammarSize(grammar: string | undefined): void {
   }
 }
 
-export type ChatTemplateContentPart = {
-  type: 'text' | 'media_marker';
-  text: string;
-};
-
-export type ChatTemplateMessage = {
-  role: string;
-  content: string | ChatTemplateContentPart[];
-};
-
 export type WasmRuntimeTokenEvent = {
   requestId: GenerateRequestId;
   token: string;
@@ -79,6 +69,16 @@ export type WasmRuntimeEventDrainResult = {
 export type WasmSchedulerProgressResult = {
   stepResult: number;
   completedResponseCount: number;
+};
+
+/**
+ * Shape of an OpenAI-compatible chat message accepted by
+ * `WasmBridge.applyChatTemplate`. Corresponds to the JSON array parsed by
+ * `common_chat_msgs_parse_oaicompat` on the native side.
+ */
+export type ChatTemplateMessage = {
+  role: string;
+  content: string;
 };
 
 export class WasmBridge {
@@ -376,6 +376,74 @@ export class WasmBridge {
     }
   }
 
+  public getBosText(): string {
+    try {
+      const ptr = this.callNumber('CE_GetBosText');
+      if (!ptr) {
+        return '';
+      }
+      try {
+        return this.module.UTF8ToString(ptr);
+      } finally {
+        this.module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
+      }
+    } catch (error) {
+      if (this.isMissingOptionalRuntimeApiError('CE_GetBosText', error)) {
+        return '';
+      }
+      throw error;
+    }
+  }
+
+  public getEosText(): string {
+    try {
+      const ptr = this.callNumber('CE_GetEosText');
+      if (!ptr) {
+        return '';
+      }
+      try {
+        return this.module.UTF8ToString(ptr);
+      } finally {
+        this.module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
+      }
+    } catch (error) {
+      if (this.isMissingOptionalRuntimeApiError('CE_GetEosText', error)) {
+        return '';
+      }
+      throw error;
+    }
+  }
+
+  public tokenToString(tokenId: number): string {
+    try {
+      const ptr = this.callNumber('CE_TokenToString', ['number'], [tokenId]);
+      if (!ptr) {
+        return '';
+      }
+      try {
+        return this.module.UTF8ToString(ptr);
+      } finally {
+        this.module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
+      }
+    } catch (error) {
+      if (this.isMissingOptionalRuntimeApiError('CE_TokenToString', error)) {
+        return '';
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Applies llama.cpp's native chat template (via common_chat_format_single)
+   * to a set of OpenAI-style chat messages and returns the formatted prompt
+   * text. Returns '' when the runtime lacks the export (older WASM builds)
+   * or when the model has no embedded chat template.
+   *
+   * Retained as a general-purpose bridge API for callers that want the
+   * llama.cpp-native formatting path. The in-engine CharacterAgent uses its
+   * own cross-model custom template builder instead (see
+   * src/character/custom-template.ts).
+   */
   public applyChatTemplate(
     messages: ChatTemplateMessage[],
     addAssistant: boolean
@@ -389,7 +457,6 @@ export class WasmBridge {
       if (!ptr) {
         return '';
       }
-
       try {
         return this.module.UTF8ToString(ptr);
       } finally {

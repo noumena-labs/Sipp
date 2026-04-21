@@ -3,19 +3,34 @@
 // action-parser.test.ts
 //
 // - Exercises the streaming parser: chunk-boundary robustness, prose
-//   coalescing, malformed-tag handling.
+//   coalescing, unknown-cue handling.
 //
 //////////////////////////////////////////////////////////////////////////////
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import type { ActionSchema } from './action-schema.js';
+import { expandActionCues } from './action-schema.js';
 import {
   ActionParseError,
-  parseActionTag,
+  parseActionCue,
   StreamingActionParser,
   type ParsedEvent,
 } from './action-parser.js';
+
+const SCHEMA: ActionSchema = {
+  actions: [
+    { name: 'wave', args: [] },
+    { name: 'shake_head', args: [] },
+    {
+      name: 'set_mood',
+      args: [{ name: 'mood', type: 'enum', values: ['happy', 'sad'] }],
+    },
+  ],
+};
+
+const CUES = expandActionCues(SCHEMA);
 
 function drainAll(parser: StreamingActionParser, chunks: string[]): ParsedEvent[] {
   const events: ParsedEvent[] = [];
@@ -26,38 +41,44 @@ function drainAll(parser: StreamingActionParser, chunks: string[]): ParsedEvent[
   return events;
 }
 
-test('parseActionTag parses an argless tag', () => {
-  const event = parseActionTag('<action name="idle"/>');
+test('parseActionCue resolves a bare cue label', () => {
+  const event = parseActionCue('[wave]', CUES);
   assert.equal(event.kind, 'action');
-  assert.equal(event.name, 'idle');
+  assert.equal(event.name, 'wave');
   assert.deepEqual(event.args, {});
 });
 
-test('parseActionTag parses a tag with a JSON args payload', () => {
-  const event = parseActionTag('<action name="wave" args={"duration_ms":800}/>');
-  assert.equal(event.name, 'wave');
-  assert.deepEqual(event.args, { duration_ms: 800 });
+test('parseActionCue resolves an enum-valued cue label', () => {
+  const event = parseActionCue('[mood: happy]', CUES);
+  assert.equal(event.name, 'set_mood');
+  assert.deepEqual(event.args, { mood: 'happy' });
 });
 
-test('parseActionTag rejects malformed tags', () => {
-  assert.throws(() => parseActionTag('<action />'), (error) => error instanceof ActionParseError);
+test('parseActionCue rejects unknown labels', () => {
+  assert.throws(
+    () => parseActionCue('[look at moon]', CUES),
+    (error) => error instanceof ActionParseError
+  );
+});
+
+test('parseActionCue rejects malformed envelopes', () => {
+  assert.throws(
+    () => parseActionCue('wave', CUES),
+    (error) => error instanceof ActionParseError
+  );
 });
 
 test('StreamingActionParser emits prose and action events in stream order', () => {
-  const parser = new StreamingActionParser();
+  const parser = new StreamingActionParser(SCHEMA);
   const events = drainAll(parser, [
     'Hello ',
     'there!',
-    '<action name="wave" args={"duration_ms":800}/>',
+    '[wave]',
     ' all done.',
   ]);
-  // Prose is streamed as it becomes unambiguous; we assert on ordering and
-  // full reconstruction rather than exact chunking.
   const action = events.find((event) => event.kind === 'action');
   assert.ok(action && action.kind === 'action' && action.name === 'wave');
 
-  // The action must appear after every byte of the leading prose and before
-  // every byte of the trailing prose.
   const actionIndex = events.indexOf(action);
   const leading = events
     .slice(0, actionIndex)
@@ -73,62 +94,86 @@ test('StreamingActionParser emits prose and action events in stream order', () =
   assert.equal(trailing, ' all done.');
 });
 
-test('StreamingActionParser coalesces contiguous prose across chunks', () => {
-  const parser = new StreamingActionParser();
-  const events = drainAll(parser, ['a', 'b', 'c']);
+test('StreamingActionParser resolves enum-valued cues', () => {
+  const parser = new StreamingActionParser(SCHEMA);
+  const events = drainAll(parser, ['Hi! [mood: happy] nice to meet you.']);
+  const action = events.find((event) => event.kind === 'action');
+  assert.ok(action && action.kind === 'action');
+  assert.equal(action.name, 'set_mood');
+  assert.deepEqual(action.args, { mood: 'happy' });
+});
+
+test('StreamingActionParser coalesces contiguous prose within a single chunk', () => {
+  const parser = new StreamingActionParser(SCHEMA);
+  const events = drainAll(parser, ['abc']);
   assert.equal(events.length, 1);
   assert.deepEqual(events[0], { kind: 'prose', text: 'abc' });
 });
 
-test('StreamingActionParser tolerates tag boundaries split across chunks', () => {
-  const parser = new StreamingActionParser();
-  const source = 'hello<action name="wave" args={"duration_ms":800}/>world';
-  // Chunk every 3 characters to force boundaries inside the tag.
+test('StreamingActionParser preserves stream order across chunks without losing prose', () => {
+  const parser = new StreamingActionParser(SCHEMA);
+  const events = drainAll(parser, ['a', 'b', 'c']);
+  // Each chunk may flush as its own prose event — the invariant is that
+  // the concatenated prose equals the full input and ordering is preserved.
+  const joined = events
+    .filter((event) => event.kind === 'prose')
+    .map((event) => (event.kind === 'prose' ? event.text : ''))
+    .join('');
+  assert.equal(joined, 'abc');
+  assert.ok(events.every((event) => event.kind === 'prose'));
+});
+
+test('StreamingActionParser tolerates cue boundaries split across chunks', () => {
+  const parser = new StreamingActionParser(SCHEMA);
+  const source = 'hello[mood: sad]world';
   const chunks: string[] = [];
   for (let index = 0; index < source.length; index += 3) {
     chunks.push(source.slice(index, index + 3));
   }
   const events = drainAll(parser, chunks);
   const action = events.find((event) => event.kind === 'action');
-  assert.ok(action, 'action event must be emitted');
-  if (action && action.kind === 'action') {
-    assert.equal(action.name, 'wave');
-    assert.deepEqual(action.args, { duration_ms: 800 });
-  }
-  const prose = events.filter((event) => event.kind === 'prose').map((event) =>
-    event.kind === 'prose' ? event.text : ''
-  );
-  assert.equal(prose.join(''), 'helloworld');
+  assert.ok(action && action.kind === 'action');
+  assert.equal(action.name, 'set_mood');
+  assert.deepEqual(action.args, { mood: 'sad' });
+  const prose = events
+    .filter((event) => event.kind === 'prose')
+    .map((event) => (event.kind === 'prose' ? event.text : ''))
+    .join('');
+  assert.equal(prose, 'helloworld');
 });
 
-test('StreamingActionParser surfaces unterminated tag as prose on flush', () => {
-  const parser = new StreamingActionParser();
-  const events = drainAll(parser, ['pre <action name="wave"']);
+test('StreamingActionParser surfaces unterminated cue as prose on flush', () => {
+  const parser = new StreamingActionParser(SCHEMA);
+  const events = drainAll(parser, ['pre [wave']);
   const joined = events
     .filter((event) => event.kind === 'prose')
     .map((event) => (event.kind === 'prose' ? event.text : ''))
     .join('');
-  assert.equal(joined, 'pre <action name="wave"');
+  assert.equal(joined, 'pre [wave');
 });
 
-test('StreamingActionParser defers prose that might start a tag', () => {
-  const parser = new StreamingActionParser();
-  // The trailing `<act` is ambiguous; the parser must hold back those bytes.
-  const first = parser.consume('hi <act');
-  const proseSoFar = first
+test('StreamingActionParser surfaces unknown cues as prose verbatim', () => {
+  const parser = new StreamingActionParser(SCHEMA);
+  const events = drainAll(parser, ['hi [look at moon] there']);
+  const actions = events.filter((event) => event.kind === 'action');
+  assert.equal(actions.length, 0);
+  const joined = events
     .filter((event) => event.kind === 'prose')
     .map((event) => (event.kind === 'prose' ? event.text : ''))
     .join('');
-  // `<action` prefix length is 7, so up to 6 trailing bytes are deferred.
-  // 'hi <act' is 7 bytes → only the first byte is safely emitted.
-  assert.ok(proseSoFar.length < 'hi <act'.length, 'parser must hold back ambiguous bytes');
-  assert.ok('hi <act'.startsWith(proseSoFar));
-  // Completing with the rest of a valid tag resolves the ambiguity.
-  const rest = parser.consume('ion name="idle"/>');
-  const actions = rest.filter((event) => event.kind === 'action');
-  assert.equal(actions.length, 1);
-  const action = actions[0];
-  if (action && action.kind === 'action') {
-    assert.equal(action.name, 'idle');
-  }
+  assert.equal(joined, 'hi [look at moon] there');
+});
+
+test('StreamingActionParser defers bytes that might start a cue', () => {
+  const parser = new StreamingActionParser(SCHEMA);
+  // The trailing `[w` is an unfinished cue — the parser must hold those
+  // bytes until the closing `]` arrives (or flush is called).
+  const first = parser.consume('hi [w');
+  const actions = first.filter((event) => event.kind === 'action');
+  assert.equal(actions.length, 0);
+  const rest = parser.consume('ave] done');
+  rest.push(...parser.flush());
+  const action = rest.find((event) => event.kind === 'action');
+  assert.ok(action && action.kind === 'action');
+  assert.equal(action.name, 'wave');
 });

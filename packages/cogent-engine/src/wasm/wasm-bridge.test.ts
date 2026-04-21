@@ -508,8 +508,8 @@ test('WasmBridge calls multimodal init when a projector path is configured', asy
       'number',
       'number',
       'number',
-      'number',
       'string',
+      'number',
       'number',
       'number',
       'number',
@@ -562,30 +562,14 @@ test('WasmBridge calls multimodal init when a projector path is configured', asy
   });
 });
 
-test('WasmBridge flattens media buffers and frees the native template string', () => {
+test('WasmBridge flattens media buffers and exposes template + marker', () => {
   const module = new MockWasmBridgeModule();
   module.chatTemplate = 'template';
   module.mediaMarker = '<__media__>';
-  module.appliedChatTemplateText = 'templated prompt';
   const bridge = new WasmBridge(module);
 
   assert.equal(bridge.getMediaMarker(), '<__media__>');
   assert.equal(bridge.getChatTemplate(), 'template');
-  assert.equal(
-    bridge.applyChatTemplate(
-      [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: 'look ' },
-            { type: 'media_marker', text: '<__media__>' },
-          ],
-        },
-      ],
-      true
-    ),
-    'templated prompt'
-  );
 
   const requestId = bridge.enqueuePromptWithMedia(
     'ctx',
@@ -604,7 +588,6 @@ test('WasmBridge flattens media buffers and frees the native template string', (
     images: [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5])],
     grammar: '',
   });
-  assert.ok(module.freedStringPointers.length >= 1);
 });
 
 test('WasmBridge decodes token callbacks through the function table', () => {

@@ -23,6 +23,11 @@ import {
   resolveMaxMemoryTurns,
   type CharacterConfig,
 } from './character-config.js';
+import {
+  buildChatPrompt,
+  sniffChatFormat,
+  type ChatFormat,
+} from './custom-template.js';
 import { renderSystemPrompt } from './persona.js';
 
 /**
@@ -40,6 +45,10 @@ export interface CharacterAgentEngine {
     options?: { signal?: AbortSignal }
   ): Promise<GenerateResponse>;
   cancelQueuedRequest?(requestId: GenerateRequestId): Promise<boolean>;
+  /** Returns the Jinja chat_template string embedded in the GGUF, or null. */
+  getChatTemplate?(): string | null;
+  /** Returns the model's BOS token rendered as text (may be empty). */
+  getBosText?(): string;
 }
 
 export interface CharacterAgentOptions {
@@ -79,6 +88,7 @@ export class CharacterAgent {
   private readonly memoryLimitTurns: number;
   private readonly turnHistory: ChatTurn[] = [];
   private readonly eventBus: ActionBus;
+  private turnSequence = 0;
 
   public constructor(
     engine: CharacterAgentEngine,
@@ -133,7 +143,7 @@ export class CharacterAgent {
   public chat(userMessage: string, options: { signal?: AbortSignal } = {}): AsyncIterable<ChatEvent> {
     const trimmed = userMessage ?? '';
     const queue = new AsyncEventQueue<ChatEvent>();
-    const parser = new StreamingActionParser();
+    const parser = new StreamingActionParser(this.config.actions);
 
     const emit = (event: ChatEvent): void => {
       queue.push(event);
@@ -141,21 +151,23 @@ export class CharacterAgent {
     };
 
     const turnMessages = this.buildTurnMessages(trimmed);
+    const renderedPrompt = this.renderPromptText(turnMessages);
 
     emit({ kind: 'turn-start', userMessage: trimmed });
 
     // Drive the engine in a detached async task so the async iterator can
     // begin delivering buffered events to the consumer immediately.
-    void this.runTurn(turnMessages, trimmed, parser, emit, queue, options.signal);
+    void this.runTurn(renderedPrompt, turnMessages, trimmed, parser, emit, queue, options.signal);
 
     return queue;
   }
 
   /**
-   * Builds the chat-template messages passed to `queuePrompt`. The runtime
-   * feeds this array to llama.cpp's native chat template, which emits the
-   * correct role/EOS special tokens so the model stops at its own turn-end
-   * rather than hallucinating additional "User:" turns.
+   * Builds the ordered ChatMessage[] for the current turn. This sequence is
+   * rendered into raw prompt text via our own template builder (see
+   * `renderPromptText`); we no longer delegate to llama.cpp's native chat
+   * template because its single-message delta formatter silently drops the
+   * system turn when it's the first in history.
    */
   private buildTurnMessages(userMessage: string): ChatMessage[] {
     const messages: ChatMessage[] = [{ role: 'system', content: this.systemPrompt }];
@@ -166,7 +178,34 @@ export class CharacterAgent {
     return messages;
   }
 
+  /**
+   * Resolves the effective chat format: config override > sniff from the
+   * model's embedded template > throw. Then renders the full conversation
+   * into a raw prompt string with the model's BOS prefix.
+   */
+  private renderPromptText(messages: ChatMessage[]): string {
+    const override = this.config.chatFormat;
+    const templateSource = this.engine.getChatTemplate?.() ?? null;
+    const format: ChatFormat | null =
+      override ?? sniffChatFormat(templateSource);
+    if (format == null) {
+      throw new Error(
+        'CharacterAgent: unable to resolve chat format. Model has no embedded ' +
+          'chat_template and no `chatFormat` override was provided in CharacterConfig. ' +
+          'Set `chatFormat` to one of: chatml, llama3, llama2, mistral, gemma, phi3.'
+      );
+    }
+    const bosText = this.engine.getBosText?.() ?? '';
+    return buildChatPrompt({
+      format,
+      messages,
+      bosText,
+      addGenerationPrompt: true,
+    });
+  }
+
   private async runTurn(
+    promptText: string,
     messages: ChatMessage[],
     userMessage: string,
     parser: StreamingActionParser,
@@ -174,18 +213,38 @@ export class CharacterAgent {
     queue: AsyncEventQueue<ChatEvent>,
     signal: AbortSignal | undefined
   ): Promise<void> {
-    let accumulatedText = '';
+    let assistantProse = '';
+    let rawOutputText = '';
     let requestId: GenerateRequestId = 0;
     let cancelled = false;
     let errorMessage: string | undefined;
+    const contextKey = this.nextTurnContextKey();
+
+    console.info('[CharacterAgent] queuePrompt input', {
+      characterId: this.config.id,
+      contextKey,
+      userMessage,
+      messages,
+      promptTextPreview: promptText.slice(0, 400),
+      promptTextByteLength: promptText.length,
+      maxOutputTokens: this.maxOutputTokens,
+      // Temporarily disable action grammar while debugging prompt quality so
+      // we can compare unconstrained model responses 1:1 against the
+      // grammar-constrained path.
+      grammar: this.grammarSource,
+      //grammar: undefined,
+    });
 
     const onToken = (token: string): void => {
       if (token.length === 0) {
         return;
       }
-      accumulatedText += token;
+      rawOutputText += token;
       const events = parser.consume(token);
       for (const event of events) {
+        if (event.kind === 'prose') {
+          assistantProse += event.text;
+        }
         emit(event);
       }
     };
@@ -193,13 +252,17 @@ export class CharacterAgent {
     try {
       const promptOptions: PromptOptions = {
         nTokens: this.maxOutputTokens,
+        promptFormat: 'raw',
+        // Temporarily disable action grammar while debugging prompt quality so
+        // we can isolate whether constrained decoding is causing nonsensical
+        // replies. Re-enable this once the baseline chat path is validated.
         grammar: this.grammarSource,
-        messages,
         onToken,
         signal,
       };
-      requestId = await this.engine.queuePrompt(this.config.id, '', promptOptions);
+      requestId = await this.engine.queuePrompt(contextKey, promptText, promptOptions);
       const response = await this.engine.runQueuedRequest(requestId, { signal });
+      rawOutputText = response.outputText;
       cancelled = response.cancelled;
       if (response.failed && response.errorMessage) {
         errorMessage = response.errorMessage;
@@ -222,10 +285,23 @@ export class CharacterAgent {
     // Drain any buffered prose or action still sitting in the parser.
     const trailing = parser.flush();
     for (const event of trailing) {
+      if (event.kind === 'prose') {
+        assistantProse += event.text;
+      }
       emit(event);
     }
 
-    const finalText = accumulatedText.trim();
+    const finalText = assistantProse.trim();
+
+    console.info('[CharacterAgent] raw LLM output', {
+      characterId: this.config.id,
+      contextKey,
+      requestId,
+      cancelled,
+      errorMessage,
+      rawOutputText,
+      parsedProseText: finalText,
+    });
 
     if (!cancelled && !errorMessage) {
       this.pushTurnToMemory({ role: 'user', content: userMessage });
@@ -240,6 +316,11 @@ export class CharacterAgent {
     };
     emit(endEvent);
     queue.close();
+  }
+
+  private nextTurnContextKey(): string {
+    this.turnSequence += 1;
+    return `${this.config.id}::turn-${this.turnSequence}`;
   }
 
   private pushTurnToMemory(turn: ChatTurn): void {

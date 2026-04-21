@@ -11,10 +11,15 @@
 export type {
   ActionArgSpec,
   ActionArgType,
+  ActionCue,
   ActionSchema,
   ActionSpec,
 } from './action-schema.js';
-export { renderActionSchemaForPrompt, validateActionSchema } from './action-schema.js';
+export {
+  expandActionCues,
+  renderActionCueList,
+  validateActionSchema,
+} from './action-schema.js';
 
 export { ActionSchemaError, compileActionGrammar } from './action-grammar.js';
 
@@ -22,7 +27,7 @@ export type { ActionEvent, ParsedEvent, ProseEvent } from './action-parser.js';
 export {
   ActionParseError,
   StreamingActionParser,
-  parseActionTag,
+  parseActionCue,
 } from './action-parser.js';
 
 export type {

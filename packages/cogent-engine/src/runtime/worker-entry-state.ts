@@ -238,7 +238,6 @@ export class WorkerEntryState {
       signal?: AbortSignal;
       onToken?: (token: string) => void;
       grammar?: string;
-      messages?: import('../types.js').ChatMessage[];
     }
   ): Promise<GenerateRequestId> {
     const runtime = this.ensureEngine();
@@ -261,7 +260,6 @@ export class WorkerEntryState {
       signal: options.signal,
       onToken: options.onToken,
       grammar: options.grammar,
-      messages: options.messages,
       ...(media != null ? { media } : {}),
     } as import('../types.js').PromptOptions & { media?: Uint8Array[] };
     return runtime.queuePrompt(contextKey, promptText, queuedOptions);
@@ -458,9 +456,11 @@ export class WorkerEntryState {
     const runtime = this.ensureEngine();
     const chatTemplate = normalizeOptionalString(runtime.getChatTemplate());
     const mediaMarker = normalizeOptionalString(runtime.getMediaMarker());
+    const bosText = typeof runtime.getBosText === 'function' ? runtime.getBosText() : '';
     return {
       chatTemplate,
       mediaMarker,
+      bosText,
     };
   }
 }

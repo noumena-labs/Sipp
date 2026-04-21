@@ -134,6 +134,10 @@ export class CogentEngine {
     return this.runtime.getMediaMarker();
   }
 
+  public getBosText(): string {
+    return this.runtime.getBosText();
+  }
+
   public async cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean> {
     return this.runtime.cancelQueuedRequest(requestId);
   }

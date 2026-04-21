@@ -7,45 +7,67 @@
 //   human-readable descriptions. Bindings (three.js, DOM, etc.) translate
 //   emitted actions into runtime effects.
 //
+// - The model-facing surface is a flat list of natural-language "cues"
+//   wrapped in square brackets (e.g. `[wave]`, `[wave softly]`,
+//   `[mood: happy]`). Cues collapse enum-valued arguments into one cue per
+//   enum value so the model never sees code-shaped meta-syntax it might
+//   echo back into dialog. Internally each cue round-trips to the original
+//   (name, args) pair via a lookup table built at schema registration.
+//
 //////////////////////////////////////////////////////////////////////////////
 
 /**
  * Primitive argument types supported by the action grammar generator.
  *
- * The types intentionally mirror the JSON value kinds that GBNF can express
- * naturally: strings, numbers, booleans, and string enumerations. Complex
- * nested payloads are discouraged for v1 because they dramatically increase
- * grammar size and sampling cost.
+ * For v1 the model-facing cue surface only exposes argless actions and
+ * enum-valued actions. `string`, `number`, and `boolean` args remain in the
+ * schema vocabulary for future use but are currently not projected into
+ * cues — an action that declares a non-enum arg is represented as a bare
+ * `[name]` cue with empty args.
  */
 export type ActionArgType = 'string' | 'number' | 'boolean' | 'enum';
 
 export interface ActionArgSpec {
-  /** Argument identifier — must match the JSON key emitted by the model. */
+  /** Argument identifier — matches the key on the emitted args object. */
   readonly name: string;
   /** Primitive value kind. */
   readonly type: ActionArgType;
   /** Allowed values when {@link type} is `'enum'`. Ignored otherwise. */
   readonly values?: readonly string[];
-  /** Optional human-readable description (included in prompt text only). */
+  /** Optional human-readable description (not surfaced to the model). */
   readonly description?: string;
   /**
-   * Numeric bounds — informational only (not enforced by the grammar itself,
-   * which always accepts any JSON number). Bindings can clamp at dispatch.
+   * Numeric bounds — informational only (not enforced by the grammar itself).
+   * Bindings can clamp at dispatch.
    */
   readonly min?: number;
   readonly max?: number;
+  /**
+   * Optional per-enum-value cue label override. When present, keys are enum
+   * values and the associated strings are used as the cue suffix instead of
+   * the default `"{argName}: {value}"` form. Lets authors write
+   * `[wave softly]` instead of `[wave intensity: low]`.
+   */
+  readonly cueLabels?: Readonly<Record<string, string>>;
 }
 
 export interface ActionSpec {
   /**
-   * Action identifier. Emitted verbatim as the JSON `name` field so bindings
-   * can dispatch with a simple switch. Keep identifiers in snake_case.
+   * Action identifier. Emitted verbatim as the `name` field on parsed action
+   * events so bindings can dispatch with a simple switch. Keep identifiers
+   * in snake_case.
    */
   readonly name: string;
-  /** Short description of the action, surfaced to the model in the prompt. */
+  /** Short description of the action (not surfaced to the model). */
   readonly description?: string;
   /** Ordered list of argument specs. Order is significant for readability. */
   readonly args: readonly ActionArgSpec[];
+  /**
+   * Optional override for the bare `[label]` shown when this action has no
+   * enum args. Defaults to the action's snake_case name with underscores
+   * converted to spaces (e.g. `shake_head` → `[shake head]`).
+   */
+  readonly cueLabel?: string;
 }
 
 export interface ActionSchema {
@@ -56,14 +78,6 @@ export interface ActionSchema {
 /**
  * Validates that an action schema is well-formed. Returns an error message on
  * the first problem detected; returns null on success.
- *
- * The checks are intentionally conservative:
- *   - every action/arg name must be a non-empty identifier matching the
- *     pattern `[A-Za-z_][A-Za-z0-9_]*`;
- *   - action names must be unique;
- *   - arg names within an action must be unique;
- *   - enum args must declare at least one allowed value;
- *   - non-enum args must NOT declare `values`.
  */
 const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -118,29 +132,109 @@ export function validateActionSchema(schema: ActionSchema): string | null {
 }
 
 /**
- * Renders the schema as human-readable prose for inclusion in the system
- * prompt. The prose complements the GBNF grammar by explaining each action's
- * intent to the model — the grammar constrains syntax, the prose teaches
- * semantics.
+ * A single bracketed cue that the model can emit and the parser recognises.
+ *
+ * `label` is the verbatim text that appears between the square brackets —
+ * e.g. `wave`, `wave softly`, `mood: happy`. `name` and `args` are the
+ * (action, args) tuple the cue dispatches to.
  */
-export function renderActionSchemaForPrompt(schema: ActionSchema): string {
-  const lines: string[] = [];
+export interface ActionCue {
+  readonly label: string;
+  readonly name: string;
+  readonly args: Readonly<Record<string, string>>;
+}
+
+/**
+ * Default cue label for an argless action. Converts snake_case to space-
+ * separated words so identifiers read naturally in dialog (`shake_head` →
+ * `shake head`). Authors can override via {@link ActionSpec.cueLabel}.
+ */
+function defaultActionLabel(action: ActionSpec): string {
+  return action.cueLabel ?? action.name.replace(/_/g, ' ');
+}
+
+/**
+ * Default cue label for an enum-valued action variant. The format is
+ * `{argName}: {value}` which reads naturally for mood-like axes
+ * (e.g. `mood: happy`) while still being distinct from general prose.
+ * Overridable per-value via {@link ActionArgSpec.cueLabels}.
+ */
+function defaultEnumLabel(action: ActionSpec, arg: ActionArgSpec, value: string): string {
+  const override = arg.cueLabels?.[value];
+  if (override != null) {
+    return override;
+  }
+  return `${arg.name.replace(/_/g, ' ')}: ${value}`;
+}
+
+/**
+ * Expands an action schema into the flat list of cues the model is allowed
+ * to emit. The ordering is deterministic (schema declaration order, then
+ * enum value order) so prompt-cache keys remain stable across rebuilds.
+ *
+ * Rules:
+ *   - Actions with no args produce a single `[actionLabel]` cue that
+ *     dispatches to `{name, args:{}}`.
+ *   - Actions whose first arg is an enum produce one cue per enum value,
+ *     dispatching to `{name, args:{argName: value}}`. Additional args on
+ *     such actions are dropped from the cue surface (there is no
+ *     multi-enum cross-product in v1).
+ *   - Actions whose first arg is a non-enum primitive (`string`, `number`,
+ *     `boolean`) collapse to a single bare `[actionLabel]` cue with empty
+ *     args. The typed arg is not exposed to the model.
+ *
+ * Throws if the schema is malformed or if two different cues collapse to
+ * the same label (rare; authors can disambiguate via `cueLabels`).
+ */
+export function expandActionCues(schema: ActionSchema): readonly ActionCue[] {
+  const validationError = validateActionSchema(schema);
+  if (validationError != null) {
+    throw new Error(validationError);
+  }
+
+  const cues: ActionCue[] = [];
+  const seen = new Set<string>();
+
+  const push = (cue: ActionCue): void => {
+    if (seen.has(cue.label)) {
+      throw new Error(
+        `Cue label collision: "[${cue.label}]" is produced by more than one action. ` +
+          `Disambiguate via cueLabel / cueLabels in the schema.`
+      );
+    }
+    seen.add(cue.label);
+    cues.push(cue);
+  };
+
   for (const action of schema.actions) {
-    const argsSummary = action.args
-      .map((arg) => {
-        if (arg.type === 'enum' && arg.values != null) {
-          return `${arg.name}: ${arg.values.map((value) => `"${value}"`).join(' | ')}`;
-        }
-        return `${arg.name}: ${arg.type}`;
-      })
-      .join(', ');
-    const descriptionSuffix = action.description ? ` — ${action.description}` : '';
-    lines.push(`- ${action.name}(${argsSummary})${descriptionSuffix}`);
-    for (const arg of action.args) {
-      if (arg.description) {
-        lines.push(`    · ${arg.name}: ${arg.description}`);
+    const firstArg = action.args[0];
+    if (firstArg != null && firstArg.type === 'enum' && firstArg.values != null) {
+      for (const value of firstArg.values) {
+        push({
+          label: defaultEnumLabel(action, firstArg, value),
+          name: action.name,
+          args: { [firstArg.name]: value },
+        });
       }
+    } else {
+      push({
+        label: defaultActionLabel(action),
+        name: action.name,
+        args: {},
+      });
     }
   }
-  return lines.join('\n');
+
+  return cues;
+}
+
+/**
+ * Renders the schema as a flat, comma-separated list of bracketed cues for
+ * inclusion in the system prompt. The prose complements the GBNF grammar
+ * by enumerating the exact vocabulary — the grammar constrains syntax, the
+ * prose lists the allowed cues.
+ */
+export function renderActionCueList(schema: ActionSchema): string {
+  const cues = expandActionCues(schema);
+  return cues.map((cue) => `[${cue.label}]`).join(', ');
 }

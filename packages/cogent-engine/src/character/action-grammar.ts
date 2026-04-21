@@ -3,26 +3,30 @@
 // action-grammar.ts
 //
 // - Compiles an ActionSchema into a GBNF grammar that constrains the model's
-//   output to interleaved prose and well-typed action tags.
+//   output to interleaved prose and bracketed action cues.
 //
 // Wire format the grammar produces:
 //
-//     Hello there!<action name="wave" args={"duration_ms":800}/> done.
+//     Hello there! [wave] all done. [mood: happy]
 //
-// - The <action .../> tag is a self-closing XML-style envelope so the text
-//   stream remains trivially splittable into prose + action tokens.
+// - Cues are short natural-language labels wrapped in square brackets. The
+//   grammar restricts the allowed labels to the exact set enumerated by
+//   {@link expandActionCues}, so the model cannot invent new cue text.
 //
-// - Argument payload is JSON (an object literal) so it parses cleanly on the
-//   TS side and we reuse the existing JSON-shaped grammar rules.
+// - Square brackets were chosen over angle-bracketed XML tags to keep the
+//   surface stylistically compatible with prose. Earlier versions used a
+//   typed `<action name="..." args={...}/>` form whose code-shape caused
+//   small models to mimic function-signature boilerplate in dialog.
 //
 //////////////////////////////////////////////////////////////////////////////
 
-import type { ActionArgSpec, ActionSchema, ActionSpec } from './action-schema.js';
-import { validateActionSchema } from './action-schema.js';
+import { expandActionCues, validateActionSchema } from './action-schema.js';
+import type { ActionSchema } from './action-schema.js';
 
 /**
- * Thrown when a supplied ActionSchema fails structural validation. Exposed as
- * a named class so callers can distinguish schema errors from other errors.
+ * Thrown when a supplied ActionSchema fails structural validation. Exposed
+ * as a named class so callers can distinguish schema errors from other
+ * errors.
  */
 export class ActionSchemaError extends Error {
   public constructor(message: string) {
@@ -32,29 +36,13 @@ export class ActionSchemaError extends Error {
 }
 
 /**
- * GBNF rule names accept only `[a-zA-Z0-9-]`. User identifiers accept `_`, so
- * we derive rule-name fragments by replacing `_` with `-`. We emit the
- * user-supplied name verbatim only inside string literals (the on-wire
- * `name="set_mood"` must round-trip unchanged to action-parser.ts).
- */
-function sanitizeRuleIdent(identifier: string): string {
-  return identifier.replace(/_/g, '-');
-}
-
-/**
  * Generates a GBNF grammar that:
  *   - always starts at `root`;
- *   - accepts any interleaving of prose characters and action tags;
- *   - restricts action names to the declared set;
- *   - restricts each argument's value kind to its declared type;
- *   - restricts enum args to the declared set of string literals.
+ *   - accepts any interleaving of prose characters and bracketed cues;
+ *   - restricts cue labels to the declared alternation set.
  *
- * The grammar is intentionally permissive about prose: any UTF-8 byte that is
- * NOT `<` is allowed. This lets the model stream natural language freely and
- * switch into an action tag only when it chooses the `<action ` prefix.
- *
- * The returned source is guaranteed to be <= the bridge's 64 KiB cap for any
- * reasonable schema (our largest realistic schema is well under 4 KiB).
+ * The returned source is guaranteed to be <= the bridge's 64 KiB cap for
+ * any reasonable schema.
  */
 export function compileActionGrammar(schema: ActionSchema): string {
   const validationError = validateActionSchema(schema);
@@ -62,143 +50,56 @@ export function compileActionGrammar(schema: ActionSchema): string {
     throw new ActionSchemaError(validationError);
   }
 
-  // Detect identifiers that collide after rule-name sanitisation. Two distinct
-  // user-supplied names (e.g. "set_mood" and "set-mood") would both sanitise
-  // to the same GBNF rule fragment and produce an ambiguous grammar.
-  const seenActionRuleIdents = new Map<string, string>();
-  for (const action of schema.actions) {
-    const sanitised = sanitizeRuleIdent(action.name);
-    const prior = seenActionRuleIdents.get(sanitised);
-    if (prior != null && prior !== action.name) {
-      throw new ActionSchemaError(
-        `Action names "${prior}" and "${action.name}" collide after GBNF ` +
-          `rule-name sanitisation (both become "${sanitised}"). Rename one.`
-      );
-    }
-    seenActionRuleIdents.set(sanitised, action.name);
+  let cues;
+  try {
+    cues = expandActionCues(schema);
+  } catch (error) {
+    throw new ActionSchemaError((error as Error).message);
+  }
 
-    const seenArgRuleIdents = new Map<string, string>();
-    for (const arg of action.args) {
-      const sArg = sanitizeRuleIdent(arg.name);
-      const priorArg = seenArgRuleIdents.get(sArg);
-      if (priorArg != null && priorArg !== arg.name) {
-        throw new ActionSchemaError(
-          `Args "${priorArg}" and "${arg.name}" in action "${action.name}" ` +
-            `collide after GBNF rule-name sanitisation (both become "${sArg}"). Rename one.`
-        );
-      }
-      seenArgRuleIdents.set(sArg, arg.name);
-    }
+  if (cues.length === 0) {
+    throw new ActionSchemaError('Action schema produced no cues.');
   }
 
   const rules: string[] = [];
 
-  // `root` is prose interleaved with zero or more action tags.
-  rules.push('root ::= (prose-char | action-tag)*');
+  // `root` is one or more atoms; an atom is either a prose character or a
+  // bracketed cue. Requiring at least one atom avoids the zero-length root
+  // deadlock we observed with LFM2 under grammar-constrained sampling.
+  rules.push('root ::= atom atom*');
+  rules.push('atom ::= prose-char | action-cue');
 
-  // Prose = any single byte that is not the `<` that would begin a tag.
-  // We enumerate by excluding `<` (0x3C). GBNF supports character classes.
-  rules.push('prose-char ::= [^<]');
+  // Prose is expressed as explicit positive ranges rather than a negated
+  // catch-all like `[^]` / `[^]` / `[^\[]`. The negated form
+  // parsed correctly, but under llama.cpp's grammar sampler it could still
+  // collapse the grammar stack to empty on accepted token pieces, which then
+  // aborts on the next sampler apply. These ranges keep ordinary dialog free
+  // while reserving `[` exclusively for action cues.
+  //
+  // Allowed prose:
+  //   - ASCII whitespace: space, tab, CR, LF
+  //   - Printable ASCII before `[` : U+0021..U+005A
+  //   - Printable ASCII after `[`  : U+005C..U+007E
+  //   - All non-ASCII Unicode code points
+  rules.push('prose-char ::= [ \\t\\n\\r] | [!-Z] | [\\\\-~] | [\\x80-\\U0010FFFF]');
 
-  // `action-tag` begins with the literal `<action name="` followed by a name,
-  // then an optional args object, then `/>`.
-  rules.push('action-tag ::= "<action name=\\"" action-name "\\"" action-args-part "/>"');
+  // Each cue is `[` + literal-label + `]`. The label alternation enumerates
+  // the exact legal labels so the model cannot invent unknown cues.
+  rules.push('action-cue ::= "[" cue-label "]"');
 
-  // action-name is the alternation of the declared identifiers (bare,
-  // without surrounding quotes — the quotes are emitted by the parent rule).
-  const actionNameAlts = schema.actions
-    .map((action) => rawStringLiteral(action.name))
-    .join(' | ');
-  rules.push(`action-name ::= ${actionNameAlts}`);
-
-  // action-args-part is either empty (when no action declares args) or a
-  // space + `args=` + per-action payload alternation.
-  const anyActionHasArgs = schema.actions.some((action) => action.args.length > 0);
-  if (!anyActionHasArgs) {
-    rules.push('action-args-part ::= ""');
-  } else {
-    rules.push('action-args-part ::= "" | ws "args=" action-args');
-    const actionArgsAlts = schema.actions
-      .filter((action) => action.args.length > 0)
-      .map((action) => `action-args-${sanitizeRuleIdent(action.name)}`)
-      .join(' | ');
-    rules.push(`action-args ::= ${actionArgsAlts}`);
-    for (const action of schema.actions) {
-      if (action.args.length === 0) {
-        continue;
-      }
-      rules.push(renderActionArgsRule(action));
-      for (const arg of action.args) {
-        rules.push(renderArgValueRule(action, arg));
-      }
-    }
-  }
-
-  // Shared JSON-ish primitives.
-  rules.push('ws ::= " "');
-  rules.push('json-number ::= "-"? ("0" | [1-9] [0-9]*) ("." [0-9]+)? ([eE] [-+]? [0-9]+)?');
-  rules.push('json-string ::= "\\"" json-string-char* "\\""');
-  // Permit any character except `"` and `\` inside strings; escape sequences
-  // are out of scope for v1 — our argument strings are ASCII labels.
-  rules.push('json-string-char ::= [^"\\\\]');
-  rules.push('json-bool ::= "true" | "false"');
+  const labelAlts = cues.map((cue) => gbnfStringLiteral(cue.label)).join(' | ');
+  rules.push(`cue-label ::= ${labelAlts}`);
 
   return rules.join('\n') + '\n';
 }
 
-function renderActionArgsRule(action: ActionSpec): string {
-  const parts: string[] = ['"{"'];
-  for (let index = 0; index < action.args.length; index += 1) {
-    const arg = action.args[index];
-    if (index > 0) {
-      parts.push('","');
-    }
-    parts.push(jsonStringLiteral(arg.name));
-    parts.push('":"');
-    parts.push(`arg-${sanitizeRuleIdent(action.name)}-${sanitizeRuleIdent(arg.name)}`);
-  }
-  parts.push('"}"');
-  return `action-args-${sanitizeRuleIdent(action.name)} ::= ${parts.join(' ')}`;
-}
-
-function renderArgValueRule(action: ActionSpec, arg: ActionArgSpec): string {
-  const ruleName = `arg-${sanitizeRuleIdent(action.name)}-${sanitizeRuleIdent(arg.name)}`;
-  switch (arg.type) {
-    case 'string':
-      return `${ruleName} ::= json-string`;
-    case 'number':
-      return `${ruleName} ::= json-number`;
-    case 'boolean':
-      return `${ruleName} ::= json-bool`;
-    case 'enum': {
-      const alts = (arg.values ?? []).map((value) => jsonStringLiteral(value)).join(' | ');
-      return `${ruleName} ::= ${alts}`;
-    }
-    default: {
-      // Exhaustive guard — all cases are handled above.
-      const exhaustive: never = arg.type;
-      throw new ActionSchemaError(`Unsupported arg type: ${String(exhaustive)}`);
-    }
-  }
-}
-
 /**
- * Escapes a JavaScript string as a GBNF string literal. GBNF uses the same
- * escape conventions as JSON for `"` and `\`, which covers every identifier
- * we accept (validated to match `[A-Za-z_][A-Za-z0-9_]*`) and every enum
- * value we permit (arbitrary ASCII strings).
+ * Escapes a string as a GBNF string literal. GBNF uses JSON-style escapes
+ * for `"` and `\`. Our labels are short ASCII phrases so no further
+ * escaping is required, but we remain defensive in case authors introduce
+ * special characters via `cueLabel` / `cueLabels`.
  */
-function jsonStringLiteral(source: string): string {
-  const escaped = source.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  return `"\\"${escaped}\\""`;
-}
-
-/**
- * Produces a GBNF literal that matches the raw source string *without*
- * surrounding JSON quotes. Used when the parent rule has already emitted the
- * opening/closing `"` characters (e.g. inside `name="..."`).
- */
-function rawStringLiteral(source: string): string {
+function gbnfStringLiteral(source: string): string {
   const escaped = source.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   return `"${escaped}"`;
 }

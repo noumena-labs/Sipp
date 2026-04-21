@@ -13,7 +13,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type {
-  ChatMessage,
   GenerateRequestId,
   GenerateResponse,
   PromptOptions,
@@ -73,6 +72,13 @@ function createFakeEngine(): FakeEngine {
     cancelCalls,
     enqueue(script: ScriptedResponse) {
       scripts.push(script);
+    },
+    getChatTemplate(): string | null {
+      // Minimal ChatML signature so sniffChatFormat() returns 'chatml'.
+      return '<|im_start|>system<|im_end|>';
+    },
+    getBosText(): string {
+      return '';
     },
     async queuePrompt(
       contextKey: string,
@@ -153,7 +159,7 @@ test('CharacterAgent exposes stable systemPrompt and grammarSource', () => {
 test('chat() yields turn-start, prose, action, turn-end in order', async () => {
   const engine = createFakeEngine();
   engine.enqueue({
-    tokens: ['Hello ', 'there. ', '<action name="wave"/>', ' Bye.'],
+    tokens: ['Hello ', 'there. ', '[wave]', ' Bye.'],
   });
   const agent = new CharacterAgent(engine, buildConfig());
   const events = await collectEvents(agent.chat('hi'));
@@ -182,13 +188,28 @@ test('chat() threads grammar and maxOutputTokens into queuePrompt options', asyn
 
   assert.equal(engine.queuePromptCalls.length, 1);
   const call = engine.queuePromptCalls[0];
-  assert.equal(call.contextKey, 'aria-01');
+  assert.equal(call.contextKey, 'aria-01::turn-1');
   assert.ok(typeof call.options === 'object' && call.options != null);
   const opts = call.options as PromptOptions;
   assert.equal(opts.nTokens, 42);
-  assert.ok(typeof opts.grammar === 'string' && opts.grammar.length > 0);
-  assert.equal(opts.grammar, agent.getGrammarSource());
+  // Grammar is compiled from the action schema and forwarded to the engine.
+  assert.equal(typeof opts.grammar, 'string');
+  assert.ok(opts.grammar && opts.grammar.includes('root'));
   assert.equal(typeof opts.onToken, 'function');
+});
+
+test('chat() uses a fresh contextKey for each turn', async () => {
+  const engine = createFakeEngine();
+  engine.enqueue({ tokens: ['first reply'] });
+  engine.enqueue({ tokens: ['second reply'] });
+  const agent = new CharacterAgent(engine, buildConfig());
+
+  await collectEvents(agent.chat('first'));
+  await collectEvents(agent.chat('second'));
+
+  assert.equal(engine.queuePromptCalls.length, 2);
+  assert.equal(engine.queuePromptCalls[0].contextKey, 'aria-01::turn-1');
+  assert.equal(engine.queuePromptCalls[1].contextKey, 'aria-01::turn-2');
 });
 
 test('successful turns commit user+assistant pairs to memory', async () => {
@@ -203,6 +224,24 @@ test('successful turns commit user+assistant pairs to memory', async () => {
   assert.equal(memory[0].content, 'hello');
   assert.equal(memory[1].role, 'assistant');
   assert.equal(memory[1].content, 'hi there');
+});
+
+test('assistant memory stores prose only when actions are interleaved', async () => {
+  const engine = createFakeEngine();
+  engine.enqueue({
+    tokens: ['Hello ', '[wave]', ' there.'],
+  });
+  const agent = new CharacterAgent(engine, buildConfig());
+
+  const events = await collectEvents(agent.chat('hello'));
+  const end = events[events.length - 1];
+  assert.ok(end.kind === 'turn-end');
+  assert.equal(end.finalText, 'Hello  there.');
+
+  const memory = agent.getMemory();
+  assert.equal(memory.length, 2);
+  assert.equal(memory[1].role, 'assistant');
+  assert.equal(memory[1].content, 'Hello  there.');
 });
 
 test('errored turns do not commit to memory and surface errorMessage', async () => {
@@ -294,28 +333,29 @@ test('clearMemory empties the sliding window', async () => {
   assert.equal(agent.getMemory().length, 0);
 });
 
-test('chat() passes a well-formed messages array through to queuePrompt', async () => {
+test('chat() passes a rendered raw prompt to queuePrompt', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['hi'] });
   const agent = new CharacterAgent(engine, buildConfig());
   await collectEvents(agent.chat('hello'));
 
   const call = engine.queuePromptCalls[0];
-  assert.equal(call.promptText, '');
+  // Should be the ChatML-rendered conversation, not empty/delta.
+  assert.ok(typeof call.promptText === 'string' && call.promptText.length > 0);
+  assert.ok(call.promptText.includes('<|im_start|>system'));
+  assert.ok(call.promptText.includes('Aria'));
+  assert.ok(call.promptText.includes('<|im_start|>user'));
+  assert.ok(call.promptText.includes('hello'));
+  // Trailing assistant header should be present to cue generation.
+  assert.ok(call.promptText.endsWith('<|im_start|>assistant\n'));
+
   assert.ok(typeof call.options === 'object' && call.options != null);
   const opts = call.options as PromptOptions;
-  assert.ok(Array.isArray(opts.messages));
-  const messages = opts.messages as ChatMessage[];
-  assert.equal(messages.length, 2);
-  assert.equal(messages[0].role, 'system');
-  assert.ok(messages[0].content.includes('Aria'));
-  assert.equal(messages[1].role, 'user');
-  assert.equal(messages[1].content, 'hello');
-  // promptFormat should NOT be forced to 'raw' anymore; runtime picks it.
-  assert.equal(opts.promptFormat, undefined);
+  // Messages path is gone; runtime must receive 'raw' so it does not double-wrap.
+  assert.equal(opts.promptFormat, 'raw');
 });
 
-test('chat() includes prior turn history in the messages array', async () => {
+test('chat() includes prior turn history in the rendered prompt', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['first reply'] });
   engine.enqueue({ tokens: ['second reply'] });
@@ -324,15 +364,13 @@ test('chat() includes prior turn history in the messages array', async () => {
   await collectEvents(agent.chat('second question'));
 
   const secondCall = engine.queuePromptCalls[1];
-  const opts = secondCall.options as PromptOptions;
-  const messages = opts.messages as ChatMessage[];
-  // system + (user/assistant from first turn) + current user
-  assert.equal(messages.length, 4);
-  assert.equal(messages[0].role, 'system');
-  assert.equal(messages[1].role, 'user');
-  assert.equal(messages[1].content, 'first question');
-  assert.equal(messages[2].role, 'assistant');
-  assert.equal(messages[2].content, 'first reply');
-  assert.equal(messages[3].role, 'user');
-  assert.equal(messages[3].content, 'second question');
+  const rendered = secondCall.promptText;
+  // System + first user + first assistant + second user, in that order.
+  const idxSystem = rendered.indexOf('<|im_start|>system');
+  const idxFirstUser = rendered.indexOf('first question');
+  const idxAssistant = rendered.indexOf('first reply');
+  const idxSecondUser = rendered.indexOf('second question');
+  assert.ok(idxSystem >= 0 && idxFirstUser > idxSystem);
+  assert.ok(idxAssistant > idxFirstUser);
+  assert.ok(idxSecondUser > idxAssistant);
 });
