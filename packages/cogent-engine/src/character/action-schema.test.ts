@@ -13,8 +13,10 @@ import test from 'node:test';
 import type { ActionSchema } from './action-schema.js';
 import {
   expandActionCues,
+  findCanonicalActionCue,
   renderActionCapabilityList,
   renderActionCueList,
+  summarizeActionCues,
   validateActionSchema,
 } from './action-schema.js';
 
@@ -123,6 +125,68 @@ test('expandActionCues respects cueLabel and cueLabels overrides', () => {
   ]);
 });
 
+test('expandActionCues includes cueAliases for argless and enum actions', () => {
+  const cues = expandActionCues({
+    actions: [
+      {
+        name: 'wave',
+        cueAliases: ['hello wave'],
+        args: [],
+      },
+      {
+        name: 'set_mood',
+        args: [
+          {
+            name: 'mood',
+            type: 'enum',
+            values: ['happy'],
+            cueAliases: { happy: ['smile', 'be happy'] },
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.deepEqual(cues.map((cue) => cue.label), [
+    'wave',
+    'hello wave',
+    'mood: happy',
+    'smile',
+    'be happy',
+  ]);
+});
+
+test('summarizeActionCues keeps one primary cue and records aliases separately', () => {
+  const cues = summarizeActionCues({
+    actions: [
+      {
+        name: 'set_mood',
+        description: 'Shift expression.',
+        args: [
+          {
+            name: 'mood',
+            type: 'enum',
+            values: ['happy'],
+            cueLabels: { happy: 'smile' },
+            cueAliases: { happy: ['mood: happy', 'be happy'] },
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.deepEqual(cues, [
+    {
+      label: 'smile',
+      name: 'set_mood',
+      args: { mood: 'happy' },
+      aliases: ['mood: happy', 'be happy'],
+      description: 'Shift expression.',
+      usageHint: undefined,
+    },
+  ]);
+});
+
 test('expandActionCues throws when two cues collapse to the same label', () => {
   assert.throws(
     () =>
@@ -152,4 +216,48 @@ test('renderActionCapabilityList ties visible cues back to runtime actions', () 
       '- [shake head] -> shake_head',
     ].join('\n')
   );
+});
+
+test('renderActionCapabilityList includes usage hints when provided', () => {
+  const text = renderActionCapabilityList({
+    actions: [
+      {
+        name: 'wave',
+        description: 'Wave hello.',
+        usageHint: 'greeting someone or saying goodbye',
+        args: [],
+      },
+    ],
+  });
+
+  assert.equal(
+    text,
+    '- [wave] -> wave: Wave hello.; use when greeting someone or saying goodbye'
+  );
+});
+
+test('findCanonicalActionCue resolves runtime actions back to primary cue labels', () => {
+  const cue = findCanonicalActionCue(
+    {
+      actions: [
+        {
+          name: 'look_at',
+          args: [
+            {
+              name: 'target',
+              type: 'enum',
+              values: ['camera'],
+              cueLabels: { camera: 'look at you' },
+              cueAliases: { camera: ['target: camera'] },
+            },
+          ],
+        },
+      ],
+    },
+    'look_at',
+    { target: 'camera' }
+  );
+
+  assert.ok(cue);
+  assert.equal(cue?.label, 'look at you');
 });

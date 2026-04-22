@@ -2,9 +2,8 @@
 //
 // persona.test.ts
 //
-// - Verifies the rendered system prompt stays fully driven by the supplied
-//   persona and action schema, while giving the model stronger instructions
-//   about supported capabilities and action selection.
+// - Verifies the rendered system prompt stays driven by the supplied persona
+//   and action schema while remaining compact and canonical.
 //
 //////////////////////////////////////////////////////////////////////////////
 
@@ -20,33 +19,52 @@ const PERSONA: PersonaSpec = {
   description: 'She speaks warmly and keeps answers grounded in her configured role.',
   style: 'warm, concise',
   notes: ['Do not claim abilities you do not have.'],
+  dialogExamples: [
+    { user: 'hello', assistant: '[wave] Hi there!' },
+    { user: 'who are you?', assistant: "[smile] I'm Aria." },
+  ],
 };
 
 const ACTIONS: ActionSchema = {
   actions: [
-    { name: 'wave', description: 'Wave hello.', args: [] },
+    {
+      name: 'wave',
+      description: 'Wave hello.',
+      usageHint: 'greeting someone or saying goodbye',
+      args: [],
+    },
     {
       name: 'set_mood',
       description: 'Shift facial expression to match a mood.',
-      args: [{ name: 'mood', type: 'enum', values: ['happy', 'curious'] }],
+      usageHint: 'the emotional tone of the reply naturally fits the mood',
+      args: [
+        {
+          name: 'mood',
+          type: 'enum',
+          values: ['happy', 'curious'],
+          cueLabels: { happy: 'smile', curious: 'lean in' },
+          cueAliases: { happy: ['mood: happy'] },
+        },
+      ],
     },
   ],
 };
 
-test('renderSystemPrompt includes dynamic capability list and action policy', () => {
+test('renderSystemPrompt keeps the prompt compact and canonical', () => {
   const prompt = renderSystemPrompt(PERSONA, ACTIONS);
 
   assert.match(prompt, /You are Aria\./);
   assert.match(prompt, /A cheerful robotics guide\./);
   assert.match(prompt, /Style: warm, concise/);
-  assert.match(prompt, /Do not invent traits, backstory, rules, or capabilities/);
-  assert.match(prompt, /Only use cues from this exact list: \[wave\], \[mood: happy\], \[mood: curious\]\./);
-  assert.match(prompt, /Supported actions and their meanings:/);
-  assert.match(prompt, /- \[wave\] -> wave: Wave hello\./);
-  assert.match(prompt, /- \[mood: happy\] -> set_mood\(mood="happy"\): Shift facial expression to match a mood\./);
-  assert.match(prompt, /prioritize that action in your next reply when it fits/);
-  assert.match(prompt, /If the user asks what you can do or which actions you support, answer using the currently declared actions from the schema above/);
-  assert.match(prompt, /If a requested action is not supported by the schema, say so plainly and do not emit an unsupported cue\./);
+  assert.match(prompt, /Your only name is Aria; you have no last name, alternate identity, or other persona/);
+  assert.match(prompt, /Your capabilities are exactly the persona and supported cues below/);
+  assert.match(prompt, /Reply style: brief, natural, and in character/);
+  assert.match(prompt, /Supported cues: \[wave\], \[smile\], \[lean in\]\./);
+  assert.match(prompt, /Use cues naturally in social moments: \[wave\] for greeting someone or saying goodbye; \[smile\] for the emotional tone of the reply naturally fits the mood; \[lean in\] for the emotional tone of the reply naturally fits the mood\./);
+  assert.doesNotMatch(prompt, /Cue guide:/);
+  assert.doesNotMatch(prompt, /Dialog examples:/);
+  assert.doesNotMatch(prompt, /User: hello/);
+  assert.ok(prompt.length < 1800, `prompt unexpectedly long: ${prompt.length}`);
 });
 
 test('renderSystemPrompt remains valid when action descriptions are sparse', () => {
@@ -57,13 +75,20 @@ test('renderSystemPrompt remains valid when action descriptions are sparse', () 
         { name: 'nod', args: [] },
         {
           name: 'look_at',
-          args: [{ name: 'target', type: 'enum', values: ['camera'] }],
+          args: [
+            {
+              name: 'target',
+              type: 'enum',
+              values: ['camera'],
+              cueLabels: { camera: 'look at you' },
+              cueAliases: { camera: ['target: camera'] },
+            },
+          ],
         },
       ],
     }
   );
 
-  assert.match(prompt, /Only use cues from this exact list: \[nod\], \[target: camera\]\./);
-  assert.match(prompt, /- \[nod\] -> nod/);
-  assert.match(prompt, /- \[target: camera\] -> look_at\(target="camera"\)/);
+  assert.match(prompt, /Supported cues: \[nod\], \[look at you\]\./);
+  assert.doesNotMatch(prompt, /Cue guide:/);
 });

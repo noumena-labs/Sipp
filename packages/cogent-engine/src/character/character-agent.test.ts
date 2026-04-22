@@ -25,17 +25,32 @@ import {
 } from './character-agent.js';
 import type { CharacterConfig } from './character-config.js';
 
-const baseActions = {
-  actions: [
-    { name: 'wave', description: 'wave hello', args: [] },
-  ],
-} as const;
-
 function buildConfig(overrides: Partial<CharacterConfig> = {}): CharacterConfig {
   return {
     id: 'aria-01',
     persona: { name: 'Aria', description: 'A friendly guide.' },
-    actions: baseActions,
+    actions: {
+      actions: [
+        {
+          name: 'wave',
+          description: 'wave hello',
+          args: [],
+        },
+        {
+          name: 'set_mood',
+          description: 'adjust expression',
+          args: [
+            {
+              name: 'mood',
+              type: 'enum',
+              values: ['happy'],
+              cueLabels: { happy: 'smile' },
+              cueAliases: { happy: ['mood: happy'] },
+            },
+          ],
+        },
+      ],
+    },
     ...overrides,
   };
 }
@@ -237,7 +252,7 @@ test('successful turns commit user+assistant pairs to memory', async () => {
   assert.equal(memory[1].content, 'hi there');
 });
 
-test('assistant memory stores prose only when actions are interleaved', async () => {
+test('assistant memory preserves cues when actions are interleaved', async () => {
   const engine = createFakeEngine();
   engine.enqueue({
     tokens: ['Hello ', '[wave]', ' there.'],
@@ -252,7 +267,18 @@ test('assistant memory stores prose only when actions are interleaved', async ()
   const memory = agent.getMemory();
   assert.equal(memory.length, 2);
   assert.equal(memory[1].role, 'assistant');
-  assert.equal(memory[1].content, 'Hello  there.');
+  assert.equal(memory[1].content, 'Hello [wave] there.');
+});
+
+test('assistant memory keeps multiple cues inline for later turns', async () => {
+  const engine = createFakeEngine();
+  engine.enqueue({ tokens: ['[mood: happy] Hello ', '[wave]', ' again.'] });
+  const agent = new CharacterAgent(engine, buildConfig());
+
+  await collectEvents(agent.chat('hello'));
+
+  const memory = agent.getMemory();
+  assert.equal(memory[1].content, '[smile] Hello [wave] again.');
 });
 
 test('chat() stops before leaked next-turn chat template markers', async () => {
@@ -416,4 +442,81 @@ test('chat() includes prior turn history in the rendered prompt', async () => {
   assert.ok(idxSystem >= 0 && idxFirstUser > idxSystem);
   assert.ok(idxAssistant > idxFirstUser);
   assert.ok(idxSecondUser > idxAssistant);
+});
+
+test('chat() keeps the user message literal in the rendered prompt', async () => {
+  const engine = createFakeEngine();
+  engine.enqueue({ tokens: ['[wave] Hi!'] });
+  const agent = new CharacterAgent(engine, buildConfig());
+
+  await collectEvents(agent.chat('hi there'));
+
+  const call = engine.queuePromptCalls[0];
+  assert.match(call.promptText, /<user>\nhi there<\/user>/);
+  assert.doesNotMatch(call.promptText, /reply briefly and warmly/);
+});
+
+test('chat() injects persona dialog examples as few-shot chat turns', async () => {
+  const engine = createFakeEngine();
+  engine.enqueue({ tokens: ['[wave] hi'] });
+  const agent = new CharacterAgent(
+    engine,
+    buildConfig({
+      persona: {
+        name: 'Mira',
+        description: 'An observant companion.',
+        dialogExamples: [
+          { user: 'hello', assistant: '[wave] Hello there.' },
+          { user: 'are you okay?', assistant: '[settle] I am here with you.' },
+        ],
+      },
+      actions: {
+        actions: [
+          { name: 'wave', description: 'wave hello', args: [] },
+          { name: 'set_mood', description: 'adjust expression', args: [] },
+        ],
+      },
+    })
+  );
+
+  await collectEvents(agent.chat('hello'));
+
+  assert.equal(engine.queuePromptCalls.length, 1);
+  const call = engine.queuePromptCalls[0];
+  assert.doesNotMatch(call.promptText, /Dialog examples:/);
+  assert.match(call.promptText, /<user>\nhello<\/user>\n<assistant>\n\[wave\] Hello there\.<\/assistant>/);
+  assert.match(call.promptText, /<user>\nare you okay\?<\/user>\n<assistant>\n\[settle\] I am here with you\.<\/assistant>/);
+  const firstExampleIndex = call.promptText.indexOf('<user>\nhello</user>');
+  const liveUserIndex = call.promptText.lastIndexOf('<user>\nhello</user>');
+  assert.ok(firstExampleIndex >= 0 && liveUserIndex > firstExampleIndex);
+});
+
+test('chat() preserves non-exact user-prefix text in assistant output', async () => {
+  const engine = createFakeEngine();
+  engine.enqueue({
+    tokens: ['hello there, friend'],
+  });
+  const agent = new CharacterAgent(engine, buildConfig());
+
+  const events = await collectEvents(agent.chat('hello'));
+  const end = events[events.length - 1];
+  assert.ok(end.kind === 'turn-end');
+  assert.equal(end.finalText, 'hello there, friend');
+
+  const memory = agent.getMemory();
+  assert.equal(memory[1].content, 'hello there, friend');
+});
+
+test('chat() strips only an exact leading user-message echo before storing assistant output', async () => {
+  const engine = createFakeEngine();
+  engine.enqueue({ tokens: ["Tell me what's your name?\n\nI'm Aria."] });
+  const agent = new CharacterAgent(engine, buildConfig());
+
+  const events = await collectEvents(agent.chat("Tell me what's your name?"));
+  const end = events[events.length - 1];
+  assert.ok(end.kind === 'turn-end');
+  assert.equal(end.finalText, "I'm Aria.");
+
+  const memory = agent.getMemory();
+  assert.equal(memory[1].content, "I'm Aria.");
 });

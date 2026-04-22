@@ -49,6 +49,12 @@ export interface ActionArgSpec {
    * `[wave softly]` instead of `[wave intensity: low]`.
    */
   readonly cueLabels?: Readonly<Record<string, string>>;
+  /**
+   * Optional alternate cue phrasings for enum values. These do not change the
+   * emitted runtime action; they widen the model-facing surface so authors can
+   * provide more natural variants such as `smile` in addition to `mood: happy`.
+   */
+  readonly cueAliases?: Readonly<Record<string, readonly string[]>>;
 }
 
 export interface ActionSpec {
@@ -68,6 +74,16 @@ export interface ActionSpec {
    * converted to spaces (e.g. `shake_head` → `[shake head]`).
    */
   readonly cueLabel?: string;
+  /**
+   * Optional alternate cue phrasings for argless actions. Useful for giving
+   * the model a few natural ways to reach the same behavior.
+   */
+  readonly cueAliases?: readonly string[];
+  /**
+   * Optional short usage hint shown to the model in prompts. Helps nudge when
+   * the action feels natural without hardcoding character-specific logic.
+   */
+  readonly usageHint?: string;
 }
 
 export interface ActionSchema {
@@ -144,6 +160,15 @@ export interface ActionCue {
   readonly args: Readonly<Record<string, string>>;
 }
 
+export interface ActionCueSummary {
+  readonly label: string;
+  readonly name: string;
+  readonly args: Readonly<Record<string, string>>;
+  readonly aliases: readonly string[];
+  readonly description?: string;
+  readonly usageHint?: string;
+}
+
 /**
  * Default cue label for an argless action. Converts snake_case to space-
  * separated words so identifiers read naturally in dialog (`shake_head` →
@@ -165,6 +190,36 @@ function defaultEnumLabel(action: ActionSpec, arg: ActionArgSpec, value: string)
     return override;
   }
   return `${arg.name.replace(/_/g, ' ')}: ${value}`;
+}
+
+function cueAliasesForAction(action: ActionSpec): readonly string[] {
+  return action.cueAliases?.filter((alias) => typeof alias === 'string' && alias.length > 0) ?? [];
+}
+
+function cueAliasesForEnumValue(arg: ActionArgSpec, value: string): readonly string[] {
+  return arg.cueAliases?.[value]?.filter((alias) => typeof alias === 'string' && alias.length > 0) ?? [];
+}
+
+function cueKey(name: string, args: Readonly<Record<string, string>>): string {
+  return `${name}:${Object.entries(args)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}=${value}`)
+    .join(',')}`;
+}
+
+function defaultPrimaryCueLabel(action: ActionSpec, firstArg: ActionArgSpec | undefined, value?: string): string {
+  if (firstArg != null && value != null) {
+    const override = firstArg.cueLabels?.[value];
+    if (override && override.length > 0) {
+      return override;
+    }
+    const alias = firstArg.cueAliases?.[value]?.[0];
+    if (alias && alias.length > 0) {
+      return alias;
+    }
+    return `${firstArg.name.replace(/_/g, ' ')}: ${value}`;
+  }
+  return defaultActionLabel(action);
 }
 
 /**
@@ -210,22 +265,121 @@ export function expandActionCues(schema: ActionSchema): readonly ActionCue[] {
     const firstArg = action.args[0];
     if (firstArg != null && firstArg.type === 'enum' && firstArg.values != null) {
       for (const value of firstArg.values) {
-        push({
-          label: defaultEnumLabel(action, firstArg, value),
-          name: action.name,
-          args: { [firstArg.name]: value },
-        });
+        const labels = [
+          defaultEnumLabel(action, firstArg, value),
+          ...cueAliasesForEnumValue(firstArg, value),
+        ];
+        for (const label of labels) {
+          push({
+            label,
+            name: action.name,
+            args: { [firstArg.name]: value },
+          });
+        }
       }
     } else {
-      push({
-        label: defaultActionLabel(action),
-        name: action.name,
-        args: {},
-      });
+      const labels = [defaultActionLabel(action), ...cueAliasesForAction(action)];
+      for (const label of labels) {
+        push({
+          label,
+          name: action.name,
+          args: {},
+        });
+      }
     }
   }
 
   return cues;
+}
+
+/**
+ * Returns one canonical prompt-facing cue per runtime action variant, while
+ * retaining alias information separately. This keeps system prompts compact
+ * and natural while the grammar/parser can still accept the full alias set.
+ */
+export function summarizeActionCues(schema: ActionSchema): readonly ActionCueSummary[] {
+  const validationError = validateActionSchema(schema);
+  if (validationError != null) {
+    throw new Error(validationError);
+  }
+
+  const summaries: ActionCueSummary[] = [];
+  const seenPrimaryLabels = new Set<string>();
+
+  for (const action of schema.actions) {
+    const firstArg = action.args[0];
+    if (firstArg != null && firstArg.type === 'enum' && firstArg.values != null) {
+      for (const value of firstArg.values) {
+        const label = defaultPrimaryCueLabel(action, firstArg, value);
+        if (seenPrimaryLabels.has(label)) {
+          throw new Error(
+            `Cue label collision: primary label "[${label}]" is produced by more than one action variant.`
+          );
+        }
+        seenPrimaryLabels.add(label);
+        const aliases = Array.from(
+          new Set(
+            [defaultEnumLabel(action, firstArg, value), ...cueAliasesForEnumValue(firstArg, value)].filter(
+              (alias) => alias.length > 0 && alias !== label
+            )
+          )
+        );
+        summaries.push({
+          label,
+          name: action.name,
+          args: { [firstArg.name]: value },
+          aliases,
+          description: action.description,
+          usageHint: action.usageHint,
+        });
+      }
+    } else {
+      const label = defaultPrimaryCueLabel(action, undefined);
+      if (seenPrimaryLabels.has(label)) {
+        throw new Error(
+          `Cue label collision: primary label "[${label}]" is produced by more than one action variant.`
+        );
+      }
+      seenPrimaryLabels.add(label);
+      const aliases = Array.from(
+        new Set(
+          [defaultActionLabel(action), ...cueAliasesForAction(action)].filter(
+            (alias) => alias.length > 0 && alias !== label
+          )
+        )
+      );
+      summaries.push({
+        label,
+        name: action.name,
+        args: {},
+        aliases,
+        description: action.description,
+        usageHint: action.usageHint,
+      });
+    }
+  }
+
+  return summaries;
+}
+
+/** Resolves a runtime action tuple back to its canonical prompt-facing cue. */
+export function findCanonicalActionCue(
+  schema: ActionSchema,
+  name: string,
+  args: Readonly<Record<string, unknown>>
+): ActionCueSummary | null {
+  const targetKey = cueKey(
+    name,
+    Object.fromEntries(
+      Object.entries(args).map(([key, value]) => [key, String(value)])
+    )
+  );
+  for (const summary of summarizeActionCues(schema)) {
+    if (cueKey(summary.name, summary.args) === targetKey) {
+      return summary;
+    }
+  }
+  return null;
 }
 
 /**
@@ -235,7 +389,7 @@ export function expandActionCues(schema: ActionSchema): readonly ActionCue[] {
  * prose lists the allowed cues.
  */
 export function renderActionCueList(schema: ActionSchema): string {
-  const cues = expandActionCues(schema);
+  const cues = summarizeActionCues(schema);
   return cues.map((cue) => `[${cue.label}]`).join(', ');
 }
 
@@ -246,22 +400,26 @@ export function renderActionCueList(schema: ActionSchema): string {
  * particular character.json shape.
  */
 export function renderActionCapabilityList(schema: ActionSchema): string {
-  const cues = expandActionCues(schema);
-  const actionByName = new Map(schema.actions.map((action) => [action.name, action]));
+  const cues = summarizeActionCues(schema);
 
   return cues
     .map((cue) => {
-      const action = actionByName.get(cue.name);
       const argText =
         Object.keys(cue.args).length === 0
           ? cue.name
           : `${cue.name}(${Object.entries(cue.args)
               .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
               .join(', ')})`;
-      const description = action?.description?.trim();
-      return description == null || description.length === 0
+      const description = cue.description?.trim();
+      const usageHint = cue.usageHint?.trim();
+      const detailParts = [
+        description && description.length > 0 ? description : null,
+        usageHint && usageHint.length > 0 ? `use when ${usageHint}` : null,
+        cue.aliases.length > 0 ? `accepts aliases: ${cue.aliases.map((alias) => `[${alias}]`).join(', ')}` : null,
+      ].filter((part): part is string => part != null);
+      return detailParts.length === 0
         ? `- [${cue.label}] -> ${argText}`
-        : `- [${cue.label}] -> ${argText}: ${description}`;
+        : `- [${cue.label}] -> ${argText}: ${detailParts.join('; ')}`;
     })
     .join('\n');
 }

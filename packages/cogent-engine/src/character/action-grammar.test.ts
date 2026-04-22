@@ -65,6 +65,27 @@ test('compileActionGrammar wraps cue labels in square brackets and restricts alt
   );
 });
 
+test('compileActionGrammar includes aliases even when prompt rendering stays canonical', () => {
+  const grammar = compileActionGrammar({
+    actions: [
+      {
+        name: 'set_mood',
+        args: [
+          {
+            name: 'mood',
+            type: 'enum',
+            values: ['happy'],
+            cueLabels: { happy: 'smile' },
+            cueAliases: { happy: ['mood: happy', 'be happy'] },
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.match(grammar, /cue-label ::= "smile" \| "mood: happy" \| "be happy"/);
+});
+
 test('compileActionGrammar rejects schemas with colliding cue labels', () => {
   assert.throws(
     () =>

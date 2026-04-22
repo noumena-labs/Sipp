@@ -42,6 +42,10 @@ struct SlotState {
   std::vector<llama_token> generated_tokens;
   std::string output_text;
   std::string buffered_output_text;
+  // Holds trailing bytes of an incomplete UTF-8 sequence that spans
+  // multiple sampled tokens. Flushed to buffered_output_text once the
+  // continuation bytes arrive (or on terminal phase transitions).
+  std::string pending_utf8_bytes;
   std::string terminal_error_message;
   llama_sampler *sampler = nullptr;
 

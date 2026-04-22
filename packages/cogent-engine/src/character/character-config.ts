@@ -12,7 +12,7 @@
 
 import type { ActionSchema } from './action-schema.js';
 import { validateActionSchema } from './action-schema.js';
-import type { PersonaSpec } from './persona.js';
+import type { PersonaDialogExample, PersonaSpec } from './persona.js';
 
 export interface CharacterAssets {
   /**
@@ -81,6 +81,33 @@ export function parseCharacterConfig(raw: unknown): CharacterConfig {
   if (typeof personaRec.name !== 'string' || personaRec.name.trim().length === 0) {
     throw new CharacterConfigError('`persona.name` is required and must be a non-empty string.');
   }
+  if (personaRec.notes != null) {
+    if (!Array.isArray(personaRec.notes) || personaRec.notes.some((note) => typeof note !== 'string')) {
+      throw new CharacterConfigError('`persona.notes` must be an array of strings if present.');
+    }
+  }
+  if (personaRec.dialogExamples != null) {
+    if (!Array.isArray(personaRec.dialogExamples)) {
+      throw new CharacterConfigError('`persona.dialogExamples` must be an array if present.');
+    }
+    const invalidIndex = personaRec.dialogExamples.findIndex((example) => {
+      if (example == null || typeof example !== 'object') {
+        return true;
+      }
+      const rec = example as Record<string, unknown>;
+      return (
+        typeof rec.user !== 'string' ||
+        rec.user.trim().length === 0 ||
+        typeof rec.assistant !== 'string' ||
+        rec.assistant.trim().length === 0
+      );
+    });
+    if (invalidIndex >= 0) {
+      throw new CharacterConfigError(
+        '`persona.dialogExamples` entries must be objects with non-empty string `user` and `assistant` fields.'
+      );
+    }
+  }
 
   const actions = source.actions;
   if (actions == null || typeof actions !== 'object') {
@@ -116,7 +143,16 @@ export function parseCharacterConfig(raw: unknown): CharacterConfig {
 
   return {
     id,
-    persona: persona as PersonaSpec,
+    persona: {
+      ...(persona as PersonaSpec),
+      dialogExamples:
+        personaRec.dialogExamples == null
+          ? undefined
+          : (personaRec.dialogExamples as readonly PersonaDialogExample[]).map((example) => ({
+              user: example.user.trim(),
+              assistant: example.assistant.trim(),
+            })),
+    },
     actions: actions as ActionSchema,
     assets: (assets as CharacterAssets | undefined) ?? undefined,
     memory: (memory as CharacterMemoryConfig | undefined) ?? undefined,

@@ -15,7 +15,11 @@ export interface ChatMessage {
   readonly id: string;
   readonly role: 'user' | 'assistant';
   readonly text: string;
-  readonly actions: ReadonlyArray<{ name: string; args: Readonly<Record<string, unknown>> }>;
+  readonly actions: ReadonlyArray<{
+    name: string;
+    args: Readonly<Record<string, unknown>>;
+    label: string;
+  }>;
   readonly pending?: boolean;
 }
 
@@ -52,8 +56,12 @@ export function ChatPanel({ messages, onSend, disabled }: ChatPanelProps) {
         {messages.map((msg) => (
           <div key={msg.id} className={`chat-entry ${msg.role}`}>
             {msg.actions.map((action, index) => (
-              <span key={index} className="action-chip" title={JSON.stringify(action.args)}>
-                {action.name}
+              <span
+                key={index}
+                className="action-chip"
+                title={`${action.name} ${JSON.stringify(action.args)}`}
+              >
+                {action.label}
               </span>
             ))}
             {msg.text}

@@ -17,12 +17,13 @@ import type {
 } from '../core/inference-types.js';
 import { ActionBus, type CharacterEvent } from './action-bus.js';
 import { compileActionGrammar } from './action-grammar.js';
-import { StreamingActionParser, type ParsedEvent } from './action-parser.js';
+import { StreamingActionParser } from './action-parser.js';
 import {
   DEFAULT_MEMORY_MAX_TURNS,
   resolveMaxMemoryTurns,
   type CharacterConfig,
 } from './character-config.js';
+import { findCanonicalActionCue } from './action-schema.js';
 import { buildAppliedChatTemplateContext } from './chat-template-metadata.js';
 import { renderSystemPrompt } from './persona.js';
 
@@ -159,6 +160,12 @@ export class CharacterAgent {
     // Drive the engine in a detached async task so the async iterator can
     // begin delivering buffered events to the consumer immediately.
     void (async () => {
+      if (options.signal?.aborted) {
+        emit({ kind: 'turn-end', finalText: '', cancelled: true });
+        queue.close();
+        return;
+      }
+
       const parser = new StreamingActionParser(this.config.actions);
       const turnMessages = this.buildTurnMessages(trimmed);
       try {
@@ -185,6 +192,10 @@ export class CharacterAgent {
    */
   private buildTurnMessages(userMessage: string): ChatMessage[] {
     const messages: ChatMessage[] = [{ role: 'system', content: this.systemPrompt }];
+    for (const example of this.config.persona.dialogExamples ?? []) {
+      messages.push({ role: 'user', content: example.user });
+      messages.push({ role: 'assistant', content: example.assistant });
+    }
     for (const turn of this.turnHistory) {
       messages.push({ role: turn.role, content: turn.content });
     }
@@ -209,7 +220,6 @@ export class CharacterAgent {
     queue: AsyncEventQueue<ChatEvent>,
     signal: AbortSignal | undefined
   ): Promise<void> {
-    let assistantProse = '';
     let rawOutputText = '';
     let pendingText = '';
     let requestId: GenerateRequestId = 0;
@@ -243,9 +253,6 @@ export class CharacterAgent {
       }
       const events = parser.consume(text);
       for (const event of events) {
-        if (event.kind === 'prose') {
-          assistantProse += event.text;
-        }
         emit(event);
       }
     };
@@ -315,7 +322,8 @@ export class CharacterAgent {
       emitParsedText(trimTrailingBoundaryPrefix(pendingText, boundaryMarkers));
     }
 
-    const finalText = this.buildFinalText(rawOutputText, boundaryMarkers).trim();
+    const finalText = this.buildFinalText(rawOutputText, boundaryMarkers, userMessage).trim();
+    const memoryText = this.buildMemoryText(rawOutputText, boundaryMarkers, userMessage).trim();
 
     console.info('[CharacterAgent] raw LLM output', {
       characterId: this.config.id,
@@ -326,11 +334,12 @@ export class CharacterAgent {
       reachedBoundary,
       rawOutputText,
       parsedProseText: finalText,
+      memoryText,
     });
 
-    if (!cancelled && !errorMessage) {
+    if (!cancelled && !errorMessage && memoryText.length > 0) {
       this.pushTurnToMemory({ role: 'user', content: userMessage });
-      this.pushTurnToMemory({ role: 'assistant', content: finalText });
+      this.pushTurnToMemory({ role: 'assistant', content: memoryText });
     }
 
     const endEvent = {
@@ -348,9 +357,13 @@ export class CharacterAgent {
     return `${this.config.id}::turn-${this.turnSequence}`;
   }
 
-  private buildFinalText(rawOutputText: string, boundaryMarkers: readonly string[]): string {
+  private buildFinalText(
+    rawOutputText: string,
+    boundaryMarkers: readonly string[],
+    userMessage: string
+  ): string {
     const parser = new StreamingActionParser(this.config.actions);
-    const cleaned = sanitizeAssistantMemoryText(rawOutputText, boundaryMarkers);
+    const cleaned = sanitizeAssistantOutputText(rawOutputText, boundaryMarkers, userMessage);
     const events = parser.consume(cleaned);
     const trailing = parser.flush();
     let prose = '';
@@ -360,6 +373,26 @@ export class CharacterAgent {
       }
     }
     return prose;
+  }
+
+  private buildMemoryText(
+    rawOutputText: string,
+    boundaryMarkers: readonly string[],
+    userMessage: string
+  ): string {
+    const parser = new StreamingActionParser(this.config.actions);
+    const cleaned = sanitizeAssistantOutputText(rawOutputText, boundaryMarkers, userMessage);
+    const events = parser.consume(cleaned);
+    const trailing = parser.flush();
+    return [...events, ...trailing]
+      .map((event) => {
+        if (event.kind === 'prose') {
+          return event.text;
+        }
+        const canonical = findCanonicalActionCue(this.config.actions, event.name, event.args);
+        return canonical == null ? event.raw : `[${canonical.label}]`;
+      })
+      .join('');
   }
 
   private pushTurnToMemory(turn: ChatTurn): void {
@@ -501,6 +534,39 @@ function sanitizeAssistantMemoryText(
 ): string {
   const split = splitOnAssistantBoundary(text, boundaryMarkers);
   return split.safeText;
+}
+
+function sanitizeAssistantOutputText(
+  text: string,
+  boundaryMarkers: readonly string[],
+  userMessage: string
+): string {
+  return stripExactUserMessageEcho(sanitizeAssistantMemoryText(text, boundaryMarkers), userMessage);
+}
+
+function stripExactUserMessageEcho(text: string, userMessage: string): string {
+  const source = userMessage.trim();
+  if (source.length === 0) {
+    return text;
+  }
+
+  const escaped = escapeRegExp(source).replace(/\s+/g, '\\s+');
+  const exactEcho = new RegExp(`^\\s*${escaped}\\s*$`);
+  const echoedLinePrefix = new RegExp(`^\\s*${escaped}\\s*(?:\\r?\\n\\s*)+`);
+
+  let out = text;
+  if (exactEcho.test(out)) {
+    return '';
+  }
+  const prefixMatch = out.match(echoedLinePrefix);
+  if (prefixMatch) {
+    out = out.slice(prefixMatch[0].length).trimStart();
+  }
+  return out;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function longestSuffixPrefixOverlap(source: string, marker: string): number {

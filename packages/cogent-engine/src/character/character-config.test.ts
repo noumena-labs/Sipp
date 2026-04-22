@@ -38,6 +38,13 @@ test('parseCharacterConfig accepts a minimal valid config and round-trips fields
   const raw = buildValid({
     assets: { vrm: '/models/aria.vrm' },
     memory: { maxTurns: 4 },
+    persona: {
+      name: 'Aria',
+      description: 'A friendly guide.',
+      dialogExamples: [
+        { user: ' hello ', assistant: ' [wave] Hi there! ' },
+      ],
+    },
   });
   const config = parseCharacterConfig(raw);
   assert.equal(config.id, 'aria-01');
@@ -45,6 +52,9 @@ test('parseCharacterConfig accepts a minimal valid config and round-trips fields
   assert.equal(config.actions.actions.length, 1);
   assert.equal(config.assets?.vrm, '/models/aria.vrm');
   assert.equal(config.memory?.maxTurns, 4);
+  assert.deepEqual(config.persona.dialogExamples, [
+    { user: 'hello', assistant: '[wave] Hi there!' },
+  ]);
 });
 
 test('parseCharacterConfig rejects non-object input', () => {
@@ -103,6 +113,29 @@ test('parseCharacterConfig validates memory.maxTurns', () => {
 test('parseCharacterConfig rejects non-object assets/memory', () => {
   assert.throws(() => parseCharacterConfig(buildValid({ assets: 'nope' })), /assets/);
   assert.throws(() => parseCharacterConfig(buildValid({ memory: 7 })), /memory/);
+});
+
+test('parseCharacterConfig validates persona notes and dialogExamples', () => {
+  assert.throws(
+    () => parseCharacterConfig(buildValid({ persona: { name: 'Aria', notes: 'nope' } })),
+    /persona\.notes/
+  );
+  assert.throws(
+    () => parseCharacterConfig(buildValid({ persona: { name: 'Aria', dialogExamples: 'nope' } })),
+    /persona\.dialogExamples/
+  );
+  assert.throws(
+    () =>
+      parseCharacterConfig(
+        buildValid({
+          persona: {
+            name: 'Aria',
+            dialogExamples: [{ user: 'hello', assistant: '' }],
+          },
+        })
+      ),
+    /persona\.dialogExamples/
+  );
 });
 
 test('resolveMaxMemoryTurns returns configured value or default', () => {

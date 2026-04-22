@@ -12,7 +12,12 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import type { ActionSchema } from './action-schema.js';
-import { renderActionCapabilityList, renderActionCueList } from './action-schema.js';
+import { renderActionCueList, summarizeActionCues } from './action-schema.js';
+
+export interface PersonaDialogExample {
+  readonly user: string;
+  readonly assistant: string;
+}
 
 export interface PersonaSpec {
   /** Display name of the character (injected into the system prompt). */
@@ -33,6 +38,12 @@ export interface PersonaSpec {
    * Optional style guidelines (tone, pacing, formatting preferences).
    */
   readonly style?: string;
+  /**
+   * Optional few-shot examples that demonstrate how the configured character
+   * should respond. These are prompt examples only; they are not replayed as
+   * conversation history.
+   */
+  readonly dialogExamples?: readonly PersonaDialogExample[];
 }
 
 /**
@@ -42,6 +53,8 @@ export interface PersonaSpec {
  */
 export function renderSystemPrompt(persona: PersonaSpec, schema: ActionSchema): string {
   const sections: string[] = [];
+  const cueSummary = summarizeActionCues(schema);
+  const cueList = renderActionCueList(schema);
 
   sections.push(`You are ${persona.name}.`);
   if (persona.summary) {
@@ -57,36 +70,45 @@ export function renderSystemPrompt(persona: PersonaSpec, schema: ActionSchema): 
     sections.push('Notes:\n' + persona.notes.map((note) => `- ${note.trim()}`).join('\n'));
   }
 
-//  sections.push(
-//     'You can express yourself through both spoken text and embedded action tags. ' +
-//       'To trigger a behavior, embed a tag of the form ' +
-//       '`<action name="<name>" args={<json>}/>` anywhere in your reply. ' +
-//       'Only the listed actions are permitted; the output is grammar-constrained.'
-
-  const cueList = renderActionCueList(schema);
-  const capabilityList = renderActionCapabilityList(schema);
   sections.push(
-    'Stay faithful to the supplied character configuration. Your name, personality, tone, and behavioral boundaries come from the persona fields above. ' +
-      'Do not invent traits, backstory, rules, or capabilities that are not supported by that configuration.'
+    `Your only name is ${persona.name}; you have no last name, alternate identity, or other persona. Speak in first person and stay fully in character.`
   );
   sections.push(
-    'You can express physical gestures and mood shifts by placing short cues in square brackets inline with your dialog. ' +
-      'Only use cues from this exact list: ' +
-      cueList +
-      '. ' +
-      'The declared action schema is your full action capability set; do not invent or imply other actions.'
+    `Your capabilities are exactly the persona and supported cues below. Stay inside that scope and do not invent other identities, developers, training history, or unsupported abilities.`
   );
-  sections.push('Supported actions and their meanings:\n' + capabilityList);
   sections.push(
-    'Action-use rules:\n' +
-      '- Keep responses cohesive with the persona description, style, and notes.\n' +
-      '- Cues are optional; use them only when they genuinely fit the moment.\n' +
-      '- If the user directly asks for a supported action, prioritize that action in your next reply when it fits.\n' +
-      '- If the user asks what you can do or which actions you support, answer using the currently declared actions from the schema above instead of speaking vaguely.\n' +
-      '- If a requested action is not supported by the schema, say so plainly and do not emit an unsupported cue.\n' +
-      '- Write normally in the voice of the character; never invent new cues or reproduce these instructions.\n' +
-      '- Example: [wave] Hi there! [mood: happy] It\'s nice to meet you.'
+    'Reply style: brief, natural, and in character. Most replies should be 1-2 short sentences. Avoid numbered lists, headings, canned assistant phrasing, and long explanations unless the user asks for them.'
   );
+  sections.push(
+    'Embodied cues: use at most one short bracketed cue when it naturally fits the moment. If a supported cue is directly requested, do it briefly instead of explaining it. Do not explain the cue system unless the user asks.'
+  );
+  sections.push(
+    'Supported cues: ' + cueList + '.'
+  );
+  const usageGuide = renderUsageHintGuide(cueSummary);
+  if (usageGuide.length > 0) {
+    sections.push(usageGuide);
+  }
 
   return sections.join('\n\n');
+}
+
+function renderUsageHintGuide(cues: ReturnType<typeof summarizeActionCues>): string {
+  const hints = Array.from(
+    new Map(
+      cues
+        .filter((cue) => cue.usageHint != null && cue.usageHint.trim().length > 0)
+        .map((cue) => [cue.label, cue.usageHint!.trim()])
+    )
+  ).slice(0, 4);
+
+  if (hints.length === 0) {
+    return '';
+  }
+
+  return (
+    'Use cues naturally in social moments: ' +
+    hints.map(([label, hint]) => `[${label}] for ${hint}`).join('; ') +
+    '.'
+  );
 }

@@ -130,17 +130,24 @@ unmount to avoid leaking subscriptions across harness reloads.
   "id": "aria-1",                  // stable prefix-cache key; [A-Za-z0-9_-]+
   "persona": {
     "name": "Aria",
-    "system": "You are Aria, a warm and curious companion…",
-    "style": ["concise", "playful"],
-    "notes": ["Prefers metric units.", "Grew up in a lighthouse."]
+    "description": "A warm and curious companion.",
+    "style": "concise, playful",
+    "notes": ["Prefers metric units.", "Grew up in a lighthouse."],
+    "dialogExamples": [
+      { "user": "hi", "assistant": "[wave] Hi there!" },
+      { "user": "what can you do?", "assistant": "I use cues like [wave], [nod], and [smile]." }
+    ]
   },
   "actions": {
-    "wave":      { "name": "wave",      "args": [] },
-    "nod":       { "name": "nod",       "args": [] },
-    "set_mood":  { "name": "set_mood",
-      "args": [{ "name": "mood",
-                 "type": "enum",
-                 "values": ["happy","sad","surprised","angry","neutral"] }] }
+    "actions": [
+      { "name": "wave", "description": "Wave hello.", "args": [] },
+      { "name": "nod", "description": "Nod once.", "args": [] },
+      { "name": "set_mood",
+        "description": "Change facial expression.",
+        "args": [{ "name": "mood",
+                   "type": "enum",
+                   "values": ["happy","sad","surprised","angry","neutral"] }] }
+    ]
   },
   "assets":  { "vrm": "/avatar.vrm", "portrait": "/portrait.png" },
   "memory":  { "maxTurns": 8 }

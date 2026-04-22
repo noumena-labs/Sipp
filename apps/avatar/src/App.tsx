@@ -125,7 +125,15 @@ export default function App() {
       );
 
       setStatus('Initialising inference runtime…');
-      await engine.initEngine(modelPath);
+      await engine.initEngine(modelPath, {
+        sampling: {
+          temperature: 0.6,
+          topP: 0.9,
+          topK: 40,
+          minP: 0.05,
+          repeatPenalty: 1.05,
+        },
+      });
 
       const agent = new CharacterAgent(engine, config, { bus: new ActionBus() });
       if (previousHarness) {
@@ -183,7 +191,14 @@ export default function App() {
               msg.id === assistantId
                 ? {
                     ...msg,
-                    actions: [...msg.actions, { name: event.name, args: event.args }],
+                    actions: [
+                      ...msg.actions,
+                      {
+                        name: event.name,
+                        args: event.args,
+                        label: event.raw.slice(1, -1),
+                      },
+                    ],
                   }
                 : msg
             )

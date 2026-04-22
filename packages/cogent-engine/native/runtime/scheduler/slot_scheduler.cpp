@@ -38,6 +38,7 @@ void SlotState::ResetToIdle() {
   generated_tokens.clear();
   output_text.clear();
   buffered_output_text.clear();
+  pending_utf8_bytes.clear();
   terminal_error_message.clear();
   sampler = nullptr;
 }
@@ -55,6 +56,7 @@ void SlotState::AttachRequest(GenerateRequest &request_ref,
   generated_tokens.clear();
   output_text.clear();
   buffered_output_text.clear();
+  pending_utf8_bytes.clear();
   terminal_error_message.clear();
 }
 
