@@ -9,8 +9,6 @@
 //////////////////////////////////////////////////////////////////////////////
 
 export type {
-  ActionArgSpec,
-  ActionArgType,
   ActionCue,
   ActionSchema,
   ActionSpec,

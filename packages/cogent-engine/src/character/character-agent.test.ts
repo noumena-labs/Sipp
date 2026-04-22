@@ -34,20 +34,10 @@ function buildConfig(overrides: Partial<CharacterConfig> = {}): CharacterConfig 
         {
           name: 'wave',
           description: 'wave hello',
-          args: [],
         },
         {
-          name: 'set_mood',
+          name: 'smile',
           description: 'adjust expression',
-          args: [
-            {
-              name: 'mood',
-              type: 'enum',
-              values: ['happy'],
-              cueLabels: { happy: 'smile' },
-              cueAliases: { happy: ['mood: happy'] },
-            },
-          ],
         },
       ],
     },
@@ -218,7 +208,6 @@ test('chat() threads grammar and maxOutputTokens into queuePrompt options', asyn
   assert.ok(typeof call.options === 'object' && call.options != null);
   const opts = call.options as PromptOptions;
   assert.equal(opts.nTokens, 42);
-  // Grammar is compiled from the action schema and forwarded to the engine.
   assert.equal(typeof opts.grammar, 'string');
   assert.ok(opts.grammar && opts.grammar.includes('root'));
   assert.equal(typeof opts.onToken, 'function');
@@ -272,7 +261,7 @@ test('assistant memory preserves cues when actions are interleaved', async () =>
 
 test('assistant memory keeps multiple cues inline for later turns', async () => {
   const engine = createFakeEngine();
-  engine.enqueue({ tokens: ['[mood: happy] Hello ', '[wave]', ' again.'] });
+  engine.enqueue({ tokens: ['[smile] Hello ', '[wave]', ' again.'] });
   const agent = new CharacterAgent(engine, buildConfig());
 
   await collectEvents(agent.chat('hello'));
@@ -323,7 +312,6 @@ test('errored turns do not commit to memory and surface errorMessage', async () 
   assert.ok(end.kind === 'turn-end');
   assert.equal(end.errorMessage, 'boom');
   assert.equal(agent.getMemory().length, 0);
-  // Best-effort cancel should have been attempted.
   assert.equal(engine.cancelCalls.length, 1);
 });
 
@@ -363,10 +351,7 @@ test('maxTurns: 0 disables memory retention', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['one'] });
   engine.enqueue({ tokens: ['two'] });
-  const agent = new CharacterAgent(
-    engine,
-    buildConfig({ memory: { maxTurns: 0 } })
-  );
+  const agent = new CharacterAgent(engine, buildConfig({ memory: { maxTurns: 0 } }));
   await collectEvents(agent.chat('a'));
   await collectEvents(agent.chat('b'));
   assert.equal(agent.getMemory().length, 0);
@@ -377,10 +362,7 @@ test('memory sliding window drops oldest pairs past maxTurns', async () => {
   engine.enqueue({ tokens: ['r1'] });
   engine.enqueue({ tokens: ['r2'] });
   engine.enqueue({ tokens: ['r3'] });
-  const agent = new CharacterAgent(
-    engine,
-    buildConfig({ memory: { maxTurns: 2 } })
-  );
+  const agent = new CharacterAgent(engine, buildConfig({ memory: { maxTurns: 2 } }));
   await collectEvents(agent.chat('m1'));
   await collectEvents(agent.chat('m2'));
   await collectEvents(agent.chat('m3'));
@@ -410,7 +392,6 @@ test('chat() passes a rendered raw prompt to queuePrompt', async () => {
   await collectEvents(agent.chat('hello'));
 
   const call = engine.queuePromptCalls[0];
-  // Should be the applied-template conversation, not empty/delta.
   assert.ok(typeof call.promptText === 'string' && call.promptText.length > 0);
   assert.ok(call.promptText.includes('<system>\n'));
   assert.ok(call.promptText.includes('Aria'));
@@ -420,7 +401,6 @@ test('chat() passes a rendered raw prompt to queuePrompt', async () => {
 
   assert.ok(typeof call.options === 'object' && call.options != null);
   const opts = call.options as PromptOptions;
-  // Messages path is gone; runtime must receive 'raw' so it does not double-wrap.
   assert.equal(opts.promptFormat, 'raw');
 });
 
@@ -434,7 +414,6 @@ test('chat() includes prior turn history in the rendered prompt', async () => {
 
   const secondCall = engine.queuePromptCalls[1];
   const rendered = secondCall.promptText;
-  // System + first user + first assistant + second user, in that order.
   const idxSystem = rendered.indexOf('<system>\n');
   const idxFirstUser = rendered.indexOf('first question');
   const idxAssistant = rendered.indexOf('first reply');
@@ -472,8 +451,8 @@ test('chat() injects persona dialog examples as few-shot chat turns', async () =
       },
       actions: {
         actions: [
-          { name: 'wave', description: 'wave hello', args: [] },
-          { name: 'set_mood', description: 'adjust expression', args: [] },
+          { name: 'wave', description: 'wave hello' },
+          { name: 'settle', description: 'adjust expression' },
         ],
       },
     })
@@ -493,9 +472,7 @@ test('chat() injects persona dialog examples as few-shot chat turns', async () =
 
 test('chat() preserves non-exact user-prefix text in assistant output', async () => {
   const engine = createFakeEngine();
-  engine.enqueue({
-    tokens: ['hello there, friend'],
-  });
+  engine.enqueue({ tokens: ['hello there, friend'] });
   const agent = new CharacterAgent(engine, buildConfig());
 
   const events = await collectEvents(agent.chat('hello'));

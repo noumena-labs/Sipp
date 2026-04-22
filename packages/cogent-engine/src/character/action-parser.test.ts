@@ -3,7 +3,7 @@
 // action-parser.test.ts
 //
 // - Exercises the streaming parser: chunk-boundary robustness, prose
-//   coalescing, unknown-cue handling.
+//   coalescing, unknown-cue handling for the flat action model.
 //
 //////////////////////////////////////////////////////////////////////////////
 
@@ -21,12 +21,9 @@ import {
 
 const SCHEMA: ActionSchema = {
   actions: [
-    { name: 'wave', args: [] },
-    { name: 'shake_head', args: [] },
-    {
-      name: 'set_mood',
-      args: [{ name: 'mood', type: 'enum', values: ['happy', 'sad'] }],
-    },
+    { name: 'wave' },
+    { name: 'shake_head' },
+    { name: 'look_at_you', cue: 'look at you' },
   ],
 };
 
@@ -41,17 +38,15 @@ function drainAll(parser: StreamingActionParser, chunks: string[]): ParsedEvent[
   return events;
 }
 
-test('parseActionCue resolves a bare cue label', () => {
+test('parseActionCue resolves a flat cue label', () => {
   const event = parseActionCue('[wave]', CUES);
   assert.equal(event.kind, 'action');
   assert.equal(event.name, 'wave');
-  assert.deepEqual(event.args, {});
 });
 
-test('parseActionCue resolves an enum-valued cue label', () => {
-  const event = parseActionCue('[mood: happy]', CUES);
-  assert.equal(event.name, 'set_mood');
-  assert.deepEqual(event.args, { mood: 'happy' });
+test('parseActionCue resolves a custom cue label', () => {
+  const event = parseActionCue('[look at you]', CUES);
+  assert.equal(event.name, 'look_at_you');
 });
 
 test('parseActionCue rejects unknown labels', () => {
@@ -70,12 +65,7 @@ test('parseActionCue rejects malformed envelopes', () => {
 
 test('StreamingActionParser emits prose and action events in stream order', () => {
   const parser = new StreamingActionParser(SCHEMA);
-  const events = drainAll(parser, [
-    'Hello ',
-    'there!',
-    '[wave]',
-    ' all done.',
-  ]);
+  const events = drainAll(parser, ['Hello ', 'there!', '[wave]', ' all done.']);
   const action = events.find((event) => event.kind === 'action');
   assert.ok(action && action.kind === 'action' && action.name === 'wave');
 
@@ -94,13 +84,12 @@ test('StreamingActionParser emits prose and action events in stream order', () =
   assert.equal(trailing, ' all done.');
 });
 
-test('StreamingActionParser resolves enum-valued cues', () => {
+test('StreamingActionParser resolves custom cue labels', () => {
   const parser = new StreamingActionParser(SCHEMA);
-  const events = drainAll(parser, ['Hi! [mood: happy] nice to meet you.']);
+  const events = drainAll(parser, ['Hi! [look at you] nice to meet you.']);
   const action = events.find((event) => event.kind === 'action');
   assert.ok(action && action.kind === 'action');
-  assert.equal(action.name, 'set_mood');
-  assert.deepEqual(action.args, { mood: 'happy' });
+  assert.equal(action.name, 'look_at_you');
 });
 
 test('StreamingActionParser coalesces contiguous prose within a single chunk', () => {
@@ -113,8 +102,6 @@ test('StreamingActionParser coalesces contiguous prose within a single chunk', (
 test('StreamingActionParser preserves stream order across chunks without losing prose', () => {
   const parser = new StreamingActionParser(SCHEMA);
   const events = drainAll(parser, ['a', 'b', 'c']);
-  // Each chunk may flush as its own prose event — the invariant is that
-  // the concatenated prose equals the full input and ordering is preserved.
   const joined = events
     .filter((event) => event.kind === 'prose')
     .map((event) => (event.kind === 'prose' ? event.text : ''))
@@ -125,7 +112,7 @@ test('StreamingActionParser preserves stream order across chunks without losing 
 
 test('StreamingActionParser tolerates cue boundaries split across chunks', () => {
   const parser = new StreamingActionParser(SCHEMA);
-  const source = 'hello[mood: sad]world';
+  const source = 'hello[look at you]world';
   const chunks: string[] = [];
   for (let index = 0; index < source.length; index += 3) {
     chunks.push(source.slice(index, index + 3));
@@ -133,8 +120,7 @@ test('StreamingActionParser tolerates cue boundaries split across chunks', () =>
   const events = drainAll(parser, chunks);
   const action = events.find((event) => event.kind === 'action');
   assert.ok(action && action.kind === 'action');
-  assert.equal(action.name, 'set_mood');
-  assert.deepEqual(action.args, { mood: 'sad' });
+  assert.equal(action.name, 'look_at_you');
   const prose = events
     .filter((event) => event.kind === 'prose')
     .map((event) => (event.kind === 'prose' ? event.text : ''))
@@ -166,8 +152,6 @@ test('StreamingActionParser surfaces unknown cues as prose verbatim', () => {
 
 test('StreamingActionParser defers bytes that might start a cue', () => {
   const parser = new StreamingActionParser(SCHEMA);
-  // The trailing `[w` is an unfinished cue — the parser must hold those
-  // bytes until the closing `]` arrives (or flush is called).
   const first = parser.consume('hi [w');
   const actions = first.filter((event) => event.kind === 'action');
   assert.equal(actions.length, 0);

@@ -83,21 +83,41 @@ export class ThreeVRMBinding {
       case 'shake_head':
         this.startAnimation(this.buildNodAnimation(-1, /*axisY=*/ true));
         return;
-      case 'set_mood': {
-        const mood = String(event.args.mood ?? '').toLowerCase();
-        this.applyMood(mood);
+      case 'smile':
+        this.applyMood('happy');
         return;
-      }
-      case 'look_at': {
-        const target = String(event.args.target ?? 'camera').toLowerCase();
-        this.applyLookAt(target);
+      case 'look_sad':
+        this.applyMood('sad');
         return;
-      }
+      case 'gasp':
+        this.applyMood('surprised');
+        return;
+      case 'look_angry':
+        this.applyMood('angry');
+        return;
+      case 'settle':
+        this.applyMood('neutral');
+        return;
+      case 'look_at_you':
+        this.applyLookAt('camera');
+        return;
+      case 'glance_left':
+        this.applyLookAt('left');
+        return;
+      case 'glance_right':
+        this.applyLookAt('right');
+        return;
+      case 'look_up':
+        this.applyLookAt('up');
+        return;
+      case 'look_down':
+        this.applyLookAt('down');
+        return;
       default:
         // Unknown action — log and ignore. Unknown actions are not a bug in
         // the harness; they mean the schema drifted from what the binding
         // knows how to render.
-        console.info(`[binding] no handler for action "${event.name}"`, event.args);
+        console.info(`[binding] no handler for action "${event.name}"`);
     }
   }
 

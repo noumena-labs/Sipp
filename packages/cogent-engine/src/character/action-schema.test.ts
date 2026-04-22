@@ -3,7 +3,7 @@
 // action-schema.test.ts
 //
 // - Exercises validateActionSchema, expandActionCues, and
-//   renderActionCueList.
+//   renderActionCueList for the flat action model.
 //
 //////////////////////////////////////////////////////////////////////////////
 
@@ -20,242 +20,120 @@ import {
   validateActionSchema,
 } from './action-schema.js';
 
-const WAVE_SCHEMA: ActionSchema = {
+const SCHEMA: ActionSchema = {
   actions: [
     {
       name: 'wave',
       description: 'Wave a hand.',
-      args: [
-        { name: 'duration_ms', type: 'number', description: 'Wave length in ms.' },
-      ],
+      usageHint: 'greeting or saying goodbye',
     },
     {
-      name: 'set_mood',
-      args: [
-        { name: 'mood', type: 'enum', values: ['happy', 'sad'] },
-        { name: 'persist', type: 'boolean' },
-      ],
+      name: 'look_at_you',
+      cue: 'look at you',
+      description: 'Turn attention toward the user.',
     },
     {
       name: 'shake_head',
-      args: [],
+      description: 'Shake the head side to side.',
     },
   ],
 };
 
 test('validateActionSchema accepts a well-formed schema', () => {
-  assert.equal(validateActionSchema(WAVE_SCHEMA), null);
+  assert.equal(validateActionSchema(SCHEMA), null);
 });
 
 test('validateActionSchema rejects an empty schema', () => {
-  assert.match(
-    String(validateActionSchema({ actions: [] })),
-    /at least one action/
-  );
+  assert.match(String(validateActionSchema({ actions: [] })), /at least one action/);
 });
 
 test('validateActionSchema rejects duplicate action names', () => {
   const error = validateActionSchema({
-    actions: [
-      { name: 'wave', args: [] },
-      { name: 'wave', args: [] },
-    ],
+    actions: [{ name: 'wave' }, { name: 'wave' }],
   });
   assert.match(String(error), /Duplicate action name/);
 });
 
 test('validateActionSchema rejects invalid identifiers', () => {
   const error = validateActionSchema({
-    actions: [{ name: '1bad', args: [] }],
+    actions: [{ name: '1bad' }],
   });
   assert.match(String(error), /Invalid action name/);
 });
 
-test('validateActionSchema rejects enum args without values', () => {
+test('validateActionSchema rejects empty cue overrides', () => {
+  const error = validateActionSchema({
+    actions: [{ name: 'wave', cue: '   ' }],
+  });
+  assert.match(String(error), /invalid cue label/i);
+});
+
+test('validateActionSchema rejects cue label collisions', () => {
   const error = validateActionSchema({
     actions: [
-      { name: 'x', args: [{ name: 'mode', type: 'enum' }] },
+      { name: 'look_at_you', cue: 'look at you' },
+      { name: 'look_at_you_again', cue: 'look at you' },
     ],
   });
-  assert.match(String(error), /non-empty values/);
+  assert.match(String(error), /collision/i);
 });
 
-test('expandActionCues produces one cue per enum value and a bare cue otherwise', () => {
-  const cues = expandActionCues(WAVE_SCHEMA);
-  // wave: first arg is a non-enum number → bare `[wave]` with empty args.
-  // set_mood: first arg is enum with two values → two cues.
-  // shake_head: no args → bare `[shake head]` with underscore converted.
-  assert.deepEqual(cues.map((cue) => cue.label), [
-    'wave',
-    'mood: happy',
-    'mood: sad',
-    'shake head',
-  ]);
-  const happy = cues.find((cue) => cue.label === 'mood: happy');
-  assert.ok(happy);
-  assert.equal(happy.name, 'set_mood');
-  assert.deepEqual(happy.args, { mood: 'happy' });
-});
-
-test('expandActionCues respects cueLabel and cueLabels overrides', () => {
-  const cues = expandActionCues({
-    actions: [
-      {
-        name: 'wave',
-        cueLabel: 'greet',
-        args: [],
-      },
-      {
-        name: 'intensity',
-        args: [
-          {
-            name: 'level',
-            type: 'enum',
-            values: ['low', 'high'],
-            cueLabels: { low: 'wave softly', high: 'wave energetically' },
-          },
-        ],
-      },
-    ],
-  });
-  assert.deepEqual(cues.map((cue) => cue.label), [
-    'greet',
-    'wave softly',
-    'wave energetically',
+test('expandActionCues produces one cue per action in declaration order', () => {
+  const cues = expandActionCues(SCHEMA);
+  assert.deepEqual(cues, [
+    { label: 'wave', name: 'wave' },
+    { label: 'look at you', name: 'look_at_you' },
+    { label: 'shake head', name: 'shake_head' },
   ]);
 });
 
-test('expandActionCues includes cueAliases for argless and enum actions', () => {
-  const cues = expandActionCues({
-    actions: [
-      {
-        name: 'wave',
-        cueAliases: ['hello wave'],
-        args: [],
-      },
-      {
-        name: 'set_mood',
-        args: [
-          {
-            name: 'mood',
-            type: 'enum',
-            values: ['happy'],
-            cueAliases: { happy: ['smile', 'be happy'] },
-          },
-        ],
-      },
-    ],
-  });
-
-  assert.deepEqual(cues.map((cue) => cue.label), [
-    'wave',
-    'hello wave',
-    'mood: happy',
-    'smile',
-    'be happy',
-  ]);
-});
-
-test('summarizeActionCues keeps one primary cue and records aliases separately', () => {
-  const cues = summarizeActionCues({
-    actions: [
-      {
-        name: 'set_mood',
-        description: 'Shift expression.',
-        args: [
-          {
-            name: 'mood',
-            type: 'enum',
-            values: ['happy'],
-            cueLabels: { happy: 'smile' },
-            cueAliases: { happy: ['mood: happy', 'be happy'] },
-          },
-        ],
-      },
-    ],
-  });
-
+test('summarizeActionCues preserves cue labels and metadata', () => {
+  const cues = summarizeActionCues(SCHEMA);
   assert.deepEqual(cues, [
     {
-      label: 'smile',
-      name: 'set_mood',
-      args: { mood: 'happy' },
-      aliases: ['mood: happy', 'be happy'],
-      description: 'Shift expression.',
+      label: 'wave',
+      name: 'wave',
+      description: 'Wave a hand.',
+      usageHint: 'greeting or saying goodbye',
+    },
+    {
+      label: 'look at you',
+      name: 'look_at_you',
+      description: 'Turn attention toward the user.',
+      usageHint: undefined,
+    },
+    {
+      label: 'shake head',
+      name: 'shake_head',
+      description: 'Shake the head side to side.',
       usageHint: undefined,
     },
   ]);
 });
 
-test('expandActionCues throws when two cues collapse to the same label', () => {
-  assert.throws(
-    () =>
-      expandActionCues({
-        actions: [
-          { name: 'wave', args: [] },
-          { name: 'wave_', cueLabel: 'wave', args: [] },
-        ],
-      }),
-    /collision/i
-  );
-});
-
 test('renderActionCueList emits bracketed, comma-separated labels', () => {
-  const text = renderActionCueList(WAVE_SCHEMA);
-  assert.equal(text, '[wave], [mood: happy], [mood: sad], [shake head]');
+  const text = renderActionCueList(SCHEMA);
+  assert.equal(text, '[wave], [look at you], [shake head]');
 });
 
-test('renderActionCapabilityList ties visible cues back to runtime actions', () => {
-  const text = renderActionCapabilityList(WAVE_SCHEMA);
+test('renderActionCapabilityList ties visible cues back to flat runtime actions', () => {
+  const text = renderActionCapabilityList(SCHEMA);
   assert.equal(
     text,
     [
-      '- [wave] -> wave: Wave a hand.',
-      '- [mood: happy] -> set_mood(mood="happy")',
-      '- [mood: sad] -> set_mood(mood="sad")',
-      '- [shake head] -> shake_head',
+      '- [wave] -> wave: Wave a hand.; use when greeting or saying goodbye',
+      '- [look at you] -> look_at_you: Turn attention toward the user.',
+      '- [shake head] -> shake_head: Shake the head side to side.',
     ].join('\n')
-  );
-});
-
-test('renderActionCapabilityList includes usage hints when provided', () => {
-  const text = renderActionCapabilityList({
-    actions: [
-      {
-        name: 'wave',
-        description: 'Wave hello.',
-        usageHint: 'greeting someone or saying goodbye',
-        args: [],
-      },
-    ],
-  });
-
-  assert.equal(
-    text,
-    '- [wave] -> wave: Wave hello.; use when greeting someone or saying goodbye'
   );
 });
 
 test('findCanonicalActionCue resolves runtime actions back to primary cue labels', () => {
   const cue = findCanonicalActionCue(
     {
-      actions: [
-        {
-          name: 'look_at',
-          args: [
-            {
-              name: 'target',
-              type: 'enum',
-              values: ['camera'],
-              cueLabels: { camera: 'look at you' },
-              cueAliases: { camera: ['target: camera'] },
-            },
-          ],
-        },
-      ],
+      actions: [{ name: 'look_at_you', cue: 'look at you' }],
     },
-    'look_at',
-    { target: 'camera' }
+    'look_at_you'
   );
 
   assert.ok(cue);

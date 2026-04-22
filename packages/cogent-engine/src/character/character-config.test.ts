@@ -21,7 +21,7 @@ import {
 
 const validActions: ActionSchema = {
   actions: [
-    { name: 'wave', description: 'wave hello', args: [] },
+    { name: 'wave', description: 'wave hello' },
   ],
 };
 
@@ -87,7 +87,7 @@ test('parseCharacterConfig requires persona to be an object', () => {
 
 test('parseCharacterConfig surfaces action-schema error messages', () => {
   const raw = buildValid({
-    actions: { actions: [{ name: 'bad id', description: 'x', args: [] }] },
+    actions: { actions: [{ name: 'bad id', description: 'x' }] },
   });
   assert.throws(
     () => parseCharacterConfig(raw),

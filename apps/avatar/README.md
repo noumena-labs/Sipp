@@ -2,8 +2,8 @@
 
 A minimal three.js + React example that binds the `cogent-engine` character
 harness to a [VRM](https://vrm.dev/) avatar. It streams model output
-on-device via WebAssembly, parses inline `<action …/>` tags into scene
-gestures, and renders the conversation in a minimal chat UI.
+on-device via WebAssembly, parses inline bracketed cues into scene gestures,
+and renders the conversation in a minimal chat UI.
 
 This is an **example**, not a product. It is deliberately small so the
 plumbing is readable end-to-end.
@@ -25,8 +25,8 @@ Then open the printed localhost URL, paste a `.gguf` model URL into the
 `OPFS` (persisted across reloads) and spins up the inference runtime.
 
 The app ships with a starter `character.json` at `public/character.json`
-driving a persona named **Aria** and five actions: `wave`, `nod`,
-`shake_head`, `set_mood`, `look_at`.
+driving a persona named **Aria** and flat actions such as `wave`, `nod`,
+`shake_head`, `smile`, and `look_at_you`.
 
 Scripts:
 
@@ -62,7 +62,6 @@ The starter file is a complete, valid example:
   "persona": {
     "name": "Aria",
     "description": "A cheerful, curious virtual companion…",
-    "style": "warm, concise, playful",
     "dialogExamples": [
       { "user": "hi", "assistant": "[wave] Hi there!" },
       { "user": "what's your name?", "assistant": "[smile] I'm Aria." }
@@ -70,11 +69,9 @@ The starter file is a complete, valid example:
   },
   "actions": {
     "actions": [
-      { "name": "wave", "description": "Wave a greeting.", "args": [] },
-      { "name": "set_mood",
-        "description": "Change facial expression.",
-        "args": [{ "name": "mood", "type": "enum",
-                   "values": ["happy","sad","surprised","angry","neutral"] }] }
+      { "name": "wave", "description": "Wave a greeting." },
+      { "name": "smile", "description": "Smile warmly." },
+      { "name": "look_at_you", "cue": "look at you", "description": "Briefly turn attention toward the user." }
     ]
   },
   "assets": { "vrm": "/avatar.vrm", "portrait": "/portrait.png" },
@@ -83,7 +80,7 @@ The starter file is a complete, valid example:
 ```
 
 Actions listed here become part of the GBNF grammar handed to the sampler,
-so the model literally cannot emit an action not in the schema. Unknown
+so the model literally cannot emit a cue not in the schema. Unknown
 actions are logged and ignored by the scene binding, not by the parser.
 
 ---

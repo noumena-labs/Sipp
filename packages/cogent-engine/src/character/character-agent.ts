@@ -389,7 +389,7 @@ export class CharacterAgent {
         if (event.kind === 'prose') {
           return event.text;
         }
-        const canonical = findCanonicalActionCue(this.config.actions, event.name, event.args);
+        const canonical = findCanonicalActionCue(this.config.actions, event.name);
         return canonical == null ? event.raw : `[${canonical.label}]`;
       })
       .join('');

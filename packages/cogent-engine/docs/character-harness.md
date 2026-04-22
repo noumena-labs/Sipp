@@ -97,14 +97,14 @@ returned promise.
 ```ts
 type AgentEvent =
   | { kind: 'prose'; text: string }
-  | { kind: 'action'; name: string; args: Record<string, unknown> }
+  | { kind: 'action'; name: string; raw: string }
   | { kind: 'turn-end'; errorMessage?: string };
 ```
 
 - `prose` chunks are already stripped of any in-band action tags and can be
   concatenated verbatim for display.
-- `action` events carry validated, coerced args (per the action schema); args
-  that fail validation are dropped with a `console.warn`.
+- `action` events carry the flat runtime action name plus the raw bracketed
+  cue text that triggered it.
 - `turn-end` is always the last event for a turn, even on abort or error.
 
 ### `ActionBus`
@@ -131,7 +131,6 @@ unmount to avoid leaking subscriptions across harness reloads.
   "persona": {
     "name": "Aria",
     "description": "A warm and curious companion.",
-    "style": "concise, playful",
     "notes": ["Prefers metric units.", "Grew up in a lighthouse."],
     "dialogExamples": [
       { "user": "hi", "assistant": "[wave] Hi there!" },
@@ -140,13 +139,10 @@ unmount to avoid leaking subscriptions across harness reloads.
   },
   "actions": {
     "actions": [
-      { "name": "wave", "description": "Wave hello.", "args": [] },
-      { "name": "nod", "description": "Nod once.", "args": [] },
-      { "name": "set_mood",
-        "description": "Change facial expression.",
-        "args": [{ "name": "mood",
-                   "type": "enum",
-                   "values": ["happy","sad","surprised","angry","neutral"] }] }
+      { "name": "wave", "description": "Wave hello." },
+      { "name": "nod", "description": "Nod once." },
+      { "name": "smile", "description": "Smile warmly." },
+      { "name": "look_at_you", "cue": "look at you", "description": "Turn attention toward the user." }
     ]
   },
   "assets":  { "vrm": "/avatar.vrm", "portrait": "/portrait.png" },
@@ -164,27 +160,24 @@ action schema is validated by `validateActionSchema` and surfaced as
 ## 3. Wire format (action protocol)
 
 The model is constrained by a GBNF grammar to emit prose and (optionally)
-one or more tagged actions inline. The tag shape is:
+one or more bracketed cues inline. The cue shape is:
 
 ```
-<action name="wave" args='{"mood":"happy"}'/>
+[wave]
 ```
 
-- The tag is self-closing; no nested content.
-- `args` is a JSON object whose shape is fixed by the action schema. The
-  grammar allows only the exact arg names and types declared in
-  `character.json`.
+- The cue label is a short natural-language phrase wrapped in square brackets.
+- Each cue maps directly to one runtime action name from `character.json`.
 - Prose and actions can interleave. A turn may contain zero or many actions.
 
 `StreamingActionParser` consumes tokens incrementally and coalesces prose
 within a single drain pass, emitting:
 
-1. `prose` events for any user-visible text (action tags stripped out).
-2. `action` events as soon as a complete tag has been parsed and validated.
+1. `prose` events for any user-visible text (cues stripped out).
+2. `action` events as soon as a complete cue has been parsed and validated.
 
-The parser defers up to `TAG_PREFIX.length - 1 = 6` bytes of trailing
-ambiguous text between calls so a tag that straddles two token boundaries is
-never mis-emitted as prose.
+The parser defers any unfinished trailing `[` prefix between calls so a cue
+that straddles two token boundaries is never mis-emitted as prose.
 
 ---
 

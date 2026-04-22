@@ -16,20 +16,9 @@ import type { ActionSchema } from './action-schema.js';
 
 const SCHEMA: ActionSchema = {
   actions: [
-    {
-      name: 'wave',
-      args: [],
-    },
-    {
-      name: 'set_mood',
-      args: [
-        { name: 'mood', type: 'enum', values: ['happy', 'sad'] },
-      ],
-    },
-    {
-      name: 'shake_head',
-      args: [],
-    },
+    { name: 'wave' },
+    { name: 'smile' },
+    { name: 'shake_head' },
   ],
 };
 
@@ -42,48 +31,29 @@ test('compileActionGrammar throws ActionSchemaError on invalid input', () => {
 
 test('compileActionGrammar emits a root rule that requires at least one atom', () => {
   const grammar = compileActionGrammar(SCHEMA);
-  // Kleene-plus at root: grammar stack stays shallow (single frame per
-  // iteration) while still forbidding the zero-length match that caused a
-  // sampler deadlock with LFM2 earlier.
   assert.match(grammar, /^root ::= \( action-cue \| prose-char \)\+/m);
 });
 
 test('compileActionGrammar allows broad prose while reserving [ for cues', () => {
   const grammar = compileActionGrammar(SCHEMA);
-  // Negated class matches any single codepoint except `[`. This replaced a
-  // four-alternation positive-range rule that caused large grammar-stack
-  // fanout during sampling.
-  assert.match(grammar, /^prose-char ::= \[\^\[\]/m);
+  assert.match(grammar, /^prose-char ::= \[\^\[/m);
 });
 
 test('compileActionGrammar wraps cue labels in square brackets and restricts alternatives', () => {
   const grammar = compileActionGrammar(SCHEMA);
   assert.match(grammar, /action-cue ::= "\[" cue-label "\]"/);
-  assert.match(
-    grammar,
-    /cue-label ::= "wave" \| "mood: happy" \| "mood: sad" \| "shake head"/
-  );
+  assert.match(grammar, /cue-label ::= "wave" \| "smile" \| "shake head"/);
 });
 
-test('compileActionGrammar includes aliases even when prompt rendering stays canonical', () => {
+test('compileActionGrammar uses custom cue labels when provided', () => {
   const grammar = compileActionGrammar({
     actions: [
-      {
-        name: 'set_mood',
-        args: [
-          {
-            name: 'mood',
-            type: 'enum',
-            values: ['happy'],
-            cueLabels: { happy: 'smile' },
-            cueAliases: { happy: ['mood: happy', 'be happy'] },
-          },
-        ],
-      },
+      { name: 'look_at_you', cue: 'look at you' },
+      { name: 'look_down', cue: 'look down' },
     ],
   });
 
-  assert.match(grammar, /cue-label ::= "smile" \| "mood: happy" \| "be happy"/);
+  assert.match(grammar, /cue-label ::= "look at you" \| "look down"/);
 });
 
 test('compileActionGrammar rejects schemas with colliding cue labels', () => {
@@ -91,8 +61,8 @@ test('compileActionGrammar rejects schemas with colliding cue labels', () => {
     () =>
       compileActionGrammar({
         actions: [
-          { name: 'wave', args: [] },
-          { name: 'wave_', cueLabel: 'wave', args: [] },
+          { name: 'wave' },
+          { name: 'wave_again', cue: 'wave' },
         ],
       }),
     (error) => error instanceof ActionSchemaError
@@ -103,16 +73,5 @@ test('compileActionGrammar stays well below the bridge grammar size cap', () => 
   const grammar = compileActionGrammar(SCHEMA);
   const byteLength = new TextEncoder().encode(grammar).byteLength;
   assert.ok(byteLength < MAX_GRAMMAR_BYTES, `grammar was ${byteLength} bytes`);
-  // Realistic action grammars should be tiny — a few hundred bytes at most.
   assert.ok(byteLength < 4096, `grammar unexpectedly large: ${byteLength} bytes`);
-});
-
-test('compileActionGrammar handles schemas with only argless actions', () => {
-  const grammar = compileActionGrammar({
-    actions: [
-      { name: 'idle', args: [] },
-      { name: 'stop', args: [] },
-    ],
-  });
-  assert.match(grammar, /cue-label ::= "idle" \| "stop"/);
 });

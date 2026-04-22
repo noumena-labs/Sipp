@@ -17,7 +17,6 @@ export interface ChatMessage {
   readonly text: string;
   readonly actions: ReadonlyArray<{
     name: string;
-    args: Readonly<Record<string, unknown>>;
     label: string;
   }>;
   readonly pending?: boolean;
@@ -59,7 +58,7 @@ export function ChatPanel({ messages, onSend, disabled }: ChatPanelProps) {
               <span
                 key={index}
                 className="action-chip"
-                title={`${action.name} ${JSON.stringify(action.args)}`}
+                title={action.name}
               >
                 {action.label}
               </span>

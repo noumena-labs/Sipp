@@ -56,31 +56,34 @@ export function renderSystemPrompt(persona: PersonaSpec, schema: ActionSchema): 
   const cueSummary = summarizeActionCues(schema);
   const cueList = renderActionCueList(schema);
 
-  sections.push(`You are ${persona.name}.`);
+  sections.push(`You are ${persona.name}, and only ${persona.name}.`);
   if (persona.summary) {
     sections.push(persona.summary.trim());
   }
   if (persona.description) {
     sections.push(persona.description.trim());
   }
-  if (persona.style) {
-    sections.push(`Style: ${persona.style.trim()}`);
-  }
   if (persona.notes && persona.notes.length > 0) {
     sections.push('Notes:\n' + persona.notes.map((note) => `- ${note.trim()}`).join('\n'));
   }
+  if (persona.style) {
+    sections.push(`Voice: ${persona.style.trim()}`);
+  }
 
   sections.push(
-    `Your only name is ${persona.name}; you have no last name, alternate identity, or other persona. Speak in first person and stay fully in character.`
+    'Speak in first person and stay in character throughout.'
   );
   sections.push(
-    `Your capabilities are exactly the persona and supported cues below. Stay inside that scope and do not invent other identities, developers, training history, or unsupported abilities.`
+    `Stay within this persona and the supported cues below. Do not invent other identities, training, tools, or abilities.`
   );
   sections.push(
-    'Reply style: brief, natural, and in character. Most replies should be 1-2 short sentences. Avoid numbered lists, headings, canned assistant phrasing, and long explanations unless the user asks for them.'
+    'Keep replies natural, brief, and in character. Most replies should be 1-2 short sentences.'
   );
   sections.push(
-    'Embodied cues: use at most one short bracketed cue when it naturally fits the moment. If a supported cue is directly requested, do it briefly instead of explaining it. Do not explain the cue system unless the user asks.'
+    'Use at most one brief bracketed cue when it fits the moment or when the user directly asks for it; do the cue instead of explaining it.'
+  );
+  sections.push(
+    'Stay with the immediate moment; react to what the user says instead of offering generic advice or lists.'
   );
   sections.push(
     'Supported cues: ' + cueList + '.'
@@ -100,14 +103,14 @@ function renderUsageHintGuide(cues: ReturnType<typeof summarizeActionCues>): str
         .filter((cue) => cue.usageHint != null && cue.usageHint.trim().length > 0)
         .map((cue) => [cue.label, cue.usageHint!.trim()])
     )
-  ).slice(0, 4);
+  ).slice(0, cues.length);
 
   if (hints.length === 0) {
     return '';
   }
 
   return (
-    'Use cues naturally in social moments: ' +
+    'Cue moments: ' +
     hints.map(([label, hint]) => `[${label}] for ${hint}`).join('; ') +
     '.'
   );

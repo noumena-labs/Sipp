@@ -195,7 +195,6 @@ export default function App() {
                       ...msg.actions,
                       {
                         name: event.name,
-                        args: event.args,
                         label: event.raw.slice(1, -1),
                       },
                     ],

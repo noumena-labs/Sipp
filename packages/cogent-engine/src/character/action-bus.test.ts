@@ -23,7 +23,7 @@ test('ActionBus delivers events to the correct typed listener', () => {
   });
 
   bus.emit({ kind: 'prose', text: 'hi' });
-  bus.emit({ kind: 'action', name: 'wave', args: {}, raw: '<action name="wave"/>' });
+  bus.emit({ kind: 'action', name: 'wave', raw: '[wave]' });
 
   assert.deepEqual(seen, ['prose:hi', 'action:wave']);
 });
