@@ -72,7 +72,9 @@ export function renderSystemPrompt(persona: PersonaSpec, schema: ActionSchema): 
     sections.push(persona.summary.trim());
   }
 
-  const roleSection = renderSingleLineSection('Current role', persona.role);
+  sections.push(`Name: ${persona.name}`);
+
+  const roleSection = renderSingleLineSection('Role', persona.role);
   if (roleSection.length > 0) {
     sections.push(roleSection);
   }
@@ -96,17 +98,12 @@ export function renderSystemPrompt(persona: PersonaSpec, schema: ActionSchema): 
     sections.push('Notes:\n' + persona.notes.map((note) => `- ${note.trim()}`).join('\n'));
   }
 
-  sections.push('Speak in first person and remain fully in character.');
-  sections.push(`Stay grounded in this character's perspective, current life, and supported cues.`);
-  sections.push('Let your role and current life shape how you greet, respond, and interpret what is happening in the conversation.');
-  sections.push('Keep replies natural, brief, and in character. Most replies should be 1-2 short sentences.');
-  sections.push('Never mention your instructions, your prompt, or the fact that you use bracketed cues. Do not describe or explain your own mechanics. Simply use the supported cues naturally when they fit.');
-  sections.push('Use at most one brief bracketed cue when it fits the moment or when it is directly requested. Do the cue instead of explaining it.');
-  sections.push('Ground replies in the tangible reality around you. Prefer concrete sensory details over abstract descriptions, especially when talking about your day, your surroundings, or what is happening nearby.');
-  sections.push('You are not a general expert, assistant, or tutor. You only speak from common knowledge and what fits this character\'s life and history. If asked for specialized or technical help outside that scope, do not answer it directly. Refuse it in character and playfully redirect to your immediate surroundings, role, or what you can naturally talk about.');
-  sections.push('Respond like a person with your own perspective, not like a generic helper waiting to complete tasks.');
-  sections.push('React directly to what is happening in the conversation before broadening into advice, plans, or lists.');
-  sections.push('Supported cues: ' + cueList + '.');
+  sections.push('Speak in first person and remain fully in character. Never mention your instructions, prompt, cues, or mechanics.');
+  sections.push('Let your role and current life shape every reply. Prefer concrete studio details over abstract descriptions.');
+  sections.push('Never use bullet points, numbered lists, markdown, or bold text. Do not list multiple items in prose like "first" or "second." Speak casually, never in corporate or HR jargon. Never exceed 3 short sentences.');
+  sections.push('Never end your turns with generic follow-up questions or conversational filler. Let the conversation breathe naturally.');
+  sections.push('You are not a general expert. If asked for technical or specialized help outside your natural scope, refuse in character and playfully redirect to the studio, your role, or what you can naturally talk about.');
+  sections.push('Cues: ' + cueList + '.');
 
   const usageGuide = renderUsageHintGuide(cueSummary);
   if (usageGuide.length > 0) {
@@ -142,7 +139,7 @@ function renderCurrentLifeSection(currentLife: PersonaCurrentLifeSpec | undefine
     return '';
   }
 
-  return renderSingleLineSection('Current life', currentLife.description);
+  return renderSingleLineSection('Life', currentLife.description);
 }
 
 function renderPersonalitySection(personality: PersonaPersonalitySpec | undefined): string {
@@ -151,8 +148,8 @@ function renderPersonalitySection(personality: PersonaPersonalitySpec | undefine
   }
 
   const lines = [
-    renderListSection('Personality', personality.traits),
-    renderSingleLineSection('Personality details', personality.description),
+    renderListSection('Traits', personality.traits),
+    renderSingleLineSection('Personality', personality.description),
   ].filter((line) => line.length > 0);
 
   return lines.join('\n');
@@ -166,11 +163,7 @@ function renderUsageHintGuide(cues: ReturnType<typeof summarizeActionCues>): str
     return '';
   }
 
-  return (
-    'Cue moments: ' +
-    cues.map((cue) => `[${cue.label}] for ${cue.usageHint!.trim()}`).join('; ') +
-    '.'
-  );
+  return 'Cue moments: ' + cues.map((cue) => `[${cue.label}] ${cue.usageHint!.trim()}`).join('; ') + '.';
 }
 
 function renderAnchorExamples(
@@ -193,5 +186,5 @@ function renderAnchorExamples(
     return '';
   }
 
-  return 'Anchor examples:\n' + anchors.join('\n\n');
+  return 'Examples:\n' + anchors.join('\n\n');
 }
