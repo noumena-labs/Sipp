@@ -289,6 +289,12 @@ async function handleGetBackendObservability(): Promise<WorkerBackendObservabili
   };
 }
 
+async function handleApplyChatTemplate(
+  message: Extract<WorkerRequestMessage, { kind: 'apply-chat-template' }>
+): Promise<string> {
+  return state.applyChatTemplate(message.messages, message.addAssistant);
+}
+
 self.onmessage = async (event: MessageEvent<WorkerRequestMessage>) => {
   const message = event.data;
   try {
@@ -340,6 +346,9 @@ self.onmessage = async (event: MessageEvent<WorkerRequestMessage>) => {
         break;
       case 'get-backend-observability':
         value = await handleGetBackendObservability();
+        break;
+      case 'apply-chat-template':
+        value = await handleApplyChatTemplate(message);
         break;
       default:
         throw new Error('Unknown worker request kind.');

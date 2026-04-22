@@ -12,7 +12,6 @@
 
 import type { ActionSchema } from './action-schema.js';
 import { validateActionSchema } from './action-schema.js';
-import type { ChatFormat } from './custom-template.js';
 import type { PersonaSpec } from './persona.js';
 
 export interface CharacterAssets {
@@ -45,12 +44,6 @@ export interface CharacterConfig {
   readonly actions: ActionSchema;
   readonly assets?: CharacterAssets;
   readonly memory?: CharacterMemoryConfig;
-  /**
-   * Optional override for the chat-prompt format. When omitted, the agent
-   * sniffs it from the model's embedded chat template. Useful when a
-   * model ships a non-standard or missing template.
-   */
-  readonly chatFormat?: ChatFormat;
 }
 
 export class CharacterConfigError extends Error {
@@ -121,35 +114,12 @@ export function parseCharacterConfig(raw: unknown): CharacterConfig {
     }
   }
 
-  const chatFormatRaw = source.chatFormat;
-  let chatFormat: ChatFormat | undefined;
-  if (chatFormatRaw != null) {
-    if (typeof chatFormatRaw !== 'string') {
-      throw new CharacterConfigError('`chatFormat` must be a string if present.');
-    }
-    const allowed: ReadonlyArray<ChatFormat> = [
-      'chatml',
-      'llama3',
-      'llama2',
-      'mistral',
-      'gemma',
-      'phi3',
-    ];
-    if (!allowed.includes(chatFormatRaw as ChatFormat)) {
-      throw new CharacterConfigError(
-        `\`chatFormat\` must be one of: ${allowed.join(', ')}.`
-      );
-    }
-    chatFormat = chatFormatRaw as ChatFormat;
-  }
-
   return {
     id,
     persona: persona as PersonaSpec,
     actions: actions as ActionSchema,
     assets: (assets as CharacterAssets | undefined) ?? undefined,
     memory: (memory as CharacterMemoryConfig | undefined) ?? undefined,
-    ...(chatFormat ? { chatFormat } : {}),
   };
 }
 

@@ -440,9 +440,8 @@ export class WasmBridge {
    * or when the model has no embedded chat template.
    *
    * Retained as a general-purpose bridge API for callers that want the
-   * llama.cpp-native formatting path. The in-engine CharacterAgent uses its
-   * own cross-model custom template builder instead (see
-   * src/character/custom-template.ts).
+   * model-native chat formatting path. CharacterAgent now uses this same
+   * template-application path via the runtime surface.
    */
   public applyChatTemplate(
     messages: ChatTemplateMessage[],

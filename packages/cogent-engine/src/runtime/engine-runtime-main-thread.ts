@@ -36,6 +36,7 @@ import {
 } from './queued-request-pump.js';
 import { RequestTracker } from './request-tracker.js';
 import {
+  type ChatTemplateMessage,
   parseBackendObservabilityJson,
   WasmBridge,
 } from '../wasm/wasm-bridge.js';
@@ -55,6 +56,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private cachedMediaMarker: string | null = null;
   private cachedChatTemplate: string | null = null;
   private cachedBosText: string = '';
+  private cachedEosText: string = '';
   private readonly opfs = new FileSystemStorage();
   private readonly browserModelCache = new BrowserModelCache(this.opfs);
   private readonly modelLoader: MainThreadModelLoader;
@@ -386,6 +388,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.cachedMediaMarker = null;
     this.cachedChatTemplate = null;
     this.cachedBosText = '';
+    this.cachedEosText = '';
     this.transportObservability = {
       ...DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY,
     };
@@ -641,6 +644,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.cachedMediaMarker = bridge.getMediaMarker();
     this.cachedChatTemplate = bridge.getChatTemplate();
     this.cachedBosText = bridge.getBosText();
+    this.cachedEosText = bridge.getEosText();
 
     this.modelLoader.cleanupAfterEngineInit(module);
   }
@@ -888,6 +892,17 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
   public getBosText(): string {
     return this.cachedBosText;
+  }
+
+  public getEosText(): string {
+    return this.cachedEosText;
+  }
+
+  public async applyChatTemplate(
+    messages: ChatTemplateMessage[],
+    addAssistant: boolean
+  ): Promise<string> {
+    return this.getReadyEngineBridge().applyChatTemplate(messages, addAssistant);
   }
 
   public async getBackendObservability(): Promise<BackendObservability | null> {

@@ -103,6 +103,7 @@ class MockMainThreadModule {
   public lastQueuedCallbackPtr = 0;
   public mediaMarker: string | null = null;
   public chatTemplate: string | null = null;
+  public eosText = '</s>';
   public appliedChatTemplateText = '';
   public returnEmptyAppliedChatTemplate = false;
   public lastAppliedChatTemplateMessages: Array<{
@@ -275,6 +276,8 @@ class MockMainThreadModule {
         return this.mediaMarker == null ? 0 : this.writeTempCString(this.mediaMarker);
       case 'CE_GetChatTemplate':
         return this.chatTemplate == null ? 0 : this.writeTempCString(this.chatTemplate);
+      case 'CE_GetEosText':
+        return this.writeTempCString(this.eosText);
       case 'CE_ApplyChatTemplate': {
         if (this.chatTemplate == null) {
           return 0;
@@ -1267,6 +1270,28 @@ test('MainThreadEngineRuntime lets a late runQueuedRequest() waiter observe an a
   assert.ok(stepCallsBeforeWaiter > 0);
   assert.equal(module.runStepCallCount, stepCallsBeforeWaiter);
   assert.equal(response.outputText, 'tok1tok2');
+});
+
+test('MainThreadEngineRuntime applies the model chat template through WasmBridge', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success');
+  module.chatTemplate = 'template';
+  module.appliedChatTemplateText = 'templated:ok';
+  attachReadyModule(runtime, module);
+
+  const rendered = await runtime.applyChatTemplate(
+    [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'hi' },
+    ],
+    true
+  );
+
+  assert.equal(rendered, 'templated:ok');
+  assert.deepEqual(module.lastAppliedChatTemplateMessages, [
+    { role: 'system', content: 'sys' },
+    { role: 'user', content: 'hi' },
+  ]);
 });
 
 test('MainThreadEngineRuntime does not yield to setTimeout during short WAITING bursts', async () => {

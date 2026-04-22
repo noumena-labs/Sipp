@@ -74,11 +74,22 @@ function createFakeEngine(): FakeEngine {
       scripts.push(script);
     },
     getChatTemplate(): string | null {
-      // Minimal ChatML signature so sniffChatFormat() returns 'chatml'.
-      return '<|im_start|>system<|im_end|>';
+      return 'fake-template';
     },
     getBosText(): string {
       return '';
+    },
+    getEosText(): string {
+      return '</s>';
+    },
+    async applyChatTemplate(
+      messages: Array<{ role: string; content: string }>,
+      addAssistant: boolean
+    ): Promise<string> {
+      const rendered = messages
+        .map((message) => `<${message.role}>\n${message.content}</${message.role}>\n`)
+        .join('');
+      return `${rendered}${addAssistant ? '<assistant>\n' : ''}`;
     },
     async queuePrompt(
       contextKey: string,
@@ -244,6 +255,39 @@ test('assistant memory stores prose only when actions are interleaved', async ()
   assert.equal(memory[1].content, 'Hello  there.');
 });
 
+test('chat() stops before leaked next-turn chat template markers', async () => {
+  const engine = createFakeEngine();
+  engine.enqueue({
+    tokens: ['Hello there.', '</assistant>\n<user>\nignored'],
+  });
+  const agent = new CharacterAgent(engine, buildConfig());
+
+  const events = await collectEvents(agent.chat('hello'));
+  const end = events[events.length - 1];
+  assert.ok(end.kind === 'turn-end');
+  assert.equal(end.finalText, 'Hello there.');
+  assert.ok(engine.cancelCalls.length >= 1);
+
+  const memory = agent.getMemory();
+  assert.equal(memory[1].content, 'Hello there.');
+});
+
+test('chat() trims partial boundary prefixes that arrive at end of stream', async () => {
+  const engine = createFakeEngine();
+  engine.enqueue({
+    tokens: ['Hello there.', '</assist'],
+  });
+  const agent = new CharacterAgent(engine, buildConfig());
+
+  const events = await collectEvents(agent.chat('hello'));
+  const end = events[events.length - 1];
+  assert.ok(end.kind === 'turn-end');
+  assert.equal(end.finalText, 'Hello there.');
+
+  const memory = agent.getMemory();
+  assert.equal(memory[1].content, 'Hello there.');
+});
+
 test('errored turns do not commit to memory and surface errorMessage', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: [], throwOnRun: new Error('boom') });
@@ -340,14 +384,13 @@ test('chat() passes a rendered raw prompt to queuePrompt', async () => {
   await collectEvents(agent.chat('hello'));
 
   const call = engine.queuePromptCalls[0];
-  // Should be the ChatML-rendered conversation, not empty/delta.
+  // Should be the applied-template conversation, not empty/delta.
   assert.ok(typeof call.promptText === 'string' && call.promptText.length > 0);
-  assert.ok(call.promptText.includes('<|im_start|>system'));
+  assert.ok(call.promptText.includes('<system>\n'));
   assert.ok(call.promptText.includes('Aria'));
-  assert.ok(call.promptText.includes('<|im_start|>user'));
+  assert.ok(call.promptText.includes('<user>\n'));
   assert.ok(call.promptText.includes('hello'));
-  // Trailing assistant header should be present to cue generation.
-  assert.ok(call.promptText.endsWith('<|im_start|>assistant\n'));
+  assert.ok(call.promptText.endsWith('<assistant>\n'));
 
   assert.ok(typeof call.options === 'object' && call.options != null);
   const opts = call.options as PromptOptions;
@@ -366,7 +409,7 @@ test('chat() includes prior turn history in the rendered prompt', async () => {
   const secondCall = engine.queuePromptCalls[1];
   const rendered = secondCall.promptText;
   // System + first user + first assistant + second user, in that order.
-  const idxSystem = rendered.indexOf('<|im_start|>system');
+  const idxSystem = rendered.indexOf('<system>\n');
   const idxFirstUser = rendered.indexOf('first question');
   const idxAssistant = rendered.indexOf('first reply');
   const idxSecondUser = rendered.indexOf('second question');

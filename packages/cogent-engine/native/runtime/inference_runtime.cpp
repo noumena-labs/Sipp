@@ -1893,17 +1893,12 @@ std::string InferenceRuntime::ApplyChatTemplate(
     return {};
   }
 
-  const std::size_t split_index = messages.size() - 1;
-  std::vector<common_chat_msg> past_messages;
-  past_messages.reserve(split_index);
-  for (std::size_t index = 0; index < split_index; ++index) {
-    past_messages.push_back(messages[index]);
-  }
-
   try {
-    return common_chat_format_single(chat_templates_.get(), past_messages,
-                                     messages.back(), add_assistant,
-                                     /* use_jinja = */ true);
+    common_chat_templates_inputs inputs;
+    inputs.messages = messages;
+    inputs.add_generation_prompt = add_assistant;
+    inputs.use_jinja = true;
+    return common_chat_templates_apply(chat_templates_.get(), inputs).prompt;
   } catch (const std::exception &error) {
     fprintf(stderr, "%s: warning: failed to apply common chat template: %s\n",
             __func__, error.what());

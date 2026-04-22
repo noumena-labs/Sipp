@@ -23,6 +23,7 @@ import {
   WorkerBackendObservabilityResult,
   WorkerRuntimeMetadata,
 } from './engine-runtime-worker-protocol.js';
+import type { ChatTemplateMessage } from '../wasm/wasm-bridge.js';
 import { createAbortError } from '../utils/abort.js';
 import {
   createDefaultTransportObservability,
@@ -519,6 +520,28 @@ export class WorkerEngineRuntime implements EngineRuntime {
     return this.cachedRuntimeMetadata?.bosText ?? '';
   }
 
+  public getEosText(): string {
+    return this.cachedRuntimeMetadata?.eosText ?? '';
+  }
+
+  public async applyChatTemplate(
+    messages: ChatTemplateMessage[],
+    addAssistant: boolean
+  ): Promise<string> {
+    await this.ensureWorkerInitialized();
+    const callId = this.nextCallId++;
+    return (await this.callWorkerWithAbort<
+      Extract<WorkerRequestMessage, { kind: 'apply-chat-template' }>
+    >(
+      callId,
+      {
+        kind: 'apply-chat-template',
+        messages,
+        addAssistant,
+      }
+    )) as string;
+  }
+
   public async runQueuedRequest(
     requestId: GenerateRequestId,
     options?: { signal?: AbortSignal }
@@ -863,6 +886,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
       chatTemplate: normalizeOptionalString(metadata?.chatTemplate),
       mediaMarker: normalizeOptionalString(metadata?.mediaMarker),
       bosText: typeof metadata?.bosText === 'string' ? metadata.bosText : '',
+      eosText: typeof metadata?.eosText === 'string' ? metadata.eosText : '',
     };
   }
 }

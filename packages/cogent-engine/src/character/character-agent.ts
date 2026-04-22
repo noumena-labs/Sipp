@@ -23,11 +23,7 @@ import {
   resolveMaxMemoryTurns,
   type CharacterConfig,
 } from './character-config.js';
-import {
-  buildChatPrompt,
-  sniffChatFormat,
-  type ChatFormat,
-} from './custom-template.js';
+import { buildAppliedChatTemplateContext } from './chat-template-metadata.js';
 import { renderSystemPrompt } from './persona.js';
 
 /**
@@ -49,6 +45,9 @@ export interface CharacterAgentEngine {
   getChatTemplate?(): string | null;
   /** Returns the model's BOS token rendered as text (may be empty). */
   getBosText?(): string;
+  /** Returns the model's EOS token rendered as text (may be empty). */
+  getEosText?(): string;
+  applyChatTemplate(messages: Array<{ role: string; content: string }>, addAssistant: boolean): Promise<string>;
 }
 
 export interface CharacterAgentOptions {
@@ -74,6 +73,12 @@ export interface ChatTurn {
  * ActionBus event shape so consumers can choose either transport.
  */
 export type ChatEvent = CharacterEvent;
+
+interface ResolvedPromptContext {
+  readonly promptText: string;
+  readonly boundaryMarkers: readonly string[];
+  readonly templateSource: string | null;
+}
 
 /**
  * A character-driven conversation agent. Pair one with a CogentEngine and a
@@ -143,31 +148,40 @@ export class CharacterAgent {
   public chat(userMessage: string, options: { signal?: AbortSignal } = {}): AsyncIterable<ChatEvent> {
     const trimmed = userMessage ?? '';
     const queue = new AsyncEventQueue<ChatEvent>();
-    const parser = new StreamingActionParser(this.config.actions);
 
     const emit = (event: ChatEvent): void => {
       queue.push(event);
       this.eventBus.emit(event);
     };
 
-    const turnMessages = this.buildTurnMessages(trimmed);
-    const renderedPrompt = this.renderPromptText(turnMessages);
-
     emit({ kind: 'turn-start', userMessage: trimmed });
 
     // Drive the engine in a detached async task so the async iterator can
     // begin delivering buffered events to the consumer immediately.
-    void this.runTurn(renderedPrompt, turnMessages, trimmed, parser, emit, queue, options.signal);
+    void (async () => {
+      const parser = new StreamingActionParser(this.config.actions);
+      const turnMessages = this.buildTurnMessages(trimmed);
+      try {
+        const promptContext = await this.buildPromptContext(turnMessages);
+        await this.runTurn(promptContext, turnMessages, trimmed, parser, emit, queue, options.signal);
+      } catch (error) {
+        emit({
+          kind: 'turn-end',
+          finalText: '',
+          cancelled: false,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+        queue.close();
+      }
+    })();
 
     return queue;
   }
 
   /**
    * Builds the ordered ChatMessage[] for the current turn. This sequence is
-   * rendered into raw prompt text via our own template builder (see
-   * `renderPromptText`); we no longer delegate to llama.cpp's native chat
-   * template because its single-message delta formatter silently drops the
-   * system turn when it's the first in history.
+   * rendered through the model's embedded chat template so the character
+   * system prompt and turn history follow the model's native chat contract.
    */
   private buildTurnMessages(userMessage: string): ChatMessage[] {
     const messages: ChatMessage[] = [{ role: 'system', content: this.systemPrompt }];
@@ -179,33 +193,15 @@ export class CharacterAgent {
   }
 
   /**
-   * Resolves the effective chat format: config override > sniff from the
-   * model's embedded template > throw. Then renders the full conversation
-   * into a raw prompt string with the model's BOS prefix.
+   * Renders the full conversation through the model's embedded chat template
+   * and derives assistant boundaries from that applied template output.
    */
-  private renderPromptText(messages: ChatMessage[]): string {
-    const override = this.config.chatFormat;
-    const templateSource = this.engine.getChatTemplate?.() ?? null;
-    const format: ChatFormat | null =
-      override ?? sniffChatFormat(templateSource);
-    if (format == null) {
-      throw new Error(
-        'CharacterAgent: unable to resolve chat format. Model has no embedded ' +
-          'chat_template and no `chatFormat` override was provided in CharacterConfig. ' +
-          'Set `chatFormat` to one of: chatml, llama3, llama2, mistral, gemma, phi3.'
-      );
-    }
-    const bosText = this.engine.getBosText?.() ?? '';
-    return buildChatPrompt({
-      format,
-      messages,
-      bosText,
-      addGenerationPrompt: true,
-    });
+  private async buildPromptContext(messages: ChatMessage[]): Promise<ResolvedPromptContext> {
+    return buildAppliedChatTemplateContext(this.engine, messages);
   }
 
   private async runTurn(
-    promptText: string,
+    promptContext: ResolvedPromptContext,
     messages: ChatMessage[],
     userMessage: string,
     parser: StreamingActionParser,
@@ -215,19 +211,25 @@ export class CharacterAgent {
   ): Promise<void> {
     let assistantProse = '';
     let rawOutputText = '';
+    let pendingText = '';
     let requestId: GenerateRequestId = 0;
     let cancelled = false;
     let errorMessage: string | undefined;
+    let reachedBoundary = false;
     const contextKey = this.nextTurnContextKey();
+    const promptText = promptContext.promptText;
+    const boundaryMarkers = promptContext.boundaryMarkers;
 
     console.info('[CharacterAgent] queuePrompt input', {
       characterId: this.config.id,
       contextKey,
+      templateSourcePreview: promptContext.templateSource?.slice(0, 160) ?? null,
       userMessage,
       messages,
       promptTextPreview: promptText.slice(0, 400),
       promptTextByteLength: promptText.length,
       maxOutputTokens: this.maxOutputTokens,
+      boundaryMarkers,
       // Temporarily disable action grammar while debugging prompt quality so
       // we can compare unconstrained model responses 1:1 against the
       // grammar-constrained path.
@@ -235,12 +237,11 @@ export class CharacterAgent {
       //grammar: undefined,
     });
 
-    const onToken = (token: string): void => {
-      if (token.length === 0) {
+    const emitParsedText = (text: string): void => {
+      if (text.length === 0) {
         return;
       }
-      rawOutputText += token;
-      const events = parser.consume(token);
+      const events = parser.consume(text);
       for (const event of events) {
         if (event.kind === 'prose') {
           assistantProse += event.text;
@@ -249,13 +250,37 @@ export class CharacterAgent {
       }
     };
 
+    const requestBoundaryStop = (): void => {
+      if (requestId === 0 || signal?.aborted || !this.engine.cancelQueuedRequest) {
+        return;
+      }
+      void this.engine.cancelQueuedRequest(requestId).catch(() => {
+        // Best-effort only; generation may already be terminating naturally.
+      });
+    };
+
+    const onToken = (token: string): void => {
+      if (token.length === 0 || reachedBoundary) {
+        return;
+      }
+      rawOutputText += token;
+      pendingText += token;
+
+      const split = splitOnAssistantBoundary(pendingText, boundaryMarkers);
+      emitParsedText(split.safeText);
+      pendingText = split.trailingText;
+
+      if (split.hitBoundary) {
+        pendingText = '';
+        reachedBoundary = true;
+        requestBoundaryStop();
+      }
+    };
+
     try {
       const promptOptions: PromptOptions = {
         nTokens: this.maxOutputTokens,
         promptFormat: 'raw',
-        // Temporarily disable action grammar while debugging prompt quality so
-        // we can isolate whether constrained decoding is causing nonsensical
-        // replies. Re-enable this once the baseline chat path is validated.
         grammar: this.grammarSource,
         onToken,
         signal,
@@ -263,17 +288,21 @@ export class CharacterAgent {
       requestId = await this.engine.queuePrompt(contextKey, promptText, promptOptions);
       const response = await this.engine.runQueuedRequest(requestId, { signal });
       rawOutputText = response.outputText;
-      cancelled = response.cancelled;
+      cancelled = response.cancelled && !reachedBoundary;
       if (response.failed && response.errorMessage) {
         errorMessage = response.errorMessage;
       }
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : String(error);
-      if (signal?.aborted) {
+      if (reachedBoundary && !signal?.aborted) {
+        cancelled = false;
+      } else {
+        errorMessage = error instanceof Error ? error.message : String(error);
+      }
+      if (signal?.aborted && !reachedBoundary) {
         cancelled = true;
       }
       // Best-effort cancel in case the runtime still holds the request.
-      if (requestId !== 0 && this.engine.cancelQueuedRequest) {
+      if (requestId !== 0 && this.engine.cancelQueuedRequest && !reachedBoundary) {
         try {
           await this.engine.cancelQueuedRequest(requestId);
         } catch {
@@ -282,16 +311,11 @@ export class CharacterAgent {
       }
     }
 
-    // Drain any buffered prose or action still sitting in the parser.
-    const trailing = parser.flush();
-    for (const event of trailing) {
-      if (event.kind === 'prose') {
-        assistantProse += event.text;
-      }
-      emit(event);
+    if (!reachedBoundary) {
+      emitParsedText(trimTrailingBoundaryPrefix(pendingText, boundaryMarkers));
     }
 
-    const finalText = assistantProse.trim();
+    const finalText = this.buildFinalText(rawOutputText, boundaryMarkers).trim();
 
     console.info('[CharacterAgent] raw LLM output', {
       characterId: this.config.id,
@@ -299,6 +323,7 @@ export class CharacterAgent {
       requestId,
       cancelled,
       errorMessage,
+      reachedBoundary,
       rawOutputText,
       parsedProseText: finalText,
     });
@@ -321,6 +346,20 @@ export class CharacterAgent {
   private nextTurnContextKey(): string {
     this.turnSequence += 1;
     return `${this.config.id}::turn-${this.turnSequence}`;
+  }
+
+  private buildFinalText(rawOutputText: string, boundaryMarkers: readonly string[]): string {
+    const parser = new StreamingActionParser(this.config.actions);
+    const cleaned = sanitizeAssistantMemoryText(rawOutputText, boundaryMarkers);
+    const events = parser.consume(cleaned);
+    const trailing = parser.flush();
+    let prose = '';
+    for (const event of [...events, ...trailing]) {
+      if (event.kind === 'prose') {
+        prose += event.text;
+      }
+    }
+    return prose;
   }
 
   private pushTurnToMemory(turn: ChatTurn): void {
@@ -390,4 +429,86 @@ class AsyncEventQueue<T> implements AsyncIterable<T> {
       },
     };
   }
+}
+
+function splitOnAssistantBoundary(
+  text: string,
+  boundaryMarkers: readonly string[]
+): { safeText: string; trailingText: string; hitBoundary: boolean } {
+  let earliestIndex = -1;
+  let matchedMarker = '';
+
+  for (const marker of boundaryMarkers) {
+    if (marker.length === 0) {
+      continue;
+    }
+    const index = text.indexOf(marker);
+    if (index >= 0 && (earliestIndex < 0 || index < earliestIndex)) {
+      earliestIndex = index;
+      matchedMarker = marker;
+    }
+  }
+
+  if (earliestIndex >= 0) {
+    return {
+      safeText: text.slice(0, earliestIndex),
+      trailingText: text.slice(earliestIndex + matchedMarker.length),
+      hitBoundary: true,
+    };
+  }
+
+  let safeLength = text.length;
+  for (const marker of boundaryMarkers) {
+    if (marker.length <= 1) {
+      continue;
+    }
+    const overlap = longestSuffixPrefixOverlap(text, marker);
+    safeLength = Math.min(safeLength, text.length - overlap);
+  }
+
+  return {
+    safeText: text.slice(0, safeLength),
+    trailingText: text.slice(safeLength),
+    hitBoundary: false,
+  };
+}
+
+function trimTrailingBoundaryPrefix(
+  text: string,
+  boundaryMarkers: readonly string[]
+): string {
+  let out = text;
+  let changed = true;
+  while (changed && out.length > 0) {
+    changed = false;
+    for (const marker of boundaryMarkers) {
+      if (marker.length === 0) {
+        continue;
+      }
+      if (marker.startsWith(out)) {
+        out = '';
+        changed = true;
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+function sanitizeAssistantMemoryText(
+  text: string,
+  boundaryMarkers: readonly string[]
+): string {
+  const split = splitOnAssistantBoundary(text, boundaryMarkers);
+  return split.safeText;
+}
+
+function longestSuffixPrefixOverlap(source: string, marker: string): number {
+  const maxLength = Math.min(source.length, marker.length - 1);
+  for (let length = maxLength; length > 0; length -= 1) {
+    if (source.endsWith(marker.slice(0, length))) {
+      return length;
+    }
+  }
+  return 0;
 }

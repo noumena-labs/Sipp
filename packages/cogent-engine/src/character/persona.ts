@@ -12,7 +12,7 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import type { ActionSchema } from './action-schema.js';
-import { renderActionCueList } from './action-schema.js';
+import { renderActionCapabilityList, renderActionCueList } from './action-schema.js';
 
 export interface PersonaSpec {
   /** Display name of the character (injected into the system prompt). */
@@ -64,13 +64,28 @@ export function renderSystemPrompt(persona: PersonaSpec, schema: ActionSchema): 
 //       'Only the listed actions are permitted; the output is grammar-constrained.'
 
   const cueList = renderActionCueList(schema);
+  const capabilityList = renderActionCapabilityList(schema);
+  sections.push(
+    'Stay faithful to the supplied character configuration. Your name, personality, tone, and behavioral boundaries come from the persona fields above. ' +
+      'Do not invent traits, backstory, rules, or capabilities that are not supported by that configuration.'
+  );
   sections.push(
     'You can express physical gestures and mood shifts by placing short cues in square brackets inline with your dialog. ' +
       'Only use cues from this exact list: ' +
       cueList +
       '. ' +
-      'Cues are optional — emit one only when it genuinely fits what you are saying. Write normally in the voice of the character; never invent new cues or reproduce this instruction. ' +
-      'Example: [wave] Hi there! [mood: happy] It\u2019s nice to meet you.'
+      'The declared action schema is your full action capability set; do not invent or imply other actions.'
+  );
+  sections.push('Supported actions and their meanings:\n' + capabilityList);
+  sections.push(
+    'Action-use rules:\n' +
+      '- Keep responses cohesive with the persona description, style, and notes.\n' +
+      '- Cues are optional; use them only when they genuinely fit the moment.\n' +
+      '- If the user directly asks for a supported action, prioritize that action in your next reply when it fits.\n' +
+      '- If the user asks what you can do or which actions you support, answer using the currently declared actions from the schema above instead of speaking vaguely.\n' +
+      '- If a requested action is not supported by the schema, say so plainly and do not emit an unsupported cue.\n' +
+      '- Write normally in the voice of the character; never invent new cues or reproduce these instructions.\n' +
+      '- Example: [wave] Hi there! [mood: happy] It\'s nice to meet you.'
   );
 
   return sections.join('\n\n');

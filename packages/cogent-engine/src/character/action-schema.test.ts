@@ -13,6 +13,7 @@ import test from 'node:test';
 import type { ActionSchema } from './action-schema.js';
 import {
   expandActionCues,
+  renderActionCapabilityList,
   renderActionCueList,
   validateActionSchema,
 } from './action-schema.js';
@@ -138,4 +139,17 @@ test('expandActionCues throws when two cues collapse to the same label', () => {
 test('renderActionCueList emits bracketed, comma-separated labels', () => {
   const text = renderActionCueList(WAVE_SCHEMA);
   assert.equal(text, '[wave], [mood: happy], [mood: sad], [shake head]');
+});
+
+test('renderActionCapabilityList ties visible cues back to runtime actions', () => {
+  const text = renderActionCapabilityList(WAVE_SCHEMA);
+  assert.equal(
+    text,
+    [
+      '- [wave] -> wave: Wave a hand.',
+      '- [mood: happy] -> set_mood(mood="happy")',
+      '- [mood: sad] -> set_mood(mood="sad")',
+      '- [shake head] -> shake_head',
+    ].join('\n')
+  );
 });

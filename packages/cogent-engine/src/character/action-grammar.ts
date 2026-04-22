@@ -36,6 +36,12 @@ export class ActionSchemaError extends Error {
 }
 
 /**
+ * Minimal diagnostic grammar used to prove whether grammar-constrained
+ * decoding works at all through the runtime path.
+ */
+export const MINIMAL_TEST_GRAMMAR_SOURCE = 'root ::= "yes" | "no"\n';
+
+/**
  * Generates a GBNF grammar that:
  *   - always starts at `root`;
  *   - accepts any interleaving of prose characters and bracketed cues;
@@ -63,25 +69,21 @@ export function compileActionGrammar(schema: ActionSchema): string {
 
   const rules: string[] = [];
 
-  // `root` is one or more atoms; an atom is either a prose character or a
-  // bracketed cue. Requiring at least one atom avoids the zero-length root
-  // deadlock we observed with LFM2 under grammar-constrained sampling.
-  rules.push('root ::= atom atom*');
-  rules.push('atom ::= prose-char | action-cue');
+  // `root` is one or more atoms, where an atom is either a bracketed action
+  // cue or a single prose character. Using `(alt)+` directly (instead of an
+  // `atom atom*` pair with an intermediate rule) keeps the grammar stack
+  // shallow during sampling: one fewer rule layer, single stack frame per
+  // iteration. Requiring `+` (one-or-more) keeps the zero-length deadlock
+  // fix we need with stochastic samplers.
+  rules.push('root ::= ( action-cue | prose-char )+');
 
-  // Prose is expressed as explicit positive ranges rather than a negated
-  // catch-all like `[^]` / `[^]` / `[^\[]`. The negated form
-  // parsed correctly, but under llama.cpp's grammar sampler it could still
-  // collapse the grammar stack to empty on accepted token pieces, which then
-  // aborts on the next sampler apply. These ranges keep ordinary dialog free
-  // while reserving `[` exclusively for action cues.
-  //
-  // Allowed prose:
-  //   - ASCII whitespace: space, tab, CR, LF
-  //   - Printable ASCII before `[` : U+0021..U+005A
-  //   - Printable ASCII after `[`  : U+005C..U+007E
-  //   - All non-ASCII Unicode code points
-  rules.push('prose-char ::= [ \\t\\n\\r] | [!-Z] | [\\\\-~] | [\\x80-\\U0010FFFF]');
+  // Prose is any single codepoint except `[`, which is reserved for the
+  // opening bracket of an action cue. The negated class `[^[]` compiles to
+  // a single stack frame per prose char, matching what llama.cpp's upstream
+  // example grammars use. This replaces an earlier four-alternation positive
+  // range rule that, while semantically equivalent, created a large stack
+  // fanout per sampled token piece.
+  rules.push('prose-char ::= [^[]');
 
   // Each cue is `[` + literal-label + `]`. The label alternation enumerates
   // the exact legal labels so the model cannot invent unknown cues.

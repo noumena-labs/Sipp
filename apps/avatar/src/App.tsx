@@ -195,9 +195,9 @@ export default function App() {
                 ? {
                     ...msg,
                     text:
-                      msg.text.trim().length === 0 && msg.actions.length === 0
+                      event.finalText.trim().length === 0 && msg.actions.length === 0
                         ? '[No visible response generated.]'
-                        : msg.text,
+                        : event.finalText,
                     pending: false,
                   }
                 : msg

@@ -13,6 +13,7 @@ import {
   RuntimeAggregateObservabilityMetrics,
   TransportObservability,
 } from '../types.js';
+import type { ChatTemplateMessage } from '../wasm/wasm-bridge.js';
 
 export type { CogentConfig };
 
@@ -70,6 +71,9 @@ export interface EngineRuntime {
    * emit the correct leading special token per model.
    */
   getBosText(): string;
+  /** Returns the model's EOS token rendered as text, or '' if unavailable. */
+  getEosText(): string;
+  applyChatTemplate(messages: ChatTemplateMessage[], addAssistant: boolean): Promise<string>;
   cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean>;
   queuePrompt(
     contextKey: string,

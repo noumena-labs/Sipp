@@ -1,6 +1,7 @@
 import { CogentConfig } from '../cogent-config.js';
 import { MainThreadEngineRuntime } from './engine-runtime-main-thread.js';
 import { GenerateRequestId, TransportObservability } from '../types.js';
+import type { ChatTemplateMessage } from '../wasm/wasm-bridge.js';
 import {
   WorkerResponseMessage,
   WorkerRuntimeMetadata,
@@ -265,6 +266,14 @@ export class WorkerEntryState {
     return runtime.queuePrompt(contextKey, promptText, queuedOptions);
   }
 
+  public async applyChatTemplate(
+    messages: ChatTemplateMessage[],
+    addAssistant: boolean
+  ): Promise<string> {
+    const runtime = this.ensureEngine();
+    return runtime.applyChatTemplate(messages, addAssistant);
+  }
+
   public closeStreamModelLoad(callId: number): void {
     const loadState = this.activeModelLoads.get(callId);
     if (loadState?.streamController == null) {
@@ -457,10 +466,12 @@ export class WorkerEntryState {
     const chatTemplate = normalizeOptionalString(runtime.getChatTemplate());
     const mediaMarker = normalizeOptionalString(runtime.getMediaMarker());
     const bosText = typeof runtime.getBosText === 'function' ? runtime.getBosText() : '';
+    const eosText = typeof runtime.getEosText === 'function' ? runtime.getEosText() : '';
     return {
       chatTemplate,
       mediaMarker,
       bosText,
+      eosText,
     };
   }
 }

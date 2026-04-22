@@ -590,6 +590,23 @@ test('WasmBridge flattens media buffers and exposes template + marker', () => {
   });
 });
 
+test('WasmBridge applies model chat template text', () => {
+  const module = new MockWasmBridgeModule();
+  module.chatTemplate = 'template';
+  module.appliedChatTemplateText = 'templated:ok';
+  const bridge = new WasmBridge(module);
+
+  const rendered = bridge.applyChatTemplate(
+    [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'hi' },
+    ],
+    true
+  );
+
+  assert.equal(rendered, 'templated:ok');
+});
+
 test('WasmBridge decodes token callbacks through the function table', () => {
   const module = new MockWasmBridgeModule();
   const bridge = new WasmBridge(module);

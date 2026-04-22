@@ -15,6 +15,7 @@ import {
   RuntimeAggregateObservabilityMetrics,
   TransportObservability,
 } from './types.js';
+import type { ChatTemplateMessage } from './wasm/wasm-bridge.js';
 
 function shouldUseWorker(config: CogentConfig): boolean {
   if (config.executionMode === 'main-thread') {
@@ -136,6 +137,14 @@ export class CogentEngine {
 
   public getBosText(): string {
     return this.runtime.getBosText();
+  }
+
+  public getEosText(): string {
+    return this.runtime.getEosText();
+  }
+
+  public async applyChatTemplate(messages: ChatTemplateMessage[], addAssistant: boolean): Promise<string> {
+    return this.runtime.applyChatTemplate(messages, addAssistant);
   }
 
   public async cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean> {

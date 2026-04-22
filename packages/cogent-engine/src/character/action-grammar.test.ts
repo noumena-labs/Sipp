@@ -42,20 +42,18 @@ test('compileActionGrammar throws ActionSchemaError on invalid input', () => {
 
 test('compileActionGrammar emits a root rule that requires at least one atom', () => {
   const grammar = compileActionGrammar(SCHEMA);
-  // Zero-or-more at root caused a sampler deadlock with LFM2 ("Shared batch
-  // tick could not make progress"); we require at least one atom instead.
-  assert.match(grammar, /^root ::= atom atom\*/m);
-  assert.match(grammar, /^atom ::= prose-char \| action-cue/m);
+  // Kleene-plus at root: grammar stack stays shallow (single frame per
+  // iteration) while still forbidding the zero-length match that caused a
+  // sampler deadlock with LFM2 earlier.
+  assert.match(grammar, /^root ::= \( action-cue \| prose-char \)\+/m);
 });
 
 test('compileActionGrammar allows broad prose while reserving [ for cues', () => {
   const grammar = compileActionGrammar(SCHEMA);
-  // The prose rule is expressed as explicit positive ranges rather than a
-  // negated character class to avoid a llama.cpp grammar-sampler edge case.
-  assert.match(
-    grammar,
-    /prose-char ::= \[ \\t\\n\\r\] \| \[!-Z\] \| \[\\\\-~\] \| \[\\x80-\\U0010FFFF\]/
-  );
+  // Negated class matches any single codepoint except `[`. This replaced a
+  // four-alternation positive-range rule that caused large grammar-stack
+  // fanout during sampling.
+  assert.match(grammar, /^prose-char ::= \[\^\[\]/m);
 });
 
 test('compileActionGrammar wraps cue labels in square brackets and restricts alternatives', () => {

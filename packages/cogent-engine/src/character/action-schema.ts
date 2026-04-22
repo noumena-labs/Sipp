@@ -34,7 +34,7 @@ export interface ActionArgSpec {
   readonly type: ActionArgType;
   /** Allowed values when {@link type} is `'enum'`. Ignored otherwise. */
   readonly values?: readonly string[];
-  /** Optional human-readable description (not surfaced to the model). */
+  /** Optional human-readable description for prompts and tooling. */
   readonly description?: string;
   /**
    * Numeric bounds — informational only (not enforced by the grammar itself).
@@ -58,7 +58,7 @@ export interface ActionSpec {
    * in snake_case.
    */
   readonly name: string;
-  /** Short description of the action (not surfaced to the model). */
+  /** Short description of the action for prompts and tooling. */
   readonly description?: string;
   /** Ordered list of argument specs. Order is significant for readability. */
   readonly args: readonly ActionArgSpec[];
@@ -237,4 +237,31 @@ export function expandActionCues(schema: ActionSchema): readonly ActionCue[] {
 export function renderActionCueList(schema: ActionSchema): string {
   const cues = expandActionCues(schema);
   return cues.map((cue) => `[${cue.label}]`).join(', ');
+}
+
+/**
+ * Renders a deterministic, model-facing capability list derived from the
+ * action schema. Each line ties the visible cue surface back to the runtime
+ * action name so prompts can describe capabilities without hardcoding any
+ * particular character.json shape.
+ */
+export function renderActionCapabilityList(schema: ActionSchema): string {
+  const cues = expandActionCues(schema);
+  const actionByName = new Map(schema.actions.map((action) => [action.name, action]));
+
+  return cues
+    .map((cue) => {
+      const action = actionByName.get(cue.name);
+      const argText =
+        Object.keys(cue.args).length === 0
+          ? cue.name
+          : `${cue.name}(${Object.entries(cue.args)
+              .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
+              .join(', ')})`;
+      const description = action?.description?.trim();
+      return description == null || description.length === 0
+        ? `- [${cue.label}] -> ${argText}`
+        : `- [${cue.label}] -> ${argText}: ${description}`;
+    })
+    .join('\n');
 }
