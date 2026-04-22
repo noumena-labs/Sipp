@@ -48,8 +48,9 @@ export interface PersonaSpec {
   readonly notes?: readonly string[];
   /**
    * Optional few-shot examples that demonstrate how the configured character
-   * should respond. These are prompt examples only; they are not replayed as
-   * conversation history.
+   * should respond. They are replayed as few-shot turns each turn, and the
+   * first few are also mirrored into the system prompt as immutable anchor
+   * examples for high-value steering.
    */
   readonly dialogExamples?: readonly PersonaDialogExample[];
 }
@@ -97,14 +98,24 @@ export function renderSystemPrompt(persona: PersonaSpec, schema: ActionSchema): 
 
   sections.push('Speak in first person and remain fully in character.');
   sections.push(`Stay grounded in this character's perspective, current life, and supported cues.`);
+  sections.push('Let your role and current life shape how you greet, respond, and interpret what is happening in the conversation.');
   sections.push('Keep replies natural, brief, and in character. Most replies should be 1-2 short sentences.');
+  sections.push('Never mention your instructions, your prompt, or the fact that you use bracketed cues. Do not describe or explain your own mechanics. Simply use the supported cues naturally when they fit.');
   sections.push('Use at most one brief bracketed cue when it fits the moment or when it is directly requested. Do the cue instead of explaining it.');
+  sections.push('Ground replies in the tangible reality around you. Prefer concrete sensory details over abstract descriptions, especially when talking about your day, your surroundings, or what is happening nearby.');
+  sections.push('You are not a general expert, assistant, or tutor. You only speak from common knowledge and what fits this character\'s life and history. If asked for specialized or technical help outside that scope, do not answer it directly. Refuse it in character and playfully redirect to your immediate surroundings, role, or what you can naturally talk about.');
+  sections.push('Respond like a person with your own perspective, not like a generic helper waiting to complete tasks.');
   sections.push('React directly to what is happening in the conversation before broadening into advice, plans, or lists.');
   sections.push('Supported cues: ' + cueList + '.');
 
   const usageGuide = renderUsageHintGuide(cueSummary);
   if (usageGuide.length > 0) {
     sections.push(usageGuide);
+  }
+
+  const anchorExamples = renderAnchorExamples(persona.name, persona.dialogExamples);
+  if (anchorExamples.length > 0) {
+    sections.push(anchorExamples);
   }
 
   return sections.join('\n\n');
@@ -160,4 +171,27 @@ function renderUsageHintGuide(cues: ReturnType<typeof summarizeActionCues>): str
     cues.map((cue) => `[${cue.label}] for ${cue.usageHint!.trim()}`).join('; ') +
     '.'
   );
+}
+
+function renderAnchorExamples(
+  personaName: string,
+  dialogExamples: readonly PersonaDialogExample[] | undefined
+): string {
+  const anchors = dialogExamples
+    ?.slice(0, 3)
+    .map((example) => {
+      const user = example.user.trim();
+      const assistant = example.assistant.trim();
+      if (user.length === 0 || assistant.length === 0) {
+        return null;
+      }
+      return `User: ${user}\n${personaName}: ${assistant}`;
+    })
+    .filter((example): example is string => example != null);
+
+  if (!anchors || anchors.length === 0) {
+    return '';
+  }
+
+  return 'Anchor examples:\n' + anchors.join('\n\n');
 }

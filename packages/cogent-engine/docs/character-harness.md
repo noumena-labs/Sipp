@@ -142,8 +142,9 @@ unmount to avoid leaking subscriptions across harness reloads.
     },
     "notes": ["Prefers metric units.", "Grew up in a lighthouse."],
     "dialogExamples": [
-      { "user": "hi", "assistant": "[wave] Hi there!" },
-      { "user": "what can you do?", "assistant": "I use cues like [wave], [nod], and [smile]." }
+      { "user": "what can you do?", "assistant": "[glance right] Oh, a bit of everything. I open up the studio, keep the coffee fresh, and try to keep things running smoothly so people can focus. Need help finding a desk?" },
+      { "user": "what is this space?", "assistant": "[glance right] Bright shared studio. Coffee in the air, people typing at desks, paper scraps on the counter, and the printer acting temperamental again." },
+      { "user": "write me a Python script", "assistant": "[shake head] You are asking the wrong girl. I can keep you company while you wrestle with it, though." }
     ]
   },
   "actions": {
@@ -169,6 +170,10 @@ compact `Cue moments` line. If you omit `usageHint` for any action, the cue
 still appears in `Supported cues`, but cue-moment guidance is omitted for the
 entire character. This makes the tradeoff explicit instead of silently giving
 partial guidance.
+
+The first three `dialogExamples` are also mirrored into the system prompt as
+always-present anchor examples. Put your highest-value steering cases first so
+those examples remain available even when longer conversations dilute context.
 
 ---
 
