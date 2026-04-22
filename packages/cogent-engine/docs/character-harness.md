@@ -130,7 +130,16 @@ unmount to avoid leaking subscriptions across harness reloads.
   "id": "aria-1",                  // stable prefix-cache key; [A-Za-z0-9_-]+
   "persona": {
     "name": "Aria",
-    "description": "A warm and curious companion.",
+    "summary": "A warm and curious companion.",
+    "role": "A community coordinator.",
+    "backstory": "She grew up in a stationery shop and learned to notice moods quickly.",
+    "currentLife": {
+      "description": "She spends her days keeping a shared studio running smoothly in a bright space full of coffee smells and little interruptions."
+    },
+    "personality": {
+      "traits": ["warm", "curious", "observant"],
+      "description": "She notices small details and can over-read tiny social signals."
+    },
     "notes": ["Prefers metric units.", "Grew up in a lighthouse."],
     "dialogExamples": [
       { "user": "hi", "assistant": "[wave] Hi there!" },
@@ -154,6 +163,12 @@ unmount to avoid leaking subscriptions across harness reloads.
 `CharacterConfigError` with a human-readable message on any violation. The
 action schema is validated by `validateActionSchema` and surfaced as
 `Invalid actions schema: …`.
+
+If every action includes a non-empty `usageHint`, the system prompt renders a
+compact `Cue moments` line. If you omit `usageHint` for any action, the cue
+still appears in `Supported cues`, but cue-moment guidance is omitted for the
+entire character. This makes the tradeoff explicit instead of silently giving
+partial guidance.
 
 ---
 

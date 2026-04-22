@@ -20,41 +20,50 @@ import {
 } from './character-config.js';
 
 const validActions: ActionSchema = {
-  actions: [
-    { name: 'wave', description: 'wave hello' },
-  ],
+  actions: [{ name: 'wave', description: 'wave hello' }],
 };
 
 function buildValid(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: 'aria-01',
-    persona: { name: 'Aria', description: 'A friendly guide.' },
+    persona: { name: 'Aria', summary: 'A friendly guide.' },
     actions: validActions,
     ...overrides,
   };
 }
 
-test('parseCharacterConfig accepts a minimal valid config and round-trips fields', () => {
+test('parseCharacterConfig accepts a valid simplified persona and trims fields', () => {
   const raw = buildValid({
     assets: { vrm: '/models/aria.vrm' },
     memory: { maxTurns: 4 },
     persona: {
-      name: 'Aria',
-      description: 'A friendly guide.',
-      dialogExamples: [
-        { user: ' hello ', assistant: ' [wave] Hi there! ' },
-      ],
+      name: ' Aria ',
+      summary: ' A friendly guide. ',
+      role: ' community coordinator ',
+      backstory: ' Grew up in a stationery shop. ',
+      currentLife: {
+        description: ' Runs a shared studio. ',
+      },
+      personality: {
+        traits: [' warm ', ' curious '],
+        description: ' Notices little details. ',
+      },
+      dialogExamples: [{ user: ' hello ', assistant: ' [wave] Hi there! ' }],
     },
   });
   const config = parseCharacterConfig(raw);
   assert.equal(config.id, 'aria-01');
   assert.equal(config.persona.name, 'Aria');
+  assert.equal(config.persona.summary, 'A friendly guide.');
+  assert.equal(config.persona.role, 'community coordinator');
+  assert.equal(config.persona.backstory, 'Grew up in a stationery shop.');
+  assert.equal(config.persona.currentLife?.description, 'Runs a shared studio.');
+  assert.deepEqual(config.persona.personality?.traits, ['warm', 'curious']);
+  assert.equal(config.persona.personality?.description, 'Notices little details.');
   assert.equal(config.actions.actions.length, 1);
   assert.equal(config.assets?.vrm, '/models/aria.vrm');
   assert.equal(config.memory?.maxTurns, 4);
-  assert.deepEqual(config.persona.dialogExamples, [
-    { user: 'hello', assistant: '[wave] Hi there!' },
-  ]);
+  assert.deepEqual(config.persona.dialogExamples, [{ user: 'hello', assistant: '[wave] Hi there!' }]);
 });
 
 test('parseCharacterConfig rejects non-object input', () => {
@@ -76,7 +85,7 @@ test('parseCharacterConfig rejects missing or invalid id', () => {
 });
 
 test('parseCharacterConfig rejects missing persona.name', () => {
-  const raw = buildValid({ persona: { description: 'nameless' } });
+  const raw = buildValid({ persona: { summary: 'nameless' } });
   assert.throws(() => parseCharacterConfig(raw), /persona\.name/);
 });
 
@@ -91,8 +100,7 @@ test('parseCharacterConfig surfaces action-schema error messages', () => {
   });
   assert.throws(
     () => parseCharacterConfig(raw),
-    (err: unknown) =>
-      err instanceof CharacterConfigError && /Invalid actions schema/.test(err.message)
+    (err: unknown) => err instanceof CharacterConfigError && /Invalid actions schema/.test(err.message)
   );
 });
 
@@ -138,17 +146,51 @@ test('parseCharacterConfig validates persona notes and dialogExamples', () => {
   );
 });
 
-test('resolveMaxMemoryTurns returns configured value or default', () => {
-  const withConfig: CharacterConfig = parseCharacterConfig(
-    buildValid({ memory: { maxTurns: 3 } })
+test('parseCharacterConfig validates currentLife and simplified personality', () => {
+  assert.throws(
+    () => parseCharacterConfig(buildValid({ persona: { name: 'Aria', currentLife: 'nope' } })),
+    /persona\.currentLife/
   );
+  assert.throws(
+    () => parseCharacterConfig(buildValid({ persona: { name: 'Aria', personality: 'nope' } })),
+    /persona\.personality/
+  );
+  assert.throws(
+    () =>
+      parseCharacterConfig(
+        buildValid({
+          persona: { name: 'Aria', currentLife: { description: ['open shop'] } },
+        })
+      ),
+    /persona\.currentLife\.description/
+  );
+  assert.throws(
+    () =>
+      parseCharacterConfig(
+        buildValid({
+          persona: { name: 'Aria', personality: { traits: 'warm' } },
+        })
+      ),
+    /persona\.personality\.traits/
+  );
+  assert.throws(
+    () =>
+      parseCharacterConfig(
+        buildValid({
+          persona: { name: 'Aria', personality: { description: ['quirky'] } },
+        })
+      ),
+    /persona\.personality\.description/
+  );
+});
+
+test('resolveMaxMemoryTurns returns configured value or default', () => {
+  const withConfig: CharacterConfig = parseCharacterConfig(buildValid({ memory: { maxTurns: 3 } }));
   assert.equal(resolveMaxMemoryTurns(withConfig), 3);
 
   const noMemory: CharacterConfig = parseCharacterConfig(buildValid());
   assert.equal(resolveMaxMemoryTurns(noMemory), DEFAULT_MEMORY_MAX_TURNS);
 
-  const zero: CharacterConfig = parseCharacterConfig(
-    buildValid({ memory: { maxTurns: 0 } })
-  );
+  const zero: CharacterConfig = parseCharacterConfig(buildValid({ memory: { maxTurns: 0 } }));
   assert.equal(resolveMaxMemoryTurns(zero), 0);
 });

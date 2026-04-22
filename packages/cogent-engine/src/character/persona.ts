@@ -19,25 +19,33 @@ export interface PersonaDialogExample {
   readonly assistant: string;
 }
 
+export interface PersonaCurrentLifeSpec {
+  readonly description?: string;
+}
+
+export interface PersonaPersonalitySpec {
+  readonly traits?: readonly string[];
+  readonly description?: string;
+}
+
 export interface PersonaSpec {
   /** Display name of the character (injected into the system prompt). */
   readonly name: string;
-  /** One-line persona summary (e.g. "A cheerful robotics assistant."). */
+  /** One-line persona summary. */
   readonly summary?: string;
-  /**
-   * Longer, freeform persona description. May include multiple paragraphs.
-   * Rendered verbatim into the system prompt after the summary line.
-   */
-  readonly description?: string;
+  /** One-line present-day role or social identity. */
+  readonly role?: string;
+  /** Present-tense grounding for what fills the character's life right now. */
+  readonly currentLife?: PersonaCurrentLifeSpec;
+  /** Minimal, designer-friendly personality authoring surface. */
+  readonly personality?: PersonaPersonalitySpec;
+  /** Optional short grounding about the character's past. */
+  readonly backstory?: string;
   /**
    * Static notes that become part of the system prompt every turn. Useful
-   * for world-state, safety rules, or authoring-time instructions.
+   * for character-specific constraints that do not fit a structured section.
    */
   readonly notes?: readonly string[];
-  /**
-   * Optional style guidelines (tone, pacing, formatting preferences).
-   */
-  readonly style?: string;
   /**
    * Optional few-shot examples that demonstrate how the configured character
    * should respond. These are prompt examples only; they are not replayed as
@@ -56,38 +64,44 @@ export function renderSystemPrompt(persona: PersonaSpec, schema: ActionSchema): 
   const cueSummary = summarizeActionCues(schema);
   const cueList = renderActionCueList(schema);
 
-  sections.push(`You are ${persona.name}, and only ${persona.name}.`);
+  sections.push(
+    `You are ${persona.name}. You have no identity, history, tools, or abilities outside what is written here.`
+  );
   if (persona.summary) {
     sections.push(persona.summary.trim());
   }
-  if (persona.description) {
-    sections.push(persona.description.trim());
+
+  const roleSection = renderSingleLineSection('Current role', persona.role);
+  if (roleSection.length > 0) {
+    sections.push(roleSection);
   }
+
+  const currentLifeSection = renderCurrentLifeSection(persona.currentLife);
+  if (currentLifeSection.length > 0) {
+    sections.push(currentLifeSection);
+  }
+
+  const personalitySection = renderPersonalitySection(persona.personality);
+  if (personalitySection.length > 0) {
+    sections.push(personalitySection);
+  }
+
+  const backstorySection = renderSingleLineSection('Backstory', persona.backstory);
+  if (backstorySection.length > 0) {
+    sections.push(backstorySection);
+  }
+
   if (persona.notes && persona.notes.length > 0) {
     sections.push('Notes:\n' + persona.notes.map((note) => `- ${note.trim()}`).join('\n'));
   }
-  if (persona.style) {
-    sections.push(`Voice: ${persona.style.trim()}`);
-  }
 
-  sections.push(
-    'Speak in first person and stay in character throughout.'
-  );
-  sections.push(
-    `Stay within this persona and the supported cues below. Do not invent other identities, training, tools, or abilities.`
-  );
-  sections.push(
-    'Keep replies natural, brief, and in character. Most replies should be 1-2 short sentences.'
-  );
-  sections.push(
-    'Use at most one brief bracketed cue when it fits the moment or when the user directly asks for it; do the cue instead of explaining it.'
-  );
-  sections.push(
-    'Stay with the immediate moment; react to what the user says instead of offering generic advice or lists.'
-  );
-  sections.push(
-    'Supported cues: ' + cueList + '.'
-  );
+  sections.push('Speak in first person and remain fully in character.');
+  sections.push(`Stay grounded in this character's perspective, current life, and supported cues.`);
+  sections.push('Keep replies natural, brief, and in character. Most replies should be 1-2 short sentences.');
+  sections.push('Use at most one brief bracketed cue when it fits the moment or when it is directly requested. Do the cue instead of explaining it.');
+  sections.push('React directly to what is happening in the conversation before broadening into advice, plans, or lists.');
+  sections.push('Supported cues: ' + cueList + '.');
+
   const usageGuide = renderUsageHintGuide(cueSummary);
   if (usageGuide.length > 0) {
     sections.push(usageGuide);
@@ -96,22 +110,54 @@ export function renderSystemPrompt(persona: PersonaSpec, schema: ActionSchema): 
   return sections.join('\n\n');
 }
 
-function renderUsageHintGuide(cues: ReturnType<typeof summarizeActionCues>): string {
-  const hints = Array.from(
-    new Map(
-      cues
-        .filter((cue) => cue.usageHint != null && cue.usageHint.trim().length > 0)
-        .map((cue) => [cue.label, cue.usageHint!.trim()])
-    )
-  ).slice(0, cues.length);
+function renderSingleLineSection(label: string, value: string | undefined): string {
+  const text = value?.trim();
+  if (!text) {
+    return '';
+  }
+  return `${label}: ${text}`;
+}
 
-  if (hints.length === 0) {
+function renderListSection(label: string, values: readonly string[] | undefined): string {
+  const items = values?.map((value) => value.trim()).filter((value) => value.length > 0) ?? [];
+  if (items.length === 0) {
+    return '';
+  }
+  return `${label}: ${items.join(', ')}.`;
+}
+
+function renderCurrentLifeSection(currentLife: PersonaCurrentLifeSpec | undefined): string {
+  if (!currentLife) {
+    return '';
+  }
+
+  return renderSingleLineSection('Current life', currentLife.description);
+}
+
+function renderPersonalitySection(personality: PersonaPersonalitySpec | undefined): string {
+  if (!personality) {
+    return '';
+  }
+
+  const lines = [
+    renderListSection('Personality', personality.traits),
+    renderSingleLineSection('Personality details', personality.description),
+  ].filter((line) => line.length > 0);
+
+  return lines.join('\n');
+}
+
+function renderUsageHintGuide(cues: ReturnType<typeof summarizeActionCues>): string {
+  if (cues.length === 0) {
+    return '';
+  }
+  if (cues.some((cue) => cue.usageHint == null || cue.usageHint.trim().length === 0)) {
     return '';
   }
 
   return (
     'Cue moments: ' +
-    hints.map(([label, hint]) => `[${label}] for ${hint}`).join('; ') +
+    cues.map((cue) => `[${cue.label}] for ${cue.usageHint!.trim()}`).join('; ') +
     '.'
   );
 }

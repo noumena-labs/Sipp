@@ -12,7 +12,12 @@
 
 import type { ActionSchema } from './action-schema.js';
 import { validateActionSchema } from './action-schema.js';
-import type { PersonaDialogExample, PersonaSpec } from './persona.js';
+import type {
+  PersonaCurrentLifeSpec,
+  PersonaDialogExample,
+  PersonaPersonalitySpec,
+  PersonaSpec,
+} from './persona.js';
 
 export interface CharacterAssets {
   /**
@@ -55,6 +60,37 @@ export class CharacterConfigError extends Error {
 
 const ID_RE = /^[A-Za-z0-9_\-]+$/;
 
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+}
+
+function validateOptionalStringArray(
+  owner: Record<string, unknown>,
+  key: string,
+  errorMessage: string
+): void {
+  const value = owner[key];
+  if (value != null && !isStringArray(value)) {
+    throw new CharacterConfigError(errorMessage);
+  }
+}
+
+function trimOptionalString(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function trimOptionalStringArray(value: unknown): readonly string[] | undefined {
+  if (!isStringArray(value)) {
+    return undefined;
+  }
+  const trimmed = value.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 /**
  * Parses and validates a CharacterConfig object (e.g. the result of
  * `JSON.parse(readFileSync('character.json'))`). Throws CharacterConfigError
@@ -81,8 +117,45 @@ export function parseCharacterConfig(raw: unknown): CharacterConfig {
   if (typeof personaRec.name !== 'string' || personaRec.name.trim().length === 0) {
     throw new CharacterConfigError('`persona.name` is required and must be a non-empty string.');
   }
+  if (personaRec.currentLife != null && typeof personaRec.currentLife !== 'object') {
+    throw new CharacterConfigError('`persona.currentLife` must be an object if present.');
+  }
+  if (personaRec.personality != null && typeof personaRec.personality !== 'object') {
+    throw new CharacterConfigError('`persona.personality` must be an object if present.');
+  }
+  if (personaRec.currentLife != null) {
+    const currentLifeRec = personaRec.currentLife as Record<string, unknown>;
+    for (const key of ['description']) {
+      const value = currentLifeRec[key];
+      if (value != null && typeof value !== 'string') {
+        throw new CharacterConfigError(`\`persona.currentLife.${key}\` must be a string if present.`);
+      }
+    }
+  }
+
+  if (personaRec.personality != null) {
+    const personalityRec = personaRec.personality as Record<string, unknown>;
+    validateOptionalStringArray(personalityRec, 'traits', '`persona.personality.traits` must be an array of strings if present.');
+    for (const key of ['description']) {
+      const value = personalityRec[key];
+      if (value != null && typeof value !== 'string') {
+        throw new CharacterConfigError(`\`persona.personality.${key}\` must be a string if present.`);
+      }
+    }
+  }
+
+  if (personaRec.role != null && typeof personaRec.role !== 'string') {
+    throw new CharacterConfigError('`persona.role` must be a string if present.');
+  }
+  if (personaRec.summary != null && typeof personaRec.summary !== 'string') {
+    throw new CharacterConfigError('`persona.summary` must be a string if present.');
+  }
+  if (personaRec.backstory != null && typeof personaRec.backstory !== 'string') {
+    throw new CharacterConfigError('`persona.backstory` must be a string if present.');
+  }
+
   if (personaRec.notes != null) {
-    if (!Array.isArray(personaRec.notes) || personaRec.notes.some((note) => typeof note !== 'string')) {
+    if (!isStringArray(personaRec.notes)) {
       throw new CharacterConfigError('`persona.notes` must be an array of strings if present.');
     }
   }
@@ -144,7 +217,24 @@ export function parseCharacterConfig(raw: unknown): CharacterConfig {
   return {
     id,
     persona: {
-      ...(persona as PersonaSpec),
+      name: personaRec.name.trim(),
+      summary: trimOptionalString(personaRec.summary),
+      role: trimOptionalString(personaRec.role),
+      currentLife:
+        personaRec.currentLife == null
+          ? undefined
+          : {
+              description: trimOptionalString((personaRec.currentLife as Record<string, unknown>).description),
+            } satisfies PersonaCurrentLifeSpec,
+      personality:
+        personaRec.personality == null
+          ? undefined
+          : {
+              traits: trimOptionalStringArray((personaRec.personality as Record<string, unknown>).traits),
+              description: trimOptionalString((personaRec.personality as Record<string, unknown>).description),
+            } satisfies PersonaPersonalitySpec,
+      backstory: trimOptionalString(personaRec.backstory),
+      notes: trimOptionalStringArray(personaRec.notes),
       dialogExamples:
         personaRec.dialogExamples == null
           ? undefined
@@ -152,7 +242,7 @@ export function parseCharacterConfig(raw: unknown): CharacterConfig {
               user: example.user.trim(),
               assistant: example.assistant.trim(),
             })),
-    },
+    } satisfies PersonaSpec,
     actions: actions as ActionSchema,
     assets: (assets as CharacterAssets | undefined) ?? undefined,
     memory: (memory as CharacterMemoryConfig | undefined) ?? undefined,

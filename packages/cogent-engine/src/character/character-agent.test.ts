@@ -28,7 +28,7 @@ import type { CharacterConfig } from './character-config.js';
 function buildConfig(overrides: Partial<CharacterConfig> = {}): CharacterConfig {
   return {
     id: 'aria-01',
-    persona: { name: 'Aria', description: 'A friendly guide.' },
+    persona: { name: 'Aria', summary: 'A friendly guide.' },
     actions: {
       actions: [
         {
@@ -440,13 +440,13 @@ test('chat() injects persona dialog examples as few-shot chat turns', async () =
   engine.enqueue({ tokens: ['[wave] hi'] });
   const agent = new CharacterAgent(
     engine,
-    buildConfig({
-      persona: {
-        name: 'Mira',
-        description: 'An observant companion.',
-        dialogExamples: [
-          { user: 'hello', assistant: '[wave] Hello there.' },
-          { user: 'are you okay?', assistant: '[settle] I am here with you.' },
+      buildConfig({
+        persona: {
+          name: 'Mira',
+          summary: 'An observant companion.',
+          dialogExamples: [
+            { user: 'hello', assistant: '[wave] Hello there.' },
+            { user: 'are you okay?', assistant: '[settle] I am here with you.' },
         ],
       },
       actions: {
