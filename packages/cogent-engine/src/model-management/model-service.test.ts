@@ -18,8 +18,8 @@ import type {
   GenerateResponse,
   InferenceInitConfig,
   InternalBundleDescriptor,
-  ModelLoadInfo,
   PromptOptions,
+  RequestObservabilityMetrics,
   RuntimeAggregateObservabilityMetrics,
   StagedModelBundle,
   StageModelBundleOptions,
@@ -175,48 +175,36 @@ class FakeRuntime implements EngineRuntime {
   public lastPrompt: string | null = null;
   public mediaMarker: string | null = null;
   public stageGate: Promise<void> | null = null;
+  private runtimeMetricsEnabled = false;
+  private backendProfilingEnabled = false;
+  private nextRequestId = 1;
+  private readonly queuedRequests = new Map<
+    GenerateRequestId,
+    {
+      promptText: string;
+      options?: number | PromptOptions;
+    }
+  >();
 
   public getExecutionMode(): EngineExecutionMode {
     return 'main-thread';
-  }
-
-  public getStagedModelInfo(): ModelLoadInfo | null {
-    return null;
   }
 
   public getTransportObservability(): TransportObservability {
     return {
       executionMode: 'main-thread',
       workerBacked: false,
-      enabled: false,
-    } as TransportObservability;
+      enabled: this.runtimeMetricsEnabled,
+      bufferedTokenLimit: 0,
+      flushIntervalMs: 0,
+      flushCount: 0,
+      coalescedTokenCount: 0,
+      maxObservedBufferedTokenCount: 0,
+      activeTokenTransport: this.runtimeMetricsEnabled ? 'runtime-events' : 'none',
+    };
   }
 
   public async initModule(): Promise<void> {}
-
-  public async stageModelUrl(): Promise<string> {
-    return '/model.gguf';
-  }
-
-  public async stageModelFile(): Promise<string> {
-    return '/model.gguf';
-  }
-
-  public async stageModelStream(): Promise<string> {
-    return '/model.gguf';
-  }
-
-  public stageModelBuffer(): string {
-    return '/model.gguf';
-  }
-
-  public async stageModelFiles(): Promise<string> {
-    return '/model.gguf';
-  }
-
-  public async stageModelUrls(): Promise<string> {
-    return '/model.gguf';
-  }
 
   public async stageModelBundle(
     descriptor: InternalBundleDescriptor,
@@ -242,16 +230,16 @@ class FakeRuntime implements EngineRuntime {
       detectionMethod: 'filename',
       modelType: null,
       modelArchitecture: null,
-      modelLoadInfo: null,
-      projectorLoadInfo: null,
     };
   }
 
   public async loadRuntimeModel(
     modelPathOrBundle: string | StagedModelBundle,
-    _config?: InferenceInitConfig
+    config?: InferenceInitConfig
   ): Promise<void> {
     this.loadCount += 1;
+    this.runtimeMetricsEnabled = config?.enableRuntimeObservability === true;
+    this.backendProfilingEnabled = config?.enableBackendProfiling === true;
     this.mediaMarker =
       typeof modelPathOrBundle === 'string' || modelPathOrBundle.multimodalProjectorPath == null
         ? null
@@ -263,10 +251,6 @@ class FakeRuntime implements EngineRuntime {
     this.mediaMarker = null;
   }
 
-  public readChatTemplate(): string | null {
-    return null;
-  }
-
   public readMediaMarker(): string | null {
     return this.mediaMarker;
   }
@@ -275,41 +259,71 @@ class FakeRuntime implements EngineRuntime {
     return true;
   }
 
-  public async enqueueQuery(): Promise<GenerateRequestId> {
-    return 1;
-  }
-
-  public async awaitQuery(): Promise<GenerateResponse> {
-    return {
-      requestId: 1,
-      outputText: 'ok',
-      cancelled: false,
-      failed: false,
-    };
-  }
-
-  public async executeQuery(
+  public async enqueueQuery(
     _contextKey: string,
     promptText: string,
-    options: number | PromptOptions = 128
-  ): Promise<string> {
+    options?: number | PromptOptions
+  ): Promise<GenerateRequestId> {
+    const requestId = this.nextRequestId++;
     this.lastPrompt = promptText;
+    this.queuedRequests.set(requestId, { promptText, options });
     if (typeof options === 'object') {
       options.onToken?.('token');
     }
-    return `answer:${promptText}`;
+    return requestId;
   }
 
-  public getRuntimeAggregateObservability(): RuntimeAggregateObservabilityMetrics | null {
-    return null;
+  public async awaitQuery(requestId: GenerateRequestId): Promise<GenerateResponse> {
+    const request = this.queuedRequests.get(requestId);
+    if (request == null) {
+      return {
+        requestId,
+        completed: false,
+        outputText: '',
+        cancelled: false,
+        failed: true,
+        errorMessage: `Missing fake request ${requestId}.`,
+      };
+    }
+    this.queuedRequests.delete(requestId);
+    return {
+      requestId,
+      completed: true,
+      outputText: `answer:${request.promptText}`,
+      cancelled: false,
+      failed: false,
+      requestObservability: this.runtimeMetricsEnabled ? this.createMetrics() : null,
+    };
   }
 
   public getRuntimeObservability(): RuntimeAggregateObservabilityMetrics | null {
-    return null;
+    return this.runtimeMetricsEnabled ? this.createMetrics() : null;
   }
 
   public async getBackendObservability(): Promise<BackendObservability | null> {
-    return null;
+    if (!this.backendProfilingEnabled) {
+      return null;
+    }
+    return {
+      profilingEnabled: true,
+      webgpuCompiled: false,
+      webgpuRegistered: false,
+      webgpuDeviceCount: 0,
+      gpuOffloadSupported: false,
+      engineInitialized: true,
+      availableBackends: [{ name: 'cpu', deviceCount: 1 }],
+      devices: [],
+    };
+  }
+
+  private createMetrics(): RequestObservabilityMetrics {
+    return {
+      totalMs: 12,
+      ttftMs: 4,
+      tokensPerSecond: 100,
+      inputTokenCount: 3,
+      outputTokenCount: 5,
+    };
   }
 }
 
@@ -355,6 +369,62 @@ test('ModelService loads, lists, tracks current, and queries text models', async
   assert.equal(answer, 'answer:hello');
   assert.deepEqual(tokens, ['token']);
   assert.equal(runtime.lastPrompt, 'hello');
+});
+
+test('ModelService keeps observability off by default', async () => {
+  const { service } = createService();
+  await service.load(file('text-model.gguf'));
+  await service.query('hello');
+
+  const snapshot = service.currentObservability();
+  assert.equal(snapshot.mode, 'off');
+  assert.equal(snapshot.state, 'ready');
+  assert.equal(snapshot.query?.status, 'success');
+  assert.equal(snapshot.runtime, undefined);
+  assert.equal(snapshot.profile, undefined);
+});
+
+test('ModelService captures runtime observability without backend profile data', async () => {
+  const { service } = createService();
+  const loaded = await service.load(file('runtime-model.gguf'), { observability: 'runtime' });
+  await service.query('hello');
+  await service.load(loaded.id, { observability: 'runtime' });
+
+  const snapshot = service.currentObservability();
+  assert.equal(snapshot.mode, 'runtime');
+  assert.equal(snapshot.runtime?.outputTokenCount, 5);
+  assert.equal(snapshot.profile, undefined);
+});
+
+test('ModelService emits lifecycle observability and captures runtime/profile modes', async () => {
+  const { service } = createService();
+  const events: string[] = [];
+  const unsubscribe = service.subscribeObservability((event) => {
+    events.push(event.type);
+  });
+
+  await service.load(file('profiled-model.gguf'), { observability: 'profile' });
+  await service.query('hello');
+
+  const snapshot = service.currentObservability();
+  assert.equal(snapshot.mode, 'profile');
+  assert.equal(snapshot.state, 'ready');
+  assert.equal(snapshot.query?.status, 'success');
+  assert.equal(snapshot.runtime?.tokensPerSecond, 100);
+  assert.equal(snapshot.runtime?.execution.mode, 'main-thread');
+  assert.equal(snapshot.profile?.profilingEnabled, true);
+  assert.deepEqual(events, ['load-start', 'load-complete', 'query-start', 'query-complete']);
+
+  service.close();
+  unsubscribe();
+  assert.equal(service.currentObservability().state, 'closed');
+  assert.deepEqual(events, [
+    'load-start',
+    'load-complete',
+    'query-start',
+    'query-complete',
+    'close',
+  ]);
 });
 
 test('ModelService switches models and reuses identical runtime fingerprints as no-ops', async () => {
@@ -446,6 +516,38 @@ test('ModelService marks installed entries broken when assets are missing', asyn
     createdAt: new Date(0).toISOString(),
     updatedAt: new Date(0).toISOString(),
   };
+  registry.manifest.models[broken.id] = broken;
+  const { service } = createService({ registry });
+
+  await assert.rejects(
+    () => service.load(broken.id),
+    (error) => error instanceof QueryError && error.code === 'MODEL_BROKEN'
+  );
+  assert.equal(registry.manifest.models[broken.id]?.status, 'broken');
+});
+
+test('ModelService marks installed entries broken when cached asset files are missing', async () => {
+  const registry = new MemoryRegistryStore();
+  const asset: AssetRecord = {
+    id: 'asset-corrupt-file',
+    kind: 'model',
+    name: 'corrupt.gguf',
+    hash: 'asset-corrupt-file',
+    bytes: 12,
+    storagePath: 'asset-corrupt-file-corrupt.gguf',
+    refCount: 1,
+    createdAt: new Date(0).toISOString(),
+  };
+  const broken: ModelEntry = {
+    id: 'model-corrupt-file',
+    name: 'corrupt.gguf',
+    modality: 'text',
+    status: 'ready',
+    modelAssetIds: [asset.id],
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+  };
+  registry.manifest.assets[asset.id] = asset;
   registry.manifest.models[broken.id] = broken;
   const { service } = createService({ registry });
 
