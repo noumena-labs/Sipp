@@ -6,12 +6,9 @@ export type ModelBundleProjectorStatus =
   | 'not-required'
   | 'explicit'
   | 'paired'
-  | 'discovered'
   | 'missing';
 
-export type ModelDetectionMethod = 'filename' | 'url' | 'hf-api' | 'gguf-metadata' | 'none';
-
-export type ProjectorDiscoverySource = 'hf-api' | 'head-probe' | 'none';
+export type ModelDetectionMethod = 'filename' | 'url' | 'gguf-metadata' | 'none';
 
 export interface ModelBundleUrlProjectorDescriptor {
   kind: 'url';
@@ -29,39 +26,39 @@ export type ModelBundleProjectorDescriptor =
   | ModelBundleUrlProjectorDescriptor
   | ModelBundleFileProjectorDescriptor;
 
-export interface UrlModelBundleDescriptor {
+export interface UrlBundleDescriptor {
   kind: 'url';
   url: string;
   destFileName?: string;
   projector?: ModelBundleProjectorDescriptor;
 }
 
-export interface UrlsModelBundleDescriptor {
+export interface UrlsBundleDescriptor {
   kind: 'urls';
   urls: string[];
   projector?: ModelBundleProjectorDescriptor;
 }
 
-export interface FileModelBundleDescriptor {
+export interface FileBundleDescriptor {
   kind: 'file';
   file: File;
   destFileName?: string;
   projector?: ModelBundleProjectorDescriptor;
 }
 
-export interface FilesModelBundleDescriptor {
+export interface FilesBundleDescriptor {
   kind: 'files';
   files: File[];
   projector?: ModelBundleProjectorDescriptor;
 }
 
-export type ModelBundleDescriptor =
-  | UrlModelBundleDescriptor
-  | UrlsModelBundleDescriptor
-  | FileModelBundleDescriptor
-  | FilesModelBundleDescriptor;
+export type InternalBundleDescriptor =
+  | UrlBundleDescriptor
+  | UrlsBundleDescriptor
+  | FileBundleDescriptor
+  | FilesBundleDescriptor;
 
-export interface PrepareModelBundleOptions {
+export interface StageModelBundleOptions {
   signal?: AbortSignal;
 }
 
@@ -75,21 +72,6 @@ export interface ModelDetectionResult {
   modelArchitecture: string | null;
 }
 
-export interface ProjectorDiscoveryResult {
-  projectorUrl: string | null;
-  candidates: string[];
-  source: ProjectorDiscoverySource;
-  message: string;
-}
-
-export interface ParsedHuggingFaceModelUrl {
-  org: string;
-  repo: string;
-  ref: string;
-  filename: string;
-  baseUrl: string;
-}
-
 export interface LocalProjectorResolutionResult<T> {
   modelFiles: T[];
   projectorFile: T | null;
@@ -97,7 +79,7 @@ export interface LocalProjectorResolutionResult<T> {
   errorMessage: string | null;
 }
 
-export interface PreparedModelBundle {
+export interface StagedModelBundle {
   sourceKind: ModelBundleSourceKind;
   modelPath: string;
   multimodalProjectorPath: string | null;

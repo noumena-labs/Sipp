@@ -1,7 +1,3 @@
-import { FileSystemStorage } from '../storage/file-system-storage.js';
-import {
-  BrowserModelCache,
-} from '../storage/browser-model-cache.js';
 import { CogentConfig, EngineModuleOptions } from '../cogent-config.js';
 import { normalizeInitConfig } from '../core/init-config.js';
 import {
@@ -16,11 +12,11 @@ import {
   GenerateRequestId,
   GenerateResponse,
   InferenceInitConfig,
-  ModelBundleDescriptor,
+  InternalBundleDescriptor,
   ModelLoadInfo,
   PromptOptions,
-  PreparedModelBundle,
-  PrepareModelBundleOptions,
+  StagedModelBundle,
+  StageModelBundleOptions,
   RuntimeAggregateObservabilityMetrics,
   TransportObservability,
 } from '../types.js';
@@ -55,8 +51,6 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private engineInitialized = false;
   private cachedMediaMarker: string | null = null;
   private cachedChatTemplate: string | null = null;
-  private readonly opfs = new FileSystemStorage();
-  private readonly browserModelCache = new BrowserModelCache(this.opfs);
   private readonly modelLoader: MainThreadModelLoader;
   private queuedPromptCallbacks = new Map<
     GenerateRequestId,
@@ -76,8 +70,6 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   constructor(private config: CogentConfig = {}) {
     this.modelLoader = new MainThreadModelLoader(
       this.config,
-      this.opfs,
-      this.browserModelCache,
       this.parseConfiguredUrl.bind(this),
       (info) => {
         this.lastModelLoadInfo = info;
@@ -93,7 +85,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       finalizeRequest: (bridge, requestId, options) => {
         this.finalizeRequest(bridge, requestId, options);
       },
-      cancelQueuedRequest: (requestId) => this.cancelQueuedRequest(requestId),
+      cancelQuery: (requestId) => this.cancelQuery(requestId),
     });
   }
 
@@ -156,7 +148,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return 'main-thread';
   }
 
-  public getLastModelLoadInfo(): ModelLoadInfo | null {
+  public getStagedModelInfo(): ModelLoadInfo | null {
     return this.lastModelLoadInfo;
   }
 
@@ -262,7 +254,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private getReadyEngineModule(): EngineModule {
     const module = this.getLoadedModule();
     if (!this.engineInitialized) {
-      throw new Error('Engine is not initialized. Call initEngine(modelPath, config?) first.');
+      throw new Error('Engine is not initialized. Call loadRuntimeModel(modelPath, config?) first.');
     }
     return module;
   }
@@ -504,14 +496,14 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return this.scheduler.pumpOnce();
   }
 
-  public async loadModelFromUrl(
+  public async stageModelUrl(
     url: string,
     destFileName: string = 'model.gguf',
     onProgress?: (pct: number) => void,
     signal?: AbortSignal
   ): Promise<string> {
     const module = await this.ensureModule();
-    return this.modelLoader.loadModelFromUrl(
+    return this.modelLoader.stageModelUrl(
       module,
       url,
       destFileName,
@@ -520,7 +512,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     );
   }
 
-  public async loadModelFromReadableStream(
+  public async stageModelStream(
     stream: ReadableStream<Uint8Array>,
     destFileName: string = 'model.gguf',
     options: {
@@ -530,7 +522,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     } = {}
   ): Promise<string> {
     const module = await this.ensureModule();
-    return this.modelLoader.loadModelFromReadableStream(
+    return this.modelLoader.stageModelStream(
       module,
       stream,
       destFileName,
@@ -538,14 +530,14 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     );
   }
 
-  public async loadModelFromFile(
+  public async stageModelFile(
     file: File,
     destFileName?: string,
     onProgress?: (pct: number) => void,
     signal?: AbortSignal
   ): Promise<string> {
     const module = await this.ensureModule();
-    return this.modelLoader.loadModelFromFile(
+    return this.modelLoader.stageModelFile(
       module,
       file,
       destFileName,
@@ -554,42 +546,42 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     );
   }
 
-  public loadModelFromBuffer(buffer: Uint8Array, destFileName: string = 'model.gguf'): string {
+  public stageModelBuffer(buffer: Uint8Array, destFileName: string = 'model.gguf'): string {
     const module = this.getLoadedModule();
-    return this.modelLoader.loadModelFromBuffer(module, buffer, destFileName);
+    return this.modelLoader.stageModelBuffer(module, buffer, destFileName);
   }
 
-  public async loadModelFromFileShards(
+  public async stageModelFiles(
     files: File[],
     onProgress?: (pct: number) => void,
     signal?: AbortSignal
   ): Promise<string> {
     const module = await this.ensureModule();
-    return this.modelLoader.loadModelFromFileShards(module, files, onProgress, signal);
+    return this.modelLoader.stageModelFiles(module, files, onProgress, signal);
   }
 
-  public async loadModelFromUrls(
+  public async stageModelUrls(
     urls: string[],
     onProgress?: (pct: number) => void,
     signal?: AbortSignal
   ): Promise<string> {
     const module = await this.ensureModule();
-    return this.modelLoader.loadModelFromUrls(module, urls, onProgress, signal);
+    return this.modelLoader.stageModelUrls(module, urls, onProgress, signal);
   }
 
-  public async prepareModelBundle(
-    descriptor: ModelBundleDescriptor,
-    options?: PrepareModelBundleOptions
-  ): Promise<PreparedModelBundle> {
+  public async stageModelBundle(
+    descriptor: InternalBundleDescriptor,
+    options?: StageModelBundleOptions
+  ): Promise<StagedModelBundle> {
     const module = await this.ensureModule();
-    return this.modelLoader.prepareModelBundle(module, descriptor, options);
+    return this.modelLoader.stageModelBundle(module, descriptor, options);
   }
 
   /**
    * Initialize engine state with a model path in MEMFS.
    */
-  public async initEngine(
-    modelPathOrBundle: string | PreparedModelBundle,
+  public async loadRuntimeModel(
+    modelPathOrBundle: string | StagedModelBundle,
     config?: InferenceInitConfig
   ): Promise<void> {
     const module = await this.ensureModule();
@@ -623,7 +615,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       normalizedConfig.enableRuntimeObservability > 0;
     this.backendProfilingEnabled = normalizedConfig.enableBackendProfiling > 0;
     this.transportObservability.enabled = this.runtimeObservabilityEnabled;
-    const result = await bridge.initEngine(modelPath, normalizedConfig);
+    const result = await bridge.loadRuntimeModel(modelPath, normalizedConfig);
     if (result !== 0) {
       this.engineInitialized = false;
       this.resetRuntimeLifecycleState(
@@ -632,8 +624,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       throw new Error(`Failed to initialize engine. Code: ${result}`);
     }
     this.engineInitialized = true;
-    this.cachedMediaMarker = bridge.getMediaMarker();
-    this.cachedChatTemplate = bridge.getChatTemplate();
+    this.cachedMediaMarker = bridge.readMediaMarker();
+    this.cachedChatTemplate = bridge.readChatTemplate();
 
     this.modelLoader.cleanupAfterEngineInit(module);
   }
@@ -665,13 +657,13 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.initPromise = null;
   }
 
-  public async cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean> {
+  public async cancelQuery(requestId: GenerateRequestId): Promise<boolean> {
     const bridge = this.getReadyEngineBridge();
     if (!Number.isInteger(requestId) || requestId <= 0) {
       return false;
     }
 
-    const cancelled = await bridge.cancelQueuedRequest(requestId);
+    const cancelled = await bridge.cancelQuery(requestId);
     if (!cancelled) {
       return false;
     }
@@ -693,7 +685,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return true;
   }
 
-  public async queuePrompt(
+  public async enqueueQuery(
     contextKey: string,
     promptText: string,
     options: number | PromptOptions = 128
@@ -741,7 +733,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
             `Prompt contains ${markerCount} media marker(s) but ${request.media.length} image(s) were provided. Use "${this.cachedMediaMarker}" in your prompt to place each image.`
           );
         }
-        requestId = bridge.enqueuePromptWithMedia(
+        requestId = bridge.startMediaRequest(
           request.contextKey,
           request.promptText,
           request.maxOutputTokens,
@@ -749,7 +741,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
           Number(callbackPtr)
         );
       } else {
-        requestId = bridge.enqueuePrompt(
+        requestId = bridge.startTextRequest(
           request.contextKey,
           request.promptText,
           request.maxOutputTokens,
@@ -782,7 +774,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
     if (signal != null) {
       this.tracker.attachSignal(requestId, signal, () => {
-        void this.cancelQueuedRequest(requestId);
+        void this.cancelQuery(requestId);
       });
     }
 
@@ -791,7 +783,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return requestId;
   }
 
-  public async runQueuedRequest(
+  public async awaitQuery(
     requestId: GenerateRequestId,
     options?: { signal?: AbortSignal }
   ): Promise<GenerateResponse> {
@@ -800,7 +792,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       throw new Error('requestId must be a positive integer.');
     }
     if (options?.signal?.aborted) {
-      await this.cancelQueuedRequest(requestId);
+      await this.cancelQuery(requestId);
       throw createAbortError('Prompt was aborted before execution started.');
     }
 
@@ -810,7 +802,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       signal == null
         ? null
         : () => {
-            void this.cancelQueuedRequest(requestId);
+            void this.cancelQuery(requestId);
           };
     if (abortListener != null) {
       signal?.addEventListener('abort', abortListener, { once: true });
@@ -840,14 +832,14 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   /**
    * Submit a generation prompt.
    */
-  public async submitPrompt(
+  public async executeQuery(
     contextKey: string,
     promptText: string,
     options: number | PromptOptions = 128
   ): Promise<string> {
     const signal = typeof options === 'object' ? options.signal : undefined;
-    const requestId = await this.queuePrompt(contextKey, promptText, options);
-    const response = await this.runQueuedRequest(requestId, { signal });
+    const requestId = await this.enqueueQuery(contextKey, promptText, options);
+    const response = await this.awaitQuery(requestId, { signal });
     if (response.cancelled) {
       throw createAbortError(response.errorMessage ?? 'Queued prompt cancelled.');
     }
@@ -869,11 +861,11 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return this.getRuntimeAggregateObservability();
   }
 
-  public getMediaMarker(): string | null {
+  public readMediaMarker(): string | null {
     return this.cachedMediaMarker;
   }
 
-  public getChatTemplate(): string | null {
+  public readChatTemplate(): string | null {
     return this.cachedChatTemplate;
   }
 

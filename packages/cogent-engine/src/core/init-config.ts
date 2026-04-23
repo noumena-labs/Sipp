@@ -75,11 +75,11 @@ function normalizeInteger(
 function normalizeOptionalInteger(
   fieldName: string,
   value: number | undefined,
-  fallback: number,
+  defaultValue: number,
   minimum: number
 ): number {
   if (value == null) {
-    return fallback;
+    return defaultValue;
   }
   return normalizeInteger(fieldName, value, minimum, false);
 }
@@ -87,12 +87,12 @@ function normalizeOptionalInteger(
 function normalizeNumber(
   fieldName: string,
   value: number | undefined,
-  fallback: number,
+  defaultValue: number,
   minimum: number,
   maximum?: number
 ): number {
   if (value == null) {
-    return fallback;
+    return defaultValue;
   }
   if (!Number.isFinite(value) || value < minimum || (maximum != null && value > maximum)) {
     const maximumClause = maximum != null ? ` and <= ${maximum}` : '';
@@ -104,10 +104,10 @@ function normalizeNumber(
 function normalizeSignedNumber(
   fieldName: string,
   value: number | undefined,
-  fallback: number
+  defaultValue: number
 ): number {
   if (value == null) {
-    return fallback;
+    return defaultValue;
   }
   if (!Number.isFinite(value)) {
     throw new Error(`"${fieldName}" must be a finite number.`);
@@ -148,10 +148,10 @@ function normalizeOptionalBoolean(value: boolean | undefined): number {
 
 function normalizeOptionalBooleanWithDefault(
   value: boolean | undefined,
-  fallback: number
+  defaultValue: number
 ): number {
   if (value == null) {
-    return fallback;
+    return defaultValue;
   }
   return value ? 1 : 0;
 }

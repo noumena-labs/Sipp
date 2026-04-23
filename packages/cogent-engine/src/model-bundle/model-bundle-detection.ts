@@ -1,8 +1,6 @@
 import {
   LocalProjectorResolutionResult,
   ModelDetectionResult,
-  ParsedHuggingFaceModelUrl,
-  ProjectorDiscoveryResult,
 } from './model-bundle-types.js';
 import { inspectGgufMetadata } from './gguf-metadata.js';
 
@@ -159,11 +157,11 @@ export async function detectModelFromGgufFile(
   signal?: AbortSignal
 ): Promise<ModelDetectionResult> {
   const fileName = normalizeFileName(file.name);
-  const fallback = detectModelFromFilename(fileName);
+  const defaultValue = detectModelFromFilename(fileName);
   const metadata = await inspectGgufMetadata(file, { signal });
 
   if (metadata == null) {
-    return fallback;
+    return defaultValue;
   }
 
   const modelType = normalizeOptionalString(metadata.generalType);
@@ -185,13 +183,13 @@ export async function detectModelFromGgufFile(
     isProjector || isVisionByMetadata
       ? 'gguf-metadata'
       : modelType != null || modelArchitecture != null
-        ? fallback.isVisionModel
-          ? fallback.detectionMethod
+        ? defaultValue.isVisionModel
+          ? defaultValue.detectionMethod
           : 'gguf-metadata'
-        : fallback.detectionMethod;
+        : defaultValue.detectionMethod;
 
   return {
-    isVisionModel: !isProjector && (isVisionByMetadata || fallback.isVisionModel),
+    isVisionModel: !isProjector && (isVisionByMetadata || defaultValue.isVisionModel),
     isProjector,
     suggestedProjectorUrl: null,
     detectionMethod,
@@ -205,11 +203,6 @@ export function detectModelFromUrl(url: string): ModelDetectionResult {
   const filename = extractFilenameFromUrl(url);
   const result = detectModelFromFilename(filename);
   result.detectionMethod = result.isVisionModel ? 'url' : result.detectionMethod;
-
-  if (result.isVisionModel) {
-    result.suggestedProjectorUrl = deriveProjectorUrlFallback(url);
-  }
-
   return result;
 }
 
@@ -220,154 +213,6 @@ export function detectModel(
   return source === 'url'
     ? detectModelFromUrl(urlOrFilename)
     : detectModelFromFilename(urlOrFilename);
-}
-
-export function parseHuggingFaceUrl(url: string): ParsedHuggingFaceModelUrl | null {
-  const match = url.match(
-    /^(https:\/\/huggingface\.co\/([^/]+)\/([^/]+))\/(resolve|blob)\/([^/]+)\/(.+)$/
-  );
-  if (!match) {
-    return null;
-  }
-
-  return {
-    org: match[2],
-    repo: match[3],
-    ref: match[5],
-    filename: match[6],
-    baseUrl: match[1],
-  };
-}
-
-export async function discoverProjectorFromHuggingFace(
-  modelUrl: string
-): Promise<ProjectorDiscoveryResult> {
-  const hf = parseHuggingFaceUrl(modelUrl);
-  if (!hf) {
-    return {
-      projectorUrl: null,
-      candidates: [],
-      source: 'none',
-      message: 'Not a HuggingFace URL — cannot auto-discover projector.',
-    };
-  }
-
-  try {
-    const apiUrl = `https://huggingface.co/api/models/${hf.org}/${hf.repo}`;
-    const response = await fetch(apiUrl);
-    if (!response.ok) {
-      return {
-        projectorUrl: null,
-        candidates: [],
-        source: 'none',
-        message: `HuggingFace API returned ${response.status} for ${hf.org}/${hf.repo}.`,
-      };
-    }
-
-    const data = await response.json();
-    const siblings = Array.isArray(data?.siblings)
-      ? (data.siblings as Array<{ rfilename?: unknown }>)
-      : [];
-    const projectorFiles = siblings
-      .map((sibling) => {
-        if (typeof sibling?.rfilename === 'string') {
-          return sibling.rfilename;
-        }
-        return '';
-      })
-      .filter(
-        (name: string): name is string =>
-          name.length > 0 &&
-          isGgufFileName(name) &&
-          PROJECTOR_FILENAME_PATTERNS.some((pattern) => pattern.test(name))
-      );
-
-    if (projectorFiles.length === 0) {
-      return {
-        projectorUrl: null,
-        candidates: [],
-        source: 'hf-api',
-        message: `No mmproj/projector GGUF files found in ${hf.org}/${hf.repo}. This model may not have a published projector.`,
-      };
-    }
-
-    const preferred =
-      projectorFiles.find((name: string) => /f16/i.test(name)) ?? projectorFiles[0];
-    return {
-      projectorUrl: `${hf.baseUrl}/resolve/${hf.ref}/${preferred}`,
-      candidates: projectorFiles,
-      source: 'hf-api',
-      message:
-        projectorFiles.length === 1
-          ? `Found projector: ${preferred}`
-          : `Found ${projectorFiles.length} projector(s): ${projectorFiles.join(', ')}. Using: ${preferred}`,
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return {
-      projectorUrl: null,
-      candidates: [],
-      source: 'none',
-      message: `HuggingFace API error: ${message}`,
-    };
-  }
-}
-
-export async function discoverProjector(modelUrl: string): Promise<ProjectorDiscoveryResult> {
-  const hfResult = await discoverProjectorFromHuggingFace(modelUrl);
-  if (hfResult.projectorUrl) {
-    return hfResult;
-  }
-
-  const hf = parseHuggingFaceUrl(modelUrl);
-  if (hf) {
-    const candidates = [
-      'mmproj-model-f16.gguf',
-      `${hf.repo}-mmproj-f16.gguf`,
-      'mmproj.gguf',
-    ];
-
-    for (const candidate of candidates) {
-      const candidateUrl = `${hf.baseUrl}/resolve/${hf.ref}/${candidate}`;
-      try {
-        const response = await fetch(candidateUrl, { method: 'HEAD' });
-        if (response.ok) {
-          return {
-            projectorUrl: candidateUrl,
-            candidates: [candidate],
-            source: 'head-probe',
-            message: `Found projector via HEAD probe: ${candidate}`,
-          };
-        }
-      } catch {
-        // Continue probing.
-      }
-    }
-  }
-
-  return {
-    projectorUrl: null,
-    candidates: [],
-    source: 'none',
-    message: hfResult.message || 'Could not discover a projector file. Please provide one manually.',
-  };
-}
-
-export async function validateProjectorUrl(url: string): Promise<string | null> {
-  try {
-    const response = await fetch(url, { method: 'HEAD' });
-    return response.ok ? url : null;
-  } catch {
-    return null;
-  }
-}
-
-function deriveProjectorUrlFallback(modelUrl: string): string | null {
-  const hf = parseHuggingFaceUrl(modelUrl);
-  if (!hf) {
-    return null;
-  }
-  return `${hf.baseUrl}/resolve/${hf.ref}/mmproj-model-f16.gguf`;
 }
 
 function extractFilenameFromUrl(url: string): string {

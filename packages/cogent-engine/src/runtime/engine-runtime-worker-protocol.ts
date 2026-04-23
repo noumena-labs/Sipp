@@ -1,15 +1,13 @@
-import {
-  BackendObservability,
-  GenerateRequestId,
-  GenerateResponse,
-  InferenceInitConfig,
-  ModelBundleDescriptor,
-  ModelLoadInfo,
-  PromptOptions,
-  PreparedModelBundle,
-  RuntimeAggregateObservabilityMetrics,
-  TransportObservability,
-} from '../types.js';
+import type { CogentConfig } from '../cogent-config.js';
+import type {
+  ModelInfo,
+  ModelLoadOptions,
+  ModelLoadProgress,
+  ModelSource,
+  QueryErrorCode,
+  QueryInput,
+  QueryOptions,
+} from '../model-management/model-types.js';
 
 export interface WorkerSerializableCogentConfig {
   moduleUrl?: string;
@@ -25,97 +23,42 @@ export interface WorkerSerializableCogentConfig {
   debugTokenTransport?: 'auto' | 'runtime-events';
 }
 
-export interface WorkerRuntimeMetadata {
-  chatTemplate: string | null;
-  mediaMarker: string | null;
-}
-
-export interface WorkerQueuedPromptOptions {
-  nTokens?: number;
-  promptFormat?: PromptOptions['promptFormat'];
-  media?: ArrayBuffer[];
-}
+export type WorkerModelLoadOptions = Pick<ModelLoadOptions, 'runtime'>;
+export type WorkerQueryOptions = Pick<QueryOptions, 'session' | 'maxTokens' | 'format'>;
 
 export type WorkerRequestMessage =
   | {
-      kind: 'init-module';
+      kind: 'models-load';
+      callId: number;
+      config: WorkerSerializableCogentConfig;
+      source: ModelSource;
+      options: WorkerModelLoadOptions;
+    }
+  | {
+      kind: 'models-list';
       callId: number;
       config: WorkerSerializableCogentConfig;
     }
   | {
-      kind: 'load-model-url';
+      kind: 'models-remove';
       callId: number;
-      url: string;
-      destFileName: string;
+      config: WorkerSerializableCogentConfig;
+      id: string;
     }
   | {
-      kind: 'load-model-file';
+      kind: 'query';
       callId: number;
-      file: File;
-      destFileName: string;
+      config: WorkerSerializableCogentConfig;
+      input: QueryInput;
+      options: WorkerQueryOptions;
     }
   | {
-      kind: 'load-model-file-shards';
-      callId: number;
-      files: File[];
-    }
-  | {
-      kind: 'load-model-urls';
-      callId: number;
-      urls: string[];
-    }
-  | {
-      kind: 'prepare-model-bundle';
-      callId: number;
-      descriptor: ModelBundleDescriptor;
-    }
-  | {
-      kind: 'load-model-stream-start';
-      callId: number;
-      destFileName: string;
-      expectedBytes?: number;
-    }
-  | {
-      kind: 'load-model-stream-chunk';
-      callId: number;
-      chunk: ArrayBuffer;
-    }
-  | {
-      kind: 'load-model-stream-end';
+      kind: 'close';
       callId: number;
     }
   | {
-      kind: 'cancel-model-load';
-      callId: number;
-    }
-  | {
-      kind: 'init-engine';
-      callId: number;
-      modelPath: string;
-      config?: InferenceInitConfig;
-    }
-  | {
-      kind: 'queue-prompt';
-      callId: number;
-      contextKey: string;
-      promptText: string;
-      options: WorkerQueuedPromptOptions;
-    }
-  | {
-      kind: 'queue-prompt-with-media';
-      callId: number;
-      contextKey: string;
-      promptText: string;
-      options: WorkerQueuedPromptOptions;
-    }
-  | {
-      kind: 'cancel-request';
-      callId: number;
-      requestId: GenerateRequestId;
-    }
-  | {
-      kind: 'get-backend-observability';
-      callId: number;
+      kind: 'cancel';
+      targetCallId: number;
     };
 
 export type WorkerResponseMessage =
@@ -129,54 +72,20 @@ export type WorkerResponseMessage =
       callId: number;
       message: string;
       errorName?: string;
+      queryErrorCode?: QueryErrorCode;
     }
   | {
       kind: 'load-progress';
       callId: number;
-      progressPct: number;
-    }
-  | {
-      kind: 'load-stream-ack';
-      callId: number;
+      progress: ModelLoadProgress;
     }
   | {
       kind: 'token';
-      requestId: GenerateRequestId;
+      callId: number;
       text: string;
-      bufferedTokenCount: number;
-    }
-  | {
-      kind: 'request-complete';
-      requestId: GenerateRequestId;
-      result: WorkerRunQueuedRequestResult;
-    }
-  | {
-      kind: 'request-failed';
-      requestId: GenerateRequestId;
-      message: string;
-      errorName?: string;
-      runtimeAggregateObservability: RuntimeAggregateObservabilityMetrics | null;
-      transportObservability: TransportObservability;
     };
 
-export interface WorkerLoadModelResult {
-  modelPath: string;
-  modelLoadInfo: ModelLoadInfo | null;
-  transportObservability: TransportObservability;
-}
-
-export interface WorkerPrepareModelBundleResult {
-  bundle: PreparedModelBundle;
-  transportObservability: TransportObservability;
-}
-
-export interface WorkerRunQueuedRequestResult {
-  response: GenerateResponse;
-  runtimeAggregateObservability: RuntimeAggregateObservabilityMetrics | null;
-  transportObservability: TransportObservability;
-}
-
-export interface WorkerBackendObservabilityResult {
-  backendObservability: BackendObservability | null;
-  transportObservability: TransportObservability;
-}
+export type WorkerServiceConfig = Pick<
+  CogentConfig,
+  'moduleUrl' | 'wasmUrl' | 'moduleOptions' | 'maxModelBytes' | 'trustedOrigins'
+>;
