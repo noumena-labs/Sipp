@@ -139,6 +139,7 @@ set(CE_MTMD_SOURCES
     ${CE_MTMD_MODEL_DIR}/deepseekocr.cpp
     ${CE_MTMD_MODEL_DIR}/mobilenetv5.cpp
     ${CE_MTMD_MODEL_DIR}/youtuvl.cpp
+    ${CE_MTMD_MODEL_DIR}/yasa2.cpp
 )
 
 add_executable(CogentEngine ${PLUGIN_SOURCES})
