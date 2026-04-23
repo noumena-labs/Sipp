@@ -174,11 +174,11 @@ foreach(_ggml_target ggml ggml-base ggml-cpu ggml-webgpu)
 endforeach()
 
 set(CE_WASM_EXPORTED_FUNCTIONS
-    "['_CE_Init','_CE_InitWithMultimodal','_CE_Close','_CE_EnqueuePrompt','_CE_EnqueuePromptWithMedia','_CE_CancelQueuedRequest','_CE_RunSchedulerTick','_CE_RunSchedulerBurst','_CE_RunSchedulerBurstWithDeadline','_CE_RunRequestStep','_CE_GetCompletedRequestStatus','_CE_DrainCompletedRequestIds','_CE_DrainRuntimeEvents','_CE_GetCompletedRequestOutputSize','_CE_CopyCompletedRequestOutput','_CE_GetCompletedRequestErrorSize','_CE_CopyCompletedRequestError','_CE_GetCompletedRequestRuntimeObservability','_CE_ConsumeCompletedRequest','_CE_FreeString','_CE_GetRuntimeObservability','_CE_ResetRuntimeObservability','_CE_GetBackendObservabilityJson','_CE_GetMediaMarker','_CE_GetChatTemplate','_CE_ApplyChatTemplate','_malloc','_free']"
+    "['_CE_Init','_CE_InitWithMultimodal','_CE_Close','_CE_StartTextRequest','_CE_StartMediaRequest','_CE_CancelRequest','_CE_RunSchedulerBurst','_CE_RunSchedulerBurstWithDeadline','_CE_GetCompletedRequestStatus','_CE_DrainRuntimeEvents','_CE_GetCompletedRequestOutputSize','_CE_CopyCompletedRequestOutput','_CE_GetCompletedRequestErrorSize','_CE_CopyCompletedRequestError','_CE_GetCompletedRequestRuntimeObservability','_CE_ConsumeCompletedRequest','_CE_FreeString','_CE_GetRuntimeObservability','_CE_ResetRuntimeObservability','_CE_GetBackendObservabilityJson','_CE_GetMediaMarker','_CE_GetChatTemplate','_CE_ApplyChatTemplate','_malloc','_free']"
 )
 
 # HEAPU8 is needed for later binary media packing through the wasm bridge.
-set(CE_WASM_RUNTIME_METHODS "['ccall','FS','WORKERFS','UTF8ToString','addFunction','removeFunction','getValue','setValue','HEAP32','HEAPF64','HEAPU8']")
+set(CE_WASM_RUNTIME_METHODS "['ccall','FS','WORKERFS','UTF8ToString','HEAP32','HEAPF64','HEAPU8']")
 
 set(CE_WASM_TARGET_LINK_OPTIONS
     ${CE_WASM_LINK_FLAGS}
@@ -194,14 +194,13 @@ set(CE_WASM_TARGET_LINK_OPTIONS
 if(CE_WASM_USE_JSPI)
     list(APPEND CE_WASM_TARGET_LINK_OPTIONS
         -sJSPI=1
-        # CE_Init, CE_InitWithMultimodal, CE_RunSchedulerTick, CE_RunSchedulerBurst, and
-        # CE_RunSchedulerBurstWithDeadline,
-        # CE_RunRequestStep may suspend on the browser WebGPU path.
+        # CE_Init, CE_InitWithMultimodal, CE_RunSchedulerBurst, and
+        # CE_RunSchedulerBurstWithDeadline
         # CE_GetBackendObservabilityJson can also suspend because querying ggml-webgpu
         # devices may force adapter/device creation under emdawnwebgpu.
         # CE_Close is intentionally not exported as a JSPI function because the
         # TS wrapper calls it synchronously during teardown/reinit.
-        "-sJSPI_EXPORTS=['_main_thread','CE_Init','CE_InitWithMultimodal','CE_RunSchedulerTick','CE_RunSchedulerBurst','CE_RunSchedulerBurstWithDeadline','CE_RunRequestStep','CE_GetBackendObservabilityJson']"
+        "-sJSPI_EXPORTS=['_main_thread','CE_Init','CE_InitWithMultimodal','CE_RunSchedulerBurst','CE_RunSchedulerBurstWithDeadline','CE_GetBackendObservabilityJson']"
     )
 endif()
 
