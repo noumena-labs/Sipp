@@ -21,6 +21,11 @@
       "import": "./dist/esm/character/internal.js",
       "default": "./dist/esm/character/internal.js"
     },
+    "./orchestrator": {
+      "types": "./dist/types/orchestrator/index.d.ts",
+      "import": "./dist/esm/orchestrator/index.js",
+      "default": "./dist/esm/orchestrator/index.js"
+    },
     "./wasm/*": "./dist/wasm/*"
   },
   "files": [
