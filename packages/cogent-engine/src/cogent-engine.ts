@@ -1,22 +1,29 @@
-import { CogentConfig } from './cogent-config.js';
-import { MainThreadEngineRuntime } from './runtime/engine-runtime-main-thread.js';
-import { EngineRuntime } from './runtime/engine-runtime.js';
-import { WorkerEngineRuntime } from './runtime/engine-runtime-worker.js';
+import { ModelService } from './model-management/model-service.js';
+import type { ModelLifecycleService } from './model-management/model-service-contract.js';
+import { WorkerModelServiceClient } from './model-management/worker-model-service-client.js';
 import {
-  BackendObservability,
-  GenerateRequestId,
-  GenerateResponse,
-  InferenceInitConfig,
-  ModelBundleDescriptor,
-  ModelLoadInfo,
-  PromptOptions,
-  PreparedModelBundle,
-  PrepareModelBundleOptions,
-  RuntimeAggregateObservabilityMetrics,
-  TransportObservability,
-} from './types.js';
+  QueryError,
+  type ModelInfo,
+  type ModelLoadOptions,
+  type ModelSource,
+  type QueryInput,
+  type QueryOptions,
+} from './model-management/model-types.js';
+import { MainThreadEngineRuntime } from './runtime/engine-runtime-main-thread.js';
 
-function shouldUseWorker(config: CogentConfig): boolean {
+export interface CogentEngineOptions {
+  moduleUrl?: string;
+  wasmUrl?: string;
+  moduleOptions?: {
+    locateFile?: (path: string, prefix?: string) => string;
+    [key: string]: unknown;
+  };
+  trustedOrigins?: string[];
+  executionMode?: 'auto' | 'worker' | 'main-thread';
+  workerUrl?: string;
+}
+
+function shouldUseWorker(config: CogentEngineOptions): boolean {
   if (config.executionMode === 'main-thread') {
     return false;
   }
@@ -31,145 +38,72 @@ function shouldUseWorker(config: CogentConfig): boolean {
   );
 }
 
-export type { CogentConfig } from './cogent-config.js';
+interface CogentModelManager {
+  load(source: ModelSource, options?: ModelLoadOptions): Promise<ModelInfo>;
+  current(): ModelInfo | null;
+  list(): Promise<ModelInfo[]>;
+  remove(id: string): Promise<void>;
+}
+
+class RuntimeModelManager implements CogentModelManager {
+  constructor(
+    private readonly assertOpen: () => void,
+    private readonly service: ModelLifecycleService
+  ) {}
+
+  public load(source: ModelSource, options?: ModelLoadOptions): Promise<ModelInfo> {
+    this.assertOpen();
+    return this.service.load(source, options);
+  }
+
+  public current(): ModelInfo | null {
+    this.assertOpen();
+    return this.service.currentModel();
+  }
+
+  public list(): Promise<ModelInfo[]> {
+    this.assertOpen();
+    return this.service.list();
+  }
+
+  public async remove(id: string): Promise<void> {
+    this.assertOpen();
+    await this.service.remove(id);
+  }
+}
 
 export class CogentEngine {
-  private readonly runtime: EngineRuntime;
+  public readonly models: CogentModelManager;
+  #service: ModelLifecycleService;
+  #closed = false;
 
-  constructor(config: CogentConfig = {}) {
-    this.runtime = shouldUseWorker(config)
-      ? new WorkerEngineRuntime(config)
-      : new MainThreadEngineRuntime(config);
+  private constructor(config: CogentEngineOptions = {}) {
+    this.#service = shouldUseWorker(config)
+      ? new WorkerModelServiceClient(config)
+      : new ModelService(new MainThreadEngineRuntime(config));
+    this.models = new RuntimeModelManager(() => this.assertOpen(), this.#service);
   }
 
-  public getExecutionMode() {
-    return this.runtime.getExecutionMode();
+  public static async create(options: CogentEngineOptions = {}): Promise<CogentEngine> {
+    return new CogentEngine(options);
   }
 
-  public getLastModelLoadInfo(): ModelLoadInfo | null {
-    return this.runtime.getLastModelLoadInfo();
+  public async query(input: QueryInput, options?: QueryOptions): Promise<string> {
+    this.assertOpen();
+    return await this.#service.query(input, options);
   }
 
-  public getTransportObservability(): TransportObservability {
-    return this.runtime.getTransportObservability();
+  public async close(): Promise<void> {
+    if (this.#closed) {
+      return;
+    }
+    this.#closed = true;
+    await this.#service.close();
   }
 
-  public async initModule(): Promise<void> {
-    await this.runtime.initModule();
-  }
-
-  public async loadModelFromUrl(
-    url: string,
-    destFileName = 'model.gguf',
-    onProgress?: (pct: number) => void,
-    signal?: AbortSignal
-  ): Promise<string> {
-    return this.runtime.loadModelFromUrl(url, destFileName, onProgress, signal);
-  }
-
-  public async loadModelFromFile(
-    file: File,
-    destFileName: string = file.name || 'model.gguf',
-    onProgress?: (pct: number) => void,
-    signal?: AbortSignal
-  ): Promise<string> {
-    return this.runtime.loadModelFromFile(file, destFileName, onProgress, signal);
-  }
-
-  public async loadModelFromReadableStream(
-    stream: ReadableStream<Uint8Array>,
-    destFileName = 'model.gguf',
-    options: {
-      expectedBytes?: number;
-      onProgress?: (pct: number) => void;
-      signal?: AbortSignal;
-    } = {}
-  ): Promise<string> {
-    return this.runtime.loadModelFromReadableStream(stream, destFileName, options);
-  }
-
-  public loadModelFromBuffer(buffer: Uint8Array, destFileName = 'model.gguf'): string {
-    return this.runtime.loadModelFromBuffer(buffer, destFileName);
-  }
-
-  public async loadModelFromFileShards(
-    files: File[],
-    onProgress?: (pct: number) => void,
-    signal?: AbortSignal
-  ): Promise<string> {
-    return this.runtime.loadModelFromFileShards(files, onProgress, signal);
-  }
-
-  public async loadModelFromUrls(
-    urls: string[],
-    onProgress?: (pct: number) => void,
-    signal?: AbortSignal
-  ): Promise<string> {
-    return this.runtime.loadModelFromUrls(urls, onProgress, signal);
-  }
-
-  public async initEngine(
-    modelPathOrBundle: string | PreparedModelBundle,
-    config?: InferenceInitConfig
-  ): Promise<void> {
-    await this.runtime.initEngine(modelPathOrBundle, config);
-  }
-
-  public async prepareModelBundle(
-    descriptor: ModelBundleDescriptor,
-    options?: PrepareModelBundleOptions
-  ): Promise<PreparedModelBundle> {
-    return this.runtime.prepareModelBundle(descriptor, options);
-  }
-
-  public close(): void {
-    this.runtime.close();
-  }
-
-  public getChatTemplate(): string | null {
-    return this.runtime.getChatTemplate();
-  }
-
-  public getMediaMarker(): string | null {
-    return this.runtime.getMediaMarker();
-  }
-
-  public async cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean> {
-    return this.runtime.cancelQueuedRequest(requestId);
-  }
-
-  public async queuePrompt(
-    contextKey: string,
-    promptText: string,
-    options: number | PromptOptions = 128
-  ): Promise<GenerateRequestId> {
-    return this.runtime.queuePrompt(contextKey, promptText, options);
-  }
-
-  public async runQueuedRequest(
-    requestId: GenerateRequestId,
-    options?: { signal?: AbortSignal }
-  ): Promise<GenerateResponse> {
-    return this.runtime.runQueuedRequest(requestId, options);
-  }
-
-  public async submitPrompt(
-    contextKey: string,
-    promptText: string,
-    options: number | PromptOptions = 128
-  ): Promise<string> {
-    return this.runtime.submitPrompt(contextKey, promptText, options);
-  }
-
-  public getRuntimeAggregateObservability(): RuntimeAggregateObservabilityMetrics | null {
-    return this.runtime.getRuntimeAggregateObservability();
-  }
-
-  public getRuntimeObservability(): RuntimeAggregateObservabilityMetrics | null {
-    return this.runtime.getRuntimeAggregateObservability();
-  }
-
-  public async getBackendObservability(): Promise<BackendObservability | null> {
-    return this.runtime.getBackendObservability();
+  private assertOpen(): void {
+    if (this.#closed) {
+      throw new QueryError('ENGINE_CLOSED', 'CogentEngine is closed.');
+    }
   }
 }
