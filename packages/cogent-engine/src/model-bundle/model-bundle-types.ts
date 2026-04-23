@@ -1,6 +1,4 @@
-import { ModelLoadInfo } from '../core/inference-types.js';
-
-export type ModelBundleSourceKind = 'url' | 'urls' | 'file' | 'files';
+export type ModelBundleSourceKind = 'file' | 'files';
 
 export type ModelBundleProjectorStatus =
   | 'not-required'
@@ -8,13 +6,7 @@ export type ModelBundleProjectorStatus =
   | 'paired'
   | 'missing';
 
-export type ModelDetectionMethod = 'filename' | 'url' | 'gguf-metadata' | 'none';
-
-export interface ModelBundleUrlProjectorDescriptor {
-  kind: 'url';
-  url: string;
-  destFileName?: string;
-}
+export type ModelDetectionMethod = 'filename' | 'gguf-metadata' | 'none';
 
 export interface ModelBundleFileProjectorDescriptor {
   kind: 'file';
@@ -22,39 +14,20 @@ export interface ModelBundleFileProjectorDescriptor {
   destFileName?: string;
 }
 
-export type ModelBundleProjectorDescriptor =
-  | ModelBundleUrlProjectorDescriptor
-  | ModelBundleFileProjectorDescriptor;
-
-export interface UrlBundleDescriptor {
-  kind: 'url';
-  url: string;
-  destFileName?: string;
-  projector?: ModelBundleProjectorDescriptor;
-}
-
-export interface UrlsBundleDescriptor {
-  kind: 'urls';
-  urls: string[];
-  projector?: ModelBundleProjectorDescriptor;
-}
-
 export interface FileBundleDescriptor {
   kind: 'file';
   file: File;
   destFileName?: string;
-  projector?: ModelBundleProjectorDescriptor;
+  projector?: ModelBundleFileProjectorDescriptor;
 }
 
 export interface FilesBundleDescriptor {
   kind: 'files';
   files: File[];
-  projector?: ModelBundleProjectorDescriptor;
+  projector?: ModelBundleFileProjectorDescriptor;
 }
 
 export type InternalBundleDescriptor =
-  | UrlBundleDescriptor
-  | UrlsBundleDescriptor
   | FileBundleDescriptor
   | FilesBundleDescriptor;
 
@@ -89,6 +62,4 @@ export interface StagedModelBundle {
   detectionMethod: ModelDetectionMethod;
   modelType: string | null;
   modelArchitecture: string | null;
-  modelLoadInfo: ModelLoadInfo | null;
-  projectorLoadInfo: ModelLoadInfo | null;
 }

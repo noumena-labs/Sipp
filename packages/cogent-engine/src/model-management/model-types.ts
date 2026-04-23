@@ -1,10 +1,19 @@
-import type { InferenceInitConfig, PromptFormatMode } from '../types.js';
+import type { BackendDeviceType, InferenceInitConfig, PromptFormatMode } from '../types.js';
 
 export type ModelModality = 'text' | 'vision';
 export type ModelStatus = 'ready' | 'needs_projector' | 'broken';
 export type ModelSourceKind = 'remote' | 'local';
 
 export type ModelAssetKind = 'model' | 'projector' | 'shard';
+export type ObservabilityMode = 'off' | 'runtime' | 'profile';
+export type ObservabilityState = 'idle' | 'loading' | 'ready' | 'querying' | 'error' | 'closed';
+export type ObservabilityEventType =
+  | 'load-start'
+  | 'load-complete'
+  | 'query-start'
+  | 'query-complete'
+  | 'error'
+  | 'close';
 
 export interface ModelLoadProgress {
   phase: 'metadata' | 'download' | 'store' | 'load';
@@ -32,8 +41,6 @@ export interface ModelRuntimeOptions {
   schedulerPolicy?: InferenceInitConfig['schedulerPolicy'];
   decodeTokenReserve?: number;
   adaptivePrefillChunking?: boolean;
-  enableRuntimeObservability?: boolean;
-  enableBackendProfiling?: boolean;
   multimodalUseGpu?: boolean;
   debugCompareMultimodalEmbeddings?: boolean;
   imageMinTokens?: number;
@@ -44,6 +51,7 @@ export interface ModelRuntimeOptions {
 export interface ModelLoadOptions {
   signal?: AbortSignal;
   onProgress?: (progress: ModelLoadProgress) => void;
+  observability?: ObservabilityMode;
   runtime?: ModelRuntimeOptions;
 }
 
@@ -82,6 +90,83 @@ export interface QueryOptions {
   format?: 'auto' | 'raw';
   signal?: AbortSignal;
   onToken?: (token: string) => void;
+}
+
+export interface QueryObservation {
+  session: string | null;
+  status: 'running' | 'success' | 'cancelled' | 'failed';
+  wallMs: number | null;
+  ttftMs: number | null;
+  outputTokenCount: number | null;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
+export interface RuntimeObservation {
+  totalMs: number;
+  ttftMs: number;
+  tokensPerSecond: number | null;
+  inputTokenCount: number;
+  outputTokenCount: number;
+  promptEvalMs?: number;
+  decodeEvalMs?: number;
+  sampleMs?: number;
+  queueDelayMs?: number;
+  meanItlMs?: number;
+  tailItlMs?: number;
+  promptEvalTokens?: number;
+  decodeEvalCount?: number;
+  batchParticipationCount?: number;
+  decodeFirstTickCount?: number;
+  chunkedPrefillTickCount?: number;
+  mixedWorkloadTickCount?: number;
+  lcpReuseTokens?: number;
+  prefixCacheRestoreTokens?: number;
+  prefixCacheHitCount?: number;
+  prefixCacheStoreCount?: number;
+  execution: {
+    mode: 'main-thread' | 'worker';
+    workerBacked: boolean;
+    tokenPath?: 'none' | 'runtime-event';
+  };
+}
+
+export interface BackendProfileObservation {
+  profilingEnabled: boolean;
+  webgpuCompiled: boolean;
+  webgpuRegistered: boolean;
+  webgpuDeviceCount: number;
+  gpuOffloadSupported: boolean;
+  availableBackends: Array<{
+    name: string;
+    deviceCount: number;
+  }>;
+  devices: Array<{
+    name: string;
+    description: string;
+    type: BackendDeviceType;
+    backendName: string;
+  }>;
+}
+
+export interface ObservabilitySnapshot {
+  mode: ObservabilityMode;
+  state: ObservabilityState;
+  updatedAt: string;
+  model: ModelInfo | null;
+  query: QueryObservation | null;
+  runtime?: RuntimeObservation;
+  profile?: BackendProfileObservation;
+}
+
+export interface ObservabilityEvent {
+  type: ObservabilityEventType;
+  snapshot: ObservabilitySnapshot;
+}
+
+export interface EngineObservability {
+  current(): ObservabilitySnapshot;
+  subscribe(listener: (event: ObservabilityEvent) => void): () => void;
 }
 
 export type QueryErrorCode =
