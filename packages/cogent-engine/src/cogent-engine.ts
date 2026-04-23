@@ -1,8 +1,11 @@
 import { ModelService } from './model-management/model-service.js';
 import type { ModelLifecycleService } from './model-management/model-service-contract.js';
-import { WorkerModelServiceClient } from './model-management/worker-model-service-client.js';
+import { WorkerModelServiceClient } from './worker/model-service-client.js';
 import {
   QueryError,
+  type EngineObservability,
+  type ObservabilityEvent,
+  type ObservabilitySnapshot,
   type ModelInfo,
   type ModelLoadOptions,
   type ModelSource,
@@ -72,16 +75,35 @@ class RuntimeModelManager implements CogentModelManager {
   }
 }
 
+class RuntimeObservability implements EngineObservability {
+  constructor(
+    private readonly assertOpen: () => void,
+    private readonly service: ModelLifecycleService
+  ) {}
+
+  public current(): ObservabilitySnapshot {
+    this.assertOpen();
+    return this.service.currentObservability();
+  }
+
+  public subscribe(listener: (event: ObservabilityEvent) => void): () => void {
+    this.assertOpen();
+    return this.service.subscribeObservability(listener);
+  }
+}
+
 export class CogentEngine {
   public readonly models: CogentModelManager;
+  public readonly observability: EngineObservability;
   #service: ModelLifecycleService;
   #closed = false;
 
-  private constructor(config: CogentEngineOptions = {}) {
-    this.#service = shouldUseWorker(config)
-      ? new WorkerModelServiceClient(config)
-      : new ModelService(new MainThreadEngineRuntime(config));
+  private constructor(options: CogentEngineOptions = {}) {
+    this.#service = shouldUseWorker(options)
+      ? new WorkerModelServiceClient(options)
+      : new ModelService(new MainThreadEngineRuntime(options));
     this.models = new RuntimeModelManager(() => this.assertOpen(), this.#service);
+    this.observability = new RuntimeObservability(() => this.assertOpen(), this.#service);
   }
 
   public static async create(options: CogentEngineOptions = {}): Promise<CogentEngine> {
