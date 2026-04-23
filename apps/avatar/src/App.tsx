@@ -2,9 +2,9 @@
 //
 // App.tsx
 //
-// - Wires a CogentEngine + CharacterAgent together with the three-vrm scene
-//   and the chat UI. Config lives in /character.json; the user picks a
-//   model URL at runtime. Everything below the app is renderer-agnostic.
+// - Wires a CogentEngine + CharacterAgent together with the avatar stage
+//   and chat UI. `character.json` remains semantic-only; the avatar app owns
+//   render assets and resolves them by character-folder convention.
 //
 //////////////////////////////////////////////////////////////////////////////
 
@@ -18,16 +18,26 @@ import {
 } from 'cogent-engine/character';
 import { AvatarCanvas } from './components/AvatarCanvas';
 import { ChatComposer } from './components/ChatComposer';
+import {
+  resolveAvatarRenderAssets,
+  validateAvatarRenderAssets,
+  type AvatarRenderAssets,
+} from './characters/render-assets';
 import { ControlsPanel } from './components/ControlsPanel';
 import { TranscriptDrawer } from './components/TranscriptDrawer';
 import type { ChatMessage } from './components/chat-types';
 
-const DEFAULT_CHARACTER_URL = '/character.json';
+const DEFAULT_CHARACTER_URL = '/characters/aria/character.json';
 
 interface LoadedHarness {
   readonly engine: CogentEngine;
   readonly agent: CharacterAgent;
   readonly config: CharacterConfig;
+}
+
+interface PreviewCharacter {
+  readonly config: CharacterConfig;
+  readonly renderAssets: AvatarRenderAssets;
 }
 
 export default function App() {
@@ -36,7 +46,7 @@ export default function App() {
   const [status, setStatus] = useState('Idle.');
   const [busy, setBusy] = useState(false);
   const [harness, setHarness] = useState<LoadedHarness | null>(null);
-  const [previewConfig, setPreviewConfig] = useState<CharacterConfig | null>(null);
+  const [previewCharacter, setPreviewCharacter] = useState<PreviewCharacter | null>(null);
   const [previewResolved, setPreviewResolved] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -65,17 +75,24 @@ export default function App() {
     return parseCharacterConfig(raw);
   };
 
+  const loadCharacterPreview = async (configUrl: string): Promise<PreviewCharacter> => {
+    const config = await fetchCharacterConfig(configUrl);
+    const renderAssets = resolveAvatarRenderAssets(configUrl);
+    await validateAvatarRenderAssets(config, renderAssets);
+    return { config, renderAssets };
+  };
+
   const loadPreviewConfig = async (
     configUrl: string,
     requestId: number
-  ): Promise<CharacterConfig> => {
+  ): Promise<PreviewCharacter> => {
     try {
-      const config = await fetchCharacterConfig(configUrl);
+      const preview = await loadCharacterPreview(configUrl);
       if (requestId === previewRequestIdRef.current) {
-        setPreviewConfig(config);
+        setPreviewCharacter(preview);
         setPreviewResolved(true);
       }
-      return config;
+      return preview;
     } catch (error) {
       if (requestId === previewRequestIdRef.current) {
         setPreviewResolved(true);
@@ -112,10 +129,12 @@ export default function App() {
     setBusy(true);
     setStatus('Fetching character.json…');
     const previousHarness = harness;
+    const previousPreviewCharacter = previewCharacter;
     const requestId = ++previewRequestIdRef.current;
     let previewUpdated = false;
     try {
-      const config = await loadPreviewConfig(args.characterUrl, requestId);
+      const preview = await loadPreviewConfig(args.characterUrl, requestId);
+      const config = preview.config;
       previewUpdated = true;
 
       setStatus('Initialising engine…');
@@ -151,7 +170,7 @@ export default function App() {
     } catch (error) {
       console.error(error);
       if (previewUpdated && previousHarness && requestId === previewRequestIdRef.current) {
-        setPreviewConfig(previousHarness.config);
+        setPreviewCharacter(previousPreviewCharacter);
       }
       setStatus(`Load failed: ${(error as Error).message}`);
     } finally {
@@ -248,18 +267,25 @@ export default function App() {
     setDrawerOpen(false);
   };
 
-  const vrmUrl = previewConfig?.assets?.vrm;
+  const handleAvatarError = (message: string): void => {
+    setStatus(`Avatar failed: ${message}`);
+  };
+
   const latestAssistantMessage = [...messages]
     .reverse()
     .find((message) => message.role === 'assistant');
   const speaking =
     latestAssistantMessage?.pending === true && latestAssistantMessage.text.trim().length > 0;
   const characterName =
-    previewConfig?.persona.name ?? harness?.config.persona.name ?? 'Companion';
+    previewCharacter?.config.persona.name ?? harness?.config.persona.name ?? 'Companion';
   const personaSummary =
-    previewConfig?.persona.summary ??
+    previewCharacter?.config.persona.summary ??
     harness?.config.persona.summary ??
     'A warm, playful stage companion.';
+  const actionNames = useMemo(
+    () => previewCharacter?.config.actions.actions.map((action) => action.name) ?? [],
+    [previewCharacter]
+  );
   const setupStatus = previewResolved ? status : 'Loading character preview…';
 
   return (
@@ -267,10 +293,12 @@ export default function App() {
       <div className="stage-shell">
         <AvatarCanvas
           bus={bus}
-          vrmUrl={vrmUrl}
+          renderAssets={previewCharacter?.renderAssets}
+          actionNames={actionNames}
           speaking={speaking}
           bubbleText={latestAssistantMessage?.text ?? ''}
           bubblePending={latestAssistantMessage?.pending ?? false}
+          onError={handleAvatarError}
         />
 
         <div className="stage-overlay stage-top-left">

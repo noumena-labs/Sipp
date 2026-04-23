@@ -34,7 +34,6 @@ function buildValid(overrides: Record<string, unknown> = {}): Record<string, unk
 
 test('parseCharacterConfig accepts a valid simplified persona and trims fields', () => {
   const raw = buildValid({
-    assets: { vrm: '/models/aria.vrm' },
     memory: { maxTurns: 4 },
     persona: {
       name: ' Aria ',
@@ -61,7 +60,6 @@ test('parseCharacterConfig accepts a valid simplified persona and trims fields',
   assert.deepEqual(config.persona.personality?.traits, ['warm', 'curious']);
   assert.equal(config.persona.personality?.description, 'Notices little details.');
   assert.equal(config.actions.actions.length, 1);
-  assert.equal(config.assets?.vrm, '/models/aria.vrm');
   assert.equal(config.memory?.maxTurns, 4);
   assert.deepEqual(config.persona.dialogExamples, [{ user: 'hello', assistant: '[wave] Hi there!' }]);
 });
@@ -118,8 +116,8 @@ test('parseCharacterConfig validates memory.maxTurns', () => {
   assert.equal(zero.memory?.maxTurns, 0);
 });
 
-test('parseCharacterConfig rejects non-object assets/memory', () => {
-  assert.throws(() => parseCharacterConfig(buildValid({ assets: 'nope' })), /assets/);
+test('parseCharacterConfig rejects renderer-owned assets and non-object memory', () => {
+  assert.throws(() => parseCharacterConfig(buildValid({ assets: {} })), /assets/);
   assert.throws(() => parseCharacterConfig(buildValid({ memory: 7 })), /memory/);
 });
 

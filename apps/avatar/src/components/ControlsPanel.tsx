@@ -77,7 +77,7 @@ export function ControlsPanel({
               value={cfg}
               onChange={(event) => setCfg(event.target.value)}
               disabled={busy}
-              placeholder="/character.json"
+              placeholder="/characters/aria/character.json"
             />
           </label>
           <label className="field-label">

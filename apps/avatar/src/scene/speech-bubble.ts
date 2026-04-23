@@ -91,6 +91,7 @@ interface CloudUniforms {
   readonly uShadowColor: THREE.IUniform<THREE.Color>;
   readonly uOpacity: THREE.IUniform<number>;
   readonly uGradientCenter: THREE.IUniform<number>;
+  readonly [key: string]: THREE.IUniform<unknown>;
 }
 
 type CloudMaterial = THREE.ShaderMaterial & {

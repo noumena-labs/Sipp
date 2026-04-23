@@ -40,11 +40,7 @@ export { ActionBus } from './action-bus.js';
 export type { PersonaSpec } from './persona.js';
 export { renderSystemPrompt } from './persona.js';
 
-export type {
-  CharacterAssets,
-  CharacterConfig,
-  CharacterMemoryConfig,
-} from './character-config.js';
+export type { CharacterConfig, CharacterMemoryConfig } from './character-config.js';
 export {
   CharacterConfigError,
   DEFAULT_MEMORY_MAX_TURNS,

@@ -3,7 +3,6 @@
 // vrm-loader.ts
 //
 // - Loads and recenters a .vrm file via GLTFLoader + VRMLoaderPlugin.
-//   If no VRM is available, the scene simply renders without an avatar.
 //
 //////////////////////////////////////////////////////////////////////////////
 
@@ -27,47 +26,42 @@ export interface LoadedAvatar {
 }
 
 /**
- * Attempts to load the given .vrm URL. Returns `null` when the URL is empty,
- * missing, or the fetch / parse fails.
+ * Loads the given .vrm URL and returns a ready-to-render avatar.
  */
-export async function loadAvatar(vrmUrl: string | undefined | null): Promise<LoadedAvatar | null> {
-  if (!vrmUrl) {
-    return null;
+export async function loadAvatar(vrmUrl: string): Promise<LoadedAvatar> {
+  const loader = new GLTFLoader();
+  loader.register((parser) => new VRMLoaderPlugin(parser));
+  const gltf = await loader.loadAsync(vrmUrl);
+  const vrm: VRM | undefined = gltf.userData.vrm;
+  if (!vrm) {
+    throw new Error('Loaded GLTF did not include VRM user data.');
   }
-  try {
-    const loader = new GLTFLoader();
-    loader.register((parser) => new VRMLoaderPlugin(parser));
-    const gltf = await loader.loadAsync(vrmUrl);
-    const vrm: VRM | undefined = gltf.userData.vrm;
-    if (!vrm) {
-      throw new Error('Loaded GLTF did not include VRM user data.');
-    }
-    VRMUtils.removeUnnecessaryVertices(gltf.scene);
-    VRMUtils.combineSkeletons(gltf.scene);
-    vrm.scene.rotation.y = Math.PI; // Face the camera by default.
-    const layout = centerAvatar(vrm.scene, vrm);
-    return {
-      root: vrm.scene,
-      vrm,
-      layout,
-      update(delta) {
-        vrm.update(delta);
-      },
-      dispose() {
-        VRMUtils.deepDispose(vrm.scene);
-      },
-    };
-  } catch (error) {
-    console.warn('[avatar] VRM load failed:', error);
-    return null;
-  }
+  VRMUtils.removeUnnecessaryVertices(gltf.scene);
+  VRMUtils.combineSkeletons(gltf.scene);
+  VRMUtils.combineMorphs(vrm);
+  vrm.scene.traverse((object) => {
+    object.frustumCulled = false;
+  });
+  vrm.scene.rotation.y = Math.PI; // Face the camera by default.
+  const layout = centerAvatar(vrm.scene, vrm);
+  return {
+    root: vrm.scene,
+    vrm,
+    layout,
+    update(delta) {
+      vrm.update(delta);
+    },
+    dispose() {
+      VRMUtils.deepDispose(vrm.scene);
+    },
+  };
 }
 
 export function getAvatarHeadNode(avatar: LoadedAvatar): THREE.Object3D | null {
-  return resolveHeadNode(avatar.root, avatar.vrm);
+  return resolveHeadNode(avatar.vrm);
 }
 
-function resolveHeadNode(root: THREE.Object3D, vrm: VRM): THREE.Object3D | null {
+function resolveHeadNode(vrm: VRM): THREE.Object3D | null {
   return (
     vrm.humanoid?.getRawBoneNode(VRMHumanBoneName.Head) ??
     vrm.humanoid?.getNormalizedBoneNode(VRMHumanBoneName.Head) ??
@@ -103,7 +97,7 @@ function centerAvatar(root: THREE.Object3D, vrm: VRM): AvatarLayout {
 
   const height = Math.max(size.y, 0.8);
   const centerY = (bounds.min.y + bounds.max.y) * 0.5;
-  const headNode = resolveHeadNode(root, vrm);
+  const headNode = resolveHeadNode(vrm);
   const headY = headNode
     ? headNode.getWorldPosition(headPos).y
     : bounds.max.y - height * 0.12;

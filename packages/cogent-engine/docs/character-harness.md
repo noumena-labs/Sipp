@@ -125,6 +125,12 @@ unmount to avoid leaking subscriptions across harness reloads.
 
 ### `character.json` — `CharacterConfig`
 
+`character.json` is deliberately semantic-only. It defines who the character
+is, what actions the model may emit, and how much memory the harness retains.
+Renderer-specific assets such as `.vrm` files, portraits, and animation clips
+do not belong in this schema. Host applications own those concerns and bind the
+semantic action names to whatever runtime functions they implement.
+
 ```jsonc
 {
   "id": "aria-1",                  // stable prefix-cache key; [A-Za-z0-9_-]+
@@ -158,7 +164,6 @@ unmount to avoid leaking subscriptions across harness reloads.
       { "name": "look_at_you", "cue": "look at you", "description": "Turn attention toward the user." }
     ]
   },
-  "assets":  { "vrm": "/avatar.vrm", "portrait": "/portrait.png" },
   "memory":  { "maxTurns": 8 }
 }
 ```
@@ -167,6 +172,10 @@ unmount to avoid leaking subscriptions across harness reloads.
 `CharacterConfigError` with a human-readable message on any violation. The
 action schema is validated by `validateActionSchema` and surfaced as
 `Invalid actions schema: …`.
+
+Host applications are expected to interpret action names such as `wave` or
+`look_at_you` and route them to renderer-owned functions. The harness never
+loads render assets or infers renderer behavior from character descriptions.
 
 If every action includes a non-empty `usageHint`, the system prompt renders a
 compact `Cue moments` line. If you omit `usageHint` for any action, the cue

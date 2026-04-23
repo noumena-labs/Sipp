@@ -24,9 +24,9 @@ Then open the printed localhost URL, paste a `.gguf` model URL into the
 "Model" field, and press **Load**. The first load downloads the model into
 `OPFS` (persisted across reloads) and spins up the inference runtime.
 
-The app ships with a starter `character.json` at `public/character.json`
-driving a persona named **Aria** and flat actions such as `wave`, `nod`,
-`shake_head`, `smile`, and `look_at_you`.
+The app ships with a starter character package at
+`public/characters/aria/character.json` driving a persona named **Aria** and
+flat actions such as `wave`, `nod`, `shake_head`, `smile`, and `look_at_you`.
 
 Scripts:
 
@@ -44,16 +44,17 @@ Scripts:
   works; the starter persona expects an instruct-tuned model (e.g. a
   Qwen-2.5 or Llama-3.2 instruct at 1–3B). The URL is prompted at runtime —
   no build-time config.
-- **(Optional) A `.vrm` avatar** at `/avatar.vrm` (or any URL you put in
-  `character.json → assets.vrm`). If no VRM is provided or loading fails,
-  the scene stays empty until a valid avatar is available.
+- **A `.vrm` avatar** at `public/characters/<id>/avatar.vrm`.
+- **Mixamo `.fbx` clips** for clip-backed actions at
+  `public/characters/<id>/animations/<action-name>.fbx`.
 
 ---
 
 ## `character.json` shape
 
 See `packages/cogent-engine/docs/character-harness.md` for the full schema.
-The starter file is a complete, valid example:
+The starter file is a complete, valid example. It is semantic-only: no avatar
+model paths, no portraits, and no animation metadata.
 
 ```jsonc
 {
@@ -86,10 +87,31 @@ The starter file is a complete, valid example:
       { "name": "look_at_you", "cue": "look at you", "description": "Briefly turn attention toward the user." }
     ]
   },
-  "assets": { "vrm": "/avatar.vrm", "portrait": "/portrait.png" },
   "memory": { "maxTurns": 8 }
 }
 ```
+
+## Character package layout
+
+The avatar app resolves renderer assets by folder convention, not by fields in
+`character.json`:
+
+```text
+public/
+  characters/
+    aria/
+      character.json
+      avatar.vrm
+      animations/
+        idle.fbx
+        wave.fbx
+        nod.fbx
+        shake_head.fbx
+```
+
+`idle.fbx` is the default looping base pose for the avatar. `wave`, `nod`, and
+`shake_head` are clip-backed in v1 and must each have a matching Mixamo `.fbx`
+file. Facial expressions and gaze actions remain code-driven inside the app.
 
 If every action includes a `usageHint`, the system prompt also renders a
 compact cue-guidance line. If you omit `usageHint` for any action, that cue
@@ -123,24 +145,29 @@ character.json ──► parseCharacterConfig ──► CharacterAgent
                                                 │
                     ┌──────────────── prose / action events ──────────────┐
                     ▼                                                     ▼
-              ChatPanel (UI)                                       ActionBus
-                                                                        │
-                                               ┌───────────────────────┐│
-                                               ▼                        ▼
-                                        ThreeVRMBinding          (your bindings)
-                                               │
-                                               ▼
-                                       three.js scene / VRM
+        ChatComposer / TranscriptDrawer                             ActionBus
+                                                                         │
+                                                ┌───────────────────────┐│
+                                                ▼                        ▼
+                                         ThreeVRMBinding          (your bindings)
+                                                │
+                                                ▼
+                        app-owned avatar.vrm + Mixamo .fbx clips + three.js scene
 ```
 
  - `src/App.tsx` — wires engine + agent + bus + chat UI.
 - `src/scene/scene.ts` — three.js renderer, lighting, animation loop.
 - `src/scene/vrm-loader.ts` — GLTFLoader + `VRMLoaderPlugin` with
   bounds-based centering for successful VRM loads.
-- `src/bindings/three-vrm-binding.ts` — maps `ActionBus` events to VRM
-  humanoid bones, expression presets, and lookAt.
+- `src/characters/render-assets.ts` — resolves `avatar.vrm` and Mixamo clips
+  from the loaded character folder.
+- `src/actions/*` — app-owned action functions, Mixamo retargeting, and
+  renderer-specific dispatch.
+- `src/bindings/three-vrm-binding.ts` — binds `ActionBus` events onto VRM
+  clips, expressions, and lookAt.
 - `src/components/AvatarCanvas.tsx` — mounts the scene and wires resize.
-- `src/components/ChatPanel.tsx` — streaming chat bubbles with action chips.
+- `src/components/ChatComposer.tsx` — prompt composer.
+- `src/components/TranscriptDrawer.tsx` — conversation log.
 - `src/components/ControlsPanel.tsx` — character/model URL inputs and reset.
 
 ---
@@ -150,6 +177,8 @@ character.json ──► parseCharacterConfig ──► CharacterAgent
 - **Text-only interaction.** The example intentionally omits speech input,
   speech output, and lipsync while the core chat and action loop is kept
   small and stable.
+- **Mixamo-only body clips in v1.** Clip-backed body gestures currently assume
+  Mixamo `.fbx` source files and the upstream `three-vrm` retargeting path.
 - **Memory is a plain sliding window.** No summarisation, no vector recall.
   Good enough for short sessions; will forget aggressively across long
   ones.
@@ -159,7 +188,9 @@ character.json ──► parseCharacterConfig ──► CharacterAgent
 ## Troubleshooting
 
 - **"character.json HTTP 404"** — the file must be served by Vite; default
-  is `/character.json` resolved from `public/`.
+  is `/characters/aria/character.json` resolved from `public/`.
+- **"Missing required render asset …"** — `avatar.vrm` or one of the required
+  Mixamo `.fbx` clips is missing from the character folder.
 - **"Load failed: …"** — the model URL must return a `.gguf` file with
   permissive CORS. HuggingFace resolve URLs work if the repo is public.
 - **Actions never fire** — the model may be too small to follow the grammar

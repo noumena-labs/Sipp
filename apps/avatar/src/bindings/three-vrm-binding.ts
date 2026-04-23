@@ -2,9 +2,9 @@
 //
 // three-vrm-binding.ts
 //
-// - Bridges character ActionBus events onto a loaded VRM. The binding owns
-//   both one-shot gestures and the continuous idle / facial behavior that
-//   runs every frame.
+// - Bridges character ActionBus events onto a loaded VRM. Body gestures are
+//   loaded from Mixamo .fbx clips by action name; facial and gaze behaviors
+//   remain code-driven.
 //
 //////////////////////////////////////////////////////////////////////////////
 
@@ -12,24 +12,29 @@ import * as THREE from 'three';
 import { VRMExpressionPresetName, VRMHumanBoneName } from '@pixiv/three-vrm';
 import type { ActionEvent } from 'cogent-engine/character';
 import { ActionBus } from 'cogent-engine/character';
+import {
+  dispatchAvatarAction,
+  getRequiredClipActions,
+} from '../actions';
+import {
+  BASE_MOOD_EXPRESSIONS,
+  MOOD_TO_EXPRESSION,
+  TALKING_MOUTH_EXPRESSIONS,
+  TRANSIENT_EXPRESSIONS,
+  type ExpressionActionName,
+  type ExpressionEnvelope,
+} from '../actions/expressions';
+import { resolveGazeOffset, type GazeTarget } from '../actions/gaze';
+import {
+  loadMixamoAnimationClip,
+  type ClipActionName,
+} from '../actions/mixamo';
+import type { AvatarActionRuntime } from '../actions/runtime';
+import {
+  resolveActionClipUrl,
+  type AvatarRenderAssets,
+} from '../characters/render-assets';
 import type { LoadedAvatar } from '../scene/vrm-loader';
-
-interface ActiveAnimation {
-  readonly name: string;
-  readonly durationSeconds: number;
-  elapsedSeconds: number;
-  update(progress: number): void;
-  cleanup(): void;
-}
-
-interface ExpressionEnvelope {
-  readonly name: VRMExpressionPresetName | string;
-  readonly peak: number;
-  readonly attackSeconds: number;
-  readonly holdSeconds: number;
-  readonly releaseSeconds: number;
-  elapsedSeconds: number;
-}
 
 interface BoneMotion {
   readonly node: THREE.Object3D;
@@ -44,50 +49,16 @@ const DOUBLE_BLINK_CHANCE = 0.16;
 const TALKING_MOUTH_DAMPING = 14;
 const GAZE_ACTION_SECONDS = 1.4;
 
-const TRANSIENT_EXPRESSIONS: Partial<Record<string, ExpressionEnvelopeSpec>> = {
-  smile: { name: VRMExpressionPresetName.Happy, peak: 0.82, attackSeconds: 0.14, holdSeconds: 1.9, releaseSeconds: 0.45 },
-  look_sad: { name: VRMExpressionPresetName.Sad, peak: 0.7, attackSeconds: 0.18, holdSeconds: 2.3, releaseSeconds: 0.5 },
-  gasp: { name: VRMExpressionPresetName.Surprised, peak: 0.88, attackSeconds: 0.08, holdSeconds: 0.85, releaseSeconds: 0.32 },
-  look_angry: { name: VRMExpressionPresetName.Angry, peak: 0.72, attackSeconds: 0.12, holdSeconds: 1.9, releaseSeconds: 0.45 },
-};
+const CLIP_FADE_SECONDS = 0.18;
+const CLIP_STOP_DELAY_MS = Math.ceil(CLIP_FADE_SECONDS * 1000);
 
-interface ExpressionEnvelopeSpec {
-  readonly name: VRMExpressionPresetName | string;
-  readonly peak: number;
-  readonly attackSeconds: number;
-  readonly holdSeconds: number;
-  readonly releaseSeconds: number;
-}
-
-const BASE_MOOD_EXPRESSIONS = [
-  VRMExpressionPresetName.Happy,
-  VRMExpressionPresetName.Sad,
-  VRMExpressionPresetName.Surprised,
-  VRMExpressionPresetName.Angry,
-  VRMExpressionPresetName.Relaxed,
-] as const;
-
-const MOOD_TO_EXPRESSION: Record<string, (typeof BASE_MOOD_EXPRESSIONS)[number] | null> = {
-  happy: VRMExpressionPresetName.Happy,
-  sad: VRMExpressionPresetName.Sad,
-  surprised: VRMExpressionPresetName.Surprised,
-  angry: VRMExpressionPresetName.Angry,
-  neutral: null,
-};
-
-const TALKING_MOUTH_EXPRESSIONS = [
-  VRMExpressionPresetName.Aa,
-  VRMExpressionPresetName.Ih,
-  VRMExpressionPresetName.Ou,
-  VRMExpressionPresetName.Ee,
-  VRMExpressionPresetName.Oh,
-] as const;
-
-export class ThreeVRMBinding {
+export class ThreeVRMBinding implements AvatarActionRuntime {
   private readonly bus: ActionBus;
   private readonly avatar: LoadedAvatar;
+  private readonly renderAssets: AvatarRenderAssets;
   private readonly disposers: Array<() => void> = [];
   private readonly expressionValues = new Map<VRMExpressionPresetName | string, number>();
+  private readonly clipActions = new Map<ClipActionName, THREE.AnimationAction>();
   private readonly lookTarget = new THREE.Object3D();
   private readonly desiredLookTarget = new THREE.Vector3();
   private readonly tempVec = new THREE.Vector3();
@@ -97,7 +68,7 @@ export class ThreeVRMBinding {
   private readonly headMotion: BoneMotion | null;
   private readonly neckMotion: BoneMotion | null;
   private readonly chestMotion: BoneMotion | null;
-  private active: ActiveAnimation | null = null;
+  private readonly mixer: THREE.AnimationMixer;
   private activeMood: (typeof BASE_MOOD_EXPRESSIONS)[number] | null = null;
   private transientExpressions: ExpressionEnvelope[] = [];
   private speaking = false;
@@ -106,10 +77,18 @@ export class ThreeVRMBinding {
   private blinkExpression: ExpressionEnvelope | null = null;
   private gazeOverrideSeconds = 0;
   private readonly gazeOffset = new THREE.Vector3(0, 0, 1.35);
+  private currentClipAction: THREE.AnimationAction | null = null;
+  private idleAction: THREE.AnimationAction | null = null;
+  private readonly pendingClipStops = new Map<
+    THREE.AnimationAction,
+    ReturnType<typeof window.setTimeout>
+  >();
 
-  public constructor(bus: ActionBus, avatar: LoadedAvatar) {
+  public constructor(bus: ActionBus, avatar: LoadedAvatar, renderAssets: AvatarRenderAssets) {
     this.bus = bus;
     this.avatar = avatar;
+    this.renderAssets = renderAssets;
+    this.mixer = new THREE.AnimationMixer(this.avatar.vrm.scene);
     this.baseFocus = avatar.layout.focusPoint.clone();
     this.headMotion = this.getBoneMotion(VRMHumanBoneName.Head);
     this.neckMotion = this.getBoneMotion(VRMHumanBoneName.Neck);
@@ -120,23 +99,33 @@ export class ThreeVRMBinding {
     this.lookTarget.position.copy(this.baseFocus).add(this.gazeOffset);
     this.desiredLookTarget.copy(this.lookTarget.position);
     this.disposers.push(this.bus.on('action', (event) => this.handleAction(event)));
+    this.mixer.addEventListener('finished', this.handleMixerFinished);
 
     if (this.avatar.vrm.lookAt) {
       this.avatar.vrm.lookAt.target = this.lookTarget;
     }
   }
 
+  public async init(actionNames: readonly string[]): Promise<void> {
+    const clipActions = getRequiredClipActions(actionNames);
+    await Promise.all([
+      this.preloadIdleAction(),
+      ...clipActions.map((actionName) => this.preloadClipAction(actionName)),
+    ]);
+    this.playIdle();
+  }
+
   /** Per-frame update. Forward `deltaSeconds` from the scene loop. */
   public tick(deltaSeconds: number): void {
     this.elapsedSeconds += deltaSeconds;
-    this.avatar.update(deltaSeconds);
-    this.updateOneShotAnimation(deltaSeconds);
+    this.mixer.update(deltaSeconds);
     this.updateTransientExpressions(deltaSeconds);
     this.updateBlink(deltaSeconds);
     this.updateIdlePose();
     this.updateLookAt(deltaSeconds);
     this.updateMouthExpressions(deltaSeconds);
     this.updateExpressionWeights(deltaSeconds);
+    this.avatar.update(deltaSeconds);
   }
 
   public setSpeaking(active: boolean): void {
@@ -144,13 +133,21 @@ export class ThreeVRMBinding {
   }
 
   public dispose(): void {
+    for (const timeoutId of this.pendingClipStops.values()) {
+      window.clearTimeout(timeoutId);
+    }
+    this.pendingClipStops.clear();
     for (const disposer of this.disposers) {
       disposer();
     }
-    if (this.active) {
-      this.active.cleanup();
-      this.active = null;
+    this.mixer.removeEventListener('finished', this.handleMixerFinished);
+    this.idleAction?.stop();
+    for (const action of this.clipActions.values()) {
+      action.stop();
     }
+    this.clipActions.clear();
+    this.idleAction = null;
+    this.currentClipAction = null;
     this.resetBoneMotion(this.chestMotion);
     this.resetBoneMotion(this.neckMotion);
     this.resetBoneMotion(this.headMotion);
@@ -165,132 +162,62 @@ export class ThreeVRMBinding {
     }
   }
 
-  private handleAction(event: ActionEvent): void {
-    switch (event.name) {
-      case 'wave':
-        this.startAnimation(this.buildWaveAnimation());
-        return;
-      case 'nod':
-        this.startAnimation(this.buildNodAnimation(1));
-        return;
-      case 'shake_head':
-        this.startAnimation(this.buildNodAnimation(-1, true));
-        return;
-      case 'smile':
-      case 'look_sad':
-      case 'gasp':
-      case 'look_angry':
-        this.playTransientExpression(event.name);
-        return;
-      case 'settle':
-        this.transientExpressions = [];
-        this.setMood('neutral');
-        return;
-      case 'look_at_you':
-        this.applyLookAt('camera');
-        return;
-      case 'glance_left':
-        this.applyLookAt('left');
-        return;
-      case 'glance_right':
-        this.applyLookAt('right');
-        return;
-      case 'look_up':
-        this.applyLookAt('up');
-        return;
-      case 'look_down':
-        this.applyLookAt('down');
-        return;
-      default:
-        console.info(`[binding] no handler for action "${event.name}"`);
-    }
-  }
-
-  private startAnimation(next: ActiveAnimation): void {
-    if (this.active) {
-      this.active.cleanup();
-    }
-    this.active = next;
-  }
-
-  private updateOneShotAnimation(deltaSeconds: number): void {
-    if (!this.active) {
-      return;
-    }
-    this.active.elapsedSeconds += deltaSeconds;
-    const progress = Math.min(1, this.active.elapsedSeconds / this.active.durationSeconds);
-    this.active.update(progress);
-    if (progress >= 1) {
-      this.active.cleanup();
-      this.active = null;
-    }
-  }
-
-  private buildWaveAnimation(): ActiveAnimation {
-    const target = this.avatar.vrm.humanoid?.getNormalizedBoneNode(VRMHumanBoneName.RightUpperArm) ?? null;
-    const initialRotation = target ? target.rotation.clone() : null;
-    const durationSeconds = 1.4;
-    return {
-      name: 'wave',
-      durationSeconds,
-      elapsedSeconds: 0,
-      update(progress: number) {
-        if (!target || !initialRotation) {
-          return;
-        }
-        const raise = Math.sin(Math.min(1, progress * 2) * Math.PI * 0.5) * -1.4;
-        const oscillate = progress > 0.3 ? Math.sin(progress * Math.PI * 6) * 0.3 : 0;
-        target.rotation.set(
-          initialRotation.x,
-          initialRotation.y,
-          initialRotation.z + raise + oscillate
-        );
-      },
-      cleanup() {
-        if (target && initialRotation) {
-          target.rotation.copy(initialRotation);
-        }
-      },
-    };
-  }
-
-  private buildNodAnimation(direction: number, axisY = false): ActiveAnimation {
-    const head = this.headMotion?.node ?? null;
-    const initialRotation = head ? head.rotation.clone() : null;
-    const durationSeconds = 1.0;
-    return {
-      name: axisY ? 'shake_head' : 'nod',
-      durationSeconds,
-      elapsedSeconds: 0,
-      update(progress: number) {
-        if (!head || !initialRotation) {
-          return;
-        }
-        const swing = Math.sin(progress * Math.PI * 2) * 0.3 * direction;
-        if (axisY) {
-          head.rotation.set(initialRotation.x, initialRotation.y + swing, initialRotation.z);
-        } else {
-          head.rotation.set(initialRotation.x + swing, initialRotation.y, initialRotation.z);
-        }
-      },
-      cleanup() {
-        if (head && initialRotation) {
-          head.rotation.copy(initialRotation);
-        }
-      },
-    };
-  }
-
-  private setMood(mood: string): void {
-    this.activeMood = MOOD_TO_EXPRESSION[mood] ?? null;
-  }
-
-  private playTransientExpression(actionName: string): void {
-    const next = TRANSIENT_EXPRESSIONS[actionName];
+  public playClip(name: ClipActionName): void {
+    const next = this.clipActions.get(name);
     if (!next) {
-      return;
+      throw new Error(`Clip action \"${name}\" was triggered before it finished loading.`);
     }
+
+    this.cancelScheduledClipStop(next);
+    const previousAction = this.currentClipAction;
+
+    next.reset();
+    next.enabled = true;
+    next.setLoop(THREE.LoopOnce, 1);
+    next.clampWhenFinished = true;
+    next.play();
+
+    if (previousAction && previousAction !== next) {
+      previousAction.crossFadeTo(next, CLIP_FADE_SECONDS, false);
+      this.scheduleClipStop(previousAction);
+    } else if (this.idleAction) {
+      this.idleAction.crossFadeTo(next, CLIP_FADE_SECONDS, false);
+    } else {
+      next.fadeIn(CLIP_FADE_SECONDS);
+    }
+
+    this.currentClipAction = next;
+  }
+
+  public playTransientExpression(actionName: ExpressionActionName): void {
+    const next = TRANSIENT_EXPRESSIONS[actionName];
     this.transientExpressions.push({ ...next, elapsedSeconds: 0 });
+  }
+
+  public settle(): void {
+    this.transientExpressions = [];
+    this.setMood('neutral');
+  }
+
+  public applyLookAt(target: GazeTarget): void {
+    const headNode =
+      this.headMotion?.node ??
+      this.avatar.vrm.humanoid?.getNormalizedBoneNode(VRMHumanBoneName.Head) ??
+      this.avatar.root;
+    headNode.getWorldPosition(this.headWorldPos);
+    resolveGazeOffset(target, this.tempVec);
+    this.desiredLookTarget.copy(this.headWorldPos).add(this.tempVec);
+    this.gazeOverrideSeconds = GAZE_ACTION_SECONDS;
+  }
+
+  private handleAction(event: ActionEvent): void {
+    if (!dispatchAvatarAction(event.name, this)) {
+      console.info(`[binding] no handler for action "${event.name}"`);
+    }
+  }
+
+  private setMood(mood: keyof typeof MOOD_TO_EXPRESSION): void {
+    this.activeMood = MOOD_TO_EXPRESSION[mood] ?? null;
   }
 
   private updateTransientExpressions(deltaSeconds: number): void {
@@ -334,6 +261,10 @@ export class ThreeVRMBinding {
   }
 
   private updateIdlePose(): void {
+    if (this.idleAction) {
+      return;
+    }
+
     const talkFactor = this.speaking ? 1 : 0;
     const swaySlow = Math.sin(this.elapsedSeconds * 0.72);
     const swayFast = Math.sin(this.elapsedSeconds * 1.47 + 0.9);
@@ -358,7 +289,7 @@ export class ThreeVRMBinding {
       );
     }
 
-    if (this.headMotion && !this.active) {
+    if (this.headMotion) {
       const rest = this.headMotion.rest;
       this.headMotion.node.rotation.set(
         rest.x + swayFast * 0.018 + micro * 0.01 + talkFactor * 0.018 * Math.sin(this.elapsedSeconds * 5.1),
@@ -451,37 +382,6 @@ export class ThreeVRMBinding {
     expressionManager.update();
   }
 
-  private applyLookAt(target: 'camera' | 'left' | 'right' | 'up' | 'down'): void {
-    const headNode = this.headMotion?.node ?? this.avatar.vrm.humanoid?.getNormalizedBoneNode(VRMHumanBoneName.Head) ?? this.avatar.root;
-    headNode.getWorldPosition(this.headWorldPos);
-    const offset = this.tempVec.set(0, 0, 1.35);
-    switch (target) {
-      case 'left':
-        offset.x = -0.38;
-        offset.y = 0.02;
-        break;
-      case 'right':
-        offset.x = 0.38;
-        offset.y = 0.02;
-        break;
-      case 'up':
-        offset.x = 0;
-        offset.y = 0.34;
-        break;
-      case 'down':
-        offset.x = 0;
-        offset.y = -0.24;
-        break;
-      case 'camera':
-      default:
-        offset.x = 0;
-        offset.y = 0;
-        break;
-    }
-    this.desiredLookTarget.copy(this.headWorldPos).add(offset);
-    this.gazeOverrideSeconds = GAZE_ACTION_SECONDS;
-  }
-
   private getBoneMotion(humanBoneName: VRMHumanBoneName): BoneMotion | null {
     const node = this.avatar.vrm.humanoid?.getNormalizedBoneNode(humanBoneName) ?? null;
     if (!node) {
@@ -491,6 +391,73 @@ export class ThreeVRMBinding {
       node,
       rest: node.rotation.clone(),
     };
+  }
+
+  private readonly handleMixerFinished = (event: { action: THREE.AnimationAction }): void => {
+    if (event.action !== this.currentClipAction) {
+      event.action.stop();
+      return;
+    }
+
+    if (this.idleAction) {
+      this.playIdle();
+      event.action.crossFadeTo(this.idleAction, CLIP_FADE_SECONDS, false);
+    } else {
+      event.action.fadeOut(CLIP_FADE_SECONDS);
+    }
+
+    this.scheduleClipStop(event.action);
+    this.currentClipAction = null;
+  };
+
+  private async preloadIdleAction(): Promise<void> {
+    const clip = await loadMixamoAnimationClip(this.renderAssets.idleUrl, this.avatar.vrm);
+    const action = this.mixer.clipAction(clip);
+    action.enabled = true;
+    action.clampWhenFinished = false;
+    action.setLoop(THREE.LoopRepeat, Infinity);
+    this.idleAction = action;
+  }
+
+  private async preloadClipAction(actionName: ClipActionName): Promise<void> {
+    const clipUrl = resolveActionClipUrl(this.renderAssets, actionName);
+    const clip = await loadMixamoAnimationClip(clipUrl, this.avatar.vrm);
+    const action = this.mixer.clipAction(clip);
+    action.enabled = false;
+    action.clampWhenFinished = false;
+    action.setLoop(THREE.LoopOnce, 1);
+    this.clipActions.set(actionName, action);
+  }
+
+  private playIdle(): void {
+    if (!this.idleAction) {
+      return;
+    }
+
+    this.cancelScheduledClipStop(this.idleAction);
+    this.idleAction.enabled = true;
+    this.idleAction.reset();
+    this.idleAction.setLoop(THREE.LoopRepeat, Infinity);
+    this.idleAction.clampWhenFinished = false;
+    this.idleAction.play();
+  }
+
+  private scheduleClipStop(action: THREE.AnimationAction): void {
+    this.cancelScheduledClipStop(action);
+    const timeoutId = window.setTimeout(() => {
+      action.stop();
+      this.pendingClipStops.delete(action);
+    }, CLIP_STOP_DELAY_MS);
+    this.pendingClipStops.set(action, timeoutId);
+  }
+
+  private cancelScheduledClipStop(action: THREE.AnimationAction): void {
+    const timeoutId = this.pendingClipStops.get(action);
+    if (timeoutId == null) {
+      return;
+    }
+    window.clearTimeout(timeoutId);
+    this.pendingClipStops.delete(action);
   }
 
   private resetBoneMotion(motion: BoneMotion | null): void {
