@@ -36,6 +36,10 @@ function formatIntent(agent: SimulationAgentState): string {
   }
 }
 
+function formatGoal(agent: SimulationAgentState): string {
+  return agent.goal?.label ?? 'idle';
+}
+
 export function AgentInspector(props: AgentInspectorProps) {
   return (
     <div className="agent-inspector glass-panel">
@@ -57,8 +61,9 @@ export function AgentInspector(props: AgentInspectorProps) {
                   ({a.position.x.toFixed(1)}, {a.position.z.toFixed(1)})
                 </span>
               </div>
-              <div className="agent-intent">intent: {formatIntent(a)}</div>
-              {a.status ? <div className="agent-status">"{a.status}"</div> : null}
+              <div className="agent-activity">{a.status || 'watching quietly'}</div>
+              <div className="agent-goal">goal: {formatGoal(a)}</div>
+              {a.intent ? <div className="agent-intent">executor: {formatIntent(a)}</div> : null}
               {a.holding ? <div className="agent-holding">holding: {a.holding}</div> : null}
             </li>
           );

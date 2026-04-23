@@ -767,6 +767,7 @@ function logChoiceQuery(args: {
   cancelled?: boolean;
   errorMessage?: string;
 }): void {
+  if (!isPromptTraceEnabled()) return;
   if (args.phase === 'request') {
     console.groupCollapsed(`[CharacterAgent.choose] -> ${args.contextKey}`);
     console.log('systemPrompt', args.systemPrompt ?? '');
@@ -784,4 +785,8 @@ function logChoiceQuery(args: {
     console.warn('error', args.errorMessage);
   }
   console.groupEnd();
+}
+
+function isPromptTraceEnabled(): boolean {
+  return (globalThis as { COGENT_TRACE_PROMPTS?: boolean }).COGENT_TRACE_PROMPTS === true;
 }

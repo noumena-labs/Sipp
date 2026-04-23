@@ -65,7 +65,7 @@ export default function App() {
           pushEvent({
             tick: event.tick,
             kind: 'intent',
-            text: `${event.agentId} -> ${event.intent.kind}`,
+            text: `${event.agentId} decided to ${event.goal.label} (${event.status})`,
           });
           break;
         case 'director-conflict':
@@ -245,6 +245,7 @@ export default function App() {
         <SimulationCanvas
           bus={bus}
           bounds={COURTYARD_SCENARIO.bounds ?? { halfExtent: 8 }}
+          snapshot={snapshot}
         highlightedAgentId={selectedAgentId}
       />
 

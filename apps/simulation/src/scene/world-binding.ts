@@ -15,19 +15,28 @@ import type {
   SimulationBus,
   SimulationEvent,
 } from '../runtime/bus.js';
-import type { WorldSnapshot } from '../runtime/types.js';
+import type { AgentIntent, Vec2, WorldSnapshot } from '../runtime/types.js';
 import { createAgentVisual, type AgentVisual } from '../render/agent-mesh.js';
 import { createObjectVisual, type ObjectVisual } from '../render/object-mesh.js';
 import { emotionGlyphFor } from '../render/emoji-billboard.js';
 import { AGENT_COLOR_BY_ID } from '../scenarios/courtyard-snack.js';
 
 const LERP_ALPHA = 0.22;
+const THINKING_SECONDS = 1.2;
+const PULSE_SECONDS = 0.8;
+const THINKING_GLYPH = '\u{1F914}';
 
 interface AgentEntry {
   readonly visual: AgentVisual;
+  readonly targetMarker: THREE.Mesh;
+  readonly targetLine: THREE.Line;
   targetX: number;
   targetZ: number;
   targetHeading: number;
+  status: string;
+  holding: string | null;
+  pulseUntil: number;
+  thinkingUntil: number;
 }
 
 interface ObjectEntry {
@@ -39,6 +48,7 @@ interface ObjectEntry {
 }
 
 export interface WorldBinding {
+  applySnapshot(snapshot: WorldSnapshot): void;
   dispose(): void;
   setHighlightedAgent(agentId: string | null): void;
 }
@@ -51,6 +61,7 @@ export function bindWorldToScene(
   const agents = new Map<string, AgentEntry>();
   const objects = new Map<string, ObjectEntry>();
   let highlightedAgent: string | null = null;
+  let elapsedSeconds = 0;
 
   const ensureAgent = (id: string, name: string): AgentEntry => {
     let entry = agents.get(id);
@@ -58,7 +69,45 @@ export function bindWorldToScene(
     const color = AGENT_COLOR_BY_ID.get(id) ?? '#c0c0c0';
     const visual = createAgentVisual(name, color);
     worldRoot.add(visual.root);
-    entry = { visual, targetX: 0, targetZ: 0, targetHeading: 0 };
+    const targetMarker = new THREE.Mesh(
+      new THREE.RingGeometry(0.28, 0.38, 32),
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color(color),
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.55,
+        depthWrite: false,
+      })
+    );
+    targetMarker.rotation.x = -Math.PI / 2;
+    targetMarker.position.y = 0.018;
+    targetMarker.visible = false;
+    worldRoot.add(targetMarker);
+
+    const targetLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+      new THREE.LineBasicMaterial({
+        color: new THREE.Color(color),
+        transparent: true,
+        opacity: 0.42,
+        depthWrite: false,
+      })
+    );
+    targetLine.visible = false;
+    worldRoot.add(targetLine);
+
+    entry = {
+      visual,
+      targetMarker,
+      targetLine,
+      targetX: 0,
+      targetZ: 0,
+      targetHeading: 0,
+      status: '',
+      holding: null,
+      pulseUntil: 0,
+      thinkingUntil: 0,
+    };
     agents.set(id, entry);
     if (highlightedAgent === id) visual.setHighlighted(true);
     return entry;
@@ -83,6 +132,12 @@ export function bindWorldToScene(
       entry.targetX = a.position.x;
       entry.targetZ = a.position.z;
       entry.targetHeading = a.heading;
+      if (entry.status !== a.status || entry.holding !== a.holding) {
+        entry.status = a.status;
+        entry.holding = a.holding;
+        entry.pulseUntil = Math.max(entry.pulseUntil, elapsedSeconds + PULSE_SECONDS);
+      }
+      setAgentTarget(entry, resolveIntentTarget(a.intent, snap));
       if (a.emotion) {
         entry.visual.emoji.setGlyph(emotionGlyphFor(a.emotion));
         entry.visual.emoji.setVisible(true);
@@ -93,7 +148,10 @@ export function bindWorldToScene(
     for (const [id, entry] of agents) {
       if (!seenAgents.has(id)) {
         worldRoot.remove(entry.visual.root);
+        worldRoot.remove(entry.targetMarker);
+        worldRoot.remove(entry.targetLine);
         entry.visual.dispose();
+        disposeTargetVisuals(entry);
         agents.delete(id);
       }
     }
@@ -122,11 +180,30 @@ export function bindWorldToScene(
   const handleEvent = (event: SimulationEvent): void => {
     if (event.kind === 'tick-end') {
       applySnapshot(event.snapshot);
+      return;
+    }
+    if (event.kind === 'agent-query-start') {
+      const entry = agents.get(event.agentId);
+      if (entry) {
+        entry.thinkingUntil = elapsedSeconds + THINKING_SECONDS;
+        entry.pulseUntil = Math.max(entry.pulseUntil, elapsedSeconds + PULSE_SECONDS);
+        entry.visual.emoji.setGlyph(THINKING_GLYPH);
+        entry.visual.emoji.setVisible(true);
+      }
+      return;
+    }
+    if (event.kind === 'agent-intent') {
+      const entry = agents.get(event.agentId);
+      if (entry) {
+        entry.status = event.status;
+        entry.pulseUntil = elapsedSeconds + PULSE_SECONDS;
+      }
     }
   };
   const unsubscribe = bus.onAny(handleEvent);
 
-  const stopFrame = onFrame(() => {
+  const stopFrame = onFrame((dt) => {
+    elapsedSeconds += dt;
     for (const entry of agents.values()) {
       const pos = entry.visual.root.position;
       pos.x += (entry.targetX - pos.x) * LERP_ALPHA;
@@ -137,6 +214,19 @@ export function bindWorldToScene(
       while (delta > Math.PI) delta -= Math.PI * 2;
       while (delta < -Math.PI) delta += Math.PI * 2;
       rot.y += delta * LERP_ALPHA;
+      const pulse = Math.max(0, entry.pulseUntil - elapsedSeconds) / PULSE_SECONDS;
+      entry.visual.body.scale.set(1 + pulse * 0.18, 1 + pulse * 0.12, 1 + pulse * 0.18);
+      if (entry.thinkingUntil > elapsedSeconds) {
+        entry.visual.emoji.setGlyph(THINKING_GLYPH);
+        entry.visual.emoji.setVisible(true);
+      }
+      if (entry.targetLine.visible) {
+        const target = entry.targetMarker.position;
+        entry.targetLine.geometry.setFromPoints([
+          new THREE.Vector3(pos.x, 0.06, pos.z),
+          new THREE.Vector3(target.x, 0.06, target.z),
+        ]);
+      }
     }
     for (const entry of objects.values()) {
       if (entry.heldBy) {
@@ -144,7 +234,7 @@ export function bindWorldToScene(
         if (holder) {
           entry.visual.root.position.x = holder.visual.root.position.x;
           entry.visual.root.position.z = holder.visual.root.position.z;
-          return;
+          continue;
         }
       }
       const p = entry.visual.root.position;
@@ -154,12 +244,16 @@ export function bindWorldToScene(
   });
 
   return {
+    applySnapshot,
     dispose() {
       unsubscribe();
       stopFrame();
       for (const entry of agents.values()) {
         worldRoot.remove(entry.visual.root);
+        worldRoot.remove(entry.targetMarker);
+        worldRoot.remove(entry.targetLine);
         entry.visual.dispose();
+        disposeTargetVisuals(entry);
       }
       for (const entry of objects.values()) {
         worldRoot.remove(entry.visual.root);
@@ -175,4 +269,43 @@ export function bindWorldToScene(
       }
     },
   };
+}
+
+function resolveIntentTarget(intent: AgentIntent | null, snap: WorldSnapshot): Vec2 | null {
+  if (!intent) return null;
+  switch (intent.kind) {
+    case 'move_to':
+      return intent.target;
+    case 'approach_agent': {
+      const target = snap.agents.find((agent) => agent.id === intent.agentId);
+      return target?.position ?? null;
+    }
+    case 'pick_up':
+    case 'use': {
+      const target = snap.objects.find((object) => object.id === intent.objectId);
+      return target?.position ?? null;
+    }
+    case 'wait':
+    case 'drop':
+      return null;
+  }
+}
+
+function setAgentTarget(entry: AgentEntry, target: Vec2 | null): void {
+  if (!target) {
+    entry.targetMarker.visible = false;
+    entry.targetLine.visible = false;
+    return;
+  }
+  entry.targetMarker.position.x = target.x;
+  entry.targetMarker.position.z = target.z;
+  entry.targetMarker.visible = true;
+  entry.targetLine.visible = true;
+}
+
+function disposeTargetVisuals(entry: AgentEntry): void {
+  entry.targetMarker.geometry.dispose();
+  (entry.targetMarker.material as THREE.Material).dispose();
+  entry.targetLine.geometry.dispose();
+  (entry.targetLine.material as THREE.Material).dispose();
 }

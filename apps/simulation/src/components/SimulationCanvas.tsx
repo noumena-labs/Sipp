@@ -10,7 +10,7 @@
 
 import { useEffect, useRef } from 'react';
 import type { SimulationBus } from '../runtime/bus.js';
-import type { WorldBounds } from '../runtime/types.js';
+import type { WorldBounds, WorldSnapshot } from '../runtime/types.js';
 import { createSimulationScene, type SimulationSceneHandle } from '../scene/scene.js';
 import { bindWorldToScene, type WorldBinding } from '../scene/world-binding.js';
 
@@ -18,6 +18,7 @@ export interface SimulationCanvasProps {
   readonly bus: SimulationBus;
   readonly bounds: WorldBounds;
   readonly highlightedAgentId: string | null;
+  readonly snapshot: WorldSnapshot | null;
 }
 
 export function SimulationCanvas(props: SimulationCanvasProps) {
@@ -55,6 +56,12 @@ export function SimulationCanvas(props: SimulationCanvasProps) {
   useEffect(() => {
     bindingRef.current?.setHighlightedAgent(props.highlightedAgentId);
   }, [props.highlightedAgentId]);
+
+  useEffect(() => {
+    if (props.snapshot) {
+      bindingRef.current?.applySnapshot(props.snapshot);
+    }
+  }, [props.snapshot]);
 
   return <div ref={containerRef} className="sim-canvas" />;
 }

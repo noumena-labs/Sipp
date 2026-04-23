@@ -1,4 +1,5 @@
 import type {
+  AgentGoal,
   AgentIntent,
   DirectorDecision,
   SimulationAgentState,
@@ -28,7 +29,9 @@ export interface AgentQueryEndEvent {
   readonly kind: 'agent-query-end';
   readonly tick: number;
   readonly agentId: string;
+  readonly goal: AgentGoal | null;
   readonly intent: AgentIntent | null;
+  readonly status: string;
   readonly emotion: string | null;
   readonly cancelled: boolean;
   readonly errorMessage?: string;
@@ -38,7 +41,9 @@ export interface AgentIntentEvent {
   readonly kind: 'agent-intent';
   readonly tick: number;
   readonly agentId: string;
+  readonly goal: AgentGoal;
   readonly intent: AgentIntent;
+  readonly status: string;
 }
 
 export interface AgentActionEvent {

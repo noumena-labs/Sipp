@@ -270,13 +270,20 @@ html, body, #app {
   font-size: 11px;
 }
 
+.agent-activity {
+  color: #eef3ff;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.agent-goal,
 .agent-intent {
   color: #c6cddc;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
+  margin-top: 2px;
 }
 
-.agent-status,
 .agent-holding {
   color: #9aa3b8;
   font-size: 11px;

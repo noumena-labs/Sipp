@@ -9,6 +9,7 @@ import {
 } from './reducer.js';
 import type {
   AgentGoal,
+  AgentIntent,
   DirectorDecision,
   DirectorResolution,
   ScenarioAgentSeed,
@@ -99,7 +100,6 @@ export class SimulationRuntime {
         // Ignore.
       }
     }
-    this.bus.clear();
   }
 
   public addAgent(agent: SimulationAgentChooser, seed: ScenarioAgentSeed): void {
@@ -184,6 +184,7 @@ export class SimulationRuntime {
         if (signal.aborted) return;
         const decision = coerceConflictDecision(result.data, conflicts);
         applyDirectorDecision(this.state, decision);
+        this.clearSatisfiedGoals([]);
         this.emit({ kind: 'director-decision', tick: this.state.tick, decision });
         if (decision.note) {
           this.emit({ kind: 'world-note', tick: this.state.tick, note: decision.note });
@@ -253,10 +254,10 @@ export class SimulationRuntime {
     if (signal.aborted) return;
 
     agentState.goal = result.goal;
-    const intent = this.mapGoalToIntent(result.goal, perception);
+    const intent = this.mapGoalToIntent(result.goal);
     agentState.intent = intent;
     agentState.intentIssuedAtTick = this.state.tick;
-    agentState.status = result.goal.label;
+    agentState.status = this.describeActiveGoal(result.goal);
     if (intent.emotion) {
       agentState.emotion = intent.emotion;
     }
@@ -265,7 +266,9 @@ export class SimulationRuntime {
       kind: 'agent-query-end',
       tick: this.state.tick,
       agentId: chosenId,
+      goal: result.goal,
       intent,
+      status: agentState.status,
       emotion: intent.emotion ?? null,
       cancelled: result.cancelled,
       ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
@@ -274,14 +277,13 @@ export class SimulationRuntime {
       kind: 'agent-intent',
       tick: this.state.tick,
       agentId: chosenId,
+      goal: result.goal,
       intent,
+      status: agentState.status,
     });
   }
 
-  private mapGoalToIntent(
-    goal: AgentGoal,
-    _perception: import('./types.js').AgentPerception
-  ): import('./types.js').AgentIntent {
+  private mapGoalToIntent(goal: AgentGoal): AgentIntent {
     switch (goal.kind) {
       case 'wait':
         return { kind: 'wait', emotion: inferEmotionFromGoal(goal), reason: goal.label };
@@ -325,18 +327,47 @@ export class SimulationRuntime {
           agent.goal.kind === 'drop' ||
           agent.goal.kind === 'wait'
         ) {
+          agent.status = this.describeCompletedGoal(agent);
           agent.goal = null;
         }
         continue;
       }
       if (arrived.has(agent.id)) {
-        if (agent.goal.kind === 'go_to_object' || agent.goal.kind === 'go_to_agent') {
+        if (agent.goal.kind === 'go_to_object') {
+          const chainedGoal = this.buildImmediateObjectActionGoal(agent.goal.objectId);
+          if (chainedGoal) {
+            const intent = this.mapGoalToIntent(chainedGoal);
+            agent.goal = chainedGoal;
+            agent.intent = intent;
+            agent.intentIssuedAtTick = this.state.tick;
+            agent.status = this.describeActiveGoal(chainedGoal);
+            if (intent.emotion) {
+              agent.emotion = intent.emotion;
+            }
+            this.emit({
+              kind: 'agent-intent',
+              tick: this.state.tick,
+              agentId: agent.id,
+              goal: chainedGoal,
+              intent,
+              status: agent.status,
+            });
+            continue;
+          }
+          agent.status = this.describeCompletedGoal(agent);
+          agent.goal = null;
+          agent.intent = null;
+          continue;
+        }
+        if (agent.goal.kind === 'go_to_agent') {
+          agent.status = this.describeCompletedGoal(agent);
           agent.goal = null;
           agent.intent = null;
         }
         continue;
       }
       if (this.isGoalInvalid(agent)) {
+        agent.status = this.describeBlockedGoal(agent.goal);
         agent.goal = null;
         agent.intent = null;
       }
@@ -365,6 +396,81 @@ export class SimulationRuntime {
       }
       default:
         return false;
+    }
+  }
+
+  private buildImmediateObjectActionGoal(objectId: string): AgentGoal | null {
+    const object = this.state.objects.find((entry) => entry.id === objectId);
+    if (!object) return null;
+    const affordance = object.affordances.find((entry) => {
+      if (entry.kind === 'pick_up') {
+        return object.heldBy == null;
+      }
+      return true;
+    });
+    if (!affordance) return null;
+    return { kind: 'object_action', objectId, affordance, label: affordance.label };
+  }
+
+  private describeActiveGoal(goal: AgentGoal): string {
+    switch (goal.kind) {
+      case 'wait':
+        return 'pausing to watch the courtyard';
+      case 'go_to_object': {
+        const object = this.state.objects.find((entry) => entry.id === goal.objectId);
+        return object ? `heading to the ${object.label}` : goal.label;
+      }
+      case 'go_to_agent': {
+        const target = this.state.agents.find((entry) => entry.id === goal.agentId);
+        return target ? `approaching ${target.name}` : goal.label;
+      }
+      case 'object_action':
+        return goal.affordance.status ?? goal.label;
+      case 'drop':
+        return goal.label.replace(/^drop /, 'putting down ');
+    }
+  }
+
+  private describeCompletedGoal(agent: SimulationAgentState): string {
+    const goal = agent.goal;
+    if (!goal) return agent.status;
+    switch (goal.kind) {
+      case 'wait':
+        return 'watching quietly';
+      case 'go_to_object': {
+        const object = this.state.objects.find((entry) => entry.id === goal.objectId);
+        return object ? `arrived at the ${object.label}` : 'arrived';
+      }
+      case 'go_to_agent': {
+        const target = this.state.agents.find((entry) => entry.id === goal.agentId);
+        return target ? `reached ${target.name}` : 'arrived';
+      }
+      case 'object_action':
+        if (goal.affordance.kind === 'pick_up') {
+          const object = this.state.objects.find((entry) => entry.id === goal.objectId);
+          if (object?.heldBy === agent.id) {
+            return `picked up the ${object.label}`;
+          }
+          return object ? `missed the ${object.label}` : 'missed the target';
+        }
+        return goal.affordance.status ?? goal.label;
+      case 'drop':
+        return 'set something down';
+    }
+  }
+
+  private describeBlockedGoal(goal: AgentGoal): string {
+    switch (goal.kind) {
+      case 'go_to_object':
+      case 'object_action': {
+        const object = this.state.objects.find((entry) => entry.id === goal.objectId);
+        return object ? `lost access to the ${object.label}` : 'lost the target';
+      }
+      case 'go_to_agent':
+        return 'lost sight of the target';
+      case 'wait':
+      case 'drop':
+        return 'reconsidering';
     }
   }
 

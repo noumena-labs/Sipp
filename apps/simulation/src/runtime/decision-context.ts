@@ -23,7 +23,7 @@ export function buildDecisionContext(perception: AgentPerception): DecisionConte
     lines.push('Within reach:');
     for (const object of reachableObjects) {
       lines.push(`- ${describeObject(object)}`);
-      for (const affordance of object.affordances) {
+      for (const affordance of object.affordances.filter((entry) => isAffordanceAvailable(object, entry.kind))) {
         options.push({
           label: affordance.label,
           goal: { kind: 'object_action', objectId: object.id, affordance, label: affordance.label },
@@ -90,6 +90,13 @@ function describeOtherAgent(agent: AgentPerception['nearbyAgents'][number]): str
 function describeObject(object: PerceivedObject): string {
   const ownership = object.heldBy ? `held by ${object.heldBy}` : 'free';
   return `${object.label} (${ownership})`;
+}
+
+function isAffordanceAvailable(object: PerceivedObject, kind: 'pick_up' | 'use'): boolean {
+  if (kind === 'pick_up') {
+    return object.heldBy == null;
+  }
+  return true;
 }
 
 function qualitativeDistance(distance: number): string {
