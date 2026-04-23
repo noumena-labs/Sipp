@@ -467,6 +467,90 @@ test('clearMemory empties the sliding window', async () => {
   assert.equal(agent.getMemory().length, 0);
 });
 
+test('choose() threads literal-choice grammar into queuePrompt options', async () => {
+  const engine = createFakeEngine();
+  engine.enqueue({ tokens: ['wait'] });
+  const agent = new CharacterAgent(engine, buildConfig());
+
+  const result = await agent.choose('What should you do?', {
+    choices: ['wait', 'wander', 'approach:aria'],
+  });
+
+  assert.equal(result.choice, 'wait');
+  assert.equal(result.cancelled, false);
+  assert.equal(engine.queuePromptCalls.length, 1);
+  const call = engine.queuePromptCalls[0];
+  assert.ok(typeof call.options === 'object' && call.options != null);
+  const opts = call.options as PromptOptions;
+  assert.equal(opts.promptFormat, 'raw');
+  assert.equal(opts.nTokens, 24);
+  assert.ok(typeof opts.grammar === 'string' && opts.grammar.includes('approach:aria'));
+  assert.ok(call.promptText.includes('Choose exactly one of the following options'));
+});
+
+test('choose() is stateless and does not write memory', async () => {
+  const engine = createFakeEngine();
+  engine.enqueue({ tokens: ['chat reply'] });
+  engine.enqueue({ tokens: ['wander'] });
+  const agent = new CharacterAgent(engine, buildConfig());
+
+  await collectEvents(agent.chat('hello'));
+  assert.equal(agent.getMemory().length, 2);
+
+  const result = await agent.choose('Pick one.', {
+    choices: ['wait', 'wander'],
+  });
+
+  assert.equal(result.choice, 'wander');
+  assert.equal(agent.getMemory().length, 2);
+  const rendered = engine.queuePromptCalls[1]!.promptText;
+  assert.doesNotMatch(rendered, /chat reply/);
+  assert.doesNotMatch(rendered, /<user>\nhello<\/user>/);
+});
+
+test('choose() returns null on invalid model output', async () => {
+  const engine = createFakeEngine();
+  engine.enqueue({ tokens: ['something else entirely'] });
+  const agent = new CharacterAgent(engine, buildConfig());
+
+  const result = await agent.choose('Pick one.', {
+    choices: ['yes', 'no'],
+  });
+
+  assert.equal(result.choice, null);
+  assert.equal(result.cancelled, false);
+});
+
+test('choose() surfaces engine failure', async () => {
+  const engine = createFakeEngine();
+  engine.enqueue({ tokens: [], throwOnRun: new Error('boom') });
+  const agent = new CharacterAgent(engine, buildConfig());
+
+  const result = await agent.choose('Pick one.', {
+    choices: ['yes', 'no'],
+  });
+
+  assert.equal(result.choice, null);
+  assert.equal(result.errorMessage, 'boom');
+  assert.equal(engine.cancelCalls.length, 1);
+});
+
+test('choose() returns cancelled when aborted', async () => {
+  const engine = createFakeEngine();
+  const controller = new AbortController();
+  controller.abort();
+  engine.enqueue({ tokens: [], response: { completed: false, cancelled: true, outputText: '' } });
+  const agent = new CharacterAgent(engine, buildConfig());
+
+  const result = await agent.choose('Pick one.', {
+    choices: ['yes', 'no'],
+    signal: controller.signal,
+  });
+
+  assert.equal(result.choice, null);
+  assert.equal(result.cancelled, true);
+});
+
 test('overlapping chat() auto-cancels the prior turn and commits only the replacement turn', async () => {
   const engine = createFakeEngine();
   let releaseFirst!: () => void;

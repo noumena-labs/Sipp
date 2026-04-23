@@ -1,82 +1,57 @@
-//////////////////////////////////////////////////////////////////////////////
-//
-// world-orchestrator.ts
-//
-// - The "game brain". Owns the world state and drives a fixed-rate tick
-//   loop that:
-//     1. Emits `tick-start`.
-//     2. Optionally queries at most one agent (scheduled round-robin).
-//     3. Runs the reducer (movement, interactions, conflict detection).
-//     4. Queries the director when conflicts exist or on cadence ticks.
-//     5. Applies the director decision to state.
-//     6. Emits `tick-end` with an immutable snapshot.
-//
-//   Ticks never overlap: if LLM inference runs past the nominal tick
-//   interval, the next tick simply waits.
-//
-//////////////////////////////////////////////////////////////////////////////
-
-import { SimulationBus, type SimulationEvent } from './simulation-bus.js';
+import type { DirectorRuntime, JsonValue } from 'cogent-engine/orchestrator';
+import { SimulationBus, type SimulationEvent } from './bus.js';
 import { buildPerception } from './sensing.js';
-import { SimulationAgent } from './simulation-agent.js';
-import { WorldDirector } from './world-director.js';
+import { SimulationAgentChooser } from './agent-chooser.js';
 import {
   applyDirectorDecision,
   applyTickFirstPass,
   type MutableWorldState,
-} from './world-reducer.js';
+} from './reducer.js';
 import type {
+  DirectorDecision,
+  DirectorResolution,
   ScenarioAgentSeed,
   ScenarioObjectSeed,
   SimulationAgentState,
   SimulationObjectState,
   WorldBounds,
+  WorldConflict,
   WorldSnapshot,
-} from './simulation-types.js';
+} from './types.js';
 
-export interface WorldOrchestratorOptions {
-  /** Stable identifier used to scope engine context keys for the director. */
+export interface SimulationRuntimeOptions {
   readonly id?: string;
-  /** Initial world bounds. Default = half-extent 8 (16×16 world). */
   readonly bounds?: WorldBounds;
-  /** Ticks per second. Default = 1.5. */
-  readonly tickHz?: number;
-  /** Ticks between director narration queries. Default = 10. */
-  readonly directorCadenceTicks?: number;
-  /** Initial director note shown before the first tick completes. */
   readonly initialDirectorNote?: string | null;
-  /** Pre-built event bus to share with external consumers. */
+  readonly directorCadenceTicks?: number;
+  readonly resolveConflictQuery?: string;
+  readonly narrateQuery?: string;
   readonly bus?: SimulationBus;
 }
 
-export interface AttachedSimulationAgent {
-  readonly agent: SimulationAgent;
-  readonly seed: ScenarioAgentSeed;
-}
-
-export class WorldOrchestrator {
+export class SimulationRuntime {
   public readonly bus: SimulationBus;
   public readonly id: string;
 
   private readonly state: MutableWorldState;
-  private readonly simulationAgents: Map<string, SimulationAgent> = new Map();
-  private readonly director: WorldDirector | null;
+  private readonly simulationAgents: Map<string, SimulationAgentChooser> = new Map();
+  private readonly director: DirectorRuntime | null;
   private readonly directorCadenceTicks: number;
+  private readonly resolveConflictQuery: string;
+  private readonly narrateQuery: string;
 
-  private tickHz: number;
-  private running = false;
   private disposed = false;
-  private tickTimer: ReturnType<typeof setTimeout> | null = null;
   private inFlightTick: Promise<void> | null = null;
   private queryCursor = 0;
   private activeController: AbortController | null = null;
 
-  public constructor(director: WorldDirector | null, options: WorldOrchestratorOptions = {}) {
-    this.id = options.id ?? 'world';
+  public constructor(director: DirectorRuntime | null, options: SimulationRuntimeOptions = {}) {
+    this.id = options.id ?? 'simulation';
     this.bus = options.bus ?? new SimulationBus();
-    this.tickHz = clampHz(options.tickHz ?? 1.5);
-    this.directorCadenceTicks = Math.max(1, Math.floor(options.directorCadenceTicks ?? 10));
     this.director = director;
+    this.directorCadenceTicks = Math.max(1, Math.floor(options.directorCadenceTicks ?? 10));
+    this.resolveConflictQuery = options.resolveConflictQuery ?? 'resolve_pickup_conflict';
+    this.narrateQuery = options.narrateQuery ?? 'narrate_scene';
     this.state = {
       tick: 0,
       timeSeconds: 0,
@@ -86,10 +61,6 @@ export class WorldOrchestrator {
       directorNote: options.initialDirectorNote ?? null,
     };
   }
-
-  // ---------------------------------------------------------------------
-  // Public API
-  // ---------------------------------------------------------------------
 
   public getSnapshot(): WorldSnapshot {
     return {
@@ -102,40 +73,13 @@ export class WorldOrchestrator {
     };
   }
 
-  public getTickHz(): number {
-    return this.tickHz;
-  }
-
-  public setTickHz(hz: number): void {
-    this.tickHz = clampHz(hz);
-  }
-
-  public isRunning(): boolean {
-    return this.running;
-  }
-
-  public start(): void {
-    if (this.disposed || this.running) return;
-    this.running = true;
-    this.scheduleNextTick(0);
-  }
-
-  public pause(): void {
-    this.running = false;
-    if (this.tickTimer !== null) {
-      clearTimeout(this.tickTimer);
-      this.tickTimer = null;
-    }
-  }
-
-  /** Runs exactly one tick. Resolves after the tick fully completes. */
-  public async step(): Promise<void> {
+  public async step(dtSeconds: number): Promise<void> {
     if (this.disposed) return;
     if (this.inFlightTick) {
       await this.inFlightTick;
       return;
     }
-    this.inFlightTick = this.runTick().finally(() => {
+    this.inFlightTick = this.runTick(dtSeconds).finally(() => {
       this.inFlightTick = null;
     });
     await this.inFlightTick;
@@ -144,11 +88,6 @@ export class WorldOrchestrator {
   public async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
-    this.running = false;
-    if (this.tickTimer !== null) {
-      clearTimeout(this.tickTimer);
-      this.tickTimer = null;
-    }
     if (this.activeController) {
       this.activeController.abort();
     }
@@ -156,15 +95,15 @@ export class WorldOrchestrator {
       try {
         await this.inFlightTick;
       } catch {
-        // ignore
+        // Ignore.
       }
     }
     this.bus.clear();
   }
 
-  public addAgent(agent: SimulationAgent, seed: ScenarioAgentSeed): void {
+  public addAgent(agent: SimulationAgentChooser, seed: ScenarioAgentSeed): void {
     if (this.simulationAgents.has(seed.id)) {
-      throw new Error(`agent "${seed.id}" already exists`);
+      throw new Error(`agent ${JSON.stringify(seed.id)} already exists`);
     }
     this.simulationAgents.set(seed.id, agent);
     this.state.agents.push({
@@ -185,7 +124,6 @@ export class WorldOrchestrator {
   public removeAgent(agentId: string): void {
     this.simulationAgents.delete(agentId);
     this.state.agents = this.state.agents.filter((a) => a.id !== agentId);
-    // Release any objects held by this agent.
     for (const obj of this.state.objects) {
       if (obj.heldBy === agentId) obj.heldBy = null;
     }
@@ -214,40 +152,10 @@ export class WorldOrchestrator {
     }
   }
 
-  // ---------------------------------------------------------------------
-  // Tick loop
-  // ---------------------------------------------------------------------
-
-  private scheduleNextTick(delayMs: number): void {
-    if (!this.running || this.disposed) return;
-    this.tickTimer = setTimeout(() => {
-      this.tickTimer = null;
-      if (!this.running || this.disposed) return;
-      if (this.inFlightTick) {
-        // Previous tick is still running; try again soon.
-        this.scheduleNextTick(1);
-        return;
-      }
-      const tickStart = performance.now();
-      this.inFlightTick = this.runTick()
-        .catch(() => {
-          // Errors are surfaced via bus events; the loop keeps going.
-        })
-        .finally(() => {
-          this.inFlightTick = null;
-          const elapsedMs = performance.now() - tickStart;
-          const intervalMs = 1000 / this.tickHz;
-          const next = Math.max(0, intervalMs - elapsedMs);
-          this.scheduleNextTick(next);
-        });
-    }, delayMs);
-  }
-
-  private async runTick(): Promise<void> {
+  private async runTick(dtSeconds: number): Promise<void> {
     if (this.disposed) return;
-    const dt = 1 / this.tickHz;
     this.state.tick += 1;
-    this.state.timeSeconds += dt;
+    this.state.timeSeconds += dtSeconds;
 
     const controller = new AbortController();
     this.activeController = controller;
@@ -256,61 +164,47 @@ export class WorldOrchestrator {
     try {
       this.emit({ kind: 'tick-start', tick: this.state.tick, timeSeconds: this.state.timeSeconds });
 
-      // 1. Optionally query one agent (round-robin, only agents that lack an intent).
       await this.maybeQueryOneAgent(signal);
-
       if (signal.aborted) return;
 
-      // 2. Reduce physics + interactions.
-      const { conflicts } = applyTickFirstPass(this.state, dt);
+      const { conflicts } = applyTickFirstPass(this.state, dtSeconds);
 
-      // 3. Resolve conflicts if any.
       if (conflicts.length > 0 && this.director) {
         this.emit({ kind: 'director-conflict', tick: this.state.tick, conflicts });
         const snapshotBefore = this.getSnapshot();
-        const result = await this.director.resolveConflicts(snapshotBefore, conflicts, {
-          signal,
-        });
+        const result = await this.director.query(this.resolveConflictQuery, {
+          state: snapshotBefore as unknown as JsonValue,
+          conflicts: conflicts as unknown as JsonValue,
+        }, { signal });
         if (signal.aborted) return;
-        applyDirectorDecision(this.state, result.decision);
-        this.emit({
-          kind: 'director-decision',
-          tick: this.state.tick,
-          decision: result.decision,
-        });
-        if (result.decision.note) {
-          this.emit({ kind: 'world-note', tick: this.state.tick, note: result.decision.note });
+        const decision = coerceConflictDecision(result.data, conflicts);
+        applyDirectorDecision(this.state, decision);
+        this.emit({ kind: 'director-decision', tick: this.state.tick, decision });
+        if (decision.note) {
+          this.emit({ kind: 'world-note', tick: this.state.tick, note: decision.note });
         }
       } else if (
         this.director &&
-        this.state.tick % this.directorCadenceTicks === 0 &&
-        this.simulationAgents.size > 0
+        this.simulationAgents.size > 0 &&
+        this.state.tick % this.directorCadenceTicks === 0
       ) {
-        // 4. Cadence narration.
         const snapshotBefore = this.getSnapshot();
-        const result = await this.director.narrate(snapshotBefore, { signal });
+        const result = await this.director.query(this.narrateQuery, {
+          state: snapshotBefore as unknown as JsonValue,
+        }, { signal });
         if (signal.aborted) return;
-        this.state.directorNote = result.decision.note || this.state.directorNote;
-        this.emit({
-          kind: 'director-decision',
-          tick: this.state.tick,
-          decision: result.decision,
-        });
-        if (result.decision.note) {
-          this.emit({ kind: 'world-note', tick: this.state.tick, note: result.decision.note });
+        const decision = coerceNarrationDecision(result.data, snapshotBefore);
+        this.state.directorNote = decision.note || this.state.directorNote;
+        this.emit({ kind: 'director-decision', tick: this.state.tick, decision });
+        if (decision.note) {
+          this.emit({ kind: 'world-note', tick: this.state.tick, note: decision.note });
         }
       }
 
-      // 5. Emit per-agent state events + tick end.
       for (const agent of this.state.agents) {
         this.emit({ kind: 'agent-state', tick: this.state.tick, agent: cloneAgent(agent) });
         if (agent.emotion) {
-          this.emit({
-            kind: 'agent-action',
-            tick: this.state.tick,
-            agentId: agent.id,
-            emotion: agent.emotion,
-          });
+          this.emit({ kind: 'agent-action', tick: this.state.tick, agentId: agent.id, emotion: agent.emotion });
         }
       }
       this.emit({ kind: 'tick-end', tick: this.state.tick, snapshot: this.getSnapshot() });
@@ -324,7 +218,6 @@ export class WorldOrchestrator {
   private async maybeQueryOneAgent(signal: AbortSignal): Promise<void> {
     if (this.simulationAgents.size === 0) return;
     const ids = Array.from(this.simulationAgents.keys());
-    // Round-robin starting at queryCursor; pick the first agent without an active intent.
     let chosenId: string | null = null;
     for (let i = 0; i < ids.length; i += 1) {
       const candidate = ids[(this.queryCursor + i) % ids.length]!;
@@ -354,21 +247,21 @@ export class WorldOrchestrator {
     const result = await agent.query(perception, { signal });
     if (signal.aborted) return;
 
-    agentState.intent = result.output.intent;
+    agentState.intent = result.intent;
     agentState.intentIssuedAtTick = this.state.tick;
-    if (result.output.status.length > 0) {
-      agentState.status = result.output.status;
+    if (result.intent.kind === 'wait' && result.intent.reason) {
+      agentState.status = result.intent.reason;
     }
-    if (result.output.intent.emotion) {
-      agentState.emotion = result.output.intent.emotion;
+    if (result.intent.emotion) {
+      agentState.emotion = result.intent.emotion;
     }
 
     this.emit({
       kind: 'agent-query-end',
       tick: this.state.tick,
       agentId: chosenId,
-      intent: result.output.intent,
-      emotion: result.output.intent.emotion ?? null,
+      intent: result.intent,
+      emotion: result.intent.emotion ?? null,
       cancelled: result.cancelled,
       ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
     });
@@ -376,7 +269,7 @@ export class WorldOrchestrator {
       kind: 'agent-intent',
       tick: this.state.tick,
       agentId: chosenId,
-      intent: result.output.intent,
+      intent: result.intent,
     });
   }
 
@@ -385,9 +278,49 @@ export class WorldOrchestrator {
   }
 }
 
-function clampHz(hz: number): number {
-  if (!Number.isFinite(hz) || hz <= 0) return 1.5;
-  return Math.max(0.25, Math.min(20, hz));
+function coerceConflictDecision(
+  value: JsonValue | null,
+  conflicts: readonly WorldConflict[]
+): DirectorDecision {
+  if (isRecord(value) && typeof value.note === 'string' && Array.isArray(value.resolutions)) {
+    const resolutions: DirectorResolution[] = [];
+    for (const entry of value.resolutions) {
+      if (!isRecord(entry)) continue;
+      if (typeof entry.objectId !== 'string') continue;
+      const winnerAgentId =
+        entry.winnerAgentId === null || typeof entry.winnerAgentId === 'string'
+          ? entry.winnerAgentId
+          : null;
+      const note = typeof entry.note === 'string' && entry.note.length > 0 ? entry.note : undefined;
+      resolutions.push({ objectId: entry.objectId, winnerAgentId, ...(note ? { note } : {}) });
+    }
+    if (resolutions.length === conflicts.length) {
+      return { note: value.note, resolutions };
+    }
+  }
+  return deterministicConflictResolution(conflicts);
+}
+
+function coerceNarrationDecision(value: JsonValue | null, snapshot: WorldSnapshot): DirectorDecision {
+  if (isRecord(value) && typeof value.note === 'string') {
+    return { note: value.note, resolutions: [] };
+  }
+  return { note: `Tick ${snapshot.tick}: the courtyard carries on.`, resolutions: [] };
+}
+
+function deterministicConflictResolution(conflicts: readonly WorldConflict[]): DirectorDecision {
+  return {
+    note: 'Director fell back to deterministic tie-break.',
+    resolutions: conflicts.map((conflict) => ({
+      objectId: conflict.objectId,
+      winnerAgentId: conflict.contenderAgentIds[0] ?? null,
+      note: 'first-come tie break',
+    })),
+  };
+}
+
+function isRecord(value: JsonValue | null): value is Record<string, JsonValue> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function cloneAgent(agent: SimulationAgentState): SimulationAgentState {

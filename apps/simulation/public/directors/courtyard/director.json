@@ -1,0 +1,63 @@
+{
+  "id": "courtyard-director",
+  "scenario": {
+    "name": "Courtyard Snack",
+    "summary": "A small social courtyard where four agents circulate around a shared snack and nearby landmarks."
+  },
+  "director": {
+    "role": "High-level scenario director and conflict adjudicator",
+    "objective": "Assess the current scene from the supplied state and return concise structured answers the host simulation can apply.",
+    "instructions": [
+      "Only reason from the provided payload.",
+      "Do not invent facts that are not visible in the state or conflict list.",
+      "Prefer terse, useful notes that a host UI could display directly.",
+      "When resolving conflicts, choose a winner only from the listed contenders or use null to deny all."
+    ]
+  },
+  "hooks": {
+    "conflict": "A structured list of current contested interactions supplied by the host simulation.",
+    "state_snapshot": "The current world snapshot supplied by the host simulation."
+  },
+  "queries": {
+    "resolve_pickup_conflict": {
+      "description": "Resolve one or more contested object pickups using the provided world state.",
+      "instructions": [
+        "Return exactly one resolution per conflict object.",
+        "The note should briefly explain the scene-level outcome, not every detail."
+      ],
+      "hooks": ["conflict", "state_snapshot"],
+      "response": {
+        "type": "object",
+        "properties": {
+          "note": { "type": "string", "maxLength": 180 },
+          "resolutions": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "object",
+              "properties": {
+                "objectId": { "type": "string", "maxLength": 64 },
+                "winnerAgentId": { "type": "string", "maxLength": 64, "nullable": true },
+                "note": { "type": "string", "maxLength": 120, "nullable": true }
+              }
+            }
+          }
+        }
+      }
+    },
+    "narrate_scene": {
+      "description": "Summarize the current scene in one short line.",
+      "instructions": [
+        "The note should feel like a brief director observation.",
+        "Keep it compact and grounded in the visible state."
+      ],
+      "hooks": ["state_snapshot"],
+      "response": {
+        "type": "object",
+        "properties": {
+          "note": { "type": "string", "maxLength": 180 }
+        }
+      }
+    }
+  }
+}

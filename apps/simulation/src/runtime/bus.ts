@@ -1,21 +1,10 @@
-//////////////////////////////////////////////////////////////////////////////
-//
-// simulation-bus.ts
-//
-// - Lightweight typed pub/sub for orchestrator-level events.
-// - Mirrors the character ActionBus so apps can hook logging, UI panels,
-//   and scene bindings without touching the orchestrator internals.
-//
-//////////////////////////////////////////////////////////////////////////////
-
 import type {
   AgentIntent,
   DirectorDecision,
-  SimulationActionName,
   SimulationAgentState,
   WorldConflict,
   WorldSnapshot,
-} from './simulation-types.js';
+} from './types.js';
 
 export interface TickStartEvent {
   readonly kind: 'tick-start';
@@ -40,7 +29,7 @@ export interface AgentQueryEndEvent {
   readonly tick: number;
   readonly agentId: string;
   readonly intent: AgentIntent | null;
-  readonly emotion: SimulationActionName | null;
+  readonly emotion: string | null;
   readonly cancelled: boolean;
   readonly errorMessage?: string;
 }
@@ -56,7 +45,7 @@ export interface AgentActionEvent {
   readonly kind: 'agent-action';
   readonly tick: number;
   readonly agentId: string;
-  readonly emotion: SimulationActionName;
+  readonly emotion: string;
 }
 
 export interface AgentStateChangeEvent {
@@ -96,11 +85,10 @@ export type SimulationEvent =
   | WorldNoteEvent;
 
 export type SimulationEventKind = SimulationEvent['kind'];
-export type SimulationEventListener<
-  K extends SimulationEventKind = SimulationEventKind,
-> = (event: Extract<SimulationEvent, { kind: K }>) => void;
+export type SimulationEventListener<K extends SimulationEventKind = SimulationEventKind> = (
+  event: Extract<SimulationEvent, { kind: K }>
+) => void;
 
-/** Identical in shape to the character ActionBus. */
 export class SimulationBus {
   private readonly listenersByKind: Map<SimulationEventKind, Set<SimulationEventListener<any>>> =
     new Map();
@@ -155,7 +143,6 @@ export class SimulationBus {
 
   private logListenerError(error: unknown, kind: SimulationEventKind): void {
     const message = error instanceof Error ? error.message : String(error);
-    // eslint-disable-next-line no-console -- surfaced for developer debugging.
     console.error(`[SimulationBus] listener for "${kind}" threw: ${message}`);
   }
 }

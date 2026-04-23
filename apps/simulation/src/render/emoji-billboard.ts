@@ -9,9 +9,8 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import * as THREE from 'three';
-import type { SimulationActionName } from 'cogent-engine/orchestrator';
 
-export const EMOTION_GLYPH: Record<SimulationActionName, string> = {
+export const DEFAULT_EMOTION_GLYPHS: Readonly<Record<string, string>> = {
   thinking: '\u{1F914}',
   curious: '\u{1F9D0}',
   happy: '\u{1F60A}',
@@ -21,6 +20,10 @@ export const EMOTION_GLYPH: Record<SimulationActionName, string> = {
   sleepy: '\u{1F634}',
   celebrate: '\u{1F389}',
 };
+
+export function emotionGlyphFor(emotion: string): string {
+  return DEFAULT_EMOTION_GLYPHS[emotion] ?? '\u{2728}';
+}
 
 export interface EmojiBillboard {
   readonly sprite: THREE.Sprite;

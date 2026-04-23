@@ -2,7 +2,7 @@
 //
 // scene/world-binding.ts
 //
-// - Mirrors a WorldOrchestrator's snapshots into the three.js scene.
+// - Mirrors the app-owned simulation runtime snapshots into the three.js scene.
 // - On every `tick-end` event it diffs the snapshot against the visual
 //   caches and updates positions, emotions, and held-object mounts.
 // - Held objects are re-parented under their holding agent root so they
@@ -12,14 +12,13 @@
 
 import * as THREE from 'three';
 import type {
-  SimulationActionName,
   SimulationBus,
   SimulationEvent,
-  WorldSnapshot,
-} from 'cogent-engine/orchestrator';
+} from '../runtime/bus.js';
+import type { WorldSnapshot } from '../runtime/types.js';
 import { createAgentVisual, type AgentVisual } from '../render/agent-mesh.js';
 import { createObjectVisual, type ObjectVisual } from '../render/object-mesh.js';
-import { EMOTION_GLYPH } from '../render/emoji-billboard.js';
+import { emotionGlyphFor } from '../render/emoji-billboard.js';
 import { AGENT_COLOR_BY_ID } from '../scenarios/courtyard-snack.js';
 
 const LERP_ALPHA = 0.22;
@@ -85,7 +84,7 @@ export function bindWorldToScene(
       entry.targetZ = a.position.z;
       entry.targetHeading = a.heading;
       if (a.emotion) {
-        entry.visual.emoji.setGlyph(EMOTION_GLYPH[a.emotion as SimulationActionName]);
+        entry.visual.emoji.setGlyph(emotionGlyphFor(a.emotion));
         entry.visual.emoji.setVisible(true);
       } else {
         entry.visual.emoji.setVisible(false);

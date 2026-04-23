@@ -1,20 +1,4 @@
-//////////////////////////////////////////////////////////////////////////////
-//
-// world-reducer.ts
-//
-// - Pure, synchronous state transitions. The reducer is authoritative: the
-//   LLM only *suggests* intents; this code decides what actually happens.
-//
-// Responsibilities each tick:
-//   1. Advance time.
-//   2. Apply each agent's active intent (movement, approach, drop).
-//   3. Detect contested pick_up / use requests (multiple agents wanting the
-//      same object on the same tick) and surface them as WorldConflict[].
-//   4. Apply uncontested pick_up / use requests.
-//   5. Apply director resolutions after the conflict query (second pass).
-//
-//////////////////////////////////////////////////////////////////////////////
-
+import { clampToBounds, vec2Distance } from './sensing.js';
 import type {
   AgentIntent,
   DirectorDecision,
@@ -23,10 +7,8 @@ import type {
   Vec2,
   WorldBounds,
   WorldConflict,
-} from './simulation-types.js';
-import { clampToBounds, vec2Direction, vec2Distance } from './sensing.js';
+} from './types.js';
 
-/** Mutable, orchestrator-owned world state. Never leaked directly. */
 export interface MutableWorldState {
   tick: number;
   timeSeconds: number;
@@ -36,13 +18,8 @@ export interface MutableWorldState {
   directorNote: string | null;
 }
 
-/** Distance within which an agent can pick_up / use / drop / interact. */
 export const INTERACTION_RADIUS = 0.75;
 
-/**
- * Advance continuous movement for one time step. Pure: mutates nothing,
- * returns the new agent position and heading.
- */
 export function stepMovement(
   agent: SimulationAgentState,
   objects: readonly SimulationObjectState[],
@@ -90,8 +67,6 @@ function resolveMovementTarget(
       return target ? target.position : null;
     }
     case 'wander': {
-      // Cheap deterministic wander: pick a point offset from current pos
-      // that loops based on agent id hash + tick-independent heading.
       const offset = hashVec2(agent.id);
       return {
         x: agent.position.x + offset.x,
@@ -118,12 +93,7 @@ export interface TickReducerResult {
   readonly conflicts: WorldConflict[];
 }
 
-/**
- * First pass: integrate movement, handle `drop`, and resolve uncontested
- * `pick_up` / `use`. Returns any conflicts the director must resolve next.
- */
 export function applyTickFirstPass(state: MutableWorldState, dt: number): TickReducerResult {
-  // Movement integration.
   for (const agent of state.agents) {
     const next = stepMovement(agent, state.objects, state.agents, dt, state.bounds);
     agent.position = next.position;
@@ -133,7 +103,6 @@ export function applyTickFirstPass(state: MutableWorldState, dt: number): TickRe
     }
   }
 
-  // Move carried objects with their carrier.
   for (const obj of state.objects) {
     if (obj.heldBy) {
       const carrier = state.agents.find((a) => a.id === obj.heldBy);
@@ -143,7 +112,6 @@ export function applyTickFirstPass(state: MutableWorldState, dt: number): TickRe
     }
   }
 
-  // Handle drops.
   for (const agent of state.agents) {
     if (agent.intent?.kind !== 'drop') continue;
     if (!agent.holding) {
@@ -158,8 +126,7 @@ export function applyTickFirstPass(state: MutableWorldState, dt: number): TickRe
     agent.intent = null;
   }
 
-  // Collect pick_up / use requests that are within interaction radius.
-  const requests = new Map<string, string[]>(); // objectId -> agentId[]
+  const requests = new Map<string, string[]>();
   for (const agent of state.agents) {
     const intent = agent.intent;
     if (!intent) continue;
@@ -183,7 +150,6 @@ export function applyTickFirstPass(state: MutableWorldState, dt: number): TickRe
     const obj = state.objects.find((o) => o.id === objectId);
     if (!obj) continue;
     if (obj.heldBy) {
-      // Already held by someone; treat as a denied interaction.
       for (const id of contenders) {
         clearAgentIntent(state, id);
       }
@@ -196,8 +162,6 @@ export function applyTickFirstPass(state: MutableWorldState, dt: number): TickRe
     conflicts.push({ kind: 'contested_object', objectId, contenderAgentIds: contenders });
   }
 
-  // Clear wait intents so the agent is eligible for a fresh query next tick
-  // that triggers it (orchestrator decides cadence).
   for (const agent of state.agents) {
     if (agent.intent?.kind === 'wait') {
       agent.intent = null;
@@ -207,18 +171,13 @@ export function applyTickFirstPass(state: MutableWorldState, dt: number): TickRe
   return { conflicts };
 }
 
-/** Second pass: apply director resolutions authoritatively. */
-export function applyDirectorDecision(
-  state: MutableWorldState,
-  decision: DirectorDecision
-): void {
+export function applyDirectorDecision(state: MutableWorldState, decision: DirectorDecision): void {
   state.directorNote = decision.note.length > 0 ? decision.note : state.directorNote;
   for (const resolution of decision.resolutions) {
     const obj = state.objects.find((o) => o.id === resolution.objectId);
     if (!obj) continue;
     if (obj.heldBy) continue;
     if (resolution.winnerAgentId === null) {
-      // Deny all contenders; clear their intents so they can choose afresh.
       for (const agent of state.agents) {
         if (agent.intent?.kind === 'pick_up' && agent.intent.objectId === obj.id) {
           agent.intent = null;
@@ -230,7 +189,6 @@ export function applyDirectorDecision(
       continue;
     }
     applyPickUp(state, resolution.winnerAgentId, obj.id);
-    // Everyone else loses their intent on this object.
     for (const agent of state.agents) {
       if (agent.id === resolution.winnerAgentId) continue;
       if (agent.intent?.kind === 'pick_up' && agent.intent.objectId === obj.id) {
@@ -243,16 +201,11 @@ export function applyDirectorDecision(
   }
 }
 
-function applyPickUp(
-  state: MutableWorldState,
-  agentId: string,
-  objectId: string
-): void {
+function applyPickUp(state: MutableWorldState, agentId: string, objectId: string): void {
   const agent = state.agents.find((a) => a.id === agentId);
   const obj = state.objects.find((o) => o.id === objectId);
   if (!agent || !obj) return;
   if (agent.holding) {
-    // Can't pick up while holding something — drop silently.
     const prev = state.objects.find((o) => o.id === agent.holding);
     if (prev) prev.heldBy = null;
     agent.holding = null;

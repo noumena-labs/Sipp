@@ -9,7 +9,8 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import { useEffect, useRef } from 'react';
-import type { SimulationBus, WorldBounds } from 'cogent-engine/orchestrator';
+import type { SimulationBus } from '../runtime/bus.js';
+import type { WorldBounds } from '../runtime/types.js';
 import { createSimulationScene, type SimulationSceneHandle } from '../scene/scene.js';
 import { bindWorldToScene, type WorldBinding } from '../scene/world-binding.js';
 

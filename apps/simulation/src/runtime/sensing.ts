@@ -1,12 +1,3 @@
-//////////////////////////////////////////////////////////////////////////////
-//
-// sensing.ts
-//
-// - Pure functions that derive an AgentPerception from the current world
-//   state. Kept separate from the reducer so it is trivially testable.
-//
-//////////////////////////////////////////////////////////////////////////////
-
 import type {
   AgentPerception,
   PerceivedAgent,
@@ -15,14 +6,11 @@ import type {
   SimulationObjectState,
   Vec2,
   WorldBounds,
-} from './simulation-types.js';
+} from './types.js';
 
 export interface SensingOptions {
-  /** Max distance an agent perceives other agents. Default = 8. */
   readonly agentSightRadius?: number;
-  /** Max distance an agent perceives objects. Default = 8. */
   readonly objectSightRadius?: number;
-  /** Max number of neighbours returned per category. Default = 6. */
   readonly maxNeighbours?: number;
 }
 

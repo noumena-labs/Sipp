@@ -8,7 +8,7 @@
 //
 //////////////////////////////////////////////////////////////////////////////
 
-import type { ScenarioSeed } from 'cogent-engine/orchestrator';
+import type { ScenarioSeed } from '../runtime/types.js';
 
 export interface ScenarioAgentAssignment {
   readonly agentId: string;
@@ -60,6 +60,8 @@ export const COURTYARD_AGENTS: readonly ScenarioAgentAssignment[] = [
 ];
 
 export const COURTYARD_SCENARIO: ScenarioSeed = {
+  id: 'courtyard-snack',
+  title: 'Courtyard Snack',
   bounds: { halfExtent: 8 },
   agents: COURTYARD_AGENTS.map((a) => ({
     id: a.agentId,
@@ -77,6 +79,10 @@ export const COURTYARD_SCENARIO: ScenarioSeed = {
     { id: 'plant-b', kind: 'plant', position: { x: 5, z: 0 }, tags: ['decor'] },
   ],
   directorNote: 'A single yellow banana sits between them on the courtyard tile.',
+  directorConfigUrl: '/directors/courtyard/director.json',
+  directorCadenceTicks: 10,
+  resolveConflictQuery: 'resolve_pickup_conflict',
+  narrateQuery: 'narrate_scene',
 };
 
 export const AGENT_COLOR_BY_ID: ReadonlyMap<string, string> = new Map(

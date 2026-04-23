@@ -8,8 +8,8 @@
 //
 //////////////////////////////////////////////////////////////////////////////
 
-import type { SimulationAgentState } from 'cogent-engine/orchestrator';
-import { EMOTION_GLYPH } from '../render/emoji-billboard.js';
+import type { SimulationAgentState } from '../runtime/types.js';
+import { emotionGlyphFor } from '../render/emoji-billboard.js';
 
 export interface AgentInspectorProps {
   readonly agents: readonly SimulationAgentState[];
@@ -45,7 +45,7 @@ export function AgentInspector(props: AgentInspectorProps) {
       <ul>
         {props.agents.map((a) => {
           const selected = a.id === props.selectedAgentId;
-          const glyph = a.emotion ? EMOTION_GLYPH[a.emotion] : ' ';
+          const glyph = a.emotion ? emotionGlyphFor(a.emotion) : ' ';
           return (
             <li
               key={a.id}

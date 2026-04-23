@@ -40,7 +40,10 @@ export {
   parseCharacterConfig,
 } from './character-config.js';
 
+export { ChoiceGrammarError, compileChoiceGrammar, parseChoiceOutput } from './choice-grammar.js';
+
 export type {
+  ChoiceResult,
   CharacterAgentEngine,
   CharacterAgentOptions,
   ChatEvent,

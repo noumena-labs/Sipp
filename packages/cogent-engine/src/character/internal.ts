@@ -17,6 +17,8 @@ export {
 
 export { compileActionGrammar, MINIMAL_TEST_GRAMMAR_SOURCE } from './action-grammar.js';
 
+export { ChoiceGrammarError, compileChoiceGrammar, parseChoiceOutput } from './choice-grammar.js';
+
 export type { ActionEvent, ParsedEvent, ProseEvent } from './action-parser.js';
 export { ActionParseError, StreamingActionParser, parseActionCue } from './action-parser.js';
 

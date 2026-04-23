@@ -4,8 +4,9 @@
 //
 // - Top-level simulation app. Wires:
 //     - a single shared CogentEngine, loaded from a user-pasted .gguf URL
-//     - a WorldDirector and four SimulationAgents, all sharing that engine
-//     - a WorldOrchestrator that drives the tick loop
+//     - a DirectorRuntime from `director.json`
+//     - four CharacterAgent-backed chooser adapters
+//     - an app-local SimulationRuntime that owns the world loop
 //     - a SimulationCanvas that mirrors tick-end snapshots into three.js
 //     - a side panel with transport, event log, and an agent inspector
 //
@@ -13,24 +14,22 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CogentEngine, getBundledRuntimeUrls } from 'cogent-engine';
-import {
-  createSimulationAgentFromConfigUrl,
-  SimulationBus,
-  WorldDirector,
-  WorldOrchestrator,
-  type SimulationAgentState,
-  type SimulationEvent,
-  type WorldSnapshot,
-} from 'cogent-engine/orchestrator';
+import { createDirectorFromConfigUrl } from 'cogent-engine/orchestrator';
 import { SimulationCanvas } from './components/SimulationCanvas';
 import { ControlsPanel } from './components/ControlsPanel';
 import { EventLog, type EventLogEntry } from './components/EventLog';
 import { AgentInspector } from './components/AgentInspector';
-import { COURTYARD_AGENTS, COURTYARD_SCENARIO } from './scenarios/courtyard-snack';
+import { COURTYARD_AGENTS, COURTYARD_SCENARIO } from './scenarios/courtyard-snack.js';
+import { SimulationBus, type SimulationEvent } from './runtime/bus.js';
+import {
+  createSimulationAgentChooserFromConfigUrl,
+} from './runtime/agent-chooser.js';
+import { SimulationRuntime } from './runtime/simulation-runtime.js';
+import type { SimulationAgentState, WorldSnapshot } from './runtime/types.js';
 
 interface LoadedHarness {
   readonly engine: CogentEngine;
-  readonly orchestrator: WorldOrchestrator;
+  readonly runtime: SimulationRuntime;
 }
 
 export default function App() {
@@ -92,10 +91,34 @@ export default function App() {
     return () => off();
   }, [bus, pushEvent]);
 
-  // Keep orchestrator tick rate synced with slider.
   useEffect(() => {
-    harness?.orchestrator.setTickHz(tickHz);
-  }, [harness, tickHz]);
+    if (!running || !harness) {
+      return;
+    }
+    const delayMs = 1000 / tickHz;
+    let disposed = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const loop = async (): Promise<void> => {
+      if (disposed) return;
+      await harness.runtime.step(1 / tickHz);
+      if (disposed) return;
+      timeoutId = setTimeout(() => {
+        void loop();
+      }, delayMs);
+    };
+
+    timeoutId = setTimeout(() => {
+      void loop();
+    }, 0);
+
+    return () => {
+      disposed = true;
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+      }
+    };
+  }, [harness, running, tickHz]);
 
   const loadHarness = useCallback(
     async (url: string): Promise<void> => {
@@ -103,7 +126,7 @@ export default function App() {
       setModelUrl(url);
       try {
         if (harness) {
-          await harness.orchestrator.dispose();
+          await harness.runtime.dispose();
           harness.engine.close();
           setHarness(null);
           setRunning(false);
@@ -128,23 +151,29 @@ export default function App() {
           },
         });
 
-        setStatus('Building orchestrator…');
-        const director = new WorldDirector('courtyard', engine);
-        const orchestrator = new WorldOrchestrator(director, {
-          id: 'courtyard',
+        setStatus('Loading director config…');
+        const { director } = await createDirectorFromConfigUrl({
+          configUrl: COURTYARD_SCENARIO.directorConfigUrl,
+          engine,
+        });
+
+        setStatus('Building simulation runtime…');
+        const runtime = new SimulationRuntime(director, {
+          id: COURTYARD_SCENARIO.id,
           bus,
           bounds: COURTYARD_SCENARIO.bounds,
-          tickHz,
-          directorCadenceTicks: 10,
+          directorCadenceTicks: COURTYARD_SCENARIO.directorCadenceTicks,
           initialDirectorNote: COURTYARD_SCENARIO.directorNote ?? null,
+          resolveConflictQuery: COURTYARD_SCENARIO.resolveConflictQuery,
+          narrateQuery: COURTYARD_SCENARIO.narrateQuery,
         });
         for (const seed of COURTYARD_SCENARIO.objects) {
-          orchestrator.upsertObject(seed);
+          runtime.upsertObject(seed);
         }
 
         setStatus('Loading agent personas…');
         for (const assignment of COURTYARD_AGENTS) {
-          const { agent } = await createSimulationAgentFromConfigUrl({
+          const { agent } = await createSimulationAgentChooserFromConfigUrl({
             agentId: assignment.agentId,
             configUrl: assignment.characterUrl,
             engine,
@@ -153,11 +182,11 @@ export default function App() {
           if (!seed) {
             throw new Error(`no scenario seed for ${assignment.agentId}`);
           }
-          orchestrator.addAgent(agent, seed);
+          runtime.addAgent(agent, seed);
         }
 
-        setSnapshot(orchestrator.getSnapshot());
-        setHarness({ engine, orchestrator });
+        setSnapshot(runtime.getSnapshot());
+        setHarness({ engine, runtime });
         setStatus('Ready. Press Start.');
       } catch (error) {
         console.error(error);
@@ -171,14 +200,12 @@ export default function App() {
 
   const handleStart = (): void => {
     if (!harness) return;
-    harness.orchestrator.start();
     setRunning(true);
     setStatus('Running.');
   };
 
   const handlePause = (): void => {
     if (!harness) return;
-    harness.orchestrator.pause();
     setRunning(false);
     setStatus('Paused.');
   };
@@ -186,11 +213,10 @@ export default function App() {
   const handleStep = async (): Promise<void> => {
     if (!harness) return;
     if (running) {
-      harness.orchestrator.pause();
       setRunning(false);
     }
     setStatus('Stepping…');
-    await harness.orchestrator.step();
+    await harness.runtime.step(1 / tickHz);
     setStatus('Stepped.');
   };
 
@@ -198,7 +224,7 @@ export default function App() {
     if (!harness) return;
     setBusy(true);
     try {
-      await harness.orchestrator.dispose();
+      await harness.runtime.dispose();
       harness.engine.close();
       setHarness(null);
       setRunning(false);
@@ -215,9 +241,9 @@ export default function App() {
 
   return (
     <div className="sim-app">
-      <SimulationCanvas
-        bus={bus}
-        bounds={COURTYARD_SCENARIO.bounds ?? { halfExtent: 8 }}
+        <SimulationCanvas
+          bus={bus}
+          bounds={COURTYARD_SCENARIO.bounds ?? { halfExtent: 8 }}
         highlightedAgentId={selectedAgentId}
       />
 

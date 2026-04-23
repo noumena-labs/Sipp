@@ -18,6 +18,7 @@ import type {
 import { ActionBus, type CharacterEvent } from './action-bus.js';
 import { compileActionGrammar } from './action-grammar.js';
 import { StreamingActionParser, type ParsedEvent } from './action-parser.js';
+import { compileChoiceGrammar, parseChoiceOutput } from './choice-grammar.js';
 import {
   DEFAULT_MEMORY_MAX_TURNS,
   resolveMaxMemoryTurns,
@@ -71,6 +72,13 @@ export interface CharacterAgentOptions {
 export interface ChatTurn {
   readonly role: 'user' | 'assistant';
   readonly content: string;
+}
+
+export interface ChoiceResult {
+  readonly choice: string | null;
+  readonly cancelled: boolean;
+  readonly errorMessage?: string;
+  readonly rawText: string;
 }
 
 /**
@@ -155,6 +163,86 @@ export class CharacterAgent {
   /** Final rendered system prompt — exposed for inspection and tests. */
   public getSystemPrompt(): string {
     return this.systemPrompt;
+  }
+
+  public async choose(
+    userMessage: string,
+    options: {
+      choices: readonly string[];
+      signal?: AbortSignal;
+      maxOutputTokens?: number;
+    }
+  ): Promise<ChoiceResult> {
+    const grammar = compileChoiceGrammar(options.choices);
+    const choicePrompt = renderChoicePrompt(userMessage, options.choices);
+    const messages: ChatMessage[] = [
+      { role: 'system', content: this.systemPrompt },
+      { role: 'user', content: choicePrompt },
+    ];
+
+    let promptText: string;
+    try {
+      promptText = await renderAppliedChatTemplate(this.engine, messages);
+    } catch (error) {
+      return {
+        choice: null,
+        cancelled: options.signal?.aborted === true,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        rawText: '',
+      };
+    }
+
+    const promptOptions: PromptOptions = {
+      nTokens: options.maxOutputTokens ?? 24,
+      promptFormat: 'raw',
+      grammar,
+      ...(options.signal ? { signal: options.signal } : {}),
+    };
+
+    let requestId = 0;
+    try {
+      requestId = await this.engine.queuePrompt(this.config.id, promptText, promptOptions);
+      const response = await this.engine.runQueuedRequest(
+        requestId,
+        options.signal ? { signal: options.signal } : {}
+      );
+      const rawText = (response.outputText ?? '').trim();
+      if (response.cancelled) {
+        return {
+          choice: null,
+          cancelled: true,
+          rawText,
+        };
+      }
+      if (response.failed) {
+        return {
+          choice: null,
+          cancelled: false,
+          errorMessage: response.errorMessage ?? 'generation failed',
+          rawText,
+        };
+      }
+      return {
+        choice: parseChoiceOutput(rawText, options.choices),
+        cancelled: false,
+        rawText,
+      };
+    } catch (error) {
+      const cancelled = options.signal?.aborted === true;
+      if (requestId !== 0 && !cancelled && this.engine.cancelQueuedRequest) {
+        try {
+          await this.engine.cancelQueuedRequest(requestId);
+        } catch {
+          // Swallow cancel errors.
+        }
+      }
+      return {
+        choice: null,
+        cancelled,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        rawText: '',
+      };
+    }
   }
 
   /**
@@ -624,4 +712,14 @@ function sliceUnstreamedSuffix(streamedOutputText: string, finalOutputText: stri
     return '';
   }
   return finalOutputText.slice(streamedOutputText.length);
+}
+
+function renderChoicePrompt(userMessage: string, choices: readonly string[]): string {
+  const normalizedChoices = choices.map((choice) => choice.trim());
+  return [
+    userMessage.trim(),
+    '',
+    'Choose exactly one of the following options and output only that option text:',
+    ...normalizedChoices.map((choice) => `- ${choice}`),
+  ].join('\n');
 }

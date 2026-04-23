@@ -44,7 +44,12 @@ character.json -> parseCharacterConfig -> CharacterAgent
                               prose/action/turn-end events
 ```
 
-`CharacterAgent.chat()` is the main API. It returns an async iterable of:
+`CharacterAgent` now has two primary APIs:
+
+- `chat()` for streaming in-character conversational turns
+- `choose()` for stateless constrained one-of-N decisions
+
+`chat()` returns an async iterable of:
 
 - `turn-start`
 - `prose`
@@ -71,6 +76,15 @@ class CharacterAgent {
 
   chat(userMessage: string, options?: { signal?: AbortSignal }): AsyncIterable<ChatEvent>
 
+  choose(
+    userMessage: string,
+    options: {
+      choices: readonly string[];
+      signal?: AbortSignal;
+      maxOutputTokens?: number;
+    }
+  ): Promise<ChoiceResult>
+
   clearMemory(): void
   getMemory(): readonly ChatTurn[]
   getGrammarSource(): string
@@ -78,9 +92,9 @@ class CharacterAgent {
 }
 ```
 
-Concurrency rule: only one turn may be active per agent. Starting a new
-`chat()` automatically aborts the previous in-flight turn before the new one
-begins.
+Concurrency rule: only one streaming `chat()` turn may be active per agent.
+Starting a new `chat()` automatically aborts the previous in-flight turn
+before the new one begins. `choose()` is a separate stateless one-shot call.
 
 Context key rule: every turn for one agent uses `config.id` as the engine
 context key so the persona prefix can stay hot in KV cache.
@@ -184,6 +198,35 @@ type ChatEvent =
 - `prose` is display text with cues stripped out
 - `action` is the flat runtime action name from the schema
 - `turn-end` always closes the turn, including aborts and failures
+
+## choose()
+
+Use `choose()` when the host app wants a strict answer from a fixed option
+list while still reusing the character's persona prompt.
+
+```ts
+const result = await agent.choose('What should you do next?', {
+  choices: ['wait', 'wander', 'approach:aria', 'pick_up:banana'],
+});
+```
+
+Result shape:
+
+```ts
+interface ChoiceResult {
+  choice: string | null;
+  cancelled: boolean;
+  errorMessage?: string;
+  rawText: string;
+}
+```
+
+Rules:
+
+- `choose()` is stateless
+- it does not read memory
+- it does not write memory
+- it applies a literal-choice grammar so the model can only emit one provided option
 
 ## Memory model
 
