@@ -5,8 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "bunx --bun vite",
-    "build": "bunx --bun vite build",
-    "preview": "bunx --bun vite preview"
+    "build": "bunx --bun vite build"
   },
   "dependencies": {
     "cogent-engine": "workspace:*",
