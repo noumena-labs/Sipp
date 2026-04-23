@@ -14,7 +14,7 @@ import {
 import {
   DEFAULT_QUEUED_REQUEST_PUMP_SYNC_BURST_LIMIT,
   QueuedRequestPumpStepResult,
-  runQueuedRequestPumpLoop,
+  runRequestPumpLoop,
 } from './queued-request-pump.js';
 import { RequestTracker } from './request-tracker.js';
 import { WasmBridge } from '../wasm/wasm-bridge.js';
@@ -52,7 +52,7 @@ type QueuedRequestSchedulerOptions = {
     requestId: GenerateRequestId,
     options?: SchedulerFinalizeOptions
   ) => void;
-  cancelQueuedRequest: (requestId: GenerateRequestId) => Promise<boolean>;
+  cancelQuery: (requestId: GenerateRequestId) => Promise<boolean>;
 };
 
 export class QueuedRequestScheduler {
@@ -212,7 +212,7 @@ export class QueuedRequestScheduler {
 
       tracked.callbackError = callbackError;
       tracked.cancelRequested = true;
-      void this.options.cancelQueuedRequest(requestId);
+      void this.options.cancelQuery(requestId);
     }
   }
 
@@ -451,7 +451,7 @@ export class QueuedRequestScheduler {
 
   private async runSchedulerPump(generation: number): Promise<void> {
     const bridge = this.options.getBridge();
-    await runQueuedRequestPumpLoop({
+    await runRequestPumpLoop({
       isCurrentGeneration: () => generation === this.schedulerPumpGeneration,
       waitingStepResult: REQUEST_STEP_RESULT_WAITING,
       shouldYieldForResponsiveness: (burstTickCount) =>

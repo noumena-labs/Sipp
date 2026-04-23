@@ -3,26 +3,19 @@ import { ModelLoadInfo } from '../core/inference-types.js';
 import {
   detectModel,
   detectModelFromGgufFile,
-  discoverProjector,
   resolveLocalModelAndProjectorFiles,
 } from '../model-bundle/model-bundle-detection.js';
 import {
-  ModelBundleDescriptor,
+  InternalBundleDescriptor,
   ModelBundleProjectorDescriptor,
   ModelBundleProjectorStatus,
-  PreparedModelBundle,
-  PrepareModelBundleOptions,
+  StagedModelBundle,
+  StageModelBundleOptions,
 } from '../model-bundle/model-bundle-types.js';
-import {
-  BrowserModelCache,
-  BrowserModelCacheLookupResult,
-} from '../storage/browser-model-cache.js';
-import { FileSystemStorage } from '../storage/file-system-storage.js';
 import {
   DEFAULT_MAX_MODEL_BYTES,
   MountableModelFile,
   URL_DOWNLOAD_CONCURRENCY_MEMORY,
-  URL_DOWNLOAD_CONCURRENCY_OPFS,
   URL_METADATA_FETCH_CONCURRENCY,
   UrlShardMetadata,
   createMountableModelFile,
@@ -76,8 +69,6 @@ export class MainThreadModelLoader {
 
   constructor(
     private readonly config: CogentConfig,
-    private readonly opfs: FileSystemStorage,
-    private readonly browserModelCache: BrowserModelCache,
     private readonly parseConfiguredUrl: (rawUrl: string, fieldName: string) => URL,
     private readonly onModelLoadInfo: (info: ModelLoadInfo) => void
   ) {}
@@ -91,7 +82,7 @@ export class MainThreadModelLoader {
     this.loadedAssetPaths = [];
   }
 
-  public async loadModelFromUrl(
+  public async stageModelUrl(
     module: EngineModule,
     url: string,
     destFileName = 'model.gguf',
@@ -99,10 +90,10 @@ export class MainThreadModelLoader {
     signal?: AbortSignal
   ): Promise<string> {
     void destFileName;
-    return this.loadModelFromUrls(module, [url], onProgress, signal);
+    return this.stageModelUrls(module, [url], onProgress, signal);
   }
 
-  public async loadModelFromReadableStream(
+  public async stageModelStream(
     module: EngineModule,
     stream: ReadableStream<Uint8Array>,
     destFileName = 'model.gguf',
@@ -114,26 +105,12 @@ export class MainThreadModelLoader {
   ): Promise<string> {
     void options.expectedBytes;
 
-    const opfsEnabled =
-      FileSystemStorage.isSupported() &&
-      this.config.persistentModelCache?.enabled !== false;
-
-    let modelFile: Blob;
-    if (opfsEnabled) {
-      modelFile = await this.opfs.streamToDisk(
-        destFileName,
-        stream,
-        options.onProgress,
-        options.signal
-      );
-    } else {
-      modelFile = await this.readStreamToMountableModelFile(
-        stream,
-        destFileName,
-        undefined,
-        options.signal
-      );
-    }
+    const modelFile = await this.readStreamToMountableModelFile(
+      stream,
+      destFileName,
+      undefined,
+      options.signal
+    );
 
     const mountedPaths = await this.mountAssetFiles(module, [modelFile]);
     const modelPath = mountedPaths[0];
@@ -143,15 +120,15 @@ export class MainThreadModelLoader {
       modelPath,
       fileName: destFileName,
       byteLength: modelFile.size,
-      persistentCacheEnabled: opfsEnabled,
+      persistentCacheEnabled: false,
       persistentCacheKey: null,
       persistentCacheHit: false,
-      persistentCacheStored: opfsEnabled,
+      persistentCacheStored: false,
     });
     return modelPath;
   }
 
-  public async loadModelFromFile(
+  public async stageModelFile(
     module: EngineModule,
     file: File,
     destFileName = file.name || 'model.gguf',
@@ -178,7 +155,7 @@ export class MainThreadModelLoader {
     return modelPath;
   }
 
-  public loadModelFromBuffer(
+  public stageModelBuffer(
     module: EngineModule,
     buffer: Uint8Array,
     destFileName = 'model.gguf'
@@ -208,7 +185,7 @@ export class MainThreadModelLoader {
     return modelPath;
   }
 
-  public async loadModelFromFileShards(
+  public async stageModelFiles(
     module: EngineModule,
     files: File[],
     onProgress?: (pct: number) => void,
@@ -218,7 +195,7 @@ export class MainThreadModelLoader {
       throw new Error('No shard files provided.');
     }
     if (files.length === 1) {
-      return this.loadModelFromFile(module, files[0], files[0].name, onProgress, signal);
+      return this.stageModelFile(module, files[0], files[0].name, onProgress, signal);
     }
 
     try {
@@ -245,7 +222,7 @@ export class MainThreadModelLoader {
     }
   }
 
-  public async loadModelFromUrls(
+  public async stageModelUrls(
     module: EngineModule,
     urls: string[],
     onProgress?: (pct: number) => void,
@@ -279,11 +256,11 @@ export class MainThreadModelLoader {
     }
   }
 
-  public async prepareModelBundle(
+  public async stageModelBundle(
     module: EngineModule,
-    descriptor: ModelBundleDescriptor,
-    options: PrepareModelBundleOptions = {}
-  ): Promise<PreparedModelBundle> {
+    descriptor: InternalBundleDescriptor,
+    options: StageModelBundleOptions = {}
+  ): Promise<StagedModelBundle> {
     const plan = await this.resolveBundlePlan(descriptor, options.signal);
     const modelAssetSet = await this.loadResolvedAssetSet(plan.modelAssets, options.signal);
     const projectorAssetSet =
@@ -329,7 +306,7 @@ export class MainThreadModelLoader {
   }
 
   private async resolveBundlePlan(
-    descriptor: ModelBundleDescriptor,
+    descriptor: InternalBundleDescriptor,
     signal?: AbortSignal
   ): Promise<ResolvedBundlePlan> {
     switch (descriptor.kind) {
@@ -451,7 +428,7 @@ export class MainThreadModelLoader {
   private async resolveProjectorAssetForUrlDescriptor(
     detection: ReturnType<typeof detectModel>,
     explicitProjector: ModelBundleProjectorDescriptor | undefined,
-    primaryModelUrl: string
+    _primaryModelUrl: string
   ): Promise<{
     projectorAsset: ResolvedAssetRequest | null;
     projectorStatus: ModelBundleProjectorStatus;
@@ -471,21 +448,9 @@ export class MainThreadModelLoader {
       };
     }
 
-    const discovery = await discoverProjector(primaryModelUrl);
-    if (!discovery.projectorUrl) {
-      return {
-        projectorAsset: null,
-        projectorStatus: 'missing',
-      };
-    }
-
     return {
-      projectorAsset: {
-        kind: 'url',
-        url: discovery.projectorUrl,
-        mountFileName: this.deriveFileNameFromUrl(discovery.projectorUrl, 'mmproj.gguf'),
-      },
-      projectorStatus: 'discovered',
+      projectorAsset: null,
+      projectorStatus: 'missing',
     };
   }
 
@@ -606,14 +571,9 @@ export class MainThreadModelLoader {
       throw new Error('No URL assets provided.');
     }
 
-    const opfsSupported =
-      FileSystemStorage.isSupported() &&
-      this.config.persistentModelCache?.enabled !== false;
     const linkedAbort = createLinkedAbortController(signal);
     const loadSignal = linkedAbort.signal;
-    const downloadConcurrency = opfsSupported
-      ? URL_DOWNLOAD_CONCURRENCY_OPFS
-      : URL_DOWNLOAD_CONCURRENCY_MEMORY;
+    const downloadConcurrency = URL_DOWNLOAD_CONCURRENCY_MEMORY;
 
     try {
       const assetMeta = await this.resolveUrlAssetMetadata(assets, loadSignal);
@@ -642,43 +602,9 @@ export class MainThreadModelLoader {
             throw createAbortError('Model load aborted.');
           }
 
-          const cachedEntry: BrowserModelCacheLookupResult | null = opfsSupported
-            ? await this.browserModelCache.get(asset.cacheIdentity)
-            : null;
-          if (cachedEntry != null) {
-            reportAssetProgress(index, cachedEntry.file.size);
-            return {
-              file: createMountableModelFile(cachedEntry.file, asset.mountFileName),
-              cacheKey: cachedEntry.key,
-              cacheHit: true,
-              cacheStored: false,
-            };
-          }
-
           const response = await fetch(asset.url, { signal: loadSignal });
           if (!response.ok) {
             throw new Error(`HTTP ${response.status} for ${asset.mountFileName}`);
-          }
-
-          if (opfsSupported) {
-            if (!response.body) {
-              throw new Error(`Empty body for ${asset.mountFileName}`);
-            }
-            const storedEntry = await this.browserModelCache.storeStream(
-              asset.cacheIdentity,
-              response.body,
-              (written) => {
-                reportAssetProgress(index, written);
-              },
-              loadSignal
-            );
-            reportAssetProgress(index, storedEntry.file.size);
-            return {
-              file: createMountableModelFile(storedEntry.file, asset.mountFileName),
-              cacheKey: storedEntry.key,
-              cacheHit: false,
-              cacheStored: true,
-            };
           }
 
           if (!response.body) {
@@ -686,9 +612,6 @@ export class MainThreadModelLoader {
             reportAssetProgress(index, buffer.byteLength);
             return {
               file: createMountableModelFile(new Blob([buffer]), asset.mountFileName),
-              cacheKey: null,
-              cacheHit: false,
-              cacheStored: false,
             };
           }
 
@@ -701,9 +624,6 @@ export class MainThreadModelLoader {
               },
               loadSignal
             ),
-            cacheKey: null,
-            cacheHit: false,
-            cacheStored: false,
           };
         },
         () => {
@@ -715,25 +635,18 @@ export class MainThreadModelLoader {
         onProgress(100);
       }
 
-      const cacheKeys = assetResults.map(
-        (result, index) =>
-          result.cacheKey ?? this.browserModelCache.buildEntryKey(assetMeta[index].cacheIdentity)
-      );
-      const allCacheHits = opfsSupported && assetResults.every((result) => result.cacheHit);
-      const anyCacheStored = opfsSupported && assetResults.some((result) => result.cacheStored);
-
       return {
         files: assetResults.map((result) => result.file),
         loadInfo: {
           sourceKind: 'url',
-          reuseMode: allCacheHits ? 'persistent-cache' : 'network',
+          reuseMode: 'network',
           modelPath: '',
           fileName: assetMeta[0].mountFileName,
           byteLength: assetResults.reduce((sum, result) => sum + result.file.size, 0),
-          persistentCacheEnabled: opfsSupported,
-          persistentCacheKey: opfsSupported ? cacheKeys.join(',') : null,
-          persistentCacheHit: allCacheHits,
-          persistentCacheStored: anyCacheStored,
+          persistentCacheEnabled: false,
+          persistentCacheKey: null,
+          persistentCacheHit: false,
+          persistentCacheStored: false,
         },
       };
     } catch (error) {
@@ -855,7 +768,6 @@ export class MainThreadModelLoader {
       URL_METADATA_FETCH_CONCURRENCY,
       async (asset) => {
         const parsed = this.parseConfiguredUrl(asset.url, 'modelUrl');
-        const canonicalUrl = parsed.toString();
         const sourceFileName = normalizeModelFileName(
           parsed.pathname.split('/').pop() || 'model.gguf'
         );
@@ -868,13 +780,6 @@ export class MainThreadModelLoader {
             fileName: sourceFileName,
             mountFileName: normalizeModelFileName(asset.mountFileName),
             contentLength,
-            cacheIdentity: {
-              canonicalUrl,
-              fileName: sourceFileName,
-              etag: headResp.headers.get('ETag')?.trim() ?? '',
-              lastModified: headResp.headers.get('Last-Modified')?.trim() ?? '',
-              contentLength,
-            },
           };
         } catch (error) {
           if (isAbortError(error) || signal.aborted) {
@@ -885,13 +790,6 @@ export class MainThreadModelLoader {
             fileName: sourceFileName,
             mountFileName: normalizeModelFileName(asset.mountFileName),
             contentLength: 0,
-            cacheIdentity: {
-              canonicalUrl,
-              fileName: sourceFileName,
-              etag: '',
-              lastModified: '',
-              contentLength: 0,
-            },
           };
         }
       }
@@ -948,9 +846,9 @@ export class MainThreadModelLoader {
     this.activeMountPath = null;
   }
 
-  private deriveFileNameFromUrl(url: string, fallbackName: string): string {
+  private deriveFileNameFromUrl(url: string, defaultName: string): string {
     const parsed = this.parseConfiguredUrl(url, 'modelUrl');
     const rawName = parsed.pathname.split('/').pop();
-    return normalizeModelFileName(rawName && rawName.length > 0 ? rawName : fallbackName);
+    return normalizeModelFileName(rawName && rawName.length > 0 ? rawName : defaultName);
   }
 }

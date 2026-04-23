@@ -8,7 +8,7 @@ export interface QueuedRequestPumpStepResult {
 export const DEFAULT_QUEUED_REQUEST_PUMP_SYNC_BURST_LIMIT = 128;
 export const DEFAULT_QUEUED_REQUEST_PUMP_IDLE_STREAK_BEFORE_YIELD = 4;
 
-export async function runQueuedRequestPumpLoop(options: {
+export async function runRequestPumpLoop(options: {
   isCurrentGeneration: () => boolean;
   runStep: () => Promise<QueuedRequestPumpStepResult>;
   waitForNextSchedulerStep: () => Promise<void>;
