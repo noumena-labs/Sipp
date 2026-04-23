@@ -12,6 +12,8 @@ import test from 'node:test';
 
 import type { ActionSchema } from './action-schema.js';
 import {
+  ActionSchemaError,
+  assertValidActionSchema,
   expandActionCues,
   findCanonicalActionCue,
   renderActionCapabilityList,
@@ -76,6 +78,13 @@ test('validateActionSchema rejects cue label collisions', () => {
     ],
   });
   assert.match(String(error), /collision/i);
+});
+
+test('assertValidActionSchema throws ActionSchemaError on invalid input', () => {
+  assert.throws(
+    () => assertValidActionSchema({ actions: [] }),
+    (error) => error instanceof ActionSchemaError
+  );
 });
 
 test('expandActionCues produces one cue per action in declaration order', () => {

@@ -17,14 +17,18 @@ import type {
 } from '../core/inference-types.js';
 import { ActionBus, type CharacterEvent } from './action-bus.js';
 import { compileActionGrammar } from './action-grammar.js';
-import { StreamingActionParser } from './action-parser.js';
+import { StreamingActionParser, type ParsedEvent } from './action-parser.js';
 import {
   DEFAULT_MEMORY_MAX_TURNS,
   resolveMaxMemoryTurns,
   type CharacterConfig,
 } from './character-config.js';
-import { findCanonicalActionCue } from './action-schema.js';
-import { buildAppliedChatTemplateContext } from './chat-template-metadata.js';
+import { summarizeActionCues } from './action-schema.js';
+import {
+  buildBoundaryMarkers,
+  probeChatTemplateBoundaryInfo,
+  renderAppliedChatTemplate,
+} from './chat-template-metadata.js';
 import { renderSystemPrompt } from './persona.js';
 
 /**
@@ -81,6 +85,16 @@ interface ResolvedPromptContext {
   readonly templateSource: string | null;
 }
 
+interface CachedPromptMetadata {
+  readonly boundaryMarkers: readonly string[];
+  readonly templateSource: string | null;
+}
+
+interface InFlightTurn {
+  readonly controller: AbortController;
+  readonly done: Promise<void>;
+}
+
 /**
  * A character-driven conversation agent. Pair one with a CogentEngine and a
  * CharacterConfig to get a grammar-constrained, memory-aware chat loop.
@@ -92,9 +106,11 @@ export class CharacterAgent {
   private readonly systemPrompt: string;
   private readonly grammarSource: string;
   private readonly memoryLimitTurns: number;
+  private readonly canonicalCueLabelsByActionName: ReadonlyMap<string, string>;
   private readonly turnHistory: ChatTurn[] = [];
   private readonly eventBus: ActionBus;
-  private turnSequence = 0;
+  private promptMetadataPromise: Promise<CachedPromptMetadata> | undefined;
+  private currentTurn: InFlightTurn | undefined;
 
   public constructor(
     engine: CharacterAgentEngine,
@@ -107,6 +123,9 @@ export class CharacterAgent {
     this.eventBus = options.bus ?? new ActionBus();
     this.systemPrompt = renderSystemPrompt(config.persona, config.actions);
     this.grammarSource = compileActionGrammar(config.actions);
+    this.canonicalCueLabelsByActionName = new Map(
+      summarizeActionCues(config.actions).map((cue) => [cue.name, cue.label])
+    );
     this.memoryLimitTurns = Math.max(
       0,
       resolveMaxMemoryTurns(config) ?? DEFAULT_MEMORY_MAX_TURNS
@@ -155,34 +174,69 @@ export class CharacterAgent {
       this.eventBus.emit(event);
     };
 
-    emit({ kind: 'turn-start', userMessage: trimmed });
+    const controller = new AbortController();
+    const detachSignalForwarder = forwardAbortSignal(options.signal, controller);
+    const previousTurn = this.currentTurn;
 
-    // Drive the engine in a detached async task so the async iterator can
-    // begin delivering buffered events to the consumer immediately.
-    void (async () => {
-      if (options.signal?.aborted) {
-        emit({ kind: 'turn-end', finalText: '', cancelled: true });
-        queue.close();
-        return;
+    let inFlightTurn: InFlightTurn;
+    const done = this.executeTurn(trimmed, emit, controller.signal, previousTurn).finally(() => {
+      detachSignalForwarder();
+      if (this.currentTurn === inFlightTurn) {
+        this.currentTurn = undefined;
       }
-
-      const parser = new StreamingActionParser(this.config.actions);
-      const turnMessages = this.buildTurnMessages(trimmed);
-      try {
-        const promptContext = await this.buildPromptContext(turnMessages);
-        await this.runTurn(promptContext, turnMessages, trimmed, parser, emit, queue, options.signal);
-      } catch (error) {
-        emit({
-          kind: 'turn-end',
-          finalText: '',
-          cancelled: false,
-          errorMessage: error instanceof Error ? error.message : String(error),
-        });
-        queue.close();
-      }
-    })();
+      queue.close();
+    });
+    inFlightTurn = {
+      controller,
+      done,
+    };
+    this.currentTurn = inFlightTurn;
+    void done;
 
     return queue;
+  }
+
+  private async executeTurn(
+    userMessage: string,
+    emit: (event: ChatEvent) => void,
+    signal: AbortSignal,
+    previousTurn: InFlightTurn | undefined
+  ): Promise<void> {
+    if (previousTurn) {
+      previousTurn.controller.abort();
+      try {
+        await previousTurn.done;
+      } catch {
+        // A prior turn already surfaced its own terminal event.
+      }
+    }
+
+    emit({ kind: 'turn-start', userMessage });
+
+    if (signal.aborted) {
+      emit({ kind: 'turn-end', finalText: '', cancelled: true });
+      return;
+    }
+
+    const parser = new StreamingActionParser(this.config.actions);
+    const turnMessages = this.buildTurnMessages(userMessage);
+    try {
+      const promptContext = await this.buildPromptContext(turnMessages);
+      if (signal.aborted) {
+        emit({ kind: 'turn-end', finalText: '', cancelled: true });
+        return;
+      }
+      await this.runTurn(promptContext, userMessage, parser, emit, signal);
+    } catch (error) {
+      emit({
+        kind: 'turn-end',
+        finalText: '',
+        cancelled: signal.aborted,
+        ...(signal.aborted
+          ? {}
+          : { errorMessage: error instanceof Error ? error.message : String(error) }),
+      });
+    }
   }
 
   /**
@@ -208,57 +262,78 @@ export class CharacterAgent {
    * and derives assistant boundaries from that applied template output.
    */
   private async buildPromptContext(messages: ChatMessage[]): Promise<ResolvedPromptContext> {
-    return buildAppliedChatTemplateContext(this.engine, messages);
+    const [promptText, metadata] = await Promise.all([
+      renderAppliedChatTemplate(this.engine, messages),
+      this.getPromptMetadata(),
+    ]);
+
+    return {
+      promptText,
+      boundaryMarkers: metadata.boundaryMarkers,
+      templateSource: metadata.templateSource,
+    };
+  }
+
+  private getPromptMetadata(): Promise<CachedPromptMetadata> {
+    if (!this.promptMetadataPromise) {
+      this.promptMetadataPromise = probeChatTemplateBoundaryInfo(this.engine)
+        .then((boundaryInfo) => ({
+          boundaryMarkers: buildBoundaryMarkers(boundaryInfo),
+          templateSource: this.engine.getChatTemplate?.() ?? null,
+        }))
+        .catch((error) => {
+          this.promptMetadataPromise = undefined;
+          throw error;
+        });
+    }
+
+    return this.promptMetadataPromise;
   }
 
   private async runTurn(
     promptContext: ResolvedPromptContext,
-    messages: ChatMessage[],
     userMessage: string,
     parser: StreamingActionParser,
     emit: (event: ChatEvent) => void,
-    queue: AsyncEventQueue<ChatEvent>,
-    signal: AbortSignal | undefined
+    signal: AbortSignal
   ): Promise<void> {
-    let rawOutputText = '';
+    let streamedOutputText = '';
     let pendingText = '';
+    let proseText = '';
+    let memoryText = '';
     let requestId: GenerateRequestId = 0;
     let cancelled = false;
     let errorMessage: string | undefined;
     let reachedBoundary = false;
-    const contextKey = this.nextTurnContextKey();
+    const contextKey = this.config.id;
     const promptText = promptContext.promptText;
     const boundaryMarkers = promptContext.boundaryMarkers;
 
-    console.info('[CharacterAgent] queuePrompt input', {
-      characterId: this.config.id,
-      contextKey,
-      templateSourcePreview: promptContext.templateSource?.slice(0, 160) ?? null,
-      userMessage,
-      messages,
-      promptTextPreview: promptText.slice(0, 400),
-      promptTextByteLength: promptText.length,
-      maxOutputTokens: this.maxOutputTokens,
-      boundaryMarkers,
-      // Temporarily disable action grammar while debugging prompt quality so
-      // we can compare unconstrained model responses 1:1 against the
-      // grammar-constrained path.
-      grammar: this.grammarSource,
-      //grammar: undefined,
-    });
+    const recordParsedEvents = (events: readonly ParsedEvent[]): void => {
+      for (const event of events) {
+        if (event.kind === 'prose') {
+          proseText += event.text;
+          memoryText += event.text;
+        } else {
+          memoryText += this.renderCanonicalActionCue(event.name, event.raw);
+        }
+        emit(event);
+      }
+    };
 
     const emitParsedText = (text: string): void => {
       if (text.length === 0) {
         return;
       }
-      const events = parser.consume(text);
-      for (const event of events) {
-        emit(event);
-      }
+      recordParsedEvents(parser.consume(text));
+    };
+
+    const flushParsedText = (): void => {
+      recordParsedEvents(parser.flush());
     };
 
     const requestBoundaryStop = (): void => {
-      if (requestId === 0 || signal?.aborted || !this.engine.cancelQueuedRequest) {
+      if (requestId === 0 || signal.aborted || !this.engine.cancelQueuedRequest) {
         return;
       }
       void this.engine.cancelQueuedRequest(requestId).catch(() => {
@@ -266,12 +341,12 @@ export class CharacterAgent {
       });
     };
 
-    const onToken = (token: string): void => {
-      if (token.length === 0 || reachedBoundary) {
+    const consumeOutputText = (text: string): void => {
+      if (text.length === 0 || reachedBoundary) {
         return;
       }
-      rawOutputText += token;
-      pendingText += token;
+      streamedOutputText += text;
+      pendingText += text;
 
       const split = splitOnAssistantBoundary(pendingText, boundaryMarkers);
       emitParsedText(split.safeText);
@@ -284,6 +359,10 @@ export class CharacterAgent {
       }
     };
 
+    const onToken = (token: string): void => {
+      consumeOutputText(token);
+    };
+
     try {
       const promptOptions: PromptOptions = {
         nTokens: this.maxOutputTokens,
@@ -294,18 +373,21 @@ export class CharacterAgent {
       };
       requestId = await this.engine.queuePrompt(contextKey, promptText, promptOptions);
       const response = await this.engine.runQueuedRequest(requestId, { signal });
-      rawOutputText = response.outputText;
+      const unseenOutputSuffix = sliceUnstreamedSuffix(streamedOutputText, response.outputText);
+      if (!reachedBoundary && unseenOutputSuffix.length > 0) {
+        consumeOutputText(unseenOutputSuffix);
+      }
       cancelled = response.cancelled && !reachedBoundary;
       if (response.failed && response.errorMessage) {
         errorMessage = response.errorMessage;
       }
     } catch (error) {
-      if (reachedBoundary && !signal?.aborted) {
+      if (reachedBoundary && !signal.aborted) {
         cancelled = false;
       } else {
         errorMessage = error instanceof Error ? error.message : String(error);
       }
-      if (signal?.aborted && !reachedBoundary) {
+      if (signal.aborted && !reachedBoundary) {
         cancelled = true;
       }
       // Best-effort cancel in case the runtime still holds the request.
@@ -321,25 +403,14 @@ export class CharacterAgent {
     if (!reachedBoundary) {
       emitParsedText(trimTrailingBoundaryPrefix(pendingText, boundaryMarkers));
     }
+    flushParsedText();
 
-    const finalText = this.buildFinalText(rawOutputText, boundaryMarkers, userMessage).trim();
-    const memoryText = this.buildMemoryText(rawOutputText, boundaryMarkers, userMessage).trim();
+    const finalText = stripExactUserMessageEcho(proseText, userMessage).trim();
+    const sanitizedMemoryText = stripExactUserMessageEcho(memoryText, userMessage).trim();
 
-    console.info('[CharacterAgent] raw LLM output', {
-      characterId: this.config.id,
-      contextKey,
-      requestId,
-      cancelled,
-      errorMessage,
-      reachedBoundary,
-      rawOutputText,
-      parsedProseText: finalText,
-      memoryText,
-    });
-
-    if (!cancelled && !errorMessage && memoryText.length > 0) {
+    if (!cancelled && !errorMessage && sanitizedMemoryText.length > 0) {
       this.pushTurnToMemory({ role: 'user', content: userMessage });
-      this.pushTurnToMemory({ role: 'assistant', content: memoryText });
+      this.pushTurnToMemory({ role: 'assistant', content: sanitizedMemoryText });
     }
 
     const endEvent = {
@@ -349,50 +420,11 @@ export class CharacterAgent {
       ...(errorMessage ? { errorMessage } : {}),
     };
     emit(endEvent);
-    queue.close();
   }
 
-  private nextTurnContextKey(): string {
-    this.turnSequence += 1;
-    return `${this.config.id}::turn-${this.turnSequence}`;
-  }
-
-  private buildFinalText(
-    rawOutputText: string,
-    boundaryMarkers: readonly string[],
-    userMessage: string
-  ): string {
-    const parser = new StreamingActionParser(this.config.actions);
-    const cleaned = sanitizeAssistantOutputText(rawOutputText, boundaryMarkers, userMessage);
-    const events = parser.consume(cleaned);
-    const trailing = parser.flush();
-    let prose = '';
-    for (const event of [...events, ...trailing]) {
-      if (event.kind === 'prose') {
-        prose += event.text;
-      }
-    }
-    return prose;
-  }
-
-  private buildMemoryText(
-    rawOutputText: string,
-    boundaryMarkers: readonly string[],
-    userMessage: string
-  ): string {
-    const parser = new StreamingActionParser(this.config.actions);
-    const cleaned = sanitizeAssistantOutputText(rawOutputText, boundaryMarkers, userMessage);
-    const events = parser.consume(cleaned);
-    const trailing = parser.flush();
-    return [...events, ...trailing]
-      .map((event) => {
-        if (event.kind === 'prose') {
-          return event.text;
-        }
-        const canonical = findCanonicalActionCue(this.config.actions, event.name);
-        return canonical == null ? event.raw : `[${canonical.label}]`;
-      })
-      .join('');
+  private renderCanonicalActionCue(name: string, rawCue: string): string {
+    const label = this.canonicalCueLabelsByActionName.get(name);
+    return label == null ? rawCue : `[${label}]`;
   }
 
   private pushTurnToMemory(turn: ChatTurn): void {
@@ -528,22 +560,6 @@ function trimTrailingBoundaryPrefix(
   return out;
 }
 
-function sanitizeAssistantMemoryText(
-  text: string,
-  boundaryMarkers: readonly string[]
-): string {
-  const split = splitOnAssistantBoundary(text, boundaryMarkers);
-  return split.safeText;
-}
-
-function sanitizeAssistantOutputText(
-  text: string,
-  boundaryMarkers: readonly string[],
-  userMessage: string
-): string {
-  return stripExactUserMessageEcho(sanitizeAssistantMemoryText(text, boundaryMarkers), userMessage);
-}
-
 function stripExactUserMessageEcho(text: string, userMessage: string): string {
   const source = userMessage.trim();
   if (source.length === 0) {
@@ -577,4 +593,35 @@ function longestSuffixPrefixOverlap(source: string, marker: string): number {
     }
   }
   return 0;
+}
+
+function forwardAbortSignal(
+  source: AbortSignal | undefined,
+  controller: AbortController
+): () => void {
+  if (!source) {
+    return () => {};
+  }
+  if (source.aborted) {
+    controller.abort();
+    return () => {};
+  }
+
+  const onAbort = (): void => {
+    controller.abort();
+  };
+  source.addEventListener('abort', onAbort, { once: true });
+  return () => {
+    source.removeEventListener('abort', onAbort);
+  };
+}
+
+function sliceUnstreamedSuffix(streamedOutputText: string, finalOutputText: string): string {
+  if (streamedOutputText.length === 0) {
+    return finalOutputText;
+  }
+  if (!finalOutputText.startsWith(streamedOutputText)) {
+    return '';
+  }
+  return finalOutputText.slice(streamedOutputText.length);
 }

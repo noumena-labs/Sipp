@@ -52,11 +52,7 @@ export class ActionParseError extends Error {
 const CUE_OPEN = '[';
 const CUE_CLOSE = ']';
 
-/**
- * Builds a label → cue lookup from an ActionSchema. Separated so callers
- * that already computed the cue list can pass it directly via
- * {@link StreamingActionParser.fromCues}.
- */
+/** Builds a label → cue lookup from an expanded action list. */
 function buildCueMap(cues: readonly ActionCue[]): Map<string, ActionCue> {
   const map = new Map<string, ActionCue>();
   for (const cue of cues) {
@@ -81,18 +77,6 @@ export class StreamingActionParser {
    */
   public constructor(schema: ActionSchema) {
     this.cueMap = buildCueMap(expandActionCues(schema));
-  }
-
-  /**
-   * Alternative constructor for callers (e.g. tests) that have already
-   * computed the cue list and want to avoid re-running schema validation.
-   */
-  public static fromCues(cues: readonly ActionCue[]): StreamingActionParser {
-    // Bypass the schema-based constructor by assigning directly.
-    const parser = Object.create(StreamingActionParser.prototype) as StreamingActionParser;
-    (parser as unknown as { buffer: string }).buffer = '';
-    (parser as unknown as { cueMap: Map<string, ActionCue> }).cueMap = buildCueMap(cues);
-    return parser;
   }
 
   /**

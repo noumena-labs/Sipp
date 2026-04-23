@@ -20,20 +20,14 @@
 //
 //////////////////////////////////////////////////////////////////////////////
 
-import { expandActionCues, validateActionSchema } from './action-schema.js';
+import {
+  ActionSchemaError,
+  assertValidActionSchema,
+  expandActionCues,
+} from './action-schema.js';
 import type { ActionSchema } from './action-schema.js';
 
-/**
- * Thrown when a supplied ActionSchema fails structural validation. Exposed
- * as a named class so callers can distinguish schema errors from other
- * errors.
- */
-export class ActionSchemaError extends Error {
-  public constructor(message: string) {
-    super(message);
-    this.name = 'ActionSchemaError';
-  }
-}
+export { ActionSchemaError } from './action-schema.js';
 
 /**
  * Minimal diagnostic grammar used to prove whether grammar-constrained
@@ -51,17 +45,8 @@ export const MINIMAL_TEST_GRAMMAR_SOURCE = 'root ::= "yes" | "no"\n';
  * any reasonable schema.
  */
 export function compileActionGrammar(schema: ActionSchema): string {
-  const validationError = validateActionSchema(schema);
-  if (validationError != null) {
-    throw new ActionSchemaError(validationError);
-  }
-
-  let cues;
-  try {
-    cues = expandActionCues(schema);
-  } catch (error) {
-    throw new ActionSchemaError((error as Error).message);
-  }
+  assertValidActionSchema(schema);
+  const cues = expandActionCues(schema);
 
   if (cues.length === 0) {
     throw new ActionSchemaError('Action schema produced no cues.');

@@ -13,7 +13,7 @@ export interface AppliedChatTemplateContext {
   readonly templateSource: string | null;
 }
 
-interface ChatBoundaryInfo {
+export interface ChatBoundaryInfo {
   readonly assistantPrefix: string;
   readonly assistantSuffix: string;
   readonly nextTurnPrefixes: readonly string[];
@@ -29,18 +29,42 @@ const BOUNDARY_SENTINELS = {
 
 export async function buildAppliedChatTemplateContext(
   provider: ChatTemplateMetadataProvider,
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  boundaryInfo?: ChatBoundaryInfo
 ): Promise<AppliedChatTemplateContext> {
-  const promptMessages = toTemplateMessages(messages);
-  const promptText = await provider.applyChatTemplate(promptMessages, true);
+  const [promptText, info] = await Promise.all([
+    renderAppliedChatTemplate(provider, messages),
+    boundaryInfo == null ? probeChatTemplateBoundaryInfo(provider) : Promise.resolve(boundaryInfo),
+  ]);
+
+  return {
+    promptText,
+    boundaryMarkers: buildBoundaryMarkers(info),
+    templateSource: provider.getChatTemplate?.() ?? null,
+  };
+}
+
+export async function renderAppliedChatTemplate(
+  provider: ChatTemplateMetadataProvider,
+  messages: ChatMessage[]
+): Promise<string> {
+  const promptText = await provider.applyChatTemplate(toTemplateMessages(messages), true);
   if (promptText.length === 0) {
     throw new Error(
       'CharacterAgent: model chat_template did not produce a prompt. Ensure the loaded GGUF includes a valid chat template.'
     );
   }
+  return promptText;
+}
 
+export async function probeChatTemplateBoundaryInfo(
+  provider: ChatTemplateMetadataProvider
+): Promise<ChatBoundaryInfo> {
   const eosText = provider.getEosText?.() ?? '';
-  const info = await getChatBoundaryInfo(provider, eosText);
+  return getChatBoundaryInfo(provider, eosText);
+}
+
+export function buildBoundaryMarkers(info: ChatBoundaryInfo): readonly string[] {
   const markers = new Set<string>();
   if (info.assistantSuffix.length > 0) {
     markers.add(info.assistantSuffix);
@@ -53,12 +77,7 @@ export async function buildAppliedChatTemplateContext(
   if (info.eosText.length > 0) {
     markers.add(info.eosText);
   }
-
-  return {
-    promptText,
-    boundaryMarkers: Array.from(markers),
-    templateSource: provider.getChatTemplate?.() ?? null,
-  };
+  return Array.from(markers);
 }
 
 function toTemplateMessages(messages: readonly ChatMessage[]): ChatTemplateMessage[] {

@@ -12,9 +12,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { CogentEngine, getBundledRuntimeUrls } from 'cogent-engine';
 import {
   ActionBus,
-  CharacterAgent,
+  createCharacterFromConfigUrl,
   parseCharacterConfig,
   type CharacterConfig,
+  type CharacterAgent,
 } from 'cogent-engine/character';
 import { AvatarCanvas } from './components/AvatarCanvas';
 import { ChatComposer } from './components/ChatComposer';
@@ -51,32 +52,17 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   // The bus is created once per app lifetime and reused across harness
-  // reloads so the scene binding is stable.
+  // reloads so the scene binding stays stable across agent replacement.
   const bus = useMemo(() => new ActionBus(), []);
   const abortRef = useRef<AbortController | null>(null);
   const previewRequestIdRef = useRef(0);
 
-  // Bridge the agent's bus into the current harness when it changes so
-  // scene bindings stay attached to whichever agent is live.
-  useEffect(() => {
-    if (!harness) {
-      return;
-    }
-    const dispose = harness.agent.bus.onAny((event) => bus.emit(event));
-    return dispose;
-  }, [harness, bus]);
-
-  const fetchCharacterConfig = async (configUrl: string): Promise<CharacterConfig> => {
+  const loadCharacterPreview = async (configUrl: string): Promise<PreviewCharacter> => {
     const res = await fetch(configUrl);
     if (!res.ok) {
       throw new Error(`character.json HTTP ${res.status}`);
     }
-    const raw = await res.json();
-    return parseCharacterConfig(raw);
-  };
-
-  const loadCharacterPreview = async (configUrl: string): Promise<PreviewCharacter> => {
-    const config = await fetchCharacterConfig(configUrl);
+    const config = parseCharacterConfig(await res.json());
     const renderAssets = resolveAvatarRenderAssets(configUrl);
     await validateAvatarRenderAssets(config, renderAssets);
     return { config, renderAssets };
@@ -159,7 +145,11 @@ export default function App() {
         },
       });
 
-      const agent = new CharacterAgent(engine, config, { bus: new ActionBus() });
+      const { agent } = await createCharacterFromConfigUrl({
+        configUrl: args.characterUrl,
+        engine,
+        bus,
+      });
       if (previousHarness) {
         previousHarness.engine.close();
       }

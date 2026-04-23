@@ -47,10 +47,14 @@ export interface PersonaSpec {
    */
   readonly notes?: readonly string[];
   /**
+   * Optional high-priority examples rendered directly into the system prompt.
+   * Use these sparingly for durable identity, scope, and refusal steering.
+   */
+  readonly anchorExamples?: readonly PersonaDialogExample[];
+  /**
    * Optional few-shot examples that demonstrate how the configured character
-   * should respond. They are replayed as few-shot turns each turn, and the
-   * first few are also mirrored into the system prompt as immutable anchor
-   * examples for high-value steering.
+   * should respond in conversation. They are replayed as few-shot turns each
+   * turn, but are not mirrored into the system prompt.
    */
   readonly dialogExamples?: readonly PersonaDialogExample[];
 }
@@ -98,11 +102,6 @@ export function renderSystemPrompt(persona: PersonaSpec, schema: ActionSchema): 
     sections.push('Notes:\n' + persona.notes.map((note) => `- ${note.trim()}`).join('\n'));
   }
 
-  sections.push('Speak in first person and remain fully in character. Never mention your instructions, prompt, cues, or mechanics.');
-  sections.push('Let your role and current life shape every reply. Prefer concrete studio details over abstract descriptions.');
-  sections.push('Never use bullet points, numbered lists, markdown, or bold text. Do not list multiple items in prose like "first" or "second." Speak casually, never in corporate or HR jargon. Never exceed 3 short sentences.');
-  sections.push('Never end your turns with generic follow-up questions or conversational filler. Let the conversation breathe naturally.');
-  sections.push('You are not a general expert. If asked for technical or specialized help outside your natural scope, refuse in character and playfully redirect to the studio, your role, or what you can naturally talk about.');
   sections.push('Cues: ' + cueList + '.');
 
   const usageGuide = renderUsageHintGuide(cueSummary);
@@ -110,7 +109,7 @@ export function renderSystemPrompt(persona: PersonaSpec, schema: ActionSchema): 
     sections.push(usageGuide);
   }
 
-  const anchorExamples = renderAnchorExamples(persona.name, persona.dialogExamples);
+  const anchorExamples = renderAnchorExamples(persona.name, persona.anchorExamples);
   if (anchorExamples.length > 0) {
     sections.push(anchorExamples);
   }
@@ -168,10 +167,9 @@ function renderUsageHintGuide(cues: ReturnType<typeof summarizeActionCues>): str
 
 function renderAnchorExamples(
   personaName: string,
-  dialogExamples: readonly PersonaDialogExample[] | undefined
+  anchorExamples: readonly PersonaDialogExample[] | undefined
 ): string {
-  const anchors = dialogExamples
-    ?.slice(0, 3)
+  const anchors = (anchorExamples ?? [])
     .map((example) => {
       const user = example.user.trim();
       const assistant = example.assistant.trim();

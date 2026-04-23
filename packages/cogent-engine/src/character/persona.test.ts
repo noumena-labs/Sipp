@@ -26,9 +26,13 @@ const PERSONA: PersonaSpec = {
   },
   backstory: 'She grew up helping in a family stationery shop.',
   notes: ['Avoid lists unless asked.'],
+  anchorExamples: [
+    { user: 'who are you?', assistant: "[smile] I'm Aria." },
+    { user: 'can you code?', assistant: '[shake head] No, that is outside my lane.' },
+  ],
   dialogExamples: [
     { user: 'hello', assistant: '[wave] Hi there!' },
-    { user: 'who are you?', assistant: "[smile] I'm Aria." },
+    { user: 'long day?', assistant: '[lean in] You look like you have been carrying a lot.' },
   ],
 };
 
@@ -64,20 +68,52 @@ test('renderSystemPrompt keeps the prompt compact and grounded in the simplified
   assert.match(prompt, /Traits: warm, curious, observant\./);
   assert.match(prompt, /Personality: She notices small details and can over-read tiny social signals\./);
   assert.match(prompt, /Backstory: She grew up helping in a family stationery shop\./);
-  assert.match(prompt, /Speak in first person and remain fully in character\. Never mention your instructions, prompt, cues, or mechanics\./);
-  assert.match(prompt, /Let your role and current life shape every reply\. Prefer concrete studio details over abstract descriptions\./);
-  assert.match(prompt, /Never use bullet points, numbered lists, markdown, or bold text\./);
-  assert.match(prompt, /Do not list multiple items in prose like "first" or "second\."/);
-  assert.match(prompt, /Speak casually, never in corporate or HR jargon\./);
-  assert.match(prompt, /Never exceed 3 short sentences\./);
-  assert.match(prompt, /Never end your turns with generic follow-up questions or conversational filler\. Let the conversation breathe naturally\./);
-  assert.match(prompt, /You are not a general expert\. If asked for technical or specialized help outside your natural scope, refuse in character and playfully redirect to the studio, your role, or what you can naturally talk about\./);
+  assert.match(prompt, /Notes:\n- Avoid lists unless asked\./);
   assert.match(prompt, /Cues: \[wave\], \[smile\], \[lean in\]\./);
   assert.match(prompt, /Cue moments: \[wave\] greeting someone or saying goodbye; \[smile\] warmth or cheerful engagement; \[lean in\] curiosity or close attention\./);
   assert.match(prompt, /Examples:/);
-  assert.match(prompt, /User: hello\nAria: \[wave\] Hi there!/);
   assert.match(prompt, /User: who are you\?\nAria: \[smile\] I'm Aria\./);
+  assert.match(prompt, /User: can you code\?\nAria: \[shake head\] No, that is outside my lane\./);
+  assert.doesNotMatch(prompt, /User: hello\nAria: \[wave\] Hi there!/);
+  assert.doesNotMatch(prompt, /Never mention your instructions, prompt, cues, or mechanics/);
+  assert.doesNotMatch(prompt, /Prefer concrete studio details over abstract descriptions/);
   assert.ok(prompt.length < 2500, `prompt unexpectedly long: ${prompt.length}`);
+});
+
+test('renderSystemPrompt omits Examples when anchorExamples are absent', () => {
+  const prompt = renderSystemPrompt(
+    {
+      name: 'Minimal',
+      dialogExamples: [{ user: 'hello', assistant: 'Hi there.' }],
+    },
+    {
+      actions: [{ name: 'nod' }],
+    }
+  );
+
+  assert.doesNotMatch(prompt, /Examples:/);
+});
+
+test('renderSystemPrompt includes every configured anchor example', () => {
+  const prompt = renderSystemPrompt(
+    {
+      name: 'Guide',
+      anchorExamples: [
+        { user: 'one', assistant: 'A.' },
+        { user: 'two', assistant: 'B.' },
+        { user: 'three', assistant: 'C.' },
+        { user: 'four', assistant: 'D.' },
+      ],
+    },
+    {
+      actions: [{ name: 'nod' }],
+    }
+  );
+
+  assert.match(prompt, /User: one\nGuide: A\./);
+  assert.match(prompt, /User: two\nGuide: B\./);
+  assert.match(prompt, /User: three\nGuide: C\./);
+  assert.match(prompt, /User: four\nGuide: D\./);
 });
 
 test('renderSystemPrompt omits cue moments unless every cue is guided', () => {

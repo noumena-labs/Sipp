@@ -78,6 +78,39 @@ function trimOptionalStringArray(value: unknown): readonly string[] | undefined 
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function validateDialogExampleArray(
+  value: unknown,
+  keyPath: string
+): asserts value is readonly PersonaDialogExample[] {
+  if (!Array.isArray(value)) {
+    throw new CharacterConfigError(`\`${keyPath}\` must be an array if present.`);
+  }
+  const invalidIndex = value.findIndex((example) => {
+    if (example == null || typeof example !== 'object') {
+      return true;
+    }
+    const rec = example as Record<string, unknown>;
+    return (
+      typeof rec.user !== 'string' ||
+      rec.user.trim().length === 0 ||
+      typeof rec.assistant !== 'string' ||
+      rec.assistant.trim().length === 0
+    );
+  });
+  if (invalidIndex >= 0) {
+    throw new CharacterConfigError(
+      `\`${keyPath}\` entries must be objects with non-empty string \`user\` and \`assistant\` fields.`
+    );
+  }
+}
+
+function trimDialogExampleArray(value: readonly PersonaDialogExample[] | undefined): readonly PersonaDialogExample[] | undefined {
+  return value?.map((example) => ({
+    user: example.user.trim(),
+    assistant: example.assistant.trim(),
+  }));
+}
+
 /**
  * Parses and validates a CharacterConfig object (e.g. the result of
  * `JSON.parse(readFileSync('character.json'))`). Throws CharacterConfigError
@@ -146,27 +179,11 @@ export function parseCharacterConfig(raw: unknown): CharacterConfig {
       throw new CharacterConfigError('`persona.notes` must be an array of strings if present.');
     }
   }
+  if (personaRec.anchorExamples != null) {
+    validateDialogExampleArray(personaRec.anchorExamples, 'persona.anchorExamples');
+  }
   if (personaRec.dialogExamples != null) {
-    if (!Array.isArray(personaRec.dialogExamples)) {
-      throw new CharacterConfigError('`persona.dialogExamples` must be an array if present.');
-    }
-    const invalidIndex = personaRec.dialogExamples.findIndex((example) => {
-      if (example == null || typeof example !== 'object') {
-        return true;
-      }
-      const rec = example as Record<string, unknown>;
-      return (
-        typeof rec.user !== 'string' ||
-        rec.user.trim().length === 0 ||
-        typeof rec.assistant !== 'string' ||
-        rec.assistant.trim().length === 0
-      );
-    });
-    if (invalidIndex >= 0) {
-      throw new CharacterConfigError(
-        '`persona.dialogExamples` entries must be objects with non-empty string `user` and `assistant` fields.'
-      );
-    }
+    validateDialogExampleArray(personaRec.dialogExamples, 'persona.dialogExamples');
   }
 
   const actions = source.actions;
@@ -223,13 +240,13 @@ export function parseCharacterConfig(raw: unknown): CharacterConfig {
             } satisfies PersonaPersonalitySpec,
       backstory: trimOptionalString(personaRec.backstory),
       notes: trimOptionalStringArray(personaRec.notes),
+      anchorExamples: trimDialogExampleArray(
+        personaRec.anchorExamples as readonly PersonaDialogExample[] | undefined
+      ),
       dialogExamples:
-        personaRec.dialogExamples == null
-          ? undefined
-          : (personaRec.dialogExamples as readonly PersonaDialogExample[]).map((example) => ({
-              user: example.user.trim(),
-              assistant: example.assistant.trim(),
-            })),
+        trimDialogExampleArray(
+          personaRec.dialogExamples as readonly PersonaDialogExample[] | undefined
+        ),
     } satisfies PersonaSpec,
     actions: actions as ActionSchema,
     memory: (memory as CharacterMemoryConfig | undefined) ?? undefined,

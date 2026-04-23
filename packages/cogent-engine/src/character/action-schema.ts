@@ -56,6 +56,13 @@ export interface ActionCueSummary {
 
 const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+export class ActionSchemaError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = 'ActionSchemaError';
+  }
+}
+
 function defaultActionLabel(action: ActionSpec): string {
   return action.cue?.trim() || action.name.replace(/_/g, ' ');
 }
@@ -97,16 +104,20 @@ export function validateActionSchema(schema: ActionSchema): string | null {
   return null;
 }
 
+export function assertValidActionSchema(schema: ActionSchema): void {
+  const validationError = validateActionSchema(schema);
+  if (validationError != null) {
+    throw new ActionSchemaError(validationError);
+  }
+}
+
 /**
  * Expands an action schema into the flat list of cues the model is allowed
  * to emit. Ordering is deterministic (schema declaration order) so prompt-
  * cache keys remain stable across rebuilds.
  */
 export function expandActionCues(schema: ActionSchema): readonly ActionCue[] {
-  const validationError = validateActionSchema(schema);
-  if (validationError != null) {
-    throw new Error(validationError);
-  }
+  assertValidActionSchema(schema);
 
   return schema.actions.map((action) => ({
     label: defaultActionLabel(action),
@@ -118,10 +129,7 @@ export function expandActionCues(schema: ActionSchema): readonly ActionCue[] {
  * Returns one canonical prompt-facing cue per runtime action.
  */
 export function summarizeActionCues(schema: ActionSchema): readonly ActionCueSummary[] {
-  const validationError = validateActionSchema(schema);
-  if (validationError != null) {
-    throw new Error(validationError);
-  }
+  assertValidActionSchema(schema);
 
   return schema.actions.map((action) => ({
     label: defaultActionLabel(action),
@@ -136,9 +144,15 @@ export function findCanonicalActionCue(
   schema: ActionSchema,
   name: string
 ): ActionCueSummary | null {
-  for (const summary of summarizeActionCues(schema)) {
-    if (summary.name === name) {
-      return summary;
+  assertValidActionSchema(schema);
+  for (const action of schema.actions) {
+    if (action.name === name) {
+      return {
+        label: defaultActionLabel(action),
+        name: action.name,
+        description: action.description,
+        usageHint: action.usageHint,
+      };
     }
   }
   return null;

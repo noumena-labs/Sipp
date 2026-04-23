@@ -16,6 +16,11 @@
       "import": "./dist/esm/character/index.js",
       "default": "./dist/esm/character/index.js"
     },
+    "./character/internal": {
+      "types": "./dist/types/character/internal.d.ts",
+      "import": "./dist/esm/character/internal.js",
+      "default": "./dist/esm/character/internal.js"
+    },
     "./wasm/*": "./dist/wasm/*"
   },
   "files": [

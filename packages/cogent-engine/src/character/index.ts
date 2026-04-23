@@ -13,20 +13,18 @@ export type {
   ActionSchema,
   ActionSpec,
 } from './action-schema.js';
-export {
-  expandActionCues,
-  renderActionCueList,
-  validateActionSchema,
-} from './action-schema.js';
-
-export { ActionSchemaError, compileActionGrammar } from './action-grammar.js';
 
 export type { ActionEvent, ParsedEvent, ProseEvent } from './action-parser.js';
-export {
-  ActionParseError,
-  StreamingActionParser,
-  parseActionCue,
-} from './action-parser.js';
+export type {
+  PersonaCurrentLifeSpec,
+  PersonaDialogExample,
+  PersonaPersonalitySpec,
+  PersonaSpec,
+} from './persona.js';
+
+export { ActionBus } from './action-bus.js';
+
+export { type CreateCharacterFromConfigUrlOptions, createCharacterFromConfigUrl } from './create-character.js';
 
 export type {
   CharacterEvent,
@@ -35,17 +33,11 @@ export type {
   ChatTurnEndEvent,
   ChatTurnStartEvent,
 } from './action-bus.js';
-export { ActionBus } from './action-bus.js';
-
-export type { PersonaSpec } from './persona.js';
-export { renderSystemPrompt } from './persona.js';
 
 export type { CharacterConfig, CharacterMemoryConfig } from './character-config.js';
 export {
   CharacterConfigError,
-  DEFAULT_MEMORY_MAX_TURNS,
   parseCharacterConfig,
-  resolveMaxMemoryTurns,
 } from './character-config.js';
 
 export type {

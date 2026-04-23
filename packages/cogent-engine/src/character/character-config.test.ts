@@ -47,6 +47,7 @@ test('parseCharacterConfig accepts a valid simplified persona and trims fields',
         traits: [' warm ', ' curious '],
         description: ' Notices little details. ',
       },
+      anchorExamples: [{ user: ' who are you? ', assistant: ' [wave] I am Aria. ' }],
       dialogExamples: [{ user: ' hello ', assistant: ' [wave] Hi there! ' }],
     },
   });
@@ -61,6 +62,7 @@ test('parseCharacterConfig accepts a valid simplified persona and trims fields',
   assert.equal(config.persona.personality?.description, 'Notices little details.');
   assert.equal(config.actions.actions.length, 1);
   assert.equal(config.memory?.maxTurns, 4);
+  assert.deepEqual(config.persona.anchorExamples, [{ user: 'who are you?', assistant: '[wave] I am Aria.' }]);
   assert.deepEqual(config.persona.dialogExamples, [{ user: 'hello', assistant: '[wave] Hi there!' }]);
 });
 
@@ -121,14 +123,30 @@ test('parseCharacterConfig rejects renderer-owned assets and non-object memory',
   assert.throws(() => parseCharacterConfig(buildValid({ memory: 7 })), /memory/);
 });
 
-test('parseCharacterConfig validates persona notes and dialogExamples', () => {
+test('parseCharacterConfig validates persona notes, anchorExamples, and dialogExamples', () => {
   assert.throws(
     () => parseCharacterConfig(buildValid({ persona: { name: 'Aria', notes: 'nope' } })),
     /persona\.notes/
   );
   assert.throws(
+    () => parseCharacterConfig(buildValid({ persona: { name: 'Aria', anchorExamples: 'nope' } })),
+    /persona\.anchorExamples/
+  );
+  assert.throws(
     () => parseCharacterConfig(buildValid({ persona: { name: 'Aria', dialogExamples: 'nope' } })),
     /persona\.dialogExamples/
+  );
+  assert.throws(
+    () =>
+      parseCharacterConfig(
+        buildValid({
+          persona: {
+            name: 'Aria',
+            anchorExamples: [{ user: 'hello', assistant: '' }],
+          },
+        })
+      ),
+    /persona\.anchorExamples/
   );
   assert.throws(
     () =>
