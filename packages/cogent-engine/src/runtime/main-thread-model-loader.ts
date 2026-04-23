@@ -1,13 +1,12 @@
 import { CogentConfig } from '../cogent-config.js';
-import { ModelLoadInfo } from '../core/inference-types.js';
 import {
-  detectModel,
   detectModelFromGgufFile,
   resolveLocalModelAndProjectorFiles,
 } from '../model-bundle/model-bundle-detection.js';
 import {
   InternalBundleDescriptor,
-  ModelBundleProjectorDescriptor,
+  ModelBundleFileProjectorDescriptor,
+  ModelDetectionResult,
   ModelBundleProjectorStatus,
   StagedModelBundle,
   StageModelBundleOptions,
@@ -15,25 +14,11 @@ import {
 import {
   DEFAULT_MAX_MODEL_BYTES,
   MountableModelFile,
-  URL_DOWNLOAD_CONCURRENCY_MEMORY,
-  URL_METADATA_FETCH_CONCURRENCY,
-  UrlShardMetadata,
   createMountableModelFile,
   normalizeModelFileName,
 } from './main-thread-runtime-constants.js';
 import { EngineModule } from '../wasm/engine-module.js';
-import {
-  createAbortError,
-  createLinkedAbortController,
-  isAbortError,
-} from '../utils/abort.js';
-import { mapWithConcurrency } from '../utils/async.js';
-import { asErrorMessage } from '../utils/error.js';
-
-interface UrlAssetRequest {
-  url: string;
-  mountFileName: string;
-}
+import { createAbortError } from '../utils/abort.js';
 
 interface FileAssetRequest {
   file: File;
@@ -42,22 +27,15 @@ interface FileAssetRequest {
 
 interface LoadedAssetSet {
   files: MountableModelFile[];
-  loadInfo: ModelLoadInfo;
-}
-
-interface ResolvedUrlAssetMetadata extends UrlShardMetadata {
-  mountFileName: string;
 }
 
 interface ResolvedAssetRequest {
-  kind: 'url' | 'file';
   mountFileName: string;
-  url?: string;
-  file?: File;
+  file: File;
 }
 
 interface ResolvedBundlePlan {
-  detection: ReturnType<typeof detectModel>;
+  detection: ModelDetectionResult;
   modelAssets: ResolvedAssetRequest[];
   projectorAsset: ResolvedAssetRequest | null;
   projectorStatus: ModelBundleProjectorStatus;
@@ -67,11 +45,7 @@ export class MainThreadModelLoader {
   private loadedAssetPaths: string[] = [];
   private activeMountPath: string | null = null;
 
-  constructor(
-    private readonly config: CogentConfig,
-    private readonly parseConfiguredUrl: (rawUrl: string, fieldName: string) => URL,
-    private readonly onModelLoadInfo: (info: ModelLoadInfo) => void
-  ) {}
+  constructor(private readonly config: CogentConfig) {}
 
   public cleanupAfterEngineInit(module: EngineModule): void {
     this.removeAllLoadedAssets(module);
@@ -80,180 +54,6 @@ export class MainThreadModelLoader {
   public cleanupAfterClose(module: EngineModule): void {
     this.unmountActiveAssetSet(module);
     this.loadedAssetPaths = [];
-  }
-
-  public async stageModelUrl(
-    module: EngineModule,
-    url: string,
-    destFileName = 'model.gguf',
-    onProgress?: (pct: number) => void,
-    signal?: AbortSignal
-  ): Promise<string> {
-    void destFileName;
-    return this.stageModelUrls(module, [url], onProgress, signal);
-  }
-
-  public async stageModelStream(
-    module: EngineModule,
-    stream: ReadableStream<Uint8Array>,
-    destFileName = 'model.gguf',
-    options: {
-      expectedBytes?: number;
-      onProgress?: (pct: number) => void;
-      signal?: AbortSignal;
-    } = {}
-  ): Promise<string> {
-    void options.expectedBytes;
-
-    const modelFile = await this.readStreamToMountableModelFile(
-      stream,
-      destFileName,
-      undefined,
-      options.signal
-    );
-
-    const mountedPaths = await this.mountAssetFiles(module, [modelFile]);
-    const modelPath = mountedPaths[0];
-    this.onModelLoadInfo({
-      sourceKind: 'buffer',
-      reuseMode: 'buffer',
-      modelPath,
-      fileName: destFileName,
-      byteLength: modelFile.size,
-      persistentCacheEnabled: false,
-      persistentCacheKey: null,
-      persistentCacheHit: false,
-      persistentCacheStored: false,
-    });
-    return modelPath;
-  }
-
-  public async stageModelFile(
-    module: EngineModule,
-    file: File,
-    destFileName = file.name || 'model.gguf',
-    onProgress?: (pct: number) => void,
-    signal?: AbortSignal
-  ): Promise<string> {
-    const assetSet = await this.loadFileAssetSet(
-      [
-        {
-          file,
-          mountFileName: destFileName,
-        },
-      ],
-      onProgress,
-      signal
-    );
-    const mountedPaths = await this.mountAssetFiles(module, assetSet.files);
-    const modelPath = mountedPaths[0];
-    const loadInfo = {
-      ...assetSet.loadInfo,
-      modelPath,
-    };
-    this.onModelLoadInfo(loadInfo);
-    return modelPath;
-  }
-
-  public stageModelBuffer(
-    module: EngineModule,
-    buffer: Uint8Array,
-    destFileName = 'model.gguf'
-  ): string {
-    const maxModelBytes = this.resolveMaxModelBytes();
-    if (buffer.byteLength === 0) {
-      throw new Error('Model buffer is empty.');
-    }
-    if (buffer.byteLength > maxModelBytes) {
-      throw new Error(`Model exceeds configured maxModelBytes (${maxModelBytes} bytes).`);
-    }
-
-    const modelPath = this.prepareModelPath(module, destFileName);
-    module.FS.writeFile(modelPath, buffer);
-    this.commitLoadedAssetPaths(module, [modelPath]);
-    this.onModelLoadInfo({
-      sourceKind: 'buffer',
-      reuseMode: 'buffer',
-      modelPath,
-      fileName: normalizeModelFileName(destFileName),
-      byteLength: buffer.byteLength,
-      persistentCacheEnabled: false,
-      persistentCacheKey: null,
-      persistentCacheHit: false,
-      persistentCacheStored: false,
-    });
-    return modelPath;
-  }
-
-  public async stageModelFiles(
-    module: EngineModule,
-    files: File[],
-    onProgress?: (pct: number) => void,
-    signal?: AbortSignal
-  ): Promise<string> {
-    if (!files || files.length === 0) {
-      throw new Error('No shard files provided.');
-    }
-    if (files.length === 1) {
-      return this.stageModelFile(module, files[0], files[0].name, onProgress, signal);
-    }
-
-    try {
-      const assetSet = await this.loadFileAssetSet(
-        files.map((file) => ({
-          file,
-          mountFileName: file.name,
-        })),
-        onProgress,
-        signal
-      );
-      const mountedPaths = await this.mountAssetFiles(module, assetSet.files);
-      const loadInfo = {
-        ...assetSet.loadInfo,
-        modelPath: mountedPaths[0],
-      };
-      this.onModelLoadInfo(loadInfo);
-      return mountedPaths[0];
-    } catch (error) {
-      if (isAbortError(error) || signal?.aborted) {
-        throw createAbortError('Model load aborted.');
-      }
-      throw new Error(`Failed while loading model shards: ${asErrorMessage(error)}`);
-    }
-  }
-
-  public async stageModelUrls(
-    module: EngineModule,
-    urls: string[],
-    onProgress?: (pct: number) => void,
-    signal?: AbortSignal
-  ): Promise<string> {
-    if (!urls || urls.length === 0) {
-      throw new Error('No shard URLs provided.');
-    }
-
-    try {
-      const assetSet = await this.loadUrlAssetSet(
-        urls.map((url) => ({
-          url,
-          mountFileName: this.deriveFileNameFromUrl(url, 'model.gguf'),
-        })),
-        onProgress,
-        signal
-      );
-      const mountedPaths = await this.mountAssetFiles(module, assetSet.files);
-      const loadInfo = {
-        ...assetSet.loadInfo,
-        modelPath: mountedPaths[0],
-      };
-      this.onModelLoadInfo(loadInfo);
-      return mountedPaths[0];
-    } catch (error) {
-      if (isAbortError(error) || signal?.aborted) {
-        throw createAbortError();
-      }
-      throw new Error(`Model load from URLs failed: ${asErrorMessage(error)}`);
-    }
   }
 
   public async stageModelBundle(
@@ -276,20 +76,6 @@ export class MainThreadModelLoader {
     const projectorPath =
       projectorAssetSet == null ? null : mountedPaths[modelAssetSet.files.length] ?? null;
 
-    const modelLoadInfo = {
-      ...modelAssetSet.loadInfo,
-      modelPath,
-    };
-    const projectorLoadInfo =
-      projectorAssetSet == null || projectorPath == null
-        ? null
-        : {
-            ...projectorAssetSet.loadInfo,
-            modelPath: projectorPath,
-          };
-
-    this.onModelLoadInfo(modelLoadInfo);
-
     return {
       sourceKind: descriptor.kind,
       modelPath,
@@ -300,8 +86,6 @@ export class MainThreadModelLoader {
       detectionMethod: plan.detection.detectionMethod,
       modelType: plan.detection.modelType,
       modelArchitecture: plan.detection.modelArchitecture,
-      modelLoadInfo,
-      projectorLoadInfo,
     };
   }
 
@@ -310,46 +94,6 @@ export class MainThreadModelLoader {
     signal?: AbortSignal
   ): Promise<ResolvedBundlePlan> {
     switch (descriptor.kind) {
-      case 'url': {
-        const detection = detectModel('url', descriptor.url);
-        this.ensureNotProjectorSource(detection.modelName, detection.isProjector);
-        return {
-          detection,
-          modelAssets: [
-            {
-              kind: 'url',
-              url: descriptor.url,
-              mountFileName:
-                descriptor.destFileName ?? this.deriveFileNameFromUrl(descriptor.url, 'model.gguf'),
-            },
-          ],
-          ...(await this.resolveProjectorAssetForUrlDescriptor(
-            detection,
-            descriptor.projector,
-            descriptor.url
-          )),
-        };
-      }
-      case 'urls': {
-        if (!descriptor.urls || descriptor.urls.length === 0) {
-          throw new Error('Model bundle URL list must not be empty.');
-        }
-        const detection = detectModel('url', descriptor.urls[0]);
-        this.ensureNotProjectorSource(detection.modelName, detection.isProjector);
-        return {
-          detection,
-          modelAssets: descriptor.urls.map((url) => ({
-            kind: 'url',
-            url,
-            mountFileName: this.deriveFileNameFromUrl(url, 'model.gguf'),
-          })),
-          ...(await this.resolveProjectorAssetForUrlDescriptor(
-            detection,
-            descriptor.projector,
-            descriptor.urls[0]
-          )),
-        };
-      }
       case 'file': {
         const detection = await detectModelFromGgufFile(descriptor.file, signal);
         this.ensureNotProjectorSource(detection.modelName, detection.isProjector);
@@ -357,7 +101,6 @@ export class MainThreadModelLoader {
           detection,
           modelAssets: [
             {
-              kind: 'file',
               file: descriptor.file,
               mountFileName: descriptor.destFileName ?? descriptor.file.name,
             },
@@ -401,7 +144,6 @@ export class MainThreadModelLoader {
         return {
           detection,
           modelAssets: sortedModelFiles.map((file) => ({
-            kind: 'file',
             file,
             mountFileName: file.name,
           })),
@@ -410,7 +152,6 @@ export class MainThreadModelLoader {
             (localResolution.projectorFile == null
               ? null
               : {
-                  kind: 'file',
                   file: localResolution.projectorFile,
                   mountFileName: localResolution.projectorFile.name,
                 }),
@@ -425,51 +166,13 @@ export class MainThreadModelLoader {
     }
   }
 
-  private async resolveProjectorAssetForUrlDescriptor(
-    detection: ReturnType<typeof detectModel>,
-    explicitProjector: ModelBundleProjectorDescriptor | undefined,
-    _primaryModelUrl: string
-  ): Promise<{
-    projectorAsset: ResolvedAssetRequest | null;
-    projectorStatus: ModelBundleProjectorStatus;
-  }> {
-    const explicitProjectorAsset = this.resolveExplicitProjectorAsset(explicitProjector);
-    if (explicitProjectorAsset != null) {
-      return {
-        projectorAsset: explicitProjectorAsset,
-        projectorStatus: 'explicit',
-      };
-    }
-
-    if (!detection.isVisionModel) {
-      return {
-        projectorAsset: null,
-        projectorStatus: 'not-required',
-      };
-    }
-
-    return {
-      projectorAsset: null,
-      projectorStatus: 'missing',
-    };
-  }
-
   private resolveExplicitProjectorAsset(
-    projector: ModelBundleProjectorDescriptor | undefined
+    projector: ModelBundleFileProjectorDescriptor | undefined
   ): ResolvedAssetRequest | null {
     if (projector == null) {
       return null;
     }
-    if (projector.kind === 'url') {
-      return {
-        kind: 'url',
-        url: projector.url,
-        mountFileName:
-          projector.destFileName ?? this.deriveFileNameFromUrl(projector.url, 'mmproj.gguf'),
-      };
-    }
     return {
-      kind: 'file',
       file: projector.file,
       mountFileName: projector.destFileName ?? projector.file.name,
     };
@@ -500,20 +203,9 @@ export class MainThreadModelLoader {
     if (assets.length === 0) {
       throw new Error('Asset set must not be empty.');
     }
-    const firstAsset = assets[0];
-    if (firstAsset.kind === 'url') {
-      return this.loadUrlAssetSet(
-        assets.map((asset) => ({
-          url: asset.url as string,
-          mountFileName: asset.mountFileName,
-        })),
-        undefined,
-        signal
-      );
-    }
     return this.loadFileAssetSet(
       assets.map((asset) => ({
-        file: asset.file as File,
+        file: asset.file,
         mountFileName: asset.mountFileName,
       })),
       undefined,
@@ -548,116 +240,7 @@ export class MainThreadModelLoader {
     onProgress?.(100);
     return {
       files,
-      loadInfo: {
-        sourceKind: 'file',
-        reuseMode: 'file-read',
-        modelPath: '',
-        fileName: normalizeModelFileName(assets[0].mountFileName),
-        byteLength,
-        persistentCacheEnabled: false,
-        persistentCacheKey: null,
-        persistentCacheHit: false,
-        persistentCacheStored: false,
-      },
     };
-  }
-
-  private async loadUrlAssetSet(
-    assets: UrlAssetRequest[],
-    onProgress?: (pct: number) => void,
-    signal?: AbortSignal
-  ): Promise<LoadedAssetSet> {
-    if (!assets || assets.length === 0) {
-      throw new Error('No URL assets provided.');
-    }
-
-    const linkedAbort = createLinkedAbortController(signal);
-    const loadSignal = linkedAbort.signal;
-    const downloadConcurrency = URL_DOWNLOAD_CONCURRENCY_MEMORY;
-
-    try {
-      const assetMeta = await this.resolveUrlAssetMetadata(assets, loadSignal);
-      const totalBytes = assetMeta.reduce((sum, asset) => sum + asset.contentLength, 0);
-      const loadedBytes = new Array<number>(assetMeta.length).fill(0);
-      let totalLoadedBytes = 0;
-
-      const reportAssetProgress = (index: number, byteCount: number) => {
-        const normalizedBytes = Math.max(0, byteCount);
-        const previousBytes = loadedBytes[index];
-        if (normalizedBytes <= previousBytes) {
-          return;
-        }
-        loadedBytes[index] = normalizedBytes;
-        totalLoadedBytes += normalizedBytes - previousBytes;
-        if (onProgress != null && totalBytes > 0) {
-          onProgress(Math.min(100, Math.round((totalLoadedBytes / totalBytes) * 100)));
-        }
-      };
-
-      const assetResults = await mapWithConcurrency(
-        assetMeta,
-        downloadConcurrency,
-        async (asset, index) => {
-          if (loadSignal.aborted) {
-            throw createAbortError('Model load aborted.');
-          }
-
-          const response = await fetch(asset.url, { signal: loadSignal });
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status} for ${asset.mountFileName}`);
-          }
-
-          if (!response.body) {
-            const buffer = await response.arrayBuffer();
-            reportAssetProgress(index, buffer.byteLength);
-            return {
-              file: createMountableModelFile(new Blob([buffer]), asset.mountFileName),
-            };
-          }
-
-          return {
-            file: await this.readStreamToMountableModelFile(
-              response.body,
-              asset.mountFileName,
-              (written) => {
-                reportAssetProgress(index, written);
-              },
-              loadSignal
-            ),
-          };
-        },
-        () => {
-          linkedAbort.controller.abort();
-        }
-      );
-
-      if (onProgress != null && totalBytes === 0) {
-        onProgress(100);
-      }
-
-      return {
-        files: assetResults.map((result) => result.file),
-        loadInfo: {
-          sourceKind: 'url',
-          reuseMode: 'network',
-          modelPath: '',
-          fileName: assetMeta[0].mountFileName,
-          byteLength: assetResults.reduce((sum, result) => sum + result.file.size, 0),
-          persistentCacheEnabled: false,
-          persistentCacheKey: null,
-          persistentCacheHit: false,
-          persistentCacheStored: false,
-        },
-      };
-    } catch (error) {
-      linkedAbort.controller.abort();
-      if (isAbortError(error) || signal?.aborted || loadSignal.aborted) {
-        throw createAbortError();
-      }
-      throw new Error(asErrorMessage(error));
-    } finally {
-      linkedAbort.dispose();
-    }
   }
 
   private resolveMaxModelBytes(): number {
@@ -696,111 +279,6 @@ export class MainThreadModelLoader {
       }
     }
     this.loadedAssetPaths = [...paths];
-  }
-
-  private prepareModelPath(module: EngineModule, destFileName: string): string {
-    this.unmountActiveAssetSet(module);
-    const safeName = normalizeModelFileName(destFileName);
-    const modelPath = `/models/${safeName}`;
-    this.ensureModelsDir(module);
-    this.removeFileIfExists(module, modelPath);
-    return modelPath;
-  }
-
-  private async readStreamToMountableModelFile(
-    stream: ReadableStream<Uint8Array>,
-    fileName: string,
-    onProgress?: (bytes: number) => void,
-    signal?: AbortSignal
-  ): Promise<MountableModelFile> {
-    const reader = stream.getReader();
-    const chunks: Uint8Array[] = [];
-    let bytesRead = 0;
-    const abortListener =
-      signal == null
-        ? null
-        : () => {
-            void reader.cancel(createAbortError('Model load aborted.'));
-          };
-    const abortSignal = signal;
-    if (abortListener != null && abortSignal != null) {
-      abortSignal.addEventListener('abort', abortListener, { once: true });
-    }
-    try {
-      while (true) {
-        if (signal?.aborted) {
-          throw createAbortError('Model load aborted.');
-        }
-        const { done, value } = await reader.read();
-        if (done) {
-          if (signal?.aborted) {
-            throw createAbortError('Model load aborted.');
-          }
-          break;
-        }
-        if (value != null) {
-          chunks.push(value);
-          bytesRead += value.byteLength;
-          onProgress?.(bytesRead);
-        }
-      }
-    } catch (error) {
-      if (isAbortError(error) || signal?.aborted) {
-        throw createAbortError('Model load aborted.');
-      }
-      throw error;
-    } finally {
-      if (abortListener != null && abortSignal != null) {
-        abortSignal.removeEventListener('abort', abortListener);
-      }
-      reader.releaseLock();
-    }
-
-    return createMountableModelFile(new Blob(chunks as BlobPart[]), fileName);
-  }
-
-  private async resolveUrlAssetMetadata(
-    assets: UrlAssetRequest[],
-    signal: AbortSignal
-  ): Promise<ResolvedUrlAssetMetadata[]> {
-    return mapWithConcurrency(
-      assets,
-      URL_METADATA_FETCH_CONCURRENCY,
-      async (asset) => {
-        const parsed = this.parseConfiguredUrl(asset.url, 'modelUrl');
-        const sourceFileName = normalizeModelFileName(
-          parsed.pathname.split('/').pop() || 'model.gguf'
-        );
-        try {
-          const headResp = await fetch(asset.url, { method: 'HEAD', signal });
-          const contentLength =
-            Number.parseInt(headResp.headers.get('Content-Length') ?? '0', 10) || 0;
-          return {
-            url: asset.url,
-            fileName: sourceFileName,
-            mountFileName: normalizeModelFileName(asset.mountFileName),
-            contentLength,
-          };
-        } catch (error) {
-          if (isAbortError(error) || signal.aborted) {
-            throw createAbortError('Model load aborted.');
-          }
-          return {
-            url: asset.url,
-            fileName: sourceFileName,
-            mountFileName: normalizeModelFileName(asset.mountFileName),
-            contentLength: 0,
-          };
-        }
-      }
-    );
-  }
-
-  private ensureModelsDir(module: EngineModule): void {
-    const modelsPath = '/models';
-    if (!module.FS.analyzePath(modelsPath).exists) {
-      module.FS.mkdir(modelsPath);
-    }
   }
 
   private async mountAssetFiles(
@@ -844,11 +322,5 @@ export class MainThreadModelLoader {
       // Ignore stale unmount cleanup failures.
     }
     this.activeMountPath = null;
-  }
-
-  private deriveFileNameFromUrl(url: string, defaultName: string): string {
-    const parsed = this.parseConfiguredUrl(url, 'modelUrl');
-    const rawName = parsed.pathname.split('/').pop();
-    return normalizeModelFileName(rawName && rawName.length > 0 ? rawName : defaultName);
   }
 }

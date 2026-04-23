@@ -2,17 +2,9 @@ import { TransportObservability } from '../types.js';
 
 export type MountableModelFile = Blob & { name?: string };
 
-export type UrlShardMetadata = {
-  url: string;
-  fileName: string;
-  contentLength: number;
-};
-
 export const MAX_PROMPT_TOKENS = 2048;
 export const DEFAULT_MAX_MODEL_BYTES = 8 * 1024 * 1024 * 1024;
 export const DEFAULT_PROMPT_FORMAT = 'auto-chat';
-export const URL_METADATA_FETCH_CONCURRENCY = 4;
-export const URL_DOWNLOAD_CONCURRENCY_MEMORY = 2;
 export const REQUEST_STEP_RESULT_INVALID = -1;
 export const REQUEST_STEP_RESULT_FATAL_NO_PROGRESS = -2;
 export const REQUEST_STEP_RESULT_WAITING = 0;
@@ -40,10 +32,7 @@ export const DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY: TransportObservability
   flushCount: 0,
   coalescedTokenCount: 0,
   maxObservedBufferedTokenCount: 0,
-  tokenTransportPreference: 'auto',
   activeTokenTransport: 'none',
-  tokenCallbackRegistrationCount: 0,
-  nativeCallbackTokenCount: 0,
   runtimeEventDrainCount: 0,
   runtimeEventTokenCount: 0,
   runtimeEventTerminalCount: 0,

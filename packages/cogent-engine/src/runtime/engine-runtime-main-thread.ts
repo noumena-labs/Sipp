@@ -13,7 +13,6 @@ import {
   GenerateResponse,
   InferenceInitConfig,
   InternalBundleDescriptor,
-  ModelLoadInfo,
   PromptOptions,
   StagedModelBundle,
   StageModelBundleOptions,
@@ -28,9 +27,6 @@ import {
   DEFAULT_PROMPT_FORMAT,
   MAX_PROMPT_TOKENS,
 } from './main-thread-runtime-constants.js';
-import {
-  QueuedRequestPumpStepResult,
-} from './queued-request-pump.js';
 import { RequestTracker } from './request-tracker.js';
 import {
   parseBackendObservabilityJson,
@@ -39,10 +35,8 @@ import {
 import { EngineModule } from '../wasm/engine-module.js';
 import { createAbortError } from '../utils/abort.js';
 import { asErrorMessage } from '../utils/error.js';
-import {
-  QueuedRequestPumpMode,
-  QueuedRequestScheduler,
-} from './scheduler.js';
+import { QueuedRequestScheduler } from './scheduler.js';
+import { resolveRuntimeUrls } from '../runtime-assets.js';
 
 export class MainThreadEngineRuntime implements EngineRuntime {
   private module: EngineModule | null = null;
@@ -52,29 +46,22 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private cachedMediaMarker: string | null = null;
   private cachedChatTemplate: string | null = null;
   private readonly modelLoader: MainThreadModelLoader;
+  private readonly executionMode: EngineExecutionMode;
   private queuedPromptCallbacks = new Map<
     GenerateRequestId,
     ((token: string) => void) | undefined
   >();
-  private queuedPromptCallbackPtrs = new Map<GenerateRequestId, number | bigint>();
   private queuedPromptTokenBuffers = new Map<GenerateRequestId, string[]>();
   private queuedPromptCallbackErrors = new Map<GenerateRequestId, unknown>();
   private readonly tracker = new RequestTracker<GenerateResponse>();
   private readonly scheduler: QueuedRequestScheduler;
-  private lastModelLoadInfo: ModelLoadInfo | null = null;
   private runtimeObservabilityEnabled = false;
   private backendProfilingEnabled = false;
-  private transportObservability: TransportObservability = {
-    ...DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY,
-  };
+  private transportObservability: TransportObservability;
   constructor(private config: CogentConfig = {}) {
-    this.modelLoader = new MainThreadModelLoader(
-      this.config,
-      this.parseConfiguredUrl.bind(this),
-      (info) => {
-        this.lastModelLoadInfo = info;
-      }
-    );
+    this.executionMode = config.executionMode === 'worker' ? 'worker' : 'main-thread';
+    this.transportObservability = this.createTransportObservability();
+    this.modelLoader = new MainThreadModelLoader(this.config);
     this.scheduler = new QueuedRequestScheduler({
       tracker: this.tracker,
       queuedPromptCallbacks: this.queuedPromptCallbacks,
@@ -89,67 +76,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     });
   }
 
-  private resolveWasmUrls(): { moduleUrl: string; wasmUrl: string } {
-    const moduleUrl = this.config.moduleUrl?.trim();
-    const wasmUrl = this.config.wasmUrl?.trim();
-
-    if (!moduleUrl || !wasmUrl) {
-      throw new Error(
-        'Both "moduleUrl" and "wasmUrl" must be provided in CogentEngine config. Use getBundledRuntimeUrls() for the package defaults.'
-      );
-    }
-
-    const module = this.parseConfiguredUrl(moduleUrl, 'moduleUrl');
-    const wasm = this.parseConfiguredUrl(wasmUrl, 'wasmUrl');
-    const trustedOrigins = this.resolveTrustedOrigins();
-
-    if (trustedOrigins.size > 0) {
-      if (!trustedOrigins.has(module.origin)) {
-        throw new Error(`Blocked moduleUrl origin "${module.origin}". Add it to trustedOrigins to allow it.`);
-      }
-      if (!trustedOrigins.has(wasm.origin)) {
-        throw new Error(`Blocked wasmUrl origin "${wasm.origin}". Add it to trustedOrigins to allow it.`);
-      }
-    }
-
-    return { moduleUrl: module.toString(), wasmUrl: wasm.toString() };
-  }
-
-  private parseConfiguredUrl(rawUrl: string, fieldName: string): URL {
-    try {
-      if (typeof window !== 'undefined' && typeof window.location?.href === 'string') {
-        return new URL(rawUrl, window.location.href);
-      }
-      return new URL(rawUrl);
-    } catch {
-      throw new Error(`Invalid ${fieldName} value "${rawUrl}".`);
-    }
-  }
-
-  private resolveTrustedOrigins(): Set<string> {
-    const configuredOrigins = this.config.trustedOrigins ?? [];
-    if (configuredOrigins.length > 0) {
-      const allowed = new Set<string>();
-      for (const originValue of configuredOrigins) {
-        const normalizedOrigin = this.parseConfiguredUrl(originValue, 'trustedOrigins').origin;
-        allowed.add(normalizedOrigin);
-      }
-      return allowed;
-    }
-
-    if (typeof window !== 'undefined' && typeof window.location?.origin === 'string') {
-      return new Set([window.location.origin]);
-    }
-
-    return new Set();
-  }
-
   public getExecutionMode(): EngineExecutionMode {
-    return 'main-thread';
-  }
-
-  public getStagedModelInfo(): ModelLoadInfo | null {
-    return this.lastModelLoadInfo;
+    return this.executionMode;
   }
 
   public getTransportObservability(): TransportObservability {
@@ -277,17 +205,6 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.queuedPromptCallbackErrors.delete(requestId);
   }
 
-  private releaseCallbackPtr(
-    bridge: WasmBridge,
-    requestId: GenerateRequestId
-  ): void {
-    const callbackPtr = this.queuedPromptCallbackPtrs.get(requestId);
-    if (callbackPtr != null) {
-      bridge.unregisterCallback(callbackPtr);
-    }
-    this.queuedPromptCallbackPtrs.delete(requestId);
-  }
-
   private finalizeRequest(
     bridge: WasmBridge | null,
     requestId: GenerateRequestId,
@@ -298,9 +215,6 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   ): void {
     if (options.consumeCompletedResponse && bridge != null) {
       this.consumeCompletedResponseIfPresent(bridge, requestId);
-    }
-    if (bridge != null) {
-      this.releaseCallbackPtr(bridge, requestId);
     }
     this.releaseTokenState(requestId);
     this.tracker.finalize(requestId, options);
@@ -317,45 +231,20 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return bridge.consumeCompletedResponseIfPresent(requestId);
   }
 
-  private resolveTokenTransportPreference(): 'auto' | 'runtime-events' {
-    return this.config.debugTokenTransport ?? 'auto';
-  }
-
   private shouldUseNativeRuntimeEvents(
-    bridge: WasmBridge,
     onToken: ((token: string) => void) | undefined
-  ): boolean {
-    const preference = this.resolveTokenTransportPreference();
-    this.transportObservability.tokenTransportPreference = preference;
-
+  ): void {
     if (onToken == null) {
       this.transportObservability.activeTokenTransport = 'none';
-      return false;
+      return;
     }
 
-    const runtimeEventsAvailable = bridge.supportsRuntimeEventDrain();
-    if (preference === 'runtime-events') {
-      if (!runtimeEventsAvailable) {
-        throw new Error(
-          'debugTokenTransport=runtime-events requires CE_DrainRuntimeEvents support in the loaded runtime module.'
-        );
-      }
-      this.transportObservability.activeTokenTransport = 'runtime-events';
-      return true;
-    }
-
-    this.transportObservability.activeTokenTransport = runtimeEventsAvailable
-      ? 'runtime-events'
-      : 'callbacks';
-    return runtimeEventsAvailable;
+    this.transportObservability.activeTokenTransport = 'runtime-events';
   }
 
-  private rejectAllTrackedRequests(error: unknown, bridge: WasmBridge | null = null): void {
+  private rejectAllTrackedRequests(error: unknown, _bridge: WasmBridge | null = null): void {
     this.scheduler.reset();
     for (const requestId of this.tracker.allTrackedIds()) {
-      if (bridge != null) {
-        this.releaseCallbackPtr(bridge, requestId);
-      }
       this.releaseTokenState(requestId);
     }
     this.tracker.rejectAll(error);
@@ -372,8 +261,14 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.backendProfilingEnabled = false;
     this.cachedMediaMarker = null;
     this.cachedChatTemplate = null;
-    this.transportObservability = {
+    this.transportObservability = this.createTransportObservability();
+  }
+
+  private createTransportObservability(): TransportObservability {
+    return {
       ...DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY,
+      executionMode: this.executionMode,
+      workerBacked: this.executionMode === 'worker',
     };
   }
 
@@ -407,7 +302,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     }
     if (!this.initPromise) {
       this.initPromise = (async () => {
-        const { moduleUrl, wasmUrl } = this.resolveWasmUrls();
+        const { moduleUrl, wasmUrl } = resolveRuntimeUrls(this.config);
         const createModule = await this.importModuleFactory(moduleUrl);
         const moduleConfig: EngineModuleOptions = { ...(this.config.moduleOptions ?? {}) };
         const userLocateFile = moduleConfig.locateFile;
@@ -432,141 +327,6 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       });
     }
     await this.initPromise;
-  }
-
-  public setQueuedRequestPumpMode(mode: QueuedRequestPumpMode): void {
-    this.scheduler.setPumpMode(mode);
-    if (mode === 'internal' && this.engineInitialized) {
-      this.scheduler.ensureRunning();
-    }
-  }
-
-  public hasActiveQueuedRequests(): boolean {
-    return this.scheduler.hasActiveRequests();
-  }
-
-  public getQueuedRequestSchedulerForExternalControl(): QueuedRequestScheduler {
-    return this.scheduler;
-  }
-
-  public takeSettledQueuedRequestForExternalControl(
-    requestId: GenerateRequestId
-  ):
-    | {
-        response: GenerateResponse;
-        callbackError: unknown;
-      }
-    | {
-        error: unknown;
-        callbackError: unknown;
-      }
-    | null {
-    const tracked = this.tracker.get(requestId);
-    if (tracked == null || !tracked.settled) {
-      return null;
-    }
-
-    tracked.consumed = true;
-    const callbackError = tracked.callbackError;
-    const settlement =
-      tracked.settlementState === 'resolved'
-        ? tracked.settledResult == null
-          ? {
-              error: new Error(
-                `Tracked queued request ${requestId} settled without a response.`
-              ),
-              callbackError,
-            }
-          : {
-              response: tracked.settledResult,
-              callbackError,
-            }
-        : {
-            error:
-              tracked.settledError ??
-              new Error(`Tracked queued request ${requestId} rejected without an error.`),
-            callbackError,
-          };
-
-    this.tracker.cleanupIfConsumed(requestId);
-    return settlement;
-  }
-
-  public async pumpQueuedRequestsOnce(): Promise<QueuedRequestPumpStepResult> {
-    return this.scheduler.pumpOnce();
-  }
-
-  public async stageModelUrl(
-    url: string,
-    destFileName: string = 'model.gguf',
-    onProgress?: (pct: number) => void,
-    signal?: AbortSignal
-  ): Promise<string> {
-    const module = await this.ensureModule();
-    return this.modelLoader.stageModelUrl(
-      module,
-      url,
-      destFileName,
-      onProgress,
-      signal
-    );
-  }
-
-  public async stageModelStream(
-    stream: ReadableStream<Uint8Array>,
-    destFileName: string = 'model.gguf',
-    options: {
-      expectedBytes?: number;
-      onProgress?: (pct: number) => void;
-      signal?: AbortSignal;
-    } = {}
-  ): Promise<string> {
-    const module = await this.ensureModule();
-    return this.modelLoader.stageModelStream(
-      module,
-      stream,
-      destFileName,
-      options
-    );
-  }
-
-  public async stageModelFile(
-    file: File,
-    destFileName?: string,
-    onProgress?: (pct: number) => void,
-    signal?: AbortSignal
-  ): Promise<string> {
-    const module = await this.ensureModule();
-    return this.modelLoader.stageModelFile(
-      module,
-      file,
-      destFileName,
-      onProgress,
-      signal
-    );
-  }
-
-  public stageModelBuffer(buffer: Uint8Array, destFileName: string = 'model.gguf'): string {
-    const module = this.getLoadedModule();
-    return this.modelLoader.stageModelBuffer(module, buffer, destFileName);
-  }
-
-  public async stageModelFiles(
-    files: File[],
-    onProgress?: (pct: number) => void,
-    signal?: AbortSignal
-  ): Promise<string> {
-    const module = await this.ensureModule();
-    return this.modelLoader.stageModelFiles(module, files, onProgress, signal);
-  }
-
-  public async stageModelUrls(
-    urls: string[],
-    onProgress?: (pct: number) => void,
-    signal?: AbortSignal
-  ): Promise<string> {
-    const module = await this.ensureModule();
-    return this.modelLoader.stageModelUrls(module, urls, onProgress, signal);
   }
 
   public async stageModelBundle(
@@ -625,7 +385,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     }
     this.engineInitialized = true;
     this.cachedMediaMarker = bridge.readMediaMarker();
-    this.cachedChatTemplate = bridge.readChatTemplate();
+    this.cachedChatTemplate = bridge.readNativeChatTemplate();
 
     this.modelLoader.cleanupAfterEngineInit(module);
   }
@@ -651,7 +411,6 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.modelLoader.cleanupAfterClose(module);
     this.engineInitialized = false;
     this.resetRuntimeLifecycleState();
-    this.lastModelLoadInfo = null;
     this.module = null;
     this.wasmBridge = null;
     this.initPromise = null;
@@ -699,75 +458,45 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       throw createAbortError('Prompt was aborted before it was enqueued.');
     }
 
-    const useNativeRuntimeEvents = this.shouldUseNativeRuntimeEvents(bridge, onToken);
+    this.shouldUseNativeRuntimeEvents(onToken);
 
     let requestId: GenerateRequestId = 0;
-    const callbackPtr =
-      useNativeRuntimeEvents || (onToken == null && signal == null)
-        ? 0
-        : bridge.registerTokenCallback((token: string) => {
-            if (signal?.aborted) {
-              return 1;
-            }
-            if (onToken != null && requestId !== 0) {
-              this.scheduler.bufferTokenPiece(requestId, token);
-              this.transportObservability.nativeCallbackTokenCount =
-                (this.transportObservability.nativeCallbackTokenCount ?? 0) + 1;
-            }
-            return signal?.aborted ? 1 : 0;
-          });
 
-    try {
-      if (request.media != null && request.media.length > 0) {
-        if (this.cachedMediaMarker == null) {
-          throw new Error(
-            'Loaded runtime does not expose a media marker for the current model.'
-          );
-        }
-        const markerCount = this.countMarkerOccurrences(
-          request.promptText,
-          this.cachedMediaMarker
-        );
-        if (markerCount !== request.media.length) {
-          throw new Error(
-            `Prompt contains ${markerCount} media marker(s) but ${request.media.length} image(s) were provided. Use "${this.cachedMediaMarker}" in your prompt to place each image.`
-          );
-        }
-        requestId = bridge.startMediaRequest(
-          request.contextKey,
-          request.promptText,
-          request.maxOutputTokens,
-          request.media,
-          Number(callbackPtr)
-        );
-      } else {
-        requestId = bridge.startTextRequest(
-          request.contextKey,
-          request.promptText,
-          request.maxOutputTokens,
-          Number(callbackPtr)
+    if (request.media != null && request.media.length > 0) {
+      if (this.cachedMediaMarker == null) {
+        throw new Error(
+          'Loaded runtime does not expose a media marker for the current model.'
         );
       }
-    } catch (error) {
-      if (callbackPtr !== 0) {
-        bridge.unregisterCallback(callbackPtr);
+      const markerCount = this.countMarkerOccurrences(
+        request.promptText,
+        this.cachedMediaMarker
+      );
+      if (markerCount !== request.media.length) {
+        throw new Error(
+          `Prompt contains ${markerCount} media marker(s) but ${request.media.length} image(s) were provided. Use "${this.cachedMediaMarker}" in your prompt to place each image.`
+        );
       }
-      throw error;
+      requestId = bridge.startMediaRequest(
+        request.contextKey,
+        request.promptText,
+        request.maxOutputTokens,
+        request.media,
+        0
+      );
+    } else {
+      requestId = bridge.startTextRequest(
+        request.contextKey,
+        request.promptText,
+        request.maxOutputTokens,
+        0
+      );
     }
     if (!requestId) {
-      if (callbackPtr !== 0) {
-        bridge.unregisterCallback(callbackPtr);
-      }
       throw new Error('Failed to enqueue request.');
     }
 
-    if (callbackPtr !== 0) {
-      this.transportObservability.tokenCallbackRegistrationCount =
-        (this.transportObservability.tokenCallbackRegistrationCount ?? 0) + 1;
-      this.queuedPromptCallbacks.set(requestId, onToken);
-      this.queuedPromptTokenBuffers.set(requestId, []);
-      this.queuedPromptCallbackPtrs.set(requestId, callbackPtr);
-    } else if (onToken != null) {
+    if (onToken != null) {
       this.queuedPromptCallbacks.set(requestId, onToken);
       this.queuedPromptTokenBuffers.set(requestId, []);
     }
@@ -829,27 +558,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     }
   }
 
-  /**
-   * Submit a generation prompt.
-   */
-  public async executeQuery(
-    contextKey: string,
-    promptText: string,
-    options: number | PromptOptions = 128
-  ): Promise<string> {
-    const signal = typeof options === 'object' ? options.signal : undefined;
-    const requestId = await this.enqueueQuery(contextKey, promptText, options);
-    const response = await this.awaitQuery(requestId, { signal });
-    if (response.cancelled) {
-      throw createAbortError(response.errorMessage ?? 'Queued prompt cancelled.');
-    }
-    if (response.failed) {
-      throw new Error(response.errorMessage ?? 'Queued prompt failed.');
-    }
-    return response.outputText;
-  }
-
-  public getRuntimeAggregateObservability(): RuntimeAggregateObservabilityMetrics | null {
+  public getRuntimeObservability(): RuntimeAggregateObservabilityMetrics | null {
     if (!this.runtimeObservabilityEnabled) {
       return null;
     }
@@ -857,16 +566,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return this.getReadyEngineBridge().readRuntimeObservability();
   }
 
-  public getRuntimeObservability(): RuntimeAggregateObservabilityMetrics | null {
-    return this.getRuntimeAggregateObservability();
-  }
-
   public readMediaMarker(): string | null {
     return this.cachedMediaMarker;
-  }
-
-  public readChatTemplate(): string | null {
-    return this.cachedChatTemplate;
   }
 
   public async getBackendObservability(): Promise<BackendObservability | null> {
