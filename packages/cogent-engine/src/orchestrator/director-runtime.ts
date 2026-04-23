@@ -94,6 +94,15 @@ export class DirectorRuntime {
       ...(options.signal ? { signal: options.signal } : {}),
     };
 
+    logDirectorQuery({
+      phase: 'request',
+      queryName,
+      contextKey: this.contextKey,
+      systemPrompt: this.systemPrompt,
+      userPrompt: userText,
+      grammar,
+    });
+
     let requestId = 0;
     try {
       requestId = await this.engine.queuePrompt(this.contextKey, promptText, promptOptions);
@@ -103,9 +112,25 @@ export class DirectorRuntime {
       );
       const rawText = response.outputText ?? '';
       if (response.cancelled) {
+        logDirectorQuery({
+          phase: 'response',
+          queryName,
+          contextKey: this.contextKey,
+          rawText,
+          parsed: null,
+          cancelled: true,
+        });
         return { data: null, cancelled: true, rawText };
       }
       if (response.failed) {
+        logDirectorQuery({
+          phase: 'response',
+          queryName,
+          contextKey: this.contextKey,
+          rawText,
+          parsed: null,
+          errorMessage: response.errorMessage ?? 'generation failed',
+        });
         return {
           data: null,
           cancelled: false,
@@ -115,6 +140,14 @@ export class DirectorRuntime {
       }
       const parsed = parseJsonValue(rawText);
       if (parsed == null) {
+        logDirectorQuery({
+          phase: 'response',
+          queryName,
+          contextKey: this.contextKey,
+          rawText,
+          parsed: null,
+          errorMessage: 'response was not valid JSON',
+        });
         return {
           data: null,
           cancelled: false,
@@ -124,6 +157,14 @@ export class DirectorRuntime {
       }
       const validationError = validateResponseValue(parsed, query.response);
       if (validationError) {
+        logDirectorQuery({
+          phase: 'response',
+          queryName,
+          contextKey: this.contextKey,
+          rawText,
+          parsed,
+          errorMessage: validationError,
+        });
         return {
           data: null,
           cancelled: false,
@@ -131,6 +172,13 @@ export class DirectorRuntime {
           rawText,
         };
       }
+      logDirectorQuery({
+        phase: 'response',
+        queryName,
+        contextKey: this.contextKey,
+        rawText,
+        parsed,
+      });
       return { data: parsed, cancelled: false, rawText };
     } catch (error) {
       const cancelled = options.signal?.aborted === true;
@@ -141,6 +189,15 @@ export class DirectorRuntime {
           // Swallow; the original error is more useful.
         }
       }
+      logDirectorQuery({
+        phase: 'response',
+        queryName,
+        contextKey: this.contextKey,
+        rawText: '',
+        parsed: null,
+        cancelled,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
       return {
         data: null,
         cancelled,
@@ -169,4 +226,34 @@ function parseJsonValue(raw: string): JsonValue | null {
   } catch {
     return null;
   }
+}
+
+function logDirectorQuery(args: {
+  phase: 'request' | 'response';
+  queryName: string;
+  contextKey: string;
+  systemPrompt?: string;
+  userPrompt?: string;
+  grammar?: string;
+  rawText?: string;
+  parsed?: JsonValue | null;
+  cancelled?: boolean;
+  errorMessage?: string;
+}): void {
+  if (args.phase === 'request') {
+    console.groupCollapsed(`[DirectorRuntime] ${args.queryName} -> ${args.contextKey}`);
+    console.log('systemPrompt', args.systemPrompt ?? '');
+    console.log('userPrompt', args.userPrompt ?? '');
+    console.log('grammar', args.grammar ?? '');
+    console.groupEnd();
+    return;
+  }
+  console.groupCollapsed(`[DirectorRuntime] ${args.queryName} <- ${args.contextKey}`);
+  console.log('rawText', args.rawText ?? '');
+  console.log('parsed', args.parsed ?? null);
+  console.log('cancelled', args.cancelled ?? false);
+  if (args.errorMessage) {
+    console.warn('error', args.errorMessage);
+  }
+  console.groupEnd();
 }

@@ -52,10 +52,13 @@ export function buildPerception(
     nearbyObjects.push({
       id: obj.id,
       kind: obj.kind,
+      label: obj.label,
       distance,
       direction: vec2Direction(self.position, obj.position),
       heldBy: obj.heldBy,
       contested: obj.contested,
+      affordances: obj.affordances,
+      tags: obj.tags,
     });
   }
   nearbyObjects.sort((a, b) => a.distance - b.distance);

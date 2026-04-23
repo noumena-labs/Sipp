@@ -23,8 +23,6 @@ function formatIntent(agent: SimulationAgentState): string {
   switch (intent.kind) {
     case 'wait':
       return `wait (${intent.reason ?? ''})`.trim();
-    case 'wander':
-      return 'wander';
     case 'move_to':
       return `move_to (${intent.target.x.toFixed(1)}, ${intent.target.z.toFixed(1)})`;
     case 'approach_agent':

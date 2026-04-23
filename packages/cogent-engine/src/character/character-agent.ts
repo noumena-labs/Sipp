@@ -199,6 +199,15 @@ export class CharacterAgent {
       ...(options.signal ? { signal: options.signal } : {}),
     };
 
+    logChoiceQuery({
+      phase: 'request',
+      contextKey: this.config.id,
+      systemPrompt: this.systemPrompt,
+      userPrompt: choicePrompt,
+      grammar,
+      choices: options.choices,
+    });
+
     let requestId = 0;
     try {
       requestId = await this.engine.queuePrompt(this.config.id, promptText, promptOptions);
@@ -208,6 +217,13 @@ export class CharacterAgent {
       );
       const rawText = (response.outputText ?? '').trim();
       if (response.cancelled) {
+        logChoiceQuery({
+          phase: 'response',
+          contextKey: this.config.id,
+          rawText,
+          choice: null,
+          cancelled: true,
+        });
         return {
           choice: null,
           cancelled: true,
@@ -215,6 +231,13 @@ export class CharacterAgent {
         };
       }
       if (response.failed) {
+        logChoiceQuery({
+          phase: 'response',
+          contextKey: this.config.id,
+          rawText,
+          choice: null,
+          errorMessage: response.errorMessage ?? 'generation failed',
+        });
         return {
           choice: null,
           cancelled: false,
@@ -236,6 +259,14 @@ export class CharacterAgent {
           // Swallow cancel errors.
         }
       }
+      logChoiceQuery({
+        phase: 'response',
+        contextKey: this.config.id,
+        rawText: '',
+        choice: null,
+        cancelled,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
       return {
         choice: null,
         cancelled,
@@ -722,4 +753,35 @@ function renderChoicePrompt(userMessage: string, choices: readonly string[]): st
     'Choose exactly one of the following options and output only that option text:',
     ...normalizedChoices.map((choice) => `- ${choice}`),
   ].join('\n');
+}
+
+function logChoiceQuery(args: {
+  phase: 'request' | 'response';
+  contextKey: string;
+  systemPrompt?: string;
+  userPrompt?: string;
+  grammar?: string;
+  choices?: readonly string[];
+  rawText?: string;
+  choice?: string | null;
+  cancelled?: boolean;
+  errorMessage?: string;
+}): void {
+  if (args.phase === 'request') {
+    console.groupCollapsed(`[CharacterAgent.choose] -> ${args.contextKey}`);
+    console.log('systemPrompt', args.systemPrompt ?? '');
+    console.log('userPrompt', args.userPrompt ?? '');
+    console.log('choices', args.choices ?? []);
+    console.log('grammar', args.grammar ?? '');
+    console.groupEnd();
+    return;
+  }
+  console.groupCollapsed(`[CharacterAgent.choose] <- ${args.contextKey}`);
+  console.log('rawText', args.rawText ?? '');
+  console.log('choice', args.choice ?? null);
+  console.log('cancelled', args.cancelled ?? false);
+  if (args.errorMessage) {
+    console.warn('error', args.errorMessage);
+  }
+  console.groupEnd();
 }

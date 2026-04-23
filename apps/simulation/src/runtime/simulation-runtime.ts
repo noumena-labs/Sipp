@@ -8,6 +8,7 @@ import {
   type MutableWorldState,
 } from './reducer.js';
 import type {
+  AgentGoal,
   DirectorDecision,
   DirectorResolution,
   ScenarioAgentSeed,
@@ -116,6 +117,7 @@ export class SimulationRuntime {
       emotion: null,
       status: seed.status ?? '',
       intent: null,
+      goal: null,
       holding: null,
       intentIssuedAtTick: -1,
     });
@@ -138,10 +140,12 @@ export class SimulationRuntime {
     this.state.objects.push({
       id: seed.id,
       kind: seed.kind,
+      label: seed.label ?? seed.kind,
       position: { x: seed.position.x, z: seed.position.z },
       contested: seed.contested ?? false,
       heldBy: null,
       tags: seed.tags ?? [],
+      affordances: seed.affordances ?? [],
     });
   }
 
@@ -167,7 +171,8 @@ export class SimulationRuntime {
       await this.maybeQueryOneAgent(signal);
       if (signal.aborted) return;
 
-      const { conflicts } = applyTickFirstPass(this.state, dtSeconds);
+      const { conflicts, arrivedAgentIds } = applyTickFirstPass(this.state, dtSeconds);
+      this.clearSatisfiedGoals(arrivedAgentIds);
 
       if (conflicts.length > 0 && this.director) {
         this.emit({ kind: 'director-conflict', tick: this.state.tick, conflicts });
@@ -223,7 +228,7 @@ export class SimulationRuntime {
       const candidate = ids[(this.queryCursor + i) % ids.length]!;
       const agentState = this.state.agents.find((a) => a.id === candidate);
       if (!agentState) continue;
-      if (agentState.intent) continue;
+      if (!this.needsDecision(agentState)) continue;
       chosenId = candidate;
       this.queryCursor = (this.queryCursor + i + 1) % ids.length;
       break;
@@ -247,21 +252,21 @@ export class SimulationRuntime {
     const result = await agent.query(perception, { signal });
     if (signal.aborted) return;
 
-    agentState.intent = result.intent;
+    agentState.goal = result.goal;
+    const intent = this.mapGoalToIntent(result.goal, perception);
+    agentState.intent = intent;
     agentState.intentIssuedAtTick = this.state.tick;
-    if (result.intent.kind === 'wait' && result.intent.reason) {
-      agentState.status = result.intent.reason;
-    }
-    if (result.intent.emotion) {
-      agentState.emotion = result.intent.emotion;
+    agentState.status = result.goal.label;
+    if (intent.emotion) {
+      agentState.emotion = intent.emotion;
     }
 
     this.emit({
       kind: 'agent-query-end',
       tick: this.state.tick,
       agentId: chosenId,
-      intent: result.intent,
-      emotion: result.intent.emotion ?? null,
+      intent,
+      emotion: intent.emotion ?? null,
       cancelled: result.cancelled,
       ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
     });
@@ -269,8 +274,98 @@ export class SimulationRuntime {
       kind: 'agent-intent',
       tick: this.state.tick,
       agentId: chosenId,
-      intent: result.intent,
+      intent,
     });
+  }
+
+  private mapGoalToIntent(
+    goal: AgentGoal,
+    _perception: import('./types.js').AgentPerception
+  ): import('./types.js').AgentIntent {
+    switch (goal.kind) {
+      case 'wait':
+        return { kind: 'wait', emotion: inferEmotionFromGoal(goal), reason: goal.label };
+      case 'go_to_object': {
+        const object = this.state.objects.find((entry) => entry.id === goal.objectId);
+        if (!object) {
+          return { kind: 'wait', emotion: inferEmotionFromGoal(goal), reason: 'missing-object' };
+        }
+        return { kind: 'move_to', target: object.position, emotion: inferEmotionFromGoal(goal) };
+      }
+      case 'go_to_agent':
+        return { kind: 'approach_agent', agentId: goal.agentId, emotion: inferEmotionFromGoal(goal) };
+      case 'object_action': {
+        const object = this.state.objects.find((entry) => entry.id === goal.objectId);
+        if (!object) {
+          return { kind: 'wait', emotion: inferEmotionFromGoal(goal), reason: 'missing-object' };
+        }
+        if (goal.affordance.kind === 'pick_up') {
+          return { kind: 'pick_up', objectId: goal.objectId, emotion: inferEmotionFromGoal(goal) };
+        }
+        return { kind: 'use', objectId: goal.objectId, emotion: inferEmotionFromGoal(goal) };
+      }
+      case 'drop':
+        return { kind: 'drop', emotion: inferEmotionFromGoal(goal) };
+    }
+  }
+
+  private needsDecision(agent: SimulationAgentState): boolean {
+    if (!agent.goal) return true;
+    if (!agent.intent) return true;
+    return false;
+  }
+
+  private clearSatisfiedGoals(arrivedAgentIds: readonly string[]): void {
+    const arrived = new Set(arrivedAgentIds);
+    for (const agent of this.state.agents) {
+      if (!agent.goal) continue;
+      if (!agent.intent) {
+        if (
+          agent.goal.kind === 'object_action' ||
+          agent.goal.kind === 'drop' ||
+          agent.goal.kind === 'wait'
+        ) {
+          agent.goal = null;
+        }
+        continue;
+      }
+      if (arrived.has(agent.id)) {
+        if (agent.goal.kind === 'go_to_object' || agent.goal.kind === 'go_to_agent') {
+          agent.goal = null;
+          agent.intent = null;
+        }
+        continue;
+      }
+      if (this.isGoalInvalid(agent)) {
+        agent.goal = null;
+        agent.intent = null;
+      }
+    }
+  }
+
+  private isGoalInvalid(agent: SimulationAgentState): boolean {
+    const goal = agent.goal;
+    if (!goal || !agent.intent) return false;
+    switch (goal.kind) {
+      case 'go_to_object':
+      case 'object_action': {
+        const object = this.state.objects.find((entry) => entry.id === goal.objectId);
+        if (!object) return true;
+        if (goal.kind === 'go_to_object' && object.heldBy && object.affordances.some((affordance) => affordance.kind === 'pick_up')) {
+          return true;
+        }
+        if (goal.kind === 'object_action' && goal.affordance.kind === 'pick_up' && object.heldBy && object.heldBy !== agent.id) {
+          return true;
+        }
+        return false;
+      }
+      case 'go_to_agent': {
+        const target = this.state.agents.find((entry) => entry.id === goal.agentId);
+        return !target;
+      }
+      default:
+        return false;
+    }
   }
 
   private emit(event: SimulationEvent): void {
@@ -334,6 +429,7 @@ function cloneAgent(agent: SimulationAgentState): SimulationAgentState {
     emotion: agent.emotion,
     status: agent.status,
     intent: agent.intent ? { ...agent.intent } : null,
+    goal: agent.goal ? { ...agent.goal } : null,
     holding: agent.holding,
     intentIssuedAtTick: agent.intentIssuedAtTick,
   };
@@ -343,9 +439,26 @@ function cloneObject(obj: SimulationObjectState): SimulationObjectState {
   return {
     id: obj.id,
     kind: obj.kind,
+    label: obj.label,
     position: { x: obj.position.x, z: obj.position.z },
     contested: obj.contested,
     heldBy: obj.heldBy,
     tags: obj.tags,
+    affordances: obj.affordances,
   };
+}
+
+function inferEmotionFromGoal(goal: AgentGoal): string {
+  switch (goal.kind) {
+    case 'wait':
+      return 'thinking';
+    case 'drop':
+      return 'alert';
+    case 'go_to_agent':
+      return 'curious';
+    case 'go_to_object':
+      return 'alert';
+    case 'object_action':
+      return goal.affordance.kind === 'pick_up' ? 'happy' : 'curious';
+  }
 }

@@ -31,7 +31,7 @@ export function stepMovement(
   if (!intent) {
     return { position: agent.position, heading: agent.heading };
   }
-  const target = resolveMovementTarget(intent, agent, objects, agents);
+  const target = resolveMovementTarget(intent, objects, agents);
   if (!target) {
     return { position: agent.position, heading: agent.heading };
   }
@@ -50,7 +50,6 @@ export function stepMovement(
 
 function resolveMovementTarget(
   intent: AgentIntent,
-  agent: SimulationAgentState,
   objects: readonly SimulationObjectState[],
   agents: readonly SimulationAgentState[]
 ): Vec2 | null {
@@ -66,13 +65,6 @@ function resolveMovementTarget(
       const target = objects.find((o) => o.id === intent.objectId);
       return target ? target.position : null;
     }
-    case 'wander': {
-      const offset = hashVec2(agent.id);
-      return {
-        x: agent.position.x + offset.x,
-        z: agent.position.z + offset.z,
-      };
-    }
     case 'wait':
     case 'drop':
     default:
@@ -80,26 +72,22 @@ function resolveMovementTarget(
   }
 }
 
-function hashVec2(id: string): Vec2 {
-  let h = 2166136261 >>> 0;
-  for (let i = 0; i < id.length; i += 1) {
-    h = Math.imul(h ^ id.charCodeAt(i), 16777619) >>> 0;
-  }
-  const angle = (h / 0xffffffff) * Math.PI * 2;
-  return { x: Math.cos(angle) * 1.5, z: Math.sin(angle) * 1.5 };
-}
-
 export interface TickReducerResult {
   readonly conflicts: WorldConflict[];
+  readonly arrivedAgentIds: readonly string[];
 }
 
 export function applyTickFirstPass(state: MutableWorldState, dt: number): TickReducerResult {
+  const arrivedAgentIds: string[] = [];
   for (const agent of state.agents) {
     const next = stepMovement(agent, state.objects, state.agents, dt, state.bounds);
     agent.position = next.position;
     agent.heading = next.heading;
     if (agent.intent?.emotion) {
       agent.emotion = agent.intent.emotion;
+    }
+    if (agent.intent && hasReachedCurrentIntent(agent, state.objects, state.agents)) {
+      arrivedAgentIds.push(agent.id);
     }
   }
 
@@ -126,11 +114,24 @@ export function applyTickFirstPass(state: MutableWorldState, dt: number): TickRe
     agent.intent = null;
   }
 
+  for (const agent of state.agents) {
+    if (agent.intent?.kind !== 'use') continue;
+    const intent = agent.intent;
+    const target = state.objects.find((o) => o.id === intent.objectId);
+    if (!target) {
+      agent.intent = null;
+      continue;
+    }
+    if (vec2Distance(agent.position, target.position) <= INTERACTION_RADIUS) {
+      agent.intent = null;
+    }
+  }
+
   const requests = new Map<string, string[]>();
   for (const agent of state.agents) {
     const intent = agent.intent;
     if (!intent) continue;
-    if (intent.kind !== 'pick_up' && intent.kind !== 'use') continue;
+    if (intent.kind !== 'pick_up') continue;
     const target = state.objects.find((o) => o.id === intent.objectId);
     if (!target) {
       agent.intent = null;
@@ -168,7 +169,7 @@ export function applyTickFirstPass(state: MutableWorldState, dt: number): TickRe
     }
   }
 
-  return { conflicts };
+  return { conflicts, arrivedAgentIds };
 }
 
 export function applyDirectorDecision(state: MutableWorldState, decision: DirectorDecision): void {
@@ -219,4 +220,29 @@ function applyPickUp(state: MutableWorldState, agentId: string, objectId: string
 function clearAgentIntent(state: MutableWorldState, agentId: string): void {
   const agent = state.agents.find((a) => a.id === agentId);
   if (agent) agent.intent = null;
+}
+
+export function hasReachedCurrentIntent(
+  agent: SimulationAgentState,
+  objects: readonly SimulationObjectState[],
+  agents: readonly SimulationAgentState[]
+): boolean {
+  const intent = agent.intent;
+  if (!intent) return false;
+  switch (intent.kind) {
+    case 'move_to':
+      return vec2Distance(agent.position, intent.target) <= 0.35;
+    case 'wait':
+    case 'drop':
+      return true;
+    case 'approach_agent': {
+      const target = agents.find((entry) => entry.id === intent.agentId);
+      return target ? vec2Distance(agent.position, target.position) <= 1.25 : true;
+    }
+    case 'pick_up':
+    case 'use': {
+      const target = objects.find((entry) => entry.id === intent.objectId);
+      return target ? vec2Distance(agent.position, target.position) <= INTERACTION_RADIUS : true;
+    }
+  }
 }

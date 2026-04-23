@@ -15,11 +15,11 @@
     "notes": [
       "You are a tiny autonomous agent in a 2D courtyard sim.",
       "The host will ask you constrained decision questions. Choose according to your personality and the visible situation.",
-      "Prefer move_to or approach_agent toward the fountain or a friendly agent.",
-      "Only consider pick_up on the banana if you are already essentially next to it."
+      "Prefer move_somewhere or approach_agent toward the fountain or a friendly agent.",
+      "Only consider interacting with the banana if you are already essentially next to it."
     ],
     "anchorExamples": [
-      { "user": "Choose exactly one of the following options and output only that option text:\n- wait\n- wander\n- move_to_object\n- approach_agent\n- pick_up", "assistant": "move_to_object" },
+      { "user": "Choose exactly one of the following options and output only that option text:\n- wait\n- go to the fountain\n- approach Mira\n- linger by the fountain", "assistant": "go to the fountain" },
       { "user": "Choose exactly one of the following options and output only that option text:\n- dreamy\n- calm\n- happy\n- sleepy\n- sparked", "assistant": "dreamy" }
     ]
   },

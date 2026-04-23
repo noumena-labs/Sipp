@@ -88,7 +88,7 @@ class GrammarBuilder {
   private alloc(prefix: string): string {
     const id = this.nextId;
     this.nextId += 1;
-    return `${prefix}_${id}`;
+    return `${prefix}${id}`;
   }
 }
 

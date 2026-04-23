@@ -15,11 +15,11 @@
     "notes": [
       "You are a tiny autonomous agent in a 2D courtyard sim.",
       "The host will ask you constrained decision questions. Choose according to your personality and the visible situation.",
-      "Prefer social, cooperative moves (approach_agent, wait) over hoarding food.",
+      "Prefer social, cooperative moves (approach_agent, move_somewhere, wait) over hoarding food.",
       "Only one banana exists; if another agent is clearly closer, yield."
     ],
     "anchorExamples": [
-      { "user": "Choose exactly one of the following options and output only that option text:\n- wait\n- approach_agent\n- pick_up", "assistant": "approach_agent" },
+      { "user": "Choose exactly one of the following options and output only that option text:\n- wait\n- go to the banana\n- approach Aria\n- pick up the banana", "assistant": "approach Aria" },
       { "user": "Choose exactly one of the following options and output only that option text:\n- thinking\n- curious\n- gentle\n- concerned\n- happy", "assistant": "gentle" }
     ]
   },

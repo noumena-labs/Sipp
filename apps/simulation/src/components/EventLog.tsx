@@ -16,14 +16,23 @@ export interface EventLogEntry {
 
 export interface EventLogProps {
   readonly entries: readonly EventLogEntry[];
+  readonly collapsed: boolean;
+  readonly onToggle: () => void;
 }
 
 export function EventLog(props: EventLogProps) {
+  const visibleEntries = props.collapsed
+    ? props.entries.slice(-5).reverse()
+    : props.entries.slice(-40).reverse();
+
   return (
-    <div className="event-log glass-panel">
-      <div className="panel-eyebrow">Event log</div>
+    <div className={`event-log glass-panel${props.collapsed ? ' collapsed' : ' expanded'}`}>
+      <button type="button" className="event-log-toggle" onClick={props.onToggle}>
+        <span className="panel-eyebrow">Event log</span>
+        <span className="event-log-toggle-label">{props.collapsed ? 'Expand' : 'Collapse'}</span>
+      </button>
       <ul>
-        {props.entries.slice(-40).reverse().map((e) => (
+        {visibleEntries.map((e) => (
           <li key={e.id} className={`event-${e.kind}`}>
             <span className="tick">#{e.tick}</span>
             <span className="text">{e.text}</span>

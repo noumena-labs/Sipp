@@ -43,6 +43,7 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<WorldSnapshot | null>(null);
   const [events, setEvents] = useState<EventLogEntry[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [eventLogCollapsed, setEventLogCollapsed] = useState(true);
   const eventIdRef = useRef(0);
 
   const pushEvent = useCallback((entry: Omit<EventLogEntry, 'id'>) => {
@@ -274,7 +275,11 @@ export default function App() {
       </div>
 
       <div className="sim-overlay sim-bottom">
-        <EventLog entries={events} />
+        <EventLog
+          entries={events}
+          collapsed={eventLogCollapsed}
+          onToggle={() => setEventLogCollapsed((value) => !value)}
+        />
       </div>
 
       {snapshot?.directorNote ? (

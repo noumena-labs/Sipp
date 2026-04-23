@@ -156,9 +156,33 @@ html, body, #app {
 }
 
 .event-log {
+  width: min(440px, 92vw);
+  max-height: 96px;
+  overflow-y: auto;
+  transition: max-height 140ms ease, width 140ms ease;
+}
+
+.event-log.expanded {
   width: min(780px, 92vw);
   max-height: 38vh;
-  overflow-y: auto;
+}
+
+.event-log-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  padding: 0;
+  margin: 0 0 8px;
+  cursor: pointer;
+}
+
+.event-log-toggle-label {
+  font-size: 11px;
+  color: #9aa3b8;
 }
 
 .event-log ul {
