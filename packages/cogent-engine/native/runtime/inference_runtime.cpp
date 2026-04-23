@@ -498,10 +498,231 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
   return true;
 }
 
+bool InferenceRuntime::RecoverDecodeSeedStateLocked(
+    SlotState &slot, GenerateRequest &request, SequenceState &session) {
+  if (slot.phase != SlotPhase::Decode || !slot.generated_tokens.empty()) {
+    return true;
+  }
+
+  if (request.max_output_tokens <= 0) {
+    slot.phase = SlotPhase::Completed;
+    request.lifecycle = GenerateRequestLifecycle::Completed;
+    return true;
+  }
+
+  if (request.prompt_tokens.empty()) {
+    slot.terminal_error_message =
+        "Prompt tokenization produced no tokens, so decode had no seed token.";
+    slot.phase = SlotPhase::Failed;
+    request.lifecycle = GenerateRequestLifecycle::Failed;
+    return false;
+  }
+
+  if (slot.prefill_cursor < request.prompt_tokens.size()) {
+    slot.phase = SlotPhase::Prefill;
+    request.lifecycle = GenerateRequestLifecycle::Running;
+    return true;
+  }
+
+  if (shared_context_ == nullptr || slot.seq_id < 0) {
+    slot.terminal_error_message =
+        "Decode slot lost shared context state before its first sampled token.";
+    slot.phase = SlotPhase::Failed;
+    request.lifecycle = GenerateRequestLifecycle::Failed;
+    return false;
+  }
+
+  if (session.n_past <= 0 || session.current_kv_tokens.empty()) {
+    slot.prefill_cursor = 0;
+    slot.phase = SlotPhase::Prefill;
+    request.lifecycle = GenerateRequestLifecycle::Running;
+    return true;
+  }
+
+  llama_memory_t mem = llama_get_memory(shared_context_);
+  const int32_t rewind_position = std::max(0, session.n_past - 1);
+  if (!llama_memory_seq_rm(mem, session.seq_id, rewind_position, -1)) {
+    slot.terminal_error_message =
+        "Failed to rewind shared KV state for a decode slot without a seed token.";
+    slot.phase = SlotPhase::Failed;
+    request.lifecycle = GenerateRequestLifecycle::Failed;
+    return false;
+  }
+
+  const std::size_t retained_tokens = std::min<std::size_t>(
+      session.current_kv_tokens.size(),
+      static_cast<std::size_t>(std::max(0, rewind_position)));
+  session.current_kv_tokens.resize(retained_tokens);
+  session.n_past = static_cast<int>(retained_tokens);
+  slot.prefill_cursor = std::min<std::size_t>(
+      request.prompt_tokens.size() - 1, retained_tokens);
+  slot.phase = SlotPhase::Prefill;
+  request.lifecycle = GenerateRequestLifecycle::Running;
+  return true;
+}
+
+bool InferenceRuntime::NormalizeRunnableSlotStateLocked(SlotState &slot) {
+  if (slot.request == nullptr || slot.session == nullptr) {
+    return true;
+  }
+
+  GenerateRequest &request = *slot.request;
+  SequenceState &session = *slot.session;
+
+  if (slot.phase == SlotPhase::Admitted) {
+    slot.phase = SlotPhase::Prefill;
+  }
+
+  if (slot.phase == SlotPhase::Prefill && !request.is_multimodal_turn &&
+      slot.prefill_cursor >= request.prompt_tokens.size()) {
+    slot.phase = SlotPhase::Decode;
+  }
+
+  if (slot.phase == SlotPhase::Streaming &&
+      slot.buffered_output_text.empty()) {
+    if (request.cancel_requested) {
+      slot.terminal_error_message = "Request cancelled.";
+      slot.phase = SlotPhase::Failed;
+      request.lifecycle = GenerateRequestLifecycle::Cancelled;
+      return true;
+    }
+
+    if (request.max_output_tokens > 0 &&
+        static_cast<int32_t>(slot.generated_tokens.size()) >=
+            request.max_output_tokens) {
+      slot.phase = SlotPhase::Completed;
+      request.lifecycle = GenerateRequestLifecycle::Completed;
+      return true;
+    }
+
+    slot.phase =
+        slot.generated_tokens.empty() ? SlotPhase::Prefill : SlotPhase::Decode;
+    request.lifecycle = GenerateRequestLifecycle::Running;
+  }
+
+  if (slot.phase == SlotPhase::Decode && slot.generated_tokens.empty()) {
+    return RecoverDecodeSeedStateLocked(slot, request, session);
+  }
+
+  return true;
+}
+
+std::string InferenceRuntime::BuildNoProgressDiagnosticLocked() const {
+  auto phase_name = [](SlotPhase phase) {
+    switch (phase) {
+    case SlotPhase::Idle:
+      return "Idle";
+    case SlotPhase::Admitted:
+      return "Admitted";
+    case SlotPhase::Prefill:
+      return "Prefill";
+    case SlotPhase::Decode:
+      return "Decode";
+    case SlotPhase::Streaming:
+      return "Streaming";
+    case SlotPhase::Completed:
+      return "Completed";
+    case SlotPhase::Failed:
+      return "Failed";
+    }
+    return "Unknown";
+  };
+
+  auto lifecycle_name = [](GenerateRequestLifecycle lifecycle) {
+    switch (lifecycle) {
+    case GenerateRequestLifecycle::Pending:
+      return "Pending";
+    case GenerateRequestLifecycle::Admitted:
+      return "Admitted";
+    case GenerateRequestLifecycle::Running:
+      return "Running";
+    case GenerateRequestLifecycle::Streaming:
+      return "Streaming";
+    case GenerateRequestLifecycle::Completed:
+      return "Completed";
+    case GenerateRequestLifecycle::Cancelled:
+      return "Cancelled";
+    case GenerateRequestLifecycle::Failed:
+      return "Failed";
+    }
+    return "Unknown";
+  };
+
+  int32_t active_count = 0;
+  int32_t decode_ready_count = 0;
+  int32_t prefill_ready_count = 0;
+  int32_t decode_without_seed_count = 0;
+  int32_t streaming_without_buffer_count = 0;
+  std::ostringstream stream;
+
+  for (const SlotState &slot : slot_scheduler_.Slots()) {
+    if (slot.request == nullptr) {
+      continue;
+    }
+    if (slot.phase != SlotPhase::Idle && slot.phase != SlotPhase::Completed &&
+        slot.phase != SlotPhase::Failed) {
+      active_count++;
+    }
+    if (slot.phase == SlotPhase::Decode &&
+        slot.buffered_output_text.empty() && !slot.generated_tokens.empty()) {
+      decode_ready_count++;
+    }
+    if (slot.phase == SlotPhase::Prefill &&
+        (slot.request->is_multimodal_turn ||
+         slot.prefill_cursor < slot.request->prompt_tokens.size())) {
+      prefill_ready_count++;
+    }
+    if (slot.phase == SlotPhase::Decode && slot.generated_tokens.empty()) {
+      decode_without_seed_count++;
+    }
+    if (slot.phase == SlotPhase::Streaming &&
+        slot.buffered_output_text.empty()) {
+      streaming_without_buffer_count++;
+    }
+  }
+
+  stream << "Shared batch tick could not make progress"
+         << " (active=" << active_count
+         << ", decode_ready=" << decode_ready_count
+         << ", prefill_ready=" << prefill_ready_count
+         << ", decode_without_seed=" << decode_without_seed_count
+         << ", streaming_without_buffer=" << streaming_without_buffer_count
+         << ").";
+
+  int32_t detailed_slots = 0;
+  for (const SlotState &slot : slot_scheduler_.Slots()) {
+    if (slot.request == nullptr || slot.phase == SlotPhase::Idle) {
+      continue;
+    }
+    if (detailed_slots >= 4) {
+      stream << " ...";
+      break;
+    }
+
+    stream << " slot#" << slot.slot_id << "{phase=" << phase_name(slot.phase)
+           << ", request=" << slot.request_id
+           << ", lifecycle=" << lifecycle_name(slot.request->lifecycle)
+           << ", prefill=" << slot.prefill_cursor << "/"
+           << slot.request->prompt_tokens.size()
+           << ", generated=" << slot.generated_tokens.size()
+           << ", buffered=" << slot.buffered_output_text.size()
+           << ", nPast="
+           << (slot.session != nullptr ? slot.session->n_past : -1)
+           << ", contextKey=" << slot.request->context_key << "}";
+    detailed_slots++;
+  }
+
+  return stream.str();
+}
+
 bool InferenceRuntime::RunPolicyBatchTickLocked() {
   if (primary_model_ == nullptr || shared_context_ == nullptr ||
       sampler_ == nullptr) {
     return false;
+  }
+
+  for (SlotState &slot : slot_scheduler_.MutableSlots()) {
+    NormalizeRunnableSlotStateLocked(slot);
   }
 
   auto combine_slots = [](const std::vector<SlotState *> &left,
@@ -600,6 +821,10 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     if (config_.enable_runtime_observability > 0) {
       llama_perf_sampler_reset(slot->sampler);
     }
+  }
+
+  for (SlotState &slot : slot_scheduler_.MutableSlots()) {
+    NormalizeRunnableSlotStateLocked(slot);
   }
 
   std::vector<SlotState *> live_decode_ready_slots =
@@ -1618,8 +1843,7 @@ RequestStepResult InferenceRuntime::RunSchedulerTickLocked() {
 
     if (active_slot->phase != SlotPhase::Failed &&
         active_slot->phase != SlotPhase::Completed) {
-      active_slot->terminal_error_message =
-          "Shared batch tick could not make progress.";
+      active_slot->terminal_error_message = BuildNoProgressDiagnosticLocked();
       active_slot->phase = SlotPhase::Failed;
       slot_scheduler_.FinalizeCompletedSlots(request_queue_, session_store_);
       CommitNewCompletedResponsesObservabilityLocked();
@@ -1697,8 +1921,7 @@ InferenceRuntime::RunRequestStep(GenerateRequestId request_id) {
     }
     if (active_slot->phase != SlotPhase::Failed &&
         active_slot->phase != SlotPhase::Completed) {
-      active_slot->terminal_error_message =
-          "Shared batch tick could not make progress.";
+      active_slot->terminal_error_message = BuildNoProgressDiagnosticLocked();
       active_slot->phase = SlotPhase::Failed;
     }
 

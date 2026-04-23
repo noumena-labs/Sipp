@@ -103,6 +103,11 @@ private:
                                       SequenceState &state,
                                       GenerateRequest *request,
                                       std::size_t &out_prefill_cursor);
+  bool NormalizeRunnableSlotStateLocked(SlotState &slot);
+  bool RecoverDecodeSeedStateLocked(SlotState &slot,
+                                    GenerateRequest &request,
+                                    SequenceState &session);
+  std::string BuildNoProgressDiagnosticLocked() const;
   void MaybeStorePrefixCacheEntryLocked(const std::string &context_key,
                                         const SequenceState &state,
                                         std::size_t token_count,

@@ -98,6 +98,9 @@ std::vector<SlotState *> SlotScheduler::SelectDecodeReadySlots() {
     if (slot.phase != SlotPhase::Decode) {
       continue;
     }
+    if (slot.generated_tokens.empty()) {
+      continue;
+    }
     if (!slot.buffered_output_text.empty()) {
       continue;
     }

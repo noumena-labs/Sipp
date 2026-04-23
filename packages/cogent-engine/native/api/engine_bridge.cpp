@@ -379,16 +379,6 @@ int CE_ResetRuntimeObservability() {
   return 0;
 }
 
-int CE_RunSchedulerTick() {
-  auto runtime = acquire_engine_runtime();
-  if (!runtime) {
-    return static_cast<int>(
-        noumena::cogentengine::RequestStepResult::Invalid);
-  }
-
-  return static_cast<int>(runtime->RunSchedulerTick());
-}
-
 int CE_RunSchedulerBurst(int32_t max_ticks, int32_t max_completed_responses,
                          int32_t max_emitted_tokens,
                          CE_SchedulerBurstResult *out_result) {
@@ -441,16 +431,6 @@ int CE_RunSchedulerBurstWithDeadline(int32_t max_ticks,
   return static_cast<int>(burst_result.status);
 }
 
-int CE_RunRequestStep(CE_RequestId request_id) {
-  auto runtime = acquire_engine_runtime();
-  if (!runtime) {
-    return static_cast<int>(
-        noumena::cogentengine::RequestStepResult::Invalid);
-  }
-
-  return static_cast<int>(runtime->RunRequestStep(request_id));
-}
-
 int CE_GetCompletedRequestStatus(CE_RequestId request_id) {
   noumena::cogentengine::GenerateResponse response{};
   if (!try_get_completed_response(request_id, response)) {
@@ -458,24 +438,6 @@ int CE_GetCompletedRequestStatus(CE_RequestId request_id) {
   }
 
   return completed_status_to_code(response.status);
-}
-
-int CE_DrainCompletedRequestIds(CE_RequestId *buffer, int32_t capacity) {
-  if (capacity < 0 || (capacity > 0 && buffer == nullptr)) {
-    return kStatusError;
-  }
-
-  auto runtime = acquire_engine_runtime();
-  if (!runtime || capacity == 0) {
-    return 0;
-  }
-
-  const std::vector<CE_RequestId> request_ids =
-      runtime->DrainCompletedResponseIds(capacity);
-  for (std::size_t index = 0; index < request_ids.size(); ++index) {
-    buffer[index] = request_ids[index];
-  }
-  return static_cast<int>(request_ids.size());
 }
 
 int CE_DrainRuntimeEvents(CE_RuntimeEvent *event_buffer, int32_t event_capacity,
@@ -662,7 +624,7 @@ const char *CE_GetBackendObservabilityJsonString() {
   return info_json.c_str();
 }
 
-CE_RequestId CE_EnqueuePromptQuery(const char *context_key, const char *prompt,
+CE_RequestId CE_StartPromptRequest(const char *context_key, const char *prompt,
                                    int n_tokens_predict,
                                    CE_TokenCallback on_token) {
   auto runtime = acquire_engine_runtime();
@@ -680,7 +642,7 @@ CE_RequestId CE_EnqueuePromptQuery(const char *context_key, const char *prompt,
       });
 }
 
-CE_RequestId CE_EnqueuePromptWithMediaQuery(
+CE_RequestId CE_StartPromptWithMediaRequest(
     const char *context_key, const char *prompt, int n_tokens_predict,
     int32_t n_images, const uint8_t *images_flat_buffer,
     const int32_t *image_sizes, CE_TokenCallback on_token) {
@@ -691,8 +653,8 @@ CE_RequestId CE_EnqueuePromptWithMediaQuery(
     return 0;
   }
   if (n_images == 0) {
-    return CE_EnqueuePromptQuery(context_key, prompt, n_tokens_predict,
-                                  on_token);
+    return CE_StartPromptRequest(context_key, prompt, n_tokens_predict,
+                                 on_token);
   }
 
   std::size_t total_media_bytes = 0;
@@ -763,7 +725,7 @@ const char *CE_ApplyChatTemplateString(const char *messages_json,
   return formatted_prompt.c_str();
 }
 
-int CE_CancelQueuedPromptQuery(CE_RequestId request_id) {
+int CE_CancelPromptRequest(CE_RequestId request_id) {
   auto runtime = acquire_engine_runtime();
   if (!runtime || request_id == 0) {
     return 0;
