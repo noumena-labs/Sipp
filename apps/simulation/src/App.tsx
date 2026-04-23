@@ -19,6 +19,7 @@ import { SimulationCanvas } from './components/SimulationCanvas';
 import { ControlsPanel } from './components/ControlsPanel';
 import { EventLog, type EventLogEntry } from './components/EventLog';
 import { AgentInspector } from './components/AgentInspector';
+import { Scoreboard } from './components/Scoreboard';
 import { COURTYARD_AGENTS, COURTYARD_SCENARIO } from './scenarios/courtyard-snack.js';
 import { SimulationBus, type SimulationEvent } from './runtime/bus.js';
 import {
@@ -71,21 +72,24 @@ export default function App() {
         case 'director-conflict':
           pushEvent({
             tick: event.tick,
-            kind: 'conflict',
-            text: `conflict: ${event.conflicts.map((c) => `${c.objectId} contested by [${c.contenderAgentIds.join(', ')}]`).join('; ')}`,
+            kind: 'referee',
+            text: `director ruling: ${event.conflicts.map(describeConflict).join('; ')}`,
           });
           break;
         case 'director-decision': {
           const parts: string[] = [];
           if (event.decision.note) parts.push(event.decision.note);
           for (const r of event.decision.resolutions) {
-            parts.push(`${r.objectId} -> ${r.winnerAgentId ?? 'none'}`);
+            parts.push(`${r.conflictId}: ${r.outcome}${r.winnerAgentId ? ` (${r.winnerAgentId})` : ''}`);
           }
           pushEvent({ tick: event.tick, kind: 'decision', text: parts.join(' | ') });
           break;
         }
         case 'world-note':
           pushEvent({ tick: event.tick, kind: 'note', text: event.note });
+          break;
+        case 'game-event':
+          pushEvent({ tick: event.tick, kind: 'game', text: event.event.message });
           break;
       }
     });
@@ -156,6 +160,7 @@ export default function App() {
         const { director } = await createDirectorFromConfigUrl({
           configUrl: COURTYARD_SCENARIO.directorConfigUrl,
           engine,
+          runtimeOptions: { maxOutputTokens: 96 },
         });
 
         setStatus('Building simulation runtime…');
@@ -163,9 +168,10 @@ export default function App() {
           id: COURTYARD_SCENARIO.id,
           bus,
           bounds: COURTYARD_SCENARIO.bounds,
+          game: COURTYARD_SCENARIO.game,
           directorCadenceTicks: COURTYARD_SCENARIO.directorCadenceTicks,
           initialDirectorNote: COURTYARD_SCENARIO.directorNote ?? null,
-          resolveConflictQuery: COURTYARD_SCENARIO.resolveConflictQuery,
+          resolveRefereeQuery: COURTYARD_SCENARIO.resolveRefereeQuery,
           narrateQuery: COURTYARD_SCENARIO.narrateQuery,
         });
         for (const seed of COURTYARD_SCENARIO.objects) {
@@ -242,11 +248,11 @@ export default function App() {
 
   return (
     <div className="sim-app">
-        <SimulationCanvas
-          bus={bus}
-          bounds={COURTYARD_SCENARIO.bounds ?? { halfExtent: 8 }}
-          snapshot={snapshot}
+      <SimulationCanvas
+        bus={bus}
+        bounds={COURTYARD_SCENARIO.bounds ?? { halfExtent: 8 }}
         highlightedAgentId={selectedAgentId}
+        snapshot={snapshot}
       />
 
       <div className="sim-overlay sim-top-left">
@@ -283,14 +289,24 @@ export default function App() {
         />
       </div>
 
-      {snapshot?.directorNote ? (
-        <div className="sim-overlay sim-top-center">
-          <div className="director-note glass-panel">
-            <span className="panel-eyebrow">Director</span>
-            <span>{snapshot.directorNote}</span>
-          </div>
+      {snapshot ? (
+        <div className="sim-overlay sim-top-center sim-center-stack">
+          <Scoreboard snapshot={snapshot} />
+          {snapshot.directorNote ? (
+            <div className="director-note glass-panel">
+              <span className="panel-eyebrow">Director</span>
+              <span>{snapshot.directorNote}</span>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
   );
+}
+
+function describeConflict(conflict: import('./runtime/types.js').WorldConflict): string {
+  if (conflict.kind === 'contested_object') {
+    return `${conflict.objectId} contested by [${conflict.contenderAgentIds.join(', ')}]`;
+  }
+  return `${conflict.attackerAgentId} bumps ${conflict.targetAgentId}`;
 }

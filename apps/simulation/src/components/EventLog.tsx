@@ -11,7 +11,7 @@ export interface EventLogEntry {
   readonly id: number;
   readonly tick: number;
   readonly text: string;
-  readonly kind: 'note' | 'intent' | 'conflict' | 'decision' | 'query';
+  readonly kind: 'note' | 'intent' | 'conflict' | 'decision' | 'query' | 'game' | 'referee';
 }
 
 export interface EventLogProps {
@@ -39,7 +39,7 @@ export function EventLog(props: EventLogProps) {
           </li>
         ))}
         {props.entries.length === 0 ? (
-          <li className="event-empty">(no events yet — start the simulation)</li>
+          <li className="event-empty">(no events yet - start the simulation)</li>
         ) : null}
       </ul>
     </div>

@@ -2,6 +2,7 @@ import type {
   AgentGoal,
   AgentIntent,
   DirectorDecision,
+  SimulationGameEvent,
   SimulationAgentState,
   WorldConflict,
   WorldSnapshot,
@@ -77,6 +78,12 @@ export interface WorldNoteEvent {
   readonly note: string;
 }
 
+export interface GameEventBusEvent {
+  readonly kind: 'game-event';
+  readonly tick: number;
+  readonly event: SimulationGameEvent;
+}
+
 export type SimulationEvent =
   | TickStartEvent
   | TickEndEvent
@@ -87,7 +94,8 @@ export type SimulationEvent =
   | AgentStateChangeEvent
   | DirectorConflictEvent
   | DirectorDecisionEvent
-  | WorldNoteEvent;
+  | WorldNoteEvent
+  | GameEventBusEvent;
 
 export type SimulationEventKind = SimulationEvent['kind'];
 export type SimulationEventListener<K extends SimulationEventKind = SimulationEventKind> = (

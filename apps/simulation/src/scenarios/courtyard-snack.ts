@@ -2,9 +2,8 @@
 //
 // scenarios/courtyard-snack.ts
 //
-// - Hand-authored demo scenario: 4 agents meeting in a small courtyard
-//   that has a single banana (contested), plus a bench, fountain, and
-//   two potted plants as ambient objects.
+// - Hand-authored Banana Dash demo: 4 character agents race to carry the
+//   banana to a shared goal while bumping and contesting each other.
 //
 //////////////////////////////////////////////////////////////////////////////
 
@@ -27,8 +26,8 @@ export const COURTYARD_AGENTS: readonly ScenarioAgentAssignment[] = [
     archetype: 'aria',
     characterUrl: '/characters/aria/character.json',
     color: '#f4a261',
-    position: { x: -3, z: -2 },
-    status: 'just arrived at the courtyard',
+    position: { x: -5, z: -4 },
+    status: 'eyeing the banana lane',
   },
   {
     agentId: 'beck',
@@ -36,8 +35,8 @@ export const COURTYARD_AGENTS: readonly ScenarioAgentAssignment[] = [
     archetype: 'beck',
     characterUrl: '/characters/beck/character.json',
     color: '#2a9d8f',
-    position: { x: 3, z: -2 },
-    status: 'looking for something to eat',
+    position: { x: 5, z: -4 },
+    status: 'ready to sprint',
   },
   {
     agentId: 'mira',
@@ -45,8 +44,8 @@ export const COURTYARD_AGENTS: readonly ScenarioAgentAssignment[] = [
     archetype: 'mira',
     characterUrl: '/characters/mira/character.json',
     color: '#e76f51',
-    position: { x: -3, z: 3 },
-    status: 'watching the others curiously',
+    position: { x: -5, z: 4 },
+    status: 'plotting a playful steal',
   },
   {
     agentId: 'sol',
@@ -54,14 +53,14 @@ export const COURTYARD_AGENTS: readonly ScenarioAgentAssignment[] = [
     archetype: 'sol',
     characterUrl: '/characters/sol/character.json',
     color: '#8ab0ff',
-    position: { x: 3, z: 3 },
-    status: 'daydreaming by the fountain',
+    position: { x: 5, z: 4 },
+    status: 'waiting for a clean opening',
   },
 ];
 
 export const COURTYARD_SCENARIO: ScenarioSeed = {
-  id: 'courtyard-snack',
-  title: 'Courtyard Snack',
+  id: 'banana-dash',
+  title: 'Banana Dash',
   bounds: { halfExtent: 8 },
   agents: COURTYARD_AGENTS.map((a) => ({
     id: a.agentId,
@@ -69,7 +68,7 @@ export const COURTYARD_SCENARIO: ScenarioSeed = {
     archetype: a.archetype,
     position: a.position,
     status: a.status,
-    speed: 1.2,
+    speed: 1.35,
   })),
   objects: [
     {
@@ -78,46 +77,78 @@ export const COURTYARD_SCENARIO: ScenarioSeed = {
       label: 'banana',
       position: { x: 0, z: 0 },
       contested: true,
-      tags: ['food'],
-      affordances: [{ kind: 'pick_up', label: 'pick up the banana', status: 'reaching for the banana' }],
+      collisionRadius: 0.2,
+      tags: ['food', 'score'],
+      affordances: [{ kind: 'pick_up', label: 'grab banana', status: 'grabbing the banana' }],
     },
     {
-      id: 'bench',
-      kind: 'bench',
-      label: 'bench',
-      position: { x: 0, z: -5 },
-      tags: ['seat'],
-      affordances: [{ kind: 'use', label: 'sit on the bench', status: 'settling onto the bench' }],
+      id: 'home-base',
+      kind: 'goal',
+      label: 'home base',
+      position: { x: 0, z: -6 },
+      collisionRadius: 1.2,
+      tags: ['goal'],
+      affordances: [],
     },
     {
-      id: 'fountain',
-      kind: 'fountain',
-      label: 'fountain',
-      position: { x: 0, z: 5 },
-      tags: ['water'],
-      affordances: [{ kind: 'use', label: 'linger by the fountain', status: 'lingering by the fountain' }],
+      id: 'crate-a',
+      kind: 'crate',
+      label: 'left crate',
+      position: { x: -3, z: -1 },
+      blocksMovement: true,
+      collisionRadius: 0.65,
+      tags: ['obstacle'],
+      affordances: [],
     },
     {
-      id: 'plant-a',
-      kind: 'plant',
-      label: 'left plant',
-      position: { x: -5, z: 0 },
-      tags: ['decor'],
-      affordances: [{ kind: 'use', label: 'inspect the left plant', status: 'inspecting the left plant' }],
+      id: 'crate-b',
+      kind: 'crate',
+      label: 'right crate',
+      position: { x: 3, z: 1 },
+      blocksMovement: true,
+      collisionRadius: 0.65,
+      tags: ['obstacle'],
+      affordances: [],
     },
     {
-      id: 'plant-b',
-      kind: 'plant',
-      label: 'right plant',
-      position: { x: 5, z: 0 },
-      tags: ['decor'],
-      affordances: [{ kind: 'use', label: 'inspect the right plant', status: 'inspecting the right plant' }],
+      id: 'rock-a',
+      kind: 'rock',
+      label: 'north rock',
+      position: { x: -2, z: 3 },
+      blocksMovement: true,
+      collisionRadius: 0.55,
+      tags: ['obstacle'],
+      affordances: [],
+    },
+    {
+      id: 'rock-b',
+      kind: 'rock',
+      label: 'south rock',
+      position: { x: 2, z: -3 },
+      blocksMovement: true,
+      collisionRadius: 0.55,
+      tags: ['obstacle'],
+      affordances: [],
     },
   ],
-  directorNote: 'A single yellow banana sits between them on the courtyard tile.',
+  game: {
+    title: 'Banana Dash',
+    bananaObjectId: 'banana',
+    goalObjectId: 'home-base',
+    bananaSpawnPoints: [
+      { x: 0, z: 0 },
+      { x: -6, z: 1 },
+      { x: 6, z: -1 },
+      { x: -1, z: 5 },
+      { x: 1, z: -5 },
+      { x: 5, z: 5 },
+      { x: -5, z: -5 },
+    ],
+  },
+  directorNote: 'Banana Dash begins: score by carrying the banana to home base.',
   directorConfigUrl: '/directors/courtyard/director.json',
-  directorCadenceTicks: 10,
-  resolveConflictQuery: 'resolve_pickup_conflict',
+  directorCadenceTicks: 12,
+  resolveRefereeQuery: 'resolve_referee_event',
   narrateQuery: 'narrate_scene',
 };
 

@@ -1,43 +1,53 @@
 {
-  "id": "courtyard-director",
+  "id": "banana-dash-director",
   "scenario": {
-    "name": "Courtyard Snack",
-    "summary": "A small social courtyard where four agents circulate around a shared snack and nearby landmarks."
+    "name": "Banana Dash",
+    "summary": "Four character agents race to carry a banana to a shared home base while contesting pickups and bumping carriers. The director referees contested beats and narrates the action."
   },
   "director": {
-    "role": "High-level scenario director and conflict adjudicator",
-    "objective": "Assess the current scene from the supplied state and return concise structured answers the host simulation can apply.",
+    "role": "Playful referee and scene narrator",
+    "objective": "Resolve compact referee events fairly and narrate the Banana Dash in short, lively observations.",
     "instructions": [
-      "Only reason from the provided payload.",
-      "Do not invent facts that are not visible in the state or conflict list.",
-      "Prefer terse, useful notes that a host UI could display directly.",
-      "When resolving conflicts, choose a winner only from the listed contenders or use null to deny all."
+      "Only reason from the supplied payload.",
+      "Do not invent agents, scores, objects, or positions.",
+      "For referee events, choose an outcome that is fair, readable, and playful.",
+      "When resolving pickup contests, winnerAgentId must be one of the contenders or null.",
+      "When resolving forced drops, use drop, hold, or attacker_fumbles.",
+      "Keep notes short enough for a live simulation overlay."
     ]
   },
   "hooks": {
-    "conflict": "A structured list of current contested interactions supplied by the host simulation.",
-    "state_snapshot": "The current world snapshot supplied by the host simulation."
+    "referee_event": "A compact event requiring a ruling, such as a contested banana pickup or forced-drop attempt.",
+    "scoreboard": "Current per-agent banana delivery score.",
+    "scene_summary": "Compact current world summary supplied by the host simulation."
   },
   "queries": {
-    "resolve_pickup_conflict": {
-      "description": "Resolve one or more contested object pickups using the provided world state.",
+    "resolve_referee_event": {
+      "description": "Resolve one Banana Dash referee event.",
       "instructions": [
-        "Return exactly one resolution per conflict object.",
-        "The note should briefly explain the scene-level outcome, not every detail."
+        "Return exactly one resolution for the supplied conflictId.",
+        "For contested_object, use outcome pickup with a valid winnerAgentId, or deny with winnerAgentId null.",
+        "For forced_drop, use outcome drop, hold, or attacker_fumbles. winnerAgentId should be null unless outcome is pickup.",
+        "The note should describe the ruling in one playful sentence."
       ],
-      "hooks": ["conflict", "state_snapshot"],
+      "hooks": ["referee_event", "scoreboard", "scene_summary"],
       "response": {
         "type": "object",
         "properties": {
           "note": { "type": "string", "maxLength": 180 },
           "resolutions": {
             "type": "array",
-            "maxItems": 8,
+            "maxItems": 1,
             "items": {
               "type": "object",
               "properties": {
-                "objectId": { "type": "string", "maxLength": 64 },
+                "conflictId": { "type": "string", "maxLength": 80 },
+                "objectId": { "type": "string", "maxLength": 64, "nullable": true },
                 "winnerAgentId": { "type": "string", "maxLength": 64, "nullable": true },
+                "outcome": {
+                  "type": "string",
+                  "enum": ["pickup", "deny", "drop", "hold", "attacker_fumbles"]
+                },
                 "note": { "type": "string", "maxLength": 120, "nullable": true }
               }
             }
@@ -46,12 +56,12 @@
       }
     },
     "narrate_scene": {
-      "description": "Summarize the current scene in one short line.",
+      "description": "Summarize the current Banana Dash scene in one short line.",
       "instructions": [
-        "The note should feel like a brief director observation.",
+        "The note should feel like a lively sports-commentary beat.",
         "Keep it compact and grounded in the visible state."
       ],
-      "hooks": ["state_snapshot"],
+      "hooks": ["scoreboard", "scene_summary"],
       "response": {
         "type": "object",
         "properties": {

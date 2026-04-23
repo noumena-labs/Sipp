@@ -27,6 +27,12 @@ function specFor(kind: string): ShapeSpec {
   switch (kind) {
     case 'banana':
       return { geometry: new THREE.SphereGeometry(0.18, 16, 12), color: 0xffe066, y: 0.18 };
+    case 'goal':
+      return { geometry: new THREE.CylinderGeometry(1.15, 1.15, 0.05, 32), color: 0x7bd88f, y: 0.025 };
+    case 'crate':
+      return { geometry: new THREE.BoxGeometry(0.9, 0.75, 0.9), color: 0x9b6a3d, y: 0.375 };
+    case 'rock':
+      return { geometry: new THREE.DodecahedronGeometry(0.55, 0), color: 0x6f7482, y: 0.35 };
     case 'bench':
       return { geometry: new THREE.BoxGeometry(1.4, 0.25, 0.5), color: 0x8a6d3b, y: 0.125 };
     case 'fountain':
@@ -59,6 +65,7 @@ export function createObjectVisual(kind: string): ObjectVisual {
     setHeldBy(heldBy) {
       // Lift the object slightly when carried so it reads as "picked up".
       mesh.position.y = heldBy ? spec.y + 0.8 : spec.y;
+      mesh.scale.setScalar(heldBy ? 1.45 : 1);
     },
     dispose() {
       spec.geometry.dispose();

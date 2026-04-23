@@ -61,6 +61,13 @@ html, body, #app {
   max-width: 520px;
 }
 
+.sim-center-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
 .sim-bottom {
   bottom: 16px;
   left: 16px;
@@ -216,6 +223,8 @@ html, body, #app {
 .event-log .event-conflict { background: rgba(230, 111, 81, 0.12); }
 .event-log .event-decision { background: rgba(255, 209, 102, 0.09); }
 .event-log .event-query { color: #9aa3b8; }
+.event-log .event-game { background: rgba(123, 216, 143, 0.09); }
+.event-log .event-referee { background: rgba(255, 209, 102, 0.14); }
 .event-log .event-empty { color: #6a7390; font-style: italic; }
 
 .agent-inspector ul {
@@ -296,5 +305,56 @@ html, body, #app {
   gap: 4px;
   font-size: 13px;
   color: #e8ecf5;
+  text-align: center;
+}
+
+.scoreboard {
+  width: min(520px, 92vw);
+  padding: 12px 14px;
+}
+
+.scoreboard-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 8px;
+}
+
+.scoreboard-banana,
+.scoreboard-meta {
+  color: #9aa3b8;
+  font-size: 11px;
+}
+
+.scoreboard-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.score-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.22);
+  font-size: 12px;
+}
+
+.score-row.carrying {
+  background: rgba(255, 224, 102, 0.14);
+  border: 1px solid rgba(255, 224, 102, 0.28);
+}
+
+.score-row strong {
+  color: #fff;
+  font-size: 15px;
+}
+
+.scoreboard-meta {
+  margin-top: 8px;
   text-align: center;
 }

@@ -5,16 +5,21 @@ import { SimulationAgentChooser } from './agent-chooser.js';
 import {
   applyDirectorDecision,
   applyTickFirstPass,
+  cloneScore,
+  deterministicConflictResolution,
+  type MutableGameState,
   type MutableWorldState,
 } from './reducer.js';
 import type {
   AgentGoal,
-  AgentIntent,
   DirectorDecision,
   DirectorResolution,
   ScenarioAgentSeed,
+  ScenarioGameSeed,
   ScenarioObjectSeed,
   SimulationAgentState,
+  SimulationGameEvent,
+  SimulationGameState,
   SimulationObjectState,
   WorldBounds,
   WorldConflict,
@@ -24,11 +29,19 @@ import type {
 export interface SimulationRuntimeOptions {
   readonly id?: string;
   readonly bounds?: WorldBounds;
+  readonly game: ScenarioGameSeed;
   readonly initialDirectorNote?: string | null;
   readonly directorCadenceTicks?: number;
-  readonly resolveConflictQuery?: string;
+  readonly resolveRefereeQuery?: string;
   readonly narrateQuery?: string;
+  readonly refereeTimeoutMs?: number;
   readonly bus?: SimulationBus;
+}
+
+interface AgentQueryInFlight {
+  readonly agentId: string;
+  readonly controller: AbortController;
+  readonly done: Promise<void>;
 }
 
 export class SimulationRuntime {
@@ -39,21 +52,25 @@ export class SimulationRuntime {
   private readonly simulationAgents: Map<string, SimulationAgentChooser> = new Map();
   private readonly director: DirectorRuntime | null;
   private readonly directorCadenceTicks: number;
-  private readonly resolveConflictQuery: string;
+  private readonly resolveRefereeQuery: string;
   private readonly narrateQuery: string;
+  private readonly refereeTimeoutMs: number;
+  private readonly activeControllers: Set<AbortController> = new Set();
 
   private disposed = false;
   private inFlightTick: Promise<void> | null = null;
+  private agentQueryInFlight: AgentQueryInFlight | null = null;
+  private narrationInFlight: Promise<void> | null = null;
   private queryCursor = 0;
-  private activeController: AbortController | null = null;
 
-  public constructor(director: DirectorRuntime | null, options: SimulationRuntimeOptions = {}) {
+  public constructor(director: DirectorRuntime | null, options: SimulationRuntimeOptions) {
     this.id = options.id ?? 'simulation';
     this.bus = options.bus ?? new SimulationBus();
     this.director = director;
-    this.directorCadenceTicks = Math.max(1, Math.floor(options.directorCadenceTicks ?? 10));
-    this.resolveConflictQuery = options.resolveConflictQuery ?? 'resolve_pickup_conflict';
+    this.directorCadenceTicks = Math.max(1, Math.floor(options.directorCadenceTicks ?? 12));
+    this.resolveRefereeQuery = options.resolveRefereeQuery ?? 'resolve_referee_event';
     this.narrateQuery = options.narrateQuery ?? 'narrate_scene';
+    this.refereeTimeoutMs = Math.max(1000, Math.floor(options.refereeTimeoutMs ?? 6000));
     this.state = {
       tick: 0,
       timeSeconds: 0,
@@ -61,6 +78,7 @@ export class SimulationRuntime {
       agents: [],
       objects: [],
       directorNote: options.initialDirectorNote ?? null,
+      game: createGameState(options.game),
     };
   }
 
@@ -72,6 +90,7 @@ export class SimulationRuntime {
       agents: this.state.agents.map(cloneAgent),
       objects: this.state.objects.map(cloneObject),
       directorNote: this.state.directorNote,
+      game: cloneGame(this.state.game),
     };
   }
 
@@ -90,16 +109,20 @@ export class SimulationRuntime {
   public async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
-    if (this.activeController) {
-      this.activeController.abort();
+    for (const controller of this.activeControllers) {
+      controller.abort();
+    }
+    if (this.agentQueryInFlight) {
+      this.agentQueryInFlight.controller.abort();
+      await this.agentQueryInFlight.done.catch(() => undefined);
     }
     if (this.inFlightTick) {
-      try {
-        await this.inFlightTick;
-      } catch {
-        // Ignore.
-      }
+      await this.inFlightTick.catch(() => undefined);
     }
+    if (this.narrationInFlight) {
+      await this.narrationInFlight.catch(() => undefined);
+    }
+    this.bus.clear();
   }
 
   public addAgent(agent: SimulationAgentChooser, seed: ScenarioAgentSeed): void {
@@ -107,6 +130,8 @@ export class SimulationRuntime {
       throw new Error(`agent ${JSON.stringify(seed.id)} already exists`);
     }
     this.simulationAgents.set(seed.id, agent);
+    this.state.game.score.deliveries[seed.id] = 0;
+    this.state.game.score.forcedDrops[seed.id] = 0;
     this.state.agents.push({
       id: seed.id,
       name: seed.name,
@@ -120,12 +145,15 @@ export class SimulationRuntime {
       goal: null,
       holding: null,
       intentIssuedAtTick: -1,
+      thinking: false,
     });
   }
 
   public removeAgent(agentId: string): void {
     this.simulationAgents.delete(agentId);
     this.state.agents = this.state.agents.filter((a) => a.id !== agentId);
+    delete this.state.game.score.deliveries[agentId];
+    delete this.state.game.score.forcedDrops[agentId];
     for (const obj of this.state.objects) {
       if (obj.heldBy === agentId) obj.heldBy = null;
     }
@@ -146,6 +174,8 @@ export class SimulationRuntime {
       heldBy: null,
       tags: seed.tags ?? [],
       affordances: seed.affordances ?? [],
+      blocksMovement: seed.blocksMovement ?? false,
+      collisionRadius: seed.collisionRadius ?? 0.45,
     });
   }
 
@@ -161,67 +191,84 @@ export class SimulationRuntime {
     this.state.tick += 1;
     this.state.timeSeconds += dtSeconds;
 
+    this.emit({ kind: 'tick-start', tick: this.state.tick, timeSeconds: this.state.timeSeconds });
+
+    const { conflicts, arrivedAgentIds, events } = applyTickFirstPass(this.state, dtSeconds);
+    this.emitGameEvents(events);
+    this.clearSatisfiedGoals(arrivedAgentIds);
+
+    if (conflicts.length > 0) {
+      await this.handleRefereeConflict(conflicts[0]!);
+    } else {
+      this.maybeStartOneAgentQuery();
+      this.maybeStartNarration();
+    }
+
+    for (const agent of this.state.agents) {
+      this.emit({ kind: 'agent-state', tick: this.state.tick, agent: cloneAgent(agent) });
+      if (agent.emotion) {
+        this.emit({ kind: 'agent-action', tick: this.state.tick, agentId: agent.id, emotion: agent.emotion });
+      }
+    }
+    this.emit({ kind: 'tick-end', tick: this.state.tick, snapshot: this.getSnapshot() });
+  }
+
+  private async handleRefereeConflict(conflict: WorldConflict): Promise<void> {
+    if (this.agentQueryInFlight) {
+      this.agentQueryInFlight.controller.abort();
+      await this.agentQueryInFlight.done.catch(() => undefined);
+    }
+
+    this.state.game.referee = { status: 'ruling', conflict, startedAtTick: this.state.tick };
+    this.emit({ kind: 'director-conflict', tick: this.state.tick, conflicts: [conflict] });
+    this.emit({
+      kind: 'game-event',
+      tick: this.state.tick,
+      event: { kind: 'fallback', message: `Director is ruling on ${describeConflict(conflict)}.` },
+    });
+
+    const decision = this.director
+      ? await this.queryRefereeWithTimeout(conflict)
+      : deterministicConflictResolution(this.state, [conflict]);
+    const events = applyDirectorDecision(this.state, decision);
+    this.emit({ kind: 'director-decision', tick: this.state.tick, decision });
+    if (decision.note) {
+      this.emit({ kind: 'world-note', tick: this.state.tick, note: decision.note });
+    }
+    this.emitGameEvents(events);
+    this.state.game.referee = { status: 'idle' };
+  }
+
+  private async queryRefereeWithTimeout(conflict: WorldConflict): Promise<DirectorDecision> {
+    if (!this.director) return deterministicConflictResolution(this.state, [conflict]);
+
     const controller = new AbortController();
-    this.activeController = controller;
-    const signal = controller.signal;
-
+    this.activeControllers.add(controller);
+    const timeoutId = setTimeout(() => controller.abort(), this.refereeTimeoutMs);
     try {
-      this.emit({ kind: 'tick-start', tick: this.state.tick, timeSeconds: this.state.timeSeconds });
-
-      await this.maybeQueryOneAgent(signal);
-      if (signal.aborted) return;
-
-      const { conflicts, arrivedAgentIds } = applyTickFirstPass(this.state, dtSeconds);
-      this.clearSatisfiedGoals(arrivedAgentIds);
-
-      if (conflicts.length > 0 && this.director) {
-        this.emit({ kind: 'director-conflict', tick: this.state.tick, conflicts });
-        const snapshotBefore = this.getSnapshot();
-        const result = await this.director.query(this.resolveConflictQuery, {
-          state: snapshotBefore as unknown as JsonValue,
-          conflicts: conflicts as unknown as JsonValue,
-        }, { signal });
-        if (signal.aborted) return;
-        const decision = coerceConflictDecision(result.data, conflicts);
-        applyDirectorDecision(this.state, decision);
-        this.clearSatisfiedGoals([]);
-        this.emit({ kind: 'director-decision', tick: this.state.tick, decision });
-        if (decision.note) {
-          this.emit({ kind: 'world-note', tick: this.state.tick, note: decision.note });
-        }
-      } else if (
-        this.director &&
-        this.simulationAgents.size > 0 &&
-        this.state.tick % this.directorCadenceTicks === 0
-      ) {
-        const snapshotBefore = this.getSnapshot();
-        const result = await this.director.query(this.narrateQuery, {
-          state: snapshotBefore as unknown as JsonValue,
-        }, { signal });
-        if (signal.aborted) return;
-        const decision = coerceNarrationDecision(result.data, snapshotBefore);
-        this.state.directorNote = decision.note || this.state.directorNote;
-        this.emit({ kind: 'director-decision', tick: this.state.tick, decision });
-        if (decision.note) {
-          this.emit({ kind: 'world-note', tick: this.state.tick, note: decision.note });
-        }
+      const result = await this.director.query(
+        this.resolveRefereeQuery,
+        buildRefereePayload(this.state, conflict) as unknown as Record<string, JsonValue>,
+        { signal: controller.signal }
+      );
+      if (result.cancelled || result.data == null) {
+        const fallback = deterministicConflictResolution(this.state, [conflict]);
+        this.emit({
+          kind: 'game-event',
+          tick: this.state.tick,
+          event: { kind: 'fallback', message: 'Director ruling timed out; house rule applies.' },
+        });
+        return fallback;
       }
-
-      for (const agent of this.state.agents) {
-        this.emit({ kind: 'agent-state', tick: this.state.tick, agent: cloneAgent(agent) });
-        if (agent.emotion) {
-          this.emit({ kind: 'agent-action', tick: this.state.tick, agentId: agent.id, emotion: agent.emotion });
-        }
-      }
-      this.emit({ kind: 'tick-end', tick: this.state.tick, snapshot: this.getSnapshot() });
+      return coerceRefereeDecision(result.data, conflict, this.state);
     } finally {
-      if (this.activeController === controller) {
-        this.activeController = null;
-      }
+      clearTimeout(timeoutId);
+      this.activeControllers.delete(controller);
     }
   }
 
-  private async maybeQueryOneAgent(signal: AbortSignal): Promise<void> {
+  private maybeStartOneAgentQuery(): void {
+    if (this.disposed || this.agentQueryInFlight || this.narrationInFlight) return;
     if (this.simulationAgents.size === 0) return;
     const ids = Array.from(this.simulationAgents.keys());
     let chosenId: string | null = null;
@@ -246,72 +293,122 @@ export class SimulationRuntime {
       this.state.objects,
       this.state.tick,
       this.state.bounds,
-      this.state.directorNote
+      this.state.directorNote,
+      cloneGame(this.state.game)
     );
 
+    const controller = new AbortController();
+    agentState.thinking = true;
     this.emit({ kind: 'agent-query-start', tick: this.state.tick, agentId: chosenId });
-    const result = await agent.query(perception, { signal });
-    if (signal.aborted) return;
-
-    agentState.goal = result.goal;
-    const intent = this.mapGoalToIntent(result.goal);
-    agentState.intent = intent;
-    agentState.intentIssuedAtTick = this.state.tick;
-    agentState.status = this.describeActiveGoal(result.goal);
-    if (intent.emotion) {
-      agentState.emotion = intent.emotion;
-    }
-
-    this.emit({
-      kind: 'agent-query-end',
-      tick: this.state.tick,
-      agentId: chosenId,
-      goal: result.goal,
-      intent,
-      status: agentState.status,
-      emotion: intent.emotion ?? null,
-      cancelled: result.cancelled,
-      ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
+    const done = agent.query(perception, { signal: controller.signal }).then((result) => {
+      if (this.disposed || controller.signal.aborted) return;
+      const current = this.state.agents.find((a) => a.id === chosenId);
+      if (!current) return;
+      current.goal = result.goal;
+      const intent = this.mapGoalToIntent(result.goal);
+      current.intent = intent;
+      current.intentIssuedAtTick = this.state.tick;
+      current.status = result.goal.label;
+      current.thinking = false;
+      current.emotion = intent.emotion;
+      this.emit({
+        kind: 'agent-query-end',
+        tick: this.state.tick,
+        agentId: chosenId,
+        goal: result.goal,
+        intent,
+        status: result.goal.label,
+        emotion: intent.emotion,
+        cancelled: result.cancelled,
+        ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
+      });
+      this.emit({
+        kind: 'agent-intent',
+        tick: this.state.tick,
+        agentId: chosenId,
+        goal: result.goal,
+        intent,
+        status: result.goal.label,
+      });
+    }).catch((error) => {
+      if (!controller.signal.aborted) {
+        this.emit({
+          kind: 'agent-query-end',
+          tick: this.state.tick,
+          agentId: chosenId,
+          goal: null,
+          intent: null,
+          status: 'query failed',
+          emotion: null,
+          cancelled: false,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }).finally(() => {
+      const current = this.state.agents.find((a) => a.id === chosenId);
+      if (current) current.thinking = false;
+      if (this.agentQueryInFlight?.agentId === chosenId) {
+        this.agentQueryInFlight = null;
+      }
     });
-    this.emit({
-      kind: 'agent-intent',
-      tick: this.state.tick,
-      agentId: chosenId,
-      goal: result.goal,
-      intent,
-      status: agentState.status,
+
+    this.agentQueryInFlight = { agentId: chosenId, controller, done };
+  }
+
+  private maybeStartNarration(): void {
+    if (!this.director || this.agentQueryInFlight || this.narrationInFlight) return;
+    if (this.simulationAgents.size === 0 || this.state.tick % this.directorCadenceTicks !== 0) return;
+
+    const controller = new AbortController();
+    this.activeControllers.add(controller);
+    this.narrationInFlight = this.director.query(
+      this.narrateQuery,
+      buildNarrationPayload(this.state) as unknown as Record<string, JsonValue>,
+      { signal: controller.signal }
+    ).then((result) => {
+      if (this.disposed || controller.signal.aborted) return;
+      const decision = coerceNarrationDecision(result.data, this.getSnapshot());
+      this.state.directorNote = decision.note || this.state.directorNote;
+      this.emit({ kind: 'director-decision', tick: this.state.tick, decision });
+      if (decision.note) {
+        this.emit({ kind: 'world-note', tick: this.state.tick, note: decision.note });
+      }
+    }).finally(() => {
+      this.activeControllers.delete(controller);
+      this.narrationInFlight = null;
     });
   }
 
-  private mapGoalToIntent(goal: AgentGoal): AgentIntent {
+  private mapGoalToIntent(goal: AgentGoal): import('./types.js').AgentIntent {
     switch (goal.kind) {
       case 'wait':
         return { kind: 'wait', emotion: inferEmotionFromGoal(goal), reason: goal.label };
       case 'go_to_object': {
         const object = this.state.objects.find((entry) => entry.id === goal.objectId);
-        if (!object) {
-          return { kind: 'wait', emotion: inferEmotionFromGoal(goal), reason: 'missing-object' };
-        }
-        return { kind: 'move_to', target: object.position, emotion: inferEmotionFromGoal(goal) };
+        if (!object) return { kind: 'wait', emotion: inferEmotionFromGoal(goal), reason: 'missing-object' };
+        return { kind: 'go_to_object', objectId: object.id, emotion: inferEmotionFromGoal(goal) };
       }
       case 'go_to_agent':
         return { kind: 'approach_agent', agentId: goal.agentId, emotion: inferEmotionFromGoal(goal) };
       case 'object_action': {
         const object = this.state.objects.find((entry) => entry.id === goal.objectId);
-        if (!object) {
-          return { kind: 'wait', emotion: inferEmotionFromGoal(goal), reason: 'missing-object' };
-        }
+        if (!object) return { kind: 'wait', emotion: inferEmotionFromGoal(goal), reason: 'missing-object' };
         if (goal.affordance.kind === 'pick_up') {
           return { kind: 'pick_up', objectId: goal.objectId, emotion: inferEmotionFromGoal(goal) };
         }
         return { kind: 'use', objectId: goal.objectId, emotion: inferEmotionFromGoal(goal) };
       }
+      case 'deliver':
+        return { kind: 'deliver', objectId: goal.objectId, emotion: inferEmotionFromGoal(goal) };
+      case 'sabotage_agent':
+        return { kind: 'sabotage', agentId: goal.agentId, emotion: inferEmotionFromGoal(goal) };
       case 'drop':
         return { kind: 'drop', emotion: inferEmotionFromGoal(goal) };
     }
   }
 
   private needsDecision(agent: SimulationAgentState): boolean {
+    if (agent.thinking) return false;
     if (!agent.goal) return true;
     if (!agent.intent) return true;
     return false;
@@ -325,49 +422,22 @@ export class SimulationRuntime {
         if (
           agent.goal.kind === 'object_action' ||
           agent.goal.kind === 'drop' ||
-          agent.goal.kind === 'wait'
+          agent.goal.kind === 'wait' ||
+          agent.goal.kind === 'deliver' ||
+          agent.goal.kind === 'sabotage_agent'
         ) {
-          agent.status = this.describeCompletedGoal(agent);
           agent.goal = null;
         }
         continue;
       }
       if (arrived.has(agent.id)) {
-        if (agent.goal.kind === 'go_to_object') {
-          const chainedGoal = this.buildImmediateObjectActionGoal(agent.goal.objectId);
-          if (chainedGoal) {
-            const intent = this.mapGoalToIntent(chainedGoal);
-            agent.goal = chainedGoal;
-            agent.intent = intent;
-            agent.intentIssuedAtTick = this.state.tick;
-            agent.status = this.describeActiveGoal(chainedGoal);
-            if (intent.emotion) {
-              agent.emotion = intent.emotion;
-            }
-            this.emit({
-              kind: 'agent-intent',
-              tick: this.state.tick,
-              agentId: agent.id,
-              goal: chainedGoal,
-              intent,
-              status: agent.status,
-            });
-            continue;
-          }
-          agent.status = this.describeCompletedGoal(agent);
-          agent.goal = null;
-          agent.intent = null;
-          continue;
-        }
-        if (agent.goal.kind === 'go_to_agent') {
-          agent.status = this.describeCompletedGoal(agent);
+        if (agent.goal.kind === 'go_to_object' || agent.goal.kind === 'go_to_agent') {
           agent.goal = null;
           agent.intent = null;
         }
         continue;
       }
       if (this.isGoalInvalid(agent)) {
-        agent.status = this.describeBlockedGoal(agent.goal);
         agent.goal = null;
         agent.intent = null;
       }
@@ -382,13 +452,19 @@ export class SimulationRuntime {
       case 'object_action': {
         const object = this.state.objects.find((entry) => entry.id === goal.objectId);
         if (!object) return true;
-        if (goal.kind === 'go_to_object' && object.heldBy && object.affordances.some((affordance) => affordance.kind === 'pick_up')) {
-          return true;
+        if (goal.kind === 'go_to_object' && object.heldBy && object.id === this.state.game.bananaObjectId) {
+          return object.heldBy !== agent.id;
         }
         if (goal.kind === 'object_action' && goal.affordance.kind === 'pick_up' && object.heldBy && object.heldBy !== agent.id) {
           return true;
         }
         return false;
+      }
+      case 'deliver':
+        return agent.holding !== this.state.game.bananaObjectId;
+      case 'sabotage_agent': {
+        const target = this.state.agents.find((entry) => entry.id === goal.agentId);
+        return !target || target.holding !== this.state.game.bananaObjectId;
       }
       case 'go_to_agent': {
         const target = this.state.agents.find((entry) => entry.id === goal.agentId);
@@ -399,78 +475,9 @@ export class SimulationRuntime {
     }
   }
 
-  private buildImmediateObjectActionGoal(objectId: string): AgentGoal | null {
-    const object = this.state.objects.find((entry) => entry.id === objectId);
-    if (!object) return null;
-    const affordance = object.affordances.find((entry) => {
-      if (entry.kind === 'pick_up') {
-        return object.heldBy == null;
-      }
-      return true;
-    });
-    if (!affordance) return null;
-    return { kind: 'object_action', objectId, affordance, label: affordance.label };
-  }
-
-  private describeActiveGoal(goal: AgentGoal): string {
-    switch (goal.kind) {
-      case 'wait':
-        return 'pausing to watch the courtyard';
-      case 'go_to_object': {
-        const object = this.state.objects.find((entry) => entry.id === goal.objectId);
-        return object ? `heading to the ${object.label}` : goal.label;
-      }
-      case 'go_to_agent': {
-        const target = this.state.agents.find((entry) => entry.id === goal.agentId);
-        return target ? `approaching ${target.name}` : goal.label;
-      }
-      case 'object_action':
-        return goal.affordance.status ?? goal.label;
-      case 'drop':
-        return goal.label.replace(/^drop /, 'putting down ');
-    }
-  }
-
-  private describeCompletedGoal(agent: SimulationAgentState): string {
-    const goal = agent.goal;
-    if (!goal) return agent.status;
-    switch (goal.kind) {
-      case 'wait':
-        return 'watching quietly';
-      case 'go_to_object': {
-        const object = this.state.objects.find((entry) => entry.id === goal.objectId);
-        return object ? `arrived at the ${object.label}` : 'arrived';
-      }
-      case 'go_to_agent': {
-        const target = this.state.agents.find((entry) => entry.id === goal.agentId);
-        return target ? `reached ${target.name}` : 'arrived';
-      }
-      case 'object_action':
-        if (goal.affordance.kind === 'pick_up') {
-          const object = this.state.objects.find((entry) => entry.id === goal.objectId);
-          if (object?.heldBy === agent.id) {
-            return `picked up the ${object.label}`;
-          }
-          return object ? `missed the ${object.label}` : 'missed the target';
-        }
-        return goal.affordance.status ?? goal.label;
-      case 'drop':
-        return 'set something down';
-    }
-  }
-
-  private describeBlockedGoal(goal: AgentGoal): string {
-    switch (goal.kind) {
-      case 'go_to_object':
-      case 'object_action': {
-        const object = this.state.objects.find((entry) => entry.id === goal.objectId);
-        return object ? `lost access to the ${object.label}` : 'lost the target';
-      }
-      case 'go_to_agent':
-        return 'lost sight of the target';
-      case 'wait':
-      case 'drop':
-        return 'reconsidering';
+  private emitGameEvents(events: readonly SimulationGameEvent[]): void {
+    for (const event of events) {
+      this.emit({ kind: 'game-event', tick: this.state.tick, event });
     }
   }
 
@@ -479,45 +486,150 @@ export class SimulationRuntime {
   }
 }
 
-function coerceConflictDecision(
+function createGameState(seed: ScenarioGameSeed): MutableGameState {
+  return {
+    title: seed.title,
+    bananaObjectId: seed.bananaObjectId,
+    goalObjectId: seed.goalObjectId,
+    bananaSpawnPoints: seed.bananaSpawnPoints.map((point) => ({ x: point.x, z: point.z })),
+    score: { deliveries: {}, forcedDrops: {} },
+    referee: { status: 'idle' },
+    nextSpawnIndex: 1,
+  };
+}
+
+function cloneGame(game: MutableGameState): SimulationGameState {
+  return {
+    title: game.title,
+    bananaObjectId: game.bananaObjectId,
+    goalObjectId: game.goalObjectId,
+    bananaSpawnPoints: game.bananaSpawnPoints.map((point) => ({ x: point.x, z: point.z })),
+    score: cloneScore(game.score),
+    referee: game.referee,
+  };
+}
+
+function buildRefereePayload(state: MutableWorldState, conflict: WorldConflict): JsonValue {
+  return {
+    referee_event: summarizeConflict(state, conflict),
+    scoreboard: state.game.score.deliveries,
+    scene_summary: buildSceneSummary(state),
+  };
+}
+
+function buildNarrationPayload(state: MutableWorldState): JsonValue {
+  return {
+    scoreboard: state.game.score.deliveries,
+    scene_summary: buildSceneSummary(state),
+  };
+}
+
+function summarizeConflict(state: MutableWorldState, conflict: WorldConflict): JsonValue {
+  if (conflict.kind === 'contested_object') {
+    const object = state.objects.find((entry) => entry.id === conflict.objectId);
+    return {
+      conflictId: conflict.id,
+      kind: conflict.kind,
+      objectId: conflict.objectId,
+      objectLabel: object?.label ?? conflict.objectId,
+      contenders: conflict.contenderAgentIds.map((id) => summarizeAgent(state, id)),
+    };
+  }
+  return {
+    conflictId: conflict.id,
+    kind: conflict.kind,
+    objectId: conflict.objectId,
+    attacker: summarizeAgent(state, conflict.attackerAgentId),
+    target: summarizeAgent(state, conflict.targetAgentId),
+  };
+}
+
+function buildSceneSummary(state: MutableWorldState): JsonValue {
+  const banana = state.objects.find((entry) => entry.id === state.game.bananaObjectId);
+  return {
+    tick: state.tick,
+    banana: banana
+      ? { position: jsonVec(banana.position), heldBy: banana.heldBy }
+      : null,
+    agents: state.agents.map((agent) => ({
+      id: agent.id,
+      name: agent.name,
+      position: jsonVec(agent.position),
+      holding: agent.holding,
+      status: agent.status,
+    })),
+  };
+}
+
+function summarizeAgent(state: MutableWorldState, agentId: string): JsonValue {
+  const agent = state.agents.find((entry) => entry.id === agentId);
+  if (!agent) return { id: agentId, missing: true };
+  return {
+    id: agent.id,
+    name: agent.name,
+    position: jsonVec(agent.position),
+    holding: agent.holding,
+    status: agent.status,
+    intentIssuedAtTick: agent.intentIssuedAtTick,
+    score: state.game.score.deliveries[agent.id] ?? 0,
+  };
+}
+
+function jsonVec(position: { readonly x: number; readonly z: number }): JsonValue {
+  return { x: position.x, z: position.z };
+}
+
+function coerceRefereeDecision(
   value: JsonValue | null,
-  conflicts: readonly WorldConflict[]
+  conflict: WorldConflict,
+  state: MutableWorldState
 ): DirectorDecision {
   if (isRecord(value) && typeof value.note === 'string' && Array.isArray(value.resolutions)) {
     const resolutions: DirectorResolution[] = [];
     for (const entry of value.resolutions) {
       if (!isRecord(entry)) continue;
-      if (typeof entry.objectId !== 'string') continue;
-      const winnerAgentId =
-        entry.winnerAgentId === null || typeof entry.winnerAgentId === 'string'
-          ? entry.winnerAgentId
-          : null;
+      if (entry.conflictId !== conflict.id) continue;
+      const winnerAgentId = entry.winnerAgentId === null || typeof entry.winnerAgentId === 'string'
+        ? entry.winnerAgentId
+        : null;
+      const outcome = parseOutcome(entry.outcome);
+      if (!outcome) continue;
+      const objectId = typeof entry.objectId === 'string' ? entry.objectId : undefined;
       const note = typeof entry.note === 'string' && entry.note.length > 0 ? entry.note : undefined;
-      resolutions.push({ objectId: entry.objectId, winnerAgentId, ...(note ? { note } : {}) });
+      resolutions.push({ conflictId: conflict.id, ...(objectId ? { objectId } : {}), winnerAgentId, outcome, ...(note ? { note } : {}) });
     }
-    if (resolutions.length === conflicts.length) {
+    if (resolutions.length === 1) {
       return { note: value.note, resolutions };
     }
   }
-  return deterministicConflictResolution(conflicts);
+  return deterministicConflictResolution(state, [conflict]);
 }
 
 function coerceNarrationDecision(value: JsonValue | null, snapshot: WorldSnapshot): DirectorDecision {
   if (isRecord(value) && typeof value.note === 'string') {
     return { note: value.note, resolutions: [] };
   }
-  return { note: `Tick ${snapshot.tick}: the courtyard carries on.`, resolutions: [] };
+  return { note: `Tick ${snapshot.tick}: Banana Dash keeps moving.`, resolutions: [] };
 }
 
-function deterministicConflictResolution(conflicts: readonly WorldConflict[]): DirectorDecision {
-  return {
-    note: 'Director fell back to deterministic tie-break.',
-    resolutions: conflicts.map((conflict) => ({
-      objectId: conflict.objectId,
-      winnerAgentId: conflict.contenderAgentIds[0] ?? null,
-      note: 'first-come tie break',
-    })),
-  };
+function parseOutcome(value: JsonValue | undefined): DirectorResolution['outcome'] | null {
+  switch (value) {
+    case 'pickup':
+    case 'deny':
+    case 'drop':
+    case 'hold':
+    case 'attacker_fumbles':
+      return value;
+    default:
+      return null;
+  }
+}
+
+function describeConflict(conflict: WorldConflict): string {
+  if (conflict.kind === 'contested_object') {
+    return `${conflict.objectId} contested by ${conflict.contenderAgentIds.join(', ')}`;
+  }
+  return `${conflict.attackerAgentId} bumping ${conflict.targetAgentId}`;
 }
 
 function isRecord(value: JsonValue | null): value is Record<string, JsonValue> {
@@ -538,6 +650,7 @@ function cloneAgent(agent: SimulationAgentState): SimulationAgentState {
     goal: agent.goal ? { ...agent.goal } : null,
     holding: agent.holding,
     intentIssuedAtTick: agent.intentIssuedAtTick,
+    thinking: agent.thinking,
   };
 }
 
@@ -551,6 +664,8 @@ function cloneObject(obj: SimulationObjectState): SimulationObjectState {
     heldBy: obj.heldBy,
     tags: obj.tags,
     affordances: obj.affordances,
+    blocksMovement: obj.blocksMovement,
+    collisionRadius: obj.collisionRadius,
   };
 }
 
@@ -561,8 +676,10 @@ function inferEmotionFromGoal(goal: AgentGoal): string {
     case 'drop':
       return 'alert';
     case 'go_to_agent':
+    case 'sabotage_agent':
       return 'curious';
     case 'go_to_object':
+    case 'deliver':
       return 'alert';
     case 'object_action':
       return goal.affordance.kind === 'pick_up' ? 'happy' : 'curious';

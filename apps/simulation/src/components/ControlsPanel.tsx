@@ -32,7 +32,7 @@ export function ControlsPanel(props: ControlsPanelProps) {
   return (
     <div className="controls-panel glass-panel">
       <div className="panel-eyebrow">Simulation</div>
-      <div className="panel-title">Courtyard Snack</div>
+      <div className="panel-title">Banana Dash</div>
 
       <label className="field">
         <span>Model URL (.gguf)</span>

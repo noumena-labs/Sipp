@@ -44,8 +44,10 @@ export function createSimulationScene(
   dir.position.set(5, 10, 5);
   scene.add(dir);
 
-  // Ground plane.
-  const groundSize = halfExtent * 2;
+  // Ground plane. `halfExtent` is the maximum integer cell center, so the
+  // visible grid extends half a cell past it on each side.
+  const visualHalfExtent = halfExtent + 0.5;
+  const groundSize = visualHalfExtent * 2;
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(groundSize, groundSize),
     new THREE.MeshStandardMaterial({ color: 0x2a3142, roughness: 0.95, metalness: 0.0 })
@@ -53,20 +55,17 @@ export function createSimulationScene(
   ground.rotation.x = -Math.PI / 2;
   scene.add(ground);
 
-  // Grid helper at 1-unit spacing.
-  const grid = new THREE.GridHelper(groundSize, groundSize, 0x3a4256, 0x2f364a);
-  (grid.material as THREE.Material).transparent = true;
-  (grid.material as THREE.Material).opacity = 0.6;
-  grid.position.y = 0.002;
+  // Grid lines mark cell edges, placing integer world coordinates at cell centers.
+  const grid = createCellCenteredGrid(visualHalfExtent);
   scene.add(grid);
 
   // Bounds outline.
   const outlineGeom = new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(-halfExtent, 0.004, -halfExtent),
-    new THREE.Vector3(halfExtent, 0.004, -halfExtent),
-    new THREE.Vector3(halfExtent, 0.004, halfExtent),
-    new THREE.Vector3(-halfExtent, 0.004, halfExtent),
-    new THREE.Vector3(-halfExtent, 0.004, -halfExtent),
+    new THREE.Vector3(-visualHalfExtent, 0.004, -visualHalfExtent),
+    new THREE.Vector3(visualHalfExtent, 0.004, -visualHalfExtent),
+    new THREE.Vector3(visualHalfExtent, 0.004, visualHalfExtent),
+    new THREE.Vector3(-visualHalfExtent, 0.004, visualHalfExtent),
+    new THREE.Vector3(-visualHalfExtent, 0.004, -visualHalfExtent),
   ]);
   const outline = new THREE.Line(
     outlineGeom,
@@ -124,4 +123,24 @@ export function createSimulationScene(
       });
     },
   };
+}
+
+function createCellCenteredGrid(visualHalfExtent: number): THREE.LineSegments {
+  const positions: number[] = [];
+  const min = -visualHalfExtent;
+  const max = visualHalfExtent;
+
+  for (let n = min; n <= max + 1e-6; n += 1) {
+    positions.push(min, 0.002, n, max, 0.002, n);
+    positions.push(n, 0.002, min, n, 0.002, max);
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  const material = new THREE.LineBasicMaterial({
+    color: 0x2f364a,
+    transparent: true,
+    opacity: 0.6,
+  });
+  return new THREE.LineSegments(geometry, material);
 }

@@ -16,9 +16,12 @@ export interface ObjectAffordance {
 export type AgentIntent =
   | { kind: 'wait'; emotion: string; reason?: string }
   | { kind: 'move_to'; target: Vec2; emotion: string }
+  | { kind: 'go_to_object'; objectId: string; emotion: string }
   | { kind: 'approach_agent'; agentId: string; emotion: string }
   | { kind: 'pick_up'; objectId: string; emotion: string }
   | { kind: 'drop'; emotion: string }
+  | { kind: 'deliver'; objectId: string; emotion: string }
+  | { kind: 'sabotage'; agentId: string; emotion: string }
   | { kind: 'use'; objectId: string; emotion: string };
 
 export interface SimulationAgentState {
@@ -34,6 +37,7 @@ export interface SimulationAgentState {
   goal: AgentGoal | null;
   holding: string | null;
   intentIssuedAtTick: number;
+  thinking: boolean;
 }
 
 export interface SimulationObjectState {
@@ -45,7 +49,27 @@ export interface SimulationObjectState {
   heldBy: string | null;
   readonly tags: readonly string[];
   readonly affordances: readonly ObjectAffordance[];
+  readonly blocksMovement: boolean;
+  readonly collisionRadius: number;
 }
+
+export interface SimulationScoreState {
+  readonly deliveries: Readonly<Record<string, number>>;
+  readonly forcedDrops: Readonly<Record<string, number>>;
+}
+
+export interface SimulationGameState {
+  readonly title: string;
+  readonly bananaObjectId: string;
+  readonly goalObjectId: string;
+  readonly bananaSpawnPoints: readonly Vec2[];
+  readonly score: SimulationScoreState;
+  readonly referee: RefereeState;
+}
+
+export type RefereeState =
+  | { readonly status: 'idle' }
+  | { readonly status: 'ruling'; readonly conflict: WorldConflict; readonly startedAtTick: number };
 
 export interface WorldSnapshot {
   readonly tick: number;
@@ -54,6 +78,7 @@ export interface WorldSnapshot {
   readonly agents: readonly SimulationAgentState[];
   readonly objects: readonly SimulationObjectState[];
   readonly directorNote: string | null;
+  readonly game: SimulationGameState;
 }
 
 export interface PerceivedAgent {
@@ -76,6 +101,8 @@ export interface PerceivedObject {
   readonly contested: boolean;
   readonly affordances: readonly ObjectAffordance[];
   readonly tags: readonly string[];
+  readonly blocksMovement: boolean;
+  readonly collisionRadius: number;
 }
 
 export interface AgentPerception {
@@ -85,6 +112,7 @@ export interface AgentPerception {
   readonly tick: number;
   readonly bounds: WorldBounds;
   readonly directorNote: string | null;
+  readonly game: SimulationGameState;
 }
 
 export type AgentGoal =
@@ -92,6 +120,8 @@ export type AgentGoal =
   | { kind: 'go_to_object'; objectId: string; label: string }
   | { kind: 'go_to_agent'; agentId: string; label: string }
   | { kind: 'object_action'; objectId: string; affordance: ObjectAffordance; label: string }
+  | { kind: 'deliver'; objectId: string; label: string }
+  | { kind: 'sabotage_agent'; agentId: string; label: string }
   | { kind: 'drop'; label: string };
 
 export interface DecisionOption {
@@ -105,22 +135,54 @@ export interface DecisionContext {
 }
 
 export interface ContestedObjectConflict {
+  readonly id: string;
   readonly kind: 'contested_object';
   readonly objectId: string;
   readonly contenderAgentIds: readonly string[];
 }
 
-export type WorldConflict = ContestedObjectConflict;
+export interface ForcedDropConflict {
+  readonly id: string;
+  readonly kind: 'forced_drop';
+  readonly attackerAgentId: string;
+  readonly targetAgentId: string;
+  readonly objectId: string;
+}
+
+export type WorldConflict = ContestedObjectConflict | ForcedDropConflict;
+
+export type DirectorResolutionOutcome =
+  | 'pickup'
+  | 'deny'
+  | 'drop'
+  | 'hold'
+  | 'attacker_fumbles';
 
 export interface DirectorResolution {
-  readonly objectId: string;
+  readonly conflictId: string;
+  readonly objectId?: string;
   readonly winnerAgentId: string | null;
+  readonly outcome: DirectorResolutionOutcome;
   readonly note?: string;
 }
 
 export interface DirectorDecision {
   readonly resolutions: readonly DirectorResolution[];
   readonly note: string;
+}
+
+export interface SimulationGameEvent {
+  readonly kind:
+    | 'delivery'
+    | 'respawn'
+    | 'pickup'
+    | 'drop'
+    | 'forced_drop'
+    | 'fallback';
+  readonly message: string;
+  readonly agentId?: string;
+  readonly objectId?: string;
+  readonly points?: number;
 }
 
 export interface ScenarioAgentSeed {
@@ -141,6 +203,15 @@ export interface ScenarioObjectSeed {
   readonly contested?: boolean;
   readonly tags?: readonly string[];
   readonly affordances?: readonly ObjectAffordance[];
+  readonly blocksMovement?: boolean;
+  readonly collisionRadius?: number;
+}
+
+export interface ScenarioGameSeed {
+  readonly title: string;
+  readonly bananaObjectId: string;
+  readonly goalObjectId: string;
+  readonly bananaSpawnPoints: readonly Vec2[];
 }
 
 export interface ScenarioSeed {
@@ -149,9 +220,10 @@ export interface ScenarioSeed {
   readonly bounds?: WorldBounds;
   readonly agents: readonly ScenarioAgentSeed[];
   readonly objects: readonly ScenarioObjectSeed[];
+  readonly game: ScenarioGameSeed;
   readonly directorNote?: string;
   readonly directorConfigUrl: string;
   readonly directorCadenceTicks?: number;
-  readonly resolveConflictQuery?: string;
+  readonly resolveRefereeQuery?: string;
   readonly narrateQuery?: string;
 }

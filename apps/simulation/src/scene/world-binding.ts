@@ -15,7 +15,7 @@ import type {
   SimulationBus,
   SimulationEvent,
 } from '../runtime/bus.js';
-import type { AgentIntent, Vec2, WorldSnapshot } from '../runtime/types.js';
+import type { AgentIntent, SimulationAgentState, Vec2, WorldSnapshot } from '../runtime/types.js';
 import { createAgentVisual, type AgentVisual } from '../render/agent-mesh.js';
 import { createObjectVisual, type ObjectVisual } from '../render/object-mesh.js';
 import { emotionGlyphFor } from '../render/emoji-billboard.js';
@@ -138,7 +138,11 @@ export function bindWorldToScene(
         entry.pulseUntil = Math.max(entry.pulseUntil, elapsedSeconds + PULSE_SECONDS);
       }
       setAgentTarget(entry, resolveIntentTarget(a.intent, snap));
-      if (a.emotion) {
+      const glyph = activityGlyphFor(a, snap);
+      if (glyph) {
+        entry.visual.emoji.setGlyph(glyph);
+        entry.visual.emoji.setVisible(true);
+      } else if (a.emotion) {
         entry.visual.emoji.setGlyph(emotionGlyphFor(a.emotion));
         entry.visual.emoji.setVisible(true);
       } else {
@@ -195,7 +199,7 @@ export function bindWorldToScene(
     if (event.kind === 'agent-intent') {
       const entry = agents.get(event.agentId);
       if (entry) {
-        entry.status = event.status;
+        entry.status = event.intent.kind;
         entry.pulseUntil = elapsedSeconds + PULSE_SECONDS;
       }
     }
@@ -232,8 +236,8 @@ export function bindWorldToScene(
       if (entry.heldBy) {
         const holder = agents.get(entry.heldBy);
         if (holder) {
-          entry.visual.root.position.x = holder.visual.root.position.x;
-          entry.visual.root.position.z = holder.visual.root.position.z;
+          entry.visual.root.position.x = holder.visual.root.position.x + Math.sin(holder.targetHeading) * 0.42;
+          entry.visual.root.position.z = holder.visual.root.position.z + Math.cos(holder.targetHeading) * 0.42;
           continue;
         }
       }
@@ -276,18 +280,54 @@ function resolveIntentTarget(intent: AgentIntent | null, snap: WorldSnapshot): V
   switch (intent.kind) {
     case 'move_to':
       return intent.target;
+    case 'go_to_object': {
+      const target = snap.objects.find((object) => object.id === intent.objectId);
+      return target?.position ?? null;
+    }
     case 'approach_agent': {
       const target = snap.agents.find((agent) => agent.id === intent.agentId);
       return target?.position ?? null;
     }
+    case 'sabotage': {
+      const target = snap.agents.find((agent) => agent.id === intent.agentId);
+      return target?.position ?? null;
+    }
     case 'pick_up':
-    case 'use': {
+    case 'use':
+    case 'deliver':
+    {
       const target = snap.objects.find((object) => object.id === intent.objectId);
       return target?.position ?? null;
     }
     case 'wait':
     case 'drop':
       return null;
+  }
+}
+
+function activityGlyphFor(agent: SimulationAgentState, snap: WorldSnapshot): string | null {
+  if (agent.thinking) return '\u{1F914}';
+  if (agent.holding === snap.game.bananaObjectId) return '\u{1F34C}';
+  const intent = agent.intent;
+  if (!intent) return null;
+  switch (intent.kind) {
+    case 'go_to_object':
+    case 'move_to':
+      return '\u{1F3C3}';
+    case 'pick_up':
+      return '\u{270B}';
+    case 'deliver':
+      return '\u{1F3C1}';
+    case 'sabotage':
+      return '\u{1F4A5}';
+    case 'approach_agent':
+      return '\u{1F440}';
+    case 'wait':
+      return '\u{23F3}';
+    case 'drop':
+      return '\u{1F4A8}';
+    case 'use':
+      return '\u{2728}';
   }
 }
 

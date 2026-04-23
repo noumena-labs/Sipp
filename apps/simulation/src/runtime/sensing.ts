@@ -3,6 +3,7 @@ import type {
   PerceivedAgent,
   PerceivedObject,
   SimulationAgentState,
+  SimulationGameState,
   SimulationObjectState,
   Vec2,
   WorldBounds,
@@ -21,6 +22,7 @@ export function buildPerception(
   tick: number,
   bounds: WorldBounds,
   directorNote: string | null,
+  game: SimulationGameState,
   options: SensingOptions = {}
 ): AgentPerception {
   const agentRadius = options.agentSightRadius ?? 8;
@@ -59,12 +61,14 @@ export function buildPerception(
       contested: obj.contested,
       affordances: obj.affordances,
       tags: obj.tags,
+      blocksMovement: obj.blocksMovement,
+      collisionRadius: obj.collisionRadius,
     });
   }
   nearbyObjects.sort((a, b) => a.distance - b.distance);
   nearbyObjects.length = Math.min(nearbyObjects.length, maxNeighbours);
 
-  return { self, nearbyAgents, nearbyObjects, tick, bounds, directorNote };
+  return { self, nearbyAgents, nearbyObjects, tick, bounds, directorNote, game };
 }
 
 export function vec2Distance(a: Vec2, b: Vec2): number {
