@@ -48,6 +48,11 @@ function formatGoal(agent: SimulationAgentState): string {
 
 function formatActivity(agent: SimulationAgentState): string {
   if (agent.thinking) return 'thinking through the next move';
+  if (agent.navigation.detourTarget) {
+    return agent.navigation.obstacleId
+      ? `detouring around ${agent.navigation.obstacleId}`
+      : 'detouring around an obstacle';
+  }
   if (agent.holding === 'banana') return 'carrying banana to home base';
   const intent = agent.intent;
   if (!intent) return agent.status || 'watching quietly';

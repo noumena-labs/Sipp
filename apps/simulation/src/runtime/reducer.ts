@@ -38,6 +38,10 @@ export const INTERACTION_RADIUS = 0.75;
 export const AGENT_RADIUS = 0.38;
 export const GOAL_RADIUS = 1.2;
 export const SABOTAGE_RADIUS = 0.95;
+const DETOUR_PADDING = 0.35;
+const DETOUR_REACHED_RADIUS = 0.35;
+const BLOCKED_REPATH_TICKS = 2;
+const SIDESTEP_ANGLES = [0, Math.PI / 6, -Math.PI / 6, Math.PI / 3, -Math.PI / 3, Math.PI / 2, -Math.PI / 2] as const;
 
 export interface TickReducerResult {
   readonly conflicts: WorldConflict[];
@@ -131,14 +135,8 @@ function moveAgentsWithoutOverlap(
   const accepted = new Map<string, Vec2>();
 
   for (const agent of state.agents) {
-    const next = stepMovement(agent, state, dt);
-    let position = next.position;
-    if (collidesWithBlockingObject(position, state.objects)) {
-      position = agent.position;
-    }
-    if (collidesWithAgents(agent.id, position, state.agents, accepted)) {
-      position = agent.position;
-    }
+    const next = stepMovement(agent, state, dt, accepted);
+    const position = next.position;
 
     agent.position = position;
     agent.heading = next.heading;
@@ -156,27 +154,77 @@ function moveAgentsWithoutOverlap(
 function stepMovement(
   agent: SimulationAgentState,
   state: MutableWorldState,
-  dt: number
+  dt: number,
+  accepted: ReadonlyMap<string, Vec2>
 ): { position: Vec2; heading: number } {
   const intent = agent.intent;
   if (!intent) {
+    agent.navigation.detourTarget = null;
+    agent.navigation.blockedTicks = 0;
+    agent.navigation.obstacleId = null;
     return { position: agent.position, heading: agent.heading };
   }
-  const target = resolveMovementTarget(intent, state);
-  if (!target) {
+  const finalTarget = resolveMovementTarget(intent, state);
+  if (!finalTarget) {
+    agent.navigation.detourTarget = null;
+    agent.navigation.blockedTicks = 0;
+    agent.navigation.obstacleId = null;
     return { position: agent.position, heading: agent.heading };
   }
+  if (agent.navigation.detourTarget && vec2Distance(agent.position, agent.navigation.detourTarget) <= DETOUR_REACHED_RADIUS) {
+    agent.navigation.detourTarget = null;
+    agent.navigation.obstacleId = null;
+  }
+
+  if (agent.navigation.detourTarget && hasClearLine(agent.position, finalTarget, state.objects)) {
+    agent.navigation.detourTarget = null;
+    agent.navigation.obstacleId = null;
+  }
+
+  const target = agent.navigation.detourTarget ?? finalTarget;
   const dx = target.x - agent.position.x;
   const dz = target.z - agent.position.z;
   const dist = Math.sqrt(dx * dx + dz * dz);
   if (dist < 1e-4) {
+    agent.navigation.blockedTicks = 0;
     return { position: agent.position, heading: agent.heading };
   }
   const step = Math.min(dist, agent.speed * dt);
-  const nx = agent.position.x + (dx / dist) * step;
-  const nz = agent.position.z + (dz / dist) * step;
-  const heading = Math.atan2(dx, dz);
-  return { position: clampToBounds({ x: nx, z: nz }, state.bounds), heading };
+  const desiredHeading = Math.atan2(dx, dz);
+
+  for (const angle of SIDESTEP_ANGLES) {
+    const heading = desiredHeading + angle;
+    const candidate = clampToBounds({
+      x: agent.position.x + Math.sin(heading) * step,
+      z: agent.position.z + Math.cos(heading) * step,
+    }, state.bounds);
+    if (!isCandidateBlocked(agent.id, candidate, state, accepted)) {
+      if (angle === 0) {
+        agent.navigation.blockedTicks = 0;
+        if (agent.navigation.detourTarget && vec2Distance(candidate, finalTarget) < vec2Distance(agent.position, finalTarget)) {
+          agent.navigation.detourTarget = null;
+          agent.navigation.obstacleId = null;
+        }
+      } else {
+        agent.navigation.blockedTicks = 0;
+      }
+      return { position: candidate, heading };
+    }
+  }
+
+  agent.navigation.blockedTicks += 1;
+  const blockingObstacle = findBlockingObstacleOnPath(agent.position, finalTarget, state.objects);
+  if (blockingObstacle && (agent.navigation.detourTarget == null || agent.navigation.blockedTicks >= BLOCKED_REPATH_TICKS)) {
+    const detour = chooseDetourTarget(agent, finalTarget, blockingObstacle, state, accepted);
+    if (detour) {
+      agent.navigation.detourTarget = detour.target;
+      agent.navigation.obstacleId = blockingObstacle.id;
+      agent.navigation.blockedTicks = 0;
+      return { position: agent.position, heading: detour.heading };
+    }
+  }
+
+  return { position: agent.position, heading: desiredHeading };
 }
 
 function resolveMovementTarget(intent: AgentIntent, state: MutableWorldState): Vec2 | null {
@@ -210,6 +258,16 @@ function collidesWithBlockingObject(position: Vec2, objects: readonly Simulation
   );
 }
 
+function findBlockingObject(position: Vec2, objects: readonly SimulationObjectState[]): SimulationObjectState | null {
+  for (const obj of objects) {
+    if (!obj.blocksMovement) continue;
+    if (vec2Distance(position, obj.position) < AGENT_RADIUS + obj.collisionRadius) {
+      return obj;
+    }
+  }
+  return null;
+}
+
 function collidesWithAgents(
   agentId: string,
   position: Vec2,
@@ -224,6 +282,89 @@ function collidesWithAgents(
     }
   }
   return false;
+}
+
+function isCandidateBlocked(
+  agentId: string,
+  position: Vec2,
+  state: MutableWorldState,
+  accepted: ReadonlyMap<string, Vec2>
+): boolean {
+  return (
+    collidesWithBlockingObject(position, state.objects) ||
+    collidesWithAgents(agentId, position, state.agents, accepted)
+  );
+}
+
+function hasClearLine(from: Vec2, to: Vec2, objects: readonly SimulationObjectState[]): boolean {
+  return findBlockingObstacleOnPath(from, to, objects) == null;
+}
+
+function findBlockingObstacleOnPath(
+  from: Vec2,
+  to: Vec2,
+  objects: readonly SimulationObjectState[]
+): SimulationObjectState | null {
+  let best: { object: SimulationObjectState; t: number } | null = null;
+  for (const obj of objects) {
+    if (!obj.blocksMovement) continue;
+    const hit = distanceToSegment(obj.position, from, to);
+    const radius = obj.collisionRadius + AGENT_RADIUS + DETOUR_PADDING;
+    if (hit.distance > radius) continue;
+    if (best == null || hit.t < best.t) {
+      best = { object: obj, t: hit.t };
+    }
+  }
+  return best?.object ?? null;
+}
+
+function chooseDetourTarget(
+  agent: SimulationAgentState,
+  finalTarget: Vec2,
+  obstacle: SimulationObjectState,
+  state: MutableWorldState,
+  accepted: ReadonlyMap<string, Vec2>
+): { target: Vec2; heading: number } | null {
+  const padding = obstacle.collisionRadius + AGENT_RADIUS + DETOUR_PADDING;
+  const awayX = agent.position.x - obstacle.position.x;
+  const awayZ = agent.position.z - obstacle.position.z;
+  const awayLen = Math.sqrt(awayX * awayX + awayZ * awayZ) || 1;
+  const nx = awayX / awayLen;
+  const nz = awayZ / awayLen;
+  const tx = -nz;
+  const tz = nx;
+
+  const candidates: Vec2[] = [
+    clampToBounds({ x: obstacle.position.x + tx * padding + nx * padding, z: obstacle.position.z + tz * padding + nz * padding }, state.bounds),
+    clampToBounds({ x: obstacle.position.x - tx * padding + nx * padding, z: obstacle.position.z - tz * padding + nz * padding }, state.bounds),
+  ];
+
+  let best: { target: Vec2; score: number; heading: number } | null = null;
+  for (const candidate of candidates) {
+    if (findBlockingObject(candidate, state.objects)) continue;
+    if (collidesWithAgents(agent.id, candidate, state.agents, accepted)) continue;
+    const heading = Math.atan2(candidate.x - agent.position.x, candidate.z - agent.position.z);
+    const score = vec2Distance(candidate, finalTarget);
+    if (best == null || score < best.score) {
+      best = { target: candidate, score, heading };
+    }
+  }
+  return best ? { target: best.target, heading: best.heading } : null;
+}
+
+function distanceToSegment(point: Vec2, a: Vec2, b: Vec2): { distance: number; t: number } {
+  const abx = b.x - a.x;
+  const abz = b.z - a.z;
+  const apx = point.x - a.x;
+  const apz = point.z - a.z;
+  const abLenSq = abx * abx + abz * abz;
+  if (abLenSq < 1e-6) {
+    return { distance: vec2Distance(point, a), t: 0 };
+  }
+  const unclampedT = (apx * abx + apz * abz) / abLenSq;
+  const t = Math.max(0, Math.min(1, unclampedT));
+  const closest = { x: a.x + abx * t, z: a.z + abz * t };
+  return { distance: vec2Distance(point, closest), t };
 }
 
 function syncHeldObjects(state: MutableWorldState): void {

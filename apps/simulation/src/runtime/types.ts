@@ -38,6 +38,13 @@ export interface SimulationAgentState {
   holding: string | null;
   intentIssuedAtTick: number;
   thinking: boolean;
+  navigation: AgentNavigationState;
+}
+
+export interface AgentNavigationState {
+  detourTarget: Vec2 | null;
+  blockedTicks: number;
+  obstacleId: string | null;
 }
 
 export interface SimulationObjectState {

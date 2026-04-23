@@ -146,6 +146,11 @@ export class SimulationRuntime {
       holding: null,
       intentIssuedAtTick: -1,
       thinking: false,
+      navigation: {
+        detourTarget: null,
+        blockedTicks: 0,
+        obstacleId: null,
+      },
     });
   }
 
@@ -651,6 +656,13 @@ function cloneAgent(agent: SimulationAgentState): SimulationAgentState {
     holding: agent.holding,
     intentIssuedAtTick: agent.intentIssuedAtTick,
     thinking: agent.thinking,
+    navigation: {
+      detourTarget: agent.navigation.detourTarget
+        ? { x: agent.navigation.detourTarget.x, z: agent.navigation.detourTarget.z }
+        : null,
+      blockedTicks: agent.navigation.blockedTicks,
+      obstacleId: agent.navigation.obstacleId,
+    },
   };
 }
 
