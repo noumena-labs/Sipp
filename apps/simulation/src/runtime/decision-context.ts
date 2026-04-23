@@ -17,14 +17,14 @@ export function buildDecisionContext(perception: AgentPerception): DecisionConte
   if (perception.self.holding === perception.game.bananaObjectId) {
     addCarrierOptions(options, lines, goal);
   } else {
-    addNonCarrierOptions(options, lines, banana, goal, carrier);
+    addNonCarrierOptions(options, lines, banana, carrier);
   }
 
   addAmbientOptions(perception, options, lines);
   options.push({ label: 'wait', goal: { kind: 'wait', label: 'wait' } });
   dedupeOptionsInPlace(options);
 
-  lines.push('Choose your next action from the available options only. Prefer scoring, contesting the banana, or bumping the carrier over sightseeing.');
+  lines.push('Choose your next action from the available options only. Prefer scoring, rushing the banana, or bumping the carrier over hanging back.');
   return { prompt: lines.join('\n'), options };
 }
 
@@ -45,13 +45,18 @@ function addCarrierOptions(
       goal: { kind: 'go_to_object', objectId: goal.id, label: 'run to home base' },
     });
   }
+  if (goal) {
+    options.push({
+      label: 'keep running to base',
+      goal: { kind: 'deliver', objectId: goal.id, label: 'keep running to base' },
+    });
+  }
 }
 
 function addNonCarrierOptions(
   options: DecisionOption[],
   lines: string[],
   banana: PerceivedObject | undefined,
-  goal: PerceivedObject | undefined,
   carrier: PerceivedAgent | undefined
 ): void {
   if (banana && !banana.heldBy) {
@@ -76,23 +81,15 @@ function addNonCarrierOptions(
 
   if (carrier) {
     lines.push(`${carrier.name} has the banana and is ${qualitativeDistance(carrier.distance)}.`);
-    if (carrier.distance <= SABOTAGE_RADIUS) {
+    if (carrier.distance <= SABOTAGE_RADIUS * 1.6) {
       options.push({
         label: `bump ${carrier.name}`,
         goal: { kind: 'sabotage_agent', agentId: carrier.id, label: `bump ${carrier.name}` },
       });
-    } else {
-      options.push({
-        label: `chase ${carrier.name}`,
-        goal: { kind: 'go_to_agent', agentId: carrier.id, label: `chase ${carrier.name}` },
-      });
     }
-  }
-
-  if (!banana && goal) {
     options.push({
-      label: 'guard home base',
-      goal: { kind: 'go_to_object', objectId: goal.id, label: 'guard home base' },
+      label: `chase ${carrier.name}`,
+      goal: { kind: 'go_to_agent', agentId: carrier.id, label: `chase ${carrier.name}` },
     });
   }
 }

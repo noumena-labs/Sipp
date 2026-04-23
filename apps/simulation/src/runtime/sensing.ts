@@ -28,12 +28,20 @@ export function buildPerception(
   const agentRadius = options.agentSightRadius ?? 8;
   const objectRadius = options.objectSightRadius ?? 8;
   const maxNeighbours = options.maxNeighbours ?? 6;
+  const mustSeeAgentIds = new Set<string>();
+  const mustSeeObjectIds = new Set<string>([game.bananaObjectId, game.goalObjectId]);
+
+  for (const other of agents) {
+    if (other.holding === game.bananaObjectId) {
+      mustSeeAgentIds.add(other.id);
+    }
+  }
 
   const nearbyAgents: PerceivedAgent[] = [];
   for (const other of agents) {
     if (other.id === self.id) continue;
     const distance = vec2Distance(self.position, other.position);
-    if (distance > agentRadius) continue;
+    if (distance > agentRadius && !mustSeeAgentIds.has(other.id)) continue;
     nearbyAgents.push({
       id: other.id,
       name: other.name,
@@ -44,13 +52,13 @@ export function buildPerception(
       holding: other.holding,
     });
   }
-  nearbyAgents.sort((a, b) => a.distance - b.distance);
-  nearbyAgents.length = Math.min(nearbyAgents.length, maxNeighbours);
+  nearbyAgents.sort((a, b) => compareByPriority(a.distance, b.distance, mustSeeAgentIds.has(a.id), mustSeeAgentIds.has(b.id)));
+  trimToVisibleCount(nearbyAgents, maxNeighbours, (entry) => mustSeeAgentIds.has(entry.id));
 
   const nearbyObjects: PerceivedObject[] = [];
   for (const obj of objects) {
     const distance = vec2Distance(self.position, obj.position);
-    if (distance > objectRadius) continue;
+    if (distance > objectRadius && !mustSeeObjectIds.has(obj.id)) continue;
     nearbyObjects.push({
       id: obj.id,
       kind: obj.kind,
@@ -65,10 +73,31 @@ export function buildPerception(
       collisionRadius: obj.collisionRadius,
     });
   }
-  nearbyObjects.sort((a, b) => a.distance - b.distance);
-  nearbyObjects.length = Math.min(nearbyObjects.length, maxNeighbours);
+  nearbyObjects.sort((a, b) => compareByPriority(a.distance, b.distance, mustSeeObjectIds.has(a.id), mustSeeObjectIds.has(b.id)));
+  trimToVisibleCount(nearbyObjects, maxNeighbours, (entry) => mustSeeObjectIds.has(entry.id));
 
   return { self, nearbyAgents, nearbyObjects, tick, bounds, directorNote, game };
+}
+
+function compareByPriority(aDistance: number, bDistance: number, aPinned: boolean, bPinned: boolean): number {
+  if (aPinned !== bPinned) {
+    return aPinned ? -1 : 1;
+  }
+  return aDistance - bDistance;
+}
+
+function trimToVisibleCount<T>(entries: T[], maxNeighbours: number, keep: (entry: T) => boolean): void {
+  if (entries.length <= maxNeighbours) return;
+  const pinned = entries.filter(keep);
+  const rest = entries.filter((entry) => !keep(entry));
+  entries.length = 0;
+  for (const entry of pinned) {
+    entries.push(entry);
+  }
+  for (const entry of rest) {
+    if (entries.length >= maxNeighbours) break;
+    entries.push(entry);
+  }
 }
 
 export function vec2Distance(a: Vec2, b: Vec2): number {

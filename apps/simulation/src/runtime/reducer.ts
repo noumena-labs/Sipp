@@ -255,6 +255,7 @@ function processDeliveries(state: MutableWorldState, events: SimulationGameEvent
   for (const agent of state.agents) {
     if (agent.holding !== banana.id) continue;
     if (vec2Distance(agent.position, goal.position) > GOAL_RADIUS) continue;
+    const previousCarrierId = agent.id;
     incrementScore(state.game.score.deliveries, agent.id);
     agent.holding = null;
     agent.intent = null;
@@ -270,6 +271,7 @@ function processDeliveries(state: MutableWorldState, events: SimulationGameEvent
       message: `${agent.name} scores by delivering the banana to home base!`,
     });
     respawnBanana(state, events);
+    clearCarrierPursuits(state, previousCarrierId);
   }
 }
 
@@ -464,6 +466,7 @@ function dropHeldObject(
   message: string
 ): void {
   if (!agent.holding) return;
+  const previousCarrierId = agent.id;
   const held = getObject(state, agent.holding);
   if (held) {
     held.heldBy = null;
@@ -475,7 +478,33 @@ function dropHeldObject(
   agent.goal = null;
   agent.status = 'dropped the banana';
   agent.emotion = 'surprised';
+  clearCarrierPursuits(state, previousCarrierId);
   events.push({ kind: 'drop', agentId: agent.id, objectId, message });
+}
+
+function clearCarrierPursuits(state: MutableWorldState, carrierId: string): void {
+  for (const agent of state.agents) {
+    if (agent.id === carrierId) continue;
+    if (agent.goal?.kind === 'sabotage_agent' && agent.goal.agentId === carrierId) {
+      agent.goal = null;
+      agent.intent = null;
+      continue;
+    }
+    if (agent.goal?.kind === 'go_to_agent' && agent.goal.agentId === carrierId) {
+      agent.goal = null;
+      agent.intent = null;
+      continue;
+    }
+    if (agent.intent?.kind === 'sabotage' && agent.intent.agentId === carrierId) {
+      agent.intent = null;
+      agent.goal = null;
+      continue;
+    }
+    if (agent.intent?.kind === 'approach_agent' && agent.intent.agentId === carrierId) {
+      agent.intent = null;
+      agent.goal = null;
+    }
+  }
 }
 
 function choosePickupWinner(
