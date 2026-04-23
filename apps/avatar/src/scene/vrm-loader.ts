@@ -10,12 +10,20 @@
 
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { VRM, VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+import { VRM, VRMHumanBoneName, VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+
+export interface AvatarLayout {
+  readonly height: number;
+  readonly focusPoint: THREE.Vector3;
+  readonly verticalExtent: number;
+  readonly horizontalExtent: number;
+}
 
 export interface LoadedAvatar {
   readonly root: THREE.Object3D;
   /** Present when a real VRM was loaded; null when using the primitive fallback. */
   readonly vrm: VRM | null;
+  readonly layout: AvatarLayout;
   update(deltaSeconds: number): void;
   dispose(): void;
 }
@@ -39,9 +47,11 @@ export async function loadAvatar(vrmUrl: string | undefined | null): Promise<Loa
     VRMUtils.removeUnnecessaryVertices(gltf.scene);
     VRMUtils.combineSkeletons(gltf.scene);
     vrm.scene.rotation.y = Math.PI; // Face the camera by default.
+    const layout = centerAvatar(vrm.scene, vrm);
     return {
       root: vrm.scene,
       vrm,
+      layout,
       update(delta) {
         vrm.update(delta);
       },
@@ -91,6 +101,7 @@ function createPrimitiveAvatar(): LoadedAvatar {
   return {
     root: group,
     vrm: null,
+    layout: centerAvatar(group, null),
     update() {
       // Primitive avatar is static; gestures are driven by the binding.
     },
@@ -108,5 +119,59 @@ function createPrimitiveAvatar(): LoadedAvatar {
         }
       });
     },
+  };
+}
+
+function centerAvatar(root: THREE.Object3D, vrm: VRM | null): AvatarLayout {
+  const bounds = new THREE.Box3();
+  const center = new THREE.Vector3();
+  const size = new THREE.Vector3();
+  const headPos = new THREE.Vector3();
+
+  root.updateMatrixWorld(true);
+  bounds.setFromObject(root);
+  if (bounds.isEmpty()) {
+    return {
+      height: 1.8,
+      focusPoint: new THREE.Vector3(0, 1.1, 0),
+      verticalExtent: 1.1,
+      horizontalExtent: 0.5,
+    };
+  }
+
+  bounds.getCenter(center);
+  root.position.x -= center.x;
+  root.position.z -= center.z;
+  root.position.y -= bounds.min.y;
+
+  root.updateMatrixWorld(true);
+  bounds.setFromObject(root);
+  bounds.getSize(size);
+
+  const height = Math.max(size.y, 0.8);
+  const centerY = (bounds.min.y + bounds.max.y) * 0.5;
+  const headNode =
+    vrm?.humanoid?.getNormalizedBoneNode(VRMHumanBoneName.Head) ?? root.getObjectByName('head');
+  const headY = headNode
+    ? headNode.getWorldPosition(headPos).y
+    : bounds.max.y - height * 0.12;
+  const focusY = THREE.MathUtils.clamp(
+    THREE.MathUtils.lerp(centerY, headY, 0.35),
+    bounds.min.y + height * 0.38,
+    bounds.max.y - height * 0.12
+  );
+
+  return {
+    height,
+    focusPoint: new THREE.Vector3(0, focusY, 0),
+    verticalExtent: Math.max(focusY - bounds.min.y, bounds.max.y - focusY),
+    horizontalExtent: Math.max(
+      Math.abs(bounds.min.x),
+      Math.abs(bounds.max.x),
+      Math.abs(bounds.min.z),
+      Math.abs(bounds.max.z),
+      size.x * 0.5,
+      0.35
+    ),
   };
 }

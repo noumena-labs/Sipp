@@ -17,11 +17,19 @@ import { ThreeVRMBinding } from '../bindings/three-vrm-binding';
 interface AvatarCanvasProps {
   readonly bus: ActionBus;
   readonly vrmUrl?: string;
+  readonly speaking?: boolean;
   readonly status?: string;
 }
 
-export function AvatarCanvas({ bus, vrmUrl, status }: AvatarCanvasProps) {
+export function AvatarCanvas({ bus, vrmUrl, speaking = false, status }: AvatarCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const bindingRef = useRef<ThreeVRMBinding | null>(null);
+  const speakingRef = useRef(speaking);
+
+  useEffect(() => {
+    speakingRef.current = speaking;
+    bindingRef.current?.setSpeaking(speaking);
+  }, [speaking]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -53,7 +61,10 @@ export function AvatarCanvas({ bus, vrmUrl, status }: AvatarCanvasProps) {
       }
       avatar = loaded;
       sceneHandle.avatarRoot.add(loaded.root);
+      sceneHandle.focusAvatar(loaded.layout);
       binding = new ThreeVRMBinding(bus, loaded);
+      binding.setSpeaking(speakingRef.current);
+      bindingRef.current = binding;
       const offFrame = sceneHandle.onFrame((delta) => binding?.tick(delta));
       // Stash the off-frame on the binding so dispose can call it.
       (binding as unknown as { _off: () => void })._off = offFrame;
@@ -66,6 +77,9 @@ export function AvatarCanvas({ bus, vrmUrl, status }: AvatarCanvasProps) {
         const off = (binding as unknown as { _off?: () => void })._off;
         off?.();
         binding.dispose();
+        if (bindingRef.current === binding) {
+          bindingRef.current = null;
+        }
       }
       if (avatar) {
         avatar.dispose();

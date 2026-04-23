@@ -238,12 +238,14 @@ export default function App() {
   };
 
   const vrmUrl = previewConfig?.assets?.vrm;
+  const speaking = messages.some((message) => message.role === 'assistant' && message.pending);
 
   return (
     <>
       <AvatarCanvas
         bus={bus}
         vrmUrl={vrmUrl}
+        speaking={speaking}
         status={previewResolved ? undefined : 'Loading character preview…'}
       />
       <aside className="side-panel">

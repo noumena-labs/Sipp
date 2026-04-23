@@ -12,6 +12,7 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import * as THREE from 'three';
+import type { AvatarLayout } from './vrm-loader';
 
 export interface SceneHandle {
   readonly renderer: THREE.WebGLRenderer;
@@ -20,9 +21,14 @@ export interface SceneHandle {
   readonly avatarRoot: THREE.Group;
   /** Register a function to be invoked each frame with delta-time (seconds). */
   onFrame(callback: (deltaSeconds: number) => void): () => void;
+  focusAvatar(layout: AvatarLayout): void;
   setSize(width: number, height: number): void;
   dispose(): void;
 }
+
+const DEFAULT_FOCUS = new THREE.Vector3(0, 1.3, 0);
+const MIN_CAMERA_DISTANCE = 1.7;
+const CAMERA_PADDING = 1.35;
 
 export function createScene(container: HTMLElement): SceneHandle {
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -33,8 +39,8 @@ export function createScene(container: HTMLElement): SceneHandle {
   const scene = new THREE.Scene();
 
   const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 20);
-  camera.position.set(0, 1.35, 2.4);
-  camera.lookAt(0, 1.3, 0);
+  camera.position.set(0, DEFAULT_FOCUS.y + 0.05, 2.4);
+  camera.lookAt(DEFAULT_FOCUS);
 
   // Lighting — a hemisphere for fill and a directional for shape.
   const hemi = new THREE.HemisphereLight(0xffffff, 0x223344, 0.9);
@@ -57,6 +63,8 @@ export function createScene(container: HTMLElement): SceneHandle {
 
   const callbacks = new Set<(deltaSeconds: number) => void>();
   const clock = new THREE.Clock();
+  const currentFocus = DEFAULT_FOCUS.clone();
+  let lastLayout: AvatarLayout | null = null;
   let disposed = false;
 
   const tick = (): void => {
@@ -78,6 +86,28 @@ export function createScene(container: HTMLElement): SceneHandle {
     renderer.setSize(safeW, safeH, false);
     camera.aspect = safeW / safeH;
     camera.updateProjectionMatrix();
+    if (lastLayout) {
+      applyCameraLayout(lastLayout);
+    }
+  };
+
+  const applyCameraLayout = (layout: AvatarLayout): void => {
+    lastLayout = layout;
+    const focus = layout.focusPoint;
+    const verticalFov = THREE.MathUtils.degToRad(camera.fov);
+    const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * camera.aspect);
+    const distanceForHeight = layout.verticalExtent / Math.tan(verticalFov / 2);
+    const distanceForWidth = layout.horizontalExtent / Math.tan(horizontalFov / 2);
+    const distance = Math.min(
+      6,
+      Math.max(MIN_CAMERA_DISTANCE, Math.max(distanceForHeight, distanceForWidth) * CAMERA_PADDING)
+    );
+    currentFocus.copy(focus);
+    camera.position.set(0, focus.y + layout.height * 0.03, distance);
+    camera.lookAt(currentFocus);
+    camera.near = 0.1;
+    camera.far = Math.max(20, distance + layout.height * 4);
+    camera.updateProjectionMatrix();
   };
 
   return {
@@ -88,6 +118,9 @@ export function createScene(container: HTMLElement): SceneHandle {
     onFrame(callback) {
       callbacks.add(callback);
       return () => callbacks.delete(callback);
+    },
+    focusAvatar(layout) {
+      applyCameraLayout(layout);
     },
     setSize,
     dispose() {
