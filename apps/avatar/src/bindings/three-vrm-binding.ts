@@ -2,9 +2,9 @@
 //
 // three-vrm-binding.ts
 //
-// - Bridges character ActionBus events onto a loaded VRM (or primitive
-//   fallback) avatar. The binding owns both one-shot gestures and the
-//   continuous idle / facial behavior that runs every frame.
+// - Bridges character ActionBus events onto a loaded VRM. The binding owns
+//   both one-shot gestures and the continuous idle / facial behavior that
+//   runs every frame.
 //
 //////////////////////////////////////////////////////////////////////////////
 
@@ -111,7 +111,7 @@ export class ThreeVRMBinding {
     this.bus = bus;
     this.avatar = avatar;
     this.baseFocus = avatar.layout.focusPoint.clone();
-    this.headMotion = this.getBoneMotion(VRMHumanBoneName.Head, 'head');
+    this.headMotion = this.getBoneMotion(VRMHumanBoneName.Head);
     this.neckMotion = this.getBoneMotion(VRMHumanBoneName.Neck);
     this.chestMotion =
       this.getBoneMotion(VRMHumanBoneName.UpperChest) ??
@@ -121,9 +121,8 @@ export class ThreeVRMBinding {
     this.desiredLookTarget.copy(this.lookTarget.position);
     this.disposers.push(this.bus.on('action', (event) => this.handleAction(event)));
 
-    const vrm = this.avatar.vrm;
-    if (vrm?.lookAt) {
-      vrm.lookAt.target = this.lookTarget;
+    if (this.avatar.vrm.lookAt) {
+      this.avatar.vrm.lookAt.target = this.lookTarget;
     }
   }
 
@@ -155,12 +154,12 @@ export class ThreeVRMBinding {
     this.resetBoneMotion(this.chestMotion);
     this.resetBoneMotion(this.neckMotion);
     this.resetBoneMotion(this.headMotion);
-    const expressionManager = this.avatar.vrm?.expressionManager;
+    const expressionManager = this.avatar.vrm.expressionManager;
     if (expressionManager) {
       expressionManager.resetValues();
       expressionManager.update();
     }
-    if (this.avatar.vrm?.lookAt) {
+    if (this.avatar.vrm.lookAt) {
       this.avatar.vrm.lookAt.target = null;
       this.avatar.vrm.lookAt.reset();
     }
@@ -228,9 +227,7 @@ export class ThreeVRMBinding {
   }
 
   private buildWaveAnimation(): ActiveAnimation {
-    const rightArm = this.avatar.vrm?.humanoid?.getNormalizedBoneNode(VRMHumanBoneName.RightUpperArm);
-    const fallback = this.avatar.root.getObjectByName('armR');
-    const target = rightArm ?? fallback ?? null;
+    const target = this.avatar.vrm.humanoid?.getNormalizedBoneNode(VRMHumanBoneName.RightUpperArm) ?? null;
     const initialRotation = target ? target.rotation.clone() : null;
     const durationSeconds = 1.4;
     return {
@@ -258,7 +255,7 @@ export class ThreeVRMBinding {
   }
 
   private buildNodAnimation(direction: number, axisY = false): ActiveAnimation {
-    const head = this.headMotion?.node ?? this.avatar.root.getObjectByName('head') ?? null;
+    const head = this.headMotion?.node ?? null;
     const initialRotation = head ? head.rotation.clone() : null;
     const durationSeconds = 1.0;
     return {
@@ -373,7 +370,7 @@ export class ThreeVRMBinding {
 
   private updateLookAt(deltaSeconds: number): void {
     const vrm = this.avatar.vrm;
-    if (!vrm?.lookAt) {
+    if (!vrm.lookAt) {
       return;
     }
 
@@ -417,7 +414,7 @@ export class ThreeVRMBinding {
   }
 
   private updateExpressionWeights(deltaSeconds: number): void {
-    const expressionManager = this.avatar.vrm?.expressionManager;
+    const expressionManager = this.avatar.vrm.expressionManager;
     if (!expressionManager) {
       return;
     }
@@ -455,7 +452,7 @@ export class ThreeVRMBinding {
   }
 
   private applyLookAt(target: 'camera' | 'left' | 'right' | 'up' | 'down'): void {
-    const headNode = this.headMotion?.node ?? this.avatar.vrm?.humanoid?.getNormalizedBoneNode(VRMHumanBoneName.Head) ?? this.avatar.root;
+    const headNode = this.headMotion?.node ?? this.avatar.vrm.humanoid?.getNormalizedBoneNode(VRMHumanBoneName.Head) ?? this.avatar.root;
     headNode.getWorldPosition(this.headWorldPos);
     const offset = this.tempVec.set(0, 0, 1.35);
     switch (target) {
@@ -485,10 +482,8 @@ export class ThreeVRMBinding {
     this.gazeOverrideSeconds = GAZE_ACTION_SECONDS;
   }
 
-  private getBoneMotion(humanBoneName: VRMHumanBoneName, fallbackName?: string): BoneMotion | null {
-    const node =
-      this.avatar.vrm?.humanoid?.getNormalizedBoneNode(humanBoneName) ??
-      (fallbackName ? this.avatar.root.getObjectByName(fallbackName) : null);
+  private getBoneMotion(humanBoneName: VRMHumanBoneName): BoneMotion | null {
+    const node = this.avatar.vrm.humanoid?.getNormalizedBoneNode(humanBoneName) ?? null;
     if (!node) {
       return null;
     }

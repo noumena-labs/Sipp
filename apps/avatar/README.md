@@ -46,8 +46,7 @@ Scripts:
   no build-time config.
 - **(Optional) A `.vrm` avatar** at `/avatar.vrm` (or any URL you put in
   `character.json → assets.vrm`). If no VRM is provided or loading fails,
-  the scene falls back to a **primitive capsule figure** with named
-  `head`, `armL`, `armR` meshes so gestures still play.
+  the scene stays empty until a valid avatar is available.
 
 ---
 
@@ -136,8 +135,8 @@ character.json ──► parseCharacterConfig ──► CharacterAgent
 
  - `src/App.tsx` — wires engine + agent + bus + chat UI.
 - `src/scene/scene.ts` — three.js renderer, lighting, animation loop.
-- `src/scene/vrm-loader.ts` — GLTFLoader + `VRMLoaderPlugin` with a
-  primitive fallback.
+- `src/scene/vrm-loader.ts` — GLTFLoader + `VRMLoaderPlugin` with
+  bounds-based centering for successful VRM loads.
 - `src/bindings/three-vrm-binding.ts` — maps `ActionBus` events to VRM
   humanoid bones, expression presets, and lookAt.
 - `src/components/AvatarCanvas.tsx` — mounts the scene and wires resize.
@@ -151,9 +150,6 @@ character.json ──► parseCharacterConfig ──► CharacterAgent
 - **Text-only interaction.** The example intentionally omits speech input,
   speech output, and lipsync while the core chat and action loop is kept
   small and stable.
-- **Primitive fallback is ugly on purpose.** It exists to prove that
-  gestures drive correctly without a VRM asset; ship a real `.vrm` for any
-  demo you'd show someone.
 - **Memory is a plain sliding window.** No summarisation, no vector recall.
   Good enough for short sessions; will forget aggressively across long
   ones.

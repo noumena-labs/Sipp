@@ -76,7 +76,18 @@ export function AvatarCanvas({
     (async () => {
       const loaded = await loadAvatar(vrmUrl);
       if (cancelled || !sceneHandle) {
-        loaded.dispose();
+        loaded?.dispose();
+        return;
+      }
+      if (!loaded) {
+        if (bubbleRef.current) {
+          bubbleRef.current.dispose();
+          bubbleRef.current = null;
+        }
+        if (bindingRef.current) {
+          bindingRef.current.dispose();
+          bindingRef.current = null;
+        }
         return;
       }
       avatar = loaded;
