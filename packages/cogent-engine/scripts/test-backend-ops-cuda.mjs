@@ -778,6 +778,7 @@ const configureArgs = [
 ];
 if (msvcDetails.clPath) {
   configureArgs.push(`-DCMAKE_CUDA_HOST_COMPILER=${normalizeHostPath(msvcDetails.clPath)}`);
+  configureArgs.push(`-DCMAKE_ASM_COMPILER=${normalizeHostPath(msvcDetails.clPath)}`);
 }
 if (buildConfig.makeProgram) {
   configureArgs.push(`-DCMAKE_MAKE_PROGRAM=${buildConfig.makeProgram}`);
