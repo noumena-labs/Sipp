@@ -36,13 +36,14 @@ export function ControlsPanel({
 }: ControlsPanelProps) {
   const [cfg, setCfg] = useState(characterUrl);
   const [model, setModel] = useState(modelUrl);
-  const [expanded, setExpanded] = useState(modelUrl.trim().length === 0);
 
   useEffect(() => {
-    if (loaded) {
-      setExpanded(false);
-    }
-  }, [loaded]);
+    setCfg(characterUrl);
+  }, [characterUrl]);
+
+  useEffect(() => {
+    setModel(modelUrl);
+  }, [modelUrl]);
 
   const handleSubmit = (event: FormEvent): void => {
     event.preventDefault();
@@ -68,16 +69,32 @@ export function ControlsPanel({
       <div className="status-line">{status}</div>
 
       <form className="controls-form" onSubmit={handleSubmit}>
+        <div className="controls-fields">
+          <label className="field-label">
+            <span>character.json URL</span>
+            <input
+              type="text"
+              value={cfg}
+              onChange={(event) => setCfg(event.target.value)}
+              disabled={busy}
+              placeholder="/character.json"
+            />
+          </label>
+          <label className="field-label">
+            <span>Model (.gguf) URL</span>
+            <input
+              type="url"
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              disabled={busy}
+              placeholder="https://huggingface.co/.../model.gguf"
+            />
+          </label>
+        </div>
+
         <div className="controls-toolbar">
           <button type="submit" disabled={busy || cfg.trim().length === 0 || model.trim().length === 0}>
-            {loaded ? 'Reload Model' : 'Load Model'}
-          </button>
-          <button
-            type="button"
-            className="secondary-button"
-            onClick={() => setExpanded((open) => !open)}
-          >
-            {expanded ? 'Hide Setup' : 'Setup'}
+            {loaded ? 'Reload Model' : 'Load Character + Model'}
           </button>
           {loaded && onReset ? (
             <button type="button" className="secondary-button" onClick={onReset} disabled={busy}>
@@ -85,31 +102,6 @@ export function ControlsPanel({
             </button>
           ) : null}
         </div>
-
-        {expanded ? (
-          <div className="controls-fields">
-            <label className="field-label">
-              <span>character.json URL</span>
-              <input
-                type="text"
-                value={cfg}
-                onChange={(event) => setCfg(event.target.value)}
-                disabled={busy}
-                placeholder="/character.json"
-              />
-            </label>
-            <label className="field-label">
-              <span>Model (.gguf) URL</span>
-              <input
-                type="url"
-                value={model}
-                onChange={(event) => setModel(event.target.value)}
-                disabled={busy}
-                placeholder="https://huggingface.co/.../model.gguf"
-              />
-            </label>
-          </div>
-        ) : null}
       </form>
     </div>
   );

@@ -2,8 +2,11 @@
 //
 // speech-bubble.ts
 //
-// - Renders a world-space billboard bubble above the avatar head using a
-//   canvas texture so long streaming text stays readable and cheap to update.
+// - Renders a fluffy, hovering white cloud above the avatar head.
+// - Cloud silhouette built from a cluster of overlapping spheres with an
+//   unlit soft-white shader (subtle vertical gradient + rim feathering).
+// - Streamed assistant text drawn to a CanvasTexture on a transparent plane
+//   tucked inside the cloud silhouette.
 //
 //////////////////////////////////////////////////////////////////////////////
 
@@ -12,13 +15,69 @@ import type { LoadedAvatar } from './vrm-loader';
 import { getAvatarHeadNode } from './vrm-loader';
 
 const CANVAS_WIDTH = 1024;
-const CANVAS_HEIGHT = 640;
-const MAX_LINES = 6;
-const TEXT_FONT = '600 52px "Trebuchet MS", "Segoe UI", sans-serif';
-const LABEL_FONT = '600 24px "Segoe UI", sans-serif';
-const TEXT_LINE_HEIGHT = 68;
-const TEXT_AREA_WIDTH = 828;
-const FLOAT_SPEED = 1.75;
+const CANVAS_HEIGHT = 320;
+const MAX_LINES = 5;
+const TEXT_FONT = '600 38px "Trebuchet MS", "Segoe UI", sans-serif';
+const TEXT_LINE_HEIGHT = 46;
+const TEXT_AREA_WIDTH = 820;
+const FLOAT_SPEED = 1.4;
+const FLOAT_AMPLITUDE = 0.028;
+const BUBBLE_SCALE_MULTIPLIER = 0.5;
+const BUBBLE_CAMERA_PULL = 0.08;
+const BUBBLE_HORIZONTAL_RATIO = 0.3;
+const BUBBLE_VERTICAL_RATIO = 0.16;
+const BUBBLE_VERTICAL_BIAS = 0.15;
+
+// Unlit cloud shader: soft white body with a gentle top-to-bottom gradient
+// and a feathered rim that fades at glancing angles, giving volumetric read.
+const CLOUD_VERTEX_SHADER = `
+varying vec3 vNormal;
+varying vec3 vViewDir;
+varying vec3 vLocalPos;
+
+void main() {
+  vLocalPos = position;
+  vec4 worldPos = modelMatrix * vec4(position, 1.0);
+  vec4 viewPos = viewMatrix * worldPos;
+  vNormal = normalize(normalMatrix * normal);
+  vViewDir = normalize(-viewPos.xyz);
+  gl_Position = projectionMatrix * viewPos;
+}
+`;
+
+const CLOUD_FRAGMENT_SHADER = `
+uniform vec3 uTopColor;
+uniform vec3 uBottomColor;
+uniform vec3 uShadowColor;
+uniform float uOpacity;
+uniform float uGradientCenter;
+
+varying vec3 vNormal;
+varying vec3 vViewDir;
+varying vec3 vLocalPos;
+
+void main() {
+  vec3 n = normalize(vNormal);
+  vec3 v = normalize(vViewDir);
+  float facing = clamp(dot(n, v), 0.0, 1.0);
+
+  // Vertical gradient across the puff: brighter near the top, softly
+  // shadowed underneath so the cloud reads as lit from above.
+  float vertical = clamp(vLocalPos.y / max(uGradientCenter, 0.0001) * 0.5 + 0.5, 0.0, 1.0);
+  float gradient = smoothstep(0.1, 0.9, vertical);
+  vec3 base = mix(uBottomColor, uTopColor, gradient);
+
+  // Under-shadow on the bottom faces, very subtle.
+  float underShadow = smoothstep(0.55, 0.0, vertical) * 0.22;
+  base = mix(base, uShadowColor, underShadow);
+
+  // Feather the silhouette so sphere seams dissolve into the cloud edge.
+  float edge = pow(facing, 1.6);
+  float alpha = uOpacity * smoothstep(0.02, 0.55, edge);
+
+  gl_FragColor = vec4(base, alpha);
+}
+`;
 
 interface SpeechBubbleOptions {
   readonly scene: THREE.Scene;
@@ -26,17 +85,53 @@ interface SpeechBubbleOptions {
   readonly avatar: LoadedAvatar;
 }
 
+interface CloudUniforms {
+  readonly uTopColor: THREE.IUniform<THREE.Color>;
+  readonly uBottomColor: THREE.IUniform<THREE.Color>;
+  readonly uShadowColor: THREE.IUniform<THREE.Color>;
+  readonly uOpacity: THREE.IUniform<number>;
+  readonly uGradientCenter: THREE.IUniform<number>;
+}
+
+type CloudMaterial = THREE.ShaderMaterial & {
+  readonly uniforms: CloudUniforms;
+};
+
+interface CloudPuff {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  readonly radius: number;
+}
+
+// Hand-authored cluster that reads as a rounded, slightly wider-than-tall
+// cartoon cloud. Coordinates are in the bubble's local space; Y up.
+const CLOUD_PUFFS: readonly CloudPuff[] = [
+  { x: 0.0, y: 0.02, z: 0.0, radius: 0.46 },
+  { x: -0.52, y: -0.02, z: 0.0, radius: 0.38 },
+  { x: 0.52, y: -0.02, z: 0.0, radius: 0.38 },
+  { x: -0.28, y: 0.26, z: 0.04, radius: 0.34 },
+  { x: 0.28, y: 0.26, z: 0.04, radius: 0.34 },
+  { x: -0.78, y: -0.08, z: -0.02, radius: 0.26 },
+  { x: 0.78, y: -0.08, z: -0.02, radius: 0.26 },
+  { x: 0.0, y: 0.34, z: 0.02, radius: 0.3 },
+  { x: -0.18, y: -0.26, z: 0.02, radius: 0.3 },
+  { x: 0.22, y: -0.28, z: 0.02, radius: 0.3 },
+  { x: -0.6, y: -0.26, z: 0.0, radius: 0.22 },
+  { x: 0.6, y: -0.26, z: 0.0, radius: 0.22 },
+];
+
+const CLOUD_HALF_HEIGHT = 0.55;
+
 export class SpeechBubble {
   private readonly scene: THREE.Scene;
   private readonly camera: THREE.PerspectiveCamera;
   private readonly avatar: LoadedAvatar;
   private readonly headNode: THREE.Object3D | null;
   private readonly root = new THREE.Group();
-  private readonly glowMaterial: THREE.MeshBasicMaterial;
-  private readonly backMaterial: THREE.MeshBasicMaterial;
-  private readonly frontMaterial: THREE.MeshBasicMaterial;
-  private readonly tailBackMaterial: THREE.MeshBasicMaterial;
-  private readonly tailFrontMaterial: THREE.MeshBasicMaterial;
+  private readonly cloudGroup = new THREE.Group();
+  private readonly cloudMaterial: CloudMaterial;
+  private readonly faceMaterial: THREE.MeshBasicMaterial;
   private readonly canvas: HTMLCanvasElement;
   private readonly context: CanvasRenderingContext2D;
   private readonly texture: THREE.CanvasTexture;
@@ -56,7 +151,9 @@ export class SpeechBubble {
     this.camera = camera;
     this.avatar = avatar;
     this.headNode = getAvatarHeadNode(avatar);
-    this.scale = THREE.MathUtils.clamp(this.avatar.layout.height / 1.8, 0.86, 1.16);
+    this.scale =
+      THREE.MathUtils.clamp(this.avatar.layout.height / 1.8, 0.86, 1.16) *
+      BUBBLE_SCALE_MULTIPLIER;
 
     this.canvas = document.createElement('canvas');
     this.canvas.width = CANVAS_WIDTH;
@@ -73,81 +170,35 @@ export class SpeechBubble {
     this.texture.magFilter = THREE.LinearFilter;
     this.texture.generateMipmaps = false;
 
-    const glow = new THREE.Mesh(
-      new THREE.PlaneGeometry(1.86, 1.18),
-      new THREE.MeshBasicMaterial({
-        color: 0x7bc4ff,
-        transparent: true,
-        opacity: 0,
-        depthWrite: false,
-        depthTest: false,
-        toneMapped: false,
-      })
-    );
-    glow.position.z = -0.05;
-    this.glowMaterial = glow.material as THREE.MeshBasicMaterial;
+    this.cloudMaterial = createCloudMaterial();
 
-    const backPlate = new THREE.Mesh(
-      new THREE.PlaneGeometry(1.56, 0.98),
-      new THREE.MeshBasicMaterial({
-        color: 0x26123e,
-        transparent: true,
-        opacity: 0,
-        depthWrite: false,
-        depthTest: false,
-        toneMapped: false,
-      })
-    );
-    backPlate.position.set(0.04, -0.03, -0.03);
-    this.backMaterial = backPlate.material as THREE.MeshBasicMaterial;
+    const puffGeometry = new THREE.SphereGeometry(1, 32, 24);
+    for (const puff of CLOUD_PUFFS) {
+      const mesh = new THREE.Mesh(puffGeometry, this.cloudMaterial);
+      mesh.position.set(puff.x, puff.y, puff.z);
+      mesh.scale.setScalar(puff.radius);
+      mesh.renderOrder = 10;
+      this.cloudGroup.add(mesh);
+    }
 
-    const frontPlate = new THREE.Mesh(
-      new THREE.PlaneGeometry(1.48, 0.92),
+    const face = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.6, 0.62),
       new THREE.MeshBasicMaterial({
         map: this.texture,
         transparent: true,
         opacity: 0,
         depthWrite: false,
-        depthTest: false,
+        depthTest: true,
         toneMapped: false,
       })
     );
-    this.frontMaterial = frontPlate.material as THREE.MeshBasicMaterial;
+    face.position.set(0, 0.04, 0.48);
+    face.renderOrder = 12;
+    this.faceMaterial = face.material as THREE.MeshBasicMaterial;
 
-    const tailBack = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.2, 0.2),
-      new THREE.MeshBasicMaterial({
-        color: 0x26123e,
-        transparent: true,
-        opacity: 0,
-        depthWrite: false,
-        depthTest: false,
-        toneMapped: false,
-      })
-    );
-    tailBack.position.set(-0.36, -0.53, -0.03);
-    tailBack.rotation.z = Math.PI / 4;
-    this.tailBackMaterial = tailBack.material as THREE.MeshBasicMaterial;
-
-    const tailFront = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.16, 0.16),
-      new THREE.MeshBasicMaterial({
-        color: 0x90d8ff,
-        transparent: true,
-        opacity: 0,
-        depthWrite: false,
-        depthTest: false,
-        toneMapped: false,
-      })
-    );
-    tailFront.position.set(-0.34, -0.5, 0.01);
-    tailFront.rotation.z = Math.PI / 4;
-    this.tailFrontMaterial = tailFront.material as THREE.MeshBasicMaterial;
-
-    this.root.add(glow, backPlate, tailBack, tailFront, frontPlate);
+    this.root.add(this.cloudGroup, face);
     this.root.scale.setScalar(this.scale);
     this.root.visible = false;
-    this.root.renderOrder = 10;
     this.scene.add(this.root);
   }
 
@@ -208,43 +259,27 @@ export class SpeechBubble {
       return;
     }
 
-    const gradient = context.createLinearGradient(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-    gradient.addColorStop(0, 'rgba(144, 216, 255, 0.96)');
-    gradient.addColorStop(0.42, 'rgba(172, 199, 255, 0.94)');
-    gradient.addColorStop(1, 'rgba(211, 191, 255, 0.94)');
-    drawRoundedRect(context, 40, 28, CANVAS_WIDTH - 92, CANVAS_HEIGHT - 86, 70);
-    context.fillStyle = gradient;
-    context.fill();
-
-    context.lineWidth = 8;
-    context.strokeStyle = 'rgba(255, 255, 255, 0.85)';
-    context.stroke();
-
-    context.fillStyle = 'rgba(255, 255, 255, 0.16)';
-    drawRoundedRect(context, 76, 64, CANVAS_WIDTH - 244, 92, 44);
-    context.fill();
-
-    context.fillStyle = '#25113b';
-    context.font = LABEL_FONT;
-    context.fillText('Reply', 110, 122);
-
-    context.fillStyle = '#150a29';
     context.font = TEXT_FONT;
+    context.textBaseline = 'alphabetic';
+    context.fillStyle = '#2a2550';
+    context.shadowColor = 'rgba(255, 255, 255, 0.9)';
+    context.shadowBlur = 10;
+    context.shadowOffsetX = 0;
+    context.shadowOffsetY = 0;
+
     const { lines, truncated } = wrapText(context, displayText, TEXT_AREA_WIDTH, MAX_LINES);
     const bubbleLines = truncated ? appendEllipsis(lines) : lines;
+
+    const totalHeight = bubbleLines.length * TEXT_LINE_HEIGHT;
+    const startY = (CANVAS_HEIGHT - totalHeight) / 2 + TEXT_LINE_HEIGHT * 0.75;
+
     bubbleLines.forEach((line, index) => {
-      context.fillText(line, 110, 218 + index * TEXT_LINE_HEIGHT);
+      const metrics = context.measureText(line);
+      const x = (CANVAS_WIDTH - metrics.width) / 2;
+      context.fillText(line, x, startY + index * TEXT_LINE_HEIGHT);
     });
 
-    if (this.pending) {
-      context.fillStyle = 'rgba(34, 13, 71, 0.64)';
-      drawRoundedRect(context, CANVAS_WIDTH - 206, CANVAS_HEIGHT - 130, 110, 56, 24);
-      context.fill();
-      context.fillStyle = '#ffffff';
-      context.font = '700 26px "Segoe UI", sans-serif';
-      context.fillText('LIVE', CANVAS_WIDTH - 177, CANVAS_HEIGHT - 92);
-    }
-
+    context.shadowBlur = 0;
     this.texture.needsUpdate = true;
   }
 
@@ -255,25 +290,48 @@ export class SpeechBubble {
       this.headWorld.set(0, this.avatar.layout.focusPoint.y + this.avatar.layout.height * 0.3, 0);
     }
 
-    this.cameraOffset.copy(this.camera.position).sub(this.headWorld).normalize().multiplyScalar(0.18);
-    const verticalOffset = this.avatar.layout.height * 0.18 + 0.2;
-    const floatOffset = Math.sin(this.elapsedSeconds * FLOAT_SPEED) * 0.03;
+    this.cameraOffset
+      .copy(this.camera.position)
+      .sub(this.headWorld)
+      .normalize()
+      .multiplyScalar(BUBBLE_CAMERA_PULL);
+    const verticalOffset = this.avatar.layout.height * BUBBLE_VERTICAL_RATIO + BUBBLE_VERTICAL_BIAS;
+    const floatOffset = Math.sin(this.elapsedSeconds * FLOAT_SPEED) * FLOAT_AMPLITUDE;
+    const driftX = Math.sin(this.elapsedSeconds * FLOAT_SPEED * 0.6) * 0.012;
 
     this.worldTarget.copy(this.headWorld);
-    this.worldTarget.x += this.cameraOffset.x;
+    this.worldTarget.x += this.cameraOffset.x + driftX;
+    this.worldTarget.x += this.avatar.layout.height * BUBBLE_HORIZONTAL_RATIO;
     this.worldTarget.y += verticalOffset + floatOffset;
     this.worldTarget.z += this.cameraOffset.z;
     this.root.position.copy(this.worldTarget);
-    this.root.scale.setScalar(this.scale * (0.92 + this.visibility * 0.08));
+    this.root.scale.setScalar(this.scale * (0.95 + this.visibility * 0.05));
   }
 
   private updateMaterials(): void {
-    this.glowMaterial.opacity = this.visibility * 0.16;
-    this.backMaterial.opacity = this.visibility * 0.95;
-    this.frontMaterial.opacity = this.visibility;
-    this.tailBackMaterial.opacity = this.visibility * 0.95;
-    this.tailFrontMaterial.opacity = this.visibility;
+    this.cloudMaterial.uniforms.uOpacity.value = this.visibility;
+    this.faceMaterial.opacity = this.visibility;
   }
+}
+
+function createCloudMaterial(): CloudMaterial {
+  const uniforms: CloudUniforms = {
+    uTopColor: { value: new THREE.Color('#ffffff') },
+    uBottomColor: { value: new THREE.Color('#eef2ff') },
+    uShadowColor: { value: new THREE.Color('#c9d3ef') },
+    uOpacity: { value: 0 },
+    uGradientCenter: { value: CLOUD_HALF_HEIGHT },
+  };
+
+  return new THREE.ShaderMaterial({
+    uniforms,
+    vertexShader: CLOUD_VERTEX_SHADER,
+    fragmentShader: CLOUD_FRAGMENT_SHADER,
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    toneMapped: false,
+  }) as CloudMaterial;
 }
 
 function wrapText(
@@ -370,22 +428,4 @@ function appendEllipsis(lines: string[]): string[] {
   const lastLine = result[result.length - 1] ?? '';
   result[result.length - 1] = `${lastLine.replace(/[\s.]+$/u, '')}...`;
   return result;
-}
-
-function drawRoundedRect(
-  context: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  radius: number
-): void {
-  const safeRadius = Math.min(radius, width / 2, height / 2);
-  context.beginPath();
-  context.moveTo(x + safeRadius, y);
-  context.arcTo(x + width, y, x + width, y + height, safeRadius);
-  context.arcTo(x + width, y + height, x, y + height, safeRadius);
-  context.arcTo(x, y + height, x, y, safeRadius);
-  context.arcTo(x, y, x + width, y, safeRadius);
-  context.closePath();
 }

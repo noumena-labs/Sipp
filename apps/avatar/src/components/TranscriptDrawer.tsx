@@ -69,21 +69,23 @@ export function TranscriptDrawer({
                 : '[No visible response generated.]';
               return (
                 <article key={message.id} className={`transcript-entry ${message.role}`}>
-                  <div className="transcript-meta">
-                    <span className="transcript-role">
-                      {message.role === 'user' ? 'You' : characterName}
-                    </span>
-                    {message.pending ? <span className="transcript-pending">Typing</span> : null}
-                  </div>
-                  {message.actions.length > 0 ? (
-                    <div className="transcript-actions">
-                      {message.actions.map((action, index) => (
-                        <span key={`${message.id}-${index}`} className="action-chip" title={action.name}>
-                          {action.label}
-                        </span>
-                      ))}
+                  <div className="transcript-meta-row">
+                    <div className="transcript-meta">
+                      <span className="transcript-role">
+                        {message.role === 'user' ? 'You' : characterName}
+                      </span>
+                      {message.pending ? <span className="transcript-pending">Typing</span> : null}
                     </div>
-                  ) : null}
+                    {message.actions.length > 0 ? (
+                      <div className="transcript-actions">
+                        {message.actions.map((action, index) => (
+                          <span key={`${message.id}-${index}`} className="action-chip" title={action.name}>
+                            {action.label}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
                   <div className="transcript-text">
                     {message.text.trim().length > 0 ? message.text : fallbackText}
                     {message.pending ? <span className="cursor">▍</span> : null}

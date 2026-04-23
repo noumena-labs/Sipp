@@ -215,7 +215,7 @@ textarea:focus {
   padding: 18px;
   border-radius: 26px;
   display: grid;
-  gap: 14px;
+  gap: 12px;
 }
 
 .controls-header {
@@ -275,18 +275,23 @@ textarea:focus {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+  align-items: center;
 }
 
 .controls-fields {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .field-label {
   display: grid;
-  gap: 7px;
+  gap: 6px;
   font-size: 12px;
   color: rgba(219, 237, 255, 0.76);
+}
+
+.controls-toolbar > button:first-child {
+  min-width: 196px;
 }
 
 .secondary-button {
@@ -429,48 +434,69 @@ textarea:focus {
   min-height: 0;
   overflow-y: auto;
   padding-right: 4px;
-  display: grid;
-  gap: 12px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 6px;
 }
 
 .transcript-empty {
-  align-self: start;
-  padding: 18px;
-  border-radius: 22px;
+  align-self: stretch;
+  padding: 14px 16px;
+  border-radius: 16px;
   background: rgba(255, 255, 255, 0.04);
   color: rgba(213, 232, 255, 0.76);
-  line-height: 1.55;
+  line-height: 1.5;
+  font-size: 13px;
 }
 
 .transcript-entry {
-  padding: 14px 14px 16px;
-  border-radius: 22px;
+  padding: 6px 12px 8px;
+  border-radius: 14px;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: fit-content;
+  max-width: calc(100% - 18px);
+  flex: 0 0 auto;
 }
 
 .transcript-entry.user {
-  background: rgba(112, 155, 255, 0.16);
+  background: rgba(112, 155, 255, 0.14);
   border-color: rgba(144, 188, 255, 0.18);
+  align-self: flex-end;
+  margin-right: 6px;
 }
 
 .transcript-entry.assistant {
   background: rgba(255, 255, 255, 0.05);
+  align-self: flex-start;
+  margin-left: 6px;
+}
+
+.transcript-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .transcript-meta {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .transcript-role,
 .transcript-pending {
-  font-size: 11px;
-  letter-spacing: 0.14em;
+  font-size: 10px;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
+  line-height: 1;
 }
 
 .transcript-role {
@@ -484,14 +510,15 @@ textarea:focus {
 .transcript-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 10px;
+  gap: 4px;
 }
 
 .transcript-text {
   white-space: pre-wrap;
-  line-height: 1.6;
+  line-height: 1.4;
   color: #eff5ff;
+  font-size: 14px;
+  margin: 0;
 }
 
 .action-chip {
@@ -591,6 +618,14 @@ textarea:focus {
   .controls-toolbar,
   .chat-composer-row {
     grid-template-columns: 1fr;
+  }
+
+  .controls-toolbar {
+    display: grid;
+  }
+
+  .controls-toolbar > button:first-child {
+    min-width: 0;
   }
 
   .history-toggle {
