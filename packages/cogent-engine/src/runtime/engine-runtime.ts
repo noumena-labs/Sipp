@@ -5,11 +5,11 @@ import {
   GenerateRequestId,
   GenerateResponse,
   InferenceInitConfig,
-  ModelBundleDescriptor,
+  InternalBundleDescriptor,
   ModelLoadInfo,
   PromptOptions,
-  PreparedModelBundle,
-  PrepareModelBundleOptions,
+  StagedModelBundle,
+  StageModelBundleOptions,
   RuntimeAggregateObservabilityMetrics,
   TransportObservability,
 } from '../types.js';
@@ -18,22 +18,22 @@ export type { CogentConfig };
 
 export interface EngineRuntime {
   getExecutionMode(): EngineExecutionMode;
-  getLastModelLoadInfo(): ModelLoadInfo | null;
+  getStagedModelInfo(): ModelLoadInfo | null;
   getTransportObservability(): TransportObservability;
   initModule(): Promise<void>;
-  loadModelFromUrl(
+  stageModelUrl(
     url: string,
     destFileName?: string,
     onProgress?: (pct: number) => void,
     signal?: AbortSignal
   ): Promise<string>;
-  loadModelFromFile(
+  stageModelFile(
     file: File,
     destFileName?: string,
     onProgress?: (pct: number) => void,
     signal?: AbortSignal
   ): Promise<string>;
-  loadModelFromReadableStream(
+  stageModelStream(
     stream: ReadableStream<Uint8Array>,
     destFileName?: string,
     options?: {
@@ -42,39 +42,39 @@ export interface EngineRuntime {
       signal?: AbortSignal;
     }
   ): Promise<string>;
-  loadModelFromBuffer(buffer: Uint8Array, destFileName?: string): string;
-  loadModelFromFileShards(
+  stageModelBuffer(buffer: Uint8Array, destFileName?: string): string;
+  stageModelFiles(
     files: File[],
     onProgress?: (pct: number) => void,
     signal?: AbortSignal
   ): Promise<string>;
-  loadModelFromUrls(
+  stageModelUrls(
     urls: string[],
     onProgress?: (pct: number) => void,
     signal?: AbortSignal
   ): Promise<string>;
-  prepareModelBundle(
-    descriptor: ModelBundleDescriptor,
-    options?: PrepareModelBundleOptions
-  ): Promise<PreparedModelBundle>;
-  initEngine(
-    modelPathOrBundle: string | PreparedModelBundle,
+  stageModelBundle(
+    descriptor: InternalBundleDescriptor,
+    options?: StageModelBundleOptions
+  ): Promise<StagedModelBundle>;
+  loadRuntimeModel(
+    modelPathOrBundle: string | StagedModelBundle,
     config?: InferenceInitConfig
   ): Promise<void>;
   close(): void;
-  getChatTemplate(): string | null;
-  getMediaMarker(): string | null;
-  cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean>;
-  queuePrompt(
+  readChatTemplate(): string | null;
+  readMediaMarker(): string | null;
+  cancelQuery(requestId: GenerateRequestId): Promise<boolean>;
+  enqueueQuery(
     contextKey: string,
     promptText: string,
     options?: number | PromptOptions
   ): Promise<GenerateRequestId>;
-  runQueuedRequest(
+  awaitQuery(
     requestId: GenerateRequestId,
     options?: { signal?: AbortSignal }
   ): Promise<GenerateResponse>;
-  submitPrompt(
+  executeQuery(
     contextKey: string,
     promptText: string,
     options?: number | PromptOptions

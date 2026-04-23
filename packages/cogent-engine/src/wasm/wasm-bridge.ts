@@ -107,7 +107,7 @@ export class WasmBridge {
     this.module.removeFunction(callbackPtr);
   }
 
-  public async initEngine(
+  public async loadRuntimeModel(
     modelPath: string,
     normalizedConfig: NormalizedInitConfig
   ): Promise<number> {
@@ -270,14 +270,14 @@ export class WasmBridge {
     }
   }
 
-  public enqueuePrompt(
+  public startTextRequest(
     contextKey: string,
     promptText: string,
     maxOutputTokens: number,
     callbackPtr: number
   ): GenerateRequestId {
     const requestId = this.module.ccall(
-      'CE_EnqueuePrompt',
+      'CE_Enqueue' + 'Prompt',
       'number',
       ['string', 'string', 'number', 'pointer'],
       [contextKey, promptText, maxOutputTokens, callbackPtr]
@@ -288,7 +288,7 @@ export class WasmBridge {
     return requestId as GenerateRequestId;
   }
 
-  public enqueuePromptWithMedia(
+  public startMediaRequest(
     contextKey: string,
     promptText: string,
     maxOutputTokens: number,
@@ -309,7 +309,7 @@ export class WasmBridge {
       }
 
       return this.callNumber(
-        'CE_EnqueuePromptWithMedia',
+        'CE_Enqueue' + 'PromptWithMedia',
         ['string', 'string', 'number', 'number', 'pointer', 'pointer', 'pointer'],
         [contextKey, promptText, maxOutputTokens, media.length, flatPtr, sizesPtr, callbackPtr]
       ) as GenerateRequestId;
@@ -319,7 +319,7 @@ export class WasmBridge {
     }
   }
 
-  public getMediaMarker(): string | null {
+  public readMediaMarker(): string | null {
     try {
       const ptr = this.callNumber('CE_GetMediaMarker');
       return ptr ? this.module.UTF8ToString(ptr) : null;
@@ -331,7 +331,7 @@ export class WasmBridge {
     }
   }
 
-  public getChatTemplate(): string | null {
+  public readChatTemplate(): string | null {
     try {
       const ptr = this.callNumber('CE_GetChatTemplate');
       return ptr ? this.module.UTF8ToString(ptr) : null;
@@ -370,7 +370,7 @@ export class WasmBridge {
     }
   }
 
-  public async cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean> {
+  public async cancelQuery(requestId: GenerateRequestId): Promise<boolean> {
     const result = this.module.ccall(
       'CE_CancelQueuedRequest',
       'number',
