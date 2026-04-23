@@ -17,8 +17,10 @@ import {
   type CharacterConfig,
 } from 'cogent-engine/character';
 import { AvatarCanvas } from './components/AvatarCanvas';
-import { ChatPanel, type ChatMessage } from './components/ChatPanel';
+import { ChatComposer } from './components/ChatComposer';
 import { ControlsPanel } from './components/ControlsPanel';
+import { TranscriptDrawer } from './components/TranscriptDrawer';
+import type { ChatMessage } from './components/chat-types';
 
 const DEFAULT_CHARACTER_URL = '/character.json';
 
@@ -37,6 +39,7 @@ export default function App() {
   const [previewConfig, setPreviewConfig] = useState<CharacterConfig | null>(null);
   const [previewResolved, setPreviewResolved] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   // The bus is created once per app lifetime and reused across harness
   // reloads so the scene binding is stable.
   const bus = useMemo(() => new ActionBus(), []);
@@ -102,6 +105,8 @@ export default function App() {
   }, []);
 
   const handleLoad = async (args: { characterUrl: string; modelUrl: string }): Promise<void> => {
+    abortRef.current?.abort();
+    abortRef.current = null;
     setCharacterUrl(args.characterUrl);
     setModelUrl(args.modelUrl);
     setBusy(true);
@@ -141,6 +146,7 @@ export default function App() {
       }
       setHarness({ engine, agent, config });
       setMessages([]);
+      setDrawerOpen(false);
       setStatus(`Ready. Character: ${config.persona.name}.`);
     } catch (error) {
       console.error(error);
@@ -210,7 +216,9 @@ export default function App() {
                     ...msg,
                     text:
                       event.finalText.trim().length === 0 && msg.actions.length === 0
-                        ? '[No visible response generated.]'
+                        ? event.cancelled
+                          ? '[Response interrupted.]'
+                          : '[No visible response generated.]'
                         : event.finalText,
                     pending: false,
                   }
@@ -232,34 +240,82 @@ export default function App() {
   };
 
   const handleReset = (): void => {
+    abortRef.current?.abort();
+    abortRef.current = null;
     harness?.agent.clearMemory();
     setMessages([]);
     setStatus('Memory cleared.');
+    setDrawerOpen(false);
   };
 
   const vrmUrl = previewConfig?.assets?.vrm;
-  const speaking = messages.some((message) => message.role === 'assistant' && message.pending);
+  const latestAssistantMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === 'assistant');
+  const speaking =
+    latestAssistantMessage?.pending === true && latestAssistantMessage.text.trim().length > 0;
+  const characterName =
+    previewConfig?.persona.name ?? harness?.config.persona.name ?? 'Companion';
+  const personaSummary =
+    previewConfig?.persona.summary ??
+    harness?.config.persona.summary ??
+    'A warm, playful stage companion.';
+  const setupStatus = previewResolved ? status : 'Loading character preview…';
 
   return (
-    <>
-      <AvatarCanvas
-        bus={bus}
-        vrmUrl={vrmUrl}
-        speaking={speaking}
-        status={previewResolved ? undefined : 'Loading character preview…'}
-      />
-      <aside className="side-panel">
-        <ControlsPanel
-          characterUrl={characterUrl}
-          modelUrl={modelUrl}
-          status={status}
-          busy={busy}
-          loaded={harness != null}
-          onLoad={handleLoad}
-          onReset={handleReset}
+    <div className="avatar-app">
+      <div className="stage-shell">
+        <AvatarCanvas
+          bus={bus}
+          vrmUrl={vrmUrl}
+          speaking={speaking}
+          bubbleText={latestAssistantMessage?.text ?? ''}
+          bubblePending={latestAssistantMessage?.pending ?? false}
         />
-        <ChatPanel messages={messages} onSend={handleSend} disabled={!harness || busy} />
-      </aside>
-    </>
+
+        <div className="stage-overlay stage-top-left">
+          <ControlsPanel
+            characterUrl={characterUrl}
+            modelUrl={modelUrl}
+            characterName={characterName}
+            personaSummary={personaSummary}
+            status={setupStatus}
+            busy={busy}
+            loaded={harness != null}
+            onLoad={handleLoad}
+            onReset={handleReset}
+          />
+        </div>
+
+        <div className="stage-overlay stage-top-right">
+          <button
+            type="button"
+            className={`history-toggle glass-panel${drawerOpen ? ' active' : ''}`}
+            onClick={() => setDrawerOpen((open) => !open)}
+            aria-expanded={drawerOpen}
+            aria-controls="transcript-drawer"
+          >
+            <span className="panel-eyebrow">Transcript</span>
+            <span className="history-toggle-label">Full chat log</span>
+            <span className="history-toggle-count">{String(messages.length).padStart(2, '0')}</span>
+          </button>
+        </div>
+
+        <div className="stage-overlay stage-bottom">
+          <ChatComposer
+            onSend={handleSend}
+            disabled={!harness || busy}
+            characterName={characterName}
+          />
+        </div>
+
+        <TranscriptDrawer
+          open={drawerOpen}
+          messages={messages}
+          onClose={() => setDrawerOpen(false)}
+          characterName={characterName}
+        />
+      </div>
+    </div>
   );
 }

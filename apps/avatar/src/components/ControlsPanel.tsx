@@ -9,11 +9,13 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import type { FormEvent } from 'react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 interface ControlsPanelProps {
   readonly characterUrl: string;
   readonly modelUrl: string;
+  readonly characterName?: string;
+  readonly personaSummary?: string;
   readonly status: string;
   readonly busy: boolean;
   readonly loaded: boolean;
@@ -24,6 +26,8 @@ interface ControlsPanelProps {
 export function ControlsPanel({
   characterUrl,
   modelUrl,
+  characterName = 'Companion',
+  personaSummary = 'A warm, playful stage companion.',
   status,
   busy,
   loaded,
@@ -32,6 +36,13 @@ export function ControlsPanel({
 }: ControlsPanelProps) {
   const [cfg, setCfg] = useState(characterUrl);
   const [model, setModel] = useState(modelUrl);
+  const [expanded, setExpanded] = useState(modelUrl.trim().length === 0);
+
+  useEffect(() => {
+    if (loaded) {
+      setExpanded(false);
+    }
+  }, [loaded]);
 
   const handleSubmit = (event: FormEvent): void => {
     event.preventDefault();
@@ -42,41 +53,64 @@ export function ControlsPanel({
   };
 
   return (
-    <div className="controls-panel">
-      <h2>Avatar Setup</h2>
-      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <label style={{ fontSize: 12, color: '#8a94a8' }}>
-          character.json URL
-          <input
-            type="text"
-            value={cfg}
-            onChange={(e) => setCfg(e.target.value)}
-            disabled={busy}
-            placeholder="/character.json"
-          />
-        </label>
-        <label style={{ fontSize: 12, color: '#8a94a8' }}>
-          Model (.gguf) URL
-          <input
-            type="url"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            disabled={busy}
-            placeholder="https://huggingface.co/.../model.gguf"
-          />
-        </label>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button type="submit" disabled={busy}>
-            {loaded ? 'Reload' : 'Load'}
+    <div className="controls-panel glass-panel">
+      <div className="controls-header">
+        <div className="controls-copy">
+          <span className="panel-eyebrow">Avatar Setup</span>
+          <h1>{characterName}</h1>
+          <p>{personaSummary}</p>
+        </div>
+        <div className={`status-pill ${busy ? 'busy' : loaded ? 'ready' : 'idle'}`}>
+          {busy ? 'Loading' : loaded ? 'Live' : 'Standby'}
+        </div>
+      </div>
+
+      <div className="status-line">{status}</div>
+
+      <form className="controls-form" onSubmit={handleSubmit}>
+        <div className="controls-toolbar">
+          <button type="submit" disabled={busy || cfg.trim().length === 0 || model.trim().length === 0}>
+            {loaded ? 'Reload Model' : 'Load Model'}
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => setExpanded((open) => !open)}
+          >
+            {expanded ? 'Hide Setup' : 'Setup'}
           </button>
           {loaded && onReset ? (
-            <button type="button" onClick={onReset} disabled={busy}>
-              Reset memory
+            <button type="button" className="secondary-button" onClick={onReset} disabled={busy}>
+              Reset Memory
             </button>
           ) : null}
         </div>
+
+        {expanded ? (
+          <div className="controls-fields">
+            <label className="field-label">
+              <span>character.json URL</span>
+              <input
+                type="text"
+                value={cfg}
+                onChange={(event) => setCfg(event.target.value)}
+                disabled={busy}
+                placeholder="/character.json"
+              />
+            </label>
+            <label className="field-label">
+              <span>Model (.gguf) URL</span>
+              <input
+                type="url"
+                value={model}
+                onChange={(event) => setModel(event.target.value)}
+                disabled={busy}
+                placeholder="https://huggingface.co/.../model.gguf"
+              />
+            </label>
+          </div>
+        ) : null}
       </form>
-      <div className="status-line">{status}</div>
     </div>
   );
 }

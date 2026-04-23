@@ -1,0 +1,99 @@
+//////////////////////////////////////////////////////////////////////////////
+//
+// TranscriptDrawer.tsx
+//
+// - Slide-out transcript containing the full conversation history.
+//
+//////////////////////////////////////////////////////////////////////////////
+
+import { useEffect, useRef } from 'react';
+import type { ChatMessage } from './chat-types';
+
+interface TranscriptDrawerProps {
+  readonly open: boolean;
+  readonly messages: readonly ChatMessage[];
+  readonly onClose: () => void;
+  readonly characterName?: string;
+  readonly id?: string;
+}
+
+export function TranscriptDrawer({
+  open,
+  messages,
+  onClose,
+  characterName = 'Companion',
+  id = 'transcript-drawer',
+}: TranscriptDrawerProps) {
+  const logRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const log = logRef.current;
+    if (!log) {
+      return;
+    }
+    log.scrollTop = log.scrollHeight;
+  }, [messages, open]);
+
+  return (
+    <>
+      <button
+        type="button"
+        className={`transcript-backdrop${open ? ' open' : ''}`}
+        onClick={onClose}
+        aria-label="Close transcript drawer"
+      />
+      <aside
+        id={id}
+        className={`transcript-drawer glass-panel${open ? ' open' : ''}`}
+        aria-hidden={!open}
+      >
+        <div className="transcript-header">
+          <div>
+            <span className="panel-eyebrow">Conversation</span>
+            <h2>{characterName}'s transcript</h2>
+          </div>
+          <button type="button" className="secondary-button" onClick={onClose}>
+            Close
+          </button>
+        </div>
+
+        <div className="transcript-log" ref={logRef}>
+          {messages.length === 0 ? (
+            <div className="transcript-empty">
+              Full replies will collect here once the conversation starts.
+            </div>
+          ) : (
+            messages.map((message) => {
+              const fallbackText = message.pending
+                ? '...'
+                : '[No visible response generated.]';
+              return (
+                <article key={message.id} className={`transcript-entry ${message.role}`}>
+                  <div className="transcript-meta">
+                    <span className="transcript-role">
+                      {message.role === 'user' ? 'You' : characterName}
+                    </span>
+                    {message.pending ? <span className="transcript-pending">Typing</span> : null}
+                  </div>
+                  {message.actions.length > 0 ? (
+                    <div className="transcript-actions">
+                      {message.actions.map((action, index) => (
+                        <span key={`${message.id}-${index}`} className="action-chip" title={action.name}>
+                          {action.label}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="transcript-text">
+                    {message.text.trim().length > 0 ? message.text : fallbackText}
+                    {message.pending ? <span className="cursor">▍</span> : null}
+                  </div>
+                </article>
+              );
+            })
+          )}
+        </div>
+      </aside>
+    </>
+  );
+}

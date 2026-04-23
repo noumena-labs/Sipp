@@ -65,6 +65,19 @@ export async function loadAvatar(vrmUrl: string | undefined | null): Promise<Loa
   }
 }
 
+export function getAvatarHeadNode(avatar: LoadedAvatar): THREE.Object3D | null {
+  return resolveHeadNode(avatar.root, avatar.vrm);
+}
+
+function resolveHeadNode(root: THREE.Object3D, vrm: VRM | null): THREE.Object3D | null {
+  return (
+    vrm?.humanoid?.getRawBoneNode(VRMHumanBoneName.Head) ??
+    vrm?.humanoid?.getNormalizedBoneNode(VRMHumanBoneName.Head) ??
+    root.getObjectByName('head') ??
+    null
+  );
+}
+
 function createPrimitiveAvatar(): LoadedAvatar {
   const group = new THREE.Group();
 
@@ -150,8 +163,7 @@ function centerAvatar(root: THREE.Object3D, vrm: VRM | null): AvatarLayout {
 
   const height = Math.max(size.y, 0.8);
   const centerY = (bounds.min.y + bounds.max.y) * 0.5;
-  const headNode =
-    vrm?.humanoid?.getNormalizedBoneNode(VRMHumanBoneName.Head) ?? root.getObjectByName('head');
+  const headNode = resolveHeadNode(root, vrm);
   const headY = headNode
     ? headNode.getWorldPosition(headPos).y
     : bounds.max.y - height * 0.12;

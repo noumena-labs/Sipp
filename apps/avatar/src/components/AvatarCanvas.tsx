@@ -13,23 +13,42 @@ import type { ActionBus } from 'cogent-engine/character';
 import { createScene, type SceneHandle } from '../scene/scene';
 import { loadAvatar, type LoadedAvatar } from '../scene/vrm-loader';
 import { ThreeVRMBinding } from '../bindings/three-vrm-binding';
+import { SpeechBubble } from '../scene/speech-bubble';
 
 interface AvatarCanvasProps {
   readonly bus: ActionBus;
   readonly vrmUrl?: string;
   readonly speaking?: boolean;
+  readonly bubbleText?: string;
+  readonly bubblePending?: boolean;
   readonly status?: string;
 }
 
-export function AvatarCanvas({ bus, vrmUrl, speaking = false, status }: AvatarCanvasProps) {
+export function AvatarCanvas({
+  bus,
+  vrmUrl,
+  speaking = false,
+  bubbleText = '',
+  bubblePending = false,
+  status,
+}: AvatarCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const bindingRef = useRef<ThreeVRMBinding | null>(null);
+  const bubbleRef = useRef<SpeechBubble | null>(null);
   const speakingRef = useRef(speaking);
+  const bubbleTextRef = useRef(bubbleText);
+  const bubblePendingRef = useRef(bubblePending);
 
   useEffect(() => {
     speakingRef.current = speaking;
     bindingRef.current?.setSpeaking(speaking);
   }, [speaking]);
+
+  useEffect(() => {
+    bubbleTextRef.current = bubbleText;
+    bubblePendingRef.current = bubblePending;
+    bubbleRef.current?.setContent(bubbleText, bubblePending);
+  }, [bubblePending, bubbleText]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -39,6 +58,7 @@ export function AvatarCanvas({ bus, vrmUrl, speaking = false, status }: AvatarCa
     let sceneHandle: SceneHandle | null = null;
     let avatar: LoadedAvatar | null = null;
     let binding: ThreeVRMBinding | null = null;
+    let speechBubble: SpeechBubble | null = null;
     let cancelled = false;
 
     sceneHandle = createScene(container);
@@ -65,7 +85,17 @@ export function AvatarCanvas({ bus, vrmUrl, speaking = false, status }: AvatarCa
       binding = new ThreeVRMBinding(bus, loaded);
       binding.setSpeaking(speakingRef.current);
       bindingRef.current = binding;
-      const offFrame = sceneHandle.onFrame((delta) => binding?.tick(delta));
+      speechBubble = new SpeechBubble({
+        scene: sceneHandle.scene,
+        camera: sceneHandle.camera,
+        avatar: loaded,
+      });
+      speechBubble.setContent(bubbleTextRef.current, bubblePendingRef.current);
+      bubbleRef.current = speechBubble;
+      const offFrame = sceneHandle.onFrame((delta) => {
+        binding?.tick(delta);
+        speechBubble?.tick(delta);
+      });
       // Stash the off-frame on the binding so dispose can call it.
       (binding as unknown as { _off: () => void })._off = offFrame;
     })();
@@ -79,6 +109,12 @@ export function AvatarCanvas({ bus, vrmUrl, speaking = false, status }: AvatarCa
         binding.dispose();
         if (bindingRef.current === binding) {
           bindingRef.current = null;
+        }
+      }
+      if (speechBubble) {
+        speechBubble.dispose();
+        if (bubbleRef.current === speechBubble) {
+          bubbleRef.current = null;
         }
       }
       if (avatar) {
