@@ -1,6 +1,8 @@
 import type {
   ModelInfo,
   ModelLoadOptions,
+  ObservabilityEvent,
+  ObservabilitySnapshot,
   ModelSource,
   QueryInput,
   QueryOptions,
@@ -12,5 +14,7 @@ export interface ModelLifecycleService {
   list(): Promise<ModelInfo[]>;
   remove(id: string): Promise<void>;
   query(input: QueryInput, options?: QueryOptions): Promise<string>;
+  currentObservability(): ObservabilitySnapshot;
+  subscribeObservability(listener: (event: ObservabilityEvent) => void): () => void;
   close(): void | Promise<void>;
 }

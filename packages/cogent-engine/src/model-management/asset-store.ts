@@ -26,9 +26,13 @@ function normalizeAssetName(name: string): string {
   return defaultValue.replace(/[\\/:*?"<>|]+/g, '-');
 }
 
+function currentLocationHref(): string | undefined {
+  return typeof globalThis.location?.href === 'string' ? globalThis.location.href : undefined;
+}
+
 function fileNameFromUrl(url: string): string {
   try {
-    const parsed = new URL(url, typeof window !== 'undefined' ? window.location.href : undefined);
+    const parsed = new URL(url, currentLocationHref());
     return normalizeAssetName(decodeURIComponent(parsed.pathname.split('/').pop() || 'model.gguf'));
   } catch {
     return normalizeAssetName(url.split('/').pop()?.split('?')[0] ?? 'model.gguf');
@@ -212,10 +216,8 @@ export class AssetStore {
 
   private parseUrl(rawUrl: string): URL {
     try {
-      if (typeof window !== 'undefined' && typeof window.location?.href === 'string') {
-        return new URL(rawUrl, window.location.href);
-      }
-      return new URL(rawUrl);
+      const baseHref = currentLocationHref();
+      return baseHref == null ? new URL(rawUrl) : new URL(rawUrl, baseHref);
     } catch {
       throw new QueryError('INVALID_MODEL_SOURCE', `Invalid model URL "${rawUrl}".`);
     }

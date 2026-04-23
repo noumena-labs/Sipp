@@ -1,5 +1,6 @@
 import type { EngineRuntime } from '../runtime/engine-runtime.js';
 import type {
+  GenerateResponse,
   InferenceInitConfig,
   ModelBundleFileProjectorDescriptor,
   InternalBundleDescriptor,
@@ -19,11 +20,22 @@ import {
   type ModelLoadOptions,
   type ModelRuntimeOptions,
   type ModelSource,
+  type ObservabilityEvent,
+  type ObservabilityMode,
+  type ObservabilitySnapshot,
+  type QueryObservation,
   type QueryInput,
   type QueryOptions,
   type RegistryManifest,
 } from './model-types.js';
 import type { ModelLifecycleService } from './model-service-contract.js';
+import {
+  applyObservabilityMode,
+  ObservabilityController,
+  resolveObservabilityMode,
+  toBackendProfileObservation,
+  toRuntimeObservation,
+} from './observability-controller.js';
 
 interface InstalledAsset {
   record: AssetRecord;
@@ -67,39 +79,54 @@ function isSourceObject(source: ModelSource): source is Extract<ModelSource, { m
   return typeof source === 'object' && source != null && !isFile(source) && !Array.isArray(source);
 }
 
-function toRuntimeConfig(options: ModelRuntimeOptions | undefined): InferenceInitConfig {
+function toRuntimeConfig(
+  options: ModelRuntimeOptions | undefined,
+  mode: ObservabilityMode
+): InferenceInitConfig {
+  const effectiveOptions = applyObservabilityMode(options, mode);
   return {
-    nCtx: options?.nCtx,
-    nBatch: options?.nBatch,
-    nUbatch: options?.nUbatch,
-    nSeqMax: options?.nSeqMax,
-    nThreads: options?.nThreads,
-    nThreadsBatch: options?.nThreadsBatch,
-    nGpuLayers: options?.nGpuLayers,
-    flashAttention: options?.flashAttention,
-    kvUnified: options?.kvUnified,
-    maxCachedSessions: options?.maxCachedSessions,
-    retainedPrefixTokens: options?.retainedPrefixTokens,
-    prefillChunkSize: options?.prefillChunkSize,
-    prefixCacheIntervalTokens: options?.prefixCacheIntervalTokens,
-    maxPrefixCacheEntries: options?.maxPrefixCacheEntries,
-    schedulerPolicy: options?.schedulerPolicy,
-    decodeTokenReserve: options?.decodeTokenReserve,
-    adaptivePrefillChunking: options?.adaptivePrefillChunking,
-    enableRuntimeObservability: options?.enableRuntimeObservability,
-    enableBackendProfiling: options?.enableBackendProfiling,
-    multimodalUseGpu: options?.multimodalUseGpu,
-    debugCompareMultimodalEmbeddings: options?.debugCompareMultimodalEmbeddings,
-    imageMinTokens: options?.imageMinTokens,
-    imageMaxTokens: options?.imageMaxTokens,
-    sampling: options?.sampling,
+    nCtx: effectiveOptions.nCtx,
+    nBatch: effectiveOptions.nBatch,
+    nUbatch: effectiveOptions.nUbatch,
+    nSeqMax: effectiveOptions.nSeqMax,
+    nThreads: effectiveOptions.nThreads,
+    nThreadsBatch: effectiveOptions.nThreadsBatch,
+    nGpuLayers: effectiveOptions.nGpuLayers,
+    flashAttention: effectiveOptions.flashAttention,
+    kvUnified: effectiveOptions.kvUnified,
+    maxCachedSessions: effectiveOptions.maxCachedSessions,
+    retainedPrefixTokens: effectiveOptions.retainedPrefixTokens,
+    prefillChunkSize: effectiveOptions.prefillChunkSize,
+    prefixCacheIntervalTokens: effectiveOptions.prefixCacheIntervalTokens,
+    maxPrefixCacheEntries: effectiveOptions.maxPrefixCacheEntries,
+    schedulerPolicy: effectiveOptions.schedulerPolicy,
+    decodeTokenReserve: effectiveOptions.decodeTokenReserve,
+    adaptivePrefillChunking: effectiveOptions.adaptivePrefillChunking,
+    enableRuntimeObservability: effectiveOptions.enableRuntimeObservability,
+    enableBackendProfiling: effectiveOptions.enableBackendProfiling,
+    multimodalUseGpu: effectiveOptions.multimodalUseGpu,
+    debugCompareMultimodalEmbeddings: effectiveOptions.debugCompareMultimodalEmbeddings,
+    imageMinTokens: effectiveOptions.imageMinTokens,
+    imageMaxTokens: effectiveOptions.imageMaxTokens,
+    sampling: effectiveOptions.sampling,
   };
+}
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError';
 }
 
 export class ModelService implements ModelLifecycleService {
   private current: LoadedModelState | null = null;
   private operationChain: Promise<void> = Promise.resolve();
   private transitioning = false;
+  private readonly observability = new ObservabilityController();
 
   constructor(
     private readonly runtime: EngineRuntime,
@@ -125,29 +152,66 @@ export class ModelService implements ModelLifecycleService {
       .map((entry) => this.toModelInfo(entry, manifest));
   }
 
+  public currentObservability(): ObservabilitySnapshot {
+    return this.observability.current();
+  }
+
+  public subscribeObservability(listener: (event: ObservabilityEvent) => void): () => void {
+    return this.observability.subscribe(listener);
+  }
+
   public async load(source: ModelSource, options: ModelLoadOptions = {}): Promise<ModelInfo> {
     return this.withLifecycleLock(async () => {
       if (options.signal?.aborted) {
         throw new DOMException('Model load aborted.', 'AbortError');
       }
 
-      const runtimeFingerprint = sha256Text(stableJson(options.runtime ?? {}));
-      const manifest = await this.registry.read();
-      const existing = this.resolveInstalledModel(manifest, source);
-      if (existing != null && !isSourceObject(source)) {
-        return await this.loadEntry(existing, runtimeFingerprint, options);
-      }
+      const observabilityMode = resolveObservabilityMode(options.observability);
+      const runtimeFingerprint = sha256Text(
+        stableJson({
+          runtime: options.runtime ?? {},
+          observability: observabilityMode,
+        })
+      );
+      this.observability.emit('load-start', {
+        mode: observabilityMode,
+        state: 'loading',
+        query: null,
+        runtime: undefined,
+        profile: undefined,
+      });
+      try {
+        const manifest = await this.registry.read();
+        const existing = this.resolveInstalledModel(manifest, source);
+        if (existing != null && !isSourceObject(source)) {
+          return await this.loadEntry(existing, runtimeFingerprint, options, observabilityMode);
+        }
 
-      const installed = await this.installSource(source, manifest, options);
-      await this.registerAssets(installed.assets);
-      const classified = await this.classifyAssets(installed.assets, options.signal);
-      const plan = await this.resolvePairingPlan(classified, installed.assets, options.signal);
-      const entry = await this.upsertModelEntry(plan, runtimeFingerprint);
-      const modelInfo = await this.loadEntry(entry, runtimeFingerprint, options);
-      if (installed.source === 'remote') {
+        const installed = await this.installSource(source, manifest, options);
+        await this.registerAssets(installed.assets);
+        const classified = await this.classifyAssets(installed.assets, options.signal);
+        const plan = await this.resolvePairingPlan(classified, installed.assets, options.signal);
+        const entry = await this.upsertModelEntry(plan, runtimeFingerprint);
+        const modelInfo = await this.loadEntry(entry, runtimeFingerprint, options, observabilityMode);
+        if (installed.source === 'remote') {
+          return modelInfo;
+        }
         return modelInfo;
+      } catch (error) {
+        this.observability.emit('error', {
+          state: 'error',
+          query: {
+            session: null,
+            status: isAbortError(error) ? 'cancelled' : 'failed',
+            wallMs: null,
+            ttftMs: null,
+            outputTokenCount: null,
+            errorCode: error instanceof QueryError ? error.code : undefined,
+            errorMessage: error instanceof Error ? error.message : String(error),
+          },
+        });
+        throw error;
       }
-      return modelInfo;
     });
   }
 
@@ -188,6 +252,11 @@ export class ModelService implements ModelLifecycleService {
       for (const asset of orphanedAssets) {
         await this.assetStore.delete(asset);
       }
+      this.observability.update({
+        state: this.currentSnapshot == null ? 'idle' : 'ready',
+        model: this.currentSnapshot,
+        query: null,
+      });
     });
   }
 
@@ -216,13 +285,50 @@ export class ModelService implements ModelLifecycleService {
       onToken: options.onToken,
       media,
     };
+    const session = options.session ?? 'default';
+    const start = nowMs();
+    this.observability.emit('query-start', {
+      state: 'querying',
+      query: {
+        session,
+        status: 'running',
+        wallMs: null,
+        ttftMs: null,
+        outputTokenCount: null,
+      },
+    });
+    let failureRecorded = false;
     try {
-      return await this.runtime.executeQuery(options.session ?? 'default', prompt, promptOptions);
+      const requestId = await this.runtime.enqueueQuery(session, prompt, promptOptions);
+      const response = await this.runtime.awaitQuery(requestId, { signal: options.signal });
+      if (response.cancelled) {
+        const error = new DOMException(response.errorMessage ?? 'Queued request cancelled.', 'AbortError');
+        this.recordQueryFailure(session, start, error, response);
+        failureRecorded = true;
+        throw error;
+      }
+      if (response.failed) {
+        const error = new Error(response.errorMessage ?? 'Queued prompt failed.');
+        this.recordQueryFailure(session, start, error, response);
+        failureRecorded = true;
+        throw error;
+      }
+      this.recordQuerySuccess(session, start, response);
+      return response.outputText;
     } catch (error) {
+      if (!failureRecorded) {
+        this.recordQueryFailure(session, start, error);
+      }
       if (error instanceof QueryError) {
         throw error;
       }
-      throw new QueryError('QUERY_FAILED', 'Model query failed.', { cause: error });
+      throw new QueryError(
+        'QUERY_FAILED',
+        error instanceof Error && error.message.trim().length > 0
+          ? `Model query failed: ${error.message}`
+          : 'Model query failed.',
+        { cause: error }
+      );
     }
   }
 
@@ -230,6 +336,67 @@ export class ModelService implements ModelLifecycleService {
     this.runtime.close();
     this.current = null;
     this.currentSnapshot = null;
+    this.observability.markClosed();
+  }
+
+  private recordQuerySuccess(
+    session: string,
+    start: number,
+    response: GenerateResponse
+  ): void {
+    const metrics = response.requestObservability ?? response.runtimeObservability ?? null;
+    const runtime = toRuntimeObservation(
+      metrics ?? this.runtime.getRuntimeObservability(),
+      this.runtime.getTransportObservability()
+    );
+    this.observability.emit('query-complete', {
+      state: 'ready',
+      query: this.toQueryObservation(session, 'success', start, response),
+      ...(runtime == null ? {} : { runtime }),
+    });
+  }
+
+  private recordQueryFailure(
+    session: string,
+    start: number,
+    error: unknown,
+    response?: GenerateResponse
+  ): void {
+    const metrics = response?.requestObservability ?? response?.runtimeObservability ?? null;
+    const runtime = toRuntimeObservation(
+      metrics ?? this.runtime.getRuntimeObservability(),
+      this.runtime.getTransportObservability()
+    );
+    this.observability.emit('error', {
+      state: 'error',
+      query: {
+        ...this.toQueryObservation(
+          session,
+          isAbortError(error) || response?.cancelled === true ? 'cancelled' : 'failed',
+          start,
+          response
+        ),
+        errorCode: error instanceof QueryError ? error.code : undefined,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      },
+      ...(runtime == null ? {} : { runtime }),
+    });
+  }
+
+  private toQueryObservation(
+    session: string,
+    status: QueryObservation['status'],
+    start: number,
+    response?: GenerateResponse
+  ): QueryObservation {
+    const metrics = response?.requestObservability ?? response?.runtimeObservability ?? null;
+    return {
+      session,
+      status,
+      wallMs: Math.max(0, nowMs() - start),
+      ttftMs: metrics?.ttftMs ?? null,
+      outputTokenCount: metrics?.outputTokenCount ?? null,
+    };
   }
 
   private async installSource(
@@ -401,7 +568,7 @@ export class ModelService implements ModelLifecycleService {
       }
       assets.push({
         record,
-        file: await this.assetStore.getFile(record),
+        file: await this.getAssetFileForEntry(entry, record),
       });
     }
     return {
@@ -530,18 +697,41 @@ export class ModelService implements ModelLifecycleService {
   private async loadEntry(
     entry: ModelEntry,
     runtimeFingerprint: string,
-    options: ModelLoadOptions
+    options: ModelLoadOptions,
+    observabilityMode: ObservabilityMode
   ): Promise<ModelInfo> {
     if (entry.status === 'broken') {
       throw new QueryError('MODEL_BROKEN', `Installed model "${entry.id}" is broken.`);
     }
     if (entry.status === 'needs_projector') {
       const manifest = await this.registry.read();
-      return this.toModelInfo(entry, manifest);
+      const info = this.toModelInfo(entry, manifest);
+      this.observability.emit('load-complete', {
+        mode: observabilityMode,
+        state: 'ready',
+        model: info,
+      });
+      return info;
     }
     if (this.current?.id === entry.id && this.current.runtimeFingerprint === runtimeFingerprint) {
       const manifest = await this.registry.read();
-      return this.toModelInfo(entry, manifest);
+      const info = this.toModelInfo(entry, manifest);
+      const runtime = toRuntimeObservation(
+        this.runtime.getRuntimeObservability(),
+        this.runtime.getTransportObservability()
+      );
+      const profile =
+        observabilityMode === 'profile'
+          ? toBackendProfileObservation(await this.runtime.getBackendObservability())
+          : undefined;
+      this.observability.emit('load-complete', {
+        mode: observabilityMode,
+        state: 'ready',
+        model: info,
+        ...(runtime == null ? {} : { runtime }),
+        ...(profile == null ? {} : { profile }),
+      });
+      return info;
     }
 
     const manifest = await this.registry.read();
@@ -557,7 +747,7 @@ export class ModelService implements ModelLifecycleService {
     const staged = await this.runtime.stageModelBundle(descriptor, {
       signal: options.signal,
     });
-    await this.runtime.loadRuntimeModel(staged, toRuntimeConfig(options.runtime));
+    await this.runtime.loadRuntimeModel(staged, toRuntimeConfig(options.runtime, observabilityMode));
 
     const loadedAt = new Date().toISOString();
     const updated = await this.registry.write((draft) => {
@@ -581,6 +771,21 @@ export class ModelService implements ModelLifecycleService {
       percent: 100,
       assetName: entry.name,
     });
+    const runtime = toRuntimeObservation(
+      this.runtime.getRuntimeObservability(),
+      this.runtime.getTransportObservability()
+    );
+    const profile =
+      observabilityMode === 'profile'
+        ? toBackendProfileObservation(await this.runtime.getBackendObservability())
+        : undefined;
+    this.observability.emit('load-complete', {
+      mode: observabilityMode,
+      state: 'ready',
+      model: this.currentSnapshot,
+      ...(runtime == null ? {} : { runtime }),
+      ...(profile == null ? {} : { profile }),
+    });
     return this.currentSnapshot;
   }
 
@@ -595,7 +800,7 @@ export class ModelService implements ModelLifecycleService {
         await this.markBroken(entry.id);
         throw new QueryError('MODEL_BROKEN', `Installed model "${entry.id}" references a missing asset.`);
       }
-      modelFiles.push(await this.assetStore.getFile(asset));
+      modelFiles.push(await this.getAssetFileForEntry(entry, asset));
     }
     let projectorFile: File | null = null;
     if (entry.projectorAssetId != null) {
@@ -604,9 +809,20 @@ export class ModelService implements ModelLifecycleService {
         await this.markBroken(entry.id);
         throw new QueryError('MODEL_BROKEN', `Installed model "${entry.id}" references a missing projector.`);
       }
-      projectorFile = await this.assetStore.getFile(projector);
+      projectorFile = await this.getAssetFileForEntry(entry, projector);
     }
     return { modelFiles, projectorFile };
+  }
+
+  private async getAssetFileForEntry(entry: ModelEntry, asset: AssetRecord): Promise<File> {
+    try {
+      return await this.assetStore.getFile(asset);
+    } catch (error) {
+      if (error instanceof QueryError && error.code === 'MODEL_BROKEN') {
+        await this.markBroken(entry.id);
+      }
+      throw error;
+    }
   }
 
   private buildDescriptor(modelFiles: File[], projectorFile: File | null): InternalBundleDescriptor {

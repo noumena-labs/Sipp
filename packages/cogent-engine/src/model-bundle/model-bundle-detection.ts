@@ -7,6 +7,7 @@ import { inspectGgufMetadata } from './gguf-metadata.js';
 const VLM_FILENAME_PATTERNS: RegExp[] = [
   /llava/i,
   /qwen[_-]?2?[_-]?vl/i,
+  /lfm[\s._-]*(?:\d+(?:\.\d+)?)?[\s._-]*vl/i,
   /internvl/i,
   /cogvlm/i,
   /phi[_-]?\d*[_-]?vision/i,
@@ -168,6 +169,7 @@ export async function detectModelFromGgufFile(
   const modelArchitecture = normalizeOptionalString(metadata.generalArchitecture);
   const clipProjectorType = normalizeOptionalString(metadata.clipProjectorType);
   const clipVisionProjectorType = normalizeOptionalString(metadata.clipVisionProjectorType);
+  const clipHasVisionEncoder = metadata.clipHasVisionEncoder === true;
 
   const isProjector =
     modelType === 'mmproj' ||
@@ -176,8 +178,8 @@ export async function detectModelFromGgufFile(
     clipVisionProjectorType != null;
   const isVisionByMetadata =
     !isProjector &&
-    modelArchitecture != null &&
-    VLM_METADATA_ARCHITECTURES.has(modelArchitecture);
+    (clipHasVisionEncoder ||
+      (modelArchitecture != null && VLM_METADATA_ARCHITECTURES.has(modelArchitecture)));
 
   const detectionMethod =
     isProjector || isVisionByMetadata
@@ -197,31 +199,6 @@ export async function detectModelFromGgufFile(
     modelType,
     modelArchitecture,
   };
-}
-
-export function detectModelFromUrl(url: string): ModelDetectionResult {
-  const filename = extractFilenameFromUrl(url);
-  const result = detectModelFromFilename(filename);
-  result.detectionMethod = result.isVisionModel ? 'url' : result.detectionMethod;
-  return result;
-}
-
-export function detectModel(
-  source: 'url' | 'file',
-  urlOrFilename: string
-): ModelDetectionResult {
-  return source === 'url'
-    ? detectModelFromUrl(urlOrFilename)
-    : detectModelFromFilename(urlOrFilename);
-}
-
-function extractFilenameFromUrl(url: string): string {
-  try {
-    const pathname = new URL(url).pathname;
-    return pathname.split('/').pop() ?? url;
-  } catch {
-    return url.split('/').pop()?.split('?')[0] ?? url;
-  }
 }
 
 function normalizeFileName(fileName: string | undefined): string {
