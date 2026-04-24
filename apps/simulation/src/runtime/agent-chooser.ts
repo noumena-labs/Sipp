@@ -42,12 +42,13 @@ export class SimulationAgentChooser {
 
   public async query(
     perception: AgentPerception,
-    options: { signal?: AbortSignal } = {}
+    options: { signal?: AbortSignal; timeoutMs?: number } = {}
   ): Promise<SimulationAgentChoiceResult> {
     const decision = buildDecisionContext(perception);
     const choiceResult = await this.agent.choose(decision.prompt, {
       choices: decision.options.map((option) => option.label),
       signal: options.signal,
+      timeoutMs: options.timeoutMs,
       maxOutputTokens: this.maxChoiceOutputTokens,
     });
 

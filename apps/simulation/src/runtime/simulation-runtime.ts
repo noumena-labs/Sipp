@@ -35,6 +35,8 @@ export interface SimulationRuntimeOptions {
   readonly resolveRefereeQuery?: string;
   readonly narrateQuery?: string;
   readonly refereeTimeoutMs?: number;
+  readonly narrationTimeoutMs?: number;
+  readonly agentQueryTimeoutMs?: number;
   readonly bus?: SimulationBus;
 }
 
@@ -55,6 +57,8 @@ export class SimulationRuntime {
   private readonly resolveRefereeQuery: string;
   private readonly narrateQuery: string;
   private readonly refereeTimeoutMs: number;
+  private readonly narrationTimeoutMs: number;
+  private readonly agentQueryTimeoutMs: number;
   private readonly activeControllers: Set<AbortController> = new Set();
   private readonly movementSubstepSeconds = 0.15;
 
@@ -62,6 +66,7 @@ export class SimulationRuntime {
   private inFlightTick: Promise<void> | null = null;
   private agentQueryInFlight: AgentQueryInFlight | null = null;
   private narrationInFlight: Promise<void> | null = null;
+  private narrationController: AbortController | null = null;
   private queryCursor = 0;
 
   public constructor(director: DirectorRuntime | null, options: SimulationRuntimeOptions) {
@@ -72,6 +77,8 @@ export class SimulationRuntime {
     this.resolveRefereeQuery = options.resolveRefereeQuery ?? 'resolve_referee_event';
     this.narrateQuery = options.narrateQuery ?? 'narrate_scene';
     this.refereeTimeoutMs = Math.max(1000, Math.floor(options.refereeTimeoutMs ?? 6000));
+    this.narrationTimeoutMs = Math.max(1000, Math.floor(options.narrationTimeoutMs ?? 4000));
+    this.agentQueryTimeoutMs = Math.max(1000, Math.floor(options.agentQueryTimeoutMs ?? 5000));
     this.state = {
       tick: 0,
       timeSeconds: 0,
@@ -108,7 +115,7 @@ export class SimulationRuntime {
   }
 
   public isBusy(): boolean {
-    return this.agentQueryInFlight != null || this.narrationInFlight != null || this.state.game.referee.status === 'ruling';
+    return this.agentQueryInFlight != null || this.state.game.referee.status === 'ruling';
   }
 
   public async waitForIdle(): Promise<void> {
@@ -247,6 +254,8 @@ export class SimulationRuntime {
       await this.agentQueryInFlight.done.catch(() => undefined);
     }
 
+    this.cancelNarration();
+
     this.state.game.referee = { status: 'ruling', conflict, startedAtTick: this.state.tick };
     this.emit({ kind: 'director-conflict', tick: this.state.tick, conflicts: [conflict] });
     this.emit({
@@ -255,20 +264,23 @@ export class SimulationRuntime {
       event: { kind: 'fallback', message: `Director is ruling on ${describeConflict(conflict)}.` },
     });
 
-    const decision = this.director
-      ? await this.queryRefereeWithTimeout(conflict)
-      : deterministicConflictResolution(this.state, [conflict]);
-    const events = applyDirectorDecision(this.state, decision);
-    this.emit({ kind: 'director-decision', tick: this.state.tick, decision });
-    if (decision.note) {
-      this.emit({ kind: 'world-note', tick: this.state.tick, note: decision.note });
-    }
-    this.emitGameEvents(events);
-    this.state.game.referee = { status: 'idle' };
+    try {
+      const decision = this.director
+        ? await this.queryRefereeWithTimeout(conflict)
+        : deterministicConflictResolution(this.state, [conflict]);
+      const events = applyDirectorDecision(this.state, decision);
+      this.emit({ kind: 'director-decision', tick: this.state.tick, decision });
+      if (decision.note) {
+        this.emit({ kind: 'world-note', tick: this.state.tick, note: decision.note });
+      }
+      this.emitGameEvents(events);
+    } finally {
+      this.state.game.referee = { status: 'idle' };
 
-    // Let agents start replanning immediately after a ruling instead of waiting
-    // for the next tick, which makes bump/drop sequences feel stalled.
-    this.maybeStartOneAgentQuery();
+      // Let agents start replanning immediately after a ruling instead of waiting
+      // for the next tick, which makes bump/drop sequences feel stalled.
+      this.maybeStartOneAgentQuery();
+    }
   }
 
   private async queryRefereeWithTimeout(conflict: WorldConflict): Promise<DirectorDecision> {
@@ -276,31 +288,42 @@ export class SimulationRuntime {
 
     const controller = new AbortController();
     this.activeControllers.add(controller);
-    const timeoutId = setTimeout(() => controller.abort(), this.refereeTimeoutMs);
     try {
-      const result = await this.director.query(
-        this.resolveRefereeQuery,
-        buildRefereePayload(this.state, conflict) as unknown as Record<string, JsonValue>,
-        { signal: controller.signal }
-      );
-      if (result.cancelled || result.data == null) {
+      try {
+        const result = await this.director.query(
+          this.resolveRefereeQuery,
+          buildRefereePayload(this.state, conflict) as unknown as Record<string, JsonValue>,
+          { signal: controller.signal, timeoutMs: this.refereeTimeoutMs }
+        );
+        if (result.cancelled || result.data == null) {
+          const fallback = deterministicConflictResolution(this.state, [conflict]);
+          this.emit({
+            kind: 'game-event',
+            tick: this.state.tick,
+            event: { kind: 'fallback', message: 'Director ruling timed out; house rule applies.' },
+          });
+          return fallback;
+        }
+        return coerceRefereeDecision(result.data, conflict, this.state);
+      } catch (error) {
         const fallback = deterministicConflictResolution(this.state, [conflict]);
         this.emit({
           kind: 'game-event',
           tick: this.state.tick,
-          event: { kind: 'fallback', message: 'Director ruling timed out; house rule applies.' },
+          event: {
+            kind: 'fallback',
+            message: `Director ruling failed; house rule applies. (${error instanceof Error ? error.message : String(error)})`,
+          },
         });
         return fallback;
       }
-      return coerceRefereeDecision(result.data, conflict, this.state);
     } finally {
-      clearTimeout(timeoutId);
       this.activeControllers.delete(controller);
     }
   }
 
   private maybeStartOneAgentQuery(): void {
-    if (this.disposed || this.agentQueryInFlight || this.narrationInFlight) return;
+    if (this.disposed || this.agentQueryInFlight) return;
     if (this.simulationAgents.size === 0) return;
     const ids = Array.from(this.simulationAgents.keys());
     let chosenId: string | null = null;
@@ -332,7 +355,10 @@ export class SimulationRuntime {
     const controller = new AbortController();
     agentState.thinking = true;
     this.emit({ kind: 'agent-query-start', tick: this.state.tick, agentId: chosenId });
-    const done = agent.query(perception, { signal: controller.signal }).then((result) => {
+    const done = agent.query(perception, {
+      signal: controller.signal,
+      timeoutMs: this.agentQueryTimeoutMs,
+    }).then((result) => {
       if (this.disposed || controller.signal.aborted) return;
       const current = this.state.agents.find((a) => a.id === chosenId);
       if (!current) return;
@@ -392,13 +418,14 @@ export class SimulationRuntime {
     if (this.simulationAgents.size === 0 || this.state.tick % this.directorCadenceTicks !== 0) return;
 
     const controller = new AbortController();
+    this.narrationController = controller;
     this.activeControllers.add(controller);
     this.narrationInFlight = this.director.query(
       this.narrateQuery,
       buildNarrationPayload(this.state) as unknown as Record<string, JsonValue>,
-      { signal: controller.signal }
+      { signal: controller.signal, timeoutMs: this.narrationTimeoutMs }
     ).then((result) => {
-      if (this.disposed || controller.signal.aborted) return;
+      if (this.disposed || controller.signal.aborted || result.cancelled || result.data == null) return;
       const decision = coerceNarrationDecision(result.data, this.getSnapshot());
       this.state.directorNote = decision.note || this.state.directorNote;
       this.emit({ kind: 'director-decision', tick: this.state.tick, decision });
@@ -407,8 +434,15 @@ export class SimulationRuntime {
       }
     }).finally(() => {
       this.activeControllers.delete(controller);
+      if (this.narrationController === controller) {
+        this.narrationController = null;
+      }
       this.narrationInFlight = null;
     });
+  }
+
+  private cancelNarration(): void {
+    this.narrationController?.abort();
   }
 
   private mapGoalToIntent(goal: AgentGoal): import('./types.js').AgentIntent {

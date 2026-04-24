@@ -14,8 +14,10 @@ import type { ChatMessage, PromptOptions } from '../core/inference-types.js';
 import { renderDirectorSystemPrompt, renderDirectorUserMessage } from './director-prompt.js';
 import { compileResponseGrammar } from './response-grammar.js';
 import { validateResponseValue } from './response-schema.js';
+import { createTimedAbortController, waitForAbort } from '../utils/abort.js';
 import type {
   DirectorConfig,
+  DirectorQueryOptions,
   DirectorQueryPayload,
   DirectorQueryResult,
   DirectorRuntimeOptions,
@@ -64,7 +66,7 @@ export class DirectorRuntime {
   public async query(
     queryName: string,
     payload: DirectorQueryPayload,
-    options: { signal?: AbortSignal } = {}
+    options: DirectorQueryOptions = {}
   ): Promise<DirectorQueryResult> {
     const query = this.requireQuery(queryName);
     const grammar = this.getGrammarSource(queryName);
@@ -87,11 +89,12 @@ export class DirectorRuntime {
       };
     }
 
+    const abort = createTimedAbortController(options.signal, options.timeoutMs);
     const promptOptions: PromptOptions = {
       nTokens: this.maxOutputTokens,
       promptFormat: 'raw',
       grammar,
-      ...(options.signal ? { signal: options.signal } : {}),
+      signal: abort.signal,
     };
 
     logDirectorQuery({
@@ -106,10 +109,14 @@ export class DirectorRuntime {
     let requestId = 0;
     try {
       requestId = await this.engine.queuePrompt(this.contextKey, promptText, promptOptions);
-      const response = await this.engine.runQueuedRequest(
-        requestId,
-        options.signal ? { signal: options.signal } : {}
-      );
+      const response = await Promise.race([
+        this.engine.runQueuedRequest(requestId, { signal: abort.signal }),
+        waitForAbort(abort.signal, {
+          timedOut: abort.timedOut,
+          timeoutMessage: 'Director query timed out.',
+          abortMessage: 'Director query aborted.',
+        }),
+      ]);
       const rawText = response.outputText ?? '';
       if (response.cancelled) {
         logDirectorQuery({
@@ -181,14 +188,21 @@ export class DirectorRuntime {
       });
       return { data: parsed, cancelled: false, rawText };
     } catch (error) {
-      const cancelled = options.signal?.aborted === true;
-      if (requestId !== 0 && !cancelled && this.engine.cancelQueuedRequest) {
+      const cancelled = abort.signal.aborted;
+      if (requestId !== 0 && cancelled && this.engine.cancelQueuedRequest) {
+        void this.engine.cancelQueuedRequest(requestId).catch(() => undefined);
+      } else if (requestId !== 0 && !cancelled && this.engine.cancelQueuedRequest) {
         try {
           await this.engine.cancelQueuedRequest(requestId);
         } catch {
           // Swallow; the original error is more useful.
         }
       }
+      const errorMessage = cancelled
+        ? abort.timedOut()
+          ? 'Director query timed out.'
+          : undefined
+        : error instanceof Error ? error.message : String(error);
       logDirectorQuery({
         phase: 'response',
         queryName,
@@ -196,14 +210,16 @@ export class DirectorRuntime {
         rawText: '',
         parsed: null,
         cancelled,
-        errorMessage: error instanceof Error ? error.message : String(error),
+        ...(errorMessage ? { errorMessage } : {}),
       });
       return {
         data: null,
         cancelled,
-        errorMessage: error instanceof Error ? error.message : String(error),
+        ...(errorMessage ? { errorMessage } : {}),
         rawText: '',
       };
+    } finally {
+      abort.dispose();
     }
   }
 

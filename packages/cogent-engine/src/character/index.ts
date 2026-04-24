@@ -44,6 +44,7 @@ export { ChoiceGrammarError, compileChoiceGrammar, parseChoiceOutput } from './c
 
 export type {
   ChoiceResult,
+  CharacterChoiceOptions,
   CharacterAgentEngine,
   CharacterAgentOptions,
   ChatEvent,

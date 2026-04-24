@@ -14,6 +14,8 @@ class FakeEngine implements CharacterAgentEngine {
   public outputText = '';
   public fail = false;
   public grammar: string | undefined;
+  public waitForAbort = false;
+  public cancelCalls: GenerateRequestId[] = [];
 
   public async applyChatTemplate(
     messages: Array<{ role: string; content: string }>,
@@ -35,8 +37,28 @@ class FakeEngine implements CharacterAgentEngine {
 
   public async runQueuedRequest(
     requestId: GenerateRequestId,
-    _options?: { signal?: AbortSignal }
+    options?: { signal?: AbortSignal }
   ): Promise<GenerateResponse> {
+    if (this.waitForAbort) {
+      await new Promise<void>((resolve) => {
+        const signal = options?.signal;
+        if (!signal) {
+          return;
+        }
+        if (signal.aborted) {
+          resolve();
+          return;
+        }
+        signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      return {
+        requestId,
+        completed: false,
+        failed: false,
+        cancelled: true,
+        outputText: '',
+      };
+    }
     return {
       requestId,
       completed: true,
@@ -48,6 +70,7 @@ class FakeEngine implements CharacterAgentEngine {
   }
 
   public async cancelQueuedRequest(_requestId: GenerateRequestId): Promise<boolean> {
+    this.cancelCalls.push(_requestId);
     return true;
   }
 
@@ -118,4 +141,17 @@ test('DirectorRuntime surfaces engine failure', async () => {
 
   assert.equal(result.data, null);
   assert.equal(result.errorMessage, 'boom');
+});
+
+test('DirectorRuntime returns cancelled on timeout and cancels the queued request', async () => {
+  const engine = new FakeEngine();
+  engine.waitForAbort = true;
+  const runtime = new DirectorRuntime(engine, CONFIG);
+
+  const result = await runtime.query('resolve_conflict', { state: { tick: 1 } }, { timeoutMs: 1 });
+
+  assert.equal(result.data, null);
+  assert.equal(result.cancelled, true);
+  assert.equal(result.errorMessage, 'Director query timed out.');
+  assert.deepEqual(engine.cancelCalls, [1]);
 });

@@ -102,3 +102,8 @@ export interface DirectorQueryResult {
   readonly errorMessage?: string;
   readonly rawText: string;
 }
+
+export interface DirectorQueryOptions {
+  readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
+}

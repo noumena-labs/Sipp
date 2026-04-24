@@ -10,6 +10,7 @@ export type {
   DirectorConfig,
   DirectorProfileConfig,
   DirectorQueryConfig,
+  DirectorQueryOptions,
   DirectorQueryPayload,
   DirectorQueryResult,
   DirectorRuntimeOptions,

@@ -31,6 +31,7 @@ import {
   renderAppliedChatTemplate,
 } from './chat-template-metadata.js';
 import { renderSystemPrompt } from './persona.js';
+import { createTimedAbortController, waitForAbort } from '../utils/abort.js';
 
 /**
  * Minimal shape of the engine the agent needs. Defined structurally so tests
@@ -79,6 +80,13 @@ export interface ChoiceResult {
   readonly cancelled: boolean;
   readonly errorMessage?: string;
   readonly rawText: string;
+}
+
+export interface CharacterChoiceOptions {
+  readonly choices: readonly string[];
+  readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
+  readonly maxOutputTokens?: number;
 }
 
 /**
@@ -167,11 +175,7 @@ export class CharacterAgent {
 
   public async choose(
     userMessage: string,
-    options: {
-      choices: readonly string[];
-      signal?: AbortSignal;
-      maxOutputTokens?: number;
-    }
+    options: CharacterChoiceOptions
   ): Promise<ChoiceResult> {
     const grammar = compileChoiceGrammar(options.choices);
     const choicePrompt = renderChoicePrompt(userMessage, options.choices);
@@ -192,11 +196,12 @@ export class CharacterAgent {
       };
     }
 
+    const abort = createTimedAbortController(options.signal, options.timeoutMs);
     const promptOptions: PromptOptions = {
       nTokens: options.maxOutputTokens ?? 24,
       promptFormat: 'raw',
       grammar,
-      ...(options.signal ? { signal: options.signal } : {}),
+      signal: abort.signal,
     };
 
     logChoiceQuery({
@@ -211,10 +216,14 @@ export class CharacterAgent {
     let requestId = 0;
     try {
       requestId = await this.engine.queuePrompt(this.config.id, promptText, promptOptions);
-      const response = await this.engine.runQueuedRequest(
-        requestId,
-        options.signal ? { signal: options.signal } : {}
-      );
+      const response = await Promise.race([
+        this.engine.runQueuedRequest(requestId, { signal: abort.signal }),
+        waitForAbort(abort.signal, {
+          timedOut: abort.timedOut,
+          timeoutMessage: 'Choice timed out.',
+          abortMessage: 'Choice aborted.',
+        }),
+      ]);
       const rawText = (response.outputText ?? '').trim();
       if (response.cancelled) {
         logChoiceQuery({
@@ -251,28 +260,37 @@ export class CharacterAgent {
         rawText,
       };
     } catch (error) {
-      const cancelled = options.signal?.aborted === true;
-      if (requestId !== 0 && !cancelled && this.engine.cancelQueuedRequest) {
+      const cancelled = abort.signal.aborted;
+      if (requestId !== 0 && cancelled && this.engine.cancelQueuedRequest) {
+        void this.engine.cancelQueuedRequest(requestId).catch(() => undefined);
+      } else if (requestId !== 0 && !cancelled && this.engine.cancelQueuedRequest) {
         try {
           await this.engine.cancelQueuedRequest(requestId);
         } catch {
           // Swallow cancel errors.
         }
       }
+      const errorMessage = cancelled
+        ? abort.timedOut()
+          ? 'Choice timed out.'
+          : undefined
+        : error instanceof Error ? error.message : String(error);
       logChoiceQuery({
         phase: 'response',
         contextKey: this.config.id,
         rawText: '',
         choice: null,
         cancelled,
-        errorMessage: error instanceof Error ? error.message : String(error),
+        ...(errorMessage ? { errorMessage } : {}),
       });
       return {
         choice: null,
         cancelled,
-        errorMessage: error instanceof Error ? error.message : String(error),
+        ...(errorMessage ? { errorMessage } : {}),
         rawText: '',
       };
+    } finally {
+      abort.dispose();
     }
   }
 

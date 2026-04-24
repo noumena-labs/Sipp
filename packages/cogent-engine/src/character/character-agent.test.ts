@@ -551,6 +551,27 @@ test('choose() returns cancelled when aborted', async () => {
   assert.equal(result.cancelled, true);
 });
 
+test('choose() returns cancelled on timeout and cancels the queued request', async () => {
+  const engine = createFakeEngine();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  engine.enqueue({ tokens: ['yes'], waitBeforeTokens: gate });
+  const agent = new CharacterAgent(engine, buildConfig());
+
+  const result = await agent.choose('Pick one.', {
+    choices: ['yes', 'no'],
+    timeoutMs: 1,
+  });
+  release();
+
+  assert.equal(result.choice, null);
+  assert.equal(result.cancelled, true);
+  assert.equal(result.errorMessage, 'Choice timed out.');
+  assert.deepEqual(engine.cancelCalls, [1]);
+});
+
 test('overlapping chat() auto-cancels the prior turn and commits only the replacement turn', async () => {
   const engine = createFakeEngine();
   let releaseFirst!: () => void;
