@@ -3,24 +3,62 @@ import type { BrainActivityStoreSnapshot } from '../runtime/brain-activity-store
 
 export interface BrainActivityHudProps {
   readonly activity: BrainActivityStoreSnapshot;
+  readonly expanded: boolean;
   readonly selectedBrainId: string | null;
+  readonly onExpand: () => void;
+  readonly onCollapse: () => void;
   readonly onSelectBrain: (brainId: string) => void;
 }
 
 export function BrainActivityHud(props: BrainActivityHudProps) {
+  const hasRunningBrain = props.activity.brains.some((brain) => brain.status === 'running');
+  const hasCompletedQuery = props.activity.totalQueries > 0 && !hasRunningBrain;
+
+  if (!props.expanded) {
+    return (
+      <button
+        type="button"
+        className="brain-hud-compact glass-panel"
+        onClick={props.onExpand}
+        aria-label="Expand brain activity visualizer"
+      >
+        <span className={`brain-hud-compact-indicator${hasRunningBrain ? ' active processing' : ''}`}>
+          <span className="brain-hud-compact-dot" />
+          Processing
+        </span>
+        <span className={`brain-hud-compact-indicator${hasCompletedQuery ? ' active done' : ''}`}>
+          <span className="brain-hud-compact-dot" />
+          Done
+        </span>
+        <span className="brain-hud-compact-query-label">Queries</span>
+        <span className="brain-hud-compact-total">{props.activity.totalQueries}</span>
+      </button>
+    );
+  }
+
   const activeBrain = props.activity.brains.find((brain) => brain.status === 'running') ?? null;
   const streamPreview = activeBrain?.responseText.trim() || previewPrompt(activeBrain?.renderedPrompt ?? '');
 
   return (
-    <div className="brain-hud glass-panel">
+    <div className="brain-hud brain-hud-expanded glass-panel">
       <div className="brain-hud-head">
         <div>
           <span className="panel-eyebrow">Brain Activity</span>
           <div className="brain-hud-title">LLM query visualizer</div>
         </div>
-        <span className={`brain-hud-status${activeBrain ? ' active' : ''}`}>
-          {activeBrain ? `${activeBrain.label} live` : 'Idle'}
-        </span>
+        <div className="brain-hud-head-actions">
+          <span className={`brain-hud-status${activeBrain ? ' active' : ''}`}>
+            {activeBrain ? `${activeBrain.label} live` : 'Idle'}
+          </span>
+          <button
+            type="button"
+            className="brain-hud-minimize"
+            onClick={props.onCollapse}
+            aria-label="Collapse brain activity visualizer"
+          >
+            Minimize
+          </button>
+        </div>
       </div>
 
       <div className="brain-metric-grid">

@@ -86,6 +86,8 @@ export default function App() {
   const [events, setEvents] = useState<EventLogEntry[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedBrainId, setSelectedBrainId] = useState<string | null>(null);
+  const [hasSimulationStarted, setHasSimulationStarted] = useState(false);
+  const [brainHudExpanded, setBrainHudExpanded] = useState(false);
   const [hoveredObject, setHoveredObject] = useState<HoveredSceneObject | null>(null);
   const [eventLogCollapsed, setEventLogCollapsed] = useState(true);
   const eventIdRef = useRef(0);
@@ -103,6 +105,19 @@ export default function App() {
   const pushEvent = useCallback((entry: Omit<EventLogEntry, 'id'>) => {
     const id = ++eventIdRef.current;
     setEvents((prev) => [...prev.slice(-199), { ...entry, id }]);
+  }, []);
+
+  const handleExpandBrainHud = useCallback((): void => {
+    setBrainHudExpanded(true);
+  }, []);
+
+  const handleCollapseBrainHud = useCallback((): void => {
+    setBrainHudExpanded(false);
+    setSelectedBrainId(null);
+  }, []);
+
+  const handleSelectBrain = useCallback((brainId: string): void => {
+    setSelectedBrainId((prev) => prev === brainId ? null : brainId);
   }, []);
 
   // Subscribe to bus once.
@@ -282,6 +297,8 @@ export default function App() {
       criticalIssueRef.current = false;
       setEvents([]);
       brainStore.reset();
+      setHasSimulationStarted(false);
+      setBrainHudExpanded(false);
       setSelectedBrainId(null);
       setSelectedAgentId(null);
       snapshotRef.current = null;
@@ -381,6 +398,7 @@ export default function App() {
   const handleStart = (): void => {
     if (!harness) return;
     criticalIssueRef.current = false;
+    setHasSimulationStarted(true);
     setRunning(true);
     setStatus('Running.');
   };
@@ -397,6 +415,7 @@ export default function App() {
       setRunning(false);
     }
     criticalIssueRef.current = false;
+    setHasSimulationStarted(true);
     setStatus('Stepping…');
     await harness.runtime.step(1 / tickHz);
     await harness.runtime.waitForIdle();
@@ -417,6 +436,8 @@ export default function App() {
       setSnapshot(null);
       setEvents([]);
       brainStore.reset();
+      setHasSimulationStarted(false);
+      setBrainHudExpanded(false);
       setSelectedBrainId(null);
       setSelectedAgentId(null);
       eventIdRef.current = 0;
@@ -504,14 +525,22 @@ export default function App() {
         />
       </div>
 
+      {hasSimulationStarted ? (
+        <div className="sim-overlay sim-bottom-left">
+          <BrainActivityHud
+            activity={brainActivity}
+            expanded={brainHudExpanded}
+            selectedBrainId={selectedBrainId}
+            onExpand={handleExpandBrainHud}
+            onCollapse={handleCollapseBrainHud}
+            onSelectBrain={handleSelectBrain}
+          />
+        </div>
+      ) : null}
+
       {snapshot ? (
         <div className="sim-overlay sim-top-center sim-center-stack">
           <Scoreboard snapshot={snapshot} metaText={scoreboardStatus} />
-          <BrainActivityHud
-            activity={brainActivity}
-            selectedBrainId={selectedBrainId}
-            onSelectBrain={(brainId) => setSelectedBrainId((prev) => prev === brainId ? null : brainId)}
-          />
           <div className={`director-note glass-panel director-${directorState.mode}`}>
             <div className="director-note-head">
               <div className="director-note-main">

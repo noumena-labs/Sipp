@@ -76,6 +76,12 @@ html, body, #app {
   justify-content: center;
 }
 
+.sim-bottom-left {
+  left: 16px;
+  bottom: 16px;
+  z-index: 6;
+}
+
 .sim-bottom-right {
   right: 16px;
   bottom: 16px;
@@ -430,10 +436,70 @@ html, body, #app {
 }
 
 .brain-hud {
-  width: min(620px, 92vw);
   display: grid;
   gap: 12px;
   padding: 14px;
+}
+
+.brain-hud-expanded {
+  width: min(620px, calc(100vw - 32px));
+}
+
+.brain-hud-compact {
+  width: 132px;
+  min-height: 132px;
+  display: grid;
+  grid-template-rows: 1fr 1fr auto auto;
+  gap: 8px;
+  align-items: end;
+  justify-items: start;
+  padding: 12px;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+
+.brain-hud-compact-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #6d7894;
+}
+
+.brain-hud-compact-indicator.active.processing {
+  color: #ffe39a;
+}
+
+.brain-hud-compact-indicator.active.done {
+  color: #c8f0d2;
+}
+
+.brain-hud-compact-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 0 rgba(255, 255, 255, 0);
+}
+
+.brain-hud-compact-indicator.active.processing .brain-hud-compact-dot {
+  animation: brain-pulse 1s ease-in-out infinite;
+}
+
+.brain-hud-compact-query-label {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #8fa4d4;
+}
+
+.brain-hud-compact-total {
+  font-size: 24px;
+  font-weight: 700;
+  color: #f4f7ff;
+  line-height: 1;
 }
 
 .brain-hud-head {
@@ -441,6 +507,12 @@ html, body, #app {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+}
+
+.brain-hud-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .brain-hud-title {
@@ -466,6 +538,16 @@ html, body, #app {
   color: #fff1c8;
   background: rgba(255, 209, 102, 0.12);
   border-color: rgba(255, 209, 102, 0.28);
+}
+
+.brain-hud-minimize {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #e9eefc;
+  font-size: 11px;
+  cursor: pointer;
 }
 
 .brain-metric-grid {
@@ -838,6 +920,11 @@ html, body, #app {
     bottom: 12px;
   }
 
+  .sim-bottom-left {
+    left: 12px;
+    bottom: 120px;
+  }
+
   .sim-bottom-right {
     right: 12px;
     bottom: 92px;
@@ -851,6 +938,20 @@ html, body, #app {
   .scoreboard-head {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .brain-hud-head-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .brain-hud-expanded {
+    width: min(100vw - 24px, 420px);
+  }
+
+  .brain-hud-compact {
+    width: 112px;
+    min-height: 112px;
   }
 
   .brain-drawer {
