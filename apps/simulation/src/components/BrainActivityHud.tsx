@@ -64,7 +64,7 @@ export function BrainActivityHud(props: BrainActivityHudProps) {
       <div className="brain-metric-grid">
         <Metric label="Total queries" value={String(props.activity.totalQueries)} />
         <Metric label="Queries / sec" value={props.activity.queriesPerSecond.toFixed(2)} />
-        <Metric label="Last latency" value={formatMs(props.activity.lastLatencyMs)} />
+        <Metric label="Avg latency" value={formatMs(props.activity.averageLatencyMs)} />
         <Metric label="Failures" value={String(props.activity.totalFailures)} />
       </div>
 

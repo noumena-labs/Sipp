@@ -2,6 +2,7 @@ import type { RequestObservabilityMetrics } from 'cogent-engine';
 
 const QUERIES_PER_SECOND_WINDOW_MS = 10_000;
 const LIVE_UPDATE_INTERVAL_MS = 120;
+const ROLLING_LATENCY_SAMPLE_COUNT = 10;
 
 export interface BrainDefinition {
   readonly id: string;
@@ -62,7 +63,7 @@ export interface BrainActivityStoreSnapshot {
   readonly activeBrainId: string | null;
   readonly activeBrainLabel: string | null;
   readonly activeQueryCount: number;
-  readonly lastLatencyMs: number | null;
+  readonly averageLatencyMs: number | null;
   readonly totalFailures: number;
   readonly totalCancelled: number;
 }
@@ -100,6 +101,7 @@ export class BrainActivityStore {
   private readonly queryIdsByRequestId = new Map<number, string>();
   private readonly activeQueryIds = new Set<string>();
   private readonly recentQueryStartsMs: number[] = [];
+  private readonly recentLatenciesMs: number[] = [];
 
   private liveUpdateTimer: ReturnType<typeof setInterval> | null = null;
   private cachedSnapshot: BrainActivityStoreSnapshot | null = null;
@@ -108,7 +110,6 @@ export class BrainActivityStore {
   private totalQueries = 0;
   private totalFailures = 0;
   private totalCancelled = 0;
-  private lastLatencyMs: number | null = null;
 
   public constructor(definitions: readonly BrainDefinition[]) {
     this.definitions = definitions.slice();
@@ -142,7 +143,7 @@ export class BrainActivityStore {
       activeBrainId: activeBrain?.brainId ?? null,
       activeBrainLabel: activeBrain?.label ?? null,
       activeQueryCount: this.activeQueryIds.size,
-      lastLatencyMs: this.lastLatencyMs,
+      averageLatencyMs: average(this.recentLatenciesMs),
       totalFailures: this.totalFailures,
       totalCancelled: this.totalCancelled,
     };
@@ -164,7 +165,7 @@ export class BrainActivityStore {
     this.totalQueries = 0;
     this.totalFailures = 0;
     this.totalCancelled = 0;
-    this.lastLatencyMs = null;
+    this.recentLatenciesMs.length = 0;
     this.stopLiveUpdates();
     this.invalidateSnapshot();
     this.emit();
@@ -276,7 +277,10 @@ export class BrainActivityStore {
     record.inputTokenCount = args.requestObservability?.inputTokenCount ?? null;
     record.outputTokenCount = args.requestObservability?.outputTokenCount ?? null;
     if (record.startedAtMs != null) {
-      this.lastLatencyMs = now - record.startedAtMs;
+      this.recentLatenciesMs.push(now - record.startedAtMs);
+      if (this.recentLatenciesMs.length > ROLLING_LATENCY_SAMPLE_COUNT) {
+        this.recentLatenciesMs.shift();
+      }
     }
     if (record.requestId != null) {
       this.queryIdsByRequestId.delete(record.requestId);
@@ -470,4 +474,15 @@ function countRecentQueries(values: readonly number[], now: number): number {
     }
   }
   return count;
+}
+
+function average(values: readonly number[]): number | null {
+  if (values.length === 0) {
+    return null;
+  }
+  let sum = 0;
+  for (const value of values) {
+    sum += value;
+  }
+  return sum / values.length;
 }
