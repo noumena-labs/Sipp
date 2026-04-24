@@ -301,18 +301,35 @@ export type SimulationGameEvent =
       readonly impactTick: number;
     }
   | {
+      readonly kind: 'bat_swing';
+      readonly agentId: string;
+      readonly objectId: string;
+      readonly origin: Vec2;
+      readonly aimAt: Vec2;
+      readonly radius: number;
+      readonly startAngle: number;
+      readonly endAngle: number;
+      readonly hits: readonly BatSwingHit[];
+    }
+  | {
       readonly kind: 'power_up_use';
       readonly agentId: string;
       readonly targetAgentId: string;
       readonly objectId: string;
-      readonly powerUp: PowerUpKind;
+      readonly powerUp: 'ice_cube';
       readonly position: Vec2;
-      readonly effect: 'hit' | 'freeze';
+      readonly effect: 'freeze';
     }
   | {
       readonly kind: 'fallback';
       readonly message: string;
     };
+
+export interface BatSwingHit {
+  readonly agentId: string;
+  readonly from: Vec2;
+  readonly to: Vec2;
+}
 
 export interface ScenarioAgentSeed {
   readonly id: string;

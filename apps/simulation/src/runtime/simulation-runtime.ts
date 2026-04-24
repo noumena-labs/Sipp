@@ -5,6 +5,7 @@ import { SimulationAgentChooser } from './agent-chooser.js';
 import {
   applyDirectorDecision,
   applyTickFirstPass,
+  BAT_SWING_RADIUS,
   CHASE_MIN_DISTANCE,
   cloneScore,
   deterministicConflictResolution,
@@ -586,6 +587,13 @@ export class SimulationRuntime {
       return { kind: 'deliver', objectId: home.id, label };
     }
 
+    if (goal.kind === 'sabotage_agent' && goal.method === 'bump' && agent.powerUp?.kind === 'bat') {
+      const target = this.state.agents.find((entry) => entry.id === goal.agentId);
+      if (target) {
+        return { kind: 'sabotage_agent', agentId: target.id, method: 'bat', label: `smack ${target.name} with the bat` };
+      }
+    }
+
     if (goal.kind === 'push_agent') {
       const target = this.state.agents.find((entry) => entry.id === goal.agentId);
       if (target?.holding === this.state.game.bananaObjectId && agent.cooldowns.sabotageUntilTick <= this.state.tick) {
@@ -919,6 +927,7 @@ function summarizeForcedDropAttempt(
     currentHolder: object?.heldBy ?? null,
     distance: attacker && target ? roundForPrompt(vec2Distance(attacker.position, target.position)) : null,
     sabotageRadius: SABOTAGE_RADIUS,
+    batSwingRadius: BAT_SWING_RADIUS,
     attackerIntentAgeTicks: attacker ? Math.max(0, state.tick - attacker.intentIssuedAtTick) : null,
     targetDistanceToGoal: target && goal ? roundForPrompt(vec2Distance(target.position, goal.position)) : null,
     score: {

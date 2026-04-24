@@ -1,4 +1,4 @@
-import { CHASE_MIN_DISTANCE, GOAL_RADIUS, ICE_THROW_RADIUS, INTERACTION_RADIUS, SABOTAGE_RADIUS } from './reducer.js';
+import { BAT_SWING_RADIUS, CHASE_MIN_DISTANCE, GOAL_RADIUS, ICE_THROW_RADIUS, INTERACTION_RADIUS } from './reducer.js';
 import type {
   AgentPerception,
   DecisionContext,
@@ -139,7 +139,9 @@ function addNonCarrierOptions(
       : `${carrier.name} has the banana and is ${qualitativeDistance(carrier.distance)}.`;
     lines.push(carrierState);
     if (carrierIsTooCloseToChase) {
-      lines.push(`${carrier.name} is too close to chase. Prioritize bumping or using a power-up to knock the banana loose; push is secondary disruption.`);
+      lines.push(perception.self.powerUp
+        ? `${carrier.name} is too close to chase. Prioritize your equipped power-up to knock the banana loose; push is secondary disruption.`
+        : `${carrier.name} is too close to chase. Prioritize bumping to knock the banana loose; push is secondary disruption.`);
     }
 
     if (perception.self.powerUp?.kind === 'ice_cube' && !sabotageCoolingDown) {
@@ -174,13 +176,17 @@ function addNonCarrierOptions(
       });
     }
 
-    if (carrier.distance <= CHASE_MIN_DISTANCE && !sabotageCoolingDown) {
+    if (!perception.self.powerUp && carrier.distance <= CHASE_MIN_DISTANCE && !sabotageCoolingDown) {
       options.push({
         label: `bump ${carrier.name}`,
         goal: { kind: 'sabotage_agent', agentId: carrier.id, method: 'bump', label: `bump ${carrier.name}` },
       });
     } else if (sabotageCoolingDown) {
-      lines.push('Your regular bump is cooling down, so this is a good moment to reposition or hunt a guaranteed hit.');
+      lines.push('Your sabotage is cooling down, so this is a good moment to reposition or hunt a guaranteed hit.');
+    }
+
+    if (perception.self.powerUp?.kind === 'bat' && carrier.distance <= BAT_SWING_RADIUS && !sabotageCoolingDown) {
+      lines.push(`${carrier.name} is inside your bat swing arc.`);
     }
 
     if (!carrierIsTooCloseToChase) {

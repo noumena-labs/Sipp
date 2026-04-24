@@ -1,6 +1,7 @@
 import { clampToBounds, vec2Distance } from './sensing.js';
 import type {
   AgentIntent,
+  BatSwingHit,
   DirectorDecision,
   ForcedDropOutcome,
   ForcedDropRulingRecord,
@@ -57,10 +58,12 @@ export const CHASE_MIN_DISTANCE = 2.1;
 export const PUSH_RADIUS = AGENT_APPROACH_RADIUS - 0.35;
 export const PUSH_DISTANCE = 2.6;
 export const ICE_THROW_RADIUS = 4.5;
+export const BAT_SWING_RADIUS = 1.3;
 export const FORCED_DROP_HISTORY_LIMIT = 8;
 export const SABOTAGE_COOLDOWN_TICKS = 3;
 export const FREEZE_TICKS = 38;
 export const ICE_THROW_TRAVEL_TICKS = 4;
+const BAT_SWING_HALF_ANGLE = (Math.PI * 7) / 18;
 const DETOUR_PADDING = 0.35;
 const DETOUR_REACHED_RADIUS = 0.35;
 const BLOCKED_REPATH_TICKS = 2;
@@ -671,8 +674,11 @@ function processSabotageRequests(state: MutableWorldState, events: SimulationGam
       clearAgentSabotage(state, agent);
       continue;
     }
+    const method: SabotageMethod = intent.method === 'bump' && agent.powerUp?.kind === 'bat'
+      ? 'bat'
+      : intent.method;
 
-    if (intent.method === 'bump') {
+    if (method === 'bump') {
       if (target.holding !== banana.id) {
         clearAgentSabotage(state, agent);
         continue;
@@ -701,7 +707,7 @@ function processSabotageRequests(state: MutableWorldState, events: SimulationGam
       continue;
     }
 
-    const powerUp = consumePowerUp(agent, intent.method);
+    const powerUp = consumePowerUp(agent, method);
     if (!powerUp) {
       clearAgentSabotage(state, agent);
       continue;
@@ -716,7 +722,7 @@ function processSabotageRequests(state: MutableWorldState, events: SimulationGam
       clearAgentSabotage(state, agent);
       continue;
     }
-    if (vec2Distance(agent.position, target.position) > SABOTAGE_RADIUS) {
+    if (vec2Distance(agent.position, target.position) > BAT_SWING_RADIUS) {
       agent.powerUp = powerUp;
       continue;
     }
@@ -1079,27 +1085,112 @@ function applyGuaranteedPowerUpSabotage(
   events: SimulationGameEvent[]
 ): void {
   if (powerUp.kind === 'bat') {
-    const position = midpoint(attacker.position, target.position);
-    attacker.status = `bonks ${target.name} with the bat`;
-    attacker.emotion = 'alert';
-    target.emotion = 'surprised';
-    if (target.holding === banana.id) {
-      dropHeldObject(state, target, events, `${attacker.name} bonks ${target.name} with the bat!`, 'bat');
-      incrementScore(state.game.score.forcedDrops, attacker.id);
-    } else {
-      target.status = 'gets bonked sideways';
-    }
-    events.push({
-      kind: 'power_up_use',
-      agentId: attacker.id,
-      targetAgentId: target.id,
-      objectId: powerUp.objectId,
-      powerUp: 'bat',
-      position,
-      effect: 'hit',
-    });
-    scheduleRespawnFromRule(state, powerUp.objectId);
+    applyBatSwing(state, attacker, target, powerUp, banana, events);
     return;
+  }
+}
+
+function applyBatSwing(
+  state: MutableWorldState,
+  attacker: SimulationAgentState,
+  target: SimulationAgentState,
+  powerUp: { kind: 'bat'; objectId: string },
+  banana: SimulationObjectState,
+  events: SimulationGameEvent[]
+): void {
+  const aimDirection = normalizeVec({
+    x: target.position.x - attacker.position.x,
+    z: target.position.z - attacker.position.z,
+  }) ?? normalizeVec({ x: Math.sin(attacker.heading), z: Math.cos(attacker.heading) }) ?? { x: 0, z: 1 };
+  const aimAngle = Math.atan2(aimDirection.x, aimDirection.z);
+  const hits: BatSwingHit[] = [];
+
+  for (const candidate of state.agents) {
+    if (candidate.id === attacker.id) continue;
+    if (!isAgentInBatSwing(attacker, candidate, target.id, aimDirection)) continue;
+    const from = { x: candidate.position.x, z: candidate.position.z };
+    const pushDirection = normalizeVec({
+      x: candidate.position.x - attacker.position.x,
+      z: candidate.position.z - attacker.position.z,
+    }) ?? aimDirection;
+    hits.push({
+      agentId: candidate.id,
+      from,
+      to: choosePushLandingPoint(state, candidate, pushDirection),
+    });
+  }
+
+  attacker.status = hits.length === 1
+    ? `swings the bat at ${target.name}`
+    : 'swings the bat through the crowd';
+  attacker.heading = aimAngle;
+  attacker.emotion = 'alert';
+
+  events.push({
+    kind: 'bat_swing',
+    agentId: attacker.id,
+    objectId: powerUp.objectId,
+    origin: { x: attacker.position.x, z: attacker.position.z },
+    aimAt: { x: target.position.x, z: target.position.z },
+    radius: BAT_SWING_RADIUS,
+    startAngle: aimAngle - BAT_SWING_HALF_ANGLE,
+    endAngle: aimAngle + BAT_SWING_HALF_ANGLE,
+    hits,
+  });
+
+  for (const hit of hits) {
+    const hitAgent = state.agents.find((agent) => agent.id === hit.agentId);
+    if (!hitAgent) continue;
+    hitAgent.emotion = 'surprised';
+    if (hitAgent.holding === banana.id) {
+      dropHeldObject(state, hitAgent, events, `${attacker.name} sweeps the bat through ${hitAgent.name}!`, 'bat');
+      incrementScore(state.game.score.forcedDrops, attacker.id);
+    }
+    applyBatSwingPush(state, attacker, hitAgent, hit.from, hit.to);
+  }
+
+  scheduleRespawnFromRule(state, powerUp.objectId);
+}
+
+function isAgentInBatSwing(
+  attacker: SimulationAgentState,
+  candidate: SimulationAgentState,
+  selectedTargetId: string,
+  aimDirection: Vec2
+): boolean {
+  const distance = vec2Distance(attacker.position, candidate.position);
+  if (distance > BAT_SWING_RADIUS) return false;
+  if (candidate.id === selectedTargetId) return true;
+  const direction = normalizeVec({
+    x: candidate.position.x - attacker.position.x,
+    z: candidate.position.z - attacker.position.z,
+  });
+  if (!direction) return true;
+  const dot = direction.x * aimDirection.x + direction.z * aimDirection.z;
+  return Math.acos(Math.max(-1, Math.min(1, dot))) <= BAT_SWING_HALF_ANGLE;
+}
+
+function applyBatSwingPush(
+  state: MutableWorldState,
+  attacker: SimulationAgentState,
+  target: SimulationAgentState,
+  from: Vec2,
+  to: Vec2
+): void {
+  target.position = to;
+  target.heading = Math.atan2(to.x - from.x, to.z - from.z);
+  target.intent = null;
+  target.goal = null;
+  target.status = `sent flying by ${attacker.name}'s bat swing`;
+  target.emotion = 'surprised';
+  target.navigation.detourTarget = null;
+  target.navigation.blockedTicks = 0;
+  target.navigation.obstacleId = null;
+  if (target.holding) {
+    const held = getObject(state, target.holding);
+    if (held) {
+      held.position = { x: to.x, z: to.z };
+    }
   }
 }
 
@@ -1464,7 +1555,11 @@ export function hasReachedCurrentIntent(agent: SimulationAgentState, state: Muta
     case 'sabotage': {
       const target = state.agents.find((entry) => entry.id === intent.agentId);
       if (!target) return true;
-      const radius = intent.method === 'ice_cube' ? ICE_THROW_RADIUS : SABOTAGE_RADIUS;
+      const radius = intent.method === 'ice_cube'
+        ? ICE_THROW_RADIUS
+        : intent.method === 'bat' || (intent.method === 'bump' && agent.powerUp?.kind === 'bat')
+          ? BAT_SWING_RADIUS
+          : SABOTAGE_RADIUS;
       return vec2Distance(agent.position, target.position) <= radius;
     }
     case 'pick_up':

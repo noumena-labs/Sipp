@@ -629,10 +629,14 @@ function describeGameEvent(
       return `${nameOf(event.agentId, snapshot)} pushes ${nameOf(event.targetAgentId, snapshot)} away.`;
     case 'power_up_throw':
       return `${nameOf(event.agentId, snapshot)} hurls an ice cube at ${nameOf(event.targetAgentId, snapshot)}.`;
+    case 'bat_swing': {
+      const hitNames = event.hits.map((hit) => nameOf(hit.agentId, snapshot));
+      return hitNames.length > 0
+        ? `${nameOf(event.agentId, snapshot)} swings the bat and sends ${hitNames.join(', ')} flying.`
+        : `${nameOf(event.agentId, snapshot)} swings the bat through open air.`;
+    }
     case 'power_up_use':
-      return event.powerUp === 'bat'
-        ? `${nameOf(event.agentId, snapshot)} bonks ${nameOf(event.targetAgentId, snapshot)} with the bat.`
-        : `${nameOf(event.targetAgentId, snapshot)} gets encased in ice after ${nameOf(event.agentId, snapshot)}'s throw lands.`;
+      return `${nameOf(event.targetAgentId, snapshot)} gets encased in ice after ${nameOf(event.agentId, snapshot)}'s throw lands.`;
     case 'fallback':
       if (event.message.startsWith('Director is ruling on ')) {
         return null;

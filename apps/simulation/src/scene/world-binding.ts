@@ -31,6 +31,8 @@ const ICE_THROW_SECONDS_PER_TICK = 0.16;
 const FROZEN_SHAKE_SECONDS = 0.18;
 const ICE_PROJECTILE_STALE_SECONDS = 1.2;
 const ICE_PATH_SEGMENTS = 16;
+const BAT_SWING_SECONDS = 0.34;
+const BAT_SWING_SEGMENTS = 18;
 
 interface AgentEntry {
   name: string;
@@ -98,6 +100,17 @@ interface ProjectileEffect {
   dispose(): void;
 }
 
+interface BatSwingEffect {
+  readonly root: THREE.Group;
+  readonly arc: THREE.Line;
+  readonly bat: ReturnType<typeof createBatMesh>;
+  readonly startAt: number;
+  readonly endAt: number;
+  readonly startAngle: number;
+  readonly endAngle: number;
+  dispose(): void;
+}
+
 export interface WorldBinding {
   applySnapshot(snapshot: WorldSnapshot): void;
   dispose(): void;
@@ -121,6 +134,7 @@ export function bindWorldToScene(
   const objects = new Map<string, ObjectEntry>();
   const bursts = new Set<BurstEffect>();
   const projectiles = new Set<ProjectileEffect>();
+  const batSwings = new Set<BatSwingEffect>();
   const hoverPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   let highlightedAgent: string | null = null;
   let hoveredObject: string | null = null;
@@ -431,6 +445,20 @@ export function bindWorldToScene(
       updateIceProjectilePath(projectile, endX, endZ, progress);
     }
 
+    for (const swing of Array.from(batSwings)) {
+      if (swing.endAt <= elapsedSeconds) {
+        swing.dispose();
+        batSwings.delete(swing);
+        continue;
+      }
+      const progress = clamp01((elapsedSeconds - swing.startAt) / (swing.endAt - swing.startAt));
+      const eased = 1 - Math.pow(1 - progress, 2);
+      const angle = lerp(swing.startAngle, swing.endAngle, eased);
+      swing.root.rotation.y = -angle;
+      const material = swing.arc.material as THREE.LineBasicMaterial;
+      material.opacity = 0.72 * (1 - progress * 0.55);
+    }
+
     for (const burst of Array.from(bursts)) {
       if (burst.endAt <= elapsedSeconds) {
         burst.dispose();
@@ -566,24 +594,51 @@ export function bindWorldToScene(
         );
         return;
       }
+      case 'bat_swing': {
+        const attacker = agents.get(event.agentId);
+        if (attacker) {
+          attacker.glyphOverride = '🏏';
+          attacker.glyphOverrideUntil = elapsedSeconds + 0.42;
+          attacker.flashColor = new THREE.Color(0xffc86a);
+          attacker.flashUntil = elapsedSeconds + 0.45;
+          attacker.pulseUntil = elapsedSeconds + PULSE_SECONDS;
+        }
+        spawnBatSwing(event.origin, event.radius, event.startAngle, event.endAngle);
+        for (const hit of event.hits) {
+          const target = agents.get(hit.agentId);
+          if (target) {
+            target.targetX = hit.to.x;
+            target.targetZ = hit.to.z;
+            target.glyphOverride = '💫';
+            target.glyphOverrideUntil = elapsedSeconds + 0.44;
+            target.flashColor = new THREE.Color(0xffc86a);
+            target.flashUntil = elapsedSeconds + 0.52;
+            target.joltUntil = elapsedSeconds + IMPACT_SECONDS;
+            target.joltDirection = {
+              x: hit.to.x - hit.from.x,
+              z: hit.to.z - hit.from.z,
+            };
+          }
+          spawnBurst(hit.from, 0xffc86a, 10, 0.28);
+        }
+        return;
+      }
       case 'power_up_use': {
         const attacker = agents.get(event.agentId);
         const target = agents.get(event.targetAgentId);
         if (attacker) {
-          attacker.glyphOverride = event.powerUp === 'bat' ? '🏏' : '🧊';
+          attacker.glyphOverride = '🧊';
           attacker.glyphOverrideUntil = elapsedSeconds + 0.36;
-          attacker.flashColor = new THREE.Color(event.powerUp === 'bat' ? 0xffc86a : 0x8fe7ff);
+          attacker.flashColor = new THREE.Color(0x8fe7ff);
           attacker.flashUntil = elapsedSeconds + FLASH_SECONDS;
         }
         if (target) {
-          if (event.effect === 'freeze') {
-            target.iceShell.visible = true;
-          }
-          target.glyphOverride = event.effect === 'freeze' ? '⛄' : '💢';
+          target.iceShell.visible = true;
+          target.glyphOverride = '⛄';
           target.glyphOverrideUntil = elapsedSeconds + 0.4;
-          target.flashColor = new THREE.Color(event.effect === 'freeze' ? 0x8fe7ff : 0xff8a80);
+          target.flashColor = new THREE.Color(0x8fe7ff);
           target.flashUntil = elapsedSeconds + 0.5;
-          target.joltUntil = elapsedSeconds + (event.effect === 'freeze' ? FROZEN_SHAKE_SECONDS : IMPACT_SECONDS);
+          target.joltUntil = elapsedSeconds + FROZEN_SHAKE_SECONDS;
           target.joltDirection = attacker
             ? {
                 x: target.visual.root.position.x - attacker.visual.root.position.x,
@@ -591,10 +646,8 @@ export function bindWorldToScene(
               }
             : { x: 0.1, z: 0.1 };
         }
-        if (event.effect === 'freeze') {
-          consumeIceProjectile(event.objectId, event.targetAgentId);
-        }
-        spawnBurst(event.position, event.effect === 'freeze' ? 0x8fe7ff : 0xffc86a, 14, 0.34);
+        consumeIceProjectile(event.objectId, event.targetAgentId);
+        spawnBurst(event.position, 0x8fe7ff, 14, 0.34);
         return;
       }
       case 'delivery': {
@@ -720,6 +773,40 @@ export function bindWorldToScene(
     }
   }
 
+  function spawnBatSwing(origin: Vec2, radius: number, startAngle: number, endAngle: number): void {
+    const root = new THREE.Group();
+    root.position.set(origin.x, 0, origin.z);
+    const bat = createBatMesh();
+    bat.root.position.set(radius * 0.52, 0.72, 0);
+    bat.root.rotation.set(0, 0, -Math.PI / 2);
+    bat.root.scale.setScalar(0.95);
+    root.add(bat.root);
+    worldRoot.add(root);
+
+    const arc = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(createSwingArcPoints(origin, radius, startAngle, endAngle)),
+      new THREE.LineBasicMaterial({ color: 0xffc86a, transparent: true, opacity: 0.72, depthWrite: false })
+    );
+    worldRoot.add(arc);
+
+    batSwings.add({
+      root,
+      arc,
+      bat,
+      startAt: elapsedSeconds,
+      endAt: elapsedSeconds + BAT_SWING_SECONDS,
+      startAngle,
+      endAngle,
+      dispose: () => {
+        worldRoot.remove(root);
+        worldRoot.remove(arc);
+        bat.dispose();
+        arc.geometry.dispose();
+        (arc.material as THREE.Material).dispose();
+      },
+    });
+  }
+
   return {
     applySnapshot,
     dispose() {
@@ -746,10 +833,14 @@ export function bindWorldToScene(
       for (const projectile of projectiles) {
         projectile.dispose();
       }
+      for (const swing of batSwings) {
+        swing.dispose();
+      }
       agents.clear();
       objects.clear();
       bursts.clear();
       projectiles.clear();
+      batSwings.clear();
     },
     pickObject(ray) {
       const point = new THREE.Vector3();
@@ -985,6 +1076,20 @@ function updateIceProjectilePath(projectile: ProjectileEffect, endX: number, end
   projectile.path.geometry.setFromPoints(points);
   const material = projectile.path.material as THREE.LineBasicMaterial;
   material.opacity = 0.18 + 0.42 * (1 - progress * 0.35);
+}
+
+function createSwingArcPoints(origin: Vec2, radius: number, startAngle: number, endAngle: number): THREE.Vector3[] {
+  const points: THREE.Vector3[] = [];
+  for (let i = 0; i <= BAT_SWING_SEGMENTS; i += 1) {
+    const t = i / BAT_SWING_SEGMENTS;
+    const angle = lerp(startAngle, endAngle, t);
+    points.push(new THREE.Vector3(
+      origin.x + Math.sin(angle) * radius,
+      0.085,
+      origin.z + Math.cos(angle) * radius
+    ));
+  }
+  return points;
 }
 
 function lerp(a: number, b: number, t: number): number {
