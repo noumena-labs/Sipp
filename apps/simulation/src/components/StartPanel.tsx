@@ -50,7 +50,7 @@ export function StartPanel(props: StartPanelProps) {
           <p className="start-story-copy">
             Interfaces are becoming adaptive: users expect software to understand their task, respond in real time, 
             and surface the right action without convoluted workflows. 
-            Current AI infrastructure do not allow this interactive speed and privacy-first.  
+            Current AI infrastructure cannot provide this at interactive speeds or privacy-first.  
           </p>
         </section>
 
@@ -64,7 +64,7 @@ export function StartPanel(props: StartPanelProps) {
       </div>
 
       <div className="start-config-head">
-        <div className="start-config-title">PoC: Banana Dash</div>
+        <div className="start-config-title">Demo: Banana Dash</div>
         <div className="start-config-copy">A demo consisting of 4 brains and 1 judge as the that fight for bananas.</div>
       </div>
 
