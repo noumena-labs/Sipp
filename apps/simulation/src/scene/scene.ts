@@ -34,7 +34,7 @@ export function createSimulationScene(
 
   // Tilted top-down camera. Positioned high on +Z so north (-Z) is up-screen.
   const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 200);
-  const camDistance = halfExtent * 2.2;
+  const camDistance = halfExtent * 3.1;
   camera.position.set(0, camDistance, camDistance * 0.65);
   camera.lookAt(0, 0, 0);
 
@@ -46,7 +46,7 @@ export function createSimulationScene(
 
   // Ground plane. `halfExtent` is the maximum integer cell center, so the
   // visible grid extends half a cell past it on each side.
-  const visualHalfExtent = halfExtent + 0.5;
+  const visualHalfExtent = halfExtent + 1;
   const groundSize = visualHalfExtent * 2;
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(groundSize, groundSize),
