@@ -12,9 +12,11 @@
 //
 //////////////////////////////////////////////////////////////////////////////
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { CogentEngine, getBundledRuntimeUrls } from 'cogent-engine';
 import { createDirectorFromConfigUrl } from 'cogent-engine/orchestrator';
+import { BrainActivityHud } from './components/BrainActivityHud';
+import { BrainTraceDrawer } from './components/BrainTraceDrawer';
 import { SimulationCanvas } from './components/SimulationCanvas';
 import { ControlsPanel } from './components/ControlsPanel';
 import { EventLog, type EventLogEntry } from './components/EventLog';
@@ -23,8 +25,13 @@ import { Scoreboard } from './components/Scoreboard';
 import { COURTYARD_AGENTS, COURTYARD_SCENARIO } from './scenarios/courtyard-snack.js';
 import { SimulationBus, type SimulationEvent } from './runtime/bus.js';
 import {
+  BrainActivityStore,
+  type BrainDefinition,
+} from './runtime/brain-activity-store.js';
+import {
   createSimulationAgentChooserFromConfigUrl,
 } from './runtime/agent-chooser.js';
+import { createTracedBrainEngine } from './runtime/traced-engine.js';
 import { SimulationRuntime } from './runtime/simulation-runtime.js';
 import type {
   DirectorDecision,
@@ -49,8 +56,24 @@ interface DirectorPanelState {
   readonly note: string | null;
 }
 
+const BRAIN_DEFINITIONS: readonly BrainDefinition[] = [
+  ...COURTYARD_AGENTS.map((agent) => ({
+    id: agent.agentId,
+    label: agent.name,
+    kind: 'agent' as const,
+    accentColor: agent.color,
+  })),
+  {
+    id: 'director',
+    label: 'Director',
+    kind: 'director' as const,
+    accentColor: '#ffd166',
+  },
+];
+
 export default function App() {
   const bus = useMemo(() => new SimulationBus(), []);
+  const brainStore = useMemo(() => new BrainActivityStore(BRAIN_DEFINITIONS), []);
   const appRef = useRef<HTMLDivElement | null>(null);
   const inspectorRef = useRef<HTMLDivElement | null>(null);
   const [modelUrl, setModelUrl] = useState('');
@@ -62,6 +85,7 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<WorldSnapshot | null>(null);
   const [events, setEvents] = useState<EventLogEntry[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [selectedBrainId, setSelectedBrainId] = useState<string | null>(null);
   const [hoveredObject, setHoveredObject] = useState<HoveredSceneObject | null>(null);
   const [eventLogCollapsed, setEventLogCollapsed] = useState(true);
   const eventIdRef = useRef(0);
@@ -69,6 +93,11 @@ export default function App() {
   const criticalIssueRef = useRef(false);
   const [directorState, setDirectorState] = useState<DirectorPanelState>(() =>
     createInitialDirectorState(COURTYARD_SCENARIO.directorNote ?? null)
+  );
+  const brainActivity = useSyncExternalStore(
+    brainStore.subscribe,
+    brainStore.getSnapshot,
+    brainStore.getSnapshot
   );
 
   const pushEvent = useCallback((entry: Omit<EventLogEntry, 'id'>) => {
@@ -81,6 +110,7 @@ export default function App() {
     const off = bus.onAny((event: SimulationEvent) => {
       switch (event.kind) {
         case 'tick-end':
+          brainStore.setCurrentTick(event.tick);
           snapshotRef.current = event.snapshot;
           setSnapshot(event.snapshot);
           if (event.snapshot.directorNote) {
@@ -110,6 +140,12 @@ export default function App() {
               tick: event.tick,
               kind: 'query',
               text: `${nameOf(event.agentId, snapshotRef.current)}'s turn gets interrupted.`,
+            });
+          }
+          if (event.queryStatus !== 'ok') {
+            brainStore.reviseLatestQuery(event.agentId, {
+              status: mapSimulationQueryStatus(event.queryStatus),
+              errorMessage: event.errorMessage,
             });
           }
           break;
@@ -176,6 +212,13 @@ export default function App() {
         }
         case 'runtime-error': {
           const text = `${event.severity === 'critical' ? 'Critical' : 'Warning'} ${event.source} query issue: ${event.message}`;
+          const targetBrainId = event.source === 'agent' ? event.agentId ?? null : 'director';
+          if (targetBrainId) {
+            brainStore.reviseLatestQuery(targetBrainId, {
+              status: classifyRuntimeIssueStatus(event.message),
+              errorMessage: event.message,
+            });
+          }
           if (event.severity === 'critical') {
             criticalIssueRef.current = true;
             setRunning(false);
@@ -198,7 +241,7 @@ export default function App() {
       }
     });
     return () => off();
-  }, [bus, pushEvent]);
+  }, [brainStore, bus, pushEvent]);
 
   useEffect(() => {
     if (!running || !harness) {
@@ -238,6 +281,8 @@ export default function App() {
       eventIdRef.current = 0;
       criticalIssueRef.current = false;
       setEvents([]);
+      brainStore.reset();
+      setSelectedBrainId(null);
       setSelectedAgentId(null);
       snapshotRef.current = null;
       setSnapshot(null);
@@ -260,6 +305,7 @@ export default function App() {
 
         setStatus('Initialising inference runtime…');
         await engine.initEngine(modelPath, {
+          enableRuntimeObservability: true,
           sampling: {
             temperature: 0.5,
             topP: 0.9,
@@ -270,9 +316,13 @@ export default function App() {
         });
 
         setStatus('Loading director config…');
+        const directorBrain = BRAIN_DEFINITIONS.find((brain) => brain.id === 'director');
+        if (!directorBrain) {
+          throw new Error('director brain definition is missing');
+        }
         const { director } = await createDirectorFromConfigUrl({
           configUrl: COURTYARD_SCENARIO.directorConfigUrl,
-          engine,
+          engine: createTracedBrainEngine(engine, brainStore, directorBrain),
           runtimeOptions: { maxOutputTokens: 96 },
         });
 
@@ -296,10 +346,14 @@ export default function App() {
 
         setStatus('Loading agent personas…');
         for (const assignment of COURTYARD_AGENTS) {
+          const brain = BRAIN_DEFINITIONS.find((entry) => entry.id === assignment.agentId);
+          if (!brain) {
+            throw new Error(`brain definition missing for ${assignment.agentId}`);
+          }
           const { agent } = await createSimulationAgentChooserFromConfigUrl({
             agentId: assignment.agentId,
             configUrl: assignment.characterUrl,
-            engine,
+            engine: createTracedBrainEngine(engine, brainStore, brain),
           });
           const seed = COURTYARD_SCENARIO.agents.find((a) => a.id === assignment.agentId);
           if (!seed) {
@@ -321,7 +375,7 @@ export default function App() {
         setBusy(false);
       }
     },
-    [bus, harness, tickHz]
+    [brainStore, bus, harness, tickHz]
   );
 
   const handleStart = (): void => {
@@ -362,6 +416,8 @@ export default function App() {
       snapshotRef.current = null;
       setSnapshot(null);
       setEvents([]);
+      brainStore.reset();
+      setSelectedBrainId(null);
       setSelectedAgentId(null);
       eventIdRef.current = 0;
       setDirectorState(createInitialDirectorState(COURTYARD_SCENARIO.directorNote ?? null));
@@ -451,6 +507,11 @@ export default function App() {
       {snapshot ? (
         <div className="sim-overlay sim-top-center sim-center-stack">
           <Scoreboard snapshot={snapshot} metaText={scoreboardStatus} />
+          <BrainActivityHud
+            activity={brainActivity}
+            selectedBrainId={selectedBrainId}
+            onSelectBrain={(brainId) => setSelectedBrainId((prev) => prev === brainId ? null : brainId)}
+          />
           <div className={`director-note glass-panel director-${directorState.mode}`}>
             <div className="director-note-head">
               <div className="director-note-main">
@@ -466,6 +527,12 @@ export default function App() {
           </div>
         </div>
       ) : null}
+
+      <BrainTraceDrawer
+        activity={brainActivity}
+        selectedBrainId={selectedBrainId}
+        onClose={() => setSelectedBrainId(null)}
+      />
 
       {hoveredObject ? (
         <div className="sim-overlay sim-bottom-right">
@@ -583,4 +650,24 @@ function createInitialDirectorState(note: string | null): DirectorPanelState {
     detail: 'No ruling in progress.',
     note,
   };
+}
+
+function mapSimulationQueryStatus(
+  status: import('./runtime/bus.js').AgentQueryEndEvent['queryStatus']
+): 'cancelled' | 'timed_out' | 'failed' {
+  switch (status) {
+    case 'aborted':
+      return 'cancelled';
+    case 'timed_out':
+      return 'timed_out';
+    case 'failed':
+    case 'invalid_response':
+      return 'failed';
+    case 'ok':
+      return 'failed';
+  }
+}
+
+function classifyRuntimeIssueStatus(message: string): 'timed_out' | 'failed' {
+  return message.toLowerCase().includes('timed out') ? 'timed_out' : 'failed';
 }

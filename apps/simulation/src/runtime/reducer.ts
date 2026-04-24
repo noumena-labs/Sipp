@@ -818,7 +818,7 @@ function chooseForcedDropLandingPoint(
     x: Math.sin(carrier.heading || 0),
     z: Math.cos(carrier.heading || 0),
   };
-  const baseDirection = normalizeVec(awayFromCrowd) ?? normalizeVec(fallbackDirection) ?? { x: 0, z: 1 };
+  const baseDirection = awayFromCrowd ?? normalizeVec(fallbackDirection) ?? { x: 0, z: 1 };
   const radii = [2.6, 3.1, 3.6, 4.2, 4.8];
   const candidateAngles = [0, Math.PI / 8, -Math.PI / 8, Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2, Math.PI, Math.PI * 0.75, -Math.PI * 0.75];
 
