@@ -2,6 +2,8 @@ import { clampToBounds, vec2Distance } from './sensing.js';
 import type {
   AgentIntent,
   DirectorDecision,
+  ForcedDropOutcome,
+  ForcedDropRulingRecord,
   RefereeState,
   SimulationAgentState,
   SimulationGameEvent,
@@ -18,9 +20,14 @@ export interface MutableScoreState {
   forcedDrops: Record<string, number>;
 }
 
-export interface MutableGameState extends Omit<SimulationGameState, 'score' | 'referee'> {
+export interface MutableRefereeMemoryState {
+  forcedDrops: ForcedDropRulingRecord[];
+}
+
+export interface MutableGameState extends Omit<SimulationGameState, 'score' | 'referee' | 'refereeMemory'> {
   score: MutableScoreState;
   referee: RefereeState;
+  refereeMemory: MutableRefereeMemoryState;
   pendingRespawn: SimulationGameState['pendingRespawn'];
   nextSpawnIndex: number;
 }
@@ -39,6 +46,8 @@ export const INTERACTION_RADIUS = 0.75;
 export const AGENT_RADIUS = 0.38;
 export const GOAL_RADIUS = 1.2;
 export const SABOTAGE_RADIUS = 0.95;
+export const FORCED_DROP_HISTORY_LIMIT = 8;
+export const SABOTAGE_COOLDOWN_TICKS = 3;
 const DETOUR_PADDING = 0.35;
 const DETOUR_REACHED_RADIUS = 0.35;
 const BLOCKED_REPATH_TICKS = 2;
@@ -607,6 +616,11 @@ function processSabotageRequests(state: MutableWorldState): WorldConflict[] {
   for (const agent of state.agents) {
     const intent = agent.intent;
     if (intent?.kind !== 'sabotage') continue;
+    if (agent.cooldowns.sabotageUntilTick > state.tick) {
+      agent.intent = null;
+      agent.goal = null;
+      continue;
+    }
     const target = state.agents.find((entry) => entry.id === intent.agentId);
     if (!target || target.holding !== banana.id) {
       agent.intent = null;
@@ -712,11 +726,17 @@ function applyForcedDropResolution(
   const target = state.agents.find((agent) => agent.id === conflict.targetAgentId);
   const obj = getObject(state, conflict.objectId);
   if (!attacker || !target || !obj) return;
+  const ruledOutcome = coerceForcedDropOutcome(outcome);
 
   attacker.intent = null;
   attacker.goal = null;
+  attacker.cooldowns.sabotageUntilTick = Math.max(
+    attacker.cooldowns.sabotageUntilTick,
+    state.tick + SABOTAGE_COOLDOWN_TICKS
+  );
+  recordForcedDropRuling(state, conflict, ruledOutcome);
 
-  if (outcome === 'drop' && target.holding === obj.id) {
+  if (ruledOutcome === 'drop' && target.holding === obj.id) {
     dropHeldObject(state, target, events, `${attacker.name} bumps ${target.name}, and the banana drops!`, 'forced');
     incrementScore(state.game.score.forcedDrops, attacker.id);
     events.push({
@@ -730,7 +750,7 @@ function applyForcedDropResolution(
     return;
   }
 
-  if (outcome === 'attacker_fumbles') {
+  if (ruledOutcome === 'attacker_fumbles') {
     attacker.status = 'fumbled a sabotage attempt';
     attacker.emotion = 'surprised';
     events.push({
@@ -754,6 +774,31 @@ function applyForcedDropResolution(
     position: { x: target.position.x, z: target.position.z },
     outcome: 'hold',
   });
+}
+
+function coerceForcedDropOutcome(outcome: string): ForcedDropOutcome {
+  if (outcome === 'drop' || outcome === 'hold' || outcome === 'attacker_fumbles') {
+    return outcome;
+  }
+  return 'hold';
+}
+
+function recordForcedDropRuling(
+  state: MutableWorldState,
+  conflict: Extract<WorldConflict, { kind: 'forced_drop' }>,
+  outcome: ForcedDropOutcome
+): void {
+  state.game.refereeMemory.forcedDrops.push({
+    tick: state.tick,
+    attackerAgentId: conflict.attackerAgentId,
+    targetAgentId: conflict.targetAgentId,
+    objectId: conflict.objectId,
+    outcome,
+  });
+  const extra = state.game.refereeMemory.forcedDrops.length - FORCED_DROP_HISTORY_LIMIT;
+  if (extra > 0) {
+    state.game.refereeMemory.forcedDrops.splice(0, extra);
+  }
 }
 
 function dropHeldObject(

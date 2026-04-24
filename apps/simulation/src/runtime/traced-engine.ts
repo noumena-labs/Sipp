@@ -39,12 +39,12 @@ class TracedBrainEngine implements CharacterAgentEngine {
     this.lastAppliedTemplate = null;
 
     const prompts = extractPromptSections(template?.messages ?? []);
-    const directorQueryName = this.brain.kind === 'director' ? parseDirectorQueryName(prompts.userPrompt) : null;
-    const queryType = classifyQueryType(this.brain.kind, directorQueryName);
+    const directorTaskName = this.brain.kind === 'director' ? parseDirectorTaskName(prompts.userPrompt) : null;
+    const queryType = classifyQueryType(this.brain.kind, directorTaskName);
     const queryId = this.store.beginQuery({
       brainId: this.brain.id,
       queryType,
-      ...(directorQueryName ? { queryName: directorQueryName } : {}),
+      ...(directorTaskName ? { queryName: directorTaskName } : {}),
       contextKey,
       systemPrompt: prompts.systemPrompt,
       userPrompt: prompts.userPrompt,
@@ -114,6 +114,10 @@ class TracedBrainEngine implements CharacterAgentEngine {
     return this.engine.getEosText();
   }
 
+  public getMediaMarker(): string | null {
+    return this.engine.getMediaMarker();
+  }
+
   public async applyChatTemplate(
     messages: Array<{ role: string; content: string }>,
     addAssistant: boolean
@@ -161,19 +165,19 @@ function extractPromptSections(messages: ReadonlyArray<{ role: string; content: 
   return { systemPrompt, userPrompt };
 }
 
-function parseDirectorQueryName(userPrompt: string): string | null {
-  const match = userPrompt.match(/^Query:\s*([^\n]+)/m);
+function parseDirectorTaskName(userPrompt: string): string | null {
+  const match = userPrompt.match(/^Task:\s*([^\n]+)/m);
   return match?.[1]?.trim() ?? null;
 }
 
 function classifyQueryType(
   brainKind: BrainDefinition['kind'],
-  directorQueryName: string | null
+  directorTaskName: string | null
 ): BrainQueryType {
   if (brainKind === 'agent') {
     return 'decision';
   }
-  if (directorQueryName?.includes('narrate')) {
+  if (directorTaskName?.includes('narrate')) {
     return 'narration';
   }
   return 'referee';

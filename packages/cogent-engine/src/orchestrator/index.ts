@@ -7,35 +7,40 @@
 //////////////////////////////////////////////////////////////////////////////
 
 export type {
+  DirectorChoice,
+  DirectorChoiceConfig,
+  DirectorChoiceSource,
   DirectorConfig,
+  DirectorDataInput,
+  DirectorImageInput,
+  DirectorInputKind,
+  DirectorInputSlotConfig,
+  DirectorInputValue,
+  DirectorOutputConfig,
   DirectorProfileConfig,
-  DirectorQueryConfig,
-  DirectorQueryOptions,
-  DirectorQueryPayload,
-  DirectorQueryResult,
+  DirectorRunRequest,
+  DirectorRunResult,
   DirectorRuntimeOptions,
   DirectorScenarioConfig,
+  DirectorSelection,
+  DirectorSelectManyOutputConfig,
+  DirectorSelectOneOutputConfig,
+  DirectorSelectSlotConfig,
+  DirectorSelectSlotsOutputConfig,
+  DirectorTaskConfig,
+  DirectorTaskPrompt,
+  DirectorTextInput,
+  DirectorTextOutputConfig,
+  DirectorTextWithDirectivesOutputConfig,
   JsonArray,
   JsonObject,
   JsonPrimitive,
   JsonValue,
-  ResponseArraySchema,
-  ResponseBooleanSchema,
-  ResponseNullSchema,
-  ResponseNumberSchema,
-  ResponseObjectSchema,
-  ResponseSchema,
-  ResponseStringSchema,
 } from './director-types.js';
 
 export { DirectorConfigError, parseDirectorConfig } from './director-config.js';
 
-export { compileResponseGrammar } from './response-grammar.js';
-
-export {
-  renderResponseSchemaSummary,
-  validateResponseValue,
-} from './response-schema.js';
+export { DirectorOutputError } from './director-output.js';
 
 export {
   renderDirectorSystemPrompt,

@@ -54,6 +54,8 @@ export interface CharacterAgentEngine {
   getBosText?(): string;
   /** Returns the model's EOS token rendered as text (may be empty). */
   getEosText?(): string;
+  /** Returns the model's media marker rendered as text, when multimodal input is available. */
+  getMediaMarker?(): string | null;
   applyChatTemplate(messages: Array<{ role: string; content: string }>, addAssistant: boolean): Promise<string>;
 }
 

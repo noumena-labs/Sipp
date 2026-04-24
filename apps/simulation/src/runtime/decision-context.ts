@@ -7,6 +7,7 @@ export function buildDecisionContext(perception: AgentPerception): DecisionConte
   const banana = findObject(perception, perception.game.bananaObjectId);
   const goal = findObject(perception, perception.game.goalObjectId);
   const carrier = perception.nearbyAgents.find((agent) => agent.holding === perception.game.bananaObjectId);
+  const sabotageCoolingDown = perception.self.cooldowns.sabotageUntilTick > perception.tick;
 
   lines.push(`Tick ${perception.tick}. Banana Dash score: ${formatScore(perception)}.`);
   lines.push(`You are ${describeHolding(perception)}.`);
@@ -17,14 +18,18 @@ export function buildDecisionContext(perception: AgentPerception): DecisionConte
   if (perception.self.holding === perception.game.bananaObjectId) {
     addCarrierOptions(options, lines, goal);
   } else {
-    addNonCarrierOptions(options, lines, banana, carrier);
+    addNonCarrierOptions(options, lines, banana, carrier, sabotageCoolingDown);
   }
 
   addAmbientOptions(perception, options, lines);
   options.push({ label: 'wait', goal: { kind: 'wait', label: 'wait' } });
   dedupeOptionsInPlace(options);
 
-  lines.push('Choose your next action from the available options only. Prefer scoring, rushing the banana, or bumping the carrier over hanging back.');
+  lines.push(
+    sabotageCoolingDown
+      ? 'Choose your next action from the available options only. Prefer scoring, rushing the banana, or chasing the carrier over hanging back.'
+      : 'Choose your next action from the available options only. Prefer scoring, rushing the banana, or bumping the carrier over hanging back.'
+  );
   return { prompt: lines.join('\n'), options };
 }
 
@@ -57,7 +62,8 @@ function addNonCarrierOptions(
   options: DecisionOption[],
   lines: string[],
   banana: PerceivedObject | undefined,
-  carrier: PerceivedAgent | undefined
+  carrier: PerceivedAgent | undefined,
+  sabotageCoolingDown: boolean
 ): void {
   if (banana && !banana.heldBy) {
     lines.push(`Banana is ${qualitativeDistance(banana.distance)}.`);
@@ -81,11 +87,13 @@ function addNonCarrierOptions(
 
   if (carrier) {
     lines.push(`${carrier.name} has the banana and is ${qualitativeDistance(carrier.distance)}.`);
-    if (carrier.distance <= SABOTAGE_RADIUS * 1.6) {
+    if (carrier.distance <= SABOTAGE_RADIUS * 1.6 && !sabotageCoolingDown) {
       options.push({
         label: `bump ${carrier.name}`,
         goal: { kind: 'sabotage_agent', agentId: carrier.id, label: `bump ${carrier.name}` },
       });
+    } else if (sabotageCoolingDown) {
+      lines.push('You just tried a bump; keep pressure without bumping again yet.');
     }
     options.push({
       label: `chase ${carrier.name}`,

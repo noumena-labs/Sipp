@@ -1,11 +1,15 @@
-import type { DirectorRuntime, JsonValue } from 'cogent-engine/orchestrator';
+import type { DirectorChoice, DirectorRuntime, JsonValue } from 'cogent-engine/orchestrator';
 import { SimulationBus, type SimulationEvent } from './bus.js';
-import { buildPerception } from './sensing.js';
+import { buildPerception, vec2Distance } from './sensing.js';
 import { SimulationAgentChooser } from './agent-chooser.js';
 import {
   applyDirectorDecision,
   applyTickFirstPass,
   cloneScore,
+  deterministicConflictResolution,
+  FORCED_DROP_HISTORY_LIMIT,
+  SABOTAGE_COOLDOWN_TICKS,
+  SABOTAGE_RADIUS,
   type MutableGameState,
   type MutableWorldState,
 } from './reducer.js';
@@ -13,6 +17,8 @@ import type {
   AgentGoal,
   DirectorDecision,
   DirectorResolution,
+  ForcedDropOutcome,
+  ForcedDropRulingRecord,
   ScenarioAgentSeed,
   ScenarioGameSeed,
   ScenarioObjectSeed,
@@ -25,14 +31,27 @@ import type {
   WorldSnapshot,
 } from './types.js';
 
+const FORCED_DROP_OUTCOMES: readonly ForcedDropOutcome[] = ['drop', 'hold', 'attacker_fumbles'];
+const FORCED_DROP_REPEAT_SUPPRESSION_COUNT = 3;
+
+interface ForcedDropPolicy {
+  readonly availableOutcomes: readonly ForcedDropOutcome[];
+  readonly suppressedOutcomes: readonly ForcedDropOutcome[];
+  readonly fallbackOutcome: ForcedDropOutcome;
+  readonly samePairHistory: readonly ForcedDropRulingRecord[];
+  readonly recentHistory: readonly ForcedDropRulingRecord[];
+  readonly suppressionNotes: readonly string[];
+  readonly varietyNote: string;
+}
+
 export interface SimulationRuntimeOptions {
   readonly id?: string;
   readonly bounds?: WorldBounds;
   readonly game: ScenarioGameSeed;
   readonly initialDirectorNote?: string | null;
   readonly directorCadenceTicks?: number;
-  readonly resolveRefereeQuery?: string;
-  readonly narrateQuery?: string;
+  readonly resolveRefereeTask?: string;
+  readonly narrateTask?: string;
   readonly refereeTimeoutMs?: number;
   readonly narrationTimeoutMs?: number;
   readonly agentQueryTimeoutMs?: number;
@@ -53,8 +72,8 @@ export class SimulationRuntime {
   private readonly simulationAgents: Map<string, SimulationAgentChooser> = new Map();
   private readonly director: DirectorRuntime;
   private readonly directorCadenceTicks: number;
-  private readonly resolveRefereeQuery: string;
-  private readonly narrateQuery: string;
+  private readonly resolveRefereeTask: string;
+  private readonly narrateTask: string;
   private readonly refereeTimeoutMs: number;
   private readonly narrationTimeoutMs: number;
   private readonly agentQueryTimeoutMs: number;
@@ -73,8 +92,8 @@ export class SimulationRuntime {
     this.bus = options.bus ?? new SimulationBus();
     this.director = director;
     this.directorCadenceTicks = Math.max(1, Math.floor(options.directorCadenceTicks ?? 12));
-    this.resolveRefereeQuery = options.resolveRefereeQuery ?? 'resolve_referee_event';
-    this.narrateQuery = options.narrateQuery ?? 'narrate_scene';
+    this.resolveRefereeTask = options.resolveRefereeTask ?? 'resolve_referee_event';
+    this.narrateTask = options.narrateTask ?? 'narrate_scene';
     this.refereeTimeoutMs = Math.max(1000, Math.floor(options.refereeTimeoutMs ?? 30000));
     this.narrationTimeoutMs = Math.max(1000, Math.floor(options.narrationTimeoutMs ?? 15000));
     this.agentQueryTimeoutMs = Math.max(1000, Math.floor(options.agentQueryTimeoutMs ?? 30000));
@@ -163,6 +182,9 @@ export class SimulationRuntime {
       holding: null,
       intentIssuedAtTick: -1,
       thinking: false,
+      cooldowns: {
+        sabotageUntilTick: 0,
+      },
       navigation: {
         detourTarget: null,
         blockedTicks: 0,
@@ -289,46 +311,71 @@ export class SimulationRuntime {
     this.activeControllers.add(controller);
     try {
       try {
-        const result = await this.director.query(
-          this.resolveRefereeQuery,
-          buildRefereePayload(this.state, conflict) as unknown as Record<string, JsonValue>,
-          { signal: controller.signal, timeoutMs: this.refereeTimeoutMs }
-        );
-        if (result.status !== 'ok' || result.data == null) {
-          this.emitRuntimeIssue({
-            severity: 'critical',
-            source: 'referee',
-            message: `Director referee query failed: ${result.errorMessage ?? result.status}`,
-            conflictId: conflict.id,
-            queryName: this.resolveRefereeQuery,
-          });
-          return null;
-        }
-        const decision = coerceRefereeDecision(result.data, conflict);
-        if (!decision) {
-          this.emitRuntimeIssue({
-            severity: 'critical',
-            source: 'referee',
-            message: 'Director referee response did not contain a valid resolution for the conflict.',
-            conflictId: conflict.id,
-            queryName: this.resolveRefereeQuery,
-          });
-          return null;
-        }
-        return decision;
-      } catch (error) {
-        this.emitRuntimeIssue({
-          severity: 'critical',
-          source: 'referee',
-          message: `Director referee query failed: ${error instanceof Error ? error.message : String(error)}`,
-          conflictId: conflict.id,
-          queryName: this.resolveRefereeQuery,
+        const choices = buildRefereeChoices(this.state, conflict);
+        const result = await this.director.run<DirectorResolution>(this.resolveRefereeTask, {
+          inputs: buildRefereePayload(this.state, conflict) as Record<string, JsonValue>,
+          choices,
+          signal: controller.signal,
+          timeoutMs: this.refereeTimeoutMs,
         });
-        return null;
+        if (result.status === 'aborted') {
+          return null;
+        }
+        if (result.status !== 'ok') {
+          return this.fallbackRefereeDecision(
+            conflict,
+            `Director referee task failed: ${result.errorMessage ?? result.status}`
+          );
+        }
+        const resolution = result.selections[0]?.payload;
+        if (!resolution) {
+          return this.fallbackRefereeDecision(
+            conflict,
+            'Director referee task did not select a valid ruling.'
+          );
+        }
+        return {
+          note: describeRefereeResolution(this.state, conflict, resolution),
+          resolutions: [{ ...resolution, note: resolution.note ?? describeResolutionNote(resolution) }],
+        };
+      } catch (error) {
+        if (controller.signal.aborted || this.disposed) {
+          return null;
+        }
+        return this.fallbackRefereeDecision(
+          conflict,
+          `Director referee task failed: ${error instanceof Error ? error.message : String(error)}`
+        );
       }
     } finally {
       this.activeControllers.delete(controller);
     }
+  }
+
+  private fallbackRefereeDecision(conflict: WorldConflict, message: string): DirectorDecision {
+    this.emitRuntimeIssue({
+      severity: 'warning',
+      source: 'referee',
+      message: `${message}; applying deterministic house-rule fallback.`,
+      conflictId: conflict.id,
+      taskName: this.resolveRefereeTask,
+    });
+    if (conflict.kind === 'forced_drop') {
+      const policy = buildForcedDropPolicy(this.state, conflict);
+      return {
+        note: 'The referee uses a quick house-rule ruling.',
+        resolutions: [
+          {
+            conflictId: conflict.id,
+            objectId: conflict.objectId,
+            winnerAgentId: null,
+            outcome: policy.fallbackOutcome,
+            note: `fallback ${policy.fallbackOutcome}`,
+          },
+        ],
+      };
+    }
+    return deterministicConflictResolution(this.state, [conflict]);
   }
 
   private maybeStartOneAgentQuery(): void {
@@ -457,22 +504,22 @@ export class SimulationRuntime {
     const controller = new AbortController();
     this.narrationController = controller;
     this.activeControllers.add(controller);
-    this.narrationInFlight = this.director.query(
-      this.narrateQuery,
-      buildNarrationPayload(this.state) as unknown as Record<string, JsonValue>,
-      { signal: controller.signal, timeoutMs: this.narrationTimeoutMs }
-    ).then((result) => {
+    this.narrationInFlight = this.director.run(this.narrateTask, {
+      inputs: buildNarrationPayload(this.state) as Record<string, JsonValue>,
+      signal: controller.signal,
+      timeoutMs: this.narrationTimeoutMs,
+    }).then((result) => {
       if (this.disposed || controller.signal.aborted) return;
-      if (result.status !== 'ok' || result.data == null) {
+      if (result.status !== 'ok') {
         this.emitRuntimeIssue({
           severity: 'warning',
           source: 'narration',
-          message: `Director narration query failed: ${result.errorMessage ?? result.status}`,
-          queryName: this.narrateQuery,
+          message: `Director narration task failed: ${result.errorMessage ?? result.status}`,
+          taskName: this.narrateTask,
         });
         return;
       }
-      const decision = coerceNarrationDecision(result.data, this.getSnapshot());
+      const decision = coerceNarrationDecision(result.text, this.getSnapshot());
       this.state.directorNote = decision.note || this.state.directorNote;
       this.emit({ kind: 'director-decision', tick: this.state.tick, decision });
       if (decision.note) {
@@ -603,7 +650,7 @@ export class SimulationRuntime {
     readonly message: string;
     readonly agentId?: string;
     readonly conflictId?: string;
-    readonly queryName?: string;
+    readonly taskName?: string;
   }): void {
     const prefix = `[SimulationRuntime] ${args.source} ${args.severity}`;
     if (args.severity === 'critical') {
@@ -623,6 +670,7 @@ function createGameState(seed: ScenarioGameSeed): MutableGameState {
     bananaSpawnPoints: seed.bananaSpawnPoints.map((point) => ({ x: point.x, z: point.z })),
     score: { deliveries: {}, forcedDrops: {} },
     referee: { status: 'idle' },
+    refereeMemory: { forcedDrops: [] },
     pendingRespawn: null,
     nextSpawnIndex: 1,
   };
@@ -636,6 +684,9 @@ function cloneGame(game: MutableGameState): SimulationGameState {
     bananaSpawnPoints: game.bananaSpawnPoints.map((point) => ({ x: point.x, z: point.z })),
     score: cloneScore(game.score),
     referee: game.referee,
+    refereeMemory: {
+      forcedDrops: game.refereeMemory.forcedDrops.map(cloneForcedDropRulingRecord),
+    },
     pendingRespawn: game.pendingRespawn
       ? {
           objectId: game.pendingRespawn.objectId,
@@ -646,7 +697,7 @@ function cloneGame(game: MutableGameState): SimulationGameState {
   };
 }
 
-function buildRefereePayload(state: MutableWorldState, conflict: WorldConflict): JsonValue {
+export function buildRefereePayload(state: MutableWorldState, conflict: WorldConflict): JsonValue {
   return {
     referee_event: summarizeConflict(state, conflict),
     scoreboard: state.game.score.deliveries,
@@ -672,12 +723,26 @@ function summarizeConflict(state: MutableWorldState, conflict: WorldConflict): J
       contenders: conflict.contenderAgentIds.map((id) => summarizeAgent(state, id)),
     };
   }
+  const policy = buildForcedDropPolicy(state, conflict);
   return {
     conflictId: conflict.id,
     kind: conflict.kind,
     objectId: conflict.objectId,
     attacker: summarizeAgent(state, conflict.attackerAgentId),
     target: summarizeAgent(state, conflict.targetAgentId),
+    attempt: summarizeForcedDropAttempt(state, conflict),
+    recent_history: {
+      same_pair: policy.samePairHistory.map(summarizeForcedDropRuling),
+      recent_forced_drops: policy.recentHistory.map(summarizeForcedDropRuling),
+    },
+    ruling_policy: {
+      availableOutcomes: policy.availableOutcomes,
+      suppressedOutcomes: policy.suppressedOutcomes,
+      suppressionNotes: policy.suppressionNotes,
+      fallbackOutcome: policy.fallbackOutcome,
+      varietyNote: policy.varietyNote,
+      sabotageCooldownTicksAfterRuling: SABOTAGE_COOLDOWN_TICKS,
+    },
   };
 }
 
@@ -694,6 +759,7 @@ function buildSceneSummary(state: MutableWorldState): JsonValue {
       position: jsonVec(agent.position),
       holding: agent.holding,
       status: agent.status,
+      sabotageCooldownRemainingTicks: Math.max(0, agent.cooldowns.sabotageUntilTick - state.tick),
     })),
   };
 }
@@ -708,6 +774,7 @@ function summarizeAgent(state: MutableWorldState, agentId: string): JsonValue {
     holding: agent.holding,
     status: agent.status,
     intentIssuedAtTick: agent.intentIssuedAtTick,
+    sabotageCooldownRemainingTicks: Math.max(0, agent.cooldowns.sabotageUntilTick - state.tick),
     score: state.game.score.deliveries[agent.id] ?? 0,
   };
 }
@@ -716,49 +783,225 @@ function jsonVec(position: { readonly x: number; readonly z: number }): JsonValu
   return { x: position.x, z: position.z };
 }
 
-function coerceRefereeDecision(
-  value: JsonValue | null,
-  conflict: WorldConflict
-): DirectorDecision | null {
-  if (isRecord(value) && typeof value.note === 'string' && Array.isArray(value.resolutions)) {
-    const resolutions: DirectorResolution[] = [];
-    for (const entry of value.resolutions) {
-      if (!isRecord(entry)) continue;
-      if (entry.conflictId !== conflict.id) continue;
-      const winnerAgentId = entry.winnerAgentId === null || typeof entry.winnerAgentId === 'string'
-        ? entry.winnerAgentId
-        : null;
-      const outcome = parseOutcome(entry.outcome);
-      if (!outcome) continue;
-      const objectId = typeof entry.objectId === 'string' ? entry.objectId : undefined;
-      const note = typeof entry.note === 'string' && entry.note.length > 0 ? entry.note : undefined;
-      resolutions.push({ conflictId: conflict.id, ...(objectId ? { objectId } : {}), winnerAgentId, outcome, ...(note ? { note } : {}) });
-    }
-    if (resolutions.length === 1) {
-      return { note: value.note, resolutions };
-    }
-  }
-  return null;
+function summarizeForcedDropAttempt(
+  state: MutableWorldState,
+  conflict: Extract<WorldConflict, { kind: 'forced_drop' }>
+): JsonValue {
+  const attacker = state.agents.find((entry) => entry.id === conflict.attackerAgentId);
+  const target = state.agents.find((entry) => entry.id === conflict.targetAgentId);
+  const object = state.objects.find((entry) => entry.id === conflict.objectId);
+  const goal = state.objects.find((entry) => entry.id === state.game.goalObjectId);
+  return {
+    attackerAgentId: conflict.attackerAgentId,
+    attackerName: attacker?.name ?? conflict.attackerAgentId,
+    targetAgentId: conflict.targetAgentId,
+    targetName: target?.name ?? conflict.targetAgentId,
+    objectId: conflict.objectId,
+    currentHolder: object?.heldBy ?? null,
+    distance: attacker && target ? roundForPrompt(vec2Distance(attacker.position, target.position)) : null,
+    sabotageRadius: SABOTAGE_RADIUS,
+    attackerIntentAgeTicks: attacker ? Math.max(0, state.tick - attacker.intentIssuedAtTick) : null,
+    targetDistanceToGoal: target && goal ? roundForPrompt(vec2Distance(target.position, goal.position)) : null,
+    score: {
+      deliveries: state.game.score.deliveries,
+      forcedDrops: state.game.score.forcedDrops,
+    },
+  };
 }
 
-function coerceNarrationDecision(value: JsonValue | null, snapshot: WorldSnapshot): DirectorDecision {
-  if (isRecord(value) && typeof value.note === 'string') {
-    return { note: value.note, resolutions: [] };
+function summarizeForcedDropRuling(record: ForcedDropRulingRecord): JsonValue {
+  return {
+    tick: record.tick,
+    attackerAgentId: record.attackerAgentId,
+    targetAgentId: record.targetAgentId,
+    objectId: record.objectId,
+    outcome: record.outcome,
+  };
+}
+
+function buildForcedDropPolicy(
+  state: MutableWorldState,
+  conflict: Extract<WorldConflict, { kind: 'forced_drop' }>
+): ForcedDropPolicy {
+  const recentHistory = state.game.refereeMemory.forcedDrops.slice(-FORCED_DROP_HISTORY_LIMIT);
+  const samePairHistory = recentHistory.filter(
+    (record) =>
+      record.attackerAgentId === conflict.attackerAgentId &&
+      record.targetAgentId === conflict.targetAgentId
+  );
+  const suppressed = new Set<ForcedDropOutcome>();
+  const suppressionNotes: string[] = [];
+
+  const lastSamePair = samePairHistory[samePairHistory.length - 1];
+  if (lastSamePair?.outcome === 'attacker_fumbles') {
+    suppressed.add('attacker_fumbles');
+    suppressionNotes.push('Same attacker-target pair just fumbled; omit attacker_fumbles to keep the next ruling varied.');
+  }
+
+  const lastGlobal = recentHistory.slice(-FORCED_DROP_REPEAT_SUPPRESSION_COUNT);
+  if (lastGlobal.length === FORCED_DROP_REPEAT_SUPPRESSION_COUNT) {
+    const repeatedOutcome = lastGlobal[0]!.outcome;
+    if (!suppressed.has(repeatedOutcome) && lastGlobal.every((record) => record.outcome === repeatedOutcome)) {
+      const alternativesAfterSuppression = FORCED_DROP_OUTCOMES.filter(
+        (outcome) => outcome !== repeatedOutcome && !suppressed.has(outcome)
+      );
+      if (alternativesAfterSuppression.length >= 2) {
+        suppressed.add(repeatedOutcome);
+        suppressionNotes.push(`The last ${FORCED_DROP_REPEAT_SUPPRESSION_COUNT} forced-drop rulings were ${repeatedOutcome}; omit it for variety.`);
+      }
+    }
+  }
+
+  const availableOutcomes = FORCED_DROP_OUTCOMES.filter((outcome) => !suppressed.has(outcome));
+  return {
+    availableOutcomes,
+    suppressedOutcomes: FORCED_DROP_OUTCOMES.filter((outcome) => suppressed.has(outcome)),
+    fallbackOutcome: chooseForcedDropFallback(availableOutcomes),
+    samePairHistory,
+    recentHistory,
+    suppressionNotes,
+    varietyNote: suppressionNotes.length > 0
+      ? 'Choose from the available outcomes only and prefer a fair variation from recent rulings.'
+      : 'All outcomes are legal; attacker_fumbles should be occasional, not the default.',
+  };
+}
+
+function chooseForcedDropFallback(availableOutcomes: readonly ForcedDropOutcome[]): ForcedDropOutcome {
+  if (availableOutcomes.includes('drop')) return 'drop';
+  if (availableOutcomes.includes('hold')) return 'hold';
+  return availableOutcomes[0] ?? 'hold';
+}
+
+function roundForPrompt(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+export function buildRefereeChoices(
+  state: MutableWorldState,
+  conflict: WorldConflict
+): readonly DirectorChoice<DirectorResolution>[] {
+  if (conflict.kind === 'contested_object') {
+    const object = state.objects.find((entry) => entry.id === conflict.objectId);
+    const choices: DirectorChoice<DirectorResolution>[] = conflict.contenderAgentIds.map((agentId) => {
+      const agent = state.agents.find((entry) => entry.id === agentId);
+      return {
+        id: `pickup:${agentId}`,
+        label: `award pickup to ${agent?.name ?? agentId}`,
+        description: `Let ${agent?.name ?? agentId} win the ${object?.label ?? conflict.objectId} scramble.`,
+        payload: {
+          conflictId: conflict.id,
+          objectId: conflict.objectId,
+          winnerAgentId: agentId,
+          outcome: 'pickup',
+        },
+      };
+    });
+    choices.push({
+      id: 'deny',
+      label: 'deny pickup',
+      description: 'No one gets the object from this scramble.',
+      payload: {
+        conflictId: conflict.id,
+        objectId: conflict.objectId,
+        winnerAgentId: null,
+        outcome: 'deny',
+      },
+    });
+    return choices;
+  }
+
+  const attacker = state.agents.find((entry) => entry.id === conflict.attackerAgentId);
+  const target = state.agents.find((entry) => entry.id === conflict.targetAgentId);
+  const policy = buildForcedDropPolicy(state, conflict);
+  return policy.availableOutcomes.map((outcome) => ({
+    id: outcome,
+    label: forcedDropChoiceLabel(outcome),
+    description: describeForcedDropChoice(
+      outcome,
+      attacker?.name ?? conflict.attackerAgentId,
+      target?.name ?? conflict.targetAgentId
+    ),
+    payload: {
+      conflictId: conflict.id,
+      objectId: conflict.objectId,
+      winnerAgentId: null,
+      outcome,
+    },
+  }));
+}
+
+function forcedDropChoiceLabel(outcome: ForcedDropOutcome): string {
+  switch (outcome) {
+    case 'drop':
+      return 'carrier drops';
+    case 'hold':
+      return 'carrier holds';
+    case 'attacker_fumbles':
+      return 'attacker fumbles';
+  }
+}
+
+function describeForcedDropChoice(
+  outcome: ForcedDropOutcome,
+  attackerName: string,
+  targetName: string
+): string {
+  switch (outcome) {
+    case 'drop':
+      return `Clean contact: ${attackerName} lands the bump and ${targetName} drops the banana.`;
+    case 'hold':
+      return `Balanced or braced contact: ${targetName} absorbs the bump and keeps the banana.`;
+    case 'attacker_fumbles':
+      return `Reckless or overextended contact: ${attackerName} mistimes the bump. Use occasionally, not as the default.`;
+  }
+}
+
+function describeRefereeResolution(
+  state: MutableWorldState,
+  conflict: WorldConflict,
+  resolution: DirectorResolution
+): string {
+  if (conflict.kind === 'contested_object') {
+    const object = state.objects.find((entry) => entry.id === conflict.objectId);
+    if (resolution.outcome === 'pickup' && resolution.winnerAgentId) {
+      const winner = state.agents.find((entry) => entry.id === resolution.winnerAgentId);
+      return `${winner?.name ?? resolution.winnerAgentId} gets the ${object?.label ?? conflict.objectId} after the scramble.`;
+    }
+    return `The ${object?.label ?? conflict.objectId} scramble is waved off.`;
+  }
+
+  const attacker = state.agents.find((entry) => entry.id === conflict.attackerAgentId);
+  const target = state.agents.find((entry) => entry.id === conflict.targetAgentId);
+  switch (resolution.outcome) {
+    case 'drop':
+      return `${attacker?.name ?? conflict.attackerAgentId} bumps ${target?.name ?? conflict.targetAgentId}, and the banana pops loose.`;
+    case 'attacker_fumbles':
+      return `${attacker?.name ?? conflict.attackerAgentId} overcooks the bump and fumbles the play.`;
+    default:
+      return `${target?.name ?? conflict.targetAgentId} braces through the bump and keeps the banana.`;
+  }
+}
+
+function describeResolutionNote(resolution: DirectorResolution): string {
+  switch (resolution.outcome) {
+    case 'pickup':
+      return 'pickup awarded';
+    case 'deny':
+      return 'pickup denied';
+    case 'drop':
+      return 'forced drop';
+    case 'hold':
+      return 'carrier holds';
+    case 'attacker_fumbles':
+      return 'attacker fumbles';
+  }
+}
+
+function coerceNarrationDecision(value: string, snapshot: WorldSnapshot): DirectorDecision {
+  if (value.length > 0) {
+    return { note: value, resolutions: [] };
   }
   return { note: `Tick ${snapshot.tick}: Banana Dash keeps moving.`, resolutions: [] };
-}
-
-function parseOutcome(value: JsonValue | undefined): DirectorResolution['outcome'] | null {
-  switch (value) {
-    case 'pickup':
-    case 'deny':
-    case 'drop':
-    case 'hold':
-    case 'attacker_fumbles':
-      return value;
-    default:
-      return null;
-  }
 }
 
 function describeConflict(conflict: WorldConflict): string {
@@ -766,10 +1009,6 @@ function describeConflict(conflict: WorldConflict): string {
     return `${conflict.objectId} contested by ${conflict.contenderAgentIds.join(', ')}`;
   }
   return `${conflict.attackerAgentId} bumping ${conflict.targetAgentId}`;
-}
-
-function isRecord(value: JsonValue | null): value is Record<string, JsonValue> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function cloneAgent(agent: SimulationAgentState): SimulationAgentState {
@@ -787,6 +1026,9 @@ function cloneAgent(agent: SimulationAgentState): SimulationAgentState {
     holding: agent.holding,
     intentIssuedAtTick: agent.intentIssuedAtTick,
     thinking: agent.thinking,
+    cooldowns: {
+      sabotageUntilTick: agent.cooldowns.sabotageUntilTick,
+    },
     navigation: {
       detourTarget: agent.navigation.detourTarget
         ? { x: agent.navigation.detourTarget.x, z: agent.navigation.detourTarget.z }
@@ -794,6 +1036,16 @@ function cloneAgent(agent: SimulationAgentState): SimulationAgentState {
       blockedTicks: agent.navigation.blockedTicks,
       obstacleId: agent.navigation.obstacleId,
     },
+  };
+}
+
+function cloneForcedDropRulingRecord(record: ForcedDropRulingRecord): ForcedDropRulingRecord {
+  return {
+    tick: record.tick,
+    attackerAgentId: record.attackerAgentId,
+    targetAgentId: record.targetAgentId,
+    objectId: record.objectId,
+    outcome: record.outcome,
   };
 }
 

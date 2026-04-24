@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { DirectorConfigError, parseDirectorConfig } from './director-config.js';
 
-test('parseDirectorConfig accepts a valid multi-query config', () => {
+test('parseDirectorConfig accepts shape-driven tasks', () => {
   const config = parseDirectorConfig({
     id: 'courtyard-director',
     scenario: { name: 'Courtyard', summary: 'Snack-time courtyard.' },
@@ -12,29 +12,26 @@ test('parseDirectorConfig accepts a valid multi-query config', () => {
       objective: 'Keep the scene coherent.',
       instructions: ['Only use the provided state.'],
     },
-    hooks: {
-      conflict: 'Conflict detector output.',
-      state_snapshot: 'Current world state.',
+    inputs: {
+      conflict: { kind: 'data', description: 'Conflict detector output.' },
+      screenshot: { kind: 'image', description: 'Current app screenshot.' },
     },
-    queries: {
+    tasks: {
       resolve_conflict: {
-        description: 'Resolve a conflict.',
-        hooks: ['conflict', 'state_snapshot'],
-        instructions: ['Pick a winner.'],
-        response: {
-          type: 'object',
-          properties: {
-            winnerAgentId: { type: 'string', nullable: true, maxLength: 32 },
-            note: { type: 'string', maxLength: 120 },
-          },
-        },
+        purpose: 'Resolve a conflict.',
+        inputs: ['conflict'],
+        instructions: ['Pick a ruling.'],
+        output: { shape: 'select_one', choices: 'runtime' },
       },
-      narrate: {
-        response: {
-          type: 'object',
-          properties: {
-            note: { type: 'string', maxLength: 120 },
-          },
+      inspect_screen: {
+        inputs: ['screenshot'],
+        output: {
+          shape: 'text_with_directives',
+          maxLength: 200,
+          maxDirectives: 1,
+          directives: [
+            { id: 'nav.billing', label: 'Open billing' },
+          ],
         },
       },
     },
@@ -42,42 +39,66 @@ test('parseDirectorConfig accepts a valid multi-query config', () => {
 
   assert.equal(config.id, 'courtyard-director');
   assert.equal(config.director.role, 'Scenario director');
-  assert.ok(config.queries.resolve_conflict);
-  assert.ok(config.queries.narrate);
+  assert.equal(config.inputs?.screenshot?.kind, 'image');
+  assert.equal(config.tasks.resolve_conflict?.output.shape, 'select_one');
+  assert.equal(config.tasks.inspect_screen?.output.shape, 'text_with_directives');
 });
 
-test('parseDirectorConfig rejects unknown query hook references', () => {
+test('parseDirectorConfig rejects unknown task input references', () => {
   assert.throws(
     () =>
       parseDirectorConfig({
         id: 'd',
         director: { role: 'role' },
-        hooks: { known: 'known hook' },
-        queries: {
+        inputs: { known: { kind: 'text', description: 'known input' } },
+        tasks: {
           q: {
-            hooks: ['missing'],
-            response: { type: 'object', properties: { note: { type: 'string' } } },
+            inputs: ['missing'],
+            output: { shape: 'text' },
           },
         },
       }),
     (error: unknown) =>
-      error instanceof DirectorConfigError && /unknown hook/.test(error.message)
+      error instanceof DirectorConfigError && /unknown input/.test(error.message)
   );
 });
 
-test('parseDirectorConfig rejects invalid response schema objects', () => {
+test('parseDirectorConfig rejects invalid output shapes', () => {
   assert.throws(
     () =>
       parseDirectorConfig({
         id: 'd',
         director: { role: 'role' },
-        queries: {
+        tasks: {
           q: {
-            response: { type: 'object', properties: {} },
+            output: { shape: 'json', response: { type: 'object' } },
           },
         },
       }),
     (error: unknown) =>
-      error instanceof DirectorConfigError && /must define at least one field/.test(error.message)
+      error instanceof DirectorConfigError && /Unsupported output shape/.test(error.message)
+  );
+});
+
+test('parseDirectorConfig rejects duplicate static choice ids', () => {
+  assert.throws(
+    () =>
+      parseDirectorConfig({
+        id: 'd',
+        director: { role: 'role' },
+        tasks: {
+          q: {
+            output: {
+              shape: 'select_one',
+              choices: [
+                { id: 'yes' },
+                { id: 'yes' },
+              ],
+            },
+          },
+        },
+      }),
+    (error: unknown) =>
+      error instanceof DirectorConfigError && /duplicate choice id/.test(error.message)
   );
 });

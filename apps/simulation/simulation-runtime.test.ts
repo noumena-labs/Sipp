@@ -2,12 +2,20 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { CharacterAgentEngine } from 'cogent-engine/character';
-import { DirectorRuntime, parseDirectorConfig } from 'cogent-engine/orchestrator';
+import { DirectorRuntime, parseDirectorConfig, type JsonValue } from 'cogent-engine/orchestrator';
 
 import { SimulationBus, type SimulationEvent } from './src/runtime/bus.ts';
 import { applyDirectorDecision, type MutableWorldState } from './src/runtime/reducer.ts';
-import { SimulationRuntime } from './src/runtime/simulation-runtime.ts';
-import type { SimulationAgentState, SimulationObjectState, Vec2 } from './src/runtime/types.ts';
+import { buildRefereeChoices, buildRefereePayload, SimulationRuntime } from './src/runtime/simulation-runtime.ts';
+import { buildDecisionContext } from './src/runtime/decision-context.ts';
+import type {
+  AgentPerception,
+  DirectorResolution,
+  SimulationAgentState,
+  SimulationObjectState,
+  Vec2,
+  WorldConflict,
+} from './src/runtime/types.ts';
 
 const DIRECTOR_CONFIG = parseDirectorConfig({
   id: 'banana-dash-referee',
@@ -15,48 +23,25 @@ const DIRECTOR_CONFIG = parseDirectorConfig({
     role: 'Banana Dash referee',
     instructions: ['Resolve conflicts quickly using only the supplied scene state.'],
   },
-  queries: {
+  inputs: {
+    referee_event: { kind: 'data', description: 'Referee event to resolve.' },
+    scoreboard: { kind: 'data', description: 'Current score.' },
+    scene_summary: { kind: 'data', description: 'Current scene summary.' },
+  },
+  tasks: {
     resolve_referee_event: {
-      response: {
-        type: 'object',
-        properties: {
-          note: { type: 'string', maxLength: 160 },
-          resolutions: {
-            type: 'array',
-            maxItems: 4,
-            items: {
-              type: 'object',
-              properties: {
-                conflictId: { type: 'string', maxLength: 64 },
-                objectId: { type: 'string', nullable: true, maxLength: 64 },
-                winnerAgentId: { type: 'string', nullable: true, maxLength: 64 },
-                outcome: {
-                  type: 'string',
-                  enum: ['pickup', 'deny', 'drop', 'hold', 'attacker_fumbles'],
-                },
-                note: { type: 'string', nullable: true, maxLength: 160 },
-              },
-            },
-          },
-        },
-      },
+      inputs: ['referee_event', 'scoreboard', 'scene_summary'],
+      output: { shape: 'select_one', choices: 'runtime' },
+    },
+    narrate_scene: {
+      inputs: ['scoreboard', 'scene_summary'],
+      output: { shape: 'text', maxLength: 180 },
     },
   },
 });
 
-interface MutableRuntimeState {
-  agents: SimulationAgentState[];
-  objects: SimulationObjectState[];
-  game: {
-    score: {
-      deliveries: Record<string, number>;
-      forcedDrops: Record<string, number>;
-    };
-  };
-}
-
 interface MutableRuntimeInternals {
-  state: MutableRuntimeState;
+  state: MutableWorldState;
   refereeTimeoutMs: number;
 }
 
@@ -74,7 +59,7 @@ function createTimeoutEngine(): CharacterAgentEngine & { cancelCalls: number[] }
     async runQueuedRequest(requestId, options = {}) {
       const signal = options.signal;
       if (!signal) {
-        throw new Error('Expected an abortable director query.');
+        throw new Error('Expected an abortable director task.');
       }
       if (!signal.aborted) {
         await new Promise<void>((resolve) => {
@@ -92,6 +77,36 @@ function createTimeoutEngine(): CharacterAgentEngine & { cancelCalls: number[] }
     async cancelQueuedRequest(requestId) {
       cancelCalls.push(requestId);
       return true;
+    },
+  };
+}
+
+function createOutputEngine(outputText: string): CharacterAgentEngine & { grammar?: string; promptText?: string } {
+  let grammar: string | undefined;
+  let promptText: string | undefined;
+  return {
+    get grammar() {
+      return grammar;
+    },
+    get promptText() {
+      return promptText;
+    },
+    async applyChatTemplate(messages, _addAssistant) {
+      return messages.map((message) => `${message.role}: ${message.content}`).join('\n');
+    },
+    async queuePrompt(_contextKey, queuedPromptText, options) {
+      promptText = queuedPromptText;
+      grammar = typeof options === 'object' ? options.grammar : undefined;
+      return 1;
+    },
+    async runQueuedRequest(requestId) {
+      return {
+        requestId,
+        completed: true,
+        failed: false,
+        cancelled: false,
+        outputText,
+      };
     },
   };
 }
@@ -115,6 +130,9 @@ function createAgent(
     holding: null,
     intentIssuedAtTick: 0,
     thinking: false,
+    cooldowns: {
+      sabotageUntilTick: 0,
+    },
     navigation: {
       detourTarget: null,
       blockedTicks: 0,
@@ -164,10 +182,63 @@ function createWorldState(): MutableWorldState {
         forcedDrops: {},
       },
       referee: { status: 'idle' },
+      refereeMemory: { forcedDrops: [] },
       pendingRespawn: null,
       nextSpawnIndex: 0,
     },
   };
+}
+
+function expectJsonObject(value: JsonValue | undefined): Record<string, JsonValue> {
+  assert.ok(value != null && typeof value === 'object' && !Array.isArray(value));
+  return value as Record<string, JsonValue>;
+}
+
+function createForcedDropConflict(
+  tick: number,
+  attackerAgentId = 'attacker',
+  targetAgentId = 'carrier'
+): Extract<WorldConflict, { kind: 'forced_drop' }> {
+  return {
+    id: `drop:${attackerAgentId}:${targetAgentId}:${tick}`,
+    kind: 'forced_drop',
+    attackerAgentId,
+    targetAgentId,
+    objectId: 'banana',
+  };
+}
+
+function populateForcedDropWorld(state: MutableWorldState): void {
+  state.agents.push(
+    createAgent('carrier', 'Carrier', { x: 0, z: 0 }, {
+      status: 'carrying the banana to home base',
+      holding: 'banana',
+      intent: { kind: 'go_to_object', objectId: 'home', emotion: 'alert' },
+      goal: { kind: 'deliver', objectId: 'home', label: 'run to home base' },
+    }),
+    createAgent('attacker', 'Attacker', { x: 0.5, z: 0 }, {
+      status: 'lining up a bump',
+      intent: { kind: 'sabotage', agentId: 'carrier', emotion: 'alert' },
+      goal: { kind: 'sabotage_agent', agentId: 'carrier', label: 'bump Carrier' },
+    })
+  );
+  state.objects.push(
+    createObject('banana', 'banana', { x: 0, z: 0 }, {
+      label: 'banana',
+      contested: true,
+      heldBy: 'carrier',
+      tags: ['food'],
+      affordances: [{ kind: 'pick_up', label: 'grab banana' }],
+    }),
+    createObject('home', 'goal', { x: 5, z: 5 }, {
+      label: 'home base',
+      tags: ['goal', 'score'],
+    })
+  );
+  state.game.score.deliveries.carrier = 0;
+  state.game.score.deliveries.attacker = 0;
+  state.game.score.forcedDrops.carrier = 0;
+  state.game.score.forcedDrops.attacker = 0;
 }
 
 function timeoutAfter(ms: number, message: string): Promise<never> {
@@ -176,7 +247,7 @@ function timeoutAfter(ms: number, message: string): Promise<never> {
   });
 }
 
-test('SimulationRuntime reports referee timeout without forcing a fallback ruling', async () => {
+test('SimulationRuntime applies deterministic referee fallback after timeout', async () => {
   const engine = createTimeoutEngine();
   const director = new DirectorRuntime(engine, DIRECTOR_CONFIG);
   const bus = new SimulationBus();
@@ -244,21 +315,387 @@ test('SimulationRuntime reports referee timeout without forcing a fallback rulin
     const snapshot = runtime.getSnapshot();
     assert.equal(snapshot.game.referee.status, 'idle');
     assert.equal(runtime.isBusy(), false);
-    assert.equal(snapshot.game.score.forcedDrops.attacker, 0);
-    assert.equal(snapshot.objects.find((object) => object.id === 'banana')?.heldBy, 'carrier');
-    assert.equal(snapshot.agents.find((agent) => agent.id === 'carrier')?.holding, 'banana');
+    assert.equal(snapshot.game.score.forcedDrops.attacker, 1);
+    assert.equal(snapshot.objects.find((object) => object.id === 'banana')?.heldBy, null);
+    assert.equal(snapshot.agents.find((agent) => agent.id === 'carrier')?.holding, null);
     assert.deepEqual(engine.cancelCalls, [1]);
     assert.ok(
       events.some(
         (event) =>
           event.kind === 'runtime-error' &&
-          event.severity === 'critical' &&
+          event.severity === 'warning' &&
           event.source === 'referee' &&
-          event.message.includes('timed out')
+          event.message.includes('fallback')
       )
     );
-    assert.equal(events.some((event) => event.kind === 'director-decision'), false);
-    assert.equal(events.some((event) => event.kind === 'game-event' && event.event.kind === 'forced_drop'), false);
+    assert.equal(events.some((event) => event.kind === 'director-decision'), true);
+    assert.equal(events.some((event) => event.kind === 'game-event' && event.event.kind === 'forced_drop'), true);
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+test('SimulationRuntime maps referee selection choices to director resolutions', async () => {
+  const engine = createOutputEngine('pickup:beck');
+  const director = new DirectorRuntime(engine, DIRECTOR_CONFIG);
+  const bus = new SimulationBus();
+  const events: SimulationEvent[] = [];
+  bus.onAny((event) => {
+    events.push(event);
+  });
+
+  const runtime = new SimulationRuntime(director, {
+    bus,
+    game: {
+      title: 'Banana Dash',
+      bananaObjectId: 'banana',
+      goalObjectId: 'home',
+      bananaSpawnPoints: [{ x: -4, z: -4 }],
+    },
+  });
+
+  const state = (runtime as unknown as MutableRuntimeInternals).state;
+  state.agents.push(
+    createAgent('aria', 'Aria', { x: 0, z: 0 }, {
+      intent: { kind: 'pick_up', objectId: 'banana', emotion: 'happy' },
+      goal: {
+        kind: 'object_action',
+        objectId: 'banana',
+        affordance: { kind: 'pick_up', label: 'grab banana' },
+        label: 'grab banana',
+      },
+    }),
+    createAgent('beck', 'Beck', { x: 0.1, z: 0 }, {
+      intent: { kind: 'pick_up', objectId: 'banana', emotion: 'happy' },
+      goal: {
+        kind: 'object_action',
+        objectId: 'banana',
+        affordance: { kind: 'pick_up', label: 'grab banana' },
+        label: 'grab banana',
+      },
+    })
+  );
+  state.objects.push(
+    createObject('banana', 'banana', { x: 0, z: 0 }, {
+      label: 'banana',
+      contested: true,
+      tags: ['food'],
+      affordances: [{ kind: 'pick_up', label: 'grab banana' }],
+    }),
+    createObject('home', 'goal', { x: 5, z: 5 }, {
+      label: 'home base',
+      tags: ['goal', 'score'],
+    })
+  );
+
+  try {
+    await Promise.race([
+      runtime.step(0.1),
+      timeoutAfter(500, 'Simulation step hung while applying selected referee ruling.'),
+    ]);
+    await Promise.race([
+      runtime.waitForIdle(),
+      timeoutAfter(500, 'Simulation never returned to idle after selected referee ruling.'),
+    ]);
+
+    const snapshot = runtime.getSnapshot();
+    assert.equal(snapshot.objects.find((object) => object.id === 'banana')?.heldBy, 'beck');
+    assert.equal(snapshot.agents.find((agent) => agent.id === 'beck')?.holding, 'banana');
+    assert.ok(engine.grammar?.includes('"pickup:beck"'));
+    assert.ok(engine.grammar?.includes('"deny"'));
+    assert.equal(events.some((event) => event.kind === 'director-decision'), true);
+    assert.equal(events.some((event) => event.kind === 'runtime-error'), false);
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+test('forced-drop referee choices expose policy through grammar without leaking payload fields', () => {
+  const state = createWorldState();
+  state.tick = 8;
+  populateForcedDropWorld(state);
+  const conflict = createForcedDropConflict(state.tick);
+  const director = new DirectorRuntime(createOutputEngine('drop'), DIRECTOR_CONFIG);
+  const payload = expectJsonObject(buildRefereePayload(state, conflict));
+  const refereeEvent = expectJsonObject(payload.referee_event);
+  const attempt = expectJsonObject(refereeEvent.attempt);
+  const recentHistory = expectJsonObject(refereeEvent.recent_history);
+  const rulingPolicy = expectJsonObject(refereeEvent.ruling_policy);
+
+  assert.deepEqual(payload.scoreboard, { carrier: 0, attacker: 0 });
+  assert.equal(attempt.attackerName, 'Attacker');
+  assert.equal(attempt.targetName, 'Carrier');
+  assert.equal(attempt.currentHolder, 'carrier');
+  assert.equal(attempt.distance, 0.5);
+  assert.equal(attempt.attackerIntentAgeTicks, 8);
+  assert.equal(attempt.targetDistanceToGoal, 7.07);
+  assert.deepEqual(recentHistory.same_pair, []);
+  assert.deepEqual(recentHistory.recent_forced_drops, []);
+  assert.deepEqual(rulingPolicy.availableOutcomes, ['drop', 'hold', 'attacker_fumbles']);
+  assert.deepEqual(rulingPolicy.suppressedOutcomes, []);
+  assert.equal(rulingPolicy.fallbackOutcome, 'drop');
+  assert.match(String(rulingPolicy.varietyNote), /occasional/);
+
+  const freshChoices = buildRefereeChoices(state, conflict);
+  assert.deepEqual(freshChoices.map((choice) => choice.id), ['drop', 'hold', 'attacker_fumbles']);
+  const freshRequest = {
+    inputs: payload as Record<string, JsonValue>,
+    choices: freshChoices,
+  };
+  const freshGrammar = director.getTaskGrammar<DirectorResolution>('resolve_referee_event', {
+    ...freshRequest,
+  });
+  assert.match(freshGrammar ?? '', /"drop"/);
+  assert.match(freshGrammar ?? '', /"hold"/);
+  assert.match(freshGrammar ?? '', /"attacker_fumbles"/);
+
+  const prompt = director.getTaskPrompt<DirectorResolution>('resolve_referee_event', freshRequest);
+  assert.match(prompt.userPrompt, /recent_history/);
+  assert.match(prompt.userPrompt, /ruling_policy/);
+  assert.match(prompt.userPrompt, /currentHolder/);
+  assert.match(prompt.userPrompt, /fallbackOutcome/);
+  assert.doesNotMatch(prompt.userPrompt, /winnerAgentId/);
+
+  state.game.refereeMemory.forcedDrops.push({
+    tick: 7,
+    attackerAgentId: 'attacker',
+    targetAgentId: 'carrier',
+    objectId: 'banana',
+    outcome: 'attacker_fumbles',
+  });
+  const suppressedPayload = expectJsonObject(buildRefereePayload(state, conflict));
+  const suppressedRefereeEvent = expectJsonObject(suppressedPayload.referee_event);
+  const suppressedRecentHistory = expectJsonObject(suppressedRefereeEvent.recent_history);
+  const suppressedPolicy = expectJsonObject(suppressedRefereeEvent.ruling_policy);
+  const suppressedChoices = buildRefereeChoices(state, conflict);
+  assert.deepEqual(suppressedChoices.map((choice) => choice.id), ['drop', 'hold']);
+  const suppressedGrammar = director.getTaskGrammar<DirectorResolution>('resolve_referee_event', {
+    inputs: suppressedPayload as Record<string, JsonValue>,
+    choices: suppressedChoices,
+  });
+  assert.match(suppressedGrammar ?? '', /"drop"/);
+  assert.match(suppressedGrammar ?? '', /"hold"/);
+  assert.doesNotMatch(suppressedGrammar ?? '', /"attacker_fumbles"/);
+  assert.deepEqual(suppressedRecentHistory.same_pair, [
+    {
+      tick: 7,
+      attackerAgentId: 'attacker',
+      targetAgentId: 'carrier',
+      objectId: 'banana',
+      outcome: 'attacker_fumbles',
+    },
+  ]);
+  assert.deepEqual(suppressedPolicy.suppressedOutcomes, ['attacker_fumbles']);
+  assert.equal(suppressedPolicy.fallbackOutcome, 'drop');
+  assert.match(String(suppressedPolicy.varietyNote), /fair variation/);
+});
+
+test('forced-drop policy suppresses three repeated global outcomes when alternatives remain', () => {
+  const state = createWorldState();
+  state.tick = 20;
+  populateForcedDropWorld(state);
+  state.game.refereeMemory.forcedDrops.push(
+    { tick: 17, attackerAgentId: 'a', targetAgentId: 'b', objectId: 'banana', outcome: 'drop' },
+    { tick: 18, attackerAgentId: 'c', targetAgentId: 'd', objectId: 'banana', outcome: 'drop' },
+    { tick: 19, attackerAgentId: 'e', targetAgentId: 'f', objectId: 'banana', outcome: 'drop' }
+  );
+
+  const conflict = createForcedDropConflict(state.tick);
+  const choices = buildRefereeChoices(state, conflict);
+  assert.deepEqual(choices.map((choice) => choice.id), ['hold', 'attacker_fumbles']);
+  const payload = expectJsonObject(buildRefereePayload(state, conflict));
+  const refereeEvent = expectJsonObject(payload.referee_event);
+  const rulingPolicy = expectJsonObject(refereeEvent.ruling_policy);
+  assert.deepEqual(rulingPolicy.suppressedOutcomes, ['drop']);
+
+  const director = new DirectorRuntime(createOutputEngine('hold'), DIRECTOR_CONFIG);
+  const grammar = director.getTaskGrammar<DirectorResolution>('resolve_referee_event', {
+    inputs: payload as Record<string, JsonValue>,
+    choices,
+  });
+  assert.doesNotMatch(grammar ?? '', /"drop"/);
+  assert.match(grammar ?? '', /"hold"/);
+  assert.match(grammar ?? '', /"attacker_fumbles"/);
+});
+
+test('forced-drop rulings record referee history and apply sabotage cooldown', () => {
+  const state = createWorldState();
+  state.tick = 10;
+  populateForcedDropWorld(state);
+  const conflict = createForcedDropConflict(state.tick);
+  state.game.referee = { status: 'ruling', conflict, startedAtTick: state.tick };
+
+  applyDirectorDecision(state, {
+    note: 'The referee rules that the attacker overcommits.',
+    resolutions: [
+      {
+        conflictId: conflict.id,
+        objectId: 'banana',
+        winnerAgentId: null,
+        outcome: 'attacker_fumbles',
+      },
+    ],
+  });
+
+  const attacker = state.agents.find((agent) => agent.id === 'attacker');
+  assert.equal(attacker?.cooldowns.sabotageUntilTick, 13);
+  assert.deepEqual(state.game.refereeMemory.forcedDrops, [
+    {
+      tick: 10,
+      attackerAgentId: 'attacker',
+      targetAgentId: 'carrier',
+      objectId: 'banana',
+      outcome: 'attacker_fumbles',
+    },
+  ]);
+});
+
+test('agent decision context hides bump option while sabotage is cooling down', () => {
+  const state = createWorldState();
+  populateForcedDropWorld(state);
+  const attacker = state.agents.find((agent) => agent.id === 'attacker')!;
+  attacker.cooldowns.sabotageUntilTick = 12;
+  const carrier = state.agents.find((agent) => agent.id === 'carrier')!;
+  const banana = state.objects.find((object) => object.id === 'banana')!;
+  const home = state.objects.find((object) => object.id === 'home')!;
+  const perception: AgentPerception = {
+    self: attacker,
+    nearbyAgents: [
+      {
+        id: carrier.id,
+        name: carrier.name,
+        distance: 0.5,
+        direction: { x: -1, z: 0 },
+        emotion: carrier.emotion,
+        status: carrier.status,
+        holding: carrier.holding,
+      },
+    ],
+    nearbyObjects: [
+      {
+        id: banana.id,
+        kind: banana.kind,
+        label: banana.label,
+        description: banana.description,
+        distance: 0.5,
+        direction: { x: -1, z: 0 },
+        heldBy: banana.heldBy,
+        contested: banana.contested,
+        affordances: banana.affordances,
+        tags: banana.tags,
+        blocksMovement: banana.blocksMovement,
+        collisionRadius: banana.collisionRadius,
+      },
+      {
+        id: home.id,
+        kind: home.kind,
+        label: home.label,
+        description: home.description,
+        distance: 6,
+        direction: { x: 1, z: 0 },
+        heldBy: home.heldBy,
+        contested: home.contested,
+        affordances: home.affordances,
+        tags: home.tags,
+        blocksMovement: home.blocksMovement,
+        collisionRadius: home.collisionRadius,
+      },
+    ],
+    tick: 10,
+    bounds: state.bounds,
+    directorNote: null,
+    game: state.game,
+  };
+
+  const decision = buildDecisionContext(perception);
+  assert.equal(decision.options.some((option) => option.label === 'bump Carrier'), false);
+  assert.equal(decision.options.some((option) => option.label === 'chase Carrier'), true);
+  assert.match(decision.prompt, /chasing the carrier/);
+  assert.doesNotMatch(decision.prompt, /bumping the carrier over hanging back/);
+  assert.match(decision.prompt, /without bumping again yet/);
+});
+
+test('invalid repeated forced-drop fumble falls back through policy without pausing', async () => {
+  const engine = createOutputEngine('attacker_fumbles');
+  const director = new DirectorRuntime(engine, DIRECTOR_CONFIG);
+  const bus = new SimulationBus();
+  const events: SimulationEvent[] = [];
+  bus.onAny((event) => {
+    events.push(event);
+  });
+
+  const runtime = new SimulationRuntime(director, {
+    bus,
+    game: {
+      title: 'Banana Dash',
+      bananaObjectId: 'banana',
+      goalObjectId: 'home',
+      bananaSpawnPoints: [{ x: -4, z: -4 }],
+    },
+  });
+
+  const state = (runtime as unknown as MutableRuntimeInternals).state;
+  populateForcedDropWorld(state);
+  state.game.refereeMemory.forcedDrops.push({
+    tick: 0,
+    attackerAgentId: 'attacker',
+    targetAgentId: 'carrier',
+    objectId: 'banana',
+    outcome: 'attacker_fumbles',
+  });
+
+  try {
+    await Promise.race([
+      runtime.step(0.1),
+      timeoutAfter(500, 'Simulation step hung while applying forced-drop policy fallback.'),
+    ]);
+    await Promise.race([
+      runtime.waitForIdle(),
+      timeoutAfter(500, 'Simulation never returned to idle after forced-drop policy fallback.'),
+    ]);
+
+    const snapshot = runtime.getSnapshot();
+    const attacker = snapshot.agents.find((agent) => agent.id === 'attacker');
+    assert.equal(runtime.isBusy(), false);
+    assert.equal(snapshot.objects.find((object) => object.id === 'banana')?.heldBy, null);
+    assert.equal(snapshot.game.score.forcedDrops.attacker, 1);
+    assert.equal(attacker?.cooldowns.sabotageUntilTick, 4);
+    assert.equal(snapshot.game.refereeMemory.forcedDrops.length, 2);
+    assert.equal(snapshot.game.refereeMemory.forcedDrops.at(-1)?.outcome, 'drop');
+    assert.match(engine.grammar ?? '', /"drop"/);
+    assert.match(engine.grammar ?? '', /"hold"/);
+    assert.doesNotMatch(engine.grammar ?? '', /"attacker_fumbles"/);
+    assert.match(engine.promptText ?? '', /recent_history/);
+    assert.match(engine.promptText ?? '', /ruling_policy/);
+    assert.doesNotMatch(engine.promptText ?? '', /winnerAgentId/);
+    assert.equal(
+      events.some(
+        (event) =>
+          event.kind === 'game-event' &&
+          event.event.kind === 'forced_drop' &&
+          event.event.outcome === 'drop'
+      ),
+      true
+    );
+    assert.equal(
+      events.some(
+        (event) =>
+          event.kind === 'game-event' &&
+          event.event.kind === 'forced_drop' &&
+          event.event.outcome === 'attacker_fumbles'
+      ),
+      false
+    );
+    assert.equal(
+      events.some(
+        (event) =>
+          event.kind === 'runtime-error' &&
+          event.severity === 'warning' &&
+          event.source === 'referee' &&
+          event.message.includes('did not match any available choice')
+      ),
+      true
+    );
   } finally {
     await runtime.dispose();
   }

@@ -38,7 +38,12 @@ export interface SimulationAgentState {
   holding: string | null;
   intentIssuedAtTick: number;
   thinking: boolean;
+  cooldowns: AgentCooldownState;
   navigation: AgentNavigationState;
+}
+
+export interface AgentCooldownState {
+  sabotageUntilTick: number;
 }
 
 export interface AgentNavigationState {
@@ -73,7 +78,20 @@ export interface SimulationGameState {
   readonly bananaSpawnPoints: readonly Vec2[];
   readonly score: SimulationScoreState;
   readonly referee: RefereeState;
+  readonly refereeMemory: SimulationRefereeMemory;
   readonly pendingRespawn: PendingRespawnState | null;
+}
+
+export interface SimulationRefereeMemory {
+  readonly forcedDrops: readonly ForcedDropRulingRecord[];
+}
+
+export interface ForcedDropRulingRecord {
+  readonly tick: number;
+  readonly attackerAgentId: string;
+  readonly targetAgentId: string;
+  readonly objectId: string;
+  readonly outcome: ForcedDropOutcome;
 }
 
 export interface PendingRespawnState {
@@ -167,12 +185,15 @@ export interface ForcedDropConflict {
 
 export type WorldConflict = ContestedObjectConflict | ForcedDropConflict;
 
-export type DirectorResolutionOutcome =
-  | 'pickup'
-  | 'deny'
+export type ForcedDropOutcome =
   | 'drop'
   | 'hold'
   | 'attacker_fumbles';
+
+export type DirectorResolutionOutcome =
+  | 'pickup'
+  | 'deny'
+  | ForcedDropOutcome;
 
 export interface DirectorResolution {
   readonly conflictId: string;
@@ -220,7 +241,7 @@ export type SimulationGameEvent =
       readonly targetAgentId: string;
       readonly objectId: string;
       readonly position: Vec2;
-      readonly outcome: 'drop' | 'hold' | 'attacker_fumbles';
+      readonly outcome: ForcedDropOutcome;
     }
   | {
       readonly kind: 'fallback';
@@ -267,8 +288,8 @@ export interface ScenarioSeed {
   readonly directorNote?: string;
   readonly directorConfigUrl: string;
   readonly directorCadenceTicks?: number;
-  readonly resolveRefereeQuery?: string;
-  readonly narrateQuery?: string;
+  readonly resolveRefereeTask?: string;
+  readonly narrateTask?: string;
   readonly refereeTimeoutMs?: number;
   readonly narrationTimeoutMs?: number;
   readonly agentQueryTimeoutMs?: number;

@@ -8,65 +8,52 @@
     "role": "Playful referee and scene narrator",
     "objective": "Resolve compact referee events fairly and narrate the Banana Dash in short, lively observations.",
     "instructions": [
-      "Only reason from the supplied payload.",
+      "Only reason from the supplied task inputs.",
       "Do not invent agents, scores, objects, or positions.",
       "For referee events, choose an outcome that is fair, readable, and playful.",
-      "When resolving pickup contests, winnerAgentId must be one of the contenders or null.",
-      "When resolving forced drops, use drop, hold, or attacker_fumbles.",
-      "Keep notes short enough for a live simulation overlay."
+      "Keep narration short enough for a live simulation overlay."
     ]
   },
-  "hooks": {
-    "referee_event": "A compact event requiring a ruling, such as a contested banana pickup or forced-drop attempt.",
-    "scoreboard": "Current per-agent banana delivery score.",
-    "scene_summary": "Compact current world summary supplied by the host simulation."
+  "inputs": {
+    "referee_event": {
+      "kind": "data",
+      "description": "A compact event requiring a ruling, such as a contested banana pickup or forced-drop attempt."
+    },
+    "scoreboard": {
+      "kind": "data",
+      "description": "Current per-agent banana delivery score."
+    },
+    "scene_summary": {
+      "kind": "data",
+      "description": "Compact current world summary supplied by the host simulation."
+    }
   },
-  "queries": {
+  "tasks": {
     "resolve_referee_event": {
-      "description": "Resolve one Banana Dash referee event.",
+      "purpose": "Resolve one Banana Dash referee event.",
       "instructions": [
-        "Return exactly one resolution for the supplied conflictId.",
-        "For contested_object, use outcome pickup with a valid winnerAgentId, or deny with winnerAgentId null.",
-        "For forced_drop, use outcome drop, hold, or attacker_fumbles. winnerAgentId should be null unless outcome is pickup.",
-        "The note should describe the ruling in one playful sentence."
+        "Pick exactly one supplied ruling choice.",
+        "For contested_object, award pickup only to a listed contender or choose deny.",
+        "For forced_drop, use referee_event.ruling_policy and referee_event.recent_history when choosing.",
+        "For forced_drop, fumbles are occasional and should not be treated as the default.",
+        "For repeated same-pair forced_drop attempts, vary the ruling unless the host supplies only one legal choice."
       ],
-      "hooks": ["referee_event", "scoreboard", "scene_summary"],
-      "response": {
-        "type": "object",
-        "properties": {
-          "note": { "type": "string", "maxLength": 180 },
-          "resolutions": {
-            "type": "array",
-            "maxItems": 1,
-            "items": {
-              "type": "object",
-              "properties": {
-                "conflictId": { "type": "string", "maxLength": 80 },
-                "objectId": { "type": "string", "maxLength": 64, "nullable": true },
-                "winnerAgentId": { "type": "string", "maxLength": 64, "nullable": true },
-                "outcome": {
-                  "type": "string",
-                  "enum": ["pickup", "deny", "drop", "hold", "attacker_fumbles"]
-                },
-                "note": { "type": "string", "maxLength": 120, "nullable": true }
-              }
-            }
-          }
-        }
+      "inputs": ["referee_event", "scoreboard", "scene_summary"],
+      "output": {
+        "shape": "select_one",
+        "choices": "runtime"
       }
     },
     "narrate_scene": {
-      "description": "Summarize the current Banana Dash scene in one short line.",
+      "purpose": "Summarize the current Banana Dash scene in one short line.",
       "instructions": [
         "The note should feel like a lively sports-commentary beat.",
         "Keep it compact and grounded in the visible state."
       ],
-      "hooks": ["scoreboard", "scene_summary"],
-      "response": {
-        "type": "object",
-        "properties": {
-          "note": { "type": "string", "maxLength": 180 }
-        }
+      "inputs": ["scoreboard", "scene_summary"],
+      "output": {
+        "shape": "text",
+        "maxLength": 180
       }
     }
   }

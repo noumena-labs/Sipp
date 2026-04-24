@@ -211,7 +211,7 @@ export default function App() {
           break;
         }
         case 'runtime-error': {
-          const text = `${event.severity === 'critical' ? 'Critical' : 'Warning'} ${event.source} query issue: ${event.message}`;
+          const text = `${event.severity === 'critical' ? 'Critical' : 'Warning'} ${event.source} task issue: ${event.message}`;
           const targetBrainId = event.source === 'agent' ? event.agentId ?? null : 'director';
           if (targetBrainId) {
             brainStore.reviseLatestQuery(targetBrainId, {
@@ -334,8 +334,8 @@ export default function App() {
           game: COURTYARD_SCENARIO.game,
           directorCadenceTicks: COURTYARD_SCENARIO.directorCadenceTicks,
           initialDirectorNote: COURTYARD_SCENARIO.directorNote ?? null,
-          resolveRefereeQuery: COURTYARD_SCENARIO.resolveRefereeQuery,
-          narrateQuery: COURTYARD_SCENARIO.narrateQuery,
+          resolveRefereeTask: COURTYARD_SCENARIO.resolveRefereeTask,
+          narrateTask: COURTYARD_SCENARIO.narrateTask,
           refereeTimeoutMs: COURTYARD_SCENARIO.refereeTimeoutMs,
           narrationTimeoutMs: COURTYARD_SCENARIO.narrationTimeoutMs,
           agentQueryTimeoutMs: COURTYARD_SCENARIO.agentQueryTimeoutMs,

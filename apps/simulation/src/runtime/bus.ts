@@ -92,7 +92,7 @@ export interface RuntimeErrorEvent {
   readonly message: string;
   readonly agentId?: string;
   readonly conflictId?: string;
-  readonly queryName?: string;
+  readonly taskName?: string;
 }
 
 export type SimulationEvent =
