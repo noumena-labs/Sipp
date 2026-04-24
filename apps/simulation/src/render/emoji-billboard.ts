@@ -19,6 +19,7 @@ export const DEFAULT_EMOTION_GLYPHS: Readonly<Record<string, string>> = {
   frustrated: '\u{1F624}',
   sleepy: '\u{1F634}',
   celebrate: '\u{1F389}',
+  surprised: '\u{1F4A2}',
 };
 
 export function emotionGlyphFor(emotion: string): string {

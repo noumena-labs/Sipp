@@ -3,10 +3,8 @@
 // scene/world-binding.ts
 //
 // - Mirrors the app-owned simulation runtime snapshots into the three.js scene.
-// - On every `tick-end` event it diffs the snapshot against the visual
-//   caches and updates positions, emotions, and held-object mounts.
-// - Held objects are re-parented under their holding agent root so they
-//   follow along naturally between ticks.
+// - Applies immediate visual reactions from simulation bus events so query,
+//   bump, drop, and score feedback does not wait for the next tick snapshot.
 //
 //////////////////////////////////////////////////////////////////////////////
 
@@ -15,16 +13,19 @@ import type {
   SimulationBus,
   SimulationEvent,
 } from '../runtime/bus.js';
-import type { AgentIntent, SimulationAgentState, Vec2, WorldSnapshot } from '../runtime/types.js';
+import type { AgentIntent, SimulationAgentState, SimulationGameEvent, Vec2, WorldSnapshot } from '../runtime/types.js';
 import { createAgentVisual, type AgentVisual } from '../render/agent-mesh.js';
 import { createObjectVisual, type ObjectVisual } from '../render/object-mesh.js';
 import { emotionGlyphFor } from '../render/emoji-billboard.js';
 import { AGENT_COLOR_BY_ID } from '../scenarios/courtyard-snack.js';
 
 const LERP_ALPHA = 0.22;
-const THINKING_SECONDS = 1.2;
 const PULSE_SECONDS = 0.8;
-const THINKING_GLYPH = '\u{1F914}';
+const QUERY_GLYPH = '...';
+const FLASH_SECONDS = 0.32;
+const IMPACT_SECONDS = 0.28;
+const CONFETTI_SECONDS = 0.9;
+const DROP_ARC_SECONDS = 0.75;
 
 interface AgentEntry {
   readonly visual: AgentVisual;
@@ -36,7 +37,13 @@ interface AgentEntry {
   status: string;
   holding: string | null;
   pulseUntil: number;
-  thinkingUntil: number;
+  glyphOverride: string | null;
+  glyphOverrideUntil: number;
+  flashColor: THREE.Color | null;
+  flashUntil: number;
+  joltUntil: number;
+  joltDirection: Vec2 | null;
+  baseColor: THREE.Color;
 }
 
 interface ObjectEntry {
@@ -45,6 +52,22 @@ interface ObjectEntry {
   targetX: number;
   targetZ: number;
   heldBy: string | null;
+  toss: TossAnimation | null;
+}
+
+interface TossAnimation {
+  readonly startX: number;
+  readonly startZ: number;
+  readonly endX: number;
+  readonly endZ: number;
+  readonly startAt: number;
+  readonly endAt: number;
+}
+
+interface BurstEffect {
+  readonly root: THREE.Group;
+  readonly dispose: () => void;
+  readonly endAt: number;
 }
 
 export interface WorldBinding {
@@ -60,19 +83,21 @@ export function bindWorldToScene(
 ): WorldBinding {
   const agents = new Map<string, AgentEntry>();
   const objects = new Map<string, ObjectEntry>();
+  const bursts = new Set<BurstEffect>();
   let highlightedAgent: string | null = null;
   let elapsedSeconds = 0;
 
   const ensureAgent = (id: string, name: string): AgentEntry => {
     let entry = agents.get(id);
     if (entry) return entry;
-    const color = AGENT_COLOR_BY_ID.get(id) ?? '#c0c0c0';
-    const visual = createAgentVisual(name, color);
+    const colorHex = AGENT_COLOR_BY_ID.get(id) ?? '#c0c0c0';
+    const baseColor = new THREE.Color(colorHex);
+    const visual = createAgentVisual(name, colorHex);
     worldRoot.add(visual.root);
     const targetMarker = new THREE.Mesh(
       new THREE.RingGeometry(0.28, 0.38, 32),
       new THREE.MeshBasicMaterial({
-        color: new THREE.Color(color),
+        color: baseColor,
         side: THREE.DoubleSide,
         transparent: true,
         opacity: 0.55,
@@ -87,7 +112,7 @@ export function bindWorldToScene(
     const targetLine = new THREE.Line(
       new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
       new THREE.LineBasicMaterial({
-        color: new THREE.Color(color),
+        color: baseColor,
         transparent: true,
         opacity: 0.42,
         depthWrite: false,
@@ -106,7 +131,13 @@ export function bindWorldToScene(
       status: '',
       holding: null,
       pulseUntil: 0,
-      thinkingUntil: 0,
+      glyphOverride: null,
+      glyphOverrideUntil: 0,
+      flashColor: null,
+      flashUntil: 0,
+      joltUntil: 0,
+      joltDirection: null,
+      baseColor,
     };
     agents.set(id, entry);
     if (highlightedAgent === id) visual.setHighlighted(true);
@@ -118,13 +149,12 @@ export function bindWorldToScene(
     if (entry) return entry;
     const visual = createObjectVisual(kind);
     worldRoot.add(visual.root);
-    entry = { visual, kind, targetX: 0, targetZ: 0, heldBy: null };
+    entry = { visual, kind, targetX: 0, targetZ: 0, heldBy: null, toss: null };
     objects.set(id, entry);
     return entry;
   };
 
   const applySnapshot = (snap: WorldSnapshot): void => {
-    // Sync agents.
     const seenAgents = new Set<string>();
     for (const a of snap.agents) {
       seenAgents.add(a.id);
@@ -138,16 +168,7 @@ export function bindWorldToScene(
         entry.pulseUntil = Math.max(entry.pulseUntil, elapsedSeconds + PULSE_SECONDS);
       }
       setAgentTarget(entry, resolveIntentTarget(a.intent, snap));
-      const glyph = activityGlyphFor(a, snap);
-      if (glyph) {
-        entry.visual.emoji.setGlyph(glyph);
-        entry.visual.emoji.setVisible(true);
-      } else if (a.emotion) {
-        entry.visual.emoji.setGlyph(emotionGlyphFor(a.emotion));
-        entry.visual.emoji.setVisible(true);
-      } else {
-        entry.visual.emoji.setVisible(false);
-      }
+      updateAgentGlyph(entry, a, snap);
     }
     for (const [id, entry] of agents) {
       if (!seenAgents.has(id)) {
@@ -160,7 +181,6 @@ export function bindWorldToScene(
       }
     }
 
-    // Sync objects.
     const seenObjects = new Set<string>();
     for (const o of snap.objects) {
       seenObjects.add(o.id);
@@ -189,19 +209,36 @@ export function bindWorldToScene(
     if (event.kind === 'agent-query-start') {
       const entry = agents.get(event.agentId);
       if (entry) {
-        entry.thinkingUntil = elapsedSeconds + THINKING_SECONDS;
+        entry.glyphOverride = QUERY_GLYPH;
+        entry.glyphOverrideUntil = Number.POSITIVE_INFINITY;
         entry.pulseUntil = Math.max(entry.pulseUntil, elapsedSeconds + PULSE_SECONDS);
-        entry.visual.emoji.setGlyph(THINKING_GLYPH);
+        entry.visual.emoji.setGlyph(QUERY_GLYPH);
         entry.visual.emoji.setVisible(true);
+      }
+      return;
+    }
+    if (event.kind === 'agent-query-end') {
+      const entry = agents.get(event.agentId);
+      if (entry) {
+        entry.glyphOverride = null;
+        entry.glyphOverrideUntil = 0;
       }
       return;
     }
     if (event.kind === 'agent-intent') {
       const entry = agents.get(event.agentId);
       if (entry) {
-        entry.status = event.intent.kind;
+        entry.status = event.status;
+        entry.glyphOverride = glyphForIntent(event.intent);
+        entry.glyphOverrideUntil = elapsedSeconds + 0.24;
+        entry.visual.emoji.setGlyph(entry.glyphOverride);
+        entry.visual.emoji.setVisible(true);
         entry.pulseUntil = elapsedSeconds + PULSE_SECONDS;
       }
+      return;
+    }
+    if (event.kind === 'game-event') {
+      applyGameEvent(event.event);
     }
   };
   const unsubscribe = bus.onAny(handleEvent);
@@ -212,27 +249,61 @@ export function bindWorldToScene(
       const pos = entry.visual.root.position;
       pos.x += (entry.targetX - pos.x) * LERP_ALPHA;
       pos.z += (entry.targetZ - pos.z) * LERP_ALPHA;
+      let offsetX = 0;
+      let offsetZ = 0;
+      if (entry.joltUntil > elapsedSeconds && entry.joltDirection) {
+        const strength = (entry.joltUntil - elapsedSeconds) / IMPACT_SECONDS;
+        offsetX = entry.joltDirection.x * 0.14 * strength;
+        offsetZ = entry.joltDirection.z * 0.14 * strength;
+      }
+      entry.visual.root.position.x = pos.x + offsetX;
+      entry.visual.root.position.z = pos.z + offsetZ;
+
       const rot = entry.visual.root.rotation;
       const desired = -entry.targetHeading;
       let delta = desired - rot.y;
       while (delta > Math.PI) delta -= Math.PI * 2;
       while (delta < -Math.PI) delta += Math.PI * 2;
       rot.y += delta * LERP_ALPHA;
+
       const pulse = Math.max(0, entry.pulseUntil - elapsedSeconds) / PULSE_SECONDS;
       entry.visual.body.scale.set(1 + pulse * 0.18, 1 + pulse * 0.12, 1 + pulse * 0.18);
-      if (entry.thinkingUntil > elapsedSeconds) {
-        entry.visual.emoji.setGlyph(THINKING_GLYPH);
-        entry.visual.emoji.setVisible(true);
+
+      if (entry.flashUntil > elapsedSeconds && entry.flashColor) {
+        applyBodyFlash(entry, 1 - (entry.flashUntil - elapsedSeconds) / FLASH_SECONDS);
+      } else {
+        clearBodyFlash(entry);
       }
+
+      if (entry.glyphOverride && entry.glyphOverrideUntil !== Number.POSITIVE_INFINITY && entry.glyphOverrideUntil <= elapsedSeconds) {
+        entry.glyphOverride = null;
+        entry.glyphOverrideUntil = 0;
+      }
+
       if (entry.targetLine.visible) {
         const target = entry.targetMarker.position;
         entry.targetLine.geometry.setFromPoints([
-          new THREE.Vector3(pos.x, 0.06, pos.z),
+          new THREE.Vector3(entry.visual.root.position.x, 0.06, entry.visual.root.position.z),
           new THREE.Vector3(target.x, 0.06, target.z),
         ]);
       }
     }
+
     for (const entry of objects.values()) {
+      if (entry.toss && entry.toss.endAt > elapsedSeconds) {
+        const progress = clamp01((elapsedSeconds - entry.toss.startAt) / (entry.toss.endAt - entry.toss.startAt));
+        const arcHeight = Math.sin(progress * Math.PI) * 1.05;
+        const bounce = progress > 0.72 ? Math.sin((progress - 0.72) / 0.28 * Math.PI * 5) * 0.08 * (1 - progress) : 0;
+        entry.visual.root.position.x = lerp(entry.toss.startX, entry.toss.endX, progress);
+        entry.visual.root.position.z = lerp(entry.toss.startZ, entry.toss.endZ, progress);
+        entry.visual.root.position.y = arcHeight + Math.abs(bounce);
+        if (progress >= 1) {
+          entry.toss = null;
+          entry.visual.root.position.y = 0;
+        }
+        continue;
+      }
+      entry.visual.root.position.y = 0;
       if (entry.heldBy) {
         const holder = agents.get(entry.heldBy);
         if (holder) {
@@ -245,13 +316,161 @@ export function bindWorldToScene(
       p.x += (entry.targetX - p.x) * LERP_ALPHA;
       p.z += (entry.targetZ - p.z) * LERP_ALPHA;
     }
+
+    for (const burst of Array.from(bursts)) {
+      if (burst.endAt <= elapsedSeconds) {
+        burst.dispose();
+        bursts.delete(burst);
+      }
+    }
   });
+
+  function applyGameEvent(event: SimulationGameEvent): void {
+    switch (event.kind) {
+      case 'pickup': {
+        const entry = agents.get(event.agentId);
+        if (entry) {
+          entry.glyphOverride = '✋';
+          entry.glyphOverrideUntil = elapsedSeconds + 0.28;
+          entry.pulseUntil = elapsedSeconds + PULSE_SECONDS;
+        }
+        spawnBurst(event.position, 0xffe066, 6, 0.22);
+        return;
+      }
+      case 'drop': {
+        const entry = agents.get(event.agentId);
+        if (entry) {
+          entry.glyphOverride = '💢';
+          entry.glyphOverrideUntil = elapsedSeconds + 0.35;
+          entry.flashColor = new THREE.Color(0xff8a80);
+          entry.flashUntil = elapsedSeconds + FLASH_SECONDS;
+        }
+        const objectEntry = objects.get(event.objectId);
+        if (objectEntry) {
+          objectEntry.toss = {
+            startX: event.from.x,
+            startZ: event.from.z,
+            endX: event.to.x,
+            endZ: event.to.z,
+            startAt: elapsedSeconds,
+            endAt: elapsedSeconds + DROP_ARC_SECONDS,
+          };
+          objectEntry.targetX = event.to.x;
+          objectEntry.targetZ = event.to.z;
+          objectEntry.heldBy = null;
+          objectEntry.visual.setHeldBy(null);
+        }
+        spawnBurst(event.from, event.cause === 'forced' ? 0xff8a80 : 0xffd166, 8, 0.28);
+        return;
+      }
+      case 'forced_drop': {
+        const attacker = agents.get(event.attackerAgentId);
+        const target = agents.get(event.targetAgentId);
+        if (attacker) {
+          attacker.glyphOverride = '💥';
+          attacker.glyphOverrideUntil = elapsedSeconds + 0.32;
+          attacker.flashColor = new THREE.Color(0xffc107);
+          attacker.flashUntil = elapsedSeconds + FLASH_SECONDS;
+        }
+        if (target) {
+          target.glyphOverride = event.outcome === 'drop' ? '💢' : '‼';
+          target.glyphOverrideUntil = elapsedSeconds + 0.32;
+          target.flashColor = new THREE.Color(0xff8a80);
+          target.flashUntil = elapsedSeconds + FLASH_SECONDS;
+          target.joltUntil = elapsedSeconds + IMPACT_SECONDS;
+          target.joltDirection = attacker
+            ? {
+                x: target.visual.root.position.x - attacker.visual.root.position.x,
+                z: target.visual.root.position.z - attacker.visual.root.position.z,
+              }
+            : { x: 0.1, z: 0.1 };
+        }
+        spawnBurst(event.position, 0xf9aa33, 12, 0.34);
+        return;
+      }
+      case 'delivery': {
+        const entry = agents.get(event.agentId);
+        if (entry) {
+          entry.glyphOverride = '🎉';
+          entry.glyphOverrideUntil = elapsedSeconds + CONFETTI_SECONDS;
+          entry.flashColor = new THREE.Color(0x7bd88f);
+          entry.flashUntil = elapsedSeconds + 0.55;
+          entry.pulseUntil = elapsedSeconds + 0.9;
+        }
+        spawnBurst(event.position, 0x7bd88f, 18, CONFETTI_SECONDS);
+        return;
+      }
+      case 'respawn': {
+        const objectEntry = objects.get(event.objectId);
+        if (objectEntry) {
+          objectEntry.targetX = event.position.x;
+          objectEntry.targetZ = event.position.z;
+          objectEntry.heldBy = null;
+          objectEntry.visual.setHeldBy(null);
+        }
+        spawnBurst(event.position, 0xffe066, 10, 0.28);
+        return;
+      }
+      case 'fallback':
+        return;
+    }
+  }
+
+  function spawnBurst(position: Vec2, colorHex: number, count: number, duration: number): void {
+    const material = new THREE.MeshBasicMaterial({ color: colorHex, transparent: true, opacity: 0.9, depthWrite: false });
+    const geometry = new THREE.PlaneGeometry(0.08, 0.18);
+    const root = new THREE.Group();
+    for (let i = 0; i < count; i += 1) {
+      const particle = new THREE.Mesh(geometry, material.clone());
+      const angle = (Math.PI * 2 * i) / count;
+      particle.position.set(Math.sin(angle) * 0.2, 0.2 + (i % 3) * 0.08, Math.cos(angle) * 0.2);
+      particle.rotation.x = -Math.PI / 2;
+      particle.userData = { angle, speed: 0.35 + (i % 4) * 0.08 };
+      root.add(particle);
+    }
+    root.position.set(position.x, 0.05, position.z);
+    worldRoot.add(root);
+    const burst: BurstEffect = {
+      root,
+      endAt: elapsedSeconds + duration,
+      dispose: () => {
+        worldRoot.remove(root);
+        root.traverse((obj) => {
+          const mesh = obj as THREE.Mesh;
+          mesh.geometry?.dispose?.();
+          const material = mesh.material;
+          if (Array.isArray(material)) material.forEach((m) => m.dispose());
+          else if (material) (material as THREE.Material).dispose();
+        });
+      },
+    };
+    bursts.add(burst);
+    const start = elapsedSeconds;
+    const stop = onFrame(() => {
+      const progress = clamp01((elapsedSeconds - start) / duration);
+      for (const child of root.children) {
+        const mesh = child as THREE.Mesh;
+        const user = mesh.userData as { angle: number; speed: number };
+        mesh.position.x = Math.sin(user.angle) * user.speed * progress;
+        mesh.position.z = Math.cos(user.angle) * user.speed * progress;
+        mesh.position.y = 0.15 + Math.sin(progress * Math.PI) * 0.7;
+        const material = mesh.material as THREE.MeshBasicMaterial;
+        material.opacity = 0.9 * (1 - progress);
+      }
+      if (progress >= 1) {
+        stop();
+      }
+    });
+  }
 
   return {
     applySnapshot,
     dispose() {
       unsubscribe();
       stopFrame();
+      for (const burst of bursts) {
+        burst.dispose();
+      }
       for (const entry of agents.values()) {
         worldRoot.remove(entry.visual.root);
         worldRoot.remove(entry.targetMarker);
@@ -265,6 +484,7 @@ export function bindWorldToScene(
       }
       agents.clear();
       objects.clear();
+      bursts.clear();
     },
     setHighlightedAgent(agentId) {
       highlightedAgent = agentId;
@@ -294,8 +514,7 @@ function resolveIntentTarget(intent: AgentIntent | null, snap: WorldSnapshot): V
     }
     case 'pick_up':
     case 'use':
-    case 'deliver':
-    {
+    case 'deliver': {
       const target = snap.objects.find((object) => object.id === intent.objectId);
       return target?.position ?? null;
     }
@@ -305,30 +524,78 @@ function resolveIntentTarget(intent: AgentIntent | null, snap: WorldSnapshot): V
   }
 }
 
+function updateAgentGlyph(entry: AgentEntry, agent: SimulationAgentState, snap: WorldSnapshot): void {
+  const glyph = entry.glyphOverride && entry.glyphOverrideUntil > 0
+    ? entry.glyphOverride
+    : activityGlyphFor(agent, snap);
+  if (glyph) {
+    entry.visual.emoji.setGlyph(glyph);
+    entry.visual.emoji.setVisible(true);
+  } else if (agent.emotion) {
+    entry.visual.emoji.setGlyph(emotionGlyphFor(agent.emotion));
+    entry.visual.emoji.setVisible(true);
+  } else {
+    entry.visual.emoji.setVisible(false);
+  }
+}
+
 function activityGlyphFor(agent: SimulationAgentState, snap: WorldSnapshot): string | null {
-  if (agent.thinking) return '\u{1F914}';
-  if (agent.holding === snap.game.bananaObjectId) return '\u{1F34C}';
+  if (agent.holding === snap.game.bananaObjectId) return '🍌';
   const intent = agent.intent;
   if (!intent) return null;
   switch (intent.kind) {
     case 'go_to_object':
     case 'move_to':
-      return '\u{1F3C3}';
+      return '🏃';
     case 'pick_up':
-      return '\u{270B}';
+      return '✋';
     case 'deliver':
-      return '\u{1F3C1}';
+      return '🏁';
     case 'sabotage':
-      return '\u{1F4A5}';
+      return '💥';
     case 'approach_agent':
-      return '\u{1F440}';
+      return '👀';
     case 'wait':
-      return '\u{23F3}';
+      return '⏳';
     case 'drop':
-      return '\u{1F4A8}';
+      return '💢';
     case 'use':
-      return '\u{2728}';
+      return '✨';
   }
+}
+
+function glyphForIntent(intent: AgentIntent): string {
+  switch (intent.kind) {
+    case 'go_to_object':
+    case 'move_to':
+      return '🏃';
+    case 'pick_up':
+      return '✋';
+    case 'deliver':
+      return '🏁';
+    case 'sabotage':
+      return '💥';
+    case 'approach_agent':
+      return '👀';
+    case 'wait':
+      return '⏳';
+    case 'drop':
+      return '💢';
+    case 'use':
+      return '✨';
+  }
+}
+
+function applyBodyFlash(entry: AgentEntry, progress: number): void {
+  const material = entry.visual.body.material as THREE.MeshStandardMaterial;
+  const flash = entry.flashColor ?? entry.baseColor;
+  material.color.copy(entry.baseColor).lerp(flash, 1 - progress);
+}
+
+function clearBodyFlash(entry: AgentEntry): void {
+  const material = entry.visual.body.material as THREE.MeshStandardMaterial;
+  material.color.copy(entry.baseColor);
+  entry.flashColor = null;
 }
 
 function setAgentTarget(entry: AgentEntry, target: Vec2 | null): void {
@@ -348,4 +615,12 @@ function disposeTargetVisuals(entry: AgentEntry): void {
   (entry.targetMarker.material as THREE.Material).dispose();
   entry.targetLine.geometry.dispose();
   (entry.targetLine.material as THREE.Material).dispose();
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
 }

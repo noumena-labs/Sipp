@@ -2,6 +2,7 @@ import type { WorldSnapshot } from '../runtime/types.js';
 
 export interface ScoreboardProps {
   readonly snapshot: WorldSnapshot;
+  readonly metaText?: string;
 }
 
 export function Scoreboard(props: ScoreboardProps) {
@@ -33,7 +34,7 @@ export function Scoreboard(props: ScoreboardProps) {
         ))}
       </div>
       <div className="scoreboard-meta">
-        {props.snapshot.game.referee.status === 'ruling' ? 'director ruling...' : 'race in progress'}
+        {props.metaText ?? (props.snapshot.game.referee.status === 'ruling' ? 'director ruling...' : 'race in progress')}
       </div>
     </div>
   );

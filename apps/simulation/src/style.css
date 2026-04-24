@@ -222,7 +222,10 @@ html, body, #app {
 .event-log .event-intent { background: rgba(120, 200, 150, 0.07); }
 .event-log .event-conflict { background: rgba(230, 111, 81, 0.12); }
 .event-log .event-decision { background: rgba(255, 209, 102, 0.09); }
-.event-log .event-query { color: #9aa3b8; }
+.event-log .event-query {
+  background: rgba(138, 176, 255, 0.08);
+  color: #c7d4f6;
+}
 .event-log .event-game { background: rgba(123, 216, 143, 0.09); }
 .event-log .event-referee { background: rgba(255, 209, 102, 0.14); }
 .event-log .event-empty { color: #6a7390; font-style: italic; }
@@ -302,10 +305,89 @@ html, body, #app {
 .director-note {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
+  width: min(520px, 92vw);
+  padding: 12px 14px;
   font-size: 13px;
   color: #e8ecf5;
-  text-align: center;
+  text-align: left;
+}
+
+.director-note-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.director-note-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  min-width: 0;
+}
+
+.director-note .panel-eyebrow {
+  margin-bottom: 0;
+  flex: 0 0 auto;
+}
+
+.director-headline {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: #fff3d6;
+}
+
+.director-detail {
+  color: #eef3ff;
+  line-height: 1.35;
+}
+
+.director-quote {
+  color: #c5cfdf;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.director-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-self: end;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+@media (max-width: 560px) {
+  .director-note-head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .director-pill {
+    justify-self: start;
+  }
+}
+
+.director-pill-idle,
+.director-pill-update {
+  background: rgba(138, 176, 255, 0.12);
+  color: #d7e4ff;
+}
+
+.director-pill-ruling {
+  background: rgba(255, 209, 102, 0.16);
+  color: #ffe39a;
+  border-color: rgba(255, 209, 102, 0.3);
+}
+
+.director-ruling {
+  border-color: rgba(255, 209, 102, 0.22);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 209, 102, 0.08);
 }
 
 .scoreboard {

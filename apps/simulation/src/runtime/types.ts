@@ -72,6 +72,13 @@ export interface SimulationGameState {
   readonly bananaSpawnPoints: readonly Vec2[];
   readonly score: SimulationScoreState;
   readonly referee: RefereeState;
+  readonly pendingRespawn: PendingRespawnState | null;
+}
+
+export interface PendingRespawnState {
+  readonly objectId: string;
+  readonly spawnPosition: Vec2;
+  readonly activateAtTick: number;
 }
 
 export type RefereeState =
@@ -178,19 +185,45 @@ export interface DirectorDecision {
   readonly note: string;
 }
 
-export interface SimulationGameEvent {
-  readonly kind:
-    | 'delivery'
-    | 'respawn'
-    | 'pickup'
-    | 'drop'
-    | 'forced_drop'
-    | 'fallback';
-  readonly message: string;
-  readonly agentId?: string;
-  readonly objectId?: string;
-  readonly points?: number;
-}
+export type SimulationGameEvent =
+  | {
+      readonly kind: 'delivery';
+      readonly agentId: string;
+      readonly objectId: string;
+      readonly position: Vec2;
+      readonly points: number;
+    }
+  | {
+      readonly kind: 'respawn';
+      readonly objectId: string;
+      readonly position: Vec2;
+    }
+  | {
+      readonly kind: 'pickup';
+      readonly agentId: string;
+      readonly objectId: string;
+      readonly position: Vec2;
+    }
+  | {
+      readonly kind: 'drop';
+      readonly agentId: string;
+      readonly objectId: string;
+      readonly from: Vec2;
+      readonly to: Vec2;
+      readonly cause: 'voluntary' | 'forced';
+    }
+  | {
+      readonly kind: 'forced_drop';
+      readonly attackerAgentId: string;
+      readonly targetAgentId: string;
+      readonly objectId: string;
+      readonly position: Vec2;
+      readonly outcome: 'drop' | 'hold' | 'attacker_fumbles';
+    }
+  | {
+      readonly kind: 'fallback';
+      readonly message: string;
+    };
 
 export interface ScenarioAgentSeed {
   readonly id: string;

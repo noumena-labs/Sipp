@@ -56,6 +56,7 @@ export class SimulationRuntime {
   private readonly narrateQuery: string;
   private readonly refereeTimeoutMs: number;
   private readonly activeControllers: Set<AbortController> = new Set();
+  private readonly movementSubstepSeconds = 0.15;
 
   private disposed = false;
   private inFlightTick: Promise<void> | null = null;
@@ -100,10 +101,20 @@ export class SimulationRuntime {
       await this.inFlightTick;
       return;
     }
-    this.inFlightTick = this.runTick(dtSeconds).finally(() => {
+    this.inFlightTick = this.runStep(dtSeconds).finally(() => {
       this.inFlightTick = null;
     });
     await this.inFlightTick;
+  }
+
+  public isBusy(): boolean {
+    return this.agentQueryInFlight != null || this.narrationInFlight != null || this.state.game.referee.status === 'ruling';
+  }
+
+  public async waitForIdle(): Promise<void> {
+    while (!this.disposed && this.isBusy()) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
   }
 
   public async dispose(): Promise<void> {
@@ -191,6 +202,18 @@ export class SimulationRuntime {
     }
   }
 
+  private async runStep(dtSeconds: number): Promise<void> {
+    let remaining = dtSeconds;
+    while (remaining > 1e-6) {
+      const substep = Math.min(remaining, this.movementSubstepSeconds);
+      await this.runTick(substep);
+      remaining -= substep;
+      if (this.disposed || this.isBusy()) {
+        return;
+      }
+    }
+  }
+
   private async runTick(dtSeconds: number): Promise<void> {
     if (this.disposed) return;
     this.state.tick += 1;
@@ -242,6 +265,10 @@ export class SimulationRuntime {
     }
     this.emitGameEvents(events);
     this.state.game.referee = { status: 'idle' };
+
+    // Let agents start replanning immediately after a ruling instead of waiting
+    // for the next tick, which makes bump/drop sequences feel stalled.
+    this.maybeStartOneAgentQuery();
   }
 
   private async queryRefereeWithTimeout(conflict: WorldConflict): Promise<DirectorDecision> {
@@ -499,6 +526,7 @@ function createGameState(seed: ScenarioGameSeed): MutableGameState {
     bananaSpawnPoints: seed.bananaSpawnPoints.map((point) => ({ x: point.x, z: point.z })),
     score: { deliveries: {}, forcedDrops: {} },
     referee: { status: 'idle' },
+    pendingRespawn: null,
     nextSpawnIndex: 1,
   };
 }
@@ -511,6 +539,13 @@ function cloneGame(game: MutableGameState): SimulationGameState {
     bananaSpawnPoints: game.bananaSpawnPoints.map((point) => ({ x: point.x, z: point.z })),
     score: cloneScore(game.score),
     referee: game.referee,
+    pendingRespawn: game.pendingRespawn
+      ? {
+          objectId: game.pendingRespawn.objectId,
+          spawnPosition: { x: game.pendingRespawn.spawnPosition.x, z: game.pendingRespawn.spawnPosition.z },
+          activateAtTick: game.pendingRespawn.activateAtTick,
+        }
+      : null,
   };
 }
 
