@@ -22,7 +22,7 @@ import { ControlsPanel } from './components/ControlsPanel';
 import { EventLog, type EventLogEntry } from './components/EventLog';
 import { AgentInspector } from './components/AgentInspector';
 import { Scoreboard } from './components/Scoreboard';
-import { COURTYARD_AGENTS, COURTYARD_SCENARIO } from './scenarios/courtyard-snack.js';
+import { COURTYARD_AGENTS, COURTYARD_SCENARIO, createCourtyardScenario } from './scenarios/courtyard-snack.js';
 import { SimulationBus, type SimulationEvent } from './runtime/bus.js';
 import {
   BrainActivityStore,
@@ -36,6 +36,7 @@ import { SimulationRuntime } from './runtime/simulation-runtime.js';
 import type {
   DirectorDecision,
   DirectorResolution,
+  ScenarioSeed,
   SimulationAgentState,
   SimulationGameEvent,
   WorldConflict,
@@ -46,6 +47,7 @@ import type { HoveredSceneObject } from './scene/world-binding.js';
 interface LoadedHarness {
   readonly engine: CogentEngine;
   readonly runtime: SimulationRuntime;
+  readonly scenario: ScenarioSeed;
 }
 
 interface DirectorPanelState {
@@ -85,6 +87,7 @@ export default function App() {
   const [status, setStatus] = useState('Idle. Press Load to initialize the model.');
   const [busy, setBusy] = useState(false);
   const [harness, setHarness] = useState<LoadedHarness | null>(null);
+  const [activeScenario, setActiveScenario] = useState<ScenarioSeed | null>(null);
   const [running, setRunning] = useState(false);
   const [snapshot, setSnapshot] = useState<WorldSnapshot | null>(null);
   const [events, setEvents] = useState<EventLogEntry[]>([]);
@@ -319,6 +322,8 @@ export default function App() {
           await harness.runtime.dispose();
           harness.engine.close();
         }
+        const scenario = createCourtyardScenario();
+        setActiveScenario(scenario);
         resetSimulationUi();
         setStatus('Initialising engine…');
         const engine = new CogentEngine({ ...getBundledRuntimeUrls() });
@@ -347,26 +352,26 @@ export default function App() {
           throw new Error('director brain definition is missing');
         }
         const { director } = await createDirectorFromConfigUrl({
-          configUrl: COURTYARD_SCENARIO.directorConfigUrl,
+          configUrl: scenario.directorConfigUrl,
           engine: createTracedBrainEngine(engine, brainStore, directorBrain),
           runtimeOptions: { maxOutputTokens: 96 },
         });
 
         setStatus('Building simulation runtime…');
         const runtime = new SimulationRuntime(director, {
-          id: COURTYARD_SCENARIO.id,
+          id: scenario.id,
           bus,
-          bounds: COURTYARD_SCENARIO.bounds,
-          game: COURTYARD_SCENARIO.game,
-          directorCadenceTicks: COURTYARD_SCENARIO.directorCadenceTicks,
-          initialDirectorNote: COURTYARD_SCENARIO.directorNote ?? null,
-          resolveRefereeTask: COURTYARD_SCENARIO.resolveRefereeTask,
-          narrateTask: COURTYARD_SCENARIO.narrateTask,
-          refereeTimeoutMs: COURTYARD_SCENARIO.refereeTimeoutMs,
-          narrationTimeoutMs: COURTYARD_SCENARIO.narrationTimeoutMs,
-          agentQueryTimeoutMs: COURTYARD_SCENARIO.agentQueryTimeoutMs,
+          bounds: scenario.bounds,
+          game: scenario.game,
+          directorCadenceTicks: scenario.directorCadenceTicks,
+          initialDirectorNote: scenario.directorNote ?? null,
+          resolveRefereeTask: scenario.resolveRefereeTask,
+          narrateTask: scenario.narrateTask,
+          refereeTimeoutMs: scenario.refereeTimeoutMs,
+          narrationTimeoutMs: scenario.narrationTimeoutMs,
+          agentQueryTimeoutMs: scenario.agentQueryTimeoutMs,
         });
-        for (const seed of COURTYARD_SCENARIO.objects) {
+        for (const seed of scenario.objects) {
           runtime.upsertObject(seed);
         }
 
@@ -381,7 +386,7 @@ export default function App() {
             configUrl: assignment.characterUrl,
             engine: createTracedBrainEngine(engine, brainStore, brain),
           });
-          const seed = COURTYARD_SCENARIO.agents.find((a) => a.id === assignment.agentId);
+          const seed = scenario.agents.find((a) => a.id === assignment.agentId);
           if (!seed) {
             throw new Error(`no scenario seed for ${assignment.agentId}`);
           }
@@ -392,10 +397,11 @@ export default function App() {
         snapshotRef.current = initialSnapshot;
         setSnapshot(initialSnapshot);
         setDirectorState(createInitialDirectorState(initialSnapshot.directorNote));
-        setHarness({ engine, runtime });
+        setHarness({ engine, runtime, scenario });
         setStatus('Ready. Press Start.');
       } catch (error) {
         console.error(error);
+        setActiveScenario(null);
         setStatus(`Load failed: ${(error as Error).message}`);
       } finally {
         setBusy(false);
@@ -442,6 +448,7 @@ export default function App() {
     try {
       await currentHarness.runtime.dispose();
       currentHarness.engine.close();
+      setActiveScenario(null);
       resetSimulationUi();
       setStatus('Reset. Press Load to rebuild.');
     } finally {
@@ -450,6 +457,7 @@ export default function App() {
   };
 
   const agents: readonly SimulationAgentState[] = snapshot?.agents ?? [];
+  const scenario = activeScenario ?? harness?.scenario ?? COURTYARD_SCENARIO;
   const scoreboardStatus = directorState.mode === 'ruling'
     ? 'director adjudicating a call'
     : 'race in progress';
@@ -486,7 +494,7 @@ export default function App() {
     <div ref={appRef} className="sim-app">
       <SimulationCanvas
         bus={bus}
-        bounds={COURTYARD_SCENARIO.bounds ?? { halfExtent: 8 }}
+        bounds={scenario.bounds ?? { halfExtent: 8 }}
         highlightedAgentId={selectedAgentId}
         onBackgroundClick={() => setSelectedAgentId(null)}
         onHoverObject={setHoveredObject}
