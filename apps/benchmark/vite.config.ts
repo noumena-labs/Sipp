@@ -16,12 +16,12 @@ export default defineConfig({
       // Use the built workspace entry directly so Vite does not serve the package
       // through an immutable /node_modules dependency URL that can stay stale
       // across local package rebuilds.
-      'cogent-engine': cogentEngineEntry,
+      '@noumena-labs/cogent-engine': cogentEngineEntry,
     },
     preserveSymlinks: true,
   },
   optimizeDeps: {
-    exclude: ['cogent-engine'],
+    exclude: ['@noumena-labs/cogent-engine'],
   },
   server: {
     headers: {

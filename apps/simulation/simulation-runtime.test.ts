@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { CharacterAgentEngine } from 'cogent-engine/character';
-import { DirectorRuntime, parseDirectorConfig, type JsonValue } from 'cogent-engine/orchestrator';
+import type { CharacterAgentEngine } from '@noumena-labs/cogent-engine/character';
+import { DirectorRuntime, parseDirectorConfig, type JsonValue } from '@noumena-labs/cogent-engine/orchestrator';
 
 import { SimulationBus, type SimulationEvent } from './src/runtime/bus.ts';
 import { applyDirectorDecision, applyTickFirstPass, type MutableWorldState } from './src/runtime/reducer.ts';

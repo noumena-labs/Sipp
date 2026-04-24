@@ -3,9 +3,9 @@ import type {
   GenerateResponse,
   PromptOptions,
   RequestObservabilityMetrics,
-} from 'cogent-engine';
-import type { CogentEngine } from 'cogent-engine';
-import type { CharacterAgentEngine } from 'cogent-engine/character';
+} from '@noumena-labs/cogent-engine';
+import type { CogentEngine } from '@noumena-labs/cogent-engine';
+import type { CharacterAgentEngine } from '@noumena-labs/cogent-engine/character';
 import type { BrainDefinition, BrainQueryType, BrainQueryStatus, BrainActivityStore } from './brain-activity-store.js';
 
 interface AppliedTemplateSnapshot {

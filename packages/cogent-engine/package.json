@@ -1,5 +1,5 @@
 {
-  "name": "cogent-engine",
+  "name": "@noumena-labs/cogent-engine",
   "version": "1.0.0",
   "description": "Browser-focused inference runtime for llama.cpp compiled to WebAssembly.",
   "main": "dist/esm/index.js",
@@ -26,7 +26,9 @@
       "import": "./dist/esm/orchestrator/index.js",
       "default": "./dist/esm/orchestrator/index.js"
     },
-    "./wasm/*": "./dist/wasm/*"
+    "./wasm/*": "./dist/wasm/*",
+    "./wasm-bun/*": "./dist/wasm-bun/*",
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
@@ -35,11 +37,13 @@
   "scripts": {
     "clean": "bun ./scripts/clean.mjs",
     "build": "bun run build:wasm && bun run build:ts",
+    "build:release": "bun run clean && bun run build:wasm && bun run build:wasm:bun && bun run build:ts",
     "build:dev": "bun run build:wasm:dev && bun run build:ts",
     "rebuild": "bun run clean && bun run build",
     "build:wasm": "bun ./scripts/build-wasm.mjs",
     "build:wasm:dev": "bun ./scripts/build-wasm-dev.mjs",
     "build:wasm:bun": "bun ./scripts/build-wasm-bun.mjs",
+    "release:prepare": "bun run build:release && bun run pack:validate",
     "test:backend-ops:webgpu": "bun ./scripts/test-backend-ops-webgpu.mjs",
     "test:backend-ops:webgpu:op": "bun ./scripts/test-backend-ops-webgpu-op.mjs",
     "test:backend-ops:webgpu:debug": "bun ./scripts/test-backend-ops-webgpu-op.mjs --debug",
@@ -47,6 +51,7 @@
     "test:backend-ops:cuda:op": "bun ./scripts/test-backend-ops-cuda-op.mjs",
     "test:backend-ops:cuda:debug": "bun ./scripts/test-backend-ops-cuda-op.mjs --debug",
     "build:ts": "bun ./scripts/clean-ts-dist.mjs && bunx --bun tsc -p tsconfig.json",
+    "pack:validate": "bun ./scripts/validate-pack.mjs",
     "bench:bun": "bun ./benchmarks/benchmark-bun.ts"
   },
   "keywords": [
@@ -56,6 +61,19 @@
     "cogent"
   ],
   "author": "Constant",
+  "homepage": "https://github.com/noumena-labs/CogentLM/tree/constant/dev/packages/cogent-engine#readme",
+  "bugs": {
+    "url": "https://github.com/noumena-labs/CogentLM/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/noumena-labs/CogentLM.git",
+    "directory": "packages/cogent-engine"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
   "license": "MIT",
   "devDependencies": {
     "typescript": "^5.3.3",

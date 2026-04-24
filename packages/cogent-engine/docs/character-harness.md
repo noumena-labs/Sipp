@@ -1,6 +1,6 @@
 # Character Harness
 
-`cogent-engine/character` is the small layer that turns a loaded `CogentEngine`
+`@noumena-labs/cogent-engine/character` is the small layer that turns a loaded `CogentEngine`
 into a character chat loop driven by `character.json`.
 
 - `character.json` stays semantic-only: persona, actions, memory.
@@ -16,7 +16,7 @@ import {
   CharacterAgent,
   createCharacterFromConfigUrl,
   parseCharacterConfig,
-} from 'cogent-engine/character';
+} from '@noumena-labs/cogent-engine/character';
 ```
 
 Advanced prompt/parser helpers now live under:
@@ -25,7 +25,7 @@ Advanced prompt/parser helpers now live under:
 import {
   compileActionGrammar,
   StreamingActionParser,
-} from 'cogent-engine/character/internal';
+} from '@noumena-labs/cogent-engine/character/internal';
 ```
 
 ## Mental model

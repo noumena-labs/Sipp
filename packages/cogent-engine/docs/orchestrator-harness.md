@@ -1,6 +1,6 @@
 # Orchestrator Harness
 
-`cogent-engine/orchestrator` is a config-driven director runtime.
+`@noumena-labs/cogent-engine/orchestrator` is a config-driven director runtime.
 
 It does not own world state, ticks, reducers, sensing, movement, or
 rendering. The host app owns the simulation and calls the director runtime
@@ -26,7 +26,7 @@ import {
   type DirectorConfig,
   type DirectorQueryPayload,
   type ResponseSchema,
-} from 'cogent-engine/orchestrator';
+} from '@noumena-labs/cogent-engine/orchestrator';
 ```
 
 ## Mental Model

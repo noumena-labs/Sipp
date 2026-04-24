@@ -1,4 +1,4 @@
-import type { RequestObservabilityMetrics } from 'cogent-engine';
+import type { RequestObservabilityMetrics } from '@noumena-labs/cogent-engine';
 
 const QUERIES_PER_SECOND_WINDOW_MS = 10_000;
 const LIVE_UPDATE_INTERVAL_MS = 120;

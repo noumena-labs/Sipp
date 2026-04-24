@@ -10,8 +10,8 @@
 
 import * as THREE from 'three';
 import { VRMExpressionPresetName, VRMHumanBoneName } from '@pixiv/three-vrm';
-import type { ActionEvent } from 'cogent-engine/character';
-import { ActionBus } from 'cogent-engine/character';
+import type { ActionEvent } from '@noumena-labs/cogent-engine/character';
+import { ActionBus } from '@noumena-labs/cogent-engine/character';
 import {
   dispatchAvatarAction,
   getRequiredClipActions,

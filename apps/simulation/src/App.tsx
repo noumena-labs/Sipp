@@ -13,8 +13,8 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { CogentEngine, getBundledRuntimeUrls } from 'cogent-engine';
-import { createDirectorFromConfigUrl } from 'cogent-engine/orchestrator';
+import { CogentEngine, getBundledRuntimeUrls } from '@noumena-labs/cogent-engine';
+import { createDirectorFromConfigUrl } from '@noumena-labs/cogent-engine/orchestrator';
 import { BrainActivityHud } from './components/BrainActivityHud';
 import { BrainTraceDrawer } from './components/BrainTraceDrawer';
 import { SimulationCanvas } from './components/SimulationCanvas';

@@ -21,14 +21,14 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      'cogent-engine/orchestrator': cogentEngineOrchestratorEntry,
-      'cogent-engine/character': cogentEngineCharacterEntry,
-      'cogent-engine': cogentEngineEntry,
+      '@noumena-labs/cogent-engine/orchestrator': cogentEngineOrchestratorEntry,
+      '@noumena-labs/cogent-engine/character': cogentEngineCharacterEntry,
+      '@noumena-labs/cogent-engine': cogentEngineEntry,
     },
     preserveSymlinks: true,
   },
   optimizeDeps: {
-    exclude: ['cogent-engine'],
+    exclude: ['@noumena-labs/cogent-engine'],
   },
   server: {
     headers: {
