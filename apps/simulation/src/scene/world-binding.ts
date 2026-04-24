@@ -15,6 +15,7 @@ import type {
 } from '../runtime/bus.js';
 import type { AgentIntent, SimulationAgentState, SimulationGameEvent, Vec2, WorldSnapshot } from '../runtime/types.js';
 import { createAgentVisual, type AgentVisual } from '../render/agent-mesh.js';
+import { createBatMesh } from '../render/bat-mesh.js';
 import { createObjectVisual, type ObjectVisual } from '../render/object-mesh.js';
 import { emotionGlyphFor } from '../render/emoji-billboard.js';
 import { AGENT_COLOR_BY_ID } from '../scenarios/courtyard-snack.js';
@@ -766,23 +767,14 @@ function syncAgentProp(entry: AgentEntry, agent: SimulationAgentState): void {
 }
 
 function createPowerUpProp(kind: 'bat' | 'ice_cube'): THREE.Object3D {
-  const root = new THREE.Group();
   if (kind === 'bat') {
-    const handle = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.03, 0.03, 0.44, 10),
-      new THREE.MeshStandardMaterial({ color: 0xc58b4e, roughness: 0.6, metalness: 0.05 })
-    );
-    handle.rotation.z = Math.PI / 3;
-    handle.position.set(0.02, 0.02, 0);
-    const barrel = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.08, 0.06, 0.24, 12),
-      new THREE.MeshStandardMaterial({ color: 0xe8ba74, roughness: 0.55, metalness: 0.05 })
-    );
-    barrel.rotation.z = Math.PI / 3;
-    barrel.position.set(0.17, 0.12, 0);
-    root.add(handle, barrel);
-    return root;
+    const bat = createBatMesh();
+    bat.root.position.set(0.2, 0.13, 0.04);
+    bat.root.rotation.set(0.22, -0.22, Math.PI / 3);
+    bat.root.scale.setScalar(0.62);
+    return bat.root;
   }
+  const root = new THREE.Group();
   const cube = new THREE.Mesh(
     new THREE.BoxGeometry(0.2, 0.2, 0.2),
     new THREE.MeshStandardMaterial({ color: 0x8fe7ff, roughness: 0.2, metalness: 0.1, transparent: true, opacity: 0.9 })

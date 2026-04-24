@@ -9,6 +9,9 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import * as THREE from 'three';
+import { createBatMesh } from './bat-mesh.js';
+
+const BAT_HOVER_COLOR = 0xffc86a;
 
 export interface ObjectVisual {
   readonly root: THREE.Group;
@@ -57,14 +60,6 @@ function specFor(kind: string): ShapeSpec {
         hoverColor: 0x7bd88f,
         parts: [
           { geometry: new THREE.CylinderGeometry(1.15, 1.15, 0.05, 32), color: 0x7bd88f, y: 0.025 },
-        ],
-      };
-    case 'bat':
-      return {
-        hoverColor: 0xffc86a,
-        parts: [
-          { geometry: new THREE.CylinderGeometry(0.05, 0.05, 0.7, 12), color: 0xc58b4e, y: 0.34, rotationZ: Math.PI / 3 },
-          { geometry: new THREE.CylinderGeometry(0.12, 0.08, 0.36, 16), color: 0xe8ba74, y: 0.56, offsetX: 0.16, rotationZ: Math.PI / 3 },
         ],
       };
     case 'ice_cube':
@@ -120,6 +115,9 @@ function specFor(kind: string): ShapeSpec {
 }
 
 export function createObjectVisual(kind: string): ObjectVisual {
+  if (kind === 'bat') {
+    return createBatObjectVisual();
+  }
   const spec = specFor(kind);
   const root = new THREE.Group();
   const parts = spec.parts.map((part) => createPart(part, root));
@@ -171,6 +169,60 @@ export function createObjectVisual(kind: string): ObjectVisual {
         part.mesh.geometry.dispose();
         (part.mesh.material as THREE.Material).dispose();
       }
+    },
+  };
+}
+
+function createBatObjectVisual(): ObjectVisual {
+  const root = new THREE.Group();
+  const bat = createBatMesh();
+  root.add(bat.root);
+
+  let heldBy: string | null = null;
+  let hovered = false;
+  let active = true;
+
+  const applyVisualState = (): void => {
+    const carryScale = heldBy ? 1.4 : 1;
+    const hoverScale = hovered ? 1.1 : 1;
+    const activeOpacity = active ? 1 : 0;
+    const scale = carryScale * hoverScale;
+
+    bat.root.position.set(0, heldBy ? 0.91 : 0.11, 0);
+    bat.root.rotation.set(0, -0.38, Math.PI / 2);
+    bat.root.scale.setScalar(scale);
+
+    for (const mesh of bat.meshes) {
+      const material = mesh.material;
+      material.transparent = activeOpacity < 1;
+      material.opacity = activeOpacity;
+      material.emissive.copy(hovered ? new THREE.Color(BAT_HOVER_COLOR).multiplyScalar(0.28) : new THREE.Color(0x000000));
+    }
+
+    root.visible = active;
+  };
+
+  applyVisualState();
+
+  return {
+    root,
+    setPosition(x, z) {
+      root.position.set(x, 0, z);
+    },
+    setHeldBy(nextHeldBy) {
+      heldBy = nextHeldBy;
+      applyVisualState();
+    },
+    setHovered(nextHovered) {
+      hovered = nextHovered;
+      applyVisualState();
+    },
+    setActive(nextActive) {
+      active = nextActive;
+      applyVisualState();
+    },
+    dispose() {
+      bat.dispose();
     },
   };
 }
