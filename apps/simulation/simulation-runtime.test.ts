@@ -150,7 +150,7 @@ function timeoutAfter(ms: number, message: string): Promise<never> {
   });
 }
 
-test('SimulationRuntime falls back and clears referee state after a director timeout', async () => {
+test('SimulationRuntime reports referee timeout without forcing a fallback ruling', async () => {
   const engine = createTimeoutEngine();
   const director = new DirectorRuntime(engine, DIRECTOR_CONFIG);
   const bus = new SimulationBus();
@@ -212,32 +212,27 @@ test('SimulationRuntime falls back and clears referee state after a director tim
 
     await Promise.race([
       runtime.waitForIdle(),
-      timeoutAfter(500, 'Simulation never returned to idle after the fallback ruling.'),
+      timeoutAfter(500, 'Simulation never returned to idle after the timed out ruling.'),
     ]);
 
     const snapshot = runtime.getSnapshot();
     assert.equal(snapshot.game.referee.status, 'idle');
     assert.equal(runtime.isBusy(), false);
-    assert.equal(snapshot.game.score.forcedDrops.attacker, 1);
-    assert.equal(snapshot.objects.find((object) => object.id === 'banana')?.heldBy, null);
-    assert.equal(snapshot.agents.find((agent) => agent.id === 'carrier')?.holding, null);
+    assert.equal(snapshot.game.score.forcedDrops.attacker, 0);
+    assert.equal(snapshot.objects.find((object) => object.id === 'banana')?.heldBy, 'carrier');
+    assert.equal(snapshot.agents.find((agent) => agent.id === 'carrier')?.holding, 'banana');
     assert.deepEqual(engine.cancelCalls, [1]);
     assert.ok(
       events.some(
         (event) =>
-          event.kind === 'game-event' &&
-          event.event.kind === 'fallback' &&
-          event.event.message.includes('timed out')
+          event.kind === 'runtime-error' &&
+          event.severity === 'critical' &&
+          event.source === 'referee' &&
+          event.message.includes('timed out')
       )
     );
-    assert.ok(
-      events.some(
-        (event) =>
-          event.kind === 'game-event' &&
-          event.event.kind === 'forced_drop' &&
-          event.event.outcome === 'drop'
-      )
-    );
+    assert.equal(events.some((event) => event.kind === 'director-decision'), false);
+    assert.equal(events.some((event) => event.kind === 'game-event' && event.event.kind === 'forced_drop'), false);
   } finally {
     await runtime.dispose();
   }

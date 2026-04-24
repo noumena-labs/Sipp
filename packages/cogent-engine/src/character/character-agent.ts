@@ -77,7 +77,7 @@ export interface ChatTurn {
 
 export interface ChoiceResult {
   readonly choice: string | null;
-  readonly cancelled: boolean;
+  readonly status: 'ok' | 'aborted' | 'timed_out' | 'failed' | 'invalid_response';
   readonly errorMessage?: string;
   readonly rawText: string;
 }
@@ -190,7 +190,7 @@ export class CharacterAgent {
     } catch (error) {
       return {
         choice: null,
-        cancelled: options.signal?.aborted === true,
+        status: options.signal?.aborted === true ? 'aborted' : 'failed',
         errorMessage: error instanceof Error ? error.message : String(error),
         rawText: '',
       };
@@ -226,16 +226,20 @@ export class CharacterAgent {
       ]);
       const rawText = (response.outputText ?? '').trim();
       if (response.cancelled) {
+        const status = abort.timedOut() ? 'timed_out' : 'aborted';
+        const errorMessage = status === 'timed_out' ? 'Choice timed out.' : 'Choice aborted.';
         logChoiceQuery({
           phase: 'response',
           contextKey: this.config.id,
           rawText,
           choice: null,
-          cancelled: true,
+          status,
+          errorMessage,
         });
         return {
           choice: null,
-          cancelled: true,
+          status,
+          errorMessage,
           rawText,
         };
       }
@@ -245,18 +249,36 @@ export class CharacterAgent {
           contextKey: this.config.id,
           rawText,
           choice: null,
+          status: 'failed',
           errorMessage: response.errorMessage ?? 'generation failed',
         });
         return {
           choice: null,
-          cancelled: false,
+          status: 'failed',
           errorMessage: response.errorMessage ?? 'generation failed',
           rawText,
         };
       }
+      const choice = parseChoiceOutput(rawText, options.choices);
+      if (choice == null) {
+        logChoiceQuery({
+          phase: 'response',
+          contextKey: this.config.id,
+          rawText,
+          choice: null,
+          status: 'invalid_response',
+          errorMessage: 'choice output did not match any available option',
+        });
+        return {
+          choice: null,
+          status: 'invalid_response',
+          errorMessage: 'choice output did not match any available option',
+          rawText,
+        };
+      }
       return {
-        choice: parseChoiceOutput(rawText, options.choices),
-        cancelled: false,
+        choice,
+        status: 'ok',
         rawText,
       };
     } catch (error) {
@@ -270,23 +292,28 @@ export class CharacterAgent {
           // Swallow cancel errors.
         }
       }
-      const errorMessage = cancelled
+      const status = cancelled
         ? abort.timedOut()
-          ? 'Choice timed out.'
-          : undefined
-        : error instanceof Error ? error.message : String(error);
+          ? 'timed_out'
+          : 'aborted'
+        : 'failed';
+      const errorMessage = status === 'timed_out'
+        ? 'Choice timed out.'
+        : status === 'aborted'
+          ? 'Choice aborted.'
+          : error instanceof Error ? error.message : String(error);
       logChoiceQuery({
         phase: 'response',
         contextKey: this.config.id,
         rawText: '',
         choice: null,
-        cancelled,
-        ...(errorMessage ? { errorMessage } : {}),
+        status,
+        errorMessage,
       });
       return {
         choice: null,
-        cancelled,
-        ...(errorMessage ? { errorMessage } : {}),
+        status,
+        errorMessage,
         rawText: '',
       };
     } finally {
@@ -782,7 +809,7 @@ function logChoiceQuery(args: {
   choices?: readonly string[];
   rawText?: string;
   choice?: string | null;
-  cancelled?: boolean;
+  status?: ChoiceResult['status'];
   errorMessage?: string;
 }): void {
   if (!isPromptTraceEnabled()) return;
@@ -798,7 +825,7 @@ function logChoiceQuery(args: {
   console.groupCollapsed(`[CharacterAgent.choose] <- ${args.contextKey}`);
   console.log('rawText', args.rawText ?? '');
   console.log('choice', args.choice ?? null);
-  console.log('cancelled', args.cancelled ?? false);
+  console.log('status', args.status ?? 'ok');
   if (args.errorMessage) {
     console.warn('error', args.errorMessage);
   }

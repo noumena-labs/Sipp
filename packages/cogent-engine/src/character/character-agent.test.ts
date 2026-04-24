@@ -477,7 +477,7 @@ test('choose() threads literal-choice grammar into queuePrompt options', async (
   });
 
   assert.equal(result.choice, 'wait');
-  assert.equal(result.cancelled, false);
+  assert.equal(result.status, 'ok');
   assert.equal(engine.queuePromptCalls.length, 1);
   const call = engine.queuePromptCalls[0];
   assert.ok(typeof call.options === 'object' && call.options != null);
@@ -518,7 +518,7 @@ test('choose() returns null on invalid model output', async () => {
   });
 
   assert.equal(result.choice, null);
-  assert.equal(result.cancelled, false);
+  assert.equal(result.status, 'invalid_response');
 });
 
 test('choose() surfaces engine failure', async () => {
@@ -531,6 +531,7 @@ test('choose() surfaces engine failure', async () => {
   });
 
   assert.equal(result.choice, null);
+  assert.equal(result.status, 'failed');
   assert.equal(result.errorMessage, 'boom');
   assert.equal(engine.cancelCalls.length, 1);
 });
@@ -548,7 +549,7 @@ test('choose() returns cancelled when aborted', async () => {
   });
 
   assert.equal(result.choice, null);
-  assert.equal(result.cancelled, true);
+  assert.equal(result.status, 'aborted');
 });
 
 test('choose() returns cancelled on timeout and cancels the queued request', async () => {
@@ -567,7 +568,7 @@ test('choose() returns cancelled on timeout and cancels the queued request', asy
   release();
 
   assert.equal(result.choice, null);
-  assert.equal(result.cancelled, true);
+  assert.equal(result.status, 'timed_out');
   assert.equal(result.errorMessage, 'Choice timed out.');
   assert.deepEqual(engine.cancelCalls, [1]);
 });

@@ -2,6 +2,7 @@ import {
   createCharacterFromConfigUrl,
   type CharacterAgent,
   type CharacterConfig,
+  type ChoiceResult,
 } from 'cogent-engine/character';
 import type { CharacterAgentEngine } from 'cogent-engine/character';
 import { buildDecisionContext } from './decision-context.js';
@@ -12,9 +13,10 @@ export interface SimulationAgentChooserOptions {
 }
 
 export interface SimulationAgentChoiceResult {
-  readonly goal: AgentGoal;
-  readonly cancelled: boolean;
+  readonly goal: AgentGoal | null;
+  readonly status: ChoiceResult['status'];
   readonly errorMessage?: string;
+  readonly rawText: string;
 }
 
 export class SimulationAgentChooser {
@@ -52,18 +54,28 @@ export class SimulationAgentChooser {
       maxOutputTokens: this.maxChoiceOutputTokens,
     });
 
-    if (choiceResult.cancelled) {
+    if (choiceResult.status !== 'ok') {
       return {
-        goal: { kind: 'wait', label: 'wait' },
-        cancelled: true,
+        goal: null,
+        status: choiceResult.status,
         ...(choiceResult.errorMessage ? { errorMessage: choiceResult.errorMessage } : {}),
+        rawText: choiceResult.rawText,
       };
     }
 
-    const chosen = findOptionByLabel(decision, choiceResult.choice) ?? findOptionByLabel(decision, 'wait');
+    const chosen = findOptionByLabel(decision, choiceResult.choice);
+    if (!chosen) {
+      return {
+        goal: null,
+        status: 'invalid_response',
+        errorMessage: choiceResult.errorMessage ?? 'choice output did not match any available option',
+        rawText: choiceResult.rawText,
+      };
+    }
     return {
-      goal: chosen?.goal ?? { kind: 'wait', label: 'wait' },
-      cancelled: false,
+      goal: chosen.goal,
+      status: 'ok',
+      rawText: choiceResult.rawText,
       ...(choiceResult.errorMessage ? { errorMessage: choiceResult.errorMessage } : {}),
     };
   }

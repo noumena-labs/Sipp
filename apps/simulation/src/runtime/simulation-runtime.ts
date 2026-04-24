@@ -6,7 +6,6 @@ import {
   applyDirectorDecision,
   applyTickFirstPass,
   cloneScore,
-  deterministicConflictResolution,
   type MutableGameState,
   type MutableWorldState,
 } from './reducer.js';
@@ -52,7 +51,7 @@ export class SimulationRuntime {
 
   private readonly state: MutableWorldState;
   private readonly simulationAgents: Map<string, SimulationAgentChooser> = new Map();
-  private readonly director: DirectorRuntime | null;
+  private readonly director: DirectorRuntime;
   private readonly directorCadenceTicks: number;
   private readonly resolveRefereeQuery: string;
   private readonly narrateQuery: string;
@@ -69,16 +68,16 @@ export class SimulationRuntime {
   private narrationController: AbortController | null = null;
   private queryCursor = 0;
 
-  public constructor(director: DirectorRuntime | null, options: SimulationRuntimeOptions) {
+  public constructor(director: DirectorRuntime, options: SimulationRuntimeOptions) {
     this.id = options.id ?? 'simulation';
     this.bus = options.bus ?? new SimulationBus();
     this.director = director;
     this.directorCadenceTicks = Math.max(1, Math.floor(options.directorCadenceTicks ?? 12));
     this.resolveRefereeQuery = options.resolveRefereeQuery ?? 'resolve_referee_event';
     this.narrateQuery = options.narrateQuery ?? 'narrate_scene';
-    this.refereeTimeoutMs = Math.max(1000, Math.floor(options.refereeTimeoutMs ?? 6000));
-    this.narrationTimeoutMs = Math.max(1000, Math.floor(options.narrationTimeoutMs ?? 4000));
-    this.agentQueryTimeoutMs = Math.max(1000, Math.floor(options.agentQueryTimeoutMs ?? 5000));
+    this.refereeTimeoutMs = Math.max(1000, Math.floor(options.refereeTimeoutMs ?? 30000));
+    this.narrationTimeoutMs = Math.max(1000, Math.floor(options.narrationTimeoutMs ?? 15000));
+    this.agentQueryTimeoutMs = Math.max(1000, Math.floor(options.agentQueryTimeoutMs ?? 30000));
     this.state = {
       tick: 0,
       timeSeconds: 0,
@@ -264,28 +263,27 @@ export class SimulationRuntime {
       event: { kind: 'fallback', message: `Director is ruling on ${describeConflict(conflict)}.` },
     });
 
+    let appliedDecision = false;
     try {
-      const decision = this.director
-        ? await this.queryRefereeWithTimeout(conflict)
-        : deterministicConflictResolution(this.state, [conflict]);
-      const events = applyDirectorDecision(this.state, decision);
-      this.emit({ kind: 'director-decision', tick: this.state.tick, decision });
-      if (decision.note) {
-        this.emit({ kind: 'world-note', tick: this.state.tick, note: decision.note });
+      const decision = await this.queryRefereeWithTimeout(conflict);
+      if (decision) {
+        const events = applyDirectorDecision(this.state, decision);
+        this.emit({ kind: 'director-decision', tick: this.state.tick, decision });
+        if (decision.note) {
+          this.emit({ kind: 'world-note', tick: this.state.tick, note: decision.note });
+        }
+        this.emitGameEvents(events);
+        appliedDecision = true;
       }
-      this.emitGameEvents(events);
     } finally {
       this.state.game.referee = { status: 'idle' };
-
-      // Let agents start replanning immediately after a ruling instead of waiting
-      // for the next tick, which makes bump/drop sequences feel stalled.
-      this.maybeStartOneAgentQuery();
+      if (appliedDecision) {
+        this.maybeStartOneAgentQuery();
+      }
     }
   }
 
-  private async queryRefereeWithTimeout(conflict: WorldConflict): Promise<DirectorDecision> {
-    if (!this.director) return deterministicConflictResolution(this.state, [conflict]);
-
+  private async queryRefereeWithTimeout(conflict: WorldConflict): Promise<DirectorDecision | null> {
     const controller = new AbortController();
     this.activeControllers.add(controller);
     try {
@@ -295,27 +293,37 @@ export class SimulationRuntime {
           buildRefereePayload(this.state, conflict) as unknown as Record<string, JsonValue>,
           { signal: controller.signal, timeoutMs: this.refereeTimeoutMs }
         );
-        if (result.cancelled || result.data == null) {
-          const fallback = deterministicConflictResolution(this.state, [conflict]);
-          this.emit({
-            kind: 'game-event',
-            tick: this.state.tick,
-            event: { kind: 'fallback', message: 'Director ruling timed out; house rule applies.' },
+        if (result.status !== 'ok' || result.data == null) {
+          this.emitRuntimeIssue({
+            severity: 'critical',
+            source: 'referee',
+            message: `Director referee query failed: ${result.errorMessage ?? result.status}`,
+            conflictId: conflict.id,
+            queryName: this.resolveRefereeQuery,
           });
-          return fallback;
+          return null;
         }
-        return coerceRefereeDecision(result.data, conflict, this.state);
+        const decision = coerceRefereeDecision(result.data, conflict);
+        if (!decision) {
+          this.emitRuntimeIssue({
+            severity: 'critical',
+            source: 'referee',
+            message: 'Director referee response did not contain a valid resolution for the conflict.',
+            conflictId: conflict.id,
+            queryName: this.resolveRefereeQuery,
+          });
+          return null;
+        }
+        return decision;
       } catch (error) {
-        const fallback = deterministicConflictResolution(this.state, [conflict]);
-        this.emit({
-          kind: 'game-event',
-          tick: this.state.tick,
-          event: {
-            kind: 'fallback',
-            message: `Director ruling failed; house rule applies. (${error instanceof Error ? error.message : String(error)})`,
-          },
+        this.emitRuntimeIssue({
+          severity: 'critical',
+          source: 'referee',
+          message: `Director referee query failed: ${error instanceof Error ? error.message : String(error)}`,
+          conflictId: conflict.id,
+          queryName: this.resolveRefereeQuery,
         });
-        return fallback;
+        return null;
       }
     } finally {
       this.activeControllers.delete(controller);
@@ -362,6 +370,28 @@ export class SimulationRuntime {
       if (this.disposed || controller.signal.aborted) return;
       const current = this.state.agents.find((a) => a.id === chosenId);
       if (!current) return;
+      if (result.status !== 'ok' || !result.goal) {
+        current.thinking = false;
+        current.status = 'decision query failed';
+        this.emit({
+          kind: 'agent-query-end',
+          tick: this.state.tick,
+          agentId: chosenId,
+          goal: null,
+          intent: null,
+          status: current.status,
+          emotion: null,
+          queryStatus: result.status,
+          ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
+        });
+        this.emitRuntimeIssue({
+          severity: 'critical',
+          source: 'agent',
+          message: `${current.name} decision query failed: ${result.errorMessage ?? result.status}`,
+          agentId: chosenId,
+        });
+        return;
+      }
       current.goal = result.goal;
       const intent = this.mapGoalToIntent(result.goal);
       current.intent = intent;
@@ -377,7 +407,7 @@ export class SimulationRuntime {
         intent,
         status: result.goal.label,
         emotion: intent.emotion,
-        cancelled: result.cancelled,
+        queryStatus: result.status,
         ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
       });
       this.emit({
@@ -398,8 +428,14 @@ export class SimulationRuntime {
           intent: null,
           status: 'query failed',
           emotion: null,
-          cancelled: false,
+          queryStatus: 'failed',
           errorMessage: error instanceof Error ? error.message : String(error),
+        });
+        this.emitRuntimeIssue({
+          severity: 'critical',
+          source: 'agent',
+          message: `${chosenId} decision query failed: ${error instanceof Error ? error.message : String(error)}`,
+          agentId: chosenId,
         });
       }
     }).finally(() => {
@@ -414,7 +450,7 @@ export class SimulationRuntime {
   }
 
   private maybeStartNarration(): void {
-    if (!this.director || this.agentQueryInFlight || this.narrationInFlight) return;
+    if (this.agentQueryInFlight || this.narrationInFlight) return;
     if (this.simulationAgents.size === 0 || this.state.tick % this.directorCadenceTicks !== 0) return;
 
     const controller = new AbortController();
@@ -425,7 +461,16 @@ export class SimulationRuntime {
       buildNarrationPayload(this.state) as unknown as Record<string, JsonValue>,
       { signal: controller.signal, timeoutMs: this.narrationTimeoutMs }
     ).then((result) => {
-      if (this.disposed || controller.signal.aborted || result.cancelled || result.data == null) return;
+      if (this.disposed || controller.signal.aborted) return;
+      if (result.status !== 'ok' || result.data == null) {
+        this.emitRuntimeIssue({
+          severity: 'warning',
+          source: 'narration',
+          message: `Director narration query failed: ${result.errorMessage ?? result.status}`,
+          queryName: this.narrateQuery,
+        });
+        return;
+      }
       const decision = coerceNarrationDecision(result.data, this.getSnapshot());
       this.state.directorNote = decision.note || this.state.directorNote;
       this.emit({ kind: 'director-decision', tick: this.state.tick, decision });
@@ -550,6 +595,23 @@ export class SimulationRuntime {
   private emit(event: SimulationEvent): void {
     this.bus.emit(event);
   }
+
+  private emitRuntimeIssue(args: {
+    readonly severity: 'critical' | 'warning';
+    readonly source: 'agent' | 'referee' | 'narration';
+    readonly message: string;
+    readonly agentId?: string;
+    readonly conflictId?: string;
+    readonly queryName?: string;
+  }): void {
+    const prefix = `[SimulationRuntime] ${args.source} ${args.severity}`;
+    if (args.severity === 'critical') {
+      console.error(`${prefix}: ${args.message}`);
+    } else {
+      console.warn(`${prefix}: ${args.message}`);
+    }
+    this.emit({ kind: 'runtime-error', tick: this.state.tick, ...args });
+  }
 }
 
 function createGameState(seed: ScenarioGameSeed): MutableGameState {
@@ -655,9 +717,8 @@ function jsonVec(position: { readonly x: number; readonly z: number }): JsonValu
 
 function coerceRefereeDecision(
   value: JsonValue | null,
-  conflict: WorldConflict,
-  state: MutableWorldState
-): DirectorDecision {
+  conflict: WorldConflict
+): DirectorDecision | null {
   if (isRecord(value) && typeof value.note === 'string' && Array.isArray(value.resolutions)) {
     const resolutions: DirectorResolution[] = [];
     for (const entry of value.resolutions) {
@@ -676,7 +737,7 @@ function coerceRefereeDecision(
       return { note: value.note, resolutions };
     }
   }
-  return deterministicConflictResolution(state, [conflict]);
+  return null;
 }
 
 function coerceNarrationDecision(value: JsonValue | null, snapshot: WorldSnapshot): DirectorDecision {

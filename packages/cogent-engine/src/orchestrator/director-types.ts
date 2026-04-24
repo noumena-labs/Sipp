@@ -98,7 +98,7 @@ export interface DirectorQueryPayload {
 
 export interface DirectorQueryResult {
   readonly data: JsonValue | null;
-  readonly cancelled: boolean;
+  readonly status: 'ok' | 'aborted' | 'timed_out' | 'failed' | 'invalid_response';
   readonly errorMessage?: string;
   readonly rawText: string;
 }

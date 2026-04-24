@@ -62,6 +62,7 @@ export default function App() {
   const [eventLogCollapsed, setEventLogCollapsed] = useState(true);
   const eventIdRef = useRef(0);
   const snapshotRef = useRef<WorldSnapshot | null>(null);
+  const criticalIssueRef = useRef(false);
   const [directorState, setDirectorState] = useState<DirectorPanelState>(() =>
     createInitialDirectorState(COURTYARD_SCENARIO.directorNote ?? null)
   );
@@ -100,7 +101,7 @@ export default function App() {
               kind: 'note',
               text: `${nameOf(event.agentId, snapshotRef.current)} hits a decision error: ${event.errorMessage}`,
             });
-          } else if (event.cancelled) {
+          } else if (event.queryStatus === 'aborted') {
             pushEvent({
               tick: event.tick,
               kind: 'query',
@@ -169,6 +170,27 @@ export default function App() {
           });
           break;
         }
+        case 'runtime-error': {
+          const text = `${event.severity === 'critical' ? 'Critical' : 'Warning'} ${event.source} query issue: ${event.message}`;
+          if (event.severity === 'critical') {
+            criticalIssueRef.current = true;
+            setRunning(false);
+            setStatus(`Paused: ${event.message}`);
+            setDirectorState((prev) => ({
+              ...prev,
+              mode: 'update',
+              tick: event.tick,
+              headline: 'Runtime query error',
+              detail: event.message,
+            }));
+          }
+          pushEvent({
+            tick: event.tick,
+            kind: event.severity === 'critical' ? 'error' : 'note',
+            text,
+          });
+          break;
+        }
       }
     });
     return () => off();
@@ -186,6 +208,7 @@ export default function App() {
       if (disposed) return;
       await harness.runtime.step(1 / tickHz);
       await harness.runtime.waitForIdle();
+      if (criticalIssueRef.current) return;
       if (disposed) return;
       timeoutId = setTimeout(() => {
         void loop();
@@ -209,6 +232,7 @@ export default function App() {
       setBusy(true);
       setModelUrl(url);
       eventIdRef.current = 0;
+      criticalIssueRef.current = false;
       setEvents([]);
       setSelectedAgentId(null);
       snapshotRef.current = null;
@@ -258,6 +282,9 @@ export default function App() {
           initialDirectorNote: COURTYARD_SCENARIO.directorNote ?? null,
           resolveRefereeQuery: COURTYARD_SCENARIO.resolveRefereeQuery,
           narrateQuery: COURTYARD_SCENARIO.narrateQuery,
+          refereeTimeoutMs: COURTYARD_SCENARIO.refereeTimeoutMs,
+          narrationTimeoutMs: COURTYARD_SCENARIO.narrationTimeoutMs,
+          agentQueryTimeoutMs: COURTYARD_SCENARIO.agentQueryTimeoutMs,
         });
         for (const seed of COURTYARD_SCENARIO.objects) {
           runtime.upsertObject(seed);
@@ -295,6 +322,7 @@ export default function App() {
 
   const handleStart = (): void => {
     if (!harness) return;
+    criticalIssueRef.current = false;
     setRunning(true);
     setStatus('Running.');
   };
@@ -310,9 +338,11 @@ export default function App() {
     if (running) {
       setRunning(false);
     }
+    criticalIssueRef.current = false;
     setStatus('Stepping…');
     await harness.runtime.step(1 / tickHz);
     await harness.runtime.waitForIdle();
+    if (criticalIssueRef.current) return;
     setStatus('Stepped.');
   };
 
@@ -324,6 +354,7 @@ export default function App() {
       harness.engine.close();
       setHarness(null);
       setRunning(false);
+      criticalIssueRef.current = false;
       snapshotRef.current = null;
       setSnapshot(null);
       setEvents([]);

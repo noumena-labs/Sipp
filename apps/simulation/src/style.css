@@ -228,6 +228,8 @@ html, body, #app {
 }
 .event-log .event-game { background: rgba(123, 216, 143, 0.09); }
 .event-log .event-referee { background: rgba(255, 209, 102, 0.14); }
+.event-log .event-error { background: rgba(230, 111, 81, 0.18); }
+.event-log .event-error .text { color: #ffc6b8; }
 .event-log .event-empty { color: #6a7390; font-style: italic; }
 
 .agent-inspector ul {

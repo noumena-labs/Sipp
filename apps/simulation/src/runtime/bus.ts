@@ -34,7 +34,7 @@ export interface AgentQueryEndEvent {
   readonly intent: AgentIntent | null;
   readonly status: string;
   readonly emotion: string | null;
-  readonly cancelled: boolean;
+  readonly queryStatus: 'ok' | 'aborted' | 'timed_out' | 'failed' | 'invalid_response';
   readonly errorMessage?: string;
 }
 
@@ -84,6 +84,17 @@ export interface GameEventBusEvent {
   readonly event: SimulationGameEvent;
 }
 
+export interface RuntimeErrorEvent {
+  readonly kind: 'runtime-error';
+  readonly tick: number;
+  readonly severity: 'critical' | 'warning';
+  readonly source: 'agent' | 'referee' | 'narration';
+  readonly message: string;
+  readonly agentId?: string;
+  readonly conflictId?: string;
+  readonly queryName?: string;
+}
+
 export type SimulationEvent =
   | TickStartEvent
   | TickEndEvent
@@ -95,7 +106,8 @@ export type SimulationEvent =
   | DirectorConflictEvent
   | DirectorDecisionEvent
   | WorldNoteEvent
-  | GameEventBusEvent;
+  | GameEventBusEvent
+  | RuntimeErrorEvent;
 
 export type SimulationEventKind = SimulationEvent['kind'];
 export type SimulationEventListener<K extends SimulationEventKind = SimulationEventKind> = (

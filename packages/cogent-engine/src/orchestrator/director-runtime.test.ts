@@ -117,7 +117,7 @@ test('DirectorRuntime returns parsed validated data', async () => {
   });
 
   assert.deepEqual(result.data, { note: 'Aria wins', winnerAgentId: 'aria' });
-  assert.equal(result.cancelled, false);
+  assert.equal(result.status, 'ok');
   assert.ok(engine.grammar?.includes('winnerAgentId'));
 });
 
@@ -129,6 +129,7 @@ test('DirectorRuntime surfaces validation failure as null data', async () => {
   const result = await runtime.query('resolve_conflict', { state: { tick: 1 } });
 
   assert.equal(result.data, null);
+  assert.equal(result.status, 'invalid_response');
   assert.match(result.errorMessage ?? '', /winnerAgentId is required/);
 });
 
@@ -140,10 +141,11 @@ test('DirectorRuntime surfaces engine failure', async () => {
   const result = await runtime.query('resolve_conflict', { state: { tick: 1 } });
 
   assert.equal(result.data, null);
+  assert.equal(result.status, 'failed');
   assert.equal(result.errorMessage, 'boom');
 });
 
-test('DirectorRuntime returns cancelled on timeout and cancels the queued request', async () => {
+test('DirectorRuntime returns timed_out on timeout and cancels the queued request', async () => {
   const engine = new FakeEngine();
   engine.waitForAbort = true;
   const runtime = new DirectorRuntime(engine, CONFIG);
@@ -151,7 +153,7 @@ test('DirectorRuntime returns cancelled on timeout and cancels the queued reques
   const result = await runtime.query('resolve_conflict', { state: { tick: 1 } }, { timeoutMs: 1 });
 
   assert.equal(result.data, null);
-  assert.equal(result.cancelled, true);
+  assert.equal(result.status, 'timed_out');
   assert.equal(result.errorMessage, 'Director query timed out.');
   assert.deepEqual(engine.cancelCalls, [1]);
 });

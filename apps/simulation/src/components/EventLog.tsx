@@ -11,7 +11,7 @@ export interface EventLogEntry {
   readonly id: number;
   readonly tick: number;
   readonly text: string;
-  readonly kind: 'note' | 'intent' | 'conflict' | 'decision' | 'query' | 'game' | 'referee';
+  readonly kind: 'note' | 'intent' | 'conflict' | 'decision' | 'query' | 'game' | 'referee' | 'error';
 }
 
 export interface EventLogProps {

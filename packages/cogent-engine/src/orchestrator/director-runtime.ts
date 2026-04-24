@@ -83,7 +83,7 @@ export class DirectorRuntime {
     } catch (error) {
       return {
         data: null,
-        cancelled: options.signal?.aborted === true,
+        status: options.signal?.aborted === true ? 'aborted' : 'failed',
         errorMessage: error instanceof Error ? error.message : String(error),
         rawText: '',
       };
@@ -119,15 +119,18 @@ export class DirectorRuntime {
       ]);
       const rawText = response.outputText ?? '';
       if (response.cancelled) {
+        const status = abort.timedOut() ? 'timed_out' : 'aborted';
+        const errorMessage = status === 'timed_out' ? 'Director query timed out.' : 'Director query aborted.';
         logDirectorQuery({
           phase: 'response',
           queryName,
           contextKey: this.contextKey,
           rawText,
           parsed: null,
-          cancelled: true,
+          status,
+          errorMessage,
         });
-        return { data: null, cancelled: true, rawText };
+        return { data: null, status, errorMessage, rawText };
       }
       if (response.failed) {
         logDirectorQuery({
@@ -136,11 +139,12 @@ export class DirectorRuntime {
           contextKey: this.contextKey,
           rawText,
           parsed: null,
+          status: 'failed',
           errorMessage: response.errorMessage ?? 'generation failed',
         });
         return {
           data: null,
-          cancelled: false,
+          status: 'failed',
           errorMessage: response.errorMessage ?? 'generation failed',
           rawText,
         };
@@ -153,11 +157,12 @@ export class DirectorRuntime {
           contextKey: this.contextKey,
           rawText,
           parsed: null,
+          status: 'invalid_response',
           errorMessage: 'response was not valid JSON',
         });
         return {
           data: null,
-          cancelled: false,
+          status: 'invalid_response',
           errorMessage: 'response was not valid JSON',
           rawText,
         };
@@ -170,11 +175,12 @@ export class DirectorRuntime {
           contextKey: this.contextKey,
           rawText,
           parsed,
+          status: 'invalid_response',
           errorMessage: validationError,
         });
         return {
           data: null,
-          cancelled: false,
+          status: 'invalid_response',
           errorMessage: validationError,
           rawText,
         };
@@ -186,7 +192,7 @@ export class DirectorRuntime {
         rawText,
         parsed,
       });
-      return { data: parsed, cancelled: false, rawText };
+      return { data: parsed, status: 'ok', rawText };
     } catch (error) {
       const cancelled = abort.signal.aborted;
       if (requestId !== 0 && cancelled && this.engine.cancelQueuedRequest) {
@@ -198,24 +204,29 @@ export class DirectorRuntime {
           // Swallow; the original error is more useful.
         }
       }
-      const errorMessage = cancelled
+      const status = cancelled
         ? abort.timedOut()
-          ? 'Director query timed out.'
-          : undefined
-        : error instanceof Error ? error.message : String(error);
+          ? 'timed_out'
+          : 'aborted'
+        : 'failed';
+      const errorMessage = status === 'timed_out'
+        ? 'Director query timed out.'
+        : status === 'aborted'
+          ? 'Director query aborted.'
+          : error instanceof Error ? error.message : String(error);
       logDirectorQuery({
         phase: 'response',
         queryName,
         contextKey: this.contextKey,
         rawText: '',
         parsed: null,
-        cancelled,
-        ...(errorMessage ? { errorMessage } : {}),
+        status,
+        errorMessage,
       });
       return {
         data: null,
-        cancelled,
-        ...(errorMessage ? { errorMessage } : {}),
+        status,
+        errorMessage,
         rawText: '',
       };
     } finally {
@@ -253,7 +264,7 @@ function logDirectorQuery(args: {
   grammar?: string;
   rawText?: string;
   parsed?: JsonValue | null;
-  cancelled?: boolean;
+  status?: DirectorQueryResult['status'];
   errorMessage?: string;
 }): void {
   if (!isPromptTraceEnabled()) return;
@@ -268,7 +279,7 @@ function logDirectorQuery(args: {
   console.groupCollapsed(`[DirectorRuntime] ${args.queryName} <- ${args.contextKey}`);
   console.log('rawText', args.rawText ?? '');
   console.log('parsed', args.parsed ?? null);
-  console.log('cancelled', args.cancelled ?? false);
+  console.log('status', args.status ?? 'ok');
   if (args.errorMessage) {
     console.warn('error', args.errorMessage);
   }

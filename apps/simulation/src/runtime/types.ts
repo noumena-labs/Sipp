@@ -266,4 +266,7 @@ export interface ScenarioSeed {
   readonly directorCadenceTicks?: number;
   readonly resolveRefereeQuery?: string;
   readonly narrateQuery?: string;
+  readonly refereeTimeoutMs?: number;
+  readonly narrationTimeoutMs?: number;
+  readonly agentQueryTimeoutMs?: number;
 }

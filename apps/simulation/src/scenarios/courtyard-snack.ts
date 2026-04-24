@@ -150,6 +150,9 @@ export const COURTYARD_SCENARIO: ScenarioSeed = {
   directorCadenceTicks: 12,
   resolveRefereeQuery: 'resolve_referee_event',
   narrateQuery: 'narrate_scene',
+  refereeTimeoutMs: 30000,
+  agentQueryTimeoutMs: 30000,
+  narrationTimeoutMs: 15000,
 };
 
 export const AGENT_COLOR_BY_ID: ReadonlyMap<string, string> = new Map(
