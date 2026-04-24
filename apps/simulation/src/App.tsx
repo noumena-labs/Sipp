@@ -19,6 +19,7 @@ import { BrainActivityHud } from './components/BrainActivityHud';
 import { BrainTraceDrawer } from './components/BrainTraceDrawer';
 import { SimulationCanvas } from './components/SimulationCanvas';
 import { ControlsPanel } from './components/ControlsPanel';
+import { StartPanel } from './components/StartPanel';
 import { EventLog, type EventLogEntry } from './components/EventLog';
 import { AgentInspector } from './components/AgentInspector';
 import { Scoreboard } from './components/Scoreboard';
@@ -501,43 +502,54 @@ export default function App() {
         snapshot={snapshot}
       />
 
-      <div className="sim-overlay sim-top-left">
-        <ControlsPanel
-          modelUrl={modelUrl}
-          onModelUrlChange={setModelUrl}
-          onLoad={loadHarness}
-          onStart={handleStart}
-          onPause={handlePause}
-          onStep={handleStep}
-          onReset={handleReset}
-          status={status}
-          busy={busy}
-          loaded={harness != null}
-          running={running}
-          tick={snapshot?.tick ?? 0}
-          highlightStart={highlightStart}
-        />
-      </div>
+      {harness ? (
+        <div className="sim-overlay sim-top-left">
+          <ControlsPanel
+            onStart={handleStart}
+            onPause={handlePause}
+            onStep={handleStep}
+            onReset={handleReset}
+            status={status}
+            running={running}
+            tick={snapshot?.tick ?? 0}
+            highlightStart={highlightStart}
+          />
+        </div>
+      ) : (
+        <div className="sim-overlay sim-start">
+          <StartPanel
+            modelUrl={modelUrl}
+            onModelUrlChange={setModelUrl}
+            onLoad={loadHarness}
+            status={status}
+            busy={busy}
+          />
+        </div>
+      )}
 
-      <div ref={inspectorRef} className="sim-overlay sim-top-right">
-        <AgentInspector
-          agents={agents}
-          bananaObjectId={snapshot?.game.bananaObjectId}
-          tick={snapshot?.tick ?? 0}
-          selectedAgentId={selectedAgentId}
-          onSelect={setSelectedAgentId}
-        />
-      </div>
+      {harness ? (
+        <>
+          <div ref={inspectorRef} className="sim-overlay sim-top-right">
+            <AgentInspector
+              agents={agents}
+              bananaObjectId={snapshot?.game.bananaObjectId}
+              tick={snapshot?.tick ?? 0}
+              selectedAgentId={selectedAgentId}
+              onSelect={setSelectedAgentId}
+            />
+          </div>
 
-      <div className="sim-overlay sim-bottom">
-        <EventLog
-          entries={events}
-          collapsed={eventLogCollapsed}
-          onToggle={() => setEventLogCollapsed((value) => !value)}
-        />
-      </div>
+          <div className="sim-overlay sim-bottom">
+            <EventLog
+              entries={events}
+              collapsed={eventLogCollapsed}
+              onToggle={() => setEventLogCollapsed((value) => !value)}
+            />
+          </div>
+        </>
+      ) : null}
 
-      {hasSimulationStarted ? (
+      {harness && hasSimulationStarted ? (
         <div className="sim-overlay sim-bottom-left">
           <BrainActivityHud
             activity={brainActivity}
@@ -550,7 +562,7 @@ export default function App() {
         </div>
       ) : null}
 
-      {snapshot ? (
+      {harness && snapshot ? (
         <div className="sim-overlay sim-top-center sim-center-stack">
           <Scoreboard snapshot={snapshot} metaText={scoreboardStatus} />
           <div className={`director-note glass-panel director-${directorState.mode}`}>
@@ -569,13 +581,15 @@ export default function App() {
         </div>
       ) : null}
 
-      <BrainTraceDrawer
-        activity={brainActivity}
-        selectedBrainId={selectedBrainId}
-        onClose={() => setSelectedBrainId(null)}
-      />
+      {harness ? (
+        <BrainTraceDrawer
+          activity={brainActivity}
+          selectedBrainId={selectedBrainId}
+          onClose={() => setSelectedBrainId(null)}
+        />
+      ) : null}
 
-      {hoveredObject ? (
+      {harness && hoveredObject ? (
         <div className="sim-overlay sim-bottom-right">
           <div className="hover-card glass-panel">
             <span className="panel-eyebrow">Inspecting</span>

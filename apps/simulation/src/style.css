@@ -61,6 +61,17 @@ html, body, #app {
   max-width: 520px;
 }
 
+.sim-start {
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: radial-gradient(circle at 50% 36%, rgba(255, 180, 59, 0.12), transparent 34%), rgba(5, 8, 14, 0.54);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
 .sim-center-stack {
   display: flex;
   flex-direction: column;
@@ -148,23 +159,78 @@ html, body, #app {
   margin-bottom: 10px;
 }
 
-.controls-panel .field {
+.start-panel {
+  width: min(560px, 100%);
+  padding: 28px;
+  background: linear-gradient(180deg, rgba(32, 38, 59, 0.9), rgba(18, 22, 35, 0.88));
+  border-color: rgba(255, 216, 107, 0.18);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.48), 0 0 80px rgba(255, 180, 59, 0.08);
+}
+
+.start-title {
+  margin: 0 0 10px;
+  color: #fff3d6;
+  font-size: clamp(34px, 8vw, 58px);
+  line-height: 0.95;
+  letter-spacing: -0.05em;
+}
+
+.start-copy {
+  margin: 0 0 22px;
+  color: #cbd4e6;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.start-panel .field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-bottom: 10px;
+  gap: 6px;
+  margin-bottom: 12px;
   font-size: 12px;
   color: #c6cddc;
 }
 
-.controls-panel input[type="text"] {
+.start-panel input[type="text"] {
   background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 8px;
-  padding: 6px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  padding: 10px 12px;
   color: #fff;
   font-size: 13px;
   font-family: inherit;
+}
+
+.start-load-button {
+  width: 100%;
+  padding: 11px 14px;
+  background: linear-gradient(180deg, #ffd86b, #ffb43b);
+  color: #241400;
+  border: 1px solid rgba(255, 216, 107, 0.72);
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px rgba(255, 216, 107, 0.24), 0 14px 34px rgba(255, 180, 59, 0.18);
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+
+.start-load-button:hover:not(:disabled) {
+  background: linear-gradient(180deg, #ffe188, #ffc55a);
+  transform: translateY(-1px);
+}
+
+.start-load-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.start-status {
+  margin-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 10px;
+  color: #9aa3b8;
+  font-size: 12px;
 }
 
 .controls-panel .row {
@@ -934,6 +1000,20 @@ html, body, #app {
     top: 12px;
     width: min(100vw - 24px, 100%);
     max-width: none;
+  }
+
+  .sim-start {
+    padding: 12px;
+    align-items: start;
+    padding-top: 24px;
+  }
+
+  .start-panel {
+    padding: 22px;
+  }
+
+  .start-copy {
+    font-size: 14px;
   }
 
   .sim-bottom {
