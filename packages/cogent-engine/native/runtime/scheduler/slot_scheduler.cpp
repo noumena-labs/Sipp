@@ -53,6 +53,12 @@ void SlotState::AttachRequest(GenerateRequest &request_ref,
   decode_step_count = 0;
   batch_participation_count = 0;
   generated_tokens.clear();
+  if (request_ref.max_output_tokens > 0) {
+    generated_tokens.reserve(static_cast<std::size_t>(
+        std::max<int32_t>(1, request_ref.max_output_tokens)));
+    output_text.reserve(static_cast<std::size_t>(
+        std::max<int32_t>(16, request_ref.max_output_tokens * 4)));
+  }
   output_text.clear();
   buffered_output_text.clear();
   terminal_error_message.clear();

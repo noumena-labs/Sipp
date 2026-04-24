@@ -128,6 +128,7 @@ private:
   void CommitNewCompletedResponsesObservabilityLocked();
   void CommitCompletedObservabilityLocked(GenerateRequestId request_id,
                                           const GenerateResponse &response);
+  int32_t ResolveBatchTokenBudgetLocked() const;
   llama_context *CreateContext() const;
 
   InferenceRuntimeConfig config_;

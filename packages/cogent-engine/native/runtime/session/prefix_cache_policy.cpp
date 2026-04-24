@@ -26,10 +26,11 @@ std::uint64_t mix_token_hash(std::uint64_t hash, llama_token token) {
 namespace noumena::cogentengine {
 
 PrefixCachePolicy::PrefixCachePolicy(std::size_t prefix_cache_interval_tokens)
-    : prefix_cache_interval_tokens_(
-          std::max<std::size_t>(1, prefix_cache_interval_tokens)),
+    : prefix_cache_interval_tokens_(prefix_cache_interval_tokens),
       minimum_prefix_cache_tokens_(
-          std::min<std::size_t>(prefix_cache_interval_tokens_, 32)) {}
+          prefix_cache_interval_tokens_ == 0
+              ? 32
+              : std::min<std::size_t>(prefix_cache_interval_tokens_, 32)) {}
 
 bool PrefixCachePolicy::ShouldStoreBoundary(
     std::size_t token_count, std::size_t terminal_token_count) const {
@@ -38,6 +39,9 @@ bool PrefixCachePolicy::ShouldStoreBoundary(
   }
   if (token_count == terminal_token_count) {
     return true;
+  }
+  if (prefix_cache_interval_tokens_ == 0) {
+    return false;
   }
   return token_count % prefix_cache_interval_tokens_ == 0;
 }
@@ -50,7 +54,9 @@ PrefixCachePolicy::BuildCandidateBoundaries(
     return boundaries;
   }
 
-  boundaries.reserve(tokens.size() / prefix_cache_interval_tokens_ + 1);
+  boundaries.reserve(prefix_cache_interval_tokens_ == 0
+                         ? 1
+                         : tokens.size() / prefix_cache_interval_tokens_ + 1);
 
   std::uint64_t rolling_hash = kFnvOffsetBasis;
   for (std::size_t index = 0; index < tokens.size(); ++index) {

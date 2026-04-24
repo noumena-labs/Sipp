@@ -10,7 +10,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <unordered_set>
 
 namespace {
 
@@ -180,13 +179,17 @@ SharedBatchPlan BatchPlanner::BuildPolicyBatch(
     next_prefill_slot_index++;
   }
 
-  std::unordered_set<const SlotState *> occupied_slots;
-  occupied_slots.reserve(plan.contributions.size());
+  std::vector<const SlotState *> occupied_slots;
+  occupied_slots.reserve(static_cast<std::size_t>(
+      std::max(0, plan.decode_token_count + plan.prefill_token_count)));
   for (const auto &contribution : plan.contributions) {
     if (contribution.slot == nullptr) {
       continue;
     }
-    occupied_slots.insert(contribution.slot);
+    if (std::find(occupied_slots.begin(), occupied_slots.end(),
+                  contribution.slot) == occupied_slots.end()) {
+      occupied_slots.push_back(contribution.slot);
+    }
   }
   plan.occupied_slot_count = static_cast<int32_t>(occupied_slots.size());
 

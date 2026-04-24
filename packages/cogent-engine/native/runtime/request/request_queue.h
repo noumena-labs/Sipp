@@ -67,6 +67,7 @@ private:
   std::deque<GenerateRequestId> completed_response_ready_ids_;
   std::deque<RuntimeEvent> runtime_events_;
   std::unordered_set<GenerateRequestId> queued_completed_response_ids_;
+  int32_t total_emitted_token_count_ = 0;
 };
 
 } // namespace noumena::cogentengine

@@ -283,7 +283,7 @@ int CE_InitPlugin(const char *model_path, const CE_InitConfig *config) {
     runtime_config.prefix_cache_interval_tokens =
         config->prefix_cache_interval_tokens > 0
             ? config->prefix_cache_interval_tokens
-            : 128;
+            : 0;
     runtime_config.max_prefix_cache_entries =
         config->max_prefix_cache_entries > 0 ? config->max_prefix_cache_entries : 32;
     runtime_config.scheduler_policy.mode =

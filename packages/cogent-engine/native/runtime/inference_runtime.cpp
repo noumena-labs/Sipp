@@ -14,6 +14,7 @@
 #include <exception>
 #include <functional>
 #include <memory>
+#include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -29,7 +30,6 @@ namespace {
 
 constexpr char kDefaultPromptContextKey[] = "__primary_prompt__";
 constexpr int kMaxPredictionTokens = 2048;
-constexpr std::size_t kDefaultPrefixCacheIntervalTokens = 128;
 
 using BitmapPtr = std::unique_ptr<mtmd_bitmap, decltype(&mtmd_bitmap_free)>;
 using InputChunksPtr =
@@ -44,7 +44,7 @@ normalize_config(noumena::cogentengine::InferenceRuntimeConfig config) {
       std::max<int32_t>(0, config.retained_prefix_tokens);
   config.prefill_chunk_size = std::max<int32_t>(0, config.prefill_chunk_size);
   config.prefix_cache_interval_tokens =
-      std::max<int32_t>(1, config.prefix_cache_interval_tokens);
+      std::max<int32_t>(0, config.prefix_cache_interval_tokens);
   config.max_prefix_cache_entries =
       std::max<int32_t>(1, config.max_prefix_cache_entries);
   config.image_min_tokens = std::max<int32_t>(0, config.image_min_tokens);
@@ -425,7 +425,7 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
   llama_pos new_n_past = 0;
   const int32_t eval_status = mtmd_helper_eval_chunks(
       mtmd_ctx_, shared_context_, chunks.get(), 0, session.seq_id,
-      config_.n_batch > 0 ? config_.n_batch : 256, true, &new_n_past);
+      ResolveBatchTokenBudgetLocked(), true, &new_n_past);
   const auto prefill_end = std::chrono::steady_clock::now();
   request.multimodal.reset();
   if (eval_status != 0) {
@@ -443,11 +443,10 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
 
   // The multimodal prefill path runs on the same async backends as normal
   // decode, so force completion before reading logits for the first sample.
-  llama_synchronize(shared_context_);
+  // llama_synchronize(shared_context_);
 
   const llama_token next_token =
       llama_sampler_sample(slot.sampler, shared_context_, -1);
-  llama_sampler_accept(slot.sampler, next_token);
   request.attributed_sample_count++;
   request.first_sampled_token_id = static_cast<int32_t>(next_token);
   if (llama_vocab_is_eog(vocab, next_token)) {
@@ -498,8 +497,9 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
   return true;
 }
 
-bool InferenceRuntime::RecoverDecodeSeedStateLocked(
-    SlotState &slot, GenerateRequest &request, SequenceState &session) {
+bool InferenceRuntime::RecoverDecodeSeedStateLocked(SlotState &slot,
+                                                    GenerateRequest &request,
+                                                    SequenceState &session) {
   if (slot.phase != SlotPhase::Decode || !slot.generated_tokens.empty()) {
     return true;
   }
@@ -542,8 +542,8 @@ bool InferenceRuntime::RecoverDecodeSeedStateLocked(
   llama_memory_t mem = llama_get_memory(shared_context_);
   const int32_t rewind_position = std::max(0, session.n_past - 1);
   if (!llama_memory_seq_rm(mem, session.seq_id, rewind_position, -1)) {
-    slot.terminal_error_message =
-        "Failed to rewind shared KV state for a decode slot without a seed token.";
+    slot.terminal_error_message = "Failed to rewind shared KV state for a "
+                                  "decode slot without a seed token.";
     slot.phase = SlotPhase::Failed;
     request.lifecycle = GenerateRequestLifecycle::Failed;
     return false;
@@ -554,8 +554,8 @@ bool InferenceRuntime::RecoverDecodeSeedStateLocked(
       static_cast<std::size_t>(std::max(0, rewind_position)));
   session.current_kv_tokens.resize(retained_tokens);
   session.n_past = static_cast<int>(retained_tokens);
-  slot.prefill_cursor = std::min<std::size_t>(
-      request.prompt_tokens.size() - 1, retained_tokens);
+  slot.prefill_cursor =
+      std::min<std::size_t>(request.prompt_tokens.size() - 1, retained_tokens);
   slot.phase = SlotPhase::Prefill;
   request.lifecycle = GenerateRequestLifecycle::Running;
   return true;
@@ -578,8 +578,7 @@ bool InferenceRuntime::NormalizeRunnableSlotStateLocked(SlotState &slot) {
     slot.phase = SlotPhase::Decode;
   }
 
-  if (slot.phase == SlotPhase::Streaming &&
-      slot.buffered_output_text.empty()) {
+  if (slot.phase == SlotPhase::Streaming && slot.buffered_output_text.empty()) {
     if (request.cancel_requested) {
       slot.terminal_error_message = "Request cancelled.";
       slot.phase = SlotPhase::Failed;
@@ -663,8 +662,8 @@ std::string InferenceRuntime::BuildNoProgressDiagnosticLocked() const {
         slot.phase != SlotPhase::Failed) {
       active_count++;
     }
-    if (slot.phase == SlotPhase::Decode &&
-        slot.buffered_output_text.empty() && !slot.generated_tokens.empty()) {
+    if (slot.phase == SlotPhase::Decode && slot.buffered_output_text.empty() &&
+        !slot.generated_tokens.empty()) {
       decode_ready_count++;
     }
     if (slot.phase == SlotPhase::Prefill &&
@@ -705,8 +704,7 @@ std::string InferenceRuntime::BuildNoProgressDiagnosticLocked() const {
            << ", prefill=" << slot.prefill_cursor << "/"
            << slot.request->prompt_tokens.size()
            << ", generated=" << slot.generated_tokens.size()
-           << ", buffered=" << slot.buffered_output_text.size()
-           << ", nPast="
+           << ", buffered=" << slot.buffered_output_text.size() << ", nPast="
            << (slot.session != nullptr ? slot.session->n_past : -1)
            << ", contextKey=" << slot.request->context_key << "}";
     detailed_slots++;
@@ -729,15 +727,13 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
                           const std::vector<SlotState *> &right) {
     std::vector<SlotState *> combined;
     combined.reserve(left.size() + right.size());
-    std::unordered_set<SlotState *> seen;
-    seen.reserve(left.size() + right.size());
     for (SlotState *slot : left) {
-      if (slot != nullptr && seen.insert(slot).second) {
+      if (slot != nullptr) {
         combined.push_back(slot);
       }
     }
     for (SlotState *slot : right) {
-      if (slot != nullptr && seen.insert(slot).second) {
+      if (slot != nullptr) {
         combined.push_back(slot);
       }
     }
@@ -851,8 +847,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     return false;
   }
 
-  const int32_t batch_token_budget =
-      config_.n_batch > 0 ? config_.n_batch : 256;
+  const int32_t batch_token_budget = ResolveBatchTokenBudgetLocked();
   const SchedulerTickBudget tick_budget = slot_scheduler_.BuildTickBudget(
       config_.scheduler_policy,
       static_cast<int32_t>(live_decode_ready_slots.size()),
@@ -984,7 +979,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     return false;
   }
 
-  llama_synchronize(shared_context_);
+  // llama_synchronize(shared_context_);
 
   for (const BatchContribution &contribution : plan.contributions) {
     if (contribution.slot == nullptr || contribution.slot->session == nullptr) {
@@ -1009,9 +1004,8 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   // that protecting decode latency over prefill efficiency is the correct
   // trade-off in user-facing LLM serving systems.
   const bool has_decode_pressure = !live_decode_ready_slots.empty();
-
+  std::vector<SlotState *> prefix_cache_slots;
   if (!has_decode_pressure) {
-    std::vector<SlotState *> prefix_cache_slots;
     prefix_cache_slots.reserve(plan.contributions.size());
     std::unordered_set<SlotState *> prefix_cache_slot_set;
     prefix_cache_slot_set.reserve(plan.contributions.size());
@@ -1026,13 +1020,6 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
         continue;
       }
       prefix_cache_slots.push_back(contribution.slot);
-    }
-
-    for (SlotState *slot : prefix_cache_slots) {
-      MaybeStorePrefixCacheEntryLocked(
-          slot->request->context_key, *slot->session,
-          slot->session->current_kv_tokens.size(),
-          slot->request->prompt_tokens.size(), slot->request);
     }
   }
 
@@ -1049,7 +1036,6 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     GenerateRequest &slot_request = *slot.request;
     const llama_token next_token = llama_sampler_sample(
         slot.sampler, shared_context_, pending_logits.batch_token_index);
-    llama_sampler_accept(slot.sampler, next_token);
     if (slot_request.first_sampled_token_id < 0) {
       slot_request.first_sampled_token_id = static_cast<int32_t>(next_token);
     }
@@ -1101,6 +1087,17 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       slot.phase = SlotPhase::Decode;
       slot_request.lifecycle = GenerateRequestLifecycle::Running;
     }
+  }
+
+  for (SlotState *slot : prefix_cache_slots) {
+    if (slot == nullptr || slot->request == nullptr ||
+        slot->session == nullptr) {
+      continue;
+    }
+    MaybeStorePrefixCacheEntryLocked(slot->request->context_key, *slot->session,
+                                     slot->session->current_kv_tokens.size(),
+                                     slot->request->prompt_tokens.size(),
+                                     slot->request);
   }
 
   const auto tick_end = std::chrono::steady_clock::now();
@@ -1378,6 +1375,11 @@ void InferenceRuntime::CommitCompletedObservabilityLocked(
 }
 
 void InferenceRuntime::CommitNewCompletedResponsesObservabilityLocked() {
+  if (committed_observability_request_ids_.size() >=
+      request_queue_.CompletedResponseCount()) {
+    return;
+  }
+
   std::vector<GenerateRequestId> completed_request_ids =
       request_queue_.CompletedResponseIds();
   if (completed_request_ids.empty()) {
@@ -1400,6 +1402,20 @@ void InferenceRuntime::CommitNewCompletedResponsesObservabilityLocked() {
   }
 }
 
+int32_t InferenceRuntime::ResolveBatchTokenBudgetLocked() const {
+  if (shared_context_ != nullptr) {
+    const auto n_batch = static_cast<int32_t>(llama_n_batch(shared_context_));
+    return std::max<int32_t>(1, n_batch);
+  }
+
+  if (config_.n_batch > 0) {
+    return std::max<int32_t>(1, config_.n_batch);
+  }
+
+  const llama_context_params default_params = llama_context_default_params();
+  return std::max<int32_t>(1, static_cast<int32_t>(default_params.n_batch));
+}
+
 InferenceRuntime::InferenceRuntime(std::string model_path,
                                    InferenceRuntimeConfig config)
     : config_(normalize_config(config)),
@@ -1408,10 +1424,8 @@ InferenceRuntime::InferenceRuntime(std::string model_path,
           static_cast<size_t>(std::max<int32_t>(1, config_.n_seq_max))),
       prefix_state_cache_(static_cast<std::size_t>(
           std::max<int32_t>(1, config_.max_prefix_cache_entries))),
-      prefix_cache_policy_(static_cast<std::size_t>(
-          config_.prefix_cache_interval_tokens > 0
-              ? config_.prefix_cache_interval_tokens
-              : static_cast<int32_t>(kDefaultPrefixCacheIntervalTokens))),
+      prefix_cache_policy_(
+          static_cast<std::size_t>(config_.prefix_cache_interval_tokens)),
       model_fingerprint_(
           static_cast<std::uint64_t>(std::hash<std::string>{}(model_path))) {
   if (model_path.empty()) {
@@ -1497,9 +1511,10 @@ InferenceRuntime::InferenceRuntime(std::string model_path,
       return;
     }
     if (!mtmd_support_vision(mtmd_ctx_)) {
-      fprintf(stderr,
-              "%s: error: multimodal projector does not expose vision support\n",
-              __func__);
+      fprintf(
+          stderr,
+          "%s: error: multimodal projector does not expose vision support\n",
+          __func__);
       mtmd_free(mtmd_ctx_);
       mtmd_ctx_ = nullptr;
       return;
@@ -1534,8 +1549,7 @@ InferenceRuntime::InferenceRuntime(std::string model_path,
 
   slot_scheduler_.Resize(
       static_cast<std::size_t>(std::max<int32_t>(1, config_.n_seq_max)));
-  shared_batch_builder_.EnsureCapacity(config_.n_batch > 0 ? config_.n_batch
-                                                           : 256,
+  shared_batch_builder_.EnsureCapacity(ResolveBatchTokenBudgetLocked(),
                                        std::max<int32_t>(1, config_.n_seq_max));
 }
 
@@ -1550,8 +1564,9 @@ llama_context *InferenceRuntime::CreateContext() const {
           ? static_cast<uint32_t>(config_.n_ctx)
           : static_cast<uint32_t>(
                 std::min(4096 * 2, llama_model_n_ctx_train(primary_model_)));
-  ctx_params.n_batch =
-      config_.n_batch > 0 ? static_cast<uint32_t>(config_.n_batch) : 256u;
+  if (config_.n_batch > 0) {
+    ctx_params.n_batch = static_cast<uint32_t>(config_.n_batch);
+  }
   if (config_.n_ubatch > 0) {
     ctx_params.n_ubatch = static_cast<uint32_t>(config_.n_ubatch);
   } else if (ctx_params.n_ubatch > ctx_params.n_batch) {
