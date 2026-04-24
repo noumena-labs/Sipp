@@ -16,6 +16,7 @@ export interface AgentVisual {
   readonly body: THREE.Mesh;
   readonly nameSprite: THREE.Sprite;
   readonly emoji: EmojiBillboard;
+  readonly propAnchor: THREE.Group;
   setPosition(x: number, z: number): void;
   setHeading(radians: number): void;
   setHighlighted(on: boolean): void;
@@ -80,6 +81,10 @@ export function createAgentVisual(name: string, color: string): AgentVisual {
   emoji.setVisible(false);
   root.add(emoji.sprite);
 
+  const propAnchor = new THREE.Group();
+  propAnchor.position.set(0, BODY_HEIGHT + 0.35, 0);
+  root.add(propAnchor);
+
   // Highlight ring (hidden by default).
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(BODY_RADIUS + 0.08, BODY_RADIUS + 0.18, 32),
@@ -95,6 +100,7 @@ export function createAgentVisual(name: string, color: string): AgentVisual {
     body,
     nameSprite,
     emoji,
+    propAnchor,
     setPosition(x, z) {
       root.position.set(x, 0, z);
     },

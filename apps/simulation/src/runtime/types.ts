@@ -13,6 +13,14 @@ export interface ObjectAffordance {
   readonly status?: string;
 }
 
+export type PowerUpKind = 'bat' | 'ice_cube';
+export type SabotageMethod = 'bump' | PowerUpKind;
+
+export interface EquippedPowerUpState {
+  readonly kind: PowerUpKind;
+  readonly objectId: string;
+}
+
 export type AgentIntent =
   | { kind: 'wait'; emotion: string; reason?: string }
   | { kind: 'move_to'; target: Vec2; emotion: string }
@@ -21,7 +29,7 @@ export type AgentIntent =
   | { kind: 'pick_up'; objectId: string; emotion: string }
   | { kind: 'drop'; emotion: string }
   | { kind: 'deliver'; objectId: string; emotion: string }
-  | { kind: 'sabotage'; agentId: string; emotion: string }
+  | { kind: 'sabotage'; agentId: string; method: SabotageMethod; emotion: string }
   | { kind: 'use'; objectId: string; emotion: string };
 
 export interface SimulationAgentState {
@@ -36,6 +44,8 @@ export interface SimulationAgentState {
   intent: AgentIntent | null;
   goal: AgentGoal | null;
   holding: string | null;
+  powerUp: EquippedPowerUpState | null;
+  frozenUntilTick: number;
   intentIssuedAtTick: number;
   thinking: boolean;
   cooldowns: AgentCooldownState;
@@ -58,6 +68,7 @@ export interface SimulationObjectState {
   readonly label: string;
   readonly description: string;
   position: Vec2;
+  active: boolean;
   readonly contested: boolean;
   heldBy: string | null;
   readonly tags: readonly string[];
@@ -75,11 +86,11 @@ export interface SimulationGameState {
   readonly title: string;
   readonly bananaObjectId: string;
   readonly goalObjectId: string;
-  readonly bananaSpawnPoints: readonly Vec2[];
+  readonly respawnRules: readonly ObjectRespawnRule[];
   readonly score: SimulationScoreState;
   readonly referee: RefereeState;
   readonly refereeMemory: SimulationRefereeMemory;
-  readonly pendingRespawn: PendingRespawnState | null;
+  readonly pendingRespawns: readonly PendingRespawnState[];
 }
 
 export interface SimulationRefereeMemory {
@@ -98,6 +109,12 @@ export interface PendingRespawnState {
   readonly objectId: string;
   readonly spawnPosition: Vec2;
   readonly activateAtTick: number;
+}
+
+export interface ObjectRespawnRule {
+  readonly objectId: string;
+  readonly delayTicks: number;
+  readonly spawnPoints: readonly Vec2[];
 }
 
 export type RefereeState =
@@ -122,6 +139,8 @@ export interface PerceivedAgent {
   readonly emotion: string | null;
   readonly status: string;
   readonly holding: string | null;
+  readonly powerUp: PowerUpKind | null;
+  readonly frozenUntilTick: number;
 }
 
 export interface PerceivedObject {
@@ -131,6 +150,7 @@ export interface PerceivedObject {
   readonly description: string;
   readonly distance: number;
   readonly direction: Vec2;
+  readonly active: boolean;
   readonly heldBy: string | null;
   readonly contested: boolean;
   readonly affordances: readonly ObjectAffordance[];
@@ -155,7 +175,7 @@ export type AgentGoal =
   | { kind: 'go_to_agent'; agentId: string; label: string }
   | { kind: 'object_action'; objectId: string; affordance: ObjectAffordance; label: string }
   | { kind: 'deliver'; objectId: string; label: string }
-  | { kind: 'sabotage_agent'; agentId: string; label: string }
+  | { kind: 'sabotage_agent'; agentId: string; method: SabotageMethod; label: string }
   | { kind: 'drop'; label: string };
 
 export interface DecisionOption {
@@ -233,7 +253,7 @@ export type SimulationGameEvent =
       readonly objectId: string;
       readonly from: Vec2;
       readonly to: Vec2;
-      readonly cause: 'voluntary' | 'forced';
+      readonly cause: 'voluntary' | 'bump' | 'bat' | 'ice';
     }
   | {
       readonly kind: 'forced_drop';
@@ -242,6 +262,21 @@ export type SimulationGameEvent =
       readonly objectId: string;
       readonly position: Vec2;
       readonly outcome: ForcedDropOutcome;
+    }
+  | {
+      readonly kind: 'bump_whiff';
+      readonly attackerAgentId: string;
+      readonly targetAgentId: string;
+      readonly position: Vec2;
+    }
+  | {
+      readonly kind: 'power_up_use';
+      readonly agentId: string;
+      readonly targetAgentId: string;
+      readonly objectId: string;
+      readonly powerUp: PowerUpKind;
+      readonly position: Vec2;
+      readonly effect: 'hit' | 'freeze';
     }
   | {
       readonly kind: 'fallback';
@@ -264,6 +299,7 @@ export interface ScenarioObjectSeed {
   readonly label?: string;
   readonly description?: string;
   readonly position: Vec2;
+  readonly active?: boolean;
   readonly contested?: boolean;
   readonly tags?: readonly string[];
   readonly affordances?: readonly ObjectAffordance[];
@@ -275,7 +311,7 @@ export interface ScenarioGameSeed {
   readonly title: string;
   readonly bananaObjectId: string;
   readonly goalObjectId: string;
-  readonly bananaSpawnPoints: readonly Vec2[];
+  readonly respawnRules: readonly ObjectRespawnRule[];
 }
 
 export interface ScenarioSeed {

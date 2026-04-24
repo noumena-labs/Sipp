@@ -12,6 +12,8 @@ export function Scoreboard(props: ScoreboardProps) {
       name: agent.name,
       deliveries: props.snapshot.game.score.deliveries[agent.id] ?? 0,
       holding: agent.holding === props.snapshot.game.bananaObjectId,
+      powerUp: agent.powerUp?.kind ?? null,
+      frozen: agent.frozenUntilTick > props.snapshot.tick,
     }))
     .sort((a, b) => b.deliveries - a.deliveries || a.name.localeCompare(b.name));
   const banana = props.snapshot.objects.find((object) => object.id === props.snapshot.game.bananaObjectId);
@@ -28,7 +30,7 @@ export function Scoreboard(props: ScoreboardProps) {
       <div className="scoreboard-grid">
         {rows.map((row) => (
           <div key={row.id} className={`score-row${row.holding ? ' carrying' : ''}`}>
-            <span>{row.name}</span>
+            <span>{row.name}{row.powerUp === 'bat' ? ' 🏏' : row.powerUp === 'ice_cube' ? ' 🧊' : ''}{row.frozen ? ' ❄' : ''}</span>
             <strong>{row.deliveries}</strong>
           </div>
         ))}

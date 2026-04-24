@@ -4,7 +4,11 @@ import type {
   DirectorDecision,
   ForcedDropOutcome,
   ForcedDropRulingRecord,
+  ObjectRespawnRule,
+  PendingRespawnState,
+  PowerUpKind,
   RefereeState,
+  SabotageMethod,
   SimulationAgentState,
   SimulationGameEvent,
   SimulationGameState,
@@ -28,8 +32,8 @@ export interface MutableGameState extends Omit<SimulationGameState, 'score' | 'r
   score: MutableScoreState;
   referee: RefereeState;
   refereeMemory: MutableRefereeMemoryState;
-  pendingRespawn: SimulationGameState['pendingRespawn'];
-  nextSpawnIndex: number;
+  pendingRespawns: PendingRespawnState[];
+  nextSpawnIndexByObjectId: Record<string, number>;
 }
 
 export interface MutableWorldState {
@@ -48,6 +52,7 @@ export const GOAL_RADIUS = 1.2;
 export const SABOTAGE_RADIUS = 0.95;
 export const FORCED_DROP_HISTORY_LIMIT = 8;
 export const SABOTAGE_COOLDOWN_TICKS = 3;
+export const FREEZE_TICKS = 6;
 const DETOUR_PADDING = 0.35;
 const DETOUR_REACHED_RADIUS = 0.35;
 const BLOCKED_REPATH_TICKS = 2;
@@ -66,6 +71,7 @@ export function applyTickFirstPass(state: MutableWorldState, dt: number): TickRe
   const arrivedAgentIds: string[] = [];
 
   processPendingRespawn(state, events);
+  refreshFrozenAgents(state);
 
   moveAgentsWithoutOverlap(state, dt, arrivedAgentIds);
   syncHeldObjects(state);
@@ -75,7 +81,7 @@ export function applyTickFirstPass(state: MutableWorldState, dt: number): TickRe
 
   const conflicts = [
     ...processPickupRequests(state, events),
-    ...processSabotageRequests(state),
+    ...processSabotageRequests(state, events),
   ];
 
   for (const agent of state.agents) {
@@ -171,6 +177,12 @@ function stepMovement(
   dt: number,
   accepted: ReadonlyMap<string, Vec2>
 ): { position: Vec2; heading: number } {
+  if (agent.frozenUntilTick > state.tick) {
+    agent.navigation.detourTarget = null;
+    agent.navigation.blockedTicks = 0;
+    agent.navigation.obstacleId = null;
+    return { position: agent.position, heading: agent.heading };
+  }
   const intent = agent.intent;
   if (!intent) {
     agent.navigation.detourTarget = null;
@@ -286,12 +298,13 @@ function resolveMovementTarget(
 
 function collidesWithBlockingObject(position: Vec2, objects: readonly SimulationObjectState[]): boolean {
   return objects.some(
-    (obj) => obj.blocksMovement && vec2Distance(position, obj.position) < AGENT_RADIUS + obj.collisionRadius
+    (obj) => obj.active && obj.blocksMovement && vec2Distance(position, obj.position) < AGENT_RADIUS + obj.collisionRadius
   );
 }
 
 function findBlockingObject(position: Vec2, objects: readonly SimulationObjectState[]): SimulationObjectState | null {
   for (const obj of objects) {
+    if (!obj.active) continue;
     if (!obj.blocksMovement) continue;
     if (vec2Distance(position, obj.position) < AGENT_RADIUS + obj.collisionRadius) {
       return obj;
@@ -455,6 +468,7 @@ function findBlockingObstacleOnPath(
 ): SimulationObjectState | null {
   let best: { object: SimulationObjectState; t: number } | null = null;
   for (const obj of objects) {
+    if (!obj.active) continue;
     if (!obj.blocksMovement) continue;
     const hit = distanceToSegment(obj.position, from, to);
     const radius = obj.collisionRadius + AGENT_RADIUS + DETOUR_PADDING;
@@ -519,9 +533,11 @@ function syncHeldObjects(state: MutableWorldState): void {
   for (const obj of state.objects) {
     if (!obj.heldBy) continue;
     const carrier = state.agents.find((a) => a.id === obj.heldBy);
-    if (carrier) {
+    if (carrier && carrier.holding === obj.id) {
       obj.position = { x: carrier.position.x, z: carrier.position.z };
+      continue;
     }
+    obj.heldBy = null;
   }
 }
 
@@ -564,6 +580,16 @@ function processDeliveries(state: MutableWorldState, events: SimulationGameEvent
   }
 }
 
+function refreshFrozenAgents(state: MutableWorldState): void {
+  for (const agent of state.agents) {
+    if (agent.frozenUntilTick <= state.tick) continue;
+    agent.intent = null;
+    agent.goal = null;
+    agent.status = 'frozen in place';
+    agent.emotion = 'sleepy';
+  }
+}
+
 function processPickupRequests(
   state: MutableWorldState,
   events: SimulationGameEvent[]
@@ -590,6 +616,10 @@ function processPickupRequests(
   for (const [objectId, contenders] of requests) {
     const obj = getObject(state, objectId);
     if (!obj) continue;
+    if (!obj.active) {
+      clearPickupIntents(state, objectId);
+      continue;
+    }
     if (obj.heldBy) {
       for (const id of contenders) clearAgentIntent(state, id);
       continue;
@@ -608,7 +638,7 @@ function processPickupRequests(
   return conflicts;
 }
 
-function processSabotageRequests(state: MutableWorldState): WorldConflict[] {
+function processSabotageRequests(state: MutableWorldState, events: SimulationGameEvent[]): WorldConflict[] {
   const banana = getObject(state, state.game.bananaObjectId);
   if (!banana) return [];
 
@@ -616,64 +646,111 @@ function processSabotageRequests(state: MutableWorldState): WorldConflict[] {
   for (const agent of state.agents) {
     const intent = agent.intent;
     if (intent?.kind !== 'sabotage') continue;
+    if (agent.frozenUntilTick > state.tick) {
+      clearAgentSabotage(state, agent);
+      continue;
+    }
     if (agent.cooldowns.sabotageUntilTick > state.tick) {
-      agent.intent = null;
-      agent.goal = null;
+      clearAgentSabotage(state, agent);
       continue;
     }
     const target = state.agents.find((entry) => entry.id === intent.agentId);
     if (!target || target.holding !== banana.id) {
-      agent.intent = null;
+      clearAgentSabotage(state, agent);
       continue;
     }
     if (vec2Distance(agent.position, target.position) > SABOTAGE_RADIUS) continue;
-    conflicts.push({
-      id: `drop:${agent.id}:${target.id}:${state.tick}`,
-      kind: 'forced_drop',
-      attackerAgentId: agent.id,
-      targetAgentId: target.id,
-      objectId: banana.id,
-    });
+
+    if (intent.method === 'bump') {
+      spendSabotageCooldown(agent, state.tick);
+      if (!resolveBumpContact(state, agent, target)) {
+        agent.status = 'swings wide on the bump';
+        agent.emotion = 'surprised';
+        clearAgentSabotage(state, agent);
+        events.push({
+          kind: 'bump_whiff',
+          attackerAgentId: agent.id,
+          targetAgentId: target.id,
+          position: midpoint(agent.position, target.position),
+        });
+        continue;
+      }
+      conflicts.push({
+        id: `drop:${agent.id}:${target.id}:${state.tick}`,
+        kind: 'forced_drop',
+        attackerAgentId: agent.id,
+        targetAgentId: target.id,
+        objectId: banana.id,
+      });
+      continue;
+    }
+
+    const powerUp = consumePowerUp(agent, intent.method);
+    spendSabotageCooldown(agent, state.tick);
+    if (!powerUp) {
+      clearAgentSabotage(state, agent);
+      continue;
+    }
+    applyGuaranteedPowerUpSabotage(state, agent, target, powerUp, banana, events);
+    clearAgentSabotage(state, agent);
+    continue;
   }
   return conflicts;
 }
 
 function processPendingRespawn(state: MutableWorldState, events: SimulationGameEvent[]): void {
-  const pending = state.game.pendingRespawn;
-  if (!pending || state.tick < pending.activateAtTick) return;
-  const banana = getObject(state, pending.objectId);
-  state.game.pendingRespawn = null;
-  if (!banana) return;
-  banana.position = { x: pending.spawnPosition.x, z: pending.spawnPosition.z };
-  banana.heldBy = null;
-  events.push({
-    kind: 'respawn',
-    objectId: banana.id,
-    position: { x: banana.position.x, z: banana.position.z },
-  });
+  if (state.game.pendingRespawns.length === 0) return;
+
+  const remaining: PendingRespawnState[] = [];
+  for (const pending of state.game.pendingRespawns) {
+    if (state.tick < pending.activateAtTick) {
+      remaining.push(pending);
+      continue;
+    }
+    const object = getObject(state, pending.objectId);
+    if (!object) continue;
+    object.position = { x: pending.spawnPosition.x, z: pending.spawnPosition.z };
+    object.heldBy = null;
+    object.active = true;
+    events.push({
+      kind: 'respawn',
+      objectId: object.id,
+      position: { x: object.position.x, z: object.position.z },
+    });
+  }
+  state.game.pendingRespawns = remaining;
 }
 
 function scheduleRespawn(state: MutableWorldState, objectId: string, delayTicks: number): void {
-  const spawn = nextValidBananaSpawn(state);
-  state.game.pendingRespawn = {
+  const spawn = nextValidObjectSpawn(state, objectId);
+  if (!spawn) return;
+  state.game.pendingRespawns = state.game.pendingRespawns.filter((entry) => entry.objectId !== objectId);
+  state.game.pendingRespawns.push({
     objectId,
     spawnPosition: spawn,
     activateAtTick: state.tick + delayTicks,
-  };
+  });
 }
 
-function nextValidBananaSpawn(state: MutableWorldState): Vec2 {
-  const spawns = state.game.bananaSpawnPoints;
+function nextValidObjectSpawn(state: MutableWorldState, objectId: string): Vec2 | null {
+  const rule = getRespawnRule(state, objectId);
+  const spawns = rule?.spawnPoints;
+  if (!spawns || spawns.length === 0) return null;
+  const startIndex = state.game.nextSpawnIndexByObjectId[objectId] ?? 0;
   for (let i = 0; i < spawns.length; i += 1) {
-    const index = (state.game.nextSpawnIndex + i) % spawns.length;
+    const index = (startIndex + i) % spawns.length;
     const candidate = spawns[index]!;
     if (isValidSpawn(state, candidate)) {
-      state.game.nextSpawnIndex = (index + 1) % spawns.length;
+      state.game.nextSpawnIndexByObjectId[objectId] = (index + 1) % spawns.length;
       return candidate;
     }
   }
-  state.game.nextSpawnIndex = (state.game.nextSpawnIndex + 1) % spawns.length;
-  return spawns[state.game.nextSpawnIndex] ?? { x: 0, z: 0 };
+  state.game.nextSpawnIndexByObjectId[objectId] = (startIndex + 1) % spawns.length;
+  return spawns[state.game.nextSpawnIndexByObjectId[objectId]] ?? null;
+}
+
+function getRespawnRule(state: MutableWorldState, objectId: string): ObjectRespawnRule | undefined {
+  return state.game.respawnRules.find((rule) => rule.objectId === objectId);
 }
 
 function isValidSpawn(state: MutableWorldState, position: Vec2): boolean {
@@ -694,7 +771,26 @@ function applyPickUp(
 ): void {
   const agent = state.agents.find((a) => a.id === agentId);
   const obj = getObject(state, objectId);
-  if (!agent || !obj || obj.heldBy) return;
+  if (!agent || !obj || obj.heldBy || !obj.active) return;
+
+  if (isPowerUpKind(obj.kind)) {
+    if (agent.powerUp) return;
+    obj.active = false;
+    obj.heldBy = null;
+    agent.powerUp = { kind: obj.kind, objectId: obj.id };
+    agent.intent = null;
+    agent.goal = null;
+    agent.status = `snagged the ${obj.label}`;
+    agent.emotion = 'happy';
+    events.push({
+      kind: 'pickup',
+      agentId: agent.id,
+      objectId: obj.id,
+      position: { x: agent.position.x, z: agent.position.z },
+    });
+    return;
+  }
+
   if (agent.holding) {
     const prev = getObject(state, agent.holding);
     if (prev) prev.heldBy = null;
@@ -728,16 +824,12 @@ function applyForcedDropResolution(
   if (!attacker || !target || !obj) return;
   const ruledOutcome = coerceForcedDropOutcome(outcome);
 
-  attacker.intent = null;
-  attacker.goal = null;
-  attacker.cooldowns.sabotageUntilTick = Math.max(
-    attacker.cooldowns.sabotageUntilTick,
-    state.tick + SABOTAGE_COOLDOWN_TICKS
-  );
+  clearAgentSabotage(state, attacker);
+  spendSabotageCooldown(attacker, state.tick);
   recordForcedDropRuling(state, conflict, ruledOutcome);
 
   if (ruledOutcome === 'drop' && target.holding === obj.id) {
-    dropHeldObject(state, target, events, `${attacker.name} bumps ${target.name}, and the banana drops!`, 'forced');
+    dropHeldObject(state, target, events, `${attacker.name} bumps ${target.name}, and the banana drops!`, 'bump');
     incrementScore(state.game.score.forcedDrops, attacker.id);
     events.push({
       kind: 'forced_drop',
@@ -806,12 +898,12 @@ function dropHeldObject(
   agent: SimulationAgentState,
   events: SimulationGameEvent[],
   _message: string,
-  cause: 'voluntary' | 'forced' = 'voluntary'
+  cause: 'voluntary' | 'bump' | 'bat' | 'ice' = 'voluntary'
 ): void {
   if (!agent.holding) return;
   const previousCarrierId = agent.id;
   const from = { x: agent.position.x, z: agent.position.z };
-  const to = cause === 'forced'
+  const to = cause === 'bump' || cause === 'bat' || cause === 'ice'
     ? chooseForcedDropLandingPoint(state, agent)
     : chooseVoluntaryDropLandingPoint(state, from);
   const held = getObject(state, agent.holding);
@@ -827,6 +919,116 @@ function dropHeldObject(
   agent.emotion = 'surprised';
   clearCarrierPursuits(state, previousCarrierId);
   events.push({ kind: 'drop', agentId: agent.id, objectId, from, to, cause });
+}
+
+function clearAgentSabotage(state: MutableWorldState, agent: SimulationAgentState): void {
+  agent.intent = null;
+  agent.goal = null;
+  if (agent.frozenUntilTick > state.tick) {
+    agent.status = 'frozen in place';
+  }
+}
+
+function spendSabotageCooldown(agent: SimulationAgentState, tick: number): void {
+  agent.cooldowns.sabotageUntilTick = Math.max(agent.cooldowns.sabotageUntilTick, tick + SABOTAGE_COOLDOWN_TICKS);
+}
+
+function resolveBumpContact(
+  state: MutableWorldState,
+  attacker: SimulationAgentState,
+  target: SimulationAgentState
+): boolean {
+  const seed = `${state.tick}:${attacker.id}:${target.id}:bump`;
+  return hashString(seed) % 2 === 0;
+}
+
+function consumePowerUp(agent: SimulationAgentState, method: SabotageMethod): { kind: PowerUpKind; objectId: string } | null {
+  if (method === 'bump') return null;
+  if (!agent.powerUp || agent.powerUp.kind !== method) return null;
+  const powerUp = agent.powerUp;
+  agent.powerUp = null;
+  return powerUp;
+}
+
+function applyGuaranteedPowerUpSabotage(
+  state: MutableWorldState,
+  attacker: SimulationAgentState,
+  target: SimulationAgentState,
+  powerUp: { kind: PowerUpKind; objectId: string },
+  banana: SimulationObjectState,
+  events: SimulationGameEvent[]
+): void {
+  const position = midpoint(attacker.position, target.position);
+  if (powerUp.kind === 'bat') {
+    attacker.status = `bonks ${target.name} with the bat`;
+    attacker.emotion = 'alert';
+    target.emotion = 'surprised';
+    if (target.holding === banana.id) {
+      dropHeldObject(state, target, events, `${attacker.name} bonks ${target.name} with the bat!`, 'bat');
+      incrementScore(state.game.score.forcedDrops, attacker.id);
+    } else {
+      target.status = 'gets bonked sideways';
+    }
+    events.push({
+      kind: 'power_up_use',
+      agentId: attacker.id,
+      targetAgentId: target.id,
+      objectId: powerUp.objectId,
+      powerUp: 'bat',
+      position,
+      effect: 'hit',
+    });
+    scheduleRespawnFromRule(state, powerUp.objectId);
+    return;
+  }
+
+  attacker.status = `launches the ice cube at ${target.name}`;
+  attacker.emotion = 'alert';
+  target.frozenUntilTick = Math.max(target.frozenUntilTick, state.tick + FREEZE_TICKS);
+  target.intent = null;
+  target.goal = null;
+  target.status = 'frozen solid by an ice cube';
+  target.emotion = 'sleepy';
+  if (target.holding === banana.id) {
+    dropHeldObject(state, target, events, `${attacker.name} freezes ${target.name} and the banana pops free!`, 'ice');
+    incrementScore(state.game.score.forcedDrops, attacker.id);
+  }
+  events.push({
+    kind: 'power_up_use',
+    agentId: attacker.id,
+    targetAgentId: target.id,
+    objectId: powerUp.objectId,
+    powerUp: 'ice_cube',
+    position,
+    effect: 'freeze',
+  });
+  scheduleRespawnFromRule(state, powerUp.objectId);
+}
+
+function scheduleRespawnFromRule(state: MutableWorldState, objectId: string): void {
+  const rule = getRespawnRule(state, objectId);
+  if (!rule) return;
+  scheduleRespawn(state, objectId, rule.delayTicks);
+}
+
+function midpoint(a: Vec2, b: Vec2): Vec2 {
+  return {
+    x: (a.x + b.x) / 2,
+    z: (a.z + b.z) / 2,
+  };
+}
+
+function hashString(value: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function isPowerUpKind(kind: string): kind is PowerUpKind {
+  return kind === 'bat' || kind === 'ice_cube';
 }
 
 function chooseVoluntaryDropLandingPoint(state: MutableWorldState, origin: Vec2): Vec2 {
@@ -929,6 +1131,7 @@ function scoreForcedDropCandidate(
   const banana = getObject(state, state.game.bananaObjectId);
   let obstacleClearance = 0;
   for (const object of state.objects) {
+    if (!object.active) continue;
     if (object.id === banana?.id) continue;
     const distance = vec2Distance(object.position, candidate) - object.collisionRadius;
     obstacleClearance = Math.max(obstacleClearance, Math.max(0, 1.4 - distance));

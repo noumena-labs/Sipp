@@ -50,6 +50,8 @@ export function buildPerception(
       emotion: other.emotion,
       status: other.status,
       holding: other.holding,
+      powerUp: other.powerUp?.kind ?? null,
+      frozenUntilTick: other.frozenUntilTick,
     });
   }
   nearbyAgents.sort((a, b) => compareByPriority(a.distance, b.distance, mustSeeAgentIds.has(a.id), mustSeeAgentIds.has(b.id)));
@@ -57,6 +59,7 @@ export function buildPerception(
 
   const nearbyObjects: PerceivedObject[] = [];
   for (const obj of objects) {
+    if (!obj.active) continue;
     const distance = vec2Distance(self.position, obj.position);
     if (distance > objectRadius && !mustSeeObjectIds.has(obj.id)) continue;
     nearbyObjects.push({
@@ -66,6 +69,7 @@ export function buildPerception(
       description: obj.description,
       distance,
       direction: vec2Direction(self.position, obj.position),
+      active: obj.active,
       heldBy: obj.heldBy,
       contested: obj.contested,
       affordances: obj.affordances,

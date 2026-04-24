@@ -45,6 +45,8 @@ interface AgentEntry {
   joltUntil: number;
   joltDirection: Vec2 | null;
   baseColor: THREE.Color;
+  propMesh: THREE.Object3D | null;
+  propKind: string | null;
 }
 
 interface ObjectEntry {
@@ -157,6 +159,8 @@ export function bindWorldToScene(
       joltUntil: 0,
       joltDirection: null,
       baseColor,
+      propMesh: null,
+      propKind: null,
     };
     agents.set(id, entry);
     if (highlightedAgent === id) visual.setHighlighted(true);
@@ -210,6 +214,7 @@ export function bindWorldToScene(
         entry.holding = a.holding;
         entry.pulseUntil = Math.max(entry.pulseUntil, elapsedSeconds + PULSE_SECONDS);
       }
+      syncAgentProp(entry, a);
       setAgentTarget(entry, resolveIntentTarget(a.intent, snap));
       updateAgentGlyph(entry, a, snap);
     }
@@ -218,6 +223,10 @@ export function bindWorldToScene(
         worldRoot.remove(entry.visual.root);
         worldRoot.remove(entry.targetMarker);
         worldRoot.remove(entry.targetLine);
+        if (entry.propMesh) {
+          entry.visual.propAnchor.remove(entry.propMesh);
+          disposeObject3D(entry.propMesh);
+        }
         entry.visual.dispose();
         disposeTargetVisuals(entry);
         agents.delete(id);
@@ -234,6 +243,7 @@ export function bindWorldToScene(
         entry.heldBy = o.heldBy;
         entry.visual.setHeldBy(o.heldBy);
       }
+      entry.visual.setActive(o.active);
     }
     for (const [id, entry] of objects) {
       if (!seenObjects.has(id)) {
@@ -361,6 +371,7 @@ export function bindWorldToScene(
       const p = entry.visual.root.position;
       p.x += (entry.targetX - p.x) * LERP_ALPHA;
       p.z += (entry.targetZ - p.z) * LERP_ALPHA;
+      entry.visual.setPosition(p.x, p.z);
     }
 
     for (const burst of Array.from(bursts)) {
@@ -380,7 +391,12 @@ export function bindWorldToScene(
           entry.glyphOverrideUntil = elapsedSeconds + 0.28;
           entry.pulseUntil = elapsedSeconds + PULSE_SECONDS;
         }
-        spawnBurst(event.position, 0xffe066, 6, 0.22);
+        const objectEntry = objects.get(event.objectId);
+        if (objectEntry && (objectEntry.kind === 'bat' || objectEntry.kind === 'ice_cube')) {
+          objectEntry.visual.setActive(false);
+        }
+        const burstColor = objectEntry?.kind === 'ice_cube' ? 0x8fe7ff : objectEntry?.kind === 'bat' ? 0xffc86a : 0xffe066;
+        spawnBurst(event.position, burstColor, 6, 0.22);
         return;
       }
       case 'drop': {
@@ -405,8 +421,16 @@ export function bindWorldToScene(
           objectEntry.targetZ = event.to.z;
           objectEntry.heldBy = null;
           objectEntry.visual.setHeldBy(null);
+          objectEntry.visual.setActive(true);
         }
-        spawnBurst(event.from, event.cause === 'forced' ? 0xff8a80 : 0xffd166, 8, 0.28);
+        const burstColor = event.cause === 'ice'
+          ? 0x8fe7ff
+          : event.cause === 'bat'
+            ? 0xffc86a
+            : event.cause === 'bump'
+              ? 0xff8a80
+              : 0xffd166;
+        spawnBurst(event.from, burstColor, 8, 0.28);
         return;
       }
       case 'forced_drop': {
@@ -434,6 +458,42 @@ export function bindWorldToScene(
         spawnBurst(event.position, 0xf9aa33, 12, 0.34);
         return;
       }
+      case 'bump_whiff': {
+        const attacker = agents.get(event.attackerAgentId);
+        if (attacker) {
+          attacker.glyphOverride = '💨';
+          attacker.glyphOverrideUntil = elapsedSeconds + 0.28;
+          attacker.flashColor = new THREE.Color(0xf4d35e);
+          attacker.flashUntil = elapsedSeconds + FLASH_SECONDS;
+        }
+        spawnBurst(event.position, 0xf4d35e, 7, 0.22);
+        return;
+      }
+      case 'power_up_use': {
+        const attacker = agents.get(event.agentId);
+        const target = agents.get(event.targetAgentId);
+        if (attacker) {
+          attacker.glyphOverride = event.powerUp === 'bat' ? '🏏' : '🧊';
+          attacker.glyphOverrideUntil = elapsedSeconds + 0.36;
+          attacker.flashColor = new THREE.Color(event.powerUp === 'bat' ? 0xffc86a : 0x8fe7ff);
+          attacker.flashUntil = elapsedSeconds + FLASH_SECONDS;
+        }
+        if (target) {
+          target.glyphOverride = event.effect === 'freeze' ? '🧊' : '💢';
+          target.glyphOverrideUntil = elapsedSeconds + 0.4;
+          target.flashColor = new THREE.Color(event.effect === 'freeze' ? 0x8fe7ff : 0xff8a80);
+          target.flashUntil = elapsedSeconds + 0.5;
+          target.joltUntil = elapsedSeconds + IMPACT_SECONDS;
+          target.joltDirection = attacker
+            ? {
+                x: target.visual.root.position.x - attacker.visual.root.position.x,
+                z: target.visual.root.position.z - attacker.visual.root.position.z,
+              }
+            : { x: 0.1, z: 0.1 };
+        }
+        spawnBurst(event.position, event.effect === 'freeze' ? 0x8fe7ff : 0xffc86a, 14, 0.34);
+        return;
+      }
       case 'delivery': {
         const entry = agents.get(event.agentId);
         if (entry) {
@@ -453,6 +513,7 @@ export function bindWorldToScene(
           objectEntry.targetZ = event.position.z;
           objectEntry.heldBy = null;
           objectEntry.visual.setHeldBy(null);
+          objectEntry.visual.setActive(true);
         }
         spawnBurst(event.position, 0xffe066, 10, 0.28);
         return;
@@ -521,6 +582,10 @@ export function bindWorldToScene(
         worldRoot.remove(entry.visual.root);
         worldRoot.remove(entry.targetMarker);
         worldRoot.remove(entry.targetLine);
+        if (entry.propMesh) {
+          entry.visual.propAnchor.remove(entry.propMesh);
+          disposeObject3D(entry.propMesh);
+        }
         entry.visual.dispose();
         disposeTargetVisuals(entry);
       }
@@ -540,6 +605,7 @@ export function bindWorldToScene(
 
       let best: { entry: ObjectEntry; score: number } | null = null;
       for (const entry of objects.values()) {
+        if (entry.visual.root.visible === false) continue;
         const position = entry.visual.root.position;
         const dx = point.x - position.x;
         const dz = point.z - position.z;
@@ -623,6 +689,9 @@ function updateAgentGlyph(entry: AgentEntry, agent: SimulationAgentState, snap: 
 
 function activityGlyphFor(agent: SimulationAgentState, snap: WorldSnapshot): string | null {
   if (agent.holding === snap.game.bananaObjectId) return '🍌';
+  if (agent.powerUp?.kind === 'bat') return '🏏';
+  if (agent.powerUp?.kind === 'ice_cube') return '🧊';
+  if (agent.frozenUntilTick > snap.tick) return '🧊';
   const intent = agent.intent;
   if (!intent) return null;
   switch (intent.kind) {
@@ -634,7 +703,7 @@ function activityGlyphFor(agent: SimulationAgentState, snap: WorldSnapshot): str
     case 'deliver':
       return '🏁';
     case 'sabotage':
-      return '💥';
+      return intent.method === 'bat' ? '🏏' : intent.method === 'ice_cube' ? '🧊' : '💥';
     case 'approach_agent':
       return '👀';
     case 'wait':
@@ -656,7 +725,7 @@ function glyphForIntent(intent: AgentIntent): string {
     case 'deliver':
       return '🏁';
     case 'sabotage':
-      return '💥';
+      return intent.method === 'bat' ? '🏏' : intent.method === 'ice_cube' ? '🧊' : '💥';
     case 'approach_agent':
       return '👀';
     case 'wait':
@@ -678,6 +747,59 @@ function clearBodyFlash(entry: AgentEntry): void {
   const material = entry.visual.body.material as THREE.MeshStandardMaterial;
   material.color.copy(entry.baseColor);
   entry.flashColor = null;
+}
+
+function syncAgentProp(entry: AgentEntry, agent: SimulationAgentState): void {
+  const nextKind = agent.powerUp?.kind ?? null;
+  if (entry.propKind === nextKind) return;
+  if (entry.propMesh) {
+    entry.visual.propAnchor.remove(entry.propMesh);
+    disposeObject3D(entry.propMesh);
+    entry.propMesh = null;
+    entry.propKind = null;
+  }
+  if (!nextKind) return;
+  const mesh = createPowerUpProp(nextKind);
+  entry.visual.propAnchor.add(mesh);
+  entry.propMesh = mesh;
+  entry.propKind = nextKind;
+}
+
+function createPowerUpProp(kind: 'bat' | 'ice_cube'): THREE.Object3D {
+  const root = new THREE.Group();
+  if (kind === 'bat') {
+    const handle = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.03, 0.03, 0.44, 10),
+      new THREE.MeshStandardMaterial({ color: 0xc58b4e, roughness: 0.6, metalness: 0.05 })
+    );
+    handle.rotation.z = Math.PI / 3;
+    handle.position.set(0.02, 0.02, 0);
+    const barrel = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.08, 0.06, 0.24, 12),
+      new THREE.MeshStandardMaterial({ color: 0xe8ba74, roughness: 0.55, metalness: 0.05 })
+    );
+    barrel.rotation.z = Math.PI / 3;
+    barrel.position.set(0.17, 0.12, 0);
+    root.add(handle, barrel);
+    return root;
+  }
+  const cube = new THREE.Mesh(
+    new THREE.BoxGeometry(0.2, 0.2, 0.2),
+    new THREE.MeshStandardMaterial({ color: 0x8fe7ff, roughness: 0.2, metalness: 0.1, transparent: true, opacity: 0.9 })
+  );
+  cube.rotation.set(0.35, 0.15, -0.2);
+  root.add(cube);
+  return root;
+}
+
+function disposeObject3D(root: THREE.Object3D): void {
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    mesh.geometry?.dispose?.();
+    const material = mesh.material;
+    if (Array.isArray(material)) material.forEach((entry) => entry.dispose());
+    else material?.dispose?.();
+  });
 }
 
 function setAgentTarget(entry: AgentEntry, target: Vec2 | null): void {

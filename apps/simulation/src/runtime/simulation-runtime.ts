@@ -180,6 +180,8 @@ export class SimulationRuntime {
       intent: null,
       goal: null,
       holding: null,
+      powerUp: null,
+      frozenUntilTick: 0,
       intentIssuedAtTick: -1,
       thinking: false,
       cooldowns: {
@@ -215,6 +217,7 @@ export class SimulationRuntime {
       label: seed.label ?? seed.kind,
       description: seed.description ?? seed.label ?? seed.kind,
       position: { x: seed.position.x, z: seed.position.z },
+      active: seed.active ?? true,
       contested: seed.contested ?? false,
       heldBy: null,
       tags: seed.tags ?? [],
@@ -560,7 +563,7 @@ export class SimulationRuntime {
       case 'deliver':
         return { kind: 'deliver', objectId: goal.objectId, emotion: inferEmotionFromGoal(goal) };
       case 'sabotage_agent':
-        return { kind: 'sabotage', agentId: goal.agentId, emotion: inferEmotionFromGoal(goal) };
+        return { kind: 'sabotage', agentId: goal.agentId, method: goal.method, emotion: inferEmotionFromGoal(goal) };
       case 'drop':
         return { kind: 'drop', emotion: inferEmotionFromGoal(goal) };
     }
@@ -568,6 +571,7 @@ export class SimulationRuntime {
 
   private needsDecision(agent: SimulationAgentState): boolean {
     if (agent.thinking) return false;
+    if (agent.frozenUntilTick > this.state.tick) return false;
     if (!agent.goal) return true;
     if (!agent.intent) return true;
     return false;
@@ -611,6 +615,7 @@ export class SimulationRuntime {
       case 'object_action': {
         const object = this.state.objects.find((entry) => entry.id === goal.objectId);
         if (!object) return true;
+        if (!object.active) return true;
         if (goal.kind === 'go_to_object' && object.heldBy && object.id === this.state.game.bananaObjectId) {
           return object.heldBy !== agent.id;
         }
@@ -623,7 +628,9 @@ export class SimulationRuntime {
         return agent.holding !== this.state.game.bananaObjectId;
       case 'sabotage_agent': {
         const target = this.state.agents.find((entry) => entry.id === goal.agentId);
-        return !target || target.holding !== this.state.game.bananaObjectId;
+        if (!target || target.holding !== this.state.game.bananaObjectId) return true;
+        if (goal.method !== 'bump' && agent.powerUp?.kind !== goal.method) return true;
+        return false;
       }
       case 'go_to_agent': {
         const target = this.state.agents.find((entry) => entry.id === goal.agentId);
@@ -667,12 +674,16 @@ function createGameState(seed: ScenarioGameSeed): MutableGameState {
     title: seed.title,
     bananaObjectId: seed.bananaObjectId,
     goalObjectId: seed.goalObjectId,
-    bananaSpawnPoints: seed.bananaSpawnPoints.map((point) => ({ x: point.x, z: point.z })),
+    respawnRules: seed.respawnRules.map((rule) => ({
+      objectId: rule.objectId,
+      delayTicks: rule.delayTicks,
+      spawnPoints: rule.spawnPoints.map((point) => ({ x: point.x, z: point.z })),
+    })),
     score: { deliveries: {}, forcedDrops: {} },
     referee: { status: 'idle' },
     refereeMemory: { forcedDrops: [] },
-    pendingRespawn: null,
-    nextSpawnIndex: 1,
+    pendingRespawns: [],
+    nextSpawnIndexByObjectId: {},
   };
 }
 
@@ -681,19 +692,21 @@ function cloneGame(game: MutableGameState): SimulationGameState {
     title: game.title,
     bananaObjectId: game.bananaObjectId,
     goalObjectId: game.goalObjectId,
-    bananaSpawnPoints: game.bananaSpawnPoints.map((point) => ({ x: point.x, z: point.z })),
+    respawnRules: game.respawnRules.map((rule) => ({
+      objectId: rule.objectId,
+      delayTicks: rule.delayTicks,
+      spawnPoints: rule.spawnPoints.map((point) => ({ x: point.x, z: point.z })),
+    })),
     score: cloneScore(game.score),
     referee: game.referee,
     refereeMemory: {
       forcedDrops: game.refereeMemory.forcedDrops.map(cloneForcedDropRulingRecord),
     },
-    pendingRespawn: game.pendingRespawn
-      ? {
-          objectId: game.pendingRespawn.objectId,
-          spawnPosition: { x: game.pendingRespawn.spawnPosition.x, z: game.pendingRespawn.spawnPosition.z },
-          activateAtTick: game.pendingRespawn.activateAtTick,
-        }
-      : null,
+    pendingRespawns: game.pendingRespawns.map((pending) => ({
+      objectId: pending.objectId,
+      spawnPosition: { x: pending.spawnPosition.x, z: pending.spawnPosition.z },
+      activateAtTick: pending.activateAtTick,
+    })),
   };
 }
 
@@ -758,9 +771,20 @@ function buildSceneSummary(state: MutableWorldState): JsonValue {
       name: agent.name,
       position: jsonVec(agent.position),
       holding: agent.holding,
+      powerUp: agent.powerUp?.kind ?? null,
+      frozenRemainingTicks: Math.max(0, agent.frozenUntilTick - state.tick),
       status: agent.status,
       sabotageCooldownRemainingTicks: Math.max(0, agent.cooldowns.sabotageUntilTick - state.tick),
     })),
+    active_objects: state.objects
+      .filter((object) => object.active)
+      .map((object) => ({
+        id: object.id,
+        kind: object.kind,
+        label: object.label,
+        position: jsonVec(object.position),
+        heldBy: object.heldBy,
+      })),
   };
 }
 
@@ -772,8 +796,10 @@ function summarizeAgent(state: MutableWorldState, agentId: string): JsonValue {
     name: agent.name,
     position: jsonVec(agent.position),
     holding: agent.holding,
+    powerUp: agent.powerUp?.kind ?? null,
     status: agent.status,
     intentIssuedAtTick: agent.intentIssuedAtTick,
+    frozenRemainingTicks: Math.max(0, agent.frozenUntilTick - state.tick),
     sabotageCooldownRemainingTicks: Math.max(0, agent.cooldowns.sabotageUntilTick - state.tick),
     score: state.game.score.deliveries[agent.id] ?? 0,
   };
@@ -1024,6 +1050,8 @@ function cloneAgent(agent: SimulationAgentState): SimulationAgentState {
     intent: agent.intent ? { ...agent.intent } : null,
     goal: agent.goal ? { ...agent.goal } : null,
     holding: agent.holding,
+    powerUp: agent.powerUp ? { ...agent.powerUp } : null,
+    frozenUntilTick: agent.frozenUntilTick,
     intentIssuedAtTick: agent.intentIssuedAtTick,
     thinking: agent.thinking,
     cooldowns: {
@@ -1056,6 +1084,7 @@ function cloneObject(obj: SimulationObjectState): SimulationObjectState {
     label: obj.label,
     description: obj.description,
     position: { x: obj.position.x, z: obj.position.z },
+    active: obj.active,
     contested: obj.contested,
     heldBy: obj.heldBy,
     tags: obj.tags,

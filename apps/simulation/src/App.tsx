@@ -512,6 +512,7 @@ export default function App() {
       <div ref={inspectorRef} className="sim-overlay sim-top-right">
         <AgentInspector
           agents={agents}
+          bananaObjectId={snapshot?.game.bananaObjectId}
           selectedAgentId={selectedAgentId}
           onSelect={setSelectedAgentId}
         />
@@ -582,13 +583,13 @@ function describeGameEvent(
 ): string | null {
   switch (event.kind) {
     case 'pickup':
-      return `${nameOf(event.agentId, snapshot)} grabs the banana.`;
+      return `${nameOf(event.agentId, snapshot)} grabs the ${objectLabelOf(event.objectId, snapshot)}.`;
     case 'delivery':
       return `${nameOf(event.agentId, snapshot)} scores by delivering the banana!`;
     case 'respawn':
-      return `The banana pops back into play at (${event.position.x.toFixed(1)}, ${event.position.z.toFixed(1)}).`;
+      return `The ${objectLabelOf(event.objectId, snapshot)} pops back into play at (${event.position.x.toFixed(1)}, ${event.position.z.toFixed(1)}).`;
     case 'drop':
-      return `${nameOf(event.agentId, snapshot)} drops the banana${event.cause === 'forced' ? ' after a bump' : ''}.`;
+      return `${nameOf(event.agentId, snapshot)} drops the banana${event.cause === 'bump' ? ' after a bump' : event.cause === 'bat' ? ' after a bonk' : event.cause === 'ice' ? ' after freezing up' : ''}.`;
     case 'forced_drop':
       if (event.outcome === 'drop') {
         return `${nameOf(event.attackerAgentId, snapshot)} bumps ${nameOf(event.targetAgentId, snapshot)} and the banana flies loose.`;
@@ -597,6 +598,12 @@ function describeGameEvent(
         return `${nameOf(event.attackerAgentId, snapshot)} fumbles the bump on ${nameOf(event.targetAgentId, snapshot)}.`;
       }
       return `${nameOf(event.targetAgentId, snapshot)} keeps hold through the bump.`;
+    case 'bump_whiff':
+      return `${nameOf(event.attackerAgentId, snapshot)} lunges at ${nameOf(event.targetAgentId, snapshot)} and whiffs the bump.`;
+    case 'power_up_use':
+      return event.powerUp === 'bat'
+        ? `${nameOf(event.agentId, snapshot)} bonks ${nameOf(event.targetAgentId, snapshot)} with the bat.`
+        : `${nameOf(event.agentId, snapshot)} pelts ${nameOf(event.targetAgentId, snapshot)} with an ice cube and freezes them.`;
     case 'fallback':
       if (event.message.startsWith('Director is ruling on ')) {
         return null;

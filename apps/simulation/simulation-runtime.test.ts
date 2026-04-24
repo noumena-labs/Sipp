@@ -128,6 +128,8 @@ function createAgent(
     intent: null,
     goal: null,
     holding: null,
+    powerUp: null,
+    frozenUntilTick: 0,
     intentIssuedAtTick: 0,
     thinking: false,
     cooldowns: {
@@ -154,6 +156,7 @@ function createObject(
     label: kind,
     description: kind,
     position,
+    active: true,
     contested: false,
     heldBy: null,
     tags: [],
@@ -176,15 +179,15 @@ function createWorldState(): MutableWorldState {
       title: 'Banana Dash',
       bananaObjectId: 'banana',
       goalObjectId: 'home',
-      bananaSpawnPoints: [{ x: -4, z: -4 }],
+      respawnRules: [{ objectId: 'banana', delayTicks: 1, spawnPoints: [{ x: -4, z: -4 }] }],
       score: {
         deliveries: {},
         forcedDrops: {},
       },
       referee: { status: 'idle' },
       refereeMemory: { forcedDrops: [] },
-      pendingRespawn: null,
-      nextSpawnIndex: 0,
+      pendingRespawns: [],
+      nextSpawnIndexByObjectId: {},
     },
   };
 }
@@ -218,8 +221,8 @@ function populateForcedDropWorld(state: MutableWorldState): void {
     }),
     createAgent('attacker', 'Attacker', { x: 0.5, z: 0 }, {
       status: 'lining up a bump',
-      intent: { kind: 'sabotage', agentId: 'carrier', emotion: 'alert' },
-      goal: { kind: 'sabotage_agent', agentId: 'carrier', label: 'bump Carrier' },
+      intent: { kind: 'sabotage', agentId: 'carrier', method: 'bump', emotion: 'alert' },
+      goal: { kind: 'sabotage_agent', agentId: 'carrier', method: 'bump', label: 'bump Carrier' },
     })
   );
   state.objects.push(
@@ -262,7 +265,7 @@ test('SimulationRuntime applies deterministic referee fallback after timeout', a
       title: 'Banana Dash',
       bananaObjectId: 'banana',
       goalObjectId: 'home',
-      bananaSpawnPoints: [{ x: -4, z: -4 }],
+      respawnRules: [{ objectId: 'banana', delayTicks: 1, spawnPoints: [{ x: -4, z: -4 }] }],
     },
     refereeTimeoutMs: 5,
   });
@@ -279,8 +282,8 @@ test('SimulationRuntime applies deterministic referee fallback after timeout', a
     }),
     createAgent('attacker', 'Attacker', { x: 0.5, z: 0 }, {
       status: 'lining up a bump',
-      intent: { kind: 'sabotage', agentId: 'carrier', emotion: 'alert' },
-      goal: { kind: 'sabotage_agent', agentId: 'carrier', label: 'bump Carrier' },
+      intent: { kind: 'sabotage', agentId: 'carrier', method: 'bump', emotion: 'alert' },
+      goal: { kind: 'sabotage_agent', agentId: 'carrier', method: 'bump', label: 'bump Carrier' },
     })
   );
   state.objects.push(
@@ -350,7 +353,7 @@ test('SimulationRuntime maps referee selection choices to director resolutions',
       title: 'Banana Dash',
       bananaObjectId: 'banana',
       goalObjectId: 'home',
-      bananaSpawnPoints: [{ x: -4, z: -4 }],
+      respawnRules: [{ objectId: 'banana', delayTicks: 1, spawnPoints: [{ x: -4, z: -4 }] }],
     },
   });
 
@@ -630,7 +633,7 @@ test('invalid repeated forced-drop fumble falls back through policy without paus
       title: 'Banana Dash',
       bananaObjectId: 'banana',
       goalObjectId: 'home',
-      bananaSpawnPoints: [{ x: -4, z: -4 }],
+      respawnRules: [{ objectId: 'banana', delayTicks: 1, spawnPoints: [{ x: -4, z: -4 }] }],
     },
   });
 
@@ -714,8 +717,8 @@ test('forced drops throw the banana away from the carrier scrum', () => {
     }),
     createAgent('attacker', 'Attacker', { x: 0.45, z: 0 }, {
       status: 'lining up a bump',
-      intent: { kind: 'sabotage', agentId: 'carrier', emotion: 'alert' },
-      goal: { kind: 'sabotage_agent', agentId: 'carrier', label: 'bump Carrier' },
+      intent: { kind: 'sabotage', agentId: 'carrier', method: 'bump', emotion: 'alert' },
+      goal: { kind: 'sabotage_agent', agentId: 'carrier', method: 'bump', label: 'bump Carrier' },
     }),
     createAgent('shadow-1', 'Shadow 1', { x: -0.55, z: 0.15 }),
     createAgent('shadow-2', 'Shadow 2', { x: 0.2, z: 0.75 })
