@@ -16,14 +16,21 @@ const buildDir = path.join(projectRoot, buildDirName);
 const buildDistDir = path.join(buildDir, 'dist');
 const packageWasmSubdir = process.env.CE_WASM_OUTPUT_SUBDIR?.trim() || 'wasm';
 const packageWasmDir = path.join(projectRoot, 'dist', packageWasmSubdir);
+const enableDebug = false;
+const enableEsModule = true;
+const enableFilesystem = true;
 const enableJspi = true;
+const enableAggressiveOpt = true;
+const enablePthreads = false;
+const suppressLlamaLogs = true;
 const emscriptenEnvironment = 'web,worker';
 const enableMemory64 = readBooleanEnv('CE_WASM_MEM64', true);
 const ltoMode = process.env.CE_WASM_LTO_MODE?.trim().toUpperCase() || (isWindows ? 'THIN' : 'FULL');
-const initialMemory = process.env.CE_WASM_INITIAL_MEMORY?.trim();
+const initialMemory = process.env.CE_WASM_INITIAL_MEMORY?.trim() || '512MB';
 const maximumMemory =
   process.env.CE_WASM_MAXIMUM_MEMORY?.trim() || (enableMemory64 ? '16384MB' : '4096MB');
-const stackSize = process.env.CE_WASM_STACK_SIZE?.trim();
+const stackSize = process.env.CE_WASM_STACK_SIZE?.trim() || '16MB';
+const buildParallelLevel = process.env.CE_WASM_BUILD_PARALLEL_LEVEL?.trim() || process.env.CMAKE_BUILD_PARALLEL_LEVEL?.trim();
 
 let activeChildProcess = null;
 let signalHandlersInstalled = false;
@@ -365,6 +372,92 @@ function getCacheEntry(cacheText, key) {
   return match ? match[1].trim() : null;
 }
 
+function shouldRunConfigure(expectedGenerator) {
+  const cachePath = path.join(buildDir, 'CMakeCache.txt');
+  if (!existsSync(cachePath)) {
+    return true;
+  }
+
+  const cacheText = readFileSync(cachePath, 'utf8');
+  const cachedGenerator = getCacheEntry(cacheText, 'CMAKE_GENERATOR');
+  const cachedBuildType = getCacheEntry(cacheText, 'CMAKE_BUILD_TYPE');
+  const cachedDebug = getCacheEntry(cacheText, 'CE_WASM_DEBUG');
+  const cachedEsModule = getCacheEntry(cacheText, 'CE_WASM_ES_MODULE');
+  const cachedAggressiveOpt = getCacheEntry(cacheText, 'CE_WASM_AGGRESSIVE_OPT');
+  const cachedSuppressLlamaLogs = getCacheEntry(cacheText, 'CE_SUPPRESS_LLAMA_LOGS');
+  const cachedPthreads = getCacheEntry(cacheText, 'CE_WASM_PTHREADS');
+  const cachedJspi = getCacheEntry(cacheText, 'CE_WASM_USE_JSPI');
+  const cachedEnvironment = getCacheEntry(cacheText, 'CE_WASM_ENVIRONMENT');
+  const cachedFilesystem = getCacheEntry(cacheText, 'CE_WASM_FILESYSTEM');
+  const cachedMemory64 = getCacheEntry(cacheText, 'CE_WASM_MEM64') ?? getCacheEntry(cacheText, 'LLAMA_WASM_MEM64');
+  const cachedInitialMemory = getCacheEntry(cacheText, 'CE_WASM_INITIAL_MEMORY');
+  const cachedMaximumMemory = getCacheEntry(cacheText, 'CE_WASM_MAXIMUM_MEMORY');
+  const cachedStackSize = getCacheEntry(cacheText, 'CE_WASM_STACK_SIZE');
+  const cachedLtoMode = getCacheEntry(cacheText, 'CE_WASM_LTO_MODE');
+
+  if (expectedGenerator && cachedGenerator && cachedGenerator !== expectedGenerator) {
+    return true;
+  }
+
+  if (cachedBuildType && cachedBuildType !== 'Release') {
+    return true;
+  }
+
+  if (cachedDebug && cachedDebug !== (enableDebug ? 'ON' : 'OFF')) {
+    return true;
+  }
+
+  if (cachedEsModule && cachedEsModule !== (enableEsModule ? 'ON' : 'OFF')) {
+    return true;
+  }
+
+  if (cachedAggressiveOpt && cachedAggressiveOpt !== (enableAggressiveOpt ? 'ON' : 'OFF')) {
+    return true;
+  }
+
+  if (cachedSuppressLlamaLogs && cachedSuppressLlamaLogs !== (suppressLlamaLogs ? 'ON' : 'OFF')) {
+    return true;
+  }
+
+  if (cachedPthreads && cachedPthreads !== (enablePthreads ? 'ON' : 'OFF')) {
+    return true;
+  }
+
+  if (cachedJspi && cachedJspi !== (enableJspi ? 'ON' : 'OFF')) {
+    return true;
+  }
+
+  if (cachedEnvironment && cachedEnvironment !== emscriptenEnvironment) {
+    return true;
+  }
+
+  if (cachedFilesystem && cachedFilesystem !== (enableFilesystem ? 'ON' : 'OFF')) {
+    return true;
+  }
+
+  if (cachedMemory64 && cachedMemory64 !== (enableMemory64 ? 'ON' : 'OFF')) {
+    return true;
+  }
+
+  if (cachedInitialMemory && cachedInitialMemory !== initialMemory) {
+    return true;
+  }
+
+  if (cachedMaximumMemory && cachedMaximumMemory !== maximumMemory) {
+    return true;
+  }
+
+  if (cachedStackSize && cachedStackSize !== stackSize) {
+    return true;
+  }
+
+  if (cachedLtoMode && cachedLtoMode.toUpperCase() !== ltoMode) {
+    return true;
+  }
+
+  return false;
+}
+
 function hasIncompleteBuildDirectory() {
   if (!existsSync(buildDir)) {
     return false;
@@ -574,12 +667,18 @@ const cmakeConfigureArgs = [
   buildConfig.generator,
   '-DCMAKE_BUILD_TYPE=Release',
   `-DCMAKE_TOOLCHAIN_FILE=${toolchainPath}`,
-  '-DCE_WASM_ES_MODULE=ON',
-  '-DCE_WASM_AGGRESSIVE_OPT=ON',
+  `-DCE_WASM_DEBUG=${enableDebug ? 'ON' : 'OFF'}`,
+  `-DCE_WASM_ES_MODULE=${enableEsModule ? 'ON' : 'OFF'}`,
+  `-DCE_WASM_FILESYSTEM=${enableFilesystem ? 'ON' : 'OFF'}`,
+  `-DCE_WASM_AGGRESSIVE_OPT=${enableAggressiveOpt ? 'ON' : 'OFF'}`,
+  `-DCE_SUPPRESS_LLAMA_LOGS=${suppressLlamaLogs ? 'ON' : 'OFF'}`,
+  `-DCE_WASM_PTHREADS=${enablePthreads ? 'ON' : 'OFF'}`,
   `-DCE_WASM_USE_JSPI=${enableJspi ? 'ON' : 'OFF'}`,
   `-DCE_WASM_ENVIRONMENT=${emscriptenEnvironment}`,
   `-DCE_WASM_MEM64=${enableMemory64 ? 'ON' : 'OFF'}`,
   `-DCE_WASM_LTO_MODE=${ltoMode}`,
+  `-DCE_WASM_INITIAL_MEMORY=${initialMemory}`,
+  `-DCE_WASM_STACK_SIZE=${stackSize}`,
   '-DLLAMA_BUILD_HTML=OFF'
 ];
 
@@ -593,23 +692,26 @@ if (emdawnwebgpuDir) {
   cmakeConfigureArgs.push(`-DEMDAWNWEBGPU_DIR=${emdawnwebgpuDir}`);
 }
 
-if (initialMemory) {
-  cmakeConfigureArgs.push(`-DCE_WASM_INITIAL_MEMORY=${initialMemory}`);
-}
-
 if (maximumMemory) {
   cmakeConfigureArgs.push(`-DCE_WASM_MAXIMUM_MEMORY=${maximumMemory}`);
 }
 
-if (stackSize) {
-  cmakeConfigureArgs.push(`-DCE_WASM_STACK_SIZE=${stackSize}`);
-}
-
 console.log(
   `${buildLabel} generator=${buildConfig.generator} mem64=${enableMemory64 ? 'on' : 'off'} lto=${ltoMode.toLowerCase()} output=dist/${packageWasmSubdir}` +
-    (buildConfig.makeProgram ? ` make_program=${buildConfig.makeProgram}` : '')
+    (buildConfig.makeProgram ? ` make_program=${buildConfig.makeProgram}` : '') +
+    (buildParallelLevel ? ` jobs=${buildParallelLevel}` : '')
 );
 
-await runCommand(cmakeExecutable, cmakeConfigureArgs);
-await runCommand(cmakeExecutable, ['--build', buildDirName, '--config', 'Release', '--target', wasmTargetName]);
+if (shouldRunConfigure(buildConfig.generator)) {
+  await runCommand(cmakeExecutable, cmakeConfigureArgs);
+} else {
+  console.log(`${buildLabel} reusing existing CMake configure state`);
+}
+
+const cmakeBuildArgs = ['--build', buildDirName, '--config', 'Release', '--target', wasmTargetName];
+if (buildParallelLevel) {
+  cmakeBuildArgs.push('--parallel', buildParallelLevel);
+}
+
+await runCommand(cmakeExecutable, cmakeBuildArgs);
 await copyWasmArtifacts();

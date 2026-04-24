@@ -12,6 +12,7 @@
   "scripts": {
     "build": "bun run build:package",
     "build:package": "bun run --filter=cogent-engine build",
+    "build:package:dev": "bun run --filter=cogent-engine build:dev",
     "rebuild:package": "bun run --filter=cogent-engine rebuild",
     "clean:package": "bun run --filter=cogent-engine clean",
     "test:backend-ops:webgpu": "bun run --filter=cogent-engine test:backend-ops:webgpu",
@@ -27,7 +28,7 @@
     "avatar:dev": "bun run build:package && bun run --filter=cogent-engine-avatar-app dev",
     "avatar:build": "bun run build:package && bun run --filter=cogent-engine-avatar-app build",
     "avatar:preview": "bun run --filter=cogent-engine-avatar-app preview",
-    "simulation:dev": "bun run build:package && bun run --filter=cogent-engine-simulation-app dev",
+    "simulation:dev": "bun run build:package:dev && bun run --filter=cogent-engine-simulation-app dev",
     "simulation:build": "bun run build:package && bun run --filter=cogent-engine-simulation-app build",
     "simulation:preview": "bun run --filter=cogent-engine-simulation-app preview",
     "bench:browser": "bun ./scripts/benchmark-browser.mjs"
