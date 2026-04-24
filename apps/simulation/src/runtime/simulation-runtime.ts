@@ -5,9 +5,12 @@ import { SimulationAgentChooser } from './agent-chooser.js';
 import {
   applyDirectorDecision,
   applyTickFirstPass,
+  CHASE_MIN_DISTANCE,
   cloneScore,
   deterministicConflictResolution,
   FORCED_DROP_HISTORY_LIMIT,
+  GOAL_RADIUS,
+  ICE_THROW_RADIUS,
   SABOTAGE_COOLDOWN_TICKS,
   SABOTAGE_RADIUS,
   type MutableGameState,
@@ -442,20 +445,21 @@ export class SimulationRuntime {
         });
         return;
       }
-      current.goal = result.goal;
-      const intent = this.mapGoalToIntent(result.goal);
+      const goal = this.coerceCloseRangeGoal(current, result.goal);
+      current.goal = goal;
+      const intent = this.mapGoalToIntent(goal);
       current.intent = intent;
       current.intentIssuedAtTick = this.state.tick;
-      current.status = result.goal.label;
+      current.status = goal.label;
       current.thinking = false;
       current.emotion = intent.emotion;
       this.emit({
         kind: 'agent-query-end',
         tick: this.state.tick,
         agentId: chosenId,
-        goal: result.goal,
+        goal,
         intent,
-        status: result.goal.label,
+        status: goal.label,
         emotion: intent.emotion,
         queryStatus: result.status,
         ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
@@ -464,9 +468,9 @@ export class SimulationRuntime {
         kind: 'agent-intent',
         tick: this.state.tick,
         agentId: chosenId,
-        goal: result.goal,
+        goal,
         intent,
-        status: result.goal.label,
+        status: goal.label,
       });
     }).catch((error) => {
       if (!controller.signal.aborted) {
@@ -561,11 +565,69 @@ export class SimulationRuntime {
       }
       case 'deliver':
         return { kind: 'deliver', objectId: goal.objectId, emotion: inferEmotionFromGoal(goal) };
+      case 'push_agent':
+        return { kind: 'push', agentId: goal.agentId, emotion: inferEmotionFromGoal(goal) };
       case 'sabotage_agent':
         return { kind: 'sabotage', agentId: goal.agentId, method: goal.method, emotion: inferEmotionFromGoal(goal) };
       case 'drop':
         return { kind: 'drop', emotion: inferEmotionFromGoal(goal) };
     }
+  }
+
+  private coerceCloseRangeGoal(agent: SimulationAgentState, goal: AgentGoal): AgentGoal {
+    if (agent.holding === this.state.game.bananaObjectId) {
+      const home = this.state.objects.find((entry) => entry.id === this.state.game.goalObjectId);
+      if (!home) return goal;
+      if (goal.kind === 'deliver' && goal.objectId === home.id) return goal;
+      if (goal.kind === 'go_to_object' && goal.objectId === home.id) return goal;
+      const label = vec2Distance(agent.position, home.position) <= GOAL_RADIUS
+        ? 'score at home base'
+        : 'keep running to base';
+      return { kind: 'deliver', objectId: home.id, label };
+    }
+
+    if (goal.kind === 'push_agent') {
+      const target = this.state.agents.find((entry) => entry.id === goal.agentId);
+      if (target?.holding === this.state.game.bananaObjectId && agent.cooldowns.sabotageUntilTick <= this.state.tick) {
+        return this.closeRangeGoalForTarget(agent, target);
+      }
+      return goal;
+    }
+
+    if (goal.kind === 'go_to_agent') {
+      const target = this.state.agents.find((entry) => entry.id === goal.agentId);
+      if (target && vec2Distance(agent.position, target.position) <= CHASE_MIN_DISTANCE) {
+        return this.closeRangeGoalForTarget(agent, target);
+      }
+      return goal;
+    }
+
+    if (goal.kind === 'wait') {
+      const target = nearestAgentWithin(agent, this.state.agents, CHASE_MIN_DISTANCE);
+      if (target) {
+        return this.closeRangeGoalForTarget(agent, target);
+      }
+    }
+
+    return goal;
+  }
+
+  private closeRangeGoalForTarget(agent: SimulationAgentState, target: SimulationAgentState): AgentGoal {
+    if (target.holding === this.state.game.bananaObjectId && agent.cooldowns.sabotageUntilTick <= this.state.tick) {
+      if (agent.powerUp) {
+        const distance = vec2Distance(agent.position, target.position);
+        if (agent.powerUp.kind === 'ice_cube' && distance <= ICE_THROW_RADIUS) {
+          return { kind: 'sabotage_agent', agentId: target.id, method: 'ice_cube', label: `freeze ${target.name} with the ice cube` };
+        }
+        const label = agent.powerUp.kind === 'bat'
+          ? `smack ${target.name} with the bat`
+          : `freeze ${target.name} with the ice cube`;
+        return { kind: 'sabotage_agent', agentId: target.id, method: agent.powerUp.kind, label };
+      }
+      return { kind: 'sabotage_agent', agentId: target.id, method: 'bump', label: `bump ${target.name}` };
+    }
+
+    return { kind: 'push_agent', agentId: target.id, label: `push ${target.name}` };
   }
 
   private needsDecision(agent: SimulationAgentState): boolean {
@@ -586,6 +648,7 @@ export class SimulationRuntime {
           agent.goal.kind === 'drop' ||
           agent.goal.kind === 'wait' ||
           agent.goal.kind === 'deliver' ||
+          agent.goal.kind === 'push_agent' ||
           agent.goal.kind === 'sabotage_agent'
         ) {
           agent.goal = null;
@@ -625,6 +688,10 @@ export class SimulationRuntime {
       }
       case 'deliver':
         return agent.holding !== this.state.game.bananaObjectId;
+      case 'push_agent': {
+        const target = this.state.agents.find((entry) => entry.id === goal.agentId);
+        return !target;
+      }
       case 'sabotage_agent': {
         const target = this.state.agents.find((entry) => entry.id === goal.agentId);
         if (!target) return true;
@@ -812,6 +879,23 @@ function summarizeAgent(state: MutableWorldState, agentId: string): JsonValue {
     sabotageCooldownRemainingTicks: Math.max(0, agent.cooldowns.sabotageUntilTick - state.tick),
     score: state.game.score.deliveries[agent.id] ?? 0,
   };
+}
+
+function nearestAgentWithin(
+  self: SimulationAgentState,
+  agents: readonly SimulationAgentState[],
+  maxDistance: number
+): SimulationAgentState | null {
+  let best: { agent: SimulationAgentState; distance: number } | null = null;
+  for (const agent of agents) {
+    if (agent.id === self.id) continue;
+    const distance = vec2Distance(self.position, agent.position);
+    if (distance > maxDistance) continue;
+    if (best == null || distance < best.distance) {
+      best = { agent, distance };
+    }
+  }
+  return best?.agent ?? null;
 }
 
 function jsonVec(position: { readonly x: number; readonly z: number }): JsonValue {
@@ -1110,6 +1194,7 @@ function inferEmotionFromGoal(goal: AgentGoal): string {
     case 'drop':
       return 'alert';
     case 'go_to_agent':
+    case 'push_agent':
     case 'sabotage_agent':
       return 'curious';
     case 'go_to_object':

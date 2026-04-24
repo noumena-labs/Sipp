@@ -1,4 +1,4 @@
-import { GOAL_RADIUS, ICE_THROW_RADIUS, INTERACTION_RADIUS, SABOTAGE_RADIUS } from './reducer.js';
+import { CHASE_MIN_DISTANCE, GOAL_RADIUS, ICE_THROW_RADIUS, INTERACTION_RADIUS, SABOTAGE_RADIUS } from './reducer.js';
 import type {
   AgentPerception,
   DecisionContext,
@@ -15,6 +15,7 @@ export function buildDecisionContext(perception: AgentPerception): DecisionConte
   const goal = findObject(perception, perception.game.goalObjectId);
   const carrier = perception.nearbyAgents.find((agent) => agent.holding === perception.game.bananaObjectId);
   const sabotageCoolingDown = perception.self.cooldowns.sabotageUntilTick > perception.tick;
+  const hasAgentInCloseRange = perception.nearbyAgents.some((agent) => agent.distance <= CHASE_MIN_DISTANCE);
   const powerUps = perception.nearbyObjects
     .filter((object) => object.kind === 'bat' || object.kind === 'ice_cube')
     .sort(compareObjectsForPriority);
@@ -31,18 +32,27 @@ export function buildDecisionContext(perception: AgentPerception): DecisionConte
     return { prompt: lines.join('\n'), options };
   }
 
-  if (perception.self.holding === perception.game.bananaObjectId) {
+  const isCarrier = perception.self.holding === perception.game.bananaObjectId;
+
+  if (isCarrier) {
     addCarrierOptions(options, lines, goal);
   } else {
     addNonCarrierOptions(perception, options, lines, banana, carrier, powerUps, sabotageCoolingDown);
+    addCloseAgentOptions(perception, options, lines, sabotageCoolingDown);
+    addAmbientOptions(perception, options, lines, powerUps);
   }
 
-  addAmbientOptions(perception, options, lines, powerUps);
-  options.push({ label: 'wait', goal: { kind: 'wait', label: 'wait' } });
+  if (!isCarrier && !hasAgentInCloseRange) {
+    options.push({ label: 'wait', goal: { kind: 'wait', label: 'wait' } });
+  }
   dedupeOptionsInPlace(options);
 
-  if (sabotageCoolingDown) {
-    lines.push('Choose your next action from the available options only. Keep moving, reposition, or grab a power-up while your bump cooldown clears.');
+  if (isCarrier) {
+    lines.push('Choose your next action from the available options only. You have the banana, so focus on scoring at home base.');
+  } else if (sabotageCoolingDown) {
+    lines.push(hasAgentInCloseRange
+      ? 'Choose your next action from the available options only. Someone is in contact range, so push them or take another active option instead of idling.'
+      : 'Choose your next action from the available options only. Keep moving, reposition, or grab a power-up while your bump cooldown clears.');
   } else if (perception.self.powerUp) {
     lines.push('Choose your next action from the available options only. A guaranteed slapstick hit with your equipped power-up is valuable if the carrier is reachable.');
   } else {
@@ -123,10 +133,14 @@ function addNonCarrierOptions(
   }
 
   if (carrier) {
+    const carrierIsTooCloseToChase = carrier.distance <= CHASE_MIN_DISTANCE;
     const carrierState = carrier.frozenUntilTick > perception.tick
       ? `${carrier.name} has the banana but is frozen for ${carrier.frozenUntilTick - perception.tick} more ticks.`
       : `${carrier.name} has the banana and is ${qualitativeDistance(carrier.distance)}.`;
     lines.push(carrierState);
+    if (carrierIsTooCloseToChase) {
+      lines.push(`${carrier.name} is too close to chase. Prioritize bumping or using a power-up to knock the banana loose; push is secondary disruption.`);
+    }
 
     if (perception.self.powerUp?.kind === 'ice_cube' && !sabotageCoolingDown) {
       const iceTargets = perception.nearbyAgents
@@ -147,7 +161,7 @@ function addNonCarrierOptions(
           },
         });
       }
-    } else if (perception.self.powerUp && carrier.distance <= SABOTAGE_RADIUS * 1.4 && !sabotageCoolingDown) {
+    } else if (perception.self.powerUp && carrier.distance <= CHASE_MIN_DISTANCE && !sabotageCoolingDown) {
       const label = sabotageLabel(perception.self.powerUp.kind, carrier.name);
       options.push({
         label,
@@ -160,7 +174,7 @@ function addNonCarrierOptions(
       });
     }
 
-    if (carrier.distance <= SABOTAGE_RADIUS * 1.6 && !sabotageCoolingDown) {
+    if (carrier.distance <= CHASE_MIN_DISTANCE && !sabotageCoolingDown) {
       options.push({
         label: `bump ${carrier.name}`,
         goal: { kind: 'sabotage_agent', agentId: carrier.id, method: 'bump', label: `bump ${carrier.name}` },
@@ -169,11 +183,39 @@ function addNonCarrierOptions(
       lines.push('Your regular bump is cooling down, so this is a good moment to reposition or hunt a guaranteed hit.');
     }
 
-    options.push({
-      label: `chase ${carrier.name}`,
-      goal: { kind: 'go_to_agent', agentId: carrier.id, label: `chase ${carrier.name}` },
+    if (!carrierIsTooCloseToChase) {
+      options.push({
+        label: `chase ${carrier.name}`,
+        goal: { kind: 'go_to_agent', agentId: carrier.id, label: `chase ${carrier.name}` },
+      });
+    }
+  }
+}
+
+function addCloseAgentOptions(
+  perception: AgentPerception,
+  options: DecisionOption[],
+  lines: string[],
+  sabotageCoolingDown: boolean
+): void {
+  const closeAgents = perception.nearbyAgents
+    .filter((agent) => agent.distance <= CHASE_MIN_DISTANCE)
+    .filter((agent) => agent.holding !== perception.game.bananaObjectId || sabotageCoolingDown)
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, 3);
+  if (closeAgents.length === 0) return;
+
+  lines.push('Close agents you can shove if bumping is not the better play:');
+  const pushOptions: DecisionOption[] = [];
+  for (const agent of closeAgents) {
+    const label = `push ${agent.name}`;
+    lines.push(`- ${agent.name} (${qualitativeDistance(agent.distance)})`);
+    pushOptions.push({
+      label,
+      goal: { kind: 'push_agent', agentId: agent.id, label },
     });
   }
+  options.push(...pushOptions);
 }
 
 function addAmbientOptions(
@@ -200,7 +242,8 @@ function addAmbientOptions(
   }
 
   if (options.length <= 2 && visibleAgents.length > 0) {
-    const agent = visibleAgents[0]!;
+    const agent = visibleAgents.find((entry) => entry.distance > CHASE_MIN_DISTANCE);
+    if (!agent) return;
     options.push({
       label: `approach ${agent.name}`,
       goal: { kind: 'go_to_agent', agentId: agent.id, label: `approach ${agent.name}` },

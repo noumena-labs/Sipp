@@ -5,7 +5,7 @@ import type { CharacterAgentEngine } from 'cogent-engine/character';
 import { DirectorRuntime, parseDirectorConfig, type JsonValue } from 'cogent-engine/orchestrator';
 
 import { SimulationBus, type SimulationEvent } from './src/runtime/bus.ts';
-import { applyDirectorDecision, type MutableWorldState } from './src/runtime/reducer.ts';
+import { applyDirectorDecision, applyTickFirstPass, type MutableWorldState } from './src/runtime/reducer.ts';
 import { buildRefereeChoices, buildRefereePayload, SimulationRuntime } from './src/runtime/simulation-runtime.ts';
 import { buildDecisionContext } from './src/runtime/decision-context.ts';
 import type {
@@ -595,11 +595,13 @@ test('agent decision context hides bump option while sabotage is cooling down', 
       {
         id: carrier.id,
         name: carrier.name,
-        distance: 0.5,
+        distance: 1.6,
         direction: { x: -1, z: 0 },
         emotion: carrier.emotion,
         status: carrier.status,
         holding: carrier.holding,
+        powerUp: carrier.powerUp?.kind ?? null,
+        frozenUntilTick: carrier.frozenUntilTick,
       },
     ],
     nearbyObjects: [
@@ -608,8 +610,9 @@ test('agent decision context hides bump option while sabotage is cooling down', 
         kind: banana.kind,
         label: banana.label,
         description: banana.description,
-        distance: 0.5,
+        distance: 1.6,
         direction: { x: -1, z: 0 },
+        active: banana.active,
         heldBy: banana.heldBy,
         contested: banana.contested,
         affordances: banana.affordances,
@@ -624,6 +627,7 @@ test('agent decision context hides bump option while sabotage is cooling down', 
         description: home.description,
         distance: 6,
         direction: { x: 1, z: 0 },
+        active: home.active,
         heldBy: home.heldBy,
         contested: home.contested,
         affordances: home.affordances,
@@ -640,10 +644,68 @@ test('agent decision context hides bump option while sabotage is cooling down', 
 
   const decision = buildDecisionContext(perception);
   assert.equal(decision.options.some((option) => option.label === 'bump Carrier'), false);
-  assert.equal(decision.options.some((option) => option.label === 'chase Carrier'), true);
-  assert.match(decision.prompt, /chasing the carrier/);
-  assert.doesNotMatch(decision.prompt, /bumping the carrier over hanging back/);
-  assert.match(decision.prompt, /without bumping again yet/);
+  assert.equal(decision.options.some((option) => option.label === 'chase Carrier'), false);
+  assert.equal(decision.options.some((option) => option.label === 'push Carrier'), true);
+  assert.equal(decision.options.some((option) => option.label === 'wait'), false);
+  assert.match(decision.prompt, /already in contact range/);
+  assert.match(decision.prompt, /Close agents/);
+
+  attacker.cooldowns.sabotageUntilTick = 0;
+  const readyDecision = buildDecisionContext(perception);
+  assert.equal(readyDecision.options.some((option) => option.label === 'bump Carrier'), true);
+  assert.equal(readyDecision.options.some((option) => option.label === 'push Carrier'), false);
+});
+
+test('push relocates a nearby carrier without dropping the banana', () => {
+  const state = createWorldState();
+  state.tick = 10;
+  state.agents.push(
+    createAgent('carrier', 'Carrier', { x: 0, z: 0 }, {
+      speed: 1.2,
+      status: 'carrying the banana to home base',
+      holding: 'banana',
+      intent: { kind: 'go_to_object', objectId: 'home', emotion: 'alert' },
+      goal: { kind: 'deliver', objectId: 'home', label: 'run to home base' },
+    }),
+    createAgent('pusher', 'Pusher', { x: 0.5, z: 0 }, {
+      status: 'pushing Carrier',
+      intent: { kind: 'push', agentId: 'carrier', emotion: 'alert' },
+      goal: { kind: 'push_agent', agentId: 'carrier', label: 'push Carrier' },
+    })
+  );
+  state.objects.push(
+    createObject('banana', 'banana', { x: 0, z: 0 }, {
+      label: 'banana',
+      contested: true,
+      heldBy: 'carrier',
+      tags: ['food'],
+      affordances: [{ kind: 'pick_up', label: 'grab banana' }],
+    }),
+    createObject('home', 'goal', { x: 5, z: 5 }, {
+      label: 'home base',
+      tags: ['goal', 'score'],
+    })
+  );
+  state.game.score.forcedDrops.pusher = 0;
+
+  const result = applyTickFirstPass(state, 0.1);
+  const carrier = state.agents.find((agent) => agent.id === 'carrier')!;
+  const pusher = state.agents.find((agent) => agent.id === 'pusher')!;
+  const banana = state.objects.find((object) => object.id === 'banana')!;
+  const pushEvent = result.events.find((event) => event.kind === 'push');
+
+  assert.ok(pushEvent && pushEvent.kind === 'push');
+  assert.equal(result.events.some((event) => event.kind === 'drop'), false);
+  assert.equal(carrier.holding, 'banana');
+  assert.equal(banana.heldBy, 'carrier');
+  assert.deepEqual(carrier.position, pushEvent.to);
+  assert.deepEqual(banana.position, pushEvent.to);
+  assert.equal(pusher.intent, null);
+  assert.equal(pusher.goal, null);
+  assert.equal(carrier.intent, null);
+  assert.equal(carrier.goal, null);
+  assert.ok(Math.hypot(pushEvent.to.x - pushEvent.from.x, pushEvent.to.z - pushEvent.from.z) > 0.5);
+  assert.equal(state.game.score.forcedDrops.pusher, 0);
 });
 
 test('invalid repeated forced-drop fumble falls back through policy without pausing', async () => {

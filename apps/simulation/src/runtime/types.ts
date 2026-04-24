@@ -29,6 +29,7 @@ export type AgentIntent =
   | { kind: 'pick_up'; objectId: string; emotion: string }
   | { kind: 'drop'; emotion: string }
   | { kind: 'deliver'; objectId: string; emotion: string }
+  | { kind: 'push'; agentId: string; emotion: string }
   | { kind: 'sabotage'; agentId: string; method: SabotageMethod; emotion: string }
   | { kind: 'use'; objectId: string; emotion: string };
 
@@ -185,6 +186,7 @@ export type AgentGoal =
   | { kind: 'go_to_agent'; agentId: string; label: string }
   | { kind: 'object_action'; objectId: string; affordance: ObjectAffordance; label: string }
   | { kind: 'deliver'; objectId: string; label: string }
+  | { kind: 'push_agent'; agentId: string; label: string }
   | { kind: 'sabotage_agent'; agentId: string; method: SabotageMethod; label: string }
   | { kind: 'drop'; label: string };
 
@@ -277,6 +279,14 @@ export type SimulationGameEvent =
       readonly kind: 'bump_whiff';
       readonly attackerAgentId: string;
       readonly targetAgentId: string;
+      readonly position: Vec2;
+    }
+  | {
+      readonly kind: 'push';
+      readonly agentId: string;
+      readonly targetAgentId: string;
+      readonly from: Vec2;
+      readonly to: Vec2;
       readonly position: Vec2;
     }
   | {

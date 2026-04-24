@@ -516,6 +516,29 @@ export function bindWorldToScene(
         spawnBurst(event.position, 0xf4d35e, 7, 0.22);
         return;
       }
+      case 'push': {
+        const pusher = agents.get(event.agentId);
+        const target = agents.get(event.targetAgentId);
+        if (pusher) {
+          pusher.glyphOverride = '✋';
+          pusher.glyphOverrideUntil = elapsedSeconds + 0.3;
+          pusher.flashColor = new THREE.Color(0xffc107);
+          pusher.flashUntil = elapsedSeconds + FLASH_SECONDS;
+        }
+        if (target) {
+          target.glyphOverride = '💨';
+          target.glyphOverrideUntil = elapsedSeconds + 0.38;
+          target.flashColor = new THREE.Color(0xff8a80);
+          target.flashUntil = elapsedSeconds + FLASH_SECONDS;
+          target.joltUntil = elapsedSeconds + IMPACT_SECONDS;
+          target.joltDirection = {
+            x: event.to.x - event.from.x,
+            z: event.to.z - event.from.z,
+          };
+        }
+        spawnBurst(event.position, 0xf4d35e, 10, 0.26);
+        return;
+      }
       case 'power_up_throw': {
         const attacker = agents.get(event.agentId);
         if (attacker) {
@@ -739,7 +762,8 @@ function resolveIntentTarget(intent: AgentIntent | null, snap: WorldSnapshot): V
       const target = snap.objects.find((object) => object.id === intent.objectId);
       return target?.position ?? null;
     }
-    case 'approach_agent': {
+    case 'approach_agent':
+    case 'push': {
       const target = snap.agents.find((agent) => agent.id === intent.agentId);
       return target?.position ?? null;
     }
@@ -793,6 +817,8 @@ function activityGlyphFor(agent: SimulationAgentState, snap: WorldSnapshot): str
       return intent.method === 'bat' ? '🏏' : intent.method === 'ice_cube' ? '🧊' : '💥';
     case 'approach_agent':
       return '👀';
+    case 'push':
+      return '✋';
     case 'wait':
       return '⏳';
     case 'drop':
@@ -815,6 +841,8 @@ function glyphForIntent(intent: AgentIntent): string {
       return intent.method === 'bat' ? '🏏' : intent.method === 'ice_cube' ? '🧊' : '💥';
     case 'approach_agent':
       return '👀';
+    case 'push':
+      return '✋';
     case 'wait':
       return '⏳';
     case 'drop':

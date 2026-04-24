@@ -603,6 +603,8 @@ function describeGameEvent(
       return `${nameOf(event.targetAgentId, snapshot)} keeps hold through the bump.`;
     case 'bump_whiff':
       return `${nameOf(event.attackerAgentId, snapshot)} lunges at ${nameOf(event.targetAgentId, snapshot)} and whiffs the bump.`;
+    case 'push':
+      return `${nameOf(event.agentId, snapshot)} pushes ${nameOf(event.targetAgentId, snapshot)} away.`;
     case 'power_up_throw':
       return `${nameOf(event.agentId, snapshot)} hurls an ice cube at ${nameOf(event.targetAgentId, snapshot)}.`;
     case 'power_up_use':

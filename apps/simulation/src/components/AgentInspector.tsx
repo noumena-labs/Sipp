@@ -37,6 +37,8 @@ function formatIntent(agent: SimulationAgentState): string {
       return 'drop';
     case 'deliver':
       return `deliver ${intent.objectId}`;
+    case 'push':
+      return `push ${intent.agentId}`;
     case 'sabotage':
       return `${intent.method === 'bat' ? 'bat' : intent.method === 'ice_cube' ? 'ice' : 'bump'} ${intent.agentId}`;
     case 'use':
@@ -68,6 +70,8 @@ function formatActivity(agent: SimulationAgentState, bananaObjectId: string, tic
       return `reaching for ${intent.objectId}`;
     case 'approach_agent':
       return `chasing ${intent.agentId}`;
+    case 'push':
+      return `pushing ${intent.agentId}`;
     case 'sabotage':
       return intent.method === 'bat'
         ? `lining up a bat smack on ${intent.agentId}`
