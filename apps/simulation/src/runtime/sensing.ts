@@ -63,6 +63,7 @@ export function buildPerception(
       id: obj.id,
       kind: obj.kind,
       label: obj.label,
+      description: obj.description,
       distance,
       direction: vec2Direction(self.position, obj.position),
       heldBy: obj.heldBy,

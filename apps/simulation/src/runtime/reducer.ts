@@ -766,7 +766,9 @@ function dropHeldObject(
   if (!agent.holding) return;
   const previousCarrierId = agent.id;
   const from = { x: agent.position.x, z: agent.position.z };
-  const to = chooseDropLandingPoint(state, from);
+  const to = cause === 'forced'
+    ? chooseForcedDropLandingPoint(state, agent)
+    : chooseVoluntaryDropLandingPoint(state, from);
   const held = getObject(state, agent.holding);
   if (held) {
     held.heldBy = null;
@@ -782,7 +784,7 @@ function dropHeldObject(
   events.push({ kind: 'drop', agentId: agent.id, objectId, from, to, cause });
 }
 
-function chooseDropLandingPoint(state: MutableWorldState, origin: Vec2): Vec2 {
+function chooseVoluntaryDropLandingPoint(state: MutableWorldState, origin: Vec2): Vec2 {
   const radii = [0.9, 0.75, 1.1, 0.55];
   for (const radius of radii) {
     for (let i = 0; i < 10; i += 1) {
@@ -797,6 +799,134 @@ function chooseDropLandingPoint(state: MutableWorldState, origin: Vec2): Vec2 {
     }
   }
   return { x: origin.x, z: origin.z };
+}
+
+function chooseForcedDropLandingPoint(
+  state: MutableWorldState,
+  carrier: SimulationAgentState
+): Vec2 {
+  const origin = carrier.position;
+  const nearbyAgents = state.agents.filter((agent) => vec2Distance(agent.position, origin) <= 3.5);
+  const crowdCenter = nearbyAgents.length > 0
+    ? averagePosition(nearbyAgents.map((agent) => agent.position))
+    : origin;
+  const awayFromCrowd = normalizeVec({
+    x: origin.x - crowdCenter.x,
+    z: origin.z - crowdCenter.z,
+  });
+  const fallbackDirection = {
+    x: Math.sin(carrier.heading || 0),
+    z: Math.cos(carrier.heading || 0),
+  };
+  const baseDirection = normalizeVec(awayFromCrowd) ?? normalizeVec(fallbackDirection) ?? { x: 0, z: 1 };
+  const radii = [2.6, 3.1, 3.6, 4.2, 4.8];
+  const candidateAngles = [0, Math.PI / 8, -Math.PI / 8, Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2, Math.PI, Math.PI * 0.75, -Math.PI * 0.75];
+
+  let best: { point: Vec2; score: number } | null = null;
+  for (const radius of radii) {
+    for (const angleOffset of candidateAngles) {
+      const direction = rotateVec(baseDirection, angleOffset);
+      const candidate = clampToBounds(
+        {
+          x: origin.x + direction.x * radius,
+          z: origin.z + direction.z * radius,
+        },
+        state.bounds
+      );
+      const score = scoreForcedDropCandidate(state, candidate, carrier.id);
+      if (score == null) continue;
+      if (best == null || score > best.score) {
+        best = { point: candidate, score };
+      }
+    }
+  }
+
+  if (best) {
+    return best.point;
+  }
+
+  const fallback = chooseVoluntaryDropLandingPoint(state, origin);
+  if (fallback.x !== origin.x || fallback.z !== origin.z) {
+    return fallback;
+  }
+
+  return clampToBounds(
+    {
+      x: origin.x + baseDirection.x * 2.4,
+      z: origin.z + baseDirection.z * 2.4,
+    },
+    state.bounds
+  );
+}
+
+function scoreForcedDropCandidate(
+  state: MutableWorldState,
+  candidate: Vec2,
+  carrierId: string
+): number | null {
+  if (findBlockingObject(candidate, state.objects)) return null;
+
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  let nearbyPenalty = 0;
+  for (const agent of state.agents) {
+    const distance = vec2Distance(agent.position, candidate);
+    if (agent.id === carrierId && distance < AGENT_RADIUS * 3.6) return null;
+    if (distance < AGENT_RADIUS * 2.4) return null;
+    nearestDistance = Math.min(nearestDistance, distance);
+    nearbyPenalty += Math.max(0, 2.6 - distance);
+  }
+
+  const goal = getObject(state, state.game.goalObjectId);
+  if (goal && vec2Distance(goal.position, candidate) < GOAL_RADIUS + 0.6) {
+    return null;
+  }
+
+  const banana = getObject(state, state.game.bananaObjectId);
+  let obstacleClearance = 0;
+  for (const object of state.objects) {
+    if (object.id === banana?.id) continue;
+    const distance = vec2Distance(object.position, candidate) - object.collisionRadius;
+    obstacleClearance = Math.max(obstacleClearance, Math.max(0, 1.4 - distance));
+  }
+
+  return nearestDistance * 2.4 - nearbyPenalty * 1.7 - obstacleClearance;
+}
+
+function averagePosition(points: readonly Vec2[]): Vec2 {
+  if (points.length === 0) {
+    return { x: 0, z: 0 };
+  }
+
+  let totalX = 0;
+  let totalZ = 0;
+  for (const point of points) {
+    totalX += point.x;
+    totalZ += point.z;
+  }
+  return {
+    x: totalX / points.length,
+    z: totalZ / points.length,
+  };
+}
+
+function normalizeVec(vector: Vec2): Vec2 | null {
+  const length = Math.sqrt(vector.x * vector.x + vector.z * vector.z);
+  if (length < 1e-6) {
+    return null;
+  }
+  return {
+    x: vector.x / length,
+    z: vector.z / length,
+  };
+}
+
+function rotateVec(vector: Vec2, angle: number): Vec2 {
+  const sin = Math.sin(angle);
+  const cos = Math.cos(angle);
+  return {
+    x: vector.x * cos - vector.z * sin,
+    z: vector.x * sin + vector.z * cos,
+  };
 }
 
 function clearCarrierPursuits(state: MutableWorldState, carrierId: string): void {

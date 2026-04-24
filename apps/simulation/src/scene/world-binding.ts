@@ -28,6 +28,7 @@ const CONFETTI_SECONDS = 0.9;
 const DROP_ARC_SECONDS = 0.75;
 
 interface AgentEntry {
+  name: string;
   readonly visual: AgentVisual;
   readonly targetMarker: THREE.Mesh;
   readonly targetLine: THREE.Line;
@@ -47,8 +48,12 @@ interface AgentEntry {
 }
 
 interface ObjectEntry {
+  readonly id: string;
   readonly visual: ObjectVisual;
   kind: string;
+  label: string;
+  description: string;
+  collisionRadius: number;
   targetX: number;
   targetZ: number;
   heldBy: string | null;
@@ -73,7 +78,15 @@ interface BurstEffect {
 export interface WorldBinding {
   applySnapshot(snapshot: WorldSnapshot): void;
   dispose(): void;
+  pickObject(ray: THREE.Ray): HoveredSceneObject | null;
   setHighlightedAgent(agentId: string | null): void;
+  setHoveredObject(objectId: string | null): void;
+}
+
+export interface HoveredSceneObject {
+  readonly id: string;
+  readonly label: string;
+  readonly description: string;
 }
 
 export function bindWorldToScene(
@@ -84,12 +97,17 @@ export function bindWorldToScene(
   const agents = new Map<string, AgentEntry>();
   const objects = new Map<string, ObjectEntry>();
   const bursts = new Set<BurstEffect>();
+  const hoverPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   let highlightedAgent: string | null = null;
+  let hoveredObject: string | null = null;
   let elapsedSeconds = 0;
 
   const ensureAgent = (id: string, name: string): AgentEntry => {
     let entry = agents.get(id);
-    if (entry) return entry;
+    if (entry) {
+      entry.name = name;
+      return entry;
+    }
     const colorHex = AGENT_COLOR_BY_ID.get(id) ?? '#c0c0c0';
     const baseColor = new THREE.Color(colorHex);
     const visual = createAgentVisual(name, colorHex);
@@ -122,6 +140,7 @@ export function bindWorldToScene(
     worldRoot.add(targetLine);
 
     entry = {
+      name,
       visual,
       targetMarker,
       targetLine,
@@ -144,13 +163,37 @@ export function bindWorldToScene(
     return entry;
   };
 
-  const ensureObject = (id: string, kind: string): ObjectEntry => {
+  const ensureObject = (
+    id: string,
+    kind: string,
+    label: string,
+    description: string,
+    collisionRadius: number
+  ): ObjectEntry => {
     let entry = objects.get(id);
-    if (entry) return entry;
+    if (entry) {
+      entry.kind = kind;
+      entry.label = label;
+      entry.description = description;
+      entry.collisionRadius = collisionRadius;
+      return entry;
+    }
     const visual = createObjectVisual(kind);
     worldRoot.add(visual.root);
-    entry = { visual, kind, targetX: 0, targetZ: 0, heldBy: null, toss: null };
+    entry = {
+      id,
+      visual,
+      kind,
+      label,
+      description,
+      collisionRadius,
+      targetX: 0,
+      targetZ: 0,
+      heldBy: null,
+      toss: null,
+    };
     objects.set(id, entry);
+    entry.visual.setHovered(id === hoveredObject);
     return entry;
   };
 
@@ -184,7 +227,7 @@ export function bindWorldToScene(
     const seenObjects = new Set<string>();
     for (const o of snap.objects) {
       seenObjects.add(o.id);
-      const entry = ensureObject(o.id, o.kind);
+      const entry = ensureObject(o.id, o.kind, o.label, o.description, o.collisionRadius);
       entry.targetX = o.position.x;
       entry.targetZ = o.position.z;
       if (entry.heldBy !== o.heldBy) {
@@ -194,6 +237,9 @@ export function bindWorldToScene(
     }
     for (const [id, entry] of objects) {
       if (!seenObjects.has(id)) {
+        if (hoveredObject === id) {
+          hoveredObject = null;
+        }
         worldRoot.remove(entry.visual.root);
         entry.visual.dispose();
         objects.delete(id);
@@ -486,10 +532,46 @@ export function bindWorldToScene(
       objects.clear();
       bursts.clear();
     },
+    pickObject(ray) {
+      const point = new THREE.Vector3();
+      if (!ray.intersectPlane(hoverPlane, point)) {
+        return null;
+      }
+
+      let best: { entry: ObjectEntry; score: number } | null = null;
+      for (const entry of objects.values()) {
+        const position = entry.visual.root.position;
+        const dx = point.x - position.x;
+        const dz = point.z - position.z;
+        const distance = Math.sqrt(dx * dx + dz * dz);
+        const hoverRadius = Math.max(0.65, entry.collisionRadius + 0.32);
+        if (distance > hoverRadius) continue;
+        const score = distance / hoverRadius;
+        if (best == null || score < best.score) {
+          best = { entry, score };
+        }
+      }
+
+      if (!best) {
+        return null;
+      }
+
+      return {
+        id: best.entry.id,
+        label: best.entry.label,
+        description: best.entry.description,
+      };
+    },
     setHighlightedAgent(agentId) {
       highlightedAgent = agentId;
       for (const [id, entry] of agents) {
         entry.visual.setHighlighted(id === agentId);
+      }
+    },
+    setHoveredObject(objectId) {
+      hoveredObject = objectId;
+      for (const [id, entry] of objects) {
+        entry.visual.setHovered(id === objectId);
       }
     },
   };

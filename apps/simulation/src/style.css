@@ -76,6 +76,12 @@ html, body, #app {
   justify-content: center;
 }
 
+.sim-bottom-right {
+  right: 16px;
+  bottom: 16px;
+  width: min(320px, calc(100vw - 32px));
+}
+
 .glass-panel {
   background: rgba(22, 27, 42, 0.82);
   backdrop-filter: blur(10px);
@@ -385,6 +391,27 @@ html, body, #app {
   background: rgba(255, 209, 102, 0.16);
   color: #ffe39a;
   border-color: rgba(255, 209, 102, 0.3);
+}
+
+.hover-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 12px 14px;
+}
+
+.hover-card-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+  text-transform: capitalize;
+}
+
+.hover-card-copy {
+  color: #d5def0;
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .director-ruling {

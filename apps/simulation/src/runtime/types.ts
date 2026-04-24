@@ -51,6 +51,7 @@ export interface SimulationObjectState {
   readonly id: string;
   readonly kind: string;
   readonly label: string;
+  readonly description: string;
   position: Vec2;
   readonly contested: boolean;
   heldBy: string | null;
@@ -109,6 +110,7 @@ export interface PerceivedObject {
   readonly id: string;
   readonly kind: string;
   readonly label: string;
+  readonly description: string;
   readonly distance: number;
   readonly direction: Vec2;
   readonly heldBy: string | null;
@@ -239,6 +241,7 @@ export interface ScenarioObjectSeed {
   readonly id: string;
   readonly kind: string;
   readonly label?: string;
+  readonly description?: string;
   readonly position: Vec2;
   readonly contested?: boolean;
   readonly tags?: readonly string[];

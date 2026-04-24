@@ -34,6 +34,7 @@ import type {
   WorldConflict,
   WorldSnapshot,
 } from './runtime/types.js';
+import type { HoveredSceneObject } from './scene/world-binding.js';
 
 interface LoadedHarness {
   readonly engine: CogentEngine;
@@ -50,6 +51,8 @@ interface DirectorPanelState {
 
 export default function App() {
   const bus = useMemo(() => new SimulationBus(), []);
+  const appRef = useRef<HTMLDivElement | null>(null);
+  const inspectorRef = useRef<HTMLDivElement | null>(null);
   const [modelUrl, setModelUrl] = useState('');
   const [status, setStatus] = useState('Idle. Paste a .gguf URL and press Load.');
   const [busy, setBusy] = useState(false);
@@ -59,6 +62,7 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<WorldSnapshot | null>(null);
   const [events, setEvents] = useState<EventLogEntry[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [hoveredObject, setHoveredObject] = useState<HoveredSceneObject | null>(null);
   const [eventLogCollapsed, setEventLogCollapsed] = useState(true);
   const eventIdRef = useRef(0);
   const snapshotRef = useRef<WorldSnapshot | null>(null);
@@ -375,12 +379,38 @@ export default function App() {
   const directorNote = directorState.note?.trim() || null;
   const showDirectorNote = directorNote != null && directorNote !== directorDetail;
 
+  useEffect(() => {
+    const app = appRef.current;
+    if (!app) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent): void => {
+      if (selectedAgentId == null) {
+        return;
+      }
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+      if (inspectorRef.current?.contains(target)) {
+        return;
+      }
+      setSelectedAgentId(null);
+    };
+
+    app.addEventListener('pointerdown', handlePointerDown);
+    return () => app.removeEventListener('pointerdown', handlePointerDown);
+  }, [selectedAgentId]);
+
   return (
-    <div className="sim-app">
+    <div ref={appRef} className="sim-app">
       <SimulationCanvas
         bus={bus}
         bounds={COURTYARD_SCENARIO.bounds ?? { halfExtent: 8 }}
         highlightedAgentId={selectedAgentId}
+        onBackgroundClick={() => setSelectedAgentId(null)}
+        onHoverObject={setHoveredObject}
         snapshot={snapshot}
       />
 
@@ -402,7 +432,7 @@ export default function App() {
         />
       </div>
 
-      <div className="sim-overlay sim-top-right">
+      <div ref={inspectorRef} className="sim-overlay sim-top-right">
         <AgentInspector
           agents={agents}
           selectedAgentId={selectedAgentId}
@@ -433,6 +463,16 @@ export default function App() {
             </div>
             {directorDetail ? <span className="director-detail">{directorDetail}</span> : null}
             {showDirectorNote ? <span className="director-quote">{directorNote}</span> : null}
+          </div>
+        </div>
+      ) : null}
+
+      {hoveredObject ? (
+        <div className="sim-overlay sim-bottom-right">
+          <div className="hover-card glass-panel">
+            <span className="panel-eyebrow">Inspecting</span>
+            <span className="hover-card-title">{hoveredObject.label}</span>
+            <span className="hover-card-copy">{hoveredObject.description}</span>
           </div>
         </div>
       ) : null}

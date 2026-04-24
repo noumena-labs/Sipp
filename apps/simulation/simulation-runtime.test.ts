@@ -5,6 +5,7 @@ import type { CharacterAgentEngine } from 'cogent-engine/character';
 import { DirectorRuntime, parseDirectorConfig } from 'cogent-engine/orchestrator';
 
 import { SimulationBus, type SimulationEvent } from './src/runtime/bus.ts';
+import { applyDirectorDecision, type MutableWorldState } from './src/runtime/reducer.ts';
 import { SimulationRuntime } from './src/runtime/simulation-runtime.ts';
 import type { SimulationAgentState, SimulationObjectState, Vec2 } from './src/runtime/types.ts';
 
@@ -133,6 +134,7 @@ function createObject(
     id,
     kind,
     label: kind,
+    description: kind,
     position,
     contested: false,
     heldBy: null,
@@ -141,6 +143,30 @@ function createObject(
     blocksMovement: false,
     collisionRadius: 0.45,
     ...overrides,
+  };
+}
+
+function createWorldState(): MutableWorldState {
+  return {
+    tick: 0,
+    timeSeconds: 0,
+    bounds: { halfExtent: 8 },
+    agents: [],
+    objects: [],
+    directorNote: null,
+    game: {
+      title: 'Banana Dash',
+      bananaObjectId: 'banana',
+      goalObjectId: 'home',
+      bananaSpawnPoints: [{ x: -4, z: -4 }],
+      score: {
+        deliveries: {},
+        forcedDrops: {},
+      },
+      referee: { status: 'idle' },
+      pendingRespawn: null,
+      nextSpawnIndex: 0,
+    },
   };
 }
 
@@ -236,4 +262,96 @@ test('SimulationRuntime reports referee timeout without forcing a fallback rulin
   } finally {
     await runtime.dispose();
   }
+});
+
+test('forced drops throw the banana away from the carrier scrum', () => {
+  const state = createWorldState();
+  state.tick = 10;
+  state.agents.push(
+    createAgent('carrier', 'Carrier', { x: 0, z: 0 }, {
+      heading: 0,
+      status: 'carrying the banana to home base',
+      holding: 'banana',
+      intent: { kind: 'go_to_object', objectId: 'home', emotion: 'alert' },
+      goal: { kind: 'deliver', objectId: 'home', label: 'run to home base' },
+    }),
+    createAgent('attacker', 'Attacker', { x: 0.45, z: 0 }, {
+      status: 'lining up a bump',
+      intent: { kind: 'sabotage', agentId: 'carrier', emotion: 'alert' },
+      goal: { kind: 'sabotage_agent', agentId: 'carrier', label: 'bump Carrier' },
+    }),
+    createAgent('shadow-1', 'Shadow 1', { x: -0.55, z: 0.15 }),
+    createAgent('shadow-2', 'Shadow 2', { x: 0.2, z: 0.75 })
+  );
+  state.objects.push(
+    createObject('banana', 'banana', { x: 0, z: 0 }, {
+      label: 'banana',
+      description: 'The bright yellow banana every agent is scrambling to carry home.',
+      contested: true,
+      heldBy: 'carrier',
+      tags: ['food'],
+      affordances: [{ kind: 'pick_up', label: 'grab banana' }],
+      collisionRadius: 0.2,
+    }),
+    createObject('home', 'goal', { x: 0, z: -6 }, {
+      label: 'home base',
+      description: 'The shared scoring circle where a carrier cashes in the banana.',
+      tags: ['goal', 'score'],
+      collisionRadius: 1.2,
+    }),
+    createObject('rock', 'rock', { x: 2.8, z: -0.6 }, {
+      label: 'rock',
+      description: 'A blocking rock.',
+      blocksMovement: true,
+      collisionRadius: 0.55,
+      tags: ['obstacle'],
+    })
+  );
+  state.game.score.deliveries.carrier = 0;
+  state.game.score.forcedDrops.attacker = 0;
+  state.game.score.forcedDrops.carrier = 0;
+  state.game.referee = {
+    status: 'ruling',
+    startedAtTick: state.tick,
+    conflict: {
+      id: 'drop:attacker:carrier:10',
+      kind: 'forced_drop',
+      attackerAgentId: 'attacker',
+      targetAgentId: 'carrier',
+      objectId: 'banana',
+    },
+  };
+
+  const events = applyDirectorDecision(state, {
+    note: 'The referee rules that the hit jars the banana loose.',
+    resolutions: [
+      {
+        conflictId: 'drop:attacker:carrier:10',
+        objectId: 'banana',
+        winnerAgentId: null,
+        outcome: 'drop',
+      },
+    ],
+  });
+
+  const banana = state.objects.find((object) => object.id === 'banana');
+  const carrier = state.agents.find((agent) => agent.id === 'carrier');
+  assert.ok(banana);
+  assert.ok(carrier);
+  assert.equal(banana.heldBy, null);
+  assert.equal(carrier.holding, null);
+  assert.equal(state.game.score.forcedDrops.attacker, 1);
+
+  const carrierDistance = Math.hypot(banana.position.x - carrier.position.x, banana.position.z - carrier.position.z);
+  assert.ok(carrierDistance >= 2.4, `expected banana to land well clear of the carrier scrum, got ${carrierDistance.toFixed(2)}`);
+
+  const nearestAgentDistance = Math.min(
+    ...state.agents.map((agent) => Math.hypot(banana.position.x - agent.position.x, banana.position.z - agent.position.z))
+  );
+  assert.ok(nearestAgentDistance >= 0.9, `expected banana to avoid immediate re-capture, got nearest agent distance ${nearestAgentDistance.toFixed(2)}`);
+
+  const dropEvent = events.find((event) => event.kind === 'drop');
+  const forcedDropEvent = events.find((event) => event.kind === 'forced_drop');
+  assert.ok(dropEvent && dropEvent.kind === 'drop');
+  assert.ok(forcedDropEvent && forcedDropEvent.kind === 'forced_drop');
 });

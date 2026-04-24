@@ -14,6 +14,7 @@ export interface ObjectVisual {
   readonly root: THREE.Group;
   setPosition(x: number, z: number): void;
   setHeldBy(heldBy: string | null): void;
+  setHovered(hovered: boolean): void;
   dispose(): void;
 }
 
@@ -51,21 +52,38 @@ export function createObjectVisual(kind: string): ObjectVisual {
     roughness: 0.6,
     metalness: 0.05,
   });
+  const hoverEmissive = new THREE.Color(spec.color).multiplyScalar(0.28);
   const mesh = new THREE.Mesh(spec.geometry, material);
   mesh.position.y = spec.y;
 
   const root = new THREE.Group();
   root.add(mesh);
 
+  let heldBy: string | null = null;
+  let hovered = false;
+
+  const applyVisualState = (): void => {
+    mesh.position.y = heldBy ? spec.y + 0.8 : spec.y;
+    const carryScale = heldBy ? 1.45 : 1;
+    const hoverScale = hovered ? 1.1 : 1;
+    mesh.scale.setScalar(carryScale * hoverScale);
+    material.emissive.copy(hovered ? hoverEmissive : new THREE.Color(0x000000));
+  };
+
+  applyVisualState();
+
   return {
     root,
     setPosition(x, z) {
       root.position.set(x, 0, z);
     },
-    setHeldBy(heldBy) {
-      // Lift the object slightly when carried so it reads as "picked up".
-      mesh.position.y = heldBy ? spec.y + 0.8 : spec.y;
-      mesh.scale.setScalar(heldBy ? 1.45 : 1);
+    setHeldBy(nextHeldBy) {
+      heldBy = nextHeldBy;
+      applyVisualState();
+    },
+    setHovered(nextHovered) {
+      hovered = nextHovered;
+      applyVisualState();
     },
     dispose() {
       spec.geometry.dispose();
