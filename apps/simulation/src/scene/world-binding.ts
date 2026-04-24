@@ -27,8 +27,10 @@ const FLASH_SECONDS = 0.32;
 const IMPACT_SECONDS = 0.28;
 const CONFETTI_SECONDS = 0.9;
 const DROP_ARC_SECONDS = 0.75;
-const ICE_THROW_ARC_SECONDS = 0.64;
+const ICE_THROW_SECONDS_PER_TICK = 0.16;
 const FROZEN_SHAKE_SECONDS = 0.18;
+const ICE_PROJECTILE_STALE_SECONDS = 1.2;
+const ICE_PATH_SEGMENTS = 16;
 
 interface AgentEntry {
   name: string;
@@ -82,13 +84,17 @@ interface BurstEffect {
 }
 
 interface ProjectileEffect {
+  readonly objectId: string;
+  readonly targetAgentId: string;
   readonly root: THREE.Group;
+  readonly path: THREE.Line;
   readonly startX: number;
   readonly startZ: number;
   readonly endX: number;
   readonly endZ: number;
   readonly startAt: number;
   readonly endAt: number;
+  readonly expireAt: number;
   dispose(): void;
 }
 
@@ -407,18 +413,22 @@ export function bindWorldToScene(
     }
 
     for (const projectile of Array.from(projectiles)) {
-      if (projectile.endAt <= elapsedSeconds) {
+      if (projectile.expireAt <= elapsedSeconds) {
         projectile.dispose();
         projectiles.delete(projectile);
         continue;
       }
       const progress = clamp01((elapsedSeconds - projectile.startAt) / (projectile.endAt - projectile.startAt));
+      const target = agents.get(projectile.targetAgentId);
+      const endX = target?.visual.root.position.x ?? projectile.endX;
+      const endZ = target?.visual.root.position.z ?? projectile.endZ;
       const arcHeight = Math.sin(progress * Math.PI) * 1.15;
-      projectile.root.position.x = lerp(projectile.startX, projectile.endX, progress);
-      projectile.root.position.z = lerp(projectile.startZ, projectile.endZ, progress);
+      projectile.root.position.x = lerp(projectile.startX, endX, progress);
+      projectile.root.position.z = lerp(projectile.startZ, endZ, progress);
       projectile.root.position.y = 0.48 + arcHeight;
       projectile.root.rotation.x += dt * 6;
       projectile.root.rotation.z += dt * 5.5;
+      updateIceProjectilePath(projectile, endX, endZ, progress);
     }
 
     for (const burst of Array.from(bursts)) {
@@ -547,7 +557,13 @@ export function bindWorldToScene(
           attacker.flashColor = new THREE.Color(0x8fe7ff);
           attacker.flashUntil = elapsedSeconds + FLASH_SECONDS;
         }
-        spawnIceProjectile(event.from, event.targetAtLaunch);
+        spawnIceProjectile(
+          event.objectId,
+          event.targetAgentId,
+          event.from,
+          event.targetAtLaunch,
+          event.impactTick - event.launchedAtTick
+        );
         return;
       }
       case 'power_up_use': {
@@ -560,17 +576,23 @@ export function bindWorldToScene(
           attacker.flashUntil = elapsedSeconds + FLASH_SECONDS;
         }
         if (target) {
+          if (event.effect === 'freeze') {
+            target.iceShell.visible = true;
+          }
           target.glyphOverride = event.effect === 'freeze' ? '⛄' : '💢';
           target.glyphOverrideUntil = elapsedSeconds + 0.4;
           target.flashColor = new THREE.Color(event.effect === 'freeze' ? 0x8fe7ff : 0xff8a80);
           target.flashUntil = elapsedSeconds + 0.5;
-          target.joltUntil = elapsedSeconds + IMPACT_SECONDS;
+          target.joltUntil = elapsedSeconds + (event.effect === 'freeze' ? FROZEN_SHAKE_SECONDS : IMPACT_SECONDS);
           target.joltDirection = attacker
             ? {
                 x: target.visual.root.position.x - attacker.visual.root.position.x,
                 z: target.visual.root.position.z - attacker.visual.root.position.z,
               }
             : { x: 0.1, z: 0.1 };
+        }
+        if (event.effect === 'freeze') {
+          consumeIceProjectile(event.objectId, event.targetAgentId);
         }
         spawnBurst(event.position, event.effect === 'freeze' ? 0x8fe7ff : 0xffc86a, 14, 0.34);
         return;
@@ -651,7 +673,8 @@ export function bindWorldToScene(
     });
   }
 
-  function spawnIceProjectile(from: Vec2, to: Vec2): void {
+  function spawnIceProjectile(objectId: string, targetAgentId: string, from: Vec2, to: Vec2, travelTickCount: number): void {
+    consumeIceProjectile(objectId, targetAgentId);
     const root = new THREE.Group();
     const cube = new THREE.Mesh(
       new THREE.BoxGeometry(0.28, 0.28, 0.28),
@@ -661,19 +684,40 @@ export function bindWorldToScene(
     root.add(cube);
     root.position.set(from.x, 0.48, from.z);
     worldRoot.add(root);
+    const path = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(Array.from({ length: ICE_PATH_SEGMENTS + 1 }, () => new THREE.Vector3(from.x, 0.08, from.z))),
+      new THREE.LineBasicMaterial({ color: 0x8fe7ff, transparent: true, opacity: 0.5, depthWrite: false })
+    );
+    worldRoot.add(path);
+    const duration = Math.max(0.18, travelTickCount * ICE_THROW_SECONDS_PER_TICK);
     projectiles.add({
+      objectId,
+      targetAgentId,
       root,
+      path,
       startX: from.x,
       startZ: from.z,
       endX: to.x,
       endZ: to.z,
       startAt: elapsedSeconds,
-      endAt: elapsedSeconds + ICE_THROW_ARC_SECONDS,
+      endAt: elapsedSeconds + duration,
+      expireAt: elapsedSeconds + duration + ICE_PROJECTILE_STALE_SECONDS,
       dispose: () => {
         worldRoot.remove(root);
+        worldRoot.remove(path);
         disposeObject3D(root);
+        path.geometry.dispose();
+        (path.material as THREE.Material).dispose();
       },
     });
+  }
+
+  function consumeIceProjectile(objectId: string, targetAgentId: string): void {
+    for (const projectile of Array.from(projectiles)) {
+      if (projectile.objectId !== objectId || projectile.targetAgentId !== targetAgentId) continue;
+      projectile.dispose();
+      projectiles.delete(projectile);
+    }
   }
 
   return {
@@ -925,6 +969,22 @@ function disposeTargetVisuals(entry: AgentEntry): void {
   (entry.targetMarker.material as THREE.Material).dispose();
   entry.targetLine.geometry.dispose();
   (entry.targetLine.material as THREE.Material).dispose();
+}
+
+function updateIceProjectilePath(projectile: ProjectileEffect, endX: number, endZ: number, progress: number): void {
+  const points: THREE.Vector3[] = [];
+  const visibleProgress = Math.max(0.08, progress);
+  for (let i = 0; i <= ICE_PATH_SEGMENTS; i += 1) {
+    const t = (i / ICE_PATH_SEGMENTS) * visibleProgress;
+    points.push(new THREE.Vector3(
+      lerp(projectile.startX, endX, t),
+      0.08 + Math.sin(t * Math.PI) * 0.38,
+      lerp(projectile.startZ, endZ, t)
+    ));
+  }
+  projectile.path.geometry.setFromPoints(points);
+  const material = projectile.path.material as THREE.LineBasicMaterial;
+  material.opacity = 0.18 + 0.42 * (1 - progress * 0.35);
 }
 
 function lerp(a: number, b: number, t: number): number {

@@ -297,7 +297,8 @@ export type SimulationGameEvent =
       readonly powerUp: 'ice_cube';
       readonly from: Vec2;
       readonly targetAtLaunch: Vec2;
-      readonly travelTicks: number;
+      readonly launchedAtTick: number;
+      readonly impactTick: number;
     }
   | {
       readonly kind: 'power_up_use';

@@ -1128,7 +1128,8 @@ function launchIceThrow(
     powerUp: 'ice_cube',
     from: { x: attacker.position.x, z: attacker.position.z },
     targetAtLaunch: { x: target.position.x, z: target.position.z },
-    travelTicks: ICE_THROW_TRAVEL_TICKS,
+    launchedAtTick: state.tick,
+    impactTick: state.tick + ICE_THROW_TRAVEL_TICKS,
   });
   scheduleRespawnFromRule(state, powerUp.objectId);
 }
