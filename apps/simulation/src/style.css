@@ -201,6 +201,57 @@ html, body, #app {
   font-family: inherit;
 }
 
+.start-options {
+  display: grid;
+  gap: 10px;
+  margin: 4px 0 16px;
+}
+
+.start-option-row {
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.start-option-row.disabled {
+  opacity: 0.62;
+}
+
+.start-option-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.start-option-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #e9edf7;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.start-option-toggle input {
+  width: 15px;
+  height: 15px;
+  accent-color: #ffd86b;
+}
+
+.start-option-value {
+  color: #aab4c8;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.start-option-row input[type="range"] {
+  width: 100%;
+  accent-color: #ffd86b;
+}
+
 .start-load-button {
   width: 100%;
   padding: 11px 14px;

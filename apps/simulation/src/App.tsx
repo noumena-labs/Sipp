@@ -19,7 +19,7 @@ import { BrainActivityHud } from './components/BrainActivityHud';
 import { BrainTraceDrawer } from './components/BrainTraceDrawer';
 import { SimulationCanvas } from './components/SimulationCanvas';
 import { ControlsPanel } from './components/ControlsPanel';
-import { StartPanel } from './components/StartPanel';
+import { StartPanel, type StartScenarioSettings } from './components/StartPanel';
 import { EventLog, type EventLogEntry } from './components/EventLog';
 import { AgentInspector } from './components/AgentInspector';
 import { Scoreboard } from './components/Scoreboard';
@@ -78,6 +78,14 @@ const DEFAULT_MODEL_URL = 'https://huggingface.co/LiquidAI/LFM2.5-350M-GGUF/reso
 const SIMULATION_TICK_HZ = 1.5;
 const SIMULATION_STEP_SECONDS = 1 / SIMULATION_TICK_HZ;
 const SIMULATION_STEP_DELAY_MS = 1000 / SIMULATION_TICK_HZ;
+const DEFAULT_SCENARIO_SETTINGS: StartScenarioSettings = {
+  obstaclesEnabled: true,
+  obstacleTarget: 12,
+  batsEnabled: true,
+  batTarget: 1,
+  iceCubesEnabled: true,
+  iceCubeTarget: 1,
+};
 
 export default function App() {
   const bus = useMemo(() => new SimulationBus(), []);
@@ -85,6 +93,7 @@ export default function App() {
   const appRef = useRef<HTMLDivElement | null>(null);
   const inspectorRef = useRef<HTMLDivElement | null>(null);
   const [modelUrl, setModelUrl] = useState(DEFAULT_MODEL_URL);
+  const [scenarioSettings, setScenarioSettings] = useState<StartScenarioSettings>(DEFAULT_SCENARIO_SETTINGS);
   const [status, setStatus] = useState('Idle. Press Load to initialize the model.');
   const [busy, setBusy] = useState(false);
   const [harness, setHarness] = useState<LoadedHarness | null>(null);
@@ -323,7 +332,20 @@ export default function App() {
           await harness.runtime.dispose();
           harness.engine.close();
         }
-        const scenario = createCourtyardScenario();
+        const scenario = createCourtyardScenario({
+          obstacles: {
+            enabled: scenarioSettings.obstaclesEnabled,
+            target: scenarioSettings.obstacleTarget,
+          },
+          bats: {
+            enabled: scenarioSettings.batsEnabled,
+            target: scenarioSettings.batTarget,
+          },
+          iceCubes: {
+            enabled: scenarioSettings.iceCubesEnabled,
+            target: scenarioSettings.iceCubeTarget,
+          },
+        });
         setActiveScenario(scenario);
         resetSimulationUi();
         setStatus('Initialising engine…');
@@ -408,7 +430,7 @@ export default function App() {
         setBusy(false);
       }
     },
-    [brainStore, bus, harness, resetSimulationUi]
+    [brainStore, bus, harness, resetSimulationUi, scenarioSettings]
   );
 
   const handleStart = (): void => {
@@ -520,6 +542,8 @@ export default function App() {
           <StartPanel
             modelUrl={modelUrl}
             onModelUrlChange={setModelUrl}
+            scenarioSettings={scenarioSettings}
+            onScenarioSettingsChange={setScenarioSettings}
             onLoad={loadHarness}
             status={status}
             busy={busy}

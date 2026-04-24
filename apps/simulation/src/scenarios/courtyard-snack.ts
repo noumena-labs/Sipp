@@ -65,9 +65,22 @@ const MIN_FREE_COMPONENT_SIZE = 120;
 const GENERATION_ATTEMPTS = 40;
 const OBSTACLE_GROUP_COUNT_RANGE = { min: 3, max: 6 } as const;
 const GROUP_LENGTH_RANGE = { min: 2, max: 5 } as const;
+const DEFAULT_COUNT_OPTIONS = {
+  obstacles: { enabled: true, target: 12 },
+  bats: { enabled: true, target: 1 },
+  iceCubes: { enabled: true, target: 1 },
+} as const;
 
 export interface CourtyardScenarioOptions {
   readonly seed?: number;
+  readonly obstacles?: CountOption;
+  readonly bats?: CountOption;
+  readonly iceCubes?: CountOption;
+}
+
+export interface CountOption {
+  readonly enabled: boolean;
+  readonly target: number;
 }
 
 interface CandidateObject {
@@ -77,11 +90,11 @@ interface CandidateObject {
 
 interface LayoutDraft {
   readonly obstacles: readonly ScenarioObjectSeed[];
-  readonly batPosition: Vec2;
-  readonly icePosition: Vec2;
+  readonly batPositions: readonly Vec2[];
+  readonly icePositions: readonly Vec2[];
   readonly bananaRespawns: readonly Vec2[];
-  readonly batRespawns: readonly Vec2[];
-  readonly iceRespawns: readonly Vec2[];
+  readonly batRespawns: readonly (readonly Vec2[])[];
+  readonly iceRespawns: readonly (readonly Vec2[])[];
 }
 
 interface ReservedZone {
@@ -93,7 +106,8 @@ export const COURTYARD_SCENARIO: ScenarioSeed = createCourtyardScenario({ seed: 
 
 export function createCourtyardScenario(options: CourtyardScenarioOptions = {}): ScenarioSeed {
   const seed = options.seed ?? createScenarioSeed();
-  const layout = generateCourtyardLayout(seed);
+  const counts = resolveScenarioCounts(seed, options);
+  const layout = generateCourtyardLayout(seed, counts);
   return {
     id: 'banana-dash',
     title: 'Banana Dash',
@@ -109,28 +123,8 @@ export function createCourtyardScenario(options: CourtyardScenarioOptions = {}):
     objects: [
       createBananaObject(),
       createHomeBaseObject(),
-      {
-        id: 'bat-power-up',
-        kind: 'bat',
-        label: 'baseball bat',
-        description: 'A rubbery cartoon bat. One close smack guarantees a bonk and pops the banana loose.',
-        position: layout.batPosition,
-        contested: true,
-        collisionRadius: 0.24,
-        tags: ['power_up', 'weapon'],
-        affordances: [{ kind: 'pick_up', label: 'grab baseball bat', status: 'reaching for the baseball bat' }],
-      },
-      {
-        id: 'ice-power-up',
-        kind: 'ice_cube',
-        label: 'ice cube',
-        description: 'A chunky cartoon ice cube. One toss freezes a runner long enough to spill the banana.',
-        position: layout.icePosition,
-        contested: true,
-        collisionRadius: 0.22,
-        tags: ['power_up', 'weapon'],
-        affordances: [{ kind: 'pick_up', label: 'grab ice cube', status: 'reaching for the ice cube' }],
-      },
+      ...layout.batPositions.map((position, index) => createBatObject(index, position)),
+      ...layout.icePositions.map((position, index) => createIceCubeObject(index, position)),
       ...layout.obstacles,
     ],
     game: {
@@ -143,16 +137,16 @@ export function createCourtyardScenario(options: CourtyardScenarioOptions = {}):
           delayTicks: 1,
           spawnPoints: layout.bananaRespawns,
         },
-        {
-          objectId: 'bat-power-up',
+        ...layout.batRespawns.map((spawnPoints, index) => ({
+          objectId: powerUpId('bat-power-up', index),
           delayTicks: 12,
-          spawnPoints: layout.batRespawns,
-        },
-        {
-          objectId: 'ice-power-up',
+          spawnPoints,
+        })),
+        ...layout.iceRespawns.map((spawnPoints, index) => ({
+          objectId: powerUpId('ice-power-up', index),
           delayTicks: 12,
-          spawnPoints: layout.iceRespawns,
-        },
+          spawnPoints,
+        })),
       ],
     },
     directorNote: 'Banana Dash begins: score by carrying the banana to home base, or peel off for slapstick power-ups on the wings.',
@@ -197,14 +191,64 @@ function createHomeBaseObject(): ScenarioObjectSeed {
   };
 }
 
+function createBatObject(index: number, position: Vec2): ScenarioObjectSeed {
+  return {
+    id: powerUpId('bat-power-up', index),
+    kind: 'bat',
+    label: 'baseball bat',
+    description: 'A rubbery cartoon bat. One close smack guarantees a bonk and pops the banana loose.',
+    position,
+    contested: true,
+    collisionRadius: 0.24,
+    tags: ['power_up', 'weapon'],
+    affordances: [{ kind: 'pick_up', label: 'grab baseball bat', status: 'reaching for the baseball bat' }],
+  };
+}
+
+function createIceCubeObject(index: number, position: Vec2): ScenarioObjectSeed {
+  return {
+    id: powerUpId('ice-power-up', index),
+    kind: 'ice_cube',
+    label: 'ice cube',
+    description: 'A chunky cartoon ice cube. One toss freezes a runner long enough to spill the banana.',
+    position,
+    contested: true,
+    collisionRadius: 0.22,
+    tags: ['power_up', 'weapon'],
+    affordances: [{ kind: 'pick_up', label: 'grab ice cube', status: 'reaching for the ice cube' }],
+  };
+}
+
+function powerUpId(baseId: string, index: number): string {
+  return index === 0 ? baseId : `${baseId}-${index + 1}`;
+}
+
 function createScenarioSeed(): number {
   return Math.floor(Math.random() * 0xffffffff) >>> 0;
 }
 
-function generateCourtyardLayout(seed: number): LayoutDraft {
+interface ResolvedScenarioCounts {
+  readonly obstacles: number;
+  readonly bats: number;
+  readonly iceCubes: number;
+}
+
+function resolveScenarioCounts(seed: number, options: CourtyardScenarioOptions): ResolvedScenarioCounts {
+  const rng = createRng(seed ^ 0xa53a9f31);
+  const obstacles = options.obstacles ?? DEFAULT_COUNT_OPTIONS.obstacles;
+  const bats = options.bats ?? DEFAULT_COUNT_OPTIONS.bats;
+  const iceCubes = options.iceCubes ?? DEFAULT_COUNT_OPTIONS.iceCubes;
+  return {
+    obstacles: obstacles.enabled ? randomInt(rng, 1, obstacles.target) : 0,
+    bats: bats.enabled ? randomInt(rng, 1, bats.target) : 0,
+    iceCubes: iceCubes.enabled ? randomInt(rng, 1, iceCubes.target) : 0,
+  };
+}
+
+function generateCourtyardLayout(seed: number, counts: ResolvedScenarioCounts): LayoutDraft {
   for (let attempt = 0; attempt < GENERATION_ATTEMPTS; attempt += 1) {
     const rng = createRng(seed + attempt * 0x9e3779b9);
-    const obstacles = createObstacleSeeds(generateObstacleCandidates(rng));
+    const obstacles = createObstacleSeeds(generateObstacleCandidates(rng, counts.obstacles));
     const reserved = createReservedZones();
     const freeCells = enumerateFreeCells(obstacles, reserved);
     const reachableCells = reachableFrom(BANANA_POSITION, freeCells);
@@ -217,30 +261,37 @@ function generateCourtyardLayout(seed: number): LayoutDraft {
       { center: BANANA_POSITION, radius: 3.2 },
       { center: HOME_BASE_POSITION, radius: 2.5 },
     ];
-    const batPosition = pickFreeCell(rng, reachableCells, powerUpAvoidance);
-    const icePosition = pickFreeCell(rng, reachableCells, [
-      ...powerUpAvoidance,
-      { center: batPosition, radius: 3 },
-    ]);
-    const occupied = [...reserved, { center: batPosition, radius: 1.5 }, { center: icePosition, radius: 1.5 }];
+    const batPositions = pickPowerUpPositions(rng, reachableCells, counts.bats, powerUpAvoidance, []);
+    const icePositions = pickPowerUpPositions(rng, reachableCells, counts.iceCubes, powerUpAvoidance, batPositions);
+    const occupied = [
+      ...reserved,
+      ...batPositions.map((center) => ({ center, radius: 1.5 })),
+      ...icePositions.map((center) => ({ center, radius: 1.5 })),
+    ];
 
     return {
       obstacles,
-      batPosition,
-      icePosition,
+      batPositions,
+      icePositions,
       bananaRespawns: [BANANA_POSITION, ...pickRespawns(rng, reachableCells, 6, occupied)],
-      batRespawns: [batPosition, ...pickRespawns(rng, reachableCells, 3, occupied.filter((zone) => zone.center !== batPosition))],
-      iceRespawns: [icePosition, ...pickRespawns(rng, reachableCells, 3, occupied.filter((zone) => zone.center !== icePosition))],
+      batRespawns: batPositions.map((position) => [
+        position,
+        ...pickRespawns(rng, reachableCells, 3, occupied.filter((zone) => zone.center !== position)),
+      ]),
+      iceRespawns: icePositions.map((position) => [
+        position,
+        ...pickRespawns(rng, reachableCells, 3, occupied.filter((zone) => zone.center !== position)),
+      ]),
     };
   }
 
-  return createFallbackLayout();
+  return createFallbackLayout(counts);
 }
 
-function generateObstacleCandidates(rng: Rng): CandidateObject[] {
+function generateObstacleCandidates(rng: Rng, count: number): CandidateObject[] {
   const occupied = new Set<string>();
   const obstacles: CandidateObject[] = [];
-  const groups = randomInt(rng, OBSTACLE_GROUP_COUNT_RANGE.min, OBSTACLE_GROUP_COUNT_RANGE.max);
+  const reserved = createReservedZones();
   const directions = [
     { x: 1, z: 0 },
     { x: 0, z: 1 },
@@ -248,7 +299,7 @@ function generateObstacleCandidates(rng: Rng): CandidateObject[] {
     { x: 1, z: -1 },
   ] as const;
 
-  for (let group = 0; group < groups; group += 1) {
+  for (let group = 0; obstacles.length < count && group < count * OBSTACLE_GROUP_COUNT_RANGE.max; group += 1) {
     const start = randomCell(rng, 6);
     const direction = directions[randomInt(rng, 0, directions.length - 1)]!;
     const length = randomInt(rng, GROUP_LENGTH_RANGE.min, GROUP_LENGTH_RANGE.max);
@@ -262,7 +313,7 @@ function generateObstacleCandidates(rng: Rng): CandidateObject[] {
         x: clampCell(start.x + step.x * i + jitter.x),
         z: clampCell(start.z + step.z * i + jitter.z),
       };
-      if (isReservedPosition(position, createReservedZones())) continue;
+      if (isReservedPosition(position, reserved)) continue;
       const key = cellKey(position);
       if (occupied.has(key)) continue;
       occupied.add(key);
@@ -270,6 +321,28 @@ function generateObstacleCandidates(rng: Rng): CandidateObject[] {
         kind: rng() < 0.55 ? 'crate' : 'rock',
         position,
       });
+      if (obstacles.length >= count) break;
+    }
+  }
+
+  if (obstacles.length < count) {
+    const limit = COURTYARD_BOUNDS.halfExtent - 1;
+    const fillCells: Vec2[] = [];
+    for (let x = -limit; x <= limit; x += 1) {
+      for (let z = -limit; z <= limit; z += 1) {
+        const position = { x, z };
+        if (isReservedPosition(position, reserved)) continue;
+        if (occupied.has(cellKey(position))) continue;
+        fillCells.push(position);
+      }
+    }
+    for (const position of shuffle(fillCells, rng)) {
+      occupied.add(cellKey(position));
+      obstacles.push({
+        kind: rng() < 0.55 ? 'crate' : 'rock',
+        position,
+      });
+      if (obstacles.length >= count) break;
     }
   }
 
@@ -292,17 +365,47 @@ function createObstacleSeeds(candidates: readonly CandidateObject[]): ScenarioOb
   }));
 }
 
-function createFallbackLayout(): LayoutDraft {
+function createFallbackLayout(counts: ResolvedScenarioCounts): LayoutDraft {
   const obstacles = createObstacleSeeds([
     { kind: 'crate', position: { x: -3, z: -1 } },
     { kind: 'crate', position: { x: 3, z: 1 } },
     { kind: 'rock', position: { x: -2, z: 3 } },
     { kind: 'rock', position: { x: 2, z: -3 } },
-  ]);
+    { kind: 'crate', position: { x: -5, z: 0 } },
+    { kind: 'rock', position: { x: 5, z: 0 } },
+    { kind: 'crate', position: { x: -1, z: -3 } },
+    { kind: 'rock', position: { x: 1, z: 3 } },
+    { kind: 'crate', position: { x: -6, z: -2 } },
+    { kind: 'rock', position: { x: 6, z: -2 } },
+    { kind: 'crate', position: { x: -4, z: 3 } },
+    { kind: 'rock', position: { x: 4, z: 3 } },
+    { kind: 'crate', position: { x: -1, z: 6 } },
+    { kind: 'rock', position: { x: 1, z: 6 } },
+    { kind: 'crate', position: { x: -6, z: 5 } },
+    { kind: 'rock', position: { x: 6, z: 5 } },
+    { kind: 'crate', position: { x: -4, z: -6 } },
+    { kind: 'rock', position: { x: 4, z: -6 } },
+    { kind: 'crate', position: { x: 0, z: 2 } },
+    { kind: 'rock', position: { x: 0, z: -2 } },
+  ].slice(0, counts.obstacles));
+  const batPositions = [
+    { x: -6, z: 2 },
+    { x: -5.5, z: 5 },
+    { x: -6.2, z: -1.5 },
+    { x: -3, z: 5.5 },
+    { x: -5.5, z: -5 },
+  ].slice(0, counts.bats);
+  const icePositions = [
+    { x: 6, z: 2 },
+    { x: 5.4, z: 5 },
+    { x: 6.1, z: -1.8 },
+    { x: 3, z: 5.5 },
+    { x: 5.5, z: -5 },
+  ].slice(0, counts.iceCubes);
   return {
     obstacles,
-    batPosition: { x: -6, z: 2 },
-    icePosition: { x: 6, z: 2 },
+    batPositions,
+    icePositions,
     bananaRespawns: [
       BANANA_POSITION,
       { x: -6, z: 1 },
@@ -312,8 +415,8 @@ function createFallbackLayout(): LayoutDraft {
       { x: 5, z: 5 },
       { x: -5, z: -5 },
     ],
-    batRespawns: [{ x: -6, z: 2 }, { x: -5.5, z: 5 }, { x: -6.2, z: -1.5 }],
-    iceRespawns: [{ x: 6, z: 2 }, { x: 5.4, z: 5 }, { x: 6.1, z: -1.8 }],
+    batRespawns: batPositions.map((position) => [position, { x: -5.5, z: 5 }, { x: -6.2, z: -1.5 }]),
+    iceRespawns: icePositions.map((position) => [position, { x: 5.4, z: 5 }, { x: 6.1, z: -1.8 }]),
   };
 }
 
@@ -365,6 +468,25 @@ function isReachable(position: Vec2, reachableCells: readonly Vec2[]): boolean {
 function pickFreeCell(rng: Rng, cells: readonly Vec2[], avoid: readonly ReservedZone[]): Vec2 {
   const candidates = cells.filter((cell) => !isReservedPosition(cell, avoid));
   return cloneVec(candidates[randomInt(rng, 0, candidates.length - 1)] ?? cells[randomInt(rng, 0, cells.length - 1)] ?? BANANA_POSITION);
+}
+
+function pickPowerUpPositions(
+  rng: Rng,
+  cells: readonly Vec2[],
+  count: number,
+  baseAvoidance: readonly ReservedZone[],
+  otherPowerUps: readonly Vec2[]
+): Vec2[] {
+  const selected: Vec2[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const position = pickFreeCell(rng, cells, [
+      ...baseAvoidance,
+      ...otherPowerUps.map((center) => ({ center, radius: 3 })),
+      ...selected.map((center) => ({ center, radius: 3 })),
+    ]);
+    selected.push(position);
+  }
+  return selected;
 }
 
 function pickRespawns(rng: Rng, cells: readonly Vec2[], count: number, avoid: readonly ReservedZone[]): Vec2[] {
