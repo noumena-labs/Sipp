@@ -31,6 +31,11 @@ html, body, #app {
   height: 100%;
 }
 
+.sim-board {
+  position: absolute;
+  inset: 0;
+}
+
 .sim-overlay {
   position: absolute;
   pointer-events: none;
@@ -99,6 +104,113 @@ html, body, #app {
   width: min(320px, calc(100vw - 32px));
 }
 
+.tutorial-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 11;
+  background:
+    radial-gradient(circle at 50% 38%, rgba(255, 216, 107, 0.08), transparent 34%),
+    rgba(3, 6, 12, 0.62);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+.tutorial-card {
+  position: absolute;
+  z-index: 12;
+  width: min(360px, calc(100vw - 32px));
+  padding: 18px;
+  border-color: rgba(255, 216, 107, 0.22);
+  box-shadow: 0 20px 54px rgba(0, 0, 0, 0.48), 0 0 0 1px rgba(255, 216, 107, 0.08);
+}
+
+.tutorial-focus {
+  z-index: 12;
+}
+
+.tutorial-focus-host {
+  z-index: 12;
+}
+
+.tutorial-focus > * {
+  box-shadow: 0 0 0 1px rgba(255, 216, 107, 0.22), 0 0 0 10px rgba(255, 216, 107, 0.08), 0 20px 48px rgba(0, 0, 0, 0.36);
+}
+
+.tutorial-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tutorial-step-count {
+  font-size: 11px;
+  color: #a9b4ca;
+}
+
+.tutorial-title {
+  margin: 8px 0 10px;
+  font-size: 22px;
+  line-height: 1.1;
+  color: #fff4d7;
+}
+
+.tutorial-copy {
+  margin: 0;
+  color: #d8e1f3;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.tutorial-checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 16px;
+  color: #c9d2e6;
+  font-size: 13px;
+}
+
+.tutorial-checkbox-row input {
+  width: 15px;
+  height: 15px;
+  accent-color: #ffd86b;
+}
+
+.tutorial-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.tutorial-actions button {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+
+.tutorial-dismiss {
+  color: #e6ecfa;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.tutorial-next {
+  color: #241400;
+  background: linear-gradient(180deg, #ffd86b, #ffb43b);
+  border: 1px solid rgba(255, 216, 107, 0.68);
+}
+
+.tutorial-actions button:hover {
+  transform: translateY(-1px);
+}
+
 .brain-drawer-backdrop {
    position: absolute;
    inset: 0;
@@ -160,7 +272,7 @@ html, body, #app {
 }
 
 .start-panel {
-  width: min(560px, 100%);
+  width: min(720px, 100%);
   padding: 28px;
   background: linear-gradient(180deg, rgba(32, 38, 59, 0.9), rgba(18, 22, 35, 0.88));
   border-color: rgba(255, 216, 107, 0.18);
@@ -170,16 +282,68 @@ html, body, #app {
 .start-title {
   margin: 0 0 10px;
   color: #fff3d6;
-  font-size: clamp(34px, 8vw, 58px);
-  line-height: 0.95;
-  letter-spacing: -0.05em;
+  font-size: clamp(30px, 6.8vw, 52px);
+  line-height: 0.98;
+  letter-spacing: -0.045em;
 }
 
-.start-copy {
-  margin: 0 0 22px;
+.start-lead {
+  margin: 0 0 20px;
   color: #cbd4e6;
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+.start-story-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.start-story-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px 15px;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.start-story-label {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #ffd86b;
+}
+
+.start-story-copy {
+  margin: 0;
+  color: #d4ddef;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.start-story-copy strong {
+  color: #fff4d7;
+}
+
+.start-config-head {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+
+.start-config-title {
+  color: #f5f7ff;
   font-size: 15px;
-  line-height: 1.55;
+  font-weight: 700;
+}
+
+.start-config-copy {
+  color: #aab4ca;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .start-panel .field {
@@ -291,6 +455,10 @@ html, body, #app {
   margin-bottom: 10px;
 }
 
+.controls-panel .controls-row-secondary {
+  margin-top: -4px;
+}
+
 .controls-panel button {
   flex: 1;
   min-width: 0;
@@ -324,6 +492,12 @@ html, body, #app {
 .controls-panel button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.controls-panel .controls-secondary-button {
+  flex: 0 0 auto;
+  width: 100%;
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .controls-panel .status {
@@ -1067,8 +1241,12 @@ html, body, #app {
     padding: 22px;
   }
 
-  .start-copy {
+  .start-lead {
     font-size: 14px;
+  }
+
+  .start-story-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .sim-bottom {
@@ -1124,5 +1302,18 @@ html, body, #app {
 
   .brain-drawer-close {
     width: 100%;
+  }
+
+  .tutorial-card {
+    width: min(100vw - 24px, 100%);
+    padding: 16px;
+  }
+
+  .tutorial-title {
+    font-size: 20px;
+  }
+
+  .tutorial-actions {
+    flex-direction: column;
   }
 }

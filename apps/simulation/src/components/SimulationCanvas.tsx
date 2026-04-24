@@ -23,6 +23,7 @@ export interface SimulationCanvasProps {
   readonly bus: SimulationBus;
   readonly bounds: WorldBounds;
   readonly highlightedAgentId: string | null;
+  readonly highlightedObjectId?: string | null;
   readonly onBackgroundClick?: () => void;
   readonly onHoverObject?: (object: HoveredSceneObject | null) => void;
   readonly snapshot: WorldSnapshot | null;
@@ -118,6 +119,10 @@ export function SimulationCanvas(props: SimulationCanvasProps) {
   useEffect(() => {
     bindingRef.current?.setHighlightedAgent(props.highlightedAgentId);
   }, [props.highlightedAgentId]);
+
+  useEffect(() => {
+    bindingRef.current?.setHighlightedObject(props.highlightedObjectId ?? null);
+  }, [props.highlightedObjectId]);
 
   useEffect(() => {
     return () => props.onHoverObject?.(null);

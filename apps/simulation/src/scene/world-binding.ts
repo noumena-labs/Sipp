@@ -116,6 +116,7 @@ export interface WorldBinding {
   dispose(): void;
   pickObject(ray: THREE.Ray): HoveredSceneObject | null;
   setHighlightedAgent(agentId: string | null): void;
+  setHighlightedObject(objectId: string | null): void;
   setHoveredObject(objectId: string | null): void;
 }
 
@@ -137,6 +138,7 @@ export function bindWorldToScene(
   const batSwings = new Set<BatSwingEffect>();
   const hoverPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   let highlightedAgent: string | null = null;
+  let highlightedObject: string | null = null;
   let hoveredObject: string | null = null;
   let elapsedSeconds = 0;
 
@@ -247,7 +249,7 @@ export function bindWorldToScene(
       toss: null,
     };
     objects.set(id, entry);
-    entry.visual.setHovered(id === hoveredObject);
+    entry.visual.setHovered(id === hoveredObject || id === highlightedObject);
     return entry;
   };
 
@@ -879,10 +881,16 @@ export function bindWorldToScene(
         entry.visual.setHighlighted(id === agentId);
       }
     },
+    setHighlightedObject(objectId) {
+      highlightedObject = objectId;
+      for (const [id, entry] of objects) {
+        entry.visual.setHovered(id === hoveredObject || id === objectId);
+      }
+    },
     setHoveredObject(objectId) {
       hoveredObject = objectId;
       for (const [id, entry] of objects) {
-        entry.visual.setHovered(id === objectId);
+        entry.visual.setHovered(id === objectId || id === highlightedObject);
       }
     },
   };

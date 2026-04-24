@@ -23,6 +23,7 @@ import { StartPanel, type StartScenarioSettings } from './components/StartPanel'
 import { EventLog, type EventLogEntry } from './components/EventLog';
 import { AgentInspector } from './components/AgentInspector';
 import { Scoreboard } from './components/Scoreboard';
+import { TutorialOverlay, type TutorialCardPlacement } from './components/TutorialOverlay';
 import { COURTYARD_AGENTS, COURTYARD_SCENARIO, createCourtyardScenario } from './scenarios/courtyard-snack.js';
 import { SimulationBus, type SimulationEvent } from './runtime/bus.js';
 import {
@@ -59,6 +60,14 @@ interface DirectorPanelState {
   readonly note: string | null;
 }
 
+interface TutorialStep {
+  readonly id: string;
+  readonly target: string | null;
+  readonly placement: TutorialCardPlacement;
+  readonly title: string;
+  readonly body: string;
+}
+
 const BRAIN_DEFINITIONS: readonly BrainDefinition[] = [
   ...COURTYARD_AGENTS.map((agent) => ({
     id: agent.agentId,
@@ -85,6 +94,65 @@ const DEFAULT_SCENARIO_SETTINGS: StartScenarioSettings = {
   iceCubesEnabled: true,
   iceCubeTarget: 1,
 };
+const TUTORIAL_STORAGE_KEY = 'simulation.tutorial.dismissed';
+const TUTORIAL_STEPS: readonly TutorialStep[] = [
+  {
+    id: 'overview',
+    target: null,
+    placement: 'center',
+    title: 'What this simulation is',
+    body: 'Banana Dash is the proof of concept. Five local LLM-powered brains operate live in a shared environment with real-time decisions, arbitration, and observability. This is not a chatbot demo. It shows how local inference can power proactive systems that monitor context, adapt behavior, surface help before the user asks, and enable hybrid products where long-running local LLM observers work alongside intelligent cloud models.',
+  },
+  {
+    id: 'controls',
+    target: 'controls',
+    placement: 'right',
+    title: 'Control panel',
+    body: 'Use Start to begin the live match, Pause to stop the loop, Step to advance one simulation slice at a time, and Reset to rebuild the scenario from scratch.',
+  },
+  {
+    id: 'brain-hud',
+    target: 'brain-hud',
+    placement: 'top',
+    title: 'LLM query visualizer',
+    body: 'This panel shows the live query traffic for all five brains. You can see which brain is active, how many queries have run, how long they take, and inspect the latest streamed output.',
+  },
+  {
+    id: 'event-log',
+    target: 'event-log',
+    placement: 'top',
+    title: 'Event log',
+    body: 'The event log is the readable play-by-play. It summarizes agent choices, director rulings, score events, and runtime issues as the match unfolds.',
+  },
+  {
+    id: 'director',
+    target: 'director',
+    placement: 'bottom',
+    title: 'Director panel',
+    body: 'The director is the fifth brain. It narrates the scene and steps in when the simulation needs a ruling on a contested interaction or house-rule decision.',
+  },
+  {
+    id: 'scoreboard',
+    target: 'scoreboard',
+    placement: 'bottom',
+    title: 'Scoreboard',
+    body: 'The scoreboard tracks who is holding the banana and how many deliveries each agent has converted into points.',
+  },
+  {
+    id: 'agents',
+    target: 'agents',
+    placement: 'left',
+    title: 'Agents panel',
+    body: 'This panel shows each agent\'s live state: position, current activity, goal, executor intent, held items, and status. Click an agent to highlight them in the scene.',
+  },
+  {
+    id: 'goal',
+    target: 'game-board',
+    placement: 'bottom',
+    title: 'Game board and scoring goal',
+    body: 'This is the game board. Agents score by carrying the banana into the glowing home base scoring ring. The tutorial highlights that home base while this step is active.',
+  },
+];
 
 export default function App() {
   const bus = useMemo(() => new SimulationBus(), []);
@@ -106,6 +174,9 @@ export default function App() {
   const [brainHudExpanded, setBrainHudExpanded] = useState(false);
   const [hoveredObject, setHoveredObject] = useState<HoveredSceneObject | null>(null);
   const [eventLogCollapsed, setEventLogCollapsed] = useState(true);
+  const [tutorialOpen, setTutorialOpen] = useState(false);
+  const [tutorialStepIndex, setTutorialStepIndex] = useState(0);
+  const [tutorialDismissed, setTutorialDismissed] = useState(() => readTutorialDismissedPreference());
   const eventIdRef = useRef(0);
   const snapshotRef = useRef<WorldSnapshot | null>(null);
   const criticalIssueRef = useRef(false);
@@ -136,6 +207,30 @@ export default function App() {
     setSelectedBrainId((prev) => prev === brainId ? null : brainId);
   }, []);
 
+  const openTutorial = useCallback((stepIndex = 0): void => {
+    setHoveredObject(null);
+    setSelectedAgentId(null);
+    setSelectedBrainId(null);
+    setTutorialStepIndex(stepIndex);
+    setTutorialOpen(true);
+  }, []);
+
+  const closeTutorial = useCallback((): void => {
+    setTutorialOpen(false);
+  }, []);
+
+  const handleTutorialNext = useCallback((): void => {
+    if (tutorialStepIndex >= TUTORIAL_STEPS.length - 1) {
+      setTutorialOpen(false);
+      return;
+    }
+    setTutorialStepIndex((prev) => prev + 1);
+  }, [tutorialStepIndex]);
+
+  const handleTutorialPreferenceChange = useCallback((value: boolean): void => {
+    setTutorialDismissed(value);
+  }, []);
+
   const resetSimulationUi = useCallback((): void => {
     eventIdRef.current = 0;
     criticalIssueRef.current = false;
@@ -145,6 +240,8 @@ export default function App() {
     brainStore.reset();
     setHasSimulationStarted(false);
     setBrainHudExpanded(false);
+    setTutorialOpen(false);
+    setTutorialStepIndex(0);
     setSelectedBrainId(null);
     setSelectedAgentId(null);
     setHoveredObject(null);
@@ -292,6 +389,21 @@ export default function App() {
   }, [brainStore, bus, pushEvent]);
 
   useEffect(() => {
+    window.localStorage.setItem(TUTORIAL_STORAGE_KEY, tutorialDismissed ? '1' : '0');
+  }, [tutorialDismissed]);
+
+  useEffect(() => {
+    if (!tutorialOpen) {
+      return;
+    }
+    setHoveredObject(null);
+    const activeStep = TUTORIAL_STEPS[tutorialStepIndex];
+    if (activeStep?.id === 'brain-hud') {
+      setBrainHudExpanded(true);
+    }
+  }, [tutorialOpen, tutorialStepIndex]);
+
+  useEffect(() => {
     if (!running || !harness) {
       return;
     }
@@ -421,6 +533,11 @@ export default function App() {
         setSnapshot(initialSnapshot);
         setDirectorState(createInitialDirectorState(initialSnapshot.directorNote));
         setHarness({ engine, runtime, scenario });
+        setBrainHudExpanded(true);
+        if (!tutorialDismissed) {
+          setTutorialStepIndex(0);
+          setTutorialOpen(true);
+        }
         setStatus('Ready. Press Start.');
       } catch (error) {
         console.error(error);
@@ -430,7 +547,7 @@ export default function App() {
         setBusy(false);
       }
     },
-    [brainStore, bus, harness, resetSimulationUi, scenarioSettings]
+    [brainStore, bus, harness, resetSimulationUi, scenarioSettings, tutorialDismissed]
   );
 
   const handleStart = (): void => {
@@ -488,6 +605,16 @@ export default function App() {
   const directorNote = directorState.note?.trim() || null;
   const showDirectorNote = directorNote != null && directorNote !== directorDetail;
   const highlightStart = harness != null && !busy && !running && !hasSimulationStarted;
+  const tutorialStep = tutorialOpen ? TUTORIAL_STEPS[tutorialStepIndex] ?? null : null;
+  const activeTutorialTarget = tutorialStep?.target ?? null;
+  const highlightedObjectId = tutorialStep?.id === 'goal'
+    ? scenario.game.goalObjectId
+    : hoveredObject?.id ?? null;
+  const topCenterFocused = activeTutorialTarget === 'scoreboard' || activeTutorialTarget === 'director';
+  const tutorialTargetClass = (targetId: string, baseClass = ''): string => {
+    const activeClass = activeTutorialTarget === targetId ? ' tutorial-focus' : '';
+    return `${baseClass}${activeClass}`.trim();
+  };
 
   useEffect(() => {
     const app = appRef.current;
@@ -515,22 +642,26 @@ export default function App() {
 
   return (
     <div ref={appRef} className="sim-app">
-      <SimulationCanvas
-        bus={bus}
-        bounds={scenario.bounds ?? { halfExtent: 8 }}
-        highlightedAgentId={selectedAgentId}
-        onBackgroundClick={() => setSelectedAgentId(null)}
-        onHoverObject={setHoveredObject}
-        snapshot={snapshot}
-      />
+      <div className={tutorialTargetClass('game-board', 'sim-board')} data-tutorial-target="game-board">
+        <SimulationCanvas
+          bus={bus}
+          bounds={scenario.bounds ?? { halfExtent: 8 }}
+          highlightedAgentId={selectedAgentId}
+          highlightedObjectId={highlightedObjectId}
+          onBackgroundClick={() => setSelectedAgentId(null)}
+          onHoverObject={setHoveredObject}
+          snapshot={snapshot}
+        />
+      </div>
 
       {harness ? (
-        <div className="sim-overlay sim-top-left">
+        <div className={tutorialTargetClass('controls', 'sim-overlay sim-top-left')} data-tutorial-target="controls">
           <ControlsPanel
             onStart={handleStart}
             onPause={handlePause}
             onStep={handleStep}
             onReset={handleReset}
+            onOpenTutorial={() => openTutorial(0)}
             status={status}
             running={running}
             tick={snapshot?.tick ?? 0}
@@ -553,7 +684,7 @@ export default function App() {
 
       {harness ? (
         <>
-          <div ref={inspectorRef} className="sim-overlay sim-top-right">
+          <div ref={inspectorRef} className={tutorialTargetClass('agents', 'sim-overlay sim-top-right')} data-tutorial-target="agents">
             <AgentInspector
               agents={agents}
               bananaObjectId={snapshot?.game.bananaObjectId}
@@ -563,7 +694,7 @@ export default function App() {
             />
           </div>
 
-          <div className="sim-overlay sim-bottom">
+          <div className={tutorialTargetClass('event-log', 'sim-overlay sim-bottom')} data-tutorial-target="event-log">
             <EventLog
               entries={events}
               collapsed={eventLogCollapsed}
@@ -573,8 +704,8 @@ export default function App() {
         </>
       ) : null}
 
-      {harness && hasSimulationStarted ? (
-        <div className="sim-overlay sim-bottom-left">
+      {harness ? (
+        <div className={tutorialTargetClass('brain-hud', 'sim-overlay sim-bottom-left')} data-tutorial-target="brain-hud">
           <BrainActivityHud
             activity={brainActivity}
             expanded={brainHudExpanded}
@@ -587,20 +718,24 @@ export default function App() {
       ) : null}
 
       {harness && snapshot ? (
-        <div className="sim-overlay sim-top-center sim-center-stack">
-          <Scoreboard snapshot={snapshot} metaText={scoreboardStatus} />
-          <div className={`director-note glass-panel director-${directorState.mode}`}>
-            <div className="director-note-head">
-              <div className="director-note-main">
-                <span className="panel-eyebrow">Director</span>
-                <span className="director-headline">{directorState.headline}</span>
+        <div className={`sim-overlay sim-top-center sim-center-stack${topCenterFocused ? ' tutorial-focus-host' : ''}`}>
+          <div className={tutorialTargetClass('scoreboard')} data-tutorial-target="scoreboard">
+            <Scoreboard snapshot={snapshot} metaText={scoreboardStatus} />
+          </div>
+          <div className={tutorialTargetClass('director')} data-tutorial-target="director">
+            <div className={`director-note glass-panel director-${directorState.mode}`}>
+              <div className="director-note-head">
+                <div className="director-note-main">
+                  <span className="panel-eyebrow">Director</span>
+                  <span className="director-headline">{directorState.headline}</span>
+                </div>
+                <span className={`director-pill director-pill-${directorState.mode}`}>
+                  {directorState.mode === 'ruling' ? 'Adjudicating' : 'Live'}
+                </span>
               </div>
-              <span className={`director-pill director-pill-${directorState.mode}`}>
-                {directorState.mode === 'ruling' ? 'Adjudicating' : 'Live'}
-              </span>
+              {directorDetail ? <span className="director-detail">{directorDetail}</span> : null}
+              {showDirectorNote ? <span className="director-quote">{directorNote}</span> : null}
             </div>
-            {directorDetail ? <span className="director-detail">{directorDetail}</span> : null}
-            {showDirectorNote ? <span className="director-quote">{directorNote}</span> : null}
           </div>
         </div>
       ) : null}
@@ -613,7 +748,7 @@ export default function App() {
         />
       ) : null}
 
-      {harness && hoveredObject ? (
+      {harness && hoveredObject && !tutorialOpen ? (
         <div className="sim-overlay sim-bottom-right">
           <div className="hover-card glass-panel">
             <span className="panel-eyebrow">Inspecting</span>
@@ -622,8 +757,28 @@ export default function App() {
           </div>
         </div>
       ) : null}
+
+      {tutorialStep ? (
+        <TutorialOverlay
+          open={tutorialOpen}
+          title={tutorialStep.title}
+          body={tutorialStep.body}
+          target={tutorialStep.target}
+          placement={tutorialStep.placement}
+          stepIndex={tutorialStepIndex}
+          stepCount={TUTORIAL_STEPS.length}
+          neverShowAgain={tutorialDismissed}
+          onNext={handleTutorialNext}
+          onDismiss={closeTutorial}
+          onNeverShowAgainChange={handleTutorialPreferenceChange}
+        />
+      ) : null}
     </div>
   );
+}
+
+function readTutorialDismissedPreference(): boolean {
+  return window.localStorage.getItem(TUTORIAL_STORAGE_KEY) === '1';
 }
 
 function describeGameEvent(

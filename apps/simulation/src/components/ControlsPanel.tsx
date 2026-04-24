@@ -11,6 +11,7 @@ export interface ControlsPanelProps {
   readonly onPause: () => void;
   readonly onStep: () => void;
   readonly onReset: () => void;
+  readonly onOpenTutorial: () => void;
   readonly status: string;
   readonly running: boolean;
   readonly tick: number;
@@ -44,6 +45,12 @@ export function ControlsPanel(props: ControlsPanelProps) {
         </button>
         <button type="button" onClick={props.onReset}>
           Reset
+        </button>
+      </div>
+
+      <div className="row controls-row-secondary">
+        <button type="button" className="controls-secondary-button" onClick={props.onOpenTutorial}>
+          Tutorial
         </button>
       </div>
 
