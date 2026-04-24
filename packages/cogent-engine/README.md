@@ -47,6 +47,8 @@ const loaded = await engine.models.load({
   projector: 'https://example.com/mmproj.gguf',
 });
 
+await engine.models.load(loaded.id);
+
 console.log(engine.models.current());
 console.log(await engine.models.list());
 
@@ -54,6 +56,8 @@ await engine.models.remove(loaded.id);
 ```
 
 `engine.models.load(...)` handles first load, reload, model switching, local imports, remote downloads, shard arrays, and explicit model/projector assembly.
+
+`ModelInfo.id` is the installed model id for the persisted base-model entry. If a model has already been validated with a projector, later `engine.models.load(id)` reuses that stored pairing automatically. Installed entries and pairings live in OPFS, so they survive tab refresh and browser restart for the same origin.
 
 Managed storage requires OPFS. If OPFS is unavailable, loading fails clearly instead of silently falling back to transient memory.
 

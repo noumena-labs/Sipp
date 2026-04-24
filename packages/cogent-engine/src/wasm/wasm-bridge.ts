@@ -305,12 +305,20 @@ export class WasmBridge {
 
   public readMediaMarker(): string | null {
     const ptr = this.callNumber('CE_GetMediaMarker');
-    return ptr ? this.module.UTF8ToString(ptr) : null;
+    if (!ptr) {
+      return null;
+    }
+    const marker = this.module.UTF8ToString(ptr);
+    return marker.length > 0 ? marker : null;
   }
 
   public readNativeChatTemplate(): string | null {
     const ptr = this.callNumber('CE_GetChatTemplate');
-    return ptr ? this.module.UTF8ToString(ptr) : null;
+    if (!ptr) {
+      return null;
+    }
+    const template = this.module.UTF8ToString(ptr);
+    return template.length > 0 ? template : null;
   }
 
   public applyChatTemplate(

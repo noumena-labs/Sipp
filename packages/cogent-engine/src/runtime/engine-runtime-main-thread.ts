@@ -371,6 +371,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
             multimodalProjectorPath: modelPathOrBundle.multimodalProjectorPath,
           };
     const normalizedConfig = normalizeInitConfig(effectiveConfig);
+    const expectsMediaSupport = normalizedConfig.multimodalProjectorPath != null;
     this.runtimeObservabilityEnabled =
       normalizedConfig.enableRuntimeObservability > 0;
     this.backendProfilingEnabled = normalizedConfig.enableBackendProfiling > 0;
@@ -386,6 +387,16 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.engineInitialized = true;
     this.cachedMediaMarker = bridge.readMediaMarker();
     this.cachedChatTemplate = bridge.readNativeChatTemplate();
+    if (expectsMediaSupport && this.cachedMediaMarker == null) {
+      const error = new Error(
+        'Failed to initialize multimodal runtime: loaded projector did not expose a media marker.'
+      );
+      bridge.close();
+      this.engineInitialized = false;
+      this.resetRuntimeLifecycleState(error);
+      this.modelLoader.cleanupAfterClose(module);
+      throw error;
+    }
 
     this.modelLoader.cleanupAfterEngineInit(module);
   }

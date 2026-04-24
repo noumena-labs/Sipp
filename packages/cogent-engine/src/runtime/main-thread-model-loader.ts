@@ -80,7 +80,7 @@ export class MainThreadModelLoader {
       sourceKind: descriptor.kind,
       modelPath,
       multimodalProjectorPath: projectorPath,
-      isVisionModel: plan.detection.isVisionModel,
+      isVisionModel: plan.detection.inspection.visionCapable,
       projectorStatus: plan.projectorStatus,
       modelName: plan.detection.modelName,
       detectionMethod: plan.detection.detectionMethod,
@@ -96,7 +96,10 @@ export class MainThreadModelLoader {
     switch (descriptor.kind) {
       case 'file': {
         const detection = await detectModelFromGgufFile(descriptor.file, signal);
-        this.ensureNotProjectorSource(detection.modelName, detection.isProjector);
+        this.ensureNotProjectorSource(
+          detection.modelName,
+          detection.inspection.role === 'projector'
+        );
         return {
           detection,
           modelAssets: [
@@ -107,7 +110,7 @@ export class MainThreadModelLoader {
           ],
           projectorAsset: this.resolveExplicitProjectorAsset(descriptor.projector),
           projectorStatus: this.resolveProjectorStatus(
-            detection.isVisionModel,
+            detection.inspection.visionCapable,
             descriptor.projector == null ? null : 'explicit'
           ),
         };
@@ -139,7 +142,10 @@ export class MainThreadModelLoader {
         );
         const detectionFile = sortedModelFiles[0];
         const detection = await detectModelFromGgufFile(detectionFile, signal);
-        this.ensureNotProjectorSource(detection.modelName, detection.isProjector);
+        this.ensureNotProjectorSource(
+          detection.modelName,
+          detection.inspection.role === 'projector'
+        );
 
         return {
           detection,
@@ -157,10 +163,10 @@ export class MainThreadModelLoader {
                 }),
           projectorStatus:
             explicitProjectorAsset != null
-              ? this.resolveProjectorStatus(detection.isVisionModel, 'explicit')
+              ? this.resolveProjectorStatus(detection.inspection.visionCapable, 'explicit')
               : localResolution.projectorFile != null
                 ? 'paired'
-                : this.resolveProjectorStatus(detection.isVisionModel, null),
+                : this.resolveProjectorStatus(detection.inspection.visionCapable, null),
         };
       }
     }

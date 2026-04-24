@@ -694,8 +694,7 @@ const char *CE_GetMediaMarkerString() {
   if (!runtime) {
     return nullptr;
   }
-  const char *marker = runtime->GetMediaMarker();
-  return marker != nullptr ? marker : empty_c_string();
+  return runtime->GetMediaMarker();
 }
 
 const char *CE_GetChatTemplateString() {
@@ -703,8 +702,7 @@ const char *CE_GetChatTemplateString() {
   if (!runtime) {
     return nullptr;
   }
-  const char *tmpl = runtime->GetChatTemplate();
-  return tmpl != nullptr ? tmpl : empty_c_string();
+  return runtime->GetChatTemplate();
 }
 
 const char *CE_ApplyChatTemplateString(const char *messages_json,

@@ -6,7 +6,7 @@ This document presents a comprehensive set of visualizations for the CogentEngin
 
 ## 1. High-Level System Architecture
 
-`CogentEngine` is a facade that provides a unified interface for model lifecycle management (`CogentModelManager`), observability, and inference execution. `CogentEngine.create()` injects the package-bundled WASM runtime URLs by default, unless callers provide explicit `{ moduleUrl, wasmUrl }`. It then selects the underlying implementation based on the environment and configuration. When running in a browser environment with `Worker` support (and no explicit `executionMode` override), it delegates to a `WorkerModelServiceClient`. On Node.js or when `executionMode: 'main-thread'` is set, it uses `ModelService` directly with a `MainThreadEngineRuntime`.
+`CogentEngine` is a facade that provides a unified interface for model lifecycle management (`CogentModelManager`), observability, and inference execution. `CogentEngine.create()` selects the underlying implementation based on the environment and configuration. When running in a browser environment with `Worker` support (and no explicit `executionMode` override), it delegates to a `WorkerModelServiceClient`. On Node.js or when `executionMode: 'main-thread'` is set, it uses `ModelService` directly with a `MainThreadEngineRuntime`. Runtime asset URLs are resolved lazily inside the chosen execution context. If callers do not provide explicit `{ moduleUrl, wasmUrl }`, the runtime falls back to the package-bundled assets from inside that context.
 
 All inference-critical logic — WASM module management, native bridge calls, and request tracking — lives inside `MainThreadEngineRuntime`. The worker-backed path instantiates the same runtime class inside a Web Worker, communicates through a structured `postMessage` protocol (defined in `WorkerRequestMessage`/`WorkerResponseMessage`), and exposes the same `ModelLifecycleService` interface.
 
@@ -41,7 +41,7 @@ graph TD
     end
 
     subgraph Persistence ["Persistence Layer (OPFS)"]
-        Registry["ModelRegistryStore<br/>(manifest.json)"]
+        Registry["ModelRegistryStore<br/>(registry.json)"]
         Assets["AssetStore<br/>(Raw downloaded files)"]
     end
 
@@ -87,7 +87,7 @@ graph TD
 
 ## 2. Model Asset Management & Loading
 
-`ModelService` completely manages model and projector assets. It downloads remote assets, caches them in an OPFS-backed `AssetStore`, and tracks pairings in a `ModelRegistryStore`. The execution path translates a user's `ModelSource` into installed asset records and an internal runtime bundle descriptor before handing it to the runtime. Low-level bundle descriptors, mount paths, queue internals, and native scheduler details are not public API.
+`ModelService` completely manages model and projector assets. It downloads remote assets, caches them in an OPFS-backed `AssetStore`, and tracks installed models plus projector pairing state in a `ModelRegistryStore`. Installed model ids identify the persisted base-model entry, not a temporary runtime mount. Successful projector pairings are stored on that entry and reused later; unresolved pairing scans are cached against the current projector inventory revision and retried only after the installed projector set changes. The execution path translates a user's `ModelSource` into installed asset records and an internal runtime bundle descriptor before handing it to the runtime. Low-level bundle descriptors, mount paths, queue internals, and native scheduler details are not public API.
 
 ```mermaid
 flowchart TD

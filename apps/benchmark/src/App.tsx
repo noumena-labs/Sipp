@@ -82,6 +82,34 @@ function sourceLabel(source: ModelSource): string {
   return 'model.gguf';
 }
 
+function isModelSourceObject(
+  source: ModelSource
+): source is Extract<ModelSource, { model: ModelSource }> {
+  return (
+    typeof source === 'object' &&
+    source != null &&
+    !(source instanceof File) &&
+    !Array.isArray(source) &&
+    'model' in source
+  );
+}
+
+function sourceKey(source: ModelSource): string {
+  if (typeof source === 'string') return `string:${source}`;
+  if (source instanceof File) {
+    return `file:${source.name}:${source.size}:${source.lastModified}`;
+  }
+  if (Array.isArray(source)) {
+    return `array:[${source.map((item) => sourceKey(item)).join('|')}]`;
+  }
+  if (!isModelSourceObject(source)) {
+    return 'unknown:model-source';
+  }
+  return `pair:model=${sourceKey(source.model)};projector=${
+    source.projector == null ? 'none' : sourceKey(source.projector)
+  }`;
+}
+
 function withProjector(source: ModelSource, projector?: string | File): ModelSource {
   if (projector == null) return source;
   if (
@@ -153,6 +181,7 @@ export default function App() {
   const [benchmarkReport, setBenchmarkReport] = useState<BenchmarkReport | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const projectorFileInputRef = useRef<HTMLInputElement>(null);
+  const loadedSourceKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -235,6 +264,7 @@ export default function App() {
     });
     setLastLoadMs(round(performance.now() - start));
     setSourceInfo({ label: sourceLabel(source), bytes: info.bytes });
+    loadedSourceKeyRef.current = sourceKey(source);
     await refreshModels(targetEngine);
     return info;
   };
@@ -263,12 +293,16 @@ export default function App() {
     setResponse('');
     setLastRun(null);
     try {
-      if (engine.models.current() == null) {
-        const source = modelSource();
-        if (source == null) {
-          setStatus('Select a model source first.');
-          return;
-        }
+      const source = modelSource();
+      if (source == null) {
+        setStatus('Select a model source first.');
+        return;
+      }
+      const nextSourceKey = sourceKey(source);
+      if (
+        engine.models.current() == null ||
+        loadedSourceKeyRef.current !== nextSourceKey
+      ) {
         const info = await loadModelSelection(engine, source);
         setStatus(info.status === 'ready' ? `loaded ${info.name}` : `${info.name}: ${info.status}`);
       }

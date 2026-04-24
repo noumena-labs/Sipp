@@ -1490,6 +1490,20 @@ InferenceRuntime::InferenceRuntime(std::string model_path,
     }
     mtmd_ctx_ = mtmd_init_from_file(config_.mmproj_path.c_str(), primary_model_,
                                     mtmd_params);
+    if (mtmd_ctx_ == nullptr) {
+      fprintf(stderr,
+              "%s: error: failed to initialize multimodal projector from %s\n",
+              __func__, config_.mmproj_path.c_str());
+      return;
+    }
+    if (!mtmd_support_vision(mtmd_ctx_)) {
+      fprintf(stderr,
+              "%s: error: multimodal projector does not expose vision support\n",
+              __func__);
+      mtmd_free(mtmd_ctx_);
+      mtmd_ctx_ = nullptr;
+      return;
+    }
   }
 
   auto sparams = llama_sampler_chain_default_params();
@@ -1587,8 +1601,14 @@ InferenceRuntime::~InferenceRuntime() {
 
 bool InferenceRuntime::IsReady() const {
   std::lock_guard<std::mutex> lock(operation_mutex_);
-  return primary_model_ != nullptr && shared_context_ != nullptr &&
-         sampler_ != nullptr;
+  if (primary_model_ == nullptr || shared_context_ == nullptr ||
+      sampler_ == nullptr) {
+    return false;
+  }
+  if (!config_.mmproj_path.empty()) {
+    return mtmd_ctx_ != nullptr && mtmd_support_vision(mtmd_ctx_);
+  }
+  return true;
 }
 
 bool InferenceRuntime::TryGetRuntimeObservability(
