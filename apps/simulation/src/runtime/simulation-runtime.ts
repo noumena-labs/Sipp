@@ -158,7 +158,6 @@ export class SimulationRuntime {
     if (this.narrationInFlight) {
       await this.narrationInFlight.catch(() => undefined);
     }
-    this.bus.clear();
   }
 
   public addAgent(agent: SimulationAgentChooser, seed: ScenarioAgentSeed): void {

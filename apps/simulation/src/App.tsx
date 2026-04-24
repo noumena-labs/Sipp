@@ -3,7 +3,7 @@
 // App.tsx
 //
 // - Top-level simulation app. Wires:
-//     - a single shared CogentEngine, loaded from a user-pasted .gguf URL
+//     - a single shared CogentEngine, loaded from the configured .gguf URL
 //     - a DirectorRuntime from `director.json`
 //     - four CharacterAgent-backed chooser adapters
 //     - an app-local SimulationRuntime that owns the world loop
@@ -71,17 +71,21 @@ const BRAIN_DEFINITIONS: readonly BrainDefinition[] = [
   },
 ];
 
+const DEFAULT_MODEL_URL = 'https://huggingface.co/LiquidAI/LFM2.5-350M-GGUF/resolve/main/LFM2.5-350M-Q8_0.gguf';
+const SIMULATION_TICK_HZ = 1.5;
+const SIMULATION_STEP_SECONDS = 1 / SIMULATION_TICK_HZ;
+const SIMULATION_STEP_DELAY_MS = 1000 / SIMULATION_TICK_HZ;
+
 export default function App() {
   const bus = useMemo(() => new SimulationBus(), []);
   const brainStore = useMemo(() => new BrainActivityStore(BRAIN_DEFINITIONS), []);
   const appRef = useRef<HTMLDivElement | null>(null);
   const inspectorRef = useRef<HTMLDivElement | null>(null);
-  const [modelUrl, setModelUrl] = useState('');
-  const [status, setStatus] = useState('Idle. Paste a .gguf URL and press Load.');
+  const [modelUrl, setModelUrl] = useState(DEFAULT_MODEL_URL);
+  const [status, setStatus] = useState('Idle. Press Load to initialize the model.');
   const [busy, setBusy] = useState(false);
   const [harness, setHarness] = useState<LoadedHarness | null>(null);
   const [running, setRunning] = useState(false);
-  const [tickHz, setTickHz] = useState(1.5);
   const [snapshot, setSnapshot] = useState<WorldSnapshot | null>(null);
   const [events, setEvents] = useState<EventLogEntry[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -119,6 +123,22 @@ export default function App() {
   const handleSelectBrain = useCallback((brainId: string): void => {
     setSelectedBrainId((prev) => prev === brainId ? null : brainId);
   }, []);
+
+  const resetSimulationUi = useCallback((): void => {
+    eventIdRef.current = 0;
+    criticalIssueRef.current = false;
+    snapshotRef.current = null;
+    setSnapshot(null);
+    setEvents([]);
+    brainStore.reset();
+    setHasSimulationStarted(false);
+    setBrainHudExpanded(false);
+    setSelectedBrainId(null);
+    setSelectedAgentId(null);
+    setHoveredObject(null);
+    setEventLogCollapsed(true);
+    setDirectorState(createInitialDirectorState(COURTYARD_SCENARIO.directorNote ?? null));
+  }, [brainStore]);
 
   // Subscribe to bus once.
   useEffect(() => {
@@ -262,19 +282,18 @@ export default function App() {
     if (!running || !harness) {
       return;
     }
-    const delayMs = 1000 / tickHz;
     let disposed = false;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
     const loop = async (): Promise<void> => {
       if (disposed) return;
-      await harness.runtime.step(1 / tickHz);
+      await harness.runtime.step(SIMULATION_STEP_SECONDS);
       await harness.runtime.waitForIdle();
       if (criticalIssueRef.current) return;
       if (disposed) return;
       timeoutId = setTimeout(() => {
         void loop();
-      }, delayMs);
+      }, SIMULATION_STEP_DELAY_MS);
     };
 
     timeoutId = setTimeout(() => {
@@ -287,30 +306,20 @@ export default function App() {
         clearTimeout(timeoutId);
       }
     };
-  }, [harness, running, tickHz]);
+  }, [harness, running]);
 
   const loadHarness = useCallback(
     async (url: string): Promise<void> => {
       setBusy(true);
       setModelUrl(url);
-      eventIdRef.current = 0;
-      criticalIssueRef.current = false;
-      setEvents([]);
-      brainStore.reset();
-      setHasSimulationStarted(false);
-      setBrainHudExpanded(false);
-      setSelectedBrainId(null);
-      setSelectedAgentId(null);
-      snapshotRef.current = null;
-      setSnapshot(null);
-      setDirectorState(createInitialDirectorState(COURTYARD_SCENARIO.directorNote ?? null));
+      setRunning(false);
       try {
         if (harness) {
+          setHarness(null);
           await harness.runtime.dispose();
           harness.engine.close();
-          setHarness(null);
-          setRunning(false);
         }
+        resetSimulationUi();
         setStatus('Initialising engine…');
         const engine = new CogentEngine({ ...getBundledRuntimeUrls() });
         await engine.initModule();
@@ -392,7 +401,7 @@ export default function App() {
         setBusy(false);
       }
     },
-    [brainStore, bus, harness, tickHz]
+    [brainStore, bus, harness, resetSimulationUi]
   );
 
   const handleStart = (): void => {
@@ -417,7 +426,7 @@ export default function App() {
     criticalIssueRef.current = false;
     setHasSimulationStarted(true);
     setStatus('Stepping…');
-    await harness.runtime.step(1 / tickHz);
+    await harness.runtime.step(SIMULATION_STEP_SECONDS);
     await harness.runtime.waitForIdle();
     if (criticalIssueRef.current) return;
     setStatus('Stepped.');
@@ -426,22 +435,14 @@ export default function App() {
   const handleReset = async (): Promise<void> => {
     if (!harness) return;
     setBusy(true);
+    setRunning(false);
+    setStatus('Resetting…');
+    const currentHarness = harness;
+    setHarness(null);
     try {
-      await harness.runtime.dispose();
-      harness.engine.close();
-      setHarness(null);
-      setRunning(false);
-      criticalIssueRef.current = false;
-      snapshotRef.current = null;
-      setSnapshot(null);
-      setEvents([]);
-      brainStore.reset();
-      setHasSimulationStarted(false);
-      setBrainHudExpanded(false);
-      setSelectedBrainId(null);
-      setSelectedAgentId(null);
-      eventIdRef.current = 0;
-      setDirectorState(createInitialDirectorState(COURTYARD_SCENARIO.directorNote ?? null));
+      await currentHarness.runtime.dispose();
+      currentHarness.engine.close();
+      resetSimulationUi();
       setStatus('Reset. Press Load to rebuild.');
     } finally {
       setBusy(false);
@@ -455,6 +456,7 @@ export default function App() {
   const directorDetail = directorState.detail?.trim() || null;
   const directorNote = directorState.note?.trim() || null;
   const showDirectorNote = directorNote != null && directorNote !== directorDetail;
+  const highlightStart = harness != null && !busy && !running && !hasSimulationStarted;
 
   useEffect(() => {
     const app = appRef.current;
@@ -494,18 +496,18 @@ export default function App() {
       <div className="sim-overlay sim-top-left">
         <ControlsPanel
           modelUrl={modelUrl}
+          onModelUrlChange={setModelUrl}
           onLoad={loadHarness}
           onStart={handleStart}
           onPause={handlePause}
           onStep={handleStep}
           onReset={handleReset}
-          tickHz={tickHz}
-          onTickHzChange={setTickHz}
           status={status}
           busy={busy}
           loaded={harness != null}
           running={running}
           tick={snapshot?.tick ?? 0}
+          highlightStart={highlightStart}
         />
       </div>
 

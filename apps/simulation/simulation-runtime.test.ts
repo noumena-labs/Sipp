@@ -413,6 +413,33 @@ test('SimulationRuntime maps referee selection choices to director resolutions',
   }
 });
 
+test('SimulationRuntime dispose leaves shared bus listeners intact', async () => {
+  const director = new DirectorRuntime(createOutputEngine('hold'), DIRECTOR_CONFIG);
+  const bus = new SimulationBus();
+  const events: SimulationEvent[] = [];
+  bus.onAny((event) => {
+    events.push(event);
+  });
+
+  const runtime = new SimulationRuntime(director, {
+    bus,
+    game: {
+      title: 'Banana Dash',
+      bananaObjectId: 'banana',
+      goalObjectId: 'home',
+      respawnRules: [{ objectId: 'banana', delayTicks: 1, spawnPoints: [{ x: -4, z: -4 }] }],
+    },
+  });
+
+  try {
+    await runtime.dispose();
+    bus.emit({ kind: 'tick-start', tick: 99, timeSeconds: 9.9 });
+    assert.equal(events.at(-1)?.kind, 'tick-start');
+  } finally {
+    await runtime.dispose();
+  }
+});
+
 test('forced-drop referee choices expose policy through grammar without leaking payload fields', () => {
   const state = createWorldState();
   state.tick = 8;

@@ -167,10 +167,6 @@ html, body, #app {
   font-family: inherit;
 }
 
-.controls-panel input[type="range"] {
-  width: 100%;
-}
-
 .controls-panel .row {
   display: flex;
   flex-wrap: wrap;
@@ -188,10 +184,24 @@ html, body, #app {
   border-radius: 8px;
   font-size: 12px;
   cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
 }
 
 .controls-panel button:hover:not(:disabled) {
   background: linear-gradient(180deg, #34436c, #233057);
+}
+
+.controls-panel button.start-button-highlight {
+  background: linear-gradient(180deg, #ffd86b, #ffb43b);
+  color: #241400;
+  border-color: rgba(255, 216, 107, 0.72);
+  box-shadow: 0 0 0 1px rgba(255, 216, 107, 0.24), 0 0 24px rgba(255, 180, 59, 0.24);
+  animation: start-button-callout 1.2s ease-in-out infinite;
+  font-weight: 700;
+}
+
+.controls-panel button.start-button-highlight:hover:not(:disabled) {
+  background: linear-gradient(180deg, #ffe188, #ffc55a);
 }
 
 .controls-panel button:disabled {
@@ -875,6 +885,18 @@ html, body, #app {
   100% {
     transform: scale(1);
     box-shadow: 0 0 0 0 rgba(255, 255, 255, 0);
+  }
+}
+
+@keyframes start-button-callout {
+  0%,
+  100% {
+    transform: translateY(0);
+    box-shadow: 0 0 0 1px rgba(255, 216, 107, 0.24), 0 0 20px rgba(255, 180, 59, 0.2);
+  }
+  50% {
+    transform: translateY(-1px);
+    box-shadow: 0 0 0 1px rgba(255, 216, 107, 0.36), 0 0 30px rgba(255, 180, 59, 0.34);
   }
 }
 

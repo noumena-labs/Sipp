@@ -2,32 +2,30 @@
 //
 // components/ControlsPanel.tsx
 //
-// - Setup + transport panel. Mirrors the avatar app pattern: paste a
-//   .gguf URL, click Load, then Start / Pause / Step and tune the tick
-//   rate. Character config URLs are implicit (scenario-defined).
+// - Setup + transport panel. Mirrors the avatar app pattern: review the
+//   .gguf URL, click Load, then Start / Pause / Step. Character config
+//   URLs are implicit (scenario-defined).
 //
 //////////////////////////////////////////////////////////////////////////////
 
-import { useState } from 'react';
-
 export interface ControlsPanelProps {
   readonly modelUrl: string;
+  readonly onModelUrlChange: (modelUrl: string) => void;
   readonly onLoad: (modelUrl: string) => void | Promise<void>;
   readonly onStart: () => void;
   readonly onPause: () => void;
   readonly onStep: () => void;
   readonly onReset: () => void;
-  readonly tickHz: number;
-  readonly onTickHzChange: (hz: number) => void;
   readonly status: string;
   readonly busy: boolean;
   readonly loaded: boolean;
   readonly running: boolean;
   readonly tick: number;
+  readonly highlightStart: boolean;
 }
 
 export function ControlsPanel(props: ControlsPanelProps) {
-  const [modelUrl, setModelUrl] = useState(props.modelUrl);
+  const trimmedModelUrl = props.modelUrl.trim();
 
   return (
     <div className="controls-panel glass-panel">
@@ -35,21 +33,21 @@ export function ControlsPanel(props: ControlsPanelProps) {
       <div className="panel-title">Banana Dash</div>
 
       <label className="field">
-        <span>Model URL (.gguf)</span>
+        <span>Model GGUF</span>
         <input
           type="text"
-          value={modelUrl}
+          value={props.modelUrl}
           disabled={props.busy}
           placeholder="https://…/model.gguf"
-          onChange={(e) => setModelUrl(e.target.value)}
+          onChange={(e) => props.onModelUrlChange(e.target.value)}
         />
       </label>
 
       <div className="row">
         <button
           type="button"
-          disabled={props.busy || modelUrl.trim().length === 0}
-          onClick={() => props.onLoad(modelUrl.trim())}
+          disabled={props.busy || trimmedModelUrl.length === 0}
+          onClick={() => props.onLoad(trimmedModelUrl)}
         >
           {props.loaded ? 'Reload' : 'Load'}
         </button>
@@ -58,6 +56,7 @@ export function ControlsPanel(props: ControlsPanelProps) {
       <div className="row">
         <button
           type="button"
+          className={props.highlightStart ? 'start-button-highlight' : undefined}
           disabled={!props.loaded || props.running}
           onClick={props.onStart}
         >
@@ -77,18 +76,6 @@ export function ControlsPanel(props: ControlsPanelProps) {
           Reset
         </button>
       </div>
-
-      <label className="field">
-        <span>Tick rate: {props.tickHz.toFixed(2)} Hz</span>
-        <input
-          type="range"
-          min={0.5}
-          max={4}
-          step={0.1}
-          value={props.tickHz}
-          onChange={(e) => props.onTickHzChange(parseFloat(e.target.value))}
-        />
-      </label>
 
       <div className="status">
         <div>tick #{props.tick}</div>
