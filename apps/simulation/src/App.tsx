@@ -515,6 +515,7 @@ export default function App() {
         <AgentInspector
           agents={agents}
           bananaObjectId={snapshot?.game.bananaObjectId}
+          tick={snapshot?.tick ?? 0}
           selectedAgentId={selectedAgentId}
           onSelect={setSelectedAgentId}
         />
@@ -602,10 +603,12 @@ function describeGameEvent(
       return `${nameOf(event.targetAgentId, snapshot)} keeps hold through the bump.`;
     case 'bump_whiff':
       return `${nameOf(event.attackerAgentId, snapshot)} lunges at ${nameOf(event.targetAgentId, snapshot)} and whiffs the bump.`;
+    case 'power_up_throw':
+      return `${nameOf(event.agentId, snapshot)} hurls an ice cube at ${nameOf(event.targetAgentId, snapshot)}.`;
     case 'power_up_use':
       return event.powerUp === 'bat'
         ? `${nameOf(event.agentId, snapshot)} bonks ${nameOf(event.targetAgentId, snapshot)} with the bat.`
-        : `${nameOf(event.agentId, snapshot)} pelts ${nameOf(event.targetAgentId, snapshot)} with an ice cube and freezes them.`;
+        : `${nameOf(event.targetAgentId, snapshot)} gets encased in ice after ${nameOf(event.agentId, snapshot)}'s throw lands.`;
     case 'fallback':
       if (event.message.startsWith('Director is ruling on ')) {
         return null;

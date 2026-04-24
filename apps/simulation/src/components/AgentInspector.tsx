@@ -14,6 +14,7 @@ import { emotionGlyphFor } from '../render/emoji-billboard.js';
 export interface AgentInspectorProps {
   readonly agents: readonly SimulationAgentState[];
   readonly bananaObjectId?: string;
+  readonly tick: number;
   readonly selectedAgentId: string | null;
   readonly onSelect: (agentId: string | null) => void;
 }
@@ -47,8 +48,10 @@ function formatGoal(agent: SimulationAgentState): string {
   return agent.goal?.label ?? 'idle';
 }
 
-function formatActivity(agent: SimulationAgentState, bananaObjectId: string): string {
-  if (agent.frozenUntilTick > 0 && agent.status === 'frozen in place') return 'frozen in place';
+function formatActivity(agent: SimulationAgentState, bananaObjectId: string, tick: number): string {
+  if (agent.frozenUntilTick > tick && (agent.status === 'frozen in place' || agent.status === 'frozen inside a block of ice')) {
+    return 'frozen inside a block of ice';
+  }
   if (agent.thinking) return 'thinking through the next move';
   if (agent.navigation.detourTarget) {
     return agent.navigation.obstacleId
@@ -94,6 +97,8 @@ export function AgentInspector(props: AgentInspectorProps) {
           const selected = a.id === props.selectedAgentId;
           const glyph = a.holding === bananaObjectId
             ? '🍌'
+            : a.frozenUntilTick > props.tick
+              ? '⛄'
             : a.powerUp?.kind === 'bat'
               ? '🏏'
               : a.powerUp?.kind === 'ice_cube'
@@ -114,12 +119,12 @@ export function AgentInspector(props: AgentInspectorProps) {
                   ({a.position.x.toFixed(1)}, {a.position.z.toFixed(1)})
                 </span>
               </div>
-              <div className="agent-activity">{formatActivity(a, bananaObjectId)}</div>
+              <div className="agent-activity">{formatActivity(a, bananaObjectId, props.tick)}</div>
               <div className="agent-goal">goal: {a.thinking ? 'thinking...' : formatGoal(a)}</div>
               {a.intent ? <div className="agent-intent">executor: {formatIntent(a)}</div> : null}
               {a.holding ? <div className="agent-holding">holding: {a.holding}</div> : null}
               {a.powerUp ? <div className="agent-holding">power-up: {a.powerUp.kind === 'bat' ? 'baseball bat' : 'ice cube'}</div> : null}
-              {a.frozenUntilTick > 0 && a.status === 'frozen in place' ? <div className="agent-holding">status: frozen</div> : null}
+              {a.frozenUntilTick > props.tick ? <div className="agent-holding">status: frozen in ice</div> : null}
             </li>
           );
         })}

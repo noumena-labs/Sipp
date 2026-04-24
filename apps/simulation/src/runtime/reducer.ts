@@ -5,6 +5,7 @@ import type {
   ForcedDropOutcome,
   ForcedDropRulingRecord,
   ObjectRespawnRule,
+  PendingIceImpactState,
   PendingRespawnState,
   PowerUpKind,
   RefereeState,
@@ -33,6 +34,7 @@ export interface MutableGameState extends Omit<SimulationGameState, 'score' | 'r
   referee: RefereeState;
   refereeMemory: MutableRefereeMemoryState;
   pendingRespawns: PendingRespawnState[];
+  pendingIceImpacts: PendingIceImpactState[];
   nextSpawnIndexByObjectId: Record<string, number>;
 }
 
@@ -50,9 +52,11 @@ export const INTERACTION_RADIUS = 0.75;
 export const AGENT_RADIUS = 0.38;
 export const GOAL_RADIUS = 1.2;
 export const SABOTAGE_RADIUS = 0.95;
+export const ICE_THROW_RADIUS = 4.5;
 export const FORCED_DROP_HISTORY_LIMIT = 8;
 export const SABOTAGE_COOLDOWN_TICKS = 3;
-export const FREEZE_TICKS = 6;
+export const FREEZE_TICKS = 38;
+export const ICE_THROW_TRAVEL_TICKS = 4;
 const DETOUR_PADDING = 0.35;
 const DETOUR_REACHED_RADIUS = 0.35;
 const BLOCKED_REPATH_TICKS = 2;
@@ -71,6 +75,7 @@ export function applyTickFirstPass(state: MutableWorldState, dt: number): TickRe
   const arrivedAgentIds: string[] = [];
 
   processPendingRespawn(state, events);
+  processPendingIceImpacts(state, events);
   refreshFrozenAgents(state);
 
   moveAgentsWithoutOverlap(state, dt, arrivedAgentIds);
@@ -585,7 +590,7 @@ function refreshFrozenAgents(state: MutableWorldState): void {
     if (agent.frozenUntilTick <= state.tick) continue;
     agent.intent = null;
     agent.goal = null;
-    agent.status = 'frozen in place';
+    agent.status = 'frozen inside a block of ice';
     agent.emotion = 'sleepy';
   }
 }
@@ -655,13 +660,17 @@ function processSabotageRequests(state: MutableWorldState, events: SimulationGam
       continue;
     }
     const target = state.agents.find((entry) => entry.id === intent.agentId);
-    if (!target || target.holding !== banana.id) {
+    if (!target) {
       clearAgentSabotage(state, agent);
       continue;
     }
-    if (vec2Distance(agent.position, target.position) > SABOTAGE_RADIUS) continue;
 
     if (intent.method === 'bump') {
+      if (target.holding !== banana.id) {
+        clearAgentSabotage(state, agent);
+        continue;
+      }
+      if (vec2Distance(agent.position, target.position) > SABOTAGE_RADIUS) continue;
       spendSabotageCooldown(agent, state.tick);
       if (!resolveBumpContact(state, agent, target)) {
         agent.status = 'swings wide on the bump';
@@ -686,11 +695,25 @@ function processSabotageRequests(state: MutableWorldState, events: SimulationGam
     }
 
     const powerUp = consumePowerUp(agent, intent.method);
-    spendSabotageCooldown(agent, state.tick);
     if (!powerUp) {
       clearAgentSabotage(state, agent);
       continue;
     }
+    if (powerUp.kind === 'ice_cube') {
+      if (vec2Distance(agent.position, target.position) > ICE_THROW_RADIUS) {
+        agent.powerUp = powerUp;
+        continue;
+      }
+      spendSabotageCooldown(agent, state.tick);
+      launchIceThrow(state, agent, target, powerUp, events);
+      clearAgentSabotage(state, agent);
+      continue;
+    }
+    if (vec2Distance(agent.position, target.position) > SABOTAGE_RADIUS) {
+      agent.powerUp = powerUp;
+      continue;
+    }
+    spendSabotageCooldown(agent, state.tick);
     applyGuaranteedPowerUpSabotage(state, agent, target, powerUp, banana, events);
     clearAgentSabotage(state, agent);
     continue;
@@ -719,6 +742,25 @@ function processPendingRespawn(state: MutableWorldState, events: SimulationGameE
     });
   }
   state.game.pendingRespawns = remaining;
+}
+
+function processPendingIceImpacts(state: MutableWorldState, events: SimulationGameEvent[]): void {
+  if (state.game.pendingIceImpacts.length === 0) return;
+  const banana = getObject(state, state.game.bananaObjectId);
+  if (!banana) return;
+
+  const remaining: PendingIceImpactState[] = [];
+  for (const pending of state.game.pendingIceImpacts) {
+    if (state.tick < pending.activateAtTick) {
+      remaining.push(pending);
+      continue;
+    }
+    const attacker = state.agents.find((agent) => agent.id === pending.attackerAgentId);
+    const target = state.agents.find((agent) => agent.id === pending.targetAgentId);
+    if (!attacker || !target) continue;
+    applyIceImpact(state, attacker, target, pending.objectId, banana, events);
+  }
+  state.game.pendingIceImpacts = remaining;
 }
 
 function scheduleRespawn(state: MutableWorldState, objectId: string, delayTicks: number): void {
@@ -925,7 +967,7 @@ function clearAgentSabotage(state: MutableWorldState, agent: SimulationAgentStat
   agent.intent = null;
   agent.goal = null;
   if (agent.frozenUntilTick > state.tick) {
-    agent.status = 'frozen in place';
+    agent.status = 'frozen inside a block of ice';
   }
 }
 
@@ -958,8 +1000,8 @@ function applyGuaranteedPowerUpSabotage(
   banana: SimulationObjectState,
   events: SimulationGameEvent[]
 ): void {
-  const position = midpoint(attacker.position, target.position);
   if (powerUp.kind === 'bat') {
+    const position = midpoint(attacker.position, target.position);
     attacker.status = `bonks ${target.name} with the bat`;
     attacker.emotion = 'alert';
     target.emotion = 'surprised';
@@ -981,13 +1023,50 @@ function applyGuaranteedPowerUpSabotage(
     scheduleRespawnFromRule(state, powerUp.objectId);
     return;
   }
+}
 
-  attacker.status = `launches the ice cube at ${target.name}`;
+function launchIceThrow(
+  state: MutableWorldState,
+  attacker: SimulationAgentState,
+  target: SimulationAgentState,
+  powerUp: { kind: 'ice_cube'; objectId: string },
+  events: SimulationGameEvent[]
+): void {
+  attacker.status = `hurls the ice cube at ${target.name}`;
   attacker.emotion = 'alert';
+  state.game.pendingIceImpacts.push({
+    objectId: powerUp.objectId,
+    attackerAgentId: attacker.id,
+    targetAgentId: target.id,
+    launchedFrom: { x: attacker.position.x, z: attacker.position.z },
+    activateAtTick: state.tick + ICE_THROW_TRAVEL_TICKS,
+    launchedAtTick: state.tick,
+  });
+  events.push({
+    kind: 'power_up_throw',
+    agentId: attacker.id,
+    targetAgentId: target.id,
+    objectId: powerUp.objectId,
+    powerUp: 'ice_cube',
+    from: { x: attacker.position.x, z: attacker.position.z },
+    targetAtLaunch: { x: target.position.x, z: target.position.z },
+    travelTicks: ICE_THROW_TRAVEL_TICKS,
+  });
+  scheduleRespawnFromRule(state, powerUp.objectId);
+}
+
+function applyIceImpact(
+  state: MutableWorldState,
+  attacker: SimulationAgentState,
+  target: SimulationAgentState,
+  objectId: string,
+  banana: SimulationObjectState,
+  events: SimulationGameEvent[]
+): void {
   target.frozenUntilTick = Math.max(target.frozenUntilTick, state.tick + FREEZE_TICKS);
   target.intent = null;
   target.goal = null;
-  target.status = 'frozen solid by an ice cube';
+  target.status = 'frozen inside a block of ice';
   target.emotion = 'sleepy';
   if (target.holding === banana.id) {
     dropHeldObject(state, target, events, `${attacker.name} freezes ${target.name} and the banana pops free!`, 'ice');
@@ -997,12 +1076,11 @@ function applyGuaranteedPowerUpSabotage(
     kind: 'power_up_use',
     agentId: attacker.id,
     targetAgentId: target.id,
-    objectId: powerUp.objectId,
+    objectId,
     powerUp: 'ice_cube',
-    position,
+    position: { x: target.position.x, z: target.position.z },
     effect: 'freeze',
   });
-  scheduleRespawnFromRule(state, powerUp.objectId);
 }
 
 function scheduleRespawnFromRule(state: MutableWorldState, objectId: string): void {
@@ -1266,7 +1344,9 @@ export function hasReachedCurrentIntent(agent: SimulationAgentState, state: Muta
     }
     case 'sabotage': {
       const target = state.agents.find((entry) => entry.id === intent.agentId);
-      return target ? vec2Distance(agent.position, target.position) <= SABOTAGE_RADIUS : true;
+      if (!target) return true;
+      const radius = intent.method === 'ice_cube' ? ICE_THROW_RADIUS : SABOTAGE_RADIUS;
+      return vec2Distance(agent.position, target.position) <= radius;
     }
     case 'pick_up':
     case 'use': {

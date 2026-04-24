@@ -91,6 +91,7 @@ export interface SimulationGameState {
   readonly referee: RefereeState;
   readonly refereeMemory: SimulationRefereeMemory;
   readonly pendingRespawns: readonly PendingRespawnState[];
+  readonly pendingIceImpacts: readonly PendingIceImpactState[];
 }
 
 export interface SimulationRefereeMemory {
@@ -109,6 +110,15 @@ export interface PendingRespawnState {
   readonly objectId: string;
   readonly spawnPosition: Vec2;
   readonly activateAtTick: number;
+}
+
+export interface PendingIceImpactState {
+  readonly objectId: string;
+  readonly attackerAgentId: string;
+  readonly targetAgentId: string;
+  readonly launchedFrom: Vec2;
+  readonly activateAtTick: number;
+  readonly launchedAtTick: number;
 }
 
 export interface ObjectRespawnRule {
@@ -268,6 +278,16 @@ export type SimulationGameEvent =
       readonly attackerAgentId: string;
       readonly targetAgentId: string;
       readonly position: Vec2;
+    }
+  | {
+      readonly kind: 'power_up_throw';
+      readonly agentId: string;
+      readonly targetAgentId: string;
+      readonly objectId: string;
+      readonly powerUp: 'ice_cube';
+      readonly from: Vec2;
+      readonly targetAtLaunch: Vec2;
+      readonly travelTicks: number;
     }
   | {
       readonly kind: 'power_up_use';

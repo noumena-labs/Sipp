@@ -27,10 +27,13 @@ const FLASH_SECONDS = 0.32;
 const IMPACT_SECONDS = 0.28;
 const CONFETTI_SECONDS = 0.9;
 const DROP_ARC_SECONDS = 0.75;
+const ICE_THROW_ARC_SECONDS = 0.64;
+const FROZEN_SHAKE_SECONDS = 0.18;
 
 interface AgentEntry {
   name: string;
   readonly visual: AgentVisual;
+  readonly iceShell: THREE.Mesh;
   readonly targetMarker: THREE.Mesh;
   readonly targetLine: THREE.Line;
   targetX: number;
@@ -78,6 +81,17 @@ interface BurstEffect {
   readonly endAt: number;
 }
 
+interface ProjectileEffect {
+  readonly root: THREE.Group;
+  readonly startX: number;
+  readonly startZ: number;
+  readonly endX: number;
+  readonly endZ: number;
+  readonly startAt: number;
+  readonly endAt: number;
+  dispose(): void;
+}
+
 export interface WorldBinding {
   applySnapshot(snapshot: WorldSnapshot): void;
   dispose(): void;
@@ -100,6 +114,7 @@ export function bindWorldToScene(
   const agents = new Map<string, AgentEntry>();
   const objects = new Map<string, ObjectEntry>();
   const bursts = new Set<BurstEffect>();
+  const projectiles = new Set<ProjectileEffect>();
   const hoverPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   let highlightedAgent: string | null = null;
   let hoveredObject: string | null = null;
@@ -115,6 +130,19 @@ export function bindWorldToScene(
     const baseColor = new THREE.Color(colorHex);
     const visual = createAgentVisual(name, colorHex);
     worldRoot.add(visual.root);
+    const iceShell = new THREE.Mesh(
+      new THREE.BoxGeometry(0.95, 1.25, 0.95),
+      new THREE.MeshStandardMaterial({
+        color: 0x9ae8ff,
+        roughness: 0.14,
+        metalness: 0.08,
+        transparent: true,
+        opacity: 0.45,
+      })
+    );
+    iceShell.position.set(0, 0.62, 0);
+    iceShell.visible = false;
+    visual.root.add(iceShell);
     const targetMarker = new THREE.Mesh(
       new THREE.RingGeometry(0.28, 0.38, 32),
       new THREE.MeshBasicMaterial({
@@ -145,6 +173,7 @@ export function bindWorldToScene(
     entry = {
       name,
       visual,
+      iceShell,
       targetMarker,
       targetLine,
       targetX: 0,
@@ -216,6 +245,7 @@ export function bindWorldToScene(
         entry.pulseUntil = Math.max(entry.pulseUntil, elapsedSeconds + PULSE_SECONDS);
       }
       syncAgentProp(entry, a);
+      entry.iceShell.visible = a.frozenUntilTick > snap.tick;
       setAgentTarget(entry, resolveIntentTarget(a.intent, snap));
       updateAgentGlyph(entry, a, snap);
     }
@@ -313,6 +343,7 @@ export function bindWorldToScene(
         offsetX = entry.joltDirection.x * 0.14 * strength;
         offsetZ = entry.joltDirection.z * 0.14 * strength;
       }
+
       entry.visual.root.position.x = pos.x + offsetX;
       entry.visual.root.position.z = pos.z + offsetZ;
 
@@ -373,6 +404,21 @@ export function bindWorldToScene(
       p.x += (entry.targetX - p.x) * LERP_ALPHA;
       p.z += (entry.targetZ - p.z) * LERP_ALPHA;
       entry.visual.setPosition(p.x, p.z);
+    }
+
+    for (const projectile of Array.from(projectiles)) {
+      if (projectile.endAt <= elapsedSeconds) {
+        projectile.dispose();
+        projectiles.delete(projectile);
+        continue;
+      }
+      const progress = clamp01((elapsedSeconds - projectile.startAt) / (projectile.endAt - projectile.startAt));
+      const arcHeight = Math.sin(progress * Math.PI) * 1.15;
+      projectile.root.position.x = lerp(projectile.startX, projectile.endX, progress);
+      projectile.root.position.z = lerp(projectile.startZ, projectile.endZ, progress);
+      projectile.root.position.y = 0.48 + arcHeight;
+      projectile.root.rotation.x += dt * 6;
+      projectile.root.rotation.z += dt * 5.5;
     }
 
     for (const burst of Array.from(bursts)) {
@@ -470,6 +516,17 @@ export function bindWorldToScene(
         spawnBurst(event.position, 0xf4d35e, 7, 0.22);
         return;
       }
+      case 'power_up_throw': {
+        const attacker = agents.get(event.agentId);
+        if (attacker) {
+          attacker.glyphOverride = '🧊';
+          attacker.glyphOverrideUntil = elapsedSeconds + 0.28;
+          attacker.flashColor = new THREE.Color(0x8fe7ff);
+          attacker.flashUntil = elapsedSeconds + FLASH_SECONDS;
+        }
+        spawnIceProjectile(event.from, event.targetAtLaunch);
+        return;
+      }
       case 'power_up_use': {
         const attacker = agents.get(event.agentId);
         const target = agents.get(event.targetAgentId);
@@ -480,7 +537,7 @@ export function bindWorldToScene(
           attacker.flashUntil = elapsedSeconds + FLASH_SECONDS;
         }
         if (target) {
-          target.glyphOverride = event.effect === 'freeze' ? '🧊' : '💢';
+          target.glyphOverride = event.effect === 'freeze' ? '⛄' : '💢';
           target.glyphOverrideUntil = elapsedSeconds + 0.4;
           target.flashColor = new THREE.Color(event.effect === 'freeze' ? 0x8fe7ff : 0xff8a80);
           target.flashUntil = elapsedSeconds + 0.5;
@@ -571,6 +628,31 @@ export function bindWorldToScene(
     });
   }
 
+  function spawnIceProjectile(from: Vec2, to: Vec2): void {
+    const root = new THREE.Group();
+    const cube = new THREE.Mesh(
+      new THREE.BoxGeometry(0.28, 0.28, 0.28),
+      new THREE.MeshStandardMaterial({ color: 0x8fe7ff, roughness: 0.18, metalness: 0.08, transparent: true, opacity: 0.92 })
+    );
+    cube.rotation.set(0.35, 0.15, -0.2);
+    root.add(cube);
+    root.position.set(from.x, 0.48, from.z);
+    worldRoot.add(root);
+    projectiles.add({
+      root,
+      startX: from.x,
+      startZ: from.z,
+      endX: to.x,
+      endZ: to.z,
+      startAt: elapsedSeconds,
+      endAt: elapsedSeconds + ICE_THROW_ARC_SECONDS,
+      dispose: () => {
+        worldRoot.remove(root);
+        disposeObject3D(root);
+      },
+    });
+  }
+
   return {
     applySnapshot,
     dispose() {
@@ -594,9 +676,13 @@ export function bindWorldToScene(
         worldRoot.remove(entry.visual.root);
         entry.visual.dispose();
       }
+      for (const projectile of projectiles) {
+        projectile.dispose();
+      }
       agents.clear();
       objects.clear();
       bursts.clear();
+      projectiles.clear();
     },
     pickObject(ray) {
       const point = new THREE.Vector3();
@@ -690,9 +776,9 @@ function updateAgentGlyph(entry: AgentEntry, agent: SimulationAgentState, snap: 
 
 function activityGlyphFor(agent: SimulationAgentState, snap: WorldSnapshot): string | null {
   if (agent.holding === snap.game.bananaObjectId) return '🍌';
+  if (agent.frozenUntilTick > snap.tick) return '⛄';
   if (agent.powerUp?.kind === 'bat') return '🏏';
   if (agent.powerUp?.kind === 'ice_cube') return '🧊';
-  if (agent.frozenUntilTick > snap.tick) return '🧊';
   const intent = agent.intent;
   if (!intent) return null;
   switch (intent.kind) {

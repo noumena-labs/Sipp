@@ -627,7 +627,8 @@ export class SimulationRuntime {
         return agent.holding !== this.state.game.bananaObjectId;
       case 'sabotage_agent': {
         const target = this.state.agents.find((entry) => entry.id === goal.agentId);
-        if (!target || target.holding !== this.state.game.bananaObjectId) return true;
+        if (!target) return true;
+        if (goal.method === 'bump' && target.holding !== this.state.game.bananaObjectId) return true;
         if (goal.method !== 'bump' && agent.powerUp?.kind !== goal.method) return true;
         return false;
       }
@@ -682,6 +683,7 @@ function createGameState(seed: ScenarioGameSeed): MutableGameState {
     referee: { status: 'idle' },
     refereeMemory: { forcedDrops: [] },
     pendingRespawns: [],
+    pendingIceImpacts: [],
     nextSpawnIndexByObjectId: {},
   };
 }
@@ -705,6 +707,14 @@ function cloneGame(game: MutableGameState): SimulationGameState {
       objectId: pending.objectId,
       spawnPosition: { x: pending.spawnPosition.x, z: pending.spawnPosition.z },
       activateAtTick: pending.activateAtTick,
+    })),
+    pendingIceImpacts: game.pendingIceImpacts.map((pending) => ({
+      objectId: pending.objectId,
+      attackerAgentId: pending.attackerAgentId,
+      targetAgentId: pending.targetAgentId,
+      launchedFrom: { x: pending.launchedFrom.x, z: pending.launchedFrom.z },
+      activateAtTick: pending.activateAtTick,
+      launchedAtTick: pending.launchedAtTick,
     })),
   };
 }

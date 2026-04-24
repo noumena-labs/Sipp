@@ -187,6 +187,7 @@ function createWorldState(): MutableWorldState {
       referee: { status: 'idle' },
       refereeMemory: { forcedDrops: [] },
       pendingRespawns: [],
+      pendingIceImpacts: [],
       nextSpawnIndexByObjectId: {},
     },
   };

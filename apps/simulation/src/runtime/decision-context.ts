@@ -1,4 +1,4 @@
-import { GOAL_RADIUS, INTERACTION_RADIUS, SABOTAGE_RADIUS } from './reducer.js';
+import { GOAL_RADIUS, ICE_THROW_RADIUS, INTERACTION_RADIUS, SABOTAGE_RADIUS } from './reducer.js';
 import type {
   AgentPerception,
   DecisionContext,
@@ -128,7 +128,26 @@ function addNonCarrierOptions(
       : `${carrier.name} has the banana and is ${qualitativeDistance(carrier.distance)}.`;
     lines.push(carrierState);
 
-    if (perception.self.powerUp && carrier.distance <= SABOTAGE_RADIUS * 1.4) {
+    if (perception.self.powerUp?.kind === 'ice_cube' && !sabotageCoolingDown) {
+      const iceTargets = perception.nearbyAgents
+        .filter((agent) => agent.distance <= ICE_THROW_RADIUS)
+        .sort((a, b) => Number(b.holding === perception.game.bananaObjectId) - Number(a.holding === perception.game.bananaObjectId) || a.distance - b.distance);
+      if (iceTargets.length > 0) {
+        lines.push('Your ice cube can be thrown at any nearby agent within range.');
+      }
+      for (const target of iceTargets.slice(0, 3)) {
+        const label = sabotageLabel('ice_cube', target.name);
+        options.push({
+          label,
+          goal: {
+            kind: 'sabotage_agent',
+            agentId: target.id,
+            method: 'ice_cube',
+            label,
+          },
+        });
+      }
+    } else if (perception.self.powerUp && carrier.distance <= SABOTAGE_RADIUS * 1.4 && !sabotageCoolingDown) {
       const label = sabotageLabel(perception.self.powerUp.kind, carrier.name);
       options.push({
         label,
@@ -212,7 +231,7 @@ function formatScore(perception: AgentPerception): string {
 }
 
 function sabotageLabel(powerUp: PowerUpKind, targetName: string): string {
-  return powerUp === 'bat' ? `smack ${targetName} with the bat` : `freeze ${targetName} with the ice cube`;
+  return powerUp === 'bat' ? `smack ${targetName} with the bat` : `throw the ice cube at ${targetName}`;
 }
 
 function labelForPowerUp(powerUp: PowerUpKind): string {
