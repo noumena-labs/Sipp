@@ -1,94 +1,30 @@
 import {
   LocalProjectorResolutionResult,
-  ModelDetectionResult,
+  type AssetInspection,
+  type ModelDetectionResult,
 } from './model-bundle-types.js';
 import { inspectGgufMetadata } from './gguf-metadata.js';
 
-const VLM_FILENAME_PATTERNS: RegExp[] = [
-  /llava/i,
-  /qwen[_-]?2?[_-]?vl/i,
-  /lfm[\s._-]*(?:\d+(?:\.\d+)?)?[\s._-]*vl/i,
-  /internvl/i,
-  /cogvlm/i,
-  /phi[_-]?\d*[_-]?vision/i,
-  /minicpm[_-]?v/i,
-  /moondream/i,
-  /obsidian/i,
-  /bunny/i,
-  /nanollava/i,
-  /bakllava/i,
-  /mllama/i,
-  /llama[_-]?\d*[_-]?vision/i,
-  /pixtral/i,
-  /smolvlm/i,
-  /gemma.*pali/i,
-];
+interface VisionArchitectureRule {
+  projectorTypes: readonly string[];
+  requiresVisionEncoderFlag?: boolean;
+}
 
-const PROJECTOR_FILENAME_PATTERNS: RegExp[] = [
-  /mmproj/i,
-  /projector/i,
-  /clip[_-]?model/i,
-  /vision[_-]?encoder/i,
-];
-
-const VLM_METADATA_ARCHITECTURES = new Set([
-  'cogvlm',
-  'llama4',
-  'mllama',
-  'paddleocr',
-  'qwen2vl',
-  'qwen3vl',
-  'qwen3vlmoe',
+const VISION_ARCHITECTURE_RULES = new Map<string, VisionArchitectureRule>([
+  ['cogvlm', { projectorTypes: ['cogvlm'] }],
+  ['gemma3', { projectorTypes: ['gemma3'], requiresVisionEncoderFlag: true }],
+  ['gemma3n', { projectorTypes: ['gemma3nv'], requiresVisionEncoderFlag: true }],
+  ['gemma4', { projectorTypes: ['gemma4v'], requiresVisionEncoderFlag: true }],
+  ['hunyuan_vl', { projectorTypes: ['hunyuanvl'] }],
+  ['lfm2', { projectorTypes: ['lfm2'], requiresVisionEncoderFlag: true }],
+  ['llama4', { projectorTypes: ['llama4'], requiresVisionEncoderFlag: true }],
+  ['paddleocr', { projectorTypes: ['paddleocr'] }],
+  ['qwen2vl', { projectorTypes: ['qwen2vl_merger', 'qwen2.5vl_merger'] }],
+  ['qwen3vl', { projectorTypes: ['qwen3vl_merger'] }],
+  ['qwen3vlmoe', { projectorTypes: ['qwen3vl_merger'] }],
 ]);
 
-function isGgufFileName(fileName: string): boolean {
-  return fileName.trim().toLowerCase().endsWith('.gguf');
-}
-
-export function findProjectorFileCandidates<T extends { name: string }>(files: T[]): T[] {
-  return files.filter(
-    (file) =>
-      isGgufFileName(file.name) &&
-      PROJECTOR_FILENAME_PATTERNS.some((pattern) => pattern.test(file.name))
-  );
-}
-
-export function splitModelAndProjectorFiles<T extends { name: string }>(
-  files: T[]
-): LocalProjectorResolutionResult<T> {
-  const candidates = findProjectorFileCandidates(files);
-  if (candidates.length > 1) {
-    return {
-      modelFiles: [...files],
-      projectorFile: null,
-      candidateFileNames: candidates.map((candidate) => candidate.name),
-      errorMessage: `Multiple projector candidates found: ${candidates
-        .map((candidate) => candidate.name)
-        .join(', ')}.`,
-    };
-  }
-
-  if (candidates.length === 0) {
-    return {
-      modelFiles: [...files],
-      projectorFile: null,
-      candidateFileNames: [],
-      errorMessage: null,
-    };
-  }
-
-  const projectorFile = candidates[0];
-  const modelFiles = files.filter((file) => file !== projectorFile);
-  return {
-    modelFiles,
-    projectorFile,
-    candidateFileNames: [projectorFile.name],
-    errorMessage:
-      modelFiles.length > 0
-        ? null
-        : `No model files remain after removing projector candidate "${projectorFile.name}".`,
-  };
-}
+const ASSET_INSPECTION_VERSION = 1;
 
 export async function resolveLocalModelAndProjectorFiles<T extends Blob & { name: string }>(
   files: T[],
@@ -102,7 +38,7 @@ export async function resolveLocalModelAndProjectorFiles<T extends Blob & { name
   );
 
   const candidates = detections
-    .filter(({ detection }) => detection.isProjector)
+    .filter(({ detection }) => detection.inspection.role === 'projector')
     .map(({ file }) => file);
 
   if (candidates.length > 1) {
@@ -138,31 +74,21 @@ export async function resolveLocalModelAndProjectorFiles<T extends Blob & { name
   };
 }
 
-export function detectModelFromFilename(filename: string): ModelDetectionResult {
-  const isProjector = PROJECTOR_FILENAME_PATTERNS.some((pattern) => pattern.test(filename));
-  const isVision = VLM_FILENAME_PATTERNS.some((pattern) => pattern.test(filename));
-
-  return {
-    isVisionModel: isVision && !isProjector,
-    isProjector,
-    suggestedProjectorUrl: null,
-    detectionMethod: isVision || isProjector ? 'filename' : 'none',
-    modelName: filename,
-    modelType: null,
-    modelArchitecture: null,
-  };
-}
-
 export async function detectModelFromGgufFile(
   file: Blob & { name?: string },
   signal?: AbortSignal
 ): Promise<ModelDetectionResult> {
   const fileName = normalizeFileName(file.name);
-  const defaultValue = detectModelFromFilename(fileName);
   const metadata = await inspectGgufMetadata(file, { signal });
 
   if (metadata == null) {
-    return defaultValue;
+    return {
+      inspection: emptyInspection(),
+      detectionMethod: 'none',
+      modelName: fileName,
+      modelType: null,
+      modelArchitecture: null,
+    };
   }
 
   const modelType = normalizeOptionalString(metadata.generalType);
@@ -170,34 +96,82 @@ export async function detectModelFromGgufFile(
   const clipProjectorType = normalizeOptionalString(metadata.clipProjectorType);
   const clipVisionProjectorType = normalizeOptionalString(metadata.clipVisionProjectorType);
   const clipHasVisionEncoder = metadata.clipHasVisionEncoder === true;
+  const providedVisionProjectorType = clipVisionProjectorType ?? clipProjectorType;
 
-  const isProjector =
-    modelType === 'mmproj' ||
-    modelArchitecture === 'clip' ||
-    clipProjectorType != null ||
-    clipVisionProjectorType != null;
-  const isVisionByMetadata =
-    !isProjector &&
-    (clipHasVisionEncoder ||
-      (modelArchitecture != null && VLM_METADATA_ARCHITECTURES.has(modelArchitecture)));
-
-  const detectionMethod =
-    isProjector || isVisionByMetadata
-      ? 'gguf-metadata'
-      : modelType != null || modelArchitecture != null
-        ? defaultValue.isVisionModel
-          ? defaultValue.detectionMethod
-          : 'gguf-metadata'
-        : defaultValue.detectionMethod;
+  const inspection = buildInspection(
+    modelType,
+    modelArchitecture,
+    clipHasVisionEncoder,
+    providedVisionProjectorType
+  );
 
   return {
-    isVisionModel: !isProjector && (isVisionByMetadata || defaultValue.isVisionModel),
-    isProjector,
-    suggestedProjectorUrl: null,
-    detectionMethod,
+    inspection,
+    detectionMethod: inspection.role === 'unknown' ? 'none' : 'gguf-metadata',
     modelName: fileName,
     modelType,
     modelArchitecture,
+  };
+}
+
+export function inspectionFromDetection(detection: ModelDetectionResult): AssetInspection {
+  return detection.inspection;
+}
+
+function buildInspection(
+  modelType: string | null,
+  architecture: string | null,
+  clipHasVisionEncoder: boolean,
+  providedVisionProjectorType: string | null
+): AssetInspection {
+  const isProjector =
+    modelType === 'mmproj' || architecture === 'clip' || providedVisionProjectorType != null;
+
+  const compatibleVisionProjectorTypes = isProjector
+    ? []
+    : resolveCompatibleVisionProjectorTypes(architecture, clipHasVisionEncoder);
+  const visionCapable = !isProjector && (clipHasVisionEncoder || compatibleVisionProjectorTypes.length > 0);
+
+  return {
+    version: ASSET_INSPECTION_VERSION,
+    role:
+      isProjector
+        ? 'projector'
+        : modelType != null || architecture != null || clipHasVisionEncoder
+          ? 'model'
+          : 'unknown',
+    architecture,
+    visionCapable,
+    compatibleVisionProjectorTypes,
+    providedVisionProjectorType,
+  };
+}
+
+function resolveCompatibleVisionProjectorTypes(
+  architecture: string | null,
+  clipHasVisionEncoder: boolean
+): string[] {
+  if (architecture == null) {
+    return [];
+  }
+  const rule = VISION_ARCHITECTURE_RULES.get(architecture);
+  if (rule == null) {
+    return [];
+  }
+  if (rule.requiresVisionEncoderFlag && !clipHasVisionEncoder) {
+    return [];
+  }
+  return [...rule.projectorTypes];
+}
+
+function emptyInspection(): AssetInspection {
+  return {
+    version: ASSET_INSPECTION_VERSION,
+    role: 'unknown',
+    architecture: null,
+    visionCapable: false,
+    compatibleVisionProjectorTypes: [],
+    providedVisionProjectorType: null,
   };
 }
 

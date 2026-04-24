@@ -18,6 +18,7 @@ import {
   type ModelEntry,
   type ModelInfo,
   type ModelLoadOptions,
+  type ModelPairingReasonCode,
   type ModelRuntimeOptions,
   type ModelSource,
   type ObservabilityEvent,
@@ -45,6 +46,7 @@ interface InstalledAsset {
 interface SourceInstallResult {
   assets: InstalledAsset[];
   source: 'remote' | 'local';
+  explicitProjectorAssetId: string | null;
 }
 
 type BaseSource = string | File | readonly string[] | readonly File[];
@@ -122,6 +124,38 @@ function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError';
 }
 
+function entryAssetFingerprint(entry: Pick<ModelEntry, 'modelAssetIds' | 'projectorAssetId'>): string {
+  return sha256Text(
+    stableJson({
+      modelAssetIds: [...entry.modelAssetIds].sort((left, right) => left.localeCompare(right)),
+      projectorAssetId: entry.projectorAssetId ?? null,
+    })
+  );
+}
+
+function entryAssetIds(entry: Pick<ModelEntry, 'modelAssetIds' | 'projectorAssetId'>): string[] {
+  return [...entry.modelAssetIds, entry.projectorAssetId].filter(
+    (value): value is string => typeof value === 'string'
+  );
+}
+
+function cloneModelEntry(entry: ModelEntry): ModelEntry {
+  return JSON.parse(JSON.stringify(entry)) as ModelEntry;
+}
+
+function normalizeVisionProjectorTypes(projectorTypes: readonly string[]): string[] {
+  return [...new Set(projectorTypes)].sort((left, right) => left.localeCompare(right));
+}
+
+function sameVisionProjectorTypes(left: readonly string[], right: readonly string[]): boolean {
+  const normalizedLeft = normalizeVisionProjectorTypes(left);
+  const normalizedRight = normalizeVisionProjectorTypes(right);
+  return (
+    normalizedLeft.length === normalizedRight.length &&
+    normalizedLeft.every((value, index) => value === normalizedRight[index])
+  );
+}
+
 export class ModelService implements ModelLifecycleService {
   private current: LoadedModelState | null = null;
   private operationChain: Promise<void> = Promise.resolve();
@@ -184,19 +218,44 @@ export class ModelService implements ModelLifecycleService {
         const manifest = await this.registry.read();
         const existing = this.resolveInstalledModel(manifest, source);
         if (existing != null && !isSourceObject(source)) {
-          return await this.loadEntry(existing, runtimeFingerprint, options, observabilityMode);
+          const basePlan = await this.deriveBasePlanForEntry(existing, manifest, options.signal);
+          const prepared = await this.resolveEntryForLoading(existing, basePlan, options.signal);
+          return await this.loadEntry(prepared, runtimeFingerprint, options, observabilityMode);
         }
 
         const installed = await this.installSource(source, manifest, options);
-        await this.registerAssets(installed.assets);
         const classified = await this.classifyAssets(installed.assets, options.signal);
-        const plan = await this.resolvePairingPlan(classified, installed.assets, options.signal);
-        const entry = await this.upsertModelEntry(plan, runtimeFingerprint);
-        const modelInfo = await this.loadEntry(entry, runtimeFingerprint, options, observabilityMode);
-        if (installed.source === 'remote') {
-          return modelInfo;
+        await this.registerAssets(installed.assets, classified);
+        const sourceProjectorAssetId = this.resolveSourceProjectorAssetId(
+          classified,
+          installed.explicitProjectorAssetId
+        );
+        const basePlan = this.pairingValidator.resolve(
+          classified.filter((file) => file.assetId !== sourceProjectorAssetId)
+        );
+        let entry = await this.upsertBaseModelEntry(basePlan, runtimeFingerprint);
+
+        if (sourceProjectorAssetId != null) {
+          const previousEntry = cloneModelEntry(entry);
+          try {
+            const explicitPlan = this.pairingValidator.resolveExplicit(
+              classified,
+              sourceProjectorAssetId
+            );
+            entry = await this.setResolvedProjector(
+              entry.id,
+              explicitPlan.projectorAssetId!,
+              explicitPlan.compatibleVisionProjectorTypes
+            );
+            return await this.loadEntry(entry, runtimeFingerprint, options, observabilityMode);
+          } catch (error) {
+            await this.restoreEntry(previousEntry);
+            throw error;
+          }
         }
-        return modelInfo;
+
+        const prepared = await this.resolveEntryForLoading(entry, basePlan, options.signal);
+        return await this.loadEntry(prepared, runtimeFingerprint, options, observabilityMode);
       } catch (error) {
         this.observability.emit('error', {
           state: 'error',
@@ -230,6 +289,7 @@ export class ModelService implements ModelLifecycleService {
 
       const orphanedAssets: AssetRecord[] = [];
       await this.registry.write((draft) => {
+        let projectorIndexChanged = false;
         const removed = draft.models[id];
         if (removed == null) {
           return;
@@ -245,8 +305,14 @@ export class ModelService implements ModelLifecycleService {
           asset.refCount = Math.max(0, asset.refCount - 1);
           if (asset.refCount === 0) {
             orphanedAssets.push(asset);
+            if (asset.kind === 'projector') {
+              projectorIndexChanged = true;
+            }
             delete draft.assets[assetId];
           }
+        }
+        if (projectorIndexChanged) {
+          draft.projectorIndexRevision += 1;
         }
       });
       for (const asset of orphanedAssets) {
@@ -405,7 +471,7 @@ export class ModelService implements ModelLifecycleService {
     options: ModelLoadOptions
   ): Promise<SourceInstallResult> {
     if (isSourceObject(source)) {
-      const base = await this.installBaseSource(source.model, manifest, options);
+      const base = await this.installBaseSource(source.model, manifest, options, false);
       const projector =
         source.projector == null
           ? null
@@ -413,30 +479,38 @@ export class ModelService implements ModelLifecycleService {
       return {
         assets: [...base.assets, ...(projector?.assets ?? [])],
         source: base.source,
+        explicitProjectorAssetId: projector?.assets[0]?.record.id ?? null,
       };
     }
-    return this.installBaseSource(source, manifest, options);
+    const base = await this.installBaseSource(source, manifest, options, false);
+    return {
+      ...base,
+      explicitProjectorAssetId: null,
+    };
   }
 
   private async installBaseSource(
     source: BaseSource,
     manifest: RegistryManifest,
-    options: ModelLoadOptions
+    options: ModelLoadOptions,
+    includeProjector: boolean
   ): Promise<SourceInstallResult> {
     if (typeof source === 'string') {
       const installed = manifest.models[source];
       if (installed != null) {
-        return await this.assetsForEntry(installed, manifest);
+        return await this.assetsForEntry(installed, manifest, includeProjector);
       }
       return {
         assets: [await this.installRemoteAsset(source, 'model', manifest, options)],
         source: 'remote',
+        explicitProjectorAssetId: null,
       };
     }
     if (isFile(source)) {
       return {
         assets: [await this.installLocalAsset(source, 'model', manifest, options)],
         source: 'local',
+        explicitProjectorAssetId: null,
       };
     }
     if (isStringArray(source)) {
@@ -448,6 +522,7 @@ export class ModelService implements ModelLifecycleService {
           source.map((url) => this.installRemoteAsset(url, 'shard', manifest, options))
         ),
         source: 'remote',
+        explicitProjectorAssetId: null,
       };
     }
     if (isFileArray(source)) {
@@ -459,6 +534,7 @@ export class ModelService implements ModelLifecycleService {
           source.map((file) => this.installLocalAsset(file, 'shard', manifest, options))
         ),
         source: 'local',
+        explicitProjectorAssetId: null,
       };
     }
     throw new QueryError('INVALID_MODEL_SOURCE', 'Unsupported model source.');
@@ -473,12 +549,14 @@ export class ModelService implements ModelLifecycleService {
       return {
         assets: [await this.installRemoteAsset(source, 'projector', manifest, options)],
         source: 'remote',
+        explicitProjectorAssetId: null,
       };
     }
     if (isFile(source)) {
       return {
         assets: [await this.installLocalAsset(source, 'projector', manifest, options)],
         source: 'local',
+        explicitProjectorAssetId: null,
       };
     }
     throw new QueryError('INVALID_MODEL_SOURCE', 'Projector source must be a URL or File.');
@@ -554,9 +632,10 @@ export class ModelService implements ModelLifecycleService {
 
   private async assetsForEntry(
     entry: ModelEntry,
-    manifest: RegistryManifest
+    manifest: RegistryManifest,
+    includeProjector: boolean
   ): Promise<SourceInstallResult> {
-    const assetIds = [...entry.modelAssetIds, entry.projectorAssetId].filter(
+    const assetIds = [...entry.modelAssetIds, includeProjector ? entry.projectorAssetId : undefined].filter(
       (assetId): assetId is string => typeof assetId === 'string'
     );
     const assets: InstalledAsset[] = [];
@@ -574,6 +653,7 @@ export class ModelService implements ModelLifecycleService {
     return {
       assets,
       source: assets.some((asset) => asset.record.sourceUrl != null) ? 'remote' : 'local',
+      explicitProjectorAssetId: null,
     };
   }
 
@@ -582,84 +662,75 @@ export class ModelService implements ModelLifecycleService {
     signal?: AbortSignal
   ): Promise<ClassifiedAssetFile[]> {
     return Promise.all(
-      assets.map((asset) => this.pairingValidator.classify(asset.record.id, asset.file, signal))
+      assets.map(async (asset) => {
+        if (asset.record.inspection?.version === 1) {
+          return {
+            assetId: asset.record.id,
+            file: asset.file,
+            inspection: asset.record.inspection,
+            name: asset.file.name,
+          };
+        }
+        return await this.pairingValidator.classify(asset.record.id, asset.file, signal);
+      })
     );
   }
 
-  private async registerAssets(assets: InstalledAsset[]): Promise<void> {
+  private async registerAssets(
+    assets: InstalledAsset[],
+    classified: ClassifiedAssetFile[]
+  ): Promise<void> {
+    const classifiedById = new Map(classified.map((file) => [file.assetId, file]));
     await this.registry.write((draft) => {
+      let projectorIndexChanged = false;
       for (const installed of assets) {
         const existing = draft.assets[installed.record.id];
+        const inspection = classifiedById.get(installed.record.id)?.inspection;
+        const nextKind =
+          inspection?.role === 'projector' || installed.record.kind === 'projector'
+            ? 'projector'
+            : existing?.kind ?? installed.record.kind;
         if (existing == null) {
-          draft.assets[installed.record.id] = installed.record;
+          draft.assets[installed.record.id] = {
+            ...installed.record,
+            kind: nextKind,
+            ...(inspection == null ? {} : { inspection }),
+          };
+          if (nextKind === 'projector') {
+            projectorIndexChanged = true;
+          }
           continue;
+        }
+        if (existing.kind !== nextKind && (existing.kind === 'projector' || nextKind === 'projector')) {
+          projectorIndexChanged = true;
         }
         draft.assets[installed.record.id] = {
           ...existing,
-          kind: installed.record.kind === 'projector' ? 'projector' : existing.kind,
+          kind: nextKind,
           sourceUrl: installed.record.sourceUrl ?? existing.sourceUrl,
           sourceEtag: installed.record.sourceEtag ?? existing.sourceEtag,
           sourceLastModified: installed.record.sourceLastModified ?? existing.sourceLastModified,
+          ...(inspection == null ? {} : { inspection }),
         };
+      }
+      if (projectorIndexChanged) {
+        draft.projectorIndexRevision += 1;
       }
     });
   }
 
-  private async resolvePairingPlan(
-    classified: ClassifiedAssetFile[],
-    assets: InstalledAsset[],
-    signal?: AbortSignal
-  ): Promise<PairingPlan> {
-    const explicitProjector = classified.find((file) =>
-      assets.some((asset) => asset.record.id === file.assetId && asset.record.kind === 'projector')
-    );
-    const plan = this.pairingValidator.resolve(classified, explicitProjector?.assetId);
-    if (plan.status === 'needs_projector') {
-      const manifest = await this.registry.read();
-      const installedProjectors = Object.values(manifest.assets).filter(
-        (asset) => asset.kind === 'projector'
-      );
-      if (installedProjectors.length === 1) {
-        const projector = installedProjectors[0];
-        const file = await this.assetStore.getFile(projector);
-        return this.pairingValidator.resolve(
-          [...classified, await this.pairingValidator.classify(projector.id, file, signal)],
-          projector.id
-        );
-      }
-      if (installedProjectors.length > 1) {
-        throw new QueryError(
-          'INVALID_MODEL_PAIRING',
-          'Multiple installed projectors are available. Provide an explicit projector.'
-        );
-      }
-    }
-    return plan;
-  }
-
-  private async upsertModelEntry(
+  private async upsertBaseModelEntry(
     plan: PairingPlan,
     runtimeFingerprint: string
   ): Promise<ModelEntry> {
     const id = `model-${sha256Text(
       stableJson({
-        modelAssetIds: plan.modelAssetIds,
-        projectorAssetId: plan.projectorAssetId ?? null,
+        modelAssetIds: [...plan.modelAssetIds].sort((left, right) => left.localeCompare(right)),
       })
     ).slice(0, 24)}`;
     const now = new Date().toISOString();
     let entry!: ModelEntry;
     await this.registry.write((draft) => {
-      for (const assetId of [...plan.modelAssetIds, plan.projectorAssetId].filter(
-        (value): value is string => typeof value === 'string'
-      )) {
-        const asset = draft.assets[assetId];
-        if (asset == null) {
-          continue;
-        }
-        draft.assets[assetId] = asset;
-      }
-
       const existing = draft.models[id];
       if (existing == null) {
         entry = {
@@ -668,30 +739,339 @@ export class ModelService implements ModelLifecycleService {
           modality: plan.modality,
           status: plan.status,
           modelAssetIds: plan.modelAssetIds,
-          projectorAssetId: plan.projectorAssetId,
           runtimeFingerprint,
           createdAt: now,
           updatedAt: now,
         };
         draft.models[id] = entry;
-        for (const assetId of [...plan.modelAssetIds, plan.projectorAssetId].filter(
-          (value): value is string => typeof value === 'string'
-        )) {
+        for (const assetId of plan.modelAssetIds) {
           const asset = draft.assets[assetId];
           if (asset != null) {
             asset.refCount += 1;
           }
         }
       } else {
+        this.updateAssetReferences(
+          draft,
+          [...existing.modelAssetIds, existing.projectorAssetId].filter(
+            (value): value is string => typeof value === 'string'
+          ),
+          [...plan.modelAssetIds, existing.projectorAssetId].filter(
+            (value): value is string => typeof value === 'string'
+          )
+        );
         existing.name = plan.name;
-        existing.modality = plan.modality;
-        existing.status = plan.status;
+        existing.modelAssetIds = plan.modelAssetIds;
+        if (existing.projectorAssetId == null) {
+          existing.modality = plan.modality;
+          existing.status = plan.status;
+        }
         existing.runtimeFingerprint = runtimeFingerprint;
         existing.updatedAt = now;
         entry = existing;
       }
     });
     return entry;
+  }
+
+  private async deriveBasePlanForEntry(
+    entry: ModelEntry,
+    manifest: RegistryManifest,
+    signal?: AbortSignal
+  ): Promise<PairingPlan> {
+    const installed = await this.assetsForEntry(entry, manifest, false);
+    const classified = await this.classifyAssets(installed.assets, signal);
+    return this.pairingValidator.resolve(classified);
+  }
+
+  private resolveSourceProjectorAssetId(
+    classified: readonly ClassifiedAssetFile[],
+    explicitProjectorAssetId: string | null
+  ): string | null {
+    if (explicitProjectorAssetId != null) {
+      return explicitProjectorAssetId;
+    }
+    const projectors = classified.filter((file) => file.inspection.role === 'projector');
+    return projectors.length === 1 ? projectors[0].assetId : null;
+  }
+
+  private async resolveEntryForLoading(
+    entry: ModelEntry,
+    basePlan: PairingPlan,
+    signal?: AbortSignal
+  ): Promise<ModelEntry> {
+    let manifest = await this.registry.read();
+    let current = manifest.models[entry.id] ?? entry;
+
+    if (current.projectorAssetId != null) {
+      const projector = manifest.assets[current.projectorAssetId];
+      if (projector == null) {
+        current = await this.detachProjector(current.id, basePlan);
+        manifest = await this.registry.read();
+        current = manifest.models[current.id] ?? current;
+      } else if (basePlan.compatibleVisionProjectorTypes.length > 0) {
+        const inspectedProjector = await this.ensureProjectorInspection(projector, signal);
+        const providedType = inspectedProjector?.inspection?.providedVisionProjectorType ?? null;
+        if (
+          providedType == null ||
+          !basePlan.compatibleVisionProjectorTypes.includes(providedType)
+        ) {
+          current = await this.detachProjector(current.id, basePlan);
+          manifest = await this.registry.read();
+          current = manifest.models[current.id] ?? current;
+        } else if (
+          current.pairing?.state !== 'resolved' ||
+          !sameVisionProjectorTypes(
+            current.pairing.compatibleVisionProjectorTypes,
+            basePlan.compatibleVisionProjectorTypes
+          )
+        ) {
+          current = await this.setResolvedProjector(
+            current.id,
+            projector.id,
+            basePlan.compatibleVisionProjectorTypes
+          );
+        } else {
+          return current;
+        }
+      } else {
+        return current;
+      }
+    }
+
+    if (basePlan.modality !== 'vision') {
+      if (
+        current.pairing?.state === 'unresolved' &&
+        current.pairing.reasonCode === 'BASE_NOT_VISION' &&
+        current.pairing.checkedProjectorIndexRevision === manifest.projectorIndexRevision
+      ) {
+        return current;
+      }
+      return await this.setUnresolvedPairing(current.id, basePlan, 'BASE_NOT_VISION');
+    }
+
+    if (basePlan.compatibleVisionProjectorTypes.length === 0) {
+      if (
+        current.pairing?.state === 'unresolved' &&
+        current.pairing.reasonCode === 'MISSING_METADATA' &&
+        current.pairing.checkedProjectorIndexRevision === manifest.projectorIndexRevision
+      ) {
+        return current;
+      }
+      return await this.setUnresolvedPairing(current.id, basePlan, 'MISSING_METADATA');
+    }
+
+    if (
+      current.pairing?.state === 'unresolved' &&
+      current.pairing.checkedProjectorIndexRevision === manifest.projectorIndexRevision &&
+      sameVisionProjectorTypes(
+        current.pairing.compatibleVisionProjectorTypes,
+        basePlan.compatibleVisionProjectorTypes
+      )
+    ) {
+      return current;
+    }
+
+    const matches = await this.findCompatibleInstalledProjectorIds(
+      manifest,
+      basePlan.compatibleVisionProjectorTypes,
+      signal
+    );
+    if (matches.length === 1) {
+      return await this.setResolvedProjector(
+        current.id,
+        matches[0],
+        basePlan.compatibleVisionProjectorTypes
+      );
+    }
+
+    return await this.setUnresolvedPairing(
+      current.id,
+      basePlan,
+      matches.length === 0 ? 'NO_MATCH' : 'MULTIPLE_MATCHES'
+    );
+  }
+
+  private async findCompatibleInstalledProjectorIds(
+    manifest: RegistryManifest,
+    compatibleVisionProjectorTypes: readonly string[],
+    signal?: AbortSignal
+  ): Promise<string[]> {
+    const compatible = new Set(compatibleVisionProjectorTypes);
+    const matches: string[] = [];
+    for (const asset of Object.values(manifest.assets)) {
+      if (asset.kind !== 'projector') {
+        continue;
+      }
+      const inspected = await this.ensureProjectorInspection(asset, signal);
+      const providedType = inspected?.inspection?.providedVisionProjectorType ?? null;
+      if (providedType != null && compatible.has(providedType)) {
+        matches.push(asset.id);
+      }
+    }
+    return matches.sort((left, right) => left.localeCompare(right));
+  }
+
+  private async ensureProjectorInspection(
+    asset: AssetRecord,
+    signal?: AbortSignal
+  ): Promise<AssetRecord | null> {
+    if (asset.inspection?.version === 1) {
+      return asset;
+    }
+    try {
+      const file = await this.assetStore.getFile(asset);
+      const classified = await this.pairingValidator.classify(asset.id, file, signal);
+      const updated = await this.registry.write((draft) => {
+        const next = draft.assets[asset.id];
+        if (next == null) {
+          return;
+        }
+        const nextKind =
+          classified.inspection.role === 'projector' || next.kind === 'projector'
+            ? 'projector'
+            : next.kind;
+        if (next.kind !== nextKind && (next.kind === 'projector' || nextKind === 'projector')) {
+          draft.projectorIndexRevision += 1;
+        }
+        next.kind = nextKind;
+        next.inspection = classified.inspection;
+      });
+      return updated.assets[asset.id] ?? null;
+    } catch (error) {
+      if (error instanceof QueryError && error.code === 'MODEL_BROKEN') {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  private async setResolvedProjector(
+    id: string,
+    projectorAssetId: string,
+    compatibleVisionProjectorTypes: readonly string[]
+  ): Promise<ModelEntry> {
+    const now = new Date().toISOString();
+    let entry!: ModelEntry;
+    await this.registry.write((draft) => {
+      const existing = draft.models[id];
+      if (existing == null) {
+        throw new QueryError('MODEL_NOT_FOUND', `Model "${id}" is not installed.`);
+      }
+      this.updateAssetReferences(
+        draft,
+        entryAssetIds(existing),
+        [...existing.modelAssetIds, projectorAssetId]
+      );
+      existing.projectorAssetId = projectorAssetId;
+      existing.modality = 'vision';
+      existing.status = 'ready';
+      existing.pairing = {
+        state: 'resolved',
+        checkedProjectorIndexRevision: draft.projectorIndexRevision,
+        compatibleVisionProjectorTypes: normalizeVisionProjectorTypes(
+          compatibleVisionProjectorTypes
+        ),
+        updatedAt: now,
+      };
+      existing.updatedAt = now;
+      entry = existing;
+    });
+    return entry;
+  }
+
+  private async setUnresolvedPairing(
+    id: string,
+    plan: PairingPlan,
+    reasonCode: ModelPairingReasonCode
+  ): Promise<ModelEntry> {
+    const now = new Date().toISOString();
+    let entry!: ModelEntry;
+    await this.registry.write((draft) => {
+      const existing = draft.models[id];
+      if (existing == null) {
+        throw new QueryError('MODEL_NOT_FOUND', `Model "${id}" is not installed.`);
+      }
+      this.updateAssetReferences(draft, entryAssetIds(existing), [...existing.modelAssetIds]);
+      existing.projectorAssetId = undefined;
+      existing.modality = plan.modality;
+      existing.status = plan.status;
+      existing.pairing = {
+        state: 'unresolved',
+        checkedProjectorIndexRevision: draft.projectorIndexRevision,
+        compatibleVisionProjectorTypes: normalizeVisionProjectorTypes(
+          plan.compatibleVisionProjectorTypes
+        ),
+        reasonCode,
+        updatedAt: now,
+      };
+      existing.updatedAt = now;
+      entry = existing;
+    });
+    return entry;
+  }
+
+  private async detachProjector(id: string, basePlan: PairingPlan): Promise<ModelEntry> {
+    const now = new Date().toISOString();
+    let entry!: ModelEntry;
+    await this.registry.write((draft) => {
+      const existing = draft.models[id];
+      if (existing == null) {
+        throw new QueryError('MODEL_NOT_FOUND', `Model "${id}" is not installed.`);
+      }
+      this.updateAssetReferences(draft, entryAssetIds(existing), [...existing.modelAssetIds]);
+      existing.projectorAssetId = undefined;
+      existing.modality = basePlan.modality;
+      existing.status = basePlan.status;
+      existing.pairing = undefined;
+      existing.updatedAt = now;
+      entry = existing;
+    });
+    return entry;
+  }
+
+  private async restoreEntry(snapshot: ModelEntry): Promise<ModelEntry> {
+    const restored = cloneModelEntry(snapshot);
+    let entry!: ModelEntry;
+    await this.registry.write((draft) => {
+      const existing = draft.models[restored.id];
+      if (existing == null) {
+        throw new QueryError('MODEL_NOT_FOUND', `Model "${restored.id}" is not installed.`);
+      }
+      this.updateAssetReferences(draft, entryAssetIds(existing), entryAssetIds(restored));
+      draft.models[restored.id] = restored;
+      entry = restored;
+    });
+    return entry;
+  }
+
+  private updateAssetReferences(
+    manifest: RegistryManifest,
+    previousAssetIds: readonly string[],
+    nextAssetIds: readonly string[]
+  ): void {
+    const previous = new Set(previousAssetIds);
+    const next = new Set(nextAssetIds);
+
+    for (const assetId of previous) {
+      if (next.has(assetId)) {
+        continue;
+      }
+      const asset = manifest.assets[assetId];
+      if (asset != null) {
+        asset.refCount = Math.max(0, asset.refCount - 1);
+      }
+    }
+
+    for (const assetId of next) {
+      if (previous.has(assetId)) {
+        continue;
+      }
+      const asset = manifest.assets[assetId];
+      if (asset != null) {
+        asset.refCount += 1;
+      }
+    }
   }
 
   private async loadEntry(
@@ -713,7 +1093,11 @@ export class ModelService implements ModelLifecycleService {
       });
       return info;
     }
-    if (this.current?.id === entry.id && this.current.runtimeFingerprint === runtimeFingerprint) {
+    if (
+      this.current?.id === entry.id &&
+      this.current.assetFingerprint === entryAssetFingerprint(entry) &&
+      this.current.runtimeFingerprint === runtimeFingerprint
+    ) {
       const manifest = await this.registry.read();
       const info = this.toModelInfo(entry, manifest);
       const runtime = toRuntimeObservation(
@@ -747,6 +1131,22 @@ export class ModelService implements ModelLifecycleService {
     const staged = await this.runtime.stageModelBundle(descriptor, {
       signal: options.signal,
     });
+    if (
+      this.current != null &&
+      (this.current.id !== entry.id ||
+        this.current.assetFingerprint !== entryAssetFingerprint(entry) ||
+        this.current.runtimeFingerprint !== runtimeFingerprint)
+    ) {
+      this.current = null;
+      this.currentSnapshot = null;
+      this.observability.update({
+        state: 'loading',
+        model: null,
+        query: null,
+        runtime: undefined,
+        profile: undefined,
+      });
+    }
     await this.runtime.loadRuntimeModel(staged, toRuntimeConfig(options.runtime, observabilityMode));
 
     const loadedAt = new Date().toISOString();
@@ -761,6 +1161,7 @@ export class ModelService implements ModelLifecycleService {
     const loadedEntry = updated.models[entry.id] ?? entry;
     this.current = {
       id: loadedEntry.id,
+      assetFingerprint: entryAssetFingerprint(loadedEntry),
       runtimeFingerprint,
     };
     this.currentSnapshot = this.toModelInfo(loadedEntry, updated);

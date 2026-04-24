@@ -1,3 +1,4 @@
+import type { AssetInspection } from '../model-bundle/model-bundle-types.js';
 import type { BackendDeviceType, InferenceInitConfig, PromptFormatMode } from '../types.js';
 
 export type ModelModality = 'text' | 'vision';
@@ -66,6 +67,7 @@ export type ModelSource =
     };
 
 export interface ModelInfo {
+  /** Installed model id persisted in OPFS. Pass this back to engine.models.load(id) to reload it. */
   id: string;
   name: string;
   modality: ModelModality;
@@ -207,6 +209,22 @@ export interface AssetRecord {
   sourceLastModified?: string;
   refCount: number;
   createdAt: string;
+  inspection?: AssetInspection;
+}
+
+export type ModelPairingReasonCode =
+  | 'BASE_NOT_VISION'
+  | 'NO_MATCH'
+  | 'MULTIPLE_MATCHES'
+  | 'MISSING_METADATA'
+  | 'INCOMPATIBLE_PROJECTOR';
+
+export interface ModelPairingState {
+  state: 'resolved' | 'unresolved';
+  checkedProjectorIndexRevision: number;
+  compatibleVisionProjectorTypes: string[];
+  reasonCode?: ModelPairingReasonCode;
+  updatedAt: string;
 }
 
 export interface ModelEntry {
@@ -216,6 +234,7 @@ export interface ModelEntry {
   status: ModelStatus;
   modelAssetIds: string[];
   projectorAssetId?: string;
+  pairing?: ModelPairingState;
   runtimeFingerprint?: string;
   createdAt: string;
   updatedAt: string;
@@ -224,12 +243,14 @@ export interface ModelEntry {
 
 export interface RegistryManifest {
   version: 3;
+  projectorIndexRevision: number;
   assets: Record<string, AssetRecord>;
   models: Record<string, ModelEntry>;
 }
 
 export interface LoadedModelState {
   id: string;
+  assetFingerprint: string;
   runtimeFingerprint: string;
 }
 

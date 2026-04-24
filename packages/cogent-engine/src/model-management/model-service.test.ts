@@ -31,20 +31,13 @@ function file(name: string, contents = name): File {
 }
 
 function cloneManifest(manifest: RegistryManifest): RegistryManifest {
-  return {
-    version: 3,
-    assets: Object.fromEntries(
-      Object.entries(manifest.assets).map(([id, asset]) => [id, { ...asset }])
-    ),
-    models: Object.fromEntries(
-      Object.entries(manifest.models).map(([id, model]) => [id, { ...model }])
-    ),
-  };
+  return JSON.parse(JSON.stringify(manifest)) as RegistryManifest;
 }
 
 class MemoryRegistryStore {
   public manifest: RegistryManifest = {
     version: 3,
+    projectorIndexRevision: 0,
     assets: {},
     models: {},
   };
@@ -154,23 +147,91 @@ class FakePairingValidator extends PairingValidator {
   public override async classify(assetId: string, input: File): Promise<{
     assetId: string;
     file: File;
-    isProjector: boolean;
-    isVisionModel: boolean;
+    inspection: {
+      version: 1;
+      role: 'model' | 'projector';
+      architecture: string | null;
+      visionCapable: boolean;
+      compatibleVisionProjectorTypes: string[];
+      providedVisionProjectorType: string | null;
+    };
     name: string;
   }> {
+    const isProjector = /mmproj|projector/i.test(input.name);
+    const visionCapable = !isProjector && /vision|llava/i.test(input.name);
     return {
       assetId,
       file: input,
-      isProjector: /mmproj|projector/i.test(input.name),
-      isVisionModel: /vision|llava/i.test(input.name),
+      inspection: {
+        version: 1,
+        role: isProjector ? 'projector' : 'model',
+        architecture: visionCapable ? 'vision-test' : 'text-test',
+        visionCapable,
+        compatibleVisionProjectorTypes: visionCapable ? ['vision-merger'] : [],
+        providedVisionProjectorType: isProjector ? 'vision-merger' : null,
+      },
       name: input.name,
     };
+  }
+}
+
+class MetadataLimitedPairingValidator extends PairingValidator {
+  public override async classify(assetId: string, input: File): Promise<{
+    assetId: string;
+    file: File;
+    inspection: {
+      version: 1;
+      role: 'model' | 'projector';
+      architecture: string | null;
+      visionCapable: boolean;
+      compatibleVisionProjectorTypes: string[];
+      providedVisionProjectorType: string | null;
+    };
+    name: string;
+  }> {
+    const isProjector = /mmproj|projector/i.test(input.name);
+    return {
+      assetId,
+      file: input,
+      inspection: {
+        version: 1,
+        role: isProjector ? 'projector' : 'model',
+        architecture: isProjector ? 'clip' : 'llama',
+        visionCapable: false,
+        compatibleVisionProjectorTypes: [],
+        providedVisionProjectorType: null,
+      },
+      name: input.name,
+    };
+  }
+}
+
+class IncompatibleProjectorValidator extends FakePairingValidator {
+  public override async classify(assetId: string, input: File): Promise<{
+    assetId: string;
+    file: File;
+    inspection: {
+      version: 1;
+      role: 'model' | 'projector';
+      architecture: string | null;
+      visionCapable: boolean;
+      compatibleVisionProjectorTypes: string[];
+      providedVisionProjectorType: string | null;
+    };
+    name: string;
+  }> {
+    const classified = await super.classify(assetId, input);
+    if (/bad-mmproj/i.test(input.name)) {
+      classified.inspection.providedVisionProjectorType = 'other-merger';
+    }
+    return classified;
   }
 }
 
 class FakeRuntime implements EngineRuntime {
   public closeCount = 0;
   public loadCount = 0;
+  public nextLoadError: Error | null = null;
   public stagedDescriptors: InternalBundleDescriptor[] = [];
   public lastPrompt: string | null = null;
   public mediaMarker: string | null = null;
@@ -227,7 +288,7 @@ class FakeRuntime implements EngineRuntime {
           : descriptor.kind === 'files'
             ? descriptor.files[0]?.name ?? 'model.gguf'
             : 'model.gguf',
-      detectionMethod: 'filename',
+      detectionMethod: 'gguf-metadata',
       modelType: null,
       modelArchitecture: null,
     };
@@ -240,6 +301,12 @@ class FakeRuntime implements EngineRuntime {
     this.loadCount += 1;
     this.runtimeMetricsEnabled = config?.enableRuntimeObservability === true;
     this.backendProfilingEnabled = config?.enableBackendProfiling === true;
+    if (this.nextLoadError != null) {
+      const error = this.nextLoadError;
+      this.nextLoadError = null;
+      this.mediaMarker = null;
+      throw error;
+    }
     this.mediaMarker =
       typeof modelPathOrBundle === 'string' || modelPathOrBundle.multimodalProjectorPath == null
         ? null
@@ -331,6 +398,7 @@ function createService(overrides: {
   runtime?: FakeRuntime;
   registry?: MemoryRegistryStore;
   assets?: FakeAssetStore;
+  validator?: PairingValidator;
 } = {}): {
   service: ModelService;
   runtime: FakeRuntime;
@@ -345,7 +413,7 @@ function createService(overrides: {
       runtime,
       registry as unknown as ModelRegistryStore,
       assets as unknown as AssetStore,
-      new FakePairingValidator()
+      overrides.validator ?? new FakePairingValidator()
     ),
     runtime,
     registry,
@@ -442,10 +510,11 @@ test('ModelService switches models and reuses identical runtime fingerprints as 
   assert.equal(runtime.loadCount, 3);
 });
 
-test('ModelService attaches explicit projectors only to vision-capable bases', async () => {
+test('ModelService attaches explicit projectors and rejects metadata-proven mismatches', async () => {
   const { service, runtime } = createService();
   const pendingVision = await service.load(file('vision-base.gguf'));
   assert.equal(pendingVision.status, 'needs_projector');
+  assert.equal(pendingVision.modality, 'vision');
   assert.equal(pendingVision.loaded, false);
   assert.equal(service.currentModel(), null);
 
@@ -453,6 +522,7 @@ test('ModelService attaches explicit projectors only to vision-capable bases', a
     model: pendingVision.id,
     projector: file('mmproj.gguf'),
   });
+  assert.equal(vision.id, pendingVision.id);
   assert.equal(vision.modality, 'vision');
   assert.equal(vision.status, 'ready');
   assert.equal(vision.loaded, true);
@@ -464,15 +534,124 @@ test('ModelService attaches explicit projectors only to vision-capable bases', a
   assert.equal(answer, 'answer:<image>\ndescribe');
   assert.equal(runtime.lastPrompt, '<image>\ndescribe');
 
-  const text = await service.load(file('plain-text.gguf'));
+  const mismatch = createService({
+    validator: new IncompatibleProjectorValidator(),
+  });
+  const text = await mismatch.service.load(file('vision-base.gguf'));
   await assert.rejects(
     () =>
-      service.load({
+      mismatch.service.load({
         model: text.id,
-        projector: file('mmproj-2.gguf'),
+        projector: file('bad-mmproj.gguf'),
       }),
     (error) => error instanceof QueryError && error.code === 'INVALID_MODEL_PAIRING'
   );
+});
+
+test('ModelService switches from text to explicit multimodal loads when metadata pairing is inconclusive', async () => {
+  const { service, runtime } = createService({
+    validator: new MetadataLimitedPairingValidator(),
+  });
+
+  const text = await service.load(file('plain-text.gguf'));
+  assert.equal(text.modality, 'text');
+  assert.equal(service.currentModel()?.id, text.id);
+
+  const vision = await service.load({
+    model: file('ambiguous-vision-base.gguf'),
+    projector: file('ambiguous-mmproj.gguf'),
+  });
+
+  assert.equal(vision.modality, 'vision');
+  assert.equal(vision.status, 'ready');
+  assert.equal(vision.loaded, true);
+  assert.equal(runtime.loadCount, 2);
+  assert.equal(service.currentModel()?.id, vision.id);
+
+  const answer = await service.query({
+    prompt: 'describe',
+    media: [new Uint8Array([1, 2, 3])],
+  });
+  assert.equal(answer, 'answer:<image>\ndescribe');
+  assert.equal(runtime.lastPrompt, '<image>\ndescribe');
+});
+
+test('ModelService auto-retries unresolved vision bases when the projector index changes', async () => {
+  const { service } = createService();
+  const pending = await service.load(file('vision-base.gguf'));
+  assert.equal(pending.status, 'needs_projector');
+
+  await service.load({
+    model: file('other-vision.gguf'),
+    projector: file('mmproj.gguf'),
+  });
+
+  const resolved = await service.load(pending.id);
+  assert.equal(resolved.id, pending.id);
+  assert.equal(resolved.status, 'ready');
+  assert.equal(resolved.loaded, true);
+});
+
+test('ModelService persists validated projector pairings across service instances', async () => {
+  const registry = new MemoryRegistryStore();
+  const assets = new FakeAssetStore();
+
+  const first = createService({ registry, assets });
+  const installed = await first.service.load({
+    model: file('vision-base.gguf'),
+    projector: file('mmproj.gguf'),
+  });
+  assert.equal(installed.status, 'ready');
+  assert.equal(installed.loaded, true);
+
+  const second = createService({ registry, assets });
+  const reloaded = await second.service.load(installed.id);
+  assert.equal(reloaded.id, installed.id);
+  assert.equal(reloaded.status, 'ready');
+  assert.equal(reloaded.loaded, true);
+});
+
+test('ModelService replaces the projector on an installed model without reusing the old one', async () => {
+  const { service, runtime } = createService();
+  const first = await service.load({
+    model: file('vision-base.gguf'),
+    projector: file('mmproj-a.gguf'),
+  });
+  assert.equal(runtime.loadCount, 1);
+
+  const second = await service.load({
+    model: first.id,
+    projector: file('mmproj-b.gguf'),
+  });
+  assert.equal(second.id, first.id);
+  assert.equal(second.status, 'ready');
+  assert.equal(runtime.loadCount, 2);
+});
+
+test('ModelService restores the previous installed pairing when a replacement projector fails to load', async () => {
+  const { service, runtime } = createService();
+  const installed = await service.load({
+    model: file('vision-base.gguf'),
+    projector: file('mmproj-a.gguf'),
+  });
+  assert.equal(service.currentModel()?.id, installed.id);
+
+  runtime.nextLoadError = new Error('multimodal init failed');
+  await assert.rejects(
+    () =>
+      service.load({
+        model: installed.id,
+        projector: file('mmproj-b.gguf'),
+      }),
+    /multimodal init failed/
+  );
+
+  assert.equal(service.currentModel(), null);
+
+  const reloaded = await service.load(installed.id);
+  assert.equal(reloaded.id, installed.id);
+  assert.equal(reloaded.status, 'ready');
+  assert.equal(reloaded.loaded, true);
 });
 
 test('ModelService updates remote models when validators change', async () => {

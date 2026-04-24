@@ -79,7 +79,31 @@ test('PairingValidator accepts explicit projectors for LFM VL base models', asyn
   assert.equal(plan.projectorAssetId, projector.assetId);
 });
 
-test('PairingValidator detects LFM VL bases from filename when GGUF metadata is unavailable', async () => {
+test('PairingValidator allows explicit projector loads when GGUF metadata is inconclusive', async () => {
+  const validator = new PairingValidator();
+  const base = await validator.classify(
+    'asset-model',
+    ggufFile('base.gguf', {
+      'general.architecture': 'llama',
+      'general.type': 'model',
+    })
+  );
+  const projector = await validator.classify(
+    'asset-projector',
+    ggufFile('mmproj.gguf', {
+      'general.architecture': 'clip',
+      'general.type': 'mmproj',
+      'clip.has_vision_encoder': true,
+    })
+  );
+
+  const plan = validator.resolveExplicit([base, projector], projector.assetId);
+  assert.equal(plan.modality, 'vision');
+  assert.equal(plan.status, 'ready');
+  assert.equal(plan.projectorAssetId, projector.assetId);
+});
+
+test('PairingValidator does not fall back to filename-based projector pairing', async () => {
   const validator = new PairingValidator();
   const base = await validator.classify(
     'asset-model',
@@ -90,7 +114,8 @@ test('PairingValidator detects LFM VL bases from filename when GGUF metadata is 
     new File(['not-a-gguf'], 'mmproj-LFM2-VL-1.6B-f16.gguf')
   );
 
-  const plan = validator.resolve([base, projector], projector.assetId);
-  assert.equal(plan.modality, 'vision');
-  assert.equal(plan.status, 'ready');
+  await assert.rejects(
+    () => Promise.resolve().then(() => validator.resolve([base, projector], projector.assetId)),
+    /projector asset/
+  );
 });

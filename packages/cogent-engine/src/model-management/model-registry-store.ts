@@ -11,6 +11,7 @@ const REGISTRY_FILE_NAME = 'registry.json';
 function emptyManifest(): RegistryManifest {
   return {
     version: 3,
+    projectorIndexRevision: 0,
     assets: {},
     models: {},
   };
@@ -28,7 +29,18 @@ function parseManifest(text: string): RegistryManifest {
   if (!isObject(parsed.assets) || !isObject(parsed.models)) {
     throw new QueryError('STORAGE_CORRUPT', 'Model registry is missing assets or models.');
   }
-  return parsed as unknown as RegistryManifest;
+  const projectorIndexRevision = (parsed as { projectorIndexRevision?: unknown }).projectorIndexRevision;
+  return {
+    version: 3,
+    projectorIndexRevision:
+      typeof projectorIndexRevision === 'number' &&
+      Number.isInteger(projectorIndexRevision) &&
+      projectorIndexRevision >= 0
+        ? projectorIndexRevision
+        : 0,
+    assets: parsed.assets as RegistryManifest['assets'],
+    models: parsed.models as RegistryManifest['models'],
+  };
 }
 
 export class ModelRegistryStore {
@@ -103,11 +115,7 @@ export class ModelRegistryStore {
   }
 
   private clone(manifest: RegistryManifest): RegistryManifest {
-    return {
-      version: 3,
-      assets: { ...manifest.assets },
-      models: { ...manifest.models },
-    };
+    return JSON.parse(JSON.stringify(manifest)) as RegistryManifest;
   }
 
   private async withLock<T>(operation: () => Promise<T>): Promise<T> {

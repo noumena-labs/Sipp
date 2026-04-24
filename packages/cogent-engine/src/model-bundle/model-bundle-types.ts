@@ -6,7 +6,17 @@ export type ModelBundleProjectorStatus =
   | 'paired'
   | 'missing';
 
-export type ModelDetectionMethod = 'filename' | 'gguf-metadata' | 'none';
+export type ModelDetectionMethod = 'gguf-metadata' | 'none';
+export type AssetRole = 'model' | 'projector' | 'unknown';
+
+export interface AssetInspection {
+  version: 1;
+  role: AssetRole;
+  architecture: string | null;
+  visionCapable: boolean;
+  compatibleVisionProjectorTypes: string[];
+  providedVisionProjectorType: string | null;
+}
 
 export interface ModelBundleFileProjectorDescriptor {
   kind: 'file';
@@ -36,9 +46,7 @@ export interface StageModelBundleOptions {
 }
 
 export interface ModelDetectionResult {
-  isVisionModel: boolean;
-  isProjector: boolean;
-  suggestedProjectorUrl: string | null;
+  inspection: AssetInspection;
   detectionMethod: ModelDetectionMethod;
   modelName: string;
   modelType: string | null;
