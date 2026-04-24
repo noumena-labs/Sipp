@@ -20,6 +20,12 @@ export interface TickEndEvent {
   readonly snapshot: WorldSnapshot;
 }
 
+export interface WorldSyncEvent {
+  readonly kind: 'world-sync';
+  readonly tick: number;
+  readonly snapshot: WorldSnapshot;
+}
+
 export interface AgentQueryStartEvent {
   readonly kind: 'agent-query-start';
   readonly tick: number;
@@ -98,6 +104,7 @@ export interface RuntimeErrorEvent {
 export type SimulationEvent =
   | TickStartEvent
   | TickEndEvent
+  | WorldSyncEvent
   | AgentQueryStartEvent
   | AgentQueryEndEvent
   | AgentIntentEvent

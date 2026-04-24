@@ -719,6 +719,9 @@ export class SimulationRuntime {
   private emitGameEvents(events: readonly SimulationGameEvent[]): void {
     for (const event of events) {
       this.emit({ kind: 'game-event', tick: this.state.tick, event });
+      if (shouldEmitImmediateWorldSync(event)) {
+        this.emit({ kind: 'world-sync', tick: this.state.tick, snapshot: this.getSnapshot() });
+      }
     }
   }
 
@@ -1211,5 +1214,23 @@ function inferEmotionFromGoal(goal: AgentGoal): string {
       return 'alert';
     case 'object_action':
       return goal.affordance.kind === 'pick_up' ? 'happy' : 'curious';
+  }
+}
+
+function shouldEmitImmediateWorldSync(event: SimulationGameEvent): boolean {
+  switch (event.kind) {
+    case 'bat_swing':
+    case 'power_up_use':
+    case 'drop':
+    case 'push':
+    case 'delivery':
+    case 'respawn':
+      return true;
+    case 'pickup':
+    case 'forced_drop':
+    case 'bump_whiff':
+    case 'power_up_throw':
+    case 'fallback':
+      return false;
   }
 }

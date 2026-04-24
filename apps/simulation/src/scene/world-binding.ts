@@ -309,7 +309,7 @@ export function bindWorldToScene(
   };
 
   const handleEvent = (event: SimulationEvent): void => {
-    if (event.kind === 'tick-end') {
+    if (event.kind === 'tick-end' || event.kind === 'world-sync') {
       applySnapshot(event.snapshot);
       return;
     }

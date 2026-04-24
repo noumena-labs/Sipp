@@ -75,9 +75,8 @@ const BRAIN_DEFINITIONS: readonly BrainDefinition[] = [
 ];
 
 const DEFAULT_MODEL_URL = 'https://huggingface.co/LiquidAI/LFM2.5-350M-GGUF/resolve/main/LFM2.5-350M-Q8_0.gguf';
-const SIMULATION_TICK_HZ = 1.5;
-const SIMULATION_STEP_SECONDS = 1 / SIMULATION_TICK_HZ;
-const SIMULATION_STEP_DELAY_MS = 1000 / SIMULATION_TICK_HZ;
+const SIMULATION_STEP_SECONDS = 0.15;
+const SIMULATION_STEP_DELAY_MS = SIMULATION_STEP_SECONDS * 1000;
 const DEFAULT_SCENARIO_SETTINGS: StartScenarioSettings = {
   obstaclesEnabled: true,
   obstacleTarget: 12,
@@ -158,6 +157,7 @@ export default function App() {
     const off = bus.onAny((event: SimulationEvent) => {
       switch (event.kind) {
         case 'tick-end':
+        case 'world-sync':
           brainStore.setCurrentTick(event.tick);
           snapshotRef.current = event.snapshot;
           setSnapshot(event.snapshot);
