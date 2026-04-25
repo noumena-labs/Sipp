@@ -375,7 +375,7 @@ export function bindWorldToScene(
       entry.visual.root.position.z = pos.z + offsetZ;
 
       const rot = entry.visual.root.rotation;
-      const desired = -entry.targetHeading;
+      const desired = entry.targetHeading;
       let delta = desired - rot.y;
       while (delta > Math.PI) delta -= Math.PI * 2;
       while (delta < -Math.PI) delta += Math.PI * 2;

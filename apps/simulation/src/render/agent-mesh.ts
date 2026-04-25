@@ -41,14 +41,15 @@ export function createAgentVisual(name: string, color: string): AgentVisual {
   body.position.y = BODY_HEIGHT / 2;
   root.add(body);
 
-  // Heading nose.
+  // Heading nose. Runtime heading 0 means facing +Z; ConeGeometry points along
+  // +Y by default, so rotate it onto local +Z.
   const noseMat = new THREE.MeshStandardMaterial({
     color: new THREE.Color(color).offsetHSL(0, 0, -0.15),
     roughness: 0.5,
   });
   const nose = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.24, 16), noseMat);
-  nose.rotation.z = -Math.PI / 2;
-  nose.position.set(BODY_RADIUS + 0.05, BODY_HEIGHT / 2, 0);
+  nose.rotation.x = Math.PI / 2;
+  nose.position.set(0, BODY_HEIGHT / 2, BODY_RADIUS + 0.05);
   root.add(nose);
 
   // Name label sprite.
@@ -105,7 +106,7 @@ export function createAgentVisual(name: string, color: string): AgentVisual {
       root.position.set(x, 0, z);
     },
     setHeading(rad) {
-      root.rotation.y = -rad; // THREE Y rotation is left-handed vs our heading
+      root.rotation.y = rad;
     },
     setHighlighted(on) {
       ring.visible = on;
