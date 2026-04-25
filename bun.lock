@@ -12,8 +12,8 @@
       "name": "cogent-engine-avatar-app",
       "version": "0.0.1",
       "dependencies": {
+        "@noumena-labs/cogent-engine": "workspace:*",
         "@pixiv/three-vrm": "^3.3.0",
-        "cogent-engine": "workspace:*",
         "react": "^19.2.4",
         "react-dom": "^19.2.4",
         "scheduler": "^0.27.0",
@@ -32,7 +32,7 @@
       "name": "cogent-engine-benchmark-app",
       "version": "0.0.1",
       "dependencies": {
-        "cogent-engine": "workspace:*",
+        "@noumena-labs/cogent-engine": "workspace:*",
         "react": "^19.2.4",
         "react-dom": "^19.2.4",
         "scheduler": "^0.27.0",
@@ -49,7 +49,7 @@
       "name": "cogent-engine-simulation-app",
       "version": "0.0.1",
       "dependencies": {
-        "cogent-engine": "workspace:*",
+        "@noumena-labs/cogent-engine": "workspace:*",
         "react": "^19.2.4",
         "react-dom": "^19.2.4",
         "scheduler": "^0.27.0",
@@ -65,7 +65,7 @@
       },
     },
     "packages/cogent-engine": {
-      "name": "cogent-engine",
+      "name": "@noumena-labs/cogent-engine",
       "version": "1.0.0",
       "devDependencies": {
         "@types/node": "^20.10.0",
@@ -168,6 +168,8 @@
     "@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.5.5", "", {}, "sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og=="],
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
+
+    "@noumena-labs/cogent-engine": ["@noumena-labs/cogent-engine@workspace:packages/cogent-engine"],
 
     "@pixiv/three-vrm": ["@pixiv/three-vrm@3.5.2", "", { "dependencies": { "@pixiv/three-vrm-core": "3.5.2", "@pixiv/three-vrm-materials-hdr-emissive-multiplier": "3.5.2", "@pixiv/three-vrm-materials-mtoon": "3.5.2", "@pixiv/three-vrm-materials-v0compat": "3.5.2", "@pixiv/three-vrm-node-constraint": "3.5.2", "@pixiv/three-vrm-springbone": "3.5.2" }, "peerDependencies": { "three": ">=0.137" } }, "sha512-YC3T8WZvb18n1uzYS60I9WCc2kOJxWZ/Q0RfklFAg0nD3Dz/kvvEoCYfZj5idnJqOtbLUXZGXZF1KCXKUB2qHg=="],
 
@@ -282,8 +284,6 @@
     "browserslist": ["browserslist@4.28.2", "", { "dependencies": { "baseline-browser-mapping": "^2.10.12", "caniuse-lite": "^1.0.30001782", "electron-to-chromium": "^1.5.328", "node-releases": "^2.0.36", "update-browserslist-db": "^1.2.3" }, "bin": { "browserslist": "cli.js" } }, "sha512-48xSriZYYg+8qXna9kwqjIVzuQxi+KYWp2+5nCYnYKPTr0LvD89Jqk2Or5ogxz0NUMfIjhh2lIUX/LyX9B4oIg=="],
 
     "caniuse-lite": ["caniuse-lite@1.0.30001785", "", {}, "sha512-blhOL/WNR+Km1RI/LCVAvA73xplXA7ZbjzI4YkMK9pa6T/P3F2GxjNpEkyw5repTw9IvkyrjyHpwjnhZ5FOvYQ=="],
-
-    "cogent-engine": ["cogent-engine@workspace:packages/cogent-engine"],
 
     "cogent-engine-avatar-app": ["cogent-engine-avatar-app@workspace:apps/avatar"],
 
