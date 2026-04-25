@@ -114,11 +114,11 @@ const CONFIG = parseDirectorConfig({
     },
     narrate: {
       inputs: ['state'],
-      output: { shape: 'text', maxLength: 80 },
+      output: { shape: 'text', minLength: 1, maxLength: 80 },
     },
     inspect_screen: {
       inputs: ['screenshot'],
-      output: { shape: 'text', maxLength: 80 },
+      output: { shape: 'text', minLength: 1, maxLength: 80 },
     },
     choose_many: {
       inputs: ['state'],
@@ -136,7 +136,7 @@ const CONFIG = parseDirectorConfig({
     },
     assist_with_directives: {
       inputs: ['state'],
-      output: { shape: 'text_with_directives', directives: 'runtime', maxDirectives: 1, maxLength: 120 },
+      output: { shape: 'text_with_directives', directives: 'runtime', minLength: 1, maxDirectives: 1, maxLength: 120 },
     },
   },
 });
@@ -163,9 +163,9 @@ test('DirectorRuntime returns a selected runtime choice with hidden payload', as
   assert.equal(result.selections[0]?.id, 'winner:aria');
   assert.deepEqual(result.selections[0]?.payload, { winnerAgentId: 'aria', secret: 'not shown' });
   assert.ok(engine.grammar?.includes('"winner:aria"'));
-  assert.ok(engine.prompt.includes('winner:aria=Aria wins'));
+  assert.ok(engine.prompt.includes('winner:aria - Aria wins'));
   assert.equal(engine.prompt.includes('not shown'), false);
-  assert.equal(engine.prompt.includes('no JSON'), true);
+  assert.equal(engine.prompt.includes('Never output JSON'), true);
 });
 
 test('DirectorRuntime exposes task grammar and prompt for inspection', () => {
@@ -184,9 +184,13 @@ test('DirectorRuntime exposes task grammar and prompt for inspection', () => {
 
   assert.equal(grammar, prompt.grammar);
   assert.ok(grammar?.includes('"winner:aria"'));
-  assert.ok(prompt.userPrompt.includes('winner:aria=Aria wins'));
+  assert.ok(prompt.userPrompt.includes('winner:aria - Aria wins'));
   assert.equal(prompt.userPrompt.includes('hidden'), false);
   assert.equal(prompt.media.length, 0);
+  assert.ok(prompt.userPrompt.includes('Task:\nResolve a conflict.'));
+  assert.ok(prompt.userPrompt.includes('Response:\nSelect exactly one choice id. Output only the id.'));
+  assert.ok(prompt.userPrompt.includes('Inputs:'));
+  assert.equal(prompt.userPrompt.includes('Output shape:'), false);
 });
 
 test('DirectorRuntime threads grammar for select_many and select_slots', async () => {
@@ -231,6 +235,8 @@ test('DirectorRuntime threads directive grammar for text_with_directives', async
   assert.deepEqual(result.selections[0]?.payload, { route: '/billing', secret: 'hidden' });
   assert.ok(engine.grammar?.includes('directive-cue ::= "[" directive-id "]"'));
   assert.ok(engine.grammar?.includes('"nav.billing" | "inspect.menu"'));
+  assert.ok(engine.prompt.includes('Response:\nWrite only the final answer, under 120 characters.'));
+  assert.ok(engine.prompt.includes('Available directives:'));
   assert.equal(engine.prompt.includes('hidden'), false);
 });
 
@@ -288,6 +294,21 @@ test('DirectorRuntime returns text task output without JSON parsing', async () =
   assert.equal(result.text, 'Aria sprints toward home base.');
   assert.deepEqual(result.selections, []);
   assert.equal(engine.grammar, undefined);
+  assert.ok(engine.prompt.includes('Task:\nComplete task narrate.'));
+  assert.ok(engine.prompt.includes('Response:\nWrite only the final answer, under 80 characters.'));
+  assert.equal(engine.prompt.includes('Output shape:'), false);
+  assert.equal(engine.prompt.includes('Keep it at least 1 characters'), false);
+});
+
+test('DirectorRuntime returns invalid_response for empty text when minLength is required', async () => {
+  const engine = new FakeEngine();
+  engine.outputText = '   ';
+  const runtime = new DirectorRuntime(engine, CONFIG);
+
+  const result = await runtime.run('narrate', { inputs: { state: { tick: 4 } } });
+
+  assert.equal(result.status, 'invalid_response');
+  assert.match(result.errorMessage ?? '', /at least 1 characters/);
 });
 
 test('DirectorRuntime renders image inputs through media markers', async () => {

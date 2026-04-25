@@ -485,7 +485,7 @@ test('choose() threads literal-choice grammar into queuePrompt options', async (
   assert.equal(opts.promptFormat, 'raw');
   assert.equal(opts.nTokens, 24);
   assert.ok(typeof opts.grammar === 'string' && opts.grammar.includes('approach:aria'));
-  assert.ok(call.promptText.includes('Output one option text only.'));
+  assert.ok(call.promptText.includes('Choose exactly one of the following options and output only that option text:'));
 });
 
 test('choose() is stateless and does not write memory', async () => {

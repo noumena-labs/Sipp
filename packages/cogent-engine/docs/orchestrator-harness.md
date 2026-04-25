@@ -2,17 +2,16 @@
 
 `@noumena-labs/cogent-engine/orchestrator` is a config-driven director runtime.
 
-It does not own world state, ticks, reducers, sensing, movement, or
-rendering. The host app owns the simulation and calls the director runtime
-when it wants model judgment about the current scenario state.
+It does not own world state, ticks, reducers, sensing, movement, or rendering. The host app owns the simulation and calls the director runtime when it wants model judgment about the current scenario state.
 
 The package is responsible for:
 
 - parsing `director.json`
-- rendering deterministic prompts from config plus app-supplied payload
-- compiling the matching JSON response grammar
-- executing the query through `CogentEngine`
-- validating the returned JSON against the declared response schema
+- resolving static or runtime-supplied choices
+- rendering deterministic prompts from config plus app-supplied inputs
+- compiling output grammars for constrained shapes
+- executing the task through `CogentEngine`
+- parsing and validating the returned text against the declared output shape
 
 ## Public API
 
@@ -21,11 +20,10 @@ import {
   DirectorRuntime,
   createDirectorFromConfigUrl,
   parseDirectorConfig,
-  compileResponseGrammar,
-  validateResponseValue,
   type DirectorConfig,
-  type DirectorQueryPayload,
-  type ResponseSchema,
+  type DirectorRunRequest,
+  type DirectorRunResult,
+  type DirectorTaskPrompt,
 } from '@noumena-labs/cogent-engine/orchestrator';
 ```
 
@@ -34,18 +32,18 @@ import {
 ```text
 host app / game
   owns world state, ticks, reducers, rendering
-        │
-        ├─ builds payload for a named query
-        ▼
-DirectorRuntime.query("resolve_conflict", payload)
-        │
-        ├─ render system prompt from director.json
-        ├─ render user message from query config + payload
-        ├─ compile grammar from query.response
-        ├─ run model through CogentEngine
-        └─ parse + validate returned JSON
-        ▼
-structured result for the host app to apply
+        |
+        |- builds inputs and optional runtime choices for a named task
+        v
+DirectorRuntime.run("resolve_conflict", request)
+        |
+        |- render system prompt from director.json
+        |- render user prompt from task config + request inputs
+        |- compile grammar from task.output when needed
+        |- run model through CogentEngine
+        `- parse + validate output by task.output shape
+        v
+shape-driven result for the host app to apply
 ```
 
 ## `director.json`
@@ -61,31 +59,87 @@ Minimal shape:
   },
   "director": {
     "role": "High-level scenario director",
-    "objective": "Assess the supplied state and return concise structured results.",
+    "objective": "Assess the supplied state and return concise results.",
     "instructions": [
-      "Only reason from the supplied payload."
+      "Only reason from the supplied inputs."
     ]
   },
-  "hooks": {
-    "conflict": "Conflict detector output from the host app."
+  "inputs": {
+    "conflict": {
+      "kind": "data",
+      "description": "Conflict detector output from the host app."
+    },
+    "scene_brief": {
+      "kind": "text",
+      "description": "Facts to narrate."
+    }
   },
-  "queries": {
+  "tasks": {
     "resolve_conflict": {
+      "purpose": "Resolve one conflict.",
       "instructions": [
-        "Pick one winner from the provided contenders or null to deny all."
+        "Pick one listed ruling."
       ],
-      "hooks": ["conflict"],
-      "response": {
-        "type": "object",
-        "properties": {
-          "winnerAgentId": { "type": "string", "nullable": true, "maxLength": 64 },
-          "note": { "type": "string", "maxLength": 160 }
-        }
+      "inputs": ["conflict"],
+      "output": {
+        "shape": "select_one",
+        "choices": "runtime"
+      }
+    },
+    "narrate_scene": {
+      "purpose": "Write one short narration beat from the supplied observations.",
+      "instructions": [
+        "Use supplied observations only."
+      ],
+      "inputs": ["scene_brief"],
+      "output": {
+        "shape": "text",
+        "minLength": 1,
+        "maxLength": 160
       }
     }
   }
 }
 ```
+
+## Prompt Contract
+
+Every task uses the same user-prompt sections:
+
+```text
+Task:
+Resolve one conflict.
+
+Instructions:
+- Pick one listed ruling.
+
+Response:
+Select exactly one choice id. Output only the id.
+Available choices:
+- drop
+- hold
+
+Inputs:
+
+conflict:
+{
+  "kind": "forced_drop"
+}
+```
+
+Only the `Response` section varies by `task.output.shape`. Task purpose, instructions, inputs, input ordering, and media handling are shared for every task shape.
+
+Input descriptions are rendered in the system prompt input glossary, not repeated in the user prompt.
+
+## Output Shapes
+
+- `select_one`: constrained to exactly one choice id.
+- `select_many`: constrained to zero or more choice ids according to `min` and `max`.
+- `select_slots`: constrained to one `slot=choice` line per configured slot.
+- `text`: unconstrained plain text parsed with optional `minLength` and `maxLength` validation.
+- `text_with_directives`: plain text with optional bracketed directive ids, parsed against configured directives.
+
+`minLength` is a validation contract. It is not rendered as model-facing prompt text.
 
 ## Runtime
 
@@ -95,50 +149,30 @@ class DirectorRuntime {
 
   getConfig(): DirectorConfig
   getSystemPrompt(): string
-  getGrammarSource(queryName: string): string
+  getTaskGrammar(taskName: string, request?: DirectorRunRequest): string | undefined
+  getTaskPrompt(taskName: string, request?: DirectorRunRequest): DirectorTaskPrompt
 
-  query(
-    queryName: string,
-    payload: DirectorQueryPayload,
-    options?: { signal?: AbortSignal }
-  ): Promise<DirectorQueryResult>
+  run(taskName: string, request?: DirectorRunRequest): Promise<DirectorRunResult>
 }
 ```
 
-`DirectorQueryResult` contains:
+`DirectorRunResult` contains:
 
-- `data`: validated JSON value or `null`
-- `cancelled`: whether generation was cancelled
-- `errorMessage`: parse/validation/runtime error when present
+- `status`: `ok`, `aborted`, `timed_out`, `failed`, or `invalid_response`
+- `text`: parsed text for text-like tasks
+- `selections`: parsed selections for choice/directive tasks
 - `rawText`: raw model output
+- `errorMessage`: parse, validation, or runtime error when present
 
-The package intentionally does not impose fallback business logic. If the
-query fails, the host app decides what to do next.
-
-## Response Schema Subset
-
-Supported schema nodes:
-
-- `object`
-- `array`
-- `string`
-- `number`
-- `boolean`
-- `null`
-- `nullable` on every non-null node
-- `enum` and `maxLength` on strings
-- `integer` on numbers
-- `maxItems` on arrays
-
-This is a pragmatic JSON-contract subset, not full JSON Schema.
+The package intentionally does not impose fallback business logic. If a task fails, the host app decides what to do next.
 
 ## Host App Responsibilities
 
 - own the game loop and tick rate
 - own world state and reducers
 - decide when to query the director
-- decide fallback behavior if the query fails
+- supply task inputs and runtime choices
+- decide fallback behavior if the task fails
 - own character brains, rendering, and scene bindings
 
-The `apps/simulation` example shows one way to layer a world simulation on
-top of this generic director runtime.
+The `apps/simulation` example shows one way to layer a world simulation on top of this generic director runtime.

@@ -5,12 +5,12 @@
     "summary": "Four agents race to deliver the banana while contesting pickups and forced drops."
   },
   "director": {
-    "role": "Referee and narrator",
-    "objective": "Rule conflicts fairly and narrate briefly.",
+    "role": "Fair referee and old-timey radio play-by-play announcer",
+    "objective": "Rule conflicts fairly and call Banana Dash with lively, grounded play-by-play.",
     "instructions": [
-      "Use only supplied inputs.",
-      "Choose one legal ruling.",
-      "Keep narration to one overlay line."
+      "Use only supplied facts.",
+      "Choose one legal ruling for referee tasks.",
+      "For narration, keep the call lively, grounded, and concise."
     ]
   },
   "inputs": {
@@ -28,7 +28,7 @@
     },
     "narration_brief": {
       "kind": "text",
-      "description": "Host-synthesized play-by-play facts."
+      "description": "Observation facts for play-by-play."
     }
   },
   "tasks": {
@@ -45,16 +45,17 @@
       }
     },
     "narrate_scene": {
-      "purpose": "Turn the supplied play facts into one short Banana Dash call.",
+      "purpose": "Call these observations as one fun, witty old-timey radio line.",
       "instructions": [
-        "Sound like an old-timey radio baseball announcer.",
-        "Name the active agents and call the play in motion.",
-        "Never summarize inventory or say generic lines like Powerups available."
+        "Use the observations only.",
+        "Name a player, the live action, and the stakes.",
+        "Avoid repeating the previous call."
       ],
       "inputs": ["narration_brief"],
       "output": {
         "shape": "text",
-        "maxLength": 180
+        "minLength": 16,
+        "maxLength": 220
       }
     }
   }

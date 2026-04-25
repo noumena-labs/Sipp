@@ -30,7 +30,7 @@ import {
   probeChatTemplateBoundaryInfo,
   renderAppliedChatTemplate,
 } from './chat-template-metadata.js';
-import { renderChoiceSystemPrompt, renderSystemPrompt } from './persona.js';
+import { renderSystemPrompt } from './persona.js';
 import { createTimedAbortController, waitForAbort } from '../utils/abort.js';
 
 /**
@@ -122,7 +122,6 @@ export class CharacterAgent {
   private readonly config: CharacterConfig;
   private readonly maxOutputTokens: number;
   private readonly systemPrompt: string;
-  private readonly choiceSystemPrompt: string;
   private readonly grammarSource: string;
   private readonly memoryLimitTurns: number;
   private readonly canonicalCueLabelsByActionName: ReadonlyMap<string, string>;
@@ -141,7 +140,6 @@ export class CharacterAgent {
     this.maxOutputTokens = options.maxOutputTokens ?? 256;
     this.eventBus = options.bus ?? new ActionBus();
     this.systemPrompt = renderSystemPrompt(config.persona, config.actions);
-    this.choiceSystemPrompt = renderChoiceSystemPrompt(config.persona);
     this.grammarSource = compileActionGrammar(config.actions);
     this.canonicalCueLabelsByActionName = new Map(
       summarizeActionCues(config.actions).map((cue) => [cue.name, cue.label])
@@ -184,7 +182,7 @@ export class CharacterAgent {
     const grammar = compileChoiceGrammar(options.choices);
     const choicePrompt = renderChoicePrompt(userMessage, options.choices);
     const messages: ChatMessage[] = [
-      { role: 'system', content: this.choiceSystemPrompt },
+      { role: 'system', content: this.systemPrompt },
       { role: 'user', content: choicePrompt },
     ];
 
@@ -212,7 +210,7 @@ export class CharacterAgent {
     logChoiceQuery({
       phase: 'request',
       contextKey,
-      systemPrompt: this.choiceSystemPrompt,
+      systemPrompt: this.systemPrompt,
       userPrompt: choicePrompt,
       grammar,
       choices: options.choices,
@@ -799,9 +797,9 @@ function renderChoicePrompt(userMessage: string, choices: readonly string[]): st
   const normalizedChoices = choices.map((choice) => choice.trim());
   return [
     userMessage.trim(),
-    'Options:',
+    '',
+    'Choose exactly one of the following options and output only that option text:',
     ...normalizedChoices.map((choice) => `- ${choice}`),
-    'Output one option text only.',
   ].join('\n');
 }
 

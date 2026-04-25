@@ -231,6 +231,7 @@ function parseOutput(raw: unknown, path: string): DirectorOutputConfig {
     case 'text':
       return {
         shape,
+        minLength: parsePositiveInteger(raw.minLength, `${path}.minLength`),
         maxLength: parsePositiveInteger(raw.maxLength, `${path}.maxLength`),
       };
     case 'text_with_directives':
@@ -238,6 +239,7 @@ function parseOutput(raw: unknown, path: string): DirectorOutputConfig {
         shape,
         directives: parseChoiceSource(raw.directives, `${path}.directives`),
         maxDirectives: parsePositiveInteger(raw.maxDirectives, `${path}.maxDirectives`),
+        minLength: parsePositiveInteger(raw.minLength, `${path}.minLength`),
         maxLength: parsePositiveInteger(raw.maxLength, `${path}.maxLength`),
       };
     default:

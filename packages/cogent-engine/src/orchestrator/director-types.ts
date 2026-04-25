@@ -73,6 +73,7 @@ export interface DirectorSelectSlotsOutputConfig {
 
 export interface DirectorTextOutputConfig {
   readonly shape: 'text';
+  readonly minLength?: number;
   readonly maxLength?: number;
 }
 
@@ -80,6 +81,7 @@ export interface DirectorTextWithDirectivesOutputConfig {
   readonly shape: 'text_with_directives';
   readonly directives: DirectorChoiceSource;
   readonly maxDirectives?: number;
+  readonly minLength?: number;
   readonly maxLength?: number;
 }
 

@@ -15,7 +15,8 @@ export function buildDecisionContext(perception: AgentPerception): DecisionConte
   const goal = findObject(perception, perception.game.goalObjectId);
   const carrier = perception.nearbyAgents.find((agent) => agent.holding === perception.game.bananaObjectId);
   const sabotageCoolingDown = perception.self.cooldowns.sabotageUntilTick > perception.tick;
-  const hasAgentInCloseRange = perception.nearbyAgents.some((agent) => agent.distance <= CHASE_MIN_DISTANCE);
+  const hasCarrierInCloseRange = carrier != null && carrier.distance <= CHASE_MIN_DISTANCE;
+  const bananaIsLoose = banana != null && !banana.heldBy;
   const powerUps = perception.nearbyObjects
     .filter((object) => object.kind === 'bat' || object.kind === 'ice_cube')
     .sort(compareObjectsForPriority);
@@ -53,21 +54,21 @@ export function buildDecisionContext(perception: AgentPerception): DecisionConte
     reorderNonCarrierOptions(options, perception, shouldPrioritizeCarrier);
   }
 
-  if (!isCarrier && !hasAgentInCloseRange) {
-    options.push({ label: 'wait', goal: { kind: 'wait', label: 'wait' } });
-  }
   dedupeOptionsInPlace(options);
 
   if (isCarrier) {
     lines.push('Choose your next action from the available options only. You have the banana, so focus on scoring at home base.');
   } else if (sabotageCoolingDown) {
-    lines.push(hasAgentInCloseRange
-      ? 'Choose your next action from the available options only. Someone is in contact range, so push them or take another active option instead of idling.'
-      : 'Choose your next action from the available options only. If another agent has the banana, keep pressure on them, but a nearby power-up is still worth peeling for when it sets up a faster interception.');
+    const guidance = hasCarrierInCloseRange
+      ? 'Choose your next action from the available options only. The carrier is in contact range, so push them or take another active option.'
+      : bananaIsLoose
+        ? 'Choose your next action from the available options only. The banana is loose, so keep racing it while sabotage cools down.'
+        : 'Choose your next action from the available options only. If another agent has the banana, keep pressure on them, but a nearby power-up is still worth peeling for when it sets up a faster interception.';
+    lines.push(guidance);
   } else if (perception.self.powerUp) {
-    lines.push('Choose your next action from the available options only. If another agent has the banana, use your equipped power-up to stop them before drifting into side errands.');
+    lines.push('Choose your next action from the available options only. The banana is the goal; use your equipped power-up only to strip a carrier or stop the nearest rival to a loose banana.');
   } else {
-    lines.push('Choose your next action from the available options only. If another agent has the banana, stopping or intercepting them is the main priority, but nearby bats and ice cubes are often strong setup plays when they lead to a quicker stop.');
+    lines.push('Choose your next action from the available options only. The banana is the priority. Power-ups are setup plays only when they help you grab it faster or strip it from a carrier.');
   }
   return { prompt: lines.join('\n'), options };
 }
@@ -112,32 +113,29 @@ function addNonCarrierOptions(
       : `${carrier.name} has the banana and is ${qualitativeDistance(carrier.distance)}.`;
     lines.push(carrierState);
     if (carrierIsTooCloseToChase) {
-      lines.push(perception.self.powerUp
-        ? `${carrier.name} is already in contact range. Prioritize your equipped power-up to knock the banana loose; push is only backup disruption.`
-        : `${carrier.name} is already in contact range. Prioritize bumping to knock the banana loose; push is only backup disruption.`);
+      if (sabotageCoolingDown) {
+        lines.push(`${carrier.name} is already in contact range, but your sabotage is cooling down; shove only if it buys time.`);
+      } else {
+        lines.push(perception.self.powerUp
+          ? `${carrier.name} is already in contact range. Prioritize your equipped power-up to knock the banana loose.`
+          : `${carrier.name} is already in contact range. Prioritize bumping to knock the banana loose.`);
+      }
     } else if (shouldPrioritizeCarrier) {
       lines.push(`The banana is already claimed, so weigh direct pressure on ${carrier.name} against any nearby power-up that would create a cleaner interception.`);
     }
 
-    if (perception.self.powerUp?.kind === 'ice_cube' && !sabotageCoolingDown) {
-      const iceTargets = perception.nearbyAgents
-        .filter((agent) => agent.distance <= ICE_THROW_RADIUS)
-        .sort((a, b) => Number(b.holding === perception.game.bananaObjectId) - Number(a.holding === perception.game.bananaObjectId) || a.distance - b.distance);
-      if (iceTargets.length > 0) {
-        lines.push('Your ice cube can be thrown at any nearby agent within range.');
-      }
-      for (const target of iceTargets.slice(0, 3)) {
-        const label = sabotageLabel('ice_cube', target.name);
-        options.push({
+    if (perception.self.powerUp?.kind === 'ice_cube' && carrier.distance <= ICE_THROW_RADIUS && !sabotageCoolingDown) {
+      lines.push('Your ice cube can stop the carrier from range.');
+      const label = sabotageLabel('ice_cube', carrier.name);
+      options.push({
+        label,
+        goal: {
+          kind: 'sabotage_agent',
+          agentId: carrier.id,
+          method: 'ice_cube',
           label,
-          goal: {
-            kind: 'sabotage_agent',
-            agentId: target.id,
-            method: 'ice_cube',
-            label,
-          },
-        });
-      }
+        },
+      });
     } else if (perception.self.powerUp && carrier.distance <= CHASE_MIN_DISTANCE && !sabotageCoolingDown) {
       const label = sabotageLabel(perception.self.powerUp.kind, carrier.name);
       options.push({
@@ -156,7 +154,7 @@ function addNonCarrierOptions(
         label: `bump ${carrier.name}`,
         goal: { kind: 'sabotage_agent', agentId: carrier.id, method: 'bump', label: `bump ${carrier.name}` },
       });
-    } else if (sabotageCoolingDown) {
+    } else if (sabotageCoolingDown && !carrierIsTooCloseToChase) {
       lines.push('Your sabotage is cooling down, so this is a good moment to reposition or hunt a guaranteed hit.');
     }
 
@@ -174,6 +172,25 @@ function addNonCarrierOptions(
 
   if (banana && !banana.heldBy) {
     lines.push(`Banana is ${qualitativeDistance(banana.distance)}.`);
+    const immediateThreat = findImmediateLooseBananaThreat(perception, banana);
+    const tacticalTarget = !sabotageCoolingDown && perception.self.powerUp
+      ? findLooseBananaSabotageTarget(perception, banana)
+      : null;
+    if (tacticalTarget) {
+      lines.push(`${tacticalTarget.name} is the nearest rival to the loose banana, so a quick ${labelForPowerUp(perception.self.powerUp!.kind)} play can open the lane.`);
+      const label = sabotageLabel(perception.self.powerUp.kind, tacticalTarget.name);
+      options.push({
+        label,
+        goal: {
+          kind: 'sabotage_agent',
+          agentId: tacticalTarget.id,
+          method: perception.self.powerUp.kind,
+          label,
+        },
+      });
+    } else if (immediateThreat) {
+      lines.push(`${immediateThreat.name} is the nearest rival to the loose banana.`);
+    }
     if (banana.distance <= INTERACTION_RADIUS) {
       options.push({
         label: 'grab banana',
@@ -218,14 +235,16 @@ function addCloseAgentOptions(
   lines: string[],
   sabotageCoolingDown: boolean
 ): void {
+  if (!sabotageCoolingDown) return;
+
   const closeAgents = perception.nearbyAgents
     .filter((agent) => agent.distance <= CHASE_MIN_DISTANCE)
-    .filter((agent) => agent.holding !== perception.game.bananaObjectId || sabotageCoolingDown)
+    .filter((agent) => agent.holding === perception.game.bananaObjectId)
     .sort((a, b) => a.distance - b.distance)
     .slice(0, 3);
   if (closeAgents.length === 0) return;
 
-  lines.push('Close agents you can shove if bumping is not the better play:');
+  lines.push('Close agents you can shove while sabotage is cooling down:');
   const pushOptions: DecisionOption[] = [];
   for (const agent of closeAgents) {
     const label = `push ${agent.name}`;
@@ -244,7 +263,6 @@ function addAmbientOptions(
   lines: string[],
   powerUps: readonly PerceivedObject[]
 ): void {
-  const visibleAgents = perception.nearbyAgents.filter((agent) => agent.holding !== perception.game.bananaObjectId);
   const visibleObjects = perception.nearbyObjects
     .filter((object) => !object.tags.includes('obstacle'))
     .filter((object) => object.id !== perception.game.bananaObjectId)
@@ -259,15 +277,6 @@ function addAmbientOptions(
       lines.push(`- ${object.label} (${qualitativeDistance(object.distance)})`);
       options.push({ label, goal: { kind: 'go_to_object', objectId: object.id, label } });
     }
-  }
-
-  if (options.length <= 2 && visibleAgents.length > 0) {
-    const agent = visibleAgents.find((entry) => entry.distance > CHASE_MIN_DISTANCE);
-    if (!agent) return;
-    options.push({
-      label: `approach ${agent.name}`,
-      goal: { kind: 'go_to_agent', agentId: agent.id, label: `approach ${agent.name}` },
-    });
   }
 }
 
@@ -295,9 +304,9 @@ function getDecisionPriorityScore(
 
   switch (option.goal.kind) {
     case 'sabotage_agent':
-      return option.goal.agentId === carrierAgentId ? 120 : 90;
+      return option.goal.agentId === carrierAgentId ? 120 : 96;
     case 'push_agent':
-      return option.goal.agentId === carrierAgentId ? 110 : 85;
+      return option.goal.agentId === carrierAgentId ? 110 : 93;
     case 'go_to_agent':
       if (option.goal.agentId === carrierAgentId) {
         const distanceScore = carrierDistance == null ? 0 : Math.max(0, 10 - carrierDistance * 1.5);
@@ -305,10 +314,10 @@ function getDecisionPriorityScore(
       }
       return 70;
     case 'object_action':
-      if (option.goal.objectId === perception.game.bananaObjectId) return 95;
+      if (option.goal.objectId === perception.game.bananaObjectId) return 110;
       return scorePowerUpOption(option.goal.objectId, objectDistance, shouldPrioritizeCarrier, powerUpBias);
     case 'go_to_object':
-      if (option.goal.objectId === perception.game.bananaObjectId) return 92;
+      if (option.goal.objectId === perception.game.bananaObjectId) return 105;
       return scorePowerUpOption(option.goal.objectId, objectDistance, shouldPrioritizeCarrier, powerUpBias);
     case 'wait':
       return 10;
@@ -341,6 +350,45 @@ function getPerceivedObjectDistance(perception: AgentPerception, objectId: strin
 
 function getPerceivedAgentDistance(perception: AgentPerception, agentId: string): number | null {
   return perception.nearbyAgents.find((agent) => agent.id === agentId)?.distance ?? null;
+}
+
+function findImmediateLooseBananaThreat(
+  perception: AgentPerception,
+  banana: PerceivedObject | undefined
+): PerceivedAgent | null {
+  if (!banana || banana.heldBy) return null;
+  const selfToBanana = banana.distance;
+  return perception.nearbyAgents
+    .filter((agent) => agent.frozenUntilTick <= perception.tick)
+    .map((agent) => ({ agent, bananaDistance: distanceBetweenDirections(agent.distance, agent.direction, selfToBanana, banana.direction) }))
+    .filter((entry) => entry.bananaDistance < selfToBanana)
+    .sort((a, b) => a.bananaDistance - b.bananaDistance || a.agent.distance - b.agent.distance)
+    .map((entry) => entry.agent)[0] ?? null;
+}
+
+function findLooseBananaSabotageTarget(
+  perception: AgentPerception,
+  banana: PerceivedObject | undefined
+): PerceivedAgent | null {
+  const threat = findImmediateLooseBananaThreat(perception, banana);
+  if (!threat || !perception.self.powerUp) return null;
+  const range = perception.self.powerUp.kind === 'ice_cube' ? ICE_THROW_RADIUS : BAT_SWING_RADIUS;
+  return threat.distance <= range ? threat : null;
+}
+
+function distanceBetweenDirections(
+  distanceA: number,
+  directionA: { readonly x: number; readonly z: number },
+  distanceB: number,
+  directionB: { readonly x: number; readonly z: number }
+): number {
+  const ax = directionA.x * distanceA;
+  const az = directionA.z * distanceA;
+  const bx = directionB.x * distanceB;
+  const bz = directionB.z * distanceB;
+  const dx = ax - bx;
+  const dz = az - bz;
+  return Math.sqrt(dx * dx + dz * dz);
 }
 
 function powerUpBiasForArchetype(archetype: string): number {

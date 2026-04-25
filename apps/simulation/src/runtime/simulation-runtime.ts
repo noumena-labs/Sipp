@@ -39,7 +39,7 @@ import type {
 const FORCED_DROP_OUTCOMES: readonly ForcedDropOutcome[] = ['drop', 'hold', 'attacker_fumbles'];
 const FORCED_DROP_REPEAT_SUPPRESSION_COUNT = 3;
 const DEFAULT_MAX_MOVE_TICKS_BEFORE_REEVALUATION = 15;
-
+const MAX_RECENT_NARRATION_EVENTS = 8;
 interface ForcedDropPolicy {
   readonly availableOutcomes: readonly ForcedDropOutcome[];
   readonly suppressedOutcomes: readonly ForcedDropOutcome[];
@@ -49,6 +49,13 @@ interface ForcedDropPolicy {
   readonly suppressionNotes: readonly string[];
   readonly varietyNote: string;
 }
+
+interface NarrationEventSummary {
+  readonly tick: number;
+  readonly text: string;
+}
+
+type NarrationWorldState = Pick<WorldSnapshot, 'agents' | 'objects' | 'game' | 'tick' | 'bounds'>;
 
 export interface SimulationRuntimeOptions {
   readonly id?: string;
@@ -86,6 +93,7 @@ export class SimulationRuntime {
   private readonly agentQueryTimeoutMs: number;
   private readonly maxMoveTicksBeforeReevaluation: number;
   private readonly activeControllers: Set<AbortController> = new Set();
+  private readonly recentNarrationEvents: NarrationEventSummary[] = [];
   private readonly movementSubstepSeconds = 0.15;
 
   private disposed = false;
@@ -520,10 +528,12 @@ export class SimulationRuntime {
     const controller = new AbortController();
     this.narrationController = controller;
     this.activeControllers.add(controller);
+    const narrationEvents = [...this.recentNarrationEvents];
     this.narrationInFlight = this.director.run(this.narrateTask, {
-      inputs: buildNarrationPayload(this.state) as Record<string, JsonValue>,
+      inputs: buildNarrationPayload(this.state, narrationEvents) as Record<string, JsonValue>,
       signal: controller.signal,
       timeoutMs: this.narrationTimeoutMs,
+      maxOutputTokens: 128,
     }).then((result) => {
       if (this.disposed || controller.signal.aborted) return;
       if (result.status !== 'ok') {
@@ -533,14 +543,16 @@ export class SimulationRuntime {
           message: `Director narration task failed: ${result.errorMessage ?? result.status}`,
           taskName: this.narrateTask,
         });
+        this.recentNarrationEvents.splice(0, narrationEvents.length);
         return;
       }
-      const decision = coerceNarrationDecision(result.text, this.getSnapshot());
+      const decision = coerceNarrationDecision(result.text, this.getSnapshot(), narrationEvents);
       this.state.directorNote = decision.note || this.state.directorNote;
       this.emit({ kind: 'director-decision', tick: this.state.tick, decision });
       if (decision.note) {
         this.emit({ kind: 'world-note', tick: this.state.tick, note: decision.note });
       }
+      this.recentNarrationEvents.splice(0, narrationEvents.length);
     }).finally(() => {
       this.activeControllers.delete(controller);
       if (this.narrationController === controller) {
@@ -665,7 +677,7 @@ export class SimulationRuntime {
 
   private invalidateMovementGoalsForBananaDrop(): void {
     for (const agent of this.state.agents) {
-      if (!isReevaluableMovementGoal(agent.goal)) continue;
+      if (!isLooseBananaReevaluationGoal(agent.goal)) continue;
       this.clearAgentForReevaluation(agent, 'banana is loose; changing plans');
     }
   }
@@ -751,6 +763,7 @@ export class SimulationRuntime {
 
   private emitGameEvents(events: readonly SimulationGameEvent[]): void {
     for (const event of events) {
+      this.recordNarrationEvent(event);
       this.emit({ kind: 'game-event', tick: this.state.tick, event });
       if (event.kind === 'drop' && event.objectId === this.state.game.bananaObjectId) {
         this.invalidateMovementGoalsForBananaDrop();
@@ -758,6 +771,15 @@ export class SimulationRuntime {
       if (shouldEmitImmediateWorldSync(event)) {
         this.emit({ kind: 'world-sync', tick: this.state.tick, snapshot: this.getSnapshot() });
       }
+    }
+  }
+
+  private recordNarrationEvent(event: SimulationGameEvent): void {
+    const text = describeNarrationGameEvent(this.state, event);
+    if (!text) return;
+    this.recentNarrationEvents.push({ tick: this.state.tick, text });
+    if (this.recentNarrationEvents.length > MAX_RECENT_NARRATION_EVENTS) {
+      this.recentNarrationEvents.splice(0, this.recentNarrationEvents.length - MAX_RECENT_NARRATION_EVENTS);
     }
   }
 
@@ -841,31 +863,62 @@ export function buildRefereePayload(state: MutableWorldState, conflict: WorldCon
   };
 }
 
-function buildNarrationPayload(state: MutableWorldState): JsonValue {
+//////////////////////////////////////////////////////////////////////////////////////////////////////////
+// NARRATION
+//////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+function buildNarrationPayload(
+  state: MutableWorldState,
+  recentEvents: readonly NarrationEventSummary[]
+): JsonValue {
   return {
-    narration_brief: buildNarrationBrief(state),
+    narration_brief: buildNarrationBrief(state, recentEvents),
   };
 }
 
-function buildNarrationBrief(state: MutableWorldState): string {
-  const secondaryBeat = describeSecondaryNarrationBeat(state);
-  const previousNote = state.directorNote?.trim();
-  const lines = [
-    'Style: old-timey radio baseball play-by-play for Banana Dash.',
-    `Score: ${formatNarrationScore(state)}.`,
-    `Primary beat: ${describePrimaryNarrationBeat(state)}.`,
-  ];
+function buildNarrationBrief(
+  state: MutableWorldState,
+  recentEvents: readonly NarrationEventSummary[]
+): string {
+  const observations = collectNarrationObservations(state, recentEvents);
+  return [
+    'Write a sentence based on ALL the observations below as if you are an old-timey sports caller at an active game.',
+    '',
+    'Observations:',
+    ...observations.map((observation) => `- ${observation}`),
+  ].join('\n');
+}
 
-  if (secondaryBeat.length > 0) {
-    lines.push(`Secondary beat: ${secondaryBeat}.`);
-  }
+function collectNarrationObservations(
+  state: MutableWorldState,
+  recentEvents: readonly NarrationEventSummary[]
+): string[] {
+  const observations: string[] = [];
+  const previousNote = normalizePreviousNarrationNote(state.directorNote);
+
   if (previousNote) {
-    lines.push(`Previous call: ${previousNote}`);
+    observations.push(`Previous call to avoid: ${asSentence(previousNote)}`);
   }
+  observations.push(`Score: ${asSentence(formatNarrationScore(state))}`);
+  observations.push(...describeBananaNarrationObservations(state));
+  observations.push(...describeAgentIntentObservations(state));
+  observations.push(...describePowerUpNarrationObservations(state));
+  observations.push(...describeFrozenNarrationObservations(state));
+  observations.push(...formatRecentNarrationEventObservations(recentEvents));
 
-  lines.push('Avoid: generic inventory summaries like "Powerups available." Call motion, pressure, a race, a bonk threat, a freeze threat, or a scoring chance.');
-  lines.push('Output: one sentence under 180 characters.');
-  return lines.join('\n');
+  return dedupeNarrationObservations(observations).slice(0, 12);
+}
+
+function normalizePreviousNarrationNote(note: string | null): string | null {
+  const trimmed = note?.trim();
+  if (!trimmed) return null;
+  return trimmed.replace(/[.!?]+$/g, '').trim() || null;
+}
+
+function formatRecentNarrationEventObservations(events: readonly NarrationEventSummary[]): string[] {
+  return events
+    .slice(-2)
+    .map((entry) => `Recent event: ${asSentence(entry.text)}`);
 }
 
 function formatNarrationScore(state: MutableWorldState): string {
@@ -886,68 +939,136 @@ function formatNarrationScore(state: MutableWorldState): string {
   return `${formatNameList(leaders.map((entry) => entry.agent.name))} lead${leaders.length === 1 ? 's' : ''} with ${leaderScore}`;
 }
 
-function describePrimaryNarrationBeat(state: MutableWorldState): string {
+function describeBananaNarrationObservations(state: MutableWorldState): string[] {
   const banana = state.objects.find((entry) => entry.id === state.game.bananaObjectId);
-  if (!banana) return 'The banana has vanished from the diamond and everyone is resetting';
+  if (!banana) return ['The banana is not visible.'];
 
   if (banana.heldBy) {
     const carrier = state.agents.find((entry) => entry.id === banana.heldBy);
-    if (!carrier) return `The banana is marked as held by ${banana.heldBy}, but the pack is hunting for the play`;
+    if (!carrier) return [`The banana is marked as held by ${banana.heldBy}.`];
     const goal = state.objects.find((entry) => entry.id === state.game.goalObjectId);
     const goalDistance = goal ? roundForPrompt(vec2Distance(carrier.position, goal.position)) : null;
-    const nearestChasers = nearestAgentsTo(carrier, state.agents, 2).map((entry) => entry.agent.name);
-    const frozen = carrier.frozenUntilTick > state.tick ? ` frozen for ${carrier.frozenUntilTick - state.tick} ticks` : '';
-    const scoreThreat = goalDistance != null && goalDistance <= GOAL_RADIUS + 1.2
-      ? 'right on the doorstep of home base'
-      : goalDistance != null
-        ? `${goalDistance} units from home base`
-        : 'looking for home base';
-    const chase = nearestChasers.length > 0 ? ` with ${formatNameList(nearestChasers)} giving chase` : '';
-    return `${carrier.name} has the banana${frozen}, ${scoreThreat}${chase}`;
+    const observations = [`${carrier.name} has the banana.`];
+    if (goalDistance != null) {
+      observations.push(`${carrier.name} is ${describeGoalProgress(goalDistance)}.`);
+    }
+    const chasers = nearestAgentsTo(carrier, state.agents, 2)
+      .filter((entry) => entry.agent.frozenUntilTick <= state.tick)
+      .map((entry) => entry.agent.name);
+    if (chasers.length > 0) {
+      observations.push(`${formatNameList(chasers)} ${chasers.length === 1 ? 'is' : 'are'} chasing ${carrier.name}.`);
+    }
+    return observations;
   }
 
   const rushers = state.agents
     .map((agent) => ({ agent, distance: vec2Distance(agent.position, banana.position) }))
+    .filter((entry) => entry.agent.frozenUntilTick <= state.tick)
     .sort((a, b) => a.distance - b.distance)
     .slice(0, 2);
   const activeRushers = rushers
     .filter((entry) => isAgentDrivingAtBanana(entry.agent))
     .map((entry) => entry.agent.name);
   const names = activeRushers.length > 0 ? activeRushers : rushers.map((entry) => entry.agent.name);
-  return `Loose banana on the ${describeFieldZone(state, banana.position)} with ${formatNameList(names)} charging in`;
+  const observations = [`The banana is loose on the ${describeFieldZone(state, banana.position)}.`];
+  if (names.length > 0) {
+    observations.push(`${formatNameList(names)} ${names.length === 1 ? 'is' : 'are'} charging toward the banana.`);
+  }
+  return observations;
 }
 
-function describeSecondaryNarrationBeat(state: MutableWorldState): string {
-  const beats: string[] = [];
-  const equipped = state.agents
+function describeAgentIntentObservations(state: MutableWorldState): string[] {
+  return state.agents
+    .filter((agent) => agent.frozenUntilTick <= state.tick)
+    .map((agent) => describeAgentIntentObservation(state, agent))
+    .filter((entry): entry is string => entry != null)
+    .slice(0, 5);
+}
+
+function describeAgentIntentObservation(
+  state: MutableWorldState,
+  agent: SimulationAgentState
+): string | null {
+  const intent = agent.intent;
+  if (!intent) return null;
+  switch (intent.kind) {
+    case 'go_to_object':
+      return `${agent.name} is moving toward ${describeNarrationObject(state, intent.objectId)}.`;
+    case 'pick_up':
+      return `${agent.name} is trying to grab ${describeNarrationObject(state, intent.objectId)}.`;
+    case 'deliver':
+      return `${agent.name} is heading to home base.`;
+    case 'approach_agent':
+      return `${agent.name} is chasing ${agentName(state, intent.agentId)}.`;
+    case 'push':
+      return `${agent.name} is trying to shove ${agentName(state, intent.agentId)}.`;
+    case 'sabotage':
+      return `${agent.name} is trying to ${describeSabotageObservation(state, intent.agentId, intent.method)}.`;
+    case 'use':
+      return `${agent.name} is using ${describeNarrationObject(state, intent.objectId)}.`;
+    case 'drop':
+      return `${agent.name} is dropping what they carry.`;
+    case 'move_to':
+    case 'wait':
+      return null;
+  }
+}
+
+function describePowerUpNarrationObservations(state: MutableWorldState): string[] {
+  return state.agents
     .filter((agent) => agent.powerUp != null)
-    .map((agent) => `${agent.name} has ${labelForNarrationPowerUp(agent.powerUp!.kind)}`);
-  if (equipped.length > 0) {
-    beats.push(formatNameList(equipped));
-  }
+    .map((agent) => `${agent.name} has ${labelForNarrationPowerUp(agent.powerUp!.kind)}.`)
+    .slice(0, 4);
+}
 
-  const iceHunters = state.agents
-    .filter((agent) => agent.powerUp == null && /ice cube/i.test(agent.status))
-    .map((agent) => agent.name);
-  if (iceHunters.length > 0) {
-    beats.push(`${formatNameList(iceHunters)} ${iceHunters.length === 1 ? 'is' : 'are'} peeling for ice`);
-  }
-
-  const batHunters = state.agents
-    .filter((agent) => agent.powerUp == null && /bat|baseball/i.test(agent.status))
-    .map((agent) => agent.name);
-  if (batHunters.length > 0) {
-    beats.push(`${formatNameList(batHunters)} ${batHunters.length === 1 ? 'is' : 'are'} hunting the bat`);
-  }
-
-  const frozen = state.agents
+function describeFrozenNarrationObservations(state: MutableWorldState): string[] {
+  return state.agents
     .filter((agent) => agent.frozenUntilTick > state.tick)
-    .map((agent) => `${agent.name} is frozen`);
-  if (frozen.length > 0) {
-    beats.push(formatNameList(frozen));
-  }
+    .map((agent) => `${agent.name} is frozen for ${agent.frozenUntilTick - state.tick} more ticks.`)
+    .slice(0, 3);
+}
 
-  return beats.slice(0, 2).join('; ');
+function describeGoalProgress(distance: number): string {
+  if (distance <= GOAL_RADIUS + 1.2) return 'on the doorstep of home base';
+  if (distance <= 4) return 'closing on home base';
+  if (distance <= 7) return 'midfield from home base';
+  return 'far from home base';
+}
+
+function describeSabotageObservation(
+  state: MutableWorldState,
+  targetAgentId: string,
+  method: 'bump' | PowerUpKind
+): string {
+  const target = state.agents.find((entry) => entry.id === targetAgentId);
+  const targetName = target?.name ?? targetAgentId;
+  const targetHasBanana = target?.holding === state.game.bananaObjectId;
+  switch (method) {
+    case 'bat':
+      return `smack ${targetName} with the bat${targetHasBanana ? ' and knock the banana loose' : ''}`;
+    case 'ice_cube':
+      return `freeze ${targetName} with ice${targetHasBanana ? ' and stop the banana run' : ''}`;
+    case 'bump':
+      return `bump ${targetName}${targetHasBanana ? ' and knock the banana loose' : ''}`;
+  }
+}
+
+function dedupeNarrationObservations(observations: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const observation of observations) {
+    const normalized = normalizeNarrationText(observation);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    unique.push(observation);
+  }
+  return unique;
+}
+
+function asSentence(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return '';
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
 function nearestAgentsTo(
@@ -967,7 +1088,85 @@ function isAgentDrivingAtBanana(agent: SimulationAgentState): boolean {
 }
 
 function labelForNarrationPowerUp(powerUp: PowerUpKind): string {
-  return powerUp === 'bat' ? 'the bat' : 'ice';
+  return powerUp === 'bat' ? 'the bat' : 'an ice cube';
+}
+
+function describeNarrationObject(state: NarrationWorldState, objectId: string): string {
+  if (objectId === state.game.goalObjectId) return 'home base';
+  const object = state.objects.find((entry) => entry.id === objectId);
+  const label = object?.label ?? objectId;
+  return label === 'banana' ? 'the banana' : label;
+}
+
+function agentName(state: NarrationWorldState, agentId: string): string {
+  return state.agents.find((entry) => entry.id === agentId)?.name ?? agentId;
+}
+
+function describeNarrationGameEvent(state: MutableWorldState, event: SimulationGameEvent): string | null {
+  switch (event.kind) {
+    case 'delivery':
+      return `${agentName(state, event.agentId)} scored with ${describeNarrationObject(state, event.objectId)}`;
+    case 'pickup': {
+      const object = state.objects.find((entry) => entry.id === event.objectId);
+      if (event.objectId === state.game.bananaObjectId) {
+        return `${agentName(state, event.agentId)} grabbed the banana and turned for home`;
+      }
+      return `${agentName(state, event.agentId)} snagged ${object?.label ?? event.objectId} for trouble`;
+    }
+    case 'drop':
+      return `${agentName(state, event.agentId)} lost ${describeNarrationObject(state, event.objectId)} after ${labelForNarrationDropCause(event.cause)}`;
+    case 'forced_drop':
+      return describeForcedDropNarrationEvent(state, event);
+    case 'bump_whiff':
+      return `${agentName(state, event.attackerAgentId)} whiffed the bump on ${agentName(state, event.targetAgentId)}`;
+    case 'push':
+      return `${agentName(state, event.agentId)} shoved ${agentName(state, event.targetAgentId)} off the line`;
+    case 'power_up_throw':
+      return `${agentName(state, event.agentId)} threw ice at ${agentName(state, event.targetAgentId)}`;
+    case 'bat_swing': {
+      const hits = event.hits.map((hit) => agentName(state, hit.agentId));
+      return hits.length > 0
+        ? `${agentName(state, event.agentId)} swung the bat and rattled ${formatNameList(hits)}`
+        : `${agentName(state, event.agentId)} swung the bat and found nothing but breeze`;
+    }
+    case 'power_up_use':
+      return `${agentName(state, event.agentId)} froze ${agentName(state, event.targetAgentId)} with ice`;
+    case 'respawn':
+      return event.objectId === state.game.bananaObjectId
+        ? `the banana respawned on the ${describeFieldZone(state, event.position)}`
+        : null;
+    case 'fallback':
+      return null;
+  }
+}
+
+function describeForcedDropNarrationEvent(
+  state: NarrationWorldState,
+  event: Extract<SimulationGameEvent, { kind: 'forced_drop' }>
+): string {
+  const attacker = agentName(state, event.attackerAgentId);
+  const target = agentName(state, event.targetAgentId);
+  switch (event.outcome) {
+    case 'drop':
+      return `${attacker} knocked the banana loose from ${target}`;
+    case 'hold':
+      return `${target} kept the banana through ${attacker}'s challenge`;
+    case 'attacker_fumbles':
+      return `${attacker} fumbled the challenge on ${target}`;
+  }
+}
+
+function labelForNarrationDropCause(cause: Extract<SimulationGameEvent, { kind: 'drop' }>['cause']): string {
+  switch (cause) {
+    case 'bat':
+      return 'a bat bonk';
+    case 'bump':
+      return 'a bump';
+    case 'ice':
+      return 'an ice mishap';
+    case 'voluntary':
+      return 'a voluntary drop';
+  }
 }
 
 function describeFieldZone(state: MutableWorldState, position: { readonly x: number; readonly z: number }): string {
@@ -1289,44 +1488,44 @@ function describeResolutionNote(resolution: DirectorResolution): string {
   }
 }
 
-function coerceNarrationDecision(value: string, snapshot: WorldSnapshot): DirectorDecision {
+function coerceNarrationDecision(
+  value: string,
+  snapshot: WorldSnapshot,
+  _recentEvents: readonly NarrationEventSummary[]
+): DirectorDecision {
   const note = value.trim();
-  if (note.length > 0 && !isGenericNarration(note)) {
+  if (
+    note.length > 0 &&
+    !isTooShortNarration(note) &&
+    !isGenericNarration(note) &&
+    !isRepeatedNarration(note, snapshot.directorNote)
+  ) {
     return { note, resolutions: [] };
   }
-  return { note: buildNarrationFallback(snapshot), resolutions: [] };
+  return { note: '', resolutions: [] };
+}
+
+function isTooShortNarration(note: string): boolean {
+  const words = note.match(/[A-Za-z0-9]+(?:['-][A-Za-z0-9]+)*/g) ?? [];
+  return note.trim().length < 16 || words.length < 4;
 }
 
 function isGenericNarration(note: string): boolean {
-  return /^(power[- ]?ups? available|power[- ]?ups? are available|available power[- ]?ups?)[.!]?$/i.test(note.trim());
+  const trimmed = note.trim();
+  return /^(power[- ]?ups? available|power[- ]?ups? are available|available power[- ]?ups?)[.!]?$/i.test(trimmed)
+    || /^return plain text(?: under \d+(?: characters?)?)?[.!]?$/i.test(trimmed)
+    || /^write (?:only the final answer|the final answer only)(?:,? under \d+(?: characters?)?)?[.!]?$/i.test(
+      trimmed
+    );
 }
 
-function buildNarrationFallback(snapshot: WorldSnapshot): string {
-  const banana = snapshot.objects.find((entry) => entry.id === snapshot.game.bananaObjectId);
-  if (banana?.heldBy) {
-    const carrier = snapshot.agents.find((entry) => entry.id === banana.heldBy);
-    const chasers = carrier
-      ? snapshot.agents
-          .filter((agent) => agent.id !== carrier.id)
-          .map((agent) => ({ agent, distance: vec2Distance(agent.position, carrier.position) }))
-          .sort((a, b) => a.distance - b.distance)
-          .slice(0, 2)
-          .map((entry) => entry.agent.name)
-      : [];
-    const pursuit = chasers.length > 0
-      ? `, and ${formatNameList(chasers)} ${chasers.length === 1 ? 'is' : 'are'} bearing down`
-      : ' with the field scrambling';
-    return `${carrier?.name ?? banana.heldBy} has the banana${pursuit}!`;
-  }
-  if (banana) {
-    const rushers = snapshot.agents
-      .map((agent) => ({ agent, distance: vec2Distance(agent.position, banana.position) }))
-      .sort((a, b) => a.distance - b.distance)
-      .slice(0, 2)
-      .map((entry) => entry.agent.name);
-    return `Loose banana on the diamond, and ${formatNameList(rushers)} ${rushers.length === 1 ? 'is' : 'are'} charging in!`;
-  }
-  return `Tick ${snapshot.tick}: Banana Dash keeps moving.`;
+function isRepeatedNarration(note: string, previousNote: string | null): boolean {
+  if (!previousNote) return false;
+  return normalizeNarrationText(note) === normalizeNarrationText(previousNote);
+}
+
+function normalizeNarrationText(note: string): string {
+  return note.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
 function describeConflict(conflict: WorldConflict): string {
@@ -1415,6 +1614,15 @@ function isReevaluableMovementGoal(
   goal: AgentGoal | null
 ): goal is Extract<AgentGoal, { kind: 'go_to_object' | 'go_to_agent' }> {
   return goal?.kind === 'go_to_object' || goal?.kind === 'go_to_agent';
+}
+
+function isLooseBananaReevaluationGoal(
+  goal: AgentGoal | null
+): goal is Extract<AgentGoal, { kind: 'go_to_object' | 'go_to_agent' | 'push_agent' | 'sabotage_agent' }> {
+  return goal?.kind === 'go_to_object'
+    || goal?.kind === 'go_to_agent'
+    || goal?.kind === 'push_agent'
+    || goal?.kind === 'sabotage_agent';
 }
 
 function shouldEmitImmediateWorldSync(event: SimulationGameEvent): boolean {

@@ -144,6 +144,7 @@ export class DirectorRuntime {
     });
 
     let requestId = 0;
+    let rawText = '';
     try {
       requestId = await this.engine.queuePrompt(contextKey, promptText, promptOptions);
       const response = await Promise.race([
@@ -154,11 +155,21 @@ export class DirectorRuntime {
           abortMessage: 'Director task aborted.',
         }),
       ]);
-      const rawText = response.outputText ?? '';
+      rawText = response.outputText ?? '';
+      const parseText = sanitizeDirectorModelOutput(rawText);
       if (response.cancelled) {
         const status = abort.timedOut() ? 'timed_out' : 'aborted';
-        const errorMessage = status === 'timed_out' ? 'Director task timed out.' : 'Director task aborted.';
-        logDirectorRun({ phase: 'response', taskName, contextKey, rawText, status, errorMessage });
+        const errorMessage = status === 'timed_out'
+          ? 'Director task timed out.'
+          : 'Director task aborted.';
+        logDirectorRun({
+          phase: 'response',
+          taskName,
+          contextKey,
+          rawText,
+          status,
+          errorMessage,
+        });
         return { status, text: '', selections: [], errorMessage, rawText };
       }
       if (response.failed) {
@@ -175,7 +186,7 @@ export class DirectorRuntime {
       }
 
       const resolved = resolveDirectorChoices(task.output, request);
-      const parsed = parseDirectorOutput(rawText, task.output, resolved);
+      const parsed = parseDirectorOutput(parseText, task.output, resolved);
       logDirectorRun({ phase: 'response', taskName, contextKey, rawText, status: 'ok' });
       return {
         status: 'ok',
@@ -204,7 +215,7 @@ export class DirectorRuntime {
         phase: 'response',
         taskName,
         contextKey,
-        rawText: '',
+        rawText,
         status,
         errorMessage,
       });
@@ -213,7 +224,7 @@ export class DirectorRuntime {
         text: '',
         selections: [],
         errorMessage,
-        rawText: '',
+        rawText,
       };
     } finally {
       abort.dispose();
@@ -273,6 +284,52 @@ function defaultTokenBudget(
     case 'text_with_directives':
       return fallback;
   }
+}
+
+const DIRECTOR_OUTPUT_BOUNDARY_MARKERS = [
+  '<system-reminder>',
+  '</system-reminder>',
+  '<|im_start|>system',
+  '<|im_start|>user',
+  '<|im_start|>assistant',
+  '<|start_header_id|>system<|end_header_id|>',
+  '<|start_header_id|>user<|end_header_id|>',
+  '<|start_header_id|>assistant<|end_header_id|>',
+  '<｜System｜>',
+  '<｜User｜>',
+  '<｜Assistant｜>',
+  '<system>',
+  '<user>',
+  '<assistant>',
+] as const;
+
+function sanitizeDirectorModelOutput(rawText: string): string {
+  let end = rawText.length;
+  for (const marker of DIRECTOR_OUTPUT_BOUNDARY_MARKERS) {
+    const index = rawText.indexOf(marker);
+    if (index >= 0) {
+      end = Math.min(end, index);
+    }
+  }
+
+  let out = rawText.slice(0, end);
+  for (const marker of DIRECTOR_OUTPUT_BOUNDARY_MARKERS) {
+    const overlap = longestSuffixPrefixOverlap(out, marker);
+    if (overlap > 0) {
+      out = out.slice(0, out.length - overlap);
+    }
+  }
+  return out.trim();
+}
+
+function longestSuffixPrefixOverlap(source: string, marker: string): number {
+  const maxLength = Math.min(source.length, marker.length - 1);
+  for (let length = maxLength; length > 0; length -= 1) {
+    if (source.endsWith(marker.slice(0, length))) {
+      return length;
+    }
+  }
+  return 0;
 }
 
 function logDirectorRun(args: {

@@ -32,6 +32,7 @@ const DIRECTOR_CONFIG = parseDirectorConfig({
     referee_event: { kind: 'data', description: 'Referee event to resolve.' },
     scoreboard: { kind: 'data', description: 'Current score.' },
     scene_summary: { kind: 'data', description: 'Current scene summary.' },
+    narration_brief: { kind: 'text', description: 'Observation facts for play-by-play.' },
   },
   tasks: {
     resolve_referee_event: {
@@ -39,8 +40,10 @@ const DIRECTOR_CONFIG = parseDirectorConfig({
       output: { shape: 'select_one', choices: 'runtime' },
     },
     narrate_scene: {
-      inputs: ['scoreboard', 'scene_summary'],
-      output: { shape: 'text', maxLength: 180 },
+      purpose: 'Call these observations as one fun, witty old-timey radio line.',
+      instructions: ['Use the observations only.', 'Name a player, the live action, and the stakes.'],
+      inputs: ['narration_brief'],
+      output: { shape: 'text', minLength: 16, maxLength: 220 },
     },
   },
 });
@@ -276,6 +279,90 @@ function timeoutAfter(ms: number, message: string): Promise<never> {
     setTimeout(() => reject(new Error(message)), ms);
   });
 }
+
+test('narration prompt includes recent beats and rejects repeated previous calls', async () => {
+  const engine = createOutputEngine('one race');
+  const director = new DirectorRuntime(engine, DIRECTOR_CONFIG);
+  const bus = new SimulationBus();
+  const notes: string[] = [];
+  bus.on('world-note', (event) => {
+    notes.push(event.note);
+  });
+
+  const runtime = new SimulationRuntime(director, {
+    bus,
+    directorCadenceTicks: 1,
+    initialDirectorNote: 'one race',
+    game: {
+      title: 'Banana Dash',
+      bananaObjectId: 'banana',
+      goalObjectId: 'home',
+      respawnRules: [{ objectId: 'banana', delayTicks: 1, spawnPoints: [{ x: -4, z: -4 }] }],
+    },
+  });
+
+  try {
+    const internals = runtime as unknown as MutableRuntimeInternals & {
+      simulationAgents: Map<string, StubChooser>;
+      recentNarrationEvents: Array<{ tick: number; text: string }>;
+      maybeStartNarration(): void;
+      narrationInFlight: Promise<void> | null;
+    };
+    internals.simulationAgents.set('aria', createAbortedChooser());
+    internals.state.tick = 12;
+    internals.state.game.score.deliveries.aria = 1;
+    internals.state.game.score.deliveries.mira = 0;
+    internals.state.agents.push(
+      createAgent('aria', 'Aria', { x: 0, z: 0 }, {
+        holding: 'banana',
+        powerUp: { kind: 'ice_cube', objectId: 'ice' },
+        status: 'carrying the banana to home base',
+        goal: { kind: 'deliver', objectId: 'home', label: 'run to home base' },
+        intent: { kind: 'deliver', objectId: 'home', emotion: 'alert' },
+      }),
+      createAgent('mira', 'Mira', { x: 0.8, z: 0 }, {
+        powerUp: { kind: 'bat', objectId: 'bat' },
+        status: 'lining up a bat bonk',
+        goal: { kind: 'sabotage_agent', agentId: 'aria', method: 'bat', label: 'bonk Aria' },
+        intent: { kind: 'sabotage', agentId: 'aria', method: 'bat', emotion: 'alert' },
+      })
+    );
+    internals.state.objects.push(
+      createObject('banana', 'banana', { x: 0, z: 0 }, {
+        label: 'banana',
+        contested: true,
+        heldBy: 'aria',
+        tags: ['food', 'score'],
+        affordances: [{ kind: 'pick_up', label: 'grab banana' }],
+      }),
+      createObject('home', 'goal', { x: 1, z: 0 }, {
+        label: 'home base',
+        tags: ['goal', 'score'],
+      })
+    );
+    internals.recentNarrationEvents.push({ tick: 11, text: 'Aria grabbed the banana and turned for home' });
+
+    internals.maybeStartNarration();
+    await internals.narrationInFlight;
+
+    assert.match(engine.promptText ?? '', /Call these observations as one fun, witty old-timey radio line/);
+    assert.match(engine.promptText ?? '', /Response:\nWrite only the final answer, under 220 characters\./);
+    assert.match(engine.promptText ?? '', /Write a sentence based on ALL the observations below as if you are an old-timey sports caller at an active game\./);
+    assert.match(engine.promptText ?? '', /- Previous call to avoid: one race\./);
+    assert.match(engine.promptText ?? '', /- Aria has the banana\./);
+    assert.match(engine.promptText ?? '', /- Aria is on the doorstep of home base\./);
+    assert.match(engine.promptText ?? '', /- Mira is trying to smack Aria with the bat and knock the banana loose\./);
+    assert.match(engine.promptText ?? '', /- Recent event: Aria grabbed the banana and turned for home\./);
+    assert.doesNotMatch(engine.promptText ?? '', /Output shape:/);
+    assert.doesNotMatch(engine.promptText ?? '', /Description: Play-by-play/);
+    assert.doesNotMatch(engine.promptText ?? '', /Play:/);
+    assert.doesNotMatch(engine.promptText ?? '', /Threats:/);
+    assert.equal(notes.length, 0);
+    assert.equal(internals.state.directorNote, 'one race');
+  } finally {
+    await runtime.dispose();
+  }
+});
 
 test('SimulationRuntime applies deterministic referee fallback after timeout', async () => {
   const engine = createTimeoutEngine();
@@ -674,7 +761,7 @@ test('agent decision context hides bump option while sabotage is cooling down', 
   assert.equal(decision.options.some((option) => option.label === 'push Carrier'), true);
   assert.equal(decision.options.some((option) => option.label === 'wait'), false);
   assert.match(decision.prompt, /already in contact range/);
-  assert.match(decision.prompt, /Close agents/);
+  assert.match(decision.prompt, /while sabotage is cooling down/);
 
   attacker.cooldowns.sabotageUntilTick = 0;
   const readyDecision = buildDecisionContext(perception);
@@ -764,7 +851,7 @@ test('agent decision context keeps chase first for chase-leaning agents', () => 
   assert.equal(decision.options[0]?.label, 'chase Carrier');
   assert.equal(decision.options.some((option) => option.label === 'go get the baseball bat'), true);
   assert.match(decision.prompt, /weigh direct pressure on Carrier against any nearby power-up/);
-  assert.match(decision.prompt, /main priority, but nearby bats and ice cubes are often strong setup plays/);
+  assert.match(decision.prompt, /Power-ups are setup plays only when they help you grab it faster/);
 });
 
 test('agent decision context still surfaces nearby power-ups as the top setup for power-up-leaning agents', () => {
@@ -848,6 +935,97 @@ test('agent decision context still surfaces nearby power-ups as the top setup fo
 
   assert.equal(decision.options[0]?.label, 'go get the ice cube');
   assert.equal(decision.options.some((option) => option.label === 'chase Carrier'), true);
+});
+
+test('agent decision context allows tactical sabotage only against the immediate loose-banana threat', () => {
+  const state = createWorldState();
+  const seeker = createAgent('mira', 'Mira', { x: 0, z: 0 }, {
+    archetype: 'mira',
+    powerUp: { kind: 'ice_cube', objectId: 'ice-power-up' },
+  });
+  const threat = createAgent('threat', 'Threat', { x: 0.8, z: 0 }, {
+    status: 'rushing banana',
+  });
+  const drifter = createAgent('drifter', 'Drifter', { x: 0, z: 2.5 }, {
+    status: 'wandering wide',
+  });
+  const perception: AgentPerception = {
+    self: seeker,
+    nearbyAgents: [
+      {
+        id: threat.id,
+        name: threat.name,
+        distance: 0.8,
+        direction: { x: 1, z: 0 },
+        emotion: threat.emotion,
+        status: threat.status,
+        holding: threat.holding,
+        powerUp: threat.powerUp?.kind ?? null,
+        frozenUntilTick: threat.frozenUntilTick,
+      },
+      {
+        id: drifter.id,
+        name: drifter.name,
+        distance: 2.5,
+        direction: { x: 0, z: 1 },
+        emotion: drifter.emotion,
+        status: drifter.status,
+        holding: drifter.holding,
+        powerUp: drifter.powerUp?.kind ?? null,
+        frozenUntilTick: drifter.frozenUntilTick,
+      },
+    ],
+    nearbyObjects: [
+      {
+        id: 'banana',
+        kind: 'banana',
+        label: 'banana',
+        description: 'banana',
+        distance: 1.1,
+        direction: { x: 1, z: 0 },
+        active: true,
+        heldBy: null,
+        contested: true,
+        affordances: [{ kind: 'pick_up', label: 'grab banana' }],
+        tags: ['food'],
+        blocksMovement: false,
+        collisionRadius: 0.2,
+      },
+      {
+        id: 'home',
+        kind: 'goal',
+        label: 'home base',
+        description: 'home base',
+        distance: 6,
+        direction: { x: 0, z: -1 },
+        active: true,
+        heldBy: null,
+        contested: false,
+        affordances: [],
+        tags: ['goal'],
+        blocksMovement: false,
+        collisionRadius: 1.2,
+      },
+    ],
+    tick: 10,
+    bounds: state.bounds,
+    directorNote: null,
+    game: state.game,
+  };
+
+  const decision = buildDecisionContext(perception);
+
+  assert.equal(decision.options[0]?.label, 'rush banana');
+  assert.equal(decision.options.some((option) => option.label === 'throw the ice cube at Threat'), true);
+  assert.equal(decision.options.some((option) => option.label === 'throw the ice cube at Drifter'), false);
+  assert.equal(decision.options.some((option) => option.label === 'push Threat'), false);
+
+  seeker.cooldowns.sabotageUntilTick = 12;
+  const coolingDecision = buildDecisionContext(perception);
+  assert.equal(coolingDecision.options[0]?.label, 'rush banana');
+  assert.equal(coolingDecision.options.some((option) => option.label === 'throw the ice cube at Threat'), false);
+  assert.equal(coolingDecision.options.some((option) => option.label === 'push Threat'), false);
+  assert.match(coolingDecision.prompt, /banana is loose, so keep racing it/);
 });
 
 test('push relocates a nearby carrier without dropping the banana', () => {
@@ -1079,7 +1257,7 @@ test('deliver goals are not cleared by the reevaluation cap', async () => {
   }
 });
 
-test('forced banana drops clear only movement goals that are still in flight', () => {
+test('forced banana drops clear active banana-contest goals that are still in flight', () => {
   const state = createWorldState();
   state.tick = 10;
   state.agents.push(
@@ -1168,10 +1346,12 @@ test('forced banana drops clear only movement goals that are still in flight', (
   assert.equal(scout?.navigation.detourTarget, null);
   assert.equal(scout?.navigation.blockedTicks, 0);
   assert.equal(scout?.navigation.obstacleId, null);
-  assert.deepEqual(bruiser?.goal, { kind: 'push_agent', agentId: 'scout', label: 'push Scout' });
-  assert.deepEqual(bruiser?.intent, { kind: 'push', agentId: 'scout', emotion: 'alert' });
-  assert.deepEqual(attacker?.goal, { kind: 'sabotage_agent', agentId: 'carrier', method: 'bump', label: 'bump Carrier' });
-  assert.deepEqual(attacker?.intent, { kind: 'sabotage', agentId: 'carrier', method: 'bump', emotion: 'alert' });
+  assert.equal(bruiser?.goal, null);
+  assert.equal(bruiser?.intent, null);
+  assert.equal(bruiser?.status, 'banana is loose; changing plans');
+  assert.equal(attacker?.goal, null);
+  assert.equal(attacker?.intent, null);
+  assert.equal(attacker?.status, 'banana is loose; changing plans');
 });
 
 test('invalid repeated forced-drop fumble falls back through policy without pausing', async () => {
