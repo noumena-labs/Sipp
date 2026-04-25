@@ -157,6 +157,7 @@ export function createCourtyardScenario(options: CourtyardScenarioOptions = {}):
     refereeTimeoutMs: 30000,
     agentQueryTimeoutMs: 30000,
     narrationTimeoutMs: 15000,
+    maxMoveTicksBeforeReevaluation: 15,
   };
 }
 

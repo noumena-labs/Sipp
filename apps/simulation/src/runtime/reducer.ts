@@ -63,6 +63,7 @@ export const FORCED_DROP_HISTORY_LIMIT = 8;
 export const SABOTAGE_COOLDOWN_TICKS = 3;
 export const FREEZE_TICKS = 38;
 export const ICE_THROW_TRAVEL_TICKS = 4;
+export const BANANA_CARRIER_SPEED_MULTIPLIER = 0.92;
 const BAT_SWING_HALF_ANGLE = (Math.PI * 7) / 18;
 const DETOUR_PADDING = 0.35;
 const DETOUR_REACHED_RADIUS = 0.35;
@@ -228,7 +229,10 @@ function stepMovement(
     agent.navigation.blockedTicks = 0;
     return { position: agent.position, heading: agent.heading };
   }
-  const step = Math.min(dist, agent.speed * dt);
+  const effectiveSpeed = agent.holding === state.game.bananaObjectId
+    ? agent.speed * BANANA_CARRIER_SPEED_MULTIPLIER
+    : agent.speed;
+  const step = Math.min(dist, effectiveSpeed * dt);
   const desiredHeading = Math.atan2(dx, dz);
 
   for (const angle of SIDESTEP_ANGLES) {

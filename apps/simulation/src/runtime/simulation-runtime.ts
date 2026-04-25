@@ -37,6 +37,7 @@ import type {
 
 const FORCED_DROP_OUTCOMES: readonly ForcedDropOutcome[] = ['drop', 'hold', 'attacker_fumbles'];
 const FORCED_DROP_REPEAT_SUPPRESSION_COUNT = 3;
+const DEFAULT_MAX_MOVE_TICKS_BEFORE_REEVALUATION = 15;
 
 interface ForcedDropPolicy {
   readonly availableOutcomes: readonly ForcedDropOutcome[];
@@ -59,6 +60,7 @@ export interface SimulationRuntimeOptions {
   readonly refereeTimeoutMs?: number;
   readonly narrationTimeoutMs?: number;
   readonly agentQueryTimeoutMs?: number;
+  readonly maxMoveTicksBeforeReevaluation?: number;
   readonly bus?: SimulationBus;
 }
 
@@ -81,6 +83,7 @@ export class SimulationRuntime {
   private readonly refereeTimeoutMs: number;
   private readonly narrationTimeoutMs: number;
   private readonly agentQueryTimeoutMs: number;
+  private readonly maxMoveTicksBeforeReevaluation: number;
   private readonly activeControllers: Set<AbortController> = new Set();
   private readonly movementSubstepSeconds = 0.15;
 
@@ -101,6 +104,10 @@ export class SimulationRuntime {
     this.refereeTimeoutMs = Math.max(1000, Math.floor(options.refereeTimeoutMs ?? 30000));
     this.narrationTimeoutMs = Math.max(1000, Math.floor(options.narrationTimeoutMs ?? 15000));
     this.agentQueryTimeoutMs = Math.max(1000, Math.floor(options.agentQueryTimeoutMs ?? 30000));
+    this.maxMoveTicksBeforeReevaluation = Math.max(
+      1,
+      Math.floor(options.maxMoveTicksBeforeReevaluation ?? DEFAULT_MAX_MOVE_TICKS_BEFORE_REEVALUATION)
+    );
     this.state = {
       tick: 0,
       timeSeconds: 0,
@@ -259,6 +266,7 @@ export class SimulationRuntime {
     const { conflicts, arrivedAgentIds, events } = applyTickFirstPass(this.state, dtSeconds);
     this.emitGameEvents(events);
     this.clearSatisfiedGoals(arrivedAgentIds);
+    this.expireStaleMovementGoals();
 
     if (conflicts.length > 0) {
       await this.handleRefereeConflict(conflicts[0]!);
@@ -646,6 +654,30 @@ export class SimulationRuntime {
     return false;
   }
 
+  private expireStaleMovementGoals(): void {
+    for (const agent of this.state.agents) {
+      if (!isReevaluableMovementGoal(agent.goal)) continue;
+      if (this.state.tick - agent.intentIssuedAtTick < this.maxMoveTicksBeforeReevaluation) continue;
+      this.clearAgentForReevaluation(agent, 'reconsidering the route');
+    }
+  }
+
+  private invalidateMovementGoalsForBananaDrop(): void {
+    for (const agent of this.state.agents) {
+      if (!isReevaluableMovementGoal(agent.goal)) continue;
+      this.clearAgentForReevaluation(agent, 'banana is loose; changing plans');
+    }
+  }
+
+  private clearAgentForReevaluation(agent: SimulationAgentState, status: string): void {
+    agent.goal = null;
+    agent.intent = null;
+    agent.status = status;
+    agent.navigation.detourTarget = null;
+    agent.navigation.blockedTicks = 0;
+    agent.navigation.obstacleId = null;
+  }
+
   private clearSatisfiedGoals(arrivedAgentIds: readonly string[]): void {
     const arrived = new Set(arrivedAgentIds);
     for (const agent of this.state.agents) {
@@ -719,6 +751,9 @@ export class SimulationRuntime {
   private emitGameEvents(events: readonly SimulationGameEvent[]): void {
     for (const event of events) {
       this.emit({ kind: 'game-event', tick: this.state.tick, event });
+      if (event.kind === 'drop' && event.objectId === this.state.game.bananaObjectId) {
+        this.invalidateMovementGoalsForBananaDrop();
+      }
       if (shouldEmitImmediateWorldSync(event)) {
         this.emit({ kind: 'world-sync', tick: this.state.tick, snapshot: this.getSnapshot() });
       }
@@ -1215,6 +1250,12 @@ function inferEmotionFromGoal(goal: AgentGoal): string {
     case 'object_action':
       return goal.affordance.kind === 'pick_up' ? 'happy' : 'curious';
   }
+}
+
+function isReevaluableMovementGoal(
+  goal: AgentGoal | null
+): goal is Extract<AgentGoal, { kind: 'go_to_object' | 'go_to_agent' }> {
+  return goal?.kind === 'go_to_object' || goal?.kind === 'go_to_agent';
 }
 
 function shouldEmitImmediateWorldSync(event: SimulationGameEvent): boolean {

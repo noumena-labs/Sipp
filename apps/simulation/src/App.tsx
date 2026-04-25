@@ -585,6 +585,7 @@ export default function App() {
           refereeTimeoutMs: scenario.refereeTimeoutMs,
           narrationTimeoutMs: scenario.narrationTimeoutMs,
           agentQueryTimeoutMs: scenario.agentQueryTimeoutMs,
+          maxMoveTicksBeforeReevaluation: scenario.maxMoveTicksBeforeReevaluation,
         });
         for (const seed of scenario.objects) {
           runtime.upsertObject(seed);

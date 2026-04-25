@@ -377,4 +377,5 @@ export interface ScenarioSeed {
   readonly refereeTimeoutMs?: number;
   readonly narrationTimeoutMs?: number;
   readonly agentQueryTimeoutMs?: number;
+  readonly maxMoveTicksBeforeReevaluation?: number;
 }
