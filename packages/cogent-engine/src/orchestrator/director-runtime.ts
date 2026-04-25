@@ -132,11 +132,12 @@ export class DirectorRuntime {
       ...(grammar ? { grammar } : {}),
       ...(media.length > 0 ? { media: [...media] } : {}),
     };
+    const contextKey = this.getTaskContextKey(taskName);
 
     logDirectorRun({
       phase: 'request',
       taskName,
-      contextKey: this.contextKey,
+      contextKey,
       systemPrompt: this.systemPrompt,
       userPrompt: userText,
       grammar,
@@ -144,7 +145,7 @@ export class DirectorRuntime {
 
     let requestId = 0;
     try {
-      requestId = await this.engine.queuePrompt(this.contextKey, promptText, promptOptions);
+      requestId = await this.engine.queuePrompt(contextKey, promptText, promptOptions);
       const response = await Promise.race([
         this.engine.runQueuedRequest(requestId, { signal: abort.signal }),
         waitForAbort(abort.signal, {
@@ -157,7 +158,7 @@ export class DirectorRuntime {
       if (response.cancelled) {
         const status = abort.timedOut() ? 'timed_out' : 'aborted';
         const errorMessage = status === 'timed_out' ? 'Director task timed out.' : 'Director task aborted.';
-        logDirectorRun({ phase: 'response', taskName, contextKey: this.contextKey, rawText, status, errorMessage });
+        logDirectorRun({ phase: 'response', taskName, contextKey, rawText, status, errorMessage });
         return { status, text: '', selections: [], errorMessage, rawText };
       }
       if (response.failed) {
@@ -165,7 +166,7 @@ export class DirectorRuntime {
         logDirectorRun({
           phase: 'response',
           taskName,
-          contextKey: this.contextKey,
+          contextKey,
           rawText,
           status: 'failed',
           errorMessage,
@@ -175,7 +176,7 @@ export class DirectorRuntime {
 
       const resolved = resolveDirectorChoices(task.output, request);
       const parsed = parseDirectorOutput(rawText, task.output, resolved);
-      logDirectorRun({ phase: 'response', taskName, contextKey: this.contextKey, rawText, status: 'ok' });
+      logDirectorRun({ phase: 'response', taskName, contextKey, rawText, status: 'ok' });
       return {
         status: 'ok',
         text: parsed.text,
@@ -202,7 +203,7 @@ export class DirectorRuntime {
       logDirectorRun({
         phase: 'response',
         taskName,
-        contextKey: this.contextKey,
+        contextKey,
         rawText: '',
         status,
         errorMessage,
@@ -229,6 +230,10 @@ export class DirectorRuntime {
 
   private getMediaMarker(): string | null {
     return this.engine.getMediaMarker?.() ?? null;
+  }
+
+  private getTaskContextKey(taskName: string): string {
+    return `${this.contextKey}:${taskName}`;
   }
 }
 

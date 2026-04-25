@@ -26,40 +26,25 @@ export interface RenderedDirectorUserMessage {
 interface RenderInputContext {
   readonly inputName: string;
   readonly configuredKind?: DirectorInputKind;
-  readonly description?: string;
   readonly value: NonNullable<DirectorRunRequest['inputs']>[string];
 }
 
 export function renderDirectorSystemPrompt(config: DirectorConfig): string {
   const lines: string[] = [];
   const scenarioName = config.scenario?.name?.trim();
-  lines.push(
-    scenarioName
-      ? `You are the director brain for the scenario "${scenarioName}".`
-      : 'You are the director brain for a host application scenario.'
-  );
-  lines.push('Reason only from the supplied task inputs. Do not invent unseen facts.');
-  lines.push('For selection tasks, output only the requested choice id format.');
-  lines.push('For text tasks, write concise plain text. Never output JSON.');
+  lines.push(scenarioName ? `Director for ${scenarioName}.` : 'Director for host scenario.');
+  lines.push('Use only supplied inputs; do not invent facts.');
+  lines.push('Selection tasks: output only a choice id. Text tasks: concise plain text, no JSON.');
 
   lines.push(`Role: ${config.director.role}`);
   if (config.director.objective) {
-    lines.push(`Objective: ${config.director.objective}`);
+    lines.push(`Goal: ${config.director.objective}`);
   }
   if (config.scenario?.summary) {
     lines.push(`Scenario: ${config.scenario.summary}`);
   }
   if (config.director.instructions && config.director.instructions.length > 0) {
-    lines.push('Instructions:');
-    for (const instruction of config.director.instructions) {
-      lines.push(`- ${instruction}`);
-    }
-  }
-  if (config.inputs && Object.keys(config.inputs).length > 0) {
-    lines.push('Input glossary:');
-    for (const [name, input] of Object.entries(config.inputs)) {
-      lines.push(`- ${name} (${input.kind}): ${input.description}`);
-    }
+    lines.push(`Rules: ${config.director.instructions.join(' ')}`);
   }
 
   return lines.join('\n');
@@ -80,12 +65,8 @@ export function renderDirectorUserMessage<TPayload>(
     lines.push(`Purpose: ${task.purpose}`);
   }
   if (task.instructions && task.instructions.length > 0) {
-    lines.push('Task instructions:');
-    for (const instruction of task.instructions) {
-      lines.push(`- ${instruction}`);
-    }
+    lines.push(`Instructions: ${task.instructions.join(' ')}`);
   }
-  lines.push('Output shape:');
   lines.push(renderOutputInstructions(task.output, resolved));
 
   const inputSections = collectInputSections(config, task, request);
@@ -93,16 +74,13 @@ export function renderDirectorUserMessage<TPayload>(
     lines.push('Inputs:');
     for (const input of inputSections) {
       lines.push(`${input.inputName}:`);
-      if (input.description) {
-        lines.push(`Description: ${input.description}`);
-      }
       lines.push(renderInput(input, media, mediaMarker));
     }
   } else {
     lines.push('Inputs: none');
   }
 
-  return { text: lines.join('\n\n'), media };
+  return { text: lines.join('\n'), media };
 }
 
 function renderOutputInstructions<TPayload>(
@@ -112,23 +90,22 @@ function renderOutputInstructions<TPayload>(
   switch (output.shape) {
     case 'select_one':
       return [
-        'Select exactly one choice. Output only the choice id. No prose.',
+        'Output one choice id only.',
         renderChoiceList(resolved.choices ?? []),
       ].join('\n');
     case 'select_many':
       return [
-        `Select ${output.min ?? 0} to ${output.max ?? 'all'} choices. Output one choice id per line. No prose.`,
+        `Output ${output.min ?? 0} to ${output.max ?? 'all'} choice ids, one per line.`,
         renderChoiceList(resolved.choices ?? []),
       ].join('\n');
     case 'select_slots':
       return renderSlotInstructions(output, resolved);
     case 'text':
-      return `Write plain text only.${output.maxLength ? ` Keep it at most ${output.maxLength} characters.` : ''}`;
+      return `Plain text only.${output.maxLength ? ` Max ${output.maxLength} chars.` : ''}`;
     case 'text_with_directives':
       return [
-        `Write plain text.${output.maxLength ? ` Keep it at most ${output.maxLength} characters.` : ''}`,
-        'When a grounded app action is useful, include the directive id in square brackets.',
-        `${output.maxDirectives ? `Use at most ${output.maxDirectives} directives.` : 'Use only needed directives.'}`,
+        `Plain text.${output.maxLength ? ` Max ${output.maxLength} chars.` : ''}`,
+        `Use directive ids in brackets only when useful.${output.maxDirectives ? ` Max ${output.maxDirectives}.` : ''}`,
         renderChoiceList(resolved.directives ?? [], 'Available directives'),
       ].join('\n');
   }
@@ -138,7 +115,7 @@ function renderSlotInstructions<TPayload>(
   output: Extract<DirectorOutputConfig, { shape: 'select_slots' }>,
   resolved: ResolvedDirectorChoices<TPayload>
 ): string {
-  const lines = ['Select exactly one choice for each slot. Output one line per slot as slot=choice. No prose.'];
+  const lines = ['Output one line per slot as slot=choice. No prose.'];
   for (const slot of output.slots) {
     lines.push(`Slot ${slot.name}${slot.description ? `: ${slot.description}` : ''}`);
     lines.push(renderChoiceList(resolved.slotChoices?.[slot.name] ?? []));
@@ -152,9 +129,8 @@ function renderChoiceList(
 ): string {
   const lines = [`${title}:`];
   for (const choice of choices) {
-    const label = choice.label ? ` - ${choice.label}` : '';
-    const description = choice.description ? `: ${choice.description}` : '';
-    lines.push(`- ${choice.id}${label}${description}`);
+    const label = choice.label ? `=${choice.label}` : '';
+    lines.push(`- ${choice.id}${label}`);
   }
   return lines.join('\n');
 }
@@ -166,7 +142,6 @@ function collectInputSections<TPayload>(
 ): RenderInputContext[] {
   const supplied = request.inputs ?? {};
   const orderedNames = task.inputs ?? Object.keys(supplied);
-  const seen = new Set<string>();
   const sections: RenderInputContext[] = [];
 
   for (const inputName of orderedNames) {
@@ -174,25 +149,10 @@ function collectInputSections<TPayload>(
     if (value === undefined) {
       continue;
     }
-    seen.add(inputName);
     const slot = config.inputs?.[inputName];
     sections.push({
       inputName,
       configuredKind: slot?.kind,
-      description: slot?.description,
-      value,
-    });
-  }
-
-  for (const [inputName, value] of Object.entries(supplied)) {
-    if (seen.has(inputName) || value === undefined) {
-      continue;
-    }
-    const slot = config.inputs?.[inputName];
-    sections.push({
-      inputName,
-      configuredKind: slot?.kind,
-      description: slot?.description,
       value,
     });
   }
@@ -250,5 +210,5 @@ function normalizeInputEnvelope(
 }
 
 function renderJson(value: JsonValue): string {
-  return JSON.stringify(value, null, 2);
+  return JSON.stringify(value);
 }

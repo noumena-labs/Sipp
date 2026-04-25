@@ -836,14 +836,14 @@ export function buildRefereePayload(state: MutableWorldState, conflict: WorldCon
   return {
     referee_event: summarizeConflict(state, conflict),
     scoreboard: state.game.score.deliveries,
-    scene_summary: buildSceneSummary(state),
+    scene_summary: buildRefereeSceneSummary(state),
   };
 }
 
 function buildNarrationPayload(state: MutableWorldState): JsonValue {
   return {
     scoreboard: state.game.score.deliveries,
-    scene_summary: buildSceneSummary(state),
+    scene_summary: buildNarrationSceneSummary(state),
   };
 }
 
@@ -855,7 +855,7 @@ function summarizeConflict(state: MutableWorldState, conflict: WorldConflict): J
       kind: conflict.kind,
       objectId: conflict.objectId,
       objectLabel: object?.label ?? conflict.objectId,
-      contenders: conflict.contenderAgentIds.map((id) => summarizeAgent(state, id)),
+      contenders: conflict.contenderAgentIds.map((id) => summarizeConflictAgent(state, id, object?.position)),
     };
   }
   const policy = buildForcedDropPolicy(state, conflict);
@@ -863,8 +863,8 @@ function summarizeConflict(state: MutableWorldState, conflict: WorldConflict): J
     conflictId: conflict.id,
     kind: conflict.kind,
     objectId: conflict.objectId,
-    attacker: summarizeAgent(state, conflict.attackerAgentId),
-    target: summarizeAgent(state, conflict.targetAgentId),
+    attacker: summarizeConflictAgent(state, conflict.attackerAgentId),
+    target: summarizeConflictAgent(state, conflict.targetAgentId),
     attempt: summarizeForcedDropAttempt(state, conflict),
     recent_history: {
       same_pair: policy.samePairHistory.map(summarizeForcedDropRuling),
@@ -881,50 +881,63 @@ function summarizeConflict(state: MutableWorldState, conflict: WorldConflict): J
   };
 }
 
-function buildSceneSummary(state: MutableWorldState): JsonValue {
+function buildRefereeSceneSummary(state: MutableWorldState): JsonValue {
+  const banana = state.objects.find((entry) => entry.id === state.game.bananaObjectId);
+  const goal = state.objects.find((entry) => entry.id === state.game.goalObjectId);
+  return {
+    tick: state.tick,
+    banana: banana ? { heldBy: banana.heldBy, position: jsonVec(banana.position) } : null,
+    goal: goal ? { position: jsonVec(goal.position) } : null,
+  };
+}
+
+function buildNarrationSceneSummary(state: MutableWorldState): JsonValue {
   const banana = state.objects.find((entry) => entry.id === state.game.bananaObjectId);
   return {
     tick: state.tick,
     banana: banana
       ? { position: jsonVec(banana.position), heldBy: banana.heldBy }
       : null,
-    agents: state.agents.map((agent) => ({
-      id: agent.id,
-      name: agent.name,
-      position: jsonVec(agent.position),
-      holding: agent.holding,
-      powerUp: agent.powerUp?.kind ?? null,
-      frozenRemainingTicks: Math.max(0, agent.frozenUntilTick - state.tick),
-      status: agent.status,
-      sabotageCooldownRemainingTicks: Math.max(0, agent.cooldowns.sabotageUntilTick - state.tick),
-    })),
-    active_objects: state.objects
-      .filter((object) => object.active)
-      .map((object) => ({
-        id: object.id,
-        kind: object.kind,
-        label: object.label,
-        position: jsonVec(object.position),
-        heldBy: object.heldBy,
-      })),
+    agents: state.agents.map((agent) => summarizeNarrationAgent(state, agent)),
+    powerups: state.objects
+      .filter((object) => object.active && (object.kind === 'bat' || object.kind === 'ice_cube'))
+      .map((object) => ({ kind: object.kind, label: object.label, heldBy: object.heldBy })),
   };
 }
 
-function summarizeAgent(state: MutableWorldState, agentId: string): JsonValue {
-  const agent = state.agents.find((entry) => entry.id === agentId);
-  if (!agent) return { id: agentId, missing: true };
+function summarizeNarrationAgent(state: MutableWorldState, agent: SimulationAgentState): JsonValue {
   return {
     id: agent.id,
     name: agent.name,
-    position: jsonVec(agent.position),
+    holding: agent.holding,
+    powerUp: agent.powerUp?.kind ?? null,
+    frozenRemainingTicks: Math.max(0, agent.frozenUntilTick - state.tick),
+    sabotageCooldownRemainingTicks: Math.max(0, agent.cooldowns.sabotageUntilTick - state.tick),
+    status: agent.status,
+  };
+}
+
+function summarizeConflictAgent(
+  state: MutableWorldState,
+  agentId: string,
+  referencePosition?: { readonly x: number; readonly z: number }
+): JsonValue {
+  const agent = state.agents.find((entry) => entry.id === agentId);
+  if (!agent) return { id: agentId, missing: true };
+  const summary: Record<string, JsonValue> = {
+    id: agent.id,
+    name: agent.name,
     holding: agent.holding,
     powerUp: agent.powerUp?.kind ?? null,
     status: agent.status,
-    intentIssuedAtTick: agent.intentIssuedAtTick,
     frozenRemainingTicks: Math.max(0, agent.frozenUntilTick - state.tick),
     sabotageCooldownRemainingTicks: Math.max(0, agent.cooldowns.sabotageUntilTick - state.tick),
     score: state.game.score.deliveries[agent.id] ?? 0,
   };
+  if (referencePosition) {
+    summary.distance = roundForPrompt(vec2Distance(agent.position, referencePosition));
+  }
+  return summary;
 }
 
 function nearestAgentWithin(
@@ -968,10 +981,7 @@ function summarizeForcedDropAttempt(
     batSwingRadius: BAT_SWING_RADIUS,
     attackerIntentAgeTicks: attacker ? Math.max(0, state.tick - attacker.intentIssuedAtTick) : null,
     targetDistanceToGoal: target && goal ? roundForPrompt(vec2Distance(target.position, goal.position)) : null,
-    score: {
-      deliveries: state.game.score.deliveries,
-      forcedDrops: state.game.score.forcedDrops,
-    },
+    forcedDrops: state.game.score.forcedDrops,
   };
 }
 
@@ -1001,7 +1011,7 @@ function buildForcedDropPolicy(
   const lastSamePair = samePairHistory[samePairHistory.length - 1];
   if (lastSamePair?.outcome === 'attacker_fumbles') {
     suppressed.add('attacker_fumbles');
-    suppressionNotes.push('Same attacker-target pair just fumbled; omit attacker_fumbles to keep the next ruling varied.');
+    suppressionNotes.push('Same pair just fumbled; omit attacker_fumbles.');
   }
 
   const lastGlobal = recentHistory.slice(-FORCED_DROP_REPEAT_SUPPRESSION_COUNT);
@@ -1013,7 +1023,7 @@ function buildForcedDropPolicy(
       );
       if (alternativesAfterSuppression.length >= 2) {
         suppressed.add(repeatedOutcome);
-        suppressionNotes.push(`The last ${FORCED_DROP_REPEAT_SUPPRESSION_COUNT} forced-drop rulings were ${repeatedOutcome}; omit it for variety.`);
+        suppressionNotes.push(`Last ${FORCED_DROP_REPEAT_SUPPRESSION_COUNT} forced-drop rulings were ${repeatedOutcome}; omit it.`);
       }
     }
   }
@@ -1027,8 +1037,8 @@ function buildForcedDropPolicy(
     recentHistory,
     suppressionNotes,
     varietyNote: suppressionNotes.length > 0
-      ? 'Choose from the available outcomes only and prefer a fair variation from recent rulings.'
-      : 'All outcomes are legal; attacker_fumbles should be occasional, not the default.',
+      ? 'Choose an available fair variation.'
+      : 'All outcomes legal; fumbles occasional.',
   };
 }
 

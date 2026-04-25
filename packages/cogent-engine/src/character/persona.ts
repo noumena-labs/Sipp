@@ -117,6 +117,27 @@ export function renderSystemPrompt(persona: PersonaSpec, schema: ActionSchema): 
   return sections.join('\n\n');
 }
 
+export function renderChoiceSystemPrompt(persona: PersonaSpec): string {
+  const sections: string[] = [
+    `You are ${persona.name}. Choose exactly one supplied option and output only that option text.`,
+  ];
+
+  if (persona.summary) {
+    sections.push(persona.summary.trim());
+  }
+
+  const personality = renderPersonalitySection(persona.personality);
+  if (personality.length > 0) {
+    sections.push(personality);
+  }
+
+  if (persona.notes && persona.notes.length > 0) {
+    sections.push(`Rules: ${persona.notes.map((note) => note.trim()).join(' ')}`);
+  }
+
+  return sections.join('\n');
+}
+
 function renderSingleLineSection(label: string, value: string | undefined): string {
   const text = value?.trim();
   if (!text) {

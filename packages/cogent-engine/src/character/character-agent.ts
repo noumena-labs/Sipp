@@ -30,7 +30,7 @@ import {
   probeChatTemplateBoundaryInfo,
   renderAppliedChatTemplate,
 } from './chat-template-metadata.js';
-import { renderSystemPrompt } from './persona.js';
+import { renderChoiceSystemPrompt, renderSystemPrompt } from './persona.js';
 import { createTimedAbortController, waitForAbort } from '../utils/abort.js';
 
 /**
@@ -122,6 +122,7 @@ export class CharacterAgent {
   private readonly config: CharacterConfig;
   private readonly maxOutputTokens: number;
   private readonly systemPrompt: string;
+  private readonly choiceSystemPrompt: string;
   private readonly grammarSource: string;
   private readonly memoryLimitTurns: number;
   private readonly canonicalCueLabelsByActionName: ReadonlyMap<string, string>;
@@ -140,6 +141,7 @@ export class CharacterAgent {
     this.maxOutputTokens = options.maxOutputTokens ?? 256;
     this.eventBus = options.bus ?? new ActionBus();
     this.systemPrompt = renderSystemPrompt(config.persona, config.actions);
+    this.choiceSystemPrompt = renderChoiceSystemPrompt(config.persona);
     this.grammarSource = compileActionGrammar(config.actions);
     this.canonicalCueLabelsByActionName = new Map(
       summarizeActionCues(config.actions).map((cue) => [cue.name, cue.label])
@@ -182,7 +184,7 @@ export class CharacterAgent {
     const grammar = compileChoiceGrammar(options.choices);
     const choicePrompt = renderChoicePrompt(userMessage, options.choices);
     const messages: ChatMessage[] = [
-      { role: 'system', content: this.systemPrompt },
+      { role: 'system', content: this.choiceSystemPrompt },
       { role: 'user', content: choicePrompt },
     ];
 
@@ -205,11 +207,12 @@ export class CharacterAgent {
       grammar,
       signal: abort.signal,
     };
+    const contextKey = `${this.config.id}:choice`;
 
     logChoiceQuery({
       phase: 'request',
-      contextKey: this.config.id,
-      systemPrompt: this.systemPrompt,
+      contextKey,
+      systemPrompt: this.choiceSystemPrompt,
       userPrompt: choicePrompt,
       grammar,
       choices: options.choices,
@@ -217,7 +220,7 @@ export class CharacterAgent {
 
     let requestId = 0;
     try {
-      requestId = await this.engine.queuePrompt(this.config.id, promptText, promptOptions);
+      requestId = await this.engine.queuePrompt(contextKey, promptText, promptOptions);
       const response = await Promise.race([
         this.engine.runQueuedRequest(requestId, { signal: abort.signal }),
         waitForAbort(abort.signal, {
@@ -232,7 +235,7 @@ export class CharacterAgent {
         const errorMessage = status === 'timed_out' ? 'Choice timed out.' : 'Choice aborted.';
         logChoiceQuery({
           phase: 'response',
-          contextKey: this.config.id,
+          contextKey,
           rawText,
           choice: null,
           status,
@@ -248,7 +251,7 @@ export class CharacterAgent {
       if (response.failed) {
         logChoiceQuery({
           phase: 'response',
-          contextKey: this.config.id,
+          contextKey,
           rawText,
           choice: null,
           status: 'failed',
@@ -265,7 +268,7 @@ export class CharacterAgent {
       if (choice == null) {
         logChoiceQuery({
           phase: 'response',
-          contextKey: this.config.id,
+          contextKey,
           rawText,
           choice: null,
           status: 'invalid_response',
@@ -306,7 +309,7 @@ export class CharacterAgent {
           : error instanceof Error ? error.message : String(error);
       logChoiceQuery({
         phase: 'response',
-        contextKey: this.config.id,
+        contextKey,
         rawText: '',
         choice: null,
         status,
@@ -796,9 +799,9 @@ function renderChoicePrompt(userMessage: string, choices: readonly string[]): st
   const normalizedChoices = choices.map((choice) => choice.trim());
   return [
     userMessage.trim(),
-    '',
-    'Choose exactly one of the following options and output only that option text:',
+    'Options:',
     ...normalizedChoices.map((choice) => `- ${choice}`),
+    'Output one option text only.',
   ].join('\n');
 }
 

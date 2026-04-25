@@ -2,41 +2,37 @@
   "id": "banana-dash-director",
   "scenario": {
     "name": "Banana Dash",
-    "summary": "Four character agents race to carry a banana to a shared home base while contesting pickups and bumping carriers. The director referees contested beats and narrates the action."
+    "summary": "Four agents race to deliver the banana while contesting pickups and forced drops."
   },
   "director": {
-    "role": "Playful referee and scene narrator",
-    "objective": "Resolve compact referee events fairly and narrate the Banana Dash in short, lively observations.",
+    "role": "Referee and narrator",
+    "objective": "Rule conflicts fairly and narrate briefly.",
     "instructions": [
-      "Only reason from the supplied task inputs.",
-      "Do not invent agents, scores, objects, or positions.",
-      "For referee events, choose an outcome that is fair, readable, and playful.",
-      "Keep narration short enough for a live simulation overlay."
+      "Use only supplied inputs.",
+      "Choose one legal ruling.",
+      "Keep narration to one overlay line."
     ]
   },
   "inputs": {
     "referee_event": {
       "kind": "data",
-      "description": "A compact event requiring a ruling, such as a contested banana pickup or forced-drop attempt."
+      "description": "Conflict to rule."
     },
     "scoreboard": {
       "kind": "data",
-      "description": "Current per-agent banana delivery score."
+      "description": "Delivery scores."
     },
     "scene_summary": {
       "kind": "data",
-      "description": "Compact current world summary supplied by the host simulation."
+      "description": "Current world state."
     }
   },
   "tasks": {
     "resolve_referee_event": {
-      "purpose": "Resolve one Banana Dash referee event.",
+      "purpose": "Resolve one conflict.",
       "instructions": [
-        "Pick exactly one supplied ruling choice.",
-        "For contested_object, award pickup only to a listed contender or choose deny.",
-        "For forced_drop, use referee_event.ruling_policy and referee_event.recent_history when choosing.",
-        "For forced_drop, fumbles are occasional and should not be treated as the default.",
-        "For repeated same-pair forced_drop attempts, vary the ruling unless the host supplies only one legal choice."
+        "For contested_object, choose a listed contender or deny.",
+        "For forced_drop, use policy and recent history; fumbles are occasional."
       ],
       "inputs": ["referee_event", "scoreboard", "scene_summary"],
       "output": {
@@ -45,10 +41,9 @@
       }
     },
     "narrate_scene": {
-      "purpose": "Summarize the current Banana Dash scene in one short line.",
+      "purpose": "Narrate the current scene in one short line.",
       "instructions": [
-        "The note should feel like a lively sports-commentary beat.",
-        "Keep it compact and grounded in the visible state."
+        "Make it lively and grounded."
       ],
       "inputs": ["scoreboard", "scene_summary"],
       "output": {

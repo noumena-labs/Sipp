@@ -163,9 +163,9 @@ test('DirectorRuntime returns a selected runtime choice with hidden payload', as
   assert.equal(result.selections[0]?.id, 'winner:aria');
   assert.deepEqual(result.selections[0]?.payload, { winnerAgentId: 'aria', secret: 'not shown' });
   assert.ok(engine.grammar?.includes('"winner:aria"'));
-  assert.ok(engine.prompt.includes('winner:aria - Aria wins'));
+  assert.ok(engine.prompt.includes('winner:aria=Aria wins'));
   assert.equal(engine.prompt.includes('not shown'), false);
-  assert.equal(engine.prompt.includes('Never output JSON'), true);
+  assert.equal(engine.prompt.includes('no JSON'), true);
 });
 
 test('DirectorRuntime exposes task grammar and prompt for inspection', () => {
@@ -184,7 +184,7 @@ test('DirectorRuntime exposes task grammar and prompt for inspection', () => {
 
   assert.equal(grammar, prompt.grammar);
   assert.ok(grammar?.includes('"winner:aria"'));
-  assert.ok(prompt.userPrompt.includes('winner:aria - Aria wins'));
+  assert.ok(prompt.userPrompt.includes('winner:aria=Aria wins'));
   assert.equal(prompt.userPrompt.includes('hidden'), false);
   assert.equal(prompt.media.length, 0);
 });

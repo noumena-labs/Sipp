@@ -214,7 +214,10 @@ export default function App() {
 
   const clearAgentGlyphOverride = useCallback((agentId: string): void => {
     const current = agentGlyphOverridesRef.current.get(agentId);
-    if (current?.timeoutId !== null) {
+    if (!current) {
+      return;
+    }
+    if (current.timeoutId !== null) {
       clearTimeout(current.timeoutId);
     }
     agentGlyphOverridesRef.current.delete(agentId);
@@ -552,6 +555,10 @@ export default function App() {
         setStatus('Initialising inference runtime…');
         await engine.initEngine(modelPath, {
           enableRuntimeObservability: true,
+          maxCachedSessions: 8,
+          prefixCacheIntervalTokens: 64,
+          maxPrefixCacheEntries: 64,
+          schedulerPolicy: 'latency-first',
           sampling: {
             temperature: 0.5,
             topP: 0.9,
