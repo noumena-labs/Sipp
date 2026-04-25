@@ -14,15 +14,20 @@ import type {
   SimulationEvent,
 } from '../runtime/bus.js';
 import type { AgentIntent, SimulationAgentState, SimulationGameEvent, Vec2, WorldSnapshot } from '../runtime/types.js';
+import {
+  INTENT_GLYPH_OVERRIDE_SECONDS,
+  QUERY_GLYPH,
+  glyphOverridesForGameEvent,
+  glyphForIntent,
+  resolveAgentGlyph,
+} from '../agent-glyphs.js';
 import { createAgentVisual, type AgentVisual } from '../render/agent-mesh.js';
 import { createBatMesh } from '../render/bat-mesh.js';
 import { createObjectVisual, type ObjectVisual } from '../render/object-mesh.js';
-import { emotionGlyphFor } from '../render/emoji-billboard.js';
 import { AGENT_COLOR_BY_ID } from '../scenarios/courtyard-snack.js';
 
 const LERP_ALPHA = 0.22;
 const PULSE_SECONDS = 0.8;
-const QUERY_GLYPH = '...';
 const FLASH_SECONDS = 0.32;
 const IMPACT_SECONDS = 0.28;
 const CONFETTI_SECONDS = 0.9;
@@ -339,7 +344,7 @@ export function bindWorldToScene(
       if (entry) {
         entry.status = event.status;
         entry.glyphOverride = glyphForIntent(event.intent);
-        entry.glyphOverrideUntil = elapsedSeconds + 0.24;
+        entry.glyphOverrideUntil = elapsedSeconds + INTENT_GLYPH_OVERRIDE_SECONDS;
         entry.visual.emoji.setGlyph(entry.glyphOverride);
         entry.visual.emoji.setVisible(true);
         entry.pulseUntil = elapsedSeconds + PULSE_SECONDS;
@@ -470,12 +475,19 @@ export function bindWorldToScene(
   });
 
   function applyGameEvent(event: SimulationGameEvent): void {
+    for (const override of glyphOverridesForGameEvent(event)) {
+      const entry = agents.get(override.agentId);
+      if (!entry) continue;
+      entry.glyphOverride = override.glyph;
+      entry.glyphOverrideUntil = elapsedSeconds + override.durationSeconds;
+      entry.visual.emoji.setGlyph(override.glyph);
+      entry.visual.emoji.setVisible(true);
+    }
+
     switch (event.kind) {
       case 'pickup': {
         const entry = agents.get(event.agentId);
         if (entry) {
-          entry.glyphOverride = '✋';
-          entry.glyphOverrideUntil = elapsedSeconds + 0.28;
           entry.pulseUntil = elapsedSeconds + PULSE_SECONDS;
         }
         const objectEntry = objects.get(event.objectId);
@@ -489,8 +501,6 @@ export function bindWorldToScene(
       case 'drop': {
         const entry = agents.get(event.agentId);
         if (entry) {
-          entry.glyphOverride = '💢';
-          entry.glyphOverrideUntil = elapsedSeconds + 0.35;
           entry.flashColor = new THREE.Color(0xff8a80);
           entry.flashUntil = elapsedSeconds + FLASH_SECONDS;
         }
@@ -524,14 +534,10 @@ export function bindWorldToScene(
         const attacker = agents.get(event.attackerAgentId);
         const target = agents.get(event.targetAgentId);
         if (attacker) {
-          attacker.glyphOverride = '💥';
-          attacker.glyphOverrideUntil = elapsedSeconds + 0.32;
           attacker.flashColor = new THREE.Color(0xffc107);
           attacker.flashUntil = elapsedSeconds + FLASH_SECONDS;
         }
         if (target) {
-          target.glyphOverride = event.outcome === 'drop' ? '💢' : '‼';
-          target.glyphOverrideUntil = elapsedSeconds + 0.32;
           target.flashColor = new THREE.Color(0xff8a80);
           target.flashUntil = elapsedSeconds + FLASH_SECONDS;
           target.joltUntil = elapsedSeconds + IMPACT_SECONDS;
@@ -548,8 +554,6 @@ export function bindWorldToScene(
       case 'bump_whiff': {
         const attacker = agents.get(event.attackerAgentId);
         if (attacker) {
-          attacker.glyphOverride = '💨';
-          attacker.glyphOverrideUntil = elapsedSeconds + 0.28;
           attacker.flashColor = new THREE.Color(0xf4d35e);
           attacker.flashUntil = elapsedSeconds + FLASH_SECONDS;
         }
@@ -560,14 +564,10 @@ export function bindWorldToScene(
         const pusher = agents.get(event.agentId);
         const target = agents.get(event.targetAgentId);
         if (pusher) {
-          pusher.glyphOverride = '✋';
-          pusher.glyphOverrideUntil = elapsedSeconds + 0.3;
           pusher.flashColor = new THREE.Color(0xffc107);
           pusher.flashUntil = elapsedSeconds + FLASH_SECONDS;
         }
         if (target) {
-          target.glyphOverride = '💨';
-          target.glyphOverrideUntil = elapsedSeconds + 0.38;
           target.flashColor = new THREE.Color(0xff8a80);
           target.flashUntil = elapsedSeconds + FLASH_SECONDS;
           target.joltUntil = elapsedSeconds + IMPACT_SECONDS;
@@ -582,8 +582,6 @@ export function bindWorldToScene(
       case 'power_up_throw': {
         const attacker = agents.get(event.agentId);
         if (attacker) {
-          attacker.glyphOverride = '🧊';
-          attacker.glyphOverrideUntil = elapsedSeconds + 0.28;
           attacker.flashColor = new THREE.Color(0x8fe7ff);
           attacker.flashUntil = elapsedSeconds + FLASH_SECONDS;
         }
@@ -599,8 +597,6 @@ export function bindWorldToScene(
       case 'bat_swing': {
         const attacker = agents.get(event.agentId);
         if (attacker) {
-          attacker.glyphOverride = '🏏';
-          attacker.glyphOverrideUntil = elapsedSeconds + 0.42;
           attacker.flashColor = new THREE.Color(0xffc86a);
           attacker.flashUntil = elapsedSeconds + 0.45;
           attacker.pulseUntil = elapsedSeconds + PULSE_SECONDS;
@@ -611,8 +607,6 @@ export function bindWorldToScene(
           if (target) {
             target.targetX = hit.to.x;
             target.targetZ = hit.to.z;
-            target.glyphOverride = '💫';
-            target.glyphOverrideUntil = elapsedSeconds + 0.44;
             target.flashColor = new THREE.Color(0xffc86a);
             target.flashUntil = elapsedSeconds + 0.52;
             target.joltUntil = elapsedSeconds + IMPACT_SECONDS;
@@ -629,15 +623,11 @@ export function bindWorldToScene(
         const attacker = agents.get(event.agentId);
         const target = agents.get(event.targetAgentId);
         if (attacker) {
-          attacker.glyphOverride = '🧊';
-          attacker.glyphOverrideUntil = elapsedSeconds + 0.36;
           attacker.flashColor = new THREE.Color(0x8fe7ff);
           attacker.flashUntil = elapsedSeconds + FLASH_SECONDS;
         }
         if (target) {
           target.iceShell.visible = true;
-          target.glyphOverride = '⛄';
-          target.glyphOverrideUntil = elapsedSeconds + 0.4;
           target.flashColor = new THREE.Color(0x8fe7ff);
           target.flashUntil = elapsedSeconds + 0.5;
           target.joltUntil = elapsedSeconds + FROZEN_SHAKE_SECONDS;
@@ -655,8 +645,6 @@ export function bindWorldToScene(
       case 'delivery': {
         const entry = agents.get(event.agentId);
         if (entry) {
-          entry.glyphOverride = '🎉';
-          entry.glyphOverrideUntil = elapsedSeconds + CONFETTI_SECONDS;
           entry.flashColor = new THREE.Color(0x7bd88f);
           entry.flashUntil = elapsedSeconds + 0.55;
           entry.pulseUntil = elapsedSeconds + 0.9;
@@ -927,71 +915,18 @@ function resolveIntentTarget(intent: AgentIntent | null, snap: WorldSnapshot): V
 }
 
 function updateAgentGlyph(entry: AgentEntry, agent: SimulationAgentState, snap: WorldSnapshot): void {
-  const glyph = entry.glyphOverride && entry.glyphOverrideUntil > 0
+  const glyphOverride = entry.glyphOverride && entry.glyphOverrideUntil > 0
     ? entry.glyphOverride
-    : activityGlyphFor(agent, snap);
+    : null;
+  const glyph = resolveAgentGlyph(agent, {
+    bananaObjectId: snap.game.bananaObjectId,
+    tick: snap.tick,
+  }, glyphOverride);
   if (glyph) {
     entry.visual.emoji.setGlyph(glyph);
     entry.visual.emoji.setVisible(true);
-  } else if (agent.emotion) {
-    entry.visual.emoji.setGlyph(emotionGlyphFor(agent.emotion));
-    entry.visual.emoji.setVisible(true);
   } else {
     entry.visual.emoji.setVisible(false);
-  }
-}
-
-function activityGlyphFor(agent: SimulationAgentState, snap: WorldSnapshot): string | null {
-  if (agent.holding === snap.game.bananaObjectId) return '🍌';
-  if (agent.frozenUntilTick > snap.tick) return '⛄';
-  if (agent.powerUp?.kind === 'bat') return '🏏';
-  if (agent.powerUp?.kind === 'ice_cube') return '🧊';
-  const intent = agent.intent;
-  if (!intent) return null;
-  switch (intent.kind) {
-    case 'go_to_object':
-    case 'move_to':
-      return '🏃';
-    case 'pick_up':
-      return '✋';
-    case 'deliver':
-      return '🏁';
-    case 'sabotage':
-      return intent.method === 'bat' ? '🏏' : intent.method === 'ice_cube' ? '🧊' : '💥';
-    case 'approach_agent':
-      return '👀';
-    case 'push':
-      return '✋';
-    case 'wait':
-      return '⏳';
-    case 'drop':
-      return '💢';
-    case 'use':
-      return '✨';
-  }
-}
-
-function glyphForIntent(intent: AgentIntent): string {
-  switch (intent.kind) {
-    case 'go_to_object':
-    case 'move_to':
-      return '🏃';
-    case 'pick_up':
-      return '✋';
-    case 'deliver':
-      return '🏁';
-    case 'sabotage':
-      return intent.method === 'bat' ? '🏏' : intent.method === 'ice_cube' ? '🧊' : '💥';
-    case 'approach_agent':
-      return '👀';
-    case 'push':
-      return '✋';
-    case 'wait':
-      return '⏳';
-    case 'drop':
-      return '💢';
-    case 'use':
-      return '✨';
   }
 }
 

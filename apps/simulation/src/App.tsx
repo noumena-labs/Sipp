@@ -24,6 +24,13 @@ import { EventLog, type EventLogEntry } from './components/EventLog';
 import { AgentInspector } from './components/AgentInspector';
 import { Scoreboard } from './components/Scoreboard';
 import { TutorialOverlay, type TutorialCardPlacement } from './components/TutorialOverlay';
+import {
+  INTENT_GLYPH_OVERRIDE_SECONDS,
+  QUERY_GLYPH,
+  glyphOverridesForGameEvent,
+  glyphForIntent,
+  resolveAgentGlyph,
+} from './agent-glyphs.js';
 import { COURTYARD_AGENTS, COURTYARD_SCENARIO, createCourtyardScenario } from './scenarios/courtyard-snack.js';
 import { SimulationBus, type SimulationEvent } from './runtime/bus.js';
 import {
@@ -66,6 +73,11 @@ interface TutorialStep {
   readonly placement: TutorialCardPlacement;
   readonly title: string;
   readonly body: string;
+}
+
+interface AgentGlyphOverride {
+  readonly glyph: string;
+  timeoutId: ReturnType<typeof setTimeout> | null;
 }
 
 const BRAIN_DEFINITIONS: readonly BrainDefinition[] = [
@@ -167,6 +179,7 @@ export default function App() {
   const [activeScenario, setActiveScenario] = useState<ScenarioSeed | null>(null);
   const [running, setRunning] = useState(false);
   const [snapshot, setSnapshot] = useState<WorldSnapshot | null>(null);
+  const [agentGlyphById, setAgentGlyphById] = useState<Record<string, string | null>>({});
   const [events, setEvents] = useState<EventLogEntry[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedBrainId, setSelectedBrainId] = useState<string | null>(null);
@@ -180,6 +193,7 @@ export default function App() {
   const eventIdRef = useRef(0);
   const snapshotRef = useRef<WorldSnapshot | null>(null);
   const criticalIssueRef = useRef(false);
+  const agentGlyphOverridesRef = useRef<Map<string, AgentGlyphOverride>>(new Map());
   const [directorState, setDirectorState] = useState<DirectorPanelState>(() =>
     createInitialDirectorState(COURTYARD_SCENARIO.directorNote ?? null)
   );
@@ -192,6 +206,53 @@ export default function App() {
   const pushEvent = useCallback((entry: Omit<EventLogEntry, 'id'>) => {
     const id = ++eventIdRef.current;
     setEvents((prev) => [...prev.slice(-199), { ...entry, id }]);
+  }, []);
+
+  const setDisplayedAgentGlyph = useCallback((agentId: string, glyph: string | null): void => {
+    setAgentGlyphById((prev) => prev[agentId] === glyph ? prev : { ...prev, [agentId]: glyph });
+  }, []);
+
+  const clearAgentGlyphOverride = useCallback((agentId: string): void => {
+    const current = agentGlyphOverridesRef.current.get(agentId);
+    if (current?.timeoutId !== null) {
+      clearTimeout(current.timeoutId);
+    }
+    agentGlyphOverridesRef.current.delete(agentId);
+  }, []);
+
+  const setAgentGlyphOverride = useCallback((agentId: string, glyph: string, durationMs: number | null = null): void => {
+    clearAgentGlyphOverride(agentId);
+    const override: AgentGlyphOverride = { glyph, timeoutId: null };
+    if (durationMs !== null) {
+      override.timeoutId = setTimeout(() => {
+        const current = agentGlyphOverridesRef.current.get(agentId);
+        if (current !== override) return;
+        agentGlyphOverridesRef.current.delete(agentId);
+      }, durationMs);
+    }
+    agentGlyphOverridesRef.current.set(agentId, override);
+    setDisplayedAgentGlyph(agentId, glyph);
+  }, [clearAgentGlyphOverride, setDisplayedAgentGlyph]);
+
+  const syncAgentGlyphs = useCallback((nextSnapshot: WorldSnapshot): void => {
+    const nextGlyphById: Record<string, string | null> = {};
+    for (const agent of nextSnapshot.agents) {
+      nextGlyphById[agent.id] = resolveAgentGlyph(agent, {
+        bananaObjectId: nextSnapshot.game.bananaObjectId,
+        tick: nextSnapshot.tick,
+      }, agentGlyphOverridesRef.current.get(agent.id)?.glyph ?? null);
+    }
+    setAgentGlyphById(nextGlyphById);
+  }, []);
+
+  const resetAgentGlyphs = useCallback((): void => {
+    for (const override of agentGlyphOverridesRef.current.values()) {
+      if (override.timeoutId !== null) {
+        clearTimeout(override.timeoutId);
+      }
+    }
+    agentGlyphOverridesRef.current.clear();
+    setAgentGlyphById({});
   }, []);
 
   const handleExpandBrainHud = useCallback((): void => {
@@ -236,6 +297,7 @@ export default function App() {
     criticalIssueRef.current = false;
     snapshotRef.current = null;
     setSnapshot(null);
+    resetAgentGlyphs();
     setEvents([]);
     brainStore.reset();
     setHasSimulationStarted(false);
@@ -247,7 +309,18 @@ export default function App() {
     setHoveredObject(null);
     setEventLogCollapsed(true);
     setDirectorState(createInitialDirectorState(COURTYARD_SCENARIO.directorNote ?? null));
-  }, [brainStore]);
+  }, [brainStore, resetAgentGlyphs]);
+
+  useEffect(() => {
+    return () => {
+      for (const override of agentGlyphOverridesRef.current.values()) {
+        if (override.timeoutId !== null) {
+          clearTimeout(override.timeoutId);
+        }
+      }
+      agentGlyphOverridesRef.current.clear();
+    };
+  }, []);
 
   // Subscribe to bus once.
   useEffect(() => {
@@ -258,6 +331,7 @@ export default function App() {
           brainStore.setCurrentTick(event.tick);
           snapshotRef.current = event.snapshot;
           setSnapshot(event.snapshot);
+          syncAgentGlyphs(event.snapshot);
           if (event.snapshot.directorNote) {
             setDirectorState((prev) => (
               prev.note === event.snapshot.directorNote
@@ -267,6 +341,7 @@ export default function App() {
           }
           break;
         case 'agent-query-start':
+          setAgentGlyphOverride(event.agentId, QUERY_GLYPH);
           pushEvent({
             tick: event.tick,
             kind: 'query',
@@ -274,6 +349,7 @@ export default function App() {
           });
           break;
         case 'agent-query-end':
+          clearAgentGlyphOverride(event.agentId);
           if (event.errorMessage) {
             pushEvent({
               tick: event.tick,
@@ -295,6 +371,7 @@ export default function App() {
           }
           break;
         case 'agent-intent':
+          setAgentGlyphOverride(event.agentId, glyphForIntent(event.intent), INTENT_GLYPH_OVERRIDE_SECONDS * 1000);
           pushEvent({
             tick: event.tick,
             kind: 'intent',
@@ -346,6 +423,9 @@ export default function App() {
           }));
           break;
         case 'game-event': {
+          for (const override of glyphOverridesForGameEvent(event.event)) {
+            setAgentGlyphOverride(override.agentId, override.glyph, override.durationSeconds * 1000);
+          }
           const text = describeGameEvent(event.event, snapshotRef.current);
           if (!text) break;
           pushEvent({
@@ -386,7 +466,7 @@ export default function App() {
       }
     });
     return () => off();
-  }, [brainStore, bus, pushEvent]);
+  }, [brainStore, bus, clearAgentGlyphOverride, pushEvent, setAgentGlyphOverride, syncAgentGlyphs]);
 
   useEffect(() => {
     window.localStorage.setItem(TUTORIAL_STORAGE_KEY, tutorialDismissed ? '1' : '0');
@@ -687,6 +767,7 @@ export default function App() {
           <div ref={inspectorRef} className={tutorialTargetClass('agents', 'sim-overlay sim-top-right')} data-tutorial-target="agents">
             <AgentInspector
               agents={agents}
+              glyphByAgentId={agentGlyphById}
               bananaObjectId={snapshot?.game.bananaObjectId}
               tick={snapshot?.tick ?? 0}
               selectedAgentId={selectedAgentId}

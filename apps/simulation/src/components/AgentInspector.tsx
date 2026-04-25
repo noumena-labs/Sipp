@@ -2,17 +2,17 @@
 //
 // components/AgentInspector.tsx
 //
-// - Shows per-agent state from the latest snapshot: position, emotion,
+// - Shows per-agent state from the latest snapshot: position, live glyph,
 //   current intent, and status. Clicking an agent highlights them in
 //   the 3D scene.
 //
 //////////////////////////////////////////////////////////////////////////////
 
 import type { SimulationAgentState } from '../runtime/types.js';
-import { emotionGlyphFor } from '../render/emoji-billboard.js';
 
 export interface AgentInspectorProps {
   readonly agents: readonly SimulationAgentState[];
+  readonly glyphByAgentId: Readonly<Record<string, string | null>>;
   readonly bananaObjectId?: string;
   readonly tick: number;
   readonly selectedAgentId: string | null;
@@ -99,17 +99,7 @@ export function AgentInspector(props: AgentInspectorProps) {
       <ul>
         {props.agents.map((a) => {
           const selected = a.id === props.selectedAgentId;
-          const glyph = a.holding === bananaObjectId
-            ? '🍌'
-            : a.frozenUntilTick > props.tick
-              ? '⛄'
-            : a.powerUp?.kind === 'bat'
-              ? '🏏'
-              : a.powerUp?.kind === 'ice_cube'
-                ? '🧊'
-                : a.emotion
-                  ? emotionGlyphFor(a.emotion)
-                  : ' ';
+          const glyph = props.glyphByAgentId[a.id] ?? ' ';
           return (
             <li
               key={a.id}
