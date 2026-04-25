@@ -30,6 +30,7 @@ import type {
   SimulationGameEvent,
   SimulationGameState,
   SimulationObjectState,
+  PowerUpKind,
   WorldBounds,
   WorldConflict,
   WorldSnapshot,
@@ -842,9 +843,150 @@ export function buildRefereePayload(state: MutableWorldState, conflict: WorldCon
 
 function buildNarrationPayload(state: MutableWorldState): JsonValue {
   return {
-    scoreboard: state.game.score.deliveries,
-    scene_summary: buildNarrationSceneSummary(state),
+    narration_brief: buildNarrationBrief(state),
   };
+}
+
+function buildNarrationBrief(state: MutableWorldState): string {
+  const secondaryBeat = describeSecondaryNarrationBeat(state);
+  const previousNote = state.directorNote?.trim();
+  const lines = [
+    'Style: old-timey radio baseball play-by-play for Banana Dash.',
+    `Score: ${formatNarrationScore(state)}.`,
+    `Primary beat: ${describePrimaryNarrationBeat(state)}.`,
+  ];
+
+  if (secondaryBeat.length > 0) {
+    lines.push(`Secondary beat: ${secondaryBeat}.`);
+  }
+  if (previousNote) {
+    lines.push(`Previous call: ${previousNote}`);
+  }
+
+  lines.push('Avoid: generic inventory summaries like "Powerups available." Call motion, pressure, a race, a bonk threat, a freeze threat, or a scoring chance.');
+  lines.push('Output: one sentence under 180 characters.');
+  return lines.join('\n');
+}
+
+function formatNarrationScore(state: MutableWorldState): string {
+  const entries = Object.entries(state.game.score.deliveries)
+    .map(([agentId, score]) => ({ agent: state.agents.find((entry) => entry.id === agentId), score }))
+    .filter((entry): entry is { agent: SimulationAgentState; score: number } => entry.agent != null)
+    .sort((a, b) => b.score - a.score || a.agent.name.localeCompare(b.agent.name));
+  if (entries.length === 0) return 'No score yet';
+
+  const leaderScore = entries[0]!.score;
+  const leaders = entries.filter((entry) => entry.score === leaderScore);
+  if (leaderScore === 0) {
+    return 'Scoreless tie';
+  }
+  if (leaders.length === entries.length) {
+    return `All tied at ${leaderScore}`;
+  }
+  return `${formatNameList(leaders.map((entry) => entry.agent.name))} lead${leaders.length === 1 ? 's' : ''} with ${leaderScore}`;
+}
+
+function describePrimaryNarrationBeat(state: MutableWorldState): string {
+  const banana = state.objects.find((entry) => entry.id === state.game.bananaObjectId);
+  if (!banana) return 'The banana has vanished from the diamond and everyone is resetting';
+
+  if (banana.heldBy) {
+    const carrier = state.agents.find((entry) => entry.id === banana.heldBy);
+    if (!carrier) return `The banana is marked as held by ${banana.heldBy}, but the pack is hunting for the play`;
+    const goal = state.objects.find((entry) => entry.id === state.game.goalObjectId);
+    const goalDistance = goal ? roundForPrompt(vec2Distance(carrier.position, goal.position)) : null;
+    const nearestChasers = nearestAgentsTo(carrier, state.agents, 2).map((entry) => entry.agent.name);
+    const frozen = carrier.frozenUntilTick > state.tick ? ` frozen for ${carrier.frozenUntilTick - state.tick} ticks` : '';
+    const scoreThreat = goalDistance != null && goalDistance <= GOAL_RADIUS + 1.2
+      ? 'right on the doorstep of home base'
+      : goalDistance != null
+        ? `${goalDistance} units from home base`
+        : 'looking for home base';
+    const chase = nearestChasers.length > 0 ? ` with ${formatNameList(nearestChasers)} giving chase` : '';
+    return `${carrier.name} has the banana${frozen}, ${scoreThreat}${chase}`;
+  }
+
+  const rushers = state.agents
+    .map((agent) => ({ agent, distance: vec2Distance(agent.position, banana.position) }))
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, 2);
+  const activeRushers = rushers
+    .filter((entry) => isAgentDrivingAtBanana(entry.agent))
+    .map((entry) => entry.agent.name);
+  const names = activeRushers.length > 0 ? activeRushers : rushers.map((entry) => entry.agent.name);
+  return `Loose banana on the ${describeFieldZone(state, banana.position)} with ${formatNameList(names)} charging in`;
+}
+
+function describeSecondaryNarrationBeat(state: MutableWorldState): string {
+  const beats: string[] = [];
+  const equipped = state.agents
+    .filter((agent) => agent.powerUp != null)
+    .map((agent) => `${agent.name} has ${labelForNarrationPowerUp(agent.powerUp!.kind)}`);
+  if (equipped.length > 0) {
+    beats.push(formatNameList(equipped));
+  }
+
+  const iceHunters = state.agents
+    .filter((agent) => agent.powerUp == null && /ice cube/i.test(agent.status))
+    .map((agent) => agent.name);
+  if (iceHunters.length > 0) {
+    beats.push(`${formatNameList(iceHunters)} ${iceHunters.length === 1 ? 'is' : 'are'} peeling for ice`);
+  }
+
+  const batHunters = state.agents
+    .filter((agent) => agent.powerUp == null && /bat|baseball/i.test(agent.status))
+    .map((agent) => agent.name);
+  if (batHunters.length > 0) {
+    beats.push(`${formatNameList(batHunters)} ${batHunters.length === 1 ? 'is' : 'are'} hunting the bat`);
+  }
+
+  const frozen = state.agents
+    .filter((agent) => agent.frozenUntilTick > state.tick)
+    .map((agent) => `${agent.name} is frozen`);
+  if (frozen.length > 0) {
+    beats.push(formatNameList(frozen));
+  }
+
+  return beats.slice(0, 2).join('; ');
+}
+
+function nearestAgentsTo(
+  self: SimulationAgentState,
+  agents: readonly SimulationAgentState[],
+  limit: number
+): Array<{ agent: SimulationAgentState; distance: number }> {
+  return agents
+    .filter((agent) => agent.id !== self.id)
+    .map((agent) => ({ agent, distance: vec2Distance(self.position, agent.position) }))
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, limit);
+}
+
+function isAgentDrivingAtBanana(agent: SimulationAgentState): boolean {
+  return /banana|rush|grab|score/i.test(agent.status);
+}
+
+function labelForNarrationPowerUp(powerUp: PowerUpKind): string {
+  return powerUp === 'bat' ? 'the bat' : 'ice';
+}
+
+function describeFieldZone(state: MutableWorldState, position: { readonly x: number; readonly z: number }): string {
+  const edge = state.bounds.halfExtent * 0.45;
+  const horizontal = position.x < -edge ? 'left-field' : position.x > edge ? 'right-field' : 'center';
+  if (position.z < -edge) {
+    return horizontal === 'center' ? 'home stretch' : `${horizontal} corner near home`;
+  }
+  if (position.z > edge) {
+    return horizontal === 'center' ? 'deep outfield' : `deep ${horizontal}`;
+  }
+  return horizontal === 'center' ? 'middle of the diamond' : `${horizontal} line`;
+}
+
+function formatNameList(names: readonly string[]): string {
+  if (names.length === 0) return 'nobody';
+  if (names.length === 1) return names[0]!;
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`;
 }
 
 function summarizeConflict(state: MutableWorldState, conflict: WorldConflict): JsonValue {
@@ -888,32 +1030,6 @@ function buildRefereeSceneSummary(state: MutableWorldState): JsonValue {
     tick: state.tick,
     banana: banana ? { heldBy: banana.heldBy, position: jsonVec(banana.position) } : null,
     goal: goal ? { position: jsonVec(goal.position) } : null,
-  };
-}
-
-function buildNarrationSceneSummary(state: MutableWorldState): JsonValue {
-  const banana = state.objects.find((entry) => entry.id === state.game.bananaObjectId);
-  return {
-    tick: state.tick,
-    banana: banana
-      ? { position: jsonVec(banana.position), heldBy: banana.heldBy }
-      : null,
-    agents: state.agents.map((agent) => summarizeNarrationAgent(state, agent)),
-    powerups: state.objects
-      .filter((object) => object.active && (object.kind === 'bat' || object.kind === 'ice_cube'))
-      .map((object) => ({ kind: object.kind, label: object.label, heldBy: object.heldBy })),
-  };
-}
-
-function summarizeNarrationAgent(state: MutableWorldState, agent: SimulationAgentState): JsonValue {
-  return {
-    id: agent.id,
-    name: agent.name,
-    holding: agent.holding,
-    powerUp: agent.powerUp?.kind ?? null,
-    frozenRemainingTicks: Math.max(0, agent.frozenUntilTick - state.tick),
-    sabotageCooldownRemainingTicks: Math.max(0, agent.cooldowns.sabotageUntilTick - state.tick),
-    status: agent.status,
   };
 }
 
@@ -1174,10 +1290,43 @@ function describeResolutionNote(resolution: DirectorResolution): string {
 }
 
 function coerceNarrationDecision(value: string, snapshot: WorldSnapshot): DirectorDecision {
-  if (value.length > 0) {
-    return { note: value, resolutions: [] };
+  const note = value.trim();
+  if (note.length > 0 && !isGenericNarration(note)) {
+    return { note, resolutions: [] };
   }
-  return { note: `Tick ${snapshot.tick}: Banana Dash keeps moving.`, resolutions: [] };
+  return { note: buildNarrationFallback(snapshot), resolutions: [] };
+}
+
+function isGenericNarration(note: string): boolean {
+  return /^(power[- ]?ups? available|power[- ]?ups? are available|available power[- ]?ups?)[.!]?$/i.test(note.trim());
+}
+
+function buildNarrationFallback(snapshot: WorldSnapshot): string {
+  const banana = snapshot.objects.find((entry) => entry.id === snapshot.game.bananaObjectId);
+  if (banana?.heldBy) {
+    const carrier = snapshot.agents.find((entry) => entry.id === banana.heldBy);
+    const chasers = carrier
+      ? snapshot.agents
+          .filter((agent) => agent.id !== carrier.id)
+          .map((agent) => ({ agent, distance: vec2Distance(agent.position, carrier.position) }))
+          .sort((a, b) => a.distance - b.distance)
+          .slice(0, 2)
+          .map((entry) => entry.agent.name)
+      : [];
+    const pursuit = chasers.length > 0
+      ? `, and ${formatNameList(chasers)} ${chasers.length === 1 ? 'is' : 'are'} bearing down`
+      : ' with the field scrambling';
+    return `${carrier?.name ?? banana.heldBy} has the banana${pursuit}!`;
+  }
+  if (banana) {
+    const rushers = snapshot.agents
+      .map((agent) => ({ agent, distance: vec2Distance(agent.position, banana.position) }))
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, 2)
+      .map((entry) => entry.agent.name);
+    return `Loose banana on the diamond, and ${formatNameList(rushers)} ${rushers.length === 1 ? 'is' : 'are'} charging in!`;
+  }
+  return `Tick ${snapshot.tick}: Banana Dash keeps moving.`;
 }
 
 function describeConflict(conflict: WorldConflict): string {

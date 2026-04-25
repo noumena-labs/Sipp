@@ -25,6 +25,10 @@
     "scene_summary": {
       "kind": "data",
       "description": "Current world state."
+    },
+    "narration_brief": {
+      "kind": "text",
+      "description": "Host-synthesized play-by-play facts."
     }
   },
   "tasks": {
@@ -41,11 +45,13 @@
       }
     },
     "narrate_scene": {
-      "purpose": "Narrate the current scene in one short line.",
+      "purpose": "Turn the supplied play facts into one short Banana Dash call.",
       "instructions": [
-        "Make it lively and grounded."
+        "Sound like an old-timey radio baseball announcer.",
+        "Name the active agents and call the play in motion.",
+        "Never summarize inventory or say generic lines like Powerups available."
       ],
-      "inputs": ["scoreboard", "scene_summary"],
+      "inputs": ["narration_brief"],
       "output": {
         "shape": "text",
         "maxLength": 180
