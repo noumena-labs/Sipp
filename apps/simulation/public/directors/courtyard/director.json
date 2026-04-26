@@ -45,10 +45,12 @@
       }
     },
     "narrate_scene": {
-      "purpose": "Call these observations as one fun, witty old-timey radio line.",
+      "purpose": "Write one complete old-timey radio play-by-play sentence for the current Banana Dash scene.",
       "instructions": [
         "Use the observations only.",
-        "Name a player, the live action, and the stakes.",
+        "Include at least one player name, the live action, and the stakes in the same sentence.",
+        "Do not answer with only a name, label, list, fragment, or JSON.",
+        "Use 8 to 24 words.",
         "Avoid repeating the previous call."
       ],
       "inputs": ["narration_brief"],

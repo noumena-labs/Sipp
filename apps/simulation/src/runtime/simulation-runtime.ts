@@ -890,7 +890,10 @@ function buildNarrationBrief(
 ): string {
   const observations = collectNarrationObservations(state, recentEvents);
   return [
-    'Write a sentence based on ALL the observations below as if you are an old-timey sports caller at an active game.',
+    'Write exactly one complete sentence as an old-timey sports caller at an active game.',
+    'The sentence must use ALL the observations below, include at least one player name, describe live action, and mention the stakes.',
+    'Do not answer with only a player name, label, list, fragment, or JSON.',
+    'Use 8 to 24 words.',
     '',
     'Observations:',
     ...observations.map((observation) => `- ${observation}`),

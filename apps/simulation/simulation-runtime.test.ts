@@ -351,7 +351,10 @@ test('narration prompt includes recent beats and rejects repeated previous calls
 
     assert.match(engine.promptText ?? '', /Call these observations as one fun, witty old-timey radio line/);
     assert.match(engine.promptText ?? '', /Response:\nWrite only the final answer\./);
-    assert.match(engine.promptText ?? '', /Write a sentence based on ALL the observations below as if you are an old-timey sports caller at an active game\./);
+    assert.match(engine.promptText ?? '', /Write exactly one complete sentence as an old-timey sports caller at an active game\./);
+    assert.match(engine.promptText ?? '', /include at least one player name, describe live action, and mention the stakes/);
+    assert.match(engine.promptText ?? '', /Do not answer with only a player name, label, list, fragment, or JSON\./);
+    assert.match(engine.promptText ?? '', /Use 8 to 24 words\./);
     assert.match(engine.promptText ?? '', /- Previous call to avoid: one race\./);
     assert.match(engine.promptText ?? '', /- Aria has the banana\./);
     assert.match(engine.promptText ?? '', /- Aria is on the doorstep of home base\./);
