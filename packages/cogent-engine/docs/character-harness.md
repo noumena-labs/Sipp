@@ -4,6 +4,20 @@
 
 The host app still owns model loading, engine lifecycle, render assets, and business logic.
 
+## 5-Line Quickstart
+
+If you already have a loaded `CogentEngine` named `engine`, this is enough to make a character talk.
+
+```ts
+import { createCharacterFromConfigUrl } from '@noumena-labs/cogent-engine/character';
+const { character } = await createCharacterFromConfigUrl({ configUrl: '/characters/aria/character.json', engine });
+for await (const event of character.chat('Say hi in character.')) {
+  if (event.kind === 'prose') document.body.textContent += event.text;
+}
+```
+
+Swap the URL for your own `character.json`. The harness handles the character prompt, memory window, streaming text, and action cues for you.
+
 ## Public API
 
 ```ts

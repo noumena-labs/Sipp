@@ -4,6 +4,20 @@
 
 It does not own world state, ticks, reducers, sensing, movement, or rendering. The host app owns the simulation and calls the director runtime when it wants model judgment about current scenario state.
 
+## 5-Line Quickstart
+
+If you already have a loaded `CogentEngine` named `engine`, this is enough to ask the director for a decision.
+
+```ts
+import { createDirectorFromConfigUrl } from '@noumena-labs/cogent-engine/director';
+const { director } = await createDirectorFromConfigUrl({ configUrl: '/directors/courtyard/director.json', engine });
+const result = await director.run('resolve_referee_event', { choices: [{ id: 'wait', label: 'Wait' }, { id: 'move', label: 'Move' }] });
+if (result.status === 'ok') console.log(result.selections[0]?.id);
+else console.warn(result.errorMessage);
+```
+
+Swap the URL and task name for your own `director.json`. The harness builds the prompt, constrains the answer, parses the result, and gives your app a clean decision object.
+
 ## Public API
 
 ```ts
