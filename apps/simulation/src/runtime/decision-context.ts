@@ -164,8 +164,8 @@ function addNonCarrierOptions(
 
     if (!carrierIsTooCloseToChase) {
       options.push({
-        label: `chase ${carrier.name}`,
-        goal: { kind: 'go_to_agent', agentId: carrier.id, label: `chase ${carrier.name}` },
+        label: `chase ${carrier.name} with the banana`,
+        goal: { kind: 'go_to_agent', agentId: carrier.id, label: `chase ${carrier.name} with the banana` },
       });
     }
   }
