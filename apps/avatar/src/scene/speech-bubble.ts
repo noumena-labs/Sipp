@@ -252,7 +252,7 @@ function drawDialogueWindow(
   context.fill();
 
   context.lineJoin = 'round';
-  context.lineWidth = 20;
+  context.lineWidth = 2;
   context.strokeStyle = 'rgba(255, 255, 255, 0.22)';
   context.stroke();
   context.lineWidth = 6;
