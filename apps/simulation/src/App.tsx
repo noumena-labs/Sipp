@@ -425,6 +425,19 @@ export default function App() {
             ...(prev.mode === 'idle' ? { headline: 'Director update', detail: event.note } : {}),
           }));
           break;
+        case 'director-narration-trace': {
+          const raw = event.rawText.trim() || '(empty)';
+          const parsed = event.parsedText.trim();
+          const detail = parsed && parsed !== raw ? ` parsed=${JSON.stringify(parsed)}` : '';
+          pushEvent({
+            tick: event.tick,
+            kind: event.accepted ? 'note' : 'error',
+            text: event.accepted
+              ? `Director raw narration: ${JSON.stringify(raw)}${detail}`
+              : `Director rejected narration (${event.reason ?? 'unknown'}): raw=${JSON.stringify(raw)}${detail}`,
+          });
+          break;
+        }
         case 'game-event': {
           for (const override of glyphOverridesForGameEvent(event.event)) {
             setAgentGlyphOverride(override.agentId, override.glyph, override.durationSeconds * 1000);

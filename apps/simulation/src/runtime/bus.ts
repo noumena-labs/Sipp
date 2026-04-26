@@ -84,6 +84,15 @@ export interface WorldNoteEvent {
   readonly note: string;
 }
 
+export interface DirectorNarrationTraceEvent {
+  readonly kind: 'director-narration-trace';
+  readonly tick: number;
+  readonly rawText: string;
+  readonly parsedText: string;
+  readonly accepted: boolean;
+  readonly reason?: string;
+}
+
 export interface GameEventBusEvent {
   readonly kind: 'game-event';
   readonly tick: number;
@@ -113,6 +122,7 @@ export type SimulationEvent =
   | DirectorConflictEvent
   | DirectorDecisionEvent
   | WorldNoteEvent
+  | DirectorNarrationTraceEvent
   | GameEventBusEvent
   | RuntimeErrorEvent;
 

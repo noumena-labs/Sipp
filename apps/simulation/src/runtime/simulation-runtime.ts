@@ -547,6 +547,14 @@ export class SimulationRuntime {
         return;
       }
       const decision = coerceNarrationDecision(result.text, this.getSnapshot(), narrationEvents);
+      this.emit({
+        kind: 'director-narration-trace',
+        tick: this.state.tick,
+        rawText: result.rawText,
+        parsedText: result.text,
+        accepted: decision.note.length > 0,
+        ...(decision.note.length === 0 ? { reason: describeRejectedNarration(result.text, this.getSnapshot()) } : {}),
+      });
       this.state.directorNote = decision.note || this.state.directorNote;
       this.emit({ kind: 'director-decision', tick: this.state.tick, decision });
       if (decision.note) {
@@ -1503,6 +1511,15 @@ function coerceNarrationDecision(
     return { note, resolutions: [] };
   }
   return { note: '', resolutions: [] };
+}
+
+function describeRejectedNarration(note: string, snapshot: WorldSnapshot): string {
+  const trimmed = note.trim();
+  if (trimmed.length === 0) return 'empty response';
+  if (isTooShortNarration(trimmed)) return 'too short';
+  if (isGenericNarration(trimmed)) return 'generic instruction text';
+  if (isRepeatedNarration(trimmed, snapshot.directorNote)) return 'repeated previous call';
+  return 'did not pass narration validation';
 }
 
 function isTooShortNarration(note: string): boolean {

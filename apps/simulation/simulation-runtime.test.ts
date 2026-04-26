@@ -368,6 +368,71 @@ test('narration prompt includes recent beats and rejects repeated previous calls
   }
 });
 
+test('SimulationRuntime emits raw trace when narration is rejected', async () => {
+  const engine = createOutputEngine('Sol');
+  const director = new DirectorRuntime(engine, DIRECTOR_CONFIG);
+  const bus = new SimulationBus();
+  const events: SimulationEvent[] = [];
+  bus.onAny((event) => {
+    events.push(event);
+  });
+
+  const runtime = new SimulationRuntime(director, {
+    bus,
+    directorCadenceTicks: 1,
+    initialDirectorNote: 'The banana race is already rolling.',
+    game: {
+      title: 'Banana Dash',
+      bananaObjectId: 'banana',
+      goalObjectId: 'home',
+      respawnRules: [{ objectId: 'banana', delayTicks: 1, spawnPoints: [{ x: -4, z: -4 }] }],
+    },
+  });
+
+  try {
+    const internals = runtime as unknown as MutableRuntimeInternals & {
+      simulationAgents: Map<string, StubChooser>;
+      maybeStartNarration(): void;
+      narrationInFlight: Promise<void> | null;
+    };
+    internals.simulationAgents.set('sol', createAbortedChooser());
+    internals.state.tick = 12;
+    internals.state.game.score.deliveries.sol = 0;
+    internals.state.agents.push(
+      createAgent('sol', 'Sol', { x: 0, z: 0 }, {
+        status: 'charging toward the banana',
+        intent: { kind: 'go_to_object', objectId: 'banana', emotion: 'alert' },
+      })
+    );
+    internals.state.objects.push(
+      createObject('banana', 'banana', { x: 1, z: 0 }, {
+        label: 'banana',
+        contested: true,
+        tags: ['food', 'score'],
+        affordances: [{ kind: 'pick_up', label: 'grab banana' }],
+      }),
+      createObject('home', 'goal', { x: 5, z: 0 }, {
+        label: 'home base',
+        tags: ['goal', 'score'],
+      })
+    );
+
+    internals.maybeStartNarration();
+    await internals.narrationInFlight;
+
+    const trace = events.find((event) => event.kind === 'director-narration-trace');
+    assert.ok(trace);
+    assert.equal(trace.rawText, 'Sol');
+    assert.equal(trace.parsedText, 'Sol');
+    assert.equal(trace.accepted, false);
+    assert.equal(trace.reason, 'too short');
+    assert.equal(events.some((event) => event.kind === 'world-note'), false);
+    assert.equal(internals.state.directorNote, 'The banana race is already rolling.');
+  } finally {
+    await runtime.dispose();
+  }
+});
+
 test('SimulationRuntime applies deterministic referee fallback after timeout', async () => {
   const engine = createTimeoutEngine();
   const director = new DirectorRuntime(engine, DIRECTOR_CONFIG);
