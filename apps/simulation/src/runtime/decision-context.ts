@@ -23,6 +23,9 @@ export function buildDecisionContext(perception: AgentPerception): DecisionConte
 
   lines.push(`Tick ${perception.tick}. Banana Dash score: ${formatScore(perception)}.`);
   lines.push(`You are ${describeSelfState(perception)}.`);
+  if (perception.lastDecision) {
+    lines.push(`Heavily consider your last decision: ${perception.lastDecision}. Stay with it if it still makes sense, but change course if the banana or carrier situation is clearly better.`);
+  }
   if (perception.directorNote) {
     lines.push(`Director says: ${perception.directorNote}`);
   }
@@ -121,7 +124,7 @@ function addNonCarrierOptions(
           : `${carrier.name} is already in contact range. Prioritize bumping to knock the banana loose.`);
       }
     } else if (shouldPrioritizeCarrier) {
-      lines.push(`The banana is already claimed, so weigh direct pressure on ${carrier.name} against any nearby power-up that would create a cleaner interception.`);
+      lines.push(`The banana is already claimed, so direct pressure on ${carrier.name} is the default; detour only for a close power-up that creates a faster stop.`);
     }
 
     if (perception.self.powerUp?.kind === 'ice_cube' && carrier.distance <= ICE_THROW_RADIUS && !sabotageCoolingDown) {
@@ -335,13 +338,13 @@ function scorePowerUpOption(
   shouldPrioritizeCarrier: boolean,
   powerUpBias: number
 ): number {
-  const distanceBonus = distance == null ? 0 : Math.max(0, 12 - distance * 3);
-  const base = shouldPrioritizeCarrier ? 82 : 88;
+  const distanceBonus = distance == null ? 0 : Math.max(0, 8 - distance * 2);
+  const base = shouldPrioritizeCarrier ? 80 : 78;
   if (objectId.includes('bat')) {
     return base + powerUpBias + distanceBonus;
   }
   if (objectId.includes('ice')) {
-    return base + powerUpBias + distanceBonus + 2;
+    return base + powerUpBias + distanceBonus + 1;
   }
   return base + distanceBonus;
 }
@@ -397,13 +400,13 @@ function distanceBetweenDirections(
 function powerUpBiasForArchetype(archetype: string): number {
   switch (archetype) {
     case 'mira':
-      return 12;
+      return 4;
     case 'beck':
-      return 8;
+      return 3;
     case 'sol':
-      return 5;
+      return 2;
     case 'aria':
-      return 1;
+      return 0;
     default:
       return 0;
   }

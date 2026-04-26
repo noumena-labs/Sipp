@@ -824,6 +824,7 @@ test('agent decision context hides bump option while sabotage is cooling down', 
     tick: 10,
     bounds: state.bounds,
     directorNote: null,
+    lastDecision: null,
     game: state.game,
   };
 
@@ -915,18 +916,72 @@ test('agent decision context keeps chase first for chase-leaning agents', () => 
     tick: 10,
     bounds: state.bounds,
     directorNote: null,
+    lastDecision: null,
     game: state.game,
   };
 
   const decision = buildDecisionContext(perception);
 
-  assert.equal(decision.options[0]?.label, 'chase Carrier');
+  assert.equal(decision.options[0]?.label, 'chase Carrier with the banana');
   assert.equal(decision.options.some((option) => option.label === 'go get the baseball bat'), true);
-  assert.match(decision.prompt, /weigh direct pressure on Carrier against any nearby power-up/);
+  assert.match(decision.prompt, /direct pressure on Carrier is the default/);
   assert.match(decision.prompt, /Power-ups are setup plays only when they help you grab it faster/);
 });
 
-test('agent decision context still surfaces nearby power-ups as the top setup for power-up-leaning agents', () => {
+test('agent decision context includes last decision as steering context', () => {
+  const state = createWorldState();
+  const seeker = createAgent('beck', 'Beck', { x: 0, z: 0 }, {
+    archetype: 'beck',
+  });
+  const perception: AgentPerception = {
+    self: seeker,
+    nearbyAgents: [],
+    nearbyObjects: [
+      {
+        id: 'banana',
+        kind: 'banana',
+        label: 'banana',
+        description: 'banana',
+        distance: 3,
+        direction: { x: 1, z: 0 },
+        active: true,
+        heldBy: null,
+        contested: true,
+        affordances: [{ kind: 'pick_up', label: 'grab banana' }],
+        tags: ['food'],
+        blocksMovement: false,
+        collisionRadius: 0.2,
+      },
+      {
+        id: 'home',
+        kind: 'goal',
+        label: 'home base',
+        description: 'home base',
+        distance: 6,
+        direction: { x: 0, z: -1 },
+        active: true,
+        heldBy: null,
+        contested: false,
+        affordances: [],
+        tags: ['goal'],
+        blocksMovement: false,
+        collisionRadius: 1.2,
+      },
+    ],
+    tick: 10,
+    bounds: state.bounds,
+    directorNote: null,
+    lastDecision: 'go get the ice cube',
+    game: state.game,
+  };
+
+  const decision = buildDecisionContext(perception);
+
+  assert.match(decision.prompt, /Heavily consider your last decision: go get the ice cube/);
+  assert.equal(decision.options.some((option) => option.label === 'rush banana'), true);
+});
+
+test('agent decision context keeps carrier pressure above nearby setup power-ups', () => {
   const state = createWorldState();
   const seeker = createAgent('mira', 'Mira', { x: 0, z: 0 }, {
     archetype: 'mira',
@@ -1000,13 +1055,15 @@ test('agent decision context still surfaces nearby power-ups as the top setup fo
     tick: 10,
     bounds: state.bounds,
     directorNote: null,
+    lastDecision: null,
     game: state.game,
   };
 
   const decision = buildDecisionContext(perception);
 
-  assert.equal(decision.options[0]?.label, 'go get the ice cube');
-  assert.equal(decision.options.some((option) => option.label === 'chase Carrier'), true);
+  assert.equal(decision.options[0]?.label, 'chase Carrier with the banana');
+  assert.equal(decision.options.some((option) => option.label === 'go get the ice cube'), true);
+  assert.match(decision.prompt, /detour only for a close power-up that creates a faster stop/);
 });
 
 test('agent decision context allows tactical sabotage only against the immediate loose-banana threat', () => {
@@ -1082,6 +1139,7 @@ test('agent decision context allows tactical sabotage only against the immediate
     tick: 10,
     bounds: state.bounds,
     directorNote: null,
+    lastDecision: null,
     game: state.game,
   };
 
@@ -1233,6 +1291,112 @@ test('stale go_to_object goals are cleared after the reevaluation cap', async ()
     assert.equal(runner.goal, null);
     assert.equal(runner.intent, null);
     assert.equal(runner.status, 'reconsidering the route');
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+test('stale movement goals are passed back as last-decision steering context', async () => {
+  let seenLastDecision: string | null = null;
+  const director = new DirectorRuntime(createOutputEngine('drop'), DIRECTOR_CONFIG);
+  const runtime = new SimulationRuntime(director, {
+    game: {
+      title: 'Banana Dash',
+      bananaObjectId: 'banana',
+      goalObjectId: 'home',
+      respawnRules: [{ objectId: 'banana', delayTicks: 1, spawnPoints: [{ x: -4, z: -4 }] }],
+    },
+    maxMoveTicksBeforeReevaluation: 3,
+  });
+
+  try {
+    const internals = runtime as unknown as MutableRuntimeInternals & { simulationAgents: Map<string, StubChooser> };
+    internals.simulationAgents.set('runner', {
+      async query(perception) {
+        seenLastDecision = perception.lastDecision;
+        return { goal: null, status: 'aborted', rawText: '' };
+      },
+    });
+    internals.state.tick = 2;
+    internals.state.agents.push(
+      createAgent('runner', 'Runner', { x: -3, z: 0 }, {
+        speed: 0,
+        status: 'heading to ice',
+        goal: { kind: 'go_to_object', objectId: 'ice-power-up', label: 'go get the ice cube' },
+        intent: { kind: 'go_to_object', objectId: 'ice-power-up', emotion: 'alert' },
+        intentIssuedAtTick: 0,
+      })
+    );
+    internals.state.objects.push(
+      createObject('banana', 'banana', { x: 0, z: 0 }, {
+        contested: true,
+        affordances: [{ kind: 'pick_up', label: 'grab banana' }],
+      }),
+      createObject('ice-power-up', 'ice_cube', { x: 4, z: 0 }, {
+        label: 'ice cube',
+        contested: true,
+        affordances: [{ kind: 'pick_up', label: 'grab ice cube' }],
+      }),
+      createObject('home', 'goal', { x: 5, z: 5 })
+    );
+
+    await runtime.step(0.1);
+    await runtime.waitForIdle();
+
+    assert.equal(seenLastDecision, 'go get the ice cube');
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+test('arriving at a pickup target completes the selected pickup action', async () => {
+  const director = new DirectorRuntime(createOutputEngine('drop'), DIRECTOR_CONFIG);
+  const runtime = new SimulationRuntime(director, {
+    game: {
+      title: 'Banana Dash',
+      bananaObjectId: 'banana',
+      goalObjectId: 'home',
+      respawnRules: [{ objectId: 'banana', delayTicks: 1, spawnPoints: [{ x: -4, z: -4 }] }],
+    },
+    maxMoveTicksBeforeReevaluation: 10,
+  });
+
+  try {
+    const internals = runtime as unknown as MutableRuntimeInternals;
+    internals.state.agents.push(
+      createAgent('runner', 'Runner', { x: 0, z: 0 }, {
+        speed: 0,
+        status: 'heading to bat',
+        goal: { kind: 'go_to_object', objectId: 'bat', label: 'go get the baseball bat' },
+        intent: { kind: 'go_to_object', objectId: 'bat', emotion: 'alert' },
+        intentIssuedAtTick: 0,
+      })
+    );
+    internals.state.objects.push(
+      createObject('banana', 'banana', { x: 4, z: 0 }, {
+        contested: true,
+        affordances: [{ kind: 'pick_up', label: 'grab banana' }],
+      }),
+      createObject('bat', 'bat', { x: 0.2, z: 0 }, {
+        label: 'baseball bat',
+        contested: true,
+        affordances: [{ kind: 'pick_up', label: 'grab baseball bat' }],
+      }),
+      createObject('home', 'goal', { x: 5, z: 5 })
+    );
+
+    await runtime.step(0.1);
+
+    const runner = runtime.getSnapshot().agents.find((agent) => agent.id === 'runner');
+    assert.ok(runner);
+    assert.deepEqual(runner.goal, {
+      kind: 'object_action',
+      objectId: 'bat',
+      affordance: { kind: 'pick_up', label: 'grab baseball bat' },
+      label: 'grab baseball bat',
+    });
+    assert.deepEqual(runner.intent, { kind: 'pick_up', objectId: 'bat', emotion: 'happy' });
+    assert.equal(runner.status, 'grab baseball bat');
   } finally {
     await runtime.dispose();
   }

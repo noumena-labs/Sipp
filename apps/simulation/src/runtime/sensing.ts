@@ -23,7 +23,8 @@ export function buildPerception(
   bounds: WorldBounds,
   directorNote: string | null,
   game: SimulationGameState,
-  options: SensingOptions = {}
+  options: SensingOptions = {},
+  lastDecision: string | null = null
 ): AgentPerception {
   const agentRadius = options.agentSightRadius ?? 8;
   const objectRadius = options.objectSightRadius ?? 8;
@@ -81,7 +82,7 @@ export function buildPerception(
   nearbyObjects.sort((a, b) => compareByPriority(a.distance, b.distance, mustSeeObjectIds.has(a.id), mustSeeObjectIds.has(b.id)));
   trimToVisibleCount(nearbyObjects, maxNeighbours, (entry) => mustSeeObjectIds.has(entry.id));
 
-  return { self, nearbyAgents, nearbyObjects, tick, bounds, directorNote, game };
+  return { self, nearbyAgents, nearbyObjects, tick, bounds, directorNote, lastDecision, game };
 }
 
 function compareByPriority(aDistance: number, bDistance: number, aPinned: boolean, bPinned: boolean): number {

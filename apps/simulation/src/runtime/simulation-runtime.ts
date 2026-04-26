@@ -97,6 +97,7 @@ export class SimulationRuntime {
   private readonly maxMoveTicksBeforeReevaluation: number;
   private readonly activeControllers: Set<AbortController> = new Set();
   private readonly recentNarrationEvents: NarrationEventSummary[] = [];
+  private readonly lastDecisionByAgentId: Map<string, string> = new Map();
   private readonly movementSubstepSeconds = 0.15;
 
   private disposed = false;
@@ -219,6 +220,7 @@ export class SimulationRuntime {
 
   public removeAgent(agentId: string): void {
     this.simulationAgents.delete(agentId);
+    this.lastDecisionByAgentId.delete(agentId);
     this.state.agents = this.state.agents.filter((a) => a.id !== agentId);
     delete this.state.game.score.deliveries[agentId];
     delete this.state.game.score.forcedDrops[agentId];
@@ -431,7 +433,9 @@ export class SimulationRuntime {
       this.state.tick,
       this.state.bounds,
       this.state.directorNote,
-      cloneGame(this.state.game)
+      cloneGame(this.state.game),
+      {},
+      this.lastDecisionByAgentId.get(agentState.id) ?? null
     );
 
     const controller = new AbortController();
@@ -468,6 +472,7 @@ export class SimulationRuntime {
       }
       const goal = this.coerceCloseRangeGoal(current, result.goal);
       current.goal = goal;
+      this.lastDecisionByAgentId.set(current.id, goal.label);
       const intent = this.mapGoalToIntent(goal);
       current.intent = intent;
       current.intentIssuedAtTick = this.state.tick;
@@ -699,6 +704,9 @@ export class SimulationRuntime {
   }
 
   private clearAgentForReevaluation(agent: SimulationAgentState, status: string): void {
+    if (agent.goal) {
+      this.lastDecisionByAgentId.set(agent.id, agent.goal.label);
+    }
     agent.goal = null;
     agent.intent = null;
     agent.status = status;
@@ -725,6 +733,9 @@ export class SimulationRuntime {
         continue;
       }
       if (arrived.has(agent.id)) {
+        if (this.completeArrivedPickupGoal(agent)) {
+          continue;
+        }
         if (agent.goal.kind === 'go_to_object' || agent.goal.kind === 'go_to_agent') {
           agent.goal = null;
           agent.intent = null;
@@ -736,6 +747,25 @@ export class SimulationRuntime {
         agent.intent = null;
       }
     }
+  }
+
+  private completeArrivedPickupGoal(agent: SimulationAgentState): boolean {
+    if (agent.goal?.kind !== 'go_to_object') return false;
+    const object = this.state.objects.find((entry) => entry.id === agent.goal?.objectId);
+    const affordance = object?.affordances.find((entry) => entry.kind === 'pick_up');
+    if (!object || !object.active || object.heldBy || !affordance) return false;
+    const label = affordance.label;
+    agent.goal = {
+      kind: 'object_action',
+      objectId: object.id,
+      affordance: { ...affordance, label },
+      label,
+    };
+    agent.intent = { kind: 'pick_up', objectId: object.id, emotion: inferEmotionFromGoal(agent.goal) };
+    agent.intentIssuedAtTick = this.state.tick;
+    agent.status = label;
+    this.lastDecisionByAgentId.set(agent.id, label);
+    return true;
   }
 
   private isGoalInvalid(agent: SimulationAgentState): boolean {
