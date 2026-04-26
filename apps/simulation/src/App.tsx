@@ -113,7 +113,7 @@ const TUTORIAL_STEPS: readonly TutorialStep[] = [
     target: null,
     placement: 'center',
     title: 'What this simulation is',
-    body: 'Banana Dash is the proof of concept. Five local LLM-powered brains operate live in a shared environment with real-time decisions, arbitration, and observability. This is not a chatbot demo. It shows how local inference can power proactive systems that monitor context, adapt behavior, surface help before the user asks, and enable hybrid products where long-running local LLM observers work alongside intelligent cloud models.',
+    body: 'Banana Dash is the proof-of-concept tech demo utilizing CogentLM. Five local LLM-powered brains operate live in a shared environment with real-time decisions, arbitration, and observability. This is not a chatbot demo. It shows how local inference can power proactive systems that monitor context, adapt behavior, and react to information in real-time.',
   },
   {
     id: 'controls',
