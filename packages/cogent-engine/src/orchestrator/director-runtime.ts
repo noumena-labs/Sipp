@@ -20,6 +20,7 @@ import { createTimedAbortController, waitForAbort } from '../utils/abort.js';
 import {
   compileDirectorOutputGrammar,
   DirectorOutputError,
+  type ResolvedDirectorChoices,
   parseDirectorOutput,
   resolveDirectorChoices,
 } from './director-output.js';
@@ -119,18 +120,27 @@ export class DirectorRuntime {
     request: DirectorRunRequest<TPayload> = {}
   ): Promise<DirectorRunResult<TPayload>> {
     let task: DirectorTaskConfig;
+    let resolved: ResolvedDirectorChoices<TPayload> = {};
     let grammar: string | undefined;
     let userText = '';
     let media: readonly Uint8Array[] = [];
 
     try {
       task = this.requireTask(taskName);
-      const taskPrompt = this.getTaskPrompt(taskName, request);
-      grammar = taskPrompt.grammar;
-      userText = taskPrompt.userPrompt;
-      media = taskPrompt.media;
+      resolved = resolveDirectorChoices(task.output, request);
+      grammar = compileDirectorOutputGrammar(task.output, resolved);
+      const rendered = renderDirectorUserMessage(
+        this.config,
+        taskName,
+        task,
+        request,
+        resolved,
+        this.getMediaMarker()
+      );
+      userText = rendered.text;
+      media = rendered.media;
     } catch (error) {
-      return failedResult(error);
+      return failedPreflightResult(error);
     }
 
     const messages: ChatMessage[] = [
@@ -215,7 +225,6 @@ export class DirectorRuntime {
         return { status: 'failed', text: '', selections: [], errorMessage, rawText };
       }
 
-      const resolved = resolveDirectorChoices(task.output, request);
       const parsed = parseDirectorOutput(parseText, task.output, resolved);
       logDirectorRun({ phase: 'response', taskName, contextKey, rawText, status: 'ok' });
       return {
@@ -278,9 +287,9 @@ export class DirectorRuntime {
   }
 }
 
-function failedResult<TPayload>(error: unknown): DirectorRunResult<TPayload> {
+function failedPreflightResult<TPayload>(error: unknown): DirectorRunResult<TPayload> {
   return {
-    status: error instanceof DirectorOutputError ? 'invalid_response' : 'failed',
+    status: 'invalid_request',
     text: '',
     selections: [],
     errorMessage: error instanceof Error ? error.message : String(error),

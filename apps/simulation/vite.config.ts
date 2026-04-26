@@ -13,16 +13,16 @@ const cogentEngineCharacterEntry = path.resolve(
   simAppDir,
   '../../packages/cogent-engine/dist/esm/character/index.js'
 );
-const cogentEngineOrchestratorEntry = path.resolve(
+const cogentEngineDirectorEntry = path.resolve(
   simAppDir,
-  '../../packages/cogent-engine/dist/esm/orchestrator/index.js'
+  '../../packages/cogent-engine/dist/esm/director/index.js'
 );
 
 export default defineConfig({
   plugins: [react(), cogentEngineDistWatch()],
   resolve: {
     alias: {
-      '@noumena-labs/cogent-engine/orchestrator': cogentEngineOrchestratorEntry,
+      '@noumena-labs/cogent-engine/director': cogentEngineDirectorEntry,
       '@noumena-labs/cogent-engine/character': cogentEngineCharacterEntry,
       '@noumena-labs/cogent-engine': cogentEngineEntry,
     },

@@ -36,26 +36,24 @@ const PERSONA: PersonaSpec = {
   ],
 };
 
-const GUIDED_ACTIONS: ActionSchema = {
-  actions: [
-    {
-      name: 'wave',
-      description: 'Wave hello.',
-      usageHint: 'greeting someone or saying goodbye',
-    },
-    {
-      name: 'smile',
-      description: 'Smile warmly.',
-      usageHint: 'warmth or cheerful engagement',
-    },
-    {
-      name: 'lean_in',
-      cue: 'lean in',
-      description: 'Lean in slightly.',
-      usageHint: 'curiosity or close attention',
-    },
-  ],
-};
+const GUIDED_ACTIONS: ActionSchema = [
+  {
+    id: 'wave',
+    description: 'Wave hello.',
+    usageHint: 'greeting someone or saying goodbye',
+  },
+  {
+    id: 'smile',
+    description: 'Smile warmly.',
+    usageHint: 'warmth or cheerful engagement',
+  },
+  {
+    id: 'lean_in',
+    cue: 'lean in',
+    description: 'Lean in slightly.',
+    usageHint: 'curiosity or close attention',
+  },
+];
 
 test('renderSystemPrompt keeps the prompt compact and grounded in the simplified persona fields', () => {
   const prompt = renderSystemPrompt(PERSONA, GUIDED_ACTIONS);
@@ -86,9 +84,7 @@ test('renderSystemPrompt omits Examples when anchorExamples are absent', () => {
       name: 'Minimal',
       dialogExamples: [{ user: 'hello', assistant: 'Hi there.' }],
     },
-    {
-      actions: [{ name: 'nod' }],
-    }
+    [{ id: 'nod' }]
   );
 
   assert.doesNotMatch(prompt, /Examples:/);
@@ -105,9 +101,7 @@ test('renderSystemPrompt includes every configured anchor example', () => {
         { user: 'four', assistant: 'D.' },
       ],
     },
-    {
-      actions: [{ name: 'nod' }],
-    }
+    [{ id: 'nod' }]
   );
 
   assert.match(prompt, /User: one\nGuide: A\./);
@@ -119,12 +113,10 @@ test('renderSystemPrompt includes every configured anchor example', () => {
 test('renderSystemPrompt omits cue moments unless every cue is guided', () => {
   const prompt = renderSystemPrompt(
     { name: 'Minimal' },
-    {
-      actions: [
-        { name: 'nod', usageHint: 'agreeing or acknowledging' },
-        { name: 'look_at_you', cue: 'look at you' },
-      ],
-    }
+    [
+      { id: 'nod', usageHint: 'agreeing or acknowledging' },
+      { id: 'look_at_you', cue: 'look at you' },
+    ]
   );
 
   assert.match(prompt, /Cues: \[nod\], \[look at you\]\./);

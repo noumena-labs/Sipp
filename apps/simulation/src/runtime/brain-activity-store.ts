@@ -16,7 +16,7 @@ export type BrainQueryStatus =
   | 'idle'
   | 'running'
   | 'completed'
-  | 'cancelled'
+  | 'aborted'
   | 'timed_out'
   | 'failed';
 
@@ -65,7 +65,7 @@ export interface BrainActivityStoreSnapshot {
   readonly activeQueryCount: number;
   readonly averageLatencyMs: number | null;
   readonly totalFailures: number;
-  readonly totalCancelled: number;
+  readonly totalAborted: number;
 }
 
 interface BrainActivityRecord {
@@ -97,7 +97,8 @@ export class BrainActivityStore {
   private readonly definitions: readonly BrainDefinition[];
   private readonly definitionsById: Map<string, BrainDefinition>;
   private readonly listeners = new Set<() => void>();
-  private readonly recordsByBrainId = new Map<string, BrainActivityRecord>();
+  private readonly recordsByQueryId = new Map<string, BrainActivityRecord>();
+  private readonly latestQueryIdByBrainId = new Map<string, string>();
   private readonly queryIdsByRequestId = new Map<number, string>();
   private readonly activeQueryIds = new Set<string>();
   private readonly recentQueryStartsMs: number[] = [];
@@ -109,7 +110,7 @@ export class BrainActivityStore {
   private nextQueryId = 1;
   private totalQueries = 0;
   private totalFailures = 0;
-  private totalCancelled = 0;
+  private totalAborted = 0;
 
   public constructor(definitions: readonly BrainDefinition[]) {
     this.definitions = definitions.slice();
@@ -132,7 +133,7 @@ export class BrainActivityStore {
     const recentQueryCount = countRecentQueries(this.recentQueryStartsMs, now);
 
     const brains = this.definitions.map((definition) =>
-      this.toPublicEntry(this.recordsByBrainId.get(definition.id) ?? this.createEmptyRecord(definition), now)
+      this.toPublicEntry(this.getLatestRecord(definition.id) ?? this.createEmptyRecord(definition), now)
     );
     const activeBrain = brains.find((brain) => brain.status === 'running') ?? null;
 
@@ -145,7 +146,7 @@ export class BrainActivityStore {
       activeQueryCount: this.activeQueryIds.size,
       averageLatencyMs: average(this.recentLatenciesMs),
       totalFailures: this.totalFailures,
-      totalCancelled: this.totalCancelled,
+      totalAborted: this.totalAborted,
     };
 
     return this.cachedSnapshot;
@@ -156,7 +157,8 @@ export class BrainActivityStore {
   };
 
   public reset = (): void => {
-    this.recordsByBrainId.clear();
+    this.recordsByQueryId.clear();
+    this.latestQueryIdByBrainId.clear();
     this.queryIdsByRequestId.clear();
     this.activeQueryIds.clear();
     this.recentQueryStartsMs.length = 0;
@@ -164,7 +166,7 @@ export class BrainActivityStore {
     this.nextQueryId = 1;
     this.totalQueries = 0;
     this.totalFailures = 0;
-    this.totalCancelled = 0;
+    this.totalAborted = 0;
     this.recentLatenciesMs.length = 0;
     this.stopLiveUpdates();
     this.invalidateSnapshot();
@@ -183,7 +185,7 @@ export class BrainActivityStore {
     this.totalQueries += 1;
 
     const queryId = `brain-query-${this.nextQueryId++}`;
-    this.recordsByBrainId.set(args.brainId, {
+    const record: BrainActivityRecord = {
       brainId: definition.id,
       label: definition.label,
       kind: definition.kind,
@@ -206,7 +208,9 @@ export class BrainActivityStore {
       inputTokenCount: null,
       outputTokenCount: null,
       errorMessage: null,
-    });
+    };
+    this.recordsByQueryId.set(queryId, record);
+    this.latestQueryIdByBrainId.set(args.brainId, queryId);
     this.activeQueryIds.add(queryId);
     this.ensureLiveUpdates();
     this.invalidateSnapshot(now);
@@ -298,7 +302,7 @@ export class BrainActivityStore {
       readonly errorMessage?: string | null;
     }
   ): void {
-    const record = this.recordsByBrainId.get(brainId);
+    const record = this.getLatestRecord(brainId);
     if (!record || record.queryId == null) {
       return;
     }
@@ -320,12 +324,12 @@ export class BrainActivityStore {
   }
 
   private findRecordByQueryId(queryId: string): BrainActivityRecord | null {
-    for (const record of this.recordsByBrainId.values()) {
-      if (record.queryId === queryId) {
-        return record;
-      }
-    }
-    return null;
+    return this.recordsByQueryId.get(queryId) ?? null;
+  }
+
+  private getLatestRecord(brainId: string): BrainActivityRecord | null {
+    const queryId = this.latestQueryIdByBrainId.get(brainId);
+    return queryId ? this.recordsByQueryId.get(queryId) ?? null : null;
   }
 
   private createEmptyRecord(definition: BrainDefinition): BrainActivityRecord {
@@ -449,15 +453,15 @@ export class BrainActivityStore {
     if (countsAsFailure(previous)) {
       this.totalFailures = Math.max(0, this.totalFailures - 1);
     }
-    if (previous === 'cancelled') {
-      this.totalCancelled = Math.max(0, this.totalCancelled - 1);
+    if (previous === 'aborted') {
+      this.totalAborted = Math.max(0, this.totalAborted - 1);
     }
 
     if (countsAsFailure(next)) {
       this.totalFailures += 1;
     }
-    if (next === 'cancelled') {
-      this.totalCancelled += 1;
+    if (next === 'aborted') {
+      this.totalAborted += 1;
     }
   }
 }

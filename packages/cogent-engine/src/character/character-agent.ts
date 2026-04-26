@@ -2,7 +2,7 @@
 //
 // character-agent.ts
 //
-// - High-level character turn loop that ties an engine instance to a
+// - High-level character runtime that ties an engine instance to a
 //   CharacterConfig: builds the system prompt, tracks memory, compiles the
 //   grammar once, and exposes a single `chat()` async iterator that emits
 //   prose/action events as they arrive.
@@ -15,7 +15,7 @@ import type {
   GenerateResponse,
   PromptOptions,
 } from '../core/inference-types.js';
-import { ActionBus, type CharacterEvent } from './action-bus.js';
+import { CharacterEventBus, type CharacterEvent } from './action-bus.js';
 import { compileActionGrammar } from './action-grammar.js';
 import { StreamingActionParser, type ParsedEvent } from './action-parser.js';
 import { compileChoiceGrammar, parseChoiceOutput } from './choice-grammar.js';
@@ -32,8 +32,9 @@ import {
 } from '../core/chat-template-boundaries.js';
 import { renderSystemPrompt } from './persona.js';
 import { createTimedAbortController, waitForAbort } from '../utils/abort.js';
+import type { RunStatus } from '../core/run-status.js';
 
-export interface CharacterAgentEngine {
+export interface CharacterRuntimeEngine {
   queuePrompt(
     contextKey: string,
     promptText: string,
@@ -52,17 +53,19 @@ export interface CharacterAgentEngine {
   getEosText?(): string;
 }
 
-export interface CharacterAgentOptions {
+export interface CharacterRuntimeOptions {
   /**
    * Maximum tokens the model may emit per turn. Defaults to 256, which is a
    * reasonable upper bound for conversational replies.
    */
   readonly maxOutputTokens?: number;
   /**
-   * Prebuilt ActionBus. When omitted, the agent creates one internally.
-   * Injecting a shared bus lets multiple consumers observe the same agent.
+   * Prebuilt CharacterEventBus. When omitted, the runtime creates one internally.
+   * Injecting a shared bus lets multiple consumers observe the same character.
    */
-  readonly bus?: ActionBus;
+  readonly bus?: CharacterEventBus;
+  /** Stable engine context key prefix. Defaults to `character:${config.id}`. */
+  readonly contextKey?: string;
 }
 
 export interface ChatTurn {
@@ -70,14 +73,14 @@ export interface ChatTurn {
   readonly content: string;
 }
 
-export interface ChoiceResult {
-  readonly choice: string | null;
-  readonly status: 'ok' | 'aborted' | 'timed_out' | 'failed' | 'invalid_response';
+export interface CharacterChooseResult {
+  readonly selection: string | null;
+  readonly status: RunStatus;
   readonly errorMessage?: string;
   readonly rawText: string;
 }
 
-export interface CharacterChoiceOptions {
+export interface CharacterChooseOptions {
   readonly choices: readonly string[];
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
@@ -85,8 +88,8 @@ export interface CharacterChoiceOptions {
 }
 
 /**
- * Turn-level chat event yielded by {@link CharacterAgent.chat}. Mirrors the
- * ActionBus event shape so consumers can choose either transport.
+ * Turn-level chat event yielded by {@link CharacterRuntime.chat}. Mirrors the
+ * CharacterEventBus event shape so consumers can choose either transport.
  */
 export type ChatEvent = CharacterEvent;
 
@@ -102,36 +105,38 @@ interface InFlightTurn {
 }
 
 /**
- * A character-driven conversation agent. Pair one with a CogentEngine and a
+ * A character-driven conversation runtime. Pair one with a CogentEngine and a
  * CharacterConfig to get a grammar-constrained, memory-aware chat loop.
  */
-export class CharacterAgent {
-  private readonly engine: CharacterAgentEngine;
+export class CharacterRuntime {
+  private readonly engine: CharacterRuntimeEngine;
   private readonly config: CharacterConfig;
   private readonly maxOutputTokens: number;
+  private readonly contextKey: string;
   private readonly systemPrompt: string;
   private readonly grammarSource: string;
   private readonly promptRuntime: ChatTemplatePromptRuntime;
   private readonly memoryLimitTurns: number;
-  private readonly canonicalCueLabelsByActionName: ReadonlyMap<string, string>;
+  private readonly canonicalCueLabelsByActionId: ReadonlyMap<string, string>;
   private readonly turnHistory: ChatTurn[] = [];
-  private readonly eventBus: ActionBus;
+  private readonly eventBus: CharacterEventBus;
   private currentTurn: InFlightTurn | undefined;
 
   public constructor(
-    engine: CharacterAgentEngine,
+    engine: CharacterRuntimeEngine,
     config: CharacterConfig,
-    options: CharacterAgentOptions = {}
+    options: CharacterRuntimeOptions = {}
   ) {
     this.engine = engine;
     this.config = config;
     this.maxOutputTokens = options.maxOutputTokens ?? 256;
-    this.eventBus = options.bus ?? new ActionBus();
+    this.contextKey = options.contextKey ?? `character:${config.id}`;
+    this.eventBus = options.bus ?? new CharacterEventBus();
     this.promptRuntime = new ChatTemplatePromptRuntime(engine);
     this.systemPrompt = renderSystemPrompt(config.persona, config.actions);
     this.grammarSource = compileActionGrammar(config.actions);
-    this.canonicalCueLabelsByActionName = new Map(
-      summarizeActionCues(config.actions).map((cue) => [cue.name, cue.label])
+    this.canonicalCueLabelsByActionId = new Map(
+      summarizeActionCues(config.actions).map((cue) => [cue.id, cue.label])
     );
     this.memoryLimitTurns = Math.max(
       0,
@@ -140,8 +145,12 @@ export class CharacterAgent {
   }
 
   /** Exposes the event bus for imperative subscribers (VRM bindings, logs). */
-  public get bus(): ActionBus {
+  public get bus(): CharacterEventBus {
     return this.eventBus;
+  }
+
+  public getConfig(): CharacterConfig {
+    return this.config;
   }
 
   /** Read-only snapshot of the sliding-window memory. */
@@ -166,9 +175,19 @@ export class CharacterAgent {
 
   public async choose(
     userMessage: string,
-    options: CharacterChoiceOptions
-  ): Promise<ChoiceResult> {
-    const grammar = compileChoiceGrammar(options.choices);
+    options: CharacterChooseOptions
+  ): Promise<CharacterChooseResult> {
+    let grammar: string;
+    try {
+      grammar = compileChoiceGrammar(options.choices);
+    } catch (error) {
+      return {
+        selection: null,
+        status: 'invalid_request',
+        errorMessage: error instanceof Error ? error.message : String(error),
+        rawText: '',
+      };
+    }
     const choicePrompt = renderChoicePrompt(userMessage, options.choices);
     const messages: ChatMessage[] = [
       { role: 'system', content: this.systemPrompt },
@@ -183,7 +202,7 @@ export class CharacterAgent {
       boundaryMarkers = promptContext.boundaryMarkers;
     } catch (error) {
       return {
-        choice: null,
+        selection: null,
         status: options.signal?.aborted === true ? 'aborted' : 'failed',
         errorMessage: error instanceof Error ? error.message : String(error),
         rawText: '',
@@ -197,7 +216,7 @@ export class CharacterAgent {
       grammar,
       signal: abort.signal,
     };
-    const contextKey = `${this.config.id}:choice`;
+    const contextKey = `${this.contextKey}:choose`;
 
     logChoiceQuery({
       phase: 'request',
@@ -228,12 +247,12 @@ export class CharacterAgent {
           phase: 'response',
           contextKey,
           rawText,
-          choice: null,
+          selection: null,
           status,
           errorMessage,
         });
         return {
-          choice: null,
+          selection: null,
           status,
           errorMessage,
           rawText,
@@ -244,36 +263,36 @@ export class CharacterAgent {
           phase: 'response',
           contextKey,
           rawText,
-          choice: null,
+          selection: null,
           status: 'failed',
           errorMessage: response.errorMessage ?? 'generation failed',
         });
         return {
-          choice: null,
+          selection: null,
           status: 'failed',
           errorMessage: response.errorMessage ?? 'generation failed',
           rawText,
         };
       }
-      const choice = parseChoiceOutput(parseText, options.choices);
-      if (choice == null) {
+      const selection = parseChoiceOutput(parseText, options.choices);
+      if (selection == null) {
         logChoiceQuery({
           phase: 'response',
           contextKey,
           rawText,
-          choice: null,
+          selection: null,
           status: 'invalid_response',
           errorMessage: 'choice output did not match any available option',
         });
         return {
-          choice: null,
+          selection: null,
           status: 'invalid_response',
           errorMessage: 'choice output did not match any available option',
           rawText,
         };
       }
       return {
-        choice,
+        selection,
         status: 'ok',
         rawText,
       };
@@ -302,12 +321,12 @@ export class CharacterAgent {
         phase: 'response',
         contextKey,
         rawText: '',
-        choice: null,
+        selection: null,
         status,
         errorMessage,
       });
       return {
-        choice: null,
+        selection: null,
         status,
         errorMessage,
         rawText: '',
@@ -327,14 +346,14 @@ export class CharacterAgent {
    */
   public chat(userMessage: string, options: { signal?: AbortSignal } = {}): AsyncIterable<ChatEvent> {
     const trimmed = userMessage ?? '';
-    const queue = new AsyncEventQueue<ChatEvent>();
+    const controller = new AbortController();
+    const queue = new AsyncEventQueue<ChatEvent>(() => controller.abort());
 
     const emit = (event: ChatEvent): void => {
       queue.push(event);
       this.eventBus.emit(event);
     };
 
-    const controller = new AbortController();
     const detachSignalForwarder = forwardAbortSignal(options.signal, controller);
     const previousTurn = this.currentTurn;
 
@@ -374,7 +393,7 @@ export class CharacterAgent {
     emit({ kind: 'turn-start', userMessage });
 
     if (signal.aborted) {
-      emit({ kind: 'turn-end', finalText: '', cancelled: true });
+      emit({ kind: 'turn-end', finalText: '', status: 'aborted' });
       return;
     }
 
@@ -383,7 +402,7 @@ export class CharacterAgent {
     try {
       const promptContext = await this.buildPromptContext(turnMessages);
       if (signal.aborted) {
-        emit({ kind: 'turn-end', finalText: '', cancelled: true });
+        emit({ kind: 'turn-end', finalText: '', status: 'aborted' });
         return;
       }
       await this.runTurn(promptContext, userMessage, parser, emit, signal);
@@ -391,7 +410,7 @@ export class CharacterAgent {
       emit({
         kind: 'turn-end',
         finalText: '',
-        cancelled: signal.aborted,
+        status: signal.aborted ? 'aborted' : 'failed',
         ...(signal.aborted
           ? {}
           : { errorMessage: error instanceof Error ? error.message : String(error) }),
@@ -436,9 +455,9 @@ export class CharacterAgent {
     let proseText = '';
     let memoryText = '';
     let requestId: GenerateRequestId = 0;
-    let cancelled = false;
+    let status: RunStatus = 'ok';
     let errorMessage: string | undefined;
-    const contextKey = this.config.id;
+    const contextKey = `${this.contextKey}:chat`;
     const promptText = promptContext.promptText;
     const outputSanitizer = new StreamingBoundaryTextSanitizer(promptContext.boundaryMarkers);
 
@@ -448,7 +467,7 @@ export class CharacterAgent {
           proseText += event.text;
           memoryText += event.text;
         } else {
-          memoryText += this.renderCanonicalActionCue(event.name, event.raw);
+          memoryText += this.renderCanonicalActionCue(event.id, event.raw);
         }
         emit(event);
       }
@@ -505,18 +524,24 @@ export class CharacterAgent {
       if (!outputSanitizer.reachedBoundary && unseenOutputSuffix.length > 0) {
         consumeOutputText(unseenOutputSuffix);
       }
-      cancelled = response.cancelled && !outputSanitizer.reachedBoundary;
+      if (response.cancelled && !outputSanitizer.reachedBoundary) {
+        status = 'aborted';
+      }
       if (response.failed && response.errorMessage) {
+        status = 'failed';
         errorMessage = response.errorMessage;
       }
     } catch (error) {
       if (outputSanitizer.reachedBoundary && !signal.aborted) {
-        cancelled = false;
+        status = 'ok';
       } else {
-        errorMessage = error instanceof Error ? error.message : String(error);
+        status = signal.aborted ? 'aborted' : 'failed';
+        if (!signal.aborted) {
+          errorMessage = error instanceof Error ? error.message : String(error);
+        }
       }
       if (signal.aborted && !outputSanitizer.reachedBoundary) {
-        cancelled = true;
+        status = 'aborted';
       }
       // Best-effort cancel in case the runtime still holds the request.
       if (requestId !== 0 && this.engine.cancelQueuedRequest && !outputSanitizer.reachedBoundary) {
@@ -534,7 +559,7 @@ export class CharacterAgent {
     const finalText = stripExactUserMessageEcho(proseText, userMessage).trim();
     const sanitizedMemoryText = stripExactUserMessageEcho(memoryText, userMessage).trim();
 
-    if (!cancelled && !errorMessage && sanitizedMemoryText.length > 0) {
+    if (status === 'ok' && !errorMessage && sanitizedMemoryText.length > 0) {
       this.pushTurnToMemory({ role: 'user', content: userMessage });
       this.pushTurnToMemory({ role: 'assistant', content: sanitizedMemoryText });
     }
@@ -542,14 +567,14 @@ export class CharacterAgent {
     const endEvent = {
       kind: 'turn-end' as const,
       finalText,
-      cancelled,
+      status,
       ...(errorMessage ? { errorMessage } : {}),
     };
     emit(endEvent);
   }
 
-  private renderCanonicalActionCue(name: string, rawCue: string): string {
-    const label = this.canonicalCueLabelsByActionName.get(name);
+  private renderCanonicalActionCue(id: string, rawCue: string): string {
+    const label = this.canonicalCueLabelsByActionId.get(id);
     return label == null ? rawCue : `[${label}]`;
   }
 
@@ -562,6 +587,7 @@ export class CharacterAgent {
     }
   }
 }
+
 
 /**
  * Small async FIFO queue. Consumers await items via `for await`; producers
@@ -576,6 +602,8 @@ class AsyncEventQueue<T> implements AsyncIterable<T> {
   private readonly pendingValues: T[] = [];
   private readonly pendingResolvers: Array<(result: IteratorResult<T>) => void> = [];
   private closed = false;
+
+  public constructor(private readonly onReturn?: () => void) {}
 
   public push(value: T): void {
     if (this.closed) {
@@ -615,6 +643,7 @@ class AsyncEventQueue<T> implements AsyncIterable<T> {
         });
       },
       return: (): Promise<IteratorResult<T>> => {
+        this.onReturn?.();
         this.close();
         return Promise.resolve({ value: undefined as never, done: true });
       },
@@ -696,13 +725,13 @@ function logChoiceQuery(args: {
   grammar?: string;
   choices?: readonly string[];
   rawText?: string;
-  choice?: string | null;
-  status?: ChoiceResult['status'];
+  selection?: string | null;
+  status?: CharacterChooseResult['status'];
   errorMessage?: string;
 }): void {
   if (!isPromptTraceEnabled()) return;
   if (args.phase === 'request') {
-    console.groupCollapsed(`[CharacterAgent.choose] -> ${args.contextKey}`);
+    console.groupCollapsed(`[CharacterRuntime.choose] -> ${args.contextKey}`);
     console.log('systemPrompt', args.systemPrompt ?? '');
     console.log('userPrompt', args.userPrompt ?? '');
     console.log('choices', args.choices ?? []);
@@ -710,9 +739,9 @@ function logChoiceQuery(args: {
     console.groupEnd();
     return;
   }
-  console.groupCollapsed(`[CharacterAgent.choose] <- ${args.contextKey}`);
+  console.groupCollapsed(`[CharacterRuntime.choose] <- ${args.contextKey}`);
   console.log('rawText', args.rawText ?? '');
-  console.log('choice', args.choice ?? null);
+  console.log('selection', args.selection ?? null);
   console.log('status', args.status ?? 'ok');
   if (args.errorMessage) {
     console.warn('error', args.errorMessage);

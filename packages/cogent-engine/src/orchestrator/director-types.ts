@@ -2,12 +2,14 @@
 //
 // director-types.ts
 //
-// - Generic types for the `cogent-engine/orchestrator` subpath.
+// - Generic types for the director harness public API.
 // - A director config defines scenario-level guidance and named tasks.
 // - Tasks declare their output shape so callers can choose fast constrained
 //   selection paths or expressive text paths without JSON model responses.
 //
 //////////////////////////////////////////////////////////////////////////////
+
+import type { RunStatus } from '../core/run-status.js';
 
 export type JsonPrimitive = string | number | boolean | null;
 
@@ -148,7 +150,7 @@ export interface DirectorSelection<TPayload = unknown> {
 }
 
 export interface DirectorRunResult<TPayload = unknown> {
-  readonly status: 'ok' | 'aborted' | 'timed_out' | 'failed' | 'invalid_response';
+  readonly status: RunStatus;
   readonly text: string;
   readonly selections: readonly DirectorSelection<TPayload>[];
   readonly rawText: string;

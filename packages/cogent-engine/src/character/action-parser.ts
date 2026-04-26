@@ -5,7 +5,7 @@
 // - Incremental parser that turns a stream of text chunks (as produced by
 //   the grammar defined in action-grammar.ts) into two kinds of events:
 //     * `{ kind: 'prose', text }` — a run of plain characters;
-//     * `{ kind: 'action', name }` — a recognised bracketed cue.
+//     * `{ kind: 'action', id }` — a recognised bracketed cue.
 //
 // - Must be tolerant of chunk boundaries splitting in the middle of a cue.
 //   Internal buffering is retained across calls to {@link consume}.
@@ -21,7 +21,7 @@ import { expandActionCues, type ActionCue, type ActionSchema } from './action-sc
 
 export interface ActionEvent {
   readonly kind: 'action';
-  readonly name: string;
+  readonly id: string;
   /** Raw cue text including the surrounding brackets — useful for logs. */
   readonly raw: string;
 }
@@ -141,7 +141,7 @@ export class StreamingActionParser {
 
       const cue = this.cueMap.get(label);
       if (cue != null) {
-        events.push({ kind: 'action', name: cue.name, raw });
+        events.push({ kind: 'action', id: cue.id, raw });
       } else {
         // Unknown cue — surface as prose so the text is not silently
         // dropped. The grammar, when enabled, prevents this from
@@ -184,5 +184,5 @@ export function parseActionCue(raw: string, cues: readonly ActionCue[]): ActionE
   if (cue == null) {
     throw new ActionParseError(`Unknown action cue: [${label}]`, raw);
   }
-  return { kind: 'action', name: cue.name, raw };
+  return { kind: 'action', id: cue.id, raw };
 }

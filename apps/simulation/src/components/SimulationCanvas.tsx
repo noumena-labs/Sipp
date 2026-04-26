@@ -2,7 +2,7 @@
 //
 // components/SimulationCanvas.tsx
 //
-// - Hosts the three.js simulation scene and binds it to the orchestrator
+// - Hosts the three.js simulation scene and binds it to the director
 //   bus. Mount once and reuse; the binding is created here and disposed
 //   when the component unmounts.
 //

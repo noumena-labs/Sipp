@@ -194,9 +194,18 @@ function collectInputSections<TPayload>(
   for (const inputName of orderedNames) {
     const value = supplied[inputName];
     if (value === undefined) {
+      if (task.inputs?.includes(inputName)) {
+        throw new Error(`director input ${JSON.stringify(inputName)} is required by this task.`);
+      }
       continue;
     }
     const slot = config.inputs?.[inputName];
+    if (config.inputs && !slot) {
+      throw new Error(`director input ${JSON.stringify(inputName)} is not defined in director.json.`);
+    }
+    if (slot) {
+      validateInputKind(inputName, slot.kind, value);
+    }
     sections.push({
       inputName,
       configuredKind: slot?.kind,
@@ -205,6 +214,33 @@ function collectInputSections<TPayload>(
   }
 
   return sections;
+}
+
+function validateInputKind(
+  inputName: string,
+  configuredKind: DirectorInputKind,
+  value: DirectorInputValue
+): void {
+  const actualKind = resolveInputKind(value, configuredKind);
+  if (actualKind !== configuredKind) {
+    throw new Error(
+      `director input ${JSON.stringify(inputName)} expected ${configuredKind}, got ${actualKind}.`
+    );
+  }
+}
+
+function resolveInputKind(
+  value: DirectorInputValue,
+  configuredKind: DirectorInputKind
+): DirectorInputKind {
+  const envelope = normalizeInputEnvelope(value);
+  if (envelope) {
+    return envelope.kind;
+  }
+  if (configuredKind === 'text' && typeof value === 'string') {
+    return 'text';
+  }
+  return 'data';
 }
 
 function renderInput(

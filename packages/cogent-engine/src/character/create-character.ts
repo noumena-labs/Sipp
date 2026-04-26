@@ -1,19 +1,19 @@
-import { ActionBus } from './action-bus.js';
-import { CharacterAgent, type CharacterAgentEngine, type CharacterAgentOptions } from './character-agent.js';
+import { CharacterEventBus } from './action-bus.js';
+import { CharacterRuntime, type CharacterRuntimeEngine, type CharacterRuntimeOptions } from './character-agent.js';
 import { parseCharacterConfig, type CharacterConfig } from './character-config.js';
 
 export interface CreateCharacterFromConfigUrlOptions {
   readonly configUrl: string;
-  readonly engine: CharacterAgentEngine;
-  readonly bus?: ActionBus;
-  readonly agentOptions?: Omit<CharacterAgentOptions, 'bus'>;
+  readonly engine: CharacterRuntimeEngine;
+  readonly bus?: CharacterEventBus;
+  readonly runtimeOptions?: Omit<CharacterRuntimeOptions, 'bus'>;
   readonly fetch?: typeof globalThis.fetch;
   readonly signal?: AbortSignal;
 }
 
 export async function createCharacterFromConfigUrl(
   options: CreateCharacterFromConfigUrlOptions
-): Promise<{ agent: CharacterAgent; config: CharacterConfig }> {
+): Promise<{ character: CharacterRuntime; config: CharacterConfig }> {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   if (typeof fetchImpl !== 'function') {
     throw new Error(
@@ -27,9 +27,26 @@ export async function createCharacterFromConfigUrl(
   }
 
   const config = parseCharacterConfig(await response.json());
-  const agent = new CharacterAgent(options.engine, config, {
-    ...options.agentOptions,
+  const character = new CharacterRuntime(options.engine, config, {
+    ...options.runtimeOptions,
     ...(options.bus ? { bus: options.bus } : {}),
   });
-  return { agent, config };
+  return { character, config };
+}
+
+export interface CreateCharacterFromConfigOptions {
+  readonly config: CharacterConfig;
+  readonly engine: CharacterRuntimeEngine;
+  readonly bus?: CharacterEventBus;
+  readonly runtimeOptions?: Omit<CharacterRuntimeOptions, 'bus'>;
+}
+
+export function createCharacterFromConfig(
+  options: CreateCharacterFromConfigOptions
+): { character: CharacterRuntime; config: CharacterConfig } {
+  const character = new CharacterRuntime(options.engine, options.config, {
+    ...options.runtimeOptions,
+    ...(options.bus ? { bus: options.bus } : {}),
+  });
+  return { character, config: options.config };
 }

@@ -13,11 +13,7 @@
       "Choose ice over direct chase when it is the cleaner and faster stop."
     ]
   },
-  "actions": {
-    "actions": [
-      { "name": "thinking" }
-    ]
-  },
+  "actions": [],
   "memory": {
     "maxTurns": 0
   }

@@ -91,7 +91,7 @@ export function BrainActivityHud(props: BrainActivityHudProps) {
               <span className="brain-chip-head">
                 <span className="brain-chip-orb" />
                 <span className="brain-chip-name">{brain.label}</span>
-                <span className="brain-chip-kind">{brain.kind === 'director' ? 'orch' : 'char'}</span>
+                <span className="brain-chip-kind">{brain.kind === 'director' ? 'dir' : 'char'}</span>
               </span>
               <span className="brain-chip-status">{formatStatus(brain.status, brain.queryType)}</span>
               <span className="brain-chip-meta">
@@ -125,8 +125,8 @@ function formatStatus(
       return `${queryLabel} live`;
     case 'completed':
       return `${queryLabel} complete`;
-    case 'cancelled':
-      return `${queryLabel} cancelled`;
+    case 'aborted':
+      return `${queryLabel} aborted`;
     case 'timed_out':
       return `${queryLabel} timed out`;
     case 'failed':

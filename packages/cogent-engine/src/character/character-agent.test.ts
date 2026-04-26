@@ -2,7 +2,7 @@
 //
 // character-agent.test.ts
 //
-// - Exercises CharacterAgent with a fake engine that captures the onToken
+// - Exercises CharacterRuntime with a fake engine that captures the onToken
 //   callback from queuePrompt options, then scripts token emission during
 //   runQueuedRequest. Covers the turn-event stream, memory accounting,
 //   cancellation, error handling, and bus mirroring.
@@ -18,10 +18,10 @@ import type {
   PromptOptions,
 } from '../core/inference-types.js';
 import type { ChatTemplateMessage } from '../core/chat-template-boundaries.js';
-import { ActionBus, type CharacterEvent } from './action-bus.js';
+import { CharacterEventBus, type CharacterEvent } from './action-bus.js';
 import {
-  CharacterAgent,
-  type CharacterAgentEngine,
+  CharacterRuntime,
+  type CharacterRuntimeEngine,
   type ChatEvent,
 } from './character-agent.js';
 import type { CharacterConfig } from './character-config.js';
@@ -30,18 +30,16 @@ function buildConfig(overrides: Partial<CharacterConfig> = {}): CharacterConfig 
   return {
     id: 'aria-01',
     persona: { name: 'Aria', summary: 'A friendly guide.' },
-    actions: {
-      actions: [
-        {
-          name: 'wave',
-          description: 'wave hello',
-        },
-        {
-          name: 'smile',
-          description: 'adjust expression',
-        },
-      ],
-    },
+    actions: [
+      {
+        id: 'wave',
+        description: 'wave hello',
+      },
+      {
+        id: 'smile',
+        description: 'adjust expression',
+      },
+    ],
     ...overrides,
   };
 }
@@ -53,7 +51,7 @@ interface ScriptedResponse {
   readonly waitBeforeTokens?: Promise<void>;
 }
 
-interface FakeEngine extends CharacterAgentEngine {
+interface FakeEngine extends CharacterRuntimeEngine {
   readonly queuePromptCalls: Array<{
     contextKey: string;
     promptText: string;
@@ -227,9 +225,9 @@ function waitForScriptRelease(
   });
 }
 
-test('CharacterAgent exposes stable systemPrompt and grammarSource', () => {
+test('CharacterRuntime exposes stable systemPrompt and grammarSource', () => {
   const engine = createFakeEngine();
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
   const prompt1 = agent.getSystemPrompt();
   const prompt2 = agent.getSystemPrompt();
   assert.equal(prompt1, prompt2);
@@ -245,7 +243,7 @@ test('chat() yields turn-start, prose, action, turn-end in order', async () => {
   engine.enqueue({
     tokens: ['Hello ', 'there. ', '[wave]', ' Bye.'],
   });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
   const events = await collectEvents(agent.chat('hi'));
 
   assert.equal(events[0].kind, 'turn-start');
@@ -256,23 +254,23 @@ test('chat() yields turn-start, prose, action, turn-end in order', async () => {
 
   const action = events.find((e) => e.kind === 'action');
   assert.ok(action && action.kind === 'action');
-  assert.equal(action.name, 'wave');
+  assert.equal(action.id, 'wave');
 
   const end = events[events.length - 1];
   assert.ok(end.kind === 'turn-end');
-  assert.equal(end.cancelled, false);
+  assert.equal(end.status, 'ok');
   assert.ok(end.finalText.includes('Hello there.'));
 });
 
 test('chat() threads grammar and maxOutputTokens into queuePrompt options', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['ok'] });
-  const agent = new CharacterAgent(engine, buildConfig(), { maxOutputTokens: 42 });
+  const agent = new CharacterRuntime(engine, buildConfig(), { maxOutputTokens: 42 });
   await collectEvents(agent.chat('hi'));
 
   assert.equal(engine.queuePromptCalls.length, 1);
   const call = engine.queuePromptCalls[0];
-  assert.equal(call.contextKey, 'aria-01');
+  assert.equal(call.contextKey, 'character:aria-01:chat');
   assert.ok(typeof call.options === 'object' && call.options != null);
   const opts = call.options as PromptOptions;
   assert.equal(opts.nTokens, 42);
@@ -285,21 +283,21 @@ test('chat() reuses a stable contextKey for each turn', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['first reply'] });
   engine.enqueue({ tokens: ['second reply'] });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
 
   await collectEvents(agent.chat('first'));
   await collectEvents(agent.chat('second'));
 
   assert.equal(engine.queuePromptCalls.length, 2);
-  assert.equal(engine.queuePromptCalls[0].contextKey, 'aria-01');
-  assert.equal(engine.queuePromptCalls[1].contextKey, 'aria-01');
+  assert.equal(engine.queuePromptCalls[0].contextKey, 'character:aria-01:chat');
+  assert.equal(engine.queuePromptCalls[1].contextKey, 'character:aria-01:chat');
 });
 
 test('chat() probes chat template boundaries once per agent and reuses them across turns', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['first reply'] });
   engine.enqueue({ tokens: ['second reply'] });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
 
   await collectEvents(agent.chat('first'));
   await collectEvents(agent.chat('second'));
@@ -311,7 +309,7 @@ test('chat() probes chat template boundaries once per agent and reuses them acro
 test('successful turns commit user+assistant pairs to memory', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['hi there'] });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
   await collectEvents(agent.chat('hello'));
 
   const memory = agent.getMemory();
@@ -327,7 +325,7 @@ test('assistant memory preserves cues when actions are interleaved', async () =>
   engine.enqueue({
     tokens: ['Hello ', '[wave]', ' there.'],
   });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
 
   const events = await collectEvents(agent.chat('hello'));
   const end = events[events.length - 1];
@@ -343,7 +341,7 @@ test('assistant memory preserves cues when actions are interleaved', async () =>
 test('assistant memory keeps multiple cues inline for later turns', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['[smile] Hello ', '[wave]', ' again.'] });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
 
   await collectEvents(agent.chat('hello'));
 
@@ -356,7 +354,7 @@ test('chat() stops before leaked next-turn chat template markers', async () => {
   engine.enqueue({
     tokens: ['Hello there.', '</assistant>\n<user>\nignored'],
   });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
 
   const events = await collectEvents(agent.chat('hello'));
   const end = events[events.length - 1];
@@ -373,7 +371,7 @@ test('chat() trims partial boundary prefixes that arrive at end of stream', asyn
   engine.enqueue({
     tokens: ['Hello there.', '</assist'],
   });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
 
   const events = await collectEvents(agent.chat('hello'));
   const end = events[events.length - 1];
@@ -387,7 +385,7 @@ test('chat() trims partial boundary prefixes that arrive at end of stream', asyn
 test('errored turns do not commit to memory and surface errorMessage', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: [], throwOnRun: new Error('boom') });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
   const events = await collectEvents(agent.chat('hello'));
   const end = events[events.length - 1];
   assert.ok(end.kind === 'turn-end');
@@ -396,7 +394,7 @@ test('errored turns do not commit to memory and surface errorMessage', async () 
   assert.equal(engine.cancelCalls.length, 1);
 });
 
-test('cancelled turns do not commit to memory', async () => {
+test('aborted turns do not commit to memory', async () => {
   const engine = createFakeEngine();
   const controller = new AbortController();
   controller.abort();
@@ -404,23 +402,23 @@ test('cancelled turns do not commit to memory', async () => {
     tokens: [],
     response: { completed: false, cancelled: true, outputText: '' },
   });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
   const events = await collectEvents(agent.chat('hi', { signal: controller.signal }));
   const end = events[events.length - 1];
   assert.ok(end.kind === 'turn-end');
-  assert.equal(end.cancelled, true);
+  assert.equal(end.status, 'aborted');
   assert.equal(agent.getMemory().length, 0);
 });
 
 test('bus emits mirror the async iterator events', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['hey'] });
-  const bus = new ActionBus();
+  const bus = new CharacterEventBus();
   const busEvents: CharacterEvent[] = [];
   bus.onAny((event) => {
     busEvents.push(event);
   });
-  const agent = new CharacterAgent(engine, buildConfig(), { bus });
+  const agent = new CharacterRuntime(engine, buildConfig(), { bus });
   const iterEvents = await collectEvents(agent.chat('yo'));
   assert.equal(busEvents.length, iterEvents.length);
   for (let i = 0; i < busEvents.length; i += 1) {
@@ -432,7 +430,7 @@ test('maxTurns: 0 disables memory retention', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['one'] });
   engine.enqueue({ tokens: ['two'] });
-  const agent = new CharacterAgent(engine, buildConfig({ memory: { maxTurns: 0 } }));
+  const agent = new CharacterRuntime(engine, buildConfig({ memory: { maxTurns: 0 } }));
   await collectEvents(agent.chat('a'));
   await collectEvents(agent.chat('b'));
   assert.equal(agent.getMemory().length, 0);
@@ -443,7 +441,7 @@ test('memory sliding window drops oldest pairs past maxTurns', async () => {
   engine.enqueue({ tokens: ['r1'] });
   engine.enqueue({ tokens: ['r2'] });
   engine.enqueue({ tokens: ['r3'] });
-  const agent = new CharacterAgent(engine, buildConfig({ memory: { maxTurns: 2 } }));
+  const agent = new CharacterRuntime(engine, buildConfig({ memory: { maxTurns: 2 } }));
   await collectEvents(agent.chat('m1'));
   await collectEvents(agent.chat('m2'));
   await collectEvents(agent.chat('m3'));
@@ -459,7 +457,7 @@ test('memory sliding window drops oldest pairs past maxTurns', async () => {
 test('clearMemory empties the sliding window', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['hi'] });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
   await collectEvents(agent.chat('hello'));
   assert.equal(agent.getMemory().length, 2);
   agent.clearMemory();
@@ -469,13 +467,13 @@ test('clearMemory empties the sliding window', async () => {
 test('choose() threads literal-choice grammar into queuePrompt options', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['wait'] });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
 
   const result = await agent.choose('What should you do?', {
     choices: ['wait', 'wander', 'approach:aria'],
   });
 
-  assert.equal(result.choice, 'wait');
+  assert.equal(result.selection, 'wait');
   assert.equal(result.status, 'ok');
   assert.equal(engine.queuePromptCalls.length, 1);
   const call = engine.queuePromptCalls[0];
@@ -491,7 +489,7 @@ test('choose() is stateless and does not write memory', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['chat reply'] });
   engine.enqueue({ tokens: ['wander'] });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
 
   await collectEvents(agent.chat('hello'));
   assert.equal(agent.getMemory().length, 2);
@@ -500,7 +498,7 @@ test('choose() is stateless and does not write memory', async () => {
     choices: ['wait', 'wander'],
   });
 
-  assert.equal(result.choice, 'wander');
+  assert.equal(result.selection, 'wander');
   assert.equal(agent.getMemory().length, 2);
   const rendered = engine.queuePromptCalls[1]!.promptText;
   assert.doesNotMatch(rendered, /chat reply/);
@@ -510,55 +508,55 @@ test('choose() is stateless and does not write memory', async () => {
 test('choose() returns null on invalid model output', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['something else entirely'] });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
 
   const result = await agent.choose('Pick one.', {
     choices: ['yes', 'no'],
   });
 
-  assert.equal(result.choice, null);
+  assert.equal(result.selection, null);
   assert.equal(result.status, 'invalid_response');
 });
 
 test('choose() surfaces engine failure', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: [], throwOnRun: new Error('boom') });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
 
   const result = await agent.choose('Pick one.', {
     choices: ['yes', 'no'],
   });
 
-  assert.equal(result.choice, null);
+  assert.equal(result.selection, null);
   assert.equal(result.status, 'failed');
   assert.equal(result.errorMessage, 'boom');
   assert.equal(engine.cancelCalls.length, 1);
 });
 
-test('choose() returns cancelled when aborted', async () => {
+test('choose() returns aborted when aborted', async () => {
   const engine = createFakeEngine();
   const controller = new AbortController();
   controller.abort();
   engine.enqueue({ tokens: [], response: { completed: false, cancelled: true, outputText: '' } });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
 
   const result = await agent.choose('Pick one.', {
     choices: ['yes', 'no'],
     signal: controller.signal,
   });
 
-  assert.equal(result.choice, null);
+  assert.equal(result.selection, null);
   assert.equal(result.status, 'aborted');
 });
 
-test('choose() returns cancelled on timeout and cancels the queued request', async () => {
+test('choose() returns timed_out on timeout and cancels the queued request', async () => {
   const engine = createFakeEngine();
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
   engine.enqueue({ tokens: ['yes'], waitBeforeTokens: gate });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
 
   const result = await agent.choose('Pick one.', {
     choices: ['yes', 'no'],
@@ -566,7 +564,7 @@ test('choose() returns cancelled on timeout and cancels the queued request', asy
   });
   release();
 
-  assert.equal(result.choice, null);
+  assert.equal(result.selection, null);
   assert.equal(result.status, 'timed_out');
   assert.equal(result.errorMessage, 'Choice timed out.');
   assert.deepEqual(engine.cancelCalls, [1]);
@@ -580,7 +578,7 @@ test('overlapping chat() auto-cancels the prior turn and commits only the replac
   });
   engine.enqueue({ tokens: ['first reply'], waitBeforeTokens: firstGate });
   engine.enqueue({ tokens: ['second reply'] });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
 
   const firstEventsPromise = collectEvents(agent.chat('first'));
   await engine.waitForRunCount(1);
@@ -594,11 +592,11 @@ test('overlapping chat() auto-cancels the prior turn and commits only the replac
 
   const firstEnd = firstEvents[firstEvents.length - 1];
   assert.ok(firstEnd.kind === 'turn-end');
-  assert.equal(firstEnd.cancelled, true);
+  assert.equal(firstEnd.status, 'aborted');
 
   const secondEnd = secondEvents[secondEvents.length - 1];
   assert.ok(secondEnd.kind === 'turn-end');
-  assert.equal(secondEnd.cancelled, false);
+  assert.equal(secondEnd.status, 'ok');
   assert.equal(secondEnd.finalText, 'second reply');
 
   const memory = agent.getMemory();
@@ -610,7 +608,7 @@ test('overlapping chat() auto-cancels the prior turn and commits only the replac
 test('chat() passes a rendered raw prompt to queuePrompt', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['hi'] });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
   await collectEvents(agent.chat('hello'));
 
   const call = engine.queuePromptCalls[0];
@@ -630,7 +628,7 @@ test('chat() includes prior turn history in the rendered prompt', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['first reply'] });
   engine.enqueue({ tokens: ['second reply'] });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
   await collectEvents(agent.chat('first question'));
   await collectEvents(agent.chat('second question'));
 
@@ -648,7 +646,7 @@ test('chat() includes prior turn history in the rendered prompt', async () => {
 test('chat() keeps the user message literal in the rendered prompt', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['[wave] Hi!'] });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
 
   await collectEvents(agent.chat('hi there'));
 
@@ -660,7 +658,7 @@ test('chat() keeps the user message literal in the rendered prompt', async () =>
 test('chat() injects persona dialog examples as few-shot chat turns', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['[wave] hi'] });
-  const agent = new CharacterAgent(
+  const agent = new CharacterRuntime(
     engine,
       buildConfig({
         persona: {
@@ -671,12 +669,10 @@ test('chat() injects persona dialog examples as few-shot chat turns', async () =
             { user: 'are you okay?', assistant: '[settle] I am here with you.' },
         ],
       },
-      actions: {
-        actions: [
-          { name: 'wave', description: 'wave hello' },
-          { name: 'settle', description: 'adjust expression' },
-        ],
-      },
+      actions: [
+        { id: 'wave', description: 'wave hello' },
+        { id: 'settle', description: 'adjust expression' },
+      ],
     })
   );
 
@@ -695,7 +691,7 @@ test('chat() injects persona dialog examples as few-shot chat turns', async () =
 test('chat() does not inject anchorExamples as few-shot chat turns', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['[wave] hi'] });
-  const agent = new CharacterAgent(
+  const agent = new CharacterRuntime(
     engine,
     buildConfig({
       persona: {
@@ -707,12 +703,10 @@ test('chat() does not inject anchorExamples as few-shot chat turns', async () =>
         ],
         dialogExamples: [{ user: 'hello', assistant: '[wave] Hello there.' }],
       },
-      actions: {
-        actions: [
-          { name: 'wave', description: 'wave hello' },
-          { name: 'settle', description: 'adjust expression' },
-        ],
-      },
+      actions: [
+        { id: 'wave', description: 'wave hello' },
+        { id: 'settle', description: 'adjust expression' },
+      ],
     })
   );
 
@@ -728,7 +722,7 @@ test('chat() does not inject anchorExamples as few-shot chat turns', async () =>
 test('chat() preserves non-exact user-prefix text in assistant output', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['hello there, friend'] });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
 
   const events = await collectEvents(agent.chat('hello'));
   const end = events[events.length - 1];
@@ -742,7 +736,7 @@ test('chat() preserves non-exact user-prefix text in assistant output', async ()
 test('chat() strips only an exact leading user-message echo before storing assistant output', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ["Tell me what's your name?\n\nI'm Aria."] });
-  const agent = new CharacterAgent(engine, buildConfig());
+  const agent = new CharacterRuntime(engine, buildConfig());
 
   const events = await collectEvents(agent.chat("Tell me what's your name?"));
   const end = events[events.length - 1];

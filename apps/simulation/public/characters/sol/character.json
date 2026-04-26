@@ -13,11 +13,7 @@
       "Whimsical angles are fine only when they still pressure the carrier or open a faster line to the banana."
     ]
   },
-  "actions": {
-    "actions": [
-      { "name": "dreamy" }
-    ]
-  },
+  "actions": [],
   "memory": {
     "maxTurns": 0
   }

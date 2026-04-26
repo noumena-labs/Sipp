@@ -34,7 +34,7 @@ export async function validateAvatarRenderAssets(
   config: CharacterConfig,
   renderAssets: AvatarRenderAssets
 ): Promise<void> {
-  const actionNames = config.actions.actions.map((action) => action.name);
+  const actionNames = config.actions.map((action) => action.id);
   const unsupportedActions = getUnsupportedAvatarActions(actionNames);
   if (unsupportedActions.length > 0) {
     throw new Error(`Unsupported avatar actions: ${unsupportedActions.join(', ')}`);

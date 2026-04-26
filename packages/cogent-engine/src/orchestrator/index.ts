@@ -1,8 +1,8 @@
 //////////////////////////////////////////////////////////////////////////////
 //
-// orchestrator/index.ts
+// director/index.ts
 //
-// - Barrel export for the `cogent-engine/orchestrator` subpath.
+// - Barrel export for the director harness public API.
 //
 //////////////////////////////////////////////////////////////////////////////
 
@@ -42,13 +42,12 @@ export { DirectorConfigError, parseDirectorConfig } from './director-config.js';
 
 export { DirectorOutputError } from './director-output.js';
 
-export {
-  renderDirectorSystemPrompt,
-  renderDirectorUserMessage,
-} from './director-prompt.js';
-
 export type { DirectorRuntimeEngine } from './director-runtime.js';
 export { DirectorRuntime } from './director-runtime.js';
 
-export type { CreateDirectorFromConfigUrlOptions } from './create-director-from-config.js';
-export { createDirectorFromConfigUrl } from './create-director-from-config.js';
+export type {
+  CreateDirectorFromConfigOptions,
+  CreateDirectorFromConfigUrlOptions,
+} from './create-director-from-config.js';
+export { createDirectorFromConfig, createDirectorFromConfigUrl } from './create-director-from-config.js';
+export type { RunStatus } from '../core/run-status.js';

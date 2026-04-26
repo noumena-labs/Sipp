@@ -27,7 +27,7 @@ export function BrainTraceDrawer(props: BrainTraceDrawerProps) {
                 <span className="panel-eyebrow">Latest Snapshot</span>
                 <h2>{brain.label}</h2>
                 <div className="brain-drawer-subhead">
-                  {brain.kind === 'director' ? 'Orchestrator harness' : 'Character harness'}
+                  {brain.kind === 'director' ? 'Director harness' : 'Character harness'}
                 </div>
               </div>
               <button type="button" className="brain-drawer-close" onClick={props.onClose}>

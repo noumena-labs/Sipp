@@ -54,23 +54,21 @@
       }
     ]
   },
-  "actions": {
-    "actions": [
-      { "name": "wave", "description": "Wave a greeting with one hand.", "usageHint": "warm greeting or goodbye" },
-      { "name": "nod", "description": "Nod affirmatively.", "usageHint": "agreeing or acknowledging" },
-      { "name": "shake_head", "description": "Shake the head side to side.", "usageHint": "gently disagreeing or saying no" },
-      { "name": "smile", "description": "Smile warmly.", "usageHint": "warmth or cheerful engagement" },
-      { "name": "look_sad", "description": "Show a sad expression.", "usageHint": "sympathy or subdued" },
-      { "name": "gasp", "description": "Show surprise.", "usageHint": "surprise or delight" },
-      { "name": "look_angry", "description": "Show frustration or intensity.", "usageHint": "frustration or intensity" },
-      { "name": "settle", "description": "Return to a neutral expression.", "usageHint": "calm or resetting" },
-      { "name": "look_at_you", "description": "Briefly turn attention toward the user.", "usageHint": "shifting attention to user" },
-      { "name": "glance_left", "description": "Briefly glance to the left.", "usageHint": "hesitation or sidelong doubt" },
-      { "name": "glance_right", "description": "Briefly glance to the right.", "usageHint": "curiosity or checking a thought" },
-      { "name": "look_up", "description": "Briefly look upward.", "usageHint": "thinking or remembering" },
-      { "name": "look_down", "description": "Briefly look downward.", "usageHint": "softer or reflective moment" }
-    ]
-  },
+  "actions": [
+    { "id": "wave", "description": "Wave a greeting with one hand.", "usageHint": "warm greeting or goodbye" },
+    { "id": "nod", "description": "Nod affirmatively.", "usageHint": "agreeing or acknowledging" },
+    { "id": "shake_head", "description": "Shake the head side to side.", "usageHint": "gently disagreeing or saying no" },
+    { "id": "smile", "description": "Smile warmly.", "usageHint": "warmth or cheerful engagement" },
+    { "id": "look_sad", "description": "Show a sad expression.", "usageHint": "sympathy or subdued" },
+    { "id": "gasp", "description": "Show surprise.", "usageHint": "surprise or delight" },
+    { "id": "look_angry", "description": "Show frustration or intensity.", "usageHint": "frustration or intensity" },
+    { "id": "settle", "description": "Return to a neutral expression.", "usageHint": "calm or resetting" },
+    { "id": "look_at_you", "description": "Briefly turn attention toward the user.", "usageHint": "shifting attention to user" },
+    { "id": "glance_left", "description": "Briefly glance to the left.", "usageHint": "hesitation or sidelong doubt" },
+    { "id": "glance_right", "description": "Briefly glance to the right.", "usageHint": "curiosity or checking a thought" },
+    { "id": "look_up", "description": "Briefly look upward.", "usageHint": "thinking or remembering" },
+    { "id": "look_down", "description": "Briefly look downward.", "usageHint": "softer or reflective moment" }
+  ],
   "memory": {
     "maxTurns": 8
   }

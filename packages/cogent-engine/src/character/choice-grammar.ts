@@ -3,7 +3,7 @@
 // choice-grammar.ts
 //
 // - Tiny helper for strict literal choice queries.
-// - Used by `CharacterAgent.choose()` to constrain the model to emit exactly
+// - Used by `CharacterRuntime.choose()` to constrain the model to emit exactly
 //   one of the provided choices and nothing else.
 //
 //////////////////////////////////////////////////////////////////////////////

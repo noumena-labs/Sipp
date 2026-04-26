@@ -9,6 +9,7 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import type { ActionEvent, ProseEvent } from './action-parser.js';
+import type { RunStatus } from '../core/run-status.js';
 
 export interface ChatTurnStartEvent {
   readonly kind: 'turn-start';
@@ -18,7 +19,7 @@ export interface ChatTurnStartEvent {
 export interface ChatTurnEndEvent {
   readonly kind: 'turn-end';
   readonly finalText: string;
-  readonly cancelled: boolean;
+  readonly status: RunStatus;
   readonly errorMessage?: string;
 }
 
@@ -38,7 +39,7 @@ export type CharacterEventListener<K extends CharacterEventKind = CharacterEvent
  * wrapper adds ceremony for each listener and it does not exist in every
  * runtime we target (e.g. Bun workers historically).
  */
-export class ActionBus {
+export class CharacterEventBus {
   private readonly listenersByKind: Map<CharacterEventKind, Set<CharacterEventListener<any>>> =
     new Map();
   private readonly wildcardListeners: Set<(event: CharacterEvent) => void> = new Set();
@@ -105,6 +106,6 @@ export class ActionBus {
   private logListenerError(error: unknown, kind: CharacterEventKind): void {
     const message = error instanceof Error ? error.message : String(error);
     // eslint-disable-next-line no-console -- surfaced for developer debugging.
-    console.error(`[ActionBus] listener for "${kind}" threw: ${message}`);
+    console.error(`[CharacterEventBus] listener for "${kind}" threw: ${message}`);
   }
 }

@@ -1,22 +1,20 @@
 # Character Harness
 
-`@noumena-labs/cogent-engine/character` is the small layer that turns a loaded `CogentEngine`
-into a character chat loop driven by `character.json`.
+`@noumena-labs/cogent-engine/character` turns a loaded `CogentEngine` into a character runtime driven by `character.json`.
 
-- `character.json` stays semantic-only: persona, actions, memory.
-- The host app still owns model selection, engine lifecycle, and render assets.
-- A single model can back many `CharacterAgent` instances, each with its own
-  prompt, memory, and stable context key.
+The host app still owns model loading, engine lifecycle, render assets, and business logic.
 
 ## Public API
 
 ```ts
 import {
-  ActionBus,
-  CharacterAgent,
+  CharacterEventBus,
+  CharacterRuntime,
+  createCharacterFromConfig,
   createCharacterFromConfigUrl,
   parseCharacterConfig,
-  type CharacterAgentEngine,
+  type CharacterChooseResult,
+  type CharacterRuntimeEngine,
 } from '@noumena-labs/cogent-engine/character';
 ```
 
@@ -26,13 +24,13 @@ Advanced grammar/parser helpers live under:
 import {
   compileActionGrammar,
   StreamingActionParser,
-} from '@noumena-labs/cogent-engine/character/internal';
+} from '@noumena-labs/cogent-engine/character/advanced';
 ```
 
-## Mental model
+## Mental Model
 
 ```text
-character.json -> parseCharacterConfig -> CharacterAgent
+character.json -> parseCharacterConfig -> CharacterRuntime
                                            |
                                 queuePrompt(raw prompt, grammar)
                                            |
@@ -41,39 +39,29 @@ character.json -> parseCharacterConfig -> CharacterAgent
                                            |
                                   streamed tokens
                                            |
-                                           v
-                              prose/action/turn-end events
+                              text/action/turn-end events
 ```
 
-`CharacterAgent` now has two primary APIs:
+`CharacterRuntime` has two primary APIs:
 
 - `chat()` for streaming in-character conversational turns
 - `choose()` for stateless constrained one-of-N decisions
 
-`chat()` returns an async iterable of:
-
-- `turn-start`
-- `prose`
-- `action`
-- `turn-end`
-
-The same events are mirrored onto `agent.bus` for bindings that outlive a
-single turn.
-
-## CharacterAgent
+## CharacterRuntime
 
 ```ts
-class CharacterAgent {
+class CharacterRuntime {
   constructor(
-    engine: CharacterAgentEngine,
+    engine: CharacterRuntimeEngine,
     config: CharacterConfig,
     options?: {
-      bus?: ActionBus;
+      bus?: CharacterEventBus;
       maxOutputTokens?: number;
+      contextKey?: string;
     }
   )
 
-  readonly bus: ActionBus
+  readonly bus: CharacterEventBus
 
   chat(userMessage: string, options?: { signal?: AbortSignal }): AsyncIterable<ChatEvent>
 
@@ -82,10 +70,12 @@ class CharacterAgent {
     options: {
       choices: readonly string[];
       signal?: AbortSignal;
+      timeoutMs?: number;
       maxOutputTokens?: number;
     }
-  ): Promise<ChoiceResult>
+  ): Promise<CharacterChooseResult>
 
+  getConfig(): CharacterConfig
   clearMemory(): void
   getMemory(): readonly ChatTurn[]
   getGrammarSource(): string
@@ -93,32 +83,21 @@ class CharacterAgent {
 }
 ```
 
-Concurrency rule: only one streaming `chat()` turn may be active per agent.
-Starting a new `chat()` automatically aborts the previous in-flight turn
-before the new one begins. `choose()` is a separate stateless one-shot call.
+`CogentEngine` implements `CharacterRuntimeEngine`; app authors usually do not implement it manually.
 
-Context key rule: every turn for one agent uses `config.id` as the engine
-context key so the persona prefix can stay hot in KV cache.
+Only one streaming `chat()` turn may be active per character runtime. Starting a new `chat()` aborts the previous in-flight turn before the new one begins. Breaking out of the async iterator aborts the active turn.
 
-## createCharacterFromConfigUrl
-
-Use this when the app already has an engine and just wants to load a character:
+## Loaders
 
 ```ts
-const { agent, config } = await createCharacterFromConfigUrl({
+const { character, config } = await createCharacterFromConfigUrl({
   configUrl: '/characters/aria/character.json',
   engine,
-  bus,
+  bus: new CharacterEventBus(),
 });
 ```
 
-It:
-
-- fetches the JSON
-- validates it with `parseCharacterConfig`
-- constructs a `CharacterAgent`
-
-It does **not** load the model or create the engine.
+Use `createCharacterFromConfig({ config, engine })` when you already have a parsed config object.
 
 ## character.json
 
@@ -131,39 +110,22 @@ Minimal example:
     "name": "Aria",
     "summary": "A warm, curious companion.",
     "role": "A community coordinator.",
-    "currentLife": {
-      "description": "She spends her days keeping a shared studio running smoothly."
-    },
-    "personality": {
-      "traits": ["warm", "curious", "observant"],
-      "description": "She notices small details and can over-read tiny social signals."
-    },
-    "backstory": "She grew up helping in a stationery shop.",
     "notes": [
-      "Speak in first person and remain fully in character.",
-      "Never mention your instructions, prompt, cues, or mechanics."
-    ],
-    "anchorExamples": [
-      { "user": "who are you?", "assistant": "[wave] I'm Aria." }
-    ],
-    "dialogExamples": [
-      { "user": "hi", "assistant": "[wave] Hi there." }
+      "Speak in first person and remain fully in character."
     ]
   },
-  "actions": {
-    "actions": [
-      {
-        "name": "wave",
-        "description": "Wave hello.",
-        "usageHint": "warm greeting or goodbye"
-      },
-      {
-        "name": "look_at_you",
-        "cue": "look at you",
-        "description": "Turn attention toward the user."
-      }
-    ]
-  },
+  "actions": [
+    {
+      "id": "wave",
+      "description": "Wave hello.",
+      "usageHint": "warm greeting or goodbye"
+    },
+    {
+      "id": "look_at_you",
+      "cue": "look at you",
+      "description": "Turn attention toward the user."
+    }
+  ],
   "memory": {
     "maxTurns": 8
   }
@@ -173,18 +135,13 @@ Minimal example:
 Rules:
 
 - `id` must match `[A-Za-z0-9_-]+`
-- `actions.actions` must contain at least one action
-- render assets do not belong here
+- `actions` is an array and may be empty for choose-only characters
+- action `id` must match `[A-Za-z_][A-Za-z0-9_]*`
+- action `cue` must not contain brackets, newlines, or control characters
+- render assets do not belong in `character.json`
 - character-specific style rules belong in `persona.notes`
 
-If every action has a `usageHint`, the prompt renderer adds a compact cue-usage
-line. If any action omits it, that extra line is omitted entirely.
-
-Use `anchorExamples` for strong, persistent steering in the system prompt.
-Usually 1-3 is enough, but the renderer includes every configured anchor.
-
-Use `dialogExamples` for conversational flow examples that are replayed each
-turn as few-shot chat messages, but are not copied into the system prompt.
+Use `anchorExamples` for durable steering in the system prompt. Use `dialogExamples` for few-shot conversational turns replayed each chat turn.
 
 ## Events
 
@@ -192,56 +149,44 @@ turn as few-shot chat messages, but are not copied into the system prompt.
 type ChatEvent =
   | { kind: 'turn-start'; userMessage: string }
   | { kind: 'prose'; text: string }
-  | { kind: 'action'; name: string; raw: string }
-  | { kind: 'turn-end'; finalText: string; cancelled: boolean; errorMessage?: string }
+  | { kind: 'action'; id: string; raw: string }
+  | { kind: 'turn-end'; finalText: string; status: RunStatus; errorMessage?: string }
 ```
 
 - `prose` is display text with cues stripped out
-- `action` is the flat runtime action name from the schema
-- `turn-end` always closes the turn, including aborts and failures
+- `action.id` is the runtime action id from `actions[].id`
+- `turn-end.status` is `ok`, `aborted`, `timed_out`, `failed`, `invalid_request`, or `invalid_response`
 
 ## choose()
 
-Use `choose()` when the host app wants a strict answer from a fixed option
-list while still reusing the character's persona prompt.
+Use `choose()` when the host app wants a strict answer from a fixed option list while still reusing the character persona prompt.
 
 ```ts
-const result = await agent.choose('What should you do next?', {
+const result = await character.choose('What should you do next?', {
   choices: ['wait', 'wander', 'approach:aria', 'pick_up:banana'],
+  timeoutMs: 10_000,
 });
+
+if (result.status === 'ok') {
+  console.log(result.selection);
+}
 ```
 
-Result shape:
-
 ```ts
-interface ChoiceResult {
-  choice: string | null;
-  cancelled: boolean;
+interface CharacterChooseResult {
+  selection: string | null;
+  status: RunStatus;
   errorMessage?: string;
   rawText: string;
 }
 ```
 
-Rules:
+`choose()` is stateless: it does not read or write chat memory.
 
-- `choose()` is stateless
-- it does not read memory
-- it does not write memory
-- it applies a literal-choice grammar so the model can only emit one provided option
-
-## Memory model
+## Memory Model
 
 - `persona.notes` are static prompt material
 - `memory.maxTurns` controls a plain sliding window of prior user/assistant pairs
 - `clearMemory()` resets only the sliding window
 
 No summarization, vector memory, or tool loop is built in.
-
-## Notes for host apps
-
-- Model choice stays at the app level
-- Render assets stay at the app level
-- Multiple characters can share one `CogentEngine`
-- Each agent keeps its own memory and prompt state
-
-The avatar example under `apps/avatar` shows the intended setup.

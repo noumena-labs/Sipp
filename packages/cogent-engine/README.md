@@ -49,7 +49,7 @@ Public entrypoints:
 
 - `@noumena-labs/cogent-engine`
 - `@noumena-labs/cogent-engine/character`
-- `@noumena-labs/cogent-engine/orchestrator`
+- `@noumena-labs/cogent-engine/director`
 
 If Emscripten is installed but not active in your shell, activate it first (example):
 
@@ -340,7 +340,7 @@ Scoped subpath imports:
 
 ```ts
 import { createCharacterFromConfigUrl } from '@noumena-labs/cogent-engine/character';
-import { createDirectorFromConfigUrl } from '@noumena-labs/cogent-engine/orchestrator';
+import { createDirectorFromConfigUrl } from '@noumena-labs/cogent-engine/director';
 ```
 
 `getBundledRuntimeUrls()` is the clean default when you want to use the runtime assets packaged

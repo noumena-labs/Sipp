@@ -994,7 +994,7 @@ html, body, #app {
   color: #ffcfbe;
 }
 
-.brain-status-cancelled .brain-chip-status {
+.brain-status-aborted .brain-chip-status {
   color: #ffe6a8;
 }
 

@@ -5,8 +5,8 @@ import type {
   RequestObservabilityMetrics,
 } from '@noumena-labs/cogent-engine';
 import type { CogentEngine } from '@noumena-labs/cogent-engine';
-import type { CharacterAgentEngine } from '@noumena-labs/cogent-engine/character';
-import type { DirectorRuntimeEngine } from '@noumena-labs/cogent-engine/orchestrator';
+import type { CharacterRuntimeEngine } from '@noumena-labs/cogent-engine/character';
+import type { DirectorRuntimeEngine } from '@noumena-labs/cogent-engine/director';
 import type { BrainDefinition, BrainQueryType, BrainQueryStatus, BrainActivityStore } from './brain-activity-store.js';
 
 interface TracedChatMessage {
@@ -23,12 +23,12 @@ export function createTracedBrainEngine(
   engine: CogentEngine,
   store: BrainActivityStore,
   brain: BrainDefinition
-): CharacterAgentEngine & DirectorRuntimeEngine {
+): CharacterRuntimeEngine & DirectorRuntimeEngine {
   return new TracedBrainEngine(engine, store, brain);
 }
 
-class TracedBrainEngine implements CharacterAgentEngine, DirectorRuntimeEngine {
-  private lastAppliedTemplate: AppliedTemplateSnapshot | null = null;
+class TracedBrainEngine implements CharacterRuntimeEngine, DirectorRuntimeEngine {
+  private readonly appliedTemplatesByPrompt = new Map<string, AppliedTemplateSnapshot[]>();
 
   public constructor(
     private readonly engine: CogentEngine,
@@ -41,8 +41,7 @@ class TracedBrainEngine implements CharacterAgentEngine, DirectorRuntimeEngine {
     promptText: string,
     options: number | PromptOptions = 128
   ): Promise<GenerateRequestId> {
-    const template = this.lastAppliedTemplate?.promptText === promptText ? this.lastAppliedTemplate : null;
-    this.lastAppliedTemplate = null;
+    const template = this.takeAppliedTemplate(promptText);
 
     const prompts = extractPromptSections(template?.messages ?? []);
     const directorTaskName = this.brain.kind === 'director' ? parseDirectorTaskName(contextKey) : null;
@@ -129,8 +128,25 @@ class TracedBrainEngine implements CharacterAgentEngine, DirectorRuntimeEngine {
     addAssistant: boolean
   ): Promise<string> {
     const promptText = await this.engine.applyChatTemplate(messages, addAssistant);
-    this.lastAppliedTemplate = addAssistant ? { promptText, messages } : null;
+    if (addAssistant) {
+      this.rememberAppliedTemplate({ promptText, messages });
+    }
     return promptText;
+  }
+
+  private rememberAppliedTemplate(snapshot: AppliedTemplateSnapshot): void {
+    const entries = this.appliedTemplatesByPrompt.get(snapshot.promptText) ?? [];
+    entries.push(snapshot);
+    this.appliedTemplatesByPrompt.set(snapshot.promptText, entries);
+  }
+
+  private takeAppliedTemplate(promptText: string): AppliedTemplateSnapshot | null {
+    const entries = this.appliedTemplatesByPrompt.get(promptText);
+    const snapshot = entries?.shift() ?? null;
+    if (entries && entries.length === 0) {
+      this.appliedTemplatesByPrompt.delete(promptText);
+    }
+    return snapshot;
   }
 }
 
@@ -195,7 +211,7 @@ function isAbortError(error: unknown): boolean {
 
 function classifyResponseStatus(response: GenerateResponse): Exclude<BrainQueryStatus, 'idle' | 'running'> {
   if (response.cancelled) {
-    return response.errorMessage?.toLowerCase().includes('timed out') ? 'timed_out' : 'cancelled';
+    return response.errorMessage?.toLowerCase().includes('timed out') ? 'timed_out' : 'aborted';
   }
   if (response.failed) {
     return response.errorMessage?.toLowerCase().includes('timed out') ? 'timed_out' : 'failed';
@@ -207,7 +223,7 @@ function classifyErrorStatus(error: unknown): Exclude<BrainQueryStatus, 'idle' |
   if (!isAbortError(error)) {
     return asErrorMessage(error).toLowerCase().includes('timed out') ? 'timed_out' : 'failed';
   }
-  return asErrorMessage(error).toLowerCase().includes('timed out') ? 'timed_out' : 'cancelled';
+  return asErrorMessage(error).toLowerCase().includes('timed out') ? 'timed_out' : 'aborted';
 }
 
 function getObservability(response: GenerateResponse): RequestObservabilityMetrics | null {

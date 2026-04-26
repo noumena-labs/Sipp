@@ -13,11 +13,7 @@
       "Favor the move that gets you the banana fastest."
     ]
   },
-  "actions": {
-    "actions": [
-      { "name": "hungry" }
-    ]
-  },
+  "actions": [],
   "memory": {
     "maxTurns": 0
   }

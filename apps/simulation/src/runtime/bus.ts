@@ -40,7 +40,7 @@ export interface AgentQueryEndEvent {
   readonly intent: AgentIntent | null;
   readonly status: string;
   readonly emotion: string | null;
-  readonly queryStatus: 'ok' | 'aborted' | 'timed_out' | 'failed' | 'invalid_response';
+  readonly queryStatus: 'ok' | 'aborted' | 'timed_out' | 'failed' | 'invalid_request' | 'invalid_response';
   readonly errorMessage?: string;
 }
 
@@ -53,8 +53,8 @@ export interface AgentIntentEvent {
   readonly status: string;
 }
 
-export interface AgentActionEvent {
-  readonly kind: 'agent-action';
+export interface AgentExpressionEvent {
+  readonly kind: 'agent-expression';
   readonly tick: number;
   readonly agentId: string;
   readonly emotion: string;
@@ -117,7 +117,7 @@ export type SimulationEvent =
   | AgentQueryStartEvent
   | AgentQueryEndEvent
   | AgentIntentEvent
-  | AgentActionEvent
+  | AgentExpressionEvent
   | AgentStateChangeEvent
   | DirectorConflictEvent
   | DirectorDecisionEvent

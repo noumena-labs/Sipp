@@ -1,41 +1,44 @@
 import {
   createCharacterFromConfigUrl,
-  type CharacterAgent,
-  type CharacterAgentEngine,
+  type CharacterRuntime,
+  type CharacterRuntimeEngine,
   type CharacterConfig,
-  type ChoiceResult,
+  type CharacterChooseResult,
 } from '@noumena-labs/cogent-engine/character';
 import { buildDecisionContext } from './decision-context.js';
 import type { AgentGoal, AgentPerception, DecisionContext } from './types.js';
 
 export interface SimulationAgentChooserOptions {
-  readonly maxChoiceOutputTokens?: number;
+  readonly maxDecisionOutputTokens?: number;
 }
 
-export interface SimulationAgentChoiceResult {
+export interface SimulationAgentDecisionResult {
   readonly goal: AgentGoal | null;
-  readonly status: ChoiceResult['status'];
+  readonly status: CharacterChooseResult['status'];
   readonly errorMessage?: string;
   readonly rawText: string;
 }
 
 export class SimulationAgentChooser {
-  private readonly agent: CharacterAgent;
+  private readonly character: CharacterRuntime;
   private readonly config: CharacterConfig;
-  private readonly maxChoiceOutputTokens: number;
+  private readonly maxDecisionOutputTokens: number;
 
   public readonly agentId: string;
 
   public constructor(
     agentId: string,
-    agent: CharacterAgent,
+    character: CharacterRuntime,
     config: CharacterConfig,
     options: SimulationAgentChooserOptions = {}
   ) {
     this.agentId = agentId;
-    this.agent = agent;
+    if (config.id !== agentId) {
+      throw new Error(`character config id ${JSON.stringify(config.id)} must match simulation agent id ${JSON.stringify(agentId)}.`);
+    }
+    this.character = character;
     this.config = config;
-    this.maxChoiceOutputTokens = options.maxChoiceOutputTokens ?? 24;
+    this.maxDecisionOutputTokens = options.maxDecisionOutputTokens ?? 24;
   }
 
   public get characterConfig(): CharacterConfig {
@@ -45,38 +48,38 @@ export class SimulationAgentChooser {
   public async query(
     perception: AgentPerception,
     options: { signal?: AbortSignal; timeoutMs?: number } = {}
-  ): Promise<SimulationAgentChoiceResult> {
+  ): Promise<SimulationAgentDecisionResult> {
     const decision = buildDecisionContext(perception);
-    const choiceResult = await this.agent.choose(decision.prompt, {
+    const chooseResult = await this.character.choose(decision.prompt, {
       choices: decision.options.map((option) => option.label),
       signal: options.signal,
       timeoutMs: options.timeoutMs,
-      maxOutputTokens: this.maxChoiceOutputTokens,
+      maxOutputTokens: this.maxDecisionOutputTokens,
     });
 
-    if (choiceResult.status !== 'ok') {
+    if (chooseResult.status !== 'ok') {
       return {
         goal: null,
-        status: choiceResult.status,
-        ...(choiceResult.errorMessage ? { errorMessage: choiceResult.errorMessage } : {}),
-        rawText: choiceResult.rawText,
+        status: chooseResult.status,
+        ...(chooseResult.errorMessage ? { errorMessage: chooseResult.errorMessage } : {}),
+        rawText: chooseResult.rawText,
       };
     }
 
-    const chosen = findOptionByLabel(decision, choiceResult.choice);
+    const chosen = findOptionByLabel(decision, chooseResult.selection);
     if (!chosen) {
       return {
         goal: null,
         status: 'invalid_response',
-        errorMessage: choiceResult.errorMessage ?? 'choice output did not match any available option',
-        rawText: choiceResult.rawText,
+        errorMessage: chooseResult.errorMessage ?? 'choice output did not match any available option',
+        rawText: chooseResult.rawText,
       };
     }
     return {
       goal: chosen.goal,
       status: 'ok',
-      rawText: choiceResult.rawText,
-      ...(choiceResult.errorMessage ? { errorMessage: choiceResult.errorMessage } : {}),
+      rawText: chooseResult.rawText,
+      ...(chooseResult.errorMessage ? { errorMessage: chooseResult.errorMessage } : {}),
     };
   }
 }
@@ -84,7 +87,7 @@ export class SimulationAgentChooser {
 export interface CreateSimulationAgentChooserFromConfigUrlOptions {
   readonly agentId: string;
   readonly configUrl: string;
-  readonly engine: CharacterAgentEngine;
+  readonly engine: CharacterRuntimeEngine;
   readonly chooserOptions?: SimulationAgentChooserOptions;
   readonly fetch?: typeof globalThis.fetch;
   readonly signal?: AbortSignal;
@@ -93,14 +96,14 @@ export interface CreateSimulationAgentChooserFromConfigUrlOptions {
 export async function createSimulationAgentChooserFromConfigUrl(
   options: CreateSimulationAgentChooserFromConfigUrlOptions
 ): Promise<{ agent: SimulationAgentChooser; config: CharacterConfig }> {
-  const { agent: characterAgent, config } = await createCharacterFromConfigUrl({
+  const { character, config } = await createCharacterFromConfigUrl({
     configUrl: options.configUrl,
     engine: options.engine,
     fetch: options.fetch,
     signal: options.signal,
   });
   return {
-    agent: new SimulationAgentChooser(options.agentId, characterAgent, config, options.chooserOptions),
+    agent: new SimulationAgentChooser(options.agentId, character, config, options.chooserOptions),
     config,
   };
 }

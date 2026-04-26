@@ -2,7 +2,7 @@
 //
 // App.tsx
 //
-// - Wires a CogentEngine + CharacterAgent together with the avatar stage
+// - Wires a CogentEngine + CharacterRuntime together with the avatar stage
 //   and chat UI. `character.json` remains semantic-only; the avatar app owns
 //   render assets and resolves them by character-folder convention.
 //
@@ -11,11 +11,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CogentEngine, getBundledRuntimeUrls } from '@noumena-labs/cogent-engine';
 import {
-  ActionBus,
+  CharacterEventBus,
   createCharacterFromConfigUrl,
   parseCharacterConfig,
   type CharacterConfig,
-  type CharacterAgent,
+  type CharacterRuntime,
 } from '@noumena-labs/cogent-engine/character';
 import { AvatarCanvas } from './components/AvatarCanvas';
 import { ChatComposer } from './components/ChatComposer';
@@ -32,7 +32,7 @@ const DEFAULT_CHARACTER_URL = '/characters/aria/character.json';
 
 interface LoadedHarness {
   readonly engine: CogentEngine;
-  readonly agent: CharacterAgent;
+  readonly character: CharacterRuntime;
   readonly config: CharacterConfig;
 }
 
@@ -52,8 +52,8 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   // The bus is created once per app lifetime and reused across harness
-  // reloads so the scene binding stays stable across agent replacement.
-  const bus = useMemo(() => new ActionBus(), []);
+  // reloads so the scene binding stays stable across character replacement.
+  const bus = useMemo(() => new CharacterEventBus(), []);
   const abortRef = useRef<AbortController | null>(null);
   const previewRequestIdRef = useRef(0);
 
@@ -145,7 +145,7 @@ export default function App() {
         },
       });
 
-      const { agent } = await createCharacterFromConfigUrl({
+      const { character } = await createCharacterFromConfigUrl({
         configUrl: args.characterUrl,
         engine,
         bus,
@@ -153,7 +153,7 @@ export default function App() {
       if (previousHarness) {
         previousHarness.engine.close();
       }
-      setHarness({ engine, agent, config });
+      setHarness({ engine, character, config });
       setMessages([]);
       setDrawerOpen(false);
       setStatus(`Ready. Character: ${config.persona.name}.`);
@@ -193,7 +193,7 @@ export default function App() {
     setMessages((prev) => [...prev, userMessage, assistantMessage]);
 
     try {
-      for await (const event of harness.agent.chat(text, { signal: controller.signal })) {
+      for await (const event of harness.character.chat(text, { signal: controller.signal })) {
         if (event.kind === 'prose') {
           setMessages((prev) =>
             prev.map((msg) =>
@@ -209,7 +209,7 @@ export default function App() {
                     actions: [
                       ...msg.actions,
                       {
-                        name: event.name,
+                        id: event.id,
                         label: event.raw.slice(1, -1),
                       },
                     ],
@@ -225,7 +225,7 @@ export default function App() {
                     ...msg,
                     text:
                       event.finalText.trim().length === 0 && msg.actions.length === 0
-                        ? event.cancelled
+                        ? event.status === 'aborted'
                           ? '[Response interrupted.]'
                           : '[No visible response generated.]'
                         : event.finalText,
@@ -251,7 +251,7 @@ export default function App() {
   const handleReset = (): void => {
     abortRef.current?.abort();
     abortRef.current = null;
-    harness?.agent.clearMemory();
+    harness?.character.clearMemory();
     setMessages([]);
     setStatus('Memory cleared.');
     setDrawerOpen(false);
@@ -273,7 +273,7 @@ export default function App() {
     harness?.config.persona.summary ??
     'A warm, playful stage companion.';
   const actionNames = useMemo(
-    () => previewCharacter?.config.actions.actions.map((action) => action.name) ?? [],
+    () => previewCharacter?.config.actions.map((action) => action.id) ?? [],
     [previewCharacter]
   );
   const setupStatus = previewResolved ? status : 'Loading character preview…';

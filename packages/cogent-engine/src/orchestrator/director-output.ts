@@ -161,7 +161,8 @@ function compileSelectManyGrammar(
   max: number | undefined,
   choices: readonly DirectorChoiceConfig[]
 ): string {
-  const boundedMax = Math.max(min, max ?? choices.length);
+  assertSelectManyBounds(min, max, choices.length);
+  const boundedMax = max ?? choices.length;
   const lines = [
     `root ::= ${min === 0 ? '"" | ' : ''}selection-line${boundedMax > 1 ? ` (linebreak selection-line){${Math.max(0, min - 1)},${boundedMax - 1}}` : ''}`,
     `selection-line ::= ${choiceAlternation(choices)}`,
@@ -223,6 +224,7 @@ function parseSelectMany<TPayload>(
   const ids = trimmed.length === 0
     ? []
     : trimmed.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+  assertSelectManyBounds(min, max, choices.length);
   const boundedMax = max ?? choices.length;
   if (ids.length < min || ids.length > boundedMax) {
     throw new DirectorOutputError(`selection count must be between ${min} and ${boundedMax}.`);
@@ -241,6 +243,15 @@ function parseSelectMany<TPayload>(
     selections.push(selectionFromChoice(choice));
   }
   return { text: '', selections };
+}
+
+function assertSelectManyBounds(min: number, max: number | undefined, choiceCount: number): void {
+  if (min > choiceCount) {
+    throw new DirectorOutputError(`select_many min ${min} exceeds available choice count ${choiceCount}.`);
+  }
+  if (max != null && max > choiceCount) {
+    throw new DirectorOutputError(`select_many max ${max} exceeds available choice count ${choiceCount}.`);
+  }
 }
 
 function parseSelectSlots<TPayload>(

@@ -13,11 +13,7 @@
       "Choose the move that reaches the banana fastest or strips it from the carrier fastest."
     ]
   },
-  "actions": {
-    "actions": [
-      { "name": "thinking" }
-    ]
-  },
+  "actions": [],
   "memory": {
     "maxTurns": 0
   }

@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { ActionBus } from './action-bus.js';
-import type { CharacterAgentEngine } from './character-agent.js';
+import { CharacterEventBus } from './action-bus.js';
+import type { CharacterRuntimeEngine } from './character-agent.js';
 import { createCharacterFromConfigUrl } from './create-character.js';
 
-function createEngineStub(): CharacterAgentEngine {
+function createEngineStub(): CharacterRuntimeEngine {
   return {
     async queuePrompt() {
       return 1;
@@ -25,8 +25,8 @@ function createEngineStub(): CharacterAgentEngine {
   };
 }
 
-test('createCharacterFromConfigUrl fetches, parses, and builds an agent', async () => {
-  const bus = new ActionBus();
+test('createCharacterFromConfigUrl fetches, parses, and builds a character runtime', async () => {
+  const bus = new CharacterEventBus();
   const fetchCalls: Array<{ url: string; signal?: AbortSignal }> = [];
   const engine = createEngineStub();
 
@@ -43,7 +43,7 @@ test('createCharacterFromConfigUrl fetches, parses, and builds an agent', async 
           return {
             id: 'aria',
             persona: { name: 'Aria' },
-            actions: { actions: [{ name: 'wave' }] },
+            actions: [{ id: 'wave' }],
           };
         },
       } as Response;
@@ -53,7 +53,7 @@ test('createCharacterFromConfigUrl fetches, parses, and builds an agent', async 
   assert.equal(fetchCalls.length, 1);
   assert.equal(fetchCalls[0].url, '/characters/aria/character.json');
   assert.equal(result.config.id, 'aria');
-  assert.equal(result.agent.bus, bus);
+  assert.equal(result.character.bus, bus);
 });
 
 test('createCharacterFromConfigUrl surfaces HTTP errors', async () => {

@@ -273,7 +273,7 @@ test('DirectorRuntime reports oversized grammars before queueing generation', as
     choices,
   });
 
-  assert.equal(result.status, 'invalid_response');
+  assert.equal(result.status, 'invalid_request');
   assert.match(result.errorMessage ?? '', /grammar exceeds maximum size/);
   assert.equal(engine.queueCalls, 0);
 });

@@ -19,13 +19,11 @@ import {
   type ParsedEvent,
 } from './action-parser.js';
 
-const SCHEMA: ActionSchema = {
-  actions: [
-    { name: 'wave' },
-    { name: 'shake_head' },
-    { name: 'look_at_you', cue: 'look at you' },
-  ],
-};
+const SCHEMA: ActionSchema = [
+  { id: 'wave' },
+  { id: 'shake_head' },
+  { id: 'look_at_you', cue: 'look at you' },
+];
 
 const CUES = expandActionCues(SCHEMA);
 
@@ -41,12 +39,12 @@ function drainAll(parser: StreamingActionParser, chunks: string[]): ParsedEvent[
 test('parseActionCue resolves a flat cue label', () => {
   const event = parseActionCue('[wave]', CUES);
   assert.equal(event.kind, 'action');
-  assert.equal(event.name, 'wave');
+  assert.equal(event.id, 'wave');
 });
 
 test('parseActionCue resolves a custom cue label', () => {
   const event = parseActionCue('[look at you]', CUES);
-  assert.equal(event.name, 'look_at_you');
+  assert.equal(event.id, 'look_at_you');
 });
 
 test('parseActionCue rejects unknown labels', () => {
@@ -67,7 +65,7 @@ test('StreamingActionParser emits prose and action events in stream order', () =
   const parser = new StreamingActionParser(SCHEMA);
   const events = drainAll(parser, ['Hello ', 'there!', '[wave]', ' all done.']);
   const action = events.find((event) => event.kind === 'action');
-  assert.ok(action && action.kind === 'action' && action.name === 'wave');
+  assert.ok(action && action.kind === 'action' && action.id === 'wave');
 
   const actionIndex = events.indexOf(action);
   const leading = events
@@ -89,7 +87,7 @@ test('StreamingActionParser resolves custom cue labels', () => {
   const events = drainAll(parser, ['Hi! [look at you] nice to meet you.']);
   const action = events.find((event) => event.kind === 'action');
   assert.ok(action && action.kind === 'action');
-  assert.equal(action.name, 'look_at_you');
+  assert.equal(action.id, 'look_at_you');
 });
 
 test('StreamingActionParser coalesces contiguous prose within a single chunk', () => {
@@ -120,7 +118,7 @@ test('StreamingActionParser tolerates cue boundaries split across chunks', () =>
   const events = drainAll(parser, chunks);
   const action = events.find((event) => event.kind === 'action');
   assert.ok(action && action.kind === 'action');
-  assert.equal(action.name, 'look_at_you');
+  assert.equal(action.id, 'look_at_you');
   const prose = events
     .filter((event) => event.kind === 'prose')
     .map((event) => (event.kind === 'prose' ? event.text : ''))
@@ -159,5 +157,5 @@ test('StreamingActionParser defers bytes that might start a cue', () => {
   rest.push(...parser.flush());
   const action = rest.find((event) => event.kind === 'action');
   assert.ok(action && action.kind === 'action');
-  assert.equal(action.name, 'wave');
+  assert.equal(action.id, 'wave');
 });

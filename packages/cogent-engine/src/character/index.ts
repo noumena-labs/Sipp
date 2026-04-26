@@ -3,7 +3,7 @@
 // character/index.ts
 //
 // - Barrel export for the `cogent-engine/character` subpath.
-// - Everything needed to stand up a character-driven chat loop ships from
+// - Everything needed to stand up a character-driven runtime ships from
 //   this single entry point.
 //
 //////////////////////////////////////////////////////////////////////////////
@@ -22,9 +22,14 @@ export type {
   PersonaSpec,
 } from './persona.js';
 
-export { ActionBus } from './action-bus.js';
+export { CharacterEventBus } from './action-bus.js';
 
-export { type CreateCharacterFromConfigUrlOptions, createCharacterFromConfigUrl } from './create-character.js';
+export {
+  type CreateCharacterFromConfigOptions,
+  type CreateCharacterFromConfigUrlOptions,
+  createCharacterFromConfig,
+  createCharacterFromConfigUrl,
+} from './create-character.js';
 
 export type {
   CharacterEvent,
@@ -40,14 +45,13 @@ export {
   parseCharacterConfig,
 } from './character-config.js';
 
-export { ChoiceGrammarError, compileChoiceGrammar, parseChoiceOutput } from './choice-grammar.js';
-
 export type {
-  CharacterAgentEngine,
-  ChoiceResult,
-  CharacterChoiceOptions,
-  CharacterAgentOptions,
+  CharacterRuntimeEngine,
+  CharacterChooseResult,
+  CharacterChooseOptions,
+  CharacterRuntimeOptions,
   ChatEvent,
   ChatTurn,
 } from './character-agent.js';
-export { CharacterAgent } from './character-agent.js';
+export { CharacterRuntime } from './character-agent.js';
+export type { RunStatus } from '../core/run-status.js';

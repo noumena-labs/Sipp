@@ -5,7 +5,7 @@
 // - Top-level simulation app. Wires:
 //     - a single shared CogentEngine, loaded from the configured .gguf URL
 //     - a DirectorRuntime from `director.json`
-//     - four CharacterAgent-backed chooser adapters
+//     - four CharacterRuntime-backed chooser adapters
 //     - an app-local SimulationRuntime that owns the world loop
 //     - a SimulationCanvas that mirrors tick-end snapshots into three.js
 //     - a side panel with transport, event log, and an agent inspector
@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { CogentEngine, getBundledRuntimeUrls } from '@noumena-labs/cogent-engine';
-import { createDirectorFromConfigUrl } from '@noumena-labs/cogent-engine/orchestrator';
+import { createDirectorFromConfigUrl } from '@noumena-labs/cogent-engine/director';
 import { BrainActivityHud } from './components/BrainActivityHud';
 import { BrainTraceDrawer } from './components/BrainTraceDrawer';
 import { SimulationCanvas } from './components/SimulationCanvas';
@@ -176,6 +176,7 @@ export default function App() {
   const [status, setStatus] = useState('Idle. Press Load to initialize the model.');
   const [busy, setBusy] = useState(false);
   const [harness, setHarness] = useState<LoadedHarness | null>(null);
+  const harnessRef = useRef<LoadedHarness | null>(null);
   const [activeScenario, setActiveScenario] = useState<ScenarioSeed | null>(null);
   const [running, setRunning] = useState(false);
   const [snapshot, setSnapshot] = useState<WorldSnapshot | null>(null);
@@ -315,6 +316,10 @@ export default function App() {
   }, [brainStore, resetAgentGlyphs]);
 
   useEffect(() => {
+    harnessRef.current = harness;
+  }, [harness]);
+
+  useEffect(() => {
     return () => {
       for (const override of agentGlyphOverridesRef.current.values()) {
         if (override.timeoutId !== null) {
@@ -322,6 +327,12 @@ export default function App() {
         }
       }
       agentGlyphOverridesRef.current.clear();
+      const currentHarness = harnessRef.current;
+      if (currentHarness) {
+        void currentHarness.runtime.dispose();
+        currentHarness.engine.close();
+        harnessRef.current = null;
+      }
     };
   }, []);
 
@@ -534,6 +545,8 @@ export default function App() {
       setBusy(true);
       setModelUrl(url);
       setRunning(false);
+      let nextEngine: CogentEngine | null = null;
+      let nextRuntime: SimulationRuntime | null = null;
       try {
         if (harness) {
           setHarness(null);
@@ -557,16 +570,16 @@ export default function App() {
         setActiveScenario(scenario);
         resetSimulationUi();
         setStatus('Initialising engine…');
-        const engine = new CogentEngine({ ...getBundledRuntimeUrls() });
-        await engine.initModule();
+        nextEngine = new CogentEngine({ ...getBundledRuntimeUrls() });
+        await nextEngine.initModule();
 
         setStatus('Downloading model…');
-        const modelPath = await engine.loadModelFromUrl(url, 'model.gguf', (pct) =>
+        const modelPath = await nextEngine.loadModelFromUrl(url, 'model.gguf', (pct) =>
           setStatus(`Downloading model… ${Math.floor(pct)}%`)
         );
 
         setStatus('Initialising inference runtime…');
-        await engine.initEngine(modelPath, {
+        await nextEngine.initEngine(modelPath, {
           enableRuntimeObservability: true,
           maxCachedSessions: 8,
           prefixCacheIntervalTokens: 64,
@@ -588,12 +601,12 @@ export default function App() {
         }
         const { director } = await createDirectorFromConfigUrl({
           configUrl: scenario.directorConfigUrl,
-          engine: createTracedBrainEngine(engine, brainStore, directorBrain),
+          engine: createTracedBrainEngine(nextEngine, brainStore, directorBrain),
           runtimeOptions: { maxOutputTokens: 96 },
         });
 
         setStatus('Building simulation runtime…');
-        const runtime = new SimulationRuntime(director, {
+        nextRuntime = new SimulationRuntime(director, {
           id: scenario.id,
           bus,
           bounds: scenario.bounds,
@@ -608,7 +621,7 @@ export default function App() {
           maxMoveTicksBeforeReevaluation: scenario.maxMoveTicksBeforeReevaluation,
         });
         for (const seed of scenario.objects) {
-          runtime.upsertObject(seed);
+          nextRuntime.upsertObject(seed);
         }
 
         setStatus('Loading agent personas…');
@@ -620,20 +633,22 @@ export default function App() {
           const { agent } = await createSimulationAgentChooserFromConfigUrl({
             agentId: assignment.agentId,
             configUrl: assignment.characterUrl,
-            engine: createTracedBrainEngine(engine, brainStore, brain),
+            engine: createTracedBrainEngine(nextEngine, brainStore, brain),
           });
           const seed = scenario.agents.find((a) => a.id === assignment.agentId);
           if (!seed) {
             throw new Error(`no scenario seed for ${assignment.agentId}`);
           }
-          runtime.addAgent(agent, seed);
+          nextRuntime.addAgent(agent, seed);
         }
 
-        const initialSnapshot = runtime.getSnapshot();
+        const initialSnapshot = nextRuntime.getSnapshot();
         snapshotRef.current = initialSnapshot;
         setSnapshot(initialSnapshot);
         setDirectorState(createInitialDirectorState(initialSnapshot.directorNote));
-        setHarness({ engine, runtime, scenario });
+        setHarness({ engine: nextEngine, runtime: nextRuntime, scenario });
+        nextEngine = null;
+        nextRuntime = null;
         setBrainHudExpanded(true);
         if (!tutorialDismissed) {
           setTutorialStepIndex(0);
@@ -642,6 +657,12 @@ export default function App() {
         setStatus('Ready. Press Start.');
       } catch (error) {
         console.error(error);
+        if (nextRuntime) {
+          await nextRuntime.dispose().catch(() => undefined);
+        }
+        if (nextEngine) {
+          nextEngine.close();
+        }
         setActiveScenario(null);
         setStatus(`Load failed: ${(error as Error).message}`);
       } finally {
@@ -1004,13 +1025,14 @@ function createInitialDirectorState(note: string | null): DirectorPanelState {
 
 function mapSimulationQueryStatus(
   status: import('./runtime/bus.js').AgentQueryEndEvent['queryStatus']
-): 'cancelled' | 'timed_out' | 'failed' {
+): 'aborted' | 'timed_out' | 'failed' {
   switch (status) {
     case 'aborted':
-      return 'cancelled';
+      return 'aborted';
     case 'timed_out':
       return 'timed_out';
     case 'failed':
+    case 'invalid_request':
     case 'invalid_response':
       return 'failed';
     case 'ok':

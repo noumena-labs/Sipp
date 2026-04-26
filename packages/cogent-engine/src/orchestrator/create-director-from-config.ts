@@ -27,6 +27,22 @@ export async function createDirectorFromConfigUrl(
   }
 
   const config = parseDirectorConfig(await response.json());
-  const director = new DirectorRuntime(options.engine, config, options.runtimeOptions);
-  return { director, config };
+  return createDirectorFromConfig({
+    config,
+    engine: options.engine,
+    runtimeOptions: options.runtimeOptions,
+  });
+}
+
+export interface CreateDirectorFromConfigOptions {
+  readonly config: DirectorConfig;
+  readonly engine: DirectorRuntimeEngine;
+  readonly runtimeOptions?: DirectorRuntimeOptions;
+}
+
+export function createDirectorFromConfig(
+  options: CreateDirectorFromConfigOptions
+): { director: DirectorRuntime; config: DirectorConfig } {
+  const director = new DirectorRuntime(options.engine, options.config, options.runtimeOptions);
+  return { director, config: options.config };
 }

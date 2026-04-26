@@ -1,4 +1,4 @@
-import type { DirectorChoice, DirectorRuntime, JsonValue } from '@noumena-labs/cogent-engine/orchestrator';
+import type { DirectorChoice, DirectorRuntime, JsonValue } from '@noumena-labs/cogent-engine/director';
 import { SimulationBus, type SimulationEvent } from './bus.js';
 import { buildPerception, vec2Distance } from './sensing.js';
 import { SimulationAgentChooser } from './agent-chooser.js';
@@ -19,10 +19,13 @@ import {
 } from './reducer.js';
 import type {
   AgentGoal,
+  AgentIntent,
   DirectorDecision,
   DirectorResolution,
   ForcedDropOutcome,
   ForcedDropRulingRecord,
+  ObjectAffordance,
+  RefereeState,
   ScenarioAgentSeed,
   ScenarioGameSeed,
   ScenarioObjectSeed,
@@ -153,7 +156,7 @@ export class SimulationRuntime {
   }
 
   public isBusy(): boolean {
-    return this.agentQueryInFlight != null || this.state.game.referee.status === 'ruling';
+    return this.agentQueryInFlight != null || this.narrationInFlight != null || this.state.game.referee.status === 'ruling';
   }
 
   public async waitForIdle(): Promise<void> {
@@ -287,7 +290,7 @@ export class SimulationRuntime {
     for (const agent of this.state.agents) {
       this.emit({ kind: 'agent-state', tick: this.state.tick, agent: cloneAgent(agent) });
       if (agent.emotion) {
-        this.emit({ kind: 'agent-action', tick: this.state.tick, agentId: agent.id, emotion: agent.emotion });
+        this.emit({ kind: 'agent-expression', tick: this.state.tick, agentId: agent.id, emotion: agent.emotion });
       }
     }
     this.emit({ kind: 'tick-end', tick: this.state.tick, snapshot: this.getSnapshot() });
@@ -299,7 +302,7 @@ export class SimulationRuntime {
       await this.agentQueryInFlight.done.catch(() => undefined);
     }
 
-    this.cancelNarration();
+    await this.cancelNarration();
 
     this.state.game.referee = { status: 'ruling', conflict, startedAtTick: this.state.tick };
     this.emit({ kind: 'director-conflict', tick: this.state.tick, conflicts: [conflict] });
@@ -529,6 +532,8 @@ export class SimulationRuntime {
     this.narrationController = controller;
     this.activeControllers.add(controller);
     const narrationEvents = [...this.recentNarrationEvents];
+    const requestTick = this.state.tick;
+    const requestSnapshot = this.getSnapshot();
     this.narrationInFlight = this.director.run(this.narrateTask, {
       inputs: buildNarrationPayload(this.state, narrationEvents) as Record<string, JsonValue>,
       signal: controller.signal,
@@ -546,19 +551,19 @@ export class SimulationRuntime {
         this.recentNarrationEvents.splice(0, narrationEvents.length);
         return;
       }
-      const decision = coerceNarrationDecision(result.text, this.getSnapshot(), narrationEvents);
+      const decision = coerceNarrationDecision(result.text, requestSnapshot, narrationEvents);
       this.emit({
         kind: 'director-narration-trace',
-        tick: this.state.tick,
+        tick: requestTick,
         rawText: result.rawText,
         parsedText: result.text,
         accepted: decision.note.length > 0,
-        ...(decision.note.length === 0 ? { reason: describeRejectedNarration(result.text, this.getSnapshot()) } : {}),
+        ...(decision.note.length === 0 ? { reason: describeRejectedNarration(result.text, requestSnapshot) } : {}),
       });
       this.state.directorNote = decision.note || this.state.directorNote;
-      this.emit({ kind: 'director-decision', tick: this.state.tick, decision });
+      this.emit({ kind: 'director-decision', tick: requestTick, decision });
       if (decision.note) {
-        this.emit({ kind: 'world-note', tick: this.state.tick, note: decision.note });
+        this.emit({ kind: 'world-note', tick: requestTick, note: decision.note });
       }
       this.recentNarrationEvents.splice(0, narrationEvents.length);
     }).finally(() => {
@@ -570,11 +575,14 @@ export class SimulationRuntime {
     });
   }
 
-  private cancelNarration(): void {
+  private async cancelNarration(): Promise<void> {
     this.narrationController?.abort();
+    if (this.narrationInFlight) {
+      await this.narrationInFlight.catch(() => undefined);
+    }
   }
 
-  private mapGoalToIntent(goal: AgentGoal): import('./types.js').AgentIntent {
+  private mapGoalToIntent(goal: AgentGoal): AgentIntent {
     switch (goal.kind) {
       case 'wait':
         return { kind: 'wait', emotion: inferEmotionFromGoal(goal), reason: goal.label };
@@ -843,7 +851,7 @@ function cloneGame(game: MutableGameState): SimulationGameState {
       spawnPoints: rule.spawnPoints.map((point) => ({ x: point.x, z: point.z })),
     })),
     score: cloneScore(game.score),
-    referee: game.referee,
+    referee: cloneRefereeState(game.referee),
     refereeMemory: {
       forcedDrops: game.refereeMemory.forcedDrops.map(cloneForcedDropRulingRecord),
     },
@@ -1565,8 +1573,8 @@ function cloneAgent(agent: SimulationAgentState): SimulationAgentState {
     speed: agent.speed,
     emotion: agent.emotion,
     status: agent.status,
-    intent: agent.intent ? { ...agent.intent } : null,
-    goal: agent.goal ? { ...agent.goal } : null,
+    intent: agent.intent ? cloneAgentIntent(agent.intent) : null,
+    goal: agent.goal ? cloneAgentGoal(agent.goal) : null,
     holding: agent.holding,
     powerUp: agent.powerUp ? { ...agent.powerUp } : null,
     frozenUntilTick: agent.frozenUntilTick,
@@ -1595,6 +1603,61 @@ function cloneForcedDropRulingRecord(record: ForcedDropRulingRecord): ForcedDrop
   };
 }
 
+function cloneRefereeState(referee: RefereeState): RefereeState {
+  if (referee.status === 'idle') {
+    return { status: 'idle' };
+  }
+  return {
+    status: 'ruling',
+    conflict: cloneWorldConflict(referee.conflict),
+    startedAtTick: referee.startedAtTick,
+  };
+}
+
+function cloneWorldConflict(conflict: WorldConflict): WorldConflict {
+  if (conflict.kind === 'contested_object') {
+    return {
+      id: conflict.id,
+      kind: 'contested_object',
+      objectId: conflict.objectId,
+      contenderAgentIds: [...conflict.contenderAgentIds],
+    };
+  }
+  return {
+    id: conflict.id,
+    kind: 'forced_drop',
+    attackerAgentId: conflict.attackerAgentId,
+    targetAgentId: conflict.targetAgentId,
+    objectId: conflict.objectId,
+  };
+}
+
+function cloneAgentIntent(intent: AgentIntent): AgentIntent {
+  switch (intent.kind) {
+    case 'move_to':
+      return { ...intent, target: { x: intent.target.x, z: intent.target.z } };
+    default:
+      return { ...intent };
+  }
+}
+
+function cloneAgentGoal(goal: AgentGoal): AgentGoal {
+  switch (goal.kind) {
+    case 'object_action':
+      return { ...goal, affordance: cloneObjectAffordance(goal.affordance) };
+    default:
+      return { ...goal };
+  }
+}
+
+function cloneObjectAffordance(affordance: ObjectAffordance): ObjectAffordance {
+  return {
+    kind: affordance.kind,
+    label: affordance.label,
+    ...(affordance.status ? { status: affordance.status } : {}),
+  };
+}
+
 function cloneObject(obj: SimulationObjectState): SimulationObjectState {
   return {
     id: obj.id,
@@ -1605,8 +1668,8 @@ function cloneObject(obj: SimulationObjectState): SimulationObjectState {
     active: obj.active,
     contested: obj.contested,
     heldBy: obj.heldBy,
-    tags: obj.tags,
-    affordances: obj.affordances,
+    tags: [...obj.tags],
+    affordances: obj.affordances.map(cloneObjectAffordance),
     blocksMovement: obj.blocksMovement,
     collisionRadius: obj.collisionRadius,
   };

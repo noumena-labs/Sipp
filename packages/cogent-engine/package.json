@@ -16,15 +16,15 @@
       "import": "./dist/esm/character/index.js",
       "default": "./dist/esm/character/index.js"
     },
-    "./character/internal": {
-      "types": "./dist/types/character/internal.d.ts",
-      "import": "./dist/esm/character/internal.js",
-      "default": "./dist/esm/character/internal.js"
+    "./character/advanced": {
+      "types": "./dist/types/character/advanced.d.ts",
+      "import": "./dist/esm/character/advanced.js",
+      "default": "./dist/esm/character/advanced.js"
     },
-    "./orchestrator": {
-      "types": "./dist/types/orchestrator/index.d.ts",
-      "import": "./dist/esm/orchestrator/index.js",
-      "default": "./dist/esm/orchestrator/index.js"
+    "./director": {
+      "types": "./dist/types/director/index.d.ts",
+      "import": "./dist/esm/director/index.js",
+      "default": "./dist/esm/director/index.js"
     },
     "./wasm/*": "./dist/wasm/*",
     "./wasm-bun/*": "./dist/wasm-bun/*",

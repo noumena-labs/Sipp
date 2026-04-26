@@ -9,7 +9,7 @@ benchmark, and simulation apps that exercise it.
 - `packages/cogent-engine/third_party/llama.cpp`: pinned `llama.cpp` submodule
 - `apps/avatar`: browser character harness with a VRM avatar
 - `apps/benchmark`: browser benchmark harness
-- `apps/simulation`: browser simulation and orchestrator example
+- `apps/simulation`: browser simulation and director example
 
 ## Clone
 
@@ -85,7 +85,7 @@ Available public imports:
 
 - `@noumena-labs/cogent-engine`
 - `@noumena-labs/cogent-engine/character`
-- `@noumena-labs/cogent-engine/orchestrator`
+- `@noumena-labs/cogent-engine/director`
 
 Browser apps that use the wasm runtime need `Cross-Origin-Opener-Policy: same-origin` and
 `Cross-Origin-Embedder-Policy: require-corp` so `SharedArrayBuffer` stays available.

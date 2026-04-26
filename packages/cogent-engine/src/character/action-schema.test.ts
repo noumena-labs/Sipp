@@ -22,67 +22,57 @@ import {
   validateActionSchema,
 } from './action-schema.js';
 
-const SCHEMA: ActionSchema = {
-  actions: [
-    {
-      name: 'wave',
-      description: 'Wave a hand.',
-      usageHint: 'greeting or saying goodbye',
-    },
-    {
-      name: 'look_at_you',
-      cue: 'look at you',
-      description: 'Turn attention toward the user.',
-    },
-    {
-      name: 'shake_head',
-      description: 'Shake the head side to side.',
-    },
-  ],
-};
+const SCHEMA: ActionSchema = [
+  {
+    id: 'wave',
+    description: 'Wave a hand.',
+    usageHint: 'greeting or saying goodbye',
+  },
+  {
+    id: 'look_at_you',
+    cue: 'look at you',
+    description: 'Turn attention toward the user.',
+  },
+  {
+    id: 'shake_head',
+    description: 'Shake the head side to side.',
+  },
+];
 
 test('validateActionSchema accepts a well-formed schema', () => {
   assert.equal(validateActionSchema(SCHEMA), null);
 });
 
-test('validateActionSchema rejects an empty schema', () => {
-  assert.match(String(validateActionSchema({ actions: [] })), /at least one action/);
+test('validateActionSchema accepts an empty schema for choose-only characters', () => {
+  assert.equal(validateActionSchema([]), null);
 });
 
-test('validateActionSchema rejects duplicate action names', () => {
-  const error = validateActionSchema({
-    actions: [{ name: 'wave' }, { name: 'wave' }],
-  });
-  assert.match(String(error), /Duplicate action name/);
+test('validateActionSchema rejects duplicate action ids', () => {
+  const error = validateActionSchema([{ id: 'wave' }, { id: 'wave' }]);
+  assert.match(String(error), /Duplicate action id/);
 });
 
 test('validateActionSchema rejects invalid identifiers', () => {
-  const error = validateActionSchema({
-    actions: [{ name: '1bad' }],
-  });
-  assert.match(String(error), /Invalid action name/);
+  const error = validateActionSchema([{ id: '1bad' }]);
+  assert.match(String(error), /Invalid action id/);
 });
 
 test('validateActionSchema rejects empty cue overrides', () => {
-  const error = validateActionSchema({
-    actions: [{ name: 'wave', cue: '   ' }],
-  });
+  const error = validateActionSchema([{ id: 'wave', cue: '   ' }]);
   assert.match(String(error), /invalid cue label/i);
 });
 
 test('validateActionSchema rejects cue label collisions', () => {
-  const error = validateActionSchema({
-    actions: [
-      { name: 'look_at_you', cue: 'look at you' },
-      { name: 'look_at_you_again', cue: 'look at you' },
-    ],
-  });
+  const error = validateActionSchema([
+    { id: 'look_at_you', cue: 'look at you' },
+    { id: 'look_at_you_again', cue: 'look at you' },
+  ]);
   assert.match(String(error), /collision/i);
 });
 
 test('assertValidActionSchema throws ActionSchemaError on invalid input', () => {
   assert.throws(
-    () => assertValidActionSchema({ actions: [] }),
+    () => assertValidActionSchema([{ id: 'bad id' }]),
     (error) => error instanceof ActionSchemaError
   );
 });
@@ -90,9 +80,9 @@ test('assertValidActionSchema throws ActionSchemaError on invalid input', () => 
 test('expandActionCues produces one cue per action in declaration order', () => {
   const cues = expandActionCues(SCHEMA);
   assert.deepEqual(cues, [
-    { label: 'wave', name: 'wave' },
-    { label: 'look at you', name: 'look_at_you' },
-    { label: 'shake head', name: 'shake_head' },
+    { label: 'wave', id: 'wave' },
+    { label: 'look at you', id: 'look_at_you' },
+    { label: 'shake head', id: 'shake_head' },
   ]);
 });
 
@@ -101,19 +91,19 @@ test('summarizeActionCues preserves cue labels and metadata', () => {
   assert.deepEqual(cues, [
     {
       label: 'wave',
-      name: 'wave',
+      id: 'wave',
       description: 'Wave a hand.',
       usageHint: 'greeting or saying goodbye',
     },
     {
       label: 'look at you',
-      name: 'look_at_you',
+      id: 'look_at_you',
       description: 'Turn attention toward the user.',
       usageHint: undefined,
     },
     {
       label: 'shake head',
-      name: 'shake_head',
+      id: 'shake_head',
       description: 'Shake the head side to side.',
       usageHint: undefined,
     },
@@ -139,9 +129,7 @@ test('renderActionCapabilityList ties visible cues back to flat runtime actions'
 
 test('findCanonicalActionCue resolves runtime actions back to primary cue labels', () => {
   const cue = findCanonicalActionCue(
-    {
-      actions: [{ name: 'look_at_you', cue: 'look at you' }],
-    },
+    [{ id: 'look_at_you', cue: 'look at you' }],
     'look_at_you'
   );
 

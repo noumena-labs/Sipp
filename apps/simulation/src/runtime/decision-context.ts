@@ -212,9 +212,11 @@ function addNonCarrierOptions(
 
   if (!perception.self.powerUp && powerUps.length > 0) {
     lines.push('Power-ups on the field:');
-    for (const powerUp of powerUps.slice(0, 2)) {
+    const visiblePowerUps = powerUps.slice(0, 2);
+    for (const [index, powerUp] of visiblePowerUps.entries()) {
       lines.push(`- ${powerUp.label} (${qualitativeDistance(powerUp.distance)})`);
-      const label = powerUp.distance <= INTERACTION_RADIUS ? `grab ${powerUp.label}` : `go get the ${powerUp.label}`;
+      const labelTarget = visiblePowerUps.length > 1 ? `${ordinalLabel(index)} ${powerUp.label}` : powerUp.label;
+      const label = powerUp.distance <= INTERACTION_RADIUS ? `grab ${labelTarget}` : `go get the ${labelTarget}`;
       options.push({
         label,
         goal: powerUp.distance <= INTERACTION_RADIUS
@@ -450,6 +452,10 @@ function sabotageLabel(powerUp: PowerUpKind, targetName: string): string {
 
 function labelForPowerUp(powerUp: PowerUpKind): string {
   return powerUp === 'bat' ? 'the bat' : 'the ice cube';
+}
+
+function ordinalLabel(index: number): string {
+  return index === 0 ? 'closest' : 'second';
 }
 
 function qualitativeDistance(distance: number): string {
