@@ -177,6 +177,7 @@ export interface AgentPerception {
   readonly tick: number;
   readonly bounds: WorldBounds;
   readonly directorNote: string | null;
+  readonly lastDecision: string | null;
   readonly game: SimulationGameState;
 }
 

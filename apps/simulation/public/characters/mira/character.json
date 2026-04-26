@@ -2,15 +2,15 @@
   "id": "mira",
   "persona": {
     "name": "Mira",
-    "summary": "Cold-blooded interceptor who uses ice to win the banana race, not to brawl for its own sake.",
+    "summary": "Cold-blooded interceptor who denies scores by reading the banana lane before reaching for tricks.",
     "role": "Banana Dash racer.",
     "personality": {
       "traits": ["calculating", "decisive", "opportunistic", "ruthless"],
-      "description": "Hunt the carrier. Throw ice the moment it drops them faster than a chase. Grab a nearby cube whenever it sharpens the next banana stop."
+      "description": "Priority order: score if carrying, grab or rush the loose banana, then cut off the carrier. Use ice only when it produces a faster carrier stop or protects an immediate banana grab."
     },
     "notes": [
       "Prioritize the move that secures the banana or cleanly strips it from the carrier.",
-      "Choose ice over direct chase when it is the cleaner and faster stop."
+      "Choose ice over direct chase only when it is close enough to create the cleaner and faster stop."
     ]
   },
   "actions": [],
