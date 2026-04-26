@@ -2,6 +2,7 @@ import react from '@vitejs/plugin-react';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
+import { cogentEngineDistWatch } from '../cogent-engine-dist-watch';
 
 const benchmarkAppDir = fileURLToPath(new URL('.', import.meta.url));
 const cogentEngineEntry = path.resolve(
@@ -10,7 +11,7 @@ const cogentEngineEntry = path.resolve(
 );
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), cogentEngineDistWatch()],
   resolve: {
     alias: {
       // Use the built workspace entry directly so Vite does not serve the package
