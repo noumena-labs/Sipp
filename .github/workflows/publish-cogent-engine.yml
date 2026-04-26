@@ -1,0 +1,57 @@
+name: Publish Cogent Engine
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Run npm publish in dry-run mode
+        required: false
+        default: true
+        type: boolean
+  # release:
+  #   types:
+  #     - published
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish-cogent-engine:
+    runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN != '' && secrets.PACKAGE_PUBLISH_TOKEN || github.token }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+
+      - name: Set up CMake
+        uses: lukka/get-cmake@latest
+
+      - name: Set up Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Publish cogent engine
+        env:
+          COGENT_ENGINE_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+        run: |
+          if [ "$COGENT_ENGINE_DRY_RUN" = "true" ]; then
+            bun ./scripts/publish-cogent-engine.mjs --dry-run
+          else
+            bun ./scripts/publish-cogent-engine.mjs
+          fi

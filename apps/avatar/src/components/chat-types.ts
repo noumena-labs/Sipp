@@ -3,7 +3,7 @@ export interface ChatMessage {
   readonly role: 'user' | 'assistant';
   readonly text: string;
   readonly actions: ReadonlyArray<{
-    name: string;
+    id: string;
     label: string;
   }>;
   readonly pending?: boolean;

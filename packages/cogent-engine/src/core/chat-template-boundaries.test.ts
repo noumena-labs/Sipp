@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { ChatTemplateMessage } from '../wasm/wasm-bridge.js';
 import {
   buildAppliedChatTemplateContext,
   probeChatTemplateBoundaryInfo,
-} from './chat-template-metadata.js';
+  type ChatTemplateMessage,
+} from './chat-template-boundaries.js';
 
 function createProvider(formatMessage: (messages: ChatTemplateMessage[], addAssistant: boolean) => string) {
   const calls: Array<{ messages: ChatTemplateMessage[]; addAssistant: boolean }> = [];

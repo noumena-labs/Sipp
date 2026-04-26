@@ -4,7 +4,7 @@ import {
   getBundledRuntimeUrls,
   type ModelBundleDescriptor,
   type PreparedModelBundle,
-} from 'cogent-engine';
+} from '@noumena-labs/cogent-engine';
 import { MetricCard } from './components/MetricCard';
 import { runScenarioBenchmark, supportsQueuedRequestApi, runMixedLoadBenchmark, captureBrowserMemorySnapshot } from './lib/benchmark-runner';
 import type { ConfigOptions, EnvironmentInfo, ScenarioResult, MixedLoadResult, MemorySnapshot, RequestObservability } from './lib/types';

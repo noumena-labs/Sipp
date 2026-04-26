@@ -102,7 +102,9 @@ export function renderSystemPrompt(persona: PersonaSpec, schema: ActionSchema): 
     sections.push('Notes:\n' + persona.notes.map((note) => `- ${note.trim()}`).join('\n'));
   }
 
-  sections.push('Cues: ' + cueList + '.');
+  if (cueList.length > 0) {
+    sections.push('Cues: ' + cueList + '.');
+  }
 
   const usageGuide = renderUsageHintGuide(cueSummary);
   if (usageGuide.length > 0) {

@@ -1,6 +1,7 @@
-# cogent-engine
+# @noumena-labs/cogent-engine
 
-`cogent-engine` is a browser-focused package that compiles an inference-only CogentEngine C++ runtime plus `llama.cpp` to WebAssembly and exposes a typed TypeScript API.
+`@noumena-labs/cogent-engine` is a browser-focused package that compiles an inference-only
+CogentEngine C++ runtime plus `llama.cpp` to WebAssembly and exposes a typed TypeScript API.
 
 Source layout in this package:
 
@@ -23,6 +24,33 @@ Source layout in this package:
 - Emscripten SDK (`emcmake`, `emcc`) in `PATH`
 - CMake 3.20+ and at least one CMake generator tool (`ninja`, `nmake`, or `make`)
 
+## Install From GitHub Packages
+
+In a consuming repository, add this `.npmrc` mapping:
+
+```ini
+@noumena-labs:registry=https://npm.pkg.github.com
+```
+
+Authenticate with either a PAT in `NODE_AUTH_TOKEN` or `npm login`:
+
+```bash
+npm login --scope=@noumena-labs --registry=https://npm.pkg.github.com --auth-type=legacy
+```
+
+Use a PAT with `read:packages` to install and `write:packages` to publish. Install a pinned
+version in the consuming app:
+
+```bash
+npm install @noumena-labs/cogent-engine@1.0.0
+```
+
+Public entrypoints:
+
+- `@noumena-labs/cogent-engine`
+- `@noumena-labs/cogent-engine/character`
+- `@noumena-labs/cogent-engine/director`
+
 If Emscripten is installed but not active in your shell, activate it first (example):
 
 ```bash
@@ -33,7 +61,7 @@ source /path/to/emsdk/emsdk_env.sh
 /path/to/emsdk/emsdk_env.ps1
 ```
 
-## Complete Compile (From Source)
+## Build From Source
 
 From the monorepo root:
 
@@ -42,10 +70,22 @@ bun install
 bun run build:package
 ```
 
+Use the release build when you need the publishable package layout:
+
+```bash
+bun run build:package:release
+```
+
 Or from `packages/cogent-engine/` after the workspace has already been installed:
 
 ```bash
 bun run build
+```
+
+Release build from the package directory:
+
+```bash
+bun run build:release
 ```
 
 For a full clean rebuild:
@@ -56,9 +96,9 @@ bun run rebuild
 
 What this does:
 
-- `bun run build:wasm` compiles `native/` + `third_party/llama.cpp` with Emscripten and writes runtime artifacts to `dist/wasm`
-- `bun run build:wasm:bun` compiles a Bun-specific mem32 runtime and writes it to `dist/wasm-bun`
-- `bun run build:ts` compiles TypeScript wrapper code to `dist/esm` and declarations to `dist/types`
+- `bun run build` and `bun run build:package` compile the browser runtime into `dist/wasm` plus the TypeScript outputs in `dist/esm` and `dist/types`
+- `bun run build:release` and `bun run build:package:release` add the Bun-compatible wasm runtime in `dist/wasm-bun`
+- `bun run release:prepare` runs the release build and validates the tarball with `npm pack --dry-run`
 - `build:wasm` auto-selects a CMake generator, or you can force one via `CMAKE_GENERATOR`
 
 Why first builds are slow:
@@ -113,6 +153,26 @@ bun run build
 
 - TS-only changes: `bun run build:ts`
 - C++/WASM changes: `bun run build:wasm`
+
+## Publish To GitHub Packages
+
+From the monorepo root:
+
+```bash
+bun run publish:cogent-engine:dry-run
+bun run publish:cogent-engine
+```
+
+The root helper script:
+
+- checks that `@noumena-labs` is mapped to `https://npm.pkg.github.com`
+- verifies `NODE_AUTH_TOKEN` or an existing `npm login` token is available
+- runs `packages/cogent-engine` `release:prepare`
+- publishes with `npm publish` from the package directory
+
+The repository does not commit credentials. Local publishes should use `NODE_AUTH_TOKEN` or a
+prior `npm login --scope=@noumena-labs --registry=https://npm.pkg.github.com`. CI uses the same
+helper through `.github/workflows/publish-cogent-engine.yml`.
 
 ## Bun Benchmark
 
@@ -231,7 +291,13 @@ The repository also includes `.vscode/tasks.json` and `.vscode/launch.json` to a
 
 ## How To Use In An App
 
-Install from local path during development:
+Install from the published package in a consuming app:
+
+```bash
+npm install @noumena-labs/cogent-engine@1.0.0
+```
+
+For local monorepo development, you can still install from a path:
 
 ```bash
 bun add ../packages/cogent-engine
@@ -240,7 +306,7 @@ bun add ../packages/cogent-engine
 Then import and run:
 
 ```ts
-import { CogentEngine, getBundledRuntimeUrls } from "cogent-engine";
+import { CogentEngine, getBundledRuntimeUrls } from '@noumena-labs/cogent-engine';
 
 const engine = new CogentEngine(getBundledRuntimeUrls());
 await engine.initModule();
@@ -270,7 +336,18 @@ If you need explicit request handles for scheduling, cancellation, or mixed-load
 - `queuePrompt(...)`
 - `runQueuedRequest(...)`
 
-`getBundledRuntimeUrls()` is the clean default when you want to use the runtime assets packaged with `cogent-engine`.
+Scoped subpath imports:
+
+```ts
+import { createCharacterFromConfigUrl } from '@noumena-labs/cogent-engine/character';
+import { createDirectorFromConfigUrl } from '@noumena-labs/cogent-engine/director';
+```
+
+`getBundledRuntimeUrls()` is the clean default when you want to use the runtime assets packaged
+with `@noumena-labs/cogent-engine`.
+
+`getBundledBunRuntimeUrls()` is the Bun-specific equivalent when you need the `dist/wasm-bun`
+runtime layout.
 
 `moduleUrl` and `wasmUrl` are still available for advanced cases where you want to host the runtime assets somewhere else.
 By default, only same-origin module/wasm URLs are allowed.
@@ -296,6 +373,23 @@ const engine = new CogentEngine({
   trustedOrigins: ["https://cdn.example.com"],
 });
 ```
+
+## Browser Runtime Requirements
+
+Browser consumers need cross-origin isolation so `SharedArrayBuffer` remains available for the
+wasm runtime. At minimum, serve the app HTML with:
+
+```http
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+If wasm, worker, or model assets come from another origin, make sure those responses also satisfy
+your COEP setup with compatible CORS or `Cross-Origin-Resource-Policy` headers.
+
+`getBundledRuntimeUrls()` and `getBundledBunRuntimeUrls()` resolve packaged assets relative to the
+installed package via `import.meta.url`, so external apps can load the shipped wasm files directly
+from `node_modules` without the monorepo's Vite aliases.
 
 ## Browser Benchmark App
 

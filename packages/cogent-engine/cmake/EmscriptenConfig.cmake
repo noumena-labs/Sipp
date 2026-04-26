@@ -20,6 +20,8 @@ option(CE_WASM_ES_MODULE    "Build as modularized ES module for JS package manag
 option(CE_WASM_FILESYSTEM   "Enable Emscripten virtual filesystem support"     ON)
 option(CE_WASM_USE_JSPI     "Enable JSPI-based async exports"                  ON)
 option(CE_WASM_MEM64        "Enable wasm64 memory model"                       ON)
+set(CE_WASM_LTO_MODE "FULL" CACHE STRING "LTO mode for release WASM builds")
+set_property(CACHE CE_WASM_LTO_MODE PROPERTY STRINGS OFF THIN FULL)
 
 set(CE_WASM_INITIAL_MEMORY "512MB" CACHE STRING "Initial WASM memory")
 set(CE_WASM_MAXIMUM_MEMORY "16384MB" CACHE STRING "Maximum WASM memory")
@@ -27,6 +29,11 @@ set(CE_WASM_STACK_SIZE "16MB" CACHE STRING "WASM stack size")
 set(CE_WASM_PTHREAD_STACK_SIZE "2MB" CACHE STRING "Default pthread stack size")
 set(CE_WASM_PTHREAD_POOL_SIZE "4" CACHE STRING "Pthread pool size")
 set(CE_WASM_ENVIRONMENT "web,worker" CACHE STRING "Emscripten environment list")
+
+string(TOUPPER "${CE_WASM_LTO_MODE}" CE_WASM_LTO_MODE)
+if(NOT CE_WASM_LTO_MODE STREQUAL "OFF" AND NOT CE_WASM_LTO_MODE STREQUAL "THIN" AND NOT CE_WASM_LTO_MODE STREQUAL "FULL")
+    message(FATAL_ERROR "Invalid CE_WASM_LTO_MODE='${CE_WASM_LTO_MODE}'. Use OFF, THIN, or FULL.")
+endif()
 
 # ======================================================================================
 # GGML Backend Configuration for Emscripten
@@ -152,6 +159,7 @@ if(CE_WASM_DEBUG)
         ${_CE_DEBUG_PATH_REMAP_FLAGS}
     )
     set(_CE_LTO_FLAGS)
+    set(_CE_ACTIVE_LTO_MODE OFF)
 else()
     if(CE_WASM_AGGRESSIVE_OPT)
         # Equivalent to -Ofast but without deprecated warning and compatible with ggml.
@@ -177,7 +185,14 @@ else()
     endif()
     set(_CE_DEBUG_COMPILE_FLAGS -g0)
     set(_CE_DEBUG_LINK_FLAGS -g0)
-    set(_CE_LTO_FLAGS -flto=full)
+    if(CE_WASM_LTO_MODE STREQUAL "OFF")
+        set(_CE_LTO_FLAGS)
+    elseif(CE_WASM_LTO_MODE STREQUAL "THIN")
+        set(_CE_LTO_FLAGS -flto=thin)
+    else()
+        set(_CE_LTO_FLAGS -flto=full)
+    endif()
+    set(_CE_ACTIVE_LTO_MODE ${CE_WASM_LTO_MODE})
 endif()
 
 # ======================================================================================
@@ -319,6 +334,7 @@ message(STATUS "=== CogentEngine Emscripten Configuration ===")
 message(STATUS "  Pthreads:           ${CE_WASM_PTHREADS}")
 message(STATUS "  Debug mode:         ${CE_WASM_DEBUG}")
 message(STATUS "  Aggressive opt:     ${CE_WASM_AGGRESSIVE_OPT}")
+message(STATUS "  LTO mode:           ${_CE_ACTIVE_LTO_MODE}")
 message(STATUS "  ES Module:          ${CE_WASM_ES_MODULE}")
 message(STATUS "  Filesystem:         ${CE_WASM_FILESYSTEM}")
 message(STATUS "  JSPI:               ${CE_WASM_USE_JSPI}")

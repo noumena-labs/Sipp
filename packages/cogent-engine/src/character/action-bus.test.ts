@@ -10,39 +10,39 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { ActionBus, type CharacterEvent } from './action-bus.js';
+import { CharacterEventBus, type CharacterEvent } from './action-bus.js';
 
-test('ActionBus delivers events to the correct typed listener', () => {
-  const bus = new ActionBus();
+test('CharacterEventBus delivers events to the correct typed listener', () => {
+  const bus = new CharacterEventBus();
   const seen: string[] = [];
   bus.on('prose', (event) => {
     seen.push(`prose:${event.text}`);
   });
   bus.on('action', (event) => {
-    seen.push(`action:${event.name}`);
+    seen.push(`action:${event.id}`);
   });
 
   bus.emit({ kind: 'prose', text: 'hi' });
-  bus.emit({ kind: 'action', name: 'wave', raw: '[wave]' });
+  bus.emit({ kind: 'action', id: 'wave', raw: '[wave]' });
 
   assert.deepEqual(seen, ['prose:hi', 'action:wave']);
 });
 
-test('ActionBus wildcard listener receives every event', () => {
-  const bus = new ActionBus();
+test('CharacterEventBus wildcard listener receives every event', () => {
+  const bus = new CharacterEventBus();
   const events: CharacterEvent[] = [];
   bus.onAny((event) => {
     events.push(event);
   });
   bus.emit({ kind: 'turn-start', userMessage: 'hello' });
-  bus.emit({ kind: 'turn-end', finalText: 'hi', cancelled: false });
+  bus.emit({ kind: 'turn-end', finalText: 'hi', status: 'ok' });
   assert.equal(events.length, 2);
   assert.equal(events[0].kind, 'turn-start');
   assert.equal(events[1].kind, 'turn-end');
 });
 
-test('ActionBus disposer removes the listener', () => {
-  const bus = new ActionBus();
+test('CharacterEventBus disposer removes the listener', () => {
+  const bus = new CharacterEventBus();
   let count = 0;
   const dispose = bus.on('prose', () => {
     count += 1;
@@ -53,14 +53,14 @@ test('ActionBus disposer removes the listener', () => {
   assert.equal(count, 1);
 });
 
-test('ActionBus continues dispatching when one listener throws', () => {
+test('CharacterEventBus continues dispatching when one listener throws', () => {
   const originalError = console.error;
   const errors: string[] = [];
   console.error = (...args) => {
     errors.push(args.join(' '));
   };
   try {
-    const bus = new ActionBus();
+    const bus = new CharacterEventBus();
     const events: string[] = [];
     bus.on('prose', () => {
       throw new Error('boom');
@@ -76,8 +76,8 @@ test('ActionBus continues dispatching when one listener throws', () => {
   }
 });
 
-test('ActionBus clear() removes every listener', () => {
-  const bus = new ActionBus();
+test('CharacterEventBus clear() removes every listener', () => {
+  const bus = new CharacterEventBus();
   let hits = 0;
   bus.on('prose', () => {
     hits += 1;

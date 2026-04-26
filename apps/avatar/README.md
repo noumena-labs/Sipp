@@ -33,10 +33,10 @@ Open the printed local URL, paste a `.gguf` model URL, and press `Load`.
 `src/App.tsx` uses the public helper:
 
 ```ts
-const { agent, config } = await createCharacterFromConfigUrl({
+const { character, config } = await createCharacterFromConfigUrl({
   configUrl: args.characterUrl,
   engine,
-  bus: new ActionBus(),
+  bus: new CharacterEventBus(),
 });
 ```
 

@@ -2,7 +2,7 @@
 //
 // character-agent.ts
 //
-// - High-level character turn loop that ties an engine instance to a
+// - High-level character runtime that ties an engine instance to a
 //   CharacterConfig: builds the system prompt, tracks memory, compiles the
 //   grammar once, and exposes a single `chat()` async iterator that emits
 //   prose/action events as they arrive.
@@ -15,9 +15,10 @@ import type {
   GenerateResponse,
   PromptOptions,
 } from '../core/inference-types.js';
-import { ActionBus, type CharacterEvent } from './action-bus.js';
+import { CharacterEventBus, type CharacterEvent } from './action-bus.js';
 import { compileActionGrammar } from './action-grammar.js';
 import { StreamingActionParser, type ParsedEvent } from './action-parser.js';
+import { compileChoiceGrammar, parseChoiceOutput } from './choice-grammar.js';
 import {
   DEFAULT_MEMORY_MAX_TURNS,
   resolveMaxMemoryTurns,
@@ -25,17 +26,15 @@ import {
 } from './character-config.js';
 import { summarizeActionCues } from './action-schema.js';
 import {
-  buildBoundaryMarkers,
-  probeChatTemplateBoundaryInfo,
-  renderAppliedChatTemplate,
-} from './chat-template-metadata.js';
+  ChatTemplatePromptRuntime,
+  sanitizeAssistantText,
+  StreamingBoundaryTextSanitizer,
+} from '../core/chat-template-boundaries.js';
 import { renderSystemPrompt } from './persona.js';
+import { createTimedAbortController, waitForAbort } from '../utils/abort.js';
+import type { RunStatus } from '../core/run-status.js';
 
-/**
- * Minimal shape of the engine the agent needs. Defined structurally so tests
- * can supply a fake without pulling in the full CogentEngine class.
- */
-export interface CharacterAgentEngine {
+export interface CharacterRuntimeEngine {
   queuePrompt(
     contextKey: string,
     promptText: string,
@@ -46,26 +45,27 @@ export interface CharacterAgentEngine {
     options?: { signal?: AbortSignal }
   ): Promise<GenerateResponse>;
   cancelQueuedRequest?(requestId: GenerateRequestId): Promise<boolean>;
-  /** Returns the Jinja chat_template string embedded in the GGUF, or null. */
+  applyChatTemplate(
+    messages: Array<{ role: string; content: string }>,
+    addAssistant: boolean
+  ): Promise<string>;
   getChatTemplate?(): string | null;
-  /** Returns the model's BOS token rendered as text (may be empty). */
-  getBosText?(): string;
-  /** Returns the model's EOS token rendered as text (may be empty). */
   getEosText?(): string;
-  applyChatTemplate(messages: Array<{ role: string; content: string }>, addAssistant: boolean): Promise<string>;
 }
 
-export interface CharacterAgentOptions {
+export interface CharacterRuntimeOptions {
   /**
    * Maximum tokens the model may emit per turn. Defaults to 256, which is a
    * reasonable upper bound for conversational replies.
    */
   readonly maxOutputTokens?: number;
   /**
-   * Prebuilt ActionBus. When omitted, the agent creates one internally.
-   * Injecting a shared bus lets multiple consumers observe the same agent.
+   * Prebuilt CharacterEventBus. When omitted, the runtime creates one internally.
+   * Injecting a shared bus lets multiple consumers observe the same character.
    */
-  readonly bus?: ActionBus;
+  readonly bus?: CharacterEventBus;
+  /** Stable engine context key prefix. Defaults to `character:${config.id}`. */
+  readonly contextKey?: string;
 }
 
 export interface ChatTurn {
@@ -73,19 +73,28 @@ export interface ChatTurn {
   readonly content: string;
 }
 
+export interface CharacterChooseResult {
+  readonly selection: string | null;
+  readonly status: RunStatus;
+  readonly errorMessage?: string;
+  readonly rawText: string;
+}
+
+export interface CharacterChooseOptions {
+  readonly choices: readonly string[];
+  readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
+  readonly maxOutputTokens?: number;
+}
+
 /**
- * Turn-level chat event yielded by {@link CharacterAgent.chat}. Mirrors the
- * ActionBus event shape so consumers can choose either transport.
+ * Turn-level chat event yielded by {@link CharacterRuntime.chat}. Mirrors the
+ * CharacterEventBus event shape so consumers can choose either transport.
  */
 export type ChatEvent = CharacterEvent;
 
 interface ResolvedPromptContext {
   readonly promptText: string;
-  readonly boundaryMarkers: readonly string[];
-  readonly templateSource: string | null;
-}
-
-interface CachedPromptMetadata {
   readonly boundaryMarkers: readonly string[];
   readonly templateSource: string | null;
 }
@@ -96,35 +105,38 @@ interface InFlightTurn {
 }
 
 /**
- * A character-driven conversation agent. Pair one with a CogentEngine and a
+ * A character-driven conversation runtime. Pair one with a CogentEngine and a
  * CharacterConfig to get a grammar-constrained, memory-aware chat loop.
  */
-export class CharacterAgent {
-  private readonly engine: CharacterAgentEngine;
+export class CharacterRuntime {
+  private readonly engine: CharacterRuntimeEngine;
   private readonly config: CharacterConfig;
   private readonly maxOutputTokens: number;
+  private readonly contextKey: string;
   private readonly systemPrompt: string;
   private readonly grammarSource: string;
+  private readonly promptRuntime: ChatTemplatePromptRuntime;
   private readonly memoryLimitTurns: number;
-  private readonly canonicalCueLabelsByActionName: ReadonlyMap<string, string>;
+  private readonly canonicalCueLabelsByActionId: ReadonlyMap<string, string>;
   private readonly turnHistory: ChatTurn[] = [];
-  private readonly eventBus: ActionBus;
-  private promptMetadataPromise: Promise<CachedPromptMetadata> | undefined;
+  private readonly eventBus: CharacterEventBus;
   private currentTurn: InFlightTurn | undefined;
 
   public constructor(
-    engine: CharacterAgentEngine,
+    engine: CharacterRuntimeEngine,
     config: CharacterConfig,
-    options: CharacterAgentOptions = {}
+    options: CharacterRuntimeOptions = {}
   ) {
     this.engine = engine;
     this.config = config;
     this.maxOutputTokens = options.maxOutputTokens ?? 256;
-    this.eventBus = options.bus ?? new ActionBus();
+    this.contextKey = options.contextKey ?? `character:${config.id}`;
+    this.eventBus = options.bus ?? new CharacterEventBus();
+    this.promptRuntime = new ChatTemplatePromptRuntime(engine);
     this.systemPrompt = renderSystemPrompt(config.persona, config.actions);
     this.grammarSource = compileActionGrammar(config.actions);
-    this.canonicalCueLabelsByActionName = new Map(
-      summarizeActionCues(config.actions).map((cue) => [cue.name, cue.label])
+    this.canonicalCueLabelsByActionId = new Map(
+      summarizeActionCues(config.actions).map((cue) => [cue.id, cue.label])
     );
     this.memoryLimitTurns = Math.max(
       0,
@@ -133,8 +145,12 @@ export class CharacterAgent {
   }
 
   /** Exposes the event bus for imperative subscribers (VRM bindings, logs). */
-  public get bus(): ActionBus {
+  public get bus(): CharacterEventBus {
     return this.eventBus;
+  }
+
+  public getConfig(): CharacterConfig {
+    return this.config;
   }
 
   /** Read-only snapshot of the sliding-window memory. */
@@ -157,6 +173,169 @@ export class CharacterAgent {
     return this.systemPrompt;
   }
 
+  public async choose(
+    userMessage: string,
+    options: CharacterChooseOptions
+  ): Promise<CharacterChooseResult> {
+    let grammar: string;
+    try {
+      grammar = compileChoiceGrammar(options.choices);
+    } catch (error) {
+      return {
+        selection: null,
+        status: 'invalid_request',
+        errorMessage: error instanceof Error ? error.message : String(error),
+        rawText: '',
+      };
+    }
+    const choicePrompt = renderChoicePrompt(userMessage, options.choices);
+    const messages: ChatMessage[] = [
+      { role: 'system', content: this.systemPrompt },
+      { role: 'user', content: choicePrompt },
+    ];
+
+    let promptText: string;
+    let boundaryMarkers: readonly string[] = [];
+    try {
+      const promptContext = await this.promptRuntime.render(messages);
+      promptText = promptContext.promptText;
+      boundaryMarkers = promptContext.boundaryMarkers;
+    } catch (error) {
+      return {
+        selection: null,
+        status: options.signal?.aborted === true ? 'aborted' : 'failed',
+        errorMessage: error instanceof Error ? error.message : String(error),
+        rawText: '',
+      };
+    }
+
+    const abort = createTimedAbortController(options.signal, options.timeoutMs);
+    const promptOptions: PromptOptions = {
+      nTokens: options.maxOutputTokens ?? 24,
+      promptFormat: 'raw',
+      grammar,
+      signal: abort.signal,
+    };
+    const contextKey = `${this.contextKey}:choose`;
+
+    logChoiceQuery({
+      phase: 'request',
+      contextKey,
+      systemPrompt: this.systemPrompt,
+      userPrompt: choicePrompt,
+      grammar,
+      choices: options.choices,
+    });
+
+    let requestId = 0;
+    try {
+      requestId = await this.engine.queuePrompt(contextKey, promptText, promptOptions);
+      const response = await Promise.race([
+        this.engine.runQueuedRequest(requestId, { signal: abort.signal }),
+        waitForAbort(abort.signal, {
+          timedOut: abort.timedOut,
+          timeoutMessage: 'Choice timed out.',
+          abortMessage: 'Choice aborted.',
+        }),
+      ]);
+      const rawText = response.outputText ?? '';
+      const parseText = sanitizeAssistantText(rawText, boundaryMarkers);
+      if (response.cancelled) {
+        const status = abort.timedOut() ? 'timed_out' : 'aborted';
+        const errorMessage = status === 'timed_out' ? 'Choice timed out.' : 'Choice aborted.';
+        logChoiceQuery({
+          phase: 'response',
+          contextKey,
+          rawText,
+          selection: null,
+          status,
+          errorMessage,
+        });
+        return {
+          selection: null,
+          status,
+          errorMessage,
+          rawText,
+        };
+      }
+      if (response.failed) {
+        logChoiceQuery({
+          phase: 'response',
+          contextKey,
+          rawText,
+          selection: null,
+          status: 'failed',
+          errorMessage: response.errorMessage ?? 'generation failed',
+        });
+        return {
+          selection: null,
+          status: 'failed',
+          errorMessage: response.errorMessage ?? 'generation failed',
+          rawText,
+        };
+      }
+      const selection = parseChoiceOutput(parseText, options.choices);
+      if (selection == null) {
+        logChoiceQuery({
+          phase: 'response',
+          contextKey,
+          rawText,
+          selection: null,
+          status: 'invalid_response',
+          errorMessage: 'choice output did not match any available option',
+        });
+        return {
+          selection: null,
+          status: 'invalid_response',
+          errorMessage: 'choice output did not match any available option',
+          rawText,
+        };
+      }
+      return {
+        selection,
+        status: 'ok',
+        rawText,
+      };
+    } catch (error) {
+      const cancelled = abort.signal.aborted;
+      if (requestId !== 0 && cancelled && this.engine.cancelQueuedRequest) {
+        void this.engine.cancelQueuedRequest(requestId).catch(() => undefined);
+      } else if (requestId !== 0 && !cancelled && this.engine.cancelQueuedRequest) {
+        try {
+          await this.engine.cancelQueuedRequest(requestId);
+        } catch {
+          // Swallow cancel errors.
+        }
+      }
+      const status = cancelled
+        ? abort.timedOut()
+          ? 'timed_out'
+          : 'aborted'
+        : 'failed';
+      const errorMessage = status === 'timed_out'
+        ? 'Choice timed out.'
+        : status === 'aborted'
+          ? 'Choice aborted.'
+          : error instanceof Error ? error.message : String(error);
+      logChoiceQuery({
+        phase: 'response',
+        contextKey,
+        rawText: '',
+        selection: null,
+        status,
+        errorMessage,
+      });
+      return {
+        selection: null,
+        status,
+        errorMessage,
+        rawText: '',
+      };
+    } finally {
+      abort.dispose();
+    }
+  }
+
   /**
    * Processes a single user turn. Returns an async iterator that yields
    * `ChatEvent`s as they arrive, terminating with a `turn-end` event.
@@ -167,14 +346,14 @@ export class CharacterAgent {
    */
   public chat(userMessage: string, options: { signal?: AbortSignal } = {}): AsyncIterable<ChatEvent> {
     const trimmed = userMessage ?? '';
-    const queue = new AsyncEventQueue<ChatEvent>();
+    const controller = new AbortController();
+    const queue = new AsyncEventQueue<ChatEvent>(() => controller.abort());
 
     const emit = (event: ChatEvent): void => {
       queue.push(event);
       this.eventBus.emit(event);
     };
 
-    const controller = new AbortController();
     const detachSignalForwarder = forwardAbortSignal(options.signal, controller);
     const previousTurn = this.currentTurn;
 
@@ -214,7 +393,7 @@ export class CharacterAgent {
     emit({ kind: 'turn-start', userMessage });
 
     if (signal.aborted) {
-      emit({ kind: 'turn-end', finalText: '', cancelled: true });
+      emit({ kind: 'turn-end', finalText: '', status: 'aborted' });
       return;
     }
 
@@ -223,7 +402,7 @@ export class CharacterAgent {
     try {
       const promptContext = await this.buildPromptContext(turnMessages);
       if (signal.aborted) {
-        emit({ kind: 'turn-end', finalText: '', cancelled: true });
+        emit({ kind: 'turn-end', finalText: '', status: 'aborted' });
         return;
       }
       await this.runTurn(promptContext, userMessage, parser, emit, signal);
@@ -231,7 +410,7 @@ export class CharacterAgent {
       emit({
         kind: 'turn-end',
         finalText: '',
-        cancelled: signal.aborted,
+        status: signal.aborted ? 'aborted' : 'failed',
         ...(signal.aborted
           ? {}
           : { errorMessage: error instanceof Error ? error.message : String(error) }),
@@ -262,32 +441,7 @@ export class CharacterAgent {
    * and derives assistant boundaries from that applied template output.
    */
   private async buildPromptContext(messages: ChatMessage[]): Promise<ResolvedPromptContext> {
-    const [promptText, metadata] = await Promise.all([
-      renderAppliedChatTemplate(this.engine, messages),
-      this.getPromptMetadata(),
-    ]);
-
-    return {
-      promptText,
-      boundaryMarkers: metadata.boundaryMarkers,
-      templateSource: metadata.templateSource,
-    };
-  }
-
-  private getPromptMetadata(): Promise<CachedPromptMetadata> {
-    if (!this.promptMetadataPromise) {
-      this.promptMetadataPromise = probeChatTemplateBoundaryInfo(this.engine)
-        .then((boundaryInfo) => ({
-          boundaryMarkers: buildBoundaryMarkers(boundaryInfo),
-          templateSource: this.engine.getChatTemplate?.() ?? null,
-        }))
-        .catch((error) => {
-          this.promptMetadataPromise = undefined;
-          throw error;
-        });
-    }
-
-    return this.promptMetadataPromise;
+    return this.promptRuntime.render(messages);
   }
 
   private async runTurn(
@@ -298,16 +452,14 @@ export class CharacterAgent {
     signal: AbortSignal
   ): Promise<void> {
     let streamedOutputText = '';
-    let pendingText = '';
     let proseText = '';
     let memoryText = '';
     let requestId: GenerateRequestId = 0;
-    let cancelled = false;
+    let status: RunStatus = 'ok';
     let errorMessage: string | undefined;
-    let reachedBoundary = false;
-    const contextKey = this.config.id;
+    const contextKey = `${this.contextKey}:chat`;
     const promptText = promptContext.promptText;
-    const boundaryMarkers = promptContext.boundaryMarkers;
+    const outputSanitizer = new StreamingBoundaryTextSanitizer(promptContext.boundaryMarkers);
 
     const recordParsedEvents = (events: readonly ParsedEvent[]): void => {
       for (const event of events) {
@@ -315,7 +467,7 @@ export class CharacterAgent {
           proseText += event.text;
           memoryText += event.text;
         } else {
-          memoryText += this.renderCanonicalActionCue(event.name, event.raw);
+          memoryText += this.renderCanonicalActionCue(event.id, event.raw);
         }
         emit(event);
       }
@@ -342,19 +494,14 @@ export class CharacterAgent {
     };
 
     const consumeOutputText = (text: string): void => {
-      if (text.length === 0 || reachedBoundary) {
+      if (text.length === 0 || outputSanitizer.reachedBoundary) {
         return;
       }
       streamedOutputText += text;
-      pendingText += text;
+      const result = outputSanitizer.consume(text);
+      emitParsedText(result.safeText);
 
-      const split = splitOnAssistantBoundary(pendingText, boundaryMarkers);
-      emitParsedText(split.safeText);
-      pendingText = split.trailingText;
-
-      if (split.hitBoundary) {
-        pendingText = '';
-        reachedBoundary = true;
+      if (result.hitBoundary) {
         requestBoundaryStop();
       }
     };
@@ -374,24 +521,30 @@ export class CharacterAgent {
       requestId = await this.engine.queuePrompt(contextKey, promptText, promptOptions);
       const response = await this.engine.runQueuedRequest(requestId, { signal });
       const unseenOutputSuffix = sliceUnstreamedSuffix(streamedOutputText, response.outputText);
-      if (!reachedBoundary && unseenOutputSuffix.length > 0) {
+      if (!outputSanitizer.reachedBoundary && unseenOutputSuffix.length > 0) {
         consumeOutputText(unseenOutputSuffix);
       }
-      cancelled = response.cancelled && !reachedBoundary;
+      if (response.cancelled && !outputSanitizer.reachedBoundary) {
+        status = 'aborted';
+      }
       if (response.failed && response.errorMessage) {
+        status = 'failed';
         errorMessage = response.errorMessage;
       }
     } catch (error) {
-      if (reachedBoundary && !signal.aborted) {
-        cancelled = false;
+      if (outputSanitizer.reachedBoundary && !signal.aborted) {
+        status = 'ok';
       } else {
-        errorMessage = error instanceof Error ? error.message : String(error);
+        status = signal.aborted ? 'aborted' : 'failed';
+        if (!signal.aborted) {
+          errorMessage = error instanceof Error ? error.message : String(error);
+        }
       }
-      if (signal.aborted && !reachedBoundary) {
-        cancelled = true;
+      if (signal.aborted && !outputSanitizer.reachedBoundary) {
+        status = 'aborted';
       }
       // Best-effort cancel in case the runtime still holds the request.
-      if (requestId !== 0 && this.engine.cancelQueuedRequest && !reachedBoundary) {
+      if (requestId !== 0 && this.engine.cancelQueuedRequest && !outputSanitizer.reachedBoundary) {
         try {
           await this.engine.cancelQueuedRequest(requestId);
         } catch {
@@ -400,15 +553,13 @@ export class CharacterAgent {
       }
     }
 
-    if (!reachedBoundary) {
-      emitParsedText(trimTrailingBoundaryPrefix(pendingText, boundaryMarkers));
-    }
+    emitParsedText(outputSanitizer.flush());
     flushParsedText();
 
     const finalText = stripExactUserMessageEcho(proseText, userMessage).trim();
     const sanitizedMemoryText = stripExactUserMessageEcho(memoryText, userMessage).trim();
 
-    if (!cancelled && !errorMessage && sanitizedMemoryText.length > 0) {
+    if (status === 'ok' && !errorMessage && sanitizedMemoryText.length > 0) {
       this.pushTurnToMemory({ role: 'user', content: userMessage });
       this.pushTurnToMemory({ role: 'assistant', content: sanitizedMemoryText });
     }
@@ -416,14 +567,14 @@ export class CharacterAgent {
     const endEvent = {
       kind: 'turn-end' as const,
       finalText,
-      cancelled,
+      status,
       ...(errorMessage ? { errorMessage } : {}),
     };
     emit(endEvent);
   }
 
-  private renderCanonicalActionCue(name: string, rawCue: string): string {
-    const label = this.canonicalCueLabelsByActionName.get(name);
+  private renderCanonicalActionCue(id: string, rawCue: string): string {
+    const label = this.canonicalCueLabelsByActionId.get(id);
     return label == null ? rawCue : `[${label}]`;
   }
 
@@ -436,6 +587,7 @@ export class CharacterAgent {
     }
   }
 }
+
 
 /**
  * Small async FIFO queue. Consumers await items via `for await`; producers
@@ -450,6 +602,8 @@ class AsyncEventQueue<T> implements AsyncIterable<T> {
   private readonly pendingValues: T[] = [];
   private readonly pendingResolvers: Array<(result: IteratorResult<T>) => void> = [];
   private closed = false;
+
+  public constructor(private readonly onReturn?: () => void) {}
 
   public push(value: T): void {
     if (this.closed) {
@@ -489,75 +643,12 @@ class AsyncEventQueue<T> implements AsyncIterable<T> {
         });
       },
       return: (): Promise<IteratorResult<T>> => {
+        this.onReturn?.();
         this.close();
         return Promise.resolve({ value: undefined as never, done: true });
       },
     };
   }
-}
-
-function splitOnAssistantBoundary(
-  text: string,
-  boundaryMarkers: readonly string[]
-): { safeText: string; trailingText: string; hitBoundary: boolean } {
-  let earliestIndex = -1;
-  let matchedMarker = '';
-
-  for (const marker of boundaryMarkers) {
-    if (marker.length === 0) {
-      continue;
-    }
-    const index = text.indexOf(marker);
-    if (index >= 0 && (earliestIndex < 0 || index < earliestIndex)) {
-      earliestIndex = index;
-      matchedMarker = marker;
-    }
-  }
-
-  if (earliestIndex >= 0) {
-    return {
-      safeText: text.slice(0, earliestIndex),
-      trailingText: text.slice(earliestIndex + matchedMarker.length),
-      hitBoundary: true,
-    };
-  }
-
-  let safeLength = text.length;
-  for (const marker of boundaryMarkers) {
-    if (marker.length <= 1) {
-      continue;
-    }
-    const overlap = longestSuffixPrefixOverlap(text, marker);
-    safeLength = Math.min(safeLength, text.length - overlap);
-  }
-
-  return {
-    safeText: text.slice(0, safeLength),
-    trailingText: text.slice(safeLength),
-    hitBoundary: false,
-  };
-}
-
-function trimTrailingBoundaryPrefix(
-  text: string,
-  boundaryMarkers: readonly string[]
-): string {
-  let out = text;
-  let changed = true;
-  while (changed && out.length > 0) {
-    changed = false;
-    for (const marker of boundaryMarkers) {
-      if (marker.length === 0) {
-        continue;
-      }
-      if (marker.startsWith(out)) {
-        out = '';
-        changed = true;
-        break;
-      }
-    }
-  }
-  return out;
 }
 
 function stripExactUserMessageEcho(text: string, userMessage: string): string {
@@ -583,16 +674,6 @@ function stripExactUserMessageEcho(text: string, userMessage: string): string {
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function longestSuffixPrefixOverlap(source: string, marker: string): number {
-  const maxLength = Math.min(source.length, marker.length - 1);
-  for (let length = maxLength; length > 0; length -= 1) {
-    if (source.endsWith(marker.slice(0, length))) {
-      return length;
-    }
-  }
-  return 0;
 }
 
 function forwardAbortSignal(
@@ -624,4 +705,50 @@ function sliceUnstreamedSuffix(streamedOutputText: string, finalOutputText: stri
     return '';
   }
   return finalOutputText.slice(streamedOutputText.length);
+}
+
+function renderChoicePrompt(userMessage: string, choices: readonly string[]): string {
+  const normalizedChoices = choices.map((choice) => choice.trim());
+  return [
+    userMessage.trim(),
+    '',
+    'Choose exactly one of the following options and output only that option text:',
+    ...normalizedChoices.map((choice) => `- ${choice}`),
+  ].join('\n');
+}
+
+function logChoiceQuery(args: {
+  phase: 'request' | 'response';
+  contextKey: string;
+  systemPrompt?: string;
+  userPrompt?: string;
+  grammar?: string;
+  choices?: readonly string[];
+  rawText?: string;
+  selection?: string | null;
+  status?: CharacterChooseResult['status'];
+  errorMessage?: string;
+}): void {
+  if (!isPromptTraceEnabled()) return;
+  if (args.phase === 'request') {
+    console.groupCollapsed(`[CharacterRuntime.choose] -> ${args.contextKey}`);
+    console.log('systemPrompt', args.systemPrompt ?? '');
+    console.log('userPrompt', args.userPrompt ?? '');
+    console.log('choices', args.choices ?? []);
+    console.log('grammar', args.grammar ?? '');
+    console.groupEnd();
+    return;
+  }
+  console.groupCollapsed(`[CharacterRuntime.choose] <- ${args.contextKey}`);
+  console.log('rawText', args.rawText ?? '');
+  console.log('selection', args.selection ?? null);
+  console.log('status', args.status ?? 'ok');
+  if (args.errorMessage) {
+    console.warn('error', args.errorMessage);
+  }
+  console.groupEnd();
+}
+
+function isPromptTraceEnabled(): boolean {
+  return (globalThis as { COGENT_TRACE_PROMPTS?: boolean }).COGENT_TRACE_PROMPTS === true;
 }

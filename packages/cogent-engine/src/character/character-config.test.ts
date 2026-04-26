@@ -19,9 +19,7 @@ import {
   type CharacterConfig,
 } from './character-config.js';
 
-const validActions: ActionSchema = {
-  actions: [{ name: 'wave', description: 'wave hello' }],
-};
+const validActions: ActionSchema = [{ id: 'wave', description: 'wave hello' }];
 
 function buildValid(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -60,7 +58,7 @@ test('parseCharacterConfig accepts a valid simplified persona and trims fields',
   assert.equal(config.persona.currentLife?.description, 'Runs a shared studio.');
   assert.deepEqual(config.persona.personality?.traits, ['warm', 'curious']);
   assert.equal(config.persona.personality?.description, 'Notices little details.');
-  assert.equal(config.actions.actions.length, 1);
+  assert.equal(config.actions.length, 1);
   assert.equal(config.memory?.maxTurns, 4);
   assert.deepEqual(config.persona.anchorExamples, [{ user: 'who are you?', assistant: '[wave] I am Aria.' }]);
   assert.deepEqual(config.persona.dialogExamples, [{ user: 'hello', assistant: '[wave] Hi there!' }]);
@@ -96,7 +94,7 @@ test('parseCharacterConfig requires persona to be an object', () => {
 
 test('parseCharacterConfig surfaces action-schema error messages', () => {
   const raw = buildValid({
-    actions: { actions: [{ name: 'bad id', description: 'x' }] },
+    actions: [{ id: 'bad id', description: 'x' }],
   });
   assert.throws(
     () => parseCharacterConfig(raw),

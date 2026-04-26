@@ -1,4 +1,5 @@
 export * from './core/inference-types.js';
+export * from './core/run-status.js';
 export * from './model-bundle/model-bundle-types.js';
 export * from './model-bundle/gguf-metadata.js';
 export * from './model-bundle/model-bundle-detection.js';

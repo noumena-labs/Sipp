@@ -2,16 +2,16 @@
 //
 // three-vrm-binding.ts
 //
-// - Bridges character ActionBus events onto a loaded VRM. Body gestures are
-//   loaded from Mixamo .fbx clips by action name; facial and gaze behaviors
+// - Bridges character event bus events onto a loaded VRM. Body gestures are
+//   loaded from Mixamo .fbx clips by action id; facial and gaze behaviors
 //   remain code-driven.
 //
 //////////////////////////////////////////////////////////////////////////////
 
 import * as THREE from 'three';
 import { VRMExpressionPresetName, VRMHumanBoneName } from '@pixiv/three-vrm';
-import type { ActionEvent } from 'cogent-engine/character';
-import { ActionBus } from 'cogent-engine/character';
+import type { ActionEvent } from '@noumena-labs/cogent-engine/character';
+import { CharacterEventBus } from '@noumena-labs/cogent-engine/character';
 import {
   dispatchAvatarAction,
   getRequiredClipActions,
@@ -53,7 +53,7 @@ const CLIP_FADE_SECONDS = 0.18;
 const CLIP_STOP_DELAY_MS = Math.ceil(CLIP_FADE_SECONDS * 1000);
 
 export class ThreeVRMBinding implements AvatarActionRuntime {
-  private readonly bus: ActionBus;
+  private readonly bus: CharacterEventBus;
   private readonly avatar: LoadedAvatar;
   private readonly renderAssets: AvatarRenderAssets;
   private readonly disposers: Array<() => void> = [];
@@ -84,7 +84,7 @@ export class ThreeVRMBinding implements AvatarActionRuntime {
     ReturnType<typeof window.setTimeout>
   >();
 
-  public constructor(bus: ActionBus, avatar: LoadedAvatar, renderAssets: AvatarRenderAssets) {
+  public constructor(bus: CharacterEventBus, avatar: LoadedAvatar, renderAssets: AvatarRenderAssets) {
     this.bus = bus;
     this.avatar = avatar;
     this.renderAssets = renderAssets;
@@ -211,8 +211,8 @@ export class ThreeVRMBinding implements AvatarActionRuntime {
   }
 
   private handleAction(event: ActionEvent): void {
-    if (!dispatchAvatarAction(event.name, this)) {
-      console.info(`[binding] no handler for action "${event.name}"`);
+    if (!dispatchAvatarAction(event.id, this)) {
+      console.info(`[binding] no handler for action "${event.id}"`);
     }
   }
 

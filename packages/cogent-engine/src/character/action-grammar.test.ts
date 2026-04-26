@@ -14,19 +14,22 @@ import { MAX_GRAMMAR_BYTES } from '../wasm/wasm-bridge.js';
 import { ActionSchemaError, compileActionGrammar } from './action-grammar.js';
 import type { ActionSchema } from './action-schema.js';
 
-const SCHEMA: ActionSchema = {
-  actions: [
-    { name: 'wave' },
-    { name: 'smile' },
-    { name: 'shake_head' },
-  ],
-};
+const SCHEMA: ActionSchema = [
+  { id: 'wave' },
+  { id: 'smile' },
+  { id: 'shake_head' },
+];
 
 test('compileActionGrammar throws ActionSchemaError on invalid input', () => {
   assert.throws(
-    () => compileActionGrammar({ actions: [] }),
+    () => compileActionGrammar([{ id: 'bad id' }]),
     (error) => error instanceof ActionSchemaError
   );
+});
+
+test('compileActionGrammar emits prose-only grammar for empty action schemas', () => {
+  const grammar = compileActionGrammar([]);
+  assert.match(grammar, /^root ::= prose-char\+/m);
 });
 
 test('compileActionGrammar emits a root rule that requires at least one atom', () => {
@@ -46,12 +49,10 @@ test('compileActionGrammar wraps cue labels in square brackets and restricts alt
 });
 
 test('compileActionGrammar uses custom cue labels when provided', () => {
-  const grammar = compileActionGrammar({
-    actions: [
-      { name: 'look_at_you', cue: 'look at you' },
-      { name: 'look_down', cue: 'look down' },
-    ],
-  });
+  const grammar = compileActionGrammar([
+    { id: 'look_at_you', cue: 'look at you' },
+    { id: 'look_down', cue: 'look down' },
+  ]);
 
   assert.match(grammar, /cue-label ::= "look at you" \| "look down"/);
 });
@@ -59,12 +60,10 @@ test('compileActionGrammar uses custom cue labels when provided', () => {
 test('compileActionGrammar rejects schemas with colliding cue labels', () => {
   assert.throws(
     () =>
-      compileActionGrammar({
-        actions: [
-          { name: 'wave' },
-          { name: 'wave_again', cue: 'wave' },
-        ],
-      }),
+      compileActionGrammar([
+        { id: 'wave' },
+        { id: 'wave_again', cue: 'wave' },
+      ]),
     (error) => error instanceof ActionSchemaError
   );
 });

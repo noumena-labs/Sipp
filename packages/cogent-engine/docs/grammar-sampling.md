@@ -10,30 +10,28 @@ you must not break when extending it.
 
 ## 1. Why grammar sampling at all
 
-The character harness uses GBNF to force the model to emit a **strict action
-protocol** interleaved with free prose:
+The character harness uses GBNF to force the model to emit a **strict cue
+vocabulary** interleaved with free prose:
 
 ```
-<action name="wave" args='{"mood":"happy"}'/>
+Hello there! [wave]
 ```
 
 Free-form function-calling (`{"tool_calls":[…]}` JSON) was rejected for
 three reasons:
 
-1. **Streaming parse.** Action tags can be recognised and dispatched as soon
-   as the closing `/>` is produced; JSON requires brace balancing that
+1. **Streaming parse.** Bracketed cues can be recognised and dispatched as
+   soon as the closing `]` is produced; JSON requires brace balancing that
    defeats incremental parsing.
 2. **Prose co-emission.** The protocol lets the model narrate and act in the
-   same turn (`"I wave hello! <action name=\"wave\" args='{}'/>"`). A JSON
-   envelope would either swallow the prose or require a second pass.
-3. **Tiny grammars.** The full action schema for a character compiles to
-   well under 2 KiB of GBNF, far below our size cap.
+   same turn (`"I wave hello! [wave]"`). A JSON envelope would either swallow
+   the prose or require a second pass.
+3. **Tiny grammars.** The full action schema for a character compiles to a
+   compact cue-label alternation, far below our size cap.
 
 The grammar is compiled from the `actions` section of `character.json` by
-`compileActionGrammar`. It constrains action `name` to the declared set and
-validates each arg's type (string / number / enum) inline — mis-shaped
-actions cannot be produced in the first place, so the parser doesn't need a
-second validation pass.
+`compileActionGrammar`. It constrains bracket labels to the declared cue set;
+unknown action ids or malformed cue labels are rejected at config load time.
 
 ---
 
@@ -105,7 +103,7 @@ are intentionally equal.
 The grammar argument is plumbed as a plain string through every layer:
 
 ```
-CharacterAgent
+CharacterRuntime
     → engine.queuePrompt({ grammar })       // TS runtime
         → WasmBridge.generate(..., grammar)  // validates size, passes string
             → wasm_exports / engine_bridge   // std::string grammar
@@ -131,25 +129,18 @@ Key points:
 `compileActionGrammar(schema)` emits GBNF with this rough shape:
 
 ```
-root       ::= prose (action prose)*
-prose      ::= [^<]*
-action     ::= "<action name=\"" action-name "\" args='" action-args "'/>"
-action-name ::= "wave" | "nod" | "set_mood" | …
-action-args ::= action-args-wave | action-args-nod | action-args-set_mood
-action-args-wave     ::= "{}"
-action-args-set_mood ::= "{\"mood\":\"" mood-value "\"}"
-mood-value           ::= "happy" | "sad" | "surprised" | "angry" | "neutral"
-…
+root       ::= ( action-cue | prose-char )+
+prose-char ::= [^[]
+action-cue ::= "[" cue-label "]"
+cue-label  ::= "wave" | "nod" | "look at you" | …
 ```
 
 Two things to know if you extend it:
 
-- Each action produces its own `action-args-<name>` LHS. If you refactor,
-  remember that downstream test string replacements must use `replaceAll`:
-  the LHS name and an RHS reference both appear.
-- Enum args are emitted as alternation of literal strings, so the model
-  cannot invent new values. Prefer enums over free-form strings whenever
-  the domain is closed.
+- Each action id produces one bracketed cue. The optional `cue` field lets
+  authors expose a more natural label while keeping the runtime id stable.
+- `[` is reserved as the cue opener. The schema validator rejects cue labels
+  containing brackets, newlines, or control characters.
 
 ---
 
@@ -161,7 +152,7 @@ Two things to know if you extend it:
   65 KiB grammar throws).
 - End-to-end grammar-constrained generation is validated indirectly via
   `character-agent.test.ts` with a fake engine that asserts the `grammar`
-  option was set when and only when the agent is in action mode.
+  option is threaded into character runtime requests.
 
 Native verification requires a wasm build (`bun run build:wasm`); the TS
 test suite can't exercise the llama.cpp sampler path directly.
@@ -183,31 +174,22 @@ test suite can't exercise the llama.cpp sampler path directly.
 5. **Reordering the sampler chain.** Grammar **must** run first. Running it
    after top-k/top-p can let the downstream samplers pick a disallowed
    token that the grammar would have rejected.
-6. **Using `_` in rule names.** llama.cpp's GBNF parser accepts only
-   `[a-zA-Z0-9-]` in rule identifiers, but our action-schema validator
-   intentionally permits `_` in user-supplied action/arg names (LLMs have
-   strong `snake_case` priors for function-calling). `compileActionGrammar`
-   bridges the gap by sanitising `_` → `-` **only** in rule-name fragments;
-   on-wire string literals like `name="set_mood"` and JSON arg keys like
-   `"duration_ms"` remain verbatim so the action-parser can round-trip them.
-   If two distinct identifiers collide after sanitisation (e.g. `set_mood`
-   and `set-mood`), the compiler throws `ActionSchemaError` at compile
-   time rather than producing an ambiguous grammar.
+6. **Putting `[` in constrained prose.** Character actions and director
+   directives reserve brackets for cue syntax. Use an unconstrained `text`
+   director task if literal brackets need to appear in model output.
 
 ---
 
-## 8. Identifier character sets — wire vs rule name
+## 8. Identifier Character Sets
 
-Two different charsets coexist in the action-schema plumbing:
+Two different authoring surfaces coexist in the action-schema plumbing:
 
 | Surface | Charset | Enforced by |
 |---|---|---|
-| `ActionSpec.name`, `ActionArgSpec.name` (authoring / wire) | `[A-Za-z_][A-Za-z0-9_]*` | `IDENTIFIER_RE` in `action-schema.ts` |
-| GBNF rule-name fragments (internal) | `[A-Za-z][A-Za-z0-9-]*` | llama.cpp GBNF parser |
+| `ActionSpec.id` | `[A-Za-z_][A-Za-z0-9_]*` | `IDENTIFIER_RE` in `action-schema.ts` |
+| `ActionSpec.cue` | no brackets, newlines, or control characters | `CUE_LABEL_RE` in `action-schema.ts` |
+| GBNF rule names | static names only | `action-grammar.ts` |
 
-The compiler keeps these two surfaces aligned by applying
-`sanitizeRuleIdent` (a simple `_ → -` substitution) **only** at the four
-rule-name construction sites in `action-grammar.ts`. Do not apply it to
-`rawStringLiteral(action.name)` (wire tag name) or `jsonStringLiteral(arg.name)`
-(JSON key) — those literals are consumed by `action-parser.ts`, which
-expects them byte-for-byte as the schema declared them.
+The compiler keeps runtime ids and cue labels separate: runtime ids are used
+by host bindings, while cue labels are the exact bracket text parsed from
+model output.

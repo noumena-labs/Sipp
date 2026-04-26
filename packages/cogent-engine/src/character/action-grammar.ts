@@ -15,13 +15,12 @@
 //
 // - Square brackets were chosen over angle-bracketed XML tags to keep the
 //   surface stylistically compatible with prose. Earlier versions used a
-//   typed `<action name="..." args={...}/>` form whose code-shape caused
+//   typed `<action id="..." args={...}/>` form whose code-shape caused
 //   small models to mimic function-signature boilerplate in dialog.
 //
 //////////////////////////////////////////////////////////////////////////////
 
 import {
-  ActionSchemaError,
   assertValidActionSchema,
   expandActionCues,
 } from './action-schema.js';
@@ -48,11 +47,11 @@ export function compileActionGrammar(schema: ActionSchema): string {
   assertValidActionSchema(schema);
   const cues = expandActionCues(schema);
 
-  if (cues.length === 0) {
-    throw new ActionSchemaError('Action schema produced no cues.');
-  }
-
   const rules: string[] = [];
+
+  if (cues.length === 0) {
+    return 'root ::= prose-char+\nprose-char ::= [^[]\n';
+  }
 
   // `root` is one or more atoms, where an atom is either a bracketed action
   // cue or a single prose character. Using `(alt)+` directly (instead of an
@@ -84,7 +83,7 @@ export function compileActionGrammar(schema: ActionSchema): string {
  * Escapes a string as a GBNF string literal. GBNF uses JSON-style escapes
  * for `"` and `\`. Our labels are short ASCII phrases so no further
  * escaping is required, but we remain defensive in case authors introduce
- * special characters via `cueLabel` / `cueLabels`.
+ * special characters via `cue`.
  */
 function gbnfStringLiteral(source: string): string {
   const escaped = source.replace(/\\/g, '\\\\').replace(/"/g, '\\"');

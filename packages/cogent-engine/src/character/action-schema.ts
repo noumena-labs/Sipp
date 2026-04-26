@@ -4,11 +4,11 @@
 //
 // - Declarative schema describing the set of actions a character can emit.
 // - Renderer-agnostic: each declared action is one model-facing cue and one
-//   runtime action name. Bindings (three.js, DOM, etc.) translate emitted
-//   action names into runtime effects.
+//   runtime action id. Bindings (three.js, DOM, etc.) translate emitted
+//   action ids into runtime effects.
 //
 // - The model-facing surface is intentionally flat: one bracketed cue such as
-//   `[wave]` or `[look at you]` maps directly to one runtime action name.
+//   `[wave]` or `[look at you]` maps directly to one runtime action id.
 //   This keeps character authoring, prompt rendering, parsing, and dispatch
 //   aligned 1:1 with no hidden arg expansion or enum projection.
 //
@@ -16,14 +16,14 @@
 
 export interface ActionSpec {
   /**
-   * Action identifier. Emitted verbatim as the `name` field on parsed action
+   * Action identifier. Emitted verbatim as the `id` field on parsed action
    * events so bindings can dispatch with a simple switch. Keep identifiers
    * in snake_case.
    */
-  readonly name: string;
+  readonly id: string;
   /**
    * Optional override for the bracketed cue shown to the model. Defaults to
-   * the action's snake_case name with underscores converted to spaces.
+   * the action's snake_case id with underscores converted to spaces.
    */
   readonly cue?: string;
   /** Short description of the action for prompts and tooling. */
@@ -35,26 +35,24 @@ export interface ActionSpec {
   readonly usageHint?: string;
 }
 
-export interface ActionSchema {
-  /** The registered actions the model is allowed to emit. */
-  readonly actions: readonly ActionSpec[];
-}
+export type ActionSchema = readonly ActionSpec[];
 
 export interface ActionCue {
   /** The exact label that appears between square brackets. */
   readonly label: string;
-  /** The runtime action name the cue dispatches to. */
-  readonly name: string;
+  /** The runtime action id the cue dispatches to. */
+  readonly id: string;
 }
 
 export interface ActionCueSummary {
   readonly label: string;
-  readonly name: string;
+  readonly id: string;
   readonly description?: string;
   readonly usageHint?: string;
 }
 
 const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const CUE_LABEL_RE = /^[^\[\]\r\n\x00-\x1F\x7F]+$/;
 
 export class ActionSchemaError extends Error {
   public constructor(message: string) {
@@ -64,7 +62,7 @@ export class ActionSchemaError extends Error {
 }
 
 function defaultActionLabel(action: ActionSpec): string {
-  return action.cue?.trim() || action.name.replace(/_/g, ' ');
+  return action.cue?.trim() || action.id.replace(/_/g, ' ');
 }
 
 /**
@@ -72,29 +70,35 @@ function defaultActionLabel(action: ActionSpec): string {
  * the first problem detected; returns null on success.
  */
 export function validateActionSchema(schema: ActionSchema): string | null {
-  if (!schema || !Array.isArray(schema.actions)) {
-    return 'ActionSchema.actions must be an array.';
-  }
-  if (schema.actions.length === 0) {
-    return 'ActionSchema.actions must contain at least one action.';
+  if (!Array.isArray(schema)) {
+    return 'actions must be an array.';
   }
 
-  const seenActionNames = new Set<string>();
+  const seenActionIds = new Set<string>();
   const seenCueLabels = new Set<string>();
-  for (const action of schema.actions) {
-    if (!action || typeof action.name !== 'string' || !IDENTIFIER_RE.test(action.name)) {
-      return `Invalid action name: ${JSON.stringify(action?.name)}`;
+  for (const action of schema) {
+    if (!action || typeof action.id !== 'string' || !IDENTIFIER_RE.test(action.id)) {
+      return `Invalid action id: ${JSON.stringify(action?.id)}`;
     }
-    if (seenActionNames.has(action.name)) {
-      return `Duplicate action name: ${action.name}`;
+    if (seenActionIds.has(action.id)) {
+      return `Duplicate action id: ${action.id}`;
     }
-    seenActionNames.add(action.name);
+    seenActionIds.add(action.id);
 
     if (action.cue != null && (typeof action.cue !== 'string' || action.cue.trim().length === 0)) {
-      return `Action "${action.name}" has an invalid cue label.`;
+      return `Action "${action.id}" has an invalid cue label.`;
+    }
+    if (action.description != null && typeof action.description !== 'string') {
+      return `Action "${action.id}" description must be a string.`;
+    }
+    if (action.usageHint != null && typeof action.usageHint !== 'string') {
+      return `Action "${action.id}" usageHint must be a string.`;
     }
 
     const label = defaultActionLabel(action);
+    if (!CUE_LABEL_RE.test(label)) {
+      return `Action "${action.id}" cue must not contain brackets, newlines, or control characters.`;
+    }
     if (seenCueLabels.has(label)) {
       return `Cue label collision: "[${label}]" is produced by more than one action.`;
     }
@@ -119,9 +123,9 @@ export function assertValidActionSchema(schema: ActionSchema): void {
 export function expandActionCues(schema: ActionSchema): readonly ActionCue[] {
   assertValidActionSchema(schema);
 
-  return schema.actions.map((action) => ({
+  return schema.map((action) => ({
     label: defaultActionLabel(action),
-    name: action.name,
+    id: action.id,
   }));
 }
 
@@ -131,25 +135,25 @@ export function expandActionCues(schema: ActionSchema): readonly ActionCue[] {
 export function summarizeActionCues(schema: ActionSchema): readonly ActionCueSummary[] {
   assertValidActionSchema(schema);
 
-  return schema.actions.map((action) => ({
+  return schema.map((action) => ({
     label: defaultActionLabel(action),
-    name: action.name,
+    id: action.id,
     description: action.description,
     usageHint: action.usageHint,
   }));
 }
 
-/** Resolves a runtime action name back to its canonical prompt-facing cue. */
+/** Resolves a runtime action id back to its canonical prompt-facing cue. */
 export function findCanonicalActionCue(
   schema: ActionSchema,
-  name: string
+  id: string
 ): ActionCueSummary | null {
   assertValidActionSchema(schema);
-  for (const action of schema.actions) {
-    if (action.name === name) {
+  for (const action of schema) {
+    if (action.id === id) {
       return {
         label: defaultActionLabel(action),
-        name: action.name,
+        id: action.id,
         description: action.description,
         usageHint: action.usageHint,
       };
@@ -172,7 +176,7 @@ export function renderActionCueList(schema: ActionSchema): string {
 /**
  * Renders a deterministic, model-facing capability list derived from the
  * action schema. Each line ties the visible cue surface back to the runtime
- * action name so prompts can describe capabilities without hardcoding any
+ * action id so prompts can describe capabilities without hardcoding any
  * particular character.json shape.
  */
 export function renderActionCapabilityList(schema: ActionSchema): string {
@@ -187,8 +191,8 @@ export function renderActionCapabilityList(schema: ActionSchema): string {
         usageHint && usageHint.length > 0 ? `use when ${usageHint}` : null,
       ].filter((part): part is string => part != null);
       return detailParts.length === 0
-        ? `- [${cue.label}] -> ${cue.name}`
-        : `- [${cue.label}] -> ${cue.name}: ${detailParts.join('; ')}`;
+        ? `- [${cue.label}] -> ${cue.id}`
+        : `- [${cue.label}] -> ${cue.id}: ${detailParts.join('; ')}`;
     })
     .join('\n');
 }

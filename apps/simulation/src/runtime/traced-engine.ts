@@ -1,0 +1,235 @@
+import type {
+  GenerateRequestId,
+  GenerateResponse,
+  PromptOptions,
+  RequestObservabilityMetrics,
+} from '@noumena-labs/cogent-engine';
+import type { CogentEngine } from '@noumena-labs/cogent-engine';
+import type { CharacterRuntimeEngine } from '@noumena-labs/cogent-engine/character';
+import type { DirectorRuntimeEngine } from '@noumena-labs/cogent-engine/director';
+import type { BrainDefinition, BrainQueryType, BrainQueryStatus, BrainActivityStore } from './brain-activity-store.js';
+
+interface TracedChatMessage {
+  role: string;
+  content: string;
+}
+
+interface AppliedTemplateSnapshot {
+  readonly promptText: string;
+  readonly messages: readonly TracedChatMessage[];
+}
+
+export function createTracedBrainEngine(
+  engine: CogentEngine,
+  store: BrainActivityStore,
+  brain: BrainDefinition
+): CharacterRuntimeEngine & DirectorRuntimeEngine {
+  return new TracedBrainEngine(engine, store, brain);
+}
+
+class TracedBrainEngine implements CharacterRuntimeEngine, DirectorRuntimeEngine {
+  private readonly appliedTemplatesByPrompt = new Map<string, AppliedTemplateSnapshot[]>();
+
+  public constructor(
+    private readonly engine: CogentEngine,
+    private readonly store: BrainActivityStore,
+    private readonly brain: BrainDefinition
+  ) {}
+
+  public async queuePrompt(
+    contextKey: string,
+    promptText: string,
+    options: number | PromptOptions = 128
+  ): Promise<GenerateRequestId> {
+    const template = this.takeAppliedTemplate(promptText);
+
+    const prompts = extractPromptSections(template?.messages ?? []);
+    const directorTaskName = this.brain.kind === 'director' ? parseDirectorTaskName(contextKey) : null;
+    const queryType = classifyQueryType(this.brain.kind, directorTaskName);
+    const queryId = this.store.beginQuery({
+      brainId: this.brain.id,
+      queryType,
+      ...(directorTaskName ? { queryName: directorTaskName } : {}),
+      contextKey,
+      systemPrompt: prompts.systemPrompt,
+      userPrompt: prompts.userPrompt,
+      renderedPrompt: promptText,
+      grammar: typeof options === 'object' ? options.grammar : null,
+    });
+
+    try {
+      const requestId = await this.engine.queuePrompt(
+        contextKey,
+        promptText,
+        withStreamingTap(options, (chunk) => {
+          this.store.appendResponse(queryId, chunk);
+        })
+      );
+      this.store.attachRequestId(queryId, requestId);
+      return requestId;
+    } catch (error) {
+      this.store.finishQuery(queryId, {
+        status: classifyErrorStatus(error),
+        errorMessage: asErrorMessage(error),
+      });
+      throw error;
+    }
+  }
+
+  public async runQueuedRequest(
+    requestId: GenerateRequestId,
+    options?: { signal?: AbortSignal }
+  ): Promise<GenerateResponse> {
+    const queryId = this.store.getQueryIdForRequest(requestId);
+    try {
+      const response = await this.engine.runQueuedRequest(requestId, options);
+      if (queryId) {
+        this.store.finishQuery(queryId, {
+          status: classifyResponseStatus(response),
+          responseText: response.outputText,
+          errorMessage: response.errorMessage ?? null,
+          requestObservability: getObservability(response),
+        });
+      }
+      return response;
+    } catch (error) {
+      if (queryId) {
+        this.store.finishQuery(queryId, {
+          status: classifyErrorStatus(error),
+          errorMessage: asErrorMessage(error),
+        });
+      }
+      throw error;
+    }
+  }
+
+  public async cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean> {
+    return this.engine.cancelQueuedRequest(requestId);
+  }
+
+  public getChatTemplate(): string | null {
+    return this.engine.getChatTemplate();
+  }
+
+  public getBosText(): string {
+    return this.engine.getBosText();
+  }
+
+  public getEosText(): string {
+    return this.engine.getEosText();
+  }
+
+  public getMediaMarker(): string | null {
+    return this.engine.getMediaMarker();
+  }
+
+  public async applyChatTemplate(
+    messages: TracedChatMessage[],
+    addAssistant: boolean
+  ): Promise<string> {
+    const promptText = await this.engine.applyChatTemplate(messages, addAssistant);
+    if (addAssistant) {
+      this.rememberAppliedTemplate({ promptText, messages });
+    }
+    return promptText;
+  }
+
+  private rememberAppliedTemplate(snapshot: AppliedTemplateSnapshot): void {
+    const entries = this.appliedTemplatesByPrompt.get(snapshot.promptText) ?? [];
+    entries.push(snapshot);
+    this.appliedTemplatesByPrompt.set(snapshot.promptText, entries);
+  }
+
+  private takeAppliedTemplate(promptText: string): AppliedTemplateSnapshot | null {
+    const entries = this.appliedTemplatesByPrompt.get(promptText);
+    const snapshot = entries?.shift() ?? null;
+    if (entries && entries.length === 0) {
+      this.appliedTemplatesByPrompt.delete(promptText);
+    }
+    return snapshot;
+  }
+}
+
+function withStreamingTap(
+  options: number | PromptOptions,
+  onChunk: (chunk: string) => void
+): PromptOptions {
+  if (typeof options === 'number') {
+    return {
+      nTokens: options,
+      onToken: onChunk,
+    };
+  }
+
+  const upstream = options.onToken;
+  return {
+    ...options,
+    onToken: (chunk: string) => {
+      onChunk(chunk);
+      upstream?.(chunk);
+    },
+  };
+}
+
+function extractPromptSections(messages: readonly TracedChatMessage[]): {
+  systemPrompt: string;
+  userPrompt: string;
+} {
+  const systemPrompt = messages
+    .filter((message) => message.role === 'system')
+    .map((message) => message.content.trim())
+    .filter((message) => message.length > 0)
+    .join('\n\n');
+  const userPrompt = [...messages]
+    .reverse()
+    .find((message) => message.role === 'user')
+    ?.content.trim() ?? '';
+  return { systemPrompt, userPrompt };
+}
+
+function parseDirectorTaskName(contextKey: string): string | null {
+  const parts = contextKey.split(':').map((part) => part.trim()).filter((part) => part.length > 0);
+  return parts.length > 0 ? parts[parts.length - 1]! : null;
+}
+
+function classifyQueryType(
+  brainKind: BrainDefinition['kind'],
+  directorTaskName: string | null
+): BrainQueryType {
+  if (brainKind === 'agent') {
+    return 'decision';
+  }
+  if (directorTaskName?.includes('narrate')) {
+    return 'narration';
+  }
+  return 'referee';
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+function classifyResponseStatus(response: GenerateResponse): Exclude<BrainQueryStatus, 'idle' | 'running'> {
+  if (response.cancelled) {
+    return response.errorMessage?.toLowerCase().includes('timed out') ? 'timed_out' : 'aborted';
+  }
+  if (response.failed) {
+    return response.errorMessage?.toLowerCase().includes('timed out') ? 'timed_out' : 'failed';
+  }
+  return 'completed';
+}
+
+function classifyErrorStatus(error: unknown): Exclude<BrainQueryStatus, 'idle' | 'running'> {
+  if (!isAbortError(error)) {
+    return asErrorMessage(error).toLowerCase().includes('timed out') ? 'timed_out' : 'failed';
+  }
+  return asErrorMessage(error).toLowerCase().includes('timed out') ? 'timed_out' : 'aborted';
+}
+
+function getObservability(response: GenerateResponse): RequestObservabilityMetrics | null {
+  return response.requestObservability ?? response.runtimeObservability ?? null;
+}
+
+function asErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

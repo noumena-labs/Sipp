@@ -48,6 +48,27 @@ import {
   QueuedRequestScheduler,
 } from './scheduler.js';
 
+function resolveRuntimeLocationHref(): string | null {
+  const runtimeLocation = globalThis.location;
+  return typeof runtimeLocation?.href === 'string' ? runtimeLocation.href : null;
+}
+
+function resolveRuntimeLocationOrigin(): string | null {
+  const runtimeLocation = globalThis.location;
+  if (typeof runtimeLocation?.origin === 'string') {
+    return runtimeLocation.origin;
+  }
+  const href = resolveRuntimeLocationHref();
+  if (href == null) {
+    return null;
+  }
+  try {
+    return new URL(href).origin;
+  } catch {
+    return null;
+  }
+}
+
 export class MainThreadEngineRuntime implements EngineRuntime {
   private module: EngineModule | null = null;
   private wasmBridge: WasmBridge | null = null;
@@ -127,8 +148,9 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
   private parseConfiguredUrl(rawUrl: string, fieldName: string): URL {
     try {
-      if (typeof window !== 'undefined' && typeof window.location?.href === 'string') {
-        return new URL(rawUrl, window.location.href);
+      const baseHref = resolveRuntimeLocationHref();
+      if (baseHref != null) {
+        return new URL(rawUrl, baseHref);
       }
       return new URL(rawUrl);
     } catch {
@@ -147,8 +169,9 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       return allowed;
     }
 
-    if (typeof window !== 'undefined' && typeof window.location?.origin === 'string') {
-      return new Set([window.location.origin]);
+    const currentOrigin = resolveRuntimeLocationOrigin();
+    if (currentOrigin != null) {
+      return new Set([currentOrigin]);
     }
 
     return new Set();

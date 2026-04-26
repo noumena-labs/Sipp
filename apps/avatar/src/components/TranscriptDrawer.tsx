@@ -79,7 +79,7 @@ export function TranscriptDrawer({
                     {message.actions.length > 0 ? (
                       <div className="transcript-actions">
                         {message.actions.map((action, index) => (
-                          <span key={`${message.id}-${index}`} className="action-chip" title={action.name}>
+                          <span key={`${message.id}-${index}`} className="action-chip" title={action.id}>
                             {action.label}
                           </span>
                         ))}

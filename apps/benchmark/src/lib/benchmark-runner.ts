@@ -8,7 +8,7 @@ import type {
   MemorySnapshot
 } from './types';
 import { round, measureAsync } from './utils';
-import { CogentEngine, type PreparedModelBundle } from 'cogent-engine';
+import { CogentEngine, type PreparedModelBundle } from '@noumena-labs/cogent-engine';
 
 function summarize(values: number[]) {
   const sorted = [...values].sort((left, right) => left - right);

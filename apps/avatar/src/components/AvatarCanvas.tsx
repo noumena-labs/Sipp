@@ -3,13 +3,13 @@
 // AvatarCanvas.tsx
 //
 // - Mounts the three.js renderer into a div and wires the supplied
-//   ActionBus to a ThreeVRMBinding. Handles container resize via
+//   CharacterEventBus to a ThreeVRMBinding. Handles container resize via
 //   ResizeObserver.
 //
 //////////////////////////////////////////////////////////////////////////////
 
 import { useEffect, useRef } from 'react';
-import type { ActionBus } from 'cogent-engine/character';
+import type { CharacterEventBus } from '@noumena-labs/cogent-engine/character';
 import { createScene, type SceneHandle } from '../scene/scene';
 import { loadAvatar, type LoadedAvatar } from '../scene/vrm-loader';
 import { ThreeVRMBinding } from '../bindings/three-vrm-binding';
@@ -17,7 +17,7 @@ import { SpeechBubble } from '../scene/speech-bubble';
 import type { AvatarRenderAssets } from '../characters/render-assets';
 
 interface AvatarCanvasProps {
-  readonly bus: ActionBus;
+  readonly bus: CharacterEventBus;
   readonly renderAssets?: AvatarRenderAssets;
   readonly actionNames?: readonly string[];
   readonly speaking?: boolean;
