@@ -173,18 +173,19 @@ function addNonCarrierOptions(
   if (banana && !banana.heldBy) {
     lines.push(`Banana is ${qualitativeDistance(banana.distance)}.`);
     const immediateThreat = findImmediateLooseBananaThreat(perception, banana);
-    const tacticalTarget = !sabotageCoolingDown && perception.self.powerUp
+    const powerUp = perception.self.powerUp;
+    const tacticalTarget = !sabotageCoolingDown && powerUp
       ? findLooseBananaSabotageTarget(perception, banana)
       : null;
     if (tacticalTarget) {
-      lines.push(`${tacticalTarget.name} is the nearest rival to the loose banana, so a quick ${labelForPowerUp(perception.self.powerUp!.kind)} play can open the lane.`);
-      const label = sabotageLabel(perception.self.powerUp.kind, tacticalTarget.name);
+      lines.push(`${tacticalTarget.name} is the nearest rival to the loose banana, so a quick ${labelForPowerUp(powerUp.kind)} play can open the lane.`);
+      const label = sabotageLabel(powerUp.kind, tacticalTarget.name);
       options.push({
         label,
         goal: {
           kind: 'sabotage_agent',
           agentId: tacticalTarget.id,
-          method: perception.self.powerUp.kind,
+          method: powerUp.kind,
           label,
         },
       });
