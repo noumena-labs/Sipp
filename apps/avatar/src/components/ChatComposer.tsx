@@ -13,12 +13,14 @@ interface ChatComposerProps {
   readonly onSend: (text: string) => void;
   readonly disabled?: boolean;
   readonly characterName?: string;
+  readonly suggestions?: readonly string[];
 }
 
 export function ChatComposer({
   onSend,
   disabled,
   characterName = 'your companion',
+  suggestions = [],
 }: ChatComposerProps) {
   const [draft, setDraft] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -53,6 +55,14 @@ export function ChatComposer({
     }
   };
 
+  const sendSuggestion = (suggestion: string): void => {
+    if (disabled) {
+      return;
+    }
+    onSend(suggestion);
+    setDraft('');
+  };
+
   return (
     <form className="chat-composer glass-panel" onSubmit={handleSubmit}>
       <div className="chat-composer-header">
@@ -62,6 +72,21 @@ export function ChatComposer({
         </div>
         <div className="chat-composer-hint">Enter to send</div>
       </div>
+      {suggestions.length > 0 ? (
+        <div className="prompt-suggestions" aria-label="Suggested prompts">
+          {suggestions.map((suggestion) => (
+            <button
+              key={suggestion}
+              type="button"
+              className="prompt-chip"
+              onClick={() => sendSuggestion(suggestion)}
+              disabled={disabled}
+            >
+              {suggestion}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className="chat-composer-row">
         <textarea
           ref={textareaRef}

@@ -30,11 +30,13 @@ import {
   type ClipActionName,
 } from '../actions/mixamo';
 import type { AvatarActionRuntime } from '../actions/runtime';
+import type { WorldEffectActionName } from '../actions/world-effects';
 import {
   resolveActionClipUrl,
   type AvatarRenderAssets,
 } from '../characters/render-assets';
 import type { LoadedAvatar } from '../scene/vrm-loader';
+import { FantasyWorldEffects } from '../scene/world-effects';
 
 interface BoneMotion {
   readonly node: THREE.Object3D;
@@ -69,6 +71,7 @@ export class ThreeVRMBinding implements AvatarActionRuntime {
   private readonly neckMotion: BoneMotion | null;
   private readonly chestMotion: BoneMotion | null;
   private readonly mixer: THREE.AnimationMixer;
+  private readonly worldEffects: FantasyWorldEffects;
   private activeMood: (typeof BASE_MOOD_EXPRESSIONS)[number] | null = null;
   private transientExpressions: ExpressionEnvelope[] = [];
   private speaking = false;
@@ -84,11 +87,17 @@ export class ThreeVRMBinding implements AvatarActionRuntime {
     ReturnType<typeof window.setTimeout>
   >();
 
-  public constructor(bus: CharacterEventBus, avatar: LoadedAvatar, renderAssets: AvatarRenderAssets) {
+  public constructor(
+    bus: CharacterEventBus,
+    scene: THREE.Scene,
+    avatar: LoadedAvatar,
+    renderAssets: AvatarRenderAssets
+  ) {
     this.bus = bus;
     this.avatar = avatar;
     this.renderAssets = renderAssets;
     this.mixer = new THREE.AnimationMixer(this.avatar.vrm.scene);
+    this.worldEffects = new FantasyWorldEffects(scene, avatar);
     this.baseFocus = avatar.layout.focusPoint.clone();
     this.headMotion = this.getBoneMotion(VRMHumanBoneName.Head);
     this.neckMotion = this.getBoneMotion(VRMHumanBoneName.Neck);
@@ -125,6 +134,7 @@ export class ThreeVRMBinding implements AvatarActionRuntime {
     this.updateLookAt(deltaSeconds);
     this.updateMouthExpressions(deltaSeconds);
     this.updateExpressionWeights(deltaSeconds);
+    this.worldEffects.tick(deltaSeconds);
     this.avatar.update(deltaSeconds);
   }
 
@@ -146,6 +156,7 @@ export class ThreeVRMBinding implements AvatarActionRuntime {
       action.stop();
     }
     this.clipActions.clear();
+    this.worldEffects.dispose();
     this.idleAction = null;
     this.currentClipAction = null;
     this.resetBoneMotion(this.chestMotion);
@@ -192,6 +203,10 @@ export class ThreeVRMBinding implements AvatarActionRuntime {
   public playTransientExpression(actionName: ExpressionActionName): void {
     const next = TRANSIENT_EXPRESSIONS[actionName];
     this.transientExpressions.push({ ...next, elapsedSeconds: 0 });
+  }
+
+  public playWorldEffect(name: WorldEffectActionName): void {
+    this.worldEffects.trigger(name);
   }
 
   public settle(): void {
