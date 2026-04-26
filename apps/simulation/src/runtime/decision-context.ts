@@ -177,7 +177,7 @@ function addNonCarrierOptions(
     const tacticalTarget = !sabotageCoolingDown && powerUp
       ? findLooseBananaSabotageTarget(perception, banana)
       : null;
-    if (tacticalTarget) {
+    if (tacticalTarget && powerUp) {
       lines.push(`${tacticalTarget.name} is the nearest rival to the loose banana, so a quick ${labelForPowerUp(powerUp.kind)} play can open the lane.`);
       const label = sabotageLabel(powerUp.kind, tacticalTarget.name);
       options.push({
