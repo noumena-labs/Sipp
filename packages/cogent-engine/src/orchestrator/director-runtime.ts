@@ -9,8 +9,13 @@
 //
 //////////////////////////////////////////////////////////////////////////////
 
-import type { CharacterAgentEngine } from '../character/character-agent.js';
-import type { ChatMessage, PromptOptions } from '../core/inference-types.js';
+import type {
+  ChatMessage,
+  GenerateRequestId,
+  GenerateResponse,
+  PromptOptions,
+} from '../core/inference-types.js';
+import { ChatTemplatePromptRuntime, sanitizeAssistantText } from '../core/chat-template-boundaries.js';
 import { createTimedAbortController, waitForAbort } from '../utils/abort.js';
 import {
   compileDirectorOutputGrammar,
@@ -28,15 +33,36 @@ import type {
   DirectorTaskPrompt,
 } from './director-types.js';
 
+export interface DirectorRuntimeEngine {
+  queuePrompt(
+    contextKey: string,
+    promptText: string,
+    options?: number | PromptOptions
+  ): Promise<GenerateRequestId>;
+  runQueuedRequest(
+    requestId: GenerateRequestId,
+    options?: { signal?: AbortSignal }
+  ): Promise<GenerateResponse>;
+  cancelQueuedRequest?(requestId: GenerateRequestId): Promise<boolean>;
+  applyChatTemplate(
+    messages: Array<{ role: string; content: string }>,
+    addAssistant: boolean
+  ): Promise<string>;
+  getChatTemplate?(): string | null;
+  getEosText?(): string;
+  getMediaMarker?(): string | null;
+}
+
 export class DirectorRuntime {
-  private readonly engine: CharacterAgentEngine;
+  private readonly engine: DirectorRuntimeEngine;
   private readonly config: DirectorConfig;
   private readonly maxOutputTokens: number;
   private readonly contextKey: string;
   private readonly systemPrompt: string;
+  private readonly promptRuntime: ChatTemplatePromptRuntime;
 
   public constructor(
-    engine: CharacterAgentEngine,
+    engine: DirectorRuntimeEngine,
     config: DirectorConfig,
     options: DirectorRuntimeOptions = {}
   ) {
@@ -45,6 +71,7 @@ export class DirectorRuntime {
     this.maxOutputTokens = options.maxOutputTokens ?? 256;
     this.contextKey = options.contextKey ?? `director:${config.id}`;
     this.systemPrompt = renderDirectorSystemPrompt(config);
+    this.promptRuntime = new ChatTemplatePromptRuntime(engine);
   }
 
   public getConfig(): DirectorConfig {
@@ -112,8 +139,11 @@ export class DirectorRuntime {
     ];
 
     let promptText: string;
+    let boundaryMarkers: readonly string[];
     try {
-      promptText = await this.engine.applyChatTemplate(messages, true);
+      const promptContext = await this.promptRuntime.render(messages);
+      promptText = promptContext.promptText;
+      boundaryMarkers = promptContext.boundaryMarkers;
     } catch (error) {
       return {
         status: request.signal?.aborted === true ? 'aborted' : 'failed',
@@ -156,7 +186,7 @@ export class DirectorRuntime {
         }),
       ]);
       rawText = response.outputText ?? '';
-      const parseText = sanitizeDirectorModelOutput(rawText);
+      const parseText = sanitizeAssistantText(rawText, boundaryMarkers);
       if (response.cancelled) {
         const status = abort.timedOut() ? 'timed_out' : 'aborted';
         const errorMessage = status === 'timed_out'
@@ -284,52 +314,6 @@ function defaultTokenBudget(
     case 'text_with_directives':
       return fallback;
   }
-}
-
-const DIRECTOR_OUTPUT_BOUNDARY_MARKERS = [
-  '<system-reminder>',
-  '</system-reminder>',
-  '<|im_start|>system',
-  '<|im_start|>user',
-  '<|im_start|>assistant',
-  '<|start_header_id|>system<|end_header_id|>',
-  '<|start_header_id|>user<|end_header_id|>',
-  '<|start_header_id|>assistant<|end_header_id|>',
-  '<｜System｜>',
-  '<｜User｜>',
-  '<｜Assistant｜>',
-  '<system>',
-  '<user>',
-  '<assistant>',
-] as const;
-
-function sanitizeDirectorModelOutput(rawText: string): string {
-  let end = rawText.length;
-  for (const marker of DIRECTOR_OUTPUT_BOUNDARY_MARKERS) {
-    const index = rawText.indexOf(marker);
-    if (index >= 0) {
-      end = Math.min(end, index);
-    }
-  }
-
-  let out = rawText.slice(0, end);
-  for (const marker of DIRECTOR_OUTPUT_BOUNDARY_MARKERS) {
-    const overlap = longestSuffixPrefixOverlap(out, marker);
-    if (overlap > 0) {
-      out = out.slice(0, out.length - overlap);
-    }
-  }
-  return out.trim();
-}
-
-function longestSuffixPrefixOverlap(source: string, marker: string): number {
-  const maxLength = Math.min(source.length, marker.length - 1);
-  for (let length = maxLength; length > 0; length -= 1) {
-    if (source.endsWith(marker.slice(0, length))) {
-      return length;
-    }
-  }
-  return 0;
 }
 
 function logDirectorRun(args: {

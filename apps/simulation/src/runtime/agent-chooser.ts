@@ -1,10 +1,10 @@
 import {
   createCharacterFromConfigUrl,
   type CharacterAgent,
+  type CharacterAgentEngine,
   type CharacterConfig,
   type ChoiceResult,
 } from '@noumena-labs/cogent-engine/character';
-import type { CharacterAgentEngine } from '@noumena-labs/cogent-engine/character';
 import { buildDecisionContext } from './decision-context.js';
 import type { AgentGoal, AgentPerception, DecisionContext } from './types.js';
 

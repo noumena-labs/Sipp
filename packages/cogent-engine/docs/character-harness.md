@@ -16,10 +16,11 @@ import {
   CharacterAgent,
   createCharacterFromConfigUrl,
   parseCharacterConfig,
+  type CharacterAgentEngine,
 } from '@noumena-labs/cogent-engine/character';
 ```
 
-Advanced prompt/parser helpers now live under:
+Advanced grammar/parser helpers live under:
 
 ```ts
 import {

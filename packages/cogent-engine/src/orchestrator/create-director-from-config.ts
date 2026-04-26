@@ -1,12 +1,11 @@
 import { parseDirectorConfig } from './director-config.js';
-import { DirectorRuntime } from './director-runtime.js';
+import { DirectorRuntime, type DirectorRuntimeEngine } from './director-runtime.js';
 import type { DirectorConfig } from './director-types.js';
-import type { CharacterAgentEngine } from '../character/character-agent.js';
 import type { DirectorRuntimeOptions } from './director-types.js';
 
 export interface CreateDirectorFromConfigUrlOptions {
   readonly configUrl: string;
-  readonly engine: CharacterAgentEngine;
+  readonly engine: DirectorRuntimeEngine;
   readonly runtimeOptions?: DirectorRuntimeOptions;
   readonly fetch?: typeof globalThis.fetch;
   readonly signal?: AbortSignal;

@@ -17,6 +17,7 @@ import type {
   GenerateResponse,
   PromptOptions,
 } from '../core/inference-types.js';
+import type { ChatTemplateMessage } from '../core/chat-template-boundaries.js';
 import { ActionBus, type CharacterEvent } from './action-bus.js';
 import {
   CharacterAgent,
@@ -59,7 +60,7 @@ interface FakeEngine extends CharacterAgentEngine {
     options: PromptOptions | number | undefined;
   }>;
   readonly applyChatTemplateCalls: Array<{
-    messages: Array<{ role: string; content: string }>;
+    messages: ChatTemplateMessage[];
     addAssistant: boolean;
   }>;
   readonly runCalls: GenerateRequestId[];
@@ -106,14 +107,11 @@ function createFakeEngine(): FakeEngine {
     getChatTemplate(): string | null {
       return 'fake-template';
     },
-    getBosText(): string {
-      return '';
-    },
     getEosText(): string {
       return '</s>';
     },
     async applyChatTemplate(
-      messages: Array<{ role: string; content: string }>,
+      messages: ChatTemplateMessage[],
       addAssistant: boolean
     ): Promise<string> {
       applyChatTemplateCalls.push({ messages, addAssistant });
@@ -307,6 +305,7 @@ test('chat() probes chat template boundaries once per agent and reuses them acro
   await collectEvents(agent.chat('second'));
 
   assert.equal(engine.applyChatTemplateCalls.length, 7);
+  assert.equal(engine.applyChatTemplateCalls.filter((call) => call.messages.some((message) => message.content === '__CE_BOUNDARY_SYSTEM__')).length, 5);
 });
 
 test('successful turns commit user+assistant pairs to memory', async () => {

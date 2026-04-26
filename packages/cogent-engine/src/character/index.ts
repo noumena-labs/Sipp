@@ -43,9 +43,9 @@ export {
 export { ChoiceGrammarError, compileChoiceGrammar, parseChoiceOutput } from './choice-grammar.js';
 
 export type {
+  CharacterAgentEngine,
   ChoiceResult,
   CharacterChoiceOptions,
-  CharacterAgentEngine,
   CharacterAgentOptions,
   ChatEvent,
   ChatTurn,

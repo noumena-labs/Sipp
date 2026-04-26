@@ -47,6 +47,7 @@ export {
   renderDirectorUserMessage,
 } from './director-prompt.js';
 
+export type { DirectorRuntimeEngine } from './director-runtime.js';
 export { DirectorRuntime } from './director-runtime.js';
 
 export type { CreateDirectorFromConfigUrlOptions } from './create-director-from-config.js';

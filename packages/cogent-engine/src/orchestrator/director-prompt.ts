@@ -139,10 +139,10 @@ function renderResponseInstructions<TPayload>(
     case 'select_slots':
       return renderSlotInstructions(output, resolved);
     case 'text':
-      return renderPlainTextInstructions(output.maxLength);
+      return renderPlainTextInstructions();
     case 'text_with_directives':
       return [
-        renderPlainTextInstructions(output.maxLength),
+        renderPlainTextInstructions(),
         `Include directive ids in brackets only when useful.${
           output.maxDirectives ? ` Use at most ${output.maxDirectives}.` : ''
         }`,
@@ -151,10 +151,8 @@ function renderResponseInstructions<TPayload>(
   }
 }
 
-function renderPlainTextInstructions(maxLength: number | undefined): string {
-  return maxLength
-    ? `Write only the final answer, under ${maxLength} characters.`
-    : 'Write only the final answer.';
+function renderPlainTextInstructions(): string {
+  return 'Write only the final answer.';
 }
 
 function renderSlotInstructions<TPayload>(
@@ -191,25 +189,11 @@ function collectInputSections<TPayload>(
 ): RenderInputContext[] {
   const supplied = request.inputs ?? {};
   const orderedNames = task.inputs ?? Object.keys(supplied);
-  const seen = new Set<string>();
   const sections: RenderInputContext[] = [];
 
   for (const inputName of orderedNames) {
     const value = supplied[inputName];
     if (value === undefined) {
-      continue;
-    }
-    seen.add(inputName);
-    const slot = config.inputs?.[inputName];
-    sections.push({
-      inputName,
-      configuredKind: slot?.kind,
-      value,
-    });
-  }
-
-  for (const [inputName, value] of Object.entries(supplied)) {
-    if (seen.has(inputName) || value === undefined) {
       continue;
     }
     const slot = config.inputs?.[inputName];

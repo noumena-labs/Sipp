@@ -23,6 +23,7 @@ import {
   type DirectorConfig,
   type DirectorRunRequest,
   type DirectorRunResult,
+  type DirectorRuntimeEngine,
   type DirectorTaskPrompt,
 } from '@noumena-labs/cogent-engine/orchestrator';
 ```
@@ -93,9 +94,7 @@ Minimal shape:
       ],
       "inputs": ["scene_brief"],
       "output": {
-        "shape": "text",
-        "minLength": 1,
-        "maxLength": 160
+        "shape": "text"
       }
     }
   }
@@ -136,16 +135,14 @@ Input descriptions are rendered in the system prompt input glossary, not repeate
 - `select_one`: constrained to exactly one choice id.
 - `select_many`: constrained to zero or more choice ids according to `min` and `max`.
 - `select_slots`: constrained to one `slot=choice` line per configured slot.
-- `text`: unconstrained plain text parsed with optional `minLength` and `maxLength` validation.
+- `text`: unconstrained plain text.
 - `text_with_directives`: plain text with optional bracketed directive ids, parsed against configured directives.
-
-`minLength` is a validation contract. It is not rendered as model-facing prompt text.
 
 ## Runtime
 
 ```ts
 class DirectorRuntime {
-  constructor(engine: CharacterAgentEngine, config: DirectorConfig, options?)
+  constructor(engine: DirectorRuntimeEngine, config: DirectorConfig, options?)
 
   getConfig(): DirectorConfig
   getSystemPrompt(): string

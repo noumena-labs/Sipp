@@ -1,16 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { CharacterAgentEngine } from '../character/character-agent.js';
+import type { ChatTemplateMessage } from '../core/chat-template-boundaries.js';
 import type {
   GenerateRequestId,
   GenerateResponse,
   PromptOptions,
 } from '../core/inference-types.js';
 import { parseDirectorConfig } from './director-config.js';
-import { DirectorRuntime } from './director-runtime.js';
+import { DirectorRuntime, type DirectorRuntimeEngine } from './director-runtime.js';
 
-class FakeEngine implements CharacterAgentEngine {
+class FakeEngine implements DirectorRuntimeEngine {
   public outputText = '';
   public fail = false;
   public grammar: string | undefined;
@@ -22,7 +22,7 @@ class FakeEngine implements CharacterAgentEngine {
   public cancelCalls: GenerateRequestId[] = [];
 
   public async applyChatTemplate(
-    messages: Array<{ role: string; content: string }>,
+    messages: ChatTemplateMessage[],
     _addAssistant: boolean
   ): Promise<string> {
     this.prompt = messages.map((message) => `${message.role}: ${message.content}`).join('\n');
@@ -83,12 +83,8 @@ class FakeEngine implements CharacterAgentEngine {
     return null;
   }
 
-  public getBosText(): string {
-    return '';
-  }
-
   public getEosText(): string {
-    return '';
+    return '</s>';
   }
 
   public getMediaMarker(): string | null {
@@ -114,11 +110,11 @@ const CONFIG = parseDirectorConfig({
     },
     narrate: {
       inputs: ['state'],
-      output: { shape: 'text', minLength: 1, maxLength: 80 },
+      output: { shape: 'text' },
     },
     inspect_screen: {
       inputs: ['screenshot'],
-      output: { shape: 'text', minLength: 1, maxLength: 80 },
+      output: { shape: 'text' },
     },
     choose_many: {
       inputs: ['state'],
@@ -136,7 +132,7 @@ const CONFIG = parseDirectorConfig({
     },
     assist_with_directives: {
       inputs: ['state'],
-      output: { shape: 'text_with_directives', directives: 'runtime', minLength: 1, maxDirectives: 1, maxLength: 120 },
+      output: { shape: 'text_with_directives', directives: 'runtime', maxDirectives: 1 },
     },
   },
 });
@@ -147,7 +143,7 @@ test('DirectorRuntime returns a selected runtime choice with hidden payload', as
   const runtime = new DirectorRuntime(engine, CONFIG);
 
   const result = await runtime.run('resolve_conflict', {
-    inputs: { state: { tick: 3 } },
+    inputs: { state: { tick: 3 }, extra: 'not for this task' },
     choices: [
       {
         id: 'winner:aria',
@@ -165,7 +161,20 @@ test('DirectorRuntime returns a selected runtime choice with hidden payload', as
   assert.ok(engine.grammar?.includes('"winner:aria"'));
   assert.ok(engine.prompt.includes('winner:aria - Aria wins'));
   assert.equal(engine.prompt.includes('not shown'), false);
+  assert.equal(engine.prompt.includes('not for this task'), false);
   assert.equal(engine.prompt.includes('Never output JSON'), true);
+});
+
+test('DirectorRuntime parses sanitized assistant text while preserving raw output', async () => {
+  const engine = new FakeEngine();
+  engine.outputText = 'Aria sprints toward home base.</s><user>ignored</user>';
+  const runtime = new DirectorRuntime(engine, CONFIG);
+
+  const result = await runtime.run('narrate', { inputs: { state: { tick: 4 } } });
+
+  assert.equal(result.status, 'ok');
+  assert.equal(result.text, 'Aria sprints toward home base.');
+  assert.equal(result.rawText, 'Aria sprints toward home base.</s><user>ignored</user>');
 });
 
 test('DirectorRuntime exposes task grammar and prompt for inspection', () => {
@@ -235,7 +244,7 @@ test('DirectorRuntime threads directive grammar for text_with_directives', async
   assert.deepEqual(result.selections[0]?.payload, { route: '/billing', secret: 'hidden' });
   assert.ok(engine.grammar?.includes('directive-cue ::= "[" directive-id "]"'));
   assert.ok(engine.grammar?.includes('"nav.billing" | "inspect.menu"'));
-  assert.ok(engine.prompt.includes('Response:\nWrite only the final answer, under 120 characters.'));
+  assert.ok(engine.prompt.includes('Response:\nWrite only the final answer.'));
   assert.ok(engine.prompt.includes('Available directives:'));
   assert.equal(engine.prompt.includes('hidden'), false);
 });
@@ -295,20 +304,8 @@ test('DirectorRuntime returns text task output without JSON parsing', async () =
   assert.deepEqual(result.selections, []);
   assert.equal(engine.grammar, undefined);
   assert.ok(engine.prompt.includes('Task:\nComplete task narrate.'));
-  assert.ok(engine.prompt.includes('Response:\nWrite only the final answer, under 80 characters.'));
+  assert.ok(engine.prompt.includes('Response:\nWrite only the final answer.'));
   assert.equal(engine.prompt.includes('Output shape:'), false);
-  assert.equal(engine.prompt.includes('Keep it at least 1 characters'), false);
-});
-
-test('DirectorRuntime returns invalid_response for empty text when minLength is required', async () => {
-  const engine = new FakeEngine();
-  engine.outputText = '   ';
-  const runtime = new DirectorRuntime(engine, CONFIG);
-
-  const result = await runtime.run('narrate', { inputs: { state: { tick: 4 } } });
-
-  assert.equal(result.status, 'invalid_response');
-  assert.match(result.errorMessage ?? '', /at least 1 characters/);
 });
 
 test('DirectorRuntime renders image inputs through media markers', async () => {

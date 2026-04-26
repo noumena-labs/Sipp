@@ -27,8 +27,6 @@ test('parseDirectorConfig accepts shape-driven tasks', () => {
         inputs: ['screenshot'],
         output: {
           shape: 'text_with_directives',
-          minLength: 1,
-          maxLength: 200,
           maxDirectives: 1,
           directives: [
             { id: 'nav.billing', label: 'Open billing' },
@@ -43,7 +41,6 @@ test('parseDirectorConfig accepts shape-driven tasks', () => {
   assert.equal(config.inputs?.screenshot?.kind, 'image');
   assert.equal(config.tasks.resolve_conflict?.output.shape, 'select_one');
   assert.equal(config.tasks.inspect_screen?.output.shape, 'text_with_directives');
-  assert.equal(config.tasks.inspect_screen?.output.minLength, 1);
 });
 
 test('parseDirectorConfig rejects unknown task input references', () => {

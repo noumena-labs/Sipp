@@ -22,14 +22,6 @@ export { ChoiceGrammarError, compileChoiceGrammar, parseChoiceOutput } from './c
 export type { ActionEvent, ParsedEvent, ProseEvent } from './action-parser.js';
 export { ActionParseError, StreamingActionParser, parseActionCue } from './action-parser.js';
 
-export type { AppliedChatTemplateContext, ChatBoundaryInfo, ChatTemplateMetadataProvider } from './chat-template-metadata.js';
-export {
-  buildAppliedChatTemplateContext,
-  buildBoundaryMarkers,
-  probeChatTemplateBoundaryInfo,
-  renderAppliedChatTemplate,
-} from './chat-template-metadata.js';
-
 export type {
   PersonaCurrentLifeSpec,
   PersonaDialogExample,

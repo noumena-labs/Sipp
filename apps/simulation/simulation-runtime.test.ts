@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { CharacterAgentEngine } from '@noumena-labs/cogent-engine/character';
-import { DirectorRuntime, parseDirectorConfig, type JsonValue } from '@noumena-labs/cogent-engine/orchestrator';
+import {
+  DirectorRuntime,
+  parseDirectorConfig,
+  type DirectorRuntimeEngine,
+  type JsonValue,
+} from '@noumena-labs/cogent-engine/orchestrator';
 
 import { SimulationBus, type SimulationEvent } from './src/runtime/bus.ts';
 import {
@@ -43,7 +47,7 @@ const DIRECTOR_CONFIG = parseDirectorConfig({
       purpose: 'Call these observations as one fun, witty old-timey radio line.',
       instructions: ['Use the observations only.', 'Name a player, the live action, and the stakes.'],
       inputs: ['narration_brief'],
-      output: { shape: 'text', minLength: 16, maxLength: 220 },
+      output: { shape: 'text' },
     },
   },
 });
@@ -61,7 +65,7 @@ interface StubChooser {
   }>;
 }
 
-function createTimeoutEngine(): CharacterAgentEngine & { cancelCalls: number[] } {
+function createTimeoutEngine(): DirectorRuntimeEngine & { cancelCalls: number[] } {
   const cancelCalls: number[] = [];
 
   return {
@@ -97,7 +101,7 @@ function createTimeoutEngine(): CharacterAgentEngine & { cancelCalls: number[] }
   };
 }
 
-function createOutputEngine(outputText: string): CharacterAgentEngine & { grammar?: string; promptText?: string } {
+function createOutputEngine(outputText: string): DirectorRuntimeEngine & { grammar?: string; promptText?: string } {
   let grammar: string | undefined;
   let promptText: string | undefined;
   return {
@@ -346,7 +350,7 @@ test('narration prompt includes recent beats and rejects repeated previous calls
     await internals.narrationInFlight;
 
     assert.match(engine.promptText ?? '', /Call these observations as one fun, witty old-timey radio line/);
-    assert.match(engine.promptText ?? '', /Response:\nWrite only the final answer, under 220 characters\./);
+    assert.match(engine.promptText ?? '', /Response:\nWrite only the final answer\./);
     assert.match(engine.promptText ?? '', /Write a sentence based on ALL the observations below as if you are an old-timey sports caller at an active game\./);
     assert.match(engine.promptText ?? '', /- Previous call to avoid: one race\./);
     assert.match(engine.promptText ?? '', /- Aria has the banana\./);

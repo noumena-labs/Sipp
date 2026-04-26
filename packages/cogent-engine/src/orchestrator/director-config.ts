@@ -231,16 +231,12 @@ function parseOutput(raw: unknown, path: string): DirectorOutputConfig {
     case 'text':
       return {
         shape,
-        minLength: parsePositiveInteger(raw.minLength, `${path}.minLength`),
-        maxLength: parsePositiveInteger(raw.maxLength, `${path}.maxLength`),
       };
     case 'text_with_directives':
       return {
         shape,
         directives: parseChoiceSource(raw.directives, `${path}.directives`),
         maxDirectives: parsePositiveInteger(raw.maxDirectives, `${path}.maxDirectives`),
-        minLength: parsePositiveInteger(raw.minLength, `${path}.minLength`),
-        maxLength: parsePositiveInteger(raw.maxLength, `${path}.maxLength`),
       };
     default:
       throw new DirectorConfigError(`Unsupported output shape at \`${path}.shape\`: ${JSON.stringify(shape)}.`);

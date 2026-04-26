@@ -26,17 +26,13 @@ import {
 } from './character-config.js';
 import { summarizeActionCues } from './action-schema.js';
 import {
-  buildBoundaryMarkers,
-  probeChatTemplateBoundaryInfo,
-  renderAppliedChatTemplate,
-} from './chat-template-metadata.js';
+  ChatTemplatePromptRuntime,
+  sanitizeAssistantText,
+  StreamingBoundaryTextSanitizer,
+} from '../core/chat-template-boundaries.js';
 import { renderSystemPrompt } from './persona.js';
 import { createTimedAbortController, waitForAbort } from '../utils/abort.js';
 
-/**
- * Minimal shape of the engine the agent needs. Defined structurally so tests
- * can supply a fake without pulling in the full CogentEngine class.
- */
 export interface CharacterAgentEngine {
   queuePrompt(
     contextKey: string,
@@ -48,15 +44,12 @@ export interface CharacterAgentEngine {
     options?: { signal?: AbortSignal }
   ): Promise<GenerateResponse>;
   cancelQueuedRequest?(requestId: GenerateRequestId): Promise<boolean>;
-  /** Returns the Jinja chat_template string embedded in the GGUF, or null. */
+  applyChatTemplate(
+    messages: Array<{ role: string; content: string }>,
+    addAssistant: boolean
+  ): Promise<string>;
   getChatTemplate?(): string | null;
-  /** Returns the model's BOS token rendered as text (may be empty). */
-  getBosText?(): string;
-  /** Returns the model's EOS token rendered as text (may be empty). */
   getEosText?(): string;
-  /** Returns the model's media marker rendered as text, when multimodal input is available. */
-  getMediaMarker?(): string | null;
-  applyChatTemplate(messages: Array<{ role: string; content: string }>, addAssistant: boolean): Promise<string>;
 }
 
 export interface CharacterAgentOptions {
@@ -103,11 +96,6 @@ interface ResolvedPromptContext {
   readonly templateSource: string | null;
 }
 
-interface CachedPromptMetadata {
-  readonly boundaryMarkers: readonly string[];
-  readonly templateSource: string | null;
-}
-
 interface InFlightTurn {
   readonly controller: AbortController;
   readonly done: Promise<void>;
@@ -123,11 +111,11 @@ export class CharacterAgent {
   private readonly maxOutputTokens: number;
   private readonly systemPrompt: string;
   private readonly grammarSource: string;
+  private readonly promptRuntime: ChatTemplatePromptRuntime;
   private readonly memoryLimitTurns: number;
   private readonly canonicalCueLabelsByActionName: ReadonlyMap<string, string>;
   private readonly turnHistory: ChatTurn[] = [];
   private readonly eventBus: ActionBus;
-  private promptMetadataPromise: Promise<CachedPromptMetadata> | undefined;
   private currentTurn: InFlightTurn | undefined;
 
   public constructor(
@@ -139,6 +127,7 @@ export class CharacterAgent {
     this.config = config;
     this.maxOutputTokens = options.maxOutputTokens ?? 256;
     this.eventBus = options.bus ?? new ActionBus();
+    this.promptRuntime = new ChatTemplatePromptRuntime(engine);
     this.systemPrompt = renderSystemPrompt(config.persona, config.actions);
     this.grammarSource = compileActionGrammar(config.actions);
     this.canonicalCueLabelsByActionName = new Map(
@@ -187,8 +176,11 @@ export class CharacterAgent {
     ];
 
     let promptText: string;
+    let boundaryMarkers: readonly string[] = [];
     try {
-      promptText = await renderAppliedChatTemplate(this.engine, messages);
+      const promptContext = await this.promptRuntime.render(messages);
+      promptText = promptContext.promptText;
+      boundaryMarkers = promptContext.boundaryMarkers;
     } catch (error) {
       return {
         choice: null,
@@ -227,7 +219,8 @@ export class CharacterAgent {
           abortMessage: 'Choice aborted.',
         }),
       ]);
-      const rawText = (response.outputText ?? '').trim();
+      const rawText = response.outputText ?? '';
+      const parseText = sanitizeAssistantText(rawText, boundaryMarkers);
       if (response.cancelled) {
         const status = abort.timedOut() ? 'timed_out' : 'aborted';
         const errorMessage = status === 'timed_out' ? 'Choice timed out.' : 'Choice aborted.';
@@ -262,7 +255,7 @@ export class CharacterAgent {
           rawText,
         };
       }
-      const choice = parseChoiceOutput(rawText, options.choices);
+      const choice = parseChoiceOutput(parseText, options.choices);
       if (choice == null) {
         logChoiceQuery({
           phase: 'response',
@@ -429,32 +422,7 @@ export class CharacterAgent {
    * and derives assistant boundaries from that applied template output.
    */
   private async buildPromptContext(messages: ChatMessage[]): Promise<ResolvedPromptContext> {
-    const [promptText, metadata] = await Promise.all([
-      renderAppliedChatTemplate(this.engine, messages),
-      this.getPromptMetadata(),
-    ]);
-
-    return {
-      promptText,
-      boundaryMarkers: metadata.boundaryMarkers,
-      templateSource: metadata.templateSource,
-    };
-  }
-
-  private getPromptMetadata(): Promise<CachedPromptMetadata> {
-    if (!this.promptMetadataPromise) {
-      this.promptMetadataPromise = probeChatTemplateBoundaryInfo(this.engine)
-        .then((boundaryInfo) => ({
-          boundaryMarkers: buildBoundaryMarkers(boundaryInfo),
-          templateSource: this.engine.getChatTemplate?.() ?? null,
-        }))
-        .catch((error) => {
-          this.promptMetadataPromise = undefined;
-          throw error;
-        });
-    }
-
-    return this.promptMetadataPromise;
+    return this.promptRuntime.render(messages);
   }
 
   private async runTurn(
@@ -465,16 +433,14 @@ export class CharacterAgent {
     signal: AbortSignal
   ): Promise<void> {
     let streamedOutputText = '';
-    let pendingText = '';
     let proseText = '';
     let memoryText = '';
     let requestId: GenerateRequestId = 0;
     let cancelled = false;
     let errorMessage: string | undefined;
-    let reachedBoundary = false;
     const contextKey = this.config.id;
     const promptText = promptContext.promptText;
-    const boundaryMarkers = promptContext.boundaryMarkers;
+    const outputSanitizer = new StreamingBoundaryTextSanitizer(promptContext.boundaryMarkers);
 
     const recordParsedEvents = (events: readonly ParsedEvent[]): void => {
       for (const event of events) {
@@ -509,19 +475,14 @@ export class CharacterAgent {
     };
 
     const consumeOutputText = (text: string): void => {
-      if (text.length === 0 || reachedBoundary) {
+      if (text.length === 0 || outputSanitizer.reachedBoundary) {
         return;
       }
       streamedOutputText += text;
-      pendingText += text;
+      const result = outputSanitizer.consume(text);
+      emitParsedText(result.safeText);
 
-      const split = splitOnAssistantBoundary(pendingText, boundaryMarkers);
-      emitParsedText(split.safeText);
-      pendingText = split.trailingText;
-
-      if (split.hitBoundary) {
-        pendingText = '';
-        reachedBoundary = true;
+      if (result.hitBoundary) {
         requestBoundaryStop();
       }
     };
@@ -541,24 +502,24 @@ export class CharacterAgent {
       requestId = await this.engine.queuePrompt(contextKey, promptText, promptOptions);
       const response = await this.engine.runQueuedRequest(requestId, { signal });
       const unseenOutputSuffix = sliceUnstreamedSuffix(streamedOutputText, response.outputText);
-      if (!reachedBoundary && unseenOutputSuffix.length > 0) {
+      if (!outputSanitizer.reachedBoundary && unseenOutputSuffix.length > 0) {
         consumeOutputText(unseenOutputSuffix);
       }
-      cancelled = response.cancelled && !reachedBoundary;
+      cancelled = response.cancelled && !outputSanitizer.reachedBoundary;
       if (response.failed && response.errorMessage) {
         errorMessage = response.errorMessage;
       }
     } catch (error) {
-      if (reachedBoundary && !signal.aborted) {
+      if (outputSanitizer.reachedBoundary && !signal.aborted) {
         cancelled = false;
       } else {
         errorMessage = error instanceof Error ? error.message : String(error);
       }
-      if (signal.aborted && !reachedBoundary) {
+      if (signal.aborted && !outputSanitizer.reachedBoundary) {
         cancelled = true;
       }
       // Best-effort cancel in case the runtime still holds the request.
-      if (requestId !== 0 && this.engine.cancelQueuedRequest && !reachedBoundary) {
+      if (requestId !== 0 && this.engine.cancelQueuedRequest && !outputSanitizer.reachedBoundary) {
         try {
           await this.engine.cancelQueuedRequest(requestId);
         } catch {
@@ -567,9 +528,7 @@ export class CharacterAgent {
       }
     }
 
-    if (!reachedBoundary) {
-      emitParsedText(trimTrailingBoundaryPrefix(pendingText, boundaryMarkers));
-    }
+    emitParsedText(outputSanitizer.flush());
     flushParsedText();
 
     const finalText = stripExactUserMessageEcho(proseText, userMessage).trim();
@@ -663,70 +622,6 @@ class AsyncEventQueue<T> implements AsyncIterable<T> {
   }
 }
 
-function splitOnAssistantBoundary(
-  text: string,
-  boundaryMarkers: readonly string[]
-): { safeText: string; trailingText: string; hitBoundary: boolean } {
-  let earliestIndex = -1;
-  let matchedMarker = '';
-
-  for (const marker of boundaryMarkers) {
-    if (marker.length === 0) {
-      continue;
-    }
-    const index = text.indexOf(marker);
-    if (index >= 0 && (earliestIndex < 0 || index < earliestIndex)) {
-      earliestIndex = index;
-      matchedMarker = marker;
-    }
-  }
-
-  if (earliestIndex >= 0) {
-    return {
-      safeText: text.slice(0, earliestIndex),
-      trailingText: text.slice(earliestIndex + matchedMarker.length),
-      hitBoundary: true,
-    };
-  }
-
-  let safeLength = text.length;
-  for (const marker of boundaryMarkers) {
-    if (marker.length <= 1) {
-      continue;
-    }
-    const overlap = longestSuffixPrefixOverlap(text, marker);
-    safeLength = Math.min(safeLength, text.length - overlap);
-  }
-
-  return {
-    safeText: text.slice(0, safeLength),
-    trailingText: text.slice(safeLength),
-    hitBoundary: false,
-  };
-}
-
-function trimTrailingBoundaryPrefix(
-  text: string,
-  boundaryMarkers: readonly string[]
-): string {
-  let out = text;
-  let changed = true;
-  while (changed && out.length > 0) {
-    changed = false;
-    for (const marker of boundaryMarkers) {
-      if (marker.length === 0) {
-        continue;
-      }
-      if (marker.startsWith(out)) {
-        out = '';
-        changed = true;
-        break;
-      }
-    }
-  }
-  return out;
-}
-
 function stripExactUserMessageEcho(text: string, userMessage: string): string {
   const source = userMessage.trim();
   if (source.length === 0) {
@@ -750,16 +645,6 @@ function stripExactUserMessageEcho(text: string, userMessage: string): string {
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function longestSuffixPrefixOverlap(source: string, marker: string): number {
-  const maxLength = Math.min(source.length, marker.length - 1);
-  for (let length = maxLength; length > 0; length -= 1) {
-    if (source.endsWith(marker.slice(0, length))) {
-      return length;
-    }
-  }
-  return 0;
 }
 
 function forwardAbortSignal(

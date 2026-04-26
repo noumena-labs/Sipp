@@ -101,14 +101,12 @@ export function parseDirectorOutput<TPayload>(
     case 'select_slots':
       return parseSelectSlots(rawText, output, resolved);
     case 'text':
-      return parseText<TPayload>(rawText, output.minLength, output.maxLength);
+      return parseText<TPayload>(rawText);
     case 'text_with_directives':
       return parseTextWithDirectives(
         rawText,
         requireChoices(resolved.directives, 'directives'),
-        output.maxDirectives,
-        output.minLength,
-        output.maxLength
+        output.maxDirectives
       );
   }
 }
@@ -287,22 +285,15 @@ function parseSelectSlots<TPayload>(
   return { text: '', selections };
 }
 
-function parseText<TPayload>(
-  rawText: string,
-  minLength: number | undefined,
-  maxLength: number | undefined
-): ParsedDirectorOutput<TPayload> {
+function parseText<TPayload>(rawText: string): ParsedDirectorOutput<TPayload> {
   const text = rawText.trim();
-  validateTextLength(text, minLength, maxLength);
   return { text, selections: [] };
 }
 
 function parseTextWithDirectives<TPayload>(
   rawText: string,
   directives: readonly DirectorChoice<TPayload>[],
-  maxDirectives: number | undefined,
-  minLength: number | undefined,
-  maxLength: number | undefined
+  maxDirectives: number | undefined
 ): ParsedDirectorOutput<TPayload> {
   const selections: DirectorSelection<TPayload>[] = [];
   const text = rawText.replace(/\[([A-Za-z0-9_.:-]+)\]/g, (_full, id: string) => {
@@ -319,17 +310,7 @@ function parseTextWithDirectives<TPayload>(
   if (maxDirectives != null && selections.length > maxDirectives) {
     throw new DirectorOutputError(`directive count must be at most ${maxDirectives}.`);
   }
-  validateTextLength(text, minLength, maxLength);
   return { text, selections };
-}
-
-function validateTextLength(text: string, minLength: number | undefined, maxLength: number | undefined): void {
-  if (minLength != null && text.length < minLength) {
-    throw new DirectorOutputError(`text must be at least ${minLength} characters.`);
-  }
-  if (maxLength != null && text.length > maxLength) {
-    throw new DirectorOutputError(`text must be at most ${maxLength} characters.`);
-  }
 }
 
 function selectionFromChoice<TPayload>(

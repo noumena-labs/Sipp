@@ -53,9 +53,7 @@
       ],
       "inputs": ["narration_brief"],
       "output": {
-        "shape": "text",
-        "minLength": 16,
-        "maxLength": 220
+        "shape": "text"
       }
     }
   }

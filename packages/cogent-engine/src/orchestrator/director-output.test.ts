@@ -87,9 +87,7 @@ test('text_with_directives extracts grounded directives and keeps prose', () => 
   const output: DirectorOutputConfig = {
     shape: 'text_with_directives',
     directives: 'runtime',
-    minLength: 1,
     maxDirectives: 1,
-    maxLength: 120,
   };
   const resolved = resolveDirectorChoices(output, {
     directives: [
@@ -110,9 +108,7 @@ test('text_with_directives grammar reserves brackets for known directives', () =
   const output: DirectorOutputConfig = {
     shape: 'text_with_directives',
     directives: 'runtime',
-    minLength: 1,
     maxDirectives: 2,
-    maxLength: 120,
   };
   const resolved = resolveDirectorChoices(output, {
     directives: [
@@ -126,15 +122,4 @@ test('text_with_directives grammar reserves brackets for known directives', () =
   assert.match(grammar ?? '', /^prose-char ::= \[\^\[\]/m);
   assert.match(grammar ?? '', /^directive-cue ::= "\[" directive-id "\]"/m);
   assert.match(grammar ?? '', /^directive-id ::= "nav.billing" \| "inspect.menu"/m);
-});
-
-test('text output rejects empty strings when minLength is set', () => {
-  const output: DirectorOutputConfig = {
-    shape: 'text',
-    minLength: 1,
-    maxLength: 80,
-  };
-  const resolved = resolveDirectorChoices(output, {});
-
-  assert.throws(() => parseDirectorOutput('', output, resolved), /at least 1 characters/);
 });
