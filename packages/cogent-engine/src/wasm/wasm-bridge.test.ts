@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { WasmBridge } from './wasm-bridge.js';
+import { WasmBridge, MAX_GRAMMAR_BYTES } from './wasm-bridge.js';
 import { EngineModule } from './engine-module.js';
 
 const COMPLETED_REQUEST_STATUS_PENDING = 0;
@@ -62,6 +62,16 @@ class MockWasmBridgeModule implements EngineModule {
         maxOutputTokens: number;
         callbackPtr: number;
         images: Uint8Array[];
+        grammar: string;
+      }
+    | null = null;
+  public lastEnqueue:
+    | {
+        contextKey: string;
+        promptText: string;
+        maxOutputTokens: number;
+        callbackPtr: number;
+        grammar: string;
       }
     | null = null;
   public lastBurstWithDeadlineArgs:
@@ -225,6 +235,16 @@ class MockWasmBridgeModule implements EngineModule {
           this.appliedChatTemplateText || `templated:${fallbackText}:${Number(args[1])}`
         );
       }
+      case 'CE_EnqueuePrompt': {
+        this.lastEnqueue = {
+          contextKey: String(args[0]),
+          promptText: String(args[1]),
+          maxOutputTokens: Number(args[2]),
+          callbackPtr: Number(args[3]),
+          grammar: args[4] == null ? '' : String(args[4]),
+        };
+        return 77;
+      }
       case 'CE_EnqueuePromptWithMedia': {
         const contextKey = String(args[0]);
         const promptText = String(args[1]);
@@ -233,6 +253,7 @@ class MockWasmBridgeModule implements EngineModule {
         const flatPtr = Number(args[4]);
         const sizesPtr = Number(args[5]);
         const callbackPtr = Number(args[6]);
+        const grammar = args[7] == null ? '' : String(args[7]);
         const images: Uint8Array[] = [];
         let offset = 0;
         for (let index = 0; index < imageCount; index += 1) {
@@ -246,6 +267,7 @@ class MockWasmBridgeModule implements EngineModule {
           maxOutputTokens,
           callbackPtr,
           images,
+          grammar,
         };
         return 77;
       }
@@ -486,8 +508,8 @@ test('WasmBridge calls multimodal init when a projector path is configured', asy
       'number',
       'number',
       'number',
-      'number',
       'string',
+      'number',
       'number',
       'number',
       'number',
@@ -540,30 +562,14 @@ test('WasmBridge calls multimodal init when a projector path is configured', asy
   });
 });
 
-test('WasmBridge flattens media buffers and frees the native template string', () => {
+test('WasmBridge flattens media buffers and exposes template + marker', () => {
   const module = new MockWasmBridgeModule();
   module.chatTemplate = 'template';
   module.mediaMarker = '<__media__>';
-  module.appliedChatTemplateText = 'templated prompt';
   const bridge = new WasmBridge(module);
 
   assert.equal(bridge.getMediaMarker(), '<__media__>');
   assert.equal(bridge.getChatTemplate(), 'template');
-  assert.equal(
-    bridge.applyChatTemplate(
-      [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: 'look ' },
-            { type: 'media_marker', text: '<__media__>' },
-          ],
-        },
-      ],
-      true
-    ),
-    'templated prompt'
-  );
 
   const requestId = bridge.enqueuePromptWithMedia(
     'ctx',
@@ -580,8 +586,25 @@ test('WasmBridge flattens media buffers and frees the native template string', (
     maxOutputTokens: 16,
     callbackPtr: 9,
     images: [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5])],
+    grammar: '',
   });
-  assert.ok(module.freedStringPointers.length >= 1);
+});
+
+test('WasmBridge applies model chat template text', () => {
+  const module = new MockWasmBridgeModule();
+  module.chatTemplate = 'template';
+  module.appliedChatTemplateText = 'templated:ok';
+  const bridge = new WasmBridge(module);
+
+  const rendered = bridge.applyChatTemplate(
+    [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'hi' },
+    ],
+    true
+  );
+
+  assert.equal(rendered, 'templated:ok');
 });
 
 test('WasmBridge decodes token callbacks through the function table', () => {
@@ -612,4 +635,66 @@ test('WasmBridge reads aggregate runtime observability from the module heap', ()
   assert.equal(metrics?.outputTokenCount, 7);
   assert.equal(metrics?.firstSampledTokenId, 1234);
   assert.equal(metrics?.prefixCacheStoreCount, 12);
+});
+
+test('WasmBridge accepts an optional grammar argument for enqueuePrompt', () => {
+  const module = new MockWasmBridgeModule();
+  const bridge = new WasmBridge(module);
+  const grammarSource = 'root ::= "yes" | "no"';
+  // Small grammar under the size cap should be accepted and forwarded.
+  const requestId = bridge.enqueuePrompt('ctx', 'hello', 16, 0, grammarSource);
+  assert.ok(requestId > 0);
+  assert.equal(module.lastEnqueue?.grammar, grammarSource);
+});
+
+test('WasmBridge forwards an empty string when no grammar is supplied', () => {
+  const module = new MockWasmBridgeModule();
+  const bridge = new WasmBridge(module);
+  bridge.enqueuePrompt('ctx', 'hello', 16, 0);
+  assert.equal(module.lastEnqueue?.grammar, '');
+});
+
+test('WasmBridge forwards grammar through enqueuePromptWithMedia', () => {
+  const module = new MockWasmBridgeModule();
+  module.mediaMarker = '<__media__>';
+  const bridge = new WasmBridge(module);
+  const grammarSource = 'root ::= "ok"';
+  bridge.enqueuePromptWithMedia(
+    'ctx',
+    'look <__media__>',
+    16,
+    [new Uint8Array([1, 2])],
+    0,
+    grammarSource
+  );
+  assert.equal(module.lastMediaEnqueue?.grammar, grammarSource);
+});
+
+test('WasmBridge rejects grammar payloads above the size cap', () => {
+  const bridge = new WasmBridge(new MockWasmBridgeModule());
+  // Build a grammar string whose UTF-8 byte length exceeds the cap.
+  const oversized = 'a'.repeat(MAX_GRAMMAR_BYTES + 1);
+  assert.throws(
+    () => bridge.enqueuePrompt('ctx', 'hello', 16, 0, oversized),
+    /grammar exceeds maximum size/
+  );
+});
+
+test('WasmBridge grammar cap applies to enqueuePromptWithMedia', () => {
+  const module = new MockWasmBridgeModule();
+  module.mediaMarker = '<__media__>';
+  const bridge = new WasmBridge(module);
+  const oversized = 'b'.repeat(MAX_GRAMMAR_BYTES + 1);
+  assert.throws(
+    () =>
+      bridge.enqueuePromptWithMedia(
+        'ctx',
+        'look <__media__>',
+        16,
+        [new Uint8Array([1, 2])],
+        0,
+        oversized
+      ),
+    /grammar exceeds maximum size/
+  );
 });

@@ -109,6 +109,8 @@ function createWorkerRuntimeMetadata() {
   return {
     chatTemplate: 'llama3',
     mediaMarker: '<__media__>',
+    bosText: '<|begin_of_text|>',
+    eosText: '<|end_of_text|>',
   };
 }
 
@@ -787,17 +789,58 @@ test('WorkerEngineRuntime caches runtime metadata from initEngine and clears it 
     await runtime.initModule();
     assert.equal(runtime.getChatTemplate(), null);
     assert.equal(runtime.getMediaMarker(), null);
+    assert.equal(runtime.getEosText(), '');
 
     await runtime.initEngine('/models/model.gguf');
 
     assert.equal(runtime.getChatTemplate(), 'llama3');
     assert.equal(runtime.getMediaMarker(), '<__media__>');
+    assert.equal(runtime.getEosText(), '<|end_of_text|>');
     assert.equal(MockWorker.instances[0].messages.some((message) => message.kind === 'init-engine'), true);
 
     runtime.close();
 
     assert.equal(runtime.getChatTemplate(), null);
     assert.equal(runtime.getMediaMarker(), null);
+    assert.equal(runtime.getEosText(), '');
+  } finally {
+    restoreWorker();
+  }
+});
+
+test('WorkerEngineRuntime proxies applyChatTemplate through the worker', async () => {
+  const restoreWorker = installMockWorker();
+  try {
+    MockWorker.handlerFactory = () => (worker, message) => {
+      switch (message.kind) {
+        case 'init-module':
+          worker.emit({ kind: 'resolve', callId: message.callId, value: undefined });
+          return;
+        case 'apply-chat-template':
+          worker.emit({ kind: 'resolve', callId: message.callId, value: 'templated:ok' });
+          return;
+        default:
+          worker.emit({ kind: 'resolve', callId: message.callId, value: createWorkerRuntimeMetadata() });
+      }
+    };
+
+    const runtime = new WorkerEngineRuntime({});
+    await runtime.initModule();
+    await runtime.initEngine('/models/model.gguf');
+
+    const rendered = await runtime.applyChatTemplate(
+      [
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: 'hi' },
+      ],
+      true
+    );
+
+    assert.equal(rendered, 'templated:ok');
+    assert.equal(
+      MockWorker.instances[0].messages.some((message) => message.kind === 'apply-chat-template'),
+      true
+    );
   } finally {
     restoreWorker();
   }
@@ -860,7 +903,7 @@ test('WorkerEngineRuntime forwards decode sampling config through init-engine', 
   }
 });
 
-test('WorkerEngineRuntime sends transferable media buffers without discarding auto-chat mode for media prompts', async () => {
+test('WorkerEngineRuntime sends transferable media buffers for media prompts', async () => {
   const restoreWorker = installMockWorker();
   try {
     MockWorker.handlerFactory = () => {

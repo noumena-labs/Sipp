@@ -42,6 +42,9 @@ struct GenerateRequest {
   GenerateRequestId id = 0;
   std::string context_key;
   std::string original_prompt;
+  // Optional GBNF grammar source. When non-empty the slot sampler is built
+  // with llama_sampler_init_grammar prepended to constrain decoding output.
+  std::string grammar;
   std::vector<llama_token> prompt_tokens;
   std::optional<MultimodalPayload> multimodal;
   int32_t max_output_tokens = 0;

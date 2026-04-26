@@ -2,10 +2,10 @@
  * Curated model registry for the CogentLM benchmark.
  *
  * Each entry is still app-facing catalog data, but its engine-facing
- * portion is expressed as a `cogent-engine` model bundle descriptor.
+ * portion is expressed as a `@noumena-labs/cogent-engine` model bundle descriptor.
  */
 
-import type { ModelBundleDescriptor } from 'cogent-engine';
+import type { ModelBundleDescriptor } from '@noumena-labs/cogent-engine';
 
 export type ModelCapability = 'text' | 'vision';
 

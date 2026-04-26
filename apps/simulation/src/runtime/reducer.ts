@@ -1,0 +1,1594 @@
+import { clampToBounds, vec2Distance } from './sensing.js';
+import type {
+  AgentIntent,
+  BatSwingHit,
+  DirectorDecision,
+  ForcedDropOutcome,
+  ForcedDropRulingRecord,
+  ObjectRespawnRule,
+  PendingIceImpactState,
+  PendingRespawnState,
+  PowerUpKind,
+  RefereeState,
+  SabotageMethod,
+  SimulationAgentState,
+  SimulationGameEvent,
+  SimulationGameState,
+  SimulationObjectState,
+  SimulationScoreState,
+  Vec2,
+  WorldBounds,
+  WorldConflict,
+} from './types.js';
+
+export interface MutableScoreState {
+  deliveries: Record<string, number>;
+  forcedDrops: Record<string, number>;
+}
+
+export interface MutableRefereeMemoryState {
+  forcedDrops: ForcedDropRulingRecord[];
+}
+
+export interface MutableGameState extends Omit<SimulationGameState, 'score' | 'referee' | 'refereeMemory'> {
+  score: MutableScoreState;
+  referee: RefereeState;
+  refereeMemory: MutableRefereeMemoryState;
+  pendingRespawns: PendingRespawnState[];
+  pendingIceImpacts: PendingIceImpactState[];
+  nextSpawnIndexByObjectId: Record<string, number>;
+}
+
+export interface MutableWorldState {
+  tick: number;
+  timeSeconds: number;
+  bounds: WorldBounds;
+  agents: SimulationAgentState[];
+  objects: SimulationObjectState[];
+  directorNote: string | null;
+  game: MutableGameState;
+}
+
+export const INTERACTION_RADIUS = 0.75;
+export const AGENT_RADIUS = 0.38;
+export const GOAL_RADIUS = 1.2;
+export const SABOTAGE_RADIUS = 0.95;
+export const AGENT_APPROACH_RADIUS = 1.25;
+export const CHASE_MIN_DISTANCE = 2.1;
+export const PUSH_RADIUS = AGENT_APPROACH_RADIUS - 0.35;
+export const PUSH_DISTANCE = 2.6;
+export const ICE_THROW_RADIUS = 4.5;
+export const BAT_SWING_RADIUS = 1.3;
+export const FORCED_DROP_HISTORY_LIMIT = 8;
+export const SABOTAGE_COOLDOWN_TICKS = 3;
+export const FREEZE_TICKS = 38;
+export const ICE_THROW_TRAVEL_TICKS = 4;
+export const BANANA_CARRIER_SPEED_MULTIPLIER = 0.92;
+const BAT_SWING_HALF_ANGLE = (Math.PI * 7) / 18;
+const DETOUR_PADDING = 0.35;
+const DETOUR_REACHED_RADIUS = 0.35;
+const BLOCKED_REPATH_TICKS = 2;
+const SIDESTEP_ANGLES = [0, Math.PI / 6, -Math.PI / 6, Math.PI / 3, -Math.PI / 3, Math.PI / 2, -Math.PI / 2] as const;
+const OBJECT_APPROACH_SLOT_RADIUS = 0.6;
+const AGENT_APPROACH_SLOT_RADIUS = 0.85;
+
+export interface TickReducerResult {
+  readonly conflicts: WorldConflict[];
+  readonly arrivedAgentIds: readonly string[];
+  readonly events: readonly SimulationGameEvent[];
+}
+
+export function applyTickFirstPass(state: MutableWorldState, dt: number): TickReducerResult {
+  const events: SimulationGameEvent[] = [];
+  const arrivedAgentIds: string[] = [];
+
+  processPendingRespawn(state, events);
+  processPendingIceImpacts(state, events);
+  refreshFrozenAgents(state);
+
+  moveAgentsWithoutOverlap(state, dt, arrivedAgentIds);
+  syncHeldObjects(state);
+
+  processDrops(state, events);
+  processDeliveries(state, events);
+
+  const conflicts = [
+    ...processPickupRequests(state, events),
+    ...processSabotageRequests(state, events),
+  ];
+  processPushRequests(state, events);
+
+  for (const agent of state.agents) {
+    if (agent.intent?.kind === 'wait') {
+      agent.intent = null;
+    }
+  }
+
+  return { conflicts, arrivedAgentIds, events };
+}
+
+export function applyDirectorDecision(
+  state: MutableWorldState,
+  decision: DirectorDecision
+): SimulationGameEvent[] {
+  state.directorNote = decision.note.length > 0 ? decision.note : state.directorNote;
+  const events: SimulationGameEvent[] = [];
+
+  for (const resolution of decision.resolutions) {
+    const conflict = findConflictFromResolution(state, resolution.conflictId);
+    if (conflict?.kind === 'contested_object') {
+      const objectId = resolution.objectId ?? conflict.objectId;
+      if (resolution.outcome === 'pickup' && resolution.winnerAgentId) {
+        applyPickUp(state, resolution.winnerAgentId, objectId, events);
+      } else {
+        clearPickupIntents(state, objectId);
+      }
+      continue;
+    }
+
+    if (conflict?.kind === 'forced_drop') {
+      applyForcedDropResolution(state, conflict, resolution.outcome, events);
+    }
+  }
+
+  return events;
+}
+
+export function deterministicConflictResolution(
+  state: MutableWorldState,
+  conflicts: readonly WorldConflict[]
+): DirectorDecision {
+  return {
+    note: 'The referee uses a quick house-rule ruling.',
+    resolutions: conflicts.map((conflict) => {
+      if (conflict.kind === 'contested_object') {
+        return {
+          conflictId: conflict.id,
+          objectId: conflict.objectId,
+          winnerAgentId: choosePickupWinner(state, conflict),
+          outcome: 'pickup',
+          note: 'closest grab wins',
+        };
+      }
+      return {
+        conflictId: conflict.id,
+        objectId: conflict.objectId,
+        winnerAgentId: null,
+        outcome: 'drop',
+        note: 'the bump shakes the banana loose',
+      };
+    }),
+  };
+}
+
+function moveAgentsWithoutOverlap(
+  state: MutableWorldState,
+  dt: number,
+  arrivedAgentIds: string[]
+): void {
+  const accepted = new Map<string, Vec2>();
+
+  for (const agent of state.agents) {
+    const next = stepMovement(agent, state, dt, accepted);
+    const position = next.position;
+
+    agent.position = position;
+    agent.heading = next.heading;
+    accepted.set(agent.id, position);
+
+    if (agent.intent?.emotion) {
+      agent.emotion = agent.intent.emotion;
+    }
+    if (agent.intent && hasReachedCurrentIntent(agent, state)) {
+      arrivedAgentIds.push(agent.id);
+    }
+  }
+}
+
+function stepMovement(
+  agent: SimulationAgentState,
+  state: MutableWorldState,
+  dt: number,
+  accepted: ReadonlyMap<string, Vec2>
+): { position: Vec2; heading: number } {
+  const intent = agent.intent;
+  if (agent.frozenUntilTick > state.tick) {
+    agent.navigation.detourTarget = null;
+    agent.navigation.blockedTicks = 0;
+    agent.navigation.obstacleId = null;
+    return { position: agent.position, heading: agent.heading };
+  }
+  if (!intent) {
+    agent.navigation.detourTarget = null;
+    agent.navigation.blockedTicks = 0;
+    agent.navigation.obstacleId = null;
+    return { position: agent.position, heading: agent.heading };
+  }
+  const finalTarget = resolveMovementTarget(agent, intent, state);
+  if (!finalTarget) {
+    agent.navigation.detourTarget = null;
+    agent.navigation.blockedTicks = 0;
+    agent.navigation.obstacleId = null;
+    return { position: agent.position, heading: agent.heading };
+  }
+  if (agent.navigation.detourTarget && vec2Distance(agent.position, agent.navigation.detourTarget) <= DETOUR_REACHED_RADIUS) {
+    agent.navigation.detourTarget = null;
+    agent.navigation.obstacleId = null;
+  }
+
+  if (agent.navigation.detourTarget && hasClearLine(agent.position, finalTarget, state.objects)) {
+    agent.navigation.detourTarget = null;
+    agent.navigation.obstacleId = null;
+  }
+
+  const target = agent.navigation.detourTarget ?? finalTarget;
+  const dx = target.x - agent.position.x;
+  const dz = target.z - agent.position.z;
+  const dist = Math.sqrt(dx * dx + dz * dz);
+  if (dist < 1e-4) {
+    agent.navigation.blockedTicks = 0;
+    return { position: agent.position, heading: agent.heading };
+  }
+  const effectiveSpeed = agent.holding === state.game.bananaObjectId
+    ? agent.speed * BANANA_CARRIER_SPEED_MULTIPLIER
+    : agent.speed;
+  const step = Math.min(dist, effectiveSpeed * dt);
+  const desiredHeading = Math.atan2(dx, dz);
+
+  for (const angle of SIDESTEP_ANGLES) {
+    const heading = desiredHeading + angle;
+    const candidate = clampToBounds({
+      x: agent.position.x + Math.sin(heading) * step,
+      z: agent.position.z + Math.cos(heading) * step,
+    }, state.bounds);
+    if (!isCandidateBlocked(agent.id, candidate, state, accepted)) {
+      if (angle === 0) {
+        agent.navigation.blockedTicks = 0;
+        if (agent.navigation.detourTarget && vec2Distance(candidate, finalTarget) < vec2Distance(agent.position, finalTarget)) {
+          agent.navigation.detourTarget = null;
+          agent.navigation.obstacleId = null;
+        }
+      } else {
+        agent.navigation.blockedTicks = 0;
+      }
+      return { position: candidate, heading };
+    }
+  }
+
+  agent.navigation.blockedTicks += 1;
+  const blockingObstacle = findBlockingObstacleOnPath(agent.position, finalTarget, state.objects);
+  if (blockingObstacle && (agent.navigation.detourTarget == null || agent.navigation.blockedTicks >= BLOCKED_REPATH_TICKS)) {
+    const detour = chooseDetourTarget(agent, finalTarget, blockingObstacle, state, accepted);
+    if (detour) {
+      agent.navigation.detourTarget = detour.target;
+      agent.navigation.obstacleId = blockingObstacle.id;
+      agent.navigation.blockedTicks = 0;
+      return { position: agent.position, heading: detour.heading };
+    }
+  }
+
+  return { position: agent.position, heading: desiredHeading };
+}
+
+function resolveMovementTarget(
+  agent: SimulationAgentState,
+  intent: AgentIntent,
+  state: MutableWorldState
+): Vec2 | null {
+  switch (intent.kind) {
+    case 'move_to':
+      return intent.target;
+    case 'go_to_object': {
+      const target = state.objects.find((o) => o.id === intent.objectId);
+      if (!target) return null;
+      if (usesObjectApproachSlots(state, target)) {
+        return resolveApproachPointForObject(state, agent.id, intent.objectId, target.position);
+      }
+      return target.position;
+    }
+    case 'approach_agent':
+    case 'push':
+    case 'sabotage': {
+      const target = state.agents.find((a) => a.id === intent.agentId);
+      if (!target) return null;
+      if (usesAgentApproachSlots(state, intent.agentId)) {
+        return resolveApproachPointForAgent(state, agent.id, intent.agentId, target.position);
+      }
+      return target.position;
+    }
+    case 'pick_up':
+    case 'use':
+    case 'deliver': {
+      const target = state.objects.find((o) => o.id === intent.objectId);
+      if (!target) return null;
+      if (intent.kind === 'pick_up') {
+        if (usesObjectApproachSlots(state, target)) {
+          return resolveApproachPointForObject(state, agent.id, intent.objectId, target.position);
+        }
+      }
+      return target.position;
+    }
+    case 'wait':
+    case 'drop':
+      return null;
+  }
+}
+
+function collidesWithBlockingObject(position: Vec2, objects: readonly SimulationObjectState[]): boolean {
+  return objects.some(
+    (obj) => obj.active && obj.blocksMovement && vec2Distance(position, obj.position) < AGENT_RADIUS + obj.collisionRadius
+  );
+}
+
+function findBlockingObject(position: Vec2, objects: readonly SimulationObjectState[]): SimulationObjectState | null {
+  for (const obj of objects) {
+    if (!obj.active) continue;
+    if (!obj.blocksMovement) continue;
+    if (vec2Distance(position, obj.position) < AGENT_RADIUS + obj.collisionRadius) {
+      return obj;
+    }
+  }
+  return null;
+}
+
+function collidesWithAgents(
+  agentId: string,
+  position: Vec2,
+  agents: readonly SimulationAgentState[],
+  accepted: ReadonlyMap<string, Vec2>
+): boolean {
+  for (const other of agents) {
+    if (other.id === agentId) continue;
+    const otherPosition = accepted.get(other.id) ?? other.position;
+    if (vec2Distance(position, otherPosition) < AGENT_RADIUS * 2) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isCandidateBlocked(
+  agentId: string,
+  position: Vec2,
+  state: MutableWorldState,
+  accepted: ReadonlyMap<string, Vec2>
+): boolean {
+  return (
+    collidesWithBlockingObject(position, state.objects) ||
+    collidesWithAgents(agentId, position, state.agents, accepted)
+  );
+}
+
+function usesObjectApproachSlots(
+  state: MutableWorldState,
+  object: SimulationObjectState
+): boolean {
+  return object.id === state.game.bananaObjectId || object.contested;
+}
+
+function usesAgentApproachSlots(state: MutableWorldState, targetAgentId: string): boolean {
+  return getAgentApproachContenders(state, targetAgentId).length > 1;
+}
+
+function resolveApproachPointForObject(
+  state: MutableWorldState,
+  agentId: string,
+  objectId: string,
+  center: Vec2
+): Vec2 {
+  return resolveApproachPoint(
+    agentId,
+    getObjectApproachContenders(state, objectId),
+    center,
+    OBJECT_APPROACH_SLOT_RADIUS
+  );
+}
+
+function resolveApproachPointForAgent(
+  state: MutableWorldState,
+  agentId: string,
+  targetAgentId: string,
+  center: Vec2
+): Vec2 {
+  return resolveApproachPoint(
+    agentId,
+    getAgentApproachContenders(state, targetAgentId),
+    center,
+    AGENT_APPROACH_SLOT_RADIUS
+  );
+}
+
+function resolveApproachPoint(
+  agentId: string,
+  contenders: readonly SimulationAgentState[],
+  center: Vec2,
+  radius: number
+): Vec2 {
+  if (contenders.length <= 1) {
+    return center;
+  }
+  const ordered = [...contenders].sort(compareApproachPriority(center));
+  const index = ordered.findIndex((entry) => entry.id === agentId);
+  if (index < 0) {
+    return center;
+  }
+  return slotPointAround(center, index, ordered.length, approachAngleFrom(center, ordered[0]!.position), radius);
+}
+
+function getObjectApproachContenders(
+  state: MutableWorldState,
+  objectId: string
+): SimulationAgentState[] {
+  return state.agents.filter((agent) => {
+    const intent = agent.intent;
+    return (
+      (intent?.kind === 'pick_up' && intent.objectId === objectId) ||
+      (intent?.kind === 'go_to_object' && intent.objectId === objectId)
+    );
+  });
+}
+
+function getAgentApproachContenders(
+  state: MutableWorldState,
+  targetAgentId: string
+): SimulationAgentState[] {
+  return state.agents.filter((agent) => {
+    const intent = agent.intent;
+    return (
+      (intent?.kind === 'sabotage' && intent.agentId === targetAgentId) ||
+      (intent?.kind === 'push' && intent.agentId === targetAgentId) ||
+      (intent?.kind === 'approach_agent' && intent.agentId === targetAgentId)
+    );
+  });
+}
+
+function compareApproachPriority(center: Vec2) {
+  return (a: SimulationAgentState, b: SimulationAgentState): number => {
+    const angleDiff = approachAngleFrom(center, a.position) - approachAngleFrom(center, b.position);
+    if (Math.abs(angleDiff) > 0.01) return angleDiff;
+    const distanceDiff = vec2Distance(a.position, center) - vec2Distance(b.position, center);
+    if (Math.abs(distanceDiff) > 0.01) return distanceDiff;
+    const issuedDiff = a.intentIssuedAtTick - b.intentIssuedAtTick;
+    if (issuedDiff !== 0) return issuedDiff;
+    return a.id.localeCompare(b.id);
+  };
+}
+
+function approachAngleFrom(center: Vec2, position: Vec2): number {
+  const angle = Math.atan2(position.x - center.x, position.z - center.z);
+  return angle >= 0 ? angle : angle + Math.PI * 2;
+}
+
+function slotPointAround(
+  center: Vec2,
+  index: number,
+  total: number,
+  startAngle: number,
+  radius: number
+): Vec2 {
+  if (total <= 1) {
+    return center;
+  }
+  const angle = startAngle + (Math.PI * 2 * index) / total;
+  return {
+    x: center.x + Math.sin(angle) * radius,
+    z: center.z + Math.cos(angle) * radius,
+  };
+}
+
+function hasClearLine(from: Vec2, to: Vec2, objects: readonly SimulationObjectState[]): boolean {
+  return findBlockingObstacleOnPath(from, to, objects) == null;
+}
+
+function findBlockingObstacleOnPath(
+  from: Vec2,
+  to: Vec2,
+  objects: readonly SimulationObjectState[]
+): SimulationObjectState | null {
+  let best: { object: SimulationObjectState; t: number } | null = null;
+  for (const obj of objects) {
+    if (!obj.active) continue;
+    if (!obj.blocksMovement) continue;
+    const hit = distanceToSegment(obj.position, from, to);
+    const radius = obj.collisionRadius + AGENT_RADIUS + DETOUR_PADDING;
+    if (hit.distance > radius) continue;
+    if (best == null || hit.t < best.t) {
+      best = { object: obj, t: hit.t };
+    }
+  }
+  return best?.object ?? null;
+}
+
+function chooseDetourTarget(
+  agent: SimulationAgentState,
+  finalTarget: Vec2,
+  obstacle: SimulationObjectState,
+  state: MutableWorldState,
+  accepted: ReadonlyMap<string, Vec2>
+): { target: Vec2; heading: number } | null {
+  const padding = obstacle.collisionRadius + AGENT_RADIUS + DETOUR_PADDING;
+  const awayX = agent.position.x - obstacle.position.x;
+  const awayZ = agent.position.z - obstacle.position.z;
+  const awayLen = Math.sqrt(awayX * awayX + awayZ * awayZ) || 1;
+  const nx = awayX / awayLen;
+  const nz = awayZ / awayLen;
+  const tx = -nz;
+  const tz = nx;
+
+  const candidates: Vec2[] = [
+    clampToBounds({ x: obstacle.position.x + tx * padding + nx * padding, z: obstacle.position.z + tz * padding + nz * padding }, state.bounds),
+    clampToBounds({ x: obstacle.position.x - tx * padding + nx * padding, z: obstacle.position.z - tz * padding + nz * padding }, state.bounds),
+  ];
+
+  let best: { target: Vec2; score: number; heading: number } | null = null;
+  for (const candidate of candidates) {
+    if (findBlockingObject(candidate, state.objects)) continue;
+    if (collidesWithAgents(agent.id, candidate, state.agents, accepted)) continue;
+    const heading = Math.atan2(candidate.x - agent.position.x, candidate.z - agent.position.z);
+    const score = vec2Distance(candidate, finalTarget);
+    if (best == null || score < best.score) {
+      best = { target: candidate, score, heading };
+    }
+  }
+  return best ? { target: best.target, heading: best.heading } : null;
+}
+
+function distanceToSegment(point: Vec2, a: Vec2, b: Vec2): { distance: number; t: number } {
+  const abx = b.x - a.x;
+  const abz = b.z - a.z;
+  const apx = point.x - a.x;
+  const apz = point.z - a.z;
+  const abLenSq = abx * abx + abz * abz;
+  if (abLenSq < 1e-6) {
+    return { distance: vec2Distance(point, a), t: 0 };
+  }
+  const unclampedT = (apx * abx + apz * abz) / abLenSq;
+  const t = Math.max(0, Math.min(1, unclampedT));
+  const closest = { x: a.x + abx * t, z: a.z + abz * t };
+  return { distance: vec2Distance(point, closest), t };
+}
+
+function syncHeldObjects(state: MutableWorldState): void {
+  for (const obj of state.objects) {
+    if (!obj.heldBy) continue;
+    const carrier = state.agents.find((a) => a.id === obj.heldBy);
+    if (carrier && carrier.holding === obj.id) {
+      obj.position = { x: carrier.position.x, z: carrier.position.z };
+      continue;
+    }
+    obj.heldBy = null;
+  }
+}
+
+function processDrops(state: MutableWorldState, events: SimulationGameEvent[]): void {
+  for (const agent of state.agents) {
+    if (agent.intent?.kind !== 'drop') continue;
+    if (!agent.holding) {
+      agent.intent = null;
+      continue;
+    }
+    dropHeldObject(state, agent, events, `${agent.name} drops the ${agent.holding}.`);
+  }
+}
+
+function processDeliveries(state: MutableWorldState, events: SimulationGameEvent[]): void {
+  const banana = getObject(state, state.game.bananaObjectId);
+  const goal = getObject(state, state.game.goalObjectId);
+  if (!banana || !goal) return;
+
+  for (const agent of state.agents) {
+    if (agent.holding !== banana.id) continue;
+    if (vec2Distance(agent.position, goal.position) > GOAL_RADIUS) continue;
+    const previousCarrierId = agent.id;
+    incrementScore(state.game.score.deliveries, agent.id);
+    agent.holding = null;
+    agent.intent = null;
+    agent.goal = null;
+    agent.status = 'scored a banana delivery';
+    agent.emotion = 'happy';
+    banana.heldBy = null;
+    events.push({
+      kind: 'delivery',
+      agentId: agent.id,
+      objectId: banana.id,
+      position: { x: goal.position.x, z: goal.position.z },
+      points: 1,
+    });
+    scheduleRespawn(state, banana.id, 1);
+    clearCarrierPursuits(state, previousCarrierId);
+  }
+}
+
+function refreshFrozenAgents(state: MutableWorldState): void {
+  for (const agent of state.agents) {
+    if (agent.frozenUntilTick <= state.tick) continue;
+    agent.intent = null;
+    agent.goal = null;
+    agent.status = 'frozen inside a block of ice';
+    agent.emotion = 'sleepy';
+  }
+}
+
+function processPickupRequests(
+  state: MutableWorldState,
+  events: SimulationGameEvent[]
+): WorldConflict[] {
+  const requests = new Map<string, string[]>();
+  for (const agent of state.agents) {
+    const intent = agent.intent;
+    if (intent?.kind !== 'pick_up') continue;
+    const target = getObject(state, intent.objectId);
+    if (!target) {
+      agent.intent = null;
+      continue;
+    }
+    if (vec2Distance(agent.position, target.position) > INTERACTION_RADIUS) continue;
+    let bucket = requests.get(target.id);
+    if (!bucket) {
+      bucket = [];
+      requests.set(target.id, bucket);
+    }
+    bucket.push(agent.id);
+  }
+
+  const conflicts: WorldConflict[] = [];
+  for (const [objectId, contenders] of requests) {
+    const obj = getObject(state, objectId);
+    if (!obj) continue;
+    if (!obj.active) {
+      clearPickupIntents(state, objectId);
+      continue;
+    }
+    if (obj.heldBy) {
+      for (const id of contenders) clearAgentIntent(state, id);
+      continue;
+    }
+    if (contenders.length === 1) {
+      applyPickUp(state, contenders[0]!, objectId, events);
+      continue;
+    }
+    conflicts.push({
+      id: `pickup:${objectId}:${state.tick}`,
+      kind: 'contested_object',
+      objectId,
+      contenderAgentIds: contenders,
+    });
+  }
+  return conflicts;
+}
+
+function processSabotageRequests(state: MutableWorldState, events: SimulationGameEvent[]): WorldConflict[] {
+  const banana = getObject(state, state.game.bananaObjectId);
+  if (!banana) return [];
+
+  const conflicts: WorldConflict[] = [];
+  for (const agent of state.agents) {
+    const intent = agent.intent;
+    if (intent?.kind !== 'sabotage') continue;
+    if (agent.frozenUntilTick > state.tick) {
+      clearAgentSabotage(state, agent);
+      continue;
+    }
+    if (agent.cooldowns.sabotageUntilTick > state.tick) {
+      clearAgentSabotage(state, agent);
+      continue;
+    }
+    const target = state.agents.find((entry) => entry.id === intent.agentId);
+    if (!target) {
+      clearAgentSabotage(state, agent);
+      continue;
+    }
+    const method: SabotageMethod = intent.method === 'bump' && agent.powerUp?.kind === 'bat'
+      ? 'bat'
+      : intent.method;
+
+    if (method === 'bump') {
+      if (target.holding !== banana.id) {
+        clearAgentSabotage(state, agent);
+        continue;
+      }
+      if (vec2Distance(agent.position, target.position) > SABOTAGE_RADIUS) continue;
+      spendSabotageCooldown(agent, state.tick);
+      if (!resolveBumpContact(state, agent, target)) {
+        agent.status = 'swings wide on the bump';
+        agent.emotion = 'surprised';
+        clearAgentSabotage(state, agent);
+        events.push({
+          kind: 'bump_whiff',
+          attackerAgentId: agent.id,
+          targetAgentId: target.id,
+          position: midpoint(agent.position, target.position),
+        });
+        continue;
+      }
+      conflicts.push({
+        id: `drop:${agent.id}:${target.id}:${state.tick}`,
+        kind: 'forced_drop',
+        attackerAgentId: agent.id,
+        targetAgentId: target.id,
+        objectId: banana.id,
+      });
+      continue;
+    }
+
+    const powerUp = consumePowerUp(agent, method);
+    if (!powerUp) {
+      clearAgentSabotage(state, agent);
+      continue;
+    }
+    if (powerUp.kind === 'ice_cube') {
+      if (vec2Distance(agent.position, target.position) > ICE_THROW_RADIUS) {
+        agent.powerUp = powerUp;
+        continue;
+      }
+      spendSabotageCooldown(agent, state.tick);
+      launchIceThrow(state, agent, target, powerUp, events);
+      clearAgentSabotage(state, agent);
+      continue;
+    }
+    if (vec2Distance(agent.position, target.position) > BAT_SWING_RADIUS) {
+      agent.powerUp = powerUp;
+      continue;
+    }
+    spendSabotageCooldown(agent, state.tick);
+    applyGuaranteedPowerUpSabotage(state, agent, target, powerUp, banana, events);
+    clearAgentSabotage(state, agent);
+    continue;
+  }
+  return conflicts;
+}
+
+function processPushRequests(state: MutableWorldState, events: SimulationGameEvent[]): void {
+  for (const agent of state.agents) {
+    const intent = agent.intent;
+    if (intent?.kind !== 'push') continue;
+    if (agent.frozenUntilTick > state.tick) {
+      clearAgentIntentAndGoal(agent);
+      continue;
+    }
+
+    const target = state.agents.find((entry) => entry.id === intent.agentId);
+    if (!target) {
+      clearAgentIntentAndGoal(agent);
+      continue;
+    }
+    if (vec2Distance(agent.position, target.position) > PUSH_RADIUS) continue;
+
+    applyPush(state, agent, target, events);
+  }
+}
+
+function processPendingRespawn(state: MutableWorldState, events: SimulationGameEvent[]): void {
+  if (state.game.pendingRespawns.length === 0) return;
+
+  const remaining: PendingRespawnState[] = [];
+  for (const pending of state.game.pendingRespawns) {
+    if (state.tick < pending.activateAtTick) {
+      remaining.push(pending);
+      continue;
+    }
+    const object = getObject(state, pending.objectId);
+    if (!object) continue;
+    object.position = { x: pending.spawnPosition.x, z: pending.spawnPosition.z };
+    object.heldBy = null;
+    object.active = true;
+    events.push({
+      kind: 'respawn',
+      objectId: object.id,
+      position: { x: object.position.x, z: object.position.z },
+    });
+  }
+  state.game.pendingRespawns = remaining;
+}
+
+function processPendingIceImpacts(state: MutableWorldState, events: SimulationGameEvent[]): void {
+  if (state.game.pendingIceImpacts.length === 0) return;
+  const banana = getObject(state, state.game.bananaObjectId);
+  if (!banana) return;
+
+  const remaining: PendingIceImpactState[] = [];
+  for (const pending of state.game.pendingIceImpacts) {
+    if (state.tick < pending.activateAtTick) {
+      remaining.push(pending);
+      continue;
+    }
+    const attacker = state.agents.find((agent) => agent.id === pending.attackerAgentId);
+    const target = state.agents.find((agent) => agent.id === pending.targetAgentId);
+    if (!attacker || !target) continue;
+    applyIceImpact(state, attacker, target, pending.objectId, banana, events);
+  }
+  state.game.pendingIceImpacts = remaining;
+}
+
+function scheduleRespawn(state: MutableWorldState, objectId: string, delayTicks: number): void {
+  const spawn = nextValidObjectSpawn(state, objectId);
+  if (!spawn) return;
+  state.game.pendingRespawns = state.game.pendingRespawns.filter((entry) => entry.objectId !== objectId);
+  state.game.pendingRespawns.push({
+    objectId,
+    spawnPosition: spawn,
+    activateAtTick: state.tick + delayTicks,
+  });
+}
+
+function nextValidObjectSpawn(state: MutableWorldState, objectId: string): Vec2 | null {
+  const rule = getRespawnRule(state, objectId);
+  const spawns = rule?.spawnPoints;
+  if (!spawns || spawns.length === 0) return null;
+  const startIndex = state.game.nextSpawnIndexByObjectId[objectId] ?? 0;
+  for (let i = 0; i < spawns.length; i += 1) {
+    const index = (startIndex + i) % spawns.length;
+    const candidate = spawns[index]!;
+    if (isValidSpawn(state, candidate)) {
+      state.game.nextSpawnIndexByObjectId[objectId] = (index + 1) % spawns.length;
+      return candidate;
+    }
+  }
+  state.game.nextSpawnIndexByObjectId[objectId] = (startIndex + 1) % spawns.length;
+  return spawns[state.game.nextSpawnIndexByObjectId[objectId]] ?? null;
+}
+
+function getRespawnRule(state: MutableWorldState, objectId: string): ObjectRespawnRule | undefined {
+  return state.game.respawnRules.find((rule) => rule.objectId === objectId);
+}
+
+function isValidSpawn(state: MutableWorldState, position: Vec2): boolean {
+  if (collidesWithBlockingObject(position, state.objects)) return false;
+  for (const agent of state.agents) {
+    if (vec2Distance(agent.position, position) < AGENT_RADIUS * 2.5) return false;
+  }
+  const goal = getObject(state, state.game.goalObjectId);
+  if (goal && vec2Distance(goal.position, position) < GOAL_RADIUS + 0.5) return false;
+  return true;
+}
+
+function applyPickUp(
+  state: MutableWorldState,
+  agentId: string,
+  objectId: string,
+  events: SimulationGameEvent[]
+): void {
+  const agent = state.agents.find((a) => a.id === agentId);
+  const obj = getObject(state, objectId);
+  if (!agent || !obj || obj.heldBy || !obj.active) return;
+
+  if (isPowerUpKind(obj.kind)) {
+    if (agent.powerUp) return;
+    obj.active = false;
+    obj.heldBy = null;
+    agent.powerUp = { kind: obj.kind, objectId: obj.id };
+    agent.intent = null;
+    agent.goal = null;
+    agent.status = `snagged the ${obj.label}`;
+    agent.emotion = 'happy';
+    events.push({
+      kind: 'pickup',
+      agentId: agent.id,
+      objectId: obj.id,
+      position: { x: agent.position.x, z: agent.position.z },
+    });
+    return;
+  }
+
+  if (agent.holding) {
+    const prev = getObject(state, agent.holding);
+    if (prev) prev.heldBy = null;
+    agent.holding = null;
+  }
+  obj.heldBy = agent.id;
+  obj.position = { x: agent.position.x, z: agent.position.z };
+  agent.holding = obj.id;
+  const goal = getObject(state, state.game.goalObjectId);
+  agent.intent = goal ? { kind: 'go_to_object', objectId: goal.id, emotion: 'deliver' } : null;
+  agent.goal = goal ? { kind: 'deliver', objectId: goal.id, label: 'run to home base' } : null;
+  agent.status = goal ? `carrying the ${obj.label} to home base` : `carrying the ${obj.label}`;
+  agent.emotion = 'happy';
+  events.push({
+    kind: 'pickup',
+    agentId: agent.id,
+    objectId: obj.id,
+    position: { x: agent.position.x, z: agent.position.z },
+  });
+}
+
+function applyForcedDropResolution(
+  state: MutableWorldState,
+  conflict: Extract<WorldConflict, { kind: 'forced_drop' }>,
+  outcome: string,
+  events: SimulationGameEvent[]
+): void {
+  const attacker = state.agents.find((agent) => agent.id === conflict.attackerAgentId);
+  const target = state.agents.find((agent) => agent.id === conflict.targetAgentId);
+  const obj = getObject(state, conflict.objectId);
+  if (!attacker || !target || !obj) return;
+  const ruledOutcome = coerceForcedDropOutcome(outcome);
+
+  clearAgentSabotage(state, attacker);
+  spendSabotageCooldown(attacker, state.tick);
+  recordForcedDropRuling(state, conflict, ruledOutcome);
+
+  if (ruledOutcome === 'drop' && target.holding === obj.id) {
+    dropHeldObject(state, target, events, `${attacker.name} bumps ${target.name}, and the banana drops!`, 'bump');
+    incrementScore(state.game.score.forcedDrops, attacker.id);
+    events.push({
+      kind: 'forced_drop',
+      attackerAgentId: attacker.id,
+      targetAgentId: target.id,
+      objectId: obj.id,
+      position: { x: target.position.x, z: target.position.z },
+      outcome: 'drop',
+    });
+    return;
+  }
+
+  if (ruledOutcome === 'attacker_fumbles') {
+    attacker.status = 'fumbled a sabotage attempt';
+    attacker.emotion = 'surprised';
+    events.push({
+      kind: 'forced_drop',
+      attackerAgentId: attacker.id,
+      targetAgentId: target.id,
+      objectId: obj.id,
+      position: { x: attacker.position.x, z: attacker.position.z },
+      outcome: 'attacker_fumbles',
+    });
+    return;
+  }
+
+  target.status = 'kept hold of the banana';
+  target.emotion = 'alert';
+  events.push({
+    kind: 'forced_drop',
+    attackerAgentId: attacker.id,
+    targetAgentId: target.id,
+    objectId: obj.id,
+    position: { x: target.position.x, z: target.position.z },
+    outcome: 'hold',
+  });
+}
+
+function applyPush(
+  state: MutableWorldState,
+  pusher: SimulationAgentState,
+  target: SimulationAgentState,
+  events: SimulationGameEvent[]
+): void {
+  const from = { x: target.position.x, z: target.position.z };
+  const direction = normalizeVec({
+    x: target.position.x - pusher.position.x,
+    z: target.position.z - pusher.position.z,
+  }) ?? normalizeVec({ x: Math.sin(pusher.heading), z: Math.cos(pusher.heading) }) ?? { x: 0, z: 1 };
+  const to = choosePushLandingPoint(state, target, direction);
+
+  pusher.status = `pushes ${target.name}`;
+  pusher.emotion = 'alert';
+  clearAgentIntentAndGoal(pusher);
+
+  target.position = to;
+  target.heading = Math.atan2(to.x - from.x, to.z - from.z);
+  target.intent = null;
+  target.goal = null;
+  target.status = `pushed away by ${pusher.name}`;
+  target.emotion = 'surprised';
+  target.navigation.detourTarget = null;
+  target.navigation.blockedTicks = 0;
+  target.navigation.obstacleId = null;
+  if (target.holding) {
+    const held = getObject(state, target.holding);
+    if (held) {
+      held.position = { x: to.x, z: to.z };
+    }
+  }
+
+  events.push({
+    kind: 'push',
+    agentId: pusher.id,
+    targetAgentId: target.id,
+    from,
+    to,
+    position: midpoint(pusher.position, target.position),
+  });
+}
+
+function coerceForcedDropOutcome(outcome: string): ForcedDropOutcome {
+  if (outcome === 'drop' || outcome === 'hold' || outcome === 'attacker_fumbles') {
+    return outcome;
+  }
+  return 'hold';
+}
+
+function recordForcedDropRuling(
+  state: MutableWorldState,
+  conflict: Extract<WorldConflict, { kind: 'forced_drop' }>,
+  outcome: ForcedDropOutcome
+): void {
+  state.game.refereeMemory.forcedDrops.push({
+    tick: state.tick,
+    attackerAgentId: conflict.attackerAgentId,
+    targetAgentId: conflict.targetAgentId,
+    objectId: conflict.objectId,
+    outcome,
+  });
+  const extra = state.game.refereeMemory.forcedDrops.length - FORCED_DROP_HISTORY_LIMIT;
+  if (extra > 0) {
+    state.game.refereeMemory.forcedDrops.splice(0, extra);
+  }
+}
+
+function dropHeldObject(
+  state: MutableWorldState,
+  agent: SimulationAgentState,
+  events: SimulationGameEvent[],
+  _message: string,
+  cause: 'voluntary' | 'bump' | 'bat' | 'ice' = 'voluntary'
+): void {
+  if (!agent.holding) return;
+  const previousCarrierId = agent.id;
+  const from = { x: agent.position.x, z: agent.position.z };
+  const to = cause === 'bump' || cause === 'bat' || cause === 'ice'
+    ? chooseForcedDropLandingPoint(state, agent)
+    : chooseVoluntaryDropLandingPoint(state, from);
+  const held = getObject(state, agent.holding);
+  if (held) {
+    held.heldBy = null;
+    held.position = to;
+  }
+  const objectId = agent.holding;
+  agent.holding = null;
+  agent.intent = null;
+  agent.goal = null;
+  agent.status = 'dropped the banana';
+  agent.emotion = 'surprised';
+  clearCarrierPursuits(state, previousCarrierId);
+  events.push({ kind: 'drop', agentId: agent.id, objectId, from, to, cause });
+}
+
+function clearAgentSabotage(state: MutableWorldState, agent: SimulationAgentState): void {
+  agent.intent = null;
+  agent.goal = null;
+  if (agent.frozenUntilTick > state.tick) {
+    agent.status = 'frozen inside a block of ice';
+  }
+}
+
+function clearAgentIntentAndGoal(agent: SimulationAgentState): void {
+  agent.intent = null;
+  agent.goal = null;
+  agent.navigation.detourTarget = null;
+  agent.navigation.blockedTicks = 0;
+  agent.navigation.obstacleId = null;
+}
+
+function spendSabotageCooldown(agent: SimulationAgentState, tick: number): void {
+  agent.cooldowns.sabotageUntilTick = Math.max(agent.cooldowns.sabotageUntilTick, tick + SABOTAGE_COOLDOWN_TICKS);
+}
+
+function resolveBumpContact(
+  state: MutableWorldState,
+  attacker: SimulationAgentState,
+  target: SimulationAgentState
+): boolean {
+  const seed = `${state.tick}:${attacker.id}:${target.id}:bump`;
+  return hashString(seed) % 2 === 0;
+}
+
+function consumePowerUp(agent: SimulationAgentState, method: SabotageMethod): { kind: PowerUpKind; objectId: string } | null {
+  if (method === 'bump') return null;
+  if (!agent.powerUp || agent.powerUp.kind !== method) return null;
+  const powerUp = agent.powerUp;
+  agent.powerUp = null;
+  return powerUp;
+}
+
+function applyGuaranteedPowerUpSabotage(
+  state: MutableWorldState,
+  attacker: SimulationAgentState,
+  target: SimulationAgentState,
+  powerUp: { kind: PowerUpKind; objectId: string },
+  banana: SimulationObjectState,
+  events: SimulationGameEvent[]
+): void {
+  if (powerUp.kind === 'bat') {
+    applyBatSwing(state, attacker, target, powerUp, banana, events);
+    return;
+  }
+}
+
+function applyBatSwing(
+  state: MutableWorldState,
+  attacker: SimulationAgentState,
+  target: SimulationAgentState,
+  powerUp: { kind: 'bat'; objectId: string },
+  banana: SimulationObjectState,
+  events: SimulationGameEvent[]
+): void {
+  const aimDirection = normalizeVec({
+    x: target.position.x - attacker.position.x,
+    z: target.position.z - attacker.position.z,
+  }) ?? normalizeVec({ x: Math.sin(attacker.heading), z: Math.cos(attacker.heading) }) ?? { x: 0, z: 1 };
+  const aimAngle = Math.atan2(aimDirection.x, aimDirection.z);
+  const hits: BatSwingHit[] = [];
+
+  for (const candidate of state.agents) {
+    if (candidate.id === attacker.id) continue;
+    if (!isAgentInBatSwing(attacker, candidate, target.id, aimDirection)) continue;
+    const from = { x: candidate.position.x, z: candidate.position.z };
+    const pushDirection = normalizeVec({
+      x: candidate.position.x - attacker.position.x,
+      z: candidate.position.z - attacker.position.z,
+    }) ?? aimDirection;
+    hits.push({
+      agentId: candidate.id,
+      from,
+      to: choosePushLandingPoint(state, candidate, pushDirection),
+    });
+  }
+
+  attacker.status = hits.length === 1
+    ? `swings the bat at ${target.name}`
+    : 'swings the bat through the crowd';
+  attacker.heading = aimAngle;
+  attacker.emotion = 'alert';
+
+  events.push({
+    kind: 'bat_swing',
+    agentId: attacker.id,
+    objectId: powerUp.objectId,
+    origin: { x: attacker.position.x, z: attacker.position.z },
+    aimAt: { x: target.position.x, z: target.position.z },
+    radius: BAT_SWING_RADIUS,
+    startAngle: aimAngle - BAT_SWING_HALF_ANGLE,
+    endAngle: aimAngle + BAT_SWING_HALF_ANGLE,
+    hits,
+  });
+
+  for (const hit of hits) {
+    const hitAgent = state.agents.find((agent) => agent.id === hit.agentId);
+    if (!hitAgent) continue;
+    hitAgent.emotion = 'surprised';
+    if (hitAgent.holding === banana.id) {
+      dropHeldObject(state, hitAgent, events, `${attacker.name} sweeps the bat through ${hitAgent.name}!`, 'bat');
+      incrementScore(state.game.score.forcedDrops, attacker.id);
+    }
+    applyBatSwingPush(state, attacker, hitAgent, hit.from, hit.to);
+  }
+
+  scheduleRespawnFromRule(state, powerUp.objectId);
+}
+
+function isAgentInBatSwing(
+  attacker: SimulationAgentState,
+  candidate: SimulationAgentState,
+  selectedTargetId: string,
+  aimDirection: Vec2
+): boolean {
+  const distance = vec2Distance(attacker.position, candidate.position);
+  if (distance > BAT_SWING_RADIUS) return false;
+  if (candidate.id === selectedTargetId) return true;
+  const direction = normalizeVec({
+    x: candidate.position.x - attacker.position.x,
+    z: candidate.position.z - attacker.position.z,
+  });
+  if (!direction) return true;
+  const dot = direction.x * aimDirection.x + direction.z * aimDirection.z;
+  return Math.acos(Math.max(-1, Math.min(1, dot))) <= BAT_SWING_HALF_ANGLE;
+}
+
+function applyBatSwingPush(
+  state: MutableWorldState,
+  attacker: SimulationAgentState,
+  target: SimulationAgentState,
+  from: Vec2,
+  to: Vec2
+): void {
+  target.position = to;
+  target.heading = Math.atan2(to.x - from.x, to.z - from.z);
+  target.intent = null;
+  target.goal = null;
+  target.status = `sent flying by ${attacker.name}'s bat swing`;
+  target.emotion = 'surprised';
+  target.navigation.detourTarget = null;
+  target.navigation.blockedTicks = 0;
+  target.navigation.obstacleId = null;
+  if (target.holding) {
+    const held = getObject(state, target.holding);
+    if (held) {
+      held.position = { x: to.x, z: to.z };
+    }
+  }
+}
+
+function launchIceThrow(
+  state: MutableWorldState,
+  attacker: SimulationAgentState,
+  target: SimulationAgentState,
+  powerUp: { kind: 'ice_cube'; objectId: string },
+  events: SimulationGameEvent[]
+): void {
+  attacker.status = `hurls the ice cube at ${target.name}`;
+  attacker.emotion = 'alert';
+  state.game.pendingIceImpacts.push({
+    objectId: powerUp.objectId,
+    attackerAgentId: attacker.id,
+    targetAgentId: target.id,
+    launchedFrom: { x: attacker.position.x, z: attacker.position.z },
+    activateAtTick: state.tick + ICE_THROW_TRAVEL_TICKS,
+    launchedAtTick: state.tick,
+  });
+  events.push({
+    kind: 'power_up_throw',
+    agentId: attacker.id,
+    targetAgentId: target.id,
+    objectId: powerUp.objectId,
+    powerUp: 'ice_cube',
+    from: { x: attacker.position.x, z: attacker.position.z },
+    targetAtLaunch: { x: target.position.x, z: target.position.z },
+    launchedAtTick: state.tick,
+    impactTick: state.tick + ICE_THROW_TRAVEL_TICKS,
+  });
+  scheduleRespawnFromRule(state, powerUp.objectId);
+}
+
+function applyIceImpact(
+  state: MutableWorldState,
+  attacker: SimulationAgentState,
+  target: SimulationAgentState,
+  objectId: string,
+  banana: SimulationObjectState,
+  events: SimulationGameEvent[]
+): void {
+  target.frozenUntilTick = Math.max(target.frozenUntilTick, state.tick + FREEZE_TICKS);
+  target.intent = null;
+  target.goal = null;
+  target.status = 'frozen inside a block of ice';
+  target.emotion = 'sleepy';
+  if (target.holding === banana.id) {
+    dropHeldObject(state, target, events, `${attacker.name} freezes ${target.name} and the banana pops free!`, 'ice');
+    incrementScore(state.game.score.forcedDrops, attacker.id);
+  }
+  events.push({
+    kind: 'power_up_use',
+    agentId: attacker.id,
+    targetAgentId: target.id,
+    objectId,
+    powerUp: 'ice_cube',
+    position: { x: target.position.x, z: target.position.z },
+    effect: 'freeze',
+  });
+}
+
+function scheduleRespawnFromRule(state: MutableWorldState, objectId: string): void {
+  const rule = getRespawnRule(state, objectId);
+  if (!rule) return;
+  scheduleRespawn(state, objectId, rule.delayTicks);
+}
+
+function midpoint(a: Vec2, b: Vec2): Vec2 {
+  return {
+    x: (a.x + b.x) / 2,
+    z: (a.z + b.z) / 2,
+  };
+}
+
+function hashString(value: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function isPowerUpKind(kind: string): kind is PowerUpKind {
+  return kind === 'bat' || kind === 'ice_cube';
+}
+
+function chooseVoluntaryDropLandingPoint(state: MutableWorldState, origin: Vec2): Vec2 {
+  const radii = [0.9, 0.75, 1.1, 0.55];
+  for (const radius of radii) {
+    for (let i = 0; i < 10; i += 1) {
+      const angle = (Math.PI * 2 * i) / 10;
+      const candidate = clampToBounds(
+        { x: origin.x + Math.sin(angle) * radius, z: origin.z + Math.cos(angle) * radius },
+        state.bounds
+      );
+      if (findBlockingObject(candidate, state.objects)) continue;
+      if (state.agents.some((other) => vec2Distance(other.position, candidate) < AGENT_RADIUS * 1.5)) continue;
+      return candidate;
+    }
+  }
+  return { x: origin.x, z: origin.z };
+}
+
+function choosePushLandingPoint(
+  state: MutableWorldState,
+  target: SimulationAgentState,
+  baseDirection: Vec2
+): Vec2 {
+  const distances = [PUSH_DISTANCE, 1.25, 0.95, 0.7];
+  const angleOffsets = [0, Math.PI / 8, -Math.PI / 8, Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2];
+  let best: { point: Vec2; score: number } | null = null;
+
+  for (const distance of distances) {
+    for (const angleOffset of angleOffsets) {
+      const direction = rotateVec(baseDirection, angleOffset);
+      const candidate = clampToBounds({
+        x: target.position.x + direction.x * distance,
+        z: target.position.z + direction.z * distance,
+      }, state.bounds);
+      if (vec2Distance(candidate, target.position) < AGENT_RADIUS) continue;
+      if (findBlockingObject(candidate, state.objects)) continue;
+      if (!hasClearLine(target.position, candidate, state.objects)) continue;
+      if (collidesWithAgents(target.id, candidate, state.agents, new Map())) continue;
+
+      const score = vec2Distance(candidate, target.position);
+      if (best == null || score > best.score) {
+        best = { point: candidate, score };
+      }
+    }
+  }
+
+  return best?.point ?? target.position;
+}
+
+function chooseForcedDropLandingPoint(
+  state: MutableWorldState,
+  carrier: SimulationAgentState
+): Vec2 {
+  const origin = carrier.position;
+  const nearbyAgents = state.agents.filter((agent) => vec2Distance(agent.position, origin) <= 3.5);
+  const crowdCenter = nearbyAgents.length > 0
+    ? averagePosition(nearbyAgents.map((agent) => agent.position))
+    : origin;
+  const awayFromCrowd = normalizeVec({
+    x: origin.x - crowdCenter.x,
+    z: origin.z - crowdCenter.z,
+  });
+  const fallbackDirection = {
+    x: Math.sin(carrier.heading || 0),
+    z: Math.cos(carrier.heading || 0),
+  };
+  const baseDirection = awayFromCrowd ?? normalizeVec(fallbackDirection) ?? { x: 0, z: 1 };
+  const radii = [2.6, 3.1, 3.6, 4.2, 4.8];
+  const candidateAngles = [0, Math.PI / 8, -Math.PI / 8, Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2, Math.PI, Math.PI * 0.75, -Math.PI * 0.75];
+
+  let best: { point: Vec2; score: number } | null = null;
+  for (const radius of radii) {
+    for (const angleOffset of candidateAngles) {
+      const direction = rotateVec(baseDirection, angleOffset);
+      const candidate = clampToBounds(
+        {
+          x: origin.x + direction.x * radius,
+          z: origin.z + direction.z * radius,
+        },
+        state.bounds
+      );
+      const score = scoreForcedDropCandidate(state, candidate, carrier.id);
+      if (score == null) continue;
+      if (best == null || score > best.score) {
+        best = { point: candidate, score };
+      }
+    }
+  }
+
+  if (best) {
+    return best.point;
+  }
+
+  const fallback = chooseVoluntaryDropLandingPoint(state, origin);
+  if (fallback.x !== origin.x || fallback.z !== origin.z) {
+    return fallback;
+  }
+
+  return clampToBounds(
+    {
+      x: origin.x + baseDirection.x * 2.4,
+      z: origin.z + baseDirection.z * 2.4,
+    },
+    state.bounds
+  );
+}
+
+function scoreForcedDropCandidate(
+  state: MutableWorldState,
+  candidate: Vec2,
+  carrierId: string
+): number | null {
+  if (findBlockingObject(candidate, state.objects)) return null;
+
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  let nearbyPenalty = 0;
+  for (const agent of state.agents) {
+    const distance = vec2Distance(agent.position, candidate);
+    if (agent.id === carrierId && distance < AGENT_RADIUS * 3.6) return null;
+    if (distance < AGENT_RADIUS * 2.4) return null;
+    nearestDistance = Math.min(nearestDistance, distance);
+    nearbyPenalty += Math.max(0, 2.6 - distance);
+  }
+
+  const goal = getObject(state, state.game.goalObjectId);
+  if (goal && vec2Distance(goal.position, candidate) < GOAL_RADIUS + 0.6) {
+    return null;
+  }
+
+  const banana = getObject(state, state.game.bananaObjectId);
+  let obstacleClearance = 0;
+  for (const object of state.objects) {
+    if (!object.active) continue;
+    if (object.id === banana?.id) continue;
+    const distance = vec2Distance(object.position, candidate) - object.collisionRadius;
+    obstacleClearance = Math.max(obstacleClearance, Math.max(0, 1.4 - distance));
+  }
+
+  return nearestDistance * 2.4 - nearbyPenalty * 1.7 - obstacleClearance;
+}
+
+function averagePosition(points: readonly Vec2[]): Vec2 {
+  if (points.length === 0) {
+    return { x: 0, z: 0 };
+  }
+
+  let totalX = 0;
+  let totalZ = 0;
+  for (const point of points) {
+    totalX += point.x;
+    totalZ += point.z;
+  }
+  return {
+    x: totalX / points.length,
+    z: totalZ / points.length,
+  };
+}
+
+function normalizeVec(vector: Vec2): Vec2 | null {
+  const length = Math.sqrt(vector.x * vector.x + vector.z * vector.z);
+  if (length < 1e-6) {
+    return null;
+  }
+  return {
+    x: vector.x / length,
+    z: vector.z / length,
+  };
+}
+
+function rotateVec(vector: Vec2, angle: number): Vec2 {
+  const sin = Math.sin(angle);
+  const cos = Math.cos(angle);
+  return {
+    x: vector.x * cos - vector.z * sin,
+    z: vector.x * sin + vector.z * cos,
+  };
+}
+
+function clearCarrierPursuits(state: MutableWorldState, carrierId: string): void {
+  for (const agent of state.agents) {
+    if (agent.id === carrierId) continue;
+    if (agent.goal?.kind === 'sabotage_agent' && agent.goal.agentId === carrierId) {
+      agent.goal = null;
+      agent.intent = null;
+      continue;
+    }
+    if (agent.goal?.kind === 'go_to_agent' && agent.goal.agentId === carrierId) {
+      agent.goal = null;
+      agent.intent = null;
+      continue;
+    }
+    if (agent.intent?.kind === 'sabotage' && agent.intent.agentId === carrierId) {
+      agent.intent = null;
+      agent.goal = null;
+      continue;
+    }
+    if (agent.intent?.kind === 'push' && agent.intent.agentId === carrierId) {
+      agent.intent = null;
+      agent.goal = null;
+      continue;
+    }
+    if (agent.intent?.kind === 'approach_agent' && agent.intent.agentId === carrierId) {
+      agent.intent = null;
+      agent.goal = null;
+    }
+  }
+}
+
+function choosePickupWinner(
+  state: MutableWorldState,
+  conflict: Extract<WorldConflict, { kind: 'contested_object' }>
+): string | null {
+  const obj = getObject(state, conflict.objectId);
+  if (!obj) return conflict.contenderAgentIds[0] ?? null;
+  const contenders = conflict.contenderAgentIds
+    .map((id) => state.agents.find((agent) => agent.id === id))
+    .filter((agent): agent is SimulationAgentState => agent != null)
+    .sort((a, b) => {
+      const distanceDiff = vec2Distance(a.position, obj.position) - vec2Distance(b.position, obj.position);
+      if (Math.abs(distanceDiff) > 0.01) return distanceDiff;
+      const issuedDiff = a.intentIssuedAtTick - b.intentIssuedAtTick;
+      if (issuedDiff !== 0) return issuedDiff;
+      return a.id.localeCompare(b.id);
+    });
+  return contenders[0]?.id ?? null;
+}
+
+function clearPickupIntents(state: MutableWorldState, objectId: string): void {
+  for (const agent of state.agents) {
+    if (agent.intent?.kind === 'pick_up' && agent.intent.objectId === objectId) {
+      agent.intent = null;
+    }
+  }
+}
+
+function clearAgentIntent(state: MutableWorldState, agentId: string): void {
+  const agent = state.agents.find((a) => a.id === agentId);
+  if (agent) agent.intent = null;
+}
+
+function findConflictFromResolution(
+  state: MutableWorldState,
+  conflictId: string
+): WorldConflict | null {
+  const referee = state.game.referee;
+  if (referee.status === 'ruling' && referee.conflict.id === conflictId) {
+    return referee.conflict;
+  }
+  return null;
+}
+
+export function hasReachedCurrentIntent(agent: SimulationAgentState, state: MutableWorldState): boolean {
+  const intent = agent.intent;
+  if (!intent) return false;
+  switch (intent.kind) {
+    case 'move_to':
+      return vec2Distance(agent.position, intent.target) <= 0.35;
+    case 'go_to_object': {
+      const target = getObject(state, intent.objectId);
+      if (!target) return true;
+      const reachRadius = usesObjectApproachSlots(state, target) ? INTERACTION_RADIUS : 0.35;
+      return vec2Distance(agent.position, target.position) <= reachRadius;
+    }
+    case 'wait':
+    case 'drop':
+      return true;
+    case 'approach_agent': {
+      const target = state.agents.find((entry) => entry.id === intent.agentId);
+      return target ? vec2Distance(agent.position, target.position) <= AGENT_APPROACH_RADIUS : true;
+    }
+    case 'push': {
+      const target = state.agents.find((entry) => entry.id === intent.agentId);
+      return target ? vec2Distance(agent.position, target.position) <= PUSH_RADIUS : true;
+    }
+    case 'sabotage': {
+      const target = state.agents.find((entry) => entry.id === intent.agentId);
+      if (!target) return true;
+      const radius = intent.method === 'ice_cube'
+        ? ICE_THROW_RADIUS
+        : intent.method === 'bat' || (intent.method === 'bump' && agent.powerUp?.kind === 'bat')
+          ? BAT_SWING_RADIUS
+          : SABOTAGE_RADIUS;
+      return vec2Distance(agent.position, target.position) <= radius;
+    }
+    case 'pick_up':
+    case 'use': {
+      const target = getObject(state, intent.objectId);
+      return target ? vec2Distance(agent.position, target.position) <= INTERACTION_RADIUS : true;
+    }
+    case 'deliver': {
+      const target = getObject(state, intent.objectId);
+      return target ? vec2Distance(agent.position, target.position) <= GOAL_RADIUS : true;
+    }
+  }
+}
+
+function getObject(state: MutableWorldState, objectId: string): SimulationObjectState | undefined {
+  return state.objects.find((object) => object.id === objectId);
+}
+
+function incrementScore(score: Record<string, number>, agentId: string): void {
+  score[agentId] = (score[agentId] ?? 0) + 1;
+}
+
+export function cloneScore(score: MutableScoreState): SimulationScoreState {
+  return {
+    deliveries: { ...score.deliveries },
+    forcedDrops: { ...score.forcedDrops },
+  };
+}

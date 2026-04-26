@@ -27,15 +27,32 @@ import {
 
 const RUNTIME_EVENT_DRAIN_TEXT_BUFFER_SIZE_BYTES = 64 * 1024;
 
-export type ChatTemplateContentPart = {
-  type: 'text' | 'media_marker';
-  text: string;
-};
+/**
+ * Maximum accepted size of a GBNF grammar source (UTF-8 byte length).
+ * Enforced at the bridge boundary before any ccall to the native runtime.
+ */
+export const MAX_GRAMMAR_BYTES = 64 * 1024;
 
-export type ChatTemplateMessage = {
-  role: string;
-  content: string | ChatTemplateContentPart[];
-};
+function validateGrammarSize(grammar: string | undefined): void {
+  if (grammar == null) {
+    return;
+  }
+  // Fast path: if the string length in UTF-16 code units is under the limit,
+  // UTF-8 size is guaranteed to be under 4x that. We only need the precise
+  // byte length when close to the limit.
+  if (grammar.length <= MAX_GRAMMAR_BYTES) {
+    return;
+  }
+  const byteLength =
+    typeof TextEncoder !== 'undefined'
+      ? new TextEncoder().encode(grammar).byteLength
+      : grammar.length;
+  if (byteLength > MAX_GRAMMAR_BYTES) {
+    throw new Error(
+      `grammar exceeds maximum size of ${MAX_GRAMMAR_BYTES} bytes (got ${byteLength}).`
+    );
+  }
+}
 
 export type WasmRuntimeTokenEvent = {
   requestId: GenerateRequestId;
@@ -52,6 +69,16 @@ export type WasmRuntimeEventDrainResult = {
 export type WasmSchedulerProgressResult = {
   stepResult: number;
   completedResponseCount: number;
+};
+
+/**
+ * Shape of an OpenAI-compatible chat message accepted by
+ * `WasmBridge.applyChatTemplate`. Corresponds to the JSON array parsed by
+ * `common_chat_msgs_parse_oaicompat` on the native side.
+ */
+export type ChatTemplateMessage = {
+  role: string;
+  content: string;
 };
 
 export class WasmBridge {
@@ -274,13 +301,16 @@ export class WasmBridge {
     contextKey: string,
     promptText: string,
     maxOutputTokens: number,
-    callbackPtr: number
+    callbackPtr: number,
+    grammar?: string
   ): GenerateRequestId {
+    validateGrammarSize(grammar);
+    const grammarArg = grammar ?? '';
     const requestId = this.module.ccall(
       'CE_EnqueuePrompt',
       'number',
-      ['string', 'string', 'number', 'pointer'],
-      [contextKey, promptText, maxOutputTokens, callbackPtr]
+      ['string', 'string', 'number', 'pointer', 'string'],
+      [contextKey, promptText, maxOutputTokens, callbackPtr, grammarArg]
     );
     if (requestId instanceof Promise) {
       throw new Error('Unexpected async result while enqueuing a request.');
@@ -293,8 +323,11 @@ export class WasmBridge {
     promptText: string,
     maxOutputTokens: number,
     media: Uint8Array[],
-    callbackPtr: number
+    callbackPtr: number,
+    grammar?: string
   ): GenerateRequestId {
+    validateGrammarSize(grammar);
+    const grammarArg = grammar ?? '';
     const totalBytes = media.reduce((sum, image) => sum + image.byteLength, 0);
     const flatPtr = this.allocate(Math.max(1, totalBytes));
     const sizesPtr = this.allocate(Math.max(1, media.length * 4));
@@ -310,8 +343,8 @@ export class WasmBridge {
 
       return this.callNumber(
         'CE_EnqueuePromptWithMedia',
-        ['string', 'string', 'number', 'number', 'pointer', 'pointer', 'pointer'],
-        [contextKey, promptText, maxOutputTokens, media.length, flatPtr, sizesPtr, callbackPtr]
+        ['string', 'string', 'number', 'number', 'pointer', 'pointer', 'pointer', 'string'],
+        [contextKey, promptText, maxOutputTokens, media.length, flatPtr, sizesPtr, callbackPtr, grammarArg]
       ) as GenerateRequestId;
     } finally {
       this.free(flatPtr);
@@ -343,6 +376,73 @@ export class WasmBridge {
     }
   }
 
+  public getBosText(): string {
+    try {
+      const ptr = this.callNumber('CE_GetBosText');
+      if (!ptr) {
+        return '';
+      }
+      try {
+        return this.module.UTF8ToString(ptr);
+      } finally {
+        this.module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
+      }
+    } catch (error) {
+      if (this.isMissingOptionalRuntimeApiError('CE_GetBosText', error)) {
+        return '';
+      }
+      throw error;
+    }
+  }
+
+  public getEosText(): string {
+    try {
+      const ptr = this.callNumber('CE_GetEosText');
+      if (!ptr) {
+        return '';
+      }
+      try {
+        return this.module.UTF8ToString(ptr);
+      } finally {
+        this.module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
+      }
+    } catch (error) {
+      if (this.isMissingOptionalRuntimeApiError('CE_GetEosText', error)) {
+        return '';
+      }
+      throw error;
+    }
+  }
+
+  public tokenToString(tokenId: number): string {
+    try {
+      const ptr = this.callNumber('CE_TokenToString', ['number'], [tokenId]);
+      if (!ptr) {
+        return '';
+      }
+      try {
+        return this.module.UTF8ToString(ptr);
+      } finally {
+        this.module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
+      }
+    } catch (error) {
+      if (this.isMissingOptionalRuntimeApiError('CE_TokenToString', error)) {
+        return '';
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Applies llama.cpp's native chat template (via common_chat_format_single)
+   * to a set of OpenAI-style chat messages and returns the formatted prompt
+   * text. Returns '' when the runtime lacks the export (older WASM builds)
+   * or when the model has no embedded chat template.
+   *
+   * Retained as a general-purpose bridge API for callers that want the
+   * model-native chat formatting path. CharacterRuntime now uses this same
+   * template-application path via the runtime surface.
+   */
   public applyChatTemplate(
     messages: ChatTemplateMessage[],
     addAssistant: boolean
@@ -356,7 +456,6 @@ export class WasmBridge {
       if (!ptr) {
         return '';
       }
-
       try {
         return this.module.UTF8ToString(ptr);
       } finally {

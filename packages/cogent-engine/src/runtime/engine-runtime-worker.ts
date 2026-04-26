@@ -23,6 +23,7 @@ import {
   WorkerBackendObservabilityResult,
   WorkerRuntimeMetadata,
 } from './engine-runtime-worker-protocol.js';
+import type { ChatTemplateMessage } from '../wasm/wasm-bridge.js';
 import { createAbortError } from '../utils/abort.js';
 import {
   createDefaultTransportObservability,
@@ -435,6 +436,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
     const onToken = typeof options === 'object' ? options.onToken : undefined;
     const signal = typeof options === 'object' ? options.signal : undefined;
     const media = typeof options === 'object' ? options.media : undefined;
+    const grammar = typeof options === 'object' ? options.grammar : undefined;
     const callId = this.nextCallId++;
     this.pendingQueuedTokenCallbacks.set(callId, onToken);
 
@@ -475,6 +477,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
                 nTokens: typeof options === 'number' ? options : options.nTokens,
                 promptFormat,
                 media: transferableMedia,
+                grammar,
               },
             }
           : {
@@ -484,6 +487,7 @@ export class WorkerEngineRuntime implements EngineRuntime {
               options: {
                 nTokens: typeof options === 'number' ? options : options.nTokens,
                 promptFormat,
+                grammar,
               },
             },
         undefined,
@@ -510,6 +514,32 @@ export class WorkerEngineRuntime implements EngineRuntime {
 
   public getMediaMarker(): string | null {
     return this.cachedRuntimeMetadata?.mediaMarker ?? null;
+  }
+
+  public getBosText(): string {
+    return this.cachedRuntimeMetadata?.bosText ?? '';
+  }
+
+  public getEosText(): string {
+    return this.cachedRuntimeMetadata?.eosText ?? '';
+  }
+
+  public async applyChatTemplate(
+    messages: ChatTemplateMessage[],
+    addAssistant: boolean
+  ): Promise<string> {
+    await this.ensureWorkerInitialized();
+    const callId = this.nextCallId++;
+    return (await this.callWorkerWithAbort<
+      Extract<WorkerRequestMessage, { kind: 'apply-chat-template' }>
+    >(
+      callId,
+      {
+        kind: 'apply-chat-template',
+        messages,
+        addAssistant,
+      }
+    )) as string;
   }
 
   public async runQueuedRequest(
@@ -855,6 +885,8 @@ export class WorkerEngineRuntime implements EngineRuntime {
     return {
       chatTemplate: normalizeOptionalString(metadata?.chatTemplate),
       mediaMarker: normalizeOptionalString(metadata?.mediaMarker),
+      bosText: typeof metadata?.bosText === 'string' ? metadata.bosText : '',
+      eosText: typeof metadata?.eosText === 'string' ? metadata.eosText : '',
     };
   }
 }

@@ -10,6 +10,7 @@ import {
   RuntimeAggregateObservabilityMetrics,
   TransportObservability,
 } from '../types.js';
+import type { ChatTemplateMessage } from '../wasm/wasm-bridge.js';
 
 export interface WorkerSerializableCogentConfig {
   moduleUrl?: string;
@@ -28,12 +29,15 @@ export interface WorkerSerializableCogentConfig {
 export interface WorkerRuntimeMetadata {
   chatTemplate: string | null;
   mediaMarker: string | null;
+  bosText: string;
+  eosText: string;
 }
 
 export interface WorkerQueuedPromptOptions {
   nTokens?: number;
   promptFormat?: PromptOptions['promptFormat'];
   media?: ArrayBuffer[];
+  grammar?: string;
 }
 
 export type WorkerRequestMessage =
@@ -116,6 +120,12 @@ export type WorkerRequestMessage =
   | {
       kind: 'get-backend-observability';
       callId: number;
+    }
+  | {
+      kind: 'apply-chat-template';
+      callId: number;
+      messages: ChatTemplateMessage[];
+      addAssistant: boolean;
     };
 
 export type WorkerResponseMessage =

@@ -231,6 +231,7 @@ async function handleQueuePrompt(
       nTokens: message.options.nTokens,
       promptFormat: message.options.promptFormat,
       media: undefined,
+      grammar: message.options.grammar,
       signal: abortController.signal,
       onToken: (token) => {
         state.bufferTokenPiece(requestId, token);
@@ -255,6 +256,7 @@ async function handleQueuePromptWithMedia(
       nTokens: message.options.nTokens,
       promptFormat: message.options.promptFormat,
       media,
+      grammar: message.options.grammar,
       signal: abortController.signal,
       onToken: (token) => {
         state.bufferTokenPiece(requestId, token);
@@ -285,6 +287,12 @@ async function handleGetBackendObservability(): Promise<WorkerBackendObservabili
     backendObservability: await runtime.getBackendObservability(),
     transportObservability: state.cloneTransportObservability(),
   };
+}
+
+async function handleApplyChatTemplate(
+  message: Extract<WorkerRequestMessage, { kind: 'apply-chat-template' }>
+): Promise<string> {
+  return state.applyChatTemplate(message.messages, message.addAssistant);
 }
 
 self.onmessage = async (event: MessageEvent<WorkerRequestMessage>) => {
@@ -338,6 +346,9 @@ self.onmessage = async (event: MessageEvent<WorkerRequestMessage>) => {
         break;
       case 'get-backend-observability':
         value = await handleGetBackendObservability();
+        break;
+      case 'apply-chat-template':
+        value = await handleApplyChatTemplate(message);
         break;
       default:
         throw new Error('Unknown worker request kind.');

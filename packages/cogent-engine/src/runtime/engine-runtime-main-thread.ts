@@ -5,7 +5,6 @@ import {
 import { CogentConfig, EngineModuleOptions } from '../cogent-config.js';
 import { normalizeInitConfig } from '../core/init-config.js';
 import {
-  buildChatTemplateUserMessage,
   normalizePromptText,
   resolveEffectivePromptFormat,
 } from '../core/prompt-format.js';
@@ -37,6 +36,7 @@ import {
 } from './queued-request-pump.js';
 import { RequestTracker } from './request-tracker.js';
 import {
+  type ChatTemplateMessage,
   parseBackendObservabilityJson,
   WasmBridge,
 } from '../wasm/wasm-bridge.js';
@@ -48,6 +48,27 @@ import {
   QueuedRequestScheduler,
 } from './scheduler.js';
 
+function resolveRuntimeLocationHref(): string | null {
+  const runtimeLocation = globalThis.location;
+  return typeof runtimeLocation?.href === 'string' ? runtimeLocation.href : null;
+}
+
+function resolveRuntimeLocationOrigin(): string | null {
+  const runtimeLocation = globalThis.location;
+  if (typeof runtimeLocation?.origin === 'string') {
+    return runtimeLocation.origin;
+  }
+  const href = resolveRuntimeLocationHref();
+  if (href == null) {
+    return null;
+  }
+  try {
+    return new URL(href).origin;
+  } catch {
+    return null;
+  }
+}
+
 export class MainThreadEngineRuntime implements EngineRuntime {
   private module: EngineModule | null = null;
   private wasmBridge: WasmBridge | null = null;
@@ -55,6 +76,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private engineInitialized = false;
   private cachedMediaMarker: string | null = null;
   private cachedChatTemplate: string | null = null;
+  private cachedBosText: string = '';
+  private cachedEosText: string = '';
   private readonly opfs = new FileSystemStorage();
   private readonly browserModelCache = new BrowserModelCache(this.opfs);
   private readonly modelLoader: MainThreadModelLoader;
@@ -125,8 +148,9 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
   private parseConfiguredUrl(rawUrl: string, fieldName: string): URL {
     try {
-      if (typeof window !== 'undefined' && typeof window.location?.href === 'string') {
-        return new URL(rawUrl, window.location.href);
+      const baseHref = resolveRuntimeLocationHref();
+      if (baseHref != null) {
+        return new URL(rawUrl, baseHref);
       }
       return new URL(rawUrl);
     } catch {
@@ -145,8 +169,9 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       return allowed;
     }
 
-    if (typeof window !== 'undefined' && typeof window.location?.origin === 'string') {
-      return new Set([window.location.origin]);
+    const currentOrigin = resolveRuntimeLocationOrigin();
+    if (currentOrigin != null) {
+      return new Set([currentOrigin]);
     }
 
     return new Set();
@@ -185,7 +210,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
   private resolvePromptFormat(
     input: PromptOptions | number | undefined
-  ): 'auto-chat' | 'raw' {
+  ): 'raw' {
     if (typeof input === 'number' || input === undefined) {
       return DEFAULT_PROMPT_FORMAT;
     }
@@ -210,6 +235,24 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return input.media;
   }
 
+  private resolvePromptGrammar(
+    input: PromptOptions | number | undefined
+  ): string | undefined {
+    if (typeof input === 'number' || input === undefined) {
+      return undefined;
+    }
+    if (input.grammar == null) {
+      return undefined;
+    }
+    if (typeof input.grammar !== 'string') {
+      throw new Error('grammar must be a string when provided.');
+    }
+    if (input.grammar.length === 0) {
+      return undefined;
+    }
+    return input.grammar;
+  }
+
   private countMarkerOccurrences(promptText: string, marker: string): number {
     const escapedMarker = marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return (promptText.match(new RegExp(escapedMarker, 'g')) ?? []).length;
@@ -221,35 +264,22 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     promptText: string,
     options: number | PromptOptions
   ): GenerateRequest {
+    void bridge;
     const media = this.resolvePromptMedia(options);
     const promptFormat = resolveEffectivePromptFormat(
       this.resolvePromptFormat(options),
       Boolean(media && media.length > 0)
     );
     const normalizedPromptText = normalizePromptText(promptText);
-    let formattedPromptText = normalizedPromptText;
-    if (promptFormat === 'auto-chat' && this.cachedChatTemplate != null) {
-      const chatMessage =
-        media != null && media.length > 0
-          ? buildChatTemplateUserMessage(normalizedPromptText, this.cachedMediaMarker)
-          : { role: 'user' as const, content: normalizedPromptText };
-      formattedPromptText = bridge.applyChatTemplate(
-        [chatMessage],
-        true
-      );
-      if (formattedPromptText.length === 0) {
-        throw new Error(
-          'Failed to apply the model chat template for this prompt. Use promptFormat="raw" to bypass native template formatting.'
-        );
-      }
-    }
-    return {
+    const request: GenerateRequest = {
       contextKey,
-      promptText: formattedPromptText,
+      promptText: normalizedPromptText,
       maxOutputTokens: this.resolvePromptTokenCount(options),
       promptFormat,
       media,
+      grammar: this.resolvePromptGrammar(options),
     };
+    return request;
   }
 
   private getLoadedModule(): EngineModule {
@@ -380,6 +410,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.backendProfilingEnabled = false;
     this.cachedMediaMarker = null;
     this.cachedChatTemplate = null;
+    this.cachedBosText = '';
+    this.cachedEosText = '';
     this.transportObservability = {
       ...DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY,
     };
@@ -634,6 +666,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.engineInitialized = true;
     this.cachedMediaMarker = bridge.getMediaMarker();
     this.cachedChatTemplate = bridge.getChatTemplate();
+    this.cachedBosText = bridge.getBosText();
+    this.cachedEosText = bridge.getEosText();
 
     this.modelLoader.cleanupAfterEngineInit(module);
   }
@@ -746,14 +780,16 @@ export class MainThreadEngineRuntime implements EngineRuntime {
           request.promptText,
           request.maxOutputTokens,
           request.media,
-          Number(callbackPtr)
+          Number(callbackPtr),
+          request.grammar
         );
       } else {
         requestId = bridge.enqueuePrompt(
           request.contextKey,
           request.promptText,
           request.maxOutputTokens,
-          Number(callbackPtr)
+          Number(callbackPtr),
+          request.grammar
         );
       }
     } catch (error) {
@@ -875,6 +911,21 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
   public getChatTemplate(): string | null {
     return this.cachedChatTemplate;
+  }
+
+  public getBosText(): string {
+    return this.cachedBosText;
+  }
+
+  public getEosText(): string {
+    return this.cachedEosText;
+  }
+
+  public async applyChatTemplate(
+    messages: ChatTemplateMessage[],
+    addAssistant: boolean
+  ): Promise<string> {
+    return this.getReadyEngineBridge().applyChatTemplate(messages, addAssistant);
   }
 
   public async getBackendObservability(): Promise<BackendObservability | null> {

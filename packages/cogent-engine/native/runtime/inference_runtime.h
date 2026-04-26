@@ -67,11 +67,13 @@ public:
 
   GenerateRequestId EnqueueRequest(std::string context_key, std::string prompt,
                                    int n_tokens_predict,
-                                   TokenCallback on_token_received = {});
+                                   TokenCallback on_token_received = {},
+                                   std::string grammar = {});
   GenerateRequestId EnqueueMultimodalRequest(
       std::string context_key, std::string prompt, int n_tokens_predict,
       std::vector<std::pair<const std::uint8_t *, std::size_t>> image_views,
-      TokenCallback on_token_received = {});
+      TokenCallback on_token_received = {},
+      std::string grammar = {});
   bool CancelRequest(GenerateRequestId request_id);
   RequestStepResult RunSchedulerTick();
   SchedulerBurstResult RunSchedulerBurst(int32_t max_ticks,
@@ -87,6 +89,13 @@ public:
   bool ConsumeCompletedResponse(GenerateRequestId request_id);
   const char *GetMediaMarker() const;
   const char *GetChatTemplate() const;
+  // Returns the model's BOS token rendered as text (empty string if none).
+  std::string GetBosText() const;
+  // Returns the model's EOS token rendered as text (empty string if none).
+  std::string GetEosText() const;
+  // Renders an arbitrary token id to its textual piece. Empty if invalid.
+  std::string TokenToString(int32_t token_id) const;
+  // Applies the model's embedded chat template to the full chat history.
   std::string ApplyChatTemplate(
       const std::vector<common_chat_msg> &messages,
       bool add_assistant) const;

@@ -103,6 +103,7 @@ class MockMainThreadModule {
   public lastQueuedCallbackPtr = 0;
   public mediaMarker: string | null = null;
   public chatTemplate: string | null = null;
+  public eosText = '</s>';
   public appliedChatTemplateText = '';
   public returnEmptyAppliedChatTemplate = false;
   public lastAppliedChatTemplateMessages: Array<{
@@ -275,6 +276,8 @@ class MockMainThreadModule {
         return this.mediaMarker == null ? 0 : this.writeTempCString(this.mediaMarker);
       case 'CE_GetChatTemplate':
         return this.chatTemplate == null ? 0 : this.writeTempCString(this.chatTemplate);
+      case 'CE_GetEosText':
+        return this.writeTempCString(this.eosText);
       case 'CE_ApplyChatTemplate': {
         if (this.chatTemplate == null) {
           return 0;
@@ -878,81 +881,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
   });
 }
 
-test('MainThreadEngineRuntime caches native metadata and formats auto-chat prompts via the loaded template', async () => {
-  const runtime = new MainThreadEngineRuntime({});
-  const module = new MockMainThreadModule('success');
-  module.mediaMarker = '<__media__>';
-  module.chatTemplate = 'native-template';
-  module.appliedChatTemplateText = 'templated prompt';
-  (runtime as unknown as { module: MockMainThreadModule }).module = module;
-
-  await runtime.initEngine('/models/template.gguf');
-  const requestId = await runtime.queuePrompt('ctx', 'hello world', {
-    nTokens: 16,
-  });
-
-  assert.equal(requestId, 7);
-  assert.equal(runtime.getMediaMarker(), '<__media__>');
-  assert.equal(module.lastInitIdent, 'CE_Init');
-  assert.equal(module.lastQueuedEnqueueKind, 'text');
-  assert.equal(module.lastQueuedPromptText, 'templated prompt');
-});
-
-test('MainThreadEngineRuntime applies the native chat template for media prompts and validates marker count', async () => {
-  const runtime = new MainThreadEngineRuntime({});
-  const module = new MockMainThreadModule('success');
-  module.mediaMarker = '<__media__>';
-  module.chatTemplate = 'native-template';
-  module.appliedChatTemplateText = 'templated <__media__> prompt';
-  (runtime as unknown as { module: MockMainThreadModule }).module = module;
-
-  await runtime.initEngine('/models/vision.gguf');
-  const requestId = await runtime.queuePrompt('ctx', 'describe <__media__>', {
-    nTokens: 16,
-    media: [new Uint8Array([1, 2, 3])],
-  });
-
-  assert.equal(requestId, 7);
-  assert.equal(module.lastQueuedEnqueueKind, 'media');
-  assert.equal(module.lastQueuedPromptText, 'templated <__media__> prompt');
-  assert.deepEqual(module.lastQueuedMediaImages, [new Uint8Array([1, 2, 3])]);
-  assert.deepEqual(module.lastAppliedChatTemplateMessages, [
-    {
-      role: 'user',
-      content: [
-        { type: 'text', text: 'describe ' },
-        { type: 'media_marker', text: '<__media__>' },
-      ],
-    },
-  ]);
-
-  module.appliedChatTemplateText = 'templated prompt without marker';
-  await assert.rejects(
-    runtime.queuePrompt('ctx', 'describe nothing', {
-      nTokens: 16,
-      media: [new Uint8Array([9])],
-    }),
-    /Prompt contains 0 media marker\(s\) but 1 image\(s\) were provided/
-  );
-});
-
-test('MainThreadEngineRuntime fails loudly when native auto-chat formatting returns an empty prompt', async () => {
-  const runtime = new MainThreadEngineRuntime({});
-  const module = new MockMainThreadModule('success');
-  module.chatTemplate = 'native-template';
-  module.returnEmptyAppliedChatTemplate = true;
-  (runtime as unknown as { module: MockMainThreadModule }).module = module;
-
-  await runtime.initEngine('/models/template.gguf');
-
-  await assert.rejects(
-    runtime.queuePrompt('ctx', 'hello world', {
-      nTokens: 16,
-    }),
-    /Failed to apply the model chat template/i
-  );
-});
-
 test('MainThreadEngineRuntime flushes queued tokens outside native steps and reads typed results', async () => {
   const runtime = new MainThreadEngineRuntime({});
   const module = new MockMainThreadModule('success');
@@ -1342,6 +1270,28 @@ test('MainThreadEngineRuntime lets a late runQueuedRequest() waiter observe an a
   assert.ok(stepCallsBeforeWaiter > 0);
   assert.equal(module.runStepCallCount, stepCallsBeforeWaiter);
   assert.equal(response.outputText, 'tok1tok2');
+});
+
+test('MainThreadEngineRuntime applies the model chat template through WasmBridge', async () => {
+  const runtime = new MainThreadEngineRuntime({});
+  const module = new MockMainThreadModule('success');
+  module.chatTemplate = 'template';
+  module.appliedChatTemplateText = 'templated:ok';
+  attachReadyModule(runtime, module);
+
+  const rendered = await runtime.applyChatTemplate(
+    [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'hi' },
+    ],
+    true
+  );
+
+  assert.equal(rendered, 'templated:ok');
+  assert.deepEqual(module.lastAppliedChatTemplateMessages, [
+    { role: 'system', content: 'sys' },
+    { role: 'user', content: 'hi' },
+  ]);
 });
 
 test('MainThreadEngineRuntime does not yield to setTimeout during short WAITING bursts', async () => {

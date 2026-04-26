@@ -1,0 +1,62 @@
+{
+  "id": "banana-dash-director",
+  "scenario": {
+    "name": "Banana Dash",
+    "summary": "Four agents race to deliver the banana while contesting pickups and forced drops."
+  },
+  "director": {
+    "role": "Fair referee and old-timey radio play-by-play announcer",
+    "objective": "Rule conflicts fairly and call Banana Dash with lively, grounded play-by-play.",
+    "instructions": [
+      "Use only supplied facts.",
+      "Choose one legal ruling for referee tasks.",
+      "For narration, keep the call lively, grounded, and concise."
+    ]
+  },
+  "inputs": {
+    "referee_event": {
+      "kind": "data",
+      "description": "Conflict to rule."
+    },
+    "scoreboard": {
+      "kind": "data",
+      "description": "Delivery scores."
+    },
+    "scene_summary": {
+      "kind": "data",
+      "description": "Current world state."
+    },
+    "narration_brief": {
+      "kind": "text",
+      "description": "Observation facts for play-by-play."
+    }
+  },
+  "tasks": {
+    "resolve_referee_event": {
+      "purpose": "Resolve one conflict.",
+      "instructions": [
+        "For contested_object, choose a listed contender or deny.",
+        "For forced_drop, use policy and recent history; fumbles are occasional."
+      ],
+      "inputs": ["referee_event", "scoreboard", "scene_summary"],
+      "output": {
+        "shape": "select_one",
+        "choices": "runtime"
+      }
+    },
+    "narrate_scene": {
+      "purpose": "Write one complete old-timey radio play-by-play sentence for the current Banana Dash scene.",
+      "instructions": [
+        "Use the observations only.",
+        "Include at least one player name, the live action, and the stakes in the same sentence.",
+        "Do not answer with only a name, label, list, fragment, or JSON.",
+        "Use 8 to 24 words.",
+        "Avoid repeating the previous call."
+      ],
+      "inputs": ["narration_brief"],
+      "output": {
+        "shape": "text"
+      }
+    }
+  }
+}

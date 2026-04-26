@@ -211,6 +211,33 @@ const char *CE_GetChatTemplate() {
 }
 
 EMSCRIPTEN_KEEPALIVE
+char *CE_GetBosText() {
+  std::lock_guard<std::mutex> lock(g_apiMutex);
+  if (!g_isEngineInitialized) {
+    return duplicate_heap_string("");
+  }
+  return duplicate_heap_string(CE_GetBosTextString());
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_GetEosText() {
+  std::lock_guard<std::mutex> lock(g_apiMutex);
+  if (!g_isEngineInitialized) {
+    return duplicate_heap_string("");
+  }
+  return duplicate_heap_string(CE_GetEosTextString());
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_TokenToString(int32_t token_id) {
+  std::lock_guard<std::mutex> lock(g_apiMutex);
+  if (!g_isEngineInitialized) {
+    return duplicate_heap_string("");
+  }
+  return duplicate_heap_string(CE_TokenToStringString(token_id));
+}
+
+EMSCRIPTEN_KEEPALIVE
 char *CE_ApplyChatTemplate(const char *messages_json, int add_assistant) {
   std::lock_guard<std::mutex> lock(g_apiMutex);
   if (!g_isEngineInitialized) {
@@ -222,7 +249,8 @@ char *CE_ApplyChatTemplate(const char *messages_json, int add_assistant) {
 
 EMSCRIPTEN_KEEPALIVE
 CE_RequestId CE_EnqueuePrompt(const char *context_key, const char *prompt,
-                              int n_tokens, CE_TokenCallback on_token) {
+                              int n_tokens, CE_TokenCallback on_token,
+                              const char *grammar) {
   std::lock_guard<std::mutex> lock(g_apiMutex);
   if (!g_isEngineInitialized) {
     return 0;
@@ -231,14 +259,15 @@ CE_RequestId CE_EnqueuePrompt(const char *context_key, const char *prompt,
     return 0;
   }
 
-  return CE_EnqueuePromptQuery(context_key, prompt, n_tokens, on_token);
+  return CE_EnqueuePromptQuery(context_key, prompt, n_tokens, on_token,
+                               grammar);
 }
 
 EMSCRIPTEN_KEEPALIVE
 CE_RequestId CE_EnqueuePromptWithMedia(
     const char *context_key, const char *prompt, int n_tokens, int n_images,
     const uint8_t *images_flat_buffer, const int32_t *image_sizes,
-    CE_TokenCallback on_token) {
+    CE_TokenCallback on_token, const char *grammar) {
   std::lock_guard<std::mutex> lock(g_apiMutex);
   if (!g_isEngineInitialized) {
     return 0;
@@ -249,7 +278,7 @@ CE_RequestId CE_EnqueuePromptWithMedia(
 
   return CE_EnqueuePromptWithMediaQuery(context_key, prompt, n_tokens,
                                         n_images, images_flat_buffer,
-                                        image_sizes, on_token);
+                                        image_sizes, on_token, grammar);
 }
 
 

@@ -87,6 +87,49 @@ uint32_t resolve_sampling_seed(int32_t seed) {
   return static_cast<uint32_t>(seed);
 }
 
+// Returns the number of trailing bytes in `data` that belong to an
+// incomplete UTF-8 sequence. UTF-8 code points are 1-4 bytes long, so any
+// incomplete tail is at most 3 bytes. If the trailing bytes are a complete
+// sequence (or the buffer ends mid-ASCII), returns 0.
+std::size_t incomplete_utf8_tail_length(const char *data, std::size_t size) {
+  if (data == nullptr || size == 0) {
+    return 0;
+  }
+  const auto is_continuation = [](unsigned char b) {
+    return (b & 0xC0u) == 0x80u;
+  };
+  const std::size_t max_lookback = std::min<std::size_t>(size, 4u);
+  for (std::size_t offset = 1; offset <= max_lookback; ++offset) {
+    const unsigned char byte =
+        static_cast<unsigned char>(data[size - offset]);
+    if (is_continuation(byte)) {
+      continue;
+    }
+    std::size_t expected = 0;
+    if ((byte & 0x80u) == 0x00u) {
+      expected = 1; // ASCII
+    } else if ((byte & 0xE0u) == 0xC0u) {
+      expected = 2;
+    } else if ((byte & 0xF0u) == 0xE0u) {
+      expected = 3;
+    } else if ((byte & 0xF8u) == 0xF0u) {
+      expected = 4;
+    } else {
+      // Invalid lead byte; drop only this byte as incomplete to avoid
+      // emitting garbage, but do not cascade further.
+      return 0;
+    }
+    if (offset >= expected) {
+      // The sequence starting at (size - offset) is complete.
+      return 0;
+    }
+    // Missing (expected - offset) continuation bytes.
+    return offset;
+  }
+  // All trailing bytes are continuations with no lead byte in reach.
+  return max_lookback;
+}
+
 } // namespace
 
 namespace noumena::cogentengine {
@@ -447,7 +490,6 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
 
   const llama_token next_token =
       llama_sampler_sample(slot.sampler, shared_context_, -1);
-  llama_sampler_accept(slot.sampler, next_token);
   request.attributed_sample_count++;
   request.first_sampled_token_id = static_cast<int32_t>(next_token);
   if (llama_vocab_is_eog(vocab, next_token)) {
@@ -459,7 +501,7 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
 
   char piece_buffer[128];
   const int piece_length = llama_token_to_piece(vocab, next_token, piece_buffer,
-                                                sizeof(piece_buffer), 0, true);
+                                                sizeof(piece_buffer), 0, false);
   if (piece_length < 0) {
     slot.terminal_error_message =
         "Failed to convert the first multimodal sampled token to text.";
@@ -472,8 +514,20 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
   }
 
   slot.generated_tokens.push_back(next_token);
-  slot.buffered_output_text.append(piece_buffer,
-                                   static_cast<std::size_t>(piece_length));
+  // Stitch any pending UTF-8 continuation bytes in front of this piece so
+  // multi-byte codepoints that span sampled tokens are emitted cleanly.
+  std::string stitched = std::move(slot.pending_utf8_bytes);
+  slot.pending_utf8_bytes.clear();
+  stitched.append(piece_buffer, static_cast<std::size_t>(piece_length));
+  const std::size_t tail_len =
+      incomplete_utf8_tail_length(stitched.data(), stitched.size());
+  if (tail_len > 0) {
+    slot.pending_utf8_bytes.assign(stitched.end() - tail_len, stitched.end());
+    stitched.resize(stitched.size() - tail_len);
+  }
+  if (!stitched.empty()) {
+    slot.buffered_output_text.append(stitched);
+  }
   slot.phase = SlotPhase::Streaming;
   request.lifecycle = GenerateRequestLifecycle::Streaming;
   slot_scheduler_.EmitBufferedTokenPiece(request_queue_, slot);
@@ -553,9 +607,63 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     }
 
     if (slot->sampler == nullptr) {
-      slot->sampler = llama_sampler_clone(sampler_);
+      // When the request carries a GBNF grammar we cannot clone the shared
+      // sampler chain because the grammar sampler is stateful and must be
+      // constructed fresh per slot. Build a new chain that mirrors the
+      // runtime's configured sampling parameters and prepends
+      // llama_sampler_init_grammar so decoded tokens are constrained.
+      if (!slot->request->grammar.empty()) {
+        auto sparams = llama_sampler_chain_default_params();
+        sparams.no_perf = config_.enable_runtime_observability == 0;
+        slot->sampler = llama_sampler_chain_init(sparams);
+        if (slot->sampler != nullptr) {
+          const llama_vocab *grammar_vocab =
+              llama_model_get_vocab(primary_model_);
+          llama_sampler *grammar_sampler = llama_sampler_init_grammar(
+              grammar_vocab, slot->request->grammar.c_str(), "root");
+          if (grammar_sampler == nullptr) {
+            llama_sampler_free(slot->sampler);
+            slot->sampler = nullptr;
+          } else {
+            // Mirror the configured shared sampler chain so the grammar
+            // path respects user-supplied sampling parameters. The grammar
+            // sampler must run first so downstream samplers operate on
+            // the grammar-constrained logits.
+            llama_sampler_chain_add(slot->sampler, grammar_sampler);
+            llama_sampler_chain_add(
+                slot->sampler, llama_sampler_init_penalties(
+                                   config_.sampling_repeat_last_n,
+                                   config_.sampling_repeat_penalty,
+                                   config_.sampling_frequency_penalty,
+                                   config_.sampling_presence_penalty));
+            llama_sampler_chain_add(
+                slot->sampler,
+                llama_sampler_init_top_k(config_.sampling_top_k));
+            llama_sampler_chain_add(
+                slot->sampler,
+                llama_sampler_init_top_p(config_.sampling_top_p, 1));
+            if (config_.sampling_min_p > 0.0f) {
+              llama_sampler_chain_add(
+                  slot->sampler,
+                  llama_sampler_init_min_p(config_.sampling_min_p, 1));
+            }
+            llama_sampler_chain_add(
+                slot->sampler,
+                llama_sampler_init_temp(config_.sampling_temperature));
+            llama_sampler_chain_add(
+                slot->sampler,
+                llama_sampler_init_dist(
+                    resolve_sampling_seed(config_.sampling_seed)));
+          }
+        }
+      } else {
+        slot->sampler = llama_sampler_clone(sampler_);
+      }
       if (slot->sampler == nullptr) {
-        slot->terminal_error_message = "Failed to clone per-slot sampler.";
+        slot->terminal_error_message =
+            slot->request->grammar.empty()
+                ? "Failed to clone per-slot sampler."
+                : "Failed to build per-slot grammar sampler.";
         slot->phase = SlotPhase::Failed;
         slot->request->lifecycle = GenerateRequestLifecycle::Failed;
         continue;
@@ -824,12 +932,19 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     GenerateRequest &slot_request = *slot.request;
     const llama_token next_token = llama_sampler_sample(
         slot.sampler, shared_context_, pending_logits.batch_token_index);
-    llama_sampler_accept(slot.sampler, next_token);
     if (slot_request.first_sampled_token_id < 0) {
       slot_request.first_sampled_token_id = static_cast<int32_t>(next_token);
     }
 
     if (llama_vocab_is_eog(vocab, next_token)) {
+      // Flush any buffered incomplete UTF-8 tail before terminating. By
+      // end-of-generation any remaining bytes are as final as they'll get;
+      // emit them so consumers see the full output.
+      if (!slot.pending_utf8_bytes.empty()) {
+        slot.buffered_output_text.append(slot.pending_utf8_bytes);
+        slot.pending_utf8_bytes.clear();
+        slot_scheduler_.EmitBufferedTokenPiece(request_queue_, slot);
+      }
       slot.phase = SlotPhase::Completed;
       slot_request.lifecycle = GenerateRequestLifecycle::Completed;
       continue;
@@ -837,7 +952,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
 
     char piece_buffer[128];
     const int piece_length = llama_token_to_piece(
-        vocab, next_token, piece_buffer, sizeof(piece_buffer), 0, true);
+        vocab, next_token, piece_buffer, sizeof(piece_buffer), 0, false);
     if (piece_length < 0) {
       slot.terminal_error_message =
           "Failed to convert sampled token to text piece.";
@@ -845,7 +960,8 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       slot_request.lifecycle = GenerateRequestLifecycle::Failed;
       continue;
     }
-    if (piece_length == 0 && slot_request.emitted_token_count == 0) {
+    if (piece_length == 0 && slot_request.emitted_token_count == 0 &&
+        slot.pending_utf8_bytes.empty()) {
       slot.terminal_error_message =
           "Leading sampled token decoded to an empty text piece.";
       slot.phase = SlotPhase::Failed;
@@ -854,13 +970,28 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     }
 
     slot.generated_tokens.push_back(next_token);
-    slot.buffered_output_text.append(piece_buffer,
-                                     static_cast<std::size_t>(piece_length));
+    // Stitch any pending UTF-8 continuation bytes in front of this piece
+    // so multi-byte codepoints that span sampled tokens are emitted cleanly.
+    std::string stitched = std::move(slot.pending_utf8_bytes);
+    slot.pending_utf8_bytes.clear();
+    stitched.append(piece_buffer, static_cast<std::size_t>(piece_length));
+    const std::size_t tail_len =
+        incomplete_utf8_tail_length(stitched.data(), stitched.size());
+    if (tail_len > 0) {
+      slot.pending_utf8_bytes.assign(stitched.end() - tail_len, stitched.end());
+      stitched.resize(stitched.size() - tail_len);
+    }
+    if (!stitched.empty()) {
+      slot.buffered_output_text.append(stitched);
+    }
     slot.phase = SlotPhase::Streaming;
     slot_request.lifecycle = GenerateRequestLifecycle::Streaming;
-    slot_scheduler_.EmitBufferedTokenPiece(request_queue_, slot);
+    if (!slot.buffered_output_text.empty()) {
+      slot_scheduler_.EmitBufferedTokenPiece(request_queue_, slot);
+    }
 
     if (slot_request.cancel_requested) {
+      slot.pending_utf8_bytes.clear();
       slot.terminal_error_message = "Request cancelled.";
       slot.phase = SlotPhase::Failed;
       slot_request.lifecycle = GenerateRequestLifecycle::Cancelled;
@@ -870,6 +1001,13 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     if (slot_request.max_output_tokens > 0 &&
         static_cast<int32_t>(slot.generated_tokens.size()) >=
             slot_request.max_output_tokens) {
+      // Flush any trailing incomplete UTF-8 bytes on hard max-token stop so
+      // consumers don't silently lose a codepoint.
+      if (!slot.pending_utf8_bytes.empty()) {
+        slot.buffered_output_text.append(slot.pending_utf8_bytes);
+        slot.pending_utf8_bytes.clear();
+        slot_scheduler_.EmitBufferedTokenPiece(request_queue_, slot);
+      }
       slot.phase = SlotPhase::Completed;
       slot_request.lifecycle = GenerateRequestLifecycle::Completed;
     } else if (slot.phase != SlotPhase::Failed) {
@@ -1400,7 +1538,8 @@ void InferenceRuntime::ResetRuntimeObservability() {
 GenerateRequestId
 InferenceRuntime::EnqueueRequest(std::string context_key, std::string prompt,
                                  int n_tokens_predict,
-                                 TokenCallback on_token_received) {
+                                 TokenCallback on_token_received,
+                                 std::string grammar) {
   // Fast-fail without lock (model pointer is immutable after construction).
   if (primary_model_ == nullptr || sampler_ == nullptr) {
     return 0;
@@ -1433,6 +1572,7 @@ InferenceRuntime::EnqueueRequest(std::string context_key, std::string prompt,
   request.max_output_tokens = n_tokens_predict;
   request.on_token_received = std::move(on_token_received);
   request.prompt_tokens = std::move(prompt_tokens);
+  request.grammar = std::move(grammar);
 
   if (!request_queue_.Push(std::move(request))) {
     return 0;
@@ -1444,7 +1584,8 @@ InferenceRuntime::EnqueueRequest(std::string context_key, std::string prompt,
 GenerateRequestId InferenceRuntime::EnqueueMultimodalRequest(
     std::string context_key, std::string prompt, int n_tokens_predict,
     std::vector<std::pair<const std::uint8_t *, std::size_t>> image_views,
-    TokenCallback on_token_received) {
+    TokenCallback on_token_received,
+    std::string grammar) {
   if (primary_model_ == nullptr || sampler_ == nullptr ||
       mtmd_ctx_ == nullptr || !mtmd_support_vision(mtmd_ctx_)) {
     return 0;
@@ -1485,6 +1626,7 @@ GenerateRequestId InferenceRuntime::EnqueueMultimodalRequest(
   request.max_output_tokens = n_tokens_predict;
   request.on_token_received = std::move(on_token_received);
   request.is_multimodal_turn = true;
+  request.grammar = std::move(grammar);
 
   if (!request_queue_.Push(std::move(request))) {
     return 0;
@@ -1779,6 +1921,69 @@ const char *InferenceRuntime::GetChatTemplate() const {
   return tmpl != nullptr && tmpl[0] != '\0' ? tmpl : nullptr;
 }
 
+std::string InferenceRuntime::GetBosText() const {
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+  if (primary_model_ == nullptr) {
+    return {};
+  }
+  const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
+  if (vocab == nullptr) {
+    return {};
+  }
+  const llama_token bos = llama_vocab_bos(vocab);
+  if (bos == LLAMA_TOKEN_NULL) {
+    return {};
+  }
+  char buffer[128];
+  const int piece_length = llama_token_to_piece(vocab, bos, buffer,
+                                                sizeof(buffer), 0, true);
+  if (piece_length <= 0) {
+    return {};
+  }
+  return std::string(buffer, static_cast<std::size_t>(piece_length));
+}
+
+std::string InferenceRuntime::GetEosText() const {
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+  if (primary_model_ == nullptr) {
+    return {};
+  }
+  const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
+  if (vocab == nullptr) {
+    return {};
+  }
+  const llama_token eos = llama_vocab_eos(vocab);
+  if (eos == LLAMA_TOKEN_NULL) {
+    return {};
+  }
+  char buffer[128];
+  const int piece_length = llama_token_to_piece(vocab, eos, buffer,
+                                                sizeof(buffer), 0, true);
+  if (piece_length <= 0) {
+    return {};
+  }
+  return std::string(buffer, static_cast<std::size_t>(piece_length));
+}
+
+std::string InferenceRuntime::TokenToString(int32_t token_id) const {
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+  if (primary_model_ == nullptr || token_id < 0) {
+    return {};
+  }
+  const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
+  if (vocab == nullptr) {
+    return {};
+  }
+  char buffer[256];
+  const int piece_length = llama_token_to_piece(
+      vocab, static_cast<llama_token>(token_id), buffer, sizeof(buffer), 0,
+      true);
+  if (piece_length <= 0) {
+    return {};
+  }
+  return std::string(buffer, static_cast<std::size_t>(piece_length));
+}
+
 std::string InferenceRuntime::ApplyChatTemplate(
     const std::vector<common_chat_msg> &messages, bool add_assistant) const {
   std::lock_guard<std::mutex> lock(operation_mutex_);
@@ -1791,17 +1996,12 @@ std::string InferenceRuntime::ApplyChatTemplate(
     return {};
   }
 
-  const std::size_t split_index = messages.size() - 1;
-  std::vector<common_chat_msg> past_messages;
-  past_messages.reserve(split_index);
-  for (std::size_t index = 0; index < split_index; ++index) {
-    past_messages.push_back(messages[index]);
-  }
-
   try {
-    return common_chat_format_single(chat_templates_.get(), past_messages,
-                                     messages.back(), add_assistant,
-                                     /* use_jinja = */ true);
+    common_chat_templates_inputs inputs;
+    inputs.messages = messages;
+    inputs.add_generation_prompt = add_assistant;
+    inputs.use_jinja = true;
+    return common_chat_templates_apply(chat_templates_.get(), inputs).prompt;
   } catch (const std::exception &error) {
     fprintf(stderr, "%s: warning: failed to apply common chat template: %s\n",
             __func__, error.what());

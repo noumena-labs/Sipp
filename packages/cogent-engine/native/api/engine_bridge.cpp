@@ -98,6 +98,26 @@ const char *empty_c_string() {
   return empty.c_str();
 }
 
+bool parse_chat_messages_json(const char *messages_json,
+                              std::vector<common_chat_msg> &out_messages) {
+  out_messages.clear();
+  if (messages_json == nullptr || messages_json[0] == '\0') {
+    return false;
+  }
+
+  const json parsed = json::parse(messages_json, nullptr, false);
+  if (parsed.is_discarded() || !parsed.is_array()) {
+    return false;
+  }
+  try {
+    out_messages = common_chat_msgs_parse_oaicompat(parsed);
+  } catch (const std::exception &) {
+    return false;
+  }
+
+  return true;
+}
+
 bool validate_media_buffers(int32_t n_images, const uint8_t *images_flat_buffer,
                             const int32_t *image_sizes,
                             std::size_t &out_total_bytes) {
@@ -127,26 +147,6 @@ bool validate_media_buffers(int32_t n_images, const uint8_t *images_flat_buffer,
   }
 
   out_total_bytes = total_bytes;
-  return true;
-}
-
-bool parse_chat_messages_json(const char *messages_json,
-                              std::vector<common_chat_msg> &out_messages) {
-  out_messages.clear();
-  if (messages_json == nullptr || messages_json[0] == '\0') {
-    return false;
-  }
-
-  const json parsed = json::parse(messages_json, nullptr, false);
-  if (parsed.is_discarded() || !parsed.is_array()) {
-    return false;
-  }
-  try {
-    out_messages = common_chat_msgs_parse_oaicompat(parsed);
-  } catch (const std::exception &) {
-    return false;
-  }
-
   return true;
 }
 
@@ -664,7 +664,8 @@ const char *CE_GetBackendObservabilityJsonString() {
 
 CE_RequestId CE_EnqueuePromptQuery(const char *context_key, const char *prompt,
                                    int n_tokens_predict,
-                                   CE_TokenCallback on_token) {
+                                   CE_TokenCallback on_token,
+                                   const char *grammar) {
   auto runtime = acquire_engine_runtime();
   if (!runtime) {
     return 0;
@@ -677,13 +678,15 @@ CE_RequestId CE_EnqueuePromptQuery(const char *context_key, const char *prompt,
           return on_token(token_piece, token_length) == 0;
         }
         return true;
-      });
+      },
+      grammar ? std::string(grammar) : std::string());
 }
 
 CE_RequestId CE_EnqueuePromptWithMediaQuery(
     const char *context_key, const char *prompt, int n_tokens_predict,
     int32_t n_images, const uint8_t *images_flat_buffer,
-    const int32_t *image_sizes, CE_TokenCallback on_token) {
+    const int32_t *image_sizes, CE_TokenCallback on_token,
+    const char *grammar) {
   if (prompt == nullptr || !is_valid_prediction_tokens(n_tokens_predict)) {
     return 0;
   }
@@ -692,7 +695,7 @@ CE_RequestId CE_EnqueuePromptWithMediaQuery(
   }
   if (n_images == 0) {
     return CE_EnqueuePromptQuery(context_key, prompt, n_tokens_predict,
-                                  on_token);
+                                  on_token, grammar);
   }
 
   std::size_t total_media_bytes = 0;
@@ -724,7 +727,8 @@ CE_RequestId CE_EnqueuePromptWithMediaQuery(
           return on_token(token_piece, token_length) == 0;
         }
         return true;
-      });
+      },
+      grammar ? std::string(grammar) : std::string());
 }
 
 const char *CE_GetMediaMarkerString() {
@@ -745,16 +749,48 @@ const char *CE_GetChatTemplateString() {
   return tmpl != nullptr ? tmpl : empty_c_string();
 }
 
+const char *CE_GetBosTextString() {
+  static thread_local std::string cached;
+  const auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    return empty_c_string();
+  }
+  cached = runtime->GetBosText();
+  return cached.c_str();
+}
+
+const char *CE_GetEosTextString() {
+  static thread_local std::string cached;
+  const auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    return empty_c_string();
+  }
+  cached = runtime->GetEosText();
+  return cached.c_str();
+}
+
+const char *CE_TokenToStringString(int32_t token_id) {
+  static thread_local std::string cached;
+  const auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    return empty_c_string();
+  }
+  cached = runtime->TokenToString(token_id);
+  return cached.c_str();
+}
+
 const char *CE_ApplyChatTemplateString(const char *messages_json,
                                        int add_assistant) {
   static thread_local std::string formatted_prompt;
   std::vector<common_chat_msg> messages;
   if (!parse_chat_messages_json(messages_json, messages)) {
+    formatted_prompt.clear();
     return empty_c_string();
   }
 
   const auto runtime = acquire_engine_runtime();
   if (!runtime) {
+    formatted_prompt.clear();
     return empty_c_string();
   }
 
