@@ -50,10 +50,8 @@ export function StartScreen({
           <span className="panel-eyebrow">Cogent Avatar Demo</span>
           <h1 id="start-title">Enter the Starfall Gate</h1>
           <p className="start-lede">
-            Meet {characterName}, a real-time character experience powered by a local LLM.
-            CogentEngine runs the selected GGUF model locally, connects it to a
-            high-performance backend, and drives a dynamic avatar scene with chat, memory,
-            animations, and world effects.
+            Meet {characterName}, a real-time interactive character powered by CogentLM, a high-performance inference engine for local LLMs.
+            This tech demo shows how a local model can drive lifelike character interactions, call actions in response to user input, and operate seamlessly in a dynamic real-time environment.
           </p>
         </div>
 
