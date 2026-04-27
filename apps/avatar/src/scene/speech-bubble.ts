@@ -2,9 +2,9 @@
 //
 // speech-bubble.ts
 //
-// - Renders an opaque JRPG-style dialogue window near the avatar.
-// - The full panel is drawn into one CanvasTexture so the border, fill,
-//   nameplate, tail, and text stay visually cohesive.
+// - Renders a soft fantasy dialogue window near the avatar.
+// - The full panel is drawn into one CanvasTexture so the fill, nameplate,
+//   action chips, and text stay visually cohesive.
 //
 //////////////////////////////////////////////////////////////////////////////
 
@@ -172,9 +172,9 @@ export class SpeechBubble {
 
     context.font = TEXT_FONT;
     context.textBaseline = 'alphabetic';
-    context.fillStyle = '#fff9e8';
-    context.shadowColor = 'rgba(0, 0, 0, 0.82)';
-    context.shadowBlur = 5;
+    context.fillStyle = '#fff6df';
+    context.shadowColor = 'rgba(3, 2, 12, 0.82)';
+    context.shadowBlur = 4;
     context.shadowOffsetX = 2;
     context.shadowOffsetY = 3;
 
@@ -225,52 +225,84 @@ function drawDialogueWindow(
   const panelX = 68;
   const panelY = 74;
   const panelW = 1264;
-  const panelH = 270;
-  const tailX = 275;
-  const tailTopY = panelY + panelH - 4;
+  const panelH = 300;
+  const wedgeX = panelX + panelW * 0.26;
+  const wedgeBaseY = panelY + panelH - 8;
+  const wedgeTipY = CANVAS_HEIGHT - 12;
 
   context.save();
-  context.shadowColor = 'rgba(0, 0, 0, 0.48)';
-  context.shadowBlur = 22;
-  context.shadowOffsetY = 12;
+  context.shadowColor = 'rgba(3, 2, 12, 0.7)';
+  context.shadowBlur = 34;
+  context.shadowOffsetY = 14;
 
   context.beginPath();
-  roundedRectPath(context, panelX, panelY, panelW, panelH, 16);
-  context.moveTo(tailX, tailTopY);
-  context.lineTo(tailX + 72, tailTopY);
-  context.lineTo(tailX + 26, tailTopY + 72);
+  roundedRectPath(context, panelX, panelY, panelW, panelH, 26);
+  context.moveTo(wedgeX - 54, wedgeBaseY);
+  context.lineTo(wedgeX + 54, wedgeBaseY);
+  context.lineTo(wedgeX - 12, wedgeTipY);
   context.closePath();
-  context.fillStyle = '#050717';
+  const shellGradient = context.createLinearGradient(panelX, panelY, panelX + panelW, panelY + panelH);
+  shellGradient.addColorStop(0, 'rgba(26, 17, 42, 0.96)');
+  shellGradient.addColorStop(0.58, 'rgba(14, 10, 30, 0.98)');
+  shellGradient.addColorStop(1, 'rgba(30, 17, 47, 0.96)');
+  context.fillStyle = shellGradient;
   context.fill();
 
-  const fillGradient = context.createLinearGradient(0, panelY, 0, panelY + panelH);
-  fillGradient.addColorStop(0, '#171d4b');
-  fillGradient.addColorStop(0.5, '#0e1330');
-  fillGradient.addColorStop(1, '#06091d');
-  context.shadowBlur = 0;
-  context.fillStyle = fillGradient;
-  context.fill();
+  // const fillGradient = context.createRadialGradient(
+  //   panelX + panelW * 0.2,
+  //   panelY,
+  //   40,
+  //   panelX + panelW * 0.42,
+  //   panelY + panelH * 0.34,
+  //   panelW * 0.72
+  // );
+  // fillGradient.addColorStop(0, 'rgba(255, 218, 143, 0.1)');
+  // fillGradient.addColorStop(0.34, 'rgba(28, 18, 49, 0.9)');
+  // fillGradient.addColorStop(1, 'rgba(8, 6, 20, 0.98)');
+  // context.shadowBlur = 0;
+  // context.fillStyle = fillGradient;
+  // context.fill();
 
-  context.lineJoin = 'round';
-  context.lineWidth = 2;
-  context.strokeStyle = 'rgba(255, 255, 255, 0.22)';
-  context.stroke();
-  context.lineWidth = 6;
-  context.strokeStyle = '#fffaf0';
-  context.stroke();
-  context.lineWidth = 4;
-  context.strokeStyle = '#97a0ff';
-  context.stroke();
+  // context.globalCompositeOperation = 'screen';
+  // const warmGlow = context.createRadialGradient(
+  //   panelX + panelW * 0.16,
+  //   panelY + panelH * 0.04,
+  //   0,
+  //   panelX + panelW * 0.16,
+  //   panelY + panelH * 0.04,
+  //   panelW * 0.38
+  // );
+  // warmGlow.addColorStop(0, 'rgba(255, 218, 143, 0.16)');
+  // warmGlow.addColorStop(1, 'rgba(255, 218, 143, 0)');
+  // context.fillStyle = warmGlow;
+  // context.fill();
 
-  context.globalAlpha = 0.5;
+  // const violetGlow = context.createRadialGradient(
+  //   panelX + panelW * 0.8,
+  //   panelY + panelH * 0.86,
+  //   0,
+  //   panelX + panelW * 0.8,
+  //   panelY + panelH * 0.86,
+  //   panelW * 0.4
+  // );
+  // violetGlow.addColorStop(0, 'rgba(151, 105, 255, 0.16)');
+  // violetGlow.addColorStop(1, 'rgba(151, 105, 255, 0)');
+  // context.fillStyle = violetGlow;
+  // context.fill();
+  // context.globalCompositeOperation = 'source-over';
+
+  context.globalAlpha = 0.1;
   context.beginPath();
-  roundedRectPath(context, panelX + 38, panelY + 38, panelW - 76, panelH - 76, 9);
-  context.strokeStyle = '#dfe4ff';
-  context.lineWidth = 3;
-  context.stroke();
+  roundedRectPath(context, panelX + 26, panelY + 24, panelW - 52, panelH - 48, 22);
+  const innerSheen = context.createLinearGradient(panelX, panelY, panelX + panelW, panelY + panelH);
+  innerSheen.addColorStop(0, 'rgba(255, 238, 190, 0.18)');
+  innerSheen.addColorStop(0.52, 'rgba(151, 105, 255, 0.08)');
+  innerSheen.addColorStop(1, 'rgba(82, 255, 211, 0.08)');
+  context.fillStyle = innerSheen;
+  context.fill();
   context.globalAlpha = 1;
 
-  drawNameplate(context, speakerName, panelX + 86, panelY + 32);
+  drawNameplate(context, speakerName, panelX + 86, panelY + 34);
   drawActionCapsules(context, actions, panelX + panelW - 86, panelY + 45);
   context.restore();
 }
@@ -282,29 +314,25 @@ function drawNameplate(
   y: number
 ): void {
   context.font = NAME_FONT;
-  const width = Math.max(154, context.measureText(speakerName).width + 82);
-  const height = 42;
+  const width = Math.max(150, context.measureText(speakerName).width + 76);
+  const height = 40;
 
   context.save();
-  const gradient = context.createLinearGradient(0, y, 0, y + height);
-  gradient.addColorStop(0, '#1d255f');
-  gradient.addColorStop(1, '#070a22');
-  roundedRectPath(context, x, y, width, height, 10);
+  context.shadowColor = 'rgba(3, 2, 12, 0.38)';
+  context.shadowBlur = 12;
+  const gradient = context.createLinearGradient(x, y, x + width, y + height);
+  gradient.addColorStop(0, 'rgba(255, 218, 143, 0.2)');
+  gradient.addColorStop(0.5, 'rgba(151, 105, 255, 0.2)');
+  gradient.addColorStop(1, 'rgba(82, 255, 211, 0.12)');
+  roundedRectPath(context, x, y, width, height, 14);
   context.fillStyle = gradient;
   context.fill();
-  context.lineWidth = 5;
-  context.strokeStyle = '#fffaf0';
-  context.stroke();
-  context.lineWidth = 2;
-  context.strokeStyle = '#9aa4ff';
-  roundedRectPath(context, x + 7, y + 7, width - 14, height - 14, 6);
-  context.stroke();
 
   context.textBaseline = 'middle';
-  context.fillStyle = '#fff9e8';
+  context.fillStyle = '#fff6df';
   context.shadowColor = 'rgba(0, 0, 0, 0.72)';
   context.shadowBlur = 4;
-  context.fillText(speakerName, x + 28, y + height / 2 + 1);
+  context.fillText(speakerName, x + 26, y + height / 2 + 1);
   context.restore();
 }
 
@@ -327,16 +355,15 @@ function drawActionCapsules(
     const label = formatActionLabel(action.label);
     const width = Math.min(260, Math.max(96, context.measureText(label).width + 42));
     x -= width;
-    const gradient = context.createLinearGradient(0, y, 0, y + 34);
-    gradient.addColorStop(0, 'rgba(105, 255, 222, 0.34)');
-    gradient.addColorStop(1, 'rgba(113, 90, 255, 0.24)');
+    const gradient = context.createLinearGradient(x, y, x + width, y + 34);
+    gradient.addColorStop(0, 'rgba(82, 255, 211, 0.2)');
+    gradient.addColorStop(1, 'rgba(151, 105, 255, 0.18)');
     roundedRectPath(context, x, y, width, 34, 17);
+    context.shadowColor = 'rgba(3, 2, 12, 0.3)';
+    context.shadowBlur = 8;
     context.fillStyle = gradient;
     context.fill();
-    context.lineWidth = 2;
-    context.strokeStyle = 'rgba(255, 255, 255, 0.82)';
-    context.stroke();
-    context.fillStyle = '#eafff9';
+    context.fillStyle = '#c4fff4';
     context.shadowColor = 'rgba(0, 0, 0, 0.55)';
     context.shadowBlur = 3;
     context.fillText(label, x + 21, y + 18);

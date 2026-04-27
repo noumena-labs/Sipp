@@ -377,7 +377,7 @@ textarea:focus {
 .start-button {
   width:100%;
   justify-self: center;
-  border-radius: 999px;
+  border-radius: 24px;
   padding: 16px 28px;
   font-size: 18px;
   letter-spacing: 0.14em;
