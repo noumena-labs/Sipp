@@ -18,13 +18,22 @@ import {
 } from '../actions';
 import {
   BASE_MOOD_EXPRESSIONS,
+  CLIP_ACTION_EXPRESSIONS,
   MOOD_TO_EXPRESSION,
   TALKING_MOUTH_EXPRESSIONS,
   TRANSIENT_EXPRESSIONS,
   type ExpressionActionName,
   type ExpressionEnvelope,
+  type ExpressionEnvelopeSpec,
+  type ExpressionName,
 } from '../actions/expressions';
-import { resolveGazeOffset, type GazeTarget } from '../actions/gaze';
+import {
+  NEUTRAL_GAZE_POSE,
+  resolveGazeOffset,
+  resolveGazePose,
+  type GazePose,
+  type GazeTarget,
+} from '../actions/gaze';
 import {
   loadMixamoAnimationClip,
   type ClipActionName,
@@ -43,19 +52,29 @@ interface BoneMotion {
   readonly rest: THREE.Euler;
 }
 
+interface GazeEnvelope {
+  readonly pose: GazePose;
+  elapsedSeconds: number;
+}
+
 const EXPRESSION_DAMPING = 18;
 const LOOK_TARGET_LERP = 8;
+const GAZE_POSE_DAMPING = 12;
 const BLINK_MIN_SECONDS = 2.2;
 const BLINK_MAX_SECONDS = 5.1;
 const DOUBLE_BLINK_CHANCE = 0.16;
 const TALKING_MOUTH_DAMPING = 14;
-const GAZE_ACTION_SECONDS = 1.4;
+const GAZE_ACTION_SECONDS = 2.2;
+const GAZE_POSE_ATTACK_SECONDS = 0.18;
+const GAZE_POSE_HOLD_SECONDS = 1.05;
+const GAZE_POSE_RELEASE_SECONDS = GAZE_ACTION_SECONDS - GAZE_POSE_ATTACK_SECONDS - GAZE_POSE_HOLD_SECONDS;
 
 const CLIP_FADE_SECONDS = 0.18;
 const CLIP_STOP_DELAY_MS = Math.ceil(CLIP_FADE_SECONDS * 1000);
 
 export class ThreeVRMBinding implements AvatarActionRuntime {
   private readonly bus: CharacterEventBus;
+  private readonly camera: THREE.Camera;
   private readonly avatar: LoadedAvatar;
   private readonly renderAssets: AvatarRenderAssets;
   private readonly disposers: Array<() => void> = [];
@@ -65,7 +84,9 @@ export class ThreeVRMBinding implements AvatarActionRuntime {
   private readonly desiredLookTarget = new THREE.Vector3();
   private readonly tempVec = new THREE.Vector3();
   private readonly headWorldPos = new THREE.Vector3();
+  private readonly cameraWorldPos = new THREE.Vector3();
   private readonly gazeAnchor = new THREE.Vector3();
+  private readonly currentGazePose = { ...NEUTRAL_GAZE_POSE };
   private readonly baseFocus: THREE.Vector3;
   private readonly headMotion: BoneMotion | null;
   private readonly neckMotion: BoneMotion | null;
@@ -79,6 +100,7 @@ export class ThreeVRMBinding implements AvatarActionRuntime {
   private blinkTimer = randomRange(BLINK_MIN_SECONDS, BLINK_MAX_SECONDS);
   private blinkExpression: ExpressionEnvelope | null = null;
   private gazeOverrideSeconds = 0;
+  private gazeEnvelope: GazeEnvelope | null = null;
   private readonly gazeOffset = new THREE.Vector3(0, 0, 1.35);
   private currentClipAction: THREE.AnimationAction | null = null;
   private idleAction: THREE.AnimationAction | null = null;
@@ -90,10 +112,12 @@ export class ThreeVRMBinding implements AvatarActionRuntime {
   public constructor(
     bus: CharacterEventBus,
     scene: THREE.Scene,
+    camera: THREE.Camera,
     avatar: LoadedAvatar,
     renderAssets: AvatarRenderAssets
   ) {
     this.bus = bus;
+    this.camera = camera;
     this.avatar = avatar;
     this.renderAssets = renderAssets;
     this.mixer = new THREE.AnimationMixer(this.avatar.vrm.scene);
@@ -132,6 +156,7 @@ export class ThreeVRMBinding implements AvatarActionRuntime {
     this.updateBlink(deltaSeconds);
     this.updateIdlePose();
     this.updateLookAt(deltaSeconds);
+    this.updateGazePose(deltaSeconds);
     this.updateMouthExpressions(deltaSeconds);
     this.updateExpressionWeights(deltaSeconds);
     this.worldEffects.tick(deltaSeconds);
@@ -180,6 +205,7 @@ export class ThreeVRMBinding implements AvatarActionRuntime {
     }
 
     this.cancelScheduledClipStop(next);
+    this.playClipExpression(name);
     const previousAction = this.currentClipAction;
 
     next.reset();
@@ -202,7 +228,7 @@ export class ThreeVRMBinding implements AvatarActionRuntime {
 
   public playTransientExpression(actionName: ExpressionActionName): void {
     const next = TRANSIENT_EXPRESSIONS[actionName];
-    this.transientExpressions.push({ ...next, elapsedSeconds: 0 });
+    this.pushTransientExpression(next);
   }
 
   public playWorldEffect(name: WorldEffectActionName): void {
@@ -211,6 +237,8 @@ export class ThreeVRMBinding implements AvatarActionRuntime {
 
   public settle(): void {
     this.transientExpressions = [];
+    this.gazeEnvelope = null;
+    this.gazeOverrideSeconds = 0;
     this.setMood('neutral');
   }
 
@@ -220,8 +248,17 @@ export class ThreeVRMBinding implements AvatarActionRuntime {
       this.avatar.vrm.humanoid?.getNormalizedBoneNode(VRMHumanBoneName.Head) ??
       this.avatar.root;
     headNode.getWorldPosition(this.headWorldPos);
-    resolveGazeOffset(target, this.tempVec);
-    this.desiredLookTarget.copy(this.headWorldPos).add(this.tempVec);
+    if (target === 'camera') {
+      this.camera.getWorldPosition(this.cameraWorldPos);
+      this.desiredLookTarget.copy(this.cameraWorldPos);
+    } else {
+      resolveGazeOffset(target, this.tempVec);
+      this.desiredLookTarget.copy(this.headWorldPos).add(this.tempVec);
+    }
+    this.gazeEnvelope = {
+      pose: resolveGazePose(target),
+      elapsedSeconds: 0,
+    };
     this.gazeOverrideSeconds = GAZE_ACTION_SECONDS;
   }
 
@@ -233,6 +270,42 @@ export class ThreeVRMBinding implements AvatarActionRuntime {
 
   private setMood(mood: keyof typeof MOOD_TO_EXPRESSION): void {
     this.activeMood = MOOD_TO_EXPRESSION[mood] ?? null;
+  }
+
+  private playClipExpression(actionName: ClipActionName): void {
+    const expression = CLIP_ACTION_EXPRESSIONS[actionName];
+    if (expression) {
+      this.pushTransientExpression(expression);
+    }
+  }
+
+  private pushTransientExpression(spec: ExpressionEnvelopeSpec): void {
+    const name = this.resolveExpressionName(spec.name);
+    if (!name) {
+      return;
+    }
+    this.transientExpressions.push({
+      name,
+      peak: spec.peak,
+      attackSeconds: spec.attackSeconds,
+      holdSeconds: spec.holdSeconds,
+      releaseSeconds: spec.releaseSeconds,
+      elapsedSeconds: 0,
+    });
+  }
+
+  private resolveExpressionName(candidate: ExpressionEnvelopeSpec['name']): ExpressionName | null {
+    const names = Array.isArray(candidate) ? candidate : [candidate];
+    const expressionManager = this.avatar.vrm.expressionManager;
+    if (!expressionManager) {
+      return names[0] ?? null;
+    }
+    for (const name of names) {
+      if (expressionManager.getExpression(name) != null) {
+        return name;
+      }
+    }
+    return null;
   }
 
   private updateTransientExpressions(deltaSeconds: number): void {
@@ -338,6 +411,70 @@ export class ThreeVRMBinding implements AvatarActionRuntime {
 
     this.lookTarget.position.lerp(this.desiredLookTarget, 1 - Math.exp(-LOOK_TARGET_LERP * deltaSeconds));
     this.lookTarget.updateMatrixWorld();
+  }
+
+  private updateGazePose(deltaSeconds: number): void {
+    let influence = 0;
+    let targetPose = NEUTRAL_GAZE_POSE;
+
+    if (this.gazeEnvelope) {
+      this.gazeEnvelope.elapsedSeconds += deltaSeconds;
+      targetPose = this.gazeEnvelope.pose;
+      influence = getEnvelopeInfluence(
+        this.gazeEnvelope.elapsedSeconds,
+        GAZE_POSE_ATTACK_SECONDS,
+        GAZE_POSE_HOLD_SECONDS,
+        GAZE_POSE_RELEASE_SECONDS
+      );
+      if (influence <= 0) {
+        this.gazeEnvelope = null;
+      }
+    }
+
+    this.dampGazePose(this.currentGazePose, targetPose, influence, deltaSeconds);
+    this.applyGazePoseToBone(this.chestMotion, {
+      x: this.currentGazePose.chestPitch,
+      y: this.currentGazePose.chestYaw,
+      z: this.currentGazePose.chestRoll,
+    });
+    this.applyGazePoseToBone(this.neckMotion, {
+      x: this.currentGazePose.neckPitch,
+      y: this.currentGazePose.neckYaw,
+      z: this.currentGazePose.neckRoll,
+    });
+    this.applyGazePoseToBone(this.headMotion, {
+      x: this.currentGazePose.headPitch,
+      y: this.currentGazePose.headYaw,
+      z: this.currentGazePose.headRoll,
+    });
+  }
+
+  private dampGazePose(
+    current: Record<keyof GazePose, number>,
+    targetPose: GazePose,
+    influence: number,
+    deltaSeconds: number
+  ): void {
+    for (const key of Object.keys(current) as Array<keyof GazePose>) {
+      current[key] = THREE.MathUtils.damp(
+        current[key],
+        targetPose[key] * influence,
+        GAZE_POSE_DAMPING,
+        deltaSeconds
+      );
+    }
+  }
+
+  private applyGazePoseToBone(
+    motion: BoneMotion | null,
+    rotation: { readonly x: number; readonly y: number; readonly z: number }
+  ): void {
+    if (!motion) {
+      return;
+    }
+    motion.node.rotation.x += rotation.x;
+    motion.node.rotation.y += rotation.y;
+    motion.node.rotation.z += rotation.z;
   }
 
   private updateMouthExpressions(deltaSeconds: number): void {
@@ -484,19 +621,32 @@ export class ThreeVRMBinding implements AvatarActionRuntime {
 }
 
 function getEnvelopeValue(envelope: ExpressionEnvelope): number {
-  const attackEnd = envelope.attackSeconds;
-  const holdEnd = attackEnd + envelope.holdSeconds;
-  const releaseEnd = holdEnd + envelope.releaseSeconds;
-  const elapsed = envelope.elapsedSeconds;
+  return envelope.peak * getEnvelopeInfluence(
+    envelope.elapsedSeconds,
+    envelope.attackSeconds,
+    envelope.holdSeconds,
+    envelope.releaseSeconds
+  );
+}
+
+function getEnvelopeInfluence(
+  elapsed: number,
+  attackSeconds: number,
+  holdSeconds: number,
+  releaseSeconds: number
+): number {
+  const attackEnd = attackSeconds;
+  const holdEnd = attackEnd + holdSeconds;
+  const releaseEnd = holdEnd + releaseSeconds;
 
   if (elapsed <= attackEnd) {
-    return envelope.peak * easeOutCubic(safeDivide(elapsed, envelope.attackSeconds));
+    return easeOutCubic(safeDivide(elapsed, attackSeconds));
   }
   if (elapsed <= holdEnd) {
-    return envelope.peak;
+    return 1;
   }
   if (elapsed <= releaseEnd) {
-    return envelope.peak * (1 - easeInOutCubic(safeDivide(elapsed - holdEnd, envelope.releaseSeconds)));
+    return 1 - easeInOutCubic(safeDivide(elapsed - holdEnd, releaseSeconds));
   }
   return 0;
 }

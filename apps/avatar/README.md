@@ -29,7 +29,7 @@ small default `.gguf` model URL that can be replaced before entering the demo.
 - Avatar model: `public/characters/aria/avatar.vrm`
 - Idle clip: `public/characters/aria/animations/idle.fbx`
 - Action clips: `public/characters/aria/animations/<action>.fbx`
-- Default model URL: `https://huggingface.co/LiquidAI/LFM2.5-350M-GGUF/resolve/main/LFM2.5-350M-Q8_0.gguf`
+- Default model URL: `https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF/resolve/main/LFM2.5-1.2B-Instruct-Q4_K_M.gguf`
 
 ## Fantasy Demo
 

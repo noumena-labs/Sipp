@@ -32,7 +32,7 @@ import type { ChatMessage } from './components/chat-types';
 
 const DEFAULT_CHARACTER_URL = '/characters/aria/character.json';
 const DEFAULT_MODEL_URL =
-  'https://huggingface.co/LiquidAI/LFM2.5-350M-GGUF/resolve/main/LFM2.5-350M-Q8_0.gguf';
+  'https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF/resolve/main/LFM2.5-1.2B-Instruct-Q4_K_M.gguf';
 
 const SUGGESTED_PROMPTS = [
   'Who are you, Aria?',

@@ -163,7 +163,13 @@ export function AvatarCanvas({
         avatar = loaded;
         sceneHandle.avatarRoot.add(loaded.root);
         sceneHandle.focusAvatar(loaded.layout);
-        binding = new ThreeVRMBinding(bus, sceneHandle.scene, loaded, renderAssets);
+        binding = new ThreeVRMBinding(
+          bus,
+          sceneHandle.scene,
+          sceneHandle.camera,
+          loaded,
+          renderAssets
+        );
         await binding.init(actionNames);
         if (cancelled) {
           return;
