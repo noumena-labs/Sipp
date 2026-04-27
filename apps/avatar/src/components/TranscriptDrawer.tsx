@@ -44,7 +44,7 @@ export function TranscriptDrawer({
         <div className="transcript-header">
           <div>
             <span className="panel-eyebrow">Conversation</span>
-            <h2>{characterName}'s transcript</h2>
+            <h2>Chat transcript</h2>
           </div>
           <button type="button" className="secondary-button" onClick={onClose}>
             Minimize

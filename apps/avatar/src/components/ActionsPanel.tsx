@@ -69,7 +69,6 @@ export function ActionsPanel({ actions, disabled, onTrigger }: ActionsPanelProps
     <section className="actions-panel glass-panel" aria-label="Manual avatar actions">
       <div className="actions-panel-header">
         <span className="panel-eyebrow">Actions</span>
-        <div className="actions-panel-title">Trigger Aria</div>
       </div>
       <div className="actions-panel-groups">
         {renderedGroups.map((group) => (
