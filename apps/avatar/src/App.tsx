@@ -26,9 +26,24 @@ import {
 } from './characters/render-assets';
 import { ControlsPanel } from './components/ControlsPanel';
 import { TranscriptDrawer } from './components/TranscriptDrawer';
+import { ActionsPanel } from './components/ActionsPanel';
+import { StartScreen } from './components/StartScreen';
 import type { ChatMessage } from './components/chat-types';
 
 const DEFAULT_CHARACTER_URL = '/characters/aria/character.json';
+const DEFAULT_MODEL_URL =
+  'https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF/resolve/main/LFM2.5-1.2B-Instruct-Q4_K_M.gguf';
+
+const SUGGESTED_PROMPTS = [
+  'Who are you, Aria?',
+  'What danger is near us?',
+  'Show me your favorite battle move.',
+  'Can you summon your familiar?',
+  'Teach me a spell before the quest.',
+  'What does this ruin feel like?',
+  "I'm nervous before the fight.",
+  'Give me a heroic pep talk.',
+] as const;
 
 interface LoadedHarness {
   readonly engine: CogentEngine;
@@ -42,15 +57,16 @@ interface PreviewCharacter {
 }
 
 export default function App() {
-  const [characterUrl, setCharacterUrl] = useState(DEFAULT_CHARACTER_URL);
-  const [modelUrl, setModelUrl] = useState('');
+  const [modelUrl, setModelUrl] = useState(DEFAULT_MODEL_URL);
   const [status, setStatus] = useState('Idle.');
   const [busy, setBusy] = useState(false);
+  const [started, setStarted] = useState(false);
   const [harness, setHarness] = useState<LoadedHarness | null>(null);
   const [previewCharacter, setPreviewCharacter] = useState<PreviewCharacter | null>(null);
   const [previewResolved, setPreviewResolved] = useState(false);
+  const [avatarReady, setAvatarReady] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(true);
   // The bus is created once per app lifetime and reused across harness
   // reloads so the scene binding stays stable across character replacement.
   const bus = useMemo(() => new CharacterEventBus(), []);
@@ -107,19 +123,22 @@ export default function App() {
     };
   }, []);
 
-  const handleLoad = async (args: { characterUrl: string; modelUrl: string }): Promise<void> => {
+  useEffect(() => {
+    setAvatarReady(false);
+  }, [previewCharacter]);
+
+  const handleLoad = async (args: { modelUrl: string }): Promise<void> => {
     abortRef.current?.abort();
     abortRef.current = null;
-    setCharacterUrl(args.characterUrl);
     setModelUrl(args.modelUrl);
     setBusy(true);
-    setStatus('Fetching character.json…');
+    setStatus('Loading Aria…');
     const previousHarness = harness;
     const previousPreviewCharacter = previewCharacter;
     const requestId = ++previewRequestIdRef.current;
     let previewUpdated = false;
     try {
-      const preview = await loadPreviewConfig(args.characterUrl, requestId);
+      const preview = await loadPreviewConfig(DEFAULT_CHARACTER_URL, requestId);
       const config = preview.config;
       previewUpdated = true;
 
@@ -146,7 +165,7 @@ export default function App() {
       });
 
       const { character } = await createCharacterFromConfigUrl({
-        configUrl: args.characterUrl,
+        configUrl: DEFAULT_CHARACTER_URL,
         engine,
         bus,
       });
@@ -155,7 +174,8 @@ export default function App() {
       }
       setHarness({ engine, character, config });
       setMessages([]);
-      setDrawerOpen(false);
+      setDrawerOpen(true);
+      setStarted(true);
       setStatus(`Ready. Character: ${config.persona.name}.`);
     } catch (error) {
       console.error(error);
@@ -254,11 +274,16 @@ export default function App() {
     harness?.character.clearMemory();
     setMessages([]);
     setStatus('Memory cleared.');
-    setDrawerOpen(false);
+    setDrawerOpen(true);
   };
 
   const handleAvatarError = (message: string): void => {
+    setAvatarReady(false);
     setStatus(`Avatar failed: ${message}`);
+  };
+
+  const handleManualAction = (actionId: string, cueLabel: string): void => {
+    bus.emit({ kind: 'action', id: actionId, raw: `[${cueLabel}]` });
   };
 
   const latestAssistantMessage = [...messages]
@@ -288,51 +313,77 @@ export default function App() {
           speaking={speaking}
           bubbleText={latestAssistantMessage?.text ?? ''}
           bubblePending={latestAssistantMessage?.pending ?? false}
+          bubbleActions={latestAssistantMessage?.actions ?? []}
+          characterName={characterName}
+          onReady={() => setAvatarReady(true)}
           onError={handleAvatarError}
         />
 
-        <div className="stage-overlay stage-top-left">
-          <ControlsPanel
-            characterUrl={characterUrl}
+        {started ? (
+          <>
+            <div className="stage-overlay stage-top-left">
+              <ControlsPanel
+                modelUrl={modelUrl}
+                characterName={characterName}
+                personaSummary={personaSummary}
+                status={setupStatus}
+                busy={busy}
+                loaded={harness != null}
+                onLoad={handleLoad}
+                onReset={handleReset}
+              />
+            </div>
+
+            <div className="stage-overlay stage-top-right">
+              <button
+                type="button"
+                className={`history-toggle glass-panel${drawerOpen ? ' active' : ''}`}
+                onClick={() => setDrawerOpen((open) => !open)}
+                aria-expanded={drawerOpen}
+                aria-controls="transcript-drawer"
+              >
+                <span className="panel-eyebrow">Transcript</span>
+                <span className="history-toggle-label">
+                  {drawerOpen ? 'Hide chat log' : 'Show chat log'}
+                </span>
+                <span className="history-toggle-count">{String(messages.length).padStart(2, '0')}</span>
+              </button>
+            </div>
+
+            <div className="stage-overlay stage-actions">
+              <ActionsPanel
+                actions={previewCharacter?.config.actions ?? []}
+                disabled={!avatarReady || busy}
+                onTrigger={handleManualAction}
+              />
+            </div>
+
+            <div className="stage-overlay stage-bottom">
+              <ChatComposer
+                onSend={handleSend}
+                disabled={!harness || busy}
+                characterName={characterName}
+                suggestions={SUGGESTED_PROMPTS}
+              />
+            </div>
+
+            <TranscriptDrawer
+              open={drawerOpen}
+              messages={messages}
+              onClose={() => setDrawerOpen(false)}
+              characterName={characterName}
+            />
+          </>
+        ) : (
+          <StartScreen
             modelUrl={modelUrl}
             characterName={characterName}
             personaSummary={personaSummary}
             status={setupStatus}
             busy={busy}
-            loaded={harness != null}
-            onLoad={handleLoad}
-            onReset={handleReset}
+            onStart={handleLoad}
           />
-        </div>
-
-        <div className="stage-overlay stage-top-right">
-          <button
-            type="button"
-            className={`history-toggle glass-panel${drawerOpen ? ' active' : ''}`}
-            onClick={() => setDrawerOpen((open) => !open)}
-            aria-expanded={drawerOpen}
-            aria-controls="transcript-drawer"
-          >
-            <span className="panel-eyebrow">Transcript</span>
-            <span className="history-toggle-label">Full chat log</span>
-            <span className="history-toggle-count">{String(messages.length).padStart(2, '0')}</span>
-          </button>
-        </div>
-
-        <div className="stage-overlay stage-bottom">
-          <ChatComposer
-            onSend={handleSend}
-            disabled={!harness || busy}
-            characterName={characterName}
-          />
-        </div>
-
-        <TranscriptDrawer
-          open={drawerOpen}
-          messages={messages}
-          onClose={() => setDrawerOpen(false)}
-          characterName={characterName}
-        />
+        )}
       </div>
     </div>
   );

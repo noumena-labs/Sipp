@@ -1,14 +1,19 @@
 import type { AvatarActionRuntime } from './runtime';
 import { GAZE_ACTION_TARGETS, type GazeActionName } from './gaze';
-import { isClipActionName, type ClipActionName } from './mixamo';
+import { CLIP_ACTION_NAMES, isClipActionName, type ClipActionName } from './mixamo';
 import {
   TRANSIENT_EXPRESSION_ACTIONS,
   type ExpressionActionName,
 } from './expressions';
+import {
+  WORLD_EFFECT_ACTIONS,
+  type WorldEffectActionName,
+} from './world-effects';
 
 export type SupportedAvatarActionName =
   | ClipActionName
   | ExpressionActionName
+  | WorldEffectActionName
   | GazeActionName
   | 'settle';
 
@@ -17,25 +22,33 @@ interface AvatarActionDefinition {
   execute(runtime: AvatarActionRuntime): void;
 }
 
+const CLIP_AVATAR_ACTIONS = Object.fromEntries(
+  CLIP_ACTION_NAMES.map((name) => [
+    name,
+    {
+      requiresClip: true,
+      execute(runtime: AvatarActionRuntime) {
+        runtime.playClip(name);
+      },
+    } satisfies AvatarActionDefinition,
+  ])
+) as Record<ClipActionName, AvatarActionDefinition>;
+
+const WORLD_EFFECT_AVATAR_ACTIONS = Object.fromEntries(
+  WORLD_EFFECT_ACTIONS.map((name) => [
+    name,
+    {
+      requiresClip: false,
+      execute(runtime: AvatarActionRuntime) {
+        runtime.playWorldEffect(name);
+      },
+    } satisfies AvatarActionDefinition,
+  ])
+) as Record<WorldEffectActionName, AvatarActionDefinition>;
+
 const AVATAR_ACTIONS: Record<SupportedAvatarActionName, AvatarActionDefinition> = {
-  wave: {
-    requiresClip: true,
-    execute(runtime) {
-      runtime.playClip('wave');
-    },
-  },
-  nod: {
-    requiresClip: true,
-    execute(runtime) {
-      runtime.playClip('nod');
-    },
-  },
-  shake_head: {
-    requiresClip: true,
-    execute(runtime) {
-      runtime.playClip('shake_head');
-    },
-  },
+  ...CLIP_AVATAR_ACTIONS,
+  ...WORLD_EFFECT_AVATAR_ACTIONS,
   smile: {
     requiresClip: false,
     execute(runtime) {
@@ -119,3 +132,5 @@ export function getRequiredClipActions(names: readonly string[]): readonly ClipA
 }
 
 export const SUPPORTED_EXPRESSION_ACTIONS = TRANSIENT_EXPRESSION_ACTIONS;
+export const SUPPORTED_WORLD_EFFECT_ACTIONS = WORLD_EFFECT_ACTIONS;
+export { isWorldEffectActionName } from './world-effects';

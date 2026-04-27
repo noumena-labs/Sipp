@@ -36,12 +36,6 @@ export function TranscriptDrawer({
 
   return (
     <>
-      <button
-        type="button"
-        className={`transcript-backdrop${open ? ' open' : ''}`}
-        onClick={onClose}
-        aria-label="Close transcript drawer"
-      />
       <aside
         id={id}
         className={`transcript-drawer glass-panel${open ? ' open' : ''}`}
@@ -50,10 +44,10 @@ export function TranscriptDrawer({
         <div className="transcript-header">
           <div>
             <span className="panel-eyebrow">Conversation</span>
-            <h2>{characterName}'s transcript</h2>
+            <h2>Chat transcript</h2>
           </div>
           <button type="button" className="secondary-button" onClick={onClose}>
-            Close
+            Minimize
           </button>
         </div>
 

@@ -2,7 +2,20 @@ import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import type { VRM, VRMHumanBoneName } from '@pixiv/three-vrm';
 
-export const CLIP_ACTION_NAMES = ['wave', 'nod', 'shake_head'] as const;
+export const CLIP_ACTION_NAMES = [
+  'wave',
+  'nod',
+  'shake_head',
+  'salute',
+  'thinking',
+  'bashful',
+  'excited',
+  'happy_blissful',
+  'joy_jump',
+  'upset_angry',
+  'crying',
+  'sad_idle',
+] as const;
 
 export type ClipActionName = (typeof CLIP_ACTION_NAMES)[number];
 
