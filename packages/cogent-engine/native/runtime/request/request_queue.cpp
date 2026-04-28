@@ -206,6 +206,7 @@ void RequestQueue::QueueTokenEvent(GenerateRequestId request_id, std::string tex
   event.request_id = request_id;
   event.text = std::move(text);
   runtime_events_.push_back(std::move(event));
+  total_emitted_token_count_++;
 }
 
 std::vector<RuntimeEvent> RequestQueue::DrainRuntimeEvents(std::size_t max_count,
@@ -239,11 +240,7 @@ std::vector<RuntimeEvent> RequestQueue::DrainRuntimeEvents(std::size_t max_count
 }
 
 int32_t RequestQueue::TotalEmittedTokenCount() const {
-  int32_t total = 0;
-  for (const auto &[_, request] : requests_) {
-    total += std::max(0, request.emitted_token_count);
-  }
-  return total;
+  return total_emitted_token_count_;
 }
 
 bool RequestQueue::ConsumeCompletedResponse(GenerateRequestId request_id) {
@@ -271,6 +268,7 @@ void RequestQueue::Clear() {
   completed_response_ready_ids_.clear();
   runtime_events_.clear();
   queued_completed_response_ids_.clear();
+  total_emitted_token_count_ = 0;
 }
 
 } // namespace noumena::cogentengine

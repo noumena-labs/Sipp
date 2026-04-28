@@ -1,156 +1,86 @@
-import assert from 'node:assert/strict';
 import test from 'node:test';
-
-import type { GenerateResponse } from '../types.js';
-import { WasmBridge } from '../wasm/wasm-bridge.js';
+import assert from 'node:assert/strict';
+import type { GenerateResponse, TransportObservability } from '../types.js';
 import {
-  COMPLETED_REQUEST_STATUS_PENDING,
-  DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY,
-  REQUEST_STEP_RESULT_PROGRESSED,
+  COMPLETED_REQUEST_STATUS_COMPLETED,
+  REQUEST_STEP_RESULT_WAITING,
 } from './main-thread-runtime-constants.js';
 import { RequestTracker } from './request-tracker.js';
 import { QueuedRequestScheduler } from './scheduler.js';
+import type { WasmBridge } from '../wasm/wasm-bridge.js';
 
-class MockSchedulerBridge {
-  public readonly burstCalls: Array<{
-    maxTicks: number;
-    maxCompletedResponses: number;
-    maxEmittedTokens: number;
-    maxDurationUs: number | null;
-  }> = [];
-  public pendingTokenEvents: Array<{ requestId: number; token: string }> = [];
-
-  public async runSchedulerProgress(
-    maxTicks: number,
-    maxCompletedResponses: number,
-    maxEmittedTokens: number,
-    options: {
-      maxDurationUs?: number;
-    } = {}
-  ): Promise<{ stepResult: number; completedResponseCount: number }> {
-    this.burstCalls.push({
-      maxTicks,
-      maxCompletedResponses,
-      maxEmittedTokens,
-      maxDurationUs: options.maxDurationUs ?? null,
-    });
-    return {
-      stepResult: REQUEST_STEP_RESULT_PROGRESSED,
-      completedResponseCount: 0,
-    };
-  }
-
-  public drainRuntimeEvents(maxEventCount: number): {
-    terminalRequestIds: number[];
-    tokenEvents: Array<{ requestId: number; token: string; textLength: number }>;
-    textBytes: number;
-  } {
-    const drained = this.pendingTokenEvents.splice(0, maxEventCount);
-    return {
-      terminalRequestIds: [],
-      tokenEvents: drained.map((event) => ({
-        requestId: event.requestId,
-        token: event.token,
-        textLength: event.token.length,
-      })),
-      textBytes: drained.reduce((total, event) => total + event.token.length, 0),
-    };
-  }
-
-  public drainCompletedRequestIds(): number[] {
-    return [];
-  }
-
-  public getCompletedRequestStatus(): number {
-    return COMPLETED_REQUEST_STATUS_PENDING;
-  }
-
-  public takeCompletedResponse(): GenerateResponse {
-    throw new Error('takeCompletedResponse() should not be called in this scheduler test.');
-  }
+function createTransportObservability(): TransportObservability {
+  return {
+    executionMode: 'main-thread',
+    workerBacked: false,
+    enabled: false,
+    bufferedTokenLimit: 0,
+    flushIntervalMs: 0,
+    flushCount: 0,
+    coalescedTokenCount: 0,
+    maxObservedBufferedTokenCount: 0,
+    activeTokenTransport: 'none',
+    runtimeEventDrainCount: 0,
+    runtimeEventTokenCount: 0,
+    runtimeEventTerminalCount: 0,
+    runtimeEventTextBytes: 0,
+  };
 }
 
-test('QueuedRequestScheduler uses smaller interactive bursts for callback-driven streaming requests', async () => {
+test('QueuedRequestScheduler settles completed requests even without terminal events', async () => {
   const tracker = new RequestTracker<GenerateResponse>();
-  const queuedPromptCallbacks = new Map<number, ((token: string) => void) | undefined>();
-  const queuedPromptTokenBuffers = new Map<number, string[]>();
-  const queuedPromptCallbackErrors = new Map<number, unknown>();
-  const deliveredTokens: string[] = [];
-  const bridge = new MockSchedulerBridge();
+  const transport = createTransportObservability();
+  const finalized: number[] = [];
+  const bridge = {
+    async runSchedulerProgress() {
+      return {
+        stepResult: REQUEST_STEP_RESULT_WAITING,
+        completedResponseCount: 1,
+      };
+    },
+    drainRuntimeEvents() {
+      return {
+        terminalRequestIds: [],
+        tokenEvents: [],
+        textBytes: 0,
+      };
+    },
+    getCompletedRequestStatus() {
+      return COMPLETED_REQUEST_STATUS_COMPLETED;
+    },
+    takeCompletedResponse(requestId: number): GenerateResponse {
+      return {
+        requestId,
+        completed: true,
+        cancelled: false,
+        failed: false,
+        outputText: 'done',
+      };
+    },
+  } as unknown as WasmBridge;
 
-  queuedPromptCallbacks.set(101, (token) => {
-    deliveredTokens.push(token);
-  });
-
-  const scheduler = new QueuedRequestScheduler({
-    tracker,
-    queuedPromptCallbacks,
-    queuedPromptTokenBuffers,
-    queuedPromptCallbackErrors,
-    getTransportObservability: () => ({
-      ...DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY,
-    }),
-    getBridge: () => bridge as unknown as WasmBridge,
-    finalizeRequest: () => {},
-    cancelQueuedRequest: async () => true,
-  });
-  scheduler.setPumpMode('external');
-
-  scheduler.track(101);
-
-  await scheduler.pumpOnce();
-  assert.deepEqual(bridge.burstCalls[0], {
-    maxTicks: 8,
-    maxCompletedResponses: 1,
-    maxEmittedTokens: 1,
-    maxDurationUs: null,
-  });
-
-  bridge.pendingTokenEvents.push({ requestId: 101, token: 'tok1' });
-  await scheduler.pumpOnce();
-  assert.deepEqual(deliveredTokens, ['tok1']);
-  assert.deepEqual(bridge.burstCalls[1], {
-    maxTicks: 8,
-    maxCompletedResponses: 1,
-    maxEmittedTokens: 1,
-    maxDurationUs: null,
-  });
-
-  bridge.pendingTokenEvents.push({ requestId: 101, token: 'tok2' });
-  await scheduler.pumpOnce();
-  assert.deepEqual(deliveredTokens, ['tok1', 'tok2']);
-  assert.deepEqual(bridge.burstCalls[2], {
-    maxTicks: 16,
-    maxCompletedResponses: 1,
-    maxEmittedTokens: 8,
-    maxDurationUs: 60_000,
-  });
-});
-
-test('QueuedRequestScheduler keeps the larger throughput burst for requests without token callbacks', async () => {
-  const tracker = new RequestTracker<GenerateResponse>();
-  const bridge = new MockSchedulerBridge();
   const scheduler = new QueuedRequestScheduler({
     tracker,
     queuedPromptCallbacks: new Map(),
     queuedPromptTokenBuffers: new Map(),
     queuedPromptCallbackErrors: new Map(),
-    getTransportObservability: () => ({
-      ...DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY,
+    getTransportObservability: () => transport,
+    getBridge: () => bridge,
+    finalizeRequest: (_bridge, requestId, options) => {
+      finalized.push(requestId);
+      tracker.finalize(requestId, options);
+    },
+    cancelQuery: async () => true,
+  });
+
+  const tracked = scheduler.track(1);
+  const response = await Promise.race([
+    tracked.promise,
+    new Promise<GenerateResponse>((_, reject) => {
+      setTimeout(() => reject(new Error('scheduler did not settle request')), 100);
     }),
-    getBridge: () => bridge as unknown as WasmBridge,
-    finalizeRequest: () => {},
-    cancelQueuedRequest: async () => true,
-  });
-  scheduler.setPumpMode('external');
+  ]);
 
-  scheduler.track(202);
-  await scheduler.pumpOnce();
-
-  assert.deepEqual(bridge.burstCalls[0], {
-    maxTicks: 64,
-    maxCompletedResponses: 1,
-    maxEmittedTokens: 32,
-    maxDurationUs: null,
-  });
+  assert.equal(response.outputText, 'done');
+  assert.deepEqual(finalized, [1]);
 });

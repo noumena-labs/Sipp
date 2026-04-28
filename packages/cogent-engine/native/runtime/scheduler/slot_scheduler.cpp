@@ -54,6 +54,12 @@ void SlotState::AttachRequest(GenerateRequest &request_ref,
   decode_step_count = 0;
   batch_participation_count = 0;
   generated_tokens.clear();
+  if (request_ref.max_output_tokens > 0) {
+    generated_tokens.reserve(static_cast<std::size_t>(
+        std::max<int32_t>(1, request_ref.max_output_tokens)));
+    output_text.reserve(static_cast<std::size_t>(
+        std::max<int32_t>(16, request_ref.max_output_tokens * 4)));
+  }
   output_text.clear();
   buffered_output_text.clear();
   pending_utf8_bytes.clear();
@@ -98,6 +104,9 @@ std::vector<SlotState *> SlotScheduler::SelectDecodeReadySlots() {
       continue;
     }
     if (slot.phase != SlotPhase::Decode) {
+      continue;
+    }
+    if (slot.generated_tokens.empty()) {
       continue;
     }
     if (!slot.buffered_output_text.empty()) {

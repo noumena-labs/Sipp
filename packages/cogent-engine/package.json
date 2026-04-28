@@ -50,7 +50,7 @@
     "test:backend-ops:cuda": "bun ./scripts/test-backend-ops-cuda.mjs",
     "test:backend-ops:cuda:op": "bun ./scripts/test-backend-ops-cuda-op.mjs",
     "test:backend-ops:cuda:debug": "bun ./scripts/test-backend-ops-cuda-op.mjs --debug",
-    "build:ts": "bun ./scripts/build-ts.mjs",
+    "build:ts": "bun ./scripts/clean-ts-dist.mjs && bunx --bun tsc -p tsconfig.json",
     "pack:validate": "bun ./scripts/validate-pack.mjs",
     "bench:bun": "bun ./benchmarks/benchmark-bun.ts"
   },

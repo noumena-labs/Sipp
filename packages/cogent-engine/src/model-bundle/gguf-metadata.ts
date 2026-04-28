@@ -192,7 +192,8 @@ function hasUsefulMetadata(values: ReadonlyMap<string, GgufMetadataValue>): bool
     values.has('general.type') ||
     values.has('general.architecture') ||
     values.has('clip.projector_type') ||
-    values.has('clip.vision.projector_type')
+    values.has('clip.vision.projector_type') ||
+    values.has('clip.has_vision_encoder')
   );
 }
 

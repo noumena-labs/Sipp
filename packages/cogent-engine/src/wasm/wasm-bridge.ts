@@ -82,10 +82,6 @@ export type ChatTemplateMessage = {
 };
 
 export class WasmBridge {
-  private schedulerBurstApiAvailable: boolean | null = null;
-  private schedulerBurstWithDeadlineApiAvailable: boolean | null = null;
-  private completedRequestDrainApiAvailable: boolean | null = null;
-  private runtimeEventDrainApiAvailable: boolean | null = null;
   private reusableBurstResultPtr = 0;
   private reusableRuntimeEventBufferPtr = 0;
   private reusableRuntimeEventBufferCapacity = 0;
@@ -122,19 +118,7 @@ export class WasmBridge {
     return Number(await result);
   }
 
-  public registerTokenCallback(
-    onToken: (token: string, length: number) => number
-  ): number | bigint {
-    return this.module.addFunction((rawPtr: number | bigint, length: number) => {
-      return onToken(this.module.UTF8ToString(Number(rawPtr), length), length);
-    }, 'ipi');
-  }
-
-  public unregisterCallback(callbackPtr: number | bigint): void {
-    this.module.removeFunction(callbackPtr);
-  }
-
-  public async initEngine(
+  public async loadRuntimeModel(
     modelPath: string,
     normalizedConfig: NormalizedInitConfig
   ): Promise<number> {
@@ -297,7 +281,7 @@ export class WasmBridge {
     }
   }
 
-  public enqueuePrompt(
+  public startTextRequest(
     contextKey: string,
     promptText: string,
     maxOutputTokens: number,
@@ -307,7 +291,7 @@ export class WasmBridge {
     validateGrammarSize(grammar);
     const grammarArg = grammar ?? '';
     const requestId = this.module.ccall(
-      'CE_EnqueuePrompt',
+      'CE_StartTextRequest',
       'number',
       ['string', 'string', 'number', 'pointer', 'string'],
       [contextKey, promptText, maxOutputTokens, callbackPtr, grammarArg]
@@ -318,7 +302,7 @@ export class WasmBridge {
     return requestId as GenerateRequestId;
   }
 
-  public enqueuePromptWithMedia(
+  public startMediaRequest(
     contextKey: string,
     promptText: string,
     maxOutputTokens: number,
@@ -342,7 +326,7 @@ export class WasmBridge {
       }
 
       return this.callNumber(
-        'CE_EnqueuePromptWithMedia',
+        'CE_StartMediaRequest',
         ['string', 'string', 'number', 'number', 'pointer', 'pointer', 'pointer', 'string'],
         [contextKey, promptText, maxOutputTokens, media.length, flatPtr, sizesPtr, callbackPtr, grammarArg]
       ) as GenerateRequestId;
@@ -352,28 +336,22 @@ export class WasmBridge {
     }
   }
 
-  public getMediaMarker(): string | null {
-    try {
-      const ptr = this.callNumber('CE_GetMediaMarker');
-      return ptr ? this.module.UTF8ToString(ptr) : null;
-    } catch (error) {
-      if (this.isMissingOptionalRuntimeApiError('CE_GetMediaMarker', error)) {
-        return null;
-      }
-      throw error;
+  public readMediaMarker(): string | null {
+    const ptr = this.callNumber('CE_GetMediaMarker');
+    if (!ptr) {
+      return null;
     }
+    const marker = this.module.UTF8ToString(ptr);
+    return marker.length > 0 ? marker : null;
   }
 
-  public getChatTemplate(): string | null {
-    try {
-      const ptr = this.callNumber('CE_GetChatTemplate');
-      return ptr ? this.module.UTF8ToString(ptr) : null;
-    } catch (error) {
-      if (this.isMissingOptionalRuntimeApiError('CE_GetChatTemplate', error)) {
-        return null;
-      }
-      throw error;
+  public readNativeChatTemplate(): string | null {
+    const ptr = this.callNumber('CE_GetChatTemplate');
+    if (!ptr) {
+      return null;
     }
+    const template = this.module.UTF8ToString(ptr);
+    return template.length > 0 ? template : null;
   }
 
   public getBosText(): string {
@@ -467,11 +445,12 @@ export class WasmBridge {
       }
       throw error;
     }
+    }
   }
 
-  public async cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean> {
+  public async cancelQuery(requestId: GenerateRequestId): Promise<boolean> {
     const result = this.module.ccall(
-      'CE_CancelQueuedRequest',
+      'CE_CancelRequest',
       'number',
       ['number'],
       [requestId]
@@ -563,29 +542,6 @@ export class WasmBridge {
     };
   }
 
-  public supportsRuntimeEventDrain(): boolean {
-    if (this.runtimeEventDrainApiAvailable != null) {
-      return this.runtimeEventDrainApiAvailable;
-    }
-
-    const resultPtr = this.ensureRuntimeEventDrainResultBuffer();
-    try {
-      this.callNumber(
-        'CE_DrainRuntimeEvents',
-        ['pointer', 'number', 'pointer', 'number', 'pointer'],
-        [0, 0, 0, 0, resultPtr]
-      );
-      this.runtimeEventDrainApiAvailable = true;
-    } catch (error) {
-      if (!this.isMissingOptionalRuntimeApiError('CE_DrainRuntimeEvents', error)) {
-        throw error;
-      }
-      this.runtimeEventDrainApiAvailable = false;
-    }
-
-    return this.runtimeEventDrainApiAvailable;
-  }
-
   public async runSchedulerProgress(
     maxTicks: number,
     maxCompletedResponses: number,
@@ -595,158 +551,78 @@ export class WasmBridge {
     } = {}
   ): Promise<WasmSchedulerProgressResult> {
     const maxDurationUs = Math.max(0, options.maxDurationUs ?? 0);
-    if (maxDurationUs > 0 && this.schedulerBurstWithDeadlineApiAvailable !== false) {
-      const resultPtr = this.ensureBurstResultBuffer();
-      try {
-        const stepResult = await this.callNumberAsync(
-          'CE_RunSchedulerBurstWithDeadline',
-          ['number', 'number', 'number', 'number', 'pointer'],
-          [maxTicks, maxCompletedResponses, maxEmittedTokens, maxDurationUs, resultPtr]
-        );
-        this.schedulerBurstWithDeadlineApiAvailable = true;
-        this.schedulerBurstApiAvailable = true;
-        const burstResult = this.readSchedulerBurstResult(resultPtr);
-        return {
-          stepResult,
-          completedResponseCount: burstResult.completedResponseCount,
-        };
-      } catch (error) {
-        if (!this.isMissingOptionalRuntimeApiError('CE_RunSchedulerBurstWithDeadline', error)) {
-          throw error;
-        }
-        this.schedulerBurstWithDeadlineApiAvailable = false;
-      }
-    }
-
-    if (this.schedulerBurstApiAvailable === false) {
-      return {
-        stepResult: await this.callNumberAsync('CE_RunSchedulerTick'),
-        completedResponseCount: 0,
-      };
-    }
-
     const resultPtr = this.ensureBurstResultBuffer();
-    try {
-      const stepResult = await this.callNumberAsync(
+    const stepResult =
+      maxDurationUs > 0
+        ? await this.callNumberAsync(
+            'CE_RunSchedulerBurstWithDeadline',
+            ['number', 'number', 'number', 'number', 'pointer'],
+            [maxTicks, maxCompletedResponses, maxEmittedTokens, maxDurationUs, resultPtr]
+          )
+        : await this.callNumberAsync(
         'CE_RunSchedulerBurst',
         ['number', 'number', 'number', 'pointer'],
         [maxTicks, maxCompletedResponses, maxEmittedTokens, resultPtr]
       );
-      this.schedulerBurstApiAvailable = true;
-      const burstResult = this.readSchedulerBurstResult(resultPtr);
-      return {
-        stepResult,
-        completedResponseCount: burstResult.completedResponseCount,
-      };
-    } catch (error) {
-      if (!this.isMissingOptionalRuntimeApiError('CE_RunSchedulerBurst', error)) {
-        throw error;
-      }
-      this.schedulerBurstApiAvailable = false;
-      return {
-        stepResult: await this.callNumberAsync('CE_RunSchedulerTick'),
-        completedResponseCount: 0,
-      };
-    }
-  }
-
-  public drainCompletedRequestIds(maxCount: number): GenerateRequestId[] | null {
-    if (this.completedRequestDrainApiAvailable === false) {
-      return null;
-    }
-
-    const bufferPtr = this.allocate(maxCount * 4);
-    try {
-      const drainedCount = this.callNumber(
-        'CE_DrainCompletedRequestIds',
-        ['pointer', 'number'],
-        [bufferPtr, maxCount]
-      );
-      this.completedRequestDrainApiAvailable = true;
-      if (drainedCount <= 0) {
-        return [];
-      }
-
-      const i32Offset = bufferPtr >> 2;
-      return Array.from(
-        this.module.HEAP32.subarray(i32Offset, i32Offset + drainedCount),
-        (requestId) => requestId as GenerateRequestId
-      ).filter((requestId) => requestId !== 0);
-    } catch (error) {
-      if (!this.isMissingOptionalRuntimeApiError('CE_DrainCompletedRequestIds', error)) {
-        throw error;
-      }
-      this.completedRequestDrainApiAvailable = false;
-      return null;
-    } finally {
-      this.free(bufferPtr);
-    }
+    const burstResult = this.readSchedulerBurstResult(resultPtr);
+    return {
+      stepResult,
+      completedResponseCount: burstResult.completedResponseCount,
+    };
   }
 
   public drainRuntimeEvents(
     maxEventCount: number,
     textBufferSizeBytes: number = RUNTIME_EVENT_DRAIN_TEXT_BUFFER_SIZE_BYTES
-  ): WasmRuntimeEventDrainResult | null {
-    if (!this.supportsRuntimeEventDrain()) {
-      return null;
-    }
-
+  ): WasmRuntimeEventDrainResult {
     const eventBufferPtr = this.ensureRuntimeEventBuffer(maxEventCount);
     const textBufferPtr = this.ensureRuntimeEventTextBuffer(textBufferSizeBytes);
     const resultPtr = this.ensureRuntimeEventDrainResultBuffer();
 
-    try {
-      const status = this.callNumber(
-        'CE_DrainRuntimeEvents',
-        ['pointer', 'number', 'pointer', 'number', 'pointer'],
-        [eventBufferPtr, maxEventCount, textBufferPtr, textBufferSizeBytes, resultPtr]
-      );
-      if (status !== 0) {
-        throw new Error(`Failed to drain runtime events. Code: ${status}`);
-      }
-
-      const resultOffset = resultPtr >> 2;
-      const eventCount = this.module.HEAP32[resultOffset];
-      const terminalRequestIds: GenerateRequestId[] = [];
-      const tokenEvents: WasmRuntimeTokenEvent[] = [];
-      let textBytes = 0;
-
-      for (let index = 0; index < eventCount; index += 1) {
-        const eventOffset = (eventBufferPtr + index * RUNTIME_EVENT_SIZE_BYTES) >> 2;
-        const requestId = this.module.HEAP32[eventOffset] as GenerateRequestId;
-        const kind = this.module.HEAP32[eventOffset + 1];
-        const textOffset = this.module.HEAP32[eventOffset + 3];
-        const textLength = this.module.HEAP32[eventOffset + 4];
-
-        if (kind === RUNTIME_EVENT_KIND_TOKEN) {
-          if (requestId !== 0 && textLength > 0) {
-            tokenEvents.push({
-              requestId,
-              token: this.module.UTF8ToString(textBufferPtr + textOffset, textLength),
-              textLength,
-            });
-            textBytes += textLength;
-          }
-          continue;
-        }
-
-        if (kind === RUNTIME_EVENT_KIND_TERMINAL && requestId !== 0) {
-          terminalRequestIds.push(requestId);
-        }
-      }
-
-      return {
-        terminalRequestIds,
-        tokenEvents,
-        textBytes,
-      };
-    } catch (error) {
-      if (!this.isMissingOptionalRuntimeApiError('CE_DrainRuntimeEvents', error)) {
-        throw error;
-      }
-      this.runtimeEventDrainApiAvailable = false;
-      return null;
+    const status = this.callNumber(
+      'CE_DrainRuntimeEvents',
+      ['pointer', 'number', 'pointer', 'number', 'pointer'],
+      [eventBufferPtr, maxEventCount, textBufferPtr, textBufferSizeBytes, resultPtr]
+    );
+    if (status !== 0) {
+      throw new Error(`Failed to drain runtime events. Code: ${status}`);
     }
+
+    const resultOffset = resultPtr >> 2;
+    const eventCount = this.module.HEAP32[resultOffset];
+    const terminalRequestIds: GenerateRequestId[] = [];
+    const tokenEvents: WasmRuntimeTokenEvent[] = [];
+    let textBytes = 0;
+
+    for (let index = 0; index < eventCount; index += 1) {
+      const eventOffset = (eventBufferPtr + index * RUNTIME_EVENT_SIZE_BYTES) >> 2;
+      const requestId = this.module.HEAP32[eventOffset] as GenerateRequestId;
+      const kind = this.module.HEAP32[eventOffset + 1];
+      const textOffset = this.module.HEAP32[eventOffset + 3];
+      const textLength = this.module.HEAP32[eventOffset + 4];
+
+      if (kind === RUNTIME_EVENT_KIND_TOKEN) {
+        if (requestId !== 0 && textLength > 0) {
+          tokenEvents.push({
+            requestId,
+            token: this.module.UTF8ToString(textBufferPtr + textOffset, textLength),
+            textLength,
+          });
+          textBytes += textLength;
+        }
+        continue;
+      }
+
+      if (kind === RUNTIME_EVENT_KIND_TERMINAL && requestId !== 0) {
+        terminalRequestIds.push(requestId);
+      }
+    }
+
+    return {
+      terminalRequestIds,
+      tokenEvents,
+      textBytes,
+    };
   }
 
   public releaseReusableBuffers(): void {
@@ -776,28 +652,6 @@ export class WasmBridge {
 
   private free(ptr: number): void {
     this.module._free(ptr);
-  }
-
-  private isMissingOptionalRuntimeApiError(ident: string, error: unknown): boolean {
-    const message = this.asErrorMessage(error).toLowerCase();
-    const normalizedIdent = ident.toLowerCase();
-    if (!message.includes(normalizedIdent)) {
-      return false;
-    }
-    return (
-      message.includes('unexpected ccall') ||
-      message.includes('unknown function') ||
-      message.includes('not a function') ||
-      message.includes('is not exported') ||
-      message.includes('missing')
-    );
-  }
-
-  private asErrorMessage(error: unknown): string {
-    if (error instanceof Error) {
-      return error.message;
-    }
-    return String(error);
   }
 
   private ensureBurstResultBuffer(): number {

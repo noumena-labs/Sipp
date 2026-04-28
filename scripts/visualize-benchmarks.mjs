@@ -116,7 +116,7 @@ const htmlTemplate = `<!DOCTYPE html>
         let chartInstances = [];
 
         function formatVal(val) {
-           return typeof val === 'number' ? val.toFixed(2) : val;
+           return typeof val === 'number' && Number.isFinite(val) ? val.toFixed(2) : 'n/a';
         }
 
         function createPanel(title, id, isChart = true) {
@@ -129,41 +129,65 @@ const htmlTemplate = `<!DOCTYPE html>
             \`;
         }
 
+        function readMetricValue(container, key, property = 'meanMs') {
+            if (container[key] === undefined || container[key] === null) {
+                return null;
+            }
+            if (property && typeof container[key] === 'object' && container[key] !== null) {
+                const nested = container[key][property];
+                return typeof nested === 'number' && Number.isFinite(nested) ? nested : null;
+            }
+            return typeof container[key] === 'number' && Number.isFinite(container[key]) ? container[key] : null;
+        }
+
         function getMetric(summary, metricKey, property = 'meanMs') {
-            if (!summary) return 0;
+            if (!summary) return null;
             const serving = summary.serving || {};
             const runtime = summary.runtime || {};
 
-            const mapping = {
-                'ttftMs': ['appObservedTtftMs', 'ttftMs'],
-                'tpotMs': ['appObservedTpotMs', 'tpotMs'],
-                'itlMs': ['appObservedItlMs', 'itlMs'],
-                'throughput': ['outputTokenThroughputTps', 'tokensPerSecond'],
-                'nativeTtftMs': ['nativeTtftMs'],
-                'nativeMeanItlMs': ['nativeMeanItlMs']
+            const lookup = {
+                ttftMs: [
+                    [serving, 'appObservedTtftMs'],
+                    [serving, 'ttftMs'],
+                    [runtime, 'nativeTtftMs'],
+                ],
+                tpotMs: [
+                    [serving, 'appObservedTpotMs'],
+                    [serving, 'tpotMs'],
+                ],
+                itlMs: [
+                    [serving, 'appObservedItlMs'],
+                    [serving, 'itlMs'],
+                    [runtime, 'nativeMeanItlMs'],
+                ],
+                nativeDecodeTps: [
+                    [runtime, 'nativeDecodeTokensPerSecond'],
+                    [runtime, 'decodeTokensPerSecond'],
+                    [runtime, 'tokensPerSecond'],
+                ],
+                outputThroughputTps: [
+                    [serving, 'outputTokenThroughputTps'],
+                ],
+                totalThroughputTps: [
+                    [serving, 'totalTokenThroughputTps'],
+                ],
+                nativeTtftMs: [
+                    [runtime, 'nativeTtftMs'],
+                ],
+                nativeMeanItlMs: [
+                    [runtime, 'nativeMeanItlMs'],
+                ],
             };
 
-            const keys = mapping[metricKey] || [metricKey];
-            
-            for (const key of keys) {
-                if (serving[key] !== undefined) {
-                    if (property && typeof serving[key] === 'object' && serving[key] !== null) {
-                        return serving[key][property] || 0;
-                    }
-                    return serving[key];
-                }
-            }
-            
-            for (const key of keys) {
-                if (runtime[key] !== undefined) {
-                    if (property && typeof runtime[key] === 'object' && runtime[key] !== null) {
-                        return runtime[key][property] || 0;
-                    }
-                    return runtime[key];
+            const entries = lookup[metricKey] || [[serving, metricKey], [runtime, metricKey]];
+            for (const [container, key] of entries) {
+                const value = readMetricValue(container, key, property);
+                if (value !== null) {
+                    return value;
                 }
             }
 
-            return 0;
+            return null;
         }
 
         // Generate options
@@ -203,9 +227,9 @@ const htmlTemplate = `<!DOCTYPE html>
 
             const getTrend = (scenarioId, metricKey, mode = 'hotReuseContext', property = 'meanMs') => {
                 return runs.map(r => {
-                    if (!r.data.scenarios) return 0;
+                    if (!r.data.scenarios) return null;
                     const s = r.data.scenarios.find(sc => sc.definition.id === scenarioId);
-                    if (!s || !s[mode]) return 0;
+                    if (!s || !s[mode]) return null;
                     return getMetric(s[mode].summary, metricKey, property);
                 });
             };
@@ -216,17 +240,33 @@ const htmlTemplate = `<!DOCTYPE html>
             });
             const scenarioIds = Array.from(allScenarioIds);
 
-            dashboard.innerHTML += createPanel('Throughput Trend (Hot Reuse)', 'chart-trend-through');
+            dashboard.innerHTML += createPanel('Native Decode TPS Trend (Hot Reuse)', 'chart-trend-native-decode');
+            dashboard.innerHTML += createPanel('End-to-End Output TPS Trend (Hot Reuse)', 'chart-trend-output-through');
             dashboard.innerHTML += createPanel('TTFT Trend (Hot Reuse)', 'chart-trend-ttft');
 
             setTimeout(() => {
-                chartInstances.push(new Chart(document.getElementById('chart-trend-through'), {
+                chartInstances.push(new Chart(document.getElementById('chart-trend-native-decode'), {
                     type: 'line',
                     data: {
                         labels: dateLabels,
                         datasets: scenarioIds.map((id, i) => ({
-                            label: \`\${id.toUpperCase()} (Observed)\`,
-                            data: getTrend(id, 'throughput'),
+                            label: \`\${id.toUpperCase()} Native Decode\`,
+                            data: getTrend(id, 'nativeDecodeTps'),
+                            borderColor: colors[i % colors.length],
+                            backgroundColor: colors[i % colors.length],
+                            borderWidth: 2, tension: 0.3, pointRadius: 4
+                        }))
+                    },
+                    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' } }, scales: { y: { title: {display: true, text: 'Tokens / Sec'}, grid: {color:'rgba(255,255,255,0.05)'} } } }
+                }));
+
+                chartInstances.push(new Chart(document.getElementById('chart-trend-output-through'), {
+                    type: 'line',
+                    data: {
+                        labels: dateLabels,
+                        datasets: scenarioIds.map((id, i) => ({
+                            label: \`\${id.toUpperCase()} Output TPS\`,
+                            data: getTrend(id, 'outputThroughputTps'),
                             borderColor: colors[i % colors.length],
                             backgroundColor: colors[i % colors.length],
                             borderWidth: 2, tension: 0.3, pointRadius: 4
@@ -281,12 +321,14 @@ const htmlTemplate = `<!DOCTYPE html>
                 </div>
             \`;
             
-            let bestThroughput = 0;
-            let bestTPOT = 0;
+            let bestNativeDecodeTps = null;
+            let bestOutputThroughputTps = null;
+            let bestTPOT = null;
             if (data.scenarios) {
                 const primary = data.scenarios.find(s => s.definition.id === "siso") || data.scenarios[0];
                 if (primary && primary.hotReuseContext) {
-                    bestThroughput = getMetric(primary.hotReuseContext.summary, 'throughput');
+                    bestNativeDecodeTps = getMetric(primary.hotReuseContext.summary, 'nativeDecodeTps');
+                    bestOutputThroughputTps = getMetric(primary.hotReuseContext.summary, 'outputThroughputTps');
                     bestTPOT = getMetric(primary.hotReuseContext.summary, 'tpotMs');
                 }
             }
@@ -294,8 +336,12 @@ const htmlTemplate = `<!DOCTYPE html>
             document.getElementById('kpi-container').innerHTML = \`
                 <div class="kpi-grid">
                     <div class="kpi-card">
-                        <div class="kpi-val c-success">\${formatVal(bestThroughput)} <span>tk/s</span></div>
-                        <div class="kpi-label">Throughput (Hot)</div>
+                        <div class="kpi-val c-success">\${formatVal(bestNativeDecodeTps)} <span>tk/s</span></div>
+                        <div class="kpi-label">Native Decode TPS</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-val c-primary">\${formatVal(bestOutputThroughputTps)} <span>tk/s</span></div>
+                        <div class="kpi-label">Output TPS (Hot Reuse)</div>
                     </div>
                     <div class="kpi-card">
                         <div class="kpi-val c-warning">\${formatVal(bestTPOT)} <span>ms</span></div>
@@ -308,7 +354,7 @@ const htmlTemplate = `<!DOCTYPE html>
             const backend = data.backend || {};
             document.getElementById('env-container').innerHTML = \`
                 <div class="env-details">
-                    <p>Model<span>\${data.modelSource ? data.modelSource.label : 'N/A'}</span></p>
+                    <p>Model<span>\${data.source ? data.source.label : (data.modelSource ? data.modelSource.label : 'N/A')}</span></p>
                     <p>Browser<span>\${env.browserLabel ? env.browserLabel.split(' ')[0] : 'N/A'}</span></p>
                     <p>GPU Adapter<span>\${env.adapterVendor || ''} \${env.adapterArchitecture || 'N/A'}</span></p>
                     <p>Backend<span>\${backend.inferredExecutionBackend || 'N/A'} (\${backend.runtimeBackendStatus || 'N/A'})</span></p>
@@ -317,11 +363,13 @@ const htmlTemplate = `<!DOCTYPE html>
 
             if (data.scenarios) {
                 const scenariosLabels = data.scenarios.map(s => s.definition.label);
-                const getModeSeries = (mode, metricKey) => data.scenarios.map(s => getMetric(s[mode] ? s[mode].summary : null, metricKey));
+                const getModeSeries = (mode, metricKey) =>
+                    data.scenarios.map(s => getMetric(s[mode] ? s[mode].summary : null, metricKey));
 
                 dashboard.innerHTML += createPanel('Time to First Token (TTFT)', 'chart-ttft');
                 dashboard.innerHTML += createPanel('Time per Output Token (TPOT)', 'chart-tpot');
-                dashboard.innerHTML += createPanel('Generation Throughput', 'chart-through');
+                dashboard.innerHTML += createPanel('Native Decode TPS', 'chart-native-decode');
+                dashboard.innerHTML += createPanel('End-to-End Output TPS', 'chart-output-throughput');
                 dashboard.innerHTML += createPanel('Memory Usage Profile', 'chart-memory');
 
                 setTimeout(() => {
@@ -351,14 +399,27 @@ const htmlTemplate = `<!DOCTYPE html>
                         options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, grid: {color:'rgba(255,255,255,0.05)'} } } }
                     }));
 
-                    chartInstances.push(new Chart(document.getElementById('chart-through'), {
+                    chartInstances.push(new Chart(document.getElementById('chart-native-decode'), {
                         type: 'line',
                         data: {
                             labels: scenariosLabels,
                             datasets: [
-                                { label: 'Cold', data: getModeSeries('coldPrompt', 'throughput'), borderColor: '#38bdf8', tension: 0.3 },
-                                { label: 'Hot Fresh', data: getModeSeries('hotFreshContext', 'throughput'), borderColor: '#fbbf24', tension: 0.3 },
-                                { label: 'Hot Reuse', data: getModeSeries('hotReuseContext', 'throughput'), borderColor: '#4ade80', tension: 0.3 }
+                                { label: 'Cold', data: getModeSeries('coldPrompt', 'nativeDecodeTps'), borderColor: '#38bdf8', tension: 0.3 },
+                                { label: 'Hot Fresh', data: getModeSeries('hotFreshContext', 'nativeDecodeTps'), borderColor: '#fbbf24', tension: 0.3 },
+                                { label: 'Hot Reuse', data: getModeSeries('hotReuseContext', 'nativeDecodeTps'), borderColor: '#4ade80', tension: 0.3 }
+                            ]
+                        },
+                        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, grid: {color:'rgba(255,255,255,0.05)'} } } }
+                    }));
+
+                    chartInstances.push(new Chart(document.getElementById('chart-output-throughput'), {
+                        type: 'line',
+                        data: {
+                            labels: scenariosLabels,
+                            datasets: [
+                                { label: 'Cold', data: getModeSeries('coldPrompt', 'outputThroughputTps'), borderColor: '#38bdf8', tension: 0.3 },
+                                { label: 'Hot Fresh', data: getModeSeries('hotFreshContext', 'outputThroughputTps'), borderColor: '#fbbf24', tension: 0.3 },
+                                { label: 'Hot Reuse', data: getModeSeries('hotReuseContext', 'outputThroughputTps'), borderColor: '#4ade80', tension: 0.3 }
                             ]
                         },
                         options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, grid: {color:'rgba(255,255,255,0.05)'} } } }

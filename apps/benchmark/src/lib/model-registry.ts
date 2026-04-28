@@ -1,11 +1,11 @@
 /**
  * Curated model registry for the CogentLM benchmark.
  *
- * Each entry is still app-facing catalog data, but its engine-facing
- * portion is expressed as a `@noumena-labs/cogent-engine` model bundle descriptor.
+ * Each entry is app-facing catalog data. Its engine-facing portion is a
+ * minimal `cogent-engine` ModelSource.
  */
 
-import type { ModelBundleDescriptor } from '@noumena-labs/cogent-engine';
+import type { ModelSource } from 'cogent-engine';
 
 export type ModelCapability = 'text' | 'vision';
 
@@ -16,8 +16,8 @@ export interface ModelVariant {
   sizeBytes: number;
   /** Approximate projector file size in bytes */
   projectorSizeBytes?: number;
-  /** Bundle descriptor consumed by the engine. */
-  bundle: ModelBundleDescriptor;
+  /** Source consumed by engine.models.load(...). */
+  source: ModelSource;
 }
 
 export interface ModelRegistryEntry {
@@ -51,10 +51,7 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
       {
         quant: 'Q4_0',
         sizeBytes: 397_000_000,
-        bundle: {
-          kind: 'url',
-          url: 'https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_0.gguf',
-        },
+        source: 'https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_0.gguf',
       },
     ],
   },
@@ -68,10 +65,7 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
       {
         quant: 'Q4_K_M',
         sizeBytes: 1_050_000_000,
-        bundle: {
-          kind: 'url',
-          url: 'https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf',
-        },
+        source: 'https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf',
       },
     ],
   },
@@ -85,10 +79,7 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
       {
         quant: 'Q8_0',
         sizeBytes: 386_000_000,
-        bundle: {
-          kind: 'url',
-          url: 'https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF/resolve/main/smollm2-360m-instruct-q8_0.gguf',
-        },
+        source: 'https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF/resolve/main/smollm2-360m-instruct-q8_0.gguf',
       },
     ],
   },
@@ -105,13 +96,9 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
         quant: 'Q4_K_M',
         sizeBytes: 1_400_000_000,
         projectorSizeBytes: 1_500_000_000,
-        bundle: {
-          kind: 'url',
-          url: 'https://huggingface.co/bartowski/Qwen2-VL-2B-Instruct-GGUF/resolve/main/Qwen2-VL-2B-Instruct-Q4_K_M.gguf',
-          projector: {
-            kind: 'url',
-            url: 'https://huggingface.co/bartowski/Qwen2-VL-2B-Instruct-GGUF/resolve/main/mmproj-Qwen2-VL-2B-Instruct-f16.gguf',
-          },
+        source: {
+          model: 'https://huggingface.co/bartowski/Qwen2-VL-2B-Instruct-GGUF/resolve/main/Qwen2-VL-2B-Instruct-Q4_K_M.gguf',
+          projector: 'https://huggingface.co/bartowski/Qwen2-VL-2B-Instruct-GGUF/resolve/main/mmproj-Qwen2-VL-2B-Instruct-f16.gguf',
         },
       },
     ],
@@ -127,13 +114,9 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
         quant: 'Q4_K_M',
         sizeBytes: 4_080_000_000,
         projectorSizeBytes: 624_000_000,
-        bundle: {
-          kind: 'url',
-          url: 'https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/ggml-model-q4_k.gguf',
-          projector: {
-            kind: 'url',
-            url: 'https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/mmproj-model-f16.gguf',
-          },
+        source: {
+          model: 'https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/ggml-model-q4_k.gguf',
+          projector: 'https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/mmproj-model-f16.gguf',
         },
       },
     ],
@@ -149,13 +132,9 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
         quant: 'Q8_0',
         sizeBytes: 286_000_000,
         projectorSizeBytes: 360_000_000,
-        bundle: {
-          kind: 'url',
-          url: 'https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/SmolVLM-256M-Instruct-Q8_0.gguf',
-          projector: {
-            kind: 'url',
-            url: 'https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-256M-Instruct-f16.gguf',
-          },
+        source: {
+          model: 'https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/SmolVLM-256M-Instruct-Q8_0.gguf',
+          projector: 'https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-256M-Instruct-f16.gguf',
         },
       },
     ],
@@ -171,13 +150,9 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
         quant: 'Q8_0',
         sizeBytes: 534_000_000,
         projectorSizeBytes: 360_000_000,
-        bundle: {
-          kind: 'url',
-          url: 'https://huggingface.co/ggml-org/SmolVLM-500M-Instruct-GGUF/resolve/main/SmolVLM-500M-Instruct-Q8_0.gguf',
-          projector: {
-            kind: 'url',
-            url: 'https://huggingface.co/ggml-org/SmolVLM-500M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-500M-Instruct-f16.gguf',
-          },
+        source: {
+          model: 'https://huggingface.co/ggml-org/SmolVLM-500M-Instruct-GGUF/resolve/main/SmolVLM-500M-Instruct-Q8_0.gguf',
+          projector: 'https://huggingface.co/ggml-org/SmolVLM-500M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-500M-Instruct-f16.gguf',
         },
       },
     ],
@@ -195,16 +170,28 @@ export function getDefaultVariant(model: ModelRegistryEntry): ModelVariant {
 }
 
 export function getVariantPrimaryUrl(variant: ModelVariant): string {
-  switch (variant.bundle.kind) {
-    case 'url':
-      return variant.bundle.url;
-    case 'urls':
-      return variant.bundle.urls[0] ?? 'model.gguf';
-    case 'file':
-      return variant.bundle.file.name || 'model.gguf';
-    case 'files':
-      return variant.bundle.files[0]?.name || 'model.gguf';
+  if (typeof variant.source === 'string') {
+    return variant.source;
   }
+  if (variant.source instanceof File) {
+    return variant.source.name || 'model.gguf';
+  }
+  if (Array.isArray(variant.source)) {
+    const first = variant.source[0];
+    return typeof first === 'string' ? first : first?.name || 'model.gguf';
+  }
+  if (!('model' in variant.source)) {
+    return 'model.gguf';
+  }
+  const model = variant.source.model;
+  if (typeof model === 'string') {
+    return model;
+  }
+  if (model instanceof File) {
+    return model.name || 'model.gguf';
+  }
+  const first = model[0];
+  return typeof first === 'string' ? first : first?.name || 'model.gguf';
 }
 
 export function isVisionModel(model: ModelRegistryEntry): boolean {

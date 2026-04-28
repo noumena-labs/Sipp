@@ -1,404 +1,111 @@
-# @noumena-labs/cogent-engine
+# cogent-engine
 
-`@noumena-labs/cogent-engine` is a browser-focused package that compiles an inference-only
-CogentEngine C++ runtime plus `llama.cpp` to WebAssembly and exposes a typed TypeScript API.
+Browser-first inference runtime for CogentLM.
 
-Source layout in this package:
-
-- `native/` C++ inference runtime, bridge, and wasm exports
-- `src/` TypeScript runtime wrapper
-- `third_party/llama.cpp/` vendored `llama.cpp`
-- `scripts/` build and clean scripts
-- `cmake/` shared Emscripten configuration
-
-## Design Docs
-
-- `docs/inference-runtime-v2-design.md` -> detailed target architecture, data structures, algorithms, implementation phases, and reference bibliography
-- `docs/inference-runtime-v2-implementation-guide.md` -> concrete execution checklist, file targets, verification gates, and per-phase working order
-- `docs/phase-1-implementation-workplan.md` -> step-by-step manual Phase 1 handoff with exact function order, references, and "what next" guidance
-- `docs/inference-architecture-draft.md` -> short overview that now points to the detailed design
-
-## Prerequisites
-
-- Bun 1.3+
-- Emscripten SDK (`emcmake`, `emcc`) in `PATH`
-- CMake 3.20+ and at least one CMake generator tool (`ninja`, `nmake`, or `make`)
-
-## Install From GitHub Packages
-
-In a consuming repository, add this `.npmrc` mapping:
-
-```ini
-@noumena-labs:registry=https://npm.pkg.github.com
-```
-
-Authenticate with either a PAT in `NODE_AUTH_TOKEN` or `npm login`:
-
-```bash
-npm login --scope=@noumena-labs --registry=https://npm.pkg.github.com --auth-type=legacy
-```
-
-Use a PAT with `read:packages` to install and `write:packages` to publish. Install a pinned
-version in the consuming app:
-
-```bash
-npm install @noumena-labs/cogent-engine@1.0.0
-```
-
-Public entrypoints:
-
-- `@noumena-labs/cogent-engine`
-- `@noumena-labs/cogent-engine/character`
-- `@noumena-labs/cogent-engine/director`
-
-If Emscripten is installed but not active in your shell, activate it first (example):
-
-```bash
-# macOS / Linux
-source /path/to/emsdk/emsdk_env.sh
-
-# Windows PowerShell
-/path/to/emsdk/emsdk_env.ps1
-```
-
-## Build From Source
-
-From the monorepo root:
-
-```bash
-bun install
-bun run build:package
-```
-
-Use the release build when you need the publishable package layout:
-
-```bash
-bun run build:package:release
-```
-
-Or from `packages/cogent-engine/` after the workspace has already been installed:
-
-```bash
-bun run build
-```
-
-Release build from the package directory:
-
-```bash
-bun run build:release
-```
-
-For a full clean rebuild:
-
-```bash
-bun run rebuild
-```
-
-What this does:
-
-- `bun run build` and `bun run build:package` compile the browser runtime into `dist/wasm` plus the TypeScript outputs in `dist/esm` and `dist/types`
-- `bun run build:release` and `bun run build:package:release` add the Bun-compatible wasm runtime in `dist/wasm-bun`
-- `bun run release:prepare` runs the release build and validates the tarball with `npm pack --dry-run`
-- `build:wasm` auto-selects a CMake generator, or you can force one via `CMAKE_GENERATOR`
-
-Why first builds are slow:
-
-- Emscripten downloads and caches ports (for example `emdawnwebgpu`) on first use.
-- Emscripten also compiles and caches system libraries (`libc`, `libc++`, `libhtml5`, etc.).
-- After cache warmup, rebuilds are significantly faster unless you clear the Emscripten cache.
-
-```bash
-# example
-CMAKE_GENERATOR=Ninja bun run build:wasm
-```
-
-```powershell
-# Windows PowerShell example with explicit Ninja path
-$env:CMAKE_GENERATOR="Ninja"
-$env:CMAKE_MAKE_PROGRAM="C:\\Users\\<you>\\Documents\\emsdk\\ninja\\<version>\\ninja.exe"
-bun run build:wasm
-```
-
-Build outputs:
-
-- `dist/esm` -> JS API entrypoints
-- `dist/types` -> `.d.ts` files
-- `dist/wasm` -> `cogent-engine-wasm.js` + `cogent-engine-wasm.wasm`
-- `dist/wasm-bun` -> Bun-compatible `cogent-engine-wasm.js` + `cogent-engine-wasm.wasm`
-
-## Clean Rebuild
-
-Use this when you want a full rebuild from scratch:
-
-```bash
-# Windows PowerShell
-Remove-Item -Recurse -Force build, dist\wasm -ErrorAction SilentlyContinue
-bun run build
-```
-
-```bash
-# macOS / Linux
-rm -rf build dist/wasm
-bun run build
-```
-
-Or use the package script:
-
-```bash
-bun run clean
-bun run build
-```
-
-## Faster Iteration
-
-- TS-only changes: `bun run build:ts`
-- C++/WASM changes: `bun run build:wasm`
-
-## Publish To GitHub Packages
-
-From the monorepo root:
-
-```bash
-bun run publish:cogent-engine:dry-run
-bun run publish:cogent-engine
-```
-
-The root helper script:
-
-- checks that `@noumena-labs` is mapped to `https://npm.pkg.github.com`
-- verifies `NODE_AUTH_TOKEN` or an existing `npm login` token is available
-- runs `packages/cogent-engine` `release:prepare`
-- publishes with `npm publish` from the package directory
-
-The repository does not commit credentials. Local publishes should use `NODE_AUTH_TOKEN` or a
-prior `npm login --scope=@noumena-labs --registry=https://npm.pkg.github.com`. CI uses the same
-helper through `.github/workflows/publish-cogent-engine.yml`.
-
-## Bun Benchmark
-
-From `packages/cogent-engine/`:
-
-```bash
-bun run build:wasm:bun
-bun run bench:bun --model ../../Qwen3.5-0.8B-Q4_0.gguf --json ./benchmarks/latest-bun.json
-```
-
-The benchmark measures:
-
-- model file read time
-- WASM module initialization
-- model copy into MEMFS
-- engine initialization
-- TTFT from the first streamed token callback
-- TPOT from `(E2EL - TTFT) / (output_tokens - 1)`
-- ITL from token-to-token callback intervals
-- E2EL from request start to final streamed token completion
-- request throughput, output token throughput, and total token throughput
-- cold prompt latency
-- hot prompt latency with fresh contexts
-- hot prompt latency with a reused context
-
-It also reports native `llama.cpp` perf counters for prompt eval, decode eval, and sampling, and saves a structured report with:
-
-- benchmark preset and scenario metadata
-- artifact label and inferred quantization label
-- init config and prompt format
-- Bun runtime metadata
-- per-scenario cold, hot fresh-context, and hot reused-context groups
-- SISO, SILO, LISO, and LILO as the default matrix
-- TensorRT-style serving metrics as the primary summary
-- prompt-eval and decode throughput as secondary runtime diagnostics
-- logical input tokens and effective prompt-eval tokens reported separately
-
-By default, `bench:bun` runs the standard matrix. Use `--preset single --prompt "..." --tokens 32` when you want one custom prompt instead.
-
-You can also sweep the Phase 1 init config directly from the benchmark:
-
-```bash
-bun run bench:bun \
-  --model ../../Qwen3.5-0.8B-Q4_0.gguf \
-  --ctx 4096 \
-  --batch 256 \
-  --ubatch 256 \
-  --threads 4 \
-  --threads-batch 4 \
-  --gpu-layers 99 \
-  --flash-attention auto \
-  --kv-unified true
-```
-
-## WebGPU Backend-Ops Runner
-
-The package includes a browser-hosted WebGPU runner for the vendored `llama.cpp` `test-backend-ops` target.
-
-Install Chromium for Playwright once before using these commands:
-
-```bash
-bunx playwright install chromium
-```
-
-From the monorepo root:
-
-```bash
-bun run test:backend-ops:webgpu -- --list-ops
-bun run test:backend-ops:webgpu:op -- GET_ROWS
-bun run test:backend-ops:webgpu:op -- GET_ROWS,SET_ROWS --mode support --output csv
-bun run test:backend-ops:webgpu:op -- "Get Rows" --filter "type=f32"
-```
-
-What the op wrapper does:
-
-- maps friendly op names like `get-rows`, `Get Rows`, or `GET_ROWS` onto the upstream `-o GET_ROWS` selector
-- defaults to WebGPU by relying on the underlying runner's automatic `-b WebGPU` injection
-- forwards modes to upstream `test-backend-ops`: `test`, `support`, `perf`, and `grad`
-- forwards parameter regex filtering through `-p`
-
-If you need the full upstream CLI surface, keep using the raw passthrough command:
-
-```bash
-bun run test:backend-ops:webgpu -- test -o MUL_MAT -p "type=f16"
-```
-
-## Debugging WebGPU Backend-Ops Wasm
-
-Use the debug wrapper to build `test-backend-ops` in `Debug` with `CE_WASM_DEBUG=ON` and bundled DWARF symbols inside the generated wasm:
-
-```bash
-bun run test:backend-ops:webgpu:debug -- GET_ROWS
-```
-
-The debug command:
-
-- uses a dedicated build directory: `build-test-backend-ops-webgpu-debug`
-- configures CMake with `CMAKE_BUILD_TYPE=Debug`
-- enables debugger-friendly Emscripten flags such as `-g3` and assertions
-- normalizes Windows source-path drive-letter casing in DWARF to improve VS Code breakpoint binding
-- launches headed Chromium on remote debug port `9222`
-- pauses before `callMain()` so you can attach a debugger first
-
-Before using C++ breakpoints in VS Code, install the `WebAssembly DWARF Debugging` extension: `ms-vscode.wasm-dwarf-debugging`.
-
-VS Code workflow from the repo root:
-
-1. Run the `Attach backend-ops WebGPU Debug` launch configuration.
-2. Wait for Chromium to open the runner page and pause.
-3. Set breakpoints in the wasm-backed sources you want to inspect.
-4. Click `Resume Wasm Run` in the browser page to start the selected backend-op run.
-
-If a C++ breakpoint stays gray-hollow in VS Code on Windows, rebuild the debug target after these settings changes so the wasm DWARF paths are regenerated with canonical drive-letter casing.
-
-The repository also includes `.vscode/tasks.json` and `.vscode/launch.json` to automate this attach flow.
-
-## How To Use In An App
-
-Install from the published package in a consuming app:
-
-```bash
-npm install @noumena-labs/cogent-engine@1.0.0
-```
-
-For local monorepo development, you can still install from a path:
-
-```bash
-bun add ../packages/cogent-engine
-```
-
-Then import and run:
+The public API is intentionally small:
 
 ```ts
-import { CogentEngine, getBundledRuntimeUrls } from '@noumena-labs/cogent-engine';
+import { CogentEngine } from 'cogent-engine';
 
-const engine = new CogentEngine(getBundledRuntimeUrls());
-await engine.initModule();
+const engine = await CogentEngine.create();
 
-const modelPath = await engine.loadModelFromUrl("/models/model.gguf");
-await engine.initEngine(modelPath, {
-  nCtx: 4096,
-  nBatch: 256,
-  nUbatch: 256,
-  nGpuLayers: 99,
-  flashAttention: "auto",
+await engine.models.load('https://example.com/model.gguf');
+const answer = await engine.query('Explain browser-hosted inference in one paragraph.');
+
+console.log(answer);
+await engine.close();
+```
+
+## Observability
+
+Observability is opt-in. Use `"runtime"` for request/runtime metrics or `"profile"` when backend profiling is needed:
+
+```ts
+await engine.models.load('https://example.com/model.gguf', {
+  observability: 'profile',
+  runtime: { nCtx: 4096 },
 });
 
-const response = await engine.submitPrompt("demo", "Say hello in one sentence.", {
-  nTokens: 64,
+const unsubscribe = engine.observability.subscribe((event) => {
+  console.log(event.type, event.snapshot.state);
+});
+
+await engine.query('Measure this request.');
+console.log(engine.observability.current().runtime);
+unsubscribe();
+```
+
+`query()` still returns only a string. Metrics are read from `engine.observability.current()` and lifecycle events are emitted only at load, query, error, and close boundaries.
+
+## Model Lifecycle
+
+Use `engine.models` for model management:
+
+```ts
+const loaded = await engine.models.load({
+  model: 'https://example.com/vision-model.gguf',
+  projector: 'https://example.com/mmproj.gguf',
+});
+
+await engine.models.load(loaded.id);
+
+console.log(engine.models.current());
+console.log(await engine.models.list());
+
+await engine.models.remove(loaded.id);
+```
+
+`engine.models.load(...)` handles first load, reload, model switching, local imports, remote downloads, shard arrays, and explicit model/projector assembly.
+
+`ModelInfo.id` is the installed model id for the persisted base-model entry. If a model has already been validated with a projector, later `engine.models.load(id)` reuses that stored pairing automatically. Installed entries and pairings live in OPFS, so they survive tab refresh and browser restart for the same origin.
+
+Managed storage requires OPFS. If OPFS is unavailable, loading fails clearly instead of silently falling back to transient memory.
+
+## Worker Mode
+
+When worker execution is selected, the worker hosts the same high-level model service used by main-thread mode. The main thread talks to a worker model-service client, while low-level WASM, scheduling, cache, and runtime details stay internal.
+
+## Query
+
+Use `engine.query(...)` for text or vision requests:
+
+```ts
+const text = await engine.query('Summarize the current model.');
+
+const vision = await engine.query({
+  prompt: 'What is in this image?',
+  media: [imageBytes],
+});
+```
+
+Streaming is available through `onToken`:
+
+```ts
+const output = await engine.query('Write a haiku.', {
+  maxTokens: 64,
   onToken: (token) => {
-    process.stdout.write(token);
-  },
-});
-console.log(response);
-```
-
-`submitPrompt()` is the high-level API when you want streamed token callbacks and the final output string.
-
-If you need explicit request handles for scheduling, cancellation, or mixed-load control, use:
-
-- `queuePrompt(...)`
-- `runQueuedRequest(...)`
-
-Scoped subpath imports:
-
-```ts
-import { createCharacterFromConfigUrl } from '@noumena-labs/cogent-engine/character';
-import { createDirectorFromConfigUrl } from '@noumena-labs/cogent-engine/director';
-```
-
-`getBundledRuntimeUrls()` is the clean default when you want to use the runtime assets packaged
-with `@noumena-labs/cogent-engine`.
-
-`getBundledBunRuntimeUrls()` is the Bun-specific equivalent when you need the `dist/wasm-bun`
-runtime layout.
-
-`moduleUrl` and `wasmUrl` are still available for advanced cases where you want to host the runtime assets somewhere else.
-By default, only same-origin module/wasm URLs are allowed.
-
-`persistentModelCache` currently supports one public option only:
-
-```ts
-const engine = new CogentEngine({
-  persistentModelCache: {
-    enabled: true,
+    console.log(token);
   },
 });
 ```
 
-No namespace, salt, or size-limit cache controls are part of the supported public API yet.
+## Public Exports
 
-If you host wasm assets on CDN/static storage:
+- `CogentEngine`
+- `CogentEngineOptions`
+- `ModelSource`
+- `ModelLoadOptions`
+- `ModelInfo`
+- `ObservabilityMode`
+- `EngineObservability`
+- `ObservabilityEvent`
+- `ObservabilityEventType`
+- `ObservabilitySnapshot`
+- `QueryObservation`
+- `RuntimeObservation`
+- `BackendProfileObservation`
+- `QueryInput`
+- `QueryOptions`
+- `QueryError`
 
-```ts
-const engine = new CogentEngine({
-  moduleUrl: "https://cdn.example.com/cogent-engine-wasm.js",
-  wasmUrl: "https://cdn.example.com/cogent-engine-wasm.wasm",
-  trustedOrigins: ["https://cdn.example.com"],
-});
-```
-
-## Browser Runtime Requirements
-
-Browser consumers need cross-origin isolation so `SharedArrayBuffer` remains available for the
-wasm runtime. At minimum, serve the app HTML with:
-
-```http
-Cross-Origin-Opener-Policy: same-origin
-Cross-Origin-Embedder-Policy: require-corp
-```
-
-If wasm, worker, or model assets come from another origin, make sure those responses also satisfy
-your COEP setup with compatible CORS or `Cross-Origin-Resource-Policy` headers.
-
-`getBundledRuntimeUrls()` and `getBundledBunRuntimeUrls()` resolve packaged assets relative to the
-installed package via `import.meta.url`, so external apps can load the shipped wasm files directly
-from `node_modules` without the monorepo's Vite aliases.
-
-## Browser Benchmark App
-
-A browser benchmark app lives in `../../apps/benchmark`.
-
-```bash
-cd ../../
-bun install
-bun run benchmark:dev
-```
-
-Open the Vite URL, initialize the runtime, load a local or remote `.gguf` model, then run the browser benchmark.
+Custom-hosted runtime assets can be supplied with `CogentEngine.create({ moduleUrl, wasmUrl })`.
