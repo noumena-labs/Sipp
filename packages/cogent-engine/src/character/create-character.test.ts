@@ -7,19 +7,7 @@ import { createCharacterFromConfigUrl } from './create-character.js';
 
 function createEngineStub(): CharacterRuntimeEngine {
   return {
-    async queuePrompt() {
-      return 1;
-    },
-    async runQueuedRequest() {
-      return {
-        requestId: 1,
-        completed: true,
-        failed: false,
-        cancelled: false,
-        outputText: '',
-      };
-    },
-    async applyChatTemplate() {
+    async chat() {
       return '';
     },
   };

@@ -26,6 +26,8 @@ public:
   SlotState *FindFirstActiveSlot();
   std::vector<SlotState *> SelectDecodeReadySlots();
   std::vector<SlotState *> SelectPrefillReadySlots();
+  std::vector<SlotState> &MutableSlots() { return slots_; }
+  const std::vector<SlotState> &Slots() const { return slots_; }
   SchedulerTickBudget BuildTickBudget(const SchedulerPolicyConfig &policy,
                                       int32_t decode_ready_count,
                                       int32_t prefill_ready_count,

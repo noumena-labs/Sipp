@@ -1,12 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { ChatTemplateMessage } from '../core/chat-template-boundaries.js';
 import type {
-  GenerateRequestId,
-  GenerateResponse,
-  PromptOptions,
-} from '../core/inference-types.js';
+  ChatInput,
+  ChatOptions,
+} from '../model-management/model-types.js';
 import { parseDirectorConfig } from './director-config.js';
 import { DirectorRuntime, type DirectorRuntimeEngine } from './director-runtime.js';
 
@@ -18,34 +16,24 @@ class FakeEngine implements DirectorRuntimeEngine {
   public prompt = '';
   public waitForAbort = false;
   public mediaMarker: string | null = '<image>';
-  public queueCalls = 0;
-  public cancelCalls: GenerateRequestId[] = [];
+  public queryCalls = 0;
 
-  public async applyChatTemplate(
-    messages: ChatTemplateMessage[],
-    _addAssistant: boolean
+  public readonly models = {
+    current: () => ({ mediaMarker: this.mediaMarker }),
+  };
+
+  public async chat(
+    input: ChatInput,
+    options?: ChatOptions
   ): Promise<string> {
-    this.prompt = messages.map((message) => `${message.role}: ${message.content}`).join('\n');
-    return this.prompt;
-  }
-
-  public async queuePrompt(
-    _contextKey: string,
-    _prompt: string,
-    options?: number | PromptOptions
-  ): Promise<GenerateRequestId> {
-    this.queueCalls += 1;
+    this.queryCalls += 1;
     if (typeof options === 'object' && options) {
-      this.grammar = options.grammar;
-      this.media = options.media;
+      this.grammar = (options as any).grammar;
     }
-    return 1;
-  }
+    const messages = Array.isArray(input) ? input : input.messages;
+    this.media = Array.isArray(input) ? undefined : input.media;
+    this.prompt = messages.map((message) => `${message.role}: ${message.content}`).join('\n');
 
-  public async runQueuedRequest(
-    requestId: GenerateRequestId,
-    options?: { signal?: AbortSignal }
-  ): Promise<GenerateResponse> {
     if (this.waitForAbort) {
       await new Promise<void>((resolve) => {
         const signal = options?.signal;
@@ -56,40 +44,29 @@ class FakeEngine implements DirectorRuntimeEngine {
         }
         signal.addEventListener('abort', () => resolve(), { once: true });
       });
-      return {
-        requestId,
-        completed: false,
-        failed: false,
-        cancelled: true,
-        outputText: '',
-      };
+      throw new DOMException('Operation aborted.', 'AbortError');
     }
-    return {
-      requestId,
-      completed: true,
-      failed: this.fail,
-      cancelled: false,
-      outputText: this.outputText,
-      ...(this.fail ? { errorMessage: 'boom' } : {}),
-    };
-  }
 
-  public async cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean> {
-    this.cancelCalls.push(requestId);
-    return true;
-  }
+    if (this.fail) {
+      throw new Error('boom');
+    }
 
-  public getChatTemplate(): string | null {
-    return null;
+    const safeText = sanitizeFakeChatOutput(this.outputText);
+    options?.onToken?.(safeText);
+    return safeText;
   }
+}
 
-  public getEosText(): string {
-    return '</s>';
+function sanitizeFakeChatOutput(text: string): string {
+  const markers = ['</s>', '<user>', '<assistant>', '<system>'];
+  let index = -1;
+  for (const marker of markers) {
+    const markerIndex = text.indexOf(marker);
+    if (markerIndex >= 0 && (index < 0 || markerIndex < index)) {
+      index = markerIndex;
+    }
   }
-
-  public getMediaMarker(): string | null {
-    return this.mediaMarker;
-  }
+  return (index >= 0 ? text.slice(0, index) : text).trim();
 }
 
 const CONFIG = parseDirectorConfig({
@@ -165,7 +142,7 @@ test('DirectorRuntime returns a selected runtime choice with hidden payload', as
   assert.equal(engine.prompt.includes('Never output JSON'), true);
 });
 
-test('DirectorRuntime parses sanitized assistant text while preserving raw output', async () => {
+test('DirectorRuntime parses sanitized assistant text from engine chat', async () => {
   const engine = new FakeEngine();
   engine.outputText = 'Aria sprints toward home base.</s><user>ignored</user>';
   const runtime = new DirectorRuntime(engine, CONFIG);
@@ -174,7 +151,7 @@ test('DirectorRuntime parses sanitized assistant text while preserving raw outpu
 
   assert.equal(result.status, 'ok');
   assert.equal(result.text, 'Aria sprints toward home base.');
-  assert.equal(result.rawText, 'Aria sprints toward home base.</s><user>ignored</user>');
+  assert.equal(result.rawText, 'Aria sprints toward home base.');
 });
 
 test('DirectorRuntime exposes task grammar and prompt for inspection', () => {
@@ -275,7 +252,7 @@ test('DirectorRuntime reports oversized grammars before queueing generation', as
 
   assert.equal(result.status, 'invalid_request');
   assert.match(result.errorMessage ?? '', /grammar exceeds maximum size/);
-  assert.equal(engine.queueCalls, 0);
+  assert.equal(engine.queryCalls, 0);
 });
 
 test('DirectorRuntime returns invalid_response for unknown selections', async () => {
@@ -347,5 +324,4 @@ test('DirectorRuntime returns timed_out on timeout and cancels the queued reques
 
   assert.equal(result.status, 'timed_out');
   assert.equal(result.errorMessage, 'Director task timed out.');
-  assert.deepEqual(engine.cancelCalls, [1]);
 });

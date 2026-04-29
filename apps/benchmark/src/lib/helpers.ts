@@ -1,3 +1,4 @@
+import type { CogentEngine, ObservabilitySnapshot } from '@noumena-labs/cogent-engine';
 import type { ScenarioDefinition } from './types';
 import { countWords } from './utils';
 
@@ -59,37 +60,33 @@ export function buildBenchmarkScenarios(shortPrompt: string, shortOutput: number
 }
 
 export function describeExecutionMode(targetEngine: any): string {
-  if (targetEngine == null || typeof targetEngine.getExecutionMode !== 'function') {
-    return 'unknown';
-  }
-  return targetEngine.getExecutionMode();
+  return targetEngine == null ? 'unknown' : 'managed';
 }
 
-export function describeRuntimeObservability(targetEngine: any): string {
-  if (targetEngine == null || typeof targetEngine.getTransportObservability !== 'function') {
-    return 'unknown';
-  }
-  return targetEngine.getTransportObservability().enabled ? 'enabled' : 'disabled';
+export function describeRuntimeObservability(targetEngine: CogentEngine | null): string {
+  if (targetEngine == null) return 'unknown';
+  const snapshot = targetEngine.observability.current();
+  return `${snapshot.mode}:${snapshot.state}`;
 }
 
-export function describeBackendProfiling(info: any): string {
+export function describeBackendProfiling(info: ObservabilitySnapshot['profile'] | null | undefined): string {
   if (!info) return 'inactive';
   return info.profilingEnabled ? 'enabled' : 'disabled';
 }
 
-export function describeRuntimeBackend(info: any): string {
+export function describeRuntimeBackend(info: ObservabilitySnapshot['profile'] | null | undefined): string {
   if (!info) return 'runtime not initialized';
   if (!info.webgpuCompiled) return 'CPU-only build';
   if (!info.webgpuRegistered) return 'WebGPU backend unavailable at runtime';
   return `WebGPU backend ready (${info.webgpuDeviceCount} device${info.webgpuDeviceCount === 1 ? '' : 's'})`;
 }
 
-export function describeRuntimeDevices(info: any): string {
+export function describeRuntimeDevices(info: ObservabilitySnapshot['profile'] | null | undefined): string {
   if (!info || !Array.isArray(info.devices) || info.devices.length === 0) {
     return 'none';
   }
   return info.devices
-    .map((device: any) => `${device.backendName || device.type}:${device.description || device.name || device.type}`)
+    .map((device) => `${device.backendName || device.type}:${device.description || device.name || device.type}`)
     .join(' | ');
 }
 
@@ -130,6 +127,7 @@ export function buildMixedLoadDefinition(): any {
 export function buildPhase4BenchmarkInitConfig(initConfig: any = {}): any {
   return {
     ...initConfig,
+    sampling: initConfig.sampling == null ? undefined : { ...initConfig.sampling },
     nSeqMax: Math.max(initConfig.nSeqMax ?? 1, 2),
     maxCachedSessions: Math.max(initConfig.maxCachedSessions ?? 8, 2),
   };

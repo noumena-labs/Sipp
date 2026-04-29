@@ -367,7 +367,7 @@ function createObstacleSeeds(candidates: readonly CandidateObject[]): ScenarioOb
 }
 
 function createFallbackLayout(counts: ResolvedScenarioCounts): LayoutDraft {
-  const obstacles = createObstacleSeeds([
+  const obstacles = createObstacleSeeds(([
     { kind: 'crate', position: { x: -3, z: -1 } },
     { kind: 'crate', position: { x: 3, z: 1 } },
     { kind: 'rock', position: { x: -2, z: 3 } },
@@ -388,7 +388,7 @@ function createFallbackLayout(counts: ResolvedScenarioCounts): LayoutDraft {
     { kind: 'rock', position: { x: 4, z: -6 } },
     { kind: 'crate', position: { x: 0, z: 2 } },
     { kind: 'rock', position: { x: 0, z: -2 } },
-  ].slice(0, counts.obstacles));
+  ] as CandidateObject[]).slice(0, counts.obstacles));
   const batPositions = [
     { x: -6, z: 2 },
     { x: -5.5, z: 5 },

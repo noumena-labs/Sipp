@@ -31,6 +31,9 @@ struct PrefixCachePolicyStats {
 
 class PrefixCachePolicy {
 public:
+  // A zero interval keeps terminal prompt snapshots only.  This avoids hidden
+  // KV serialization stalls on workloads that do not reuse intermediate
+  // prefix checkpoints.
   explicit PrefixCachePolicy(std::size_t prefix_cache_interval_tokens = 128);
 
   std::size_t prefix_cache_interval_tokens() const {

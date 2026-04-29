@@ -11,10 +11,4 @@ export interface CogentConfig {
   trustedOrigins?: string[];
   executionMode?: 'auto' | 'worker' | 'main-thread';
   workerUrl?: string;
-  workerMaxBufferedTokens?: number;
-  workerTokenFlushIntervalMs?: number;
-  persistentModelCache?: {
-    enabled?: boolean;
-  };
-  debugTokenTransport?: 'auto' | 'runtime-events';
 }

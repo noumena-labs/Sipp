@@ -9,7 +9,7 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CogentEngine, getBundledRuntimeUrls } from '@noumena-labs/cogent-engine';
+import { CogentEngine } from '@noumena-labs/cogent-engine';
 import {
   CharacterEventBus,
   createCharacterFromConfigUrl,
@@ -142,25 +142,25 @@ export default function App() {
       const config = preview.config;
       previewUpdated = true;
 
-      setStatus('Initialising engine…');
-      const engine = new CogentEngine({ ...getBundledRuntimeUrls() });
-      await engine.initModule();
+      const engine = await CogentEngine.create();
 
-      setStatus('Downloading model…');
-      const modelPath = await engine.loadModelFromUrl(
-        args.modelUrl,
-        'model.gguf',
-        (pct) => setStatus(`Downloading model… ${Math.floor(pct)}%`)
-      );
-
-      setStatus('Initialising inference runtime…');
-      await engine.initEngine(modelPath, {
-        sampling: {
-          temperature: 0.6,
-          topP: 0.9,
-          topK: 40,
-          minP: 0.05,
-          repeatPenalty: 1.05,
+      setStatus('Downloading and loading model…');
+      await engine.models.load(args.modelUrl, {
+        onProgress: (progress) => {
+          if (progress.phase === 'download') {
+            setStatus(`Downloading model… ${Math.floor(progress.percent ?? 0)}%`);
+          } else if (progress.phase === 'load') {
+            setStatus('Loading into memory…');
+          }
+        },
+        runtime: {
+          sampling: {
+            temperature: 0.6,
+            topP: 0.9,
+            topK: 40,
+            minP: 0.05,
+            repeatPenalty: 1.05,
+          },
         },
       });
 
@@ -225,15 +225,15 @@ export default function App() {
             prev.map((msg) =>
               msg.id === assistantId
                 ? {
-                    ...msg,
-                    actions: [
-                      ...msg.actions,
-                      {
-                        id: event.id,
-                        label: event.raw.slice(1, -1),
-                      },
-                    ],
-                  }
+                  ...msg,
+                  actions: [
+                    ...msg.actions,
+                    {
+                      id: event.id,
+                      label: event.raw.slice(1, -1),
+                    },
+                  ],
+                }
                 : msg
             )
           );
@@ -242,15 +242,15 @@ export default function App() {
             prev.map((msg) =>
               msg.id === assistantId
                 ? {
-                    ...msg,
-                    text:
-                      event.finalText.trim().length === 0 && msg.actions.length === 0
-                        ? event.status === 'aborted'
-                          ? '[Response interrupted.]'
-                          : '[No visible response generated.]'
-                        : event.finalText,
-                    pending: false,
-                  }
+                  ...msg,
+                  text:
+                    event.finalText.trim().length === 0 && msg.actions.length === 0
+                      ? event.status === 'aborted'
+                        ? '[Response interrupted.]'
+                        : '[No visible response generated.]'
+                      : event.finalText,
+                  pending: false,
+                }
                 : msg
             )
           );

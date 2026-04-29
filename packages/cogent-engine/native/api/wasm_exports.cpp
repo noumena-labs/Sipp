@@ -248,9 +248,9 @@ char *CE_ApplyChatTemplate(const char *messages_json, int add_assistant) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-CE_RequestId CE_EnqueuePrompt(const char *context_key, const char *prompt,
-                              int n_tokens, CE_TokenCallback on_token,
-                              const char *grammar) {
+CE_RequestId CE_StartTextRequest(const char *context_key, const char *prompt,
+                                 int n_tokens, CE_TokenCallback on_token,
+                                 const char *grammar) {
   std::lock_guard<std::mutex> lock(g_apiMutex);
   if (!g_isEngineInitialized) {
     return 0;
@@ -259,12 +259,12 @@ CE_RequestId CE_EnqueuePrompt(const char *context_key, const char *prompt,
     return 0;
   }
 
-  return CE_EnqueuePromptQuery(context_key, prompt, n_tokens, on_token,
+  return CE_StartPromptRequest(context_key, prompt, n_tokens, on_token,
                                grammar);
 }
 
 EMSCRIPTEN_KEEPALIVE
-CE_RequestId CE_EnqueuePromptWithMedia(
+CE_RequestId CE_StartMediaRequest(
     const char *context_key, const char *prompt, int n_tokens, int n_images,
     const uint8_t *images_flat_buffer, const int32_t *image_sizes,
     CE_TokenCallback on_token, const char *grammar) {
@@ -276,19 +276,19 @@ CE_RequestId CE_EnqueuePromptWithMedia(
     return 0;
   }
 
-  return CE_EnqueuePromptWithMediaQuery(context_key, prompt, n_tokens,
+  return CE_StartPromptWithMediaRequest(context_key, prompt, n_tokens,
                                         n_images, images_flat_buffer,
                                         image_sizes, on_token, grammar);
 }
 
 
 EMSCRIPTEN_KEEPALIVE
-int CE_CancelQueuedRequest(CE_RequestId request_id) {
+int CE_CancelRequest(CE_RequestId request_id) {
   std::lock_guard<std::mutex> lock(g_apiMutex);
   if (!g_isEngineInitialized || request_id == 0) {
     return 0;
   }
-  return CE_CancelQueuedPromptQuery(request_id);
+  return CE_CancelPromptRequest(request_id);
 }
 
 EMSCRIPTEN_KEEPALIVE

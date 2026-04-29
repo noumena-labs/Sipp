@@ -44,7 +44,7 @@ function handlePageError(error) {
 function getBrowserLaunchPlans() {
   const mode = (process.env.CE_WEBGPU_BROWSER_MODE ?? 'auto').trim().toLowerCase();
   const remoteDebuggingPort = getRemoteDebuggingPort();
-  const browserArgs = ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist'];
+  const browserArgs = ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist', '--force_high_performance_gpu'];
 
   if (remoteDebuggingPort) {
     browserArgs.push(`--remote-debugging-port=${remoteDebuggingPort}`, '--remote-debugging-address=127.0.0.1');

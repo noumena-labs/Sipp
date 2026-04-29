@@ -27,7 +27,6 @@
       "default": "./dist/esm/director/index.js"
     },
     "./wasm/*": "./dist/wasm/*",
-    "./wasm-bun/*": "./dist/wasm-bun/*",
     "./package.json": "./package.json"
   },
   "files": [
@@ -42,7 +41,6 @@
     "rebuild": "bun run clean && bun run build",
     "build:wasm": "bun ./scripts/build-wasm.mjs",
     "build:wasm:dev": "bun ./scripts/build-wasm-dev.mjs",
-    "build:wasm:bun": "bun ./scripts/build-wasm-bun.mjs",
     "release:prepare": "bun run build:release && bun run pack:validate",
     "test:backend-ops:webgpu": "bun ./scripts/test-backend-ops-webgpu.mjs",
     "test:backend-ops:webgpu:op": "bun ./scripts/test-backend-ops-webgpu-op.mjs",
@@ -50,9 +48,8 @@
     "test:backend-ops:cuda": "bun ./scripts/test-backend-ops-cuda.mjs",
     "test:backend-ops:cuda:op": "bun ./scripts/test-backend-ops-cuda-op.mjs",
     "test:backend-ops:cuda:debug": "bun ./scripts/test-backend-ops-cuda-op.mjs --debug",
-    "build:ts": "bun ./scripts/build-ts.mjs",
-    "pack:validate": "bun ./scripts/validate-pack.mjs",
-    "bench:bun": "bun ./benchmarks/benchmark-bun.ts"
+    "build:ts": "bun ./scripts/clean-ts-dist.mjs && bunx --bun tsc -p tsconfig.json",
+    "pack:validate": "bun ./scripts/validate-pack.mjs"
   },
   "keywords": [
     "wasm",

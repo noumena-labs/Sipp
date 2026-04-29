@@ -13,7 +13,7 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { CogentEngine, getBundledRuntimeUrls } from '@noumena-labs/cogent-engine';
+import { CogentEngine } from '@noumena-labs/cogent-engine';
 import { createDirectorFromConfigUrl } from '@noumena-labs/cogent-engine/director';
 import { BrainActivityHud } from './components/BrainActivityHud';
 import { BrainTraceDrawer } from './components/BrainTraceDrawer';
@@ -570,27 +570,30 @@ export default function App() {
         setActiveScenario(scenario);
         resetSimulationUi();
         setStatus('Initialising engine…');
-        nextEngine = new CogentEngine({ ...getBundledRuntimeUrls() });
-        await nextEngine.initModule();
+        nextEngine = await CogentEngine.create();
 
         setStatus('Downloading model…');
-        const modelPath = await nextEngine.loadModelFromUrl(url, 'model.gguf', (pct) =>
-          setStatus(`Downloading model… ${Math.floor(pct)}%`)
-        );
-
-        setStatus('Initialising inference runtime…');
-        await nextEngine.initEngine(modelPath, {
-          enableRuntimeObservability: true,
-          maxCachedSessions: 8,
-          prefixCacheIntervalTokens: 64,
-          maxPrefixCacheEntries: 64,
-          schedulerPolicy: 'latency-first',
-          sampling: {
-            temperature: 0.5,
-            topP: 0.9,
-            topK: 40,
-            minP: 0.05,
-            repeatPenalty: 1.05,
+        await nextEngine.models.load(url, {
+          onProgress: (progress) => {
+            if (progress.phase === 'download') {
+              setStatus(`Downloading model… ${Math.floor(progress.percent ?? 0)}%`);
+            } else if (progress.phase === 'load') {
+              setStatus('Loading into memory…');
+            }
+          },
+          observability: 'profile',
+          runtime: {
+            maxCachedSessions: 8,
+            prefixCacheIntervalTokens: 64,
+            maxPrefixCacheEntries: 64,
+            schedulerPolicy: 'latency-first',
+            sampling: {
+              temperature: 0.5,
+              topP: 0.9,
+              topK: 40,
+              minP: 0.05,
+              repeatPenalty: 1.05,
+            },
           },
         });
 

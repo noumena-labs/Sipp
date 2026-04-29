@@ -1,16 +1,9 @@
 import type { RequestObservabilityMetrics } from '../observability/runtime-observability.js';
 
 export type FlashAttentionMode = 'auto' | 'enabled' | 'disabled';
-export type PromptFormatMode = 'raw';
+export type PromptFormatMode = 'raw' | 'auto-chat';
 export type SchedulerPolicyMode = 'latency-first' | 'balanced' | 'throughput-first';
 export type EngineExecutionMode = 'main-thread' | 'worker';
-export type ModelLoadSourceKind = 'url' | 'file' | 'buffer';
-export type ModelLoadReuseMode =
-  | 'network'
-  | 'file-read'
-  | 'persistent-cache'
-  | 'page-local-reuse'
-  | 'buffer';
 
 export interface SamplingConfig {
   repeatLastN?: number;
@@ -92,16 +85,4 @@ export interface GenerateResponse {
   errorMessage?: string | null;
   requestObservability?: RequestObservabilityMetrics | null;
   runtimeObservability?: RequestObservabilityMetrics | null;
-}
-
-export interface ModelLoadInfo {
-  sourceKind: ModelLoadSourceKind;
-  reuseMode: ModelLoadReuseMode;
-  modelPath: string;
-  fileName: string;
-  byteLength: number | null;
-  persistentCacheEnabled: boolean;
-  persistentCacheKey: string | null;
-  persistentCacheHit: boolean;
-  persistentCacheStored: boolean;
 }

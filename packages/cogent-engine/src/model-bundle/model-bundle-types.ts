@@ -1,22 +1,21 @@
-import { ModelLoadInfo } from '../core/inference-types.js';
-
-export type ModelBundleSourceKind = 'url' | 'urls' | 'file' | 'files';
+export type ModelBundleSourceKind = 'file' | 'files';
 
 export type ModelBundleProjectorStatus =
   | 'not-required'
   | 'explicit'
   | 'paired'
-  | 'discovered'
   | 'missing';
 
-export type ModelDetectionMethod = 'filename' | 'url' | 'hf-api' | 'gguf-metadata' | 'none';
+export type ModelDetectionMethod = 'gguf-metadata' | 'none';
+export type AssetRole = 'model' | 'projector' | 'unknown';
 
-export type ProjectorDiscoverySource = 'hf-api' | 'head-probe' | 'none';
-
-export interface ModelBundleUrlProjectorDescriptor {
-  kind: 'url';
-  url: string;
-  destFileName?: string;
+export interface AssetInspection {
+  version: 1;
+  role: AssetRole;
+  architecture: string | null;
+  visionCapable: boolean;
+  compatibleVisionProjectorTypes: string[];
+  providedVisionProjectorType: string | null;
 }
 
 export interface ModelBundleFileProjectorDescriptor {
@@ -25,69 +24,33 @@ export interface ModelBundleFileProjectorDescriptor {
   destFileName?: string;
 }
 
-export type ModelBundleProjectorDescriptor =
-  | ModelBundleUrlProjectorDescriptor
-  | ModelBundleFileProjectorDescriptor;
-
-export interface UrlModelBundleDescriptor {
-  kind: 'url';
-  url: string;
-  destFileName?: string;
-  projector?: ModelBundleProjectorDescriptor;
-}
-
-export interface UrlsModelBundleDescriptor {
-  kind: 'urls';
-  urls: string[];
-  projector?: ModelBundleProjectorDescriptor;
-}
-
-export interface FileModelBundleDescriptor {
+export interface FileBundleDescriptor {
   kind: 'file';
   file: File;
   destFileName?: string;
-  projector?: ModelBundleProjectorDescriptor;
+  projector?: ModelBundleFileProjectorDescriptor;
 }
 
-export interface FilesModelBundleDescriptor {
+export interface FilesBundleDescriptor {
   kind: 'files';
   files: File[];
-  projector?: ModelBundleProjectorDescriptor;
+  projector?: ModelBundleFileProjectorDescriptor;
 }
 
-export type ModelBundleDescriptor =
-  | UrlModelBundleDescriptor
-  | UrlsModelBundleDescriptor
-  | FileModelBundleDescriptor
-  | FilesModelBundleDescriptor;
+export type InternalBundleDescriptor =
+  | FileBundleDescriptor
+  | FilesBundleDescriptor;
 
-export interface PrepareModelBundleOptions {
+export interface StageModelBundleOptions {
   signal?: AbortSignal;
 }
 
 export interface ModelDetectionResult {
-  isVisionModel: boolean;
-  isProjector: boolean;
-  suggestedProjectorUrl: string | null;
+  inspection: AssetInspection;
   detectionMethod: ModelDetectionMethod;
   modelName: string;
   modelType: string | null;
   modelArchitecture: string | null;
-}
-
-export interface ProjectorDiscoveryResult {
-  projectorUrl: string | null;
-  candidates: string[];
-  source: ProjectorDiscoverySource;
-  message: string;
-}
-
-export interface ParsedHuggingFaceModelUrl {
-  org: string;
-  repo: string;
-  ref: string;
-  filename: string;
-  baseUrl: string;
 }
 
 export interface LocalProjectorResolutionResult<T> {
@@ -97,7 +60,7 @@ export interface LocalProjectorResolutionResult<T> {
   errorMessage: string | null;
 }
 
-export interface PreparedModelBundle {
+export interface StagedModelBundle {
   sourceKind: ModelBundleSourceKind;
   modelPath: string;
   multimodalProjectorPath: string | null;
@@ -107,6 +70,4 @@ export interface PreparedModelBundle {
   detectionMethod: ModelDetectionMethod;
   modelType: string | null;
   modelArchitecture: string | null;
-  modelLoadInfo: ModelLoadInfo | null;
-  projectorLoadInfo: ModelLoadInfo | null;
 }

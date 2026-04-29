@@ -13,11 +13,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type {
-  GenerateRequestId,
-  GenerateResponse,
-  PromptOptions,
-} from '../core/inference-types.js';
-import type { ChatTemplateMessage } from '../core/chat-template-boundaries.js';
+  ChatInput,
+  ChatOptions,
+  QueryInput,
+  QueryOptions,
+} from '../model-management/model-types.js';
+import { StreamingBoundaryTextSanitizer } from '../core/chat-template-boundaries.js';
 import { CharacterEventBus, type CharacterEvent } from './action-bus.js';
 import {
   CharacterRuntime,
@@ -46,40 +47,33 @@ function buildConfig(overrides: Partial<CharacterConfig> = {}): CharacterConfig 
 
 interface ScriptedResponse {
   readonly tokens: readonly string[];
-  readonly response?: Partial<GenerateResponse>;
   readonly throwOnRun?: Error;
   readonly waitBeforeTokens?: Promise<void>;
 }
 
 interface FakeEngine extends CharacterRuntimeEngine {
-  readonly queuePromptCalls: Array<{
-    contextKey: string;
-    promptText: string;
-    options: PromptOptions | number | undefined;
+  readonly chatCalls: Array<{
+    input: ChatInput;
+    options: ChatOptions | undefined;
   }>;
-  readonly applyChatTemplateCalls: Array<{
-    messages: ChatTemplateMessage[];
-    addAssistant: boolean;
+  readonly queryCalls: Array<{
+    input: QueryInput;
+    options: QueryOptions | undefined;
   }>;
-  readonly runCalls: GenerateRequestId[];
-  readonly cancelCalls: GenerateRequestId[];
   enqueue(script: ScriptedResponse): void;
   waitForRunCount(count: number): Promise<void>;
 }
 
 function createFakeEngine(): FakeEngine {
-  const queuePromptCalls: FakeEngine['queuePromptCalls'] = [];
-  const applyChatTemplateCalls: FakeEngine['applyChatTemplateCalls'] = [];
-  const runCalls: GenerateRequestId[] = [];
-  const cancelCalls: GenerateRequestId[] = [];
+  const chatCalls: FakeEngine['chatCalls'] = [];
+  const queryCalls: FakeEngine['queryCalls'] = [];
   const scripts: ScriptedResponse[] = [];
-  const pendingCallbacks: Array<((token: string) => void) | undefined> = [];
   const runWaiters: Array<{ count: number; resolve: () => void }> = [];
-  let nextId = 1;
+  let completedCount = 0;
 
   const flushRunWaiters = (): void => {
     for (let index = runWaiters.length - 1; index >= 0; index -= 1) {
-      if (runCalls.length >= runWaiters[index].count) {
+      if (completedCount >= runWaiters[index].count) {
         const waiter = runWaiters.splice(index, 1)[0];
         waiter.resolve();
       }
@@ -87,101 +81,86 @@ function createFakeEngine(): FakeEngine {
   };
 
   return {
-    queuePromptCalls,
-    applyChatTemplateCalls,
-    runCalls,
-    cancelCalls,
+    chatCalls,
+    queryCalls,
     enqueue(script: ScriptedResponse) {
       scripts.push(script);
     },
     waitForRunCount(count: number): Promise<void> {
-      if (runCalls.length >= count) {
+      if (completedCount >= count) {
         return Promise.resolve();
       }
       return new Promise<void>((resolve) => {
         runWaiters.push({ count, resolve });
       });
     },
-    getChatTemplate(): string | null {
-      return 'fake-template';
-    },
-    getEosText(): string {
-      return '</s>';
-    },
-    async applyChatTemplate(
-      messages: ChatTemplateMessage[],
-      addAssistant: boolean
+    async chat(
+      input: ChatInput,
+      options?: ChatOptions
     ): Promise<string> {
-      applyChatTemplateCalls.push({ messages, addAssistant });
+      chatCalls.push({ input, options });
+      const messages = Array.isArray(input) ? input : input.messages;
       const rendered = messages
         .map((message) => `<${message.role}>\n${message.content}</${message.role}>\n`)
         .join('');
-      return `${rendered}${addAssistant ? '<assistant>\n' : ''}`;
-    },
-    async queuePrompt(
-      contextKey: string,
-      promptText: string,
-      options?: number | PromptOptions
-    ): Promise<GenerateRequestId> {
-      queuePromptCalls.push({ contextKey, promptText, options });
-      const id = nextId++;
-      const callback =
-        typeof options === 'object' && options != null ? options.onToken : undefined;
-      pendingCallbacks.push(callback);
-      return id;
-    },
-    async runQueuedRequest(
-      requestId: GenerateRequestId,
-      runOptions: { signal?: AbortSignal } = {}
-    ): Promise<GenerateResponse> {
-      runCalls.push(requestId);
+      const prompt = `${rendered}<assistant>\n`;
+      queryCalls.push({
+        input: {
+          prompt,
+          ...(!Array.isArray(input) && input.media != null ? { media: input.media } : {}),
+        },
+        options: { ...options, format: 'raw' },
+      });
+      completedCount++;
       flushRunWaiters();
+
       const script = scripts.shift();
-      const onToken = pendingCallbacks.shift();
       if (!script) {
-        throw new Error(`No scripted response enqueued for request ${requestId}`);
+        throw new Error('No scripted response enqueued for query');
       }
       if (script.throwOnRun) {
         throw script.throwOnRun;
       }
       if (script.waitBeforeTokens) {
-        await waitForScriptRelease(runOptions.signal, script.waitBeforeTokens);
-        if (runOptions.signal?.aborted) {
-          return {
-            requestId,
-            completed: false,
-            failed: false,
-            cancelled: true,
-            outputText: '',
-          };
+        await waitForScriptRelease(options?.signal, script.waitBeforeTokens);
+        if (options?.signal?.aborted) {
+          throw new DOMException('Operation aborted.', 'AbortError');
         }
       }
-      let output = '';
+
+      if (options?.signal?.aborted) {
+        throw new DOMException('Operation aborted.', 'AbortError');
+      }
+      let rawOutput = '';
+      let safeOutput = '';
+      const sanitizer = new StreamingBoundaryTextSanitizer([
+        '</assistant>\n',
+        '<system>\n',
+        '<user>\n',
+        '<assistant>\n',
+        '</s>',
+      ]);
       for (const token of script.tokens) {
-        if (runOptions.signal?.aborted) {
-          return {
-            requestId,
-            completed: false,
-            failed: false,
-            cancelled: true,
-            outputText: output,
-          };
+        if (options?.signal?.aborted) {
+          throw new DOMException('Operation aborted.', 'AbortError');
         }
-        output += token;
-        onToken?.(token);
+        rawOutput += token;
+        const result = sanitizer.consume(token);
+        if (result.safeText.length > 0) {
+          safeOutput += result.safeText;
+          options?.onToken?.(result.safeText);
+        }
+        if (result.hitBoundary) {
+          break;
+        }
       }
-      return {
-        requestId,
-        completed: true,
-        failed: false,
-        cancelled: false,
-        outputText: output,
-        ...script.response,
-      };
-    },
-    async cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean> {
-      cancelCalls.push(requestId);
-      return true;
+      const flushed = sanitizer.flush();
+      if (flushed.length > 0) {
+        safeOutput += flushed;
+        options?.onToken?.(flushed);
+      }
+      void rawOutput;
+      return safeOutput.trim();
     },
   };
 }
@@ -268,14 +247,13 @@ test('chat() threads grammar and maxOutputTokens into queuePrompt options', asyn
   const agent = new CharacterRuntime(engine, buildConfig(), { maxOutputTokens: 42 });
   await collectEvents(agent.chat('hi'));
 
-  assert.equal(engine.queuePromptCalls.length, 1);
-  const call = engine.queuePromptCalls[0];
-  assert.equal(call.contextKey, 'character:aria-01:chat');
+  assert.equal(engine.queryCalls.length, 1);
+  const call = engine.queryCalls[0];
   assert.ok(typeof call.options === 'object' && call.options != null);
-  const opts = call.options as PromptOptions;
-  assert.equal(opts.nTokens, 42);
-  assert.equal(typeof opts.grammar, 'string');
-  assert.ok(opts.grammar && opts.grammar.includes('root'));
+  const opts = call.options as QueryOptions;
+  assert.equal(opts.maxTokens, 42);
+  assert.equal(typeof (opts as any).grammar, 'string');
+  assert.ok((opts as any).grammar && (opts as any).grammar.includes('root'));
   assert.equal(typeof opts.onToken, 'function');
 });
 
@@ -288,12 +266,10 @@ test('chat() reuses a stable contextKey for each turn', async () => {
   await collectEvents(agent.chat('first'));
   await collectEvents(agent.chat('second'));
 
-  assert.equal(engine.queuePromptCalls.length, 2);
-  assert.equal(engine.queuePromptCalls[0].contextKey, 'character:aria-01:chat');
-  assert.equal(engine.queuePromptCalls[1].contextKey, 'character:aria-01:chat');
+  assert.equal(engine.queryCalls.length, 2);
 });
 
-test('chat() probes chat template boundaries once per agent and reuses them across turns', async () => {
+test('chat() sends chat messages through the engine chat API each turn', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['first reply'] });
   engine.enqueue({ tokens: ['second reply'] });
@@ -302,8 +278,11 @@ test('chat() probes chat template boundaries once per agent and reuses them acro
   await collectEvents(agent.chat('first'));
   await collectEvents(agent.chat('second'));
 
-  assert.equal(engine.applyChatTemplateCalls.length, 7);
-  assert.equal(engine.applyChatTemplateCalls.filter((call) => call.messages.some((message) => message.content === '__CE_BOUNDARY_SYSTEM__')).length, 5);
+  assert.equal(engine.chatCalls.length, 2);
+  const secondInput = engine.chatCalls[1]!.input;
+  const secondMessages = Array.isArray(secondInput) ? secondInput : secondInput.messages;
+  assert.equal(secondMessages.some((message) => message.content === 'first reply'), true);
+  assert.equal(secondMessages.some((message) => message.content === 'second'), true);
 });
 
 test('successful turns commit user+assistant pairs to memory', async () => {
@@ -360,7 +339,6 @@ test('chat() stops before leaked next-turn chat template markers', async () => {
   const end = events[events.length - 1];
   assert.ok(end.kind === 'turn-end');
   assert.equal(end.finalText, 'Hello there.');
-  assert.ok(engine.cancelCalls.length >= 1);
 
   const memory = agent.getMemory();
   assert.equal(memory[1].content, 'Hello there.');
@@ -391,17 +369,12 @@ test('errored turns do not commit to memory and surface errorMessage', async () 
   assert.ok(end.kind === 'turn-end');
   assert.equal(end.errorMessage, 'boom');
   assert.equal(agent.getMemory().length, 0);
-  assert.equal(engine.cancelCalls.length, 1);
 });
 
 test('aborted turns do not commit to memory', async () => {
   const engine = createFakeEngine();
   const controller = new AbortController();
   controller.abort();
-  engine.enqueue({
-    tokens: [],
-    response: { completed: false, cancelled: true, outputText: '' },
-  });
   const agent = new CharacterRuntime(engine, buildConfig());
   const events = await collectEvents(agent.chat('hi', { signal: controller.signal }));
   const end = events[events.length - 1];
@@ -475,14 +448,15 @@ test('choose() threads literal-choice grammar into queuePrompt options', async (
 
   assert.equal(result.selection, 'wait');
   assert.equal(result.status, 'ok');
-  assert.equal(engine.queuePromptCalls.length, 1);
-  const call = engine.queuePromptCalls[0];
+  assert.equal(engine.queryCalls.length, 1);
+  const call = engine.queryCalls[0];
   assert.ok(typeof call.options === 'object' && call.options != null);
-  const opts = call.options as PromptOptions;
-  assert.equal(opts.promptFormat, 'raw');
-  assert.equal(opts.nTokens, 24);
-  assert.ok(typeof opts.grammar === 'string' && opts.grammar.includes('approach:aria'));
-  assert.ok(call.promptText.includes('Choose exactly one of the following options and output only that option text:'));
+  const opts = call.options as QueryOptions;
+  assert.equal(opts.format, 'raw');
+  assert.equal(opts.maxTokens, 24);
+  assert.ok(typeof (opts as any).grammar === 'string' && (opts as any).grammar.includes('approach:aria'));
+  const promptText = (call.input as any).prompt;
+  assert.ok(promptText.includes('Choose exactly one of the following options and output only that option text:'));
 });
 
 test('choose() is stateless and does not write memory', async () => {
@@ -500,7 +474,7 @@ test('choose() is stateless and does not write memory', async () => {
 
   assert.equal(result.selection, 'wander');
   assert.equal(agent.getMemory().length, 2);
-  const rendered = engine.queuePromptCalls[1]!.promptText;
+  const rendered = (engine.queryCalls[1]!.input as any).prompt;
   assert.doesNotMatch(rendered, /chat reply/);
   assert.doesNotMatch(rendered, /<user>\nhello<\/user>/);
 });
@@ -530,14 +504,13 @@ test('choose() surfaces engine failure', async () => {
   assert.equal(result.selection, null);
   assert.equal(result.status, 'failed');
   assert.equal(result.errorMessage, 'boom');
-  assert.equal(engine.cancelCalls.length, 1);
 });
 
 test('choose() returns aborted when aborted', async () => {
   const engine = createFakeEngine();
   const controller = new AbortController();
   controller.abort();
-  engine.enqueue({ tokens: [], response: { completed: false, cancelled: true, outputText: '' } });
+  engine.enqueue({ tokens: [] });
   const agent = new CharacterRuntime(engine, buildConfig());
 
   const result = await agent.choose('Pick one.', {
@@ -567,7 +540,6 @@ test('choose() returns timed_out on timeout and cancels the queued request', asy
   assert.equal(result.selection, null);
   assert.equal(result.status, 'timed_out');
   assert.equal(result.errorMessage, 'Choice timed out.');
-  assert.deepEqual(engine.cancelCalls, [1]);
 });
 
 test('overlapping chat() auto-cancels the prior turn and commits only the replacement turn', async () => {
@@ -605,23 +577,24 @@ test('overlapping chat() auto-cancels the prior turn and commits only the replac
   assert.equal(memory[1].content, 'second reply');
 });
 
-test('chat() passes a rendered raw prompt to queuePrompt', async () => {
+test('chat() passes a rendered raw prompt to query', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['hi'] });
   const agent = new CharacterRuntime(engine, buildConfig());
   await collectEvents(agent.chat('hello'));
 
-  const call = engine.queuePromptCalls[0];
-  assert.ok(typeof call.promptText === 'string' && call.promptText.length > 0);
-  assert.ok(call.promptText.includes('<system>\n'));
-  assert.ok(call.promptText.includes('Aria'));
-  assert.ok(call.promptText.includes('<user>\n'));
-  assert.ok(call.promptText.includes('hello'));
-  assert.ok(call.promptText.endsWith('<assistant>\n'));
+  const call = engine.queryCalls[0];
+  const promptText = (call.input as any).prompt;
+  assert.ok(typeof promptText === 'string' && promptText.length > 0);
+  assert.ok(promptText.includes('<system>\n'));
+  assert.ok(promptText.includes('Aria'));
+  assert.ok(promptText.includes('<user>\n'));
+  assert.ok(promptText.includes('hello'));
+  assert.ok(promptText.endsWith('<assistant>\n'));
 
   assert.ok(typeof call.options === 'object' && call.options != null);
-  const opts = call.options as PromptOptions;
-  assert.equal(opts.promptFormat, 'raw');
+  const opts = call.options as QueryOptions;
+  assert.equal(opts.format, 'raw');
 });
 
 test('chat() includes prior turn history in the rendered prompt', async () => {
@@ -632,8 +605,8 @@ test('chat() includes prior turn history in the rendered prompt', async () => {
   await collectEvents(agent.chat('first question'));
   await collectEvents(agent.chat('second question'));
 
-  const secondCall = engine.queuePromptCalls[1];
-  const rendered = secondCall.promptText;
+  const secondCall = engine.queryCalls[1];
+  const rendered = (secondCall.input as any).prompt;
   const idxSystem = rendered.indexOf('<system>\n');
   const idxFirstUser = rendered.indexOf('first question');
   const idxAssistant = rendered.indexOf('first reply');
@@ -650,9 +623,9 @@ test('chat() keeps the user message literal in the rendered prompt', async () =>
 
   await collectEvents(agent.chat('hi there'));
 
-  const call = engine.queuePromptCalls[0];
-  assert.match(call.promptText, /<user>\nhi there<\/user>/);
-  assert.doesNotMatch(call.promptText, /reply briefly and warmly/);
+  const call = engine.queryCalls[0];
+  assert.match((call.input as any).prompt, /<user>\nhi there<\/user>/);
+  assert.doesNotMatch((call.input as any).prompt, /reply briefly and warmly/);
 });
 
 test('chat() injects persona dialog examples as few-shot chat turns', async () => {
@@ -660,13 +633,13 @@ test('chat() injects persona dialog examples as few-shot chat turns', async () =
   engine.enqueue({ tokens: ['[wave] hi'] });
   const agent = new CharacterRuntime(
     engine,
-      buildConfig({
-        persona: {
-          name: 'Mira',
-          summary: 'An observant companion.',
-          dialogExamples: [
-            { user: 'hello', assistant: '[wave] Hello there.' },
-            { user: 'are you okay?', assistant: '[settle] I am here with you.' },
+    buildConfig({
+      persona: {
+        name: 'Mira',
+        summary: 'An observant companion.',
+        dialogExamples: [
+          { user: 'hello', assistant: '[wave] Hello there.' },
+          { user: 'are you okay?', assistant: '[settle] I am here with you.' },
         ],
       },
       actions: [
@@ -678,13 +651,14 @@ test('chat() injects persona dialog examples as few-shot chat turns', async () =
 
   await collectEvents(agent.chat('hello'));
 
-  assert.equal(engine.queuePromptCalls.length, 1);
-  const call = engine.queuePromptCalls[0];
-  assert.doesNotMatch(call.promptText, /Dialog examples:/);
-  assert.match(call.promptText, /<user>\nhello<\/user>\n<assistant>\n\[wave\] Hello there\.<\/assistant>/);
-  assert.match(call.promptText, /<user>\nare you okay\?<\/user>\n<assistant>\n\[settle\] I am here with you\.<\/assistant>/);
-  const firstExampleIndex = call.promptText.indexOf('<user>\nhello</user>');
-  const liveUserIndex = call.promptText.lastIndexOf('<user>\nhello</user>');
+  assert.equal(engine.queryCalls.length, 1);
+  const call = engine.queryCalls[0];
+  const promptText = (call.input as any).prompt;
+  assert.doesNotMatch(promptText, /Dialog examples:/);
+  assert.match(promptText, /<user>\nhello<\/user>\n<assistant>\n\[wave\] Hello there\.<\/assistant>/);
+  assert.match(promptText, /<user>\nare you okay\?<\/user>\n<assistant>\n\[settle\] I am here with you\.<\/assistant>/);
+  const firstExampleIndex = promptText.indexOf('<user>\nhello</user>');
+  const liveUserIndex = promptText.lastIndexOf('<user>\nhello</user>');
   assert.ok(firstExampleIndex >= 0 && liveUserIndex > firstExampleIndex);
 });
 
@@ -712,11 +686,12 @@ test('chat() does not inject anchorExamples as few-shot chat turns', async () =>
 
   await collectEvents(agent.chat('hello'));
 
-  const call = engine.queuePromptCalls[0];
-  assert.match(call.promptText, /<system>[\s\S]*Examples:\n\n?User: who are you\?/);
-  assert.match(call.promptText, /<user>\nhello<\/user>\n<assistant>\n\[wave\] Hello there\.<\/assistant>/);
-  assert.doesNotMatch(call.promptText, /<user>\nwho are you\?<\/user>/);
-  assert.doesNotMatch(call.promptText, /<user>\ncan you code\?<\/user>/);
+  const call = engine.queryCalls[0];
+  const promptText = (call.input as any).prompt;
+  assert.match(promptText, /<system>[\s\S]*Examples:\n\n?User: who are you\?/);
+  assert.match(promptText, /<user>\nhello<\/user>\n<assistant>\n\[wave\] Hello there\.<\/assistant>/);
+  assert.doesNotMatch(promptText, /<user>\nwho are you\?<\/user>/);
+  assert.doesNotMatch(promptText, /<user>\ncan you code\?<\/user>/);
 });
 
 test('chat() preserves non-exact user-prefix text in assistant output', async () => {

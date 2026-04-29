@@ -1,3 +1,17 @@
+import type { RuntimeObservation } from '@noumena-labs/cogent-engine';
+
+export interface SamplingConfig {
+  repeatLastN?: number;
+  repeatPenalty?: number;
+  frequencyPenalty?: number;
+  presencePenalty?: number;
+  topK?: number;
+  topP?: number;
+  minP?: number;
+  temperature?: number;
+  seed?: number;
+}
+
 export interface EnvironmentInfo {
   browserLabel: string;
   language: string;
@@ -21,27 +35,7 @@ export interface MetricSummary {
   maxMs: number;
 }
 
-export interface RequestObservability {
-  inputTokenCount: number;
-  outputTokenCount: number;
-  promptEvalTokens: number;
-  promptEvalMs: number;
-  decodeEvalMs: number;
-  sampleMs: number;
-  queueDelayMs: number;
-  meanItlMs?: number;
-  tailItlMs: number;
-  batchParticipationCount: number;
-  decodeFirstTickCount: number;
-  chunkedPrefillTickCount: number;
-  mixedWorkloadTickCount: number;
-  lcpReuseTokens: number;
-  prefixCacheRestoreTokens: number;
-  prefixCacheHitCount: number;
-  prefixCacheStoreCount: number;
-  ttftMs?: number;
-  tokensPerSecond?: number | null;
-}
+export type RequestObservability = RuntimeObservation;
 
 export interface BenchmarkRun {
   label: string;
@@ -123,7 +117,7 @@ export interface ScenarioDefinition {
 
 export interface ScenarioResult {
   definition: ScenarioDefinition;
-  runtime: { initEngineMs: number };
+  runtime: { loadRuntimeMs: number };
   coldPrompt: GroupResult;
   hotFreshContext: GroupResult;
   hotReuseContext: GroupResult;
@@ -165,6 +159,9 @@ export interface ConfigOptions {
     prefillChunkSize: number;
     schedulerPolicy: string;
     decodeTokenReserve: number;
+    multimodalUseGpu: boolean;
+    debugCompareMultimodalEmbeddings: boolean;
+    sampling: SamplingConfig;
   };
   imageInput: ImageInput;
 }
@@ -181,7 +178,7 @@ export interface MixedLoadResult {
   definition: MixedLoadDefinition;
   unsupported?: boolean;
   reason?: string;
-  runtime: { initEngineMs: number | null };
+  runtime: { loadRuntimeMs: number | null };
   foreground?: GroupResult;
   background?: GroupResult;
 }

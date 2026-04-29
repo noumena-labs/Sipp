@@ -15,7 +15,6 @@ export interface EngineModule {
   HEAPU8: Uint8Array;
   _free(ptr: number | bigint): void;
   _malloc(size: number | bigint): number | bigint;
-  addFunction(func: (...args: any[]) => any, signature: string): number | bigint;
   ccall(
     ident: string,
     returnType: string | null,
@@ -23,6 +22,5 @@ export interface EngineModule {
     args: any[],
     opts?: { async?: boolean }
   ): Promise<any> | any;
-  removeFunction(ptr: number | bigint): void;
   UTF8ToString(ptr: number | bigint, maxBytesToRead?: number): string;
 }

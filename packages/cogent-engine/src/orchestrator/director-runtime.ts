@@ -10,13 +10,12 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import type {
-  ChatMessage,
-  GenerateRequestId,
-  GenerateResponse,
-  PromptOptions,
-} from '../core/inference-types.js';
-import { ChatTemplatePromptRuntime, sanitizeAssistantText } from '../core/chat-template-boundaries.js';
-import { createTimedAbortController, waitForAbort } from '../utils/abort.js';
+  ChatInput,
+  ChatOptions,
+  ModelInfo,
+} from '../model-management/model-types.js';
+import type { ChatMessage } from '../types.js';
+import { createTimedAbortController } from '../utils/abort.js';
 import {
   compileDirectorOutputGrammar,
   DirectorOutputError,
@@ -35,23 +34,10 @@ import type {
 } from './director-types.js';
 
 export interface DirectorRuntimeEngine {
-  queuePrompt(
-    contextKey: string,
-    promptText: string,
-    options?: number | PromptOptions
-  ): Promise<GenerateRequestId>;
-  runQueuedRequest(
-    requestId: GenerateRequestId,
-    options?: { signal?: AbortSignal }
-  ): Promise<GenerateResponse>;
-  cancelQueuedRequest?(requestId: GenerateRequestId): Promise<boolean>;
-  applyChatTemplate(
-    messages: Array<{ role: string; content: string }>,
-    addAssistant: boolean
-  ): Promise<string>;
-  getChatTemplate?(): string | null;
-  getEosText?(): string;
-  getMediaMarker?(): string | null;
+  chat(input: ChatInput, options?: ChatOptions): Promise<string>;
+  models?: {
+    current(): Pick<ModelInfo, 'mediaMarker'> | null;
+  };
 }
 
 export class DirectorRuntime {
@@ -60,7 +46,6 @@ export class DirectorRuntime {
   private readonly maxOutputTokens: number;
   private readonly contextKey: string;
   private readonly systemPrompt: string;
-  private readonly promptRuntime: ChatTemplatePromptRuntime;
 
   public constructor(
     engine: DirectorRuntimeEngine,
@@ -72,7 +57,6 @@ export class DirectorRuntime {
     this.maxOutputTokens = options.maxOutputTokens ?? 256;
     this.contextKey = options.contextKey ?? `director:${config.id}`;
     this.systemPrompt = renderDirectorSystemPrompt(config);
-    this.promptRuntime = new ChatTemplatePromptRuntime(engine);
   }
 
   public getConfig(): DirectorConfig {
@@ -148,31 +132,13 @@ export class DirectorRuntime {
       { role: 'user', content: userText },
     ];
 
-    let promptText: string;
-    let boundaryMarkers: readonly string[];
-    try {
-      const promptContext = await this.promptRuntime.render(messages);
-      promptText = promptContext.promptText;
-      boundaryMarkers = promptContext.boundaryMarkers;
-    } catch (error) {
-      return {
-        status: request.signal?.aborted === true ? 'aborted' : 'failed',
-        text: '',
-        selections: [],
-        errorMessage: error instanceof Error ? error.message : String(error),
-        rawText: '',
-      };
-    }
-
     const abort = createTimedAbortController(request.signal, request.timeoutMs);
-    const promptOptions: PromptOptions = {
-      nTokens: request.maxOutputTokens ?? defaultTokenBudget(task.output.shape, this.maxOutputTokens),
-      promptFormat: 'raw',
-      signal: abort.signal,
-      ...(grammar ? { grammar } : {}),
-      ...(media.length > 0 ? { media: [...media] } : {}),
-    };
     const contextKey = this.getTaskContextKey(taskName);
+    const queryOptions: ChatOptions = {
+      session: contextKey,
+      maxTokens: request.maxOutputTokens ?? defaultTokenBudget(task.output.shape, this.maxOutputTokens),
+      signal: abort.signal,
+    };
 
     logDirectorRun({
       phase: 'request',
@@ -183,49 +149,15 @@ export class DirectorRuntime {
       grammar,
     });
 
-    let requestId = 0;
-    let rawText = '';
     try {
-      requestId = await this.engine.queuePrompt(contextKey, promptText, promptOptions);
-      const response = await Promise.race([
-        this.engine.runQueuedRequest(requestId, { signal: abort.signal }),
-        waitForAbort(abort.signal, {
-          timedOut: abort.timedOut,
-          timeoutMessage: 'Director task timed out.',
-          abortMessage: 'Director task aborted.',
-        }),
-      ]);
-      rawText = response.outputText ?? '';
-      const parseText = sanitizeAssistantText(rawText, boundaryMarkers);
-      if (response.cancelled) {
-        const status = abort.timedOut() ? 'timed_out' : 'aborted';
-        const errorMessage = status === 'timed_out'
-          ? 'Director task timed out.'
-          : 'Director task aborted.';
-        logDirectorRun({
-          phase: 'response',
-          taskName,
-          contextKey,
-          rawText,
-          status,
-          errorMessage,
-        });
-        return { status, text: '', selections: [], errorMessage, rawText };
-      }
-      if (response.failed) {
-        const errorMessage = response.errorMessage ?? 'generation failed';
-        logDirectorRun({
-          phase: 'response',
-          taskName,
-          contextKey,
-          rawText,
-          status: 'failed',
-          errorMessage,
-        });
-        return { status: 'failed', text: '', selections: [], errorMessage, rawText };
-      }
-
-      const parsed = parseDirectorOutput(parseText, task.output, resolved);
+      const rawText = await this.engine.chat(
+        media.length > 0 ? { messages, media: [...media] } : messages,
+        {
+          ...queryOptions,
+          grammar,
+        }
+      );
+      const parsed = parseDirectorOutput(rawText, task.output, resolved);
       logDirectorRun({ phase: 'response', taskName, contextKey, rawText, status: 'ok' });
       return {
         status: 'ok',
@@ -235,15 +167,6 @@ export class DirectorRuntime {
       };
     } catch (error) {
       const cancelled = abort.signal.aborted;
-      if (requestId !== 0 && cancelled && this.engine.cancelQueuedRequest) {
-        void this.engine.cancelQueuedRequest(requestId).catch(() => undefined);
-      } else if (requestId !== 0 && !cancelled && this.engine.cancelQueuedRequest) {
-        try {
-          await this.engine.cancelQueuedRequest(requestId);
-        } catch {
-          // Swallow; the original error is more useful.
-        }
-      }
       const status = classifyCaughtStatus(error, cancelled, abort.timedOut());
       const errorMessage = status === 'timed_out'
         ? 'Director task timed out.'
@@ -254,7 +177,7 @@ export class DirectorRuntime {
         phase: 'response',
         taskName,
         contextKey,
-        rawText,
+        rawText: '',
         status,
         errorMessage,
       });
@@ -263,7 +186,7 @@ export class DirectorRuntime {
         text: '',
         selections: [],
         errorMessage,
-        rawText,
+        rawText: '',
       };
     } finally {
       abort.dispose();
@@ -279,7 +202,7 @@ export class DirectorRuntime {
   }
 
   private getMediaMarker(): string | null {
-    return this.engine.getMediaMarker?.() ?? null;
+    return this.engine.models?.current()?.mediaMarker ?? null;
   }
 
   private getTaskContextKey(taskName: string): string {
