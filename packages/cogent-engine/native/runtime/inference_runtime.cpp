@@ -116,6 +116,47 @@ bool token_to_piece_string(const llama_vocab *vocab, llama_token token,
   return true;
 }
 
+bool token_to_piece_buffer(const llama_vocab *vocab, llama_token token,
+                           bool special, char *stack_buffer,
+                           std::size_t stack_buffer_size,
+                           std::string &overflow_piece,
+                           const char *&piece_data,
+                           std::size_t &piece_size) {
+  overflow_piece.clear();
+  piece_data = nullptr;
+  piece_size = 0;
+  if (vocab == nullptr || token < 0 || stack_buffer == nullptr ||
+      stack_buffer_size == 0) {
+    return false;
+  }
+
+  const int32_t piece_length =
+      llama_token_to_piece(vocab, token, stack_buffer,
+                           static_cast<int32_t>(stack_buffer_size), 0,
+                           special);
+  if (piece_length >= 0) {
+    piece_data = stack_buffer;
+    piece_size = static_cast<std::size_t>(piece_length);
+    return true;
+  }
+
+  const int32_t required_length = -piece_length;
+  if (required_length <= 0) {
+    return false;
+  }
+
+  overflow_piece.resize(static_cast<std::size_t>(required_length));
+  const int32_t retry_length = llama_token_to_piece(
+      vocab, token, overflow_piece.data(), required_length, 0, special);
+  if (retry_length != required_length) {
+    overflow_piece.clear();
+    return false;
+  }
+  piece_data = overflow_piece.data();
+  piece_size = static_cast<std::size_t>(retry_length);
+  return true;
+}
+
 // Returns the number of trailing bytes in `data` that belong to an
 // incomplete UTF-8 sequence. UTF-8 code points are 1-4 bytes long, so any
 // incomplete tail is at most 3 bytes. If the trailing bytes are a complete
@@ -528,13 +569,18 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
     return false;
   }
 
-  std::string piece;
-  if (!token_to_piece_string(vocab, next_token, false, piece)) {
+  char piece_buffer[128];
+  std::string piece_overflow;
+  const char *piece_data = nullptr;
+  std::size_t piece_size = 0;
+  if (!token_to_piece_buffer(vocab, next_token, false, piece_buffer,
+                             sizeof(piece_buffer), piece_overflow, piece_data,
+                             piece_size)) {
     slot.terminal_error_message =
         "Failed to convert the first multimodal sampled token to text.";
     return false;
   }
-  if (piece.empty()) {
+  if (piece_size == 0) {
     slot.terminal_error_message =
         "First multimodal sampled token decoded to an empty text piece.";
     return false;
@@ -545,7 +591,7 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
   // multi-byte codepoints that span sampled tokens are emitted cleanly.
   std::string stitched = std::move(slot.pending_utf8_bytes);
   slot.pending_utf8_bytes.clear();
-  stitched.append(piece);
+  stitched.append(piece_data, piece_size);
   const std::size_t tail_len =
       incomplete_utf8_tail_length(stitched.data(), stitched.size());
   if (tail_len > 0) {
@@ -1182,15 +1228,20 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       continue;
     }
 
-    std::string piece;
-    if (!token_to_piece_string(vocab, next_token, false, piece)) {
+    char piece_buffer[128];
+    std::string piece_overflow;
+    const char *piece_data = nullptr;
+    std::size_t piece_size = 0;
+    if (!token_to_piece_buffer(vocab, next_token, false, piece_buffer,
+                               sizeof(piece_buffer), piece_overflow,
+                               piece_data, piece_size)) {
       slot.terminal_error_message =
           "Failed to convert sampled token to text piece.";
       slot.phase = SlotPhase::Failed;
       slot_request.lifecycle = GenerateRequestLifecycle::Failed;
       continue;
     }
-    if (piece.empty() && slot_request.emitted_token_count == 0 &&
+    if (piece_size == 0 && slot_request.emitted_token_count == 0 &&
         slot.pending_utf8_bytes.empty()) {
       slot.terminal_error_message =
           "Leading sampled token decoded to an empty text piece.";
@@ -1204,7 +1255,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     // so multi-byte codepoints that span sampled tokens are emitted cleanly.
     std::string stitched = std::move(slot.pending_utf8_bytes);
     slot.pending_utf8_bytes.clear();
-    stitched.append(piece);
+    stitched.append(piece_data, piece_size);
     const std::size_t tail_len =
         incomplete_utf8_tail_length(stitched.data(), stitched.size());
     if (tail_len > 0) {
