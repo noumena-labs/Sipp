@@ -92,7 +92,14 @@ SlotState *SlotScheduler::FindFirstActiveSlot() {
 
 std::vector<SlotState *> SlotScheduler::SelectDecodeReadySlots() {
   std::vector<SlotState *> decode_slots;
-  decode_slots.reserve(slots_.size());
+  SelectDecodeReadySlots(decode_slots);
+  return decode_slots;
+}
+
+void SlotScheduler::SelectDecodeReadySlots(
+    std::vector<SlotState *> &out_slots) {
+  out_slots.clear();
+  out_slots.reserve(slots_.size());
 
   // Phase 4 algorithm steps:
   // 1. Admit only slots that are already decode-ready for this tick.
@@ -112,15 +119,20 @@ std::vector<SlotState *> SlotScheduler::SelectDecodeReadySlots() {
     if (!slot.buffered_output_text.empty()) {
       continue;
     }
-    decode_slots.push_back(&slot);
+    out_slots.push_back(&slot);
   }
-
-  return decode_slots;
 }
 
 std::vector<SlotState *> SlotScheduler::SelectPrefillReadySlots() {
   std::vector<SlotState *> prefill_slots;
-  prefill_slots.reserve(slots_.size());
+  SelectPrefillReadySlots(prefill_slots);
+  return prefill_slots;
+}
+
+void SlotScheduler::SelectPrefillReadySlots(
+    std::vector<SlotState *> &out_slots) {
+  out_slots.clear();
+  out_slots.reserve(slots_.size());
 
   // Phase 4 algorithm steps:
   // 1. Admit only slots that still have prompt tokens left to prefill.
@@ -136,16 +148,14 @@ std::vector<SlotState *> SlotScheduler::SelectPrefillReadySlots() {
     }
     if (slot.request->is_multimodal_turn &&
         slot.request->multimodal.has_value()) {
-      prefill_slots.push_back(&slot);
+      out_slots.push_back(&slot);
       continue;
     }
     if (slot.prefill_cursor >= slot.request->prompt_tokens.size()) {
       continue;
     }
-    prefill_slots.push_back(&slot);
+    out_slots.push_back(&slot);
   }
-
-  return prefill_slots;
 }
 
 SchedulerTickBudget
@@ -154,21 +164,11 @@ SlotScheduler::BuildTickBudget(const SchedulerPolicyConfig &policy,
                                int32_t prefill_ready_count,
                                int32_t max_batch_tokens,
                                int32_t prefill_chunk_size) {
-  (void)policy;
   (void)prefill_chunk_size;
   SchedulerTickBudget budget;
   budget.total_token_budget = std::max(0, max_batch_tokens);
   budget.decode_first = decode_ready_count > 0;
 
-  // Phase 5B scheduler policy steps:
-  // 1. Reserve at most one decode token per decode-ready slot. The current
-  //    planner can only consume one decode contribution per slot per tick, so
-  //    reserving more decode budget than decode-ready slots only wastes batch
-  //    capacity and starves prefill without improving latency.
-  // 2. Leave at least one token of prefill room when prefill work is present
-  //    so prompt progress does not deadlock behind a decode-only reservation.
-  // 3. Spend the remainder on prefill, with chunking and fairness handled in
-  //    the batch planner.
   if (budget.total_token_budget <= 0) {
     return budget;
   }
@@ -177,11 +177,68 @@ SlotScheduler::BuildTickBudget(const SchedulerPolicyConfig &policy,
       std::max<int32_t>(0, decode_ready_count);
   const int32_t clamped_prefill_ready =
       std::max<int32_t>(0, prefill_ready_count);
-  const int32_t prefill_floor = clamped_prefill_ready > 0 ? 1 : 0;
-  const int32_t decode_budget_ceiling =
-      std::max(0, budget.total_token_budget - prefill_floor);
-  budget.reserved_decode_tokens =
-      std::min(clamped_decode_ready, decode_budget_ceiling);
+
+  if (clamped_decode_ready == 0) {
+    budget.reserved_decode_tokens = 0;
+    budget.reserved_prefill_tokens = budget.total_token_budget;
+    return budget;
+  }
+
+  if (clamped_prefill_ready == 0) {
+    budget.reserved_decode_tokens =
+        std::min(clamped_decode_ready, budget.total_token_budget);
+    budget.reserved_prefill_tokens =
+        budget.total_token_budget - budget.reserved_decode_tokens;
+    return budget;
+  }
+
+  const int32_t requested_decode_reserve =
+      policy.decode_token_reserve > 0
+          ? std::min(policy.decode_token_reserve, clamped_decode_ready)
+          : clamped_decode_ready;
+  const int32_t decode_ready_budget =
+      std::min(clamped_decode_ready, budget.total_token_budget);
+
+  switch (policy.mode) {
+  case SchedulerPolicyMode::LatencyFirst:
+    // Decode latency wins. Prefill uses leftover capacity only.
+    budget.reserved_decode_tokens =
+        policy.decode_token_reserve > 0
+            ? std::min(decode_ready_budget, requested_decode_reserve)
+            : decode_ready_budget;
+    break;
+  case SchedulerPolicyMode::ThroughputFirst: {
+    // Keep decode alive, but bias the shared batch toward prompt work.
+    const int32_t prefill_floor =
+        budget.total_token_budget > 1
+            ? std::max<int32_t>(1, (budget.total_token_budget * 3) / 4)
+            : 0;
+    const int32_t decode_ceiling =
+        std::max<int32_t>(1, budget.total_token_budget - prefill_floor);
+    const int32_t throughput_reserve =
+        policy.decode_token_reserve > 0 ? requested_decode_reserve : 1;
+    budget.reserved_decode_tokens =
+        std::min({decode_ready_budget, decode_ceiling, throughput_reserve});
+    break;
+  }
+  case SchedulerPolicyMode::Balanced:
+  default: {
+    // Preserve decode responsiveness while leaving room for prefill whenever
+    // the batch has more than one token of capacity. With n_batch=1, decode
+    // must not be starved by the prefill floor.
+    const int32_t prefill_floor = budget.total_token_budget > 1 ? 1 : 0;
+    const int32_t decode_ceiling =
+        std::max(0, budget.total_token_budget - prefill_floor);
+    budget.reserved_decode_tokens =
+        std::min(decode_ready_budget, decode_ceiling);
+    if (policy.decode_token_reserve > 0) {
+      budget.reserved_decode_tokens =
+          std::min(budget.reserved_decode_tokens, requested_decode_reserve);
+    }
+    break;
+  }
+  }
+
   budget.reserved_prefill_tokens =
       std::max(0, budget.total_token_budget - budget.reserved_decode_tokens);
 

@@ -37,7 +37,8 @@ struct SchedulerTickBudget {
   }
 
   int32_t EffectivePrefillBudget() const {
-    return std::max(0, total_token_budget - EffectiveDecodeBudget());
+    return std::clamp(reserved_prefill_tokens, 0,
+                      total_token_budget - EffectiveDecodeBudget());
   }
 };
 
