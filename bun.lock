@@ -45,6 +45,17 @@
         "vite": "^5.4.0",
       },
     },
+    "apps/examples": {
+      "name": "cogent-engine-examples",
+      "version": "0.0.1",
+      "dependencies": {
+        "@noumena-labs/cogent-engine": "workspace:*",
+      },
+      "devDependencies": {
+        "typescript": "^5.3.3",
+        "vite": "^5.1.0",
+      },
+    },
     "apps/simulation": {
       "name": "cogent-engine-simulation-app",
       "version": "0.0.1",
@@ -66,7 +77,7 @@
     },
     "packages/cogent-engine": {
       "name": "@noumena-labs/cogent-engine",
-      "version": "1.0.0",
+      "version": "0.0.1",
       "devDependencies": {
         "@types/node": "^20.10.0",
         "playwright": "^1.56.1",
@@ -288,6 +299,8 @@
     "cogent-engine-avatar-app": ["cogent-engine-avatar-app@workspace:apps/avatar"],
 
     "cogent-engine-benchmark-app": ["cogent-engine-benchmark-app@workspace:apps/benchmark"],
+
+    "cogent-engine-examples": ["cogent-engine-examples@workspace:apps/examples"],
 
     "cogent-engine-simulation-app": ["cogent-engine-simulation-app@workspace:apps/simulation"],
 

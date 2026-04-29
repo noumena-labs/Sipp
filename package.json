@@ -7,7 +7,8 @@
     "packages/*",
     "apps/benchmark",
     "apps/avatar",
-    "apps/simulation"
+    "apps/simulation",
+    "apps/examples"
   ],
   "scripts": {
     "build": "bun run build:package",
@@ -34,6 +35,9 @@
     "simulation:dev": "bun run build:package:dev && bun run --filter=cogent-engine-simulation-app dev",
     "simulation:build": "bun run build:package && bun run --filter=cogent-engine-simulation-app build",
     "simulation:preview": "bun run --filter=cogent-engine-simulation-app preview",
+    "examples:dev": "bun run build:package && bun run --filter=cogent-engine-examples dev",
+    "examples:build": "bun run build:package && bun run --filter=cogent-engine-examples build",
+    "examples:preview": "bun run --filter=cogent-engine-examples preview",
     "bench:browser": "bun ./scripts/benchmark-browser.mjs"
   },
   "devDependencies": {
