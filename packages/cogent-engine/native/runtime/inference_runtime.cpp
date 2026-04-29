@@ -515,7 +515,7 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
 
   // The multimodal prefill path runs on the same async backends as normal
   // decode, so force completion before reading logits for the first sample.
-  // llama_synchronize(shared_context_);
+  llama_synchronize(shared_context_);
 
   const llama_token next_token =
       llama_sampler_sample(slot.sampler, shared_context_, -1);
