@@ -32,6 +32,7 @@ export interface ModelRuntimeOptions {
   nSeqMax?: number;
   nThreads?: number;
   nThreadsBatch?: number;
+  /** `-1` keeps automatic/full accelerator offload; `0` forces CPU-only. */
   nGpuLayers?: number;
   flashAttention?: InferenceInitConfig['flashAttention'];
   kvUnified?: boolean;

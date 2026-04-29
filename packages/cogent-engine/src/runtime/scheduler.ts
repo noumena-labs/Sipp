@@ -291,6 +291,9 @@ export class QueuedRequestScheduler {
       (this.transportObservability.runtimeEventDrainCount ?? 0) + 1;
     const tokenRequestIds: GenerateRequestId[] = [];
     for (const tokenEvent of drained.tokenEvents) {
+      if (!this.options.queuedPromptCallbacks.has(tokenEvent.requestId)) {
+        continue;
+      }
       this.bufferQueuedTokenPiece(tokenEvent.requestId, tokenEvent.token);
       tokenRequestIds.push(tokenEvent.requestId);
     }

@@ -47,7 +47,7 @@ graph TD
 
     subgraph NativeBridge ["WASM Bridge & Exports"]
         Bridge["WasmBridge<br/>(Emscripten Abstraction)"]
-        WasmExports["CE_Init / CE_Close<br/>CE_StartTextRequest / CE_CancelRequest<br/>CE_RunSchedulerBurst / CE_DrainRuntimeEvents"]
+        WasmExports["CE_Init / CE_Close<br/>CE_StartTextRequestWithTokenEmissionMode / CE_CancelRequest<br/>CE_RunSchedulerBurst / CE_DrainRuntimeEvents"]
     end
 
     subgraph Native ["Native Inference Runtime (C++)"]
@@ -143,7 +143,7 @@ sequenceDiagram
     MS->>RT: enqueueQuery(session, prompt, options)
     
     RT->>Bridge: startTextRequest() OR startMediaRequest()
-    Bridge->>Wasm: CE_StartTextRequest / CE_StartMediaRequest
+    Bridge->>Wasm: CE_StartTextRequestWithTokenEmissionMode / CE_StartMediaRequestWithTokenEmissionMode
     Wasm-->>Bridge: requestId
     Bridge-->>RT: requestId
 

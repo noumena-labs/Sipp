@@ -84,3 +84,65 @@ test('QueuedRequestScheduler settles completed requests even without terminal ev
   assert.equal(response.outputText, 'done');
   assert.deepEqual(finalized, [1]);
 });
+
+test('QueuedRequestScheduler ignores token events for requests without callbacks', async () => {
+  const tracker = new RequestTracker<GenerateResponse>();
+  const transport = createTransportObservability();
+  const queuedPromptCallbacks = new Map();
+  const queuedPromptTokenBuffers = new Map();
+  const finalized: number[] = [];
+  const bridge = {
+    async runSchedulerProgress() {
+      return {
+        stepResult: REQUEST_STEP_RESULT_WAITING,
+        completedResponseCount: 1,
+      };
+    },
+    drainRuntimeEvents() {
+      return {
+        terminalRequestIds: [],
+        tokenEvents: [{ requestId: 1, token: 'ignored' }],
+        textBytes: 'ignored'.length,
+      };
+    },
+    getCompletedRequestStatus() {
+      return COMPLETED_REQUEST_STATUS_COMPLETED;
+    },
+    takeCompletedResponse(requestId: number): GenerateResponse {
+      return {
+        requestId,
+        completed: true,
+        cancelled: false,
+        failed: false,
+        outputText: 'done',
+      };
+    },
+  } as unknown as WasmBridge;
+
+  const scheduler = new QueuedRequestScheduler({
+    tracker,
+    queuedPromptCallbacks,
+    queuedPromptTokenBuffers,
+    queuedPromptCallbackErrors: new Map(),
+    getTransportObservability: () => transport,
+    getBridge: () => bridge,
+    finalizeRequest: (_bridge, requestId, options) => {
+      finalized.push(requestId);
+      tracker.finalize(requestId, options);
+    },
+    cancelQuery: async () => true,
+  });
+
+  const tracked = scheduler.track(1);
+  const response = await Promise.race([
+    tracked.promise,
+    new Promise<GenerateResponse>((_, reject) => {
+      setTimeout(() => reject(new Error('scheduler did not settle request')), 100);
+    }),
+  ]);
+
+  assert.equal(response.outputText, 'done');
+  assert.deepEqual(finalized, [1]);
+  assert.equal(queuedPromptTokenBuffers.size, 0);
+  assert.equal(transport.runtimeEventTokenCount, 1);
+});

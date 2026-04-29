@@ -415,10 +415,16 @@ void SlotScheduler::EmitBufferedTokenPiece(RequestQueue &request_queue,
     request->last_token_at = now;
     request->has_last_token_at = true;
     request->emitted_token_count++;
-    request_queue.QueueTokenEvent(request->id, slot.buffered_output_text);
+    if (request->token_emission_mode ==
+        GenerateTokenEmissionMode::RuntimeEvents) {
+      request_queue.QueueTokenEvent(request->id, slot.buffered_output_text);
+    }
   }
 
-  if (request != nullptr && request->on_token_received) {
+  if (request != nullptr &&
+      request->token_emission_mode ==
+          GenerateTokenEmissionMode::DirectCallback &&
+      request->on_token_received) {
     if (!request->on_token_received(
         slot.buffered_output_text.c_str(),
         static_cast<int32_t>(slot.buffered_output_text.size()))) {

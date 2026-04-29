@@ -21,7 +21,7 @@ const enableEsModule = true;
 const enableFilesystem = true;
 const enableJspi = true;
 const enableAggressiveOpt = true;
-const enablePthreads = false;
+const enablePthreads = readBooleanEnv('CE_WASM_PTHREADS', false);
 const suppressLlamaLogs = true;
 const emscriptenEnvironment = 'web,worker';
 const enableMemory64 = readBooleanEnv('CE_WASM_MEM64', true);
@@ -697,7 +697,7 @@ if (maximumMemory) {
 }
 
 console.log(
-  `${buildLabel} generator=${buildConfig.generator} mem64=${enableMemory64 ? 'on' : 'off'} lto=${ltoMode.toLowerCase()} output=dist/${packageWasmSubdir}` +
+  `${buildLabel} generator=${buildConfig.generator} mem64=${enableMemory64 ? 'on' : 'off'} pthreads=${enablePthreads ? 'on' : 'off'} lto=${ltoMode.toLowerCase()} output=dist/${packageWasmSubdir}` +
     (buildConfig.makeProgram ? ` make_program=${buildConfig.makeProgram}` : '') +
     (buildParallelLevel ? ` jobs=${buildParallelLevel}` : '')
 );

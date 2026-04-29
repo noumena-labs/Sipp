@@ -23,7 +23,7 @@ struct InferenceRuntimeConfig {
   int32_t n_seq_max = 1;
   int32_t n_threads = 0;
   int32_t n_threads_batch = 0;
-  int32_t gpu_layers = 99;
+  int32_t gpu_layers = -1;
   int32_t flash_attention = -1;
   int32_t kv_unified = -1;
   int32_t max_cached_sessions = 8;

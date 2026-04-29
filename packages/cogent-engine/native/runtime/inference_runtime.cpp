@@ -36,7 +36,7 @@ using InputChunksPtr =
 noumena::cogentengine::InferenceRuntimeConfig
 normalize_config(noumena::cogentengine::InferenceRuntimeConfig config) {
   config.n_seq_max = std::max<int32_t>(1, config.n_seq_max);
-  config.gpu_layers = std::max<int32_t>(0, config.gpu_layers);
+  config.gpu_layers = std::max<int32_t>(-1, config.gpu_layers);
   config.max_cached_sessions = std::max<int32_t>(1, config.max_cached_sessions);
   config.retained_prefix_tokens =
       std::max<int32_t>(0, config.retained_prefix_tokens);
@@ -1825,7 +1825,8 @@ GenerateRequestId
 InferenceRuntime::EnqueueRequest(std::string context_key, std::string prompt,
                                  int n_tokens_predict,
                                  TokenCallback on_token_received,
-                                 std::string grammar) {
+                                 std::string grammar,
+                                 GenerateTokenEmissionMode token_emission_mode) {
   // Fast-fail without lock (model pointer is immutable after construction).
   if (primary_model_ == nullptr || sampler_ == nullptr) {
     return 0;
@@ -1857,6 +1858,7 @@ InferenceRuntime::EnqueueRequest(std::string context_key, std::string prompt,
   request.original_prompt = std::move(prompt);
   request.max_output_tokens = n_tokens_predict;
   request.on_token_received = std::move(on_token_received);
+  request.token_emission_mode = token_emission_mode;
   request.prompt_tokens = std::move(prompt_tokens);
   request.grammar = std::move(grammar);
 
@@ -1871,7 +1873,8 @@ GenerateRequestId InferenceRuntime::EnqueueMultimodalRequest(
     std::string context_key, std::string prompt, int n_tokens_predict,
     std::vector<std::pair<const std::uint8_t *, std::size_t>> image_views,
     TokenCallback on_token_received,
-    std::string grammar) {
+    std::string grammar,
+    GenerateTokenEmissionMode token_emission_mode) {
   if (primary_model_ == nullptr || sampler_ == nullptr ||
       mtmd_ctx_ == nullptr || !mtmd_support_vision(mtmd_ctx_)) {
     return 0;
@@ -1911,6 +1914,7 @@ GenerateRequestId InferenceRuntime::EnqueueMultimodalRequest(
   request.multimodal = std::move(payload);
   request.max_output_tokens = n_tokens_predict;
   request.on_token_received = std::move(on_token_received);
+  request.token_emission_mode = token_emission_mode;
   request.is_multimodal_turn = true;
   request.grammar = std::move(grammar);
 

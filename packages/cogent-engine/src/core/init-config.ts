@@ -283,7 +283,7 @@ export function normalizeInitConfig(config: InferenceInitConfig | undefined): No
     nGpuLayers:
       config?.nGpuLayers == null
         ? DEFAULT_GPU_LAYERS
-        : normalizeInteger('nGpuLayers', config.nGpuLayers, 0, false),
+        : normalizeInteger('nGpuLayers', config.nGpuLayers, -1, false),
     flashAttention: normalizeFlashAttention(config?.flashAttention),
     kvUnified: normalizeOptionalBoolean(config?.kvUnified),
     maxCachedSessions: normalizeInteger('maxCachedSessions', config?.maxCachedSessions, 1),
