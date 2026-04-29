@@ -19,6 +19,7 @@
 #include "llama.h"
 #include "runtime/inference_runtime.h"
 
+using noumena::cogentengine::GenerateTokenEmissionMode;
 using noumena::cogentengine::InferenceRuntime;
 
 namespace {
@@ -36,6 +37,23 @@ using json = nlohmann::json;
 
 bool is_valid_prediction_tokens(int token_count) {
   return token_count > 0 && token_count <= kMaxPredictionTokens;
+}
+
+bool map_token_emission_mode(CE_TokenEmissionMode mode,
+                             GenerateTokenEmissionMode &out_mode) {
+  switch (mode) {
+  case CE_TOKEN_EMISSION_NONE:
+    out_mode = GenerateTokenEmissionMode::None;
+    return true;
+  case CE_TOKEN_EMISSION_RUNTIME_EVENTS:
+    out_mode = GenerateTokenEmissionMode::RuntimeEvents;
+    return true;
+  case CE_TOKEN_EMISSION_DIRECT_CALLBACK:
+    out_mode = GenerateTokenEmissionMode::DirectCallback;
+    return true;
+  default:
+    return false;
+  }
 }
 
 const char *backend_dev_type_name(enum ggml_backend_dev_type type) {
@@ -269,8 +287,7 @@ int CE_InitPlugin(const char *model_path, const CE_InitConfig *config) {
     runtime_config.n_seq_max = config->n_seq_max;
     runtime_config.n_threads = config->n_threads;
     runtime_config.n_threads_batch = config->n_threads_batch;
-    runtime_config.gpu_layers =
-        config->gpu_layers >= 0 ? config->gpu_layers : 99;
+    runtime_config.gpu_layers = config->gpu_layers;
     runtime_config.flash_attention = config->flash_attention;
     runtime_config.kv_unified = config->kv_unified;
     runtime_config.max_cached_sessions =
@@ -624,31 +641,43 @@ const char *CE_GetBackendObservabilityJsonString() {
   return info_json.c_str();
 }
 
-CE_RequestId CE_StartPromptRequest(const char *context_key, const char *prompt,
-                                   int n_tokens_predict,
-                                   CE_TokenCallback on_token,
-                                   const char *grammar) {
+CE_RequestId CE_StartPromptRequestWithTokenEmissionMode(
+    const char *context_key, const char *prompt, int n_tokens_predict,
+    CE_TokenCallback on_token, CE_TokenEmissionMode token_emission_mode,
+    const char *grammar) {
   auto runtime = acquire_engine_runtime();
   if (!runtime) {
     return 0;
   }
 
+  GenerateTokenEmissionMode native_emission_mode;
+  if (!map_token_emission_mode(token_emission_mode, native_emission_mode)) {
+    return 0;
+  }
+  if (native_emission_mode == GenerateTokenEmissionMode::DirectCallback &&
+      on_token == nullptr) {
+    return 0;
+  }
+
+  InferenceRuntime::TokenCallback token_callback;
+  if (native_emission_mode == GenerateTokenEmissionMode::DirectCallback) {
+    token_callback = [on_token](const char *token_piece,
+                                int32_t token_length) {
+      return on_token(token_piece, token_length) == 0;
+    };
+  }
+
   return runtime->EnqueueRequest(
       context_key ? context_key : "", prompt ? prompt : "", n_tokens_predict,
-      [on_token](const char *token_piece, int32_t token_length) {
-        if (on_token != nullptr) {
-          return on_token(token_piece, token_length) == 0;
-        }
-        return true;
-      },
-      grammar ? std::string(grammar) : std::string());
+      std::move(token_callback), grammar ? std::string(grammar) : std::string(),
+      native_emission_mode);
 }
 
-CE_RequestId CE_StartPromptWithMediaRequest(
+CE_RequestId CE_StartPromptWithMediaRequestWithTokenEmissionMode(
     const char *context_key, const char *prompt, int n_tokens_predict,
     int32_t n_images, const uint8_t *images_flat_buffer,
     const int32_t *image_sizes, CE_TokenCallback on_token,
-    const char *grammar) {
+    CE_TokenEmissionMode token_emission_mode, const char *grammar) {
   if (prompt == nullptr || !is_valid_prediction_tokens(n_tokens_predict)) {
     return 0;
   }
@@ -656,8 +685,18 @@ CE_RequestId CE_StartPromptWithMediaRequest(
     return 0;
   }
   if (n_images == 0) {
-    return CE_StartPromptRequest(context_key, prompt, n_tokens_predict,
-                                 on_token, grammar);
+    return CE_StartPromptRequestWithTokenEmissionMode(
+        context_key, prompt, n_tokens_predict, on_token, token_emission_mode,
+        grammar);
+  }
+
+  GenerateTokenEmissionMode native_emission_mode;
+  if (!map_token_emission_mode(token_emission_mode, native_emission_mode)) {
+    return 0;
+  }
+  if (native_emission_mode == GenerateTokenEmissionMode::DirectCallback &&
+      on_token == nullptr) {
+    return 0;
   }
 
   std::size_t total_media_bytes = 0;
@@ -681,16 +720,18 @@ CE_RequestId CE_StartPromptWithMediaRequest(
     byte_offset += image_size;
   }
 
+  InferenceRuntime::TokenCallback token_callback;
+  if (native_emission_mode == GenerateTokenEmissionMode::DirectCallback) {
+    token_callback = [on_token](const char *token_piece,
+                                int32_t token_length) {
+      return on_token(token_piece, token_length) == 0;
+    };
+  }
+
   return runtime->EnqueueMultimodalRequest(
       context_key ? context_key : "", prompt, n_tokens_predict,
-      std::move(image_views),
-      [on_token](const char *token_piece, int32_t token_length) {
-        if (on_token != nullptr) {
-          return on_token(token_piece, token_length) == 0;
-        }
-        return true;
-      },
-      grammar ? std::string(grammar) : std::string());
+      std::move(image_views), std::move(token_callback),
+      grammar ? std::string(grammar) : std::string(), native_emission_mode);
 }
 
 const char *CE_GetMediaMarkerString() {

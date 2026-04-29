@@ -17,6 +17,12 @@ typedef uint32_t CE_RequestId;
 typedef int32_t (*CE_TokenCallback)(const char *token_piece,
                                     int32_t token_length);
 
+typedef enum CE_TokenEmissionMode {
+  CE_TOKEN_EMISSION_NONE = 0,
+  CE_TOKEN_EMISSION_RUNTIME_EVENTS = 1,
+  CE_TOKEN_EMISSION_DIRECT_CALLBACK = 2,
+} CE_TokenEmissionMode;
+
 typedef struct CE_InitConfig {
   int32_t n_ctx;
   int32_t n_batch;

@@ -24,6 +24,10 @@ export interface InferenceInitConfig {
   nSeqMax?: number;
   nThreads?: number;
   nThreadsBatch?: number;
+  /**
+   * Number of transformer layers to offload to the accelerator. `-1` keeps
+   * llama.cpp's automatic/full offload behavior; `0` forces CPU-only loading.
+   */
   nGpuLayers?: number;
   flashAttention?: FlashAttentionMode;
   kvUnified?: boolean;

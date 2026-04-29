@@ -15,8 +15,6 @@
 #include <functional>
 #include <memory>
 #include <sstream>
-#include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -38,7 +36,7 @@ using InputChunksPtr =
 noumena::cogentengine::InferenceRuntimeConfig
 normalize_config(noumena::cogentengine::InferenceRuntimeConfig config) {
   config.n_seq_max = std::max<int32_t>(1, config.n_seq_max);
-  config.gpu_layers = std::max<int32_t>(0, config.gpu_layers);
+  config.gpu_layers = std::max<int32_t>(-1, config.gpu_layers);
   config.max_cached_sessions = std::max<int32_t>(1, config.max_cached_sessions);
   config.retained_prefix_tokens =
       std::max<int32_t>(0, config.retained_prefix_tokens);
@@ -85,6 +83,37 @@ uint32_t resolve_sampling_seed(int32_t seed) {
     return LLAMA_DEFAULT_SEED;
   }
   return static_cast<uint32_t>(seed);
+}
+
+bool token_to_piece_string(const llama_vocab *vocab, llama_token token,
+                           bool special, std::string &out_piece) {
+  out_piece.clear();
+  if (vocab == nullptr || token < 0) {
+    return false;
+  }
+
+  char stack_buffer[128];
+  const int32_t piece_length = llama_token_to_piece(
+      vocab, token, stack_buffer, sizeof(stack_buffer), 0, special);
+  if (piece_length >= 0) {
+    out_piece.assign(stack_buffer, static_cast<std::size_t>(piece_length));
+    return true;
+  }
+
+  const int32_t required_length = -piece_length;
+  if (required_length <= 0) {
+    return false;
+  }
+
+  out_piece.resize(static_cast<std::size_t>(required_length));
+  const int32_t retry_length =
+      llama_token_to_piece(vocab, token, out_piece.data(), required_length, 0,
+                           special);
+  if (retry_length != required_length) {
+    out_piece.clear();
+    return false;
+  }
+  return true;
 }
 
 // Returns the number of trailing bytes in `data` that belong to an
@@ -185,7 +214,7 @@ bool InferenceRuntime::EnsureContextSpace(SequenceState &state,
     state.current_kv_tokens.clear();
   }
 
-  state.n_past = std::max(0, state.n_past - n_discard);
+  state.n_past = static_cast<int>(state.current_kv_tokens.size());
 
   if (state.n_past + new_tokens_needed <= n_ctx) {
     return true;
@@ -499,15 +528,13 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
     return false;
   }
 
-  char piece_buffer[128];
-  const int piece_length = llama_token_to_piece(vocab, next_token, piece_buffer,
-                                                sizeof(piece_buffer), 0, false);
-  if (piece_length < 0) {
+  std::string piece;
+  if (!token_to_piece_string(vocab, next_token, false, piece)) {
     slot.terminal_error_message =
         "Failed to convert the first multimodal sampled token to text.";
     return false;
   }
-  if (piece_length == 0) {
+  if (piece.empty()) {
     slot.terminal_error_message =
         "First multimodal sampled token decoded to an empty text piece.";
     return false;
@@ -518,7 +545,7 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
   // multi-byte codepoints that span sampled tokens are emitted cleanly.
   std::string stitched = std::move(slot.pending_utf8_bytes);
   slot.pending_utf8_bytes.clear();
-  stitched.append(piece_buffer, static_cast<std::size_t>(piece_length));
+  stitched.append(piece);
   const std::size_t tail_len =
       incomplete_utf8_tail_length(stitched.data(), stitched.size());
   if (tail_len > 0) {
@@ -778,30 +805,28 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     NormalizeRunnableSlotStateLocked(slot);
   }
 
-  auto combine_slots = [](const std::vector<SlotState *> &left,
+  auto combine_slots = [](std::vector<SlotState *> &out,
+                          const std::vector<SlotState *> &left,
                           const std::vector<SlotState *> &right) {
-    std::vector<SlotState *> combined;
-    combined.reserve(left.size() + right.size());
+    out.clear();
+    out.reserve(left.size() + right.size());
     for (SlotState *slot : left) {
       if (slot != nullptr) {
-        combined.push_back(slot);
+        out.push_back(slot);
       }
     }
     for (SlotState *slot : right) {
       if (slot != nullptr) {
-        combined.push_back(slot);
+        out.push_back(slot);
       }
     }
-    return combined;
   };
 
-  std::vector<SlotState *> decode_ready_slots =
-      slot_scheduler_.SelectDecodeReadySlots();
-  std::vector<SlotState *> prefill_ready_slots =
-      slot_scheduler_.SelectPrefillReadySlots();
-  std::vector<SlotState *> runnable_slots =
-      combine_slots(decode_ready_slots, prefill_ready_slots);
-  if (runnable_slots.empty()) {
+  slot_scheduler_.SelectDecodeReadySlots(scratch_decode_ready_slots_);
+  slot_scheduler_.SelectPrefillReadySlots(scratch_prefill_ready_slots_);
+  combine_slots(scratch_runnable_slots_, scratch_decode_ready_slots_,
+                scratch_prefill_ready_slots_);
+  if (scratch_runnable_slots_.empty()) {
     return false;
   }
 
@@ -810,7 +835,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     return false;
   }
 
-  for (SlotState *slot : runnable_slots) {
+  for (SlotState *slot : scratch_runnable_slots_) {
     if (slot == nullptr || slot->request == nullptr ||
         slot->session == nullptr || slot->seq_id < 0) {
       if (slot != nullptr) {
@@ -932,9 +957,8 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     NormalizeRunnableSlotStateLocked(slot);
   }
 
-  std::vector<SlotState *> live_decode_ready_slots =
-      slot_scheduler_.SelectDecodeReadySlots();
-  for (SlotState *slot : live_decode_ready_slots) {
+  slot_scheduler_.SelectDecodeReadySlots(scratch_live_decode_ready_slots_);
+  for (SlotState *slot : scratch_live_decode_ready_slots_) {
     if (slot == nullptr || slot->request == nullptr ||
         slot->session == nullptr) {
       continue;
@@ -947,49 +971,44 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       slot->request->lifecycle = GenerateRequestLifecycle::Failed;
     }
   }
-  live_decode_ready_slots = slot_scheduler_.SelectDecodeReadySlots();
-  std::vector<SlotState *> live_prefill_ready_slots =
-      slot_scheduler_.SelectPrefillReadySlots();
-  std::vector<SlotState *> live_runnable_slots =
-      combine_slots(live_decode_ready_slots, live_prefill_ready_slots);
-  if (live_runnable_slots.empty()) {
+  slot_scheduler_.SelectDecodeReadySlots(scratch_live_decode_ready_slots_);
+  slot_scheduler_.SelectPrefillReadySlots(scratch_live_prefill_ready_slots_);
+  combine_slots(scratch_live_runnable_slots_, scratch_live_decode_ready_slots_,
+                scratch_live_prefill_ready_slots_);
+  if (scratch_live_runnable_slots_.empty()) {
     return false;
   }
 
   const int32_t batch_token_budget = ResolveBatchTokenBudgetLocked();
   const SchedulerTickBudget tick_budget = slot_scheduler_.BuildTickBudget(
       config_.scheduler_policy,
-      static_cast<int32_t>(live_decode_ready_slots.size()),
-      static_cast<int32_t>(live_prefill_ready_slots.size()), batch_token_budget,
+      static_cast<int32_t>(scratch_live_decode_ready_slots_.size()),
+      static_cast<int32_t>(scratch_live_prefill_ready_slots_.size()),
+      batch_token_budget,
       config_.prefill_chunk_size);
   const int32_t effective_prefill_chunk_size = ResolvePrefillChunkSizeLocked(
-      tick_budget, static_cast<int32_t>(live_decode_ready_slots.size()),
-      static_cast<int32_t>(live_prefill_ready_slots.size()));
+      tick_budget, static_cast<int32_t>(scratch_live_decode_ready_slots_.size()),
+      static_cast<int32_t>(scratch_live_prefill_ready_slots_.size()));
   SharedBatchPlan plan = batch_planner_.BuildPolicyBatch(
-      live_decode_ready_slots, live_prefill_ready_slots, tick_budget,
-      effective_prefill_chunk_size);
+      scratch_live_decode_ready_slots_, scratch_live_prefill_ready_slots_,
+      tick_budget, effective_prefill_chunk_size);
   if (plan.Empty()) {
     return false;
   }
 
   {
-    std::vector<GenerateRequest *> tick_requests;
-    tick_requests.reserve(plan.contributions.size());
-    std::vector<GenerateRequest *> decode_requests;
-    decode_requests.reserve(plan.contributions.size());
-    std::vector<GenerateRequest *> prefill_requests;
-    prefill_requests.reserve(plan.contributions.size());
-    std::unordered_set<GenerateRequest *> tick_request_set;
-    tick_request_set.reserve(plan.contributions.size());
-    std::unordered_set<GenerateRequest *> decode_request_set;
-    decode_request_set.reserve(plan.contributions.size());
-    std::unordered_set<GenerateRequest *> prefill_request_set;
-    prefill_request_set.reserve(plan.contributions.size());
+    scratch_tick_requests_.clear();
+    scratch_decode_requests_.clear();
+    scratch_prefill_requests_.clear();
+    scratch_tick_requests_.reserve(plan.occupied_slot_count);
+    scratch_decode_requests_.reserve(plan.decode_token_count);
+    scratch_prefill_requests_.reserve(plan.prefill_token_count);
 
     const auto mark_request = [](std::vector<GenerateRequest *> &requests,
-                                 std::unordered_set<GenerateRequest *> &seen,
                                  GenerateRequest *request) {
-      if (request == nullptr || !seen.insert(request).second) {
+      if (request == nullptr ||
+          std::find(requests.begin(), requests.end(), request) !=
+              requests.end()) {
         return;
       }
       requests.push_back(request);
@@ -1000,28 +1019,26 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
           contribution.slot->request == nullptr) {
         continue;
       }
-      mark_request(tick_requests, tick_request_set, contribution.slot->request);
+      mark_request(scratch_tick_requests_, contribution.slot->request);
       if (contribution.kind == BatchContributionKind::Decode) {
-        mark_request(decode_requests, decode_request_set,
-                     contribution.slot->request);
+        mark_request(scratch_decode_requests_, contribution.slot->request);
       } else if (contribution.kind == BatchContributionKind::Prefill) {
-        mark_request(prefill_requests, prefill_request_set,
-                     contribution.slot->request);
+        mark_request(scratch_prefill_requests_, contribution.slot->request);
       }
     }
 
     if (plan.prefill_token_count > 0 && plan.decode_token_count > 0) {
-      for (GenerateRequest *request : tick_requests) {
+      for (GenerateRequest *request : scratch_tick_requests_) {
         request->mixed_workload_tick_count++;
       }
     }
     if (tick_budget.EffectiveDecodeBudget() > 0) {
-      for (GenerateRequest *request : decode_requests) {
+      for (GenerateRequest *request : scratch_decode_requests_) {
         request->decode_first_tick_count++;
       }
     }
     if (effective_prefill_chunk_size > 0) {
-      for (GenerateRequest *request : prefill_requests) {
+      for (GenerateRequest *request : scratch_prefill_requests_) {
         request->chunked_prefill_tick_count++;
       }
     }
@@ -1071,11 +1088,13 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     batch_token_index++;
   }
 
-  llama_perf_context_reset(shared_context_);
+  if (config_.enable_runtime_observability > 0) {
+    llama_perf_context_reset(shared_context_);
+  }
   const auto tick_start = std::chrono::steady_clock::now();
 
   if (llama_decode(shared_context_, shared_batch_builder_.Get()) != 0) {
-    for (SlotState *slot : live_runnable_slots) {
+    for (SlotState *slot : scratch_live_runnable_slots_) {
       if (slot == nullptr) {
         continue;
       }
@@ -1112,12 +1131,10 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   // Reference: Sarathi-Serve (OSDI '24, arXiv:2403.02310) establishes
   // that protecting decode latency over prefill efficiency is the correct
   // trade-off in user-facing LLM serving systems.
-  const bool has_decode_pressure = !live_decode_ready_slots.empty();
-  std::vector<SlotState *> prefix_cache_slots;
+  const bool has_decode_pressure = !scratch_live_decode_ready_slots_.empty();
+  scratch_prefix_cache_slots_.clear();
   if (!has_decode_pressure) {
-    prefix_cache_slots.reserve(plan.contributions.size());
-    std::unordered_set<SlotState *> prefix_cache_slot_set;
-    prefix_cache_slot_set.reserve(plan.contributions.size());
+    scratch_prefix_cache_slots_.reserve(plan.occupied_slot_count);
     for (const BatchContribution &contribution : plan.contributions) {
       if (contribution.kind != BatchContributionKind::Prefill ||
           contribution.slot == nullptr ||
@@ -1125,10 +1142,12 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
           contribution.slot->session == nullptr) {
         continue;
       }
-      if (!prefix_cache_slot_set.insert(contribution.slot).second) {
+      if (std::find(scratch_prefix_cache_slots_.begin(),
+                    scratch_prefix_cache_slots_.end(),
+                    contribution.slot) != scratch_prefix_cache_slots_.end()) {
         continue;
       }
-      prefix_cache_slots.push_back(contribution.slot);
+      scratch_prefix_cache_slots_.push_back(contribution.slot);
     }
   }
 
@@ -1163,17 +1182,15 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       continue;
     }
 
-    char piece_buffer[128];
-    const int piece_length = llama_token_to_piece(
-        vocab, next_token, piece_buffer, sizeof(piece_buffer), 0, false);
-    if (piece_length < 0) {
+    std::string piece;
+    if (!token_to_piece_string(vocab, next_token, false, piece)) {
       slot.terminal_error_message =
           "Failed to convert sampled token to text piece.";
       slot.phase = SlotPhase::Failed;
       slot_request.lifecycle = GenerateRequestLifecycle::Failed;
       continue;
     }
-    if (piece_length == 0 && slot_request.emitted_token_count == 0 &&
+    if (piece.empty() && slot_request.emitted_token_count == 0 &&
         slot.pending_utf8_bytes.empty()) {
       slot.terminal_error_message =
           "Leading sampled token decoded to an empty text piece.";
@@ -1187,7 +1204,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     // so multi-byte codepoints that span sampled tokens are emitted cleanly.
     std::string stitched = std::move(slot.pending_utf8_bytes);
     slot.pending_utf8_bytes.clear();
-    stitched.append(piece_buffer, static_cast<std::size_t>(piece_length));
+    stitched.append(piece);
     const std::size_t tail_len =
         incomplete_utf8_tail_length(stitched.data(), stitched.size());
     if (tail_len > 0) {
@@ -1229,7 +1246,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     }
   }
 
-  for (SlotState *slot : prefix_cache_slots) {
+  for (SlotState *slot : scratch_prefix_cache_slots_) {
     if (slot == nullptr || slot->request == nullptr ||
         slot->session == nullptr) {
       continue;
@@ -1247,38 +1264,48 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
         std::chrono::duration<double, std::milli>(tick_end - tick_start)
             .count();
 
-    std::vector<GenerateRequest *> attributed_requests;
-    attributed_requests.reserve(plan.contributions.size());
-    std::unordered_set<GenerateRequest *> attributed_request_set;
-    attributed_request_set.reserve(plan.contributions.size());
-    std::unordered_map<GenerateRequest *, int32_t> prefill_token_counts;
-    std::unordered_map<GenerateRequest *, int32_t> decode_token_counts;
-    std::unordered_map<GenerateRequest *, int32_t> sample_counts;
-    std::unordered_map<GenerateRequest *, double> sample_ms_by_request;
-    prefill_token_counts.reserve(plan.contributions.size());
-    decode_token_counts.reserve(plan.contributions.size());
-    sample_counts.reserve(logits_contributions.size());
-    sample_ms_by_request.reserve(logits_contributions.size());
-
-    const auto ensure_attributed_request = [&](GenerateRequest *request) {
-      if (request == nullptr ||
-          !attributed_request_set.insert(request).second) {
-        return;
-      }
-      attributed_requests.push_back(request);
+    struct RequestTickAttribution {
+      GenerateRequest *request = nullptr;
+      int32_t prefill_tokens = 0;
+      int32_t decode_tokens = 0;
+      int32_t sample_count = 0;
+      double sample_ms = 0.0;
     };
+
+    std::vector<RequestTickAttribution> request_attributions;
+    request_attributions.reserve(
+        static_cast<std::size_t>(std::max(1, plan.occupied_slot_count)));
+
+    const auto ensure_attribution =
+        [&request_attributions](GenerateRequest *request)
+        -> RequestTickAttribution * {
+          if (request == nullptr) {
+            return nullptr;
+          }
+          for (RequestTickAttribution &attribution : request_attributions) {
+            if (attribution.request == request) {
+              return &attribution;
+            }
+          }
+          request_attributions.push_back(
+              RequestTickAttribution{.request = request});
+          return &request_attributions.back();
+        };
 
     for (const BatchContribution &contribution : plan.contributions) {
       if (contribution.slot == nullptr ||
           contribution.slot->request == nullptr) {
         continue;
       }
-      GenerateRequest *request = contribution.slot->request;
-      ensure_attributed_request(request);
+      RequestTickAttribution *attribution =
+          ensure_attribution(contribution.slot->request);
+      if (attribution == nullptr) {
+        continue;
+      }
       if (contribution.kind == BatchContributionKind::Prefill) {
-        prefill_token_counts[request]++;
+        attribution->prefill_tokens++;
       } else if (contribution.kind == BatchContributionKind::Decode) {
-        decode_token_counts[request]++;
+        attribution->decode_tokens++;
       }
     }
 
@@ -1290,18 +1317,21 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
         continue;
       }
 
-      GenerateRequest *request = contribution->slot->request;
-      ensure_attributed_request(request);
-      sample_counts[request]++;
+      RequestTickAttribution *attribution =
+          ensure_attribution(contribution->slot->request);
+      if (attribution == nullptr) {
+        continue;
+      }
+      attribution->sample_count++;
       if (contribution->slot->sampler != nullptr) {
-        sample_ms_by_request[request] =
+        attribution->sample_ms +=
             llama_perf_sampler(contribution->slot->sampler).t_sample_ms;
       }
     }
 
     double tick_sample_ms = 0.0;
-    for (const auto &[_, request_sample_ms] : sample_ms_by_request) {
-      tick_sample_ms += request_sample_ms;
+    for (const RequestTickAttribution &attribution : request_attributions) {
+      tick_sample_ms += attribution.sample_ms;
     }
 
     const int32_t total_prefill_tokens = plan.prefill_token_count;
@@ -1314,22 +1344,16 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
         std::max(0.0, tick_total_ms - ctx_perf.t_p_eval_ms -
                           ctx_perf.t_eval_ms - tick_sample_ms);
 
-    for (GenerateRequest *request : attributed_requests) {
+    for (const RequestTickAttribution &attribution : request_attributions) {
+      GenerateRequest *request = attribution.request;
       if (request == nullptr) {
         continue;
       }
 
-      const int32_t request_prefill_tokens =
-          prefill_token_counts.contains(request) ? prefill_token_counts[request]
-                                                 : 0;
-      const int32_t request_decode_tokens =
-          decode_token_counts.contains(request) ? decode_token_counts[request]
-                                                : 0;
-      const int32_t request_sample_count =
-          sample_counts.contains(request) ? sample_counts[request] : 0;
-      const double request_sample_ms = sample_ms_by_request.contains(request)
-                                           ? sample_ms_by_request[request]
-                                           : 0.0;
+      const int32_t request_prefill_tokens = attribution.prefill_tokens;
+      const int32_t request_decode_tokens = attribution.decode_tokens;
+      const int32_t request_sample_count = attribution.sample_count;
+      const double request_sample_ms = attribution.sample_ms;
       const int32_t request_work_units =
           request_prefill_tokens + request_decode_tokens + request_sample_count;
 
@@ -1352,7 +1376,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
 
     if (!has_last_runtime_observability_) {
       last_runtime_observability_ = {};
-      for (SlotState *slot : live_runnable_slots) {
+      for (SlotState *slot : scratch_live_runnable_slots_) {
         if (slot != nullptr && slot->request != nullptr) {
           last_runtime_observability_.input_token_count +=
               static_cast<int32_t>(slot->request->prompt_tokens.size());
@@ -1374,7 +1398,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     last_runtime_observability_.prefix_cache_restore_tokens = 0;
     last_runtime_observability_.prefix_cache_hit_count = 0;
     last_runtime_observability_.prefix_cache_store_count = 0;
-    for (SlotState *slot : live_runnable_slots) {
+    for (SlotState *slot : scratch_live_runnable_slots_) {
       if (slot != nullptr && slot->request != nullptr) {
         last_runtime_observability_.output_token_count +=
             slot->request->emitted_token_count;
@@ -1801,7 +1825,8 @@ GenerateRequestId
 InferenceRuntime::EnqueueRequest(std::string context_key, std::string prompt,
                                  int n_tokens_predict,
                                  TokenCallback on_token_received,
-                                 std::string grammar) {
+                                 std::string grammar,
+                                 GenerateTokenEmissionMode token_emission_mode) {
   // Fast-fail without lock (model pointer is immutable after construction).
   if (primary_model_ == nullptr || sampler_ == nullptr) {
     return 0;
@@ -1833,6 +1858,7 @@ InferenceRuntime::EnqueueRequest(std::string context_key, std::string prompt,
   request.original_prompt = std::move(prompt);
   request.max_output_tokens = n_tokens_predict;
   request.on_token_received = std::move(on_token_received);
+  request.token_emission_mode = token_emission_mode;
   request.prompt_tokens = std::move(prompt_tokens);
   request.grammar = std::move(grammar);
 
@@ -1847,7 +1873,8 @@ GenerateRequestId InferenceRuntime::EnqueueMultimodalRequest(
     std::string context_key, std::string prompt, int n_tokens_predict,
     std::vector<std::pair<const std::uint8_t *, std::size_t>> image_views,
     TokenCallback on_token_received,
-    std::string grammar) {
+    std::string grammar,
+    GenerateTokenEmissionMode token_emission_mode) {
   if (primary_model_ == nullptr || sampler_ == nullptr ||
       mtmd_ctx_ == nullptr || !mtmd_support_vision(mtmd_ctx_)) {
     return 0;
@@ -1887,6 +1914,7 @@ GenerateRequestId InferenceRuntime::EnqueueMultimodalRequest(
   request.multimodal = std::move(payload);
   request.max_output_tokens = n_tokens_predict;
   request.on_token_received = std::move(on_token_received);
+  request.token_emission_mode = token_emission_mode;
   request.is_multimodal_turn = true;
   request.grammar = std::move(grammar);
 
@@ -2194,13 +2222,11 @@ std::string InferenceRuntime::GetBosText() const {
   if (bos == LLAMA_TOKEN_NULL) {
     return {};
   }
-  char buffer[128];
-  const int piece_length = llama_token_to_piece(vocab, bos, buffer,
-                                                sizeof(buffer), 0, true);
-  if (piece_length <= 0) {
+  std::string piece;
+  if (!token_to_piece_string(vocab, bos, true, piece) || piece.empty()) {
     return {};
   }
-  return std::string(buffer, static_cast<std::size_t>(piece_length));
+  return piece;
 }
 
 std::string InferenceRuntime::GetEosText() const {
@@ -2216,13 +2242,11 @@ std::string InferenceRuntime::GetEosText() const {
   if (eos == LLAMA_TOKEN_NULL) {
     return {};
   }
-  char buffer[128];
-  const int piece_length = llama_token_to_piece(vocab, eos, buffer,
-                                                sizeof(buffer), 0, true);
-  if (piece_length <= 0) {
+  std::string piece;
+  if (!token_to_piece_string(vocab, eos, true, piece) || piece.empty()) {
     return {};
   }
-  return std::string(buffer, static_cast<std::size_t>(piece_length));
+  return piece;
 }
 
 std::string InferenceRuntime::TokenToString(int32_t token_id) const {
@@ -2234,14 +2258,13 @@ std::string InferenceRuntime::TokenToString(int32_t token_id) const {
   if (vocab == nullptr) {
     return {};
   }
-  char buffer[256];
-  const int piece_length = llama_token_to_piece(
-      vocab, static_cast<llama_token>(token_id), buffer, sizeof(buffer), 0,
-      true);
-  if (piece_length <= 0) {
+  std::string piece;
+  if (!token_to_piece_string(vocab, static_cast<llama_token>(token_id), true,
+                             piece) ||
+      piece.empty()) {
     return {};
   }
-  return std::string(buffer, static_cast<std::size_t>(piece_length));
+  return piece;
 }
 
 std::string InferenceRuntime::ApplyChatTemplate(

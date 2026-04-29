@@ -27,6 +27,15 @@ import {
 
 const RUNTIME_EVENT_DRAIN_TEXT_BUFFER_SIZE_BYTES = 64 * 1024;
 
+export const TOKEN_EMISSION_NONE = 0;
+export const TOKEN_EMISSION_RUNTIME_EVENTS = 1;
+export const TOKEN_EMISSION_DIRECT_CALLBACK = 2;
+
+export type TokenEmissionMode =
+  | typeof TOKEN_EMISSION_NONE
+  | typeof TOKEN_EMISSION_RUNTIME_EVENTS
+  | typeof TOKEN_EMISSION_DIRECT_CALLBACK;
+
 /**
  * Maximum accepted size of a GBNF grammar source (UTF-8 byte length).
  * Enforced at the bridge boundary before any ccall to the native runtime.
@@ -51,6 +60,16 @@ function validateGrammarSize(grammar: string | undefined): void {
     throw new Error(
       `grammar exceeds maximum size of ${MAX_GRAMMAR_BYTES} bytes (got ${byteLength}).`
     );
+  }
+}
+
+function validateTokenEmissionMode(mode: TokenEmissionMode): void {
+  if (
+    mode !== TOKEN_EMISSION_NONE &&
+    mode !== TOKEN_EMISSION_RUNTIME_EVENTS &&
+    mode !== TOKEN_EMISSION_DIRECT_CALLBACK
+  ) {
+    throw new Error(`invalid token emission mode ${mode}.`);
   }
 }
 
@@ -286,15 +305,24 @@ export class WasmBridge {
     promptText: string,
     maxOutputTokens: number,
     callbackPtr: number,
-    grammar?: string
+    grammar?: string,
+    tokenEmissionMode: TokenEmissionMode = TOKEN_EMISSION_NONE
   ): GenerateRequestId {
     validateGrammarSize(grammar);
+    validateTokenEmissionMode(tokenEmissionMode);
     const grammarArg = grammar ?? '';
     const requestId = this.module.ccall(
-      'CE_StartTextRequest',
+      'CE_StartTextRequestWithTokenEmissionMode',
       'number',
-      ['string', 'string', 'number', 'pointer', 'string'],
-      [contextKey, promptText, maxOutputTokens, callbackPtr, grammarArg]
+      ['string', 'string', 'number', 'pointer', 'number', 'string'],
+      [
+        contextKey,
+        promptText,
+        maxOutputTokens,
+        callbackPtr,
+        tokenEmissionMode,
+        grammarArg,
+      ]
     );
     if (requestId instanceof Promise) {
       throw new Error('Unexpected async result while enqueuing a request.');
@@ -308,9 +336,11 @@ export class WasmBridge {
     maxOutputTokens: number,
     media: Uint8Array[],
     callbackPtr: number,
-    grammar?: string
+    grammar?: string,
+    tokenEmissionMode: TokenEmissionMode = TOKEN_EMISSION_NONE
   ): GenerateRequestId {
     validateGrammarSize(grammar);
+    validateTokenEmissionMode(tokenEmissionMode);
     const grammarArg = grammar ?? '';
     const totalBytes = media.reduce((sum, image) => sum + image.byteLength, 0);
     const flatPtr = this.allocate(Math.max(1, totalBytes));
@@ -326,9 +356,29 @@ export class WasmBridge {
       }
 
       return this.callNumber(
-        'CE_StartMediaRequest',
-        ['string', 'string', 'number', 'number', 'pointer', 'pointer', 'pointer', 'string'],
-        [contextKey, promptText, maxOutputTokens, media.length, flatPtr, sizesPtr, callbackPtr, grammarArg]
+        'CE_StartMediaRequestWithTokenEmissionMode',
+        [
+          'string',
+          'string',
+          'number',
+          'number',
+          'pointer',
+          'pointer',
+          'pointer',
+          'number',
+          'string',
+        ],
+        [
+          contextKey,
+          promptText,
+          maxOutputTokens,
+          media.length,
+          flatPtr,
+          sizesPtr,
+          callbackPtr,
+          tokenEmissionMode,
+          grammarArg,
+        ]
       ) as GenerateRequestId;
     } finally {
       this.free(flatPtr);

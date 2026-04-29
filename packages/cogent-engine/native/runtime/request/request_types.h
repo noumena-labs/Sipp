@@ -24,6 +24,12 @@ namespace noumena::cogentengine {
 using GenerateRequestId = std::uint32_t;
 using GenerateTokenCallback = std::function<bool(const char *, int32_t)>;
 
+enum class GenerateTokenEmissionMode : std::uint8_t {
+  None = 0,
+  RuntimeEvents = 1,
+  DirectCallback = 2,
+};
+
 enum class GenerateRequestLifecycle : std::uint8_t {
   Pending = 0,
   Admitted,
@@ -49,6 +55,8 @@ struct GenerateRequest {
   std::optional<MultimodalPayload> multimodal;
   int32_t max_output_tokens = 0;
   GenerateTokenCallback on_token_received;
+  GenerateTokenEmissionMode token_emission_mode =
+      GenerateTokenEmissionMode::None;
   GenerateRequestLifecycle lifecycle = GenerateRequestLifecycle::Pending;
   std::chrono::steady_clock::time_point enqueued_at{};
   std::chrono::steady_clock::time_point admitted_at{};

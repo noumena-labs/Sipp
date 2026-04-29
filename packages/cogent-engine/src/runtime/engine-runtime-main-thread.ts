@@ -28,6 +28,8 @@ import {
 } from './main-thread-runtime-constants.js';
 import { RequestTracker } from './request-tracker.js';
 import {
+  TOKEN_EMISSION_NONE,
+  TOKEN_EMISSION_RUNTIME_EVENTS,
   type ChatTemplateMessage,
   parseBackendObservabilityJson,
   WasmBridge,
@@ -529,7 +531,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         request.maxOutputTokens,
         request.media,
         0,
-        request.grammar
+        request.grammar,
+        onToken != null ? TOKEN_EMISSION_RUNTIME_EVENTS : TOKEN_EMISSION_NONE
       );
     } else {
       requestId = bridge.startTextRequest(
@@ -537,7 +540,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         request.promptText,
         request.maxOutputTokens,
         0,
-        request.grammar
+        request.grammar,
+        onToken != null ? TOKEN_EMISSION_RUNTIME_EVENTS : TOKEN_EMISSION_NONE
       );
     }
     if (!requestId) {

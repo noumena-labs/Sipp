@@ -16,6 +16,7 @@
 #include <string>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include "chat.h"
 #include "runtime/config/inference_config.h"
@@ -68,12 +69,16 @@ public:
   GenerateRequestId EnqueueRequest(std::string context_key, std::string prompt,
                                    int n_tokens_predict,
                                    TokenCallback on_token_received = {},
-                                   std::string grammar = {});
+                                   std::string grammar = {},
+                                   GenerateTokenEmissionMode token_emission_mode =
+                                       GenerateTokenEmissionMode::None);
   GenerateRequestId EnqueueMultimodalRequest(
       std::string context_key, std::string prompt, int n_tokens_predict,
       std::vector<std::pair<const std::uint8_t *, std::size_t>> image_views,
       TokenCallback on_token_received = {},
-      std::string grammar = {});
+      std::string grammar = {},
+      GenerateTokenEmissionMode token_emission_mode =
+          GenerateTokenEmissionMode::None);
   bool CancelRequest(GenerateRequestId request_id);
   RequestStepResult RunSchedulerTick();
   SchedulerBurstResult RunSchedulerBurst(int32_t max_ticks,
@@ -161,6 +166,16 @@ private:
   GenerateRequestId next_request_id_ = 1;
   std::uint64_t model_fingerprint_ = 0;
   std::unordered_set<GenerateRequestId> committed_observability_request_ids_;
+  std::vector<SlotState *> scratch_decode_ready_slots_;
+  std::vector<SlotState *> scratch_prefill_ready_slots_;
+  std::vector<SlotState *> scratch_runnable_slots_;
+  std::vector<SlotState *> scratch_live_decode_ready_slots_;
+  std::vector<SlotState *> scratch_live_prefill_ready_slots_;
+  std::vector<SlotState *> scratch_live_runnable_slots_;
+  std::vector<SlotState *> scratch_prefix_cache_slots_;
+  std::vector<GenerateRequest *> scratch_tick_requests_;
+  std::vector<GenerateRequest *> scratch_decode_requests_;
+  std::vector<GenerateRequest *> scratch_prefill_requests_;
   mutable std::mutex operation_mutex_;
 };
 

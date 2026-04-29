@@ -34,13 +34,14 @@ int CE_CopyCompletedRequestError(CE_RequestId request_id, char* buffer, int32_t 
 int CE_GetCompletedRequestRuntimeObservability(CE_RequestId request_id,
                                                CE_RuntimeObservabilityMetrics* out_metrics);
 int CE_ConsumeCompletedRequest(CE_RequestId request_id);
-CE_RequestId CE_StartPromptRequest(
+CE_RequestId CE_StartPromptRequestWithTokenEmissionMode(
     const char* context_key,
     const char* prompt,
     int n_tokens_predict,
     CE_TokenCallback on_token,
+    CE_TokenEmissionMode token_emission_mode,
     const char* grammar);
-CE_RequestId CE_StartPromptWithMediaRequest(
+CE_RequestId CE_StartPromptWithMediaRequestWithTokenEmissionMode(
     const char* context_key,
     const char* prompt,
     int n_tokens_predict,
@@ -48,6 +49,7 @@ CE_RequestId CE_StartPromptWithMediaRequest(
     const uint8_t* images_flat_buffer,
     const int32_t* image_sizes,
     CE_TokenCallback on_token,
+    CE_TokenEmissionMode token_emission_mode,
     const char* grammar);
 const char* CE_GetMediaMarkerString();
 const char* CE_GetChatTemplateString();
