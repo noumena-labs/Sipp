@@ -14,6 +14,14 @@ export interface ModelLifecycleService {
   list(): Promise<ModelInfo[]>;
   remove(id: string): Promise<void>;
   query(input: QueryInput, options?: QueryOptions): Promise<string>;
+  applyChatTemplate(
+    messages: Array<{ role: string; content: string }>,
+    addAssistant: boolean
+  ): Promise<string>;
+  getChatTemplate(): string | null;
+  getBosText(): string;
+  getEosText(): string;
+  getMediaMarker(): string | null;
   currentObservability(): ObservabilitySnapshot;
   subscribeObservability(listener: (event: ObservabilityEvent) => void): () => void;
   close(): void | Promise<void>;

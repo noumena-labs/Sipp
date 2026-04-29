@@ -1,4 +1,4 @@
-import type { CogentEngine, ObservabilitySnapshot } from 'cogent-engine';
+import type { CogentEngine, ObservabilitySnapshot } from '@noumena-labs/cogent-engine';
 import type { ScenarioDefinition } from './types';
 import { countWords } from './utils';
 

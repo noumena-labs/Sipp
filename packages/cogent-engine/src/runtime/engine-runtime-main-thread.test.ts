@@ -41,12 +41,16 @@ test('MainThreadEngineRuntime fails projector-backed loads that do not expose a 
       loadRuntimeModel: () => Promise<number>;
       readMediaMarker: () => string | null;
       readNativeChatTemplate: () => string | null;
+      getBosText: () => string | null;
+      getEosText: () => string | null;
       close: () => void;
     };
   }).wasmBridge = {
     loadRuntimeModel: async () => 0,
     readMediaMarker: () => null,
     readNativeChatTemplate: () => null,
+    getBosText: () => null,
+    getEosText: () => null,
     close: () => {
       bridgeCloseCount += 1;
     },

@@ -313,6 +313,25 @@ class FakeRuntime implements EngineRuntime {
         : '<image>';
   }
 
+  public async applyChatTemplate(
+    messages: Array<{ role: string; content: string }>,
+    _addAssistant: boolean
+  ): Promise<string> {
+    return messages.map((m) => `${m.role}: ${m.content}`).join('\n');
+  }
+
+  public getChatTemplate(): string | null {
+    return 'fake-template';
+  }
+
+  public getBosText(): string {
+    return '<s>';
+  }
+
+  public getEosText(): string {
+    return '</s>';
+  }
+
   public close(): void {
     this.closeCount += 1;
     this.mediaMarker = null;

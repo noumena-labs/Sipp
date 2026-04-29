@@ -40,6 +40,33 @@ export type WorkerRequestMessage =
       id: string;
     }
   | {
+      kind: 'apply-chat-template';
+      callId: number;
+      config: WorkerSerializableCogentConfig;
+      messages: Array<{ role: string; content: string }>;
+      addAssistant: boolean;
+    }
+  | {
+      kind: 'get-chat-template';
+      callId: number;
+      config: WorkerSerializableCogentConfig;
+    }
+  | {
+      kind: 'get-bos-text';
+      callId: number;
+      config: WorkerSerializableCogentConfig;
+    }
+  | {
+      kind: 'get-eos-text';
+      callId: number;
+      config: WorkerSerializableCogentConfig;
+    }
+  | {
+      kind: 'get-media-marker';
+      callId: number;
+      config: WorkerSerializableCogentConfig;
+    }
+  | {
       kind: 'query';
       callId: number;
       config: WorkerSerializableCogentConfig;

@@ -131,7 +131,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
   private resolvePromptFormat(
     input: PromptOptions | number | undefined
-  ): 'raw' {
+  ): 'raw' | 'auto-chat' {
     if (typeof input === 'number' || input === undefined) {
       return DEFAULT_PROMPT_FORMAT;
     }
@@ -396,13 +396,13 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
     const effectiveConfig =
       typeof modelPathOrBundle === 'string' ||
-      this.hasExplicitProjectorPath(config) ||
-      modelPathOrBundle.multimodalProjectorPath == null
+        this.hasExplicitProjectorPath(config) ||
+        modelPathOrBundle.multimodalProjectorPath == null
         ? config
         : {
-            ...config,
-            multimodalProjectorPath: modelPathOrBundle.multimodalProjectorPath,
-          };
+          ...config,
+          multimodalProjectorPath: modelPathOrBundle.multimodalProjectorPath,
+        };
     const normalizedConfig = normalizeInitConfig(effectiveConfig);
     const expectsMediaSupport = normalizedConfig.multimodalProjectorPath != null;
     this.runtimeObservabilityEnabled =
@@ -579,8 +579,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       signal == null
         ? null
         : () => {
-            void this.cancelQuery(requestId);
-          };
+          void this.cancelQuery(requestId);
+        };
     if (abortListener != null) {
       signal?.addEventListener('abort', abortListener, { once: true });
     }

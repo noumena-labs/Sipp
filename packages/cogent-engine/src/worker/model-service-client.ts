@@ -48,6 +48,7 @@ function toWorkerQueryOptions(options: QueryOptions = {}): QueryOptions {
     session: options.session,
     maxTokens: options.maxTokens,
     format: options.format,
+    grammar: options.grammar,
   };
 }
 
@@ -128,6 +129,39 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
         onToken: options.onToken,
       }
     )) as string;
+  }
+
+  public async applyChatTemplate(
+    messages: Array<{ role: string; content: string }>,
+    addAssistant: boolean
+  ): Promise<string> {
+    this.assertOpen();
+    return (await this.callWorker({
+      kind: 'apply-chat-template',
+      config: this.workerConfig,
+      messages,
+      addAssistant,
+    })) as string;
+  }
+
+  public getChatTemplate(): string | null {
+    this.assertOpen();
+    return this.currentSnapshot?.chatTemplate ?? null;
+  }
+
+  public getBosText(): string {
+    this.assertOpen();
+    return this.currentSnapshot?.bosText ?? '';
+  }
+
+  public getEosText(): string {
+    this.assertOpen();
+    return this.currentSnapshot?.eosText ?? '';
+  }
+
+  public getMediaMarker(): string | null {
+    this.assertOpen();
+    return this.currentSnapshot?.mediaMarker ?? null;
   }
 
   public currentObservability(): ObservabilitySnapshot {

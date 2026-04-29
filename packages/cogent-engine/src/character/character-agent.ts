@@ -10,11 +10,10 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import type {
-  ChatMessage,
-  GenerateRequestId,
-  GenerateResponse,
-  PromptOptions,
-} from '../core/inference-types.js';
+  QueryInput,
+  QueryOptions,
+} from '../model-management/model-types.js';
+import type { ChatMessage } from '../types.js';
 import { CharacterEventBus, type CharacterEvent } from './action-bus.js';
 import { compileActionGrammar } from './action-grammar.js';
 import { StreamingActionParser, type ParsedEvent } from './action-parser.js';
@@ -35,22 +34,14 @@ import { createTimedAbortController, waitForAbort } from '../utils/abort.js';
 import type { RunStatus } from '../core/run-status.js';
 
 export interface CharacterRuntimeEngine {
-  queuePrompt(
-    contextKey: string,
-    promptText: string,
-    options?: number | PromptOptions
-  ): Promise<GenerateRequestId>;
-  runQueuedRequest(
-    requestId: GenerateRequestId,
-    options?: { signal?: AbortSignal }
-  ): Promise<GenerateResponse>;
-  cancelQueuedRequest?(requestId: GenerateRequestId): Promise<boolean>;
+  query(input: QueryInput, options?: QueryOptions): Promise<string>;
   applyChatTemplate(
     messages: Array<{ role: string; content: string }>,
     addAssistant: boolean
   ): Promise<string>;
   getChatTemplate?(): string | null;
   getEosText?(): string;
+  getMediaMarker?(): string | null;
 }
 
 export interface CharacterRuntimeOptions {
@@ -144,6 +135,10 @@ export class CharacterRuntime {
     );
   }
 
+  private getMediaMarker(): string | null {
+    return this.engine.getMediaMarker?.() ?? null;
+  }
+
   /** Exposes the event bus for imperative subscribers (VRM bindings, logs). */
   public get bus(): CharacterEventBus {
     return this.eventBus;
@@ -210,10 +205,9 @@ export class CharacterRuntime {
     }
 
     const abort = createTimedAbortController(options.signal, options.timeoutMs);
-    const promptOptions: PromptOptions = {
-      nTokens: options.maxOutputTokens ?? 24,
-      promptFormat: 'raw',
-      grammar,
+    const queryOptions: QueryOptions = {
+      maxTokens: options.maxOutputTokens ?? 24,
+      format: 'raw',
       signal: abort.signal,
     };
     const contextKey = `${this.contextKey}:choose`;
@@ -227,53 +221,17 @@ export class CharacterRuntime {
       choices: options.choices,
     });
 
-    let requestId = 0;
     try {
-      requestId = await this.engine.queuePrompt(contextKey, promptText, promptOptions);
-      const response = await Promise.race([
-        this.engine.runQueuedRequest(requestId, { signal: abort.signal }),
-        waitForAbort(abort.signal, {
-          timedOut: abort.timedOut,
-          timeoutMessage: 'Choice timed out.',
-          abortMessage: 'Choice aborted.',
-        }),
-      ]);
-      const rawText = response.outputText ?? '';
+      const rawText = await this.engine.query(
+        {
+          prompt: promptText,
+        },
+        {
+          ...queryOptions,
+          grammar,
+        }
+      );
       const parseText = sanitizeAssistantText(rawText, boundaryMarkers);
-      if (response.cancelled) {
-        const status = abort.timedOut() ? 'timed_out' : 'aborted';
-        const errorMessage = status === 'timed_out' ? 'Choice timed out.' : 'Choice aborted.';
-        logChoiceQuery({
-          phase: 'response',
-          contextKey,
-          rawText,
-          selection: null,
-          status,
-          errorMessage,
-        });
-        return {
-          selection: null,
-          status,
-          errorMessage,
-          rawText,
-        };
-      }
-      if (response.failed) {
-        logChoiceQuery({
-          phase: 'response',
-          contextKey,
-          rawText,
-          selection: null,
-          status: 'failed',
-          errorMessage: response.errorMessage ?? 'generation failed',
-        });
-        return {
-          selection: null,
-          status: 'failed',
-          errorMessage: response.errorMessage ?? 'generation failed',
-          rawText,
-        };
-      }
       const selection = parseChoiceOutput(parseText, options.choices);
       if (selection == null) {
         logChoiceQuery({
@@ -292,21 +250,12 @@ export class CharacterRuntime {
         };
       }
       return {
-        selection,
+        selection: parseChoiceOutput(parseText, options.choices),
         status: 'ok',
         rawText,
       };
     } catch (error) {
       const cancelled = abort.signal.aborted;
-      if (requestId !== 0 && cancelled && this.engine.cancelQueuedRequest) {
-        void this.engine.cancelQueuedRequest(requestId).catch(() => undefined);
-      } else if (requestId !== 0 && !cancelled && this.engine.cancelQueuedRequest) {
-        try {
-          await this.engine.cancelQueuedRequest(requestId);
-        } catch {
-          // Swallow cancel errors.
-        }
-      }
       const status = cancelled
         ? abort.timedOut()
           ? 'timed_out'
@@ -454,7 +403,6 @@ export class CharacterRuntime {
     let streamedOutputText = '';
     let proseText = '';
     let memoryText = '';
-    let requestId: GenerateRequestId = 0;
     let status: RunStatus = 'ok';
     let errorMessage: string | undefined;
     const contextKey = `${this.contextKey}:chat`;
@@ -484,13 +432,11 @@ export class CharacterRuntime {
       recordParsedEvents(parser.flush());
     };
 
+    const queryController = new AbortController();
+    const detachSignalForwarder = forwardAbortSignal(signal, queryController);
+
     const requestBoundaryStop = (): void => {
-      if (requestId === 0 || signal.aborted || !this.engine.cancelQueuedRequest) {
-        return;
-      }
-      void this.engine.cancelQueuedRequest(requestId).catch(() => {
-        // Best-effort only; generation may already be terminating naturally.
-      });
+      queryController.abort();
     };
 
     const consumeOutputText = (text: string): void => {
@@ -511,25 +457,24 @@ export class CharacterRuntime {
     };
 
     try {
-      const promptOptions: PromptOptions = {
-        nTokens: this.maxOutputTokens,
-        promptFormat: 'raw',
-        grammar: this.grammarSource,
+      const queryOptions: QueryOptions = {
+        maxTokens: this.maxOutputTokens,
+        format: 'raw',
         onToken,
-        signal,
+        signal: queryController.signal,
       };
-      requestId = await this.engine.queuePrompt(contextKey, promptText, promptOptions);
-      const response = await this.engine.runQueuedRequest(requestId, { signal });
-      const unseenOutputSuffix = sliceUnstreamedSuffix(streamedOutputText, response.outputText);
+      const rawText = await this.engine.query(
+        {
+          prompt: promptText,
+        },
+        {
+          ...queryOptions,
+          grammar: this.grammarSource,
+        }
+      );
+      const unseenOutputSuffix = sliceUnstreamedSuffix(streamedOutputText, rawText);
       if (!outputSanitizer.reachedBoundary && unseenOutputSuffix.length > 0) {
         consumeOutputText(unseenOutputSuffix);
-      }
-      if (response.cancelled && !outputSanitizer.reachedBoundary) {
-        status = 'aborted';
-      }
-      if (response.failed && response.errorMessage) {
-        status = 'failed';
-        errorMessage = response.errorMessage;
       }
     } catch (error) {
       if (outputSanitizer.reachedBoundary && !signal.aborted) {
@@ -543,14 +488,8 @@ export class CharacterRuntime {
       if (signal.aborted && !outputSanitizer.reachedBoundary) {
         status = 'aborted';
       }
-      // Best-effort cancel in case the runtime still holds the request.
-      if (requestId !== 0 && this.engine.cancelQueuedRequest && !outputSanitizer.reachedBoundary) {
-        try {
-          await this.engine.cancelQueuedRequest(requestId);
-        } catch {
-          // Swallow cancel errors — they are secondary to the original one.
-        }
-      }
+    } finally {
+      detachSignalForwarder();
     }
 
     emitParsedText(outputSanitizer.flush());
@@ -603,7 +542,7 @@ class AsyncEventQueue<T> implements AsyncIterable<T> {
   private readonly pendingResolvers: Array<(result: IteratorResult<T>) => void> = [];
   private closed = false;
 
-  public constructor(private readonly onReturn?: () => void) {}
+  public constructor(private readonly onReturn?: () => void) { }
 
   public push(value: T): void {
     if (this.closed) {
@@ -681,11 +620,11 @@ function forwardAbortSignal(
   controller: AbortController
 ): () => void {
   if (!source) {
-    return () => {};
+    return () => { };
   }
   if (source.aborted) {
     controller.abort();
-    return () => {};
+    return () => { };
   }
 
   const onAbort = (): void => {

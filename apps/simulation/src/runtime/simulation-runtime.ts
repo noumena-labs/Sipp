@@ -750,8 +750,9 @@ export class SimulationRuntime {
   }
 
   private completeArrivedPickupGoal(agent: SimulationAgentState): boolean {
-    if (agent.goal?.kind !== 'go_to_object') return false;
-    const object = this.state.objects.find((entry) => entry.id === agent.goal?.objectId);
+    const goal = agent.goal;
+    if (!goal || goal.kind !== 'go_to_object') return false;
+    const object = this.state.objects.find((entry) => entry.id === goal.objectId);
     const affordance = object?.affordances.find((entry) => entry.kind === 'pick_up');
     if (!object || !object.active || object.heldBy || !affordance) return false;
     const label = affordance.label;

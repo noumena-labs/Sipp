@@ -1,10 +1,4 @@
-import type {
-  GenerateRequestId,
-  GenerateResponse,
-  PromptOptions,
-  RequestObservabilityMetrics,
-} from '@noumena-labs/cogent-engine';
-import type { CogentEngine } from '@noumena-labs/cogent-engine';
+import type { CogentEngine, QueryInput, QueryOptions } from '@noumena-labs/cogent-engine';
 import type { CharacterRuntimeEngine } from '@noumena-labs/cogent-engine/character';
 import type { DirectorRuntimeEngine } from '@noumena-labs/cogent-engine/director';
 import type { BrainDefinition, BrainQueryType, BrainQueryStatus, BrainActivityStore } from './brain-activity-store.js';
@@ -34,39 +28,40 @@ class TracedBrainEngine implements CharacterRuntimeEngine, DirectorRuntimeEngine
     private readonly engine: CogentEngine,
     private readonly store: BrainActivityStore,
     private readonly brain: BrainDefinition
-  ) {}
+  ) { }
 
-  public async queuePrompt(
-    contextKey: string,
-    promptText: string,
-    options: number | PromptOptions = 128
-  ): Promise<GenerateRequestId> {
-    const template = this.takeAppliedTemplate(promptText);
+  public async query(input: QueryInput, options: QueryOptions = {}): Promise<string> {
+    const promptText = typeof input === 'string' ? input : input.prompt;
+    const template = this.takeAppliedTemplate(promptText ?? '');
 
     const prompts = extractPromptSections(template?.messages ?? []);
-    const directorTaskName = this.brain.kind === 'director' ? parseDirectorTaskName(contextKey) : null;
+    const directorTaskName = this.brain.kind === 'director' ? parseDirectorTaskName(options.session ?? '') : null;
     const queryType = classifyQueryType(this.brain.kind, directorTaskName);
     const queryId = this.store.beginQuery({
       brainId: this.brain.id,
       queryType,
       ...(directorTaskName ? { queryName: directorTaskName } : {}),
-      contextKey,
+      contextKey: options.session ?? 'default',
       systemPrompt: prompts.systemPrompt,
       userPrompt: prompts.userPrompt,
       renderedPrompt: promptText,
-      grammar: typeof options === 'object' ? options.grammar : null,
+      grammar: options.grammar ?? null,
     });
 
     try {
-      const requestId = await this.engine.queuePrompt(
-        contextKey,
-        promptText,
+      const response = await this.engine.query(
+        input,
         withStreamingTap(options, (chunk) => {
           this.store.appendResponse(queryId, chunk);
         })
       );
-      this.store.attachRequestId(queryId, requestId);
-      return requestId;
+
+      this.store.finishQuery(queryId, {
+        status: 'completed',
+        responseText: response,
+        errorMessage: null,
+      });
+      return response;
     } catch (error) {
       this.store.finishQuery(queryId, {
         status: classifyErrorStatus(error),
@@ -76,51 +71,8 @@ class TracedBrainEngine implements CharacterRuntimeEngine, DirectorRuntimeEngine
     }
   }
 
-  public async runQueuedRequest(
-    requestId: GenerateRequestId,
-    options?: { signal?: AbortSignal }
-  ): Promise<GenerateResponse> {
-    const queryId = this.store.getQueryIdForRequest(requestId);
-    try {
-      const response = await this.engine.runQueuedRequest(requestId, options);
-      if (queryId) {
-        this.store.finishQuery(queryId, {
-          status: classifyResponseStatus(response),
-          responseText: response.outputText,
-          errorMessage: response.errorMessage ?? null,
-          requestObservability: getObservability(response),
-        });
-      }
-      return response;
-    } catch (error) {
-      if (queryId) {
-        this.store.finishQuery(queryId, {
-          status: classifyErrorStatus(error),
-          errorMessage: asErrorMessage(error),
-        });
-      }
-      throw error;
-    }
-  }
-
-  public async cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean> {
-    return this.engine.cancelQueuedRequest(requestId);
-  }
-
-  public getChatTemplate(): string | null {
-    return this.engine.getChatTemplate();
-  }
-
-  public getBosText(): string {
-    return this.engine.getBosText();
-  }
-
-  public getEosText(): string {
-    return this.engine.getEosText();
-  }
-
   public getMediaMarker(): string | null {
-    return this.engine.getMediaMarker();
+    return (this.engine as any).getMediaMarker?.() ?? null;
   }
 
   public async applyChatTemplate(
@@ -151,16 +103,9 @@ class TracedBrainEngine implements CharacterRuntimeEngine, DirectorRuntimeEngine
 }
 
 function withStreamingTap(
-  options: number | PromptOptions,
+  options: QueryOptions,
   onChunk: (chunk: string) => void
-): PromptOptions {
-  if (typeof options === 'number') {
-    return {
-      nTokens: options,
-      onToken: onChunk,
-    };
-  }
-
+): QueryOptions {
   const upstream = options.onToken;
   return {
     ...options,
@@ -209,25 +154,11 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
 }
 
-function classifyResponseStatus(response: GenerateResponse): Exclude<BrainQueryStatus, 'idle' | 'running'> {
-  if (response.cancelled) {
-    return response.errorMessage?.toLowerCase().includes('timed out') ? 'timed_out' : 'aborted';
-  }
-  if (response.failed) {
-    return response.errorMessage?.toLowerCase().includes('timed out') ? 'timed_out' : 'failed';
-  }
-  return 'completed';
-}
-
 function classifyErrorStatus(error: unknown): Exclude<BrainQueryStatus, 'idle' | 'running'> {
   if (!isAbortError(error)) {
     return asErrorMessage(error).toLowerCase().includes('timed out') ? 'timed_out' : 'failed';
   }
   return asErrorMessage(error).toLowerCase().includes('timed out') ? 'timed_out' : 'aborted';
-}
-
-function getObservability(response: GenerateResponse): RequestObservabilityMetrics | null {
-  return response.requestObservability ?? response.runtimeObservability ?? null;
 }
 
 function asErrorMessage(error: unknown): string {

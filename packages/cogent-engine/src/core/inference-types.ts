@@ -1,7 +1,7 @@
 import type { RequestObservabilityMetrics } from '../observability/runtime-observability.js';
 
 export type FlashAttentionMode = 'auto' | 'enabled' | 'disabled';
-export type PromptFormatMode = 'raw';
+export type PromptFormatMode = 'raw' | 'auto-chat';
 export type SchedulerPolicyMode = 'latency-first' | 'balanced' | 'throughput-first';
 export type EngineExecutionMode = 'main-thread' | 'worker';
 

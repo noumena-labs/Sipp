@@ -62,9 +62,9 @@ export type ModelSource =
   | readonly string[]
   | readonly File[]
   | {
-      model: string | File | readonly string[] | readonly File[];
-      projector?: string | File;
-    };
+    model: string | File | readonly string[] | readonly File[];
+    projector?: string | File;
+  };
 
 export interface ModelInfo {
   /** Installed model id persisted in OPFS. Pass this back to engine.models.load(id) to reload it. */
@@ -75,6 +75,10 @@ export interface ModelInfo {
   source: ModelSourceKind;
   bytes: number;
   loaded: boolean;
+  chatTemplate: string | null;
+  bosText: string;
+  eosText: string;
+  mediaMarker: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -82,9 +86,9 @@ export interface ModelInfo {
 export type QueryInput =
   | string
   | {
-      prompt: string;
-      media?: Uint8Array[];
-    };
+    prompt: string;
+    media?: Uint8Array[];
+  };
 
 export interface QueryOptions {
   session?: string;
@@ -92,6 +96,7 @@ export interface QueryOptions {
   format?: 'auto' | 'raw';
   signal?: AbortSignal;
   onToken?: (token: string) => void;
+  grammar?: string;
 }
 
 export interface QueryObservation {

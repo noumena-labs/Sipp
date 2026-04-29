@@ -350,6 +350,7 @@ export class ModelService implements ModelLifecycleService {
       signal: options.signal,
       onToken: options.onToken,
       media,
+      grammar: options.grammar,
     };
     const session = options.session ?? 'default';
     const start = nowMs();
@@ -396,6 +397,29 @@ export class ModelService implements ModelLifecycleService {
         { cause: error }
       );
     }
+  }
+
+  public async applyChatTemplate(
+    messages: Array<{ role: string; content: string }>,
+    addAssistant: boolean
+  ): Promise<string> {
+    return await this.runtime.applyChatTemplate(messages, addAssistant);
+  }
+
+  public getChatTemplate(): string | null {
+    return this.runtime.getChatTemplate();
+  }
+
+  public getBosText(): string {
+    return this.runtime.getBosText();
+  }
+
+  public getEosText(): string {
+    return this.runtime.getEosText();
+  }
+
+  public getMediaMarker(): string | null {
+    return this.runtime.readMediaMarker();
   }
 
   public close(): void {
@@ -1278,6 +1302,10 @@ export class ModelService implements ModelLifecycleService {
       source: assets.some((asset) => asset.sourceUrl != null) ? 'remote' : 'local',
       bytes: assets.reduce((sum, asset) => sum + asset.bytes, 0),
       loaded: this.current?.id === entry.id,
+      chatTemplate: this.current?.id === entry.id ? this.runtime.getChatTemplate() : null,
+      bosText: this.current?.id === entry.id ? this.runtime.getBosText() : '',
+      eosText: this.current?.id === entry.id ? this.runtime.getEosText() : '',
+      mediaMarker: this.current?.id === entry.id ? this.runtime.readMediaMarker() : null,
       createdAt: entry.createdAt,
       updatedAt: entry.updatedAt,
     };

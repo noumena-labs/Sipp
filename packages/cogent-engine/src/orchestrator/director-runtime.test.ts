@@ -3,10 +3,9 @@ import test from 'node:test';
 
 import type { ChatTemplateMessage } from '../core/chat-template-boundaries.js';
 import type {
-  GenerateRequestId,
-  GenerateResponse,
-  PromptOptions,
-} from '../core/inference-types.js';
+  QueryInput,
+  QueryOptions,
+} from '../model-management/model-types.js';
 import { parseDirectorConfig } from './director-config.js';
 import { DirectorRuntime, type DirectorRuntimeEngine } from './director-runtime.js';
 
@@ -18,8 +17,7 @@ class FakeEngine implements DirectorRuntimeEngine {
   public prompt = '';
   public waitForAbort = false;
   public mediaMarker: string | null = '<image>';
-  public queueCalls = 0;
-  public cancelCalls: GenerateRequestId[] = [];
+  public queryCalls = 0;
 
   public async applyChatTemplate(
     messages: ChatTemplateMessage[],
@@ -29,23 +27,17 @@ class FakeEngine implements DirectorRuntimeEngine {
     return this.prompt;
   }
 
-  public async queuePrompt(
-    _contextKey: string,
-    _prompt: string,
-    options?: number | PromptOptions
-  ): Promise<GenerateRequestId> {
-    this.queueCalls += 1;
+  public async query(
+    input: QueryInput,
+    options?: QueryOptions
+  ): Promise<string> {
+    this.queryCalls += 1;
     if (typeof options === 'object' && options) {
-      this.grammar = options.grammar;
-      this.media = options.media;
+      this.grammar = (options as any).grammar;
     }
-    return 1;
-  }
+    this.media = (input as any).media as Uint8Array[] | undefined;
+    this.prompt = typeof input === 'string' ? input : input.prompt;
 
-  public async runQueuedRequest(
-    requestId: GenerateRequestId,
-    options?: { signal?: AbortSignal }
-  ): Promise<GenerateResponse> {
     if (this.waitForAbort) {
       await new Promise<void>((resolve) => {
         const signal = options?.signal;
@@ -56,27 +48,14 @@ class FakeEngine implements DirectorRuntimeEngine {
         }
         signal.addEventListener('abort', () => resolve(), { once: true });
       });
-      return {
-        requestId,
-        completed: false,
-        failed: false,
-        cancelled: true,
-        outputText: '',
-      };
+      throw new DOMException('Operation aborted.', 'AbortError');
     }
-    return {
-      requestId,
-      completed: true,
-      failed: this.fail,
-      cancelled: false,
-      outputText: this.outputText,
-      ...(this.fail ? { errorMessage: 'boom' } : {}),
-    };
-  }
 
-  public async cancelQueuedRequest(requestId: GenerateRequestId): Promise<boolean> {
-    this.cancelCalls.push(requestId);
-    return true;
+    if (this.fail) {
+      throw new Error('boom');
+    }
+
+    return this.outputText;
   }
 
   public getChatTemplate(): string | null {
@@ -275,7 +254,7 @@ test('DirectorRuntime reports oversized grammars before queueing generation', as
 
   assert.equal(result.status, 'invalid_request');
   assert.match(result.errorMessage ?? '', /grammar exceeds maximum size/);
-  assert.equal(engine.queueCalls, 0);
+  assert.equal(engine.queryCalls, 0);
 });
 
 test('DirectorRuntime returns invalid_response for unknown selections', async () => {
@@ -347,5 +326,4 @@ test('DirectorRuntime returns timed_out on timeout and cancels the queued reques
 
   assert.equal(result.status, 'timed_out');
   assert.equal(result.errorMessage, 'Director task timed out.');
-  assert.deepEqual(engine.cancelCalls, [1]);
 });

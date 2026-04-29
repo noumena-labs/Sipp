@@ -4,7 +4,7 @@ import {
   type ModelInfo,
   type ModelSource,
   type ObservabilitySnapshot,
-} from 'cogent-engine';
+} from '@noumena-labs/cogent-engine';
 import { MetricCard } from './components/MetricCard';
 import {
   buildBenchmarkScenarios,
@@ -105,9 +105,8 @@ function sourceKey(source: ModelSource): string {
   if (!isModelSourceObject(source)) {
     return 'unknown:model-source';
   }
-  return `pair:model=${sourceKey(source.model)};projector=${
-    source.projector == null ? 'none' : sourceKey(source.projector)
-  }`;
+  return `pair:model=${sourceKey(source.model)};projector=${source.projector == null ? 'none' : sourceKey(source.projector)
+    }`;
 }
 
 function withProjector(source: ModelSource, projector?: string | File): ModelSource {
@@ -255,11 +254,11 @@ export default function App() {
       observability: 'profile',
       runtime: getDefaultRuntimeOptions(),
       onProgress: (progress) => {
-        setStatus(
-          progress.percent == null
-            ? progress.phase
-            : `${progress.phase} ${progress.percent}%`
-        );
+        if (progress.phase === 'download') {
+          setStatus(`Downloading model… ${Math.floor(progress.percent ?? 0)}%`);
+        } else if (progress.phase === 'load') {
+          setStatus('Loading into memory…');
+        }
       },
     });
     setLastLoadMs(round(performance.now() - start));

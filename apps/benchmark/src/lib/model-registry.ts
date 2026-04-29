@@ -5,7 +5,7 @@
  * minimal `cogent-engine` ModelSource.
  */
 
-import type { ModelSource } from 'cogent-engine';
+import type { ModelSource } from '@noumena-labs/cogent-engine';
 
 export type ModelCapability = 'text' | 'vision';
 

@@ -89,7 +89,7 @@ export class WasmBridge {
   private reusableRuntimeEventTextBufferCapacity = 0;
   private reusableRuntimeEventDrainResultPtr = 0;
 
-  public constructor(private readonly module: EngineModule) {}
+  public constructor(private readonly module: EngineModule) { }
 
   public getModule(): EngineModule {
     return this.module;
@@ -129,144 +129,144 @@ export class WasmBridge {
     const ident = hasMultimodalConfig ? 'CE_InitWithMultimodal' : 'CE_Init';
     const argTypes = hasMultimodalConfig
       ? [
-          'string',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'string',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-        ]
+        'string',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'string',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+      ]
       : [
-          'string',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-          'number',
-        ];
+        'string',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+        'number',
+      ];
     const args = hasMultimodalConfig
       ? [
-          modelPath,
-          normalizedConfig.nCtx,
-          normalizedConfig.nBatch,
-          normalizedConfig.nUbatch,
-          normalizedConfig.nSeqMax,
-          normalizedConfig.nThreads,
-          normalizedConfig.nThreadsBatch,
-          normalizedConfig.nGpuLayers,
-          normalizedConfig.flashAttention,
-          normalizedConfig.kvUnified,
-          normalizedConfig.maxCachedSessions,
-          normalizedConfig.retainedPrefixTokens,
-          normalizedConfig.prefillChunkSize,
-          normalizedConfig.prefixCacheIntervalTokens,
-          normalizedConfig.maxPrefixCacheEntries,
-          normalizedConfig.schedulerPolicy,
-          normalizedConfig.decodeTokenReserve,
-          normalizedConfig.adaptivePrefillChunking,
-          normalizedConfig.enableRuntimeObservability,
-          normalizedConfig.enableBackendProfiling,
-          normalizedConfig.multimodalProjectorPath ?? '',
-          normalizedConfig.multimodalUseGpu,
-          normalizedConfig.debugCompareMultimodalEmbeddings,
-          normalizedConfig.imageMinTokens,
-          normalizedConfig.imageMaxTokens,
-          normalizedConfig.samplingRepeatLastN,
-          normalizedConfig.samplingRepeatPenalty,
-          normalizedConfig.samplingFrequencyPenalty,
-          normalizedConfig.samplingPresencePenalty,
-          normalizedConfig.samplingTopK,
-          normalizedConfig.samplingTopP,
-          normalizedConfig.samplingMinP,
-          normalizedConfig.samplingTemperature,
-          normalizedConfig.samplingSeed,
-        ]
+        modelPath,
+        normalizedConfig.nCtx,
+        normalizedConfig.nBatch,
+        normalizedConfig.nUbatch,
+        normalizedConfig.nSeqMax,
+        normalizedConfig.nThreads,
+        normalizedConfig.nThreadsBatch,
+        normalizedConfig.nGpuLayers,
+        normalizedConfig.flashAttention,
+        normalizedConfig.kvUnified,
+        normalizedConfig.maxCachedSessions,
+        normalizedConfig.retainedPrefixTokens,
+        normalizedConfig.prefillChunkSize,
+        normalizedConfig.prefixCacheIntervalTokens,
+        normalizedConfig.maxPrefixCacheEntries,
+        normalizedConfig.schedulerPolicy,
+        normalizedConfig.decodeTokenReserve,
+        normalizedConfig.adaptivePrefillChunking,
+        normalizedConfig.enableRuntimeObservability,
+        normalizedConfig.enableBackendProfiling,
+        normalizedConfig.multimodalProjectorPath ?? '',
+        normalizedConfig.multimodalUseGpu,
+        normalizedConfig.debugCompareMultimodalEmbeddings,
+        normalizedConfig.imageMinTokens,
+        normalizedConfig.imageMaxTokens,
+        normalizedConfig.samplingRepeatLastN,
+        normalizedConfig.samplingRepeatPenalty,
+        normalizedConfig.samplingFrequencyPenalty,
+        normalizedConfig.samplingPresencePenalty,
+        normalizedConfig.samplingTopK,
+        normalizedConfig.samplingTopP,
+        normalizedConfig.samplingMinP,
+        normalizedConfig.samplingTemperature,
+        normalizedConfig.samplingSeed,
+      ]
       : [
-          modelPath,
-          normalizedConfig.nCtx,
-          normalizedConfig.nBatch,
-          normalizedConfig.nUbatch,
-          normalizedConfig.nSeqMax,
-          normalizedConfig.nThreads,
-          normalizedConfig.nThreadsBatch,
-          normalizedConfig.nGpuLayers,
-          normalizedConfig.flashAttention,
-          normalizedConfig.kvUnified,
-          normalizedConfig.maxCachedSessions,
-          normalizedConfig.retainedPrefixTokens,
-          normalizedConfig.prefillChunkSize,
-          normalizedConfig.prefixCacheIntervalTokens,
-          normalizedConfig.maxPrefixCacheEntries,
-          normalizedConfig.schedulerPolicy,
-          normalizedConfig.decodeTokenReserve,
-          normalizedConfig.adaptivePrefillChunking,
-          normalizedConfig.enableRuntimeObservability,
-          normalizedConfig.enableBackendProfiling,
-          normalizedConfig.multimodalUseGpu,
-          normalizedConfig.debugCompareMultimodalEmbeddings,
-          normalizedConfig.samplingRepeatLastN,
-          normalizedConfig.samplingRepeatPenalty,
-          normalizedConfig.samplingFrequencyPenalty,
-          normalizedConfig.samplingPresencePenalty,
-          normalizedConfig.samplingTopK,
-          normalizedConfig.samplingTopP,
-          normalizedConfig.samplingMinP,
-          normalizedConfig.samplingTemperature,
-          normalizedConfig.samplingSeed,
-        ];
+        modelPath,
+        normalizedConfig.nCtx,
+        normalizedConfig.nBatch,
+        normalizedConfig.nUbatch,
+        normalizedConfig.nSeqMax,
+        normalizedConfig.nThreads,
+        normalizedConfig.nThreadsBatch,
+        normalizedConfig.nGpuLayers,
+        normalizedConfig.flashAttention,
+        normalizedConfig.kvUnified,
+        normalizedConfig.maxCachedSessions,
+        normalizedConfig.retainedPrefixTokens,
+        normalizedConfig.prefillChunkSize,
+        normalizedConfig.prefixCacheIntervalTokens,
+        normalizedConfig.maxPrefixCacheEntries,
+        normalizedConfig.schedulerPolicy,
+        normalizedConfig.decodeTokenReserve,
+        normalizedConfig.adaptivePrefillChunking,
+        normalizedConfig.enableRuntimeObservability,
+        normalizedConfig.enableBackendProfiling,
+        normalizedConfig.multimodalUseGpu,
+        normalizedConfig.debugCompareMultimodalEmbeddings,
+        normalizedConfig.samplingRepeatLastN,
+        normalizedConfig.samplingRepeatPenalty,
+        normalizedConfig.samplingFrequencyPenalty,
+        normalizedConfig.samplingPresencePenalty,
+        normalizedConfig.samplingTopK,
+        normalizedConfig.samplingTopP,
+        normalizedConfig.samplingMinP,
+        normalizedConfig.samplingTemperature,
+        normalizedConfig.samplingSeed,
+      ];
     const result = await this.module.ccall(ident, 'number', argTypes, args, {
       async: true,
     });
@@ -445,7 +445,6 @@ export class WasmBridge {
       }
       throw error;
     }
-    }
   }
 
   public async cancelQuery(requestId: GenerateRequestId): Promise<boolean> {
@@ -555,15 +554,15 @@ export class WasmBridge {
     const stepResult =
       maxDurationUs > 0
         ? await this.callNumberAsync(
-            'CE_RunSchedulerBurstWithDeadline',
-            ['number', 'number', 'number', 'number', 'pointer'],
-            [maxTicks, maxCompletedResponses, maxEmittedTokens, maxDurationUs, resultPtr]
-          )
+          'CE_RunSchedulerBurstWithDeadline',
+          ['number', 'number', 'number', 'number', 'pointer'],
+          [maxTicks, maxCompletedResponses, maxEmittedTokens, maxDurationUs, resultPtr]
+        )
         : await this.callNumberAsync(
-        'CE_RunSchedulerBurst',
-        ['number', 'number', 'number', 'pointer'],
-        [maxTicks, maxCompletedResponses, maxEmittedTokens, resultPtr]
-      );
+          'CE_RunSchedulerBurst',
+          ['number', 'number', 'number', 'pointer'],
+          [maxTicks, maxCompletedResponses, maxEmittedTokens, resultPtr]
+        );
     const burstResult = this.readSchedulerBurstResult(resultPtr);
     return {
       stepResult,
@@ -652,6 +651,28 @@ export class WasmBridge {
 
   private free(ptr: number): void {
     this.module._free(ptr);
+  }
+
+  private isMissingOptionalRuntimeApiError(ident: string, error: unknown): boolean {
+    const message = this.asErrorMessage(error).toLowerCase();
+    const normalizedIdent = ident.toLowerCase();
+    if (!message.includes(normalizedIdent)) {
+      return false;
+    }
+    return (
+      message.includes('unexpected ccall') ||
+      message.includes('unknown function') ||
+      message.includes('not a function') ||
+      message.includes('is not exported') ||
+      message.includes('missing')
+    );
+  }
+
+  private asErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+    return String(error);
   }
 
   private ensureBurstResultBuffer(): number {
