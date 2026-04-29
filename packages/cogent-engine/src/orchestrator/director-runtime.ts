@@ -10,12 +10,12 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import type {
-  QueryInput,
-  QueryOptions,
+  ChatInput,
+  ChatOptions,
+  ModelInfo,
 } from '../model-management/model-types.js';
 import type { ChatMessage } from '../types.js';
-import { ChatTemplatePromptRuntime, sanitizeAssistantText } from '../core/chat-template-boundaries.js';
-import { createTimedAbortController, waitForAbort } from '../utils/abort.js';
+import { createTimedAbortController } from '../utils/abort.js';
 import {
   compileDirectorOutputGrammar,
   DirectorOutputError,
@@ -34,14 +34,10 @@ import type {
 } from './director-types.js';
 
 export interface DirectorRuntimeEngine {
-  query(input: QueryInput, options?: QueryOptions): Promise<string>;
-  applyChatTemplate(
-    messages: Array<{ role: string; content: string }>,
-    addAssistant: boolean
-  ): Promise<string>;
-  getChatTemplate?(): string | null;
-  getEosText?(): string;
-  getMediaMarker?(): string | null;
+  chat(input: ChatInput, options?: ChatOptions): Promise<string>;
+  models?: {
+    current(): Pick<ModelInfo, 'mediaMarker'> | null;
+  };
 }
 
 export class DirectorRuntime {
@@ -50,7 +46,6 @@ export class DirectorRuntime {
   private readonly maxOutputTokens: number;
   private readonly contextKey: string;
   private readonly systemPrompt: string;
-  private readonly promptRuntime: ChatTemplatePromptRuntime;
 
   public constructor(
     engine: DirectorRuntimeEngine,
@@ -62,7 +57,6 @@ export class DirectorRuntime {
     this.maxOutputTokens = options.maxOutputTokens ?? 256;
     this.contextKey = options.contextKey ?? `director:${config.id}`;
     this.systemPrompt = renderDirectorSystemPrompt(config);
-    this.promptRuntime = new ChatTemplatePromptRuntime(engine);
   }
 
   public getConfig(): DirectorConfig {
@@ -138,29 +132,13 @@ export class DirectorRuntime {
       { role: 'user', content: userText },
     ];
 
-    let promptText: string;
-    let boundaryMarkers: readonly string[];
-    try {
-      const promptContext = await this.promptRuntime.render(messages);
-      promptText = promptContext.promptText;
-      boundaryMarkers = promptContext.boundaryMarkers;
-    } catch (error) {
-      return {
-        status: request.signal?.aborted === true ? 'aborted' : 'failed',
-        text: '',
-        selections: [],
-        errorMessage: error instanceof Error ? error.message : String(error),
-        rawText: '',
-      };
-    }
-
     const abort = createTimedAbortController(request.signal, request.timeoutMs);
-    const queryOptions: QueryOptions = {
+    const contextKey = this.getTaskContextKey(taskName);
+    const queryOptions: ChatOptions = {
+      session: contextKey,
       maxTokens: request.maxOutputTokens ?? defaultTokenBudget(task.output.shape, this.maxOutputTokens),
-      format: 'raw',
       signal: abort.signal,
     };
-    const contextKey = this.getTaskContextKey(taskName);
 
     logDirectorRun({
       phase: 'request',
@@ -172,18 +150,14 @@ export class DirectorRuntime {
     });
 
     try {
-      const rawText = await this.engine.query(
-        {
-          prompt: promptText,
-          ...(media.length > 0 ? { media: [...media] } : {}),
-        },
+      const rawText = await this.engine.chat(
+        media.length > 0 ? { messages, media: [...media] } : messages,
         {
           ...queryOptions,
           grammar,
         }
       );
-      const parseText = sanitizeAssistantText(rawText, boundaryMarkers);
-      const parsed = parseDirectorOutput(parseText, task.output, resolved);
+      const parsed = parseDirectorOutput(rawText, task.output, resolved);
       logDirectorRun({ phase: 'response', taskName, contextKey, rawText, status: 'ok' });
       return {
         status: 'ok',
@@ -228,7 +202,7 @@ export class DirectorRuntime {
   }
 
   private getMediaMarker(): string | null {
-    return this.engine.getMediaMarker?.() ?? null;
+    return this.engine.models?.current()?.mediaMarker ?? null;
   }
 
   private getTaskContextKey(taskName: string): string {

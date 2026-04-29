@@ -5,6 +5,8 @@ import type {
   ModelSource,
   ObservabilityEvent,
   QueryErrorCode,
+  ChatInput,
+  ChatOptions,
   QueryInput,
   QueryOptions,
 } from '../model-management/model-types.js';
@@ -18,7 +20,8 @@ export interface WorkerSerializableCogentConfig {
 }
 
 export type WorkerModelLoadOptions = Pick<ModelLoadOptions, 'observability' | 'runtime'>;
-export type WorkerQueryOptions = Pick<QueryOptions, 'session' | 'maxTokens' | 'format'>;
+export type WorkerQueryOptions = Pick<QueryOptions, 'session' | 'maxTokens' | 'format' | 'grammar'>;
+export type WorkerChatOptions = Pick<ChatOptions, 'session' | 'maxTokens' | 'grammar'>;
 
 export type WorkerRequestMessage =
   | {
@@ -40,38 +43,18 @@ export type WorkerRequestMessage =
       id: string;
     }
   | {
-      kind: 'apply-chat-template';
-      callId: number;
-      config: WorkerSerializableCogentConfig;
-      messages: Array<{ role: string; content: string }>;
-      addAssistant: boolean;
-    }
-  | {
-      kind: 'get-chat-template';
-      callId: number;
-      config: WorkerSerializableCogentConfig;
-    }
-  | {
-      kind: 'get-bos-text';
-      callId: number;
-      config: WorkerSerializableCogentConfig;
-    }
-  | {
-      kind: 'get-eos-text';
-      callId: number;
-      config: WorkerSerializableCogentConfig;
-    }
-  | {
-      kind: 'get-media-marker';
-      callId: number;
-      config: WorkerSerializableCogentConfig;
-    }
-  | {
       kind: 'query';
       callId: number;
       config: WorkerSerializableCogentConfig;
       input: QueryInput;
       options: WorkerQueryOptions;
+    }
+  | {
+      kind: 'chat';
+      callId: number;
+      config: WorkerSerializableCogentConfig;
+      input: ChatInput;
+      options: WorkerChatOptions;
     }
   | {
       kind: 'close';

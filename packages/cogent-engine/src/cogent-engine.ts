@@ -3,6 +3,8 @@ import type { ModelLifecycleService } from './model-management/model-service-con
 import { WorkerModelServiceClient } from './worker/model-service-client.js';
 import {
   QueryError,
+  type ChatInput,
+  type ChatOptions,
   type EngineObservability,
   type ObservabilityEvent,
   type ObservabilitySnapshot,
@@ -52,7 +54,7 @@ class RuntimeModelManager implements CogentModelManager {
   constructor(
     private readonly assertOpen: () => void,
     private readonly service: ModelLifecycleService
-  ) {}
+  ) { }
 
   public load(source: ModelSource, options?: ModelLoadOptions): Promise<ModelInfo> {
     this.assertOpen();
@@ -79,7 +81,7 @@ class RuntimeObservability implements EngineObservability {
   constructor(
     private readonly assertOpen: () => void,
     private readonly service: ModelLifecycleService
-  ) {}
+  ) { }
 
   public current(): ObservabilitySnapshot {
     this.assertOpen();
@@ -115,32 +117,9 @@ export class CogentEngine {
     return await this.#service.query(input, options);
   }
 
-  public async applyChatTemplate(
-    messages: Array<{ role: string; content: string }>,
-    addAssistant: boolean
-  ): Promise<string> {
+  public async chat(input: ChatInput, options: ChatOptions = {}): Promise<string> {
     this.assertOpen();
-    return await this.#service.applyChatTemplate(messages, addAssistant);
-  }
-
-  public getChatTemplate(): string | null {
-    this.assertOpen();
-    return this.#service.getChatTemplate();
-  }
-
-  public getBosText(): string {
-    this.assertOpen();
-    return this.#service.getBosText();
-  }
-
-  public getEosText(): string {
-    this.assertOpen();
-    return this.#service.getEosText();
-  }
-
-  public getMediaMarker(): string | null {
-    this.assertOpen();
-    return this.#service.getMediaMarker();
+    return await this.#service.chat(input, options);
   }
 
   public async close(): Promise<void> {

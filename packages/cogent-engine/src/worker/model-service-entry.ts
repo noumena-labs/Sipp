@@ -121,22 +121,23 @@ async function handleRequest(message: WorkerRequestMessage): Promise<unknown> {
       await modelService.remove(message.id);
       return modelService.currentModel();
     }
-    case 'apply-chat-template':
-      return await ensureService(message.config).applyChatTemplate(
-        message.messages,
-        message.addAssistant
-      );
-    case 'get-chat-template':
-      return ensureService(message.config).getChatTemplate();
-    case 'get-bos-text':
-      return ensureService(message.config).getBosText();
-    case 'get-eos-text':
-      return ensureService(message.config).getEosText();
-    case 'get-media-marker':
-      return ensureService(message.config).getMediaMarker();
     case 'query':
       return await withAbortController(message.callId, (signal) =>
         ensureService(message.config).query(message.input, {
+          ...message.options,
+          signal,
+          onToken: (token) => {
+            post({
+              kind: 'token',
+              callId: message.callId,
+              text: token,
+            });
+          },
+        })
+      );
+    case 'chat':
+      return await withAbortController(message.callId, (signal) =>
+        ensureService(message.config).chat(message.input, {
           ...message.options,
           signal,
           onToken: (token) => {

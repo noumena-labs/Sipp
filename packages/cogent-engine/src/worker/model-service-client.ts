@@ -3,6 +3,8 @@ import { ObservabilityController } from '../model-management/observability-contr
 import {
   WorkerRequestMessage,
   WorkerResponseMessage,
+  type WorkerChatOptions,
+  type WorkerQueryOptions,
   type WorkerSerializableCogentConfig,
 } from './model-service-protocol.js';
 import {
@@ -12,6 +14,8 @@ import {
   type ModelInfo,
   type ModelLoadOptions,
   type ModelSource,
+  type ChatInput,
+  type ChatOptions,
   type QueryInput,
   type QueryOptions,
 } from '../model-management/model-types.js';
@@ -21,7 +25,7 @@ interface PendingWorkerCall {
   resolve: (value: unknown) => void;
   reject: (error: unknown) => void;
   onProgress?: ModelLoadOptions['onProgress'];
-  onToken?: QueryOptions['onToken'];
+  onToken?: QueryOptions['onToken'] | ChatOptions['onToken'];
 }
 
 type RequestWithCallId = Extract<WorkerRequestMessage, { callId: number }>;
@@ -43,11 +47,19 @@ function toWorkerSerializableConfig(config: CogentConfig): WorkerSerializableCog
   };
 }
 
-function toWorkerQueryOptions(options: QueryOptions = {}): QueryOptions {
+function toWorkerQueryOptions(options: QueryOptions = {}): WorkerQueryOptions {
   return {
     session: options.session,
     maxTokens: options.maxTokens,
     format: options.format,
+    grammar: options.grammar,
+  };
+}
+
+function toWorkerChatOptions(options: ChatOptions = {}): WorkerChatOptions {
+  return {
+    session: options.session,
+    maxTokens: options.maxTokens,
     grammar: options.grammar,
   };
 }
@@ -131,37 +143,20 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     )) as string;
   }
 
-  public async applyChatTemplate(
-    messages: Array<{ role: string; content: string }>,
-    addAssistant: boolean
-  ): Promise<string> {
+  public async chat(input: ChatInput, options: ChatOptions = {}): Promise<string> {
     this.assertOpen();
-    return (await this.callWorker({
-      kind: 'apply-chat-template',
-      config: this.workerConfig,
-      messages,
-      addAssistant,
-    })) as string;
-  }
-
-  public getChatTemplate(): string | null {
-    this.assertOpen();
-    return this.currentSnapshot?.chatTemplate ?? null;
-  }
-
-  public getBosText(): string {
-    this.assertOpen();
-    return this.currentSnapshot?.bosText ?? '';
-  }
-
-  public getEosText(): string {
-    this.assertOpen();
-    return this.currentSnapshot?.eosText ?? '';
-  }
-
-  public getMediaMarker(): string | null {
-    this.assertOpen();
-    return this.currentSnapshot?.mediaMarker ?? null;
+    return (await this.callWorkerWithAbort(
+      {
+        kind: 'chat',
+        config: this.workerConfig,
+        input,
+        options: toWorkerChatOptions(options),
+      },
+      {
+        signal: options.signal,
+        onToken: options.onToken,
+      }
+    )) as string;
   }
 
   public currentObservability(): ObservabilitySnapshot {
@@ -273,7 +268,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     options: {
       signal?: AbortSignal;
       onProgress?: ModelLoadOptions['onProgress'];
-      onToken?: QueryOptions['onToken'];
+      onToken?: QueryOptions['onToken'] | ChatOptions['onToken'];
     }
   ): Promise<unknown> {
     if (options.signal?.aborted) {

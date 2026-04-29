@@ -1,4 +1,5 @@
 import type { AssetInspection } from '../model-bundle/model-bundle-types.js';
+import type { ChatMessage } from '../core/inference-types.js';
 import type { BackendDeviceType, InferenceInitConfig, PromptFormatMode } from '../types.js';
 
 export type ModelModality = 'text' | 'vision';
@@ -98,6 +99,15 @@ export interface QueryOptions {
   onToken?: (token: string) => void;
   grammar?: string;
 }
+
+export type ChatInput =
+  | readonly ChatMessage[]
+  | {
+      messages: readonly ChatMessage[];
+      media?: Uint8Array[];
+    };
+
+export type ChatOptions = Omit<QueryOptions, 'format'>;
 
 export interface QueryObservation {
   session: string | null;

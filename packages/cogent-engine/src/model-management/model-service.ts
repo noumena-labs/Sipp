@@ -1,4 +1,8 @@
 import type { EngineRuntime } from '../runtime/engine-runtime.js';
+import {
+  ChatTemplatePromptRuntime,
+  StreamingBoundaryTextSanitizer,
+} from '../core/chat-template-boundaries.js';
 import type {
   GenerateResponse,
   InferenceInitConfig,
@@ -6,6 +10,7 @@ import type {
   InternalBundleDescriptor,
   PromptOptions,
 } from '../types.js';
+import { createLinkedAbortController } from '../utils/abort.js';
 import { AssetStore, type RemoteAssetMetadata } from './asset-store.js';
 import { sha256Text } from './hash.js';
 import { ModelRegistryStore } from './model-registry-store.js';
@@ -14,6 +19,8 @@ import {
   QueryError,
   toPromptFormatMode,
   type AssetRecord,
+  type ChatInput,
+  type ChatOptions,
   type LoadedModelState,
   type ModelEntry,
   type ModelInfo,
@@ -158,6 +165,8 @@ function sameVisionProjectorTypes(left: readonly string[], right: readonly strin
 
 export class ModelService implements ModelLifecycleService {
   private current: LoadedModelState | null = null;
+  private chatRuntime: ChatTemplatePromptRuntime | null = null;
+  private chatRuntimeKey: string | null = null;
   private operationChain: Promise<void> = Promise.resolve();
   private transitioning = false;
   private readonly observability = new ObservabilityController();
@@ -396,6 +405,77 @@ export class ModelService implements ModelLifecycleService {
           : 'Model query failed.',
         { cause: error }
       );
+    }
+  }
+
+  public async chat(input: ChatInput, options: ChatOptions = {}): Promise<string> {
+    if (this.transitioning) {
+      throw new QueryError('MODEL_NOT_READY', 'A model lifecycle transition is in progress.');
+    }
+    if (this.current == null) {
+      throw new QueryError('MODEL_NOT_READY', 'No model is loaded. Call engine.models.load(...) first.');
+    }
+
+    const messages = isChatInputObject(input) ? input.messages : input;
+    const media = isChatInputObject(input) ? input.media : undefined;
+    const promptContext = await this.getChatRuntime(this.current).render(messages);
+    const outputSanitizer = new StreamingBoundaryTextSanitizer(promptContext.boundaryMarkers);
+    const linkedAbort = createLinkedAbortController(options.signal);
+    let streamedOutputText = '';
+    let assistantText = '';
+    let stoppedAtBoundary = false;
+
+    const consumeOutputText = (text: string): void => {
+      if (text.length === 0 || outputSanitizer.reachedBoundary) {
+        return;
+      }
+      streamedOutputText += text;
+      const result = outputSanitizer.consume(text);
+      if (result.safeText.length > 0) {
+        assistantText += result.safeText;
+        options.onToken?.(result.safeText);
+      }
+      if (result.hitBoundary) {
+        stoppedAtBoundary = true;
+        linkedAbort.controller.abort();
+      }
+    };
+
+    const flushOutputText = (): void => {
+      const safeText = outputSanitizer.flush();
+      if (safeText.length > 0) {
+        assistantText += safeText;
+        options.onToken?.(safeText);
+      }
+    };
+
+    try {
+      const rawText = await this.query(
+        {
+          prompt: promptContext.promptText,
+          ...(media != null && media.length > 0 ? { media } : {}),
+        },
+        {
+          ...options,
+          format: 'raw',
+          signal: linkedAbort.signal,
+          onToken: consumeOutputText,
+        }
+      );
+      const unseenOutputSuffix = sliceUnstreamedSuffix(streamedOutputText, rawText);
+      if (!outputSanitizer.reachedBoundary && unseenOutputSuffix.length > 0) {
+        consumeOutputText(unseenOutputSuffix);
+      }
+      flushOutputText();
+      return assistantText.trim();
+    } catch (error) {
+      if (stoppedAtBoundary && options.signal?.aborted !== true) {
+        flushOutputText();
+        return assistantText.trim();
+      }
+      throw error;
+    } finally {
+      linkedAbort.dispose();
     }
   }
 
@@ -1326,4 +1406,27 @@ export class ModelService implements ModelLifecycleService {
       release();
     }
   }
+
+  private getChatRuntime(current: LoadedModelState): ChatTemplatePromptRuntime {
+    const key = `${current.id}:${current.assetFingerprint}`;
+    if (this.chatRuntime == null || this.chatRuntimeKey !== key) {
+      this.chatRuntime = new ChatTemplatePromptRuntime(this);
+      this.chatRuntimeKey = key;
+    }
+    return this.chatRuntime;
+  }
+}
+
+function sliceUnstreamedSuffix(streamedOutputText: string, finalOutputText: string): string {
+  if (streamedOutputText.length === 0) {
+    return finalOutputText;
+  }
+  if (!finalOutputText.startsWith(streamedOutputText)) {
+    return '';
+  }
+  return finalOutputText.slice(streamedOutputText.length);
+}
+
+function isChatInputObject(input: ChatInput): input is Extract<ChatInput, { messages: unknown }> {
+  return !Array.isArray(input);
 }

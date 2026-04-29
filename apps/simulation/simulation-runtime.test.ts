@@ -70,13 +70,10 @@ function createTimeoutEngine(): DirectorRuntimeEngine & { cancelCalls: number[] 
 
   return {
     cancelCalls,
-    async applyChatTemplate(messages, _addAssistant) {
-      return messages.map((message) => `${message.role}: ${message.content}`).join('\n');
+    models: {
+      current: () => ({ mediaMarker: '<image>' }),
     },
-    async queuePrompt(_contextKey, _promptText, _options) {
-      return 1;
-    },
-    async runQueuedRequest(requestId, options = {}) {
+    async chat(_input, options = {}) {
       const signal = options.signal;
       if (!signal) {
         throw new Error('Expected an abortable director task.');
@@ -86,17 +83,8 @@ function createTimeoutEngine(): DirectorRuntimeEngine & { cancelCalls: number[] 
           signal.addEventListener('abort', () => resolve(), { once: true });
         });
       }
-      return {
-        requestId,
-        completed: false,
-        failed: false,
-        cancelled: true,
-        outputText: '',
-      };
-    },
-    async cancelQueuedRequest(requestId) {
-      cancelCalls.push(requestId);
-      return true;
+      cancelCalls.push(1);
+      throw new DOMException('Operation aborted.', 'AbortError');
     },
   };
 }
@@ -105,28 +93,20 @@ function createOutputEngine(outputText: string): DirectorRuntimeEngine & { gramm
   let grammar: string | undefined;
   let promptText: string | undefined;
   return {
+    models: {
+      current: () => ({ mediaMarker: '<image>' }),
+    },
     get grammar() {
       return grammar;
     },
     get promptText() {
       return promptText;
     },
-    async applyChatTemplate(messages, _addAssistant) {
-      return messages.map((message) => `${message.role}: ${message.content}`).join('\n');
-    },
-    async queuePrompt(_contextKey, queuedPromptText, options) {
-      promptText = queuedPromptText;
-      grammar = typeof options === 'object' ? options.grammar : undefined;
-      return 1;
-    },
-    async runQueuedRequest(requestId) {
-      return {
-        requestId,
-        completed: true,
-        failed: false,
-        cancelled: false,
-        outputText,
-      };
+    async chat(input, options) {
+      const messages = Array.isArray(input) ? input : input.messages;
+      promptText = messages.map((message) => `${message.role}: ${message.content}`).join('\n');
+      grammar = typeof options === 'object' ? options?.grammar : undefined;
+      return outputText;
     },
   };
 }
@@ -459,6 +439,7 @@ test('SimulationRuntime applies deterministic referee fallback after timeout', a
   const internals = runtime as unknown as MutableRuntimeInternals;
   internals.refereeTimeoutMs = 5;
   const state = internals.state;
+  state.tick = 1;
   state.agents.push(
     createAgent('carrier', 'Carrier', { x: 0, z: 0 }, {
       status: 'carrying the banana to home base',
@@ -1610,6 +1591,7 @@ test('invalid repeated forced-drop fumble falls back through policy without paus
   });
 
   const state = (runtime as unknown as MutableRuntimeInternals).state;
+  state.tick = 1;
   populateForcedDropWorld(state);
   state.game.refereeMemory.forcedDrops.push({
     tick: 0,
@@ -1634,7 +1616,7 @@ test('invalid repeated forced-drop fumble falls back through policy without paus
     assert.equal(runtime.isBusy(), false);
     assert.equal(snapshot.objects.find((object) => object.id === 'banana')?.heldBy, null);
     assert.equal(snapshot.game.score.forcedDrops.attacker, 1);
-    assert.equal(attacker?.cooldowns.sabotageUntilTick, 4);
+    assert.equal(attacker?.cooldowns.sabotageUntilTick, 5);
     assert.equal(snapshot.game.refereeMemory.forcedDrops.length, 2);
     assert.equal(snapshot.game.refereeMemory.forcedDrops.at(-1)?.outcome, 'drop');
     assert.match(engine.grammar ?? '', /"drop"/);

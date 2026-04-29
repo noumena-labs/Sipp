@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { ChatTemplateMessage } from '../core/chat-template-boundaries.js';
 import type {
-  QueryInput,
-  QueryOptions,
+  ChatInput,
+  ChatOptions,
 } from '../model-management/model-types.js';
 import { parseDirectorConfig } from './director-config.js';
 import { DirectorRuntime, type DirectorRuntimeEngine } from './director-runtime.js';
@@ -19,24 +18,21 @@ class FakeEngine implements DirectorRuntimeEngine {
   public mediaMarker: string | null = '<image>';
   public queryCalls = 0;
 
-  public async applyChatTemplate(
-    messages: ChatTemplateMessage[],
-    _addAssistant: boolean
-  ): Promise<string> {
-    this.prompt = messages.map((message) => `${message.role}: ${message.content}`).join('\n');
-    return this.prompt;
-  }
+  public readonly models = {
+    current: () => ({ mediaMarker: this.mediaMarker }),
+  };
 
-  public async query(
-    input: QueryInput,
-    options?: QueryOptions
+  public async chat(
+    input: ChatInput,
+    options?: ChatOptions
   ): Promise<string> {
     this.queryCalls += 1;
     if (typeof options === 'object' && options) {
       this.grammar = (options as any).grammar;
     }
-    this.media = (input as any).media as Uint8Array[] | undefined;
-    this.prompt = typeof input === 'string' ? input : input.prompt;
+    const messages = Array.isArray(input) ? input : input.messages;
+    this.media = Array.isArray(input) ? undefined : input.media;
+    this.prompt = messages.map((message) => `${message.role}: ${message.content}`).join('\n');
 
     if (this.waitForAbort) {
       await new Promise<void>((resolve) => {
@@ -55,20 +51,22 @@ class FakeEngine implements DirectorRuntimeEngine {
       throw new Error('boom');
     }
 
-    return this.outputText;
+    const safeText = sanitizeFakeChatOutput(this.outputText);
+    options?.onToken?.(safeText);
+    return safeText;
   }
+}
 
-  public getChatTemplate(): string | null {
-    return null;
+function sanitizeFakeChatOutput(text: string): string {
+  const markers = ['</s>', '<user>', '<assistant>', '<system>'];
+  let index = -1;
+  for (const marker of markers) {
+    const markerIndex = text.indexOf(marker);
+    if (markerIndex >= 0 && (index < 0 || markerIndex < index)) {
+      index = markerIndex;
+    }
   }
-
-  public getEosText(): string {
-    return '</s>';
-  }
-
-  public getMediaMarker(): string | null {
-    return this.mediaMarker;
-  }
+  return (index >= 0 ? text.slice(0, index) : text).trim();
 }
 
 const CONFIG = parseDirectorConfig({
@@ -144,7 +142,7 @@ test('DirectorRuntime returns a selected runtime choice with hidden payload', as
   assert.equal(engine.prompt.includes('Never output JSON'), true);
 });
 
-test('DirectorRuntime parses sanitized assistant text while preserving raw output', async () => {
+test('DirectorRuntime parses sanitized assistant text from engine chat', async () => {
   const engine = new FakeEngine();
   engine.outputText = 'Aria sprints toward home base.</s><user>ignored</user>';
   const runtime = new DirectorRuntime(engine, CONFIG);
@@ -153,7 +151,7 @@ test('DirectorRuntime parses sanitized assistant text while preserving raw outpu
 
   assert.equal(result.status, 'ok');
   assert.equal(result.text, 'Aria sprints toward home base.');
-  assert.equal(result.rawText, 'Aria sprints toward home base.</s><user>ignored</user>');
+  assert.equal(result.rawText, 'Aria sprints toward home base.');
 });
 
 test('DirectorRuntime exposes task grammar and prompt for inspection', () => {

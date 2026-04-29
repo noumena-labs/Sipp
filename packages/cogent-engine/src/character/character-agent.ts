@@ -10,8 +10,8 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import type {
-  QueryInput,
-  QueryOptions,
+  ChatInput,
+  ChatOptions,
 } from '../model-management/model-types.js';
 import type { ChatMessage } from '../types.js';
 import { CharacterEventBus, type CharacterEvent } from './action-bus.js';
@@ -24,24 +24,12 @@ import {
   type CharacterConfig,
 } from './character-config.js';
 import { summarizeActionCues } from './action-schema.js';
-import {
-  ChatTemplatePromptRuntime,
-  sanitizeAssistantText,
-  StreamingBoundaryTextSanitizer,
-} from '../core/chat-template-boundaries.js';
 import { renderSystemPrompt } from './persona.js';
-import { createTimedAbortController, waitForAbort } from '../utils/abort.js';
+import { createTimedAbortController } from '../utils/abort.js';
 import type { RunStatus } from '../core/run-status.js';
 
 export interface CharacterRuntimeEngine {
-  query(input: QueryInput, options?: QueryOptions): Promise<string>;
-  applyChatTemplate(
-    messages: Array<{ role: string; content: string }>,
-    addAssistant: boolean
-  ): Promise<string>;
-  getChatTemplate?(): string | null;
-  getEosText?(): string;
-  getMediaMarker?(): string | null;
+  chat(input: ChatInput, options?: ChatOptions): Promise<string>;
 }
 
 export interface CharacterRuntimeOptions {
@@ -84,12 +72,6 @@ export interface CharacterChooseOptions {
  */
 export type ChatEvent = CharacterEvent;
 
-interface ResolvedPromptContext {
-  readonly promptText: string;
-  readonly boundaryMarkers: readonly string[];
-  readonly templateSource: string | null;
-}
-
 interface InFlightTurn {
   readonly controller: AbortController;
   readonly done: Promise<void>;
@@ -106,7 +88,6 @@ export class CharacterRuntime {
   private readonly contextKey: string;
   private readonly systemPrompt: string;
   private readonly grammarSource: string;
-  private readonly promptRuntime: ChatTemplatePromptRuntime;
   private readonly memoryLimitTurns: number;
   private readonly canonicalCueLabelsByActionId: ReadonlyMap<string, string>;
   private readonly turnHistory: ChatTurn[] = [];
@@ -123,7 +104,6 @@ export class CharacterRuntime {
     this.maxOutputTokens = options.maxOutputTokens ?? 256;
     this.contextKey = options.contextKey ?? `character:${config.id}`;
     this.eventBus = options.bus ?? new CharacterEventBus();
-    this.promptRuntime = new ChatTemplatePromptRuntime(engine);
     this.systemPrompt = renderSystemPrompt(config.persona, config.actions);
     this.grammarSource = compileActionGrammar(config.actions);
     this.canonicalCueLabelsByActionId = new Map(
@@ -133,10 +113,6 @@ export class CharacterRuntime {
       0,
       resolveMaxMemoryTurns(config) ?? DEFAULT_MEMORY_MAX_TURNS
     );
-  }
-
-  private getMediaMarker(): string | null {
-    return this.engine.getMediaMarker?.() ?? null;
   }
 
   /** Exposes the event bus for imperative subscribers (VRM bindings, logs). */
@@ -189,25 +165,10 @@ export class CharacterRuntime {
       { role: 'user', content: choicePrompt },
     ];
 
-    let promptText: string;
-    let boundaryMarkers: readonly string[] = [];
-    try {
-      const promptContext = await this.promptRuntime.render(messages);
-      promptText = promptContext.promptText;
-      boundaryMarkers = promptContext.boundaryMarkers;
-    } catch (error) {
-      return {
-        selection: null,
-        status: options.signal?.aborted === true ? 'aborted' : 'failed',
-        errorMessage: error instanceof Error ? error.message : String(error),
-        rawText: '',
-      };
-    }
-
     const abort = createTimedAbortController(options.signal, options.timeoutMs);
-    const queryOptions: QueryOptions = {
+    const chatOptions: ChatOptions = {
+      session: `${this.contextKey}:choose`,
       maxTokens: options.maxOutputTokens ?? 24,
-      format: 'raw',
       signal: abort.signal,
     };
     const contextKey = `${this.contextKey}:choose`;
@@ -222,17 +183,11 @@ export class CharacterRuntime {
     });
 
     try {
-      const rawText = await this.engine.query(
-        {
-          prompt: promptText,
-        },
-        {
-          ...queryOptions,
-          grammar,
-        }
-      );
-      const parseText = sanitizeAssistantText(rawText, boundaryMarkers);
-      const selection = parseChoiceOutput(parseText, options.choices);
+      const rawText = await this.engine.chat(messages, {
+        ...chatOptions,
+        grammar,
+      });
+      const selection = parseChoiceOutput(rawText, options.choices);
       if (selection == null) {
         logChoiceQuery({
           phase: 'response',
@@ -250,7 +205,7 @@ export class CharacterRuntime {
         };
       }
       return {
-        selection: parseChoiceOutput(parseText, options.choices),
+        selection,
         status: 'ok',
         rawText,
       };
@@ -349,12 +304,11 @@ export class CharacterRuntime {
     const parser = new StreamingActionParser(this.config.actions);
     const turnMessages = this.buildTurnMessages(userMessage);
     try {
-      const promptContext = await this.buildPromptContext(turnMessages);
       if (signal.aborted) {
         emit({ kind: 'turn-end', finalText: '', status: 'aborted' });
         return;
       }
-      await this.runTurn(promptContext, userMessage, parser, emit, signal);
+      await this.runTurn(turnMessages, userMessage, parser, emit, signal);
     } catch (error) {
       emit({
         kind: 'turn-end',
@@ -385,16 +339,8 @@ export class CharacterRuntime {
     return messages;
   }
 
-  /**
-   * Renders the full conversation through the model's embedded chat template
-   * and derives assistant boundaries from that applied template output.
-   */
-  private async buildPromptContext(messages: ChatMessage[]): Promise<ResolvedPromptContext> {
-    return this.promptRuntime.render(messages);
-  }
-
   private async runTurn(
-    promptContext: ResolvedPromptContext,
+    messages: ChatMessage[],
     userMessage: string,
     parser: StreamingActionParser,
     emit: (event: ChatEvent) => void,
@@ -406,8 +352,6 @@ export class CharacterRuntime {
     let status: RunStatus = 'ok';
     let errorMessage: string | undefined;
     const contextKey = `${this.contextKey}:chat`;
-    const promptText = promptContext.promptText;
-    const outputSanitizer = new StreamingBoundaryTextSanitizer(promptContext.boundaryMarkers);
 
     const recordParsedEvents = (events: readonly ParsedEvent[]): void => {
       for (const event of events) {
@@ -432,24 +376,12 @@ export class CharacterRuntime {
       recordParsedEvents(parser.flush());
     };
 
-    const queryController = new AbortController();
-    const detachSignalForwarder = forwardAbortSignal(signal, queryController);
-
-    const requestBoundaryStop = (): void => {
-      queryController.abort();
-    };
-
     const consumeOutputText = (text: string): void => {
-      if (text.length === 0 || outputSanitizer.reachedBoundary) {
+      if (text.length === 0) {
         return;
       }
       streamedOutputText += text;
-      const result = outputSanitizer.consume(text);
-      emitParsedText(result.safeText);
-
-      if (result.hitBoundary) {
-        requestBoundaryStop();
-      }
+      emitParsedText(text);
     };
 
     const onToken = (token: string): void => {
@@ -457,42 +389,27 @@ export class CharacterRuntime {
     };
 
     try {
-      const queryOptions: QueryOptions = {
+      const queryOptions: ChatOptions = {
+        session: contextKey,
         maxTokens: this.maxOutputTokens,
-        format: 'raw',
         onToken,
-        signal: queryController.signal,
+        signal,
       };
-      const rawText = await this.engine.query(
-        {
-          prompt: promptText,
-        },
-        {
-          ...queryOptions,
-          grammar: this.grammarSource,
-        }
-      );
+      const rawText = await this.engine.chat(messages, {
+        ...queryOptions,
+        grammar: this.grammarSource,
+      });
       const unseenOutputSuffix = sliceUnstreamedSuffix(streamedOutputText, rawText);
-      if (!outputSanitizer.reachedBoundary && unseenOutputSuffix.length > 0) {
+      if (unseenOutputSuffix.length > 0) {
         consumeOutputText(unseenOutputSuffix);
       }
     } catch (error) {
-      if (outputSanitizer.reachedBoundary && !signal.aborted) {
-        status = 'ok';
-      } else {
-        status = signal.aborted ? 'aborted' : 'failed';
-        if (!signal.aborted) {
-          errorMessage = error instanceof Error ? error.message : String(error);
-        }
+      status = signal.aborted ? 'aborted' : 'failed';
+      if (!signal.aborted) {
+        errorMessage = error instanceof Error ? error.message : String(error);
       }
-      if (signal.aborted && !outputSanitizer.reachedBoundary) {
-        status = 'aborted';
-      }
-    } finally {
-      detachSignalForwarder();
     }
 
-    emitParsedText(outputSanitizer.flush());
     flushParsedText();
 
     const finalText = stripExactUserMessageEcho(proseText, userMessage).trim();

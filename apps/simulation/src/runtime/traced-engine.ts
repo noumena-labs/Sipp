@@ -1,4 +1,4 @@
-import type { CogentEngine, QueryInput, QueryOptions } from '@noumena-labs/cogent-engine';
+import type { ChatInput, ChatOptions, CogentEngine, QueryInput, QueryOptions } from '@noumena-labs/cogent-engine';
 import type { CharacterRuntimeEngine } from '@noumena-labs/cogent-engine/character';
 import type { DirectorRuntimeEngine } from '@noumena-labs/cogent-engine/director';
 import type { BrainDefinition, BrainQueryType, BrainQueryStatus, BrainActivityStore } from './brain-activity-store.js';
@@ -6,11 +6,6 @@ import type { BrainDefinition, BrainQueryType, BrainQueryStatus, BrainActivitySt
 interface TracedChatMessage {
   role: string;
   content: string;
-}
-
-interface AppliedTemplateSnapshot {
-  readonly promptText: string;
-  readonly messages: readonly TracedChatMessage[];
 }
 
 export function createTracedBrainEngine(
@@ -22,7 +17,9 @@ export function createTracedBrainEngine(
 }
 
 class TracedBrainEngine implements CharacterRuntimeEngine, DirectorRuntimeEngine {
-  private readonly appliedTemplatesByPrompt = new Map<string, AppliedTemplateSnapshot[]>();
+  public readonly models = {
+    current: () => this.engine.models.current(),
+  };
 
   public constructor(
     private readonly engine: CogentEngine,
@@ -30,11 +27,9 @@ class TracedBrainEngine implements CharacterRuntimeEngine, DirectorRuntimeEngine
     private readonly brain: BrainDefinition
   ) { }
 
-  public async query(input: QueryInput, options: QueryOptions = {}): Promise<string> {
-    const promptText = typeof input === 'string' ? input : input.prompt;
-    const template = this.takeAppliedTemplate(promptText ?? '');
-
-    const prompts = extractPromptSections(template?.messages ?? []);
+  public async chat(input: ChatInput, options: ChatOptions = {}): Promise<string> {
+    const messages = Array.isArray(input) ? input : input.messages;
+    const prompts = extractPromptSections(messages);
     const directorTaskName = this.brain.kind === 'director' ? parseDirectorTaskName(options.session ?? '') : null;
     const queryType = classifyQueryType(this.brain.kind, directorTaskName);
     const queryId = this.store.beginQuery({
@@ -44,6 +39,45 @@ class TracedBrainEngine implements CharacterRuntimeEngine, DirectorRuntimeEngine
       contextKey: options.session ?? 'default',
       systemPrompt: prompts.systemPrompt,
       userPrompt: prompts.userPrompt,
+      renderedPrompt: renderMessagesForTrace(messages),
+      grammar: options.grammar ?? null,
+    });
+
+    try {
+      const response = await this.engine.chat(
+        input,
+        withStreamingTap(options, (chunk) => {
+          this.store.appendResponse(queryId, chunk);
+        })
+      );
+
+      this.store.finishQuery(queryId, {
+        status: 'completed',
+        responseText: response,
+        errorMessage: null,
+      });
+      return response;
+    } catch (error) {
+      this.store.finishQuery(queryId, {
+        status: classifyErrorStatus(error),
+        errorMessage: asErrorMessage(error),
+      });
+      throw error;
+    }
+  }
+
+  public async query(input: QueryInput, options: QueryOptions = {}): Promise<string> {
+    const promptText = typeof input === 'string' ? input : input.prompt;
+
+    const directorTaskName = this.brain.kind === 'director' ? parseDirectorTaskName(options.session ?? '') : null;
+    const queryType = classifyQueryType(this.brain.kind, directorTaskName);
+    const queryId = this.store.beginQuery({
+      brainId: this.brain.id,
+      queryType,
+      ...(directorTaskName ? { queryName: directorTaskName } : {}),
+      contextKey: options.session ?? 'default',
+      systemPrompt: null,
+      userPrompt: null,
       renderedPrompt: promptText,
       grammar: options.grammar ?? null,
     });
@@ -69,36 +103,6 @@ class TracedBrainEngine implements CharacterRuntimeEngine, DirectorRuntimeEngine
       });
       throw error;
     }
-  }
-
-  public getMediaMarker(): string | null {
-    return (this.engine as any).getMediaMarker?.() ?? null;
-  }
-
-  public async applyChatTemplate(
-    messages: TracedChatMessage[],
-    addAssistant: boolean
-  ): Promise<string> {
-    const promptText = await this.engine.applyChatTemplate(messages, addAssistant);
-    if (addAssistant) {
-      this.rememberAppliedTemplate({ promptText, messages });
-    }
-    return promptText;
-  }
-
-  private rememberAppliedTemplate(snapshot: AppliedTemplateSnapshot): void {
-    const entries = this.appliedTemplatesByPrompt.get(snapshot.promptText) ?? [];
-    entries.push(snapshot);
-    this.appliedTemplatesByPrompt.set(snapshot.promptText, entries);
-  }
-
-  private takeAppliedTemplate(promptText: string): AppliedTemplateSnapshot | null {
-    const entries = this.appliedTemplatesByPrompt.get(promptText);
-    const snapshot = entries?.shift() ?? null;
-    if (entries && entries.length === 0) {
-      this.appliedTemplatesByPrompt.delete(promptText);
-    }
-    return snapshot;
   }
 }
 
@@ -130,6 +134,10 @@ function extractPromptSections(messages: readonly TracedChatMessage[]): {
     .find((message) => message.role === 'user')
     ?.content.trim() ?? '';
   return { systemPrompt, userPrompt };
+}
+
+function renderMessagesForTrace(messages: readonly TracedChatMessage[]): string {
+  return messages.map((message) => `${message.role}: ${message.content}`).join('\n\n');
 }
 
 function parseDirectorTaskName(contextKey: string): string | null {

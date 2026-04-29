@@ -10,7 +10,9 @@ import { CogentEngine } from 'cogent-engine';
 const engine = await CogentEngine.create();
 
 await engine.models.load('https://example.com/model.gguf');
-const answer = await engine.query('Explain browser-hosted inference in one paragraph.');
+const answer = await engine.chat([
+  { role: 'user', content: 'Explain browser-hosted inference in one paragraph.' },
+]);
 
 console.log(answer);
 await engine.close();
@@ -67,13 +69,23 @@ When worker execution is selected, the worker hosts the same high-level model se
 
 ## Query
 
-Use `engine.query(...)` for text or vision requests:
+Use `engine.chat(...)` when you have chat messages and want Cogent to apply the
+loaded model's native chat template:
+
+```ts
+const reply = await engine.chat([
+  { role: 'system', content: 'Be concise.' },
+  { role: 'user', content: 'Summarize the current model.' },
+]);
+```
+
+Use `engine.query(...)` when you already have a raw prompt string:
 
 ```ts
 const text = await engine.query('Summarize the current model.');
 
-const vision = await engine.query({
-  prompt: 'What is in this image?',
+const vision = await engine.chat({
+  messages: [{ role: 'user', content: 'What is in this image?' }],
   media: [imageBytes],
 });
 ```
@@ -81,7 +93,7 @@ const vision = await engine.query({
 Streaming is available through `onToken`:
 
 ```ts
-const output = await engine.query('Write a haiku.', {
+const output = await engine.chat([{ role: 'user', content: 'Write a haiku.' }], {
   maxTokens: 64,
   onToken: (token) => {
     console.log(token);
@@ -104,6 +116,9 @@ const output = await engine.query('Write a haiku.', {
 - `QueryObservation`
 - `RuntimeObservation`
 - `BackendProfileObservation`
+- `ChatInput`
+- `ChatMessage`
+- `ChatOptions`
 - `QueryInput`
 - `QueryOptions`
 - `QueryError`

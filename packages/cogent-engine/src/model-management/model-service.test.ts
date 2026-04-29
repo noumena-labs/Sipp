@@ -235,6 +235,8 @@ class FakeRuntime implements EngineRuntime {
   public stagedDescriptors: InternalBundleDescriptor[] = [];
   public lastPrompt: string | null = null;
   public mediaMarker: string | null = null;
+  public nextOutputText: string | null = null;
+  public streamedTokens: string[] = ['token'];
   public stageGate: Promise<void> | null = null;
   private runtimeMetricsEnabled = false;
   private backendProfilingEnabled = false;
@@ -315,9 +317,12 @@ class FakeRuntime implements EngineRuntime {
 
   public async applyChatTemplate(
     messages: Array<{ role: string; content: string }>,
-    _addAssistant: boolean
+    addAssistant: boolean
   ): Promise<string> {
-    return messages.map((m) => `${m.role}: ${m.content}`).join('\n');
+    const rendered = messages
+      .map((message) => `<${message.role}>\n${message.content}</${message.role}>\n`)
+      .join('');
+    return `${rendered}${addAssistant ? '<assistant>\n' : ''}`;
   }
 
   public getChatTemplate(): string | null {
@@ -354,7 +359,9 @@ class FakeRuntime implements EngineRuntime {
     this.lastPrompt = promptText;
     this.queuedRequests.set(requestId, { promptText, options });
     if (typeof options === 'object') {
-      options.onToken?.('token');
+      for (const token of this.streamedTokens) {
+        options.onToken?.(token);
+      }
     }
     return requestId;
   }
@@ -372,10 +379,12 @@ class FakeRuntime implements EngineRuntime {
       };
     }
     this.queuedRequests.delete(requestId);
+    const outputText = this.nextOutputText ?? `answer:${request.promptText}`;
+    this.nextOutputText = null;
     return {
       requestId,
       completed: true,
-      outputText: `answer:${request.promptText}`,
+      outputText,
       cancelled: false,
       failed: false,
       requestObservability: this.runtimeMetricsEnabled ? this.createMetrics() : null,
@@ -456,6 +465,30 @@ test('ModelService loads, lists, tracks current, and queries text models', async
   assert.equal(answer, 'answer:hello');
   assert.deepEqual(tokens, ['token']);
   assert.equal(runtime.lastPrompt, 'hello');
+});
+
+test('ModelService.chat renders chat templates and sanitizes assistant boundaries', async () => {
+  const { service, runtime } = createService();
+  await service.load(file('text-model.gguf'));
+  runtime.streamedTokens = ['Hello ', 'there</assistant>\n<user>ignored'];
+  runtime.nextOutputText = 'Hello there</assistant>\n<user>ignored';
+
+  const tokens: string[] = [];
+  const answer = await service.chat(
+    [
+      { role: 'system', content: 'Be concise.' },
+      { role: 'user', content: 'Say hello.' },
+    ],
+    {
+      onToken: (token) => tokens.push(token),
+    }
+  );
+
+  assert.equal(answer, 'Hello there');
+  assert.deepEqual(tokens, ['Hello ', 'there']);
+  assert.match(runtime.lastPrompt ?? '', /<system>\nBe concise\.<\/system>/);
+  assert.match(runtime.lastPrompt ?? '', /<user>\nSay hello\.<\/user>/);
+  assert.ok(runtime.lastPrompt?.endsWith('<assistant>\n'));
 });
 
 test('ModelService keeps observability off by default', async () => {

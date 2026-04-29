@@ -13,10 +13,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type {
+  ChatInput,
+  ChatOptions,
   QueryInput,
   QueryOptions,
 } from '../model-management/model-types.js';
-import type { ChatTemplateMessage } from '../core/chat-template-boundaries.js';
+import { StreamingBoundaryTextSanitizer } from '../core/chat-template-boundaries.js';
 import { CharacterEventBus, type CharacterEvent } from './action-bus.js';
 import {
   CharacterRuntime,
@@ -50,21 +52,21 @@ interface ScriptedResponse {
 }
 
 interface FakeEngine extends CharacterRuntimeEngine {
+  readonly chatCalls: Array<{
+    input: ChatInput;
+    options: ChatOptions | undefined;
+  }>;
   readonly queryCalls: Array<{
     input: QueryInput;
     options: QueryOptions | undefined;
-  }>;
-  readonly applyChatTemplateCalls: Array<{
-    messages: ChatTemplateMessage[];
-    addAssistant: boolean;
   }>;
   enqueue(script: ScriptedResponse): void;
   waitForRunCount(count: number): Promise<void>;
 }
 
 function createFakeEngine(): FakeEngine {
+  const chatCalls: FakeEngine['chatCalls'] = [];
   const queryCalls: FakeEngine['queryCalls'] = [];
-  const applyChatTemplateCalls: FakeEngine['applyChatTemplateCalls'] = [];
   const scripts: ScriptedResponse[] = [];
   const runWaiters: Array<{ count: number; resolve: () => void }> = [];
   let completedCount = 0;
@@ -79,8 +81,8 @@ function createFakeEngine(): FakeEngine {
   };
 
   return {
+    chatCalls,
     queryCalls,
-    applyChatTemplateCalls,
     enqueue(script: ScriptedResponse) {
       scripts.push(script);
     },
@@ -92,27 +94,23 @@ function createFakeEngine(): FakeEngine {
         runWaiters.push({ count, resolve });
       });
     },
-    getChatTemplate(): string | null {
-      return 'fake-template';
-    },
-    getEosText(): string {
-      return '</s>';
-    },
-    async applyChatTemplate(
-      messages: ChatTemplateMessage[],
-      addAssistant: boolean
+    async chat(
+      input: ChatInput,
+      options?: ChatOptions
     ): Promise<string> {
-      applyChatTemplateCalls.push({ messages, addAssistant });
+      chatCalls.push({ input, options });
+      const messages = Array.isArray(input) ? input : input.messages;
       const rendered = messages
         .map((message) => `<${message.role}>\n${message.content}</${message.role}>\n`)
         .join('');
-      return `${rendered}${addAssistant ? '<assistant>\n' : ''}`;
-    },
-    async query(
-      input: QueryInput,
-      options?: QueryOptions
-    ): Promise<string> {
-      queryCalls.push({ input, options });
+      const prompt = `${rendered}<assistant>\n`;
+      queryCalls.push({
+        input: {
+          prompt,
+          ...(!Array.isArray(input) && input.media != null ? { media: input.media } : {}),
+        },
+        options: { ...options, format: 'raw' },
+      });
       completedCount++;
       flushRunWaiters();
 
@@ -133,15 +131,36 @@ function createFakeEngine(): FakeEngine {
       if (options?.signal?.aborted) {
         throw new DOMException('Operation aborted.', 'AbortError');
       }
-      let output = '';
+      let rawOutput = '';
+      let safeOutput = '';
+      const sanitizer = new StreamingBoundaryTextSanitizer([
+        '</assistant>\n',
+        '<system>\n',
+        '<user>\n',
+        '<assistant>\n',
+        '</s>',
+      ]);
       for (const token of script.tokens) {
         if (options?.signal?.aborted) {
           throw new DOMException('Operation aborted.', 'AbortError');
         }
-        output += token;
-        options?.onToken?.(token);
+        rawOutput += token;
+        const result = sanitizer.consume(token);
+        if (result.safeText.length > 0) {
+          safeOutput += result.safeText;
+          options?.onToken?.(result.safeText);
+        }
+        if (result.hitBoundary) {
+          break;
+        }
       }
-      return output;
+      const flushed = sanitizer.flush();
+      if (flushed.length > 0) {
+        safeOutput += flushed;
+        options?.onToken?.(flushed);
+      }
+      void rawOutput;
+      return safeOutput.trim();
     },
   };
 }
@@ -250,7 +269,7 @@ test('chat() reuses a stable contextKey for each turn', async () => {
   assert.equal(engine.queryCalls.length, 2);
 });
 
-test('chat() probes chat template boundaries once per agent and reuses them across turns', async () => {
+test('chat() sends chat messages through the engine chat API each turn', async () => {
   const engine = createFakeEngine();
   engine.enqueue({ tokens: ['first reply'] });
   engine.enqueue({ tokens: ['second reply'] });
@@ -259,8 +278,11 @@ test('chat() probes chat template boundaries once per agent and reuses them acro
   await collectEvents(agent.chat('first'));
   await collectEvents(agent.chat('second'));
 
-  assert.equal(engine.applyChatTemplateCalls.length, 7);
-  assert.equal(engine.applyChatTemplateCalls.filter((call) => call.messages.some((message) => message.content === '__CE_BOUNDARY_SYSTEM__')).length, 5);
+  assert.equal(engine.chatCalls.length, 2);
+  const secondInput = engine.chatCalls[1]!.input;
+  const secondMessages = Array.isArray(secondInput) ? secondInput : secondInput.messages;
+  assert.equal(secondMessages.some((message) => message.content === 'first reply'), true);
+  assert.equal(secondMessages.some((message) => message.content === 'second'), true);
 });
 
 test('successful turns commit user+assistant pairs to memory', async () => {
