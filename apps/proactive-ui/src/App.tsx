@@ -29,7 +29,14 @@ const DEFAULT_PROJECTOR_URL =
 const DIRECTOR_CONFIG_URL = '/directors/field-kit/dom-patch-director.json';
 const INITIAL_COACH_HTML = `
   <h3 class="ai-gen-title">Proactive coach</h3>
-  <p class="ai-gen-note">Click gear cards to pack the kit, then run a peek. Cogent Engine can highlight what matters and attach a helpful note.</p>
+  <p class="ai-gen-note">Click gear cards to pack the kit, then run a peek. Cogent Engine can project a custom tradeoff lens and highlight what matters.</p>
+`;
+const INITIAL_SYNTHESIS_HTML = `
+  <div class="ai-synth-card">
+    <p class="ai-synth-kicker">AI projection layer</p>
+    <h3 class="ai-synth-title">Run a peek to generate a mission tradeoff lens.</h3>
+    <p class="ai-synth-why">The model can synthesize coverage, budget, weight, and selected item tradeoffs into custom UI for this exact kit.</p>
+  </div>
 `;
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error';
@@ -183,7 +190,7 @@ export default function App() {
             }
           },
           runtime: {
-            imageMinTokens: 48,
+            imageMinTokens: 64,
             imageMaxTokens: 256,
             sampling: {
               temperature: 0.12,
@@ -384,7 +391,7 @@ export default function App() {
             <div>
               <p className="eyebrow">Dust Ridge Field Kit</p>
               <h1>Pack the kit before the sand wall hits</h1>
-              <p className="stage-subtitle">Click gear cards to pack or unpack them. Cover all six survival needs while staying under {FIELD_KIT_LIMITS.maxWeight}kg and ${FIELD_KIT_LIMITS.maxBudget}.</p>
+              <p className="stage-subtitle">Click gear cards to pack or unpack them. The AI projection layer can synthesize coverage, budget, weight, and tradeoffs into UI for the current moment.</p>
             </div>
             <div className="storm-clock" data-ai-id="storm-clock" data-ai-label="Storm arrival countdown" data-ai-ops="replaceText,addClass,removeClass,setAttribute">
               <span>{FIELD_KIT_LIMITS.stormMinutes}</span>
@@ -402,7 +409,7 @@ export default function App() {
           <section className="mission-instructions" data-ai-id="mission-instructions" data-ai-label="Main mission instructions" data-ai-ops="replaceHtml,appendHtml,addClass,removeClass,setAttribute">
             <p className="eyebrow">Current Objective</p>
             <h2>Choose a balanced desert kit.</h2>
-            <p>Goal: pack one or more items covering Hydration, Navigation, Sun cover, Signal, Power, and First aid. Then ask the vision model to peek and help patch the UI.</p>
+            <p>Goal: cover Hydration, Navigation, Sun cover, Signal, Power, and First aid while staying under {FIELD_KIT_LIMITS.maxWeight}kg and ${FIELD_KIT_LIMITS.maxBudget}. Then ask the vision model to project a contextual mission lens.</p>
           </section>
 
           <div className="score-strip">
@@ -411,11 +418,20 @@ export default function App() {
             <Meter id="budget" label="Budget" value={score.totalCost} max={FIELD_KIT_LIMITS.maxBudget} suffix="$" state={score.budgetOk ? 'good' : 'bad'} />
           </div>
 
+          <section
+            key={`synthesis-${selectedKey}`}
+            className="synthesis-panel glass-card"
+            data-ai-id="synthesis-overlay"
+            data-ai-label="AI projection layer for custom tradeoff UI: use replaceHtml to synthesize budget, weight, risk, and next-step visualizations"
+            data-ai-ops="replaceHtml,appendHtml,addClass,removeClass,setAttribute,scrollIntoView"
+            dangerouslySetInnerHTML={{ __html: INITIAL_SYNTHESIS_HTML }}
+          />
+
           <div className="board-layout">
             <section className="gear-zone" data-ai-id="gear-board" data-ai-label="All selectable field kit gear" data-ai-ops="addClass,removeClass,setAttribute,scrollIntoView">
               <div className="instruction-card glass-card" data-ai-id="pack-instructions" data-ai-label="Pack gear instructions" data-ai-ops="replaceHtml,appendHtml,addClass,removeClass,setAttribute">
                 <h3>Field shelf</h3>
-                <p>Every card is visible at once so the vision model can reason directly from the UI. Green cards are already packed.</p>
+                <p>Every card is visible at once so the vision model can reason across selection, weight, budget, risk, and item tradeoffs. Green cards are already packed.</p>
               </div>
               <div className="category-grid">
                 {CATEGORY_GOALS.map((goal) => (
@@ -537,10 +553,10 @@ function StartScreen(props: {
       <section className="start-hero glass-card">
         <div className="start-copy">
           <p className="eyebrow">Cogent Engine Vision Pipeline</p>
-          <h1>Proactive UI that sees, reasons, and patches the DOM.</h1>
+          <h1>Proactive UI that sees, reasons, and projects custom interface.</h1>
           <p>
             This demo loads a local vision model, captures a web app as an image, asks what the user
-            appears to be doing, then applies validated JSON DOM patches with a visible callout.
+            appears to be doing, then applies validated JSON DOM patches that can generate a contextual UI layer.
           </p>
           <div className="start-steps">
             <span>1. Load model</span>
@@ -878,6 +894,10 @@ function clearTransientAiArtifacts(root: HTMLElement, classNames: readonly strin
   }
   for (const layer of Array.from(root.querySelectorAll('[data-ai-callout-layer="true"]'))) {
     layer.remove();
+  }
+  const synthesisOverlay = root.querySelector<HTMLElement>('[data-ai-id="synthesis-overlay"]');
+  if (synthesisOverlay) {
+    synthesisOverlay.innerHTML = INITIAL_SYNTHESIS_HTML;
   }
   deleteModifiedFlags(root);
 }

@@ -1,7 +1,7 @@
 import type { ChatMessage, CogentEngine } from '@noumena-labs/cogent-engine';
 import DOMPurify from 'dompurify';
 import type { FieldKitScore, GearItem } from './game-data';
-import { categoryLabel, FIELD_KIT_LIMITS } from './game-data';
+import { categoryLabel, FIELD_KIT_LIMITS, GEAR_ITEMS } from './game-data';
 
 const SUPPORTED_OPS = [
   'replaceText',
@@ -161,7 +161,7 @@ export const DEFAULT_PATCH_DIRECTOR_CONFIG: DomPatchDirectorConfig = {
   patchPolicy: {
     maxPatches: 3,
     maxTextChars: 220,
-    maxHtmlChars: 700,
+    maxHtmlChars: 1500,
     allowedClasses: ['ai-spotlight', 'ai-warning', 'ai-success', 'ai-dim', 'ai-pulse'],
     allowedHtmlClasses: [
       'ai-gen-card',
@@ -171,6 +171,29 @@ export const DEFAULT_PATCH_DIRECTOR_CONFIG: DomPatchDirectorConfig = {
       'ai-gen-warning',
       'ai-gen-success',
       'ai-gen-list',
+      'ai-synth-card',
+      'ai-synth-kicker',
+      'ai-synth-title',
+      'ai-synth-why',
+      'ai-synth-grid',
+      'ai-synth-metric',
+      'ai-synth-label',
+      'ai-synth-value',
+      'ai-synth-meter',
+      'ai-synth-fill',
+      'ai-synth-fill-0',
+      'ai-synth-fill-25',
+      'ai-synth-fill-50',
+      'ai-synth-fill-75',
+      'ai-synth-fill-100',
+      'ai-synth-row',
+      'ai-synth-chip',
+      'ai-synth-list',
+      'ai-synth-swap',
+      'ai-synth-priority',
+      'ai-synth-risk',
+      'ai-synth-success',
+      'ai-synth-warning',
     ],
     allowedAttributes: ['aria-label', 'title', 'data-ai-state', 'data-ai-note'],
   },
@@ -200,7 +223,7 @@ export class DomPatchDirector {
       { messages, media: [args.screenshot] },
       {
         session: `proactive-ui:${this.config.id}`,
-        maxTokens: 340,
+        maxTokens: 860,
         signal: args.signal,
         grammar: JSON_GRAMMAR,
       }
@@ -336,8 +359,11 @@ function renderSystemPrompt(config: DomPatchDirectorConfig): string {
   return [
     `You are the proactive UI director for ${config.scenarioName}. Inspect the screenshot first.`,
     'Return only JSON: {"observation":string,"intent":string,"patches":[Patch]}.',
-    'Patch examples: {"op":"addClass","targetId":"goal-hydration","className":"ai-warning","note":"Hydration is missing. Add water before launch."} or {"op":"replaceText","targetId":"launch-button","text":"Ready","note":"All constraints are satisfied."}.',
-    'Every patch must include op and targetId. Use one primary helpful note. Prefer notes on goal-*, gear-*, coach-panel, launch-panel, or mission-checklist. Avoid long notes on meters, buttons, or storm-clock.',
+    'Patch examples: {"op":"replaceHtml","targetId":"synthesis-overlay","html":"<div class=\"ai-synth-card ai-synth-warning\"><p class=\"ai-synth-kicker\">Mission lens</p><h3 class=\"ai-synth-title\">Hydration first</h3><p class=\"ai-synth-why\">Water closes the biggest survival gap while budget still allows it.</p></div>","note":"The projection combines risk, budget, and weight for the next move."} or {"op":"addClass","targetId":"gear-water-cache","className":"ai-spotlight","note":"This item fixes the highest-risk missing category."}.',
+    'For synthetic meters, use spans like <span class="ai-synth-meter"><span class="ai-synth-fill ai-synth-fill-75"></span></span>. Use fill classes 0/25/50/75/100, never inline styles.',
+    'For status pills, use classes like "ai-synth-chip ai-synth-warning" or "ai-synth-chip ai-synth-success".',
+    'Every patch must include op and targetId. Prefer one replaceHtml patch on synthesis-overlay when a custom visualization can explain tradeoffs better than a warning.',
+    'Use one primary helpful note. Prefer notes on synthesis-overlay, goal-*, gear-*, coach-panel, launch-panel, or mission-checklist. Avoid long notes on meters, buttons, or storm-clock.',
     'Instructions:',
     ...config.instructions.map((instruction) => `- ${instruction}`),
   ].join('\n');
@@ -358,10 +384,66 @@ function renderUserPrompt(
   return [
     'Inspect the screenshot and help the user finish the field kit.',
     `State: readiness=${state.score.readiness}; weight=${state.score.totalWeight}/${FIELD_KIT_LIMITS.maxWeight}kg; budget=$${state.score.totalCost}/$${FIELD_KIT_LIMITS.maxBudget}; ready=${state.score.readyToLaunch}; missing=${missing}; covered=${covered}; selected=${selected}.`,
-    `Rules: maxPatches=${config.patchPolicy.maxPatches}; allowedClasses=${config.patchPolicy.allowedClasses.join('|')}; use only target ids below; include one primary note; prefer the most important missing/risky item; output JSON only.`,
+    renderTradeoffContext(state),
+    `Rules: maxPatches=${config.patchPolicy.maxPatches}; allowedClasses=${config.patchPolicy.allowedClasses.join('|')}; htmlClasses=${config.patchPolicy.allowedHtmlClasses.join('|')}; use only target ids below; include one primary note; prefer synthesis-overlay for context-specific UI; output JSON only.`,
     'Targets:',
     targetLines,
   ].join('\n\n');
+}
+
+function renderTradeoffContext(state: DirectorGameState): string {
+  const remainingWeight = roundOne(FIELD_KIT_LIMITS.maxWeight - state.score.totalWeight);
+  const remainingBudget = FIELD_KIT_LIMITS.maxBudget - state.score.totalCost;
+  const overWeight = Math.max(0, roundOne(state.score.totalWeight - FIELD_KIT_LIMITS.maxWeight));
+  const overBudget = Math.max(0, state.score.totalCost - FIELD_KIT_LIMITS.maxBudget);
+  const selectedItems = state.selectedItems.map(renderGearBrief).join('; ') || 'none';
+  const missingCandidates = state.score.missingCategories
+    .map((category) => {
+      const candidates = GEAR_ITEMS
+        .filter((item) => item.category === category)
+        .map(renderGearBrief)
+        .join(', ');
+      return `${categoryLabel(category)}: ${candidates}`;
+    })
+    .join(' | ') || 'none';
+  const swapIdeas = renderSwapIdeas(state.selectedItems);
+
+  return [
+    `TradeoffState: remainingWeight=${remainingWeight}kg; remainingBudget=$${remainingBudget}; overWeight=${overWeight}kg; overBudget=$${overBudget}.`,
+    `SelectedDetails: ${selectedItems}.`,
+    `MissingCategoryCandidates: ${missingCandidates}.`,
+    `CoveragePreservingSwapIdeas: ${swapIdeas}.`,
+    'SynthesisGoal: create UI that combines multiple signals, such as survival coverage + budget + weight + item tradeoffs. Avoid merely restating one threshold.',
+  ].join('\n');
+}
+
+function renderGearBrief(item: GearItem): string {
+  return `${item.id}:${item.name}[${categoryLabel(item.category)} ${item.weight}kg $${item.cost}; ${item.tradeoff}]`;
+}
+
+function renderSwapIdeas(selectedItems: readonly GearItem[]): string {
+  const ideas = selectedItems.flatMap((selected) => {
+    const alternatives = GEAR_ITEMS
+      .filter((item) => item.category === selected.category && item.id !== selected.id)
+      .map((alternative) => ({
+        alternative,
+        weightDelta: roundOne(selected.weight - alternative.weight),
+        budgetDelta: selected.cost - alternative.cost,
+      }))
+      .filter((idea) => idea.weightDelta > 0 || idea.budgetDelta > 0)
+      .sort((left, right) => (right.weightDelta + right.budgetDelta / 100) - (left.weightDelta + left.budgetDelta / 100))
+      .slice(0, 1);
+
+    return alternatives.map((idea) => {
+      const savings = [
+        idea.weightDelta > 0 ? `${idea.weightDelta}kg lighter` : '',
+        idea.budgetDelta > 0 ? `$${idea.budgetDelta} cheaper` : '',
+      ].filter(Boolean).join(', ');
+      return `${selected.id}->${idea.alternative.id} keeps ${categoryLabel(selected.category)} coverage; ${savings}`;
+    });
+  });
+
+  return ideas.slice(0, 4).join('; ') || 'none';
 }
 
 function parsePatchResponse(rawText: string): RawPatchResponse {
@@ -744,6 +826,7 @@ function resolveNoteTarget(
     targetId.startsWith('meter-') ? 'mission-checklist' : '',
     targetId === 'storm-clock' ? 'mission-instructions' : '',
     targetId === 'launch-button' ? 'launch-panel' : '',
+    'synthesis-overlay',
     'coach-panel',
     'mission-checklist',
   ].filter(Boolean);
@@ -762,6 +845,7 @@ function isSafeNoteTarget(targetId: string): boolean {
   return (
     targetId.startsWith('goal-') ||
     targetId.startsWith('gear-') ||
+    targetId === 'synthesis-overlay' ||
     targetId === 'coach-panel' ||
     targetId === 'launch-panel' ||
     targetId === 'mission-checklist' ||
@@ -843,6 +927,10 @@ function normalizeIdentifier(value: string): string {
 
 function stripHtml(value: string): string {
   return value.replace(/<[^>]*>/g, ' ');
+}
+
+function roundOne(value: number): number {
+  return Math.round(value * 10) / 10;
 }
 
 function compactText(source: string, maxChars: number): string {

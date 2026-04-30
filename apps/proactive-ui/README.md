@@ -2,7 +2,7 @@
 
 Proactive UI demo for Cogent Engine's vision pipeline.
 
-The app is a toy game called **Dust Ridge Field Kit**. The user packs gear for a desert expedition while a vision model periodically peeks at the visible UI, explains what the user appears to be doing, and returns strict JSON patches that the app validates and applies to annotated DOM targets.
+The app is a toy game called **Dust Ridge Field Kit**. The user packs gear for a desert expedition while a vision model periodically peeks at the visible UI, explains what the user appears to be doing, and returns strict JSON patches that the app validates and applies to annotated DOM targets. The main showcase is an AI projection layer that can generate custom, context-specific UI from the current kit state.
 
 ## Quick start
 
@@ -25,12 +25,14 @@ Open the printed local URL and load the default vision model/projector pair from
 - applying safe DOM mutations while showing the full behind-the-scenes trace
 - downscaling the captured UI to a smaller JPEG in `fast` mode for lower-latency vision inference
 - rendering one model-authored callout beside the most important highlighted or changed DOM element
+- projecting model-authored tradeoff UI that combines coverage, weight, budget, selected gear, and candidate swaps
 
 ## Demo flow
 
 The game is a single field-kit board:
 
 - all gear cards are visible and grouped by survival category
+- the AI projection layer sits above the board and can become a mission lens, swap analysis, budget/weight visualization, or launch rationale
 - the checklist, selected manifest, launch gate, and coach panel stay visible
 - the drawer starts open, can be minimized, and remains excluded from screenshot capture
 
@@ -42,8 +44,8 @@ Annotate mutable regions with `data-ai-id`, `data-ai-label`, and `data-ai-ops`:
 
 ```html
 <aside
-  data-ai-id="coach-panel"
-  data-ai-label="Generated proactive coach panel"
+  data-ai-id="synthesis-overlay"
+  data-ai-label="AI projection layer for custom tradeoff UI"
   data-ai-ops="replaceHtml,appendHtml,addClass,removeClass,setAttribute,scrollIntoView"
 ></aside>
 ```
@@ -75,9 +77,9 @@ The model is asked to return only JSON:
     },
     {
       "op": "replaceHtml",
-      "targetId": "coach-panel",
-      "html": "<div class=\"ai-gen-card\"><h3 class=\"ai-gen-title\">Hydration gap</h3><p class=\"ai-gen-note\">Add a water item before launching.</p></div>",
-      "note": "The coach panel now explains the next mission blocker."
+      "targetId": "synthesis-overlay",
+      "html": "<div class=\"ai-synth-card ai-synth-warning\"><p class=\"ai-synth-kicker\">Mission lens</p><h3 class=\"ai-synth-title\">Hydration first, budget still safe</h3><div class=\"ai-synth-grid\"><div class=\"ai-synth-metric\"><span class=\"ai-synth-label\">Coverage</span><strong class=\"ai-synth-value\">1 / 6</strong><span class=\"ai-synth-meter\"><span class=\"ai-synth-fill ai-synth-fill-25\"></span></span></div><div class=\"ai-synth-metric\"><span class=\"ai-synth-label\">Budget left</span><strong class=\"ai-synth-value\">$398</strong></div></div><p class=\"ai-synth-why\">Twin water bladders are heavy, but they close the highest desert risk while leaving enough budget for signal and first aid.</p></div>",
+      "note": "The projection combines survival risk, budget room, and weight cost instead of showing a static warning."
     }
   ]
 }
@@ -91,10 +93,13 @@ The demo intentionally lets the model generate DOM patches, but not arbitrary ex
 - operations must be allowed by each target
 - CSS classes must be allowlisted
 - generated HTML is sanitized
+- generated projection UI can only use allowlisted `ai-gen-*` and `ai-synth-*` classes
 - scripts, styles, iframes, images, forms, inputs, event handlers, and unsafe attributes are stripped
 - patch count and text/HTML lengths are capped
 - missing patch notes are replaced with a safe fallback note, and the first accepted note is rendered as an overlay callout instead of being inserted into the patched element
 - rejected patches are shown in the trace panel and skipped
+
+Projection cards can use `ai-synth-card`, `ai-synth-grid`, `ai-synth-metric`, `ai-synth-meter`, `ai-synth-fill-*`, `ai-synth-chip`, `ai-synth-swap`, and related classes. Inline styles are not needed or allowed.
 
 ## Defaults
 
