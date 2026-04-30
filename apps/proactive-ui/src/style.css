@@ -232,7 +232,7 @@ input:disabled {
 }
 
 .proactive-app.drawer-open {
-  padding-right: min(472px, 34vw);
+  padding-right: min(482px, 34vw);
 }
 
 .workspace-shell {
@@ -594,15 +594,18 @@ input:disabled {
 }
 
 .dev-drawer {
-  top: 22px;
+  top: 0;
+  right: 0;
+  bottom: 0;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
-  width: min(430px, calc(100vw - 32px));
-  border: 1px solid rgba(99, 255, 190, 0.22);
-  border-radius: 20px;
-  background: linear-gradient(180deg, rgba(8, 13, 13, 0.98), rgba(5, 8, 10, 0.98));
-  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(99, 255, 190, 0.08);
-  color: #c9ffe5;
+  width: min(460px, 100vw);
+  border: 0;
+  border-left: 1px solid #242424;
+  border-radius: 0;
+  background: #000;
+  box-shadow: -28px 0 90px rgba(0, 0, 0, 0.62);
+  color: #d6ffe8;
   overflow: hidden;
 }
 
@@ -610,9 +613,10 @@ input:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid rgba(99, 255, 190, 0.16);
-  background: rgba(99, 255, 190, 0.06);
-  padding: 10px 12px;
+  min-height: 44px;
+  border-bottom: 1px solid #242424;
+  background: #050505;
+  padding: 9px 12px;
 }
 
 .dev-drawer-titlebar div,
@@ -623,7 +627,7 @@ input:disabled {
 }
 
 .dev-drawer-titlebar strong {
-  color: #8cffc9;
+  color: #9cffca;
   font-size: 0.8rem;
   letter-spacing: 0.12em;
 }
@@ -632,9 +636,9 @@ input:disabled {
 .terminal-button,
 .capture-mode-control button,
 .dev-pill button {
-  border: 1px solid rgba(99, 255, 190, 0.2);
-  background: rgba(99, 255, 190, 0.06);
-  color: #c9ffe5;
+  border: 1px solid #2b2b2b;
+  background: #0b0b0b;
+  color: #d6ffe8;
 }
 
 .dev-drawer-titlebar button {
@@ -662,7 +666,8 @@ input:disabled {
 }
 
 .dev-section {
-  border-bottom: 1px solid rgba(99, 255, 190, 0.12);
+  border-bottom: 1px solid #171717;
+  background: #000;
   padding: 12px;
 }
 
@@ -677,7 +682,7 @@ input:disabled {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 10px;
-  color: #8cffc9;
+  color: #9cffca;
   font-size: 0.74rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -685,7 +690,7 @@ input:disabled {
 
 .dev-section-header code {
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.07);
+  background: #101010;
   color: #f7d166;
   padding: 3px 7px;
 }
@@ -710,7 +715,8 @@ input:disabled {
 }
 
 .terminal-button.primary {
-  background: linear-gradient(135deg, rgba(99, 255, 190, 0.22), rgba(247, 209, 102, 0.16));
+  border-color: rgba(99, 255, 190, 0.34);
+  background: linear-gradient(135deg, rgba(39, 190, 120, 0.28), rgba(247, 209, 102, 0.1));
   color: #ecfff6;
 }
 
@@ -730,7 +736,7 @@ input:disabled {
 
 .capture-mode-control button.active {
   border-color: rgba(247, 209, 102, 0.55);
-  background: rgba(247, 209, 102, 0.16);
+  background: rgba(247, 209, 102, 0.12);
   color: #ffe59a;
 }
 
@@ -755,7 +761,7 @@ input:disabled {
   align-items: center;
   border: 1px solid rgba(99, 255, 190, 0.22);
   border-radius: 999px;
-  background: rgba(5, 8, 10, 0.96);
+  background: #000;
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
   padding: 7px;
 }
@@ -779,7 +785,7 @@ input:disabled {
 }
 
 .pipeline span {
-  border: 1px solid rgba(99, 255, 190, 0.14);
+  border: 1px solid #242424;
   border-radius: 999px;
   color: #789c8d;
   padding: 5px 6px;
@@ -841,9 +847,9 @@ input:disabled {
 
 .trace-block,
 .trace-code {
-  border: 1px solid rgba(99, 255, 190, 0.12);
+  border: 1px solid #1f1f1f;
   border-radius: 12px;
-  background: rgba(0, 0, 0, 0.28);
+  background: #050505;
   padding: 10px;
 }
 
@@ -852,7 +858,7 @@ input:disabled {
 }
 
 .trace-block h3 {
-  color: #8cffc9;
+  color: #9cffca;
   font-size: 0.72rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1026,7 +1032,7 @@ input:disabled {
   }
 
   .dev-drawer {
-    width: min(430px, calc(100vw - 32px));
+    width: min(460px, 100vw);
   }
 }
 
@@ -1075,10 +1081,10 @@ input:disabled {
   }
 
   .dev-drawer {
-    top: 12px;
-    right: 12px;
-    bottom: 12px;
-    width: calc(100vw - 24px);
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 100vw;
   }
 
   .dev-pill {

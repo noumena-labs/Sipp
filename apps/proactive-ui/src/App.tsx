@@ -184,7 +184,7 @@ export default function App() {
           },
           runtime: {
             imageMinTokens: 48,
-            imageMaxTokens: 512,
+            imageMaxTokens: 256,
             sampling: {
               temperature: 0.12,
               topP: 0.9,

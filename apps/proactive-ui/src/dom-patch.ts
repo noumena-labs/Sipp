@@ -380,13 +380,9 @@ function validatePatchResponse(
   const targetMap = new Map(targets.map((target) => [target.id, target]));
   const accepted: DomPatch[] = [];
   const rejected: RejectedPatch[] = [];
-  const candidatePatches = response.patches.slice(0, policy.maxPatches + 4);
+  const candidatePatches = response.patches.slice(0, policy.maxPatches);
 
   candidatePatches.forEach((patch, index) => {
-    if (index >= policy.maxPatches) {
-      rejected.push({ index, patch, reason: `Patch limit is ${policy.maxPatches}.` });
-      return;
-    }
     const result = validatePatch(patch, targetMap, policy);
     if (typeof result === 'string') {
       rejected.push({ index, patch, reason: result });
@@ -427,10 +423,14 @@ function validatePatch(
   if (!target) {
     return `Unknown targetId ${JSON.stringify(targetId)}.`;
   }
+  const note = readPatchNote(record, policy) ?? readContentAsNote(record, policy) ?? defaultPatchNote(op, target);
   if (!target.allowedOps.includes(op)) {
+    const fallbackClass = defaultClassForTarget(target);
+    if (target.allowedOps.includes('addClass') && policy.allowedClasses.includes(fallbackClass)) {
+      return withPatchNote({ op: 'addClass', targetId, className: fallbackClass }, note);
+    }
     return `${targetId} does not allow ${op}.`;
   }
-  const note = readPatchNote(record, policy) ?? defaultPatchNote(op, target);
 
   switch (op) {
     case 'replaceText': {
@@ -444,7 +444,7 @@ function validatePatch(
     }
     case 'addClass':
     case 'removeClass': {
-      const className = readClassName(record, operation.defaultClassName ?? '');
+      const className = readClassName(record, operation.defaultClassName ?? defaultClassForTarget(target));
       return policy.allowedClasses.includes(className)
         ? withPatchNote({ op, targetId, className }, note)
         : `Class ${JSON.stringify(className)} is not allowed.`;
@@ -473,6 +473,12 @@ function readPatchNote(record: Record<string, unknown>, policy: PatchPolicy): st
   return note.length > 0 ? note : undefined;
 }
 
+function readContentAsNote(record: Record<string, unknown>, policy: PatchPolicy): string | undefined {
+  const content = stripHtml(readStringFrom(record, ['text', 'content', 'value', 'html', 'innerHTML'], ''));
+  const note = compactText(content, policy.maxTextChars);
+  return note.length > 0 ? note : undefined;
+}
+
 function defaultPatchNote(op: SupportedPatchOp, target: PatchTargetContract): string {
   if (op === 'addClass') {
     return `The model flagged ${target.label} as the next thing to check for the mission.`;
@@ -481,6 +487,13 @@ function defaultPatchNote(op: SupportedPatchOp, target: PatchTargetContract): st
     return `The model updated ${target.label} with guidance from the screenshot.`;
   }
   return `The model adjusted ${target.label} based on the current screenshot.`;
+}
+
+function defaultClassForTarget(target: PatchTargetContract): string {
+  if (target.id.startsWith('goal-') || target.id.startsWith('meter-') || target.id.includes('launch')) {
+    return 'ai-warning';
+  }
+  return 'ai-spotlight';
 }
 
 function readPatchArray(record: Record<string, unknown>): readonly unknown[] {
@@ -705,6 +718,10 @@ function hasStringLike(record: Record<string, unknown>, keys: readonly string[])
 
 function normalizeIdentifier(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function stripHtml(value: string): string {
+  return value.replace(/<[^>]*>/g, ' ');
 }
 
 function compactText(source: string, maxChars: number): string {
