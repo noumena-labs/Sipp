@@ -13,7 +13,7 @@ bun install
 bun run proactive-ui:dev
 ```
 
-Open the printed local URL, load the default vision model/projector pair, select a few gear cards, then click `Peek at UI`.
+Open the printed local URL and load the default vision model/projector pair from the start screen. The demo enters automatically after the model is ready. Select a few gear cards, then click `Peek at UI` in the AI Console.
 
 ## What this demonstrates
 
@@ -23,6 +23,17 @@ Open the printed local URL, load the default vision model/projector pair, select
 - validating model-authored DOM patches against a scanned target contract
 - sanitizing generated HTML with `dompurify`
 - applying safe DOM mutations while showing the full behind-the-scenes trace
+- downscaling the captured UI to a smaller JPEG in `Fast capture` mode for lower-latency vision inference
+
+## Demo flow
+
+The game has three freely navigable phases:
+
+- `Brief`: explains the mission, budget, carry limit, and win condition
+- `Pack Gear`: lets the user select core survival items
+- `Launch`: shows final blockers and signal / first-aid shelf items
+
+The AI Console is intentionally separate from the main game UI and is excluded from screenshots. The model only sees the field-kit surface, not the debugging controls.
 
 ## Drop-in pattern
 
