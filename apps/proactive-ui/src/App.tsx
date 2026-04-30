@@ -19,7 +19,7 @@ import {
   CATEGORY_GOALS,
   FIELD_KIT_LIMITS,
   GEAR_ITEMS,
-  type GearTab,
+  type GearItem,
 } from './game-data';
 
 const DEFAULT_MODEL_URL =
@@ -29,7 +29,7 @@ const DEFAULT_PROJECTOR_URL =
 const DIRECTOR_CONFIG_URL = '/directors/field-kit/dom-patch-director.json';
 const INITIAL_COACH_HTML = `
   <h3 class="ai-gen-title">Proactive coach</h3>
-  <p class="ai-gen-note">Pick a phase, pack a few items, then run a peek. The model can replace this panel with generated guidance.</p>
+  <p class="ai-gen-note">Click gear cards to pack the kit, then run a peek. Cogent Engine can highlight what matters and attach a helpful note.</p>
 `;
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error';
@@ -74,27 +74,9 @@ interface CapturedImage {
   readonly byteLength: number;
 }
 
-const PHASE_COPY: Record<GearTab, { title: string; objective: string; cta: string }> = {
-  brief: {
-    title: 'Read the mission brief',
-    objective: 'Understand the objective, win condition, and constraints before packing.',
-    cta: 'Start Packing',
-  },
-  gear: {
-    title: 'Pack expedition gear',
-    objective: 'Choose items that cover every required category while staying under weight and budget.',
-    cta: 'Review Launch Gate',
-  },
-  launch: {
-    title: 'Pass the launch gate',
-    objective: 'Resolve any missing categories or over-limit constraints, then launch the expedition.',
-    cta: 'Launch Expedition',
-  },
-};
-
-const CAPTURE_PRESETS: Record<CaptureMode, { maxWidth: number; quality: number }> = {
-  fast: { maxWidth: 768, quality: 0.72 },
-  detailed: { maxWidth: 1400, quality: 0.88 },
+const CAPTURE_PRESETS: Record<CaptureMode, { maxWidth: number; maxHeight: number; quality: number }> = {
+  fast: { maxWidth: 560, maxHeight: 760, quality: 0.62 },
+  detailed: { maxWidth: 1120, maxHeight: 1400, quality: 0.86 },
 };
 
 export default function App() {
@@ -104,10 +86,10 @@ export default function App() {
   const [loadProgress, setLoadProgress] = useState<LoadProgressState | null>(null);
   const [status, setStatus] = useState('Load a vision model to begin.');
   const [visionState, setVisionState] = useState<VisionState>('idle');
-  const [activeTab, setActiveTab] = useState<GearTab>('brief');
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set(['paper-map']));
   const [autoPeek, setAutoPeek] = useState(false);
   const [captureMode, setCaptureMode] = useState<CaptureMode>('fast');
+  const [drawerOpen, setDrawerOpen] = useState(true);
   const [trace, setTrace] = useState<TraceState | null>(null);
   const [directorConfig, setDirectorConfig] = useState<DomPatchDirectorConfig>(DEFAULT_PATCH_DIRECTOR_CONFIG);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
@@ -120,11 +102,6 @@ export default function App() {
 
   const score = calculateFieldKitScore(selectedIds);
   const selectedKey = Array.from(selectedIds).sort().join('|');
-  const visibleGear = activeTab === 'gear'
-    ? GEAR_ITEMS.filter((item) => item.tab === 'gear')
-    : activeTab === 'launch'
-      ? GEAR_ITEMS.filter((item) => item.tab === 'launch')
-      : [];
   const engineReady = loadState === 'ready' && engineRef.current != null;
   const busy = loadState === 'loading' || visionState === 'capturing' || visionState === 'compressing' || visionState === 'thinking' || visionState === 'patching';
   busyRef.current = busy;
@@ -163,9 +140,9 @@ export default function App() {
     }
     const timeout = window.setTimeout(() => {
       void peekRef.current?.('auto');
-    }, 1800);
+    }, 1600);
     return () => window.clearTimeout(timeout);
-  }, [activeTab, autoPeek, engineReady, selectedKey]);
+  }, [autoPeek, engineReady, selectedKey]);
 
   const handleLoad = async (): Promise<void> => {
     const trimmedModel = modelUrl.trim();
@@ -206,10 +183,10 @@ export default function App() {
             }
           },
           runtime: {
-            imageMinTokens: 64,
-            imageMaxTokens: 768,
+            imageMinTokens: 48,
+            imageMaxTokens: 512,
             sampling: {
-              temperature: 0.15,
+              temperature: 0.12,
               topP: 0.9,
               topK: 30,
               minP: 0.05,
@@ -222,6 +199,7 @@ export default function App() {
       engineRef.current = nextEngine;
       setLoadProgress({ phase: 'ready', percent: 100 });
       setLoadState('ready');
+      setDrawerOpen(true);
       setStatus('Vision model ready. Demo started automatically.');
     } catch (error) {
       setLoadState('error');
@@ -251,13 +229,13 @@ export default function App() {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
-    clearTransientAiClasses(root, directorConfig.patchPolicy.allowedClasses);
+    clearTransientAiArtifacts(root, directorConfig.patchPolicy.allowedClasses);
 
     const id = ++traceIdRef.current;
     const started = performance.now();
     const startedAt = new Date().toLocaleTimeString();
     setVisionState('capturing');
-    setTrace({ id, source, startedAt, visionState: 'capturing', captureMode, status: 'Capturing main UI...' });
+    setTrace({ id, source, startedAt, visionState: 'capturing', captureMode, status: 'Capturing field-kit board...' });
 
     try {
       const canvas = await toCanvas(root, {
@@ -293,14 +271,14 @@ export default function App() {
         captureMode,
         targetCount: targets.length,
         visionState: 'thinking',
-        status: `Sending ${formatBytes(captured.byteLength)} image and ${targets.length} DOM targets to the model...`,
+        status: `Sending ${formatBytes(captured.byteLength)} image and ${targets.length} target ids to the model...`,
       });
 
       const director = new DomPatchDirector(engine, directorConfig);
       const result = await director.run({
         screenshot: captured.bytes,
         targets,
-        gameState: { activeTab, score, selectedItems: score.selectedItems },
+        gameState: { score, selectedItems: score.selectedItems },
         signal: controller.signal,
       });
       const appliedMutations = summarizePatches(result.patches);
@@ -375,11 +353,10 @@ export default function App() {
   const resetRun = (): void => {
     abortRef.current?.abort();
     setSelectedIds(new Set(['paper-map']));
-    setActiveTab('brief');
     setVisionState('idle');
     setStatus('Run reset. Pick gear and peek again.');
     if (workspaceRef.current) {
-      clearTransientAiClasses(workspaceRef.current, directorConfig.patchPolicy.allowedClasses);
+      clearTransientAiArtifacts(workspaceRef.current, directorConfig.patchPolicy.allowedClasses);
       deleteModifiedFlags(workspaceRef.current);
     }
   };
@@ -400,60 +377,61 @@ export default function App() {
   }
 
   return (
-    <div className="proactive-app demo-mode">
-      <main className="demo-grid">
-        <section className="workspace-shell" aria-label="Dust Ridge Field Kit game">
-          <div className={`capture-stage ${visionState}`} ref={workspaceRef} data-ai-zone="dust-ridge-field-kit" data-ai-goal="Help the user finish a safe desert expedition kit.">
-            <div className="stage-topline">
-              <div>
-                <p className="eyebrow">Dust Ridge Field Kit</p>
-                <h1>Launch before the sand wall hits</h1>
-                <p className="stage-subtitle">Choose items to cover every survival category while staying under carry weight and budget.</p>
-              </div>
-              <div className="storm-clock" data-ai-id="storm-clock" data-ai-label="Storm arrival countdown" data-ai-ops="replaceText,addClass,removeClass,setAttribute">
-                <span>{FIELD_KIT_LIMITS.stormMinutes}</span>
-                <small>min to storm</small>
-              </div>
+    <div className={`proactive-app demo-mode ${drawerOpen ? 'drawer-open' : 'drawer-closed'}`}>
+      <main className="workspace-shell" aria-label="Dust Ridge Field Kit game">
+        <div className={`capture-stage ${visionState}`} ref={workspaceRef} data-ai-zone="dust-ridge-field-kit" data-ai-goal="Help the user finish a safe desert expedition kit.">
+          <div className="stage-topline">
+            <div>
+              <p className="eyebrow">Dust Ridge Field Kit</p>
+              <h1>Pack the kit before the sand wall hits</h1>
+              <p className="stage-subtitle">Click gear cards to pack or unpack them. Cover all six survival needs while staying under {FIELD_KIT_LIMITS.maxWeight}kg and ${FIELD_KIT_LIMITS.maxBudget}.</p>
             </div>
+            <div className="storm-clock" data-ai-id="storm-clock" data-ai-label="Storm arrival countdown" data-ai-ops="replaceText,addClass,removeClass,setAttribute">
+              <span>{FIELD_KIT_LIMITS.stormMinutes}</span>
+              <small>min to storm</small>
+            </div>
+          </div>
 
-            {visionState !== 'idle' && visionState !== 'error' ? (
-              <div className="vision-overlay">
-                <div className="scanner" />
-                <strong>{describeVisionState(visionState, captureMode)}</strong>
+          {visionState !== 'idle' && visionState !== 'error' ? (
+            <div className="vision-overlay">
+              <div className="scanner" />
+              <strong>{describeVisionState(visionState, captureMode)}</strong>
+            </div>
+          ) : null}
+
+          <section className="mission-instructions" data-ai-id="mission-instructions" data-ai-label="Main mission instructions" data-ai-ops="replaceHtml,appendHtml,addClass,removeClass,setAttribute">
+            <p className="eyebrow">Current Objective</p>
+            <h2>Choose a balanced desert kit.</h2>
+            <p>Goal: pack one or more items covering Hydration, Navigation, Sun cover, Signal, Power, and First aid. Then ask the vision model to peek and help patch the UI.</p>
+          </section>
+
+          <div className="score-strip">
+            <Meter id="readiness" label="Readiness" value={score.readiness} max={100} suffix="%" state={score.readyToLaunch ? 'good' : score.readiness > 65 ? 'warn' : 'low'} />
+            <Meter id="weight" label="Weight" value={score.totalWeight} max={FIELD_KIT_LIMITS.maxWeight} suffix="kg" state={score.weightOk ? 'good' : 'bad'} />
+            <Meter id="budget" label="Budget" value={score.totalCost} max={FIELD_KIT_LIMITS.maxBudget} suffix="$" state={score.budgetOk ? 'good' : 'bad'} />
+          </div>
+
+          <div className="board-layout">
+            <section className="gear-zone" data-ai-id="gear-board" data-ai-label="All selectable field kit gear" data-ai-ops="addClass,removeClass,setAttribute,scrollIntoView">
+              <div className="instruction-card glass-card" data-ai-id="pack-instructions" data-ai-label="Pack gear instructions" data-ai-ops="replaceHtml,appendHtml,addClass,removeClass,setAttribute">
+                <h3>Field shelf</h3>
+                <p>Every card is visible at once so the vision model can reason directly from the UI. Green cards are already packed.</p>
               </div>
-            ) : null}
+              <div className="category-grid">
+                {CATEGORY_GOALS.map((goal) => (
+                  <GearCategorySection
+                    key={goal.id}
+                    goal={goal}
+                    items={GEAR_ITEMS.filter((item) => item.category === goal.id)}
+                    selectedIds={selectedIds}
+                    onToggleGear={toggleGear}
+                  />
+                ))}
+              </div>
+            </section>
 
-            <nav className="tab-row" aria-label="Field kit steps">
-              {(['brief', 'gear', 'launch'] as const).map((tab) => (
-                <button
-                  key={tab}
-                  type="button"
-                  className={activeTab === tab ? 'active' : ''}
-                  onClick={() => setActiveTab(tab)}
-                  data-ai-id={`tab-${tab}`}
-                  data-ai-label={`${tab} navigation tab`}
-                  data-ai-ops="addClass,removeClass,setAttribute,scrollIntoView"
-                >
-                  <span>{tab === 'brief' ? '1' : tab === 'gear' ? '2' : '3'}</span>
-                  {tab === 'brief' ? 'Brief' : tab === 'gear' ? 'Pack Gear' : 'Launch'}
-                </button>
-              ))}
-            </nav>
-
-            <div className="objective-banner" data-ai-id="phase-objective" data-ai-label="Current phase objective" data-ai-ops="replaceHtml,appendHtml,addClass,removeClass,setAttribute">
-              <p className="eyebrow">Current Objective</p>
-              <h2>{PHASE_COPY[activeTab].title}</h2>
-              <p>{PHASE_COPY[activeTab].objective}</p>
-            </div>
-
-            <div className="score-strip">
-              <Meter id="readiness" label="Readiness" value={score.readiness} max={100} suffix="%" state={score.readyToLaunch ? 'good' : score.readiness > 65 ? 'warn' : 'low'} />
-              <Meter id="weight" label="Weight" value={score.totalWeight} max={FIELD_KIT_LIMITS.maxWeight} suffix="kg" state={score.weightOk ? 'good' : 'bad'} />
-              <Meter id="budget" label="Budget" value={score.totalCost} max={FIELD_KIT_LIMITS.maxBudget} suffix="$" state={score.budgetOk ? 'good' : 'bad'} />
-            </div>
-
-            <div className="mission-layout">
-              <aside className="mission-panel glass-card" data-ai-id="mission-checklist" data-ai-label="Mission checklist" data-ai-ops="addClass,removeClass,setAttribute,scrollIntoView">
+            <aside className="mission-rail">
+              <section className="mission-panel glass-card" data-ai-id="mission-checklist" data-ai-label="Mission checklist" data-ai-ops="addClass,removeClass,setAttribute,scrollIntoView">
                 <p className="eyebrow">Required Coverage</p>
                 <div className="goal-list">
                   {CATEGORY_GOALS.map((goal) => {
@@ -475,58 +453,70 @@ export default function App() {
                     );
                   })}
                 </div>
+              </section>
 
-                <div className="selected-manifest" data-ai-id="selected-manifest" data-ai-label="Selected gear manifest" data-ai-ops="replaceHtml,appendHtml,addClass,removeClass,setAttribute,scrollIntoView">
-                  <p className="eyebrow">Packed Items</p>
-                  {score.selectedItems.length === 0 ? (
-                    <small>No items packed.</small>
-                  ) : (
-                    <ul>
-                      {score.selectedItems.map((item) => <li key={item.id}>{item.name}</li>)}
-                    </ul>
-                  )}
-                </div>
-              </aside>
-
-              <section className="phase-zone">
-                {activeTab === 'brief' ? (
-                  <BriefPhase onStartPacking={() => setActiveTab('gear')} />
-                ) : activeTab === 'gear' ? (
-                  <GearPhase visibleGear={visibleGear} selectedIds={selectedIds} onToggleGear={toggleGear} onReview={() => setActiveTab('launch')} />
+              <section className="selected-manifest glass-card" data-ai-id="selected-manifest" data-ai-label="Selected gear manifest" data-ai-ops="replaceHtml,appendHtml,addClass,removeClass,setAttribute,scrollIntoView">
+                <p className="eyebrow">Packed Items</p>
+                {score.selectedItems.length === 0 ? (
+                  <small>No items packed.</small>
                 ) : (
-                  <LaunchPhase visibleGear={visibleGear} selectedIds={selectedIds} score={score} onToggleGear={toggleGear} />
+                  <ul>
+                    {score.selectedItems.map((item) => <li key={item.id}>{item.name}</li>)}
+                  </ul>
                 )}
               </section>
 
-              <aside className="coach-column">
-                <div
-                  className="coach-panel glass-card"
-                  data-ai-id="coach-panel"
-                  data-ai-label="Generated proactive coach panel"
-                  data-ai-ops="replaceHtml,appendHtml,addClass,removeClass,setAttribute,scrollIntoView"
-                  dangerouslySetInnerHTML={{ __html: INITIAL_COACH_HTML }}
-                />
-              </aside>
-            </div>
-          </div>
-        </section>
+              <section className="launch-panel glass-card" data-ai-id="launch-panel" data-ai-label="Launch readiness panel" data-ai-ops="replaceHtml,appendHtml,addClass,removeClass,setAttribute,scrollIntoView">
+                <p className="eyebrow">Expedition Gate</p>
+                <h3>{score.readyToLaunch ? 'Ready to launch' : 'Not safe yet'}</h3>
+                <p>
+                  {score.readyToLaunch
+                    ? 'All required categories are covered within constraints.'
+                    : score.missingCategories.length > 0
+                      ? `Missing: ${score.missingCategories.map(categoryLabel).join(', ')}.`
+                      : 'Coverage is complete, but weight or budget needs attention.'}
+                </p>
+                <button
+                  className="launch-button"
+                  type="button"
+                  disabled={!score.readyToLaunch}
+                  data-ai-id="launch-button"
+                  data-ai-label="Launch expedition button"
+                  data-ai-ops="replaceText,addClass,removeClass,setAttribute,scrollIntoView"
+                >
+                  {score.readyToLaunch ? 'Launch Expedition' : 'Locked'}
+                </button>
+              </section>
 
-        <AIConsole
-          status={status}
-          loadState={loadState}
-          visionState={visionState}
-          engineReady={engineReady}
-          busy={busy}
-          autoPeek={autoPeek}
-          captureMode={captureMode}
-          trace={trace}
-          onPeek={() => void handleVisionPeek('manual')}
-          onAutoPeekChange={setAutoPeek}
-          onCaptureModeChange={setCaptureMode}
-          onReset={resetRun}
-          onChangeModel={handleChangeModel}
-        />
+              <section
+                className="coach-panel glass-card"
+                data-ai-id="coach-panel"
+                data-ai-label="Generated proactive coach panel"
+                data-ai-ops="replaceHtml,appendHtml,addClass,removeClass,setAttribute,scrollIntoView"
+                dangerouslySetInnerHTML={{ __html: INITIAL_COACH_HTML }}
+              />
+            </aside>
+          </div>
+        </div>
       </main>
+
+      <DeveloperDrawer
+        open={drawerOpen}
+        status={status}
+        loadState={loadState}
+        visionState={visionState}
+        engineReady={engineReady}
+        busy={busy}
+        autoPeek={autoPeek}
+        captureMode={captureMode}
+        trace={trace}
+        onOpenChange={setDrawerOpen}
+        onPeek={() => void handleVisionPeek('manual')}
+        onAutoPeekChange={setAutoPeek}
+        onCaptureModeChange={setCaptureMode}
+        onReset={resetRun}
+        onChangeModel={handleChangeModel}
+      />
     </div>
   );
 }
@@ -547,16 +537,16 @@ function StartScreen(props: {
       <section className="start-hero glass-card">
         <div className="start-copy">
           <p className="eyebrow">Cogent Engine Vision Pipeline</p>
-          <h1>Proactive UI that sees, reasons, and modifies the DOM in real-time.</h1>
+          <h1>Proactive UI that sees, reasons, and patches the DOM.</h1>
           <p>
-            This demo loads a local vision model, captures the web app as an image, asks the model
-            what the user appears to be doing, and applies validated JSON DOM patches to help them.
+            This demo loads a local vision model, captures a web app as an image, asks what the user
+            appears to be doing, then applies validated JSON DOM patches with visible notes.
           </p>
           <div className="start-steps">
             <span>1. Load model</span>
             <span>2. Pack the field kit</span>
             <span>3. Peek at UI</span>
-            <span>4. Watch DOM patches land</span>
+            <span>4. Watch DOM notes land</span>
           </div>
         </div>
 
@@ -603,114 +593,45 @@ function StartScreen(props: {
   );
 }
 
-function BriefPhase(props: { readonly onStartPacking: () => void }) {
-  return (
-    <div className="phase-card glass-card" data-ai-id="brief-card" data-ai-label="Mission brief" data-ai-ops="replaceHtml,appendHtml,addClass,removeClass,setAttribute">
-      <p className="eyebrow">Mission Rules</p>
-      <h3>Cross Dust Ridge and return before visibility collapses.</h3>
-      <div className="rules-grid">
-        <div>
-          <strong>Win condition</strong>
-          <p>Cover all six survival categories and keep the launch gate unlocked.</p>
-        </div>
-        <div>
-          <strong>Carry limit</strong>
-          <p>Stay at or below {FIELD_KIT_LIMITS.maxWeight}kg total pack weight.</p>
-        </div>
-        <div>
-          <strong>Budget cap</strong>
-          <p>Stay at or below ${FIELD_KIT_LIMITS.maxBudget} so the supply officer signs off.</p>
-        </div>
-      </div>
-      <button className="phase-cta" type="button" onClick={props.onStartPacking}>Start Packing</button>
-    </div>
-  );
-}
-
-function GearPhase(props: {
-  readonly visibleGear: readonly typeof GEAR_ITEMS[number][];
-  readonly selectedIds: ReadonlySet<string>;
-  readonly onToggleGear: (itemId: string) => void;
-  readonly onReview: () => void;
-}) {
-  return (
-    <>
-      <div className="instruction-card glass-card" data-ai-id="pack-instructions" data-ai-label="Pack gear instructions" data-ai-ops="replaceHtml,appendHtml,addClass,removeClass,setAttribute">
-        <h3>Choose the core kit</h3>
-        <p>Select cards that satisfy hydration, navigation, sun cover, and power without overpacking. The model should notice missing categories from the visible checklist and cards.</p>
-      </div>
-      <GearGrid items={props.visibleGear} selectedIds={props.selectedIds} onToggleGear={props.onToggleGear} />
-      <button className="phase-cta" type="button" onClick={props.onReview}>Review Launch Gate</button>
-    </>
-  );
-}
-
-function LaunchPhase(props: {
-  readonly visibleGear: readonly typeof GEAR_ITEMS[number][];
-  readonly selectedIds: ReadonlySet<string>;
-  readonly score: ReturnType<typeof calculateFieldKitScore>;
-  readonly onToggleGear: (itemId: string) => void;
-}) {
-  return (
-    <>
-      <div className="launch-panel glass-card" data-ai-id="launch-panel" data-ai-label="Launch readiness panel" data-ai-ops="replaceHtml,appendHtml,addClass,removeClass,setAttribute,scrollIntoView">
-        <p className="eyebrow">Expedition Gate</p>
-        <h3>{props.score.readyToLaunch ? 'Ready to launch' : 'Not safe yet'}</h3>
-        <p>
-          {props.score.readyToLaunch
-            ? 'All required categories are covered within constraints.'
-            : props.score.missingCategories.length > 0
-              ? `Missing: ${props.score.missingCategories.map(categoryLabel).join(', ')}.`
-              : 'Coverage is complete, but weight or budget needs attention.'}
-        </p>
-        <button
-          className="launch-button"
-          type="button"
-          disabled={!props.score.readyToLaunch}
-          data-ai-id="launch-button"
-          data-ai-label="Launch expedition button"
-          data-ai-ops="replaceText,addClass,removeClass,setAttribute,scrollIntoView"
-        >
-          {props.score.readyToLaunch ? 'Launch Expedition' : 'Locked'}
-        </button>
-      </div>
-      <div className="instruction-card glass-card" data-ai-id="final-safety-instructions" data-ai-label="Final safety instructions" data-ai-ops="replaceHtml,appendHtml,addClass,removeClass,setAttribute">
-        <h3>Final safety shelf</h3>
-        <p>Add signal and first-aid items here. The launch button unlocks only when the full field kit is safe.</p>
-      </div>
-      <GearGrid items={props.visibleGear} selectedIds={props.selectedIds} onToggleGear={props.onToggleGear} />
-    </>
-  );
-}
-
-function GearGrid(props: {
-  readonly items: readonly typeof GEAR_ITEMS[number][];
+function GearCategorySection(props: {
+  readonly goal: typeof CATEGORY_GOALS[number];
+  readonly items: readonly GearItem[];
   readonly selectedIds: ReadonlySet<string>;
   readonly onToggleGear: (itemId: string) => void;
 }) {
+  const covered = props.items.some((item) => props.selectedIds.has(item.id));
   return (
-    <div className="gear-grid" aria-label="Gear cards">
-      {props.items.map((item) => {
-        const selected = props.selectedIds.has(item.id);
-        return (
-          <button
-            key={item.id}
-            type="button"
-            className={`gear-card ${selected ? 'selected' : ''}`}
-            onClick={() => props.onToggleGear(item.id)}
-            data-ai-id={`gear-${item.id}`}
-            data-ai-label={`${item.name} gear card`}
-            data-ai-ops="addClass,removeClass,setAttribute,scrollIntoView"
-          >
-            <span className="gear-category">{categoryLabel(item.category)}</span>
-            <strong>{item.name}</strong>
-            <p>{item.summary}</p>
-            <small>{item.tradeoff}</small>
-            <span className="gear-stats">{item.weight}kg · ${item.cost}</span>
-          </button>
-        );
-      })}
-    </div>
+    <section className={`category-section ${covered ? 'covered' : 'missing'}`} data-ai-id={`category-${props.goal.id}`} data-ai-label={`${props.goal.label} gear section`} data-ai-ops="addClass,removeClass,setAttribute,scrollIntoView">
+      <header>
+        <div>
+          <span>{covered ? 'covered' : 'missing'}</span>
+          <h3>{props.goal.label}</h3>
+        </div>
+        <small>{props.goal.prompt}</small>
+      </header>
+      <div className="gear-grid">
+        {props.items.map((item) => {
+          const selected = props.selectedIds.has(item.id);
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className={`gear-card ${selected ? 'selected' : ''}`}
+              onClick={() => props.onToggleGear(item.id)}
+              data-ai-id={`gear-${item.id}`}
+              data-ai-label={`${item.name} gear card`}
+              data-ai-ops="addClass,removeClass,setAttribute,scrollIntoView"
+            >
+              <span className="gear-category">{categoryLabel(item.category)}</span>
+              <strong>{item.name}</strong>
+              <p>{item.summary}</p>
+              <small>{item.tradeoff}</small>
+              <span className="gear-stats">{item.weight}kg · ${item.cost}</span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -739,7 +660,8 @@ function Meter(props: {
   );
 }
 
-function AIConsole(props: {
+function DeveloperDrawer(props: {
+  readonly open: boolean;
   readonly status: string;
   readonly loadState: LoadState;
   readonly visionState: VisionState;
@@ -748,49 +670,63 @@ function AIConsole(props: {
   readonly autoPeek: boolean;
   readonly captureMode: CaptureMode;
   readonly trace: TraceState | null;
+  readonly onOpenChange: (open: boolean) => void;
   readonly onPeek: () => void;
   readonly onAutoPeekChange: (value: boolean) => void;
   readonly onCaptureModeChange: (value: CaptureMode) => void;
   readonly onReset: () => void;
   readonly onChangeModel: () => void;
 }) {
-  return (
-    <aside className="ai-console" data-capture-exclude="true" aria-label="AI controls and observability">
-      <div className="glass-card console-card">
-        <p className="eyebrow">AI Console</p>
-        <h2>Vision Loop</h2>
-        <div className="status-line console-status">
-          <span className={`state-dot ${props.loadState}`} />
-          <strong>{props.status}</strong>
-        </div>
-
-        <button className="primary-button" type="button" onClick={props.onPeek} disabled={!props.engineReady || props.busy}>
-          {props.visionState === 'thinking' ? 'Model inspecting...' : 'Peek at UI'}
+  if (!props.open) {
+    return (
+      <div className="dev-pill" data-capture-exclude="true">
+        <button type="button" className="dev-peek" onClick={props.onPeek} disabled={!props.engineReady || props.busy}>Peek</button>
+        <button type="button" className="dev-pill-status" onClick={() => props.onOpenChange(true)}>
+          <span className={`console-led ${props.visionState === 'error' ? 'error' : props.busy ? 'busy' : 'ready'}`} />
+          <span>{props.trace?.durationMs ? `${(props.trace.durationMs / 1000).toFixed(1)}s` : 'trace'}</span>
         </button>
+      </div>
+    );
+  }
 
+  return (
+    <aside className="dev-drawer" data-capture-exclude="true" aria-label="AI developer console">
+      <div className="dev-drawer-titlebar">
+        <div>
+          <span className="console-led ready" />
+          <strong>AI_TRACE</strong>
+        </div>
+        <button type="button" onClick={() => props.onOpenChange(false)}>minimize</button>
+      </div>
+
+      <section className="dev-section controls-section">
+        <div className="dev-section-header">
+          <span>controls</span>
+          <code>{props.captureMode}</code>
+        </div>
+        <p className="dev-status-line">
+          <span className={`console-led ${props.visionState === 'error' ? 'error' : props.busy ? 'busy' : 'ready'}`} />
+          {props.status}
+        </p>
+        <button className="terminal-button primary" type="button" onClick={props.onPeek} disabled={!props.engineReady || props.busy}>
+          {props.visionState === 'thinking' ? 'model.inspecting()' : 'peek.ui()'}
+        </button>
         <div className="capture-mode-control" role="radiogroup" aria-label="Capture quality">
           {(['fast', 'detailed'] as const).map((mode) => (
-            <button
-              key={mode}
-              type="button"
-              className={props.captureMode === mode ? 'active' : ''}
-              onClick={() => props.onCaptureModeChange(mode)}
-            >
-              {mode === 'fast' ? 'Fast capture' : 'Detailed capture'}
+            <button key={mode} type="button" className={props.captureMode === mode ? 'active' : ''} onClick={() => props.onCaptureModeChange(mode)}>
+              {mode}
             </button>
           ))}
         </div>
-
-        <label className="toggle-row">
+        <label className="terminal-toggle">
           <input type="checkbox" checked={props.autoPeek} onChange={(event) => props.onAutoPeekChange(event.target.checked)} disabled={!props.engineReady} />
-          Auto-peek after user actions
+          autoPeek.onUserAction
         </label>
-
-        <div className="console-actions">
-          <button className="secondary-button" type="button" onClick={props.onReset}>Reset</button>
-          <button className="secondary-button" type="button" onClick={props.onChangeModel}>Change model</button>
+        <div className="drawer-actions">
+          <button className="terminal-button" type="button" onClick={props.onReset}>reset()</button>
+          <button className="terminal-button" type="button" onClick={props.onChangeModel}>model.swap()</button>
         </div>
-      </div>
+      </section>
 
       <TracePanel trace={props.trace} visionState={props.visionState} />
     </aside>
@@ -799,16 +735,18 @@ function AIConsole(props: {
 
 function TracePanel(props: { readonly trace: TraceState | null; readonly visionState: VisionState }) {
   const trace = props.trace;
-  const stages: readonly { id: VisionState | 'done'; label: string }[] = [
-    { id: 'capturing', label: 'Capture UI' },
-    { id: 'compressing', label: 'Compress' },
-    { id: 'thinking', label: 'Vision inspect' },
-    { id: 'patching', label: 'Patch DOM' },
+  const stages: readonly { id: VisionState; label: string }[] = [
+    { id: 'capturing', label: 'capture' },
+    { id: 'compressing', label: 'compress' },
+    { id: 'thinking', label: 'infer' },
+    { id: 'patching', label: 'patch' },
   ];
   return (
-    <div className="glass-card trace-card">
-      <p className="eyebrow">Behind the Scenes</p>
-      <h2>Model Trace</h2>
+    <section className="dev-section trace-section">
+      <div className="dev-section-header">
+        <span>model_trace</span>
+        <code>{trace ? `#${trace.id}` : 'idle'}</code>
+      </div>
       <div className="pipeline">
         {stages.map((stage) => (
           <span key={stage.id} className={stage.id === props.visionState || (trace?.visionState === 'idle' && stage.id === 'patching') ? 'active' : ''}>
@@ -817,11 +755,10 @@ function TracePanel(props: { readonly trace: TraceState | null; readonly visionS
         ))}
       </div>
       {!trace ? (
-        <p className="empty-trace">No peek yet. The first run will show the screenshot, model JSON, validation, and applied DOM mutations here.</p>
+        <p className="empty-trace">No run yet. Click <code>peek.ui()</code> to capture the board, run vision inference, and inspect validated DOM patches.</p>
       ) : (
         <div className="trace-stack">
           <div className="trace-meta">
-            <span>#{trace.id}</span>
             <span>{trace.source}</span>
             <span>{trace.captureMode ?? 'fast'}</span>
             <span>{trace.startedAt}</span>
@@ -836,23 +773,23 @@ function TracePanel(props: { readonly trace: TraceState | null; readonly visionS
               </figcaption>
             </figure>
           ) : null}
-          {trace.observation ? <TraceBlock title="Observation" content={trace.observation} /> : null}
-          {trace.intent ? <TraceBlock title="Intent" content={trace.intent} /> : null}
+          {trace.observation ? <TraceBlock title="observation" content={trace.observation} /> : null}
+          {trace.intent ? <TraceBlock title="intent" content={trace.intent} /> : null}
           {trace.patches && trace.patches.length > 0 ? (
-            <TraceList title="Accepted Patches" items={trace.patches.map((patch) => `${patch.op} → ${patch.targetId}`)} />
+            <TraceList title="accepted_patches" items={trace.patches.map((patch) => `${patch.op} -> ${patch.targetId}${patch.note ? ` // ${patch.note}` : ''}`)} />
           ) : null}
           {trace.appliedMutations && trace.appliedMutations.length > 0 ? (
-            <TraceList title="DOM Mutations" items={trace.appliedMutations.map((mutation) => mutation.summary)} />
+            <TraceList title="dom_mutations" items={trace.appliedMutations.map((mutation) => mutation.summary)} />
           ) : null}
           {trace.rejectedPatches && trace.rejectedPatches.length > 0 ? (
-            <TraceList title="Rejected Patches" items={trace.rejectedPatches.map((patch) => `#${patch.index}: ${patch.reason}`)} tone="warning" />
+            <TraceList title="rejected_patches" items={trace.rejectedPatches.map((patch) => `#${patch.index}: ${patch.reason}`)} tone="warning" />
           ) : null}
-          {trace.errorMessage ? <TraceBlock title="Error" content={trace.errorMessage} tone="warning" /> : null}
-          {trace.rawText ? <TraceCode title="Raw JSON" content={trace.rawText} /> : null}
-          {trace.promptPreview ? <TraceCode title="Prompt Contract Preview" content={trace.promptPreview} /> : null}
+          {trace.errorMessage ? <TraceBlock title="error" content={trace.errorMessage} tone="warning" /> : null}
+          {trace.rawText ? <TraceCode title="raw_json" content={trace.rawText} /> : null}
+          {trace.promptPreview ? <TraceCode title="prompt_contract" content={trace.promptPreview} /> : null}
         </div>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -887,7 +824,7 @@ function TraceCode(props: { readonly title: string; readonly content: string }) 
 
 async function encodeCapture(canvas: HTMLCanvasElement, mode: CaptureMode): Promise<CapturedImage> {
   const preset = CAPTURE_PRESETS[mode];
-  const scale = Math.min(1, preset.maxWidth / canvas.width);
+  const scale = Math.min(1, preset.maxWidth / canvas.width, preset.maxHeight / canvas.height);
   const width = Math.max(1, Math.round(canvas.width * scale));
   const height = Math.max(1, Math.round(canvas.height * scale));
   const outputCanvas = document.createElement('canvas');
@@ -926,15 +863,18 @@ function canvasToBlob(canvas: HTMLCanvasElement, mimeType: string, quality: numb
 function summarizePatches(patches: readonly DomPatch[]): readonly AppliedMutation[] {
   return patches.map((patch) => ({
     targetId: patch.targetId,
-    summary: `${patch.op} applied to ${patch.targetId}`,
+    summary: `${patch.op} applied to ${patch.targetId}${patch.note ? ' with note' : ''}`,
   }));
 }
 
-function clearTransientAiClasses(root: HTMLElement, classNames: readonly string[]): void {
+function clearTransientAiArtifacts(root: HTMLElement, classNames: readonly string[]): void {
   for (const element of Array.from(root.querySelectorAll<HTMLElement>('[data-ai-id]'))) {
     for (const className of classNames) {
       element.classList.remove(className);
     }
+  }
+  for (const note of Array.from(root.querySelectorAll('[data-ai-patch-note="true"]'))) {
+    note.remove();
   }
   deleteModifiedFlags(root);
 }
@@ -948,9 +888,9 @@ function deleteModifiedFlags(root: HTMLElement): void {
 function describeVisionState(state: VisionState, mode: CaptureMode): string {
   switch (state) {
     case 'capturing':
-      return 'Capturing main UI as image';
+      return 'Capturing field-kit board';
     case 'compressing':
-      return `${mode === 'fast' ? 'Fast' : 'Detailed'} image compression`;
+      return `${mode === 'fast' ? 'Fast' : 'Detailed'} JPEG compression`;
     case 'thinking':
       return 'Vision model inspecting screenshot';
     case 'patching':

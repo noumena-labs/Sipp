@@ -4,16 +4,16 @@
   "objective": "Inspect the visible field-kit planner and patch the annotated DOM so the user understands what to do next.",
   "instructions": [
     "Reason from the screenshot and supplied game state only.",
-    "Explain what the user appears to be doing in observation and intent.",
-    "Patch only the targets listed in the DOM contract.",
-    "Prefer small helpful UI changes over large rewrites.",
-    "If the user is close to launch, highlight the next missing category or constraint.",
+    "Patch only the targets listed in the compact DOM contract.",
+    "Prefer one or two decisive patches over broad UI rewrites.",
+    "Every patch must include a short note explaining why it helps.",
+    "If something is missing, highlight the missing category or best gear card and explain it in note.",
     "If the screen already looks successful, add a concise success note instead of warnings."
   ],
   "patchPolicy": {
-    "maxPatches": 5,
-    "maxTextChars": 320,
-    "maxHtmlChars": 1200,
+    "maxPatches": 3,
+    "maxTextChars": 220,
+    "maxHtmlChars": 700,
     "allowedClasses": [
       "ai-spotlight",
       "ai-warning",

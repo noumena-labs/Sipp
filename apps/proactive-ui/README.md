@@ -13,7 +13,7 @@ bun install
 bun run proactive-ui:dev
 ```
 
-Open the printed local URL and load the default vision model/projector pair from the start screen. The demo enters automatically after the model is ready. Select a few gear cards, then click `Peek at UI` in the AI Console.
+Open the printed local URL and load the default vision model/projector pair from the start screen. The demo enters automatically after the model is ready. Select a few gear cards, then click `Peek` in the floating developer drawer.
 
 ## What this demonstrates
 
@@ -23,17 +23,18 @@ Open the printed local URL and load the default vision model/projector pair from
 - validating model-authored DOM patches against a scanned target contract
 - sanitizing generated HTML with `dompurify`
 - applying safe DOM mutations while showing the full behind-the-scenes trace
-- downscaling the captured UI to a smaller JPEG in `Fast capture` mode for lower-latency vision inference
+- downscaling the captured UI to a smaller JPEG in `fast` mode for lower-latency vision inference
+- rendering model-authored patch notes beside highlighted or changed DOM elements
 
 ## Demo flow
 
-The game has three freely navigable phases:
+The game is a single field-kit board:
 
-- `Brief`: explains the mission, budget, carry limit, and win condition
-- `Pack Gear`: lets the user select core survival items
-- `Launch`: shows final blockers and signal / first-aid shelf items
+- all gear cards are visible and grouped by survival category
+- the checklist, selected manifest, launch gate, and coach panel stay visible
+- the drawer starts open, can be minimized, and remains excluded from screenshot capture
 
-The AI Console is intentionally separate from the main game UI and is excluded from screenshots. The model only sees the field-kit surface, not the debugging controls.
+The floating developer drawer is intentionally separate from the main game UI. The model only sees the field-kit surface, not the debugging controls.
 
 ## Drop-in pattern
 
@@ -69,12 +70,14 @@ The model is asked to return only JSON:
     {
       "op": "addClass",
       "targetId": "goal-hydration",
-      "className": "ai-warning"
+      "className": "ai-warning",
+      "note": "Hydration is still missing. Add a water item before launching."
     },
     {
       "op": "replaceHtml",
       "targetId": "coach-panel",
-      "html": "<div class=\"ai-gen-card\"><h3 class=\"ai-gen-title\">Hydration gap</h3><p class=\"ai-gen-note\">Add a water item before launching.</p></div>"
+      "html": "<div class=\"ai-gen-card\"><h3 class=\"ai-gen-title\">Hydration gap</h3><p class=\"ai-gen-note\">Add a water item before launching.</p></div>",
+      "note": "The coach panel now explains the next mission blocker."
     }
   ]
 }
@@ -90,6 +93,7 @@ The demo intentionally lets the model generate DOM patches, but not arbitrary ex
 - generated HTML is sanitized
 - scripts, styles, iframes, images, forms, inputs, event handlers, and unsafe attributes are stripped
 - patch count and text/HTML lengths are capped
+- missing patch notes are replaced with a safe fallback note so every visible patch explains itself
 - rejected patches are shown in the trace panel and skipped
 
 ## Defaults
