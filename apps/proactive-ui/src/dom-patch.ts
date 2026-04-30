@@ -1,0 +1,722 @@
+import type { ChatMessage, CogentEngine } from '@noumena-labs/cogent-engine';
+import DOMPurify from 'dompurify';
+import type { FieldKitScore, GearItem, GearTab } from './game-data';
+import { categoryLabel, FIELD_KIT_LIMITS } from './game-data';
+
+const SUPPORTED_OPS = [
+  'replaceText',
+  'replaceHtml',
+  'appendHtml',
+  'addClass',
+  'removeClass',
+  'setAttribute',
+  'scrollIntoView',
+] as const;
+
+const PATCH_OPERATION_ALIASES: Record<string, NormalizedPatchOperation> = {
+  replacetext: { op: 'replaceText' },
+  settext: { op: 'replaceText' },
+  updatetext: { op: 'replaceText' },
+  text: { op: 'replaceText' },
+  replacelabel: { op: 'replaceText' },
+  replacehtml: { op: 'replaceHtml' },
+  sethtml: { op: 'replaceHtml' },
+  updatehtml: { op: 'replaceHtml' },
+  html: { op: 'replaceHtml' },
+  markup: { op: 'replaceHtml' },
+  appendhtml: { op: 'appendHtml' },
+  inserthtml: { op: 'appendHtml' },
+  append: { op: 'appendHtml' },
+  insert: { op: 'appendHtml' },
+  addclass: { op: 'addClass' },
+  highlight: { op: 'addClass', defaultClassName: 'ai-spotlight' },
+  spotlight: { op: 'addClass', defaultClassName: 'ai-spotlight' },
+  pulse: { op: 'addClass', defaultClassName: 'ai-pulse' },
+  warning: { op: 'addClass', defaultClassName: 'ai-warning' },
+  warn: { op: 'addClass', defaultClassName: 'ai-warning' },
+  success: { op: 'addClass', defaultClassName: 'ai-success' },
+  dim: { op: 'addClass', defaultClassName: 'ai-dim' },
+  removeclass: { op: 'removeClass' },
+  clearclass: { op: 'removeClass' },
+  setattribute: { op: 'setAttribute' },
+  setattr: { op: 'setAttribute' },
+  attribute: { op: 'setAttribute' },
+  scrollintoview: { op: 'scrollIntoView' },
+  scroll: { op: 'scrollIntoView' },
+  reveal: { op: 'scrollIntoView' },
+} as const;
+
+const JSON_GRAMMAR = String.raw`
+root ::= object
+value ::= object | array | string | number | "true" ws | "false" ws | "null" ws
+object ::= "{" ws (string ":" ws value ("," ws string ":" ws value)*)? "}" ws
+array ::= "[" ws (value ("," ws value)*)? "]" ws
+string ::= "\"" ([^"\\] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]))* "\"" ws
+number ::= ("-"? ([0-9] | [1-9] [0-9]*) ("." [0-9]+)? ([eE] [-+]? [0-9]+)?) ws
+ws ::= [ \t\n\r]*
+`.trim();
+
+type SupportedPatchOp = typeof SUPPORTED_OPS[number];
+
+interface NormalizedPatchOperation {
+  readonly op: SupportedPatchOp;
+  readonly defaultClassName?: string;
+}
+
+export interface PatchPolicy {
+  readonly maxPatches: number;
+  readonly maxTextChars: number;
+  readonly maxHtmlChars: number;
+  readonly allowedClasses: readonly string[];
+  readonly allowedHtmlClasses: readonly string[];
+  readonly allowedAttributes: readonly string[];
+}
+
+export interface DomPatchDirectorConfig {
+  readonly id: string;
+  readonly scenarioName: string;
+  readonly objective: string;
+  readonly instructions: readonly string[];
+  readonly patchPolicy: PatchPolicy;
+}
+
+export interface PatchTargetContract {
+  readonly id: string;
+  readonly label: string;
+  readonly allowedOps: readonly SupportedPatchOp[];
+  readonly tagName: string;
+  readonly currentText: string;
+}
+
+export interface DirectorGameState {
+  readonly activeTab: GearTab;
+  readonly score: FieldKitScore;
+  readonly selectedItems: readonly GearItem[];
+}
+
+export type DomPatch =
+  | { readonly op: 'replaceText'; readonly targetId: string; readonly text: string }
+  | { readonly op: 'replaceHtml'; readonly targetId: string; readonly html: string }
+  | { readonly op: 'appendHtml'; readonly targetId: string; readonly html: string }
+  | { readonly op: 'addClass'; readonly targetId: string; readonly className: string }
+  | { readonly op: 'removeClass'; readonly targetId: string; readonly className: string }
+  | {
+    readonly op: 'setAttribute';
+    readonly targetId: string;
+    readonly attributeName: string;
+    readonly value: string;
+  }
+  | { readonly op: 'scrollIntoView'; readonly targetId: string };
+
+export interface RawPatchResponse {
+  readonly observation: string;
+  readonly intent: string;
+  readonly patches: readonly unknown[];
+}
+
+export interface RejectedPatch {
+  readonly index: number;
+  readonly reason: string;
+  readonly patch: unknown;
+}
+
+export interface ValidatedPatchResponse {
+  readonly observation: string;
+  readonly intent: string;
+  readonly patches: readonly DomPatch[];
+  readonly rejectedPatches: readonly RejectedPatch[];
+}
+
+export interface DomPatchRunResult extends ValidatedPatchResponse {
+  readonly rawText: string;
+  readonly targetCount: number;
+  readonly promptPreview: string;
+}
+
+export interface AppliedMutation {
+  readonly targetId: string;
+  readonly summary: string;
+}
+
+interface RunDomPatchDirectorArgs {
+  readonly screenshot: Uint8Array;
+  readonly targets: readonly PatchTargetContract[];
+  readonly gameState: DirectorGameState;
+  readonly signal?: AbortSignal;
+}
+
+export const DEFAULT_PATCH_DIRECTOR_CONFIG: DomPatchDirectorConfig = {
+  id: 'dust-ridge-proactive-ui',
+  scenarioName: 'Dust Ridge Field Kit',
+  objective: 'Inspect the field-kit planner and patch the annotated DOM to help the user finish safely.',
+  instructions: [
+    'Reason from the screenshot and supplied game state only.',
+    'Return only valid JSON with observation, intent, and patches.',
+    'Patch only targets from the DOM contract.',
+  ],
+  patchPolicy: {
+    maxPatches: 5,
+    maxTextChars: 320,
+    maxHtmlChars: 1200,
+    allowedClasses: ['ai-spotlight', 'ai-warning', 'ai-success', 'ai-dim', 'ai-pulse'],
+    allowedHtmlClasses: [
+      'ai-gen-card',
+      'ai-gen-title',
+      'ai-gen-note',
+      'ai-gen-action',
+      'ai-gen-warning',
+      'ai-gen-success',
+      'ai-gen-list',
+    ],
+    allowedAttributes: ['aria-label', 'title', 'data-ai-state', 'data-ai-note'],
+  },
+};
+
+export async function loadDomPatchDirectorConfig(url: string): Promise<DomPatchDirectorConfig> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`dom-patch-director.json HTTP ${response.status}`);
+  }
+  return normalizeDirectorConfig(await response.json());
+}
+
+export class DomPatchDirector {
+  public constructor(
+    private readonly engine: CogentEngine,
+    private readonly config: DomPatchDirectorConfig
+  ) { }
+
+  public async run(args: RunDomPatchDirectorArgs): Promise<DomPatchRunResult> {
+    const userPrompt = renderUserPrompt(this.config, args.targets, args.gameState);
+    const messages: ChatMessage[] = [
+      { role: 'system', content: renderSystemPrompt(this.config) },
+      { role: 'user', content: userPrompt },
+    ];
+    const rawText = await this.engine.chat(
+      { messages, media: [args.screenshot] },
+      {
+        session: `proactive-ui:${this.config.id}`,
+        maxTokens: 700,
+        signal: args.signal,
+        grammar: JSON_GRAMMAR,
+      }
+    );
+    const parsed = parsePatchResponse(rawText);
+    const validated = validatePatchResponse(parsed, args.targets, this.config.patchPolicy);
+
+    return {
+      rawText,
+      targetCount: args.targets.length,
+      promptPreview: userPrompt.slice(0, 2400),
+      ...validated,
+    };
+  }
+}
+
+export function collectPatchTargets(root: HTMLElement): PatchTargetContract[] {
+  const nodes = Array.from(root.querySelectorAll<HTMLElement>('[data-ai-id]'));
+  if (root.dataset.aiId) {
+    nodes.unshift(root);
+  }
+
+  return nodes.flatMap((node) => {
+    const id = node.dataset.aiId?.trim();
+    if (!id) {
+      return [];
+    }
+    const allowedOps = parseAllowedOps(node.dataset.aiOps ?? '');
+    if (allowedOps.length === 0) {
+      return [];
+    }
+    return [
+      {
+        id,
+        label: node.dataset.aiLabel?.trim() || id,
+        allowedOps,
+        tagName: node.tagName.toLowerCase(),
+        currentText: compactText(node.innerText || node.textContent || '', 220),
+      },
+    ];
+  });
+}
+
+export function applyDomPatches(
+  root: HTMLElement,
+  patches: readonly DomPatch[]
+): readonly AppliedMutation[] {
+  const targetNodes = collectTargetNodes(root);
+  const mutations: AppliedMutation[] = [];
+
+  for (const patch of patches) {
+    const target = targetNodes.get(patch.targetId);
+    if (!target) {
+      continue;
+    }
+
+    switch (patch.op) {
+      case 'replaceText':
+        target.textContent = patch.text;
+        mutations.push({ targetId: patch.targetId, summary: `Replaced text on ${patch.targetId}` });
+        break;
+      case 'replaceHtml':
+        target.innerHTML = patch.html;
+        mutations.push({ targetId: patch.targetId, summary: `Replaced HTML on ${patch.targetId}` });
+        break;
+      case 'appendHtml':
+        target.insertAdjacentHTML('beforeend', patch.html);
+        mutations.push({ targetId: patch.targetId, summary: `Appended generated HTML to ${patch.targetId}` });
+        break;
+      case 'addClass':
+        target.classList.add(patch.className);
+        mutations.push({ targetId: patch.targetId, summary: `Added .${patch.className} to ${patch.targetId}` });
+        break;
+      case 'removeClass':
+        target.classList.remove(patch.className);
+        mutations.push({ targetId: patch.targetId, summary: `Removed .${patch.className} from ${patch.targetId}` });
+        break;
+      case 'setAttribute':
+        target.setAttribute(patch.attributeName, patch.value);
+        mutations.push({ targetId: patch.targetId, summary: `Set ${patch.attributeName} on ${patch.targetId}` });
+        break;
+      case 'scrollIntoView':
+        target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        mutations.push({ targetId: patch.targetId, summary: `Scrolled ${patch.targetId} into view` });
+        break;
+    }
+
+    target.dataset.aiModified = 'true';
+  }
+
+  return mutations;
+}
+
+function normalizeDirectorConfig(raw: unknown): DomPatchDirectorConfig {
+  const record = asRecord(raw);
+  const policy = asRecord(record.patchPolicy);
+  return {
+    id: readString(record.id, DEFAULT_PATCH_DIRECTOR_CONFIG.id),
+    scenarioName: readString(record.scenarioName, DEFAULT_PATCH_DIRECTOR_CONFIG.scenarioName),
+    objective: readString(record.objective, DEFAULT_PATCH_DIRECTOR_CONFIG.objective),
+    instructions: readStringArray(record.instructions, DEFAULT_PATCH_DIRECTOR_CONFIG.instructions),
+    patchPolicy: {
+      maxPatches: readPositiveInt(policy.maxPatches, DEFAULT_PATCH_DIRECTOR_CONFIG.patchPolicy.maxPatches),
+      maxTextChars: readPositiveInt(policy.maxTextChars, DEFAULT_PATCH_DIRECTOR_CONFIG.patchPolicy.maxTextChars),
+      maxHtmlChars: readPositiveInt(policy.maxHtmlChars, DEFAULT_PATCH_DIRECTOR_CONFIG.patchPolicy.maxHtmlChars),
+      allowedClasses: readStringArray(policy.allowedClasses, DEFAULT_PATCH_DIRECTOR_CONFIG.patchPolicy.allowedClasses),
+      allowedHtmlClasses: readStringArray(
+        policy.allowedHtmlClasses,
+        DEFAULT_PATCH_DIRECTOR_CONFIG.patchPolicy.allowedHtmlClasses
+      ),
+      allowedAttributes: readStringArray(
+        policy.allowedAttributes,
+        DEFAULT_PATCH_DIRECTOR_CONFIG.patchPolicy.allowedAttributes
+      ),
+    },
+  };
+}
+
+function renderSystemPrompt(config: DomPatchDirectorConfig): string {
+  return [
+    `You are the proactive UI director for ${config.scenarioName}.`,
+    `Objective: ${config.objective}`,
+    'You inspect one browser screenshot and return JSON patches for annotated DOM targets.',
+    'Return only valid JSON. Do not wrap the JSON in markdown.',
+    'Schema: {"observation": string, "intent": string, "patches": DomPatch[]}.',
+    'Every DomPatch object must include exact keys "op" and "targetId".',
+    'Allowed op values: replaceText, replaceHtml, appendHtml, addClass, removeClass, setAttribute, scrollIntoView.',
+    'For text patches use {"op":"replaceText","targetId":"...","text":"..."}.',
+    'For HTML patches use {"op":"replaceHtml","targetId":"...","html":"..."}.',
+    'For class patches use {"op":"addClass","targetId":"...","className":"ai-spotlight"}.',
+    'Generated HTML should be small, semantic, and safe. No scripts, styles, iframes, images, forms, or event handlers.',
+    'Instructions:',
+    ...config.instructions.map((instruction) => `- ${instruction}`),
+  ].join('\n');
+}
+
+function renderUserPrompt(
+  config: DomPatchDirectorConfig,
+  targets: readonly PatchTargetContract[],
+  state: DirectorGameState
+): string {
+  const selected = state.selectedItems.map((item) => ({
+    id: item.id,
+    name: item.name,
+    category: categoryLabel(item.category),
+    weight: item.weight,
+    cost: item.cost,
+  }));
+  const gameState = {
+    activeTab: state.activeTab,
+    readiness: state.score.readiness,
+    readyToLaunch: state.score.readyToLaunch,
+    totalWeight: state.score.totalWeight,
+    maxWeight: FIELD_KIT_LIMITS.maxWeight,
+    totalCost: state.score.totalCost,
+    maxBudget: FIELD_KIT_LIMITS.maxBudget,
+    coveredCategories: state.score.coveredCategories.map(categoryLabel),
+    missingCategories: state.score.missingCategories.map(categoryLabel),
+    selected,
+  };
+
+  return [
+    'Inspect the attached screenshot of the current UI.',
+    'Use the screenshot first, then use the structured state and DOM contract to make safe patches.',
+    'Patch policy:',
+    JSON.stringify(config.patchPolicy, null, 2),
+    'Game state:',
+    JSON.stringify(gameState, null, 2),
+    'DOM contract. targetId must be one of these ids and op must be listed in allowedOps:',
+    JSON.stringify(targets, null, 2),
+    'Response rules:',
+    `- Include at most ${config.patchPolicy.maxPatches} patches.`,
+    '- Prefer one coach-panel HTML patch plus one or two visual highlight patches.',
+    '- For addClass/removeClass, use only allowedClasses.',
+    '- For generated HTML, use short copy and allowedHtmlClasses only.',
+    '- For setAttribute, use only allowedAttributes.',
+    '- Each patch must include "op" and "targetId". Do not use keys like operation, action, target, selector, or element.',
+    '- Example patch: {"op":"addClass","targetId":"goal-hydration","className":"ai-warning"}.',
+    '- Output exactly one JSON object and nothing else.',
+  ].join('\n\n');
+}
+
+function parsePatchResponse(rawText: string): RawPatchResponse {
+  const parsed = JSON.parse(rawText.trim()) as unknown;
+  const record = asRecord(parsed);
+  const patches = readPatchArray(record);
+  return {
+    observation: readStringFrom(
+      record,
+      ['observation', 'analysis', 'description', 'summary'],
+      'The model returned no observation.'
+    ),
+    intent: readStringFrom(
+      record,
+      ['intent', 'userIntent', 'inferredIntent', 'goal'],
+      'The model returned no intent.'
+    ),
+    patches,
+  };
+}
+
+function validatePatchResponse(
+  response: RawPatchResponse,
+  targets: readonly PatchTargetContract[],
+  policy: PatchPolicy
+): ValidatedPatchResponse {
+  const targetMap = new Map(targets.map((target) => [target.id, target]));
+  const accepted: DomPatch[] = [];
+  const rejected: RejectedPatch[] = [];
+  const candidatePatches = response.patches.slice(0, policy.maxPatches + 4);
+
+  candidatePatches.forEach((patch, index) => {
+    if (index >= policy.maxPatches) {
+      rejected.push({ index, patch, reason: `Patch limit is ${policy.maxPatches}.` });
+      return;
+    }
+    const result = validatePatch(patch, targetMap, policy);
+    if (typeof result === 'string') {
+      rejected.push({ index, patch, reason: result });
+      return;
+    }
+    accepted.push(result);
+  });
+
+  return {
+    observation: compactText(response.observation, 700),
+    intent: compactText(response.intent, 420),
+    patches: accepted,
+    rejectedPatches: rejected,
+  };
+}
+
+function validatePatch(
+  patch: unknown,
+  targetMap: ReadonlyMap<string, PatchTargetContract>,
+  policy: PatchPolicy
+): DomPatch | string {
+  const record = normalizePatchRecord(patch);
+  const operation = readPatchOperation(record);
+  if (!operation) {
+    return `Unsupported op ${JSON.stringify(readStringFrom(record, ['op', 'operation', 'action', 'type', 'kind', 'command'], ''))}; patch keys: ${Object.keys(record).join(', ') || 'none'}.`;
+  }
+  const op = operation.op;
+  const rawTargetId = readStringFrom(
+    record,
+    ['targetId', 'target', 'id', 'elementId', 'element', 'aiId', 'selector', 'query'],
+    ''
+  );
+  const targetId = resolveTargetId(rawTargetId, targetMap);
+  if (!targetId) {
+    return `Unknown targetId ${JSON.stringify(rawTargetId)}.`;
+  }
+  const target = targetMap.get(targetId)!;
+  if (!target) {
+    return `Unknown targetId ${JSON.stringify(targetId)}.`;
+  }
+  if (!target.allowedOps.includes(op)) {
+    return `${targetId} does not allow ${op}.`;
+  }
+
+  switch (op) {
+    case 'replaceText': {
+      const text = compactText(readStringFrom(record, ['text', 'content', 'value', 'innerText', 'message', 'copy'], ''), policy.maxTextChars);
+      return text ? { op, targetId, text } : 'replaceText requires non-empty text.';
+    }
+    case 'replaceHtml':
+    case 'appendHtml': {
+      const html = sanitizeGeneratedHtml(readStringFrom(record, ['html', 'content', 'value', 'innerHTML', 'markup', 'body'], ''), policy);
+      return html ? { op, targetId, html } : `${op} requires safe non-empty html.`;
+    }
+    case 'addClass':
+    case 'removeClass': {
+      const className = readClassName(record, operation.defaultClassName ?? '');
+      return policy.allowedClasses.includes(className)
+        ? { op, targetId, className }
+        : `Class ${JSON.stringify(className)} is not allowed.`;
+    }
+    case 'setAttribute': {
+      const attributeName = readStringFrom(record, ['attributeName', 'attribute', 'attr', 'name'], '');
+      const value = compactText(readStringFrom(record, ['value', 'attributeValue', 'content', 'text'], ''), 160);
+      return policy.allowedAttributes.includes(attributeName)
+        ? { op, targetId, attributeName, value }
+        : `Attribute ${JSON.stringify(attributeName)} is not allowed.`;
+    }
+    case 'scrollIntoView':
+      return { op, targetId };
+  }
+}
+
+function readPatchArray(record: Record<string, unknown>): readonly unknown[] {
+  const aliases = ['patches', 'domPatches', 'operations', 'mutations', 'actions', 'updates'];
+  for (const alias of aliases) {
+    const value = record[alias];
+    if (Array.isArray(value)) {
+      return value;
+    }
+  }
+  if (
+    hasAnyKey(record, ['op', 'operation', 'action', 'type', 'kind', 'command', 'patchOp']) &&
+    hasAnyKey(record, ['targetId', 'target', 'id', 'elementId', 'element', 'aiId', 'selector', 'query'])
+  ) {
+    return [record];
+  }
+  for (const alias of ['patch', 'domPatch', 'mutation']) {
+    const singlePatch = asRecord(record[alias]);
+    if (Object.keys(singlePatch).length > 0) {
+      return [singlePatch];
+    }
+  }
+  return [];
+}
+
+function normalizePatchRecord(patch: unknown): Record<string, unknown> {
+  const record = asRecord(patch);
+  const nestedPatch = record.patch ?? record.domPatch ?? record.mutation;
+  if (!hasAnyKey(record, ['op', 'operation', 'action', 'type', 'kind', 'command']) && nestedPatch != null) {
+    const nested = asRecord(nestedPatch);
+    if (Object.keys(nested).length > 0) {
+      return normalizePatchRecord(nested);
+    }
+  }
+
+  const keys = Object.keys(record);
+  if (!hasAnyKey(record, ['op', 'operation', 'action', 'type', 'kind', 'command']) && keys.length === 1) {
+    const wrapperOp = readNormalizedPatchOperation(keys[0]);
+    const payload = asRecord(record[keys[0]]);
+    if (wrapperOp && Object.keys(payload).length > 0) {
+      return { ...payload, op: keys[0] };
+    }
+  }
+
+  return record;
+}
+
+function readPatchOperation(record: Record<string, unknown>): NormalizedPatchOperation | null {
+  const explicitOperation = readStringFrom(
+    record,
+    ['op', 'operation', 'action', 'type', 'kind', 'command', 'patchOp'],
+    ''
+  );
+  const normalized = readNormalizedPatchOperation(explicitOperation);
+  if (normalized) {
+    return normalized;
+  }
+  return inferPatchOperation(record);
+}
+
+function readNormalizedPatchOperation(value: string): NormalizedPatchOperation | null {
+  const normalized = normalizeIdentifier(value);
+  return PATCH_OPERATION_ALIASES[normalized] ?? null;
+}
+
+function inferPatchOperation(record: Record<string, unknown>): NormalizedPatchOperation | null {
+  if (hasStringLike(record, ['html', 'innerHTML', 'markup', 'body'])) {
+    return { op: 'replaceHtml' };
+  }
+  if (hasStringLike(record, ['content', 'value'])) {
+    const content = readStringFrom(record, ['content', 'value'], '');
+    return content.includes('<') ? { op: 'replaceHtml' } : { op: 'replaceText' };
+  }
+  if (hasStringLike(record, ['text', 'innerText', 'message', 'copy'])) {
+    return { op: 'replaceText' };
+  }
+  if (hasStringLike(record, ['className', 'class', 'cssClass'])) {
+    return { op: 'addClass' };
+  }
+  if (hasStringLike(record, ['attributeName', 'attribute', 'attr', 'name'])) {
+    return { op: 'setAttribute' };
+  }
+  return null;
+}
+
+function resolveTargetId(
+  value: string,
+  targetMap: ReadonlyMap<string, PatchTargetContract>
+): string | null {
+  const targetId = normalizeTargetId(value);
+  if (targetMap.has(targetId)) {
+    return targetId;
+  }
+
+  const variants = [
+    `gear-${targetId}`,
+    `goal-${targetId}`,
+    `meter-${targetId}`,
+    `tab-${targetId}`,
+  ];
+  for (const variant of variants) {
+    if (targetMap.has(variant)) {
+      return variant;
+    }
+  }
+
+  const suffixMatch = Array.from(targetMap.keys()).find((candidate) => candidate.endsWith(`-${targetId}`));
+  return suffixMatch ?? null;
+}
+
+function normalizeTargetId(value: string): string {
+  const trimmed = value.trim();
+  const dataAiIdMatch = trimmed.match(/data-ai-id\s*=\s*["']?([^"'\]]+)/i);
+  if (dataAiIdMatch?.[1]) {
+    return dataAiIdMatch[1].trim();
+  }
+  return trimmed.replace(/^#/, '').replace(/^data-ai-id:/, '').replace(/^data-ai-id=/, '').replace(/^['"]|['"]$/g, '');
+}
+
+function sanitizeGeneratedHtml(html: string, policy: PatchPolicy): string {
+  const trimmed = html.slice(0, policy.maxHtmlChars);
+  const sanitized = DOMPurify.sanitize(trimmed, {
+    ALLOWED_TAGS: ['p', 'strong', 'em', 'span', 'ul', 'ol', 'li', 'h3', 'h4', 'button', 'div', 'small', 'br'],
+    ALLOWED_ATTR: ['class', 'aria-label', 'data-ai-generated'],
+    FORBID_TAGS: ['script', 'style', 'iframe', 'img', 'svg', 'math', 'form', 'input', 'textarea'],
+    RETURN_TRUSTED_TYPE: false,
+  }) as string;
+  const template = document.createElement('template');
+  template.innerHTML = sanitized;
+  for (const element of Array.from(template.content.querySelectorAll<HTMLElement>('[class]'))) {
+    for (const className of Array.from(element.classList)) {
+      if (!policy.allowedHtmlClasses.includes(className)) {
+        element.classList.remove(className);
+      }
+    }
+    if (element.classList.length === 0) {
+      element.removeAttribute('class');
+    }
+  }
+  return template.innerHTML.trim();
+}
+
+function collectTargetNodes(root: HTMLElement): Map<string, HTMLElement> {
+  const nodes = Array.from(root.querySelectorAll<HTMLElement>('[data-ai-id]'));
+  if (root.dataset.aiId) {
+    nodes.unshift(root);
+  }
+  return new Map(
+    nodes.flatMap((node) => {
+      const id = node.dataset.aiId?.trim();
+      return id ? [[id, node] as const] : [];
+    })
+  );
+}
+
+function parseAllowedOps(source: string): SupportedPatchOp[] {
+  const parts = source.split(',').map((part) => part.trim()).filter(Boolean);
+  return parts.filter((part): part is SupportedPatchOp => SUPPORTED_OPS.includes(part as SupportedPatchOp));
+}
+
+function readStringFrom(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+  fallback: string
+): string {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string') {
+      return value;
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return String(value);
+    }
+  }
+  return fallback;
+}
+
+function readClassName(record: Record<string, unknown>, fallback: string): string {
+  for (const key of ['className', 'class', 'classes', 'cssClass', 'value']) {
+    const value = record[key];
+    if (typeof value === 'string') {
+      return value.trim().split(/\s+/)[0] ?? fallback;
+    }
+    if (Array.isArray(value)) {
+      const className = value.find((entry): entry is string => typeof entry === 'string');
+      if (className) {
+        return className.trim().split(/\s+/)[0] ?? fallback;
+      }
+    }
+  }
+  return fallback;
+}
+
+function hasAnyKey(record: Record<string, unknown>, keys: readonly string[]): boolean {
+  return keys.some((key) => record[key] !== undefined);
+}
+
+function hasStringLike(record: Record<string, unknown>, keys: readonly string[]): boolean {
+  return keys.some((key) => {
+    const value = record[key];
+    return (
+      (typeof value === 'string' && value.trim().length > 0) ||
+      typeof value === 'number' ||
+      typeof value === 'boolean'
+    );
+  });
+}
+
+function normalizeIdentifier(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function compactText(source: string, maxChars: number): string {
+  const compacted = source.replace(/\s+/g, ' ').trim();
+  return compacted.length > maxChars ? `${compacted.slice(0, maxChars - 1)}…` : compacted;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value != null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function readString(value: unknown, fallback: string): string {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function readStringArray(value: unknown, fallback: readonly string[]): readonly string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === 'string')
+    ? value
+    : fallback;
+}
+
+function readPositiveInt(value: unknown, fallback: number): number {
+  return Number.isInteger(value) && Number(value) > 0 ? Number(value) : fallback;
+}
