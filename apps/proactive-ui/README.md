@@ -24,7 +24,7 @@ Open the printed local URL and load the default vision model/projector pair from
 - sanitizing generated HTML with `dompurify`
 - applying safe DOM mutations while showing the full behind-the-scenes trace
 - downscaling the captured UI to a smaller JPEG in `fast` mode for lower-latency vision inference
-- rendering model-authored patch notes beside highlighted or changed DOM elements
+- rendering one model-authored callout beside the most important highlighted or changed DOM element
 
 ## Demo flow
 
@@ -93,7 +93,7 @@ The demo intentionally lets the model generate DOM patches, but not arbitrary ex
 - generated HTML is sanitized
 - scripts, styles, iframes, images, forms, inputs, event handlers, and unsafe attributes are stripped
 - patch count and text/HTML lengths are capped
-- missing patch notes are replaced with a safe fallback note so every visible patch explains itself
+- missing patch notes are replaced with a safe fallback note, and the first accepted note is rendered as an overlay callout instead of being inserted into the patched element
 - rejected patches are shown in the trace panel and skipped
 
 ## Defaults

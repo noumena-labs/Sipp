@@ -948,43 +948,93 @@ input:disabled {
 }
 
 [data-ai-modified="true"]::after {
-  content: "AI PATCHED";
+  content: "";
   position: absolute;
   z-index: 9;
-  top: 8px;
-  right: 8px;
+  top: 9px;
+  right: 9px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid #ffce77;
   border-radius: 999px;
-  background: #ffce77;
-  color: #1b1008;
-  padding: 4px 7px;
-  font-size: 0.62rem;
-  font-weight: 950;
-  letter-spacing: 0.08em;
+  background: #1b1008;
+  box-shadow: 0 0 18px rgba(255, 206, 119, 0.55);
 }
 
 [data-ai-id] {
   position: relative;
 }
 
-.ai-patch-note {
-  display: block;
-  width: fit-content;
-  max-width: min(320px, 100%);
-  margin-top: 10px;
-  border: 1px solid rgba(255, 211, 128, 0.36);
-  border-radius: 14px;
-  background: rgba(21, 12, 6, 0.92);
+.ai-callout-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 14;
+  pointer-events: none;
+}
+
+.ai-patch-callout {
+  position: absolute;
+  display: grid;
+  gap: 5px;
+  width: max-content;
+  min-width: 180px;
+  max-width: 280px;
+  border: 1px solid rgba(255, 211, 128, 0.42);
+  border-radius: 16px;
+  background: rgba(18, 10, 5, 0.96);
   color: #ffe8b8;
-  padding: 9px 10px;
+  padding: 10px 11px;
   font-size: 0.78rem;
   font-weight: 800;
   line-height: 1.35;
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.28);
+  overflow-wrap: anywhere;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.36), 0 0 32px rgba(255, 190, 98, 0.12);
 }
 
-.ai-patch-note::before {
-  content: "AI note: ";
-  color: #ffce77;
+.ai-patch-callout strong {
+  width: fit-content;
+  border-radius: 999px;
+  background: #ffce77;
+  color: #1b1008;
+  padding: 3px 7px;
+  font-size: 0.62rem;
+  font-weight: 950;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ai-patch-callout span {
+  display: block;
+}
+
+.ai-patch-callout::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -9px;
+  width: 9px;
+  height: 1px;
+  background: rgba(255, 211, 128, 0.7);
+}
+
+.ai-patch-callout[data-placement="left"]::before {
+  right: -9px;
+  left: auto;
+}
+
+.ai-patch-callout[data-placement="below"]::before {
+  top: -9px;
+  left: 18px;
+  width: 1px;
+  height: 9px;
+}
+
+.ai-patch-callout[data-placement="above"]::before {
+  top: auto;
+  bottom: -9px;
+  left: 18px;
+  width: 1px;
+  height: 9px;
 }
 
 .ai-gen-card {

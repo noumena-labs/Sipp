@@ -56,6 +56,8 @@ number ::= ("-"? ([0-9] | [1-9] [0-9]*) ("." [0-9]+)? ([eE] [-+]? [0-9]+)?) ws
 ws ::= [ \t\n\r]*
 `.trim();
 
+const MAX_VISIBLE_CALLOUTS = 1;
+
 type SupportedPatchOp = typeof SUPPORTED_OPS[number];
 
 interface NormalizedPatchOperation {
@@ -245,9 +247,11 @@ export function applyDomPatches(
   root: HTMLElement,
   patches: readonly DomPatch[]
 ): readonly AppliedMutation[] {
-  removePatchNotes(root);
+  removePatchCallouts(root);
   const targetNodes = collectTargetNodes(root);
   const mutations: AppliedMutation[] = [];
+  let calloutLayer: HTMLElement | null = null;
+  let visibleNoteCount = 0;
 
   for (const patch of patches) {
     const target = targetNodes.get(patch.targetId);
@@ -286,9 +290,16 @@ export function applyDomPatches(
         break;
     }
 
-    if (patch.note) {
-      addPatchNote(target, patch.note);
-      mutations.push({ targetId: patch.targetId, summary: `Added explanatory note to ${patch.targetId}` });
+    if (patch.note && visibleNoteCount < MAX_VISIBLE_CALLOUTS) {
+      const noteTarget = resolveNoteTarget(patch.targetId, targetNodes);
+      const layer = calloutLayer ?? ensureCalloutLayer(root);
+      calloutLayer = layer;
+      addPatchCallout(root, layer, target, noteTarget, patch.note);
+      visibleNoteCount += 1;
+      mutations.push({
+        targetId: patch.targetId,
+        summary: `Added explanatory callout for ${patch.targetId}`,
+      });
     }
     target.dataset.aiModified = 'true';
   }
@@ -326,7 +337,7 @@ function renderSystemPrompt(config: DomPatchDirectorConfig): string {
     `You are the proactive UI director for ${config.scenarioName}. Inspect the screenshot first.`,
     'Return only JSON: {"observation":string,"intent":string,"patches":[Patch]}.',
     'Patch examples: {"op":"addClass","targetId":"goal-hydration","className":"ai-warning","note":"Hydration is missing. Add water before launch."} or {"op":"replaceText","targetId":"launch-button","text":"Ready","note":"All constraints are satisfied."}.',
-    'Every patch must include op, targetId, and a helpful note. Patch only listed target ids.',
+    'Every patch must include op and targetId. Use one primary helpful note. Prefer notes on goal-*, gear-*, coach-panel, launch-panel, or mission-checklist. Avoid long notes on meters, buttons, or storm-clock.',
     'Instructions:',
     ...config.instructions.map((instruction) => `- ${instruction}`),
   ].join('\n');
@@ -347,7 +358,7 @@ function renderUserPrompt(
   return [
     'Inspect the screenshot and help the user finish the field kit.',
     `State: readiness=${state.score.readiness}; weight=${state.score.totalWeight}/${FIELD_KIT_LIMITS.maxWeight}kg; budget=$${state.score.totalCost}/$${FIELD_KIT_LIMITS.maxBudget}; ready=${state.score.readyToLaunch}; missing=${missing}; covered=${covered}; selected=${selected}.`,
-    `Rules: maxPatches=${config.patchPolicy.maxPatches}; allowedClasses=${config.patchPolicy.allowedClasses.join('|')}; use only target ids below; every patch needs note; prefer the most important missing/risky item; output JSON only.`,
+    `Rules: maxPatches=${config.patchPolicy.maxPatches}; allowedClasses=${config.patchPolicy.allowedClasses.join('|')}; use only target ids below; include one primary note; prefer the most important missing/risky item; output JSON only.`,
     'Targets:',
     targetLines,
   ].join('\n\n');
@@ -649,18 +660,128 @@ function collectTargetNodes(root: HTMLElement): Map<string, HTMLElement> {
   );
 }
 
-function addPatchNote(target: HTMLElement, note: string): void {
-  const noteElement = document.createElement('span');
-  noteElement.className = 'ai-patch-note';
-  noteElement.dataset.aiPatchNote = 'true';
-  noteElement.textContent = note;
-  target.appendChild(noteElement);
+function ensureCalloutLayer(root: HTMLElement): HTMLElement {
+  const existing = root.querySelector<HTMLElement>('[data-ai-callout-layer="true"]');
+  if (existing) {
+    return existing;
+  }
+  const layer = document.createElement('div');
+  layer.className = 'ai-callout-layer';
+  layer.dataset.aiCalloutLayer = 'true';
+  root.appendChild(layer);
+  return layer;
 }
 
-function removePatchNotes(root: HTMLElement): void {
+function addPatchCallout(
+  root: HTMLElement,
+  layer: HTMLElement,
+  highlightTarget: HTMLElement,
+  noteTarget: HTMLElement,
+  note: string
+): void {
+  const callout = document.createElement('aside');
+  callout.className = 'ai-patch-callout';
+  callout.dataset.aiPatchNote = 'true';
+  callout.innerHTML = `<strong>AI note</strong><span></span>`;
+  callout.querySelector('span')!.textContent = note;
+  layer.appendChild(callout);
+  placePatchCallout(root, callout, highlightTarget, noteTarget);
+}
+
+function placePatchCallout(
+  root: HTMLElement,
+  callout: HTMLElement,
+  highlightTarget: HTMLElement,
+  noteTarget: HTMLElement
+): void {
+  const rootRect = root.getBoundingClientRect();
+  const targetRect = noteTarget.getBoundingClientRect();
+  const highlightRect = highlightTarget.getBoundingClientRect();
+  const calloutRect = callout.getBoundingClientRect();
+  const gap = 14;
+  const maxLeft = Math.max(12, rootRect.width - calloutRect.width - 12);
+  const maxTop = Math.max(12, rootRect.height - calloutRect.height - 12);
+
+  const rightLeft = targetRect.right - rootRect.left + gap;
+  const leftLeft = targetRect.left - rootRect.left - calloutRect.width - gap;
+  const belowTop = targetRect.bottom - rootRect.top + gap;
+  const aboveTop = targetRect.top - rootRect.top - calloutRect.height - gap;
+  const centeredTop = targetRect.top - rootRect.top + targetRect.height / 2 - calloutRect.height / 2;
+
+  let left = rightLeft;
+  let top = centeredTop;
+  let placement = 'right';
+
+  if (rightLeft + calloutRect.width > rootRect.width - 12 && leftLeft >= 12) {
+    left = leftLeft;
+    placement = 'left';
+  } else if (rightLeft + calloutRect.width > rootRect.width - 12 && belowTop + calloutRect.height <= rootRect.height - 12) {
+    left = targetRect.left - rootRect.left;
+    top = belowTop;
+    placement = 'below';
+  } else if (rightLeft + calloutRect.width > rootRect.width - 12 && aboveTop >= 12) {
+    left = targetRect.left - rootRect.left;
+    top = aboveTop;
+    placement = 'above';
+  }
+
+  callout.style.left = `${clamp(left, 12, maxLeft)}px`;
+  callout.style.top = `${clamp(top, 12, maxTop)}px`;
+  callout.dataset.placement = placement;
+  callout.style.setProperty('--anchor-x', `${clamp(highlightRect.left - rootRect.left + highlightRect.width / 2, 12, rootRect.width - 12)}px`);
+  callout.style.setProperty('--anchor-y', `${clamp(highlightRect.top - rootRect.top + highlightRect.height / 2, 12, rootRect.height - 12)}px`);
+}
+
+function resolveNoteTarget(
+  targetId: string,
+  targetNodes: ReadonlyMap<string, HTMLElement>
+): HTMLElement {
+  if (isSafeNoteTarget(targetId)) {
+    return targetNodes.get(targetId)!;
+  }
+
+  const safeFallbacks = [
+    targetId.startsWith('meter-') ? 'mission-checklist' : '',
+    targetId === 'storm-clock' ? 'mission-instructions' : '',
+    targetId === 'launch-button' ? 'launch-panel' : '',
+    'coach-panel',
+    'mission-checklist',
+  ].filter(Boolean);
+
+  for (const fallbackId of safeFallbacks) {
+    const fallback = targetNodes.get(fallbackId);
+    if (fallback) {
+      return fallback;
+    }
+  }
+
+  return targetNodes.get(targetId)!;
+}
+
+function isSafeNoteTarget(targetId: string): boolean {
+  return (
+    targetId.startsWith('goal-') ||
+    targetId.startsWith('gear-') ||
+    targetId === 'coach-panel' ||
+    targetId === 'launch-panel' ||
+    targetId === 'mission-checklist' ||
+    targetId === 'mission-instructions'
+  );
+}
+
+function removePatchCallouts(root: HTMLElement): void {
   for (const note of Array.from(root.querySelectorAll('[data-ai-patch-note="true"]'))) {
     note.remove();
   }
+  for (const layer of Array.from(root.querySelectorAll<HTMLElement>('[data-ai-callout-layer="true"]'))) {
+    if (layer.children.length === 0) {
+      layer.remove();
+    }
+  }
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 function parseAllowedOps(source: string): SupportedPatchOp[] {

@@ -540,13 +540,13 @@ function StartScreen(props: {
           <h1>Proactive UI that sees, reasons, and patches the DOM.</h1>
           <p>
             This demo loads a local vision model, captures a web app as an image, asks what the user
-            appears to be doing, then applies validated JSON DOM patches with visible notes.
+            appears to be doing, then applies validated JSON DOM patches with a visible callout.
           </p>
           <div className="start-steps">
             <span>1. Load model</span>
             <span>2. Pack the field kit</span>
             <span>3. Peek at UI</span>
-            <span>4. Watch DOM notes land</span>
+            <span>4. Watch callouts land</span>
           </div>
         </div>
 
@@ -875,6 +875,9 @@ function clearTransientAiArtifacts(root: HTMLElement, classNames: readonly strin
   }
   for (const note of Array.from(root.querySelectorAll('[data-ai-patch-note="true"]'))) {
     note.remove();
+  }
+  for (const layer of Array.from(root.querySelectorAll('[data-ai-callout-layer="true"]'))) {
+    layer.remove();
   }
   deleteModifiedFlags(root);
 }

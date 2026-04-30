@@ -6,8 +6,10 @@
     "Reason from the screenshot and supplied game state only.",
     "Patch only the targets listed in the compact DOM contract.",
     "Prefer one or two decisive patches over broad UI rewrites.",
-    "Every patch must include a short note explaining why it helps.",
-    "If something is missing, highlight the missing category or best gear card and explain it in note.",
+    "Use one primary short note explaining the most important patch.",
+    "Prefer notes on goal rows, gear cards, the coach panel, the launch panel, or the mission checklist.",
+    "Avoid long notes on tiny targets such as meters, buttons, or the storm clock.",
+    "If something is missing, highlight the missing category or best gear card and explain it in the primary note.",
     "If the screen already looks successful, add a concise success note instead of warnings."
   ],
   "patchPolicy": {
