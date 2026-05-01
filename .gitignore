@@ -7,6 +7,7 @@ build-check/
 build-probe/
 build-probe2/
 dist/
+apps/*/dist/
 packages/*/build/
 packages/*/build-*/
 packages/*/dist/
@@ -20,4 +21,3 @@ packages/*/a.out.wasm
 *.gguf
 
 logs/
-
