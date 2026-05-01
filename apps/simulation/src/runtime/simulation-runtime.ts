@@ -445,7 +445,7 @@ export class SimulationRuntime {
       signal: controller.signal,
       timeoutMs: this.agentQueryTimeoutMs,
     }).then((result) => {
-      if (this.disposed || controller.signal.aborted) return;
+      if (this.disposed || controller.signal.aborted || result.status === 'aborted') return;
       const current = this.state.agents.find((a) => a.id === chosenId);
       if (!current) return;
       if (result.status !== 'ok' || !result.goal) {
