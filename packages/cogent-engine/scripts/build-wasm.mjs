@@ -23,6 +23,7 @@ const enableJspi = true;
 const enableAggressiveOpt = true;
 const enablePthreads = readBooleanEnv('CE_WASM_PTHREADS', false);
 const suppressLlamaLogs = true;
+const suppressMtmdLogs = true;
 const emscriptenEnvironment = 'web,worker';
 const enableMemory64 = readBooleanEnv('CE_WASM_MEM64', true);
 const ltoMode = process.env.CE_WASM_LTO_MODE?.trim().toUpperCase() || (isWindows ? 'THIN' : 'FULL');
@@ -385,6 +386,7 @@ function shouldRunConfigure(expectedGenerator) {
   const cachedEsModule = getCacheEntry(cacheText, 'CE_WASM_ES_MODULE');
   const cachedAggressiveOpt = getCacheEntry(cacheText, 'CE_WASM_AGGRESSIVE_OPT');
   const cachedSuppressLlamaLogs = getCacheEntry(cacheText, 'CE_SUPPRESS_LLAMA_LOGS');
+  const cachedSuppressMtmdLogs = getCacheEntry(cacheText, 'MTMD_NO_LOGGING');
   const cachedPthreads = getCacheEntry(cacheText, 'CE_WASM_PTHREADS');
   const cachedJspi = getCacheEntry(cacheText, 'CE_WASM_USE_JSPI');
   const cachedEnvironment = getCacheEntry(cacheText, 'CE_WASM_ENVIRONMENT');
@@ -416,6 +418,10 @@ function shouldRunConfigure(expectedGenerator) {
   }
 
   if (cachedSuppressLlamaLogs && cachedSuppressLlamaLogs !== (suppressLlamaLogs ? 'ON' : 'OFF')) {
+    return true;
+  }
+
+  if (cachedSuppressMtmdLogs && cachedSuppressMtmdLogs !== (suppressMtmdLogs ? 'ON' : 'OFF')) {
     return true;
   }
 
@@ -672,6 +678,7 @@ const cmakeConfigureArgs = [
   `-DCE_WASM_FILESYSTEM=${enableFilesystem ? 'ON' : 'OFF'}`,
   `-DCE_WASM_AGGRESSIVE_OPT=${enableAggressiveOpt ? 'ON' : 'OFF'}`,
   `-DCE_SUPPRESS_LLAMA_LOGS=${suppressLlamaLogs ? 'ON' : 'OFF'}`,
+  `-DMTMD_NO_LOGGING=${suppressMtmdLogs ? 'ON' : 'OFF'}`,
   `-DCE_WASM_PTHREADS=${enablePthreads ? 'ON' : 'OFF'}`,
   `-DCE_WASM_USE_JSPI=${enableJspi ? 'ON' : 'OFF'}`,
   `-DCE_WASM_ENVIRONMENT=${emscriptenEnvironment}`,

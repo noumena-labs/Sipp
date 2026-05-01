@@ -27,6 +27,8 @@ add_compile_options(${CE_WASM_COMPILE_FLAGS})
 
 option(CE_BUILD_WEBGPU_TEST_BACKEND_OPS "Build llama.cpp test-backend-ops for browser-hosted WebGPU execution" OFF)
 
+option(MTMD_NO_LOGGING "Suppress all multimodal logging" OFF)
+
 function(ce_apply_emscripten_cli_target TARGET_NAME EXPORT_NAME)
   if (NOT EMSCRIPTEN OR NOT TARGET ${TARGET_NAME})
     return()
@@ -159,6 +161,10 @@ if(TARGET llama-common)
 endif()
 if(TARGET common)
     target_link_libraries(CogentEngine PRIVATE common)
+endif()
+
+if (MTMD_NO_LOGGING)
+    add_compile_definitions(MTMD_NO_LOGGING)
 endif()
 
 if(NOT MSVC)

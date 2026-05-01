@@ -43,7 +43,6 @@ export interface InferenceInitConfig {
   enableBackendProfiling?: boolean;
   multimodalProjectorPath?: string;
   multimodalUseGpu?: boolean;
-  debugCompareMultimodalEmbeddings?: boolean;
   imageMinTokens?: number;
   imageMaxTokens?: number;
   sampling?: SamplingConfig;

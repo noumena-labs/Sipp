@@ -45,7 +45,6 @@ export interface ModelRuntimeOptions {
   decodeTokenReserve?: number;
   adaptivePrefillChunking?: boolean;
   multimodalUseGpu?: boolean;
-  debugCompareMultimodalEmbeddings?: boolean;
   imageMinTokens?: number;
   imageMaxTokens?: number;
   sampling?: InferenceInitConfig['sampling'];

@@ -45,7 +45,6 @@ typedef struct CE_InitConfig {
   int32_t enable_backend_profiling;
   const char *mmproj_path;
   int32_t multimodal_use_gpu;
-  int32_t debug_compare_multimodal_embeddings;
   int32_t image_min_tokens;
   int32_t image_max_tokens;
   int32_t sampling_repeat_last_n;

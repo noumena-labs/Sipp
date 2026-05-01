@@ -33,7 +33,6 @@ struct InferenceRuntimeConfig {
   int32_t max_prefix_cache_entries = 32;
   std::string mmproj_path;
   int32_t multimodal_use_gpu = -1;
-  int32_t debug_compare_multimodal_embeddings = 0;
   int32_t image_min_tokens = 0;
   int32_t image_max_tokens = 0;
   int32_t sampling_repeat_last_n = 64;

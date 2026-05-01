@@ -324,8 +324,6 @@ int CE_InitPlugin(const char *model_path, const CE_InitConfig *config) {
         config->multimodal_use_gpu,
         static_cast<int32_t>(-1),
         static_cast<int32_t>(1));
-    runtime_config.debug_compare_multimodal_embeddings =
-        config->debug_compare_multimodal_embeddings > 0 ? 1 : 0;
     runtime_config.image_min_tokens =
         config->image_min_tokens > 0 ? config->image_min_tokens : 0;
     runtime_config.image_max_tokens =

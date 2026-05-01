@@ -37,8 +37,7 @@
     "simulation:preview": "bun run --filter=cogent-engine-simulation-app preview",
     "examples:dev": "bun run build:package && bun run --filter=cogent-engine-examples dev",
     "examples:build": "bun run build:package && bun run --filter=cogent-engine-examples build",
-    "examples:preview": "bun run --filter=cogent-engine-examples preview",
-    "bench:browser": "bun ./scripts/benchmark-browser.mjs"
+    "examples:preview": "bun run --filter=cogent-engine-examples preview"
   },
   "devDependencies": {
     "playwright-core": "^1.54.2"

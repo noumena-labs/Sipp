@@ -27,7 +27,6 @@ export interface NormalizedInitConfig {
   enableBackendProfiling: number;
   multimodalProjectorPath: string | null;
   multimodalUseGpu: number;
-  debugCompareMultimodalEmbeddings: number;
   imageMinTokens: number;
   imageMaxTokens: number;
   samplingRepeatLastN: number;
@@ -265,9 +264,6 @@ export function normalizeInitConfig(config: InferenceInitConfig | undefined): No
     config?.multimodalUseGpu,
     DEFAULT_MULTIMODAL_USE_GPU
   );
-  const debugCompareMultimodalEmbeddings = normalizeRequiredBoolean(
-    config?.debugCompareMultimodalEmbeddings
-  );
   if (imageMinTokens > 0 && imageMaxTokens > 0 && imageMaxTokens < imageMinTokens) {
     throw new Error('"imageMaxTokens" must be >= "imageMinTokens".');
   }
@@ -306,7 +302,6 @@ export function normalizeInitConfig(config: InferenceInitConfig | undefined): No
     enableBackendProfiling,
     multimodalProjectorPath,
     multimodalUseGpu,
-    debugCompareMultimodalEmbeddings,
     imageMinTokens,
     imageMaxTokens,
     ...samplingConfig,

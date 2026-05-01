@@ -49,8 +49,6 @@ normalize_config(noumena::cogentengine::InferenceRuntimeConfig config) {
   config.image_max_tokens = std::max<int32_t>(0, config.image_max_tokens);
   config.multimodal_use_gpu =
       std::clamp<int32_t>(config.multimodal_use_gpu, -1, 1);
-  config.debug_compare_multimodal_embeddings =
-      config.debug_compare_multimodal_embeddings > 0 ? 1 : 0;
   config.sampling_repeat_last_n =
       std::max<int32_t>(0, config.sampling_repeat_last_n);
   config.sampling_repeat_penalty =
@@ -106,9 +104,8 @@ bool token_to_piece_string(const llama_vocab *vocab, llama_token token,
   }
 
   out_piece.resize(static_cast<std::size_t>(required_length));
-  const int32_t retry_length =
-      llama_token_to_piece(vocab, token, out_piece.data(), required_length, 0,
-                           special);
+  const int32_t retry_length = llama_token_to_piece(
+      vocab, token, out_piece.data(), required_length, 0, special);
   if (retry_length != required_length) {
     out_piece.clear();
     return false;
@@ -119,8 +116,7 @@ bool token_to_piece_string(const llama_vocab *vocab, llama_token token,
 bool token_to_piece_buffer(const llama_vocab *vocab, llama_token token,
                            bool special, char *stack_buffer,
                            std::size_t stack_buffer_size,
-                           std::string &overflow_piece,
-                           const char *&piece_data,
+                           std::string &overflow_piece, const char *&piece_data,
                            std::size_t &piece_size) {
   overflow_piece.clear();
   piece_data = nullptr;
@@ -132,8 +128,7 @@ bool token_to_piece_buffer(const llama_vocab *vocab, llama_token token,
 
   const int32_t piece_length =
       llama_token_to_piece(vocab, token, stack_buffer,
-                           static_cast<int32_t>(stack_buffer_size), 0,
-                           special);
+                           static_cast<int32_t>(stack_buffer_size), 0, special);
   if (piece_length >= 0) {
     piece_data = stack_buffer;
     piece_size = static_cast<std::size_t>(piece_length);
@@ -170,8 +165,7 @@ std::size_t incomplete_utf8_tail_length(const char *data, std::size_t size) {
   };
   const std::size_t max_lookback = std::min<std::size_t>(size, 4u);
   for (std::size_t offset = 1; offset <= max_lookback; ++offset) {
-    const unsigned char byte =
-        static_cast<unsigned char>(data[size - offset]);
+    const unsigned char byte = static_cast<unsigned char>(data[size - offset]);
     if (is_continuation(byte)) {
       continue;
     }
@@ -919,15 +913,14 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
             // sampler must run first so downstream samplers operate on
             // the grammar-constrained logits.
             llama_sampler_chain_add(slot->sampler, grammar_sampler);
-            llama_sampler_chain_add(
-                slot->sampler, llama_sampler_init_penalties(
-                                   config_.sampling_repeat_last_n,
-                                   config_.sampling_repeat_penalty,
-                                   config_.sampling_frequency_penalty,
-                                   config_.sampling_presence_penalty));
-            llama_sampler_chain_add(
-                slot->sampler,
-                llama_sampler_init_top_k(config_.sampling_top_k));
+            llama_sampler_chain_add(slot->sampler,
+                                    llama_sampler_init_penalties(
+                                        config_.sampling_repeat_last_n,
+                                        config_.sampling_repeat_penalty,
+                                        config_.sampling_frequency_penalty,
+                                        config_.sampling_presence_penalty));
+            llama_sampler_chain_add(slot->sampler, llama_sampler_init_top_k(
+                                                       config_.sampling_top_k));
             llama_sampler_chain_add(
                 slot->sampler,
                 llama_sampler_init_top_p(config_.sampling_top_p, 1));
@@ -940,9 +933,8 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
                 slot->sampler,
                 llama_sampler_init_temp(config_.sampling_temperature));
             llama_sampler_chain_add(
-                slot->sampler,
-                llama_sampler_init_dist(
-                    resolve_sampling_seed(config_.sampling_seed)));
+                slot->sampler, llama_sampler_init_dist(resolve_sampling_seed(
+                                   config_.sampling_seed)));
           }
         }
       } else {
@@ -1030,10 +1022,10 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       config_.scheduler_policy,
       static_cast<int32_t>(scratch_live_decode_ready_slots_.size()),
       static_cast<int32_t>(scratch_live_prefill_ready_slots_.size()),
-      batch_token_budget,
-      config_.prefill_chunk_size);
+      batch_token_budget, config_.prefill_chunk_size);
   const int32_t effective_prefill_chunk_size = ResolvePrefillChunkSizeLocked(
-      tick_budget, static_cast<int32_t>(scratch_live_decode_ready_slots_.size()),
+      tick_budget,
+      static_cast<int32_t>(scratch_live_decode_ready_slots_.size()),
       static_cast<int32_t>(scratch_live_prefill_ready_slots_.size()));
   SharedBatchPlan plan = batch_planner_.BuildPolicyBatch(
       scratch_live_decode_ready_slots_, scratch_live_prefill_ready_slots_,
@@ -1052,9 +1044,8 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
 
     const auto mark_request = [](std::vector<GenerateRequest *> &requests,
                                  GenerateRequest *request) {
-      if (request == nullptr ||
-          std::find(requests.begin(), requests.end(), request) !=
-              requests.end()) {
+      if (request == nullptr || std::find(requests.begin(), requests.end(),
+                                          request) != requests.end()) {
         return;
       }
       requests.push_back(request);
@@ -1233,8 +1224,8 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     const char *piece_data = nullptr;
     std::size_t piece_size = 0;
     if (!token_to_piece_buffer(vocab, next_token, false, piece_buffer,
-                               sizeof(piece_buffer), piece_overflow,
-                               piece_data, piece_size)) {
+                               sizeof(piece_buffer), piece_overflow, piece_data,
+                               piece_size)) {
       slot.terminal_error_message =
           "Failed to convert sampled token to text piece.";
       slot.phase = SlotPhase::Failed;
@@ -1328,20 +1319,20 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
         static_cast<std::size_t>(std::max(1, plan.occupied_slot_count)));
 
     const auto ensure_attribution =
-        [&request_attributions](GenerateRequest *request)
-        -> RequestTickAttribution * {
-          if (request == nullptr) {
-            return nullptr;
-          }
-          for (RequestTickAttribution &attribution : request_attributions) {
-            if (attribution.request == request) {
-              return &attribution;
-            }
-          }
-          request_attributions.push_back(
-              RequestTickAttribution{.request = request});
-          return &request_attributions.back();
-        };
+        [&request_attributions](
+            GenerateRequest *request) -> RequestTickAttribution * {
+      if (request == nullptr) {
+        return nullptr;
+      }
+      for (RequestTickAttribution &attribution : request_attributions) {
+        if (attribution.request == request) {
+          return &attribution;
+        }
+      }
+      request_attributions.push_back(
+          RequestTickAttribution{.request = request});
+      return &request_attributions.back();
+    };
 
     for (const BatchContribution &contribution : plan.contributions) {
       if (contribution.slot == nullptr ||
@@ -1701,8 +1692,6 @@ InferenceRuntime::InferenceRuntime(std::string model_path,
     mtmd_params.use_gpu = config_.multimodal_use_gpu >= 0
                               ? config_.multimodal_use_gpu != 0
                               : config_.gpu_layers != 0;
-    // mtmd_params.debug_compare_embeddings =
-    //     config_.debug_compare_multimodal_embeddings > 0;
     mtmd_params.print_timings = false;
     mtmd_params.n_threads = config_.n_threads > 0
                                 ? config_.n_threads
@@ -1872,12 +1861,10 @@ void InferenceRuntime::ResetRuntimeObservability() {
   committed_observability_request_ids_.clear();
 }
 
-GenerateRequestId
-InferenceRuntime::EnqueueRequest(std::string context_key, std::string prompt,
-                                 int n_tokens_predict,
-                                 TokenCallback on_token_received,
-                                 std::string grammar,
-                                 GenerateTokenEmissionMode token_emission_mode) {
+GenerateRequestId InferenceRuntime::EnqueueRequest(
+    std::string context_key, std::string prompt, int n_tokens_predict,
+    TokenCallback on_token_received, std::string grammar,
+    GenerateTokenEmissionMode token_emission_mode) {
   // Fast-fail without lock (model pointer is immutable after construction).
   if (primary_model_ == nullptr || sampler_ == nullptr) {
     return 0;
@@ -1923,8 +1910,7 @@ InferenceRuntime::EnqueueRequest(std::string context_key, std::string prompt,
 GenerateRequestId InferenceRuntime::EnqueueMultimodalRequest(
     std::string context_key, std::string prompt, int n_tokens_predict,
     std::vector<std::pair<const std::uint8_t *, std::size_t>> image_views,
-    TokenCallback on_token_received,
-    std::string grammar,
+    TokenCallback on_token_received, std::string grammar,
     GenerateTokenEmissionMode token_emission_mode) {
   if (primary_model_ == nullptr || sampler_ == nullptr ||
       mtmd_ctx_ == nullptr || !mtmd_support_vision(mtmd_ctx_)) {

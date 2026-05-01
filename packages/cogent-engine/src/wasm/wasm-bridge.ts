@@ -181,11 +181,9 @@ export class WasmBridge {
         'number',
         'number',
         'number',
-        'number',
       ]
       : [
         'string',
-        'number',
         'number',
         'number',
         'number',
@@ -240,7 +238,6 @@ export class WasmBridge {
         normalizedConfig.enableBackendProfiling,
         normalizedConfig.multimodalProjectorPath ?? '',
         normalizedConfig.multimodalUseGpu,
-        normalizedConfig.debugCompareMultimodalEmbeddings,
         normalizedConfig.imageMinTokens,
         normalizedConfig.imageMaxTokens,
         normalizedConfig.samplingRepeatLastN,
@@ -275,7 +272,6 @@ export class WasmBridge {
         normalizedConfig.enableRuntimeObservability,
         normalizedConfig.enableBackendProfiling,
         normalizedConfig.multimodalUseGpu,
-        normalizedConfig.debugCompareMultimodalEmbeddings,
         normalizedConfig.samplingRepeatLastN,
         normalizedConfig.samplingRepeatPenalty,
         normalizedConfig.samplingFrequencyPenalty,

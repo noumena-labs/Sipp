@@ -114,7 +114,6 @@ function toRuntimeConfig(
     enableRuntimeObservability: effectiveOptions.enableRuntimeObservability,
     enableBackendProfiling: effectiveOptions.enableBackendProfiling,
     multimodalUseGpu: effectiveOptions.multimodalUseGpu,
-    debugCompareMultimodalEmbeddings: effectiveOptions.debugCompareMultimodalEmbeddings,
     imageMinTokens: effectiveOptions.imageMinTokens,
     imageMaxTokens: effectiveOptions.imageMaxTokens,
     sampling: effectiveOptions.sampling,
