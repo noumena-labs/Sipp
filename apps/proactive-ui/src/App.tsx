@@ -1,89 +1,184 @@
-import { useEffect, useRef, useState } from 'react';
-import { flushSync } from 'react-dom';
-import { CogentEngine } from '@noumena-labs/cogent-engine';
-import { toCanvas } from 'html-to-image';
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { CogentEngine, type RuntimeObservation } from '@noumena-labs/cogent-engine';
 import {
-  applyDomPatches,
-  collectPatchTargets,
-  DEFAULT_PATCH_DIRECTOR_CONFIG,
-  DomPatchDirector,
-  loadDomPatchDirectorConfig,
-  type AppliedMutation,
-  type DomPatch,
-  type DomPatchDirectorConfig,
-  type RejectedPatch,
-} from './dom-patch';
-import {
-  calculateFieldKitScore,
-  categoryLabel,
-  CATEGORY_GOALS,
-  FIELD_KIT_LIMITS,
-  GEAR_ITEMS,
-  type GearItem,
-} from './game-data';
+  DEFAULT_DRAWING_DIRECTOR_CONFIG,
+  DRAWING_COLORS,
+  DrawingDirector,
+  HECKLE_VOICES,
+  loadDrawingDirectorConfig,
+  type CapturedDrawing,
+  type CapturePresetId,
+  type DrawingColor,
+  type DrawingDirectorConfig,
+  type HeckleVoice,
+} from './drawing-director';
 
 const DEFAULT_MODEL_URL =
   'https://huggingface.co/LiquidAI/LFM2.5-VL-450M-GGUF/resolve/main/LFM2.5-VL-450M-F16.gguf';
 const DEFAULT_PROJECTOR_URL =
   'https://huggingface.co/LiquidAI/LFM2.5-VL-450M-GGUF/resolve/main/mmproj-LFM2.5-VL-450m-F16.gguf';
-const DIRECTOR_CONFIG_URL = '/directors/field-kit/dom-patch-director.json';
-const INITIAL_COACH_HTML = `
-  <h3 class="ai-gen-title">Proactive coach</h3>
-  <p class="ai-gen-note">Click gear cards to pack the kit, then run a peek. Cogent Engine can project a custom tradeoff lens and highlight what matters.</p>
-`;
-const INITIAL_SYNTHESIS_HTML = `
-  <div class="ai-synth-card">
-    <p class="ai-synth-kicker">AI projection layer</p>
-    <h3 class="ai-synth-title">Run a peek to generate a mission tradeoff lens.</h3>
-    <p class="ai-synth-why">The model can synthesize coverage, budget, weight, and selected item tradeoffs into custom UI for this exact kit.</p>
-  </div>
-`;
+const DIRECTOR_CONFIG_URL = '/directors/sketch-lab/drawing-director.json';
+const DRAWING_WIDTH = 800;
+const DRAWING_HEIGHT = 520;
+const DRAWING_BACKGROUND = '#fbf7ef';
+const DRAWING_BACKGROUND_RGB = { r: 251, g: 247, b: 239 };
+const INITIAL_COMMENT = 'Draw something. I am warming up my tiny art critic goggles.';
+const INITIAL_GUESS = 'waiting for ink';
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error';
-type VisionState = 'idle' | 'capturing' | 'compressing' | 'thinking' | 'patching' | 'error';
-type PeekSource = 'manual' | 'auto';
-type CaptureMode = 'fast' | 'detailed';
+type VisionState = 'idle' | 'capturing' | 'encoding' | 'thinking' | 'error';
+type InferenceSource = 'manual' | 'auto';
 
 interface LoadProgressState {
   readonly phase: string;
   readonly assetName?: string;
   readonly percent: number | null;
+  readonly overallPercent: number;
+}
+
+interface ProgressAggregator {
+  assetOrder: string[];
+  perAssetDownloadPercent: Map<string, number>;
+  perAssetStorePercent: Map<string, number>;
+  loadPhaseStarted: boolean;
+  loadPhasePercent: number;
+}
+
+const PROGRESS_WEIGHTS = {
+  modelDownload: 55,
+  modelStore: 5,
+  projectorDownload: 30,
+  projectorStore: 3,
+  load: 7,
+} as const;
+
+function createProgressAggregator(): ProgressAggregator {
+  return {
+    assetOrder: [],
+    perAssetDownloadPercent: new Map(),
+    perAssetStorePercent: new Map(),
+    loadPhaseStarted: false,
+    loadPhasePercent: 0,
+  };
+}
+
+function ingestProgress(agg: ProgressAggregator, phase: string, assetName: string | undefined, percent: number | null): number {
+  const name = assetName ?? '__unknown__';
+  if (phase === 'metadata' || phase === 'download' || phase === 'store') {
+    if (!agg.assetOrder.includes(name)) {
+      agg.assetOrder.push(name);
+    }
+  }
+  const safePct = percent == null ? null : Math.max(0, Math.min(100, percent));
+  if (phase === 'download' && safePct != null) {
+    agg.perAssetDownloadPercent.set(name, safePct);
+  } else if (phase === 'store' && safePct != null) {
+    agg.perAssetStorePercent.set(name, safePct);
+  } else if (phase === 'load') {
+    agg.loadPhaseStarted = true;
+    agg.loadPhasePercent = safePct ?? Math.max(agg.loadPhasePercent, 10);
+    // When load phase begins, any earlier asset that never reported download/store
+    // was served from cache. Mark them as fully complete so the bar advances.
+    for (const asset of agg.assetOrder) {
+      if (!agg.perAssetDownloadPercent.has(asset)) {
+        agg.perAssetDownloadPercent.set(asset, 100);
+      }
+      if (!agg.perAssetStorePercent.has(asset)) {
+        agg.perAssetStorePercent.set(asset, 100);
+      }
+    }
+    // If we never saw a projector asset by the time load starts, assume it shared
+    // the model file (single-file bundle) and credit its weights as complete.
+    if (agg.assetOrder.length < 2) {
+      agg.assetOrder.push('__projector_assumed__');
+      agg.perAssetDownloadPercent.set('__projector_assumed__', 100);
+      agg.perAssetStorePercent.set('__projector_assumed__', 100);
+    }
+  }
+
+  // Resolve which asset is model (first seen) vs projector (second seen).
+  const modelName = agg.assetOrder[0];
+  const projectorName = agg.assetOrder[1];
+  const modelDl = modelName ? agg.perAssetDownloadPercent.get(modelName) ?? 0 : 0;
+  const modelStore = modelName ? agg.perAssetStorePercent.get(modelName) ?? 0 : 0;
+  const projDl = projectorName ? agg.perAssetDownloadPercent.get(projectorName) ?? 0 : 0;
+  const projStore = projectorName ? agg.perAssetStorePercent.get(projectorName) ?? 0 : 0;
+
+  const overall =
+    (modelDl / 100) * PROGRESS_WEIGHTS.modelDownload +
+    (modelStore / 100) * PROGRESS_WEIGHTS.modelStore +
+    (projDl / 100) * PROGRESS_WEIGHTS.projectorDownload +
+    (projStore / 100) * PROGRESS_WEIGHTS.projectorStore +
+    (agg.loadPhasePercent / 100) * PROGRESS_WEIGHTS.load;
+
+  return Math.max(0, Math.min(100, Math.round(overall)));
+}
+
+interface CapturePreset {
+  readonly maxWidth: number;
+  readonly maxHeight: number;
+  readonly quality: number;
+}
+
+interface CapturedDrawingAsset extends CapturedDrawing {
+  readonly url: string;
+  readonly composeMs: number;
+  readonly encodeMs: number;
 }
 
 interface TraceState {
   readonly id: number;
-  readonly source: PeekSource;
+  readonly source: InferenceSource;
+  readonly preset: CapturePresetId;
   readonly visionState: VisionState;
   readonly status: string;
   readonly startedAt: string;
-  readonly durationMs?: number;
-  readonly screenshotUrl?: string;
-  readonly screenshotBytes?: number;
-  readonly screenshotWidth?: number;
-  readonly screenshotHeight?: number;
-  readonly captureMode?: CaptureMode;
-  readonly targetCount?: number;
-  readonly promptPreview?: string;
-  readonly rawText?: string;
-  readonly observation?: string;
-  readonly intent?: string;
-  readonly patches?: readonly DomPatch[];
-  readonly rejectedPatches?: readonly RejectedPatch[];
-  readonly appliedMutations?: readonly AppliedMutation[];
+  readonly captureUrl?: string;
+  readonly captureBytes?: number;
+  readonly captureWidth?: number;
+  readonly captureHeight?: number;
+  readonly cropX?: number;
+  readonly cropY?: number;
+  readonly cropWidth?: number;
+  readonly cropHeight?: number;
+  readonly composeMs?: number;
+  readonly encodeMs?: number;
+  readonly inferenceMs?: number;
+  readonly perceptionMs?: number;
+  readonly heckleMs?: number;
+  readonly totalMs?: number;
+  readonly subject?: string;
+  readonly features?: readonly string[];
+  readonly weirdDetail?: string;
+  readonly lineQuality?: string;
+  readonly parseStatus?: 'parsed' | 'fallback';
+  readonly parseNote?: string;
+  readonly heckleParseStatus?: 'parsed' | 'fallback';
+  readonly heckleParseNote?: string;
+  readonly comment?: string;
+  readonly guess?: string;
+  readonly perceptionPromptPreview?: string;
+  readonly hecklePromptPreview?: string;
+  readonly perceptionRawText?: string;
+  readonly heckleRawText?: string;
+  readonly runtime?: RuntimeObservation | null;
   readonly errorMessage?: string;
 }
 
-interface CapturedImage {
-  readonly bytes: Uint8Array;
-  readonly url: string;
-  readonly width: number;
-  readonly height: number;
-  readonly byteLength: number;
+interface DrawingPoint {
+  readonly x: number;
+  readonly y: number;
 }
 
-const CAPTURE_PRESETS: Record<CaptureMode, { maxWidth: number; maxHeight: number; quality: number }> = {
-  fast: { maxWidth: 560, maxHeight: 760, quality: 0.62 },
-  detailed: { maxWidth: 1120, maxHeight: 1400, quality: 0.86 },
+interface DrawingSessionRef {
+  readonly pointerId: number;
+  readonly points: DrawingPoint[];
+  lastPoint: DrawingPoint;
+}
+
+const CAPTURE_PRESETS: Record<CapturePresetId, CapturePreset> = {
+  turbo: { maxWidth: 224, maxHeight: 224, quality: 0.48 },
+  trace: { maxWidth: 336, maxHeight: 336, quality: 0.68 },
 };
 
 export default function App() {
@@ -93,29 +188,42 @@ export default function App() {
   const [loadProgress, setLoadProgress] = useState<LoadProgressState | null>(null);
   const [status, setStatus] = useState('Load a vision model to begin.');
   const [visionState, setVisionState] = useState<VisionState>('idle');
-  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set(['paper-map']));
-  const [autoPeek, setAutoPeek] = useState(false);
-  const [captureMode, setCaptureMode] = useState<CaptureMode>('fast');
+  const [selectedColor, setSelectedColor] = useState<DrawingColor>('#111827');
+  const [penSize, setPenSize] = useState(12);
+  const [autoInfer, setAutoInfer] = useState(true);
+  const [capturePreset, setCapturePreset] = useState<CapturePresetId>('turbo');
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [trace, setTrace] = useState<TraceState | null>(null);
-  const [directorConfig, setDirectorConfig] = useState<DomPatchDirectorConfig>(DEFAULT_PATCH_DIRECTOR_CONFIG);
-  const workspaceRef = useRef<HTMLDivElement | null>(null);
+  const [comment, setComment] = useState(INITIAL_COMMENT);
+  const [guess, setGuess] = useState(INITIAL_GUESS);
+  const [heckleVoice, setHeckleVoice] = useState<HeckleVoice>(HECKLE_VOICES[0]);
+  const [strokeCount, setStrokeCount] = useState(0);
+  const [historyDepth, setHistoryDepth] = useState(0);
+  const [runtimeObservation, setRuntimeObservation] = useState<RuntimeObservation | null>(null);
+  const [directorConfig, setDirectorConfig] = useState<DrawingDirectorConfig>(DEFAULT_DRAWING_DIRECTOR_CONFIG);
+
+  const userCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const engineRef = useRef<CogentEngine | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const screenshotUrlRef = useRef<string | null>(null);
-  const peekRef = useRef<((source: PeekSource) => Promise<void>) | null>(null);
-  const busyRef = useRef(false);
+  const unsubscribeObservabilityRef = useRef<(() => void) | null>(null);
+  const captureUrlRef = useRef<string | null>(null);
+  const activeDrawingRef = useRef<DrawingSessionRef | null>(null);
+  const historyRef = useRef<ImageData[]>([]);
+  const autoTimerRef = useRef<number | null>(null);
   const traceIdRef = useRef(0);
+  const strokeCountRef = useRef(0);
+  const autoInferRef = useRef(autoInfer);
+  const runtimeObservationRef = useRef<RuntimeObservation | null>(null);
+  const runInferenceRef = useRef<((source: InferenceSource, preset?: CapturePresetId) => Promise<void>) | null>(null);
 
-  const score = calculateFieldKitScore(selectedIds);
-  const selectedKey = Array.from(selectedIds).sort().join('|');
   const engineReady = loadState === 'ready' && engineRef.current != null;
-  const busy = loadState === 'loading' || visionState === 'capturing' || visionState === 'compressing' || visionState === 'thinking' || visionState === 'patching';
-  busyRef.current = busy;
+  const busy = loadState === 'loading' || (visionState !== 'idle' && visionState !== 'error');
+  autoInferRef.current = autoInfer;
+  runtimeObservationRef.current = runtimeObservation;
 
   useEffect(() => {
     let cancelled = false;
-    void loadDomPatchDirectorConfig(DIRECTOR_CONFIG_URL)
+    void loadDrawingDirectorConfig(DIRECTOR_CONFIG_URL)
       .then((config) => {
         if (!cancelled) {
           setDirectorConfig(config);
@@ -123,7 +231,7 @@ export default function App() {
       })
       .catch((error) => {
         if (!cancelled) {
-          setStatus(`Using built-in director config: ${(error as Error).message}`);
+          setStatus(`Using built-in drawing director: ${(error as Error).message}`);
         }
       });
     return () => {
@@ -134,22 +242,24 @@ export default function App() {
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
-      engineRef.current?.close();
-      if (screenshotUrlRef.current) {
-        URL.revokeObjectURL(screenshotUrlRef.current);
+      unsubscribeObservabilityRef.current?.();
+      void engineRef.current?.close();
+      if (captureUrlRef.current) {
+        URL.revokeObjectURL(captureUrlRef.current);
+      }
+      if (autoTimerRef.current != null) {
+        window.clearTimeout(autoTimerRef.current);
       }
     };
   }, []);
 
   useEffect(() => {
-    if (!autoPeek || !engineReady || busyRef.current) {
+    if (!engineReady) {
       return;
     }
-    const timeout = window.setTimeout(() => {
-      void peekRef.current?.('auto');
-    }, 1600);
-    return () => window.clearTimeout(timeout);
-  }, [autoPeek, engineReady, selectedKey]);
+    resetUserCanvas();
+    setStatus('Canvas ready. Draw and the model will heckle after each stroke.');
+  }, [engineReady]);
 
   const handleLoad = async (): Promise<void> => {
     const trimmedModel = modelUrl.trim();
@@ -161,211 +271,417 @@ export default function App() {
     }
 
     abortRef.current?.abort();
-    abortRef.current = null;
+    unsubscribeObservabilityRef.current?.();
+    unsubscribeObservabilityRef.current = null;
+    clearScheduledInference();
+    setRuntimeObservation(null);
+    runtimeObservationRef.current = null;
     setLoadState('loading');
-    setLoadProgress({ phase: 'create', percent: null });
+    const progressAgg = createProgressAggregator();
+    setLoadProgress({ phase: 'create', percent: null, overallPercent: 1 });
     setStatus('Creating Cogent Engine instance...');
 
+    let nextEngine: CogentEngine | null = null;
     try {
-      const nextEngine = await CogentEngine.create();
+      nextEngine = await CogentEngine.create();
+      unsubscribeObservabilityRef.current = nextEngine.observability.subscribe((event) => {
+        setRuntimeObservation(event.snapshot.runtime ?? null);
+        runtimeObservationRef.current = event.snapshot.runtime ?? null;
+      });
+
       setStatus('Downloading vision model and projector...');
       await nextEngine.models.load(
         { model: trimmedModel, projector: trimmedProjector },
         {
+          observability: 'runtime',
           onProgress: (progress) => {
+            const overallPercent = ingestProgress(progressAgg, progress.phase, progress.assetName, progress.percent);
             setLoadProgress({
               phase: progress.phase,
               ...(progress.assetName ? { assetName: progress.assetName } : {}),
               percent: progress.percent,
+              overallPercent,
             });
             if (progress.phase === 'download') {
               const asset = progress.assetName ? ` ${progress.assetName}` : '';
-              setStatus(`Downloading${asset}... ${Math.floor(progress.percent ?? 0)}%`);
+              setStatus(`Downloading${asset}... ${Math.floor(progress.percent ?? 0)}% (${overallPercent}% overall)`);
             } else if (progress.phase === 'load') {
-              setStatus('Loading model into memory...');
+              setStatus(`Loading fast vision runtime... (${overallPercent}% overall)`);
             } else if (progress.phase === 'metadata') {
-              setStatus('Resolving model metadata...');
+              setStatus(`Resolving model metadata... (${overallPercent}% overall)`);
             } else if (progress.phase === 'store') {
-              setStatus('Storing model assets...');
+              setStatus(`Storing model assets... (${overallPercent}% overall)`);
             }
           },
           runtime: {
-            imageMinTokens: 64,
-            imageMaxTokens: 256,
+            nCtx: 1024,
+            nBatch: 256,
+            nUbatch: 128,
+            imageMinTokens: 24,
+            imageMaxTokens: 96,
+            schedulerPolicy: 'latency-first',
+            maxCachedSessions: 2,
+            retainedPrefixTokens: 256,
+            prefixCacheIntervalTokens: 32,
+            prefillChunkSize: 256,
+            decodeTokenReserve: 128,
             sampling: {
-              temperature: 0.12,
-              topP: 0.9,
-              topK: 30,
-              minP: 0.05,
-              repeatPenalty: 1.04,
+              temperature: 0.45,
+              topP: 0.85,
+              topK: 32,
+              minP: 0.04,
+              repeatPenalty: 1.05,
             },
           },
         }
       );
-      engineRef.current?.close();
+
+      void engineRef.current?.close();
       engineRef.current = nextEngine;
+      nextEngine = null;
       setLoadProgress({ phase: 'ready', percent: 100 });
       setLoadState('ready');
       setDrawerOpen(true);
-      setStatus('Vision model ready. Demo started automatically.');
+      setStatus('Vision model ready. Fast sketch loop armed.');
     } catch (error) {
       setLoadState('error');
       setStatus(`Load failed: ${(error as Error).message}`);
+      unsubscribeObservabilityRef.current?.();
+      unsubscribeObservabilityRef.current = null;
+      void nextEngine?.close();
     }
   };
 
   const handleChangeModel = (): void => {
     abortRef.current?.abort();
-    engineRef.current?.close();
+    unsubscribeObservabilityRef.current?.();
+    unsubscribeObservabilityRef.current = null;
+    clearScheduledInference();
+    void engineRef.current?.close();
     engineRef.current = null;
-    setAutoPeek(false);
+    setAutoInfer(false);
     setLoadProgress(null);
     setLoadState('idle');
     setVisionState('idle');
+    setRuntimeObservation(null);
     setStatus('Load a vision model to begin.');
   };
 
-  const handleVisionPeek = async (source: PeekSource): Promise<void> => {
-    const root = workspaceRef.current;
+  const runInference = async (source: InferenceSource, preset: CapturePresetId = capturePreset): Promise<void> => {
+    const userCanvas = userCanvasRef.current;
     const engine = engineRef.current;
-    if (!root || !engine) {
-      setStatus('Load the vision model before peeking.');
+    if (!userCanvas || !engine) {
+      setStatus('Load the vision model before asking for a roast.');
       return;
     }
 
+    clearScheduledInference();
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
-    clearTransientAiArtifacts(root, directorConfig.patchPolicy.allowedClasses);
 
     const id = ++traceIdRef.current;
     const started = performance.now();
     const startedAt = new Date().toLocaleTimeString();
+    const voice = HECKLE_VOICES[id % HECKLE_VOICES.length];
+    setHeckleVoice(voice);
     setVisionState('capturing');
-    setTrace({ id, source, startedAt, visionState: 'capturing', captureMode, status: 'Capturing field-kit board...' });
+    setTrace({ id, source, preset, startedAt, visionState: 'capturing', status: 'Capturing canvas...' });
 
     try {
-      const canvas = await toCanvas(root, {
-        cacheBust: true,
-        pixelRatio: 1,
-        backgroundColor: '#150f0a',
-        filter: (node) => !(node instanceof HTMLElement && node.dataset.captureExclude === 'true'),
-      });
-
-      setVisionState('compressing');
-      setTrace((previous) => previous?.id === id ? {
-        ...previous,
-        visionState: 'compressing',
-        status: `${captureMode === 'fast' ? 'Fast' : 'Detailed'} capture: downscaling and JPEG encoding...`,
-      } : previous);
-
-      const captured = await encodeCapture(canvas, captureMode);
-      if (screenshotUrlRef.current) {
-        URL.revokeObjectURL(screenshotUrlRef.current);
+      const captured = await captureDrawing(userCanvas, preset);
+      if (controller.signal.aborted) {
+        return;
       }
-      screenshotUrlRef.current = captured.url;
-      const targets = collectPatchTargets(root);
+      if (captureUrlRef.current) {
+        URL.revokeObjectURL(captureUrlRef.current);
+      }
+      captureUrlRef.current = captured.url;
 
-      setVisionState('thinking');
+      setVisionState('encoding');
       setTrace({
         id,
         source,
+        preset,
         startedAt,
-        screenshotUrl: captured.url,
-        screenshotBytes: captured.byteLength,
-        screenshotWidth: captured.width,
-        screenshotHeight: captured.height,
-        captureMode,
-        targetCount: targets.length,
-        visionState: 'thinking',
-        status: `Sending ${formatBytes(captured.byteLength)} image and ${targets.length} target ids to the model...`,
+        captureUrl: captured.url,
+        captureBytes: captured.byteLength,
+        captureWidth: captured.width,
+        captureHeight: captured.height,
+        cropX: captured.cropX,
+        cropY: captured.cropY,
+        cropWidth: captured.cropWidth,
+        cropHeight: captured.cropHeight,
+        composeMs: captured.composeMs,
+        encodeMs: captured.encodeMs,
+        visionState: 'encoding',
+        status: `${preset} capture encoded at ${captured.width}x${captured.height} (${formatBytes(captured.byteLength)}).`,
       });
 
-      const director = new DomPatchDirector(engine, directorConfig);
+      setVisionState('thinking');
+      setTrace((previous) => previous?.id === id ? {
+        ...previous,
+        visionState: 'thinking',
+        status: 'Model is describing the sketch, then writing a heckle...',
+      } : previous);
+
+      const inferenceStarted = performance.now();
+      const director = new DrawingDirector(engine, directorConfig);
       const result = await director.run({
-        screenshot: captured.bytes,
-        targets,
-        gameState: { score, selectedItems: score.selectedItems },
+        capture: captured,
+        state: {
+          strokeCount: strokeCountRef.current,
+          selectedColor,
+          selectedSize: penSize,
+          canvasWidth: DRAWING_WIDTH,
+          canvasHeight: DRAWING_HEIGHT,
+          voice,
+        },
         signal: controller.signal,
       });
-      const appliedMutations = summarizePatches(result.patches);
-      const durationMs = Math.round(performance.now() - started);
-      const finalTrace: TraceState = {
+      if (controller.signal.aborted) {
+        return;
+      }
+
+      const inferenceMs = Math.round(performance.now() - inferenceStarted);
+      setComment(result.heckle.comment);
+      setGuess(result.perception.subject);
+      const totalMs = Math.round(performance.now() - started);
+      setTrace({
         id,
         source,
+        preset,
         startedAt,
-        durationMs,
-        screenshotUrl: captured.url,
-        screenshotBytes: captured.byteLength,
-        screenshotWidth: captured.width,
-        screenshotHeight: captured.height,
-        captureMode,
-        targetCount: result.targetCount,
-        promptPreview: result.promptPreview,
-        rawText: result.rawText,
-        observation: result.observation,
-        intent: result.intent,
-        patches: result.patches,
-        rejectedPatches: result.rejectedPatches,
-        appliedMutations,
-        visionState: 'patching',
-        status: `Parsed JSON and validated ${result.patches.length} patch(es); applying DOM mutations...`,
-      };
-
-      flushSync(() => {
-        setVisionState('idle');
-        setStatus(`Peek complete in ${(durationMs / 1000).toFixed(1)}s. DOM patched from model JSON.`);
-        setTrace({ ...finalTrace, visionState: 'idle', status: 'DOM patches applied.' });
+        captureUrl: captured.url,
+        captureBytes: captured.byteLength,
+        captureWidth: captured.width,
+        captureHeight: captured.height,
+        cropX: captured.cropX,
+        cropY: captured.cropY,
+        cropWidth: captured.cropWidth,
+        cropHeight: captured.cropHeight,
+        composeMs: captured.composeMs,
+        encodeMs: captured.encodeMs,
+        inferenceMs,
+        perceptionMs: result.perceptionMs,
+        heckleMs: result.heckleMs,
+        totalMs,
+        subject: result.perception.subject,
+        features: result.perception.features,
+        weirdDetail: result.perception.weirdDetail,
+        lineQuality: result.perception.lineQuality,
+        parseStatus: result.perception.parseStatus,
+        parseNote: result.perception.parseNote,
+        heckleParseStatus: result.heckle.parseStatus,
+        heckleParseNote: result.heckle.parseNote,
+        comment: result.heckle.comment,
+        guess: result.perception.subject,
+        perceptionPromptPreview: result.perceptionPromptPreview,
+        hecklePromptPreview: result.hecklePromptPreview,
+        perceptionRawText: result.perceptionRawText,
+        heckleRawText: result.heckleRawText,
+        runtime: runtimeObservationRef.current,
+        visionState: 'idle',
+        status: `Done in ${(totalMs / 1000).toFixed(2)}s. Perception ${result.perception.parseStatus}; heckle ${result.heckle.parseStatus}.`,
       });
-      applyDomPatches(root, result.patches);
+      setVisionState('idle');
+      setStatus(`Model heckled in ${(totalMs / 1000).toFixed(2)}s as ${voice}.`);
     } catch (error) {
       if (controller.signal.aborted) {
         return;
       }
-      const durationMs = Math.round(performance.now() - started);
+      const totalMs = Math.round(performance.now() - started);
       setVisionState('error');
-      setStatus(`Peek failed: ${(error as Error).message}`);
+      setStatus(`Inference failed: ${(error as Error).message}`);
       setTrace((previous) => ({
         id,
         source,
+        preset,
         startedAt,
-        durationMs,
-        screenshotUrl: previous?.id === id ? previous.screenshotUrl : undefined,
-        screenshotBytes: previous?.id === id ? previous.screenshotBytes : undefined,
-        screenshotWidth: previous?.id === id ? previous.screenshotWidth : undefined,
-        screenshotHeight: previous?.id === id ? previous.screenshotHeight : undefined,
-        captureMode,
-        targetCount: previous?.id === id ? previous.targetCount : undefined,
+        captureUrl: previous?.id === id ? previous.captureUrl : undefined,
+        captureBytes: previous?.id === id ? previous.captureBytes : undefined,
+        captureWidth: previous?.id === id ? previous.captureWidth : undefined,
+        captureHeight: previous?.id === id ? previous.captureHeight : undefined,
+        cropX: previous?.id === id ? previous.cropX : undefined,
+        cropY: previous?.id === id ? previous.cropY : undefined,
+        cropWidth: previous?.id === id ? previous.cropWidth : undefined,
+        cropHeight: previous?.id === id ? previous.cropHeight : undefined,
+        composeMs: previous?.id === id ? previous.composeMs : undefined,
+        encodeMs: previous?.id === id ? previous.encodeMs : undefined,
+        totalMs,
+        runtime: runtimeObservationRef.current,
         visionState: 'error',
-        status: 'Vision-to-DOM loop failed.',
+        status: 'Vision sketch loop failed.',
         errorMessage: (error as Error).message,
       }));
     }
   };
 
-  peekRef.current = handleVisionPeek;
+  runInferenceRef.current = runInference;
 
-  const toggleGear = (itemId: string): void => {
-    setSelectedIds((previous) => {
-      const next = new Set(previous);
-      if (next.has(itemId)) {
-        next.delete(itemId);
-      } else {
-        next.add(itemId);
-      }
-      return next;
-    });
+  function resetUserCanvas(): void {
+    const canvas = userCanvasRef.current;
+    const context = canvas?.getContext('2d');
+    if (!canvas || !context) {
+      return;
+    }
+    context.save();
+    context.globalCompositeOperation = 'source-over';
+    context.fillStyle = DRAWING_BACKGROUND;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.restore();
+    const snapshot = context.getImageData(0, 0, canvas.width, canvas.height);
+    historyRef.current = [snapshot];
+    setHistoryDepth(1);
+  }
+
+  function saveHistorySnapshot(): void {
+    const canvas = userCanvasRef.current;
+    const context = canvas?.getContext('2d');
+    if (!canvas || !context) {
+      return;
+    }
+    historyRef.current = [...historyRef.current.slice(-23), context.getImageData(0, 0, canvas.width, canvas.height)];
+    setHistoryDepth(historyRef.current.length);
+  }
+
+  function drawDot(point: DrawingPoint, color: DrawingColor, size: number): void {
+    const context = userCanvasRef.current?.getContext('2d');
+    if (!context) {
+      return;
+    }
+    context.save();
+    context.fillStyle = color;
+    context.beginPath();
+    context.arc(point.x, point.y, size / 2, 0, Math.PI * 2);
+    context.fill();
+    context.restore();
+  }
+
+  function drawSegment(from: DrawingPoint, to: DrawingPoint, color: DrawingColor, size: number): void {
+    const context = userCanvasRef.current?.getContext('2d');
+    if (!context) {
+      return;
+    }
+    context.save();
+    context.strokeStyle = color;
+    context.lineWidth = size;
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+    context.beginPath();
+    context.moveTo(from.x, from.y);
+    context.lineTo(to.x, to.y);
+    context.stroke();
+    context.restore();
+  }
+
+  function scheduleAutoInference(): void {
+    if (!autoInferRef.current) {
+      return;
+    }
+    clearScheduledInference();
+    autoTimerRef.current = window.setTimeout(() => {
+      void runInferenceRef.current?.('auto', 'turbo');
+    }, 260);
+  }
+
+  function clearScheduledInference(): void {
+    if (autoTimerRef.current == null) {
+      return;
+    }
+    window.clearTimeout(autoTimerRef.current);
+    autoTimerRef.current = null;
+  }
+
+  const handlePointerDown = (event: ReactPointerEvent<HTMLCanvasElement>): void => {
+    if (event.button !== 0 && event.pointerType !== 'touch' && event.pointerType !== 'pen') {
+      return;
+    }
+    const point = getCanvasPoint(event.currentTarget, event.clientX, event.clientY);
+    clearScheduledInference();
+    abortRef.current?.abort();
+    setVisionState('idle');
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    activeDrawingRef.current = { pointerId: event.pointerId, points: [point], lastPoint: point };
+    drawDot(point, selectedColor, penSize);
   };
 
-  const resetRun = (): void => {
-    abortRef.current?.abort();
-    setSelectedIds(new Set(['paper-map']));
-    setVisionState('idle');
-    setStatus('Run reset. Pick gear and peek again.');
-    if (workspaceRef.current) {
-      clearTransientAiArtifacts(workspaceRef.current, directorConfig.patchPolicy.allowedClasses);
-      deleteModifiedFlags(workspaceRef.current);
+  const handlePointerMove = (event: ReactPointerEvent<HTMLCanvasElement>): void => {
+    const session = activeDrawingRef.current;
+    if (!session || session.pointerId !== event.pointerId) {
+      return;
     }
+    const point = getCanvasPoint(event.currentTarget, event.clientX, event.clientY);
+    event.preventDefault();
+    drawSegment(session.lastPoint, point, selectedColor, penSize);
+    session.points.push(point);
+    session.lastPoint = point;
+  };
+
+  const handlePointerUp = (event: ReactPointerEvent<HTMLCanvasElement>): void => {
+    const session = activeDrawingRef.current;
+    if (!session || session.pointerId !== event.pointerId) {
+      return;
+    }
+    event.preventDefault();
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    activeDrawingRef.current = null;
+    saveHistorySnapshot();
+    strokeCountRef.current += 1;
+    setStrokeCount(strokeCountRef.current);
+    setStatus('Stroke captured. Scheduling fast vision peek...');
+    scheduleAutoInference();
+  };
+
+  const handlePointerCancel = (event: ReactPointerEvent<HTMLCanvasElement>): void => {
+    const session = activeDrawingRef.current;
+    if (!session || session.pointerId !== event.pointerId) {
+      return;
+    }
+    activeDrawingRef.current = null;
+  };
+
+  const handleClearUser = (): void => {
+    clearScheduledInference();
+    abortRef.current?.abort();
+    resetUserCanvas();
+    strokeCountRef.current = 0;
+    setStrokeCount(0);
+    setComment(INITIAL_COMMENT);
+    setGuess(INITIAL_GUESS);
+    setVisionState('idle');
+    setStatus('Drawing cleared. The critic is pretending it forgot everything.');
+  };
+
+  const handleResetAll = (): void => {
+    clearScheduledInference();
+    abortRef.current?.abort();
+    resetUserCanvas();
+    strokeCountRef.current = 0;
+    setStrokeCount(0);
+    setComment(INITIAL_COMMENT);
+    setGuess(INITIAL_GUESS);
+    setVisionState('idle');
+    setStatus('Canvas reset. Fresh chaos available.');
+  };
+
+  const handleUndo = (): void => {
+    const canvas = userCanvasRef.current;
+    const context = canvas?.getContext('2d');
+    if (!canvas || !context || historyRef.current.length <= 1) {
+      return;
+    }
+    clearScheduledInference();
+    abortRef.current?.abort();
+    setVisionState('idle');
+    historyRef.current.pop();
+    context.putImageData(historyRef.current[historyRef.current.length - 1], 0, 0);
+    setHistoryDepth(historyRef.current.length);
+    strokeCountRef.current = Math.max(0, strokeCountRef.current - 1);
+    setStrokeCount(strokeCountRef.current);
+    setStatus('Last stroke undone. The model pretends it did not see that.');
+    scheduleAutoInference();
   };
 
   if (!engineReady) {
@@ -384,136 +700,80 @@ export default function App() {
   }
 
   return (
-    <div className={`proactive-app demo-mode ${drawerOpen ? 'drawer-open' : 'drawer-closed'}`}>
-      <main className="workspace-shell" aria-label="Dust Ridge Field Kit game">
-        <div className={`capture-stage ${visionState}`} ref={workspaceRef} data-ai-zone="dust-ridge-field-kit" data-ai-goal="Help the user finish a safe desert expedition kit.">
-          <div className="stage-topline">
+    <div className={`proactive-app ${drawerOpen ? 'drawer-open' : 'drawer-closed'}`}>
+      <main className="studio-shell" aria-label="AI drawing studio">
+        <section className="studio-stage">
+          <header className="studio-header">
             <div>
-              <p className="eyebrow">Dust Ridge Field Kit</p>
-              <h1>Pack the kit before the sand wall hits</h1>
-              <p className="stage-subtitle">Click gear cards to pack or unpack them. The AI projection layer can synthesize coverage, budget, weight, and tradeoffs into UI for the current moment.</p>
+              <p className="eyebrow">Speed Sketch Lab</p>
+              <h1>Draw. AI heckles.</h1>
+              <p>Tiny canvas frames go straight to vision. The model guesses what it sees and heckles the visible marks.</p>
             </div>
-            <div className="storm-clock" data-ai-id="storm-clock" data-ai-label="Storm arrival countdown" data-ai-ops="replaceText,addClass,removeClass,setAttribute">
-              <span>{FIELD_KIT_LIMITS.stormMinutes}</span>
-              <small>min to storm</small>
+            <div className={`loop-badge ${busy ? 'busy' : 'ready'}`}>
+              <span />
+              {busy ? describeVisionState(visionState) : 'fast loop ready'}
             </div>
-          </div>
+          </header>
 
-          {visionState !== 'idle' && visionState !== 'error' ? (
-            <div className="vision-overlay">
-              <div className="scanner" />
-              <strong>{describeVisionState(visionState, captureMode)}</strong>
+          <section className="toolbelt" aria-label="Drawing tools">
+            <div className="palette" aria-label="Fixed colors">
+              {DRAWING_COLORS.map((color) => (
+                <button
+                  key={color}
+                  type="button"
+                  className={selectedColor === color ? 'active' : ''}
+                  style={{ background: color }}
+                  onClick={() => setSelectedColor(color)}
+                  aria-label={`Select ${color}`}
+                />
+              ))}
             </div>
-          ) : null}
-
-          <section className="mission-instructions" data-ai-id="mission-instructions" data-ai-label="Main mission instructions" data-ai-ops="replaceHtml,appendHtml,addClass,removeClass,setAttribute">
-            <p className="eyebrow">Current Objective</p>
-            <h2>Choose a balanced desert kit.</h2>
-            <p>Goal: cover Hydration, Navigation, Sun cover, Signal, Power, and First aid while staying under {FIELD_KIT_LIMITS.maxWeight}kg and ${FIELD_KIT_LIMITS.maxBudget}. Then ask the vision model to project a contextual mission lens.</p>
+            <label className="size-control">
+              <span>pen {penSize}px</span>
+              <input min="3" max="34" step="1" type="range" value={penSize} onChange={(event) => setPenSize(Number(event.target.value))} />
+            </label>
+            <div className="tool-actions">
+              <button type="button" onClick={handleUndo} disabled={historyDepth <= 1}>undo</button>
+              <button type="button" onClick={handleClearUser}>clear ink</button>
+              <button type="button" onClick={() => void runInference('manual', 'turbo')} disabled={busy}>roast now</button>
+            </div>
           </section>
 
-          <div className="score-strip">
-            <Meter id="readiness" label="Readiness" value={score.readiness} max={100} suffix="%" state={score.readyToLaunch ? 'good' : score.readiness > 65 ? 'warn' : 'low'} />
-            <Meter id="weight" label="Weight" value={score.totalWeight} max={FIELD_KIT_LIMITS.maxWeight} suffix="kg" state={score.weightOk ? 'good' : 'bad'} />
-            <Meter id="budget" label="Budget" value={score.totalCost} max={FIELD_KIT_LIMITS.maxBudget} suffix="$" state={score.budgetOk ? 'good' : 'bad'} />
+          <div className="canvas-shell">
+            <canvas
+              ref={userCanvasRef}
+              width={DRAWING_WIDTH}
+              height={DRAWING_HEIGHT}
+              className="drawing-canvas user-canvas"
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerCancel={handlePointerCancel}
+              aria-label="Drawing canvas"
+            />
+            {busy ? (
+              <div className="vision-overlay">
+                <span className="scanner" />
+                <strong>{describeVisionState(visionState)}</strong>
+              </div>
+            ) : null}
           </div>
 
-          <section
-            key={`synthesis-${selectedKey}`}
-            className="synthesis-panel glass-card"
-            data-ai-id="synthesis-overlay"
-            data-ai-label="AI projection layer for custom tradeoff UI: use replaceHtml to synthesize budget, weight, risk, and next-step visualizations"
-            data-ai-ops="replaceHtml,appendHtml,addClass,removeClass,setAttribute,scrollIntoView"
-            dangerouslySetInnerHTML={{ __html: INITIAL_SYNTHESIS_HTML }}
-          />
-
-          <div className="board-layout">
-            <section className="gear-zone" data-ai-id="gear-board" data-ai-label="All selectable field kit gear" data-ai-ops="addClass,removeClass,setAttribute,scrollIntoView">
-              <div className="instruction-card glass-card" data-ai-id="pack-instructions" data-ai-label="Pack gear instructions" data-ai-ops="replaceHtml,appendHtml,addClass,removeClass,setAttribute">
-                <h3>Field shelf</h3>
-                <p>Every card is visible at once so the vision model can reason across selection, weight, budget, risk, and item tradeoffs. Green cards are already packed.</p>
-              </div>
-              <div className="category-grid">
-                {CATEGORY_GOALS.map((goal) => (
-                  <GearCategorySection
-                    key={goal.id}
-                    goal={goal}
-                    items={GEAR_ITEMS.filter((item) => item.category === goal.id)}
-                    selectedIds={selectedIds}
-                    onToggleGear={toggleGear}
-                  />
-                ))}
-              </div>
-            </section>
-
-            <aside className="mission-rail">
-              <section className="mission-panel glass-card" data-ai-id="mission-checklist" data-ai-label="Mission checklist" data-ai-ops="addClass,removeClass,setAttribute,scrollIntoView">
-                <p className="eyebrow">Required Coverage</p>
-                <div className="goal-list">
-                  {CATEGORY_GOALS.map((goal) => {
-                    const covered = score.coveredCategories.includes(goal.id);
-                    return (
-                      <div
-                        key={goal.id}
-                        className={`goal-row ${covered ? 'covered' : 'missing'}`}
-                        data-ai-id={`goal-${goal.id}`}
-                        data-ai-label={`${goal.label} requirement`}
-                        data-ai-ops="addClass,removeClass,setAttribute,scrollIntoView"
-                      >
-                        <span>{covered ? '✓' : '!'}</span>
-                        <div>
-                          <strong>{goal.label}</strong>
-                          <small>{goal.prompt}</small>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
-
-              <section className="selected-manifest glass-card" data-ai-id="selected-manifest" data-ai-label="Selected gear manifest" data-ai-ops="replaceHtml,appendHtml,addClass,removeClass,setAttribute,scrollIntoView">
-                <p className="eyebrow">Packed Items</p>
-                {score.selectedItems.length === 0 ? (
-                  <small>No items packed.</small>
-                ) : (
-                  <ul>
-                    {score.selectedItems.map((item) => <li key={item.id}>{item.name}</li>)}
-                  </ul>
-                )}
-              </section>
-
-              <section className="launch-panel glass-card" data-ai-id="launch-panel" data-ai-label="Launch readiness panel" data-ai-ops="replaceHtml,appendHtml,addClass,removeClass,setAttribute,scrollIntoView">
-                <p className="eyebrow">Expedition Gate</p>
-                <h3>{score.readyToLaunch ? 'Ready to launch' : 'Not safe yet'}</h3>
-                <p>
-                  {score.readyToLaunch
-                    ? 'All required categories are covered within constraints.'
-                    : score.missingCategories.length > 0
-                      ? `Missing: ${score.missingCategories.map(categoryLabel).join(', ')}.`
-                      : 'Coverage is complete, but weight or budget needs attention.'}
-                </p>
-                <button
-                  className="launch-button"
-                  type="button"
-                  disabled={!score.readyToLaunch}
-                  data-ai-id="launch-button"
-                  data-ai-label="Launch expedition button"
-                  data-ai-ops="replaceText,addClass,removeClass,setAttribute,scrollIntoView"
-                >
-                  {score.readyToLaunch ? 'Launch Expedition' : 'Locked'}
-                </button>
-              </section>
-
-              <section
-                className="coach-panel glass-card"
-                data-ai-id="coach-panel"
-                data-ai-label="Generated proactive coach panel"
-                data-ai-ops="replaceHtml,appendHtml,addClass,removeClass,setAttribute,scrollIntoView"
-                dangerouslySetInnerHTML={{ __html: INITIAL_COACH_HTML }}
-              />
-            </aside>
-          </div>
-        </div>
+          <section className="reaction-strip">
+            <div className="reaction-card primary">
+              <span>heckle</span>
+              <strong>{comment}</strong>
+            </div>
+            <div className="reaction-card">
+              <span>guess</span>
+              <strong>{guess}</strong>
+            </div>
+            <div className="reaction-card stats">
+              <span>canvas</span>
+              <strong>{strokeCount} strokes / {heckleVoice}</strong>
+            </div>
+          </section>
+        </section>
       </main>
 
       <DeveloperDrawer
@@ -523,14 +783,17 @@ export default function App() {
         visionState={visionState}
         engineReady={engineReady}
         busy={busy}
-        autoPeek={autoPeek}
-        captureMode={captureMode}
+        autoInfer={autoInfer}
+        capturePreset={capturePreset}
         trace={trace}
+        runtime={runtimeObservation}
+        strokeCount={strokeCount}
+        heckleVoice={heckleVoice}
         onOpenChange={setDrawerOpen}
-        onPeek={() => void handleVisionPeek('manual')}
-        onAutoPeekChange={setAutoPeek}
-        onCaptureModeChange={setCaptureMode}
-        onReset={resetRun}
+        onInfer={() => void runInference('manual', capturePreset)}
+        onAutoInferChange={setAutoInfer}
+        onCapturePresetChange={setCapturePreset}
+        onReset={handleResetAll}
         onChangeModel={handleChangeModel}
       />
     </div>
@@ -547,22 +810,22 @@ function StartScreen(props: {
   readonly onProjectorUrlChange: (value: string) => void;
   readonly onLoad: () => void | Promise<void>;
 }) {
-  const percent = props.progress?.percent ?? null;
+  const overallPercent = props.progress?.overallPercent ?? (props.loadState === 'loading' ? 1 : 0);
+  const phasePercent = props.progress?.percent ?? null;
   return (
     <div className="start-screen">
       <section className="start-hero glass-card">
         <div className="start-copy">
           <p className="eyebrow">Cogent Engine Vision Pipeline</p>
-          <h1>Proactive UI that sees, reasons, and projects custom interface.</h1>
+          <h1>Vision Pipline Demo</h1>
           <p>
-            This demo loads a local vision model, captures a web app as an image, asks what the user
-            appears to be doing, then applies validated JSON DOM patches that can generate a contextual UI layer.
+            This demo loads a local vision model, captures a tiny image of the drawing canvas, then asks the model to guess and heckle the sketch.
           </p>
           <div className="start-steps">
-            <span>1. Load model</span>
-            <span>2. Pack the field kit</span>
-            <span>3. Peek at UI</span>
-            <span>4. Watch callouts land</span>
+            <span>1. Load vision model</span>
+            <span>2. Draw with fixed tools</span>
+            <span>3. Send low-res canvas</span>
+            <span>4. Get heckled</span>
           </div>
         </div>
 
@@ -586,7 +849,11 @@ function StartScreen(props: {
               <strong>{props.status}</strong>
             </div>
             <div className="load-progress-track">
-              <span style={{ width: `${percent ?? (props.loadState === 'loading' ? 12 : 0)}%` }} />
+              <span style={{ width: `${overallPercent}%` }} />
+            </div>
+            <div className="load-progress-numbers">
+              <span>Overall: {overallPercent}%</span>
+              {phasePercent != null ? <span>Phase: {Math.floor(phasePercent)}%</span> : null}
             </div>
             <dl>
               <div>
@@ -599,79 +866,12 @@ function StartScreen(props: {
               </div>
               <div>
                 <dt>Progress</dt>
-                <dd>{percent == null ? 'streaming' : `${Math.floor(percent)}%`}</dd>
+                <dd>{phasePercent == null ? 'streaming' : `${Math.floor(phasePercent)}%`}</dd>
               </div>
             </dl>
           </div>
         </div>
       </section>
-    </div>
-  );
-}
-
-function GearCategorySection(props: {
-  readonly goal: typeof CATEGORY_GOALS[number];
-  readonly items: readonly GearItem[];
-  readonly selectedIds: ReadonlySet<string>;
-  readonly onToggleGear: (itemId: string) => void;
-}) {
-  const covered = props.items.some((item) => props.selectedIds.has(item.id));
-  return (
-    <section className={`category-section ${covered ? 'covered' : 'missing'}`} data-ai-id={`category-${props.goal.id}`} data-ai-label={`${props.goal.label} gear section`} data-ai-ops="addClass,removeClass,setAttribute,scrollIntoView">
-      <header>
-        <div>
-          <span>{covered ? 'covered' : 'missing'}</span>
-          <h3>{props.goal.label}</h3>
-        </div>
-        <small>{props.goal.prompt}</small>
-      </header>
-      <div className="gear-grid">
-        {props.items.map((item) => {
-          const selected = props.selectedIds.has(item.id);
-          return (
-            <button
-              key={item.id}
-              type="button"
-              className={`gear-card ${selected ? 'selected' : ''}`}
-              onClick={() => props.onToggleGear(item.id)}
-              data-ai-id={`gear-${item.id}`}
-              data-ai-label={`${item.name} gear card`}
-              data-ai-ops="addClass,removeClass,setAttribute,scrollIntoView"
-            >
-              <span className="gear-category">{categoryLabel(item.category)}</span>
-              <strong>{item.name}</strong>
-              <p>{item.summary}</p>
-              <small>{item.tradeoff}</small>
-              <span className="gear-stats">{item.weight}kg · ${item.cost}</span>
-            </button>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-function Meter(props: {
-  readonly id: 'readiness' | 'weight' | 'budget';
-  readonly label: string;
-  readonly value: number;
-  readonly max: number;
-  readonly suffix: string;
-  readonly state: 'good' | 'warn' | 'low' | 'bad';
-}) {
-  const percent = Math.max(0, Math.min(100, Math.round((props.value / props.max) * 100)));
-  const displayValue = props.id === 'budget' ? `$${props.value}` : `${props.value}${props.suffix}`;
-  const displayMax = props.id === 'budget' ? `$${props.max}` : `${props.max}${props.suffix}`;
-  return (
-    <div className={`meter-card ${props.state}`} data-ai-id={`meter-${props.id}`} data-ai-label={`${props.label} meter`} data-ai-ops="replaceText,addClass,removeClass,setAttribute,scrollIntoView">
-      <div>
-        <span>{props.label}</span>
-        <strong>{displayValue}</strong>
-      </div>
-      <div className="meter-track">
-        <span style={{ width: `${percent}%` }} />
-      </div>
-      <small>limit {displayMax}</small>
     </div>
   );
 }
@@ -683,33 +883,36 @@ function DeveloperDrawer(props: {
   readonly visionState: VisionState;
   readonly engineReady: boolean;
   readonly busy: boolean;
-  readonly autoPeek: boolean;
-  readonly captureMode: CaptureMode;
+  readonly autoInfer: boolean;
+  readonly capturePreset: CapturePresetId;
   readonly trace: TraceState | null;
+  readonly runtime: RuntimeObservation | null;
+  readonly strokeCount: number;
+  readonly heckleVoice: HeckleVoice;
   readonly onOpenChange: (open: boolean) => void;
-  readonly onPeek: () => void;
-  readonly onAutoPeekChange: (value: boolean) => void;
-  readonly onCaptureModeChange: (value: CaptureMode) => void;
+  readonly onInfer: () => void;
+  readonly onAutoInferChange: (value: boolean) => void;
+  readonly onCapturePresetChange: (value: CapturePresetId) => void;
   readonly onReset: () => void;
   readonly onChangeModel: () => void;
 }) {
   if (!props.open) {
     return (
-      <div className="dev-pill" data-capture-exclude="true">
-        <button type="button" className="dev-peek" onClick={props.onPeek} disabled={!props.engineReady || props.busy}>Peek</button>
+      <div className="dev-pill">
+        <button type="button" className="dev-peek" onClick={props.onInfer} disabled={!props.engineReady || props.busy}>trace</button>
         <button type="button" className="dev-pill-status" onClick={() => props.onOpenChange(true)}>
           <span className={`console-led ${props.visionState === 'error' ? 'error' : props.busy ? 'busy' : 'ready'}`} />
-          <span>{props.trace?.durationMs ? `${(props.trace.durationMs / 1000).toFixed(1)}s` : 'trace'}</span>
+          <span>{props.trace?.totalMs ? `${(props.trace.totalMs / 1000).toFixed(2)}s` : 'AI_TRACE'}</span>
         </button>
       </div>
     );
   }
 
   return (
-    <aside className="dev-drawer" data-capture-exclude="true" aria-label="AI developer console">
+    <aside className="dev-drawer" aria-label="AI Trace developer console">
       <div className="dev-drawer-titlebar">
         <div>
-          <span className="console-led ready" />
+          <span className={`console-led ${props.visionState === 'error' ? 'error' : props.busy ? 'busy' : 'ready'}`} />
           <strong>AI_TRACE</strong>
         </div>
         <button type="button" onClick={() => props.onOpenChange(false)}>minimize</button>
@@ -718,45 +921,59 @@ function DeveloperDrawer(props: {
       <section className="dev-section controls-section">
         <div className="dev-section-header">
           <span>controls</span>
-          <code>{props.captureMode}</code>
+          <code>{props.capturePreset}</code>
         </div>
         <p className="dev-status-line">
           <span className={`console-led ${props.visionState === 'error' ? 'error' : props.busy ? 'busy' : 'ready'}`} />
           {props.status}
         </p>
-        <button className="terminal-button primary" type="button" onClick={props.onPeek} disabled={!props.engineReady || props.busy}>
-          {props.visionState === 'thinking' ? 'model.inspecting()' : 'peek.ui()'}
+        <button className="terminal-button primary" type="button" onClick={props.onInfer} disabled={!props.engineReady || props.busy}>
+          {props.visionState === 'thinking' ? 'model.inspecting()' : 'trace.infer()'}
         </button>
-        <div className="capture-mode-control" role="radiogroup" aria-label="Capture quality">
-          {(['fast', 'detailed'] as const).map((mode) => (
-            <button key={mode} type="button" className={props.captureMode === mode ? 'active' : ''} onClick={() => props.onCaptureModeChange(mode)}>
-              {mode}
+        <div className="capture-mode-control" role="radiogroup" aria-label="Capture preset">
+          {(['turbo', 'trace'] as const).map((preset) => (
+            <button key={preset} type="button" className={props.capturePreset === preset ? 'active' : ''} onClick={() => props.onCapturePresetChange(preset)}>
+              {preset}
             </button>
           ))}
         </div>
         <label className="terminal-toggle">
-          <input type="checkbox" checked={props.autoPeek} onChange={(event) => props.onAutoPeekChange(event.target.checked)} disabled={!props.engineReady} />
-          autoPeek.onUserAction
+          <input type="checkbox" checked={props.autoInfer} onChange={(event) => props.onAutoInferChange(event.target.checked)} disabled={!props.engineReady} />
+          auto.inferAfterStroke
         </label>
+        <dl className="mini-stats">
+          <div>
+            <dt>strokes</dt>
+            <dd>{props.strokeCount}</dd>
+          </div>
+          <div>
+            <dt>voice</dt>
+            <dd>{props.heckleVoice}</dd>
+          </div>
+          <div>
+            <dt>load</dt>
+            <dd>{props.loadState}</dd>
+          </div>
+        </dl>
         <div className="drawer-actions">
           <button className="terminal-button" type="button" onClick={props.onReset}>reset()</button>
           <button className="terminal-button" type="button" onClick={props.onChangeModel}>model.swap()</button>
         </div>
       </section>
 
-      <TracePanel trace={props.trace} visionState={props.visionState} />
+      <TracePanel trace={props.trace} visionState={props.visionState} runtime={props.runtime} />
     </aside>
   );
 }
 
-function TracePanel(props: { readonly trace: TraceState | null; readonly visionState: VisionState }) {
+function TracePanel(props: { readonly trace: TraceState | null; readonly visionState: VisionState; readonly runtime: RuntimeObservation | null }) {
   const trace = props.trace;
   const stages: readonly { id: VisionState; label: string }[] = [
     { id: 'capturing', label: 'capture' },
-    { id: 'compressing', label: 'compress' },
+    { id: 'encoding', label: 'encode' },
     { id: 'thinking', label: 'infer' },
-    { id: 'patching', label: 'patch' },
   ];
+  const runtime = trace?.runtime ?? props.runtime;
   return (
     <section className="dev-section trace-section">
       <div className="dev-section-header">
@@ -765,47 +982,79 @@ function TracePanel(props: { readonly trace: TraceState | null; readonly visionS
       </div>
       <div className="pipeline">
         {stages.map((stage) => (
-          <span key={stage.id} className={stage.id === props.visionState || (trace?.visionState === 'idle' && stage.id === 'patching') ? 'active' : ''}>
+          <span key={stage.id} className={stage.id === props.visionState || (trace?.visionState === 'idle' && stage.id === 'thinking') ? 'active' : ''}>
             {stage.label}
           </span>
         ))}
       </div>
       {!trace ? (
-        <p className="empty-trace">No run yet. Click <code>peek.ui()</code> to capture the board, run vision inference, and inspect validated DOM patches.</p>
+        <p className="empty-trace">No run yet. Draw a stroke or click <code>trace.infer()</code> to inspect capture, two-pass inference, raw output, metrics, and heckle parsing.</p>
       ) : (
         <div className="trace-stack">
           <div className="trace-meta">
             <span>{trace.source}</span>
-            <span>{trace.captureMode ?? 'fast'}</span>
+            <span>{trace.preset}</span>
             <span>{trace.startedAt}</span>
-            {trace.durationMs ? <span>{(trace.durationMs / 1000).toFixed(1)}s</span> : null}
+            {trace.totalMs ? <span>{(trace.totalMs / 1000).toFixed(2)}s</span> : null}
           </div>
           <p className="trace-status">{trace.status}</p>
-          {trace.screenshotUrl ? (
+          {trace.captureUrl ? (
             <figure className="screenshot-preview">
-              <img src={trace.screenshotUrl} alt="Captured UI sent to vision model" />
+              <img src={trace.captureUrl} alt="Low-res canvas sent to the vision model" />
               <figcaption>
-                {trace.screenshotWidth ?? '?'}×{trace.screenshotHeight ?? '?'} · {formatBytes(trace.screenshotBytes ?? 0)} · {trace.targetCount ?? 0} targets
+                {trace.captureWidth ?? '?'}x{trace.captureHeight ?? '?'} / {formatBytes(trace.captureBytes ?? 0)} / crop {trace.cropWidth ?? '?'}x{trace.cropHeight ?? '?'} @ {trace.cropX ?? '?'},{trace.cropY ?? '?'}
               </figcaption>
             </figure>
           ) : null}
-          {trace.observation ? <TraceBlock title="observation" content={trace.observation} /> : null}
-          {trace.intent ? <TraceBlock title="intent" content={trace.intent} /> : null}
-          {trace.patches && trace.patches.length > 0 ? (
-            <TraceList title="accepted_patches" items={trace.patches.map((patch) => `${patch.op} -> ${patch.targetId}${patch.note ? ` // ${patch.note}` : ''}`)} />
+          <TimingGrid trace={trace} runtime={runtime} />
+          {trace.subject || trace.features ? (
+            <TraceBlock
+              title="perception"
+              content={[
+                `subject: ${trace.subject ?? 'unknown'}`,
+                `features: ${trace.features?.join(', ') ?? 'none'}`,
+                `weird: ${trace.weirdDetail ?? 'unknown'}`,
+                `quality: ${trace.lineQuality ?? 'unknown'}`,
+                `parse: ${trace.parseStatus ?? 'unknown'}${trace.parseNote ? ` (${trace.parseNote})` : ''}`,
+                `heckle_parse: ${trace.heckleParseStatus ?? 'unknown'}${trace.heckleParseNote ? ` (${trace.heckleParseNote})` : ''}`,
+              ].join('\n')}
+            />
           ) : null}
-          {trace.appliedMutations && trace.appliedMutations.length > 0 ? (
-            <TraceList title="dom_mutations" items={trace.appliedMutations.map((mutation) => mutation.summary)} />
-          ) : null}
-          {trace.rejectedPatches && trace.rejectedPatches.length > 0 ? (
-            <TraceList title="rejected_patches" items={trace.rejectedPatches.map((patch) => `#${patch.index}: ${patch.reason}`)} tone="warning" />
-          ) : null}
+          {trace.comment ? <TraceBlock title="heckle" content={trace.comment} /> : null}
+          {trace.guess ? <TraceBlock title="guess" content={trace.guess} /> : null}
           {trace.errorMessage ? <TraceBlock title="error" content={trace.errorMessage} tone="warning" /> : null}
-          {trace.rawText ? <TraceCode title="raw_json" content={trace.rawText} /> : null}
-          {trace.promptPreview ? <TraceCode title="prompt_contract" content={trace.promptPreview} /> : null}
+          {trace.perceptionRawText ? <TraceCode title="perception_raw_output" content={trace.perceptionRawText} /> : null}
+          {trace.heckleRawText ? <TraceCode title="heckle_raw_output" content={trace.heckleRawText} /> : null}
+          {trace.perceptionPromptPreview ? <TraceCode title="perception_prompt" content={trace.perceptionPromptPreview} /> : null}
+          {trace.hecklePromptPreview ? <TraceCode title="heckle_prompt" content={trace.hecklePromptPreview} /> : null}
         </div>
       )}
     </section>
+  );
+}
+
+function TimingGrid(props: { readonly trace: TraceState; readonly runtime: RuntimeObservation | null }) {
+  const rows = [
+    ['compose', formatMs(props.trace.composeMs)],
+    ['encode', formatMs(props.trace.encodeMs)],
+    ['infer', formatMs(props.trace.inferenceMs)],
+    ['describe', formatMs(props.trace.perceptionMs)],
+    ['heckle', formatMs(props.trace.heckleMs)],
+    ['total', formatMs(props.trace.totalMs)],
+    ['ttft', formatMs(props.runtime?.ttftMs)],
+    ['tok/s', props.runtime?.tokensPerSecond == null ? 'n/a' : props.runtime.tokensPerSecond.toFixed(1)],
+    ['input', formatCount(props.runtime?.inputTokenCount)],
+    ['output', formatCount(props.runtime?.outputTokenCount)],
+  ] as const;
+  return (
+    <dl className="timing-grid">
+      {rows.map(([label, value]) => (
+        <div key={label}>
+          <dt>{label}</dt>
+          <dd>{value}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -814,17 +1063,6 @@ function TraceBlock(props: { readonly title: string; readonly content: string; r
     <section className={`trace-block ${props.tone ?? ''}`}>
       <h3>{props.title}</h3>
       <p>{props.content}</p>
-    </section>
-  );
-}
-
-function TraceList(props: { readonly title: string; readonly items: readonly string[]; readonly tone?: 'warning' }) {
-  return (
-    <section className={`trace-block ${props.tone ?? ''}`}>
-      <h3>{props.title}</h3>
-      <ul>
-        {props.items.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}
-      </ul>
     </section>
   );
 }
@@ -838,11 +1076,12 @@ function TraceCode(props: { readonly title: string; readonly content: string }) 
   );
 }
 
-async function encodeCapture(canvas: HTMLCanvasElement, mode: CaptureMode): Promise<CapturedImage> {
-  const preset = CAPTURE_PRESETS[mode];
-  const scale = Math.min(1, preset.maxWidth / canvas.width, preset.maxHeight / canvas.height);
-  const width = Math.max(1, Math.round(canvas.width * scale));
-  const height = Math.max(1, Math.round(canvas.height * scale));
+async function captureDrawing(userCanvas: HTMLCanvasElement, presetId: CapturePresetId): Promise<CapturedDrawingAsset> {
+  const preset = CAPTURE_PRESETS[presetId];
+  const composeStarted = performance.now();
+  const crop = findInkCrop(userCanvas);
+  const width = Math.min(preset.maxWidth, preset.maxHeight);
+  const height = width;
   const outputCanvas = document.createElement('canvas');
   outputCanvas.width = width;
   outputCanvas.height = height;
@@ -851,9 +1090,27 @@ async function encodeCapture(canvas: HTMLCanvasElement, mode: CaptureMode): Prom
     throw new Error('Could not create capture canvas context.');
   }
   context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = mode === 'fast' ? 'medium' : 'high';
-  context.drawImage(canvas, 0, 0, width, height);
+  context.imageSmoothingQuality = presetId === 'turbo' ? 'low' : 'medium';
+  context.fillStyle = DRAWING_BACKGROUND;
+  context.fillRect(0, 0, width, height);
+  const cropScale = Math.min(width / crop.width, height / crop.height);
+  const drawnWidth = Math.max(1, Math.round(crop.width * cropScale));
+  const drawnHeight = Math.max(1, Math.round(crop.height * cropScale));
+  context.drawImage(
+    userCanvas,
+    crop.x,
+    crop.y,
+    crop.width,
+    crop.height,
+    Math.round((width - drawnWidth) / 2),
+    Math.round((height - drawnHeight) / 2),
+    drawnWidth,
+    drawnHeight
+  );
+  const composeMs = Math.round(performance.now() - composeStarted);
+  const encodeStarted = performance.now();
   const blob = await canvasToBlob(outputCanvas, 'image/jpeg', preset.quality);
+  const encodeMs = Math.round(performance.now() - encodeStarted);
   const bytes = new Uint8Array(await blob.arrayBuffer());
   return {
     bytes,
@@ -861,6 +1118,61 @@ async function encodeCapture(canvas: HTMLCanvasElement, mode: CaptureMode): Prom
     width,
     height,
     byteLength: bytes.byteLength,
+    preset: presetId,
+    cropX: crop.x,
+    cropY: crop.y,
+    cropWidth: crop.width,
+    cropHeight: crop.height,
+    composeMs,
+    encodeMs,
+  };
+}
+
+function findInkCrop(canvas: HTMLCanvasElement): { readonly x: number; readonly y: number; readonly width: number; readonly height: number } {
+  const context = canvas.getContext('2d');
+  if (!context) {
+    return { x: 0, y: 0, width: canvas.width, height: canvas.height };
+  }
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+  let minX = canvas.width;
+  let minY = canvas.height;
+  let maxX = -1;
+  let maxY = -1;
+
+  for (let y = 0; y < canvas.height; y += 1) {
+    for (let x = 0; x < canvas.width; x += 1) {
+      const index = (y * canvas.width + x) * 4;
+      const distance = Math.abs(pixels[index] - DRAWING_BACKGROUND_RGB.r)
+        + Math.abs(pixels[index + 1] - DRAWING_BACKGROUND_RGB.g)
+        + Math.abs(pixels[index + 2] - DRAWING_BACKGROUND_RGB.b);
+      if (pixels[index + 3] > 0 && distance > 26) {
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+    }
+  }
+
+  if (maxX < minX || maxY < minY) {
+    return { x: 0, y: 0, width: canvas.width, height: canvas.height };
+  }
+
+  const inkWidth = maxX - minX + 1;
+  const inkHeight = maxY - minY + 1;
+  const padding = Math.max(36, Math.round(Math.max(inkWidth, inkHeight) * 0.24));
+  const x = Math.max(0, minX - padding);
+  const y = Math.max(0, minY - padding);
+  const right = Math.min(canvas.width, maxX + padding + 1);
+  const bottom = Math.min(canvas.height, maxY + padding + 1);
+  return { x, y, width: right - x, height: bottom - y };
+}
+
+function getCanvasPoint(canvas: HTMLCanvasElement, clientX: number, clientY: number): DrawingPoint {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: ((clientX - rect.left) / rect.width) * canvas.width,
+    y: ((clientY - rect.top) / rect.height) * canvas.height,
   };
 }
 
@@ -876,51 +1188,18 @@ function canvasToBlob(canvas: HTMLCanvasElement, mimeType: string, quality: numb
   });
 }
 
-function summarizePatches(patches: readonly DomPatch[]): readonly AppliedMutation[] {
-  return patches.map((patch) => ({
-    targetId: patch.targetId,
-    summary: `${patch.op} applied to ${patch.targetId}${patch.note ? ' with note' : ''}`,
-  }));
-}
-
-function clearTransientAiArtifacts(root: HTMLElement, classNames: readonly string[]): void {
-  for (const element of Array.from(root.querySelectorAll<HTMLElement>('[data-ai-id]'))) {
-    for (const className of classNames) {
-      element.classList.remove(className);
-    }
-  }
-  for (const note of Array.from(root.querySelectorAll('[data-ai-patch-note="true"]'))) {
-    note.remove();
-  }
-  for (const layer of Array.from(root.querySelectorAll('[data-ai-callout-layer="true"]'))) {
-    layer.remove();
-  }
-  const synthesisOverlay = root.querySelector<HTMLElement>('[data-ai-id="synthesis-overlay"]');
-  if (synthesisOverlay) {
-    synthesisOverlay.innerHTML = INITIAL_SYNTHESIS_HTML;
-  }
-  deleteModifiedFlags(root);
-}
-
-function deleteModifiedFlags(root: HTMLElement): void {
-  for (const element of Array.from(root.querySelectorAll<HTMLElement>('[data-ai-modified]'))) {
-    delete element.dataset.aiModified;
-  }
-}
-
-function describeVisionState(state: VisionState, mode: CaptureMode): string {
+function describeVisionState(state: VisionState): string {
   switch (state) {
     case 'capturing':
-      return 'Capturing field-kit board';
-    case 'compressing':
-      return `${mode === 'fast' ? 'Fast' : 'Detailed'} JPEG compression`;
+      return 'compositing canvas';
+    case 'encoding':
+      return 'encoding tiny JPEG';
     case 'thinking':
-      return 'Vision model inspecting screenshot';
-    case 'patching':
-      return 'Applying JSON DOM patches';
+      return 'two-pass model heckling';
     case 'idle':
+      return 'fast loop ready';
     case 'error':
-      return '';
+      return 'vision loop error';
   }
 }
 
@@ -932,4 +1211,12 @@ function formatBytes(bytes: number): string {
     return `${(bytes / 1024).toFixed(1)} KB`;
   }
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatMs(value: number | undefined): string {
+  return value == null ? 'n/a' : `${Math.round(value)}ms`;
+}
+
+function formatCount(value: number | undefined): string {
+  return value == null ? 'n/a' : String(value);
 }
