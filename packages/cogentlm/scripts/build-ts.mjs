@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { copyFile, lstat, mkdir, readdir, rm } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -129,12 +129,30 @@ async function syncTypeScriptDist() {
   await rm(backupTypesDir, { recursive: true, force: true });
 }
 
+async function preserveBundlerDirectives() {
+  const runtimePath = path.join(tempEsmDir, 'runtime', 'engine-runtime-main-thread.js');
+  const runtimeText = await readFile(runtimePath, 'utf8');
+  const patchedRuntimeText = runtimeText.replace(
+    'import(moduleUrl)',
+    'import(/* @vite-ignore */ moduleUrl)'
+  );
+
+  if (patchedRuntimeText === runtimeText) {
+    throw new Error(
+      'Could not preserve Vite dynamic import directive in engine-runtime-main-thread.js.'
+    );
+  }
+
+  await writeFile(runtimePath, patchedRuntimeText);
+}
+
 await restoreInterruptedSwap();
 await rm(tempRoot, { recursive: true, force: true });
 await mkdir(tempRoot, { recursive: true });
 
 try {
   await runTypeScriptBuild();
+  await preserveBundlerDirectives();
   await syncTypeScriptDist();
   console.log('[build-ts] updated dist/esm and dist/types');
 } finally {

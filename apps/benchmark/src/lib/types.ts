@@ -169,8 +169,8 @@ export interface ConfigOptions {
 export interface MixedLoadDefinition {
   id: string;
   label: string;
-  background: ScenarioDefinition & { promptFormat: string; contextBucket: string; concurrency: number };
-  foreground: ScenarioDefinition & { promptFormat: string; contextBucket: string; concurrency: number };
+  background: ScenarioDefinition & { promptMode: 'raw'; contextBucket: string; concurrency: number };
+  foreground: ScenarioDefinition & { promptMode: 'raw'; contextBucket: string; concurrency: number };
   concurrency: number;
 }
 

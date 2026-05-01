@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -8,6 +9,8 @@ const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const requiredPackPaths = [
   'dist/esm/index.js',
   'dist/esm/runtime-assets.js',
+  'dist/esm/worker/model-service-client.js',
+  'dist/esm/worker/model-service-entry.js',
   'dist/esm/character/index.js',
   'dist/esm/orchestrator/index.js',
   'dist/types/index.d.ts',
@@ -51,6 +54,31 @@ const missingPaths = requiredPackPaths.filter((requiredPath) => !packedPaths.has
 
 if (missingPaths.length > 0) {
   fail(`Missing required release artifacts in tarball:\n- ${missingPaths.join('\n- ')}`);
+}
+
+const workerClientPath = path.join(packageDir, 'dist', 'esm', 'worker', 'model-service-client.js');
+const workerEntryPath = path.join(packageDir, 'dist', 'esm', 'worker', 'model-service-entry.js');
+const runtimePath = path.join(packageDir, 'dist', 'esm', 'runtime', 'engine-runtime-main-thread.js');
+const workerClientText = readFileSync(workerClientPath, 'utf8');
+const workerEntryText = readFileSync(workerEntryPath, 'utf8');
+const runtimeText = readFileSync(runtimePath, 'utf8');
+
+if (!workerClientText.includes("new Worker(new URL('./model-service-entry.js', import.meta.url)")) {
+  fail(
+    'Default worker construction must use new Worker(new URL(..., import.meta.url), ...) so bundlers include the worker graph.'
+  );
+}
+
+if (workerEntryText.includes('../../wasm/cogentlm-wasm')) {
+  fail(
+    'Worker entry must not hard-code ../../wasm runtime asset URLs; use getDefaultRuntimeUrls() so bundlers rewrite assets consistently.'
+  );
+}
+
+if (!runtimeText.includes('import(/* @vite-ignore */ moduleUrl)')) {
+  fail(
+    'Runtime module import must preserve /* @vite-ignore */ in dist so Vite does not try to statically analyze user-configurable moduleUrl.'
+  );
 }
 
 console.log(
