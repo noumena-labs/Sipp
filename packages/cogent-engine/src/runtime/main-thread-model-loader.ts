@@ -52,8 +52,7 @@ export class MainThreadModelLoader {
   }
 
   public cleanupAfterClose(module: EngineModule): void {
-    this.unmountActiveAssetSet(module);
-    this.loadedAssetPaths = [];
+    this.removeAllLoadedAssets(module);
   }
 
   public async stageModelBundle(
@@ -68,13 +67,18 @@ export class MainThreadModelLoader {
         ? null
         : await this.loadResolvedAssetSet([plan.projectorAsset], options.signal);
 
-    const mountedPaths = await this.mountAssetFiles(module, [
-      ...modelAssetSet.files,
-      ...(projectorAssetSet?.files ?? []),
-    ]);
+    const mountedPaths = await this.mountAssetFiles(module, modelAssetSet.files);
     const modelPath = mountedPaths[0];
-    const projectorPath =
-      projectorAssetSet == null ? null : mountedPaths[modelAssetSet.files.length] ?? null;
+    let projectorPath: string | null = null;
+    try {
+      projectorPath =
+        projectorAssetSet == null
+          ? null
+          : await this.stageProjectorFile(module, projectorAssetSet.files[0], options.signal);
+    } catch (error) {
+      this.removeAllLoadedAssets(module);
+      throw error;
+    }
 
     return {
       sourceKind: descriptor.kind,
@@ -263,6 +267,35 @@ export class MainThreadModelLoader {
     }
   }
 
+  private async stageProjectorFile(
+    module: EngineModule,
+    file: MountableModelFile,
+    signal?: AbortSignal,
+    mountDir = '/memfs_projector'
+  ): Promise<string> {
+    if (signal?.aborted) {
+      throw createAbortError('Model load aborted.');
+    }
+
+    const fs = module.FS;
+    if (!fs.analyzePath(mountDir).exists) {
+      fs.mkdir(mountDir);
+    }
+
+    const fileName = normalizeModelFileName(file.name || 'mmproj.gguf');
+    const path = `${mountDir}/${fileName}`;
+    this.removeFileIfExists(module, path);
+
+    const data = new Uint8Array(await file.arrayBuffer());
+    if (signal?.aborted) {
+      throw createAbortError('Model load aborted.');
+    }
+
+    fs.writeFile(path, data);
+    this.commitLoadedAssetPaths(module, [...this.loadedAssetPaths, path]);
+    return path;
+  }
+
   private removeAllLoadedAssets(module: EngineModule): void {
     for (const path of this.loadedAssetPaths) {
       if (this.activeMountPath && path.startsWith(this.activeMountPath)) {
@@ -322,11 +355,15 @@ export class MainThreadModelLoader {
     if (this.activeMountPath == null) {
       return;
     }
+    const unmountedPath = this.activeMountPath;
     try {
       module.FS.unmount(this.activeMountPath);
     } catch {
       // Ignore stale unmount cleanup failures.
     }
     this.activeMountPath = null;
+    this.loadedAssetPaths = this.loadedAssetPaths.filter(
+      (path) => !path.startsWith(unmountedPath)
+    );
   }
 }
