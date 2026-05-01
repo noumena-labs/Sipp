@@ -12,6 +12,7 @@
     "apps/examples"
   ],
   "scripts": {
+    "test": "bun test packages/*/src apps/*/src",
     "build": "bun run build:package",
     "build:package": "bun run --filter=cogentlm build",
     "build:package:release": "bun run --filter=cogentlm build:release",

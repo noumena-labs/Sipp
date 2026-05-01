@@ -56,7 +56,7 @@ bun run rebuild:package
 Get started in a few lines of code:
 
 ```ts
-import { CogentEngine } from 'cogent-engine';
+import { CogentEngine } from 'cogentlm';
 
 const engine = await CogentEngine.create();
 
@@ -71,8 +71,9 @@ await engine.close();
 
 ### Query
 
-Use `engine.chat(...)` when you have chat messages and want Cogent to apply the
-loaded model's native chat template:
+Use `engine.chat(...)` for normal assistant-style interaction. Cogent reads the
+loaded GGUF model's native chat template and renders your messages into the
+model-specific prompt format before inference:
 
 ```ts
 const reply = await engine.chat([
@@ -81,10 +82,15 @@ const reply = await engine.chat([
 ]);
 ```
 
-Use `engine.query(...)` when you already have a raw prompt string:
+Use `engine.query(...)` only when you already have a complete raw prompt string.
+Cogent does not apply a chat template in `query()`, so the prompt must already
+include whatever control tokens, role markers, or assistant prefix your model
+expects:
 
 ```ts
-const text = await engine.query('Summarize the current model.');
+const text = await engine.query(
+  '<|im_start|>user\nSummarize the current model.<|im_end|>\n<|im_start|>assistant\n'
+);
 
 const vision = await engine.chat({
   messages: [{ role: 'user', content: 'What is in this image?' }],

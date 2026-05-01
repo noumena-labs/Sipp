@@ -48,7 +48,7 @@
     "test:backend-ops:cuda": "bun ./scripts/test-backend-ops-cuda.mjs",
     "test:backend-ops:cuda:op": "bun ./scripts/test-backend-ops-cuda-op.mjs",
     "test:backend-ops:cuda:debug": "bun ./scripts/test-backend-ops-cuda-op.mjs --debug",
-    "build:ts": "bun ./scripts/clean-ts-dist.mjs && bunx --bun tsc -p tsconfig.json",
+    "build:ts": "bun ./scripts/clean-ts-dist.mjs && bun ./scripts/build-ts.mjs",
     "pack:validate": "bun ./scripts/validate-pack.mjs"
   },
   "keywords": [
@@ -58,7 +58,7 @@
     "webgpu"
   ],
   "author": "noumena-labs",
-  "homepage": "https://github.com/noumena-labs/CogentLM/tree/master/packages/cogentlm#readme",
+  "homepage": "https://www.cogentlm.com/",
   "bugs": {
     "url": "https://github.com/noumena-labs/CogentLM/issues"
   },
