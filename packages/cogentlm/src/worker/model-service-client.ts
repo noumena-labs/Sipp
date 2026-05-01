@@ -51,7 +51,6 @@ function toWorkerQueryOptions(options: QueryOptions = {}): WorkerQueryOptions {
   return {
     session: options.session,
     maxTokens: options.maxTokens,
-    format: options.format,
     grammar: options.grammar,
   };
 }
@@ -210,10 +209,10 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     if (this.worker != null) {
       return this.worker;
     }
-    const workerUrl =
-      this.config.workerUrl ??
-      new URL('./model-service-entry.js', import.meta.url).toString();
-    this.worker = new Worker(workerUrl, { type: 'module' });
+    this.worker =
+      this.config.workerUrl == null
+        ? new Worker(new URL('./model-service-entry.js', import.meta.url), { type: 'module' })
+        : new Worker(this.config.workerUrl, { type: 'module' });
     this.worker.onmessage = (event: MessageEvent<WorkerResponseMessage>) => {
       this.handleWorkerMessage(event.data);
     };

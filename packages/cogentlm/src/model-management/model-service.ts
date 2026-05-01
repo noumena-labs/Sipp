@@ -17,7 +17,6 @@ import { ModelRegistryStore } from './model-registry-store.js';
 import { PairingValidator, type ClassifiedAssetFile, type PairingPlan } from './pairing-validator.js';
 import {
   QueryError,
-  toPromptFormatMode,
   type AssetRecord,
   type ChatInput,
   type ChatOptions,
@@ -354,7 +353,6 @@ export class ModelService implements ModelLifecycleService {
     }
     const promptOptions: PromptOptions = {
       nTokens: options.maxTokens,
-      promptFormat: toPromptFormatMode(options.format),
       signal: options.signal,
       onToken: options.onToken,
       media,
@@ -456,7 +454,6 @@ export class ModelService implements ModelLifecycleService {
         },
         {
           ...options,
-          format: 'raw',
           signal: linkedAbort.signal,
           onToken: consumeOutputText,
         }

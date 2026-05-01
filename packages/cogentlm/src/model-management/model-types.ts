@@ -1,6 +1,6 @@
 import type { AssetInspection } from '../model-bundle/model-bundle-types.js';
 import type { ChatMessage } from '../core/inference-types.js';
-import type { BackendDeviceType, InferenceInitConfig, PromptFormatMode } from '../types.js';
+import type { BackendDeviceType, InferenceInitConfig } from '../types.js';
 
 export type ModelModality = 'text' | 'vision';
 export type ModelStatus = 'ready' | 'needs_projector' | 'broken';
@@ -94,7 +94,6 @@ export type QueryInput =
 export interface QueryOptions {
   session?: string;
   maxTokens?: number;
-  format?: 'auto' | 'raw';
   signal?: AbortSignal;
   onToken?: (token: string) => void;
   grammar?: string;
@@ -107,7 +106,7 @@ export type ChatInput =
       media?: Uint8Array[];
     };
 
-export type ChatOptions = Omit<QueryOptions, 'format'>;
+export type ChatOptions = QueryOptions;
 
 export interface QueryObservation {
   session: string | null;
@@ -267,8 +266,4 @@ export interface LoadedModelState {
   id: string;
   assetFingerprint: string;
   runtimeFingerprint: string;
-}
-
-export function toPromptFormatMode(format: QueryOptions['format']): PromptFormatMode {
-  return format === 'raw' ? 'raw' : 'auto-chat';
 }

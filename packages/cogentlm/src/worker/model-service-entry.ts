@@ -1,5 +1,6 @@
 import { ModelService } from '../model-management/model-service.js';
 import { QueryError } from '../model-management/model-types.js';
+import { getDefaultRuntimeUrls } from '../runtime-assets.js';
 import { MainThreadEngineRuntime } from '../runtime/engine-runtime-main-thread.js';
 import {
   WorkerRequestMessage,
@@ -30,10 +31,7 @@ function stableJson(value: unknown): string {
 function buildServiceConfig(config: WorkerSerializableCogentConfig): WorkerServiceConfig {
   const bundledRuntimeUrls =
     config.moduleUrl == null && config.wasmUrl == null
-      ? {
-          moduleUrl: new URL('../../wasm/cogentlm-wasm.js', import.meta.url).toString(),
-          wasmUrl: new URL('../../wasm/cogentlm-wasm.wasm', import.meta.url).toString(),
-        }
+      ? getDefaultRuntimeUrls()
       : null;
 
   return {

@@ -20,7 +20,7 @@ export interface WorkerSerializableCogentConfig {
 }
 
 export type WorkerModelLoadOptions = Pick<ModelLoadOptions, 'observability' | 'runtime'>;
-export type WorkerQueryOptions = Pick<QueryOptions, 'session' | 'maxTokens' | 'format' | 'grammar'>;
+export type WorkerQueryOptions = Pick<QueryOptions, 'session' | 'maxTokens' | 'grammar'>;
 export type WorkerChatOptions = Pick<ChatOptions, 'session' | 'maxTokens' | 'grammar'>;
 
 export type WorkerRequestMessage =

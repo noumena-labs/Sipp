@@ -109,7 +109,7 @@ function createFakeEngine(): FakeEngine {
           prompt,
           ...(!Array.isArray(input) && input.media != null ? { media: input.media } : {}),
         },
-        options: { ...options, format: 'raw' },
+        options: { ...options },
       });
       completedCount++;
       flushRunWaiters();
@@ -452,7 +452,6 @@ test('choose() threads literal-choice grammar into queuePrompt options', async (
   const call = engine.queryCalls[0];
   assert.ok(typeof call.options === 'object' && call.options != null);
   const opts = call.options as QueryOptions;
-  assert.equal(opts.format, 'raw');
   assert.equal(opts.maxTokens, 24);
   assert.ok(typeof (opts as any).grammar === 'string' && (opts as any).grammar.includes('approach:aria'));
   const promptText = (call.input as any).prompt;
@@ -593,8 +592,6 @@ test('chat() passes a rendered raw prompt to query', async () => {
   assert.ok(promptText.endsWith('<assistant>\n'));
 
   assert.ok(typeof call.options === 'object' && call.options != null);
-  const opts = call.options as QueryOptions;
-  assert.equal(opts.format, 'raw');
 });
 
 test('chat() includes prior turn history in the rendered prompt', async () => {

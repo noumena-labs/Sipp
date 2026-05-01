@@ -1,7 +1,6 @@
 import type { RequestObservabilityMetrics } from '../observability/runtime-observability.js';
 
 export type FlashAttentionMode = 'auto' | 'enabled' | 'disabled';
-export type PromptFormatMode = 'raw' | 'auto-chat';
 export type SchedulerPolicyMode = 'latency-first' | 'balanced' | 'throughput-first';
 export type EngineExecutionMode = 'main-thread' | 'worker';
 
@@ -50,7 +49,6 @@ export interface InferenceInitConfig {
 
 export interface PromptOptions {
   nTokens?: number;
-  promptFormat?: PromptFormatMode;
   signal?: AbortSignal;
   onToken?: (token: string) => void;
   media?: Uint8Array[];
@@ -73,7 +71,6 @@ export interface GenerateRequest {
   contextKey: string;
   promptText: string;
   maxOutputTokens: number;
-  promptFormat: PromptFormatMode;
   media?: Uint8Array[];
   /** Optional GBNF grammar source (see {@link PromptOptions.grammar}). */
   grammar?: string;

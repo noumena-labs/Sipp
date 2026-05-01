@@ -1,9 +1,6 @@
 import { CogentConfig, EngineModuleOptions } from '../cogent-config.js';
 import { normalizeInitConfig } from '../core/init-config.js';
-import {
-  normalizePromptText,
-  resolveEffectivePromptFormat,
-} from '../core/prompt-format.js';
+import { normalizePromptText } from '../core/prompt-format.js';
 import {
   BackendObservability,
   EngineExecutionMode,
@@ -23,7 +20,6 @@ import { MainThreadModelLoader } from './main-thread-model-loader.js';
 import {
   COMPLETED_REQUEST_STATUS_PENDING,
   DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY,
-  DEFAULT_PROMPT_FORMAT,
   MAX_PROMPT_TOKENS,
 } from './main-thread-runtime-constants.js';
 import { RequestTracker } from './request-tracker.js';
@@ -131,15 +127,6 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return this.normalizeTokenCount(input.nTokens ?? 128);
   }
 
-  private resolvePromptFormat(
-    input: PromptOptions | number | undefined
-  ): 'raw' | 'auto-chat' {
-    if (typeof input === 'number' || input === undefined) {
-      return DEFAULT_PROMPT_FORMAT;
-    }
-    return input.promptFormat ?? DEFAULT_PROMPT_FORMAT;
-  }
-
   private resolvePromptMedia(
     input: PromptOptions | number | undefined
   ): Uint8Array[] | undefined {
@@ -189,16 +176,11 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   ): GenerateRequest {
     void bridge;
     const media = this.resolvePromptMedia(options);
-    const promptFormat = resolveEffectivePromptFormat(
-      this.resolvePromptFormat(options),
-      Boolean(media && media.length > 0)
-    );
     const normalizedPromptText = normalizePromptText(promptText);
     const request: GenerateRequest = {
       contextKey,
       promptText: normalizedPromptText,
       maxOutputTokens: this.resolvePromptTokenCount(options),
-      promptFormat,
       media,
       grammar: this.resolvePromptGrammar(options),
     };

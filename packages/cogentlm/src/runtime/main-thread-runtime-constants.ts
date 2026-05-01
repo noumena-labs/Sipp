@@ -4,7 +4,6 @@ export type MountableModelFile = Blob & { name?: string };
 
 export const MAX_PROMPT_TOKENS = 2048;
 export const DEFAULT_MAX_MODEL_BYTES = 8 * 1024 * 1024 * 1024;
-export const DEFAULT_PROMPT_FORMAT = 'auto-chat';
 export const REQUEST_STEP_RESULT_INVALID = -1;
 export const REQUEST_STEP_RESULT_FATAL_NO_PROGRESS = -2;
 export const REQUEST_STEP_RESULT_WAITING = 0;
