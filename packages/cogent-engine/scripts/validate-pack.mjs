@@ -15,9 +15,7 @@ const requiredPackPaths = [
   'dist/types/character/index.d.ts',
   'dist/types/orchestrator/index.d.ts',
   'dist/wasm/cogent-engine-wasm.js',
-  'dist/wasm/cogent-engine-wasm.wasm',
-  'dist/wasm-bun/cogent-engine-wasm.js',
-  'dist/wasm-bun/cogent-engine-wasm.wasm'
+  'dist/wasm/cogent-engine-wasm.wasm'
 ];
 
 function fail(message) {
