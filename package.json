@@ -7,6 +7,7 @@
     "packages/*",
     "apps/benchmark",
     "apps/avatar",
+    "apps/proactive-ui",
     "apps/simulation",
     "apps/examples"
   ],
@@ -32,6 +33,9 @@
     "avatar:dev": "bun run build:package && bun run --filter=cogent-engine-avatar-app dev",
     "avatar:build": "bun run build:package && bun run --filter=cogent-engine-avatar-app build",
     "avatar:preview": "bun run --filter=cogent-engine-avatar-app preview",
+    "proactive-ui:dev": "bun run build:package && bun run --filter=cogent-engine-proactive-ui-app dev",
+    "proactive-ui:build": "bun run build:package && bun run --filter=cogent-engine-proactive-ui-app build",
+    "proactive-ui:preview": "bun run --filter=cogent-engine-proactive-ui-app preview",
     "simulation:dev": "bun run build:package:dev && bun run --filter=cogent-engine-simulation-app dev",
     "simulation:build": "bun run build:package && bun run --filter=cogent-engine-simulation-app build",
     "simulation:preview": "bun run --filter=cogent-engine-simulation-app preview",
