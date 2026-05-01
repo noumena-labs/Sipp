@@ -2,24 +2,24 @@ import react from '@vitejs/plugin-react';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
-import { cogentEngineDistWatch } from '../cogent-engine-dist-watch';
+import { cogentEngineDistWatch } from '../cogentlm-dist-watch';
 
 const proactiveUiAppDir = fileURLToPath(new URL('.', import.meta.url));
 const cogentEngineEntry = path.resolve(
   proactiveUiAppDir,
-  '../../packages/cogent-engine/dist/esm/index.js'
+  '../../packages/cogentlm/dist/esm/index.js'
 );
 
 export default defineConfig({
   plugins: [react(), cogentEngineDistWatch()],
   resolve: {
     alias: {
-      '@noumena-labs/cogent-engine': cogentEngineEntry,
+      'cogentlm': cogentEngineEntry,
     },
     preserveSymlinks: true,
   },
   optimizeDeps: {
-    exclude: ['@noumena-labs/cogent-engine'],
+    exclude: ['cogentlm'],
   },
   server: {
     headers: {

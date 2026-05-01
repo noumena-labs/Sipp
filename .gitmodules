@@ -1,4 +1,4 @@
-[submodule "packages/cogent-engine/third_party/llama.cpp"]
-	path = packages/cogent-engine/third_party/llama.cpp
+[submodule "packages/cogentlm/third_party/llama.cpp"]
+	path = packages/cogentlm/third_party/llama.cpp
 	url = git@github.com:noumena-labs/llama.cpp.internal.git
 	branch = master

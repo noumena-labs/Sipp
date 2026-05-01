@@ -82,7 +82,7 @@ export function TranscriptDrawer({
                   </div>
                   <div className="transcript-text">
                     {message.text.trim().length > 0 ? message.text : fallbackText}
-                    {message.pending ? <span className="cursor">▍</span> : null}
+                    {message.pending ? <span className="cursor"></span> : null}
                   </div>
                 </article>
               );

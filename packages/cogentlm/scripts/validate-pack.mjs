@@ -14,8 +14,8 @@ const requiredPackPaths = [
   'dist/types/runtime-assets.d.ts',
   'dist/types/character/index.d.ts',
   'dist/types/orchestrator/index.d.ts',
-  'dist/wasm/cogent-engine-wasm.js',
-  'dist/wasm/cogent-engine-wasm.wasm'
+  'dist/wasm/cogentlm-wasm.js',
+  'dist/wasm/cogentlm-wasm.wasm'
 ];
 
 function fail(message) {

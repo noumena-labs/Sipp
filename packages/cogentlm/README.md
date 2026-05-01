@@ -1,11 +1,11 @@
-# cogent-engine
+# cogentlm
 
 Browser-first inference runtime for CogentLM.
 
 The public API is intentionally small:
 
 ```ts
-import { CogentEngine } from 'cogent-engine';
+import { CogentEngine } from 'cogentlm';
 
 const engine = await CogentEngine.create();
 

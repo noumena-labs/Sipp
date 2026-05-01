@@ -1,6 +1,6 @@
-import type { ChatInput, ChatOptions, CogentEngine, QueryInput, QueryOptions } from '@noumena-labs/cogent-engine';
-import type { CharacterRuntimeEngine } from '@noumena-labs/cogent-engine/character';
-import type { DirectorRuntimeEngine } from '@noumena-labs/cogent-engine/director';
+import type { ChatInput, ChatOptions, CogentEngine, QueryInput, QueryOptions } from 'cogentlm';
+import type { CharacterRuntimeEngine } from 'cogentlm/character';
+import type { DirectorRuntimeEngine } from 'cogentlm/director';
 import type { BrainDefinition, BrainQueryType, BrainQueryStatus, BrainActivityStore } from './brain-activity-store.js';
 
 interface TracedChatMessage {

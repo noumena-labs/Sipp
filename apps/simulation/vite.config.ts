@@ -2,34 +2,34 @@ import react from '@vitejs/plugin-react';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
-import { cogentEngineDistWatch } from '../cogent-engine-dist-watch';
+import { cogentEngineDistWatch } from '../cogentlm-dist-watch';
 
 const simAppDir = fileURLToPath(new URL('.', import.meta.url));
 const cogentEngineEntry = path.resolve(
   simAppDir,
-  '../../packages/cogent-engine/dist/esm/index.js'
+  '../../packages/cogentlm/dist/esm/index.js'
 );
 const cogentEngineCharacterEntry = path.resolve(
   simAppDir,
-  '../../packages/cogent-engine/dist/esm/character/index.js'
+  '../../packages/cogentlm/dist/esm/character/index.js'
 );
 const cogentEngineDirectorEntry = path.resolve(
   simAppDir,
-  '../../packages/cogent-engine/dist/esm/director/index.js'
+  '../../packages/cogentlm/dist/esm/director/index.js'
 );
 
 export default defineConfig({
   plugins: [react(), cogentEngineDistWatch()],
   resolve: {
     alias: {
-      '@noumena-labs/cogent-engine/director': cogentEngineDirectorEntry,
-      '@noumena-labs/cogent-engine/character': cogentEngineCharacterEntry,
-      '@noumena-labs/cogent-engine': cogentEngineEntry,
+      'cogentlm/director': cogentEngineDirectorEntry,
+      'cogentlm/character': cogentEngineCharacterEntry,
+      'cogentlm': cogentEngineEntry,
     },
     preserveSymlinks: true,
   },
   optimizeDeps: {
-    exclude: ['@noumena-labs/cogent-engine'],
+    exclude: ['cogentlm'],
   },
   server: {
     headers: {

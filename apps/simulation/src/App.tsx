@@ -13,8 +13,8 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { CogentEngine } from '@noumena-labs/cogent-engine';
-import { createDirectorFromConfigUrl } from '@noumena-labs/cogent-engine/director';
+import { CogentEngine } from 'cogentlm';
+import { createDirectorFromConfigUrl } from 'cogentlm/director';
 import { BrainActivityHud } from './components/BrainActivityHud';
 import { BrainTraceDrawer } from './components/BrainTraceDrawer';
 import { SimulationCanvas } from './components/SimulationCanvas';
@@ -569,16 +569,16 @@ export default function App() {
         });
         setActiveScenario(scenario);
         resetSimulationUi();
-        setStatus('Initialising engine…');
+        setStatus('Initialising engine');
         nextEngine = await CogentEngine.create();
 
-        setStatus('Downloading model…');
+        setStatus('Downloading model');
         await nextEngine.models.load(url, {
-          onProgress: (progress) => {
+          onProgress: (progress: any) => {
             if (progress.phase === 'download') {
-              setStatus(`Downloading model… ${Math.floor(progress.percent ?? 0)}%`);
+              setStatus(`Downloading model ${Math.floor(progress.percent ?? 0)}%`);
             } else if (progress.phase === 'load') {
-              setStatus('Loading into memory…');
+              setStatus('Loading into memory');
             }
           },
           observability: 'profile',
@@ -597,7 +597,7 @@ export default function App() {
           },
         });
 
-        setStatus('Loading director config…');
+        setStatus('Loading director config');
         const directorBrain = BRAIN_DEFINITIONS.find((brain) => brain.id === 'director');
         if (!directorBrain) {
           throw new Error('director brain definition is missing');
@@ -608,7 +608,7 @@ export default function App() {
           runtimeOptions: { maxOutputTokens: 96 },
         });
 
-        setStatus('Building simulation runtime…');
+        setStatus('Building simulation runtime');
         nextRuntime = new SimulationRuntime(director, {
           id: scenario.id,
           bus,
@@ -627,7 +627,7 @@ export default function App() {
           nextRuntime.upsertObject(seed);
         }
 
-        setStatus('Loading agent personas…');
+        setStatus('Loading agent personas');
         for (const assignment of COURTYARD_AGENTS) {
           const brain = BRAIN_DEFINITIONS.find((entry) => entry.id === assignment.agentId);
           if (!brain) {
@@ -696,7 +696,7 @@ export default function App() {
     }
     criticalIssueRef.current = false;
     setHasSimulationStarted(true);
-    setStatus('Stepping…');
+    setStatus('Stepping');
     await harness.runtime.step(SIMULATION_STEP_SECONDS);
     await harness.runtime.waitForIdle();
     if (criticalIssueRef.current) return;
@@ -707,7 +707,7 @@ export default function App() {
     if (!harness) return;
     setBusy(true);
     setRunning(false);
-    setStatus('Resetting…');
+    setStatus('Resetting');
     const currentHarness = harness;
     setHarness(null);
     try {

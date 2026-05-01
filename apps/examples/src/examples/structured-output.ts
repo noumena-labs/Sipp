@@ -10,7 +10,7 @@ export const structuredOutputExample: Example = {
   },
   onUserInput: async ({ engine, log, userInput }) => {
     log(userInput, 'user');
-    
+
     // Simple JSON grammar for an object with name, year, and color
     const jsonGrammar = `
       root ::= "{" space "\\"name\\":" space string "," space "\\"year\\":" space number "," space "\\"color\\":" space string "}"
@@ -20,11 +20,11 @@ export const structuredOutputExample: Example = {
     `.trim();
 
     log('Applying GBNF grammar for JSON object {name, year, color}...', 'dim');
-    
+
     try {
       let fullResponse = '';
       const responseEl = log('', 'ai'); // Create persistent element for streaming
-      
+
       await engine.chat([
         { role: 'user', content: `Extract data: ${userInput}` }
       ], {
@@ -34,11 +34,11 @@ export const structuredOutputExample: Example = {
           responseEl.innerText = fullResponse; // Update in real-time
         }
       });
-      
+
       try {
         const parsed = JSON.parse(fullResponse);
         console.log('Successfully parsed JSON:', parsed);
-        log('✅ Valid JSON received and parsed.', 'system');
+        log('Valid JSON received and parsed.', 'system');
       } catch {
         log('⚠️ Received text follows grammar but failed native JSON.parse (likely due to trailing chars or whitespace).', 'error');
       }

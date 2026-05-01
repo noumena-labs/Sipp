@@ -2,12 +2,12 @@ import react from '@vitejs/plugin-react';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
-import { cogentEngineDistWatch } from '../cogent-engine-dist-watch';
+import { cogentEngineDistWatch } from '../cogentlm-dist-watch';
 
 const benchmarkAppDir = fileURLToPath(new URL('.', import.meta.url));
 const cogentEngineEntry = path.resolve(
   benchmarkAppDir,
-  '../../packages/cogent-engine/dist/esm/index.js'
+  '../../packages/cogentlm/dist/esm/index.js'
 );
 
 export default defineConfig({
@@ -17,12 +17,12 @@ export default defineConfig({
       // Use the built workspace entry directly so Vite does not serve the package
       // through an immutable /node_modules dependency URL that can stay stale
       // across local package rebuilds.
-      '@noumena-labs/cogent-engine': cogentEngineEntry,
+      'cogentlm': cogentEngineEntry,
     },
     preserveSymlinks: true,
   },
   optimizeDeps: {
-    exclude: ['@noumena-labs/cogent-engine'],
+    exclude: ['cogentlm'],
   },
   server: {
     headers: {

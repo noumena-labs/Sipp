@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(CogentEngineWeb CXX)
+project(CogentLM CXX)
 
 set(CMAKE_CXX_FLAGS_DEBUG "" CACHE STRING "" FORCE)
 set(CMAKE_C_FLAGS_DEBUG "" CACHE STRING "" FORCE)
@@ -60,9 +60,9 @@ endfunction()
 
 # llama.cpp subproject
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libs" FORCE)
-set(LLAMA_WASM_MEM64 ${CE_WASM_MEM64} CACHE BOOL "Use wasm64 memory model for cogent-engine" FORCE)
-set(GGML_WEBGPU ON CACHE BOOL "Enable WebGPU backend for CogentEngine browser builds" FORCE)
-set(LLAMA_BUILD_COMMON ON CACHE BOOL "Build llama.cpp common utils for CogentEngine" FORCE)
+set(LLAMA_WASM_MEM64 ${CE_WASM_MEM64} CACHE BOOL "Use wasm64 memory model for cogentlm" FORCE)
+set(GGML_WEBGPU ON CACHE BOOL "Enable WebGPU backend for CogentLM browser builds" FORCE)
+set(LLAMA_BUILD_COMMON ON CACHE BOOL "Build llama.cpp common utils for CogentLM" FORCE)
 if(CE_BUILD_WEBGPU_TEST_BACKEND_OPS)
   set(LLAMA_BUILD_TESTS ON CACHE BOOL "Build llama.cpp tests" FORCE)
   set(LLAMA_OPENSSL OFF CACHE BOOL "Disable OpenSSL for Emscripten test builds" FORCE)
@@ -144,23 +144,23 @@ set(CE_MTMD_SOURCES
     ${CE_MTMD_MODEL_DIR}/yasa2.cpp
 )
 
-add_executable(CogentEngine ${PLUGIN_SOURCES})
+add_executable(CogentLM ${PLUGIN_SOURCES})
 
-target_sources(CogentEngine PRIVATE ${CE_MTMD_SOURCES})
+target_sources(CogentLM PRIVATE ${CE_MTMD_SOURCES})
 
-target_include_directories(CogentEngine PRIVATE
+target_include_directories(CogentLM PRIVATE
     ${CMAKE_SOURCE_DIR}/native
     ${CE_MTMD_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp/common
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp/vendor
 )
-target_link_libraries(CogentEngine PRIVATE llama)
+target_link_libraries(CogentLM PRIVATE llama)
 if(TARGET llama-common)
-    target_link_libraries(CogentEngine PRIVATE llama-common)
+    target_link_libraries(CogentLM PRIVATE llama-common)
 endif()
 if(TARGET common)
-    target_link_libraries(CogentEngine PRIVATE common)
+    target_link_libraries(CogentLM PRIVATE common)
 endif()
 
 if (MTMD_NO_LOGGING)
@@ -175,7 +175,7 @@ endif()
 
 foreach(_ggml_target ggml ggml-base ggml-cpu ggml-webgpu)
     if(TARGET ${_ggml_target})
-        target_link_libraries(CogentEngine PRIVATE ${_ggml_target})
+        target_link_libraries(CogentLM PRIVATE ${_ggml_target})
     endif()
 endforeach()
 
@@ -193,7 +193,7 @@ set(CE_WASM_TARGET_LINK_OPTIONS
     -sALLOW_TABLE_GROWTH=1
     -sMODULARIZE=1
     -sEXPORT_ES6=1
-    -sEXPORT_NAME='CogentEngineModule'
+    -sEXPORT_NAME='CogentLMModule'
     -sSINGLE_FILE=0
 )
 
@@ -211,10 +211,10 @@ if(CE_WASM_USE_JSPI)
 endif()
 
 # Link flags for ES Module build
-target_link_options(CogentEngine PRIVATE ${CE_WASM_TARGET_LINK_OPTIONS})
+target_link_options(CogentLM PRIVATE ${CE_WASM_TARGET_LINK_OPTIONS})
 
-set_target_properties(CogentEngine PROPERTIES
-    OUTPUT_NAME "CogentEngine"
+set_target_properties(CogentLM PROPERTIES
+    OUTPUT_NAME "CogentLM"
     SUFFIX ".js"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/dist"
 )

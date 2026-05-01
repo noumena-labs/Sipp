@@ -1,4 +1,4 @@
-import type { RuntimeObservation } from '@noumena-labs/cogent-engine';
+import type { RuntimeObservation } from 'cogentlm';
 
 export interface SamplingConfig {
   repeatLastN?: number;

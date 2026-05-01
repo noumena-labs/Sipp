@@ -1,6 +1,6 @@
 # Cogent Engine Examples
 
-This directory contains minimal, developer-centric examples for the `@noumena-labs/cogent-engine` library.
+This directory contains minimal, developer-centric examples for the `cogentlm` library.
 
 ## Getting Started
 

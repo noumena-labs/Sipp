@@ -1,6 +1,6 @@
 # Browser Benchmark App
 
-This app is the browser benchmark harness for `cogent-engine`.
+This app is the browser benchmark harness for `cogentlm`.
 It is intentionally benchmark-focused: no Three.js scene, no decorative WebGL layer,
 and no unrelated demo behavior.
 Benchmark runs explicitly enable runtime observability and backend profiling so the

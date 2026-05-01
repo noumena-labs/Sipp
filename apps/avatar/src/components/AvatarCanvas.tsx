@@ -9,7 +9,7 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import { useEffect, useRef, useSyncExternalStore } from 'react';
-import type { CharacterEventBus } from '@noumena-labs/cogent-engine/character';
+import type { CharacterEventBus } from 'cogentlm/character';
 import { createScene, type SceneHandle } from '../scene/scene';
 import { loadAvatar, type LoadedAvatar } from '../scene/vrm-loader';
 import { ThreeVRMBinding } from '../bindings/three-vrm-binding';

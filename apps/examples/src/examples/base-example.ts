@@ -1,4 +1,4 @@
-import { CogentEngine } from '@noumena-labs/cogent-engine';
+import { CogentEngine } from 'cogentlm';
 
 export interface ExampleContext {
   engine: CogentEngine;

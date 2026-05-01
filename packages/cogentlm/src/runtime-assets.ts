@@ -29,8 +29,8 @@ function parseConfiguredUrl(rawUrl: string, fieldName: string): URL {
 
 export function getDefaultRuntimeUrls(): RuntimeUrls {
   return {
-    moduleUrl: new URL('../wasm/cogent-engine-wasm.js', import.meta.url).toString(),
-    wasmUrl: new URL('../wasm/cogent-engine-wasm.wasm', import.meta.url).toString(),
+    moduleUrl: new URL('../wasm/cogentlm-wasm.js', import.meta.url).toString(),
+    wasmUrl: new URL('../wasm/cogentlm-wasm.wasm', import.meta.url).toString(),
   };
 }
 

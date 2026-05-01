@@ -4,7 +4,7 @@ import {
   type ModelInfo,
   type ModelSource,
   type ObservabilitySnapshot,
-} from '@noumena-labs/cogent-engine';
+} from 'cogentlm';
 import { MetricCard } from './components/MetricCard';
 import {
   buildBenchmarkScenarios,
@@ -255,9 +255,9 @@ export default function App() {
       runtime: getDefaultRuntimeOptions(),
       onProgress: (progress) => {
         if (progress.phase === 'download') {
-          setStatus(`Downloading model… ${Math.floor(progress.percent ?? 0)}%`);
+          setStatus(`Downloading model�?${Math.floor(progress.percent ?? 0)}%`);
         } else if (progress.phase === 'load') {
-          setStatus('Loading into memory…');
+          setStatus('Loading into memory�?);
         }
       },
     });

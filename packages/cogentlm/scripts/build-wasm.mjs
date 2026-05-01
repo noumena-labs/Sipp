@@ -6,12 +6,12 @@ import { fileURLToPath } from 'node:url';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, '..');
-const wasmTargetName = 'CogentEngine';
+const wasmTargetName = 'CogentLM';
 const isWindows = process.platform === 'win32';
 const supportedGenerators = new Set(['Ninja', 'NMake Makefiles', 'Unix Makefiles']);
 const buildLabel = process.env.CE_WASM_BUILD_LABEL?.trim() || '[build-wasm]';
 const buildDirName = process.env.CE_WASM_BUILD_DIR_NAME?.trim() || 'build';
-const artifactPrefix = 'cogent-engine-wasm';
+const artifactPrefix = 'cogentlm-wasm';
 const buildDir = path.join(projectRoot, buildDirName);
 const buildDistDir = path.join(buildDir, 'dist');
 const packageWasmSubdir = process.env.CE_WASM_OUTPUT_SUBDIR?.trim() || 'wasm';
@@ -641,14 +641,14 @@ async function copyWasmArtifacts() {
   await mkdir(packageWasmDir, { recursive: true });
 
   for (const artifactName of await readdir(buildDistDir)) {
-    if (!artifactName.startsWith('CogentEngine')) {
+    if (!artifactName.startsWith('CogentLM')) {
       continue;
     }
 
     const sourcePath = path.join(buildDistDir, artifactName);
     const targetPath = path.join(
       packageWasmDir,
-      `${artifactPrefix}${artifactName.slice('CogentEngine'.length)}`
+      `${artifactPrefix}${artifactName.slice('CogentLM'.length)}`
     );
 
     await copyFile(sourcePath, targetPath);

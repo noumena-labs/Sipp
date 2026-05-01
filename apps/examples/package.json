@@ -1,5 +1,5 @@
 {
-  "name": "cogent-engine-examples",
+  "name": "cogentlm-examples",
   "private": true,
   "version": "0.0.1",
   "type": "module",
@@ -9,7 +9,7 @@
     "preview": "bunx --bun vite preview"
   },
   "dependencies": {
-    "@noumena-labs/cogent-engine": "workspace:*"
+    "cogentlm": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.3.3",

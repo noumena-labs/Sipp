@@ -1,5 +1,5 @@
 {
-  "name": "cogent-engine-simulation-app",
+  "name": "cogentlm-simulation-app",
   "private": true,
   "version": "0.0.1",
   "type": "module",
@@ -9,7 +9,7 @@
     "preview": "bunx --bun vite preview"
   },
   "dependencies": {
-    "@noumena-labs/cogent-engine": "workspace:*",
+    "cogentlm": "workspace:*",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "scheduler": "^0.27.0",

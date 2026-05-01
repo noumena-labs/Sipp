@@ -2,7 +2,7 @@
 //
 // character/index.ts
 //
-// - Barrel export for the `cogent-engine/character` subpath.
+// - Barrel export for the `cogentlm/character` subpath.
 // - Everything needed to stand up a character-driven runtime ships from
 //   this single entry point.
 //

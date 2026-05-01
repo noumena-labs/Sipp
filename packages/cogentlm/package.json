@@ -1,6 +1,6 @@
 {
-  "name": "@noumena-labs/cogent-engine",
-  "version": "0.0.4",
+  "name": "cogentlm",
+  "version": "0.0.1",
   "description": "Browser-focused inference runtime for llama.cpp compiled to WebAssembly.",
   "main": "dist/esm/index.js",
   "types": "dist/types/index.d.ts",
@@ -52,26 +52,25 @@
     "pack:validate": "bun ./scripts/validate-pack.mjs"
   },
   "keywords": [
-    "wasm",
     "llm",
-    "emscripten",
-    "cogent"
+    "cogent",
+    "inference",
+    "webgpu"
   ],
-  "author": "Constant",
-  "homepage": "https://github.com/noumena-labs/CogentLM/tree/constant/dev/packages/cogent-engine#readme",
+  "author": "noumena-labs",
+  "homepage": "https://github.com/noumena-labs/CogentLM/tree/master/packages/cogentlm#readme",
   "bugs": {
     "url": "https://github.com/noumena-labs/CogentLM/issues"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/noumena-labs/CogentLM.git",
-    "directory": "packages/cogent-engine"
+    "directory": "packages/cogentlm"
   },
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com",
-    "access": "restricted"
+    "access": "public"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "devDependencies": {
     "typescript": "^5.3.3",
     "@types/node": "^20.10.0",

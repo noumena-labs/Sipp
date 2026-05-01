@@ -4,7 +4,7 @@ import {
   type CharacterRuntimeEngine,
   type CharacterConfig,
   type CharacterChooseResult,
-} from '@noumena-labs/cogent-engine/character';
+} from 'cogentlm/character';
 import { buildDecisionContext } from './decision-context.js';
 import type { AgentGoal, AgentPerception, DecisionContext } from './types.js';
 

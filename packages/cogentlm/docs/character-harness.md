@@ -1,6 +1,6 @@
 # Character Harness
 
-`@noumena-labs/cogent-engine/character` turns a loaded `CogentEngine` into a character runtime driven by `character.json`.
+`cogentlm/character` turns a loaded `CogentEngine` into a character runtime driven by `character.json`.
 
 The host app still owns model loading, engine lifecycle, render assets, and business logic.
 
@@ -9,7 +9,7 @@ The host app still owns model loading, engine lifecycle, render assets, and busi
 If you already have a loaded `CogentEngine` named `engine`, this is enough to make a character talk.
 
 ```ts
-import { createCharacterFromConfigUrl } from '@noumena-labs/cogent-engine/character';
+import { createCharacterFromConfigUrl } from 'cogentlm/character';
 const { character } = await createCharacterFromConfigUrl({ configUrl: '/characters/aria/character.json', engine });
 for await (const event of character.chat('Say hi in character.')) {
   if (event.kind === 'prose') document.body.textContent += event.text;
@@ -29,7 +29,7 @@ import {
   parseCharacterConfig,
   type CharacterChooseResult,
   type CharacterRuntimeEngine,
-} from '@noumena-labs/cogent-engine/character';
+} from 'cogentlm/character';
 ```
 
 Advanced grammar/parser helpers live under:
@@ -38,7 +38,7 @@ Advanced grammar/parser helpers live under:
 import {
   compileActionGrammar,
   StreamingActionParser,
-} from '@noumena-labs/cogent-engine/character/advanced';
+} from 'cogentlm/character/advanced';
 ```
 
 ## Mental Model

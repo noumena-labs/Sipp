@@ -9,14 +9,14 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CogentEngine } from '@noumena-labs/cogent-engine';
+import { CogentEngine } from 'cogentlm';
 import {
   CharacterEventBus,
   createCharacterFromConfigUrl,
   parseCharacterConfig,
   type CharacterConfig,
   type CharacterRuntime,
-} from '@noumena-labs/cogent-engine/character';
+} from 'cogentlm/character';
 import { AvatarCanvas } from './components/AvatarCanvas';
 import { ChatComposer } from './components/ChatComposer';
 import {
@@ -132,7 +132,7 @@ export default function App() {
     abortRef.current = null;
     setModelUrl(args.modelUrl);
     setBusy(true);
-    setStatus('Loading Aria…');
+    setStatus('Loading Aria?');
     const previousHarness = harness;
     const previousPreviewCharacter = previewCharacter;
     const requestId = ++previewRequestIdRef.current;
@@ -144,13 +144,13 @@ export default function App() {
 
       const engine = await CogentEngine.create();
 
-      setStatus('Downloading and loading model…');
+      setStatus('Downloading and loading model?');
       await engine.models.load(args.modelUrl, {
-        onProgress: (progress) => {
+        onProgress: (progress: { phase: string; percent: any; }) => {
           if (progress.phase === 'download') {
-            setStatus(`Downloading model… ${Math.floor(progress.percent ?? 0)}%`);
+            setStatus(`Downloading model... ${Math.floor(progress.percent ?? 0)}%`);
           } else if (progress.phase === 'load') {
-            setStatus('Loading into memory…');
+            setStatus('Loading into memory...');
           }
         },
         runtime: {
@@ -298,10 +298,10 @@ export default function App() {
     harness?.config.persona.summary ??
     'A warm, playful stage companion.';
   const actionNames = useMemo(
-    () => previewCharacter?.config.actions.map((action) => action.id) ?? [],
+    () => previewCharacter?.config.actions.map((action: { id: any; }) => action.id) ?? [],
     [previewCharacter]
   );
-  const setupStatus = previewResolved ? status : 'Loading character preview…';
+  const setupStatus = previewResolved ? status : 'Loading character preview?';
 
   return (
     <div className="avatar-app">

@@ -1,12 +1,12 @@
 # CogentLM monorepo
 
-Monorepo for the published `@noumena-labs/cogent-engine` package plus the local avatar,
+Monorepo for the published `cogentlm` package plus the local avatar,
 benchmark, and simulation apps that exercise it.
 
 ## Workspace layout
 
-- `packages/cogent-engine`: publishable npm package and native/WebAssembly bridge
-- `packages/cogent-engine/third_party/llama.cpp`: pinned `llama.cpp` submodule
+- `packages/cogentlm`: publishable npm package and native/WebAssembly bridge
+- `packages/cogentlm/third_party/llama.cpp`: pinned `llama.cpp` submodule
 - `apps/avatar`: browser character harness with a VRM avatar
 - `apps/benchmark`: browser benchmark harness
 - `apps/simulation`: browser simulation and director example
@@ -16,8 +16,8 @@ benchmark, and simulation apps that exercise it.
 Clone with submodules so the vendored `llama.cpp` checkout is present from the start:
 
 ```bash
-git clone --recurse-submodules <repo-url> cogent-engine
-cd cogent-engine
+git clone --recurse-submodules <repo-url> cogentlm
+cd cogentlm
 ```
 
 If you already cloned the repo without submodules:
@@ -51,73 +51,71 @@ For a clean rebuild:
 bun run rebuild:package
 ```
 
-## Publish to GitHub Packages
+## Getting Started
 
-The repository `.npmrc` already maps `@noumena-labs` to GitHub Packages. Authenticate with either
-`NODE_AUTH_TOKEN` or `npm login --scope=@noumena-labs --registry=https://npm.pkg.github.com`, then
-run the shared publish helper from the repo root:
+Get started in a few lines of code:
 
-```bash
-bun run publish:cogent-engine:dry-run
-bun run publish:cogent-engine
+```ts
+import { CogentEngine } from 'cogent-engine';
+
+const engine = await CogentEngine.create();
+
+await engine.models.load('https://example.com/model.gguf');
+const answer = await engine.chat([
+  { role: 'user', content: 'Explain browser-hosted inference in one paragraph.' },
+]);
+
+console.log(answer);
+await engine.close();
 ```
 
-The helper verifies registry configuration and auth, runs the package `release:prepare` flow,
-validates the tarball with `npm pack --dry-run`, and then publishes with `npm publish`. The GitHub
-Actions workflow at `.github/workflows/publish-cogent-engine.yml` calls the same helper.
+### Query
 
-## Consume from another private app
+Use `engine.chat(...)` when you have chat messages and want Cogent to apply the
+loaded model's native chat template:
 
-Add this to the consuming repository `.npmrc`:
-
-```ini
-@noumena-labs:registry=https://npm.pkg.github.com
+```ts
+const reply = await engine.chat([
+  { role: 'system', content: 'Be concise.' },
+  { role: 'user', content: 'Summarize the current model.' },
+]);
 ```
 
-Authenticate with a PAT that has `read:packages` for installs and `write:packages` for publishes,
-or use `npm login` against the GitHub Packages registry. Install a pinned version:
+Use `engine.query(...)` when you already have a raw prompt string:
 
-```bash
-npm install @noumena-labs/cogent-engine@1.0.0
+```ts
+const text = await engine.query('Summarize the current model.');
+
+const vision = await engine.chat({
+  messages: [{ role: 'user', content: 'What is in this image?' }],
+  media: [imageBytes],
+});
 ```
 
-Available public imports:
+Streaming is available through `onToken`:
 
-- `@noumena-labs/cogent-engine`
-- `@noumena-labs/cogent-engine/character`
-- `@noumena-labs/cogent-engine/director`
-
-Browser apps that use the wasm runtime need `Cross-Origin-Opener-Policy: same-origin` and
-`Cross-Origin-Embedder-Policy: require-corp` so `SharedArrayBuffer` stays available.
-
-## Benchmark inference
-
-```bash
-bun run bench:bun --model ./Qwen3.5-0.8B-Q4_0.gguf --json ./benchmarks/latest-bun.json
+```ts
+const output = await engine.chat([{ role: 'user', content: 'Write a haiku.' }], {
+  maxTokens: 64,
+  onToken: (token) => {
+    console.log(token);
+  },
+});
 ```
+### Model Lifecycle
 
-This benchmarks the Bun-hosted runtime path with the standard matrix: model file read, WASM module
-init, model load into MEMFS, engine init, cold prompts, hot fresh-context prompts, and hot
-reused-context prompts. Use `--preset single --prompt "..." --tokens 32` for one custom prompt.
-The default matrix covers `SISO`, `SILO`, `LISO`, and `LILO`. Headline metrics are reported in a
-TensorRT-style serving format: `TTFT`, `TPOT`, `ITL`, `E2EL`, request throughput, output token
-throughput, and total token throughput.
+Use `engine.models` for model management:
 
-## Run Browser Benchmark App
+```ts
+const loaded = await engine.models.load({
+  model: 'https://example.com/vision-model.gguf',
+  projector: 'https://example.com/mmproj.gguf',
+});
 
-```bash
-bun run benchmark:dev
+await engine.models.load(loaded.id);
+
+console.log(engine.models.current());
+console.log(await engine.models.list());
+
+await engine.models.remove(loaded.id);
 ```
-
-`benchmark:dev` automatically builds `packages/cogent-engine` first and then starts the browser
-benchmark app for the real browser-hosted WebGPU inference path.
-
-## Automated Browser Benchmark
-
-```bash
-bun run bench:browser --model ./Qwen3.5-0.8B-Q4_0.gguf --browser chrome --output ./benchmarks/browser/latest.json
-```
-
-This launches the benchmark app in a real Chromium browser through Playwright, uploads the local
-GGUF model, runs the browser benchmark, and saves the JSON report with browser adapter and runtime
-backend metadata.

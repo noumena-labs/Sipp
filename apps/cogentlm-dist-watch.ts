@@ -26,9 +26,9 @@ interface VitePluginLike {
 
 const appsDir = fileURLToPath(new URL('.', import.meta.url));
 const repoRoot = path.resolve(appsDir, '..');
-const cogentEngineSrcDir = path.join(repoRoot, 'packages', 'cogent-engine', 'src');
+const cogentEngineSrcDir = path.join(repoRoot, 'packages', 'cogentlm', 'src');
 const sourceFilePattern = /\.tsx?$/;
-const rebuildArgs = ['run', '--filter=@noumena-labs/cogent-engine', 'build:ts'];
+const rebuildArgs = ['run', '--filter=cogentlm', 'build:ts'];
 
 function isCogentEngineSourceFile(filePath: string): boolean {
   const resolvedPath = path.resolve(filePath);
@@ -51,13 +51,13 @@ function rebuildCogentEngineDist(): Promise<boolean> {
     });
 
     childProcess.once('error', (error) => {
-      console.error(`[cogent-engine] failed to start TS rebuild: ${error.message}`);
+      console.error(`[cogentlm] failed to start TS rebuild: ${error.message}`);
       resolve(false);
     });
 
     childProcess.once('exit', (code, signal) => {
       if (signal) {
-        console.error(`[cogent-engine] TS rebuild terminated by ${signal}`);
+        console.error(`[cogentlm] TS rebuild terminated by ${signal}`);
         resolve(false);
         return;
       }
@@ -69,7 +69,7 @@ function rebuildCogentEngineDist(): Promise<boolean> {
 
 export function cogentEngineDistWatch(): VitePluginLike {
   return {
-    name: 'cogent-engine-dist-watch',
+    name: 'cogentlm-dist-watch',
     apply: 'serve',
     configureServer(server) {
       let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -87,7 +87,7 @@ export function cogentEngineDistWatch(): VitePluginLike {
 
         do {
           rebuildRequested = false;
-          console.info('[cogent-engine] rebuilding TS dist...');
+          console.info('[cogentlm] rebuilding TS dist...');
           const rebuildSucceeded = await rebuildCogentEngineDist();
 
           if (stopped) {
@@ -95,10 +95,10 @@ export function cogentEngineDistWatch(): VitePluginLike {
           }
 
           if (rebuildSucceeded) {
-            console.info('[cogent-engine] TS dist rebuilt; reloading app.');
+            console.info('[cogentlm] TS dist rebuilt; reloading app.');
             server.ws.send({ type: 'full-reload' });
           } else {
-            console.error('[cogent-engine] TS dist rebuild failed; keeping current app session.');
+            console.error('[cogentlm] TS dist rebuild failed; keeping current app session.');
           }
         } while (rebuildRequested && !stopped);
 
@@ -128,7 +128,7 @@ export function cogentEngineDistWatch(): VitePluginLike {
       server.watcher.on('add', handleAdd);
       server.watcher.on('change', handleChange);
       server.watcher.on('unlink', handleUnlink);
-      console.info('[cogent-engine] watching packages/cogent-engine/src for TS dist rebuilds.');
+      console.info('[cogentlm] watching packages/cogentlm/src for TS dist rebuilds.');
 
       server.httpServer?.once('close', () => {
         stopped = true;

@@ -1,4 +1,4 @@
-import type { DirectorChoice, DirectorRuntime, JsonValue } from '@noumena-labs/cogent-engine/director';
+import type { DirectorChoice, DirectorRuntime, JsonValue } from 'cogentlm/director';
 import { SimulationBus, type SimulationEvent } from './bus.js';
 import { buildPerception, vec2Distance } from './sensing.js';
 import { SimulationAgentChooser } from './agent-chooser.js';

@@ -31,8 +31,8 @@ function buildServiceConfig(config: WorkerSerializableCogentConfig): WorkerServi
   const bundledRuntimeUrls =
     config.moduleUrl == null && config.wasmUrl == null
       ? {
-          moduleUrl: new URL('../../wasm/cogent-engine-wasm.js', import.meta.url).toString(),
-          wasmUrl: new URL('../../wasm/cogent-engine-wasm.wasm', import.meta.url).toString(),
+          moduleUrl: new URL('../../wasm/cogentlm-wasm.js', import.meta.url).toString(),
+          wasmUrl: new URL('../../wasm/cogentlm-wasm.wasm', import.meta.url).toString(),
         }
       : null;
 

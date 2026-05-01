@@ -7,7 +7,7 @@
 //
 //////////////////////////////////////////////////////////////////////////////
 
-import type { CharacterConfig } from '@noumena-labs/cogent-engine/character';
+import type { CharacterConfig } from 'cogentlm/character';
 
 type ActionSpec = CharacterConfig['actions'][number];
 
