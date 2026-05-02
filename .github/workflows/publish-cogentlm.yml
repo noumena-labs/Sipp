@@ -31,7 +31,7 @@ on:
 
 permissions:
   contents: write
-  packages: read
+  packages: write
 
 concurrency:
   group: release-cogentlm
@@ -122,13 +122,24 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=cogentlm-v$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Check npm version availability
+      - name: Check GitHub Packages version availability
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN != '' && secrets.PACKAGE_PUBLISH_TOKEN || github.token }}
         run: |
           set -euo pipefail
-          if npm view "cogentlm@$VERSION" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
-            echo "cogentlm@$VERSION already exists on npm."
+
+          printf "@noumena-labs:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=%s\n" "$NODE_AUTH_TOKEN" > "$RUNNER_TEMP/npmrc"
+          export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/npmrc"
+
+          VIEW_LOG="$RUNNER_TEMP/npm-view.log"
+          if npm view "@noumena-labs/cogentlm@$VERSION" version --registry https://npm.pkg.github.com >"$VIEW_LOG" 2>&1; then
+            echo "@noumena-labs/cogentlm@$VERSION already exists on GitHub Packages."
+            exit 1
+          fi
+
+          if ! grep -Eq "E404|404 Not Found" "$VIEW_LOG"; then
+            cat "$VIEW_LOG"
             exit 1
           fi
 
@@ -150,24 +161,23 @@ jobs:
       - name: Build browser consumer smoke app
         run: bun run --filter=cogentlm-examples build
 
-      - name: Configure npm authentication
+      - name: Configure GitHub Packages authentication
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN != '' && secrets.NPM_TOKEN || secrets.PACKAGE_PUBLISH_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN != '' && secrets.PACKAGE_PUBLISH_TOKEN || github.token }}
         run: |
           set -euo pipefail
           if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "Set the NPM_TOKEN repository secret before publishing cogentlm."
+            echo "Set PACKAGE_PUBLISH_TOKEN or allow the workflow GITHUB_TOKEN to publish packages."
             exit 1
           fi
-          printf "//registry.npmjs.org/:_authToken=%s\n" "$NODE_AUTH_TOKEN" > "$RUNNER_TEMP/npmrc"
+          printf "@noumena-labs:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=%s\n" "$NODE_AUTH_TOKEN" > "$RUNNER_TEMP/npmrc"
           echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/npmrc" >> "$GITHUB_ENV"
-          npm whoami --registry https://registry.npmjs.org
 
-      - name: Validate npm publish
+      - name: Validate GitHub Packages publish
         env:
           NPM_TAG: ${{ inputs.npm_tag }}
         working-directory: packages/cogentlm
-        run: npm publish --dry-run --registry https://registry.npmjs.org --access public --tag "$NPM_TAG"
+        run: npm publish --dry-run --registry https://npm.pkg.github.com --tag "$NPM_TAG"
 
       - name: Commit version and create tag
         if: ${{ inputs.dry_run == false }}
@@ -184,9 +194,9 @@ jobs:
           git push origin HEAD:master
           git push origin "$RELEASE_TAG"
 
-      - name: Publish to npm
+      - name: Publish to GitHub Packages
         if: ${{ inputs.dry_run == false }}
         env:
           NPM_TAG: ${{ inputs.npm_tag }}
         working-directory: packages/cogentlm
-        run: npm publish --registry https://registry.npmjs.org --access public --tag "$NPM_TAG"
+        run: npm publish --registry https://npm.pkg.github.com --tag "$NPM_TAG"
