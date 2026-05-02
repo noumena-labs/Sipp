@@ -26,7 +26,26 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: false
+
+      - name: Check out private llama.cpp submodule
+        env:
+          LLAMA_CPP_INTERNAL_DEPLOY_KEY: ${{ secrets.LLAMA_CPP_INTERNAL_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LLAMA_CPP_INTERNAL_DEPLOY_KEY:-}" ]; then
+            echo "::error::Set LLAMA_CPP_INTERNAL_DEPLOY_KEY to a read-only deploy key for noumena-labs/llama.cpp.internal."
+            exit 1
+          fi
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$LLAMA_CPP_INTERNAL_DEPLOY_KEY" > ~/.ssh/llama_cpp_internal
+          chmod 600 ~/.ssh/llama_cpp_internal
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/llama_cpp_internal -o IdentitiesOnly=yes" git submodule sync --recursive
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/llama_cpp_internal -o IdentitiesOnly=yes" git submodule update --init --recursive
 
       - name: Set up Node
         uses: actions/setup-node@v4

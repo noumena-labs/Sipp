@@ -51,32 +51,6 @@ For a clean rebuild:
 bun run rebuild:package
 ```
 
-## CI/CD
-
-Pull requests into `master` and pushes to `master` run the CI workflow. CI installs
-the workspace, runs the `cogentlm` package tests, builds the release WebAssembly
-and TypeScript artifacts, validates the npm tarball layout, smoke-runs the built
-package entrypoint, and builds the browser examples app as a consumer smoke test.
-
-Releases are manual from the `Release cogentlm` workflow on `master`. Choose the
-version bump (`patch`, `minor`, `major`, or `prerelease`) and npm dist-tag. A
-dry run builds and validates the package without committing, tagging, or
-publishing. A real release updates `packages/cogentlm/package.json`, includes
-`bun.lock` if Bun rewrites it, creates a `cogentlm-vX.Y.Z` git tag, pushes the
-release commit and tag to the private repo, and publishes `cogentlm` to the
-public npm registry.
-
-Configure `NPM_TOKEN` as a repository secret with publish access to the public
-`cogentlm` npm package. If `master` branch protection blocks `GITHUB_TOKEN`
-pushes, configure `RELEASE_GITHUB_TOKEN` with permission to push release commits
-and tags.
-
-## Production Troubleshooting
-
-If a local workspace build works but a downstream npm install fails, first verify the resolved package with `npm ls cogentlm`; `^0.0.1` does not resolve to `0.0.2`. For Vite deployments under a subpath, configure Vite `base` so worker and WASM assets are loaded from the deployed path instead of `/assets/...`.
-
-Remote model URLs are cached in OPFS for the current browser origin. If storage quota is too low, `engine.models.load(...)` rejects with `QueryError.code === 'STORAGE_QUOTA_EXCEEDED'`; clear site data, use a smaller model, or deploy on an origin with more persistent storage.
-
 ## Getting Started
 
 Get started in a few lines of code:
