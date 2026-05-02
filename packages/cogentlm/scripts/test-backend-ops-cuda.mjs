@@ -611,6 +611,10 @@ function removeInvalidBuildDirectory(expectedGenerator, cudaToolkit, msvcDetails
   const cacheText = readFileSync(path.join(buildDir, 'CMakeCache.txt'), 'utf8');
   const reasons = [];
 
+  const cachedSourceDir = getCacheEntry(cacheText, 'CogentLM_SOURCE_DIR') || 
+                          getCacheEntry(cacheText, 'CMAKE_HOME_DIRECTORY');
+  if (cachedSourceDir && !pathsMatch(cachedSourceDir, projectRoot)) reasons.push('source dir mismatch');
+
   if (cacheText.includes('CMAKE_MAKE_PROGRAM-NOTFOUND')) reasons.push('CMAKE_MAKE_PROGRAM-NOTFOUND');
   const cachedGen = getCacheEntry(cacheText, 'CMAKE_GENERATOR');
   if (expectedGenerator && cachedGen && cachedGen !== expectedGenerator) reasons.push(`generator=${cachedGen}`);

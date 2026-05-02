@@ -305,6 +305,9 @@ function removeInvalidBuildDirectory(expectedGenerator) {
   }
   const cacheText = readFileSync(path.join(buildDir, 'CMakeCache.txt'), 'utf8');
   const reasons = [];
+  const cachedSourceDir = getCacheEntry(cacheText, 'CogentLM_SOURCE_DIR') || 
+                          getCacheEntry(cacheText, 'CMAKE_HOME_DIRECTORY');
+  if (cachedSourceDir && !pathsMatch(cachedSourceDir, projectRoot)) reasons.push('source dir mismatch');
   if (getCacheEntry(cacheText, 'CMAKE_GENERATOR') !== expectedGenerator) reasons.push('generator mismatch');
   if (getCacheEntry(cacheText, 'CMAKE_BUILD_TYPE') !== buildType) reasons.push('build type mismatch');
   if (reasons.length > 0) {

@@ -448,8 +448,14 @@ function removeInvalidBuildDirectory(expectedGenerator) {
     reasons.push(`CE_WASM_DEBUG=${cachedDebug ?? 'OFF'}`);
   }
 
-  if (!isDebugBuild && cachedDebug === 'ON') {
+  if (cachedDebug === 'ON' && !isDebugBuild) {
     reasons.push('CE_WASM_DEBUG=ON');
+  }
+
+  const cachedSourceDir = getCacheEntry(cacheText, 'CogentLM_SOURCE_DIR') || 
+                          getCacheEntry(cacheText, 'CMAKE_HOME_DIRECTORY');
+  if (cachedSourceDir && path.resolve(cachedSourceDir) !== path.resolve(projectRoot)) {
+    reasons.push(`source_dir=${cachedSourceDir}`);
   }
 
   if (!cacheText.includes('CE_BUILD_WEBGPU_TEST_BACKEND_OPS:BOOL=ON')) {
