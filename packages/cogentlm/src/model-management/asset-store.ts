@@ -43,10 +43,42 @@ function toFile(blob: Blob, name: string): File {
   if (blob instanceof File && blob.name === name) {
     return blob;
   }
-  return new File([blob], name, {
+  const contents = blob instanceof File ? blob.slice(0, blob.size, blob.type) : blob;
+  return new File([contents], name, {
     type: blob.type,
     lastModified: blob instanceof File ? blob.lastModified : Date.now(),
   });
+}
+
+function isQuotaExceededError(error: unknown): boolean {
+  if (error == null || typeof error !== 'object' || !('name' in error)) {
+    return false;
+  }
+  const name = String((error as { name?: unknown }).name);
+  return name === 'QuotaExceededError' || name === 'NS_ERROR_DOM_QUOTA_REACHED';
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return 'unknown size';
+  }
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const digits = value >= 10 || unitIndex === 0 ? 0 : 1;
+  return `${value.toFixed(digits)} ${units[unitIndex]}`;
+}
+
+function quotaExceededError(name: string, bytes: number, cause: unknown): QueryError {
+  return new QueryError(
+    'STORAGE_QUOTA_EXCEEDED',
+    `Not enough browser storage quota to cache "${name}" (${formatBytes(bytes)}). Clear site data, use a smaller model, or choose an origin with more persistent storage.`,
+    { cause }
+  );
 }
 
 export class AssetStore {
@@ -125,33 +157,41 @@ export class AssetStore {
 
     const tempName = `tmp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${metadata.name}`;
     let written = 0;
-    const tempFile = await this.storage.streamToDisk(
-      tempName,
-      response.body,
-      (bytes) => {
-        written = bytes;
-        onProgress?.({
-          phase: 'download',
-          loadedBytes: written,
-          totalBytes: metadata.bytes,
-          percent: Math.min(100, Math.round((written / metadata.bytes) * 100)),
-          assetName: metadata.name,
-        });
-      },
-      signal
-    );
+    let tempFile: File;
+    try {
+      tempFile = await this.storage.streamToDisk(
+        tempName,
+        response.body,
+        (bytes) => {
+          written = bytes;
+          onProgress?.({
+            phase: 'download',
+            loadedBytes: written,
+            totalBytes: metadata.bytes,
+            percent: Math.min(100, Math.round((written / metadata.bytes) * 100)),
+            assetName: metadata.name,
+          });
+        },
+        signal
+      );
+    } catch (error) {
+      if (isQuotaExceededError(error)) {
+        throw quotaExceededError(metadata.name, metadata.bytes, error);
+      }
+      throw error;
+    }
 
     try {
-      const record = await this.installFile({
+      return await this.registerDownloadedFile({
         kind,
-        file: toFile(tempFile, metadata.name),
+        name: metadata.name,
+        file: tempFile,
+        storagePath: tempName,
         sourceUrl: metadata.canonicalUrl,
         sourceEtag: metadata.etag,
         sourceLastModified: metadata.lastModified,
         onProgress,
       });
-      await this.storage.deleteFile(tempName);
-      return record;
     } catch (error) {
       await this.storage.deleteFile(tempName);
       throw error;
@@ -173,7 +213,14 @@ export class AssetStore {
     const storagePath = `${id}-${name}`;
     const existing = await this.storage.getFile(storagePath);
     if (existing == null || existing.size !== input.file.size) {
-      await this.storage.streamToDisk(storagePath, input.file.stream());
+      try {
+        await this.storage.streamToDisk(storagePath, input.file.stream());
+      } catch (error) {
+        if (isQuotaExceededError(error)) {
+          throw quotaExceededError(name, input.file.size, error);
+        }
+        throw error;
+      }
     }
     input.onProgress?.({
       phase: 'store',
@@ -221,5 +268,57 @@ export class AssetStore {
     } catch {
       throw new QueryError('INVALID_MODEL_SOURCE', `Invalid model URL "${rawUrl}".`);
     }
+  }
+
+  private async registerDownloadedFile(input: {
+    kind: ModelAssetKind;
+    name: string;
+    file: File;
+    storagePath: string;
+    sourceUrl: string;
+    sourceEtag: string;
+    sourceLastModified: string;
+    onProgress?: (progress: ModelLoadProgress) => void;
+  }): Promise<AssetRecord> {
+    const name = normalizeAssetName(input.name || input.file.name || 'model.gguf');
+    input.onProgress?.({
+      phase: 'store',
+      loadedBytes: 0,
+      totalBytes: input.file.size,
+      percent: 0,
+      assetName: name,
+    });
+    const hash = await sha256Blob(input.file);
+    const id = `asset-${hash}`;
+    const canonicalStoragePath = `${id}-${name}`;
+    const existing = await this.storage.getFile(canonicalStoragePath);
+    const storagePath =
+      existing != null && existing.size === input.file.size
+        ? canonicalStoragePath
+        : input.storagePath;
+    if (storagePath !== input.storagePath) {
+      await this.storage.deleteFile(input.storagePath);
+    }
+    input.onProgress?.({
+      phase: 'store',
+      loadedBytes: input.file.size,
+      totalBytes: input.file.size,
+      percent: 100,
+      assetName: name,
+    });
+
+    return {
+      id,
+      kind: input.kind,
+      name,
+      hash,
+      bytes: input.file.size,
+      storagePath,
+      sourceUrl: input.sourceUrl,
+      sourceEtag: input.sourceEtag,
+      sourceLastModified: input.sourceLastModified,
+      refCount: 0,
+      createdAt: new Date().toISOString(),
+    };
   }
 }
