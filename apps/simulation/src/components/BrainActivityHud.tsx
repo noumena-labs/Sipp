@@ -96,7 +96,7 @@ export function BrainActivityHud(props: BrainActivityHudProps) {
               <span className="brain-chip-status">{formatStatus(brain.status, brain.queryType)}</span>
               <span className="brain-chip-meta">
                 {brain.elapsedMs != null ? formatMs(brain.elapsedMs) : 'waiting'}
-                {brain.tick != null ? ` �?#${brain.tick}` : ''}
+                {brain.tick != null ? ` #${brain.tick}` : ''}
               </span>
             </button>
           );

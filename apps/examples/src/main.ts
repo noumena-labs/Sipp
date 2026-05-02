@@ -3,7 +3,7 @@ import { basicChatExample } from './examples/basic-chat';
 import { multimodalExample } from './examples/multimodal';
 import { structuredOutputExample } from './examples/structured-output';
 import { observabilityExample } from './examples/observability';
-import { Example, ExampleContext } from './examples/base-example';
+import type { Example } from './examples/base-example';
 
 // State
 let engine: CogentEngine | null = null;

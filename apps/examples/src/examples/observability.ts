@@ -1,5 +1,9 @@
 import { Example } from './base-example';
 
+function formatMetric(value: number | null | undefined, digits = 0) {
+  return typeof value === 'number' ? value.toFixed(digits) : 'n/a';
+}
+
 export const observabilityExample: Example = {
   id: '04-observability',
   title: 'Observability',
@@ -12,9 +16,9 @@ export const observabilityExample: Example = {
         const metrics = event.snapshot.runtime;
         if (metrics) {
           log(`--- Performance Report ---`, 'dim');
-          log(`Speed: ${metrics.tokensPerSecond.toFixed(2)} t/s`, 'ai');
-          log(`TTFT: ${metrics.ttftMs.toFixed(0)}ms`, 'ai');
-          log(`Prompt Eval: ${metrics.promptEvalMs.toFixed(0)}ms`, 'ai');
+          log(`Speed: ${formatMetric(metrics.tokensPerSecond, 2)} t/s`, 'ai');
+          log(`TTFT: ${formatMetric(metrics.ttftMs)}ms`, 'ai');
+          log(`Prompt Eval: ${formatMetric(metrics.promptEvalMs)}ms`, 'ai');
           log(`Prefix Cache Hits: ${metrics.prefixCacheHitCount}`, 'ai');
           log(`-------------------------`, 'dim');
         }
