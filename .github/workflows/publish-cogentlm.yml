@@ -110,14 +110,66 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          cd packages/cogentlm
-          if [ "$BUMP" = "prerelease" ]; then
-            npm version prerelease --preid "${PRERELEASE_ID:-beta}" --no-git-tag-version
-          else
-            npm version "$BUMP" --no-git-tag-version
-          fi
-          VERSION="$(node -p "require('./package.json').version")"
-          cd ../..
+
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          const packageJsonPath = 'packages/cogentlm/package.json';
+          const bump = process.env.BUMP;
+          const prereleaseId = process.env.PRERELEASE_ID || 'beta';
+          const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+          const match = packageJson.version.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/);
+
+          if (!match) {
+            throw new Error(`Unsupported version format: ${packageJson.version}`);
+          }
+
+          let major = Number(match[1]);
+          let minor = Number(match[2]);
+          let patch = Number(match[3]);
+          const prerelease = match[4];
+
+          switch (bump) {
+            case 'major':
+              major += 1;
+              minor = 0;
+              patch = 0;
+              packageJson.version = `${major}.${minor}.${patch}`;
+              break;
+            case 'minor':
+              minor += 1;
+              patch = 0;
+              packageJson.version = `${major}.${minor}.${patch}`;
+              break;
+            case 'patch':
+              if (prerelease) {
+                packageJson.version = `${major}.${minor}.${patch}`;
+              } else {
+                patch += 1;
+                packageJson.version = `${major}.${minor}.${patch}`;
+              }
+              break;
+            case 'prerelease': {
+              const prereleaseParts = prerelease?.split('.') ?? [];
+              if (prereleaseParts[0] === prereleaseId && /^\d+$/.test(prereleaseParts[1] ?? '')) {
+                prereleaseParts[1] = String(Number(prereleaseParts[1]) + 1);
+              } else {
+                patch += 1;
+                prereleaseParts.length = 0;
+                prereleaseParts.push(prereleaseId, '0');
+              }
+              packageJson.version = `${major}.${minor}.${patch}-${prereleaseParts.join('.')}`;
+              break;
+            }
+            default:
+              throw new Error(`Unsupported bump: ${bump}`);
+          }
+
+          fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
+          console.log(packageJson.version);
+          NODE
+
+          VERSION="$(node -p "require('./packages/cogentlm/package.json').version")"
           bun install --lockfile-only
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=cogentlm-v$VERSION" >> "$GITHUB_OUTPUT"
