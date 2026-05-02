@@ -63,6 +63,12 @@ await engine.models.remove(loaded.id);
 
 Managed storage requires OPFS. If OPFS is unavailable, loading fails clearly instead of silently falling back to transient memory.
 
+### Production Troubleshooting
+
+If a local build works but the npm package fails after deployment, verify the installed package with `npm ls cogentlm`; `^0.0.1` does not resolve to `0.0.2`. For Vite apps deployed under a subpath, set Vite `base` so emitted worker and WASM assets are requested from the deployed path instead of `/assets/...`.
+
+Remote URL models are cached in OPFS for the current origin. If the browser cannot reserve enough storage, `engine.models.load(...)` rejects with `QueryError.code === 'STORAGE_QUOTA_EXCEEDED'`; clear site data, use a smaller model, or deploy on an origin with more persistent storage.
+
 ## Worker Mode
 
 When worker execution is selected, the worker hosts the same high-level model service used by main-thread mode. The main thread talks to a worker model-service client, while low-level WASM, scheduling, cache, and runtime details stay internal.
