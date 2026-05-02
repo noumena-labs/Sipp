@@ -39,6 +39,16 @@ test('resolveRuntimeUrls uses bundled runtime assets when no overrides are provi
   assert.deepEqual(resolved, getDefaultRuntimeUrls());
 });
 
+test('getDefaultRuntimeUrls maps Vite optimized deps back to package wasm assets', () => {
+  assert.deepEqual(
+    getDefaultRuntimeUrls('https://app.test/node_modules/.vite/deps/@noumena-labs_cogentlm.js?v=123'),
+    {
+      moduleUrl: 'https://app.test/node_modules/@noumena-labs/cogentlm/dist/wasm/cogentlm-wasm.js',
+      wasmUrl: 'https://app.test/node_modules/@noumena-labs/cogentlm/dist/wasm/cogentlm-wasm.wasm',
+    }
+  );
+});
+
 test('resolveRuntimeUrls uses the current window-like location for relative overrides', () => {
   const resolved = withLocation('https://app.test/ui/index.html', () =>
     resolveRuntimeUrls({

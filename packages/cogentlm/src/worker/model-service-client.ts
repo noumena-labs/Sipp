@@ -1,4 +1,5 @@
 import type { CogentConfig } from '../cogent-config.js';
+import { resolveOptimizedPackageAssetUrl } from '../runtime/package-assets.js';
 import { ObservabilityController } from '../model-management/observability-controller.js';
 import {
   WorkerRequestMessage,
@@ -30,6 +31,10 @@ interface PendingWorkerCall {
 
 type RequestWithCallId = Extract<WorkerRequestMessage, { callId: number }>;
 type WithoutCallId<T> = T extends { callId: number } ? Omit<T, 'callId'> : never;
+
+export function getOptimizedDefaultWorkerUrl(importerUrl: string = import.meta.url): string | null {
+  return resolveOptimizedPackageAssetUrl('dist/esm/worker/model-service-entry.js', importerUrl);
+}
 
 function toWorkerSerializableConfig(config: CogentConfig): WorkerSerializableCogentConfig {
   if (typeof config.moduleOptions?.locateFile === 'function') {
@@ -209,9 +214,12 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     if (this.worker != null) {
       return this.worker;
     }
+    const optimizedWorkerUrl = getOptimizedDefaultWorkerUrl();
     this.worker =
       this.config.workerUrl == null
-        ? new Worker(new URL('./model-service-entry.js', import.meta.url), { type: 'module' })
+        ? optimizedWorkerUrl == null
+          ? new Worker(new URL('./model-service-entry.js', import.meta.url), { type: 'module' })
+          : new Worker(optimizedWorkerUrl, { type: 'module' })
         : new Worker(this.config.workerUrl, { type: 'module' });
     this.worker.onmessage = (event: MessageEvent<WorkerResponseMessage>) => {
       this.handleWorkerMessage(event.data);

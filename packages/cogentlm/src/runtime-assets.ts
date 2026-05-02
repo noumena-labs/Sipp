@@ -1,4 +1,5 @@
 import type { CogentConfig } from './cogent-config.js';
+import { resolveOptimizedPackageAssetUrl } from './runtime/package-assets.js';
 
 export interface RuntimeUrls {
   moduleUrl: string;
@@ -27,11 +28,21 @@ function parseConfiguredUrl(rawUrl: string, fieldName: string): URL {
   }
 }
 
-export function getDefaultRuntimeUrls(): RuntimeUrls {
-  return {
-    moduleUrl: new URL('../wasm/cogentlm-wasm.js', import.meta.url).toString(),
-    wasmUrl: new URL('../wasm/cogentlm-wasm.wasm', import.meta.url).toString(),
-  };
+export function getDefaultRuntimeUrls(importerUrl: string = import.meta.url): RuntimeUrls {
+  const optimizedRuntimeAssetsUrl = resolveOptimizedPackageAssetUrl(
+    'dist/esm/runtime-assets.js',
+    importerUrl
+  );
+
+  return optimizedRuntimeAssetsUrl == null
+    ? {
+      moduleUrl: new URL('../wasm/cogentlm-wasm.js', import.meta.url).toString(),
+      wasmUrl: new URL('../wasm/cogentlm-wasm.wasm', import.meta.url).toString(),
+    }
+    : {
+      moduleUrl: new URL('../wasm/cogentlm-wasm.js', optimizedRuntimeAssetsUrl).toString(),
+      wasmUrl: new URL('../wasm/cogentlm-wasm.wasm', optimizedRuntimeAssetsUrl).toString(),
+    };
 }
 
 export function resolveTrustedOrigins(
@@ -64,13 +75,13 @@ export function resolveRuntimeUrls(
   const resolved =
     configuredModuleUrl == null
       ? {
-          moduleUrl: new URL(getDefaultRuntimeUrls().moduleUrl),
-          wasmUrl: new URL(getDefaultRuntimeUrls().wasmUrl),
-        }
+        moduleUrl: new URL(getDefaultRuntimeUrls().moduleUrl),
+        wasmUrl: new URL(getDefaultRuntimeUrls().wasmUrl),
+      }
       : {
-          moduleUrl: parseConfiguredUrl(configuredModuleUrl, 'moduleUrl'),
-          wasmUrl: parseConfiguredUrl(configuredWasmUrl!, 'wasmUrl'),
-        };
+        moduleUrl: parseConfiguredUrl(configuredModuleUrl, 'moduleUrl'),
+        wasmUrl: parseConfiguredUrl(configuredWasmUrl!, 'wasmUrl'),
+      };
 
   const trustedOrigins = resolveTrustedOrigins(config.trustedOrigins);
   if (trustedOrigins.size > 0) {

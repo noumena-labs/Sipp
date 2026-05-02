@@ -8,12 +8,14 @@ const packageDir = path.resolve(scriptDir, '..');
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const requiredPackPaths = [
   'dist/esm/index.js',
+  'dist/esm/runtime/package-assets.js',
   'dist/esm/runtime-assets.js',
   'dist/esm/worker/model-service-client.js',
   'dist/esm/worker/model-service-entry.js',
   'dist/esm/character/index.js',
   'dist/esm/orchestrator/index.js',
   'dist/types/index.d.ts',
+  'dist/types/runtime/package-assets.d.ts',
   'dist/types/runtime-assets.d.ts',
   'dist/types/character/index.d.ts',
   'dist/types/orchestrator/index.d.ts',
@@ -66,6 +68,12 @@ const runtimeText = readFileSync(runtimePath, 'utf8');
 if (!workerClientText.includes("new Worker(new URL('./model-service-entry.js', import.meta.url)")) {
   fail(
     'Default worker construction must use new Worker(new URL(..., import.meta.url), ...) so bundlers include the worker graph.'
+  );
+}
+
+if (!workerClientText.includes("resolveOptimizedPackageAssetUrl('dist/esm/worker/model-service-entry.js'")) {
+  fail(
+    'Worker client must preserve Vite optimized-deps fallback for package-hosted worker assets.'
   );
 }
 
