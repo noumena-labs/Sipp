@@ -1,0 +1,173 @@
+name: Release cogentlm
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump to apply
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - prerelease
+      prerelease_id:
+        description: Prerelease id used when bump is prerelease
+        required: false
+        default: beta
+        type: string
+      npm_tag:
+        description: npm dist-tag to publish
+        required: true
+        default: latest
+        type: string
+      dry_run:
+        description: Build and dry-run publish without committing, tagging, or publishing
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+  packages: read
+
+concurrency:
+  group: release-cogentlm
+  cancel-in-progress: false
+
+jobs:
+  release-cogentlm:
+    name: Release cogentlm
+    runs-on: ubuntu-latest
+    env:
+      CE_WASM_BUILD_PARALLEL_LEVEL: "2"
+    steps:
+      - name: Require master
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/master" ]; then
+            echo "Release workflow must run from master."
+            exit 1
+          fi
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.RELEASE_GITHUB_TOKEN != '' && secrets.RELEASE_GITHUB_TOKEN || github.token }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Install native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build
+
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+
+      - name: Install dependencies
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bun install --frozen-lockfile
+
+      - name: Bump package version
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+          PRERELEASE_ID: ${{ inputs.prerelease_id }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd packages/cogentlm
+          if [ "$BUMP" = "prerelease" ]; then
+            npm version prerelease --preid "${PRERELEASE_ID:-beta}" --no-git-tag-version
+          else
+            npm version "$BUMP" --no-git-tag-version
+          fi
+          VERSION="$(node -p "require('./package.json').version")"
+          cd ../..
+          bun install --lockfile-only
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=cogentlm-v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check npm version availability
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if npm view "cogentlm@$VERSION" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "cogentlm@$VERSION already exists on npm."
+            exit 1
+          fi
+
+      - name: Run package tests
+        run: bun test packages/cogentlm/src
+
+      - name: Build and validate release package
+        run: bun run --filter=cogentlm release:prepare
+
+      - name: Run built package smoke test
+        run: |
+          node --input-type=module <<'NODE'
+          const pkg = await import('./packages/cogentlm/dist/esm/index.js');
+          if (typeof pkg.CogentEngine?.create !== 'function') {
+            throw new Error('CogentEngine.create export is missing from the built package.');
+          }
+          NODE
+
+      - name: Build browser consumer smoke app
+        run: bun run --filter=cogentlm-examples build
+
+      - name: Configure npm authentication
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN != '' && secrets.NPM_TOKEN || secrets.PACKAGE_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "Set the NPM_TOKEN repository secret before publishing cogentlm."
+            exit 1
+          fi
+          printf "//registry.npmjs.org/:_authToken=%s\n" "$NODE_AUTH_TOKEN" > "$RUNNER_TEMP/npmrc"
+          echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/npmrc" >> "$GITHUB_ENV"
+          npm whoami --registry https://registry.npmjs.org
+
+      - name: Validate npm publish
+        env:
+          NPM_TAG: ${{ inputs.npm_tag }}
+        working-directory: packages/cogentlm
+        run: npm publish --dry-run --registry https://registry.npmjs.org --access public --tag "$NPM_TAG"
+
+      - name: Commit version and create tag
+        if: ${{ inputs.dry_run == false }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packages/cogentlm/package.json bun.lock
+          git commit -m "chore(release): cogentlm v$VERSION"
+          git tag -a "$RELEASE_TAG" -m "cogentlm v$VERSION"
+          git push origin HEAD:master
+          git push origin "$RELEASE_TAG"
+
+      - name: Publish to npm
+        if: ${{ inputs.dry_run == false }}
+        env:
+          NPM_TAG: ${{ inputs.npm_tag }}
+        working-directory: packages/cogentlm
+        run: npm publish --registry https://registry.npmjs.org --access public --tag "$NPM_TAG"

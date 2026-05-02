@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate and build
+    runs-on: ubuntu-latest
+    env:
+      CE_WASM_BUILD_PARALLEL_LEVEL: "2"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Install native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build
+
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+
+      - name: Install dependencies
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bun install --frozen-lockfile
+
+      - name: Run package tests
+        run: bun test packages/cogentlm/src
+
+      - name: Build and validate release package
+        run: bun run --filter=cogentlm release:prepare
+
+      - name: Run built package smoke test
+        run: |
+          node --input-type=module <<'NODE'
+          const pkg = await import('./packages/cogentlm/dist/esm/index.js');
+          if (typeof pkg.CogentEngine?.create !== 'function') {
+            throw new Error('CogentEngine.create export is missing from the built package.');
+          }
+          NODE
+
+      - name: Build browser consumer smoke app
+        run: bun run --filter=cogentlm-examples build
