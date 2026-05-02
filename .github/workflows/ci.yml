@@ -76,7 +76,7 @@ jobs:
         run: bun test packages/cogentlm/src
 
       - name: Build and validate release package
-        run: bun run --filter=cogentlm release:prepare
+        run: bun run --filter=@noumena-labs/cogentlm release:prepare
 
       - name: Run built package smoke test
         run: |
