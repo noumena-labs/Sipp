@@ -107,8 +107,28 @@ export class WasmBridge {
   private reusableRuntimeEventTextBufferPtr = 0;
   private reusableRuntimeEventTextBufferCapacity = 0;
   private reusableRuntimeEventDrainResultPtr = 0;
+  private readonly tokenDecoders = new Map<GenerateRequestId, TextDecoder>();
 
   public constructor(private readonly module: EngineModule) { }
+
+  private byteOffset(ptr: number | bigint): number {
+    const n = typeof ptr === 'bigint' ? Number(ptr) : ptr;
+    if (!Number.isSafeInteger(n) || n < 0) {
+      throw new RangeError(`Invalid wasm pointer: ${String(ptr)}`);
+    }
+    return n;
+  }
+
+  private heapIndex(ptr: number | bigint, bytesPerElement: number): number {
+    const n = this.byteOffset(ptr);
+    if (n % bytesPerElement !== 0) {
+      throw new RangeError(
+        `Unaligned wasm pointer ${n} for element size ${bytesPerElement}`
+      );
+    }
+    return Math.floor(n / bytesPerElement);
+  }
+
 
   public getModule(): EngineModule {
     return this.module;
@@ -347,7 +367,7 @@ export class WasmBridge {
       for (let index = 0; index < media.length; index += 1) {
         const image = media[index];
         this.module.HEAPU8.set(image, flatPtr + offset);
-        this.module.HEAP32[(sizesPtr >> 2) + index] = image.byteLength;
+        this.module.HEAP32[this.heapIndex(sizesPtr, 4) + index] = image.byteLength;
         offset += image.byteLength;
       }
 
@@ -633,14 +653,15 @@ export class WasmBridge {
       throw new Error(`Failed to drain runtime events. Code: ${status}`);
     }
 
-    const resultOffset = resultPtr >> 2;
+    const resultOffset = this.heapIndex(resultPtr, 4);
     const eventCount = this.module.HEAP32[resultOffset];
     const terminalRequestIds: GenerateRequestId[] = [];
     const tokenEvents: WasmRuntimeTokenEvent[] = [];
     let textBytes = 0;
 
     for (let index = 0; index < eventCount; index += 1) {
-      const eventOffset = (eventBufferPtr + index * RUNTIME_EVENT_SIZE_BYTES) >> 2;
+      const eventBytePtr = this.byteOffset(eventBufferPtr) + index * RUNTIME_EVENT_SIZE_BYTES;
+      const eventOffset = this.heapIndex(eventBytePtr, 4);
       const requestId = this.module.HEAP32[eventOffset] as GenerateRequestId;
       const kind = this.module.HEAP32[eventOffset + 1];
       const textOffset = this.module.HEAP32[eventOffset + 3];
@@ -648,9 +669,18 @@ export class WasmBridge {
 
       if (kind === RUNTIME_EVENT_KIND_TOKEN) {
         if (requestId !== 0 && textLength > 0) {
+          let decoder = this.tokenDecoders.get(requestId);
+          if (!decoder) {
+            decoder = new TextDecoder('utf-8', { fatal: false });
+            this.tokenDecoders.set(requestId, decoder);
+          }
+          const start = this.byteOffset(textBufferPtr + textOffset);
+          const end = start + textLength;
+          const token = decoder.decode(this.module.HEAPU8.subarray(start, end), { stream: true });
+
           tokenEvents.push({
             requestId,
-            token: this.module.UTF8ToString(textBufferPtr + textOffset, textLength),
+            token,
             textLength,
           });
           textBytes += textLength;
@@ -660,6 +690,7 @@ export class WasmBridge {
 
       if (kind === RUNTIME_EVENT_KIND_TERMINAL && requestId !== 0) {
         terminalRequestIds.push(requestId);
+        this.tokenDecoders.delete(requestId);
       }
     }
 
@@ -777,7 +808,7 @@ export class WasmBridge {
     completedResponseCount: number;
     emittedTokenCount: number;
   } {
-    const i32Offset = ptr >> 2;
+    const i32Offset = this.heapIndex(ptr, 4);
     return {
       ticksExecuted: this.module.HEAP32[i32Offset],
       progressedTicks: this.module.HEAP32[i32Offset + 1],
@@ -798,8 +829,8 @@ export class WasmBridge {
         return null;
       }
 
-      const f64Offset = (metricsPtr / 8) | 0;
-      const i32Offset = ((metricsPtr + RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT * 8) / 4) | 0;
+      const f64Offset = Math.floor(this.byteOffset(metricsPtr) / 8);
+      const i32Offset = Math.floor(this.byteOffset(metricsPtr + RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT * 8) / 4);
 
       return withDerivedObservabilityMetrics({
         totalMs: this.module.HEAPF64[f64Offset],
