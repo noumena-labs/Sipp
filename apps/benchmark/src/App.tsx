@@ -4,7 +4,7 @@ import {
   type ModelInfo,
   type ModelSource,
   type ObservabilitySnapshot,
-} from 'cogentlm';
+} from '@noumena-labs/cogentlm';
 import { MetricCard } from './components/MetricCard';
 import {
   buildBenchmarkScenarios,

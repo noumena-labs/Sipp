@@ -26,7 +26,7 @@ interface VitePluginLike {
 
 const appsDir = fileURLToPath(new URL('.', import.meta.url));
 const repoRoot = path.resolve(appsDir, '..');
-const cogentEngineSrcDir = path.join(repoRoot, 'packages', 'cogentlm', 'src');
+const cogentEngineSrcDir = path.join(repoRoot, 'packages', '@noumena-labs/cogentlm', 'src');
 const sourceFilePattern = /\.tsx?$/;
 const rebuildArgs = ['run', '--filter=cogentlm', 'build:ts'];
 

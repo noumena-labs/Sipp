@@ -11,9 +11,9 @@ const packageJsonPath = path.join(packageDir, 'package.json');
 const projectNpmrcPath = path.join(repoRoot, '.npmrc');
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const bunCommand = process.versions.bun ? process.execPath : 'bun';
-const registryHost = 'registry.npmjs.org';
+const registryHost = 'npm.pkg.github.com';
 const registryUrl = `https://${registryHost}`;
-const expectedPackageName = 'cogentlm';
+const expectedPackageName = '@noumena-labs/cogentlm';
 const supportedFlags = new Set(['--dry-run', '--help']);
 const rawFlags = process.argv.slice(2);
 
@@ -84,10 +84,6 @@ function npmrcHasUsableAuth(filePath) {
 function ensurePublishConfig() {
   if (packageJson.name !== expectedPackageName) {
     throw new Error(`Expected ${packageJsonPath} to declare ${expectedPackageName}, found ${packageJson.name}.`);
-  }
-
-  if (packageJson.publishConfig?.access !== 'public') {
-    throw new Error(`Expected publishConfig.access to be public.`);
   }
 }
 

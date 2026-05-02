@@ -9,7 +9,7 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CogentEngine } from 'cogentlm';
+import { CogentEngine } from '@noumena-labs/cogentlm';
 import {
   CharacterEventBus,
   createCharacterFromConfigUrl,

@@ -1,4 +1,4 @@
-import { CogentEngine } from 'cogentlm';
+import { CogentEngine } from '@noumena-labs/cogentlm';
 import { basicChatExample } from './examples/basic-chat';
 import { multimodalExample } from './examples/multimodal';
 import { structuredOutputExample } from './examples/structured-output';

@@ -22,12 +22,12 @@ export default defineConfig({
       // directly at the built ESM files so we pick up local rebuilds without
       // going through a cached /node_modules dependency URL.
       'cogentlm/character': cogentEngineCharacterEntry,
-      'cogentlm': cogentEngineEntry,
+      '@noumena-labs/cogentlm': cogentEngineEntry,
     },
     preserveSymlinks: true,
   },
   optimizeDeps: {
-    exclude: ['cogentlm'],
+    exclude: ['@noumena-labs/cogentlm'],
   },
   server: {
     headers: {

@@ -13,7 +13,7 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { CogentEngine } from 'cogentlm';
+import { CogentEngine } from '@noumena-labs/cogentlm';
 import { createDirectorFromConfigUrl } from 'cogentlm/director';
 import { BrainActivityHud } from './components/BrainActivityHud';
 import { BrainTraceDrawer } from './components/BrainTraceDrawer';

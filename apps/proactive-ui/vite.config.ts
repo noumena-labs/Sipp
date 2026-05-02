@@ -14,12 +14,12 @@ export default defineConfig({
   plugins: [react(), cogentEngineDistWatch()],
   resolve: {
     alias: {
-      'cogentlm': cogentEngineEntry,
+      '@noumena-labs/cogentlm': cogentEngineEntry,
     },
     preserveSymlinks: true,
   },
   optimizeDeps: {
-    exclude: ['cogentlm'],
+    exclude: ['@noumena-labs/cogentlm'],
   },
   server: {
     headers: {

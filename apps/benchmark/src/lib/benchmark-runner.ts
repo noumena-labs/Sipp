@@ -1,4 +1,4 @@
-import { CogentEngine, type ModelLoadOptions, type ModelSource } from 'cogentlm';
+import { CogentEngine, type ModelLoadOptions, type ModelSource } from '@noumena-labs/cogentlm';
 import type {
   BenchmarkRun,
   GroupResult,

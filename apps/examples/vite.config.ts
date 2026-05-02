@@ -11,7 +11,7 @@ const cogentlmEntry = path.resolve(
 export default defineConfig({
   resolve: {
     alias: {
-      'cogentlm': cogentlmEntry,
+      '@noumena-labs/cogentlm': cogentlmEntry,
     },
     preserveSymlinks: true,
   },
@@ -22,6 +22,6 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    exclude: ['cogentlm'],
+    exclude: ['@noumena-labs/cogentlm'],
   },
 });
