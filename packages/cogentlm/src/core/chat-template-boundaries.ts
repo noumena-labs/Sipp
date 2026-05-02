@@ -267,8 +267,6 @@ async function getChatBoundaryInfo(
     [systemMessage, user1Message, assistantMessage, user2Message],
     false
   );
-  const systemOnlyPrompt = await provider.applyChatTemplate([systemMessage], false);
-
   const assistantPrefix =
     primedAssistantPrompt.startsWith(closedUserPrompt)
       ? primedAssistantPrompt.slice(closedUserPrompt.length)
@@ -282,7 +280,7 @@ async function getChatBoundaryInfo(
       ? promptWithNextUser.slice(closedAssistantPrompt.length)
       : '';
   const nextUserPrefix = sliceBeforeSentinel(nextUserAppend, BOUNDARY_SENTINELS.user2);
-  const systemPrefix = sliceBeforeSentinel(systemOnlyPrompt, BOUNDARY_SENTINELS.system);
+  const systemPrefix = sliceBeforeSentinel(closedUserPrompt, BOUNDARY_SENTINELS.system);
 
   return {
     assistantPrefix,

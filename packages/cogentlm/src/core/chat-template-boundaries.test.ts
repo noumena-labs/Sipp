@@ -74,7 +74,7 @@ test('buildAppliedChatTemplateContext accepts cached boundary metadata to avoid 
   });
 
   const boundaryInfo = await probeChatTemplateBoundaryInfo(provider);
-  assert.equal(provider.calls.length, 5);
+  assert.equal(provider.calls.length, 4);
 
   const context = await buildAppliedChatTemplateContext(
     provider,
@@ -85,6 +85,25 @@ test('buildAppliedChatTemplateContext accepts cached boundary metadata to avoid 
     boundaryInfo
   );
 
-  assert.equal(provider.calls.length, 6);
+  assert.equal(provider.calls.length, 5);
   assert.equal(context.promptText, '<system>\nsys</system>\n<user>\nhi</user>\n<assistant>\n');
+});
+
+test('probeChatTemplateBoundaryInfo does not render invalid system-only probes', async () => {
+  const provider = createProvider((messages, addAssistant) => {
+    assert.notDeepEqual(
+      messages.map((message) => message.role),
+      ['system']
+    );
+    const parts = messages
+      .map((message) => `<${message.role}>\n${message.content}</${message.role}>\n`)
+      .join('');
+    return `${parts}${addAssistant ? '<assistant>\n' : ''}`;
+  });
+
+  const boundaryInfo = await probeChatTemplateBoundaryInfo(provider);
+
+  assert.equal(boundaryInfo.assistantPrefix, '<assistant>\n');
+  assert.deepEqual(boundaryInfo.nextTurnPrefixes, ['<system>\n', '<user>\n', '<assistant>\n']);
+  assert.equal(provider.calls.length, 4);
 });
