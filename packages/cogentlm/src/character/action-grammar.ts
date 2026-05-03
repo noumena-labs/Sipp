@@ -25,6 +25,7 @@ import {
   expandActionCues,
 } from './action-schema.js';
 import type { ActionSchema } from './action-schema.js';
+import { assertGrammarByteSize, gbnfStringLiteral } from '../utils/grammar.js';
 
 export { ActionSchemaError } from './action-schema.js';
 
@@ -50,7 +51,9 @@ export function compileActionGrammar(schema: ActionSchema): string {
   const rules: string[] = [];
 
   if (cues.length === 0) {
-    return 'root ::= prose-char+\nprose-char ::= [^[]\n';
+    const grammar = 'root ::= prose-char+\nprose-char ::= [^[]\n';
+    assertGrammarByteSize(grammar);
+    return grammar;
   }
 
   // `root` is one or more atoms, where an atom is either a bracketed action
@@ -76,16 +79,7 @@ export function compileActionGrammar(schema: ActionSchema): string {
   const labelAlts = cues.map((cue) => gbnfStringLiteral(cue.label)).join(' | ');
   rules.push(`cue-label ::= ${labelAlts}`);
 
-  return rules.join('\n') + '\n';
-}
-
-/**
- * Escapes a string as a GBNF string literal. GBNF uses JSON-style escapes
- * for `"` and `\`. Our labels are short ASCII phrases so no further
- * escaping is required, but we remain defensive in case authors introduce
- * special characters via `cue`.
- */
-function gbnfStringLiteral(source: string): string {
-  const escaped = source.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  return `"${escaped}"`;
+  const grammar = rules.join('\n') + '\n';
+  assertGrammarByteSize(grammar);
+  return grammar;
 }

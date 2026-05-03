@@ -47,11 +47,7 @@ export class MainThreadModelLoader {
 
   constructor(private readonly config: CogentConfig) {}
 
-  public cleanupAfterEngineInit(module: EngineModule): void {
-    this.removeAllLoadedAssets(module);
-  }
-
-  public cleanupAfterClose(module: EngineModule): void {
+  public cleanup(module: EngineModule): void {
     this.removeAllLoadedAssets(module);
   }
 

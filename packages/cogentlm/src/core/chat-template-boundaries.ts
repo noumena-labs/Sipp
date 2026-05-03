@@ -160,14 +160,6 @@ export function buildBoundaryMarkers(info: ChatBoundaryInfo): readonly string[] 
   return Array.from(markers);
 }
 
-export function sanitizeAssistantText(
-  text: string,
-  boundaryMarkers: readonly string[]
-): string {
-  const split = splitOnChatBoundary(text, boundaryMarkers);
-  return trimTrailingBoundaryPrefix(split.safeText, boundaryMarkers).trim();
-}
-
 export function splitOnChatBoundary(
   text: string,
   boundaryMarkers: readonly string[]

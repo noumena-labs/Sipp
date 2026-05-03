@@ -1,6 +1,5 @@
 import { CogentConfig, EngineModuleOptions } from '../cogent-config.js';
 import { normalizeInitConfig } from '../core/init-config.js';
-import { normalizePromptText } from '../core/prompt-format.js';
 import {
   BackendObservability,
   EngineExecutionMode,
@@ -36,25 +35,8 @@ import { asErrorMessage } from '../utils/error.js';
 import { QueuedRequestScheduler } from './scheduler.js';
 import { resolveRuntimeUrls } from '../runtime-assets.js';
 
-function resolveRuntimeLocationHref(): string | null {
-  const runtimeLocation = globalThis.location;
-  return typeof runtimeLocation?.href === 'string' ? runtimeLocation.href : null;
-}
-
-function resolveRuntimeLocationOrigin(): string | null {
-  const runtimeLocation = globalThis.location;
-  if (typeof runtimeLocation?.origin === 'string') {
-    return runtimeLocation.origin;
-  }
-  const href = resolveRuntimeLocationHref();
-  if (href == null) {
-    return null;
-  }
-  try {
-    return new URL(href).origin;
-  } catch {
-    return null;
-  }
+function normalizePromptText(value: string): string {
+  return value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 }
 
 export class MainThreadEngineRuntime implements EngineRuntime {
@@ -169,12 +151,10 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   }
 
   private buildGenerateRequest(
-    bridge: WasmBridge,
     contextKey: string,
     promptText: string,
     options: number | PromptOptions
   ): GenerateRequest {
-    void bridge;
     const media = this.resolvePromptMedia(options);
     const normalizedPromptText = normalizePromptText(promptText);
     const request: GenerateRequest = {
@@ -246,7 +226,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return bridge.consumeCompletedResponseIfPresent(requestId);
   }
 
-  private shouldUseNativeRuntimeEvents(
+  private updateTokenTransportObservability(
     onToken: ((token: string) => void) | undefined
   ): void {
     if (onToken == null) {
@@ -413,11 +393,11 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       bridge.close();
       this.engineInitialized = false;
       this.resetRuntimeLifecycleState(error);
-      this.modelLoader.cleanupAfterClose(module);
+      this.modelLoader.cleanup(module);
       throw error;
     }
 
-    this.modelLoader.cleanupAfterEngineInit(module);
+    this.modelLoader.cleanup(module);
   }
 
   private hasExplicitProjectorPath(config: InferenceInitConfig | undefined): boolean {
@@ -438,7 +418,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     const bridge = this.wasmBridge ?? new WasmBridge(module);
     this.rejectAllTrackedRequests(new Error('Engine runtime was closed.'), bridge);
     bridge.close();
-    this.modelLoader.cleanupAfterClose(module);
+    this.modelLoader.cleanup(module);
     this.engineInitialized = false;
     this.resetRuntimeLifecycleState();
     this.module = null;
@@ -480,7 +460,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     options: number | PromptOptions = 128
   ): Promise<GenerateRequestId> {
     const bridge = this.getReadyEngineBridge();
-    const request = this.buildGenerateRequest(bridge, contextKey, promptText, options);
+    const request = this.buildGenerateRequest(contextKey, promptText, options);
     const onToken = typeof options === 'object' ? options.onToken : undefined;
     const signal = typeof options === 'object' ? options.signal : undefined;
 
@@ -488,7 +468,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       throw createAbortError('Prompt was aborted before it was enqueued.');
     }
 
-    this.shouldUseNativeRuntimeEvents(onToken);
+    this.updateTokenTransportObservability(onToken);
 
     let requestId: GenerateRequestId = 0;
 

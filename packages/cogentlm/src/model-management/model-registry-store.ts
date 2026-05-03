@@ -1,8 +1,6 @@
 import { FileSystemStorage } from '../storage/file-system-storage.js';
 import {
   QueryError,
-  type AssetRecord,
-  type ModelEntry,
   type RegistryManifest,
 } from './model-types.js';
 
@@ -65,14 +63,6 @@ export class ModelRegistryStore {
       await this.writeManifest();
       return this.clone(manifest);
     });
-  }
-
-  public findModel(manifest: RegistryManifest, id: string): ModelEntry | null {
-    return manifest.models[id] ?? null;
-  }
-
-  public findAsset(manifest: RegistryManifest, id: string): AssetRecord | null {
-    return manifest.assets[id] ?? null;
   }
 
   private async ensureInitialized(): Promise<void> {

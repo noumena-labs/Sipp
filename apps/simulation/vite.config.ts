@@ -15,7 +15,7 @@ const cogentEngineCharacterEntry = path.resolve(
 );
 const cogentEngineDirectorEntry = path.resolve(
   simAppDir,
-  '../../packages/cogentlm/dist/esm/director/index.js'
+  '../../packages/cogentlm/dist/esm/orchestrator/index.js'
 );
 
 export default defineConfig({

@@ -16,6 +16,7 @@ const buildDir = path.join(projectRoot, buildDirName);
 const buildDistDir = path.join(buildDir, 'dist');
 const packageWasmSubdir = process.env.CE_WASM_OUTPUT_SUBDIR?.trim() || 'wasm';
 const packageWasmDir = path.join(projectRoot, 'dist', packageWasmSubdir);
+const llamaCppRoot = path.join(projectRoot, 'third_party', 'llama.cpp');
 const enableDebug = false;
 const enableEsModule = true;
 const enableFilesystem = true;
@@ -469,11 +470,18 @@ function hasIncompleteBuildDirectory() {
     return false;
   }
 
-  if (existsSync(path.join(buildDir, 'CMakeCache.txt'))) {
-    return false;
+  const cachePath = path.join(buildDir, 'CMakeCache.txt');
+  if (existsSync(cachePath)) {
+    const cacheText = readFileSync(cachePath, 'utf8');
+    const cachedGenerator = getCacheEntry(cacheText, 'CMAKE_GENERATOR');
+    return cachedGenerator != null;
   }
 
-  return existsSync(path.join(buildDir, 'CMakeFiles')) || existsSync(path.join(buildDir, 'build.ninja'));
+  return (
+    existsSync(path.join(buildDir, 'CMakeFiles')) ||
+    existsSync(path.join(buildDir, 'build.ninja')) ||
+    existsSync(path.join(buildDir, 'Makefile'))
+  );
 }
 
 // Interrupted configure runs leave behind a partial build directory. Reusing it on the

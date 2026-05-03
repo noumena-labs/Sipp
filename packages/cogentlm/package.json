@@ -22,9 +22,9 @@
       "default": "./dist/esm/character/advanced.js"
     },
     "./director": {
-      "types": "./dist/types/director/index.d.ts",
-      "import": "./dist/esm/director/index.js",
-      "default": "./dist/esm/director/index.js"
+      "types": "./dist/types/orchestrator/index.d.ts",
+      "import": "./dist/esm/orchestrator/index.js",
+      "default": "./dist/esm/orchestrator/index.js"
     },
     "./wasm/*": "./dist/wasm/*",
     "./package.json": "./package.json"

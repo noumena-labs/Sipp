@@ -6,9 +6,10 @@ import type {
   DirectorRunRequest,
   DirectorSelection,
 } from './director-types.js';
+import { assertGrammarByteSize, gbnfStringLiteral, MAX_GRAMMAR_BYTES } from '../utils/grammar.js';
 
 const CHOICE_ID_RE = /^[A-Za-z0-9_.:-]+$/;
-export const MAX_DIRECTOR_GRAMMAR_BYTES = 64 * 1024;
+export const MAX_DIRECTOR_GRAMMAR_BYTES = MAX_GRAMMAR_BYTES;
 
 export class DirectorOutputError extends Error {
   public constructor(message: string) {
@@ -336,17 +337,10 @@ function selectionFromChoice<TPayload>(
   };
 }
 
-function gbnfStringLiteral(source: string): string {
-  return JSON.stringify(source);
-}
-
 function validateDirectorGrammarSize(grammar: string): void {
-  const byteLength = typeof TextEncoder !== 'undefined'
-    ? new TextEncoder().encode(grammar).byteLength
-    : grammar.length;
-  if (byteLength > MAX_DIRECTOR_GRAMMAR_BYTES) {
-    throw new DirectorOutputError(
-      `director grammar exceeds maximum size of ${MAX_DIRECTOR_GRAMMAR_BYTES} bytes (got ${byteLength}).`
-    );
-  }
+  assertGrammarByteSize(grammar, {
+    label: 'director grammar',
+    maxBytes: MAX_DIRECTOR_GRAMMAR_BYTES,
+    createError: (message) => new DirectorOutputError(message),
+  });
 }

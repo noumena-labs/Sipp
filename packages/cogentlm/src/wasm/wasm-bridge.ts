@@ -24,50 +24,26 @@ import {
   RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES,
   SCHEDULER_BURST_RESULT_SIZE_BYTES,
 } from '../runtime/main-thread-runtime-constants.js';
+import { assertGrammarByteSize } from '../utils/grammar.js';
+export { MAX_GRAMMAR_BYTES } from '../utils/grammar.js';
 
 const RUNTIME_EVENT_DRAIN_TEXT_BUFFER_SIZE_BYTES = 64 * 1024;
 
 export const TOKEN_EMISSION_NONE = 0;
 export const TOKEN_EMISSION_RUNTIME_EVENTS = 1;
-export const TOKEN_EMISSION_DIRECT_CALLBACK = 2;
 
 export type TokenEmissionMode =
   | typeof TOKEN_EMISSION_NONE
-  | typeof TOKEN_EMISSION_RUNTIME_EVENTS
-  | typeof TOKEN_EMISSION_DIRECT_CALLBACK;
-
-/**
- * Maximum accepted size of a GBNF grammar source (UTF-8 byte length).
- * Enforced at the bridge boundary before any ccall to the native runtime.
- */
-export const MAX_GRAMMAR_BYTES = 64 * 1024;
+  | typeof TOKEN_EMISSION_RUNTIME_EVENTS;
 
 function validateGrammarSize(grammar: string | undefined): void {
-  if (grammar == null) {
-    return;
-  }
-  // Fast path: if the string length in UTF-16 code units is under the limit,
-  // UTF-8 size is guaranteed to be under 4x that. We only need the precise
-  // byte length when close to the limit.
-  if (grammar.length <= MAX_GRAMMAR_BYTES) {
-    return;
-  }
-  const byteLength =
-    typeof TextEncoder !== 'undefined'
-      ? new TextEncoder().encode(grammar).byteLength
-      : grammar.length;
-  if (byteLength > MAX_GRAMMAR_BYTES) {
-    throw new Error(
-      `grammar exceeds maximum size of ${MAX_GRAMMAR_BYTES} bytes (got ${byteLength}).`
-    );
-  }
+  assertGrammarByteSize(grammar);
 }
 
 function validateTokenEmissionMode(mode: TokenEmissionMode): void {
   if (
     mode !== TOKEN_EMISSION_NONE &&
-    mode !== TOKEN_EMISSION_RUNTIME_EVENTS &&
-    mode !== TOKEN_EMISSION_DIRECT_CALLBACK
+    mode !== TOKEN_EMISSION_RUNTIME_EVENTS
   ) {
     throw new Error(`invalid token emission mode ${mode}.`);
   }

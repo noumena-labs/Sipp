@@ -231,8 +231,7 @@ export type ModelPairingReasonCode =
   | 'BASE_NOT_VISION'
   | 'NO_MATCH'
   | 'MULTIPLE_MATCHES'
-  | 'MISSING_METADATA'
-  | 'INCOMPATIBLE_PROJECTOR';
+  | 'MISSING_METADATA';
 
 export interface ModelPairingState {
   state: 'resolved' | 'unresolved';

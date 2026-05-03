@@ -11,6 +11,7 @@ import type {
   PromptOptions,
 } from '../types.js';
 import { createLinkedAbortController } from '../utils/abort.js';
+import { stableJson } from '../utils/stable-json.js';
 import { AssetStore, type RemoteAssetMetadata } from './asset-store.js';
 import { sha256Text } from './hash.js';
 import { ModelRegistryStore } from './model-registry-store.js';
@@ -67,20 +68,6 @@ function isStringArray(value: unknown): value is readonly string[] {
 
 function isFileArray(value: unknown): value is readonly File[] {
   return Array.isArray(value) && value.every((item) => isFile(item));
-}
-
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(stableJson).join(',')}]`;
-  }
-  if (value != null && typeof value === 'object') {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`)
-      .join(',')}}`;
-  }
-  return JSON.stringify(value);
 }
 
 function isSourceObject(source: ModelSource): source is Extract<ModelSource, { model: BaseSource }> {

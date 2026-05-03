@@ -2,6 +2,7 @@ import { ModelService } from '../model-management/model-service.js';
 import { QueryError } from '../model-management/model-types.js';
 import { getDefaultRuntimeUrls } from '../runtime-assets.js';
 import { MainThreadEngineRuntime } from '../runtime/engine-runtime-main-thread.js';
+import { stableJson } from '../utils/stable-json.js';
 import {
   WorkerRequestMessage,
   WorkerResponseMessage,
@@ -13,20 +14,6 @@ let service: ModelService | null = null;
 let serviceConfigFingerprint: string | null = null;
 let unsubscribeObservability: (() => void) | null = null;
 const activeCalls = new Map<number, AbortController>();
-
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(stableJson).join(',')}]`;
-  }
-  if (value != null && typeof value === 'object') {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`)
-      .join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
 
 function buildServiceConfig(config: WorkerSerializableCogentConfig): WorkerServiceConfig {
   const bundledRuntimeUrls =

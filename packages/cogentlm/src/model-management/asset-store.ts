@@ -1,6 +1,7 @@
 import { FileSystemStorage } from '../storage/file-system-storage.js';
 import { QueryError, type AssetRecord, type ModelAssetKind, type ModelLoadProgress } from './model-types.js';
 import { sha256Blob } from './hash.js';
+import { currentLocationHref, resolveUrl } from '../utils/url.js';
 
 export interface RemoteAssetMetadata {
   url: string;
@@ -24,10 +25,6 @@ function normalizeAssetName(name: string): string {
   const trimmed = name.trim();
   const defaultValue = trimmed.length > 0 ? trimmed : 'model.gguf';
   return defaultValue.replace(/[\\/:*?"<>|]+/g, '-');
-}
-
-function currentLocationHref(): string | undefined {
-  return typeof globalThis.location?.href === 'string' ? globalThis.location.href : undefined;
 }
 
 function fileNameFromUrl(url: string): string {
@@ -263,8 +260,7 @@ export class AssetStore {
 
   private parseUrl(rawUrl: string): URL {
     try {
-      const baseHref = currentLocationHref();
-      return baseHref == null ? new URL(rawUrl) : new URL(rawUrl, baseHref);
+      return resolveUrl(rawUrl, 'model URL');
     } catch {
       throw new QueryError('INVALID_MODEL_SOURCE', `Invalid model URL "${rawUrl}".`);
     }

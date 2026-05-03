@@ -1,5 +1,6 @@
 import type { CogentConfig } from './cogent-config.js';
 import { resolveOptimizedPackageAssetUrl } from './runtime/package-assets.js';
+import { currentLocationOrigin, resolveUrl } from './utils/url.js';
 
 export interface RuntimeUrls {
   moduleUrl: string;
@@ -11,21 +12,8 @@ function normalizeOptionalString(value: string | undefined): string | undefined 
   return trimmed == null || trimmed.length === 0 ? undefined : trimmed;
 }
 
-function currentLocationHref(): string | undefined {
-  return typeof globalThis.location?.href === 'string' ? globalThis.location.href : undefined;
-}
-
-function currentLocationOrigin(): string | undefined {
-  return typeof globalThis.location?.origin === 'string' ? globalThis.location.origin : undefined;
-}
-
 function parseConfiguredUrl(rawUrl: string, fieldName: string): URL {
-  try {
-    const baseHref = currentLocationHref();
-    return baseHref == null ? new URL(rawUrl) : new URL(rawUrl, baseHref);
-  } catch {
-    throw new Error(`Invalid ${fieldName} value "${rawUrl}".`);
-  }
+  return resolveUrl(rawUrl, fieldName);
 }
 
 export function getDefaultRuntimeUrls(importerUrl: string = import.meta.url): RuntimeUrls {
@@ -74,10 +62,13 @@ export function resolveRuntimeUrls(
 
   const resolved =
     configuredModuleUrl == null
-      ? {
-        moduleUrl: new URL(getDefaultRuntimeUrls().moduleUrl),
-        wasmUrl: new URL(getDefaultRuntimeUrls().wasmUrl),
-      }
+      ? (() => {
+        const defaults = getDefaultRuntimeUrls();
+        return {
+          moduleUrl: new URL(defaults.moduleUrl),
+          wasmUrl: new URL(defaults.wasmUrl),
+        };
+      })()
       : {
         moduleUrl: parseConfiguredUrl(configuredModuleUrl, 'moduleUrl'),
         wasmUrl: parseConfiguredUrl(configuredWasmUrl!, 'wasmUrl'),

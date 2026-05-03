@@ -163,11 +163,6 @@ export class RequestTracker<TResult> {
 
   // ── Cleanup ────────────────────────────────────────────────────────
 
-  /** Remove a request from active tracking. */
-  deactivate(requestId: GenerateRequestId): void {
-    this.activeRuns.delete(requestId);
-  }
-
   /**
    * Full cleanup for a finished request: release signal, remove from active,
    * and optionally delete its completion entry entirely.

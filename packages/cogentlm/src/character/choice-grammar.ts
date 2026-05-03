@@ -8,6 +8,8 @@
 //
 //////////////////////////////////////////////////////////////////////////////
 
+import { gbnfStringLiteral } from '../utils/grammar.js';
+
 export class ChoiceGrammarError extends Error {
   public constructor(message: string) {
     super(message);
@@ -45,9 +47,4 @@ function normalizeChoices(choices: readonly string[]): readonly string[] {
     throw new ChoiceGrammarError('choices must be unique after trimming.');
   }
   return normalized;
-}
-
-function gbnfStringLiteral(source: string): string {
-  const escaped = source.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  return `"${escaped}"`;
 }

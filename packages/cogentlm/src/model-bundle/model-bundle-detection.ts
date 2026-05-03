@@ -114,10 +114,6 @@ export async function detectModelFromGgufFile(
   };
 }
 
-export function inspectionFromDetection(detection: ModelDetectionResult): AssetInspection {
-  return detection.inspection;
-}
-
 function buildInspection(
   modelType: string | null,
   architecture: string | null,

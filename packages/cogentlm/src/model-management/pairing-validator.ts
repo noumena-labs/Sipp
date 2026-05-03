@@ -1,4 +1,4 @@
-import { detectModelFromGgufFile, inspectionFromDetection } from '../model-bundle/model-bundle-detection.js';
+import { detectModelFromGgufFile } from '../model-bundle/model-bundle-detection.js';
 import type { AssetInspection } from '../model-bundle/model-bundle-types.js';
 import { QueryError, type ModelModality, type ModelStatus } from './model-types.js';
 
@@ -39,7 +39,7 @@ export class PairingValidator {
     return {
       assetId,
       file,
-      inspection: inspectionFromDetection(detection),
+      inspection: detection.inspection,
       name: detection.modelName,
     };
   }

@@ -16,6 +16,7 @@ const buildDirName =
   (isDebugBuild ? 'build-test-backend-ops-webgpu-debug' : 'build-test-backend-ops-webgpu');
 const buildDir = path.join(projectRoot, buildDirName);
 const buildOutputDir = path.join(buildDir, 'bin');
+const llamaCppRoot = path.join(projectRoot, 'third_party', 'llama.cpp');
 const runnerDir = path.join(scriptDir, 'webgpu-test-runner');
 const browserHarnessScript = path.join(scriptDir, 'run-webgpu-browser-harness.mjs');
 const testTargetName = 'test-backend-ops';
@@ -397,11 +398,18 @@ function hasIncompleteBuildDirectory() {
     return false;
   }
 
-  if (existsSync(path.join(buildDir, 'CMakeCache.txt'))) {
-    return false;
+  const cachePath = path.join(buildDir, 'CMakeCache.txt');
+  if (existsSync(cachePath)) {
+    const cacheText = readFileSync(cachePath, 'utf8');
+    const cachedGenerator = getCacheEntry(cacheText, 'CMAKE_GENERATOR');
+    return cachedGenerator != null;
   }
 
-  return existsSync(path.join(buildDir, 'CMakeFiles')) || existsSync(path.join(buildDir, 'build.ninja'));
+  return (
+    existsSync(path.join(buildDir, 'CMakeFiles')) ||
+    existsSync(path.join(buildDir, 'build.ninja')) ||
+    existsSync(path.join(buildDir, 'Makefile'))
+  );
 }
 
 function removeInvalidBuildDirectory(expectedGenerator) {
