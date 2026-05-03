@@ -1144,7 +1144,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     return false;
   }
 
-  // llama_synchronize(shared_context_);
+  llama_synchronize(shared_context_);
 
   for (const BatchContribution &contribution : plan.contributions) {
     if (contribution.slot == nullptr || contribution.slot->session == nullptr) {
@@ -1880,7 +1880,7 @@ GenerateRequestId InferenceRuntime::EnqueueRequest(
   // mutate any runtime state.  primary_model_ is write-once (set in the
   // constructor, cleared only in the destructor) so the vocab read is safe.
   const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
-  auto prompt_tokens = llama_utils::Tokenize(vocab, prompt, false, true);
+  auto prompt_tokens = llama_utils::Tokenize(vocab, prompt, true, true);
 
   // Lock only for the brief queue mutation.
   std::lock_guard<std::mutex> lock(operation_mutex_);
