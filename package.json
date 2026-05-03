@@ -26,8 +26,6 @@
     "test:backend-ops:cuda:op": "bun run --filter=@noumena-labs/cogentlm test:backend-ops:cuda:op",
     "test:backend-ops:cuda:debug": "bun run --filter=@noumena-labs/cogentlm test:backend-ops:cuda:debug",
     "bench:bun": "bun run --filter=@noumena-labs/cogentlm bench:bun",
-    "publish:cogentlm": "bun ./scripts/publish-cogentlm.mjs",
-    "publish:cogentlm:dry-run": "bun ./scripts/publish-cogentlm.mjs --dry-run",
     "benchmark:dev": "bun run build:package && bun run --filter=cogentlm-benchmark-app dev",
     "benchmark:build": "bun run build:package && bun run --filter=cogentlm-benchmark-app build",
     "benchmark:preview": "bun run --filter=cogentlm-benchmark-app preview",
