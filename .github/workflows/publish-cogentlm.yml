@@ -307,4 +307,7 @@ jobs:
           fi
           # Publish with provenance (Ready for Trusted Publishing)
           # We use the token for auth, but --provenance links it to this GitHub Action
-          npm publish --registry https://registry.npmjs.org --tag "$NPM_TAG" --provenance
+          # npm publish --registry https://registry.npmjs.org --tag "$NPM_TAG" --provenance
+
+          # Disabling provenance as this is not supported for github private packages
+          npm publish --registry https://registry.npmjs.org --tag "$NPM_TAG"
