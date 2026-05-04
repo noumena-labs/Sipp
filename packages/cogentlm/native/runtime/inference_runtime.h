@@ -63,8 +63,6 @@ public:
   bool TryGetRuntimeObservability(RuntimeObservabilityMetrics &out) const;
   bool RuntimeObservabilityEnabled() const;
   bool BackendProfilingEnabled() const;
-  void ResetRuntimeObservability();
-
 
   GenerateRequestId EnqueueRequest(std::string context_key, std::string prompt,
                                    int n_tokens_predict,
@@ -85,8 +83,6 @@ public:
                                          int32_t max_completed_responses,
                                          int32_t max_emitted_tokens,
                                          int32_t max_duration_us = 0);
-  RequestStepResult RunRequestStep(GenerateRequestId request_id);
-  std::vector<GenerateRequestId> DrainCompletedResponseIds(int32_t max_count);
   std::vector<RuntimeEvent> DrainRuntimeEvents(int32_t max_count,
                                                int32_t max_text_bytes);
   bool TryPeekCompletedResponse(GenerateRequestId request_id,
@@ -98,8 +94,6 @@ public:
   std::string GetBosText() const;
   // Returns the model's EOS token rendered as text (empty string if none).
   std::string GetEosText() const;
-  // Renders an arbitrary token id to its textual piece. Empty if invalid.
-  std::string TokenToString(int32_t token_id) const;
   // Applies the model's embedded chat template to the full chat history.
   std::string ApplyChatTemplate(
       const std::vector<common_chat_msg> &messages,

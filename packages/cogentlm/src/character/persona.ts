@@ -182,7 +182,7 @@ function renderAnchorExamples(
     })
     .filter((example): example is string => example != null);
 
-  if (!anchors || anchors.length === 0) {
+  if (anchors.length === 0) {
     return '';
   }
 

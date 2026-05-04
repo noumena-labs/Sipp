@@ -25,10 +25,6 @@ void RequestQueue::QueueCompletedResponseId(GenerateRequestId request_id) {
   if (request_id == 0 || !completed_responses_.contains(request_id)) {
     return;
   }
-  if (!queued_completed_response_ids_.insert(request_id).second) {
-    return;
-  }
-  completed_response_ready_ids_.push_back(request_id);
   RuntimeEvent event;
   event.kind = RuntimeEventKind::Terminal;
   event.request_id = request_id;
@@ -175,27 +171,6 @@ std::vector<GenerateRequestId> RequestQueue::CompletedResponseIds() const {
   return request_ids;
 }
 
-std::vector<GenerateRequestId> RequestQueue::DrainCompletedResponseIds(
-    std::size_t max_count) {
-  std::vector<GenerateRequestId> request_ids;
-  const std::size_t drain_limit =
-      max_count == 0 ? completed_response_ready_ids_.size() : max_count;
-  request_ids.reserve(std::min(drain_limit, completed_response_ready_ids_.size()));
-
-  while (!completed_response_ready_ids_.empty() &&
-         request_ids.size() < drain_limit) {
-    const GenerateRequestId request_id = completed_response_ready_ids_.front();
-    completed_response_ready_ids_.pop_front();
-    queued_completed_response_ids_.erase(request_id);
-    if (!completed_responses_.contains(request_id)) {
-      continue;
-    }
-    request_ids.push_back(request_id);
-  }
-
-  return request_ids;
-}
-
 void RequestQueue::QueueTokenEvent(GenerateRequestId request_id, std::string text) {
   if (request_id == 0 || text.empty()) {
     return;
@@ -250,7 +225,6 @@ bool RequestQueue::ConsumeCompletedResponse(GenerateRequestId request_id) {
   }
 
   RemovePendingRequestId(request_id);
-  queued_completed_response_ids_.erase(request_id);
   completed_responses_.erase(response_it);
   requests_.erase(request_id);
   return true;
@@ -265,9 +239,7 @@ void RequestQueue::Clear() {
   pending_request_ids_.clear();
   pending_request_positions_.clear();
   completed_responses_.clear();
-  completed_response_ready_ids_.clear();
   runtime_events_.clear();
-  queued_completed_response_ids_.clear();
   total_emitted_token_count_ = 0;
 }
 

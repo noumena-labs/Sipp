@@ -3,14 +3,16 @@ import {
   ChatTemplatePromptRuntime,
   StreamingBoundaryTextSanitizer,
 } from '../core/chat-template-boundaries.js';
+import { sliceUnstreamedSuffix } from '../core/streaming-output.js';
 import type {
   GenerateResponse,
   InferenceInitConfig,
   ModelBundleFileProjectorDescriptor,
+  ModelDetectionResult,
   InternalBundleDescriptor,
   PromptOptions,
 } from '../types.js';
-import { createLinkedAbortController } from '../utils/abort.js';
+import { createLinkedAbortController, isAbortError } from '../utils/abort.js';
 import { stableJson } from '../utils/stable-json.js';
 import { AssetStore, type RemoteAssetMetadata } from './asset-store.js';
 import { sha256Text } from './hash.js';
@@ -110,10 +112,6 @@ function nowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
     ? performance.now()
     : Date.now();
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException && error.name === 'AbortError';
 }
 
 function entryAssetFingerprint(entry: Pick<ModelEntry, 'modelAssetIds' | 'projectorAssetId'>): string {
@@ -1207,7 +1205,7 @@ export class ModelService implements ModelLifecycleService {
 
     const manifest = await this.registry.read();
     const files = await this.filesForEntry(entry, manifest);
-    const descriptor = this.buildDescriptor(files.modelFiles, files.projectorFile);
+    const descriptor = this.buildDescriptor(files.modelFiles, files.projectorFile, entry, manifest);
     options.onProgress?.({
       phase: 'load',
       loadedBytes: 0,
@@ -1313,7 +1311,13 @@ export class ModelService implements ModelLifecycleService {
     }
   }
 
-  private buildDescriptor(modelFiles: File[], projectorFile: File | null): InternalBundleDescriptor {
+  private buildDescriptor(
+    modelFiles: File[],
+    projectorFile: File | null,
+    entry: ModelEntry,
+    manifest: RegistryManifest
+  ): InternalBundleDescriptor {
+    const detection = this.detectionForEntry(entry, manifest);
     const projector: ModelBundleFileProjectorDescriptor | undefined =
       projectorFile == null
         ? undefined
@@ -1326,13 +1330,34 @@ export class ModelService implements ModelLifecycleService {
         kind: 'file',
         file: modelFiles[0],
         projector,
+        ...(detection == null ? {} : { detection }),
       };
     }
     return {
       kind: 'files',
       files: modelFiles,
       projector,
+      ...(detection == null ? {} : { detection }),
     };
+  }
+
+  private detectionForEntry(
+    entry: ModelEntry,
+    manifest: RegistryManifest
+  ): ModelDetectionResult | undefined {
+    for (const assetId of entry.modelAssetIds) {
+      const inspection = manifest.assets[assetId]?.inspection;
+      if (inspection != null) {
+        return {
+          inspection,
+          detectionMethod: inspection.role === 'unknown' ? 'none' : 'gguf-metadata',
+          modelName: entry.name,
+          modelType: null,
+          modelArchitecture: inspection.architecture,
+        };
+      }
+    }
+    return undefined;
   }
 
   private async markBroken(id: string): Promise<void> {
@@ -1398,16 +1423,6 @@ export class ModelService implements ModelLifecycleService {
     }
     return this.chatRuntime;
   }
-}
-
-function sliceUnstreamedSuffix(streamedOutputText: string, finalOutputText: string): string {
-  if (streamedOutputText.length === 0) {
-    return finalOutputText;
-  }
-  if (!finalOutputText.startsWith(streamedOutputText)) {
-    return '';
-  }
-  return finalOutputText.slice(streamedOutputText.length);
 }
 
 function isChatInputObject(input: ChatInput): input is Extract<ChatInput, { messages: unknown }> {

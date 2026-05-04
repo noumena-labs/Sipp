@@ -384,16 +384,6 @@ int CE_GetRuntimeObservability(CE_RuntimeObservabilityMetrics *out_metrics) {
   return 0;
 }
 
-int CE_ResetRuntimeObservability() {
-  auto runtime = acquire_engine_runtime();
-  if (!runtime) {
-    return kStatusError;
-  }
-
-  runtime->ResetRuntimeObservability();
-  return 0;
-}
-
 int CE_RunSchedulerBurst(int32_t max_ticks, int32_t max_completed_responses,
                          int32_t max_emitted_tokens,
                          CE_SchedulerBurstResult *out_result) {
@@ -765,16 +755,6 @@ const char *CE_GetEosTextString() {
     return empty_c_string();
   }
   cached = runtime->GetEosText();
-  return cached.c_str();
-}
-
-const char *CE_TokenToStringString(int32_t token_id) {
-  static thread_local std::string cached;
-  const auto runtime = acquire_engine_runtime();
-  if (!runtime) {
-    return empty_c_string();
-  }
-  cached = runtime->TokenToString(token_id);
   return cached.c_str();
 }
 

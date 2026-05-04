@@ -59,8 +59,6 @@ public:
       std::size_t max_entries = 32,
       std::size_t max_total_bytes = 256ull * 1024ull * 1024ull);
 
-  void set_max_entries(std::size_t max_entries);
-
   const PrefixCacheEntry *
   FindBestPrefix(std::uint64_t model_fingerprint, const std::string &context_key,
                  const std::vector<llama_token> &prompt_tokens,

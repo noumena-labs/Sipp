@@ -29,12 +29,14 @@ export interface FileBundleDescriptor {
   file: File;
   destFileName?: string;
   projector?: ModelBundleFileProjectorDescriptor;
+  detection?: ModelDetectionResult;
 }
 
 export interface FilesBundleDescriptor {
   kind: 'files';
   files: File[];
   projector?: ModelBundleFileProjectorDescriptor;
+  detection?: ModelDetectionResult;
 }
 
 export type InternalBundleDescriptor =

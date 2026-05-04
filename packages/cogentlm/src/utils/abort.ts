@@ -8,7 +8,12 @@ export function createAbortError(message = 'The operation was aborted.'): Error 
 }
 
 export function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'AbortError';
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'name' in error &&
+    error.name === 'AbortError'
+  );
 }
 
 export function createLinkedAbortController(signal?: AbortSignal): {
@@ -26,24 +31,24 @@ export function createLinkedAbortController(signal?: AbortSignal): {
     };
   }
 
-  const abortListener =
-    signal == null
-      ? null
-      : () => {
-          controller.abort();
-        };
-  const linkedSignal = signal;
-  if (abortListener != null && linkedSignal != null) {
-    linkedSignal.addEventListener('abort', abortListener, { once: true });
+  if (signal == null) {
+    return {
+      controller,
+      signal: controller.signal,
+      dispose: () => {},
+    };
   }
+
+  const abortListener = () => {
+    controller.abort();
+  };
+  signal.addEventListener('abort', abortListener, { once: true });
 
   return {
     controller,
     signal: controller.signal,
     dispose: () => {
-      if (abortListener != null && linkedSignal != null) {
-        linkedSignal.removeEventListener('abort', abortListener);
-      }
+      signal.removeEventListener('abort', abortListener);
     },
   };
 }
@@ -80,24 +85,4 @@ export function createTimedAbortController(
       linked.dispose();
     },
   };
-}
-
-export function waitForAbort(
-  signal: AbortSignal,
-  options: { timedOut?: () => boolean; timeoutMessage?: string; abortMessage?: string } = {}
-): Promise<never> {
-  const timeoutMessage = options.timeoutMessage ?? 'The operation timed out.';
-  const abortMessage = options.abortMessage ?? 'The operation was aborted.';
-  if (signal.aborted) {
-    return Promise.reject(
-      createAbortError(options.timedOut?.() ? timeoutMessage : abortMessage)
-    );
-  }
-  return new Promise((_, reject) => {
-    const onAbort = (): void => {
-      signal.removeEventListener('abort', onAbort);
-      reject(createAbortError(options.timedOut?.() ? timeoutMessage : abortMessage));
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-  });
 }

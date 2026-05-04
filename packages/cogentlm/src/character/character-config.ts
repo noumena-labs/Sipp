@@ -249,7 +249,7 @@ export function parseCharacterConfig(raw: unknown): CharacterConfig {
         ),
     } satisfies PersonaSpec,
     actions: (actions as ActionSchema).map((action) => ({
-      id: action.id.trim(),
+      id: action.id,
       ...(action.cue != null ? { cue: action.cue.trim() } : {}),
       ...(action.description != null ? { description: action.description.trim() } : {}),
       ...(action.usageHint != null ? { usageHint: action.usageHint.trim() } : {}),

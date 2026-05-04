@@ -95,7 +95,7 @@ export class MainThreadModelLoader {
   ): Promise<ResolvedBundlePlan> {
     switch (descriptor.kind) {
       case 'file': {
-        const detection = await detectModelFromGgufFile(descriptor.file, signal);
+        const detection = descriptor.detection ?? (await detectModelFromGgufFile(descriptor.file, signal));
         this.ensureNotProjectorSource(
           detection.modelName,
           detection.inspection.role === 'projector'
@@ -116,12 +116,19 @@ export class MainThreadModelLoader {
         };
       }
       case 'files': {
-        if (!descriptor.files || descriptor.files.length === 0) {
+        if (descriptor.files.length === 0) {
           throw new Error('Model bundle file list must not be empty.');
         }
         const explicitProjectorAsset = this.resolveExplicitProjectorAsset(descriptor.projector);
         const localResolution =
-          explicitProjectorAsset == null
+          descriptor.detection != null
+            ? {
+                modelFiles: [...descriptor.files],
+                projectorFile: null,
+                candidateFileNames: [],
+                errorMessage: null,
+              }
+          : explicitProjectorAsset == null
             ? await resolveLocalModelAndProjectorFiles(descriptor.files, signal)
             : {
                 modelFiles: [...descriptor.files],
@@ -141,7 +148,7 @@ export class MainThreadModelLoader {
           normalizeModelFileName(left.name).localeCompare(normalizeModelFileName(right.name))
         );
         const detectionFile = sortedModelFiles[0];
-        const detection = await detectModelFromGgufFile(detectionFile, signal);
+        const detection = descriptor.detection ?? (await detectModelFromGgufFile(detectionFile, signal));
         this.ensureNotProjectorSource(
           detection.modelName,
           detection.inspection.role === 'projector'

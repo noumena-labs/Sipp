@@ -9,7 +9,7 @@ The host app still owns model loading, engine lifecycle, render assets, and busi
 If you already have a loaded `CogentEngine` named `engine`, this is enough to make a character talk.
 
 ```ts
-import { createCharacterFromConfigUrl } from 'cogentlm/character';
+import { createCharacterFromConfigUrl } from '@noumena-labs/cogentlm/character';
 const { character } = await createCharacterFromConfigUrl({ configUrl: '/characters/aria/character.json', engine });
 for await (const event of character.chat('Say hi in character.')) {
   if (event.kind === 'prose') document.body.textContent += event.text;
@@ -30,15 +30,6 @@ import {
   type CharacterChooseResult,
   type CharacterRuntimeEngine,
 } from 'cogentlm/character';
-```
-
-Advanced grammar/parser helpers live under:
-
-```ts
-import {
-  compileActionGrammar,
-  StreamingActionParser,
-} from 'cogentlm/character/advanced';
 ```
 
 ## Mental Model

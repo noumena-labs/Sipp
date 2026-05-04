@@ -11,21 +11,6 @@ const tempEsmDir = path.join(tempRoot, 'esm');
 const tempTypesDir = path.join(tempRoot, 'types');
 const esmDir = path.join(distDir, 'esm');
 const typesDir = path.join(distDir, 'types');
-const backupEsmDir = path.join(distDir, '.previous-esm');
-const backupTypesDir = path.join(distDir, '.previous-types');
-
-async function pathExists(targetPath) {
-  try {
-    await lstat(targetPath);
-    return true;
-  } catch (error) {
-    if (error?.code === 'ENOENT') {
-      return false;
-    }
-
-    throw error;
-  }
-}
 
 async function pathIsDirectory(targetPath) {
   try {
@@ -112,21 +97,9 @@ async function mirrorDirectory(sourceDir, targetDir) {
   }
 }
 
-async function restoreInterruptedSwap() {
-  if ((await pathExists(backupEsmDir)) && !(await pathExists(esmDir))) {
-    await mirrorDirectory(backupEsmDir, esmDir);
-  }
-
-  if ((await pathExists(backupTypesDir)) && !(await pathExists(typesDir))) {
-    await mirrorDirectory(backupTypesDir, typesDir);
-  }
-}
-
 async function syncTypeScriptDist() {
   await mirrorDirectory(tempEsmDir, esmDir);
   await mirrorDirectory(tempTypesDir, typesDir);
-  await rm(backupEsmDir, { recursive: true, force: true });
-  await rm(backupTypesDir, { recursive: true, force: true });
 }
 
 async function preserveBundlerDirectives() {
@@ -146,7 +119,6 @@ async function preserveBundlerDirectives() {
   await writeFile(runtimePath, patchedRuntimeText);
 }
 
-await restoreInterruptedSwap();
 await rm(tempRoot, { recursive: true, force: true });
 await mkdir(tempRoot, { recursive: true });
 

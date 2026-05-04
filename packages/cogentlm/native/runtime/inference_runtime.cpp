@@ -1852,15 +1852,6 @@ bool InferenceRuntime::BackendProfilingEnabled() const {
   return config_.enable_backend_profiling > 0;
 }
 
-void InferenceRuntime::ResetRuntimeObservability() {
-  std::lock_guard<std::mutex> lock(operation_mutex_);
-  last_runtime_observability_ = {};
-  has_last_runtime_observability_ = false;
-  shared_batch_observability_ = {};
-  scheduler_observability_ = {};
-  committed_observability_request_ids_.clear();
-}
-
 GenerateRequestId InferenceRuntime::EnqueueRequest(
     std::string context_key, std::string prompt, int n_tokens_predict,
     TokenCallback on_token_received, std::string grammar,
@@ -2102,103 +2093,6 @@ RequestStepResult InferenceRuntime::RunSchedulerTickLocked() {
                                          : RequestStepResult::Waiting;
 }
 
-RequestStepResult
-InferenceRuntime::RunRequestStep(GenerateRequestId request_id) {
-  std::lock_guard<std::mutex> lock(operation_mutex_);
-
-  if (request_id == 0 || primary_model_ == nullptr ||
-      shared_context_ == nullptr || sampler_ == nullptr) {
-    return RequestStepResult::Invalid;
-  }
-
-  if (const GenerateResponse *completed =
-          request_queue_.PeekCompletedResponse(request_id);
-      completed != nullptr) {
-    CommitCompletedObservabilityLocked(request_id, *completed);
-    return RequestStepResult::Terminal;
-  }
-
-  GenerateRequest *target_request = request_queue_.FindMutable(request_id);
-  if (target_request == nullptr) {
-    return RequestStepResult::Invalid;
-  }
-
-  bool admitted_any = false;
-  while (slot_scheduler_.AdmitPendingRequests(request_queue_, session_store_)) {
-    admitted_any = true;
-  }
-
-  if (const GenerateResponse *completed =
-          request_queue_.PeekCompletedResponse(request_id);
-      completed != nullptr) {
-    CommitCompletedObservabilityLocked(request_id, *completed);
-    return RequestStepResult::Terminal;
-  }
-
-  const bool tick_executed = RunPolicyBatchTickLocked();
-
-  // Ensure terminal slots (Completed/Failed) are always moved to the
-  // request_queue, especially if RunPolicyBatchTickLocked failed early due to
-  // slot setup errors.
-  slot_scheduler_.FinalizeCompletedSlots(request_queue_, session_store_);
-  CommitNewCompletedResponsesObservabilityLocked();
-
-  if (!tick_executed) {
-    // If the request we are tracking just finished (possibly failed), return
-    // Terminal.
-    if (const GenerateResponse *completed =
-            request_queue_.PeekCompletedResponse(request_id);
-        completed != nullptr) {
-      CommitCompletedObservabilityLocked(request_id, *completed);
-      return RequestStepResult::Terminal;
-    }
-
-    if (target_request->lifecycle == GenerateRequestLifecycle::Pending ||
-        target_request->lifecycle == GenerateRequestLifecycle::Admitted) {
-      return admitted_any ? RequestStepResult::Progressed
-                          : RequestStepResult::Waiting;
-    }
-
-    SlotState *active_slot = slot_scheduler_.FindFirstActiveSlot();
-    if (active_slot == nullptr) {
-      return RequestStepResult::FatalNoProgress;
-    }
-    if (active_slot->phase != SlotPhase::Failed &&
-        active_slot->phase != SlotPhase::Completed) {
-      active_slot->terminal_error_message = BuildNoProgressDiagnosticLocked();
-      active_slot->phase = SlotPhase::Failed;
-    }
-
-    // Finalize again in case the cleanup logic above marked a slot as Failed.
-    slot_scheduler_.FinalizeCompletedSlots(request_queue_, session_store_);
-    CommitNewCompletedResponsesObservabilityLocked();
-  }
-
-  if (const GenerateResponse *completed =
-          request_queue_.PeekCompletedResponse(request_id);
-      completed != nullptr) {
-    CommitCompletedObservabilityLocked(request_id, *completed);
-    return RequestStepResult::Terminal;
-  }
-
-  return (tick_executed || admitted_any) ? RequestStepResult::Progressed
-                                         : RequestStepResult::Waiting;
-}
-
-std::vector<GenerateRequestId>
-InferenceRuntime::DrainCompletedResponseIds(int32_t max_count) {
-  std::lock_guard<std::mutex> lock(operation_mutex_);
-  if (max_count < 0) {
-    return {};
-  }
-
-  std::vector<GenerateRequestId> request_ids =
-      request_queue_.DrainCompletedResponseIds(
-          static_cast<std::size_t>(max_count));
-  std::sort(request_ids.begin(), request_ids.end());
-  return request_ids;
-}
-
 std::vector<RuntimeEvent>
 InferenceRuntime::DrainRuntimeEvents(int32_t max_count,
                                      int32_t max_text_bytes) {
@@ -2281,24 +2175,6 @@ std::string InferenceRuntime::GetEosText() const {
   }
   std::string piece;
   if (!token_to_piece_string(vocab, eos, true, piece) || piece.empty()) {
-    return {};
-  }
-  return piece;
-}
-
-std::string InferenceRuntime::TokenToString(int32_t token_id) const {
-  std::lock_guard<std::mutex> lock(operation_mutex_);
-  if (primary_model_ == nullptr || token_id < 0) {
-    return {};
-  }
-  const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
-  if (vocab == nullptr) {
-    return {};
-  }
-  std::string piece;
-  if (!token_to_piece_string(vocab, static_cast<llama_token>(token_id), true,
-                             piece) ||
-      piece.empty()) {
     return {};
   }
   return piece;

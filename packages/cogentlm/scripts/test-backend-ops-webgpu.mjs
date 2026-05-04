@@ -400,9 +400,7 @@ function hasIncompleteBuildDirectory() {
 
   const cachePath = path.join(buildDir, 'CMakeCache.txt');
   if (existsSync(cachePath)) {
-    const cacheText = readFileSync(cachePath, 'utf8');
-    const cachedGenerator = getCacheEntry(cacheText, 'CMAKE_GENERATOR');
-    return cachedGenerator != null;
+    return false;
   }
 
   return (
@@ -800,7 +798,6 @@ const cmakeConfigureArgs = [
   `-DCMAKE_BUILD_TYPE=${buildType}`,
   `-DCMAKE_TOOLCHAIN_FILE=${toolchainPath}`,
   '-DCE_BUILD_WEBGPU_TEST_BACKEND_OPS=ON',
-  '-DCE_WASM_ES_MODULE=ON',
   `-DCE_WASM_DEBUG=${isDebugBuild ? 'ON' : 'OFF'}`,
   `-DCE_WASM_AGGRESSIVE_OPT=${enableAggressiveOpt ? 'ON' : 'OFF'}`,
   `-DCE_WASM_USE_JSPI=${enableJspi ? 'ON' : 'OFF'}`,

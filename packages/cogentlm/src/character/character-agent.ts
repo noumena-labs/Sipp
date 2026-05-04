@@ -14,12 +14,12 @@ import type {
   ChatOptions,
 } from '../model-management/model-types.js';
 import type { ChatMessage } from '../types.js';
+import { sliceUnstreamedSuffix } from '../core/streaming-output.js';
 import { CharacterEventBus, type CharacterEvent } from './action-bus.js';
 import { compileActionGrammar } from './action-grammar.js';
 import { StreamingActionParser, type ParsedEvent } from './action-parser.js';
 import { compileChoiceGrammar, parseChoiceOutput } from './choice-grammar.js';
 import {
-  DEFAULT_MEMORY_MAX_TURNS,
   resolveMaxMemoryTurns,
   type CharacterConfig,
 } from './character-config.js';
@@ -109,10 +109,7 @@ export class CharacterRuntime {
     this.canonicalCueLabelsByActionId = new Map(
       summarizeActionCues(config.actions).map((cue) => [cue.id, cue.label])
     );
-    this.memoryLimitTurns = Math.max(
-      0,
-      resolveMaxMemoryTurns(config) ?? DEFAULT_MEMORY_MAX_TURNS
-    );
+    this.memoryLimitTurns = Math.max(0, resolveMaxMemoryTurns(config));
   }
 
   /** Exposes the event bus for imperative subscribers (VRM bindings, logs). */
@@ -249,7 +246,7 @@ export class CharacterRuntime {
    * behind, events buffer in memory rather than back-pressuring decode.
    */
   public chat(userMessage: string, options: { signal?: AbortSignal } = {}): AsyncIterable<ChatEvent> {
-    const trimmed = userMessage ?? '';
+    const trimmed = userMessage;
     const controller = new AbortController();
     const queue = new AsyncEventQueue<ChatEvent>(() => controller.abort());
 
@@ -551,16 +548,6 @@ function forwardAbortSignal(
   return () => {
     source.removeEventListener('abort', onAbort);
   };
-}
-
-function sliceUnstreamedSuffix(streamedOutputText: string, finalOutputText: string): string {
-  if (streamedOutputText.length === 0) {
-    return finalOutputText;
-  }
-  if (!finalOutputText.startsWith(streamedOutputText)) {
-    return '';
-  }
-  return finalOutputText.slice(streamedOutputText.length);
 }
 
 function renderChoicePrompt(userMessage: string, choices: readonly string[]): string {

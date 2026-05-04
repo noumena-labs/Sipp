@@ -397,96 +397,27 @@ export class WasmBridge {
   }
 
   public getBosText(): string {
-    try {
-      const ptr = this.callNumber('CE_GetBosText');
-      if (!ptr) {
-        return '';
-      }
-      try {
-        return this.module.UTF8ToString(ptr);
-      } finally {
-        this.module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
-      }
-    } catch (error) {
-      if (this.isMissingOptionalRuntimeApiError('CE_GetBosText', error)) {
-        return '';
-      }
-      throw error;
-    }
+    return this.callOwnedString('CE_GetBosText');
   }
 
   public getEosText(): string {
-    try {
-      const ptr = this.callNumber('CE_GetEosText');
-      if (!ptr) {
-        return '';
-      }
-      try {
-        return this.module.UTF8ToString(ptr);
-      } finally {
-        this.module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
-      }
-    } catch (error) {
-      if (this.isMissingOptionalRuntimeApiError('CE_GetEosText', error)) {
-        return '';
-      }
-      throw error;
-    }
-  }
-
-  public tokenToString(tokenId: number): string {
-    try {
-      const ptr = this.callNumber('CE_TokenToString', ['number'], [tokenId]);
-      if (!ptr) {
-        return '';
-      }
-      try {
-        return this.module.UTF8ToString(ptr);
-      } finally {
-        this.module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
-      }
-    } catch (error) {
-      if (this.isMissingOptionalRuntimeApiError('CE_TokenToString', error)) {
-        return '';
-      }
-      throw error;
-    }
+    return this.callOwnedString('CE_GetEosText');
   }
 
   /**
    * Applies llama.cpp's native chat template (via common_chat_format_single)
    * to a set of OpenAI-style chat messages and returns the formatted prompt
-   * text. Returns '' when the runtime lacks the export (older WASM builds)
-   * or when the model has no embedded chat template.
-   *
-   * Retained as a general-purpose bridge API for callers that want the
-   * model-native chat formatting path. CharacterRuntime now uses this same
-   * template-application path via the runtime surface.
+   * text. Returns '' when the model has no embedded chat template.
    */
   public applyChatTemplate(
     messages: ChatTemplateMessage[],
     addAssistant: boolean
   ): string {
-    try {
-      const ptr = this.callNumber(
-        'CE_ApplyChatTemplate',
-        ['string', 'number'],
-        [JSON.stringify(messages), addAssistant ? 1 : 0]
-      );
-      if (!ptr) {
-        return '';
-      }
-      try {
-        return this.module.UTF8ToString(ptr);
-      } finally {
-        this.module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
-      }
-    } catch (error) {
-      if (this.isMissingOptionalRuntimeApiError('CE_ApplyChatTemplate', error)) {
-        return '';
-      }
-      throw error;
-    }
+    return this.callOwnedString(
+      'CE_ApplyChatTemplate',
+      ['string', 'number'],
+      [JSON.stringify(messages), addAssistant ? 1 : 0]
+    );
   }
 
   public async cancelQuery(requestId: GenerateRequestId): Promise<boolean> {
@@ -706,26 +637,20 @@ export class WasmBridge {
     this.module._free(ptr);
   }
 
-  private isMissingOptionalRuntimeApiError(ident: string, error: unknown): boolean {
-    const message = this.asErrorMessage(error).toLowerCase();
-    const normalizedIdent = ident.toLowerCase();
-    if (!message.includes(normalizedIdent)) {
-      return false;
+  private callOwnedString(
+    ident: string,
+    argTypes: string[] = [],
+    args: unknown[] = []
+  ): string {
+    const ptr = this.callNumber(ident, argTypes, args);
+    if (!ptr) {
+      return '';
     }
-    return (
-      message.includes('unexpected ccall') ||
-      message.includes('unknown function') ||
-      message.includes('not a function') ||
-      message.includes('is not exported') ||
-      message.includes('missing')
-    );
-  }
-
-  private asErrorMessage(error: unknown): string {
-    if (error instanceof Error) {
-      return error.message;
+    try {
+      return this.module.UTF8ToString(ptr);
+    } finally {
+      this.module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
     }
-    return String(error);
   }
 
   private ensureBurstResultBuffer(): number {

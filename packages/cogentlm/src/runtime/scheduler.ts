@@ -350,14 +350,16 @@ export class QueuedRequestScheduler {
     }
     this.flushAllQueuedTokenPieces();
     this.requestCancellationForCallbackErrors();
-    // Runtime events are only hints for prompt progress. The completion table
-    // is authoritative, so reconcile tracked request state on every step to
-    // keep overlapped queries from depending on terminal event delivery.
-    const settledAny =
-      this.settleCompletedQueuedRequestsByIds(
-        bridge,
-        drainedEvents.terminalRequestIds
-      ) || this.settleCompletedTrackedRequests(bridge);
+    const settledFromEvents = this.settleCompletedQueuedRequestsByIds(
+      bridge,
+      drainedEvents.terminalRequestIds
+    );
+    const needsCompletionScan =
+      schedulerProgress.completedResponseCount > drainedEvents.terminalRequestIds.length;
+    const settledFromScan = needsCompletionScan
+      ? this.settleCompletedTrackedRequests(bridge)
+      : false;
+    const settledAny = settledFromEvents || settledFromScan;
     if (this.options.tracker.activeCount === 0) {
       return {
         hasActiveRequests: false,

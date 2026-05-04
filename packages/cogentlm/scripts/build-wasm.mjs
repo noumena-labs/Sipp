@@ -18,7 +18,6 @@ const packageWasmSubdir = process.env.CE_WASM_OUTPUT_SUBDIR?.trim() || 'wasm';
 const packageWasmDir = path.join(projectRoot, 'dist', packageWasmSubdir);
 const llamaCppRoot = path.join(projectRoot, 'third_party', 'llama.cpp');
 const enableDebug = false;
-const enableEsModule = true;
 const enableFilesystem = true;
 const enableJspi = true;
 const enableAggressiveOpt = true;
@@ -384,7 +383,6 @@ function shouldRunConfigure(expectedGenerator) {
   const cachedGenerator = getCacheEntry(cacheText, 'CMAKE_GENERATOR');
   const cachedBuildType = getCacheEntry(cacheText, 'CMAKE_BUILD_TYPE');
   const cachedDebug = getCacheEntry(cacheText, 'CE_WASM_DEBUG');
-  const cachedEsModule = getCacheEntry(cacheText, 'CE_WASM_ES_MODULE');
   const cachedAggressiveOpt = getCacheEntry(cacheText, 'CE_WASM_AGGRESSIVE_OPT');
   const cachedSuppressLlamaLogs = getCacheEntry(cacheText, 'CE_SUPPRESS_LLAMA_LOGS');
   const cachedSuppressMtmdLogs = getCacheEntry(cacheText, 'MTMD_NO_LOGGING');
@@ -407,10 +405,6 @@ function shouldRunConfigure(expectedGenerator) {
   }
 
   if (cachedDebug && cachedDebug !== (enableDebug ? 'ON' : 'OFF')) {
-    return true;
-  }
-
-  if (cachedEsModule && cachedEsModule !== (enableEsModule ? 'ON' : 'OFF')) {
     return true;
   }
 
@@ -472,9 +466,7 @@ function hasIncompleteBuildDirectory() {
 
   const cachePath = path.join(buildDir, 'CMakeCache.txt');
   if (existsSync(cachePath)) {
-    const cacheText = readFileSync(cachePath, 'utf8');
-    const cachedGenerator = getCacheEntry(cacheText, 'CMAKE_GENERATOR');
-    return cachedGenerator != null;
+    return false;
   }
 
   return (
@@ -682,7 +674,6 @@ const cmakeConfigureArgs = [
   '-DCMAKE_BUILD_TYPE=Release',
   `-DCMAKE_TOOLCHAIN_FILE=${toolchainPath}`,
   `-DCE_WASM_DEBUG=${enableDebug ? 'ON' : 'OFF'}`,
-  `-DCE_WASM_ES_MODULE=${enableEsModule ? 'ON' : 'OFF'}`,
   `-DCE_WASM_FILESYSTEM=${enableFilesystem ? 'ON' : 'OFF'}`,
   `-DCE_WASM_AGGRESSIVE_OPT=${enableAggressiveOpt ? 'ON' : 'OFF'}`,
   `-DCE_SUPPRESS_LLAMA_LOGS=${suppressLlamaLogs ? 'ON' : 'OFF'}`,

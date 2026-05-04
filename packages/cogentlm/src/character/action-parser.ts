@@ -33,22 +33,6 @@ export interface ProseEvent {
 
 export type ParsedEvent = ActionEvent | ProseEvent;
 
-/**
- * Error thrown when a bracketed cue is structurally malformed — currently
- * only produced by {@link parseActionCue}, which is a convenience helper
- * for tests. The streaming parser never throws: unknown or malformed cues
- * are surfaced as prose.
- */
-export class ActionParseError extends Error {
-  public readonly raw: string;
-
-  public constructor(message: string, raw: string) {
-    super(message);
-    this.name = 'ActionParseError';
-    this.raw = raw;
-  }
-}
-
 const CUE_OPEN = '[';
 const CUE_CLOSE = ']';
 
@@ -166,23 +150,4 @@ export class StreamingActionParser {
     }
     events.push({ kind: 'prose', text });
   }
-}
-
-/**
- * Resolves a fully buffered `[label]` string against a cue list. Separated
- * out so tests can exercise label→event mapping independently of the
- * streaming state machine. Throws {@link ActionParseError} when the input
- * is not a well-formed `[...]` envelope; unknown labels also throw.
- */
-export function parseActionCue(raw: string, cues: readonly ActionCue[]): ActionEvent {
-  if (raw.length < 2 || raw[0] !== CUE_OPEN || raw[raw.length - 1] !== CUE_CLOSE) {
-    throw new ActionParseError(`Malformed action cue: ${JSON.stringify(raw)}`, raw);
-  }
-  const label = raw.slice(1, -1);
-  const cueMap = buildCueMap(cues);
-  const cue = cueMap.get(label);
-  if (cue == null) {
-    throw new ActionParseError(`Unknown action cue: [${label}]`, raw);
-  }
-  return { kind: 'action', id: cue.id, raw };
 }

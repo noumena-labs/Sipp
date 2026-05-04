@@ -6,9 +6,10 @@ import type {
   DirectorRunRequest,
   DirectorSelection,
 } from './director-types.js';
+import { CHOICE_ID_RE } from './director-validation.js';
+import { compileBracketCueGrammar, literalAlternation } from '../core/grammar-fragments.js';
 import { assertGrammarByteSize, gbnfStringLiteral, MAX_GRAMMAR_BYTES } from '../utils/grammar.js';
 
-const CHOICE_ID_RE = /^[A-Za-z0-9_.:-]+$/;
 export const MAX_DIRECTOR_GRAMMAR_BYTES = MAX_GRAMMAR_BYTES;
 
 export class DirectorOutputError extends Error {
@@ -154,7 +155,7 @@ function requireChoices<TPayload>(
 }
 
 function choiceAlternation(choices: readonly DirectorChoiceConfig[]): string {
-  return choices.map((choice) => gbnfStringLiteral(choice.id)).join(' | ');
+  return literalAlternation(choices.map((choice) => choice.id));
 }
 
 function compileSelectManyGrammar(
@@ -195,12 +196,11 @@ function compileSelectSlotsGrammar<TPayload>(
 function compileTextWithDirectivesGrammar(
   directives: readonly DirectorChoiceConfig[]
 ): string {
-  return [
-    'root ::= ( directive-cue | prose-char )+',
-    'prose-char ::= [^[]',
-    'directive-cue ::= "[" directive-id "]"',
-    `directive-id ::= ${choiceAlternation(directives)}`,
-  ].join('\n') + '\n';
+  return compileBracketCueGrammar({
+    cueRuleName: 'directive-cue',
+    labelRuleName: 'directive-id',
+    labels: directives.map((directive) => directive.id),
+  });
 }
 
 function parseSelectOne<TPayload>(

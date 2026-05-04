@@ -122,69 +122,68 @@ export async function inspectGgufMetadata(
     options.maxPrefixBytes ?? DEFAULT_MAX_PREFIX_BYTES
   );
   const maxKvEntries = Math.max(1, options.maxKvEntries ?? DEFAULT_MAX_KV_ENTRIES);
-  const reader = new PrefixBlobReader(blob, initialPrefixBytes, maxPrefixBytes);
-
-  try {
-    await reader.ensure(24, options.signal);
-    const view = reader.view();
-    const magic = view.getUint32(0, true);
-    if (magic !== GGUF_MAGIC) {
-      return null;
-    }
-
-    const version = view.getUint32(4, true);
-    if (!GGUF_SUPPORTED_VERSIONS.has(version)) {
-      throw new Error(`Unsupported GGUF version ${version}.`);
-    }
-
-    const kvCount = readUint64AsNumber(view, 16);
-    let offset = 24;
-
-    const collected = new Map<string, GgufMetadataValue>();
-    let scannedKeyCount = 0;
-    let stoppedEarlyAtKey: string | null = null;
-
-    for (let index = 0; index < kvCount; index += 1) {
-      if (index >= maxKvEntries) {
-        stoppedEarlyAtKey = '(max-entries)';
-        break;
-      }
-
-      const keyString = await readString(reader, offset, options.signal);
-      const key = keyString.value;
-      offset = keyString.nextOffset;
-
-      await reader.ensure(offset + 4, options.signal);
-      const valueType = reader.view().getUint32(offset, true) as GgufValueType;
-      offset += 4;
-      scannedKeyCount += 1;
-
-      if (EARLY_STOP_KEYS.has(key) && hasUsefulMetadata(collected)) {
-        stoppedEarlyAtKey = key;
-        break;
-      }
-
-      if (TARGET_KEYS.has(key)) {
-        const parsed = await readValue(reader, offset, valueType, options.signal);
-        collected.set(key, parsed.value);
-        offset = parsed.nextOffset;
-      } else {
-        offset = await skipValue(reader, offset, valueType, options.signal);
-      }
-    }
-
-    return {
-      generalType: asStringValue(collected.get('general.type')),
-      generalArchitecture: asStringValue(collected.get('general.architecture')),
-      clipProjectorType: asStringValue(collected.get('clip.projector_type')),
-      clipVisionProjectorType: asStringValue(collected.get('clip.vision.projector_type')),
-      clipHasVisionEncoder: asBooleanValue(collected.get('clip.has_vision_encoder')),
-      scannedKeyCount,
-      stoppedEarlyAtKey,
-    };
-  } catch {
+  if (blob.size < 24) {
     return null;
   }
+  const reader = new PrefixBlobReader(blob, initialPrefixBytes, maxPrefixBytes);
+
+  await reader.ensure(24, options.signal);
+  const view = reader.view();
+  const magic = view.getUint32(0, true);
+  if (magic !== GGUF_MAGIC) {
+    return null;
+  }
+
+  const version = view.getUint32(4, true);
+  if (!GGUF_SUPPORTED_VERSIONS.has(version)) {
+    throw new Error(`Unsupported GGUF version ${version}.`);
+  }
+
+  const kvCount = readUint64AsNumber(view, 16);
+  let offset = 24;
+
+  const collected = new Map<string, GgufMetadataValue>();
+  let scannedKeyCount = 0;
+  let stoppedEarlyAtKey: string | null = null;
+
+  for (let index = 0; index < kvCount; index += 1) {
+    if (index >= maxKvEntries) {
+      stoppedEarlyAtKey = '(max-entries)';
+      break;
+    }
+
+    const keyString = await readString(reader, offset, options.signal);
+    const key = keyString.value;
+    offset = keyString.nextOffset;
+
+    await reader.ensure(offset + 4, options.signal);
+    const valueType = reader.view().getUint32(offset, true) as GgufValueType;
+    offset += 4;
+    scannedKeyCount += 1;
+
+    if (EARLY_STOP_KEYS.has(key) && hasUsefulMetadata(collected)) {
+      stoppedEarlyAtKey = key;
+      break;
+    }
+
+    if (TARGET_KEYS.has(key)) {
+      const parsed = await readValue(reader, offset, valueType, options.signal);
+      collected.set(key, parsed.value);
+      offset = parsed.nextOffset;
+    } else {
+      offset = await skipValue(reader, offset, valueType, options.signal);
+    }
+  }
+
+  return {
+    generalType: asStringValue(collected.get('general.type')),
+    generalArchitecture: asStringValue(collected.get('general.architecture')),
+    clipProjectorType: asStringValue(collected.get('clip.projector_type')),
+    clipVisionProjectorType: asStringValue(collected.get('clip.vision.projector_type')),
+    clipHasVisionEncoder: asBooleanValue(collected.get('clip.has_vision_encoder')),
+    scannedKeyCount,
+    stoppedEarlyAtKey,
+  };
 }
 
 function hasUsefulMetadata(values: ReadonlyMap<string, GgufMetadataValue>): boolean {

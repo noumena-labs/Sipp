@@ -13,19 +13,20 @@ export interface TrackedRequest<TResult> {
   resolve: (value: TResult) => void;
   reject: (error: unknown) => void;
   settled: boolean;
-  settlementState: 'pending' | 'resolved' | 'rejected';
-  settledResult: TResult | undefined;
-  settledError: unknown;
   consumed: boolean;
   waiterCount: number;
   callbackError: unknown;
   cancelRequested: boolean;
 }
 
+interface AbortRegistration {
+  signal: AbortSignal;
+  listener: () => void;
+}
+
 export class RequestTracker<TResult> {
   private readonly completions = new Map<GenerateRequestId, TrackedRequest<TResult>>();
-  private readonly signals = new Map<GenerateRequestId, AbortSignal>();
-  private readonly abortListeners = new Map<GenerateRequestId, () => void>();
+  private readonly abortRegistrations = new Map<GenerateRequestId, Set<AbortRegistration>>();
   private readonly activeRuns = new Set<GenerateRequestId>();
 
   // ── Query ──────────────────────────────────────────────────────────
@@ -46,7 +47,7 @@ export class RequestTracker<TResult> {
   allTrackedIds(): GenerateRequestId[] {
     const ids = new Set<GenerateRequestId>();
     for (const id of this.completions.keys()) ids.add(id);
-    for (const id of this.signals.keys()) ids.add(id);
+    for (const id of this.abortRegistrations.keys()) ids.add(id);
     for (const id of this.activeRuns) ids.add(id);
     return Array.from(ids);
   }
@@ -69,9 +70,6 @@ export class RequestTracker<TResult> {
       resolve: deferred.resolve,
       reject: deferred.reject,
       settled: false,
-      settlementState: 'pending',
-      settledResult: undefined,
-      settledError: undefined,
       consumed: false,
       waiterCount: 0,
       callbackError: undefined,
@@ -94,9 +92,6 @@ export class RequestTracker<TResult> {
       return;
     }
     tracked.settled = true;
-    tracked.settlementState = 'resolved';
-    tracked.settledResult = result;
-    tracked.settledError = undefined;
     tracked.resolve(result);
   }
 
@@ -110,9 +105,6 @@ export class RequestTracker<TResult> {
       return;
     }
     tracked.settled = true;
-    tracked.settlementState = 'rejected';
-    tracked.settledResult = undefined;
-    tracked.settledError = error;
     tracked.reject(error);
   }
 
@@ -122,9 +114,6 @@ export class RequestTracker<TResult> {
       const tracked = this.completions.get(requestId);
       if (tracked != null && !tracked.settled) {
         tracked.settled = true;
-        tracked.settlementState = 'rejected';
-        tracked.settledResult = undefined;
-        tracked.settledError = error;
         tracked.reject(error);
       }
       this.releaseSignal(requestId);
@@ -143,22 +132,50 @@ export class RequestTracker<TResult> {
     requestId: GenerateRequestId,
     signal: AbortSignal,
     onAbort: () => void
-  ): void {
+  ): () => void {
+    if (signal.aborted) {
+      onAbort();
+      return () => {};
+    }
+
     const listener = () => onAbort();
-    this.signals.set(requestId, signal);
-    this.abortListeners.set(requestId, listener);
+    const registration = { signal, listener };
+    let registrations = this.abortRegistrations.get(requestId);
+    if (registrations == null) {
+      registrations = new Set();
+      this.abortRegistrations.set(requestId, registrations);
+    }
+    registrations.add(registration);
     signal.addEventListener('abort', listener, { once: true });
+    return () => {
+      this.releaseAbortRegistration(requestId, registration);
+    };
   }
 
   /** Detach and clean up the AbortSignal listener for a request. */
   releaseSignal(requestId: GenerateRequestId): void {
-    const signal = this.signals.get(requestId);
-    const listener = this.abortListeners.get(requestId);
-    if (signal != null && listener != null) {
-      signal.removeEventListener('abort', listener);
+    const registrations = this.abortRegistrations.get(requestId);
+    if (registrations == null) {
+      return;
     }
-    this.signals.delete(requestId);
-    this.abortListeners.delete(requestId);
+    for (const registration of registrations) {
+      registration.signal.removeEventListener('abort', registration.listener);
+    }
+    this.abortRegistrations.delete(requestId);
+  }
+
+  private releaseAbortRegistration(
+    requestId: GenerateRequestId,
+    registration: AbortRegistration
+  ): void {
+    const registrations = this.abortRegistrations.get(requestId);
+    if (registrations == null || !registrations.delete(registration)) {
+      return;
+    }
+    registration.signal.removeEventListener('abort', registration.listener);
+    if (registrations.size === 0) {
+      this.abortRegistrations.delete(requestId);
+    }
   }
 
   // ── Cleanup ────────────────────────────────────────────────────────
@@ -198,7 +215,7 @@ export class RequestTracker<TResult> {
 
   /** Clear all state (used during runtime reset). */
   clear(): void {
-    for (const requestId of this.signals.keys()) {
+    for (const requestId of Array.from(this.abortRegistrations.keys())) {
       this.releaseSignal(requestId);
     }
     this.completions.clear();

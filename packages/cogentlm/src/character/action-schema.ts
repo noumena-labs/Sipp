@@ -143,25 +143,6 @@ export function summarizeActionCues(schema: ActionSchema): readonly ActionCueSum
   }));
 }
 
-/** Resolves a runtime action id back to its canonical prompt-facing cue. */
-export function findCanonicalActionCue(
-  schema: ActionSchema,
-  id: string
-): ActionCueSummary | null {
-  assertValidActionSchema(schema);
-  for (const action of schema) {
-    if (action.id === id) {
-      return {
-        label: defaultActionLabel(action),
-        id: action.id,
-        description: action.description,
-        usageHint: action.usageHint,
-      };
-    }
-  }
-  return null;
-}
-
 /**
  * Renders the schema as a flat, comma-separated list of bracketed cues for
  * inclusion in the system prompt. The prose complements the GBNF grammar
@@ -171,28 +152,4 @@ export function findCanonicalActionCue(
 export function renderActionCueList(schema: ActionSchema): string {
   const cues = summarizeActionCues(schema);
   return cues.map((cue) => `[${cue.label}]`).join(', ');
-}
-
-/**
- * Renders a deterministic, model-facing capability list derived from the
- * action schema. Each line ties the visible cue surface back to the runtime
- * action id so prompts can describe capabilities without hardcoding any
- * particular character.json shape.
- */
-export function renderActionCapabilityList(schema: ActionSchema): string {
-  const cues = summarizeActionCues(schema);
-
-  return cues
-    .map((cue) => {
-      const description = cue.description?.trim();
-      const usageHint = cue.usageHint?.trim();
-      const detailParts = [
-        description && description.length > 0 ? description : null,
-        usageHint && usageHint.length > 0 ? `use when ${usageHint}` : null,
-      ].filter((part): part is string => part != null);
-      return detailParts.length === 0
-        ? `- [${cue.label}] -> ${cue.id}`
-        : `- [${cue.label}] -> ${cue.id}: ${detailParts.join('; ')}`;
-    })
-    .join('\n');
 }

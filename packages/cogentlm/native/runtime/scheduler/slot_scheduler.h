@@ -24,9 +24,7 @@ class SlotScheduler {
 public:
   void Resize(std::size_t slot_count);
   SlotState *FindFirstActiveSlot();
-  std::vector<SlotState *> SelectDecodeReadySlots();
   void SelectDecodeReadySlots(std::vector<SlotState *> &out_slots);
-  std::vector<SlotState *> SelectPrefillReadySlots();
   void SelectPrefillReadySlots(std::vector<SlotState *> &out_slots);
   std::vector<SlotState> &MutableSlots() { return slots_; }
   const std::vector<SlotState> &Slots() const { return slots_; }

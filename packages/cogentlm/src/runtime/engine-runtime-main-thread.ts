@@ -541,15 +541,12 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
     const tracked = this.ensureTracked(requestId);
     const signal = options?.signal;
-    const abortListener =
+    const detachAbort =
       signal == null
-        ? null
-        : () => {
-          void this.cancelQuery(requestId);
-        };
-    if (abortListener != null) {
-      signal?.addEventListener('abort', abortListener, { once: true });
-    }
+        ? () => {}
+        : this.tracker.attachSignal(requestId, signal, () => {
+            void this.cancelQuery(requestId);
+          });
 
     tracked.consumed = true;
     tracked.waiterCount += 1;
@@ -564,9 +561,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       }
       return response;
     } finally {
-      if (abortListener != null) {
-        signal?.removeEventListener('abort', abortListener);
-      }
+      detachAbort();
       tracked.waiterCount = Math.max(0, tracked.waiterCount - 1);
       this.tracker.cleanupIfConsumed(requestId);
     }

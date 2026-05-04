@@ -203,12 +203,9 @@ export class QueryError extends Error {
   public readonly code: QueryErrorCode;
 
   constructor(code: QueryErrorCode, message: string, options?: { cause?: unknown }) {
-    super(message);
+    super(message, options);
     this.name = 'QueryError';
     this.code = code;
-    if (options != null && 'cause' in Error.prototype) {
-      (this as Error & { cause?: unknown }).cause = options.cause;
-    }
   }
 }
 

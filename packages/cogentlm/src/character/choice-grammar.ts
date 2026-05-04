@@ -8,7 +8,7 @@
 //
 //////////////////////////////////////////////////////////////////////////////
 
-import { gbnfStringLiteral } from '../utils/grammar.js';
+import { literalAlternation } from '../core/grammar-fragments.js';
 
 export class ChoiceGrammarError extends Error {
   public constructor(message: string) {
@@ -19,7 +19,7 @@ export class ChoiceGrammarError extends Error {
 
 export function compileChoiceGrammar(choices: readonly string[]): string {
   const normalized = normalizeChoices(choices);
-  return `root ::= ${normalized.map(gbnfStringLiteral).join(' | ')}\n`;
+  return `root ::= ${literalAlternation(normalized)}\n`;
 }
 
 export function parseChoiceOutput(raw: string, choices: readonly string[]): string | null {

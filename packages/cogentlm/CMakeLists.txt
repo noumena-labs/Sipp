@@ -180,7 +180,7 @@ foreach(_ggml_target ggml ggml-base ggml-cpu ggml-webgpu)
 endforeach()
 
 set(CE_WASM_EXPORTED_FUNCTIONS
-    "['_CE_Init','_CE_InitWithMultimodal','_CE_Close','_CE_StartTextRequestWithTokenEmissionMode','_CE_StartMediaRequestWithTokenEmissionMode','_CE_CancelRequest','_CE_RunSchedulerBurst','_CE_RunSchedulerBurstWithDeadline','_CE_GetCompletedRequestStatus','_CE_DrainRuntimeEvents','_CE_GetCompletedRequestOutputSize','_CE_CopyCompletedRequestOutput','_CE_GetCompletedRequestErrorSize','_CE_CopyCompletedRequestError','_CE_GetCompletedRequestRuntimeObservability','_CE_ConsumeCompletedRequest','_CE_FreeString','_CE_GetRuntimeObservability','_CE_ResetRuntimeObservability','_CE_GetBackendObservabilityJson','_CE_GetMediaMarker','_CE_GetChatTemplate','_CE_GetBosText','_CE_GetEosText','_CE_TokenToString','_CE_ApplyChatTemplate','_malloc','_free']"
+    "['_CE_Init','_CE_InitWithMultimodal','_CE_Close','_CE_StartTextRequestWithTokenEmissionMode','_CE_StartMediaRequestWithTokenEmissionMode','_CE_CancelRequest','_CE_RunSchedulerBurst','_CE_RunSchedulerBurstWithDeadline','_CE_GetCompletedRequestStatus','_CE_DrainRuntimeEvents','_CE_GetCompletedRequestOutputSize','_CE_CopyCompletedRequestOutput','_CE_GetCompletedRequestErrorSize','_CE_CopyCompletedRequestError','_CE_GetCompletedRequestRuntimeObservability','_CE_ConsumeCompletedRequest','_CE_FreeString','_CE_GetRuntimeObservability','_CE_GetBackendObservabilityJson','_CE_GetMediaMarker','_CE_GetChatTemplate','_CE_GetBosText','_CE_GetEosText','_CE_ApplyChatTemplate','_malloc','_free']"
 )
 
 # HEAPU8 is needed for later binary media packing through the wasm bridge.

@@ -16,7 +16,6 @@ option(CE_WASM_PTHREADS     "Enable pthreads support in WASM builds"           O
 option(CE_WASM_DEBUG        "Enable debug mode (assertions, symbols)"          OFF)
 option(CE_WASM_AGGRESSIVE_OPT "Use -Ofast instead of -O3 (may affect precision)" OFF)
 option(CE_SUPPRESS_LLAMA_LOGS "Suppress llama.cpp info/debug logs in production" ON)
-option(CE_WASM_ES_MODULE    "Build as modularized ES module for JS package managers" OFF)
 option(CE_WASM_FILESYSTEM   "Enable Emscripten virtual filesystem support"     ON)
 option(CE_WASM_USE_JSPI     "Enable JSPI-based async exports"                  ON)
 option(CE_WASM_MEM64        "Enable wasm64 memory model"                       ON)
@@ -266,17 +265,6 @@ else()
 endif()
 
 # ======================================================================================
-# ES Module Configuration (for JS package manager compatibility)
-# ======================================================================================
-if(CE_WASM_ES_MODULE)
-    list(APPEND CE_WASM_LINK_FLAGS
-        -sMODULARIZE=1
-        -sEXPORT_ES6=1
-        -sSINGLE_FILE=0
-    )
-endif()
-
-# ======================================================================================
 # WebGPU Port Configuration
 # ======================================================================================
 if(NOT EMDAWNWEBGPU_DIR)
@@ -315,18 +303,6 @@ endif()
 # Emscripten will reject the duplicated port registration.
 
 # ======================================================================================
-# Helper Function: Apply Emscripten flags to a target
-# ======================================================================================
-function(ce_apply_emscripten_flags TARGET_NAME)
-    if(NOT EMSCRIPTEN)
-        return()
-    endif()
-    
-    target_compile_options(${TARGET_NAME} PRIVATE ${CE_WASM_COMPILE_FLAGS})
-    target_link_options(${TARGET_NAME} PRIVATE ${CE_WASM_LINK_FLAGS})
-endfunction()
-
-# ======================================================================================
 # Status Output
 # ======================================================================================
 message(STATUS "")
@@ -335,7 +311,6 @@ message(STATUS "  Pthreads:           ${CE_WASM_PTHREADS}")
 message(STATUS "  Debug mode:         ${CE_WASM_DEBUG}")
 message(STATUS "  Aggressive opt:     ${CE_WASM_AGGRESSIVE_OPT}")
 message(STATUS "  LTO mode:           ${_CE_ACTIVE_LTO_MODE}")
-message(STATUS "  ES Module:          ${CE_WASM_ES_MODULE}")
 message(STATUS "  Filesystem:         ${CE_WASM_FILESYSTEM}")
 message(STATUS "  JSPI:               ${CE_WASM_USE_JSPI}")
 message(STATUS "  Memory64:           ${CE_WASM_MEM64}")

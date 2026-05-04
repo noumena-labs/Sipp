@@ -14,7 +14,6 @@
 #include <list>
 #include <optional>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "runtime/request/request_types.h"
@@ -46,7 +45,6 @@ public:
   void MarkCompleted(GenerateResponse response);
   const GenerateResponse *PeekCompletedResponse(GenerateRequestId request_id) const;
   std::vector<GenerateRequestId> CompletedResponseIds() const;
-  std::vector<GenerateRequestId> DrainCompletedResponseIds(std::size_t max_count);
   void QueueTokenEvent(GenerateRequestId request_id, std::string text);
   std::vector<RuntimeEvent> DrainRuntimeEvents(std::size_t max_count,
                                                std::size_t max_text_bytes);
@@ -64,9 +62,7 @@ private:
   std::unordered_map<GenerateRequestId, std::list<GenerateRequestId>::iterator>
       pending_request_positions_;
   std::unordered_map<GenerateRequestId, GenerateResponse> completed_responses_;
-  std::deque<GenerateRequestId> completed_response_ready_ids_;
   std::deque<RuntimeEvent> runtime_events_;
-  std::unordered_set<GenerateRequestId> queued_completed_response_ids_;
   int32_t total_emitted_token_count_ = 0;
 };
 
