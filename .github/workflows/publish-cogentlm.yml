@@ -174,6 +174,8 @@ jobs:
 
           VERSION="$(node -p "require('./packages/cogentlm/package.json').version")"
           bun install --lockfile-only
+          echo "Resolved release version: $VERSION"
+          git status --short -- packages/cogentlm/package.json bun.lock
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=cogentlm-v$VERSION" >> "$GITHUB_OUTPUT"
 
@@ -218,6 +220,14 @@ jobs:
         working-directory: packages/cogentlm
         run: |
           set -euo pipefail
+          PACKAGE_JSON_BACKUP="$RUNNER_TEMP/cogentlm-package.json"
+          cp package.json "$PACKAGE_JSON_BACKUP"
+
+          restore_package_json() {
+            cp "$PACKAGE_JSON_BACKUP" package.json
+          }
+          trap restore_package_json EXIT
+
           # Patch package.json for dry-run
           node -e "
             const fs = require('fs');
@@ -232,8 +242,8 @@ jobs:
             export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/npmrc_registry"
           fi
           npm publish --dry-run --registry https://registry.npmjs.org --tag "$NPM_TAG" --provenance
-          # Revert package.json changes
-          git checkout package.json
+          restore_package_json
+          trap - EXIT
 
       - name: Commit version and create tag
         if: ${{ inputs.dry_run == false }}
@@ -244,11 +254,35 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          CURRENT_VERSION="$(node -p "require('./packages/cogentlm/package.json').version")"
+          if [ "$CURRENT_VERSION" != "$VERSION" ]; then
+            echo "::error::Expected packages/cogentlm/package.json version $VERSION, but found $CURRENT_VERSION."
+            git status --short -- packages/cogentlm/package.json bun.lock
+            exit 1
+          fi
+
           git add packages/cogentlm/package.json bun.lock
-          git commit -m "chore(release): cogentlm v$VERSION"
-          git tag -a "$RELEASE_TAG" -m "cogentlm v$VERSION"
-          git push origin HEAD:master
-          git push origin "$RELEASE_TAG"
+          if git diff --cached --quiet -- packages/cogentlm/package.json bun.lock; then
+            echo "No version files changed; cogentlm v$VERSION is already present on HEAD."
+          else
+            git commit -m "chore(release): cogentlm v$VERSION"
+            git push origin HEAD:master
+          fi
+
+          git fetch --tags origin
+          if git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
+            TAG_TARGET="$(git rev-list -n 1 "$RELEASE_TAG")"
+            HEAD_COMMIT="$(git rev-parse HEAD)"
+            if [ "$TAG_TARGET" != "$HEAD_COMMIT" ]; then
+              echo "::error::Tag $RELEASE_TAG already exists but does not point at HEAD."
+              exit 1
+            fi
+            echo "Tag $RELEASE_TAG already points at HEAD."
+          else
+            git tag -a "$RELEASE_TAG" -m "cogentlm v$VERSION"
+            git push origin "$RELEASE_TAG"
+          fi
 
       - name: Publish to npm Registry
         if: ${{ inputs.dry_run == false }}
