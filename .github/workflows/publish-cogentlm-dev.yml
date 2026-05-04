@@ -12,7 +12,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: publish-cogentlm-dev
+  group: publish-cogentlm-dev-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -22,10 +22,16 @@ jobs:
     env:
       CE_WASM_BUILD_PARALLEL_LEVEL: "2"
     steps:
-      - name: Require master
+      - name: Validate publish source
         run: |
-          if [ "${GITHUB_REF}" != "refs/heads/master" ]; then
-            echo "Dev publish workflow must run from master."
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE:-branch}" != "branch" ]; then
+            echo "::error::Dev publish workflow must run from a branch."
+            exit 1
+          fi
+
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ] && [ "${GITHUB_REF}" != "refs/heads/master" ]; then
+            echo "::error::Scheduled dev publish workflow must run from master."
             exit 1
           fi
 
@@ -46,15 +52,31 @@ jobs:
             exit 0
           fi
 
-          LAST_TAG="$(git tag --list 'cogentlm-dev-*' --sort=-creatordate | head -n 1 || true)"
-          COMMIT_RANGE=""
-          if [ -n "$LAST_TAG" ]; then
-            COMMIT_RANGE="$LAST_TAG..HEAD"
+          BRANCH="${GITHUB_REF_NAME:-master}"
+          BRANCH_SLUG="$(printf '%s' "$BRANCH" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/-+/-/g; s/^-+//; s/-+$//' | cut -c1-48 | sed -E 's/-+$//')"
+          if [ -z "$BRANCH_SLUG" ]; then
+            BRANCH_SLUG="branch"
           fi
 
-          NON_BOT_COMMITS="$(git log --format='%H%x09%an%x09%ae' $COMMIT_RANGE | awk -F '\t' '$2 !~ /\\[bot\\]$/ && $3 !~ /\\[bot\\]@users\\.noreply\\.github\\.com$/ && $3 !~ /(^|[+._-])bot@users\\.noreply\\.github\\.com$/ { print $1 }')"
+          if [ "$BRANCH" = "master" ]; then
+            NPM_TAG="dev"
+            DEV_TAG_PREFIX="cogentlm-dev-v"
+          else
+            NPM_TAG="dev-${BRANCH_SLUG}"
+            DEV_TAG_PREFIX="cogentlm-dev-${BRANCH_SLUG}-v"
+          fi
+
+          LAST_TAG="$(git tag --list "${DEV_TAG_PREFIX}*" --merged HEAD --sort=-creatordate | head -n 1 || true)"
+          if [ -n "$LAST_TAG" ]; then
+            COMMIT_RANGE="$LAST_TAG..HEAD"
+            NON_BOT_COMMITS="$(git log --format='%H%x09%an%x09%ae' "$COMMIT_RANGE" | awk -F '\t' '$2 !~ /\[bot\]$/ && $3 !~ /\[bot\]@users\.noreply\.github\.com$/ && $3 !~ /(^|[+._-])bot@users\.noreply\.github\.com$/ { print $1 }')"
+          else
+            COMMIT_RANGE=""
+            NON_BOT_COMMITS="$(git log --format='%H%x09%an%x09%ae' | awk -F '\t' '$2 !~ /\[bot\]$/ && $3 !~ /\[bot\]@users\.noreply\.github\.com$/ && $3 !~ /(^|[+._-])bot@users\.noreply\.github\.com$/ { print $1 }')"
+          fi
+
           if [ -z "$NON_BOT_COMMITS" ]; then
-            echo "No non-bot commits since ${LAST_TAG:-repository start}; skipping dev publish."
+            echo "No non-bot commits on $BRANCH since ${LAST_TAG:-repository start}; skipping dev publish."
             echo "should_publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -72,10 +94,17 @@ jobs:
           console.log(`${major}.${minor}.${patch}`);
           NODE
           )"
-          DEV_VERSION="${BASE_VERSION}-dev.${GITHUB_RUN_NUMBER}"
-          DEV_TAG="cogentlm-dev-v${DEV_VERSION}"
+          if [ "$BRANCH" = "master" ]; then
+            DEV_VERSION="${BASE_VERSION}-dev.${GITHUB_RUN_NUMBER}"
+          else
+            DEV_VERSION="${BASE_VERSION}-dev.branch-${BRANCH_SLUG}.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT:-1}"
+          fi
+          DEV_TAG="${DEV_TAG_PREFIX}${DEV_VERSION}"
 
           echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "branch_slug=$BRANCH_SLUG" >> "$GITHUB_OUTPUT"
+          echo "npm_tag=$NPM_TAG" >> "$GITHUB_OUTPUT"
           echo "version=$DEV_VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$DEV_TAG" >> "$GITHUB_OUTPUT"
           echo "last_tag=$LAST_TAG" >> "$GITHUB_OUTPUT"
@@ -83,15 +112,22 @@ jobs:
       - name: Summarize dev publish contents
         if: steps.dev.outputs.should_publish == 'true'
         env:
+          BRANCH: ${{ steps.dev.outputs.branch }}
+          BRANCH_SLUG: ${{ steps.dev.outputs.branch_slug }}
           LAST_TAG: ${{ steps.dev.outputs.last_tag }}
           DEV_VERSION: ${{ steps.dev.outputs.version }}
+          NPM_TAG: ${{ steps.dev.outputs.npm_tag }}
         run: |
           set -euo pipefail
           {
             echo "## cogentlm dev publish"
             echo
+            echo "- Branch: \`$BRANCH\`"
+            if [ "$BRANCH" != "master" ]; then
+              echo "- Branch slug: \`$BRANCH_SLUG\`"
+            fi
             echo "- Version: \`$DEV_VERSION\`"
-            echo "- Dist tag: \`dev\`"
+            echo "- Dist tag: \`$NPM_TAG\`"
             if [ -n "${LAST_TAG:-}" ]; then
               echo "- Previous dev tag: \`$LAST_TAG\`"
               echo
@@ -244,16 +280,18 @@ jobs:
       - name: Validate GitHub Packages publish
         if: steps.dev.outputs.should_publish == 'true'
         env:
+          NPM_TAG: ${{ steps.dev.outputs.npm_tag }}
           NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
         working-directory: packages/cogentlm
-        run: npm publish --dry-run --registry https://npm.pkg.github.com --tag dev
+        run: npm publish --dry-run --registry https://npm.pkg.github.com --tag "$NPM_TAG"
 
       - name: Publish to GitHub Packages
         if: steps.dev.outputs.should_publish == 'true'
         env:
+          NPM_TAG: ${{ steps.dev.outputs.npm_tag }}
           NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
         working-directory: packages/cogentlm
-        run: npm publish --registry https://npm.pkg.github.com --tag dev
+        run: npm publish --registry https://npm.pkg.github.com --tag "$NPM_TAG"
 
       - name: Tag dev publish
         if: steps.dev.outputs.should_publish == 'true'
