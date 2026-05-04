@@ -32,6 +32,7 @@ on:
 permissions:
   contents: write
   packages: write
+  id-token: write
 
 concurrency:
   group: release-cogentlm
@@ -176,27 +177,19 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=cogentlm-v$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Check GitHub Packages version availability
+      - name: Check npm Registry version availability
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "::error::Set PACKAGE_PUBLISH_TOKEN to a GitHub personal access token (classic) with repo, read:packages, and write:packages scopes."
+          VIEW_LOG="$RUNNER_TEMP/npm-registry-view.log"
+          # Check 'cogentlm' (unscoped) on the main registry
+          if npm view "cogentlm@$VERSION" version --registry https://registry.npmjs.org >"$VIEW_LOG" 2>&1; then
+            echo "cogentlm@$VERSION already exists on the npm Registry."
             exit 1
           fi
 
-          printf "@noumena-labs:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=%s\n" "$NODE_AUTH_TOKEN" > "$RUNNER_TEMP/npmrc"
-          export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/npmrc"
-
-          VIEW_LOG="$RUNNER_TEMP/npm-view.log"
-          if npm view "@noumena-labs/cogentlm@$VERSION" version --registry https://npm.pkg.github.com >"$VIEW_LOG" 2>&1; then
-            echo "@noumena-labs/cogentlm@$VERSION already exists on GitHub Packages."
-            exit 1
-          fi
-
-          if ! grep -Eq "E404|404 Not Found" "$VIEW_LOG"; then
+          if ! grep -Eq "E404|404 Not Found|is not in the npm registry" "$VIEW_LOG"; then
             cat "$VIEW_LOG"
             exit 1
           fi
@@ -219,26 +212,28 @@ jobs:
       - name: Build browser consumer smoke app
         run: bun run --filter=cogentlm-examples build
 
-      - name: Configure GitHub Packages authentication
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "::error::Set PACKAGE_PUBLISH_TOKEN to a GitHub personal access token (classic) with repo, read:packages, and write:packages scopes."
-            exit 1
-          fi
-          printf "@noumena-labs:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=%s\n" "$NODE_AUTH_TOKEN" > "$RUNNER_TEMP/npmrc"
-          export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/npmrc"
-          echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/npmrc" >> "$GITHUB_ENV"
-          npm whoami --registry https://npm.pkg.github.com
-
-      - name: Validate GitHub Packages publish
+      - name: Validate npm Registry publish (dry-run)
         env:
           NPM_TAG: ${{ inputs.npm_tag }}
-          NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
         working-directory: packages/cogentlm
-        run: npm publish --dry-run --registry https://npm.pkg.github.com --tag "$NPM_TAG"
+        run: |
+          set -euo pipefail
+          # Patch package.json for dry-run
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.name = 'cogentlm';
+            pkg.publishConfig = { registry: 'https://registry.npmjs.org', access: 'public' };
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+          "
+          # Ensure auth for dry-run if token is available
+          if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+            printf "//registry.npmjs.org/:_authToken=%s\n" "$NODE_AUTH_TOKEN" > "$RUNNER_TEMP/npmrc_registry"
+            export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/npmrc_registry"
+          fi
+          npm publish --dry-run --registry https://registry.npmjs.org --tag "$NPM_TAG" --provenance
+          # Revert package.json changes
+          git checkout package.json
 
       - name: Commit version and create tag
         if: ${{ inputs.dry_run == false }}
@@ -255,10 +250,27 @@ jobs:
           git push origin HEAD:master
           git push origin "$RELEASE_TAG"
 
-      - name: Publish to GitHub Packages
+      - name: Publish to npm Registry
         if: ${{ inputs.dry_run == false }}
         env:
           NPM_TAG: ${{ inputs.npm_tag }}
-          NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         working-directory: packages/cogentlm
-        run: npm publish --registry https://npm.pkg.github.com --tag "$NPM_TAG"
+        run: |
+          set -euo pipefail
+          # Patch package.json for public release
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.name = 'cogentlm';
+            pkg.publishConfig = { registry: 'https://registry.npmjs.org', access: 'public' };
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+          "
+          # Ensure auth for registry
+          if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+            printf "//registry.npmjs.org/:_authToken=%s\n" "$NODE_AUTH_TOKEN" > "$RUNNER_TEMP/npmrc_registry"
+            export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/npmrc_registry"
+          fi
+          # Publish with provenance (Ready for Trusted Publishing)
+          # We use the token for auth, but --provenance links it to this GitHub Action
+          npm publish --registry https://registry.npmjs.org --tag "$NPM_TAG" --provenance
