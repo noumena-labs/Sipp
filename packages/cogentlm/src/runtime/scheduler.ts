@@ -101,13 +101,6 @@ export class QueuedRequestScheduler {
     });
   }
 
-  public bufferTokenPiece(
-    requestId: GenerateRequestId,
-    token: string
-  ): void {
-    this.bufferQueuedTokenPiece(requestId, token);
-  }
-
   public settleCompletedRequestIfPresent(
     bridge: WasmBridge,
     requestId: GenerateRequestId
@@ -149,12 +142,8 @@ export class QueuedRequestScheduler {
         onToken(piece);
       } catch (error) {
         this.options.queuedPromptCallbackErrors.set(requestId, error);
-        const remainingStart = readIndex + 1;
-        const remainingCount = bufferedPieces.length - remainingStart;
-        if (remainingCount > 0) {
-          bufferedPieces.copyWithin(0, remainingStart);
-        }
-        bufferedPieces.length = Math.max(remainingCount, 0);
+        this.options.queuedPromptCallbacks.delete(requestId);
+        bufferedPieces.length = 0;
         break;
       }
       readIndex += 1;
@@ -291,7 +280,10 @@ export class QueuedRequestScheduler {
       (this.transportObservability.runtimeEventDrainCount ?? 0) + 1;
     const tokenRequestIds: GenerateRequestId[] = [];
     for (const tokenEvent of drained.tokenEvents) {
-      if (!this.options.queuedPromptCallbacks.has(tokenEvent.requestId)) {
+      if (
+        !this.options.queuedPromptCallbacks.has(tokenEvent.requestId) ||
+        this.options.queuedPromptCallbackErrors.has(tokenEvent.requestId)
+      ) {
         continue;
       }
       this.bufferQueuedTokenPiece(tokenEvent.requestId, tokenEvent.token);
@@ -350,14 +342,16 @@ export class QueuedRequestScheduler {
     }
     this.flushAllQueuedTokenPieces();
     this.requestCancellationForCallbackErrors();
-    // Runtime events are only hints for prompt progress. The completion table
-    // is authoritative, so reconcile tracked request state on every step to
-    // keep overlapped queries from depending on terminal event delivery.
-    const settledAny =
-      this.settleCompletedQueuedRequestsByIds(
-        bridge,
-        drainedEvents.terminalRequestIds
-      ) || this.settleCompletedTrackedRequests(bridge);
+    const settledFromEvents = this.settleCompletedQueuedRequestsByIds(
+      bridge,
+      drainedEvents.terminalRequestIds
+    );
+    const needsCompletionScan =
+      schedulerProgress.completedResponseCount > drainedEvents.terminalRequestIds.length;
+    const settledFromScan = needsCompletionScan
+      ? this.settleCompletedTrackedRequests(bridge)
+      : false;
+    const settledAny = settledFromEvents || settledFromScan;
     if (this.options.tracker.activeCount === 0) {
       return {
         hasActiveRequests: false,

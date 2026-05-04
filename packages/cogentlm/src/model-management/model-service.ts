@@ -3,14 +3,17 @@ import {
   ChatTemplatePromptRuntime,
   StreamingBoundaryTextSanitizer,
 } from '../core/chat-template-boundaries.js';
+import { sliceUnstreamedSuffix } from '../core/streaming-output.js';
 import type {
   GenerateResponse,
   InferenceInitConfig,
   ModelBundleFileProjectorDescriptor,
+  ModelDetectionResult,
   InternalBundleDescriptor,
   PromptOptions,
 } from '../types.js';
-import { createLinkedAbortController } from '../utils/abort.js';
+import { createLinkedAbortController, isAbortError } from '../utils/abort.js';
+import { stableJson } from '../utils/stable-json.js';
 import { AssetStore, type RemoteAssetMetadata } from './asset-store.js';
 import { sha256Text } from './hash.js';
 import { ModelRegistryStore } from './model-registry-store.js';
@@ -69,20 +72,6 @@ function isFileArray(value: unknown): value is readonly File[] {
   return Array.isArray(value) && value.every((item) => isFile(item));
 }
 
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(stableJson).join(',')}]`;
-  }
-  if (value != null && typeof value === 'object') {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`)
-      .join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
-
 function isSourceObject(source: ModelSource): source is Extract<ModelSource, { model: BaseSource }> {
   return typeof source === 'object' && source != null && !isFile(source) && !Array.isArray(source);
 }
@@ -123,10 +112,6 @@ function nowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
     ? performance.now()
     : Date.now();
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException && error.name === 'AbortError';
 }
 
 function entryAssetFingerprint(entry: Pick<ModelEntry, 'modelAssetIds' | 'projectorAssetId'>): string {
@@ -704,9 +689,13 @@ export class ModelService implements ModelLifecycleService {
     const record = await this.assetStore.installFile({
       kind,
       file,
+      signal: options.signal,
       onProgress: options.onProgress,
     });
     const existing = manifest.assets[record.id];
+    if (existing != null && existing.storagePath !== record.storagePath) {
+      await this.assetStore.delete(record);
+    }
     return {
       record: existing ?? record,
       file: await this.assetStore.getFile(existing ?? record),
@@ -1000,7 +989,7 @@ export class ModelService implements ModelLifecycleService {
     const compatible = new Set(compatibleVisionProjectorTypes);
     const matches: string[] = [];
     for (const asset of Object.values(manifest.assets)) {
-      if (asset.kind !== 'projector') {
+      if (asset.kind !== 'projector' || asset.refCount <= 0) {
         continue;
       }
       const inspected = await this.ensureProjectorInspection(asset, signal);
@@ -1220,7 +1209,7 @@ export class ModelService implements ModelLifecycleService {
 
     const manifest = await this.registry.read();
     const files = await this.filesForEntry(entry, manifest);
-    const descriptor = this.buildDescriptor(files.modelFiles, files.projectorFile);
+    const descriptor = this.buildDescriptor(files.modelFiles, files.projectorFile, entry, manifest);
     options.onProgress?.({
       phase: 'load',
       loadedBytes: 0,
@@ -1231,14 +1220,12 @@ export class ModelService implements ModelLifecycleService {
     const staged = await this.runtime.stageModelBundle(descriptor, {
       signal: options.signal,
     });
-    if (
+    const switchingCurrent =
       this.current != null &&
       (this.current.id !== entry.id ||
         this.current.assetFingerprint !== entryAssetFingerprint(entry) ||
-        this.current.runtimeFingerprint !== runtimeFingerprint)
-    ) {
-      this.current = null;
-      this.currentSnapshot = null;
+        this.current.runtimeFingerprint !== runtimeFingerprint);
+    if (switchingCurrent) {
       this.observability.update({
         state: 'loading',
         model: null,
@@ -1247,7 +1234,14 @@ export class ModelService implements ModelLifecycleService {
         profile: undefined,
       });
     }
-    await this.runtime.loadRuntimeModel(staged, toRuntimeConfig(options.runtime, observabilityMode));
+    try {
+      await this.runtime.loadRuntimeModel(staged, toRuntimeConfig(options.runtime, observabilityMode));
+    } catch (error) {
+      this.runtime.close();
+      this.current = null;
+      this.currentSnapshot = null;
+      throw error;
+    }
 
     const loadedAt = new Date().toISOString();
     const updated = await this.registry.write((draft) => {
@@ -1326,7 +1320,13 @@ export class ModelService implements ModelLifecycleService {
     }
   }
 
-  private buildDescriptor(modelFiles: File[], projectorFile: File | null): InternalBundleDescriptor {
+  private buildDescriptor(
+    modelFiles: File[],
+    projectorFile: File | null,
+    entry: ModelEntry,
+    manifest: RegistryManifest
+  ): InternalBundleDescriptor {
+    const detection = this.detectionForEntry(entry, manifest);
     const projector: ModelBundleFileProjectorDescriptor | undefined =
       projectorFile == null
         ? undefined
@@ -1339,13 +1339,34 @@ export class ModelService implements ModelLifecycleService {
         kind: 'file',
         file: modelFiles[0],
         projector,
+        ...(detection == null ? {} : { detection }),
       };
     }
     return {
       kind: 'files',
       files: modelFiles,
       projector,
+      ...(detection == null ? {} : { detection }),
     };
+  }
+
+  private detectionForEntry(
+    entry: ModelEntry,
+    manifest: RegistryManifest
+  ): ModelDetectionResult | undefined {
+    for (const assetId of entry.modelAssetIds) {
+      const inspection = manifest.assets[assetId]?.inspection;
+      if (inspection != null) {
+        return {
+          inspection,
+          detectionMethod: inspection.role === 'unknown' ? 'none' : 'gguf-metadata',
+          modelName: entry.name,
+          modelType: null,
+          modelArchitecture: inspection.architecture,
+        };
+      }
+    }
+    return undefined;
   }
 
   private async markBroken(id: string): Promise<void> {
@@ -1411,16 +1432,6 @@ export class ModelService implements ModelLifecycleService {
     }
     return this.chatRuntime;
   }
-}
-
-function sliceUnstreamedSuffix(streamedOutputText: string, finalOutputText: string): string {
-  if (streamedOutputText.length === 0) {
-    return finalOutputText;
-  }
-  if (!finalOutputText.startsWith(streamedOutputText)) {
-    return '';
-  }
-  return finalOutputText.slice(streamedOutputText.length);
 }
 
 function isChatInputObject(input: ChatInput): input is Extract<ChatInput, { messages: unknown }> {

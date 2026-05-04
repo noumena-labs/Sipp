@@ -32,15 +32,6 @@ import {
 } from 'cogentlm/character';
 ```
 
-Advanced grammar/parser helpers live under:
-
-```ts
-import {
-  compileActionGrammar,
-  StreamingActionParser,
-} from 'cogentlm/character/advanced';
-```
-
 ## Mental Model
 
 ```text

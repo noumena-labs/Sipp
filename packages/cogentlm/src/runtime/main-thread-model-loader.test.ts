@@ -104,7 +104,7 @@ test('MainThreadModelLoader cleanup removes MEMFS projector and unmounts model f
     },
   });
 
-  loader.cleanupAfterEngineInit(module);
+  loader.cleanup(module);
 
   assert.deepEqual(module.FS.unlinks, ['/memfs_projector/mmproj.gguf']);
   assert.deepEqual(module.FS.unmounts, ['/workerfs_model']);

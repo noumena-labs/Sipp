@@ -1,6 +1,7 @@
 import { FileSystemStorage } from '../storage/file-system-storage.js';
 import { QueryError, type AssetRecord, type ModelAssetKind, type ModelLoadProgress } from './model-types.js';
 import { sha256Blob } from './hash.js';
+import { currentLocationHref, resolveUrl } from '../utils/url.js';
 
 export interface RemoteAssetMetadata {
   url: string;
@@ -17,6 +18,7 @@ export interface InstallAssetInput {
   sourceUrl?: string;
   sourceEtag?: string;
   sourceLastModified?: string;
+  signal?: AbortSignal;
   onProgress?: (progress: ModelLoadProgress) => void;
 }
 
@@ -24,10 +26,6 @@ function normalizeAssetName(name: string): string {
   const trimmed = name.trim();
   const defaultValue = trimmed.length > 0 ? trimmed : 'model.gguf';
   return defaultValue.replace(/[\\/:*?"<>|]+/g, '-');
-}
-
-function currentLocationHref(): string | undefined {
-  return typeof globalThis.location?.href === 'string' ? globalThis.location.href : undefined;
 }
 
 function fileNameFromUrl(url: string): string {
@@ -201,20 +199,14 @@ export class AssetStore {
   public async installFile(input: InstallAssetInput): Promise<AssetRecord> {
     this.ensureAvailable();
     const name = normalizeAssetName(input.file.name || 'model.gguf');
-    input.onProgress?.({
-      phase: 'store',
-      loadedBytes: 0,
-      totalBytes: input.file.size,
-      percent: 0,
-      assetName: name,
-    });
-    const hash = await sha256Blob(input.file);
+    this.emitStoreProgress(input.onProgress, name, 0, input.file.size, 0);
+    const hash = await sha256Blob(input.file, input.signal);
     const id = `asset-${hash}`;
     const storagePath = `${id}-${name}`;
     const existing = await this.storage.getFile(storagePath);
     if (existing == null || existing.size !== input.file.size) {
       try {
-        await this.storage.streamToDisk(storagePath, input.file.stream());
+        await this.storage.streamToDisk(storagePath, input.file.stream(), undefined, input.signal);
       } catch (error) {
         if (isQuotaExceededError(error)) {
           throw quotaExceededError(name, input.file.size, error);
@@ -222,15 +214,8 @@ export class AssetStore {
         throw error;
       }
     }
-    input.onProgress?.({
-      phase: 'store',
-      loadedBytes: input.file.size,
-      totalBytes: input.file.size,
-      percent: 100,
-      assetName: name,
-    });
-
-    return {
+    this.emitStoreProgress(input.onProgress, name, input.file.size, input.file.size, 100);
+    return this.buildAssetRecord({
       id,
       kind: input.kind,
       name,
@@ -240,9 +225,7 @@ export class AssetStore {
       sourceUrl: input.sourceUrl,
       sourceEtag: input.sourceEtag,
       sourceLastModified: input.sourceLastModified,
-      refCount: 0,
-      createdAt: new Date().toISOString(),
-    };
+    });
   }
 
   public async getFile(record: AssetRecord): Promise<File> {
@@ -263,8 +246,7 @@ export class AssetStore {
 
   private parseUrl(rawUrl: string): URL {
     try {
-      const baseHref = currentLocationHref();
-      return baseHref == null ? new URL(rawUrl) : new URL(rawUrl, baseHref);
+      return resolveUrl(rawUrl, 'model URL');
     } catch {
       throw new QueryError('INVALID_MODEL_SOURCE', `Invalid model URL "${rawUrl}".`);
     }
@@ -281,13 +263,7 @@ export class AssetStore {
     onProgress?: (progress: ModelLoadProgress) => void;
   }): Promise<AssetRecord> {
     const name = normalizeAssetName(input.name || input.file.name || 'model.gguf');
-    input.onProgress?.({
-      phase: 'store',
-      loadedBytes: 0,
-      totalBytes: input.file.size,
-      percent: 0,
-      assetName: name,
-    });
+    this.emitStoreProgress(input.onProgress, name, 0, input.file.size, 0);
     const hash = await sha256Blob(input.file);
     const id = `asset-${hash}`;
     const canonicalStoragePath = `${id}-${name}`;
@@ -299,15 +275,8 @@ export class AssetStore {
     if (storagePath !== input.storagePath) {
       await this.storage.deleteFile(input.storagePath);
     }
-    input.onProgress?.({
-      phase: 'store',
-      loadedBytes: input.file.size,
-      totalBytes: input.file.size,
-      percent: 100,
-      assetName: name,
-    });
-
-    return {
+    this.emitStoreProgress(input.onProgress, name, input.file.size, input.file.size, 100);
+    return this.buildAssetRecord({
       id,
       kind: input.kind,
       name,
@@ -317,6 +286,28 @@ export class AssetStore {
       sourceUrl: input.sourceUrl,
       sourceEtag: input.sourceEtag,
       sourceLastModified: input.sourceLastModified,
+    });
+  }
+
+  private emitStoreProgress(
+    onProgress: ((progress: ModelLoadProgress) => void) | undefined,
+    assetName: string,
+    loadedBytes: number,
+    totalBytes: number,
+    percent: number
+  ): void {
+    onProgress?.({
+      phase: 'store',
+      loadedBytes,
+      totalBytes,
+      percent,
+      assetName,
+    });
+  }
+
+  private buildAssetRecord(input: Omit<AssetRecord, 'refCount' | 'createdAt'>): AssetRecord {
+    return {
+      ...input,
       refCount: 0,
       createdAt: new Date().toISOString(),
     };

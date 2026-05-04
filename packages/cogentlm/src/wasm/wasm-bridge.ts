@@ -16,6 +16,7 @@ import {
   COMPLETED_REQUEST_STATUS_COMPLETED,
   COMPLETED_REQUEST_STATUS_FAILED,
   COMPLETED_REQUEST_STATUS_PENDING,
+  COMPLETED_REQUEST_STATUS_UNKNOWN,
   RUNTIME_EVENT_DRAIN_RESULT_SIZE_BYTES,
   RUNTIME_EVENT_KIND_TERMINAL,
   RUNTIME_EVENT_KIND_TOKEN,
@@ -24,50 +25,26 @@ import {
   RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES,
   SCHEDULER_BURST_RESULT_SIZE_BYTES,
 } from '../runtime/main-thread-runtime-constants.js';
+import { assertGrammarByteSize } from '../utils/grammar.js';
+export { MAX_GRAMMAR_BYTES } from '../utils/grammar.js';
 
 const RUNTIME_EVENT_DRAIN_TEXT_BUFFER_SIZE_BYTES = 64 * 1024;
 
 export const TOKEN_EMISSION_NONE = 0;
 export const TOKEN_EMISSION_RUNTIME_EVENTS = 1;
-export const TOKEN_EMISSION_DIRECT_CALLBACK = 2;
 
 export type TokenEmissionMode =
   | typeof TOKEN_EMISSION_NONE
-  | typeof TOKEN_EMISSION_RUNTIME_EVENTS
-  | typeof TOKEN_EMISSION_DIRECT_CALLBACK;
-
-/**
- * Maximum accepted size of a GBNF grammar source (UTF-8 byte length).
- * Enforced at the bridge boundary before any ccall to the native runtime.
- */
-export const MAX_GRAMMAR_BYTES = 64 * 1024;
+  | typeof TOKEN_EMISSION_RUNTIME_EVENTS;
 
 function validateGrammarSize(grammar: string | undefined): void {
-  if (grammar == null) {
-    return;
-  }
-  // Fast path: if the string length in UTF-16 code units is under the limit,
-  // UTF-8 size is guaranteed to be under 4x that. We only need the precise
-  // byte length when close to the limit.
-  if (grammar.length <= MAX_GRAMMAR_BYTES) {
-    return;
-  }
-  const byteLength =
-    typeof TextEncoder !== 'undefined'
-      ? new TextEncoder().encode(grammar).byteLength
-      : grammar.length;
-  if (byteLength > MAX_GRAMMAR_BYTES) {
-    throw new Error(
-      `grammar exceeds maximum size of ${MAX_GRAMMAR_BYTES} bytes (got ${byteLength}).`
-    );
-  }
+  assertGrammarByteSize(grammar);
 }
 
 function validateTokenEmissionMode(mode: TokenEmissionMode): void {
   if (
     mode !== TOKEN_EMISSION_NONE &&
-    mode !== TOKEN_EMISSION_RUNTIME_EVENTS &&
-    mode !== TOKEN_EMISSION_DIRECT_CALLBACK
+    mode !== TOKEN_EMISSION_RUNTIME_EVENTS
   ) {
     throw new Error(`invalid token emission mode ${mode}.`);
   }
@@ -127,11 +104,6 @@ export class WasmBridge {
       );
     }
     return Math.floor(n / bytesPerElement);
-  }
-
-
-  public getModule(): EngineModule {
-    return this.module;
   }
 
   public callNumber(
@@ -421,96 +393,27 @@ export class WasmBridge {
   }
 
   public getBosText(): string {
-    try {
-      const ptr = this.callNumber('CE_GetBosText');
-      if (!ptr) {
-        return '';
-      }
-      try {
-        return this.module.UTF8ToString(ptr);
-      } finally {
-        this.module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
-      }
-    } catch (error) {
-      if (this.isMissingOptionalRuntimeApiError('CE_GetBosText', error)) {
-        return '';
-      }
-      throw error;
-    }
+    return this.callOwnedString('CE_GetBosText');
   }
 
   public getEosText(): string {
-    try {
-      const ptr = this.callNumber('CE_GetEosText');
-      if (!ptr) {
-        return '';
-      }
-      try {
-        return this.module.UTF8ToString(ptr);
-      } finally {
-        this.module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
-      }
-    } catch (error) {
-      if (this.isMissingOptionalRuntimeApiError('CE_GetEosText', error)) {
-        return '';
-      }
-      throw error;
-    }
-  }
-
-  public tokenToString(tokenId: number): string {
-    try {
-      const ptr = this.callNumber('CE_TokenToString', ['number'], [tokenId]);
-      if (!ptr) {
-        return '';
-      }
-      try {
-        return this.module.UTF8ToString(ptr);
-      } finally {
-        this.module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
-      }
-    } catch (error) {
-      if (this.isMissingOptionalRuntimeApiError('CE_TokenToString', error)) {
-        return '';
-      }
-      throw error;
-    }
+    return this.callOwnedString('CE_GetEosText');
   }
 
   /**
    * Applies llama.cpp's native chat template (via common_chat_format_single)
    * to a set of OpenAI-style chat messages and returns the formatted prompt
-   * text. Returns '' when the runtime lacks the export (older WASM builds)
-   * or when the model has no embedded chat template.
-   *
-   * Retained as a general-purpose bridge API for callers that want the
-   * model-native chat formatting path. CharacterRuntime now uses this same
-   * template-application path via the runtime surface.
+   * text. Returns '' when the model has no embedded chat template.
    */
   public applyChatTemplate(
     messages: ChatTemplateMessage[],
     addAssistant: boolean
   ): string {
-    try {
-      const ptr = this.callNumber(
-        'CE_ApplyChatTemplate',
-        ['string', 'number'],
-        [JSON.stringify(messages), addAssistant ? 1 : 0]
-      );
-      if (!ptr) {
-        return '';
-      }
-      try {
-        return this.module.UTF8ToString(ptr);
-      } finally {
-        this.module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
-      }
-    } catch (error) {
-      if (this.isMissingOptionalRuntimeApiError('CE_ApplyChatTemplate', error)) {
-        return '';
-      }
-      throw error;
-    }
+    return this.callOwnedString(
+      'CE_ApplyChatTemplate',
+      ['string', 'number'],
+      [JSON.stringify(messages), addAssistant ? 1 : 0]
+    );
   }
 
   public async cancelQuery(requestId: GenerateRequestId): Promise<boolean> {
@@ -533,6 +436,9 @@ export class WasmBridge {
 
   public consumeCompletedResponseIfPresent(requestId: GenerateRequestId): boolean {
     const status = this.getCompletedRequestStatus(requestId);
+    if (status === COMPLETED_REQUEST_STATUS_UNKNOWN) {
+      return false;
+    }
     if (status === COMPLETED_REQUEST_STATUS_PENDING) {
       return false;
     }
@@ -576,6 +482,9 @@ export class WasmBridge {
     const status = this.getCompletedRequestStatus(requestId);
     if (status === COMPLETED_REQUEST_STATUS_PENDING) {
       throw new Error('Queued request reached a terminal step without a completed response.');
+    }
+    if (status === COMPLETED_REQUEST_STATUS_UNKNOWN) {
+      throw new Error('Queued request response is no longer available.');
     }
 
     const outputText = this.copyCompletedRequestText(
@@ -702,6 +611,7 @@ export class WasmBridge {
   }
 
   public releaseReusableBuffers(): void {
+    this.tokenDecoders.clear();
     if (this.reusableBurstResultPtr !== 0) {
       this.free(this.reusableBurstResultPtr);
       this.reusableBurstResultPtr = 0;
@@ -723,33 +633,34 @@ export class WasmBridge {
   }
 
   private allocate(size: number): number {
-    return Number(this.module._malloc(size));
+    if (!Number.isSafeInteger(size) || size <= 0) {
+      throw new RangeError(`Invalid wasm allocation size: ${size}`);
+    }
+    const ptr = Number(this.module._malloc(size));
+    if (ptr === 0) {
+      throw new Error(`WASM allocation failed for ${size} bytes.`);
+    }
+    return ptr;
   }
 
   private free(ptr: number): void {
     this.module._free(ptr);
   }
 
-  private isMissingOptionalRuntimeApiError(ident: string, error: unknown): boolean {
-    const message = this.asErrorMessage(error).toLowerCase();
-    const normalizedIdent = ident.toLowerCase();
-    if (!message.includes(normalizedIdent)) {
-      return false;
+  private callOwnedString(
+    ident: string,
+    argTypes: string[] = [],
+    args: unknown[] = []
+  ): string {
+    const ptr = this.callNumber(ident, argTypes, args);
+    if (!ptr) {
+      return '';
     }
-    return (
-      message.includes('unexpected ccall') ||
-      message.includes('unknown function') ||
-      message.includes('not a function') ||
-      message.includes('is not exported') ||
-      message.includes('missing')
-    );
-  }
-
-  private asErrorMessage(error: unknown): string {
-    if (error instanceof Error) {
-      return error.message;
+    try {
+      return this.module.UTF8ToString(ptr);
+    } finally {
+      this.module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
     }
-    return String(error);
   }
 
   private ensureBurstResultBuffer(): number {

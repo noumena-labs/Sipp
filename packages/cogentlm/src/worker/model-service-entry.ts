@@ -2,6 +2,7 @@ import { ModelService } from '../model-management/model-service.js';
 import { QueryError } from '../model-management/model-types.js';
 import { getDefaultRuntimeUrls } from '../runtime-assets.js';
 import { MainThreadEngineRuntime } from '../runtime/engine-runtime-main-thread.js';
+import { stableJson } from '../utils/stable-json.js';
 import {
   WorkerRequestMessage,
   WorkerResponseMessage,
@@ -14,19 +15,7 @@ let serviceConfigFingerprint: string | null = null;
 let unsubscribeObservability: (() => void) | null = null;
 const activeCalls = new Map<number, AbortController>();
 
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(stableJson).join(',')}]`;
-  }
-  if (value != null && typeof value === 'object') {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`)
-      .join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
+type WorkerOperationRequest = Exclude<WorkerRequestMessage, { kind: 'cancel' }>;
 
 function buildServiceConfig(config: WorkerSerializableCogentConfig): WorkerServiceConfig {
   const bundledRuntimeUrls =
@@ -96,22 +85,60 @@ async function withAbortController<T>(
   }
 }
 
-async function handleRequest(message: WorkerRequestMessage): Promise<unknown> {
+function postLoadProgress(callId: number): NonNullable<Parameters<ModelService['load']>[1]>['onProgress'] {
+  return (progress) => {
+    post({
+      kind: 'load-progress',
+      callId,
+      progress,
+    });
+  };
+}
+
+function postToken(callId: number): NonNullable<Parameters<ModelService['query']>[1]>['onToken'] {
+  return (token) => {
+    post({
+      kind: 'token',
+      callId,
+      text: token,
+    });
+  };
+}
+
+async function runLoad(message: Extract<WorkerOperationRequest, { kind: 'models-load' }>): Promise<unknown> {
+  return await withAbortController(message.callId, (signal) =>
+    ensureService(message.config).load(message.source, {
+      ...message.options,
+      signal,
+      onProgress: postLoadProgress(message.callId),
+    })
+  );
+}
+
+async function runQuery(message: Extract<WorkerOperationRequest, { kind: 'query' }>): Promise<string> {
+  return await withAbortController(message.callId, (signal) =>
+    ensureService(message.config).query(message.input, {
+      ...message.options,
+      signal,
+      onToken: postToken(message.callId),
+    })
+  );
+}
+
+async function runChat(message: Extract<WorkerOperationRequest, { kind: 'chat' }>): Promise<string> {
+  return await withAbortController(message.callId, (signal) =>
+    ensureService(message.config).chat(message.input, {
+      ...message.options,
+      signal,
+      onToken: postToken(message.callId),
+    })
+  );
+}
+
+async function handleRequest(message: WorkerOperationRequest): Promise<unknown> {
   switch (message.kind) {
     case 'models-load':
-      return await withAbortController(message.callId, (signal) =>
-        ensureService(message.config).load(message.source, {
-          ...message.options,
-          signal,
-          onProgress: (progress) => {
-            post({
-              kind: 'load-progress',
-              callId: message.callId,
-              progress,
-            });
-          },
-        })
-      );
+      return await runLoad(message);
     case 'models-list':
       return await ensureService(message.config).list();
     case 'models-remove': {
@@ -120,33 +147,9 @@ async function handleRequest(message: WorkerRequestMessage): Promise<unknown> {
       return modelService.currentModel();
     }
     case 'query':
-      return await withAbortController(message.callId, (signal) =>
-        ensureService(message.config).query(message.input, {
-          ...message.options,
-          signal,
-          onToken: (token) => {
-            post({
-              kind: 'token',
-              callId: message.callId,
-              text: token,
-            });
-          },
-        })
-      );
+      return await runQuery(message);
     case 'chat':
-      return await withAbortController(message.callId, (signal) =>
-        ensureService(message.config).chat(message.input, {
-          ...message.options,
-          signal,
-          onToken: (token) => {
-            post({
-              kind: 'token',
-              callId: message.callId,
-              text: token,
-            });
-          },
-        })
-      );
+      return await runChat(message);
     case 'close':
       for (const callId of activeCalls.keys()) {
         abortActiveCall(callId);
@@ -157,11 +160,6 @@ async function handleRequest(message: WorkerRequestMessage): Promise<unknown> {
       service = null;
       serviceConfigFingerprint = null;
       return undefined;
-    case 'cancel':
-      abortActiveCall(message.targetCallId);
-      return undefined;
-    default:
-      throw new Error('Unknown worker request kind.');
   }
 }
 

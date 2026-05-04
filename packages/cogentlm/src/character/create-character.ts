@@ -1,6 +1,7 @@
 import { CharacterEventBus } from './action-bus.js';
 import { CharacterRuntime, type CharacterRuntimeEngine, type CharacterRuntimeOptions } from './character-agent.js';
 import { parseCharacterConfig, type CharacterConfig } from './character-config.js';
+import { loadJsonConfig } from '../utils/load-json-config.js';
 
 export interface CreateCharacterFromConfigUrlOptions {
   readonly configUrl: string;
@@ -14,19 +15,12 @@ export interface CreateCharacterFromConfigUrlOptions {
 export async function createCharacterFromConfigUrl(
   options: CreateCharacterFromConfigUrlOptions
 ): Promise<{ character: CharacterRuntime; config: CharacterConfig }> {
-  const fetchImpl = options.fetch ?? globalThis.fetch;
-  if (typeof fetchImpl !== 'function') {
-    throw new Error(
-      'createCharacterFromConfigUrl requires a fetch implementation. Pass `fetch` explicitly in this runtime.'
-    );
-  }
-
-  const response = await fetchImpl(options.configUrl, { signal: options.signal });
-  if (!response.ok) {
-    throw new Error(`character.json HTTP ${response.status}`);
-  }
-
-  const config = parseCharacterConfig(await response.json());
+  const config = parseCharacterConfig(await loadJsonConfig(options.configUrl, {
+    fetch: options.fetch,
+    signal: options.signal,
+    fetchLabel: 'createCharacterFromConfigUrl',
+    httpLabel: 'character.json',
+  }));
   const character = new CharacterRuntime(options.engine, config, {
     ...options.runtimeOptions,
     ...(options.bus ? { bus: options.bus } : {}),

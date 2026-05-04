@@ -11,7 +11,6 @@ extern "C" {
 int CE_InitPlugin(const char* model_path, const CE_InitConfig* config);
 void CE_ClosePlugin();
 int CE_GetRuntimeObservability(CE_RuntimeObservabilityMetrics* out_metrics);
-int CE_ResetRuntimeObservability();
 int CE_RunSchedulerBurst(int32_t max_ticks,
                          int32_t max_completed_responses,
                          int32_t max_emitted_tokens,
@@ -55,7 +54,6 @@ const char* CE_GetMediaMarkerString();
 const char* CE_GetChatTemplateString();
 const char* CE_GetBosTextString();
 const char* CE_GetEosTextString();
-const char* CE_TokenToStringString(int32_t token_id);
 const char* CE_ApplyChatTemplateString(const char* messages_json,
                                        int add_assistant);
 int CE_CancelPromptRequest(CE_RequestId request_id);

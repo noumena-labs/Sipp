@@ -90,12 +90,6 @@ SlotState *SlotScheduler::FindFirstActiveSlot() {
   return active_slot_it == slots_.end() ? nullptr : &(*active_slot_it);
 }
 
-std::vector<SlotState *> SlotScheduler::SelectDecodeReadySlots() {
-  std::vector<SlotState *> decode_slots;
-  SelectDecodeReadySlots(decode_slots);
-  return decode_slots;
-}
-
 void SlotScheduler::SelectDecodeReadySlots(
     std::vector<SlotState *> &out_slots) {
   out_slots.clear();
@@ -121,12 +115,6 @@ void SlotScheduler::SelectDecodeReadySlots(
     }
     out_slots.push_back(&slot);
   }
-}
-
-std::vector<SlotState *> SlotScheduler::SelectPrefillReadySlots() {
-  std::vector<SlotState *> prefill_slots;
-  SelectPrefillReadySlots(prefill_slots);
-  return prefill_slots;
 }
 
 void SlotScheduler::SelectPrefillReadySlots(

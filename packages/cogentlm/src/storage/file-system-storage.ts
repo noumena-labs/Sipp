@@ -1,3 +1,5 @@
+import { createAbortError } from '../utils/abort.js';
+
 /**
  * FileSystemStorage provides an abstraction for the Origin Private File System (OPFS),
  * allowing large assets to be streamed directly to browser-managed persistent storage.
@@ -29,6 +31,10 @@ export class FileSystemStorage {
     return this.root;
   }
 
+  private isNotFoundError(error: unknown): boolean {
+    return typeof DOMException === 'function' && error instanceof DOMException && error.name === 'NotFoundError';
+  }
+
   /**
    * Get a File handle for an existing file in storage.
    */
@@ -37,7 +43,10 @@ export class FileSystemStorage {
       const root = await this.ensureRoot();
       const handle = await root.getFileHandle(fileName);
       return await handle.getFile();
-    } catch (e) {
+    } catch (error) {
+      if (!this.isNotFoundError(error)) {
+        throw error;
+      }
       return null;
     }
   }
@@ -61,44 +70,7 @@ export class FileSystemStorage {
       try {
         await writable.abort();
       } catch {}
-      try {
-        await root.removeEntry(fileName);
-      } catch {}
       throw error;
-    }
-  }
-
-  public async estimate(): Promise<{
-    usageBytes: number | null;
-    quotaBytes: number | null;
-  }> {
-    if (
-      typeof navigator === 'undefined' ||
-      typeof navigator.storage?.estimate !== 'function'
-    ) {
-      return {
-        usageBytes: null,
-        quotaBytes: null,
-      };
-    }
-
-    try {
-      const estimate = await navigator.storage.estimate();
-      return {
-        usageBytes:
-          typeof estimate.usage === 'number' && Number.isFinite(estimate.usage)
-            ? estimate.usage
-            : null,
-        quotaBytes:
-          typeof estimate.quota === 'number' && Number.isFinite(estimate.quota)
-            ? estimate.quota
-            : null,
-      };
-    } catch {
-      return {
-        usageBytes: null,
-        quotaBytes: null,
-      };
     }
   }
 
@@ -111,6 +83,10 @@ export class FileSystemStorage {
     onProgress?: (bytes: number) => void,
     signal?: AbortSignal
   ): Promise<File> {
+    if (signal?.aborted) {
+      throw createAbortError('File write aborted.');
+    }
+
     const root = await this.ensureRoot();
     const handle = await root.getFileHandle(fileName, { create: true });
 
@@ -118,13 +94,6 @@ export class FileSystemStorage {
     // In some browsers (Firefox), this might be behind a flag or limited.
     // Use the modern piping API if possible.
     const writable = await handle.createWritable();
-    const abortListener =
-      signal == null
-        ? null
-        : () => {
-            void writable.abort();
-          };
-    
     try {
       let bytesWritten = 0;
       const progressTransformer = new TransformStream({
@@ -135,11 +104,7 @@ export class FileSystemStorage {
         }
       });
 
-      if (abortListener != null) {
-        signal?.addEventListener('abort', abortListener, { once: true });
-      }
-
-      await stream.pipeThrough(progressTransformer).pipeTo(writable);
+      await stream.pipeThrough(progressTransformer).pipeTo(writable, { signal });
       return await handle.getFile();
     } catch (e) {
       // Cleanup on failure
@@ -148,10 +113,6 @@ export class FileSystemStorage {
         await root.removeEntry(fileName);
       } catch {}
       throw e;
-    } finally {
-      if (abortListener != null) {
-        signal?.removeEventListener('abort', abortListener);
-      }
     }
   }
 
@@ -162,34 +123,10 @@ export class FileSystemStorage {
     try {
       const root = await this.ensureRoot();
       await root.removeEntry(fileName);
-    } catch (e) {}
-  }
-
-  /**
-   * List all cached model files.
-   */
-  public async listFiles(): Promise<string[]> {
-    try {
-      const root = await this.ensureRoot();
-      const names: string[] = [];
-      // @ts-ignore - async iterator on entries()
-      for await (const name of root.keys()) {
-        names.push(name);
+    } catch (error) {
+      if (!this.isNotFoundError(error)) {
+        throw error;
       }
-      return names;
-    } catch (e) {
-      return [];
     }
-  }
-
-  /**
-   * Clear all cached files.
-   */
-  public async clear(): Promise<void> {
-    try {
-      const opfsRoot = await navigator.storage.getDirectory();
-      await opfsRoot.removeEntry(this.dirName, { recursive: true });
-      this.root = null;
-    } catch (e) {}
   }
 }

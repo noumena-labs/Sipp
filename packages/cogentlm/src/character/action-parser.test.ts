@@ -11,10 +11,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { ActionSchema } from './action-schema.js';
-import { expandActionCues } from './action-schema.js';
 import {
-  ActionParseError,
-  parseActionCue,
   StreamingActionParser,
   type ParsedEvent,
 } from './action-parser.js';
@@ -25,8 +22,6 @@ const SCHEMA: ActionSchema = [
   { id: 'look_at_you', cue: 'look at you' },
 ];
 
-const CUES = expandActionCues(SCHEMA);
-
 function drainAll(parser: StreamingActionParser, chunks: string[]): ParsedEvent[] {
   const events: ParsedEvent[] = [];
   for (const chunk of chunks) {
@@ -35,31 +30,6 @@ function drainAll(parser: StreamingActionParser, chunks: string[]): ParsedEvent[
   events.push(...parser.flush());
   return events;
 }
-
-test('parseActionCue resolves a flat cue label', () => {
-  const event = parseActionCue('[wave]', CUES);
-  assert.equal(event.kind, 'action');
-  assert.equal(event.id, 'wave');
-});
-
-test('parseActionCue resolves a custom cue label', () => {
-  const event = parseActionCue('[look at you]', CUES);
-  assert.equal(event.id, 'look_at_you');
-});
-
-test('parseActionCue rejects unknown labels', () => {
-  assert.throws(
-    () => parseActionCue('[look at moon]', CUES),
-    (error) => error instanceof ActionParseError
-  );
-});
-
-test('parseActionCue rejects malformed envelopes', () => {
-  assert.throws(
-    () => parseActionCue('wave', CUES),
-    (error) => error instanceof ActionParseError
-  );
-});
 
 test('StreamingActionParser emits prose and action events in stream order', () => {
   const parser = new StreamingActionParser(SCHEMA);

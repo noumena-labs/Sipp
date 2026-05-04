@@ -1,3 +1,5 @@
 {
-    "cmake.sourceDirectory": "D:/GIT_DIR/_NoumenaLabs/_CogentEngine/CogentLM/packages/cogent-engine"
+    "cmake.sourceDirectory": "D:/GIT_DIR/_NoumenaLabs/_CogentEngine/CogentLM/packages/cogent-engine",
+    "typescript.referencesCodeLens.enabled": true,
+    "typescript.implementationsCodeLens.enabled": true
 }

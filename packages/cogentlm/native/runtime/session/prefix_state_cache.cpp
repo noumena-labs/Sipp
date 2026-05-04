@@ -17,11 +17,6 @@ PrefixStateCache::PrefixStateCache(std::size_t max_entries,
     : max_entries_(std::max<std::size_t>(1, max_entries)),
       max_total_bytes_(std::max<std::size_t>(1, max_total_bytes)) {}
 
-void PrefixStateCache::set_max_entries(std::size_t max_entries) {
-  max_entries_ = std::max<std::size_t>(1, max_entries);
-  EnforceLimit();
-}
-
 const PrefixCacheEntry *PrefixStateCache::FindBestPrefix(
     std::uint64_t model_fingerprint, const std::string &context_key,
     const std::vector<llama_token> &prompt_tokens,

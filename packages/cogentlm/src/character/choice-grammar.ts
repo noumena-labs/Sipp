@@ -8,6 +8,9 @@
 //
 //////////////////////////////////////////////////////////////////////////////
 
+import { literalAlternation } from '../core/grammar-fragments.js';
+import { assertGrammarByteSize } from '../utils/grammar.js';
+
 export class ChoiceGrammarError extends Error {
   public constructor(message: string) {
     super(message);
@@ -17,7 +20,9 @@ export class ChoiceGrammarError extends Error {
 
 export function compileChoiceGrammar(choices: readonly string[]): string {
   const normalized = normalizeChoices(choices);
-  return `root ::= ${normalized.map(gbnfStringLiteral).join(' | ')}\n`;
+  const grammar = `root ::= ${literalAlternation(normalized)}\n`;
+  assertGrammarByteSize(grammar, { label: 'choice grammar' });
+  return grammar;
 }
 
 export function parseChoiceOutput(raw: string, choices: readonly string[]): string | null {
@@ -45,9 +50,4 @@ function normalizeChoices(choices: readonly string[]): readonly string[] {
     throw new ChoiceGrammarError('choices must be unique after trimming.');
   }
   return normalized;
-}
-
-function gbnfStringLiteral(source: string): string {
-  const escaped = source.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  return `"${escaped}"`;
 }

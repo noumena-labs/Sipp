@@ -196,21 +196,33 @@ test('chat() renders messages through the worker service and sanitizes assistant
   });
 });
 
-test('worker mode forwards explicit relative runtime overrides without resolving them on the main thread', async () => {
+test('worker mode resolves explicit relative runtime overrides on the main thread', async () => {
+  const previousLocation = globalThis.location;
+  Object.defineProperty(globalThis, 'location', {
+    configurable: true,
+    value: new URL('https://app.test/page/index.html'),
+  });
   await withGlobalWorker(FakeWorker as unknown as typeof Worker, async () => {
-    const engine = await CogentEngine.create({
-      executionMode: 'worker',
-      moduleUrl: './runtime/custom-module.js',
-      wasmUrl: './runtime/custom-module.wasm',
-    });
+    try {
+      const engine = await CogentEngine.create({
+        executionMode: 'worker',
+        moduleUrl: './runtime/custom-module.js',
+        wasmUrl: './runtime/custom-module.wasm',
+      });
 
-    await engine.models.list();
-    const request = FakeWorker.lastInstance?.messages[0];
+      await engine.models.list();
+      const request = FakeWorker.lastInstance?.messages[0];
 
-    assert.equal(request?.kind, 'models-list');
-    assert.equal(request?.config.moduleUrl, './runtime/custom-module.js');
-    assert.equal(request?.config.wasmUrl, './runtime/custom-module.wasm');
+      assert.equal(request?.kind, 'models-list');
+      assert.equal(request?.config.moduleUrl, 'https://app.test/page/runtime/custom-module.js');
+      assert.equal(request?.config.wasmUrl, 'https://app.test/page/runtime/custom-module.wasm');
 
-    await engine.close();
+      await engine.close();
+    } finally {
+      Object.defineProperty(globalThis, 'location', {
+        configurable: true,
+        value: previousLocation,
+      });
+    }
   });
 });

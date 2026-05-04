@@ -133,6 +133,17 @@ export class DirectorRuntime {
     ];
 
     const abort = createTimedAbortController(request.signal, request.timeoutMs);
+    if (abort.signal.aborted) {
+      const status = abort.timedOut() ? 'timed_out' : 'aborted';
+      abort.dispose();
+      return {
+        status,
+        text: '',
+        selections: [],
+        rawText: '',
+        errorMessage: status === 'timed_out' ? 'Director task timed out.' : 'Director task aborted.',
+      };
+    }
     const contextKey = this.getTaskContextKey(taskName);
     const queryOptions: ChatOptions = {
       session: contextKey,
@@ -157,6 +168,16 @@ export class DirectorRuntime {
           grammar,
         }
       );
+      if (abort.signal.aborted) {
+        const status = abort.timedOut() ? 'timed_out' : 'aborted';
+        return {
+          status,
+          text: '',
+          selections: [],
+          rawText: '',
+          errorMessage: status === 'timed_out' ? 'Director task timed out.' : 'Director task aborted.',
+        };
+      }
       const parsed = parseDirectorOutput(rawText, task.output, resolved);
       logDirectorRun({ phase: 'response', taskName, contextKey, rawText, status: 'ok' });
       return {

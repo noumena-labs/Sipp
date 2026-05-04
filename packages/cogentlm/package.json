@@ -16,15 +16,10 @@
       "import": "./dist/esm/character/index.js",
       "default": "./dist/esm/character/index.js"
     },
-    "./character/advanced": {
-      "types": "./dist/types/character/advanced.d.ts",
-      "import": "./dist/esm/character/advanced.js",
-      "default": "./dist/esm/character/advanced.js"
-    },
     "./director": {
-      "types": "./dist/types/director/index.d.ts",
-      "import": "./dist/esm/director/index.js",
-      "default": "./dist/esm/director/index.js"
+      "types": "./dist/types/orchestrator/index.d.ts",
+      "import": "./dist/esm/orchestrator/index.js",
+      "default": "./dist/esm/orchestrator/index.js"
     },
     "./wasm/*": "./dist/wasm/*",
     "./package.json": "./package.json"
@@ -48,7 +43,7 @@
     "test:backend-ops:cuda": "bun ./scripts/test-backend-ops-cuda.mjs",
     "test:backend-ops:cuda:op": "bun ./scripts/test-backend-ops-cuda-op.mjs",
     "test:backend-ops:cuda:debug": "bun ./scripts/test-backend-ops-cuda-op.mjs --debug",
-    "build:ts": "bun ./scripts/clean-ts-dist.mjs && bun ./scripts/build-ts.mjs",
+    "build:ts": "bun ./scripts/build-ts.mjs",
     "pack:validate": "bun ./scripts/validate-pack.mjs"
   },
   "keywords": [

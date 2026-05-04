@@ -14,12 +14,12 @@ import type {
   ChatOptions,
 } from '../model-management/model-types.js';
 import type { ChatMessage } from '../types.js';
+import { sliceUnstreamedSuffix } from '../core/streaming-output.js';
 import { CharacterEventBus, type CharacterEvent } from './action-bus.js';
 import { compileActionGrammar } from './action-grammar.js';
 import { StreamingActionParser, type ParsedEvent } from './action-parser.js';
 import { compileChoiceGrammar, parseChoiceOutput } from './choice-grammar.js';
 import {
-  DEFAULT_MEMORY_MAX_TURNS,
   resolveMaxMemoryTurns,
   type CharacterConfig,
 } from './character-config.js';
@@ -109,10 +109,7 @@ export class CharacterRuntime {
     this.canonicalCueLabelsByActionId = new Map(
       summarizeActionCues(config.actions).map((cue) => [cue.id, cue.label])
     );
-    this.memoryLimitTurns = Math.max(
-      0,
-      resolveMaxMemoryTurns(config) ?? DEFAULT_MEMORY_MAX_TURNS
-    );
+    this.memoryLimitTurns = Math.max(0, resolveMaxMemoryTurns(config));
   }
 
   /** Exposes the event bus for imperative subscribers (VRM bindings, logs). */
@@ -166,6 +163,16 @@ export class CharacterRuntime {
     ];
 
     const abort = createTimedAbortController(options.signal, options.timeoutMs);
+    if (abort.signal.aborted) {
+      const status = abort.timedOut() ? 'timed_out' : 'aborted';
+      abort.dispose();
+      return {
+        selection: null,
+        status,
+        errorMessage: status === 'timed_out' ? 'Choice timed out.' : 'Choice aborted.',
+        rawText: '',
+      };
+    }
     const chatOptions: ChatOptions = {
       session: `${this.contextKey}:choose`,
       maxTokens: options.maxOutputTokens ?? 24,
@@ -187,6 +194,15 @@ export class CharacterRuntime {
         ...chatOptions,
         grammar,
       });
+      if (abort.signal.aborted) {
+        const status = abort.timedOut() ? 'timed_out' : 'aborted';
+        return {
+          selection: null,
+          status,
+          errorMessage: status === 'timed_out' ? 'Choice timed out.' : 'Choice aborted.',
+          rawText: '',
+        };
+      }
       const selection = parseChoiceOutput(rawText, options.choices);
       if (selection == null) {
         logChoiceQuery({
@@ -249,7 +265,7 @@ export class CharacterRuntime {
    * behind, events buffer in memory rather than back-pressuring decode.
    */
   public chat(userMessage: string, options: { signal?: AbortSignal } = {}): AsyncIterable<ChatEvent> {
-    const trimmed = userMessage ?? '';
+    const trimmed = userMessage;
     const controller = new AbortController();
     const queue = new AsyncEventQueue<ChatEvent>(() => controller.abort());
 
@@ -288,7 +304,10 @@ export class CharacterRuntime {
     if (previousTurn) {
       previousTurn.controller.abort();
       try {
-        await previousTurn.done;
+        await Promise.race([
+          previousTurn.done,
+          new Promise<void>((resolve) => setTimeout(resolve, 1000)),
+        ]);
       } catch {
         // A prior turn already surfaced its own terminal event.
       }
@@ -399,9 +418,13 @@ export class CharacterRuntime {
         ...queryOptions,
         grammar: this.grammarSource,
       });
-      const unseenOutputSuffix = sliceUnstreamedSuffix(streamedOutputText, rawText);
-      if (unseenOutputSuffix.length > 0) {
-        consumeOutputText(unseenOutputSuffix);
+      if (signal.aborted) {
+        status = 'aborted';
+      } else {
+        const unseenOutputSuffix = sliceUnstreamedSuffix(streamedOutputText, rawText);
+        if (unseenOutputSuffix.length > 0) {
+          consumeOutputText(unseenOutputSuffix);
+        }
       }
     } catch (error) {
       status = signal.aborted ? 'aborted' : 'failed';
@@ -551,16 +574,6 @@ function forwardAbortSignal(
   return () => {
     source.removeEventListener('abort', onAbort);
   };
-}
-
-function sliceUnstreamedSuffix(streamedOutputText: string, finalOutputText: string): string {
-  if (streamedOutputText.length === 0) {
-    return finalOutputText;
-  }
-  if (!finalOutputText.startsWith(streamedOutputText)) {
-    return '';
-  }
-  return finalOutputText.slice(streamedOutputText.length);
 }
 
 function renderChoicePrompt(userMessage: string, choices: readonly string[]): string {

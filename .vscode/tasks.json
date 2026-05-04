@@ -84,6 +84,16 @@
         "panel": "dedicated",
         "clear": true
       }
+    },
+    {
+      "type": "typescript",
+      "tsconfig": "packages/cogentlm/tsconfig.json",
+      "option": "watch",
+      "problemMatcher": [
+        "$tsc-watch"
+      ],
+      "group": "build",
+      "label": "tsc: watch - packages/cogentlm/tsconfig.json"
     }
   ],
   "inputs": [

@@ -25,10 +25,8 @@ public:
   void EnsureCapacity(int32_t max_tokens, int32_t max_sequences);
   void Reset();
 
-  bool AddPrefillToken(llama_token token, int32_t position, llama_seq_id seq_id,
-                       bool request_logits);
-  bool AddDecodeToken(llama_token token, int32_t position, llama_seq_id seq_id,
-                      bool request_logits);
+  bool AddToken(llama_token token, int32_t position, llama_seq_id seq_id,
+                bool request_logits);
 
   bool IsAllocated() const;
   int32_t CapacityTokens() const;

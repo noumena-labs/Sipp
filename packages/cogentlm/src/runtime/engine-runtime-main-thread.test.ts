@@ -33,7 +33,7 @@ test('MainThreadEngineRuntime fails projector-backed loads that do not expose a 
   });
   const fakeModule = createModule();
   let bridgeCloseCount = 0;
-  let cleanupAfterCloseCount = 0;
+  let cleanupCount = 0;
 
   (runtime as unknown as { module: EngineModule }).module = fakeModule;
   (runtime as unknown as {
@@ -57,15 +57,11 @@ test('MainThreadEngineRuntime fails projector-backed loads that do not expose a 
   };
   (runtime as unknown as {
     modelLoader: {
-      cleanupAfterClose: () => void;
-      cleanupAfterEngineInit: () => void;
+      cleanup: () => void;
     };
   }).modelLoader = {
-    cleanupAfterClose: () => {
-      cleanupAfterCloseCount += 1;
-    },
-    cleanupAfterEngineInit: () => {
-      throw new Error('cleanupAfterEngineInit should not run on failed multimodal init.');
+    cleanup: () => {
+      cleanupCount += 1;
     },
   };
 
@@ -86,6 +82,6 @@ test('MainThreadEngineRuntime fails projector-backed loads that do not expose a 
     /did not expose a media marker/
   );
   assert.equal(bridgeCloseCount, 1);
-  assert.equal(cleanupAfterCloseCount, 1);
+  assert.equal(cleanupCount, 1);
   assert.equal(runtime.readMediaMarker(), null);
 });

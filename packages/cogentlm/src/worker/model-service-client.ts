@@ -1,6 +1,8 @@
 import type { CogentConfig } from '../cogent-config.js';
+import { resolveRuntimeUrls } from '../runtime-assets.js';
 import { resolveOptimizedPackageAssetUrl } from '../runtime/package-assets.js';
 import { ObservabilityController } from '../model-management/observability-controller.js';
+import { createAbortError } from '../utils/abort.js';
 import {
   WorkerRequestMessage,
   WorkerResponseMessage,
@@ -29,6 +31,12 @@ interface PendingWorkerCall {
   onToken?: QueryOptions['onToken'] | ChatOptions['onToken'];
 }
 
+interface WorkerCallOptions {
+  signal?: AbortSignal;
+  onProgress?: ModelLoadOptions['onProgress'];
+  onToken?: QueryOptions['onToken'] | ChatOptions['onToken'];
+}
+
 type RequestWithCallId = Extract<WorkerRequestMessage, { callId: number }>;
 type WithoutCallId<T> = T extends { callId: number } ? Omit<T, 'callId'> : never;
 
@@ -43,9 +51,25 @@ function toWorkerSerializableConfig(config: CogentConfig): WorkerSerializableCog
     );
   }
 
+  if (config.moduleOptions != null && typeof structuredClone === 'function') {
+    try {
+      structuredClone(config.moduleOptions);
+    } catch (error) {
+      throw new Error(
+        'Worker mode only supports structured-cloneable moduleOptions.',
+        { cause: error }
+      );
+    }
+  }
+
+  const runtimeUrls =
+    config.moduleUrl == null && config.wasmUrl == null
+      ? null
+      : resolveRuntimeUrls(config);
+
   return {
-    moduleUrl: config.moduleUrl,
-    wasmUrl: config.wasmUrl,
+    moduleUrl: runtimeUrls?.moduleUrl,
+    wasmUrl: runtimeUrls?.wasmUrl,
     moduleOptions: config.moduleOptions,
     maxModelBytes: config.maxModelBytes,
     trustedOrigins: config.trustedOrigins,
@@ -90,7 +114,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
 
   public async load(source: ModelSource, options: ModelLoadOptions = {}): Promise<ModelInfo> {
     this.assertOpen();
-    const result = (await this.callWorkerWithAbort(
+    const result = (await this.callWorker(
       {
         kind: 'models-load',
         config: this.workerConfig,
@@ -133,7 +157,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
 
   public async query(input: QueryInput, options: QueryOptions = {}): Promise<string> {
     this.assertOpen();
-    return (await this.callWorkerWithAbort(
+    return (await this.callWorker(
       {
         kind: 'query',
         config: this.workerConfig,
@@ -149,7 +173,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
 
   public async chat(input: ChatInput, options: ChatOptions = {}): Promise<string> {
     this.assertOpen();
-    return (await this.callWorkerWithAbort(
+    return (await this.callWorker(
       {
         kind: 'chat',
         config: this.workerConfig,
@@ -257,29 +281,12 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     this.ensureWorker().postMessage(message);
   }
 
-  private callWorker<T extends RequestWithCallId>(message: WithoutCallId<T>): Promise<unknown> {
-    const callId = this.nextCallId++;
-    const request = {
-      ...message,
-      callId,
-    } as T;
-
-    return new Promise<unknown>((resolve, reject) => {
-      this.pendingCalls.set(callId, { resolve, reject });
-      this.postWorkerMessage(request);
-    });
-  }
-
-  private callWorkerWithAbort<T extends RequestWithCallId>(
+  private callWorker<T extends RequestWithCallId>(
     message: WithoutCallId<T>,
-    options: {
-      signal?: AbortSignal;
-      onProgress?: ModelLoadOptions['onProgress'];
-      onToken?: QueryOptions['onToken'] | ChatOptions['onToken'];
-    }
+    options: WorkerCallOptions = {}
   ): Promise<unknown> {
     if (options.signal?.aborted) {
-      throw new DOMException('Operation aborted.', 'AbortError');
+      throw createAbortError('Operation aborted.');
     }
 
     const callId = this.nextCallId++;
@@ -288,38 +295,40 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       callId,
     } as T;
 
-    const abortListener =
-      options.signal == null
-        ? null
-        : () => {
-            this.postWorkerMessage({
-              kind: 'cancel',
-              targetCallId: callId,
-            });
-          };
-
-    if (abortListener != null) {
-      options.signal?.addEventListener('abort', abortListener, { once: true });
+    let cleanup = (): void => {};
+    if (options.signal != null) {
+      const abortListener = () => {
+        this.postWorkerMessage({
+          kind: 'cancel',
+          targetCallId: callId,
+        });
+      };
+      options.signal.addEventListener('abort', abortListener, { once: true });
+      cleanup = () => {
+        options.signal?.removeEventListener('abort', abortListener);
+      };
     }
 
     return new Promise<unknown>((resolve, reject) => {
       this.pendingCalls.set(callId, {
         resolve: (value) => {
-          if (abortListener != null) {
-            options.signal?.removeEventListener('abort', abortListener);
-          }
+          cleanup();
           resolve(value);
         },
         reject: (error) => {
-          if (abortListener != null) {
-            options.signal?.removeEventListener('abort', abortListener);
-          }
+          cleanup();
           reject(error);
         },
         onProgress: options.onProgress,
         onToken: options.onToken,
       });
-      this.postWorkerMessage(request);
+      try {
+        this.postWorkerMessage(request);
+      } catch (error) {
+        cleanup();
+        this.pendingCalls.delete(callId);
+        reject(error);
+      }
     });
   }
 

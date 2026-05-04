@@ -203,12 +203,9 @@ export class QueryError extends Error {
   public readonly code: QueryErrorCode;
 
   constructor(code: QueryErrorCode, message: string, options?: { cause?: unknown }) {
-    super(message);
+    super(message, options);
     this.name = 'QueryError';
     this.code = code;
-    if (options != null && 'cause' in Error.prototype) {
-      (this as Error & { cause?: unknown }).cause = options.cause;
-    }
   }
 }
 
@@ -231,8 +228,7 @@ export type ModelPairingReasonCode =
   | 'BASE_NOT_VISION'
   | 'NO_MATCH'
   | 'MULTIPLE_MATCHES'
-  | 'MISSING_METADATA'
-  | 'INCOMPATIBLE_PROJECTOR';
+  | 'MISSING_METADATA';
 
 export interface ModelPairingState {
   state: 'resolved' | 'unresolved';

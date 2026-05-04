@@ -1,8 +1,6 @@
 import { FileSystemStorage } from '../storage/file-system-storage.js';
 import {
   QueryError,
-  type AssetRecord,
-  type ModelEntry,
   type RegistryManifest,
 } from './model-types.js';
 
@@ -60,19 +58,12 @@ export class ModelRegistryStore {
   ): Promise<RegistryManifest> {
     return this.withLock(async () => {
       await this.ensureInitialized();
-      const manifest = this.getManifest();
+      const manifest = this.clone(this.getManifest());
       await update(manifest);
-      await this.writeManifest();
+      await this.writeManifest(manifest);
+      this.manifest = manifest;
       return this.clone(manifest);
     });
-  }
-
-  public findModel(manifest: RegistryManifest, id: string): ModelEntry | null {
-    return manifest.models[id] ?? null;
-  }
-
-  public findAsset(manifest: RegistryManifest, id: string): AssetRecord | null {
-    return manifest.assets[id] ?? null;
   }
 
   private async ensureInitialized(): Promise<void> {
@@ -83,9 +74,12 @@ export class ModelRegistryStore {
     if (this.initPromise == null) {
       this.initPromise = (async () => {
         const text = await this.storage.readText(REGISTRY_FILE_NAME);
-        this.manifest = text == null ? emptyManifest() : parseManifest(text);
         if (text == null) {
-          await this.writeManifest();
+          const manifest = emptyManifest();
+          await this.writeManifest(manifest);
+          this.manifest = manifest;
+        } else {
+          this.manifest = parseManifest(text);
         }
       })().finally(() => {
         this.initPromise = null;
@@ -110,8 +104,8 @@ export class ModelRegistryStore {
     return this.manifest;
   }
 
-  private async writeManifest(): Promise<void> {
-    await this.storage.writeText(REGISTRY_FILE_NAME, JSON.stringify(this.getManifest(), null, 2));
+  private async writeManifest(manifest: RegistryManifest = this.getManifest()): Promise<void> {
+    await this.storage.writeText(REGISTRY_FILE_NAME, JSON.stringify(manifest, null, 2));
   }
 
   private clone(manifest: RegistryManifest): RegistryManifest {

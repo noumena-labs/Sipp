@@ -1,6 +1,5 @@
 import { CogentConfig, EngineModuleOptions } from '../cogent-config.js';
 import { normalizeInitConfig } from '../core/init-config.js';
-import { normalizePromptText } from '../core/prompt-format.js';
 import {
   BackendObservability,
   EngineExecutionMode,
@@ -36,31 +35,15 @@ import { asErrorMessage } from '../utils/error.js';
 import { QueuedRequestScheduler } from './scheduler.js';
 import { resolveRuntimeUrls } from '../runtime-assets.js';
 
-function resolveRuntimeLocationHref(): string | null {
-  const runtimeLocation = globalThis.location;
-  return typeof runtimeLocation?.href === 'string' ? runtimeLocation.href : null;
-}
-
-function resolveRuntimeLocationOrigin(): string | null {
-  const runtimeLocation = globalThis.location;
-  if (typeof runtimeLocation?.origin === 'string') {
-    return runtimeLocation.origin;
-  }
-  const href = resolveRuntimeLocationHref();
-  if (href == null) {
-    return null;
-  }
-  try {
-    return new URL(href).origin;
-  } catch {
-    return null;
-  }
+function normalizePromptText(value: string): string {
+  return value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 }
 
 export class MainThreadEngineRuntime implements EngineRuntime {
   private module: EngineModule | null = null;
   private wasmBridge: WasmBridge | null = null;
   private initPromise: Promise<void> | null = null;
+  private moduleGeneration = 0;
   private engineInitialized = false;
   private cachedMediaMarker: string | null = null;
   private cachedChatTemplate: string | null = null;
@@ -169,12 +152,10 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   }
 
   private buildGenerateRequest(
-    bridge: WasmBridge,
     contextKey: string,
     promptText: string,
     options: number | PromptOptions
   ): GenerateRequest {
-    void bridge;
     const media = this.resolvePromptMedia(options);
     const normalizedPromptText = normalizePromptText(promptText);
     const request: GenerateRequest = {
@@ -218,6 +199,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.queuedPromptCallbacks.delete(requestId);
     this.queuedPromptTokenBuffers.delete(requestId);
     this.queuedPromptCallbackErrors.delete(requestId);
+    this.refreshTokenTransportObservability();
   }
 
   private finalizeRequest(
@@ -246,15 +228,23 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return bridge.consumeCompletedResponseIfPresent(requestId);
   }
 
-  private shouldUseNativeRuntimeEvents(
+  private updateTokenTransportObservability(
     onToken: ((token: string) => void) | undefined
   ): void {
     if (onToken == null) {
-      this.transportObservability.activeTokenTransport = 'none';
+      this.refreshTokenTransportObservability();
       return;
     }
 
     this.transportObservability.activeTokenTransport = 'runtime-events';
+  }
+
+  private refreshTokenTransportObservability(): void {
+    this.transportObservability.activeTokenTransport = Array.from(
+      this.queuedPromptCallbacks.values()
+    ).some((callback) => callback != null)
+      ? 'runtime-events'
+      : 'none';
   }
 
   private rejectAllTrackedRequests(error: unknown, _bridge: WasmBridge | null = null): void {
@@ -318,6 +308,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       return;
     }
     if (!this.initPromise) {
+      const generation = this.moduleGeneration;
       this.initPromise = (async () => {
         const { moduleUrl, wasmUrl } = resolveRuntimeUrls(this.config);
         const createModule = await this.importModuleFactory(moduleUrl);
@@ -334,12 +325,19 @@ export class MainThreadEngineRuntime implements EngineRuntime {
           return prefix ? `${prefix}${path}` : path;
         };
 
-        this.module = await createModule(moduleConfig);
-        this.wasmBridge = new WasmBridge(this.module);
+        const module = await createModule(moduleConfig);
+        if (generation !== this.moduleGeneration) {
+          new WasmBridge(module).close();
+          throw createAbortError('Module initialization was cancelled.');
+        }
+        this.module = module;
+        this.wasmBridge = new WasmBridge(module);
       })().catch((error) => {
-        this.initPromise = null;
-        this.module = null;
-        this.wasmBridge = null;
+        if (generation === this.moduleGeneration) {
+          this.initPromise = null;
+          this.module = null;
+          this.wasmBridge = null;
+        }
         throw error;
       });
     }
@@ -393,31 +391,30 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       normalizedConfig.enableRuntimeObservability > 0;
     this.backendProfilingEnabled = normalizedConfig.enableBackendProfiling > 0;
     this.transportObservability.enabled = this.runtimeObservabilityEnabled;
-    const result = await bridge.loadRuntimeModel(modelPath, normalizedConfig);
-    if (result !== 0) {
-      this.engineInitialized = false;
-      this.resetRuntimeLifecycleState(
-        new Error(`Engine runtime failed to initialize. Code: ${result}`)
-      );
-      throw new Error(`Failed to initialize engine. Code: ${result}`);
-    }
-    this.engineInitialized = true;
-    this.cachedMediaMarker = bridge.readMediaMarker();
-    this.cachedChatTemplate = bridge.readNativeChatTemplate();
-    this.cachedBosText = bridge.getBosText();
-    this.cachedEosText = bridge.getEosText();
-    if (expectsMediaSupport && this.cachedMediaMarker == null) {
-      const error = new Error(
-        'Failed to initialize multimodal runtime: loaded projector did not expose a media marker.'
-      );
-      bridge.close();
+    try {
+      const result = await bridge.loadRuntimeModel(modelPath, normalizedConfig);
+      if (result !== 0) {
+        throw new Error(`Failed to initialize engine. Code: ${result}`);
+      }
+      this.engineInitialized = true;
+      this.cachedMediaMarker = bridge.readMediaMarker();
+      this.cachedChatTemplate = bridge.readNativeChatTemplate();
+      this.cachedBosText = bridge.getBosText();
+      this.cachedEosText = bridge.getEosText();
+      if (expectsMediaSupport && this.cachedMediaMarker == null) {
+        const error = new Error(
+          'Failed to initialize multimodal runtime: loaded projector did not expose a media marker.'
+        );
+        bridge.close();
+        throw error;
+      }
+    } catch (error) {
       this.engineInitialized = false;
       this.resetRuntimeLifecycleState(error);
-      this.modelLoader.cleanupAfterClose(module);
       throw error;
+    } finally {
+      this.modelLoader.cleanup(module);
     }
-
-    this.modelLoader.cleanupAfterEngineInit(module);
   }
 
   private hasExplicitProjectorPath(config: InferenceInitConfig | undefined): boolean {
@@ -431,14 +428,20 @@ export class MainThreadEngineRuntime implements EngineRuntime {
    * Shutdown engine instance.
    */
   public close(): void {
+    this.moduleGeneration += 1;
     const module = this.module;
+    this.initPromise = null;
     if (!module) {
+      this.engineInitialized = false;
+      this.resetRuntimeLifecycleState(new Error('Engine runtime was closed.'));
+      this.module = null;
+      this.wasmBridge = null;
       return;
     }
     const bridge = this.wasmBridge ?? new WasmBridge(module);
     this.rejectAllTrackedRequests(new Error('Engine runtime was closed.'), bridge);
     bridge.close();
-    this.modelLoader.cleanupAfterClose(module);
+    this.modelLoader.cleanup(module);
     this.engineInitialized = false;
     this.resetRuntimeLifecycleState();
     this.module = null;
@@ -447,10 +450,10 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   }
 
   public async cancelQuery(requestId: GenerateRequestId): Promise<boolean> {
-    const bridge = this.getReadyEngineBridge();
     if (!Number.isInteger(requestId) || requestId <= 0) {
       return false;
     }
+    const bridge = this.getReadyEngineBridge();
 
     const cancelled = await bridge.cancelQuery(requestId);
     if (!cancelled) {
@@ -480,7 +483,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     options: number | PromptOptions = 128
   ): Promise<GenerateRequestId> {
     const bridge = this.getReadyEngineBridge();
-    const request = this.buildGenerateRequest(bridge, contextKey, promptText, options);
+    const request = this.buildGenerateRequest(contextKey, promptText, options);
     const onToken = typeof options === 'object' ? options.onToken : undefined;
     const signal = typeof options === 'object' ? options.signal : undefined;
 
@@ -488,7 +491,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       throw createAbortError('Prompt was aborted before it was enqueued.');
     }
 
-    this.shouldUseNativeRuntimeEvents(onToken);
+    this.updateTokenTransportObservability(onToken);
 
     let requestId: GenerateRequestId = 0;
 
@@ -550,10 +553,10 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     requestId: GenerateRequestId,
     options?: { signal?: AbortSignal }
   ): Promise<GenerateResponse> {
-    this.getReadyEngineBridge();
     if (!Number.isInteger(requestId) || requestId <= 0) {
       throw new Error('requestId must be a positive integer.');
     }
+    this.getReadyEngineBridge();
     if (options?.signal?.aborted) {
       await this.cancelQuery(requestId);
       throw createAbortError('Prompt was aborted before execution started.');
@@ -561,15 +564,12 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
     const tracked = this.ensureTracked(requestId);
     const signal = options?.signal;
-    const abortListener =
+    const detachAbort =
       signal == null
-        ? null
-        : () => {
-          void this.cancelQuery(requestId);
-        };
-    if (abortListener != null) {
-      signal?.addEventListener('abort', abortListener, { once: true });
-    }
+        ? () => {}
+        : this.tracker.attachSignal(requestId, signal, () => {
+            void this.cancelQuery(requestId);
+          });
 
     tracked.consumed = true;
     tracked.waiterCount += 1;
@@ -584,9 +584,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       }
       return response;
     } finally {
-      if (abortListener != null) {
-        signal?.removeEventListener('abort', abortListener);
-      }
+      detachAbort();
       tracked.waiterCount = Math.max(0, tracked.waiterCount - 1);
       this.tracker.cleanupIfConsumed(requestId);
     }

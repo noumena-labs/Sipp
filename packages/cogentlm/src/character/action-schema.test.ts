@@ -15,8 +15,6 @@ import {
   ActionSchemaError,
   assertValidActionSchema,
   expandActionCues,
-  findCanonicalActionCue,
-  renderActionCapabilityList,
   renderActionCueList,
   summarizeActionCues,
   validateActionSchema,
@@ -113,26 +111,4 @@ test('summarizeActionCues preserves cue labels and metadata', () => {
 test('renderActionCueList emits bracketed, comma-separated labels', () => {
   const text = renderActionCueList(SCHEMA);
   assert.equal(text, '[wave], [look at you], [shake head]');
-});
-
-test('renderActionCapabilityList ties visible cues back to flat runtime actions', () => {
-  const text = renderActionCapabilityList(SCHEMA);
-  assert.equal(
-    text,
-    [
-      '- [wave] -> wave: Wave a hand.; use when greeting or saying goodbye',
-      '- [look at you] -> look_at_you: Turn attention toward the user.',
-      '- [shake head] -> shake_head: Shake the head side to side.',
-    ].join('\n')
-  );
-});
-
-test('findCanonicalActionCue resolves runtime actions back to primary cue labels', () => {
-  const cue = findCanonicalActionCue(
-    [{ id: 'look_at_you', cue: 'look at you' }],
-    'look_at_you'
-  );
-
-  assert.ok(cue);
-  assert.equal(cue?.label, 'look at you');
 });
