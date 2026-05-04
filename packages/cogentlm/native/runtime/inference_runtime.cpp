@@ -1446,31 +1446,16 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     last_runtime_observability_.decode_eval_count += plan.decode_token_count;
     last_runtime_observability_.sample_count +=
         static_cast<int32_t>(logits_contributions.size());
-    last_runtime_observability_.output_token_count = 0;
+    last_runtime_observability_.output_token_count +=
+        static_cast<int32_t>(logits_contributions.size());
     last_runtime_observability_.first_sampled_token_id = -1;
-    last_runtime_observability_.lcp_reuse_tokens = 0;
-    last_runtime_observability_.prefix_cache_restore_tokens = 0;
-    last_runtime_observability_.prefix_cache_hit_count = 0;
-    last_runtime_observability_.prefix_cache_store_count = 0;
     for (SlotState *slot : scratch_live_runnable_slots_) {
       if (slot != nullptr && slot->request != nullptr) {
-        last_runtime_observability_.output_token_count +=
-            slot->request->emitted_token_count;
         if (last_runtime_observability_.first_sampled_token_id < 0 &&
             slot->request->first_sampled_token_id >= 0) {
           last_runtime_observability_.first_sampled_token_id =
               slot->request->first_sampled_token_id;
         }
-      }
-      if (slot != nullptr && slot->request != nullptr) {
-        last_runtime_observability_.lcp_reuse_tokens +=
-            slot->request->lcp_reuse_tokens;
-        last_runtime_observability_.prefix_cache_restore_tokens +=
-            slot->request->prefix_cache_restore_tokens;
-        last_runtime_observability_.prefix_cache_hit_count +=
-            slot->request->prefix_cache_hit_count;
-        last_runtime_observability_.prefix_cache_store_count +=
-            slot->request->prefix_cache_store_count;
       }
     }
     last_runtime_observability_.sample_ms += tick_sample_ms;
@@ -1593,31 +1578,21 @@ void InferenceRuntime::CommitCompletedObservabilityLocked(
     return;
   }
 
-  const RuntimeObservabilityMetrics accumulated_runtime_observability =
-      last_runtime_observability_;
-  last_runtime_observability_ = response.runtime_observability;
-  last_runtime_observability_.total_ms =
-      accumulated_runtime_observability.total_ms > 0.0
-          ? accumulated_runtime_observability.total_ms
-          : std::max(response.runtime_observability.total_ms,
-                     response.runtime_observability.e2e_ms);
-  last_runtime_observability_.prompt_eval_ms =
-      accumulated_runtime_observability.prompt_eval_ms;
-  last_runtime_observability_.decode_eval_ms =
-      accumulated_runtime_observability.decode_eval_ms;
-  last_runtime_observability_.sample_ms =
-      accumulated_runtime_observability.sample_ms;
-  last_runtime_observability_.prompt_eval_tokens =
-      accumulated_runtime_observability.prompt_eval_tokens;
-  last_runtime_observability_.decode_eval_count =
-      std::max(last_runtime_observability_.decode_eval_count,
-               accumulated_runtime_observability.decode_eval_count);
-  last_runtime_observability_.sample_count =
-      std::max(last_runtime_observability_.sample_count,
-               accumulated_runtime_observability.sample_count);
-  last_runtime_observability_.output_token_count =
-      std::max(last_runtime_observability_.output_token_count,
-               accumulated_runtime_observability.output_token_count);
+  const RuntimeObservabilityMetrics request_metrics =
+      response.runtime_observability;
+  last_runtime_observability_.queue_delay_ms = request_metrics.queue_delay_ms;
+  last_runtime_observability_.ttft_ms = request_metrics.ttft_ms;
+  last_runtime_observability_.mean_itl_ms = request_metrics.mean_itl_ms;
+  last_runtime_observability_.tail_itl_ms = request_metrics.tail_itl_ms;
+
+  // Accumulate event-based counters that are not tracked in the tick loop.
+  last_runtime_observability_.prefix_cache_hit_count +=
+      request_metrics.prefix_cache_hit_count;
+  last_runtime_observability_.prefix_cache_store_count +=
+      request_metrics.prefix_cache_store_count;
+  last_runtime_observability_.lcp_reuse_tokens += request_metrics.lcp_reuse_tokens;
+  last_runtime_observability_.prefix_cache_restore_tokens +=
+      request_metrics.prefix_cache_restore_tokens;
   has_last_runtime_observability_ = true;
 
   scheduler_observability_.accumulated_queue_delay_ms +=
