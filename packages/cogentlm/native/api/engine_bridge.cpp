@@ -29,6 +29,7 @@ constexpr int kCompletedRequestStatusPending = 0;
 constexpr int kCompletedRequestStatusCompleted = 1;
 constexpr int kCompletedRequestStatusCancelled = 2;
 constexpr int kCompletedRequestStatusFailed = 3;
+constexpr int kCompletedRequestStatusUnknown = 4;
 constexpr int kMaxPredictionTokens = 2048;
 
 std::mutex g_engineMutex;
@@ -437,12 +438,17 @@ int CE_RunSchedulerBurstWithDeadline(int32_t max_ticks,
 }
 
 int CE_GetCompletedRequestStatus(CE_RequestId request_id) {
+  auto runtime = acquire_engine_runtime();
+  if (!runtime || request_id == 0) {
+    return kCompletedRequestStatusUnknown;
+  }
   noumena::cogentengine::GenerateResponse response{};
-  if (!try_get_completed_response(request_id, response)) {
-    return kCompletedRequestStatusPending;
+  if (runtime->TryPeekCompletedResponse(request_id, response)) {
+    return completed_status_to_code(response.status);
   }
 
-  return completed_status_to_code(response.status);
+  return runtime->HasRequest(request_id) ? kCompletedRequestStatusPending
+                                         : kCompletedRequestStatusUnknown;
 }
 
 int CE_DrainRuntimeEvents(CE_RuntimeEvent *event_buffer, int32_t event_capacity,

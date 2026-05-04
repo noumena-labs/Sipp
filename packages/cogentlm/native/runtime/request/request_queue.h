@@ -41,6 +41,7 @@ public:
   TryPopNextAdmissible(const std::function<bool(const GenerateRequest &)> &predicate);
   GenerateRequest *FindMutable(GenerateRequestId request_id);
   const GenerateRequest *Find(GenerateRequestId request_id) const;
+  bool Contains(GenerateRequestId request_id) const;
   bool Cancel(GenerateRequestId request_id, std::string error_message);
   void MarkCompleted(GenerateResponse response);
   const GenerateResponse *PeekCompletedResponse(GenerateRequestId request_id) const;

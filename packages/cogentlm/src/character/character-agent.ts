@@ -163,6 +163,16 @@ export class CharacterRuntime {
     ];
 
     const abort = createTimedAbortController(options.signal, options.timeoutMs);
+    if (abort.signal.aborted) {
+      const status = abort.timedOut() ? 'timed_out' : 'aborted';
+      abort.dispose();
+      return {
+        selection: null,
+        status,
+        errorMessage: status === 'timed_out' ? 'Choice timed out.' : 'Choice aborted.',
+        rawText: '',
+      };
+    }
     const chatOptions: ChatOptions = {
       session: `${this.contextKey}:choose`,
       maxTokens: options.maxOutputTokens ?? 24,
@@ -184,6 +194,15 @@ export class CharacterRuntime {
         ...chatOptions,
         grammar,
       });
+      if (abort.signal.aborted) {
+        const status = abort.timedOut() ? 'timed_out' : 'aborted';
+        return {
+          selection: null,
+          status,
+          errorMessage: status === 'timed_out' ? 'Choice timed out.' : 'Choice aborted.',
+          rawText: '',
+        };
+      }
       const selection = parseChoiceOutput(rawText, options.choices);
       if (selection == null) {
         logChoiceQuery({
@@ -285,7 +304,10 @@ export class CharacterRuntime {
     if (previousTurn) {
       previousTurn.controller.abort();
       try {
-        await previousTurn.done;
+        await Promise.race([
+          previousTurn.done,
+          new Promise<void>((resolve) => setTimeout(resolve, 1000)),
+        ]);
       } catch {
         // A prior turn already surfaced its own terminal event.
       }
@@ -396,9 +418,13 @@ export class CharacterRuntime {
         ...queryOptions,
         grammar: this.grammarSource,
       });
-      const unseenOutputSuffix = sliceUnstreamedSuffix(streamedOutputText, rawText);
-      if (unseenOutputSuffix.length > 0) {
-        consumeOutputText(unseenOutputSuffix);
+      if (signal.aborted) {
+        status = 'aborted';
+      } else {
+        const unseenOutputSuffix = sliceUnstreamedSuffix(streamedOutputText, rawText);
+        if (unseenOutputSuffix.length > 0) {
+          consumeOutputText(unseenOutputSuffix);
+        }
       }
     } catch (error) {
       status = signal.aborted ? 'aborted' : 'failed';

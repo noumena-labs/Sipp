@@ -1,3 +1,5 @@
+import { createAbortError } from '../utils/abort.js';
+
 /**
  * FileSystemStorage provides an abstraction for the Origin Private File System (OPFS),
  * allowing large assets to be streamed directly to browser-managed persistent storage.
@@ -68,9 +70,6 @@ export class FileSystemStorage {
       try {
         await writable.abort();
       } catch {}
-      try {
-        await root.removeEntry(fileName);
-      } catch {}
       throw error;
     }
   }
@@ -84,6 +83,10 @@ export class FileSystemStorage {
     onProgress?: (bytes: number) => void,
     signal?: AbortSignal
   ): Promise<File> {
+    if (signal?.aborted) {
+      throw createAbortError('File write aborted.');
+    }
+
     const root = await this.ensureRoot();
     const handle = await root.getFileHandle(fileName, { create: true });
 
@@ -91,13 +94,6 @@ export class FileSystemStorage {
     // In some browsers (Firefox), this might be behind a flag or limited.
     // Use the modern piping API if possible.
     const writable = await handle.createWritable();
-    const abortListener =
-      signal == null
-        ? null
-        : () => {
-            void writable.abort();
-          };
-    
     try {
       let bytesWritten = 0;
       const progressTransformer = new TransformStream({
@@ -108,11 +104,7 @@ export class FileSystemStorage {
         }
       });
 
-      if (abortListener != null) {
-        signal?.addEventListener('abort', abortListener, { once: true });
-      }
-
-      await stream.pipeThrough(progressTransformer).pipeTo(writable);
+      await stream.pipeThrough(progressTransformer).pipeTo(writable, { signal });
       return await handle.getFile();
     } catch (e) {
       // Cleanup on failure
@@ -121,10 +113,6 @@ export class FileSystemStorage {
         await root.removeEntry(fileName);
       } catch {}
       throw e;
-    } finally {
-      if (abortListener != null) {
-        signal?.removeEventListener('abort', abortListener);
-      }
     }
   }
 

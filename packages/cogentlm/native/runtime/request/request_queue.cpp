@@ -114,6 +114,10 @@ const GenerateRequest *RequestQueue::Find(GenerateRequestId request_id) const {
   return it == requests_.end() ? nullptr : &it->second;
 }
 
+bool RequestQueue::Contains(GenerateRequestId request_id) const {
+  return requests_.contains(request_id);
+}
+
 bool RequestQueue::Cancel(GenerateRequestId request_id, std::string error_message) {
   GenerateRequest *request = FindMutable(request_id);
   if (request == nullptr) {
@@ -193,11 +197,6 @@ std::vector<RuntimeEvent> RequestQueue::DrainRuntimeEvents(std::size_t max_count
   std::size_t used_text_bytes = 0;
   while (!runtime_events_.empty() && events.size() < drain_limit) {
     RuntimeEvent &event = runtime_events_.front();
-    if (event.kind == RuntimeEventKind::Terminal &&
-        !completed_responses_.contains(event.request_id)) {
-      runtime_events_.pop_front();
-      continue;
-    }
 
     const std::size_t required_text_bytes =
         event.kind == RuntimeEventKind::Token ? event.text.size() + 1 : 0;

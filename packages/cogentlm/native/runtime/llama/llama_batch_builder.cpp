@@ -41,32 +41,13 @@ void LlamaBatchBuilder::Reset() {
   llama_utils::BatchClear(batch_);
 }
 
-bool LlamaBatchBuilder::AddPrefillToken(llama_token token, int32_t position,
-                                        llama_seq_id seq_id,
-                                        bool request_logits) {
+bool LlamaBatchBuilder::AddToken(llama_token token, int32_t position,
+                                 llama_seq_id seq_id,
+                                 bool request_logits) {
   if (!is_allocated_ || batch_.n_tokens >= capacity_tokens_) {
     return false;
   }
 
-  // Phase 3 note:
-  // - This helper is intentionally small and concrete.
-  // - The higher-level dense-prefill packing policy belongs in BatchPlanner.
-  llama_utils::BatchAdd(batch_, token, position, seq_id, request_logits);
-  return true;
-}
-
-bool LlamaBatchBuilder::AddDecodeToken(llama_token token, int32_t position,
-                                       llama_seq_id seq_id,
-                                       bool request_logits) {
-  if (!is_allocated_ || batch_.n_tokens >= capacity_tokens_) {
-    return false;
-  }
-
-  // Phase 3 note:
-  // - Decode adds exactly one token contribution for a decode-ready slot per
-  //   shared-batch tick.
-  // - Sampler choice and slot-selection policy are owned by the runtime and
-  //   scheduler, not by this builder.
   llama_utils::BatchAdd(batch_, token, position, seq_id, request_logits);
   return true;
 }

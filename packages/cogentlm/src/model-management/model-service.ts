@@ -689,9 +689,13 @@ export class ModelService implements ModelLifecycleService {
     const record = await this.assetStore.installFile({
       kind,
       file,
+      signal: options.signal,
       onProgress: options.onProgress,
     });
     const existing = manifest.assets[record.id];
+    if (existing != null && existing.storagePath !== record.storagePath) {
+      await this.assetStore.delete(record);
+    }
     return {
       record: existing ?? record,
       file: await this.assetStore.getFile(existing ?? record),
@@ -985,7 +989,7 @@ export class ModelService implements ModelLifecycleService {
     const compatible = new Set(compatibleVisionProjectorTypes);
     const matches: string[] = [];
     for (const asset of Object.values(manifest.assets)) {
-      if (asset.kind !== 'projector') {
+      if (asset.kind !== 'projector' || asset.refCount <= 0) {
         continue;
       }
       const inspected = await this.ensureProjectorInspection(asset, signal);
@@ -1216,14 +1220,12 @@ export class ModelService implements ModelLifecycleService {
     const staged = await this.runtime.stageModelBundle(descriptor, {
       signal: options.signal,
     });
-    if (
+    const switchingCurrent =
       this.current != null &&
       (this.current.id !== entry.id ||
         this.current.assetFingerprint !== entryAssetFingerprint(entry) ||
-        this.current.runtimeFingerprint !== runtimeFingerprint)
-    ) {
-      this.current = null;
-      this.currentSnapshot = null;
+        this.current.runtimeFingerprint !== runtimeFingerprint);
+    if (switchingCurrent) {
       this.observability.update({
         state: 'loading',
         model: null,
@@ -1232,7 +1234,14 @@ export class ModelService implements ModelLifecycleService {
         profile: undefined,
       });
     }
-    await this.runtime.loadRuntimeModel(staged, toRuntimeConfig(options.runtime, observabilityMode));
+    try {
+      await this.runtime.loadRuntimeModel(staged, toRuntimeConfig(options.runtime, observabilityMode));
+    } catch (error) {
+      this.runtime.close();
+      this.current = null;
+      this.currentSnapshot = null;
+      throw error;
+    }
 
     const loadedAt = new Date().toISOString();
     const updated = await this.registry.write((draft) => {

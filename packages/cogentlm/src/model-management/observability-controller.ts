@@ -14,7 +14,12 @@ import type {
   RuntimeObservation,
 } from './model-types.js';
 
-type SnapshotPatch = Partial<Omit<ObservabilitySnapshot, 'updatedAt'>>;
+type SnapshotPatch = Partial<
+  Omit<ObservabilitySnapshot, 'updatedAt' | 'runtime' | 'profile'> & {
+    runtime: RuntimeObservation | null | undefined;
+    profile: BackendProfileObservation | null | undefined;
+  }
+>;
 
 function cloneSnapshot(snapshot: ObservabilitySnapshot): ObservabilitySnapshot {
   return {
@@ -216,15 +221,18 @@ export class ObservabilityController implements EngineObservability {
     this.emit('close', {
       state: 'closed',
       model: null,
+      query: null,
+      runtime: null,
+      profile: null,
     });
   }
 
   private buildSnapshot(patch: SnapshotPatch): ObservabilitySnapshot {
-    const next: ObservabilitySnapshot = {
+    const next = {
       ...this.snapshot,
       ...patch,
       updatedAt: new Date().toISOString(),
-    };
+    } as ObservabilitySnapshot;
     if ('runtime' in patch && patch.runtime == null) {
       delete next.runtime;
     }

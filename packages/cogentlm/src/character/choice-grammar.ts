@@ -9,6 +9,7 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import { literalAlternation } from '../core/grammar-fragments.js';
+import { assertGrammarByteSize } from '../utils/grammar.js';
 
 export class ChoiceGrammarError extends Error {
   public constructor(message: string) {
@@ -19,7 +20,9 @@ export class ChoiceGrammarError extends Error {
 
 export function compileChoiceGrammar(choices: readonly string[]): string {
   const normalized = normalizeChoices(choices);
-  return `root ::= ${literalAlternation(normalized)}\n`;
+  const grammar = `root ::= ${literalAlternation(normalized)}\n`;
+  assertGrammarByteSize(grammar, { label: 'choice grammar' });
+  return grammar;
 }
 
 export function parseChoiceOutput(raw: string, choices: readonly string[]): string | null {

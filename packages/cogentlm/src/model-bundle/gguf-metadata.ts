@@ -1,3 +1,5 @@
+import { createAbortError } from '../utils/abort.js';
+
 const GGUF_MAGIC = 0x46554747;
 const GGUF_SUPPORTED_VERSIONS = new Set([2, 3]);
 const DEFAULT_INITIAL_PREFIX_BYTES = 64 * 1024;
@@ -384,6 +386,6 @@ function asBooleanValue(value: GgufMetadataValue | undefined): boolean | null {
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
-    throw new Error('GGUF metadata inspection was aborted.');
+    throw createAbortError('GGUF metadata inspection was aborted.');
   }
 }

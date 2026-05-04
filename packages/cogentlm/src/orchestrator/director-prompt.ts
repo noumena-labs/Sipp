@@ -233,6 +233,10 @@ function resolveInputKind(
   value: DirectorInputValue,
   configuredKind: DirectorInputKind
 ): DirectorInputKind {
+  if (configuredKind === 'data') {
+    const envelope = normalizeInputEnvelope(value, configuredKind);
+    return envelope?.kind ?? 'data';
+  }
   const envelope = normalizeInputEnvelope(value);
   if (envelope) {
     return envelope.kind;
@@ -248,7 +252,7 @@ function renderInput(
   media: Uint8Array[],
   mediaMarker: string | null
 ): string {
-  const envelope = normalizeInputEnvelope(input.value);
+  const envelope = normalizeInputEnvelope(input.value, input.configuredKind);
   if (envelope?.kind === 'text') {
     return envelope.text.trim();
   }
@@ -270,19 +274,20 @@ function renderInput(
 }
 
 function normalizeInputEnvelope(
-  value: DirectorInputValue | undefined
+  value: DirectorInputValue | undefined,
+  configuredKind?: DirectorInputKind
 ): { kind: 'text'; text: string } | { kind: 'data'; value: JsonValue } | { kind: 'image'; media: Uint8Array; description?: string } | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return null;
   }
   const record = value as Record<string, unknown>;
-  if (record.kind === 'text' && typeof record.text === 'string') {
+  if (record.kind === 'text' && configuredKind !== 'data' && typeof record.text === 'string') {
     return { kind: 'text', text: record.text };
   }
   if (record.kind === 'data' && 'value' in record) {
     return { kind: 'data', value: record.value as JsonValue };
   }
-  if (record.kind === 'image' && record.media instanceof Uint8Array) {
+  if (record.kind === 'image' && configuredKind !== 'data' && record.media instanceof Uint8Array) {
     return {
       kind: 'image',
       media: record.media,

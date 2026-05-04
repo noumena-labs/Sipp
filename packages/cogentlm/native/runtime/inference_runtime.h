@@ -87,6 +87,7 @@ public:
                                                int32_t max_text_bytes);
   bool TryPeekCompletedResponse(GenerateRequestId request_id,
                                 GenerateResponse &out_response) const;
+  bool HasRequest(GenerateRequestId request_id) const;
   bool ConsumeCompletedResponse(GenerateRequestId request_id);
   const char *GetMediaMarker() const;
   const char *GetChatTemplate() const;

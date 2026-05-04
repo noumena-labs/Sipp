@@ -16,6 +16,7 @@ import {
   COMPLETED_REQUEST_STATUS_COMPLETED,
   COMPLETED_REQUEST_STATUS_FAILED,
   COMPLETED_REQUEST_STATUS_PENDING,
+  COMPLETED_REQUEST_STATUS_UNKNOWN,
   RUNTIME_EVENT_DRAIN_RESULT_SIZE_BYTES,
   RUNTIME_EVENT_KIND_TERMINAL,
   RUNTIME_EVENT_KIND_TOKEN,
@@ -103,11 +104,6 @@ export class WasmBridge {
       );
     }
     return Math.floor(n / bytesPerElement);
-  }
-
-
-  public getModule(): EngineModule {
-    return this.module;
   }
 
   public callNumber(
@@ -440,6 +436,9 @@ export class WasmBridge {
 
   public consumeCompletedResponseIfPresent(requestId: GenerateRequestId): boolean {
     const status = this.getCompletedRequestStatus(requestId);
+    if (status === COMPLETED_REQUEST_STATUS_UNKNOWN) {
+      return false;
+    }
     if (status === COMPLETED_REQUEST_STATUS_PENDING) {
       return false;
     }
@@ -483,6 +482,9 @@ export class WasmBridge {
     const status = this.getCompletedRequestStatus(requestId);
     if (status === COMPLETED_REQUEST_STATUS_PENDING) {
       throw new Error('Queued request reached a terminal step without a completed response.');
+    }
+    if (status === COMPLETED_REQUEST_STATUS_UNKNOWN) {
+      throw new Error('Queued request response is no longer available.');
     }
 
     const outputText = this.copyCompletedRequestText(
@@ -609,6 +611,7 @@ export class WasmBridge {
   }
 
   public releaseReusableBuffers(): void {
+    this.tokenDecoders.clear();
     if (this.reusableBurstResultPtr !== 0) {
       this.free(this.reusableBurstResultPtr);
       this.reusableBurstResultPtr = 0;
@@ -630,7 +633,14 @@ export class WasmBridge {
   }
 
   private allocate(size: number): number {
-    return Number(this.module._malloc(size));
+    if (!Number.isSafeInteger(size) || size <= 0) {
+      throw new RangeError(`Invalid wasm allocation size: ${size}`);
+    }
+    const ptr = Number(this.module._malloc(size));
+    if (ptr === 0) {
+      throw new Error(`WASM allocation failed for ${size} bytes.`);
+    }
+    return ptr;
   }
 
   private free(ptr: number): void {

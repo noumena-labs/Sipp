@@ -1,4 +1,5 @@
 import type { CogentConfig } from '../cogent-config.js';
+import { resolveRuntimeUrls } from '../runtime-assets.js';
 import { resolveOptimizedPackageAssetUrl } from '../runtime/package-assets.js';
 import { ObservabilityController } from '../model-management/observability-controller.js';
 import { createAbortError } from '../utils/abort.js';
@@ -50,9 +51,25 @@ function toWorkerSerializableConfig(config: CogentConfig): WorkerSerializableCog
     );
   }
 
+  if (config.moduleOptions != null && typeof structuredClone === 'function') {
+    try {
+      structuredClone(config.moduleOptions);
+    } catch (error) {
+      throw new Error(
+        'Worker mode only supports structured-cloneable moduleOptions.',
+        { cause: error }
+      );
+    }
+  }
+
+  const runtimeUrls =
+    config.moduleUrl == null && config.wasmUrl == null
+      ? null
+      : resolveRuntimeUrls(config);
+
   return {
-    moduleUrl: config.moduleUrl,
-    wasmUrl: config.wasmUrl,
+    moduleUrl: runtimeUrls?.moduleUrl,
+    wasmUrl: runtimeUrls?.wasmUrl,
     moduleOptions: config.moduleOptions,
     maxModelBytes: config.maxModelBytes,
     trustedOrigins: config.trustedOrigins,

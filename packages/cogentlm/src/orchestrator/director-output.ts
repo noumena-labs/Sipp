@@ -137,10 +137,24 @@ function validateChoices(
     if (!CHOICE_ID_RE.test(choice.id)) {
       throw new DirectorOutputError(`${path} contains invalid choice id ${JSON.stringify(choice.id)}.`);
     }
+    validateChoiceText(choice.label, `${path}.${choice.id}.label`);
+    validateChoiceText(choice.description, `${path}.${choice.id}.description`);
     if (seen.has(choice.id)) {
       throw new DirectorOutputError(`${path} contains duplicate choice id ${JSON.stringify(choice.id)}.`);
     }
     seen.add(choice.id);
+  }
+}
+
+function validateChoiceText(value: unknown, path: string): void {
+  if (value == null) {
+    return;
+  }
+  if (typeof value !== 'string') {
+    throw new DirectorOutputError(`${path} must be a string when provided.`);
+  }
+  if (/\r|\n/.test(value)) {
+    throw new DirectorOutputError(`${path} must not contain line breaks.`);
   }
 }
 
@@ -249,6 +263,9 @@ function parseSelectMany<TPayload>(
 function assertSelectManyBounds(min: number, max: number | undefined, choiceCount: number): void {
   if (min > choiceCount) {
     throw new DirectorOutputError(`select_many min ${min} exceeds available choice count ${choiceCount}.`);
+  }
+  if (max != null && max < min) {
+    throw new DirectorOutputError(`select_many max ${max} must be greater than or equal to min ${min}.`);
   }
   if (max != null && max > choiceCount) {
     throw new DirectorOutputError(`select_many max ${max} exceeds available choice count ${choiceCount}.`);

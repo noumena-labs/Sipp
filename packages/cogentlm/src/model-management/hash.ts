@@ -133,11 +133,17 @@ export function sha256Text(value: string): string {
   return hash.digest();
 }
 
-export async function sha256Blob(blob: Blob): Promise<string> {
+export async function sha256Blob(blob: Blob, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) {
+    throw new DOMException('Hashing aborted.', 'AbortError');
+  }
   const hash = new Sha256();
   const reader = blob.stream().getReader();
   try {
     while (true) {
+      if (signal?.aborted) {
+        throw new DOMException('Hashing aborted.', 'AbortError');
+      }
       const { done, value } = await reader.read();
       if (done) {
         break;

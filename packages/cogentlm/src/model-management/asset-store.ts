@@ -18,6 +18,7 @@ export interface InstallAssetInput {
   sourceUrl?: string;
   sourceEtag?: string;
   sourceLastModified?: string;
+  signal?: AbortSignal;
   onProgress?: (progress: ModelLoadProgress) => void;
 }
 
@@ -199,13 +200,13 @@ export class AssetStore {
     this.ensureAvailable();
     const name = normalizeAssetName(input.file.name || 'model.gguf');
     this.emitStoreProgress(input.onProgress, name, 0, input.file.size, 0);
-    const hash = await sha256Blob(input.file);
+    const hash = await sha256Blob(input.file, input.signal);
     const id = `asset-${hash}`;
     const storagePath = `${id}-${name}`;
     const existing = await this.storage.getFile(storagePath);
     if (existing == null || existing.size !== input.file.size) {
       try {
-        await this.storage.streamToDisk(storagePath, input.file.stream());
+        await this.storage.streamToDisk(storagePath, input.file.stream(), undefined, input.signal);
       } catch (error) {
         if (isQuotaExceededError(error)) {
           throw quotaExceededError(name, input.file.size, error);

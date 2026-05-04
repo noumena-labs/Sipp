@@ -501,10 +501,22 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
 
   std::string prompt_text = request.original_prompt;
   const char *media_marker = mtmd_default_marker();
-  if (media_marker != nullptr && media_marker[0] != '\0' &&
-      prompt_text.find(media_marker) == std::string::npos) {
-    for (std::size_t index = 0; index < bitmap_ptrs.size(); ++index) {
-      prompt_text.insert(0, media_marker);
+  if (media_marker != nullptr && media_marker[0] != '\0') {
+    const std::string marker(media_marker);
+    std::size_t marker_count = 0;
+    std::size_t search_pos = 0;
+    while ((search_pos = prompt_text.find(marker, search_pos)) !=
+           std::string::npos) {
+      marker_count++;
+      search_pos += marker.size();
+    }
+    if (marker_count > bitmap_ptrs.size()) {
+      request.multimodal.reset();
+      return false;
+    }
+    while (marker_count < bitmap_ptrs.size()) {
+      prompt_text.insert(0, marker);
+      marker_count++;
     }
   }
 
@@ -1100,14 +1112,9 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       continue;
     }
 
-    const bool added =
-        contribution.kind == BatchContributionKind::Prefill
-            ? shared_batch_builder_.AddPrefillToken(
-                  contribution.token, contribution.position,
-                  contribution.slot->seq_id, contribution.request_logits)
-            : shared_batch_builder_.AddDecodeToken(
-                  contribution.token, contribution.position,
-                  contribution.slot->seq_id, contribution.request_logits);
+    const bool added = shared_batch_builder_.AddToken(
+        contribution.token, contribution.position, contribution.slot->seq_id,
+        contribution.request_logits);
     if (!added) {
       if (contribution.slot != nullptr) {
         contribution.slot->terminal_error_message =
@@ -1815,7 +1822,6 @@ InferenceRuntime::~InferenceRuntime() {
     llama_model_free(primary_model_);
   }
 
-  llama_backend_free();
 }
 
 bool InferenceRuntime::IsReady() const {
@@ -2115,6 +2121,11 @@ bool InferenceRuntime::TryPeekCompletedResponse(
   }
   out_response = *response;
   return true;
+}
+
+bool InferenceRuntime::HasRequest(GenerateRequestId request_id) const {
+  std::lock_guard<std::mutex> lock(operation_mutex_);
+  return request_queue_.Contains(request_id);
 }
 
 bool InferenceRuntime::ConsumeCompletedResponse(GenerateRequestId request_id) {
