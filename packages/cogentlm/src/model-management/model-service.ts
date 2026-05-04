@@ -495,7 +495,7 @@ export class ModelService implements ModelLifecycleService {
     start: number,
     response: GenerateResponse
   ): void {
-    const metrics = response.requestObservability ?? response.runtimeObservability ?? null;
+    const metrics = response.observability ?? null;
     const runtime = toRuntimeObservation(
       metrics ?? this.runtime.getRuntimeObservability(),
       this.runtime.getTransportObservability()
@@ -513,7 +513,7 @@ export class ModelService implements ModelLifecycleService {
     error: unknown,
     response?: GenerateResponse
   ): void {
-    const metrics = response?.requestObservability ?? response?.runtimeObservability ?? null;
+    const metrics = response?.observability ?? null;
     const runtime = toRuntimeObservation(
       metrics ?? this.runtime.getRuntimeObservability(),
       this.runtime.getTransportObservability()
@@ -540,7 +540,7 @@ export class ModelService implements ModelLifecycleService {
     start: number,
     response?: GenerateResponse
   ): QueryObservation {
-    const metrics = response?.requestObservability ?? response?.runtimeObservability ?? null;
+    const metrics = response?.observability ?? null;
     return {
       session,
       status,

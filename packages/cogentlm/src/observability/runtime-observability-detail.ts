@@ -37,16 +37,12 @@ export type DetailedRuntimeObservabilityMetrics =
   DetailedRuntimeAggregateObservabilityMetrics;
 
 export function deriveTokensPerSecond(metrics: {
-  outputTokenCount: number;
-  decodeEvalMs: number;
-  totalMs: number;
+  meanItlMs: number;
 }): number | null {
-  const effectiveMs =
-    metrics.decodeEvalMs > 0 ? metrics.decodeEvalMs : metrics.totalMs;
-  if (effectiveMs <= 0 || metrics.outputTokenCount <= 0) {
+  if (metrics.meanItlMs <= 0) {
     return null;
   }
-  return (metrics.outputTokenCount * 1000) / effectiveMs;
+  return 1000 / metrics.meanItlMs;
 }
 
 export function withDerivedObservabilityMetrics<T extends {
@@ -55,6 +51,7 @@ export function withDerivedObservabilityMetrics<T extends {
   inputTokenCount: number;
   outputTokenCount: number;
   decodeEvalMs: number;
+  meanItlMs: number;
 }>(metrics: T): T & { tokensPerSecond: number | null } {
   return {
     ...metrics,

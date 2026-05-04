@@ -511,8 +511,7 @@ export class WasmBridge {
       cancelled: status === COMPLETED_REQUEST_STATUS_CANCELLED,
       outputText,
       errorMessage: errorText.length > 0 ? errorText : null,
-      requestObservability: runtimeObservability,
-      runtimeObservability,
+      observability: runtimeObservability,
     };
   }
 

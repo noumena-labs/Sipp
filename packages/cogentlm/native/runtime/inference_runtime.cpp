@@ -76,6 +76,11 @@ double proportional_share(double total, int32_t part, int32_t whole) {
   return total * (static_cast<double>(part) / static_cast<double>(whole));
 }
 
+double duration_ms(std::chrono::steady_clock::time_point start,
+                   std::chrono::steady_clock::time_point end) {
+  return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
 uint32_t resolve_sampling_seed(int32_t seed) {
   if (seed < 0) {
     return LLAMA_DEFAULT_SEED;
@@ -1441,34 +1446,56 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     last_runtime_observability_.decode_eval_count += plan.decode_token_count;
     last_runtime_observability_.sample_count +=
         static_cast<int32_t>(logits_contributions.size());
-    last_runtime_observability_.output_token_count = 0;
+    last_runtime_observability_.output_token_count +=
+        static_cast<int32_t>(logits_contributions.size());
     last_runtime_observability_.first_sampled_token_id = -1;
-    last_runtime_observability_.lcp_reuse_tokens = 0;
-    last_runtime_observability_.prefix_cache_restore_tokens = 0;
-    last_runtime_observability_.prefix_cache_hit_count = 0;
-    last_runtime_observability_.prefix_cache_store_count = 0;
     for (SlotState *slot : scratch_live_runnable_slots_) {
       if (slot != nullptr && slot->request != nullptr) {
-        last_runtime_observability_.output_token_count +=
-            slot->request->emitted_token_count;
         if (last_runtime_observability_.first_sampled_token_id < 0 &&
             slot->request->first_sampled_token_id >= 0) {
           last_runtime_observability_.first_sampled_token_id =
               slot->request->first_sampled_token_id;
         }
       }
-      if (slot != nullptr && slot->request != nullptr) {
-        last_runtime_observability_.lcp_reuse_tokens +=
-            slot->request->lcp_reuse_tokens;
-        last_runtime_observability_.prefix_cache_restore_tokens +=
-            slot->request->prefix_cache_restore_tokens;
-        last_runtime_observability_.prefix_cache_hit_count +=
-            slot->request->prefix_cache_hit_count;
-        last_runtime_observability_.prefix_cache_store_count +=
-            slot->request->prefix_cache_store_count;
-      }
     }
     last_runtime_observability_.sample_ms += tick_sample_ms;
+
+    double active_accumulated_itl_ms = 0.0;
+    int32_t active_itl_sample_count = 0;
+    double active_accumulated_ttft_ms = 0.0;
+    int32_t active_ttft_count = 0;
+
+    for (SlotState *slot : scratch_live_runnable_slots_) {
+      if (slot != nullptr && slot->request != nullptr) {
+        if (slot->request->has_first_token_at) {
+          const double ttft = duration_ms(slot->request->enqueued_at,
+                                          slot->request->first_token_at);
+          active_accumulated_ttft_ms += ttft;
+          active_ttft_count++;
+
+          if (slot->request->emitted_token_count > 1) {
+            active_accumulated_itl_ms +=
+                (slot->request->accumulated_itl_ms /
+                 static_cast<double>(slot->request->emitted_token_count - 1));
+            active_itl_sample_count++;
+          }
+        }
+      }
+    }
+
+    if (active_ttft_count > 0) {
+      last_runtime_observability_.ttft_ms =
+          active_accumulated_ttft_ms / active_ttft_count;
+    } else {
+      last_runtime_observability_.ttft_ms = 0.0;
+    }
+
+    if (active_itl_sample_count > 0) {
+      last_runtime_observability_.mean_itl_ms =
+          active_accumulated_itl_ms / active_itl_sample_count;
+    } else {
+      last_runtime_observability_.mean_itl_ms = 0.0;
+    }
 
     UpdateSharedBatchMetricsLocked(plan);
     UpdateSchedulerObservabilityLocked(plan, tick_budget,
@@ -1551,31 +1578,21 @@ void InferenceRuntime::CommitCompletedObservabilityLocked(
     return;
   }
 
-  const RuntimeObservabilityMetrics accumulated_runtime_observability =
-      last_runtime_observability_;
-  last_runtime_observability_ = response.runtime_observability;
-  last_runtime_observability_.total_ms =
-      accumulated_runtime_observability.total_ms > 0.0
-          ? accumulated_runtime_observability.total_ms
-          : std::max(response.runtime_observability.total_ms,
-                     response.runtime_observability.e2e_ms);
-  last_runtime_observability_.prompt_eval_ms =
-      accumulated_runtime_observability.prompt_eval_ms;
-  last_runtime_observability_.decode_eval_ms =
-      accumulated_runtime_observability.decode_eval_ms;
-  last_runtime_observability_.sample_ms =
-      accumulated_runtime_observability.sample_ms;
-  last_runtime_observability_.prompt_eval_tokens =
-      accumulated_runtime_observability.prompt_eval_tokens;
-  last_runtime_observability_.decode_eval_count =
-      std::max(last_runtime_observability_.decode_eval_count,
-               accumulated_runtime_observability.decode_eval_count);
-  last_runtime_observability_.sample_count =
-      std::max(last_runtime_observability_.sample_count,
-               accumulated_runtime_observability.sample_count);
-  last_runtime_observability_.output_token_count =
-      std::max(last_runtime_observability_.output_token_count,
-               accumulated_runtime_observability.output_token_count);
+  const RuntimeObservabilityMetrics request_metrics =
+      response.runtime_observability;
+  last_runtime_observability_.queue_delay_ms = request_metrics.queue_delay_ms;
+  last_runtime_observability_.ttft_ms = request_metrics.ttft_ms;
+  last_runtime_observability_.mean_itl_ms = request_metrics.mean_itl_ms;
+  last_runtime_observability_.tail_itl_ms = request_metrics.tail_itl_ms;
+
+  // Accumulate event-based counters that are not tracked in the tick loop.
+  last_runtime_observability_.prefix_cache_hit_count +=
+      request_metrics.prefix_cache_hit_count;
+  last_runtime_observability_.prefix_cache_store_count +=
+      request_metrics.prefix_cache_store_count;
+  last_runtime_observability_.lcp_reuse_tokens += request_metrics.lcp_reuse_tokens;
+  last_runtime_observability_.prefix_cache_restore_tokens +=
+      request_metrics.prefix_cache_restore_tokens;
   has_last_runtime_observability_ = true;
 
   scheduler_observability_.accumulated_queue_delay_ms +=
@@ -1862,6 +1879,7 @@ GenerateRequestId InferenceRuntime::EnqueueRequest(
     std::string context_key, std::string prompt, int n_tokens_predict,
     TokenCallback on_token_received, std::string grammar,
     GenerateTokenEmissionMode token_emission_mode) {
+  const auto enqueued_at = std::chrono::steady_clock::now();
   // Fast-fail without lock (model pointer is immutable after construction).
   if (primary_model_ == nullptr || sampler_ == nullptr) {
     return 0;
@@ -1889,6 +1907,7 @@ GenerateRequestId InferenceRuntime::EnqueueRequest(
 
   GenerateRequest request;
   request.id = next_request_id_++;
+  request.enqueued_at = enqueued_at;
   request.context_key = std::move(context_key);
   request.original_prompt = std::move(prompt);
   request.max_output_tokens = n_tokens_predict;
@@ -1909,6 +1928,7 @@ GenerateRequestId InferenceRuntime::EnqueueMultimodalRequest(
     std::vector<std::pair<const std::uint8_t *, std::size_t>> image_views,
     TokenCallback on_token_received, std::string grammar,
     GenerateTokenEmissionMode token_emission_mode) {
+  const auto enqueued_at = std::chrono::steady_clock::now();
   if (primary_model_ == nullptr || sampler_ == nullptr ||
       mtmd_ctx_ == nullptr || !mtmd_support_vision(mtmd_ctx_)) {
     return 0;
@@ -1942,6 +1962,7 @@ GenerateRequestId InferenceRuntime::EnqueueMultimodalRequest(
 
   GenerateRequest request;
   request.id = next_request_id_++;
+  request.enqueued_at = enqueued_at;
   request.context_key = std::move(context_key);
   request.original_prompt = std::move(prompt);
   request.prompt_tokens = std::move(prompt_tokens);

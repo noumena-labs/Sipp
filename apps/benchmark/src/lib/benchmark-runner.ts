@@ -132,10 +132,10 @@ async function runObservedQuery(
 
 function summarizeRunGroup(runs: BenchmarkRun[], benchmarkDurationMs: number): GroupSummary {
   const observations = runs
-    .map((run) => run.requestObservability)
+    .map((run) => run.observability)
     .filter((value): value is RequestObservability => value != null);
   const totalInputTokens = runs.reduce(
-    (acc, run) => acc + (run.requestObservability?.inputTokenCount ?? 0),
+    (acc, run) => acc + (run.observability?.inputTokenCount ?? 0),
     0
   );
   const totalGeneratedTokens = runs.reduce((acc, run) => acc + run.outputTokenCount, 0);
@@ -238,7 +238,7 @@ function createRun(
     outputTokenCount: observability?.outputTokenCount ?? tokenTimes.length,
     outputLength: output.length,
     outputPreview: output.slice(0, 160).replace(/\s+/g, ' ').trim(),
-    requestObservability: observability,
+    observability,
   };
 }
 
