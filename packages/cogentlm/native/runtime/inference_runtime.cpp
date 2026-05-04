@@ -76,6 +76,11 @@ double proportional_share(double total, int32_t part, int32_t whole) {
   return total * (static_cast<double>(part) / static_cast<double>(whole));
 }
 
+double duration_ms(std::chrono::steady_clock::time_point start,
+                   std::chrono::steady_clock::time_point end) {
+  return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
 uint32_t resolve_sampling_seed(int32_t seed) {
   if (seed < 0) {
     return LLAMA_DEFAULT_SEED;
@@ -1470,6 +1475,43 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     }
     last_runtime_observability_.sample_ms += tick_sample_ms;
 
+    double active_accumulated_itl_ms = 0.0;
+    int32_t active_itl_sample_count = 0;
+    double active_accumulated_ttft_ms = 0.0;
+    int32_t active_ttft_count = 0;
+
+    for (SlotState *slot : scratch_live_runnable_slots_) {
+      if (slot != nullptr && slot->request != nullptr) {
+        if (slot->request->has_first_token_at) {
+          const double ttft = duration_ms(slot->request->enqueued_at,
+                                          slot->request->first_token_at);
+          active_accumulated_ttft_ms += ttft;
+          active_ttft_count++;
+
+          if (slot->request->emitted_token_count > 1) {
+            active_accumulated_itl_ms +=
+                (slot->request->accumulated_itl_ms /
+                 static_cast<double>(slot->request->emitted_token_count - 1));
+            active_itl_sample_count++;
+          }
+        }
+      }
+    }
+
+    if (active_ttft_count > 0) {
+      last_runtime_observability_.ttft_ms =
+          active_accumulated_ttft_ms / active_ttft_count;
+    } else {
+      last_runtime_observability_.ttft_ms = 0.0;
+    }
+
+    if (active_itl_sample_count > 0) {
+      last_runtime_observability_.mean_itl_ms =
+          active_accumulated_itl_ms / active_itl_sample_count;
+    } else {
+      last_runtime_observability_.mean_itl_ms = 0.0;
+    }
+
     UpdateSharedBatchMetricsLocked(plan);
     UpdateSchedulerObservabilityLocked(plan, tick_budget,
                                        effective_prefill_chunk_size);
@@ -1862,6 +1904,7 @@ GenerateRequestId InferenceRuntime::EnqueueRequest(
     std::string context_key, std::string prompt, int n_tokens_predict,
     TokenCallback on_token_received, std::string grammar,
     GenerateTokenEmissionMode token_emission_mode) {
+  const auto enqueued_at = std::chrono::steady_clock::now();
   // Fast-fail without lock (model pointer is immutable after construction).
   if (primary_model_ == nullptr || sampler_ == nullptr) {
     return 0;
@@ -1889,6 +1932,7 @@ GenerateRequestId InferenceRuntime::EnqueueRequest(
 
   GenerateRequest request;
   request.id = next_request_id_++;
+  request.enqueued_at = enqueued_at;
   request.context_key = std::move(context_key);
   request.original_prompt = std::move(prompt);
   request.max_output_tokens = n_tokens_predict;
@@ -1909,6 +1953,7 @@ GenerateRequestId InferenceRuntime::EnqueueMultimodalRequest(
     std::vector<std::pair<const std::uint8_t *, std::size_t>> image_views,
     TokenCallback on_token_received, std::string grammar,
     GenerateTokenEmissionMode token_emission_mode) {
+  const auto enqueued_at = std::chrono::steady_clock::now();
   if (primary_model_ == nullptr || sampler_ == nullptr ||
       mtmd_ctx_ == nullptr || !mtmd_support_vision(mtmd_ctx_)) {
     return 0;
@@ -1942,6 +1987,7 @@ GenerateRequestId InferenceRuntime::EnqueueMultimodalRequest(
 
   GenerateRequest request;
   request.id = next_request_id_++;
+  request.enqueued_at = enqueued_at;
   request.context_key = std::move(context_key);
   request.original_prompt = std::move(prompt);
   request.prompt_tokens = std::move(prompt_tokens);

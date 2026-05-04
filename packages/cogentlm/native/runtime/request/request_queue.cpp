@@ -39,7 +39,6 @@ bool RequestQueue::Push(GenerateRequest request) {
   }
 
   request.lifecycle = GenerateRequestLifecycle::Pending;
-  request.enqueued_at = std::chrono::steady_clock::now();
   request.has_admitted_at = false;
   request.has_first_token_at = false;
   request.has_last_token_at = false;

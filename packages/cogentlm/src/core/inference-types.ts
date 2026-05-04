@@ -83,6 +83,6 @@ export interface GenerateResponse {
   cancelled: boolean;
   outputText: string;
   errorMessage?: string | null;
-  requestObservability?: RequestObservabilityMetrics | null;
-  runtimeObservability?: RequestObservabilityMetrics | null;
+  /** Performance metrics for the request. */
+  observability?: RequestObservabilityMetrics | null;
 }
