@@ -51,7 +51,7 @@ export interface BenchmarkRun {
   outputTokenCount: number;
   outputLength: number;
   outputPreview: string;
-  requestObservability: RequestObservability | null;
+  observability: RequestObservability | null;
 }
 
 export interface GroupSummary {

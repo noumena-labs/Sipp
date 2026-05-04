@@ -51,6 +51,7 @@ export function withDerivedObservabilityMetrics<T extends {
   inputTokenCount: number;
   outputTokenCount: number;
   decodeEvalMs: number;
+  meanItlMs: number;
 }>(metrics: T): T & { tokensPerSecond: number | null } {
   return {
     ...metrics,

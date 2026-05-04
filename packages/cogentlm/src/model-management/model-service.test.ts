@@ -387,7 +387,7 @@ class FakeRuntime implements EngineRuntime {
       outputText,
       cancelled: false,
       failed: false,
-      requestObservability: this.runtimeMetricsEnabled ? this.createMetrics() : null,
+      observability: this.runtimeMetricsEnabled ? this.createMetrics() : null,
     };
   }
 

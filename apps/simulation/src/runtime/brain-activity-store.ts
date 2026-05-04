@@ -252,7 +252,7 @@ export class BrainActivityStore {
       readonly status: Exclude<BrainQueryStatus, 'idle' | 'running'>;
       readonly responseText?: string | null;
       readonly errorMessage?: string | null;
-      readonly requestObservability?: QueryObservation | null;
+      readonly observability?: QueryObservation | null;
   }): void {
     const record = this.findRecordByQueryId(queryId);
     this.activeQueryIds.delete(queryId);
@@ -276,9 +276,9 @@ export class BrainActivityStore {
       record.responseText = args.responseText;
     }
     record.errorMessage = args.errorMessage?.trim() || null;
-    record.ttftMs = args.requestObservability?.ttftMs ?? null;
-    record.inputTokenCount = (args.requestObservability as any)?.inputTokenCount ?? null;
-    record.outputTokenCount = args.requestObservability?.outputTokenCount ?? null;
+    record.ttftMs = args.observability?.ttftMs ?? null;
+    record.inputTokenCount = (args.observability as any)?.inputTokenCount ?? null;
+    record.outputTokenCount = args.observability?.outputTokenCount ?? null;
     if (record.startedAtMs != null) {
       this.recentLatenciesMs.push(now - record.startedAtMs);
       if (this.recentLatenciesMs.length > ROLLING_LATENCY_SAMPLE_COUNT) {
