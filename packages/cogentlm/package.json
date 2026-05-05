@@ -1,7 +1,7 @@
 {
   "name": "@noumena-labs/cogentlm",
   "version": "0.0.8",
-  "description": "Browser-focused inference runtime for llama.cpp compiled to WebAssembly.",
+  "description": "Run powerful AI models locally with high-performance text and vision inference directly in the browser",
   "main": "dist/esm/index.js",
   "types": "dist/types/index.d.ts",
   "type": "module",
@@ -47,10 +47,17 @@
     "pack:validate": "bun ./scripts/validate-pack.mjs"
   },
   "keywords": [
+    "ai",
     "llm",
-    "cogent",
+    "cogentlm",
     "inference",
-    "webgpu"
+    "webgpu",
+    "wasm",
+    "front-end",
+    "vision",
+    "chat",
+    "gguf",
+    "llama.cpp"
   ],
   "author": "noumena-labs",
   "homepage": "https://www.cogentlm.com/",

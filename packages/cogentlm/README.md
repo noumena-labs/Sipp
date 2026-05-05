@@ -1,6 +1,6 @@
 # cogentlm
 
-A high-performance inference and vision runtime for running models locally in browser.
+A high-performance, WebGPU-accelerated inference and vision runtime for executing Large Language Models (LLMs) and computer vision locally in the browser.
 
 ```ts
 import { CogentEngine } from 'cogentlm';
