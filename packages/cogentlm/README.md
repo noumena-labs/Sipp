@@ -1,8 +1,6 @@
 # cogentlm
 
-Browser-first inference runtime for CogentLM.
-
-The public API is intentionally small:
+A high-performance inference and vision runtime for running models locally in browser.
 
 ```ts
 import { CogentEngine } from 'cogentlm';
