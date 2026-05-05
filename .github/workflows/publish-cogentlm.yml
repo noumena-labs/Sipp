@@ -200,6 +200,8 @@ jobs:
         run: bun test packages/cogentlm/src
 
       - name: Build and validate release package
+        env:
+          COGENTLM_PACKAGE_ROOT: node_modules/cogentlm
         run: bun run --filter=@noumena-labs/cogentlm release:prepare
 
       - name: Run built package smoke test

@@ -6,6 +6,10 @@ import { fileURLToPath } from 'node:url';
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const packageDir = path.resolve(scriptDir, '..');
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const packageRootEnvVar = 'COGENTLM_PACKAGE_ROOT';
+const internalPackageRoot = 'node_modules/@noumena-labs/cogentlm';
+const publicPackageRoot = 'node_modules/cogentlm';
+const supportedPackageRoots = new Set([internalPackageRoot, publicPackageRoot]);
 const requiredPackPaths = [
   'dist/esm/index.js',
   'dist/esm/runtime/package-assets.js',
@@ -26,6 +30,16 @@ const requiredPackPaths = [
 function fail(message) {
   console.error(`[pack:validate] ${message}`);
   process.exit(1);
+}
+
+function getExpectedPackageRoot() {
+  const packageRoot = process.env[packageRootEnvVar]?.trim() || internalPackageRoot;
+
+  if (!supportedPackageRoots.has(packageRoot)) {
+    fail(`${packageRootEnvVar} must be one of: ${Array.from(supportedPackageRoots).join(', ')}`);
+  }
+
+  return packageRoot;
 }
 
 const packResult = spawnSync(npmCommand, ['pack', '--dry-run', '--json'], {
@@ -61,9 +75,11 @@ if (missingPaths.length > 0) {
 const workerClientPath = path.join(packageDir, 'dist', 'esm', 'worker', 'model-service-client.js');
 const workerEntryPath = path.join(packageDir, 'dist', 'esm', 'worker', 'model-service-entry.js');
 const runtimePath = path.join(packageDir, 'dist', 'esm', 'runtime', 'engine-runtime-main-thread.js');
+const packageAssetsPath = path.join(packageDir, 'dist', 'esm', 'runtime', 'package-assets.js');
 const workerClientText = readFileSync(workerClientPath, 'utf8');
 const workerEntryText = readFileSync(workerEntryPath, 'utf8');
 const runtimeText = readFileSync(runtimePath, 'utf8');
+const packageAssetsText = readFileSync(packageAssetsPath, 'utf8');
 
 if (!workerClientText.includes("new Worker(new URL('./model-service-entry.js', import.meta.url)")) {
   fail(
@@ -87,6 +103,11 @@ if (!runtimeText.includes('import(/* @vite-ignore */ moduleUrl)')) {
   fail(
     'Runtime module import must preserve /* @vite-ignore */ in dist so Vite does not try to statically analyze user-configurable moduleUrl.'
   );
+}
+
+const expectedPackageRoot = getExpectedPackageRoot();
+if (!packageAssetsText.includes(`const PACKAGE_ROOT = '${expectedPackageRoot}';`)) {
+  fail(`Runtime package asset resolver must use PACKAGE_ROOT '${expectedPackageRoot}'.`);
 }
 
 console.log(
