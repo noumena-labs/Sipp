@@ -21,6 +21,7 @@ export default defineConfig({
       // Resolve both the root package entry and the ./character subpath
       // directly at the built ESM files so we pick up local rebuilds without
       // going through a cached /node_modules dependency URL.
+      '@noumena-labs/cogentlm/character': cogentEngineCharacterEntry,
       'cogentlm/character': cogentEngineCharacterEntry,
       '@noumena-labs/cogentlm': cogentEngineEntry,
     },
