@@ -11,6 +11,22 @@ const tempEsmDir = path.join(tempRoot, 'esm');
 const tempTypesDir = path.join(tempRoot, 'types');
 const esmDir = path.join(distDir, 'esm');
 const typesDir = path.join(distDir, 'types');
+const packageRootEnvVar = 'COGENTLM_PACKAGE_ROOT';
+const internalPackageRoot = 'node_modules/@noumena-labs/cogentlm';
+const publicPackageRoot = 'node_modules/cogentlm';
+const supportedPackageRoots = new Set([internalPackageRoot, publicPackageRoot]);
+
+function getPackageRoot() {
+  const packageRoot = process.env[packageRootEnvVar]?.trim() || internalPackageRoot;
+
+  if (!supportedPackageRoots.has(packageRoot)) {
+    throw new Error(
+      `${packageRootEnvVar} must be one of: ${Array.from(supportedPackageRoots).join(', ')}`
+    );
+  }
+
+  return packageRoot;
+}
 
 async function pathIsDirectory(targetPath) {
   try {
@@ -119,12 +135,39 @@ async function preserveBundlerDirectives() {
   await writeFile(runtimePath, patchedRuntimeText);
 }
 
+async function applyPackageRootOverride() {
+  const packageRoot = getPackageRoot();
+
+  if (packageRoot === internalPackageRoot) {
+    return;
+  }
+
+  const packageAssetsPath = path.join(tempEsmDir, 'runtime', 'package-assets.js');
+  const packageAssetsText = await readFile(packageAssetsPath, 'utf8');
+  const internalPackageRootStatement = `const PACKAGE_ROOT = '${internalPackageRoot}';`;
+
+  if (!packageAssetsText.includes(internalPackageRootStatement)) {
+    throw new Error('Could not find the default PACKAGE_ROOT statement in runtime/package-assets.js.');
+  }
+
+  await writeFile(
+    packageAssetsPath,
+    packageAssetsText.replace(
+      internalPackageRootStatement,
+      `const PACKAGE_ROOT = '${packageRoot}';`
+    )
+  );
+
+  console.log(`[build-ts] package asset root: ${packageRoot}`);
+}
+
 await rm(tempRoot, { recursive: true, force: true });
 await mkdir(tempRoot, { recursive: true });
 
 try {
   await runTypeScriptBuild();
   await preserveBundlerDirectives();
+  await applyPackageRootOverride();
   await syncTypeScriptDist();
   console.log('[build-ts] updated dist/esm and dist/types');
 } finally {
