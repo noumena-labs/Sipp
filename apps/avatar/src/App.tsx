@@ -16,7 +16,7 @@ import {
   parseCharacterConfig,
   type CharacterConfig,
   type CharacterRuntime,
-} from 'cogentlm/character';
+} from '@noumena-labs/cogentlm/character';
 import { AvatarCanvas } from './components/AvatarCanvas';
 import { ChatComposer } from './components/ChatComposer';
 import {

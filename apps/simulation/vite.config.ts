@@ -22,6 +22,8 @@ export default defineConfig({
   plugins: [react(), cogentEngineDistWatch()],
   resolve: {
     alias: {
+      '@noumena-labs/cogentlm/director': cogentEngineDirectorEntry,
+      '@noumena-labs/cogentlm/character': cogentEngineCharacterEntry,
       'cogentlm/director': cogentEngineDirectorEntry,
       'cogentlm/character': cogentEngineCharacterEntry,
       '@noumena-labs/cogentlm': cogentEngineEntry,
