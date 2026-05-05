@@ -6,7 +6,7 @@ import {
   parseDirectorConfig,
   type DirectorRuntimeEngine,
   type JsonValue,
-} from 'cogentlm/director';
+} from '@noumena-labs/cogentlm/director';
 
 import { SimulationBus, type SimulationEvent } from './src/runtime/bus.ts';
 import {
