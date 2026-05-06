@@ -273,6 +273,10 @@ html, body, #app {
 
 .start-panel {
   width: min(720px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   padding: 28px;
   background: linear-gradient(180deg, rgba(32, 38, 59, 0.9), rgba(18, 22, 35, 0.88));
   border-color: rgba(255, 216, 107, 0.18);
@@ -1238,6 +1242,7 @@ html, body, #app {
   }
 
   .start-panel {
+    max-height: calc(100vh - 36px);
     padding: 22px;
   }
 
