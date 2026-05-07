@@ -99,7 +99,7 @@ if (workerEntryText.includes('../../wasm/cogentlm-wasm')) {
   );
 }
 
-if (!runtimeText.includes('import(/* @vite-ignore */ moduleUrl)')) {
+if (!runtimeText.includes('import(/* @vite-ignore */ /* webpackIgnore: true */ /* turbopackIgnore: true */ moduleUrl)')) {
   fail(
     'Runtime module import must preserve /* @vite-ignore */ in dist so Vite does not try to statically analyze user-configurable moduleUrl.'
   );
