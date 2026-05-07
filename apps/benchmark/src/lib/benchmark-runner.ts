@@ -106,7 +106,7 @@ async function runObservedQuery(
 
   try {
     const [output, observability] = await Promise.all([
-      targetEngine.query(prompt, {
+      targetEngine.chat([{ role: 'user', content: prompt }], {
         maxTokens: options.maxTokens,
         session: options.session,
         onToken: () => {
@@ -272,7 +272,7 @@ export async function runPromptGroup(
 ): Promise<{ benchmarkDurationMs: number; runs: BenchmarkRun[]; summary: GroupSummary }> {
   for (let i = 0; i < warmupRuns; i++) {
     setStatus(`${groupLabel}: warmup ${i + 1}/${warmupRuns}`);
-    await targetEngine.query(prompt, {
+    await targetEngine.chat([{ role: 'user', content: prompt }], {
       maxTokens: tokenCount,
       session: sessionFactory(i),
     });

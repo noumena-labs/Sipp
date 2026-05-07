@@ -313,15 +313,20 @@ export default function App() {
       const start = performance.now();
       let ttftMs: number | null = null;
       let tokens = 0;
-      const output = await engine.query(image == null ? prompt : { prompt, media: image }, {
-        maxTokens: tokenCount,
-        session: `query-${Date.now()}`,
-        onToken: (token) => {
-          tokens += 1;
-          setResponse((current) => current + token);
-          ttftMs ??= round(performance.now() - start);
-        },
-      });
+      const output = await engine.chat(
+        image == null
+          ? [{ role: 'user', content: prompt }]
+          : { messages: [{ role: 'user', content: prompt }], media: image },
+        {
+          maxTokens: tokenCount,
+          session: `query-${Date.now()}`,
+          onToken: (token) => {
+            tokens += 1;
+            setResponse((current) => current + token);
+            ttftMs ??= round(performance.now() - start);
+          },
+        }
+      );
       const snapshot = engine.observability.current();
       setResponse(output);
       setObservability(snapshot);
@@ -473,7 +478,7 @@ export default function App() {
         <h1>CogentEngine Minimal API</h1>
         <p>
           Load with <code>engine.models.load()</code>, inspect with{' '}
-          <code>engine.models.current()</code>, query with <code>engine.query()</code>, and
+          <code>engine.models.current()</code>, query with <code>engine.chat()</code>, and
           benchmark with the same minimal surface.
         </p>
       </header>
