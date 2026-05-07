@@ -284,7 +284,18 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   }
 
   private async importModuleFactory(moduleUrl: string): Promise<(options: EngineModuleOptions) => Promise<EngineModule>> {
-    const importedModule = await import(/* @vite-ignore */ moduleUrl);
+    // Dynamic import of an Emscripten glue module resolved at runtime from a URL.
+    // Stack ignore comments so every major bundler skips static analysis:
+    //   - @vite-ignore       -> Vite / Rollup
+    //   - webpackIgnore      -> webpack (>=2)
+    //   - turbopackIgnore    -> Turbopack (Next.js)
+    // esbuild, Bun, and native ESM ignore unknown comments and pass through.
+    const importedModule = await import(
+      /* @vite-ignore */
+      /* webpackIgnore: true */
+      /* turbopackIgnore: true */
+      moduleUrl
+    );
     const createModule = importedModule.default;
     if (typeof createModule !== 'function') {
       throw new Error(`Invalid Emscripten module at "${moduleUrl}"`);

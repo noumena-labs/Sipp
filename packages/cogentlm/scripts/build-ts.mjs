@@ -121,14 +121,20 @@ async function syncTypeScriptDist() {
 async function preserveBundlerDirectives() {
   const runtimePath = path.join(tempEsmDir, 'runtime', 'engine-runtime-main-thread.js');
   const runtimeText = await readFile(runtimePath, 'utf8');
+  // Stack ignore comments so every major bundler skips static analysis of the
+  // dynamic Emscripten module URL:
+  //   - @vite-ignore       -> Vite / Rollup
+  //   - webpackIgnore      -> webpack (>=2)
+  //   - turbopackIgnore    -> Turbopack (Next.js)
+  // esbuild, Bun, and native ESM ignore unknown comments and pass through.
   const patchedRuntimeText = runtimeText.replace(
     'import(moduleUrl)',
-    'import(/* @vite-ignore */ moduleUrl)'
+    'import(/* @vite-ignore */ /* webpackIgnore: true */ /* turbopackIgnore: true */ moduleUrl)'
   );
 
   if (patchedRuntimeText === runtimeText) {
     throw new Error(
-      'Could not preserve Vite dynamic import directive in engine-runtime-main-thread.js.'
+      'Could not preserve bundler ignore directives in engine-runtime-main-thread.js.'
     );
   }
 
