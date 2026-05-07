@@ -19,7 +19,6 @@ import { MainThreadModelLoader } from './main-thread-model-loader.js';
 import {
   COMPLETED_REQUEST_STATUS_PENDING,
   DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY,
-  MAX_PROMPT_TOKENS,
 } from './main-thread-runtime-constants.js';
 import { RequestTracker } from './request-tracker.js';
 import {
@@ -95,8 +94,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     if (!Number.isInteger(nTokens)) {
       throw new Error('nTokens must be an integer.');
     }
-    if (nTokens <= 0 || nTokens > MAX_PROMPT_TOKENS) {
-      throw new Error(`nTokens must be between 1 and ${MAX_PROMPT_TOKENS}.`);
+    if (nTokens <= 0) {
+      throw new Error('nTokens must be a positive integer.');
     }
     return nTokens;
   }
