@@ -122,6 +122,7 @@ set(CE_MTMD_SOURCES
     ${CE_MTMD_MODEL_DIR}/gemma4a.cpp
     ${CE_MTMD_MODEL_DIR}/gemma4v.cpp
     ${CE_MTMD_MODEL_DIR}/glm4v.cpp
+    ${CE_MTMD_MODEL_DIR}/granite-speech.cpp
     ${CE_MTMD_MODEL_DIR}/hunyuanocr.cpp
     ${CE_MTMD_MODEL_DIR}/internvl.cpp
     ${CE_MTMD_MODEL_DIR}/kimivl.cpp
