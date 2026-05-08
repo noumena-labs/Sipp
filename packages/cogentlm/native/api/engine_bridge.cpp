@@ -223,6 +223,34 @@ void copy_runtime_observability(
   out_metrics->mean_itl_ms = runtime_observability.mean_itl_ms;
   out_metrics->tail_itl_ms = runtime_observability.tail_itl_ms;
   out_metrics->e2e_ms = runtime_observability.e2e_ms;
+  out_metrics->native_scheduler_tick_ms =
+      runtime_observability.native_scheduler_tick_ms;
+  out_metrics->native_scheduler_admit_ms =
+      runtime_observability.native_scheduler_admit_ms;
+  out_metrics->native_scheduler_finalize_ms =
+      runtime_observability.native_scheduler_finalize_ms;
+  out_metrics->native_scheduler_commit_ms =
+      runtime_observability.native_scheduler_commit_ms;
+  out_metrics->native_policy_prepare_ms =
+      runtime_observability.native_policy_prepare_ms;
+  out_metrics->native_policy_plan_ms =
+      runtime_observability.native_policy_plan_ms;
+  out_metrics->native_batch_build_ms =
+      runtime_observability.native_batch_build_ms;
+  out_metrics->native_llama_decode_wall_ms =
+      runtime_observability.native_llama_decode_wall_ms;
+  out_metrics->native_synchronize_ms =
+      runtime_observability.native_synchronize_ms;
+  out_metrics->native_kv_update_ms =
+      runtime_observability.native_kv_update_ms;
+  out_metrics->native_sampler_wall_ms =
+      runtime_observability.native_sampler_wall_ms;
+  out_metrics->native_token_emit_ms =
+      runtime_observability.native_token_emit_ms;
+  out_metrics->native_prefix_cache_ms =
+      runtime_observability.native_prefix_cache_ms;
+  out_metrics->native_observability_ms =
+      runtime_observability.native_observability_ms;
   out_metrics->input_token_count = runtime_observability.input_token_count;
   out_metrics->prompt_eval_tokens = runtime_observability.prompt_eval_tokens;
   out_metrics->decode_eval_count = runtime_observability.decode_eval_count;
@@ -245,6 +273,10 @@ void copy_runtime_observability(
       runtime_observability.prefix_cache_hit_count;
   out_metrics->prefix_cache_store_count =
       runtime_observability.prefix_cache_store_count;
+  out_metrics->native_policy_tick_count =
+      runtime_observability.native_policy_tick_count;
+  out_metrics->native_scheduler_tick_count =
+      runtime_observability.native_scheduler_tick_count;
 }
 
 void copy_scheduler_burst_result(

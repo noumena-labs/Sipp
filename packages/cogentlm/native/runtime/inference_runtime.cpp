@@ -858,6 +858,11 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     return false;
   }
 
+  const bool collect_observability = config_.enable_runtime_observability > 0;
+  const auto policy_tick_start =
+      collect_observability ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{};
+
   for (SlotState &slot : slot_scheduler_.MutableSlots()) {
     NormalizeRunnableSlotStateLocked(slot);
   }
@@ -1003,7 +1008,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     }
 
     request.lifecycle = GenerateRequestLifecycle::Running;
-    if (config_.enable_runtime_observability > 0) {
+    if (collect_observability) {
       llama_perf_sampler_reset(slot->sampler);
     }
   }
@@ -1034,6 +1039,10 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     return false;
   }
 
+  const auto policy_prepare_end =
+      collect_observability ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{};
+
   const int32_t batch_token_budget = ResolveBatchTokenBudgetLocked();
   const SchedulerTickBudget tick_budget = slot_scheduler_.BuildTickBudget(
       config_.scheduler_policy,
@@ -1050,6 +1059,9 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   if (plan.Empty()) {
     return false;
   }
+  const auto policy_plan_end =
+      collect_observability ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{};
 
   {
     scratch_tick_requests_.clear();
@@ -1137,10 +1149,15 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     batch_token_index++;
   }
 
-  if (config_.enable_runtime_observability > 0) {
+  if (collect_observability) {
     llama_perf_context_reset(shared_context_);
   }
+  const auto batch_build_end =
+      collect_observability ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{};
   const auto tick_start = std::chrono::steady_clock::now();
+  const auto decode_start =
+      collect_observability ? tick_start : std::chrono::steady_clock::time_point{};
 
   if (llama_decode(shared_context_, shared_batch_builder_.Get()) != 0) {
     for (SlotState *slot : scratch_live_runnable_slots_) {
@@ -1155,8 +1172,15 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     }
     return false;
   }
+  const auto decode_end =
+      collect_observability ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{};
 
+  const auto synchronize_start = decode_end;
   llama_synchronize(shared_context_);
+  const auto synchronize_end =
+      collect_observability ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{};
 
   for (const BatchContribution &contribution : plan.contributions) {
     if (contribution.slot == nullptr || contribution.slot->session == nullptr) {
@@ -1169,6 +1193,9 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   }
 
   batch_planner_.ApplyDecodeResults(plan);
+  const auto kv_update_end =
+      collect_observability ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{};
 
   // Stall-free prefix caching: only store snapshots when there are no
   // active decode slots competing for the lock.  When decode and prefill
@@ -1200,6 +1227,10 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     }
   }
 
+  const auto sample_phase_start =
+      collect_observability ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{};
+  double sampler_wall_ms = 0.0;
   for (const PendingLogitsContribution &pending_logits : logits_contributions) {
     const BatchContribution *logit_contribution = pending_logits.contribution;
     if (logit_contribution == nullptr || logit_contribution->slot == nullptr ||
@@ -1211,8 +1242,15 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
 
     SlotState &slot = *logit_contribution->slot;
     GenerateRequest &slot_request = *slot.request;
+    const auto sampler_start =
+        collect_observability ? std::chrono::steady_clock::now()
+                              : std::chrono::steady_clock::time_point{};
     const llama_token next_token = llama_sampler_sample(
         slot.sampler, shared_context_, pending_logits.batch_token_index);
+    if (collect_observability) {
+      sampler_wall_ms +=
+          duration_ms(sampler_start, std::chrono::steady_clock::now());
+    }
     if (slot_request.first_sampled_token_id < 0) {
       slot_request.first_sampled_token_id = static_cast<int32_t>(next_token);
     }
@@ -1299,7 +1337,11 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       slot_request.lifecycle = GenerateRequestLifecycle::Running;
     }
   }
+  const auto sample_phase_end =
+      collect_observability ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{};
 
+  const auto prefix_cache_start = sample_phase_end;
   for (SlotState *slot : scratch_prefix_cache_slots_) {
     if (slot == nullptr || slot->request == nullptr ||
         slot->session == nullptr) {
@@ -1310,9 +1352,32 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
                                      slot->request->prompt_tokens.size(),
                                      slot->request);
   }
+  const auto prefix_cache_end =
+      collect_observability ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{};
 
   const auto tick_end = std::chrono::steady_clock::now();
-  if (config_.enable_runtime_observability > 0) {
+  if (collect_observability) {
+    const auto observability_start = std::chrono::steady_clock::now();
+    const double native_policy_prepare_ms =
+        duration_ms(policy_tick_start, policy_prepare_end);
+    const double native_policy_plan_ms =
+        duration_ms(policy_prepare_end, policy_plan_end);
+    const double native_batch_build_ms =
+        duration_ms(policy_plan_end, batch_build_end);
+    const double native_llama_decode_wall_ms =
+        duration_ms(decode_start, decode_end);
+    const double native_synchronize_ms =
+        duration_ms(synchronize_start, synchronize_end);
+    const double native_kv_update_ms =
+        duration_ms(synchronize_end, kv_update_end);
+    const double native_sample_phase_ms =
+        duration_ms(sample_phase_start, sample_phase_end);
+    const double native_sampler_wall_ms = sampler_wall_ms;
+    const double native_token_emit_ms =
+        std::max(0.0, native_sample_phase_ms - native_sampler_wall_ms);
+    const double native_prefix_cache_ms =
+        duration_ms(prefix_cache_start, prefix_cache_end);
     const auto ctx_perf = llama_perf_context(shared_context_);
     const double tick_total_ms =
         std::chrono::duration<double, std::milli>(tick_end - tick_start)
@@ -1392,6 +1457,8 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     const int32_t total_decode_tokens = plan.decode_token_count;
     const int32_t total_sample_count =
         static_cast<int32_t>(logits_contributions.size());
+    const int32_t total_eval_tokens =
+        total_prefill_tokens + total_decode_tokens;
     const int32_t total_work_units =
         total_prefill_tokens + total_decode_tokens + total_sample_count;
     const double tick_overhead_ms =
@@ -1408,6 +1475,8 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       const int32_t request_decode_tokens = attribution.decode_tokens;
       const int32_t request_sample_count = attribution.sample_count;
       const double request_sample_ms = attribution.sample_ms;
+      const int32_t request_eval_tokens =
+          request_prefill_tokens + request_decode_tokens;
       const int32_t request_work_units =
           request_prefill_tokens + request_decode_tokens + request_sample_count;
 
@@ -1417,15 +1486,58 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
           ctx_perf.t_eval_ms, request_decode_tokens, total_decode_tokens);
       const double overhead_share_ms = proportional_share(
           tick_overhead_ms, request_work_units, total_work_units);
+      const double prepare_share_ms = proportional_share(
+          native_policy_prepare_ms, request_work_units, total_work_units);
+      const double plan_share_ms = proportional_share(
+          native_policy_plan_ms, request_work_units, total_work_units);
+      const double batch_build_share_ms = proportional_share(
+          native_batch_build_ms, request_work_units, total_work_units);
+      const double decode_wall_share_ms =
+          proportional_share(native_llama_decode_wall_ms, request_eval_tokens,
+                             total_eval_tokens);
+      const double synchronize_share_ms = proportional_share(
+          native_synchronize_ms, request_eval_tokens, total_eval_tokens);
+      const double kv_update_share_ms = proportional_share(
+          native_kv_update_ms, request_eval_tokens, total_eval_tokens);
+      const double sampler_wall_share_ms = proportional_share(
+          native_sampler_wall_ms, request_sample_count, total_sample_count);
+      const double token_emit_share_ms = proportional_share(
+          native_token_emit_ms, request_sample_count, total_sample_count);
+      const double prefix_cache_share_ms = proportional_share(
+          native_prefix_cache_ms, request_prefill_tokens, total_prefill_tokens);
 
       request->attributed_prompt_eval_ms += prompt_share_ms;
       request->attributed_decode_eval_ms += decode_share_ms;
       request->attributed_sample_ms += request_sample_ms;
+      request->attributed_native_policy_prepare_ms += prepare_share_ms;
+      request->attributed_native_policy_plan_ms += plan_share_ms;
+      request->attributed_native_batch_build_ms += batch_build_share_ms;
+      request->attributed_native_llama_decode_wall_ms += decode_wall_share_ms;
+      request->attributed_native_synchronize_ms += synchronize_share_ms;
+      request->attributed_native_kv_update_ms += kv_update_share_ms;
+      request->attributed_native_sampler_wall_ms += sampler_wall_share_ms;
+      request->attributed_native_token_emit_ms += token_emit_share_ms;
+      request->attributed_native_prefix_cache_ms += prefix_cache_share_ms;
       request->attributed_total_ms += prompt_share_ms + decode_share_ms +
                                       request_sample_ms + overhead_share_ms;
       request->attributed_prompt_eval_tokens += request_prefill_tokens;
       request->attributed_decode_eval_count += request_decode_tokens;
       request->attributed_sample_count += request_sample_count;
+      request->attributed_native_policy_tick_count++;
+    }
+
+    const double native_observability_ms =
+        duration_ms(observability_start, std::chrono::steady_clock::now());
+    for (const RequestTickAttribution &attribution : request_attributions) {
+      if (attribution.request == nullptr) {
+        continue;
+      }
+      const int32_t request_work_units =
+          attribution.prefill_tokens + attribution.decode_tokens +
+          attribution.sample_count;
+      attribution.request->attributed_native_observability_ms +=
+          proportional_share(native_observability_ms, request_work_units,
+                             total_work_units);
     }
 
     if (!has_last_runtime_observability_) {
@@ -1459,6 +1571,23 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       }
     }
     last_runtime_observability_.sample_ms += tick_sample_ms;
+    last_runtime_observability_.native_policy_prepare_ms +=
+        native_policy_prepare_ms;
+    last_runtime_observability_.native_policy_plan_ms += native_policy_plan_ms;
+    last_runtime_observability_.native_batch_build_ms += native_batch_build_ms;
+    last_runtime_observability_.native_llama_decode_wall_ms +=
+        native_llama_decode_wall_ms;
+    last_runtime_observability_.native_synchronize_ms +=
+        native_synchronize_ms;
+    last_runtime_observability_.native_kv_update_ms += native_kv_update_ms;
+    last_runtime_observability_.native_sampler_wall_ms +=
+        native_sampler_wall_ms;
+    last_runtime_observability_.native_token_emit_ms += native_token_emit_ms;
+    last_runtime_observability_.native_prefix_cache_ms +=
+        native_prefix_cache_ms;
+    last_runtime_observability_.native_observability_ms +=
+        native_observability_ms;
+    last_runtime_observability_.native_policy_tick_count++;
 
     double active_accumulated_itl_ms = 0.0;
     int32_t active_itl_sample_count = 0;
@@ -2082,16 +2211,91 @@ RequestStepResult InferenceRuntime::RunSchedulerTickLocked() {
     return RequestStepResult::Invalid;
   }
 
+  const bool collect_observability = config_.enable_runtime_observability > 0;
+  const auto scheduler_tick_start =
+      collect_observability ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{};
   const std::size_t completed_before = request_queue_.CompletedResponseCount();
+  const std::vector<GenerateRequestId> completed_ids_before =
+      collect_observability ? request_queue_.CompletedResponseIds()
+                            : std::vector<GenerateRequestId>{};
   bool admitted_any = false;
+  const auto admit_start = scheduler_tick_start;
   while (slot_scheduler_.AdmitPendingRequests(request_queue_, session_store_)) {
     admitted_any = true;
   }
+  const auto admit_end =
+      collect_observability ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{};
+  const double scheduler_admit_ms =
+      collect_observability ? duration_ms(admit_start, admit_end) : 0.0;
 
   const bool tick_executed = RunPolicyBatchTickLocked();
+  const auto policy_end =
+      collect_observability ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{};
 
+  const auto finalize_start = policy_end;
   slot_scheduler_.FinalizeCompletedSlots(request_queue_, session_store_);
+  const auto finalize_end =
+      collect_observability ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{};
+  const double scheduler_finalize_ms =
+      collect_observability ? duration_ms(finalize_start, finalize_end) : 0.0;
+
+  const auto commit_start = finalize_end;
   CommitNewCompletedResponsesObservabilityLocked();
+  const auto commit_end =
+      collect_observability ? std::chrono::steady_clock::now()
+                            : std::chrono::steady_clock::time_point{};
+  const double scheduler_commit_ms =
+      collect_observability ? duration_ms(commit_start, commit_end) : 0.0;
+
+  if (collect_observability &&
+      request_queue_.CompletedResponseCount() > completed_before) {
+    std::vector<GenerateRequestId> completed_ids_after =
+        request_queue_.CompletedResponseIds();
+    std::vector<GenerateRequestId> new_completed_ids;
+    new_completed_ids.reserve(completed_ids_after.size() - completed_before);
+    for (GenerateRequestId request_id : completed_ids_after) {
+      if (std::find(completed_ids_before.begin(), completed_ids_before.end(),
+                    request_id) == completed_ids_before.end()) {
+        new_completed_ids.push_back(request_id);
+      }
+    }
+
+    const double completed_count =
+        static_cast<double>(std::max<std::size_t>(1, new_completed_ids.size()));
+    for (GenerateRequestId request_id : new_completed_ids) {
+      GenerateResponse *response =
+          request_queue_.FindMutableCompletedResponse(request_id);
+      if (response == nullptr) {
+        continue;
+      }
+      response->runtime_observability.native_scheduler_tick_ms +=
+          duration_ms(scheduler_tick_start, commit_end) / completed_count;
+      response->runtime_observability.native_scheduler_admit_ms +=
+          scheduler_admit_ms / completed_count;
+      response->runtime_observability.native_scheduler_finalize_ms +=
+          scheduler_finalize_ms / completed_count;
+      response->runtime_observability.native_scheduler_commit_ms +=
+          scheduler_commit_ms / completed_count;
+      response->runtime_observability.native_scheduler_tick_count += 1;
+    }
+  }
+
+  if (collect_observability && has_last_runtime_observability_ &&
+      (tick_executed || admitted_any ||
+       request_queue_.CompletedResponseCount() > completed_before)) {
+    last_runtime_observability_.native_scheduler_tick_ms +=
+        duration_ms(scheduler_tick_start, commit_end);
+    last_runtime_observability_.native_scheduler_admit_ms += scheduler_admit_ms;
+    last_runtime_observability_.native_scheduler_finalize_ms +=
+        scheduler_finalize_ms;
+    last_runtime_observability_.native_scheduler_commit_ms +=
+        scheduler_commit_ms;
+    last_runtime_observability_.native_scheduler_tick_count++;
+  }
   if (request_queue_.CompletedResponseCount() > completed_before) {
     return RequestStepResult::Progressed;
   }

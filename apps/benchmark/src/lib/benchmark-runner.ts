@@ -1,9 +1,11 @@
 import { CogentEngine, type ModelLoadOptions, type ModelSource } from '@noumena-labs/cogentlm';
 import type {
   BenchmarkRun,
+  BenchmarkTraceReport,
   GroupResult,
   GroupSummary,
   MemorySnapshot,
+  MixedLoadResult,
   RequestObservability,
   ScenarioDefinition,
   ScenarioResult,
@@ -19,6 +21,19 @@ interface ObservedQueryRun {
   tokenTimes: number[];
   observability: RequestObservability | null;
 }
+
+const JS_TRANSPORT_DELTA_KEYS = [
+  'jsSchedulerProgressMs',
+  'jsRuntimeEventDrainMs',
+  'jsTokenCallbackMs',
+  'jsPumpStepMs',
+  'jsSchedulerYieldMs',
+  'jsSchedulerProgressCount',
+  'jsRuntimeEventDrainCount',
+  'jsTokenCallbackCount',
+  'jsPumpStepCount',
+  'jsSchedulerYieldCount',
+] as const satisfies readonly (keyof RequestObservability)[];
 
 function summarize(values: number[]) {
   const sorted = [...values].sort((left, right) => left - right);
@@ -54,6 +69,90 @@ function cloneRuntimeObservation(
     ...observation,
     execution: { ...observation.execution },
   };
+}
+
+function withTransportDeltas(
+  observation: RequestObservability | null,
+  baseline: RequestObservability | null
+): RequestObservability | null {
+  if (observation == null) {
+    return null;
+  }
+  const next = cloneRuntimeObservation(observation);
+  if (next == null) {
+    return null;
+  }
+  for (const key of JS_TRANSPORT_DELTA_KEYS) {
+    const value = next[key];
+    const base = baseline?.[key];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      const baseNumber = typeof base === 'number' && Number.isFinite(base) ? base : 0;
+      (next as unknown as Record<string, unknown>)[key] = round(Math.max(0, value - baseNumber));
+    }
+  }
+  return next;
+}
+
+function observationNumber(
+  observation: RequestObservability | null | undefined,
+  key: keyof RequestObservability
+): number | null {
+  const value = observation?.[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function summarizeObservation(
+  observations: RequestObservability[],
+  key: keyof RequestObservability
+) {
+  return summarizeOptional(
+    observations
+      .map((item) => observationNumber(item, key))
+      .filter((value): value is number => value != null)
+  );
+}
+
+function summarizePerDecodeToken(
+  observations: RequestObservability[],
+  key: keyof RequestObservability
+) {
+  return summarizeOptional(
+    observations
+      .map((item) => {
+        const value = observationNumber(item, key);
+        const decodeCount = observationNumber(item, 'decodeEvalCount');
+        return value != null && decodeCount != null && decodeCount > 0
+          ? round(value / decodeCount)
+          : null;
+      })
+      .filter((value): value is number => value != null)
+  );
+}
+
+function nativeNonDecodeWallMs(
+  observation: RequestObservability | null | undefined
+): number | null {
+  if (observation == null) {
+    return null;
+  }
+  const keys = [
+    'nativeSchedulerAdmitMs',
+    'nativeSchedulerFinalizeMs',
+    'nativeSchedulerCommitMs',
+    'nativePolicyPrepareMs',
+    'nativePolicyPlanMs',
+    'nativeBatchBuildMs',
+    'nativeKvUpdateMs',
+    'nativeSamplerWallMs',
+    'nativeTokenEmitMs',
+    'nativePrefixCacheMs',
+    'nativeObservabilityMs',
+  ] as const satisfies readonly (keyof RequestObservability)[];
+  const total = keys.reduce((sum, key) => {
+    const value = observationNumber(observation, key);
+    return sum + (value ?? 0);
+  }, 0);
+  return Number.isFinite(total) ? round(total) : null;
 }
 
 function observeSessionCompletion(
@@ -102,6 +201,7 @@ async function runObservedQuery(
   const start = performance.now();
   let ttftMs: number | null = null;
   const tokenTimes: number[] = [];
+  const baselineRuntime = cloneRuntimeObservation(targetEngine.observability.current().runtime);
   const sessionObserver = observeSessionCompletion(targetEngine, options.session);
 
   try {
@@ -123,7 +223,7 @@ async function runObservedQuery(
       wallMs: round(performance.now() - start),
       ttftMs,
       tokenTimes,
-      observability,
+      observability: withTransportDeltas(observability, baselineRuntime),
     };
   } finally {
     sessionObserver.dispose();
@@ -206,6 +306,34 @@ function summarizeRunGroup(runs: BenchmarkRun[], benchmarkDurationMs: number): G
         )
       ),
       decodeTokensPerSecond: averageOptional(observations.map((item) => item.tokensPerSecond)),
+      nativeSchedulerTickMs: summarizeObservation(observations, 'nativeSchedulerTickMs'),
+      nativeSchedulerAdmitMs: summarizeObservation(observations, 'nativeSchedulerAdmitMs'),
+      nativeSchedulerFinalizeMs: summarizeObservation(observations, 'nativeSchedulerFinalizeMs'),
+      nativeSchedulerCommitMs: summarizeObservation(observations, 'nativeSchedulerCommitMs'),
+      nativePolicyPrepareMs: summarizeObservation(observations, 'nativePolicyPrepareMs'),
+      nativePolicyPlanMs: summarizeObservation(observations, 'nativePolicyPlanMs'),
+      nativeBatchBuildMs: summarizeObservation(observations, 'nativeBatchBuildMs'),
+      nativeLlamaDecodeWallMs: summarizeObservation(observations, 'nativeLlamaDecodeWallMs'),
+      nativeLlamaDecodeWallPerTokenMs: summarizePerDecodeToken(
+        observations,
+        'nativeLlamaDecodeWallMs'
+      ),
+      nativeSynchronizeMs: summarizeObservation(observations, 'nativeSynchronizeMs'),
+      nativeKvUpdateMs: summarizeObservation(observations, 'nativeKvUpdateMs'),
+      nativeSamplerWallMs: summarizeObservation(observations, 'nativeSamplerWallMs'),
+      nativeTokenEmitMs: summarizeObservation(observations, 'nativeTokenEmitMs'),
+      nativePrefixCacheMs: summarizeObservation(observations, 'nativePrefixCacheMs'),
+      nativeObservabilityMs: summarizeObservation(observations, 'nativeObservabilityMs'),
+      nativeNonDecodeWallMs: summarizeOptional(
+        observations
+          .map((item) => nativeNonDecodeWallMs(item))
+          .filter((value): value is number => value != null)
+      ),
+      jsSchedulerProgressMs: summarizeObservation(observations, 'jsSchedulerProgressMs'),
+      jsRuntimeEventDrainMs: summarizeObservation(observations, 'jsRuntimeEventDrainMs'),
+      jsTokenCallbackMs: summarizeObservation(observations, 'jsTokenCallbackMs'),
+      jsPumpStepMs: summarizeObservation(observations, 'jsPumpStepMs'),
+      jsSchedulerYieldMs: summarizeObservation(observations, 'jsSchedulerYieldMs'),
     },
   };
 }
@@ -229,6 +357,7 @@ function createRun(
     wallMs,
     appObservedTtftMs: ttftMs,
     appObservedTpotMs,
+    appObservedTokenTimesMs: tokenTimes,
     appObservedItlMsValues,
     nativeTtftMs: observability?.ttftMs ?? null,
     nativeMeanItlMs: observability?.meanItlMs ?? null,
@@ -496,6 +625,121 @@ export async function runMixedLoadBenchmark(
       runs: backgroundRuns,
       summary: summarizeRunGroup(backgroundRuns, benchmarkDurationMs),
     }),
+  };
+}
+
+function collectGroupLogs(
+  scenarioId: string,
+  scenarioLabel: string,
+  group: GroupResult
+): BenchmarkTraceReport['logs'] {
+  return group.runs.map((run) => ({
+    scenarioId,
+    scenarioLabel,
+    groupId: group.id,
+    groupLabel: group.label,
+    runLabel: run.label,
+    wallMs: run.wallMs,
+    appObservedTtftMs: run.appObservedTtftMs,
+    appObservedTpotMs: run.appObservedTpotMs,
+    appObservedTokenTimesMs: run.appObservedTokenTimesMs,
+    appObservedItlMsValues: run.appObservedItlMsValues,
+    outputTokenCount: run.outputTokenCount,
+    observability: run.observability,
+  }));
+}
+
+export function buildBenchmarkTraceReport(
+  scenarios: ScenarioResult[],
+  mixedLoad: MixedLoadResult | null
+): BenchmarkTraceReport {
+  const logs: BenchmarkTraceReport['logs'] = [];
+  for (const scenario of scenarios) {
+    logs.push(
+      ...collectGroupLogs(
+        scenario.definition.id,
+        scenario.definition.label,
+        scenario.coldPrompt
+      ),
+      ...collectGroupLogs(
+        scenario.definition.id,
+        scenario.definition.label,
+        scenario.hotFreshContext
+      ),
+      ...collectGroupLogs(
+        scenario.definition.id,
+        scenario.definition.label,
+        scenario.hotReuseContext
+      )
+    );
+  }
+  if (mixedLoad?.foreground != null) {
+    logs.push(
+      ...collectGroupLogs(
+        mixedLoad.definition.id,
+        mixedLoad.definition.label,
+        mixedLoad.foreground
+      )
+    );
+  }
+  if (mixedLoad?.background != null) {
+    logs.push(
+      ...collectGroupLogs(
+        mixedLoad.definition.id,
+        mixedLoad.definition.label,
+        mixedLoad.background
+      )
+    );
+  }
+
+  const observations = logs
+    .map((log) => log.observability)
+    .filter((value): value is RequestObservability => value != null);
+
+  return {
+    runCount: logs.length,
+    logs,
+    analysis: {
+      nativeSchedulerTickMs: summarizeObservation(observations, 'nativeSchedulerTickMs'),
+      nativeSchedulerAdmitMs: summarizeObservation(observations, 'nativeSchedulerAdmitMs'),
+      nativeSchedulerFinalizeMs: summarizeObservation(observations, 'nativeSchedulerFinalizeMs'),
+      nativeSchedulerCommitMs: summarizeObservation(observations, 'nativeSchedulerCommitMs'),
+      nativePolicyPrepareMs: summarizeObservation(observations, 'nativePolicyPrepareMs'),
+      nativePolicyPlanMs: summarizeObservation(observations, 'nativePolicyPlanMs'),
+      nativeBatchBuildMs: summarizeObservation(observations, 'nativeBatchBuildMs'),
+      nativeLlamaDecodeWallMs: summarizeObservation(
+        observations,
+        'nativeLlamaDecodeWallMs'
+      ),
+      nativeLlamaDecodeWallPerTokenMs: summarizePerDecodeToken(
+        observations,
+        'nativeLlamaDecodeWallMs'
+      ),
+      nativeSynchronizeMs: summarizeObservation(observations, 'nativeSynchronizeMs'),
+      nativeKvUpdateMs: summarizeObservation(observations, 'nativeKvUpdateMs'),
+      nativeSamplerWallMs: summarizeObservation(observations, 'nativeSamplerWallMs'),
+      nativeTokenEmitMs: summarizeObservation(observations, 'nativeTokenEmitMs'),
+      nativePrefixCacheMs: summarizeObservation(observations, 'nativePrefixCacheMs'),
+      nativeObservabilityMs: summarizeObservation(observations, 'nativeObservabilityMs'),
+      nativeNonDecodeWallMs: summarizeOptional(
+        observations
+          .map((item) => nativeNonDecodeWallMs(item))
+          .filter((value): value is number => value != null)
+      ),
+      jsSchedulerProgressMs: summarizeObservation(observations, 'jsSchedulerProgressMs'),
+      jsRuntimeEventDrainMs: summarizeObservation(observations, 'jsRuntimeEventDrainMs'),
+      jsTokenCallbackMs: summarizeObservation(observations, 'jsTokenCallbackMs'),
+      jsPumpStepMs: summarizeObservation(observations, 'jsPumpStepMs'),
+      jsSchedulerYieldMs: summarizeObservation(observations, 'jsSchedulerYieldMs'),
+      appObservedTtftMs: summarizeOptional(
+        logs
+          .map((log) => log.appObservedTtftMs)
+          .filter((value): value is number => value != null)
+      ),
+      appObservedItlMs: summarizeOptional(logs.flatMap((log) => log.appObservedItlMsValues)),
+      e2elMs:
+        logs.length > 0 ? summarize(logs.map((log) => log.wallMs)) : null,
+    },
   };
 }
 

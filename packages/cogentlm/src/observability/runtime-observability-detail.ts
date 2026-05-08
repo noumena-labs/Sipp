@@ -12,6 +12,20 @@ interface DetailedObservabilityMetricsBase
   meanItlMs: number;
   tailItlMs: number;
   e2elMs: number;
+  nativeSchedulerTickMs: number;
+  nativeSchedulerAdmitMs: number;
+  nativeSchedulerFinalizeMs: number;
+  nativeSchedulerCommitMs: number;
+  nativePolicyPrepareMs: number;
+  nativePolicyPlanMs: number;
+  nativeBatchBuildMs: number;
+  nativeLlamaDecodeWallMs: number;
+  nativeSynchronizeMs: number;
+  nativeKvUpdateMs: number;
+  nativeSamplerWallMs: number;
+  nativeTokenEmitMs: number;
+  nativePrefixCacheMs: number;
+  nativeObservabilityMs: number;
   promptEvalTokens: number;
   decodeEvalCount: number;
   sampleCount: number;
@@ -24,6 +38,8 @@ interface DetailedObservabilityMetricsBase
   prefixCacheRestoreTokens: number;
   prefixCacheHitCount: number;
   prefixCacheStoreCount: number;
+  nativePolicyTickCount: number;
+  nativeSchedulerTickCount: number;
 }
 
 export interface DetailedRequestObservabilityMetrics

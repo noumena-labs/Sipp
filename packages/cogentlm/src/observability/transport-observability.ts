@@ -14,4 +14,13 @@ export interface TransportObservability {
   runtimeEventTokenCount?: number;
   runtimeEventTerminalCount?: number;
   runtimeEventTextBytes?: number;
+  schedulerProgressCount?: number;
+  schedulerProgressMs?: number;
+  runtimeEventDrainMs?: number;
+  tokenCallbackCount?: number;
+  tokenCallbackMs?: number;
+  pumpStepCount?: number;
+  pumpStepMs?: number;
+  schedulerYieldCount?: number;
+  schedulerYieldMs?: number;
 }

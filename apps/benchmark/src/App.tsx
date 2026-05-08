@@ -13,6 +13,7 @@ import {
   summarizeMemorySnapshots,
 } from './lib/helpers';
 import {
+  buildBenchmarkTraceReport,
   captureBrowserMemorySnapshot,
   runMixedLoadBenchmark,
   runScenarioBenchmark,
@@ -34,6 +35,7 @@ import {
   MODEL_REGISTRY,
 } from './lib/model-registry';
 import type {
+  BenchmarkTraceReport,
   GroupResult,
   MemorySnapshot,
   MetricSummary,
@@ -42,7 +44,7 @@ import type {
 } from './lib/types';
 
 interface BenchmarkReport {
-  schema: 'cogent.benchmark.browser.v7';
+  schema: 'cogent.benchmark.browser.v8';
   generatedAt: string;
   model: ModelInfo | null;
   source: { label: string; bytes: number | null };
@@ -60,6 +62,7 @@ interface BenchmarkReport {
     snapshots: MemorySnapshot[];
     summary: ReturnType<typeof summarizeMemorySnapshots>;
   };
+  trace: BenchmarkTraceReport;
 }
 
 function getDefaultRuntimeOptions() {
@@ -395,9 +398,10 @@ export default function App() {
         );
         snapshots.push(await captureBrowserMemorySnapshot('after-mixed-load', true));
       }
+      const trace = buildBenchmarkTraceReport(results, mixed);
 
       const report: BenchmarkReport = {
-        schema: 'cogent.benchmark.browser.v7',
+        schema: 'cogent.benchmark.browser.v8',
         generatedAt: new Date().toISOString(),
         model: info,
         source: {
@@ -418,6 +422,7 @@ export default function App() {
           snapshots,
           summary: summarizeMemorySnapshots(snapshots),
         },
+        trace,
       };
 
       setScenarioResults(results);
@@ -459,6 +464,90 @@ export default function App() {
         <MetricCard
           label="Decode TPS"
           value={formatTps(group.summary.runtime.nativeDecodeTokensPerSecond?.meanMs)}
+        />
+        <MetricCard
+          label="Native Decode Wall"
+          value={formatSummary(group.summary.runtime.nativeLlamaDecodeWallMs)}
+        />
+        <MetricCard
+          label="Decode Wall / Tok"
+          value={formatSummary(group.summary.runtime.nativeLlamaDecodeWallPerTokenMs)}
+        />
+        <MetricCard
+          label="GPU Sync"
+          value={formatSummary(group.summary.runtime.nativeSynchronizeMs)}
+        />
+        <MetricCard
+          label="Native Non-Decode"
+          value={formatSummary(group.summary.runtime.nativeNonDecodeWallMs)}
+        />
+        <MetricCard
+          label="Policy Prep"
+          value={formatSummary(group.summary.runtime.nativePolicyPrepareMs)}
+        />
+        <MetricCard
+          label="Policy Plan"
+          value={formatSummary(group.summary.runtime.nativePolicyPlanMs)}
+        />
+        <MetricCard
+          label="Batch Build"
+          value={formatSummary(group.summary.runtime.nativeBatchBuildMs)}
+        />
+        <MetricCard
+          label="Sampler Wall"
+          value={formatSummary(group.summary.runtime.nativeSamplerWallMs)}
+        />
+        <MetricCard
+          label="Token Emission"
+          value={formatSummary(group.summary.runtime.nativeTokenEmitMs)}
+        />
+        <MetricCard
+          label="KV Update"
+          value={formatSummary(group.summary.runtime.nativeKvUpdateMs)}
+        />
+        <MetricCard
+          label="Prefix Cache"
+          value={formatSummary(group.summary.runtime.nativePrefixCacheMs)}
+        />
+        <MetricCard
+          label="Observability"
+          value={formatSummary(group.summary.runtime.nativeObservabilityMs)}
+        />
+        <MetricCard
+          label="Scheduler Tick"
+          value={formatSummary(group.summary.runtime.nativeSchedulerTickMs)}
+        />
+        <MetricCard
+          label="Scheduler Admit"
+          value={formatSummary(group.summary.runtime.nativeSchedulerAdmitMs)}
+        />
+        <MetricCard
+          label="Scheduler Finalize"
+          value={formatSummary(group.summary.runtime.nativeSchedulerFinalizeMs)}
+        />
+        <MetricCard
+          label="Scheduler Commit"
+          value={formatSummary(group.summary.runtime.nativeSchedulerCommitMs)}
+        />
+        <MetricCard
+          label="JS Pump"
+          value={formatSummary(group.summary.runtime.jsPumpStepMs)}
+        />
+        <MetricCard
+          label="JS Progress"
+          value={formatSummary(group.summary.runtime.jsSchedulerProgressMs)}
+        />
+        <MetricCard
+          label="Event Drain"
+          value={formatSummary(group.summary.runtime.jsRuntimeEventDrainMs)}
+        />
+        <MetricCard
+          label="Token Callback"
+          value={formatSummary(group.summary.runtime.jsTokenCallbackMs)}
+        />
+        <MetricCard
+          label="JS Yield"
+          value={formatSummary(group.summary.runtime.jsSchedulerYieldMs)}
         />
         <MetricCard
           label="E2EL"
@@ -713,6 +802,110 @@ export default function App() {
                 label="Backend"
                 value={describeRuntimeBackend(observability?.profile)}
               />
+              <MetricCard
+                label="Native Decode"
+                value={
+                  observability?.runtime?.nativeLlamaDecodeWallMs != null
+                    ? formatMs(observability.runtime.nativeLlamaDecodeWallMs)
+                    : 'n/a'
+                }
+              />
+              <MetricCard
+                label="GPU Sync"
+                value={
+                  observability?.runtime?.nativeSynchronizeMs != null
+                    ? formatMs(observability.runtime.nativeSynchronizeMs)
+                    : 'n/a'
+                }
+              />
+              <MetricCard
+                label="KV Update"
+                value={
+                  observability?.runtime?.nativeKvUpdateMs != null
+                    ? formatMs(observability.runtime.nativeKvUpdateMs)
+                    : 'n/a'
+                }
+              />
+              <MetricCard
+                label="Sampler Wall"
+                value={
+                  observability?.runtime?.nativeSamplerWallMs != null
+                    ? formatMs(observability.runtime.nativeSamplerWallMs)
+                    : 'n/a'
+                }
+              />
+              <MetricCard
+                label="Token Emit"
+                value={
+                  observability?.runtime?.nativeTokenEmitMs != null
+                    ? formatMs(observability.runtime.nativeTokenEmitMs)
+                    : 'n/a'
+                }
+              />
+              <MetricCard
+                label="Policy Prep"
+                value={
+                  observability?.runtime?.nativePolicyPrepareMs != null
+                    ? formatMs(observability.runtime.nativePolicyPrepareMs)
+                    : 'n/a'
+                }
+              />
+              <MetricCard
+                label="Policy Plan"
+                value={
+                  observability?.runtime?.nativePolicyPlanMs != null
+                    ? formatMs(observability.runtime.nativePolicyPlanMs)
+                    : 'n/a'
+                }
+              />
+              <MetricCard
+                label="Batch Build"
+                value={
+                  observability?.runtime?.nativeBatchBuildMs != null
+                    ? formatMs(observability.runtime.nativeBatchBuildMs)
+                    : 'n/a'
+                }
+              />
+              <MetricCard
+                label="Scheduler Tick"
+                value={
+                  observability?.runtime?.nativeSchedulerTickMs != null
+                    ? formatMs(observability.runtime.nativeSchedulerTickMs)
+                    : 'n/a'
+                }
+              />
+              <MetricCard
+                label="JS Pump"
+                value={
+                  observability?.runtime?.jsPumpStepMs != null
+                    ? formatMs(observability.runtime.jsPumpStepMs)
+                    : 'n/a'
+                }
+              />
+              <MetricCard
+                label="JS Progress"
+                value={
+                  observability?.runtime?.jsSchedulerProgressMs != null
+                    ? formatMs(observability.runtime.jsSchedulerProgressMs)
+                    : 'n/a'
+                }
+              />
+              <MetricCard
+                label="Event Drain"
+                value={
+                  observability?.runtime?.jsRuntimeEventDrainMs != null
+                    ? formatMs(observability.runtime.jsRuntimeEventDrainMs)
+                    : 'n/a'
+                }
+              />
+              <MetricCard
+                label="Token Callback"
+                value={
+                  observability?.runtime?.jsTokenCallbackMs != null
+                    ? formatMs(observability.runtime.jsTokenCallbackMs)
+                    : 'n/a'
+                }
+              />
             </div>
           </section>
 
@@ -822,6 +1015,119 @@ export default function App() {
                       <MetricCard
                         label="UA Memory Peak"
                         value={formatBytes(benchmarkReport.memory.summary.maxUserAgentBytes)}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+
+                {benchmarkReport != null ? (
+                  <div className="result-card">
+                    <h3>Timing Trace</h3>
+                    <div className="metric-grid">
+                      <MetricCard label="Raw Runs" value={benchmarkReport.trace.runCount} />
+                      <MetricCard
+                        label="Trace Decode Wall"
+                        value={formatSummary(
+                          benchmarkReport.trace.analysis.nativeLlamaDecodeWallMs
+                        )}
+                      />
+                      <MetricCard
+                        label="Trace Decode / Tok"
+                        value={formatSummary(
+                          benchmarkReport.trace.analysis.nativeLlamaDecodeWallPerTokenMs
+                        )}
+                      />
+                      <MetricCard
+                        label="Trace Sync"
+                        value={formatSummary(benchmarkReport.trace.analysis.nativeSynchronizeMs)}
+                      />
+                      <MetricCard
+                        label="Trace KV Update"
+                        value={formatSummary(benchmarkReport.trace.analysis.nativeKvUpdateMs)}
+                      />
+                      <MetricCard
+                        label="Trace Sampler"
+                        value={formatSummary(benchmarkReport.trace.analysis.nativeSamplerWallMs)}
+                      />
+                      <MetricCard
+                        label="Trace Token Emit"
+                        value={formatSummary(benchmarkReport.trace.analysis.nativeTokenEmitMs)}
+                      />
+                      <MetricCard
+                        label="Trace Prefix Cache"
+                        value={formatSummary(benchmarkReport.trace.analysis.nativePrefixCacheMs)}
+                      />
+                      <MetricCard
+                        label="Trace Observability"
+                        value={formatSummary(benchmarkReport.trace.analysis.nativeObservabilityMs)}
+                      />
+                      <MetricCard
+                        label="Trace Non-Decode"
+                        value={formatSummary(
+                          benchmarkReport.trace.analysis.nativeNonDecodeWallMs
+                        )}
+                      />
+                      <MetricCard
+                        label="Trace Policy Prep"
+                        value={formatSummary(benchmarkReport.trace.analysis.nativePolicyPrepareMs)}
+                      />
+                      <MetricCard
+                        label="Trace Policy Plan"
+                        value={formatSummary(benchmarkReport.trace.analysis.nativePolicyPlanMs)}
+                      />
+                      <MetricCard
+                        label="Trace Batch Build"
+                        value={formatSummary(benchmarkReport.trace.analysis.nativeBatchBuildMs)}
+                      />
+                      <MetricCard
+                        label="Trace Scheduler Tick"
+                        value={formatSummary(benchmarkReport.trace.analysis.nativeSchedulerTickMs)}
+                      />
+                      <MetricCard
+                        label="Trace Scheduler Admit"
+                        value={formatSummary(benchmarkReport.trace.analysis.nativeSchedulerAdmitMs)}
+                      />
+                      <MetricCard
+                        label="Trace Scheduler Finalize"
+                        value={formatSummary(benchmarkReport.trace.analysis.nativeSchedulerFinalizeMs)}
+                      />
+                      <MetricCard
+                        label="Trace Scheduler Commit"
+                        value={formatSummary(benchmarkReport.trace.analysis.nativeSchedulerCommitMs)}
+                      />
+                      <MetricCard
+                        label="Trace JS Pump"
+                        value={formatSummary(benchmarkReport.trace.analysis.jsPumpStepMs)}
+                      />
+                      <MetricCard
+                        label="Trace JS Progress"
+                        value={formatSummary(benchmarkReport.trace.analysis.jsSchedulerProgressMs)}
+                      />
+                      <MetricCard
+                        label="Trace Event Drain"
+                        value={formatSummary(
+                          benchmarkReport.trace.analysis.jsRuntimeEventDrainMs
+                        )}
+                      />
+                      <MetricCard
+                        label="Trace Token Callback"
+                        value={formatSummary(benchmarkReport.trace.analysis.jsTokenCallbackMs)}
+                      />
+                      <MetricCard
+                        label="Trace JS Yield"
+                        value={formatSummary(benchmarkReport.trace.analysis.jsSchedulerYieldMs)}
+                      />
+                      <MetricCard
+                        label="Trace TTFT"
+                        value={formatSummary(benchmarkReport.trace.analysis.appObservedTtftMs)}
+                      />
+                      <MetricCard
+                        label="Trace ITL"
+                        value={formatSummary(benchmarkReport.trace.analysis.appObservedItlMs)}
+                      />
+                      <MetricCard
+                        label="Trace E2EL"
+                        value={formatSummary(benchmarkReport.trace.analysis.e2elMs)}
                       />
                     </div>
                   </div>

@@ -42,6 +42,7 @@ export interface BenchmarkRun {
   wallMs: number;
   appObservedTtftMs: number | null;
   appObservedTpotMs: number | null;
+  appObservedTokenTimesMs: number[];
   appObservedItlMsValues: number[];
   nativeTtftMs: number | null;
   nativeMeanItlMs: number | null;
@@ -91,6 +92,27 @@ export interface GroupSummary {
     avgPrefixCacheStoreCount: number | null;
     promptTokensPerSecond: number | null;
     decodeTokensPerSecond: number | null;
+    nativeSchedulerTickMs: MetricSummary | null;
+    nativeSchedulerAdmitMs: MetricSummary | null;
+    nativeSchedulerFinalizeMs: MetricSummary | null;
+    nativeSchedulerCommitMs: MetricSummary | null;
+    nativePolicyPrepareMs: MetricSummary | null;
+    nativePolicyPlanMs: MetricSummary | null;
+    nativeBatchBuildMs: MetricSummary | null;
+    nativeLlamaDecodeWallMs: MetricSummary | null;
+    nativeLlamaDecodeWallPerTokenMs: MetricSummary | null;
+    nativeSynchronizeMs: MetricSummary | null;
+    nativeKvUpdateMs: MetricSummary | null;
+    nativeSamplerWallMs: MetricSummary | null;
+    nativeTokenEmitMs: MetricSummary | null;
+    nativePrefixCacheMs: MetricSummary | null;
+    nativeObservabilityMs: MetricSummary | null;
+    nativeNonDecodeWallMs: MetricSummary | null;
+    jsSchedulerProgressMs: MetricSummary | null;
+    jsRuntimeEventDrainMs: MetricSummary | null;
+    jsTokenCallbackMs: MetricSummary | null;
+    jsPumpStepMs: MetricSummary | null;
+    jsSchedulerYieldMs: MetricSummary | null;
   };
 }
 
@@ -181,4 +203,50 @@ export interface MixedLoadResult {
   runtime: { loadRuntimeMs: number | null };
   foreground?: GroupResult;
   background?: GroupResult;
+}
+
+export interface BenchmarkLogEntry {
+  scenarioId: string;
+  scenarioLabel: string;
+  groupId: string;
+  groupLabel: string;
+  runLabel: string;
+  wallMs: number;
+  appObservedTtftMs: number | null;
+  appObservedTpotMs: number | null;
+  appObservedTokenTimesMs: number[];
+  appObservedItlMsValues: number[];
+  outputTokenCount: number;
+  observability: RequestObservability | null;
+}
+
+export interface BenchmarkTraceReport {
+  runCount: number;
+  logs: BenchmarkLogEntry[];
+  analysis: {
+    nativeSchedulerTickMs: MetricSummary | null;
+    nativeSchedulerAdmitMs: MetricSummary | null;
+    nativeSchedulerFinalizeMs: MetricSummary | null;
+    nativeSchedulerCommitMs: MetricSummary | null;
+    nativePolicyPrepareMs: MetricSummary | null;
+    nativePolicyPlanMs: MetricSummary | null;
+    nativeBatchBuildMs: MetricSummary | null;
+    nativeLlamaDecodeWallMs: MetricSummary | null;
+    nativeLlamaDecodeWallPerTokenMs: MetricSummary | null;
+    nativeSynchronizeMs: MetricSummary | null;
+    nativeKvUpdateMs: MetricSummary | null;
+    nativeSamplerWallMs: MetricSummary | null;
+    nativeTokenEmitMs: MetricSummary | null;
+    nativePrefixCacheMs: MetricSummary | null;
+    nativeObservabilityMs: MetricSummary | null;
+    nativeNonDecodeWallMs: MetricSummary | null;
+    jsSchedulerProgressMs: MetricSummary | null;
+    jsRuntimeEventDrainMs: MetricSummary | null;
+    jsTokenCallbackMs: MetricSummary | null;
+    jsPumpStepMs: MetricSummary | null;
+    jsSchedulerYieldMs: MetricSummary | null;
+    appObservedTtftMs: MetricSummary | null;
+    appObservedItlMs: MetricSummary | null;
+    e2elMs: MetricSummary | null;
+  };
 }

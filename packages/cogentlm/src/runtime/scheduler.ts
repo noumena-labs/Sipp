@@ -29,6 +29,12 @@ const SCHEDULER_PUMP_INTERACTIVE_STREAMING_TICK_LIMIT = 16;
 const SCHEDULER_PUMP_INTERACTIVE_STREAMING_EMITTED_TOKEN_LIMIT = 8;
 const SCHEDULER_PUMP_INTERACTIVE_STREAMING_DURATION_US = 80_000;
 
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
 type SchedulerFinalizeOptions = {
   consumeCompletedResponse?: boolean;
   deleteCompletion?: boolean;
@@ -138,6 +144,8 @@ export class QueuedRequestScheduler {
     let readIndex = 0;
     while (readIndex < bufferedPieces.length) {
       const piece = bufferedPieces[readIndex];
+      const measureCallback = this.transportObservability.enabled;
+      const callbackStart = measureCallback ? nowMs() : 0;
       try {
         onToken(piece);
       } catch (error) {
@@ -145,6 +153,14 @@ export class QueuedRequestScheduler {
         this.options.queuedPromptCallbacks.delete(requestId);
         bufferedPieces.length = 0;
         break;
+      } finally {
+        if (measureCallback) {
+          this.transportObservability.tokenCallbackCount =
+            (this.transportObservability.tokenCallbackCount ?? 0) + 1;
+          this.transportObservability.tokenCallbackMs =
+            (this.transportObservability.tokenCallbackMs ?? 0) +
+            Math.max(0, nowMs() - callbackStart);
+        }
       }
       readIndex += 1;
     }
@@ -189,22 +205,34 @@ export class QueuedRequestScheduler {
     const usingFirstTokenBurst = this.requestsAwaitingFirstToken.size > 0;
     const usingInteractiveStreamingBurst =
       !usingFirstTokenBurst && this.interactiveStreamingRequests.size > 0;
-    return bridge.runSchedulerProgress(
-      usingFirstTokenBurst
-        ? SCHEDULER_PUMP_INTERACTIVE_FIRST_TOKEN_TICK_LIMIT
-        : usingInteractiveStreamingBurst
-          ? SCHEDULER_PUMP_INTERACTIVE_STREAMING_TICK_LIMIT
-          : SCHEDULER_PUMP_NATIVE_BURST_TICK_LIMIT,
-      Math.max(1, this.options.tracker.activeCount),
-      usingFirstTokenBurst
-        ? SCHEDULER_PUMP_INTERACTIVE_FIRST_TOKEN_EMITTED_TOKEN_LIMIT
-        : usingInteractiveStreamingBurst
-          ? SCHEDULER_PUMP_INTERACTIVE_STREAMING_EMITTED_TOKEN_LIMIT
-          : SCHEDULER_PUMP_NATIVE_BURST_EMITTED_TOKEN_LIMIT,
-      usingInteractiveStreamingBurst
-        ? { maxDurationUs: SCHEDULER_PUMP_INTERACTIVE_STREAMING_DURATION_US }
-        : undefined
-    );
+    const measureProgress = this.transportObservability.enabled;
+    const progressStart = measureProgress ? nowMs() : 0;
+    try {
+      return await bridge.runSchedulerProgress(
+        usingFirstTokenBurst
+          ? SCHEDULER_PUMP_INTERACTIVE_FIRST_TOKEN_TICK_LIMIT
+          : usingInteractiveStreamingBurst
+            ? SCHEDULER_PUMP_INTERACTIVE_STREAMING_TICK_LIMIT
+            : SCHEDULER_PUMP_NATIVE_BURST_TICK_LIMIT,
+        Math.max(1, this.options.tracker.activeCount),
+        usingFirstTokenBurst
+          ? SCHEDULER_PUMP_INTERACTIVE_FIRST_TOKEN_EMITTED_TOKEN_LIMIT
+          : usingInteractiveStreamingBurst
+            ? SCHEDULER_PUMP_INTERACTIVE_STREAMING_EMITTED_TOKEN_LIMIT
+            : SCHEDULER_PUMP_NATIVE_BURST_EMITTED_TOKEN_LIMIT,
+        usingInteractiveStreamingBurst
+          ? { maxDurationUs: SCHEDULER_PUMP_INTERACTIVE_STREAMING_DURATION_US }
+          : undefined
+      );
+    } finally {
+      if (measureProgress) {
+        this.transportObservability.schedulerProgressCount =
+          (this.transportObservability.schedulerProgressCount ?? 0) + 1;
+        this.transportObservability.schedulerProgressMs =
+          (this.transportObservability.schedulerProgressMs ?? 0) +
+          Math.max(0, nowMs() - progressStart);
+      }
+    }
   }
 
   private settleCompletedQueuedRequest(
@@ -272,12 +300,19 @@ export class QueuedRequestScheduler {
     tokenEventCount: number;
     tokenRequestIds: GenerateRequestId[];
   } {
+    const measureDrain = this.transportObservability.enabled;
+    const drainStart = measureDrain ? nowMs() : 0;
     const drained = bridge.drainRuntimeEvents(
       Math.max(8, this.options.tracker.activeCount * 2)
     );
 
     this.transportObservability.runtimeEventDrainCount =
       (this.transportObservability.runtimeEventDrainCount ?? 0) + 1;
+    if (measureDrain) {
+      this.transportObservability.runtimeEventDrainMs =
+        (this.transportObservability.runtimeEventDrainMs ?? 0) +
+        Math.max(0, nowMs() - drainStart);
+    }
     const tokenRequestIds: GenerateRequestId[] = [];
     for (const tokenEvent of drained.tokenEvents) {
       if (
@@ -334,77 +369,89 @@ export class QueuedRequestScheduler {
       };
     }
 
-    const schedulerProgress = await this.runSchedulerProgress(bridge);
-    const stepResult = schedulerProgress.stepResult;
-    const drainedEvents = this.drainRuntimeEvents(bridge);
-    for (const requestId of drainedEvents.tokenRequestIds) {
-      this.requestsAwaitingFirstToken.delete(requestId);
-    }
-    this.flushAllQueuedTokenPieces();
-    this.requestCancellationForCallbackErrors();
-    const settledFromEvents = this.settleCompletedQueuedRequestsByIds(
-      bridge,
-      drainedEvents.terminalRequestIds
-    );
-    const needsCompletionScan =
-      schedulerProgress.completedResponseCount > drainedEvents.terminalRequestIds.length;
-    const settledFromScan = needsCompletionScan
-      ? this.settleCompletedTrackedRequests(bridge)
-      : false;
-    const settledAny = settledFromEvents || settledFromScan;
-    if (this.options.tracker.activeCount === 0) {
-      return {
-        hasActiveRequests: false,
-        stepResult,
-        settledAny,
-      };
-    }
-
-    if (stepResult === REQUEST_STEP_RESULT_INVALID) {
-      this.rejectPendingQueuedRequests(
+    const measurePumpStep = this.transportObservability.enabled;
+    const pumpStepStart = measurePumpStep ? nowMs() : 0;
+    try {
+      const schedulerProgress = await this.runSchedulerProgress(bridge);
+      const stepResult = schedulerProgress.stepResult;
+      const drainedEvents = this.drainRuntimeEvents(bridge);
+      for (const requestId of drainedEvents.tokenRequestIds) {
+        this.requestsAwaitingFirstToken.delete(requestId);
+      }
+      this.flushAllQueuedTokenPieces();
+      this.requestCancellationForCallbackErrors();
+      const settledFromEvents = this.settleCompletedQueuedRequestsByIds(
         bridge,
-        new Error('Queued scheduler tick became invalid.')
+        drainedEvents.terminalRequestIds
       );
+      const needsCompletionScan =
+        schedulerProgress.completedResponseCount > drainedEvents.terminalRequestIds.length;
+      const settledFromScan = needsCompletionScan
+        ? this.settleCompletedTrackedRequests(bridge)
+        : false;
+      const settledAny = settledFromEvents || settledFromScan;
+      if (this.options.tracker.activeCount === 0) {
+        return {
+          hasActiveRequests: false,
+          stepResult,
+          settledAny,
+        };
+      }
+
+      if (stepResult === REQUEST_STEP_RESULT_INVALID) {
+        this.rejectPendingQueuedRequests(
+          bridge,
+          new Error('Queued scheduler tick became invalid.')
+        );
+        return {
+          hasActiveRequests: false,
+          stepResult,
+          settledAny,
+        };
+      }
+
+      if (stepResult === REQUEST_STEP_RESULT_FATAL_NO_PROGRESS) {
+        this.rejectPendingQueuedRequests(
+          bridge,
+          new Error('Queued request execution failed to make progress.')
+        );
+        return {
+          hasActiveRequests: false,
+          stepResult,
+          settledAny,
+        };
+      }
+
+      if (
+        stepResult !== REQUEST_STEP_RESULT_WAITING &&
+        stepResult !== REQUEST_STEP_RESULT_PROGRESSED &&
+        stepResult !== REQUEST_STEP_RESULT_TERMINAL
+      ) {
+        this.rejectPendingQueuedRequests(
+          bridge,
+          new Error(`Queued scheduler returned unknown step result ${stepResult}.`)
+        );
+        return {
+          hasActiveRequests: false,
+          stepResult,
+          settledAny,
+        };
+      }
+
       return {
-        hasActiveRequests: false,
+        hasActiveRequests: this.options.tracker.activeCount > 0,
         stepResult,
         settledAny,
       };
+    } finally {
+      if (measurePumpStep) {
+        this.transportObservability.pumpStepCount =
+          (this.transportObservability.pumpStepCount ?? 0) + 1;
+        this.transportObservability.pumpStepMs =
+          (this.transportObservability.pumpStepMs ?? 0) +
+          Math.max(0, nowMs() - pumpStepStart);
+      }
     }
-
-    if (stepResult === REQUEST_STEP_RESULT_FATAL_NO_PROGRESS) {
-      this.rejectPendingQueuedRequests(
-        bridge,
-        new Error('Queued request execution failed to make progress.')
-      );
-      return {
-        hasActiveRequests: false,
-        stepResult,
-        settledAny,
-      };
-    }
-
-    if (
-      stepResult !== REQUEST_STEP_RESULT_WAITING &&
-      stepResult !== REQUEST_STEP_RESULT_PROGRESSED &&
-      stepResult !== REQUEST_STEP_RESULT_TERMINAL
-    ) {
-      this.rejectPendingQueuedRequests(
-        bridge,
-        new Error(`Queued scheduler returned unknown step result ${stepResult}.`)
-      );
-      return {
-        hasActiveRequests: false,
-        stepResult,
-        settledAny,
-      };
-    }
-
-    return {
-      hasActiveRequests: this.options.tracker.activeCount > 0,
-      stepResult,
-      settledAny,
-    };
   }
 
   private async runSchedulerPump(generation: number): Promise<void> {
@@ -438,9 +485,18 @@ export class QueuedRequestScheduler {
   }
 
   private async waitForNextSchedulerStep(): Promise<void> {
+    const measureYield = this.transportObservability.enabled;
+    const yieldStart = measureYield ? nowMs() : 0;
     await new Promise((resolve) => {
       setTimeout(resolve, 0);
     });
+    if (measureYield) {
+      this.transportObservability.schedulerYieldCount =
+        (this.transportObservability.schedulerYieldCount ?? 0) + 1;
+      this.transportObservability.schedulerYieldMs =
+        (this.transportObservability.schedulerYieldMs ?? 0) +
+        Math.max(0, nowMs() - yieldStart);
+    }
   }
 
   private shouldYieldForResponsiveness(burstTickCount: number): boolean {

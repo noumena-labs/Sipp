@@ -14,8 +14,8 @@ export const COMPLETED_REQUEST_STATUS_COMPLETED = 1;
 export const COMPLETED_REQUEST_STATUS_CANCELLED = 2;
 export const COMPLETED_REQUEST_STATUS_FAILED = 3;
 export const COMPLETED_REQUEST_STATUS_UNKNOWN = 4;
-export const RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES = 128;
-export const RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT = 9;
+export const RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES = 248;
+export const RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT = 23;
 export const SCHEDULER_BURST_RESULT_SIZE_BYTES = 16;
 export const RUNTIME_EVENT_SIZE_BYTES = 20;
 export const RUNTIME_EVENT_DRAIN_RESULT_SIZE_BYTES = 8;
@@ -36,6 +36,15 @@ export const DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY: TransportObservability
   runtimeEventTokenCount: 0,
   runtimeEventTerminalCount: 0,
   runtimeEventTextBytes: 0,
+  schedulerProgressCount: 0,
+  schedulerProgressMs: 0,
+  runtimeEventDrainMs: 0,
+  tokenCallbackCount: 0,
+  tokenCallbackMs: 0,
+  pumpStepCount: 0,
+  pumpStepMs: 0,
+  schedulerYieldCount: 0,
+  schedulerYieldMs: 0,
 };
 
 export function normalizeModelFileName(fileName: string): string {

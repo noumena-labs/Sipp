@@ -23,6 +23,20 @@ struct RuntimeObservabilityMetrics {
   double mean_itl_ms = 0.0;
   double tail_itl_ms = 0.0;
   double e2e_ms = 0.0;
+  double native_scheduler_tick_ms = 0.0;
+  double native_scheduler_admit_ms = 0.0;
+  double native_scheduler_finalize_ms = 0.0;
+  double native_scheduler_commit_ms = 0.0;
+  double native_policy_prepare_ms = 0.0;
+  double native_policy_plan_ms = 0.0;
+  double native_batch_build_ms = 0.0;
+  double native_llama_decode_wall_ms = 0.0;
+  double native_synchronize_ms = 0.0;
+  double native_kv_update_ms = 0.0;
+  double native_sampler_wall_ms = 0.0;
+  double native_token_emit_ms = 0.0;
+  double native_prefix_cache_ms = 0.0;
+  double native_observability_ms = 0.0;
   int32_t input_token_count = 0;
   int32_t prompt_eval_tokens = 0;
   int32_t decode_eval_count = 0;
@@ -37,6 +51,8 @@ struct RuntimeObservabilityMetrics {
   int32_t prefix_cache_restore_tokens = 0;
   int32_t prefix_cache_hit_count = 0;
   int32_t prefix_cache_store_count = 0;
+  int32_t native_policy_tick_count = 0;
+  int32_t native_scheduler_tick_count = 0;
 };
 
 struct SharedBatchObservabilityMetrics {

@@ -50,9 +50,20 @@ bool RequestQueue::Push(GenerateRequest request) {
   request.attributed_prompt_eval_ms = 0.0;
   request.attributed_decode_eval_ms = 0.0;
   request.attributed_sample_ms = 0.0;
+  request.attributed_native_policy_prepare_ms = 0.0;
+  request.attributed_native_policy_plan_ms = 0.0;
+  request.attributed_native_batch_build_ms = 0.0;
+  request.attributed_native_llama_decode_wall_ms = 0.0;
+  request.attributed_native_synchronize_ms = 0.0;
+  request.attributed_native_kv_update_ms = 0.0;
+  request.attributed_native_sampler_wall_ms = 0.0;
+  request.attributed_native_token_emit_ms = 0.0;
+  request.attributed_native_prefix_cache_ms = 0.0;
+  request.attributed_native_observability_ms = 0.0;
   request.attributed_prompt_eval_tokens = 0;
   request.attributed_decode_eval_count = 0;
   request.attributed_sample_count = 0;
+  request.attributed_native_policy_tick_count = 0;
   request.decode_first_tick_count = 0;
   request.chunked_prefill_tick_count = 0;
   request.mixed_workload_tick_count = 0;
@@ -161,6 +172,12 @@ void RequestQueue::MarkCompleted(GenerateResponse response) {
 
 const GenerateResponse *
 RequestQueue::PeekCompletedResponse(GenerateRequestId request_id) const {
+  auto response_it = completed_responses_.find(request_id);
+  return response_it == completed_responses_.end() ? nullptr : &response_it->second;
+}
+
+GenerateResponse *
+RequestQueue::FindMutableCompletedResponse(GenerateRequestId request_id) {
   auto response_it = completed_responses_.find(request_id);
   return response_it == completed_responses_.end() ? nullptr : &response_it->second;
 }

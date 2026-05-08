@@ -45,6 +45,7 @@ public:
   bool Cancel(GenerateRequestId request_id, std::string error_message);
   void MarkCompleted(GenerateResponse response);
   const GenerateResponse *PeekCompletedResponse(GenerateRequestId request_id) const;
+  GenerateResponse *FindMutableCompletedResponse(GenerateRequestId request_id);
   std::vector<GenerateRequestId> CompletedResponseIds() const;
   void QueueTokenEvent(GenerateRequestId request_id, std::string text);
   std::vector<RuntimeEvent> DrainRuntimeEvents(std::size_t max_count,

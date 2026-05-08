@@ -106,6 +106,30 @@ export function toRuntimeObservation(
   includeFinite(observation, 'queueDelayMs', (metrics as { queueDelayMs?: unknown }).queueDelayMs);
   includeFinite(observation, 'meanItlMs', (metrics as { meanItlMs?: unknown }).meanItlMs);
   includeFinite(observation, 'tailItlMs', (metrics as { tailItlMs?: unknown }).tailItlMs);
+  includeFinite(observation, 'nativeSchedulerTickMs', (metrics as { nativeSchedulerTickMs?: unknown }).nativeSchedulerTickMs);
+  includeFinite(observation, 'nativeSchedulerAdmitMs', (metrics as { nativeSchedulerAdmitMs?: unknown }).nativeSchedulerAdmitMs);
+  includeFinite(observation, 'nativeSchedulerFinalizeMs', (metrics as { nativeSchedulerFinalizeMs?: unknown }).nativeSchedulerFinalizeMs);
+  includeFinite(observation, 'nativeSchedulerCommitMs', (metrics as { nativeSchedulerCommitMs?: unknown }).nativeSchedulerCommitMs);
+  includeFinite(observation, 'nativePolicyPrepareMs', (metrics as { nativePolicyPrepareMs?: unknown }).nativePolicyPrepareMs);
+  includeFinite(observation, 'nativePolicyPlanMs', (metrics as { nativePolicyPlanMs?: unknown }).nativePolicyPlanMs);
+  includeFinite(observation, 'nativeBatchBuildMs', (metrics as { nativeBatchBuildMs?: unknown }).nativeBatchBuildMs);
+  includeFinite(observation, 'nativeLlamaDecodeWallMs', (metrics as { nativeLlamaDecodeWallMs?: unknown }).nativeLlamaDecodeWallMs);
+  includeFinite(observation, 'nativeSynchronizeMs', (metrics as { nativeSynchronizeMs?: unknown }).nativeSynchronizeMs);
+  includeFinite(observation, 'nativeKvUpdateMs', (metrics as { nativeKvUpdateMs?: unknown }).nativeKvUpdateMs);
+  includeFinite(observation, 'nativeSamplerWallMs', (metrics as { nativeSamplerWallMs?: unknown }).nativeSamplerWallMs);
+  includeFinite(observation, 'nativeTokenEmitMs', (metrics as { nativeTokenEmitMs?: unknown }).nativeTokenEmitMs);
+  includeFinite(observation, 'nativePrefixCacheMs', (metrics as { nativePrefixCacheMs?: unknown }).nativePrefixCacheMs);
+  includeFinite(observation, 'nativeObservabilityMs', (metrics as { nativeObservabilityMs?: unknown }).nativeObservabilityMs);
+  includeFinite(observation, 'jsSchedulerProgressMs', transport.schedulerProgressMs);
+  includeFinite(observation, 'jsRuntimeEventDrainMs', transport.runtimeEventDrainMs);
+  includeFinite(observation, 'jsTokenCallbackMs', transport.tokenCallbackMs);
+  includeFinite(observation, 'jsPumpStepMs', transport.pumpStepMs);
+  includeFinite(observation, 'jsSchedulerYieldMs', transport.schedulerYieldMs);
+  includeFinite(observation, 'jsSchedulerProgressCount', transport.schedulerProgressCount);
+  includeFinite(observation, 'jsRuntimeEventDrainCount', transport.runtimeEventDrainCount);
+  includeFinite(observation, 'jsTokenCallbackCount', transport.tokenCallbackCount);
+  includeFinite(observation, 'jsPumpStepCount', transport.pumpStepCount);
+  includeFinite(observation, 'jsSchedulerYieldCount', transport.schedulerYieldCount);
   includeFinite(observation, 'promptEvalTokens', (metrics as { promptEvalTokens?: unknown }).promptEvalTokens);
   includeFinite(observation, 'decodeEvalCount', (metrics as { decodeEvalCount?: unknown }).decodeEvalCount);
   includeFinite(
@@ -144,6 +168,8 @@ export function toRuntimeObservation(
     'prefixCacheStoreCount',
     (metrics as { prefixCacheStoreCount?: unknown }).prefixCacheStoreCount
   );
+  includeFinite(observation, 'nativePolicyTickCount', (metrics as { nativePolicyTickCount?: unknown }).nativePolicyTickCount);
+  includeFinite(observation, 'nativeSchedulerTickCount', (metrics as { nativeSchedulerTickCount?: unknown }).nativeSchedulerTickCount);
 
   return observation;
 }
