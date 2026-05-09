@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <exception>
 #include <functional>
 #include <memory>
@@ -86,6 +87,81 @@ uint32_t resolve_sampling_seed(int32_t seed) {
     return LLAMA_DEFAULT_SEED;
   }
   return static_cast<uint32_t>(seed);
+}
+
+// Sampler-shape predicates.  A "greedy" configuration collapses the entire
+// stochastic chain to a single argmax, which is the hot path for chat with
+// temperature 0 (deterministic / tool-calling).  The "neutral" predicates let
+// us omit individual stages that would be no-ops for the configured params,
+// saving a per-token candidate walk each.
+//
+// Tolerances are conservative on purpose: only configurations that would
+// genuinely produce identical output are short-circuited.
+constexpr float kSamplerFloatEpsilon = 1e-6f;
+
+bool sampler_is_greedy(const noumena::cogentengine::InferenceRuntimeConfig &cfg) {
+  return cfg.sampling_temperature <= kSamplerFloatEpsilon ||
+         cfg.sampling_top_k == 1;
+}
+
+bool sampler_penalties_neutral(
+    const noumena::cogentengine::InferenceRuntimeConfig &cfg) {
+  return cfg.sampling_repeat_penalty == 1.0f &&
+         cfg.sampling_frequency_penalty == 0.0f &&
+         cfg.sampling_presence_penalty == 0.0f;
+}
+
+bool sampler_top_p_identity(
+    const noumena::cogentengine::InferenceRuntimeConfig &cfg) {
+  return cfg.sampling_top_p >= 1.0f - kSamplerFloatEpsilon;
+}
+
+bool sampler_temp_identity(
+    const noumena::cogentengine::InferenceRuntimeConfig &cfg) {
+  return std::abs(cfg.sampling_temperature - 1.0f) <= kSamplerFloatEpsilon;
+}
+
+// Append the runtime-configured sampling stages onto an already-initialized
+// chain.  Honors the greedy fast path and skip-neutral predicates so a chain
+// only carries stages that actually change the distribution.  Used by both the
+// shared sampler and the per-slot grammar sampler so the two paths cannot
+// drift.
+void append_configured_sampler_stages(
+    llama_sampler *chain,
+    const noumena::cogentengine::InferenceRuntimeConfig &cfg) {
+  if (chain == nullptr) {
+    return;
+  }
+  if (sampler_is_greedy(cfg)) {
+    // Pure argmax: no candidate sort, no penalties, no random draw.  This is
+    // the dominant chat configuration and previously paid the full chain.
+    llama_sampler_chain_add(chain, llama_sampler_init_greedy());
+    return;
+  }
+  if (cfg.sampling_top_k > 0) {
+    llama_sampler_chain_add(chain, llama_sampler_init_top_k(cfg.sampling_top_k));
+  }
+  if (!sampler_penalties_neutral(cfg)) {
+    llama_sampler_chain_add(chain, llama_sampler_init_penalties(
+                                       cfg.sampling_repeat_last_n,
+                                       cfg.sampling_repeat_penalty,
+                                       cfg.sampling_frequency_penalty,
+                                       cfg.sampling_presence_penalty));
+  }
+  if (!sampler_top_p_identity(cfg)) {
+    llama_sampler_chain_add(chain,
+                            llama_sampler_init_top_p(cfg.sampling_top_p, 1));
+  }
+  if (cfg.sampling_min_p > 0.0f) {
+    llama_sampler_chain_add(chain,
+                            llama_sampler_init_min_p(cfg.sampling_min_p, 1));
+  }
+  if (!sampler_temp_identity(cfg)) {
+    llama_sampler_chain_add(chain,
+                            llama_sampler_init_temp(cfg.sampling_temperature));
+  }
+  llama_sampler_chain_add(
+      chain, llama_sampler_init_dist(resolve_sampling_seed(cfg.sampling_seed)));
 }
 
 bool token_to_piece_string(const llama_vocab *vocab, llama_token token,
@@ -235,7 +311,6 @@ bool InferenceRuntime::EnsureContextSpace(SequenceState &state,
     }
     state.current_kv_tokens.clear();
     state.n_past = 0;
-    state.RebuildRollingHash();
     return true;
   }
 
@@ -256,7 +331,6 @@ bool InferenceRuntime::EnsureContextSpace(SequenceState &state,
   }
 
   state.n_past = static_cast<int>(state.current_kv_tokens.size());
-  state.RebuildRollingHash();
 
   if (state.n_past + new_tokens_needed <= n_ctx) {
     return true;
@@ -267,7 +341,6 @@ bool InferenceRuntime::EnsureContextSpace(SequenceState &state,
   }
   state.current_kv_tokens.clear();
   state.n_past = 0;
-  state.RebuildRollingHash();
 
   return true;
 }
@@ -330,11 +403,19 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
           shared_context_, cached_prefix->state_bytes.data(),
           cached_prefix->state_bytes.size(), state.seq_id);
       if (restored == cached_prefix->state_bytes.size()) {
+        // The cached `state_bytes` may correspond to a deferred snapshot
+        // taken *after* the boundary moment (i.e. the seq had already
+        // decoded a few tokens past `token_count` by the time the drain
+        // ran).  Truncate the seq's KV down to the recorded boundary so
+        // the CPU mirror in `prefix_tokens` is the source of truth.  This
+        // is a constant-cost KV bookkeeping call (no compute) and is
+        // load-bearing for correctness when boundary snapshots are
+        // deferred via `EnqueuePendingSnapshot`.
+        llama_memory_seq_rm(mem, state.seq_id,
+                            static_cast<int32_t>(cached_prefix->token_count),
+                            -1);
         state.current_kv_tokens = cached_prefix->prefix_tokens;
         state.n_past = static_cast<int>(cached_prefix->token_count);
-        // The cached entry's hash is exactly the rolling hash for the restored
-        // prefix length, so we can adopt it directly and skip the rebuild walk.
-        state.prefix_rolling_hash = cached_prefix->prefix_hash;
         match_len = cached_prefix->token_count;
         restored_from_prefix_cache = true;
         if (request != nullptr) {
@@ -346,7 +427,6 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
         llama_memory_seq_rm(mem, state.seq_id, 0, -1);
         state.current_kv_tokens.clear();
         state.n_past = 0;
-        state.RebuildRollingHash();
       }
     }
   }
@@ -401,7 +481,6 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
       llama_memory_seq_rm(mem, state.seq_id, 0, -1);
       state.current_kv_tokens.clear();
       state.n_past = 0;
-      state.RebuildRollingHash();
       match_len = 0;
       if (request != nullptr) {
         request->lcp_reuse_tokens = 0;
@@ -416,7 +495,6 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
       }
       state.current_kv_tokens.resize(match_len);
       state.n_past = static_cast<int>(match_len);
-      state.RebuildRollingHash();
     }
   }
 
@@ -425,7 +503,6 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
       llama_memory_seq_rm(mem, state.seq_id, 0, -1);
       state.current_kv_tokens.clear();
       state.n_past = 0;
-      state.RebuildRollingHash();
       match_len = 0;
       if (request != nullptr) {
         request->lcp_reuse_tokens = 0;
@@ -437,7 +514,6 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
       }
       state.current_kv_tokens.resize(match_len - 1);
       state.n_past = static_cast<int>(match_len - 1);
-      state.RebuildRollingHash();
       match_len--;
       if (request != nullptr) {
         if (restored_from_prefix_cache) {
@@ -471,20 +547,24 @@ void InferenceRuntime::MaybeStorePrefixCacheEntryLocked(
     return;
   }
 
-  // Fast path: when storing the entire current KV vector (the only case
-  // exercised by the tick loop), reuse the rolling hash maintained on the
-  // SequenceState instead of re-walking every token.  Fall back to the policy
-  // helper for the rare partial-prefix case to keep semantics identical.
-  const std::uint64_t prefix_hash =
-      (token_count == state.current_kv_tokens.size())
-          ? state.prefix_rolling_hash
-          : prefix_cache_policy_.HashPrefix(state.current_kv_tokens,
-                                            token_count);
-  if (!prefix_state_cache_.StorePrefixState(
-          shared_context_, state.seq_id, model_fingerprint_, context_key,
-          state.current_kv_tokens, token_count, prefix_hash, token_count)) {
-    return;
-  }
+  // Capture the boundary's identity (tokens + hash) eagerly, but defer the
+  // expensive `llama_state_seq_get_data` GPU readback to a quieter moment
+  // (`DrainPendingSnapshots` from the burst's Waiting tail or completion
+  // path).  Synchronous storage was the source of multi-hundred-millisecond
+  // mid-decode tail-ITL spikes whenever an interval boundary landed inside
+  // an active streaming response.
+  PendingPrefixSnapshot pending;
+  pending.model_fingerprint = model_fingerprint_;
+  pending.context_key = context_key;
+  pending.seq_id = state.seq_id;
+  pending.token_count = token_count;
+  pending.prefix_hash =
+      prefix_cache_policy_.HashPrefix(state.current_kv_tokens, token_count);
+  pending.retention_priority = token_count;
+  pending.prefix_tokens.assign(state.current_kv_tokens.begin(),
+                               state.current_kv_tokens.begin() +
+                                   static_cast<std::ptrdiff_t>(token_count));
+  prefix_state_cache_.EnqueuePendingSnapshot(std::move(pending));
 
   prefix_cache_policy_.RecordStore(token_count);
   if (request != nullptr) {
@@ -562,7 +642,6 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
   }
   session.current_kv_tokens.clear();
   session.n_past = 0;
-  session.RebuildRollingHash();
 
   const auto prefill_start = std::chrono::steady_clock::now();
   llama_pos new_n_past = 0;
@@ -712,7 +791,6 @@ bool InferenceRuntime::RecoverDecodeSeedStateLocked(SlotState &slot,
       static_cast<std::size_t>(std::max(0, rewind_position)));
   session.current_kv_tokens.resize(retained_tokens);
   session.n_past = static_cast<int>(retained_tokens);
-  session.RebuildRollingHash();
   slot.prefill_cursor =
       std::min<std::size_t>(request.prompt_tokens.size() - 1, retained_tokens);
   slot.phase = SlotPhase::Prefill;
@@ -950,36 +1028,12 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
             llama_sampler_free(slot->sampler);
             slot->sampler = nullptr;
           } else {
-            // Mirror the configured shared sampler chain so the grammar
-            // path respects user-supplied sampling parameters. The grammar
-            // sampler must run first so downstream samplers operate on
-            // the grammar-constrained logits.
+            // Grammar must run first so downstream stages operate on the
+            // grammar-constrained logits; the rest of the chain (or the
+            // greedy fast path) is appended via the shared helper so the two
+            // sampler-construction paths stay in sync.
             llama_sampler_chain_add(slot->sampler, grammar_sampler);
-            // Top-K runs before penalties for the same reason as the shared
-            // sampler chain: the penalty pass is O(candidates), so cutting the
-            // candidate set first is a strict speedup.
-            llama_sampler_chain_add(slot->sampler, llama_sampler_init_top_k(
-                                                       config_.sampling_top_k));
-            llama_sampler_chain_add(slot->sampler,
-                                    llama_sampler_init_penalties(
-                                        config_.sampling_repeat_last_n,
-                                        config_.sampling_repeat_penalty,
-                                        config_.sampling_frequency_penalty,
-                                        config_.sampling_presence_penalty));
-            llama_sampler_chain_add(
-                slot->sampler,
-                llama_sampler_init_top_p(config_.sampling_top_p, 1));
-            if (config_.sampling_min_p > 0.0f) {
-              llama_sampler_chain_add(
-                  slot->sampler,
-                  llama_sampler_init_min_p(config_.sampling_min_p, 1));
-            }
-            llama_sampler_chain_add(
-                slot->sampler,
-                llama_sampler_init_temp(config_.sampling_temperature));
-            llama_sampler_chain_add(
-                slot->sampler, llama_sampler_init_dist(resolve_sampling_seed(
-                                   config_.sampling_seed)));
+            append_configured_sampler_stages(slot->sampler, config_);
           }
         }
       } else {
@@ -1209,11 +1263,6 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     SequenceState &session = *contribution.slot->session;
     session.current_kv_tokens.push_back(contribution.token);
     session.n_past++;
-    // Roll the FNV-1a hash forward token-at-a-time so the prefix cache snapshot
-    // path can read the cached digest in O(1) instead of re-walking the full
-    // KV token vector for every boundary store.
-    session.prefix_rolling_hash =
-        MixPrefixHashToken(session.prefix_rolling_hash, contribution.token);
   }
 
   batch_planner_.ApplyDecodeResults(plan);
@@ -1937,29 +1986,11 @@ InferenceRuntime::InferenceRuntime(std::string model_path,
     return;
   }
 
-  // Top-K is applied before the penalty samplers so the per-token penalty walk
-  // operates on a vocabulary-sized candidate set already trimmed to K (often
-  // <=64 vs. >32k).  This dramatically reduces sampler overhead per generated
-  // token without changing the sampling distribution: every token survivable
-  // after penalties + top-K is identical regardless of order.
-  llama_sampler_chain_add(sampler_,
-                          llama_sampler_init_top_k(config_.sampling_top_k));
-  llama_sampler_chain_add(sampler_, llama_sampler_init_penalties(
-                                        config_.sampling_repeat_last_n,
-                                        config_.sampling_repeat_penalty,
-                                        config_.sampling_frequency_penalty,
-                                        config_.sampling_presence_penalty));
-  llama_sampler_chain_add(sampler_,
-                          llama_sampler_init_top_p(config_.sampling_top_p, 1));
-  if (config_.sampling_min_p > 0.0f) {
-    llama_sampler_chain_add(
-        sampler_, llama_sampler_init_min_p(config_.sampling_min_p, 1));
-  }
-  llama_sampler_chain_add(
-      sampler_, llama_sampler_init_temp(config_.sampling_temperature));
-  llama_sampler_chain_add(
-      sampler_,
-      llama_sampler_init_dist(resolve_sampling_seed(config_.sampling_seed)));
+  // Stage selection is delegated to append_configured_sampler_stages so the
+  // greedy fast path and the skip-neutral gating live in one place and the
+  // grammar sampler chain (built per-slot) cannot drift.  Top-K still runs
+  // before penalties for the configured stochastic chain.
+  append_configured_sampler_stages(sampler_, config_);
 
   slot_scheduler_.Resize(
       static_cast<std::size_t>(std::max<int32_t>(1, config_.n_seq_max)));
@@ -2227,7 +2258,25 @@ SchedulerBurstResult InferenceRuntime::RunSchedulerBurst(
       return burst_result;
     }
 
+    // A snapshot drain is "free latency" only at moments when no streaming
+    // tokens are about to be observed by the user.  Two such moments exist:
+    //
+    //   1. `Waiting` — the tick had nothing to schedule.  Pure idle.
+    //   2. `completed_response_count > 0` at burst exit — a request just
+    //      finished inside this burst.  JS will settle the request, then
+    //      enqueue the next one (or yield to the user).  The cost lands
+    //      between requests where neither wallMs nor ITL observes it, and
+    //      crucially BEFORE the next request's `PrepareSequenceForPrompt`
+    //      cache lookup — without this, EMIT_LIMIT=1 streaming bursts
+    //      always exit via the emit-limit branch (never `Waiting`) and the
+    //      pending snapshot from the just-completed request stays queued
+    //      until *its successor* has already missed the cache.
+    //
+    // During active streaming `completed_response_count == 0`, so this
+    // gate keeps the drain off the per-token critical path.
+
     if (step_result == RequestStepResult::Waiting) {
+      prefix_state_cache_.DrainPendingSnapshots(shared_context_, 2);
       burst_result.status = burst_result.progressed_ticks > 0 ||
                                     burst_result.completed_response_count > 0
                                 ? RequestStepResult::Progressed
@@ -2235,17 +2284,26 @@ SchedulerBurstResult InferenceRuntime::RunSchedulerBurst(
       return burst_result;
     }
 
+    const auto drain_if_request_just_completed = [this, &burst_result]() {
+      if (burst_result.completed_response_count > 0) {
+        prefix_state_cache_.DrainPendingSnapshots(shared_context_, 2);
+      }
+    };
+
     if (clamped_max_completed > 0 &&
         burst_result.completed_response_count >= clamped_max_completed) {
+      drain_if_request_just_completed();
       burst_result.status = RequestStepResult::Progressed;
       return burst_result;
     }
     if (clamped_max_emitted > 0 &&
         burst_result.emitted_token_count >= clamped_max_emitted) {
+      drain_if_request_just_completed();
       burst_result.status = RequestStepResult::Progressed;
       return burst_result;
     }
     if (has_duration_deadline && std::chrono::steady_clock::now() >= deadline) {
+      drain_if_request_just_completed();
       burst_result.status = burst_result.progressed_ticks > 0 ||
                                     burst_result.completed_response_count > 0
                                 ? RequestStepResult::Progressed
@@ -2254,6 +2312,9 @@ SchedulerBurstResult InferenceRuntime::RunSchedulerBurst(
     }
   }
 
+  if (burst_result.completed_response_count > 0) {
+    prefix_state_cache_.DrainPendingSnapshots(shared_context_, 2);
+  }
   burst_result.status = burst_result.progressed_ticks > 0 ||
                                 burst_result.completed_response_count > 0
                             ? RequestStepResult::Progressed

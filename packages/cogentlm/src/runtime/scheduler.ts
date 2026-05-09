@@ -25,8 +25,17 @@ const SCHEDULER_PUMP_NATIVE_BURST_TICK_LIMIT = 64;
 const SCHEDULER_PUMP_NATIVE_BURST_EMITTED_TOKEN_LIMIT = 32;
 const SCHEDULER_PUMP_INTERACTIVE_FIRST_TOKEN_TICK_LIMIT = 8;
 const SCHEDULER_PUMP_INTERACTIVE_FIRST_TOKEN_EMITTED_TOKEN_LIMIT = 1;
+// Streaming bursts return after a single emitted token so the runtime-event
+// drain delivers each token to the JS layer at decode cadence rather than
+// in clumps at the end of an 80ms burst.  Without this, multiple tokens
+// produced inside a single WASM burst all surface to the browser at the
+// same wall-clock instant when the burst yields, which collapses ITL to
+// near-zero within a clump and inflates p99 ITL between clumps – the user
+// perceives stutter even though native decode is uniform.  TICK_LIMIT and
+// DURATION are kept as upstream backstops for stalls or non-streaming
+// contributions inside the same burst.
 const SCHEDULER_PUMP_INTERACTIVE_STREAMING_TICK_LIMIT = 16;
-const SCHEDULER_PUMP_INTERACTIVE_STREAMING_EMITTED_TOKEN_LIMIT = 8;
+const SCHEDULER_PUMP_INTERACTIVE_STREAMING_EMITTED_TOKEN_LIMIT = 1;
 const SCHEDULER_PUMP_INTERACTIVE_STREAMING_DURATION_US = 80_000;
 
 function nowMs(): number {
