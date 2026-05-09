@@ -42,6 +42,9 @@ struct SlotState {
   std::vector<llama_token> generated_tokens;
   std::string output_text;
   std::string buffered_output_text;
+  // Holds text pieces generated during a tick that are waiting for the
+  // next tick's GPU window to be emitted to JS.
+  std::string pending_emission_text;
   // Holds trailing bytes of an incomplete UTF-8 sequence that spans
   // multiple sampled tokens. Flushed to buffered_output_text once the
   // continuation bytes arrive (or on terminal phase transitions).

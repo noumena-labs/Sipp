@@ -963,6 +963,305 @@ std::string InferenceRuntime::BuildNoProgressDiagnosticLocked() const {
   return stream.str();
 }
 
+void InferenceRuntime::CompletePendingBookkeepingLocked() {
+  if (!has_pending_bookkeeping_) {
+    return;
+  }
+
+  const bool collect_observability = config_.enable_runtime_observability > 0;
+  const auto &pb = pending_bookkeeping_;
+  const struct llama_model *model = llama_get_model(shared_context_);
+  const struct llama_vocab *vocab = llama_model_get_vocab(model);
+
+  // 1. Emit deferred tokens to JS. These tokens were sampled at the end of the
+  // previous tick and moved to pending_emission_text so they wouldn't block
+  // the next tick's scheduling selection.
+  for (const auto &logits : pb.logits_contributions) {
+    if (logits.contribution_index < pb.plan.contributions.size()) {
+      const BatchContribution &contribution =
+          pb.plan.contributions[logits.contribution_index];
+      if (contribution.slot != nullptr) {
+        SlotState &slot = *contribution.slot;
+
+        if (logits.sampled_token >= 0 && slot.phase != SlotPhase::Failed) {
+          char piece_buffer[128];
+          std::string piece_overflow;
+          const char *piece_data = nullptr;
+          std::size_t piece_size = 0;
+          if (token_to_piece_buffer(vocab, logits.sampled_token, false,
+                                     piece_buffer, sizeof(piece_buffer),
+                                     piece_overflow, piece_data, piece_size)) {
+            std::string stitched = std::move(slot.pending_utf8_bytes);
+            slot.pending_utf8_bytes.clear();
+            stitched.append(piece_data, piece_size);
+
+            const std::size_t tail_len =
+                incomplete_utf8_tail_length(stitched.data(), stitched.size());
+            if (tail_len > 0) {
+              slot.pending_utf8_bytes.assign(stitched.end() - tail_len,
+                                             stitched.end());
+              stitched.resize(stitched.size() - tail_len);
+            }
+
+            if (!stitched.empty()) {
+              slot.pending_emission_text.append(stitched);
+            }
+          } else {
+            slot.terminal_error_message =
+                "Failed to convert sampled token to text piece.";
+            slot.phase = SlotPhase::Failed;
+          }
+        }
+
+        if (slot.phase == SlotPhase::Completed ||
+            slot.phase == SlotPhase::Failed) {
+          if (!slot.pending_utf8_bytes.empty()) {
+            slot.pending_emission_text.append(slot.pending_utf8_bytes);
+            slot.pending_utf8_bytes.clear();
+          }
+        }
+
+        if (!slot.pending_emission_text.empty()) {
+          slot.buffered_output_text.append(slot.pending_emission_text);
+          slot.pending_emission_text.clear();
+          slot_scheduler_.EmitBufferedTokenPiece(request_queue_, slot);
+        }
+      }
+    }
+  }
+
+  // 2. Perform deferred Prefix Cache storage. Snapshots are boundary-aware;
+  // we use the token_count captured at the end of the previous tick to
+  // ensure logical consistency even if the KV cache has since been extended.
+  for (const auto &entry : pb.prefix_cache_entries) {
+    SlotState *slot = entry.first;
+    std::size_t token_count = entry.second;
+    if (slot != nullptr && slot->request != nullptr &&
+        slot->session != nullptr) {
+      MaybeStorePrefixCacheEntryLocked(
+          slot->request->context_key, *slot->session, token_count,
+          slot->request->prompt_tokens.size(), slot->request);
+    }
+  }
+
+  // 3. Perform deferred Observability Attribution.
+  if (collect_observability) {
+    const auto observability_start = std::chrono::steady_clock::now();
+    const double native_policy_prepare_ms =
+        duration_ms(pb.policy_tick_start, pb.policy_prepare_end);
+    const double native_policy_plan_ms =
+        duration_ms(pb.policy_prepare_end, pb.policy_plan_end);
+    const double native_batch_build_ms =
+        duration_ms(pb.policy_plan_end, pb.batch_build_end);
+    const double native_llama_decode_wall_ms =
+        duration_ms(pb.decode_start, pb.decode_end);
+    const double native_synchronize_ms =
+        duration_ms(pb.synchronize_start, pb.synchronize_end);
+    const double native_kv_update_ms =
+        duration_ms(pb.synchronize_end, pb.sample_phase_start);
+    const double native_sample_phase_ms =
+        duration_ms(pb.sample_phase_start, pb.sample_phase_end);
+    const double native_sampler_wall_ms = pb.sampler_wall_ms;
+    const double native_token_emit_ms =
+        std::max(0.0, native_sample_phase_ms - native_sampler_wall_ms);
+    const double native_prefix_cache_ms =
+        duration_ms(pb.sample_phase_end, observability_start);
+    const auto &ctx_perf = pb.ctx_perf;
+    const double tick_total_ms =
+        std::chrono::duration<double, std::milli>(pb.sample_phase_end -
+                                                  pb.policy_tick_start)
+            .count();
+
+    struct RequestTickAttribution {
+      GenerateRequest *request = nullptr;
+      int32_t prefill_tokens = 0;
+      int32_t decode_tokens = 0;
+      int32_t sample_count = 0;
+      double sample_ms = 0.0;
+    };
+
+    std::vector<RequestTickAttribution> request_attributions;
+    request_attributions.reserve(
+        static_cast<std::size_t>(std::max(1, pb.plan.occupied_slot_count)));
+
+    const auto ensure_attribution =
+        [&request_attributions](
+            GenerateRequest *request) -> RequestTickAttribution * {
+      if (request == nullptr) {
+        return nullptr;
+      }
+      for (RequestTickAttribution &attribution : request_attributions) {
+        if (attribution.request == request) {
+          return &attribution;
+        }
+      }
+      request_attributions.push_back(
+          RequestTickAttribution{.request = request});
+      return &request_attributions.back();
+    };
+
+    for (const BatchContribution &contribution : pb.plan.contributions) {
+      if (contribution.request == nullptr) {
+        continue;
+      }
+      RequestTickAttribution *attribution =
+          ensure_attribution(contribution.request);
+      if (attribution == nullptr) {
+        continue;
+      }
+      if (contribution.kind == BatchContributionKind::Prefill) {
+        attribution->prefill_tokens++;
+      } else if (contribution.kind == BatchContributionKind::Decode) {
+        attribution->decode_tokens++;
+      }
+    }
+
+    for (const PendingLogitsContribution &pending_logits :
+         pb.logits_contributions) {
+      if (pending_logits.request == nullptr) {
+        continue;
+      }
+
+      RequestTickAttribution *attribution =
+          ensure_attribution(pending_logits.request);
+      if (attribution == nullptr) {
+        continue;
+      }
+      attribution->sample_count++;
+      attribution->sample_ms += pending_logits.sample_ms;
+    }
+
+    double tick_sample_ms = 0.0;
+    for (const RequestTickAttribution &attribution : request_attributions) {
+      tick_sample_ms += attribution.sample_ms;
+    }
+
+    const int32_t total_prefill_tokens = pb.plan.prefill_token_count;
+    const int32_t total_decode_tokens = pb.plan.decode_token_count;
+    const int32_t total_sample_count =
+        static_cast<int32_t>(pb.logits_contributions.size());
+    const int32_t total_eval_tokens =
+        total_prefill_tokens + total_decode_tokens;
+    const int32_t total_work_units =
+        total_prefill_tokens + total_decode_tokens + total_sample_count;
+    const double tick_overhead_ms =
+        std::max(0.0, tick_total_ms - ctx_perf.t_p_eval_ms -
+                          ctx_perf.t_eval_ms - tick_sample_ms);
+
+    for (const RequestTickAttribution &attribution : request_attributions) {
+      GenerateRequest *request = attribution.request;
+      if (request == nullptr) {
+        continue;
+      }
+
+      const int32_t request_prefill_tokens = attribution.prefill_tokens;
+      const int32_t request_decode_tokens = attribution.decode_tokens;
+      const int32_t request_sample_count = attribution.sample_count;
+      const double request_sample_ms = attribution.sample_ms;
+      const int32_t request_eval_tokens =
+          request_prefill_tokens + request_decode_tokens;
+      const int32_t request_work_units =
+          request_prefill_tokens + request_decode_tokens + request_sample_count;
+
+      const double prompt_share_ms = proportional_share(
+          ctx_perf.t_p_eval_ms, request_prefill_tokens, total_prefill_tokens);
+      const double decode_share_ms = proportional_share(
+          ctx_perf.t_eval_ms, request_decode_tokens, total_decode_tokens);
+      const double overhead_share_ms = proportional_share(
+          tick_overhead_ms, request_work_units, total_work_units);
+      const double prepare_share_ms = proportional_share(
+          native_policy_prepare_ms, request_work_units, total_work_units);
+      const double plan_share_ms = proportional_share(
+          native_policy_plan_ms, request_work_units, total_work_units);
+      const double batch_build_share_ms = proportional_share(
+          native_batch_build_ms, request_work_units, total_work_units);
+      const double decode_wall_share_ms = proportional_share(
+          native_llama_decode_wall_ms, request_eval_tokens, total_eval_tokens);
+      const double synchronize_share_ms = proportional_share(
+          native_synchronize_ms, request_eval_tokens, total_eval_tokens);
+      const double kv_update_share_ms = proportional_share(
+          native_kv_update_ms, request_eval_tokens, total_eval_tokens);
+      const double sampler_wall_share_ms = proportional_share(
+          native_sampler_wall_ms, request_sample_count, total_sample_count);
+      const double token_emit_share_ms = proportional_share(
+          native_token_emit_ms, request_sample_count, total_sample_count);
+      const double prefix_cache_share_ms = proportional_share(
+          native_prefix_cache_ms, request_prefill_tokens, total_prefill_tokens);
+
+      request->attributed_prompt_eval_ms += prompt_share_ms;
+      request->attributed_decode_eval_ms += decode_share_ms;
+      request->attributed_sample_ms += request_sample_ms;
+      request->attributed_native_policy_prepare_ms += prepare_share_ms;
+      request->attributed_native_policy_plan_ms += plan_share_ms;
+      request->attributed_native_batch_build_ms += batch_build_share_ms;
+      request->attributed_native_llama_decode_wall_ms += decode_wall_share_ms;
+      request->attributed_native_synchronize_ms += synchronize_share_ms;
+      request->attributed_native_kv_update_ms += kv_update_share_ms;
+      request->attributed_native_sampler_wall_ms += sampler_wall_share_ms;
+      request->attributed_native_token_emit_ms += token_emit_share_ms;
+      request->attributed_native_prefix_cache_ms += prefix_cache_share_ms;
+      request->attributed_total_ms += prompt_share_ms + decode_share_ms +
+                                      request_sample_ms + overhead_share_ms;
+      request->attributed_prompt_eval_tokens += request_prefill_tokens;
+      request->attributed_decode_eval_count += request_decode_tokens;
+      request->attributed_sample_count += request_sample_count;
+      request->attributed_native_policy_tick_count++;
+    }
+
+    const double native_observability_ms =
+        duration_ms(observability_start, std::chrono::steady_clock::now());
+    for (const RequestTickAttribution &attribution : request_attributions) {
+      if (attribution.request == nullptr) {
+        continue;
+      }
+      const int32_t request_work_units = attribution.prefill_tokens +
+                                         attribution.decode_tokens +
+                                         attribution.sample_count;
+      attribution.request->attributed_native_observability_ms +=
+          proportional_share(native_observability_ms, request_work_units,
+                             total_work_units);
+    }
+
+    last_runtime_observability_.total_ms += tick_total_ms;
+    last_runtime_observability_.prompt_eval_ms += ctx_perf.t_p_eval_ms;
+    last_runtime_observability_.decode_eval_ms += ctx_perf.t_eval_ms;
+    last_runtime_observability_.prompt_eval_tokens +=
+        pb.plan.prefill_token_count;
+    last_runtime_observability_.decode_eval_count += pb.plan.decode_token_count;
+    last_runtime_observability_.sample_count +=
+        static_cast<int32_t>(pb.logits_contributions.size());
+    last_runtime_observability_.output_token_count +=
+        static_cast<int32_t>(pb.logits_contributions.size());
+    last_runtime_observability_.sample_ms += tick_sample_ms;
+    last_runtime_observability_.native_policy_prepare_ms +=
+        native_policy_prepare_ms;
+    last_runtime_observability_.native_policy_plan_ms += native_policy_plan_ms;
+    last_runtime_observability_.native_batch_build_ms += native_batch_build_ms;
+    last_runtime_observability_.native_llama_decode_wall_ms +=
+        native_llama_decode_wall_ms;
+    last_runtime_observability_.native_synchronize_ms += native_synchronize_ms;
+    last_runtime_observability_.native_kv_update_ms += native_kv_update_ms;
+    last_runtime_observability_.native_sampler_wall_ms +=
+        native_sampler_wall_ms;
+    last_runtime_observability_.native_token_emit_ms += native_token_emit_ms;
+    last_runtime_observability_.native_prefix_cache_ms +=
+        native_prefix_cache_ms;
+    last_runtime_observability_.native_observability_ms +=
+        native_observability_ms;
+    last_runtime_observability_.native_policy_tick_count++;
+
+    UpdateSharedBatchMetricsLocked(pb.plan);
+    UpdateSchedulerObservabilityLocked(pb.plan, pb.tick_budget,
+                                       pb.effective_prefill_chunk_size);
+  }
+
+  has_pending_bookkeeping_ = false;
+}
+
+void InferenceRuntime::FlushAllPendingBookkeepingLocked() {
+  CompletePendingBookkeepingLocked();
+}
+
 bool InferenceRuntime::RunPolicyBatchTickLocked() {
   if (primary_model_ == nullptr || shared_context_ == nullptr ||
       sampler_ == nullptr) {
@@ -1210,7 +1509,8 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
 
   int32_t batch_token_index = 0;
 
-  for (const BatchContribution &contribution : plan.contributions) {
+  for (std::size_t i = 0; i < plan.contributions.size(); ++i) {
+    const BatchContribution &contribution = plan.contributions[i];
     if (contribution.slot == nullptr || contribution.slot->seq_id < 0) {
       continue;
     }
@@ -1229,22 +1529,17 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
 
     if (contribution.request_logits) {
       scratch_logits_contributions_.push_back(
-          PendingLogitsContribution{&contribution, batch_token_index});
+          PendingLogitsContribution{i, contribution.request, batch_token_index});
     }
 
     batch_token_index++;
-  }
-
-  if (collect_observability) {
+  }  if (collect_observability) {
     llama_perf_context_reset(shared_context_);
   }
   const auto batch_build_end = collect_observability
                                    ? std::chrono::steady_clock::now()
                                    : std::chrono::steady_clock::time_point{};
-  const auto tick_start = std::chrono::steady_clock::now();
-  const auto decode_start = collect_observability
-                                ? tick_start
-                                : std::chrono::steady_clock::time_point{};
+  const auto decode_start = std::chrono::steady_clock::now();
 
   if (llama_decode(shared_context_, shared_batch_builder_.Get()) != 0) {
     for (SlotState *slot : scratch_live_runnable_slots_) {
@@ -1257,8 +1552,15 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
         slot->request->lifecycle = GenerateRequestLifecycle::Failed;
       }
     }
+    FlushAllPendingBookkeepingLocked();
     return false;
   }
+
+  // CPU/GPU OVERLAP: While the GPU is processing the batch we just enqueued,
+  // we complete the bookkeeping (emitting, prefix caching, observability)
+  // for the tokens sampled at the end of the PREVIOUS tick.
+  CompletePendingBookkeepingLocked();
+
   const auto decode_end = collect_observability
                               ? std::chrono::steady_clock::now()
                               : std::chrono::steady_clock::time_point{};
@@ -1269,6 +1571,9 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
                                    ? std::chrono::steady_clock::now()
                                    : std::chrono::steady_clock::time_point{};
 
+  // Critical bookkeeping: Update KV tracking and slot phases immediately.
+  // These are required for the BatchPlanner to correctly construct the next
+  // tick's batch.
   for (const BatchContribution &contribution : plan.contributions) {
     if (contribution.slot == nullptr || contribution.slot->session == nullptr) {
       continue;
@@ -1280,31 +1585,14 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   }
 
   batch_planner_.ApplyDecodeResults(plan);
-  const auto kv_update_end = collect_observability
-                                 ? std::chrono::steady_clock::now()
-                                 : std::chrono::steady_clock::time_point{};
 
-  // Stall-free prefix caching: only store snapshots when there are no
-  // active decode slots competing for the lock.  When decode and prefill
-  // are interleaved in the same tick, the KV state serialization would
-  // stall token generation for all active users.  By deferring the
-  // snapshot, we trade a potential cache miss on a future request for
-  // smooth, uninterrupted decode latency now.
-  //
-  // Reference: Sarathi-Serve (OSDI '24, arXiv:2403.02310) establishes
-  // that protecting decode latency over prefill efficiency is the correct
-  // trade-off in user-facing LLM serving systems.
   const bool has_decode_pressure = !scratch_live_decode_ready_slots_.empty();
-  scratch_prefix_cache_slots_.clear();
+  std::vector<std::pair<SlotState *, std::size_t>> next_prefix_cache_entries;
+
   if (!has_decode_pressure) {
-    // Slot-id-indexed seen flags give us O(1) dedup instead of an O(N^2)
-    // std::find scan over the prefix cache slot list.  Resize lazily and
-    // reset only the bytes we touched to keep the memset cost proportional
-    // to the actual contribution count.
     if (scratch_prefix_cache_seen_.size() < slot_scheduler_.Slots().size()) {
       scratch_prefix_cache_seen_.assign(slot_scheduler_.Slots().size(), 0);
     }
-    scratch_prefix_cache_slots_.reserve(plan.occupied_slot_count);
     for (const BatchContribution &contribution : plan.contributions) {
       if (contribution.kind != BatchContributionKind::Prefill ||
           contribution.slot == nullptr ||
@@ -1317,12 +1605,6 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
           scratch_prefix_cache_seen_[slot_id]) {
         continue;
       }
-      // Boundary-aware gate: only enqueue slots whose post-tick KV length
-      // actually qualifies for a snapshot.  Skipping non-boundary slots here
-      // avoids the function call, the context_key copy indirection, and
-      // (critically) any storage-layer lookup that would otherwise contend
-      // for the cache's internal structures while we still hold the runtime
-      // mutex.
       const std::size_t kv_size =
           contribution.slot->session->current_kv_tokens.size();
       const std::size_t terminal_size =
@@ -1331,7 +1613,11 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
         continue;
       }
       scratch_prefix_cache_seen_[slot_id] = 1;
-      scratch_prefix_cache_slots_.push_back(contribution.slot);
+      next_prefix_cache_entries.push_back({contribution.slot, kv_size});
+    }
+    // Clear flags immediately so they are ready for the next tick.
+    for (const auto &entry : next_prefix_cache_entries) {
+      scratch_prefix_cache_seen_[entry.first->slot_id] = 0;
     }
   }
 
@@ -1339,18 +1625,18 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
                                       ? std::chrono::steady_clock::now()
                                       : std::chrono::steady_clock::time_point{};
   double sampler_wall_ms = 0.0;
-  for (const PendingLogitsContribution &pending_logits :
+  for (PendingLogitsContribution &pending_logits :
        scratch_logits_contributions_) {
-    const BatchContribution *logit_contribution = pending_logits.contribution;
-    if (logit_contribution == nullptr || logit_contribution->slot == nullptr ||
-        logit_contribution->slot->request == nullptr ||
-        logit_contribution->slot->sampler == nullptr ||
+    const BatchContribution &logit_contribution =
+        plan.contributions[pending_logits.contribution_index];
+    if (logit_contribution.slot == nullptr ||
+        logit_contribution.slot->sampler == nullptr ||
         pending_logits.batch_token_index < 0) {
       continue;
     }
 
-    SlotState &slot = *logit_contribution->slot;
-    GenerateRequest &slot_request = *slot.request;
+    SlotState &slot = *logit_contribution.slot;
+    GenerateRequest &slot_request = *pending_logits.request;
     const auto sampler_start = collect_observability
                                    ? std::chrono::steady_clock::now()
                                    : std::chrono::steady_clock::time_point{};
@@ -1364,384 +1650,77 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       slot_request.first_sampled_token_id = static_cast<int32_t>(next_token);
     }
 
+    if (collect_observability && slot.sampler != nullptr) {
+      pending_logits.sample_ms =
+          llama_perf_sampler(slot.sampler).t_sample_ms;
+    }
+
+    pending_logits.sampled_token = next_token;
+
     if (llama_vocab_is_eog(vocab, next_token)) {
-      // Flush any buffered incomplete UTF-8 tail before terminating. By
-      // end-of-generation any remaining bytes are as final as they'll get;
-      // emit them so consumers see the full output.
       if (!slot.pending_utf8_bytes.empty()) {
-        slot.buffered_output_text.append(slot.pending_utf8_bytes);
+        slot.pending_emission_text.append(slot.pending_utf8_bytes);
         slot.pending_utf8_bytes.clear();
-        slot_scheduler_.EmitBufferedTokenPiece(request_queue_, slot);
       }
       slot.phase = SlotPhase::Completed;
       slot_request.lifecycle = GenerateRequestLifecycle::Completed;
-      continue;
-    }
-
-    char piece_buffer[128];
-    std::string piece_overflow;
-    const char *piece_data = nullptr;
-    std::size_t piece_size = 0;
-    if (!token_to_piece_buffer(vocab, next_token, false, piece_buffer,
-                               sizeof(piece_buffer), piece_overflow, piece_data,
-                               piece_size)) {
-      slot.terminal_error_message =
-          "Failed to convert sampled token to text piece.";
-      slot.phase = SlotPhase::Failed;
-      slot_request.lifecycle = GenerateRequestLifecycle::Failed;
-      continue;
-    }
-    if (piece_size == 0 && slot_request.emitted_token_count == 0 &&
-        slot.pending_utf8_bytes.empty()) {
-      slot.terminal_error_message =
-          "Leading sampled token decoded to an empty text piece.";
-      slot.phase = SlotPhase::Failed;
-      slot_request.lifecycle = GenerateRequestLifecycle::Failed;
       continue;
     }
 
     slot.generated_tokens.push_back(next_token);
-    // Stitch any pending UTF-8 continuation bytes in front of this piece
-    // so multi-byte codepoints that span sampled tokens are emitted cleanly.
-    std::string stitched = std::move(slot.pending_utf8_bytes);
-    slot.pending_utf8_bytes.clear();
-    stitched.append(piece_data, piece_size);
-    const std::size_t tail_len =
-        incomplete_utf8_tail_length(stitched.data(), stitched.size());
-    if (tail_len > 0) {
-      slot.pending_utf8_bytes.assign(stitched.end() - tail_len, stitched.end());
-      stitched.resize(stitched.size() - tail_len);
-    }
-    if (!stitched.empty()) {
-      slot.buffered_output_text.append(stitched);
-    }
-    slot.phase = SlotPhase::Streaming;
-    slot_request.lifecycle = GenerateRequestLifecycle::Streaming;
-    if (!slot.buffered_output_text.empty()) {
-      slot_scheduler_.EmitBufferedTokenPiece(request_queue_, slot);
-    }
-
-    if (slot_request.cancel_requested) {
-      slot.pending_utf8_bytes.clear();
-      slot.terminal_error_message = "Request cancelled.";
-      slot.phase = SlotPhase::Failed;
-      slot_request.lifecycle = GenerateRequestLifecycle::Cancelled;
-      continue;
-    }
 
     if (slot_request.max_output_tokens > 0 &&
         static_cast<int32_t>(slot.generated_tokens.size()) >=
             slot_request.max_output_tokens) {
-      // Flush any trailing incomplete UTF-8 bytes on hard max-token stop so
-      // consumers don't silently lose a codepoint.
-      if (!slot.pending_utf8_bytes.empty()) {
-        slot.buffered_output_text.append(slot.pending_utf8_bytes);
-        slot.pending_utf8_bytes.clear();
-        slot_scheduler_.EmitBufferedTokenPiece(request_queue_, slot);
-      }
       slot.phase = SlotPhase::Completed;
       slot_request.lifecycle = GenerateRequestLifecycle::Completed;
-    } else if (slot.phase != SlotPhase::Failed) {
-      slot.phase = SlotPhase::Decode;
-      slot_request.lifecycle = GenerateRequestLifecycle::Running;
+    } else {
+      slot.phase = SlotPhase::Streaming;
+      slot_request.lifecycle = GenerateRequestLifecycle::Streaming;
     }
   }
+
   const auto sample_phase_end = collect_observability
                                     ? std::chrono::steady_clock::now()
                                     : std::chrono::steady_clock::time_point{};
 
-  const auto prefix_cache_start = sample_phase_end;
-  for (SlotState *slot : scratch_prefix_cache_slots_) {
-    if (slot == nullptr || slot->request == nullptr ||
-        slot->session == nullptr) {
-      continue;
-    }
-    MaybeStorePrefixCacheEntryLocked(slot->request->context_key, *slot->session,
-                                     slot->session->current_kv_tokens.size(),
-                                     slot->request->prompt_tokens.size(),
-                                     slot->request);
-    // Clear only the seen-flags we actually set this tick; cheaper than
-    // memset'ing the whole flag buffer when the boundary set is small.
-    if (slot->slot_id < scratch_prefix_cache_seen_.size()) {
-      scratch_prefix_cache_seen_[slot->slot_id] = 0;
+  // Prepare bookkeeping for the NEXT tick's GPU window.
+  pending_bookkeeping_ = {
+      .plan = plan,
+      .logits_contributions = scratch_logits_contributions_,
+      .prefix_cache_entries = std::move(next_prefix_cache_entries),
+      .policy_tick_start = policy_tick_start,
+      .policy_prepare_end = policy_prepare_end,
+      .policy_plan_end = policy_plan_end,
+      .batch_build_end = batch_build_end,
+      .decode_start = decode_start,
+      .decode_end = decode_end,
+      .synchronize_start = synchronize_start,
+      .synchronize_end = synchronize_end,
+      .sample_phase_start = sample_phase_start,
+      .sample_phase_end = sample_phase_end,
+      .sampler_wall_ms = sampler_wall_ms,
+      .ctx_perf = collect_observability ? llama_perf_context(shared_context_)
+                                        : llama_perf_context_data{},
+      .effective_prefill_chunk_size = effective_prefill_chunk_size,
+      .tick_budget = tick_budget};
+  has_pending_bookkeeping_ = true;
+
+  // If any slot was marked Completed or Failed this tick, we MUST flush
+  // immediately so that the FinalizeCompletedSlots() call following this
+  // tick sees the final tokens and accurate request metrics.
+  bool must_flush = false;
+  for (const SlotState &slot : slot_scheduler_.Slots()) {
+    if (slot.phase == SlotPhase::Completed || slot.phase == SlotPhase::Failed) {
+      must_flush = true;
+      break;
     }
   }
-  const auto prefix_cache_end = collect_observability
-                                    ? std::chrono::steady_clock::now()
-                                    : std::chrono::steady_clock::time_point{};
 
-  const auto tick_end = std::chrono::steady_clock::now();
-  if (collect_observability) {
-    const auto observability_start = std::chrono::steady_clock::now();
-    const double native_policy_prepare_ms =
-        duration_ms(policy_tick_start, policy_prepare_end);
-    const double native_policy_plan_ms =
-        duration_ms(policy_prepare_end, policy_plan_end);
-    const double native_batch_build_ms =
-        duration_ms(policy_plan_end, batch_build_end);
-    const double native_llama_decode_wall_ms =
-        duration_ms(decode_start, decode_end);
-    const double native_synchronize_ms =
-        duration_ms(synchronize_start, synchronize_end);
-    const double native_kv_update_ms =
-        duration_ms(synchronize_end, kv_update_end);
-    const double native_sample_phase_ms =
-        duration_ms(sample_phase_start, sample_phase_end);
-    const double native_sampler_wall_ms = sampler_wall_ms;
-    const double native_token_emit_ms =
-        std::max(0.0, native_sample_phase_ms - native_sampler_wall_ms);
-    const double native_prefix_cache_ms =
-        duration_ms(prefix_cache_start, prefix_cache_end);
-    const auto ctx_perf = llama_perf_context(shared_context_);
-    const double tick_total_ms =
-        std::chrono::duration<double, std::milli>(tick_end - tick_start)
-            .count();
-
-    struct RequestTickAttribution {
-      GenerateRequest *request = nullptr;
-      int32_t prefill_tokens = 0;
-      int32_t decode_tokens = 0;
-      int32_t sample_count = 0;
-      double sample_ms = 0.0;
-    };
-
-    std::vector<RequestTickAttribution> request_attributions;
-    request_attributions.reserve(
-        static_cast<std::size_t>(std::max(1, plan.occupied_slot_count)));
-
-    const auto ensure_attribution =
-        [&request_attributions](
-            GenerateRequest *request) -> RequestTickAttribution * {
-      if (request == nullptr) {
-        return nullptr;
-      }
-      for (RequestTickAttribution &attribution : request_attributions) {
-        if (attribution.request == request) {
-          return &attribution;
-        }
-      }
-      request_attributions.push_back(
-          RequestTickAttribution{.request = request});
-      return &request_attributions.back();
-    };
-
-    for (const BatchContribution &contribution : plan.contributions) {
-      if (contribution.slot == nullptr ||
-          contribution.slot->request == nullptr) {
-        continue;
-      }
-      RequestTickAttribution *attribution =
-          ensure_attribution(contribution.slot->request);
-      if (attribution == nullptr) {
-        continue;
-      }
-      if (contribution.kind == BatchContributionKind::Prefill) {
-        attribution->prefill_tokens++;
-      } else if (contribution.kind == BatchContributionKind::Decode) {
-        attribution->decode_tokens++;
-      }
-    }
-
-    for (const PendingLogitsContribution &pending_logits :
-         scratch_logits_contributions_) {
-      const BatchContribution *contribution = pending_logits.contribution;
-      if (contribution == nullptr || contribution->slot == nullptr ||
-          contribution->slot->request == nullptr) {
-        continue;
-      }
-
-      RequestTickAttribution *attribution =
-          ensure_attribution(contribution->slot->request);
-      if (attribution == nullptr) {
-        continue;
-      }
-      attribution->sample_count++;
-      if (contribution->slot->sampler != nullptr) {
-        attribution->sample_ms +=
-            llama_perf_sampler(contribution->slot->sampler).t_sample_ms;
-      }
-    }
-
-    double tick_sample_ms = 0.0;
-    for (const RequestTickAttribution &attribution : request_attributions) {
-      tick_sample_ms += attribution.sample_ms;
-    }
-
-    const int32_t total_prefill_tokens = plan.prefill_token_count;
-    const int32_t total_decode_tokens = plan.decode_token_count;
-    const int32_t total_sample_count =
-        static_cast<int32_t>(scratch_logits_contributions_.size());
-    const int32_t total_eval_tokens =
-        total_prefill_tokens + total_decode_tokens;
-    const int32_t total_work_units =
-        total_prefill_tokens + total_decode_tokens + total_sample_count;
-    const double tick_overhead_ms =
-        std::max(0.0, tick_total_ms - ctx_perf.t_p_eval_ms -
-                          ctx_perf.t_eval_ms - tick_sample_ms);
-
-    for (const RequestTickAttribution &attribution : request_attributions) {
-      GenerateRequest *request = attribution.request;
-      if (request == nullptr) {
-        continue;
-      }
-
-      const int32_t request_prefill_tokens = attribution.prefill_tokens;
-      const int32_t request_decode_tokens = attribution.decode_tokens;
-      const int32_t request_sample_count = attribution.sample_count;
-      const double request_sample_ms = attribution.sample_ms;
-      const int32_t request_eval_tokens =
-          request_prefill_tokens + request_decode_tokens;
-      const int32_t request_work_units =
-          request_prefill_tokens + request_decode_tokens + request_sample_count;
-
-      const double prompt_share_ms = proportional_share(
-          ctx_perf.t_p_eval_ms, request_prefill_tokens, total_prefill_tokens);
-      const double decode_share_ms = proportional_share(
-          ctx_perf.t_eval_ms, request_decode_tokens, total_decode_tokens);
-      const double overhead_share_ms = proportional_share(
-          tick_overhead_ms, request_work_units, total_work_units);
-      const double prepare_share_ms = proportional_share(
-          native_policy_prepare_ms, request_work_units, total_work_units);
-      const double plan_share_ms = proportional_share(
-          native_policy_plan_ms, request_work_units, total_work_units);
-      const double batch_build_share_ms = proportional_share(
-          native_batch_build_ms, request_work_units, total_work_units);
-      const double decode_wall_share_ms = proportional_share(
-          native_llama_decode_wall_ms, request_eval_tokens, total_eval_tokens);
-      const double synchronize_share_ms = proportional_share(
-          native_synchronize_ms, request_eval_tokens, total_eval_tokens);
-      const double kv_update_share_ms = proportional_share(
-          native_kv_update_ms, request_eval_tokens, total_eval_tokens);
-      const double sampler_wall_share_ms = proportional_share(
-          native_sampler_wall_ms, request_sample_count, total_sample_count);
-      const double token_emit_share_ms = proportional_share(
-          native_token_emit_ms, request_sample_count, total_sample_count);
-      const double prefix_cache_share_ms = proportional_share(
-          native_prefix_cache_ms, request_prefill_tokens, total_prefill_tokens);
-
-      request->attributed_prompt_eval_ms += prompt_share_ms;
-      request->attributed_decode_eval_ms += decode_share_ms;
-      request->attributed_sample_ms += request_sample_ms;
-      request->attributed_native_policy_prepare_ms += prepare_share_ms;
-      request->attributed_native_policy_plan_ms += plan_share_ms;
-      request->attributed_native_batch_build_ms += batch_build_share_ms;
-      request->attributed_native_llama_decode_wall_ms += decode_wall_share_ms;
-      request->attributed_native_synchronize_ms += synchronize_share_ms;
-      request->attributed_native_kv_update_ms += kv_update_share_ms;
-      request->attributed_native_sampler_wall_ms += sampler_wall_share_ms;
-      request->attributed_native_token_emit_ms += token_emit_share_ms;
-      request->attributed_native_prefix_cache_ms += prefix_cache_share_ms;
-      request->attributed_total_ms += prompt_share_ms + decode_share_ms +
-                                      request_sample_ms + overhead_share_ms;
-      request->attributed_prompt_eval_tokens += request_prefill_tokens;
-      request->attributed_decode_eval_count += request_decode_tokens;
-      request->attributed_sample_count += request_sample_count;
-      request->attributed_native_policy_tick_count++;
-    }
-
-    const double native_observability_ms =
-        duration_ms(observability_start, std::chrono::steady_clock::now());
-    for (const RequestTickAttribution &attribution : request_attributions) {
-      if (attribution.request == nullptr) {
-        continue;
-      }
-      const int32_t request_work_units = attribution.prefill_tokens +
-                                         attribution.decode_tokens +
-                                         attribution.sample_count;
-      attribution.request->attributed_native_observability_ms +=
-          proportional_share(native_observability_ms, request_work_units,
-                             total_work_units);
-    }
-
-    if (!has_last_runtime_observability_) {
-      last_runtime_observability_ = {};
-      for (SlotState *slot : scratch_live_runnable_slots_) {
-        if (slot != nullptr && slot->request != nullptr) {
-          last_runtime_observability_.input_token_count +=
-              static_cast<int32_t>(slot->request->prompt_tokens.size());
-        }
-      }
-      has_last_runtime_observability_ = true;
-    }
-
-    last_runtime_observability_.total_ms += tick_total_ms;
-    last_runtime_observability_.prompt_eval_ms += ctx_perf.t_p_eval_ms;
-    last_runtime_observability_.decode_eval_ms += ctx_perf.t_eval_ms;
-    last_runtime_observability_.prompt_eval_tokens += plan.prefill_token_count;
-    last_runtime_observability_.decode_eval_count += plan.decode_token_count;
-    last_runtime_observability_.sample_count +=
-        static_cast<int32_t>(scratch_logits_contributions_.size());
-    last_runtime_observability_.output_token_count +=
-        static_cast<int32_t>(scratch_logits_contributions_.size());
-    last_runtime_observability_.first_sampled_token_id = -1;
-    for (SlotState *slot : scratch_live_runnable_slots_) {
-      if (slot != nullptr && slot->request != nullptr) {
-        if (last_runtime_observability_.first_sampled_token_id < 0 &&
-            slot->request->first_sampled_token_id >= 0) {
-          last_runtime_observability_.first_sampled_token_id =
-              slot->request->first_sampled_token_id;
-        }
-      }
-    }
-    last_runtime_observability_.sample_ms += tick_sample_ms;
-    last_runtime_observability_.native_policy_prepare_ms +=
-        native_policy_prepare_ms;
-    last_runtime_observability_.native_policy_plan_ms += native_policy_plan_ms;
-    last_runtime_observability_.native_batch_build_ms += native_batch_build_ms;
-    last_runtime_observability_.native_llama_decode_wall_ms +=
-        native_llama_decode_wall_ms;
-    last_runtime_observability_.native_synchronize_ms += native_synchronize_ms;
-    last_runtime_observability_.native_kv_update_ms += native_kv_update_ms;
-    last_runtime_observability_.native_sampler_wall_ms +=
-        native_sampler_wall_ms;
-    last_runtime_observability_.native_token_emit_ms += native_token_emit_ms;
-    last_runtime_observability_.native_prefix_cache_ms +=
-        native_prefix_cache_ms;
-    last_runtime_observability_.native_observability_ms +=
-        native_observability_ms;
-    last_runtime_observability_.native_policy_tick_count++;
-
-    double active_accumulated_itl_ms = 0.0;
-    int32_t active_itl_sample_count = 0;
-    double active_accumulated_ttft_ms = 0.0;
-    int32_t active_ttft_count = 0;
-
-    for (SlotState *slot : scratch_live_runnable_slots_) {
-      if (slot != nullptr && slot->request != nullptr) {
-        if (slot->request->has_first_token_at) {
-          const double ttft = duration_ms(slot->request->enqueued_at,
-                                          slot->request->first_token_at);
-          active_accumulated_ttft_ms += ttft;
-          active_ttft_count++;
-
-          if (slot->request->emitted_token_count > 1) {
-            active_accumulated_itl_ms +=
-                (slot->request->accumulated_itl_ms /
-                 static_cast<double>(slot->request->emitted_token_count - 1));
-            active_itl_sample_count++;
-          }
-        }
-      }
-    }
-
-    if (active_ttft_count > 0) {
-      last_runtime_observability_.ttft_ms =
-          active_accumulated_ttft_ms / active_ttft_count;
-    } else {
-      last_runtime_observability_.ttft_ms = 0.0;
-    }
-
-    if (active_itl_sample_count > 0) {
-      last_runtime_observability_.mean_itl_ms =
-          active_accumulated_itl_ms / active_itl_sample_count;
-    } else {
-      last_runtime_observability_.mean_itl_ms = 0.0;
-    }
-
-    UpdateSharedBatchMetricsLocked(plan);
-    UpdateSchedulerObservabilityLocked(plan, tick_budget,
-                                       effective_prefill_chunk_size);
+  if (must_flush) {
+    FlushAllPendingBookkeepingLocked();
   }
+
   return true;
 }
 
@@ -2323,6 +2302,8 @@ SchedulerBurstResult InferenceRuntime::RunSchedulerBurst(
     }
   }
 
+  FlushAllPendingBookkeepingLocked();
+
   if (burst_result.completed_response_count > 0) {
     prefix_state_cache_.DrainPendingSnapshots(shared_context_, 2);
   }
@@ -2365,6 +2346,7 @@ RequestStepResult InferenceRuntime::RunSchedulerTickLocked() {
                               : std::chrono::steady_clock::time_point{};
 
   const auto finalize_start = policy_end;
+  FlushAllPendingBookkeepingLocked();
   slot_scheduler_.FinalizeCompletedSlots(request_queue_, session_store_);
   const auto finalize_end = collect_observability
                                 ? std::chrono::steady_clock::now()

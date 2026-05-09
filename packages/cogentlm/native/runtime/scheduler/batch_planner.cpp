@@ -86,6 +86,7 @@ SharedBatchPlan BatchPlanner::BuildPolicyBatch(
 
     BatchContribution contribution;
     contribution.slot = slot;
+    contribution.request = slot->request;
     contribution.kind = BatchContributionKind::Decode;
     contribution.token = slot->generated_tokens.back();
     contribution.position =
@@ -144,6 +145,7 @@ SharedBatchPlan BatchPlanner::BuildPolicyBatch(
          ++token_index) {
       BatchContribution contribution;
       contribution.slot = slot;
+      contribution.request = slot->request;
       contribution.kind = BatchContributionKind::Prefill;
       contribution.token = prompt_tokens[token_index];
       contribution.position = static_cast<int32_t>(token_index);

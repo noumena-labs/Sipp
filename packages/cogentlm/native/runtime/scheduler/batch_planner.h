@@ -24,6 +24,7 @@ enum class BatchContributionKind : std::uint8_t {
 
 struct BatchContribution {
   SlotState *slot = nullptr;
+  GenerateRequest *request = nullptr;
   BatchContributionKind kind = BatchContributionKind::Prefill;
   llama_token token = 0;
   int32_t position = 0;

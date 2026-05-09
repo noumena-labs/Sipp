@@ -126,6 +126,8 @@ private:
                                   const llama_vocab *vocab);
 
   bool RunPolicyBatchTickLocked();
+  void CompletePendingBookkeepingLocked();
+  void FlushAllPendingBookkeepingLocked();
   RequestStepResult RunSchedulerTickLocked();
   int32_t ResolvePrefillChunkSizeLocked(
       const SchedulerTickBudget &tick_budget, int32_t decode_ready_count,
@@ -180,10 +182,39 @@ private:
   // need to sample from" list.  Lives across ticks so its capacity stabilizes
   // and the inference hot path performs zero heap allocations.
   struct PendingLogitsContribution {
-    const BatchContribution *contribution = nullptr;
+    std::size_t contribution_index = 0;
+    GenerateRequest *request = nullptr;
     int32_t batch_token_index = -1;
+    llama_token sampled_token = -1;
+    double sample_ms = 0.0;
   };
+
+  struct PendingTickBookkeeping {
+    SharedBatchPlan plan;
+    std::vector<PendingLogitsContribution> logits_contributions;
+    std::vector<std::pair<SlotState *, std::size_t>> prefix_cache_entries;
+
+    // Observability metadata captured at the end of the pending tick.
+    std::chrono::steady_clock::time_point policy_tick_start;
+    std::chrono::steady_clock::time_point policy_prepare_end;
+    std::chrono::steady_clock::time_point policy_plan_end;
+    std::chrono::steady_clock::time_point batch_build_end;
+    std::chrono::steady_clock::time_point decode_start;
+    std::chrono::steady_clock::time_point decode_end;
+    std::chrono::steady_clock::time_point synchronize_start;
+    std::chrono::steady_clock::time_point synchronize_end;
+    std::chrono::steady_clock::time_point sample_phase_start;
+    std::chrono::steady_clock::time_point sample_phase_end;
+    double sampler_wall_ms = 0.0;
+    llama_perf_context_data ctx_perf = {};
+    int32_t effective_prefill_chunk_size = 0;
+    SchedulerTickBudget tick_budget = {};
+  };
+
   std::vector<PendingLogitsContribution> scratch_logits_contributions_;
+  std::vector<PendingLogitsContribution> pending_logits_contributions_;
+  PendingTickBookkeeping pending_bookkeeping_;
+  bool has_pending_bookkeeping_ = false;
   mutable std::mutex operation_mutex_;
 };
 
