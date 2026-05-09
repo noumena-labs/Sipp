@@ -34,9 +34,9 @@ const SCHEDULER_PUMP_INTERACTIVE_FIRST_TOKEN_EMITTED_TOKEN_LIMIT = 1;
 // perceives stutter even though native decode is uniform.  TICK_LIMIT and
 // DURATION are kept as upstream backstops for stalls or non-streaming
 // contributions inside the same burst.
-const SCHEDULER_PUMP_INTERACTIVE_STREAMING_TICK_LIMIT = 16;
+const SCHEDULER_PUMP_INTERACTIVE_STREAMING_TICK_LIMIT = 32;
 const SCHEDULER_PUMP_INTERACTIVE_STREAMING_EMITTED_TOKEN_LIMIT = 1;
-const SCHEDULER_PUMP_INTERACTIVE_STREAMING_DURATION_US = 80_000;
+const SCHEDULER_PUMP_INTERACTIVE_STREAMING_DURATION_US = 160_000;
 
 function nowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'

@@ -99,7 +99,8 @@ uint32_t resolve_sampling_seed(int32_t seed) {
 // genuinely produce identical output are short-circuited.
 constexpr float kSamplerFloatEpsilon = 1e-6f;
 
-bool sampler_is_greedy(const noumena::cogentengine::InferenceRuntimeConfig &cfg) {
+bool sampler_is_greedy(
+    const noumena::cogentengine::InferenceRuntimeConfig &cfg) {
   return cfg.sampling_temperature <= kSamplerFloatEpsilon ||
          cfg.sampling_top_k == 1;
 }
@@ -126,6 +127,17 @@ bool sampler_temp_identity(
 // only carries stages that actually change the distribution.  Used by both the
 // shared sampler and the per-slot grammar sampler so the two paths cannot
 // drift.
+//
+// (Note: an earlier iteration of this function inserted a custom
+// "threshold-prefilter" sampler before `top_k` in the hope of bypassing the
+// O(N log K) std::partial_sort that llama.cpp uses for npartial <= 128.
+// The prefilter was net-negative on every measured scenario — Qwen3's
+// raw-logit distribution is peaked enough that the prefilter's safety
+// fallback fired most tokens, costing 2 full scans of the 152k-entry array
+// without yielding any reduction in `top_k`'s work.  Removed; revisit only if
+// we can either (a) acquire empirical per-model logit-spread data to set the
+// threshold dynamically or
+// (b) move sampling onto the GPU as a fused kernel.)
 void append_configured_sampler_stages(
     llama_sampler *chain,
     const noumena::cogentengine::InferenceRuntimeConfig &cfg) {
@@ -139,14 +151,15 @@ void append_configured_sampler_stages(
     return;
   }
   if (cfg.sampling_top_k > 0) {
-    llama_sampler_chain_add(chain, llama_sampler_init_top_k(cfg.sampling_top_k));
+    llama_sampler_chain_add(chain,
+                            llama_sampler_init_top_k(cfg.sampling_top_k));
   }
   if (!sampler_penalties_neutral(cfg)) {
-    llama_sampler_chain_add(chain, llama_sampler_init_penalties(
-                                       cfg.sampling_repeat_last_n,
-                                       cfg.sampling_repeat_penalty,
-                                       cfg.sampling_frequency_penalty,
-                                       cfg.sampling_presence_penalty));
+    llama_sampler_chain_add(
+        chain, llama_sampler_init_penalties(cfg.sampling_repeat_last_n,
+                                            cfg.sampling_repeat_penalty,
+                                            cfg.sampling_frequency_penalty,
+                                            cfg.sampling_presence_penalty));
   }
   if (!sampler_top_p_identity(cfg)) {
     llama_sampler_chain_add(chain,
@@ -957,9 +970,9 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   }
 
   const bool collect_observability = config_.enable_runtime_observability > 0;
-  const auto policy_tick_start =
-      collect_observability ? std::chrono::steady_clock::now()
-                            : std::chrono::steady_clock::time_point{};
+  const auto policy_tick_start = collect_observability
+                                     ? std::chrono::steady_clock::now()
+                                     : std::chrono::steady_clock::time_point{};
 
   for (SlotState &slot : slot_scheduler_.MutableSlots()) {
     NormalizeRunnableSlotStateLocked(slot);
@@ -1116,9 +1129,9 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     return false;
   }
 
-  const auto policy_prepare_end =
-      collect_observability ? std::chrono::steady_clock::now()
-                            : std::chrono::steady_clock::time_point{};
+  const auto policy_prepare_end = collect_observability
+                                      ? std::chrono::steady_clock::now()
+                                      : std::chrono::steady_clock::time_point{};
 
   const int32_t batch_token_budget = ResolveBatchTokenBudgetLocked();
   const SchedulerTickBudget tick_budget = slot_scheduler_.BuildTickBudget(
@@ -1136,9 +1149,9 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   if (plan.Empty()) {
     return false;
   }
-  const auto policy_plan_end =
-      collect_observability ? std::chrono::steady_clock::now()
-                            : std::chrono::steady_clock::time_point{};
+  const auto policy_plan_end = collect_observability
+                                   ? std::chrono::steady_clock::now()
+                                   : std::chrono::steady_clock::time_point{};
 
   {
     scratch_tick_requests_.clear();
@@ -1225,12 +1238,13 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   if (collect_observability) {
     llama_perf_context_reset(shared_context_);
   }
-  const auto batch_build_end =
-      collect_observability ? std::chrono::steady_clock::now()
-                            : std::chrono::steady_clock::time_point{};
+  const auto batch_build_end = collect_observability
+                                   ? std::chrono::steady_clock::now()
+                                   : std::chrono::steady_clock::time_point{};
   const auto tick_start = std::chrono::steady_clock::now();
-  const auto decode_start =
-      collect_observability ? tick_start : std::chrono::steady_clock::time_point{};
+  const auto decode_start = collect_observability
+                                ? tick_start
+                                : std::chrono::steady_clock::time_point{};
 
   if (llama_decode(shared_context_, shared_batch_builder_.Get()) != 0) {
     for (SlotState *slot : scratch_live_runnable_slots_) {
@@ -1245,15 +1259,15 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     }
     return false;
   }
-  const auto decode_end =
-      collect_observability ? std::chrono::steady_clock::now()
-                            : std::chrono::steady_clock::time_point{};
+  const auto decode_end = collect_observability
+                              ? std::chrono::steady_clock::now()
+                              : std::chrono::steady_clock::time_point{};
 
   const auto synchronize_start = decode_end;
   llama_synchronize(shared_context_);
-  const auto synchronize_end =
-      collect_observability ? std::chrono::steady_clock::now()
-                            : std::chrono::steady_clock::time_point{};
+  const auto synchronize_end = collect_observability
+                                   ? std::chrono::steady_clock::now()
+                                   : std::chrono::steady_clock::time_point{};
 
   for (const BatchContribution &contribution : plan.contributions) {
     if (contribution.slot == nullptr || contribution.slot->session == nullptr) {
@@ -1266,9 +1280,9 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   }
 
   batch_planner_.ApplyDecodeResults(plan);
-  const auto kv_update_end =
-      collect_observability ? std::chrono::steady_clock::now()
-                            : std::chrono::steady_clock::time_point{};
+  const auto kv_update_end = collect_observability
+                                 ? std::chrono::steady_clock::now()
+                                 : std::chrono::steady_clock::time_point{};
 
   // Stall-free prefix caching: only store snapshots when there are no
   // active decode slots competing for the lock.  When decode and prefill
@@ -1287,8 +1301,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     // std::find scan over the prefix cache slot list.  Resize lazily and
     // reset only the bytes we touched to keep the memset cost proportional
     // to the actual contribution count.
-    if (scratch_prefix_cache_seen_.size() <
-        slot_scheduler_.Slots().size()) {
+    if (scratch_prefix_cache_seen_.size() < slot_scheduler_.Slots().size()) {
       scratch_prefix_cache_seen_.assign(slot_scheduler_.Slots().size(), 0);
     }
     scratch_prefix_cache_slots_.reserve(plan.occupied_slot_count);
@@ -1322,9 +1335,9 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     }
   }
 
-  const auto sample_phase_start =
-      collect_observability ? std::chrono::steady_clock::now()
-                            : std::chrono::steady_clock::time_point{};
+  const auto sample_phase_start = collect_observability
+                                      ? std::chrono::steady_clock::now()
+                                      : std::chrono::steady_clock::time_point{};
   double sampler_wall_ms = 0.0;
   for (const PendingLogitsContribution &pending_logits :
        scratch_logits_contributions_) {
@@ -1338,9 +1351,9 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
 
     SlotState &slot = *logit_contribution->slot;
     GenerateRequest &slot_request = *slot.request;
-    const auto sampler_start =
-        collect_observability ? std::chrono::steady_clock::now()
-                              : std::chrono::steady_clock::time_point{};
+    const auto sampler_start = collect_observability
+                                   ? std::chrono::steady_clock::now()
+                                   : std::chrono::steady_clock::time_point{};
     const llama_token next_token = llama_sampler_sample(
         slot.sampler, shared_context_, pending_logits.batch_token_index);
     if (collect_observability) {
@@ -1433,9 +1446,9 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       slot_request.lifecycle = GenerateRequestLifecycle::Running;
     }
   }
-  const auto sample_phase_end =
-      collect_observability ? std::chrono::steady_clock::now()
-                            : std::chrono::steady_clock::time_point{};
+  const auto sample_phase_end = collect_observability
+                                    ? std::chrono::steady_clock::now()
+                                    : std::chrono::steady_clock::time_point{};
 
   const auto prefix_cache_start = sample_phase_end;
   for (SlotState *slot : scratch_prefix_cache_slots_) {
@@ -1453,9 +1466,9 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       scratch_prefix_cache_seen_[slot->slot_id] = 0;
     }
   }
-  const auto prefix_cache_end =
-      collect_observability ? std::chrono::steady_clock::now()
-                            : std::chrono::steady_clock::time_point{};
+  const auto prefix_cache_end = collect_observability
+                                    ? std::chrono::steady_clock::now()
+                                    : std::chrono::steady_clock::time_point{};
 
   const auto tick_end = std::chrono::steady_clock::now();
   if (collect_observability) {
@@ -1593,9 +1606,8 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
           native_policy_plan_ms, request_work_units, total_work_units);
       const double batch_build_share_ms = proportional_share(
           native_batch_build_ms, request_work_units, total_work_units);
-      const double decode_wall_share_ms =
-          proportional_share(native_llama_decode_wall_ms, request_eval_tokens,
-                             total_eval_tokens);
+      const double decode_wall_share_ms = proportional_share(
+          native_llama_decode_wall_ms, request_eval_tokens, total_eval_tokens);
       const double synchronize_share_ms = proportional_share(
           native_synchronize_ms, request_eval_tokens, total_eval_tokens);
       const double kv_update_share_ms = proportional_share(
@@ -1633,9 +1645,9 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       if (attribution.request == nullptr) {
         continue;
       }
-      const int32_t request_work_units =
-          attribution.prefill_tokens + attribution.decode_tokens +
-          attribution.sample_count;
+      const int32_t request_work_units = attribution.prefill_tokens +
+                                         attribution.decode_tokens +
+                                         attribution.sample_count;
       attribution.request->attributed_native_observability_ms +=
           proportional_share(native_observability_ms, request_work_units,
                              total_work_units);
@@ -1678,8 +1690,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     last_runtime_observability_.native_batch_build_ms += native_batch_build_ms;
     last_runtime_observability_.native_llama_decode_wall_ms +=
         native_llama_decode_wall_ms;
-    last_runtime_observability_.native_synchronize_ms +=
-        native_synchronize_ms;
+    last_runtime_observability_.native_synchronize_ms += native_synchronize_ms;
     last_runtime_observability_.native_kv_update_ms += native_kv_update_ms;
     last_runtime_observability_.native_sampler_wall_ms +=
         native_sampler_wall_ms;
@@ -1820,7 +1831,8 @@ void InferenceRuntime::CommitCompletedObservabilityLocked(
       request_metrics.prefix_cache_hit_count;
   last_runtime_observability_.prefix_cache_store_count +=
       request_metrics.prefix_cache_store_count;
-  last_runtime_observability_.lcp_reuse_tokens += request_metrics.lcp_reuse_tokens;
+  last_runtime_observability_.lcp_reuse_tokens +=
+      request_metrics.lcp_reuse_tokens;
   last_runtime_observability_.prefix_cache_restore_tokens +=
       request_metrics.prefix_cache_restore_tokens;
   has_last_runtime_observability_ = true;
@@ -2055,7 +2067,6 @@ InferenceRuntime::~InferenceRuntime() {
   if (primary_model_ != nullptr) {
     llama_model_free(primary_model_);
   }
-
 }
 
 bool InferenceRuntime::IsReady() const {
@@ -2342,30 +2353,30 @@ RequestStepResult InferenceRuntime::RunSchedulerTickLocked() {
   while (slot_scheduler_.AdmitPendingRequests(request_queue_, session_store_)) {
     admitted_any = true;
   }
-  const auto admit_end =
-      collect_observability ? std::chrono::steady_clock::now()
-                            : std::chrono::steady_clock::time_point{};
+  const auto admit_end = collect_observability
+                             ? std::chrono::steady_clock::now()
+                             : std::chrono::steady_clock::time_point{};
   const double scheduler_admit_ms =
       collect_observability ? duration_ms(admit_start, admit_end) : 0.0;
 
   const bool tick_executed = RunPolicyBatchTickLocked();
-  const auto policy_end =
-      collect_observability ? std::chrono::steady_clock::now()
-                            : std::chrono::steady_clock::time_point{};
+  const auto policy_end = collect_observability
+                              ? std::chrono::steady_clock::now()
+                              : std::chrono::steady_clock::time_point{};
 
   const auto finalize_start = policy_end;
   slot_scheduler_.FinalizeCompletedSlots(request_queue_, session_store_);
-  const auto finalize_end =
-      collect_observability ? std::chrono::steady_clock::now()
-                            : std::chrono::steady_clock::time_point{};
+  const auto finalize_end = collect_observability
+                                ? std::chrono::steady_clock::now()
+                                : std::chrono::steady_clock::time_point{};
   const double scheduler_finalize_ms =
       collect_observability ? duration_ms(finalize_start, finalize_end) : 0.0;
 
   const auto commit_start = finalize_end;
   CommitNewCompletedResponsesObservabilityLocked();
-  const auto commit_end =
-      collect_observability ? std::chrono::steady_clock::now()
-                            : std::chrono::steady_clock::time_point{};
+  const auto commit_end = collect_observability
+                              ? std::chrono::steady_clock::now()
+                              : std::chrono::steady_clock::time_point{};
   const double scheduler_commit_ms =
       collect_observability ? duration_ms(commit_start, commit_end) : 0.0;
 
