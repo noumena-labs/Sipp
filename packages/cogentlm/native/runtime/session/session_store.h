@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "llama.h"
+#include "runtime/session/prefix_cache_policy.h"
 
 namespace noumena::cogentengine {
 
@@ -24,6 +25,22 @@ struct SequenceState {
   std::vector<llama_token> current_kv_tokens;
   int n_past = 0;
   std::size_t pin_count = 0;
+  // Rolling FNV-1a hash over current_kv_tokens.  Maintained incrementally on
+  // append (the per-tick hot path) and rebuilt only when the sequence is
+  // truncated, restored, or replaced — operations that are already O(N) in the
+  // token count.  Lets the prefix cache snapshot path read a precomputed hash
+  // instead of re-walking the full token vector on every boundary store.
+  std::uint64_t prefix_rolling_hash = kPrefixHashSeed;
+
+  // Recompute the rolling hash from scratch.  Call this after any bulk
+  // mutation of current_kv_tokens (clear/resize/assign/restore).
+  void RebuildRollingHash() {
+    std::uint64_t hash = kPrefixHashSeed;
+    for (llama_token token : current_kv_tokens) {
+      hash = MixPrefixHashToken(hash, token);
+    }
+    prefix_rolling_hash = hash;
+  }
 };
 
 class SessionStore {

@@ -168,9 +168,22 @@ private:
   std::vector<SlotState *> scratch_live_prefill_ready_slots_;
   std::vector<SlotState *> scratch_live_runnable_slots_;
   std::vector<SlotState *> scratch_prefix_cache_slots_;
+  // Slot-id-indexed seen-flags used for O(1) deduplication when populating
+  // `scratch_prefix_cache_slots_`.  Sized once to slot count; reset to false
+  // after each use so the memset cost is paid against a small, fixed buffer
+  // rather than per-contribution std::find calls.
+  std::vector<std::uint8_t> scratch_prefix_cache_seen_;
   std::vector<GenerateRequest *> scratch_tick_requests_;
   std::vector<GenerateRequest *> scratch_decode_requests_;
   std::vector<GenerateRequest *> scratch_prefill_requests_;
+  // Persistent scratch for the per-tick "which batch slots produced logits we
+  // need to sample from" list.  Lives across ticks so its capacity stabilizes
+  // and the inference hot path performs zero heap allocations.
+  struct PendingLogitsContribution {
+    const BatchContribution *contribution = nullptr;
+    int32_t batch_token_index = -1;
+  };
+  std::vector<PendingLogitsContribution> scratch_logits_contributions_;
   mutable std::mutex operation_mutex_;
 };
 

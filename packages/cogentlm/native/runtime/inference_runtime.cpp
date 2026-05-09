@@ -235,6 +235,7 @@ bool InferenceRuntime::EnsureContextSpace(SequenceState &state,
     }
     state.current_kv_tokens.clear();
     state.n_past = 0;
+    state.RebuildRollingHash();
     return true;
   }
 
@@ -255,6 +256,7 @@ bool InferenceRuntime::EnsureContextSpace(SequenceState &state,
   }
 
   state.n_past = static_cast<int>(state.current_kv_tokens.size());
+  state.RebuildRollingHash();
 
   if (state.n_past + new_tokens_needed <= n_ctx) {
     return true;
@@ -265,6 +267,7 @@ bool InferenceRuntime::EnsureContextSpace(SequenceState &state,
   }
   state.current_kv_tokens.clear();
   state.n_past = 0;
+  state.RebuildRollingHash();
 
   return true;
 }
@@ -329,6 +332,9 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
       if (restored == cached_prefix->state_bytes.size()) {
         state.current_kv_tokens = cached_prefix->prefix_tokens;
         state.n_past = static_cast<int>(cached_prefix->token_count);
+        // The cached entry's hash is exactly the rolling hash for the restored
+        // prefix length, so we can adopt it directly and skip the rebuild walk.
+        state.prefix_rolling_hash = cached_prefix->prefix_hash;
         match_len = cached_prefix->token_count;
         restored_from_prefix_cache = true;
         if (request != nullptr) {
@@ -340,6 +346,7 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
         llama_memory_seq_rm(mem, state.seq_id, 0, -1);
         state.current_kv_tokens.clear();
         state.n_past = 0;
+        state.RebuildRollingHash();
       }
     }
   }
@@ -394,6 +401,7 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
       llama_memory_seq_rm(mem, state.seq_id, 0, -1);
       state.current_kv_tokens.clear();
       state.n_past = 0;
+      state.RebuildRollingHash();
       match_len = 0;
       if (request != nullptr) {
         request->lcp_reuse_tokens = 0;
@@ -408,6 +416,7 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
       }
       state.current_kv_tokens.resize(match_len);
       state.n_past = static_cast<int>(match_len);
+      state.RebuildRollingHash();
     }
   }
 
@@ -416,6 +425,7 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
       llama_memory_seq_rm(mem, state.seq_id, 0, -1);
       state.current_kv_tokens.clear();
       state.n_past = 0;
+      state.RebuildRollingHash();
       match_len = 0;
       if (request != nullptr) {
         request->lcp_reuse_tokens = 0;
@@ -427,6 +437,7 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
       }
       state.current_kv_tokens.resize(match_len - 1);
       state.n_past = static_cast<int>(match_len - 1);
+      state.RebuildRollingHash();
       match_len--;
       if (request != nullptr) {
         if (restored_from_prefix_cache) {
@@ -460,8 +471,15 @@ void InferenceRuntime::MaybeStorePrefixCacheEntryLocked(
     return;
   }
 
+  // Fast path: when storing the entire current KV vector (the only case
+  // exercised by the tick loop), reuse the rolling hash maintained on the
+  // SequenceState instead of re-walking every token.  Fall back to the policy
+  // helper for the rare partial-prefix case to keep semantics identical.
   const std::uint64_t prefix_hash =
-      prefix_cache_policy_.HashPrefix(state.current_kv_tokens, token_count);
+      (token_count == state.current_kv_tokens.size())
+          ? state.prefix_rolling_hash
+          : prefix_cache_policy_.HashPrefix(state.current_kv_tokens,
+                                            token_count);
   if (!prefix_state_cache_.StorePrefixState(
           shared_context_, state.seq_id, model_fingerprint_, context_key,
           state.current_kv_tokens, token_count, prefix_hash, token_count)) {
@@ -544,6 +562,7 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
   }
   session.current_kv_tokens.clear();
   session.n_past = 0;
+  session.RebuildRollingHash();
 
   const auto prefill_start = std::chrono::steady_clock::now();
   llama_pos new_n_past = 0;
@@ -693,6 +712,7 @@ bool InferenceRuntime::RecoverDecodeSeedStateLocked(SlotState &slot,
       static_cast<std::size_t>(std::max(0, rewind_position)));
   session.current_kv_tokens.resize(retained_tokens);
   session.n_past = static_cast<int>(retained_tokens);
+  session.RebuildRollingHash();
   slot.prefill_cursor =
       std::min<std::size_t>(request.prompt_tokens.size() - 1, retained_tokens);
   slot.phase = SlotPhase::Prefill;
@@ -935,14 +955,17 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
             // sampler must run first so downstream samplers operate on
             // the grammar-constrained logits.
             llama_sampler_chain_add(slot->sampler, grammar_sampler);
+            // Top-K runs before penalties for the same reason as the shared
+            // sampler chain: the penalty pass is O(candidates), so cutting the
+            // candidate set first is a strict speedup.
+            llama_sampler_chain_add(slot->sampler, llama_sampler_init_top_k(
+                                                       config_.sampling_top_k));
             llama_sampler_chain_add(slot->sampler,
                                     llama_sampler_init_penalties(
                                         config_.sampling_repeat_last_n,
                                         config_.sampling_repeat_penalty,
                                         config_.sampling_frequency_penalty,
                                         config_.sampling_presence_penalty));
-            llama_sampler_chain_add(slot->sampler, llama_sampler_init_top_k(
-                                                       config_.sampling_top_k));
             llama_sampler_chain_add(
                 slot->sampler,
                 llama_sampler_init_top_p(config_.sampling_top_p, 1));
@@ -1114,13 +1137,9 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
                                        std::max<int32_t>(1, config_.n_seq_max));
   shared_batch_builder_.Reset();
 
-  struct PendingLogitsContribution {
-    const BatchContribution *contribution = nullptr;
-    int32_t batch_token_index = -1;
-  };
-
-  std::vector<PendingLogitsContribution> logits_contributions;
-  logits_contributions.reserve(plan.contributions.size());
+  // Reuse the persistent scratch (capacity stable across ticks); clear() keeps
+  // the existing allocation so the inference hot path performs no heap work.
+  scratch_logits_contributions_.clear();
 
   int32_t batch_token_index = 0;
 
@@ -1142,7 +1161,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     }
 
     if (contribution.request_logits) {
-      logits_contributions.push_back(
+      scratch_logits_contributions_.push_back(
           PendingLogitsContribution{&contribution, batch_token_index});
     }
 
@@ -1190,6 +1209,11 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     SequenceState &session = *contribution.slot->session;
     session.current_kv_tokens.push_back(contribution.token);
     session.n_past++;
+    // Roll the FNV-1a hash forward token-at-a-time so the prefix cache snapshot
+    // path can read the cached digest in O(1) instead of re-walking the full
+    // KV token vector for every boundary store.
+    session.prefix_rolling_hash =
+        MixPrefixHashToken(session.prefix_rolling_hash, contribution.token);
   }
 
   batch_planner_.ApplyDecodeResults(plan);
@@ -1210,6 +1234,14 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   const bool has_decode_pressure = !scratch_live_decode_ready_slots_.empty();
   scratch_prefix_cache_slots_.clear();
   if (!has_decode_pressure) {
+    // Slot-id-indexed seen flags give us O(1) dedup instead of an O(N^2)
+    // std::find scan over the prefix cache slot list.  Resize lazily and
+    // reset only the bytes we touched to keep the memset cost proportional
+    // to the actual contribution count.
+    if (scratch_prefix_cache_seen_.size() <
+        slot_scheduler_.Slots().size()) {
+      scratch_prefix_cache_seen_.assign(slot_scheduler_.Slots().size(), 0);
+    }
     scratch_prefix_cache_slots_.reserve(plan.occupied_slot_count);
     for (const BatchContribution &contribution : plan.contributions) {
       if (contribution.kind != BatchContributionKind::Prefill ||
@@ -1218,11 +1250,25 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
           contribution.slot->session == nullptr) {
         continue;
       }
-      if (std::find(scratch_prefix_cache_slots_.begin(),
-                    scratch_prefix_cache_slots_.end(),
-                    contribution.slot) != scratch_prefix_cache_slots_.end()) {
+      const std::size_t slot_id = contribution.slot->slot_id;
+      if (slot_id >= scratch_prefix_cache_seen_.size() ||
+          scratch_prefix_cache_seen_[slot_id]) {
         continue;
       }
+      // Boundary-aware gate: only enqueue slots whose post-tick KV length
+      // actually qualifies for a snapshot.  Skipping non-boundary slots here
+      // avoids the function call, the context_key copy indirection, and
+      // (critically) any storage-layer lookup that would otherwise contend
+      // for the cache's internal structures while we still hold the runtime
+      // mutex.
+      const std::size_t kv_size =
+          contribution.slot->session->current_kv_tokens.size();
+      const std::size_t terminal_size =
+          contribution.slot->request->prompt_tokens.size();
+      if (!prefix_cache_policy_.ShouldStoreBoundary(kv_size, terminal_size)) {
+        continue;
+      }
+      scratch_prefix_cache_seen_[slot_id] = 1;
       scratch_prefix_cache_slots_.push_back(contribution.slot);
     }
   }
@@ -1231,7 +1277,8 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       collect_observability ? std::chrono::steady_clock::now()
                             : std::chrono::steady_clock::time_point{};
   double sampler_wall_ms = 0.0;
-  for (const PendingLogitsContribution &pending_logits : logits_contributions) {
+  for (const PendingLogitsContribution &pending_logits :
+       scratch_logits_contributions_) {
     const BatchContribution *logit_contribution = pending_logits.contribution;
     if (logit_contribution == nullptr || logit_contribution->slot == nullptr ||
         logit_contribution->slot->request == nullptr ||
@@ -1351,6 +1398,11 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
                                      slot->session->current_kv_tokens.size(),
                                      slot->request->prompt_tokens.size(),
                                      slot->request);
+    // Clear only the seen-flags we actually set this tick; cheaper than
+    // memset'ing the whole flag buffer when the boundary set is small.
+    if (slot->slot_id < scratch_prefix_cache_seen_.size()) {
+      scratch_prefix_cache_seen_[slot->slot_id] = 0;
+    }
   }
   const auto prefix_cache_end =
       collect_observability ? std::chrono::steady_clock::now()
@@ -1429,7 +1481,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     }
 
     for (const PendingLogitsContribution &pending_logits :
-         logits_contributions) {
+         scratch_logits_contributions_) {
       const BatchContribution *contribution = pending_logits.contribution;
       if (contribution == nullptr || contribution->slot == nullptr ||
           contribution->slot->request == nullptr) {
@@ -1456,7 +1508,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     const int32_t total_prefill_tokens = plan.prefill_token_count;
     const int32_t total_decode_tokens = plan.decode_token_count;
     const int32_t total_sample_count =
-        static_cast<int32_t>(logits_contributions.size());
+        static_cast<int32_t>(scratch_logits_contributions_.size());
     const int32_t total_eval_tokens =
         total_prefill_tokens + total_decode_tokens;
     const int32_t total_work_units =
@@ -1557,9 +1609,9 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     last_runtime_observability_.prompt_eval_tokens += plan.prefill_token_count;
     last_runtime_observability_.decode_eval_count += plan.decode_token_count;
     last_runtime_observability_.sample_count +=
-        static_cast<int32_t>(logits_contributions.size());
+        static_cast<int32_t>(scratch_logits_contributions_.size());
     last_runtime_observability_.output_token_count +=
-        static_cast<int32_t>(logits_contributions.size());
+        static_cast<int32_t>(scratch_logits_contributions_.size());
     last_runtime_observability_.first_sampled_token_id = -1;
     for (SlotState *slot : scratch_live_runnable_slots_) {
       if (slot != nullptr && slot->request != nullptr) {
@@ -1885,13 +1937,18 @@ InferenceRuntime::InferenceRuntime(std::string model_path,
     return;
   }
 
+  // Top-K is applied before the penalty samplers so the per-token penalty walk
+  // operates on a vocabulary-sized candidate set already trimmed to K (often
+  // <=64 vs. >32k).  This dramatically reduces sampler overhead per generated
+  // token without changing the sampling distribution: every token survivable
+  // after penalties + top-K is identical regardless of order.
+  llama_sampler_chain_add(sampler_,
+                          llama_sampler_init_top_k(config_.sampling_top_k));
   llama_sampler_chain_add(sampler_, llama_sampler_init_penalties(
                                         config_.sampling_repeat_last_n,
                                         config_.sampling_repeat_penalty,
                                         config_.sampling_frequency_penalty,
                                         config_.sampling_presence_penalty));
-  llama_sampler_chain_add(sampler_,
-                          llama_sampler_init_top_k(config_.sampling_top_k));
   llama_sampler_chain_add(sampler_,
                           llama_sampler_init_top_p(config_.sampling_top_p, 1));
   if (config_.sampling_min_p > 0.0f) {
