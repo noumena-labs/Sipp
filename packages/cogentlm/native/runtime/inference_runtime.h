@@ -101,8 +101,9 @@ public:
       bool add_assistant) const;
 
 private:
-  bool EnsureContextSpace(SequenceState &state, int new_tokens_needed,
+  bool EnsureContextSpace(SequenceState &state, llama_seq_id seq_id, int new_tokens_needed,
                           int n_ctx);
+  bool ReconcilePhysicalState(SequenceState &state, llama_seq_id seq_id, llama_memory_t mem);
   int32_t ResolveInitialDecodeContextReservationLocked(
       int32_t max_output_tokens) const;
   bool EnsureDecodeStepContextSpaceLocked(SlotState &slot);
@@ -110,6 +111,7 @@ private:
                                       const std::vector<llama_token> &prompt_tokens,
                                       int n_tokens_predict,
                                       SequenceState &state,
+                                      llama_seq_id seq_id,
                                       GenerateRequest *request,
                                       std::size_t &out_prefill_cursor);
   bool NormalizeRunnableSlotStateLocked(SlotState &slot);
@@ -119,6 +121,7 @@ private:
   std::string BuildNoProgressDiagnosticLocked() const;
   void MaybeStorePrefixCacheEntryLocked(const std::string &context_key,
                                         const SequenceState &state,
+                                        llama_seq_id seq_id,
                                         std::size_t token_count,
                                         std::size_t terminal_token_count,
                                         GenerateRequest *request);

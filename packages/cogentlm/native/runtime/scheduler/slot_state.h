@@ -36,6 +36,7 @@ struct SlotState {
   GenerateRequestId request_id = 0;
   GenerateRequest *request = nullptr;
   SequenceState *session = nullptr;
+  SequenceState mirror;
   std::size_t prefill_cursor = 0;
   std::size_t decode_step_count = 0;
   std::size_t batch_participation_count = 0;

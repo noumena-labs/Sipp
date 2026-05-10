@@ -293,18 +293,23 @@ std::size_t incomplete_utf8_tail_length(const char *data, std::size_t size) {
 namespace noumena::cogentengine {
 
 bool InferenceRuntime::EnsureContextSpace(SequenceState &state,
+                                          llama_seq_id seq_id,
                                           int new_tokens_needed, int n_ctx) {
-  if (shared_context_ == nullptr || state.seq_id < 0 || n_ctx <= 0) {
+  if (shared_context_ == nullptr || seq_id < 0 || n_ctx <= 0) {
     return false;
   }
 
   if (new_tokens_needed <= 0) {
     return true;
   }
-
   if (new_tokens_needed > n_ctx) {
     fprintf(stderr, "Input too large for context size!\n");
     return false;
+  }
+
+  llama_memory_t mem = llama_get_memory(shared_context_);
+  if (!state.InSync()) {
+    ReconcilePhysicalState(state, seq_id, mem);
   }
 
   if (state.n_past + new_tokens_needed <= n_ctx) {
@@ -316,10 +321,8 @@ bool InferenceRuntime::EnsureContextSpace(SequenceState &state,
   const int max_discard = std::max(0, state.n_past - n_keep);
   const int n_discard = std::clamp(required_discard, 0, max_discard);
 
-  llama_memory_t mem = llama_get_memory(shared_context_);
-
   if (n_discard <= 0) {
-    if (!llama_memory_seq_rm(mem, state.seq_id, 0, -1)) {
+    if (!llama_memory_seq_rm(mem, seq_id, 0, -1)) {
       return false;
     }
     state.current_kv_tokens.clear();
@@ -327,11 +330,11 @@ bool InferenceRuntime::EnsureContextSpace(SequenceState &state,
     return true;
   }
 
-  if (!llama_memory_seq_rm(mem, state.seq_id, n_keep, n_keep + n_discard)) {
+  if (!llama_memory_seq_rm(mem, seq_id, n_keep, n_keep + n_discard)) {
     return false;
   }
 
-  llama_memory_seq_add(mem, state.seq_id, n_keep + n_discard, -1, -n_discard);
+  llama_memory_seq_add(mem, seq_id, n_keep + n_discard, -1, -n_discard);
 
   if (static_cast<int>(state.current_kv_tokens.size()) > n_keep) {
     const int erase_end =
@@ -343,18 +346,33 @@ bool InferenceRuntime::EnsureContextSpace(SequenceState &state,
     state.current_kv_tokens.clear();
   }
 
-  state.n_past = static_cast<int>(state.current_kv_tokens.size());
-
   if (state.n_past + new_tokens_needed <= n_ctx) {
     return true;
   }
 
-  if (!llama_memory_seq_rm(mem, state.seq_id, 0, -1)) {
+  if (!llama_memory_seq_rm(mem, seq_id, 0, -1)) {
     return false;
   }
   state.current_kv_tokens.clear();
   state.n_past = 0;
+  return true;
+}
 
+bool InferenceRuntime::ReconcilePhysicalState(SequenceState &state,
+                                               llama_seq_id seq_id,
+                                              llama_memory_t mem) {
+  if (mem == nullptr || seq_id < 0) {
+    return false;
+  }
+
+  // FORCE PHYSICAL SYNC: Ensure llama.cpp's internal state matches our mirror.
+  if (!llama_memory_seq_rm(mem, seq_id,
+                           static_cast<int32_t>(state.current_kv_tokens.size()),
+                           -1)) {
+    return false;
+  }
+  const int old_n_past = state.n_past;
+  state.n_past = static_cast<int>(state.current_kv_tokens.size());
   return true;
 }
 
@@ -383,18 +401,20 @@ bool InferenceRuntime::EnsureDecodeStepContextSpaceLocked(SlotState &slot) {
       slot.session->n_past + 1 > n_ctx) {
     return false;
   }
-  return EnsureContextSpace(*slot.session, 1, n_ctx);
+  return EnsureContextSpace(*slot.session, slot.seq_id, 1, n_ctx);
 }
 
 bool InferenceRuntime::PrepareSequenceForPromptLocked(
     const std::string &context_key,
     const std::vector<llama_token> &prompt_tokens, int n_tokens_predict,
-    SequenceState &state, GenerateRequest *request,
+    SequenceState &state, llama_seq_id seq_id, GenerateRequest *request,
     std::size_t &out_prefill_cursor) {
   out_prefill_cursor = 0;
-  if (shared_context_ == nullptr || state.seq_id < 0) {
+  if (shared_context_ == nullptr || seq_id < 0) {
     return false;
   }
+
+  llama_memory_t mem = llama_get_memory(shared_context_);
 
   const bool has_live_tokens = !state.current_kv_tokens.empty();
   const std::size_t live_match_len =
@@ -403,18 +423,24 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
   std::size_t match_len = live_match_len;
   bool restored_from_prefix_cache = false;
 
+  if (!has_live_tokens) {
+    // FRESH REQUEST: We must explicitly scrub the hardware sequence ID to 
+    // remove any stale 'sticky' data from previous sessions. This prevents 
+    // position conflicts during the subsequent prefill.
+    llama_memory_seq_rm(mem, seq_id, 0, -1);
+  }
+
   if (!has_live_tokens && !prompt_tokens.empty()) {
     if (const PrefixCacheEntry *cached_prefix =
             prefix_state_cache_.FindBestPrefix(model_fingerprint_, context_key,
                                                prompt_tokens,
                                                prefix_cache_policy_);
         cached_prefix != nullptr) {
-      llama_memory_t mem = llama_get_memory(shared_context_);
-      llama_memory_seq_rm(mem, state.seq_id, 0, -1);
+      llama_memory_seq_rm(mem, seq_id, 0, -1);
 
       const std::size_t restored = llama_state_seq_set_data(
           shared_context_, cached_prefix->state_bytes.data(),
-          cached_prefix->state_bytes.size(), state.seq_id);
+          cached_prefix->state_bytes.size(), seq_id);
       if (restored == cached_prefix->state_bytes.size()) {
         // The cached `state_bytes` may correspond to a deferred snapshot
         // taken *after* the boundary moment (i.e. the seq had already
@@ -424,12 +450,12 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
         // is a constant-cost KV bookkeeping call (no compute) and is
         // load-bearing for correctness when boundary snapshots are
         // deferred via `EnqueuePendingSnapshot`.
-        llama_memory_seq_rm(mem, state.seq_id,
+        llama_memory_seq_rm(mem, seq_id,
                             static_cast<int32_t>(cached_prefix->token_count),
                             -1);
         state.current_kv_tokens = cached_prefix->prefix_tokens;
         state.n_past = static_cast<int>(cached_prefix->token_count);
-        match_len = cached_prefix->token_count;
+        match_len = std::min(cached_prefix->token_count, prompt_tokens.size());
         restored_from_prefix_cache = true;
         if (request != nullptr) {
           request->prefix_cache_restore_tokens +=
@@ -437,10 +463,15 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
           request->prefix_cache_hit_count++;
         }
       } else {
-        llama_memory_seq_rm(mem, state.seq_id, 0, -1);
+        llama_memory_seq_rm(mem, seq_id, 0, -1);
         state.current_kv_tokens.clear();
         state.n_past = 0;
       }
+    } else {
+      // PREFIX CACHE MISS: If we are starting a fresh request on a potentially 
+      // sticky hardware ID and the prefix cache didn't give us a hit, we must
+      // explicitly clear the hardware memory to prevent position conflicts.
+      llama_memory_seq_rm(mem, seq_id, 0, -1);
     }
   }
 
@@ -453,7 +484,7 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
   const int initial_decode_headroom =
       ResolveInitialDecodeContextReservationLocked(n_tokens_predict);
   const int total_needed = tokens_to_add + initial_decode_headroom;
-  if (!EnsureContextSpace(state, total_needed, n_ctx)) {
+  if (!EnsureContextSpace(state, seq_id, total_needed, n_ctx)) {
     return false;
   }
 
@@ -484,14 +515,13 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
     }
   }
 
-  llama_memory_t mem = llama_get_memory(shared_context_);
   const bool is_recurrent = llama_model_is_recurrent(primary_model_);
   const bool is_hybrid = llama_model_is_hybrid(primary_model_);
   const bool allow_partial_kv = !(is_recurrent || is_hybrid);
 
   if (match_len < state.current_kv_tokens.size()) {
     if (!allow_partial_kv) {
-      llama_memory_seq_rm(mem, state.seq_id, 0, -1);
+      llama_memory_seq_rm(mem, seq_id, 0, -1);
       state.current_kv_tokens.clear();
       state.n_past = 0;
       match_len = 0;
@@ -502,7 +532,7 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
         }
       }
     } else {
-      if (!llama_memory_seq_rm(mem, state.seq_id,
+      if (!llama_memory_seq_rm(mem, seq_id,
                                static_cast<int32_t>(match_len), -1)) {
         return false;
       }
@@ -513,7 +543,7 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
 
   if (match_len == prompt_tokens.size() && match_len > 0) {
     if (!allow_partial_kv) {
-      llama_memory_seq_rm(mem, state.seq_id, 0, -1);
+      llama_memory_seq_rm(mem, seq_id, 0, -1);
       state.current_kv_tokens.clear();
       state.n_past = 0;
       match_len = 0;
@@ -521,7 +551,7 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
         request->lcp_reuse_tokens = 0;
       }
     } else {
-      if (!llama_memory_seq_rm(mem, state.seq_id,
+      if (!llama_memory_seq_rm(mem, seq_id,
                                static_cast<int32_t>(match_len - 1), -1)) {
         return false;
       }
@@ -546,12 +576,12 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
 
 void InferenceRuntime::MaybeStorePrefixCacheEntryLocked(
     const std::string &context_key, const SequenceState &state,
-    std::size_t token_count, std::size_t terminal_token_count,
-    GenerateRequest *request) {
+    llama_seq_id seq_id, std::size_t token_count,
+    std::size_t terminal_token_count, GenerateRequest *request) {
   if (request != nullptr && request->is_multimodal_turn) {
     return;
   }
-  if (shared_context_ == nullptr || state.seq_id < 0 || token_count == 0 ||
+  if (shared_context_ == nullptr || seq_id < 0 || token_count == 0 ||
       token_count > state.current_kv_tokens.size()) {
     return;
   }
@@ -569,7 +599,7 @@ void InferenceRuntime::MaybeStorePrefixCacheEntryLocked(
   PendingPrefixSnapshot pending;
   pending.model_fingerprint = model_fingerprint_;
   pending.context_key = context_key;
-  pending.seq_id = state.seq_id;
+  pending.seq_id = seq_id;
   pending.token_count = token_count;
   pending.prefix_hash =
       prefix_cache_policy_.HashPrefix(state.current_kv_tokens, token_count);
@@ -594,7 +624,7 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
   }
 
   GenerateRequest &request = *slot.request;
-  SequenceState &session = *slot.session;
+  SequenceState &mirror = slot.mirror;
   if (!request.multimodal.has_value()) {
     return false;
   }
@@ -638,7 +668,7 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
 
   mtmd_input_text text_input{};
   text_input.text = prompt_text.c_str();
-  text_input.add_special = session.n_past == 0;
+  text_input.add_special = mirror.n_past == 0;
   text_input.parse_special = true;
 
   InputChunksPtr chunks(mtmd_input_chunks_init(), &mtmd_input_chunks_free);
@@ -649,17 +679,17 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
   }
 
   llama_memory_t memory = llama_get_memory(shared_context_);
-  if (!llama_memory_seq_rm(memory, session.seq_id, 0, -1)) {
+  if (!llama_memory_seq_rm(memory, slot.seq_id, 0, -1)) {
     request.multimodal.reset();
     return false;
   }
-  session.current_kv_tokens.clear();
-  session.n_past = 0;
+  mirror.current_kv_tokens.clear();
+  mirror.n_past = 0;
 
   const auto prefill_start = std::chrono::steady_clock::now();
   llama_pos new_n_past = 0;
   const int32_t eval_status = mtmd_helper_eval_chunks(
-      mtmd_ctx_, shared_context_, chunks.get(), 0, session.seq_id,
+      mtmd_ctx_, shared_context_, chunks.get(), 0, slot.seq_id,
       ResolveBatchTokenBudgetLocked(), true, &new_n_past);
   const auto prefill_end = std::chrono::steady_clock::now();
   request.multimodal.reset();
@@ -667,11 +697,12 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
     return false;
   }
 
-  session.n_past = static_cast<int>(new_n_past);
+  mirror.n_past = static_cast<int>(new_n_past);
+  mirror.current_kv_tokens.resize(static_cast<std::size_t>(new_n_past));
   const double multimodal_prefill_ms =
       std::chrono::duration<double, std::milli>(prefill_end - prefill_start)
           .count();
-  request.attributed_prompt_eval_tokens += session.n_past;
+  request.attributed_prompt_eval_tokens += mirror.n_past;
   request.attributed_prompt_eval_ms += multimodal_prefill_ms;
   request.attributed_total_ms += multimodal_prefill_ms;
   slot.prefill_cursor = request.prompt_tokens.size();
@@ -749,7 +780,7 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
 
 bool InferenceRuntime::RecoverDecodeSeedStateLocked(SlotState &slot,
                                                     GenerateRequest &request,
-                                                    SequenceState &session) {
+                                                    SequenceState &mirror) {
   if (slot.phase != SlotPhase::Decode || !slot.generated_tokens.empty()) {
     return true;
   }
@@ -782,7 +813,7 @@ bool InferenceRuntime::RecoverDecodeSeedStateLocked(SlotState &slot,
     return false;
   }
 
-  if (session.n_past <= 0 || session.current_kv_tokens.empty()) {
+  if (mirror.n_past <= 0 || mirror.current_kv_tokens.empty()) {
     slot.prefill_cursor = 0;
     slot.phase = SlotPhase::Prefill;
     request.lifecycle = GenerateRequestLifecycle::Running;
@@ -790,20 +821,24 @@ bool InferenceRuntime::RecoverDecodeSeedStateLocked(SlotState &slot,
   }
 
   llama_memory_t mem = llama_get_memory(shared_context_);
-  const int32_t rewind_position = std::max(0, session.n_past - 1);
-  if (!llama_memory_seq_rm(mem, session.seq_id, rewind_position, -1)) {
-    slot.terminal_error_message = "Failed to rewind shared KV state for a "
-                                  "decode slot without a seed token.";
+  const int32_t rewind_position = std::max(0, mirror.n_past - 1);
+
+  // When recovering a decode slot (e.g. after a session reload or failure),
+  // we must ensure the physical KV cache is rolled back to match our
+  // logical mirror. Legacy code only rewound by 1 token; we now perform
+  // a full reconciliation to handle mixed-load session reuse correctly.
+  const std::size_t retained_tokens = std::min<std::size_t>(
+      mirror.current_kv_tokens.size(),
+      static_cast<std::size_t>(std::max(0, rewind_position)));
+  mirror.current_kv_tokens.resize(retained_tokens);
+
+  if (!ReconcilePhysicalState(mirror, slot.seq_id, mem)) {
+    slot.terminal_error_message = "Failed to reconcile shared KV state for a "
+                                  "decode slot during seed recovery.";
     slot.phase = SlotPhase::Failed;
     request.lifecycle = GenerateRequestLifecycle::Failed;
     return false;
   }
-
-  const std::size_t retained_tokens = std::min<std::size_t>(
-      session.current_kv_tokens.size(),
-      static_cast<std::size_t>(std::max(0, rewind_position)));
-  session.current_kv_tokens.resize(retained_tokens);
-  session.n_past = static_cast<int>(retained_tokens);
   slot.prefill_cursor =
       std::min<std::size_t>(request.prompt_tokens.size() - 1, retained_tokens);
   slot.phase = SlotPhase::Prefill;
@@ -812,19 +847,19 @@ bool InferenceRuntime::RecoverDecodeSeedStateLocked(SlotState &slot,
 }
 
 bool InferenceRuntime::NormalizeRunnableSlotStateLocked(SlotState &slot) {
-  if (slot.request == nullptr || slot.session == nullptr) {
+  if (slot.request == nullptr) {
     return true;
   }
 
   GenerateRequest &request = *slot.request;
-  SequenceState &session = *slot.session;
 
   if (slot.phase == SlotPhase::Admitted) {
     slot.phase = SlotPhase::Prefill;
   }
 
   if (slot.phase == SlotPhase::Prefill && !request.is_multimodal_turn &&
-      slot.prefill_cursor >= request.prompt_tokens.size()) {
+      slot.prefill_cursor >= request.prompt_tokens.size() &&
+      slot.mirror.n_past > 0) {
     slot.phase = SlotPhase::Decode;
   }
 
@@ -849,8 +884,18 @@ bool InferenceRuntime::NormalizeRunnableSlotStateLocked(SlotState &slot) {
     request.lifecycle = GenerateRequestLifecycle::Running;
   }
 
+  // Defense-in-depth: a slot that lands in Decode with no sampled token
+  // (because, e.g., a state-machine bug advanced `prefill_cursor` past
+  // `prompt_tokens.size()` without populating `mirror.n_past` or
+  // `generated_tokens`) is otherwise unrunnable — `SelectDecodeReadySlots`
+  // filters it out for empty `generated_tokens`, and
+  // `SelectPrefillReadySlots` filters it out because phase is no longer
+  // Prefill.  `RecoverDecodeSeedStateLocked` rolls the slot back to the
+  // last prefill position so the next tick can re-seed it; without this
+  // call any such slot becomes a permanent "no progress" hang and trips
+  // the FatalNoProgress diagnostic.
   if (slot.phase == SlotPhase::Decode && slot.generated_tokens.empty()) {
-    return RecoverDecodeSeedStateLocked(slot, request, session);
+    return RecoverDecodeSeedStateLocked(slot, request, slot.mirror);
   }
 
   return true;
@@ -1039,7 +1084,7 @@ void InferenceRuntime::CompletePendingBookkeepingLocked() {
     if (slot != nullptr && slot->request != nullptr &&
         slot->session != nullptr) {
       MaybeStorePrefixCacheEntryLocked(
-          slot->request->context_key, *slot->session, token_count,
+          slot->request->context_key, *slot->session, slot->seq_id, token_count,
           slot->request->prompt_tokens.size(), slot->request);
     }
   }
@@ -1273,8 +1318,9 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
                                      ? std::chrono::steady_clock::now()
                                      : std::chrono::steady_clock::time_point{};
 
-  for (SlotState &slot : slot_scheduler_.MutableSlots()) {
-    NormalizeRunnableSlotStateLocked(slot);
+  const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
+  if (vocab == nullptr) {
+    return false;
   }
 
   auto combine_slots = [](std::vector<SlotState *> &out,
@@ -1294,138 +1340,124 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     }
   };
 
-  slot_scheduler_.SelectDecodeReadySlots(scratch_decode_ready_slots_);
-  slot_scheduler_.SelectPrefillReadySlots(scratch_prefill_ready_slots_);
-  combine_slots(scratch_runnable_slots_, scratch_decode_ready_slots_,
-                scratch_prefill_ready_slots_);
-  if (scratch_runnable_slots_.empty()) {
-    return false;
-  }
-
-  const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
-  if (vocab == nullptr) {
-    return false;
-  }
-
-  for (SlotState *slot : scratch_runnable_slots_) {
-    if (slot == nullptr || slot->request == nullptr ||
-        slot->session == nullptr || slot->seq_id < 0) {
-      if (slot != nullptr) {
-        slot->terminal_error_message =
-            "Runnable slot lost request or sequence state.";
-        slot->phase = SlotPhase::Failed;
-        if (slot->request != nullptr) {
-          slot->request->lifecycle = GenerateRequestLifecycle::Failed;
-        }
-      }
+  // Phase 1: Global State Normalization & Sequence Preparation.
+  // We perform this pass over ALL mutable slots to ensure that newly admitted 
+  // or recovered requests are correctly transitioned (e.g. Admitted -> Prefill)
+  // and their KV caches are physically sanitized before we select the tick's batch.
+  for (SlotState &slot : slot_scheduler_.MutableSlots()) {
+    if (slot.request == nullptr || slot.session == nullptr || slot.seq_id < 0) {
       continue;
     }
 
-    if (slot->sampler == nullptr) {
-      // When the request carries a GBNF grammar we cannot clone the shared
-      // sampler chain because the grammar sampler is stateful and must be
-      // constructed fresh per slot. Build a new chain that mirrors the
-      // runtime's configured sampling parameters and prepends
-      // llama_sampler_init_grammar so decoded tokens are constrained.
-      if (!slot->request->grammar.empty()) {
+    // 1. Core State Machine Transitions (Admitted -> Prefill, Seed Recovery, etc.)
+    if (!NormalizeRunnableSlotStateLocked(slot)) {
+      continue;
+    }
+
+    // 2. Sampler Lifecycle Management
+    if (slot.sampler == nullptr) {
+      if (!slot.request->grammar.empty()) {
         auto sparams = llama_sampler_chain_default_params();
         sparams.no_perf = config_.enable_runtime_observability == 0;
-        slot->sampler = llama_sampler_chain_init(sparams);
-        if (slot->sampler != nullptr) {
-          const llama_vocab *grammar_vocab =
-              llama_model_get_vocab(primary_model_);
+        slot.sampler = llama_sampler_chain_init(sparams);
+        if (slot.sampler != nullptr) {
+          const llama_vocab *grammar_vocab = llama_model_get_vocab(primary_model_);
           llama_sampler *grammar_sampler = llama_sampler_init_grammar(
-              grammar_vocab, slot->request->grammar.c_str(), "root");
+              grammar_vocab, slot.request->grammar.c_str(), "root");
           if (grammar_sampler == nullptr) {
-            llama_sampler_free(slot->sampler);
-            slot->sampler = nullptr;
+            llama_sampler_free(slot.sampler);
+            slot.sampler = nullptr;
           } else {
-            // Grammar must run first so downstream stages operate on the
-            // grammar-constrained logits; the rest of the chain (or the
-            // greedy fast path) is appended via the shared helper so the two
-            // sampler-construction paths stay in sync.
-            llama_sampler_chain_add(slot->sampler, grammar_sampler);
-            append_configured_sampler_stages(slot->sampler, config_);
+            llama_sampler_chain_add(slot.sampler, grammar_sampler);
+            append_configured_sampler_stages(slot.sampler, config_);
           }
         }
       } else {
-        slot->sampler = llama_sampler_clone(sampler_);
+        slot.sampler = llama_sampler_clone(sampler_);
       }
-      if (slot->sampler == nullptr) {
-        slot->terminal_error_message =
-            slot->request->grammar.empty()
-                ? "Failed to clone per-slot sampler."
-                : "Failed to build per-slot grammar sampler.";
-        slot->phase = SlotPhase::Failed;
-        slot->request->lifecycle = GenerateRequestLifecycle::Failed;
+      if (slot.sampler == nullptr) {
+        slot.terminal_error_message = slot.request->grammar.empty()
+                                          ? "Failed to clone per-slot sampler."
+                                          : "Failed to build per-slot grammar sampler.";
+        slot.phase = SlotPhase::Failed;
+        slot.request->lifecycle = GenerateRequestLifecycle::Failed;
         continue;
       }
     }
 
-    GenerateRequest &request = *slot->request;
-    SequenceState &session = *slot->session;
-
-    if (slot->phase == SlotPhase::Prefill && slot->prefill_cursor == 0) {
-      if (request.is_multimodal_turn) {
-        if (!RunMultimodalPrefillLocked(*slot, vocab)) {
-          if (slot->terminal_error_message.empty()) {
-            slot->terminal_error_message =
-                "Failed to evaluate multimodal prompt.";
+    // 3. Prompt Sequence Preparation (KV Cache Sanitization & LCP Reuse)
+    if (slot.phase == SlotPhase::Prefill && slot.prefill_cursor == 0) {
+      if (slot.request->is_multimodal_turn) {
+        if (!RunMultimodalPrefillLocked(slot, vocab)) {
+          if (slot.terminal_error_message.empty()) {
+            slot.terminal_error_message = "Failed to evaluate multimodal prompt.";
           }
-          slot->phase = SlotPhase::Failed;
-          request.lifecycle = GenerateRequestLifecycle::Failed;
-          request.multimodal.reset();
+          slot.phase = SlotPhase::Failed;
+          slot.request->lifecycle = GenerateRequestLifecycle::Failed;
+          slot.request->multimodal.reset();
         }
         continue;
       }
 
       std::size_t prefill_cursor = 0;
       if (!PrepareSequenceForPromptLocked(
-              request.context_key, request.prompt_tokens,
-              request.max_output_tokens, session, &request, prefill_cursor)) {
-        slot->terminal_error_message =
-            "Failed to prepare sequence for prompt reuse.";
-        slot->phase = SlotPhase::Failed;
-        request.lifecycle = GenerateRequestLifecycle::Failed;
+              slot.request->context_key, slot.request->prompt_tokens,
+              slot.request->max_output_tokens, slot.mirror, slot.seq_id,
+              slot.request, prefill_cursor)) {
+        slot.terminal_error_message = "Failed to prepare sequence for prompt reuse.";
+        slot.phase = SlotPhase::Failed;
+        slot.request->lifecycle = GenerateRequestLifecycle::Failed;
         continue;
       }
 
-      slot->prefill_cursor = prefill_cursor;
-      slot->phase = slot->prefill_cursor >= request.prompt_tokens.size()
+      slot.prefill_cursor = prefill_cursor;
+      slot.phase = slot.prefill_cursor >= slot.request->prompt_tokens.size()
                         ? SlotPhase::Decode
                         : SlotPhase::Prefill;
     }
 
-    request.lifecycle = GenerateRequestLifecycle::Running;
+    // 4. Context Headroom Extension (for Decode slots)
+    if (slot.phase == SlotPhase::Decode) {
+      if (!EnsureDecodeStepContextSpaceLocked(slot)) {
+        slot.terminal_error_message = "Failed to extend decode context headroom.";
+        slot.phase = SlotPhase::Failed;
+        slot.request->lifecycle = GenerateRequestLifecycle::Failed;
+        continue;
+      }
+    }
+
+    slot.request->lifecycle = GenerateRequestLifecycle::Running;
     if (collect_observability) {
-      llama_perf_sampler_reset(slot->sampler);
+      llama_perf_sampler_reset(slot.sampler);
     }
   }
 
-  for (SlotState &slot : slot_scheduler_.MutableSlots()) {
-    NormalizeRunnableSlotStateLocked(slot);
-  }
-
-  slot_scheduler_.SelectDecodeReadySlots(scratch_live_decode_ready_slots_);
-  for (SlotState *slot : scratch_live_decode_ready_slots_) {
-    if (slot == nullptr || slot->request == nullptr ||
-        slot->session == nullptr) {
-      continue;
-    }
-
-    if (!EnsureDecodeStepContextSpaceLocked(*slot)) {
-      slot->terminal_error_message =
-          "Failed to extend decode context headroom.";
-      slot->phase = SlotPhase::Failed;
-      slot->request->lifecycle = GenerateRequestLifecycle::Failed;
-    }
-  }
+  // Phase 2: Batch Selection.
+  // Now that all slots are normalized and their logical mirrors reflect the 
+  // actual intent (e.g. truncated after a sticky hit), we select the best
+  // subset for the hardware batch.
   slot_scheduler_.SelectDecodeReadySlots(scratch_live_decode_ready_slots_);
   slot_scheduler_.SelectPrefillReadySlots(scratch_live_prefill_ready_slots_);
   combine_slots(scratch_live_runnable_slots_, scratch_live_decode_ready_slots_,
                 scratch_live_prefill_ready_slots_);
+
   if (scratch_live_runnable_slots_.empty()) {
     return false;
+  }
+
+  // GLOBAL PHYSICAL RECONCILIATION
+  // Before we build the batch, we must ensure EVERY active sequence is
+  // physically in sync with its logical CPU mirror. This prevents Status -1
+  // errors in both Prefill and Decode phases.
+  {
+    llama_memory_t mem = llama_get_memory(shared_context_);
+    for (SlotState *slot : scratch_live_runnable_slots_) {
+      if (slot != nullptr && slot->session != nullptr) {
+        if (!slot->mirror.InSync()) {
+          ReconcilePhysicalState(slot->mirror, slot->seq_id, mem);
+        }
+      }
+    }
   }
 
   const auto policy_prepare_end = collect_observability
@@ -1541,12 +1573,64 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
                                    : std::chrono::steady_clock::time_point{};
   const auto decode_start = std::chrono::steady_clock::now();
 
-  if (llama_decode(shared_context_, shared_batch_builder_.Get()) != 0) {
+  const int32_t decode_status =
+      llama_decode(shared_context_, shared_batch_builder_.Get());
+  if (decode_status != 0) {
+    // Capture enough state at the failure point to diagnose without
+    // needing to attach a debugger.  llama_decode return codes per the
+    // public llama.h header:
+    //   1   = could not find a KV slot for the batch (capacity / layout)
+    //   2   = aborted (some ubatches already in context memory)
+    //  -1   = invalid input batch (positions/seq_ids inconsistent)
+    //  <-1  = fatal compute error
+    const llama_batch &failing_batch = shared_batch_builder_.Get();
+    std::ostringstream diag;
+    diag << "llama_decode() failed in shared tick (status=" << decode_status
+         << ", n_tokens=" << failing_batch.n_tokens
+         << ", n_seq_max=" << config_.n_seq_max
+         << ", n_ctx=" << llama_n_ctx(shared_context_)
+         << ", contributions={";
+    const int32_t kPreviewLimit = 16;
+    const int32_t preview_count = std::min(failing_batch.n_tokens, kPreviewLimit);
+    for (int32_t i = 0; i < preview_count; ++i) {
+      diag << (i == 0 ? "" : ",")
+           << "(seq=" << failing_batch.seq_id[i][0]
+           << ",pos=" << failing_batch.pos[i]
+           << ",log=" << static_cast<int>(failing_batch.logits[i] != 0) << ")";
+    }
+    if (failing_batch.n_tokens > kPreviewLimit) {
+      diag << ",...+" << (failing_batch.n_tokens - kPreviewLimit);
+    }
+    diag << "}, slots={";
+    bool first_slot = true;
+    for (const SlotState *slot : scratch_live_runnable_slots_) {
+      if (slot == nullptr) {
+        continue;
+      }
+      if (!first_slot) {
+        diag << ",";
+      }
+      first_slot = false;
+      const int32_t n_past =
+          slot->session != nullptr ? static_cast<int32_t>(slot->mirror.n_past) : -1;
+      const std::size_t kv_tokens =
+          slot->session != nullptr ? slot->mirror.current_kv_tokens.size() : 0;
+      diag << "(slot=" << slot->slot_id << ",seq=" << slot->seq_id
+           << ",phase=" << static_cast<int>(slot->phase)
+           << ",cursor=" << slot->prefill_cursor << "/"
+           << (slot->request != nullptr ? slot->request->prompt_tokens.size()
+                                        : 0)
+           << ",n_past=" << n_past << ",kv=" << kv_tokens
+           << ",gen=" << slot->generated_tokens.size() << ")";
+    }
+    diag << "})";
+    const std::string diagnostic = diag.str();
+
     for (SlotState *slot : scratch_live_runnable_slots_) {
       if (slot == nullptr) {
         continue;
       }
-      slot->terminal_error_message = "llama_decode() failed in shared tick.";
+      slot->terminal_error_message = diagnostic;
       slot->phase = SlotPhase::Failed;
       if (slot->request != nullptr) {
         slot->request->lifecycle = GenerateRequestLifecycle::Failed;
@@ -1574,14 +1658,23 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   // Critical bookkeeping: Update KV tracking and slot phases immediately.
   // These are required for the BatchPlanner to correctly construct the next
   // tick's batch.
+  // Symmetric with `BatchPlanner::ApplyDecodeResults` below — both loops
+  // walk `plan.contributions` and must agree on which contributions to
+  // process.  An asymmetric filter (e.g. checking `slot->session` here but
+  // not in ApplyDecodeResults) would leave `prefill_cursor` advancing
+  // while `mirror.n_past` stays at 0, producing the silent
+  // "stuck-Decode-with-no-seed" state instead of a recoverable failure.
+  // `mirror` lives on the slot by value, so it is reachable as long as
+  // `slot` itself is non-null; `request` is the only other linkage we
+  // depend on (for prompt size in ApplyDecodeResults).
   for (const BatchContribution &contribution : plan.contributions) {
-    if (contribution.slot == nullptr || contribution.slot->session == nullptr) {
+    if (contribution.slot == nullptr || contribution.slot->request == nullptr) {
       continue;
     }
 
-    SequenceState &session = *contribution.slot->session;
-    session.current_kv_tokens.push_back(contribution.token);
-    session.n_past++;
+    SequenceState &mirror = contribution.slot->mirror;
+    mirror.current_kv_tokens.push_back(contribution.token);
+    mirror.n_past++;
   }
 
   batch_planner_.ApplyDecodeResults(plan);
@@ -1606,7 +1699,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
         continue;
       }
       const std::size_t kv_size =
-          contribution.slot->session->current_kv_tokens.size();
+          contribution.slot->mirror.current_kv_tokens.size();
       const std::size_t terminal_size =
           contribution.slot->request->prompt_tokens.size();
       if (!prefix_cache_policy_.ShouldStoreBoundary(kv_size, terminal_size)) {

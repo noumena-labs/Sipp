@@ -41,14 +41,19 @@ void SlotState::ResetToIdle() {
   pending_utf8_bytes.clear();
   terminal_error_message.clear();
   sampler = nullptr;
+  mirror.current_kv_tokens.clear();
+  mirror.n_past = 0;
+  mirror.hardware_id = -1;
 }
 
 void SlotState::AttachRequest(GenerateRequest &request_ref,
                               SequenceState &session_ref) {
-  seq_id = session_ref.seq_id;
   request_id = request_ref.id;
   request = &request_ref;
   session = &session_ref;
+  mirror.current_kv_tokens.clear();
+  mirror.n_past = 0;
+  mirror.hardware_id = session_ref.hardware_id;
   phase = SlotPhase::Admitted;
   prefill_cursor = 0;
   decode_step_count = 0;
@@ -70,13 +75,13 @@ void SlotScheduler::Resize(std::size_t slot_count) {
   slots_.resize(slot_count);
   for (std::size_t i = 0; i < slots_.size(); ++i) {
     slots_[i].slot_id = i;
-    slots_[i].seq_id = static_cast<llama_seq_id>(i);
+    slots_[i].seq_id = -1;
     if (slots_[i].phase == SlotPhase::Idle && slots_[i].request == nullptr) {
       continue;
     }
     slots_[i].ResetToIdle();
     slots_[i].slot_id = i;
-    slots_[i].seq_id = static_cast<llama_seq_id>(i);
+    slots_[i].seq_id = -1;
   }
 }
 
@@ -131,7 +136,7 @@ void SlotScheduler::SelectPrefillReadySlots(
     if (slot.request == nullptr || slot.session == nullptr) {
       continue;
     }
-    if (slot.phase != SlotPhase::Prefill) {
+    if (slot.phase != SlotPhase::Prefill && slot.phase != SlotPhase::Admitted) {
       continue;
     }
     if (slot.request->is_multimodal_turn &&
@@ -257,24 +262,38 @@ bool SlotScheduler::AdmitPendingRequests(RequestQueue &request_queue,
     return false;
   }
 
-  if (request->is_multimodal_turn) {
-    session_store.Remove(request->context_key);
-  }
-
   SequenceState &session = session_store.GetOrCreateSession(request->context_key);
-  if (session.seq_id < 0) {
-    session_store.Remove(request->context_key);
-
+  
+  const llama_seq_id leased_seq_id = session_store.AcquireSeqId(-1);
+  if (leased_seq_id < 0) {
     GenerateResponse response;
     response.request_id = request->id;
     response.status = GenerateResponseStatus::Failed;
-    response.error_message = "Failed to create or acquire session context.";
+    response.error_message = "Failed to acquire a hardware sequence ID.";
     request_queue.MarkCompleted(std::move(response));
     return false;
   }
 
+  // LEASE FRESH ID: To ensure absolute physical isolation and prevent stale 
+  // sequence leakage, we always lease a fresh hardware ID for a new request.
+  // The SessionStore will explicitly scrub the hardware clean upon leasing.
+  session.hardware_id = leased_seq_id;
+  session.current_kv_tokens.clear();
+  session.n_past = 0;
+
+  if (request->is_multimodal_turn) {
+    session.current_kv_tokens.clear();
+    session.n_past = 0;
+    // Note: If we had a sticky hit, multimodal still requires a reset.
+    // If we didn't have a sticky hit, it's already cleared above.
+    if (leased_seq_id >= 0) {
+      session_store.ClearSequenceMemory(leased_seq_id);
+    }
+  }
+
   session_store.Pin(request->context_key);
   idle_slot_it->AttachRequest(*request, session);
+  idle_slot_it->seq_id = leased_seq_id;
   idle_slot_it->phase = SlotPhase::Prefill;
   return true;
 }
@@ -390,6 +409,12 @@ void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue,
                                               : slot.terminal_error_message;
     }
 
+    if (slot.request != nullptr && slot.session != nullptr) {
+      slot.session->current_kv_tokens = slot.mirror.current_kv_tokens;
+      slot.session->n_past = slot.mirror.n_past;
+      slot.session->hardware_id = slot.mirror.hardware_id;
+    }
+
     if (slot.request != nullptr) {
       const std::string context_key = slot.request->context_key;
       const bool drop_multimodal_session = slot.request->is_multimodal_turn;
@@ -398,6 +423,12 @@ void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue,
         session_store.Remove(context_key);
       }
     }
+    
+    if (slot.seq_id >= 0) {
+      session_store.ReleaseSeqId(slot.seq_id);
+      slot.seq_id = -1;
+    }
+    
     request_queue.MarkCompleted(std::move(response));
     slot.ResetToIdle();
   }

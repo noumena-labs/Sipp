@@ -89,11 +89,7 @@ SharedBatchPlan BatchPlanner::BuildPolicyBatch(
     contribution.request = slot->request;
     contribution.kind = BatchContributionKind::Decode;
     contribution.token = slot->generated_tokens.back();
-    contribution.position =
-        slot->session != nullptr
-            ? slot->session->n_past
-            : static_cast<int32_t>(slot->request->prompt_tokens.size() +
-                                   slot->generated_tokens.size() - 1);
+    contribution.position = slot->mirror.n_past;
     contribution.request_logits = true;
     plan.contributions.push_back(contribution);
     plan.decode_token_count++;
@@ -101,7 +97,18 @@ SharedBatchPlan BatchPlanner::BuildPolicyBatch(
   }
 
   std::vector<SlotState *> active_prefill_slots;
+  // Parallel vector tracking how many tokens the current tick has *already*
+  // committed to each active slot.  Indexed identically to
+  // `active_prefill_slots`, kept in lockstep on erase.  Reads as the
+  // in-tick continuation cursor so that revisits (round-robin returning to
+  // the same slot when chunk_cap < remaining prompt) keep advancing through
+  // the prompt instead of re-emitting the same positions.  Without this,
+  // any chunked-prefill scenario where a single active slot consumes
+  // multiple iterations per tick produces N duplicate-position
+  // contributions and trips llama.cpp's batch consistency check.
+  std::vector<std::size_t> in_tick_offset;
   active_prefill_slots.reserve(prefill_slots.size());
+  in_tick_offset.reserve(prefill_slots.size());
   for (SlotState *slot : prefill_slots) {
     if (slot == nullptr || slot->request == nullptr) {
       continue;
@@ -110,7 +117,16 @@ SharedBatchPlan BatchPlanner::BuildPolicyBatch(
       continue;
     }
     active_prefill_slots.push_back(slot);
+    in_tick_offset.push_back(0);
   }
+
+  const auto erase_active_slot = [&](std::size_t index) {
+    active_prefill_slots.erase(
+        active_prefill_slots.begin() +
+        static_cast<std::ptrdiff_t>(index));
+    in_tick_offset.erase(in_tick_offset.begin() +
+                         static_cast<std::ptrdiff_t>(index));
+  };
 
   std::size_t next_prefill_slot_index = 0;
   while (remaining_prefill_budget > 0 && !active_prefill_slots.empty()) {
@@ -120,17 +136,13 @@ SharedBatchPlan BatchPlanner::BuildPolicyBatch(
 
     SlotState *slot = active_prefill_slots[next_prefill_slot_index];
     if (slot == nullptr || slot->request == nullptr) {
-      active_prefill_slots.erase(
-          active_prefill_slots.begin() +
-          static_cast<std::ptrdiff_t>(next_prefill_slot_index));
+      erase_active_slot(next_prefill_slot_index);
       continue;
     }
 
     const auto &prompt_tokens = slot->request->prompt_tokens;
     if (slot->prefill_cursor >= prompt_tokens.size()) {
-      active_prefill_slots.erase(
-          active_prefill_slots.begin() +
-          static_cast<std::ptrdiff_t>(next_prefill_slot_index));
+      erase_active_slot(next_prefill_slot_index);
       continue;
     }
 
@@ -139,8 +151,12 @@ SharedBatchPlan BatchPlanner::BuildPolicyBatch(
         budget, prefill_chunk_size, remaining_prefill_budget,
         active_prefill_slots.size(), has_decode_pressure);
 
+    // Resume from where prior in-tick visits to this slot left off, not
+    // from the slot's persistent `prefill_cursor` (which only advances in
+    // ApplyDecodeResults *after* the batch executes).
+    const std::size_t resume_offset = in_tick_offset[next_prefill_slot_index];
     int32_t remaining_slot_budget = slot_chunk_budget;
-    for (std::size_t token_index = slot->prefill_cursor;
+    for (std::size_t token_index = slot->prefill_cursor + resume_offset;
          token_index < prompt_tokens.size() && remaining_slot_budget > 0;
          ++token_index) {
       BatchContribution contribution;
@@ -159,22 +175,22 @@ SharedBatchPlan BatchPlanner::BuildPolicyBatch(
       }
     }
 
-    if (plan.contributions.size() > slot_contribution_start) {
-      const std::size_t contributed_count =
-          plan.contributions.size() - slot_contribution_start;
-      const bool completed_prompt =
-          slot->prefill_cursor + contributed_count >= prompt_tokens.size();
-      plan.contributions.back().request_logits = completed_prompt;
-    }
+    const std::size_t added_this_iteration =
+        plan.contributions.size() - slot_contribution_start;
+    const std::size_t total_added = resume_offset + added_this_iteration;
+    in_tick_offset[next_prefill_slot_index] = total_added;
 
     const bool slot_completed_prompt =
-        slot->prefill_cursor +
-            (plan.contributions.size() - slot_contribution_start) >=
-        prompt_tokens.size();
+        slot->prefill_cursor + total_added >= prompt_tokens.size();
+    if (added_this_iteration > 0 && slot_completed_prompt) {
+      // Only the last contribution overall (across all iterations of this
+      // tick for this slot) should carry the end-of-prompt logits flag so
+      // the runtime samples the first generated token from the right
+      // position.
+      plan.contributions.back().request_logits = true;
+    }
     if (slot_completed_prompt) {
-      active_prefill_slots.erase(
-          active_prefill_slots.begin() +
-          static_cast<std::ptrdiff_t>(next_prefill_slot_index));
+      erase_active_slot(next_prefill_slot_index);
       continue;
     }
 
