@@ -3,50 +3,26 @@ import type {
   RuntimeAggregateObservabilityMetrics,
 } from './runtime-observability.js';
 
-interface DetailedObservabilityMetricsBase
-  extends RequestObservabilityMetrics {
-  promptEvalMs: number;
-  decodeEvalMs: number;
-  sampleMs: number;
-  queueDelayMs: number;
-  meanItlMs: number;
-  tailItlMs: number;
-  e2elMs: number;
-
-  promptEvalTokens: number;
-  decodeEvalCount: number;
-  sampleCount: number;
-  batchParticipationCount: number;
-  firstSampledTokenId: number;
-}
-
-export interface DetailedRequestObservabilityMetrics
-  extends DetailedObservabilityMetricsBase {}
+export interface DetailedRequestObservabilityMetrics extends RequestObservabilityMetrics {}
 
 export interface DetailedRuntimeAggregateObservabilityMetrics
-  extends DetailedObservabilityMetricsBase,
+  extends RequestObservabilityMetrics,
     RuntimeAggregateObservabilityMetrics {}
 
-export type DetailedRuntimeObservabilityMetrics =
-  DetailedRuntimeAggregateObservabilityMetrics;
+export type DetailedRuntimeObservabilityMetrics = DetailedRuntimeAggregateObservabilityMetrics;
 
 export function deriveTokensPerSecond(metrics: {
-  meanItlMs: number;
+  itlAvgMs: number;
 }): number | null {
-  if (metrics.meanItlMs <= 0) {
+  if (metrics.itlAvgMs <= 0) {
     return null;
   }
-  return 1000 / metrics.meanItlMs;
+  return 1000 / metrics.itlAvgMs;
 }
 
-export function withDerivedObservabilityMetrics<T extends {
-  totalMs: number;
-  ttftMs: number;
-  inputTokenCount: number;
-  outputTokenCount: number;
-  decodeEvalMs: number;
-  meanItlMs: number;
-}>(metrics: T): T & { tokensPerSecond: number | null } {
+export function withDerivedObservabilityMetrics<T extends RequestObservabilityMetrics>(
+  metrics: T
+): T & { tokensPerSecond: number | null } {
   return {
     ...metrics,
     tokensPerSecond: deriveTokensPerSecond(metrics),

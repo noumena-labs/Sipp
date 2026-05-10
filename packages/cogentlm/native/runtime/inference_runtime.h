@@ -18,6 +18,7 @@
 #include <utility>
 #include <vector>
 
+#include "api/ffi_types.h"
 #include "chat.h"
 #include "runtime/config/inference_config.h"
 #include "runtime/llama/llama_batch_builder.h"
@@ -85,6 +86,14 @@ public:
                                          int32_t max_duration_us = 0);
   std::vector<RuntimeEvent> DrainRuntimeEvents(int32_t max_count,
                                                int32_t max_text_bytes);
+  void DrainRuntimeEventsDirectly(CE_RuntimeEvent *event_buffer,
+                                  int32_t event_capacity, char *text_buffer,
+                                  int32_t text_capacity,
+                                  CE_RuntimeEventDrainResult *out_result);
+  SchedulerBurstResult RunSchedulerLoop(int32_t max_ticks,
+                                        int32_t max_completed_responses,
+                                        int32_t max_emitted_tokens,
+                                        int32_t max_duration_us);
   bool TryPeekCompletedResponse(GenerateRequestId request_id,
                                 GenerateResponse &out_response) const;
   bool HasRequest(GenerateRequestId request_id) const;
@@ -202,6 +211,7 @@ private:
   PendingTickBookkeeping pending_bookkeeping_;
   bool has_pending_bookkeeping_ = false;
 
+  mutable std::mutex request_queue_mutex_;
   mutable std::mutex operation_mutex_;
 };
 

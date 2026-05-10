@@ -113,37 +113,38 @@ export interface QueryObservation {
   status: 'running' | 'success' | 'cancelled' | 'failed';
   wallMs: number | null;
   ttftMs: number | null;
-  outputTokenCount: number | null;
+  outputTokens: number | null;
   errorCode?: string;
   errorMessage?: string;
 }
 
 export interface RuntimeObservation {
-  totalMs: number;
+  // Unified Phase & Efficiency Metrics
   ttftMs: number;
+  itlAvgMs: number;
+  itlP99Ms: number;
+  e2eMs: number;
+
+  prefillMs: number;
+  decodeMs: number;
+
+  nativeGpuMs: number;
+  nativeSyncMs: number;
+  nativeLogicMs: number;
+
+  inputTokens: number;
+  outputTokens: number;
+  cacheHits: number;
+
   tokensPerSecond: number | null;
-  inputTokenCount: number;
-  outputTokenCount: number;
-  promptEvalMs?: number;
-  decodeEvalMs?: number;
-  sampleMs?: number;
-  queueDelayMs?: number;
-  meanItlMs?: number;
-  tailItlMs?: number;
-  nativeSchedulerTickMs?: number;
-  nativeSchedulerAdmitMs?: number;
-  nativeSchedulerFinalizeMs?: number;
-  nativeSchedulerCommitMs?: number;
-  nativePolicyPrepareMs?: number;
-  nativePolicyPlanMs?: number;
-  nativeBatchBuildMs?: number;
-  nativeLlamaDecodeWallMs?: number;
-  nativeSynchronizeMs?: number;
-  nativeKvUpdateMs?: number;
-  nativeSamplerWallMs?: number;
-  nativeTokenEmitMs?: number;
-  nativePrefixCacheMs?: number;
-  nativeObservabilityMs?: number;
+
+  // JS Side & Transport Metadata
+  execution: {
+    mode: 'main-thread' | 'worker';
+    workerBacked: boolean;
+    tokenPath?: 'none' | 'runtime-event';
+  };
+
   jsSchedulerProgressMs?: number;
   jsRuntimeEventDrainMs?: number;
   jsTokenCallbackMs?: number;
@@ -154,23 +155,7 @@ export interface RuntimeObservation {
   jsTokenCallbackCount?: number;
   jsPumpStepCount?: number;
   jsSchedulerYieldCount?: number;
-  promptEvalTokens?: number;
-  decodeEvalCount?: number;
-  batchParticipationCount?: number;
-  decodeFirstTickCount?: number;
-  chunkedPrefillTickCount?: number;
-  mixedWorkloadTickCount?: number;
-  lcpReuseTokens?: number;
-  prefixCacheRestoreTokens?: number;
-  prefixCacheHitCount?: number;
-  prefixCacheStoreCount?: number;
-  nativePolicyTickCount?: number;
-  nativeSchedulerTickCount?: number;
-  execution: {
-    mode: 'main-thread' | 'worker';
-    workerBacked: boolean;
-    tokenPath?: 'none' | 'runtime-event';
-  };
+
 }
 
 export interface BackendProfileObservation {

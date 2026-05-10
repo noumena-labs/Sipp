@@ -14,9 +14,9 @@ export const COMPLETED_REQUEST_STATUS_COMPLETED = 1;
 export const COMPLETED_REQUEST_STATUS_CANCELLED = 2;
 export const COMPLETED_REQUEST_STATUS_FAILED = 3;
 export const COMPLETED_REQUEST_STATUS_UNKNOWN = 4;
-export const RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES = 104;
+export const RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES = 88;
 export const RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT = 9;
-export const SCHEDULER_BURST_RESULT_SIZE_BYTES = 16;
+export const SCHEDULER_LOOP_RESULT_SIZE_BYTES = 16;
 export const RUNTIME_EVENT_SIZE_BYTES = 20;
 export const RUNTIME_EVENT_DRAIN_RESULT_SIZE_BYTES = 8;
 export const RUNTIME_EVENT_KIND_TOKEN = 1;
@@ -26,17 +26,10 @@ export const DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY: TransportObservability
   executionMode: 'main-thread',
   workerBacked: false,
   enabled: false,
-  bufferedTokenLimit: 0,
-  flushIntervalMs: 0,
-  flushCount: 0,
-  coalescedTokenCount: 0,
-  maxObservedBufferedTokenCount: 0,
   activeTokenTransport: 'none',
   runtimeEventDrainMs: 0,
   tokenCallbackCount: 0,
   tokenCallbackMs: 0,
-  pumpStepCount: 0,
-  pumpStepMs: 0,
   schedulerYieldCount: 0,
   schedulerYieldMs: 0,
 };

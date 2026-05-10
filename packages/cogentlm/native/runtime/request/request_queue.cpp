@@ -44,15 +44,15 @@ bool RequestQueue::Push(GenerateRequest request) {
   request.has_last_token_at = false;
   request.has_completed_at = false;
   request.emitted_token_count = 0;
-  request.accumulated_itl_ms = 0.0;
-  request.tail_itl_ms = 0.0;
-  request.attributed_total_ms = 0.0;
-  request.attributed_prompt_eval_ms = 0.0;
-  request.attributed_decode_eval_ms = 0.0;
-  request.attributed_sample_ms = 0.0;
-  request.attributed_prompt_eval_tokens = 0;
-  request.attributed_decode_eval_count = 0;
-  request.attributed_sample_count = 0;
+  request.itl_sum_ms = 0.0;
+  request.itl_p99_ms = 0.0;
+  request.e2e_ms = 0.0;
+  request.prefill_ms = 0.0;
+  request.decode_ms = 0.0;
+  request.native_logic_ms = 0.0;
+  request.input_tokens = 0;
+  request.output_tokens = 0;
+  request.cache_hits = 0;
   request.first_sampled_token_id = -1;
   request.cancel_requested = false;
   requests_.emplace(request_id, std::move(request));
@@ -187,6 +187,20 @@ void RequestQueue::QueueTokenEvent(GenerateRequestId request_id, std::string tex
   total_emitted_token_count_++;
 }
 
+std::vector<RuntimeEvent> RequestQueue::DrainEvents(std::size_t max_count) {
+  std::vector<RuntimeEvent> events;
+  const std::size_t drain_limit =
+      max_count == 0 ? runtime_events_.size() : max_count;
+  events.reserve(std::min(drain_limit, runtime_events_.size()));
+
+  while (!runtime_events_.empty() && events.size() < drain_limit) {
+    events.push_back(std::move(runtime_events_.front()));
+    runtime_events_.pop_front();
+  }
+
+  return events;
+}
+
 std::vector<RuntimeEvent> RequestQueue::DrainRuntimeEvents(std::size_t max_count,
                                                            std::size_t max_text_bytes) {
   std::vector<RuntimeEvent> events;
@@ -230,6 +244,10 @@ bool RequestQueue::ConsumeCompletedResponse(GenerateRequestId request_id) {
 
 std::size_t RequestQueue::CompletedResponseCount() const {
   return completed_responses_.size();
+}
+
+std::size_t RequestQueue::LiveRequestCount() const {
+  return requests_.size() - completed_responses_.size();
 }
 
 void RequestQueue::Clear() {

@@ -48,11 +48,13 @@ public:
   GenerateResponse *FindMutableCompletedResponse(GenerateRequestId request_id);
   std::vector<GenerateRequestId> CompletedResponseIds() const;
   void QueueTokenEvent(GenerateRequestId request_id, std::string text);
+  std::vector<RuntimeEvent> DrainEvents(std::size_t max_count);
   std::vector<RuntimeEvent> DrainRuntimeEvents(std::size_t max_count,
                                                std::size_t max_text_bytes);
   int32_t TotalEmittedTokenCount() const;
   bool ConsumeCompletedResponse(GenerateRequestId request_id);
   std::size_t CompletedResponseCount() const;
+  std::size_t LiveRequestCount() const;
   void Clear();
 
 private:

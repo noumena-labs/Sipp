@@ -14,18 +14,28 @@ int CE_GetRuntimeObservability(CE_RuntimeObservabilityMetrics* out_metrics);
 int CE_RunSchedulerBurst(int32_t max_ticks,
                          int32_t max_completed_responses,
                          int32_t max_emitted_tokens,
-                         CE_SchedulerBurstResult* out_result);
+                         CE_SchedulerLoopResult* out_result);
 int CE_RunSchedulerBurstWithDeadline(int32_t max_ticks,
                                      int32_t max_completed_responses,
                                      int32_t max_emitted_tokens,
                                      int32_t max_duration_us,
-                                     CE_SchedulerBurstResult* out_result);
+                                     CE_SchedulerLoopResult* out_result);
+int CE_RunSchedulerLoop(int32_t max_ticks,
+                        int32_t max_completed_responses,
+                        int32_t max_emitted_tokens,
+                        int32_t max_duration_us,
+                        CE_SchedulerLoopResult* out_result);
 int CE_GetCompletedRequestStatus(CE_RequestId request_id);
 int CE_DrainRuntimeEvents(CE_RuntimeEvent* event_buffer,
                           int32_t event_capacity,
                           char* text_buffer,
                           int32_t text_capacity,
                           CE_RuntimeEventDrainResult* out_result);
+int CE_DrainRuntimeEventsDirectly(CE_RuntimeEvent* event_buffer,
+                                  int32_t event_capacity,
+                                  char* text_buffer,
+                                  int32_t text_capacity,
+                                  CE_RuntimeEventDrainResult* out_result);
 int CE_GetCompletedRequestOutputSize(CE_RequestId request_id);
 int CE_CopyCompletedRequestOutput(CE_RequestId request_id, char* buffer, int32_t capacity);
 int CE_GetCompletedRequestErrorSize(CE_RequestId request_id);

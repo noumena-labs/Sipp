@@ -311,50 +311,30 @@ void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue,
       request.completed_at = std::chrono::steady_clock::now();
       request.has_completed_at = true;
 
-      response.runtime_observability.queue_delay_ms =
-          request.has_admitted_at
-              ? duration_ms(request.enqueued_at, request.admitted_at)
-              : 0.0;
       response.runtime_observability.ttft_ms =
           request.has_first_token_at
               ? duration_ms(request.enqueued_at, request.first_token_at)
               : 0.0;
-      response.runtime_observability.mean_itl_ms =
-          request.emitted_token_count > 1
-              ? request.accumulated_itl_ms /
-                    static_cast<double>(request.emitted_token_count - 1)
+      response.runtime_observability.itl_avg_ms =
+          request.output_tokens > 1
+              ? request.itl_sum_ms /
+                    static_cast<double>(request.output_tokens - 1)
               : 0.0;
-      response.runtime_observability.tail_itl_ms = request.tail_itl_ms;
+      response.runtime_observability.itl_p99_ms = request.itl_p99_ms;
       response.runtime_observability.e2e_ms =
           duration_ms(request.enqueued_at, request.completed_at);
-      response.runtime_observability.total_ms =
-          request.attributed_total_ms > 0.0
-              ? request.attributed_total_ms
-              : response.runtime_observability.e2e_ms;
-      response.runtime_observability.prompt_eval_ms =
-          request.attributed_prompt_eval_ms;
-      response.runtime_observability.decode_eval_ms =
-          request.attributed_decode_eval_ms;
-      response.runtime_observability.sample_ms =
-          request.attributed_sample_ms;
-      response.runtime_observability.input_token_count =
-          static_cast<int32_t>(request.prompt_tokens.size());
-      response.runtime_observability.prompt_eval_tokens =
-          request.attributed_prompt_eval_tokens;
-      response.runtime_observability.output_token_count =
-          request.emitted_token_count;
-      response.runtime_observability.first_sampled_token_id =
-          request.first_sampled_token_id;
-      response.runtime_observability.batch_participation_count =
-          static_cast<int32_t>(slot.batch_participation_count);
-      response.runtime_observability.decode_eval_count =
-          request.attributed_decode_eval_count > 0
-              ? request.attributed_decode_eval_count
-              : static_cast<int32_t>(slot.decode_step_count);
-      response.runtime_observability.sample_count =
-          request.attributed_sample_count > 0
-              ? request.attributed_sample_count
-              : static_cast<int32_t>(slot.generated_tokens.size());
+
+      response.runtime_observability.prefill_ms = request.prefill_ms;
+      response.runtime_observability.decode_ms = request.decode_ms;
+
+      response.runtime_observability.native_gpu_ms = 0.0; // Placeholder
+      response.runtime_observability.native_sync_ms = 0.0; // Placeholder
+      response.runtime_observability.native_logic_ms = request.native_logic_ms;
+
+      response.runtime_observability.input_tokens =
+          request.input_tokens > 0 ? request.input_tokens : static_cast<int32_t>(request.prompt_tokens.size());
+      response.runtime_observability.output_tokens = request.output_tokens;
+      response.runtime_observability.cache_hits = request.cache_hits;
     }
     if (response.status == GenerateResponseStatus::Cancelled) {
       response.error_message = "Request cancelled.";
@@ -405,12 +385,13 @@ void SlotScheduler::EmitBufferedTokenPiece(RequestQueue &request_queue,
       request->has_first_token_at = true;
     } else if (request->has_last_token_at) {
       const double itl_ms = duration_ms(request->last_token_at, now);
-      request->accumulated_itl_ms += itl_ms;
-      request->tail_itl_ms = std::max(request->tail_itl_ms, itl_ms);
+      request->itl_sum_ms += itl_ms;
+      request->itl_p99_ms = std::max(request->itl_p99_ms, itl_ms);
     }
 
     request->last_token_at = now;
     request->has_last_token_at = true;
+    request->output_tokens++;
     request->emitted_token_count++;
     if (request->token_emission_mode ==
         GenerateTokenEmissionMode::RuntimeEvents) {

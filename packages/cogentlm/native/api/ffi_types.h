@@ -59,32 +59,34 @@ typedef struct CE_InitConfig {
 } CE_InitConfig;
 
 typedef struct CE_RuntimeObservabilityMetrics {
-  double total_ms;
-  double prompt_eval_ms;
-  double decode_eval_ms;
-  double sample_ms;
-  double queue_delay_ms;
+  // Latency (User Experience)
   double ttft_ms;
-  double mean_itl_ms;
-  double tail_itl_ms;
+  double itl_avg_ms;
+  double itl_p99_ms;
   double e2e_ms;
 
-  int32_t input_token_count;
-  int32_t prompt_eval_tokens;
-  int32_t decode_eval_count;
-  int32_t sample_count;
-  int32_t output_token_count;
-  int32_t first_sampled_token_id;
-  int32_t batch_participation_count;
+  // Phases (Compute)
+  double prefill_ms;
+  double decode_ms;
 
+  // Native (Hardware & Engine)
+  double native_gpu_ms;
+  double native_sync_ms;
+  double native_logic_ms;
+
+  // Counts
+  int32_t input_tokens;
+  int32_t output_tokens;
+  int32_t cache_hits;
+  int32_t _reserved;
 } CE_RuntimeObservabilityMetrics;
 
-typedef struct CE_SchedulerBurstResult {
+typedef struct CE_SchedulerLoopResult {
   int32_t ticks_executed;
   int32_t progressed_ticks;
   int32_t completed_response_count;
   int32_t emitted_token_count;
-} CE_SchedulerBurstResult;
+} CE_SchedulerLoopResult;
 
 typedef struct CE_RuntimeEvent {
   CE_RequestId request_id;
@@ -102,10 +104,10 @@ typedef struct CE_RuntimeEventDrainResult {
 #ifdef __cplusplus
 static_assert(sizeof(CE_RequestId) == 4,
               "CE_RequestId must stay 32-bit for JS/Wasm FFI calls.");
-static_assert(sizeof(CE_RuntimeObservabilityMetrics) == 104,
+static_assert(sizeof(CE_RuntimeObservabilityMetrics) == 88,
               "CE_RuntimeObservabilityMetrics layout changed. Update the TS FFI reader.");
-static_assert(sizeof(CE_SchedulerBurstResult) == 16,
-              "CE_SchedulerBurstResult layout changed. Update the TS FFI reader.");
+static_assert(sizeof(CE_SchedulerLoopResult) == 16,
+              "CE_SchedulerLoopResult layout changed. Update the TS FFI reader.");
 static_assert(sizeof(CE_RuntimeEvent) == 20,
               "CE_RuntimeEvent layout changed. Update the TS FFI reader.");
 static_assert(sizeof(CE_RuntimeEventDrainResult) == 8,

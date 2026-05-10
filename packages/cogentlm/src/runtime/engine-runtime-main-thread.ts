@@ -56,8 +56,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     GenerateRequestId,
     ((token: string) => void) | undefined
   >();
-  private queuedPromptTokenBuffers = new Map<GenerateRequestId, string[]>();
   private queuedPromptCallbackErrors = new Map<GenerateRequestId, unknown>();
+  private queuedTokenCallbackPtrs = new Map<GenerateRequestId, number>();
   private readonly tracker = new RequestTracker<GenerateResponse>();
   private readonly scheduler: QueuedRequestScheduler;
   private runtimeObservabilityEnabled = false;
@@ -70,7 +70,6 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.scheduler = new QueuedRequestScheduler({
       tracker: this.tracker,
       queuedPromptCallbacks: this.queuedPromptCallbacks,
-      queuedPromptTokenBuffers: this.queuedPromptTokenBuffers,
       queuedPromptCallbackErrors: this.queuedPromptCallbackErrors,
       getTransportObservability: () => this.transportObservability,
       getBridge: () => this.getReadyEngineBridge(),
@@ -197,8 +196,15 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
   private releaseTokenState(requestId: GenerateRequestId): void {
     this.queuedPromptCallbacks.delete(requestId);
-    this.queuedPromptTokenBuffers.delete(requestId);
     this.queuedPromptCallbackErrors.delete(requestId);
+    
+    const callbackPtr = this.queuedTokenCallbackPtrs.get(requestId);
+    if (callbackPtr != null && callbackPtr !== 0) {
+      const bridge = this.getLoadedWasmBridge();
+      bridge.unregisterTokenCallback(callbackPtr);
+      this.queuedTokenCallbackPtrs.delete(requestId);
+    }
+
     this.refreshTokenTransportObservability();
   }
 
@@ -505,6 +511,22 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.updateTokenTransportObservability(onToken);
 
     let requestId: GenerateRequestId = 0;
+    let callbackPtr = 0;
+
+    // DIAGNOSTIC: route streaming through the runtime-event queue (drained
+    // in batches by `QueuedRequestScheduler.drainRuntimeEvents` after each
+    // `runInferenceLoop` iteration) instead of the per-token wasm-table
+    // callback.  The DirectCallback path adds a wasm→JS call_indirect plus
+    // BigInt boundary, byteOffset, UTF8ToString, and user-callback work on
+    // the inference critical path *for every token*.  RuntimeEvents enqueues
+    // a string into a vector inside native (sub-µs) and lets JS pull events
+    // in bulk, so any TPS recovery here is direct evidence the per-token
+    // callback is the bottleneck.  `itl_avg_ms` is computed inside native in
+    // `EmitBufferedTokenPiece` regardless of mode, so the benchmark's
+    // `1000 / itlAvgMs` TPS metric stays accurate even when JS dispatch is
+    // delayed until the loop returns.
+    const emissionMode =
+      onToken != null ? TOKEN_EMISSION_RUNTIME_EVENTS : TOKEN_EMISSION_NONE;
 
     if (request.media != null && request.media.length > 0) {
       if (this.cachedMediaMarker == null) {
@@ -526,27 +548,33 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         request.promptText,
         request.maxOutputTokens,
         request.media,
-        0,
+        callbackPtr,
         request.grammar,
-        onToken != null ? TOKEN_EMISSION_RUNTIME_EVENTS : TOKEN_EMISSION_NONE
+        emissionMode
       );
     } else {
       requestId = bridge.startTextRequest(
         request.contextKey,
         request.promptText,
         request.maxOutputTokens,
-        0,
+        callbackPtr,
         request.grammar,
-        onToken != null ? TOKEN_EMISSION_RUNTIME_EVENTS : TOKEN_EMISSION_NONE
+        emissionMode
       );
     }
     if (!requestId) {
+      if (callbackPtr !== 0) {
+        bridge.unregisterTokenCallback(callbackPtr);
+      }
       throw new Error('Failed to enqueue request.');
+    }
+
+    if (callbackPtr !== 0) {
+      this.queuedTokenCallbackPtrs.set(requestId, callbackPtr);
     }
 
     if (onToken != null) {
       this.queuedPromptCallbacks.set(requestId, onToken);
-      this.queuedPromptTokenBuffers.set(requestId, []);
     }
 
     if (signal != null) {

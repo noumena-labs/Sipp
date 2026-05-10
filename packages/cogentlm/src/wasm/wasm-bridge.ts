@@ -23,7 +23,7 @@ import {
   RUNTIME_EVENT_SIZE_BYTES,
   RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT,
   RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES,
-  SCHEDULER_BURST_RESULT_SIZE_BYTES,
+  SCHEDULER_LOOP_RESULT_SIZE_BYTES,
 } from '../runtime/main-thread-runtime-constants.js';
 import { assertGrammarByteSize } from '../utils/grammar.js';
 export { MAX_GRAMMAR_BYTES } from '../utils/grammar.js';
@@ -32,10 +32,12 @@ const RUNTIME_EVENT_DRAIN_TEXT_BUFFER_SIZE_BYTES = 64 * 1024;
 
 export const TOKEN_EMISSION_NONE = 0;
 export const TOKEN_EMISSION_RUNTIME_EVENTS = 1;
+export const TOKEN_EMISSION_DIRECT_CALLBACK = 2;
 
 export type TokenEmissionMode =
   | typeof TOKEN_EMISSION_NONE
-  | typeof TOKEN_EMISSION_RUNTIME_EVENTS;
+  | typeof TOKEN_EMISSION_RUNTIME_EVENTS
+  | typeof TOKEN_EMISSION_DIRECT_CALLBACK;
 
 function validateGrammarSize(grammar: string | undefined): void {
   assertGrammarByteSize(grammar);
@@ -44,7 +46,8 @@ function validateGrammarSize(grammar: string | undefined): void {
 function validateTokenEmissionMode(mode: TokenEmissionMode): void {
   if (
     mode !== TOKEN_EMISSION_NONE &&
-    mode !== TOKEN_EMISSION_RUNTIME_EVENTS
+    mode !== TOKEN_EMISSION_RUNTIME_EVENTS &&
+    mode !== TOKEN_EMISSION_DIRECT_CALLBACK
   ) {
     throw new Error(`invalid token emission mode ${mode}.`);
   }
@@ -57,6 +60,7 @@ export type WasmRuntimeTokenEvent = {
 };
 
 export type WasmRuntimeEventDrainResult = {
+  eventCount: number;
   terminalRequestIds: GenerateRequestId[];
   tokenEvents: WasmRuntimeTokenEvent[];
   textBytes: number;
@@ -85,8 +89,21 @@ export class WasmBridge {
   private reusableRuntimeEventTextBufferCapacity = 0;
   private reusableRuntimeEventDrainResultPtr = 0;
   private readonly tokenDecoders = new Map<GenerateRequestId, TextDecoder>();
+  private _cachedDataView: DataView | null = null;
+  private _cachedHeapU8: Uint8Array | null = null;
 
   public constructor(private readonly module: EngineModule) { }
+
+  private ensureHeapView(): DataView {
+    if (
+      this._cachedDataView == null ||
+      this._cachedDataView.buffer !== this.module.HEAPU8.buffer
+    ) {
+      this._cachedDataView = new DataView(this.module.HEAPU8.buffer);
+      this._cachedHeapU8 = this.module.HEAPU8;
+    }
+    return this._cachedDataView;
+  }
 
   private byteOffset(ptr: number | bigint): number {
     const n = typeof ptr === 'bigint' ? Number(ptr) : ptr;
@@ -127,6 +144,15 @@ export class WasmBridge {
       async: true,
     });
     return Number(await result);
+  }
+
+  private getDecoder(requestId: GenerateRequestId): TextDecoder {
+    let decoder = this.tokenDecoders.get(requestId);
+    if (!decoder) {
+      decoder = new TextDecoder();
+      this.tokenDecoders.set(requestId, decoder);
+    }
+    return decoder;
   }
 
   public async loadRuntimeModel(
@@ -515,7 +541,7 @@ export class WasmBridge {
     };
   }
 
-  public async runSchedulerProgress(
+  public async runInferenceLoop(
     maxTicks: number,
     maxCompletedResponses: number,
     maxEmittedTokens: number,
@@ -524,24 +550,61 @@ export class WasmBridge {
     } = {}
   ): Promise<WasmSchedulerProgressResult> {
     const maxDurationUs = Math.max(0, options.maxDurationUs ?? 0);
-    const resultPtr = this.ensureBurstResultBuffer();
-    const stepResult =
-      maxDurationUs > 0
-        ? await this.callNumberAsync(
-          'CE_RunSchedulerBurstWithDeadline',
-          ['number', 'number', 'number', 'number', 'pointer'],
-          [maxTicks, maxCompletedResponses, maxEmittedTokens, maxDurationUs, resultPtr]
-        )
-        : await this.callNumberAsync(
-          'CE_RunSchedulerBurst',
-          ['number', 'number', 'number', 'pointer'],
-          [maxTicks, maxCompletedResponses, maxEmittedTokens, resultPtr]
-        );
-    const burstResult = this.readSchedulerBurstResult(resultPtr);
+    const resultPtr = this.ensureLoopResultBuffer();
+    
+    const stepResult = await this.callNumberAsync(
+      'CE_RunSchedulerLoop',
+      ['number', 'number', 'number', 'number', 'pointer'],
+      [maxTicks, maxCompletedResponses, maxEmittedTokens, maxDurationUs, resultPtr]
+    );
+
+    const loopResult = this.readSchedulerLoopResult(resultPtr);
     return {
       stepResult,
-      completedResponseCount: burstResult.completedResponseCount,
+      completedResponseCount: loopResult.completedResponseCount,
     };
+  }
+
+  public registerTokenCallback(
+    onToken: (text: string) => boolean
+  ): number {
+    // Native signature: int32_t (*CE_TokenCallback)(const char *text, int32_t length)
+    //
+    // Emscripten addFunction signature is one char per slot: <return><arg1><arg2>...
+    // Crucially, 'i' is always i32 but 'p' tracks the pointer width of the
+    // build: in this WASM_BIGINT/MEMORY64 build, pointers are i64, so the
+    // native call site produces wasm sig (i64, i32) -> i32. Registering as
+    // 'iii' (i.e. (i32, i32) -> i32) traps with "function signature mismatch"
+    // the moment native invokes the callback. 'ipi' lets emscripten emit i64
+    // for the pointer slot when the build is 64-bit and i32 when it is 32-bit.
+    //
+    // textPtr arrives as a BigInt under WASM_BIGINT (the 'p' slot is i64 in
+    // this build).  Although UTF8ToString accepts `number | bigint` in its
+    // type signature, it forwards the value into UTF8ArrayToString, which does
+    // `endPtr - idx` and `heapOrArray.subarray(idx, endPtr)` — mixing the
+    // BigInt idx with the Number endPtr from findStringEnd throws
+    // "Cannot mix BigInt and other types, use explicit conversions".  Coerce
+    // to Number once at the boundary using byteOffset (which validates the
+    // pointer is a safe integer).
+    //
+    // Return-value contract: native treats 0 as "continue" and any non-zero
+    // value as "cancel" — the C++ lambda is `on_token(...) == 0`, which then
+    // becomes the `bool` the runtime interprets as "keep going".  Our `onToken`
+    // wrapper returns true to mean "continue", so the JS-side mapping is
+    // continue → 0, cancel → 1.  Returning the obvious `? 1 : 0` inverts the
+    // contract and silently cancels every successful token, surfacing as
+    // "Request cancelled." after the first emission.
+    const callbackPtr = this.module.addFunction((textPtr: number | bigint, length: number) => {
+      const text = this.module.UTF8ToString(this.byteOffset(textPtr), length);
+      return onToken(text) ? 0 : 1;
+    }, 'ipi');
+    return callbackPtr;
+  }
+
+  public unregisterTokenCallback(ptr: number): void {
+    if (ptr !== 0) {
+      this.module.removeFunction(ptr);
+    }
   }
 
   public drainRuntimeEvents(
@@ -553,7 +616,7 @@ export class WasmBridge {
     const resultPtr = this.ensureRuntimeEventDrainResultBuffer();
 
     const status = this.callNumber(
-      'CE_DrainRuntimeEvents',
+      'CE_DrainRuntimeEventsDirectly',
       ['pointer', 'number', 'pointer', 'number', 'pointer'],
       [eventBufferPtr, maxEventCount, textBufferPtr, textBufferSizeBytes, resultPtr]
     );
@@ -561,59 +624,85 @@ export class WasmBridge {
       throw new Error(`Failed to drain runtime events. Code: ${status}`);
     }
 
-    const resultOffset = this.heapIndex(resultPtr, 4);
-    const eventCount = this.module.HEAP32[resultOffset];
+    const view = this.ensureHeapView();
+    const resultOffset = this.byteOffset(resultPtr);
+    const eventCount = view.getInt32(resultOffset, true);
     const terminalRequestIds: GenerateRequestId[] = [];
     const tokenEvents: WasmRuntimeTokenEvent[] = [];
-    let textBytes = 0;
+    let totalTextBytes = 0;
 
-    for (let index = 0; index < eventCount; index += 1) {
-      const eventBytePtr = this.byteOffset(eventBufferPtr) + index * RUNTIME_EVENT_SIZE_BYTES;
-      const eventOffset = this.heapIndex(eventBytePtr, 4);
-      const requestId = this.module.HEAP32[eventOffset] as GenerateRequestId;
-      const kind = this.module.HEAP32[eventOffset + 1];
-      const textOffset = this.module.HEAP32[eventOffset + 3];
-      const textLength = this.module.HEAP32[eventOffset + 4];
+    const eventBaseOffset = this.byteOffset(eventBufferPtr);
+    const textBaseOffset = this.byteOffset(textBufferPtr);
+    const heapU8 = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
 
-      if (kind === RUNTIME_EVENT_KIND_TOKEN) {
-        if (requestId !== 0 && textLength > 0) {
-          let decoder = this.tokenDecoders.get(requestId);
-          if (!decoder) {
-            decoder = new TextDecoder('utf-8', { fatal: false });
-            this.tokenDecoders.set(requestId, decoder);
-          }
-          const start = this.byteOffset(textBufferPtr + textOffset);
-          const end = start + textLength;
-          const token = decoder.decode(this.module.HEAPU8.subarray(start, end), { stream: true });
+    let i = 0;
+    while (i < eventCount) {
+      const eventOffset = eventBaseOffset + i * RUNTIME_EVENT_SIZE_BYTES;
+      const requestId = view.getUint32(eventOffset, true);
+      const kind = view.getInt32(eventOffset + 4, true);
+      const status = view.getInt32(eventOffset + 8, true);
+      const textOffset = view.getInt32(eventOffset + 12, true);
+      const textLength = view.getInt32(eventOffset + 16, true);
 
-          tokenEvents.push({
-            requestId,
-            token,
-            textLength,
-          });
-          textBytes += textLength;
-        }
+      if (kind === RUNTIME_EVENT_KIND_TERMINAL) {
+        terminalRequestIds.push(requestId);
+        this.tokenDecoders.delete(requestId);
+        i++;
         continue;
       }
 
-      if (kind === RUNTIME_EVENT_KIND_TERMINAL && requestId !== 0) {
-        terminalRequestIds.push(requestId);
-        this.tokenDecoders.delete(requestId);
+      if (kind === RUNTIME_EVENT_KIND_TOKEN) {
+        // Coalesce contiguous tokens for the same request
+        let batchTextLength = textLength;
+        let batchEnd = i + 1;
+        while (batchEnd < eventCount) {
+          const nextOffset = eventBaseOffset + batchEnd * RUNTIME_EVENT_SIZE_BYTES;
+          const nextRequestId = view.getUint32(nextOffset, true);
+          const nextKind = view.getInt32(nextOffset + 4, true);
+          const nextTextLength = view.getInt32(nextOffset + 16, true);
+
+          if (nextKind === RUNTIME_EVENT_KIND_TOKEN && nextRequestId === requestId) {
+            batchTextLength += nextTextLength;
+            batchEnd++;
+          } else {
+            break;
+          }
+        }
+
+        const textBuffer = new Uint8Array(batchTextLength);
+        let writeOffset = 0;
+        for (let j = i; j < batchEnd; j++) {
+          const chunkOffset = eventBaseOffset + j * RUNTIME_EVENT_SIZE_BYTES;
+          const chunkTextOffset = view.getInt32(chunkOffset + 12, true);
+          const chunkTextLen = view.getInt32(chunkOffset + 16, true);
+          const absoluteTextOffset = textBaseOffset + chunkTextOffset;
+          textBuffer.set(heapU8.subarray(absoluteTextOffset, absoluteTextOffset + chunkTextLen), writeOffset);
+          writeOffset += chunkTextLen;
+        }
+
+        const decoder = this.getDecoder(requestId);
+        const token = decoder.decode(textBuffer, { stream: true });
+        tokenEvents.push({ requestId, token, textLength: batchTextLength });
+        totalTextBytes += batchTextLength;
+        i = batchEnd;
+      } else {
+        i++;
       }
     }
 
     return {
+      eventCount,
       terminalRequestIds,
       tokenEvents,
-      textBytes,
+      textBytes: totalTextBytes,
     };
   }
 
   public releaseReusableBuffers(): void {
     this.tokenDecoders.clear();
-    if (this.reusableBurstResultPtr !== 0) {
-      this.free(this.reusableBurstResultPtr);
-      this.reusableBurstResultPtr = 0;
+    if (this.reusableLoopResultPtr !== 0) {
+      this.free(this.reusableLoopResultPtr);
+      this.reusableLoopResultPtr = 0;
     }
     if (this.reusableRuntimeEventBufferPtr !== 0) {
       this.free(this.reusableRuntimeEventBufferPtr);
@@ -662,12 +751,15 @@ export class WasmBridge {
     }
   }
 
-  private ensureBurstResultBuffer(): number {
-    if (this.reusableBurstResultPtr === 0) {
-      this.reusableBurstResultPtr = this.allocate(SCHEDULER_BURST_RESULT_SIZE_BYTES);
+  private reusableLoopResultPtr = 0;
+  private ensureLoopResultBuffer(): number {
+    if (this.reusableLoopResultPtr === 0) {
+      this.reusableLoopResultPtr = this.allocate(SCHEDULER_LOOP_RESULT_SIZE_BYTES);
     }
-    return this.reusableBurstResultPtr;
+    return this.reusableLoopResultPtr;
   }
+
+
 
   private ensureRuntimeEventBuffer(maxEventCount: number): number {
     const requiredCapacity = Math.max(1, maxEventCount) * RUNTIME_EVENT_SIZE_BYTES;
@@ -712,18 +804,19 @@ export class WasmBridge {
     return this.reusableRuntimeEventDrainResultPtr;
   }
 
-  private readSchedulerBurstResult(ptr: number): {
+  private readSchedulerLoopResult(ptr: number): {
     ticksExecuted: number;
     progressedTicks: number;
     completedResponseCount: number;
     emittedTokenCount: number;
   } {
-    const i32Offset = this.heapIndex(ptr, 4);
+    const view = this.ensureHeapView();
+    const offset = this.byteOffset(ptr);
     return {
-      ticksExecuted: this.module.HEAP32[i32Offset],
-      progressedTicks: this.module.HEAP32[i32Offset + 1],
-      completedResponseCount: this.module.HEAP32[i32Offset + 2],
-      emittedTokenCount: this.module.HEAP32[i32Offset + 3],
+      ticksExecuted: view.getInt32(offset, true),
+      progressedTicks: view.getInt32(offset + 4, true),
+      completedResponseCount: view.getInt32(offset + 8, true),
+      emittedTokenCount: view.getInt32(offset + 12, true),
     };
   }
 
@@ -739,27 +832,26 @@ export class WasmBridge {
         return null;
       }
 
-      const f64Offset = Math.floor(this.byteOffset(metricsPtr) / 8);
-      const i32Offset = Math.floor(this.byteOffset(metricsPtr + RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT * 8) / 4);
+      const view = this.ensureHeapView();
+      const offset = this.byteOffset(metricsPtr);
+      const doublesOffset = offset;
+      const intsOffset = offset + RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT * 8;
 
       return withDerivedObservabilityMetrics({
-        totalMs: this.module.HEAPF64[f64Offset],
-        promptEvalMs: this.module.HEAPF64[f64Offset + 1],
-        decodeEvalMs: this.module.HEAPF64[f64Offset + 2],
-        sampleMs: this.module.HEAPF64[f64Offset + 3],
-        queueDelayMs: this.module.HEAPF64[f64Offset + 4],
-        ttftMs: this.module.HEAPF64[f64Offset + 5],
-        meanItlMs: this.module.HEAPF64[f64Offset + 6],
-        tailItlMs: this.module.HEAPF64[f64Offset + 7],
-        e2elMs: this.module.HEAPF64[f64Offset + 8],
-        inputTokenCount: this.module.HEAP32[i32Offset],
-        promptEvalTokens: this.module.HEAP32[i32Offset + 1],
-        decodeEvalCount: this.module.HEAP32[i32Offset + 2],
-        sampleCount: this.module.HEAP32[i32Offset + 3],
-        outputTokenCount: this.module.HEAP32[i32Offset + 4],
-        firstSampledTokenId: this.module.HEAP32[i32Offset + 5],
-        batchParticipationCount: this.module.HEAP32[i32Offset + 6],
-      });
+        ttftMs: view.getFloat64(doublesOffset, true),
+        itlAvgMs: view.getFloat64(doublesOffset + 8, true),
+        itlP99Ms: view.getFloat64(doublesOffset + 16, true),
+        e2eMs: view.getFloat64(doublesOffset + 24, true),
+        prefillMs: view.getFloat64(doublesOffset + 32, true),
+        decodeMs: view.getFloat64(doublesOffset + 40, true),
+        nativeGpuMs: view.getFloat64(doublesOffset + 48, true),
+        nativeSyncMs: view.getFloat64(doublesOffset + 56, true),
+        nativeLogicMs: view.getFloat64(doublesOffset + 64, true),
+
+        inputTokens: view.getInt32(intsOffset, true),
+        outputTokens: view.getInt32(intsOffset + 4, true),
+        cacheHits: view.getInt32(intsOffset + 8, true),
+      } as any);
     } finally {
       this.free(metricsPtr);
     }

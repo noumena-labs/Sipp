@@ -32,7 +32,7 @@ test('QueuedRequestScheduler settles completed requests even without terminal ev
   const transport = createTransportObservability();
   const finalized: number[] = [];
   const bridge = {
-    async runSchedulerProgress() {
+    async runInferenceLoop() {
       return {
         stepResult: REQUEST_STEP_RESULT_WAITING,
         completedResponseCount: 1,
@@ -92,7 +92,7 @@ test('QueuedRequestScheduler ignores token events for requests without callbacks
   const queuedPromptTokenBuffers = new Map();
   const finalized: number[] = [];
   const bridge = {
-    async runSchedulerProgress() {
+    async runInferenceLoop() {
       return {
         stepResult: REQUEST_STEP_RESULT_WAITING,
         completedResponseCount: 1,

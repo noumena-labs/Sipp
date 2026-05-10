@@ -214,29 +214,34 @@ int copy_completed_field(char *buffer, int32_t capacity,
 void copy_runtime_observability(
     const noumena::cogentengine::RuntimeObservabilityMetrics &runtime_observability,
     CE_RuntimeObservabilityMetrics *out_metrics) {
-  out_metrics->total_ms = runtime_observability.total_ms;
-  out_metrics->prompt_eval_ms = runtime_observability.prompt_eval_ms;
-  out_metrics->decode_eval_ms = runtime_observability.decode_eval_ms;
-  out_metrics->sample_ms = runtime_observability.sample_ms;
-  out_metrics->queue_delay_ms = runtime_observability.queue_delay_ms;
+  if (out_metrics == nullptr) {
+    return;
+  }
+
+  // Latency (User Experience)
   out_metrics->ttft_ms = runtime_observability.ttft_ms;
-  out_metrics->mean_itl_ms = runtime_observability.mean_itl_ms;
-  out_metrics->tail_itl_ms = runtime_observability.tail_itl_ms;
+  out_metrics->itl_avg_ms = runtime_observability.itl_avg_ms;
+  out_metrics->itl_p99_ms = runtime_observability.itl_p99_ms;
   out_metrics->e2e_ms = runtime_observability.e2e_ms;
-  out_metrics->input_token_count = runtime_observability.input_token_count;
-  out_metrics->prompt_eval_tokens = runtime_observability.prompt_eval_tokens;
-  out_metrics->decode_eval_count = runtime_observability.decode_eval_count;
-  out_metrics->sample_count = runtime_observability.sample_count;
-  out_metrics->output_token_count = runtime_observability.output_token_count;
-  out_metrics->first_sampled_token_id =
-      runtime_observability.first_sampled_token_id;
-  out_metrics->batch_participation_count =
-      runtime_observability.batch_participation_count;
+
+  // Phases (Compute)
+  out_metrics->prefill_ms = runtime_observability.prefill_ms;
+  out_metrics->decode_ms = runtime_observability.decode_ms;
+
+  // Native (Hardware & Engine)
+  out_metrics->native_gpu_ms = runtime_observability.native_gpu_ms;
+  out_metrics->native_sync_ms = runtime_observability.native_sync_ms;
+  out_metrics->native_logic_ms = runtime_observability.native_logic_ms;
+
+  // Counts
+  out_metrics->input_tokens = runtime_observability.input_tokens;
+  out_metrics->output_tokens = runtime_observability.output_tokens;
+  out_metrics->cache_hits = runtime_observability.cache_hits;
 }
 
-void copy_scheduler_burst_result(
+void copy_scheduler_loop_result(
     const noumena::cogentengine::SchedulerBurstResult &burst_result,
-    CE_SchedulerBurstResult *out_result) {
+    CE_SchedulerLoopResult *out_result) {
   if (out_result == nullptr) {
     return;
   }
@@ -374,7 +379,7 @@ int CE_GetRuntimeObservability(CE_RuntimeObservabilityMetrics *out_metrics) {
 
 int CE_RunSchedulerBurst(int32_t max_ticks, int32_t max_completed_responses,
                          int32_t max_emitted_tokens,
-                         CE_SchedulerBurstResult *out_result) {
+                         CE_SchedulerLoopResult *out_result) {
   if (out_result == nullptr) {
     return static_cast<int>(
         noumena::cogentengine::RequestStepResult::Invalid);
@@ -393,7 +398,7 @@ int CE_RunSchedulerBurst(int32_t max_ticks, int32_t max_completed_responses,
   const noumena::cogentengine::SchedulerBurstResult burst_result =
       runtime->RunSchedulerBurst(max_ticks, max_completed_responses,
                                  max_emitted_tokens);
-  copy_scheduler_burst_result(burst_result, out_result);
+  copy_scheduler_loop_result(burst_result, out_result);
   return static_cast<int>(burst_result.status);
 }
 
@@ -401,7 +406,7 @@ int CE_RunSchedulerBurstWithDeadline(int32_t max_ticks,
                                      int32_t max_completed_responses,
                                      int32_t max_emitted_tokens,
                                      int32_t max_duration_us,
-                                     CE_SchedulerBurstResult *out_result) {
+                                     CE_SchedulerLoopResult *out_result) {
   if (out_result == nullptr) {
     return static_cast<int>(
         noumena::cogentengine::RequestStepResult::Invalid);
@@ -420,7 +425,7 @@ int CE_RunSchedulerBurstWithDeadline(int32_t max_ticks,
   const noumena::cogentengine::SchedulerBurstResult burst_result =
       runtime->RunSchedulerBurst(max_ticks, max_completed_responses,
                                  max_emitted_tokens, max_duration_us);
-  copy_scheduler_burst_result(burst_result, out_result);
+  copy_scheduler_loop_result(burst_result, out_result);
   return static_cast<int>(burst_result.status);
 }
 
@@ -476,6 +481,52 @@ int CE_DrainRuntimeEvents(CE_RuntimeEvent *event_buffer, int32_t event_capacity,
 
   out_result->event_count = static_cast<int32_t>(runtime_events.size());
   out_result->text_bytes = used_text_bytes;
+  return 0;
+}
+
+int CE_RunSchedulerLoop(int32_t max_ticks, int32_t max_completed_responses,
+                        int32_t max_emitted_tokens, int32_t max_duration_us,
+                        CE_SchedulerLoopResult *out_result) {
+  if (out_result == nullptr) {
+    return static_cast<int>(noumena::cogentengine::RequestStepResult::Invalid);
+  }
+
+  auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    out_result->ticks_executed = 0;
+    out_result->progressed_ticks = 0;
+    out_result->completed_response_count = 0;
+    out_result->emitted_token_count = 0;
+    return static_cast<int>(noumena::cogentengine::RequestStepResult::Invalid);
+  }
+
+  const noumena::cogentengine::SchedulerBurstResult burst_result =
+      runtime->RunSchedulerLoop(max_ticks, max_completed_responses,
+                                max_emitted_tokens, max_duration_us);
+  copy_scheduler_loop_result(burst_result, out_result);
+  return static_cast<int>(burst_result.status);
+}
+
+int CE_DrainRuntimeEventsDirectly(CE_RuntimeEvent *event_buffer,
+                                  int32_t event_capacity, char *text_buffer,
+                                  int32_t text_capacity,
+                                  CE_RuntimeEventDrainResult *out_result) {
+  if (out_result == nullptr || event_capacity < 0 || text_capacity < 0 ||
+      (event_capacity > 0 && event_buffer == nullptr) ||
+      (text_capacity > 0 && text_buffer == nullptr)) {
+    return kStatusError;
+  }
+
+  out_result->event_count = 0;
+  out_result->text_bytes = 0;
+
+  auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    return kStatusError;
+  }
+
+  runtime->DrainRuntimeEventsDirectly(event_buffer, event_capacity, text_buffer,
+                                      text_capacity, out_result);
   return 0;
 }
 

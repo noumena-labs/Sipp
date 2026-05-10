@@ -70,8 +70,6 @@ normalize_config(noumena::cogentengine::InferenceRuntimeConfig config) {
   return config;
 }
 
-
-
 uint32_t resolve_sampling_seed(int32_t seed) {
   if (seed < 0) {
     return LLAMA_DEFAULT_SEED;
@@ -99,7 +97,12 @@ bool sampler_penalties_neutral(
     const noumena::cogentengine::InferenceRuntimeConfig &cfg) {
   return cfg.sampling_repeat_penalty == 1.0f &&
          cfg.sampling_frequency_penalty == 0.0f &&
-         cfg.sampling_presence_penalty == 0.0f;
+          cfg.sampling_presence_penalty == 0.0f;
+}
+
+double duration_ms(std::chrono::steady_clock::time_point start,
+                   std::chrono::steady_clock::time_point end) {
+  return std::chrono::duration<double, std::milli>(end - start).count();
 }
 
 bool sampler_top_p_identity(
@@ -345,7 +348,7 @@ bool InferenceRuntime::EnsureContextSpace(SequenceState &state,
 }
 
 bool InferenceRuntime::ReconcilePhysicalState(SequenceState &state,
-                                               llama_seq_id seq_id,
+                                              llama_seq_id seq_id,
                                               llama_memory_t mem) {
   if (mem == nullptr || seq_id < 0) {
     return false;
@@ -440,7 +443,9 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
 
   const int n_ctx = llama_n_ctx(shared_context_);
   const int tokens_to_add = static_cast<int>(prompt_tokens.size() - match_len);
-  const int total_needed = tokens_to_add + ResolveInitialDecodeContextReservationLocked(n_tokens_predict);
+  const int total_needed =
+      tokens_to_add +
+      ResolveInitialDecodeContextReservationLocked(n_tokens_predict);
 
   if (!EnsureContextSpace(state, seq_id, total_needed, n_ctx)) {
     return false;
@@ -453,10 +458,12 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
   const bool is_hybrid = llama_model_is_hybrid(primary_model_);
   const bool allow_partial_kv = !(is_recurrent || is_hybrid);
 
-  // If the current match is shorter than the physical KV cache, truncate the tail.
-  // CRITICAL: If state.current_kv_tokens is empty, we MUST scrub the entire physical 
-  // sequence to ensure isolation from previous users of this seq_id (status=-1 fix).
-  if (match_len < state.current_kv_tokens.size() || state.current_kv_tokens.empty()) {
+  // If the current match is shorter than the physical KV cache, truncate the
+  // tail. CRITICAL: If state.current_kv_tokens is empty, we MUST scrub the
+  // entire physical sequence to ensure isolation from previous users of this
+  // seq_id (status=-1 fix).
+  if (match_len < state.current_kv_tokens.size() ||
+      state.current_kv_tokens.empty()) {
     llama_memory_t mem = llama_get_memory(shared_context_);
     if (!allow_partial_kv || state.current_kv_tokens.empty()) {
       llama_memory_seq_rm(mem, seq_id, 0, -1);
@@ -464,7 +471,8 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
       state.n_past = 0;
       match_len = 0;
     } else {
-      if (!llama_memory_seq_rm(mem, seq_id, static_cast<int32_t>(match_len), -1)) {
+      if (!llama_memory_seq_rm(mem, seq_id, static_cast<int32_t>(match_len),
+                               -1)) {
         return false;
       }
       state.current_kv_tokens.resize(match_len);
@@ -472,8 +480,9 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
     }
   }
 
-  // Edge case: if we matched the entire prompt, we must still re-decode the last
-  // token to trigger the logits generation required for the next token sampling.
+  // Edge case: if we matched the entire prompt, we must still re-decode the
+  // last token to trigger the logits generation required for the next token
+  // sampling.
   if (match_len == prompt_tokens.size() && match_len > 0) {
     llama_memory_t mem = llama_get_memory(shared_context_);
     if (!allow_partial_kv) {
@@ -482,13 +491,18 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
       state.n_past = 0;
       match_len = 0;
     } else {
-      if (!llama_memory_seq_rm(mem, seq_id, static_cast<int32_t>(match_len - 1), -1)) {
+      if (!llama_memory_seq_rm(mem, seq_id, static_cast<int32_t>(match_len - 1),
+                               -1)) {
         return false;
       }
       state.current_kv_tokens.resize(match_len - 1);
       state.n_past = static_cast<int>(match_len - 1);
       match_len--;
     }
+  }
+
+  if (request != nullptr) {
+    request->cache_hits = static_cast<int32_t>(match_len);
   }
 
   out_prefill_cursor = match_len;
@@ -620,9 +634,9 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
   const double multimodal_prefill_ms =
       std::chrono::duration<double, std::milli>(prefill_end - prefill_start)
           .count();
-  request.attributed_prompt_eval_tokens += mirror.n_past;
-  request.attributed_prompt_eval_ms += multimodal_prefill_ms;
-  request.attributed_total_ms += multimodal_prefill_ms;
+  request.input_tokens += static_cast<int32_t>(new_n_past);
+  request.prefill_ms += multimodal_prefill_ms;
+  request.e2e_ms += multimodal_prefill_ms;
   slot.prefill_cursor = request.prompt_tokens.size();
 
   // The multimodal prefill path runs on the same async backends as normal
@@ -631,7 +645,6 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
 
   const llama_token next_token =
       llama_sampler_sample(slot.sampler, shared_context_, -1);
-  request.attributed_sample_count++;
   request.first_sampled_token_id = static_cast<int32_t>(next_token);
   if (llama_vocab_is_eog(vocab, next_token)) {
     slot.terminal_error_message =
@@ -952,8 +965,8 @@ void InferenceRuntime::CompletePendingBookkeepingLocked() {
           const char *piece_data = nullptr;
           std::size_t piece_size = 0;
           if (token_to_piece_buffer(vocab, logits.sampled_token, false,
-                                     piece_buffer, sizeof(piece_buffer),
-                                     piece_overflow, piece_data, piece_size)) {
+                                    piece_buffer, sizeof(piece_buffer),
+                                    piece_overflow, piece_data, piece_size)) {
             std::string stitched = std::move(slot.pending_utf8_bytes);
             slot.pending_utf8_bytes.clear();
             stitched.append(piece_data, piece_size);
@@ -987,6 +1000,7 @@ void InferenceRuntime::CompletePendingBookkeepingLocked() {
         if (!slot.pending_emission_text.empty()) {
           slot.buffered_output_text.append(slot.pending_emission_text);
           slot.pending_emission_text.clear();
+          std::lock_guard<std::mutex> lock(request_queue_mutex_);
           slot_scheduler_.EmitBufferedTokenPiece(request_queue_, slot);
         }
       }
@@ -1020,8 +1034,6 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     return false;
   }
 
-
-
   const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
   if (vocab == nullptr) {
     return false;
@@ -1045,15 +1057,17 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   };
 
   // Phase 1: Global State Normalization & Sequence Preparation.
-  // We perform this pass over ALL mutable slots to ensure that newly admitted 
+  // We perform this pass over ALL mutable slots to ensure that newly admitted
   // or recovered requests are correctly transitioned (e.g. Admitted -> Prefill)
-  // and their KV caches are physically sanitized before we select the tick's batch.
+  // and their KV caches are physically sanitized before we select the tick's
+  // batch.
   for (SlotState &slot : slot_scheduler_.MutableSlots()) {
     if (slot.request == nullptr || slot.session == nullptr || slot.seq_id < 0) {
       continue;
     }
 
-    // 1. Core State Machine Transitions (Admitted -> Prefill, Seed Recovery, etc.)
+    // 1. Core State Machine Transitions (Admitted -> Prefill, Seed Recovery,
+    // etc.)
     if (!NormalizeRunnableSlotStateLocked(slot)) {
       continue;
     }
@@ -1065,7 +1079,8 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
         sparams.no_perf = config_.enable_runtime_observability == 0;
         slot.sampler = llama_sampler_chain_init(sparams);
         if (slot.sampler != nullptr) {
-          const llama_vocab *grammar_vocab = llama_model_get_vocab(primary_model_);
+          const llama_vocab *grammar_vocab =
+              llama_model_get_vocab(primary_model_);
           llama_sampler *grammar_sampler = llama_sampler_init_grammar(
               grammar_vocab, slot.request->grammar.c_str(), "root");
           if (grammar_sampler == nullptr) {
@@ -1080,9 +1095,10 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
         slot.sampler = llama_sampler_clone(sampler_);
       }
       if (slot.sampler == nullptr) {
-        slot.terminal_error_message = slot.request->grammar.empty()
-                                          ? "Failed to clone per-slot sampler."
-                                          : "Failed to build per-slot grammar sampler.";
+        slot.terminal_error_message =
+            slot.request->grammar.empty()
+                ? "Failed to clone per-slot sampler."
+                : "Failed to build per-slot grammar sampler.";
         slot.phase = SlotPhase::Failed;
         slot.request->lifecycle = GenerateRequestLifecycle::Failed;
         continue;
@@ -1094,7 +1110,8 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       if (slot.request->is_multimodal_turn) {
         if (!RunMultimodalPrefillLocked(slot, vocab)) {
           if (slot.terminal_error_message.empty()) {
-            slot.terminal_error_message = "Failed to evaluate multimodal prompt.";
+            slot.terminal_error_message =
+                "Failed to evaluate multimodal prompt.";
           }
           slot.phase = SlotPhase::Failed;
           slot.request->lifecycle = GenerateRequestLifecycle::Failed;
@@ -1108,7 +1125,8 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
               slot.request->context_key, slot.request->prompt_tokens,
               slot.request->max_output_tokens, slot.mirror, slot.seq_id,
               slot.request, prefill_cursor)) {
-        slot.terminal_error_message = "Failed to prepare sequence for prompt reuse.";
+        slot.terminal_error_message =
+            "Failed to prepare sequence for prompt reuse.";
         slot.phase = SlotPhase::Failed;
         slot.request->lifecycle = GenerateRequestLifecycle::Failed;
         continue;
@@ -1116,14 +1134,15 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
 
       slot.prefill_cursor = prefill_cursor;
       slot.phase = slot.prefill_cursor >= slot.request->prompt_tokens.size()
-                        ? SlotPhase::Decode
-                        : SlotPhase::Prefill;
+                       ? SlotPhase::Decode
+                       : SlotPhase::Prefill;
     }
 
     // 4. Context Headroom Extension (for Decode slots)
     if (slot.phase == SlotPhase::Decode) {
       if (!EnsureDecodeStepContextSpaceLocked(slot)) {
-        slot.terminal_error_message = "Failed to extend decode context headroom.";
+        slot.terminal_error_message =
+            "Failed to extend decode context headroom.";
         slot.phase = SlotPhase::Failed;
         slot.request->lifecycle = GenerateRequestLifecycle::Failed;
         continue;
@@ -1131,11 +1150,10 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     }
 
     slot.request->lifecycle = GenerateRequestLifecycle::Running;
-
   }
 
   // Phase 2: Batch Selection.
-  // Now that all slots are normalized and their logical mirrors reflect the 
+  // Now that all slots are normalized and their logical mirrors reflect the
   // actual intent (e.g. truncated after a sticky hit), we select the best
   // subset for the hardware batch.
   slot_scheduler_.SelectDecodeReadySlots(scratch_live_decode_ready_slots_);
@@ -1146,8 +1164,6 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   if (scratch_live_runnable_slots_.empty()) {
     return false;
   }
-
-
 
   const int32_t batch_token_budget = ResolveBatchTokenBudgetLocked();
   const SchedulerTickBudget tick_budget = slot_scheduler_.BuildTickBudget(
@@ -1165,8 +1181,6 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   if (plan.Empty()) {
     return false;
   }
-
-
 
   shared_batch_builder_.EnsureCapacity(batch_token_budget,
                                        std::max<int32_t>(1, config_.n_seq_max));
@@ -1197,40 +1211,33 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     }
 
     if (contribution.request_logits) {
-      scratch_logits_contributions_.push_back(
-          PendingLogitsContribution{i, contribution.request, batch_token_index});
+      scratch_logits_contributions_.push_back(PendingLogitsContribution{
+          i, contribution.request, batch_token_index});
     }
 
     batch_token_index++;
   }
-
-
-
+  const auto tick_start = std::chrono::steady_clock::now();
+  
   const int32_t decode_status =
       llama_decode(shared_context_, shared_batch_builder_.Get());
-
-
+  
+  const auto decode_end = std::chrono::steady_clock::now();
+  const double decode_step_ms = duration_ms(tick_start, decode_end);
 
   if (decode_status != 0) {
-    // Capture enough state at the failure point to diagnose without
-    // needing to attach a debugger.  llama_decode return codes per the
-    // public llama.h header:
-    //   1   = could not find a KV slot for the batch (capacity / layout)
-    //   2   = aborted (some ubatches already in context memory)
-    //  -1   = invalid input batch (positions/seq_ids inconsistent)
-    //  <-1  = fatal compute error
+    // ... (rest of failure logic)
     const llama_batch &failing_batch = shared_batch_builder_.Get();
     std::ostringstream diag;
     diag << "llama_decode() failed in shared tick (status=" << decode_status
          << ", n_tokens=" << failing_batch.n_tokens
          << ", n_seq_max=" << config_.n_seq_max
-         << ", n_ctx=" << llama_n_ctx(shared_context_)
-         << ", contributions={";
+         << ", n_ctx=" << llama_n_ctx(shared_context_) << ", contributions={";
     const int32_t kPreviewLimit = 16;
-    const int32_t preview_count = std::min(failing_batch.n_tokens, kPreviewLimit);
+    const int32_t preview_count =
+        std::min(failing_batch.n_tokens, kPreviewLimit);
     for (int32_t i = 0; i < preview_count; ++i) {
-      diag << (i == 0 ? "" : ",")
-           << "(seq=" << failing_batch.seq_id[i][0]
+      diag << (i == 0 ? "" : ",") << "(seq=" << failing_batch.seq_id[i][0]
            << ",pos=" << failing_batch.pos[i]
            << ",log=" << static_cast<int>(failing_batch.logits[i] != 0) << ")";
     }
@@ -1247,15 +1254,16 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
         diag << ",";
       }
       first_slot = false;
-      const int32_t n_past =
-          slot->session != nullptr ? static_cast<int32_t>(slot->mirror.n_past) : -1;
+      const int32_t n_past = slot->session != nullptr
+                                 ? static_cast<int32_t>(slot->mirror.n_past)
+                                 : -1;
       const std::size_t kv_tokens =
           slot->session != nullptr ? slot->mirror.current_kv_tokens.size() : 0;
       diag << "(slot=" << slot->slot_id << ",seq=" << slot->seq_id
            << ",phase=" << static_cast<int>(slot->phase)
            << ",cursor=" << slot->prefill_cursor << "/"
            << (slot->request != nullptr ? slot->request->prompt_tokens.size()
-                                        : 0)
+                                         : 0)
            << ",n_past=" << n_past << ",kv=" << kv_tokens
            << ",gen=" << slot->generated_tokens.size() << ")";
     }
@@ -1281,24 +1289,30 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   // for the tokens sampled at the end of the PREVIOUS tick.
   CompletePendingBookkeepingLocked();
 
+  const auto sync_start = std::chrono::steady_clock::now();
   llama_synchronize(shared_context_);
+  const auto sync_end = std::chrono::steady_clock::now();
+  const double sync_ms = duration_ms(sync_start, sync_end);
 
-  // Critical bookkeeping: Update KV tracking and slot phases immediately.
-  // These are required for the BatchPlanner to correctly construct the next
-  // tick's batch.
-  // Symmetric with `BatchPlanner::ApplyDecodeResults` below — both loops
-  // walk `plan.contributions` and must agree on which contributions to
-  // process.  An asymmetric filter (e.g. checking `slot->session` here but
-  // not in ApplyDecodeResults) would leave `prefill_cursor` advancing
-  // while `mirror.n_past` stays at 0, producing the silent
-  // "stuck-Decode-with-no-seed" state instead of a recoverable failure.
-  // `mirror` lives on the slot by value, so it is reachable as long as
-  // `slot` itself is non-null; `request` is the only other linkage we
-  // depend on (for prompt size in ApplyDecodeResults).
+  const auto tick_end = std::chrono::steady_clock::now();
+  const double total_tick_ms = duration_ms(tick_start, tick_end);
+  const double logic_ms = total_tick_ms - (decode_step_ms + sync_ms);
+
+  // Attribute times to participating requests
   for (const BatchContribution &contribution : plan.contributions) {
     if (contribution.slot == nullptr || contribution.slot->request == nullptr) {
       continue;
     }
+
+    GenerateRequest &request = *contribution.slot->request;
+    if (contribution.kind == BatchContributionKind::Prefill) {
+      request.prefill_ms += decode_step_ms;
+      request.input_tokens++;
+    } else {
+      request.decode_ms += decode_step_ms;
+    }
+    request.native_logic_ms += logic_ms;
+    request.e2e_ms += total_tick_ms;
 
     SequenceState &mirror = contribution.slot->mirror;
     mirror.current_kv_tokens.push_back(contribution.token);
@@ -1342,8 +1356,6 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     }
   }
 
-
-
   for (PendingLogitsContribution &pending_logits :
        scratch_logits_contributions_) {
     const BatchContribution &logit_contribution =
@@ -1383,8 +1395,6 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       slot_request.lifecycle = GenerateRequestLifecycle::Streaming;
     }
   }
-
-
 
   // Prepare bookkeeping for the NEXT tick's GPU window.
   pending_bookkeeping_ = {
@@ -1439,8 +1449,6 @@ int32_t InferenceRuntime::ResolvePrefillChunkSizeLocked(
   return fair_share;
 }
 
-
-
 void InferenceRuntime::CommitCompletedObservabilityLocked(
     GenerateRequestId request_id, const GenerateResponse &response) {
   if (request_id == 0 ||
@@ -1455,24 +1463,41 @@ void InferenceRuntime::CommitCompletedObservabilityLocked(
 
   const RuntimeObservabilityMetrics request_metrics =
       response.runtime_observability;
-  last_runtime_observability_.queue_delay_ms = request_metrics.queue_delay_ms;
+  
+  // Latency (User Experience)
   last_runtime_observability_.ttft_ms = request_metrics.ttft_ms;
-  last_runtime_observability_.mean_itl_ms = request_metrics.mean_itl_ms;
-  last_runtime_observability_.tail_itl_ms = request_metrics.tail_itl_ms;
+  last_runtime_observability_.itl_avg_ms = request_metrics.itl_avg_ms;
+  last_runtime_observability_.itl_p99_ms = request_metrics.itl_p99_ms;
+  last_runtime_observability_.e2e_ms = request_metrics.e2e_ms;
+
+  // Phases (Compute)
+  last_runtime_observability_.prefill_ms = request_metrics.prefill_ms;
+  last_runtime_observability_.decode_ms = request_metrics.decode_ms;
+
+  // Native (Hardware & Engine)
+  last_runtime_observability_.native_gpu_ms = request_metrics.native_gpu_ms;
+  last_runtime_observability_.native_sync_ms = request_metrics.native_sync_ms;
+  last_runtime_observability_.native_logic_ms = request_metrics.native_logic_ms;
+
+  // Counts
+  last_runtime_observability_.input_tokens = request_metrics.input_tokens;
+  last_runtime_observability_.output_tokens = request_metrics.output_tokens;
+  last_runtime_observability_.cache_hits = request_metrics.cache_hits;
 
   has_last_runtime_observability_ = true;
-
-
 }
 
 void InferenceRuntime::CommitNewCompletedResponsesObservabilityLocked() {
-  if (committed_observability_request_ids_.size() >=
-      request_queue_.CompletedResponseCount()) {
-    return;
+  std::vector<GenerateRequestId> completed_request_ids;
+  {
+    std::lock_guard<std::mutex> lock(request_queue_mutex_);
+    if (committed_observability_request_ids_.size() >=
+        request_queue_.CompletedResponseCount()) {
+      return;
+    }
+    completed_request_ids = request_queue_.CompletedResponseIds();
   }
 
-  std::vector<GenerateRequestId> completed_request_ids =
-      request_queue_.CompletedResponseIds();
   if (completed_request_ids.empty()) {
     return;
   }
@@ -1484,6 +1509,7 @@ void InferenceRuntime::CommitNewCompletedResponsesObservabilityLocked() {
       continue;
     }
 
+    std::lock_guard<std::mutex> lock(request_queue_mutex_);
     const GenerateResponse *completed =
         request_queue_.PeekCompletedResponse(request_id);
     if (completed == nullptr) {
@@ -1828,7 +1854,7 @@ GenerateRequestId InferenceRuntime::EnqueueMultimodalRequest(
 }
 
 bool InferenceRuntime::CancelRequest(GenerateRequestId request_id) {
-  std::lock_guard<std::mutex> lock(operation_mutex_);
+  std::lock_guard<std::mutex> lock(request_queue_mutex_);
   if (request_id == 0) {
     return false;
   }
@@ -1954,25 +1980,271 @@ SchedulerBurstResult InferenceRuntime::RunSchedulerBurst(
   return burst_result;
 }
 
+void InferenceRuntime::DrainRuntimeEventsDirectly(
+    CE_RuntimeEvent *event_buffer, int32_t event_capacity, char *text_buffer,
+    int32_t text_capacity, CE_RuntimeEventDrainResult *out_result) {
+  std::lock_guard<std::mutex> lock(request_queue_mutex_);
+  if (event_buffer == nullptr || event_capacity <= 0 || out_result == nullptr) {
+    return;
+  }
+
+  const std::vector<RuntimeEvent> events =
+      request_queue_.DrainEvents(static_cast<std::size_t>(event_capacity));
+  out_result->event_count = static_cast<int32_t>(events.size());
+  out_result->text_bytes = 0;
+
+  int32_t text_cursor = 0;
+  for (int32_t i = 0; i < out_result->event_count; ++i) {
+    const RuntimeEvent &src = events[i];
+    CE_RuntimeEvent &dst = event_buffer[i];
+
+    dst.request_id = static_cast<CE_RequestId>(src.request_id);
+    dst.kind = static_cast<int32_t>(src.kind);
+    dst.status = static_cast<int32_t>(src.status);
+    dst.text_offset = -1;
+    dst.text_length = 0;
+
+    if (!src.text.empty() && text_buffer != nullptr) {
+      const int32_t space_remaining = text_capacity - text_cursor;
+      const int32_t to_copy =
+          std::min(static_cast<int32_t>(src.text.size()), space_remaining);
+      if (to_copy > 0) {
+        std::memcpy(text_buffer + text_cursor, src.text.data(), to_copy);
+        dst.text_offset = text_cursor;
+        dst.text_length = to_copy;
+        text_cursor += to_copy;
+        out_result->text_bytes += to_copy;
+      }
+    }
+  }
+}
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+
+extern "C" {
+/**
+ * Suspends the Wasm execution stack via JSPI and resumes on the next browser
+ * event loop tick.
+ *
+ * IMPORTANT: do *not* use `setTimeout(resolve, 0)` here.  All major browsers
+ * clamp `setTimeout` to a 1–4ms minimum (4ms once nesting passes 5 levels,
+ * which the inference loop will routinely cross).  Yielding every 16ms via a
+ * 4ms-clamped timer burns roughly 4/(16+4) = 20% of wall time in scheduler
+ * idle, which directly translates into a ~20% decode-TPS regression at
+ * single-query workloads.
+ *
+ * `MessageChannel.postMessage` is the canonical fast-macrotask primitive in
+ * browsers (sub-100µs in practice) and is what React, Lit, and the WHATWG
+ * `scheduler` polyfill use for exactly this purpose.  It still yields a true
+ * macrotask boundary so the browser can paint, deliver input events, and
+ * service other JS, but without the timer clamp.  `scheduler.yield()` would
+ * be even nicer if available, but it lands behind a flag in many engines, so
+ * we feature-detect and fall back to the channel.  `Promise.resolve()` is
+ * deliberately *not* used as a fallback — microtasks chain inside the
+ * current task and would not allow paint, defeating the purpose of yielding.
+ */
+EM_ASYNC_JS(void, ce_native_yield, (), {
+  if (typeof scheduler !== 'undefined' && typeof scheduler.yield === 'function') {
+    await scheduler.yield();
+    return;
+  }
+  if (!Module._ce_yield_channel) {
+    const channel = new MessageChannel();
+    const queue = [];
+    channel.port1.onmessage = () => {
+      const resolve = queue.shift();
+      if (resolve) resolve();
+    };
+    Module._ce_yield_channel = channel;
+    Module._ce_yield_queue = queue;
+  }
+  await new Promise(resolve => {
+    Module._ce_yield_queue.push(resolve);
+    Module._ce_yield_channel.port2.postMessage(0);
+  });
+});
+}
+#endif
+
+SchedulerBurstResult InferenceRuntime::RunSchedulerLoop(
+    int32_t max_ticks, int32_t max_completed_responses,
+    int32_t max_emitted_tokens, int32_t max_duration_us) {
+  std::unique_lock<std::mutex> lock(operation_mutex_);
+  SchedulerBurstResult loop_result;
+
+  if (primary_model_ == nullptr || shared_context_ == nullptr ||
+      sampler_ == nullptr) {
+    loop_result.status = RequestStepResult::Invalid;
+    return loop_result;
+  }
+
+  const int32_t yield_threshold_us = 16000; // 16ms
+  const auto loop_start = std::chrono::steady_clock::now();
+  auto last_yield_time = loop_start;
+
+  while (true) {
+    // Check if we have enqueued requests. If not, we can exit the loop.
+    if (request_queue_.LiveRequestCount() == 0 && !has_pending_bookkeeping_) {
+      loop_result.status = RequestStepResult::Waiting;
+      break;
+    }
+
+    const std::size_t completed_before = [this]() {
+      std::lock_guard<std::mutex> lock(request_queue_mutex_);
+      return request_queue_.CompletedResponseCount();
+    }();
+    const int32_t emitted_before = [this]() {
+      std::lock_guard<std::mutex> lock(request_queue_mutex_);
+      return request_queue_.TotalEmittedTokenCount();
+    }();
+
+    const RequestStepResult step_result = RunSchedulerTickLocked();
+
+    const std::size_t completed_after = [this]() {
+      std::lock_guard<std::mutex> lock(request_queue_mutex_);
+      return request_queue_.CompletedResponseCount();
+    }();
+    const int32_t emitted_after = [this]() {
+      std::lock_guard<std::mutex> lock(request_queue_mutex_);
+      return request_queue_.TotalEmittedTokenCount();
+    }();
+
+    loop_result.ticks_executed++;
+    if (completed_after > completed_before) {
+      loop_result.completed_response_count +=
+          static_cast<int32_t>(completed_after - completed_before);
+    }
+    if (emitted_after > emitted_before) {
+      loop_result.emitted_token_count += emitted_after - emitted_before;
+    }
+    if (step_result == RequestStepResult::Progressed ||
+        step_result == RequestStepResult::Terminal) {
+      loop_result.progressed_ticks++;
+    }
+
+    if (step_result == RequestStepResult::Invalid ||
+        step_result == RequestStepResult::FatalNoProgress) {
+      loop_result.status = step_result;
+      break;
+    }
+
+    // Check if we need to yield to the browser for responsiveness.
+#ifdef __EMSCRIPTEN__
+    const auto now = std::chrono::steady_clock::now();
+
+    // Check if we reached the absolute duration limit.
+    if (max_duration_us > 0) {
+      const auto elapsed_us =
+          std::chrono::duration_cast<std::chrono::microseconds>(now -
+                                                                loop_start)
+              .count();
+      if (elapsed_us >= max_duration_us) {
+        loop_result.status = RequestStepResult::Progressed;
+        break;
+      }
+    }
+
+    if (std::chrono::duration_cast<std::chrono::microseconds>(now -
+                                                              last_yield_time)
+            .count() >= yield_threshold_us) {
+      // Must flush bookkeeping before yielding so JS sees the latest tokens.
+      FlushAllPendingBookkeepingLocked();
+
+      // Unlock while suspended so other JS calls can potentially interact
+      // with the runtime (though they should ideally wait).
+      lock.unlock();
+      ce_native_yield();
+      lock.lock();
+
+      last_yield_time = std::chrono::steady_clock::now();
+    }
+#endif
+
+    // Termination conditions
+    if (max_ticks > 0 && loop_result.ticks_executed >= max_ticks) {
+      loop_result.status = RequestStepResult::Progressed;
+      break;
+    }
+    if (max_completed_responses > 0 &&
+        loop_result.completed_response_count >= max_completed_responses) {
+      loop_result.status = RequestStepResult::Progressed;
+      break;
+    }
+    if (max_emitted_tokens > 0 &&
+        loop_result.emitted_token_count >= max_emitted_tokens) {
+      loop_result.status = RequestStepResult::Progressed;
+      break;
+    }
+  }
+
+  FlushAllPendingBookkeepingLocked();
+  return loop_result;
+}
+
 RequestStepResult InferenceRuntime::RunSchedulerTickLocked() {
   if (primary_model_ == nullptr || shared_context_ == nullptr ||
       sampler_ == nullptr) {
     return RequestStepResult::Invalid;
   }
 
-  const std::size_t completed_before = request_queue_.CompletedResponseCount();
+  const std::size_t completed_before = [this]() {
+    std::lock_guard<std::mutex> lock(request_queue_mutex_);
+    return request_queue_.CompletedResponseCount();
+  }();
+
   bool admitted_any = false;
-  while (slot_scheduler_.AdmitPendingRequests(request_queue_, session_store_)) {
+  while (true) {
+    std::lock_guard<std::mutex> lock(request_queue_mutex_);
+    if (!slot_scheduler_.AdmitPendingRequests(request_queue_, session_store_)) {
+      break;
+    }
     admitted_any = true;
   }
 
   const bool tick_executed = RunPolicyBatchTickLocked();
 
-  FlushAllPendingBookkeepingLocked();
-  slot_scheduler_.FinalizeCompletedSlots(request_queue_, session_store_);
+  // CPU/GPU OVERLAP: Do NOT flush pending bookkeeping unconditionally here.
+  // The deferred-bookkeeping pipeline parks tick N's sampled token in
+  // `pending_bookkeeping_` so that tick N+1 can emit it from inside
+  // `RunPolicyBatchTickLocked` (line ~1290) — i.e. *while* the GPU is busy
+  // running tick N+1's batch.  Flushing unconditionally at the end of every
+  // tick re-emits the token immediately, before tick N+1 has even been
+  // dispatched, and `CompletePendingBookkeepingLocked()` becomes a no-op
+  // next tick.  That negates the overlap and leaves only the bookkeeping
+  // overhead, regressing single-query decode TPS to roughly the pre-overlap
+  // baseline minus the new plumbing cost.
+  //
+  // We do still need a flush as a safety net: when `RunPolicyBatchTickLocked`
+  // early-returns (no runnable slots — e.g. a Streaming slot got cancelled
+  // in Phase 1 normalize, or all slots are already terminal), the next call
+  // through `RunPolicyBatchTickLocked` won't reach line ~1290 either, so the
+  // `pending_bookkeeping_` struct (which references slot pointers about to
+  // be reset by `FinalizeCompletedSlots` below) would be stranded, leaking
+  // the last sampled token and pinning `has_pending_bookkeeping_=true`
+  // (which the loop's exit condition checks, causing a hot spin).
+  //
+  // The success path (`tick_executed == true`) means we did sample and the
+  // `must_flush` block inside `RunPolicyBatchTickLocked` already flushed if
+  // any slot terminated — so it's safe to defer to the next tick's overlap
+  // window for everything else.
+  if (!tick_executed) {
+    FlushAllPendingBookkeepingLocked();
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(request_queue_mutex_);
+    slot_scheduler_.FinalizeCompletedSlots(request_queue_, session_store_);
+  }
+
   CommitNewCompletedResponsesObservabilityLocked();
 
-  if (request_queue_.CompletedResponseCount() > completed_before) {
+  const std::size_t completed_after = [this]() {
+    std::lock_guard<std::mutex> lock(request_queue_mutex_);
+    return request_queue_.CompletedResponseCount();
+  }();
+
+  if (completed_after > completed_before) {
     return RequestStepResult::Progressed;
   }
 
@@ -2003,7 +2275,7 @@ RequestStepResult InferenceRuntime::RunSchedulerTickLocked() {
 std::vector<RuntimeEvent>
 InferenceRuntime::DrainRuntimeEvents(int32_t max_count,
                                      int32_t max_text_bytes) {
-  std::lock_guard<std::mutex> lock(operation_mutex_);
+  std::lock_guard<std::mutex> lock(request_queue_mutex_);
   const std::size_t clamped_max_count =
       max_count <= 0 ? 0 : static_cast<std::size_t>(max_count);
   const std::size_t clamped_max_text_bytes =
@@ -2014,7 +2286,7 @@ InferenceRuntime::DrainRuntimeEvents(int32_t max_count,
 
 bool InferenceRuntime::TryPeekCompletedResponse(
     GenerateRequestId request_id, GenerateResponse &out_response) const {
-  std::lock_guard<std::mutex> lock(operation_mutex_);
+  std::lock_guard<std::mutex> lock(request_queue_mutex_);
   const GenerateResponse *response =
       request_queue_.PeekCompletedResponse(request_id);
   if (response == nullptr) {
@@ -2025,12 +2297,12 @@ bool InferenceRuntime::TryPeekCompletedResponse(
 }
 
 bool InferenceRuntime::HasRequest(GenerateRequestId request_id) const {
-  std::lock_guard<std::mutex> lock(operation_mutex_);
+  std::lock_guard<std::mutex> lock(request_queue_mutex_);
   return request_queue_.Contains(request_id);
 }
 
 bool InferenceRuntime::ConsumeCompletedResponse(GenerateRequestId request_id) {
-  std::lock_guard<std::mutex> lock(operation_mutex_);
+  std::lock_guard<std::mutex> lock(request_queue_mutex_);
   committed_observability_request_ids_.erase(request_id);
   return request_queue_.ConsumeCompletedResponse(request_id);
 }

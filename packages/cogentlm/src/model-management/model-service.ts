@@ -256,7 +256,7 @@ export class ModelService implements ModelLifecycleService {
             status: isAbortError(error) ? 'cancelled' : 'failed',
             wallMs: null,
             ttftMs: null,
-            outputTokenCount: null,
+            outputTokens: null,
             errorCode: error instanceof QueryError ? error.code : undefined,
             errorMessage: error instanceof Error ? error.message : String(error),
           },
@@ -352,7 +352,7 @@ export class ModelService implements ModelLifecycleService {
         status: 'running',
         wallMs: null,
         ttftMs: null,
-        outputTokenCount: null,
+        outputTokens: null,
       },
     });
     let failureRecorded = false;
@@ -546,7 +546,7 @@ export class ModelService implements ModelLifecycleService {
       status,
       wallMs: Math.max(0, nowMs() - start),
       ttftMs: metrics?.ttftMs ?? null,
-      outputTokenCount: metrics?.outputTokenCount ?? null,
+      outputTokens: metrics?.outputTokens ?? null,
     };
   }
 

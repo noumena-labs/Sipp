@@ -23,4 +23,6 @@ export interface EngineModule {
     opts?: { async?: boolean }
   ): Promise<any> | any;
   UTF8ToString(ptr: number | bigint, maxBytesToRead?: number): string;
+  addFunction(fn: Function, signature: string): number;
+  removeFunction(ptr: number): void;
 }
