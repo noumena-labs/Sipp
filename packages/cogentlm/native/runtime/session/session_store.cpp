@@ -150,24 +150,27 @@ llama_seq_id SessionStore::AcquireSeqId(llama_seq_id hint) {
     return -1;
   }
 
+  llama_seq_id seq_id = -1;
   if (hint >= 0 && hint < static_cast<llama_seq_id>(seq_id_available_.size())) {
     auto it = std::find(free_seq_ids_.begin(), free_seq_ids_.end(), hint);
     if (it != free_seq_ids_.end()) {
+      seq_id = hint;
       free_seq_ids_.erase(it);
-      seq_id_available_[static_cast<size_t>(hint)] = false;
-      // DO NOT clear sequence memory; we want to keep it warm for LCP reuse.
-      return hint;
     }
   }
 
-  const llama_seq_id seq_id = free_seq_ids_.front();
-  free_seq_ids_.pop_front();
+  if (seq_id == -1) {
+    seq_id = free_seq_ids_.front();
+    free_seq_ids_.pop_front();
+  }
+
   if (seq_id >= 0 &&
       static_cast<size_t>(seq_id) < seq_id_available_.size()) {
     seq_id_available_[static_cast<size_t>(seq_id)] = false;
   }
 
-  // GUARANTEE CLEAN STATE for a new lease.
+  // GUARANTEE ISOLATION: Any ID taken from the free pool is stale.
+  // We must scrub it to prevent position conflicts (status=-1).
   ClearSequenceMemory(seq_id);
 
   return seq_id;

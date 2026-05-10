@@ -218,6 +218,7 @@ private:
   std::vector<PendingLogitsContribution> pending_logits_contributions_;
   PendingTickBookkeeping pending_bookkeeping_;
   bool has_pending_bookkeeping_ = false;
+  llama_perf_context_data cumulative_gpu_perf_ = {};
   mutable std::mutex operation_mutex_;
 };
 

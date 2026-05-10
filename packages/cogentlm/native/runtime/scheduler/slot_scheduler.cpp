@@ -264,7 +264,7 @@ bool SlotScheduler::AdmitPendingRequests(RequestQueue &request_queue,
 
   SequenceState &session = session_store.GetOrCreateSession(request->context_key);
   
-  const llama_seq_id leased_seq_id = session_store.AcquireSeqId(-1);
+  const llama_seq_id leased_seq_id = session_store.AcquireSeqId(session.hardware_id);
   if (leased_seq_id < 0) {
     GenerateResponse response;
     response.request_id = request->id;
@@ -280,16 +280,6 @@ bool SlotScheduler::AdmitPendingRequests(RequestQueue &request_queue,
   session.hardware_id = leased_seq_id;
   session.current_kv_tokens.clear();
   session.n_past = 0;
-
-  if (request->is_multimodal_turn) {
-    session.current_kv_tokens.clear();
-    session.n_past = 0;
-    // Note: If we had a sticky hit, multimodal still requires a reset.
-    // If we didn't have a sticky hit, it's already cleared above.
-    if (leased_seq_id >= 0) {
-      session_store.ClearSequenceMemory(leased_seq_id);
-    }
-  }
 
   session_store.Pin(request->context_key);
   idle_slot_it->AttachRequest(*request, session);
