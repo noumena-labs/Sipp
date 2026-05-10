@@ -337,26 +337,6 @@ void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue,
           request.attributed_decode_eval_ms;
       response.runtime_observability.sample_ms =
           request.attributed_sample_ms;
-      response.runtime_observability.native_policy_prepare_ms =
-          request.attributed_native_policy_prepare_ms;
-      response.runtime_observability.native_policy_plan_ms =
-          request.attributed_native_policy_plan_ms;
-      response.runtime_observability.native_batch_build_ms =
-          request.attributed_native_batch_build_ms;
-      response.runtime_observability.native_llama_decode_wall_ms =
-          request.attributed_native_llama_decode_wall_ms;
-      response.runtime_observability.native_synchronize_ms =
-          request.attributed_native_synchronize_ms;
-      response.runtime_observability.native_kv_update_ms =
-          request.attributed_native_kv_update_ms;
-      response.runtime_observability.native_sampler_wall_ms =
-          request.attributed_native_sampler_wall_ms;
-      response.runtime_observability.native_token_emit_ms =
-          request.attributed_native_token_emit_ms;
-      response.runtime_observability.native_prefix_cache_ms =
-          request.attributed_native_prefix_cache_ms;
-      response.runtime_observability.native_observability_ms =
-          request.attributed_native_observability_ms;
       response.runtime_observability.input_token_count =
           static_cast<int32_t>(request.prompt_tokens.size());
       response.runtime_observability.prompt_eval_tokens =
@@ -375,23 +355,6 @@ void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue,
           request.attributed_sample_count > 0
               ? request.attributed_sample_count
               : static_cast<int32_t>(slot.generated_tokens.size());
-      response.runtime_observability.decode_first_tick_count =
-          request.decode_first_tick_count;
-      response.runtime_observability.chunked_prefill_tick_count =
-          request.chunked_prefill_tick_count;
-      response.runtime_observability.mixed_workload_tick_count =
-          request.mixed_workload_tick_count;
-      response.runtime_observability.lcp_reuse_tokens =
-          request.lcp_reuse_tokens;
-      response.runtime_observability.prefix_cache_restore_tokens =
-          request.prefix_cache_restore_tokens;
-      response.runtime_observability.prefix_cache_hit_count =
-          request.prefix_cache_hit_count;
-      response.runtime_observability.prefix_cache_store_count =
-          request.prefix_cache_store_count;
-      response.runtime_observability.native_policy_tick_count =
-          request.attributed_native_policy_tick_count;
-      response.runtime_observability.native_scheduler_tick_count = 0;
     }
     if (response.status == GenerateResponseStatus::Cancelled) {
       response.error_message = "Request cancelled.";

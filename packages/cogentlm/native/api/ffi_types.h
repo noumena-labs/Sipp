@@ -68,20 +68,7 @@ typedef struct CE_RuntimeObservabilityMetrics {
   double mean_itl_ms;
   double tail_itl_ms;
   double e2e_ms;
-  double native_scheduler_tick_ms;
-  double native_scheduler_admit_ms;
-  double native_scheduler_finalize_ms;
-  double native_scheduler_commit_ms;
-  double native_policy_prepare_ms;
-  double native_policy_plan_ms;
-  double native_batch_build_ms;
-  double native_llama_decode_wall_ms;
-  double native_synchronize_ms;
-  double native_kv_update_ms;
-  double native_sampler_wall_ms;
-  double native_token_emit_ms;
-  double native_prefix_cache_ms;
-  double native_observability_ms;
+
   int32_t input_token_count;
   int32_t prompt_eval_tokens;
   int32_t decode_eval_count;
@@ -89,15 +76,7 @@ typedef struct CE_RuntimeObservabilityMetrics {
   int32_t output_token_count;
   int32_t first_sampled_token_id;
   int32_t batch_participation_count;
-  int32_t decode_first_tick_count;
-  int32_t chunked_prefill_tick_count;
-  int32_t mixed_workload_tick_count;
-  int32_t lcp_reuse_tokens;
-  int32_t prefix_cache_restore_tokens;
-  int32_t prefix_cache_hit_count;
-  int32_t prefix_cache_store_count;
-  int32_t native_policy_tick_count;
-  int32_t native_scheduler_tick_count;
+
 } CE_RuntimeObservabilityMetrics;
 
 typedef struct CE_SchedulerBurstResult {
@@ -123,7 +102,7 @@ typedef struct CE_RuntimeEventDrainResult {
 #ifdef __cplusplus
 static_assert(sizeof(CE_RequestId) == 4,
               "CE_RequestId must stay 32-bit for JS/Wasm FFI calls.");
-static_assert(sizeof(CE_RuntimeObservabilityMetrics) == 248,
+static_assert(sizeof(CE_RuntimeObservabilityMetrics) == 104,
               "CE_RuntimeObservabilityMetrics layout changed. Update the TS FFI reader.");
 static_assert(sizeof(CE_SchedulerBurstResult) == 16,
               "CE_SchedulerBurstResult layout changed. Update the TS FFI reader.");

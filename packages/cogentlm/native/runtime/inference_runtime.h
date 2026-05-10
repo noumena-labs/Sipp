@@ -135,10 +135,7 @@ private:
   int32_t ResolvePrefillChunkSizeLocked(
       const SchedulerTickBudget &tick_budget, int32_t decode_ready_count,
       int32_t prefill_ready_count) const;
-  void UpdateSharedBatchMetricsLocked(const SharedBatchPlan &plan);
-  void UpdateSchedulerObservabilityLocked(const SharedBatchPlan &plan,
-                                          const SchedulerTickBudget &budget,
-                                          int32_t effective_prefill_chunk_size);
+
   void CommitNewCompletedResponsesObservabilityLocked();
   void CommitCompletedObservabilityLocked(GenerateRequestId request_id,
                                           const GenerateResponse &response);
@@ -159,8 +156,7 @@ private:
   SlotScheduler slot_scheduler_;
   BatchPlanner batch_planner_;
   LlamaBatchBuilder shared_batch_builder_;
-  SharedBatchObservabilityMetrics shared_batch_observability_;
-  SchedulerObservabilityMetrics scheduler_observability_;
+
   PrefixStateCache prefix_state_cache_;
   PrefixCachePolicy prefix_cache_policy_;
   GenerateRequestId next_request_id_ = 1;
@@ -189,7 +185,7 @@ private:
     GenerateRequest *request = nullptr;
     int32_t batch_token_index = -1;
     llama_token sampled_token = -1;
-    double sample_ms = 0.0;
+
   };
 
   struct PendingTickBookkeeping {
@@ -197,19 +193,6 @@ private:
     std::vector<PendingLogitsContribution> logits_contributions;
     std::vector<std::pair<SlotState *, std::size_t>> prefix_cache_entries;
 
-    // Observability metadata captured at the end of the pending tick.
-    std::chrono::steady_clock::time_point policy_tick_start;
-    std::chrono::steady_clock::time_point policy_prepare_end;
-    std::chrono::steady_clock::time_point policy_plan_end;
-    std::chrono::steady_clock::time_point batch_build_end;
-    std::chrono::steady_clock::time_point decode_start;
-    std::chrono::steady_clock::time_point decode_end;
-    std::chrono::steady_clock::time_point synchronize_start;
-    std::chrono::steady_clock::time_point synchronize_end;
-    std::chrono::steady_clock::time_point sample_phase_start;
-    std::chrono::steady_clock::time_point sample_phase_end;
-    double sampler_wall_ms = 0.0;
-    llama_perf_context_data ctx_perf = {};
     int32_t effective_prefill_chunk_size = 0;
     SchedulerTickBudget tick_budget = {};
   };
@@ -218,7 +201,7 @@ private:
   std::vector<PendingLogitsContribution> pending_logits_contributions_;
   PendingTickBookkeeping pending_bookkeeping_;
   bool has_pending_bookkeeping_ = false;
-  llama_perf_context_data cumulative_gpu_perf_ = {};
+
   mutable std::mutex operation_mutex_;
 };
 

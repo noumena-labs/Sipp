@@ -287,17 +287,6 @@ function summarizeRunGroup(runs: BenchmarkRun[], benchmarkDurationMs: number): G
       avgBatchParticipationCount: averageOptional(
         observations.map((item) => item.batchParticipationCount)
       ),
-      avgDecodeFirstTickCount: averageOptional(observations.map((item) => item.decodeFirstTickCount)),
-      avgChunkedPrefillTickCount: averageOptional(
-        observations.map((item) => item.chunkedPrefillTickCount)
-      ),
-      avgMixedWorkloadTickCount: averageOptional(observations.map((item) => item.mixedWorkloadTickCount)),
-      avgLcpReuseTokens: averageOptional(observations.map((item) => item.lcpReuseTokens)),
-      avgPrefixCacheRestoreTokens: averageOptional(
-        observations.map((item) => item.prefixCacheRestoreTokens)
-      ),
-      avgPrefixCacheHitCount: averageOptional(observations.map((item) => item.prefixCacheHitCount)),
-      avgPrefixCacheStoreCount: averageOptional(observations.map((item) => item.prefixCacheStoreCount)),
       promptTokensPerSecond: averageOptional(
         observations.map((item) =>
           item.promptEvalTokens != null && item.promptEvalMs != null && item.promptEvalMs > 0

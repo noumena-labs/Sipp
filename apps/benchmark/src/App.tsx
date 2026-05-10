@@ -482,52 +482,8 @@ export default function App() {
           value={formatSummary(group.summary.runtime.nativeNonDecodeWallMs)}
         />
         <MetricCard
-          label="Policy Prep"
-          value={formatSummary(group.summary.runtime.nativePolicyPrepareMs)}
-        />
-        <MetricCard
-          label="Policy Plan"
-          value={formatSummary(group.summary.runtime.nativePolicyPlanMs)}
-        />
-        <MetricCard
-          label="Batch Build"
-          value={formatSummary(group.summary.runtime.nativeBatchBuildMs)}
-        />
-        <MetricCard
-          label="Sampler Wall"
-          value={formatSummary(group.summary.runtime.nativeSamplerWallMs)}
-        />
-        <MetricCard
-          label="Token Emission"
-          value={formatSummary(group.summary.runtime.nativeTokenEmitMs)}
-        />
-        <MetricCard
-          label="KV Update"
-          value={formatSummary(group.summary.runtime.nativeKvUpdateMs)}
-        />
-        <MetricCard
-          label="Prefix Cache"
-          value={formatSummary(group.summary.runtime.nativePrefixCacheMs)}
-        />
-        <MetricCard
-          label="Observability"
-          value={formatSummary(group.summary.runtime.nativeObservabilityMs)}
-        />
-        <MetricCard
           label="Scheduler Tick"
           value={formatSummary(group.summary.runtime.nativeSchedulerTickMs)}
-        />
-        <MetricCard
-          label="Scheduler Admit"
-          value={formatSummary(group.summary.runtime.nativeSchedulerAdmitMs)}
-        />
-        <MetricCard
-          label="Scheduler Finalize"
-          value={formatSummary(group.summary.runtime.nativeSchedulerFinalizeMs)}
-        />
-        <MetricCard
-          label="Scheduler Commit"
-          value={formatSummary(group.summary.runtime.nativeSchedulerCommitMs)}
         />
         <MetricCard
           label="JS Pump"
@@ -811,62 +767,6 @@ export default function App() {
                 }
               />
               <MetricCard
-                label="GPU Sync"
-                value={
-                  observability?.runtime?.nativeSynchronizeMs != null
-                    ? formatMs(observability.runtime.nativeSynchronizeMs)
-                    : 'n/a'
-                }
-              />
-              <MetricCard
-                label="KV Update"
-                value={
-                  observability?.runtime?.nativeKvUpdateMs != null
-                    ? formatMs(observability.runtime.nativeKvUpdateMs)
-                    : 'n/a'
-                }
-              />
-              <MetricCard
-                label="Sampler Wall"
-                value={
-                  observability?.runtime?.nativeSamplerWallMs != null
-                    ? formatMs(observability.runtime.nativeSamplerWallMs)
-                    : 'n/a'
-                }
-              />
-              <MetricCard
-                label="Token Emit"
-                value={
-                  observability?.runtime?.nativeTokenEmitMs != null
-                    ? formatMs(observability.runtime.nativeTokenEmitMs)
-                    : 'n/a'
-                }
-              />
-              <MetricCard
-                label="Policy Prep"
-                value={
-                  observability?.runtime?.nativePolicyPrepareMs != null
-                    ? formatMs(observability.runtime.nativePolicyPrepareMs)
-                    : 'n/a'
-                }
-              />
-              <MetricCard
-                label="Policy Plan"
-                value={
-                  observability?.runtime?.nativePolicyPlanMs != null
-                    ? formatMs(observability.runtime.nativePolicyPlanMs)
-                    : 'n/a'
-                }
-              />
-              <MetricCard
-                label="Batch Build"
-                value={
-                  observability?.runtime?.nativeBatchBuildMs != null
-                    ? formatMs(observability.runtime.nativeBatchBuildMs)
-                    : 'n/a'
-                }
-              />
-              <MetricCard
                 label="Scheduler Tick"
                 value={
                   observability?.runtime?.nativeSchedulerTickMs != null
@@ -1036,64 +936,6 @@ export default function App() {
                         value={formatSummary(
                           benchmarkReport.trace.analysis.nativeLlamaDecodeWallPerTokenMs
                         )}
-                      />
-                      <MetricCard
-                        label="Trace Sync"
-                        value={formatSummary(benchmarkReport.trace.analysis.nativeSynchronizeMs)}
-                      />
-                      <MetricCard
-                        label="Trace KV Update"
-                        value={formatSummary(benchmarkReport.trace.analysis.nativeKvUpdateMs)}
-                      />
-                      <MetricCard
-                        label="Trace Sampler"
-                        value={formatSummary(benchmarkReport.trace.analysis.nativeSamplerWallMs)}
-                      />
-                      <MetricCard
-                        label="Trace Token Emit"
-                        value={formatSummary(benchmarkReport.trace.analysis.nativeTokenEmitMs)}
-                      />
-                      <MetricCard
-                        label="Trace Prefix Cache"
-                        value={formatSummary(benchmarkReport.trace.analysis.nativePrefixCacheMs)}
-                      />
-                      <MetricCard
-                        label="Trace Observability"
-                        value={formatSummary(benchmarkReport.trace.analysis.nativeObservabilityMs)}
-                      />
-                      <MetricCard
-                        label="Trace Non-Decode"
-                        value={formatSummary(
-                          benchmarkReport.trace.analysis.nativeNonDecodeWallMs
-                        )}
-                      />
-                      <MetricCard
-                        label="Trace Policy Prep"
-                        value={formatSummary(benchmarkReport.trace.analysis.nativePolicyPrepareMs)}
-                      />
-                      <MetricCard
-                        label="Trace Policy Plan"
-                        value={formatSummary(benchmarkReport.trace.analysis.nativePolicyPlanMs)}
-                      />
-                      <MetricCard
-                        label="Trace Batch Build"
-                        value={formatSummary(benchmarkReport.trace.analysis.nativeBatchBuildMs)}
-                      />
-                      <MetricCard
-                        label="Trace Scheduler Tick"
-                        value={formatSummary(benchmarkReport.trace.analysis.nativeSchedulerTickMs)}
-                      />
-                      <MetricCard
-                        label="Trace Scheduler Admit"
-                        value={formatSummary(benchmarkReport.trace.analysis.nativeSchedulerAdmitMs)}
-                      />
-                      <MetricCard
-                        label="Trace Scheduler Finalize"
-                        value={formatSummary(benchmarkReport.trace.analysis.nativeSchedulerFinalizeMs)}
-                      />
-                      <MetricCard
-                        label="Trace Scheduler Commit"
-                        value={formatSummary(benchmarkReport.trace.analysis.nativeSchedulerCommitMs)}
                       />
                       <MetricCard
                         label="Trace JS Pump"

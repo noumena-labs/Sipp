@@ -83,13 +83,6 @@ export interface GroupSummary {
     avgQueueDelayMs: number | null;
     avgTailItlMs: number | null;
     avgBatchParticipationCount: number | null;
-    avgDecodeFirstTickCount: number | null;
-    avgChunkedPrefillTickCount: number | null;
-    avgMixedWorkloadTickCount: number | null;
-    avgLcpReuseTokens: number | null;
-    avgPrefixCacheRestoreTokens: number | null;
-    avgPrefixCacheHitCount: number | null;
-    avgPrefixCacheStoreCount: number | null;
     promptTokensPerSecond: number | null;
     decodeTokensPerSecond: number | null;
     nativeSchedulerTickMs: MetricSummary | null;
