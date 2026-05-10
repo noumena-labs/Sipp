@@ -169,10 +169,6 @@ llama_seq_id SessionStore::AcquireSeqId(llama_seq_id hint) {
     seq_id_available_[static_cast<size_t>(seq_id)] = false;
   }
 
-  // GUARANTEE ISOLATION: Any ID taken from the free pool is stale.
-  // We must scrub it to prevent position conflicts (status=-1).
-  ClearSequenceMemory(seq_id);
-
   return seq_id;
 }
 

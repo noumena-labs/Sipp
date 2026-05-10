@@ -477,9 +477,11 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
   const bool allow_partial_kv = !(is_recurrent || is_hybrid);
 
   // If the current match is shorter than the physical KV cache, truncate the tail.
-  if (match_len < state.current_kv_tokens.size()) {
+  // CRITICAL: If state.current_kv_tokens is empty, we MUST scrub the entire physical 
+  // sequence to ensure isolation from previous users of this seq_id (status=-1 fix).
+  if (match_len < state.current_kv_tokens.size() || state.current_kv_tokens.empty()) {
     llama_memory_t mem = llama_get_memory(shared_context_);
-    if (!allow_partial_kv) {
+    if (!allow_partial_kv || state.current_kv_tokens.empty()) {
       llama_memory_seq_rm(mem, seq_id, 0, -1);
       state.current_kv_tokens.clear();
       state.n_past = 0;

@@ -51,8 +51,8 @@ void SlotState::AttachRequest(GenerateRequest &request_ref,
   request_id = request_ref.id;
   request = &request_ref;
   session = &session_ref;
-  mirror.current_kv_tokens.clear();
-  mirror.n_past = 0;
+  mirror.current_kv_tokens = session_ref.current_kv_tokens;
+  mirror.n_past = session_ref.n_past;
   mirror.hardware_id = session_ref.hardware_id;
   phase = SlotPhase::Admitted;
   prefill_cursor = 0;
@@ -274,12 +274,14 @@ bool SlotScheduler::AdmitPendingRequests(RequestQueue &request_queue,
     return false;
   }
 
-  // LEASE FRESH ID: To ensure absolute physical isolation and prevent stale 
-  // sequence leakage, we always lease a fresh hardware ID for a new request.
-  // The SessionStore will explicitly scrub the hardware clean upon leasing.
+  // LEASE ID: We honor the session's sticky ID if possible to enable LCP reuse.
+  // If we get a different ID, we must clear the logical cache as the physical 
+  // state will not match.
+  if (leased_seq_id != session.hardware_id) {
+    session.current_kv_tokens.clear();
+    session.n_past = 0;
+  }
   session.hardware_id = leased_seq_id;
-  session.current_kv_tokens.clear();
-  session.n_past = 0;
 
   session_store.Pin(request->context_key);
   idle_slot_it->AttachRequest(*request, session);
