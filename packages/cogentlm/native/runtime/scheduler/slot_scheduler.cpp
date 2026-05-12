@@ -327,9 +327,12 @@ void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue,
       response.runtime_observability.prefill_ms = request.prefill_ms;
       response.runtime_observability.decode_ms = request.decode_ms;
 
-      response.runtime_observability.native_gpu_ms = 0.0; // Placeholder
-      response.runtime_observability.native_sync_ms = 0.0; // Placeholder
+      response.runtime_observability.native_gpu_ms = request.native_gpu_ms;
+      response.runtime_observability.native_sync_ms = request.native_sync_ms;
       response.runtime_observability.native_logic_ms = request.native_logic_ms;
+      response.runtime_observability.inter_decode_js_ms =
+          request.inter_decode_js_ms;
+      response.runtime_observability.yield_wait_ms = request.yield_wait_ms;
 
       response.runtime_observability.input_tokens =
           request.input_tokens > 0 ? request.input_tokens : static_cast<int32_t>(request.prompt_tokens.size());
@@ -369,21 +372,17 @@ void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue,
   }
 }
 
-void SlotScheduler::EmitBufferedTokenPiece(RequestQueue &request_queue,
-                                           SlotState &slot) {
+double SlotScheduler::EmitBufferedTokenPiece(RequestQueue &request_queue,
+                                            SlotState &slot) {
   if (slot.buffered_output_text.empty()) {
-    return;
+    return 0.0;
   }
-
   GenerateRequest *request = slot.request;
-  slot.output_text.append(slot.buffered_output_text);
+  double ffi_ms = 0.0;
 
   if (request != nullptr) {
     const auto now = std::chrono::steady_clock::now();
-    if (!request->has_first_token_at) {
-      request->first_token_at = now;
-      request->has_first_token_at = true;
-    } else if (request->has_last_token_at) {
+    if (request->has_last_token_at) {
       const double itl_ms = duration_ms(request->last_token_at, now);
       request->itl_sum_ms += itl_ms;
       request->itl_p99_ms = std::max(request->itl_p99_ms, itl_ms);
@@ -391,26 +390,35 @@ void SlotScheduler::EmitBufferedTokenPiece(RequestQueue &request_queue,
 
     request->last_token_at = now;
     request->has_last_token_at = true;
-    request->output_tokens++;
-    request->emitted_token_count++;
+
     if (request->token_emission_mode ==
         GenerateTokenEmissionMode::RuntimeEvents) {
       request_queue.QueueTokenEvent(request->id, slot.buffered_output_text);
+    } else if (request->token_emission_mode ==
+               GenerateTokenEmissionMode::StreamingBuffer) {
+      request_queue.AppendStreamingToken(request->id,
+                                         slot.buffered_output_text);
     }
   }
+
+  slot.output_text.append(slot.buffered_output_text);
 
   if (request != nullptr &&
       request->token_emission_mode ==
           GenerateTokenEmissionMode::DirectCallback &&
       request->on_token_received) {
+    const auto ffi_start = std::chrono::steady_clock::now();
     if (!request->on_token_received(
         slot.buffered_output_text.c_str(),
         static_cast<int32_t>(slot.buffered_output_text.size()))) {
       request->cancel_requested = true;
     }
+    const auto ffi_end = std::chrono::steady_clock::now();
+    ffi_ms = duration_ms(ffi_start, ffi_end);
   }
 
   slot.buffered_output_text.clear();
+  return ffi_ms;
 }
 
 } // namespace noumena::cogentengine

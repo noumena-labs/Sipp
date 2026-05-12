@@ -36,6 +36,15 @@ int CE_DrainRuntimeEventsDirectly(CE_RuntimeEvent* event_buffer,
                                   char* text_buffer,
                                   int32_t text_capacity,
                                   CE_RuntimeEventDrainResult* out_result);
+
+// Streaming buffer FFI: all four are init-time accessors returning stable
+// wasm-heap addresses.  JS caches them and reads/writes the buffer and
+// counter cells via HEAPU8 / HEAP32 directly afterwards (zero ccalls).
+// Record format: [u32 LE requestId | u32 LE textLength | bytes...].
+const uint8_t* CE_GetStreamingBufferPointer();
+int32_t CE_GetStreamingBufferCapacity();
+int32_t* CE_GetStreamingBufferUsedAddress();
+int32_t* CE_GetStreamingBufferDropCountAddress();
 int CE_GetCompletedRequestOutputSize(CE_RequestId request_id);
 int CE_CopyCompletedRequestOutput(CE_RequestId request_id, char* buffer, int32_t capacity);
 int CE_GetCompletedRequestErrorSize(CE_RequestId request_id);

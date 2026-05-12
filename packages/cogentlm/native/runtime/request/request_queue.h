@@ -9,10 +9,12 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <list>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -57,6 +59,22 @@ public:
   std::size_t LiveRequestCount() const;
   void Clear();
 
+  // Streaming token buffer (StreamingBuffer emission mode).  Single-
+  // producer (inference tick) / single-consumer (JS drain inside
+  // ce_native_yield while wasm is suspended).  Records are
+  // [u32 LE requestId | u32 LE textLength | bytes...].  Overflow bumps
+  // `streaming_buffer_drop_count_`; the request's full `output_text` is
+  // still preserved by the slot scheduler.
+  void AppendStreamingToken(GenerateRequestId request_id,
+                            const std::string &text);
+  const uint8_t *StreamingBufferPointer() const;
+  std::size_t StreamingBufferCapacity() const;
+  // Pointers to i32 cells JS reads/writes via HEAP32 directly (no ccall).
+  int32_t *StreamingBufferUsedAddress();
+  int32_t *StreamingBufferDropCountAddress();
+  // Strips not-yet-drained records for a request.  Called on cancel/finalize.
+  void RemoveStreamingTokenRecordsForRequest(GenerateRequestId request_id);
+
 private:
   void RemovePendingRequestId(GenerateRequestId request_id);
   void QueueCompletedResponseId(GenerateRequestId request_id);
@@ -68,6 +86,14 @@ private:
   std::unordered_map<GenerateRequestId, GenerateResponse> completed_responses_;
   std::deque<RuntimeEvent> runtime_events_;
   int32_t total_emitted_token_count_ = 0;
+
+  // 64 KB ≈ 25 yield windows of headroom at 200 TPS with 5-byte tokens.
+  static constexpr std::size_t kStreamingBufferCapacity = 64 * 1024;
+  std::vector<uint8_t> streaming_buffer_ =
+      std::vector<uint8_t>(kStreamingBufferCapacity);
+  // i32 so JS can read/write them as single HEAP32 slots.
+  int32_t streaming_buffer_used_ = 0;
+  int32_t streaming_buffer_drop_count_ = 0;
 };
 
 } // namespace noumena::cogentengine

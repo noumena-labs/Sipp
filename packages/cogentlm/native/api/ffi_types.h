@@ -21,6 +21,9 @@ typedef enum CE_TokenEmissionMode {
   CE_TOKEN_EMISSION_NONE = 0,
   CE_TOKEN_EMISSION_RUNTIME_EVENTS = 1,
   CE_TOKEN_EMISSION_DIRECT_CALLBACK = 2,
+  // Native appends to the streaming buffer; JS drains via the SAB ring on
+  // each ce_native_yield.  See request_queue.h for the wire format.
+  CE_TOKEN_EMISSION_STREAMING_BUFFER = 3,
 } CE_TokenEmissionMode;
 
 typedef struct CE_InitConfig {
@@ -70,9 +73,14 @@ typedef struct CE_RuntimeObservabilityMetrics {
   double decode_ms;
 
   // Native (Hardware & Engine)
+  // native_gpu_ms is raw decode+sync wall time; inter_decode_js_ms is the
+  // JS-work window between successive syncs; yield_wait_ms is the subset
+  // spent suspended in ce_native_yield().  See observability_metrics.h.
   double native_gpu_ms;
   double native_sync_ms;
   double native_logic_ms;
+  double inter_decode_js_ms;
+  double yield_wait_ms;
 
   // Counts
   int32_t input_tokens;
@@ -104,7 +112,7 @@ typedef struct CE_RuntimeEventDrainResult {
 #ifdef __cplusplus
 static_assert(sizeof(CE_RequestId) == 4,
               "CE_RequestId must stay 32-bit for JS/Wasm FFI calls.");
-static_assert(sizeof(CE_RuntimeObservabilityMetrics) == 88,
+static_assert(sizeof(CE_RuntimeObservabilityMetrics) == 104,
               "CE_RuntimeObservabilityMetrics layout changed. Update the TS FFI reader.");
 static_assert(sizeof(CE_SchedulerLoopResult) == 16,
               "CE_SchedulerLoopResult layout changed. Update the TS FFI reader.");

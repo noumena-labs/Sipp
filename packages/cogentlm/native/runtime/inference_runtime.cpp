@@ -97,7 +97,7 @@ bool sampler_penalties_neutral(
     const noumena::cogentengine::InferenceRuntimeConfig &cfg) {
   return cfg.sampling_repeat_penalty == 1.0f &&
          cfg.sampling_frequency_penalty == 0.0f &&
-          cfg.sampling_presence_penalty == 0.0f;
+         cfg.sampling_presence_penalty == 0.0f;
 }
 
 double duration_ms(std::chrono::steady_clock::time_point start,
@@ -280,7 +280,6 @@ std::size_t incomplete_utf8_tail_length(const char *data, std::size_t size) {
   // All trailing bytes are continuations with no lead byte in reach.
   return max_lookback;
 }
-
 } // namespace
 
 namespace noumena::cogentengine {
@@ -503,6 +502,7 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
 
   if (request != nullptr) {
     request->cache_hits = static_cast<int32_t>(match_len);
+    total_cache_hits_ += match_len;
   }
 
   out_prefill_cursor = match_len;
@@ -636,6 +636,8 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
           .count();
   request.input_tokens += static_cast<int32_t>(new_n_past);
   request.prefill_ms += multimodal_prefill_ms;
+  total_input_tokens_ += static_cast<std::size_t>(new_n_past);
+  total_prefill_ms_ += multimodal_prefill_ms;
   request.e2e_ms += multimodal_prefill_ms;
   slot.prefill_cursor = request.prompt_tokens.size();
 
@@ -949,9 +951,80 @@ void InferenceRuntime::CompletePendingBookkeepingLocked() {
   const struct llama_model *model = llama_get_model(shared_context_);
   const struct llama_vocab *vocab = llama_model_get_vocab(model);
 
-  // 1. Emit deferred tokens to JS. These tokens were sampled at the end of the
-  // previous tick and moved to pending_emission_text so they wouldn't block
-  // the next tick's scheduling selection.
+  double tick_ffi_ms = 0.0;
+
+  // 0. Finalize timing and token counts for the batch that just finished its GPU window.
+  scratch_tick_requests_.clear();
+  
+  bool tick_had_prefill = false;
+  bool tick_had_decode = false;
+
+  for (const BatchContribution &contribution : pb.plan.contributions) {
+    if (contribution.request == nullptr) {
+      continue;
+    }
+
+    GenerateRequest &request = *contribution.request;
+    if (contribution.kind == BatchContributionKind::Prefill) {
+      request.input_tokens++;
+      total_input_tokens_++;
+      tick_had_prefill = true;
+    } else {
+      tick_had_decode = true;
+      request.output_tokens++;
+      request.emitted_token_count++;
+      total_output_tokens_++;
+
+      if (!request.has_first_token_at) {
+        request.first_token_at = std::chrono::steady_clock::now();
+        request.has_first_token_at = true;
+      }
+    }
+
+    // Check if we already attributed time to this request in this tick.
+    bool already_seen = false;
+    for (const auto* seen : scratch_tick_requests_) {
+      if (seen == &request) {
+        already_seen = true;
+        break;
+      }
+    }
+
+    if (!already_seen) {
+      scratch_tick_requests_.push_back(&request);
+    }
+  }
+
+  // Wall-clock phase time billed to decode/prefill: raw GPU window plus
+  // engine CPU logic.  This is honest in both StreamingBuffer and
+  // DirectCallback modes — event-loop contention inside llama_synchronize
+  // counts here (it's wall time the model actually took) and JS bridge work
+  // outside the GPU window is reported separately via inter_decode_js_ms.
+  const double tick_phase_ms = pb.native_gpu_ms + pb.native_logic_ms;
+
+  // Update request-specific metrics for the participating requests.
+  for (GenerateRequest *request_ptr : scratch_tick_requests_) {
+    if (request_ptr) {
+      GenerateRequest &request = *request_ptr;
+      request.native_sync_ms += pb.native_sync_ms;
+      request.native_gpu_ms += pb.native_gpu_ms;
+      request.native_logic_ms += pb.native_logic_ms;
+      request.inter_decode_js_ms += pb.inter_decode_js_ms;
+      request.yield_wait_ms += pb.yield_wait_ms;
+      request.e2e_ms += pb.total_tick_ms;
+      request.decode_ms += (tick_had_decode ? tick_phase_ms : 0.0);
+      request.prefill_ms += (tick_had_prefill ? tick_phase_ms : 0.0);
+    }
+  }
+
+  // System-wide wall-clock tracking for aggregate TPS reporting.
+  if (tick_had_decode) {
+    total_decode_ms_ += tick_phase_ms;
+  } else if (tick_had_prefill) {
+    total_prefill_ms_ += tick_phase_ms;
+  }
+
+  // 1. Convert sampled tokens to text pieces. This is native CPU work.
   for (const auto &logits : pb.logits_contributions) {
     if (logits.contribution_index < pb.plan.contributions.size()) {
       const BatchContribution &contribution =
@@ -1000,16 +1073,12 @@ void InferenceRuntime::CompletePendingBookkeepingLocked() {
         if (!slot.pending_emission_text.empty()) {
           slot.buffered_output_text.append(slot.pending_emission_text);
           slot.pending_emission_text.clear();
-          std::lock_guard<std::mutex> lock(request_queue_mutex_);
-          slot_scheduler_.EmitBufferedTokenPiece(request_queue_, slot);
         }
       }
     }
   }
 
-  // 2. Perform deferred Prefix Cache storage. Snapshots are boundary-aware;
-  // we use the token_count captured at the end of the previous tick to
-  // ensure logical consistency even if the KV cache has since been extended.
+  // 2. Perform deferred Prefix Cache storage.
   for (const auto &entry : pb.prefix_cache_entries) {
     SlotState *slot = entry.first;
     std::size_t token_count = entry.second;
@@ -1020,18 +1089,43 @@ void InferenceRuntime::CompletePendingBookkeepingLocked() {
           slot->request->prompt_tokens.size(), slot->request);
     }
   }
+}
 
+void InferenceRuntime::EmitPendingTokensLocked() {
+  if (!has_pending_bookkeeping_) {
+    return;
+  }
+
+  double tick_ffi_ms = 0.0;
+  for (const BatchContribution &contribution : pending_bookkeeping_.plan.contributions) {
+    if (contribution.slot != nullptr) {
+      SlotState &slot = *contribution.slot;
+      if (!slot.buffered_output_text.empty()) {
+        std::lock_guard<std::mutex> lock(request_queue_mutex_);
+        tick_ffi_ms += slot_scheduler_.EmitBufferedTokenPiece(request_queue_, slot);
+      }
+    }
+  }
+
+  last_tick_ffi_ms_ = tick_ffi_ms;
   has_pending_bookkeeping_ = false;
 }
 
 void InferenceRuntime::FlushAllPendingBookkeepingLocked() {
   CompletePendingBookkeepingLocked();
+  EmitPendingTokensLocked();
 }
 
 bool InferenceRuntime::RunPolicyBatchTickLocked() {
   if (primary_model_ == nullptr || shared_context_ == nullptr ||
       sampler_ == nullptr) {
     return false;
+  }
+
+  // Ensure any results from the previous tick are committed before starting a new batch.
+  // This updates last_tick_ffi_ms_ which we use below for timing calibration.
+  if (has_pending_bookkeeping_) {
+    FlushAllPendingBookkeepingLocked();
   }
 
   const llama_vocab *vocab = llama_model_get_vocab(primary_model_);
@@ -1175,6 +1269,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
       tick_budget,
       static_cast<int32_t>(scratch_live_decode_ready_slots_.size()),
       static_cast<int32_t>(scratch_live_prefill_ready_slots_.size()));
+  const auto tick_start = std::chrono::steady_clock::now();
   SharedBatchPlan plan = batch_planner_.BuildPolicyBatch(
       scratch_live_decode_ready_slots_, scratch_live_prefill_ready_slots_,
       tick_budget, effective_prefill_chunk_size);
@@ -1217,13 +1312,44 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
 
     batch_token_index++;
   }
-  const auto tick_start = std::chrono::steady_clock::now();
-  
+  const auto tick_start_pre_decode = std::chrono::steady_clock::now();
+  const double planning_ms = duration_ms(tick_start, tick_start_pre_decode);
+
+  const auto gpu_start = std::chrono::steady_clock::now();
+  // Wall-clock from the prior tick's gpu_end to this tick's gpu_start.
+  // Captures everything that ran on the worker between syncs: ce_native_yield,
+  // the streaming drain hook, scheduler-pump bookkeeping, drainRuntimeEvents,
+  // postMessage processing.  Zero on the first tick.  Idle-aware: if the gap
+  // is unreasonably large (>500ms) we treat it as a request-boundary or
+  // wake-from-idle and report zero, since otherwise the metric would be
+  // dominated by host-side idle time and tell us nothing about contention.
+  constexpr double kInterDecodeGapCapMs = 500.0;
+  const double raw_inter_decode_js_ms =
+      has_last_gpu_end_ ? duration_ms(last_gpu_end_, gpu_start) : 0.0;
+  const bool inter_decode_is_idle_gap =
+      raw_inter_decode_js_ms > kInterDecodeGapCapMs;
+  const double inter_decode_js_ms =
+      inter_decode_is_idle_gap ? 0.0 : raw_inter_decode_js_ms;
+  // Snapshot of ce_native_yield() time accumulated since the prior gpu_end
+  // (subset of inter_decode_js_ms).  Reset for the next inter-decode window.
+  // Discarded alongside inter_decode_js_ms when we declared an idle gap.
+  const double yield_wait_ms =
+      inter_decode_is_idle_gap ? 0.0 : pending_yield_wait_ms_;
+  pending_yield_wait_ms_ = 0.0;
+
   const int32_t decode_status =
       llama_decode(shared_context_, shared_batch_builder_.Get());
-  
-  const auto decode_end = std::chrono::steady_clock::now();
-  const double decode_step_ms = duration_ms(tick_start, decode_end);
+  llama_synchronize(shared_context_);
+  const auto gpu_end = std::chrono::steady_clock::now();
+  last_gpu_end_ = gpu_end;
+  has_last_gpu_end_ = true;
+
+  // Raw wall-clock decode+sync window.  In WebGPU+wasm this includes any
+  // event-loop wait inside llama_synchronize.  We expose inter_decode_js_ms
+  // and yield_wait_ms separately so consumers can attribute contention; we
+  // no longer pre-subtract last_tick_ffi_ms_ from this number because that
+  // compensation was DirectCallback-only and silently zero in StreamingBuffer.
+  const double raw_gpu_ms = duration_ms(gpu_start, gpu_end);
 
   if (decode_status != 0) {
     // ... (rest of failure logic)
@@ -1263,7 +1389,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
            << ",phase=" << static_cast<int>(slot->phase)
            << ",cursor=" << slot->prefill_cursor << "/"
            << (slot->request != nullptr ? slot->request->prompt_tokens.size()
-                                         : 0)
+                                        : 0)
            << ",n_past=" << n_past << ",kv=" << kv_tokens
            << ",gen=" << slot->generated_tokens.size() << ")";
     }
@@ -1284,35 +1410,18 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     return false;
   }
 
-  // CPU/GPU OVERLAP: While the GPU is processing the batch we just enqueued,
-  // we complete the bookkeeping (emitting, prefix caching, observability)
-  // for the tokens sampled at the end of the PREVIOUS tick.
+  const auto bookkeeping_start = std::chrono::steady_clock::now();
   CompletePendingBookkeepingLocked();
+  const auto bookkeeping_end = std::chrono::steady_clock::now();
+  const double bookkeeping_ms = duration_ms(bookkeeping_start, bookkeeping_end);
 
-  const auto sync_start = std::chrono::steady_clock::now();
-  llama_synchronize(shared_context_);
-  const auto sync_end = std::chrono::steady_clock::now();
-  const double sync_ms = duration_ms(sync_start, sync_end);
+  const double native_logic_ms = planning_ms + bookkeeping_ms;
 
-  const auto tick_end = std::chrono::steady_clock::now();
-  const double total_tick_ms = duration_ms(tick_start, tick_end);
-  const double logic_ms = total_tick_ms - (decode_step_ms + sync_ms);
-
-  // Attribute times to participating requests
+  // CPU state management (logical context progress)
   for (const BatchContribution &contribution : plan.contributions) {
     if (contribution.slot == nullptr || contribution.slot->request == nullptr) {
       continue;
     }
-
-    GenerateRequest &request = *contribution.slot->request;
-    if (contribution.kind == BatchContributionKind::Prefill) {
-      request.prefill_ms += decode_step_ms;
-      request.input_tokens++;
-    } else {
-      request.decode_ms += decode_step_ms;
-    }
-    request.native_logic_ms += logic_ms;
-    request.e2e_ms += total_tick_ms;
 
     SequenceState &mirror = contribution.slot->mirror;
     mirror.current_kv_tokens.push_back(contribution.token);
@@ -1396,13 +1505,28 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     }
   }
 
+  // Now perform the FFI emission calls (JS bound).
+  EmitPendingTokensLocked();
+
+  const auto tick_end = std::chrono::steady_clock::now();
+  const double total_tick_ms = duration_ms(tick_start, tick_end);
+
   // Prepare bookkeeping for the NEXT tick's GPU window.
-  pending_bookkeeping_ = {
-      .plan = plan,
-      .logits_contributions = scratch_logits_contributions_,
-      .prefix_cache_entries = std::move(next_prefix_cache_entries),
-      .effective_prefill_chunk_size = effective_prefill_chunk_size,
-      .tick_budget = tick_budget};
+  // We use direct assignment to avoid aggregate initialization errors in some C++ environments.
+  pending_bookkeeping_.plan = std::move(plan);
+  pending_bookkeeping_.logits_contributions = std::move(scratch_logits_contributions_);
+  pending_bookkeeping_.prefix_cache_entries = std::move(next_prefix_cache_entries);
+  pending_bookkeeping_.effective_prefill_chunk_size = effective_prefill_chunk_size;
+  pending_bookkeeping_.tick_budget = tick_budget;
+  pending_bookkeeping_.tick_time_ms = raw_gpu_ms;
+  pending_bookkeeping_.native_gpu_ms = raw_gpu_ms;
+  pending_bookkeeping_.native_sync_ms = 0.0;
+  pending_bookkeeping_.native_logic_ms = native_logic_ms;
+  pending_bookkeeping_.total_tick_ms = total_tick_ms;
+  pending_bookkeeping_.ffi_time_ms = last_tick_ffi_ms_;
+  pending_bookkeeping_.inter_decode_js_ms = inter_decode_js_ms;
+  pending_bookkeeping_.yield_wait_ms = yield_wait_ms;
+  
   has_pending_bookkeeping_ = true;
 
   // If any slot was marked Completed or Failed this tick, we MUST flush
@@ -1463,7 +1587,7 @@ void InferenceRuntime::CommitCompletedObservabilityLocked(
 
   const RuntimeObservabilityMetrics request_metrics =
       response.runtime_observability;
-  
+
   // Latency (User Experience)
   last_runtime_observability_.ttft_ms = request_metrics.ttft_ms;
   last_runtime_observability_.itl_avg_ms = request_metrics.itl_avg_ms;
@@ -1478,6 +1602,9 @@ void InferenceRuntime::CommitCompletedObservabilityLocked(
   last_runtime_observability_.native_gpu_ms = request_metrics.native_gpu_ms;
   last_runtime_observability_.native_sync_ms = request_metrics.native_sync_ms;
   last_runtime_observability_.native_logic_ms = request_metrics.native_logic_ms;
+  last_runtime_observability_.inter_decode_js_ms =
+      request_metrics.inter_decode_js_ms;
+  last_runtime_observability_.yield_wait_ms = request_metrics.yield_wait_ms;
 
   // Counts
   last_runtime_observability_.input_tokens = request_metrics.input_tokens;
@@ -1544,7 +1671,13 @@ InferenceRuntime::InferenceRuntime(std::string model_path,
       prefix_cache_policy_(
           static_cast<std::size_t>(config_.prefix_cache_interval_tokens)),
       model_fingerprint_(
-          static_cast<std::uint64_t>(std::hash<std::string>{}(model_path))) {
+          static_cast<std::uint64_t>(std::hash<std::string>{}(model_path))),
+      last_tick_ffi_ms_(0.0),
+      total_decode_ms_(0.0),
+      total_prefill_ms_(0.0),
+      total_input_tokens_(0),
+      total_output_tokens_(0),
+      total_cache_hits_(0) {
   if (model_path.empty()) {
     fprintf(stderr, "%s: error: model path is required\n", __func__);
     return;
@@ -1729,12 +1862,40 @@ bool InferenceRuntime::IsReady() const {
 bool InferenceRuntime::TryGetRuntimeObservability(
     RuntimeObservabilityMetrics &out) const {
   std::lock_guard<std::mutex> lock(operation_mutex_);
-  if (config_.enable_runtime_observability == 0 ||
-      !has_last_runtime_observability_) {
+  if (config_.enable_runtime_observability == 0) {
     return false;
   }
 
-  out = last_runtime_observability_;
+  RuntimeObservabilityMetrics metrics = {};
+  
+  // Cumulative Counters (The Source of Truth for System TPS)
+  metrics.input_tokens = static_cast<int32_t>(total_input_tokens_);
+  metrics.output_tokens = static_cast<int32_t>(total_output_tokens_);
+  metrics.cache_hits = static_cast<int32_t>(total_cache_hits_);
+  metrics.prefill_ms = total_prefill_ms_;
+  metrics.decode_ms = total_decode_ms_;
+
+  bool any_active = false;
+  for (const auto &slot : slot_scheduler_.Slots()) {
+    if (slot.request != nullptr) {
+      any_active = true;
+      // Report TTFT of the first active request in the session.
+      if (metrics.ttft_ms == 0.0 && slot.request->has_first_token_at) {
+        metrics.ttft_ms = duration_ms(slot.request->enqueued_at, slot.request->first_token_at);
+      }
+    }
+  }
+
+  // If nothing is active, fall back to latency metrics from the last completed request
+  // (to avoid zeros in the UI after a query finishes).
+  if (!any_active && has_last_runtime_observability_) {
+    metrics.ttft_ms = last_runtime_observability_.ttft_ms;
+    metrics.itl_avg_ms = last_runtime_observability_.itl_avg_ms;
+    metrics.itl_p99_ms = last_runtime_observability_.itl_p99_ms;
+    metrics.e2e_ms = last_runtime_observability_.e2e_ms;
+  }
+
+  out = metrics;
   return true;
 }
 
@@ -2019,52 +2180,62 @@ void InferenceRuntime::DrainRuntimeEventsDirectly(
   }
 }
 
+const uint8_t *InferenceRuntime::StreamingBufferPointer() {
+  std::lock_guard<std::mutex> lock(request_queue_mutex_);
+  return request_queue_.StreamingBufferPointer();
+}
+
+std::size_t InferenceRuntime::StreamingBufferCapacity() {
+  std::lock_guard<std::mutex> lock(request_queue_mutex_);
+  return request_queue_.StreamingBufferCapacity();
+}
+
+int32_t *InferenceRuntime::StreamingBufferUsedAddress() {
+  std::lock_guard<std::mutex> lock(request_queue_mutex_);
+  return request_queue_.StreamingBufferUsedAddress();
+}
+
+int32_t *InferenceRuntime::StreamingBufferDropCountAddress() {
+  std::lock_guard<std::mutex> lock(request_queue_mutex_);
+  return request_queue_.StreamingBufferDropCountAddress();
+}
+
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 
 extern "C" {
-/**
- * Suspends the Wasm execution stack via JSPI and resumes on the next browser
- * event loop tick.
- *
- * IMPORTANT: do *not* use `setTimeout(resolve, 0)` here.  All major browsers
- * clamp `setTimeout` to a 1–4ms minimum (4ms once nesting passes 5 levels,
- * which the inference loop will routinely cross).  Yielding every 16ms via a
- * 4ms-clamped timer burns roughly 4/(16+4) = 20% of wall time in scheduler
- * idle, which directly translates into a ~20% decode-TPS regression at
- * single-query workloads.
- *
- * `MessageChannel.postMessage` is the canonical fast-macrotask primitive in
- * browsers (sub-100µs in practice) and is what React, Lit, and the WHATWG
- * `scheduler` polyfill use for exactly this purpose.  It still yields a true
- * macrotask boundary so the browser can paint, deliver input events, and
- * service other JS, but without the timer clamp.  `scheduler.yield()` would
- * be even nicer if available, but it lands behind a flag in many engines, so
- * we feature-detect and fall back to the channel.  `Promise.resolve()` is
- * deliberately *not* used as a fallback — microtasks chain inside the
- * current task and would not allow paint, defeating the purpose of yielding.
- */
+// JSPI yield.  Uses scheduler.yield() when present, otherwise a reusable
+// MessageChannel (NOT setTimeout — clamped to 4 ms after 5 nesting levels).
+// After the yield resolves and before wasm resumes, invokes the optional
+// `Module._ce_yield_drain` hook so the host can drain accumulated streaming
+// bytes once per yield window.
+// clang-format off
 EM_ASYNC_JS(void, ce_native_yield, (), {
   if (typeof scheduler !== 'undefined' && typeof scheduler.yield === 'function') {
     await scheduler.yield();
-    return;
+  } else {
+    if (!Module._ce_yield_channel) {
+      const channel = new MessageChannel();
+      const queue = [];
+      channel.port1.onmessage = () => {
+        const resolve = queue.shift();
+        if (resolve) resolve();
+      };
+      Module._ce_yield_channel = channel;
+      Module._ce_yield_queue = queue;
+    }
+    await new Promise(resolve => {
+      Module._ce_yield_queue.push(resolve);
+      Module._ce_yield_channel.port2.postMessage(0);
+    });
   }
-  if (!Module._ce_yield_channel) {
-    const channel = new MessageChannel();
-    const queue = [];
-    channel.port1.onmessage = () => {
-      const resolve = queue.shift();
-      if (resolve) resolve();
-    };
-    Module._ce_yield_channel = channel;
-    Module._ce_yield_queue = queue;
+  if (typeof Module._ce_yield_drain === 'function') {
+    try { Module._ce_yield_drain(); }
+    catch (e) { if (typeof console !== 'undefined') console.error('ce_yield_drain threw:', e); }
   }
-  await new Promise(resolve => {
-    Module._ce_yield_queue.push(resolve);
-    Module._ce_yield_channel.port2.postMessage(0);
-  });
 });
-}
+} // extern "C"
+// clang-format on
 #endif
 
 SchedulerBurstResult InferenceRuntime::RunSchedulerLoop(
@@ -2154,10 +2325,16 @@ SchedulerBurstResult InferenceRuntime::RunSchedulerLoop(
       // Unlock while suspended so other JS calls can potentially interact
       // with the runtime (though they should ideally wait).
       lock.unlock();
+      const auto yield_start = std::chrono::steady_clock::now();
       ce_native_yield();
+      const auto yield_end = std::chrono::steady_clock::now();
       lock.lock();
 
-      last_yield_time = std::chrono::steady_clock::now();
+      // Bill the yield window (JSPI await + _ce_yield_drain) to the next
+      // tick's bookkeeping so it shows up against the inter-decode window
+      // for the requests that ran across this yield.
+      pending_yield_wait_ms_ += duration_ms(yield_start, yield_end);
+      last_yield_time = yield_end;
     }
 #endif
 
@@ -2204,30 +2381,9 @@ RequestStepResult InferenceRuntime::RunSchedulerTickLocked() {
 
   const bool tick_executed = RunPolicyBatchTickLocked();
 
-  // CPU/GPU OVERLAP: Do NOT flush pending bookkeeping unconditionally here.
-  // The deferred-bookkeeping pipeline parks tick N's sampled token in
-  // `pending_bookkeeping_` so that tick N+1 can emit it from inside
-  // `RunPolicyBatchTickLocked` (line ~1290) — i.e. *while* the GPU is busy
-  // running tick N+1's batch.  Flushing unconditionally at the end of every
-  // tick re-emits the token immediately, before tick N+1 has even been
-  // dispatched, and `CompletePendingBookkeepingLocked()` becomes a no-op
-  // next tick.  That negates the overlap and leaves only the bookkeeping
-  // overhead, regressing single-query decode TPS to roughly the pre-overlap
-  // baseline minus the new plumbing cost.
-  //
-  // We do still need a flush as a safety net: when `RunPolicyBatchTickLocked`
-  // early-returns (no runnable slots — e.g. a Streaming slot got cancelled
-  // in Phase 1 normalize, or all slots are already terminal), the next call
-  // through `RunPolicyBatchTickLocked` won't reach line ~1290 either, so the
-  // `pending_bookkeeping_` struct (which references slot pointers about to
-  // be reset by `FinalizeCompletedSlots` below) would be stranded, leaking
-  // the last sampled token and pinning `has_pending_bookkeeping_=true`
-  // (which the loop's exit condition checks, causing a hot spin).
-  //
-  // The success path (`tick_executed == true`) means we did sample and the
-  // `must_flush` block inside `RunPolicyBatchTickLocked` already flushed if
-  // any slot terminated — so it's safe to defer to the next tick's overlap
-  // window for everything else.
+  // Only flush on no-progress.  Success path keeps pending bookkeeping for
+  // the next tick's CPU/GPU overlap window; must_flush inside
+  // RunPolicyBatchTickLocked already handles terminating slots.
   if (!tick_executed) {
     FlushAllPendingBookkeepingLocked();
   }

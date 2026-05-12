@@ -28,6 +28,9 @@ enum class GenerateTokenEmissionMode : std::uint8_t {
   None = 0,
   RuntimeEvents = 1,
   DirectCallback = 2,
+  // Native appends UTF-8 bytes to RequestQueue's streaming buffer; JS
+  // drains into the SAB ring on each ce_native_yield.
+  StreamingBuffer = 3,
 };
 
 enum class GenerateRequestLifecycle : std::uint8_t {
@@ -73,7 +76,13 @@ struct GenerateRequest {
   double e2e_ms = 0.0;
   double prefill_ms = 0.0;
   double decode_ms = 0.0;
+  double native_sync_ms = 0.0;
+  double native_gpu_ms = 0.0;
   double native_logic_ms = 0.0;
+  // Cumulative JS-work window between successive syncs, billed to each
+  // request participating in the tick.  See observability_metrics.h.
+  double inter_decode_js_ms = 0.0;
+  double yield_wait_ms = 0.0;
   int32_t input_tokens = 0;
   int32_t output_tokens = 0;
   int32_t cache_hits = 0;

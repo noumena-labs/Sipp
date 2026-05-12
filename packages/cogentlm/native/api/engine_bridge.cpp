@@ -52,6 +52,9 @@ bool map_token_emission_mode(CE_TokenEmissionMode mode,
   case CE_TOKEN_EMISSION_DIRECT_CALLBACK:
     out_mode = GenerateTokenEmissionMode::DirectCallback;
     return true;
+  case CE_TOKEN_EMISSION_STREAMING_BUFFER:
+    out_mode = GenerateTokenEmissionMode::StreamingBuffer;
+    return true;
   default:
     return false;
   }
@@ -232,6 +235,8 @@ void copy_runtime_observability(
   out_metrics->native_gpu_ms = runtime_observability.native_gpu_ms;
   out_metrics->native_sync_ms = runtime_observability.native_sync_ms;
   out_metrics->native_logic_ms = runtime_observability.native_logic_ms;
+  out_metrics->inter_decode_js_ms = runtime_observability.inter_decode_js_ms;
+  out_metrics->yield_wait_ms = runtime_observability.yield_wait_ms;
 
   // Counts
   out_metrics->input_tokens = runtime_observability.input_tokens;
@@ -528,6 +533,38 @@ int CE_DrainRuntimeEventsDirectly(CE_RuntimeEvent *event_buffer,
   runtime->DrainRuntimeEventsDirectly(event_buffer, event_capacity, text_buffer,
                                       text_capacity, out_result);
   return 0;
+}
+
+const uint8_t *CE_GetStreamingBufferPointer() {
+  auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    return nullptr;
+  }
+  return runtime->StreamingBufferPointer();
+}
+
+int32_t CE_GetStreamingBufferCapacity() {
+  auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    return 0;
+  }
+  return static_cast<int32_t>(runtime->StreamingBufferCapacity());
+}
+
+int32_t *CE_GetStreamingBufferUsedAddress() {
+  auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    return nullptr;
+  }
+  return runtime->StreamingBufferUsedAddress();
+}
+
+int32_t *CE_GetStreamingBufferDropCountAddress() {
+  auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    return nullptr;
+  }
+  return runtime->StreamingBufferDropCountAddress();
 }
 
 int CE_GetCompletedRequestOutputSize(CE_RequestId request_id) {

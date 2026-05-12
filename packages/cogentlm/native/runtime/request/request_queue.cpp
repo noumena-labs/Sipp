@@ -9,6 +9,7 @@
 #include "runtime/request/request_queue.h"
 
 #include <chrono>
+#include <cstring>
 
 namespace noumena::cogentengine {
 
@@ -50,6 +51,8 @@ bool RequestQueue::Push(GenerateRequest request) {
   request.prefill_ms = 0.0;
   request.decode_ms = 0.0;
   request.native_logic_ms = 0.0;
+  request.inter_decode_js_ms = 0.0;
+  request.yield_wait_ms = 0.0;
   request.input_tokens = 0;
   request.output_tokens = 0;
   request.cache_hits = 0;
@@ -187,6 +190,83 @@ void RequestQueue::QueueTokenEvent(GenerateRequestId request_id, std::string tex
   total_emitted_token_count_++;
 }
 
+void RequestQueue::AppendStreamingToken(GenerateRequestId request_id,
+                                        const std::string &text) {
+  if (request_id == 0 || text.empty()) {
+    return;
+  }
+  // [u32 LE requestId | u32 LE textLength | bytes...].  Wasm is little-
+  // endian; memcpy of u32 fields matches the wire format JS expects.
+  const std::size_t text_size = text.size();
+  const std::size_t record_size = 8 + text_size;
+  if (record_size > streaming_buffer_.size() ||
+      static_cast<std::size_t>(streaming_buffer_used_) + record_size >
+          streaming_buffer_.size()) {
+    streaming_buffer_drop_count_++;
+    return;
+  }
+  uint8_t *dst = streaming_buffer_.data() +
+                 static_cast<std::size_t>(streaming_buffer_used_);
+  const uint32_t request_id_u32 = static_cast<uint32_t>(request_id);
+  const uint32_t text_length_u32 = static_cast<uint32_t>(text_size);
+  std::memcpy(dst, &request_id_u32, sizeof(uint32_t));
+  std::memcpy(dst + sizeof(uint32_t), &text_length_u32, sizeof(uint32_t));
+  if (text_size > 0) {
+    std::memcpy(dst + 2 * sizeof(uint32_t), text.data(), text_size);
+  }
+  streaming_buffer_used_ += static_cast<int32_t>(record_size);
+  total_emitted_token_count_++;
+}
+
+const uint8_t *RequestQueue::StreamingBufferPointer() const {
+  return streaming_buffer_.data();
+}
+
+std::size_t RequestQueue::StreamingBufferCapacity() const {
+  return streaming_buffer_.size();
+}
+
+int32_t *RequestQueue::StreamingBufferUsedAddress() {
+  return &streaming_buffer_used_;
+}
+
+int32_t *RequestQueue::StreamingBufferDropCountAddress() {
+  return &streaming_buffer_drop_count_;
+}
+
+void RequestQueue::RemoveStreamingTokenRecordsForRequest(
+    GenerateRequestId request_id) {
+  if (request_id == 0 || streaming_buffer_used_ == 0) {
+    return;
+  }
+  // Linear scan + in-place compaction.  Runs at settle time, not hot path.
+  std::size_t read_offset = 0;
+  std::size_t write_offset = 0;
+  const std::size_t used = static_cast<std::size_t>(streaming_buffer_used_);
+  while (read_offset + 8 <= used) {
+    uint32_t record_request_id = 0;
+    uint32_t record_text_length = 0;
+    std::memcpy(&record_request_id, streaming_buffer_.data() + read_offset,
+                sizeof(uint32_t));
+    std::memcpy(&record_text_length,
+                streaming_buffer_.data() + read_offset + sizeof(uint32_t),
+                sizeof(uint32_t));
+    const std::size_t record_size = 8 + record_text_length;
+    if (read_offset + record_size > used) {
+      break;
+    }
+    if (record_request_id != static_cast<uint32_t>(request_id)) {
+      if (write_offset != read_offset) {
+        std::memmove(streaming_buffer_.data() + write_offset,
+                     streaming_buffer_.data() + read_offset, record_size);
+      }
+      write_offset += record_size;
+    }
+    read_offset += record_size;
+  }
+  streaming_buffer_used_ = static_cast<int32_t>(write_offset);
+}
+
 std::vector<RuntimeEvent> RequestQueue::DrainEvents(std::size_t max_count) {
   std::vector<RuntimeEvent> events;
   const std::size_t drain_limit =
@@ -257,6 +337,8 @@ void RequestQueue::Clear() {
   completed_responses_.clear();
   runtime_events_.clear();
   total_emitted_token_count_ = 0;
+  streaming_buffer_used_ = 0;
+  streaming_buffer_drop_count_ = 0;
 }
 
 } // namespace noumena::cogentengine
