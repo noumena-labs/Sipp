@@ -2,6 +2,11 @@ import type { CogentConfig } from '../cogent-config.js';
 import { resolveRuntimeUrls } from '../runtime-assets.js';
 import { resolveOptimizedPackageAssetUrl } from '../runtime/package-assets.js';
 import { ObservabilityController } from '../model-management/observability-controller.js';
+import {
+  StreamingRingReader,
+  createStreamingRingBuffer,
+  DEFAULT_STREAMING_RING_CAPACITY,
+} from '../runtime/streaming-ring.js';
 import { createAbortError } from '../utils/abort.js';
 import {
   WorkerRequestMessage,
@@ -81,6 +86,10 @@ function toWorkerQueryOptions(options: QueryOptions = {}): WorkerQueryOptions {
     session: options.session,
     maxTokens: options.maxTokens,
     grammar: options.grammar,
+    // Carry the caller's streaming intent across the worker boundary.  When
+    // false, the worker leaves engine emission_mode at NONE — required to get
+    // a real native baseline TPS comparison from a worker-backed engine.
+    streaming: options.onToken != null,
   };
 }
 
@@ -89,6 +98,7 @@ function toWorkerChatOptions(options: ChatOptions = {}): WorkerChatOptions {
     session: options.session,
     maxTokens: options.maxTokens,
     grammar: options.grammar,
+    streaming: options.onToken != null,
   };
 }
 
@@ -107,6 +117,15 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
   private readonly observability = new ObservabilityController();
   private readonly pendingCalls = new Map<number, PendingWorkerCall>();
   private readonly workerConfig: WorkerSerializableCogentConfig;
+  // SAB streaming ring, lazily allocated when first needed.  Null when
+  // COOP/COEP is missing; worker falls back to per-token postMessage.
+  private streamingRingBuffer: SharedArrayBuffer | null = null;
+  private streamingRingReader: StreamingRingReader | null = null;
+  // rAF poll handle; alive only while >0 streaming calls are in flight.
+  private streamingActiveCount = 0;
+  private streamingPollHandle: number | null = null;
+  // Native request id → worker callId, populated by `streaming-claim`.
+  private readonly callIdByNativeRequestId = new Map<number, number>();
 
   constructor(private readonly config: CogentConfig = {}) {
     this.workerConfig = toWorkerSerializableConfig(config);
@@ -202,6 +221,12 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       return;
     }
     this.closed = true;
+    // Tear down the streaming poll so it doesn't keep `this` reachable.
+    this.streamingActiveCount = 0;
+    this.stopStreamingPoll();
+    this.streamingRingReader = null;
+    this.streamingRingBuffer = null;
+    this.callIdByNativeRequestId.clear();
     for (const pending of this.pendingCalls.values()) {
       pending.reject(new QueryError('ENGINE_CLOSED', 'CogentEngine is closed.'));
     }
@@ -254,7 +279,92 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     this.worker.onmessageerror = () => {
       this.failWorker(new Error('Worker runtime failed to deserialize a message.'));
     };
+    // Tell the worker about the SAB ring (or null) before any operation.
+    this.ensureStreamingRing();
+    this.worker.postMessage({
+      kind: 'streaming-init',
+      ringBuffer: this.streamingRingBuffer,
+    } satisfies WorkerRequestMessage);
     return this.worker;
+  }
+
+  private ensureStreamingRing(): void {
+    if (this.streamingRingBuffer != null) {
+      return;
+    }
+    if (typeof SharedArrayBuffer === 'undefined') {
+      return;
+    }
+    try {
+      this.streamingRingBuffer = createStreamingRingBuffer(
+        DEFAULT_STREAMING_RING_CAPACITY
+      );
+      this.streamingRingReader = new StreamingRingReader(this.streamingRingBuffer);
+    } catch {
+      this.streamingRingBuffer = null;
+      this.streamingRingReader = null;
+    }
+  }
+
+  private registerStreamingCall(): void {
+    if (this.streamingRingReader == null) {
+      return;
+    }
+    this.streamingActiveCount += 1;
+    this.startStreamingPoll();
+  }
+
+  private unregisterStreamingCall(): void {
+    if (this.streamingRingReader == null) {
+      return;
+    }
+    if (this.streamingActiveCount > 0) {
+      this.streamingActiveCount -= 1;
+    }
+    if (this.streamingActiveCount === 0) {
+      this.stopStreamingPoll();
+    }
+  }
+
+  private startStreamingPoll(): void {
+    if (this.streamingPollHandle != null || this.streamingRingReader == null) {
+      return;
+    }
+    const requestFrame = (cb: FrameRequestCallback): number =>
+      typeof requestAnimationFrame === 'function'
+        ? requestAnimationFrame(cb)
+        : (setTimeout(() => cb(performance.now()), 16) as unknown as number);
+    const tick = () => {
+      this.streamingPollHandle = null;
+      const reader = this.streamingRingReader;
+      if (reader == null) {
+        return;
+      }
+      for (const { requestId, text } of reader.drain()) {
+        const callId = this.callIdByNativeRequestId.get(requestId);
+        if (callId == null) continue;
+        const pending = this.pendingCalls.get(callId);
+        if (pending != null) {
+          try { pending.onToken?.(text); } catch { /* user error */ }
+        }
+      }
+      if (this.streamingActiveCount === 0) {
+        return;
+      }
+      this.streamingPollHandle = requestFrame(tick);
+    };
+    this.streamingPollHandle = requestFrame(tick);
+  }
+
+  private stopStreamingPoll(): void {
+    if (this.streamingPollHandle != null) {
+      if (typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(this.streamingPollHandle);
+      } else {
+        clearTimeout(this.streamingPollHandle as unknown as ReturnType<typeof setTimeout>);
+      }
+      this.streamingPollHandle = null;
+    }
   }
 
   private failWorker(error: unknown): void {
@@ -265,6 +375,12 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       this.worker.terminate();
       this.worker = null;
     }
+    // Reset streaming state; the next worker spawn allocates a fresh ring.
+    this.streamingActiveCount = 0;
+    this.stopStreamingPoll();
+    this.streamingRingReader = null;
+    this.streamingRingBuffer = null;
+    this.callIdByNativeRequestId.clear();
     for (const pending of this.pendingCalls.values()) {
       pending.reject(error);
     }
@@ -309,14 +425,32 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       };
     }
 
+    const isStreaming = options.onToken != null;
+    if (isStreaming) {
+      this.registerStreamingCall();
+    }
+
     return new Promise<unknown>((resolve, reject) => {
+      const finalize = () => {
+        cleanup();
+        if (isStreaming) {
+          this.streamingRingReader?.forgetRequest(callId);
+          for (const [nativeId, mappedCallId] of this.callIdByNativeRequestId) {
+            if (mappedCallId === callId) {
+              this.callIdByNativeRequestId.delete(nativeId);
+              break;
+            }
+          }
+          this.unregisterStreamingCall();
+        }
+      };
       this.pendingCalls.set(callId, {
         resolve: (value) => {
-          cleanup();
+          finalize();
           resolve(value);
         },
         reject: (error) => {
-          cleanup();
+          finalize();
           reject(error);
         },
         onProgress: options.onProgress,
@@ -325,7 +459,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       try {
         this.postWorkerMessage(request);
       } catch (error) {
-        cleanup();
+        finalize();
         this.pendingCalls.delete(callId);
         reject(error);
       }
@@ -340,6 +474,11 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
 
     if (message.kind === 'token') {
       this.pendingCalls.get(message.callId)?.onToken?.(message.text);
+      return;
+    }
+
+    if (message.kind === 'streaming-claim') {
+      this.callIdByNativeRequestId.set(message.nativeRequestId, message.callId);
       return;
     }
 

@@ -342,6 +342,16 @@ export class ModelService implements ModelLifecycleService {
       onToken: options.onToken,
       media,
       grammar: options.grammar,
+      // Forward the internal streaming-claim hook if the caller (worker
+      // entry) attached one.  See PromptOptions.__internalRequestStarted
+      // for why this exists.  We use a property-key escape hatch so the
+      // public ChatOptions / QueryOptions types don't have to advertise
+      // this internal hook.
+      __internalRequestStarted: (
+        options as ChatOptions & {
+          __internalRequestStarted?: (requestId: number) => void;
+        }
+      ).__internalRequestStarted,
     };
     const session = options.session ?? 'default';
     const start = nowMs();
