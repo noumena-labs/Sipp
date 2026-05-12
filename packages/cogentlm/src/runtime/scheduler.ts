@@ -139,21 +139,6 @@ export class QueuedRequestScheduler {
     return true;
   }
 
-  private settleCompletedQueuedRequestsByIds(
-    bridge: WasmBridge,
-    requestIds: Iterable<GenerateRequestId>
-  ): boolean {
-    let settledAny = false;
-    for (const requestId of requestIds) {
-      if (this.options.tracker.get(requestId) == null) {
-        continue;
-      }
-      settledAny =
-        this.settleCompletedRequestIfPresent(bridge, requestId) || settledAny;
-    }
-    return settledAny;
-  }
-
   private settleCompletedTrackedRequests(bridge: WasmBridge): boolean {
     let settledAny = false;
     for (const requestId of this.options.tracker.allTrackedIds()) {
@@ -161,72 +146,6 @@ export class QueuedRequestScheduler {
         this.settleCompletedRequestIfPresent(bridge, requestId) || settledAny;
     }
     return settledAny;
-  }
-
-  private drainRuntimeEvents(bridge: WasmBridge) {
-    // The native runtime-event queue can hold the full token stream (one
-    // event per emitted token) for an entire query before JS gets a chance
-    // to drain.  Cap the per-call drain at the reusable buffer's event
-    // capacity but loop until the native queue reports it returned fewer
-    // events than asked, so we never drop the tail of a long response.
-    const perCallEventCap = Math.max(
-      256,
-      this.options.tracker.activeCount * 64
-    );
-    const transport = this.options.getTransportObservability();
-    const drainStart = performance.now();
-    let drained = bridge.drainRuntimeEvents(perCallEventCap);
-    const aggregatedTokenEvents: typeof drained.tokenEvents = [];
-    const aggregatedTerminalIds: typeof drained.terminalRequestIds = [];
-    let aggregatedTextBytes = 0;
-    let totalEventCount = 0;
-    let callbackMs = 0;
-    let callbackCount = 0;
-    while (true) {
-      for (const tokenEvent of drained.tokenEvents) {
-        const callback = this.options.queuedPromptCallbacks.get(tokenEvent.requestId);
-        if (
-          !callback ||
-          this.options.queuedPromptCallbackErrors.has(tokenEvent.requestId)
-        ) {
-          continue;
-        }
-        const cbStart = performance.now();
-        try {
-          callback(tokenEvent.token);
-        } catch (error) {
-          this.options.queuedPromptCallbackErrors.set(tokenEvent.requestId, error);
-        }
-        callbackMs += performance.now() - cbStart;
-        callbackCount += 1;
-      }
-      aggregatedTokenEvents.push(...drained.tokenEvents);
-      aggregatedTerminalIds.push(...drained.terminalRequestIds);
-      aggregatedTextBytes += drained.textBytes;
-      totalEventCount += drained.eventCount;
-      if (drained.eventCount < perCallEventCap) {
-        break;
-      }
-      drained = bridge.drainRuntimeEvents(perCallEventCap);
-    }
-    // The drain *includes* user-callback time; record both separately so
-    // consumers can see callback contribution to bridge jitter.
-    transport.runtimeEventDrainMs =
-      (transport.runtimeEventDrainMs ?? 0) + (performance.now() - drainStart);
-    transport.runtimeEventDrainCount =
-      (transport.runtimeEventDrainCount ?? 0) + 1;
-    if (callbackCount > 0) {
-      transport.tokenCallbackMs = (transport.tokenCallbackMs ?? 0) + callbackMs;
-      transport.tokenCallbackCount =
-        (transport.tokenCallbackCount ?? 0) + callbackCount;
-    }
-
-    return {
-      eventCount: totalEventCount,
-      tokenEvents: aggregatedTokenEvents,
-      terminalRequestIds: aggregatedTerminalIds,
-      textBytes: aggregatedTextBytes,
-    };
   }
 
   private rejectPendingQueuedRequests(
@@ -250,27 +169,18 @@ export class QueuedRequestScheduler {
     const uninstallYieldDrain = this.installStreamingDrainHook(bridge, generation);
 
     try {
-      const transport = this.options.getTransportObservability();
       while (
         generation === this.schedulerPumpGeneration &&
         this.options.tracker.activeCount > 0
       ) {
         try {
-          const loopStart = performance.now();
           const loopResult = await bridge.runInferenceLoop(
             CONTINUOUS_LOOP_TICK_LIMIT,
             this.options.tracker.activeCount,
             CONTINUOUS_LOOP_TOKEN_LIMIT
           );
-          transport.schedulerProgressMs =
-            (transport.schedulerProgressMs ?? 0) +
-            (performance.now() - loopStart);
-          transport.schedulerProgressCount =
-            (transport.schedulerProgressCount ?? 0) + 1;
-          const drainedEvents = this.drainRuntimeEvents(bridge);
           this.requestCancellationForCallbackErrors();
-          this.settleCompletedQueuedRequestsByIds(bridge, drainedEvents.terminalRequestIds);
-          if (loopResult.completedResponseCount > drainedEvents.terminalRequestIds.length) {
+          if (loopResult.completedResponseCount > 0) {
             this.settleCompletedTrackedRequests(bridge);
           }
           if (loopResult.stepResult === REQUEST_STEP_RESULT_INVALID) {
@@ -291,7 +201,6 @@ export class QueuedRequestScheduler {
     } finally {
       uninstallYieldDrain();
       try { this.drainStreamingBufferToRing(bridge); } catch { /* cleanup */ }
-      try { this.drainRuntimeEvents(bridge); } catch { /* cleanup */ }
     }
   }
 

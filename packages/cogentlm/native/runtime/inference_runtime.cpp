@@ -16,6 +16,7 @@
 #include <functional>
 #include <memory>
 #include <sstream>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -638,7 +639,8 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
   request.prefill_ms += multimodal_prefill_ms;
   total_input_tokens_ += static_cast<std::size_t>(new_n_past);
   total_prefill_ms_ += multimodal_prefill_ms;
-  request.e2e_ms += multimodal_prefill_ms;
+  // request.e2e_ms is finalized at completion (enqueued_at → completed_at)
+  // by FinalizeCompletedSlots; we don't accumulate ticks into it here.
   slot.prefill_cursor = request.prompt_tokens.size();
 
   // The multimodal prefill path runs on the same async backends as normal
@@ -951,73 +953,68 @@ void InferenceRuntime::CompletePendingBookkeepingLocked() {
   const struct llama_model *model = llama_get_model(shared_context_);
   const struct llama_vocab *vocab = llama_model_get_vocab(model);
 
-  double tick_ffi_ms = 0.0;
-
-  // 0. Finalize timing and token counts for the batch that just finished its GPU window.
+  // 0. Token-count bookkeeping + per-request "did this tick include a
+  // prefill / decode contribution from THIS request?" classification.
+  // Cross-mode ticks (one request prefilling while another decodes) must
+  // attribute tick wall-time to decode_ms / prefill_ms per request based on
+  // that request's own contributions, not the union across the whole batch.
   scratch_tick_requests_.clear();
-  
   bool tick_had_prefill = false;
   bool tick_had_decode = false;
+  std::unordered_map<GenerateRequest *, std::uint8_t> per_request_kinds;
+  constexpr std::uint8_t kKindPrefill = 1u << 0;
+  constexpr std::uint8_t kKindDecode = 1u << 1;
 
   for (const BatchContribution &contribution : pb.plan.contributions) {
     if (contribution.request == nullptr) {
       continue;
     }
-
     GenerateRequest &request = *contribution.request;
+    auto [it, inserted] = per_request_kinds.try_emplace(&request, 0u);
+    if (inserted) {
+      scratch_tick_requests_.push_back(&request);
+    }
     if (contribution.kind == BatchContributionKind::Prefill) {
       request.input_tokens++;
       total_input_tokens_++;
       tick_had_prefill = true;
+      it->second |= kKindPrefill;
     } else {
       tick_had_decode = true;
       request.output_tokens++;
       request.emitted_token_count++;
       total_output_tokens_++;
-
-      if (!request.has_first_token_at) {
-        request.first_token_at = std::chrono::steady_clock::now();
-        request.has_first_token_at = true;
-      }
-    }
-
-    // Check if we already attributed time to this request in this tick.
-    bool already_seen = false;
-    for (const auto* seen : scratch_tick_requests_) {
-      if (seen == &request) {
-        already_seen = true;
-        break;
-      }
-    }
-
-    if (!already_seen) {
-      scratch_tick_requests_.push_back(&request);
+      it->second |= kKindDecode;
+      // first_token_at is set at the sampling site inside RunPolicyBatchTickLocked
+      // so TTFT doesn't include the post-decode yield + next-tick prefix.
     }
   }
 
-  // Wall-clock phase time billed to decode/prefill: raw GPU window plus
-  // engine CPU logic.  This is honest in both StreamingBuffer and
-  // DirectCallback modes — event-loop contention inside llama_synchronize
-  // counts here (it's wall time the model actually took) and JS bridge work
-  // outside the GPU window is reported separately via inter_decode_js_ms.
+  // Wall-clock phase time billed to each participating request.  Event-loop
+  // contention inside llama_synchronize counts here — it's wall time the
+  // model actually took.  Each request's decode_ms / prefill_ms reflects
+  // only the kinds *that request* contributed to this tick.
   const double tick_phase_ms = pb.native_gpu_ms + pb.native_logic_ms;
-
-  // Update request-specific metrics for the participating requests.
   for (GenerateRequest *request_ptr : scratch_tick_requests_) {
-    if (request_ptr) {
-      GenerateRequest &request = *request_ptr;
-      request.native_sync_ms += pb.native_sync_ms;
-      request.native_gpu_ms += pb.native_gpu_ms;
-      request.native_logic_ms += pb.native_logic_ms;
-      request.inter_decode_js_ms += pb.inter_decode_js_ms;
-      request.yield_wait_ms += pb.yield_wait_ms;
-      request.e2e_ms += pb.total_tick_ms;
-      request.decode_ms += (tick_had_decode ? tick_phase_ms : 0.0);
-      request.prefill_ms += (tick_had_prefill ? tick_phase_ms : 0.0);
+    if (request_ptr == nullptr) {
+      continue;
+    }
+    GenerateRequest &request = *request_ptr;
+    const std::uint8_t kinds = per_request_kinds[&request];
+    request.native_sync_ms += pb.native_sync_ms;
+    request.native_gpu_ms += pb.native_gpu_ms;
+    request.native_logic_ms += pb.native_logic_ms;
+    if (kinds & kKindDecode) {
+      request.decode_ms += tick_phase_ms;
+    }
+    if (kinds & kKindPrefill) {
+      request.prefill_ms += tick_phase_ms;
     }
   }
 
-  // System-wide wall-clock tracking for aggregate TPS reporting.
+  // System-wide totals: a mixed tick counts once toward decode (its
+  // user-observable phase) when any contribution was decode; otherwise toward
+  // prefill if any contribution was prefill.
   if (tick_had_decode) {
     total_decode_ms_ += tick_phase_ms;
   } else if (tick_had_prefill) {
@@ -1096,18 +1093,15 @@ void InferenceRuntime::EmitPendingTokensLocked() {
     return;
   }
 
-  double tick_ffi_ms = 0.0;
   for (const BatchContribution &contribution : pending_bookkeeping_.plan.contributions) {
     if (contribution.slot != nullptr) {
       SlotState &slot = *contribution.slot;
       if (!slot.buffered_output_text.empty()) {
         std::lock_guard<std::mutex> lock(request_queue_mutex_);
-        tick_ffi_ms += slot_scheduler_.EmitBufferedTokenPiece(request_queue_, slot);
+        slot_scheduler_.EmitBufferedTokenPiece(request_queue_, slot);
       }
     }
   }
-
-  last_tick_ffi_ms_ = tick_ffi_ms;
   has_pending_bookkeeping_ = false;
 }
 
@@ -1122,8 +1116,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     return false;
   }
 
-  // Ensure any results from the previous tick are committed before starting a new batch.
-  // This updates last_tick_ffi_ms_ which we use below for timing calibration.
+  // Commit results from the previous tick before starting a new batch.
   if (has_pending_bookkeeping_) {
     FlushAllPendingBookkeepingLocked();
   }
@@ -1316,39 +1309,14 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   const double planning_ms = duration_ms(tick_start, tick_start_pre_decode);
 
   const auto gpu_start = std::chrono::steady_clock::now();
-  // Wall-clock from the prior tick's gpu_end to this tick's gpu_start.
-  // Captures everything that ran on the worker between syncs: ce_native_yield,
-  // the streaming drain hook, scheduler-pump bookkeeping, drainRuntimeEvents,
-  // postMessage processing.  Zero on the first tick.  Idle-aware: if the gap
-  // is unreasonably large (>500ms) we treat it as a request-boundary or
-  // wake-from-idle and report zero, since otherwise the metric would be
-  // dominated by host-side idle time and tell us nothing about contention.
-  constexpr double kInterDecodeGapCapMs = 500.0;
-  const double raw_inter_decode_js_ms =
-      has_last_gpu_end_ ? duration_ms(last_gpu_end_, gpu_start) : 0.0;
-  const bool inter_decode_is_idle_gap =
-      raw_inter_decode_js_ms > kInterDecodeGapCapMs;
-  const double inter_decode_js_ms =
-      inter_decode_is_idle_gap ? 0.0 : raw_inter_decode_js_ms;
-  // Snapshot of ce_native_yield() time accumulated since the prior gpu_end
-  // (subset of inter_decode_js_ms).  Reset for the next inter-decode window.
-  // Discarded alongside inter_decode_js_ms when we declared an idle gap.
-  const double yield_wait_ms =
-      inter_decode_is_idle_gap ? 0.0 : pending_yield_wait_ms_;
-  pending_yield_wait_ms_ = 0.0;
-
   const int32_t decode_status =
       llama_decode(shared_context_, shared_batch_builder_.Get());
   llama_synchronize(shared_context_);
   const auto gpu_end = std::chrono::steady_clock::now();
-  last_gpu_end_ = gpu_end;
-  has_last_gpu_end_ = true;
 
   // Raw wall-clock decode+sync window.  In WebGPU+wasm this includes any
-  // event-loop wait inside llama_synchronize.  We expose inter_decode_js_ms
-  // and yield_wait_ms separately so consumers can attribute contention; we
-  // no longer pre-subtract last_tick_ffi_ms_ from this number because that
-  // compensation was DirectCallback-only and silently zero in StreamingBuffer.
+  // event-loop wait inside llama_synchronize (the GPU-completion microtask
+  // queuing behind other worker JS work).
   const double raw_gpu_ms = duration_ms(gpu_start, gpu_end);
 
   if (decode_status != 0) {
@@ -1482,6 +1450,15 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
 
     pending_logits.sampled_token = next_token;
 
+    // TTFT clock: the moment the first sampled token exists.  Marked here
+    // (not at start of the next tick) so the metric reflects model-produce
+    // latency without inflating it by the post-tick yield + the next tick's
+    // bookkeeping prefix.
+    if (!slot_request.has_first_token_at) {
+      slot_request.first_token_at = std::chrono::steady_clock::now();
+      slot_request.has_first_token_at = true;
+    }
+
     if (llama_vocab_is_eog(vocab, next_token)) {
       if (!slot.pending_utf8_bytes.empty()) {
         slot.pending_emission_text.append(slot.pending_utf8_bytes);
@@ -1505,7 +1482,8 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
     }
   }
 
-  // Now perform the FFI emission calls (JS bound).
+  // Flush any tokens already buffered into the runtime's streaming buffer
+  // so they're visible to the next ce_native_yield drain.
   EmitPendingTokensLocked();
 
   const auto tick_end = std::chrono::steady_clock::now();
@@ -1523,10 +1501,7 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   pending_bookkeeping_.native_sync_ms = 0.0;
   pending_bookkeeping_.native_logic_ms = native_logic_ms;
   pending_bookkeeping_.total_tick_ms = total_tick_ms;
-  pending_bookkeeping_.ffi_time_ms = last_tick_ffi_ms_;
-  pending_bookkeeping_.inter_decode_js_ms = inter_decode_js_ms;
-  pending_bookkeeping_.yield_wait_ms = yield_wait_ms;
-  
+
   has_pending_bookkeeping_ = true;
 
   // If any slot was marked Completed or Failed this tick, we MUST flush
@@ -1602,9 +1577,6 @@ void InferenceRuntime::CommitCompletedObservabilityLocked(
   last_runtime_observability_.native_gpu_ms = request_metrics.native_gpu_ms;
   last_runtime_observability_.native_sync_ms = request_metrics.native_sync_ms;
   last_runtime_observability_.native_logic_ms = request_metrics.native_logic_ms;
-  last_runtime_observability_.inter_decode_js_ms =
-      request_metrics.inter_decode_js_ms;
-  last_runtime_observability_.yield_wait_ms = request_metrics.yield_wait_ms;
 
   // Counts
   last_runtime_observability_.input_tokens = request_metrics.input_tokens;
@@ -1672,7 +1644,6 @@ InferenceRuntime::InferenceRuntime(std::string model_path,
           static_cast<std::size_t>(config_.prefix_cache_interval_tokens)),
       model_fingerprint_(
           static_cast<std::uint64_t>(std::hash<std::string>{}(model_path))),
-      last_tick_ffi_ms_(0.0),
       total_decode_ms_(0.0),
       total_prefill_ms_(0.0),
       total_input_tokens_(0),
@@ -1911,7 +1882,7 @@ bool InferenceRuntime::BackendProfilingEnabled() const {
 
 GenerateRequestId InferenceRuntime::EnqueueRequest(
     std::string context_key, std::string prompt, int n_tokens_predict,
-    TokenCallback on_token_received, std::string grammar,
+    std::string grammar,
     GenerateTokenEmissionMode token_emission_mode) {
   const auto enqueued_at = std::chrono::steady_clock::now();
   // Fast-fail without lock (model pointer is immutable after construction).
@@ -1945,7 +1916,6 @@ GenerateRequestId InferenceRuntime::EnqueueRequest(
   request.context_key = std::move(context_key);
   request.original_prompt = std::move(prompt);
   request.max_output_tokens = n_tokens_predict;
-  request.on_token_received = std::move(on_token_received);
   request.token_emission_mode = token_emission_mode;
   request.prompt_tokens = std::move(prompt_tokens);
   request.grammar = std::move(grammar);
@@ -1960,7 +1930,7 @@ GenerateRequestId InferenceRuntime::EnqueueRequest(
 GenerateRequestId InferenceRuntime::EnqueueMultimodalRequest(
     std::string context_key, std::string prompt, int n_tokens_predict,
     std::vector<std::pair<const std::uint8_t *, std::size_t>> image_views,
-    TokenCallback on_token_received, std::string grammar,
+    std::string grammar,
     GenerateTokenEmissionMode token_emission_mode) {
   const auto enqueued_at = std::chrono::steady_clock::now();
   if (primary_model_ == nullptr || sampler_ == nullptr ||
@@ -2002,7 +1972,6 @@ GenerateRequestId InferenceRuntime::EnqueueMultimodalRequest(
   request.prompt_tokens = std::move(prompt_tokens);
   request.multimodal = std::move(payload);
   request.max_output_tokens = n_tokens_predict;
-  request.on_token_received = std::move(on_token_received);
   request.token_emission_mode = token_emission_mode;
   request.is_multimodal_turn = true;
   request.grammar = std::move(grammar);
@@ -2139,45 +2108,6 @@ SchedulerBurstResult InferenceRuntime::RunSchedulerBurst(
                             ? RequestStepResult::Progressed
                             : RequestStepResult::Waiting;
   return burst_result;
-}
-
-void InferenceRuntime::DrainRuntimeEventsDirectly(
-    CE_RuntimeEvent *event_buffer, int32_t event_capacity, char *text_buffer,
-    int32_t text_capacity, CE_RuntimeEventDrainResult *out_result) {
-  std::lock_guard<std::mutex> lock(request_queue_mutex_);
-  if (event_buffer == nullptr || event_capacity <= 0 || out_result == nullptr) {
-    return;
-  }
-
-  const std::vector<RuntimeEvent> events =
-      request_queue_.DrainEvents(static_cast<std::size_t>(event_capacity));
-  out_result->event_count = static_cast<int32_t>(events.size());
-  out_result->text_bytes = 0;
-
-  int32_t text_cursor = 0;
-  for (int32_t i = 0; i < out_result->event_count; ++i) {
-    const RuntimeEvent &src = events[i];
-    CE_RuntimeEvent &dst = event_buffer[i];
-
-    dst.request_id = static_cast<CE_RequestId>(src.request_id);
-    dst.kind = static_cast<int32_t>(src.kind);
-    dst.status = static_cast<int32_t>(src.status);
-    dst.text_offset = -1;
-    dst.text_length = 0;
-
-    if (!src.text.empty() && text_buffer != nullptr) {
-      const int32_t space_remaining = text_capacity - text_cursor;
-      const int32_t to_copy =
-          std::min(static_cast<int32_t>(src.text.size()), space_remaining);
-      if (to_copy > 0) {
-        std::memcpy(text_buffer + text_cursor, src.text.data(), to_copy);
-        dst.text_offset = text_cursor;
-        dst.text_length = to_copy;
-        text_cursor += to_copy;
-        out_result->text_bytes += to_copy;
-      }
-    }
-  }
 }
 
 const uint8_t *InferenceRuntime::StreamingBufferPointer() {
@@ -2325,16 +2255,10 @@ SchedulerBurstResult InferenceRuntime::RunSchedulerLoop(
       // Unlock while suspended so other JS calls can potentially interact
       // with the runtime (though they should ideally wait).
       lock.unlock();
-      const auto yield_start = std::chrono::steady_clock::now();
       ce_native_yield();
-      const auto yield_end = std::chrono::steady_clock::now();
       lock.lock();
 
-      // Bill the yield window (JSPI await + _ce_yield_drain) to the next
-      // tick's bookkeeping so it shows up against the inter-decode window
-      // for the requests that ran across this yield.
-      pending_yield_wait_ms_ += duration_ms(yield_start, yield_end);
-      last_yield_time = yield_end;
+      last_yield_time = std::chrono::steady_clock::now();
     }
 #endif
 
@@ -2426,18 +2350,6 @@ RequestStepResult InferenceRuntime::RunSchedulerTickLocked() {
 
   return (tick_executed || admitted_any) ? RequestStepResult::Progressed
                                          : RequestStepResult::Waiting;
-}
-
-std::vector<RuntimeEvent>
-InferenceRuntime::DrainRuntimeEvents(int32_t max_count,
-                                     int32_t max_text_bytes) {
-  std::lock_guard<std::mutex> lock(request_queue_mutex_);
-  const std::size_t clamped_max_count =
-      max_count <= 0 ? 0 : static_cast<std::size_t>(max_count);
-  const std::size_t clamped_max_text_bytes =
-      max_text_bytes <= 0 ? 0 : static_cast<std::size_t>(max_text_bytes);
-  return request_queue_.DrainRuntimeEvents(clamped_max_count,
-                                           clamped_max_text_bytes);
 }
 
 bool InferenceRuntime::TryPeekCompletedResponse(

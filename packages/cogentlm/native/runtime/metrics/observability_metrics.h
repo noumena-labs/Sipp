@@ -28,22 +28,10 @@ struct RuntimeObservabilityMetrics {
   // Raw wall-clock `gpu_end - gpu_start` around llama_decode + llama_synchronize.
   // In WebGPU+wasm, llama_synchronize is an event-loop dependency, so this
   // number includes any browser-side wait for the GPU completion microtask
-  // to be picked up.  Do NOT pre-subtract FFI/yield costs here — those are
-  // reported separately so the consumer can see the decomposition.
+  // to be picked up.
   double native_gpu_ms = 0.0;
   double native_sync_ms = 0.0;
   double native_logic_ms = 0.0;
-
-  // Wall-clock from the previous tick's `gpu_end` to this tick's `gpu_start`.
-  // This is the worker-thread JS work window between successive syncs:
-  // ce_native_yield, the streaming drain hook, scheduler-pump bookkeeping,
-  // drainRuntimeEvents, and any postMessage processing.  Contributes directly
-  // to event-loop contention seen by the next llama_synchronize.
-  double inter_decode_js_ms = 0.0;
-  // Subset of inter_decode_js_ms spent suspended inside ce_native_yield()
-  // (the JSPI await + the _ce_yield_drain hook).  The remainder is JS pump
-  // work outside the wasm-suspend window.
-  double yield_wait_ms = 0.0;
 
   // Counts
   int32_t input_tokens = 0;

@@ -9,9 +9,7 @@
 
 #pragma once
 
-#include <chrono>
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -55,8 +53,6 @@ struct SchedulerBurstResult {
 
 class InferenceRuntime {
 public:
-  using TokenCallback = std::function<bool(const char *, int32_t)>;
-
   explicit InferenceRuntime(std::string model_path,
                             InferenceRuntimeConfig config = {});
   ~InferenceRuntime();
@@ -68,14 +64,12 @@ public:
 
   GenerateRequestId EnqueueRequest(std::string context_key, std::string prompt,
                                    int n_tokens_predict,
-                                   TokenCallback on_token_received = {},
                                    std::string grammar = {},
                                    GenerateTokenEmissionMode token_emission_mode =
                                        GenerateTokenEmissionMode::None);
   GenerateRequestId EnqueueMultimodalRequest(
       std::string context_key, std::string prompt, int n_tokens_predict,
       std::vector<std::pair<const std::uint8_t *, std::size_t>> image_views,
-      TokenCallback on_token_received = {},
       std::string grammar = {},
       GenerateTokenEmissionMode token_emission_mode =
           GenerateTokenEmissionMode::None);
@@ -85,12 +79,6 @@ public:
                                          int32_t max_completed_responses,
                                          int32_t max_emitted_tokens,
                                          int32_t max_duration_us = 0);
-  std::vector<RuntimeEvent> DrainRuntimeEvents(int32_t max_count,
-                                               int32_t max_text_bytes);
-  void DrainRuntimeEventsDirectly(CE_RuntimeEvent *event_buffer,
-                                  int32_t event_capacity, char *text_buffer,
-                                  int32_t text_capacity,
-                                  CE_RuntimeEventDrainResult *out_result);
   // Streaming buffer accessors — see request_queue.h.  Stable addresses;
   // called once at init, then JS uses HEAP32 / HEAPU8 directly.
   const uint8_t *StreamingBufferPointer();
@@ -218,26 +206,10 @@ private:
     double native_sync_ms = 0.0;
     double native_logic_ms = 0.0;
     double total_tick_ms = 0.0;
-    double ffi_time_ms = 0.0;
-    // Wall-clock from the prior tick's gpu_end to this tick's gpu_start.
-    // Zero on the first tick of a request stream.
-    double inter_decode_js_ms = 0.0;
-    // Cumulative time spent suspended in ce_native_yield() between the prior
-    // tick's gpu_end and this tick's gpu_start (subset of inter_decode_js_ms).
-    double yield_wait_ms = 0.0;
   };
 
   std::vector<PendingLogitsContribution> scratch_logits_contributions_;
   std::vector<PendingLogitsContribution> pending_logits_contributions_;
-  double last_tick_ffi_ms_ = 0.0;
-  // Wall-clock time of the previous tick's gpu_end.  Used to compute
-  // inter_decode_js_ms on the next tick.  has_last_gpu_end_ gates the
-  // first-tick case where there is no prior window.
-  std::chrono::steady_clock::time_point last_gpu_end_{};
-  bool has_last_gpu_end_ = false;
-  // Accumulator: ce_native_yield() time since the previous tick's gpu_end.
-  // RunPolicyBatchTickLocked snapshots and resets this on each entry.
-  double pending_yield_wait_ms_ = 0.0;
   double total_decode_ms_ = 0.0;
   double total_prefill_ms_ = 0.0;
   std::size_t total_input_tokens_ = 0;

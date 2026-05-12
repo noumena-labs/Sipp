@@ -15,28 +15,16 @@ export const COMPLETED_REQUEST_STATUS_CANCELLED = 2;
 export const COMPLETED_REQUEST_STATUS_FAILED = 3;
 export const COMPLETED_REQUEST_STATUS_UNKNOWN = 4;
 // Mirrors CE_RuntimeObservabilityMetrics in native/api/ffi_types.h.
-// 11 doubles + 3 int32 + 1 reserved int32 = 88 + 16 padding = 104 bytes.
-export const RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES = 104;
-export const RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT = 11;
+// 9 doubles + 3 int32 + 1 reserved int32 = 72 + 16 = 88 bytes.
+export const RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES = 88;
+export const RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT = 9;
 export const SCHEDULER_LOOP_RESULT_SIZE_BYTES = 16;
-export const RUNTIME_EVENT_SIZE_BYTES = 20;
-export const RUNTIME_EVENT_DRAIN_RESULT_SIZE_BYTES = 8;
-export const RUNTIME_EVENT_KIND_TOKEN = 1;
-export const RUNTIME_EVENT_KIND_TERMINAL = 2;
 
 export const DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY: TransportObservability = {
   executionMode: 'main-thread',
   workerBacked: false,
   enabled: false,
   activeTokenTransport: 'none',
-  schedulerProgressCount: 0,
-  schedulerProgressMs: 0,
-  runtimeEventDrainCount: 0,
-  runtimeEventDrainMs: 0,
-  tokenCallbackCount: 0,
-  tokenCallbackMs: 0,
-  schedulerYieldCount: 0,
-  schedulerYieldMs: 0,
   streamingDrainCount: 0,
   streamingDrainMs: 0,
 };

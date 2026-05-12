@@ -26,16 +26,6 @@ int CE_RunSchedulerLoop(int32_t max_ticks,
                         int32_t max_duration_us,
                         CE_SchedulerLoopResult* out_result);
 int CE_GetCompletedRequestStatus(CE_RequestId request_id);
-int CE_DrainRuntimeEvents(CE_RuntimeEvent* event_buffer,
-                          int32_t event_capacity,
-                          char* text_buffer,
-                          int32_t text_capacity,
-                          CE_RuntimeEventDrainResult* out_result);
-int CE_DrainRuntimeEventsDirectly(CE_RuntimeEvent* event_buffer,
-                                  int32_t event_capacity,
-                                  char* text_buffer,
-                                  int32_t text_capacity,
-                                  CE_RuntimeEventDrainResult* out_result);
 
 // Streaming buffer FFI: all four are init-time accessors returning stable
 // wasm-heap addresses.  JS caches them and reads/writes the buffer and
@@ -56,7 +46,6 @@ CE_RequestId CE_StartPromptRequestWithTokenEmissionMode(
     const char* context_key,
     const char* prompt,
     int n_tokens_predict,
-    CE_TokenCallback on_token,
     CE_TokenEmissionMode token_emission_mode,
     const char* grammar);
 CE_RequestId CE_StartPromptWithMediaRequestWithTokenEmissionMode(
@@ -66,7 +55,6 @@ CE_RequestId CE_StartPromptWithMediaRequestWithTokenEmissionMode(
     int32_t n_images,
     const uint8_t* images_flat_buffer,
     const int32_t* image_sizes,
-    CE_TokenCallback on_token,
     CE_TokenEmissionMode token_emission_mode,
     const char* grammar);
 const char* CE_GetMediaMarkerString();

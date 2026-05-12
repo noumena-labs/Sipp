@@ -15,8 +15,8 @@ let service: ModelService | null = null;
 let serviceConfigFingerprint: string | null = null;
 let unsubscribeObservability: (() => void) | null = null;
 const activeCalls = new Map<number, AbortController>();
-// SAB streaming ring writer; set on `streaming-init`.  Null when SAB is
-// unavailable — tokens then fall back to per-token postMessage.
+// SAB streaming ring writer; set on `streaming-init`.  When null, streaming
+// is unavailable and requests with onToken will be rejected upstream.
 let streamingRingWriter: StreamingRingWriter | null = null;
 
 type WorkerOperationRequest = Exclude<
@@ -103,26 +103,6 @@ function postLoadProgress(callId: number): NonNullable<Parameters<ModelService['
   };
 }
 
-// Fallback path used by StreamingBuffer mode only when the SAB ring isn't
-// wired (or overflows).  Native StreamingBuffer drains write to the ring
-// directly via the scheduler's `_ce_yield_drain` hook — this closure is
-// only invoked by the DirectCallback fallback path.
-function postToken(callId: number): (token: string) => void {
-  return (token) => {
-    if (
-      streamingRingWriter != null &&
-      streamingRingWriter.tryWriteString(callId, token)
-    ) {
-      return;
-    }
-    post({
-      kind: 'token',
-      callId,
-      text: token,
-    });
-  };
-}
-
 async function runLoad(message: Extract<WorkerOperationRequest, { kind: 'models-load' }>): Promise<unknown> {
   return await withAbortController(message.callId, (signal) =>
     ensureService(message.config).load(message.source, {
@@ -133,14 +113,10 @@ async function runLoad(message: Extract<WorkerOperationRequest, { kind: 'models-
   );
 }
 
-// Sends `streaming-claim` so main can map ring records (carrying native
-// request id) to its callId.  Fires synchronously on enqueue, before any
-// token bytes are produced.
-//
-// `streaming=false` MUST NOT inject an onToken — the engine selects
-// TOKEN_EMISSION_NONE only when onToken is null.  Injecting postToken anyway
-// would force StreamingBuffer/DirectCallback mode in worker runs even when
-// the caller explicitly opted out of streaming.
+// Wires the engine to emit tokens through the SAB ring (when `streaming`)
+// and publishes a `streaming-claim` message so the main thread can map the
+// native request id back to its call id.  When `streaming=false`, returns
+// {} so the engine selects TOKEN_EMISSION_NONE.
 function streamingOptionsFor(
   callId: number,
   streaming: boolean
@@ -152,7 +128,10 @@ function streamingOptionsFor(
     return {};
   }
   return {
-    onToken: postToken(callId),
+    // The engine sees a non-null onToken and selects StreamingBuffer; the
+    // body is never invoked because tokens go through the SAB ring drain
+    // hook on each ce_native_yield.
+    onToken: () => {},
     __internalRequestStarted: (requestId) =>
       post({ kind: 'streaming-claim', callId, nativeRequestId: requestId }),
   };

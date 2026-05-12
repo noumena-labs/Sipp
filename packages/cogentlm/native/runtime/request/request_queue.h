@@ -10,7 +10,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <functional>
 #include <list>
 #include <optional>
@@ -22,18 +21,6 @@
 #include "runtime/request/response_types.h"
 
 namespace noumena::cogentengine {
-
-enum class RuntimeEventKind : std::uint8_t {
-  Token = 1,
-  Terminal = 2,
-};
-
-struct RuntimeEvent {
-  RuntimeEventKind kind = RuntimeEventKind::Token;
-  GenerateRequestId request_id = 0;
-  GenerateResponseStatus status = GenerateResponseStatus::Pending;
-  std::string text;
-};
 
 class RequestQueue {
 public:
@@ -49,22 +36,17 @@ public:
   const GenerateResponse *PeekCompletedResponse(GenerateRequestId request_id) const;
   GenerateResponse *FindMutableCompletedResponse(GenerateRequestId request_id);
   std::vector<GenerateRequestId> CompletedResponseIds() const;
-  void QueueTokenEvent(GenerateRequestId request_id, std::string text);
-  std::vector<RuntimeEvent> DrainEvents(std::size_t max_count);
-  std::vector<RuntimeEvent> DrainRuntimeEvents(std::size_t max_count,
-                                               std::size_t max_text_bytes);
   int32_t TotalEmittedTokenCount() const;
   bool ConsumeCompletedResponse(GenerateRequestId request_id);
   std::size_t CompletedResponseCount() const;
   std::size_t LiveRequestCount() const;
   void Clear();
 
-  // Streaming token buffer (StreamingBuffer emission mode).  Single-
-  // producer (inference tick) / single-consumer (JS drain inside
-  // ce_native_yield while wasm is suspended).  Records are
-  // [u32 LE requestId | u32 LE textLength | bytes...].  Overflow bumps
-  // `streaming_buffer_drop_count_`; the request's full `output_text` is
-  // still preserved by the slot scheduler.
+  // Streaming token buffer.  Single-producer (inference tick) /
+  // single-consumer (JS drain inside ce_native_yield while wasm is
+  // suspended).  Records are [u32 LE requestId | u32 LE textLength | bytes].
+  // Overflow bumps `streaming_buffer_drop_count_`; the request's full
+  // `output_text` is still preserved by the slot scheduler.
   void AppendStreamingToken(GenerateRequestId request_id,
                             const std::string &text);
   const uint8_t *StreamingBufferPointer() const;
@@ -84,7 +66,6 @@ private:
   std::unordered_map<GenerateRequestId, std::list<GenerateRequestId>::iterator>
       pending_request_positions_;
   std::unordered_map<GenerateRequestId, GenerateResponse> completed_responses_;
-  std::deque<RuntimeEvent> runtime_events_;
   int32_t total_emitted_token_count_ = 0;
 
   // 64 KB ≈ 25 yield windows of headroom at 200 TPS with 5-byte tokens.

@@ -23,14 +23,9 @@ void RequestQueue::RemovePendingRequestId(GenerateRequestId request_id) {
 }
 
 void RequestQueue::QueueCompletedResponseId(GenerateRequestId request_id) {
-  if (request_id == 0 || !completed_responses_.contains(request_id)) {
-    return;
-  }
-  RuntimeEvent event;
-  event.kind = RuntimeEventKind::Terminal;
-  event.request_id = request_id;
-  event.status = completed_responses_.at(request_id).status;
-  runtime_events_.push_back(std::move(event));
+  // Retained as a hook in case future code wants per-completion side effects;
+  // today MarkCompleted handles bookkeeping directly.
+  (void)request_id;
 }
 
 bool RequestQueue::Push(GenerateRequest request) {
@@ -51,8 +46,6 @@ bool RequestQueue::Push(GenerateRequest request) {
   request.prefill_ms = 0.0;
   request.decode_ms = 0.0;
   request.native_logic_ms = 0.0;
-  request.inter_decode_js_ms = 0.0;
-  request.yield_wait_ms = 0.0;
   request.input_tokens = 0;
   request.output_tokens = 0;
   request.cache_hits = 0;
@@ -177,19 +170,6 @@ std::vector<GenerateRequestId> RequestQueue::CompletedResponseIds() const {
   return request_ids;
 }
 
-void RequestQueue::QueueTokenEvent(GenerateRequestId request_id, std::string text) {
-  if (request_id == 0 || text.empty()) {
-    return;
-  }
-
-  RuntimeEvent event;
-  event.kind = RuntimeEventKind::Token;
-  event.request_id = request_id;
-  event.text = std::move(text);
-  runtime_events_.push_back(std::move(event));
-  total_emitted_token_count_++;
-}
-
 void RequestQueue::AppendStreamingToken(GenerateRequestId request_id,
                                         const std::string &text) {
   if (request_id == 0 || text.empty()) {
@@ -267,45 +247,6 @@ void RequestQueue::RemoveStreamingTokenRecordsForRequest(
   streaming_buffer_used_ = static_cast<int32_t>(write_offset);
 }
 
-std::vector<RuntimeEvent> RequestQueue::DrainEvents(std::size_t max_count) {
-  std::vector<RuntimeEvent> events;
-  const std::size_t drain_limit =
-      max_count == 0 ? runtime_events_.size() : max_count;
-  events.reserve(std::min(drain_limit, runtime_events_.size()));
-
-  while (!runtime_events_.empty() && events.size() < drain_limit) {
-    events.push_back(std::move(runtime_events_.front()));
-    runtime_events_.pop_front();
-  }
-
-  return events;
-}
-
-std::vector<RuntimeEvent> RequestQueue::DrainRuntimeEvents(std::size_t max_count,
-                                                           std::size_t max_text_bytes) {
-  std::vector<RuntimeEvent> events;
-  const std::size_t drain_limit = max_count == 0 ? runtime_events_.size() : max_count;
-  events.reserve(std::min(drain_limit, runtime_events_.size()));
-
-  std::size_t used_text_bytes = 0;
-  while (!runtime_events_.empty() && events.size() < drain_limit) {
-    RuntimeEvent &event = runtime_events_.front();
-
-    const std::size_t required_text_bytes =
-        event.kind == RuntimeEventKind::Token ? event.text.size() + 1 : 0;
-    if (required_text_bytes > 0 &&
-        used_text_bytes + required_text_bytes > max_text_bytes) {
-      break;
-    }
-
-    used_text_bytes += required_text_bytes;
-    events.push_back(std::move(event));
-    runtime_events_.pop_front();
-  }
-
-  return events;
-}
-
 int32_t RequestQueue::TotalEmittedTokenCount() const {
   return total_emitted_token_count_;
 }
@@ -335,7 +276,6 @@ void RequestQueue::Clear() {
   pending_request_ids_.clear();
   pending_request_positions_.clear();
   completed_responses_.clear();
-  runtime_events_.clear();
   total_emitted_token_count_ = 0;
   streaming_buffer_used_ = 0;
   streaming_buffer_drop_count_ = 0;

@@ -118,7 +118,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
   private readonly pendingCalls = new Map<number, PendingWorkerCall>();
   private readonly workerConfig: WorkerSerializableCogentConfig;
   // SAB streaming ring, lazily allocated when first needed.  Null when
-  // COOP/COEP is missing; worker falls back to per-token postMessage.
+  // COOP/COEP is missing; streaming requests will error in that case.
   private streamingRingBuffer: SharedArrayBuffer | null = null;
   private streamingRingReader: StreamingRingReader | null = null;
   // rAF poll handle; alive only while >0 streaming calls are in flight.
@@ -336,24 +336,40 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
         : (setTimeout(() => cb(performance.now()), 16) as unknown as number);
     const tick = () => {
       this.streamingPollHandle = null;
-      const reader = this.streamingRingReader;
-      if (reader == null) {
-        return;
-      }
-      for (const { requestId, text } of reader.drain()) {
-        const callId = this.callIdByNativeRequestId.get(requestId);
-        if (callId == null) continue;
-        const pending = this.pendingCalls.get(callId);
-        if (pending != null) {
-          try { pending.onToken?.(text); } catch { /* user error */ }
-        }
-      }
+      this.drainStreamingRing();
       if (this.streamingActiveCount === 0) {
         return;
       }
       this.streamingPollHandle = requestFrame(tick);
     };
     this.streamingPollHandle = requestFrame(tick);
+  }
+
+  private drainStreamingRing(): void {
+    const reader = this.streamingRingReader;
+    if (reader == null) {
+      return;
+    }
+    // Coalesce all messages drained this frame into one onToken call per
+    // request so callers receive at most one DOM-touching invocation per
+    // animation frame regardless of native decode rate.
+    const aggregated = new Map<number, string>();
+    for (const { requestId, text } of reader.drain()) {
+      const callId = this.callIdByNativeRequestId.get(requestId);
+      if (callId == null) continue;
+      const existing = aggregated.get(callId);
+      aggregated.set(callId, existing == null ? text : existing + text);
+    }
+    for (const [callId, text] of aggregated) {
+      const pending = this.pendingCalls.get(callId);
+      if (pending != null) {
+        try {
+          pending.onToken?.(text);
+        } catch {
+          /* user error */
+        }
+      }
+    }
   }
 
   private stopStreamingPoll(): void {
@@ -432,8 +448,10 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
 
     return new Promise<unknown>((resolve, reject) => {
       const finalize = () => {
-        cleanup();
         if (isStreaming) {
+          // Drain one last time to catch tokens that arrived just before or
+          // along with the final resolution message.
+          this.drainStreamingRing();
           this.streamingRingReader?.forgetRequest(callId);
           for (const [nativeId, mappedCallId] of this.callIdByNativeRequestId) {
             if (mappedCallId === callId) {
@@ -443,6 +461,8 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
           }
           this.unregisterStreamingCall();
         }
+        cleanup();
+        this.pendingCalls.delete(callId);
       };
       this.pendingCalls.set(callId, {
         resolve: (value) => {
@@ -472,11 +492,6 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       return;
     }
 
-    if (message.kind === 'token') {
-      this.pendingCalls.get(message.callId)?.onToken?.(message.text);
-      return;
-    }
-
     if (message.kind === 'streaming-claim') {
       this.callIdByNativeRequestId.set(message.nativeRequestId, message.callId);
       return;
@@ -493,7 +508,6 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     if (pending == null) {
       return;
     }
-    this.pendingCalls.delete(message.callId);
 
     if (message.kind === 'resolve') {
       pending.resolve(message.value);

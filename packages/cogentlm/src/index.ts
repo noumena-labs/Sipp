@@ -18,8 +18,3 @@ export {
   type RuntimeObservation,
 } from './model-management/model-types.js';
 export type { ChatMessage } from './core/inference-types.js';
-export {
-  batchTokensByFrame,
-  type BatchedTokens,
-  type BatchTokensByFrameOptions,
-} from './streaming/token-batching.js';

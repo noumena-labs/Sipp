@@ -81,15 +81,11 @@ export function toRuntimeObservation(
   }
 
   const tokenPath =
-    transport.activeTokenTransport === 'runtime-events'
-      ? 'runtime-event'
-      : transport.activeTokenTransport === 'streaming-buffer'
-        ? 'streaming-buffer'
-        : transport.activeTokenTransport === 'direct-callback'
-          ? 'direct-callback'
-          : transport.activeTokenTransport === 'none'
-            ? 'none'
-            : undefined;
+    transport.activeTokenTransport === 'streaming-buffer'
+      ? 'streaming-buffer'
+      : transport.activeTokenTransport === 'none'
+        ? 'none'
+        : undefined;
 
   const observation: RuntimeObservation = {
     ttftMs: metrics.ttftMs,
@@ -101,12 +97,10 @@ export function toRuntimeObservation(
     nativeGpuMs: metrics.nativeGpuMs,
     nativeSyncMs: metrics.nativeSyncMs,
     nativeLogicMs: metrics.nativeLogicMs,
-    interDecodeJsMs: metrics.interDecodeJsMs,
-    yieldWaitMs: metrics.yieldWaitMs,
     inputTokens: metrics.inputTokens,
     outputTokens: metrics.outputTokens,
     cacheHits: metrics.cacheHits,
-    tokensPerSecond: (metrics as any).tokensPerSecond,
+    tokensPerSecond: metrics.itlAvgMs > 0 ? 1000 / metrics.itlAvgMs : 0,
 
 
     execution: {
@@ -116,15 +110,7 @@ export function toRuntimeObservation(
     },
   };
 
-  includeFinite(observation, 'jsSchedulerProgressMs', transport.schedulerProgressMs);
-  includeFinite(observation, 'jsRuntimeEventDrainMs', transport.runtimeEventDrainMs);
-  includeFinite(observation, 'jsTokenCallbackMs', transport.tokenCallbackMs);
-  includeFinite(observation, 'jsSchedulerYieldMs', transport.schedulerYieldMs);
   includeFinite(observation, 'jsStreamingDrainMs', transport.streamingDrainMs);
-  includeFinite(observation, 'jsSchedulerProgressCount', transport.schedulerProgressCount);
-  includeFinite(observation, 'jsRuntimeEventDrainCount', transport.runtimeEventDrainCount);
-  includeFinite(observation, 'jsTokenCallbackCount', transport.tokenCallbackCount);
-  includeFinite(observation, 'jsSchedulerYieldCount', transport.schedulerYieldCount);
   includeFinite(observation, 'jsStreamingDrainCount', transport.streamingDrainCount);
   return observation;
 }

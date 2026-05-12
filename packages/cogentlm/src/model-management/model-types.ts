@@ -131,10 +131,6 @@ export interface RuntimeObservation {
   nativeGpuMs: number;
   nativeSyncMs: number;
   nativeLogicMs: number;
-  /** Worker-thread JS work between successive decodes (yield + drain + pump). */
-  interDecodeJsMs: number;
-  /** Subset of interDecodeJsMs spent suspended inside ce_native_yield(). */
-  yieldWaitMs: number;
 
   inputTokens: number;
   outputTokens: number;
@@ -146,21 +142,11 @@ export interface RuntimeObservation {
   execution: {
     mode: 'main-thread' | 'worker';
     workerBacked: boolean;
-    tokenPath?: 'none' | 'runtime-event' | 'streaming-buffer' | 'direct-callback';
+    tokenPath?: 'none' | 'streaming-buffer';
   };
 
-  jsSchedulerProgressMs?: number;
-  jsRuntimeEventDrainMs?: number;
-  jsTokenCallbackMs?: number;
-  jsPumpStepMs?: number;
-  jsSchedulerYieldMs?: number;
   /** Cumulative ms spent in `_ce_yield_drain` (SAB ring writes from native scratch). */
   jsStreamingDrainMs?: number;
-  jsSchedulerProgressCount?: number;
-  jsRuntimeEventDrainCount?: number;
-  jsTokenCallbackCount?: number;
-  jsPumpStepCount?: number;
-  jsSchedulerYieldCount?: number;
   jsStreamingDrainCount?: number;
 }
 

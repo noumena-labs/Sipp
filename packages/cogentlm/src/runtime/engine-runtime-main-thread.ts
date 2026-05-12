@@ -24,7 +24,6 @@ import {
 import { RequestTracker } from './request-tracker.js';
 import {
   TOKEN_EMISSION_NONE,
-  TOKEN_EMISSION_DIRECT_CALLBACK,
   TOKEN_EMISSION_STREAMING_BUFFER,
   type ChatTemplateMessage,
   parseBackendObservabilityJson,
@@ -59,14 +58,14 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     ((token: string) => void) | undefined
   >();
   private queuedPromptCallbackErrors = new Map<GenerateRequestId, unknown>();
-  private queuedTokenCallbackPtrs = new Map<GenerateRequestId, number>();
   private readonly tracker = new RequestTracker<GenerateResponse>();
   private readonly scheduler: QueuedRequestScheduler;
   private runtimeObservabilityEnabled = false;
   private backendProfilingEnabled = false;
   private transportObservability: TransportObservability;
-  // Worker-side SAB ring writer.  When set, queries use StreamingBuffer
-  // mode; otherwise streaming falls back to DirectCallback.
+  // Worker-side SAB ring writer.  When set, requests with onToken run in
+  // StreamingBuffer emission mode; otherwise streaming is rejected with an
+  // explicit error (cross-origin isolation required).
   private streamingRingWriter: StreamingRingWriter | null = null;
   constructor(private config: CogentConfig = {}) {
     this.executionMode = config.executionMode === 'worker' ? 'worker' : 'main-thread';
@@ -86,8 +85,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     });
   }
 
-  // Wires the worker-side SAB streaming ring writer; null falls back to
-  // DirectCallback for streaming.  Called once by the worker entry.
+  // Wires the worker-side SAB streaming ring writer.  Called once by the
+  // worker entry after the main thread allocates the ring SAB.
   public setStreamingRingWriter(writer: StreamingRingWriter | null): void {
     this.streamingRingWriter = writer;
   }
@@ -209,14 +208,6 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private releaseTokenState(requestId: GenerateRequestId): void {
     this.queuedPromptCallbacks.delete(requestId);
     this.queuedPromptCallbackErrors.delete(requestId);
-    
-    const callbackPtr = this.queuedTokenCallbackPtrs.get(requestId);
-    if (callbackPtr != null && callbackPtr !== 0) {
-      const bridge = this.getLoadedWasmBridge();
-      bridge.unregisterTokenCallback(callbackPtr);
-      this.queuedTokenCallbackPtrs.delete(requestId);
-    }
-
     this.refreshTokenTransportObservability();
   }
 
@@ -255,15 +246,11 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     }
 
     this.transportObservability.activeTokenTransport =
-      this.streamingRingWriter != null ? 'streaming-buffer' : 'direct-callback';
+      this.streamingRingWriter != null ? 'streaming-buffer' : 'none';
   }
 
   private refreshTokenTransportObservability(): void {
-    this.transportObservability.activeTokenTransport = Array.from(
-      this.queuedPromptCallbacks.values()
-    ).some((callback) => callback != null)
-      ? 'runtime-events'
-      : 'none';
+    this.transportObservability.activeTokenTransport = 'none';
   }
 
   private rejectAllTrackedRequests(error: unknown, _bridge: WasmBridge | null = null): void {
@@ -523,33 +510,18 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
     this.updateTokenTransportObservability(onToken);
 
-    let requestId: GenerateRequestId = 0;
-    let callbackPtr = 0;
-
-    // StreamingBuffer when a SAB ring writer is wired (worker mode);
-    // DirectCallback fallback elsewhere.  No onToken → NONE (full speed,
-    // response returned at end).
-    const useStreamingBuffer = onToken != null && this.streamingRingWriter != null;
-
-    if (onToken != null && !useStreamingBuffer) {
-      callbackPtr = bridge.registerTokenCallback((token) => {
-        try {
-          onToken(token);
-          return true;
-        } catch (e) {
-          this.queuedPromptCallbackErrors.set(requestId, e);
-          return false;
-        }
-      });
+    // Streaming requires a worker-side SAB ring writer.  In worker mode the
+    // worker entry installs one before enqueueing; on the main thread there
+    // is no streaming consumer and onToken with no ring is a usage error.
+    if (onToken != null && this.streamingRingWriter == null) {
+      throw new Error(
+        'onToken streaming requires worker execution mode with cross-origin isolation (SAB).'
+      );
     }
-
     const emissionMode =
-      onToken == null
-        ? TOKEN_EMISSION_NONE
-        : useStreamingBuffer
-          ? TOKEN_EMISSION_STREAMING_BUFFER
-          : TOKEN_EMISSION_DIRECT_CALLBACK;
+      onToken == null ? TOKEN_EMISSION_NONE : TOKEN_EMISSION_STREAMING_BUFFER;
 
+    let requestId: GenerateRequestId = 0;
     if (request.media != null && request.media.length > 0) {
       if (this.cachedMediaMarker == null) {
         throw new Error(
@@ -570,7 +542,6 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         request.promptText,
         request.maxOutputTokens,
         request.media,
-        callbackPtr,
         request.grammar,
         emissionMode
       );
@@ -579,20 +550,12 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         request.contextKey,
         request.promptText,
         request.maxOutputTokens,
-        callbackPtr,
         request.grammar,
         emissionMode
       );
     }
     if (!requestId) {
-      if (callbackPtr !== 0) {
-        bridge.unregisterTokenCallback(callbackPtr);
-      }
       throw new Error('Failed to enqueue request.');
-    }
-
-    if (callbackPtr !== 0) {
-      this.queuedTokenCallbackPtrs.set(requestId, callbackPtr);
     }
 
     // Worker entry uses this hook to publish a streaming-claim message

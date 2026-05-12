@@ -14,16 +14,12 @@
 // stay in a JS-safe scalar ABI. Do not widen this to uint64_t without also
 // changing the exported calling convention.
 typedef uint32_t CE_RequestId;
-typedef int32_t (*CE_TokenCallback)(const char *token_piece,
-                                    int32_t token_length);
 
 typedef enum CE_TokenEmissionMode {
   CE_TOKEN_EMISSION_NONE = 0,
-  CE_TOKEN_EMISSION_RUNTIME_EVENTS = 1,
-  CE_TOKEN_EMISSION_DIRECT_CALLBACK = 2,
   // Native appends to the streaming buffer; JS drains via the SAB ring on
   // each ce_native_yield.  See request_queue.h for the wire format.
-  CE_TOKEN_EMISSION_STREAMING_BUFFER = 3,
+  CE_TOKEN_EMISSION_STREAMING_BUFFER = 1,
 } CE_TokenEmissionMode;
 
 typedef struct CE_InitConfig {
@@ -72,15 +68,12 @@ typedef struct CE_RuntimeObservabilityMetrics {
   double prefill_ms;
   double decode_ms;
 
-  // Native (Hardware & Engine)
-  // native_gpu_ms is raw decode+sync wall time; inter_decode_js_ms is the
-  // JS-work window between successive syncs; yield_wait_ms is the subset
-  // spent suspended in ce_native_yield().  See observability_metrics.h.
+  // Native (Hardware & Engine).  native_gpu_ms is raw decode+sync wall time;
+  // in WebGPU+wasm that window includes any event-loop wait inside
+  // llama_synchronize for the GPU-completion microtask.
   double native_gpu_ms;
   double native_sync_ms;
   double native_logic_ms;
-  double inter_decode_js_ms;
-  double yield_wait_ms;
 
   // Counts
   int32_t input_tokens;
@@ -96,28 +89,11 @@ typedef struct CE_SchedulerLoopResult {
   int32_t emitted_token_count;
 } CE_SchedulerLoopResult;
 
-typedef struct CE_RuntimeEvent {
-  CE_RequestId request_id;
-  int32_t kind;
-  int32_t status;
-  int32_t text_offset;
-  int32_t text_length;
-} CE_RuntimeEvent;
-
-typedef struct CE_RuntimeEventDrainResult {
-  int32_t event_count;
-  int32_t text_bytes;
-} CE_RuntimeEventDrainResult;
-
 #ifdef __cplusplus
 static_assert(sizeof(CE_RequestId) == 4,
               "CE_RequestId must stay 32-bit for JS/Wasm FFI calls.");
-static_assert(sizeof(CE_RuntimeObservabilityMetrics) == 104,
+static_assert(sizeof(CE_RuntimeObservabilityMetrics) == 88,
               "CE_RuntimeObservabilityMetrics layout changed. Update the TS FFI reader.");
 static_assert(sizeof(CE_SchedulerLoopResult) == 16,
               "CE_SchedulerLoopResult layout changed. Update the TS FFI reader.");
-static_assert(sizeof(CE_RuntimeEvent) == 20,
-              "CE_RuntimeEvent layout changed. Update the TS FFI reader.");
-static_assert(sizeof(CE_RuntimeEventDrainResult) == 8,
-              "CE_RuntimeEventDrainResult layout changed. Update the TS FFI reader.");
 #endif

@@ -1,51 +1,44 @@
 export interface RequestObservabilityMetrics {
-  /** Time to first token (milliseconds from enqueue to first emission). */
+  /**
+   * Time to first token: enqueue → first sampled token.  Sampled at the
+   * moment llama_sampler_sample produces the first token, not at the time
+   * the JS consumer sees it (the JS-side delivery is unbounded and consumer-
+   * controlled).
+   */
   ttftMs: number;
-  /** Average inter-token latency (milliseconds between output tokens). */
+  /** Average inter-token latency (ms between consecutive emitted tokens). */
   itlAvgMs: number;
-  /** Tail inter-token latency (P99/max observed between output tokens). */
+  /**
+   * Worst-observed inter-token latency.  Field is named `p99` for backwards
+   * compatibility; the implementation is `max(itl)` since the per-request
+   * sample count is small enough (typically ≤ outputTokens) that max is a
+   * faithful tail-latency proxy.
+   */
   itlP99Ms: number;
-  /** End-to-end latency (milliseconds from enqueue to terminal state). */
+  /** End-to-end latency: enqueue → completion. */
   e2eMs: number;
 
-  /** Time spent in the prefill (prompt evaluation) phase. */
+  /** Wall-clock summed over ticks where this request had a prefill contribution. */
   prefillMs: number;
-  /** Time spent in the decoding (token generation) phase. */
+  /** Wall-clock summed over ticks where this request had a decode contribution. */
   decodeMs: number;
 
   /**
    * Raw wall-clock window around llama_decode + llama_synchronize.  In
    * WebGPU+wasm this includes any event-loop wait inside llama_synchronize
-   * (the GPU-completion microtask waiting behind queued JS work), so it is
-   * NOT a pure GPU-only number — pair it with `interDecodeJsMs` to attribute
-   * how much of the gap to native vs. JS-side contention.
+   * (the GPU-completion microtask waiting behind queued JS work).
    */
   nativeGpuMs: number;
   /** Cumulative time spent in backend synchronization (llama_synchronize). */
   nativeSyncMs: number;
   /** Internal engine logic overhead (scheduling, batching, bookkeeping). */
   nativeLogicMs: number;
-  /**
-   * Cumulative wall-clock between successive `gpu_end → gpu_start` boundaries.
-   * Captures all worker-thread JS work between decodes: ce_native_yield, the
-   * streaming-buffer drain hook, scheduler-pump bookkeeping, drainRuntimeEvents,
-   * and postMessage processing.  Idle gaps >500ms are excluded (treated as
-   * request boundaries).
-   */
-  interDecodeJsMs: number;
-  /**
-   * Subset of `interDecodeJsMs` spent suspended inside `ce_native_yield()`
-   * (the JSPI await plus the `_ce_yield_drain` hook).  The remainder is JS
-   * pump work that ran with wasm fully returned to JS (drainRuntimeEvents,
-   * settle logic, postMessage dispatch).
-   */
-  yieldWaitMs: number;
 
   /** Total number of tokens processed in the prompt. */
   inputTokens: number;
   /** Total number of tokens generated in the response. */
   outputTokens: number;
-  /** Number of tokens reused from KV cache (LCP/Prefix hits). */
+  /** Number of tokens reused from KV cache (LCP / prefix hits). */
   cacheHits: number;
 }
 
