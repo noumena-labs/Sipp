@@ -2,6 +2,7 @@ import type { ChatInput, ChatOptions, CogentEngine, QueryInput, QueryOptions } f
 import type { CharacterRuntimeEngine } from '@noumena-labs/cogentlm/character';
 import type { DirectorRuntimeEngine } from '@noumena-labs/cogentlm/director';
 import type { BrainDefinition, BrainQueryType, BrainQueryStatus, BrainActivityStore } from './brain-activity-store.js';
+import type { SimulationBus } from './bus.js';
 
 interface TracedChatMessage {
   role: string;
@@ -11,9 +12,10 @@ interface TracedChatMessage {
 export function createTracedBrainEngine(
   engine: CogentEngine,
   store: BrainActivityStore,
+  bus: SimulationBus,
   brain: BrainDefinition
 ): CharacterRuntimeEngine & DirectorRuntimeEngine {
-  return new TracedBrainEngine(engine, store, brain);
+  return new TracedBrainEngine(engine, store, bus, brain);
 }
 
 class TracedBrainEngine implements CharacterRuntimeEngine, DirectorRuntimeEngine {
@@ -24,6 +26,7 @@ class TracedBrainEngine implements CharacterRuntimeEngine, DirectorRuntimeEngine
   public constructor(
     private readonly engine: CogentEngine,
     private readonly store: BrainActivityStore,
+    private readonly bus: SimulationBus,
     private readonly brain: BrainDefinition
   ) { }
 
@@ -46,8 +49,8 @@ class TracedBrainEngine implements CharacterRuntimeEngine, DirectorRuntimeEngine
     try {
       const response = await this.engine.chat(
         input,
-        withStreamingTap(options, (chunk) => {
-          this.store.appendResponse(queryId, chunk);
+        withTracedStreamingTap(options, this.brain.id, queryId, this.bus, (tokens) => {
+          this.store.appendResponse(queryId, tokens);
         })
       );
 
@@ -85,8 +88,8 @@ class TracedBrainEngine implements CharacterRuntimeEngine, DirectorRuntimeEngine
     try {
       const response = await this.engine.query(
         input,
-        withStreamingTap(options, (chunk) => {
-          this.store.appendResponse(queryId, chunk);
+        withTracedStreamingTap(options, this.brain.id, queryId, this.bus, (tokens) => {
+          this.store.appendResponse(queryId, tokens);
         })
       );
 
@@ -108,14 +111,38 @@ class TracedBrainEngine implements CharacterRuntimeEngine, DirectorRuntimeEngine
 
 function withStreamingTap(
   options: QueryOptions,
-  onChunk: (chunk: string) => void
+  onTokens: (tokens: string[]) => void
 ): QueryOptions {
   const upstream = options.onToken;
   return {
     ...options,
-    onToken: (chunk: string) => {
-      onChunk(chunk);
-      upstream?.(chunk);
+    onToken: (tokens: string[]) => {
+      onTokens(tokens);
+      upstream?.(tokens);
+    },
+  };
+}
+
+function withTracedStreamingTap(
+  options: QueryOptions,
+  brainId: string,
+  queryId: string,
+  bus: SimulationBus,
+  onTokens: (tokens: string[]) => void
+): QueryOptions {
+  const upstream = options.onToken;
+  return {
+    ...options,
+    onToken: (tokens: string[]) => {
+      onTokens(tokens);
+      bus.emit({
+        kind: 'agent-token',
+        tick: 0, // Tick is not strictly needed for UI streaming, but part of schema
+        agentId: brainId,
+        queryId,
+        tokens,
+      });
+      upstream?.(tokens);
     },
   };
 }

@@ -1,7 +1,10 @@
+import { useEffect, useState } from 'react';
 import type { BrainActivityStoreSnapshot } from '../runtime/brain-activity-store.js';
+import type { SimulationBus } from '../runtime/bus.js';
 
 export interface BrainTraceDrawerProps {
   readonly activity: BrainActivityStoreSnapshot;
+  readonly bus: SimulationBus;
   readonly selectedBrainId: string | null;
   readonly onClose: () => void;
 }
@@ -10,6 +13,29 @@ export function BrainTraceDrawer(props: BrainTraceDrawerProps) {
   const brain = props.selectedBrainId
     ? props.activity.brains.find((entry) => entry.brainId === props.selectedBrainId) ?? null
     : null;
+
+  const [liveResponse, setLiveResponse] = useState('');
+  const [activeQueryId, setActiveQueryId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (brain) {
+      if (brain.queryId !== activeQueryId) {
+        setActiveQueryId(brain.queryId);
+        setLiveResponse(brain.responseText);
+      }
+    } else {
+      setActiveQueryId(null);
+      setLiveResponse('');
+    }
+  }, [brain, activeQueryId]);
+
+  useEffect(() => {
+    return props.bus.on('agent-token', (event) => {
+      if (event.queryId === activeQueryId) {
+        setLiveResponse((prev) => prev + event.tokens.join(''));
+      }
+    });
+  }, [props.bus, activeQueryId]);
 
   return (
     <>
@@ -48,7 +74,7 @@ export function BrainTraceDrawer(props: BrainTraceDrawerProps) {
               <TraceSection title="Prompt snapshot" body={brain.renderedPrompt} />
               <TraceSection title="System prompt" body={brain.systemPrompt} />
               <TraceSection title="User prompt" body={brain.userPrompt} />
-              <TraceSection title="Response snapshot" body={brain.responseText} live={brain.status === 'running'} />
+              <TraceSection title="Response snapshot" body={liveResponse} live={brain.status === 'running'} />
               {brain.grammar ? <TraceSection title="Grammar" body={brain.grammar} /> : null}
               {brain.errorMessage ? <TraceSection title="Error" body={brain.errorMessage} tone="error" /> : null}
             </div>

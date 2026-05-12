@@ -604,7 +604,7 @@ export default function App() {
         }
         const { director } = await createDirectorFromConfigUrl({
           configUrl: scenario.directorConfigUrl,
-          engine: createTracedBrainEngine(nextEngine, brainStore, directorBrain),
+          engine: createTracedBrainEngine(nextEngine, brainStore, bus, directorBrain),
           runtimeOptions: { maxOutputTokens: 96 },
         });
 
@@ -636,7 +636,7 @@ export default function App() {
           const { agent } = await createSimulationAgentChooserFromConfigUrl({
             agentId: assignment.agentId,
             configUrl: assignment.characterUrl,
-            engine: createTracedBrainEngine(nextEngine, brainStore, brain),
+            engine: createTracedBrainEngine(nextEngine, brainStore, bus, brain),
           });
           const seed = scenario.agents.find((a) => a.id === assignment.agentId);
           if (!seed) {
@@ -834,6 +834,7 @@ export default function App() {
         <div className={tutorialTargetClass('brain-hud', 'sim-overlay sim-bottom-left')} data-tutorial-target="brain-hud">
           <BrainActivityHud
             activity={brainActivity}
+            bus={bus}
             expanded={brainHudExpanded}
             selectedBrainId={selectedBrainId}
             onExpand={handleExpandBrainHud}
@@ -869,6 +870,7 @@ export default function App() {
       {harness ? (
         <BrainTraceDrawer
           activity={brainActivity}
+          bus={bus}
           selectedBrainId={selectedBrainId}
           onClose={() => setSelectedBrainId(null)}
         />

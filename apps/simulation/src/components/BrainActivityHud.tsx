@@ -1,8 +1,10 @@
-import type { CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import type { BrainActivityStoreSnapshot } from '../runtime/brain-activity-store.js';
+import type { SimulationBus } from '../runtime/bus.js';
 
 export interface BrainActivityHudProps {
   readonly activity: BrainActivityStoreSnapshot;
+  readonly bus: SimulationBus;
   readonly expanded: boolean;
   readonly selectedBrainId: string | null;
   readonly onExpand: () => void;
@@ -13,6 +15,29 @@ export interface BrainActivityHudProps {
 export function BrainActivityHud(props: BrainActivityHudProps) {
   const hasRunningBrain = props.activity.brains.some((brain) => brain.status === 'running');
   const hasCompletedQuery = props.activity.totalQueries > 0 && !hasRunningBrain;
+
+  const [liveText, setLiveText] = useState('');
+  const [activeQueryId, setActiveQueryId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const activeBrain = props.activity.brains.find((brain) => brain.status === 'running');
+    if (activeBrain) {
+      if (activeBrain.queryId !== activeQueryId) {
+        setActiveQueryId(activeBrain.queryId);
+        setLiveText(activeBrain.responseText);
+      }
+    } else {
+      setActiveQueryId(null);
+    }
+  }, [props.activity.brains, activeQueryId]);
+
+  useEffect(() => {
+    return props.bus.on('agent-token', (event) => {
+      if (event.queryId === activeQueryId) {
+        setLiveText((prev) => prev + event.tokens.join(''));
+      }
+    });
+  }, [props.bus, activeQueryId]);
 
   if (!props.expanded) {
     return (
@@ -37,7 +62,7 @@ export function BrainActivityHud(props: BrainActivityHudProps) {
   }
 
   const activeBrain = props.activity.brains.find((brain) => brain.status === 'running') ?? null;
-  const streamPreview = activeBrain?.responseText.trim() || previewPrompt(activeBrain?.renderedPrompt ?? '');
+  const streamPreview = activeBrain ? (liveText.trim() || previewPrompt(activeBrain.renderedPrompt)) : null;
 
   return (
     <div className="brain-hud brain-hud-expanded glass-panel">

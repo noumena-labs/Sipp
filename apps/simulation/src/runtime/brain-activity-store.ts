@@ -233,17 +233,24 @@ export class BrainActivityStore {
     return this.queryIdsByRequestId.get(requestId) ?? null;
   }
 
-  public appendResponse(queryId: string, chunk: string): void {
-    if (chunk.length === 0) {
+  public appendResponse(queryId: string, tokens: string[]): void {
+    if (tokens.length === 0) {
       return;
     }
     const record = this.findRecordByQueryId(queryId);
     if (!record) {
       return;
     }
-    record.responseText += chunk;
+    for (const token of tokens) {
+      record.responseText += token;
+    }
+    // Mutate-only: the active liveUpdateTimer (LIVE_UPDATE_INTERVAL_MS)
+    // emits on a clock so all subscribers refresh together at a bounded
+    // rate, decoupled from token arrival.  Emitting here would force a
+    // React re-render per token across every subscriber (HUD, trace
+    // drawer, agent inspector), which is the quadratic-in-traffic path
+    // we want to avoid on streaming-heavy turns.
     this.invalidateSnapshot();
-    this.emit();
   }
 
   public finishQuery(
