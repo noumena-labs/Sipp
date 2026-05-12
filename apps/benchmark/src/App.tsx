@@ -16,8 +16,10 @@ import {
   buildBenchmarkTraceReport,
   captureBrowserMemorySnapshot,
   runMixedLoadBenchmark,
+  runObservedQuery,
   runScenarioBenchmark,
   supportsConcurrentQueryApi,
+  type ObservedQueryRun,
 } from './lib/benchmark-runner';
 import {
   formatBytes,
@@ -130,8 +132,8 @@ async function fetchImageBytes(source: string): Promise<Uint8Array[]> {
   return [new Uint8Array(await response.arrayBuffer())];
 }
 
-function formatSummary(summary: MetricSummary | null): string {
-  return summary == null ? 'n/a' : `${summary.meanMs} ms mean / ${summary.p99Ms} ms p99`;
+function formatSummary(summary: MetricSummary | null, unit: string = 'ms'): string {
+  return summary == null ? 'n/a' : `${summary.meanMs} ${unit} mean / ${summary.p99Ms} ${unit} p99`;
 }
 
 function formatTps(value: number | null | undefined): string {
@@ -164,6 +166,17 @@ export default function App() {
   const [tokenCount, setTokenCount] = useState(64);
   const [warmupRuns, setWarmupRuns] = useState(1);
   const [measuredRuns, setMeasuredRuns] = useState(3);
+  // Three transport modes:
+  //   off    — engine in TOKEN_EMISSION_NONE; nothing crosses to main.
+  //   silent — engine in StreamingBuffer; main drains SAB but onToken is a
+  //            no-op (no DOM work).  This isolates *streaming pipeline*
+  //            cost from *rendering* cost — should match native TPS within
+  //            ~2 % if the architecture is honoring the principle.
+  //   render — engine in StreamingBuffer; main drains SAB and writes
+  //            textContent once per rAF.  Pays the GPU-compositor tax.
+  type StreamMode = 'off' | 'silent' | 'render';
+  const [streamMode, setStreamMode] = useState<StreamMode>('render');
+  const streamTokens = streamMode !== 'off';
   const [imageSource, setImageSource] = useState('');
   const [imageEnabled, setImageEnabled] = useState(false);
   const [currentModel, setCurrentModel] = useState<ModelInfo | null>(null);
@@ -174,6 +187,7 @@ export default function App() {
     wallMs: number;
     ttftMs: number | null;
     tokens: number;
+    tps: number | null;
   } | null>(null);
   const [lastLoadMs, setLastLoadMs] = useState(0);
   const [sourceInfo, setSourceInfo] = useState<{ label: string; bytes: number } | null>(null);
@@ -184,6 +198,7 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const projectorFileInputRef = useRef<HTMLInputElement>(null);
   const loadedSourceKeyRef = useRef<string | null>(null);
+  const responseElementRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -198,10 +213,25 @@ export default function App() {
           return;
         }
         created = nextEngine;
+        let pendingSnapshot: any = null;
+        const updateInterval = setInterval(() => {
+          if (pendingSnapshot) {
+            setObservability(pendingSnapshot);
+            setCurrentModel(pendingSnapshot.model);
+            pendingSnapshot = null;
+          }
+        }, 250); // Steady 4 FPS for metrics to keep main thread clear
+
         unsubscribe = nextEngine.observability.subscribe((event) => {
-          setObservability(event.snapshot);
-          setCurrentModel(event.snapshot.model);
+          pendingSnapshot = event.snapshot;
         });
+
+        // Cleanup interval on dispose
+        const originalUnsubscribe = unsubscribe;
+        unsubscribe = () => {
+          clearInterval(updateInterval);
+          originalUnsubscribe();
+        };
         setEngine(nextEngine);
         setCurrentModel(nextEngine.models.current());
         setObservability(nextEngine.observability.current());
@@ -313,31 +343,49 @@ export default function App() {
         imageEnabled && imageSource.trim().length > 0
           ? await fetchImageBytes(imageSource.trim())
           : undefined;
-      const start = performance.now();
-      let ttftMs: number | null = null;
-      let tokens = 0;
-      const output = await engine.chat(
-        image == null
-          ? [{ role: 'user', content: prompt }]
-          : { messages: [{ role: 'user', content: prompt }], media: image },
-        {
+      // onToken is invoked at most once per rAF (the SDK coalesces SAB
+      // drains internally), so a single textContent write per call is
+      // already frame-bounded.
+      let accumulated = '';
+      const onToken =
+        streamMode === 'render'
+          ? (chunk: string) => {
+              accumulated += chunk;
+              if (responseElementRef.current) {
+                responseElementRef.current.textContent = accumulated;
+              }
+            }
+          : streamMode === 'silent'
+            ? (_chunk: string) => {
+                /* silent: SAB drained, no DOM work */
+              }
+            : undefined;
+      try {
+        const run = await runObservedQuery(engine, prompt, {
           maxTokens: tokenCount,
           session: `query-${Date.now()}`,
-          onToken: (token) => {
-            tokens += 1;
-            setResponse((current) => current + token);
-            ttftMs ??= round(performance.now() - start);
-          },
-        }
-      );
-      const snapshot = engine.observability.current();
-      setResponse(output);
-      setObservability(snapshot);
-      setLastRun({
-        wallMs: round(performance.now() - start),
-        ttftMs: snapshot.runtime?.ttftMs ?? ttftMs,
-        tokens: snapshot.runtime?.outputTokenCount ?? tokens,
-      });
+          media: image,
+          streamTokens,
+          // streamTokens=false → onToken omitted upstream → engine NONE.
+          onToken,
+        });
+        setResponse(run.output); // Sync React state at the end
+        setObservability(engine.observability.current());
+        setLastRun({
+          wallMs: run.wallMs,
+          ttftMs: run.observability?.ttftMs ?? run.ttftMs,
+          tokens: run.observability?.outputTokens ?? run.tokenTimes.length,
+          tps:
+            (run.observability?.decodeMs ?? 0) > 0 &&
+              (run.observability?.outputTokens ?? 0) > 0
+              ? (run.observability!.outputTokens * 1000) /
+              run.observability!.decodeMs
+              : null,
+          observability: run.observability,
+        });
+      } finally {
+        // No cleanup needed for refs
+      }
       setStatus('idle');
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
@@ -377,7 +425,8 @@ export default function App() {
             measuredRuns,
             getDefaultRuntimeOptions(),
             setStatus,
-            true
+            true,
+            streamTokens
           )
         );
       }
@@ -394,7 +443,8 @@ export default function App() {
           measuredRuns,
           getDefaultRuntimeOptions(),
           setStatus,
-          true
+          true,
+          streamTokens
         );
         snapshots.push(await captureBrowserMemorySnapshot('after-mixed-load', true));
       }
@@ -452,64 +502,30 @@ export default function App() {
   const renderGroup = (title: string, group: GroupResult) => (
     <div className="result-card" key={`${group.id}-${title}`}>
       <h3>{title}</h3>
+      <div className="metric-group-title">Latency (User Experience)</div>
       <div className="metric-grid">
-        <MetricCard label="Runs" value={group.runs.length} />
-        <MetricCard label="Duration" value={formatMs(group.benchmarkDurationMs)} />
-        <MetricCard label="Req/s" value={group.summary.serving.requestThroughputRps ?? 'n/a'} />
-        <MetricCard label="TTFT" value={formatSummary(group.summary.runtime.nativeTtftMs)} />
-        <MetricCard
-          label="Output TPS"
-          value={formatTps(group.summary.serving.outputTokenThroughputTps)}
-        />
-        <MetricCard
-          label="Decode TPS"
-          value={formatTps(group.summary.runtime.nativeDecodeTokensPerSecond?.meanMs)}
-        />
-        <MetricCard
-          label="Native Decode Wall"
-          value={formatSummary(group.summary.runtime.nativeLlamaDecodeWallMs)}
-        />
-        <MetricCard
-          label="Decode Wall / Tok"
-          value={formatSummary(group.summary.runtime.nativeLlamaDecodeWallPerTokenMs)}
-        />
-        <MetricCard
-          label="GPU Sync"
-          value={formatSummary(group.summary.runtime.nativeSynchronizeMs)}
-        />
-        <MetricCard
-          label="Native Non-Decode"
-          value={formatSummary(group.summary.runtime.nativeNonDecodeWallMs)}
-        />
-        <MetricCard
-          label="Scheduler Tick"
-          value={formatSummary(group.summary.runtime.nativeSchedulerTickMs)}
-        />
-        <MetricCard
-          label="JS Pump"
-          value={formatSummary(group.summary.runtime.jsPumpStepMs)}
-        />
-        <MetricCard
-          label="JS Progress"
-          value={formatSummary(group.summary.runtime.jsSchedulerProgressMs)}
-        />
-        <MetricCard
-          label="Event Drain"
-          value={formatSummary(group.summary.runtime.jsRuntimeEventDrainMs)}
-        />
-        <MetricCard
-          label="Token Callback"
-          value={formatSummary(group.summary.runtime.jsTokenCallbackMs)}
-        />
-        <MetricCard
-          label="JS Yield"
-          value={formatSummary(group.summary.runtime.jsSchedulerYieldMs)}
-        />
-        <MetricCard
-          label="E2EL"
-          value={formatSummary(group.summary.serving.e2elMs)}
-        />
+        <MetricCard label="TTFT" value={formatSummary(group.summary.runtime.ttftMs)} />
+        <MetricCard label="ITL Avg" value={formatSummary(group.summary.runtime.itlAvgMs)} />
+        <MetricCard label="ITL P99" value={formatSummary(group.summary.runtime.itlP99Ms)} />
+        <MetricCard label="Decode TPS" value={formatSummary(group.summary.runtime.tps, 'tok/s')} />
       </div>
+
+      <div className="metric-group-title">Compute Phases</div>
+      <div className="metric-grid">
+        <MetricCard label="Prefill" value={formatSummary(group.summary.runtime.avgPrefillMs)} />
+        <MetricCard label="Decode" value={formatSummary(group.summary.runtime.avgDecodeMs)} />
+        <MetricCard label="Input Tokens" value={group.summary.runtime.avgInputTokens ?? 'n/a'} />
+        <MetricCard label="Output Tokens" value={group.summary.runtime.avgOutputTokens ?? 'n/a'} />
+      </div>
+
+      <div className="metric-group-title">Hardware Efficiency</div>
+      <div className="metric-grid">
+        <MetricCard label="Native GPU" value={formatSummary(group.summary.runtime.avgNativeGpuMs)} />
+        <MetricCard label="Native Sync" value={formatSummary(group.summary.runtime.avgNativeSyncMs)} />
+        <MetricCard label="Engine Logic" value={formatSummary(group.summary.runtime.avgNativeLogicMs)} />
+        <MetricCard label="Cache Hits" value={group.summary.runtime.avgCacheHits ?? 'n/a'} />
+      </div>
+
       {group.runs[0]?.outputPreview ? (
         <p className="result-preview">{group.runs[0].outputPreview}</p>
       ) : null}
@@ -536,30 +552,30 @@ export default function App() {
             </div>
             <div className="field-grid">
               <div className="row">
-                <label>
-                  <input
-                    type="radio"
-                    checked={modelType === 'registry'}
-                    onChange={() => setModelType('registry')}
-                  />{' '}
-                  Model Library
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    checked={modelType === 'url'}
-                    onChange={() => setModelType('url')}
-                  />{' '}
-                  Custom URL
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    checked={modelType === 'file'}
-                    onChange={() => setModelType('file')}
-                  />{' '}
-                  Local File
-                </label>
+                <label>Source Type</label>
+                <div className="toggle-group">
+                  <button
+                    type="button"
+                    className={`toggle-item ${modelType === 'registry' ? 'active' : ''}`}
+                    onClick={() => setModelType('registry')}
+                  >
+                    Library
+                  </button>
+                  <button
+                    type="button"
+                    className={`toggle-item ${modelType === 'url' ? 'active' : ''}`}
+                    onClick={() => setModelType('url')}
+                  >
+                    URL
+                  </button>
+                  <button
+                    type="button"
+                    className={`toggle-item ${modelType === 'file' ? 'active' : ''}`}
+                    onClick={() => setModelType('file')}
+                  >
+                    Local File
+                  </button>
+                </div>
               </div>
               <div className="row">
                 {modelType === 'registry' ? (
@@ -645,18 +661,22 @@ export default function App() {
                 </label>
               </div>
               {imageEnabled ? (
-                <>
-                  <input
-                    value={imageSource.startsWith('data:') ? '' : imageSource}
-                    onChange={(event) => setImageSource(event.target.value)}
-                    placeholder="https://.../image.jpg"
-                  />
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp,image/gif"
-                    onChange={uploadImage}
-                  />
-                </>
+                <div className="row">
+                  <label>Image URL or File</label>
+                  <div className="field-grid">
+                    <input
+                      value={imageSource.startsWith('data:') ? '' : imageSource}
+                      onChange={(event) => setImageSource(event.target.value)}
+                      placeholder="https://.../image.jpg"
+                    />
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/gif"
+                      onChange={uploadImage}
+                      style={{ padding: '8px' }}
+                    />
+                  </div>
+                </div>
               ) : null}
               <div className="button-row">
                 <button
@@ -699,6 +719,44 @@ export default function App() {
                 <div className="row">
                   <label>Observability</label>
                   <input value={observability?.mode ?? 'off'} readOnly />
+                </div>
+                <div className="row">
+                  <label title="Off = engine NONE (no emission). Silent = engine emits to SAB, main drains, no DOM work (isolates pipeline cost from render cost). Render = engine emits, main writes textContent once per rAF (pays compositor tax).">
+                    Stream Tokens
+                  </label>
+                  <div className="toggle-group">
+                    <button
+                      type="button"
+                      className={`toggle-item ${streamMode === 'off' ? 'active' : ''}`}
+                      onClick={() => setStreamMode('off')}
+                      title="Off — NONE (native baseline)"
+                    >
+                      Off
+                    </button>
+                    <button
+                      type="button"
+                      className={`toggle-item ${streamMode === 'silent' ? 'active' : ''}`}
+                      onClick={() => setStreamMode('silent')}
+                      title="On — silent (pipeline only)"
+                    >
+                      Silent
+                    </button>
+                    <button
+                      type="button"
+                      className={`toggle-item ${streamMode === 'render' ? 'active' : ''}`}
+                      onClick={() => setStreamMode('render')}
+                      title="On — rendered (with DOM)"
+                    >
+                      Render
+                    </button>
+                  </div>
+                </div>
+                <div className="row">
+                  <label>Active Transport</label>
+                  <input
+                    value={observability?.runtime?.execution.tokenPath ?? 'pending'}
+                    readOnly
+                  />
                 </div>
               </div>
               <div className="button-row">
@@ -747,64 +805,18 @@ export default function App() {
               <MetricCard label="Obs Mode" value={observability?.mode ?? 'off'} />
               <MetricCard label="Obs State" value={observability?.state ?? 'idle'} />
               <MetricCard
-                label="Last Query Decode TPS"
+                label="Current Decode TPS"
                 value={
-                  observability?.runtime?.tokensPerSecond == null
-                    ? 'n/a'
-                    : round(observability.runtime.tokensPerSecond)
+                  lastRun?.tps != null
+                    ? formatTps(lastRun.tps)
+                    : observability?.runtime?.tokensPerSecond == null
+                      ? 'n/a'
+                      : round(observability.runtime.tokensPerSecond)
                 }
               />
               <MetricCard
                 label="Backend"
                 value={describeRuntimeBackend(observability?.profile)}
-              />
-              <MetricCard
-                label="Native Decode"
-                value={
-                  observability?.runtime?.nativeLlamaDecodeWallMs != null
-                    ? formatMs(observability.runtime.nativeLlamaDecodeWallMs)
-                    : 'n/a'
-                }
-              />
-              <MetricCard
-                label="Scheduler Tick"
-                value={
-                  observability?.runtime?.nativeSchedulerTickMs != null
-                    ? formatMs(observability.runtime.nativeSchedulerTickMs)
-                    : 'n/a'
-                }
-              />
-              <MetricCard
-                label="JS Pump"
-                value={
-                  observability?.runtime?.jsPumpStepMs != null
-                    ? formatMs(observability.runtime.jsPumpStepMs)
-                    : 'n/a'
-                }
-              />
-              <MetricCard
-                label="JS Progress"
-                value={
-                  observability?.runtime?.jsSchedulerProgressMs != null
-                    ? formatMs(observability.runtime.jsSchedulerProgressMs)
-                    : 'n/a'
-                }
-              />
-              <MetricCard
-                label="Event Drain"
-                value={
-                  observability?.runtime?.jsRuntimeEventDrainMs != null
-                    ? formatMs(observability.runtime.jsRuntimeEventDrainMs)
-                    : 'n/a'
-                }
-              />
-              <MetricCard
-                label="Token Callback"
-                value={
-                  observability?.runtime?.jsTokenCallbackMs != null
-                    ? formatMs(observability.runtime.jsTokenCallbackMs)
-                    : 'n/a'
-                }
               />
             </div>
           </section>
@@ -824,11 +836,30 @@ export default function App() {
                     value={lastRun.ttftMs == null ? 'n/a' : formatMs(lastRun.ttftMs)}
                   />
                   <MetricCard label="Tokens" value={lastRun.tokens || 'n/a'} />
+                  <MetricCard label="TPS" value={lastRun.tps == null ? 'n/a' : formatTps(lastRun.tps)} />
+                  {lastRun.observability && (
+                    <>
+                      <div className="metric-group-title" style={{ gridColumn: '1 / -1', marginTop: '1rem' }}>Compute Phases</div>
+                      <MetricCard label="Prefill" value={formatMs(lastRun.observability.prefillMs)} />
+                      <MetricCard label="Decode" value={formatMs(lastRun.observability.decodeMs)} />
+                      <MetricCard label="Input" value={lastRun.observability.inputTokens} />
+                      <MetricCard label="Cache Hits" value={lastRun.observability.cacheHits} />
+
+                      <div className="metric-group-title" style={{ gridColumn: '1 / -1', marginTop: '1rem' }}>Hardware Efficiency</div>
+                      <MetricCard label="Native GPU" value={formatMs(lastRun.observability.nativeGpuMs)} />
+                      <MetricCard label="Native Sync" value={formatMs(lastRun.observability.nativeSyncMs)} />
+                      <MetricCard label="Engine Logic" value={formatMs(lastRun.observability.nativeLogicMs)} />
+                    </>
+                  )}
                 </>
               )}
             </div>
-            <div className="response" style={{ marginTop: '16px' }}>
-              {response}
+            <div
+              className={`response ${isBusy ? 'generating' : ''}`}
+              style={{ marginTop: '16px' }}
+              ref={responseElementRef}
+            >
+              {response || (isBusy ? 'Generating response...' : 'Ready for query.')}
             </div>
           </section>
 
@@ -926,50 +957,23 @@ export default function App() {
                     <div className="metric-grid">
                       <MetricCard label="Raw Runs" value={benchmarkReport.trace.runCount} />
                       <MetricCard
-                        label="Trace Decode Wall"
-                        value={formatSummary(
-                          benchmarkReport.trace.analysis.nativeLlamaDecodeWallMs
-                        )}
-                      />
-                      <MetricCard
-                        label="Trace Decode / Tok"
-                        value={formatSummary(
-                          benchmarkReport.trace.analysis.nativeLlamaDecodeWallPerTokenMs
-                        )}
-                      />
-                      <MetricCard
-                        label="Trace JS Pump"
-                        value={formatSummary(benchmarkReport.trace.analysis.jsPumpStepMs)}
-                      />
-                      <MetricCard
-                        label="Trace JS Progress"
-                        value={formatSummary(benchmarkReport.trace.analysis.jsSchedulerProgressMs)}
-                      />
-                      <MetricCard
-                        label="Trace Event Drain"
-                        value={formatSummary(
-                          benchmarkReport.trace.analysis.jsRuntimeEventDrainMs
-                        )}
-                      />
-                      <MetricCard
-                        label="Trace Token Callback"
-                        value={formatSummary(benchmarkReport.trace.analysis.jsTokenCallbackMs)}
-                      />
-                      <MetricCard
-                        label="Trace JS Yield"
-                        value={formatSummary(benchmarkReport.trace.analysis.jsSchedulerYieldMs)}
-                      />
-                      <MetricCard
                         label="Trace TTFT"
-                        value={formatSummary(benchmarkReport.trace.analysis.appObservedTtftMs)}
+                        value={formatSummary(benchmarkReport.trace.analysis.nativeTtftMs)}
                       />
                       <MetricCard
-                        label="Trace ITL"
-                        value={formatSummary(benchmarkReport.trace.analysis.appObservedItlMs)}
+                        label="Trace Mean ITL"
+                        value={formatSummary(benchmarkReport.trace.analysis.nativeMeanItlMs)}
                       />
                       <MetricCard
-                        label="Trace E2EL"
-                        value={formatSummary(benchmarkReport.trace.analysis.e2elMs)}
+                        label="Trace Tail ITL"
+                        value={formatSummary(benchmarkReport.trace.analysis.nativeTailItlMs)}
+                      />
+                      <MetricCard
+                        label="Trace Decode TPS"
+                        value={formatSummary(
+                          benchmarkReport.trace.analysis.nativeDecodeTokensPerSecond,
+                          'tok/s'
+                        )}
                       />
                     </div>
                   </div>

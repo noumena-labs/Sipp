@@ -14,26 +14,13 @@ import { measureAsync, round } from './utils';
 
 type BenchmarkRuntimeOptions = NonNullable<ModelLoadOptions['runtime']>;
 
-interface ObservedQueryRun {
+export interface ObservedQueryRun {
   output: string;
   wallMs: number;
   ttftMs: number | null;
   tokenTimes: number[];
   observability: RequestObservability | null;
 }
-
-const JS_TRANSPORT_DELTA_KEYS = [
-  'jsSchedulerProgressMs',
-  'jsRuntimeEventDrainMs',
-  'jsTokenCallbackMs',
-  'jsPumpStepMs',
-  'jsSchedulerYieldMs',
-  'jsSchedulerProgressCount',
-  'jsRuntimeEventDrainCount',
-  'jsTokenCallbackCount',
-  'jsPumpStepCount',
-  'jsSchedulerYieldCount',
-] as const satisfies readonly (keyof RequestObservability)[];
 
 function summarize(values: number[]) {
   const sorted = [...values].sort((left, right) => left - right);
@@ -65,94 +52,7 @@ function cloneRuntimeObservation(
   if (observation == null) {
     return null;
   }
-  return {
-    ...observation,
-    execution: { ...observation.execution },
-  };
-}
-
-function withTransportDeltas(
-  observation: RequestObservability | null,
-  baseline: RequestObservability | null
-): RequestObservability | null {
-  if (observation == null) {
-    return null;
-  }
-  const next = cloneRuntimeObservation(observation);
-  if (next == null) {
-    return null;
-  }
-  for (const key of JS_TRANSPORT_DELTA_KEYS) {
-    const value = next[key];
-    const base = baseline?.[key];
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      const baseNumber = typeof base === 'number' && Number.isFinite(base) ? base : 0;
-      (next as unknown as Record<string, unknown>)[key] = round(Math.max(0, value - baseNumber));
-    }
-  }
-  return next;
-}
-
-function observationNumber(
-  observation: RequestObservability | null | undefined,
-  key: keyof RequestObservability
-): number | null {
-  const value = observation?.[key];
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-function summarizeObservation(
-  observations: RequestObservability[],
-  key: keyof RequestObservability
-) {
-  return summarizeOptional(
-    observations
-      .map((item) => observationNumber(item, key))
-      .filter((value): value is number => value != null)
-  );
-}
-
-function summarizePerDecodeToken(
-  observations: RequestObservability[],
-  key: keyof RequestObservability
-) {
-  return summarizeOptional(
-    observations
-      .map((item) => {
-        const value = observationNumber(item, key);
-        const decodeCount = observationNumber(item, 'decodeEvalCount');
-        return value != null && decodeCount != null && decodeCount > 0
-          ? round(value / decodeCount)
-          : null;
-      })
-      .filter((value): value is number => value != null)
-  );
-}
-
-function nativeNonDecodeWallMs(
-  observation: RequestObservability | null | undefined
-): number | null {
-  if (observation == null) {
-    return null;
-  }
-  const keys = [
-    'nativeSchedulerAdmitMs',
-    'nativeSchedulerFinalizeMs',
-    'nativeSchedulerCommitMs',
-    'nativePolicyPrepareMs',
-    'nativePolicyPlanMs',
-    'nativeBatchBuildMs',
-    'nativeKvUpdateMs',
-    'nativeSamplerWallMs',
-    'nativeTokenEmitMs',
-    'nativePrefixCacheMs',
-    'nativeObservabilityMs',
-  ] as const satisfies readonly (keyof RequestObservability)[];
-  const total = keys.reduce((sum, key) => {
-    const value = observationNumber(observation, key);
-    return sum + (value ?? 0);
-  }, 0);
-  return Number.isFinite(total) ? round(total) : null;
+  return { ...observation };
 }
 
 function observeSessionCompletion(
@@ -190,31 +90,52 @@ function observeSessionCompletion(
   };
 }
 
-async function runObservedQuery(
+export async function runObservedQuery(
   targetEngine: CogentEngine,
   prompt: string,
   options: {
     session: string;
     maxTokens: number;
+    onToken?: (token: string) => void;
+    media?: Uint8Array[];
+    /**
+     * When false, the chat call is made WITHOUT an `onToken` callback so the
+     * engine runs in NONE emission mode (no per-token FFI/SAB activity).
+     * TTFT and per-token timing then come from native runtime_observability
+     * instead of JS-side wall-clock instrumentation.  Default true.
+     */
+    streamTokens?: boolean;
   }
 ): Promise<ObservedQueryRun> {
   const start = performance.now();
   let ttftMs: number | null = null;
   const tokenTimes: number[] = [];
-  const baselineRuntime = cloneRuntimeObservation(targetEngine.observability.current().runtime);
   const sessionObserver = observeSessionCompletion(targetEngine, options.session);
+  const streamTokens = options.streamTokens ?? true;
 
   try {
+    const messages = options.media == null
+      ? [{ role: 'user', content: prompt }]
+      : { messages: [{ role: 'user', content: prompt }], media: options.media };
+    // Pass `onToken` only when streaming is enabled.  Omitting it triggers
+    // TOKEN_EMISSION_NONE on the engine side, which is the NONE-mode path.
+    const chatOptions = streamTokens
+      ? {
+          maxTokens: options.maxTokens,
+          session: options.session,
+          onToken: (token: string) => {
+            const elapsed = round(performance.now() - start);
+            tokenTimes.push(elapsed);
+            ttftMs ??= elapsed;
+            options.onToken?.(token);
+          },
+        }
+      : {
+          maxTokens: options.maxTokens,
+          session: options.session,
+        };
     const [output, observability] = await Promise.all([
-      targetEngine.chat([{ role: 'user', content: prompt }], {
-        maxTokens: options.maxTokens,
-        session: options.session,
-        onToken: () => {
-          const elapsed = round(performance.now() - start);
-          tokenTimes.push(elapsed);
-          ttftMs ??= elapsed;
-        },
-      }),
+      targetEngine.chat(messages, chatOptions),
       sessionObserver.promise,
     ]);
 
@@ -223,7 +144,7 @@ async function runObservedQuery(
       wallMs: round(performance.now() - start),
       ttftMs,
       tokenTimes,
-      observability: withTransportDeltas(observability, baselineRuntime),
+      observability,
     };
   } finally {
     sessionObserver.dispose();
@@ -234,12 +155,25 @@ function summarizeRunGroup(runs: BenchmarkRun[], benchmarkDurationMs: number): G
   const observations = runs
     .map((run) => run.observability)
     .filter((value): value is RequestObservability => value != null);
+  
   const totalInputTokens = runs.reduce(
-    (acc, run) => acc + (run.observability?.inputTokenCount ?? 0),
+    (acc, run) => acc + (run.observability?.inputTokens ?? 0),
     0
   );
-  const totalGeneratedTokens = runs.reduce((acc, run) => acc + run.outputTokenCount, 0);
+  const totalGeneratedTokens = runs.reduce((acc, run) => acc + run.outputTokens, 0);
   const benchmarkDurationSeconds = benchmarkDurationMs > 0 ? benchmarkDurationMs / 1000 : 0;
+  
+  // Native decode TPS: output_tokens / decode_ms.
+  // Includes GPU synchronization overhead to accurately reflect pure 
+  // hardware-native inference performance, consistent with industry standards.
+  const tpsValues = observations
+    .map((item) =>
+      item.decodeMs > 0 && item.outputTokens > 0
+        ? (item.outputTokens * 1000) / item.decodeMs
+        : 0
+    )
+    .filter((v) => v > 0);
+
   return {
     serving: {
       successfulRequests: runs.length,
@@ -248,81 +182,26 @@ function summarizeRunGroup(runs: BenchmarkRun[], benchmarkDurationMs: number): G
       totalGeneratedTokens,
       requestThroughputRps:
         benchmarkDurationSeconds > 0 ? round(runs.length / benchmarkDurationSeconds) : null,
-      // End-to-end output throughput uses the full benchmark wall time.
       outputTokenThroughputTps:
         benchmarkDurationSeconds > 0 ? round(totalGeneratedTokens / benchmarkDurationSeconds) : null,
-      // Total throughput counts both prompt and generated tokens over wall time.
       totalTokenThroughputTps:
         benchmarkDurationSeconds > 0
           ? round((totalInputTokens + totalGeneratedTokens) / benchmarkDurationSeconds)
           : null,
-      appObservedTtftMs: summarizeOptional(
-        runs.map((run) => run.appObservedTtftMs).filter((value): value is number => value != null)
-      ),
-      appObservedTpotMs: summarizeOptional(
-        runs.map((run) => run.appObservedTpotMs).filter((value): value is number => value != null)
-      ),
-      appObservedItlMs: summarizeOptional(runs.flatMap((run) => run.appObservedItlMsValues)),
-      e2elMs: summarize(runs.map((run) => run.wallMs)),
     },
     runtime: {
-      nativeTtftMs: summarizeOptional(observations.map((item) => item.ttftMs)),
-      nativeMeanItlMs: summarizeOptional(
-        observations.map((item) => item.meanItlMs).filter((value): value is number => value != null)
-      ),
-      nativeTailItlMs: summarizeOptional(
-        observations.map((item) => item.tailItlMs).filter((value): value is number => value != null)
-      ),
-      nativeDecodeTokensPerSecond: summarizeOptional(
-        observations.map((item) => item.tokensPerSecond).filter((value): value is number => value != null)
-      ),
-      avgLogicalInputTokenCount: averageOptional(observations.map((item) => item.inputTokenCount)),
-      avgPromptEvalTokens: averageOptional(observations.map((item) => item.promptEvalTokens)),
-      avgPromptEvalMs: averageOptional(observations.map((item) => item.promptEvalMs)),
-      avgDecodeEvalMs: averageOptional(observations.map((item) => item.decodeEvalMs)),
-      avgSampleMs: averageOptional(observations.map((item) => item.sampleMs)),
-      avgOutputTokenCount: averageOptional(observations.map((item) => item.outputTokenCount)),
-      avgQueueDelayMs: averageOptional(observations.map((item) => item.queueDelayMs)),
-      avgTailItlMs: averageOptional(observations.map((item) => item.tailItlMs)),
-      avgBatchParticipationCount: averageOptional(
-        observations.map((item) => item.batchParticipationCount)
-      ),
-      promptTokensPerSecond: averageOptional(
-        observations.map((item) =>
-          item.promptEvalTokens != null && item.promptEvalMs != null && item.promptEvalMs > 0
-            ? (item.promptEvalTokens / item.promptEvalMs) * 1000
-            : null
-        )
-      ),
-      decodeTokensPerSecond: averageOptional(observations.map((item) => item.tokensPerSecond)),
-      nativeSchedulerTickMs: summarizeObservation(observations, 'nativeSchedulerTickMs'),
-      nativeSchedulerAdmitMs: summarizeObservation(observations, 'nativeSchedulerAdmitMs'),
-      nativeSchedulerFinalizeMs: summarizeObservation(observations, 'nativeSchedulerFinalizeMs'),
-      nativeSchedulerCommitMs: summarizeObservation(observations, 'nativeSchedulerCommitMs'),
-      nativePolicyPrepareMs: summarizeObservation(observations, 'nativePolicyPrepareMs'),
-      nativePolicyPlanMs: summarizeObservation(observations, 'nativePolicyPlanMs'),
-      nativeBatchBuildMs: summarizeObservation(observations, 'nativeBatchBuildMs'),
-      nativeLlamaDecodeWallMs: summarizeObservation(observations, 'nativeLlamaDecodeWallMs'),
-      nativeLlamaDecodeWallPerTokenMs: summarizePerDecodeToken(
-        observations,
-        'nativeLlamaDecodeWallMs'
-      ),
-      nativeSynchronizeMs: summarizeObservation(observations, 'nativeSynchronizeMs'),
-      nativeKvUpdateMs: summarizeObservation(observations, 'nativeKvUpdateMs'),
-      nativeSamplerWallMs: summarizeObservation(observations, 'nativeSamplerWallMs'),
-      nativeTokenEmitMs: summarizeObservation(observations, 'nativeTokenEmitMs'),
-      nativePrefixCacheMs: summarizeObservation(observations, 'nativePrefixCacheMs'),
-      nativeObservabilityMs: summarizeObservation(observations, 'nativeObservabilityMs'),
-      nativeNonDecodeWallMs: summarizeOptional(
-        observations
-          .map((item) => nativeNonDecodeWallMs(item))
-          .filter((value): value is number => value != null)
-      ),
-      jsSchedulerProgressMs: summarizeObservation(observations, 'jsSchedulerProgressMs'),
-      jsRuntimeEventDrainMs: summarizeObservation(observations, 'jsRuntimeEventDrainMs'),
-      jsTokenCallbackMs: summarizeObservation(observations, 'jsTokenCallbackMs'),
-      jsPumpStepMs: summarizeObservation(observations, 'jsPumpStepMs'),
-      jsSchedulerYieldMs: summarizeObservation(observations, 'jsSchedulerYieldMs'),
+      ttftMs: summarizeOptional(observations.map((item) => item.ttftMs)),
+      itlAvgMs: summarizeOptional(observations.map((item) => item.itlAvgMs)),
+      itlP99Ms: summarizeOptional(observations.map((item) => item.itlP99Ms)),
+      tps: summarizeOptional(tpsValues),
+      avgInputTokens: averageOptional(observations.map((item) => item.inputTokens)),
+      avgOutputTokens: averageOptional(observations.map((item) => item.outputTokens)),
+      avgPrefillMs: averageOptional(observations.map((item) => item.prefillMs)),
+      avgDecodeMs: averageOptional(observations.map((item) => item.decodeMs)),
+      avgNativeGpuMs: averageOptional(observations.map((item) => item.nativeGpuMs)),
+      avgNativeSyncMs: averageOptional(observations.map((item) => item.nativeSyncMs)),
+      avgNativeLogicMs: averageOptional(observations.map((item) => item.nativeLogicMs)),
+      avgCacheHits: averageOptional(observations.map((item) => item.cacheHits)),
     },
   };
 }
@@ -333,27 +212,20 @@ function createRun(
   ttftMs: number | null,
   tokenTimes: number[],
   output: string,
-  observability: RequestObservability | null = null
+  observability: RequestObservability | null
 ): BenchmarkRun {
-  const appObservedItlMsValues: number[] = [];
-  for (let i = 1; i < tokenTimes.length; i++) {
-    appObservedItlMsValues.push(round(tokenTimes[i] - tokenTimes[i - 1]));
-  }
-  const appObservedTpotMs =
-    ttftMs != null && tokenTimes.length > 1 ? round((wallMs - ttftMs) / (tokenTimes.length - 1)) : null;
   return {
     label,
     wallMs,
-    appObservedTtftMs: ttftMs,
-    appObservedTpotMs,
-    appObservedTokenTimesMs: tokenTimes,
-    appObservedItlMsValues,
-    nativeTtftMs: observability?.ttftMs ?? null,
-    nativeMeanItlMs: observability?.meanItlMs ?? null,
-    nativeTailItlMs: observability?.tailItlMs ?? null,
-    nativeDecodeTokensPerSecond: observability?.tokensPerSecond ?? null,
-    inputTokenCount: observability?.inputTokenCount ?? null,
-    outputTokenCount: observability?.outputTokenCount ?? tokenTimes.length,
+    ttftMs: observability?.ttftMs ?? null,
+    itlAvgMs: observability?.itlAvgMs ?? null,
+    itlP99Ms: observability?.itlP99Ms ?? null,
+    tps:
+      (observability?.decodeMs ?? 0) > 0 && (observability?.outputTokens ?? 0) > 0
+        ? (observability!.outputTokens * 1000) / observability!.decodeMs
+        : null,
+    inputTokens: observability?.inputTokens ?? null,
+    outputTokens: observability?.outputTokens ?? tokenTimes.length,
     outputLength: output.length,
     outputPreview: output.slice(0, 160).replace(/\s+/g, ' ').trim(),
     observability,
@@ -386,7 +258,8 @@ export async function runPromptGroup(
   warmupRuns: number,
   measuredRuns: number,
   sessionFactory: (index: number) => string,
-  setStatus: (s: string) => void
+  setStatus: (s: string) => void,
+  streamTokens: boolean = true
 ): Promise<{ benchmarkDurationMs: number; runs: BenchmarkRun[]; summary: GroupSummary }> {
   for (let i = 0; i < warmupRuns; i++) {
     setStatus(`${groupLabel}: warmup ${i + 1}/${warmupRuns}`);
@@ -403,6 +276,7 @@ export async function runPromptGroup(
     const run = await runObservedQuery(targetEngine, prompt, {
       maxTokens: tokenCount,
       session: sessionFactory(i + warmupRuns),
+      streamTokens,
     });
     runs.push(
       createRun(
@@ -432,7 +306,8 @@ export async function runScenarioBenchmark(
   measuredRuns: number,
   runtime: BenchmarkRuntimeOptions,
   setStatus: (s: string) => void,
-  alreadyLoaded?: boolean
+  alreadyLoaded?: boolean,
+  streamTokens: boolean = true
 ): Promise<ScenarioResult> {
   let loadRuntimeMs = 0;
   if (!alreadyLoaded) {
@@ -451,7 +326,8 @@ export async function runScenarioBenchmark(
     0,
     1,
     () => `${scenario.id}-cold`,
-    setStatus
+    setStatus,
+    streamTokens
   );
   const hotFreshContext = await runPromptGroup(
     targetEngine,
@@ -461,7 +337,8 @@ export async function runScenarioBenchmark(
     warmupRuns,
     measuredRuns,
     (index) => `${scenario.id}-fresh-${index}`,
-    setStatus
+    setStatus,
+    streamTokens
   );
   const hotReuseContext = await runPromptGroup(
     targetEngine,
@@ -471,7 +348,8 @@ export async function runScenarioBenchmark(
     warmupRuns,
     measuredRuns,
     () => `${scenario.id}-reuse`,
-    setStatus
+    setStatus,
+    streamTokens
   );
 
   return {
@@ -539,7 +417,8 @@ export async function runMixedLoadBenchmark(
   measuredRuns: number,
   runtime: BenchmarkRuntimeOptions,
   setStatus: (s: string) => void,
-  alreadyLoaded?: boolean
+  alreadyLoaded?: boolean,
+  streamTokens: boolean = true
 ): Promise<import('./types').MixedLoadResult> {
   let loadRuntimeMs = 0;
   if (!alreadyLoaded) {
@@ -555,10 +434,12 @@ export async function runMixedLoadBenchmark(
       runObservedQuery(targetEngine, definition.background.prompt, {
         maxTokens: definition.background.outputTokenLimit,
         session: `${definition.background.id}-warmup-${i}`,
+        streamTokens,
       }),
       runObservedQuery(targetEngine, definition.foreground.prompt, {
         maxTokens: definition.foreground.outputTokenLimit,
         session: `${definition.foreground.id}-warmup-${i}`,
+        streamTokens,
       }),
     ]);
   }
@@ -572,10 +453,12 @@ export async function runMixedLoadBenchmark(
       runObservedQuery(targetEngine, definition.background.prompt, {
         maxTokens: definition.background.outputTokenLimit,
         session: `${definition.background.id}-mixed-${i}`,
+        streamTokens,
       }),
       runObservedQuery(targetEngine, definition.foreground.prompt, {
         maxTokens: definition.foreground.outputTokenLimit,
         session: `${definition.foreground.id}-mixed-${i}`,
+        streamTokens,
       }),
     ]);
     backgroundRuns.push(
@@ -629,11 +512,7 @@ function collectGroupLogs(
     groupLabel: group.label,
     runLabel: run.label,
     wallMs: run.wallMs,
-    appObservedTtftMs: run.appObservedTtftMs,
-    appObservedTpotMs: run.appObservedTpotMs,
-    appObservedTokenTimesMs: run.appObservedTokenTimesMs,
-    appObservedItlMsValues: run.appObservedItlMsValues,
-    outputTokenCount: run.outputTokenCount,
+    outputTokens: run.outputTokens,
     observability: run.observability,
   }));
 }
@@ -685,49 +564,25 @@ export function buildBenchmarkTraceReport(
     .map((log) => log.observability)
     .filter((value): value is RequestObservability => value != null);
 
+  // Native decode TPS: output_tokens / sum-of-llama_decode-wall-times.
+  // Excludes JS yield, GPU sync, and streaming delivery — reflects pure
+  // inference throughput, the number the engine reports about itself.
+  const tpsValues = observations
+    .map((item) =>
+      item.decodeMs > 0 && item.outputTokens > 0
+        ? (item.outputTokens * 1000) / item.decodeMs
+        : 0
+    )
+    .filter((v) => v > 0);
+
   return {
     runCount: logs.length,
     logs,
     analysis: {
-      nativeSchedulerTickMs: summarizeObservation(observations, 'nativeSchedulerTickMs'),
-      nativeSchedulerAdmitMs: summarizeObservation(observations, 'nativeSchedulerAdmitMs'),
-      nativeSchedulerFinalizeMs: summarizeObservation(observations, 'nativeSchedulerFinalizeMs'),
-      nativeSchedulerCommitMs: summarizeObservation(observations, 'nativeSchedulerCommitMs'),
-      nativePolicyPrepareMs: summarizeObservation(observations, 'nativePolicyPrepareMs'),
-      nativePolicyPlanMs: summarizeObservation(observations, 'nativePolicyPlanMs'),
-      nativeBatchBuildMs: summarizeObservation(observations, 'nativeBatchBuildMs'),
-      nativeLlamaDecodeWallMs: summarizeObservation(
-        observations,
-        'nativeLlamaDecodeWallMs'
-      ),
-      nativeLlamaDecodeWallPerTokenMs: summarizePerDecodeToken(
-        observations,
-        'nativeLlamaDecodeWallMs'
-      ),
-      nativeSynchronizeMs: summarizeObservation(observations, 'nativeSynchronizeMs'),
-      nativeKvUpdateMs: summarizeObservation(observations, 'nativeKvUpdateMs'),
-      nativeSamplerWallMs: summarizeObservation(observations, 'nativeSamplerWallMs'),
-      nativeTokenEmitMs: summarizeObservation(observations, 'nativeTokenEmitMs'),
-      nativePrefixCacheMs: summarizeObservation(observations, 'nativePrefixCacheMs'),
-      nativeObservabilityMs: summarizeObservation(observations, 'nativeObservabilityMs'),
-      nativeNonDecodeWallMs: summarizeOptional(
-        observations
-          .map((item) => nativeNonDecodeWallMs(item))
-          .filter((value): value is number => value != null)
-      ),
-      jsSchedulerProgressMs: summarizeObservation(observations, 'jsSchedulerProgressMs'),
-      jsRuntimeEventDrainMs: summarizeObservation(observations, 'jsRuntimeEventDrainMs'),
-      jsTokenCallbackMs: summarizeObservation(observations, 'jsTokenCallbackMs'),
-      jsPumpStepMs: summarizeObservation(observations, 'jsPumpStepMs'),
-      jsSchedulerYieldMs: summarizeObservation(observations, 'jsSchedulerYieldMs'),
-      appObservedTtftMs: summarizeOptional(
-        logs
-          .map((log) => log.appObservedTtftMs)
-          .filter((value): value is number => value != null)
-      ),
-      appObservedItlMs: summarizeOptional(logs.flatMap((log) => log.appObservedItlMsValues)),
-      e2elMs:
-        logs.length > 0 ? summarize(logs.map((log) => log.wallMs)) : null,
+      ttftMs: summarizeOptional(observations.map((item) => item.ttftMs)),
+      itlAvgMs: summarizeOptional(observations.map((item) => item.itlAvgMs)),
+      itlP99Ms: summarizeOptional(observations.map((item) => item.itlP99Ms)),
+      tps: summarizeOptional(tpsValues),
     },
   };
 }

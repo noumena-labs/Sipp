@@ -1,4 +1,4 @@
-import type { RuntimeObservation } from '@noumena-labs/cogentlm';
+import type { RequestObservabilityMetrics } from '@noumena-labs/cogentlm';
 
 export interface SamplingConfig {
   repeatLastN?: number;
@@ -35,21 +35,17 @@ export interface MetricSummary {
   maxMs: number;
 }
 
-export type RequestObservability = RuntimeObservation;
+export type RequestObservability = RequestObservabilityMetrics;
 
 export interface BenchmarkRun {
   label: string;
   wallMs: number;
-  appObservedTtftMs: number | null;
-  appObservedTpotMs: number | null;
-  appObservedTokenTimesMs: number[];
-  appObservedItlMsValues: number[];
-  nativeTtftMs: number | null;
-  nativeMeanItlMs: number | null;
-  nativeTailItlMs: number | null;
-  nativeDecodeTokensPerSecond: number | null;
-  inputTokenCount: number | null;
-  outputTokenCount: number;
+  ttftMs: number | null;
+  itlAvgMs: number | null;
+  itlP99Ms: number | null;
+  tps: number | null;
+  inputTokens: number | null;
+  outputTokens: number;
   outputLength: number;
   outputPreview: string;
   observability: RequestObservability | null;
@@ -64,48 +60,20 @@ export interface GroupSummary {
     requestThroughputRps: number | null;
     outputTokenThroughputTps: number | null;
     totalTokenThroughputTps: number | null;
-    appObservedTtftMs: MetricSummary | null;
-    appObservedTpotMs: MetricSummary | null;
-    appObservedItlMs: MetricSummary | null;
-    e2elMs: MetricSummary;
   };
   runtime: {
-    nativeTtftMs: MetricSummary | null;
-    nativeMeanItlMs: MetricSummary | null;
-    nativeTailItlMs: MetricSummary | null;
-    nativeDecodeTokensPerSecond: MetricSummary | null;
-    avgLogicalInputTokenCount: number | null;
-    avgPromptEvalTokens: number | null;
-    avgPromptEvalMs: number | null;
-    avgDecodeEvalMs: number | null;
-    avgSampleMs: number | null;
-    avgOutputTokenCount: number | null;
-    avgQueueDelayMs: number | null;
-    avgTailItlMs: number | null;
-    avgBatchParticipationCount: number | null;
-    promptTokensPerSecond: number | null;
-    decodeTokensPerSecond: number | null;
-    nativeSchedulerTickMs: MetricSummary | null;
-    nativeSchedulerAdmitMs: MetricSummary | null;
-    nativeSchedulerFinalizeMs: MetricSummary | null;
-    nativeSchedulerCommitMs: MetricSummary | null;
-    nativePolicyPrepareMs: MetricSummary | null;
-    nativePolicyPlanMs: MetricSummary | null;
-    nativeBatchBuildMs: MetricSummary | null;
-    nativeLlamaDecodeWallMs: MetricSummary | null;
-    nativeLlamaDecodeWallPerTokenMs: MetricSummary | null;
-    nativeSynchronizeMs: MetricSummary | null;
-    nativeKvUpdateMs: MetricSummary | null;
-    nativeSamplerWallMs: MetricSummary | null;
-    nativeTokenEmitMs: MetricSummary | null;
-    nativePrefixCacheMs: MetricSummary | null;
-    nativeObservabilityMs: MetricSummary | null;
-    nativeNonDecodeWallMs: MetricSummary | null;
-    jsSchedulerProgressMs: MetricSummary | null;
-    jsRuntimeEventDrainMs: MetricSummary | null;
-    jsTokenCallbackMs: MetricSummary | null;
-    jsPumpStepMs: MetricSummary | null;
-    jsSchedulerYieldMs: MetricSummary | null;
+    ttftMs: MetricSummary | null;
+    itlAvgMs: MetricSummary | null;
+    itlP99Ms: MetricSummary | null;
+    tps: MetricSummary | null;
+    avgInputTokens: number | null;
+    avgOutputTokens: number | null;
+    avgPrefillMs: number | null;
+    avgDecodeMs: number | null;
+    avgNativeGpuMs: number | null;
+    avgNativeSyncMs: number | null;
+    avgNativeLogicMs: number | null;
+    avgCacheHits: number | null;
   };
 }
 
@@ -205,11 +173,7 @@ export interface BenchmarkLogEntry {
   groupLabel: string;
   runLabel: string;
   wallMs: number;
-  appObservedTtftMs: number | null;
-  appObservedTpotMs: number | null;
-  appObservedTokenTimesMs: number[];
-  appObservedItlMsValues: number[];
-  outputTokenCount: number;
+  outputTokens: number;
   observability: RequestObservability | null;
 }
 
@@ -217,29 +181,9 @@ export interface BenchmarkTraceReport {
   runCount: number;
   logs: BenchmarkLogEntry[];
   analysis: {
-    nativeSchedulerTickMs: MetricSummary | null;
-    nativeSchedulerAdmitMs: MetricSummary | null;
-    nativeSchedulerFinalizeMs: MetricSummary | null;
-    nativeSchedulerCommitMs: MetricSummary | null;
-    nativePolicyPrepareMs: MetricSummary | null;
-    nativePolicyPlanMs: MetricSummary | null;
-    nativeBatchBuildMs: MetricSummary | null;
-    nativeLlamaDecodeWallMs: MetricSummary | null;
-    nativeLlamaDecodeWallPerTokenMs: MetricSummary | null;
-    nativeSynchronizeMs: MetricSummary | null;
-    nativeKvUpdateMs: MetricSummary | null;
-    nativeSamplerWallMs: MetricSummary | null;
-    nativeTokenEmitMs: MetricSummary | null;
-    nativePrefixCacheMs: MetricSummary | null;
-    nativeObservabilityMs: MetricSummary | null;
-    nativeNonDecodeWallMs: MetricSummary | null;
-    jsSchedulerProgressMs: MetricSummary | null;
-    jsRuntimeEventDrainMs: MetricSummary | null;
-    jsTokenCallbackMs: MetricSummary | null;
-    jsPumpStepMs: MetricSummary | null;
-    jsSchedulerYieldMs: MetricSummary | null;
-    appObservedTtftMs: MetricSummary | null;
-    appObservedItlMs: MetricSummary | null;
-    e2elMs: MetricSummary | null;
+    ttftMs: MetricSummary | null;
+    itlAvgMs: MetricSummary | null;
+    itlP99Ms: MetricSummary | null;
+    tps: MetricSummary | null;
   };
 }
