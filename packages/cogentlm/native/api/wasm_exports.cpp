@@ -13,10 +13,9 @@ namespace {
 constexpr int kStatusFailure = -1;
 constexpr int kStatusInvalidArguments = -2;
 constexpr int kStatusNotInitialized = -3;
-constexpr int kMaxPromptTokens = 2048;
 
 bool is_valid_prediction_tokens(int token_count) {
-  return token_count > 0 && token_count <= kMaxPromptTokens;
+  return token_count > 0;
 }
 
 bool g_isEngineInitialized = false;

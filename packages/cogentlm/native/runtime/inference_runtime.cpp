@@ -29,7 +29,6 @@
 namespace {
 
 constexpr char kDefaultPromptContextKey[] = "__primary_prompt__";
-constexpr int kMaxPredictionTokens = 2048;
 
 using BitmapPtr = std::unique_ptr<mtmd_bitmap, decltype(&mtmd_bitmap_free)>;
 using InputChunksPtr =
@@ -1889,7 +1888,7 @@ GenerateRequestId InferenceRuntime::EnqueueRequest(
   if (primary_model_ == nullptr || sampler_ == nullptr) {
     return 0;
   }
-  if (n_tokens_predict <= 0 || n_tokens_predict > kMaxPredictionTokens) {
+  if (n_tokens_predict <= 0) {
     return 0;
   }
   if (context_key.empty()) {
@@ -1937,7 +1936,7 @@ GenerateRequestId InferenceRuntime::EnqueueMultimodalRequest(
       mtmd_ctx_ == nullptr || !mtmd_support_vision(mtmd_ctx_)) {
     return 0;
   }
-  if (n_tokens_predict <= 0 || n_tokens_predict > kMaxPredictionTokens) {
+  if (n_tokens_predict <= 0) {
     return 0;
   }
   if (image_views.empty()) {

@@ -30,14 +30,13 @@ constexpr int kCompletedRequestStatusCompleted = 1;
 constexpr int kCompletedRequestStatusCancelled = 2;
 constexpr int kCompletedRequestStatusFailed = 3;
 constexpr int kCompletedRequestStatusUnknown = 4;
-constexpr int kMaxPredictionTokens = 2048;
 
 std::mutex g_engineMutex;
 std::shared_ptr<InferenceRuntime> g_engineRuntime;
 using json = nlohmann::json;
 
 bool is_valid_prediction_tokens(int token_count) {
-  return token_count > 0 && token_count <= kMaxPredictionTokens;
+  return token_count > 0;
 }
 
 bool map_token_emission_mode(CE_TokenEmissionMode mode,

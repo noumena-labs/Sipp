@@ -1,6 +1,6 @@
 {
   "name": "@noumena-labs/cogentlm",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "description": "Run powerful AI models locally with high-performance text and vision inference directly in the browser",
   "main": "dist/esm/index.js",
   "types": "dist/types/index.d.ts",

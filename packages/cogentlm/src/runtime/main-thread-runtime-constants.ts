@@ -2,7 +2,6 @@ import { TransportObservability } from '../types.js';
 
 export type MountableModelFile = Blob & { name?: string };
 
-export const MAX_PROMPT_TOKENS = 2048;
 export const DEFAULT_MAX_MODEL_BYTES = 8 * 1024 * 1024 * 1024;
 export const REQUEST_STEP_RESULT_INVALID = -1;
 export const REQUEST_STEP_RESULT_FATAL_NO_PROGRESS = -2;
