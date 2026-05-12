@@ -12,12 +12,13 @@ export interface DetailedRuntimeAggregateObservabilityMetrics
 export type DetailedRuntimeObservabilityMetrics = DetailedRuntimeAggregateObservabilityMetrics;
 
 export function deriveTokensPerSecond(metrics: {
-  itlAvgMs: number;
+  decodeMs: number;
+  outputTokens: number;
 }): number | null {
-  if (metrics.itlAvgMs <= 0) {
+  if (metrics.decodeMs <= 0 || metrics.outputTokens <= 0) {
     return null;
   }
-  return 1000 / metrics.itlAvgMs;
+  return (metrics.outputTokens / metrics.decodeMs) * 1000;
 }
 
 export function withDerivedObservabilityMetrics<T extends RequestObservabilityMetrics>(

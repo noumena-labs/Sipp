@@ -13,12 +13,33 @@ export interface RequestObservabilityMetrics {
   /** Time spent in the decoding (token generation) phase. */
   decodeMs: number;
 
-  /** Cumulative wall time spent in GPU compute (llama_decode). */
+  /**
+   * Raw wall-clock window around llama_decode + llama_synchronize.  In
+   * WebGPU+wasm this includes any event-loop wait inside llama_synchronize
+   * (the GPU-completion microtask waiting behind queued JS work), so it is
+   * NOT a pure GPU-only number — pair it with `interDecodeJsMs` to attribute
+   * how much of the gap to native vs. JS-side contention.
+   */
   nativeGpuMs: number;
   /** Cumulative time spent in backend synchronization (llama_synchronize). */
   nativeSyncMs: number;
   /** Internal engine logic overhead (scheduling, batching, bookkeeping). */
   nativeLogicMs: number;
+  /**
+   * Cumulative wall-clock between successive `gpu_end → gpu_start` boundaries.
+   * Captures all worker-thread JS work between decodes: ce_native_yield, the
+   * streaming-buffer drain hook, scheduler-pump bookkeeping, drainRuntimeEvents,
+   * and postMessage processing.  Idle gaps >500ms are excluded (treated as
+   * request boundaries).
+   */
+  interDecodeJsMs: number;
+  /**
+   * Subset of `interDecodeJsMs` spent suspended inside `ce_native_yield()`
+   * (the JSPI await plus the `_ce_yield_drain` hook).  The remainder is JS
+   * pump work that ran with wasm fully returned to JS (drainRuntimeEvents,
+   * settle logic, postMessage dispatch).
+   */
+  yieldWaitMs: number;
 
   /** Total number of tokens processed in the prompt. */
   inputTokens: number;
