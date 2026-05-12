@@ -95,7 +95,7 @@ export interface QueryOptions {
   session?: string;
   maxTokens?: number;
   signal?: AbortSignal;
-  onToken?: (token: string) => void;
+  onToken?: (tokens: string[]) => void;
   grammar?: string;
 }
 

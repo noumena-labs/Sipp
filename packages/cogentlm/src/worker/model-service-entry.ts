@@ -58,9 +58,6 @@ function ensureService(config: WorkerSerializableCogentConfig): ModelService {
   if (streamingRingWriter != null) {
     runtime.setStreamingRingWriter(streamingRingWriter);
   }
-  // Fire a 'streaming-tick' to main on every SAB write so it drains the
-  // ring in its onmessage macrotask handler — outside the rendering phase
-  // where it would otherwise compete with the app's rAF loops.
   runtime.setStreamingTickCallback(() => {
     post({ kind: 'streaming-tick' });
   });
@@ -127,7 +124,7 @@ function streamingOptionsFor(
   callId: number,
   streaming: boolean
 ): {
-  onToken?: (token: string) => void;
+  onToken?: (tokens: string[]) => void;
   __internalRequestStarted?: (requestId: number) => void;
 } {
   if (!streaming) {

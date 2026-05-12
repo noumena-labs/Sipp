@@ -107,15 +107,13 @@ export type WorkerResponseMessage =
       nativeRequestId: number;
     }
   | {
-      // Fired after the worker writes a batch of tokens into the SAB ring.
-      // Main drains the ring in its onmessage handler, keeping the drain
-      // out of the rendering phase so it doesn't compete with the app's
-      // own rAF loops (e.g. Three.js).
-      kind: 'streaming-tick';
-    }
-  | {
       kind: 'observability-event';
       event: ObservabilityEvent;
+    }
+  | {
+      // Pure signal from worker to main thread: "bytes were written to the ring."
+      // Triggers a drainStreamingRing call on the main thread (macrotask).
+      kind: 'streaming-tick';
     };
 
 export type WorkerServiceConfig = Pick<

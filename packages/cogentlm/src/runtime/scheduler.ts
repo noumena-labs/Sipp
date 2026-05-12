@@ -26,7 +26,7 @@ type QueuedRequestSchedulerOptions = {
   tracker: RequestTracker<GenerateResponse>;
   queuedPromptCallbacks: Map<
     GenerateRequestId,
-    ((token: string) => void) | undefined
+    ((tokens: string[]) => void) | undefined
   >;
   queuedPromptCallbackErrors: Map<GenerateRequestId, unknown>;
   getTransportObservability: () => TransportObservability;
@@ -41,12 +41,10 @@ type QueuedRequestSchedulerOptions = {
   // `_ce_yield_drain` to copy the native streaming buffer into the ring
   // once per yield.  Null on the main-thread engine.
   getStreamingRingWriter?: () => StreamingRingWriter | null;
-  // Called after each successful copy of the native streaming buffer into
-  // the SAB ring.  Worker-mode wiring uses this to postMessage a
-  // 'streaming-tick' to main, so main drains the ring as a macrotask
-  // instead of inside a rendering-phase rAF callback (which would
-  // otherwise compete with the app's own rAF loops).  Null on main-thread
-  // engines where no cross-thread signal is needed.
+  /**
+   * Called on the worker thread after successful copy to the SAB ring.
+   * Typically used to post a 'streaming-tick' message to the main thread.
+   */
   onStreamingTick?: () => void;
 };
 
@@ -97,7 +95,8 @@ export class QueuedRequestScheduler {
   }
 
 
-  private requestCancellationForCallbackErrors(): void {
+  private requestCancellationForCallbackErrors(): boolean {
+    let canceledAny = false;
     for (const requestId of this.options.tracker.allTrackedIds()) {
       const tracked = this.options.tracker.get(requestId);
       if (tracked == null || tracked.settled || tracked.cancelRequested) {
@@ -113,7 +112,9 @@ export class QueuedRequestScheduler {
       tracked.callbackError = callbackError;
       tracked.cancelRequested = true;
       void this.options.cancelQuery(requestId);
+      canceledAny = true;
     }
+    return canceledAny;
   }
 
   public settleCompletedRequestIfPresent(
@@ -186,7 +187,10 @@ export class QueuedRequestScheduler {
             this.options.tracker.activeCount,
             CONTINUOUS_LOOP_TOKEN_LIMIT
           );
-          this.requestCancellationForCallbackErrors();
+          const hadCancellations = this.requestCancellationForCallbackErrors();
+          if (hadCancellations) {
+            this.options.onStreamingTick?.();
+          }
           if (loopResult.completedResponseCount > 0) {
             this.settleCompletedTrackedRequests(bridge);
           }
@@ -207,13 +211,13 @@ export class QueuedRequestScheduler {
       }
     } finally {
       uninstallYieldDrain();
-      // Final pass to flush any tail tokens written by the engine after
-      // the last yield-driven drain (e.g. the EoS-handling emit).  Signal
-      // main even on this path so it can pick up the tail before the
-      // request's resolve message lands.
+      // Final pass to flush tail tokens written between the last yield
+      // drain and request settlement.  The main-side tick will pick
+      // them up on its next message (or via the drain-on-resolve in the
+      // worker client's call finalizer).
       try {
         if (this.drainStreamingBufferToRing(bridge)) {
-          try { this.options.onStreamingTick?.(); } catch { /* cleanup */ }
+          this.options.onStreamingTick?.();
         }
       } catch {
         /* cleanup */
@@ -238,9 +242,10 @@ export class QueuedRequestScheduler {
       }
       const transport = this.options.getTransportObservability();
       const start = performance.now();
-      let wrote = false;
       try {
-        wrote = this.drainStreamingBufferToRing(bridge);
+        if (this.drainStreamingBufferToRing(bridge)) {
+          this.options.onStreamingTick?.();
+        }
       } catch (error) {
         // Drain runs inside the wasm yield body; throwing here aborts the
         // scheduler via a JSPI rejection.  Record + swallow instead.
@@ -252,15 +257,6 @@ export class QueuedRequestScheduler {
         (transport.streamingDrainMs ?? 0) + (performance.now() - start);
       transport.streamingDrainCount =
         (transport.streamingDrainCount ?? 0) + 1;
-      // Signal the consumer side that records are available.  Fires only
-      // when bytes were copied so we don't post empty wakeups.
-      if (wrote) {
-        try {
-          this.options.onStreamingTick?.();
-        } catch {
-          /* signaling is best-effort */
-        }
-      }
     };
     moduleAny._ce_yield_drain = drain;
     return () => {
@@ -299,9 +295,8 @@ export class QueuedRequestScheduler {
 
   // Zero-ccall drain: reads `used` via HEAP32, parses records via HEAPU8,
   // writes each into the SAB ring, then clears the `used` cell.  Safe
-  // because wasm is suspended inside the `ce_native_yield` body.  Returns
-  // true if any bytes were copied (callers signal main only on true to
-  // avoid empty wakeups).
+  // because wasm is suspended inside the `ce_native_yield` body.
+  // Returns true if any bytes were actually written to the ring.
   private drainStreamingBufferToRing(bridge: WasmBridge): boolean {
     const ringWriter = this.options.getStreamingRingWriter?.() ?? null;
     if (ringWriter == null) {
@@ -327,6 +322,7 @@ export class QueuedRequestScheduler {
     heap32[this.cachedUsedHeap32Index] = 0;
     let offset = this.cachedBufferByteAddr;
     const end = offset + used;
+    let bytesWritten = false;
     while (offset + 8 <= end) {
       const requestId =
         heapU8[offset] |
@@ -343,9 +339,11 @@ export class QueuedRequestScheduler {
         break;
       }
       const payload = heapU8.subarray(payloadStart, payloadStart + textLength);
-      ringWriter.tryWriteBytes(requestId >>> 0, payload);
+      if (ringWriter.tryWriteBytes(requestId >>> 0, payload)) {
+        bytesWritten = true;
+      }
       offset = payloadStart + textLength;
     }
-    return true;
+    return bytesWritten;
   }
 }

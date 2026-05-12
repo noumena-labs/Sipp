@@ -54,7 +54,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private readonly executionMode: EngineExecutionMode;
   private queuedPromptCallbacks = new Map<
     GenerateRequestId,
-    ((token: string) => void) | undefined
+    ((tokens: string[]) => void) | undefined
   >();
   private queuedPromptCallbackErrors = new Map<GenerateRequestId, unknown>();
   private readonly tracker = new RequestTracker<GenerateResponse>();
@@ -62,14 +62,11 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private runtimeObservabilityEnabled = false;
   private backendProfilingEnabled = false;
   private transportObservability: TransportObservability;
+  private streamingTickCallback: (() => void) | undefined;
   // Worker-side SAB ring writer.  When set, requests with onToken run in
   // StreamingBuffer emission mode; otherwise streaming is rejected with an
   // explicit error (cross-origin isolation required).
   private streamingRingWriter: StreamingRingWriter | null = null;
-  // Fires after each successful SAB ring write.  Worker entry sets this
-  // to a postMessage signal so main can drain in a macrotask handler
-  // (outside the rendering phase) instead of a rAF callback.
-  private streamingTickCallback: (() => void) | null = null;
   constructor(private config: CogentConfig = {}) {
     this.executionMode = config.executionMode === 'worker' ? 'worker' : 'main-thread';
     this.transportObservability = this.createTransportObservability();
@@ -95,10 +92,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.streamingRingWriter = writer;
   }
 
-  // Wires the worker→main signal that fires after each SAB write.  Worker
-  // entry passes a postMessage closure so the main thread drains the ring
-  // in its onmessage handler (a macrotask, not a rAF callback).
-  public setStreamingTickCallback(callback: (() => void) | null): void {
+  public setStreamingTickCallback(callback: (() => void) | undefined): void {
     this.streamingTickCallback = callback;
   }
 
@@ -249,7 +243,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   }
 
   private updateTokenTransportObservability(
-    onToken: ((token: string) => void) | undefined
+    onToken: ((tokens: string[]) => void) | undefined
   ): void {
     if (onToken == null) {
       this.refreshTokenTransportObservability();

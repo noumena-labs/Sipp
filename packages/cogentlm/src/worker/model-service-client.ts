@@ -121,10 +121,6 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
   // COOP/COEP is missing; streaming requests will error in that case.
   private streamingRingBuffer: SharedArrayBuffer | null = null;
   private streamingRingReader: StreamingRingReader | null = null;
-  // Reference count of in-flight streaming calls.  Drives ring teardown
-  // on the last unregister; the actual drain is signal-driven (the worker
-  // sends a 'streaming-tick' message per SAB write) so there is no poll
-  // handle to manage here.
   private streamingActiveCount = 0;
   // Native request id → worker callId, populated by `streaming-claim`.
   private readonly callIdByNativeRequestId = new Map<number, number>();
@@ -223,6 +219,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       return;
     }
     this.closed = true;
+    // Tear down the streaming poll so it doesn't keep `this` reachable.
     this.streamingActiveCount = 0;
     this.streamingRingReader = null;
     this.streamingRingBuffer = null;
@@ -307,39 +304,42 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
   }
 
   private registerStreamingCall(): void {
-    if (this.streamingRingReader == null) {
-      return;
-    }
     this.streamingActiveCount += 1;
   }
 
   private unregisterStreamingCall(): void {
-    if (this.streamingRingReader == null) {
-      return;
-    }
     if (this.streamingActiveCount > 0) {
       this.streamingActiveCount -= 1;
     }
   }
 
-  // Drains the SAB ring synchronously and fires `onToken` per record.
-  // Invoked from two places, both as ordinary macrotasks (never inside a
-  // rAF callback):
-  //   - on each 'streaming-tick' from the worker
-  //   - one final pass on each 'resolve' to capture tail tokens written
-  //     between the last yield-drain and the worker's resolve message.
+
+
+  // Drains the SAB ring and consolidation tokens into batches per request.
+  // Invoked from the 'streaming-tick' macrotask and one final time from
+  // the call finalizer to capture tail tokens.
   private drainStreamingRing(): void {
     const reader = this.streamingRingReader;
     if (reader == null) {
       return;
     }
+    const batches = new Map<number, string[]>();
     for (const { requestId, text } of reader.drain()) {
       const callId = this.callIdByNativeRequestId.get(requestId);
       if (callId == null) continue;
+      let batch = batches.get(callId);
+      if (batch == null) {
+        batch = [];
+        batches.set(callId, batch);
+      }
+      batch.push(text);
+    }
+
+    for (const [callId, tokens] of batches) {
       const pending = this.pendingCalls.get(callId);
       if (pending != null) {
         try {
-          pending.onToken?.(text);
+          pending.onToken?.(tokens);
         } catch {
           /* user error */
         }
@@ -455,17 +455,13 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       return;
     }
 
-    if (message.kind === 'streaming-claim') {
-      this.callIdByNativeRequestId.set(message.nativeRequestId, message.callId);
+    if (message.kind === 'streaming-tick') {
+      this.drainStreamingRing();
       return;
     }
 
-    if (message.kind === 'streaming-tick') {
-      // Drain in this macrotask handler — not inside a rAF callback — so
-      // we don't compete with the app's rendering-phase rAF callbacks
-      // (e.g. Three.js render loops).  The browser interleaves paints
-      // naturally between these macrotasks.
-      this.drainStreamingRing();
+    if (message.kind === 'streaming-claim') {
+      this.callIdByNativeRequestId.set(message.nativeRequestId, message.callId);
       return;
     }
 

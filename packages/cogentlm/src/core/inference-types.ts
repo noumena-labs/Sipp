@@ -50,7 +50,7 @@ export interface InferenceInitConfig {
 export interface PromptOptions {
   nTokens?: number;
   signal?: AbortSignal;
-  onToken?: (token: string) => void;
+  onToken?: (tokens: string[]) => void;
   media?: Uint8Array[];
   /**
    * Optional GBNF grammar source applied to the sampler for this request.
