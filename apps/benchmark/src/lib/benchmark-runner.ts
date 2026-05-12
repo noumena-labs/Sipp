@@ -96,7 +96,7 @@ export async function runObservedQuery(
   options: {
     session: string;
     maxTokens: number;
-    onToken?: (token: string) => void;
+    onToken?: (tokens: string[]) => void;
     media?: Uint8Array[];
     /**
      * When false, the chat call is made WITHOUT an `onToken` callback so the
@@ -123,11 +123,13 @@ export async function runObservedQuery(
       ? {
           maxTokens: options.maxTokens,
           session: options.session,
-          onToken: (token: string) => {
+          onToken: (tokens: string[]) => {
             const elapsed = round(performance.now() - start);
-            tokenTimes.push(elapsed);
-            ttftMs ??= elapsed;
-            options.onToken?.(token);
+            for (const token of tokens) {
+              tokenTimes.push(elapsed);
+              ttftMs ??= elapsed;
+            }
+            options.onToken?.(tokens);
           },
         }
       : {

@@ -9,16 +9,18 @@ export const basicChatExample: Example = {
   },
   onUserInput: async ({ engine, log, userInput }) => {
     log(userInput, 'user');
-    
+
     let fullResponse = '';
     const responseEl = log('', 'ai'); // Create persistent element for streaming
-    
+
     try {
       await engine.chat([
         { role: 'user', content: userInput }
       ], {
-        onToken: (token) => {
-          fullResponse += token;
+        onToken: (tokens) => {
+          for (const token of tokens) {
+            fullResponse += token;
+          }
           responseEl.innerText = fullResponse; // Update in real-time
         }
       });

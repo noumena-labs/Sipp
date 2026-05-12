@@ -358,10 +358,8 @@ class FakeRuntime implements EngineRuntime {
     const requestId = this.nextRequestId++;
     this.lastPrompt = promptText;
     this.queuedRequests.set(requestId, { promptText, options });
-    if (typeof options === 'object') {
-      for (const token of this.streamedTokens) {
-        options.onToken?.(token);
-      }
+    if (typeof options === 'object' && this.streamedTokens.length > 0) {
+      options.onToken?.(this.streamedTokens);
     }
     return requestId;
   }
@@ -467,7 +465,7 @@ test('ModelService loads, lists, tracks current, and queries text models', async
 
   const tokens: string[] = [];
   const answer = await service.query('hello', {
-    onToken: (token) => tokens.push(token),
+    onToken: (batch) => tokens.push(...batch),
   });
   assert.equal(answer, 'answer:hello');
   assert.deepEqual(tokens, ['token']);
@@ -487,7 +485,7 @@ test('ModelService.chat renders chat templates and sanitizes assistant boundarie
       { role: 'user', content: 'Say hello.' },
     ],
     {
-      onToken: (token) => tokens.push(token),
+      onToken: (batch) => tokens.push(...batch),
     }
   );
 

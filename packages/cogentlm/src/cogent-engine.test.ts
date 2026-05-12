@@ -191,7 +191,7 @@ test('chat() renders messages through the worker service and sanitizes assistant
     await engine.models.load('model-fake');
     const chunks: string[] = [];
     const output = await engine.chat([{ role: 'user', content: 'hello' }], {
-      onToken: (token) => chunks.push(token),
+      onToken: (batch) => chunks.push(...batch),
     });
     const worker = FakeWorker.lastInstance;
     const chat = worker?.messages.find((message) => message.kind === 'chat');

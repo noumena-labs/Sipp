@@ -52,7 +52,7 @@ class FakeEngine implements DirectorRuntimeEngine {
     }
 
     const safeText = sanitizeFakeChatOutput(this.outputText);
-    options?.onToken?.(safeText);
+    options?.onToken?.([safeText]);
     return safeText;
   }
 }

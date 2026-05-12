@@ -17,19 +17,21 @@ await engine.chat({
   },
   onUserInput: async ({ engine, log, userInput, media }) => {
     log(userInput, 'user');
-    
+
     let fullResponse = '';
     const responseEl = log('', 'ai');
-    
+
     try {
       // If media is present, use the multimodal structure; otherwise, standard chat
-      const chatInput = (media && media.length > 0) 
+      const chatInput = (media && media.length > 0)
         ? { messages: [{ role: 'user', content: userInput }], media }
         : [{ role: 'user', content: userInput }];
 
       await engine.chat(chatInput as any, {
-        onToken: (token) => {
-          fullResponse += token;
+        onToken: (tokens) => {
+          for (const token of tokens) {
+            fullResponse += token;
+          }
           responseEl.innerText = fullResponse;
         }
       });

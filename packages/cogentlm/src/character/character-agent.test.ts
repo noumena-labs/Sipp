@@ -148,7 +148,7 @@ function createFakeEngine(): FakeEngine {
         const result = sanitizer.consume(token);
         if (result.safeText.length > 0) {
           safeOutput += result.safeText;
-          options?.onToken?.(result.safeText);
+          options?.onToken?.([result.safeText]);
         }
         if (result.hitBoundary) {
           break;
@@ -157,7 +157,7 @@ function createFakeEngine(): FakeEngine {
       const flushed = sanitizer.flush();
       if (flushed.length > 0) {
         safeOutput += flushed;
-        options?.onToken?.(flushed);
+        options?.onToken?.([flushed]);
       }
       void rawOutput;
       return safeOutput.trim();

@@ -344,22 +344,21 @@ export default function App() {
         imageEnabled && imageSource.trim().length > 0
           ? await fetchImageBytes(imageSource.trim())
           : undefined;
-      // onToken is invoked at most once per rAF (the SDK coalesces SAB
-      // drains internally), so a single textContent write per call is
-      // already frame-bounded.
       let accumulated = '';
       const onToken =
         streamMode === 'render'
-          ? (chunk: string) => {
-            accumulated += chunk;
-            if (responseElementRef.current) {
-              responseElementRef.current.textContent = accumulated;
+          ? (tokens: string[]) => {
+              for (const chunk of tokens) {
+                accumulated += chunk;
+              }
+              if (responseElementRef.current) {
+                responseElementRef.current.textContent = accumulated;
+              }
             }
-          }
           : streamMode === 'silent'
-            ? (_chunk: string) => {
-              /* silent: SAB drained, no DOM work */
-            }
+            ? (_tokens: string[]) => {
+                /* silent: SAB drained, no DOM work */
+              }
             : undefined;
       try {
         const run = await runObservedQuery(engine, prompt, {
