@@ -150,32 +150,48 @@ const htmlTemplate = `<!DOCTYPE html>
                     [serving, 'appObservedTtftMs'],
                     [serving, 'ttftMs'],
                     [runtime, 'nativeTtftMs'],
+                    [runtime, 'ttftMs'],
                 ],
                 tpotMs: [
                     [serving, 'appObservedTpotMs'],
                     [serving, 'tpotMs'],
+                    [runtime, 'itlAvgMs'],
                 ],
                 itlMs: [
                     [serving, 'appObservedItlMs'],
                     [serving, 'itlMs'],
+                    [runtime, 'itlAvgMs'],
+                    [runtime, 'itlMs'],
                     [runtime, 'nativeMeanItlMs'],
                 ],
                 nativeDecodeTps: [
+                    [runtime, 'tps'],
                     [runtime, 'nativeDecodeTokensPerSecond'],
                     [runtime, 'decodeTokensPerSecond'],
                     [runtime, 'tokensPerSecond'],
                 ],
                 outputThroughputTps: [
                     [serving, 'outputTokenThroughputTps'],
+                    [serving, 'tps'],
                 ],
                 totalThroughputTps: [
                     [serving, 'totalTokenThroughputTps'],
                 ],
                 nativeTtftMs: [
                     [runtime, 'nativeTtftMs'],
+                    [runtime, 'ttftMs'],
                 ],
                 nativeMeanItlMs: [
                     [runtime, 'nativeMeanItlMs'],
+                    [runtime, 'itlAvgMs'],
+                ],
+                prefillMs: [
+                    [runtime, 'avgPrefillMs'],
+                    [runtime, 'prefillMs'],
+                ],
+                decodeMs: [
+                    [runtime, 'avgDecodeMs'],
+                    [runtime, 'decodeMs'],
                 ],
             };
 
@@ -352,12 +368,17 @@ const htmlTemplate = `<!DOCTYPE html>
             
             const env = data.environment || {};
             const backend = data.backend || {};
+            const profile = data.profile || {};
+            const modelName = data.model ? data.model.name : (data.source ? data.source.label : (data.modelSource ? data.modelSource.label : 'N/A'));
+            const gpuInfo = env.adapterArchitecture || (profile.devices ? profile.devices.find(d => d.type === 'gpu')?.description : 'N/A');
+            const backendInfo = backend.inferredExecutionBackend || (profile.availableBackends ? profile.availableBackends.map(b => b.name).join(', ') : 'N/A');
+
             document.getElementById('env-container').innerHTML = \`
                 <div class="env-details">
-                    <p>Model<span>\${data.source ? data.source.label : (data.modelSource ? data.modelSource.label : 'N/A')}</span></p>
+                    <p>Model<span>\${modelName}</span></p>
                     <p>Browser<span>\${env.browserLabel ? env.browserLabel.split(' ')[0] : 'N/A'}</span></p>
-                    <p>GPU Adapter<span>\${env.adapterVendor || ''} \${env.adapterArchitecture || 'N/A'}</span></p>
-                    <p>Backend<span>\${backend.inferredExecutionBackend || 'N/A'} (\${backend.runtimeBackendStatus || 'N/A'})</span></p>
+                    <p>GPU Adapter<span>\${gpuInfo}</span></p>
+                    <p>Backend<span>\${backendInfo}</span></p>
                 </div>
             \`;
 
@@ -370,34 +391,27 @@ const htmlTemplate = `<!DOCTYPE html>
                 dashboard.innerHTML += createPanel('Time per Output Token (TPOT)', 'chart-tpot');
                 dashboard.innerHTML += createPanel('Native Decode TPS', 'chart-native-decode');
                 dashboard.innerHTML += createPanel('End-to-End Output TPS', 'chart-output-throughput');
+                dashboard.innerHTML += createPanel('Inference Breakdown (ms)', 'chart-breakdown');
                 dashboard.innerHTML += createPanel('Memory Usage Profile', 'chart-memory');
 
                 setTimeout(() => {
-                    chartInstances.push(new Chart(document.getElementById('chart-ttft'), {
-                        type: 'bar',
-                        data: {
-                            labels: scenariosLabels,
-                            datasets: [
-                                { label: 'Cold Context', data: getModeSeries('coldPrompt', 'ttftMs'), backgroundColor: '#38bdf8', borderRadius: 4 },
-                                { label: 'Hot Fresh', data: getModeSeries('hotFreshContext', 'ttftMs'), backgroundColor: '#fbbf24', borderRadius: 4 },
-                                { label: 'Hot Reuse', data: getModeSeries('hotReuseContext', 'ttftMs'), backgroundColor: '#4ade80', borderRadius: 4 }
-                            ]
-                        },
-                        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, grid: {color:'rgba(255,255,255,0.05)'} } } }
-                    }));
+                    const setupChart = (id, title, metricKey) => {
+                        return new Chart(document.getElementById(id), {
+                            type: 'bar',
+                            data: {
+                                labels: scenariosLabels,
+                                datasets: [
+                                    { label: 'Cold Context', data: getModeSeries('coldPrompt', metricKey), backgroundColor: '#38bdf8', borderRadius: 4 },
+                                    { label: 'Hot Fresh', data: getModeSeries('hotFreshContext', metricKey), backgroundColor: '#fbbf24', borderRadius: 4 },
+                                    { label: 'Hot Reuse', data: getModeSeries('hotReuseContext', metricKey), backgroundColor: '#4ade80', borderRadius: 4 }
+                                ]
+                            },
+                            options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, grid: {color:'rgba(255,255,255,0.05)'} } } }
+                        });
+                    };
 
-                    chartInstances.push(new Chart(document.getElementById('chart-tpot'), {
-                        type: 'bar',
-                        data: {
-                            labels: scenariosLabels,
-                            datasets: [
-                                { label: 'Cold Context', data: getModeSeries('coldPrompt', 'tpotMs'), backgroundColor: '#38bdf8', borderRadius: 4 },
-                                { label: 'Hot Fresh', data: getModeSeries('hotFreshContext', 'tpotMs'), backgroundColor: '#fbbf24', borderRadius: 4 },
-                                { label: 'Hot Reuse', data: getModeSeries('hotReuseContext', 'tpotMs'), backgroundColor: '#4ade80', borderRadius: 4 }
-                            ]
-                        },
-                        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, grid: {color:'rgba(255,255,255,0.05)'} } } }
-                    }));
+                    chartInstances.push(setupChart('chart-ttft', 'TTFT', 'ttftMs'));
+                    chartInstances.push(setupChart('chart-tpot', 'TPOT', 'tpotMs'));
 
                     chartInstances.push(new Chart(document.getElementById('chart-native-decode'), {
                         type: 'line',
@@ -423,6 +437,18 @@ const htmlTemplate = `<!DOCTYPE html>
                             ]
                         },
                         options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, grid: {color:'rgba(255,255,255,0.05)'} } } }
+                    }));
+
+                    chartInstances.push(new Chart(document.getElementById('chart-breakdown'), {
+                        type: 'bar',
+                        data: {
+                            labels: scenariosLabels,
+                            datasets: [
+                                { label: 'Prefill', data: getModeSeries('hotReuseContext', 'prefillMs'), backgroundColor: '#6366f1', borderRadius: 4 },
+                                { label: 'Decode', data: getModeSeries('hotReuseContext', 'decodeMs'), backgroundColor: '#8b5cf6', borderRadius: 4 }
+                            ]
+                        },
+                        options: { responsive: true, maintainAspectRatio: false, scales: { y: { stacked: true, grid: {color:'rgba(255,255,255,0.05)'} }, x: { stacked: true } } }
                     }));
 
                     if (data.memory && data.memory.snapshots) {

@@ -21,3 +21,4 @@ packages/*/a.out.wasm
 *.gguf
 
 logs/
+log/
