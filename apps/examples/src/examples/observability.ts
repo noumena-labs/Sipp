@@ -18,9 +18,9 @@ export const observabilityExample: Example = {
           log(`--- Performance Report ---`, 'dim');
           log(`Speed: ${formatMetric(metrics.tokensPerSecond, 2)} t/s`, 'ai');
           log(`TTFT: ${formatMetric(metrics.ttftMs)}ms`, 'ai');
-          log(`Prompt Eval: ${formatMetric(metrics.promptEvalMs)}ms`, 'ai');
-          log(`Prefix Cache Hits: ${metrics.prefixCacheHitCount} (Warm)`, 'ai');
-          log(`LCP Reuse Tokens: ${metrics.lcpReuseTokens} (Hot)`, 'ai');
+          log(`Prefill: ${formatMetric(metrics.prefillMs)}ms`, 'ai');
+          log(`Decode: ${formatMetric(metrics.decodeMs)}ms`, 'ai');
+          log(`Cache Hits: ${metrics.cacheHits} tokens`, 'ai');
           log(`-------------------------`, 'dim');
         }
       }
