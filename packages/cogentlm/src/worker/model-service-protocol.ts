@@ -20,10 +20,27 @@ export interface WorkerSerializableCogentConfig {
 }
 
 export type WorkerModelLoadOptions = Pick<ModelLoadOptions, 'observability' | 'runtime'>;
-export type WorkerQueryOptions = Pick<QueryOptions, 'session' | 'maxTokens' | 'grammar'>;
-export type WorkerChatOptions = Pick<ChatOptions, 'session' | 'maxTokens' | 'grammar'>;
+// `streaming` carries the caller's intent across the worker boundary because
+// `onToken` itself can't be cloned through postMessage.  When false the worker
+// must NOT inject its own onToken into the engine — otherwise the engine
+// silently runs in StreamingBuffer/DirectCallback mode and TOKEN_EMISSION_NONE
+// is unreachable from a worker-backed engine.
+export type WorkerQueryOptions =
+  Pick<QueryOptions, 'session' | 'maxTokens' | 'grammar'> & {
+    streaming: boolean;
+  };
+export type WorkerChatOptions =
+  Pick<ChatOptions, 'session' | 'maxTokens' | 'grammar'> & {
+    streaming: boolean;
+  };
 
 export type WorkerRequestMessage =
+  | {
+      // Sent once on worker spawn.  Null when SAB is unavailable; worker
+      // falls back to per-token postMessage in that case.
+      kind: 'streaming-init';
+      ringBuffer: SharedArrayBuffer | null;
+    }
   | {
       kind: 'models-load';
       callId: number;
@@ -87,6 +104,13 @@ export type WorkerResponseMessage =
       kind: 'token';
       callId: number;
       text: string;
+    }
+  | {
+      // Maps native GenerateRequestId → worker callId.  Sent once per
+      // streaming request on enqueue, before any ring records arrive.
+      kind: 'streaming-claim';
+      callId: number;
+      nativeRequestId: number;
     }
   | {
       kind: 'observability-event';

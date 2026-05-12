@@ -33,11 +33,13 @@ const RUNTIME_EVENT_DRAIN_TEXT_BUFFER_SIZE_BYTES = 64 * 1024;
 export const TOKEN_EMISSION_NONE = 0;
 export const TOKEN_EMISSION_RUNTIME_EVENTS = 1;
 export const TOKEN_EMISSION_DIRECT_CALLBACK = 2;
+export const TOKEN_EMISSION_STREAMING_BUFFER = 3;
 
 export type TokenEmissionMode =
   | typeof TOKEN_EMISSION_NONE
   | typeof TOKEN_EMISSION_RUNTIME_EVENTS
-  | typeof TOKEN_EMISSION_DIRECT_CALLBACK;
+  | typeof TOKEN_EMISSION_DIRECT_CALLBACK
+  | typeof TOKEN_EMISSION_STREAMING_BUFFER;
 
 function validateGrammarSize(grammar: string | undefined): void {
   assertGrammarByteSize(grammar);
@@ -47,7 +49,8 @@ function validateTokenEmissionMode(mode: TokenEmissionMode): void {
   if (
     mode !== TOKEN_EMISSION_NONE &&
     mode !== TOKEN_EMISSION_RUNTIME_EVENTS &&
-    mode !== TOKEN_EMISSION_DIRECT_CALLBACK
+    mode !== TOKEN_EMISSION_DIRECT_CALLBACK &&
+    mode !== TOKEN_EMISSION_STREAMING_BUFFER
   ) {
     throw new Error(`invalid token emission mode ${mode}.`);
   }
@@ -92,7 +95,7 @@ export class WasmBridge {
   private _cachedDataView: DataView | null = null;
   private _cachedHeapU8: Uint8Array | null = null;
 
-  public constructor(private readonly module: EngineModule) { }
+  public constructor(public readonly module: EngineModule) { }
 
   private ensureHeapView(): DataView {
     if (
@@ -568,43 +571,41 @@ export class WasmBridge {
   public registerTokenCallback(
     onToken: (text: string) => boolean
   ): number {
-    // Native signature: int32_t (*CE_TokenCallback)(const char *text, int32_t length)
-    //
-    // Emscripten addFunction signature is one char per slot: <return><arg1><arg2>...
-    // Crucially, 'i' is always i32 but 'p' tracks the pointer width of the
-    // build: in this WASM_BIGINT/MEMORY64 build, pointers are i64, so the
-    // native call site produces wasm sig (i64, i32) -> i32. Registering as
-    // 'iii' (i.e. (i32, i32) -> i32) traps with "function signature mismatch"
-    // the moment native invokes the callback. 'ipi' lets emscripten emit i64
-    // for the pointer slot when the build is 64-bit and i32 when it is 32-bit.
-    //
-    // textPtr arrives as a BigInt under WASM_BIGINT (the 'p' slot is i64 in
-    // this build).  Although UTF8ToString accepts `number | bigint` in its
-    // type signature, it forwards the value into UTF8ArrayToString, which does
-    // `endPtr - idx` and `heapOrArray.subarray(idx, endPtr)` — mixing the
-    // BigInt idx with the Number endPtr from findStringEnd throws
-    // "Cannot mix BigInt and other types, use explicit conversions".  Coerce
-    // to Number once at the boundary using byteOffset (which validates the
-    // pointer is a safe integer).
-    //
-    // Return-value contract: native treats 0 as "continue" and any non-zero
-    // value as "cancel" — the C++ lambda is `on_token(...) == 0`, which then
-    // becomes the `bool` the runtime interprets as "keep going".  Our `onToken`
-    // wrapper returns true to mean "continue", so the JS-side mapping is
-    // continue → 0, cancel → 1.  Returning the obvious `? 1 : 0` inverts the
-    // contract and silently cancels every successful token, surfacing as
-    // "Request cancelled." after the first emission.
-    const callbackPtr = this.module.addFunction((textPtr: number | bigint, length: number) => {
+    // addFunction sig 'ipi': (return i32, pointer, i32).  Native ABI is
+    // `int32_t(const char*, int32_t)`; pointer slot uses 'p' so it follows
+    // the build's pointer width.  textPtr arrives as BigInt under
+    // WASM_BIGINT; byteOffset coerces to Number.  Return contract: 0 =
+    // continue, non-zero = cancel.
+    return this.module.addFunction((textPtr: number | bigint, length: number) => {
       const text = this.module.UTF8ToString(this.byteOffset(textPtr), length);
       return onToken(text) ? 0 : 1;
     }, 'ipi');
-    return callbackPtr;
   }
 
   public unregisterTokenCallback(ptr: number): void {
     if (ptr !== 0) {
       this.module.removeFunction(ptr);
     }
+  }
+
+  // Streaming buffer init-time accessors.  Stable wasm-heap addresses; the
+  // caller caches them once and afterwards touches the buffer and counter
+  // cells via HEAPU8 / HEAP32 directly (zero ccalls).  Returns 0 when no
+  // engine is initialized.
+  public getStreamingBufferPointer(): number {
+    return this.callNumber('CE_GetStreamingBufferPointer');
+  }
+
+  public getStreamingBufferCapacity(): number {
+    return this.callNumber('CE_GetStreamingBufferCapacity');
+  }
+
+  public getStreamingBufferUsedAddress(): number {
+    return this.callNumber('CE_GetStreamingBufferUsedAddress');
+  }
+
+  public getStreamingBufferDropCountAddress(): number {
+    return this.callNumber('CE_GetStreamingBufferDropCountAddress');
   }
 
   public drainRuntimeEvents(
@@ -847,6 +848,8 @@ export class WasmBridge {
         nativeGpuMs: view.getFloat64(doublesOffset + 48, true),
         nativeSyncMs: view.getFloat64(doublesOffset + 56, true),
         nativeLogicMs: view.getFloat64(doublesOffset + 64, true),
+        interDecodeJsMs: view.getFloat64(doublesOffset + 72, true),
+        yieldWaitMs: view.getFloat64(doublesOffset + 80, true),
 
         inputTokens: view.getInt32(intsOffset, true),
         outputTokens: view.getInt32(intsOffset + 4, true),

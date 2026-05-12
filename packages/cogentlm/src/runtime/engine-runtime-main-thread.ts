@@ -24,11 +24,13 @@ import {
 import { RequestTracker } from './request-tracker.js';
 import {
   TOKEN_EMISSION_NONE,
-  TOKEN_EMISSION_RUNTIME_EVENTS,
+  TOKEN_EMISSION_DIRECT_CALLBACK,
+  TOKEN_EMISSION_STREAMING_BUFFER,
   type ChatTemplateMessage,
   parseBackendObservabilityJson,
   WasmBridge,
 } from '../wasm/wasm-bridge.js';
+import type { StreamingRingWriter } from './streaming-ring.js';
 import { EngineModule } from '../wasm/engine-module.js';
 import { createAbortError } from '../utils/abort.js';
 import { asErrorMessage } from '../utils/error.js';
@@ -63,6 +65,9 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private runtimeObservabilityEnabled = false;
   private backendProfilingEnabled = false;
   private transportObservability: TransportObservability;
+  // Worker-side SAB ring writer.  When set, queries use StreamingBuffer
+  // mode; otherwise streaming falls back to DirectCallback.
+  private streamingRingWriter: StreamingRingWriter | null = null;
   constructor(private config: CogentConfig = {}) {
     this.executionMode = config.executionMode === 'worker' ? 'worker' : 'main-thread';
     this.transportObservability = this.createTransportObservability();
@@ -77,7 +82,14 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         this.finalizeRequest(bridge, requestId, options);
       },
       cancelQuery: (requestId) => this.cancelQuery(requestId),
+      getStreamingRingWriter: () => this.streamingRingWriter,
     });
+  }
+
+  // Wires the worker-side SAB streaming ring writer; null falls back to
+  // DirectCallback for streaming.  Called once by the worker entry.
+  public setStreamingRingWriter(writer: StreamingRingWriter | null): void {
+    this.streamingRingWriter = writer;
   }
 
 
@@ -242,7 +254,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       return;
     }
 
-    this.transportObservability.activeTokenTransport = 'runtime-events';
+    this.transportObservability.activeTokenTransport =
+      this.streamingRingWriter != null ? 'streaming-buffer' : 'direct-callback';
   }
 
   private refreshTokenTransportObservability(): void {
@@ -513,20 +526,29 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     let requestId: GenerateRequestId = 0;
     let callbackPtr = 0;
 
-    // DIAGNOSTIC: route streaming through the runtime-event queue (drained
-    // in batches by `QueuedRequestScheduler.drainRuntimeEvents` after each
-    // `runInferenceLoop` iteration) instead of the per-token wasm-table
-    // callback.  The DirectCallback path adds a wasm→JS call_indirect plus
-    // BigInt boundary, byteOffset, UTF8ToString, and user-callback work on
-    // the inference critical path *for every token*.  RuntimeEvents enqueues
-    // a string into a vector inside native (sub-µs) and lets JS pull events
-    // in bulk, so any TPS recovery here is direct evidence the per-token
-    // callback is the bottleneck.  `itl_avg_ms` is computed inside native in
-    // `EmitBufferedTokenPiece` regardless of mode, so the benchmark's
-    // `1000 / itlAvgMs` TPS metric stays accurate even when JS dispatch is
-    // delayed until the loop returns.
+    // StreamingBuffer when a SAB ring writer is wired (worker mode);
+    // DirectCallback fallback elsewhere.  No onToken → NONE (full speed,
+    // response returned at end).
+    const useStreamingBuffer = onToken != null && this.streamingRingWriter != null;
+
+    if (onToken != null && !useStreamingBuffer) {
+      callbackPtr = bridge.registerTokenCallback((token) => {
+        try {
+          onToken(token);
+          return true;
+        } catch (e) {
+          this.queuedPromptCallbackErrors.set(requestId, e);
+          return false;
+        }
+      });
+    }
+
     const emissionMode =
-      onToken != null ? TOKEN_EMISSION_RUNTIME_EVENTS : TOKEN_EMISSION_NONE;
+      onToken == null
+        ? TOKEN_EMISSION_NONE
+        : useStreamingBuffer
+          ? TOKEN_EMISSION_STREAMING_BUFFER
+          : TOKEN_EMISSION_DIRECT_CALLBACK;
 
     if (request.media != null && request.media.length > 0) {
       if (this.cachedMediaMarker == null) {
@@ -571,6 +593,19 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
     if (callbackPtr !== 0) {
       this.queuedTokenCallbackPtrs.set(requestId, callbackPtr);
+    }
+
+    // Worker entry uses this hook to publish a streaming-claim message
+    // before inference produces tokens.  Errors are swallowed.
+    if (
+      typeof options === 'object' &&
+      typeof options.__internalRequestStarted === 'function'
+    ) {
+      try {
+        options.__internalRequestStarted(requestId);
+      } catch {
+        /* internal hook errors must not abort enqueue */
+      }
     }
 
     if (onToken != null) {
