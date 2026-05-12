@@ -133,7 +133,8 @@ async function fetchImageBytes(source: string): Promise<Uint8Array[]> {
 }
 
 function formatSummary(summary: MetricSummary | null, unit: string = 'ms'): string {
-  return summary == null ? 'n/a' : `${summary.meanMs} ${unit} mean / ${summary.p99Ms} ${unit} p99`;
+  if (summary == null) return 'n/a';
+  return `${round(summary.meanMs)}${unit} avg / ${round(summary.p99Ms)}${unit} p99`;
 }
 
 function formatTps(value: number | null | undefined): string {
@@ -350,15 +351,15 @@ export default function App() {
       const onToken =
         streamMode === 'render'
           ? (chunk: string) => {
-              accumulated += chunk;
-              if (responseElementRef.current) {
-                responseElementRef.current.textContent = accumulated;
-              }
+            accumulated += chunk;
+            if (responseElementRef.current) {
+              responseElementRef.current.textContent = accumulated;
             }
+          }
           : streamMode === 'silent'
             ? (_chunk: string) => {
-                /* silent: SAB drained, no DOM work */
-              }
+              /* silent: SAB drained, no DOM work */
+            }
             : undefined;
       try {
         const run = await runObservedQuery(engine, prompt, {
@@ -510,20 +511,44 @@ export default function App() {
         <MetricCard label="Decode TPS" value={formatSummary(group.summary.runtime.tps, 'tok/s')} />
       </div>
 
-      <div className="metric-group-title">Compute Phases</div>
+      <div className="metric-group-title">Compute Profile</div>
       <div className="metric-grid">
-        <MetricCard label="Prefill" value={formatSummary(group.summary.runtime.avgPrefillMs)} />
-        <MetricCard label="Decode" value={formatSummary(group.summary.runtime.avgDecodeMs)} />
-        <MetricCard label="Input Tokens" value={group.summary.runtime.avgInputTokens ?? 'n/a'} />
-        <MetricCard label="Output Tokens" value={group.summary.runtime.avgOutputTokens ?? 'n/a'} />
+        <MetricCard
+          label="Prefill"
+          value={group.summary.runtime.avgPrefillMs != null ? formatMs(group.summary.runtime.avgPrefillMs) : 'n/a'}
+        />
+        <MetricCard
+          label="Decode"
+          value={group.summary.runtime.avgDecodeMs != null ? formatMs(group.summary.runtime.avgDecodeMs) : 'n/a'}
+        />
+        <MetricCard
+          label="Input Tokens"
+          value={group.summary.runtime.avgInputTokens ?? 'n/a'}
+        />
+        <MetricCard
+          label="Output Tokens"
+          value={group.summary.runtime.avgOutputTokens ?? 'n/a'}
+        />
       </div>
 
-      <div className="metric-group-title">Hardware Efficiency</div>
+      <div className="metric-group-title">Native Pipeline</div>
       <div className="metric-grid">
-        <MetricCard label="Native GPU" value={formatSummary(group.summary.runtime.avgNativeGpuMs)} />
-        <MetricCard label="Native Sync" value={formatSummary(group.summary.runtime.avgNativeSyncMs)} />
-        <MetricCard label="Engine Logic" value={formatSummary(group.summary.runtime.avgNativeLogicMs)} />
-        <MetricCard label="Cache Hits" value={group.summary.runtime.avgCacheHits ?? 'n/a'} />
+        <MetricCard
+          label="GPU Wall"
+          value={group.summary.runtime.avgNativeGpuMs != null ? formatMs(group.summary.runtime.avgNativeGpuMs) : 'n/a'}
+        />
+        <MetricCard
+          label="Sync/Wait"
+          value={group.summary.runtime.avgNativeSyncMs != null ? formatMs(group.summary.runtime.avgNativeSyncMs) : 'n/a'}
+        />
+        <MetricCard
+          label="CPU Logic"
+          value={group.summary.runtime.avgNativeLogicMs != null ? formatMs(group.summary.runtime.avgNativeLogicMs) : 'n/a'}
+        />
+        <MetricCard
+          label="Cache Hits"
+          value={group.summary.runtime.avgCacheHits ?? 'n/a'}
+        />
       </div>
 
       {group.runs[0]?.outputPreview ? (
