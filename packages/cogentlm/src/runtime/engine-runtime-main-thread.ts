@@ -66,6 +66,10 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   // StreamingBuffer emission mode; otherwise streaming is rejected with an
   // explicit error (cross-origin isolation required).
   private streamingRingWriter: StreamingRingWriter | null = null;
+  // Fires after each successful SAB ring write.  Worker entry sets this
+  // to a postMessage signal so main can drain in a macrotask handler
+  // (outside the rendering phase) instead of a rAF callback.
+  private streamingTickCallback: (() => void) | null = null;
   constructor(private config: CogentConfig = {}) {
     this.executionMode = config.executionMode === 'worker' ? 'worker' : 'main-thread';
     this.transportObservability = this.createTransportObservability();
@@ -81,6 +85,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       },
       cancelQuery: (requestId) => this.cancelQuery(requestId),
       getStreamingRingWriter: () => this.streamingRingWriter,
+      onStreamingTick: () => this.streamingTickCallback?.(),
     });
   }
 
@@ -88,6 +93,13 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   // worker entry after the main thread allocates the ring SAB.
   public setStreamingRingWriter(writer: StreamingRingWriter | null): void {
     this.streamingRingWriter = writer;
+  }
+
+  // Wires the worker→main signal that fires after each SAB write.  Worker
+  // entry passes a postMessage closure so the main thread drains the ring
+  // in its onmessage handler (a macrotask, not a rAF callback).
+  public setStreamingTickCallback(callback: (() => void) | null): void {
+    this.streamingTickCallback = callback;
   }
 
 

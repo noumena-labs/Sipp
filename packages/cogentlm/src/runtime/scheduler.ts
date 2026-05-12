@@ -41,6 +41,13 @@ type QueuedRequestSchedulerOptions = {
   // `_ce_yield_drain` to copy the native streaming buffer into the ring
   // once per yield.  Null on the main-thread engine.
   getStreamingRingWriter?: () => StreamingRingWriter | null;
+  // Called after each successful copy of the native streaming buffer into
+  // the SAB ring.  Worker-mode wiring uses this to postMessage a
+  // 'streaming-tick' to main, so main drains the ring as a macrotask
+  // instead of inside a rendering-phase rAF callback (which would
+  // otherwise compete with the app's own rAF loops).  Null on main-thread
+  // engines where no cross-thread signal is needed.
+  onStreamingTick?: () => void;
 };
 
 export class QueuedRequestScheduler {
@@ -200,7 +207,17 @@ export class QueuedRequestScheduler {
       }
     } finally {
       uninstallYieldDrain();
-      try { this.drainStreamingBufferToRing(bridge); } catch { /* cleanup */ }
+      // Final pass to flush any tail tokens written by the engine after
+      // the last yield-driven drain (e.g. the EoS-handling emit).  Signal
+      // main even on this path so it can pick up the tail before the
+      // request's resolve message lands.
+      try {
+        if (this.drainStreamingBufferToRing(bridge)) {
+          try { this.options.onStreamingTick?.(); } catch { /* cleanup */ }
+        }
+      } catch {
+        /* cleanup */
+      }
     }
   }
 
@@ -221,8 +238,9 @@ export class QueuedRequestScheduler {
       }
       const transport = this.options.getTransportObservability();
       const start = performance.now();
+      let wrote = false;
       try {
-        this.drainStreamingBufferToRing(bridge);
+        wrote = this.drainStreamingBufferToRing(bridge);
       } catch (error) {
         // Drain runs inside the wasm yield body; throwing here aborts the
         // scheduler via a JSPI rejection.  Record + swallow instead.
@@ -234,6 +252,15 @@ export class QueuedRequestScheduler {
         (transport.streamingDrainMs ?? 0) + (performance.now() - start);
       transport.streamingDrainCount =
         (transport.streamingDrainCount ?? 0) + 1;
+      // Signal the consumer side that records are available.  Fires only
+      // when bytes were copied so we don't post empty wakeups.
+      if (wrote) {
+        try {
+          this.options.onStreamingTick?.();
+        } catch {
+          /* signaling is best-effort */
+        }
+      }
     };
     moduleAny._ce_yield_drain = drain;
     return () => {
@@ -272,14 +299,16 @@ export class QueuedRequestScheduler {
 
   // Zero-ccall drain: reads `used` via HEAP32, parses records via HEAPU8,
   // writes each into the SAB ring, then clears the `used` cell.  Safe
-  // because wasm is suspended inside the `ce_native_yield` body.
-  private drainStreamingBufferToRing(bridge: WasmBridge): void {
+  // because wasm is suspended inside the `ce_native_yield` body.  Returns
+  // true if any bytes were copied (callers signal main only on true to
+  // avoid empty wakeups).
+  private drainStreamingBufferToRing(bridge: WasmBridge): boolean {
     const ringWriter = this.options.getStreamingRingWriter?.() ?? null;
     if (ringWriter == null) {
-      return;
+      return false;
     }
     if (!this.ensureStreamingDrainCache(bridge)) {
-      return;
+      return false;
     }
     const heapU8 = bridge.module.HEAPU8;
     const heap32 = bridge.module.HEAP32;
@@ -293,7 +322,7 @@ export class QueuedRequestScheduler {
     }
     const used = heap32[this.cachedUsedHeap32Index];
     if (used <= 0) {
-      return;
+      return false;
     }
     heap32[this.cachedUsedHeap32Index] = 0;
     let offset = this.cachedBufferByteAddr;
@@ -317,5 +346,6 @@ export class QueuedRequestScheduler {
       ringWriter.tryWriteBytes(requestId >>> 0, payload);
       offset = payloadStart + textLength;
     }
+    return true;
   }
 }

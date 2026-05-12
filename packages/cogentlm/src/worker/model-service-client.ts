@@ -121,9 +121,11 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
   // COOP/COEP is missing; streaming requests will error in that case.
   private streamingRingBuffer: SharedArrayBuffer | null = null;
   private streamingRingReader: StreamingRingReader | null = null;
-  // rAF poll handle; alive only while >0 streaming calls are in flight.
+  // Reference count of in-flight streaming calls.  Drives ring teardown
+  // on the last unregister; the actual drain is signal-driven (the worker
+  // sends a 'streaming-tick' message per SAB write) so there is no poll
+  // handle to manage here.
   private streamingActiveCount = 0;
-  private streamingPollHandle: number | null = null;
   // Native request id → worker callId, populated by `streaming-claim`.
   private readonly callIdByNativeRequestId = new Map<number, number>();
 
@@ -221,9 +223,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       return;
     }
     this.closed = true;
-    // Tear down the streaming poll so it doesn't keep `this` reachable.
     this.streamingActiveCount = 0;
-    this.stopStreamingPoll();
     this.streamingRingReader = null;
     this.streamingRingBuffer = null;
     this.callIdByNativeRequestId.clear();
@@ -311,7 +311,6 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       return;
     }
     this.streamingActiveCount += 1;
-    this.startStreamingPoll();
   }
 
   private unregisterStreamingCall(): void {
@@ -321,46 +320,22 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     if (this.streamingActiveCount > 0) {
       this.streamingActiveCount -= 1;
     }
-    if (this.streamingActiveCount === 0) {
-      this.stopStreamingPoll();
-    }
   }
 
-  private startStreamingPoll(): void {
-    if (this.streamingPollHandle != null || this.streamingRingReader == null) {
-      return;
-    }
-    const requestFrame = (cb: FrameRequestCallback): number =>
-      typeof requestAnimationFrame === 'function'
-        ? requestAnimationFrame(cb)
-        : (setTimeout(() => cb(performance.now()), 16) as unknown as number);
-    const tick = () => {
-      this.streamingPollHandle = null;
-      this.drainStreamingRing();
-      if (this.streamingActiveCount === 0) {
-        return;
-      }
-      this.streamingPollHandle = requestFrame(tick);
-    };
-    this.streamingPollHandle = requestFrame(tick);
-  }
-
+  // Drains the SAB ring synchronously and fires `onToken` per record.
+  // Invoked from two places, both as ordinary macrotasks (never inside a
+  // rAF callback):
+  //   - on each 'streaming-tick' from the worker
+  //   - one final pass on each 'resolve' to capture tail tokens written
+  //     between the last yield-drain and the worker's resolve message.
   private drainStreamingRing(): void {
     const reader = this.streamingRingReader;
     if (reader == null) {
       return;
     }
-    // Coalesce all messages drained this frame into one onToken call per
-    // request so callers receive at most one DOM-touching invocation per
-    // animation frame regardless of native decode rate.
-    const aggregated = new Map<number, string>();
     for (const { requestId, text } of reader.drain()) {
       const callId = this.callIdByNativeRequestId.get(requestId);
       if (callId == null) continue;
-      const existing = aggregated.get(callId);
-      aggregated.set(callId, existing == null ? text : existing + text);
-    }
-    for (const [callId, text] of aggregated) {
       const pending = this.pendingCalls.get(callId);
       if (pending != null) {
         try {
@@ -369,17 +344,6 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
           /* user error */
         }
       }
-    }
-  }
-
-  private stopStreamingPoll(): void {
-    if (this.streamingPollHandle != null) {
-      if (typeof cancelAnimationFrame === 'function') {
-        cancelAnimationFrame(this.streamingPollHandle);
-      } else {
-        clearTimeout(this.streamingPollHandle as unknown as ReturnType<typeof setTimeout>);
-      }
-      this.streamingPollHandle = null;
     }
   }
 
@@ -393,7 +357,6 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     }
     // Reset streaming state; the next worker spawn allocates a fresh ring.
     this.streamingActiveCount = 0;
-    this.stopStreamingPoll();
     this.streamingRingReader = null;
     this.streamingRingBuffer = null;
     this.callIdByNativeRequestId.clear();
@@ -494,6 +457,15 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
 
     if (message.kind === 'streaming-claim') {
       this.callIdByNativeRequestId.set(message.nativeRequestId, message.callId);
+      return;
+    }
+
+    if (message.kind === 'streaming-tick') {
+      // Drain in this macrotask handler — not inside a rAF callback — so
+      // we don't compete with the app's rendering-phase rAF callbacks
+      // (e.g. Three.js render loops).  The browser interleaves paints
+      // naturally between these macrotasks.
+      this.drainStreamingRing();
       return;
     }
 
