@@ -6,12 +6,14 @@
 //
 //////////////////////////////////////////////////////////////////////////////
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { CharacterEventBus } from '@noumena-labs/cogentlm/character';
 import type { ChatMessage } from './chat-types';
 
 interface TranscriptDrawerProps {
   readonly open: boolean;
   readonly messages: readonly ChatMessage[];
+  readonly bus: CharacterEventBus;
   readonly onClose: () => void;
   readonly characterName?: string;
   readonly id?: string;
@@ -20,6 +22,7 @@ interface TranscriptDrawerProps {
 export function TranscriptDrawer({
   open,
   messages,
+  bus,
   onClose,
   characterName = 'Companion',
   id = 'transcript-drawer',
@@ -57,10 +60,8 @@ export function TranscriptDrawer({
               Full replies will collect here once the conversation starts.
             </div>
           ) : (
-            messages.map((message) => {
-              const fallbackText = message.pending
-                ? '...'
-                : '[No visible response generated.]';
+            messages.map((message, index) => {
+              const isLatest = index === messages.length - 1;
               return (
                 <article key={message.id} className={`transcript-entry ${message.role}`}>
                   <div className="transcript-meta-row">
@@ -81,7 +82,11 @@ export function TranscriptDrawer({
                     ) : null}
                   </div>
                   <div className="transcript-text">
-                    {message.text.trim().length > 0 ? message.text : fallbackText}
+                    <MessageContent
+                      message={message}
+                      bus={bus}
+                      active={isLatest && message.pending === true}
+                    />
                     {message.pending ? <span className="cursor"></span> : null}
                   </div>
                 </article>
@@ -93,3 +98,38 @@ export function TranscriptDrawer({
     </>
   );
 }
+
+function MessageContent({
+  message,
+  bus,
+  active,
+}: {
+  message: ChatMessage;
+  bus: CharacterEventBus;
+  active: boolean;
+}) {
+  const [streamingText, setStreamingText] = useState('');
+
+  useEffect(() => {
+    if (!active) {
+      setStreamingText('');
+      return;
+    }
+
+    const off = bus.onAny((event) => {
+      if (event.kind === 'prose') {
+        setStreamingText((prev) => prev + event.text);
+      } else if (event.kind === 'turn-start') {
+        setStreamingText('');
+      }
+    });
+
+    return () => off();
+  }, [active, bus]);
+
+  const displayedText = active ? streamingText : message.text;
+  const fallbackText = message.pending ? '...' : '[No visible response generated.]';
+
+  return <>{displayedText.trim().length > 0 ? displayedText : fallbackText}</>;
+}
+

@@ -215,11 +215,11 @@ export default function App() {
     try {
       for await (const event of harness.character.chat(text, { signal: controller.signal })) {
         if (event.kind === 'prose') {
-          setMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === assistantId ? { ...msg, text: msg.text + event.text } : msg
-            )
-          );
+          // PROSE OPTIMIZATION: We no longer update the global 'messages' state
+          // for every streaming token. Instead, components like TranscriptDrawer
+          // and SpeechBubble subscribe to the CharacterEventBus ('bus') to
+          // provide real-time visual feedback without triggering full React
+          // reconciliation cycles.
         } else if (event.kind === 'action') {
           setMessages((prev) =>
             prev.map((msg) =>
@@ -290,7 +290,7 @@ export default function App() {
     .reverse()
     .find((message) => message.role === 'assistant');
   const speaking =
-    latestAssistantMessage?.pending === true && latestAssistantMessage.text.trim().length > 0;
+    latestAssistantMessage?.pending === true;
   const characterName =
     previewCharacter?.config.persona.name ?? harness?.config.persona.name ?? 'Companion';
   const personaSummary =
@@ -370,9 +370,11 @@ export default function App() {
             <TranscriptDrawer
               open={drawerOpen}
               messages={messages}
+              bus={bus}
               onClose={() => setDrawerOpen(false)}
               characterName={characterName}
             />
+
           </>
         ) : (
           <StartScreen

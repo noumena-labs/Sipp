@@ -126,8 +126,28 @@ export function AvatarCanvas({
     bubbleTextRef.current = bubbleText;
     bubblePendingRef.current = bubblePending;
     bubbleActionsRef.current = bubbleActions;
+    // When the prop changes (e.g. at turn-end), we sync the finalized text.
     bubbleRef.current?.setContent(bubbleText, bubblePending, bubbleActions);
   }, [bubbleActions, bubblePending, bubbleText]);
+
+  useEffect(() => {
+    let streamingText = '';
+    const off = bus.onAny((event) => {
+      if (event.kind === 'prose') {
+        streamingText += event.text;
+        bubbleRef.current?.setContent(
+          streamingText,
+          true,
+          bubbleActionsRef.current
+        );
+      } else if (event.kind === 'turn-start') {
+        streamingText = '';
+        bubbleRef.current?.setContent('', true, []);
+      }
+    });
+    return () => off();
+  }, [bus]);
+
 
   useEffect(() => {
     const container = containerRef.current;
