@@ -1,10 +1,9 @@
 name: Publish cogentlm dev
 
 on:
-  schedule:
-    # GitHub schedules use UTC. These cover 2am America/Toronto in DST and standard time.
-    - cron: "0 6 * * *"
-    - cron: "0 7 * * *"
+  # schedule:
+  #   # GitHub schedules use UTC. These cover 2am America/Toronto in DST and standard time.
+  #   - cron: "0 7 * * *"
   workflow_dispatch:
 
 permissions:
@@ -22,11 +21,21 @@ jobs:
     env:
       CE_WASM_BUILD_PARALLEL_LEVEL: "2"
     steps:
-      - name: Require master
+      - name: Validate publish ref
         run: |
-          if [ "${GITHUB_REF}" != "refs/heads/master" ]; then
-            echo "Dev publish workflow must run from master."
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ] && [ "${GITHUB_REF}" != "refs/heads/master" ]; then
+            echo "Scheduled dev publish workflow must run from master."
             exit 1
+          fi
+
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "${GITHUB_REF_TYPE}" != "branch" ]; then
+            echo "::error::Dev publish workflow must run from a branch ref."
+            exit 1
+          fi
+
+          if [ "${GITHUB_REF}" != "refs/heads/master" ]; then
+            echo "Publishing branch dev package from ${GITHUB_REF_NAME}."
           fi
 
       - name: Check out repository
@@ -46,19 +55,6 @@ jobs:
             exit 0
           fi
 
-          LAST_TAG="$(git tag --list 'cogentlm-dev-*' --sort=-creatordate | head -n 1 || true)"
-          COMMIT_RANGE=""
-          if [ -n "$LAST_TAG" ]; then
-            COMMIT_RANGE="$LAST_TAG..HEAD"
-          fi
-
-          NON_BOT_COMMITS="$(git log --format='%H%x09%an%x09%ae' $COMMIT_RANGE | awk -F '\t' '$2 !~ /\\[bot\\]$/ && $3 !~ /\\[bot\\]@users\\.noreply\\.github\\.com$/ && $3 !~ /(^|[+._-])bot@users\\.noreply\\.github\\.com$/ { print $1 }')"
-          if [ -z "$NON_BOT_COMMITS" ]; then
-            echo "No non-bot commits since ${LAST_TAG:-repository start}; skipping dev publish."
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
           BASE_VERSION="$(node <<'NODE'
           const packageJson = require('./packages/cogentlm/package.json');
           const match = packageJson.version.match(/^(\d+)\.(\d+)\.(\d+)/);
@@ -72,42 +68,108 @@ jobs:
           console.log(`${major}.${minor}.${patch}`);
           NODE
           )"
-          DEV_VERSION="${BASE_VERSION}-dev.${GITHUB_RUN_NUMBER}"
-          DEV_TAG="cogentlm-dev-v${DEV_VERSION}"
+
+          IS_MASTER="false"
+          if [ "${GITHUB_REF}" = "refs/heads/master" ]; then
+            IS_MASTER="true"
+          fi
+
+          if [ "$IS_MASTER" = "true" ]; then
+            LAST_TAG="$(git tag --list 'cogentlm-dev-*' --sort=-creatordate | head -n 1 || true)"
+            COMMIT_RANGE=""
+            if [ -n "$LAST_TAG" ]; then
+              COMMIT_RANGE="$LAST_TAG..HEAD"
+            fi
+
+            NON_BOT_COMMITS="$(git log --format='%H%x09%an%x09%ae' $COMMIT_RANGE | awk -F '\t' '$2 !~ /\\[bot\\]$/ && $3 !~ /\\[bot\\]@users\\.noreply\\.github\\.com$/ && $3 !~ /(^|[+._-])bot@users\\.noreply\\.github\\.com$/ { print $1 }')"
+            if [ -z "$NON_BOT_COMMITS" ]; then
+              echo "No non-bot commits since ${LAST_TAG:-repository start}; skipping dev publish."
+              echo "should_publish=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            DEV_VERSION="${BASE_VERSION}-dev.${GITHUB_RUN_NUMBER}"
+            DEV_TAG="cogentlm-dev-v${DEV_VERSION}"
+            DIST_TAG="dev"
+          else
+            LAST_TAG=""
+            DEV_TAG=""
+            BRANCH_SLUG="$(node <<'NODE'
+          const crypto = require('node:crypto');
+
+          const branchName = process.env.GITHUB_REF_NAME;
+          const rawSlug = branchName
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '')
+            .replace(/-{2,}/g, '-');
+
+          if (!rawSlug) {
+            throw new Error(`Could not create a safe npm dist-tag slug from branch: ${branchName}`);
+          }
+
+          const branchHash = crypto.createHash('sha1').update(branchName).digest('hex').slice(0, 8);
+          const slug = rawSlug.length > 60
+            ? `${rawSlug.slice(0, 51).replace(/-+$/g, '')}-${branchHash}`
+            : rawSlug;
+          console.log(slug);
+          NODE
+            )"
+
+            DEV_VERSION="${BASE_VERSION}-dev.branch-${BRANCH_SLUG}.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+            DIST_TAG="branch-${BRANCH_SLUG}"
+          fi
 
           echo "should_publish=true" >> "$GITHUB_OUTPUT"
           echo "version=$DEV_VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$DEV_TAG" >> "$GITHUB_OUTPUT"
+          echo "dist_tag=$DIST_TAG" >> "$GITHUB_OUTPUT"
           echo "last_tag=$LAST_TAG" >> "$GITHUB_OUTPUT"
+          echo "branch=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "is_master=$IS_MASTER" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
 
       - name: Summarize dev publish contents
         if: steps.dev.outputs.should_publish == 'true'
         env:
           LAST_TAG: ${{ steps.dev.outputs.last_tag }}
           DEV_VERSION: ${{ steps.dev.outputs.version }}
+          DIST_TAG: ${{ steps.dev.outputs.dist_tag }}
+          BRANCH_NAME: ${{ steps.dev.outputs.branch }}
+          IS_MASTER: ${{ steps.dev.outputs.is_master }}
+          SHORT_SHA: ${{ steps.dev.outputs.short_sha }}
         run: |
           set -euo pipefail
           {
             echo "## cogentlm dev publish"
             echo
+            echo "- Source branch: \`$BRANCH_NAME\`"
+            echo "- Commit: \`$SHORT_SHA\`"
             echo "- Version: \`$DEV_VERSION\`"
-            echo "- Dist tag: \`dev\`"
-            if [ -n "${LAST_TAG:-}" ]; then
-              echo "- Previous dev tag: \`$LAST_TAG\`"
-              echo
-              echo "### Included PRs"
-              git log --format='%s' "$LAST_TAG"..HEAD | grep -Eo '#[0-9]+' | sort -u || echo "No PR references found in commit subjects."
-              echo
-              echo "### Included commits"
-              git log --oneline "$LAST_TAG"..HEAD
+            echo "- Dist tag: \`$DIST_TAG\`"
+            echo "- Install: \`npm install @noumena-labs/cogentlm@$DIST_TAG\`"
+            if [ "$IS_MASTER" = "true" ]; then
+              if [ -n "${LAST_TAG:-}" ]; then
+                echo "- Previous dev tag: \`$LAST_TAG\`"
+                echo
+                echo "### Included PRs"
+                git log --format='%s' "$LAST_TAG"..HEAD | grep -Eo '#[0-9]+' | sort -u || echo "No PR references found in commit subjects."
+                echo
+                echo "### Included commits"
+                git log --oneline "$LAST_TAG"..HEAD
+              else
+                echo "- Previous dev tag: none"
+                echo
+                echo "### Included PRs"
+                git log --format='%s' | grep -Eo '#[0-9]+' | sort -u || echo "No PR references found in commit subjects."
+                echo
+                echo "### Included commits"
+                git log --oneline
+              fi
             else
-              echo "- Previous dev tag: none"
               echo
-              echo "### Included PRs"
-              git log --format='%s' | grep -Eo '#[0-9]+' | sort -u || echo "No PR references found in commit subjects."
-              echo
-              echo "### Included commits"
-              git log --oneline
+              echo "### Recent branch commits"
+              git log --oneline -n 20
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -245,18 +307,20 @@ jobs:
         if: steps.dev.outputs.should_publish == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
+          DIST_TAG: ${{ steps.dev.outputs.dist_tag }}
         working-directory: packages/cogentlm
-        run: npm publish --dry-run --registry https://npm.pkg.github.com --tag dev
+        run: npm publish --dry-run --registry https://npm.pkg.github.com --tag "$DIST_TAG"
 
       - name: Publish to GitHub Packages
         if: steps.dev.outputs.should_publish == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
+          DIST_TAG: ${{ steps.dev.outputs.dist_tag }}
         working-directory: packages/cogentlm
-        run: npm publish --registry https://npm.pkg.github.com --tag dev
+        run: npm publish --registry https://npm.pkg.github.com --tag "$DIST_TAG"
 
       - name: Tag dev publish
-        if: steps.dev.outputs.should_publish == 'true'
+        if: steps.dev.outputs.should_publish == 'true' && steps.dev.outputs.is_master == 'true'
         env:
           DEV_TAG: ${{ steps.dev.outputs.tag }}
           DEV_VERSION: ${{ steps.dev.outputs.version }}
