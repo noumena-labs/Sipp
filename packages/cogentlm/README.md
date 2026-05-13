@@ -26,12 +26,13 @@ await engine.models.load('https://example.com/model.gguf', {
   runtime: { nCtx: 4096 },
 });
 
-const unsubscribe = engine.observability.subscribe((event) => {
-  console.log(event.type, event.snapshot.state);
+const unsubscribe = engine.observability.subscribe(({ type, snapshot }) => {
+  if (type === 'query-complete') {
+    console.log(`TPS: ${snapshot.runtime?.tokensPerSecond}, TTFT: ${snapshot.runtime?.ttftMs}ms`);
+  }
 });
 
 await engine.chat([{ role: 'user', content: 'Measure this request.' }]);
-console.log(engine.observability.current().runtime);
 unsubscribe();
 ```
 
@@ -98,9 +99,8 @@ Streaming is available through `onToken`:
 
 ```ts
 const output = await engine.chat([{ role: 'user', content: 'Write a haiku.' }], {
-  maxTokens: 64,
-  onToken: (token) => {
-    console.log(token);
+  onToken: (tokens) => {
+    console.log(tokens.join(''));
   },
 });
 ```
