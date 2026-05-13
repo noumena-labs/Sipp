@@ -100,7 +100,12 @@ export function toRuntimeObservation(
     inputTokens: metrics.inputTokens,
     outputTokens: metrics.outputTokens,
     cacheHits: metrics.cacheHits,
-    tokensPerSecond: metrics.itlAvgMs > 0 ? 1000 / metrics.itlAvgMs : 0,
+    prefillTokens: metrics.prefillTokens,
+    tokensPerSecond: metrics.decodeMs > 0 ? (metrics.outputTokens / metrics.decodeMs) * 1000 : 0,
+    prefillTokensPerSecond:
+      metrics.prefillMs >= 0.1 && metrics.prefillTokens >= 1
+        ? (metrics.prefillTokens / metrics.prefillMs) * 1000
+        : 0,
 
 
     execution: {

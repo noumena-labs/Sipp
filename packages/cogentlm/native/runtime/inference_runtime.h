@@ -215,6 +215,7 @@ private:
   std::size_t total_input_tokens_ = 0;
   std::size_t total_output_tokens_ = 0;
   std::size_t total_cache_hits_ = 0;
+  std::size_t total_prefill_tokens_ = 0;
   PendingTickBookkeeping pending_bookkeeping_;
   bool has_pending_bookkeeping_ = false;
 

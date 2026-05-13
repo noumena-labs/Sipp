@@ -46,6 +46,8 @@ export interface BenchmarkRun {
   tps: number | null;
   inputTokens: number | null;
   outputTokens: number;
+  prefillTokens: number | null;
+  prefillTps: number | null;
   outputLength: number;
   outputPreview: string;
   observability: RequestObservability | null;
@@ -57,6 +59,7 @@ export interface GroupSummary {
     benchmarkDurationMs: number;
     totalInputTokens: number;
     totalGeneratedTokens: number;
+    totalPrefillTokens: number;
     requestThroughputRps: number | null;
     outputTokenThroughputTps: number | null;
     totalTokenThroughputTps: number | null;
@@ -66,8 +69,10 @@ export interface GroupSummary {
     itlAvgMs: MetricSummary | null;
     itlP99Ms: MetricSummary | null;
     tps: MetricSummary | null;
+    prefillTps: MetricSummary | null;
     avgInputTokens: number | null;
     avgOutputTokens: number | null;
+    avgPrefillTokens: number | null;
     avgPrefillMs: number | null;
     avgDecodeMs: number | null;
     avgNativeGpuMs: number | null;

@@ -632,6 +632,7 @@ export class WasmBridge {
         inputTokens: view.getInt32(intsOffset, true),
         outputTokens: view.getInt32(intsOffset + 4, true),
         cacheHits: view.getInt32(intsOffset + 8, true),
+        prefillTokens: view.getInt32(intsOffset + 12, true),
       } as any);
     } finally {
       this.free(metricsPtr);

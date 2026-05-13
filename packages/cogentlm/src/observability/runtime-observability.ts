@@ -40,6 +40,8 @@ export interface RequestObservabilityMetrics {
   outputTokens: number;
   /** Number of tokens reused from KV cache (LCP / prefix hits). */
   cacheHits: number;
+  /** Number of tokens actually processed by the GPU during prefill. */
+  prefillTokens: number;
 }
 
 export interface RuntimeAggregateObservabilityMetrics extends RequestObservabilityMetrics {}

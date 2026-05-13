@@ -13,8 +13,7 @@ export const COMPLETED_REQUEST_STATUS_COMPLETED = 1;
 export const COMPLETED_REQUEST_STATUS_CANCELLED = 2;
 export const COMPLETED_REQUEST_STATUS_FAILED = 3;
 export const COMPLETED_REQUEST_STATUS_UNKNOWN = 4;
-// Mirrors CE_RuntimeObservabilityMetrics in native/api/ffi_types.h.
-// 9 doubles + 3 int32 + 1 reserved int32 = 72 + 16 = 88 bytes.
+// 9 doubles + 4 int32 = 72 + 16 = 88 bytes.
 export const RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES = 88;
 export const RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT = 9;
 export const SCHEDULER_LOOP_RESULT_SIZE_BYTES = 16;

@@ -189,6 +189,8 @@ export default function App() {
     ttftMs: number | null;
     tokens: number;
     tps: number | null;
+    prefillTokens: number | null;
+    prefillTps: number | null;
   } | null>(null);
   const [lastLoadMs, setLastLoadMs] = useState(0);
   const [sourceInfo, setSourceInfo] = useState<{ label: string; bytes: number } | null>(null);
@@ -381,6 +383,13 @@ export default function App() {
               ? (run.observability!.outputTokens * 1000) /
               run.observability!.decodeMs
               : null,
+          prefillTps:
+            (run.observability?.prefillMs ?? 0) >= 0.1 &&
+              (run.observability?.prefillTokens ?? 0) >= 1
+              ? (run.observability!.prefillTokens * 1000) /
+              run.observability!.prefillMs
+              : null,
+          prefillTokens: run.observability?.prefillTokens ?? null,
           observability: run.observability,
         });
       } finally {
@@ -507,6 +516,7 @@ export default function App() {
         <MetricCard label="TTFT" value={formatSummary(group.summary.runtime.ttftMs)} />
         <MetricCard label="ITL Avg" value={formatSummary(group.summary.runtime.itlAvgMs)} />
         <MetricCard label="ITL P99" value={formatSummary(group.summary.runtime.itlP99Ms)} />
+        <MetricCard label="Prefill TPS" value={formatSummary(group.summary.runtime.prefillTps, 'tok/s')} />
         <MetricCard label="Decode TPS" value={formatSummary(group.summary.runtime.tps, 'tok/s')} />
       </div>
 
@@ -523,6 +533,10 @@ export default function App() {
         <MetricCard
           label="Input Tokens"
           value={group.summary.runtime.avgInputTokens ?? 'n/a'}
+        />
+        <MetricCard
+          label="Prefill Tokens"
+          value={group.summary.runtime.avgPrefillTokens ?? 'n/a'}
         />
         <MetricCard
           label="Output Tokens"
@@ -839,6 +853,16 @@ export default function App() {
                 }
               />
               <MetricCard
+                label="Current Prefill TPS"
+                value={
+                  lastRun?.prefillTps != null
+                    ? formatTps(lastRun.prefillTps)
+                    : observability?.runtime?.prefillTokensPerSecond == null
+                      ? 'n/a'
+                      : round(observability.runtime.prefillTokensPerSecond)
+                }
+              />
+              <MetricCard
                 label="Backend"
                 value={describeRuntimeBackend(observability?.profile)}
               />
@@ -861,12 +885,14 @@ export default function App() {
                   />
                   <MetricCard label="Tokens" value={lastRun.tokens || 'n/a'} />
                   <MetricCard label="TPS" value={lastRun.tps == null ? 'n/a' : formatTps(lastRun.tps)} />
+                  <MetricCard label="Prefill TPS" value={lastRun.prefillTps == null ? 'n/a' : formatTps(lastRun.prefillTps)} />
                   {lastRun.observability && (
                     <>
                       <div className="metric-group-title" style={{ gridColumn: '1 / -1', marginTop: '1rem' }}>Compute Phases</div>
                       <MetricCard label="Prefill" value={formatMs(lastRun.observability.prefillMs)} />
                       <MetricCard label="Decode" value={formatMs(lastRun.observability.decodeMs)} />
                       <MetricCard label="Input" value={lastRun.observability.inputTokens} />
+                      <MetricCard label="Prefill Tokens" value={lastRun.observability.prefillTokens} />
                       <MetricCard label="Cache Hits" value={lastRun.observability.cacheHits} />
 
                       <div className="metric-group-title" style={{ gridColumn: '1 / -1', marginTop: '1rem' }}>Hardware Efficiency</div>

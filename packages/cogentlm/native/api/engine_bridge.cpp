@@ -233,6 +233,7 @@ void copy_runtime_observability(
   out_metrics->input_tokens = runtime_observability.input_tokens;
   out_metrics->output_tokens = runtime_observability.output_tokens;
   out_metrics->cache_hits = runtime_observability.cache_hits;
+  out_metrics->prefill_tokens = runtime_observability.prefill_tokens;
 }
 
 void copy_scheduler_loop_result(

@@ -329,6 +329,7 @@ void SlotScheduler::FinalizeCompletedSlots(RequestQueue &request_queue,
           request.input_tokens > 0 ? request.input_tokens : static_cast<int32_t>(request.prompt_tokens.size());
       response.runtime_observability.output_tokens = request.output_tokens;
       response.runtime_observability.cache_hits = request.cache_hits;
+      response.runtime_observability.prefill_tokens = request.prefill_tokens;
     }
     if (response.status == GenerateResponseStatus::Cancelled) {
       response.error_message = "Request cancelled.";

@@ -163,6 +163,10 @@ function summarizeRunGroup(runs: BenchmarkRun[], benchmarkDurationMs: number): G
     0
   );
   const totalGeneratedTokens = runs.reduce((acc, run) => acc + run.outputTokens, 0);
+  const totalPrefillTokens = runs.reduce(
+    (acc, run) => acc + (run.observability?.prefillTokens ?? 0),
+    0
+  );
   const benchmarkDurationSeconds = benchmarkDurationMs > 0 ? benchmarkDurationMs / 1000 : 0;
   
   // Native decode TPS: output_tokens / decode_ms.
@@ -176,12 +180,24 @@ function summarizeRunGroup(runs: BenchmarkRun[], benchmarkDurationMs: number): G
     )
     .filter((v) => v > 0);
 
+  // Native prefill TPS: prefill_tokens / prefill_ms.
+  // We use a noise floor (min 0.1ms and ≥1 token) to avoid astronomical 
+  // numbers from zero-token ticks.
+  const prefillTpsValues = observations
+    .map((item) =>
+      item.prefillMs >= 0.1 && item.prefillTokens >= 1
+        ? (item.prefillTokens * 1000) / item.prefillMs
+        : 0
+    )
+    .filter((v) => v > 0);
+
   return {
     serving: {
       successfulRequests: runs.length,
       benchmarkDurationMs,
       totalInputTokens,
       totalGeneratedTokens,
+      totalPrefillTokens,
       requestThroughputRps:
         benchmarkDurationSeconds > 0 ? round(runs.length / benchmarkDurationSeconds) : null,
       outputTokenThroughputTps:
@@ -196,8 +212,10 @@ function summarizeRunGroup(runs: BenchmarkRun[], benchmarkDurationMs: number): G
       itlAvgMs: summarizeOptional(observations.map((item) => item.itlAvgMs)),
       itlP99Ms: summarizeOptional(observations.map((item) => item.itlP99Ms)),
       tps: summarizeOptional(tpsValues),
+      prefillTps: summarizeOptional(prefillTpsValues),
       avgInputTokens: averageOptional(observations.map((item) => item.inputTokens)),
       avgOutputTokens: averageOptional(observations.map((item) => item.outputTokens)),
+      avgPrefillTokens: averageOptional(observations.map((item) => item.prefillTokens)),
       avgPrefillMs: averageOptional(observations.map((item) => item.prefillMs)),
       avgDecodeMs: averageOptional(observations.map((item) => item.decodeMs)),
       avgNativeGpuMs: averageOptional(observations.map((item) => item.nativeGpuMs)),
@@ -228,6 +246,11 @@ function createRun(
         : null,
     inputTokens: observability?.inputTokens ?? null,
     outputTokens: observability?.outputTokens ?? tokenTimes.length,
+    prefillTokens: observability?.prefillTokens ?? null,
+    prefillTps:
+      (observability?.prefillMs ?? 0) >= 0.1 && (observability?.prefillTokens ?? 0) > 1
+        ? (observability!.prefillTokens * 1000) / observability!.prefillMs
+        : null,
     outputLength: output.length,
     outputPreview: output.slice(0, 160).replace(/\s+/g, ' ').trim(),
     observability,

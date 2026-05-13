@@ -80,6 +80,7 @@ struct GenerateRequest {
   int32_t input_tokens = 0;
   int32_t output_tokens = 0;
   int32_t cache_hits = 0;
+  int32_t prefill_tokens = 0;
   int32_t first_sampled_token_id = -1;
   bool is_multimodal_turn = false;
   bool cancel_requested = false;

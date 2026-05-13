@@ -16,11 +16,12 @@ export const observabilityExample: Example = {
         const metrics = event.snapshot.runtime;
         if (metrics) {
           log(`--- Performance Report ---`, 'dim');
-          log(`Speed: ${formatMetric(metrics.tokensPerSecond, 2)} t/s`, 'ai');
+          log(`Prefill Speed: ${formatMetric(metrics.prefillTokensPerSecond, 2)} t/s`, 'ai');
+          log(`Decode Speed: ${formatMetric(metrics.tokensPerSecond, 2)} t/s`, 'ai');
           log(`TTFT: ${formatMetric(metrics.ttftMs)}ms`, 'ai');
-          log(`Prompt Eval: ${formatMetric(metrics.promptEvalMs)}ms`, 'ai');
-          log(`Prefix Cache Hits: ${metrics.prefixCacheHitCount} (Warm)`, 'ai');
-          log(`LCP Reuse Tokens: ${metrics.lcpReuseTokens} (Hot)`, 'ai');
+          log(`Prefill Compute: ${formatMetric(metrics.prefillMs)}ms (${metrics.prefillTokens} tokens)`, 'ai');
+          log(`Decode Compute: ${formatMetric(metrics.decodeMs)}ms`, 'ai');
+          log(`Prefix Cache Hits: ${metrics.cacheHits} tokens`, 'ai');
           log(`-------------------------`, 'dim');
         }
       }

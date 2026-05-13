@@ -135,8 +135,10 @@ export interface RuntimeObservation {
   inputTokens: number;
   outputTokens: number;
   cacheHits: number;
+  prefillTokens: number;
 
   tokensPerSecond: number | null;
+  prefillTokensPerSecond: number | null;
 
   // JS Side & Transport Metadata
   execution: {

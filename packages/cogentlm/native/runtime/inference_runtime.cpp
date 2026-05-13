@@ -411,34 +411,39 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
   std::size_t match_len = live_match_len;
   bool restored_from_prefix_cache = false;
 
-  if (!has_live_tokens && !prompt_tokens.empty()) {
+  // Always check the Prefix Cache for an even better match, or if we have no live tokens.
+  if (!prompt_tokens.empty()) {
     if (const PrefixCacheEntry *cached_prefix =
             prefix_state_cache_.FindBestPrefix(model_fingerprint_, context_key,
                                                prompt_tokens,
                                                prefix_cache_policy_);
         cached_prefix != nullptr) {
-      const std::size_t restored = llama_state_seq_set_data(
-          shared_context_, cached_prefix->state_bytes.data(),
-          cached_prefix->state_bytes.size(), seq_id);
-      if (restored == cached_prefix->state_bytes.size()) {
-        // The cached `state_bytes` may correspond to a deferred snapshot
-        // taken *after* the boundary moment (i.e. the seq had already
-        // decoded a few tokens past `token_count` by the time the drain
-        // ran).
-        state.current_kv_tokens = cached_prefix->prefix_tokens;
-        state.n_past = static_cast<int>(cached_prefix->token_count);
-        match_len = std::min(cached_prefix->token_count, prompt_tokens.size());
-        restored_from_prefix_cache = true;
-      } else {
-        llama_memory_seq_rm(mem, seq_id, 0, -1);
-        state.current_kv_tokens.clear();
-        state.n_past = 0;
+      // Only restore from prefix cache if it provides a strictly better hit than our current live tokens.
+      if (cached_prefix->token_count > live_match_len) {
+        const std::size_t restored = llama_state_seq_set_data(
+            shared_context_, cached_prefix->state_bytes.data(),
+            cached_prefix->state_bytes.size(), seq_id);
+        if (restored == cached_prefix->state_bytes.size()) {
+          state.current_kv_tokens = cached_prefix->prefix_tokens;
+          state.n_past = static_cast<int>(cached_prefix->token_count);
+          match_len = std::min(cached_prefix->token_count, prompt_tokens.size());
+          restored_from_prefix_cache = true;
+        }
       }
     }
   }
 
+  // If we didn't restore from prefix cache and have no live tokens, we must scrub.
+  if (!restored_from_prefix_cache && !has_live_tokens) {
+    llama_memory_seq_rm(mem, seq_id, 0, -1);
+    state.current_kv_tokens.clear();
+    state.n_past = 0;
+    match_len = 0;
+  }
+
   // Ensure we have an authoritative match length before we check space.
-  match_len = session_store_.ComputeLcpReuse(state, prompt_tokens);
+  // We take the MAX of the Prefix Cache hit and the local session hit.
+  match_len = std::max(match_len, session_store_.ComputeLcpReuse(state, prompt_tokens));
 
   const int n_ctx = llama_n_ctx(shared_context_);
   const int tokens_to_add = static_cast<int>(prompt_tokens.size() - match_len);
@@ -615,14 +620,13 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
     request.multimodal.reset();
     return false;
   }
-  mirror.current_kv_tokens.clear();
-  mirror.n_past = 0;
-
   const auto prefill_start = std::chrono::steady_clock::now();
   llama_pos new_n_past = 0;
   const int32_t eval_status = mtmd_helper_eval_chunks(
-      mtmd_ctx_, shared_context_, chunks.get(), 0, slot.seq_id,
+      mtmd_ctx_, shared_context_, chunks.get(),
+      static_cast<int32_t>(slot.prefill_cursor), slot.seq_id,
       ResolveBatchTokenBudgetLocked(), true, &new_n_past);
+  llama_synchronize(shared_context_);
   const auto prefill_end = std::chrono::steady_clock::now();
   request.multimodal.reset();
   if (eval_status != 0) {
@@ -634,17 +638,27 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
   const double multimodal_prefill_ms =
       std::chrono::duration<double, std::milli>(prefill_end - prefill_start)
           .count();
-  request.input_tokens += static_cast<int32_t>(new_n_past);
+  const int32_t multimodal_token_count = static_cast<int32_t>(new_n_past);
+  const int32_t multimodal_processed_tokens =
+      std::max<int32_t>(0, multimodal_token_count - static_cast<int32_t>(slot.prefill_cursor));
+  
+  // Correction: For multimodal requests, the actual input token count (including images)
+  // is only known after evaluation. We update both the request-specific and 
+  // system-wide input token counters to ensure accurate hit-rate and TPS reporting.
+  const int32_t previously_counted = request.input_tokens;
+  request.input_tokens = multimodal_token_count;
+  total_input_tokens_ += (multimodal_token_count - previously_counted);
+
+  request.prefill_tokens += multimodal_processed_tokens;
   request.prefill_ms += multimodal_prefill_ms;
-  total_input_tokens_ += static_cast<std::size_t>(new_n_past);
+  total_prefill_tokens_ += static_cast<std::size_t>(multimodal_processed_tokens);
   total_prefill_ms_ += multimodal_prefill_ms;
   // request.e2e_ms is finalized at completion (enqueued_at → completed_at)
   // by FinalizeCompletedSlots; we don't accumulate ticks into it here.
   slot.prefill_cursor = request.prompt_tokens.size();
 
-  // The multimodal prefill path runs on the same async backends as normal
-  // decode, so force completion before reading logits for the first sample.
-  llama_synchronize(shared_context_);
+  // The multimodal prefill path has finished synchronization above.
+  // We can proceed to sampling.
 
   const llama_token next_token =
       llama_sampler_sample(slot.sampler, shared_context_, -1);
@@ -974,8 +988,8 @@ void InferenceRuntime::CompletePendingBookkeepingLocked() {
       scratch_tick_requests_.push_back(&request);
     }
     if (contribution.kind == BatchContributionKind::Prefill) {
-      request.input_tokens++;
-      total_input_tokens_++;
+      request.prefill_tokens++;
+      total_prefill_tokens_++;
       tick_had_prefill = true;
       it->second |= kKindPrefill;
     } else {
@@ -1011,12 +1025,11 @@ void InferenceRuntime::CompletePendingBookkeepingLocked() {
     }
   }
 
-  // System-wide totals: a mixed tick counts once toward decode (its
-  // user-observable phase) when any contribution was decode; otherwise toward
-  // prefill if any contribution was prefill.
+  // System-wide totals: count wall-clock time for each phase that was active.
   if (tick_had_decode) {
     total_decode_ms_ += tick_phase_ms;
-  } else if (tick_had_prefill) {
+  }
+  if (tick_had_prefill) {
     total_prefill_ms_ += tick_phase_ms;
   }
 
@@ -1581,6 +1594,7 @@ void InferenceRuntime::CommitCompletedObservabilityLocked(
   last_runtime_observability_.input_tokens = request_metrics.input_tokens;
   last_runtime_observability_.output_tokens = request_metrics.output_tokens;
   last_runtime_observability_.cache_hits = request_metrics.cache_hits;
+  last_runtime_observability_.prefill_tokens = request_metrics.prefill_tokens;
 
   has_last_runtime_observability_ = true;
 }
@@ -1647,7 +1661,8 @@ InferenceRuntime::InferenceRuntime(std::string model_path,
       total_prefill_ms_(0.0),
       total_input_tokens_(0),
       total_output_tokens_(0),
-      total_cache_hits_(0) {
+      total_cache_hits_(0),
+      total_prefill_tokens_(0) {
   if (model_path.empty()) {
     fprintf(stderr, "%s: error: model path is required\n", __func__);
     return;
@@ -1838,31 +1853,52 @@ bool InferenceRuntime::TryGetRuntimeObservability(
 
   RuntimeObservabilityMetrics metrics = {};
   
-  // Cumulative Counters (The Source of Truth for System TPS)
-  metrics.input_tokens = static_cast<int32_t>(total_input_tokens_);
-  metrics.output_tokens = static_cast<int32_t>(total_output_tokens_);
-  metrics.cache_hits = static_cast<int32_t>(total_cache_hits_);
-  metrics.prefill_ms = total_prefill_ms_;
-  metrics.decode_ms = total_decode_ms_;
-
   bool any_active = false;
   for (const auto &slot : slot_scheduler_.Slots()) {
     if (slot.request != nullptr) {
       any_active = true;
-      // Report TTFT of the first active request in the session.
-      if (metrics.ttft_ms == 0.0 && slot.request->has_first_token_at) {
-        metrics.ttft_ms = duration_ms(slot.request->enqueued_at, slot.request->first_token_at);
+      const GenerateRequest &request = *slot.request;
+      
+      // Request-specific metrics (Current Query context)
+      metrics.input_tokens = request.input_tokens;
+      metrics.output_tokens = request.output_tokens;
+      metrics.cache_hits = request.cache_hits;
+      metrics.prefill_tokens = request.prefill_tokens;
+      metrics.prefill_ms = request.prefill_ms;
+      metrics.decode_ms = request.decode_ms;
+      metrics.native_gpu_ms = request.native_gpu_ms;
+      metrics.native_sync_ms = request.native_sync_ms;
+      metrics.native_logic_ms = request.native_logic_ms;
+      
+      // Calculate active ITL
+      if (request.output_tokens > 1) {
+        metrics.itl_avg_ms = request.decode_ms / (request.output_tokens - 1);
       }
+
+      // Report TTFT of the first active request in the session.
+      if (request.has_first_token_at) {
+        metrics.ttft_ms = duration_ms(request.enqueued_at, request.first_token_at);
+      }
+      
+      // Once we find an active request, we use its context for the snapshot.
+      break;
     }
   }
 
   // If nothing is active, fall back to latency metrics from the last completed request
   // (to avoid zeros in the UI after a query finishes).
-  if (!any_active && has_last_runtime_observability_) {
-    metrics.ttft_ms = last_runtime_observability_.ttft_ms;
-    metrics.itl_avg_ms = last_runtime_observability_.itl_avg_ms;
-    metrics.itl_p99_ms = last_runtime_observability_.itl_p99_ms;
-    metrics.e2e_ms = last_runtime_observability_.e2e_ms;
+  if (!any_active) {
+    if (has_last_runtime_observability_) {
+      metrics = last_runtime_observability_;
+    } else {
+      // Fallback to system-wide totals if no request has ever finished
+      metrics.input_tokens = static_cast<int32_t>(total_input_tokens_);
+      metrics.output_tokens = static_cast<int32_t>(total_output_tokens_);
+      metrics.cache_hits = static_cast<int32_t>(total_cache_hits_);
+      metrics.prefill_tokens = static_cast<int32_t>(total_prefill_tokens_);
+      metrics.prefill_ms = total_prefill_ms_;
+      metrics.decode_ms = total_decode_ms_;
+    }
   }
 
   out = metrics;
@@ -1919,6 +1955,9 @@ GenerateRequestId InferenceRuntime::EnqueueRequest(
   request.prompt_tokens = std::move(prompt_tokens);
   request.grammar = std::move(grammar);
 
+  request.input_tokens = static_cast<int32_t>(request.prompt_tokens.size());
+  total_input_tokens_ += request.prompt_tokens.size();
+
   if (!request_queue_.Push(std::move(request))) {
     return 0;
   }
@@ -1974,6 +2013,9 @@ GenerateRequestId InferenceRuntime::EnqueueMultimodalRequest(
   request.token_emission_mode = token_emission_mode;
   request.is_multimodal_turn = true;
   request.grammar = std::move(grammar);
+
+  request.input_tokens = static_cast<int32_t>(request.prompt_tokens.size());
+  total_input_tokens_ += request.prompt_tokens.size();
 
   if (!request_queue_.Push(std::move(request))) {
     return 0;
@@ -2039,6 +2081,7 @@ SchedulerBurstResult InferenceRuntime::RunSchedulerBurst(
 
     if (step_result == RequestStepResult::Invalid ||
         step_result == RequestStepResult::FatalNoProgress) {
+      FlushAllPendingBookkeepingLocked();
       burst_result.status = step_result;
       return burst_result;
     }
@@ -2061,6 +2104,7 @@ SchedulerBurstResult InferenceRuntime::RunSchedulerBurst(
     // gate keeps the drain off the per-token critical path.
 
     if (step_result == RequestStepResult::Waiting) {
+      FlushAllPendingBookkeepingLocked();
       prefix_state_cache_.DrainPendingSnapshots(shared_context_, 2);
       burst_result.status = burst_result.progressed_ticks > 0 ||
                                     burst_result.completed_response_count > 0
@@ -2077,17 +2121,20 @@ SchedulerBurstResult InferenceRuntime::RunSchedulerBurst(
 
     if (clamped_max_completed > 0 &&
         burst_result.completed_response_count >= clamped_max_completed) {
+      FlushAllPendingBookkeepingLocked();
       drain_if_request_just_completed();
       burst_result.status = RequestStepResult::Progressed;
       return burst_result;
     }
     if (clamped_max_emitted > 0 &&
         burst_result.emitted_token_count >= clamped_max_emitted) {
+      FlushAllPendingBookkeepingLocked();
       drain_if_request_just_completed();
       burst_result.status = RequestStepResult::Progressed;
       return burst_result;
     }
     if (has_duration_deadline && std::chrono::steady_clock::now() >= deadline) {
+      FlushAllPendingBookkeepingLocked();
       drain_if_request_just_completed();
       burst_result.status = burst_result.progressed_ticks > 0 ||
                                     burst_result.completed_response_count > 0

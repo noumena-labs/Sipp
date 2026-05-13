@@ -79,7 +79,7 @@ typedef struct CE_RuntimeObservabilityMetrics {
   int32_t input_tokens;
   int32_t output_tokens;
   int32_t cache_hits;
-  int32_t _reserved;
+  int32_t prefill_tokens;
 } CE_RuntimeObservabilityMetrics;
 
 typedef struct CE_SchedulerLoopResult {
