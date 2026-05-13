@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "chat.h"
+#include "log.h"
 #include "mtmd-helper.h"
 #include "mtmd.h"
 #include "runtime/config/scheduler_policy.h"
@@ -411,14 +412,16 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
   std::size_t match_len = live_match_len;
   bool restored_from_prefix_cache = false;
 
-  // Always check the Prefix Cache for an even better match, or if we have no live tokens.
+  // Always check the Prefix Cache for an even better match, or if we have no
+  // live tokens.
   if (!prompt_tokens.empty()) {
     if (const PrefixCacheEntry *cached_prefix =
             prefix_state_cache_.FindBestPrefix(model_fingerprint_, context_key,
                                                prompt_tokens,
                                                prefix_cache_policy_);
         cached_prefix != nullptr) {
-      // Only restore from prefix cache if it provides a strictly better hit than our current live tokens.
+      // Only restore from prefix cache if it provides a strictly better hit
+      // than our current live tokens.
       if (cached_prefix->token_count > live_match_len) {
         const std::size_t restored = llama_state_seq_set_data(
             shared_context_, cached_prefix->state_bytes.data(),
@@ -426,14 +429,16 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
         if (restored == cached_prefix->state_bytes.size()) {
           state.current_kv_tokens = cached_prefix->prefix_tokens;
           state.n_past = static_cast<int>(cached_prefix->token_count);
-          match_len = std::min(cached_prefix->token_count, prompt_tokens.size());
+          match_len =
+              std::min(cached_prefix->token_count, prompt_tokens.size());
           restored_from_prefix_cache = true;
         }
       }
     }
   }
 
-  // If we didn't restore from prefix cache and have no live tokens, we must scrub.
+  // If we didn't restore from prefix cache and have no live tokens, we must
+  // scrub.
   if (!restored_from_prefix_cache && !has_live_tokens) {
     llama_memory_seq_rm(mem, seq_id, 0, -1);
     state.current_kv_tokens.clear();
@@ -443,7 +448,8 @@ bool InferenceRuntime::PrepareSequenceForPromptLocked(
 
   // Ensure we have an authoritative match length before we check space.
   // We take the MAX of the Prefix Cache hit and the local session hit.
-  match_len = std::max(match_len, session_store_.ComputeLcpReuse(state, prompt_tokens));
+  match_len =
+      std::max(match_len, session_store_.ComputeLcpReuse(state, prompt_tokens));
 
   const int n_ctx = llama_n_ctx(shared_context_);
   const int tokens_to_add = static_cast<int>(prompt_tokens.size() - match_len);
@@ -639,19 +645,21 @@ bool InferenceRuntime::RunMultimodalPrefillLocked(SlotState &slot,
       std::chrono::duration<double, std::milli>(prefill_end - prefill_start)
           .count();
   const int32_t multimodal_token_count = static_cast<int32_t>(new_n_past);
-  const int32_t multimodal_processed_tokens =
-      std::max<int32_t>(0, multimodal_token_count - static_cast<int32_t>(slot.prefill_cursor));
-  
-  // Correction: For multimodal requests, the actual input token count (including images)
-  // is only known after evaluation. We update both the request-specific and 
-  // system-wide input token counters to ensure accurate hit-rate and TPS reporting.
+  const int32_t multimodal_processed_tokens = std::max<int32_t>(
+      0, multimodal_token_count - static_cast<int32_t>(slot.prefill_cursor));
+
+  // Correction: For multimodal requests, the actual input token count
+  // (including images) is only known after evaluation. We update both the
+  // request-specific and system-wide input token counters to ensure accurate
+  // hit-rate and TPS reporting.
   const int32_t previously_counted = request.input_tokens;
   request.input_tokens = multimodal_token_count;
   total_input_tokens_ += (multimodal_token_count - previously_counted);
 
   request.prefill_tokens += multimodal_processed_tokens;
   request.prefill_ms += multimodal_prefill_ms;
-  total_prefill_tokens_ += static_cast<std::size_t>(multimodal_processed_tokens);
+  total_prefill_tokens_ +=
+      static_cast<std::size_t>(multimodal_processed_tokens);
   total_prefill_ms_ += multimodal_prefill_ms;
   // request.e2e_ms is finalized at completion (enqueued_at → completed_at)
   // by FinalizeCompletedSlots; we don't accumulate ticks into it here.
@@ -998,8 +1006,9 @@ void InferenceRuntime::CompletePendingBookkeepingLocked() {
       request.emitted_token_count++;
       total_output_tokens_++;
       it->second |= kKindDecode;
-      // first_token_at is set at the sampling site inside RunPolicyBatchTickLocked
-      // so TTFT doesn't include the post-decode yield + next-tick prefix.
+      // first_token_at is set at the sampling site inside
+      // RunPolicyBatchTickLocked so TTFT doesn't include the post-decode yield
+      // + next-tick prefix.
     }
   }
 
@@ -1105,7 +1114,8 @@ void InferenceRuntime::EmitPendingTokensLocked() {
     return;
   }
 
-  for (const BatchContribution &contribution : pending_bookkeeping_.plan.contributions) {
+  for (const BatchContribution &contribution :
+       pending_bookkeeping_.plan.contributions) {
     if (contribution.slot != nullptr) {
       SlotState &slot = *contribution.slot;
       if (!slot.buffered_output_text.empty()) {
@@ -1502,11 +1512,15 @@ bool InferenceRuntime::RunPolicyBatchTickLocked() {
   const double total_tick_ms = duration_ms(tick_start, tick_end);
 
   // Prepare bookkeeping for the NEXT tick's GPU window.
-  // We use direct assignment to avoid aggregate initialization errors in some C++ environments.
+  // We use direct assignment to avoid aggregate initialization errors in some
+  // C++ environments.
   pending_bookkeeping_.plan = std::move(plan);
-  pending_bookkeeping_.logits_contributions = std::move(scratch_logits_contributions_);
-  pending_bookkeeping_.prefix_cache_entries = std::move(next_prefix_cache_entries);
-  pending_bookkeeping_.effective_prefill_chunk_size = effective_prefill_chunk_size;
+  pending_bookkeeping_.logits_contributions =
+      std::move(scratch_logits_contributions_);
+  pending_bookkeeping_.prefix_cache_entries =
+      std::move(next_prefix_cache_entries);
+  pending_bookkeeping_.effective_prefill_chunk_size =
+      effective_prefill_chunk_size;
   pending_bookkeeping_.tick_budget = tick_budget;
   pending_bookkeeping_.tick_time_ms = raw_gpu_ms;
   pending_bookkeeping_.native_gpu_ms = raw_gpu_ms;
@@ -1657,12 +1671,8 @@ InferenceRuntime::InferenceRuntime(std::string model_path,
           static_cast<std::size_t>(config_.prefix_cache_interval_tokens)),
       model_fingerprint_(
           static_cast<std::uint64_t>(std::hash<std::string>{}(model_path))),
-      total_decode_ms_(0.0),
-      total_prefill_ms_(0.0),
-      total_input_tokens_(0),
-      total_output_tokens_(0),
-      total_cache_hits_(0),
-      total_prefill_tokens_(0) {
+      total_decode_ms_(0.0), total_prefill_ms_(0.0), total_input_tokens_(0),
+      total_output_tokens_(0), total_cache_hits_(0), total_prefill_tokens_(0) {
   if (model_path.empty()) {
     fprintf(stderr, "%s: error: model path is required\n", __func__);
     return;
@@ -1670,6 +1680,12 @@ InferenceRuntime::InferenceRuntime(std::string model_path,
 
 #if defined(NDEBUG) || defined(CE_SUPPRESS_LLAMA_LOGS)
   llama_log_set(llama_utils::LogCallbackDefault, nullptr);
+#endif
+#if defined(__EMSCRIPTEN__) && defined(CE_SUPPRESS_LLAMA_LOGS)
+  // llama.cpp/common logs lazily start a background std::thread. Browser WASM
+  // pthread pools are fixed-size, so do not let chat template LOG_* calls
+  // consume or fail on an extra worker.
+  common_log_set_verbosity_thold(LOG_LEVEL_OUTPUT - 1);
 #endif
 
   ggml_backend_load_all();
@@ -1852,13 +1868,13 @@ bool InferenceRuntime::TryGetRuntimeObservability(
   }
 
   RuntimeObservabilityMetrics metrics = {};
-  
+
   bool any_active = false;
   for (const auto &slot : slot_scheduler_.Slots()) {
     if (slot.request != nullptr) {
       any_active = true;
       const GenerateRequest &request = *slot.request;
-      
+
       // Request-specific metrics (Current Query context)
       metrics.input_tokens = request.input_tokens;
       metrics.output_tokens = request.output_tokens;
@@ -1869,7 +1885,7 @@ bool InferenceRuntime::TryGetRuntimeObservability(
       metrics.native_gpu_ms = request.native_gpu_ms;
       metrics.native_sync_ms = request.native_sync_ms;
       metrics.native_logic_ms = request.native_logic_ms;
-      
+
       // Calculate active ITL
       if (request.output_tokens > 1) {
         metrics.itl_avg_ms = request.decode_ms / (request.output_tokens - 1);
@@ -1877,16 +1893,17 @@ bool InferenceRuntime::TryGetRuntimeObservability(
 
       // Report TTFT of the first active request in the session.
       if (request.has_first_token_at) {
-        metrics.ttft_ms = duration_ms(request.enqueued_at, request.first_token_at);
+        metrics.ttft_ms =
+            duration_ms(request.enqueued_at, request.first_token_at);
       }
-      
+
       // Once we find an active request, we use its context for the snapshot.
       break;
     }
   }
 
-  // If nothing is active, fall back to latency metrics from the last completed request
-  // (to avoid zeros in the UI after a query finishes).
+  // If nothing is active, fall back to latency metrics from the last completed
+  // request (to avoid zeros in the UI after a query finishes).
   if (!any_active) {
     if (has_last_runtime_observability_) {
       metrics = last_runtime_observability_;
@@ -1917,8 +1934,7 @@ bool InferenceRuntime::BackendProfilingEnabled() const {
 
 GenerateRequestId InferenceRuntime::EnqueueRequest(
     std::string context_key, std::string prompt, int n_tokens_predict,
-    std::string grammar,
-    GenerateTokenEmissionMode token_emission_mode) {
+    std::string grammar, GenerateTokenEmissionMode token_emission_mode) {
   const auto enqueued_at = std::chrono::steady_clock::now();
   // Fast-fail without lock (model pointer is immutable after construction).
   if (primary_model_ == nullptr || sampler_ == nullptr) {
@@ -1968,8 +1984,7 @@ GenerateRequestId InferenceRuntime::EnqueueRequest(
 GenerateRequestId InferenceRuntime::EnqueueMultimodalRequest(
     std::string context_key, std::string prompt, int n_tokens_predict,
     std::vector<std::pair<const std::uint8_t *, std::size_t>> image_views,
-    std::string grammar,
-    GenerateTokenEmissionMode token_emission_mode) {
+    std::string grammar, GenerateTokenEmissionMode token_emission_mode) {
   const auto enqueued_at = std::chrono::steady_clock::now();
   if (primary_model_ == nullptr || sampler_ == nullptr ||
       mtmd_ctx_ == nullptr || !mtmd_support_vision(mtmd_ctx_)) {
