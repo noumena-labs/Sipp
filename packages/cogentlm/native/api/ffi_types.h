@@ -14,13 +14,12 @@
 // stay in a JS-safe scalar ABI. Do not widen this to uint64_t without also
 // changing the exported calling convention.
 typedef uint32_t CE_RequestId;
-typedef int32_t (*CE_TokenCallback)(const char *token_piece,
-                                    int32_t token_length);
 
 typedef enum CE_TokenEmissionMode {
   CE_TOKEN_EMISSION_NONE = 0,
-  CE_TOKEN_EMISSION_RUNTIME_EVENTS = 1,
-  CE_TOKEN_EMISSION_DIRECT_CALLBACK = 2,
+  // Native appends to the streaming buffer; JS drains via the SAB ring on
+  // each ce_native_yield.  See request_queue.h for the wire format.
+  CE_TOKEN_EMISSION_STREAMING_BUFFER = 1,
 } CE_TokenEmissionMode;
 
 typedef struct CE_InitConfig {
@@ -59,60 +58,42 @@ typedef struct CE_InitConfig {
 } CE_InitConfig;
 
 typedef struct CE_RuntimeObservabilityMetrics {
-  double total_ms;
-  double prompt_eval_ms;
-  double decode_eval_ms;
-  double sample_ms;
-  double queue_delay_ms;
+  // Latency (User Experience)
   double ttft_ms;
-  double mean_itl_ms;
-  double tail_itl_ms;
+  double itl_avg_ms;
+  double itl_p99_ms;
   double e2e_ms;
-  int32_t input_token_count;
-  int32_t prompt_eval_tokens;
-  int32_t decode_eval_count;
-  int32_t sample_count;
-  int32_t output_token_count;
-  int32_t first_sampled_token_id;
-  int32_t batch_participation_count;
-  int32_t decode_first_tick_count;
-  int32_t chunked_prefill_tick_count;
-  int32_t mixed_workload_tick_count;
-  int32_t lcp_reuse_tokens;
-  int32_t prefix_cache_restore_tokens;
-  int32_t prefix_cache_hit_count;
-  int32_t prefix_cache_store_count;
+
+  // Phases (Compute)
+  double prefill_ms;
+  double decode_ms;
+
+  // Native (Hardware & Engine).  native_gpu_ms is raw decode+sync wall time;
+  // in WebGPU+wasm that window includes any event-loop wait inside
+  // llama_synchronize for the GPU-completion microtask.
+  double native_gpu_ms;
+  double native_sync_ms;
+  double native_logic_ms;
+
+  // Counts
+  int32_t input_tokens;
+  int32_t output_tokens;
+  int32_t cache_hits;
+  int32_t prefill_tokens;
 } CE_RuntimeObservabilityMetrics;
 
-typedef struct CE_SchedulerBurstResult {
+typedef struct CE_SchedulerLoopResult {
   int32_t ticks_executed;
   int32_t progressed_ticks;
   int32_t completed_response_count;
   int32_t emitted_token_count;
-} CE_SchedulerBurstResult;
-
-typedef struct CE_RuntimeEvent {
-  CE_RequestId request_id;
-  int32_t kind;
-  int32_t status;
-  int32_t text_offset;
-  int32_t text_length;
-} CE_RuntimeEvent;
-
-typedef struct CE_RuntimeEventDrainResult {
-  int32_t event_count;
-  int32_t text_bytes;
-} CE_RuntimeEventDrainResult;
+} CE_SchedulerLoopResult;
 
 #ifdef __cplusplus
 static_assert(sizeof(CE_RequestId) == 4,
               "CE_RequestId must stay 32-bit for JS/Wasm FFI calls.");
-static_assert(sizeof(CE_RuntimeObservabilityMetrics) == 128,
+static_assert(sizeof(CE_RuntimeObservabilityMetrics) == 88,
               "CE_RuntimeObservabilityMetrics layout changed. Update the TS FFI reader.");
-static_assert(sizeof(CE_SchedulerBurstResult) == 16,
-              "CE_SchedulerBurstResult layout changed. Update the TS FFI reader.");
-static_assert(sizeof(CE_RuntimeEvent) == 20,
-              "CE_RuntimeEvent layout changed. Update the TS FFI reader.");
-static_assert(sizeof(CE_RuntimeEventDrainResult) == 8,
-              "CE_RuntimeEventDrainResult layout changed. Update the TS FFI reader.");
+static_assert(sizeof(CE_SchedulerLoopResult) == 16,
+              "CE_SchedulerLoopResult layout changed. Update the TS FFI reader.");
 #endif

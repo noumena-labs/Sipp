@@ -10,7 +10,6 @@
 
 #include <chrono>
 #include <cstdint>
-#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -22,12 +21,15 @@ namespace noumena::cogentengine {
 // Request ids cross the browser FFI boundary through Emscripten `ccall`.
 // Keep them 32-bit so multi-argument exported calls preserve argument layout.
 using GenerateRequestId = std::uint32_t;
-using GenerateTokenCallback = std::function<bool(const char *, int32_t)>;
 
+// Two-state emission contract: either we don't surface tokens to JS at all
+// (None), or we append UTF-8 bytes to RequestQueue's streaming buffer for
+// the JS drain hook to copy into the SAB ring (StreamingBuffer).  Legacy
+// FFI-callback and runtime-event paths were removed when SAB became the
+// mandatory transport.
 enum class GenerateTokenEmissionMode : std::uint8_t {
   None = 0,
-  RuntimeEvents = 1,
-  DirectCallback = 2,
+  StreamingBuffer = 1,
 };
 
 enum class GenerateRequestLifecycle : std::uint8_t {
@@ -54,7 +56,6 @@ struct GenerateRequest {
   std::vector<llama_token> prompt_tokens;
   std::optional<MultimodalPayload> multimodal;
   int32_t max_output_tokens = 0;
-  GenerateTokenCallback on_token_received;
   GenerateTokenEmissionMode token_emission_mode =
       GenerateTokenEmissionMode::None;
   GenerateRequestLifecycle lifecycle = GenerateRequestLifecycle::Pending;
@@ -68,23 +69,19 @@ struct GenerateRequest {
   bool has_last_token_at = false;
   bool has_completed_at = false;
   int32_t emitted_token_count = 0;
-  double accumulated_itl_ms = 0.0;
-  double tail_itl_ms = 0.0;
-  double attributed_total_ms = 0.0;
-  double attributed_prompt_eval_ms = 0.0;
-  double attributed_decode_eval_ms = 0.0;
-  double attributed_sample_ms = 0.0;
-  int32_t attributed_prompt_eval_tokens = 0;
-  int32_t attributed_decode_eval_count = 0;
-  int32_t attributed_sample_count = 0;
+  double itl_sum_ms = 0.0;
+  double itl_p99_ms = 0.0;
+  double e2e_ms = 0.0;
+  double prefill_ms = 0.0;
+  double decode_ms = 0.0;
+  double native_sync_ms = 0.0;
+  double native_gpu_ms = 0.0;
+  double native_logic_ms = 0.0;
+  int32_t input_tokens = 0;
+  int32_t output_tokens = 0;
+  int32_t cache_hits = 0;
+  int32_t prefill_tokens = 0;
   int32_t first_sampled_token_id = -1;
-  int32_t decode_first_tick_count = 0;
-  int32_t chunked_prefill_tick_count = 0;
-  int32_t mixed_workload_tick_count = 0;
-  int32_t lcp_reuse_tokens = 0;
-  int32_t prefix_cache_restore_tokens = 0;
-  int32_t prefix_cache_hit_count = 0;
-  int32_t prefix_cache_store_count = 0;
   bool is_multimodal_turn = false;
   bool cancel_requested = false;
 };

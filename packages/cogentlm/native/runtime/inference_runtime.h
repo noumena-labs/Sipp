@@ -10,7 +10,6 @@
 #pragma once
 
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -18,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include "api/ffi_types.h"
 #include "chat.h"
 #include "runtime/config/inference_config.h"
 #include "runtime/llama/llama_batch_builder.h"
@@ -53,8 +53,6 @@ struct SchedulerBurstResult {
 
 class InferenceRuntime {
 public:
-  using TokenCallback = std::function<bool(const char *, int32_t)>;
-
   explicit InferenceRuntime(std::string model_path,
                             InferenceRuntimeConfig config = {});
   ~InferenceRuntime();
@@ -66,14 +64,12 @@ public:
 
   GenerateRequestId EnqueueRequest(std::string context_key, std::string prompt,
                                    int n_tokens_predict,
-                                   TokenCallback on_token_received = {},
                                    std::string grammar = {},
                                    GenerateTokenEmissionMode token_emission_mode =
                                        GenerateTokenEmissionMode::None);
   GenerateRequestId EnqueueMultimodalRequest(
       std::string context_key, std::string prompt, int n_tokens_predict,
       std::vector<std::pair<const std::uint8_t *, std::size_t>> image_views,
-      TokenCallback on_token_received = {},
       std::string grammar = {},
       GenerateTokenEmissionMode token_emission_mode =
           GenerateTokenEmissionMode::None);
@@ -83,8 +79,16 @@ public:
                                          int32_t max_completed_responses,
                                          int32_t max_emitted_tokens,
                                          int32_t max_duration_us = 0);
-  std::vector<RuntimeEvent> DrainRuntimeEvents(int32_t max_count,
-                                               int32_t max_text_bytes);
+  // Streaming buffer accessors — see request_queue.h.  Stable addresses;
+  // called once at init, then JS uses HEAP32 / HEAPU8 directly.
+  const uint8_t *StreamingBufferPointer();
+  std::size_t StreamingBufferCapacity();
+  int32_t *StreamingBufferUsedAddress();
+  int32_t *StreamingBufferDropCountAddress();
+  SchedulerBurstResult RunSchedulerLoop(int32_t max_ticks,
+                                        int32_t max_completed_responses,
+                                        int32_t max_emitted_tokens,
+                                        int32_t max_duration_us);
   bool TryPeekCompletedResponse(GenerateRequestId request_id,
                                 GenerateResponse &out_response) const;
   bool HasRequest(GenerateRequestId request_id) const;
@@ -101,8 +105,9 @@ public:
       bool add_assistant) const;
 
 private:
-  bool EnsureContextSpace(SequenceState &state, int new_tokens_needed,
+  bool EnsureContextSpace(SequenceState &state, llama_seq_id seq_id, int new_tokens_needed,
                           int n_ctx);
+  bool ReconcilePhysicalState(SequenceState &state, llama_seq_id seq_id, llama_memory_t mem);
   int32_t ResolveInitialDecodeContextReservationLocked(
       int32_t max_output_tokens) const;
   bool EnsureDecodeStepContextSpaceLocked(SlotState &slot);
@@ -110,6 +115,7 @@ private:
                                       const std::vector<llama_token> &prompt_tokens,
                                       int n_tokens_predict,
                                       SequenceState &state,
+                                      llama_seq_id seq_id,
                                       GenerateRequest *request,
                                       std::size_t &out_prefill_cursor);
   bool NormalizeRunnableSlotStateLocked(SlotState &slot);
@@ -119,6 +125,7 @@ private:
   std::string BuildNoProgressDiagnosticLocked() const;
   void MaybeStorePrefixCacheEntryLocked(const std::string &context_key,
                                         const SequenceState &state,
+                                        llama_seq_id seq_id,
                                         std::size_t token_count,
                                         std::size_t terminal_token_count,
                                         GenerateRequest *request);
@@ -126,14 +133,14 @@ private:
                                   const llama_vocab *vocab);
 
   bool RunPolicyBatchTickLocked();
+  void CompletePendingBookkeepingLocked();
+  void EmitPendingTokensLocked();
+  void FlushAllPendingBookkeepingLocked();
   RequestStepResult RunSchedulerTickLocked();
   int32_t ResolvePrefillChunkSizeLocked(
       const SchedulerTickBudget &tick_budget, int32_t decode_ready_count,
       int32_t prefill_ready_count) const;
-  void UpdateSharedBatchMetricsLocked(const SharedBatchPlan &plan);
-  void UpdateSchedulerObservabilityLocked(const SharedBatchPlan &plan,
-                                          const SchedulerTickBudget &budget,
-                                          int32_t effective_prefill_chunk_size);
+
   void CommitNewCompletedResponsesObservabilityLocked();
   void CommitCompletedObservabilityLocked(GenerateRequestId request_id,
                                           const GenerateResponse &response);
@@ -154,8 +161,7 @@ private:
   SlotScheduler slot_scheduler_;
   BatchPlanner batch_planner_;
   LlamaBatchBuilder shared_batch_builder_;
-  SharedBatchObservabilityMetrics shared_batch_observability_;
-  SchedulerObservabilityMetrics scheduler_observability_;
+
   PrefixStateCache prefix_state_cache_;
   PrefixCachePolicy prefix_cache_policy_;
   GenerateRequestId next_request_id_ = 1;
@@ -168,9 +174,52 @@ private:
   std::vector<SlotState *> scratch_live_prefill_ready_slots_;
   std::vector<SlotState *> scratch_live_runnable_slots_;
   std::vector<SlotState *> scratch_prefix_cache_slots_;
+  // Slot-id-indexed seen-flags used for O(1) deduplication when populating
+  // `scratch_prefix_cache_slots_`.  Sized once to slot count; reset to false
+  // after each use so the memset cost is paid against a small, fixed buffer
+  // rather than per-contribution std::find calls.
+  std::vector<std::uint8_t> scratch_prefix_cache_seen_;
   std::vector<GenerateRequest *> scratch_tick_requests_;
   std::vector<GenerateRequest *> scratch_decode_requests_;
   std::vector<GenerateRequest *> scratch_prefill_requests_;
+  // Persistent scratch for the per-tick "which batch slots produced logits we
+  // need to sample from" list.  Lives across ticks so its capacity stabilizes
+  // and the inference hot path performs zero heap allocations.
+  struct PendingLogitsContribution {
+    std::size_t contribution_index = 0;
+    GenerateRequest *request = nullptr;
+    int32_t batch_token_index = -1;
+    llama_token sampled_token = -1;
+
+  };
+
+  struct PendingTickBookkeeping {
+    SharedBatchPlan plan;
+    std::vector<PendingLogitsContribution> logits_contributions;
+    std::vector<std::pair<SlotState *, std::size_t>> prefix_cache_entries;
+
+    int32_t effective_prefill_chunk_size = 0;
+    SchedulerTickBudget tick_budget = {};
+
+    double tick_time_ms = 0.0;
+    double native_gpu_ms = 0.0;
+    double native_sync_ms = 0.0;
+    double native_logic_ms = 0.0;
+    double total_tick_ms = 0.0;
+  };
+
+  std::vector<PendingLogitsContribution> scratch_logits_contributions_;
+  std::vector<PendingLogitsContribution> pending_logits_contributions_;
+  double total_decode_ms_ = 0.0;
+  double total_prefill_ms_ = 0.0;
+  std::size_t total_input_tokens_ = 0;
+  std::size_t total_output_tokens_ = 0;
+  std::size_t total_cache_hits_ = 0;
+  std::size_t total_prefill_tokens_ = 0;
+  PendingTickBookkeeping pending_bookkeeping_;
+  bool has_pending_bookkeeping_ = false;
+
+  mutable std::mutex request_queue_mutex_;
   mutable std::mutex operation_mutex_;
 };
 

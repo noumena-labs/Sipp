@@ -45,11 +45,8 @@ bool map_token_emission_mode(CE_TokenEmissionMode mode,
   case CE_TOKEN_EMISSION_NONE:
     out_mode = GenerateTokenEmissionMode::None;
     return true;
-  case CE_TOKEN_EMISSION_RUNTIME_EVENTS:
-    out_mode = GenerateTokenEmissionMode::RuntimeEvents;
-    return true;
-  case CE_TOKEN_EMISSION_DIRECT_CALLBACK:
-    out_mode = GenerateTokenEmissionMode::DirectCallback;
+  case CE_TOKEN_EMISSION_STREAMING_BUFFER:
+    out_mode = GenerateTokenEmissionMode::StreamingBuffer;
     return true;
   default:
     return false;
@@ -213,42 +210,35 @@ int copy_completed_field(char *buffer, int32_t capacity,
 void copy_runtime_observability(
     const noumena::cogentengine::RuntimeObservabilityMetrics &runtime_observability,
     CE_RuntimeObservabilityMetrics *out_metrics) {
-  out_metrics->total_ms = runtime_observability.total_ms;
-  out_metrics->prompt_eval_ms = runtime_observability.prompt_eval_ms;
-  out_metrics->decode_eval_ms = runtime_observability.decode_eval_ms;
-  out_metrics->sample_ms = runtime_observability.sample_ms;
-  out_metrics->queue_delay_ms = runtime_observability.queue_delay_ms;
+  if (out_metrics == nullptr) {
+    return;
+  }
+
+  // Latency (User Experience)
   out_metrics->ttft_ms = runtime_observability.ttft_ms;
-  out_metrics->mean_itl_ms = runtime_observability.mean_itl_ms;
-  out_metrics->tail_itl_ms = runtime_observability.tail_itl_ms;
+  out_metrics->itl_avg_ms = runtime_observability.itl_avg_ms;
+  out_metrics->itl_p99_ms = runtime_observability.itl_p99_ms;
   out_metrics->e2e_ms = runtime_observability.e2e_ms;
-  out_metrics->input_token_count = runtime_observability.input_token_count;
-  out_metrics->prompt_eval_tokens = runtime_observability.prompt_eval_tokens;
-  out_metrics->decode_eval_count = runtime_observability.decode_eval_count;
-  out_metrics->sample_count = runtime_observability.sample_count;
-  out_metrics->output_token_count = runtime_observability.output_token_count;
-  out_metrics->first_sampled_token_id =
-      runtime_observability.first_sampled_token_id;
-  out_metrics->batch_participation_count =
-      runtime_observability.batch_participation_count;
-  out_metrics->decode_first_tick_count =
-      runtime_observability.decode_first_tick_count;
-  out_metrics->chunked_prefill_tick_count =
-      runtime_observability.chunked_prefill_tick_count;
-  out_metrics->mixed_workload_tick_count =
-      runtime_observability.mixed_workload_tick_count;
-  out_metrics->lcp_reuse_tokens = runtime_observability.lcp_reuse_tokens;
-  out_metrics->prefix_cache_restore_tokens =
-      runtime_observability.prefix_cache_restore_tokens;
-  out_metrics->prefix_cache_hit_count =
-      runtime_observability.prefix_cache_hit_count;
-  out_metrics->prefix_cache_store_count =
-      runtime_observability.prefix_cache_store_count;
+
+  // Phases (Compute)
+  out_metrics->prefill_ms = runtime_observability.prefill_ms;
+  out_metrics->decode_ms = runtime_observability.decode_ms;
+
+  // Native (Hardware & Engine)
+  out_metrics->native_gpu_ms = runtime_observability.native_gpu_ms;
+  out_metrics->native_sync_ms = runtime_observability.native_sync_ms;
+  out_metrics->native_logic_ms = runtime_observability.native_logic_ms;
+
+  // Counts
+  out_metrics->input_tokens = runtime_observability.input_tokens;
+  out_metrics->output_tokens = runtime_observability.output_tokens;
+  out_metrics->cache_hits = runtime_observability.cache_hits;
+  out_metrics->prefill_tokens = runtime_observability.prefill_tokens;
 }
 
-void copy_scheduler_burst_result(
+void copy_scheduler_loop_result(
     const noumena::cogentengine::SchedulerBurstResult &burst_result,
-    CE_SchedulerBurstResult *out_result) {
+    CE_SchedulerLoopResult *out_result) {
   if (out_result == nullptr) {
     return;
   }
@@ -256,19 +246,6 @@ void copy_scheduler_burst_result(
   out_result->progressed_ticks = burst_result.progressed_ticks;
   out_result->completed_response_count = burst_result.completed_response_count;
   out_result->emitted_token_count = burst_result.emitted_token_count;
-}
-
-void copy_runtime_event(const noumena::cogentengine::RuntimeEvent &runtime_event,
-                        int32_t text_offset, CE_RuntimeEvent *out_event) {
-  if (out_event == nullptr) {
-    return;
-  }
-
-  out_event->request_id = runtime_event.request_id;
-  out_event->kind = static_cast<int32_t>(runtime_event.kind);
-  out_event->status = completed_status_to_code(runtime_event.status);
-  out_event->text_offset = text_offset;
-  out_event->text_length = static_cast<int32_t>(runtime_event.text.size());
 }
 
 } // namespace
@@ -386,7 +363,7 @@ int CE_GetRuntimeObservability(CE_RuntimeObservabilityMetrics *out_metrics) {
 
 int CE_RunSchedulerBurst(int32_t max_ticks, int32_t max_completed_responses,
                          int32_t max_emitted_tokens,
-                         CE_SchedulerBurstResult *out_result) {
+                         CE_SchedulerLoopResult *out_result) {
   if (out_result == nullptr) {
     return static_cast<int>(
         noumena::cogentengine::RequestStepResult::Invalid);
@@ -405,7 +382,7 @@ int CE_RunSchedulerBurst(int32_t max_ticks, int32_t max_completed_responses,
   const noumena::cogentengine::SchedulerBurstResult burst_result =
       runtime->RunSchedulerBurst(max_ticks, max_completed_responses,
                                  max_emitted_tokens);
-  copy_scheduler_burst_result(burst_result, out_result);
+  copy_scheduler_loop_result(burst_result, out_result);
   return static_cast<int>(burst_result.status);
 }
 
@@ -413,7 +390,7 @@ int CE_RunSchedulerBurstWithDeadline(int32_t max_ticks,
                                      int32_t max_completed_responses,
                                      int32_t max_emitted_tokens,
                                      int32_t max_duration_us,
-                                     CE_SchedulerBurstResult *out_result) {
+                                     CE_SchedulerLoopResult *out_result) {
   if (out_result == nullptr) {
     return static_cast<int>(
         noumena::cogentengine::RequestStepResult::Invalid);
@@ -432,7 +409,7 @@ int CE_RunSchedulerBurstWithDeadline(int32_t max_ticks,
   const noumena::cogentengine::SchedulerBurstResult burst_result =
       runtime->RunSchedulerBurst(max_ticks, max_completed_responses,
                                  max_emitted_tokens, max_duration_us);
-  copy_scheduler_burst_result(burst_result, out_result);
+  copy_scheduler_loop_result(burst_result, out_result);
   return static_cast<int>(burst_result.status);
 }
 
@@ -450,45 +427,59 @@ int CE_GetCompletedRequestStatus(CE_RequestId request_id) {
                                          : kCompletedRequestStatusUnknown;
 }
 
-int CE_DrainRuntimeEvents(CE_RuntimeEvent *event_buffer, int32_t event_capacity,
-                          char *text_buffer, int32_t text_capacity,
-                          CE_RuntimeEventDrainResult *out_result) {
-  if (out_result == nullptr || event_capacity < 0 || text_capacity < 0 ||
-      (event_capacity > 0 && event_buffer == nullptr) ||
-      (text_capacity > 0 && text_buffer == nullptr)) {
-    return kStatusError;
+int CE_RunSchedulerLoop(int32_t max_ticks, int32_t max_completed_responses,
+                        int32_t max_emitted_tokens, int32_t max_duration_us,
+                        CE_SchedulerLoopResult *out_result) {
+  if (out_result == nullptr) {
+    return static_cast<int>(noumena::cogentengine::RequestStepResult::Invalid);
   }
-
-  out_result->event_count = 0;
-  out_result->text_bytes = 0;
 
   auto runtime = acquire_engine_runtime();
-  if (!runtime || event_capacity == 0) {
+  if (!runtime) {
+    out_result->ticks_executed = 0;
+    out_result->progressed_ticks = 0;
+    out_result->completed_response_count = 0;
+    out_result->emitted_token_count = 0;
+    return static_cast<int>(noumena::cogentengine::RequestStepResult::Invalid);
+  }
+
+  const noumena::cogentengine::SchedulerBurstResult burst_result =
+      runtime->RunSchedulerLoop(max_ticks, max_completed_responses,
+                                max_emitted_tokens, max_duration_us);
+  copy_scheduler_loop_result(burst_result, out_result);
+  return static_cast<int>(burst_result.status);
+}
+
+const uint8_t *CE_GetStreamingBufferPointer() {
+  auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    return nullptr;
+  }
+  return runtime->StreamingBufferPointer();
+}
+
+int32_t CE_GetStreamingBufferCapacity() {
+  auto runtime = acquire_engine_runtime();
+  if (!runtime) {
     return 0;
   }
+  return static_cast<int32_t>(runtime->StreamingBufferCapacity());
+}
 
-  const std::vector<noumena::cogentengine::RuntimeEvent> runtime_events =
-      runtime->DrainRuntimeEvents(event_capacity, text_capacity);
-
-  int32_t used_text_bytes = 0;
-  for (std::size_t index = 0; index < runtime_events.size(); ++index) {
-    const noumena::cogentengine::RuntimeEvent &runtime_event =
-        runtime_events[index];
-    int32_t text_offset = 0;
-    if (!runtime_event.text.empty()) {
-      text_offset = used_text_bytes;
-      const std::size_t text_length = runtime_event.text.size();
-      std::memcpy(text_buffer + used_text_bytes, runtime_event.text.data(),
-                  text_length);
-      used_text_bytes += static_cast<int32_t>(text_length);
-      text_buffer[used_text_bytes++] = '\0';
-    }
-    copy_runtime_event(runtime_event, text_offset, &event_buffer[index]);
+int32_t *CE_GetStreamingBufferUsedAddress() {
+  auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    return nullptr;
   }
+  return runtime->StreamingBufferUsedAddress();
+}
 
-  out_result->event_count = static_cast<int32_t>(runtime_events.size());
-  out_result->text_bytes = used_text_bytes;
-  return 0;
+int32_t *CE_GetStreamingBufferDropCountAddress() {
+  auto runtime = acquire_engine_runtime();
+  if (!runtime) {
+    return nullptr;
+  }
+  return runtime->StreamingBufferDropCountAddress();
 }
 
 int CE_GetCompletedRequestOutputSize(CE_RequestId request_id) {
@@ -636,8 +627,7 @@ const char *CE_GetBackendObservabilityJsonString() {
 
 CE_RequestId CE_StartPromptRequestWithTokenEmissionMode(
     const char *context_key, const char *prompt, int n_tokens_predict,
-    CE_TokenCallback on_token, CE_TokenEmissionMode token_emission_mode,
-    const char *grammar) {
+    CE_TokenEmissionMode token_emission_mode, const char *grammar) {
   auto runtime = acquire_engine_runtime();
   if (!runtime) {
     return 0;
@@ -647,30 +637,17 @@ CE_RequestId CE_StartPromptRequestWithTokenEmissionMode(
   if (!map_token_emission_mode(token_emission_mode, native_emission_mode)) {
     return 0;
   }
-  if (native_emission_mode == GenerateTokenEmissionMode::DirectCallback &&
-      on_token == nullptr) {
-    return 0;
-  }
-
-  InferenceRuntime::TokenCallback token_callback;
-  if (native_emission_mode == GenerateTokenEmissionMode::DirectCallback) {
-    token_callback = [on_token](const char *token_piece,
-                                int32_t token_length) {
-      return on_token(token_piece, token_length) == 0;
-    };
-  }
 
   return runtime->EnqueueRequest(
       context_key ? context_key : "", prompt ? prompt : "", n_tokens_predict,
-      std::move(token_callback), grammar ? std::string(grammar) : std::string(),
-      native_emission_mode);
+      grammar ? std::string(grammar) : std::string(), native_emission_mode);
 }
 
 CE_RequestId CE_StartPromptWithMediaRequestWithTokenEmissionMode(
     const char *context_key, const char *prompt, int n_tokens_predict,
     int32_t n_images, const uint8_t *images_flat_buffer,
-    const int32_t *image_sizes, CE_TokenCallback on_token,
-    CE_TokenEmissionMode token_emission_mode, const char *grammar) {
+    const int32_t *image_sizes, CE_TokenEmissionMode token_emission_mode,
+    const char *grammar) {
   if (prompt == nullptr || !is_valid_prediction_tokens(n_tokens_predict)) {
     return 0;
   }
@@ -679,16 +656,11 @@ CE_RequestId CE_StartPromptWithMediaRequestWithTokenEmissionMode(
   }
   if (n_images == 0) {
     return CE_StartPromptRequestWithTokenEmissionMode(
-        context_key, prompt, n_tokens_predict, on_token, token_emission_mode,
-        grammar);
+        context_key, prompt, n_tokens_predict, token_emission_mode, grammar);
   }
 
   GenerateTokenEmissionMode native_emission_mode;
   if (!map_token_emission_mode(token_emission_mode, native_emission_mode)) {
-    return 0;
-  }
-  if (native_emission_mode == GenerateTokenEmissionMode::DirectCallback &&
-      on_token == nullptr) {
     return 0;
   }
 
@@ -713,17 +685,9 @@ CE_RequestId CE_StartPromptWithMediaRequestWithTokenEmissionMode(
     byte_offset += image_size;
   }
 
-  InferenceRuntime::TokenCallback token_callback;
-  if (native_emission_mode == GenerateTokenEmissionMode::DirectCallback) {
-    token_callback = [on_token](const char *token_piece,
-                                int32_t token_length) {
-      return on_token(token_piece, token_length) == 0;
-    };
-  }
-
   return runtime->EnqueueMultimodalRequest(
       context_key ? context_key : "", prompt, n_tokens_predict,
-      std::move(image_views), std::move(token_callback),
+      std::move(image_views),
       grammar ? std::string(grammar) : std::string(), native_emission_mode);
 }
 

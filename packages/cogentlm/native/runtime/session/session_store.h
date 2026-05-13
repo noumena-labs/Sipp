@@ -20,10 +20,14 @@
 namespace noumena::cogentengine {
 
 struct SequenceState {
-  llama_seq_id seq_id = -1;
   std::vector<llama_token> current_kv_tokens;
   int n_past = 0;
+  llama_seq_id hardware_id = -1;
   std::size_t pin_count = 0;
+
+  bool InSync() const {
+    return n_past == static_cast<int>(current_kv_tokens.size());
+  }
 };
 
 class SessionStore {
@@ -47,6 +51,9 @@ public:
   void Remove(const std::string &context_key);
   void EnforceLimitBeforeInsert();
   void Clear();
+  void ClearSequenceMemory(llama_seq_id seq_id) const;
+  llama_seq_id AcquireSeqId(llama_seq_id hint = -1);
+  void ReleaseSeqId(llama_seq_id seq_id);
 
 private:
   struct SessionEntry {
@@ -55,9 +62,6 @@ private:
     bool is_evictable = false;
   };
 
-  void ClearSequenceMemory(llama_seq_id seq_id) const;
-  llama_seq_id AcquireSeqId();
-  void ReleaseSeqId(llama_seq_id seq_id);
   void MarkEvictable(const std::string &context_key, SessionEntry &entry);
   void MarkPinned(const std::string &context_key, SessionEntry &entry);
   bool HasEvictableSession() const;

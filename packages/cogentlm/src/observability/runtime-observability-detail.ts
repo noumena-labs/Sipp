@@ -3,58 +3,42 @@ import type {
   RuntimeAggregateObservabilityMetrics,
 } from './runtime-observability.js';
 
-interface DetailedObservabilityMetricsBase
-  extends RequestObservabilityMetrics {
-  promptEvalMs: number;
-  decodeEvalMs: number;
-  sampleMs: number;
-  queueDelayMs: number;
-  meanItlMs: number;
-  tailItlMs: number;
-  e2elMs: number;
-  promptEvalTokens: number;
-  decodeEvalCount: number;
-  sampleCount: number;
-  batchParticipationCount: number;
-  firstSampledTokenId: number;
-  decodeFirstTickCount: number;
-  chunkedPrefillTickCount: number;
-  mixedWorkloadTickCount: number;
-  lcpReuseTokens: number;
-  prefixCacheRestoreTokens: number;
-  prefixCacheHitCount: number;
-  prefixCacheStoreCount: number;
-}
-
-export interface DetailedRequestObservabilityMetrics
-  extends DetailedObservabilityMetricsBase {}
+export interface DetailedRequestObservabilityMetrics extends RequestObservabilityMetrics {}
 
 export interface DetailedRuntimeAggregateObservabilityMetrics
-  extends DetailedObservabilityMetricsBase,
+  extends RequestObservabilityMetrics,
     RuntimeAggregateObservabilityMetrics {}
 
-export type DetailedRuntimeObservabilityMetrics =
-  DetailedRuntimeAggregateObservabilityMetrics;
+export type DetailedRuntimeObservabilityMetrics = DetailedRuntimeAggregateObservabilityMetrics;
 
 export function deriveTokensPerSecond(metrics: {
-  meanItlMs: number;
+  decodeMs: number;
+  outputTokens: number;
 }): number | null {
-  if (metrics.meanItlMs <= 0) {
+  if (metrics.decodeMs <= 0 || metrics.outputTokens <= 0) {
     return null;
   }
-  return 1000 / metrics.meanItlMs;
+  return (metrics.outputTokens / metrics.decodeMs) * 1000;
 }
 
-export function withDerivedObservabilityMetrics<T extends {
-  totalMs: number;
-  ttftMs: number;
-  inputTokenCount: number;
-  outputTokenCount: number;
-  decodeEvalMs: number;
-  meanItlMs: number;
-}>(metrics: T): T & { tokensPerSecond: number | null } {
+export function derivePrefillTokensPerSecond(metrics: {
+  prefillMs: number;
+  prefillTokens: number;
+}): number | null {
+  // A prefill of exactly 1 token is valid in cache-hit scenarios where the
+  // engine re-decodes the last cached token to generate logits.
+  if (metrics.prefillMs < 0.1 || metrics.prefillTokens < 1) {
+    return null;
+  }
+  return (metrics.prefillTokens / metrics.prefillMs) * 1000;
+}
+
+export function withDerivedObservabilityMetrics<T extends RequestObservabilityMetrics>(
+  metrics: T
+): T & { tokensPerSecond: number | null; prefillTokensPerSecond: number | null } {
   return {
     ...metrics,
     tokensPerSecond: deriveTokensPerSecond(metrics),
+    prefillTokensPerSecond: derivePrefillTokensPerSecond(metrics),
   };
 }

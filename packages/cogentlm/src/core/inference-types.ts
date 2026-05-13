@@ -50,7 +50,7 @@ export interface InferenceInitConfig {
 export interface PromptOptions {
   nTokens?: number;
   signal?: AbortSignal;
-  onToken?: (token: string) => void;
+  onToken?: (tokens: string[]) => void;
   media?: Uint8Array[];
   /**
    * Optional GBNF grammar source applied to the sampler for this request.
@@ -58,6 +58,21 @@ export interface PromptOptions {
    * matching the grammar. Must be <= 64 KiB when UTF-8 encoded.
    */
   grammar?: string;
+  /**
+   * @internal — reserved for the worker streaming path.
+   *
+   * Invoked synchronously inside the runtime once a request has been
+   * enqueued and assigned its native `GenerateRequestId`, BEFORE the
+   * request begins decoding.  The worker entry uses this hook to publish
+   * a `streaming-claim` postMessage to main, which lets the main-thread
+   * SAB ring reader translate native request ids back to its own callIds
+   * when dispatching streamed tokens to user `onToken` callbacks.
+   *
+   * Not part of the public API surface — added to PromptOptions purely so
+   * worker-internal code can pass it through `runtime.enqueueQuery`
+   * without a type-cast.  Public consumers should ignore it.
+   */
+  __internalRequestStarted?: (requestId: number) => void;
 }
 
 export interface ChatMessage {

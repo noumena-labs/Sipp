@@ -7,27 +7,15 @@ import {
   COMPLETED_REQUEST_STATUS_PENDING,
   REQUEST_STEP_RESULT_FATAL_NO_PROGRESS,
   REQUEST_STEP_RESULT_INVALID,
-  REQUEST_STEP_RESULT_PROGRESSED,
-  REQUEST_STEP_RESULT_TERMINAL,
-  REQUEST_STEP_RESULT_WAITING,
 } from './main-thread-runtime-constants.js';
-import {
-  DEFAULT_QUEUED_REQUEST_PUMP_SYNC_BURST_LIMIT,
-  QueuedRequestPumpStepResult,
-  runRequestPumpLoop,
-} from './queued-request-pump.js';
 import { RequestTracker } from './request-tracker.js';
 import { WasmBridge } from '../wasm/wasm-bridge.js';
+import type { StreamingRingWriter } from './streaming-ring.js';
 
-// Use bounded native bursts; native owns scheduling policy while this loop
-// drives browser event-loop progress and observability delivery.
-const SCHEDULER_PUMP_NATIVE_BURST_TICK_LIMIT = 64;
-const SCHEDULER_PUMP_NATIVE_BURST_EMITTED_TOKEN_LIMIT = 32;
-const SCHEDULER_PUMP_INTERACTIVE_FIRST_TOKEN_TICK_LIMIT = 8;
-const SCHEDULER_PUMP_INTERACTIVE_FIRST_TOKEN_EMITTED_TOKEN_LIMIT = 1;
-const SCHEDULER_PUMP_INTERACTIVE_STREAMING_TICK_LIMIT = 16;
-const SCHEDULER_PUMP_INTERACTIVE_STREAMING_EMITTED_TOKEN_LIMIT = 8;
-const SCHEDULER_PUMP_INTERACTIVE_STREAMING_DURATION_US = 80_000;
+// Native owns the scheduling policy; JS drives the loop and handles UI 
+// responsiveness through internal native yielding (JSPI).
+const CONTINUOUS_LOOP_TICK_LIMIT = 1024;
+const CONTINUOUS_LOOP_TOKEN_LIMIT = 512;
 
 type SchedulerFinalizeOptions = {
   consumeCompletedResponse?: boolean;
@@ -38,9 +26,8 @@ type QueuedRequestSchedulerOptions = {
   tracker: RequestTracker<GenerateResponse>;
   queuedPromptCallbacks: Map<
     GenerateRequestId,
-    ((token: string) => void) | undefined
+    ((tokens: string[]) => void) | undefined
   >;
-  queuedPromptTokenBuffers: Map<GenerateRequestId, string[]>;
   queuedPromptCallbackErrors: Map<GenerateRequestId, unknown>;
   getTransportObservability: () => TransportObservability;
   getBridge: () => WasmBridge;
@@ -50,29 +37,35 @@ type QueuedRequestSchedulerOptions = {
     options?: SchedulerFinalizeOptions
   ) => void;
   cancelQuery: (requestId: GenerateRequestId) => Promise<boolean>;
+  // Worker-side SAB ring writer.  When set, the scheduler installs
+  // `_ce_yield_drain` to copy the native streaming buffer into the ring
+  // once per yield.  Null on the main-thread engine.
+  getStreamingRingWriter?: () => StreamingRingWriter | null;
+  /**
+   * Called on the worker thread after successful copy to the SAB ring.
+   * Typically used to post a 'streaming-tick' message to the main thread.
+   */
+  onStreamingTick?: () => void;
 };
 
 export class QueuedRequestScheduler {
   private schedulerPumpPromise: Promise<void> | null = null;
   private schedulerPumpGeneration = 0;
-  private readonly requestsAwaitingFirstToken = new Set<GenerateRequestId>();
-  private readonly interactiveStreamingRequests = new Set<GenerateRequestId>();
 
   public constructor(private readonly options: QueuedRequestSchedulerOptions) { }
 
   public reset(): void {
     this.schedulerPumpGeneration += 1;
     this.schedulerPumpPromise = null;
-    this.requestsAwaitingFirstToken.clear();
-    this.interactiveStreamingRequests.clear();
+    this.cachedDrainBridge = null;
+    this.cachedBufferByteAddr = 0;
+    this.cachedUsedHeap32Index = 0;
+    this.cachedDropCountHeap32Index = 0;
+    this.lastSeenDropCount = 0;
   }
 
   public track(requestId: GenerateRequestId) {
     const tracked = this.options.tracker.track(requestId);
-    if (this.options.queuedPromptCallbacks.get(requestId) != null) {
-      this.requestsAwaitingFirstToken.add(requestId);
-      this.interactiveStreamingRequests.add(requestId);
-    }
     this.ensureRunning();
     return tracked;
   }
@@ -101,70 +94,9 @@ export class QueuedRequestScheduler {
     });
   }
 
-  public settleCompletedRequestIfPresent(
-    bridge: WasmBridge,
-    requestId: GenerateRequestId
-  ): boolean {
-    return this.settleCompletedQueuedRequest(bridge, requestId);
-  }
 
-  private get transportObservability(): TransportObservability {
-    return this.options.getTransportObservability();
-  }
-
-  private bufferQueuedTokenPiece(
-    requestId: GenerateRequestId,
-    token: string
-  ): void {
-    const buffered = this.options.queuedPromptTokenBuffers.get(requestId);
-    if (buffered != null) {
-      buffered.push(token);
-      return;
-    }
-    this.options.queuedPromptTokenBuffers.set(requestId, [token]);
-  }
-
-  private flushQueuedTokenPieces(requestId: GenerateRequestId): void {
-    const onToken = this.options.queuedPromptCallbacks.get(requestId);
-    const bufferedPieces =
-      this.options.queuedPromptTokenBuffers.get(requestId);
-    if (onToken == null || bufferedPieces == null || bufferedPieces.length === 0) {
-      if (bufferedPieces != null) {
-        bufferedPieces.length = 0;
-      }
-      return;
-    }
-
-    let readIndex = 0;
-    while (readIndex < bufferedPieces.length) {
-      const piece = bufferedPieces[readIndex];
-      try {
-        onToken(piece);
-      } catch (error) {
-        this.options.queuedPromptCallbackErrors.set(requestId, error);
-        this.options.queuedPromptCallbacks.delete(requestId);
-        bufferedPieces.length = 0;
-        break;
-      }
-      readIndex += 1;
-    }
-
-    if (readIndex >= bufferedPieces.length) {
-      bufferedPieces.length = 0;
-    }
-
-    if (readIndex > 0) {
-      this.requestsAwaitingFirstToken.delete(requestId);
-    }
-  }
-
-  private flushAllQueuedTokenPieces(): void {
-    for (const requestId of this.options.queuedPromptTokenBuffers.keys()) {
-      this.flushQueuedTokenPieces(requestId);
-    }
-  }
-
-  private requestCancellationForCallbackErrors(): void {
+  private requestCancellationForCallbackErrors(): boolean {
+    let canceledAny = false;
     for (const requestId of this.options.tracker.allTrackedIds()) {
       const tracked = this.options.tracker.get(requestId);
       if (tracked == null || tracked.settled || tracked.cancelRequested) {
@@ -180,34 +112,12 @@ export class QueuedRequestScheduler {
       tracked.callbackError = callbackError;
       tracked.cancelRequested = true;
       void this.options.cancelQuery(requestId);
+      canceledAny = true;
     }
+    return canceledAny;
   }
 
-  private async runSchedulerProgress(
-    bridge: WasmBridge
-  ): Promise<{ stepResult: number; completedResponseCount: number }> {
-    const usingFirstTokenBurst = this.requestsAwaitingFirstToken.size > 0;
-    const usingInteractiveStreamingBurst =
-      !usingFirstTokenBurst && this.interactiveStreamingRequests.size > 0;
-    return bridge.runSchedulerProgress(
-      usingFirstTokenBurst
-        ? SCHEDULER_PUMP_INTERACTIVE_FIRST_TOKEN_TICK_LIMIT
-        : usingInteractiveStreamingBurst
-          ? SCHEDULER_PUMP_INTERACTIVE_STREAMING_TICK_LIMIT
-          : SCHEDULER_PUMP_NATIVE_BURST_TICK_LIMIT,
-      Math.max(1, this.options.tracker.activeCount),
-      usingFirstTokenBurst
-        ? SCHEDULER_PUMP_INTERACTIVE_FIRST_TOKEN_EMITTED_TOKEN_LIMIT
-        : usingInteractiveStreamingBurst
-          ? SCHEDULER_PUMP_INTERACTIVE_STREAMING_EMITTED_TOKEN_LIMIT
-          : SCHEDULER_PUMP_NATIVE_BURST_EMITTED_TOKEN_LIMIT,
-      usingInteractiveStreamingBurst
-        ? { maxDurationUs: SCHEDULER_PUMP_INTERACTIVE_STREAMING_DURATION_US }
-        : undefined
-    );
-  }
-
-  private settleCompletedQueuedRequest(
+  public settleCompletedRequestIfPresent(
     bridge: WasmBridge,
     requestId: GenerateRequestId
   ): boolean {
@@ -226,83 +136,24 @@ export class QueuedRequestScheduler {
       tracked.callbackError =
         this.options.queuedPromptCallbackErrors.get(requestId);
       this.options.tracker.resolve(requestId, response);
-      this.requestsAwaitingFirstToken.delete(requestId);
-      this.interactiveStreamingRequests.delete(requestId);
       this.options.finalizeRequest(bridge, requestId, {
         deleteCompletion:
           (response.cancelled || tracked.cancelRequested) && !tracked.consumed,
       });
     } catch (error) {
-      this.requestsAwaitingFirstToken.delete(requestId);
-      this.interactiveStreamingRequests.delete(requestId);
       this.options.tracker.reject(requestId, error);
       this.options.finalizeRequest(bridge, requestId);
     }
     return true;
   }
 
-  private settleCompletedQueuedRequestsByIds(
-    bridge: WasmBridge,
-    requestIds: Iterable<GenerateRequestId>
-  ): boolean {
-    let settledAny = false;
-    for (const requestId of requestIds) {
-      if (this.options.tracker.get(requestId) == null) {
-        continue;
-      }
-      settledAny =
-        this.settleCompletedQueuedRequest(bridge, requestId) || settledAny;
-    }
-    return settledAny;
-  }
-
   private settleCompletedTrackedRequests(bridge: WasmBridge): boolean {
     let settledAny = false;
     for (const requestId of this.options.tracker.allTrackedIds()) {
       settledAny =
-        this.settleCompletedQueuedRequest(bridge, requestId) || settledAny;
+        this.settleCompletedRequestIfPresent(bridge, requestId) || settledAny;
     }
     return settledAny;
-  }
-
-  private drainRuntimeEvents(
-    bridge: WasmBridge
-  ): {
-    terminalRequestIds: GenerateRequestId[];
-    tokenEventCount: number;
-    tokenRequestIds: GenerateRequestId[];
-  } {
-    const drained = bridge.drainRuntimeEvents(
-      Math.max(8, this.options.tracker.activeCount * 2)
-    );
-
-    this.transportObservability.runtimeEventDrainCount =
-      (this.transportObservability.runtimeEventDrainCount ?? 0) + 1;
-    const tokenRequestIds: GenerateRequestId[] = [];
-    for (const tokenEvent of drained.tokenEvents) {
-      if (
-        !this.options.queuedPromptCallbacks.has(tokenEvent.requestId) ||
-        this.options.queuedPromptCallbackErrors.has(tokenEvent.requestId)
-      ) {
-        continue;
-      }
-      this.bufferQueuedTokenPiece(tokenEvent.requestId, tokenEvent.token);
-      tokenRequestIds.push(tokenEvent.requestId);
-    }
-    this.transportObservability.runtimeEventTextBytes =
-      (this.transportObservability.runtimeEventTextBytes ?? 0) + drained.textBytes;
-    this.transportObservability.runtimeEventTokenCount =
-      (this.transportObservability.runtimeEventTokenCount ?? 0) +
-      drained.tokenEvents.length;
-    this.transportObservability.runtimeEventTerminalCount =
-      (this.transportObservability.runtimeEventTerminalCount ?? 0) +
-      drained.terminalRequestIds.length;
-
-    return {
-      terminalRequestIds: drained.terminalRequestIds,
-      tokenEventCount: drained.tokenEvents.length,
-      tokenRequestIds,
-    };
   }
 
   private rejectPendingQueuedRequests(
@@ -314,8 +165,6 @@ export class QueuedRequestScheduler {
       if (tracked == null || tracked.settled) {
         continue;
       }
-      this.requestsAwaitingFirstToken.delete(requestId);
-      this.interactiveStreamingRequests.delete(requestId);
       this.options.tracker.reject(requestId, error);
       this.options.finalizeRequest(bridge, requestId, {
         deleteCompletion: true,
@@ -323,131 +172,178 @@ export class QueuedRequestScheduler {
     }
   }
 
-  private async pumpQueuedRequestsStep(
-    bridge: WasmBridge
-  ): Promise<QueuedRequestPumpStepResult> {
-    if (this.options.tracker.activeCount === 0) {
-      return {
-        hasActiveRequests: false,
-        stepResult: null,
-        settledAny: false,
-      };
-    }
+  private async runSchedulerPump(generation: number): Promise<void> {
+    const bridge = this.options.getBridge();
+    const uninstallYieldDrain = this.installStreamingDrainHook(bridge, generation);
 
-    const schedulerProgress = await this.runSchedulerProgress(bridge);
-    const stepResult = schedulerProgress.stepResult;
-    const drainedEvents = this.drainRuntimeEvents(bridge);
-    for (const requestId of drainedEvents.tokenRequestIds) {
-      this.requestsAwaitingFirstToken.delete(requestId);
+    try {
+      while (
+        generation === this.schedulerPumpGeneration &&
+        this.options.tracker.activeCount > 0
+      ) {
+        try {
+          const loopResult = await bridge.runInferenceLoop(
+            CONTINUOUS_LOOP_TICK_LIMIT,
+            this.options.tracker.activeCount,
+            CONTINUOUS_LOOP_TOKEN_LIMIT
+          );
+          const hadCancellations = this.requestCancellationForCallbackErrors();
+          if (hadCancellations) {
+            this.options.onStreamingTick?.();
+          }
+          if (loopResult.completedResponseCount > 0) {
+            this.settleCompletedTrackedRequests(bridge);
+          }
+          if (loopResult.stepResult === REQUEST_STEP_RESULT_INVALID) {
+            this.rejectPendingQueuedRequests(bridge, new Error('Inference loop became invalid.'));
+            break;
+          }
+          if (loopResult.stepResult === REQUEST_STEP_RESULT_FATAL_NO_PROGRESS) {
+            this.rejectPendingQueuedRequests(bridge, new Error('Inference loop failed to make progress.'));
+            break;
+          }
+        } catch (error) {
+          if (generation === this.schedulerPumpGeneration) {
+            this.rejectPendingQueuedRequests(bridge, error);
+          }
+          break;
+        }
+      }
+    } finally {
+      uninstallYieldDrain();
+      // Final pass to flush tail tokens written between the last yield
+      // drain and request settlement.  The main-side tick will pick
+      // them up on its next message (or via the drain-on-resolve in the
+      // worker client's call finalizer).
+      try {
+        if (this.drainStreamingBufferToRing(bridge)) {
+          this.options.onStreamingTick?.();
+        }
+      } catch {
+        /* cleanup */
+      }
     }
-    this.flushAllQueuedTokenPieces();
-    this.requestCancellationForCallbackErrors();
-    const settledFromEvents = this.settleCompletedQueuedRequestsByIds(
-      bridge,
-      drainedEvents.terminalRequestIds
-    );
-    const needsCompletionScan =
-      schedulerProgress.completedResponseCount > drainedEvents.terminalRequestIds.length;
-    const settledFromScan = needsCompletionScan
-      ? this.settleCompletedTrackedRequests(bridge)
-      : false;
-    const settledAny = settledFromEvents || settledFromScan;
-    if (this.options.tracker.activeCount === 0) {
-      return {
-        hasActiveRequests: false,
-        stepResult,
-        settledAny,
-      };
-    }
+  }
 
-    if (stepResult === REQUEST_STEP_RESULT_INVALID) {
-      this.rejectPendingQueuedRequests(
-        bridge,
-        new Error('Queued scheduler tick became invalid.')
-      );
-      return {
-        hasActiveRequests: false,
-        stepResult,
-        settledAny,
-      };
+  // Installs `Module._ce_yield_drain` to copy the native streaming buffer
+  // into the worker SAB ring once per yield.  No-op when no ring writer.
+  private installStreamingDrainHook(
+    bridge: WasmBridge,
+    generation: number
+  ): () => void {
+    const ringWriter = this.options.getStreamingRingWriter?.() ?? null;
+    if (ringWriter == null) {
+      return () => {};
     }
-
-    if (stepResult === REQUEST_STEP_RESULT_FATAL_NO_PROGRESS) {
-      this.rejectPendingQueuedRequests(
-        bridge,
-        new Error('Queued request execution failed to make progress.')
-      );
-      return {
-        hasActiveRequests: false,
-        stepResult,
-        settledAny,
-      };
-    }
-
-    if (
-      stepResult !== REQUEST_STEP_RESULT_WAITING &&
-      stepResult !== REQUEST_STEP_RESULT_PROGRESSED &&
-      stepResult !== REQUEST_STEP_RESULT_TERMINAL
-    ) {
-      this.rejectPendingQueuedRequests(
-        bridge,
-        new Error(`Queued scheduler returned unknown step result ${stepResult}.`)
-      );
-      return {
-        hasActiveRequests: false,
-        stepResult,
-        settledAny,
-      };
-    }
-
-    return {
-      hasActiveRequests: this.options.tracker.activeCount > 0,
-      stepResult,
-      settledAny,
+    const moduleAny = bridge.module as any;
+    const drain = () => {
+      if (generation !== this.schedulerPumpGeneration) {
+        return;
+      }
+      const transport = this.options.getTransportObservability();
+      const start = performance.now();
+      try {
+        if (this.drainStreamingBufferToRing(bridge)) {
+          this.options.onStreamingTick?.();
+        }
+      } catch (error) {
+        // Drain runs inside the wasm yield body; throwing here aborts the
+        // scheduler via a JSPI rejection.  Record + swallow instead.
+        for (const requestId of this.options.tracker.allTrackedIds()) {
+          this.options.queuedPromptCallbackErrors.set(requestId, error);
+        }
+      }
+      transport.streamingDrainMs =
+        (transport.streamingDrainMs ?? 0) + (performance.now() - start);
+      transport.streamingDrainCount =
+        (transport.streamingDrainCount ?? 0) + 1;
+    };
+    moduleAny._ce_yield_drain = drain;
+    return () => {
+      if (moduleAny._ce_yield_drain === drain) {
+        moduleAny._ce_yield_drain = undefined;
+      }
     };
   }
 
-  private async runSchedulerPump(generation: number): Promise<void> {
-    const bridge = this.options.getBridge();
-    await runRequestPumpLoop({
-      isCurrentGeneration: () => generation === this.schedulerPumpGeneration,
-      waitingStepResult: REQUEST_STEP_RESULT_WAITING,
-      shouldYieldForResponsiveness: (burstTickCount) =>
-        this.shouldYieldForResponsiveness(burstTickCount),
-      runStep: async () => {
-        try {
-          return await this.pumpQueuedRequestsStep(bridge);
-        } catch (error) {
-          if (generation !== this.schedulerPumpGeneration) {
-            return {
-              hasActiveRequests: false,
-              stepResult: null,
-              settledAny: false,
-            };
-          }
-          this.rejectPendingQueuedRequests(bridge, error);
-          return {
-            hasActiveRequests: false,
-            stepResult: null,
-            settledAny: false,
-          };
-        }
-      },
-      waitForNextSchedulerStep: () => this.waitForNextSchedulerStep(),
-    });
+  // Cached streaming buffer addresses; resolved once per bridge.
+  private cachedDrainBridge: WasmBridge | null = null;
+  private cachedBufferByteAddr = 0;
+  private cachedUsedHeap32Index = 0;
+  private cachedDropCountHeap32Index = 0;
+  private lastSeenDropCount = 0;
+
+  private ensureStreamingDrainCache(bridge: WasmBridge): boolean {
+    if (this.cachedDrainBridge === bridge) {
+      return this.cachedBufferByteAddr !== 0;
+    }
+    const bufferAddr = bridge.getStreamingBufferPointer();
+    const usedAddr = bridge.getStreamingBufferUsedAddress();
+    const dropAddr = bridge.getStreamingBufferDropCountAddress();
+    if (bufferAddr === 0 || usedAddr === 0 || dropAddr === 0) {
+      this.cachedDrainBridge = null;
+      this.cachedBufferByteAddr = 0;
+      return false;
+    }
+    this.cachedDrainBridge = bridge;
+    this.cachedBufferByteAddr = bufferAddr;
+    this.cachedUsedHeap32Index = Math.floor(usedAddr / 4);
+    this.cachedDropCountHeap32Index = Math.floor(dropAddr / 4);
+    this.lastSeenDropCount = 0;
+    return true;
   }
 
-  private async waitForNextSchedulerStep(): Promise<void> {
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
-  }
-
-  private shouldYieldForResponsiveness(burstTickCount: number): boolean {
-    return (
-      typeof window !== 'undefined' &&
-      typeof document !== 'undefined' &&
-      burstTickCount >= DEFAULT_QUEUED_REQUEST_PUMP_SYNC_BURST_LIMIT
-    );
+  // Zero-ccall drain: reads `used` via HEAP32, parses records via HEAPU8,
+  // writes each into the SAB ring, then clears the `used` cell.  Safe
+  // because wasm is suspended inside the `ce_native_yield` body.
+  // Returns true if any bytes were actually written to the ring.
+  private drainStreamingBufferToRing(bridge: WasmBridge): boolean {
+    const ringWriter = this.options.getStreamingRingWriter?.() ?? null;
+    if (ringWriter == null) {
+      return false;
+    }
+    if (!this.ensureStreamingDrainCache(bridge)) {
+      return false;
+    }
+    const heapU8 = bridge.module.HEAPU8;
+    const heap32 = bridge.module.HEAP32;
+    const totalDrops = heap32[this.cachedDropCountHeap32Index];
+    if (totalDrops !== this.lastSeenDropCount) {
+      const delta = (totalDrops - this.lastSeenDropCount) | 0;
+      this.lastSeenDropCount = totalDrops;
+      if (delta > 0 && typeof console !== 'undefined') {
+        console.warn(`[cogentlm] dropped ${delta} streaming token record(s).`);
+      }
+    }
+    const used = heap32[this.cachedUsedHeap32Index];
+    if (used <= 0) {
+      return false;
+    }
+    heap32[this.cachedUsedHeap32Index] = 0;
+    let offset = this.cachedBufferByteAddr;
+    const end = offset + used;
+    let bytesWritten = false;
+    while (offset + 8 <= end) {
+      const requestId =
+        heapU8[offset] |
+        (heapU8[offset + 1] << 8) |
+        (heapU8[offset + 2] << 16) |
+        (heapU8[offset + 3] << 24);
+      const textLength =
+        heapU8[offset + 4] |
+        (heapU8[offset + 5] << 8) |
+        (heapU8[offset + 6] << 16) |
+        (heapU8[offset + 7] << 24);
+      const payloadStart = offset + 8;
+      if (payloadStart + textLength > end) {
+        break;
+      }
+      const payload = heapU8.subarray(payloadStart, payloadStart + textLength);
+      if (ringWriter.tryWriteBytes(requestId >>> 0, payload)) {
+        bytesWritten = true;
+      }
+      offset = payloadStart + textLength;
+    }
+    return bytesWritten;
   }
 }

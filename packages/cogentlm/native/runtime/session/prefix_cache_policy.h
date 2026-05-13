@@ -16,6 +16,19 @@
 
 namespace noumena::cogentengine {
 
+// FNV-1a constants exposed so callers (e.g. SequenceState) can maintain a
+// rolling hash incrementally and feed the result into the prefix cache without
+// re-walking the token array.
+inline constexpr std::uint64_t kPrefixHashSeed = 1469598103934665603ull;
+inline constexpr std::uint64_t kPrefixHashPrime = 1099511628211ull;
+
+inline std::uint64_t MixPrefixHashToken(std::uint64_t hash,
+                                        llama_token token) noexcept {
+  hash ^= static_cast<std::uint64_t>(static_cast<std::uint32_t>(token));
+  hash *= kPrefixHashPrime;
+  return hash;
+}
+
 struct PrefixCacheBoundary {
   std::size_t token_count = 0;
   std::uint64_t prefix_hash = 0;

@@ -17,50 +17,32 @@ import {
   COMPLETED_REQUEST_STATUS_FAILED,
   COMPLETED_REQUEST_STATUS_PENDING,
   COMPLETED_REQUEST_STATUS_UNKNOWN,
-  RUNTIME_EVENT_DRAIN_RESULT_SIZE_BYTES,
-  RUNTIME_EVENT_KIND_TERMINAL,
-  RUNTIME_EVENT_KIND_TOKEN,
-  RUNTIME_EVENT_SIZE_BYTES,
   RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT,
   RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES,
-  SCHEDULER_BURST_RESULT_SIZE_BYTES,
+  SCHEDULER_LOOP_RESULT_SIZE_BYTES,
 } from '../runtime/main-thread-runtime-constants.js';
 import { assertGrammarByteSize } from '../utils/grammar.js';
 export { MAX_GRAMMAR_BYTES } from '../utils/grammar.js';
 
-const RUNTIME_EVENT_DRAIN_TEXT_BUFFER_SIZE_BYTES = 64 * 1024;
-
+// Mirror of CE_TokenEmissionMode in native/api/ffi_types.h.  Native exposes
+// only NONE (no emission) and STREAMING_BUFFER (SAB ring); the legacy FFI
+// callback / runtime-event paths were removed.
 export const TOKEN_EMISSION_NONE = 0;
-export const TOKEN_EMISSION_RUNTIME_EVENTS = 1;
+export const TOKEN_EMISSION_STREAMING_BUFFER = 1;
 
 export type TokenEmissionMode =
   | typeof TOKEN_EMISSION_NONE
-  | typeof TOKEN_EMISSION_RUNTIME_EVENTS;
+  | typeof TOKEN_EMISSION_STREAMING_BUFFER;
 
 function validateGrammarSize(grammar: string | undefined): void {
   assertGrammarByteSize(grammar);
 }
 
 function validateTokenEmissionMode(mode: TokenEmissionMode): void {
-  if (
-    mode !== TOKEN_EMISSION_NONE &&
-    mode !== TOKEN_EMISSION_RUNTIME_EVENTS
-  ) {
+  if (mode !== TOKEN_EMISSION_NONE && mode !== TOKEN_EMISSION_STREAMING_BUFFER) {
     throw new Error(`invalid token emission mode ${mode}.`);
   }
 }
-
-export type WasmRuntimeTokenEvent = {
-  requestId: GenerateRequestId;
-  token: string;
-  textLength: number;
-};
-
-export type WasmRuntimeEventDrainResult = {
-  terminalRequestIds: GenerateRequestId[];
-  tokenEvents: WasmRuntimeTokenEvent[];
-  textBytes: number;
-};
 
 export type WasmSchedulerProgressResult = {
   stepResult: number;
@@ -79,14 +61,21 @@ export type ChatTemplateMessage = {
 
 export class WasmBridge {
   private reusableBurstResultPtr = 0;
-  private reusableRuntimeEventBufferPtr = 0;
-  private reusableRuntimeEventBufferCapacity = 0;
-  private reusableRuntimeEventTextBufferPtr = 0;
-  private reusableRuntimeEventTextBufferCapacity = 0;
-  private reusableRuntimeEventDrainResultPtr = 0;
-  private readonly tokenDecoders = new Map<GenerateRequestId, TextDecoder>();
+  private _cachedDataView: DataView | null = null;
+  private _cachedHeapU8: Uint8Array | null = null;
 
-  public constructor(private readonly module: EngineModule) { }
+  public constructor(public readonly module: EngineModule) { }
+
+  private ensureHeapView(): DataView {
+    if (
+      this._cachedDataView == null ||
+      this._cachedDataView.buffer !== this.module.HEAPU8.buffer
+    ) {
+      this._cachedDataView = new DataView(this.module.HEAPU8.buffer);
+      this._cachedHeapU8 = this.module.HEAPU8;
+    }
+    return this._cachedDataView;
+  }
 
   private byteOffset(ptr: number | bigint): number {
     const n = typeof ptr === 'bigint' ? Number(ptr) : ptr;
@@ -292,7 +281,6 @@ export class WasmBridge {
     contextKey: string,
     promptText: string,
     maxOutputTokens: number,
-    callbackPtr: number,
     grammar?: string,
     tokenEmissionMode: TokenEmissionMode = TOKEN_EMISSION_NONE
   ): GenerateRequestId {
@@ -302,15 +290,8 @@ export class WasmBridge {
     const requestId = this.module.ccall(
       'CE_StartTextRequestWithTokenEmissionMode',
       'number',
-      ['string', 'string', 'number', 'pointer', 'number', 'string'],
-      [
-        contextKey,
-        promptText,
-        maxOutputTokens,
-        callbackPtr,
-        tokenEmissionMode,
-        grammarArg,
-      ]
+      ['string', 'string', 'number', 'number', 'string'],
+      [contextKey, promptText, maxOutputTokens, tokenEmissionMode, grammarArg]
     );
     if (requestId instanceof Promise) {
       throw new Error('Unexpected async result while enqueuing a request.');
@@ -323,7 +304,6 @@ export class WasmBridge {
     promptText: string,
     maxOutputTokens: number,
     media: Uint8Array[],
-    callbackPtr: number,
     grammar?: string,
     tokenEmissionMode: TokenEmissionMode = TOKEN_EMISSION_NONE
   ): GenerateRequestId {
@@ -352,7 +332,6 @@ export class WasmBridge {
           'number',
           'pointer',
           'pointer',
-          'pointer',
           'number',
           'string',
         ],
@@ -363,7 +342,6 @@ export class WasmBridge {
           media.length,
           flatPtr,
           sizesPtr,
-          callbackPtr,
           tokenEmissionMode,
           grammarArg,
         ]
@@ -515,7 +493,7 @@ export class WasmBridge {
     };
   }
 
-  public async runSchedulerProgress(
+  public async runInferenceLoop(
     maxTicks: number,
     maxCompletedResponses: number,
     maxEmittedTokens: number,
@@ -524,110 +502,45 @@ export class WasmBridge {
     } = {}
   ): Promise<WasmSchedulerProgressResult> {
     const maxDurationUs = Math.max(0, options.maxDurationUs ?? 0);
-    const resultPtr = this.ensureBurstResultBuffer();
-    const stepResult =
-      maxDurationUs > 0
-        ? await this.callNumberAsync(
-          'CE_RunSchedulerBurstWithDeadline',
-          ['number', 'number', 'number', 'number', 'pointer'],
-          [maxTicks, maxCompletedResponses, maxEmittedTokens, maxDurationUs, resultPtr]
-        )
-        : await this.callNumberAsync(
-          'CE_RunSchedulerBurst',
-          ['number', 'number', 'number', 'pointer'],
-          [maxTicks, maxCompletedResponses, maxEmittedTokens, resultPtr]
-        );
-    const burstResult = this.readSchedulerBurstResult(resultPtr);
+    const resultPtr = this.ensureLoopResultBuffer();
+    
+    const stepResult = await this.callNumberAsync(
+      'CE_RunSchedulerLoop',
+      ['number', 'number', 'number', 'number', 'pointer'],
+      [maxTicks, maxCompletedResponses, maxEmittedTokens, maxDurationUs, resultPtr]
+    );
+
+    const loopResult = this.readSchedulerLoopResult(resultPtr);
     return {
       stepResult,
-      completedResponseCount: burstResult.completedResponseCount,
+      completedResponseCount: loopResult.completedResponseCount,
     };
   }
 
-  public drainRuntimeEvents(
-    maxEventCount: number,
-    textBufferSizeBytes: number = RUNTIME_EVENT_DRAIN_TEXT_BUFFER_SIZE_BYTES
-  ): WasmRuntimeEventDrainResult {
-    const eventBufferPtr = this.ensureRuntimeEventBuffer(maxEventCount);
-    const textBufferPtr = this.ensureRuntimeEventTextBuffer(textBufferSizeBytes);
-    const resultPtr = this.ensureRuntimeEventDrainResultBuffer();
+  // Streaming buffer init-time accessors.  Stable wasm-heap addresses; the
+  // caller caches them once and afterwards touches the buffer and counter
+  // cells via HEAPU8 / HEAP32 directly (zero ccalls).  Returns 0 when no
+  // engine is initialized.
+  public getStreamingBufferPointer(): number {
+    return this.callNumber('CE_GetStreamingBufferPointer');
+  }
 
-    const status = this.callNumber(
-      'CE_DrainRuntimeEvents',
-      ['pointer', 'number', 'pointer', 'number', 'pointer'],
-      [eventBufferPtr, maxEventCount, textBufferPtr, textBufferSizeBytes, resultPtr]
-    );
-    if (status !== 0) {
-      throw new Error(`Failed to drain runtime events. Code: ${status}`);
-    }
+  public getStreamingBufferCapacity(): number {
+    return this.callNumber('CE_GetStreamingBufferCapacity');
+  }
 
-    const resultOffset = this.heapIndex(resultPtr, 4);
-    const eventCount = this.module.HEAP32[resultOffset];
-    const terminalRequestIds: GenerateRequestId[] = [];
-    const tokenEvents: WasmRuntimeTokenEvent[] = [];
-    let textBytes = 0;
+  public getStreamingBufferUsedAddress(): number {
+    return this.callNumber('CE_GetStreamingBufferUsedAddress');
+  }
 
-    for (let index = 0; index < eventCount; index += 1) {
-      const eventBytePtr = this.byteOffset(eventBufferPtr) + index * RUNTIME_EVENT_SIZE_BYTES;
-      const eventOffset = this.heapIndex(eventBytePtr, 4);
-      const requestId = this.module.HEAP32[eventOffset] as GenerateRequestId;
-      const kind = this.module.HEAP32[eventOffset + 1];
-      const textOffset = this.module.HEAP32[eventOffset + 3];
-      const textLength = this.module.HEAP32[eventOffset + 4];
-
-      if (kind === RUNTIME_EVENT_KIND_TOKEN) {
-        if (requestId !== 0 && textLength > 0) {
-          let decoder = this.tokenDecoders.get(requestId);
-          if (!decoder) {
-            decoder = new TextDecoder('utf-8', { fatal: false });
-            this.tokenDecoders.set(requestId, decoder);
-          }
-          const start = this.byteOffset(textBufferPtr + textOffset);
-          const end = start + textLength;
-          const token = decoder.decode(this.module.HEAPU8.subarray(start, end), { stream: true });
-
-          tokenEvents.push({
-            requestId,
-            token,
-            textLength,
-          });
-          textBytes += textLength;
-        }
-        continue;
-      }
-
-      if (kind === RUNTIME_EVENT_KIND_TERMINAL && requestId !== 0) {
-        terminalRequestIds.push(requestId);
-        this.tokenDecoders.delete(requestId);
-      }
-    }
-
-    return {
-      terminalRequestIds,
-      tokenEvents,
-      textBytes,
-    };
+  public getStreamingBufferDropCountAddress(): number {
+    return this.callNumber('CE_GetStreamingBufferDropCountAddress');
   }
 
   public releaseReusableBuffers(): void {
-    this.tokenDecoders.clear();
-    if (this.reusableBurstResultPtr !== 0) {
-      this.free(this.reusableBurstResultPtr);
-      this.reusableBurstResultPtr = 0;
-    }
-    if (this.reusableRuntimeEventBufferPtr !== 0) {
-      this.free(this.reusableRuntimeEventBufferPtr);
-      this.reusableRuntimeEventBufferPtr = 0;
-      this.reusableRuntimeEventBufferCapacity = 0;
-    }
-    if (this.reusableRuntimeEventTextBufferPtr !== 0) {
-      this.free(this.reusableRuntimeEventTextBufferPtr);
-      this.reusableRuntimeEventTextBufferPtr = 0;
-      this.reusableRuntimeEventTextBufferCapacity = 0;
-    }
-    if (this.reusableRuntimeEventDrainResultPtr !== 0) {
-      this.free(this.reusableRuntimeEventDrainResultPtr);
-      this.reusableRuntimeEventDrainResultPtr = 0;
+    if (this.reusableLoopResultPtr !== 0) {
+      this.free(this.reusableLoopResultPtr);
+      this.reusableLoopResultPtr = 0;
     }
   }
 
@@ -662,68 +575,29 @@ export class WasmBridge {
     }
   }
 
-  private ensureBurstResultBuffer(): number {
-    if (this.reusableBurstResultPtr === 0) {
-      this.reusableBurstResultPtr = this.allocate(SCHEDULER_BURST_RESULT_SIZE_BYTES);
+  private reusableLoopResultPtr = 0;
+  private ensureLoopResultBuffer(): number {
+    if (this.reusableLoopResultPtr === 0) {
+      this.reusableLoopResultPtr = this.allocate(SCHEDULER_LOOP_RESULT_SIZE_BYTES);
     }
-    return this.reusableBurstResultPtr;
+    return this.reusableLoopResultPtr;
   }
 
-  private ensureRuntimeEventBuffer(maxEventCount: number): number {
-    const requiredCapacity = Math.max(1, maxEventCount) * RUNTIME_EVENT_SIZE_BYTES;
-    if (
-      this.reusableRuntimeEventBufferPtr !== 0 &&
-      this.reusableRuntimeEventBufferCapacity >= requiredCapacity
-    ) {
-      return this.reusableRuntimeEventBufferPtr;
-    }
 
-    if (this.reusableRuntimeEventBufferPtr !== 0) {
-      this.free(this.reusableRuntimeEventBufferPtr);
-    }
-    this.reusableRuntimeEventBufferPtr = this.allocate(requiredCapacity);
-    this.reusableRuntimeEventBufferCapacity = requiredCapacity;
-    return this.reusableRuntimeEventBufferPtr;
-  }
 
-  private ensureRuntimeEventTextBuffer(textBufferSizeBytes: number): number {
-    const requiredCapacity = Math.max(1, textBufferSizeBytes);
-    if (
-      this.reusableRuntimeEventTextBufferPtr !== 0 &&
-      this.reusableRuntimeEventTextBufferCapacity >= requiredCapacity
-    ) {
-      return this.reusableRuntimeEventTextBufferPtr;
-    }
-
-    if (this.reusableRuntimeEventTextBufferPtr !== 0) {
-      this.free(this.reusableRuntimeEventTextBufferPtr);
-    }
-    this.reusableRuntimeEventTextBufferPtr = this.allocate(requiredCapacity);
-    this.reusableRuntimeEventTextBufferCapacity = requiredCapacity;
-    return this.reusableRuntimeEventTextBufferPtr;
-  }
-
-  private ensureRuntimeEventDrainResultBuffer(): number {
-    if (this.reusableRuntimeEventDrainResultPtr === 0) {
-      this.reusableRuntimeEventDrainResultPtr = this.allocate(
-        RUNTIME_EVENT_DRAIN_RESULT_SIZE_BYTES
-      );
-    }
-    return this.reusableRuntimeEventDrainResultPtr;
-  }
-
-  private readSchedulerBurstResult(ptr: number): {
+  private readSchedulerLoopResult(ptr: number): {
     ticksExecuted: number;
     progressedTicks: number;
     completedResponseCount: number;
     emittedTokenCount: number;
   } {
-    const i32Offset = this.heapIndex(ptr, 4);
+    const view = this.ensureHeapView();
+    const offset = this.byteOffset(ptr);
     return {
-      ticksExecuted: this.module.HEAP32[i32Offset],
-      progressedTicks: this.module.HEAP32[i32Offset + 1],
-      completedResponseCount: this.module.HEAP32[i32Offset + 2],
-      emittedTokenCount: this.module.HEAP32[i32Offset + 3],
+      ticksExecuted: view.getInt32(offset, true),
+      progressedTicks: view.getInt32(offset + 4, true),
+      completedResponseCount: view.getInt32(offset + 8, true),
+      emittedTokenCount: view.getInt32(offset + 12, true),
     };
   }
 
@@ -739,34 +613,27 @@ export class WasmBridge {
         return null;
       }
 
-      const f64Offset = Math.floor(this.byteOffset(metricsPtr) / 8);
-      const i32Offset = Math.floor(this.byteOffset(metricsPtr + RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT * 8) / 4);
+      const view = this.ensureHeapView();
+      const offset = this.byteOffset(metricsPtr);
+      const doublesOffset = offset;
+      const intsOffset = offset + RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT * 8;
 
       return withDerivedObservabilityMetrics({
-        totalMs: this.module.HEAPF64[f64Offset],
-        promptEvalMs: this.module.HEAPF64[f64Offset + 1],
-        decodeEvalMs: this.module.HEAPF64[f64Offset + 2],
-        sampleMs: this.module.HEAPF64[f64Offset + 3],
-        queueDelayMs: this.module.HEAPF64[f64Offset + 4],
-        ttftMs: this.module.HEAPF64[f64Offset + 5],
-        meanItlMs: this.module.HEAPF64[f64Offset + 6],
-        tailItlMs: this.module.HEAPF64[f64Offset + 7],
-        e2elMs: this.module.HEAPF64[f64Offset + 8],
-        inputTokenCount: this.module.HEAP32[i32Offset],
-        promptEvalTokens: this.module.HEAP32[i32Offset + 1],
-        decodeEvalCount: this.module.HEAP32[i32Offset + 2],
-        sampleCount: this.module.HEAP32[i32Offset + 3],
-        outputTokenCount: this.module.HEAP32[i32Offset + 4],
-        firstSampledTokenId: this.module.HEAP32[i32Offset + 5],
-        batchParticipationCount: this.module.HEAP32[i32Offset + 6],
-        decodeFirstTickCount: this.module.HEAP32[i32Offset + 7],
-        chunkedPrefillTickCount: this.module.HEAP32[i32Offset + 8],
-        mixedWorkloadTickCount: this.module.HEAP32[i32Offset + 9],
-        lcpReuseTokens: this.module.HEAP32[i32Offset + 10],
-        prefixCacheRestoreTokens: this.module.HEAP32[i32Offset + 11],
-        prefixCacheHitCount: this.module.HEAP32[i32Offset + 12],
-        prefixCacheStoreCount: this.module.HEAP32[i32Offset + 13],
-      });
+        ttftMs: view.getFloat64(doublesOffset, true),
+        itlAvgMs: view.getFloat64(doublesOffset + 8, true),
+        itlP99Ms: view.getFloat64(doublesOffset + 16, true),
+        e2eMs: view.getFloat64(doublesOffset + 24, true),
+        prefillMs: view.getFloat64(doublesOffset + 32, true),
+        decodeMs: view.getFloat64(doublesOffset + 40, true),
+        nativeGpuMs: view.getFloat64(doublesOffset + 48, true),
+        nativeSyncMs: view.getFloat64(doublesOffset + 56, true),
+        nativeLogicMs: view.getFloat64(doublesOffset + 64, true),
+
+        inputTokens: view.getInt32(intsOffset, true),
+        outputTokens: view.getInt32(intsOffset + 4, true),
+        cacheHits: view.getInt32(intsOffset + 8, true),
+        prefillTokens: view.getInt32(intsOffset + 12, true),
+      } as any);
     } finally {
       this.free(metricsPtr);
     }

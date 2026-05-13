@@ -23,4 +23,13 @@ export interface EngineModule {
     opts?: { async?: boolean }
   ): Promise<any> | any;
   UTF8ToString(ptr: number | bigint, maxBytesToRead?: number): string;
+  addFunction(fn: Function, signature: string): number;
+  removeFunction(ptr: number): void;
+  // Optional host-installed hook invoked by `ce_native_yield` (see
+  // `inference_runtime.cpp`).  Set by the streaming scheduler so that one
+  // runtime-event drain runs inside each JSPI yield window — this is what
+  // copies token bytes into the SharedArrayBuffer streaming ring without
+  // adding a separate macrotask source.  Untyped here because the hook lives
+  // on the dynamic Emscripten Module object, not in our generated bindings.
+  _ce_yield_drain?: () => void;
 }

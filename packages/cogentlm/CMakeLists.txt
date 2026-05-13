@@ -122,6 +122,7 @@ set(CE_MTMD_SOURCES
     ${CE_MTMD_MODEL_DIR}/gemma4a.cpp
     ${CE_MTMD_MODEL_DIR}/gemma4v.cpp
     ${CE_MTMD_MODEL_DIR}/glm4v.cpp
+    ${CE_MTMD_MODEL_DIR}/granite-speech.cpp
     ${CE_MTMD_MODEL_DIR}/hunyuanocr.cpp
     ${CE_MTMD_MODEL_DIR}/internvl.cpp
     ${CE_MTMD_MODEL_DIR}/kimivl.cpp
@@ -180,11 +181,11 @@ foreach(_ggml_target ggml ggml-base ggml-cpu ggml-webgpu)
 endforeach()
 
 set(CE_WASM_EXPORTED_FUNCTIONS
-    "['_CE_Init','_CE_InitWithMultimodal','_CE_Close','_CE_StartTextRequestWithTokenEmissionMode','_CE_StartMediaRequestWithTokenEmissionMode','_CE_CancelRequest','_CE_RunSchedulerBurst','_CE_RunSchedulerBurstWithDeadline','_CE_GetCompletedRequestStatus','_CE_DrainRuntimeEvents','_CE_GetCompletedRequestOutputSize','_CE_CopyCompletedRequestOutput','_CE_GetCompletedRequestErrorSize','_CE_CopyCompletedRequestError','_CE_GetCompletedRequestRuntimeObservability','_CE_ConsumeCompletedRequest','_CE_FreeString','_CE_GetRuntimeObservability','_CE_GetBackendObservabilityJson','_CE_GetMediaMarker','_CE_GetChatTemplate','_CE_GetBosText','_CE_GetEosText','_CE_ApplyChatTemplate','_malloc','_free']"
+    "['_CE_Init','_CE_InitWithMultimodal','_CE_Close','_CE_StartTextRequestWithTokenEmissionMode','_CE_StartMediaRequestWithTokenEmissionMode','_CE_CancelRequest','_CE_RunSchedulerLoop','_CE_RunSchedulerBurst','_CE_RunSchedulerBurstWithDeadline','_CE_GetCompletedRequestStatus','_CE_GetStreamingBufferPointer','_CE_GetStreamingBufferCapacity','_CE_GetStreamingBufferUsedAddress','_CE_GetStreamingBufferDropCountAddress','_CE_GetCompletedRequestOutputSize','_CE_CopyCompletedRequestOutput','_CE_GetCompletedRequestErrorSize','_CE_CopyCompletedRequestError','_CE_GetCompletedRequestRuntimeObservability','_CE_ConsumeCompletedRequest','_CE_FreeString','_CE_GetRuntimeObservability','_CE_GetBackendObservabilityJson','_CE_GetMediaMarker','_CE_GetChatTemplate','_CE_GetBosText','_CE_GetEosText','_CE_ApplyChatTemplate','_malloc','_free']"
 )
 
 # HEAPU8 is needed for later binary media packing through the wasm bridge.
-set(CE_WASM_RUNTIME_METHODS "['ccall','FS','WORKERFS','UTF8ToString','HEAP32','HEAPF64','HEAPU8']")
+set(CE_WASM_RUNTIME_METHODS "['ccall','FS','WORKERFS','UTF8ToString','HEAP32','HEAPF64','HEAPU8','addFunction','removeFunction']")
 
 set(CE_WASM_TARGET_LINK_OPTIONS
     ${CE_WASM_LINK_FLAGS}
@@ -206,7 +207,7 @@ if(CE_WASM_USE_JSPI)
         # devices may force adapter/device creation under emdawnwebgpu.
         # CE_Close is intentionally not exported as a JSPI function because the
         # TS wrapper calls it synchronously during teardown/reinit.
-        "-sJSPI_EXPORTS=['_main_thread','CE_Init','CE_InitWithMultimodal','CE_RunSchedulerBurst','CE_RunSchedulerBurstWithDeadline','CE_GetBackendObservabilityJson']"
+        "-sJSPI_EXPORTS=['_main_thread','CE_Init','CE_InitWithMultimodal','CE_RunSchedulerLoop','CE_RunSchedulerBurst','CE_RunSchedulerBurstWithDeadline','CE_GetBackendObservabilityJson']"
     )
 endif()
 

@@ -256,7 +256,7 @@ export class ModelService implements ModelLifecycleService {
             status: isAbortError(error) ? 'cancelled' : 'failed',
             wallMs: null,
             ttftMs: null,
-            outputTokenCount: null,
+            outputTokens: null,
             errorCode: error instanceof QueryError ? error.code : undefined,
             errorMessage: error instanceof Error ? error.message : String(error),
           },
@@ -342,6 +342,16 @@ export class ModelService implements ModelLifecycleService {
       onToken: options.onToken,
       media,
       grammar: options.grammar,
+      // Forward the internal streaming-claim hook if the caller (worker
+      // entry) attached one.  See PromptOptions.__internalRequestStarted
+      // for why this exists.  We use a property-key escape hatch so the
+      // public ChatOptions / QueryOptions types don't have to advertise
+      // this internal hook.
+      __internalRequestStarted: (
+        options as ChatOptions & {
+          __internalRequestStarted?: (requestId: number) => void;
+        }
+      ).__internalRequestStarted,
     };
     const session = options.session ?? 'default';
     const start = nowMs();
@@ -352,7 +362,7 @@ export class ModelService implements ModelLifecycleService {
         status: 'running',
         wallMs: null,
         ttftMs: null,
-        outputTokenCount: null,
+        outputTokens: null,
       },
     });
     let failureRecorded = false;
@@ -407,19 +417,26 @@ export class ModelService implements ModelLifecycleService {
     let assistantText = '';
     let stoppedAtBoundary = false;
 
-    const consumeOutputText = (text: string): void => {
-      if (text.length === 0 || outputSanitizer.reachedBoundary) {
-        return;
+    const consumeOutputTokens = (tokens: string[]): void => {
+      const batch: string[] = [];
+      for (const text of tokens) {
+        if (text.length === 0 || outputSanitizer.reachedBoundary) {
+          continue;
+        }
+        streamedOutputText += text;
+        const result = outputSanitizer.consume(text);
+        if (result.safeText.length > 0) {
+          assistantText += result.safeText;
+          batch.push(result.safeText);
+        }
+        if (result.hitBoundary) {
+          stoppedAtBoundary = true;
+          linkedAbort.controller.abort();
+          break;
+        }
       }
-      streamedOutputText += text;
-      const result = outputSanitizer.consume(text);
-      if (result.safeText.length > 0) {
-        assistantText += result.safeText;
-        options.onToken?.(result.safeText);
-      }
-      if (result.hitBoundary) {
-        stoppedAtBoundary = true;
-        linkedAbort.controller.abort();
+      if (batch.length > 0) {
+        options.onToken?.(batch);
       }
     };
 
@@ -427,7 +444,7 @@ export class ModelService implements ModelLifecycleService {
       const safeText = outputSanitizer.flush();
       if (safeText.length > 0) {
         assistantText += safeText;
-        options.onToken?.(safeText);
+        options.onToken?.([safeText]);
       }
     };
 
@@ -440,12 +457,12 @@ export class ModelService implements ModelLifecycleService {
         {
           ...options,
           signal: linkedAbort.signal,
-          onToken: consumeOutputText,
+          onToken: consumeOutputTokens,
         }
       );
       const unseenOutputSuffix = sliceUnstreamedSuffix(streamedOutputText, rawText);
       if (!outputSanitizer.reachedBoundary && unseenOutputSuffix.length > 0) {
-        consumeOutputText(unseenOutputSuffix);
+        consumeOutputTokens([unseenOutputSuffix]);
       }
       flushOutputText();
       return assistantText.trim();
@@ -546,7 +563,7 @@ export class ModelService implements ModelLifecycleService {
       status,
       wallMs: Math.max(0, nowMs() - start),
       ttftMs: metrics?.ttftMs ?? null,
-      outputTokenCount: metrics?.outputTokenCount ?? null,
+      outputTokens: metrics?.outputTokens ?? null,
     };
   }
 

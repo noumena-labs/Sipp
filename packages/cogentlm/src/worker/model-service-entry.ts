@@ -2,6 +2,7 @@ import { ModelService } from '../model-management/model-service.js';
 import { QueryError } from '../model-management/model-types.js';
 import { getDefaultRuntimeUrls } from '../runtime-assets.js';
 import { MainThreadEngineRuntime } from '../runtime/engine-runtime-main-thread.js';
+import { StreamingRingWriter } from '../runtime/streaming-ring.js';
 import { stableJson } from '../utils/stable-json.js';
 import {
   WorkerRequestMessage,
@@ -14,8 +15,14 @@ let service: ModelService | null = null;
 let serviceConfigFingerprint: string | null = null;
 let unsubscribeObservability: (() => void) | null = null;
 const activeCalls = new Map<number, AbortController>();
+// SAB streaming ring writer; set on `streaming-init`.  When null, streaming
+// is unavailable and requests with onToken will be rejected upstream.
+let streamingRingWriter: StreamingRingWriter | null = null;
 
-type WorkerOperationRequest = Exclude<WorkerRequestMessage, { kind: 'cancel' }>;
+type WorkerOperationRequest = Exclude<
+  WorkerRequestMessage,
+  { kind: 'cancel' } | { kind: 'streaming-init' }
+>;
 
 function buildServiceConfig(config: WorkerSerializableCogentConfig): WorkerServiceConfig {
   const bundledRuntimeUrls =
@@ -32,6 +39,9 @@ function buildServiceConfig(config: WorkerSerializableCogentConfig): WorkerServi
   };
 }
 
+// Direct runtime handle for installing the SAB ring writer after ensureService.
+let runtime: MainThreadEngineRuntime | null = null;
+
 function ensureService(config: WorkerSerializableCogentConfig): ModelService {
   const fingerprint = stableJson(buildServiceConfig(config));
   if (service != null) {
@@ -40,18 +50,19 @@ function ensureService(config: WorkerSerializableCogentConfig): ModelService {
     }
     return service;
   }
-
-  service = new ModelService(
-    new MainThreadEngineRuntime({
-      ...buildServiceConfig(config),
-      executionMode: 'worker',
-    })
-  );
+  runtime = new MainThreadEngineRuntime({
+    ...buildServiceConfig(config),
+    executionMode: 'worker',
+  });
+  service = new ModelService(runtime);
+  if (streamingRingWriter != null) {
+    runtime.setStreamingRingWriter(streamingRingWriter);
+  }
+  runtime.setStreamingTickCallback(() => {
+    post({ kind: 'streaming-tick' });
+  });
   unsubscribeObservability = service.subscribeObservability((event) => {
-    post({
-      kind: 'observability-event',
-      event,
-    });
+    post({ kind: 'observability-event', event });
   });
   serviceConfigFingerprint = fingerprint;
   return service;
@@ -95,16 +106,6 @@ function postLoadProgress(callId: number): NonNullable<Parameters<ModelService['
   };
 }
 
-function postToken(callId: number): NonNullable<Parameters<ModelService['query']>[1]>['onToken'] {
-  return (token) => {
-    post({
-      kind: 'token',
-      callId,
-      text: token,
-    });
-  };
-}
-
 async function runLoad(message: Extract<WorkerOperationRequest, { kind: 'models-load' }>): Promise<unknown> {
   return await withAbortController(message.callId, (signal) =>
     ensureService(message.config).load(message.source, {
@@ -115,12 +116,36 @@ async function runLoad(message: Extract<WorkerOperationRequest, { kind: 'models-
   );
 }
 
+// Wires the engine to emit tokens through the SAB ring (when `streaming`)
+// and publishes a `streaming-claim` message so the main thread can map the
+// native request id back to its call id.  When `streaming=false`, returns
+// {} so the engine selects TOKEN_EMISSION_NONE.
+function streamingOptionsFor(
+  callId: number,
+  streaming: boolean
+): {
+  onToken?: (tokens: string[]) => void;
+  __internalRequestStarted?: (requestId: number) => void;
+} {
+  if (!streaming) {
+    return {};
+  }
+  return {
+    // The engine sees a non-null onToken and selects StreamingBuffer; the
+    // body is never invoked because tokens go through the SAB ring drain
+    // hook on each ce_native_yield.
+    onToken: () => {},
+    __internalRequestStarted: (requestId) =>
+      post({ kind: 'streaming-claim', callId, nativeRequestId: requestId }),
+  };
+}
+
 async function runQuery(message: Extract<WorkerOperationRequest, { kind: 'query' }>): Promise<string> {
   return await withAbortController(message.callId, (signal) =>
     ensureService(message.config).query(message.input, {
       ...message.options,
       signal,
-      onToken: postToken(message.callId),
+      ...streamingOptionsFor(message.callId, message.options.streaming),
     })
   );
 }
@@ -130,7 +155,7 @@ async function runChat(message: Extract<WorkerOperationRequest, { kind: 'chat' }
     ensureService(message.config).chat(message.input, {
       ...message.options,
       signal,
-      onToken: postToken(message.callId),
+      ...streamingOptionsFor(message.callId, message.options.streaming),
     })
   );
 }
@@ -167,6 +192,16 @@ self.onmessage = async (event: MessageEvent<WorkerRequestMessage>) => {
   const message = event.data;
   if (message.kind === 'cancel') {
     abortActiveCall(message.targetCallId);
+    return;
+  }
+  if (message.kind === 'streaming-init') {
+    streamingRingWriter =
+      message.ringBuffer != null
+        ? new StreamingRingWriter(message.ringBuffer)
+        : null;
+    if (runtime != null) {
+      runtime.setStreamingRingWriter(streamingRingWriter);
+    }
     return;
   }
 

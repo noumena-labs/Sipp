@@ -14,18 +14,27 @@ int CE_GetRuntimeObservability(CE_RuntimeObservabilityMetrics* out_metrics);
 int CE_RunSchedulerBurst(int32_t max_ticks,
                          int32_t max_completed_responses,
                          int32_t max_emitted_tokens,
-                         CE_SchedulerBurstResult* out_result);
+                         CE_SchedulerLoopResult* out_result);
 int CE_RunSchedulerBurstWithDeadline(int32_t max_ticks,
                                      int32_t max_completed_responses,
                                      int32_t max_emitted_tokens,
                                      int32_t max_duration_us,
-                                     CE_SchedulerBurstResult* out_result);
+                                     CE_SchedulerLoopResult* out_result);
+int CE_RunSchedulerLoop(int32_t max_ticks,
+                        int32_t max_completed_responses,
+                        int32_t max_emitted_tokens,
+                        int32_t max_duration_us,
+                        CE_SchedulerLoopResult* out_result);
 int CE_GetCompletedRequestStatus(CE_RequestId request_id);
-int CE_DrainRuntimeEvents(CE_RuntimeEvent* event_buffer,
-                          int32_t event_capacity,
-                          char* text_buffer,
-                          int32_t text_capacity,
-                          CE_RuntimeEventDrainResult* out_result);
+
+// Streaming buffer FFI: all four are init-time accessors returning stable
+// wasm-heap addresses.  JS caches them and reads/writes the buffer and
+// counter cells via HEAPU8 / HEAP32 directly afterwards (zero ccalls).
+// Record format: [u32 LE requestId | u32 LE textLength | bytes...].
+const uint8_t* CE_GetStreamingBufferPointer();
+int32_t CE_GetStreamingBufferCapacity();
+int32_t* CE_GetStreamingBufferUsedAddress();
+int32_t* CE_GetStreamingBufferDropCountAddress();
 int CE_GetCompletedRequestOutputSize(CE_RequestId request_id);
 int CE_CopyCompletedRequestOutput(CE_RequestId request_id, char* buffer, int32_t capacity);
 int CE_GetCompletedRequestErrorSize(CE_RequestId request_id);
@@ -37,7 +46,6 @@ CE_RequestId CE_StartPromptRequestWithTokenEmissionMode(
     const char* context_key,
     const char* prompt,
     int n_tokens_predict,
-    CE_TokenCallback on_token,
     CE_TokenEmissionMode token_emission_mode,
     const char* grammar);
 CE_RequestId CE_StartPromptWithMediaRequestWithTokenEmissionMode(
@@ -47,7 +55,6 @@ CE_RequestId CE_StartPromptWithMediaRequestWithTokenEmissionMode(
     int32_t n_images,
     const uint8_t* images_flat_buffer,
     const int32_t* image_sizes,
-    CE_TokenCallback on_token,
     CE_TokenEmissionMode token_emission_mode,
     const char* grammar);
 const char* CE_GetMediaMarkerString();

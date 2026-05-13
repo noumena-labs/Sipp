@@ -81,18 +81,33 @@ export function toRuntimeObservation(
   }
 
   const tokenPath =
-    transport.activeTokenTransport === 'runtime-events'
-      ? 'runtime-event'
+    transport.activeTokenTransport === 'streaming-buffer'
+      ? 'streaming-buffer'
       : transport.activeTokenTransport === 'none'
         ? 'none'
         : undefined;
 
   const observation: RuntimeObservation = {
-    totalMs: metrics.totalMs,
     ttftMs: metrics.ttftMs,
-    tokensPerSecond: metrics.tokensPerSecond,
-    inputTokenCount: metrics.inputTokenCount,
-    outputTokenCount: metrics.outputTokenCount,
+    itlAvgMs: metrics.itlAvgMs,
+    itlP99Ms: metrics.itlP99Ms,
+    e2eMs: metrics.e2eMs,
+    prefillMs: metrics.prefillMs,
+    decodeMs: metrics.decodeMs,
+    nativeGpuMs: metrics.nativeGpuMs,
+    nativeSyncMs: metrics.nativeSyncMs,
+    nativeLogicMs: metrics.nativeLogicMs,
+    inputTokens: metrics.inputTokens,
+    outputTokens: metrics.outputTokens,
+    cacheHits: metrics.cacheHits,
+    prefillTokens: metrics.prefillTokens,
+    tokensPerSecond: metrics.decodeMs > 0 ? (metrics.outputTokens / metrics.decodeMs) * 1000 : 0,
+    prefillTokensPerSecond:
+      metrics.prefillMs >= 0.1 && metrics.prefillTokens >= 1
+        ? (metrics.prefillTokens / metrics.prefillMs) * 1000
+        : 0,
+
+
     execution: {
       mode: transport.executionMode,
       workerBacked: transport.workerBacked,
@@ -100,53 +115,11 @@ export function toRuntimeObservation(
     },
   };
 
-  includeFinite(observation, 'promptEvalMs', (metrics as { promptEvalMs?: unknown }).promptEvalMs);
-  includeFinite(observation, 'decodeEvalMs', (metrics as { decodeEvalMs?: unknown }).decodeEvalMs);
-  includeFinite(observation, 'sampleMs', (metrics as { sampleMs?: unknown }).sampleMs);
-  includeFinite(observation, 'queueDelayMs', (metrics as { queueDelayMs?: unknown }).queueDelayMs);
-  includeFinite(observation, 'meanItlMs', (metrics as { meanItlMs?: unknown }).meanItlMs);
-  includeFinite(observation, 'tailItlMs', (metrics as { tailItlMs?: unknown }).tailItlMs);
-  includeFinite(observation, 'promptEvalTokens', (metrics as { promptEvalTokens?: unknown }).promptEvalTokens);
-  includeFinite(observation, 'decodeEvalCount', (metrics as { decodeEvalCount?: unknown }).decodeEvalCount);
-  includeFinite(
-    observation,
-    'batchParticipationCount',
-    (metrics as { batchParticipationCount?: unknown }).batchParticipationCount
-  );
-  includeFinite(
-    observation,
-    'decodeFirstTickCount',
-    (metrics as { decodeFirstTickCount?: unknown }).decodeFirstTickCount
-  );
-  includeFinite(
-    observation,
-    'chunkedPrefillTickCount',
-    (metrics as { chunkedPrefillTickCount?: unknown }).chunkedPrefillTickCount
-  );
-  includeFinite(
-    observation,
-    'mixedWorkloadTickCount',
-    (metrics as { mixedWorkloadTickCount?: unknown }).mixedWorkloadTickCount
-  );
-  includeFinite(observation, 'lcpReuseTokens', (metrics as { lcpReuseTokens?: unknown }).lcpReuseTokens);
-  includeFinite(
-    observation,
-    'prefixCacheRestoreTokens',
-    (metrics as { prefixCacheRestoreTokens?: unknown }).prefixCacheRestoreTokens
-  );
-  includeFinite(
-    observation,
-    'prefixCacheHitCount',
-    (metrics as { prefixCacheHitCount?: unknown }).prefixCacheHitCount
-  );
-  includeFinite(
-    observation,
-    'prefixCacheStoreCount',
-    (metrics as { prefixCacheStoreCount?: unknown }).prefixCacheStoreCount
-  );
-
+  includeFinite(observation, 'jsStreamingDrainMs', transport.streamingDrainMs);
+  includeFinite(observation, 'jsStreamingDrainCount', transport.streamingDrainCount);
   return observation;
 }
+
 
 export function toBackendProfileObservation(
   backend: BackendObservability | null

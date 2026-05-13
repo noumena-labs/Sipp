@@ -95,7 +95,7 @@ export interface QueryOptions {
   session?: string;
   maxTokens?: number;
   signal?: AbortSignal;
-  onToken?: (token: string) => void;
+  onToken?: (tokens: string[]) => void;
   grammar?: string;
 }
 
@@ -113,38 +113,43 @@ export interface QueryObservation {
   status: 'running' | 'success' | 'cancelled' | 'failed';
   wallMs: number | null;
   ttftMs: number | null;
-  outputTokenCount: number | null;
+  outputTokens: number | null;
   errorCode?: string;
   errorMessage?: string;
 }
 
 export interface RuntimeObservation {
-  totalMs: number;
+  // Unified Phase & Efficiency Metrics
   ttftMs: number;
+  itlAvgMs: number;
+  itlP99Ms: number;
+  e2eMs: number;
+
+  prefillMs: number;
+  decodeMs: number;
+
+  nativeGpuMs: number;
+  nativeSyncMs: number;
+  nativeLogicMs: number;
+
+  inputTokens: number;
+  outputTokens: number;
+  cacheHits: number;
+  prefillTokens: number;
+
   tokensPerSecond: number | null;
-  inputTokenCount: number;
-  outputTokenCount: number;
-  promptEvalMs?: number;
-  decodeEvalMs?: number;
-  sampleMs?: number;
-  queueDelayMs?: number;
-  meanItlMs?: number;
-  tailItlMs?: number;
-  promptEvalTokens?: number;
-  decodeEvalCount?: number;
-  batchParticipationCount?: number;
-  decodeFirstTickCount?: number;
-  chunkedPrefillTickCount?: number;
-  mixedWorkloadTickCount?: number;
-  lcpReuseTokens?: number;
-  prefixCacheRestoreTokens?: number;
-  prefixCacheHitCount?: number;
-  prefixCacheStoreCount?: number;
+  prefillTokensPerSecond: number | null;
+
+  // JS Side & Transport Metadata
   execution: {
     mode: 'main-thread' | 'worker';
     workerBacked: boolean;
-    tokenPath?: 'none' | 'runtime-event';
+    tokenPath?: 'none' | 'streaming-buffer';
   };
+
+  /** Cumulative ms spent in `_ce_yield_drain` (SAB ring writes from native scratch). */
+  jsStreamingDrainMs?: number;
+  jsStreamingDrainCount?: number;
 }
 
 export interface BackendProfileObservation {

@@ -236,7 +236,7 @@ char *CE_ApplyChatTemplate(const char *messages_json, int add_assistant) {
 EMSCRIPTEN_KEEPALIVE
 CE_RequestId CE_StartTextRequestWithTokenEmissionMode(
     const char *context_key, const char *prompt, int n_tokens,
-    CE_TokenCallback on_token, int token_emission_mode, const char *grammar) {
+    int token_emission_mode, const char *grammar) {
   std::lock_guard<std::mutex> lock(g_apiMutex);
   if (!g_isEngineInitialized) {
     return 0;
@@ -246,7 +246,7 @@ CE_RequestId CE_StartTextRequestWithTokenEmissionMode(
   }
 
   return CE_StartPromptRequestWithTokenEmissionMode(
-      context_key, prompt, n_tokens, on_token,
+      context_key, prompt, n_tokens,
       static_cast<CE_TokenEmissionMode>(token_emission_mode), grammar);
 }
 
@@ -254,7 +254,7 @@ EMSCRIPTEN_KEEPALIVE
 CE_RequestId CE_StartMediaRequestWithTokenEmissionMode(
     const char *context_key, const char *prompt, int n_tokens, int n_images,
     const uint8_t *images_flat_buffer, const int32_t *image_sizes,
-    CE_TokenCallback on_token, int token_emission_mode, const char *grammar) {
+    int token_emission_mode, const char *grammar) {
   std::lock_guard<std::mutex> lock(g_apiMutex);
   if (!g_isEngineInitialized) {
     return 0;
@@ -265,8 +265,7 @@ CE_RequestId CE_StartMediaRequestWithTokenEmissionMode(
 
   return CE_StartPromptWithMediaRequestWithTokenEmissionMode(
       context_key, prompt, n_tokens, n_images, images_flat_buffer, image_sizes,
-      on_token, static_cast<CE_TokenEmissionMode>(token_emission_mode),
-      grammar);
+      static_cast<CE_TokenEmissionMode>(token_emission_mode), grammar);
 }
 
 

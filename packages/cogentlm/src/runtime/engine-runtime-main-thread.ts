@@ -23,11 +23,12 @@ import {
 import { RequestTracker } from './request-tracker.js';
 import {
   TOKEN_EMISSION_NONE,
-  TOKEN_EMISSION_RUNTIME_EVENTS,
+  TOKEN_EMISSION_STREAMING_BUFFER,
   type ChatTemplateMessage,
   parseBackendObservabilityJson,
   WasmBridge,
 } from '../wasm/wasm-bridge.js';
+import type { StreamingRingWriter } from './streaming-ring.js';
 import { EngineModule } from '../wasm/engine-module.js';
 import { createAbortError } from '../utils/abort.js';
 import { asErrorMessage } from '../utils/error.js';
@@ -53,15 +54,19 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private readonly executionMode: EngineExecutionMode;
   private queuedPromptCallbacks = new Map<
     GenerateRequestId,
-    ((token: string) => void) | undefined
+    ((tokens: string[]) => void) | undefined
   >();
-  private queuedPromptTokenBuffers = new Map<GenerateRequestId, string[]>();
   private queuedPromptCallbackErrors = new Map<GenerateRequestId, unknown>();
   private readonly tracker = new RequestTracker<GenerateResponse>();
   private readonly scheduler: QueuedRequestScheduler;
   private runtimeObservabilityEnabled = false;
   private backendProfilingEnabled = false;
   private transportObservability: TransportObservability;
+  private streamingTickCallback: (() => void) | undefined;
+  // Worker-side SAB ring writer.  When set, requests with onToken run in
+  // StreamingBuffer emission mode; otherwise streaming is rejected with an
+  // explicit error (cross-origin isolation required).
+  private streamingRingWriter: StreamingRingWriter | null = null;
   constructor(private config: CogentConfig = {}) {
     this.executionMode = config.executionMode === 'worker' ? 'worker' : 'main-thread';
     this.transportObservability = this.createTransportObservability();
@@ -69,7 +74,6 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.scheduler = new QueuedRequestScheduler({
       tracker: this.tracker,
       queuedPromptCallbacks: this.queuedPromptCallbacks,
-      queuedPromptTokenBuffers: this.queuedPromptTokenBuffers,
       queuedPromptCallbackErrors: this.queuedPromptCallbackErrors,
       getTransportObservability: () => this.transportObservability,
       getBridge: () => this.getReadyEngineBridge(),
@@ -77,7 +81,19 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         this.finalizeRequest(bridge, requestId, options);
       },
       cancelQuery: (requestId) => this.cancelQuery(requestId),
+      getStreamingRingWriter: () => this.streamingRingWriter,
+      onStreamingTick: () => this.streamingTickCallback?.(),
     });
+  }
+
+  // Wires the worker-side SAB streaming ring writer.  Called once by the
+  // worker entry after the main thread allocates the ring SAB.
+  public setStreamingRingWriter(writer: StreamingRingWriter | null): void {
+    this.streamingRingWriter = writer;
+  }
+
+  public setStreamingTickCallback(callback: (() => void) | undefined): void {
+    this.streamingTickCallback = callback;
   }
 
 
@@ -196,7 +212,6 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
   private releaseTokenState(requestId: GenerateRequestId): void {
     this.queuedPromptCallbacks.delete(requestId);
-    this.queuedPromptTokenBuffers.delete(requestId);
     this.queuedPromptCallbackErrors.delete(requestId);
     this.refreshTokenTransportObservability();
   }
@@ -228,22 +243,19 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   }
 
   private updateTokenTransportObservability(
-    onToken: ((token: string) => void) | undefined
+    onToken: ((tokens: string[]) => void) | undefined
   ): void {
     if (onToken == null) {
       this.refreshTokenTransportObservability();
       return;
     }
 
-    this.transportObservability.activeTokenTransport = 'runtime-events';
+    this.transportObservability.activeTokenTransport =
+      this.streamingRingWriter != null ? 'streaming-buffer' : 'none';
   }
 
   private refreshTokenTransportObservability(): void {
-    this.transportObservability.activeTokenTransport = Array.from(
-      this.queuedPromptCallbacks.values()
-    ).some((callback) => callback != null)
-      ? 'runtime-events'
-      : 'none';
+    this.transportObservability.activeTokenTransport = 'none';
   }
 
   private rejectAllTrackedRequests(error: unknown, _bridge: WasmBridge | null = null): void {
@@ -503,8 +515,18 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
     this.updateTokenTransportObservability(onToken);
 
-    let requestId: GenerateRequestId = 0;
+    // Streaming requires a worker-side SAB ring writer.  In worker mode the
+    // worker entry installs one before enqueueing; on the main thread there
+    // is no streaming consumer and onToken with no ring is a usage error.
+    if (onToken != null && this.streamingRingWriter == null) {
+      throw new Error(
+        'onToken streaming requires worker execution mode with cross-origin isolation (SAB).'
+      );
+    }
+    const emissionMode =
+      onToken == null ? TOKEN_EMISSION_NONE : TOKEN_EMISSION_STREAMING_BUFFER;
 
+    let requestId: GenerateRequestId = 0;
     if (request.media != null && request.media.length > 0) {
       if (this.cachedMediaMarker == null) {
         throw new Error(
@@ -525,27 +547,37 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         request.promptText,
         request.maxOutputTokens,
         request.media,
-        0,
         request.grammar,
-        onToken != null ? TOKEN_EMISSION_RUNTIME_EVENTS : TOKEN_EMISSION_NONE
+        emissionMode
       );
     } else {
       requestId = bridge.startTextRequest(
         request.contextKey,
         request.promptText,
         request.maxOutputTokens,
-        0,
         request.grammar,
-        onToken != null ? TOKEN_EMISSION_RUNTIME_EVENTS : TOKEN_EMISSION_NONE
+        emissionMode
       );
     }
     if (!requestId) {
       throw new Error('Failed to enqueue request.');
     }
 
+    // Worker entry uses this hook to publish a streaming-claim message
+    // before inference produces tokens.  Errors are swallowed.
+    if (
+      typeof options === 'object' &&
+      typeof options.__internalRequestStarted === 'function'
+    ) {
+      try {
+        options.__internalRequestStarted(requestId);
+      } catch {
+        /* internal hook errors must not abort enqueue */
+      }
+    }
+
     if (onToken != null) {
       this.queuedPromptCallbacks.set(requestId, onToken);
-      this.queuedPromptTokenBuffers.set(requestId, []);
     }
 
     if (signal != null) {

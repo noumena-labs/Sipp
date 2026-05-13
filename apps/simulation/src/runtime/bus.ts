@@ -99,6 +99,14 @@ export interface GameEventBusEvent {
   readonly event: SimulationGameEvent;
 }
 
+export interface AgentTokenEvent {
+  readonly kind: 'agent-token';
+  readonly tick: number;
+  readonly agentId: string;
+  readonly queryId: string;
+  readonly tokens: string[];
+}
+
 export interface RuntimeErrorEvent {
   readonly kind: 'runtime-error';
   readonly tick: number;
@@ -116,6 +124,7 @@ export type SimulationEvent =
   | WorldSyncEvent
   | AgentQueryStartEvent
   | AgentQueryEndEvent
+  | AgentTokenEvent
   | AgentIntentEvent
   | AgentExpressionEvent
   | AgentStateChangeEvent

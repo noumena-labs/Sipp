@@ -9,6 +9,8 @@ import type {
   WorkerResponseMessage,
 } from './worker/model-service-protocol.js';
 
+import { StreamingRingWriter } from './runtime/streaming-ring.js';
+
 class FakeWorker {
   public static lastInstance: FakeWorker | null = null;
   public onmessage: ((event: MessageEvent<WorkerResponseMessage>) => void) | null = null;
@@ -16,6 +18,7 @@ class FakeWorker {
   public onmessageerror: (() => void) | null = null;
   public readonly messages: WorkerRequestMessage[] = [];
   public terminated = false;
+  private ringWriter: StreamingRingWriter | null = null;
 
   constructor(
     public readonly url: string | URL,
@@ -27,17 +30,23 @@ class FakeWorker {
   public postMessage(message: WorkerRequestMessage): void {
     this.messages.push(message);
 
+    if (message.kind === 'streaming-init') {
+      this.ringWriter = message.ringBuffer ? new StreamingRingWriter(message.ringBuffer) : null;
+      return;
+    }
+
     if ('callId' in message) {
-      queueMicrotask(() => {
-        if (message.kind === 'query' || message.kind === 'chat') {
+      if (message.kind === 'chat' || message.kind === 'query') {
+        const text = message.kind === 'chat' ? 'Hello' : 'Hello</assistant>\n<user>ignored';
+        if (this.ringWriter) {
+          const requestId = 123;
+          this.ringWriter.tryWriteString(requestId, text);
           this.onmessage?.({
-            data: {
-              kind: 'token',
-              callId: message.callId,
-              text: 'Hello',
-            },
+            data: { kind: 'streaming-claim', callId: message.callId, nativeRequestId: requestId }
           } as MessageEvent<WorkerResponseMessage>);
         }
+      }
+      queueMicrotask(() => {
         const response: WorkerResponseMessage = {
           kind: 'resolve',
           callId: message.callId,
@@ -46,27 +55,27 @@ class FakeWorker {
               ? []
               : message.kind === 'models-remove'
                 ? null
-                  : message.kind === 'models-load'
-                    ? {
-                      id: 'model-fake',
-                      name: 'fake.gguf',
-                      modality: 'text',
-                      status: 'ready',
-                      source: 'local',
-                      bytes: 1,
-                      loaded: true,
-                      chatTemplate: 'fake-template',
-                      bosText: '<s>',
-                      eosText: '</s>',
-                      mediaMarker: null,
-                        createdAt: new Date(0).toISOString(),
-                        updatedAt: new Date(0).toISOString(),
-                      }
-                    : message.kind === 'query'
-                      ? 'Hello</assistant>\n<user>ignored'
-                      : message.kind === 'chat'
-                        ? 'Hello'
-              : undefined,
+                : message.kind === 'models-load'
+                  ? {
+                    id: 'model-fake',
+                    name: 'fake.gguf',
+                    modality: 'text',
+                    status: 'ready',
+                    source: 'local',
+                    bytes: 1,
+                    loaded: true,
+                    chatTemplate: 'fake-template',
+                    bosText: '<s>',
+                    eosText: '</s>',
+                    mediaMarker: null,
+                    createdAt: new Date(0).toISOString(),
+                    updatedAt: new Date(0).toISOString(),
+                  }
+                  : message.kind === 'query'
+                    ? 'Hello</assistant>\n<user>ignored'
+                    : message.kind === 'chat'
+                      ? 'Hello'
+                      : undefined,
         };
         this.onmessage?.({ data: response } as MessageEvent<WorkerResponseMessage>);
       });
@@ -163,9 +172,10 @@ test('worker mode lists models without requiring explicit runtime URLs', async (
     assert.ok(worker != null);
     assert.match(String(worker.url), /model-service-entry\.js$/);
     assert.equal(worker.options?.type, 'module');
-    assert.equal(worker.messages[0]?.kind, 'models-list');
-    assert.equal(worker.messages[0]?.config.moduleUrl, undefined);
-    assert.equal(worker.messages[0]?.config.wasmUrl, undefined);
+    const modelsRequest = worker.messages.find(m => m.kind === 'models-list');
+    assert.equal(modelsRequest?.kind, 'models-list');
+    assert.equal((modelsRequest as any)?.config?.moduleUrl, undefined);
+    assert.equal((modelsRequest as any)?.config?.wasmUrl, undefined);
 
     await engine.close();
     assert.equal(worker.terminated, true);
@@ -181,12 +191,13 @@ test('chat() renders messages through the worker service and sanitizes assistant
     await engine.models.load('model-fake');
     const chunks: string[] = [];
     const output = await engine.chat([{ role: 'user', content: 'hello' }], {
-      onToken: (token) => chunks.push(token),
+      onToken: (batch) => chunks.push(...batch),
     });
     const worker = FakeWorker.lastInstance;
     const chat = worker?.messages.find((message) => message.kind === 'chat');
 
     assert.equal(output, 'Hello');
+    await new Promise((resolve) => setTimeout(resolve, 50));
     assert.deepEqual(chunks, ['Hello']);
     assert.ok(chat != null && chat.kind === 'chat');
     const messages = Array.isArray(chat.input) ? chat.input : chat.input.messages;
@@ -211,8 +222,7 @@ test('worker mode resolves explicit relative runtime overrides on the main threa
       });
 
       await engine.models.list();
-      const request = FakeWorker.lastInstance?.messages[0];
-
+      const request = FakeWorker.lastInstance?.messages.find(m => m.kind === 'models-list');
       assert.equal(request?.kind, 'models-list');
       assert.equal(request?.config.moduleUrl, 'https://app.test/page/runtime/custom-module.js');
       assert.equal(request?.config.wasmUrl, 'https://app.test/page/runtime/custom-module.wasm');

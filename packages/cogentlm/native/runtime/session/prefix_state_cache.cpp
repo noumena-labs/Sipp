@@ -150,9 +150,73 @@ bool PrefixStateCache::StorePrefixState(
   return true;
 }
 
+void PrefixStateCache::EnqueuePendingSnapshot(
+    PendingPrefixSnapshot snapshot) {
+  if (snapshot.seq_id < 0 || snapshot.token_count == 0 ||
+      snapshot.prefix_tokens.size() < snapshot.token_count) {
+    return;
+  }
+
+  // Coalesce ONLY on exact identity (same seq, context, fingerprint, AND
+  // `token_count`).  Distinct boundaries on the same seq (end-of-prompt at
+  // `token_count = N_prompt`, mid-decode at `token_count = 128`, 256, ...)
+  // are *different* cache entries and must coexist – future lookups bucket
+  // by `token_count` so collapsing a shorter boundary into a longer one
+  // makes the shorter prefix permanently unfindable.  Same-identity dup
+  // can happen if a request retries a boundary (e.g. cancellation+retry);
+  // we keep the most recent payload in that case.
+  for (auto it = pending_snapshots_.begin(); it != pending_snapshots_.end();
+       ++it) {
+    if (it->seq_id == snapshot.seq_id &&
+        it->context_key == snapshot.context_key &&
+        it->model_fingerprint == snapshot.model_fingerprint &&
+        it->token_count == snapshot.token_count) {
+      *it = std::move(snapshot);
+      return;
+    }
+  }
+
+  pending_snapshots_.push_back(std::move(snapshot));
+}
+
+std::size_t PrefixStateCache::DrainPendingSnapshots(llama_context *context,
+                                                    std::size_t max_to_drain) {
+  if (context == nullptr || pending_snapshots_.empty()) {
+    return 0;
+  }
+  const std::size_t budget = max_to_drain == 0
+                                 ? pending_snapshots_.size()
+                                 : std::min(max_to_drain,
+                                            pending_snapshots_.size());
+  std::size_t drained = 0;
+  while (drained < budget && !pending_snapshots_.empty()) {
+    PendingPrefixSnapshot pending = std::move(pending_snapshots_.front());
+    pending_snapshots_.pop_front();
+    StorePrefixState(context, pending.seq_id, pending.model_fingerprint,
+                     pending.context_key, pending.prefix_tokens,
+                     pending.token_count, pending.prefix_hash,
+                     pending.retention_priority);
+    drained++;
+  }
+  return drained;
+}
+
+void PrefixStateCache::DropPendingSnapshotsForSeq(llama_seq_id seq_id) {
+  if (pending_snapshots_.empty() || seq_id < 0) {
+    return;
+  }
+  pending_snapshots_.erase(
+      std::remove_if(pending_snapshots_.begin(), pending_snapshots_.end(),
+                     [seq_id](const PendingPrefixSnapshot &snapshot) {
+                       return snapshot.seq_id == seq_id;
+                     }),
+      pending_snapshots_.end());
+}
+
 void PrefixStateCache::Clear() {
   entries_.clear();
   lookup_buckets_.clear();
+  pending_snapshots_.clear();
   total_approx_bytes_ = 0;
 }
 

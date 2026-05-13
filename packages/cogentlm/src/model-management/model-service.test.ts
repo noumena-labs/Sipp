@@ -263,7 +263,7 @@ class FakeRuntime implements EngineRuntime {
       flushCount: 0,
       coalescedTokenCount: 0,
       maxObservedBufferedTokenCount: 0,
-      activeTokenTransport: this.runtimeMetricsEnabled ? 'runtime-events' : 'none',
+      activeTokenTransport: 'none',
     };
   }
 
@@ -358,10 +358,8 @@ class FakeRuntime implements EngineRuntime {
     const requestId = this.nextRequestId++;
     this.lastPrompt = promptText;
     this.queuedRequests.set(requestId, { promptText, options });
-    if (typeof options === 'object') {
-      for (const token of this.streamedTokens) {
-        options.onToken?.(token);
-      }
+    if (typeof options === 'object' && this.streamedTokens.length > 0) {
+      options.onToken?.(this.streamedTokens);
     }
     return requestId;
   }
@@ -413,11 +411,18 @@ class FakeRuntime implements EngineRuntime {
 
   private createMetrics(): RequestObservabilityMetrics {
     return {
-      totalMs: 12,
       ttftMs: 4,
-      tokensPerSecond: 100,
-      inputTokenCount: 3,
-      outputTokenCount: 5,
+      itlAvgMs: 10, // 100 TPS
+      itlP99Ms: 2.0,
+      e2eMs: 12,
+      prefillMs: 5,
+      decodeMs: 50, // 5 tokens * 10ms = 50ms
+      nativeGpuMs: 3,
+      nativeSyncMs: 1,
+      nativeLogicMs: 1,
+      inputTokens: 3,
+      outputTokens: 5,
+      cacheHits: 0,
     };
   }
 }
@@ -460,7 +465,7 @@ test('ModelService loads, lists, tracks current, and queries text models', async
 
   const tokens: string[] = [];
   const answer = await service.query('hello', {
-    onToken: (token) => tokens.push(token),
+    onToken: (batch) => tokens.push(...batch),
   });
   assert.equal(answer, 'answer:hello');
   assert.deepEqual(tokens, ['token']);
@@ -480,7 +485,7 @@ test('ModelService.chat renders chat templates and sanitizes assistant boundarie
       { role: 'user', content: 'Say hello.' },
     ],
     {
-      onToken: (token) => tokens.push(token),
+      onToken: (batch) => tokens.push(...batch),
     }
   );
 
@@ -512,7 +517,7 @@ test('ModelService captures runtime observability without backend profile data',
 
   const snapshot = service.currentObservability();
   assert.equal(snapshot.mode, 'runtime');
-  assert.equal(snapshot.runtime?.outputTokenCount, 5);
+  assert.equal(snapshot.runtime?.outputTokens, 5);
   assert.equal(snapshot.profile, undefined);
 });
 

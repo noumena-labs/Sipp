@@ -10,19 +10,6 @@
 
 #include <algorithm>
 
-namespace {
-
-constexpr std::uint64_t kFnvOffsetBasis = 1469598103934665603ull;
-constexpr std::uint64_t kFnvPrime = 1099511628211ull;
-
-std::uint64_t mix_token_hash(std::uint64_t hash, llama_token token) {
-  hash ^= static_cast<std::uint64_t>(static_cast<std::uint32_t>(token));
-  hash *= kFnvPrime;
-  return hash;
-}
-
-} // namespace
-
 namespace noumena::cogentengine {
 
 PrefixCachePolicy::PrefixCachePolicy(std::size_t prefix_cache_interval_tokens)
@@ -58,9 +45,9 @@ PrefixCachePolicy::BuildCandidateBoundaries(
                          ? 1
                          : tokens.size() / prefix_cache_interval_tokens_ + 1);
 
-  std::uint64_t rolling_hash = kFnvOffsetBasis;
+  std::uint64_t rolling_hash = kPrefixHashSeed;
   for (std::size_t index = 0; index < tokens.size(); ++index) {
-    rolling_hash = mix_token_hash(rolling_hash, tokens[index]);
+    rolling_hash = MixPrefixHashToken(rolling_hash, tokens[index]);
     const std::size_t token_count = index + 1;
     if (!ShouldStoreBoundary(token_count, tokens.size())) {
       continue;
@@ -83,9 +70,9 @@ std::uint64_t PrefixCachePolicy::HashPrefix(
   }
 
   const std::size_t clamped_count = std::min(token_count, tokens.size());
-  std::uint64_t rolling_hash = kFnvOffsetBasis;
+  std::uint64_t rolling_hash = kPrefixHashSeed;
   for (std::size_t index = 0; index < clamped_count; ++index) {
-    rolling_hash = mix_token_hash(rolling_hash, tokens[index]);
+    rolling_hash = MixPrefixHashToken(rolling_hash, tokens[index]);
   }
   return rolling_hash;
 }

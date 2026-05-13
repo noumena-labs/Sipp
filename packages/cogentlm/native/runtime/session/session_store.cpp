@@ -61,7 +61,6 @@ SequenceState &SessionStore::GetOrCreateSession(const std::string &context_key) 
   EnforceLimitBeforeInsert();
 
   SequenceState new_state;
-  new_state.seq_id = AcquireSeqId();
   SequenceState &stored_state = Emplace(context_key, std::move(new_state));
   Touch(context_key);
   return stored_state;
@@ -72,8 +71,6 @@ SequenceState &SessionStore::Emplace(const std::string &context_key,
   auto [it, inserted] = context_states_.emplace(
       context_key, SessionEntry{.state = std::move(state)});
   if (!inserted) {
-    ClearSequenceMemory(it->second.state.seq_id);
-    ReleaseSeqId(it->second.state.seq_id);
     it->second.state = std::move(state);
   }
   MarkEvictable(context_key, it->second);
@@ -121,8 +118,6 @@ void SessionStore::Remove(const std::string &context_key) {
     if (state_it->second.is_evictable) {
       evictable_context_keys_.erase(state_it->second.evictable_it);
     }
-    ClearSequenceMemory(state_it->second.state.seq_id);
-    ReleaseSeqId(state_it->second.state.seq_id);
     context_states_.erase(state_it);
   }
 }
@@ -137,12 +132,6 @@ void SessionStore::EnforceLimitBeforeInsert() {
 }
 
 void SessionStore::Clear() {
-  for (auto &[key, entry] : context_states_) {
-    (void)key;
-    ClearSequenceMemory(entry.state.seq_id);
-    ReleaseSeqId(entry.state.seq_id);
-  }
-
   context_states_.clear();
   evictable_context_keys_.clear();
 }
@@ -156,17 +145,30 @@ void SessionStore::ClearSequenceMemory(llama_seq_id seq_id) const {
   llama_memory_seq_rm(mem, seq_id, 0, -1);
 }
 
-llama_seq_id SessionStore::AcquireSeqId() {
+llama_seq_id SessionStore::AcquireSeqId(llama_seq_id hint) {
   if (free_seq_ids_.empty()) {
     return -1;
   }
 
-  const llama_seq_id seq_id = free_seq_ids_.front();
-  free_seq_ids_.pop_front();
+  llama_seq_id seq_id = -1;
+  if (hint >= 0 && hint < static_cast<llama_seq_id>(seq_id_available_.size())) {
+    auto it = std::find(free_seq_ids_.begin(), free_seq_ids_.end(), hint);
+    if (it != free_seq_ids_.end()) {
+      seq_id = hint;
+      free_seq_ids_.erase(it);
+    }
+  }
+
+  if (seq_id == -1) {
+    seq_id = free_seq_ids_.front();
+    free_seq_ids_.pop_front();
+  }
+
   if (seq_id >= 0 &&
       static_cast<size_t>(seq_id) < seq_id_available_.size()) {
     seq_id_available_[static_cast<size_t>(seq_id)] = false;
   }
+
   return seq_id;
 }
 

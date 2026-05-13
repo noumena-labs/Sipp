@@ -1,4 +1,4 @@
-import type { RuntimeObservation } from '@noumena-labs/cogentlm';
+import type { RequestObservabilityMetrics } from '@noumena-labs/cogentlm';
 
 export interface SamplingConfig {
   repeatLastN?: number;
@@ -35,20 +35,19 @@ export interface MetricSummary {
   maxMs: number;
 }
 
-export type RequestObservability = RuntimeObservation;
+export type RequestObservability = RequestObservabilityMetrics;
 
 export interface BenchmarkRun {
   label: string;
   wallMs: number;
-  appObservedTtftMs: number | null;
-  appObservedTpotMs: number | null;
-  appObservedItlMsValues: number[];
-  nativeTtftMs: number | null;
-  nativeMeanItlMs: number | null;
-  nativeTailItlMs: number | null;
-  nativeDecodeTokensPerSecond: number | null;
-  inputTokenCount: number | null;
-  outputTokenCount: number;
+  ttftMs: number | null;
+  itlAvgMs: number | null;
+  itlP99Ms: number | null;
+  tps: number | null;
+  inputTokens: number | null;
+  outputTokens: number;
+  prefillTokens: number | null;
+  prefillTps: number | null;
   outputLength: number;
   outputPreview: string;
   observability: RequestObservability | null;
@@ -60,37 +59,26 @@ export interface GroupSummary {
     benchmarkDurationMs: number;
     totalInputTokens: number;
     totalGeneratedTokens: number;
+    totalPrefillTokens: number;
     requestThroughputRps: number | null;
     outputTokenThroughputTps: number | null;
     totalTokenThroughputTps: number | null;
-    appObservedTtftMs: MetricSummary | null;
-    appObservedTpotMs: MetricSummary | null;
-    appObservedItlMs: MetricSummary | null;
-    e2elMs: MetricSummary;
   };
   runtime: {
-    nativeTtftMs: MetricSummary | null;
-    nativeMeanItlMs: MetricSummary | null;
-    nativeTailItlMs: MetricSummary | null;
-    nativeDecodeTokensPerSecond: MetricSummary | null;
-    avgLogicalInputTokenCount: number | null;
-    avgPromptEvalTokens: number | null;
-    avgPromptEvalMs: number | null;
-    avgDecodeEvalMs: number | null;
-    avgSampleMs: number | null;
-    avgOutputTokenCount: number | null;
-    avgQueueDelayMs: number | null;
-    avgTailItlMs: number | null;
-    avgBatchParticipationCount: number | null;
-    avgDecodeFirstTickCount: number | null;
-    avgChunkedPrefillTickCount: number | null;
-    avgMixedWorkloadTickCount: number | null;
-    avgLcpReuseTokens: number | null;
-    avgPrefixCacheRestoreTokens: number | null;
-    avgPrefixCacheHitCount: number | null;
-    avgPrefixCacheStoreCount: number | null;
-    promptTokensPerSecond: number | null;
-    decodeTokensPerSecond: number | null;
+    ttftMs: MetricSummary | null;
+    itlAvgMs: MetricSummary | null;
+    itlP99Ms: MetricSummary | null;
+    tps: MetricSummary | null;
+    prefillTps: MetricSummary | null;
+    avgInputTokens: number | null;
+    avgOutputTokens: number | null;
+    avgPrefillTokens: number | null;
+    avgPrefillMs: number | null;
+    avgDecodeMs: number | null;
+    avgNativeGpuMs: number | null;
+    avgNativeSyncMs: number | null;
+    avgNativeLogicMs: number | null;
+    avgCacheHits: number | null;
   };
 }
 
@@ -169,8 +157,8 @@ export interface ConfigOptions {
 export interface MixedLoadDefinition {
   id: string;
   label: string;
-  background: ScenarioDefinition & { promptMode: 'raw'; contextBucket: string; concurrency: number };
-  foreground: ScenarioDefinition & { promptMode: 'raw'; contextBucket: string; concurrency: number };
+  background: ScenarioDefinition & { promptMode: 'chat'; contextBucket: string; concurrency: number };
+  foreground: ScenarioDefinition & { promptMode: 'chat'; contextBucket: string; concurrency: number };
   concurrency: number;
 }
 
@@ -181,4 +169,26 @@ export interface MixedLoadResult {
   runtime: { loadRuntimeMs: number | null };
   foreground?: GroupResult;
   background?: GroupResult;
+}
+
+export interface BenchmarkLogEntry {
+  scenarioId: string;
+  scenarioLabel: string;
+  groupId: string;
+  groupLabel: string;
+  runLabel: string;
+  wallMs: number;
+  outputTokens: number;
+  observability: RequestObservability | null;
+}
+
+export interface BenchmarkTraceReport {
+  runCount: number;
+  logs: BenchmarkLogEntry[];
+  analysis: {
+    ttftMs: MetricSummary | null;
+    itlAvgMs: MetricSummary | null;
+    itlP99Ms: MetricSummary | null;
+    tps: MetricSummary | null;
+  };
 }

@@ -395,16 +395,13 @@ export class CharacterRuntime {
       recordParsedEvents(parser.flush());
     };
 
-    const consumeOutputText = (text: string): void => {
-      if (text.length === 0) {
+    const onToken = (tokens: string[]): void => {
+      if (tokens.length === 0) {
         return;
       }
+      const text = tokens.join('');
       streamedOutputText += text;
-      emitParsedText(text);
-    };
-
-    const onToken = (token: string): void => {
-      consumeOutputText(token);
+      recordParsedEvents(parser.consume(text));
     };
 
     try {
@@ -423,7 +420,8 @@ export class CharacterRuntime {
       } else {
         const unseenOutputSuffix = sliceUnstreamedSuffix(streamedOutputText, rawText);
         if (unseenOutputSuffix.length > 0) {
-          consumeOutputText(unseenOutputSuffix);
+          streamedOutputText += unseenOutputSuffix;
+          recordParsedEvents(parser.consume(unseenOutputSuffix));
         }
       }
     } catch (error) {
