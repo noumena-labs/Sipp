@@ -6,7 +6,7 @@ import {
 import { sliceUnstreamedSuffix } from '../core/streaming-output.js';
 import type {
   GenerateResponse,
-  InferenceInitConfig,
+  NativeRuntimeConfig,
   ModelBundleFileProjectorDescriptor,
   ModelDetectionResult,
   InternalBundleDescriptor,
@@ -23,6 +23,8 @@ import {
   type AssetRecord,
   type ChatInput,
   type ChatOptions,
+  type EngineEvent,
+  type EngineState,
   type LoadedModelState,
   type ModelEntry,
   type ModelInfo,
@@ -36,9 +38,17 @@ import {
   type QueryObservation,
   type QueryInput,
   type QueryOptions,
+  type RequestResult,
+  type TokenBatch,
   type RegistryManifest,
 } from './model-types.js';
 import type { ModelLifecycleService } from './model-service-contract.js';
+import {
+  EngineEventController,
+  observabilityEventToStateEvent,
+  observabilitySnapshotToEngineState,
+  requestResultFromGenerateResponse,
+} from './engine-protocol-adapter.js';
 import {
   applyObservabilityMode,
   ObservabilityController,
@@ -79,39 +89,40 @@ function isSourceObject(source: ModelSource): source is Extract<ModelSource, { m
 function toRuntimeConfig(
   options: ModelRuntimeOptions | undefined,
   mode: ObservabilityMode
-): InferenceInitConfig {
-  const effectiveOptions = applyObservabilityMode(options, mode);
-  return {
-    nCtx: effectiveOptions.nCtx,
-    nBatch: effectiveOptions.nBatch,
-    nUbatch: effectiveOptions.nUbatch,
-    nSeqMax: effectiveOptions.nSeqMax,
-    nThreads: effectiveOptions.nThreads,
-    nThreadsBatch: effectiveOptions.nThreadsBatch,
-    nGpuLayers: effectiveOptions.nGpuLayers,
-    flashAttention: effectiveOptions.flashAttention,
-    kvUnified: effectiveOptions.kvUnified,
-    maxCachedSessions: effectiveOptions.maxCachedSessions,
-    retainedPrefixTokens: effectiveOptions.retainedPrefixTokens,
-    prefillChunkSize: effectiveOptions.prefillChunkSize,
-    prefixCacheIntervalTokens: effectiveOptions.prefixCacheIntervalTokens,
-    maxPrefixCacheEntries: effectiveOptions.maxPrefixCacheEntries,
-    schedulerPolicy: effectiveOptions.schedulerPolicy,
-    decodeTokenReserve: effectiveOptions.decodeTokenReserve,
-    adaptivePrefillChunking: effectiveOptions.adaptivePrefillChunking,
-    enableRuntimeObservability: effectiveOptions.enableRuntimeObservability,
-    enableBackendProfiling: effectiveOptions.enableBackendProfiling,
-    multimodalUseGpu: effectiveOptions.multimodalUseGpu,
-    imageMinTokens: effectiveOptions.imageMinTokens,
-    imageMaxTokens: effectiveOptions.imageMaxTokens,
-    sampling: effectiveOptions.sampling,
-  };
+): NativeRuntimeConfig {
+  return applyObservabilityMode(options, mode);
 }
 
 function nowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
     ? performance.now()
     : Date.now();
+}
+
+function tokenBatchFromText(
+  requestId: string,
+  streamId: number,
+  sequenceStart: number,
+  text: string
+): TokenBatch {
+  return {
+    requestId,
+    streamId,
+    sequenceStart,
+    text,
+    frameCount: 1,
+    byteCount: utf8ByteLength(text),
+    stats: {
+      framesSent: sequenceStart + 1,
+      bytesSent: utf8ByteLength(text),
+      framesDropped: 0,
+      batchesSent: sequenceStart + 1,
+    },
+  };
+}
+
+function utf8ByteLength(text: string): number {
+  return new TextEncoder().encode(text).byteLength;
 }
 
 function entryAssetFingerprint(entry: Pick<ModelEntry, 'modelAssetIds' | 'projectorAssetId'>): string {
@@ -146,27 +157,45 @@ function sameVisionProjectorTypes(left: readonly string[], right: readonly strin
   );
 }
 
+const BROWSER_GGUF_SPLIT_DIRECT_LOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+
+function normalizeLocalSourceFileName(file: File): string {
+  const trimmed = (file.name || 'model.gguf').trim();
+  const defaultValue = trimmed.length > 0 ? trimmed : 'model.gguf';
+  return defaultValue.replace(/[\\/:*?"<>|]+/g, '-');
+}
+
 export class ModelService implements ModelLifecycleService {
-  private current: LoadedModelState | null = null;
+  private currentLoaded: LoadedModelState | null = null;
   private chatRuntime: ChatTemplatePromptRuntime | null = null;
   private chatRuntimeKey: string | null = null;
   private operationChain: Promise<void> = Promise.resolve();
   private transitioning = false;
   private readonly observability = new ObservabilityController();
+  private readonly engineEvents = new EngineEventController();
+  private browserSplitCleanup: Promise<void> | null = null;
 
   constructor(
     private readonly runtime: EngineRuntime,
     private readonly registry = new ModelRegistryStore(),
     private readonly assetStore = new AssetStore(),
     private readonly pairingValidator = new PairingValidator()
-  ) {}
+  ) {
+    this.observability.subscribe((event) => {
+      this.engineEvents.emit(observabilityEventToStateEvent(event));
+    });
+  }
 
   public currentModel(): ModelInfo | null {
-    const current = this.current;
+    const current = this.currentLoaded;
     if (current == null) {
       return null;
     }
     return this.currentSnapshot ?? null;
+  }
+
+  public current(): ModelInfo | null {
+    return this.currentModel();
   }
 
   private currentSnapshot: ModelInfo | null = null;
@@ -186,11 +215,35 @@ export class ModelService implements ModelLifecycleService {
     return this.observability.subscribe(listener);
   }
 
+  public currentState(): EngineState {
+    return observabilitySnapshotToEngineState(this.observability.current());
+  }
+
+  public state(): EngineState {
+    return this.currentState();
+  }
+
+  public subscribeEvents(listener: (event: EngineEvent) => void): () => void {
+    return this.engineEvents.subscribe(listener);
+  }
+
   public async load(source: ModelSource, options: ModelLoadOptions = {}): Promise<ModelInfo> {
     return this.withLifecycleLock(async () => {
       if (options.signal?.aborted) {
         throw new DOMException('Model load aborted.', 'AbortError');
       }
+      const loadOptions: ModelLoadOptions = {
+        ...options,
+        onProgress: (progress) => {
+          options.onProgress?.(progress);
+          this.engineEvents.emit({
+            type: 'load-progress',
+            loadedBytes: progress.loadedBytes,
+            totalBytes: progress.totalBytes,
+            assetName: progress.assetName,
+          });
+        },
+      };
 
       const observabilityMode = resolveObservabilityMode(options.observability);
       const runtimeFingerprint = sha256Text(
@@ -208,15 +261,16 @@ export class ModelService implements ModelLifecycleService {
       });
       try {
         const manifest = await this.registry.read();
+        await this.cleanupBrowserSplitArtifacts(manifest);
         const existing = this.resolveInstalledModel(manifest, source);
         if (existing != null && !isSourceObject(source)) {
-          const basePlan = await this.deriveBasePlanForEntry(existing, manifest, options.signal);
-          const prepared = await this.resolveEntryForLoading(existing, basePlan, options.signal);
-          return await this.loadEntry(prepared, runtimeFingerprint, options, observabilityMode);
+          const basePlan = await this.deriveBasePlanForEntry(existing, manifest, loadOptions.signal);
+          const prepared = await this.resolveEntryForLoading(existing, basePlan, loadOptions.signal);
+          return await this.loadEntry(prepared, runtimeFingerprint, loadOptions, observabilityMode);
         }
 
-        const installed = await this.installSource(source, manifest, options);
-        const classified = await this.classifyAssets(installed.assets, options.signal);
+        const installed = await this.installSource(source, manifest, loadOptions);
+        const classified = await this.classifyAssets(installed.assets, loadOptions.signal);
         await this.registerAssets(installed.assets, classified);
         const sourceProjectorAssetId = this.resolveSourceProjectorAssetId(
           classified,
@@ -239,15 +293,15 @@ export class ModelService implements ModelLifecycleService {
               explicitPlan.projectorAssetId!,
               explicitPlan.compatibleVisionProjectorTypes
             );
-            return await this.loadEntry(entry, runtimeFingerprint, options, observabilityMode);
+            return await this.loadEntry(entry, runtimeFingerprint, loadOptions, observabilityMode);
           } catch (error) {
             await this.restoreEntry(previousEntry);
             throw error;
           }
         }
 
-        const prepared = await this.resolveEntryForLoading(entry, basePlan, options.signal);
-        return await this.loadEntry(prepared, runtimeFingerprint, options, observabilityMode);
+        const prepared = await this.resolveEntryForLoading(entry, basePlan, loadOptions.signal);
+        return await this.loadEntry(prepared, runtimeFingerprint, loadOptions, observabilityMode);
       } catch (error) {
         this.observability.emit('error', {
           state: 'error',
@@ -273,9 +327,9 @@ export class ModelService implements ModelLifecycleService {
       if (entry == null) {
         throw new QueryError('MODEL_NOT_FOUND', `Model "${id}" is not installed.`);
       }
-      if (this.current?.id === id) {
+      if (this.currentLoaded?.id === id) {
         this.runtime.close();
-        this.current = null;
+        this.currentLoaded = null;
         this.currentSnapshot = null;
       }
 
@@ -318,11 +372,40 @@ export class ModelService implements ModelLifecycleService {
     });
   }
 
-  public async query(input: QueryInput, options: QueryOptions = {}): Promise<string> {
+  public async unload(): Promise<void> {
+    await this.withLifecycleLock(async () => {
+      if (this.currentLoaded != null) {
+        this.runtime.close();
+        this.currentLoaded = null;
+        this.currentSnapshot = null;
+      }
+      this.observability.update({
+        state: 'idle',
+        model: null,
+        query: null,
+        runtime: undefined,
+        profile: undefined,
+      });
+      this.engineEvents.emit({ type: 'state', state: this.currentState() });
+    });
+  }
+
+  public async query(input: QueryInput, options: QueryOptions = {}): Promise<RequestResult> {
+    return await this.queryResult(input, options);
+  }
+
+  public async queryResult(input: QueryInput, options: QueryOptions = {}): Promise<RequestResult> {
+    const response = await this.runQuery(input, options);
+    return requestResultFromGenerateResponse(response, {
+      maxTokens: options.maxTokens,
+    });
+  }
+
+  private async runQuery(input: QueryInput, options: QueryOptions = {}): Promise<GenerateResponse> {
     if (this.transitioning) {
       throw new QueryError('MODEL_NOT_READY', 'A model lifecycle transition is in progress.');
     }
-    if (this.current == null) {
+    if (this.currentLoaded == null) {
       throw new QueryError('MODEL_NOT_READY', 'No model is loaded. Call engine.models.load(...) first.');
     }
     let prompt = typeof input === 'string' ? input : input.prompt;
@@ -336,10 +419,27 @@ export class ModelService implements ModelLifecycleService {
         prompt = `${Array.from({ length: media.length }, () => marker).join('\n')}\n${prompt}`;
       }
     }
+    let activeRequestId: number | null = null;
+    let nextSequence = 0;
+    const emitTokens = (batch: TokenBatch): void => {
+      const requestId = activeRequestId ?? Number(batch.streamId);
+      const text = batch.text;
+      if (text.length === 0) {
+        return;
+      }
+      options.onTokens?.({
+        ...batch,
+        requestId: String(requestId),
+        streamId: requestId,
+        sequenceStart: nextSequence,
+      });
+      nextSequence += Math.max(1, batch.frameCount);
+    };
     const promptOptions: PromptOptions = {
       nTokens: options.maxTokens,
       signal: options.signal,
-      onToken: options.onToken,
+      onTokens: options.onTokens == null ? undefined : emitTokens,
+      tokenFlush: options.onTokens == null ? undefined : options.tokenFlush ?? 'token',
       media,
       grammar: options.grammar,
       // Forward the internal streaming-claim hook if the caller (worker
@@ -368,21 +468,39 @@ export class ModelService implements ModelLifecycleService {
     let failureRecorded = false;
     try {
       const requestId = await this.runtime.enqueueQuery(session, prompt, promptOptions);
+      activeRequestId = requestId;
+      this.engineEvents.emit({ type: 'request-started', requestId: String(requestId), streamId: requestId });
       const response = await this.runtime.awaitQuery(requestId, { signal: options.signal });
       if (response.cancelled) {
         const error = new DOMException(response.errorMessage ?? 'Queued request cancelled.', 'AbortError');
         this.recordQueryFailure(session, start, error, response);
+        this.engineEvents.emit({
+          type: 'request-failed',
+          requestId: String(requestId),
+          error: error.message,
+        });
         failureRecorded = true;
         throw error;
       }
       if (response.failed) {
         const error = new Error(response.errorMessage ?? 'Queued prompt failed.');
         this.recordQueryFailure(session, start, error, response);
+        this.engineEvents.emit({
+          type: 'request-failed',
+          requestId: String(requestId),
+          error: error.message,
+        });
         failureRecorded = true;
         throw error;
       }
       this.recordQuerySuccess(session, start, response);
-      return response.outputText;
+      this.engineEvents.emit({
+        type: 'request-completed',
+        result: requestResultFromGenerateResponse(response, {
+          maxTokens: options.maxTokens,
+        }),
+      });
+      return response;
     } catch (error) {
       if (!failureRecorded) {
         this.recordQueryFailure(session, start, error);
@@ -390,53 +508,65 @@ export class ModelService implements ModelLifecycleService {
       if (error instanceof QueryError) {
         throw error;
       }
-      throw new QueryError(
+      const wrapped = new QueryError(
         'QUERY_FAILED',
         error instanceof Error && error.message.trim().length > 0
           ? `Model query failed: ${error.message}`
           : 'Model query failed.',
         { cause: error }
       );
+      if (!failureRecorded && activeRequestId != null) {
+        this.engineEvents.emit({
+          type: 'request-failed',
+          requestId: String(activeRequestId),
+          error: wrapped.message,
+        });
+      }
+      throw wrapped;
     }
   }
 
-  public async chat(input: ChatInput, options: ChatOptions = {}): Promise<string> {
+  public async chat(input: ChatInput, options: ChatOptions = {}): Promise<RequestResult> {
+    return await this.chatResult(input, options);
+  }
+
+  public async chatResult(input: ChatInput, options: ChatOptions = {}): Promise<RequestResult> {
     if (this.transitioning) {
       throw new QueryError('MODEL_NOT_READY', 'A model lifecycle transition is in progress.');
     }
-    if (this.current == null) {
+    if (this.currentLoaded == null) {
       throw new QueryError('MODEL_NOT_READY', 'No model is loaded. Call engine.models.load(...) first.');
     }
 
     const messages = isChatInputObject(input) ? input.messages : input;
     const media = isChatInputObject(input) ? input.media : undefined;
-    const promptContext = await this.getChatRuntime(this.current).render(messages);
+    const promptContext = await this.getChatRuntime(this.currentLoaded).render(messages);
     const outputSanitizer = new StreamingBoundaryTextSanitizer(promptContext.boundaryMarkers);
     const linkedAbort = createLinkedAbortController(options.signal);
     let streamedOutputText = '';
     let assistantText = '';
     let stoppedAtBoundary = false;
 
-    const consumeOutputTokens = (tokens: string[]): void => {
-      const batch: string[] = [];
-      for (const text of tokens) {
-        if (text.length === 0 || outputSanitizer.reachedBoundary) {
-          continue;
-        }
-        streamedOutputText += text;
-        const result = outputSanitizer.consume(text);
-        if (result.safeText.length > 0) {
-          assistantText += result.safeText;
-          batch.push(result.safeText);
-        }
-        if (result.hitBoundary) {
-          stoppedAtBoundary = true;
-          linkedAbort.controller.abort();
-          break;
-        }
+    let safeSequence = 0;
+    let lastBatch: TokenBatch | null = null;
+    const shouldStreamTokens = options.onTokens != null;
+    const consumeOutputTokens = (batch: TokenBatch): void => {
+      lastBatch = batch;
+      const text = batch.text;
+      if (text.length === 0 || outputSanitizer.reachedBoundary) {
+        return;
       }
-      if (batch.length > 0) {
-        options.onToken?.(batch);
+      streamedOutputText += text;
+      const result = outputSanitizer.consume(text);
+      if (result.safeText.length > 0) {
+        assistantText += result.safeText;
+        options.onTokens?.(
+          tokenBatchFromText(batch.requestId, batch.streamId, safeSequence++, result.safeText)
+        );
+      }
+      if (result.hitBoundary) {
+        stoppedAtBoundary = true;
+        linkedAbort.controller.abort();
       }
     };
 
@@ -444,12 +574,15 @@ export class ModelService implements ModelLifecycleService {
       const safeText = outputSanitizer.flush();
       if (safeText.length > 0) {
         assistantText += safeText;
-        options.onToken?.([safeText]);
+        const source = lastBatch ?? tokenBatchFromText('0', 0, safeSequence, safeText);
+        options.onTokens?.(
+          tokenBatchFromText(source.requestId, source.streamId, safeSequence++, safeText)
+        );
       }
     };
 
     try {
-      const rawText = await this.query(
+      const rawResult = await this.queryResult(
         {
           prompt: promptContext.promptText,
           ...(media != null && media.length > 0 ? { media } : {}),
@@ -457,19 +590,41 @@ export class ModelService implements ModelLifecycleService {
         {
           ...options,
           signal: linkedAbort.signal,
-          onToken: consumeOutputTokens,
+          ...(shouldStreamTokens ? { onTokens: consumeOutputTokens } : {}),
         }
       );
-      const unseenOutputSuffix = sliceUnstreamedSuffix(streamedOutputText, rawText);
+      const rawText = rawResult.text;
+      const unseenOutputSuffix = shouldStreamTokens
+        ? sliceUnstreamedSuffix(streamedOutputText, rawText)
+        : rawText;
       if (!outputSanitizer.reachedBoundary && unseenOutputSuffix.length > 0) {
-        consumeOutputTokens([unseenOutputSuffix]);
+        const source = lastBatch ?? tokenBatchFromText(rawResult.id, 0, safeSequence, unseenOutputSuffix);
+        consumeOutputTokens(
+          tokenBatchFromText(source.requestId, source.streamId, safeSequence, unseenOutputSuffix)
+        );
       }
       flushOutputText();
-      return assistantText.trim();
+      return {
+        ...rawResult,
+        text: assistantText.trim(),
+      };
     } catch (error) {
       if (stoppedAtBoundary && options.signal?.aborted !== true) {
         flushOutputText();
-        return assistantText.trim();
+        return requestResultFromGenerateResponse(
+          {
+            requestId: -1,
+            completed: true,
+            failed: false,
+            cancelled: false,
+            outputText: assistantText.trim(),
+            observability: null,
+          },
+          {
+            text: assistantText.trim(),
+            finishReason: 'stop',
+          }
+        );
       }
       throw error;
     } finally {
@@ -502,7 +657,7 @@ export class ModelService implements ModelLifecycleService {
 
   public close(): void {
     this.runtime.close();
-    this.current = null;
+    this.currentLoaded = null;
     this.currentSnapshot = null;
     this.observability.markClosed();
   }
@@ -603,14 +758,14 @@ export class ModelService implements ModelLifecycleService {
         return await this.assetsForEntry(installed, manifest, includeProjector);
       }
       return {
-        assets: [await this.installRemoteAsset(source, 'model', manifest, options)],
+        assets: await this.installRemoteModelAssets(source, manifest, options),
         source: 'remote',
         explicitProjectorAssetId: null,
       };
     }
     if (isFile(source)) {
       return {
-        assets: [await this.installLocalAsset(source, 'model', manifest, options)],
+        assets: await this.installLocalModelAssets(source, manifest, options),
         source: 'local',
         explicitProjectorAssetId: null,
       };
@@ -640,6 +795,16 @@ export class ModelService implements ModelLifecycleService {
       };
     }
     throw new QueryError('INVALID_MODEL_SOURCE', 'Unsupported model source.');
+  }
+
+  private async cleanupBrowserSplitArtifacts(manifest: RegistryManifest): Promise<void> {
+    if (this.browserSplitCleanup == null) {
+      this.browserSplitCleanup = this.assetStore.cleanupBrowserSplitArtifacts(manifest).catch((error) => {
+        this.browserSplitCleanup = null;
+        throw error;
+      });
+    }
+    await this.browserSplitCleanup;
   }
 
   private async installProjectorSource(
@@ -697,6 +862,114 @@ export class ModelService implements ModelLifecycleService {
     };
   }
 
+  private async installRemoteModelAssets(
+    url: string,
+    manifest: RegistryManifest,
+    options: ModelLoadOptions
+  ): Promise<InstalledAsset[]> {
+    options.onProgress?.({
+      phase: 'metadata',
+      loadedBytes: 0,
+      totalBytes: null,
+      percent: null,
+      assetName: url,
+    });
+    const metadata = await this.assetStore.resolveRemoteMetadata(url, options.signal);
+    const existingSingle = this.findRemoteAsset(manifest, metadata, 'model');
+    if (existingSingle != null) {
+      return [
+        {
+          record: existingSingle,
+          file: await this.assetStore.getFile(existingSingle),
+        },
+      ];
+    }
+
+    const existingSplit = this.findRemoteSplitAssets(manifest, metadata);
+    if (existingSplit != null) {
+      const assets: InstalledAsset[] = [];
+      for (const record of existingSplit) {
+        assets.push({
+          record,
+          file: await this.assetStore.getFile(record),
+        });
+      }
+      return assets;
+    }
+
+    if (metadata.bytes <= BROWSER_GGUF_SPLIT_DIRECT_LOAD_MAX_BYTES) {
+      const record = await this.assetStore.downloadRemote(
+        metadata,
+        'model',
+        options.signal,
+        options.onProgress
+      );
+      return [
+        {
+          record,
+          file: await this.assetStore.getFile(record),
+        },
+      ];
+    }
+
+    const records = await this.assetStore.downloadRemoteSplitGguf(
+      metadata,
+      this.runtime,
+      options.signal,
+      options.onProgress
+    );
+    return await this.installedAssetsFromRecords(records, manifest);
+  }
+
+  private async installLocalModelAssets(
+    file: File,
+    manifest: RegistryManifest,
+    options: ModelLoadOptions
+  ): Promise<InstalledAsset[]> {
+    if (file.size <= BROWSER_GGUF_SPLIT_DIRECT_LOAD_MAX_BYTES) {
+      return [await this.installLocalAsset(file, 'model', manifest, options)];
+    }
+
+    const existingSplit = this.findLocalSplitAssets(manifest, file);
+    if (existingSplit != null) {
+      const assets: InstalledAsset[] = [];
+      for (const record of existingSplit) {
+        assets.push({
+          record,
+          file: await this.assetStore.getFile(record),
+        });
+      }
+      return assets;
+    }
+
+    const records = await this.assetStore.installLocalSplitGguf(
+      file,
+      this.runtime,
+      options.signal,
+      options.onProgress
+    );
+    return await this.installedAssetsFromRecords(records, manifest);
+  }
+
+  private async installedAssetsFromRecords(
+    records: readonly AssetRecord[],
+    manifest: RegistryManifest
+  ): Promise<InstalledAsset[]> {
+    const assets: InstalledAsset[] = [];
+    for (const record of records) {
+      const existing = manifest.assets[record.id];
+      if (existing != null && existing.storagePath !== record.storagePath) {
+        await this.assetStore.delete(record);
+      }
+      const effective = existing ?? record;
+      assets.push({
+        record: effective,
+        file: await this.assetStore.getFile(effective),
+      });
+    }
+    return assets;
+  }
+
   private async installLocalAsset(
     file: File,
     kind: AssetRecord['kind'],
@@ -734,6 +1007,63 @@ export class ModelService implements ModelLifecycleService {
           asset.bytes === metadata.bytes
       ) ?? null
     );
+  }
+
+  private findRemoteSplitAssets(
+    manifest: RegistryManifest,
+    metadata: RemoteAssetMetadata
+  ): AssetRecord[] | null {
+    return this.findCompleteSplitAssets(
+      Object.values(manifest.assets).filter(
+        (asset) =>
+          asset.kind === 'shard' &&
+          asset.sourceUrl === metadata.canonicalUrl &&
+          (asset.sourceEtag ?? '') === metadata.etag &&
+          (asset.sourceLastModified ?? '') === metadata.lastModified &&
+          asset.sourceBytes === metadata.bytes &&
+          Number.isInteger(asset.sourcePartIndex) &&
+          Number.isInteger(asset.sourcePartCount)
+      )
+    );
+  }
+
+  private findLocalSplitAssets(
+    manifest: RegistryManifest,
+    file: File
+  ): AssetRecord[] | null {
+    const sourceFileName = normalizeLocalSourceFileName(file);
+    return this.findCompleteSplitAssets(
+      Object.values(manifest.assets).filter(
+        (asset) =>
+          asset.kind === 'shard' &&
+          asset.sourceUrl == null &&
+          asset.sourceFileName === sourceFileName &&
+          asset.sourceFileLastModified === file.lastModified &&
+          asset.sourceBytes === file.size &&
+          Number.isInteger(asset.sourcePartIndex) &&
+          Number.isInteger(asset.sourcePartCount)
+      )
+    );
+  }
+
+  private findCompleteSplitAssets(candidates: AssetRecord[]): AssetRecord[] | null {
+    candidates.sort((left, right) => (left.sourcePartIndex ?? 0) - (right.sourcePartIndex ?? 0));
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    const first = candidates[0];
+    const count = first?.sourcePartCount;
+    if (typeof count !== 'number' || !Number.isInteger(count) || count <= 0 || candidates.length !== count) {
+      return null;
+    }
+    for (let index = 0; index < candidates.length; index += 1) {
+      const candidate = candidates[index];
+      if (candidate.sourcePartCount !== count || candidate.sourcePartIndex !== index) {
+        return null;
+      }
+    }
+    return candidates;
   }
 
   private async assetsForEntry(
@@ -816,6 +1146,12 @@ export class ModelService implements ModelLifecycleService {
           sourceUrl: installed.record.sourceUrl ?? existing.sourceUrl,
           sourceEtag: installed.record.sourceEtag ?? existing.sourceEtag,
           sourceLastModified: installed.record.sourceLastModified ?? existing.sourceLastModified,
+          sourceBytes: installed.record.sourceBytes ?? existing.sourceBytes,
+          sourcePartIndex: installed.record.sourcePartIndex ?? existing.sourcePartIndex,
+          sourcePartCount: installed.record.sourcePartCount ?? existing.sourcePartCount,
+          sourceFileName: installed.record.sourceFileName ?? existing.sourceFileName,
+          sourceFileLastModified:
+            installed.record.sourceFileLastModified ?? existing.sourceFileLastModified,
           ...(inspection == null ? {} : { inspection }),
         };
       }
@@ -1200,9 +1536,9 @@ export class ModelService implements ModelLifecycleService {
       return info;
     }
     if (
-      this.current?.id === entry.id &&
-      this.current.assetFingerprint === entryAssetFingerprint(entry) &&
-      this.current.runtimeFingerprint === runtimeFingerprint
+      this.currentLoaded?.id === entry.id &&
+      this.currentLoaded.assetFingerprint === entryAssetFingerprint(entry) &&
+      this.currentLoaded.runtimeFingerprint === runtimeFingerprint
     ) {
       const manifest = await this.registry.read();
       const info = this.toModelInfo(entry, manifest);
@@ -1238,10 +1574,10 @@ export class ModelService implements ModelLifecycleService {
       signal: options.signal,
     });
     const switchingCurrent =
-      this.current != null &&
-      (this.current.id !== entry.id ||
-        this.current.assetFingerprint !== entryAssetFingerprint(entry) ||
-        this.current.runtimeFingerprint !== runtimeFingerprint);
+      this.currentLoaded != null &&
+      (this.currentLoaded.id !== entry.id ||
+        this.currentLoaded.assetFingerprint !== entryAssetFingerprint(entry) ||
+        this.currentLoaded.runtimeFingerprint !== runtimeFingerprint);
     if (switchingCurrent) {
       this.observability.update({
         state: 'loading',
@@ -1255,7 +1591,7 @@ export class ModelService implements ModelLifecycleService {
       await this.runtime.loadRuntimeModel(staged, toRuntimeConfig(options.runtime, observabilityMode));
     } catch (error) {
       this.runtime.close();
-      this.current = null;
+      this.currentLoaded = null;
       this.currentSnapshot = null;
       throw error;
     }
@@ -1270,7 +1606,7 @@ export class ModelService implements ModelLifecycleService {
       }
     });
     const loadedEntry = updated.models[entry.id] ?? entry;
-    this.current = {
+    this.currentLoaded = {
       id: loadedEntry.id,
       assetFingerprint: entryAssetFingerprint(loadedEntry),
       runtimeFingerprint,
@@ -1415,11 +1751,11 @@ export class ModelService implements ModelLifecycleService {
       status: entry.status,
       source: assets.some((asset) => asset.sourceUrl != null) ? 'remote' : 'local',
       bytes: assets.reduce((sum, asset) => sum + asset.bytes, 0),
-      loaded: this.current?.id === entry.id,
-      chatTemplate: this.current?.id === entry.id ? this.runtime.getChatTemplate() : null,
-      bosText: this.current?.id === entry.id ? this.runtime.getBosText() : '',
-      eosText: this.current?.id === entry.id ? this.runtime.getEosText() : '',
-      mediaMarker: this.current?.id === entry.id ? this.runtime.readMediaMarker() : null,
+      loaded: this.currentLoaded?.id === entry.id,
+      chatTemplate: this.currentLoaded?.id === entry.id ? this.runtime.getChatTemplate() : null,
+      bosText: this.currentLoaded?.id === entry.id ? this.runtime.getBosText() : '',
+      eosText: this.currentLoaded?.id === entry.id ? this.runtime.getEosText() : '',
+      mediaMarker: this.currentLoaded?.id === entry.id ? this.runtime.readMediaMarker() : null,
       createdAt: entry.createdAt,
       updatedAt: entry.updatedAt,
     };

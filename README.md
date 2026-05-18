@@ -6,6 +6,7 @@ benchmark, and simulation apps that exercise it.
 ## Workspace layout
 
 - `packages/cogentlm`: publishable npm package and native/WebAssembly bridge
+- `packages/cogentlm-rs`: Rust runtime workspace for native and binding work
 - `packages/cogentlm/third_party/llama.cpp`: pinned `llama.cpp` submodule
 - `apps/avatar`: browser character harness with a VRM avatar
 - `apps/benchmark`: browser benchmark harness
@@ -65,7 +66,7 @@ const answer = await engine.chat([
   { role: 'user', content: 'Explain browser-hosted inference in one paragraph.' },
 ]);
 
-console.log(answer);
+console.log(answer.text);
 await engine.close();
 ```
 
@@ -98,15 +99,16 @@ const vision = await engine.chat({
 });
 ```
 
-Streaming is available through `onToken`:
+Streaming is available through `onTokens`:
 
 ```ts
 const output = await engine.chat([{ role: 'user', content: 'Write a haiku.' }], {
   maxTokens: 64,
-  onToken: (token) => {
-    console.log(token);
+  onTokens: (batch) => {
+    console.log(batch.text);
   },
 });
+console.log(output.text);
 ```
 ### Model Lifecycle
 

@@ -13,6 +13,7 @@ import type {
   ChatInput,
   ChatOptions,
   ModelInfo,
+  RequestResult,
 } from '../model-management/model-types.js';
 import type { ChatMessage } from '../types.js';
 import { createTimedAbortController } from '../utils/abort.js';
@@ -34,7 +35,7 @@ import type {
 } from './director-types.js';
 
 export interface DirectorRuntimeEngine {
-  chat(input: ChatInput, options?: ChatOptions): Promise<string>;
+  chat(input: ChatInput, options?: ChatOptions): Promise<RequestResult>;
   models?: {
     current(): Pick<ModelInfo, 'mediaMarker'> | null;
   };
@@ -161,13 +162,14 @@ export class DirectorRuntime {
     });
 
     try {
-      const rawText = await this.engine.chat(
+      const result = await this.engine.chat(
         media.length > 0 ? { messages, media: [...media] } : messages,
         {
           ...queryOptions,
           grammar,
         }
       );
+      const rawText = result.text;
       if (abort.signal.aborted) {
         const status = abort.timedOut() ? 'timed_out' : 'aborted';
         return {

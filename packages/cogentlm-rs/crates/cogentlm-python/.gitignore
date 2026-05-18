@@ -1,0 +1,5 @@
+/.venv/
+/dist/
+/python/**/__pycache__/
+/python/**/*.py[cod]
+/python/cogentlm/_native.*

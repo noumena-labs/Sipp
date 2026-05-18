@@ -1,0 +1,67 @@
+[workspace]
+members = [
+    "crates/cogentlm-gguf",
+    "crates/cogentlm-sys",
+    "crates/cogentlm-core",
+    "crates/cogentlm-cli",
+    "crates/cogentlm-python",
+    "crates/cogentlm-node",
+    "crates/cogentlm-browser",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/noumena-ai/CogentLM"
+version = "0.1.0"
+
+[workspace.dependencies]
+anyhow = "1.0"
+bindgen = "0.72"
+cc = "1.2"
+clap = { version = "4.5", features = ["derive"] }
+cmake = "0.1"
+napi = { version = "3.9", default-features = false, features = ["napi4"] }
+napi-build = "2.3"
+napi-derive = "3.5"
+pyo3 = "0.21"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+thiserror = "2.0"
+
+# Cargo's default release profile leaves the Rust staticlib opaque to
+# Emscripten's whole-program LTO (-flto=full on the C++ side) and splits the
+# crate into 16 codegen units so even *intra-Rust* inlining barely happens.
+# For a perf-critical scheduler that gets called once per token, this is a
+# real ~1.5-2x TPS regression on the wasm browser target vs the previous
+# C++-only build, which had every callsite inlinable.
+#
+#   * lto = "fat"          — whole-crate LTO inside Rust. With codegen-units
+#                            =1 this gives near-optimal inlining for the
+#                            scheduler/runtime/sampler hot path.
+#   * codegen-units = 1    — required for fat LTO to fully kick in; also
+#                            lets the compiler inline freely between the
+#                            many small functions in the runtime.
+#   * opt-level = 3        — already the default; pinned here for clarity.
+#   * debug-assertions / overflow-checks / incremental: defaulted off.
+#
+# We intentionally keep panic = "unwind" (the default) so that the
+# `catch_unwind` guards in cogentlm-browser's FFI exports remain
+# effective — switching to `abort` would let any Rust panic kill the entire
+# wasm module, breaking the engine without a way to recover.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+debug = false
+strip = "symbols"
+
+# Mirror release settings into bench so micro-benchmarks reflect production
+# codegen. Cargo's default bench profile inherits from release in the new
+# profile system, but pinning these makes the intent explicit.
+[profile.bench]
+lto = "fat"
+codegen-units = 1
+opt-level = 3

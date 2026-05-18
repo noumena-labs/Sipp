@@ -1,0 +1,28 @@
+{
+  "name": "@noumena-labs/cogentlm-node",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Native Node.js bindings for CogentLM",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "license": "MIT",
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:vulkan": "napi build --platform --release --features vulkan",
+    "build:cuda": "napi build --platform --release --features cuda",
+    "build:debug": "napi build --platform",
+    "test:smoke": "node examples/phase4_node_smoke.mjs"
+  },
+  "napi": {
+    "binaryName": "cogentlm_node",
+    "targets": [
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc",
+      "x86_64-unknown-linux-gnu"
+    ]
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.3.0"
+  }
+}

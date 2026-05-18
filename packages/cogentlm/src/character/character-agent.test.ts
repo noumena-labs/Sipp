@@ -2,7 +2,7 @@
 //
 // character-agent.test.ts
 //
-// - Exercises CharacterRuntime with a fake engine that captures the onToken
+// - Exercises CharacterRuntime with a fake engine that captures the onTokens
 //   callback from queuePrompt options, then scripts token emission during
 //   runQueuedRequest. Covers the turn-event stream, memory accounting,
 //   cancellation, error handling, and bus mirroring.
@@ -17,6 +17,8 @@ import type {
   ChatOptions,
   QueryInput,
   QueryOptions,
+  RequestResult,
+  TokenBatch,
 } from '../model-management/model-types.js';
 import { StreamingBoundaryTextSanitizer } from '../core/chat-template-boundaries.js';
 import { CharacterEventBus, type CharacterEvent } from './action-bus.js';
@@ -26,6 +28,23 @@ import {
   type ChatEvent,
 } from './character-agent.js';
 import type { CharacterConfig } from './character-config.js';
+
+function tokenBatch(text: string): TokenBatch {
+  return {
+    requestId: 'test',
+    streamId: 1,
+    sequenceStart: 0,
+    text,
+    frameCount: 1,
+    byteCount: new TextEncoder().encode(text).byteLength,
+    stats: {
+      framesSent: 1,
+      bytesSent: new TextEncoder().encode(text).byteLength,
+      framesDropped: 0,
+      batchesSent: 1,
+    },
+  };
+}
 
 function buildConfig(overrides: Partial<CharacterConfig> = {}): CharacterConfig {
   return {
@@ -97,7 +116,7 @@ function createFakeEngine(): FakeEngine {
     async chat(
       input: ChatInput,
       options?: ChatOptions
-    ): Promise<string> {
+    ): Promise<RequestResult> {
       chatCalls.push({ input, options });
       const messages = Array.isArray(input) ? input : input.messages;
       const rendered = messages
@@ -148,7 +167,7 @@ function createFakeEngine(): FakeEngine {
         const result = sanitizer.consume(token);
         if (result.safeText.length > 0) {
           safeOutput += result.safeText;
-          options?.onToken?.([result.safeText]);
+          options?.onTokens?.(tokenBatch(result.safeText));
         }
         if (result.hitBoundary) {
           break;
@@ -157,10 +176,25 @@ function createFakeEngine(): FakeEngine {
       const flushed = sanitizer.flush();
       if (flushed.length > 0) {
         safeOutput += flushed;
-        options?.onToken?.([flushed]);
+        options?.onTokens?.(tokenBatch(flushed));
       }
       void rawOutput;
-      return safeOutput.trim();
+      return requestResult(safeOutput.trim());
+    },
+  };
+}
+
+function requestResult(text: string): RequestResult {
+  return {
+    id: 'test',
+    text,
+    finishReason: 'stop',
+    stats: {
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheHits: 0,
+      prefillMs: 0,
+      decodeMs: 0,
     },
   };
 }
@@ -254,7 +288,7 @@ test('chat() threads grammar and maxOutputTokens into queuePrompt options', asyn
   assert.equal(opts.maxTokens, 42);
   assert.equal(typeof (opts as any).grammar, 'string');
   assert.ok((opts as any).grammar && (opts as any).grammar.includes('root'));
-  assert.equal(typeof opts.onToken, 'function');
+  assert.equal(typeof opts.onTokens, 'function');
 });
 
 test('chat() reuses a stable contextKey for each turn', async () => {

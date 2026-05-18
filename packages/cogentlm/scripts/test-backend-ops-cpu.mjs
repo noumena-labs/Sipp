@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, '..');
-const llamaCppRoot = path.join(projectRoot, 'third_party', 'llama.cpp');
+const llamaCppRoot = path.join(projectRoot, '..', 'third_party', 'llama.cpp');
 const buildLabel = process.env.CE_TEST_BACKEND_OPS_BUILD_LABEL?.trim() || '[test-backend-ops:cpu]';
 const buildType = process.env.CE_TEST_BACKEND_OPS_BUILD_TYPE?.trim() || 'Release';
 const isDebugBuild = buildType.toLowerCase() === 'debug';

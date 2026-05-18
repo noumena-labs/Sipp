@@ -16,8 +16,8 @@ import type {
   EngineExecutionMode,
   GenerateRequestId,
   GenerateResponse,
-  InferenceInitConfig,
   InternalBundleDescriptor,
+  NativeRuntimeConfig,
   PromptOptions,
   RequestObservabilityMetrics,
   RuntimeAggregateObservabilityMetrics,
@@ -57,6 +57,7 @@ class MemoryRegistryStore {
 class FakeAssetStore {
   public readonly files = new Map<string, File>();
   public readonly deleted: string[] = [];
+  public localSplitCount = 0;
   public readonly remotes = new Map<
     string,
     {
@@ -129,6 +130,34 @@ class FakeAssetStore {
     };
   }
 
+  public async installLocalSplitGguf(file: File): Promise<AssetRecord[]> {
+    this.localSplitCount += 1;
+    const sourceFileName = file.name.replace(/[\\/:*?"<>|]+/g, '-');
+    return [0, 1].map((index) => {
+      const id = `asset-shard-${file.name}-${file.size}-${file.lastModified}-${index}`;
+      const shard = new File(
+        [`${file.name}:${index}`],
+        `${sourceFileName.replace(/\.gguf$/i, '')}-${String(index + 1).padStart(5, '0')}-of-00002.gguf`
+      );
+      this.files.set(id, shard);
+      return {
+        id,
+        kind: 'shard',
+        name: shard.name,
+        hash: id,
+        bytes: shard.size,
+        storagePath: id,
+        sourceBytes: file.size,
+        sourcePartIndex: index,
+        sourcePartCount: 2,
+        sourceFileName,
+        sourceFileLastModified: file.lastModified,
+        refCount: 0,
+        createdAt: new Date(0).toISOString(),
+      };
+    });
+  }
+
   public async getFile(record: AssetRecord): Promise<File> {
     const stored = this.files.get(record.id);
     if (stored == null) {
@@ -141,6 +170,8 @@ class FakeAssetStore {
     this.deleted.push(record.id);
     this.files.delete(record.id);
   }
+
+  public async cleanupBrowserSplitArtifacts(): Promise<void> {}
 }
 
 class FakePairingValidator extends PairingValidator {
@@ -237,6 +268,7 @@ class FakeRuntime implements EngineRuntime {
   public mediaMarker: string | null = null;
   public nextOutputText: string | null = null;
   public streamedTokens: string[] = ['token'];
+  public enqueuedOptions: Array<number | PromptOptions | undefined> = [];
   public stageGate: Promise<void> | null = null;
   private runtimeMetricsEnabled = false;
   private backendProfilingEnabled = false;
@@ -281,7 +313,7 @@ class FakeRuntime implements EngineRuntime {
     return {
       sourceKind: descriptor.kind,
       modelPath: `/models/${this.stagedDescriptors.length}.gguf`,
-      multimodalProjectorPath: projector == null ? null : '/models/mmproj.gguf',
+      projectorPath: projector == null ? null : '/models/mmproj.gguf',
       isVisionModel: projector != null,
       projectorStatus: projector == null ? 'not-required' : 'explicit',
       modelName:
@@ -298,11 +330,11 @@ class FakeRuntime implements EngineRuntime {
 
   public async loadRuntimeModel(
     modelPathOrBundle: string | StagedModelBundle,
-    config?: InferenceInitConfig
+    config?: NativeRuntimeConfig
   ): Promise<void> {
     this.loadCount += 1;
-    this.runtimeMetricsEnabled = config?.enableRuntimeObservability === true;
-    this.backendProfilingEnabled = config?.enableBackendProfiling === true;
+    this.runtimeMetricsEnabled = config?.observability?.runtimeMetrics === true;
+    this.backendProfilingEnabled = config?.observability?.backendProfiling === true;
     if (this.nextLoadError != null) {
       const error = this.nextLoadError;
       this.nextLoadError = null;
@@ -310,7 +342,7 @@ class FakeRuntime implements EngineRuntime {
       throw error;
     }
     this.mediaMarker =
-      typeof modelPathOrBundle === 'string' || modelPathOrBundle.multimodalProjectorPath == null
+      typeof modelPathOrBundle === 'string' || modelPathOrBundle.projectorPath == null
         ? null
         : '<image>';
   }
@@ -337,6 +369,16 @@ class FakeRuntime implements EngineRuntime {
     return '</s>';
   }
 
+  public async browserCacheLayout(): Promise<'single-file' | 'split-gguf'> {
+    return 'single-file';
+  }
+
+  public async planGgufSplitCount(): Promise<number> {
+    return 1;
+  }
+
+  public async splitGgufStream(): Promise<void> {}
+
   public close(): void {
     this.closeCount += 1;
     this.mediaMarker = null;
@@ -357,9 +399,24 @@ class FakeRuntime implements EngineRuntime {
   ): Promise<GenerateRequestId> {
     const requestId = this.nextRequestId++;
     this.lastPrompt = promptText;
+    this.enqueuedOptions.push(options);
     this.queuedRequests.set(requestId, { promptText, options });
     if (typeof options === 'object' && this.streamedTokens.length > 0) {
-      options.onToken?.(this.streamedTokens);
+      const text = this.streamedTokens.join('');
+      options.onTokens?.({
+        requestId: String(requestId),
+        streamId: requestId,
+        sequenceStart: 0,
+        text,
+        frameCount: this.streamedTokens.length,
+        byteCount: new TextEncoder().encode(text).byteLength,
+        stats: {
+          framesSent: this.streamedTokens.length,
+          bytesSent: new TextEncoder().encode(text).byteLength,
+          framesDropped: 0,
+          batchesSent: 1,
+        },
+      });
     }
     return requestId;
   }
@@ -465,11 +522,32 @@ test('ModelService loads, lists, tracks current, and queries text models', async
 
   const tokens: string[] = [];
   const answer = await service.query('hello', {
-    onToken: (batch) => tokens.push(...batch),
+    onTokens: (batch) => tokens.push(batch.text),
   });
-  assert.equal(answer, 'answer:hello');
+  assert.equal(answer.text, 'answer:hello');
   assert.deepEqual(tokens, ['token']);
   assert.equal(runtime.lastPrompt, 'hello');
+});
+
+test('ModelService splits large local monolithic GGUF files and reuses shards', async () => {
+  const { service, assets, runtime } = createService();
+  const large = file('large-local.gguf', 'tiny-test-placeholder');
+  Object.defineProperty(large, 'size', { value: 3 * 1024 * 1024 * 1024 });
+  Object.defineProperty(large, 'lastModified', { value: 123456 });
+
+  const first = await service.load(large);
+  assert.equal(assets.localSplitCount, 1);
+  assert.equal(runtime.stagedDescriptors.at(-1)?.kind, 'files');
+  assert.equal(
+    runtime.stagedDescriptors.at(-1)?.kind === 'files'
+      ? runtime.stagedDescriptors.at(-1)?.files.length
+      : 0,
+    2
+  );
+
+  const second = await service.load(large);
+  assert.equal(second.id, first.id);
+  assert.equal(assets.localSplitCount, 1);
 });
 
 test('ModelService.chat renders chat templates and sanitizes assistant boundaries', async () => {
@@ -485,15 +563,30 @@ test('ModelService.chat renders chat templates and sanitizes assistant boundarie
       { role: 'user', content: 'Say hello.' },
     ],
     {
-      onToken: (batch) => tokens.push(...batch),
+      onTokens: (batch) => tokens.push(batch.text),
     }
   );
 
-  assert.equal(answer, 'Hello there');
-  assert.deepEqual(tokens, ['Hello ', 'there']);
+  assert.equal(answer.text, 'Hello there');
+  assert.deepEqual(tokens, ['Hello there']);
   assert.match(runtime.lastPrompt ?? '', /<system>\nBe concise\.<\/system>/);
   assert.match(runtime.lastPrompt ?? '', /<user>\nSay hello\.<\/user>/);
   assert.ok(runtime.lastPrompt?.endsWith('<assistant>\n'));
+});
+
+test('ModelService.chat keeps token emission off when no onTokens callback is provided', async () => {
+  const { service, runtime } = createService();
+  await service.load(file('text-model.gguf'));
+  runtime.nextOutputText = 'Hello there</assistant>\n<user>ignored';
+
+  const answer = await service.chat([
+    { role: 'user', content: 'Say hello.' },
+  ]);
+
+  const options = runtime.enqueuedOptions.at(-1);
+  assert.equal(answer.text, 'Hello there');
+  assert.equal(typeof options, 'object');
+  assert.equal(typeof (options as PromptOptions).onTokens, 'undefined');
 });
 
 test('ModelService keeps observability off by default', async () => {
@@ -554,11 +647,11 @@ test('ModelService emits lifecycle observability and captures runtime/profile mo
 
 test('ModelService switches models and reuses identical runtime fingerprints as no-ops', async () => {
   const { service, runtime } = createService();
-  const first = await service.load(file('first.gguf'), { runtime: { nCtx: 1024 } });
-  await service.load(first.id, { runtime: { nCtx: 1024 } });
+  const first = await service.load(file('first.gguf'), { runtime: { context: { nCtx: 1024 } } });
+  await service.load(first.id, { runtime: { context: { nCtx: 1024 } } });
   assert.equal(runtime.loadCount, 1);
 
-  await service.load(first.id, { runtime: { nCtx: 2048 } });
+  await service.load(first.id, { runtime: { context: { nCtx: 2048 } } });
   assert.equal(runtime.loadCount, 2);
 
   const second = await service.load(file('second.gguf'));
@@ -588,7 +681,7 @@ test('ModelService attaches explicit projectors and rejects metadata-proven mism
     prompt: 'describe',
     media: [new Uint8Array([1, 2, 3])],
   });
-  assert.equal(answer, 'answer:<image>\ndescribe');
+  assert.equal(answer.text, 'answer:<image>\ndescribe');
   assert.equal(runtime.lastPrompt, '<image>\ndescribe');
 
   const mismatch = createService({
@@ -629,7 +722,7 @@ test('ModelService switches from text to explicit multimodal loads when metadata
     prompt: 'describe',
     media: [new Uint8Array([1, 2, 3])],
   });
-  assert.equal(answer, 'answer:<image>\ndescribe');
+  assert.equal(answer.text, 'answer:<image>\ndescribe');
   assert.equal(runtime.lastPrompt, '<image>\ndescribe');
 });
 

@@ -28,6 +28,9 @@ add_compile_options(${CE_WASM_COMPILE_FLAGS})
 option(CE_BUILD_WEBGPU_TEST_BACKEND_OPS "Build llama.cpp test-backend-ops for browser-hosted WebGPU execution" OFF)
 
 option(MTMD_NO_LOGGING "Suppress all multimodal logging" OFF)
+set(CE_WASM_RUST_BROWSER_LIB "" CACHE FILEPATH "Rust wasm32 Emscripten staticlib for the browser runtime")
+set(CE_RUST_SYS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../cogentlm-rs/crates/cogentlm-sys)
+set(CE_LLAMA_CPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/llama.cpp")
 
 function(ce_apply_emscripten_cli_target TARGET_NAME EXPORT_NAME)
   if (NOT EMSCRIPTEN OR NOT TARGET ${TARGET_NAME})
@@ -72,9 +75,9 @@ endif()
 if(EMSCRIPTEN)
   set(CMAKE_SYSTEM_PROCESSOR "wasm32")
 endif()
-add_subdirectory(third_party/llama.cpp)
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp/include)
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp/ggml/include)
+add_subdirectory(${CE_LLAMA_CPP_DIR} llama.cpp)
+include_directories(${CE_LLAMA_CPP_DIR}/include)
+include_directories(${CE_LLAMA_CPP_DIR}/ggml/include)
 
 foreach(t ggml ggml-cpu)
   if (TARGET ${t})
@@ -90,25 +93,22 @@ if(CE_BUILD_WEBGPU_TEST_BACKEND_OPS)
   ce_apply_emscripten_cli_target(test-backend-ops TestBackendOpsModule)
 endif()
 
-# Plugin Sources
+if(NOT CE_WASM_RUST_BROWSER_LIB)
+    message(FATAL_ERROR "Browser builds require CE_WASM_RUST_BROWSER_LIB")
+endif()
+
+# Public browser wasm exports. Rust owns lifecycle, requests, scheduling,
+# streaming buffers, GGUF ingest, and observability. C++ remains only for the
+# Emscripten export shim plus llama.cpp/ggml-webgpu/mtmd.
 set(PLUGIN_SOURCES
-    ${CMAKE_SOURCE_DIR}/native/runtime/inference_runtime.cpp
-    ${CMAKE_SOURCE_DIR}/native/runtime/request/request_queue.cpp
-    ${CMAKE_SOURCE_DIR}/native/runtime/scheduler/batch_planner.cpp
-    ${CMAKE_SOURCE_DIR}/native/runtime/scheduler/slot_scheduler.cpp
-    ${CMAKE_SOURCE_DIR}/native/runtime/session/prefix_state_cache.cpp
-    ${CMAKE_SOURCE_DIR}/native/runtime/session/prefix_cache_policy.cpp
-    ${CMAKE_SOURCE_DIR}/native/runtime/session/session_store.cpp
-    ${CMAKE_SOURCE_DIR}/native/runtime/llama/llama_batch_builder.cpp
-    ${CMAKE_SOURCE_DIR}/native/runtime/llama/llama_utils.cpp
-    ${CMAKE_SOURCE_DIR}/native/api/engine_bridge.cpp
     ${CMAKE_SOURCE_DIR}/native/api/wasm_exports.cpp
+    ${CE_RUST_SYS_DIR}/src/cogent_shim.cpp
 )
 
 # llama.cpp skips tools/mtmd entirely under EMSCRIPTEN, so compile the
 # library sources directly into the browser target and intentionally
 # exclude the desktop CLI/debug executables.
-set(CE_MTMD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp/tools/mtmd)
+set(CE_MTMD_DIR ${CE_LLAMA_CPP_DIR}/tools/mtmd)
 set(CE_MTMD_MODEL_DIR ${CE_MTMD_DIR}/models)
 set(CE_MTMD_SOURCES
     ${CE_MTMD_DIR}/mtmd.cpp
@@ -131,6 +131,7 @@ set(CE_MTMD_SOURCES
     ${CE_MTMD_MODEL_DIR}/llama4.cpp
     ${CE_MTMD_MODEL_DIR}/llava.cpp
     ${CE_MTMD_MODEL_DIR}/minicpmv.cpp
+    ${CE_MTMD_MODEL_DIR}/mimovl.cpp
     ${CE_MTMD_MODEL_DIR}/paddleocr.cpp
     ${CE_MTMD_MODEL_DIR}/pixtral.cpp
     ${CE_MTMD_MODEL_DIR}/qwen2vl.cpp
@@ -151,11 +152,27 @@ target_sources(CogentLM PRIVATE ${CE_MTMD_SOURCES})
 
 target_include_directories(CogentLM PRIVATE
     ${CMAKE_SOURCE_DIR}/native
+    ${CE_RUST_SYS_DIR}/include
     ${CE_MTMD_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp/common
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp/vendor
+    ${CE_LLAMA_CPP_DIR}
+    ${CE_LLAMA_CPP_DIR}/common
+    ${CE_LLAMA_CPP_DIR}/vendor
 )
+
+if(CE_WASM_MEM64)
+    message(FATAL_ERROR "Browser Rust staticlibs require CE_WASM_MEM64=OFF because Rust currently provides wasm32-unknown-emscripten for this path")
+endif()
+
+if(NOT EXISTS "${CE_WASM_RUST_BROWSER_LIB}")
+    message(FATAL_ERROR "CE_WASM_RUST_BROWSER_LIB does not exist: ${CE_WASM_RUST_BROWSER_LIB}")
+endif()
+
+add_library(cogentlm_browser_rust STATIC IMPORTED GLOBAL)
+set_target_properties(cogentlm_browser_rust PROPERTIES
+    IMPORTED_LOCATION "${CE_WASM_RUST_BROWSER_LIB}")
+target_link_libraries(CogentLM PRIVATE cogentlm_browser_rust)
+message(STATUS "CogentLM Rust browser staticlib: ${CE_WASM_RUST_BROWSER_LIB}")
+
 target_link_libraries(CogentLM PRIVATE llama)
 if(TARGET llama-common)
     target_link_libraries(CogentLM PRIVATE llama-common)
@@ -181,7 +198,7 @@ foreach(_ggml_target ggml ggml-base ggml-cpu ggml-webgpu)
 endforeach()
 
 set(CE_WASM_EXPORTED_FUNCTIONS
-    "['_CE_Init','_CE_InitWithMultimodal','_CE_Close','_CE_StartTextRequestWithTokenEmissionMode','_CE_StartMediaRequestWithTokenEmissionMode','_CE_CancelRequest','_CE_RunSchedulerLoop','_CE_RunSchedulerBurst','_CE_RunSchedulerBurstWithDeadline','_CE_GetCompletedRequestStatus','_CE_GetStreamingBufferPointer','_CE_GetStreamingBufferCapacity','_CE_GetStreamingBufferUsedAddress','_CE_GetStreamingBufferDropCountAddress','_CE_GetCompletedRequestOutputSize','_CE_CopyCompletedRequestOutput','_CE_GetCompletedRequestErrorSize','_CE_CopyCompletedRequestError','_CE_GetCompletedRequestRuntimeObservability','_CE_ConsumeCompletedRequest','_CE_FreeString','_CE_GetRuntimeObservability','_CE_GetBackendObservabilityJson','_CE_GetMediaMarker','_CE_GetChatTemplate','_CE_GetBosText','_CE_GetEosText','_CE_ApplyChatTemplate','_malloc','_free']"
+    "['_CE_RustBrowserEngineAbiVersion','_CE_RustBrowserEngineCreate','_CE_RustBrowserEngineId','_CE_RustBrowserEngineClose','_CE_BrowserCacheLayout','_CE_GgufPlanSplitCount','_CE_GgufSplitFile','_CE_GgufSplitStream','_CE_Init','_CE_GetLastEngineErrorSize','_CE_CopyLastEngineError','_CE_Close','_CE_StartTextRequestWithTokenEmissionMode','_CE_StartMediaRequestWithTokenEmissionMode','_CE_CancelRequest','_CE_RunSchedulerLoop','_CE_RunSchedulerBurst','_CE_RunSchedulerBurstWithDeadline','_CE_GetCompletedRequestStatus','_CE_GetStreamingBufferPointer','_CE_GetStreamingBufferCapacity','_CE_GetStreamingBufferUsedAddress','_CE_GetStreamingBufferDropCountAddress','_CE_GetCompletedRequestOutputSize','_CE_CopyCompletedRequestOutput','_CE_GetCompletedRequestErrorSize','_CE_CopyCompletedRequestError','_CE_GetCompletedRequestRuntimeObservability','_CE_ConsumeCompletedRequest','_CE_FreeString','_CE_GetRuntimeObservability','_CE_GetBackendObservabilityJson','_CE_GetMediaMarker','_CE_GetChatTemplate','_CE_GetBosText','_CE_GetEosText','_CE_ApplyChatTemplate','_malloc','_free']"
 )
 
 # HEAPU8 is needed for later binary media packing through the wasm bridge.
@@ -201,13 +218,12 @@ set(CE_WASM_TARGET_LINK_OPTIONS
 if(CE_WASM_USE_JSPI)
     list(APPEND CE_WASM_TARGET_LINK_OPTIONS
         -sJSPI=1
-        # CE_Init, CE_InitWithMultimodal, CE_RunSchedulerBurst, and
-        # CE_RunSchedulerBurstWithDeadline
+        # CE_Init, CE_RunSchedulerBurst, and CE_RunSchedulerBurstWithDeadline
         # CE_GetBackendObservabilityJson can also suspend because querying ggml-webgpu
         # devices may force adapter/device creation under emdawnwebgpu.
         # CE_Close is intentionally not exported as a JSPI function because the
         # TS wrapper calls it synchronously during teardown/reinit.
-        "-sJSPI_EXPORTS=['_main_thread','CE_Init','CE_InitWithMultimodal','CE_RunSchedulerLoop','CE_RunSchedulerBurst','CE_RunSchedulerBurstWithDeadline','CE_GetBackendObservabilityJson']"
+        "-sJSPI_EXPORTS=['_main_thread','CE_Init','CE_RunSchedulerLoop','CE_RunSchedulerBurst','CE_RunSchedulerBurstWithDeadline','CE_GetBackendObservabilityJson']"
     )
 endif()
 

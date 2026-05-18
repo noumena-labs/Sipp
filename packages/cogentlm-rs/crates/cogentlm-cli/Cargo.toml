@@ -1,0 +1,24 @@
+[package]
+name = "cogentlm-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["native"]
+native = ["cogentlm-core/native"]
+cuda = ["cogentlm-core/cuda"]
+metal = ["cogentlm-core/metal"]
+vulkan = ["cogentlm-core/vulkan"]
+openmp = ["cogentlm-core/openmp"]
+
+[[bin]]
+name = "cogentlm"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+cogentlm-core = { path = "../cogentlm-core" }
+serde_json.workspace = true

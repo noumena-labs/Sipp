@@ -4,8 +4,8 @@ import {
   EngineExecutionMode,
   GenerateRequestId,
   GenerateResponse,
-  InferenceInitConfig,
   InternalBundleDescriptor,
+  NativeRuntimeConfig,
   PromptOptions,
   RuntimeAggregateObservabilityMetrics,
   StagedModelBundle,
@@ -13,6 +13,11 @@ import {
   TransportObservability,
 } from '../types.js';
 import type { ChatTemplateMessage } from '../wasm/wasm-bridge.js';
+import type {
+  BrowserCacheLayout,
+  GgufReadAtCallbacks,
+  GgufSplitStreamCallbacks,
+} from '../wasm/wasm-bridge.js';
 
 export type { CogentConfig };
 
@@ -26,7 +31,7 @@ export interface EngineRuntime {
   ): Promise<StagedModelBundle>;
   loadRuntimeModel(
     modelPathOrBundle: string | StagedModelBundle,
-    config?: InferenceInitConfig
+    config?: NativeRuntimeConfig
   ): Promise<void>;
   close(): void;
   getChatTemplate(): string | null;
@@ -39,6 +44,23 @@ export interface EngineRuntime {
   getBosText(): string;
   /** Returns the model's EOS token rendered as text, or '' if unavailable. */
   getEosText(): string;
+  browserCacheLayout(
+    sourceBytes: number,
+    sourceBytesKnown: boolean,
+    directLoadMaxBytes: number,
+    shardMaxBytes: number
+  ): Promise<BrowserCacheLayout>;
+  planGgufSplitCount(
+    sourceBytes: number,
+    shardMaxBytes: number,
+    callbacks: GgufReadAtCallbacks
+  ): Promise<number>;
+  splitGgufStream(
+    sourceBytes: number,
+    outputPrefix: string,
+    shardMaxBytes: number,
+    callbacks: GgufSplitStreamCallbacks
+  ): Promise<void>;
   applyChatTemplate(messages: ChatTemplateMessage[], addAssistant: boolean): Promise<string>;
   cancelQuery(requestId: GenerateRequestId): Promise<boolean>;
   enqueueQuery(

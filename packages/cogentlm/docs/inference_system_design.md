@@ -1,5 +1,11 @@
 # CogentEngine Codebase Visualization
 
+> Note: this document visualizes the TypeScript/browser package around the
+> Rust-owned browser wasm runtime. The target cross-runtime
+> Rust/Python/Node/browser contract is documented in
+> [`../../../docs/engine-runtime-architecture.md`](../../../docs/engine-runtime-architecture.md).
+> New work should follow the unified command/event/state/result model there.
+
 This document presents a comprehensive set of visualizations for the CogentEngine architecture using Mermaid diagrams. The visualizations are structured from the high-level system boundary down to the nuanced function calls of the native inference scheduler.
 
 ---
@@ -47,14 +53,13 @@ graph TD
 
     subgraph NativeBridge ["WASM Bridge & Exports"]
         Bridge["WasmBridge<br/>(Emscripten Abstraction)"]
-        WasmExports["CE_Init / CE_Close<br/>CE_StartTextRequestWithTokenEmissionMode / CE_CancelRequest<br/>CE_RunSchedulerBurst / CE_DrainRuntimeEvents"]
+        WasmExports["CE_Init / CE_Close<br/>CE_StartTextRequestWithTokenEmissionMode / CE_CancelRequest<br/>CE_RunSchedulerLoop"]
     end
 
-    subgraph Native ["Native Inference Runtime (C++)"]
-        IR["InferenceRuntime"]
-        RQ["RequestQueue"]
-        SlotSched["SlotScheduler"]
-        Session["SessionStore + PrefixStateCache"]
+    subgraph Native ["Rust Browser Engine + Backend Libraries"]
+        RBE["cogentlm-browser-engine"]
+        IR["cogentlm-core::InferenceRuntime"]
+        Backend["llama.cpp / ggml-webgpu / mtmd"]
     end
 
     App --> CE
@@ -77,10 +82,9 @@ graph TD
     MainRT --> Bridge
     Bridge --> WasmExports
 
-    WasmExports --> IR
-    IR --> RQ
-    IR --> SlotSched
-    IR --> Session
+    WasmExports --> RBE
+    RBE --> IR
+    IR --> Backend
 ```
 
 ---
@@ -118,7 +122,7 @@ flowchart TD
     
     Upsert --> RunStage["MainThreadEngineRuntime.stageModelBundle()"]
     RunStage --> RunLoad["MainThreadEngineRuntime.loadRuntimeModel()"]
-    RunLoad --> CEInit["bridge.loadRuntimeModel() → CE_Init/CE_InitWithMultimodal"]
+    RunLoad --> CEInit["bridge.loadRuntimeModel() → CE_Init typed config JSON"]
 ```
 
 In **worker mode**, `WorkerModelServiceClient` proxies `load` via a `models-load` message. The worker performs the fetch, OPFS writes, and `CE_Init` locally. `load-progress` messages are sent back to the main thread to drive UI progress bars.
@@ -127,7 +131,11 @@ In **worker mode**, `WorkerModelServiceClient` proxies `load` via a `models-load
 
 ## 3. Request Lifecycle & Burst Scheduling
 
-Execution uses a **native-owned scheduling model** driven by a thin TypeScript browser event-loop pump. The TypeScript `QueuedRequestScheduler` does not own scheduling policy; it only drives the native engine in bounded bursts via `CE_RunSchedulerBurst` (or `CE_RunSchedulerBurstWithDeadline`), drains runtime events, forwards token callbacks, handles aborts, and yields for browser responsiveness.
+Execution uses a **Rust-owned scheduling model** driven by a thin TypeScript
+browser event-loop pump. The TypeScript `QueuedRequestScheduler` does not own
+scheduling policy; it only drives the Rust browser engine in bounded loops via
+`CE_RunSchedulerLoop`, drains token/completion data, forwards token callbacks,
+handles aborts, and yields for browser responsiveness.
 
 ```mermaid
 sequenceDiagram
@@ -158,20 +166,12 @@ sequenceDiagram
         Note over Sched: Calculates limits based on requests waiting for 1st token vs interactive streaming
 
         Sched->>Bridge: runSchedulerProgress()
-        Bridge->>Wasm: CE_RunSchedulerBurst / CE_RunSchedulerBurstWithDeadline
+        Bridge->>Wasm: CE_RunSchedulerLoop
         Wasm-->>Bridge: stepResult (PROGRESSED, WAITING, TERMINAL)
 
-        Sched->>Bridge: drainRuntimeEvents()
-        Bridge->>Wasm: CE_DrainRuntimeEvents()
-        Wasm-->>Bridge: Array of TOKEN and TERMINAL events
+        Sched->>Sched: drainStreamingBuffer() → Delivers TokenBatch values
 
-        loop For each drained TOKEN event
-            Sched->>Sched: bufferTokenPiece()
-        end
-        
-        Sched->>Sched: flushAllQueuedTokenPieces() → Calls onToken callbacks
-
-        loop For each drained TERMINAL event
+        loop For each completed request
             Sched->>Bridge: takeCompletedResponse(requestId)
             Bridge->>Wasm: CE_CopyCompletedRequestOutput / CE_GetCompletedRequestRuntimeObservability
             Bridge->>Wasm: CE_ConsumeCompletedRequest()
@@ -185,7 +185,7 @@ sequenceDiagram
     
     Tracker-->>RT: Resolved GenerateResponse
     RT-->>MS: GenerateResponse
-    MS-->>App: string (outputText)
+    MS-->>App: RequestResult
 ```
 
 ---
@@ -209,13 +209,19 @@ sequenceDiagram
     RT->>RT: Starts queued pump loop inside worker
     
     loop During execution
-        RT->>RT: flushAllQueuedTokenPieces()
-        RT->>Worker: callback onToken(text)
-        Worker->>WMSC: postMessage({kind:'token', callId, text})
-        WMSC->>App: onToken(text)
+        RT->>RT: drainStreamingBuffer()
+        alt SAB available
+            RT->>Worker: write TokenFrame bytes to SAB ring
+            Worker->>WMSC: postMessage({kind:'streaming-tick'})
+            WMSC->>App: onTokens(TokenBatch)
+        else SAB unavailable
+            RT->>Worker: callback onTokens(TokenBatch)
+            Worker->>WMSC: postMessage({kind:'token-batch', callId, batch})
+            WMSC->>App: onTokens(TokenBatch)
+        end
     end
     
-    MS-->>Worker: String Result
+    MS-->>Worker: RequestResult
     Worker->>WMSC: postMessage({kind:'resolve', callId, value})
     WMSC-->>App: result
 ```

@@ -3,6 +3,7 @@ import type {
   ModelLoadOptions,
   ModelLoadProgress,
   ModelSource,
+  EngineEvent,
   ObservabilityEvent,
   QueryErrorCode,
   ChatInput,
@@ -21,15 +22,15 @@ export interface WorkerSerializableCogentConfig {
 
 export type WorkerModelLoadOptions = Pick<ModelLoadOptions, 'observability' | 'runtime'>;
 // `streaming` carries the caller's intent across the worker boundary because
-// `onToken` itself can't be cloned through postMessage.  When false the worker
+// `onTokens` itself can't be cloned through postMessage.  When false the worker
 // runs the engine in TOKEN_EMISSION_NONE; when true the worker writes tokens
 // to the SAB ring for the main thread to drain.
 export type WorkerQueryOptions =
-  Pick<QueryOptions, 'session' | 'maxTokens' | 'grammar'> & {
+  Pick<QueryOptions, 'session' | 'maxTokens' | 'grammar' | 'tokenFlush'> & {
     streaming: boolean;
   };
 export type WorkerChatOptions =
-  Pick<ChatOptions, 'session' | 'maxTokens' | 'grammar'> & {
+  Pick<ChatOptions, 'session' | 'maxTokens' | 'grammar' | 'tokenFlush'> & {
     streaming: boolean;
   };
 
@@ -59,6 +60,11 @@ export type WorkerRequestMessage =
       id: string;
     }
   | {
+      kind: 'models-unload';
+      callId: number;
+      config: WorkerSerializableCogentConfig;
+    }
+  | {
       kind: 'query';
       callId: number;
       config: WorkerSerializableCogentConfig;
@@ -66,7 +72,21 @@ export type WorkerRequestMessage =
       options: WorkerQueryOptions;
     }
   | {
+      kind: 'query-result';
+      callId: number;
+      config: WorkerSerializableCogentConfig;
+      input: QueryInput;
+      options: WorkerQueryOptions;
+    }
+  | {
       kind: 'chat';
+      callId: number;
+      config: WorkerSerializableCogentConfig;
+      input: ChatInput;
+      options: WorkerChatOptions;
+    }
+  | {
+      kind: 'chat-result';
       callId: number;
       config: WorkerSerializableCogentConfig;
       input: ChatInput;
@@ -109,6 +129,10 @@ export type WorkerResponseMessage =
   | {
       kind: 'observability-event';
       event: ObservabilityEvent;
+    }
+  | {
+      kind: 'engine-event';
+      event: EngineEvent;
     }
   | {
       // Pure signal from worker to main thread: "bytes were written to the ring."

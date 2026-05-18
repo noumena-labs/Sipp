@@ -1,6 +1,6 @@
 // SAB-backed ring buffer for worker→main token streaming.
 //
-// Wire: [u32 LE requestId | u32 LE textLength | utf8 bytes].  Messages can
+// Wire: [u32 LE requestId | u32 LE sequence | u32 LE flags | u32 LE textLength | utf8 bytes].  Messages can
 // straddle the body wrap.  Header (8×i32 = 32B):
 //   [0] writeIndex (monotonic, atomic)
 //   [1] readIndex  (monotonic, atomic)
@@ -16,12 +16,14 @@ const HEADER_READ_INDEX = 1;
 const HEADER_CAPACITY = 2;
 const HEADER_DROP_COUNT = 3;
 
-const MESSAGE_PREFIX_BYTES = 8; // u32 requestId + u32 textLength
+const MESSAGE_PREFIX_BYTES = 16; // u32 requestId + u32 sequence + u32 flags + u32 textLength
 
 export const DEFAULT_STREAMING_RING_CAPACITY = 64 * 1024;
 
 export interface StreamingRingMessage {
   requestId: number;
+  sequence: number;
+  flags: number;
   text: string;
 }
 
@@ -51,6 +53,7 @@ export class StreamingRingWriter {
   private readonly body: Uint8Array;
   private readonly capacity: number;
   private readonly encoder: TextEncoder;
+  private readonly sequences = new Map<number, number>();
 
   public constructor(sab: SharedArrayBuffer) {
     this.header = new Int32Array(sab, 0, HEADER_INTS);
@@ -76,8 +79,12 @@ export class StreamingRingWriter {
       return false;
     }
     const offset = ((writeIndex % this.capacity) + this.capacity) % this.capacity;
+    const sequence = this.sequences.get(requestId) ?? 0;
+    this.sequences.set(requestId, (sequence + 1) >>> 0);
     this.writeU32(offset, requestId >>> 0);
-    this.writeU32((offset + 4) % this.capacity, payload.byteLength >>> 0);
+    this.writeU32((offset + 4) % this.capacity, sequence >>> 0);
+    this.writeU32((offset + 8) % this.capacity, 0);
+    this.writeU32((offset + 12) % this.capacity, payload.byteLength >>> 0);
     this.writeBytes((offset + MESSAGE_PREFIX_BYTES) % this.capacity, payload);
     // Single atomic store publishes the new bytes to the reader.
     Atomics.store(
@@ -132,7 +139,7 @@ export class StreamingRingReader {
     }
   }
 
-  public drain(): StreamingRingMessage[] {
+  public drain(maxMessages: number = Number.POSITIVE_INFINITY): StreamingRingMessage[] {
     const writeIndex = Atomics.load(this.header, HEADER_WRITE_INDEX);
     const readIndex = Atomics.load(this.header, HEADER_READ_INDEX);
     const available = (writeIndex - readIndex) | 0;
@@ -142,13 +149,15 @@ export class StreamingRingReader {
     const messages: StreamingRingMessage[] = [];
     let cursor = readIndex;
     let consumed = 0;
-    while (consumed < available) {
+    while (consumed < available && messages.length < maxMessages) {
       if (available - consumed < MESSAGE_PREFIX_BYTES) {
         break;
       }
       const offset = ((cursor % this.capacity) + this.capacity) % this.capacity;
       const requestId = this.readU32(offset);
-      const textLength = this.readU32((offset + 4) % this.capacity);
+      const sequence = this.readU32((offset + 4) % this.capacity);
+      const flags = this.readU32((offset + 8) % this.capacity);
+      const textLength = this.readU32((offset + 12) % this.capacity);
       const messageSize = MESSAGE_PREFIX_BYTES + textLength;
       if (available - consumed < messageSize) {
         break;
@@ -159,7 +168,7 @@ export class StreamingRingReader {
       );
       // `stream: true` so multi-byte codepoints stitch across drains.
       const text = this.decoderFor(requestId).decode(payload, { stream: true });
-      messages.push({ requestId, text });
+      messages.push({ requestId, sequence, flags, text });
       cursor = (cursor + messageSize) | 0;
       consumed += messageSize;
     }

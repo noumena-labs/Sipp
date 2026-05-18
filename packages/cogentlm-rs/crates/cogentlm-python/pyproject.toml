@@ -1,0 +1,17 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "cogentlm"
+version = "0.1.0"
+description = "Native Python bindings for CogentLM"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+
+[dependency-groups]
+dev = ["maturin>=1.5,<2"]
+
+[tool.maturin]
+module-name = "cogentlm._native"
+python-source = "python"

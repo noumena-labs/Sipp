@@ -3,7 +3,7 @@
 CogentEngine supports GBNF grammar-constrained sampling end-to-end: the
 caller passes a grammar string, it flows through the TS bridge, across the
 wasm boundary, and is applied as a fresh per-slot sampler in the native
-inference runtime. This doc explains the design choices and the invariants
+Rust inference runtime. This doc explains the design choices and the invariants
 you must not break when extending it.
 
 ---
@@ -47,27 +47,16 @@ grammar's pushdown automaton. Two invariants follow:
    does not guarantee a reset of the grammar automaton back to the `root`
    production; cloned grammar state silently produces garbage.
 
-Therefore, when `request.grammar` is non-empty, the native runtime builds a
-**fresh sampler chain per slot** with `llama_sampler_init_grammar(..., "root")`
-prepended, instead of cloning the shared chain. See
-`native/runtime/inference_runtime.cpp` around line 504:
+Therefore each active scheduler slot owns its own `common_sampler` instance.
+The Rust runtime calls the llama.cpp common-sampler shim with the request
+grammar or JSON schema while activating the slot; no sampler instance is shared
+between slots and no grammar sampler is cloned. See
+`packages/cogentlm-rs/crates/cogentlm-core/src/runtime/inference_runtime.rs`
+and `packages/cogentlm-rs/crates/cogentlm-sys/src/cogent_shim.cpp`.
 
-```cpp
-if (!slot->request->grammar.empty()) {
-  // Fresh chain; do NOT clone the shared sampler.
-  slot->sampler = llama_sampler_chain_init(sparams);
-  llama_sampler *grammar_sampler = llama_sampler_init_grammar(
-      grammar_vocab, slot->request->grammar.c_str(), "root");
-  llama_sampler_chain_add(slot->sampler, grammar_sampler);
-  // …penalties, top-k, top-p, temperature, dist…
-}
-```
-
-Plain (non-grammar) requests continue to clone the shared sampler, which is
-stateless and benefits from the shared configuration.
-
-The chain order matters: the grammar sampler runs **first** so downstream
-samplers (top-k, top-p, temperature) only see tokens the grammar allows.
+llama.cpp owns the sampler-chain construction and grammar placement. CogentLM
+owns request routing, slot ownership, backend sampler attachment, and
+accepting generated tokens back into the per-slot sampler state.
 
 ---
 
@@ -80,7 +69,7 @@ The TS bridge enforces a hard ceiling:
 export const MAX_GRAMMAR_BYTES = 64 * 1024;
 ```
 
-Any `queuePrompt({ grammar })` call whose grammar exceeds this UTF-8 byte
+Any request whose grammar exceeds this UTF-8 byte
 length is rejected at the bridge boundary before crossing into wasm. The
 cap exists because:
 
@@ -104,23 +93,22 @@ The grammar argument is plumbed as a plain string through every layer:
 
 ```
 CharacterRuntime
-    → engine.queuePrompt({ grammar })       // TS runtime
-        → WasmBridge.generate(..., grammar)  // validates size, passes string
-            → wasm_exports / engine_bridge   // std::string grammar
-                → InferenceRuntime::submit(..., std::string grammar)
-                    → SlotState->request->grammar
+    → engine.chat/query({ grammar })        // TS runtime
+        → WasmBridge.start*Request(...)      // validates size, passes string
+            → wasm_exports                   // CE_* ABI wrapper
+                → cogentlm-browser-engine     // Rust browser ABI
+                    → cogentlm-core::InferenceRuntime
+                        → SlotState.request.grammar
+                            → cogent_common_sampler_init_from_json(...)
 ```
 
 Key points:
 
-- The grammar string is **moved** into the `Request` struct on submission
-  (`request.grammar = std::move(grammar)`), so there is exactly one owner.
-- The sampler reads the C string pointer via `.c_str()` at slot activation;
-  the string must outlive the slot, which it does because the slot holds a
-  shared pointer to the request.
-- Empty string means "no grammar": the runtime branches on
-  `slot->request->grammar.empty()` to decide between the fresh-chain and
-  clone paths.
+- The grammar string is owned by the Rust request after submission.
+- The shim receives a temporary C string only while creating the slot-local
+  llama.cpp `common_sampler`.
+- Empty string means "no grammar": the runtime passes an empty grammar string
+  to the common-sampler shim for ordinary unconstrained generation.
 
 ---
 
@@ -171,9 +159,9 @@ test suite can't exercise the llama.cpp sampler path directly.
 4. **Growing the grammar beyond 64 KiB without growing the transfer
    buffer.** The bridge will reject it cleanly — good — but if you bump one
    without the other you'll see truncation/garbage on the native side.
-5. **Reordering the sampler chain.** Grammar **must** run first. Running it
-   after top-k/top-p can let the downstream samplers pick a disallowed
-   token that the grammar would have rejected.
+5. **Bypassing llama.cpp common sampler setup.** Grammar placement is owned by
+   llama.cpp; adding a Rust-side sampler shortcut must not skip grammar or JSON
+   schema setup.
 6. **Putting `[` in constrained prose.** Character actions and director
    directives reserve brackets for cue syntax. Use an unconstrained `text`
    director task if literal brackets need to appear in model output.

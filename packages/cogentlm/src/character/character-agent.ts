@@ -12,6 +12,7 @@
 import type {
   ChatInput,
   ChatOptions,
+  RequestResult,
 } from '../model-management/model-types.js';
 import type { ChatMessage } from '../types.js';
 import { sliceUnstreamedSuffix } from '../core/streaming-output.js';
@@ -29,7 +30,7 @@ import { createTimedAbortController } from '../utils/abort.js';
 import type { RunStatus } from '../core/run-status.js';
 
 export interface CharacterRuntimeEngine {
-  chat(input: ChatInput, options?: ChatOptions): Promise<string>;
+  chat(input: ChatInput, options?: ChatOptions): Promise<RequestResult>;
 }
 
 export interface CharacterRuntimeOptions {
@@ -190,10 +191,11 @@ export class CharacterRuntime {
     });
 
     try {
-      const rawText = await this.engine.chat(messages, {
+      const result = await this.engine.chat(messages, {
         ...chatOptions,
         grammar,
       });
+      const rawText = result.text;
       if (abort.signal.aborted) {
         const status = abort.timedOut() ? 'timed_out' : 'aborted';
         return {
@@ -395,11 +397,11 @@ export class CharacterRuntime {
       recordParsedEvents(parser.flush());
     };
 
-    const onToken = (tokens: string[]): void => {
-      if (tokens.length === 0) {
+    const onTokens = (batch: { text: string }): void => {
+      if (batch.text.length === 0) {
         return;
       }
-      const text = tokens.join('');
+      const text = batch.text;
       streamedOutputText += text;
       recordParsedEvents(parser.consume(text));
     };
@@ -408,13 +410,14 @@ export class CharacterRuntime {
       const queryOptions: ChatOptions = {
         session: contextKey,
         maxTokens: this.maxOutputTokens,
-        onToken,
+        onTokens,
         signal,
       };
-      const rawText = await this.engine.chat(messages, {
+      const result = await this.engine.chat(messages, {
         ...queryOptions,
         grammar: this.grammarSource,
       });
+      const rawText = result.text;
       if (signal.aborted) {
         status = 'aborted';
       } else {

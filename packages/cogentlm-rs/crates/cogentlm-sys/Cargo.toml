@@ -1,0 +1,21 @@
+[package]
+name = "cogentlm-sys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+links = "cogentlm"
+
+[features]
+default = ["native"]
+native = []
+cuda = ["native"]
+metal = ["native"]
+vulkan = ["native"]
+openmp = ["native"]
+
+[build-dependencies]
+bindgen.workspace = true
+cmake.workspace = true
+
+[dependencies]

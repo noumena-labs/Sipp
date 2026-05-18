@@ -1,10 +1,22 @@
 export { CogentEngine, type CogentEngineOptions } from './cogent-engine.js';
+export type {
+  BrowserGgufIngestSmokeResult,
+  BrowserRustEngineSmokeResult,
+  BrowserRuntimeSmokeResult,
+} from './runtime/browser-runtime-smoke-types.js';
 export {
   QueryError,
+  type BackendInfo,
   type BackendProfileObservation,
   type ChatInput,
   type ChatOptions,
+  type EngineBackendName,
+  type EngineEvent,
+  type EngineState,
+  type EngineStats,
+  type EngineStatus,
   type EngineObservability,
+  type FinishReason,
   type ModelInfo,
   type ModelLoadOptions,
   type ModelSource,
@@ -15,6 +27,12 @@ export {
   type QueryInput,
   type QueryObservation,
   type QueryOptions,
+  type RequestResult,
+  type RequestState,
+  type RequestStats,
+  type RequestStatus,
   type RuntimeObservation,
+  type StreamStats,
+  type TokenBatch,
 } from './model-management/model-types.js';
 export type { ChatMessage } from './core/inference-types.js';

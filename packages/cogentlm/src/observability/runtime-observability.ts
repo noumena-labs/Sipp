@@ -8,12 +8,7 @@ export interface RequestObservabilityMetrics {
   ttftMs: number;
   /** Average inter-token latency (ms between consecutive emitted tokens). */
   itlAvgMs: number;
-  /**
-   * Worst-observed inter-token latency.  Field is named `p99` for backwards
-   * compatibility; the implementation is `max(itl)` since the per-request
-   * sample count is small enough (typically ≤ outputTokens) that max is a
-   * faithful tail-latency proxy.
-   */
+  /** Tail inter-token latency reported by the active runtime. */
   itlP99Ms: number;
   /** End-to-end latency: enqueue → completion. */
   e2eMs: number;

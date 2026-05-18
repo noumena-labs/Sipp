@@ -1,8 +1,25 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { access, copyFile, mkdir, readdir, rm } from 'node:fs/promises';
+import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+// Parse arguments to configure default environment variables
+const isDev = process.argv.includes('--dev');
+if (isDev) {
+  process.env.CE_WASM_BUILD_LABEL ??= '[build-wasm:dev]';
+  process.env.CE_WASM_BUILD_DIR_NAME ??= 'build-wasm-dev';
+  process.env.CE_WASM_LTO_MODE ??= 'OFF';
+  process.env.CE_WASM_BUILD_PARALLEL_LEVEL ??= '8';
+} else {
+  // Default unified browser release settings
+  process.env.CE_WASM_BUILD_LABEL ??= '[build-wasm:browser]';
+  process.env.CE_WASM_BUILD_DIR_NAME ??= 'build-browser';
+  process.env.CE_WASM_OUTPUT_SUBDIR ??= 'wasm';
+  process.env.CE_WASM_MEM64 ??= '0';
+  process.env.CE_WASM_MAXIMUM_MEMORY ??= '4096MB';
+  process.env.CE_WASM_PTHREADS ??= '0';
+}
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, '..');
@@ -16,7 +33,7 @@ const buildDir = path.join(projectRoot, buildDirName);
 const buildDistDir = path.join(buildDir, 'dist');
 const packageWasmSubdir = process.env.CE_WASM_OUTPUT_SUBDIR?.trim() || 'wasm';
 const packageWasmDir = path.join(projectRoot, 'dist', packageWasmSubdir);
-const llamaCppRoot = path.join(projectRoot, 'third_party', 'llama.cpp');
+const llamaCppRoot = path.join(projectRoot, '..', 'third_party', 'llama.cpp');
 const enableDebug = false;
 const enableFilesystem = true;
 const enableJspi = true;
@@ -25,7 +42,7 @@ const enablePthreads = readBooleanEnv('CE_WASM_PTHREADS', false);
 const suppressLlamaLogs = true;
 const suppressMtmdLogs = true;
 const emscriptenEnvironment = 'web,worker';
-const enableMemory64 = readBooleanEnv('CE_WASM_MEM64', true);
+const enableMemory64 = readBooleanEnv('CE_WASM_MEM64', false);
 const ltoMode = process.env.CE_WASM_LTO_MODE?.trim().toUpperCase() || (isWindows ? 'THIN' : 'FULL');
 const initialMemory = process.env.CE_WASM_INITIAL_MEMORY?.trim() || '512MB';
 const maximumMemory =
@@ -37,6 +54,7 @@ let activeChildProcess = null;
 let signalHandlersInstalled = false;
 let activeMakeProgramDir = null;
 let cachedCmakeExecutable = null;
+let rustBrowserStaticlib = null;
 
 function readBooleanEnv(name, fallback = false) {
   const rawValue = process.env[name]?.trim().toLowerCase();
@@ -96,12 +114,91 @@ function validateLtoMode(rawValue) {
   }
 }
 
+function rustBuildEnv() {
+  if (!enablePthreads) {
+    return process.env;
+  }
+
+  return {
+    ...process.env,
+    RUSTFLAGS: [
+      process.env.RUSTFLAGS,
+      '-C',
+      'target-feature=+atomics,+bulk-memory,+mutable-globals,+simd128,+nontrapping-fptoint',
+    ]
+      .filter(Boolean)
+      .join(' '),
+  };
+}
+
+function rustCargoBuildPrefix() {
+  return enablePthreads
+    ? ['+nightly', 'build', '-Zbuild-std=std,panic_unwind']
+    : ['build'];
+}
+
+function buildRustBrowserStaticlib() {
+  if (enableMemory64) {
+    throw new Error('Browser engine requires CE_WASM_MEM64=0.');
+  }
+
+  const rustRoot = path.resolve(projectRoot, '..', 'cogentlm-rs');
+  const manifestPath = path.join(rustRoot, 'Cargo.toml');
+  if (!existsSync(manifestPath)) {
+    throw new Error(`Missing Rust workspace for browser engine: ${manifestPath}`);
+  }
+
+  console.log(`${buildLabel} building Rust browser staticlib`);
+  const result = spawnSync(
+    'cargo',
+    [
+      ...rustCargoBuildPrefix(),
+      '-p',
+      'cogentlm-browser',
+      '--target',
+      'wasm32-unknown-emscripten',
+      '--release',
+    ],
+    {
+      cwd: rustRoot,
+      stdio: 'inherit',
+      shell: false,
+      windowsHide: true,
+      env: rustBuildEnv(),
+    }
+  );
+
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`Rust browser staticlib build failed with exit code ${result.status}`);
+  }
+
+  const staticlibPath = path.join(
+    rustRoot,
+    'target',
+    'wasm32-unknown-emscripten',
+    'release',
+    'libcogentlm_browser.a'
+  );
+  if (!existsSync(staticlibPath)) {
+    throw new Error(`Rust browser staticlib was not produced: ${staticlibPath}`);
+  }
+
+  return normalizeCmakePath(staticlibPath);
+}
+
 function normalizeHostPath(inputPath) {
   if (!inputPath || !isWindows) {
     return inputPath;
   }
 
   return path.win32.normalize(inputPath.replace(/\//g, '\\'));
+}
+
+function normalizeCmakePath(inputPath) {
+  return inputPath?.replace(/\\/g, '/') ?? inputPath;
 }
 
 function findProgramsOnPath(command) {
@@ -135,8 +232,6 @@ function commandAvailable(command, args = ['--version']) {
   return !result.error && result.status === 0;
 }
 
-// Resolve cmake once up front. On Windows, Node's raw spawn lookup can be less
-// reliable than resolving the executable path explicitly.
 function resolveCmakeExecutable() {
   if (cachedCmakeExecutable) {
     return cachedCmakeExecutable;
@@ -221,7 +316,6 @@ function resolveEmsdkRoot() {
   return collectEmsdkRoots()[0] ?? null;
 }
 
-// Match the legacy standalone build by reusing the cached Dawn WebGPU port when it exists.
 function resolveEmdawnwebgpuDir(emsdkRoot) {
   const candidates = [process.env.EMDAWNWEBGPU_DIR?.trim()];
 
@@ -321,8 +415,6 @@ function detectNinjaFromVisualStudio() {
   return null;
 }
 
-// Prefer explicit environment configuration first, then fall back to the common
-// Ninja locations used by EMSDK, CMake, and Visual Studio.
 function resolveBuildConfiguration() {
   const generatorFromEnv = process.env.CMAKE_GENERATOR?.trim();
   const makeProgramFromEnv = normalizeHostPath(process.env.CMAKE_MAKE_PROGRAM?.trim());
@@ -395,6 +487,8 @@ function shouldRunConfigure(expectedGenerator) {
   const cachedMaximumMemory = getCacheEntry(cacheText, 'CE_WASM_MAXIMUM_MEMORY');
   const cachedStackSize = getCacheEntry(cacheText, 'CE_WASM_STACK_SIZE');
   const cachedLtoMode = getCacheEntry(cacheText, 'CE_WASM_LTO_MODE');
+  const cachedRustBrowserLib = getCacheEntry(cacheText, 'CE_WASM_RUST_BROWSER_LIB') ?? '';
+  const expectedRustBrowserLib = rustBrowserStaticlib ?? '';
 
   if (expectedGenerator && cachedGenerator && cachedGenerator !== expectedGenerator) {
     return true;
@@ -456,6 +550,10 @@ function shouldRunConfigure(expectedGenerator) {
     return true;
   }
 
+  if (cachedRustBrowserLib !== expectedRustBrowserLib) {
+    return true;
+  }
+
   return false;
 }
 
@@ -476,8 +574,6 @@ function hasIncompleteBuildDirectory() {
   );
 }
 
-// Interrupted configure runs leave behind a partial build directory. Reusing it on the
-// next run causes misleading follow-up failures, so start from a clean build directory.
 function removeInvalidBuildDirectory(expectedGenerator) {
   if (hasIncompleteBuildDirectory()) {
     console.log(`${buildLabel} removing incomplete build directory`);
@@ -513,6 +609,12 @@ function removeInvalidBuildDirectory(expectedGenerator) {
     reasons.push(`CE_WASM_LTO_MODE=${cachedLtoMode}`);
   }
 
+  const cachedRustBrowserLib = getCacheEntry(cacheText, 'CE_WASM_RUST_BROWSER_LIB') ?? '';
+  const expectedRustBrowserLib = rustBrowserStaticlib ?? '';
+  if (cachedRustBrowserLib !== expectedRustBrowserLib) {
+    reasons.push(`CE_WASM_RUST_BROWSER_LIB=${cachedRustBrowserLib || 'OFF'}`);
+  }
+
   if (expectedGenerator && cachedGenerator && cachedGenerator !== expectedGenerator) {
     reasons.push(`generator=${cachedGenerator}`);
   }
@@ -538,8 +640,6 @@ function terminateProcessTree(pid) {
     return;
   }
 
-  // On Windows, killing the direct child is not enough. CMake can leave Ninja alive
-  // unless the full process tree is terminated.
   if (isWindows) {
     spawnSync('taskkill.exe', ['/T', '/F', '/PID', String(pid)], {
       stdio: 'ignore',
@@ -554,7 +654,7 @@ function terminateProcessTree(pid) {
   } catch {}
 
   try {
-    process.kill(pid, 'SIGTERM');
+    process.kill(pid, 'SIGKILL');
   } catch {}
 }
 
@@ -563,101 +663,249 @@ function installSignalHandlers() {
     return;
   }
 
-  const exitForSignal = (signal) => {
-    if (activeChildProcess?.pid) {
+  const handleInterrupt = () => {
+    if (activeChildProcess) {
+      console.log(`${buildLabel} forwarding SIGINT to build process tree`);
       terminateProcessTree(activeChildProcess.pid);
     }
-
-    process.exit(signal === 'SIGINT' ? 130 : 143);
+    process.exit(130);
   };
 
-  process.on('SIGINT', () => exitForSignal('SIGINT'));
-  process.on('SIGTERM', () => exitForSignal('SIGTERM'));
+  process.on('SIGINT', handleInterrupt);
+  process.on('SIGTERM', handleInterrupt);
   signalHandlersInstalled = true;
 }
 
-// Only one build subprocess runs at a time, so keep the lifecycle logic local and
-// forward interrupts to the child process tree instead of leaving stale workers.
-async function runCommand(executable, args) {
-  const env = { ...process.env };
-  prependPathEntry(env, activeMakeProgramDir);
-
-  console.log(`${buildLabel} run: ${executable} ${args.join(' ')}`);
-
+function runCommand(command, args) {
   installSignalHandlers();
 
-  const childProcess = spawn(executable, args, {
-    cwd: projectRoot,
-    stdio: 'inherit',
-    shell: false,
-    windowsHide: true,
-    env,
-    detached: !isWindows
-  });
+  const makeProgramEnv = {};
+  if (activeMakeProgramDir) {
+    prependPathEntry(makeProgramEnv, activeMakeProgramDir);
+  }
 
-  activeChildProcess = childProcess;
-
-  try {
-    await new Promise((resolve, reject) => {
-      childProcess.once('error', reject);
-      childProcess.once('exit', (code, signal) => {
-        if (signal) {
-          reject(new Error(`Command terminated by signal ${signal}: ${executable} ${args.join(' ')}`));
-          return;
-        }
-
-        if (code !== 0) {
-          reject(new Error(`Command failed: ${executable} ${args.join(' ')}`));
-          return;
-        }
-
-        resolve();
-      });
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: projectRoot,
+      stdio: 'inherit',
+      shell: false,
+      windowsHide: true,
+      env: { ...process.env, ...makeProgramEnv }
     });
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith('Command failed')) {
-      throw error;
-    }
 
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Command failed to start: ${executable} ${args.join(' ')}\n${message}`);
-  } finally {
-    if (activeChildProcess === childProcess) {
+    activeChildProcess = child;
+
+    child.on('error', (err) => {
       activeChildProcess = null;
+      reject(err);
+    });
+
+    child.on('exit', (code) => {
+      activeChildProcess = null;
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`Command failed with exit code ${code}: ${command} ${args.join(' ')}`));
+      }
+    });
+  });
+}
+
+async function copyWasmArtifacts() {
+  await mkdir(packageWasmDir, { recursive: true });
+
+  const artifactMap = {
+    'CogentLM.js': `${artifactPrefix}.js`,
+    'CogentLM.wasm': `${artifactPrefix}.wasm`
+  };
+
+  for (const [sourceName, targetName] of Object.entries(artifactMap)) {
+    const sourcePath = path.join(buildDistDir, sourceName);
+    const targetPath = path.join(packageWasmDir, targetName);
+
+    console.log(`${buildLabel} copying artifact to dist/${packageWasmSubdir}/${targetName}`);
+    await copyFile(sourcePath, targetPath);
+  }
+}
+
+async function getWasmOptPath() {
+  const binaryName = isWindows ? 'wasm-opt.exe' : 'wasm-opt';
+  const emsdkRoot = resolveEmsdkRoot();
+  if (emsdkRoot) {
+    const candidate = path.join(
+      emsdkRoot,
+      'upstream',
+      'emscripten',
+      'bin',
+      binaryName
+    );
+    if (existsSync(candidate)) {
+      return normalizeHostPath(candidate);
+    }
+  }
+
+  if (commandAvailable('wasm-opt')) {
+    return 'wasm-opt';
+  }
+
+  return null;
+}
+
+async function optimizeWasmWithBinaryen() {
+  const wasmOptPath = await getWasmOptPath();
+  if (!wasmOptPath) {
+    console.log(`${buildLabel} wasm-opt not found, skipping extra binaryen optimization`);
+    return;
+  }
+
+  const wasmPath = path.join(packageWasmDir, `${artifactPrefix}.wasm`);
+  console.log(`${buildLabel} optimizing ${artifactPrefix}.wasm with wasm-opt (-O3)`);
+
+  const tempWasmPath = `${wasmPath}.opt`;
+  try {
+    await runCommand(wasmOptPath, ['-O3', '--asyncify', wasmPath, '-o', tempWasmPath]);
+    await copyFile(tempWasmPath, wasmPath);
+  } finally {
+    if (existsSync(tempWasmPath)) {
+      await rm(tempWasmPath, { force: true });
     }
   }
 }
 
-// Package consumers import the renamed wasm artifacts from dist/wasm rather than
-// the raw CMake output names produced in the build directory.
-async function copyWasmArtifacts() {
-  try {
-    await access(buildDistDir);
-  } catch {
-    throw new Error(`Missing build output directory: ${buildDistDir}`);
+function parseWasmExportsAndImports(wasmBuffer) {
+  // Simple binary scanner for WebAssembly imports & exports.
+  let offset = 8;
+  const functionImports = [];
+  const functionExports = [];
+  const functionTypes = [];
+  const importedFunctionCount = 0;
+
+  function readVarUint32() {
+    let result = 0;
+    let shift = 0;
+    while (offset < wasmBuffer.length) {
+      const byte = wasmBuffer[offset++];
+      result |= (byte & 0x7f) << shift;
+      if ((byte & 0x80) === 0) {
+        break;
+      }
+      shift += 7;
+    }
+    return result;
   }
 
-  await rm(packageWasmDir, { recursive: true, force: true });
-  await mkdir(packageWasmDir, { recursive: true });
+  function readString() {
+    const length = readVarUint32();
+    const str = wasmBuffer.toString('utf8', offset, offset + length);
+    offset += length;
+    return str;
+  }
 
-  for (const artifactName of await readdir(buildDistDir)) {
-    if (!artifactName.startsWith('CogentLM')) {
-      continue;
+  while (offset < wasmBuffer.length) {
+    const sectionId = wasmBuffer[offset++];
+    const sectionSize = readVarUint32();
+    const sectionEnd = offset + sectionSize;
+
+    if (sectionId === 2) { // Import Section
+      const count = readVarUint32();
+      for (let i = 0; i < count; i++) {
+        const moduleName = readString();
+        const fieldName = readString();
+        const kind = wasmBuffer[offset++];
+        if (kind === 0) { // Function import
+          const typeIndex = readVarUint32();
+          functionImports.push({ module: moduleName, name: fieldName, typeIndex });
+        } else if (kind === 1) { // Table
+          offset++; // element type
+          const limitsKind = wasmBuffer[offset++];
+          readVarUint32(); // initial limit
+          if (limitsKind === 1) readVarUint32(); // maximum limit
+        } else if (kind === 2) { // Memory
+          const limitsKind = wasmBuffer[offset++];
+          readVarUint32(); // initial limit
+          if (limitsKind === 1) readVarUint32(); // maximum limit
+        } else if (kind === 3) { // Global
+          offset += 2; // type and mutability
+        }
+      }
+    } else if (sectionId === 7) { // Export Section
+      const count = readVarUint32();
+      for (let i = 0; i < count; i++) {
+        const name = readString();
+        const kind = wasmBuffer[offset++];
+        const index = readVarUint32();
+        if (kind === 0) {
+          functionExports.push({ name, index });
+        }
+      }
     }
 
-    const sourcePath = path.join(buildDistDir, artifactName);
-    const targetPath = path.join(
-      packageWasmDir,
-      `${artifactPrefix}${artifactName.slice('CogentLM'.length)}`
-    );
-
-    await copyFile(sourcePath, targetPath);
+    offset = sectionEnd;
   }
+
+  return { functionImports, functionExports };
+}
+
+function hasCallableSyscallImplementation(moduleText, name) {
+  // Match standard Emscripten syscall assignments.
+  const escapedName = name.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+  const patterns = [
+    new RegExp(`_${escapedName}\\s*:\\s*`),
+    new RegExp(`function\\s+_${escapedName}\\b`),
+    new RegExp(`var\\s+_${escapedName}\\b`)
+  ];
+
+  return patterns.some((pattern) => pattern.test(moduleText));
+}
+
+function validateCopiedWasmGlue() {
+  const wasmPath = path.join(packageWasmDir, `${artifactPrefix}.wasm`);
+  const jsPath = path.join(packageWasmDir, `${artifactPrefix}.js`);
+
+  if (!existsSync(wasmPath) || !existsSync(jsPath)) {
+    return;
+  }
+
+  const wasmBuffer = readFileSync(wasmPath);
+  const moduleText = readFileSync(jsPath, 'utf8');
+
+  const { functionImports, functionExports } = parseWasmExportsAndImports(wasmBuffer);
+  const envImports = functionImports.filter((item) => item.module === 'env');
+
+  const missingBindings = envImports
+    .map((item) => item.name)
+    .filter((name) => !name.startsWith('__syscall_'))
+    .filter((name) => !moduleText.includes(`_${name}`))
+    .filter((name) => !moduleText.includes(name));
+
+  if (missingBindings.length > 0) {
+    throw new Error(
+      `Copied Emscripten JS glue is missing wasm import bindings: ${missingBindings.join(', ')}.`
+    );
+  }
+
+  const missingSyscallImplementations = functionImports
+    .map((item) => item.name)
+    .filter((name) => name.startsWith('__syscall_'))
+    .filter((name) => !hasCallableSyscallImplementation(moduleText, name));
+
+  if (missingSyscallImplementations.length > 0) {
+    throw new Error(
+      `Copied Emscripten JS glue is missing syscall implementations: ${missingSyscallImplementations.join(', ')}.`
+    );
+  }
+
+  console.log(
+    `${buildLabel} validated wasm JS glue for ${functionImports.length} env function imports`
+  );
 }
 
 const buildConfig = resolveBuildConfiguration();
 validateMaximumMemorySetting(maximumMemory);
 validateLtoMode(ltoMode);
+
+rustBrowserStaticlib = buildRustBrowserStaticlib();
+
 removeInvalidBuildDirectory(buildConfig.generator);
 
 activeMakeProgramDir = buildConfig.makeProgram ? path.dirname(buildConfig.makeProgram) : null;
@@ -688,6 +936,8 @@ const cmakeConfigureArgs = [
   '-DLLAMA_BUILD_HTML=OFF'
 ];
 
+cmakeConfigureArgs.push(`-DCE_WASM_RUST_BROWSER_LIB=${rustBrowserStaticlib}`);
+
 const emsdkRoot = resolveEmsdkRoot();
 if (emsdkRoot) {
   cmakeConfigureArgs.push(`-DEMSDK=${emsdkRoot}`);
@@ -704,6 +954,7 @@ if (maximumMemory) {
 
 console.log(
   `${buildLabel} generator=${buildConfig.generator} mem64=${enableMemory64 ? 'on' : 'off'} pthreads=${enablePthreads ? 'on' : 'off'} lto=${ltoMode.toLowerCase()} output=dist/${packageWasmSubdir}` +
+    ' rust_browser=on' +
     (buildConfig.makeProgram ? ` make_program=${buildConfig.makeProgram}` : '') +
     (buildParallelLevel ? ` jobs=${buildParallelLevel}` : '')
 );
@@ -721,3 +972,5 @@ if (buildParallelLevel) {
 
 await runCommand(cmakeExecutable, cmakeBuildArgs);
 await copyWasmArtifacts();
+await optimizeWasmWithBinaryen();
+validateCopiedWasmGlue();

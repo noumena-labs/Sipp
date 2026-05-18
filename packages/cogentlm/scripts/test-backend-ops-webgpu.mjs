@@ -16,7 +16,7 @@ const buildDirName =
   (isDebugBuild ? 'build-test-backend-ops-webgpu-debug' : 'build-test-backend-ops-webgpu');
 const buildDir = path.join(projectRoot, buildDirName);
 const buildOutputDir = path.join(buildDir, 'bin');
-const llamaCppRoot = path.join(projectRoot, 'third_party', 'llama.cpp');
+const llamaCppRoot = path.join(projectRoot, '..', 'third_party', 'llama.cpp');
 const runnerDir = path.join(scriptDir, 'webgpu-test-runner');
 const browserHarnessScript = path.join(scriptDir, 'run-webgpu-browser-harness.mjs');
 const testTargetName = 'test-backend-ops';

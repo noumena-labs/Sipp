@@ -25,8 +25,7 @@ import { assertGrammarByteSize } from '../utils/grammar.js';
 export { MAX_GRAMMAR_BYTES } from '../utils/grammar.js';
 
 // Mirror of CE_TokenEmissionMode in native/api/ffi_types.h.  Native exposes
-// only NONE (no emission) and STREAMING_BUFFER (SAB ring); the legacy FFI
-// callback / runtime-event paths were removed.
+// only NONE (no emission) and STREAMING_BUFFER (SAB ring).
 export const TOKEN_EMISSION_NONE = 0;
 export const TOKEN_EMISSION_STREAMING_BUFFER = 1;
 
@@ -49,6 +48,19 @@ export type WasmSchedulerProgressResult = {
   completedResponseCount: number;
 };
 
+export type BrowserCacheLayout = 'single-file' | 'split-gguf';
+
+export interface GgufSplitStreamCallbacks {
+  readAt(offset: number, target: Uint8Array): number | void;
+  openShard(path: string, index: number, count: number): number | void;
+  writeShard(bytes: Uint8Array): number | void;
+  closeShard(): number | void;
+}
+
+export interface GgufReadAtCallbacks {
+  readAt(offset: number, target: Uint8Array): number | void;
+}
+
 /**
  * Shape of an OpenAI-compatible chat message accepted by
  * `WasmBridge.applyChatTemplate`. Corresponds to the JSON array parsed by
@@ -60,7 +72,6 @@ export type ChatTemplateMessage = {
 };
 
 export class WasmBridge {
-  private reusableBurstResultPtr = 0;
   private _cachedDataView: DataView | null = null;
   private _cachedHeapU8: Uint8Array | null = null;
 
@@ -81,6 +92,14 @@ export class WasmBridge {
     const n = typeof ptr === 'bigint' ? Number(ptr) : ptr;
     if (!Number.isSafeInteger(n) || n < 0) {
       throw new RangeError(`Invalid wasm pointer: ${String(ptr)}`);
+    }
+    return n;
+  }
+
+  private safeNumber(value: number | bigint): number {
+    const n = typeof value === 'bigint' ? Number(value) : value;
+    if (!Number.isSafeInteger(n) || n < 0) {
+      throw new RangeError(`Invalid wasm integer: ${String(value)}`);
     }
     return n;
   }
@@ -122,151 +141,21 @@ export class WasmBridge {
     modelPath: string,
     normalizedConfig: NormalizedInitConfig
   ): Promise<number> {
-    const hasMultimodalConfig =
-      normalizedConfig.multimodalProjectorPath != null ||
-      normalizedConfig.imageMinTokens > 0 ||
-      normalizedConfig.imageMaxTokens > 0;
-    const ident = hasMultimodalConfig ? 'CE_InitWithMultimodal' : 'CE_Init';
-    const argTypes = hasMultimodalConfig
-      ? [
-        'string',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'string',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-      ]
-      : [
-        'string',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-        'number',
-      ];
-    const args = hasMultimodalConfig
-      ? [
-        modelPath,
-        normalizedConfig.nCtx,
-        normalizedConfig.nBatch,
-        normalizedConfig.nUbatch,
-        normalizedConfig.nSeqMax,
-        normalizedConfig.nThreads,
-        normalizedConfig.nThreadsBatch,
-        normalizedConfig.nGpuLayers,
-        normalizedConfig.flashAttention,
-        normalizedConfig.kvUnified,
-        normalizedConfig.maxCachedSessions,
-        normalizedConfig.retainedPrefixTokens,
-        normalizedConfig.prefillChunkSize,
-        normalizedConfig.prefixCacheIntervalTokens,
-        normalizedConfig.maxPrefixCacheEntries,
-        normalizedConfig.schedulerPolicy,
-        normalizedConfig.decodeTokenReserve,
-        normalizedConfig.adaptivePrefillChunking,
-        normalizedConfig.enableRuntimeObservability,
-        normalizedConfig.enableBackendProfiling,
-        normalizedConfig.multimodalProjectorPath ?? '',
-        normalizedConfig.multimodalUseGpu,
-        normalizedConfig.imageMinTokens,
-        normalizedConfig.imageMaxTokens,
-        normalizedConfig.samplingRepeatLastN,
-        normalizedConfig.samplingRepeatPenalty,
-        normalizedConfig.samplingFrequencyPenalty,
-        normalizedConfig.samplingPresencePenalty,
-        normalizedConfig.samplingTopK,
-        normalizedConfig.samplingTopP,
-        normalizedConfig.samplingMinP,
-        normalizedConfig.samplingTemperature,
-        normalizedConfig.samplingSeed,
-      ]
-      : [
-        modelPath,
-        normalizedConfig.nCtx,
-        normalizedConfig.nBatch,
-        normalizedConfig.nUbatch,
-        normalizedConfig.nSeqMax,
-        normalizedConfig.nThreads,
-        normalizedConfig.nThreadsBatch,
-        normalizedConfig.nGpuLayers,
-        normalizedConfig.flashAttention,
-        normalizedConfig.kvUnified,
-        normalizedConfig.maxCachedSessions,
-        normalizedConfig.retainedPrefixTokens,
-        normalizedConfig.prefillChunkSize,
-        normalizedConfig.prefixCacheIntervalTokens,
-        normalizedConfig.maxPrefixCacheEntries,
-        normalizedConfig.schedulerPolicy,
-        normalizedConfig.decodeTokenReserve,
-        normalizedConfig.adaptivePrefillChunking,
-        normalizedConfig.enableRuntimeObservability,
-        normalizedConfig.enableBackendProfiling,
-        normalizedConfig.multimodalUseGpu,
-        normalizedConfig.samplingRepeatLastN,
-        normalizedConfig.samplingRepeatPenalty,
-        normalizedConfig.samplingFrequencyPenalty,
-        normalizedConfig.samplingPresencePenalty,
-        normalizedConfig.samplingTopK,
-        normalizedConfig.samplingTopP,
-        normalizedConfig.samplingMinP,
-        normalizedConfig.samplingTemperature,
-        normalizedConfig.samplingSeed,
-      ];
-    const result = await this.module.ccall(ident, 'number', argTypes, args, {
+    const result = await this.module.ccall('CE_Init', 'number', ['string', 'string'], [
+      modelPath,
+      normalizedConfig.runtimeConfigJson,
+    ], {
       async: true,
     });
     return Number(result);
+  }
+
+  public readLastEngineError(): string {
+    return this.copyText(
+      'CE_GetLastEngineErrorSize',
+      'CE_CopyLastEngineError',
+      'last engine error'
+    );
   }
 
   public close(): void {
@@ -442,6 +331,144 @@ export class WasmBridge {
     }
   }
 
+  public rustBrowserEngineAbiVersion(): number {
+    return this.callNumber('CE_RustBrowserEngineAbiVersion');
+  }
+
+  public rustBrowserEngineCreate(): number {
+    return this.callNumber('CE_RustBrowserEngineCreate');
+  }
+
+  public rustBrowserEngineId(engine: number): number {
+    return this.callNumber('CE_RustBrowserEngineId', ['number'], [engine]);
+  }
+
+  public rustBrowserEngineClose(engine: number): number {
+    return this.callNumber('CE_RustBrowserEngineClose', ['number'], [engine]);
+  }
+
+  public browserCacheLayout(
+    sourceBytes: number,
+    sourceBytesKnown: boolean,
+    directLoadMaxBytes: number,
+    shardMaxBytes: number
+  ): BrowserCacheLayout {
+    const layout = this.callNumber(
+      'CE_BrowserCacheLayout',
+      ['number', 'number', 'number', 'number'],
+      [sourceBytes, sourceBytesKnown ? 1 : 0, directLoadMaxBytes, shardMaxBytes]
+    );
+    if (layout === 0) {
+      return 'single-file';
+    }
+    if (layout === 1) {
+      return 'split-gguf';
+    }
+    throw new Error(`Rust browser cache layout failed with status ${layout}.`);
+  }
+
+  public splitGgufFile(
+    inputPath: string,
+    outputPrefix: string,
+    shardMaxBytes: number
+  ): void {
+    const status = this.callNumber(
+      'CE_GgufSplitFile',
+      ['string', 'string', 'number'],
+      [inputPath, outputPrefix, shardMaxBytes]
+    );
+    if (status !== 0) {
+      throw new Error(`Rust GGUF file split failed with status ${status}.`);
+    }
+  }
+
+  public planGgufSplitCount(
+    sourceBytes: number,
+    shardMaxBytes: number,
+    callbacks: GgufReadAtCallbacks
+  ): number {
+    const readAtPtr = this.module.addFunction(
+      (_userData: number, offset: bigint | number, dstPtr: number, len: number) => {
+        const start = this.byteOffset(dstPtr);
+        const target = this.module.HEAPU8.subarray(start, start + len);
+        return callbacks.readAt(this.safeNumber(offset), target) ?? 0;
+      },
+      'iijii'
+    );
+
+    try {
+      const count = this.callNumber(
+        'CE_GgufPlanSplitCount',
+        ['number', 'number', 'number', 'number'],
+        [sourceBytes, shardMaxBytes, 0, readAtPtr]
+      );
+      if (count <= 0) {
+        throw new Error(`Rust GGUF split planning failed with status ${count}.`);
+      }
+      return count;
+    } finally {
+      this.module.removeFunction(readAtPtr);
+    }
+  }
+
+  public splitGgufStream(
+    sourceBytes: number,
+    outputPrefix: string,
+    shardMaxBytes: number,
+    callbacks: GgufSplitStreamCallbacks
+  ): void {
+    const readAtPtr = this.module.addFunction(
+      (_userData: number, offset: bigint | number, dstPtr: number, len: number) => {
+        const start = this.byteOffset(dstPtr);
+        const target = this.module.HEAPU8.subarray(start, start + len);
+        return callbacks.readAt(this.safeNumber(offset), target) ?? 0;
+      },
+      'iijii'
+    );
+    const openShardPtr = this.module.addFunction(
+      (_userData: number, pathPtr: number, index: number, count: number) =>
+        callbacks.openShard(this.module.UTF8ToString(pathPtr), index, count) ?? 0,
+      'iiiii'
+    );
+    const writeShardPtr = this.module.addFunction(
+      (_userData: number, bytesPtr: number, len: number) => {
+        const start = this.byteOffset(bytesPtr);
+        const bytes = this.module.HEAPU8.subarray(start, start + len);
+        return callbacks.writeShard(bytes) ?? 0;
+      },
+      'iiii'
+    );
+    const closeShardPtr = this.module.addFunction(
+      () => callbacks.closeShard() ?? 0,
+      'ii'
+    );
+
+    try {
+      const status = this.callNumber(
+        'CE_GgufSplitStream',
+        ['number', 'string', 'number', 'number', 'number', 'number', 'number', 'number'],
+        [
+          sourceBytes,
+          outputPrefix,
+          shardMaxBytes,
+          0,
+          readAtPtr,
+          openShardPtr,
+          writeShardPtr,
+          closeShardPtr,
+        ]
+      );
+      if (status !== 0) {
+        throw new Error(`Rust GGUF stream split failed with status ${status}.`);
+      }
+    } finally {
+      this.module.removeFunction(readAtPtr);
+      this.module.removeFunction(openShardPtr);
+      this.module.removeFunction(writeShardPtr);
+      this.module.removeFunction(closeShardPtr);
+    }
+  }
+
   public readRuntimeObservability(): DetailedRuntimeAggregateObservabilityMetrics | null {
     return this.readRuntimeObservabilityViaCall('CE_GetRuntimeObservability', [], []);
   }
@@ -499,15 +526,30 @@ export class WasmBridge {
     maxEmittedTokens: number,
     options: {
       maxDurationUs?: number;
+      // Tells the native scheduler whether to use the per-emitted-token
+      // yield path (true, for streaming requests) or the monolithic loop
+      // (false, for bulk requests). Setting this incorrectly is not a
+      // correctness bug — only a performance one: streaming requests with
+      // false won't deliver tokens until the loop returns; bulk requests
+      // with true pay per-burst yielding overhead for no reason.
+      streamingActive?: boolean;
     } = {}
   ): Promise<WasmSchedulerProgressResult> {
     const maxDurationUs = Math.max(0, options.maxDurationUs ?? 0);
+    const streamingActive = options.streamingActive === true ? 1 : 0;
     const resultPtr = this.ensureLoopResultBuffer();
-    
+
     const stepResult = await this.callNumberAsync(
       'CE_RunSchedulerLoop',
-      ['number', 'number', 'number', 'number', 'pointer'],
-      [maxTicks, maxCompletedResponses, maxEmittedTokens, maxDurationUs, resultPtr]
+      ['number', 'number', 'number', 'number', 'number', 'pointer'],
+      [
+        maxTicks,
+        maxCompletedResponses,
+        maxEmittedTokens,
+        maxDurationUs,
+        streamingActive,
+        resultPtr,
+      ]
     );
 
     const loopResult = this.readSchedulerLoopResult(resultPtr);
@@ -645,9 +687,19 @@ export class WasmBridge {
     copyFunction: string,
     fieldName: string
   ): string {
-    const byteLength = this.callNumber(sizeFunction, ['number'], [requestId]);
+    return this.copyText(sizeFunction, copyFunction, fieldName, ['number'], [requestId]);
+  }
+
+  private copyText(
+    sizeFunction: string,
+    copyFunction: string,
+    fieldName: string,
+    argTypes: string[] = [],
+    args: unknown[] = []
+  ): string {
+    const byteLength = this.callNumber(sizeFunction, argTypes, args);
     if (byteLength < 0) {
-      throw new Error(`Failed to read queued request ${fieldName} size.`);
+      throw new Error(`Failed to read ${fieldName} size.`);
     }
     if (byteLength === 0) {
       return '';
@@ -655,13 +707,13 @@ export class WasmBridge {
 
     const bufferPtr = this.allocate(byteLength + 1);
     try {
-      const copied = this.callNumber(copyFunction, ['number', 'pointer', 'number'], [
-        requestId,
+      const copied = this.callNumber(copyFunction, [...argTypes, 'pointer', 'number'], [
+        ...args,
         bufferPtr,
         byteLength + 1,
       ]);
       if (copied !== byteLength) {
-        throw new Error(`Failed to copy queued request ${fieldName}.`);
+        throw new Error(`Failed to copy ${fieldName}.`);
       }
       return this.module.UTF8ToString(bufferPtr, byteLength);
     } finally {

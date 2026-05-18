@@ -78,7 +78,7 @@ test('MainThreadModelLoader stages projector in MEMFS and model in WORKERFS', as
   });
 
   assert.equal(staged.modelPath, '/workerfs_model/model.gguf');
-  assert.equal(staged.multimodalProjectorPath, '/memfs_projector/mmproj.gguf');
+  assert.equal(staged.projectorPath, '/memfs_projector/mmproj.gguf');
   assert.deepEqual(module.FS.mounts, [
     {
       mountpoint: '/workerfs_model',

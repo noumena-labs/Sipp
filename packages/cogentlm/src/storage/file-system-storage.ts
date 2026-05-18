@@ -1,5 +1,13 @@
 import { createAbortError } from '../utils/abort.js';
 
+export interface OpfsSyncAccessHandle {
+  read(buffer: Uint8Array, options?: { at?: number }): number;
+  write(buffer: Uint8Array, options?: { at?: number }): number;
+  truncate(size: number): void;
+  flush(): void;
+  close(): void;
+}
+
 /**
  * FileSystemStorage provides an abstraction for the Origin Private File System (OPFS),
  * allowing large assets to be streamed directly to browser-managed persistent storage.
@@ -22,6 +30,26 @@ export class FileSystemStorage {
       typeof navigator.storage !== 'undefined' &&
       typeof navigator.storage.getDirectory === 'function'
     );
+  }
+
+  public static async isSyncAccessSupported(): Promise<boolean> {
+    if (!FileSystemStorage.isSupported()) {
+      return false;
+    }
+    try {
+      const root = await navigator.storage.getDirectory();
+      const handle = await root.getFileHandle(
+        `cogent-sync-access-probe-${Date.now().toString(36)}`,
+        { create: true }
+      );
+      const createSyncAccessHandle = (handle as unknown as {
+        createSyncAccessHandle?: () => Promise<OpfsSyncAccessHandle>;
+      }).createSyncAccessHandle;
+      await root.removeEntry(handle.name).catch(() => {});
+      return typeof createSyncAccessHandle === 'function';
+    } catch {
+      return false;
+    }
   }
 
   private async ensureRoot(): Promise<FileSystemDirectoryHandle> {
@@ -49,6 +77,40 @@ export class FileSystemStorage {
       }
       return null;
     }
+  }
+
+  public async listFileNames(): Promise<string[]> {
+    const root = await this.ensureRoot();
+    const names: string[] = [];
+    const entries = (root as unknown as {
+      entries: () => AsyncIterable<[string, FileSystemFileHandle | FileSystemDirectoryHandle]>;
+    }).entries;
+    if (typeof entries !== 'function') {
+      return names;
+    }
+    for await (const [name, handle] of entries.call(root)) {
+      if (handle.kind === 'file') {
+        names.push(name);
+      }
+    }
+    return names;
+  }
+
+  public async createSyncAccessHandle(
+    fileName: string,
+    options: { create?: boolean } = {}
+  ): Promise<OpfsSyncAccessHandle> {
+    const root = await this.ensureRoot();
+    const handle = await root.getFileHandle(fileName, { create: options.create === true });
+    const createSyncAccessHandle = (handle as unknown as {
+      createSyncAccessHandle?: () => Promise<OpfsSyncAccessHandle>;
+    }).createSyncAccessHandle;
+    if (typeof createSyncAccessHandle !== 'function') {
+      throw new Error(
+        'OPFS sync access handles are unavailable. Large GGUF splitting must run in a browser worker that supports createSyncAccessHandle().'
+      );
+    }
+    return await createSyncAccessHandle.call(handle);
   }
 
   public async readText(fileName: string): Promise<string | null> {

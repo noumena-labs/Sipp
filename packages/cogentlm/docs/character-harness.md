@@ -4,6 +4,15 @@
 
 The host app still owns model loading, engine lifecycle, render assets, and business logic.
 
+## Native Migration Status
+
+The character harness is still implemented in TypeScript. The Rust migration
+does not yet port `character-agent.ts`, `action-grammar.ts`, or
+`action-parser.ts`; those remain the source of truth for character prompting,
+stream parsing, and action grammar behavior. The Phase 4 native bindings expose
+the lower-level `CogentEngine` surface first, and the character harness will be
+ported only after the Python and NAPI engine bindings are stable.
+
 ## 5-Line Quickstart
 
 If you already have a loaded `CogentEngine` named `engine`, this is enough to make a character talk.

@@ -68,7 +68,7 @@ test('MainThreadEngineRuntime fails projector-backed loads that do not expose a 
   const staged: StagedModelBundle = {
     sourceKind: 'file',
     modelPath: '/models/model.gguf',
-    multimodalProjectorPath: '/models/mmproj.gguf',
+    projectorPath: '/models/mmproj.gguf',
     isVisionModel: true,
     projectorStatus: 'explicit',
     modelName: 'vision-model.gguf',

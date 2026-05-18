@@ -17,45 +17,10 @@ typedef uint32_t CE_RequestId;
 
 typedef enum CE_TokenEmissionMode {
   CE_TOKEN_EMISSION_NONE = 0,
-  // Native appends to the streaming buffer; JS drains via the SAB ring on
-  // each ce_native_yield.  See request_queue.h for the wire format.
+  // Rust appends to the streaming buffer; JS drains it through the browser
+  // scheduler pump.
   CE_TOKEN_EMISSION_STREAMING_BUFFER = 1,
 } CE_TokenEmissionMode;
-
-typedef struct CE_InitConfig {
-  int32_t n_ctx;
-  int32_t n_batch;
-  int32_t n_ubatch;
-  int32_t n_seq_max;
-  int32_t n_threads;
-  int32_t n_threads_batch;
-  int32_t gpu_layers;
-  int32_t flash_attention;
-  int32_t kv_unified;
-  int32_t max_cached_sessions;
-  int32_t retained_prefix_tokens;
-  int32_t prefill_chunk_size;
-  int32_t prefix_cache_interval_tokens;
-  int32_t max_prefix_cache_entries;
-  int32_t scheduler_policy;
-  int32_t decode_token_reserve;
-  int32_t adaptive_prefill_chunking;
-  int32_t enable_runtime_observability;
-  int32_t enable_backend_profiling;
-  const char *mmproj_path;
-  int32_t multimodal_use_gpu;
-  int32_t image_min_tokens;
-  int32_t image_max_tokens;
-  int32_t sampling_repeat_last_n;
-  float sampling_repeat_penalty;
-  float sampling_frequency_penalty;
-  float sampling_presence_penalty;
-  int32_t sampling_top_k;
-  float sampling_top_p;
-  float sampling_min_p;
-  float sampling_temperature;
-  int32_t sampling_seed;
-} CE_InitConfig;
 
 typedef struct CE_RuntimeObservabilityMetrics {
   // Latency (User Experience)

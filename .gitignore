@@ -1,6 +1,7 @@
 node_modules/
 apps/*/node_modules/
 packages/*/node_modules/
+.venv/
 
 build/
 build-check/
@@ -11,6 +12,9 @@ apps/*/dist/
 packages/*/build/
 packages/*/build-*/
 packages/*/dist/
+packages/*/target/
+packages/third_party/*
+!packages/third_party/llama.cpp/
 packages/*/build-probe/
 packages/*/build-probe2/
 packages/*/a.out.js

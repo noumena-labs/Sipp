@@ -5,16 +5,13 @@
   "packageManager": "bun@1.3.11",
   "workspaces": [
     "packages/*",
-    "apps/benchmark",
-    "apps/avatar",
-    "apps/proactive-ui",
-    "apps/simulation",
-    "apps/examples"
+    "apps/*"
   ],
   "scripts": {
     "test": "bun test packages/*/src apps/*/src",
     "build": "bun run build:package",
     "build:package": "bun run --filter=@noumena-labs/cogentlm build",
+    "build:package:browser": "bun run --filter=@noumena-labs/cogentlm build:browser",
     "build:package:release": "bun run --filter=@noumena-labs/cogentlm build:release",
     "build:package:dev": "bun run --filter=@noumena-labs/cogentlm build:dev",
     "rebuild:package": "bun run --filter=@noumena-labs/cogentlm rebuild",
@@ -25,8 +22,9 @@
     "test:backend-ops:cuda": "bun run --filter=@noumena-labs/cogentlm test:backend-ops:cuda",
     "test:backend-ops:cuda:op": "bun run --filter=@noumena-labs/cogentlm test:backend-ops:cuda:op",
     "test:backend-ops:cuda:debug": "bun run --filter=@noumena-labs/cogentlm test:backend-ops:cuda:debug",
-    "benchmark:dev": "bun run build:package && bun run --filter=cogentlm-benchmark-app dev",
-    "benchmark:build": "bun run build:package && bun run --filter=cogentlm-benchmark-app build",
+    "benchmark:dev": "bun run build:package:browser && bun run --filter=cogentlm-benchmark-app dev",
+    "benchmark:browser:smoke": "bun run build:package:browser && bun run --filter=cogentlm-benchmark-app browser:smoke:ingest",
+    "benchmark:build": "bun run build:package:browser && bun run --filter=cogentlm-benchmark-app build",
     "benchmark:preview": "bun run --filter=cogentlm-benchmark-app preview",
     "avatar:dev": "bun run build:package && bun run --filter=cogentlm-avatar-app dev",
     "avatar:build": "bun run build:package && bun run --filter=cogentlm-avatar-app build",

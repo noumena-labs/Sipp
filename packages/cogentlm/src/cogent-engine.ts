@@ -5,6 +5,8 @@ import {
   QueryError,
   type ChatInput,
   type ChatOptions,
+  type EngineEvent,
+  type EngineState,
   type EngineObservability,
   type ObservabilityEvent,
   type ObservabilitySnapshot,
@@ -13,8 +15,10 @@ import {
   type ModelSource,
   type QueryInput,
   type QueryOptions,
+  type RequestResult,
 } from './model-management/model-types.js';
 import { MainThreadEngineRuntime } from './runtime/engine-runtime-main-thread.js';
+import type { BrowserRuntimeSmokeResult } from './runtime/browser-runtime-smoke-types.js';
 
 export interface CogentEngineOptions {
   moduleUrl?: string;
@@ -112,14 +116,48 @@ export class CogentEngine {
     return new CogentEngine(options);
   }
 
-  public async query(input: QueryInput, options?: QueryOptions): Promise<string> {
+  public static async browserRuntimeSmoke(
+    options: CogentEngineOptions = {}
+  ): Promise<BrowserRuntimeSmokeResult> {
+    const runtime = new MainThreadEngineRuntime({
+      ...options,
+      executionMode: 'main-thread',
+    });
+    try {
+      return await runtime.runBrowserRuntimeSmoke();
+    } finally {
+      runtime.close();
+    }
+  }
+
+  public async query(input: QueryInput, options?: QueryOptions): Promise<RequestResult> {
     this.assertOpen();
     return await this.#service.query(input, options);
   }
 
-  public async chat(input: ChatInput, options: ChatOptions = {}): Promise<string> {
+  public async queryResult(input: QueryInput, options?: QueryOptions): Promise<RequestResult> {
+    this.assertOpen();
+    return await this.#service.queryResult(input, options);
+  }
+
+  public async chat(input: ChatInput, options: ChatOptions = {}): Promise<RequestResult> {
     this.assertOpen();
     return await this.#service.chat(input, options);
+  }
+
+  public async chatResult(input: ChatInput, options: ChatOptions = {}): Promise<RequestResult> {
+    this.assertOpen();
+    return await this.#service.chatResult(input, options);
+  }
+
+  public state(): EngineState {
+    this.assertOpen();
+    return this.#service.currentState();
+  }
+
+  public subscribeEvents(listener: (event: EngineEvent) => void): () => void {
+    this.assertOpen();
+    return this.#service.subscribeEvents(listener);
   }
 
   public async close(): Promise<void> {

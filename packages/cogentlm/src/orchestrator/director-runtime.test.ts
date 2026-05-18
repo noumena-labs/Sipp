@@ -4,6 +4,8 @@ import test from 'node:test';
 import type {
   ChatInput,
   ChatOptions,
+  RequestResult,
+  TokenBatch,
 } from '../model-management/model-types.js';
 import { parseDirectorConfig } from './director-config.js';
 import { DirectorRuntime, type DirectorRuntimeEngine } from './director-runtime.js';
@@ -25,7 +27,7 @@ class FakeEngine implements DirectorRuntimeEngine {
   public async chat(
     input: ChatInput,
     options?: ChatOptions
-  ): Promise<string> {
+  ): Promise<RequestResult> {
     this.queryCalls += 1;
     if (typeof options === 'object' && options) {
       this.grammar = (options as any).grammar;
@@ -52,9 +54,41 @@ class FakeEngine implements DirectorRuntimeEngine {
     }
 
     const safeText = sanitizeFakeChatOutput(this.outputText);
-    options?.onToken?.([safeText]);
-    return safeText;
+    options?.onTokens?.(tokenBatch(safeText));
+    return requestResult(safeText);
   }
+}
+
+function requestResult(text: string): RequestResult {
+  return {
+    id: 'test',
+    text,
+    finishReason: 'stop',
+    stats: {
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheHits: 0,
+      prefillMs: 0,
+      decodeMs: 0,
+    },
+  };
+}
+
+function tokenBatch(text: string): TokenBatch {
+  return {
+    requestId: 'test',
+    streamId: 1,
+    sequenceStart: 0,
+    text,
+    frameCount: 1,
+    byteCount: new TextEncoder().encode(text).byteLength,
+    stats: {
+      framesSent: 1,
+      bytesSent: new TextEncoder().encode(text).byteLength,
+      framesDropped: 0,
+      batchesSent: 1,
+    },
+  };
 }
 
 function sanitizeFakeChatOutput(text: string): string {

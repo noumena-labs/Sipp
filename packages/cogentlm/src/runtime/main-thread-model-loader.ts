@@ -79,7 +79,7 @@ export class MainThreadModelLoader {
     return {
       sourceKind: descriptor.kind,
       modelPath,
-      multimodalProjectorPath: projectorPath,
+      projectorPath,
       isVisionModel: plan.detection.inspection.visionCapable,
       projectorStatus: plan.projectorStatus,
       modelName: plan.detection.modelName,

@@ -1,6 +1,6 @@
 import type { AssetInspection } from '../model-bundle/model-bundle-types.js';
-import type { ChatMessage } from '../core/inference-types.js';
-import type { BackendDeviceType, InferenceInitConfig } from '../types.js';
+import type { ChatMessage, StreamStats, TokenBatch, TokenFlushMode } from '../core/inference-types.js';
+import type { BackendDeviceType, NativeRuntimeConfig } from '../types.js';
 
 export type ModelModality = 'text' | 'vision';
 export type ModelStatus = 'ready' | 'needs_projector' | 'broken';
@@ -18,37 +18,14 @@ export type ObservabilityEventType =
   | 'close';
 
 export interface ModelLoadProgress {
-  phase: 'metadata' | 'download' | 'store' | 'load';
+  phase: 'metadata' | 'download' | 'split' | 'store' | 'load';
   loadedBytes: number;
   totalBytes: number | null;
   percent: number | null;
   assetName?: string;
 }
 
-export interface ModelRuntimeOptions {
-  nCtx?: number;
-  nBatch?: number;
-  nUbatch?: number;
-  nSeqMax?: number;
-  nThreads?: number;
-  nThreadsBatch?: number;
-  /** `-1` keeps automatic/full accelerator offload; `0` forces CPU-only. */
-  nGpuLayers?: number;
-  flashAttention?: InferenceInitConfig['flashAttention'];
-  kvUnified?: boolean;
-  maxCachedSessions?: number;
-  retainedPrefixTokens?: number;
-  prefillChunkSize?: number;
-  prefixCacheIntervalTokens?: number;
-  maxPrefixCacheEntries?: number;
-  schedulerPolicy?: InferenceInitConfig['schedulerPolicy'];
-  decodeTokenReserve?: number;
-  adaptivePrefillChunking?: boolean;
-  multimodalUseGpu?: boolean;
-  imageMinTokens?: number;
-  imageMaxTokens?: number;
-  sampling?: InferenceInitConfig['sampling'];
-}
+export type ModelRuntimeOptions = NativeRuntimeConfig;
 
 export interface ModelLoadOptions {
   signal?: AbortSignal;
@@ -95,7 +72,8 @@ export interface QueryOptions {
   session?: string;
   maxTokens?: number;
   signal?: AbortSignal;
-  onToken?: (tokens: string[]) => void;
+  onTokens?: (batch: TokenBatch) => void;
+  tokenFlush?: TokenFlushMode;
   grammar?: string;
 }
 
@@ -144,7 +122,7 @@ export interface RuntimeObservation {
   execution: {
     mode: 'main-thread' | 'worker';
     workerBacked: boolean;
-    tokenPath?: 'none' | 'streaming-buffer';
+    tokenPath?: 'none' | 'streaming-buffer' | 'callback';
   };
 
   /** Cumulative ms spent in `_ce_yield_drain` (SAB ring writes from native scratch). */
@@ -169,6 +147,89 @@ export interface BackendProfileObservation {
     backendName: string;
   }>;
 }
+
+export type EngineStatus = 'idle' | 'loading' | 'ready' | 'running' | 'error' | 'closed';
+export type EngineBackendName = 'cpu' | 'cuda' | 'metal' | 'vulkan' | 'webgpu' | 'unknown';
+export type RequestStatus = 'queued' | 'prefill' | 'decode' | 'completed' | 'failed' | 'cancelled';
+export type FinishReason = 'stop' | 'length' | 'cancelled' | 'error';
+
+export interface BackendInfo {
+  selected: EngineBackendName;
+  available: string[];
+  devices: Array<{
+    id: string | null;
+    name: string;
+    type: BackendDeviceType;
+    memoryTotalBytes?: number;
+    memoryFreeBytes?: number;
+  }>;
+}
+
+export interface RequestState {
+  id: string;
+  status: RequestStatus;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+export interface EngineStats {
+  requestsRunning: number;
+  requestsQueued: number;
+  requestsCompleted: number;
+  requestsFailed: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheHits: number;
+  prefillTokens: number;
+  ttftMs: number | null;
+  interTokenMs: number | null;
+  e2eMs: number | null;
+  tokensPerSecond: number | null;
+  prefillTokensPerSecond: number | null;
+  prefillMs: number;
+  decodeMs: number;
+  backendMs: number;
+  syncMs: number;
+  engineOverheadMs: number;
+}
+
+export interface EngineState {
+  status: EngineStatus;
+  model: ModelInfo | null;
+  backend: BackendInfo;
+  requests: RequestState[];
+  stats: EngineStats;
+  updatedAt: string;
+}
+
+export interface RequestStats {
+  inputTokens: number;
+  outputTokens: number;
+  cacheHits: number;
+  ttftMs: number | null;
+  interTokenMs: number | null;
+  e2eMs: number | null;
+  tokensPerSecond: number | null;
+  prefillMs: number;
+  decodeMs: number;
+}
+
+export interface RequestResult {
+  id: string;
+  text: string;
+  finishReason: FinishReason;
+  stats: RequestStats;
+}
+
+export type EngineEvent =
+  | { type: 'state'; state: EngineState }
+  | { type: 'load-progress'; loadedBytes: number; totalBytes: number | null; assetName?: string }
+  | { type: 'request-started'; requestId: string; streamId: number }
+  | { type: 'request-completed'; result: RequestResult }
+  | { type: 'request-failed'; requestId: string; error: string }
+  | { type: 'closed' };
+
+export type { StreamStats, TokenBatch, TokenFlushMode };
 
 export interface ObservabilitySnapshot {
   mode: ObservabilityMode;
@@ -202,6 +263,7 @@ export type QueryErrorCode =
   | 'STORAGE_CORRUPT'
   | 'REMOTE_METADATA_UNAVAILABLE'
   | 'REMOTE_LOAD_FAILED'
+  | 'STREAMING_UNAVAILABLE'
   | 'QUERY_FAILED';
 
 export class QueryError extends Error {
@@ -224,6 +286,11 @@ export interface AssetRecord {
   sourceUrl?: string;
   sourceEtag?: string;
   sourceLastModified?: string;
+  sourceBytes?: number;
+  sourcePartIndex?: number;
+  sourcePartCount?: number;
+  sourceFileName?: string;
+  sourceFileLastModified?: number;
   refCount: number;
   createdAt: string;
   inspection?: AssetInspection;

@@ -18,12 +18,12 @@ option(CE_WASM_AGGRESSIVE_OPT "Use -Ofast instead of -O3 (may affect precision)"
 option(CE_SUPPRESS_LLAMA_LOGS "Suppress llama.cpp info/debug logs in production" ON)
 option(CE_WASM_FILESYSTEM   "Enable Emscripten virtual filesystem support"     ON)
 option(CE_WASM_USE_JSPI     "Enable JSPI-based async exports"                  ON)
-option(CE_WASM_MEM64        "Enable wasm64 memory model"                       ON)
+option(CE_WASM_MEM64        "Enable wasm64 memory model"                       OFF)
 set(CE_WASM_LTO_MODE "FULL" CACHE STRING "LTO mode for release WASM builds")
 set_property(CACHE CE_WASM_LTO_MODE PROPERTY STRINGS OFF THIN FULL)
 
 set(CE_WASM_INITIAL_MEMORY "512MB" CACHE STRING "Initial WASM memory")
-set(CE_WASM_MAXIMUM_MEMORY "16384MB" CACHE STRING "Maximum WASM memory")
+set(CE_WASM_MAXIMUM_MEMORY "4096MB" CACHE STRING "Maximum WASM memory")
 set(CE_WASM_STACK_SIZE "16MB" CACHE STRING "WASM stack size")
 set(CE_WASM_PTHREAD_STACK_SIZE "2MB" CACHE STRING "Default pthread stack size")
 set(CE_WASM_PTHREAD_POOL_SIZE "4" CACHE STRING "Pthread pool size")
@@ -70,9 +70,6 @@ if(CE_WASM_PTHREADS)
         -sUSE_PTHREADS=1
         -sPTHREAD_POOL_SIZE=${CE_WASM_PTHREAD_POOL_SIZE}
         -sDEFAULT_PTHREAD_STACK_SIZE=${CE_WASM_PTHREAD_STACK_SIZE}
-        # CRITICAL: Proxy main() to a worker thread so browser main thread stays responsive
-        # This prevents WebGPU synchronization from blocking the UI
-        -sPROXY_TO_PTHREAD=1
     )
     add_compile_definitions(GGML_PTHREADS=1)
     add_compile_definitions(CE_WASM_PTHREAD_POOL_SIZE=${CE_WASM_PTHREAD_POOL_SIZE})

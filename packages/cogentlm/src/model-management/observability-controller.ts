@@ -7,6 +7,7 @@ import type {
 import type {
   BackendProfileObservation,
   EngineObservability,
+  ModelRuntimeOptions,
   ObservabilityEvent,
   ObservabilityEventType,
   ObservabilityMode,
@@ -58,17 +59,17 @@ export function resolveObservabilityMode(mode: ObservabilityMode | undefined): O
   return mode ?? 'off';
 }
 
-export function applyObservabilityMode<T extends object>(
-  runtime: T | undefined,
+export function applyObservabilityMode(
+  runtime: ModelRuntimeOptions | undefined,
   mode: ObservabilityMode
-): T & {
-  enableRuntimeObservability?: boolean;
-  enableBackendProfiling?: boolean;
-} {
+): ModelRuntimeOptions {
   return {
-    ...(runtime ?? ({} as T)),
-    enableRuntimeObservability: mode === 'runtime' || mode === 'profile',
-    enableBackendProfiling: mode === 'profile',
+    ...(runtime ?? {}),
+    observability: {
+      ...(runtime?.observability ?? {}),
+      runtimeMetrics: mode === 'runtime' || mode === 'profile',
+      backendProfiling: mode === 'profile',
+    },
   };
 }
 
@@ -83,6 +84,8 @@ export function toRuntimeObservation(
   const tokenPath =
     transport.activeTokenTransport === 'streaming-buffer'
       ? 'streaming-buffer'
+      : transport.activeTokenTransport === 'callback'
+        ? 'callback'
       : transport.activeTokenTransport === 'none'
         ? 'none'
         : undefined;

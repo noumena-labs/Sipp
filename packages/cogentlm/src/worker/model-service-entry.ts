@@ -1,5 +1,9 @@
 import { ModelService } from '../model-management/model-service.js';
-import { QueryError } from '../model-management/model-types.js';
+import {
+  QueryError,
+  type RequestResult,
+  type TokenBatch,
+} from '../model-management/model-types.js';
 import { getDefaultRuntimeUrls } from '../runtime-assets.js';
 import { MainThreadEngineRuntime } from '../runtime/engine-runtime-main-thread.js';
 import { StreamingRingWriter } from '../runtime/streaming-ring.js';
@@ -14,10 +18,12 @@ import {
 let service: ModelService | null = null;
 let serviceConfigFingerprint: string | null = null;
 let unsubscribeObservability: (() => void) | null = null;
+let unsubscribeEngineEvents: (() => void) | null = null;
 const activeCalls = new Map<number, AbortController>();
 // SAB streaming ring writer; set on `streaming-init`.  When null, streaming
-// is unavailable and requests with onToken will be rejected upstream.
+// is unavailable and requests with onTokens will be rejected upstream.
 let streamingRingWriter: StreamingRingWriter | null = null;
+let streamingTickQueued = false;
 
 type WorkerOperationRequest = Exclude<
   WorkerRequestMessage,
@@ -58,11 +64,12 @@ function ensureService(config: WorkerSerializableCogentConfig): ModelService {
   if (streamingRingWriter != null) {
     runtime.setStreamingRingWriter(streamingRingWriter);
   }
-  runtime.setStreamingTickCallback(() => {
-    post({ kind: 'streaming-tick' });
-  });
+  runtime.setStreamingTickCallback(scheduleStreamingTick);
   unsubscribeObservability = service.subscribeObservability((event) => {
     post({ kind: 'observability-event', event });
+  });
+  unsubscribeEngineEvents = service.subscribeEvents((event) => {
+    post({ kind: 'engine-event', event });
   });
   serviceConfigFingerprint = fingerprint;
   return service;
@@ -77,6 +84,17 @@ function toErrorMessage(error: unknown): string {
 
 function post(message: WorkerResponseMessage): void {
   self.postMessage(message);
+}
+
+function scheduleStreamingTick(): void {
+  if (streamingTickQueued) {
+    return;
+  }
+  streamingTickQueued = true;
+  self.setTimeout(() => {
+    streamingTickQueued = false;
+    post({ kind: 'streaming-tick' });
+  }, 0);
 }
 
 function abortActiveCall(callId: number): void {
@@ -116,31 +134,38 @@ async function runLoad(message: Extract<WorkerOperationRequest, { kind: 'models-
   );
 }
 
-// Wires the engine to emit tokens through the SAB ring (when `streaming`)
-// and publishes a `streaming-claim` message so the main thread can map the
-// native request id back to its call id.  When `streaming=false`, returns
-// {} so the engine selects TOKEN_EMISSION_NONE.
+// Wires the engine to emit tokens through the SAB ring and publishes a
+// `streaming-claim` message so the main thread can map the native request id
+// back to its call id.  When `streaming=false`, returns {} so the engine
+// selects TOKEN_EMISSION_NONE.
 function streamingOptionsFor(
   callId: number,
   streaming: boolean
 ): {
-  onToken?: (tokens: string[]) => void;
+  onTokens?: (batch: TokenBatch) => void;
   __internalRequestStarted?: (requestId: number) => void;
 } {
   if (!streaming) {
     return {};
   }
+  if (streamingRingWriter == null) {
+    throw new QueryError(
+      'STREAMING_UNAVAILABLE',
+      'Worker streaming requires SharedArrayBuffer. Enable cross-origin isolation or run without onTokens.'
+    );
+  }
   return {
-    // The engine sees a non-null onToken and selects StreamingBuffer; the
-    // body is never invoked because tokens go through the SAB ring drain
-    // hook on each ce_native_yield.
-    onToken: () => {},
+    // The engine sees a non-null onTokens and selects StreamingBuffer.
+    // The scheduler writes the ring and this callback is ignored.
+    onTokens: () => {},
     __internalRequestStarted: (requestId) =>
       post({ kind: 'streaming-claim', callId, nativeRequestId: requestId }),
   };
 }
 
-async function runQuery(message: Extract<WorkerOperationRequest, { kind: 'query' }>): Promise<string> {
+async function runQuery(
+  message: Extract<WorkerOperationRequest, { kind: 'query' }>
+): Promise<RequestResult> {
   return await withAbortController(message.callId, (signal) =>
     ensureService(message.config).query(message.input, {
       ...message.options,
@@ -150,9 +175,35 @@ async function runQuery(message: Extract<WorkerOperationRequest, { kind: 'query'
   );
 }
 
-async function runChat(message: Extract<WorkerOperationRequest, { kind: 'chat' }>): Promise<string> {
+async function runQueryResult(
+  message: Extract<WorkerOperationRequest, { kind: 'query-result' }>
+): Promise<unknown> {
+  return await withAbortController(message.callId, (signal) =>
+    ensureService(message.config).queryResult(message.input, {
+      ...message.options,
+      signal,
+      ...streamingOptionsFor(message.callId, message.options.streaming),
+    })
+  );
+}
+
+async function runChat(
+  message: Extract<WorkerOperationRequest, { kind: 'chat' }>
+): Promise<RequestResult> {
   return await withAbortController(message.callId, (signal) =>
     ensureService(message.config).chat(message.input, {
+      ...message.options,
+      signal,
+      ...streamingOptionsFor(message.callId, message.options.streaming),
+    })
+  );
+}
+
+async function runChatResult(
+  message: Extract<WorkerOperationRequest, { kind: 'chat-result' }>
+): Promise<unknown> {
+  return await withAbortController(message.callId, (signal) =>
+    ensureService(message.config).chatResult(message.input, {
       ...message.options,
       signal,
       ...streamingOptionsFor(message.callId, message.options.streaming),
@@ -166,6 +217,9 @@ async function handleRequest(message: WorkerOperationRequest): Promise<unknown> 
       return await runLoad(message);
     case 'models-list':
       return await ensureService(message.config).list();
+    case 'models-unload':
+      await ensureService(message.config).unload();
+      return null;
     case 'models-remove': {
       const modelService = ensureService(message.config);
       await modelService.remove(message.id);
@@ -173,8 +227,12 @@ async function handleRequest(message: WorkerOperationRequest): Promise<unknown> 
     }
     case 'query':
       return await runQuery(message);
+    case 'query-result':
+      return await runQueryResult(message);
     case 'chat':
       return await runChat(message);
+    case 'chat-result':
+      return await runChatResult(message);
     case 'close':
       for (const callId of activeCalls.keys()) {
         abortActiveCall(callId);
@@ -182,6 +240,9 @@ async function handleRequest(message: WorkerOperationRequest): Promise<unknown> 
       service?.close();
       unsubscribeObservability?.();
       unsubscribeObservability = null;
+      unsubscribeEngineEvents?.();
+      unsubscribeEngineEvents = null;
+      streamingTickQueued = false;
       service = null;
       serviceConfigFingerprint = null;
       return undefined;

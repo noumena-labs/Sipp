@@ -65,7 +65,7 @@ export interface LocalProjectorResolutionResult<T> {
 export interface StagedModelBundle {
   sourceKind: ModelBundleSourceKind;
   modelPath: string;
-  multimodalProjectorPath: string | null;
+  projectorPath: string | null;
   isVisionModel: boolean;
   projectorStatus: ModelBundleProjectorStatus;
   modelName: string;

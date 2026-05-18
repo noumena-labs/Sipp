@@ -2,6 +2,14 @@
 
 A high-performance, WebGPU-accelerated inference and vision runtime for executing Large Language Models (LLMs) and computer vision locally in the browser.
 
+## Runtime Architecture Direction
+
+The browser package exposes the unified runtime contract:
+`EngineState`, `EngineStats`, `EngineEvent`, and `RequestResult`.
+Browser inference is owned by the Rust browser engine linked into the
+Emscripten/WebGPU artifact. Emscripten remains the browser platform/link layer
+for llama.cpp, ggml-webgpu, mtmd, JSPI, WorkerFS, and WebGPU glue.
+
 ```ts
 import { CogentEngine } from 'cogentlm';
 
@@ -12,9 +20,33 @@ const answer = await engine.chat([
   { role: 'user', content: 'Explain browser-hosted inference in one paragraph.' },
 ]);
 
-console.log(answer);
+console.log(answer.text);
 await engine.close();
 ```
+
+## Engine State And Events
+
+Use `state()` for the current point-in-time engine view and
+`subscribeEvents()` for structured runtime events:
+
+```ts
+const unsubscribe = engine.subscribeEvents((event) => {
+  if (event.type === 'request-completed') {
+    console.log(event.result.stats.tokensPerSecond);
+  }
+});
+
+const result = await engine.query('Explain browser LLM inference.', {
+  maxTokens: 64,
+});
+
+console.log(result.text);
+console.log(engine.state().backend.selected);
+unsubscribe();
+```
+
+Worker mode still uses `postMessage` for state/result/events. SharedArrayBuffer
+is required for worker token streaming when `onTokens` is attached.
 
 ## Observability
 
@@ -23,7 +55,7 @@ Observability is opt-in. Use `"runtime"` for request/runtime metrics or `"profil
 ```ts
 await engine.models.load('https://example.com/model.gguf', {
   observability: 'profile',
-  runtime: { nCtx: 4096 },
+  runtime: { context: { nCtx: 4096 } },
 });
 
 const unsubscribe = engine.observability.subscribe(({ type, snapshot }) => {
@@ -32,11 +64,13 @@ const unsubscribe = engine.observability.subscribe(({ type, snapshot }) => {
   }
 });
 
-await engine.chat([{ role: 'user', content: 'Measure this request.' }]);
+const measured = await engine.chat([{ role: 'user', content: 'Measure this request.' }]);
+console.log(measured.stats.tokensPerSecond);
 unsubscribe();
 ```
 
-`chat()` and `query()` still return only a string. Metrics are read from `engine.observability.current()` and lifecycle events are emitted only at load, query, error, and close boundaries.
+`chat()` and `query()` return `RequestResult`, including final text and request
+metrics. Metrics are also available from `engine.observability.current()`.
 
 ## Model Lifecycle
 
@@ -60,6 +94,8 @@ await engine.models.remove(loaded.id);
 
 `ModelInfo.id` is the installed model id for the persisted base-model entry. If a model has already been validated with a projector, later `engine.models.load(id)` reuses that stored pairing automatically. Installed entries and pairings live in OPFS, so they survive tab refresh and browser restart for the same origin.
 
+Large monolithic GGUF inputs use the browser cache policy only in the browser package: files at or below 2 GiB use the direct single-file path, while larger remote URLs and local `File` imports are split into llama.cpp-compatible OPFS shards by the Rust-backed browser ingest layer. This OPFS split path is not used by native Rust, Python, or Node.
+
 Managed storage requires OPFS. If OPFS is unavailable, loading fails clearly instead of silently falling back to transient memory.
 
 ## Worker Mode
@@ -77,6 +113,7 @@ const reply = await engine.chat([
   { role: 'system', content: 'Be concise.' },
   { role: 'user', content: 'Summarize the current model.' },
 ]);
+console.log(reply.text);
 ```
 
 Use `engine.query(...)` only when you already have a complete raw prompt string.
@@ -88,6 +125,7 @@ expects:
 const text = await engine.query(
   '<|im_start|>user\nSummarize the current model.<|im_end|>\n<|im_start|>assistant\n'
 );
+console.log(text.text);
 
 const vision = await engine.chat({
   messages: [{ role: 'user', content: 'What is in this image?' }],
@@ -95,14 +133,15 @@ const vision = await engine.chat({
 });
 ```
 
-Streaming is available through `onToken`:
+Streaming is available through `onTokens`:
 
 ```ts
 const output = await engine.chat([{ role: 'user', content: 'Write a haiku.' }], {
-  onToken: (tokens) => {
-    console.log(tokens.join(''));
+  onTokens: (batch) => {
+    console.log(batch.text);
   },
 });
+console.log(output.text);
 ```
 
 ## Public Exports
@@ -112,6 +151,15 @@ const output = await engine.chat([{ role: 'user', content: 'Write a haiku.' }], 
 - `ModelSource`
 - `ModelLoadOptions`
 - `ModelInfo`
+- `EngineState`
+- `EngineStats`
+- `EngineEvent`
+- `BackendInfo`
+- `RequestResult`
+- `RequestState`
+- `RequestStats`
+- `BrowserRuntimeSmokeResult`
+- `BrowserGgufIngestSmokeResult`
 - `ObservabilityMode`
 - `EngineObservability`
 - `ObservabilityEvent`
@@ -125,6 +173,8 @@ const output = await engine.chat([{ role: 'user', content: 'Write a haiku.' }], 
 - `ChatOptions`
 - `QueryInput`
 - `QueryOptions`
+- `TokenBatch`
+- `StreamStats`
 - `QueryError`
 
 Custom-hosted runtime assets can be supplied with `CogentEngine.create({ moduleUrl, wasmUrl })`.

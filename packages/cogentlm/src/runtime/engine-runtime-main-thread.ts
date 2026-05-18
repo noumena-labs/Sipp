@@ -6,11 +6,12 @@ import {
   GenerateRequest,
   GenerateRequestId,
   GenerateResponse,
-  InferenceInitConfig,
   InternalBundleDescriptor,
+  NativeRuntimeConfig,
   PromptOptions,
   StagedModelBundle,
   StageModelBundleOptions,
+  TokenBatch,
   RuntimeAggregateObservabilityMetrics,
   TransportObservability,
 } from '../types.js';
@@ -34,9 +35,218 @@ import { createAbortError } from '../utils/abort.js';
 import { asErrorMessage } from '../utils/error.js';
 import { QueuedRequestScheduler } from './scheduler.js';
 import { resolveRuntimeUrls } from '../runtime-assets.js';
+import type { BrowserRuntimeSmokeResult } from './browser-runtime-smoke-types.js';
 
 function normalizePromptText(value: string): string {
   return value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+function resolveRuntimeSiblingUrl(moduleUrl: string, extension: string): string {
+  const parsedModuleUrl = new URL(moduleUrl);
+  const filename = parsedModuleUrl.pathname.split('/').pop() ?? 'cogentlm-wasm.js';
+  const stem = filename.endsWith('.js') ? filename.slice(0, -'.js'.length) : filename;
+  return new URL(`${stem}${extension}`, parsedModuleUrl).toString();
+}
+
+const BROWSER_SMOKE_DIRECT_LOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+const BROWSER_SMOKE_SHARD_MAX_BYTES = 128;
+const GGUF_MAGIC = 0x4655_4747;
+const GGUF_VALUE_STRING = 8;
+const GGUF_ALIGNMENT = 32;
+
+function alignTo(value: number, alignment: number): number {
+  return Math.ceil(value / alignment) * alignment;
+}
+
+function appendU32(bytes: number[], value: number): void {
+  bytes.push(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff);
+}
+
+function appendU64(bytes: number[], value: number): void {
+  let remaining = BigInt(value);
+  for (let index = 0; index < 8; index += 1) {
+    bytes.push(Number(remaining & 0xffn));
+    remaining >>= 8n;
+  }
+}
+
+function appendString(bytes: number[], value: string): void {
+  const encoded = new TextEncoder().encode(value);
+  appendU64(bytes, encoded.byteLength);
+  bytes.push(...encoded);
+}
+
+function buildBrowserSmokeGguf(): Uint8Array {
+  const tensors = [
+    { name: 'blk.0.weight', fill: 1 },
+    { name: 'blk.1.weight', fill: 2 },
+    { name: 'output.weight', fill: 3 },
+  ];
+  const metadata: number[] = [];
+  const tensorData: number[] = [];
+  const tensorOffsets: number[] = [];
+
+  appendU32(metadata, GGUF_MAGIC);
+  appendU32(metadata, 3);
+  appendU64(metadata, tensors.length);
+  appendU64(metadata, 1);
+  appendString(metadata, 'general.architecture');
+  appendU32(metadata, GGUF_VALUE_STRING);
+  appendString(metadata, 'llama');
+
+  for (const tensor of tensors) {
+    const nextOffset = alignTo(tensorData.length, GGUF_ALIGNMENT);
+    while (tensorData.length < nextOffset) {
+      tensorData.push(0);
+    }
+    tensorOffsets.push(nextOffset);
+    tensorData.push(...new Array<number>(64).fill(tensor.fill));
+  }
+
+  for (let index = 0; index < tensors.length; index += 1) {
+    appendString(metadata, tensors[index].name);
+    appendU32(metadata, 1);
+    appendU64(metadata, 16);
+    appendU32(metadata, 0);
+    appendU64(metadata, tensorOffsets[index]);
+  }
+
+  const dataOffset = alignTo(metadata.length, GGUF_ALIGNMENT);
+  while (metadata.length < dataOffset) {
+    metadata.push(0);
+  }
+  metadata.push(...tensorData);
+  return new Uint8Array(metadata);
+}
+
+function runBrowserGgufIngestSmoke(bridge: WasmBridge): BrowserRuntimeSmokeResult['ggufIngest'] {
+  try {
+    const layoutForLargeFile = bridge.browserCacheLayout(
+      BROWSER_SMOKE_DIRECT_LOAD_MAX_BYTES + 1,
+      true,
+      BROWSER_SMOKE_DIRECT_LOAD_MAX_BYTES,
+      512 * 1024 * 1024
+    );
+    const source = buildBrowserSmokeGguf();
+    const readAt = (offset: number, target: Uint8Array): number => {
+      const start = Math.trunc(offset);
+      const end = start + target.byteLength;
+      if (start < 0 || end > source.byteLength) {
+        return -1;
+      }
+      target.set(source.subarray(start, end));
+      return 0;
+    };
+    const plannedShardCount = bridge.planGgufSplitCount(
+      source.byteLength,
+      BROWSER_SMOKE_SHARD_MAX_BYTES,
+      { readAt }
+    );
+    let activeShard = false;
+    let streamedShardCount = 0;
+    let streamedBytes = 0;
+
+    bridge.splitGgufStream(
+      source.byteLength,
+      'browser-smoke-model',
+      BROWSER_SMOKE_SHARD_MAX_BYTES,
+      {
+        readAt,
+        openShard: (_path, _index, count) => {
+          if (count !== plannedShardCount || activeShard) {
+            return -1;
+          }
+          activeShard = true;
+          return 0;
+        },
+        writeShard: (bytes) => {
+          if (!activeShard) {
+            return -1;
+          }
+          streamedBytes += bytes.byteLength;
+          return 0;
+        },
+        closeShard: () => {
+          if (!activeShard) {
+            return -1;
+          }
+          activeShard = false;
+          streamedShardCount += 1;
+          return 0;
+        },
+      }
+    );
+
+    if (layoutForLargeFile !== 'split-gguf') {
+      throw new Error(`unexpected browser cache layout: ${layoutForLargeFile}`);
+    }
+    if (plannedShardCount !== 2 || streamedShardCount !== plannedShardCount || streamedBytes <= 0) {
+      throw new Error(
+        `unexpected GGUF ingest result: planned=${plannedShardCount} streamed=${streamedShardCount} bytes=${streamedBytes}`
+      );
+    }
+
+    return {
+      available: true,
+      layoutForLargeFile,
+      plannedShardCount,
+      streamedShardCount,
+      streamedBytes,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      available: false,
+      layoutForLargeFile: null,
+      plannedShardCount: null,
+      streamedShardCount: 0,
+      streamedBytes: 0,
+      error: asErrorMessage(error),
+    };
+  }
+}
+
+function runBrowserRustEngineSmoke(bridge: WasmBridge): BrowserRuntimeSmokeResult['rustEngine'] {
+  let engine = 0;
+  try {
+    const abiVersion = bridge.rustBrowserEngineAbiVersion();
+    if (abiVersion <= 0) {
+      throw new Error(`Rust browser engine ABI is unavailable: version ${abiVersion}.`);
+    }
+    engine = bridge.rustBrowserEngineCreate();
+    if (engine === 0) {
+      throw new Error('Rust browser engine create returned a null handle.');
+    }
+    const engineId = bridge.rustBrowserEngineId(engine);
+    if (engineId <= 0) {
+      throw new Error(`Rust browser engine returned invalid id ${engineId}.`);
+    }
+    const closeStatus = bridge.rustBrowserEngineClose(engine);
+    engine = 0;
+    if (closeStatus !== 0) {
+      throw new Error(`Rust browser engine close failed with status ${closeStatus}.`);
+    }
+    return {
+      available: true,
+      abiVersion,
+      engineId,
+      error: null,
+    };
+  } catch (error) {
+    if (engine !== 0) {
+      try {
+        bridge.rustBrowserEngineClose(engine);
+      } catch {
+        /* ignore cleanup failure in smoke error path */
+      }
+    }
+    return {
+      available: false,
+      abiVersion: 0,
+      engineId: null,
+      error: asErrorMessage(error),
+    };
+  }
 }
 
 export class MainThreadEngineRuntime implements EngineRuntime {
@@ -54,8 +264,9 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private readonly executionMode: EngineExecutionMode;
   private queuedPromptCallbacks = new Map<
     GenerateRequestId,
-    ((tokens: string[]) => void) | undefined
+    ((batch: TokenBatch) => void) | undefined
   >();
+  private queuedPromptTokenFlushModes = new Map<GenerateRequestId, 'batch' | 'token'>();
   private queuedPromptCallbackErrors = new Map<GenerateRequestId, unknown>();
   private readonly tracker = new RequestTracker<GenerateResponse>();
   private readonly scheduler: QueuedRequestScheduler;
@@ -63,9 +274,9 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private backendProfilingEnabled = false;
   private transportObservability: TransportObservability;
   private streamingTickCallback: (() => void) | undefined;
-  // Worker-side SAB ring writer.  When set, requests with onToken run in
-  // StreamingBuffer emission mode; otherwise streaming is rejected with an
-  // explicit error (cross-origin isolation required).
+  // Worker-side SAB ring writer.  When set, requests with onTokens use the
+  // SAB fast path; otherwise the scheduler delivers TokenBatch values through
+  // callbacks/postMessage.
   private streamingRingWriter: StreamingRingWriter | null = null;
   constructor(private config: CogentConfig = {}) {
     this.executionMode = config.executionMode === 'worker' ? 'worker' : 'main-thread';
@@ -74,6 +285,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.scheduler = new QueuedRequestScheduler({
       tracker: this.tracker,
       queuedPromptCallbacks: this.queuedPromptCallbacks,
+      queuedPromptTokenFlushModes: this.queuedPromptTokenFlushModes,
       queuedPromptCallbackErrors: this.queuedPromptCallbackErrors,
       getTransportObservability: () => this.transportObservability,
       getBridge: () => this.getReadyEngineBridge(),
@@ -212,6 +424,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
   private releaseTokenState(requestId: GenerateRequestId): void {
     this.queuedPromptCallbacks.delete(requestId);
+    this.queuedPromptTokenFlushModes.delete(requestId);
     this.queuedPromptCallbackErrors.delete(requestId);
     this.refreshTokenTransportObservability();
   }
@@ -243,15 +456,15 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   }
 
   private updateTokenTransportObservability(
-    onToken: ((tokens: string[]) => void) | undefined
+    onTokens: ((batch: TokenBatch) => void) | undefined
   ): void {
-    if (onToken == null) {
+    if (onTokens == null) {
       this.refreshTokenTransportObservability();
       return;
     }
 
     this.transportObservability.activeTokenTransport =
-      this.streamingRingWriter != null ? 'streaming-buffer' : 'none';
+      this.streamingRingWriter != null ? 'streaming-buffer' : 'callback';
   }
 
   private refreshTokenTransportObservability(): void {
@@ -341,6 +554,9 @@ export class MainThreadEngineRuntime implements EngineRuntime {
           if (path.endsWith('.wasm')) {
             return wasmUrl;
           }
+          if (path.endsWith('.worker.js')) {
+            return resolveRuntimeSiblingUrl(moduleUrl, '.worker.js');
+          }
           if (userLocateFile) {
             return userLocateFile(path, prefix);
           }
@@ -374,12 +590,55 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return this.modelLoader.stageModelBundle(module, descriptor, options);
   }
 
+  public async browserCacheLayout(
+    sourceBytes: number,
+    sourceBytesKnown: boolean,
+    directLoadMaxBytes: number,
+    shardMaxBytes: number
+  ) {
+    await this.ensureModule();
+    return this.getLoadedWasmBridge().browserCacheLayout(
+      sourceBytes,
+      sourceBytesKnown,
+      directLoadMaxBytes,
+      shardMaxBytes
+    );
+  }
+
+  public async planGgufSplitCount(
+    sourceBytes: number,
+    shardMaxBytes: number,
+    callbacks: Parameters<WasmBridge['planGgufSplitCount']>[2]
+  ): Promise<number> {
+    await this.ensureModule();
+    return this.getLoadedWasmBridge().planGgufSplitCount(
+      sourceBytes,
+      shardMaxBytes,
+      callbacks
+    );
+  }
+
+  public async splitGgufStream(
+    sourceBytes: number,
+    outputPrefix: string,
+    shardMaxBytes: number,
+    callbacks: Parameters<WasmBridge['splitGgufStream']>[3]
+  ): Promise<void> {
+    await this.ensureModule();
+    this.getLoadedWasmBridge().splitGgufStream(
+      sourceBytes,
+      outputPrefix,
+      shardMaxBytes,
+      callbacks
+    );
+  }
+
   /**
-   * Initialize engine state with a model path in MEMFS.
+   * Initialize engine state with a model path mounted in the wasm filesystem.
    */
   public async loadRuntimeModel(
     modelPathOrBundle: string | StagedModelBundle,
-    config?: InferenceInitConfig
+    config?: NativeRuntimeConfig
   ): Promise<void> {
     const module = await this.ensureModule();
     const bridge = this.getLoadedWasmBridge();
@@ -401,22 +660,31 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     const effectiveConfig =
       typeof modelPathOrBundle === 'string' ||
         this.hasExplicitProjectorPath(config) ||
-        modelPathOrBundle.multimodalProjectorPath == null
+        modelPathOrBundle.projectorPath == null
         ? config
         : {
           ...config,
-          multimodalProjectorPath: modelPathOrBundle.multimodalProjectorPath,
+          multimodal: {
+            ...config?.multimodal,
+            projectorPath: modelPathOrBundle.projectorPath,
+          },
         };
     const normalizedConfig = normalizeInitConfig(effectiveConfig);
-    const expectsMediaSupport = normalizedConfig.multimodalProjectorPath != null;
+    const expectsMediaSupport = effectiveConfig?.multimodal?.projectorPath != null;
     this.runtimeObservabilityEnabled =
-      normalizedConfig.enableRuntimeObservability > 0;
-    this.backendProfilingEnabled = normalizedConfig.enableBackendProfiling > 0;
+      effectiveConfig?.observability?.runtimeMetrics === true ||
+      effectiveConfig?.observability?.backendProfiling === true;
+    this.backendProfilingEnabled = effectiveConfig?.observability?.backendProfiling === true;
     this.transportObservability.enabled = this.runtimeObservabilityEnabled;
     try {
       const result = await bridge.loadRuntimeModel(modelPath, normalizedConfig);
       if (result !== 0) {
-        throw new Error(`Failed to initialize engine. Code: ${result}`);
+        const detail = bridge.readLastEngineError();
+        throw new Error(
+          detail.length > 0
+            ? `Failed to initialize engine. Code: ${result}. ${detail}`
+            : `Failed to initialize engine. Code: ${result}`
+        );
       }
       this.engineInitialized = true;
       this.cachedMediaMarker = bridge.readMediaMarker();
@@ -439,10 +707,10 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     }
   }
 
-  private hasExplicitProjectorPath(config: InferenceInitConfig | undefined): boolean {
+  private hasExplicitProjectorPath(config: NativeRuntimeConfig | undefined): boolean {
     return (
-      typeof config?.multimodalProjectorPath === 'string' &&
-      config.multimodalProjectorPath.trim().length > 0
+      typeof config?.multimodal?.projectorPath === 'string' &&
+      config.multimodal.projectorPath.trim().length > 0
     );
   }
 
@@ -506,25 +774,17 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   ): Promise<GenerateRequestId> {
     const bridge = this.getReadyEngineBridge();
     const request = this.buildGenerateRequest(contextKey, promptText, options);
-    const onToken = typeof options === 'object' ? options.onToken : undefined;
+    const onTokens = typeof options === 'object' ? options.onTokens : undefined;
     const signal = typeof options === 'object' ? options.signal : undefined;
 
     if (signal?.aborted) {
       throw createAbortError('Prompt was aborted before it was enqueued.');
     }
 
-    this.updateTokenTransportObservability(onToken);
+    this.updateTokenTransportObservability(onTokens);
 
-    // Streaming requires a worker-side SAB ring writer.  In worker mode the
-    // worker entry installs one before enqueueing; on the main thread there
-    // is no streaming consumer and onToken with no ring is a usage error.
-    if (onToken != null && this.streamingRingWriter == null) {
-      throw new Error(
-        'onToken streaming requires worker execution mode with cross-origin isolation (SAB).'
-      );
-    }
     const emissionMode =
-      onToken == null ? TOKEN_EMISSION_NONE : TOKEN_EMISSION_STREAMING_BUFFER;
+      onTokens == null ? TOKEN_EMISSION_NONE : TOKEN_EMISSION_STREAMING_BUFFER;
 
     let requestId: GenerateRequestId = 0;
     if (request.media != null && request.media.length > 0) {
@@ -576,8 +836,12 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       }
     }
 
-    if (onToken != null) {
-      this.queuedPromptCallbacks.set(requestId, onToken);
+    if (onTokens != null) {
+      this.queuedPromptCallbacks.set(requestId, onTokens);
+      this.queuedPromptTokenFlushModes.set(
+        requestId,
+        typeof options === 'object' ? options.tokenFlush ?? 'token' : 'token'
+      );
     }
 
     if (signal != null) {
@@ -676,5 +940,28 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     } catch (error) {
       throw new Error(`Failed to parse backend observability: ${asErrorMessage(error)}`);
     }
+  }
+
+  public async runBrowserRuntimeSmoke(): Promise<BrowserRuntimeSmokeResult> {
+    await this.initModule();
+    const bridge = this.getLoadedWasmBridge();
+    const rustEngine = runBrowserRustEngineSmoke(bridge);
+    const ggufIngest = runBrowserGgufIngestSmoke(bridge);
+    const rawBackend = await bridge.getBackendObservabilityJson();
+    const backend =
+      rawBackend == null ? null : parseBackendObservabilityJson(rawBackend);
+    const webgpuReady = Boolean(
+      backend?.webgpuCompiled &&
+      backend.webgpuRegistered &&
+      backend.webgpuDeviceCount > 0 &&
+      backend.gpuOffloadSupported
+    );
+
+    return {
+      rustEngine,
+      ggufIngest,
+      backend,
+      webgpuReady,
+    };
   }
 }
