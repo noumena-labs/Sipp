@@ -61,7 +61,7 @@ try {
   const pieces = [];
   const result = await engine.chat(
     [{ role: 'user', content: prompt }],
-    { maxTokens: Number(process.env.COGENTLM_MAX_TOKENS ?? 32) },
+    { maxTokens: Number(process.env.COGENTLM_MAX_TOKENS ?? 1024) },
     batch => {
       pieces.push(batch.text);
       process.stdout.write(batch.text);

@@ -1995,14 +1995,16 @@ fn parse_stats_mode(value: &str) -> Result<StatsMode> {
 }
 
 fn parse_gpu_layers(value: &str) -> Result<GpuLayerConfig> {
-    let normalized = normalize_choice(value);
-    match normalized.as_str() {
-        "auto" => Ok(GpuLayerConfig::Auto),
-        "all" | "full" => Ok(GpuLayerConfig::All),
-        _ => normalized
+    let trimmed = value.trim();
+    if trimmed.eq_ignore_ascii_case("auto") {
+        Ok(GpuLayerConfig::Auto)
+    } else if trimmed.eq_ignore_ascii_case("all") || trimmed.eq_ignore_ascii_case("full") {
+        Ok(GpuLayerConfig::All)
+    } else {
+        trimmed
             .parse::<i32>()
             .map(GpuLayerConfig::Count)
-            .map_err(|_| invalid_arg("gpuLayers must be one of: auto, all, or an integer count")),
+            .map_err(|_| invalid_arg("gpuLayers must be one of: auto, all, or an integer count"))
     }
 }
 

@@ -17,16 +17,16 @@ export declare class CogentEngine {
 export declare class ModelService {
   constructor(storePath: string)
   get closed(): boolean
-  loadPath(modelPath: string, options?: ModelLoadOptions | undefined | null): Promise<LoadedModelInfo>
-  loadVision(modelPath: string, projectorPath: string, options?: ModelLoadOptions | undefined | null): Promise<LoadedModelInfo>
-  loadInstalled(modelId: string, options?: ModelLoadOptions | undefined | null): Promise<LoadedModelInfo>
+  loadPath(modelPath: string, options?: ModelLoadOptions | undefined | null): Promise<unknown>
+  loadVision(modelPath: string, projectorPath: string, options?: ModelLoadOptions | undefined | null): Promise<unknown>
+  loadInstalled(modelId: string, options?: ModelLoadOptions | undefined | null): Promise<unknown>
   unload(): Promise<unknown>
   remove(modelId: string): Promise<unknown>
   list(): Array<ManagedModelInfo>
-  current(): ManagedModelInfo | undefined | null
-  query(prompt: string, options?: QueryOptions | undefined | null, onTokens?: TokenBatchCallback | undefined | null): Promise<RequestResult>
-  chat(messages: Array<ChatMessage>, options?: QueryOptions | undefined | null, onTokens?: TokenBatchCallback | undefined | null): Promise<RequestResult>
-  state(): Promise<ModelServiceState>
+  current(): ManagedModelInfo | null
+  query(prompt: string, options?: QueryOptions | undefined | null, onTokens?: TokenBatchCallback | undefined | null): Promise<unknown>
+  chat(messages: Array<ChatMessage>, options?: QueryOptions | undefined | null, onTokens?: TokenBatchCallback | undefined | null): Promise<unknown>
+  state(): Promise<unknown>
   close(): Promise<unknown>
   drainEvents(): Array<EngineEvent>
 }
@@ -45,6 +45,8 @@ export interface BackendInfo {
   devices: Array<BackendDevice>
 }
 
+export declare function backendObservabilityJson(includeDetails?: boolean | undefined | null): string
+
 export interface BackendSelection {
   requested: string
   selected: string
@@ -53,66 +55,21 @@ export interface BackendSelection {
   reason?: string
 }
 
-export declare function backendObservabilityJson(includeDetails?: boolean | undefined | null): string
+export interface CacheRuntimeConfig {
+  mode?: string
+  retainedPrefixTokens?: number
+  snapshotIntervalTokens?: number
+  maxSnapshotEntries?: number
+  maxSnapshotBytes?: number
+  maxSessionEntries?: number
+  cacheKeyPolicy?: string
+  enableContextCheckpoints?: boolean
+  checkpointEveryTokens?: number
+}
 
 export interface ChatMessage {
   role: string
   content: string
-}
-
-export interface LogitBiasConfig {
-  token: number
-  bias: number
-}
-
-export interface SamplingRuntimeConfig {
-  samplers?: Array<string>
-  seed?: number
-  topK?: number
-  topP?: number
-  minP?: number
-  typicalP?: number
-  xtcProbability?: number
-  xtcThreshold?: number
-  topNSigma?: number
-  temperature?: number
-  dynatempRange?: number
-  dynatempExponent?: number
-  repeatLastN?: number
-  repeatPenalty?: number
-  frequencyPenalty?: number
-  presencePenalty?: number
-  dryMultiplier?: number
-  dryBase?: number
-  dryAllowedLength?: number
-  dryPenaltyLastN?: number
-  drySequenceBreakers?: Array<string>
-  mirostat?: number
-  mirostatTau?: number
-  mirostatEta?: number
-  minKeep?: number
-  nProbs?: number
-  logitBias?: Array<LogitBiasConfig>
-  ignoreEos?: boolean
-  grammarLazy?: boolean
-  preservedTokens?: Array<number>
-  backendSampling?: boolean
-}
-
-export interface ModelPlacementConfig {
-  devices?: Array<string>
-  gpuLayers?: string
-  splitMode?: string
-  mainGpu?: number
-  tensorSplit?: Array<number>
-  useMmap?: boolean
-  useMlock?: boolean
-  fitParams?: boolean
-  fitParamsMinCtx?: number
-  fitParamsTargetBytes?: Array<number>
-  checkTensors?: boolean
-  noExtraBufts?: boolean
-  noHost?: boolean
 }
 
 export interface ContextRuntimeConfig {
@@ -138,64 +95,6 @@ export interface ContextRuntimeConfig {
   yarnAttnFactor?: number
   yarnBetaFast?: number
   yarnBetaSlow?: number
-}
-
-export interface SchedulerRuntimeConfig {
-  continuousBatching?: boolean
-  policy?: string
-  decodeTokenReserve?: number
-  adaptivePrefillChunking?: boolean
-  prefillChunkSize?: number
-  maxRunningRequests?: number
-  maxQueuedRequests?: number
-}
-
-export interface CacheRuntimeConfig {
-  mode?: string
-  retainedPrefixTokens?: number
-  snapshotIntervalTokens?: number
-  maxSnapshotEntries?: number
-  maxSnapshotBytes?: number
-  maxSessionEntries?: number
-  cacheKeyPolicy?: string
-  enableContextCheckpoints?: boolean
-  checkpointEveryTokens?: number
-}
-
-export interface MultimodalRuntimeConfig {
-  projectorPath?: string
-  useGpu?: boolean
-  imageMinTokens?: number
-  imageMaxTokens?: number
-}
-
-export interface ResidencyRuntimeConfig {
-  maxGpuModelsPerDevice?: number
-  allowCpuModelsWhileGpuLoaded?: boolean
-  requireGpuLease?: boolean
-  gpuMemorySafetyMarginBytes?: number
-}
-
-export interface ObservabilityRuntimeConfig {
-  runtimeMetrics?: boolean
-  backendProfiling?: boolean
-}
-
-export interface NativeRuntimeConfig {
-  placement?: ModelPlacementConfig
-  context?: ContextRuntimeConfig
-  sampling?: SamplingRuntimeConfig
-  scheduler?: SchedulerRuntimeConfig
-  cache?: CacheRuntimeConfig
-  multimodal?: MultimodalRuntimeConfig
-  residency?: ResidencyRuntimeConfig
-  observability?: ObservabilityRuntimeConfig
-}
-
-export interface ModelLoadOptions {
-  backend?: string
-  stats?: string
-  runtime?: NativeRuntimeConfig
 }
 
 export interface EngineEvent {
@@ -233,6 +132,7 @@ export interface EngineStats {
   interTokenMs?: number
   e2EMs?: number
   tokensPerSecond?: number
+  decodeTokensPerSecond?: number
   prefillTokensPerSecond?: number
   prefillMs: number
   decodeMs: number
@@ -274,9 +174,15 @@ export interface GenerationResponse {
   observability: RequestObservabilityMetrics
 }
 
-export interface ModelState {
-  id: string
-  name: string
+export interface LoadedModelInfo {
+  model: ManagedModelInfo
+  backend: BackendSelection
+  runtimeFingerprint: string
+}
+
+export interface LogitBiasConfig {
+  token: number
+  bias: number
 }
 
 export interface ManagedModelInfo {
@@ -295,10 +201,26 @@ export interface ManagedModelInfo {
   updatedAtUnixMs: number
 }
 
-export interface LoadedModelInfo {
-  model: ManagedModelInfo
-  backend: BackendSelection
-  runtimeFingerprint: string
+export interface ModelLoadOptions {
+  backend?: string
+  stats?: string
+  runtime?: NativeRuntimeConfig
+}
+
+export interface ModelPlacementConfig {
+  devices?: Array<string>
+  gpuLayers?: string
+  splitMode?: string
+  mainGpu?: number
+  tensorSplit?: Array<number>
+  useMmap?: boolean
+  useMlock?: boolean
+  fitParams?: boolean
+  fitParamsMinCtx?: number
+  fitParamsTargetBytes?: Array<number>
+  checkTensors?: boolean
+  noExtraBufts?: boolean
+  noHost?: boolean
 }
 
 export interface ModelServiceState {
@@ -309,6 +231,34 @@ export interface ModelServiceState {
   requests: Array<RequestState>
   stats: EngineStats
   updatedAtUnixMs: number
+}
+
+export interface ModelState {
+  id: string
+  name: string
+}
+
+export interface MultimodalRuntimeConfig {
+  projectorPath?: string
+  useGpu?: boolean
+  imageMinTokens?: number
+  imageMaxTokens?: number
+}
+
+export interface NativeRuntimeConfig {
+  placement?: ModelPlacementConfig
+  context?: ContextRuntimeConfig
+  sampling?: SamplingRuntimeConfig
+  scheduler?: SchedulerRuntimeConfig
+  cache?: CacheRuntimeConfig
+  multimodal?: MultimodalRuntimeConfig
+  residency?: ResidencyRuntimeConfig
+  observability?: ObservabilityRuntimeConfig
+}
+
+export interface ObservabilityRuntimeConfig {
+  runtimeMetrics?: boolean
+  backendProfiling?: boolean
 }
 
 export interface QueryOptions {
@@ -359,6 +309,7 @@ export interface RequestStats {
   interTokenMs?: number
   e2EMs?: number
   tokensPerSecond?: number
+  decodeTokensPerSecond?: number
   prefillMs: number
   decodeMs: number
   debugMetricsSchedulerTicks: number
@@ -385,6 +336,13 @@ export interface RequestStats {
   debugMetricsPostDecodeMs: number
 }
 
+export interface ResidencyRuntimeConfig {
+  maxGpuModelsPerDevice?: number
+  allowCpuModelsWhileGpuLoaded?: boolean
+  requireGpuLease?: boolean
+  gpuMemorySafetyMarginBytes?: number
+}
+
 export interface ResolvedRuntimeLimits {
   nCtx: number
   nBatch: number
@@ -394,6 +352,50 @@ export interface ResolvedRuntimeLimits {
   flashAttention: string
   cacheTypeK: string
   cacheTypeV: string
+}
+
+export interface SamplingRuntimeConfig {
+  samplers?: Array<string>
+  seed?: number
+  topK?: number
+  topP?: number
+  minP?: number
+  typicalP?: number
+  xtcProbability?: number
+  xtcThreshold?: number
+  topNSigma?: number
+  temperature?: number
+  dynatempRange?: number
+  dynatempExponent?: number
+  repeatLastN?: number
+  repeatPenalty?: number
+  frequencyPenalty?: number
+  presencePenalty?: number
+  dryMultiplier?: number
+  dryBase?: number
+  dryAllowedLength?: number
+  dryPenaltyLastN?: number
+  drySequenceBreakers?: Array<string>
+  mirostat?: number
+  mirostatTau?: number
+  mirostatEta?: number
+  minKeep?: number
+  nProbs?: number
+  logitBias?: Array<LogitBiasConfig>
+  ignoreEos?: boolean
+  grammarLazy?: boolean
+  preservedTokens?: Array<number>
+  backendSampling?: boolean
+}
+
+export interface SchedulerRuntimeConfig {
+  continuousBatching?: boolean
+  policy?: string
+  decodeTokenReserve?: number
+  adaptivePrefillChunking?: boolean
+  prefillChunkSize?: number
+  maxRunningRequests?: number
+  maxQueuedRequests?: number
 }
 
 export declare function setLlamaLogQuiet(quiet: boolean): void
