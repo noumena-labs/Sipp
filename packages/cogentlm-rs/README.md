@@ -221,18 +221,18 @@ blocking calls. `query` and `chat` return `RequestResult`; optional
 thread-safe function:
 
 ```js
-const { CogentEngine } = require('./index.js');
+const { CogentEngine } = require("./index.js");
 
-const engine = await CogentEngine.load('model.gguf', {
-  placement: { gpuLayers: 'all' },
-  observability: { runtimeMetrics: true }
+const engine = await CogentEngine.load("model.gguf", {
+  placement: { gpuLayers: "all" },
+  observability: { runtimeMetrics: true },
 });
 
 try {
   const result = await engine.chat(
-    [{ role: 'user', content: 'Describe browser LLM inference.' }],
+    [{ role: "user", content: "Describe browser LLM inference." }],
     { maxTokens: 32 },
-    batch => process.stdout.write(batch.text)
+    (batch) => process.stdout.write(batch.text),
   );
   console.log(`\n${result.text.trim()}`);
 } finally {
@@ -245,7 +245,8 @@ Build the local Node binding from the crate directory:
 ```powershell
 cd crates\cogentlm-node
 bun install
-bun run build
+bun run build:cuda
+node .\examples\node_smoke.mjs ..\..\..\..\Qwen3.5-0.8B-Q4_0.gguf "Describe browser LLM inference." --gpu-layers -1
 ```
 
 ## Character Harness Status
