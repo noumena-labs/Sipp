@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "bunx --bun vite",
     "build": "bunx --bun vite build",
-    "preview": "bunx --bun vite preview"
+    "preview": "bunx --bun vite preview",
+    "browser:smoke": "node ./scripts/browser-runtime-smoke.mjs",
+    "browser:smoke:ingest": "node ./scripts/browser-runtime-smoke.mjs --require-rust-browser-engine --require-gguf-ingest"
   },
   "dependencies": {
     "@noumena-labs/cogentlm": "workspace:*",

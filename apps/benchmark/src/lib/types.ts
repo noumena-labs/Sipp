@@ -1,16 +1,4 @@
-import type { RequestObservabilityMetrics } from '@noumena-labs/cogentlm';
-
-export interface SamplingConfig {
-  repeatLastN?: number;
-  repeatPenalty?: number;
-  frequencyPenalty?: number;
-  presencePenalty?: number;
-  topK?: number;
-  topP?: number;
-  minP?: number;
-  temperature?: number;
-  seed?: number;
-}
+import type { NativeRuntimeConfig, RequestObservabilityMetrics } from '@noumena-labs/cogentlm';
 
 export interface EnvironmentInfo {
   browserLabel: string;
@@ -143,13 +131,8 @@ export interface ConfigOptions {
     bufferedTokenLimit: number;
     flushIntervalMs: number;
   };
-  initConfig: {
-    prefillChunkSize: number;
-    schedulerPolicy: string;
-    decodeTokenReserve: number;
-    multimodalUseGpu: boolean;
+  initConfig: NativeRuntimeConfig & {
     debugCompareMultimodalEmbeddings: boolean;
-    sampling: SamplingConfig;
   };
   imageInput: ImageInput;
 }

@@ -17,10 +17,8 @@ export const basicChatExample: Example = {
       await engine.chat([
         { role: 'user', content: userInput }
       ], {
-        onToken: (tokens) => {
-          for (const token of tokens) {
-            fullResponse += token;
-          }
+        onTokens: (batch) => {
+          fullResponse += batch.text;
           responseEl.innerText = fullResponse; // Update in real-time
         }
       });

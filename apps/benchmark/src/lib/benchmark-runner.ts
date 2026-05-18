@@ -1,4 +1,10 @@
-import { CogentEngine, type ModelLoadOptions, type ModelSource } from '@noumena-labs/cogentlm';
+import {
+  CogentEngine,
+  type ModelLoadOptions,
+  type ModelSource,
+  type TokenBatch,
+  type TokenFlushMode,
+} from '@noumena-labs/cogentlm';
 import type {
   BenchmarkRun,
   BenchmarkTraceReport,
@@ -20,6 +26,11 @@ export interface ObservedQueryRun {
   ttftMs: number | null;
   tokenTimes: number[];
   observability: RequestObservability | null;
+}
+
+export interface BenchmarkTokenObserver {
+  onRunStart?: (label: string) => void;
+  onTokens?: (label: string, batch: TokenBatch) => void;
 }
 
 function summarize(values: number[]) {
@@ -96,12 +107,13 @@ export async function runObservedQuery(
   options: {
     session: string;
     maxTokens: number;
-    onToken?: (tokens: string[]) => void;
+    onTokens?: (batch: TokenBatch) => void;
+    tokenFlush?: TokenFlushMode;
     media?: Uint8Array[];
     /**
-     * When false, the chat call is made WITHOUT an `onToken` callback so the
-     * engine runs in NONE emission mode (no per-token FFI/SAB activity).
-     * TTFT and per-token timing then come from native runtime_observability
+     * When false, the chat call is made WITHOUT an `onTokens` callback so the
+     * engine runs in NONE emission mode (no token-plane FFI/SAB activity).
+     * TTFT and token-plane timing then come from native runtime_observability
      * instead of JS-side wall-clock instrumentation.  Default true.
      */
     streamTokens?: boolean;
@@ -117,32 +129,34 @@ export async function runObservedQuery(
     const messages = options.media == null
       ? [{ role: 'user', content: prompt }]
       : { messages: [{ role: 'user', content: prompt }], media: options.media };
-    // Pass `onToken` only when streaming is enabled.  Omitting it triggers
+    // Pass `onTokens` only when streaming is enabled.  Omitting it triggers
     // TOKEN_EMISSION_NONE on the engine side, which is the NONE-mode path.
     const chatOptions = streamTokens
       ? {
           maxTokens: options.maxTokens,
           session: options.session,
-          onToken: (tokens: string[]) => {
+          tokenFlush: options.tokenFlush ?? 'token',
+          onTokens: (batch: TokenBatch) => {
             const elapsed = round(performance.now() - start);
-            for (const token of tokens) {
+            const frames = Math.max(1, batch.frameCount);
+            for (let index = 0; index < frames; index += 1) {
               tokenTimes.push(elapsed);
               ttftMs ??= elapsed;
             }
-            options.onToken?.(tokens);
+            options.onTokens?.(batch);
           },
         }
       : {
           maxTokens: options.maxTokens,
           session: options.session,
         };
-    const [output, observability] = await Promise.all([
+    const [result, observability] = await Promise.all([
       targetEngine.chat(messages, chatOptions),
       sessionObserver.promise,
     ]);
 
     return {
-      output,
+      output: result.text,
       wallMs: round(performance.now() - start),
       ttftMs,
       tokenTimes,
@@ -284,28 +298,47 @@ export async function runPromptGroup(
   measuredRuns: number,
   sessionFactory: (index: number) => string,
   setStatus: (s: string) => void,
-  streamTokens: boolean = true
+  streamTokens: boolean = true,
+  tokenFlush: TokenFlushMode = 'batch',
+  tokenObserver?: BenchmarkTokenObserver
 ): Promise<{ benchmarkDurationMs: number; runs: BenchmarkRun[]; summary: GroupSummary }> {
   for (let i = 0; i < warmupRuns; i++) {
     setStatus(`${groupLabel}: warmup ${i + 1}/${warmupRuns}`);
-    await targetEngine.chat([{ role: 'user', content: prompt }], {
-      maxTokens: tokenCount,
-      session: sessionFactory(i),
-    });
+    await targetEngine.chat(
+      [{ role: 'user', content: prompt }],
+      streamTokens
+        ? {
+            maxTokens: tokenCount,
+            session: sessionFactory(i),
+            tokenFlush,
+            onTokens: () => {},
+          }
+        : {
+            maxTokens: tokenCount,
+            session: sessionFactory(i),
+          }
+    );
   }
 
   const runs: BenchmarkRun[] = [];
   const benchmarkStart = performance.now();
   for (let i = 0; i < measuredRuns; i++) {
+    const runLabel = `${groupLabel}-${i + 1}`;
     setStatus(`${groupLabel}: run ${i + 1}/${measuredRuns}`);
+    tokenObserver?.onRunStart?.(runLabel);
     const run = await runObservedQuery(targetEngine, prompt, {
       maxTokens: tokenCount,
       session: sessionFactory(i + warmupRuns),
       streamTokens,
+      tokenFlush,
+      onTokens:
+        tokenObserver?.onTokens == null
+          ? undefined
+          : (batch) => tokenObserver.onTokens?.(runLabel, batch),
     });
     runs.push(
       createRun(
-        `${groupLabel}-${i + 1}`,
+        runLabel,
         run.wallMs,
         run.ttftMs,
         run.tokenTimes,
@@ -332,7 +365,9 @@ export async function runScenarioBenchmark(
   runtime: BenchmarkRuntimeOptions,
   setStatus: (s: string) => void,
   alreadyLoaded?: boolean,
-  streamTokens: boolean = true
+  streamTokens: boolean = true,
+  tokenFlush: TokenFlushMode = 'batch',
+  tokenObserver?: BenchmarkTokenObserver
 ): Promise<ScenarioResult> {
   let loadRuntimeMs = 0;
   if (!alreadyLoaded) {
@@ -352,7 +387,9 @@ export async function runScenarioBenchmark(
     1,
     () => `${scenario.id}-cold`,
     setStatus,
-    streamTokens
+    streamTokens,
+    tokenFlush,
+    tokenObserver
   );
   const hotFreshContext = await runPromptGroup(
     targetEngine,
@@ -363,7 +400,9 @@ export async function runScenarioBenchmark(
     measuredRuns,
     (index) => `${scenario.id}-fresh-${index}`,
     setStatus,
-    streamTokens
+    streamTokens,
+    tokenFlush,
+    tokenObserver
   );
   const hotReuseContext = await runPromptGroup(
     targetEngine,
@@ -374,7 +413,9 @@ export async function runScenarioBenchmark(
     measuredRuns,
     () => `${scenario.id}-reuse`,
     setStatus,
-    streamTokens
+    streamTokens,
+    tokenFlush,
+    tokenObserver
   );
 
   return {
@@ -443,7 +484,9 @@ export async function runMixedLoadBenchmark(
   runtime: BenchmarkRuntimeOptions,
   setStatus: (s: string) => void,
   alreadyLoaded?: boolean,
-  streamTokens: boolean = true
+  streamTokens: boolean = true,
+  tokenFlush: TokenFlushMode = 'batch',
+  tokenObserver?: BenchmarkTokenObserver
 ): Promise<import('./types').MixedLoadResult> {
   let loadRuntimeMs = 0;
   if (!alreadyLoaded) {
@@ -460,11 +503,13 @@ export async function runMixedLoadBenchmark(
         maxTokens: definition.background.outputTokenLimit,
         session: `${definition.background.id}-warmup-${i}`,
         streamTokens,
+        tokenFlush,
       }),
       runObservedQuery(targetEngine, definition.foreground.prompt, {
         maxTokens: definition.foreground.outputTokenLimit,
         session: `${definition.foreground.id}-warmup-${i}`,
         streamTokens,
+        tokenFlush,
       }),
     ]);
   }
@@ -474,21 +519,35 @@ export async function runMixedLoadBenchmark(
   const benchmarkStart = performance.now();
   for (let i = 0; i < measuredRuns; i++) {
     setStatus(`${definition.label}: run ${i + 1}/${measuredRuns}`);
+    const backgroundLabel = `${definition.id}-background-${i + 1}`;
+    const foregroundLabel = `${definition.id}-foreground-${i + 1}`;
+    tokenObserver?.onRunStart?.(backgroundLabel);
+    tokenObserver?.onRunStart?.(foregroundLabel);
     const [backgroundRun, foregroundRun] = await Promise.all([
       runObservedQuery(targetEngine, definition.background.prompt, {
         maxTokens: definition.background.outputTokenLimit,
         session: `${definition.background.id}-mixed-${i}`,
         streamTokens,
+        tokenFlush,
+        onTokens:
+          tokenObserver?.onTokens == null
+            ? undefined
+            : (batch) => tokenObserver.onTokens?.(backgroundLabel, batch),
       }),
       runObservedQuery(targetEngine, definition.foreground.prompt, {
         maxTokens: definition.foreground.outputTokenLimit,
         session: `${definition.foreground.id}-mixed-${i}`,
         streamTokens,
+        tokenFlush,
+        onTokens:
+          tokenObserver?.onTokens == null
+            ? undefined
+            : (batch) => tokenObserver.onTokens?.(foregroundLabel, batch),
       }),
     ]);
     backgroundRuns.push(
       createRun(
-        `${definition.id}-background-${i + 1}`,
+        backgroundLabel,
         backgroundRun.wallMs,
         backgroundRun.ttftMs,
         backgroundRun.tokenTimes,
@@ -498,7 +557,7 @@ export async function runMixedLoadBenchmark(
     );
     foregroundRuns.push(
       createRun(
-        `${definition.id}-foreground-${i + 1}`,
+        foregroundLabel,
         foregroundRun.wallMs,
         foregroundRun.ttftMs,
         foregroundRun.tokenTimes,

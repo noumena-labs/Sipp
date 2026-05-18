@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import {
   CogentEngine,
+  type BrowserRuntimeSmokeResult,
   type ModelInfo,
   type ModelSource,
   type ObservabilitySnapshot,
+  type TokenBatch,
 } from '@noumena-labs/cogentlm';
 import { MetricCard } from './components/MetricCard';
 import {
@@ -19,6 +21,7 @@ import {
   runObservedQuery,
   runScenarioBenchmark,
   supportsConcurrentQueryApi,
+  type BenchmarkTokenObserver,
   type ObservedQueryRun,
 } from './lib/benchmark-runner';
 import {
@@ -45,6 +48,22 @@ import type {
   ScenarioResult,
 } from './lib/types';
 
+declare global {
+  interface Window {
+    __cogentBench?: {
+      getEnvironment(): Promise<Record<string, unknown>>;
+      getRuntimeObservability(): ObservabilitySnapshot | null;
+      getBackendObservability(): unknown;
+      getBrowserRuntimeSmoke(): {
+        result: BrowserRuntimeSmokeResult | null;
+        error: string | null;
+      };
+      runBrowserRuntimeSmoke(): Promise<BrowserRuntimeSmokeResult>;
+      getLastReport(): BenchmarkReport | null;
+    };
+  }
+}
+
 interface BenchmarkReport {
   schema: 'cogent.benchmark.browser.v8';
   generatedAt: string;
@@ -69,8 +88,41 @@ interface BenchmarkReport {
 
 function getDefaultRuntimeOptions() {
   return {
-    nSeqMax: 2,
-    maxCachedSessions: 8,
+    placement: {
+      gpuLayers: 'all' as const,
+    },
+    context: {
+      nParallel: 1,
+    },
+    cache: {
+      mode: 'live-slot-prefix' as const,
+      maxSessionEntries: 8,
+    },
+  };
+}
+
+async function inspectBrowserEnvironment(): Promise<Record<string, unknown>> {
+  const gpu = navigator.gpu;
+  if (gpu == null) {
+    return {
+      hasNavigatorGpu: false,
+      adapterAvailable: false,
+      crossOriginIsolated: window.crossOriginIsolated,
+    };
+  }
+
+  const adapter = await gpu.requestAdapter();
+  const info = adapter == null ? null : await adapter.requestAdapterInfo?.().catch(() => null);
+  return {
+    hasNavigatorGpu: true,
+    adapterAvailable: adapter != null,
+    crossOriginIsolated: window.crossOriginIsolated,
+    adapterInfo: info == null ? null : {
+      vendor: info.vendor,
+      architecture: info.architecture,
+      device: info.device,
+      description: info.description,
+    },
   };
 }
 
@@ -169,13 +221,12 @@ export default function App() {
   const [measuredRuns, setMeasuredRuns] = useState(3);
   // Three transport modes:
   //   off    — engine in TOKEN_EMISSION_NONE; nothing crosses to main.
-  //   silent — engine in StreamingBuffer; main drains SAB but onToken is a
-  //            no-op (no DOM work).  This isolates *streaming pipeline*
-  //            cost from *rendering* cost — should match native TPS within
-  //            ~2 % if the architecture is honoring the principle.
+  //   tokens — engine in StreamingBuffer; main drains SAB and invokes onTokens
+  //            without DOM work.  This isolates callback/token-plane cost from
+  //            rendering cost.
   //   render — engine in StreamingBuffer; main drains SAB and writes
-  //            textContent once per rAF.  Pays the GPU-compositor tax.
-  type StreamMode = 'off' | 'silent' | 'render';
+  //            textContent as token batches arrive. Pays the UI/rendering tax.
+  type StreamMode = 'off' | 'tokens' | 'render';
   const [streamMode, setStreamMode] = useState<StreamMode>('render');
   const streamTokens = streamMode !== 'off';
   const [imageSource, setImageSource] = useState('');
@@ -198,10 +249,85 @@ export default function App() {
   const [mixedLoadResult, setMixedLoadResult] = useState<MixedLoadResult | null>(null);
   const [memorySnapshots, setMemorySnapshots] = useState<MemorySnapshot[]>([]);
   const [benchmarkReport, setBenchmarkReport] = useState<BenchmarkReport | null>(null);
+  const [browserSmoke, setBrowserSmoke] = useState<BrowserRuntimeSmokeResult | null>(null);
+  const [browserSmokeError, setBrowserSmokeError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const projectorFileInputRef = useRef<HTMLInputElement>(null);
   const loadedSourceKeyRef = useRef<string | null>(null);
   const responseElementRef = useRef<HTMLDivElement>(null);
+
+  const createResponseRenderer = (maxStreams = 1, flushMode: 'frame' | 'immediate' = 'frame') => {
+    let frame = 0;
+    const order: string[] = [];
+    const textByLabel = new Map<string, string>();
+
+    const flush = () => {
+      frame = 0;
+      if (responseElementRef.current == null) {
+        return;
+      }
+      responseElementRef.current.textContent = order
+        .map((label) => {
+          const text = textByLabel.get(label) ?? '';
+          return maxStreams === 1 ? text : `${label}\n${text}`;
+        })
+        .join('\n\n');
+    };
+
+    const schedule = () => {
+      if (flushMode === 'immediate') {
+        flush();
+        return;
+      }
+      if (frame === 0) {
+        frame = window.requestAnimationFrame(flush);
+      }
+    };
+
+    return {
+      reset() {
+        if (frame !== 0) {
+          window.cancelAnimationFrame(frame);
+          frame = 0;
+        }
+        order.length = 0;
+        textByLabel.clear();
+        if (responseElementRef.current != null) {
+          responseElementRef.current.textContent = '';
+        }
+      },
+      start(label: string) {
+        if (!textByLabel.has(label)) {
+          order.push(label);
+        }
+        while (order.length > maxStreams) {
+          const dropped = order.shift();
+          if (dropped != null) {
+            textByLabel.delete(dropped);
+          }
+        }
+        textByLabel.set(label, '');
+        schedule();
+      },
+      append(label: string, batch: Pick<TokenBatch, 'text'>) {
+        textByLabel.set(label, `${textByLabel.get(label) ?? ''}${batch.text}`);
+        schedule();
+      },
+      finish() {
+        if (frame !== 0) {
+          window.cancelAnimationFrame(frame);
+          flush();
+        }
+      },
+    };
+  };
+
+  const runBrowserRuntimeSmoke = async (): Promise<BrowserRuntimeSmokeResult> => {
+    setBrowserSmokeError(null);
+    const result = await CogentEngine.browserRuntimeSmoke();
+    setBrowserSmoke(result);
+    return result;
+  };
 
   useEffect(() => {
     let disposed = false;
@@ -240,6 +366,19 @@ export default function App() {
         setObservability(nextEngine.observability.current());
         setInstalledModels(await nextEngine.models.list());
         setStatus('idle');
+        void CogentEngine.browserRuntimeSmoke()
+          .then((result) => {
+            if (!disposed) {
+              setBrowserSmoke(result);
+              setBrowserSmokeError(null);
+            }
+          })
+          .catch((error) => {
+            if (!disposed) {
+              setBrowserSmoke(null);
+              setBrowserSmokeError(error instanceof Error ? error.message : String(error));
+            }
+          });
       } catch (error) {
         if (disposed) {
           return;
@@ -256,6 +395,26 @@ export default function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    window.__cogentBench = {
+      getEnvironment: inspectBrowserEnvironment,
+      getRuntimeObservability: () => observability,
+      getBackendObservability: () => browserSmoke?.backend ?? observability?.profile ?? null,
+      getBrowserRuntimeSmoke: () => ({
+        result: browserSmoke,
+        error: browserSmokeError,
+      }),
+      runBrowserRuntimeSmoke,
+      getLastReport: () => benchmarkReport,
+    };
+
+    return () => {
+      if (window.__cogentBench?.runBrowserRuntimeSmoke === runBrowserRuntimeSmoke) {
+        delete window.__cogentBench;
+      }
+    };
+  }, [benchmarkReport, observability, browserSmoke, browserSmokeError]);
 
   const projectorOverride = (): string | File | undefined => {
     const file = projectorFileInputRef.current?.files?.[0];
@@ -334,33 +493,34 @@ export default function App() {
         return;
       }
       const nextSourceKey = sourceKey(source);
-      if (
-        engine.models.current() == null ||
-        loadedSourceKeyRef.current !== nextSourceKey
-      ) {
+      const loadedModel = engine.models.current();
+      if (loadedModel == null || loadedModel.status !== 'ready') {
         const info = await loadModelSelection(engine, source);
         setStatus(info.status === 'ready' ? `loaded ${info.name}` : `${info.name}: ${info.status}`);
+      } else if (
+        loadedSourceKeyRef.current != null &&
+        loadedSourceKeyRef.current !== nextSourceKey
+      ) {
+        setStatus('Selected source differs from the loaded model. Press Load Model to switch.');
+        return;
       }
 
       const image =
         imageEnabled && imageSource.trim().length > 0
           ? await fetchImageBytes(imageSource.trim())
           : undefined;
-      let accumulated = '';
-      const onToken =
+      const queryRenderer = streamMode === 'render' ? createResponseRenderer(1, 'frame') : null;
+      queryRenderer?.reset();
+      queryRenderer?.start('response');
+      const onTokens =
         streamMode === 'render'
-          ? (tokens: string[]) => {
-              for (const chunk of tokens) {
-                accumulated += chunk;
-              }
-              if (responseElementRef.current) {
-                responseElementRef.current.textContent = accumulated;
-              }
+          ? (batch: TokenBatch) => {
+            queryRenderer?.append('response', batch);
+          }
+          : streamMode === 'tokens'
+            ? (_batch: TokenBatch) => {
+              /* onTokens mode: SAB drained and callback invoked, no DOM work */
             }
-          : streamMode === 'silent'
-            ? (_tokens: string[]) => {
-                /* silent: SAB drained, no DOM work */
-              }
             : undefined;
       try {
         const run = await runObservedQuery(engine, prompt, {
@@ -368,8 +528,9 @@ export default function App() {
           session: `query-${Date.now()}`,
           media: image,
           streamTokens,
-          // streamTokens=false → onToken omitted upstream → engine NONE.
-          onToken,
+          tokenFlush: streamMode === 'render' ? 'token' : 'batch',
+          // streamTokens=false → onTokens omitted upstream → engine NONE.
+          onTokens,
         });
         setResponse(run.output); // Sync React state at the end
         setObservability(engine.observability.current());
@@ -393,7 +554,7 @@ export default function App() {
           observability: run.observability,
         });
       } finally {
-        // No cleanup needed for refs
+        queryRenderer?.finish();
       }
       setStatus('idle');
     } catch (error) {
@@ -416,6 +577,20 @@ export default function App() {
     setMixedLoadResult(null);
     setMemorySnapshots([]);
     setBenchmarkReport(null);
+    const benchmarkRenderer = streamMode === 'render' ? createResponseRenderer(2, 'frame') : null;
+    const benchmarkTokenFlush = streamMode === 'render' ? 'token' : 'batch';
+    const benchmarkTokenObserver: BenchmarkTokenObserver | undefined =
+      streamMode === 'render'
+        ? {
+          onRunStart: (label) => {
+            benchmarkRenderer?.start(label);
+          },
+          onTokens: (label, batch) => {
+            benchmarkRenderer?.append(label, batch);
+          },
+        }
+        : undefined;
+    benchmarkRenderer?.reset();
 
     try {
       const info = await loadModelSelection(engine, source);
@@ -435,7 +610,9 @@ export default function App() {
             getDefaultRuntimeOptions(),
             setStatus,
             true,
-            streamTokens
+            streamTokens,
+            benchmarkTokenFlush,
+            benchmarkTokenObserver
           )
         );
       }
@@ -453,10 +630,13 @@ export default function App() {
           getDefaultRuntimeOptions(),
           setStatus,
           true,
-          streamTokens
+          streamTokens,
+          benchmarkTokenFlush,
+          benchmarkTokenObserver
         );
         snapshots.push(await captureBrowserMemorySnapshot('after-mixed-load', true));
       }
+      benchmarkRenderer?.finish();
       const trace = buildBenchmarkTraceReport(results, mixed);
 
       const report: BenchmarkReport = {
@@ -492,6 +672,7 @@ export default function App() {
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
+      benchmarkRenderer?.finish();
       setIsBusy(false);
     }
   };
@@ -759,7 +940,7 @@ export default function App() {
                   <input value={observability?.mode ?? 'off'} readOnly />
                 </div>
                 <div className="row">
-                  <label title="Off = engine NONE (no emission). Silent = engine emits to SAB, main drains, no DOM work (isolates pipeline cost from render cost). Render = engine emits, main writes textContent once per rAF (pays compositor tax).">
+                  <label title="Off = engine NONE (no emission). onTokens = engine emits batched tokens to SAB, main drains and invokes callbacks, no DOM work. Render = engine flushes token-sized batches and writes textContent as they arrive.">
                     Stream Tokens
                   </label>
                   <div className="toggle-group">
@@ -773,11 +954,11 @@ export default function App() {
                     </button>
                     <button
                       type="button"
-                      className={`toggle-item ${streamMode === 'silent' ? 'active' : ''}`}
-                      onClick={() => setStreamMode('silent')}
-                      title="On — silent (pipeline only)"
+                      className={`toggle-item ${streamMode === 'tokens' ? 'active' : ''}`}
+                      onClick={() => setStreamMode('tokens')}
+                      title="On — onTokens callback without DOM rendering"
                     >
-                      Silent
+                      onTokens
                     </button>
                     <button
                       type="button"
@@ -865,6 +1046,44 @@ export default function App() {
               <MetricCard
                 label="Backend"
                 value={describeRuntimeBackend(observability?.profile)}
+              />
+              <MetricCard
+                label="Rust Engine"
+                value={
+                  browserSmokeError ??
+                  (browserSmoke == null
+                    ? 'pending'
+                    : browserSmoke.rustEngine.available
+                      ? `abi ${browserSmoke.rustEngine.abiVersion}`
+                      : browserSmoke.rustEngine.error ?? 'unavailable')
+                }
+                tone={browserSmoke?.rustEngine.available ? 'ok' : browserSmokeError ? 'warn' : undefined}
+              />
+              <MetricCard
+                label="Rust GGUF Ingest"
+                value={
+                  browserSmokeError ??
+                  (browserSmoke == null
+                    ? 'pending'
+                    : browserSmoke.ggufIngest.available
+                      ? `ready (${browserSmoke.ggufIngest.plannedShardCount} shards)`
+                      : browserSmoke.ggufIngest.error ?? 'unavailable')
+                }
+                tone={browserSmoke?.ggufIngest.available ? 'ok' : browserSmokeError ? 'warn' : undefined}
+              />
+              <MetricCard
+                label="WebGPU Smoke"
+                value={
+                  browserSmokeError ??
+                  (browserSmoke == null
+                    ? 'pending'
+                    : browserSmoke.webgpuReady
+                      ? `ready (${browserSmoke.backend?.webgpuDeviceCount ?? 0})`
+                      : browserSmoke.backend?.webgpuCompiled
+                        ? 'compiled, unavailable'
+                        : 'not compiled')
+                }
+                tone={browserSmoke?.webgpuReady ? 'ok' : browserSmokeError ? 'warn' : undefined}
               />
             </div>
           </section>
@@ -1008,20 +1227,20 @@ export default function App() {
                       <MetricCard label="Raw Runs" value={benchmarkReport.trace.runCount} />
                       <MetricCard
                         label="Trace TTFT"
-                        value={formatSummary(benchmarkReport.trace.analysis.nativeTtftMs)}
+                        value={formatSummary(benchmarkReport.trace.analysis.ttftMs)}
                       />
                       <MetricCard
                         label="Trace Mean ITL"
-                        value={formatSummary(benchmarkReport.trace.analysis.nativeMeanItlMs)}
+                        value={formatSummary(benchmarkReport.trace.analysis.itlAvgMs)}
                       />
                       <MetricCard
                         label="Trace Tail ITL"
-                        value={formatSummary(benchmarkReport.trace.analysis.nativeTailItlMs)}
+                        value={formatSummary(benchmarkReport.trace.analysis.itlP99Ms)}
                       />
                       <MetricCard
                         label="Trace Decode TPS"
                         value={formatSummary(
-                          benchmarkReport.trace.analysis.nativeDecodeTokensPerSecond,
+                          benchmarkReport.trace.analysis.tps,
                           'tok/s'
                         )}
                       />

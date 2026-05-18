@@ -28,10 +28,8 @@ await engine.chat({
         : [{ role: 'user', content: userInput }];
 
       await engine.chat(chatInput as any, {
-        onToken: (tokens) => {
-          for (const token of tokens) {
-            fullResponse += token;
-          }
+        onTokens: (batch) => {
+          fullResponse += batch.text;
           responseEl.innerText = fullResponse;
         }
       });

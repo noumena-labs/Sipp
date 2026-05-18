@@ -314,17 +314,25 @@ export default function App() {
             }
           },
           runtime: {
-            nCtx: 1024,
-            nBatch: 256,
-            nUbatch: 128,
-            imageMinTokens: 24,
-            imageMaxTokens: 96,
-            schedulerPolicy: 'latency-first',
-            maxCachedSessions: 2,
-            retainedPrefixTokens: 256,
-            prefixCacheIntervalTokens: 32,
-            prefillChunkSize: 256,
-            decodeTokenReserve: 128,
+            context: {
+              nCtx: 1024,
+              nBatch: 256,
+              nUbatch: 128,
+            },
+            multimodal: {
+              imageMinTokens: 24,
+              imageMaxTokens: 96,
+            },
+            scheduler: {
+              policy: 'latency-first',
+              prefillChunkSize: 256,
+              decodeTokenReserve: 128,
+            },
+            cache: {
+              maxSessionEntries: 2,
+              retainedPrefixTokens: 256,
+              snapshotIntervalTokens: 32,
+            },
             sampling: {
               temperature: 0.45,
               topP: 0.85,

@@ -583,10 +583,14 @@ export default function App() {
           },
           observability: 'profile',
           runtime: {
-            maxCachedSessions: 8,
-            prefixCacheIntervalTokens: 64,
-            maxPrefixCacheEntries: 64,
-            schedulerPolicy: 'latency-first',
+            cache: {
+              maxSessionEntries: 8,
+              snapshotIntervalTokens: 64,
+              maxSnapshotEntries: 64,
+            },
+            scheduler: {
+              policy: 'latency-first',
+            },
             sampling: {
               temperature: 0.5,
               topP: 0.9,

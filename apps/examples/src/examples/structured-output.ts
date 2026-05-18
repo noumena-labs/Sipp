@@ -29,10 +29,8 @@ export const structuredOutputExample: Example = {
         { role: 'user', content: `Extract data: ${userInput}` }
       ], {
         grammar: jsonGrammar,
-        onToken: (tokens) => {
-          for (const token of tokens) {
-            fullResponse += token;
-          }
+        onTokens: (batch) => {
+          fullResponse += batch.text;
           responseEl.innerText = fullResponse; // Update in real-time
         }
       });

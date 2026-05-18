@@ -26,8 +26,11 @@ interface VitePluginLike {
 
 const appsDir = fileURLToPath(new URL('.', import.meta.url));
 const repoRoot = path.resolve(appsDir, '..');
-const cogentEngineSrcDir = path.join(repoRoot, 'packages', '@noumena-labs/cogentlm', 'src');
+const cogentEnginePackageDir = path.join(repoRoot, 'packages', 'cogentlm');
+const cogentEngineSrcDir = path.join(cogentEnginePackageDir, 'src');
+const cogentEngineWasmDir = path.join(cogentEnginePackageDir, 'dist', 'wasm');
 const sourceFilePattern = /\.tsx?$/;
+const wasmArtifactPattern = /cogentlm-wasm\.(?:js|wasm)$/;
 const rebuildArgs = ['run', '--filter=cogentlm', 'build:ts'];
 
 function isCogentEngineSourceFile(filePath: string): boolean {
@@ -38,6 +41,17 @@ function isCogentEngineSourceFile(filePath: string): boolean {
     !relativePath.startsWith('..') &&
     !path.isAbsolute(relativePath) &&
     sourceFilePattern.test(resolvedPath)
+  );
+}
+
+function isCogentEngineWasmArtifact(filePath: string): boolean {
+  const resolvedPath = path.resolve(filePath);
+  const relativePath = path.relative(cogentEngineWasmDir, resolvedPath);
+  return (
+    relativePath !== '' &&
+    !relativePath.startsWith('..') &&
+    !path.isAbsolute(relativePath) &&
+    wasmArtifactPattern.test(resolvedPath)
   );
 }
 
@@ -120,15 +134,41 @@ export function cogentEngineDistWatch(): VitePluginLike {
         }, 150);
       };
 
-      const handleAdd = (filePath: string) => scheduleRebuild(filePath);
-      const handleChange = (filePath: string) => scheduleRebuild(filePath);
-      const handleUnlink = (filePath: string) => scheduleRebuild(filePath);
+      let wasmReloadTimer: ReturnType<typeof setTimeout> | null = null;
+      const scheduleWasmReload = (filePath: string) => {
+        if (!isCogentEngineWasmArtifact(filePath)) {
+          return;
+        }
 
-      server.watcher.add(cogentEngineSrcDir);
+        if (wasmReloadTimer) {
+          clearTimeout(wasmReloadTimer);
+        }
+
+        wasmReloadTimer = setTimeout(() => {
+          wasmReloadTimer = null;
+          console.info('[cogentlm] wasm runtime rebuilt; reloading app.');
+          server.ws.send({ type: 'full-reload' });
+        }, 150);
+      };
+
+      const handleAdd = (filePath: string) => {
+        scheduleRebuild(filePath);
+        scheduleWasmReload(filePath);
+      };
+      const handleChange = (filePath: string) => {
+        scheduleRebuild(filePath);
+        scheduleWasmReload(filePath);
+      };
+      const handleUnlink = (filePath: string) => {
+        scheduleRebuild(filePath);
+        scheduleWasmReload(filePath);
+      };
+
+      server.watcher.add([cogentEngineSrcDir, cogentEngineWasmDir]);
       server.watcher.on('add', handleAdd);
       server.watcher.on('change', handleChange);
       server.watcher.on('unlink', handleUnlink);
-      console.info('[cogentlm] watching packages/cogentlm/src for TS dist rebuilds.');
+      console.info('[cogentlm] watching packages/cogentlm/src and dist/wasm.');
 
       server.httpServer?.once('close', () => {
         stopped = true;
@@ -136,6 +176,10 @@ export function cogentEngineDistWatch(): VitePluginLike {
         if (debounceTimer) {
           clearTimeout(debounceTimer);
           debounceTimer = null;
+        }
+        if (wasmReloadTimer) {
+          clearTimeout(wasmReloadTimer);
+          wasmReloadTimer = null;
         }
 
         server.watcher.off('add', handleAdd);

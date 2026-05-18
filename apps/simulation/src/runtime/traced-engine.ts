@@ -109,20 +109,6 @@ class TracedBrainEngine implements CharacterRuntimeEngine, DirectorRuntimeEngine
   }
 }
 
-function withStreamingTap(
-  options: QueryOptions,
-  onTokens: (tokens: string[]) => void
-): QueryOptions {
-  const upstream = options.onToken;
-  return {
-    ...options,
-    onToken: (tokens: string[]) => {
-      onTokens(tokens);
-      upstream?.(tokens);
-    },
-  };
-}
-
 function withTracedStreamingTap(
   options: QueryOptions,
   brainId: string,
@@ -130,10 +116,11 @@ function withTracedStreamingTap(
   bus: SimulationBus,
   onTokens: (tokens: string[]) => void
 ): QueryOptions {
-  const upstream = options.onToken;
+  const upstream = options.onTokens;
   return {
     ...options,
-    onToken: (tokens: string[]) => {
+    onTokens: (batch) => {
+      const tokens = batch.text.length === 0 ? [] : [batch.text];
       onTokens(tokens);
       bus.emit({
         kind: 'agent-token',
@@ -142,7 +129,7 @@ function withTracedStreamingTap(
         queryId,
         tokens,
       });
-      upstream?.(tokens);
+      upstream?.(batch);
     },
   };
 }
