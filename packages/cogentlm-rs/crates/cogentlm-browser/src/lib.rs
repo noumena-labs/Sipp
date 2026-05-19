@@ -147,7 +147,7 @@ impl BrowserEngine {
         set_llama_log_quiet(true);
         self.close_runtime();
 
-        let mut runtime = match InferenceRuntime::load(model_path, runtime_config) {
+        let runtime = match InferenceRuntime::load(model_path, runtime_config) {
             Ok(runtime) => runtime,
             Err(error) => {
                 self.set_last_error(format!("failed to load browser runtime: {error:#}"));
@@ -155,7 +155,6 @@ impl BrowserEngine {
             }
         };
         let (producer, consumer) = token_byte_ring(TOKEN_RING_DEFAULT_CAPACITY);
-        runtime.set_token_ring_producer(Some(producer.clone()));
         self.inner.runtime = Some(runtime);
         self.inner.token_producer = Some(producer);
         self.inner.token_consumer = Some(consumer);
@@ -187,9 +186,6 @@ impl BrowserEngine {
 
     #[cfg(target_family = "wasm")]
     fn close_runtime(&mut self) {
-        if let Some(runtime) = self.inner.runtime.as_mut() {
-            runtime.set_token_ring_producer(None);
-        }
         self.inner.runtime = None;
         self.inner.token_producer = None;
         self.inner.token_consumer = None;
@@ -218,7 +214,7 @@ impl BrowserEngine {
 
         let context_key = read_optional_c_string(context_key).unwrap_or_default();
         let grammar = read_optional_c_string(grammar).unwrap_or_default();
-        runtime
+        let request_id = runtime
             .enqueue_request(
                 context_key,
                 prompt,
@@ -229,7 +225,13 @@ impl BrowserEngine {
                 None,
                 emission_mode(token_emission_mode),
             )
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if request_id != 0 {
+            if let Some(producer) = self.inner.token_producer.as_ref() {
+                runtime.add_token_ring_producer(request_id, producer.clone());
+            }
+        }
+        request_id
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -271,7 +273,7 @@ impl BrowserEngine {
 
         let context_key = read_optional_c_string(context_key).unwrap_or_default();
         let grammar = read_optional_c_string(grammar).unwrap_or_default();
-        runtime
+        let request_id = runtime
             .enqueue_multimodal_request(
                 context_key,
                 prompt,
@@ -283,7 +285,13 @@ impl BrowserEngine {
                 None,
                 emission_mode(token_emission_mode),
             )
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if request_id != 0 {
+            if let Some(producer) = self.inner.token_producer.as_ref() {
+                runtime.add_token_ring_producer(request_id, producer.clone());
+            }
+        }
+        request_id
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -576,6 +584,7 @@ impl BrowserEngine {
         let Some(runtime) = self.inner.runtime.as_mut() else {
             return 0;
         };
+        runtime.remove_token_ring_producer(request_id);
         i32::from(runtime.consume_completed_response(request_id))
     }
 
