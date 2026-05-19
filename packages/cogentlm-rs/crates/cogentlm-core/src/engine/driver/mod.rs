@@ -271,7 +271,7 @@ fn run_engine_thread(
                                 emit_event(
                                     &event_subscribers,
                                     EngineEvent::RequestCompleted {
-                                        result: Arc::new(result.clone()),
+                                        result: result.clone(),
                                     },
                                 );
                                 Ok(response)
@@ -464,11 +464,11 @@ fn emit_state_event(
 ) {
     emit_event(
         event_subscribers,
-        EngineEvent::State(Arc::new(build_engine_state_with_status(
+        EngineEvent::State(build_engine_state_with_status(
             runtime,
             model_state,
             Some(status),
-        ))),
+        )),
     );
 }
 

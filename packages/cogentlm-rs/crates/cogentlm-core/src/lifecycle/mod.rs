@@ -5,6 +5,7 @@ mod registry;
 mod service;
 mod storage;
 mod types;
+mod util;
 
 pub use backend_policy::{
     read_backend_capabilities, BackendCapabilities, BackendPlan, BackendPolicy,
