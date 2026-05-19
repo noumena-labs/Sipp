@@ -205,8 +205,7 @@ pub(super) fn token_batch_from_ring_frames(
 fn update_stream_drop_stats(token_state: &mut TokenStreamState, drop_count: u64) {
     let drop_delta = drop_count.saturating_sub(token_state.last_drop_count);
     token_state.last_drop_count = drop_count;
-    token_state.stats.frames_dropped =
-        token_state.stats.frames_dropped.saturating_add(drop_delta);
+    token_state.stats.frames_dropped = token_state.stats.frames_dropped.saturating_add(drop_delta);
 }
 
 fn saturating_usize_to_u32(value: usize) -> u32 {
@@ -218,4 +217,6 @@ fn next_batch_byte_count(current: usize, drained: usize) -> Option<usize> {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    mod token_sink_tests;
+}

@@ -107,4 +107,6 @@ fn next_ffi_capacity(result: i32, current: i32) -> Option<i32> {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    mod token_tests;
+}

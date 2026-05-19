@@ -1,10 +1,18 @@
 //! Per-tick batch planner: turns the current slots into a flat list of token contributions sized to the scheduler tick budget.
 
 use crate::runtime::config::SchedulerTickBudget;
+use crate::runtime::llama_token;
 use crate::runtime::request::GenerateRequestId;
-use crate::runtime::{llama_token, scheduler::SlotPhase};
 
 use super::SlotState;
+
+mod apply_results;
+mod helpers;
+
+use helpers::{
+    erase_active_slot, positive_i32_to_usize, resolve_prefill_slice_cap, saturating_u32_to_i32,
+    saturating_usize_to_i32,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BatchContributionKind {
@@ -266,101 +274,11 @@ impl BatchPlanner {
     }
 
     pub fn apply_decode_results(&self, slots: &mut [SlotState], plan: &SharedBatchPlan) {
-        for contribution in &plan.contributions {
-            let Some(slot) = slots.get_mut(contribution.slot_index) else {
-                continue;
-            };
-            let Some(request) = slot.request() else {
-                continue;
-            };
-            let request_max_output_tokens = request.max_output_tokens;
-            let request_prompt_len = request.prompt_tokens.len();
-
-            slot.batch_participation_count = slot.batch_participation_count.saturating_add(1);
-
-            if contribution.kind == BatchContributionKind::Prefill {
-                slot.prefill_cursor = slot.prefill_cursor.saturating_add(1);
-                slot.phase = if slot.prefill_cursor >= request_prompt_len {
-                    SlotPhase::Decode
-                } else {
-                    SlotPhase::Prefill
-                };
-                continue;
-            }
-
-            if contribution.kind != BatchContributionKind::Decode {
-                continue;
-            }
-
-            slot.decode_step_count = slot.decode_step_count.saturating_add(1);
-            slot.phase =
-                if token_limit_reached(slot.generated_tokens.len(), request_max_output_tokens) {
-                    SlotPhase::Completed
-                } else if !slot.buffered_output_text.is_empty() {
-                    SlotPhase::Streaming
-                } else {
-                    SlotPhase::Decode
-                };
-        }
+        apply_results::apply_decode_results(slots, plan);
     }
-}
-
-fn resolve_prefill_slice_cap(
-    budget: SchedulerTickBudget,
-    configured_prefill_chunk_size: i32,
-    remaining_prefill_budget: i32,
-    active_prefill_slot_count: usize,
-    has_decode_pressure: bool,
-) -> i32 {
-    if remaining_prefill_budget <= 0 {
-        return 0;
-    }
-
-    let mut slice_cap = remaining_prefill_budget;
-    if configured_prefill_chunk_size > 0 {
-        slice_cap = slice_cap.min(configured_prefill_chunk_size);
-    }
-
-    if active_prefill_slot_count > 1 {
-        let active_prefill_slot_count = saturating_usize_to_i32(active_prefill_slot_count).max(1);
-        let fair_share = (remaining_prefill_budget / active_prefill_slot_count).max(1);
-        slice_cap = slice_cap.min(fair_share);
-    }
-
-    if has_decode_pressure {
-        let decode_pressure_slice_cap =
-            remaining_prefill_budget.min(budget.effective_decode_budget().max(8));
-        slice_cap = slice_cap.min(decode_pressure_slice_cap);
-    }
-
-    slice_cap.max(1)
-}
-
-fn erase_active_slot(
-    active_prefill_slots: &mut Vec<usize>,
-    in_tick_offset: &mut Vec<usize>,
-    index: usize,
-) {
-    active_prefill_slots.remove(index);
-    in_tick_offset.remove(index);
-}
-
-fn token_limit_reached(generated_token_count: usize, max_output_tokens: i32) -> bool {
-    max_output_tokens > 0
-        && generated_token_count >= usize::try_from(max_output_tokens).unwrap_or(usize::MAX)
-}
-
-fn saturating_usize_to_i32(value: usize) -> i32 {
-    i32::try_from(value).unwrap_or(i32::MAX)
-}
-
-fn saturating_u32_to_i32(value: u32) -> i32 {
-    i32::try_from(value).unwrap_or(i32::MAX)
-}
-
-fn positive_i32_to_usize(value: i32) -> Option<usize> {
-    usize::try_from(value).ok().filter(|value| *value > 0)
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    mod batch_planner_tests;
+}

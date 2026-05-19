@@ -1388,6 +1388,10 @@ fn completed_error(_engine: &BrowserEngine, _request_id: u32) -> Option<String> 
 }
 
 #[cfg(test)]
+#[path = "tests/root_tests.rs"]
+mod root_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

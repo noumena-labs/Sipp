@@ -1,0 +1,171 @@
+use std::collections::VecDeque;
+
+use cogentlm_sys as ffi;
+
+use crate::runtime::llama_seq_id;
+
+use super::{PendingPrefixSnapshot, PrefixStateCache, PrefixStateStoreRequest};
+
+impl PrefixStateCache {
+    pub fn enqueue_pending_snapshot(&mut self, snapshot: PendingPrefixSnapshot) {
+        if snapshot.seq_id < 0
+            || snapshot.token_count == 0
+            || snapshot.prefix_tokens.len() < snapshot.token_count
+        {
+            return;
+        }
+
+        if let Some(existing) = self.pending_snapshots.iter_mut().find(|pending| {
+            pending.seq_id == snapshot.seq_id
+                && pending.context_key == snapshot.context_key
+                && pending.model_fingerprint == snapshot.model_fingerprint
+                && pending.token_count == snapshot.token_count
+        }) {
+            *existing = snapshot;
+            return;
+        }
+
+        self.pending_snapshots.push_back(snapshot);
+    }
+
+    pub fn pending_snapshot_count(&self) -> usize {
+        self.pending_snapshots.len()
+    }
+
+    pub fn drain_pending_snapshots(
+        &mut self,
+        context: *mut ffi::llama_context,
+        max_to_drain: usize,
+    ) -> usize {
+        if context.is_null() || self.pending_snapshots.is_empty() {
+            return 0;
+        }
+
+        let budget = if max_to_drain == 0 {
+            self.pending_snapshots.len()
+        } else {
+            max_to_drain.min(self.pending_snapshots.len())
+        };
+        let mut drained = 0;
+        while drained < budget {
+            let Some(pending) = self.pending_snapshots.pop_front() else {
+                break;
+            };
+            self.store_pending_snapshot(context, pending);
+            drained += 1;
+        }
+        drained
+    }
+
+    pub fn drain_pending_snapshots_for_seq(
+        &mut self,
+        context: *mut ffi::llama_context,
+        seq_id: llama_seq_id,
+        max_to_drain: usize,
+    ) -> usize {
+        if context.is_null() || seq_id < 0 || self.pending_snapshots.is_empty() {
+            return 0;
+        }
+
+        let mut retained = VecDeque::with_capacity(self.pending_snapshots.len());
+        let mut drained = 0;
+        while let Some(pending) = self.pending_snapshots.pop_front() {
+            let budget_remaining = max_to_drain == 0 || drained < max_to_drain;
+            if pending.seq_id == seq_id && budget_remaining {
+                self.store_pending_snapshot(context, pending);
+                drained += 1;
+            } else {
+                retained.push_back(pending);
+            }
+        }
+        self.pending_snapshots = retained;
+        drained
+    }
+
+    pub fn drain_best_pending_snapshot_for_seq(
+        &mut self,
+        context: *mut ffi::llama_context,
+        seq_id: llama_seq_id,
+    ) -> usize {
+        if context.is_null() || seq_id < 0 || self.pending_snapshots.is_empty() {
+            return 0;
+        }
+
+        let best_index = self
+            .pending_snapshots
+            .iter()
+            .enumerate()
+            .filter(|(_, pending)| pending.seq_id == seq_id)
+            .max_by_key(|(_, pending)| pending.token_count)
+            .map(|(index, _)| index);
+
+        let drained = best_index
+            .and_then(|index| self.pending_snapshots.remove(index))
+            .map(|pending| {
+                self.store_pending_snapshot(context, pending);
+                1
+            })
+            .unwrap_or(0);
+
+        self.pending_snapshots
+            .retain(|snapshot| snapshot.seq_id != seq_id);
+        drained
+    }
+
+    pub fn drop_pending_snapshots_for_seq(&mut self, seq_id: llama_seq_id) {
+        if seq_id < 0 {
+            return;
+        }
+        self.pending_snapshots
+            .retain(|snapshot| snapshot.seq_id != seq_id);
+    }
+
+    fn store_pending_snapshot(
+        &mut self,
+        context: *mut ffi::llama_context,
+        pending: PendingPrefixSnapshot,
+    ) {
+        self.store_prefix_state(PrefixStateStoreRequest {
+            context,
+            seq_id: pending.seq_id,
+            model_fingerprint: pending.model_fingerprint,
+            context_key: &pending.context_key,
+            tokens: &pending.prefix_tokens,
+            token_count: pending.token_count,
+            prefix_hash: pending.prefix_hash,
+            retention_priority: pending.retention_priority,
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pending_snapshot_dedups_exact_identity_only() {
+        let mut cache = PrefixStateCache::default();
+        let base = PendingPrefixSnapshot {
+            model_fingerprint: 1,
+            context_key: "ctx".to_string(),
+            seq_id: 0,
+            token_count: 2,
+            prefix_hash: 10,
+            retention_priority: 0,
+            prefix_tokens: vec![1, 2],
+        };
+        cache.enqueue_pending_snapshot(base.clone());
+        cache.enqueue_pending_snapshot(PendingPrefixSnapshot {
+            retention_priority: 7,
+            ..base.clone()
+        });
+        cache.enqueue_pending_snapshot(PendingPrefixSnapshot {
+            token_count: 3,
+            prefix_hash: 11,
+            prefix_tokens: vec![1, 2, 3],
+            ..base
+        });
+
+        assert_eq!(cache.pending_snapshot_count(), 2);
+    }
+}

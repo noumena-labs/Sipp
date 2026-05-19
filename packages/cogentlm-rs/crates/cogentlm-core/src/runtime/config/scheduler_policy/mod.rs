@@ -50,4 +50,6 @@ impl SchedulerTickBudget {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    mod scheduler_policy_tests;
+}

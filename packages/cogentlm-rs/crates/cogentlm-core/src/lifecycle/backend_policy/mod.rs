@@ -241,4 +241,6 @@ fn normalize_backend_name(name: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    mod backend_policy_tests;
+}

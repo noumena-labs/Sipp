@@ -12,4 +12,6 @@ pub(crate) fn hex_lower(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    mod util_tests;
+}

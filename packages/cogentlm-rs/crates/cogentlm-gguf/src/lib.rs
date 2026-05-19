@@ -894,6 +894,10 @@ impl<'a, R: Read> CountingReader<'a, R> {
 }
 
 #[cfg(test)]
+#[path = "tests/root_tests.rs"]
+mod root_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;

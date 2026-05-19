@@ -12,7 +12,9 @@ use cogentlm_sys as ffi;
 use crate::runtime::request::{GenerateRequestLifecycle, RequestQueue};
 use crate::runtime::scheduler::{SlotPhase, SlotScheduler, SlotState};
 
-use super::numeric::{duration_ms, nonnegative_i32_to_usize, nonnegative_i32_to_usize_opt, usize_to_i32};
+use super::numeric::{
+    duration_ms, nonnegative_i32_to_usize, nonnegative_i32_to_usize_opt, usize_to_i32,
+};
 use super::text::append_token_piece_to_slot;
 
 /// RAII guard for `cogent_mtmd_bitmap`. Frees the bitmap on drop.
@@ -64,15 +66,16 @@ pub(super) fn run_multimodal_prefill(
         return false;
     }
 
-    let (multimodal_exists, mut prompt_text, prompt_tokens_len) = if let Some(request) = slot.request() {
-        (
-            request.multimodal.is_some(),
-            request.original_prompt.clone(),
-            request.prompt_tokens.len(),
-        )
-    } else {
-        (false, String::new(), 0)
-    };
+    let (multimodal_exists, mut prompt_text, prompt_tokens_len) =
+        if let Some(request) = slot.request() {
+            (
+                request.multimodal.is_some(),
+                request.original_prompt.clone(),
+                request.prompt_tokens.len(),
+            )
+        } else {
+            (false, String::new(), 0)
+        };
     if !multimodal_exists {
         return false;
     }
@@ -88,7 +91,11 @@ pub(super) fn run_multimodal_prefill(
             bitmaps.reserve(multimodal.image_buffers.len());
             for buffer in &multimodal.image_buffers {
                 let bitmap = unsafe {
-                    ffi::cogent_mtmd_bitmap_init_from_buf(mtmd_context, buffer.as_ptr(), buffer.len())
+                    ffi::cogent_mtmd_bitmap_init_from_buf(
+                        mtmd_context,
+                        buffer.as_ptr(),
+                        buffer.len(),
+                    )
                 };
                 if bitmap.is_null() {
                     success = false;

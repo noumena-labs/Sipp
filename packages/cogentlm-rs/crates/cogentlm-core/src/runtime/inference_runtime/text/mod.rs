@@ -3,9 +3,9 @@
 
 use cogentlm_sys as ffi;
 
+use crate::runtime::llama_token;
 use crate::runtime::request::GenerateRequestLifecycle;
 use crate::runtime::scheduler::{SlotPhase, SlotState};
-use crate::runtime::llama_token;
 
 use super::numeric::token_piece_growth_capacity;
 
@@ -247,4 +247,6 @@ pub(super) fn incomplete_utf8_tail_length(data: &[u8]) -> usize {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    mod text_tests;
+}

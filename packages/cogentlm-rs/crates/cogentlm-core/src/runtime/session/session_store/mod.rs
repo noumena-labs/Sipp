@@ -7,30 +7,11 @@ use cogentlm_sys as ffi;
 
 use crate::runtime::{llama_seq_id, llama_token};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SequenceState {
-    pub current_kv_tokens: Vec<llama_token>,
-    pub n_past: i32,
-    pub hardware_id: llama_seq_id,
-    pub pin_count: usize,
-}
+mod sequence_ids;
+mod state;
 
-impl Default for SequenceState {
-    fn default() -> Self {
-        Self {
-            current_kv_tokens: Vec::new(),
-            n_past: 0,
-            hardware_id: -1,
-            pin_count: 0,
-        }
-    }
-}
-
-impl SequenceState {
-    pub fn in_sync(&self) -> bool {
-        usize::try_from(self.n_past).is_ok_and(|n_past| n_past == self.current_kv_tokens.len())
-    }
-}
+use sequence_ids::clamp_sequence_capacity;
+pub use state::SequenceState;
 
 #[derive(Debug, Clone)]
 struct SessionEntry {
@@ -123,23 +104,10 @@ impl SessionStore {
         has_evictable
     }
 
-    pub fn get_or_create_session(
-        &mut self,
-        context_key: &str,
-    ) -> Option<&mut SequenceState> {
-        let ptr = match self.context_states.get_mut(context_key) {
-            Some(entry) => entry as *mut SessionEntry,
-            None => std::ptr::null_mut(),
-        };
-        if !ptr.is_null() {
-            // SAFETY: ptr is valid as we just got it from get_mut, and we do not
-            // alter the map keys or values before returning.
-            let entry = unsafe { &mut *ptr };
-            if entry.is_evictable {
-                remove_key(&mut self.evictable_context_keys, context_key);
-                self.evictable_context_keys.push_back(context_key.to_string());
-            }
-            return Some(&mut entry.state);
+    pub fn get_or_create_session(&mut self, context_key: &str) -> Option<&mut SequenceState> {
+        if self.context_states.contains_key(context_key) {
+            self.touch(context_key);
+            return self.find_mut(context_key);
         }
 
         self.enforce_limit_before_insert();
@@ -240,29 +208,6 @@ impl SessionStore {
         }
     }
 
-    pub fn acquire_seq_id(&mut self, hint: llama_seq_id) -> llama_seq_id {
-        if let Some(hint_index) = seq_id_index(hint, self.seq_id_available.len()) {
-            if let Some(index) = self
-                .free_seq_ids
-                .iter()
-                .position(|candidate| *candidate == hint)
-            {
-                self.free_seq_ids.remove(index);
-                self.seq_id_available[hint_index] = false;
-                return hint;
-            }
-        }
-
-        let Some(seq_id) = self.free_seq_ids.pop_front() else {
-            return -1;
-        };
-        if let Some(seq_index) = seq_id_index(seq_id, self.seq_id_available.len()) {
-            self.seq_id_available[seq_index] = false;
-        }
-
-        seq_id
-    }
-
     pub fn prepare_for_admission(
         &mut self,
         context_key: &str,
@@ -279,21 +224,6 @@ impl SessionStore {
         let mut snapshot = session.clone();
         snapshot.current_kv_tokens = tokens;
         Some(snapshot)
-    }
-
-    pub fn release_seq_id(&mut self, seq_id: llama_seq_id) {
-        let Some(seq_index) = seq_id_index(seq_id, self.seq_id_available.len()) else {
-            return;
-        };
-        if self.seq_id_available[seq_index] {
-            return;
-        }
-
-        self.seq_id_available[seq_index] = true;
-        // Prefer reusing the most recently released sequence for serial
-        // requests. This keeps one-request-at-a-time browser runs on the warm
-        // physical KV sequence instead of alternating across n_parallel slots.
-        self.free_seq_ids.push_front(seq_id);
     }
 
     pub fn len(&self) -> usize {
@@ -354,18 +284,7 @@ fn remove_key(keys: &mut VecDeque<String>, context_key: &str) {
     }
 }
 
-fn seq_id_index(seq_id: llama_seq_id, len: usize) -> Option<usize> {
-    let index = usize::try_from(seq_id).ok()?;
-    (index < len).then_some(index)
-}
-
-fn clamp_sequence_capacity(max_sequences: usize) -> usize {
-    let max_representable_sequences = usize::try_from(llama_seq_id::MAX)
-        .ok()
-        .and_then(|value| value.checked_add(1))
-        .unwrap_or(usize::MAX);
-    max_sequences.clamp(1, max_representable_sequences)
-}
-
 #[cfg(test)]
-mod tests;
+mod tests {
+    mod session_store_tests;
+}

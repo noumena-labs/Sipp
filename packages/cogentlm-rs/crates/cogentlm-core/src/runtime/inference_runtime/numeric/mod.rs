@@ -101,4 +101,6 @@ pub(super) fn token_piece_growth_capacity(result: i32, capacity: i32) -> Option<
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    mod numeric_tests;
+}

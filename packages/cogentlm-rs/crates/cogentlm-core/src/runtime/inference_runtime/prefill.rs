@@ -17,6 +17,18 @@ use crate::runtime::{llama_seq_id, llama_token};
 
 use super::numeric::{llama_context_limit_i32, nonnegative_i32_to_usize_opt, usize_to_i32};
 
+#[inline]
+pub(super) fn resolve_initial_decode_context_reservation(
+    max_output_tokens: i32,
+    decode_reserve: i32,
+) -> i32 {
+    if max_output_tokens <= 0 {
+        0
+    } else {
+        max_output_tokens.min(decode_reserve.max(1))
+    }
+}
+
 /// Slides the KV window so `state.n_past + new_tokens_needed <= n_ctx`,
 /// preserving `retained_prefix_tokens` at the head. Returns `false` if the
 /// shared context is invalid or no amount of trimming can fit the new tokens.
@@ -244,18 +256,6 @@ pub(super) fn prepare_sequence_for_prompt(
     let cache_hits = usize_to_i32(match_len)?;
     *out_prefill_cursor = match_len;
     Some(cache_hits)
-}
-
-#[inline]
-pub(super) fn resolve_initial_decode_context_reservation(
-    max_output_tokens: i32,
-    decode_reserve: i32,
-) -> i32 {
-    if max_output_tokens <= 0 {
-        0
-    } else {
-        max_output_tokens.min(decode_reserve.max(1))
-    }
 }
 
 /// Per-step variant: makes room for one more decode token. For multimodal

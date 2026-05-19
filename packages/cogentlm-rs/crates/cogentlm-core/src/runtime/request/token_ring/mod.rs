@@ -2,12 +2,16 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
 use std::sync::MutexGuard;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 pub const TOKEN_RING_DEFAULT_CAPACITY: usize = 256 * 1024;
 pub const TOKEN_RING_RECORD_HEADER_BYTES: usize = 16;
+
+mod record_io;
+
+use record_io::{read_bytes, read_record_header, write_bytes, TokenRingRecordHeader};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenRingFrame {
@@ -49,34 +53,6 @@ struct TokenByteRingState {
     cached_stream_id: u32,
     cached_next_sequence: u32,
     next_sequences: HashMap<u32, u32>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct TokenRingRecordHeader {
-    stream_id: u32,
-    sequence: u32,
-    flags: u32,
-    byte_len: u32,
-}
-
-impl TokenRingRecordHeader {
-    fn encode(self) -> [u8; TOKEN_RING_RECORD_HEADER_BYTES] {
-        let mut bytes = [0_u8; TOKEN_RING_RECORD_HEADER_BYTES];
-        bytes[0..4].copy_from_slice(&self.stream_id.to_le_bytes());
-        bytes[4..8].copy_from_slice(&self.sequence.to_le_bytes());
-        bytes[8..12].copy_from_slice(&self.flags.to_le_bytes());
-        bytes[12..16].copy_from_slice(&self.byte_len.to_le_bytes());
-        bytes
-    }
-
-    fn decode(bytes: [u8; TOKEN_RING_RECORD_HEADER_BYTES]) -> Self {
-        Self {
-            stream_id: u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
-            sequence: u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
-            flags: u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]),
-            byte_len: u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -291,45 +267,7 @@ fn next_sequence_for_stream(state: &mut TokenByteRingState, stream_id: u32) -> u
     sequence
 }
 
-fn write_bytes(buffer: &mut [u8], offset: usize, bytes: &[u8]) {
-    let len = buffer.len();
-    let offset = offset % len;
-    let tail = len - offset;
-    if bytes.len() <= tail {
-        buffer[offset..offset + bytes.len()].copy_from_slice(bytes);
-    } else {
-        buffer[offset..].copy_from_slice(&bytes[..tail]);
-        buffer[..bytes.len() - tail].copy_from_slice(&bytes[tail..]);
-    }
-}
-
-fn read_record_header(buffer: &[u8], offset: usize) -> [u8; TOKEN_RING_RECORD_HEADER_BYTES] {
-    let capacity = buffer.len();
-    let offset = offset % capacity;
-    let tail = capacity - offset;
-    let mut header = [0_u8; TOKEN_RING_RECORD_HEADER_BYTES];
-    if TOKEN_RING_RECORD_HEADER_BYTES <= tail {
-        header.copy_from_slice(&buffer[offset..offset + TOKEN_RING_RECORD_HEADER_BYTES]);
-    } else {
-        header[..tail].copy_from_slice(&buffer[offset..]);
-        header[tail..].copy_from_slice(&buffer[..TOKEN_RING_RECORD_HEADER_BYTES - tail]);
-    }
-    header
-}
-
-fn read_bytes(buffer: &[u8], offset: usize, len: usize) -> Vec<u8> {
-    let capacity = buffer.len();
-    let offset = offset % capacity;
-    let tail = capacity - offset;
-    if len <= tail {
-        buffer[offset..offset + len].to_vec()
-    } else {
-        let mut out = Vec::with_capacity(len);
-        out.extend_from_slice(&buffer[offset..]);
-        out.extend_from_slice(&buffer[..len - tail]);
-        out
-    }
-}
-
 #[cfg(test)]
-mod tests;
+mod tests {
+    mod token_ring_tests;
+}

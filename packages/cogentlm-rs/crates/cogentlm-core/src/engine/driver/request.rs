@@ -1,12 +1,20 @@
 //! Chat/query request types accepted by [`CogentEngine`](super::CogentEngine).
 //!
 //! All types here are public API: builders for one-shot prompts and chat
-//! conversations, plus the `QueryOptions` knobs shared by both.
+//! conversations, the `QueryOptions` knobs shared by both, and the internal
+//! runtime enqueue path for those requests.
 
+use serde_json::json;
+
+use crate::engine::protocol::EngineEvent;
 use crate::engine::{stream::TokenBatch, GenerateOptions, SamplingRuntimeConfig};
-use crate::error::Result;
+use crate::error::{Error, Result};
+use crate::runtime::request::GenerateTokenEmissionMode;
+use crate::runtime::InferenceRuntime;
 
-use super::OnTokensCallback;
+use super::events::emit_event;
+use super::token_sink::{start_async_token_sink, AsyncTokenSink};
+use super::{EngineEventSubscribers, OnTokensCallback};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChatRole {
@@ -166,5 +174,132 @@ impl ChatRequest {
 impl From<Vec<ChatMessage>> for ChatRequest {
     fn from(messages: Vec<ChatMessage>) -> Self {
         Self::new(messages)
+    }
+}
+
+pub(super) fn start_chat(
+    runtime: &mut InferenceRuntime,
+    request: ChatRequest,
+    event_subscribers: &EngineEventSubscribers,
+) -> Result<(u32, Option<AsyncTokenSink>)> {
+    let prompt = render_chat_prompt(runtime, &request.messages)?;
+    start_query(
+        runtime,
+        QueryRequest {
+            prompt,
+            options: request.options,
+            on_tokens: request.on_tokens,
+        },
+        event_subscribers,
+    )
+}
+
+pub(super) fn start_query(
+    runtime: &mut InferenceRuntime,
+    request: QueryRequest,
+    event_subscribers: &EngineEventSubscribers,
+) -> Result<(u32, Option<AsyncTokenSink>)> {
+    let QueryRequest {
+        prompt,
+        options,
+        on_tokens,
+    } = request;
+
+    if options.max_tokens <= 0 {
+        return Err(Error::InvalidRequest("max_tokens must be positive"));
+    }
+
+    let emit_tokens = on_tokens.is_some();
+    let emission_mode = if emit_tokens {
+        GenerateTokenEmissionMode::TokenStream
+    } else {
+        GenerateTokenEmissionMode::None
+    };
+
+    let request_id = if options.media.is_empty() {
+        runtime.enqueue_request(
+            options.context_key,
+            prompt,
+            options.max_tokens,
+            options.grammar,
+            options.json_schema,
+            options.stop,
+            options.sampling,
+            emission_mode,
+        )?
+    } else {
+        runtime.enqueue_multimodal_request(
+            options.context_key,
+            prompt,
+            options.max_tokens,
+            options.media,
+            options.grammar,
+            options.json_schema,
+            options.stop,
+            options.sampling,
+            emission_mode,
+        )?
+    };
+
+    emit_event(
+        event_subscribers,
+        EngineEvent::RequestStarted {
+            request_id: request_id.to_string(),
+            stream_id: request_id,
+        },
+    );
+
+    let token_sink = on_tokens.map(|callback| start_async_token_sink(request_id, callback));
+    if let Some(sink) = &token_sink {
+        runtime.add_token_ring_producer(request_id, sink.producer.clone());
+    }
+
+    Ok((request_id, token_sink))
+}
+
+fn render_chat_prompt(runtime: &InferenceRuntime, messages: &[ChatMessage]) -> Result<String> {
+    if messages.is_empty() {
+        return Err(Error::InvalidRequest("chat messages must not be empty"));
+    }
+    let messages_json = render_messages_json(messages)?;
+    let prompt = runtime.apply_chat_template_json(&messages_json, true)?;
+    if prompt.is_empty() {
+        return Err(Error::RuntimeCommand(
+            "model chat template did not produce a prompt".to_string(),
+        ));
+    }
+    Ok(prompt)
+}
+
+fn render_messages_json(messages: &[ChatMessage]) -> Result<String> {
+    let mut rendered = Vec::with_capacity(messages.len());
+    rendered.extend(messages.iter().map(|message| {
+        json!({
+            "role": message.role.as_str(),
+            "content": message.content,
+        })
+    }));
+    serde_json::to_string(&rendered)
+        .map_err(|error| Error::RuntimeCommand(format!("failed to render chat JSON: {error}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{render_messages_json, ChatMessage};
+
+    #[test]
+    fn render_messages_json_preserves_role_and_content_order() {
+        let messages = [
+            ChatMessage::system("policy"),
+            ChatMessage::user("hello"),
+            ChatMessage::assistant("hi"),
+        ];
+
+        let json = render_messages_json(&messages).expect("messages json");
+
+        assert_eq!(
+            json,
+            r#"[{"content":"policy","role":"system"},{"content":"hello","role":"user"},{"content":"hi","role":"assistant"}]"#
+        );
     }
 }

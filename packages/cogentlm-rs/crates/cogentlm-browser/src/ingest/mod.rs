@@ -273,4 +273,6 @@ impl CallbackShardWriter {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    mod ingest_tests;
+}

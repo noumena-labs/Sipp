@@ -175,4 +175,6 @@ fn empty_batch() -> ffi::llama_batch {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    mod llama_batch_builder_tests;
+}

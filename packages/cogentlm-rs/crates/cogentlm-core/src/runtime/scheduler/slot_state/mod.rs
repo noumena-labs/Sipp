@@ -194,4 +194,6 @@ impl Drop for SlotState {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    mod slot_state_tests;
+}

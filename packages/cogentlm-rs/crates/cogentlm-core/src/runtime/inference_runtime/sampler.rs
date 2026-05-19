@@ -1,15 +1,18 @@
 //! Per-slot sampler lifecycle: create from runtime config, attach/detach to
 //! the shared llama context for backend-side sampling.
 
+use std::collections::HashMap;
 use std::ffi::CString;
+use std::ptr::NonNull;
 
 use cogentlm_sys as ffi;
 
 use crate::error::{Error, Result};
 use crate::runtime::config::{NativeRuntimeConfig, SamplingRuntimeConfig};
-use crate::runtime::scheduler::SlotState;
+use crate::runtime::scheduler::{SamplerCacheKey, SlotPhase, SlotState};
 
-use super::ffi_util::runtime_command_from_shim_error;
+use super::native::runtime_command_from_shim_error;
+use super::InferenceRuntime;
 
 /// Hands the slot's CPU sampler to the backend so it can sample inside the
 /// decode kernel. Returns `false` if the slot is not eligible or the FFI call
@@ -97,4 +100,55 @@ pub(super) fn create_sampler(
         ));
     }
     Ok(sampler)
+}
+
+impl InferenceRuntime {
+    pub(super) fn detach_terminal_backend_samplers_locked(&mut self) {
+        for slot in self.slot_scheduler.mutable_slots() {
+            if matches!(slot.phase, SlotPhase::Completed | SlotPhase::Failed) {
+                detach_backend_sampler(self.shared_context, slot);
+            }
+        }
+    }
+
+    pub(super) fn reclaim_and_pool_samplers_locked(&mut self) {
+        reclaim_terminal_samplers(&mut self.slot_scheduler, &mut self.sampler_pool);
+    }
+
+    pub(super) fn detach_all_backend_samplers_locked(&mut self) {
+        for slot in self.slot_scheduler.mutable_slots() {
+            detach_backend_sampler(self.shared_context, slot);
+        }
+    }
+}
+
+fn reclaim_terminal_samplers(
+    slot_scheduler: &mut crate::runtime::scheduler::SlotScheduler,
+    sampler_pool: &mut HashMap<SamplerCacheKey, Vec<NonNull<ffi::cogent_common_sampler>>>,
+) {
+    for slot in slot_scheduler.mutable_slots() {
+        if !matches!(slot.phase, SlotPhase::Completed | SlotPhase::Failed) {
+            continue;
+        }
+        let Some(sampler) = slot.take_sampler() else {
+            continue;
+        };
+        if let Some(key) = slot.sampler_key.take() {
+            reset_sampler(sampler);
+            sampler_pool.entry(key).or_default().push(sampler);
+        } else {
+            unsafe {
+                ffi::cogent_common_sampler_free(sampler.as_ptr());
+            }
+        }
+    }
+}
+
+fn reset_sampler(sampler: NonNull<ffi::cogent_common_sampler>) {
+    unsafe {
+        let raw = ffi::cogent_common_sampler_raw(sampler.as_ptr());
+        if !raw.is_null() {
+            ffi::llama_sampler_reset(raw);
+        }
+    }
 }

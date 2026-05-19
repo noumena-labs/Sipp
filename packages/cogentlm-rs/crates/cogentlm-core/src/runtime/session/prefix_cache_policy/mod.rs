@@ -149,4 +149,6 @@ impl Default for PrefixCachePolicy {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    mod prefix_cache_policy_tests;
+}

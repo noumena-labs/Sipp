@@ -222,4 +222,6 @@ fn duration_millis_u64(duration: Duration) -> u64 {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    mod stats_tests;
+}

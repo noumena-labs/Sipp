@@ -240,4 +240,6 @@ impl RequestQueue {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    mod request_queue_tests;
+}

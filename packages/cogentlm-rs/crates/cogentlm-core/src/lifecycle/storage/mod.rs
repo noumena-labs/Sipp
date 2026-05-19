@@ -3,22 +3,23 @@
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
-use sha2::{Digest, Sha256};
-
-use super::util::hex_lower;
 use super::{
     detect_model_from_gguf_bytes, AssetRecord, AssetRole, AssetSource, ModelAssetKind, ModelError,
 };
 
+mod content;
+mod metadata;
+
+pub(crate) use content::hash_file;
+use content::inspect_local_path;
+pub(crate) use metadata::{modified_unix_ms, now_unix_ms};
+use metadata::{normalize_asset_name, unique_temp_suffix};
+
 const ASSETS_DIR: &str = "assets";
 const INCOMING_DIR: &str = ".incoming";
 const REGISTRY_FILE_NAME: &str = "registry.json";
-const COPY_BUFFER_BYTES: usize = 1024 * 1024;
-const INSPECTION_PREFIX_BYTES: usize = 8 * 1024 * 1024;
-static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+pub(super) const COPY_BUFFER_BYTES: usize = 1024 * 1024;
 
 pub trait StorageBackend: Clone + Send + Sync + 'static {
     fn root(&self) -> &Path;
@@ -247,56 +248,6 @@ impl<B: StorageBackend> AssetStore<B> {
     }
 }
 
-fn inspect_local_path(source_path: &Path) -> Result<(String, Vec<u8>), ModelError> {
-    let mut source = File::open(source_path)?;
-    let prefix_capacity = source
-        .metadata()
-        .ok()
-        .map(|metadata| inspection_prefix_capacity(metadata.len()))
-        .unwrap_or(INSPECTION_PREFIX_BYTES);
-    let mut hasher = Sha256::new();
-    let mut prefix = Vec::with_capacity(prefix_capacity);
-    let mut buffer = vec![0u8; COPY_BUFFER_BYTES];
-
-    loop {
-        let read = source.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-        if prefix.len() < INSPECTION_PREFIX_BYTES {
-            let remaining = INSPECTION_PREFIX_BYTES - prefix.len();
-            prefix.extend_from_slice(&buffer[..read.min(remaining)]);
-        }
-    }
-
-    Ok((hex_lower(&hasher.finalize()), prefix))
-}
-
-fn inspection_prefix_capacity(source_len: u64) -> usize {
-    usize::try_from(source_len)
-        .ok()
-        .map_or(INSPECTION_PREFIX_BYTES, |len| {
-            len.min(INSPECTION_PREFIX_BYTES)
-        })
-}
-
-fn hash_file(source_path: &Path) -> Result<String, ModelError> {
-    let mut source = File::open(source_path)?;
-    let mut hasher = Sha256::new();
-    let mut buffer = vec![0u8; COPY_BUFFER_BYTES];
-
-    loop {
-        let read = source.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-
-    Ok(hex_lower(&hasher.finalize()))
-}
-
 fn stage_local_path(source_path: &Path, tmp_path: &Path) -> Result<(), ModelError> {
     if let Some(parent) = tmp_path.parent() {
         fs::create_dir_all(parent)?;
@@ -332,43 +283,7 @@ fn canonicalize_existing_path(path: &Path) -> Result<PathBuf, ModelError> {
     fs::canonicalize(path).map_err(ModelError::from)
 }
 
-pub(crate) fn modified_unix_ms(metadata: &fs::Metadata) -> Option<u64> {
-    metadata.modified().ok().map(system_time_unix_ms)
-}
-
-pub(crate) fn now_unix_ms() -> u64 {
-    system_time_unix_ms(SystemTime::now())
-}
-
-fn system_time_unix_ms(value: SystemTime) -> u64 {
-    value
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX)
-}
-
-fn normalize_asset_name(path: &Path) -> String {
-    let name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("model.gguf")
-        .trim();
-    if name.is_empty() {
-        "model.gguf".to_string()
-    } else {
-        name.replace(['\\', '/', ':', '*', '?', '"', '<', '>', '|'], "-")
-    }
-}
-
-fn unique_temp_suffix() -> String {
-    format!(
-        "{}-{}",
-        now_unix_ms(),
-        NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed)
-    )
-}
-
 #[cfg(test)]
-mod tests;
+mod tests {
+    mod storage_tests;
+}

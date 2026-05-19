@@ -258,4 +258,6 @@ fn stable_type_list_vec(values: &[String]) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    mod pairing_tests;
+}
