@@ -1,4 +1,5 @@
 import type { EngineRuntime } from '../runtime/engine-runtime.js';
+import { RuntimePairingValidationError } from '../runtime/engine-runtime.js';
 import {
   ChatTemplatePromptRuntime,
   StreamingBoundaryTextSanitizer,
@@ -17,7 +18,8 @@ import { stableJson } from '../utils/stable-json.js';
 import { AssetStore, type RemoteAssetMetadata } from './asset-store.js';
 import { sha256Text } from './hash.js';
 import { ModelRegistryStore } from './model-registry-store.js';
-import { PairingValidator, type ClassifiedAssetFile, type PairingPlan } from './pairing-validator.js';
+import { ModelAssetClassifier } from './model-asset-classifier.js';
+import type { ClassifiedAsset, ClassifiedAssetFile, PairingPlan } from './pairing-types.js';
 import {
   QueryError,
   type AssetRecord,
@@ -179,7 +181,7 @@ export class ModelService implements ModelLifecycleService {
     private readonly runtime: EngineRuntime,
     private readonly registry = new ModelRegistryStore(),
     private readonly assetStore = new AssetStore(),
-    private readonly pairingValidator = new PairingValidator()
+    private readonly assetClassifier = new ModelAssetClassifier()
   ) {
     this.observability.subscribe((event) => {
       this.engineEvents.emit(observabilityEventToStateEvent(event));
@@ -276,7 +278,7 @@ export class ModelService implements ModelLifecycleService {
           classified,
           installed.explicitProjectorAssetId
         );
-        const basePlan = this.pairingValidator.resolve(
+        const basePlan = await this.resolvePairing(
           classified.filter((file) => file.assetId !== sourceProjectorAssetId)
         );
         let entry = await this.upsertBaseModelEntry(basePlan, runtimeFingerprint);
@@ -284,7 +286,7 @@ export class ModelService implements ModelLifecycleService {
         if (sourceProjectorAssetId != null) {
           const previousEntry = cloneModelEntry(entry);
           try {
-            const explicitPlan = this.pairingValidator.resolveExplicit(
+            const explicitPlan = await this.resolvePairing(
               classified,
               sourceProjectorAssetId
             );
@@ -1107,7 +1109,7 @@ export class ModelService implements ModelLifecycleService {
             name: asset.file.name,
           };
         }
-        return await this.pairingValidator.classify(asset.record.id, asset.file, signal);
+        return await this.assetClassifier.classify(asset.record.id, asset.file, signal);
       })
     );
   }
@@ -1223,7 +1225,26 @@ export class ModelService implements ModelLifecycleService {
   ): Promise<PairingPlan> {
     const installed = await this.assetsForEntry(entry, manifest, false);
     const classified = await this.classifyAssets(installed.assets, signal);
-    return this.pairingValidator.resolve(classified);
+    return await this.resolvePairing(classified);
+  }
+
+  private async resolvePairing(
+    classified: readonly ClassifiedAssetFile[],
+    explicitProjectorAssetId?: string | null
+  ): Promise<PairingPlan> {
+    const runtimeAssets: ClassifiedAsset[] = classified.map((file) => ({
+      assetId: file.assetId,
+      inspection: file.inspection,
+      name: file.name,
+    }));
+    try {
+      return await this.runtime.resolvePairing(runtimeAssets, explicitProjectorAssetId ?? null);
+    } catch (error) {
+      if (error instanceof RuntimePairingValidationError) {
+        throw new QueryError(error.code, error.message, { cause: error });
+      }
+      throw error;
+    }
   }
 
   private resolveSourceProjectorAssetId(
@@ -1363,7 +1384,7 @@ export class ModelService implements ModelLifecycleService {
     }
     try {
       const file = await this.assetStore.getFile(asset);
-      const classified = await this.pairingValidator.classify(asset.id, file, signal);
+      const classified = await this.assetClassifier.classify(asset.id, file, signal);
       const updated = await this.registry.write((draft) => {
         const next = draft.assets[asset.id];
         if (next == null) {

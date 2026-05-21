@@ -76,6 +76,8 @@ char *cogentlm_browser_engine_eos_text(const void *engine);
 char *cogentlm_browser_engine_apply_chat_template(
     const void *engine, const char *messages_json, int add_assistant);
 void cogentlm_browser_engine_free_string(char *value);
+char *cogentlm_pairing_validate_json(const char *classified_json,
+                                     const char *explicit_projector_id);
 }
 
 namespace {
@@ -528,6 +530,14 @@ char *CE_ApplyChatTemplate(const char *messages_json, int add_assistant) {
       cogentlm_browser_engine_apply_chat_template(g_rustBrowserEngine,
                                                   messages_json,
                                                   add_assistant));
+  return duplicate_heap_string(value.c_str());
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_PairingValidate(const char *classified_json,
+                         const char *explicit_projector_id) {
+  const std::string value = take_rust_string(
+      cogentlm_pairing_validate_json(classified_json, explicit_projector_id));
   return duplicate_heap_string(value.c_str());
 }
 

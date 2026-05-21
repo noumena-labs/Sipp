@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { ModelService } from './model-service.js';
 import { AssetStore } from './asset-store.js';
 import { ModelRegistryStore } from './model-registry-store.js';
-import { PairingValidator } from './pairing-validator.js';
+import { ModelAssetClassifier } from './model-asset-classifier.js';
+import type { ClassifiedAsset, PairingPlan } from './pairing-types.js';
 import {
   QueryError,
   type AssetRecord,
@@ -25,6 +26,7 @@ import type {
   StageModelBundleOptions,
   TransportObservability,
 } from '../types.js';
+import { RuntimePairingValidationError } from '../runtime/engine-runtime.js';
 
 function file(name: string, contents = name): File {
   return new File([contents], name);
@@ -174,7 +176,7 @@ class FakeAssetStore {
   public async cleanupBrowserSplitArtifacts(): Promise<void> {}
 }
 
-class FakePairingValidator extends PairingValidator {
+class FakeModelAssetClassifier extends ModelAssetClassifier {
   public override async classify(assetId: string, input: File): Promise<{
     assetId: string;
     file: File;
@@ -206,7 +208,7 @@ class FakePairingValidator extends PairingValidator {
   }
 }
 
-class MetadataLimitedPairingValidator extends PairingValidator {
+class MetadataLimitedModelAssetClassifier extends ModelAssetClassifier {
   public override async classify(assetId: string, input: File): Promise<{
     assetId: string;
     file: File;
@@ -237,7 +239,7 @@ class MetadataLimitedPairingValidator extends PairingValidator {
   }
 }
 
-class IncompatibleProjectorValidator extends FakePairingValidator {
+class IncompatibleProjectorClassifier extends FakeModelAssetClassifier {
   public override async classify(assetId: string, input: File): Promise<{
     assetId: string;
     file: File;
@@ -257,6 +259,124 @@ class IncompatibleProjectorValidator extends FakePairingValidator {
     }
     return classified;
   }
+}
+
+function resolveFakePairing(
+  files: readonly ClassifiedAsset[],
+  explicitProjectorId: string | null
+): PairingPlan {
+  if (files.length === 0) {
+    throw new RuntimePairingValidationError(
+      'INVALID_MODEL_SOURCE',
+      'No model assets were provided.'
+    );
+  }
+
+  const projectors = files.filter((file) => file.inspection.role === 'projector');
+  if (explicitProjectorId == null && projectors.length > 1) {
+    throw new RuntimePairingValidationError(
+      'INVALID_MODEL_PAIRING',
+      `Multiple projector assets were provided: ${projectors.map((file) => file.name).join(', ')}.`
+    );
+  }
+
+  const projector =
+    explicitProjectorId == null
+      ? projectors[0] ?? null
+      : files.find((file) => file.assetId === explicitProjectorId) ?? null;
+  if (explicitProjectorId != null && projector == null) {
+    throw new RuntimePairingValidationError(
+      'INVALID_MODEL_PAIRING',
+      'Explicit projector asset was not installed.'
+    );
+  }
+  if (projector != null && projector.inspection.role !== 'projector') {
+    throw new RuntimePairingValidationError(
+      'INVALID_MODEL_PAIRING',
+      `"${projector.name}" is not a projector asset.`
+    );
+  }
+
+  const modelFiles = files
+    .filter((file) => file.assetId !== projector?.assetId)
+    .sort((left, right) => left.name.localeCompare(right.name));
+  if (modelFiles.length === 0) {
+    throw new RuntimePairingValidationError(
+      'INVALID_MODEL_PAIRING',
+      'Projector assets are not runnable models.'
+    );
+  }
+
+  const modelCandidates = modelFiles.filter((file) => file.inspection.role !== 'projector');
+  const visionCandidates = modelCandidates.filter((file) => file.inspection.visionCapable);
+  const compatibilitySources = visionCandidates.filter(
+    (file) => file.inspection.compatibleVisionProjectorTypes.length > 0
+  );
+  if (!compatibleVisionTypesAgree(compatibilitySources)) {
+    throw new RuntimePairingValidationError(
+      'INVALID_MODEL_SOURCE',
+      'Model assets disagree on compatible vision projector types.'
+    );
+  }
+
+  const base = visionCandidates[0] ?? modelCandidates[0];
+  if (base == null) {
+    throw new RuntimePairingValidationError(
+      'INVALID_MODEL_PAIRING',
+      'Projector assets are not runnable models.'
+    );
+  }
+  const compatibleVisionProjectorTypes =
+    compatibilitySources[0]?.inspection.compatibleVisionProjectorTypes ?? [];
+  if (projector != null) {
+    if (explicitProjectorId == null && !base.inspection.visionCapable) {
+      throw new RuntimePairingValidationError(
+        'INVALID_MODEL_PAIRING',
+        'Projector assets can only be auto-paired with vision-capable models.'
+      );
+    }
+    const providedType = projector.inspection.providedVisionProjectorType;
+    if (
+      providedType != null &&
+      compatibleVisionProjectorTypes.length > 0 &&
+      !compatibleVisionProjectorTypes.includes(providedType)
+    ) {
+      throw new RuntimePairingValidationError(
+        'INVALID_MODEL_PAIRING',
+        `Projector type "${providedType}" is not compatible with this model.`
+      );
+    }
+    return {
+      modelAssetIds: modelFiles.map((file) => file.assetId),
+      projectorAssetId: projector.assetId,
+      name: base.name,
+      modality: 'vision',
+      status: 'ready',
+      compatibleVisionProjectorTypes,
+    };
+  }
+
+  return {
+    modelAssetIds: modelFiles.map((file) => file.assetId),
+    name: base.name,
+    modality: base.inspection.visionCapable ? 'vision' : 'text',
+    status: base.inspection.visionCapable ? 'needs_projector' : 'ready',
+    compatibleVisionProjectorTypes,
+  };
+}
+
+function compatibleVisionTypesAgree(files: readonly ClassifiedAsset[]): boolean {
+  if (files.length < 2) {
+    return true;
+  }
+  const expected = stableTypeList(files[0].inspection.compatibleVisionProjectorTypes);
+  return files
+    .slice(1)
+    .every((file) => expected === stableTypeList(file.inspection.compatibleVisionProjectorTypes));
+}
+
+function stableTypeList(values: readonly string[]): string {
+  return [...new Set(values)].sort((left, right) => left.localeCompare(right)).join('\u0000');
 }
 
 class FakeRuntime implements EngineRuntime {
@@ -300,6 +420,13 @@ class FakeRuntime implements EngineRuntime {
   }
 
   public async initModule(): Promise<void> {}
+
+  public async resolvePairing(
+    classified: readonly ClassifiedAsset[],
+    explicitProjectorId?: string | null
+  ): Promise<PairingPlan> {
+    return resolveFakePairing(classified, explicitProjectorId ?? null);
+  }
 
   public async stageModelBundle(
     descriptor: InternalBundleDescriptor,
@@ -488,7 +615,7 @@ function createService(overrides: {
   runtime?: FakeRuntime;
   registry?: MemoryRegistryStore;
   assets?: FakeAssetStore;
-  validator?: PairingValidator;
+  classifier?: ModelAssetClassifier;
 } = {}): {
   service: ModelService;
   runtime: FakeRuntime;
@@ -503,7 +630,7 @@ function createService(overrides: {
       runtime,
       registry as unknown as ModelRegistryStore,
       assets as unknown as AssetStore,
-      overrides.validator ?? new FakePairingValidator()
+      overrides.classifier ?? new FakeModelAssetClassifier()
     ),
     runtime,
     registry,
@@ -685,7 +812,7 @@ test('ModelService attaches explicit projectors and rejects metadata-proven mism
   assert.equal(runtime.lastPrompt, '<image>\ndescribe');
 
   const mismatch = createService({
-    validator: new IncompatibleProjectorValidator(),
+    classifier: new IncompatibleProjectorClassifier(),
   });
   const text = await mismatch.service.load(file('vision-base.gguf'));
   await assert.rejects(
@@ -700,7 +827,7 @@ test('ModelService attaches explicit projectors and rejects metadata-proven mism
 
 test('ModelService switches from text to explicit multimodal loads when metadata pairing is inconclusive', async () => {
   const { service, runtime } = createService({
-    validator: new MetadataLimitedPairingValidator(),
+    classifier: new MetadataLimitedModelAssetClassifier(),
   });
 
   const text = await service.load(file('plain-text.gguf'));

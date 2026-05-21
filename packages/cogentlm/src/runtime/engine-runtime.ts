@@ -13,6 +13,7 @@ import {
   TransportObservability,
 } from '../types.js';
 import type { ChatTemplateMessage } from '../wasm/wasm-bridge.js';
+import type { ClassifiedAsset, PairingPlan } from '../models/pairing-types.js';
 import type {
   BrowserCacheLayout,
   GgufReadAtCallbacks,
@@ -20,6 +21,21 @@ import type {
 } from '../wasm/wasm-bridge.js';
 
 export type { CogentConfig };
+
+export type RuntimePairingErrorCode =
+  | 'INVALID_MODEL_SOURCE'
+  | 'INVALID_MODEL_PAIRING'
+  | 'MODEL_BROKEN';
+
+export class RuntimePairingValidationError extends Error {
+  public readonly code: RuntimePairingErrorCode;
+
+  constructor(code: RuntimePairingErrorCode, message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'RuntimePairingValidationError';
+    this.code = code;
+  }
+}
 
 export interface EngineRuntime {
   getExecutionMode(): EngineExecutionMode;
@@ -61,6 +77,10 @@ export interface EngineRuntime {
     shardMaxBytes: number,
     callbacks: GgufSplitStreamCallbacks
   ): Promise<void>;
+  resolvePairing(
+    classified: readonly ClassifiedAsset[],
+    explicitProjectorId?: string | null
+  ): Promise<PairingPlan>;
   applyChatTemplate(messages: ChatTemplateMessage[], addAssistant: boolean): Promise<string>;
   cancelQuery(requestId: GenerateRequestId): Promise<boolean>;
   enqueueQuery(

@@ -4,6 +4,8 @@ import {
   GenerateResponse,
   NativeRuntimeConfig,
 } from '../types.js';
+import type { RuntimePairingErrorCode } from '../runtime/engine-runtime.js';
+import type { ClassifiedAsset, PairingPlan } from '../models/pairing-types.js';
 import { EngineModule } from './engine-module.js';
 import {
   DetailedRequestObservabilityMetrics,
@@ -49,6 +51,14 @@ export type WasmSchedulerProgressResult = {
 };
 
 export type BrowserCacheLayout = 'single-file' | 'split-gguf';
+export interface PairingValidationResponse {
+  ok: boolean;
+  plan?: PairingPlan;
+  error?: {
+    code: RuntimePairingErrorCode | string;
+    message: string;
+  };
+}
 
 export interface GgufSplitStreamCallbacks {
   readAt(offset: number, target: Uint8Array): number | void;
@@ -281,6 +291,22 @@ export class WasmBridge {
       ['string', 'number'],
       [JSON.stringify(messages), addAssistant ? 1 : 0]
     );
+  }
+
+  public validatePairing(
+    classified: readonly ClassifiedAsset[],
+    explicitProjectorId?: string | null
+  ): PairingValidationResponse {
+    const raw = this.callOwnedString(
+      'CE_PairingValidate',
+      ['string', 'string'],
+      [JSON.stringify(classified), explicitProjectorId ?? '']
+    );
+    try {
+      return JSON.parse(raw) as PairingValidationResponse;
+    } catch (error) {
+      throw new Error('Rust pairing validation returned invalid JSON.', { cause: error });
+    }
   }
 
   public async cancelQuery(requestId: GenerateRequestId): Promise<boolean> {

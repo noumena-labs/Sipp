@@ -36,6 +36,14 @@ fn projector(id: &str, name: &str, projector_type: Option<&str>) -> ClassifiedAs
     }
 }
 
+fn unknown(id: &str, name: &str) -> ClassifiedAsset {
+    ClassifiedAsset {
+        asset_id: id.to_string(),
+        name: name.to_string(),
+        inspection: AssetInspection::unknown(),
+    }
+}
+
 #[test]
 fn resolves_text_model_as_ready() {
     let plan = PairingResolver::resolve(&[model("asset-model", "base.gguf", &[])]).expect("plan");
@@ -91,11 +99,24 @@ fn rejects_explicit_incompatible_projector() {
 }
 
 #[test]
-fn rejects_explicit_projector_for_text_model() {
+fn accepts_explicit_projector_when_base_metadata_is_inconclusive() {
     let base = model("asset-model", "base.gguf", &[]);
     let mmproj = projector("asset-projector", "mmproj.gguf", Some("lfm2"));
 
-    let error = PairingResolver::resolve_explicit(&[base, mmproj], "asset-projector")
+    let plan = PairingResolver::resolve_explicit(&[base, mmproj], "asset-projector")
+        .expect("explicit projector override");
+
+    assert_eq!(plan.modality, ModelModality::Vision);
+    assert_eq!(plan.status, ModelStatus::Ready);
+    assert_eq!(plan.projector_asset_id, Some("asset-projector".to_string()));
+}
+
+#[test]
+fn rejects_explicit_projector_id_when_asset_is_not_a_projector() {
+    let base = model("asset-model", "base.gguf", &[]);
+    let named_projector = unknown("asset-projector", "mmproj-LFM2-VL-1.6B-f16.gguf");
+
+    let error = PairingResolver::resolve_explicit(&[base, named_projector], "asset-projector")
         .expect_err("pairing error");
 
     assert!(matches!(error, ModelError::InvalidModelPairing(_)));

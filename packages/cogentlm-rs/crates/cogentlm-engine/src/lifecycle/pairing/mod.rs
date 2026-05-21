@@ -25,7 +25,7 @@ impl PairingResolver {
         let selection = select_assets(files, None)?;
         let base = resolve_base_model(&selection.model_files)?;
         if let Some(projector) = selection.projector {
-            validate_explicit_projector(&base, projector)?;
+            validate_implicit_projector(&base, projector)?;
             return Ok(PairingPlan {
                 model_asset_ids: model_asset_ids(&selection.model_files),
                 projector_asset_id: Some(projector.asset_id.clone()),
@@ -208,12 +208,25 @@ fn validate_explicit_projector(
     base: &BaseModelResolution,
     projector: &ClassifiedAsset,
 ) -> Result<(), ModelError> {
+    validate_projector_compatibility(base, projector)
+}
+
+fn validate_implicit_projector(
+    base: &BaseModelResolution,
+    projector: &ClassifiedAsset,
+) -> Result<(), ModelError> {
     if !base.vision_capable {
         return Err(ModelError::InvalidModelPairing(
             "projector assets can only be paired with vision-capable models".to_string(),
         ));
     }
+    validate_projector_compatibility(base, projector)
+}
 
+fn validate_projector_compatibility(
+    base: &BaseModelResolution,
+    projector: &ClassifiedAsset,
+) -> Result<(), ModelError> {
     let Some(provided_type) = projector
         .inspection
         .provided_vision_projector_type

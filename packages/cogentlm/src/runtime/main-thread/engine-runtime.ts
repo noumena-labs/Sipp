@@ -14,7 +14,11 @@ import {
   RuntimeAggregateObservabilityMetrics,
   TransportObservability,
 } from '../../types.js';
-import { EngineRuntime } from '../engine-runtime.js';
+import {
+  RuntimePairingValidationError,
+  type EngineRuntime,
+  type RuntimePairingErrorCode,
+} from '../engine-runtime.js';
 import { MainThreadModelLoader } from './model-loader.js';
 import {
   COMPLETED_REQUEST_STATUS_PENDING,
@@ -35,9 +39,21 @@ import { asErrorMessage } from '../../utils/error.js';
 import { QueuedRequestScheduler } from '../scheduler.js';
 import { resolveRuntimeUrls } from '../../engine/runtime-assets.js';
 import type { BrowserRuntimeSmokeResult } from '../browser-smoke-types.js';
+import type { ClassifiedAsset, PairingPlan } from '../../models/pairing-types.js';
 
 function normalizePromptText(value: string): string {
   return value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+function normalizePairingErrorCode(code: string | undefined): RuntimePairingErrorCode {
+  switch (code) {
+    case 'INVALID_MODEL_SOURCE':
+    case 'INVALID_MODEL_PAIRING':
+    case 'MODEL_BROKEN':
+      return code;
+    default:
+      return 'INVALID_MODEL_PAIRING';
+  }
 }
 
 function resolveRuntimeSiblingUrl(moduleUrl: string, extension: string): string {
@@ -630,6 +646,23 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       shardMaxBytes,
       callbacks
     );
+  }
+
+  public async resolvePairing(
+    classified: readonly ClassifiedAsset[],
+    explicitProjectorId?: string | null
+  ): Promise<PairingPlan> {
+    await this.ensureModule();
+    const response = this.getLoadedWasmBridge().validatePairing(
+      classified,
+      explicitProjectorId
+    );
+    if (response.ok && response.plan != null) {
+      return response.plan;
+    }
+    const code = normalizePairingErrorCode(response.error?.code);
+    const message = response.error?.message ?? 'Model pairing validation failed.';
+    throw new RuntimePairingValidationError(code, message);
   }
 
   /**
