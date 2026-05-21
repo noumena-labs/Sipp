@@ -2,13 +2,14 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, TypedDict, Union
 
 PathLike = Union[str, Path]
+GpuLayerConfig = Union[str, dict[str, int]]
 
 class ModelPlacementConfig:
     def __init__(
         self,
         *,
         devices: Optional[Sequence[str]] = None,
-        gpu_layers: Optional[str] = None,
+        gpu_layers: Optional[GpuLayerConfig] = None,
         split_mode: Optional[str] = None,
         main_gpu: Optional[int] = None,
         tensor_split: Optional[Sequence[float]] = None,
@@ -87,14 +88,21 @@ class SamplingRuntimeConfig:
         backend_sampling: bool = True,
     ) -> None: ...
 
+class SchedulerPolicyConfig:
+    def __init__(
+        self,
+        *,
+        mode: Optional[str] = None,
+        decode_token_reserve: Optional[int] = None,
+        enable_adaptive_prefill_chunking: Optional[bool] = None,
+    ) -> None: ...
+
 class SchedulerRuntimeConfig:
     def __init__(
         self,
         *,
         continuous_batching: Optional[bool] = None,
-        policy: Optional[str] = None,
-        decode_token_reserve: Optional[int] = None,
-        adaptive_prefill_chunking: Optional[bool] = None,
+        policy: Optional[SchedulerPolicyConfig] = None,
         prefill_chunk_size: Optional[int] = None,
         max_running_requests: Optional[int] = None,
         max_queued_requests: Optional[int] = None,

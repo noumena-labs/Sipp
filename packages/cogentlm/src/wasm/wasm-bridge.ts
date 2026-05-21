@@ -1,8 +1,8 @@
-import { NormalizedInitConfig } from '../core/init-config.js';
 import {
   BackendObservability,
   GenerateRequestId,
   GenerateResponse,
+  NativeRuntimeConfig,
 } from '../types.js';
 import { EngineModule } from './engine-module.js';
 import {
@@ -139,11 +139,11 @@ export class WasmBridge {
 
   public async loadRuntimeModel(
     modelPath: string,
-    normalizedConfig: NormalizedInitConfig
+    config?: NativeRuntimeConfig
   ): Promise<number> {
     const result = await this.module.ccall('CE_Init', 'number', ['string', 'string'], [
       modelPath,
-      normalizedConfig.runtimeConfigJson,
+      JSON.stringify(config ?? {}),
     ], {
       async: true,
     });

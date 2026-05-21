@@ -224,8 +224,8 @@ thread-safe function:
 const { CogentEngine } = require("./index.js");
 
 const engine = await CogentEngine.load("model.gguf", {
-  placement: { gpuLayers: "all" },
-  observability: { runtimeMetrics: true },
+  placement: { gpu_layers: "all" },
+  observability: { runtime_metrics: true },
 });
 
 try {

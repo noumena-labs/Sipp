@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use super::{bool_arg, join_csv, push_arg};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ModelPlacementConfig {
     pub devices: Vec<String>,
     pub gpu_layers: GpuLayerConfig,
@@ -41,6 +41,14 @@ impl Default for ModelPlacementConfig {
 }
 
 impl ModelPlacementConfig {
+    pub(super) fn normalize(&mut self) {
+        if let GpuLayerConfig::Count(count) = self.gpu_layers {
+            self.gpu_layers = GpuLayerConfig::Count(count.max(0));
+        }
+        self.main_gpu = self.main_gpu.map(|value| value.max(0));
+        self.fit_params_min_ctx = self.fit_params_min_ctx.map(|value| value.max(1));
+    }
+
     pub(super) fn arg_len(&self) -> usize {
         let mut len = 6;
         if !self.devices.is_empty() {

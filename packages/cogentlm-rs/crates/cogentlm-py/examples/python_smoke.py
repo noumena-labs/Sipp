@@ -47,7 +47,7 @@ def main() -> None:
 
     runtime = NativeRuntimeConfig(
         placement=ModelPlacementConfig(
-            gpu_layers=None if args.gpu_layers is None else str(args.gpu_layers),
+            gpu_layers=None if args.gpu_layers is None else {"count": args.gpu_layers},
         ),
         context=ContextRuntimeConfig(
             n_ctx=args.ctx_size,

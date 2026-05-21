@@ -12,7 +12,7 @@ pub enum SchedulerPolicyMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct SchedulerPolicyConfig {
     pub mode: SchedulerPolicyMode,
     pub decode_token_reserve: i32,

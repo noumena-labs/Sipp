@@ -34,10 +34,12 @@ use cogentlm_engine::lifecycle::{
     ModelService as CoreModelService, ModelServiceState as CoreModelServiceState,
     ModelSourceKind as CoreModelSourceKind, ModelStatus as CoreModelStatus, StatsMode,
 };
-use cogentlm_engine::runtime::config::{SchedulerPolicyConfig, SchedulerPolicyMode};
+use cogentlm_engine::runtime::config::{
+    SchedulerPolicyConfig as CoreSchedulerPolicyConfig, SchedulerPolicyMode,
+};
 use cogentlm_engine::runtime::metrics::RuntimeObservabilityMetrics;
 use cogentlm_engine::runtime::request::{GenerateResponse, GenerateResponseStatus};
-use napi::bindgen_prelude::{AsyncTask, Buffer, Env};
+use napi::bindgen_prelude::{AsyncTask, Buffer, Either, Env};
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::{Error, Result, Status, Task};
 use napi_derive::napi;
@@ -58,34 +60,61 @@ pub struct LogitBiasConfig {
 pub struct SamplingRuntimeConfig {
     pub samplers: Option<Vec<String>>,
     pub seed: Option<i64>,
+    #[napi(js_name = "top_k")]
     pub top_k: Option<i32>,
+    #[napi(js_name = "top_p")]
     pub top_p: Option<f64>,
+    #[napi(js_name = "min_p")]
     pub min_p: Option<f64>,
+    #[napi(js_name = "typical_p")]
     pub typical_p: Option<f64>,
+    #[napi(js_name = "xtc_probability")]
     pub xtc_probability: Option<f64>,
+    #[napi(js_name = "xtc_threshold")]
     pub xtc_threshold: Option<f64>,
+    #[napi(js_name = "top_n_sigma")]
     pub top_n_sigma: Option<f64>,
     pub temperature: Option<f64>,
+    #[napi(js_name = "dynatemp_range")]
     pub dynatemp_range: Option<f64>,
+    #[napi(js_name = "dynatemp_exponent")]
     pub dynatemp_exponent: Option<f64>,
+    #[napi(js_name = "repeat_last_n")]
     pub repeat_last_n: Option<i32>,
+    #[napi(js_name = "repeat_penalty")]
     pub repeat_penalty: Option<f64>,
+    #[napi(js_name = "frequency_penalty")]
     pub frequency_penalty: Option<f64>,
+    #[napi(js_name = "presence_penalty")]
     pub presence_penalty: Option<f64>,
+    #[napi(js_name = "dry_multiplier")]
     pub dry_multiplier: Option<f64>,
+    #[napi(js_name = "dry_base")]
     pub dry_base: Option<f64>,
+    #[napi(js_name = "dry_allowed_length")]
     pub dry_allowed_length: Option<i32>,
+    #[napi(js_name = "dry_penalty_last_n")]
     pub dry_penalty_last_n: Option<i32>,
+    #[napi(js_name = "dry_sequence_breakers")]
     pub dry_sequence_breakers: Option<Vec<String>>,
     pub mirostat: Option<i32>,
+    #[napi(js_name = "mirostat_tau")]
     pub mirostat_tau: Option<f64>,
+    #[napi(js_name = "mirostat_eta")]
     pub mirostat_eta: Option<f64>,
+    #[napi(js_name = "min_keep")]
     pub min_keep: Option<i32>,
+    #[napi(js_name = "n_probs")]
     pub n_probs: Option<i32>,
+    #[napi(js_name = "logit_bias")]
     pub logit_bias: Option<Vec<LogitBiasConfig>>,
+    #[napi(js_name = "ignore_eos")]
     pub ignore_eos: Option<bool>,
+    #[napi(js_name = "grammar_lazy")]
     pub grammar_lazy: Option<bool>,
+    #[napi(js_name = "preserved_tokens")]
     pub preserved_tokens: Option<Vec<i32>>,
+    #[napi(js_name = "backend_sampling")]
     pub backend_sampling: Option<bool>,
 }
 
@@ -156,19 +185,36 @@ impl SamplingRuntimeConfig {
 }
 
 #[napi(object)]
+pub struct GpuLayerCountConfig {
+    pub count: i32,
+}
+
+#[napi(object)]
 pub struct ModelPlacementConfig {
     pub devices: Option<Vec<String>>,
-    pub gpu_layers: Option<String>,
+    #[napi(js_name = "gpu_layers")]
+    pub gpu_layers: Option<Either<String, GpuLayerCountConfig>>,
+    #[napi(js_name = "split_mode")]
     pub split_mode: Option<String>,
+    #[napi(js_name = "main_gpu")]
     pub main_gpu: Option<i32>,
+    #[napi(js_name = "tensor_split")]
     pub tensor_split: Option<Vec<f64>>,
+    #[napi(js_name = "use_mmap")]
     pub use_mmap: Option<bool>,
+    #[napi(js_name = "use_mlock")]
     pub use_mlock: Option<bool>,
+    #[napi(js_name = "fit_params")]
     pub fit_params: Option<bool>,
+    #[napi(js_name = "fit_params_min_ctx")]
     pub fit_params_min_ctx: Option<i32>,
+    #[napi(js_name = "fit_params_target_bytes")]
     pub fit_params_target_bytes: Option<Vec<f64>>,
+    #[napi(js_name = "check_tensors")]
     pub check_tensors: Option<bool>,
+    #[napi(js_name = "no_extra_bufts")]
     pub no_extra_bufts: Option<bool>,
+    #[napi(js_name = "no_host")]
     pub no_host: Option<bool>,
 }
 
@@ -179,7 +225,17 @@ impl ModelPlacementConfig {
             core.devices = devices.clone();
         }
         if let Some(value) = &self.gpu_layers {
-            core.gpu_layers = parse_gpu_layers(value)?;
+            core.gpu_layers = match value {
+                Either::A(value) => parse_gpu_layers(value)?,
+                Either::B(value) => {
+                    if value.count < 0 {
+                        return Err(invalid_arg(
+                            "gpu_layers.count must be a non-negative integer",
+                        ));
+                    }
+                    GpuLayerConfig::Count(value.count)
+                }
+            };
         }
         if let Some(value) = &self.split_mode {
             core.split_mode = parse_split_mode(value)?;
@@ -216,27 +272,48 @@ impl ModelPlacementConfig {
 
 #[napi(object)]
 pub struct ContextRuntimeConfig {
+    #[napi(js_name = "n_ctx")]
     pub n_ctx: Option<i32>,
+    #[napi(js_name = "n_batch")]
     pub n_batch: Option<i32>,
+    #[napi(js_name = "n_ubatch")]
     pub n_ubatch: Option<i32>,
+    #[napi(js_name = "n_parallel")]
     pub n_parallel: Option<i32>,
+    #[napi(js_name = "n_threads")]
     pub n_threads: Option<i32>,
+    #[napi(js_name = "n_threads_batch")]
     pub n_threads_batch: Option<i32>,
+    #[napi(js_name = "flash_attention")]
     pub flash_attention: Option<String>,
+    #[napi(js_name = "kv_unified")]
     pub kv_unified: Option<bool>,
+    #[napi(js_name = "cache_type_k")]
     pub cache_type_k: Option<String>,
+    #[napi(js_name = "cache_type_v")]
     pub cache_type_v: Option<String>,
+    #[napi(js_name = "offload_kqv")]
     pub offload_kqv: Option<bool>,
+    #[napi(js_name = "op_offload")]
     pub op_offload: Option<bool>,
+    #[napi(js_name = "swa_full")]
     pub swa_full: Option<bool>,
     pub warmup: Option<bool>,
+    #[napi(js_name = "rope_scaling")]
     pub rope_scaling: Option<String>,
+    #[napi(js_name = "rope_freq_base")]
     pub rope_freq_base: Option<f64>,
+    #[napi(js_name = "rope_freq_scale")]
     pub rope_freq_scale: Option<f64>,
+    #[napi(js_name = "yarn_orig_ctx")]
     pub yarn_orig_ctx: Option<i32>,
+    #[napi(js_name = "yarn_ext_factor")]
     pub yarn_ext_factor: Option<f64>,
+    #[napi(js_name = "yarn_attn_factor")]
     pub yarn_attn_factor: Option<f64>,
+    #[napi(js_name = "yarn_beta_fast")]
     pub yarn_beta_fast: Option<f64>,
+    #[napi(js_name = "yarn_beta_slow")]
     pub yarn_beta_slow: Option<f64>,
 }
 
@@ -291,13 +368,39 @@ impl ContextRuntimeConfig {
 }
 
 #[napi(object)]
-pub struct SchedulerRuntimeConfig {
-    pub continuous_batching: Option<bool>,
-    pub policy: Option<String>,
+pub struct SchedulerPolicyConfig {
+    pub mode: Option<String>,
+    #[napi(js_name = "decode_token_reserve")]
     pub decode_token_reserve: Option<i32>,
-    pub adaptive_prefill_chunking: Option<bool>,
+    #[napi(js_name = "enable_adaptive_prefill_chunking")]
+    pub enable_adaptive_prefill_chunking: Option<bool>,
+}
+
+impl SchedulerPolicyConfig {
+    fn apply_to_core(&self, core: &mut CoreSchedulerPolicyConfig) -> Result<()> {
+        if let Some(value) = &self.mode {
+            core.mode = parse_scheduler_policy(value)?;
+        }
+        if let Some(value) = self.decode_token_reserve {
+            core.decode_token_reserve = value;
+        }
+        if let Some(value) = self.enable_adaptive_prefill_chunking {
+            core.enable_adaptive_prefill_chunking = value;
+        }
+        Ok(())
+    }
+}
+
+#[napi(object)]
+pub struct SchedulerRuntimeConfig {
+    #[napi(js_name = "continuous_batching")]
+    pub continuous_batching: Option<bool>,
+    pub policy: Option<SchedulerPolicyConfig>,
+    #[napi(js_name = "prefill_chunk_size")]
     pub prefill_chunk_size: Option<i32>,
+    #[napi(js_name = "max_running_requests")]
     pub max_running_requests: Option<i32>,
+    #[napi(js_name = "max_queued_requests")]
     pub max_queued_requests: Option<i32>,
 }
 
@@ -307,19 +410,9 @@ impl SchedulerRuntimeConfig {
         if let Some(value) = self.continuous_batching {
             core.continuous_batching = value;
         }
-        core.policy = SchedulerPolicyConfig {
-            mode: if let Some(value) = &self.policy {
-                parse_scheduler_policy(value)?
-            } else {
-                core.policy.mode
-            },
-            decode_token_reserve: self
-                .decode_token_reserve
-                .unwrap_or(core.policy.decode_token_reserve),
-            enable_adaptive_prefill_chunking: self
-                .adaptive_prefill_chunking
-                .unwrap_or(core.policy.enable_adaptive_prefill_chunking),
-        };
+        if let Some(value) = &self.policy {
+            value.apply_to_core(&mut core.policy)?;
+        }
         if let Some(value) = self.prefill_chunk_size {
             core.prefill_chunk_size = value;
         }
@@ -332,13 +425,21 @@ impl SchedulerRuntimeConfig {
 #[napi(object)]
 pub struct CacheRuntimeConfig {
     pub mode: Option<String>,
+    #[napi(js_name = "retained_prefix_tokens")]
     pub retained_prefix_tokens: Option<i32>,
+    #[napi(js_name = "snapshot_interval_tokens")]
     pub snapshot_interval_tokens: Option<i32>,
+    #[napi(js_name = "max_snapshot_entries")]
     pub max_snapshot_entries: Option<i32>,
+    #[napi(js_name = "max_snapshot_bytes")]
     pub max_snapshot_bytes: Option<f64>,
+    #[napi(js_name = "max_session_entries")]
     pub max_session_entries: Option<i32>,
+    #[napi(js_name = "cache_key_policy")]
     pub cache_key_policy: Option<String>,
+    #[napi(js_name = "enable_context_checkpoints")]
     pub enable_context_checkpoints: Option<bool>,
+    #[napi(js_name = "checkpoint_every_tokens")]
     pub checkpoint_every_tokens: Option<i32>,
 }
 
@@ -378,9 +479,13 @@ impl CacheRuntimeConfig {
 
 #[napi(object)]
 pub struct MultimodalRuntimeConfig {
+    #[napi(js_name = "projector_path")]
     pub projector_path: Option<String>,
+    #[napi(js_name = "use_gpu")]
     pub use_gpu: Option<bool>,
+    #[napi(js_name = "image_min_tokens")]
     pub image_min_tokens: Option<i32>,
+    #[napi(js_name = "image_max_tokens")]
     pub image_max_tokens: Option<i32>,
 }
 
@@ -397,9 +502,13 @@ impl MultimodalRuntimeConfig {
 
 #[napi(object)]
 pub struct ResidencyRuntimeConfig {
+    #[napi(js_name = "max_gpu_models_per_device")]
     pub max_gpu_models_per_device: Option<f64>,
+    #[napi(js_name = "allow_cpu_models_while_gpu_loaded")]
     pub allow_cpu_models_while_gpu_loaded: Option<bool>,
+    #[napi(js_name = "require_gpu_lease")]
     pub require_gpu_lease: Option<bool>,
+    #[napi(js_name = "gpu_memory_safety_margin_bytes")]
     pub gpu_memory_safety_margin_bytes: Option<f64>,
 }
 
@@ -424,7 +533,9 @@ impl ResidencyRuntimeConfig {
 
 #[napi(object)]
 pub struct ObservabilityRuntimeConfig {
+    #[napi(js_name = "runtime_metrics")]
     pub runtime_metrics: Option<bool>,
+    #[napi(js_name = "backend_profiling")]
     pub backend_profiling: Option<bool>,
 }
 
@@ -2001,16 +2112,12 @@ fn parse_stats_mode(value: &str) -> Result<StatsMode> {
 }
 
 fn parse_gpu_layers(value: &str) -> Result<GpuLayerConfig> {
-    let trimmed = value.trim();
-    if trimmed.eq_ignore_ascii_case("auto") {
-        Ok(GpuLayerConfig::Auto)
-    } else if trimmed.eq_ignore_ascii_case("all") || trimmed.eq_ignore_ascii_case("full") {
-        Ok(GpuLayerConfig::All)
-    } else {
-        trimmed
-            .parse::<i32>()
-            .map(GpuLayerConfig::Count)
-            .map_err(|_| invalid_arg("gpuLayers must be one of: auto, all, or an integer count"))
+    match normalize_choice(value).as_str() {
+        "auto" => Ok(GpuLayerConfig::Auto),
+        "all" => Ok(GpuLayerConfig::All),
+        _ => Err(invalid_arg(
+            r#"gpu_layers must be "auto", "all", or { count: number }"#,
+        )),
     }
 }
 
@@ -2021,7 +2128,7 @@ fn parse_split_mode(value: &str) -> Result<SplitMode> {
         "row" => Ok(SplitMode::Row),
         "tensor" => Ok(SplitMode::Tensor),
         _ => Err(invalid_arg(
-            "splitMode must be one of: none, layer, row, tensor",
+            "split_mode must be one of: none, layer, row, tensor",
         )),
     }
 }
@@ -2032,7 +2139,7 @@ fn parse_flash_attention(value: &str) -> Result<FlashAttentionMode> {
         "enabled" | "enable" | "on" | "true" => Ok(FlashAttentionMode::Enabled),
         "disabled" | "disable" | "off" | "false" => Ok(FlashAttentionMode::Disabled),
         _ => Err(invalid_arg(
-            "flashAttention must be one of: auto, enabled, disabled",
+            "flash_attention must be one of: auto, enabled, disabled",
         )),
     }
 }
@@ -2081,7 +2188,7 @@ fn parse_cache_key_policy(value: &str) -> Result<CacheKeyPolicy> {
         "context_key" => Ok(CacheKeyPolicy::ContextKey),
         "prompt_hash" => Ok(CacheKeyPolicy::PromptHash),
         _ => Err(invalid_arg(
-            "cacheKeyPolicy must be one of: context-key, prompt-hash",
+            "cache_key_policy must be one of: context_key, prompt_hash",
         )),
     }
 }
@@ -2100,7 +2207,7 @@ fn parse_sampler_stage(value: &str) -> Result<SamplerStage> {
         "penalties" => Ok(SamplerStage::Penalties),
         "adaptive_p" => Ok(SamplerStage::AdaptiveP),
         _ => Err(invalid_arg(
-            "sampler stage must be one of: dry, top-k, typical-p, top-p, top-n-sigma, min-p, xtc, temperature, infill, penalties, adaptive-p",
+            "sampler stage must be one of: dry, top_k, typical_p, top_p, top_n_sigma, min_p, xtc, temperature, infill, penalties, adaptive_p",
         )),
     }
 }
@@ -2111,7 +2218,7 @@ fn parse_scheduler_policy(value: &str) -> Result<SchedulerPolicyMode> {
         "balanced" | "balance" => Ok(SchedulerPolicyMode::Balanced),
         "throughput_first" | "throughput" => Ok(SchedulerPolicyMode::ThroughputFirst),
         _ => Err(invalid_arg(
-            "schedulerPolicy must be one of: latency-first, balanced, throughput-first",
+            "scheduler.policy.mode must be one of: latency_first, balanced, throughput_first",
         )),
     }
 }

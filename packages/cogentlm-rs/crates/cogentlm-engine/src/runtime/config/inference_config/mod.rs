@@ -17,7 +17,7 @@ use sampling::merge_sampling_override_json;
 pub use sampling::{LogitBias, SamplerStage, SamplingRuntimeConfig};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct NativeRuntimeConfig {
     pub placement: ModelPlacementConfig,
     pub context: ContextRuntimeConfig,
@@ -43,6 +43,7 @@ pub struct ResolvedRuntimeLimits {
 
 impl NativeRuntimeConfig {
     pub fn normalize(mut self) -> Self {
+        self.placement.normalize();
         self.context.normalize();
         self.scheduler.normalize();
         self.cache.normalize();
@@ -94,7 +95,7 @@ impl NativeRuntimeConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct SchedulerRuntimeConfig {
     pub continuous_batching: bool,
     pub policy: SchedulerPolicyConfig,
@@ -125,7 +126,7 @@ impl SchedulerRuntimeConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct CacheRuntimeConfig {
     pub mode: KvReuseMode,
     pub retained_prefix_tokens: i32,
@@ -182,7 +183,7 @@ pub enum CacheKeyPolicy {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct MultimodalRuntimeConfig {
     pub projector_path: Option<String>,
     pub use_gpu: Option<bool>,
@@ -198,7 +199,7 @@ impl MultimodalRuntimeConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ResidencyRuntimeConfig {
     pub max_gpu_models_per_device: usize,
     pub allow_cpu_models_while_gpu_loaded: bool,
@@ -224,7 +225,7 @@ impl ResidencyRuntimeConfig {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ObservabilityRuntimeConfig {
     pub runtime_metrics: bool,
     pub backend_profiling: bool,

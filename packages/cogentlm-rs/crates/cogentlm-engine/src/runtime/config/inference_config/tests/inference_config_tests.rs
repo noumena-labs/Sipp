@@ -45,8 +45,22 @@ fn native_runtime_config_deserializes_sparse_browser_json() {
 }
 
 #[test]
+fn native_runtime_config_rejects_non_canonical_field_names() {
+    let error = serde_json::from_str::<NativeRuntimeConfig>(r#"{ "context": { "nCtx": 8192 } }"#)
+        .expect_err("camelCase fields should be rejected");
+
+    assert!(error.to_string().contains("unknown field"));
+}
+
+#[test]
 fn llama_common_args_are_normalized_at_public_boundary() {
     let config = NativeRuntimeConfig {
+        placement: ModelPlacementConfig {
+            gpu_layers: GpuLayerConfig::Count(-1),
+            main_gpu: Some(-1),
+            fit_params_min_ctx: Some(0),
+            ..ModelPlacementConfig::default()
+        },
         context: ContextRuntimeConfig {
             n_ctx: Some(-1),
             n_batch: Some(0),
@@ -62,6 +76,9 @@ fn llama_common_args_are_normalized_at_public_boundary() {
     let args = config.llama_common_args();
 
     assert_arg_value(&args, "--ctx-size", "1");
+    assert_arg_value(&args, "--gpu-layers", "0");
+    assert_arg_value(&args, "--main-gpu", "0");
+    assert_arg_value(&args, "--fit-ctx", "1");
     assert_arg_value(&args, "--batch-size", "1");
     assert_arg_value(&args, "--ubatch-size", "1");
     assert_arg_value(&args, "--parallel", "1");

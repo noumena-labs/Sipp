@@ -333,8 +333,8 @@ class FakeRuntime implements EngineRuntime {
     config?: NativeRuntimeConfig
   ): Promise<void> {
     this.loadCount += 1;
-    this.runtimeMetricsEnabled = config?.observability?.runtimeMetrics === true;
-    this.backendProfilingEnabled = config?.observability?.backendProfiling === true;
+    this.runtimeMetricsEnabled = config?.observability?.runtime_metrics === true;
+    this.backendProfilingEnabled = config?.observability?.backend_profiling === true;
     if (this.nextLoadError != null) {
       const error = this.nextLoadError;
       this.nextLoadError = null;
@@ -647,11 +647,11 @@ test('ModelService emits lifecycle observability and captures runtime/profile mo
 
 test('ModelService switches models and reuses identical runtime fingerprints as no-ops', async () => {
   const { service, runtime } = createService();
-  const first = await service.load(file('first.gguf'), { runtime: { context: { nCtx: 1024 } } });
-  await service.load(first.id, { runtime: { context: { nCtx: 1024 } } });
+  const first = await service.load(file('first.gguf'), { runtime: { context: { n_ctx: 1024 } } });
+  await service.load(first.id, { runtime: { context: { n_ctx: 1024 } } });
   assert.equal(runtime.loadCount, 1);
 
-  await service.load(first.id, { runtime: { context: { nCtx: 2048 } } });
+  await service.load(first.id, { runtime: { context: { n_ctx: 2048 } } });
   assert.equal(runtime.loadCount, 2);
 
   const second = await service.load(file('second.gguf'));

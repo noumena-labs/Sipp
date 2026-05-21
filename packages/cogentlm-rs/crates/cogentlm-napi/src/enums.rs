@@ -42,16 +42,12 @@ pub(super) fn parse_stats_mode(value: &str) -> Result<StatsMode> {
 }
 
 pub(super) fn parse_gpu_layers(value: &str) -> Result<GpuLayerConfig> {
-    let trimmed = value.trim();
-    if trimmed.eq_ignore_ascii_case("auto") {
-        Ok(GpuLayerConfig::Auto)
-    } else if trimmed.eq_ignore_ascii_case("all") || trimmed.eq_ignore_ascii_case("full") {
-        Ok(GpuLayerConfig::All)
-    } else {
-        trimmed
-            .parse::<i32>()
-            .map(GpuLayerConfig::Count)
-            .map_err(|_| invalid_arg("gpuLayers must be one of: auto, all, or an integer count"))
+    match normalize_choice(value).as_str() {
+        "auto" => Ok(GpuLayerConfig::Auto),
+        "all" => Ok(GpuLayerConfig::All),
+        _ => Err(invalid_arg(
+            r#"gpu_layers must be "auto", "all", or { count: number }"#,
+        )),
     }
 }
 
@@ -62,7 +58,7 @@ pub(super) fn parse_split_mode(value: &str) -> Result<SplitMode> {
         "row" => Ok(SplitMode::Row),
         "tensor" => Ok(SplitMode::Tensor),
         _ => Err(invalid_arg(
-            "splitMode must be one of: none, layer, row, tensor",
+            "split_mode must be one of: none, layer, row, tensor",
         )),
     }
 }
@@ -73,7 +69,7 @@ pub(super) fn parse_flash_attention(value: &str) -> Result<FlashAttentionMode> {
         "enabled" | "enable" | "on" | "true" => Ok(FlashAttentionMode::Enabled),
         "disabled" | "disable" | "off" | "false" => Ok(FlashAttentionMode::Disabled),
         _ => Err(invalid_arg(
-            "flashAttention must be one of: auto, enabled, disabled",
+            "flash_attention must be one of: auto, enabled, disabled",
         )),
     }
 }
@@ -122,7 +118,7 @@ pub(super) fn parse_cache_key_policy(value: &str) -> Result<CacheKeyPolicy> {
         "context_key" => Ok(CacheKeyPolicy::ContextKey),
         "prompt_hash" => Ok(CacheKeyPolicy::PromptHash),
         _ => Err(invalid_arg(
-            "cacheKeyPolicy must be one of: context-key, prompt-hash",
+            "cache_key_policy must be one of: context_key, prompt_hash",
         )),
     }
 }
@@ -141,7 +137,7 @@ pub(super) fn parse_sampler_stage(value: &str) -> Result<SamplerStage> {
         "penalties" => Ok(SamplerStage::Penalties),
         "adaptive_p" => Ok(SamplerStage::AdaptiveP),
         _ => Err(invalid_arg(
-            "sampler stage must be one of: dry, top-k, typical-p, top-p, top-n-sigma, min-p, xtc, temperature, infill, penalties, adaptive-p",
+            "sampler stage must be one of: dry, top_k, typical_p, top_p, top_n_sigma, min_p, xtc, temperature, infill, penalties, adaptive_p",
         )),
     }
 }
@@ -152,7 +148,7 @@ pub(super) fn parse_scheduler_policy(value: &str) -> Result<SchedulerPolicyMode>
         "balanced" | "balance" => Ok(SchedulerPolicyMode::Balanced),
         "throughput_first" | "throughput" => Ok(SchedulerPolicyMode::ThroughputFirst),
         _ => Err(invalid_arg(
-            "schedulerPolicy must be one of: latency-first, balanced, throughput-first",
+            "scheduler.policy.mode must be one of: latency_first, balanced, throughput_first",
         )),
     }
 }

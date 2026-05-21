@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct SamplingRuntimeConfig {
     pub samplers: Vec<SamplerStage>,
     pub seed: Option<u32>,

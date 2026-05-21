@@ -55,7 +55,7 @@ Observability is opt-in. Use `"runtime"` for request/runtime metrics or `"profil
 ```ts
 await engine.models.load('https://example.com/model.gguf', {
   observability: 'profile',
-  runtime: { context: { nCtx: 4096 } },
+  runtime: { context: { n_ctx: 4096 } },
 });
 
 const unsubscribe = engine.observability.subscribe(({ type, snapshot }) => {

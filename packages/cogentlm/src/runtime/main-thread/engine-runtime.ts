@@ -1,5 +1,4 @@
 import { CogentConfig, EngineModuleOptions } from '../../engine/engine-options.js';
-import { normalizeInitConfig } from '../../core/init-config.js';
 import {
   BackendObservability,
   EngineExecutionMode,
@@ -666,18 +665,17 @@ export class MainThreadEngineRuntime implements EngineRuntime {
           ...config,
           multimodal: {
             ...config?.multimodal,
-            projectorPath: modelPathOrBundle.projectorPath,
+            projector_path: modelPathOrBundle.projectorPath,
           },
         };
-    const normalizedConfig = normalizeInitConfig(effectiveConfig);
-    const expectsMediaSupport = effectiveConfig?.multimodal?.projectorPath != null;
+    const expectsMediaSupport = effectiveConfig?.multimodal?.projector_path != null;
     this.runtimeObservabilityEnabled =
-      effectiveConfig?.observability?.runtimeMetrics === true ||
-      effectiveConfig?.observability?.backendProfiling === true;
-    this.backendProfilingEnabled = effectiveConfig?.observability?.backendProfiling === true;
+      effectiveConfig?.observability?.runtime_metrics === true ||
+      effectiveConfig?.observability?.backend_profiling === true;
+    this.backendProfilingEnabled = effectiveConfig?.observability?.backend_profiling === true;
     this.transportObservability.enabled = this.runtimeObservabilityEnabled;
     try {
-      const result = await bridge.loadRuntimeModel(modelPath, normalizedConfig);
+      const result = await bridge.loadRuntimeModel(modelPath, effectiveConfig);
       if (result !== 0) {
         const detail = bridge.readLastEngineError();
         throw new Error(
@@ -709,8 +707,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
   private hasExplicitProjectorPath(config: NativeRuntimeConfig | undefined): boolean {
     return (
-      typeof config?.multimodal?.projectorPath === 'string' &&
-      config.multimodal.projectorPath.trim().length > 0
+      typeof config?.multimodal?.projector_path === 'string' &&
+      config.multimodal.projector_path.trim().length > 0
     );
   }
 

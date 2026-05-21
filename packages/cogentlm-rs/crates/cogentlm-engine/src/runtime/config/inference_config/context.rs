@@ -7,7 +7,7 @@ mod value_types;
 pub use value_types::{FlashAttentionMode, KvCacheType, RopeScaling};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ContextRuntimeConfig {
     pub n_ctx: Option<i32>,
     pub n_batch: Option<i32>,

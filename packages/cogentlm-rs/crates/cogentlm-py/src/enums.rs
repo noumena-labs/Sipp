@@ -39,16 +39,12 @@ pub(super) fn parse_stats_mode(value: &str) -> PyResult<StatsMode> {
 }
 
 pub(super) fn parse_gpu_layers(value: &str) -> PyResult<GpuLayerConfig> {
-    let normalized = normalize_choice(value);
-    match normalized.as_str() {
+    match normalize_choice(value).as_str() {
         "auto" => Ok(GpuLayerConfig::Auto),
-        "all" | "full" => Ok(GpuLayerConfig::All),
-        _ => normalized
-            .parse::<i32>()
-            .map(GpuLayerConfig::Count)
-            .map_err(|_| {
-                PyValueError::new_err("gpu_layers must be one of: auto, all, or an integer count")
-            }),
+        "all" => Ok(GpuLayerConfig::All),
+        _ => Err(PyValueError::new_err(
+            r#"gpu_layers must be "auto", "all", or {"count": int}"#,
+        )),
     }
 }
 
@@ -149,7 +145,7 @@ pub(super) fn parse_scheduler_policy(value: &str) -> PyResult<SchedulerPolicyMod
         "balanced" | "balance" => Ok(SchedulerPolicyMode::Balanced),
         "throughput_first" | "throughput" => Ok(SchedulerPolicyMode::ThroughputFirst),
         _ => Err(PyValueError::new_err(
-            "scheduler_policy must be one of: latency_first, balanced, throughput_first",
+            "scheduler.policy.mode must be one of: latency_first, balanced, throughput_first",
         )),
     }
 }

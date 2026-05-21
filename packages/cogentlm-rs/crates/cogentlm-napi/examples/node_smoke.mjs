@@ -43,10 +43,10 @@ try {
     stats: 'basic',
     runtime: {
       placement: {
-        gpuLayers: gpuLayers == null ? undefined : String(gpuLayers)
+        gpu_layers: gpuLayers == null ? undefined : { count: gpuLayers }
       },
       context: {
-        nCtx: 2048
+        n_ctx: 2048
       },
       sampling: {
         temperature: 0.7,

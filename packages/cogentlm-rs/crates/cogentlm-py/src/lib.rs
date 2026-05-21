@@ -28,7 +28,7 @@ use cogentlm_engine::runtime::metrics::RuntimeObservabilityMetrics;
 use cogentlm_engine::runtime::request::{GenerateResponse, GenerateResponseStatus};
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyAny, PyDict, PyList};
 
 const PY_CALLBACK_FAILED_MESSAGE: &str = "Python token callback failed";
 
@@ -200,7 +200,7 @@ impl PyModelPlacementConfig {
     ))]
     fn new(
         devices: Option<Vec<String>>,
-        gpu_layers: Option<String>,
+        gpu_layers: Option<&Bound<'_, PyAny>>,
         split_mode: Option<String>,
         main_gpu: Option<i32>,
         tensor_split: Option<Vec<f32>>,
@@ -218,7 +218,7 @@ impl PyModelPlacementConfig {
             core.devices = devices;
         }
         if let Some(gpu_layers) = gpu_layers {
-            core.gpu_layers = parse_gpu_layers(&gpu_layers)?;
+            core.gpu_layers = parse_gpu_layers_value(gpu_layers)?;
         }
         if let Some(split_mode) = split_mode {
             core.split_mode = parse_split_mode(&split_mode)?;
@@ -363,6 +363,44 @@ impl PyContextRuntimeConfig {
     }
 }
 
+#[pyclass(name = "SchedulerPolicyConfig")]
+#[derive(Debug, Clone)]
+struct PySchedulerPolicyConfig {
+    core: SchedulerPolicyConfig,
+}
+
+#[pymethods]
+impl PySchedulerPolicyConfig {
+    #[new]
+    #[pyo3(signature = (
+        *,
+        mode = None,
+        decode_token_reserve = None,
+        enable_adaptive_prefill_chunking = None
+    ))]
+    fn new(
+        mode: Option<String>,
+        decode_token_reserve: Option<i32>,
+        enable_adaptive_prefill_chunking: Option<bool>,
+    ) -> PyResult<Self> {
+        let mut core = SchedulerPolicyConfig::default();
+        if let Some(value) = mode {
+            core.mode = parse_scheduler_policy(&value)?;
+        }
+        if let Some(value) = decode_token_reserve {
+            core.decode_token_reserve = value;
+        }
+        if let Some(value) = enable_adaptive_prefill_chunking {
+            core.enable_adaptive_prefill_chunking = value;
+        }
+        Ok(Self { core })
+    }
+
+    fn __repr__(&self) -> String {
+        format!("{:?}", self.core)
+    }
+}
+
 #[pyclass(name = "SchedulerRuntimeConfig")]
 #[derive(Debug, Clone)]
 struct PySchedulerRuntimeConfig {
@@ -376,17 +414,14 @@ impl PySchedulerRuntimeConfig {
         *,
         continuous_batching = None,
         policy = None,
-        decode_token_reserve = None,
-        adaptive_prefill_chunking = None,
         prefill_chunk_size = None,
         max_running_requests = None,
         max_queued_requests = None
     ))]
     fn new(
+        py: Python<'_>,
         continuous_batching: Option<bool>,
-        policy: Option<String>,
-        decode_token_reserve: Option<i32>,
-        adaptive_prefill_chunking: Option<bool>,
+        policy: Option<Py<PySchedulerPolicyConfig>>,
         prefill_chunk_size: Option<i32>,
         max_running_requests: Option<i32>,
         max_queued_requests: Option<i32>,
@@ -395,16 +430,9 @@ impl PySchedulerRuntimeConfig {
         if let Some(value) = continuous_batching {
             core.continuous_batching = value;
         }
-        core.policy = SchedulerPolicyConfig {
-            mode: if let Some(policy) = policy {
-                parse_scheduler_policy(&policy)?
-            } else {
-                core.policy.mode
-            },
-            decode_token_reserve: decode_token_reserve.unwrap_or(core.policy.decode_token_reserve),
-            enable_adaptive_prefill_chunking: adaptive_prefill_chunking
-                .unwrap_or(core.policy.enable_adaptive_prefill_chunking),
-        };
+        if let Some(value) = policy {
+            core.policy = value.borrow(py).core;
+        }
         if let Some(value) = prefill_chunk_size {
             core.prefill_chunk_size = value;
         }
@@ -1255,6 +1283,7 @@ fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyModelPlacementConfig>()?;
     module.add_class::<PyContextRuntimeConfig>()?;
     module.add_class::<PySamplingRuntimeConfig>()?;
+    module.add_class::<PySchedulerPolicyConfig>()?;
     module.add_class::<PySchedulerRuntimeConfig>()?;
     module.add_class::<PyCacheRuntimeConfig>()?;
     module.add_class::<PyMultimodalRuntimeConfig>()?;
@@ -1915,17 +1944,34 @@ fn parse_stats_mode(value: &str) -> PyResult<StatsMode> {
 }
 
 fn parse_gpu_layers(value: &str) -> PyResult<GpuLayerConfig> {
-    let normalized = normalize_choice(value);
-    match normalized.as_str() {
+    match normalize_choice(value).as_str() {
         "auto" => Ok(GpuLayerConfig::Auto),
-        "all" | "full" => Ok(GpuLayerConfig::All),
-        _ => normalized
-            .parse::<i32>()
-            .map(GpuLayerConfig::Count)
-            .map_err(|_| {
-                PyValueError::new_err("gpu_layers must be one of: auto, all, or an integer count")
-            }),
+        "all" => Ok(GpuLayerConfig::All),
+        _ => Err(PyValueError::new_err(
+            r#"gpu_layers must be "auto", "all", or {"count": int}"#,
+        )),
     }
+}
+
+fn parse_gpu_layers_value(value: &Bound<'_, PyAny>) -> PyResult<GpuLayerConfig> {
+    if let Ok(value) = value.extract::<String>() {
+        return parse_gpu_layers(&value);
+    }
+    if let Ok(dict) = value.downcast::<PyDict>() {
+        let count = dict
+            .get_item("count")?
+            .ok_or_else(|| PyValueError::new_err("gpu_layers.count is required"))?
+            .extract::<i32>()?;
+        if count < 0 {
+            return Err(PyValueError::new_err(
+                "gpu_layers.count must be a non-negative integer",
+            ));
+        }
+        return Ok(GpuLayerConfig::Count(count));
+    }
+    Err(PyTypeError::new_err(
+        r#"gpu_layers must be "auto", "all", or {"count": int}"#,
+    ))
 }
 
 fn parse_split_mode(value: &str) -> PyResult<SplitMode> {
@@ -2025,7 +2071,7 @@ fn parse_scheduler_policy(value: &str) -> PyResult<SchedulerPolicyMode> {
         "balanced" | "balance" => Ok(SchedulerPolicyMode::Balanced),
         "throughput_first" | "throughput" => Ok(SchedulerPolicyMode::ThroughputFirst),
         _ => Err(PyValueError::new_err(
-            "scheduler_policy must be one of: latency_first, balanced, throughput_first",
+            "scheduler.policy.mode must be one of: latency_first, balanced, throughput_first",
         )),
     }
 }

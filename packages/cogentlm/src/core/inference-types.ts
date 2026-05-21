@@ -1,67 +1,67 @@
 import type { RequestObservabilityMetrics } from '../observability/runtime-observability.js';
 
 export type FlashAttentionMode = 'auto' | 'enabled' | 'disabled';
-export type SchedulerPolicyMode = 'latency-first' | 'balanced' | 'throughput-first';
+export type SchedulerPolicyMode = 'latency_first' | 'balanced' | 'throughput_first';
 export type EngineExecutionMode = 'main-thread' | 'worker';
 
-export type GpuLayerConfig = 'auto' | 'all' | number;
+export type GpuLayerConfig = 'auto' | 'all' | { count: number };
 export type SplitMode = 'none' | 'layer' | 'row' | 'tensor';
 export type KvCacheType = 'f16' | 'f32' | 'q8_0' | 'q4_0' | 'q4_1' | 'iq4_nl' | 'q5_0' | 'q5_1';
 export type RopeScaling = 'none' | 'linear' | 'yarn';
-export type KvReuseMode = 'disabled' | 'live-slot-prefix' | 'state-snapshot' | 'live-slot-and-snapshot';
-export type CacheKeyPolicy = 'context-key' | 'prompt-hash';
+export type KvReuseMode = 'disabled' | 'live_slot_prefix' | 'state_snapshot' | 'live_slot_and_snapshot';
+export type CacheKeyPolicy = 'context_key' | 'prompt_hash';
 export type SamplerStage =
   | 'dry'
-  | 'top-k'
-  | 'typical-p'
-  | 'top-p'
-  | 'top-n-sigma'
-  | 'min-p'
+  | 'top_k'
+  | 'typical_p'
+  | 'top_p'
+  | 'top_n_sigma'
+  | 'min_p'
   | 'xtc'
   | 'temperature'
   | 'infill'
   | 'penalties'
-  | 'adaptive-p';
+  | 'adaptive_p';
 
 export interface ModelPlacementConfig {
   devices?: string[];
-  gpuLayers?: GpuLayerConfig;
-  splitMode?: SplitMode;
-  mainGpu?: number;
-  tensorSplit?: number[];
-  useMmap?: boolean;
-  useMlock?: boolean;
-  fitParams?: boolean;
-  fitParamsMinCtx?: number;
-  fitParamsTargetBytes?: number[];
-  checkTensors?: boolean;
-  noExtraBufts?: boolean;
-  noHost?: boolean;
+  gpu_layers?: GpuLayerConfig;
+  split_mode?: SplitMode;
+  main_gpu?: number;
+  tensor_split?: number[];
+  use_mmap?: boolean;
+  use_mlock?: boolean;
+  fit_params?: boolean;
+  fit_params_min_ctx?: number;
+  fit_params_target_bytes?: number[];
+  check_tensors?: boolean;
+  no_extra_bufts?: boolean;
+  no_host?: boolean;
 }
 
 export interface ContextRuntimeConfig {
-  nCtx?: number;
-  nBatch?: number;
-  nUbatch?: number;
-  nParallel?: number;
-  nThreads?: number;
-  nThreadsBatch?: number;
-  flashAttention?: FlashAttentionMode;
-  kvUnified?: boolean;
-  cacheTypeK?: KvCacheType;
-  cacheTypeV?: KvCacheType;
-  offloadKqv?: boolean;
-  opOffload?: boolean;
-  swaFull?: boolean;
+  n_ctx?: number;
+  n_batch?: number;
+  n_ubatch?: number;
+  n_parallel?: number;
+  n_threads?: number;
+  n_threads_batch?: number;
+  flash_attention?: FlashAttentionMode;
+  kv_unified?: boolean;
+  cache_type_k?: KvCacheType;
+  cache_type_v?: KvCacheType;
+  offload_kqv?: boolean;
+  op_offload?: boolean;
+  swa_full?: boolean;
   warmup?: boolean;
-  ropeScaling?: RopeScaling;
-  ropeFreqBase?: number;
-  ropeFreqScale?: number;
-  yarnOrigCtx?: number;
-  yarnExtFactor?: number;
-  yarnAttnFactor?: number;
-  yarnBetaFast?: number;
-  yarnBetaSlow?: number;
+  rope_scaling?: RopeScaling;
+  rope_freq_base?: number;
+  rope_freq_scale?: number;
+  yarn_orig_ctx?: number;
+  yarn_ext_factor?: number;
+  yarn_attn_factor?: number;
+  yarn_beta_fast?: number;
+  yarn_beta_slow?: number;
 }
 
 export interface LogitBiasConfig {
@@ -72,76 +72,80 @@ export interface LogitBiasConfig {
 export interface SamplingRuntimeConfig {
   samplers?: SamplerStage[];
   seed?: number;
-  topK?: number;
-  topP?: number;
-  minP?: number;
-  typicalP?: number;
-  xtcProbability?: number;
-  xtcThreshold?: number;
-  topNSigma?: number;
+  top_k?: number;
+  top_p?: number;
+  min_p?: number;
+  typical_p?: number;
+  xtc_probability?: number;
+  xtc_threshold?: number;
+  top_n_sigma?: number;
   temperature?: number;
-  dynatempRange?: number;
-  dynatempExponent?: number;
-  repeatLastN?: number;
-  repeatPenalty?: number;
-  frequencyPenalty?: number;
-  presencePenalty?: number;
-  dryMultiplier?: number;
-  dryBase?: number;
-  dryAllowedLength?: number;
-  dryPenaltyLastN?: number;
-  drySequenceBreakers?: string[];
+  dynatemp_range?: number;
+  dynatemp_exponent?: number;
+  repeat_last_n?: number;
+  repeat_penalty?: number;
+  frequency_penalty?: number;
+  presence_penalty?: number;
+  dry_multiplier?: number;
+  dry_base?: number;
+  dry_allowed_length?: number;
+  dry_penalty_last_n?: number;
+  dry_sequence_breakers?: string[];
   mirostat?: number;
-  mirostatTau?: number;
-  mirostatEta?: number;
-  minKeep?: number;
-  nProbs?: number;
-  logitBias?: LogitBiasConfig[];
-  ignoreEos?: boolean;
-  grammarLazy?: boolean;
-  preservedTokens?: number[];
-  backendSampling?: boolean;
+  mirostat_tau?: number;
+  mirostat_eta?: number;
+  min_keep?: number;
+  n_probs?: number;
+  logit_bias?: LogitBiasConfig[];
+  ignore_eos?: boolean;
+  grammar_lazy?: boolean;
+  preserved_tokens?: number[];
+  backend_sampling?: boolean;
+}
+
+export interface SchedulerPolicyConfig {
+  mode?: SchedulerPolicyMode;
+  decode_token_reserve?: number;
+  enable_adaptive_prefill_chunking?: boolean;
 }
 
 export interface SchedulerRuntimeConfig {
-  continuousBatching?: boolean;
-  policy?: SchedulerPolicyMode;
-  decodeTokenReserve?: number;
-  adaptivePrefillChunking?: boolean;
-  prefillChunkSize?: number;
-  maxRunningRequests?: number;
-  maxQueuedRequests?: number;
+  continuous_batching?: boolean;
+  policy?: SchedulerPolicyConfig;
+  prefill_chunk_size?: number;
+  max_running_requests?: number;
+  max_queued_requests?: number;
 }
 
 export interface CacheRuntimeConfig {
   mode?: KvReuseMode;
-  retainedPrefixTokens?: number;
-  snapshotIntervalTokens?: number;
-  maxSnapshotEntries?: number;
-  maxSnapshotBytes?: number;
-  maxSessionEntries?: number;
-  cacheKeyPolicy?: CacheKeyPolicy;
-  enableContextCheckpoints?: boolean;
-  checkpointEveryTokens?: number;
+  retained_prefix_tokens?: number;
+  snapshot_interval_tokens?: number;
+  max_snapshot_entries?: number;
+  max_snapshot_bytes?: number;
+  max_session_entries?: number;
+  cache_key_policy?: CacheKeyPolicy;
+  enable_context_checkpoints?: boolean;
+  checkpoint_every_tokens?: number;
 }
 
 export interface MultimodalRuntimeConfig {
-  projectorPath?: string;
-  useGpu?: boolean;
-  imageMinTokens?: number;
-  imageMaxTokens?: number;
+  projector_path?: string;
+  use_gpu?: boolean;
+  image_min_tokens?: number;
+  image_max_tokens?: number;
 }
 
 export interface ResidencyRuntimeConfig {
-  maxGpuModelsPerDevice?: number;
-  allowCpuModelsWhileGpuLoaded?: boolean;
-  requireGpuLease?: boolean;
-  gpuMemorySafetyMarginBytes?: number;
+  max_gpu_models_per_device?: number;
+  allow_cpu_models_while_gpu_loaded?: boolean;
+  require_gpu_lease?: boolean;
+  gpu_memory_safety_margin_bytes?: number;
 }
 
 export interface ObservabilityRuntimeConfig {
-  runtimeMetrics?: boolean;
-  backendProfiling?: boolean;
+  runtime_metrics?: boolean;
+  backend_profiling?: boolean;
 }
 
 export interface NativeRuntimeConfig {

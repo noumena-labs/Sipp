@@ -67,8 +67,8 @@ export function applyObservabilityMode(
     ...(runtime ?? {}),
     observability: {
       ...(runtime?.observability ?? {}),
-      runtimeMetrics: mode === 'runtime' || mode === 'profile',
-      backendProfiling: mode === 'profile',
+      runtime_metrics: mode === 'runtime' || mode === 'profile',
+      backend_profiling: mode === 'profile',
     },
   };
 }
