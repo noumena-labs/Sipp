@@ -28,7 +28,7 @@ add_compile_options(${CE_WASM_COMPILE_FLAGS})
 option(CE_BUILD_WEBGPU_TEST_BACKEND_OPS "Build llama.cpp test-backend-ops for browser-hosted WebGPU execution" OFF)
 
 option(MTMD_NO_LOGGING "Suppress all multimodal logging" OFF)
-set(CE_WASM_RUST_BROWSER_LIB "" CACHE FILEPATH "Rust wasm32 Emscripten staticlib for the browser runtime")
+set(CE_WASM_RUST_STATICLIB "" CACHE FILEPATH "Rust wasm32 Emscripten staticlib for the browser runtime")
 set(CE_RUST_SYS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../cogentlm-rs/crates/cogentlm-sys)
 set(CE_LLAMA_CPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/llama.cpp")
 
@@ -93,8 +93,8 @@ if(CE_BUILD_WEBGPU_TEST_BACKEND_OPS)
   ce_apply_emscripten_cli_target(test-backend-ops TestBackendOpsModule)
 endif()
 
-if(NOT CE_WASM_RUST_BROWSER_LIB)
-    message(FATAL_ERROR "Browser builds require CE_WASM_RUST_BROWSER_LIB")
+if(NOT CE_WASM_RUST_STATICLIB)
+    message(FATAL_ERROR "Browser builds require CE_WASM_RUST_STATICLIB")
 endif()
 
 # Public browser wasm exports. Rust owns lifecycle, requests, scheduling,
@@ -163,15 +163,15 @@ if(CE_WASM_MEM64)
     message(FATAL_ERROR "Browser Rust staticlibs require CE_WASM_MEM64=OFF because Rust currently provides wasm32-unknown-emscripten for this path")
 endif()
 
-if(NOT EXISTS "${CE_WASM_RUST_BROWSER_LIB}")
-    message(FATAL_ERROR "CE_WASM_RUST_BROWSER_LIB does not exist: ${CE_WASM_RUST_BROWSER_LIB}")
+if(NOT EXISTS "${CE_WASM_RUST_STATICLIB}")
+    message(FATAL_ERROR "CE_WASM_RUST_STATICLIB does not exist: ${CE_WASM_RUST_STATICLIB}")
 endif()
 
-add_library(cogentlm_browser_rust STATIC IMPORTED GLOBAL)
-set_target_properties(cogentlm_browser_rust PROPERTIES
-    IMPORTED_LOCATION "${CE_WASM_RUST_BROWSER_LIB}")
-target_link_libraries(CogentLM PRIVATE cogentlm_browser_rust)
-message(STATUS "CogentLM Rust browser staticlib: ${CE_WASM_RUST_BROWSER_LIB}")
+add_library(cogentlm_wasm_rust STATIC IMPORTED GLOBAL)
+set_target_properties(cogentlm_wasm_rust PROPERTIES
+    IMPORTED_LOCATION "${CE_WASM_RUST_STATICLIB}")
+target_link_libraries(CogentLM PRIVATE cogentlm_wasm_rust)
+message(STATUS "CogentLM Rust wasm staticlib: ${CE_WASM_RUST_STATICLIB}")
 
 target_link_libraries(CogentLM PRIVATE llama)
 if(TARGET llama-common)

@@ -6,7 +6,7 @@ import type {
   ChatOptions,
   RequestResult,
   TokenBatch,
-} from '../model-management/model-types.js';
+} from '../models/types.js';
 import { parseDirectorConfig } from './director-config.js';
 import { DirectorRuntime, type DirectorRuntimeEngine } from './director-runtime.js';
 

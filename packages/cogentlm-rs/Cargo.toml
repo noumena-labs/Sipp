@@ -1,12 +1,12 @@
 [workspace]
 members = [
-    "crates/cogentlm-gguf",
+    "crates/cogentlm-shard",
     "crates/cogentlm-sys",
-    "crates/cogentlm-core",
+    "crates/cogentlm-engine",
     "crates/cogentlm-cli",
-    "crates/cogentlm-python",
-    "crates/cogentlm-node",
-    "crates/cogentlm-browser",
+    "crates/cogentlm-py",
+    "crates/cogentlm-napi",
+    "crates/cogentlm-wasm",
 ]
 resolver = "2"
 
@@ -48,7 +48,7 @@ thiserror = "2.0"
 #   * debug-assertions / overflow-checks / incremental: defaulted off.
 #
 # We intentionally keep panic = "unwind" (the default) so that the
-# `catch_unwind` guards in cogentlm-browser's FFI exports remain
+# `catch_unwind` guards in cogentlm-wasm's FFI exports remain
 # effective — switching to `abort` would let any Rust panic kill the entire
 # wasm module, breaking the engine without a way to recover.
 [profile.release]

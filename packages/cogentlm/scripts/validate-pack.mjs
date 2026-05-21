@@ -13,14 +13,14 @@ const supportedPackageRoots = new Set([internalPackageRoot, publicPackageRoot]);
 const requiredPackPaths = [
   'dist/esm/index.js',
   'dist/esm/runtime/package-assets.js',
-  'dist/esm/runtime-assets.js',
+  'dist/esm/engine/runtime-assets.js',
   'dist/esm/worker/model-service-client.js',
   'dist/esm/worker/model-service-entry.js',
   'dist/esm/character/index.js',
   'dist/esm/orchestrator/index.js',
   'dist/types/index.d.ts',
   'dist/types/runtime/package-assets.d.ts',
-  'dist/types/runtime-assets.d.ts',
+  'dist/types/engine/runtime-assets.d.ts',
   'dist/types/character/index.d.ts',
   'dist/types/orchestrator/index.d.ts',
   'dist/wasm/cogentlm-wasm.js',
@@ -74,7 +74,7 @@ if (missingPaths.length > 0) {
 
 const workerClientPath = path.join(packageDir, 'dist', 'esm', 'worker', 'model-service-client.js');
 const workerEntryPath = path.join(packageDir, 'dist', 'esm', 'worker', 'model-service-entry.js');
-const runtimePath = path.join(packageDir, 'dist', 'esm', 'runtime', 'engine-runtime-main-thread.js');
+const runtimePath = path.join(packageDir, 'dist', 'esm', 'runtime', 'main-thread', 'engine-runtime.js');
 const packageAssetsPath = path.join(packageDir, 'dist', 'esm', 'runtime', 'package-assets.js');
 const workerClientText = readFileSync(workerClientPath, 'utf8');
 const workerEntryText = readFileSync(workerEntryPath, 'utf8');

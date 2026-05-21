@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { GenerateResponse, TokenBatch, TransportObservability } from '../types.js';
-import { COMPLETED_REQUEST_STATUS_COMPLETED } from './main-thread-runtime-constants.js';
+import { COMPLETED_REQUEST_STATUS_COMPLETED } from './main-thread/constants.js';
 import { RequestTracker } from './request-tracker.js';
 import { QueuedRequestScheduler } from './scheduler.js';
 import type { WasmBridge } from '../wasm/wasm-bridge.js';

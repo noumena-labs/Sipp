@@ -1,0 +1,24 @@
+[package]
+name = "cogentlm-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["native"]
+native = ["cogentlm-sys/native"]
+cuda = ["cogentlm-sys/cuda"]
+metal = ["cogentlm-sys/metal"]
+vulkan = ["cogentlm-sys/vulkan"]
+openmp = ["cogentlm-sys/openmp"]
+
+[dependencies]
+cogentlm-sys = { path = "../cogentlm-sys", default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true

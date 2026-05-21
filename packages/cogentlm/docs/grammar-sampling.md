@@ -51,7 +51,7 @@ Therefore each active scheduler slot owns its own `common_sampler` instance.
 The Rust runtime calls the llama.cpp common-sampler shim with the request
 grammar or JSON schema while activating the slot; no sampler instance is shared
 between slots and no grammar sampler is cloned. See
-`packages/cogentlm-rs/crates/cogentlm-core/src/runtime/inference_runtime.rs`
+`packages/cogentlm-rs/crates/cogentlm-engine/src/runtime/inference_runtime.rs`
 and `packages/cogentlm-rs/crates/cogentlm-sys/src/cogent_shim.cpp`.
 
 llama.cpp owns the sampler-chain construction and grammar placement. CogentLM
@@ -96,8 +96,8 @@ CharacterRuntime
     → engine.chat/query({ grammar })        // TS runtime
         → WasmBridge.start*Request(...)      // validates size, passes string
             → wasm_exports                   // CE_* ABI wrapper
-                → cogentlm-browser-engine     // Rust browser ABI
-                    → cogentlm-core::InferenceRuntime
+                → cogentlm-wasm engine ABI     // Rust browser ABI
+                    → cogentlm-engine::InferenceRuntime
                         → SlotState.request.grammar
                             → cogent_common_sampler_init_from_json(...)
 ```

@@ -1,11 +1,11 @@
-import { ModelService } from '../model-management/model-service.js';
+import { ModelService } from '../models/model-service.js';
 import {
   QueryError,
   type RequestResult,
   type TokenBatch,
-} from '../model-management/model-types.js';
-import { getDefaultRuntimeUrls } from '../runtime-assets.js';
-import { MainThreadEngineRuntime } from '../runtime/engine-runtime-main-thread.js';
+} from '../models/types.js';
+import { getDefaultRuntimeUrls } from '../engine/runtime-assets.js';
+import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.js';
 import { StreamingRingWriter } from '../runtime/streaming-ring.js';
 import { stableJson } from '../utils/stable-json.js';
 import {

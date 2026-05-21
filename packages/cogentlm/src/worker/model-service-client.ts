@@ -1,7 +1,7 @@
-import type { CogentConfig } from '../cogent-config.js';
-import { resolveRuntimeUrls } from '../runtime-assets.js';
+import type { CogentConfig } from '../engine/engine-options.js';
+import { resolveRuntimeUrls } from '../engine/runtime-assets.js';
 import { resolveOptimizedPackageAssetUrl } from '../runtime/package-assets.js';
-import { ObservabilityController } from '../model-management/observability-controller.js';
+import { ObservabilityController } from '../models/observability-controller.js';
 import {
   StreamingRingReader,
   createStreamingRingBuffer,
@@ -31,9 +31,9 @@ import {
   type QueryOptions,
   type TokenBatch,
   type TokenFlushMode,
-} from '../model-management/model-types.js';
-import { observabilitySnapshotToEngineState } from '../model-management/engine-protocol-adapter.js';
-import type { ModelLifecycleService } from '../model-management/model-service-contract.js';
+} from '../models/types.js';
+import { observabilitySnapshotToEngineState } from '../models/engine-protocol-adapter.js';
+import type { ModelLifecycleService } from '../models/contract.js';
 
 interface PendingWorkerCall {
   resolve: (value: unknown) => void;

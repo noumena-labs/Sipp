@@ -19,7 +19,7 @@ import type {
   QueryOptions,
   RequestResult,
   TokenBatch,
-} from '../model-management/model-types.js';
+} from '../models/types.js';
 import { StreamingBoundaryTextSanitizer } from '../core/chat-template-boundaries.js';
 import { CharacterEventBus, type CharacterEvent } from './action-bus.js';
 import {

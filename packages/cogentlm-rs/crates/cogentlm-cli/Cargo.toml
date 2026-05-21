@@ -7,11 +7,11 @@ repository.workspace = true
 
 [features]
 default = ["native"]
-native = ["cogentlm-core/native"]
-cuda = ["cogentlm-core/cuda"]
-metal = ["cogentlm-core/metal"]
-vulkan = ["cogentlm-core/vulkan"]
-openmp = ["cogentlm-core/openmp"]
+native = ["cogentlm-engine/native"]
+cuda = ["cogentlm-engine/cuda"]
+metal = ["cogentlm-engine/metal"]
+vulkan = ["cogentlm-engine/vulkan"]
+openmp = ["cogentlm-engine/openmp"]
 
 [[bin]]
 name = "cogentlm"
@@ -20,5 +20,5 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-cogentlm-core = { path = "../cogentlm-core" }
+cogentlm-engine = { path = "../cogentlm-engine" }
 serde_json.workspace = true

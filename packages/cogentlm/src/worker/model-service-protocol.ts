@@ -1,4 +1,4 @@
-import type { CogentConfig } from '../cogent-config.js';
+import type { CogentConfig } from '../engine/engine-options.js';
 import type {
   ModelLoadOptions,
   ModelLoadProgress,
@@ -10,7 +10,7 @@ import type {
   ChatOptions,
   QueryInput,
   QueryOptions,
-} from '../model-management/model-types.js';
+} from '../models/types.js';
 
 export interface WorkerSerializableCogentConfig {
   moduleUrl?: string;

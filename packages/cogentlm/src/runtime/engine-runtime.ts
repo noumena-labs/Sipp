@@ -1,4 +1,4 @@
-import { CogentConfig } from '../cogent-config.js';
+import { CogentConfig } from '../engine/engine-options.js';
 import {
   BackendObservability,
   EngineExecutionMode,

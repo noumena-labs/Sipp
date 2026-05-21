@@ -20,7 +20,7 @@ import {
   RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT,
   RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES,
   SCHEDULER_LOOP_RESULT_SIZE_BYTES,
-} from '../runtime/main-thread-runtime-constants.js';
+} from '../runtime/main-thread/constants.js';
 import { assertGrammarByteSize } from '../utils/grammar.js';
 export { MAX_GRAMMAR_BYTES } from '../utils/grammar.js';
 

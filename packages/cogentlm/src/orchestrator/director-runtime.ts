@@ -14,7 +14,7 @@ import type {
   ChatOptions,
   ModelInfo,
   RequestResult,
-} from '../model-management/model-types.js';
+} from '../models/types.js';
 import type { ChatMessage } from '../types.js';
 import { createTimedAbortController } from '../utils/abort.js';
 import {

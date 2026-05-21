@@ -9,7 +9,7 @@ import {
   COMPLETED_REQUEST_STATUS_PENDING,
   REQUEST_STEP_RESULT_FATAL_NO_PROGRESS,
   REQUEST_STEP_RESULT_INVALID,
-} from './main-thread-runtime-constants.js';
+} from './main-thread/constants.js';
 import { RequestTracker } from './request-tracker.js';
 import { WasmBridge } from '../wasm/wasm-bridge.js';
 import type { StreamingRingWriter } from './streaming-ring.js';

@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use anyhow::{bail, Context};
 use clap::Parser;
-use cogentlm_core::runtime::request::{GenerateResponseStatus, GenerateTokenEmissionMode};
-use cogentlm_core::runtime::{InferenceRuntime, RequestStepResult};
-use cogentlm_core::{GpuLayerConfig, NativeRuntimeConfig, SamplingRuntimeConfig};
+use cogentlm_engine::engine::{GpuLayerConfig, NativeRuntimeConfig, SamplingRuntimeConfig};
+use cogentlm_engine::runtime::request::{GenerateResponseStatus, GenerateTokenEmissionMode};
+use cogentlm_engine::runtime::{InferenceRuntime, RequestStepResult};
 use serde_json::json;
 
 #[derive(Debug, Parser)]

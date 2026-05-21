@@ -119,7 +119,7 @@ async function syncTypeScriptDist() {
 }
 
 async function preserveBundlerDirectives() {
-  const runtimePath = path.join(tempEsmDir, 'runtime', 'engine-runtime-main-thread.js');
+  const runtimePath = path.join(tempEsmDir, 'runtime', 'main-thread', 'engine-runtime.js');
   const runtimeText = await readFile(runtimePath, 'utf8');
   // Stack ignore comments so every major bundler skips static analysis of the
   // dynamic Emscripten module URL:
@@ -134,7 +134,7 @@ async function preserveBundlerDirectives() {
 
   if (patchedRuntimeText === runtimeText) {
     throw new Error(
-      'Could not preserve bundler ignore directives in engine-runtime-main-thread.js.'
+      'Could not preserve bundler ignore directives in runtime/main-thread/engine-runtime.js.'
     );
   }
 

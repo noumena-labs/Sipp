@@ -13,7 +13,7 @@ import type {
   ChatInput,
   ChatOptions,
   RequestResult,
-} from '../model-management/model-types.js';
+} from '../models/types.js';
 import type { ChatMessage } from '../types.js';
 import { sliceUnstreamedSuffix } from '../core/streaming-output.js';
 import { CharacterEventBus, type CharacterEvent } from './action-bus.js';

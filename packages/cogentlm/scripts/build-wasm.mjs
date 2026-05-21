@@ -54,7 +54,7 @@ let activeChildProcess = null;
 let signalHandlersInstalled = false;
 let activeMakeProgramDir = null;
 let cachedCmakeExecutable = null;
-let rustBrowserStaticlib = null;
+let rustWasmStaticlib = null;
 
 function readBooleanEnv(name, fallback = false) {
   const rawValue = process.env[name]?.trim().toLowerCase();
@@ -137,7 +137,7 @@ function rustCargoBuildPrefix() {
     : ['build'];
 }
 
-function buildRustBrowserStaticlib() {
+function buildRustWasmStaticlib() {
   if (enableMemory64) {
     throw new Error('Browser engine requires CE_WASM_MEM64=0.');
   }
@@ -148,13 +148,13 @@ function buildRustBrowserStaticlib() {
     throw new Error(`Missing Rust workspace for browser engine: ${manifestPath}`);
   }
 
-  console.log(`${buildLabel} building Rust browser staticlib`);
+  console.log(`${buildLabel} building Rust wasm staticlib`);
   const result = spawnSync(
     'cargo',
     [
       ...rustCargoBuildPrefix(),
       '-p',
-      'cogentlm-browser',
+      'cogentlm-wasm',
       '--target',
       'wasm32-unknown-emscripten',
       '--release',
@@ -172,7 +172,7 @@ function buildRustBrowserStaticlib() {
     throw result.error;
   }
   if (result.status !== 0) {
-    throw new Error(`Rust browser staticlib build failed with exit code ${result.status}`);
+    throw new Error(`Rust wasm staticlib build failed with exit code ${result.status}`);
   }
 
   const staticlibPath = path.join(
@@ -180,10 +180,10 @@ function buildRustBrowserStaticlib() {
     'target',
     'wasm32-unknown-emscripten',
     'release',
-    'libcogentlm_browser.a'
+    'libcogentlm_wasm.a'
   );
   if (!existsSync(staticlibPath)) {
-    throw new Error(`Rust browser staticlib was not produced: ${staticlibPath}`);
+    throw new Error(`Rust wasm staticlib was not produced: ${staticlibPath}`);
   }
 
   return normalizeCmakePath(staticlibPath);
@@ -487,8 +487,8 @@ function shouldRunConfigure(expectedGenerator) {
   const cachedMaximumMemory = getCacheEntry(cacheText, 'CE_WASM_MAXIMUM_MEMORY');
   const cachedStackSize = getCacheEntry(cacheText, 'CE_WASM_STACK_SIZE');
   const cachedLtoMode = getCacheEntry(cacheText, 'CE_WASM_LTO_MODE');
-  const cachedRustBrowserLib = getCacheEntry(cacheText, 'CE_WASM_RUST_BROWSER_LIB') ?? '';
-  const expectedRustBrowserLib = rustBrowserStaticlib ?? '';
+  const cachedRustWasmLib = getCacheEntry(cacheText, 'CE_WASM_RUST_STATICLIB') ?? '';
+  const expectedRustWasmLib = rustWasmStaticlib ?? '';
 
   if (expectedGenerator && cachedGenerator && cachedGenerator !== expectedGenerator) {
     return true;
@@ -550,7 +550,7 @@ function shouldRunConfigure(expectedGenerator) {
     return true;
   }
 
-  if (cachedRustBrowserLib !== expectedRustBrowserLib) {
+  if (cachedRustWasmLib !== expectedRustWasmLib) {
     return true;
   }
 
@@ -609,10 +609,10 @@ function removeInvalidBuildDirectory(expectedGenerator) {
     reasons.push(`CE_WASM_LTO_MODE=${cachedLtoMode}`);
   }
 
-  const cachedRustBrowserLib = getCacheEntry(cacheText, 'CE_WASM_RUST_BROWSER_LIB') ?? '';
-  const expectedRustBrowserLib = rustBrowserStaticlib ?? '';
-  if (cachedRustBrowserLib !== expectedRustBrowserLib) {
-    reasons.push(`CE_WASM_RUST_BROWSER_LIB=${cachedRustBrowserLib || 'OFF'}`);
+  const cachedRustWasmLib = getCacheEntry(cacheText, 'CE_WASM_RUST_STATICLIB') ?? '';
+  const expectedRustWasmLib = rustWasmStaticlib ?? '';
+  if (cachedRustWasmLib !== expectedRustWasmLib) {
+    reasons.push(`CE_WASM_RUST_STATICLIB=${cachedRustWasmLib || 'OFF'}`);
   }
 
   if (expectedGenerator && cachedGenerator && cachedGenerator !== expectedGenerator) {
@@ -904,7 +904,7 @@ const buildConfig = resolveBuildConfiguration();
 validateMaximumMemorySetting(maximumMemory);
 validateLtoMode(ltoMode);
 
-rustBrowserStaticlib = buildRustBrowserStaticlib();
+rustWasmStaticlib = buildRustWasmStaticlib();
 
 removeInvalidBuildDirectory(buildConfig.generator);
 
@@ -936,7 +936,7 @@ const cmakeConfigureArgs = [
   '-DLLAMA_BUILD_HTML=OFF'
 ];
 
-cmakeConfigureArgs.push(`-DCE_WASM_RUST_BROWSER_LIB=${rustBrowserStaticlib}`);
+cmakeConfigureArgs.push(`-DCE_WASM_RUST_STATICLIB=${rustWasmStaticlib}`);
 
 const emsdkRoot = resolveEmsdkRoot();
 if (emsdkRoot) {

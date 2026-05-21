@@ -194,26 +194,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "cogentlm-browser"
-version = "0.1.0"
-dependencies = [
- "cogentlm-core",
- "cogentlm-gguf",
- "serde_json",
-]
-
-[[package]]
 name = "cogentlm-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "cogentlm-core",
+ "cogentlm-engine",
  "serde_json",
 ]
 
 [[package]]
-name = "cogentlm-core"
+name = "cogentlm-engine"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -225,28 +216,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "cogentlm-gguf"
+name = "cogentlm-napi"
 version = "0.1.0"
 dependencies = [
- "thiserror",
-]
-
-[[package]]
-name = "cogentlm-node"
-version = "0.1.0"
-dependencies = [
- "cogentlm-core",
+ "cogentlm-engine",
  "napi",
  "napi-build",
  "napi-derive",
 ]
 
 [[package]]
-name = "cogentlm-python"
+name = "cogentlm-py"
 version = "0.1.0"
 dependencies = [
- "cogentlm-core",
+ "cogentlm-engine",
  "pyo3",
+]
+
+[[package]]
+name = "cogentlm-shard"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
 ]
 
 [[package]]
@@ -255,6 +246,15 @@ version = "0.1.0"
 dependencies = [
  "bindgen",
  "cmake",
+]
+
+[[package]]
+name = "cogentlm-wasm"
+version = "0.1.0"
+dependencies = [
+ "cogentlm-engine",
+ "cogentlm-shard",
+ "serde_json",
 ]
 
 [[package]]

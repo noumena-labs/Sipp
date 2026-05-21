@@ -13,11 +13,11 @@ still live behind C++ APIs.
 ## Crates
 
 - `cogentlm-sys`: CMake build, bindgen bindings, and C-compatible shims for chat templates and mtmd.
-- `cogentlm-core`: typed runtime config, llama.cpp common-param/common-sampler integration, the scheduler-backed `InferenceRuntime`, and the `CogentEngine` owner-thread API.
+- `cogentlm-engine`: typed runtime config, llama.cpp common-param/common-sampler integration, the scheduler-backed `InferenceRuntime`, and the `CogentEngine` owner-thread API.
 - `cogentlm-cli`: proof-of-concept executable.
-- `cogentlm-python`: PyO3 package binding for the native engine API.
-- `cogentlm-node`: NAPI package binding for the native engine API.
-- `cogentlm-browser`: unified Emscripten staticlib crate compiling both the inference scheduler FFI shims and browser OPFS GGUF split ingest logic into the WASM target.
+- `cogentlm-py`: PyO3 package binding for the native engine API.
+- `cogentlm-napi`: NAPI package binding for the native engine API.
+- `cogentlm-wasm`: unified Emscripten staticlib crate compiling both the inference scheduler FFI shims and browser OPFS GGUF split ingest logic into the WASM target.
 
 ## Example
 
@@ -39,12 +39,12 @@ cargo run -p cogentlm-cli -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Describe browser LLM
 
 ## Native Driver
 
-`cogentlm-core::CogentEngine` is the native engine API layer. It loads
+`cogentlm-engine::CogentEngine` is the native engine API layer. It loads
 `InferenceRuntime` on a dedicated native thread and communicates through a
 command channel:
 
 ```rust
-use cogentlm_core::{ChatMessage, ChatRequest, CogentEngine, NativeRuntimeConfig, QueryOptions};
+use cogentlm_engine::{ChatMessage, ChatRequest, CogentEngine, NativeRuntimeConfig, QueryOptions};
 
 let engine = CogentEngine::load("model.gguf", NativeRuntimeConfig::default())?;
 let answer = engine.chat(ChatRequest::new(vec![
@@ -59,7 +59,7 @@ browser implementation uses the same Rust runtime through the Emscripten wasm
 export shim and keeps TypeScript as the browser storage, Worker, and app
 adapter layer.
 
-The shared runtime contract starts in `cogentlm_core::engine::protocol` and is
+The shared runtime contract starts in `cogentlm_engine::engine::protocol` and is
 re-exported as `EngineState`, `EngineStats`, `EngineEvent`, and
 `RequestResult`. The owner-thread driver also exposes explicit
 `query_response` / `chat_response` methods when raw runtime details are
@@ -93,14 +93,14 @@ Run the runtime smoke example with a local GGUF to print backend/device
 observability, raw-query/chat outputs, and runtime metrics:
 
 ```powershell
-cargo run -q -p cogentlm-core --example phase3_smoke -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Describe browser LLM inference." --max-tokens 32
+cargo run -q -p cogentlm-engine --example phase3_smoke -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Describe browser LLM inference." --max-tokens 32
 ```
 
 For vision models, use the multimodal smoke example with the text model, the
 matching mmproj GGUF, and an image file:
 
 ```powershell
-cargo run -q -p cogentlm-core --example multimodal_smoke -- <MiniCPM-model.gguf> <MiniCPM-mmproj.gguf> ..\..\test.png "Describe this image in details" --max-tokens 128
+cargo run -q -p cogentlm-engine --example multimodal_smoke -- <MiniCPM-model.gguf> <MiniCPM-mmproj.gguf> ..\..\test.png "Describe this image in details" --max-tokens 128
 ```
 
 The example defaults to chat-template mode and inserts the mtmd media marker
@@ -112,15 +112,15 @@ show the compiled backends, discovered devices, memory, and whether
 llama.cpp reports GPU offload support. To force CPU execution:
 
 ```powershell
-cargo run -q -p cogentlm-core --example phase3_smoke -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Describe browser LLM inference." --max-tokens 32 --gpu-layers 0
+cargo run -q -p cogentlm-engine --example phase3_smoke -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Describe browser LLM inference." --max-tokens 32 --gpu-layers 0
 ```
 
 To build a native GPU-capable runtime, enable the matching Cargo feature and
 allow offload with `--gpu-layers -1`:
 
 ```powershell
-cargo run -q -p cogentlm-core --features cuda --example phase3_smoke -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Describe browser LLM inference." --max-tokens 32 --gpu-layers -1
-cargo run -q -p cogentlm-core --features vulkan --example phase3_smoke -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Describe browser LLM inference." --max-tokens 32 --gpu-layers -1
+cargo run -q -p cogentlm-engine --features cuda --example phase3_smoke -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Describe browser LLM inference." --max-tokens 32 --gpu-layers -1
+cargo run -q -p cogentlm-engine --features vulkan --example phase3_smoke -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Describe browser LLM inference." --max-tokens 32 --gpu-layers -1
 ```
 
 The CLI forwards the same backend features:
@@ -142,7 +142,7 @@ Toolkit `lib\x64` directory. The CUDA DLL directory must also be available on
 
 ## Python Bindings
 
-`cogentlm-python` is the first native package binding crate. It exposes the
+`cogentlm-py` is the first native package binding crate. It exposes the
 `CogentEngine` API to Python through PyO3:
 
 ```python
@@ -195,7 +195,7 @@ assert "".join(pieces) == result["text"]
 Install the local package for development with `uv`:
 
 ```powershell
-cd crates\cogentlm-python
+cd crates\cogentlm-py
 uv venv --python 3.9 .venv
 uv sync --group dev
 uv run maturin develop --features cuda
@@ -213,7 +213,7 @@ self-hosted Linux CUDA runner.
 
 ## Node Bindings
 
-`cogentlm-node` is the initial NAPI binding crate. It mirrors the lower-level
+`cogentlm-napi` is the initial NAPI binding crate. It mirrors the lower-level
 engine surface exposed by Python and runs blocking native calls through
 `AsyncTask`, so JavaScript callers get Promises rather than main-thread
 blocking calls. `query` and `chat` return `RequestResult`; optional
@@ -243,7 +243,7 @@ try {
 Build the local Node binding from the crate directory:
 
 ```powershell
-cd crates\cogentlm-node
+cd crates\cogentlm-napi
 bun install
 bun run build:cuda
 node .\examples\node_smoke.mjs ..\..\..\..\Qwen3.5-0.8B-Q4_0.gguf "Describe browser LLM inference." --gpu-layers -1
@@ -262,7 +262,7 @@ and NAPI engine surfaces settle.
 
 The browser package uses a wasm32 WebGPU build with Rust GGUF ingest/splitting linked by Emscripten. Large monolithic GGUF files are split into OPFS-backed shards instead of relying on memory64.
 
-The browser GGUF ingest path is only for the browser package. Native Rust, Python, and Node should keep using normal files or explicit shard arrays through their native loaders. Both the GGUF ingest/splitting logic and the main browser inference engine compile together under `cogentlm-browser` to produce a single static library linked into the wasm32 WebGPU package:
+The browser GGUF ingest path is only for the browser package. Native Rust, Python, and Node should keep using normal files or explicit shard arrays through their native loaders. Both the GGUF ingest/splitting logic and the main browser inference engine compile together under `cogentlm-wasm` to produce a single static library linked into the wasm32 WebGPU package:
 
 ```powershell
 bun run build:package:browser

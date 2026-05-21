@@ -1,0 +1,26 @@
+[package]
+name = "cogentlm-napi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "cogentlm_node"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["native"]
+native = ["cogentlm-engine/native"]
+cuda = ["cogentlm-engine/cuda"]
+metal = ["cogentlm-engine/metal"]
+vulkan = ["cogentlm-engine/vulkan"]
+openmp = ["cogentlm-engine/openmp"]
+
+[dependencies]
+cogentlm-engine = { path = "../cogentlm-engine" }
+napi.workspace = true
+napi-derive.workspace = true
+
+[build-dependencies]
+napi-build.workspace = true
