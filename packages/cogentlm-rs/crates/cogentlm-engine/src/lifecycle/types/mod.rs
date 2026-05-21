@@ -1,13 +1,12 @@
 //! Shared lifecycle types, grouped by lifecycle concern.
 
 mod assets;
-mod detection;
 mod error;
 mod model;
 mod runtime;
 
 pub use assets::{AssetInspection, AssetRecord, AssetRole, AssetSource, ModelAssetKind};
-pub use detection::{GgufMetadataInspection, ModelDetection, ModelDetectionMethod};
+pub use cogentlm_shard::{GgufMetadataInspection, ModelDetection, ModelDetectionMethod};
 pub use error::ModelError;
 pub use model::{
     ClassifiedAsset, ModelAsset, ModelAssets, ModelEntry, ModelInfo, ModelModality, ModelPairing,

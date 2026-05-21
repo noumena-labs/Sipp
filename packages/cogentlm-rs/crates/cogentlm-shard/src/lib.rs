@@ -10,6 +10,19 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+mod bytes;
+mod inspection;
+
+use bytes::{
+    align_to, copy_exact_from, read_raw_value, u32_from_usize, u64_from_usize, usize_from_u32,
+    usize_from_u64, write_string, write_u32, write_u64, write_zeros, CountingReader,
+    CountingWriter, ReadAtCursor,
+};
+pub use inspection::{
+    detect_model_from_gguf_bytes, inspect_gguf_metadata, inspect_gguf_metadata_path,
+    AssetInspection, AssetRole, GgufMetadataInspection, ModelDetection, ModelDetectionMethod,
+};
+
 const GGUF_MAGIC: u32 = 0x4655_4747;
 const SUPPORTED_GGUF_VERSIONS: &[u32] = &[2, 3];
 const DEFAULT_ALIGNMENT: u64 = 32;
@@ -27,6 +40,8 @@ pub enum GgufError {
     Invalid(String),
     #[error("unsupported GGUF version {0}")]
     UnsupportedVersion(u32),
+    #[error("GGUF metadata prefix exceeded {max_bytes} bytes")]
+    MetadataTooLarge { max_bytes: usize },
     #[error("source GGUF is already split into {0} files")]
     AlreadySplit(u16),
 }
@@ -109,7 +124,7 @@ pub trait GgufShardSink {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
-enum GgufValueType {
+pub(crate) enum GgufValueType {
     Uint8 = 0,
     Int8 = 1,
     Uint16 = 2,
@@ -126,7 +141,7 @@ enum GgufValueType {
 }
 
 impl GgufValueType {
-    fn from_u32(value: u32) -> Result<Self, GgufError> {
+    pub(crate) fn from_u32(value: u32) -> Result<Self, GgufError> {
         match value {
             0 => Ok(Self::Uint8),
             1 => Ok(Self::Int8),
@@ -145,7 +160,7 @@ impl GgufValueType {
         }
     }
 
-    fn scalar_size(self) -> Option<usize> {
+    pub(crate) fn scalar_size(self) -> Option<usize> {
         match self {
             Self::Uint8 | Self::Int8 | Self::Bool => Some(1),
             Self::Uint16 | Self::Int16 => Some(2),
@@ -533,8 +548,14 @@ fn write_shard<S: GgufReadAt, W: Write>(
 
     write_u32(&mut output, GGUF_MAGIC)?;
     write_u32(&mut output, metadata.version)?;
-    write_u64(&mut output, plan.tensors.len() as u64)?;
-    write_u64(&mut output, shard_kvs.len() as u64)?;
+    write_u64(
+        &mut output,
+        u64_from_usize(plan.tensors.len(), "shard tensor count")?,
+    )?;
+    write_u64(
+        &mut output,
+        u64_from_usize(shard_kvs.len(), "shard kv count")?,
+    )?;
 
     for kv in &shard_kvs {
         write_string(&mut output, &kv.key)?;
@@ -548,7 +569,10 @@ fn write_shard<S: GgufReadAt, W: Write>(
         let tensor = &metadata.tensors[tensor_idx];
         shard_tensor_offsets.push(shard_offset);
         write_string(&mut output, &tensor.name)?;
-        write_u32(&mut output, tensor.dimensions.len() as u32)?;
+        write_u32(
+            &mut output,
+            u32_from_usize(tensor.dimensions.len(), "tensor dimension count")?,
+        )?;
         for &dimension in &tensor.dimensions {
             write_u64(&mut output, dimension)?;
         }
@@ -654,519 +678,6 @@ fn read_alignment(kv: &KvEntry) -> Option<u64> {
     }
 }
 
-fn read_raw_value<R: Read>(
-    reader: &mut CountingReader<'_, R>,
-    value_type: GgufValueType,
-) -> Result<Vec<u8>, GgufError> {
-    let mut raw = Vec::new();
-    read_raw_value_into(reader, value_type, &mut raw)?;
-    Ok(raw)
-}
-
-fn read_raw_value_into<R: Read>(
-    reader: &mut CountingReader<'_, R>,
-    value_type: GgufValueType,
-    raw: &mut Vec<u8>,
-) -> Result<(), GgufError> {
-    match value_type {
-        GgufValueType::String => {
-            let len = reader.read_u64()?;
-            raw.extend_from_slice(&len.to_le_bytes());
-            let len = usize_from_u64(len, "string length")?;
-            let bytes = reader.read_vec(len)?;
-            raw.extend_from_slice(&bytes);
-        }
-        GgufValueType::Array => {
-            let item_type_raw = reader.read_u32()?;
-            raw.extend_from_slice(&item_type_raw.to_le_bytes());
-            let item_type = GgufValueType::from_u32(item_type_raw)?;
-            let len = reader.read_u64()?;
-            raw.extend_from_slice(&len.to_le_bytes());
-            let len = usize_from_u64(len, "array length")?;
-            for _ in 0..len {
-                read_raw_value_into(reader, item_type, raw)?;
-            }
-        }
-        _ => {
-            let size = value_type
-                .scalar_size()
-                .ok_or_else(|| GgufError::Invalid("invalid scalar value type".to_string()))?;
-            raw.extend_from_slice(&reader.read_vec(size)?);
-        }
-    }
-    Ok(())
-}
-
-fn copy_exact_from<S: GgufReadAt, W: Write>(
-    source: &mut S,
-    mut source_offset: u64,
-    output: &mut W,
-    mut bytes: u64,
-    buffer: &mut [u8],
-) -> Result<(), GgufError> {
-    while bytes > 0 {
-        let chunk = usize::try_from(bytes.min(buffer.len() as u64))
-            .map_err(|_| GgufError::Invalid("copy chunk too large".to_string()))?;
-        source.read_at(source_offset, &mut buffer[..chunk])?;
-        output.write_all(&buffer[..chunk])?;
-        source_offset = source_offset
-            .checked_add(chunk as u64)
-            .ok_or_else(|| GgufError::Invalid("copy offset overflow".to_string()))?;
-        bytes -= chunk as u64;
-    }
-    Ok(())
-}
-
-fn write_zeros<W: Write>(writer: &mut W, bytes: u64) -> Result<(), GgufError> {
-    const ZEROES: [u8; 64] = [0; 64];
-    let mut remaining = bytes;
-    while remaining > 0 {
-        let chunk = usize::try_from(remaining.min(ZEROES.len() as u64))
-            .map_err(|_| GgufError::Invalid("padding too large".to_string()))?;
-        writer.write_all(&ZEROES[..chunk])?;
-        remaining -= chunk as u64;
-    }
-    Ok(())
-}
-
-fn write_string<W: Write>(writer: &mut W, value: &str) -> Result<(), GgufError> {
-    write_u64(writer, value.len() as u64)?;
-    writer.write_all(value.as_bytes())?;
-    Ok(())
-}
-
-fn write_u32<W: Write>(writer: &mut W, value: u32) -> Result<(), GgufError> {
-    writer.write_all(&value.to_le_bytes())?;
-    Ok(())
-}
-
-fn write_u64<W: Write>(writer: &mut W, value: u64) -> Result<(), GgufError> {
-    writer.write_all(&value.to_le_bytes())?;
-    Ok(())
-}
-
-fn align_to(value: u64, alignment: u64) -> Result<u64, GgufError> {
-    if alignment == 0 {
-        return Err(GgufError::Invalid("zero alignment".to_string()));
-    }
-    let remainder = value % alignment;
-    if remainder == 0 {
-        Ok(value)
-    } else {
-        value
-            .checked_add(alignment - remainder)
-            .ok_or_else(|| GgufError::Invalid("alignment overflow".to_string()))
-    }
-}
-
-fn usize_from_u64(value: u64, name: &str) -> Result<usize, GgufError> {
-    usize::try_from(value).map_err(|_| GgufError::Invalid(format!("{name} does not fit usize")))
-}
-
-fn usize_from_u32(value: u32, name: &str) -> Result<usize, GgufError> {
-    usize::try_from(value).map_err(|_| GgufError::Invalid(format!("{name} does not fit usize")))
-}
-
-struct ReadAtCursor<'a, S> {
-    source: &'a mut S,
-    position: u64,
-}
-
-impl<'a, S> ReadAtCursor<'a, S> {
-    fn new(source: &'a mut S) -> Self {
-        Self {
-            source,
-            position: 0,
-        }
-    }
-}
-
-impl<S: GgufReadAt> Read for ReadAtCursor<'_, S> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if buf.is_empty() {
-            return Ok(0);
-        }
-        self.source
-            .read_at(self.position, buf)
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
-        self.position = self
-            .position
-            .checked_add(buf.len() as u64)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "read position overflow"))?;
-        Ok(buf.len())
-    }
-}
-
-struct CountingWriter<W> {
-    inner: W,
-    position: u64,
-}
-
-impl<W> CountingWriter<W> {
-    fn new(inner: W) -> Self {
-        Self { inner, position: 0 }
-    }
-
-    fn position(&self) -> u64 {
-        self.position
-    }
-
-    fn into_inner(mut self) -> Result<W, GgufError>
-    where
-        W: Write,
-    {
-        self.flush()?;
-        Ok(self.inner)
-    }
-}
-
-impl<W: Write> Write for CountingWriter<W> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let written = self.inner.write(buf)?;
-        self.position = self
-            .position
-            .checked_add(written as u64)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "write position overflow"))?;
-        Ok(written)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
-    }
-
-    fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
-        self.inner.write_all(buf)?;
-        self.position = self
-            .position
-            .checked_add(buf.len() as u64)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "write position overflow"))?;
-        Ok(())
-    }
-}
-
-struct CountingReader<'a, R> {
-    inner: &'a mut R,
-    position: u64,
-}
-
-impl<'a, R: Read> CountingReader<'a, R> {
-    fn new(inner: &'a mut R) -> Self {
-        Self { inner, position: 0 }
-    }
-
-    fn position(&self) -> u64 {
-        self.position
-    }
-
-    fn read_exact_counted(&mut self, buf: &mut [u8]) -> Result<(), GgufError> {
-        self.inner.read_exact(buf)?;
-        self.position = self
-            .position
-            .checked_add(buf.len() as u64)
-            .ok_or_else(|| GgufError::Invalid("reader position overflow".to_string()))?;
-        Ok(())
-    }
-
-    fn read_vec(&mut self, len: usize) -> Result<Vec<u8>, GgufError> {
-        let mut buf = vec![0u8; len];
-        self.read_exact_counted(&mut buf)?;
-        Ok(buf)
-    }
-
-    fn read_u32(&mut self) -> Result<u32, GgufError> {
-        let mut buf = [0u8; 4];
-        self.read_exact_counted(&mut buf)?;
-        Ok(u32::from_le_bytes(buf))
-    }
-
-    fn read_u64(&mut self) -> Result<u64, GgufError> {
-        let mut buf = [0u8; 8];
-        self.read_exact_counted(&mut buf)?;
-        Ok(u64::from_le_bytes(buf))
-    }
-
-    fn read_string(&mut self) -> Result<String, GgufError> {
-        let len = usize_from_u64(self.read_u64()?, "string length")?;
-        let bytes = self.read_vec(len)?;
-        String::from_utf8(bytes)
-            .map_err(|_| GgufError::Invalid("GGUF string is not UTF-8".to_string()))
-    }
-}
-
 #[cfg(test)]
 #[path = "tests/root_tests.rs"]
 mod root_tests;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Cursor;
-
-    #[test]
-    fn chooses_single_file_under_direct_threshold() {
-        let policy = BrowserCachePolicy {
-            direct_load_max_bytes: 1024,
-            shard_max_bytes: 128,
-        };
-        assert_eq!(
-            policy.resolve_layout(Some(1024)),
-            BrowserCacheLayout::SingleFile
-        );
-        assert_eq!(
-            policy.resolve_layout(Some(1025)),
-            BrowserCacheLayout::SplitGguf
-        );
-        assert_eq!(policy.resolve_layout(None), BrowserCacheLayout::SplitGguf);
-    }
-
-    #[test]
-    fn writes_llama_compatible_split_shards() {
-        let root = unique_temp_dir();
-        fs::create_dir_all(&root).expect("temp dir");
-        let source = root.join("model.gguf");
-        let prefix = root.join("model");
-        let original = fake_gguf();
-        fs::write(&source, &original).expect("write source");
-
-        let manifest = split_gguf_file(
-            &source,
-            &prefix,
-            GgufSplitOptions {
-                shard_max_bytes: 128,
-            },
-        )
-        .expect("split");
-
-        assert_eq!(manifest.total_tensors, 3);
-        assert_eq!(manifest.shards.len(), 2);
-        assert_eq!(manifest.shards[0].tensor_count, 2);
-        assert_eq!(manifest.shards[1].tensor_count, 1);
-        assert_eq!(
-            manifest.shards[0]
-                .path
-                .file_name()
-                .unwrap()
-                .to_string_lossy(),
-            "model-00001-of-00002.gguf"
-        );
-
-        let first = parse_file(&manifest.shards[0].path);
-        let second = parse_file(&manifest.shards[1].path);
-        assert_eq!(read_split_no(&first), Some(0));
-        assert_eq!(read_split_count(&first), Some(2));
-        assert_eq!(read_split_no(&second), Some(1));
-        assert_eq!(read_split_count(&second), Some(2));
-        assert!(first.kvs.iter().any(|kv| kv.key == "general.architecture"));
-        assert!(!second.kvs.iter().any(|kv| kv.key == "general.architecture"));
-
-        fs::remove_dir_all(root).ok();
-    }
-
-    #[test]
-    fn splits_through_read_at_and_custom_sink() {
-        let original = fake_gguf();
-        let mut source = MemoryReadAt {
-            bytes: original.clone(),
-        };
-        let mut sink = MemoryShardSink { shards: Vec::new() };
-
-        let manifest = split_gguf(
-            original.len() as u64,
-            &mut source,
-            "model",
-            GgufSplitOptions {
-                shard_max_bytes: 128,
-            },
-            &mut sink,
-        )
-        .expect("split");
-
-        assert_eq!(manifest.shards.len(), 2);
-        assert_eq!(sink.shards.len(), 2);
-        assert_eq!(
-            sink.shards[0].path,
-            PathBuf::from("model-00001-of-00002.gguf")
-        );
-        let first = parse_bytes(&sink.shards[0].bytes);
-        let second = parse_bytes(&sink.shards[1].bytes);
-        assert_eq!(read_split_no(&first), Some(0));
-        assert_eq!(read_split_no(&second), Some(1));
-    }
-
-    #[test]
-    fn plans_split_count_through_read_at() {
-        let original = fake_gguf();
-        let mut source = MemoryReadAt {
-            bytes: original.clone(),
-        };
-        let manifest = plan_gguf_split(
-            original.len() as u64,
-            &mut source,
-            "model",
-            GgufSplitOptions {
-                shard_max_bytes: 128,
-            },
-        )
-        .expect("plan");
-
-        assert_eq!(manifest.shards.len(), 2);
-        assert_eq!(
-            manifest.shards[0].path,
-            PathBuf::from("model-00001-of-00002.gguf")
-        );
-        assert_eq!(
-            manifest.shards[1].path,
-            PathBuf::from("model-00002-of-00002.gguf")
-        );
-    }
-
-    fn parse_file(path: &Path) -> GgufMetadata {
-        let mut file = File::open(path).expect("open shard");
-        let bytes = file.metadata().expect("metadata").len();
-        let mut parsed = parse_metadata(&mut file).expect("parse shard");
-        assign_source_spans(&mut parsed, bytes).expect("spans");
-        parsed
-    }
-
-    fn parse_bytes(bytes: &[u8]) -> GgufMetadata {
-        let mut cursor = Cursor::new(bytes);
-        let mut parsed = parse_metadata(&mut cursor).expect("parse shard");
-        assign_source_spans(&mut parsed, bytes.len() as u64).expect("spans");
-        parsed
-    }
-
-    fn read_split_no(metadata: &GgufMetadata) -> Option<u16> {
-        metadata
-            .kvs
-            .iter()
-            .find(|kv| kv.key == SPLIT_NO_KEY)
-            .and_then(read_u16_kv)
-    }
-
-    fn read_split_count(metadata: &GgufMetadata) -> Option<u16> {
-        metadata
-            .kvs
-            .iter()
-            .find(|kv| kv.key == SPLIT_COUNT_KEY)
-            .and_then(read_u16_kv)
-    }
-
-    fn fake_gguf() -> Vec<u8> {
-        let tensors = vec![
-            ("blk.0.weight", vec![1u8; 64]),
-            ("blk.1.weight", vec![2u8; 64]),
-            ("output.weight", vec![3u8; 64]),
-        ];
-        let mut metadata = Vec::new();
-        write_header_and_metadata(&mut metadata, tensors.len() as u64);
-
-        let mut tensor_data = Vec::new();
-        let mut tensor_offsets = Vec::new();
-        for (_, data) in &tensors {
-            let next_offset = align_to(tensor_data.len() as u64, DEFAULT_ALIGNMENT).unwrap();
-            tensor_data.resize(next_offset as usize, 0);
-            tensor_offsets.push(next_offset);
-            tensor_data.extend_from_slice(data);
-        }
-
-        for ((name, _), offset) in tensors.iter().zip(tensor_offsets) {
-            write_string(&mut metadata, name).unwrap();
-            write_u32(&mut metadata, 1).unwrap();
-            write_u64(&mut metadata, 16).unwrap();
-            write_u32(&mut metadata, 0).unwrap();
-            write_u64(&mut metadata, offset).unwrap();
-        }
-
-        let data_offset = align_to(metadata.len() as u64, DEFAULT_ALIGNMENT).unwrap();
-        metadata.resize(data_offset as usize, 0);
-        metadata.extend_from_slice(&tensor_data);
-        metadata
-    }
-
-    fn write_header_and_metadata(bytes: &mut Vec<u8>, tensor_count: u64) {
-        let mut cursor = Cursor::new(bytes);
-        write_u32(&mut cursor, GGUF_MAGIC).unwrap();
-        write_u32(&mut cursor, 3).unwrap();
-        write_u64(&mut cursor, tensor_count).unwrap();
-        write_u64(&mut cursor, 1).unwrap();
-        write_string(&mut cursor, "general.architecture").unwrap();
-        write_u32(&mut cursor, GgufValueType::String as u32).unwrap();
-        write_string(&mut cursor, "llama").unwrap();
-    }
-
-    fn unique_temp_dir() -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "cogentlm-shard-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ))
-    }
-
-    struct MemoryReadAt {
-        bytes: Vec<u8>,
-    }
-
-    impl GgufReadAt for MemoryReadAt {
-        fn read_at(&mut self, offset: u64, dst: &mut [u8]) -> Result<(), GgufError> {
-            let offset = offset as usize;
-            let end = offset
-                .checked_add(dst.len())
-                .ok_or_else(|| GgufError::Invalid("read offset overflow".to_string()))?;
-            dst.copy_from_slice(&self.bytes[offset..end]);
-            Ok(())
-        }
-    }
-
-    struct MemoryShard {
-        path: PathBuf,
-        bytes: Vec<u8>,
-    }
-
-    struct MemoryShardSink {
-        shards: Vec<MemoryShard>,
-    }
-
-    impl GgufShardSink for MemoryShardSink {
-        type Writer = MemoryShardWriter;
-
-        fn create_shard(
-            &mut self,
-            path: &Path,
-            _index: u16,
-            _count: u16,
-        ) -> Result<Self::Writer, GgufError> {
-            Ok(MemoryShardWriter {
-                path: path.to_path_buf(),
-                bytes: Vec::new(),
-            })
-        }
-
-        fn finish_shard(&mut self, writer: Self::Writer) -> Result<u64, GgufError> {
-            let bytes = writer.bytes.len() as u64;
-            self.shards.push(MemoryShard {
-                path: writer.path,
-                bytes: writer.bytes,
-            });
-            Ok(bytes)
-        }
-    }
-
-    struct MemoryShardWriter {
-        path: PathBuf,
-        bytes: Vec<u8>,
-    }
-
-    impl Write for MemoryShardWriter {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.bytes.extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-}

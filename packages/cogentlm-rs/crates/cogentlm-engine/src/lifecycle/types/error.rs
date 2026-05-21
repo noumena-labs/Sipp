@@ -47,3 +47,21 @@ impl From<crate::Error> for ModelError {
         Self::Runtime(error.to_string())
     }
 }
+
+impl From<cogentlm_shard::GgufError> for ModelError {
+    fn from(error: cogentlm_shard::GgufError) -> Self {
+        match error {
+            cogentlm_shard::GgufError::Io(error) => Self::Io(error),
+            cogentlm_shard::GgufError::Invalid(message) => Self::InvalidGgufMetadata(message),
+            cogentlm_shard::GgufError::UnsupportedVersion(version) => {
+                Self::UnsupportedGgufVersion(version)
+            }
+            cogentlm_shard::GgufError::MetadataTooLarge { max_bytes } => {
+                Self::GgufMetadataTooLarge { max_bytes }
+            }
+            cogentlm_shard::GgufError::AlreadySplit(count) => Self::InvalidGgufMetadata(format!(
+                "source GGUF is already split into {count} files"
+            )),
+        }
+    }
+}

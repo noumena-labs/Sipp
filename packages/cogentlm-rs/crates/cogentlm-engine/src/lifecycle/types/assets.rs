@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+pub use cogentlm_shard::{AssetInspection, AssetRole};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,38 +23,6 @@ pub enum AssetSource {
         etag: Option<String>,
         last_modified: Option<String>,
     },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AssetRole {
-    Model,
-    Projector,
-    Unknown,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AssetInspection {
-    pub version: u32,
-    pub role: AssetRole,
-    pub architecture: Option<String>,
-    pub vision_capable: bool,
-    pub compatible_vision_projector_types: Vec<String>,
-    pub provided_vision_projector_type: Option<String>,
-}
-
-impl AssetInspection {
-    pub fn unknown() -> Self {
-        Self {
-            version: 1,
-            role: AssetRole::Unknown,
-            architecture: None,
-            vision_capable: false,
-            compatible_vision_projector_types: Vec::new(),
-            provided_vision_projector_type: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

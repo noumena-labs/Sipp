@@ -56,7 +56,10 @@ pub(super) fn read_raw_value_into<R: Read>(
     Ok(())
 }
 
-pub(super) fn reserve_raw_value_bytes(raw: &mut Vec<u8>, additional: usize) -> Result<(), GgufError> {
+pub(super) fn reserve_raw_value_bytes(
+    raw: &mut Vec<u8>,
+    additional: usize,
+) -> Result<(), GgufError> {
     raw.try_reserve(additional)
         .map_err(|_| GgufError::Invalid("raw value is too large".to_string()))
 }
@@ -253,6 +256,24 @@ impl<'a, R: Read> CountingReader<'a, R> {
         let mut buf = vec![0u8; len];
         self.read_exact_counted(&mut buf)?;
         Ok(buf)
+    }
+
+    pub(super) fn skip_bytes(&mut self, len: usize) -> Result<(), GgufError> {
+        const BUFFER_BYTES: usize = 8 * 1024;
+        let mut remaining = len;
+        let mut buffer = [0_u8; BUFFER_BYTES];
+        while remaining > 0 {
+            let chunk = remaining.min(BUFFER_BYTES);
+            self.read_exact_counted(&mut buffer[..chunk])?;
+            remaining -= chunk;
+        }
+        Ok(())
+    }
+
+    pub(super) fn read_u8(&mut self) -> Result<u8, GgufError> {
+        let mut buf = [0u8; 1];
+        self.read_exact_counted(&mut buf)?;
+        Ok(buf[0])
     }
 
     pub(super) fn read_u32(&mut self) -> Result<u32, GgufError> {

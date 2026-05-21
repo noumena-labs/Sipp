@@ -208,6 +208,7 @@ name = "cogentlm-engine"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cogentlm-shard",
  "cogentlm-sys",
  "serde",
  "serde_json",
@@ -237,6 +238,7 @@ dependencies = [
 name = "cogentlm-shard"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "thiserror",
 ]
 
