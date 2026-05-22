@@ -268,7 +268,9 @@ The browser GGUF ingest path is only for the browser package. Native Rust, Pytho
 bun run build:package:browser
 ```
 
-That path exports Rust-backed `CE_BrowserCacheLayout`, `CE_GgufPlanSplitCount`, `CE_GgufSplitFile`, and `CE_GgufSplitStream` along with the core `CE_RustBrowserEngine` scheduler functions.
+That path exports Rust-backed `CE_BrowserCacheLayout`,
+`CE_GgufPlanSplitCount`, and `CE_GgufSplitStream` along with the core
+`CE_RustBrowserEngine` scheduler functions.
 Remote browser model loading uses this for large monolithic GGUF URLs: the
 download lands in a temporary OPFS file, Rust plans and writes split shards
 through worker sync-access callbacks, and the temporary monolithic file is

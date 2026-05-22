@@ -198,7 +198,7 @@ foreach(_ggml_target ggml ggml-base ggml-cpu ggml-webgpu)
 endforeach()
 
 set(CE_WASM_EXPORTED_FUNCTIONS
-    "['_CE_RustBrowserEngineAbiVersion','_CE_RustBrowserEngineCreate','_CE_RustBrowserEngineId','_CE_RustBrowserEngineClose','_CE_BrowserCacheLayout','_CE_GgufPlanSplitCount','_CE_GgufSplitStream','_CE_InspectGgufMetadata','_CE_DetectModelFromGgufBytes','_CE_Init','_CE_GetLastEngineErrorSize','_CE_CopyLastEngineError','_CE_Close','_CE_StartTextRequestWithTokenEmissionMode','_CE_StartMediaRequestWithTokenEmissionMode','_CE_StartChatRequestWithTokenEmissionMode','_CE_CancelRequest','_CE_RunSchedulerLoop','_CE_RunSchedulerBurst','_CE_RunSchedulerBurstWithDeadline','_CE_GetCompletedRequestStatus','_CE_GetStreamingBufferPointer','_CE_GetStreamingBufferCapacity','_CE_GetStreamingBufferUsedAddress','_CE_GetStreamingBufferDropCountAddress','_CE_GetCompletedRequestOutputSize','_CE_CopyCompletedRequestOutput','_CE_GetCompletedRequestErrorSize','_CE_CopyCompletedRequestError','_CE_GetCompletedRequestRuntimeObservability','_CE_ConsumeCompletedRequest','_CE_FreeString','_CE_GetRuntimeObservability','_CE_GetBackendObservabilityJson','_CE_GetMediaMarker','_CE_GetChatTemplate','_CE_GetBosText','_CE_GetEosText','_CE_ProbeChatBoundaryInfo','_CE_PairingValidate','_malloc','_free']"
+    "['_CE_RustBrowserEngineAbiVersion','_CE_RustBrowserEngineCreate','_CE_RustBrowserEngineId','_CE_RustBrowserEngineClose','_CE_BrowserCacheLayout','_CE_GgufPlanSplitCount','_CE_GgufSplitStream','_CE_DetectModelFromGgufBytes','_CE_Init','_CE_GetLastEngineErrorSize','_CE_CopyLastEngineError','_CE_Close','_CE_StartTextRequestWithTokenEmissionMode','_CE_StartMediaRequestWithTokenEmissionMode','_CE_StartChatRequestWithTokenEmissionMode','_CE_CancelRequest','_CE_RunSchedulerLoop','_CE_GetCompletedRequestStatus','_CE_GetStreamingBufferPointer','_CE_GetStreamingBufferUsedAddress','_CE_GetStreamingBufferDropCountAddress','_CE_GetCompletedRequestOutputSize','_CE_CopyCompletedRequestOutput','_CE_GetCompletedRequestErrorSize','_CE_CopyCompletedRequestError','_CE_GetCompletedRequestRuntimeObservability','_CE_ConsumeCompletedRequest','_CE_FreeString','_CE_GetRuntimeObservability','_CE_GetBackendObservabilityJson','_CE_GetMediaMarker','_CE_GetChatTemplate','_CE_GetBosText','_CE_GetEosText','_CE_ProbeChatBoundaryInfo','_CE_PairingValidate','_malloc','_free']"
 )
 
 # HEAPU8 is needed for later binary media packing through the wasm bridge.
@@ -218,12 +218,12 @@ set(CE_WASM_TARGET_LINK_OPTIONS
 if(CE_WASM_USE_JSPI)
     list(APPEND CE_WASM_TARGET_LINK_OPTIONS
         -sJSPI=1
-        # CE_Init, CE_RunSchedulerBurst, and CE_RunSchedulerBurstWithDeadline
+        # CE_Init and CE_RunSchedulerLoop can suspend.
         # CE_GetBackendObservabilityJson can also suspend because querying ggml-webgpu
         # devices may force adapter/device creation under emdawnwebgpu.
         # CE_Close is intentionally not exported as a JSPI function because the
         # TS wrapper calls it synchronously during teardown/reinit.
-        "-sJSPI_EXPORTS=['_main_thread','CE_Init','CE_RunSchedulerLoop','CE_RunSchedulerBurst','CE_RunSchedulerBurstWithDeadline','CE_GetBackendObservabilityJson']"
+        "-sJSPI_EXPORTS=['_main_thread','CE_Init','CE_RunSchedulerLoop','CE_GetBackendObservabilityJson']"
     )
 endif()
 

@@ -45,10 +45,6 @@ int cogentlm_browser_engine_run_scheduler_loop(
     void *engine, int max_ticks, int max_completed_responses,
     int max_emitted_tokens, int max_duration_us, int streaming_active,
     CE_SchedulerLoopResult *out_result);
-int cogentlm_browser_engine_run_scheduler_burst(
-    void *engine, int max_ticks, int max_completed_responses,
-    int max_emitted_tokens, int max_duration_us,
-    CE_SchedulerLoopResult *out_result);
 int cogentlm_browser_engine_completed_request_status(
     const void *engine, CE_RequestId request_id);
 int cogentlm_browser_engine_completed_request_output_size(
@@ -69,7 +65,6 @@ int cogentlm_browser_engine_completed_runtime_observability(
     const void *engine, CE_RequestId request_id,
     CE_RuntimeObservabilityMetrics *out_metrics);
 std::uint8_t *cogentlm_browser_engine_streaming_buffer_pointer(void *engine);
-int cogentlm_browser_engine_streaming_buffer_capacity(const void *engine);
 std::int32_t *cogentlm_browser_engine_streaming_buffer_used_address(
     void *engine);
 std::int32_t *cogentlm_browser_engine_streaming_buffer_drop_count_address(
@@ -80,8 +75,6 @@ char *cogentlm_browser_engine_bos_text(const void *engine);
 char *cogentlm_browser_engine_eos_text(const void *engine);
 char *cogentlm_browser_engine_probe_chat_boundary_info(const void *engine);
 void cogentlm_browser_engine_free_string(char *value);
-char *cogentlm_inspect_gguf_metadata_json(const std::uint8_t *bytes,
-                                          std::uintptr_t bytes_len);
 char *cogentlm_detect_model_from_gguf_bytes_json(const char *name,
                                                  const std::uint8_t *bytes,
                                                  std::uintptr_t bytes_len);
@@ -452,20 +445,6 @@ int CE_GgufSplitStream(double source_bytes, const char *output_prefix,
 }
 
 EMSCRIPTEN_KEEPALIVE
-char *CE_InspectGgufMetadata(const std::uint8_t *bytes, double bytes_len) {
-  std::uint64_t bytes_len_u64 = 0;
-  if (!read_size_arg(bytes_len, &bytes_len_u64)) {
-    return duplicate_heap_string(
-        "{\"ok\":false,\"error\":{\"code\":\"INVALID_GGUF\",\"message\":\"invalid GGUF byte length\"}}");
-  }
-  const std::string value = take_rust_string(
-      cogentlm_inspect_gguf_metadata_json(bytes,
-                                          static_cast<std::uintptr_t>(
-                                              bytes_len_u64)));
-  return duplicate_heap_string(value.c_str());
-}
-
-EMSCRIPTEN_KEEPALIVE
 char *CE_DetectModelFromGgufBytes(const char *name, const std::uint8_t *bytes,
                                   double bytes_len) {
   std::uint64_t bytes_len_u64 = 0;
@@ -621,26 +600,6 @@ int CE_GetRuntimeObservability(CE_RuntimeObservabilityMetrics *out_metrics) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-int CE_RunSchedulerBurst(int32_t max_ticks, int32_t max_completed_responses,
-                         int32_t max_emitted_tokens,
-                         CE_SchedulerLoopResult *out_result) {
-  return cogentlm_browser_engine_run_scheduler_burst(
-      g_rustBrowserEngine, max_ticks, max_completed_responses,
-      max_emitted_tokens, 0, out_result);
-}
-
-EMSCRIPTEN_KEEPALIVE
-int CE_RunSchedulerBurstWithDeadline(int32_t max_ticks,
-                                     int32_t max_completed_responses,
-                                     int32_t max_emitted_tokens,
-                                     int32_t max_duration_us,
-                                     CE_SchedulerLoopResult *out_result) {
-  return cogentlm_browser_engine_run_scheduler_burst(
-      g_rustBrowserEngine, max_ticks, max_completed_responses,
-      max_emitted_tokens, max_duration_us, out_result);
-}
-
-EMSCRIPTEN_KEEPALIVE
 int CE_RunSchedulerLoop(int32_t max_ticks, int32_t max_completed_responses,
                         int32_t max_emitted_tokens, int32_t max_duration_us,
                         int32_t streaming_active,
@@ -662,11 +621,6 @@ int CE_GetCompletedRequestStatus(CE_RequestId request_id) {
 EMSCRIPTEN_KEEPALIVE
 const uint8_t *CE_GetStreamingBufferPointer() {
   return cogentlm_browser_engine_streaming_buffer_pointer(g_rustBrowserEngine);
-}
-
-EMSCRIPTEN_KEEPALIVE
-int32_t CE_GetStreamingBufferCapacity() {
-  return cogentlm_browser_engine_streaming_buffer_capacity(g_rustBrowserEngine);
 }
 
 EMSCRIPTEN_KEEPALIVE

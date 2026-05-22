@@ -514,10 +514,10 @@ class FakeRuntime implements EngineRuntime {
         : '<image>';
   }
 
-  public async applyChatTemplate(
-    messages: Array<{ role: string; content: string }>,
+  private renderNativeChatPrompt(
+    messages: readonly { role: string; content: string }[],
     addAssistant: boolean
-  ): Promise<string> {
+  ): string {
     const rendered = messages
       .map((message) => `<${message.role}>\n${message.content}</${message.role}>\n`)
       .join('');
@@ -602,7 +602,7 @@ class FakeRuntime implements EngineRuntime {
     messages: readonly ChatMessage[],
     options?: number | PromptOptions
   ): Promise<GenerateRequestId> {
-    return this.enqueueQuery(contextKey, await this.applyChatTemplate([...messages], true), options);
+    return this.enqueueQuery(contextKey, this.renderNativeChatPrompt(messages, true), options);
   }
 
   public async awaitQuery(requestId: GenerateRequestId): Promise<GenerateResponse> {

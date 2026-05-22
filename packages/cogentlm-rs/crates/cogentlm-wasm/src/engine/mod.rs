@@ -409,7 +409,6 @@ impl BrowserEngine {
         max_duration_us: i32,
         streaming_active: bool,
         out: *mut BrowserSchedulerLoopResult,
-        run_continuous_loop: bool,
     ) -> i32 {
         if out.is_null() {
             return STATUS_INVALID_ARGUMENTS;
@@ -422,27 +421,6 @@ impl BrowserEngine {
         } else {
             Duration::ZERO
         };
-
-        // For one-shot bursts (JS calls cogentlm_browser_engine_run_scheduler_burst)
-        // keep the original behavior: single call, drain, return.
-        if !run_continuous_loop {
-            let runtime = self
-                .inner
-                .runtime
-                .as_mut()
-                .expect("runtime present after early return");
-            let burst = runtime.run_scheduler_burst(
-                max_ticks,
-                max_completed_responses,
-                max_emitted_tokens,
-                duration,
-            );
-            self.drain_token_ring();
-            unsafe {
-                *out = scheduler_loop_result_from_runtime(burst);
-            }
-            return burst.status as i32;
-        }
 
         // Bulk (non-streaming) path: just run the runtime's own monolithic
         // loop. No per-tick drain/yield overhead — matches the pre-port
@@ -590,7 +568,6 @@ impl BrowserEngine {
         _max_duration_us: i32,
         _streaming_active: bool,
         _out: *mut BrowserSchedulerLoopResult,
-        _run_continuous_loop: bool,
     ) -> i32 {
         STATUS_UNAVAILABLE
     }
@@ -730,11 +707,6 @@ impl BrowserEngine {
     #[cfg(target_family = "wasm")]
     fn streaming_buffer_ptr(&mut self) -> *mut u8 {
         self.inner.streaming_buffer.buffer.as_mut_ptr()
-    }
-
-    #[cfg(target_family = "wasm")]
-    fn streaming_buffer_capacity(&self) -> i32 {
-        self.inner.streaming_buffer.buffer.len() as i32
     }
 
     #[cfg(target_family = "wasm")]
@@ -978,29 +950,6 @@ pub extern "C" fn cogentlm_browser_engine_run_scheduler_loop(
             max_duration_us,
             streaming_active != 0,
             out,
-            true,
-        )
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_run_scheduler_burst(
-    engine: *mut BrowserEngine,
-    max_ticks: i32,
-    max_completed_responses: i32,
-    max_emitted_tokens: i32,
-    max_duration_us: i32,
-    out: *mut BrowserSchedulerLoopResult,
-) -> i32 {
-    with_engine_mut(engine, |engine| {
-        engine.run_scheduler_loop(
-            max_ticks,
-            max_completed_responses,
-            max_emitted_tokens,
-            max_duration_us,
-            false,
-            out,
-            false,
         )
     })
 }
@@ -1149,23 +1098,6 @@ pub extern "C" fn cogentlm_browser_engine_streaming_buffer_pointer(
 }
 
 #[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_streaming_buffer_capacity(
-    engine: *const BrowserEngine,
-) -> i32 {
-    with_engine_ref(engine, |engine| {
-        #[cfg(target_family = "wasm")]
-        {
-            engine.streaming_buffer_capacity()
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let _ = engine;
-            0
-        }
-    })
-}
-
-#[no_mangle]
 pub extern "C" fn cogentlm_browser_engine_streaming_buffer_used_address(
     engine: *mut BrowserEngine,
 ) -> *mut i32 {
@@ -1263,6 +1195,7 @@ pub extern "C" fn cogentlm_browser_engine_eos_text(engine: *const BrowserEngine)
     })
 }
 
+#[no_mangle]
 pub extern "C" fn cogentlm_browser_engine_probe_chat_boundary_info(
     engine: *const BrowserEngine,
 ) -> *mut c_char {

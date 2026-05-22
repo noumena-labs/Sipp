@@ -7,8 +7,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 
 use cogentlm_shard::{
-    plan_gguf_split, split_gguf, split_gguf_file, BrowserCacheLayout, BrowserCachePolicy,
-    GgufError, GgufReadAt, GgufShardSink, GgufSplitOptions,
+    plan_gguf_split, split_gguf, BrowserCacheLayout, BrowserCachePolicy, GgufError, GgufReadAt,
+    GgufShardSink, GgufSplitOptions,
 };
 
 const STATUS_OK: i32 = 0;
@@ -37,30 +37,6 @@ pub extern "C" fn cogentlm_browser_cache_layout(
         BrowserCacheLayout::SingleFile => 0,
         BrowserCacheLayout::SplitGguf => 1,
     }
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_gguf_split_file(
-    input_path: *const c_char,
-    output_prefix: *const c_char,
-    shard_max_bytes: u64,
-) -> i32 {
-    ffi_status(|| {
-        let Some(input_path) = read_c_string(input_path)? else {
-            return Ok(STATUS_NULL_POINTER);
-        };
-        let Some(output_prefix) = read_c_string(output_prefix)? else {
-            return Ok(STATUS_NULL_POINTER);
-        };
-
-        split_gguf_file(
-            input_path,
-            output_prefix,
-            GgufSplitOptions { shard_max_bytes },
-        )
-        .map(|_| STATUS_OK)
-        .map_err(|_| STATUS_SPLIT_FAILED)
-    })
 }
 
 #[no_mangle]

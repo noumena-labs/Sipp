@@ -7,7 +7,6 @@ import {
 import type { RuntimePairingErrorCode } from '../runtime/engine-runtime.js';
 import type { ClassifiedAsset, PairingPlan } from '../models/pairing-types.js';
 import type {
-  GgufMetadataInspection,
   ModelDetectionMethod,
   ModelDetectionResult,
 } from '../bundle/model-bundle-types.js';
@@ -433,24 +432,6 @@ export class WasmBridge {
     throw new Error(`Rust browser cache layout failed with status ${layout}.`);
   }
 
-  public async inspectGgufMetadata(
-    blob: Blob,
-    options: { signal?: AbortSignal } = {}
-  ): Promise<GgufMetadataInspection | null> {
-    const bytes = await this.readGgufMetadataPrefix(blob, options.signal);
-    return this.withWasmBytes(bytes, (ptr, len) => {
-      const raw = this.callOwnedString(
-        'CE_InspectGgufMetadata',
-        ['pointer', 'number'],
-        [ptr, len]
-      );
-      return this.unwrapGgufResponse<GgufMetadataInspection | null>(
-        raw,
-        'GGUF metadata inspection'
-      );
-    });
-  }
-
   public async detectModelFromGgufFile(
     file: Blob & { name?: string },
     signal?: AbortSignal
@@ -660,10 +641,6 @@ export class WasmBridge {
   // engine is initialized.
   public getStreamingBufferPointer(): number {
     return this.callNumber('CE_GetStreamingBufferPointer');
-  }
-
-  public getStreamingBufferCapacity(): number {
-    return this.callNumber('CE_GetStreamingBufferCapacity');
   }
 
   public getStreamingBufferUsedAddress(): number {
