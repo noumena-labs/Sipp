@@ -9,6 +9,16 @@ export type ModelBundleProjectorStatus =
 export type ModelDetectionMethod = 'gguf-metadata' | 'none';
 export type AssetRole = 'model' | 'projector' | 'unknown';
 
+export interface GgufMetadataInspection {
+  generalType: string | null;
+  generalArchitecture: string | null;
+  clipProjectorType: string | null;
+  clipVisionProjectorType: string | null;
+  clipHasVisionEncoder: boolean | null;
+  scannedKeyCount: number;
+  stoppedEarlyAtKey: string | null;
+}
+
 export interface AssetInspection {
   version: 1;
   role: AssetRole;

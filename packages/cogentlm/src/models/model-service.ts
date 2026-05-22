@@ -1,11 +1,12 @@
 import type { EngineRuntime } from '../runtime/engine-runtime.js';
 import { RuntimePairingValidationError } from '../runtime/engine-runtime.js';
 import {
-  ChatTemplatePromptRuntime,
+  buildBoundaryMarkers,
   StreamingBoundaryTextSanitizer,
-} from '../core/chat-template-boundaries.js';
+} from '../core/chat-boundary-sanitizer.js';
 import { sliceUnstreamedSuffix } from '../core/streaming-output.js';
 import type {
+  GenerateRequestId,
   GenerateResponse,
   NativeRuntimeConfig,
   ModelBundleFileProjectorDescriptor,
@@ -169,8 +170,8 @@ function normalizeLocalSourceFileName(file: File): string {
 
 export class ModelService implements ModelLifecycleService {
   private currentLoaded: LoadedModelState | null = null;
-  private chatRuntime: ChatTemplatePromptRuntime | null = null;
-  private chatRuntimeKey: string | null = null;
+  private chatBoundaryMarkersPromise: Promise<readonly string[]> | null = null;
+  private chatBoundaryMarkersKey: string | null = null;
   private operationChain: Promise<void> = Promise.resolve();
   private transitioning = false;
   private readonly observability = new ObservabilityController();
@@ -181,12 +182,15 @@ export class ModelService implements ModelLifecycleService {
     private readonly runtime: EngineRuntime,
     private readonly registry = new ModelRegistryStore(),
     private readonly assetStore = new AssetStore(),
-    private readonly assetClassifier = new ModelAssetClassifier()
+    assetClassifier?: ModelAssetClassifier
   ) {
+    this.assetClassifier = assetClassifier ?? new ModelAssetClassifier(runtime);
     this.observability.subscribe((event) => {
       this.engineEvents.emit(observabilityEventToStateEvent(event));
     });
   }
+
+  private readonly assetClassifier: ModelAssetClassifier;
 
   public currentModel(): ModelInfo | null {
     const current = this.currentLoaded;
@@ -421,6 +425,16 @@ export class ModelService implements ModelLifecycleService {
         prompt = `${Array.from({ length: media.length }, () => marker).join('\n')}\n${prompt}`;
       }
     }
+    return await this.runRuntimeRequest(options, media, (session, promptOptions) =>
+      this.runtime.enqueueQuery(session, prompt, promptOptions)
+    );
+  }
+
+  private async runRuntimeRequest(
+    options: QueryOptions | ChatOptions,
+    media: Uint8Array[] | undefined,
+    enqueue: (session: string, promptOptions: PromptOptions) => Promise<GenerateRequestId>
+  ): Promise<GenerateResponse> {
     let activeRequestId: number | null = null;
     let nextSequence = 0;
     const emitTokens = (batch: TokenBatch): void => {
@@ -445,8 +459,8 @@ export class ModelService implements ModelLifecycleService {
       media,
       grammar: options.grammar,
       // Forward the internal streaming-claim hook if the caller (worker
-      // entry) attached one.  See PromptOptions.__internalRequestStarted
-      // for why this exists.  We use a property-key escape hatch so the
+      // entry) attached one. See PromptOptions.__internalRequestStarted
+      // for why this exists. We use a property-key escape hatch so the
       // public ChatOptions / QueryOptions types don't have to advertise
       // this internal hook.
       __internalRequestStarted: (
@@ -469,7 +483,7 @@ export class ModelService implements ModelLifecycleService {
     });
     let failureRecorded = false;
     try {
-      const requestId = await this.runtime.enqueueQuery(session, prompt, promptOptions);
+      const requestId = await enqueue(session, promptOptions);
       activeRequestId = requestId;
       this.engineEvents.emit({ type: 'request-started', requestId: String(requestId), streamId: requestId });
       const response = await this.runtime.awaitQuery(requestId, { signal: options.signal });
@@ -540,10 +554,14 @@ export class ModelService implements ModelLifecycleService {
       throw new QueryError('MODEL_NOT_READY', 'No model is loaded. Call engine.models.load(...) first.');
     }
 
+    const current = this.currentLoaded;
     const messages = isChatInputObject(input) ? input.messages : input;
     const media = isChatInputObject(input) ? input.media : undefined;
-    const promptContext = await this.getChatRuntime(this.currentLoaded).render(messages);
-    const outputSanitizer = new StreamingBoundaryTextSanitizer(promptContext.boundaryMarkers);
+    if (media != null && media.length > 0 && this.runtime.readMediaMarker() == null) {
+      throw new QueryError('MODEL_NOT_READY', 'The loaded model does not accept media input.');
+    }
+    const boundaryMarkers = await this.getChatBoundaryMarkers(current);
+    const outputSanitizer = new StreamingBoundaryTextSanitizer(boundaryMarkers);
     const linkedAbort = createLinkedAbortController(options.signal);
     let streamedOutputText = '';
     let assistantText = '';
@@ -584,32 +602,30 @@ export class ModelService implements ModelLifecycleService {
     };
 
     try {
-      const rawResult = await this.queryResult(
-        {
-          prompt: promptContext.promptText,
-          ...(media != null && media.length > 0 ? { media } : {}),
-        },
+      const rawResult = await this.runRuntimeRequest(
         {
           ...options,
           signal: linkedAbort.signal,
           ...(shouldStreamTokens ? { onTokens: consumeOutputTokens } : {}),
-        }
+        },
+        media == null ? undefined : [...media],
+        (session, promptOptions) => this.runtime.enqueueChat(session, messages, promptOptions)
       );
-      const rawText = rawResult.text;
+      const rawText = rawResult.outputText;
       const unseenOutputSuffix = shouldStreamTokens
         ? sliceUnstreamedSuffix(streamedOutputText, rawText)
         : rawText;
       if (!outputSanitizer.reachedBoundary && unseenOutputSuffix.length > 0) {
-        const source = lastBatch ?? tokenBatchFromText(rawResult.id, 0, safeSequence, unseenOutputSuffix);
+        const source = lastBatch ?? tokenBatchFromText(String(rawResult.requestId), 0, safeSequence, unseenOutputSuffix);
         consumeOutputTokens(
           tokenBatchFromText(source.requestId, source.streamId, safeSequence, unseenOutputSuffix)
         );
       }
       flushOutputText();
-      return {
-        ...rawResult,
+      return requestResultFromGenerateResponse(rawResult, {
         text: assistantText.trim(),
-      };
+        maxTokens: options.maxTokens,
+      });
     } catch (error) {
       if (stoppedAtBoundary && options.signal?.aborted !== true) {
         flushOutputText();
@@ -632,13 +648,6 @@ export class ModelService implements ModelLifecycleService {
     } finally {
       linkedAbort.dispose();
     }
-  }
-
-  public async applyChatTemplate(
-    messages: Array<{ role: string; content: string }>,
-    addAssistant: boolean
-  ): Promise<string> {
-    return await this.runtime.applyChatTemplate(messages, addAssistant);
   }
 
   public getChatTemplate(): string | null {
@@ -1798,13 +1807,19 @@ export class ModelService implements ModelLifecycleService {
     }
   }
 
-  private getChatRuntime(current: LoadedModelState): ChatTemplatePromptRuntime {
+  private getChatBoundaryMarkers(current: LoadedModelState): Promise<readonly string[]> {
     const key = `${current.id}:${current.assetFingerprint}`;
-    if (this.chatRuntime == null || this.chatRuntimeKey !== key) {
-      this.chatRuntime = new ChatTemplatePromptRuntime(this);
-      this.chatRuntimeKey = key;
+    if (this.chatBoundaryMarkersPromise == null || this.chatBoundaryMarkersKey !== key) {
+      this.chatBoundaryMarkersKey = key;
+      this.chatBoundaryMarkersPromise = this.runtime.probeChatTemplateBoundaryInfo()
+        .then(buildBoundaryMarkers)
+        .catch((error) => {
+          this.chatBoundaryMarkersPromise = null;
+          this.chatBoundaryMarkersKey = null;
+          throw error;
+        });
     }
-    return this.chatRuntime;
+    return this.chatBoundaryMarkersPromise;
   }
 }
 

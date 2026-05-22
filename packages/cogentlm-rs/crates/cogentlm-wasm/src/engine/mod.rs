@@ -199,36 +199,20 @@ impl BrowserEngine {
         token_emission_mode: i32,
         grammar: *const c_char,
     ) -> u32 {
-        let Some(runtime) = self.inner.runtime.as_mut() else {
-            return 0;
-        };
         let Some(prompt) = read_c_string(prompt) else {
             return 0;
         };
-        if max_tokens <= 0 {
-            return 0;
-        }
 
         let context_key = read_optional_c_string(context_key).unwrap_or_default();
         let grammar = read_optional_c_string(grammar).unwrap_or_default();
-        let request_id = runtime
-            .enqueue_request(
-                context_key,
-                prompt,
-                max_tokens,
-                grammar,
-                "",
-                Vec::new(),
-                None,
-                emission_mode(token_emission_mode),
-            )
-            .unwrap_or_default();
-        if request_id != 0 {
-            if let Some(producer) = self.inner.token_producer.as_ref() {
-                runtime.add_token_ring_producer(request_id, producer.clone());
-            }
-        }
-        request_id
+        self.enqueue_prompt_request(
+            context_key,
+            prompt,
+            max_tokens,
+            Vec::new(),
+            grammar,
+            token_emission_mode,
+        )
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -255,40 +239,23 @@ impl BrowserEngine {
         token_emission_mode: i32,
         grammar: *const c_char,
     ) -> u32 {
-        let Some(runtime) = self.inner.runtime.as_mut() else {
-            return 0;
-        };
         let Some(prompt) = read_c_string(prompt) else {
             return 0;
         };
-        if max_tokens <= 0 {
-            return 0;
-        }
         let Some(images) = copy_image_buffers(image_count, images_flat_buffer, image_sizes) else {
             return 0;
         };
 
         let context_key = read_optional_c_string(context_key).unwrap_or_default();
         let grammar = read_optional_c_string(grammar).unwrap_or_default();
-        let request_id = runtime
-            .enqueue_multimodal_request(
-                context_key,
-                prompt,
-                max_tokens,
-                images,
-                grammar,
-                "",
-                Vec::new(),
-                None,
-                emission_mode(token_emission_mode),
-            )
-            .unwrap_or_default();
-        if request_id != 0 {
-            if let Some(producer) = self.inner.token_producer.as_ref() {
-                runtime.add_token_ring_producer(request_id, producer.clone());
-            }
-        }
-        request_id
+        self.enqueue_prompt_request(
+            context_key,
+            prompt,
+            max_tokens,
+            images,
+            grammar,
+            token_emission_mode,
+        )
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -305,6 +272,119 @@ impl BrowserEngine {
         _grammar: *const c_char,
     ) -> u32 {
         0
+    }
+
+    #[cfg(target_family = "wasm")]
+    #[allow(clippy::too_many_arguments)]
+    fn start_chat_request(
+        &mut self,
+        context_key: *const c_char,
+        messages_json: *const c_char,
+        max_tokens: i32,
+        image_count: i32,
+        images_flat_buffer: *const u8,
+        image_sizes: *const i32,
+        token_emission_mode: i32,
+        grammar: *const c_char,
+    ) -> u32 {
+        let Some(runtime) = self.inner.runtime.as_ref() else {
+            return 0;
+        };
+        let Some(messages_json) = read_c_string(messages_json) else {
+            return 0;
+        };
+        let Ok(prompt) = runtime.apply_chat_template_json(&messages_json, true) else {
+            return 0;
+        };
+        if prompt.is_empty() {
+            return 0;
+        }
+        let images = if image_count > 0 {
+            let Some(images) = copy_image_buffers(image_count, images_flat_buffer, image_sizes)
+            else {
+                return 0;
+            };
+            images
+        } else {
+            Vec::new()
+        };
+        let context_key = read_optional_c_string(context_key).unwrap_or_default();
+        let grammar = read_optional_c_string(grammar).unwrap_or_default();
+        self.enqueue_prompt_request(
+            context_key,
+            prompt,
+            max_tokens,
+            images,
+            grammar,
+            token_emission_mode,
+        )
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[allow(clippy::too_many_arguments)]
+    fn start_chat_request(
+        &mut self,
+        _context_key: *const c_char,
+        _messages_json: *const c_char,
+        _max_tokens: i32,
+        _image_count: i32,
+        _images_flat_buffer: *const u8,
+        _image_sizes: *const i32,
+        _token_emission_mode: i32,
+        _grammar: *const c_char,
+    ) -> u32 {
+        0
+    }
+
+    #[cfg(target_family = "wasm")]
+    fn enqueue_prompt_request(
+        &mut self,
+        context_key: String,
+        prompt: String,
+        max_tokens: i32,
+        images: Vec<Vec<u8>>,
+        grammar: String,
+        token_emission_mode: i32,
+    ) -> u32 {
+        let Some(runtime) = self.inner.runtime.as_mut() else {
+            return 0;
+        };
+        if max_tokens <= 0 {
+            return 0;
+        }
+
+        let token_emission_mode = emission_mode(token_emission_mode);
+        let request_id = if images.is_empty() {
+            runtime.enqueue_request(
+                context_key,
+                prompt,
+                max_tokens,
+                grammar,
+                "",
+                Vec::new(),
+                None,
+                token_emission_mode,
+            )
+        } else {
+            runtime.enqueue_multimodal_request(
+                context_key,
+                prompt,
+                max_tokens,
+                images,
+                grammar,
+                "",
+                Vec::new(),
+                None,
+                token_emission_mode,
+            )
+        }
+        .unwrap_or_default();
+        if request_id != 0 {
+            if let Some(producer) = self.inner.token_producer.as_ref() {
+                runtime.add_token_ring_producer(request_id, producer.clone());
+            }
+        }
+        request_id
     }
 
     #[cfg(target_family = "wasm")]
@@ -638,16 +718,12 @@ impl BrowserEngine {
     }
 
     #[cfg(target_family = "wasm")]
-    fn apply_chat_template(
-        &self,
-        messages_json: *const c_char,
-        add_assistant: i32,
-    ) -> Option<String> {
-        let messages_json = read_c_string(messages_json)?;
+    fn probe_chat_boundary_info(&self) -> Option<String> {
         self.inner.runtime.as_ref().and_then(|runtime| {
             runtime
-                .apply_chat_template_json(&messages_json, add_assistant != 0)
+                .probe_chat_boundary_info()
                 .ok()
+                .and_then(|info| serde_json::to_string(&info).ok())
         })
     }
 
@@ -839,6 +915,33 @@ pub extern "C" fn cogentlm_browser_engine_start_media_request(
         engine.start_media_request(
             context_key,
             prompt,
+            max_tokens,
+            image_count,
+            images_flat_buffer,
+            image_sizes,
+            token_emission_mode,
+            grammar,
+        )
+    })
+}
+
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn cogentlm_browser_engine_start_chat_request(
+    engine: *mut BrowserEngine,
+    context_key: *const c_char,
+    messages_json: *const c_char,
+    max_tokens: i32,
+    image_count: i32,
+    images_flat_buffer: *const u8,
+    image_sizes: *const i32,
+    token_emission_mode: i32,
+    grammar: *const c_char,
+) -> u32 {
+    with_engine_mut(engine, |engine| {
+        engine.start_chat_request(
+            context_key,
+            messages_json,
             max_tokens,
             image_count,
             images_flat_buffer,
@@ -1160,26 +1263,17 @@ pub extern "C" fn cogentlm_browser_engine_eos_text(engine: *const BrowserEngine)
     })
 }
 
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_apply_chat_template(
+pub extern "C" fn cogentlm_browser_engine_probe_chat_boundary_info(
     engine: *const BrowserEngine,
-    messages_json: *const c_char,
-    add_assistant: i32,
 ) -> *mut c_char {
     with_engine_ref(engine, |engine| {
         #[cfg(target_family = "wasm")]
         {
-            into_c_string(
-                engine
-                    .apply_chat_template(messages_json, add_assistant)
-                    .unwrap_or_default(),
-            )
+            into_c_string(engine.probe_chat_boundary_info().unwrap_or_default())
         }
         #[cfg(not(target_family = "wasm"))]
         {
             let _ = engine;
-            let _ = messages_json;
-            let _ = add_assistant;
             std::ptr::null_mut()
         }
     })

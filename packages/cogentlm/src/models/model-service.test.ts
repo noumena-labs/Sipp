@@ -14,10 +14,12 @@ import {
 import type { EngineRuntime } from '../runtime/engine-runtime.js';
 import type {
   BackendObservability,
+  ChatMessage,
   EngineExecutionMode,
   GenerateRequestId,
   GenerateResponse,
   InternalBundleDescriptor,
+  ModelDetectionResult,
   NativeRuntimeConfig,
   PromptOptions,
   RequestObservabilityMetrics,
@@ -27,6 +29,7 @@ import type {
   TransportObservability,
 } from '../types.js';
 import { RuntimePairingValidationError } from '../runtime/engine-runtime.js';
+import type { ChatBoundaryInfo } from '../core/chat-boundary-sanitizer.js';
 
 function file(name: string, contents = name): File {
   return new File([contents], name);
@@ -177,6 +180,14 @@ class FakeAssetStore {
 }
 
 class FakeModelAssetClassifier extends ModelAssetClassifier {
+  public constructor() {
+    super({
+      async detectModelFromGgufFile(): Promise<ModelDetectionResult> {
+        throw new Error('FakeModelAssetClassifier overrides classify directly.');
+      },
+    });
+  }
+
   public override async classify(assetId: string, input: File): Promise<{
     assetId: string;
     file: File;
@@ -209,6 +220,14 @@ class FakeModelAssetClassifier extends ModelAssetClassifier {
 }
 
 class MetadataLimitedModelAssetClassifier extends ModelAssetClassifier {
+  public constructor() {
+    super({
+      async detectModelFromGgufFile(): Promise<ModelDetectionResult> {
+        throw new Error('MetadataLimitedModelAssetClassifier overrides classify directly.');
+      },
+    });
+  }
+
   public override async classify(assetId: string, input: File): Promise<{
     assetId: string;
     file: File;
@@ -421,6 +440,27 @@ class FakeRuntime implements EngineRuntime {
 
   public async initModule(): Promise<void> {}
 
+  public async detectModelFromGgufFile(file: Blob & { name?: string }): Promise<ModelDetectionResult> {
+    const name = file.name ?? 'model.gguf';
+    const isProjector = /mmproj|projector/i.test(name);
+    const visionCapable = !isProjector && /vision|llava/i.test(name);
+    const inspection = {
+      version: 1 as const,
+      role: isProjector ? 'projector' as const : 'model' as const,
+      architecture: visionCapable ? 'vision-test' : 'text-test',
+      visionCapable,
+      compatibleVisionProjectorTypes: visionCapable ? ['vision-merger'] : [],
+      providedVisionProjectorType: isProjector ? 'vision-merger' : null,
+    };
+    return {
+      inspection,
+      detectionMethod: 'gguf-metadata',
+      modelName: name,
+      modelType: null,
+      modelArchitecture: inspection.architecture,
+    };
+  }
+
   public async resolvePairing(
     classified: readonly ClassifiedAsset[],
     explicitProjectorId?: string | null
@@ -482,6 +522,15 @@ class FakeRuntime implements EngineRuntime {
       .map((message) => `<${message.role}>\n${message.content}</${message.role}>\n`)
       .join('');
     return `${rendered}${addAssistant ? '<assistant>\n' : ''}`;
+  }
+
+  public async probeChatTemplateBoundaryInfo(): Promise<ChatBoundaryInfo> {
+    return {
+      assistantPrefix: '<assistant>\n',
+      assistantSuffix: '</assistant>\n',
+      nextTurnPrefixes: ['<system>\n', '<user>\n', '<assistant>\n'],
+      eosText: '</s>',
+    };
   }
 
   public getChatTemplate(): string | null {
@@ -546,6 +595,14 @@ class FakeRuntime implements EngineRuntime {
       });
     }
     return requestId;
+  }
+
+  public async enqueueChat(
+    contextKey: string,
+    messages: readonly ChatMessage[],
+    options?: number | PromptOptions
+  ): Promise<GenerateRequestId> {
+    return this.enqueueQuery(contextKey, await this.applyChatTemplate([...messages], true), options);
   }
 
   public async awaitQuery(requestId: GenerateRequestId): Promise<GenerateResponse> {

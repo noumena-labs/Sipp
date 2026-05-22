@@ -6,6 +6,13 @@ import {
 } from '../types.js';
 import type { RuntimePairingErrorCode } from '../runtime/engine-runtime.js';
 import type { ClassifiedAsset, PairingPlan } from '../models/pairing-types.js';
+import type {
+  GgufMetadataInspection,
+  ModelDetectionMethod,
+  ModelDetectionResult,
+} from '../bundle/model-bundle-types.js';
+import type { ChatBoundaryInfo } from '../core/chat-boundary-sanitizer.js';
+import type { ChatMessage } from '../core/inference-types.js';
 import { EngineModule } from './engine-module.js';
 import {
   DetailedRequestObservabilityMetrics,
@@ -23,6 +30,7 @@ import {
   RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES,
   SCHEDULER_LOOP_RESULT_SIZE_BYTES,
 } from '../runtime/main-thread/constants.js';
+import { createAbortError } from '../utils/abort.js';
 import { assertGrammarByteSize } from '../utils/grammar.js';
 export { MAX_GRAMMAR_BYTES } from '../utils/grammar.js';
 
@@ -51,6 +59,22 @@ export type WasmSchedulerProgressResult = {
 };
 
 export type BrowserCacheLayout = 'single-file' | 'split-gguf';
+
+const DEFAULT_GGUF_METADATA_PREFIX_BYTES = 8 * 1024 * 1024;
+
+interface GgufJsonResponse<T> {
+  ok: boolean;
+  value?: T;
+  error?: {
+    code: string;
+    message: string;
+  };
+}
+
+type RustModelDetectionResult = Omit<ModelDetectionResult, 'detectionMethod'> & {
+  detectionMethod: ModelDetectionMethod | 'gguf_metadata';
+};
+
 export interface PairingValidationResponse {
   ok: boolean;
   plan?: PairingPlan;
@@ -70,16 +94,6 @@ export interface GgufSplitStreamCallbacks {
 export interface GgufReadAtCallbacks {
   readAt(offset: number, target: Uint8Array): number | void;
 }
-
-/**
- * Shape of an OpenAI-compatible chat message accepted by
- * `WasmBridge.applyChatTemplate`. Corresponds to the JSON array parsed by
- * `common_chat_msgs_parse_oaicompat` on the native side.
- */
-export type ChatTemplateMessage = {
-  role: string;
-  content: string;
-};
 
 export class WasmBridge {
   private _cachedDataView: DataView | null = null;
@@ -209,20 +223,8 @@ export class WasmBridge {
     validateGrammarSize(grammar);
     validateTokenEmissionMode(tokenEmissionMode);
     const grammarArg = grammar ?? '';
-    const totalBytes = media.reduce((sum, image) => sum + image.byteLength, 0);
-    const flatPtr = this.allocate(Math.max(1, totalBytes));
-    const sizesPtr = this.allocate(Math.max(1, media.length * 4));
-
-    try {
-      let offset = 0;
-      for (let index = 0; index < media.length; index += 1) {
-        const image = media[index];
-        this.module.HEAPU8.set(image, flatPtr + offset);
-        this.module.HEAP32[this.heapIndex(sizesPtr, 4) + index] = image.byteLength;
-        offset += image.byteLength;
-      }
-
-      return this.callNumber(
+    return this.withWasmMediaBuffers(media, (flatPtr, sizesPtr) =>
+      this.callNumber(
         'CE_StartMediaRequestWithTokenEmissionMode',
         [
           'string',
@@ -244,11 +246,46 @@ export class WasmBridge {
           tokenEmissionMode,
           grammarArg,
         ]
-      ) as GenerateRequestId;
-    } finally {
-      this.free(flatPtr);
-      this.free(sizesPtr);
-    }
+      ) as GenerateRequestId
+    );
+  }
+
+  public startChatRequest(
+    contextKey: string,
+    messages: readonly ChatMessage[],
+    maxOutputTokens: number,
+    media: Uint8Array[] = [],
+    grammar?: string,
+    tokenEmissionMode: TokenEmissionMode = TOKEN_EMISSION_NONE
+  ): GenerateRequestId {
+    validateGrammarSize(grammar);
+    validateTokenEmissionMode(tokenEmissionMode);
+    const grammarArg = grammar ?? '';
+    return this.withWasmMediaBuffers(media, (flatPtr, sizesPtr) =>
+      this.callNumber(
+        'CE_StartChatRequestWithTokenEmissionMode',
+        [
+          'string',
+          'string',
+          'number',
+          'number',
+          'pointer',
+          'pointer',
+          'number',
+          'string',
+        ],
+        [
+          contextKey,
+          JSON.stringify(messages),
+          maxOutputTokens,
+          media.length,
+          flatPtr,
+          sizesPtr,
+          tokenEmissionMode,
+          grammarArg,
+        ]
+      ) as GenerateRequestId
+    );
   }
 
   public readMediaMarker(): string | null {
@@ -282,15 +319,18 @@ export class WasmBridge {
    * to a set of OpenAI-style chat messages and returns the formatted prompt
    * text. Returns '' when the model has no embedded chat template.
    */
-  public applyChatTemplate(
-    messages: ChatTemplateMessage[],
-    addAssistant: boolean
-  ): string {
-    return this.callOwnedString(
-      'CE_ApplyChatTemplate',
-      ['string', 'number'],
-      [JSON.stringify(messages), addAssistant ? 1 : 0]
-    );
+  public probeChatTemplateBoundaryInfo(): ChatBoundaryInfo {
+    const raw = this.callOwnedString('CE_ProbeChatBoundaryInfo');
+    if (raw.trim().length === 0) {
+      throw new Error('Rust chat template boundary probe returned an empty response.');
+    }
+    try {
+      return JSON.parse(raw) as ChatBoundaryInfo;
+    } catch (error) {
+      throw new Error('Rust chat template boundary probe returned invalid JSON.', {
+        cause: error,
+      });
+    }
   }
 
   public validatePairing(
@@ -393,19 +433,48 @@ export class WasmBridge {
     throw new Error(`Rust browser cache layout failed with status ${layout}.`);
   }
 
-  public splitGgufFile(
-    inputPath: string,
-    outputPrefix: string,
-    shardMaxBytes: number
-  ): void {
-    const status = this.callNumber(
-      'CE_GgufSplitFile',
-      ['string', 'string', 'number'],
-      [inputPath, outputPrefix, shardMaxBytes]
-    );
-    if (status !== 0) {
-      throw new Error(`Rust GGUF file split failed with status ${status}.`);
-    }
+  public async inspectGgufMetadata(
+    blob: Blob,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<GgufMetadataInspection | null> {
+    const bytes = await this.readGgufMetadataPrefix(blob, options.signal);
+    return this.withWasmBytes(bytes, (ptr, len) => {
+      const raw = this.callOwnedString(
+        'CE_InspectGgufMetadata',
+        ['pointer', 'number'],
+        [ptr, len]
+      );
+      return this.unwrapGgufResponse<GgufMetadataInspection | null>(
+        raw,
+        'GGUF metadata inspection'
+      );
+    });
+  }
+
+  public async detectModelFromGgufFile(
+    file: Blob & { name?: string },
+    signal?: AbortSignal
+  ): Promise<ModelDetectionResult> {
+    const bytes = await this.readGgufMetadataPrefix(file, signal);
+    const fileName =
+      typeof file.name === 'string' && file.name.trim().length > 0
+        ? file.name
+        : 'model.gguf';
+    const detection = this.withWasmBytes(bytes, (ptr, len) => {
+      const raw = this.callOwnedString(
+        'CE_DetectModelFromGgufBytes',
+        ['string', 'pointer', 'number'],
+        [fileName, ptr, len]
+      );
+      return this.unwrapGgufResponse<RustModelDetectionResult>(
+        raw,
+        'GGUF model detection'
+      );
+    });
+    return {
+      ...detection,
+      detectionMethod: normalizeModelDetectionMethod(detection.detectionMethod),
+    };
   }
 
   public planGgufSplitCount(
@@ -627,6 +696,59 @@ export class WasmBridge {
     this.module._free(ptr);
   }
 
+  private async readGgufMetadataPrefix(
+    blob: Blob,
+    signal?: AbortSignal
+  ): Promise<Uint8Array> {
+    if (signal?.aborted) {
+      throw createAbortError('GGUF metadata read aborted.');
+    }
+    const byteLength = Math.min(blob.size, DEFAULT_GGUF_METADATA_PREFIX_BYTES);
+    const bytes = new Uint8Array(await blob.slice(0, byteLength).arrayBuffer());
+    if (signal?.aborted) {
+      throw createAbortError('GGUF metadata read aborted.');
+    }
+    return bytes;
+  }
+
+  private withWasmBytes<T>(
+    bytes: Uint8Array,
+    operation: (ptr: number, len: number) => T
+  ): T {
+    const ptr = this.allocate(Math.max(1, bytes.byteLength));
+    try {
+      if (bytes.byteLength > 0) {
+        this.module.HEAPU8.set(bytes, ptr);
+      }
+      return operation(ptr, bytes.byteLength);
+    } finally {
+      this.free(ptr);
+    }
+  }
+
+  private withWasmMediaBuffers<T>(
+    media: readonly Uint8Array[],
+    operation: (flatPtr: number, sizesPtr: number) => T
+  ): T {
+    const totalBytes = media.reduce((sum, image) => sum + image.byteLength, 0);
+    const flatPtr = this.allocate(Math.max(1, totalBytes));
+    const sizesPtr = this.allocate(Math.max(1, media.length * 4));
+
+    try {
+      let offset = 0;
+      for (let index = 0; index < media.length; index += 1) {
+        const image = media[index];
+        this.module.HEAPU8.set(image, flatPtr + offset);
+        this.module.HEAP32[this.heapIndex(sizesPtr, 4) + index] = image.byteLength;
+        offset += image.byteLength;
+      }
+      return operation(flatPtr, sizesPtr);
+    } finally {
+      this.free(flatPtr);
+      this.free(sizesPtr);
+    }
+  }
+
   private callOwnedString(
     ident: string,
     argTypes: string[] = [],
@@ -641,6 +763,22 @@ export class WasmBridge {
     } finally {
       this.module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
     }
+  }
+
+  private unwrapGgufResponse<T>(raw: string, label: string): T {
+    let parsed: GgufJsonResponse<T>;
+    try {
+      parsed = JSON.parse(raw) as GgufJsonResponse<T>;
+    } catch (error) {
+      throw new Error(`Rust ${label} returned invalid JSON.`, { cause: error });
+    }
+    if (parsed.ok) {
+      if (!Object.prototype.hasOwnProperty.call(parsed, 'value')) {
+        throw new Error(`Rust ${label} response omitted value.`);
+      }
+      return parsed.value as T;
+    }
+    throw new Error(parsed.error?.message ?? `Rust ${label} failed.`);
   }
 
   private reusableLoopResultPtr = 0;
@@ -750,4 +888,10 @@ export class WasmBridge {
 
 export function parseBackendObservabilityJson(raw: string): BackendObservability {
   return JSON.parse(raw) as BackendObservability;
+}
+
+function normalizeModelDetectionMethod(
+  value: RustModelDetectionResult['detectionMethod']
+): ModelDetectionMethod {
+  return value === 'gguf_metadata' ? 'gguf-metadata' : value;
 }

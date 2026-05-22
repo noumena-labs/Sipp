@@ -34,6 +34,11 @@ CE_RequestId cogentlm_browser_engine_start_media_request(
     int image_count, const std::uint8_t *images_flat_buffer,
     const std::int32_t *image_sizes, int token_emission_mode,
     const char *grammar);
+CE_RequestId cogentlm_browser_engine_start_chat_request(
+    void *engine, const char *context_key, const char *messages_json,
+    int max_tokens, int image_count, const std::uint8_t *images_flat_buffer,
+    const std::int32_t *image_sizes, int token_emission_mode,
+    const char *grammar);
 int cogentlm_browser_engine_cancel_request(void *engine,
                                            CE_RequestId request_id);
 int cogentlm_browser_engine_run_scheduler_loop(
@@ -73,9 +78,13 @@ char *cogentlm_browser_engine_media_marker(const void *engine);
 char *cogentlm_browser_engine_chat_template(const void *engine);
 char *cogentlm_browser_engine_bos_text(const void *engine);
 char *cogentlm_browser_engine_eos_text(const void *engine);
-char *cogentlm_browser_engine_apply_chat_template(
-    const void *engine, const char *messages_json, int add_assistant);
+char *cogentlm_browser_engine_probe_chat_boundary_info(const void *engine);
 void cogentlm_browser_engine_free_string(char *value);
+char *cogentlm_inspect_gguf_metadata_json(const std::uint8_t *bytes,
+                                          std::uintptr_t bytes_len);
+char *cogentlm_detect_model_from_gguf_bytes_json(const char *name,
+                                                 const std::uint8_t *bytes,
+                                                 std::uintptr_t bytes_len);
 char *cogentlm_pairing_validate_json(const char *classified_json,
                                      const char *explicit_projector_id);
 }
@@ -353,8 +362,6 @@ int cogentlm_browser_cache_layout(std::uint64_t source_bytes,
                                   int source_bytes_known,
                                   std::uint64_t direct_load_max_bytes,
                                   std::uint64_t shard_max_bytes);
-int cogentlm_gguf_split_file(const char *input_path, const char *output_prefix,
-                             std::uint64_t shard_max_bytes);
 int cogentlm_gguf_plan_split_count(std::uint64_t source_bytes,
                                    std::uint64_t shard_max_bytes,
                                    void *user_data,
@@ -426,18 +433,6 @@ int CE_GgufPlanSplitCount(double source_bytes, double shard_max_bytes,
 }
 
 EMSCRIPTEN_KEEPALIVE
-int CE_GgufSplitFile(const char *input_path, const char *output_prefix,
-                     double shard_max_bytes) {
-  std::uint64_t shard_max_bytes_u64 = 0;
-  if (!input_path || !output_prefix ||
-      !read_size_arg(shard_max_bytes, &shard_max_bytes_u64)) {
-    return kStatusInvalidArguments;
-  }
-  return cogentlm_gguf_split_file(input_path, output_prefix,
-                                  shard_max_bytes_u64);
-}
-
-EMSCRIPTEN_KEEPALIVE
 int CE_GgufSplitStream(double source_bytes, const char *output_prefix,
                        double shard_max_bytes, void *user_data,
                        CE_ReadAtCallback read_at,
@@ -454,6 +449,34 @@ int CE_GgufSplitStream(double source_bytes, const char *output_prefix,
   return cogentlm_gguf_split_stream(source_bytes_u64, output_prefix,
                                     shard_max_bytes_u64, user_data, read_at,
                                     open_shard, write_shard, close_shard);
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_InspectGgufMetadata(const std::uint8_t *bytes, double bytes_len) {
+  std::uint64_t bytes_len_u64 = 0;
+  if (!read_size_arg(bytes_len, &bytes_len_u64)) {
+    return duplicate_heap_string(
+        "{\"ok\":false,\"error\":{\"code\":\"INVALID_GGUF\",\"message\":\"invalid GGUF byte length\"}}");
+  }
+  const std::string value = take_rust_string(
+      cogentlm_inspect_gguf_metadata_json(bytes,
+                                          static_cast<std::uintptr_t>(
+                                              bytes_len_u64)));
+  return duplicate_heap_string(value.c_str());
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_DetectModelFromGgufBytes(const char *name, const std::uint8_t *bytes,
+                                  double bytes_len) {
+  std::uint64_t bytes_len_u64 = 0;
+  if (!read_size_arg(bytes_len, &bytes_len_u64)) {
+    return duplicate_heap_string(
+        "{\"ok\":false,\"error\":{\"code\":\"INVALID_GGUF\",\"message\":\"invalid GGUF byte length\"}}");
+  }
+  const std::string value = take_rust_string(
+      cogentlm_detect_model_from_gguf_bytes_json(
+          name, bytes, static_cast<std::uintptr_t>(bytes_len_u64)));
+  return duplicate_heap_string(value.c_str());
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -521,23 +544,20 @@ char *CE_GetEosText() {
   return duplicate_heap_string(value.c_str());
 }
 
-EMSCRIPTEN_KEEPALIVE
-char *CE_ApplyChatTemplate(const char *messages_json, int add_assistant) {
-  if (!g_isEngineInitialized) {
-    return duplicate_heap_string("");
-  }
-  const std::string value = take_rust_string(
-      cogentlm_browser_engine_apply_chat_template(g_rustBrowserEngine,
-                                                  messages_json,
-                                                  add_assistant));
-  return duplicate_heap_string(value.c_str());
-}
-
-EMSCRIPTEN_KEEPALIVE
 char *CE_PairingValidate(const char *classified_json,
                          const char *explicit_projector_id) {
   const std::string value = take_rust_string(
       cogentlm_pairing_validate_json(classified_json, explicit_projector_id));
+  return duplicate_heap_string(value.c_str());
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_ProbeChatBoundaryInfo() {
+  if (!g_isEngineInitialized) {
+    return duplicate_heap_string("");
+  }
+  const std::string value = take_rust_string(
+      cogentlm_browser_engine_probe_chat_boundary_info(g_rustBrowserEngine));
   return duplicate_heap_string(value.c_str());
 }
 
@@ -565,6 +585,20 @@ CE_RequestId CE_StartMediaRequestWithTokenEmissionMode(
   }
   return cogentlm_browser_engine_start_media_request(
       g_rustBrowserEngine, context_key, prompt, n_tokens, n_images,
+      images_flat_buffer, image_sizes, token_emission_mode, grammar);
+}
+
+EMSCRIPTEN_KEEPALIVE
+CE_RequestId CE_StartChatRequestWithTokenEmissionMode(
+    const char *context_key, const char *messages_json, int n_tokens,
+    int n_images, const uint8_t *images_flat_buffer, const int32_t *image_sizes,
+    int token_emission_mode, const char *grammar) {
+  if (!g_isEngineInitialized || messages_json == nullptr ||
+      !is_valid_prediction_tokens(n_tokens)) {
+    return 0;
+  }
+  return cogentlm_browser_engine_start_chat_request(
+      g_rustBrowserEngine, context_key, messages_json, n_tokens, n_images,
       images_flat_buffer, image_sizes, token_emission_mode, grammar);
 }
 

@@ -1,8 +1,5 @@
 import { CogentConfig } from '../../engine/engine-options.js';
-import {
-  detectModelFromGgufFile,
-  resolveLocalModelAndProjectorFiles,
-} from '../../bundle/model-bundle-detection.js';
+import { resolveLocalModelAndProjectorFiles } from '../model-detection.js';
 import {
   InternalBundleDescriptor,
   ModelBundleFileProjectorDescriptor,
@@ -18,7 +15,9 @@ import {
   normalizeModelFileName,
 } from './constants.js';
 import { EngineModule } from '../../wasm/engine-module.js';
+import { WasmBridge } from '../../wasm/wasm-bridge.js';
 import { createAbortError } from '../../utils/abort.js';
+import type { ModelDetectionProvider } from '../model-detection.js';
 
 interface FileAssetRequest {
   file: File;
@@ -56,7 +55,8 @@ export class MainThreadModelLoader {
     descriptor: InternalBundleDescriptor,
     options: StageModelBundleOptions = {}
   ): Promise<StagedModelBundle> {
-    const plan = await this.resolveBundlePlan(descriptor, options.signal);
+    const detector = new WasmBridge(module);
+    const plan = await this.resolveBundlePlan(detector, descriptor, options.signal);
     const modelAssetSet = await this.loadResolvedAssetSet(plan.modelAssets, options.signal);
     const projectorAssetSet =
       plan.projectorAsset == null
@@ -90,12 +90,14 @@ export class MainThreadModelLoader {
   }
 
   private async resolveBundlePlan(
+    detector: ModelDetectionProvider,
     descriptor: InternalBundleDescriptor,
     signal?: AbortSignal
   ): Promise<ResolvedBundlePlan> {
     switch (descriptor.kind) {
       case 'file': {
-        const detection = descriptor.detection ?? (await detectModelFromGgufFile(descriptor.file, signal));
+        const detection =
+          descriptor.detection ?? (await detector.detectModelFromGgufFile(descriptor.file, signal));
         this.ensureNotProjectorSource(
           detection.modelName,
           detection.inspection.role === 'projector'
@@ -129,7 +131,7 @@ export class MainThreadModelLoader {
                 errorMessage: null,
               }
           : explicitProjectorAsset == null
-            ? await resolveLocalModelAndProjectorFiles(descriptor.files, signal)
+            ? await resolveLocalModelAndProjectorFiles(detector, descriptor.files, signal)
             : {
                 modelFiles: [...descriptor.files],
                 projectorFile: null,
@@ -148,7 +150,8 @@ export class MainThreadModelLoader {
           normalizeModelFileName(left.name).localeCompare(normalizeModelFileName(right.name))
         );
         const detectionFile = sortedModelFiles[0];
-        const detection = descriptor.detection ?? (await detectModelFromGgufFile(detectionFile, signal));
+        const detection =
+          descriptor.detection ?? (await detector.detectModelFromGgufFile(detectionFile, signal));
         this.ensureNotProjectorSource(
           detection.modelName,
           detection.inspection.role === 'projector'

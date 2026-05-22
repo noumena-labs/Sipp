@@ -1,11 +1,13 @@
 import { CogentConfig, EngineModuleOptions } from '../../engine/engine-options.js';
 import {
   BackendObservability,
+  ChatMessage,
   EngineExecutionMode,
   GenerateRequest,
   GenerateRequestId,
   GenerateResponse,
   InternalBundleDescriptor,
+  ModelDetectionResult,
   NativeRuntimeConfig,
   PromptOptions,
   StagedModelBundle,
@@ -14,6 +16,7 @@ import {
   RuntimeAggregateObservabilityMetrics,
   TransportObservability,
 } from '../../types.js';
+import type { ChatBoundaryInfo } from '../../core/chat-boundary-sanitizer.js';
 import {
   RuntimePairingValidationError,
   type EngineRuntime,
@@ -28,8 +31,8 @@ import { RequestTracker } from '../request-tracker.js';
 import {
   TOKEN_EMISSION_NONE,
   TOKEN_EMISSION_STREAMING_BUFFER,
-  type ChatTemplateMessage,
   parseBackendObservabilityJson,
+  type TokenEmissionMode,
   WasmBridge,
 } from '../../wasm/wasm-bridge.js';
 import type { StreamingRingWriter } from '../streaming-ring.js';
@@ -605,6 +608,14 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return this.modelLoader.stageModelBundle(module, descriptor, options);
   }
 
+  public async detectModelFromGgufFile(
+    file: Blob & { name?: string },
+    signal?: AbortSignal
+  ): Promise<ModelDetectionResult> {
+    await this.ensureModule();
+    return this.getLoadedWasmBridge().detectModelFromGgufFile(file, signal);
+  }
+
   public async browserCacheLayout(
     sourceBytes: number,
     sourceBytesKnown: boolean,
@@ -803,8 +814,73 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     promptText: string,
     options: number | PromptOptions = 128
   ): Promise<GenerateRequestId> {
-    const bridge = this.getReadyEngineBridge();
     const request = this.buildGenerateRequest(contextKey, promptText, options);
+    return this.enqueueNativeRequest(options, (bridge, emissionMode) => {
+      if (request.media != null && request.media.length > 0) {
+        if (this.cachedMediaMarker == null) {
+          throw new Error(
+            'Loaded runtime does not expose a media marker for the current model.'
+          );
+        }
+        const markerCount = this.countMarkerOccurrences(
+          request.promptText,
+          this.cachedMediaMarker
+        );
+        if (markerCount !== request.media.length) {
+          throw new Error(
+            `Prompt contains ${markerCount} media marker(s) but ${request.media.length} image(s) were provided. Use "${this.cachedMediaMarker}" in your prompt to place each image.`
+          );
+        }
+        return bridge.startMediaRequest(
+          request.contextKey,
+          request.promptText,
+          request.maxOutputTokens,
+          request.media,
+          request.grammar,
+          emissionMode
+        );
+      }
+      return bridge.startTextRequest(
+        request.contextKey,
+        request.promptText,
+        request.maxOutputTokens,
+        request.grammar,
+        emissionMode
+      );
+    });
+  }
+
+  public async enqueueChat(
+    contextKey: string,
+    messages: readonly ChatMessage[],
+    options: number | PromptOptions = 128
+  ): Promise<GenerateRequestId> {
+    const media = this.resolvePromptMedia(options);
+    if (media != null && media.length > 0 && this.cachedMediaMarker == null) {
+      throw new Error(
+        'Loaded runtime does not expose a media marker for the current model.'
+      );
+    }
+    const maxOutputTokens = this.resolvePromptTokenCount(options);
+    const grammar = this.resolvePromptGrammar(options);
+
+    return this.enqueueNativeRequest(options, (bridge, emissionMode) =>
+      bridge.startChatRequest(
+        contextKey,
+        messages,
+        maxOutputTokens,
+        media,
+        grammar,
+        emissionMode
+      )
+    );
+  }
+
+  private async enqueueNativeRequest(
+    options: number | PromptOptions,
+    startRequest: (bridge: WasmBridge, emissionMode: TokenEmissionMode) => GenerateRequestId
+  ): Promise<GenerateRequestId> {
+    const bridge = this.getReadyEngineBridge();
     const onTokens = typeof options === 'object' ? options.onTokens : undefined;
     const signal = typeof options === 'object' ? options.signal : undefined;
 
@@ -816,46 +892,13 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
     const emissionMode =
       onTokens == null ? TOKEN_EMISSION_NONE : TOKEN_EMISSION_STREAMING_BUFFER;
-
-    let requestId: GenerateRequestId = 0;
-    if (request.media != null && request.media.length > 0) {
-      if (this.cachedMediaMarker == null) {
-        throw new Error(
-          'Loaded runtime does not expose a media marker for the current model.'
-        );
-      }
-      const markerCount = this.countMarkerOccurrences(
-        request.promptText,
-        this.cachedMediaMarker
-      );
-      if (markerCount !== request.media.length) {
-        throw new Error(
-          `Prompt contains ${markerCount} media marker(s) but ${request.media.length} image(s) were provided. Use "${this.cachedMediaMarker}" in your prompt to place each image.`
-        );
-      }
-      requestId = bridge.startMediaRequest(
-        request.contextKey,
-        request.promptText,
-        request.maxOutputTokens,
-        request.media,
-        request.grammar,
-        emissionMode
-      );
-    } else {
-      requestId = bridge.startTextRequest(
-        request.contextKey,
-        request.promptText,
-        request.maxOutputTokens,
-        request.grammar,
-        emissionMode
-      );
-    }
+    const requestId = startRequest(bridge, emissionMode);
     if (!requestId) {
       throw new Error('Failed to enqueue request.');
     }
 
     // Worker entry uses this hook to publish a streaming-claim message
-    // before inference produces tokens.  Errors are swallowed.
+    // before inference produces tokens. Errors are swallowed.
     if (
       typeof options === 'object' &&
       typeof options.__internalRequestStarted === 'function'
@@ -882,7 +925,6 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     }
 
     this.ensureTracked(requestId);
-
     return requestId;
   }
 
@@ -951,11 +993,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return this.cachedEosText;
   }
 
-  public async applyChatTemplate(
-    messages: ChatTemplateMessage[],
-    addAssistant: boolean
-  ): Promise<string> {
-    return this.getReadyEngineBridge().applyChatTemplate(messages, addAssistant);
+  public async probeChatTemplateBoundaryInfo(): Promise<ChatBoundaryInfo> {
+    return this.getReadyEngineBridge().probeChatTemplateBoundaryInfo();
   }
 
   public async getBackendObservability(): Promise<BackendObservability | null> {

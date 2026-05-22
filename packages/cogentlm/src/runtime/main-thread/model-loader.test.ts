@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MainThreadModelLoader } from './model-loader.js';
 import type { EngineModule, EmscriptenFs } from '../../wasm/engine-module.js';
+import type { ModelDetectionResult } from '../../types.js';
 
 interface FakeModule extends EngineModule {
   FS: EmscriptenFs & {
@@ -63,6 +64,23 @@ function createModule(): FakeModule {
   };
 }
 
+function modelDetection(name: string): ModelDetectionResult {
+  return {
+    inspection: {
+      version: 1,
+      role: 'model',
+      architecture: 'llama',
+      visionCapable: false,
+      compatibleVisionProjectorTypes: [],
+      providedVisionProjectorType: null,
+    },
+    detectionMethod: 'gguf-metadata',
+    modelName: name,
+    modelType: null,
+    modelArchitecture: 'llama',
+  };
+}
+
 test('MainThreadModelLoader stages projector in MEMFS and model in WORKERFS', async () => {
   const loader = new MainThreadModelLoader({});
   const module = createModule();
@@ -71,6 +89,7 @@ test('MainThreadModelLoader stages projector in MEMFS and model in WORKERFS', as
   const staged = await loader.stageModelBundle(module, {
     kind: 'file',
     file: new File(['not-a-gguf-model'], 'model.gguf'),
+    detection: modelDetection('model.gguf'),
     projector: {
       kind: 'file',
       file: new File([projectorBytes], 'mmproj.gguf'),
@@ -98,6 +117,7 @@ test('MainThreadModelLoader cleanup removes MEMFS projector and unmounts model f
   await loader.stageModelBundle(module, {
     kind: 'file',
     file: new File(['not-a-gguf-model'], 'model.gguf'),
+    detection: modelDetection('model.gguf'),
     projector: {
       kind: 'file',
       file: new File(['projector'], 'mmproj.gguf'),

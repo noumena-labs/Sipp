@@ -1,10 +1,12 @@
 import { CogentConfig } from '../engine/engine-options.js';
 import {
   BackendObservability,
+  ChatMessage,
   EngineExecutionMode,
   GenerateRequestId,
   GenerateResponse,
   InternalBundleDescriptor,
+  ModelDetectionResult,
   NativeRuntimeConfig,
   PromptOptions,
   RuntimeAggregateObservabilityMetrics,
@@ -12,7 +14,7 @@ import {
   StageModelBundleOptions,
   TransportObservability,
 } from '../types.js';
-import type { ChatTemplateMessage } from '../wasm/wasm-bridge.js';
+import type { ChatBoundaryInfo } from '../core/chat-boundary-sanitizer.js';
 import type { ClassifiedAsset, PairingPlan } from '../models/pairing-types.js';
 import type {
   BrowserCacheLayout,
@@ -77,11 +79,20 @@ export interface EngineRuntime {
     shardMaxBytes: number,
     callbacks: GgufSplitStreamCallbacks
   ): Promise<void>;
+  detectModelFromGgufFile(
+    file: Blob & { name?: string },
+    signal?: AbortSignal
+  ): Promise<ModelDetectionResult>;
   resolvePairing(
     classified: readonly ClassifiedAsset[],
     explicitProjectorId?: string | null
   ): Promise<PairingPlan>;
-  applyChatTemplate(messages: ChatTemplateMessage[], addAssistant: boolean): Promise<string>;
+  probeChatTemplateBoundaryInfo(): Promise<ChatBoundaryInfo>;
+  enqueueChat(
+    contextKey: string,
+    messages: readonly ChatMessage[],
+    options?: number | PromptOptions
+  ): Promise<GenerateRequestId>;
   cancelQuery(requestId: GenerateRequestId): Promise<boolean>;
   enqueueQuery(
     contextKey: string,
