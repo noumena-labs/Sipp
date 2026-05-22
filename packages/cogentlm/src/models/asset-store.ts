@@ -7,8 +7,12 @@ import {
   type QueryErrorCode,
   type RegistryManifest,
 } from './types.js';
-import { sha256Blob, sha256Text, type AssetHashProvider } from './hash.js';
 import { currentLocationHref, resolveUrl } from '../utils/url.js';
+
+export interface AssetHashProvider {
+  sha256Text(value: string): string;
+  sha256Blob(blob: Blob, signal?: AbortSignal): Promise<string>;
+}
 
 const DEFAULT_BROWSER_DIRECT_LOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_BROWSER_SHARD_MAX_BYTES = 512 * 1024 * 1024;
@@ -150,15 +154,22 @@ function quotaExceededError(name: string, bytes: number, cause: unknown): QueryE
 }
 
 export class AssetStore {
-  private hashProvider: AssetHashProvider = {
-    sha256Text,
-    sha256Blob,
-  };
+  private hashProvider: AssetHashProvider | null = null;
 
   constructor(private readonly storage = new FileSystemStorage()) {}
 
   public setHashProvider(provider: AssetHashProvider): void {
     this.hashProvider = provider;
+  }
+
+  private getHashProvider(): AssetHashProvider {
+    if (this.hashProvider == null) {
+      throw new QueryError(
+        'STORAGE_UNAVAILABLE',
+        'AssetStore requires a hash provider. Call setHashProvider() before installing assets.'
+      );
+    }
+    return this.hashProvider;
   }
 
   public ensureAvailable(): void {
@@ -330,7 +341,7 @@ export class AssetStore {
       );
     }
 
-    const sourceKey = this.hashProvider.sha256Text(
+    const sourceKey = this.getHashProvider().sha256Text(
       `${metadata.canonicalUrl}\n${metadata.etag}\n${metadata.lastModified}\n${metadata.bytes}`
     ).slice(0, 24);
     const sourceTempPath = `tmp-source-${Date.now().toString(36)}-${Math.random()
@@ -416,7 +427,7 @@ export class AssetStore {
       return [await this.installFile({ kind: 'model', file, signal, onProgress })];
     }
 
-    const sourceKey = this.hashProvider
+    const sourceKey = this.getHashProvider()
       .sha256Text(`local\n${name}\n${file.lastModified}\n${file.size}`)
       .slice(0, 24);
     const sourceTempPath = `tmp-local-source-${Date.now().toString(36)}-${Math.random()
@@ -471,7 +482,7 @@ export class AssetStore {
     this.ensureAvailable();
     const name = normalizeAssetName(input.file.name || 'model.gguf');
     this.emitStoreProgress(input.onProgress, name, 0, input.file.size, 0);
-    const hash = await this.hashProvider.sha256Blob(input.file, input.signal);
+    const hash = await this.getHashProvider().sha256Blob(input.file, input.signal);
     const id = `asset-${hash}`;
     const storagePath = `${id}-${name}`;
     const existing = await this.storage.getFile(storagePath);
@@ -553,7 +564,7 @@ export class AssetStore {
       throw new QueryError('MODEL_BROKEN', `Stored asset "${name}" is missing or empty.`);
     }
     this.emitStoreProgress(input.onProgress, name, 0, file.size, 0);
-    const hash = await this.hashProvider.sha256Blob(file, input.signal);
+    const hash = await this.getHashProvider().sha256Blob(file, input.signal);
     this.emitStoreProgress(input.onProgress, name, file.size, file.size, 100);
     return this.buildAssetRecord({
       id: `asset-${hash}`,
@@ -593,7 +604,7 @@ export class AssetStore {
   }): Promise<AssetRecord> {
     const name = normalizeAssetName(input.name || input.file.name || 'model.gguf');
     this.emitStoreProgress(input.onProgress, name, 0, input.file.size, 0);
-    const hash = await this.hashProvider.sha256Blob(input.file);
+    const hash = await this.getHashProvider().sha256Blob(input.file);
     const id = `asset-${hash}`;
     const canonicalStoragePath = `${id}-${name}`;
     const existing = await this.storage.getFile(canonicalStoragePath);

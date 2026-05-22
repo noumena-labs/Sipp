@@ -19,7 +19,6 @@ import type {
 import { createLinkedAbortController, isAbortError } from '../utils/abort.js';
 import { stableJson } from '../utils/stable-json.js';
 import { AssetStore, type RemoteAssetMetadata } from './asset-store.js';
-import { sha256Text } from './hash.js';
 import { ModelRegistryStore } from './model-registry-store.js';
 import { ModelAssetClassifier } from './model-asset-classifier.js';
 import type { ClassifiedAsset, ClassifiedAssetFile, PairingPlan } from './pairing-types.js';
@@ -136,35 +135,10 @@ function utf8ByteLength(text: string): number {
 }
 
 function entryAssetFingerprint(entry: Pick<ModelEntry, 'modelAssetIds' | 'projectorAssetId'>): string {
-  return sha256Text(
-    stableJson({
-      modelAssetIds: [...entry.modelAssetIds].sort((left, right) => left.localeCompare(right)),
-      projectorAssetId: entry.projectorAssetId ?? null,
-    })
-  );
-}
-
-function entryAssetIds(entry: Pick<ModelEntry, 'modelAssetIds' | 'projectorAssetId'>): string[] {
-  return [...entry.modelAssetIds, entry.projectorAssetId].filter(
-    (value): value is string => typeof value === 'string'
-  );
-}
-
-function cloneModelEntry(entry: ModelEntry): ModelEntry {
-  return JSON.parse(JSON.stringify(entry)) as ModelEntry;
-}
-
-function normalizeVisionProjectorTypes(projectorTypes: readonly string[]): string[] {
-  return [...new Set(projectorTypes)].sort((left, right) => left.localeCompare(right));
-}
-
-function sameVisionProjectorTypes(left: readonly string[], right: readonly string[]): boolean {
-  const normalizedLeft = normalizeVisionProjectorTypes(left);
-  const normalizedRight = normalizeVisionProjectorTypes(right);
-  return (
-    normalizedLeft.length === normalizedRight.length &&
-    normalizedLeft.every((value, index) => value === normalizedRight[index])
-  );
+  return stableJson({
+    modelAssetIds: [...entry.modelAssetIds].sort((left, right) => left.localeCompare(right)),
+    projectorAssetId: entry.projectorAssetId ?? null,
+  });
 }
 
 const BROWSER_GGUF_SPLIT_DIRECT_LOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024;
@@ -184,7 +158,7 @@ export class ModelService implements ModelLifecycleService {
   private readonly observability = new ObservabilityController();
   private readonly engineEvents = new EngineEventController();
   private browserSplitCleanup: Promise<void> | null = null;
-  private rustLifecyclePromise: Promise<RustLifecycleBridge | null> | null = null;
+  private rustLifecyclePromise: Promise<RustLifecycleBridge> | null = null;
   private rustHashProviderPromise: Promise<void> | null = null;
 
   constructor(
@@ -218,12 +192,7 @@ export class ModelService implements ModelLifecycleService {
   public async list(): Promise<ModelInfo[]> {
     const manifest = await this.registry.read();
     const rust = await this.getRustLifecycle(manifest);
-    if (rust != null) {
-      return rust.list();
-    }
-    return Object.values(manifest.models)
-      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
-      .map((entry) => this.toModelInfo(entry, manifest));
+    return rust.list();
   }
 
   public currentObservability(): ObservabilitySnapshot {
@@ -252,94 +221,7 @@ export class ModelService implements ModelLifecycleService {
         throw new DOMException('Model load aborted.', 'AbortError');
       }
       const rust = await this.getRustLifecycle(await this.registry.read());
-      if (rust != null) {
-        return await this.loadWithRustLifecycle(rust, source, options);
-      }
-      const loadOptions: ModelLoadOptions = {
-        ...options,
-        onProgress: (progress) => {
-          options.onProgress?.(progress);
-          this.engineEvents.emit({
-            type: 'load-progress',
-            loadedBytes: progress.loadedBytes,
-            totalBytes: progress.totalBytes,
-            assetName: progress.assetName,
-          });
-        },
-      };
-
-      const observabilityMode = resolveObservabilityMode(options.observability);
-      const runtimeFingerprint = sha256Text(
-        stableJson({
-          runtime: options.runtime ?? {},
-          observability: observabilityMode,
-        })
-      );
-      this.observability.emit('load-start', {
-        mode: observabilityMode,
-        state: 'loading',
-        query: null,
-        runtime: undefined,
-        profile: undefined,
-      });
-      try {
-        const manifest = await this.registry.read();
-        await this.cleanupBrowserSplitArtifacts(manifest);
-        const existing = this.resolveInstalledModel(manifest, source);
-        if (existing != null && !isSourceObject(source)) {
-          const basePlan = await this.deriveBasePlanForEntry(existing, manifest, loadOptions.signal);
-          const prepared = await this.resolveEntryForLoading(existing, basePlan, loadOptions.signal);
-          return await this.loadEntry(prepared, runtimeFingerprint, loadOptions, observabilityMode);
-        }
-
-        const installed = await this.installSource(source, manifest, loadOptions);
-        const classified = await this.classifyAssets(installed.assets, loadOptions.signal);
-        await this.registerAssets(installed.assets, classified);
-        const sourceProjectorAssetId = this.resolveSourceProjectorAssetId(
-          classified,
-          installed.explicitProjectorAssetId
-        );
-        const basePlan = await this.resolvePairing(
-          classified.filter((file) => file.assetId !== sourceProjectorAssetId)
-        );
-        let entry = await this.upsertBaseModelEntry(basePlan, runtimeFingerprint);
-
-        if (sourceProjectorAssetId != null) {
-          const previousEntry = cloneModelEntry(entry);
-          try {
-            const explicitPlan = await this.resolvePairing(
-              classified,
-              sourceProjectorAssetId
-            );
-            entry = await this.setResolvedProjector(
-              entry.id,
-              explicitPlan.projectorAssetId!,
-              explicitPlan.compatibleVisionProjectorTypes
-            );
-            return await this.loadEntry(entry, runtimeFingerprint, loadOptions, observabilityMode);
-          } catch (error) {
-            await this.restoreEntry(previousEntry);
-            throw error;
-          }
-        }
-
-        const prepared = await this.resolveEntryForLoading(entry, basePlan, loadOptions.signal);
-        return await this.loadEntry(prepared, runtimeFingerprint, loadOptions, observabilityMode);
-      } catch (error) {
-        this.observability.emit('error', {
-          state: 'error',
-          query: {
-            session: null,
-            status: isAbortError(error) ? 'cancelled' : 'failed',
-            wallMs: null,
-            ttftMs: null,
-            outputTokens: null,
-            errorCode: error instanceof QueryError ? error.code : undefined,
-            errorMessage: error instanceof Error ? error.message : String(error),
-          },
-        });
-        throw error;
-      }
+      return await this.loadWithRustLifecycle(rust, source, options);
     });
   }
 
@@ -347,67 +229,18 @@ export class ModelService implements ModelLifecycleService {
     await this.withLifecycleLock(async () => {
       const manifest = await this.registry.read();
       const rust = await this.getRustLifecycle(manifest);
-      if (rust != null) {
-        const wasCurrent = this.currentLoaded?.id === id;
-        const removed = rust.remove(id);
-        if (wasCurrent) {
-          this.runtime.close();
-          this.currentLoaded = null;
-          this.currentSnapshot = null;
-        }
-        await this.replaceManifest(removed.manifest);
-        for (const asset of removed.orphanedAssets) {
-          await this.assetStore.delete(asset);
-        }
-        this.ingestRustEvents(removed.events);
-        return;
-      }
-      const entry = manifest.models[id];
-      if (entry == null) {
-        throw new QueryError('MODEL_NOT_FOUND', `Model "${id}" is not installed.`);
-      }
-      if (this.currentLoaded?.id === id) {
+      const wasCurrent = this.currentLoaded?.id === id;
+      const removed = rust.remove(id);
+      if (wasCurrent) {
         this.runtime.close();
         this.currentLoaded = null;
         this.currentSnapshot = null;
       }
-
-      const orphanedAssets: AssetRecord[] = [];
-      await this.registry.write((draft) => {
-        let projectorIndexChanged = false;
-        const removed = draft.models[id];
-        if (removed == null) {
-          return;
-        }
-        delete draft.models[id];
-        for (const assetId of [...removed.modelAssetIds, removed.projectorAssetId].filter(
-          (value): value is string => typeof value === 'string'
-        )) {
-          const asset = draft.assets[assetId];
-          if (asset == null) {
-            continue;
-          }
-          asset.refCount = Math.max(0, asset.refCount - 1);
-          if (asset.refCount === 0) {
-            orphanedAssets.push(asset);
-            if (asset.kind === 'projector') {
-              projectorIndexChanged = true;
-            }
-            delete draft.assets[assetId];
-          }
-        }
-        if (projectorIndexChanged) {
-          draft.projectorIndexRevision += 1;
-        }
-      });
-      for (const asset of orphanedAssets) {
+      await this.replaceManifest(removed.manifest);
+      for (const asset of removed.orphanedAssets) {
         await this.assetStore.delete(asset);
       }
-      this.observability.update({
-        state: this.currentSnapshot == null ? 'idle' : 'ready',
-        model: this.currentSnapshot,
-        query: null,
-      });
+      this.ingestRustEvents(removed.events);
     });
   }
 
@@ -419,20 +252,9 @@ export class ModelService implements ModelLifecycleService {
         this.currentLoaded = null;
         this.currentSnapshot = null;
       }
-      if (rust != null) {
-        const snapshot = rust.unload();
-        this.ingestRustEvents(rust.drainEvents());
-        this.observability.ingest({ type: 'load-complete', snapshot });
-        this.engineEvents.emit({ type: 'state', state: this.currentState() });
-        return;
-      }
-      this.observability.update({
-        state: 'idle',
-        model: null,
-        query: null,
-        runtime: undefined,
-        profile: undefined,
-      });
+      const snapshot = rust.unload();
+      this.ingestRustEvents(rust.drainEvents());
+      this.observability.ingest({ type: 'load-complete', snapshot });
       this.engineEvents.emit({ type: 'state', state: this.currentState() });
     });
   }
@@ -896,25 +718,17 @@ export class ModelService implements ModelLifecycleService {
 
   private async getRustLifecycle(
     manifest: RegistryManifest
-  ): Promise<RustLifecycleBridge | null> {
-    const factory = this.runtime.createRustLifecycleBridge?.bind(this.runtime);
-    if (factory == null) {
-      return null;
-    }
+  ): Promise<RustLifecycleBridge> {
     await this.ensureRustHashProvider();
     if (this.rustLifecyclePromise == null) {
-      this.rustLifecyclePromise = factory(manifest);
+      this.rustLifecyclePromise = this.runtime.createRustLifecycleBridge(manifest);
     }
     return await this.rustLifecyclePromise;
   }
 
   private async ensureRustHashProvider(): Promise<void> {
-    const factory = this.runtime.createRustHashProvider?.bind(this.runtime);
-    if (factory == null) {
-      return;
-    }
     if (this.rustHashProviderPromise == null) {
-      this.rustHashProviderPromise = factory().then((provider) => {
+      this.rustHashProviderPromise = this.runtime.createRustHashProvider().then((provider) => {
         this.assetStore.setHashProvider(provider);
       });
     }
@@ -938,8 +752,11 @@ export class ModelService implements ModelLifecycleService {
   }
 
   private async closeRustLifecycle(): Promise<void> {
+    if (this.rustLifecyclePromise == null) {
+      return;
+    }
     const rust = await this.rustLifecyclePromise;
-    rust?.close();
+    rust.close();
     this.rustLifecyclePromise = null;
   }
 
@@ -1393,139 +1210,6 @@ export class ModelService implements ModelLifecycleService {
     );
   }
 
-  private async registerAssets(
-    assets: InstalledAsset[],
-    classified: ClassifiedAssetFile[]
-  ): Promise<void> {
-    const classifiedById = new Map(classified.map((file) => [file.assetId, file]));
-    await this.registry.write((draft) => {
-      let projectorIndexChanged = false;
-      for (const installed of assets) {
-        const existing = draft.assets[installed.record.id];
-        const inspection = classifiedById.get(installed.record.id)?.inspection;
-        const nextKind =
-          inspection?.role === 'projector' || installed.record.kind === 'projector'
-            ? 'projector'
-            : existing?.kind ?? installed.record.kind;
-        if (existing == null) {
-          draft.assets[installed.record.id] = {
-            ...installed.record,
-            kind: nextKind,
-            ...(inspection == null ? {} : { inspection }),
-          };
-          if (nextKind === 'projector') {
-            projectorIndexChanged = true;
-          }
-          continue;
-        }
-        if (existing.kind !== nextKind && (existing.kind === 'projector' || nextKind === 'projector')) {
-          projectorIndexChanged = true;
-        }
-        draft.assets[installed.record.id] = {
-          ...existing,
-          kind: nextKind,
-          sourceUrl: installed.record.sourceUrl ?? existing.sourceUrl,
-          sourceEtag: installed.record.sourceEtag ?? existing.sourceEtag,
-          sourceLastModified: installed.record.sourceLastModified ?? existing.sourceLastModified,
-          sourceBytes: installed.record.sourceBytes ?? existing.sourceBytes,
-          sourcePartIndex: installed.record.sourcePartIndex ?? existing.sourcePartIndex,
-          sourcePartCount: installed.record.sourcePartCount ?? existing.sourcePartCount,
-          sourceFileName: installed.record.sourceFileName ?? existing.sourceFileName,
-          sourceFileLastModified:
-            installed.record.sourceFileLastModified ?? existing.sourceFileLastModified,
-          ...(inspection == null ? {} : { inspection }),
-        };
-      }
-      if (projectorIndexChanged) {
-        draft.projectorIndexRevision += 1;
-      }
-    });
-  }
-
-  private async upsertBaseModelEntry(
-    plan: PairingPlan,
-    runtimeFingerprint: string
-  ): Promise<ModelEntry> {
-    const id = `model-${sha256Text(
-      stableJson({
-        modelAssetIds: [...plan.modelAssetIds].sort((left, right) => left.localeCompare(right)),
-      })
-    ).slice(0, 24)}`;
-    const now = new Date().toISOString();
-    let entry!: ModelEntry;
-    await this.registry.write((draft) => {
-      const existing = draft.models[id];
-      if (existing == null) {
-        entry = {
-          id,
-          name: plan.name,
-          modality: plan.modality,
-          status: plan.status,
-          modelAssetIds: plan.modelAssetIds,
-          runtimeFingerprint,
-          createdAt: now,
-          updatedAt: now,
-        };
-        draft.models[id] = entry;
-        for (const assetId of plan.modelAssetIds) {
-          const asset = draft.assets[assetId];
-          if (asset != null) {
-            asset.refCount += 1;
-          }
-        }
-      } else {
-        this.updateAssetReferences(
-          draft,
-          [...existing.modelAssetIds, existing.projectorAssetId].filter(
-            (value): value is string => typeof value === 'string'
-          ),
-          [...plan.modelAssetIds, existing.projectorAssetId].filter(
-            (value): value is string => typeof value === 'string'
-          )
-        );
-        existing.name = plan.name;
-        existing.modelAssetIds = plan.modelAssetIds;
-        if (existing.projectorAssetId == null) {
-          existing.modality = plan.modality;
-          existing.status = plan.status;
-        }
-        existing.runtimeFingerprint = runtimeFingerprint;
-        existing.updatedAt = now;
-        entry = existing;
-      }
-    });
-    return entry;
-  }
-
-  private async deriveBasePlanForEntry(
-    entry: ModelEntry,
-    manifest: RegistryManifest,
-    signal?: AbortSignal
-  ): Promise<PairingPlan> {
-    const installed = await this.assetsForEntry(entry, manifest, false);
-    const classified = await this.classifyAssets(installed.assets, signal);
-    return await this.resolvePairing(classified);
-  }
-
-  private async resolvePairing(
-    classified: readonly ClassifiedAssetFile[],
-    explicitProjectorAssetId?: string | null
-  ): Promise<PairingPlan> {
-    const runtimeAssets: ClassifiedAsset[] = classified.map((file) => ({
-      assetId: file.assetId,
-      inspection: file.inspection,
-      name: file.name,
-    }));
-    try {
-      return await this.runtime.resolvePairing(runtimeAssets, explicitProjectorAssetId ?? null);
-    } catch (error) {
-      if (error instanceof RuntimePairingValidationError) {
-        throw new QueryError(error.code, error.message, { cause: error });
-      }
-      throw error;
-    }
-  }
-
   private resolveSourceProjectorAssetId(
     classified: readonly ClassifiedAssetFile[],
     explicitProjectorAssetId: string | null
@@ -1535,406 +1219,6 @@ export class ModelService implements ModelLifecycleService {
     }
     const projectors = classified.filter((file) => file.inspection.role === 'projector');
     return projectors.length === 1 ? projectors[0].assetId : null;
-  }
-
-  private async resolveEntryForLoading(
-    entry: ModelEntry,
-    basePlan: PairingPlan,
-    signal?: AbortSignal
-  ): Promise<ModelEntry> {
-    let manifest = await this.registry.read();
-    let current = manifest.models[entry.id] ?? entry;
-
-    if (current.projectorAssetId != null) {
-      const projector = manifest.assets[current.projectorAssetId];
-      if (projector == null) {
-        current = await this.detachProjector(current.id, basePlan);
-        manifest = await this.registry.read();
-        current = manifest.models[current.id] ?? current;
-      } else if (basePlan.compatibleVisionProjectorTypes.length > 0) {
-        const inspectedProjector = await this.ensureProjectorInspection(projector, signal);
-        const providedType = inspectedProjector?.inspection?.providedVisionProjectorType ?? null;
-        if (
-          providedType == null ||
-          !basePlan.compatibleVisionProjectorTypes.includes(providedType)
-        ) {
-          current = await this.detachProjector(current.id, basePlan);
-          manifest = await this.registry.read();
-          current = manifest.models[current.id] ?? current;
-        } else if (
-          current.pairing?.state !== 'resolved' ||
-          !sameVisionProjectorTypes(
-            current.pairing.compatibleVisionProjectorTypes,
-            basePlan.compatibleVisionProjectorTypes
-          )
-        ) {
-          current = await this.setResolvedProjector(
-            current.id,
-            projector.id,
-            basePlan.compatibleVisionProjectorTypes
-          );
-        } else {
-          return current;
-        }
-      } else {
-        return current;
-      }
-    }
-
-    if (basePlan.modality !== 'vision') {
-      if (
-        current.pairing?.state === 'unresolved' &&
-        current.pairing.reasonCode === 'BASE_NOT_VISION' &&
-        current.pairing.checkedProjectorIndexRevision === manifest.projectorIndexRevision
-      ) {
-        return current;
-      }
-      return await this.setUnresolvedPairing(current.id, basePlan, 'BASE_NOT_VISION');
-    }
-
-    if (basePlan.compatibleVisionProjectorTypes.length === 0) {
-      if (
-        current.pairing?.state === 'unresolved' &&
-        current.pairing.reasonCode === 'MISSING_METADATA' &&
-        current.pairing.checkedProjectorIndexRevision === manifest.projectorIndexRevision
-      ) {
-        return current;
-      }
-      return await this.setUnresolvedPairing(current.id, basePlan, 'MISSING_METADATA');
-    }
-
-    if (
-      current.pairing?.state === 'unresolved' &&
-      current.pairing.checkedProjectorIndexRevision === manifest.projectorIndexRevision &&
-      sameVisionProjectorTypes(
-        current.pairing.compatibleVisionProjectorTypes,
-        basePlan.compatibleVisionProjectorTypes
-      )
-    ) {
-      return current;
-    }
-
-    const matches = await this.findCompatibleInstalledProjectorIds(
-      manifest,
-      basePlan.compatibleVisionProjectorTypes,
-      signal
-    );
-    if (matches.length === 1) {
-      return await this.setResolvedProjector(
-        current.id,
-        matches[0],
-        basePlan.compatibleVisionProjectorTypes
-      );
-    }
-
-    return await this.setUnresolvedPairing(
-      current.id,
-      basePlan,
-      matches.length === 0 ? 'NO_MATCH' : 'MULTIPLE_MATCHES'
-    );
-  }
-
-  private async findCompatibleInstalledProjectorIds(
-    manifest: RegistryManifest,
-    compatibleVisionProjectorTypes: readonly string[],
-    signal?: AbortSignal
-  ): Promise<string[]> {
-    const compatible = new Set(compatibleVisionProjectorTypes);
-    const matches: string[] = [];
-    for (const asset of Object.values(manifest.assets)) {
-      if (asset.kind !== 'projector' || asset.refCount <= 0) {
-        continue;
-      }
-      const inspected = await this.ensureProjectorInspection(asset, signal);
-      const providedType = inspected?.inspection?.providedVisionProjectorType ?? null;
-      if (providedType != null && compatible.has(providedType)) {
-        matches.push(asset.id);
-      }
-    }
-    return matches.sort((left, right) => left.localeCompare(right));
-  }
-
-  private async ensureProjectorInspection(
-    asset: AssetRecord,
-    signal?: AbortSignal
-  ): Promise<AssetRecord | null> {
-    if (asset.inspection?.version === 1) {
-      return asset;
-    }
-    try {
-      const file = await this.assetStore.getFile(asset);
-      const classified = await this.assetClassifier.classify(asset.id, file, signal);
-      const updated = await this.registry.write((draft) => {
-        const next = draft.assets[asset.id];
-        if (next == null) {
-          return;
-        }
-        const nextKind =
-          classified.inspection.role === 'projector' || next.kind === 'projector'
-            ? 'projector'
-            : next.kind;
-        if (next.kind !== nextKind && (next.kind === 'projector' || nextKind === 'projector')) {
-          draft.projectorIndexRevision += 1;
-        }
-        next.kind = nextKind;
-        next.inspection = classified.inspection;
-      });
-      return updated.assets[asset.id] ?? null;
-    } catch (error) {
-      if (error instanceof QueryError && error.code === 'MODEL_BROKEN') {
-        return null;
-      }
-      throw error;
-    }
-  }
-
-  private async setResolvedProjector(
-    id: string,
-    projectorAssetId: string,
-    compatibleVisionProjectorTypes: readonly string[]
-  ): Promise<ModelEntry> {
-    const now = new Date().toISOString();
-    let entry!: ModelEntry;
-    await this.registry.write((draft) => {
-      const existing = draft.models[id];
-      if (existing == null) {
-        throw new QueryError('MODEL_NOT_FOUND', `Model "${id}" is not installed.`);
-      }
-      this.updateAssetReferences(
-        draft,
-        entryAssetIds(existing),
-        [...existing.modelAssetIds, projectorAssetId]
-      );
-      existing.projectorAssetId = projectorAssetId;
-      existing.modality = 'vision';
-      existing.status = 'ready';
-      existing.pairing = {
-        state: 'resolved',
-        checkedProjectorIndexRevision: draft.projectorIndexRevision,
-        compatibleVisionProjectorTypes: normalizeVisionProjectorTypes(
-          compatibleVisionProjectorTypes
-        ),
-        updatedAt: now,
-      };
-      existing.updatedAt = now;
-      entry = existing;
-    });
-    return entry;
-  }
-
-  private async setUnresolvedPairing(
-    id: string,
-    plan: PairingPlan,
-    reasonCode: ModelPairingReasonCode
-  ): Promise<ModelEntry> {
-    const now = new Date().toISOString();
-    let entry!: ModelEntry;
-    await this.registry.write((draft) => {
-      const existing = draft.models[id];
-      if (existing == null) {
-        throw new QueryError('MODEL_NOT_FOUND', `Model "${id}" is not installed.`);
-      }
-      this.updateAssetReferences(draft, entryAssetIds(existing), [...existing.modelAssetIds]);
-      existing.projectorAssetId = undefined;
-      existing.modality = plan.modality;
-      existing.status = plan.status;
-      existing.pairing = {
-        state: 'unresolved',
-        checkedProjectorIndexRevision: draft.projectorIndexRevision,
-        compatibleVisionProjectorTypes: normalizeVisionProjectorTypes(
-          plan.compatibleVisionProjectorTypes
-        ),
-        reasonCode,
-        updatedAt: now,
-      };
-      existing.updatedAt = now;
-      entry = existing;
-    });
-    return entry;
-  }
-
-  private async detachProjector(id: string, basePlan: PairingPlan): Promise<ModelEntry> {
-    const now = new Date().toISOString();
-    let entry!: ModelEntry;
-    await this.registry.write((draft) => {
-      const existing = draft.models[id];
-      if (existing == null) {
-        throw new QueryError('MODEL_NOT_FOUND', `Model "${id}" is not installed.`);
-      }
-      this.updateAssetReferences(draft, entryAssetIds(existing), [...existing.modelAssetIds]);
-      existing.projectorAssetId = undefined;
-      existing.modality = basePlan.modality;
-      existing.status = basePlan.status;
-      existing.pairing = undefined;
-      existing.updatedAt = now;
-      entry = existing;
-    });
-    return entry;
-  }
-
-  private async restoreEntry(snapshot: ModelEntry): Promise<ModelEntry> {
-    const restored = cloneModelEntry(snapshot);
-    let entry!: ModelEntry;
-    await this.registry.write((draft) => {
-      const existing = draft.models[restored.id];
-      if (existing == null) {
-        throw new QueryError('MODEL_NOT_FOUND', `Model "${restored.id}" is not installed.`);
-      }
-      this.updateAssetReferences(draft, entryAssetIds(existing), entryAssetIds(restored));
-      draft.models[restored.id] = restored;
-      entry = restored;
-    });
-    return entry;
-  }
-
-  private updateAssetReferences(
-    manifest: RegistryManifest,
-    previousAssetIds: readonly string[],
-    nextAssetIds: readonly string[]
-  ): void {
-    const previous = new Set(previousAssetIds);
-    const next = new Set(nextAssetIds);
-
-    for (const assetId of previous) {
-      if (next.has(assetId)) {
-        continue;
-      }
-      const asset = manifest.assets[assetId];
-      if (asset != null) {
-        asset.refCount = Math.max(0, asset.refCount - 1);
-      }
-    }
-
-    for (const assetId of next) {
-      if (previous.has(assetId)) {
-        continue;
-      }
-      const asset = manifest.assets[assetId];
-      if (asset != null) {
-        asset.refCount += 1;
-      }
-    }
-  }
-
-  private async loadEntry(
-    entry: ModelEntry,
-    runtimeFingerprint: string,
-    options: ModelLoadOptions,
-    observabilityMode: ObservabilityMode
-  ): Promise<ModelInfo> {
-    if (entry.status === 'broken') {
-      throw new QueryError('MODEL_BROKEN', `Installed model "${entry.id}" is broken.`);
-    }
-    if (entry.status === 'needs_projector') {
-      const manifest = await this.registry.read();
-      const info = this.toModelInfo(entry, manifest);
-      this.observability.emit('load-complete', {
-        mode: observabilityMode,
-        state: 'ready',
-        model: info,
-      });
-      return info;
-    }
-    if (
-      this.currentLoaded?.id === entry.id &&
-      this.currentLoaded.assetFingerprint === entryAssetFingerprint(entry) &&
-      this.currentLoaded.runtimeFingerprint === runtimeFingerprint
-    ) {
-      const manifest = await this.registry.read();
-      const info = this.toModelInfo(entry, manifest);
-      const runtime = toRuntimeObservation(
-        this.runtime.getRuntimeObservability(),
-        this.runtime.getTransportObservability()
-      );
-      const profile =
-        observabilityMode === 'profile'
-          ? toBackendProfileObservation(await this.runtime.getBackendObservability())
-          : undefined;
-      this.observability.emit('load-complete', {
-        mode: observabilityMode,
-        state: 'ready',
-        model: info,
-        ...(runtime == null ? {} : { runtime }),
-        ...(profile == null ? {} : { profile }),
-      });
-      return info;
-    }
-
-    const manifest = await this.registry.read();
-    const files = await this.filesForEntry(entry, manifest);
-    const descriptor = this.buildDescriptor(files.modelFiles, files.projectorFile, entry, manifest);
-    options.onProgress?.({
-      phase: 'load',
-      loadedBytes: 0,
-      totalBytes: null,
-      percent: null,
-      assetName: entry.name,
-    });
-    const staged = await this.runtime.stageModelBundle(descriptor, {
-      signal: options.signal,
-    });
-    const switchingCurrent =
-      this.currentLoaded != null &&
-      (this.currentLoaded.id !== entry.id ||
-        this.currentLoaded.assetFingerprint !== entryAssetFingerprint(entry) ||
-        this.currentLoaded.runtimeFingerprint !== runtimeFingerprint);
-    if (switchingCurrent) {
-      this.observability.update({
-        state: 'loading',
-        model: null,
-        query: null,
-        runtime: undefined,
-        profile: undefined,
-      });
-    }
-    try {
-      await this.runtime.loadRuntimeModel(staged, toRuntimeConfig(options.runtime, observabilityMode));
-    } catch (error) {
-      this.runtime.close();
-      this.currentLoaded = null;
-      this.currentSnapshot = null;
-      throw error;
-    }
-
-    const loadedAt = new Date().toISOString();
-    const updated = await this.registry.write((draft) => {
-      const next = draft.models[entry.id];
-      if (next != null) {
-        next.lastLoadedAt = loadedAt;
-        next.runtimeFingerprint = runtimeFingerprint;
-        next.updatedAt = loadedAt;
-      }
-    });
-    const loadedEntry = updated.models[entry.id] ?? entry;
-    this.currentLoaded = {
-      id: loadedEntry.id,
-      assetFingerprint: entryAssetFingerprint(loadedEntry),
-      runtimeFingerprint,
-    };
-    this.currentSnapshot = this.toModelInfo(loadedEntry, updated);
-    options.onProgress?.({
-      phase: 'load',
-      loadedBytes: 1,
-      totalBytes: 1,
-      percent: 100,
-      assetName: entry.name,
-    });
-    const runtime = toRuntimeObservation(
-      this.runtime.getRuntimeObservability(),
-      this.runtime.getTransportObservability()
-    );
-    const profile =
-      observabilityMode === 'profile'
-        ? toBackendProfileObservation(await this.runtime.getBackendObservability())
-        : undefined;
-    this.observability.emit('load-complete', {
-      mode: observabilityMode,
-      state: 'ready',
-      model: this.currentSnapshot,
-      ...(runtime == null ? {} : { runtime }),
-      ...(profile == null ? {} : { profile }),
-    });
-    return this.currentSnapshot;
   }
 
   private async filesForEntry(
@@ -2037,28 +1321,6 @@ export class ModelService implements ModelLifecycleService {
       return null;
     }
     return manifest.models[source] ?? null;
-  }
-
-  private toModelInfo(entry: ModelEntry, manifest: RegistryManifest): ModelInfo {
-    const assets = [...entry.modelAssetIds, entry.projectorAssetId]
-      .filter((assetId): assetId is string => typeof assetId === 'string')
-      .map((assetId) => manifest.assets[assetId])
-      .filter((asset): asset is AssetRecord => asset != null);
-    return {
-      id: entry.id,
-      name: entry.name,
-      modality: entry.modality,
-      status: entry.status,
-      source: assets.some((asset) => asset.sourceUrl != null) ? 'remote' : 'local',
-      bytes: assets.reduce((sum, asset) => sum + asset.bytes, 0),
-      loaded: this.currentLoaded?.id === entry.id,
-      chatTemplate: this.currentLoaded?.id === entry.id ? this.runtime.getChatTemplate() : null,
-      bosText: this.currentLoaded?.id === entry.id ? this.runtime.getBosText() : '',
-      eosText: this.currentLoaded?.id === entry.id ? this.runtime.getEosText() : '',
-      mediaMarker: this.currentLoaded?.id === entry.id ? this.runtime.readMediaMarker() : null,
-      createdAt: entry.createdAt,
-      updatedAt: entry.updatedAt,
-    };
   }
 
   private async withLifecycleLock<T>(operation: () => Promise<T>): Promise<T> {

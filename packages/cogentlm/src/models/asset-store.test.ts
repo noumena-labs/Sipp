@@ -128,6 +128,15 @@ async function withSupportedStorage<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+function createTestAssetStore(storage: MemoryStorage): AssetStore {
+  const store = new AssetStore(storage as unknown as FileSystemStorage);
+  store.setHashProvider({
+    sha256Text: (value: string) => `hash:${value.length}:${value.slice(0, 8)}`,
+    sha256Blob: async (blob: Blob) => `hash-blob:${blob.size}`,
+  });
+  return store;
+}
+
 async function withSyncAccessSupported<T>(fn: () => Promise<T>): Promise<T> {
   const original = FileSystemStorage.isSyncAccessSupported;
   FileSystemStorage.isSyncAccessSupported = async () => true;
@@ -152,7 +161,7 @@ test('AssetStore registers remote downloads without copying the OPFS temp file',
   await withSupportedStorage(async () => {
     await withFetchResponse('model-bytes', async () => {
       const storage = new MemoryStorage();
-      const store = new AssetStore(storage as unknown as FileSystemStorage);
+      const store = createTestAssetStore(storage);
 
       const record = await store.downloadRemote(metadata, 'model');
       const file = await store.getFile(record);
@@ -172,7 +181,7 @@ test('AssetStore surfaces quota failures with a storage-specific error code', as
     await withFetchResponse('model-bytes', async () => {
       const storage = new MemoryStorage();
       storage.failWith = new DOMException('quota full', 'QuotaExceededError');
-      const store = new AssetStore(storage as unknown as FileSystemStorage);
+      const store = createTestAssetStore(storage);
 
       await assert.rejects(
         () => store.downloadRemote(metadata, 'model'),
@@ -189,7 +198,7 @@ test('AssetStore splits large local GGUF files through sync OPFS callbacks', asy
   await withSupportedStorage(async () => {
     await withSyncAccessSupported(async () => {
       const storage = new MemoryStorage();
-      const store = new AssetStore(storage as unknown as FileSystemStorage);
+      const store = createTestAssetStore(storage);
       const source = new File(['source'], 'local-model.gguf', { lastModified: 123456 });
       Object.defineProperty(source, 'size', { value: 3 * 1024 * 1024 * 1024 });
       const encoder = new TextEncoder();
@@ -235,7 +244,7 @@ test('AssetStore cleans browser split temp files and unregistered shards', async
     storage.files.set('split-orphan-00001-of-00002.gguf', new File(['orphan'], 'split-orphan-00001-of-00002.gguf'));
     storage.files.set('split-keep-00001-of-00002.gguf', new File(['keep'], 'split-keep-00001-of-00002.gguf'));
     storage.files.set('asset-model.gguf', new File(['model'], 'asset-model.gguf'));
-    const store = new AssetStore(storage as unknown as FileSystemStorage);
+    const store = createTestAssetStore(storage);
 
     await store.cleanupBrowserSplitArtifacts({
       version: 3,

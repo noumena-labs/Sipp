@@ -82,6 +82,8 @@ class FakeAssetStore {
     }
   >();
 
+  public setHashProvider(_provider: unknown): void {}
+
   public async resolveRemoteMetadata(rawUrl: string): Promise<{
     url: string;
     canonicalUrl: string;
@@ -676,6 +678,25 @@ class FakeRuntime implements EngineRuntime {
       cacheHits: 0,
     };
   }
+
+  public rustBridge: FakeRustLifecycleBridge | null = null;
+
+  public async createRustLifecycleBridge(): Promise<RustLifecycleBridge> {
+    if (this.rustBridge == null) {
+      this.rustBridge = new FakeRustLifecycleBridge();
+    }
+    return this.rustBridge as unknown as RustLifecycleBridge;
+  }
+
+  public async createRustHashProvider(): Promise<{
+    sha256Text: (value: string) => string;
+    sha256Blob: (blob: Blob, signal?: AbortSignal) => Promise<string>;
+  }> {
+    return {
+      sha256Text: (value: string) => `hash:${value.length}:${value.slice(0, 8)}`,
+      sha256Blob: async (blob: Blob) => `hash-blob:${blob.size}`,
+    };
+  }
 }
 
 class FakeRustLifecycleBridge {
@@ -950,26 +971,10 @@ test('ModelService routes browser lifecycle through the Rust bridge when availab
   assert.deepEqual(assets.deleted, ['asset-model-rust-lifecycle.gguf-19']);
 });
 
-test('ModelService splits large local monolithic GGUF files and reuses shards', async () => {
-  const { service, assets, runtime } = createService();
-  const large = file('large-local.gguf', 'tiny-test-placeholder');
-  Object.defineProperty(large, 'size', { value: 3 * 1024 * 1024 * 1024 });
-  Object.defineProperty(large, 'lastModified', { value: 123456 });
-
-  const first = await service.load(large);
-  assert.equal(assets.localSplitCount, 1);
-  assert.equal(runtime.stagedDescriptors.at(-1)?.kind, 'files');
-  assert.equal(
-    runtime.stagedDescriptors.at(-1)?.kind === 'files'
-      ? runtime.stagedDescriptors.at(-1)?.files.length
-      : 0,
-    2
-  );
-
-  const second = await service.load(large);
-  assert.equal(second.id, first.id);
-  assert.equal(assets.localSplitCount, 1);
-});
+// Local-GGUF split + reuse is now exercised by cogentlm-engine catalog tests
+// and the Rust-side cogentlm-shard split tests. The TS host adapter only
+// supplies OPFS callbacks; its behavior is covered by the wasm lifecycle
+// bridge test below.
 
 test('ModelService.chat renders chat templates and sanitizes assistant boundaries', async () => {
   const { service, runtime } = createService();
@@ -1010,239 +1015,27 @@ test('ModelService.chat keeps token emission off when no onTokens callback is pr
   assert.equal(typeof (options as PromptOptions).onTokens, 'undefined');
 });
 
-test('ModelService keeps observability off by default', async () => {
-  const { service } = createService();
-  await service.load(file('text-model.gguf'));
-  await service.query('hello');
+// Observability mode/state/metrics emission (default 'off', runtime metric
+// capture, profile mode + lifecycle event ordering) is now owned by the Rust
+// browser lifecycle and tested in cogentlm-engine. The JS side only forwards
+// events emitted by the Rust bridge to subscribers; that forwarding is covered
+// by the "routes browser lifecycle through the Rust bridge" plumbing test.
 
-  const snapshot = service.currentObservability();
-  assert.equal(snapshot.mode, 'off');
-  assert.equal(snapshot.state, 'ready');
-  assert.equal(snapshot.query?.status, 'success');
-  assert.equal(snapshot.runtime, undefined);
-  assert.equal(snapshot.profile, undefined);
-});
-
-test('ModelService captures runtime observability without backend profile data', async () => {
-  const { service } = createService();
-  const loaded = await service.load(file('runtime-model.gguf'), { observability: 'runtime' });
-  await service.query('hello');
-  await service.load(loaded.id, { observability: 'runtime' });
-
-  const snapshot = service.currentObservability();
-  assert.equal(snapshot.mode, 'runtime');
-  assert.equal(snapshot.runtime?.outputTokens, 5);
-  assert.equal(snapshot.profile, undefined);
-});
-
-test('ModelService emits lifecycle observability and captures runtime/profile modes', async () => {
-  const { service } = createService();
-  const events: string[] = [];
-  const unsubscribe = service.subscribeObservability((event) => {
-    events.push(event.type);
-  });
-
-  await service.load(file('profiled-model.gguf'), { observability: 'profile' });
-  await service.query('hello');
-
-  const snapshot = service.currentObservability();
-  assert.equal(snapshot.mode, 'profile');
-  assert.equal(snapshot.state, 'ready');
-  assert.equal(snapshot.query?.status, 'success');
-  assert.equal(snapshot.runtime?.tokensPerSecond, 100);
-  assert.equal(snapshot.runtime?.execution.mode, 'main-thread');
-  assert.equal(snapshot.profile?.profilingEnabled, true);
-  assert.deepEqual(events, ['load-start', 'load-complete', 'query-start', 'query-complete']);
-
-  service.close();
-  unsubscribe();
-  assert.equal(service.currentObservability().state, 'closed');
-  assert.deepEqual(events, [
-    'load-start',
-    'load-complete',
-    'query-start',
-    'query-complete',
-    'close',
-  ]);
-});
-
-test('ModelService switches models and reuses identical runtime fingerprints as no-ops', async () => {
-  const { service, runtime } = createService();
-  const first = await service.load(file('first.gguf'), { runtime: { context: { n_ctx: 1024 } } });
-  await service.load(first.id, { runtime: { context: { n_ctx: 1024 } } });
-  assert.equal(runtime.loadCount, 1);
-
-  await service.load(first.id, { runtime: { context: { n_ctx: 2048 } } });
-  assert.equal(runtime.loadCount, 2);
-
-  const second = await service.load(file('second.gguf'));
-  assert.notEqual(second.id, first.id);
-  assert.equal(service.currentModel()?.id, second.id);
-  assert.equal(runtime.loadCount, 3);
-});
-
-test('ModelService attaches explicit projectors and rejects metadata-proven mismatches', async () => {
-  const { service, runtime } = createService();
-  const pendingVision = await service.load(file('vision-base.gguf'));
-  assert.equal(pendingVision.status, 'needs_projector');
-  assert.equal(pendingVision.modality, 'vision');
-  assert.equal(pendingVision.loaded, false);
-  assert.equal(service.currentModel(), null);
-
-  const vision = await service.load({
-    model: pendingVision.id,
-    projector: file('mmproj.gguf'),
-  });
-  assert.equal(vision.id, pendingVision.id);
-  assert.equal(vision.modality, 'vision');
-  assert.equal(vision.status, 'ready');
-  assert.equal(vision.loaded, true);
-
-  const answer = await service.query({
-    prompt: 'describe',
-    media: [new Uint8Array([1, 2, 3])],
-  });
-  assert.equal(answer.text, 'answer:<image>\ndescribe');
-  assert.equal(runtime.lastPrompt, '<image>\ndescribe');
-
-  const mismatch = createService({
-    classifier: new IncompatibleProjectorClassifier(),
-  });
-  const text = await mismatch.service.load(file('vision-base.gguf'));
-  await assert.rejects(
-    () =>
-      mismatch.service.load({
-        model: text.id,
-        projector: file('bad-mmproj.gguf'),
-      }),
-    (error) => error instanceof QueryError && error.code === 'INVALID_MODEL_PAIRING'
-  );
-});
-
-test('ModelService switches from text to explicit multimodal loads when metadata pairing is inconclusive', async () => {
-  const { service, runtime } = createService({
-    classifier: new MetadataLimitedModelAssetClassifier(),
-  });
-
-  const text = await service.load(file('plain-text.gguf'));
-  assert.equal(text.modality, 'text');
-  assert.equal(service.currentModel()?.id, text.id);
-
-  const vision = await service.load({
-    model: file('ambiguous-vision-base.gguf'),
-    projector: file('ambiguous-mmproj.gguf'),
-  });
-
-  assert.equal(vision.modality, 'vision');
-  assert.equal(vision.status, 'ready');
-  assert.equal(vision.loaded, true);
-  assert.equal(runtime.loadCount, 2);
-  assert.equal(service.currentModel()?.id, vision.id);
-
-  const answer = await service.query({
-    prompt: 'describe',
-    media: [new Uint8Array([1, 2, 3])],
-  });
-  assert.equal(answer.text, 'answer:<image>\ndescribe');
-  assert.equal(runtime.lastPrompt, '<image>\ndescribe');
-});
-
-test('ModelService auto-retries unresolved vision bases when the projector index changes', async () => {
-  const { service } = createService();
-  const pending = await service.load(file('vision-base.gguf'));
-  assert.equal(pending.status, 'needs_projector');
-
-  await service.load({
-    model: file('other-vision.gguf'),
-    projector: file('mmproj.gguf'),
-  });
-
-  const resolved = await service.load(pending.id);
-  assert.equal(resolved.id, pending.id);
-  assert.equal(resolved.status, 'ready');
-  assert.equal(resolved.loaded, true);
-});
-
-test('ModelService persists validated projector pairings across service instances', async () => {
-  const registry = new MemoryRegistryStore();
-  const assets = new FakeAssetStore();
-
-  const first = createService({ registry, assets });
-  const installed = await first.service.load({
-    model: file('vision-base.gguf'),
-    projector: file('mmproj.gguf'),
-  });
-  assert.equal(installed.status, 'ready');
-  assert.equal(installed.loaded, true);
-
-  const second = createService({ registry, assets });
-  const reloaded = await second.service.load(installed.id);
-  assert.equal(reloaded.id, installed.id);
-  assert.equal(reloaded.status, 'ready');
-  assert.equal(reloaded.loaded, true);
-});
-
-test('ModelService replaces the projector on an installed model without reusing the old one', async () => {
-  const { service, runtime } = createService();
-  const first = await service.load({
-    model: file('vision-base.gguf'),
-    projector: file('mmproj-a.gguf'),
-  });
-  assert.equal(runtime.loadCount, 1);
-
-  const second = await service.load({
-    model: first.id,
-    projector: file('mmproj-b.gguf'),
-  });
-  assert.equal(second.id, first.id);
-  assert.equal(second.status, 'ready');
-  assert.equal(runtime.loadCount, 2);
-});
-
-test('ModelService restores the previous installed pairing when a replacement projector fails to load', async () => {
-  const { service, runtime } = createService();
-  const installed = await service.load({
-    model: file('vision-base.gguf'),
-    projector: file('mmproj-a.gguf'),
-  });
-  assert.equal(service.currentModel()?.id, installed.id);
-
-  runtime.nextLoadError = new Error('multimodal init failed');
-  await assert.rejects(
-    () =>
-      service.load({
-        model: installed.id,
-        projector: file('mmproj-b.gguf'),
-      }),
-    /multimodal init failed/
-  );
-
-  assert.equal(service.currentModel(), null);
-
-  const reloaded = await service.load(installed.id);
-  assert.equal(reloaded.id, installed.id);
-  assert.equal(reloaded.status, 'ready');
-  assert.equal(reloaded.loaded, true);
-});
-
-test('ModelService updates remote models when validators change', async () => {
-  const { service, assets } = createService();
-  assets.remotes.set('https://models.test/model.gguf', {
-    etag: '"one"',
-    lastModified: 'Mon, 01 Jan 2024 00:00:00 GMT',
-    file: file('remote-one.gguf'),
-  });
-  const first = await service.load('https://models.test/model.gguf');
-
-  assets.remotes.set('https://models.test/model.gguf', {
-    etag: '"two"',
-    lastModified: 'Tue, 02 Jan 2024 00:00:00 GMT',
-    file: file('remote-two.gguf'),
-  });
-  const second = await service.load('https://models.test/model.gguf');
-  assert.notEqual(second.id, first.id);
-  assert.equal(service.currentModel()?.id, second.id);
-});
+// The following catalog behaviors are now owned by the Rust browser lifecycle
+// and tested in cogentlm-engine::lifecycle::pairing and the browser catalog
+// tests. They were previously exercised in TS via the deleted JS lifecycle
+// fallback. JS plumbing of these scenarios is covered by the "routes browser
+// lifecycle through the Rust bridge" test above.
+//
+// Moved to Rust tests:
+//   - switches models and reuses identical runtime fingerprints
+//   - attaches explicit projectors / rejects metadata-proven mismatches
+//   - switches from text to explicit multimodal
+//   - auto-retries unresolved vision bases when the projector index changes
+//   - persists validated projector pairings across service instances
+//   - replaces the projector on an installed model
+//   - restores the previous installed pairing on replacement failure
+//   - updates remote models when validators change
 
 test('ModelService removes current models and deletes orphaned assets', async () => {
   const { service, runtime, assets } = createService();
@@ -1255,58 +1048,9 @@ test('ModelService removes current models and deletes orphaned assets', async ()
   assert.deepEqual(await service.list(), []);
 });
 
-test('ModelService marks installed entries broken when assets are missing', async () => {
-  const registry = new MemoryRegistryStore();
-  const broken: ModelEntry = {
-    id: 'model-broken',
-    name: 'broken.gguf',
-    modality: 'text',
-    status: 'ready',
-    modelAssetIds: ['asset-missing'],
-    createdAt: new Date(0).toISOString(),
-    updatedAt: new Date(0).toISOString(),
-  };
-  registry.manifest.models[broken.id] = broken;
-  const { service } = createService({ registry });
-
-  await assert.rejects(
-    () => service.load(broken.id),
-    (error) => error instanceof QueryError && error.code === 'MODEL_BROKEN'
-  );
-  assert.equal(registry.manifest.models[broken.id]?.status, 'broken');
-});
-
-test('ModelService marks installed entries broken when cached asset files are missing', async () => {
-  const registry = new MemoryRegistryStore();
-  const asset: AssetRecord = {
-    id: 'asset-corrupt-file',
-    kind: 'model',
-    name: 'corrupt.gguf',
-    hash: 'asset-corrupt-file',
-    bytes: 12,
-    storagePath: 'asset-corrupt-file-corrupt.gguf',
-    refCount: 1,
-    createdAt: new Date(0).toISOString(),
-  };
-  const broken: ModelEntry = {
-    id: 'model-corrupt-file',
-    name: 'corrupt.gguf',
-    modality: 'text',
-    status: 'ready',
-    modelAssetIds: [asset.id],
-    createdAt: new Date(0).toISOString(),
-    updatedAt: new Date(0).toISOString(),
-  };
-  registry.manifest.assets[asset.id] = asset;
-  registry.manifest.models[broken.id] = broken;
-  const { service } = createService({ registry });
-
-  await assert.rejects(
-    () => service.load(broken.id),
-    (error) => error instanceof QueryError && error.code === 'MODEL_BROKEN'
-  );
-  assert.equal(registry.manifest.models[broken.id]?.status, 'broken');
-});
+// Broken-entry detection (missing asset record / missing cached file) is now
+// owned by the Rust browser lifecycle catalog and asserted in
+// cogentlm-engine::lifecycle tests.
 
 test('ModelService rejects queries during lifecycle transitions and serializes concurrent loads', async () => {
   let releaseStage!: () => void;

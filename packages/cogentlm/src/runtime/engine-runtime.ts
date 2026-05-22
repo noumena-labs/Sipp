@@ -28,7 +28,7 @@ import type {
 } from '../wasm/wasm-bridge.js';
 import type { RustLifecycleBridge } from '../wasm/lifecycle-bridge.js';
 import type { RegistryManifest } from '../models/types.js';
-import type { AssetHashProvider } from '../models/hash.js';
+import type { AssetHashProvider } from '../models/asset-store.js';
 
 export type RuntimePairingErrorCode =
   | 'INVALID_MODEL_SOURCE'
@@ -93,8 +93,8 @@ export interface EngineRuntime {
     classified: readonly ClassifiedAsset[],
     explicitProjectorId?: string | null
   ): Promise<PairingPlan>;
-  createRustLifecycleBridge?(manifest: RegistryManifest): Promise<RustLifecycleBridge>;
-  createRustHashProvider?(): Promise<AssetHashProvider>;
+  createRustLifecycleBridge(manifest: RegistryManifest): Promise<RustLifecycleBridge>;
+  createRustHashProvider(): Promise<AssetHashProvider>;
   probeChatTemplateBoundaryInfo(): Promise<ChatBoundaryInfo>;
   enqueueChat(
     contextKey: string,

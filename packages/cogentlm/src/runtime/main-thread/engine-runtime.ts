@@ -53,7 +53,7 @@ import { resolveRuntimeUrls } from '../../engine/runtime-assets.js';
 import type { ClassifiedAsset, PairingPlan } from '../../models/pairing-types.js';
 import type { RegistryManifest } from '../../models/types.js';
 import { RustLifecycleBridge } from '../../wasm/lifecycle-bridge.js';
-import type { AssetHashProvider } from '../../models/hash.js';
+import type { AssetHashProvider } from '../../models/asset-store.js';
 
 function normalizePromptText(value: string): string {
   return value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
