@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MainThreadModelLoader } from './model-loader.js';
 import type { EngineModule, EmscriptenFs } from '../../wasm/engine-module.js';
-import type { ModelDetectionResult } from '../../types.js';
+import type { ModelDetectionResult } from '../../bundle/model-bundle-types.js';
 
 interface FakeModule extends EngineModule {
   FS: EmscriptenFs & {

@@ -1,9 +1,9 @@
+import type { BackendObservability } from '../observability/backend-observability.js';
 import type {
-  BackendObservability,
   RequestObservabilityMetrics,
   RuntimeAggregateObservabilityMetrics,
-  TransportObservability,
-} from '../types.js';
+} from '../observability/runtime-observability.js';
+import type { TransportObservability } from '../observability/transport-observability.js';
 import type {
   BackendProfileObservation,
   EngineObservability,

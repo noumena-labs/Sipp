@@ -1,6 +1,7 @@
 import type { AssetInspection } from '../bundle/model-bundle-types.js';
 import type { ChatMessage, StreamStats, TokenBatch, TokenFlushMode } from '../core/inference-types.js';
-import type { BackendDeviceType, NativeRuntimeConfig } from '../types.js';
+import type { NativeRuntimeConfig } from '../core/inference-types.js';
+import type { BackendDeviceType } from '../observability/backend-observability.js';
 
 export type ModelModality = 'text' | 'vision';
 export type ModelStatus = 'ready' | 'needs_projector' | 'broken';
@@ -249,6 +250,25 @@ export interface ObservabilityEvent {
 export interface EngineObservability {
   current(): ObservabilitySnapshot;
   subscribe(listener: (event: ObservabilityEvent) => void): () => void;
+}
+
+export interface ModelLifecycleService {
+  load(source: ModelSource, options?: ModelLoadOptions): Promise<ModelInfo>;
+  unload(): void | Promise<void>;
+  current(): ModelInfo | null;
+  currentModel(): ModelInfo | null;
+  list(): Promise<ModelInfo[]>;
+  remove(id: string): Promise<void>;
+  query(input: QueryInput, options?: QueryOptions): Promise<RequestResult>;
+  queryResult(input: QueryInput, options?: QueryOptions): Promise<RequestResult>;
+  chat(input: ChatInput, options?: ChatOptions): Promise<RequestResult>;
+  chatResult(input: ChatInput, options?: ChatOptions): Promise<RequestResult>;
+  state(): EngineState;
+  currentState(): EngineState;
+  subscribeEvents(listener: (event: EngineEvent) => void): () => void;
+  currentObservability(): ObservabilitySnapshot;
+  subscribeObservability(listener: (event: ObservabilityEvent) => void): () => void;
+  close(): void | Promise<void>;
 }
 
 export type QueryErrorCode =

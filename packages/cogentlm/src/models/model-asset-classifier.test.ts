@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { ModelDetectionResult } from '../types.js';
+import type { ModelDetectionResult } from '../bundle/model-bundle-types.js';
 import { ModelAssetClassifier } from './model-asset-classifier.js';
 
 const visionDetection: ModelDetectionResult = {

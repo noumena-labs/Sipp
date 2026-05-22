@@ -1,4 +1,4 @@
-import { CogentConfig } from '../../engine/engine-options.js';
+import type { CogentEngineOptions as CogentConfig } from '../../engine/cogent-engine.js';
 import { resolveLocalModelAndProjectorFiles } from '../model-detection.js';
 import {
   InternalBundleDescriptor,

@@ -80,6 +80,31 @@ char *cogentlm_detect_model_from_gguf_bytes_json(const char *name,
                                                  std::uintptr_t bytes_len);
 char *cogentlm_pairing_validate_json(const char *classified_json,
                                      const char *explicit_projector_id);
+void *cogentlm_sha256_create();
+int cogentlm_sha256_update(void *hasher, const std::uint8_t *bytes,
+                           std::uintptr_t bytes_len);
+char *cogentlm_sha256_finalize(void *hasher);
+int cogentlm_sha256_close(void *hasher);
+char *cogentlm_model_service_create_json(const char *config_json);
+int cogentlm_model_service_close(void *service);
+char *cogentlm_model_service_list_json(void *service);
+char *cogentlm_model_service_current_json(void *service);
+char *cogentlm_model_service_manifest_json(void *service);
+char *cogentlm_model_service_prepare_load_json(void *service,
+                                               const char *source_json,
+                                               const char *options_json);
+char *cogentlm_model_service_commit_load_json(void *service,
+                                              const char *commit_json);
+char *cogentlm_model_service_abort_load_json(void *service,
+                                             const char *error_json);
+char *cogentlm_model_service_remove_json(void *service,
+                                         const char *model_id);
+char *cogentlm_model_service_unload_json(void *service);
+char *cogentlm_model_service_snapshot_json(void *service);
+char *cogentlm_model_service_drain_events_json(void *service);
+char *cogentlm_model_service_record_event_json(void *service,
+                                               const char *event_type,
+                                               const char *patch_json);
 }
 
 namespace {
@@ -455,6 +480,140 @@ char *CE_DetectModelFromGgufBytes(const char *name, const std::uint8_t *bytes,
   const std::string value = take_rust_string(
       cogentlm_detect_model_from_gguf_bytes_json(
           name, bytes, static_cast<std::uintptr_t>(bytes_len_u64)));
+  return duplicate_heap_string(value.c_str());
+}
+
+EMSCRIPTEN_KEEPALIVE
+std::uintptr_t CE_Sha256Create() {
+  return reinterpret_cast<std::uintptr_t>(cogentlm_sha256_create());
+}
+
+EMSCRIPTEN_KEEPALIVE
+int CE_Sha256Update(std::uintptr_t hasher, const std::uint8_t *bytes,
+                    double bytes_len) {
+  std::uint64_t bytes_len_u64 = 0;
+  if (!read_size_arg(bytes_len, &bytes_len_u64)) {
+    return kStatusInvalidArguments;
+  }
+  return cogentlm_sha256_update(reinterpret_cast<void *>(hasher), bytes,
+                                static_cast<std::uintptr_t>(bytes_len_u64));
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_Sha256Finalize(std::uintptr_t hasher) {
+  const std::string value = take_rust_string(
+      cogentlm_sha256_finalize(reinterpret_cast<void *>(hasher)));
+  return duplicate_heap_string(value.c_str());
+}
+
+EMSCRIPTEN_KEEPALIVE
+int CE_Sha256Close(std::uintptr_t hasher) {
+  return cogentlm_sha256_close(reinterpret_cast<void *>(hasher));
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_ModelServiceCreate(const char *config_json) {
+  const std::string value =
+      take_rust_string(cogentlm_model_service_create_json(config_json));
+  return duplicate_heap_string(value.c_str());
+}
+
+EMSCRIPTEN_KEEPALIVE
+int CE_ModelServiceClose(std::uintptr_t service) {
+  return cogentlm_model_service_close(reinterpret_cast<void *>(service));
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_ModelServiceList(std::uintptr_t service) {
+  const std::string value =
+      take_rust_string(cogentlm_model_service_list_json(
+          reinterpret_cast<void *>(service)));
+  return duplicate_heap_string(value.c_str());
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_ModelServiceCurrent(std::uintptr_t service) {
+  const std::string value =
+      take_rust_string(cogentlm_model_service_current_json(
+          reinterpret_cast<void *>(service)));
+  return duplicate_heap_string(value.c_str());
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_ModelServiceManifest(std::uintptr_t service) {
+  const std::string value =
+      take_rust_string(cogentlm_model_service_manifest_json(
+          reinterpret_cast<void *>(service)));
+  return duplicate_heap_string(value.c_str());
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_ModelServicePrepareLoad(std::uintptr_t service,
+                                 const char *source_json,
+                                 const char *options_json) {
+  const std::string value = take_rust_string(
+      cogentlm_model_service_prepare_load_json(
+          reinterpret_cast<void *>(service), source_json, options_json));
+  return duplicate_heap_string(value.c_str());
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_ModelServiceCommitLoad(std::uintptr_t service,
+                                const char *commit_json) {
+  const std::string value =
+      take_rust_string(cogentlm_model_service_commit_load_json(
+          reinterpret_cast<void *>(service), commit_json));
+  return duplicate_heap_string(value.c_str());
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_ModelServiceAbortLoad(std::uintptr_t service,
+                               const char *error_json) {
+  const std::string value =
+      take_rust_string(cogentlm_model_service_abort_load_json(
+          reinterpret_cast<void *>(service), error_json));
+  return duplicate_heap_string(value.c_str());
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_ModelServiceRemove(std::uintptr_t service, const char *model_id) {
+  const std::string value =
+      take_rust_string(cogentlm_model_service_remove_json(
+          reinterpret_cast<void *>(service), model_id));
+  return duplicate_heap_string(value.c_str());
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_ModelServiceUnload(std::uintptr_t service) {
+  const std::string value =
+      take_rust_string(cogentlm_model_service_unload_json(
+          reinterpret_cast<void *>(service)));
+  return duplicate_heap_string(value.c_str());
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_ModelServiceSnapshot(std::uintptr_t service) {
+  const std::string value =
+      take_rust_string(cogentlm_model_service_snapshot_json(
+          reinterpret_cast<void *>(service)));
+  return duplicate_heap_string(value.c_str());
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_ModelServiceDrainEvents(std::uintptr_t service) {
+  const std::string value =
+      take_rust_string(cogentlm_model_service_drain_events_json(
+          reinterpret_cast<void *>(service)));
+  return duplicate_heap_string(value.c_str());
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *CE_ModelServiceRecordEvent(std::uintptr_t service,
+                                 const char *event_type,
+                                 const char *patch_json) {
+  const std::string value = take_rust_string(
+      cogentlm_model_service_record_event_json(
+          reinterpret_cast<void *>(service), event_type, patch_json));
   return duplicate_heap_string(value.c_str());
 }
 

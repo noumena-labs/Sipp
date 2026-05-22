@@ -1,4 +1,4 @@
-import type { CogentConfig } from './engine-options.js';
+import type { CogentEngineOptions as CogentConfig } from './cogent-engine.js';
 import { resolveOptimizedPackageAssetUrl } from '../runtime/package-assets.js';
 import { currentLocationOrigin, resolveUrl } from '../utils/url.js';
 

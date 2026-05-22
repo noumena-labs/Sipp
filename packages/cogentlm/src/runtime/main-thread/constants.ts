@@ -1,4 +1,4 @@
-import { TransportObservability } from '../../types.js';
+import type { TransportObservability } from '../../observability/transport-observability.js';
 
 export type MountableModelFile = Blob & { name?: string };
 

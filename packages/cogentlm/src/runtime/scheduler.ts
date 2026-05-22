@@ -3,8 +3,8 @@ import {
   GenerateResponse,
   TokenBatch,
   TokenFlushMode,
-  TransportObservability,
-} from '../types.js';
+} from '../core/inference-types.js';
+import type { TransportObservability } from '../observability/transport-observability.js';
 import {
   COMPLETED_REQUEST_STATUS_PENDING,
   REQUEST_STEP_RESULT_FATAL_NO_PROGRESS,

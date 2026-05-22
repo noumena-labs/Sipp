@@ -5,29 +5,39 @@ import { AssetStore } from './asset-store.js';
 import { ModelRegistryStore } from './model-registry-store.js';
 import { ModelAssetClassifier } from './model-asset-classifier.js';
 import type { ClassifiedAsset, PairingPlan } from './pairing-types.js';
+import type { RustLifecycleBridge } from '../wasm/lifecycle-bridge.js';
 import {
   QueryError,
   type AssetRecord,
   type ModelEntry,
+  type ModelInfo,
+  type ObservabilityEvent,
+  type ObservabilitySnapshot,
   type RegistryManifest,
 } from './types.js';
 import type { EngineRuntime } from '../runtime/engine-runtime.js';
+import type { BackendObservability } from '../observability/backend-observability.js';
 import type {
-  BackendObservability,
   ChatMessage,
   EngineExecutionMode,
   GenerateRequestId,
   GenerateResponse,
-  InternalBundleDescriptor,
-  ModelDetectionResult,
   NativeRuntimeConfig,
   PromptOptions,
-  RequestObservabilityMetrics,
-  RuntimeAggregateObservabilityMetrics,
+} from '../core/inference-types.js';
+import type {
+  InternalBundleDescriptor,
+  ModelDetectionResult,
   StagedModelBundle,
   StageModelBundleOptions,
+} from '../bundle/model-bundle-types.js';
+import type {
+  RequestObservabilityMetrics,
+  RuntimeAggregateObservabilityMetrics,
+} from '../observability/runtime-observability.js';
+import type {
   TransportObservability,
-} from '../types.js';
+} from '../observability/transport-observability.js';
 import { RuntimePairingValidationError } from '../runtime/engine-runtime.js';
 import type { ChatBoundaryInfo } from '../core/chat-boundary-sanitizer.js';
 
@@ -668,6 +678,208 @@ class FakeRuntime implements EngineRuntime {
   }
 }
 
+class FakeRustLifecycleBridge {
+  public prepareCount = 0;
+  public commitCount = 0;
+  public removeCount = 0;
+  public lastSource: unknown = null;
+  private manifest: RegistryManifest = {
+    version: 3,
+    projectorIndexRevision: 0,
+    assets: {},
+    models: {},
+  };
+  private currentModelId: string | null = null;
+
+  public list(): ModelInfo[] {
+    return Object.values(this.manifest.models).map((entry) =>
+      this.toModelInfo(entry, this.currentModelId === entry.id)
+    );
+  }
+
+  public prepareLoad(
+    source: {
+      kind: 'assets';
+      assets: AssetRecord[];
+      classified: ClassifiedAsset[];
+    },
+    options: { runtime?: NativeRuntimeConfig; observability?: 'off' | 'runtime' | 'profile' }
+  ): {
+    loadId: string;
+    model: ModelInfo;
+    runtimeFingerprint: string;
+    runtimeConfig: NativeRuntimeConfig;
+    loadRequired: boolean;
+    assets: Array<{ assetId: string; kind: AssetRecord['kind']; storagePath: string; mountName: string; bytes: number }>;
+    projector: null;
+    manifest: RegistryManifest;
+    snapshot: ObservabilitySnapshot;
+    events: ObservabilityEvent[];
+  } {
+    this.prepareCount += 1;
+    this.lastSource = source;
+    const asset = source.assets[0];
+    assert.ok(asset);
+    this.manifest.assets[asset.id] = {
+      ...asset,
+      refCount: 1,
+      inspection: source.classified[0]?.inspection ?? asset.inspection,
+    };
+    const modelId = `model-${asset.id}`;
+    const now = new Date(0).toISOString();
+    this.manifest.models[modelId] = {
+      id: modelId,
+      name: asset.name,
+      modality: 'text',
+      status: 'ready',
+      modelAssetIds: [asset.id],
+      runtimeFingerprint: 'runtime-fingerprint',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const model = this.toModelInfo(this.manifest.models[modelId], false);
+    const snapshot = this.snapshot('loading', null, options.observability ?? 'off');
+    return {
+      loadId: 'load-1',
+      model,
+      runtimeFingerprint: 'runtime-fingerprint',
+      runtimeConfig: {
+        ...(options.runtime ?? {}),
+        observability: {
+          ...(options.runtime?.observability ?? {}),
+          runtime_metrics: options.observability === 'runtime' || options.observability === 'profile',
+          backend_profiling: options.observability === 'profile',
+        },
+      },
+      loadRequired: true,
+      assets: [
+        {
+          assetId: asset.id,
+          kind: asset.kind,
+          storagePath: asset.storagePath,
+          mountName: asset.name,
+          bytes: asset.bytes,
+        },
+      ],
+      projector: null,
+      manifest: cloneManifest(this.manifest),
+      snapshot,
+      events: [{ type: 'load-start', snapshot }],
+    };
+  }
+
+  public commitLoad(): {
+    model: ModelInfo;
+    manifest: RegistryManifest;
+    snapshot: ObservabilitySnapshot;
+    events: ObservabilityEvent[];
+  } {
+    this.commitCount += 1;
+    const entry = Object.values(this.manifest.models)[0];
+    assert.ok(entry);
+    const loadedAt = new Date(1).toISOString();
+    entry.updatedAt = loadedAt;
+    entry.lastLoadedAt = loadedAt;
+    this.currentModelId = entry.id;
+    const model = this.toModelInfo(entry, true);
+    const snapshot = this.snapshot('ready', model, 'runtime');
+    return {
+      model,
+      manifest: cloneManifest(this.manifest),
+      snapshot,
+      events: [{ type: 'load-complete', snapshot }],
+    };
+  }
+
+  public abortLoad(error: { message?: string }): ObservabilitySnapshot {
+    return {
+      ...this.snapshot('error', null, 'off'),
+      query: {
+        session: null,
+        status: 'failed',
+        wallMs: null,
+        ttftMs: null,
+        outputTokens: null,
+        errorMessage: error.message,
+      },
+    };
+  }
+
+  public remove(modelId: string): {
+    removed: ModelEntry;
+    orphanedAssets: AssetRecord[];
+    manifest: RegistryManifest;
+    snapshot: ObservabilitySnapshot;
+    events: ObservabilityEvent[];
+  } {
+    this.removeCount += 1;
+    const removed = this.manifest.models[modelId];
+    assert.ok(removed);
+    delete this.manifest.models[modelId];
+    const orphanedAssets = removed.modelAssetIds
+      .map((assetId) => this.manifest.assets[assetId])
+      .filter((asset): asset is AssetRecord => asset != null);
+    for (const asset of orphanedAssets) {
+      delete this.manifest.assets[asset.id];
+    }
+    this.currentModelId = null;
+    const snapshot = this.snapshot('idle', null, 'off');
+    return {
+      removed,
+      orphanedAssets,
+      manifest: cloneManifest(this.manifest),
+      snapshot,
+      events: [{ type: 'load-complete', snapshot }],
+    };
+  }
+
+  public unload(): ObservabilitySnapshot {
+    this.currentModelId = null;
+    return this.snapshot('idle', null, 'off');
+  }
+
+  public close(): void {}
+
+  public drainEvents(): ObservabilityEvent[] {
+    return [];
+  }
+
+  private toModelInfo(entry: ModelEntry, loaded: boolean): ModelInfo {
+    const assets = entry.modelAssetIds
+      .map((assetId) => this.manifest.assets[assetId])
+      .filter((asset): asset is AssetRecord => asset != null);
+    return {
+      id: entry.id,
+      name: entry.name,
+      modality: entry.modality,
+      status: entry.status,
+      source: assets.some((asset) => asset.sourceUrl != null) ? 'remote' : 'local',
+      bytes: assets.reduce((sum, asset) => sum + asset.bytes, 0),
+      loaded,
+      chatTemplate: loaded ? 'fake-template' : null,
+      bosText: loaded ? '<s>' : '',
+      eosText: loaded ? '</s>' : '',
+      mediaMarker: null,
+      createdAt: entry.createdAt,
+      updatedAt: entry.updatedAt,
+    };
+  }
+
+  private snapshot(
+    state: ObservabilitySnapshot['state'],
+    model: ModelInfo | null,
+    mode: ObservabilitySnapshot['mode']
+  ): ObservabilitySnapshot {
+    return {
+      mode,
+      state,
+      updatedAt: new Date(0).toISOString(),
+      model,
+      query: null,
+    };
+  }
+}
+
 function createService(overrides: {
   runtime?: FakeRuntime;
   registry?: MemoryRegistryStore;
@@ -711,6 +923,31 @@ test('ModelService loads, lists, tracks current, and queries text models', async
   assert.equal(answer.text, 'answer:hello');
   assert.deepEqual(tokens, ['token']);
   assert.equal(runtime.lastPrompt, 'hello');
+});
+
+test('ModelService routes browser lifecycle through the Rust bridge when available', async () => {
+  const runtime = new FakeRuntime();
+  const rust = new FakeRustLifecycleBridge();
+  (
+    runtime as FakeRuntime & {
+      createRustLifecycleBridge: () => Promise<RustLifecycleBridge>;
+    }
+  ).createRustLifecycleBridge = async () => rust as unknown as RustLifecycleBridge;
+  const { service, assets } = createService({ runtime });
+
+  const info = await service.load(file('rust-lifecycle.gguf'), {
+    observability: 'runtime',
+    runtime: { context: { n_ctx: 1024 } },
+  });
+
+  assert.equal(rust.prepareCount, 1);
+  assert.equal(rust.commitCount, 1);
+  assert.equal(info.loaded, true);
+  assert.equal(runtime.loadCount, 1);
+  assert.equal((await service.list())[0]?.id, info.id);
+  await service.remove(info.id);
+  assert.equal(rust.removeCount, 1);
+  assert.deepEqual(assets.deleted, ['asset-model-rust-lifecycle.gguf-19']);
 });
 
 test('ModelService splits large local monolithic GGUF files and reuses shards', async () => {

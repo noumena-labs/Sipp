@@ -1,4 +1,4 @@
-import type { CogentConfig } from '../engine/engine-options.js';
+import type { CogentEngineOptions as CogentConfig } from '../engine/cogent-engine.js';
 import { resolveRuntimeUrls } from '../engine/runtime-assets.js';
 import { resolveOptimizedPackageAssetUrl } from '../runtime/package-assets.js';
 import { ObservabilityController } from '../models/observability-controller.js';
@@ -22,6 +22,7 @@ import {
   type ObservabilityEvent,
   type ObservabilitySnapshot,
   type ModelInfo,
+  type ModelLifecycleService,
   type ModelLoadOptions,
   type ModelSource,
   type RequestResult,
@@ -33,7 +34,6 @@ import {
   type TokenFlushMode,
 } from '../models/types.js';
 import { observabilitySnapshotToEngineState } from '../models/engine-protocol-adapter.js';
-import type { ModelLifecycleService } from '../models/contract.js';
 
 interface PendingWorkerCall {
   resolve: (value: unknown) => void;

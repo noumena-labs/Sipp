@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MainThreadEngineRuntime } from './engine-runtime.js';
 import type { EngineModule } from '../../wasm/engine-module.js';
-import type { StagedModelBundle } from '../../types.js';
+import type { StagedModelBundle } from '../../bundle/model-bundle-types.js';
 
 function createModule(): EngineModule {
   return {

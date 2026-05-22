@@ -94,23 +94,6 @@ export function requestResultFromGenerateResponse(
   };
 }
 
-export function requestResultFromEngineState(
-  state: EngineState,
-  text: string,
-  options: {
-    requestId?: string;
-    finishReason?: FinishReason;
-  } = {}
-): RequestResult {
-  const request = state.requests.at(0);
-  return {
-    id: options.requestId ?? request?.id ?? 'default',
-    text,
-    finishReason: options.finishReason ?? finishReasonFromRequestState(request),
-    stats: requestStatsFromEngineStats(state.stats),
-  };
-}
-
 function toEngineStatus(state: ObservabilitySnapshot['state']): EngineState['status'] {
   switch (state) {
     case 'idle':
@@ -230,20 +213,6 @@ function requestStatsFromMetrics(metrics: GenerateResponse['observability']): Re
   };
 }
 
-function requestStatsFromEngineStats(stats: EngineStats): RequestStats {
-  return {
-    inputTokens: stats.inputTokens,
-    outputTokens: stats.outputTokens,
-    cacheHits: stats.cacheHits,
-    ttftMs: stats.ttftMs,
-    interTokenMs: stats.interTokenMs,
-    e2eMs: stats.e2eMs,
-    tokensPerSecond: stats.tokensPerSecond,
-    prefillMs: stats.prefillMs,
-    decodeMs: stats.decodeMs,
-  };
-}
-
 function finishReasonFromGenerateResponse(
   response: GenerateResponse,
   maxTokens: number | undefined
@@ -258,15 +227,4 @@ function finishReasonFromGenerateResponse(
     return 'length';
   }
   return 'stop';
-}
-
-function finishReasonFromRequestState(request: RequestState | undefined): FinishReason {
-  switch (request?.status) {
-    case 'cancelled':
-      return 'cancelled';
-    case 'failed':
-      return 'error';
-    default:
-      return 'stop';
-  }
 }

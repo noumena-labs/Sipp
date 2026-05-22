@@ -1,19 +1,24 @@
-import { CogentConfig } from '../engine/engine-options.js';
-import {
-  BackendObservability,
+import type { BackendObservability } from '../observability/backend-observability.js';
+import type {
   ChatMessage,
   EngineExecutionMode,
   GenerateRequestId,
   GenerateResponse,
-  InternalBundleDescriptor,
-  ModelDetectionResult,
   NativeRuntimeConfig,
   PromptOptions,
-  RuntimeAggregateObservabilityMetrics,
+} from '../core/inference-types.js';
+import type {
+  InternalBundleDescriptor,
+  ModelDetectionResult,
   StagedModelBundle,
   StageModelBundleOptions,
+} from '../bundle/model-bundle-types.js';
+import type {
+  RuntimeAggregateObservabilityMetrics,
+} from '../observability/runtime-observability.js';
+import type {
   TransportObservability,
-} from '../types.js';
+} from '../observability/transport-observability.js';
 import type { ChatBoundaryInfo } from '../core/chat-boundary-sanitizer.js';
 import type { ClassifiedAsset, PairingPlan } from '../models/pairing-types.js';
 import type {
@@ -21,8 +26,9 @@ import type {
   GgufReadAtCallbacks,
   GgufSplitStreamCallbacks,
 } from '../wasm/wasm-bridge.js';
-
-export type { CogentConfig };
+import type { RustLifecycleBridge } from '../wasm/lifecycle-bridge.js';
+import type { RegistryManifest } from '../models/types.js';
+import type { AssetHashProvider } from '../models/hash.js';
 
 export type RuntimePairingErrorCode =
   | 'INVALID_MODEL_SOURCE'
@@ -87,6 +93,8 @@ export interface EngineRuntime {
     classified: readonly ClassifiedAsset[],
     explicitProjectorId?: string | null
   ): Promise<PairingPlan>;
+  createRustLifecycleBridge?(manifest: RegistryManifest): Promise<RustLifecycleBridge>;
+  createRustHashProvider?(): Promise<AssetHashProvider>;
   probeChatTemplateBoundaryInfo(): Promise<ChatBoundaryInfo>;
   enqueueChat(
     contextKey: string,

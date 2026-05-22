@@ -28,8 +28,6 @@ import type { ActionSchema } from './action-schema.js';
 import { compileBracketCueGrammar, compileBracketProseGrammar } from '../core/grammar-fragments.js';
 import { assertGrammarByteSize } from '../utils/grammar.js';
 
-export { ActionSchemaError } from './action-schema.js';
-
 /**
  * Generates a GBNF grammar that:
  *   - always starts at `root`;

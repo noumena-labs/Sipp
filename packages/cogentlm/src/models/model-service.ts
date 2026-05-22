@@ -2,18 +2,20 @@ import type { EngineRuntime } from '../runtime/engine-runtime.js';
 import { RuntimePairingValidationError } from '../runtime/engine-runtime.js';
 import {
   buildBoundaryMarkers,
+  sliceUnstreamedSuffix,
   StreamingBoundaryTextSanitizer,
 } from '../core/chat-boundary-sanitizer.js';
-import { sliceUnstreamedSuffix } from '../core/streaming-output.js';
 import type {
   GenerateRequestId,
   GenerateResponse,
   NativeRuntimeConfig,
+  PromptOptions,
+} from '../core/inference-types.js';
+import type {
+  InternalBundleDescriptor,
   ModelBundleFileProjectorDescriptor,
   ModelDetectionResult,
-  InternalBundleDescriptor,
-  PromptOptions,
-} from '../types.js';
+} from '../bundle/model-bundle-types.js';
 import { createLinkedAbortController, isAbortError } from '../utils/abort.js';
 import { stableJson } from '../utils/stable-json.js';
 import { AssetStore, type RemoteAssetMetadata } from './asset-store.js';
@@ -21,6 +23,11 @@ import { sha256Text } from './hash.js';
 import { ModelRegistryStore } from './model-registry-store.js';
 import { ModelAssetClassifier } from './model-asset-classifier.js';
 import type { ClassifiedAsset, ClassifiedAssetFile, PairingPlan } from './pairing-types.js';
+import type { RustLifecycleBridge } from '../wasm/lifecycle-bridge.js';
+import type {
+  RustLifecycleLoadSource,
+  RustLifecyclePrepareLoadValue,
+} from '../wasm/wasm-bridge.js';
 import {
   QueryError,
   type AssetRecord,
@@ -31,6 +38,7 @@ import {
   type LoadedModelState,
   type ModelEntry,
   type ModelInfo,
+  type ModelLifecycleService,
   type ModelLoadOptions,
   type ModelPairingReasonCode,
   type ModelRuntimeOptions,
@@ -45,7 +53,6 @@ import {
   type TokenBatch,
   type RegistryManifest,
 } from './types.js';
-import type { ModelLifecycleService } from './contract.js';
 import {
   EngineEventController,
   observabilityEventToStateEvent,
@@ -177,6 +184,8 @@ export class ModelService implements ModelLifecycleService {
   private readonly observability = new ObservabilityController();
   private readonly engineEvents = new EngineEventController();
   private browserSplitCleanup: Promise<void> | null = null;
+  private rustLifecyclePromise: Promise<RustLifecycleBridge | null> | null = null;
+  private rustHashProviderPromise: Promise<void> | null = null;
 
   constructor(
     private readonly runtime: EngineRuntime,
@@ -208,6 +217,10 @@ export class ModelService implements ModelLifecycleService {
 
   public async list(): Promise<ModelInfo[]> {
     const manifest = await this.registry.read();
+    const rust = await this.getRustLifecycle(manifest);
+    if (rust != null) {
+      return rust.list();
+    }
     return Object.values(manifest.models)
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
       .map((entry) => this.toModelInfo(entry, manifest));
@@ -237,6 +250,10 @@ export class ModelService implements ModelLifecycleService {
     return this.withLifecycleLock(async () => {
       if (options.signal?.aborted) {
         throw new DOMException('Model load aborted.', 'AbortError');
+      }
+      const rust = await this.getRustLifecycle(await this.registry.read());
+      if (rust != null) {
+        return await this.loadWithRustLifecycle(rust, source, options);
       }
       const loadOptions: ModelLoadOptions = {
         ...options,
@@ -329,6 +346,22 @@ export class ModelService implements ModelLifecycleService {
   public async remove(id: string): Promise<void> {
     await this.withLifecycleLock(async () => {
       const manifest = await this.registry.read();
+      const rust = await this.getRustLifecycle(manifest);
+      if (rust != null) {
+        const wasCurrent = this.currentLoaded?.id === id;
+        const removed = rust.remove(id);
+        if (wasCurrent) {
+          this.runtime.close();
+          this.currentLoaded = null;
+          this.currentSnapshot = null;
+        }
+        await this.replaceManifest(removed.manifest);
+        for (const asset of removed.orphanedAssets) {
+          await this.assetStore.delete(asset);
+        }
+        this.ingestRustEvents(removed.events);
+        return;
+      }
       const entry = manifest.models[id];
       if (entry == null) {
         throw new QueryError('MODEL_NOT_FOUND', `Model "${id}" is not installed.`);
@@ -380,10 +413,18 @@ export class ModelService implements ModelLifecycleService {
 
   public async unload(): Promise<void> {
     await this.withLifecycleLock(async () => {
+      const rust = await this.getRustLifecycle(await this.registry.read());
       if (this.currentLoaded != null) {
         this.runtime.close();
         this.currentLoaded = null;
         this.currentSnapshot = null;
+      }
+      if (rust != null) {
+        const snapshot = rust.unload();
+        this.ingestRustEvents(rust.drainEvents());
+        this.observability.ingest({ type: 'load-complete', snapshot });
+        this.engineEvents.emit({ type: 'state', state: this.currentState() });
+        return;
       }
       this.observability.update({
         state: 'idle',
@@ -670,7 +711,236 @@ export class ModelService implements ModelLifecycleService {
     this.runtime.close();
     this.currentLoaded = null;
     this.currentSnapshot = null;
+    void this.closeRustLifecycle();
     this.observability.markClosed();
+  }
+
+  private async loadWithRustLifecycle(
+    rust: RustLifecycleBridge,
+    source: ModelSource,
+    options: ModelLoadOptions
+  ): Promise<ModelInfo> {
+    const loadOptions: ModelLoadOptions = {
+      ...options,
+      onProgress: (progress) => {
+        options.onProgress?.(progress);
+        this.engineEvents.emit({
+          type: 'load-progress',
+          loadedBytes: progress.loadedBytes,
+          totalBytes: progress.totalBytes,
+          assetName: progress.assetName,
+        });
+      },
+    };
+    const observabilityMode = resolveObservabilityMode(options.observability);
+    let prepared: RustLifecyclePrepareLoadValue | null = null;
+    try {
+      const manifest = await this.registry.read();
+      await this.cleanupBrowserSplitArtifacts(manifest);
+      const rustSource = await this.buildRustLoadSource(source, manifest, loadOptions);
+      prepared = rust.prepareLoad(rustSource, {
+        runtime: options.runtime,
+        observability: observabilityMode,
+      });
+      await this.replaceManifest(prepared.manifest);
+      this.ingestRustEvents(prepared.events);
+
+      if (prepared.model.status === 'needs_projector') {
+        this.currentLoaded = null;
+        this.currentSnapshot = null;
+        return prepared.model;
+      }
+
+      const entry = prepared.manifest.models[prepared.model.id];
+      if (entry == null) {
+        throw new QueryError('STORAGE_CORRUPT', `Rust lifecycle omitted model "${prepared.model.id}".`);
+      }
+
+      if (prepared.loadRequired) {
+        const files = await this.filesForEntry(entry, prepared.manifest);
+        const descriptor = this.buildDescriptor(
+          files.modelFiles,
+          files.projectorFile,
+          entry,
+          prepared.manifest
+        );
+        loadOptions.onProgress?.({
+          phase: 'load',
+          loadedBytes: 0,
+          totalBytes: null,
+          percent: null,
+          assetName: entry.name,
+        });
+        const staged = await this.runtime.stageModelBundle(descriptor, {
+          signal: options.signal,
+        });
+        await this.runtime.loadRuntimeModel(staged, prepared.runtimeConfig);
+      }
+
+      const runtime = toRuntimeObservation(
+        this.runtime.getRuntimeObservability(),
+        this.runtime.getTransportObservability()
+      );
+      const profile =
+        observabilityMode === 'profile'
+          ? toBackendProfileObservation(await this.runtime.getBackendObservability())
+          : undefined;
+      const committed = rust.commitLoad({
+        loadId: prepared.loadId,
+        modelId: prepared.model.id,
+        runtimeFingerprint: prepared.runtimeFingerprint,
+        chatTemplate: this.runtime.getChatTemplate(),
+        bosText: this.runtime.getBosText(),
+        eosText: this.runtime.getEosText(),
+        mediaMarker: this.runtime.readMediaMarker(),
+        runtime,
+        profile,
+      });
+      await this.replaceManifest(committed.manifest);
+      const loadedEntry = committed.manifest.models[committed.model.id] ?? entry;
+      this.currentLoaded = {
+        id: committed.model.id,
+        assetFingerprint: entryAssetFingerprint(loadedEntry),
+        runtimeFingerprint: prepared.runtimeFingerprint,
+      };
+      this.currentSnapshot = committed.model;
+      loadOptions.onProgress?.({
+        phase: 'load',
+        loadedBytes: 1,
+        totalBytes: 1,
+        percent: 100,
+        assetName: committed.model.name,
+      });
+      this.ingestRustEvents(committed.events);
+      return committed.model;
+    } catch (error) {
+      if (prepared != null) {
+        const snapshot = rust.abortLoad({
+          message: error instanceof Error ? error.message : String(error),
+        });
+        this.observability.ingest({ type: 'error', snapshot });
+        this.ingestRustEvents(rust.drainEvents());
+      }
+      throw error;
+    }
+  }
+
+  private async buildRustLoadSource(
+    source: ModelSource,
+    manifest: RegistryManifest,
+    options: ModelLoadOptions
+  ): Promise<RustLifecycleLoadSource> {
+    const existing = this.resolveInstalledModel(manifest, source);
+    const classifiedProjectors = await this.classifiedInstalledProjectors(manifest, options.signal);
+    if (existing != null && !isSourceObject(source)) {
+      return {
+        kind: 'installed',
+        id: existing.id,
+        classifiedProjectors,
+      };
+    }
+
+    const installed = await this.installSource(source, manifest, options);
+    const classified = await this.classifyAssets(installed.assets, options.signal);
+    const sourceProjectorAssetId = this.resolveSourceProjectorAssetId(
+      classified,
+      installed.explicitProjectorAssetId
+    );
+    return {
+      kind: 'assets',
+      assets: installed.assets.map((asset) => asset.record),
+      classified: classified.map((file) => ({
+        assetId: file.assetId,
+        name: file.name,
+        inspection: file.inspection,
+      })),
+      explicitProjectorAssetId: sourceProjectorAssetId,
+      classifiedProjectors,
+    };
+  }
+
+  private async classifiedInstalledProjectors(
+    manifest: RegistryManifest,
+    signal?: AbortSignal
+  ): Promise<ClassifiedAsset[]> {
+    const projectors: ClassifiedAsset[] = [];
+    for (const asset of Object.values(manifest.assets)) {
+      if (asset.kind !== 'projector' || asset.refCount <= 0) {
+        continue;
+      }
+      if (asset.inspection != null) {
+        projectors.push({
+          assetId: asset.id,
+          name: asset.name,
+          inspection: asset.inspection,
+        });
+        continue;
+      }
+      try {
+        const file = await this.assetStore.getFile(asset);
+        const classified = await this.assetClassifier.classify(asset.id, file, signal);
+        projectors.push({
+          assetId: classified.assetId,
+          name: classified.name,
+          inspection: classified.inspection,
+        });
+      } catch (error) {
+        if (error instanceof QueryError && error.code === 'MODEL_BROKEN') {
+          continue;
+        }
+        throw error;
+      }
+    }
+    return projectors;
+  }
+
+  private async getRustLifecycle(
+    manifest: RegistryManifest
+  ): Promise<RustLifecycleBridge | null> {
+    const factory = this.runtime.createRustLifecycleBridge?.bind(this.runtime);
+    if (factory == null) {
+      return null;
+    }
+    await this.ensureRustHashProvider();
+    if (this.rustLifecyclePromise == null) {
+      this.rustLifecyclePromise = factory(manifest);
+    }
+    return await this.rustLifecyclePromise;
+  }
+
+  private async ensureRustHashProvider(): Promise<void> {
+    const factory = this.runtime.createRustHashProvider?.bind(this.runtime);
+    if (factory == null) {
+      return;
+    }
+    if (this.rustHashProviderPromise == null) {
+      this.rustHashProviderPromise = factory().then((provider) => {
+        this.assetStore.setHashProvider(provider);
+      });
+    }
+    await this.rustHashProviderPromise;
+  }
+
+  private async replaceManifest(manifest: RegistryManifest): Promise<void> {
+    await this.registry.write((draft) => {
+      draft.version = manifest.version;
+      draft.projectorIndexRevision = manifest.projectorIndexRevision;
+      draft.assets = JSON.parse(JSON.stringify(manifest.assets)) as RegistryManifest['assets'];
+      draft.models = JSON.parse(JSON.stringify(manifest.models)) as RegistryManifest['models'];
+    });
+  }
+
+  private ingestRustEvents(events: readonly ObservabilityEvent[]): void {
+    for (const event of events) {
+      this.observability.ingest(event);
+      this.engineEvents.emit(observabilityEventToStateEvent(event));
+    }
+  }
+
+  private async closeRustLifecycle(): Promise<void> {
+    const rust = await this.rustLifecyclePromise;
+    rust?.close();
+    this.rustLifecyclePromise = null;
   }
 
   private recordQuerySuccess(

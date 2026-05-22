@@ -258,6 +258,7 @@ dependencies = [
  "cogentlm-shard",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

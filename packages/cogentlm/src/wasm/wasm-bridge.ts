@@ -1,11 +1,20 @@
-import {
-  BackendObservability,
+import type { BackendObservability } from '../observability/backend-observability.js';
+import type {
   GenerateRequestId,
   GenerateResponse,
   NativeRuntimeConfig,
-} from '../types.js';
+} from '../core/inference-types.js';
 import type { RuntimePairingErrorCode } from '../runtime/engine-runtime.js';
 import type { ClassifiedAsset, PairingPlan } from '../models/pairing-types.js';
+import type {
+  AssetRecord,
+  ModelInfo,
+  ObservabilityEvent,
+  ObservabilityEventType,
+  ObservabilitySnapshot,
+  QueryErrorCode,
+  RegistryManifest,
+} from '../models/types.js';
 import type {
   ModelDetectionMethod,
   ModelDetectionResult,
@@ -31,7 +40,6 @@ import {
 } from '../runtime/main-thread/constants.js';
 import { createAbortError } from '../utils/abort.js';
 import { assertGrammarByteSize } from '../utils/grammar.js';
-export { MAX_GRAMMAR_BYTES } from '../utils/grammar.js';
 
 // Mirror of CE_TokenEmissionMode in native/api/ffi_types.h.  Native exposes
 // only NONE (no emission) and STREAMING_BUFFER (SAB ring).
@@ -81,6 +89,94 @@ export interface PairingValidationResponse {
     code: RuntimePairingErrorCode | string;
     message: string;
   };
+}
+
+export interface RustLifecycleResponse<T> {
+  ok: boolean;
+  value?: T;
+  error?: {
+    code: QueryErrorCode | string;
+    message: string;
+  };
+}
+
+export type RustLifecycleHandle = number;
+
+export interface RustLifecycleCreateValue {
+  handle: RustLifecycleHandle;
+  manifest: RegistryManifest;
+  snapshot: ObservabilitySnapshot;
+}
+
+export interface RustLifecycleLoadSourceInstalled {
+  kind: 'installed';
+  id: string;
+  classifiedProjectors?: ClassifiedAsset[];
+}
+
+export interface RustLifecycleLoadSourceAssets {
+  kind: 'assets';
+  assets: AssetRecord[];
+  classified: ClassifiedAsset[];
+  explicitProjectorAssetId?: string | null;
+  classifiedProjectors?: ClassifiedAsset[];
+}
+
+export type RustLifecycleLoadSource =
+  | RustLifecycleLoadSourceInstalled
+  | RustLifecycleLoadSourceAssets;
+
+export interface RustLifecycleLoadOptions {
+  runtime?: NativeRuntimeConfig;
+  observability?: 'off' | 'runtime' | 'profile';
+}
+
+export interface RustLifecyclePlannedAsset {
+  assetId: string;
+  kind: AssetRecord['kind'];
+  storagePath: string;
+  mountName: string;
+  bytes: number;
+}
+
+export interface RustLifecyclePrepareLoadValue {
+  loadId: string;
+  model: ModelInfo;
+  runtimeFingerprint: string;
+  runtimeConfig: NativeRuntimeConfig;
+  loadRequired: boolean;
+  assets: RustLifecyclePlannedAsset[];
+  projector?: RustLifecyclePlannedAsset | null;
+  manifest: RegistryManifest;
+  snapshot: ObservabilitySnapshot;
+  events: ObservabilityEvent[];
+}
+
+export interface RustLifecycleCommitLoad {
+  loadId: string;
+  modelId: string;
+  runtimeFingerprint: string;
+  chatTemplate?: string | null;
+  bosText?: string;
+  eosText?: string;
+  mediaMarker?: string | null;
+  runtime?: unknown;
+  profile?: unknown;
+}
+
+export interface RustLifecycleCommitLoadValue {
+  model: ModelInfo;
+  manifest: RegistryManifest;
+  snapshot: ObservabilitySnapshot;
+  events: ObservabilityEvent[];
+}
+
+export interface RustLifecycleRemoveValue {
+  removed: unknown;
+  orphanedAssets: AssetRecord[];
+  manifest: RegistryManifest;
+  snapshot: ObservabilitySnapshot;
+  events: ObservabilityEvent[];
 }
 
 export interface GgufSplitStreamCallbacks {
@@ -410,6 +506,147 @@ export class WasmBridge {
 
   public rustBrowserEngineClose(engine: number): number {
     return this.callNumber('CE_RustBrowserEngineClose', ['number'], [engine]);
+  }
+
+  public modelServiceCreate(config: {
+    manifest?: RegistryManifest | null;
+  } = {}): RustLifecycleResponse<RustLifecycleCreateValue> {
+    return this.callLifecycleJson<RustLifecycleCreateValue>(
+      'CE_ModelServiceCreate',
+      ['string'],
+      [JSON.stringify(config)]
+    );
+  }
+
+  public modelServiceClose(handle: RustLifecycleHandle): boolean {
+    return Boolean(this.callNumber('CE_ModelServiceClose', ['number'], [handle]));
+  }
+
+  public modelServiceList(
+    handle: RustLifecycleHandle
+  ): RustLifecycleResponse<ModelInfo[]> {
+    return this.callLifecycleJson<ModelInfo[]>('CE_ModelServiceList', ['number'], [handle]);
+  }
+
+  public modelServiceCurrent(
+    handle: RustLifecycleHandle
+  ): RustLifecycleResponse<ModelInfo | null> {
+    return this.callLifecycleJson<ModelInfo | null>('CE_ModelServiceCurrent', ['number'], [handle]);
+  }
+
+  public modelServiceManifest(
+    handle: RustLifecycleHandle
+  ): RustLifecycleResponse<RegistryManifest> {
+    return this.callLifecycleJson<RegistryManifest>('CE_ModelServiceManifest', ['number'], [handle]);
+  }
+
+  public modelServicePrepareLoad(
+    handle: RustLifecycleHandle,
+    source: RustLifecycleLoadSource,
+    options: RustLifecycleLoadOptions = {}
+  ): RustLifecycleResponse<RustLifecyclePrepareLoadValue> {
+    return this.callLifecycleJson<RustLifecyclePrepareLoadValue>(
+      'CE_ModelServicePrepareLoad',
+      ['number', 'string', 'string'],
+      [handle, JSON.stringify(source), JSON.stringify(options)]
+    );
+  }
+
+  public modelServiceCommitLoad(
+    handle: RustLifecycleHandle,
+    commit: RustLifecycleCommitLoad
+  ): RustLifecycleResponse<RustLifecycleCommitLoadValue> {
+    return this.callLifecycleJson<RustLifecycleCommitLoadValue>(
+      'CE_ModelServiceCommitLoad',
+      ['number', 'string'],
+      [handle, JSON.stringify(commit)]
+    );
+  }
+
+  public modelServiceAbortLoad(
+    handle: RustLifecycleHandle,
+    error: { message?: string } = {}
+  ): RustLifecycleResponse<ObservabilitySnapshot> {
+    return this.callLifecycleJson<ObservabilitySnapshot>(
+      'CE_ModelServiceAbortLoad',
+      ['number', 'string'],
+      [handle, JSON.stringify(error)]
+    );
+  }
+
+  public modelServiceRemove(
+    handle: RustLifecycleHandle,
+    modelId: string
+  ): RustLifecycleResponse<RustLifecycleRemoveValue> {
+    return this.callLifecycleJson<RustLifecycleRemoveValue>(
+      'CE_ModelServiceRemove',
+      ['number', 'string'],
+      [handle, modelId]
+    );
+  }
+
+  public modelServiceUnload(
+    handle: RustLifecycleHandle
+  ): RustLifecycleResponse<ObservabilitySnapshot> {
+    return this.callLifecycleJson<ObservabilitySnapshot>('CE_ModelServiceUnload', ['number'], [handle]);
+  }
+
+  public modelServiceSnapshot(
+    handle: RustLifecycleHandle
+  ): RustLifecycleResponse<ObservabilitySnapshot> {
+    return this.callLifecycleJson<ObservabilitySnapshot>('CE_ModelServiceSnapshot', ['number'], [handle]);
+  }
+
+  public modelServiceDrainEvents(
+    handle: RustLifecycleHandle
+  ): RustLifecycleResponse<ObservabilityEvent[]> {
+    return this.callLifecycleJson<ObservabilityEvent[]>('CE_ModelServiceDrainEvents', ['number'], [handle]);
+  }
+
+  public modelServiceRecordEvent(
+    handle: RustLifecycleHandle,
+    type: ObservabilityEventType,
+    patch: Record<string, unknown>
+  ): RustLifecycleResponse<ObservabilitySnapshot> {
+    return this.callLifecycleJson<ObservabilitySnapshot>(
+      'CE_ModelServiceRecordEvent',
+      ['number', 'string', 'string'],
+      [handle, type, JSON.stringify(patch)]
+    );
+  }
+
+  public sha256Text(value: string): string {
+    const bytes = new TextEncoder().encode(value);
+    return this.withSha256((handle) => {
+      this.updateSha256(handle, bytes);
+    });
+  }
+
+  public async sha256Blob(blob: Blob, signal?: AbortSignal): Promise<string> {
+    if (signal?.aborted) {
+      throw createAbortError('Hashing aborted.');
+    }
+    const reader = blob.stream().getReader();
+    try {
+      return this.withSha256((handle) => {
+        return (async () => {
+          while (true) {
+            if (signal?.aborted) {
+              throw createAbortError('Hashing aborted.');
+            }
+            const { done, value } = await reader.read();
+            if (done) {
+              break;
+            }
+            if (value != null && value.byteLength > 0) {
+              this.updateSha256(handle, value);
+            }
+          }
+        })();
+      });
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   public browserCacheLayout(
@@ -756,6 +993,70 @@ export class WasmBridge {
       return parsed.value as T;
     }
     throw new Error(parsed.error?.message ?? `Rust ${label} failed.`);
+  }
+
+  private callLifecycleJson<T>(
+    ident: string,
+    argTypes: string[] = [],
+    args: unknown[] = []
+  ): RustLifecycleResponse<T> {
+    const raw = this.callOwnedString(ident, argTypes, args);
+    try {
+      return JSON.parse(raw) as RustLifecycleResponse<T>;
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          code: 'STORAGE_CORRUPT',
+          message: `Rust lifecycle response from ${ident} was invalid JSON.`,
+        },
+      };
+    }
+  }
+
+  private withSha256<T>(operation: (handle: number) => T): T extends Promise<unknown> ? Promise<string> : string {
+    const handle = this.callNumber('CE_Sha256Create');
+    if (!handle) {
+      throw new Error('Failed to create Rust SHA-256 hasher.');
+    }
+    let finalized = false;
+    const finalize = (): string => {
+      finalized = true;
+      const digest = this.callOwnedString('CE_Sha256Finalize', ['number'], [handle]);
+      if (digest.length !== 64) {
+        throw new Error('Rust SHA-256 hasher returned an invalid digest.');
+      }
+      return digest;
+    };
+    try {
+      const result = operation(handle);
+      if (result instanceof Promise) {
+        return result.then(finalize).finally(() => {
+          if (!finalized) {
+            this.callNumber('CE_Sha256Close', ['number'], [handle]);
+          }
+        }) as T extends Promise<unknown> ? Promise<string> : string;
+      }
+      return finalize() as T extends Promise<unknown> ? Promise<string> : string;
+    } catch (error) {
+      if (!finalized) {
+        this.callNumber('CE_Sha256Close', ['number'], [handle]);
+      }
+      throw error;
+    }
+  }
+
+  private updateSha256(handle: number, bytes: Uint8Array): void {
+    this.withWasmBytes(bytes, (ptr, len) => {
+      const status = this.callNumber('CE_Sha256Update', ['number', 'pointer', 'number'], [
+        handle,
+        ptr,
+        len,
+      ]);
+      if (status !== 0) {
+        throw new Error(`Rust SHA-256 update failed with status ${status}.`);
+      }
+    });
   }
 
   private reusableLoopResultPtr = 0;

@@ -10,9 +10,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { MAX_GRAMMAR_BYTES } from '../wasm/wasm-bridge.js';
-import { ActionSchemaError, compileActionGrammar } from './action-grammar.js';
-import type { ActionSchema } from './action-schema.js';
+import { MAX_GRAMMAR_BYTES } from '../utils/grammar.js';
+import { compileActionGrammar } from './action-grammar.js';
+import { ActionSchemaError, type ActionSchema } from './action-schema.js';
 
 const SCHEMA: ActionSchema = [
   { id: 'wave' },

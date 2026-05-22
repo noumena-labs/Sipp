@@ -9,6 +9,10 @@ The browser package exposes the unified runtime contract:
 Browser inference is owned by the Rust browser engine linked into the
 Emscripten/WebGPU artifact. Emscripten remains the browser platform/link layer
 for llama.cpp, ggml-webgpu, mtmd, JSPI, WorkerFS, and WebGPU glue.
+The installed-model catalog, pairing decisions, lifecycle state, and
+wasm-backed asset hashing are Rust-owned; browser TypeScript still hosts
+OPFS, `fetch`, `File`, WorkerFS/MEMFS mounting, and listener dispatch because
+those APIs are browser objects.
 
 ```ts
 import { CogentEngine } from 'cogentlm';
@@ -94,7 +98,7 @@ await engine.models.remove(loaded.id);
 
 `ModelInfo.id` is the installed model id for the persisted base-model entry. If a model has already been validated with a projector, later `engine.models.load(id)` reuses that stored pairing automatically. Installed entries and pairings live in OPFS, so they survive tab refresh and browser restart for the same origin.
 
-Large monolithic GGUF inputs use the browser cache policy only in the browser package: files at or below 2 GiB use the direct single-file path, while larger remote URLs and local `File` imports are split into llama.cpp-compatible OPFS shards by the Rust-backed browser ingest layer. This OPFS split path is not used by native Rust, Python, or Node.
+Large monolithic GGUF inputs use the browser cache policy only in the browser package: files at or below 2 GiB use the direct single-file path, while larger remote URLs and local `File` imports are split into llama.cpp-compatible OPFS shards through the browser host adapter and Rust GGUF split logic. This OPFS split path is not used by native Rust, Python, or Node.
 
 Managed storage requires OPFS. If OPFS is unavailable, loading fails clearly instead of silently falling back to transient memory.
 

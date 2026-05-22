@@ -1,5 +1,4 @@
 import { ModelService } from '../models/model-service.js';
-import type { ModelLifecycleService } from '../models/contract.js';
 import { WorkerModelServiceClient } from '../worker/model-service-client.js';
 import {
   QueryError,
@@ -8,6 +7,7 @@ import {
   type EngineEvent,
   type EngineState,
   type EngineObservability,
+  type ModelLifecycleService,
   type ObservabilityEvent,
   type ObservabilitySnapshot,
   type ModelInfo,
@@ -18,18 +18,44 @@ import {
   type RequestResult,
 } from '../models/types.js';
 import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.js';
-import type { BrowserRuntimeSmokeResult } from '../runtime/browser-smoke-types.js';
+import type { BackendObservability } from '../observability/backend-observability.js';
+
+export interface EngineModuleOptions {
+  locateFile?: (path: string, prefix?: string) => string;
+  [key: string]: unknown;
+}
 
 export interface CogentEngineOptions {
   moduleUrl?: string;
   wasmUrl?: string;
-  moduleOptions?: {
-    locateFile?: (path: string, prefix?: string) => string;
-    [key: string]: unknown;
-  };
+  moduleOptions?: EngineModuleOptions;
+  maxModelBytes?: number;
   trustedOrigins?: string[];
   executionMode?: 'auto' | 'worker' | 'main-thread';
   workerUrl?: string;
+}
+
+export interface BrowserGgufIngestSmokeResult {
+  available: boolean;
+  layoutForLargeFile: 'single-file' | 'split-gguf' | null;
+  plannedShardCount: number | null;
+  streamedShardCount: number;
+  streamedBytes: number;
+  error: string | null;
+}
+
+export interface BrowserRustEngineSmokeResult {
+  available: boolean;
+  abiVersion: number;
+  engineId: number | null;
+  error: string | null;
+}
+
+export interface BrowserRuntimeSmokeResult {
+  rustEngine: BrowserRustEngineSmokeResult;
+  ggufIngest: BrowserGgufIngestSmokeResult;
+  backend: BackendObservability | null;
+  webgpuReady: boolean;
 }
 
 function shouldUseWorker(config: CogentEngineOptions): boolean {

@@ -1,5 +1,18 @@
-import { GenerateRequestId } from '../types.js';
-import { createDeferred } from '../utils/async.js';
+import type { GenerateRequestId } from '../core/inference-types.js';
+
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
 
 /**
  * Tracks the lifecycle of a pending request: its promise, settlement state,

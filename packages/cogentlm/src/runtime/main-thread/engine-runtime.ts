@@ -1,21 +1,31 @@
-import { CogentConfig, EngineModuleOptions } from '../../engine/engine-options.js';
-import {
-  BackendObservability,
+import type {
+  BrowserRuntimeSmokeResult,
+  CogentEngineOptions as CogentConfig,
+  EngineModuleOptions,
+} from '../../engine/cogent-engine.js';
+import type { BackendObservability } from '../../observability/backend-observability.js';
+import type {
   ChatMessage,
   EngineExecutionMode,
   GenerateRequest,
   GenerateRequestId,
   GenerateResponse,
-  InternalBundleDescriptor,
-  ModelDetectionResult,
   NativeRuntimeConfig,
   PromptOptions,
+  TokenBatch,
+} from '../../core/inference-types.js';
+import type {
+  InternalBundleDescriptor,
+  ModelDetectionResult,
   StagedModelBundle,
   StageModelBundleOptions,
-  TokenBatch,
+} from '../../bundle/model-bundle-types.js';
+import type {
   RuntimeAggregateObservabilityMetrics,
+} from '../../observability/runtime-observability.js';
+import type {
   TransportObservability,
-} from '../../types.js';
+} from '../../observability/transport-observability.js';
 import type { ChatBoundaryInfo } from '../../core/chat-boundary-sanitizer.js';
 import {
   RuntimePairingValidationError,
@@ -38,11 +48,12 @@ import {
 import type { StreamingRingWriter } from '../streaming-ring.js';
 import { EngineModule } from '../../wasm/engine-module.js';
 import { createAbortError } from '../../utils/abort.js';
-import { asErrorMessage } from '../../utils/error.js';
 import { QueuedRequestScheduler } from '../scheduler.js';
 import { resolveRuntimeUrls } from '../../engine/runtime-assets.js';
-import type { BrowserRuntimeSmokeResult } from '../browser-smoke-types.js';
 import type { ClassifiedAsset, PairingPlan } from '../../models/pairing-types.js';
+import type { RegistryManifest } from '../../models/types.js';
+import { RustLifecycleBridge } from '../../wasm/lifecycle-bridge.js';
+import type { AssetHashProvider } from '../../models/hash.js';
 
 function normalizePromptText(value: string): string {
   return value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -71,6 +82,10 @@ const BROWSER_SMOKE_SHARD_MAX_BYTES = 128;
 const GGUF_MAGIC = 0x4655_4747;
 const GGUF_VALUE_STRING = 8;
 const GGUF_ALIGNMENT = 32;
+
+function asErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function alignTo(value: number, alignment: number): number {
   return Math.ceil(value / alignment) * alignment;
@@ -674,6 +689,22 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     const code = normalizePairingErrorCode(response.error?.code);
     const message = response.error?.message ?? 'Model pairing validation failed.';
     throw new RuntimePairingValidationError(code, message);
+  }
+
+  public async createRustLifecycleBridge(
+    manifest: RegistryManifest
+  ): Promise<RustLifecycleBridge> {
+    await this.ensureModule();
+    return RustLifecycleBridge.create(this.getLoadedWasmBridge(), manifest);
+  }
+
+  public async createRustHashProvider(): Promise<AssetHashProvider> {
+    await this.ensureModule();
+    const bridge = this.getLoadedWasmBridge();
+    return {
+      sha256Text: (value) => bridge.sha256Text(value),
+      sha256Blob: (blob, signal) => bridge.sha256Blob(blob, signal),
+    };
   }
 
   /**

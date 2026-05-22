@@ -12,6 +12,11 @@ const K = new Uint32Array([
   0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ]);
 
+export interface AssetHashProvider {
+  sha256Text(value: string): string;
+  sha256Blob(blob: Blob, signal?: AbortSignal): Promise<string>;
+}
+
 function rightRotate(value: number, amount: number): number {
   return (value >>> amount) | (value << (32 - amount));
 }

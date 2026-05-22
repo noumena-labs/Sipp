@@ -1,4 +1,3 @@
-import type { CogentConfig } from '../engine/engine-options.js';
 import type {
   ModelLoadOptions,
   ModelLoadProgress,
@@ -141,6 +140,6 @@ export type WorkerResponseMessage =
     };
 
 export type WorkerServiceConfig = Pick<
-  CogentConfig,
+  WorkerSerializableCogentConfig,
   'moduleUrl' | 'wasmUrl' | 'moduleOptions' | 'maxModelBytes' | 'trustedOrigins'
 >;
