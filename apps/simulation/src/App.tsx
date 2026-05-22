@@ -584,19 +584,21 @@ export default function App() {
           observability: 'profile',
           runtime: {
             cache: {
-              maxSessionEntries: 8,
-              snapshotIntervalTokens: 64,
-              maxSnapshotEntries: 64,
+              max_session_entries: 8,
+              snapshot_interval_tokens: 64,
+              max_snapshot_entries: 64,
             },
             scheduler: {
-              policy: 'latency-first',
+              policy: {
+                mode: 'latency_first' as const,
+              },
             },
             sampling: {
               temperature: 0.5,
-              topP: 0.9,
-              topK: 40,
-              minP: 0.05,
-              repeatPenalty: 1.05,
+              top_p: 0.9,
+              top_k: 40,
+              min_p: 0.05,
+              repeat_penalty: 1.05,
             },
           },
         });

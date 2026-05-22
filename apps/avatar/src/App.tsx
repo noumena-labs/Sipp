@@ -156,10 +156,10 @@ export default function App() {
         runtime: {
           sampling: {
             temperature: 0.6,
-            topP: 0.9,
-            topK: 40,
-            minP: 0.05,
-            repeatPenalty: 1.05,
+            top_p: 0.9,
+            top_k: 40,
+            min_p: 0.05,
+            repeat_penalty: 1.05,
           },
         },
       });

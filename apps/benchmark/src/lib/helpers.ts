@@ -127,15 +127,17 @@ export function buildMixedLoadDefinition(): any {
 export function buildPhase4BenchmarkInitConfig(initConfig: any = {}): any {
   const context = initConfig.context ?? {};
   const cache = initConfig.cache ?? {};
+  const n_parallel = context.n_parallel ?? context.nParallel;
+  const max_session_entries = cache.max_session_entries ?? cache.maxSessionEntries;
   return {
     ...initConfig,
     context: {
       ...context,
-      nParallel: Math.max(context.nParallel ?? 1, 2),
+      n_parallel: Math.max(n_parallel ?? 1, 2),
     },
     cache: {
       ...cache,
-      maxSessionEntries: Math.max(cache.maxSessionEntries ?? 8, 2),
+      max_session_entries: Math.max(max_session_entries ?? 8, 2),
     },
     sampling: initConfig.sampling == null ? undefined : { ...initConfig.sampling },
   };

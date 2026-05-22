@@ -315,30 +315,32 @@ export default function App() {
           },
           runtime: {
             context: {
-              nCtx: 1024,
-              nBatch: 256,
-              nUbatch: 128,
+              n_ctx: 1024,
+              n_batch: 256,
+              n_ubatch: 128,
             },
             multimodal: {
-              imageMinTokens: 24,
-              imageMaxTokens: 96,
+              image_min_tokens: 24,
+              image_max_tokens: 96,
             },
             scheduler: {
-              policy: 'latency-first',
-              prefillChunkSize: 256,
-              decodeTokenReserve: 128,
+              policy: {
+                mode: 'latency_first' as const,
+                decode_token_reserve: 128,
+              },
+              prefill_chunk_size: 256,
             },
             cache: {
-              maxSessionEntries: 2,
-              retainedPrefixTokens: 256,
-              snapshotIntervalTokens: 32,
+              max_session_entries: 2,
+              retained_prefix_tokens: 256,
+              snapshot_interval_tokens: 32,
             },
             sampling: {
               temperature: 0.45,
-              topP: 0.85,
-              topK: 32,
-              minP: 0.04,
-              repeatPenalty: 1.05,
+              top_p: 0.85,
+              top_k: 32,
+              min_p: 0.04,
+              repeat_penalty: 1.05,
             },
           },
         }

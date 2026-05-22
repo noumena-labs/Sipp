@@ -89,14 +89,14 @@ interface BenchmarkReport {
 function getDefaultRuntimeOptions() {
   return {
     placement: {
-      gpuLayers: 'all' as const,
+      gpu_layers: 'all' as const,
     },
     context: {
-      nParallel: 1,
+      n_parallel: 1,
     },
     cache: {
-      mode: 'live-slot-prefix' as const,
-      maxSessionEntries: 8,
+      mode: 'live_slot_prefix' as const,
+      max_session_entries: 8,
     },
   };
 }
