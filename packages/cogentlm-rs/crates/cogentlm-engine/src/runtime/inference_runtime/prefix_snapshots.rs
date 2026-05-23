@@ -1,7 +1,8 @@
+use crate::runtime::numeric::saturating_usize_to_u64;
 use crate::runtime::scheduler::{BatchContributionKind, SlotPhase};
 use crate::runtime::session::PendingPrefixSnapshot;
 
-use super::{clamp_usize_to_u64, unique_slot_first_use, InferenceRuntime};
+use super::{unique_slot_first_use, InferenceRuntime};
 
 impl InferenceRuntime {
     pub(super) fn queue_prefix_snapshots(
@@ -19,7 +20,7 @@ impl InferenceRuntime {
             {
                 continue;
             }
-            let Some(slot) = self.slot_scheduler.slots().get(contribution.slot_index) else {
+            let Some(slot) = self.slot_scheduler.slots.get(contribution.slot_index) else {
                 continue;
             };
             let Some(request) = slot.request() else {
@@ -41,7 +42,7 @@ impl InferenceRuntime {
                     prefix_hash: self
                         .prefix_cache_policy
                         .hash_prefix(&slot.mirror.current_kv_tokens, token_count),
-                    retention_priority: clamp_usize_to_u64(token_count),
+                    retention_priority: saturating_usize_to_u64(token_count),
                     prefix_tokens: slot.mirror.current_kv_tokens[..token_count].to_vec(),
                 });
             self.prefix_cache_policy.record_store(token_count);
@@ -50,7 +51,7 @@ impl InferenceRuntime {
 
     pub(super) fn resolve_terminal_prefix_snapshots_locked(&mut self) {
         self.scratch_terminal_sequences.clear();
-        for slot in self.slot_scheduler.slots() {
+        for slot in &self.slot_scheduler.slots {
             if slot.seq_id >= 0 {
                 match slot.phase {
                     SlotPhase::Completed => {

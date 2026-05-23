@@ -6,7 +6,7 @@ impl InferenceRuntime {
     pub(super) fn build_no_progress_diagnostic_locked(&self) -> String {
         let mut counts = NoProgressCounts::default();
 
-        for slot in self.slot_scheduler.slots() {
+        for slot in &self.slot_scheduler.slots {
             let Some(request) = slot.request() else {
                 continue;
             };
@@ -48,11 +48,7 @@ impl InferenceRuntime {
             if !unique_slot_first_use(&mut failed_slots, contribution.slot_index) {
                 continue;
             }
-            let Some(slot) = self
-                .slot_scheduler
-                .mutable_slots()
-                .get_mut(contribution.slot_index)
-            else {
+            let Some(slot) = self.slot_scheduler.slots.get_mut(contribution.slot_index) else {
                 continue;
             };
             slot.fail(message);

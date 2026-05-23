@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use crate::collection::sorted_copied_values;
 use crate::runtime::metrics::RuntimeObservabilityMetrics;
 use crate::runtime::request::GenerateRequest;
 use crate::runtime::scheduler::BatchContributionKind;
@@ -9,14 +10,6 @@ use super::{
 };
 
 impl InferenceRuntime {
-    pub fn runtime_observability_enabled(&self) -> bool {
-        self.config.observability.effective_runtime_metrics()
-    }
-
-    pub fn backend_profiling_enabled(&self) -> bool {
-        self.config.observability.backend_profiling
-    }
-
     pub fn try_get_runtime_observability(&self) -> Option<RuntimeObservabilityMetrics> {
         if !self.config.observability.effective_runtime_metrics() {
             return None;
@@ -32,12 +25,13 @@ impl InferenceRuntime {
 
     pub(super) fn commit_new_completed_responses_observability_locked(&mut self) {
         // Counts move in lockstep, so avoid allocating ids when nothing new finished.
-        if self.request_queue.completed_response_count()
+        if self.request_queue.completed_responses.len()
             == self.committed_observability_request_ids.len()
         {
             return;
         }
-        let completed_request_ids = self.request_queue.completed_response_ids();
+        let completed_request_ids =
+            sorted_copied_values(self.request_queue.completed_responses.keys().copied());
         if completed_request_ids.is_empty() {
             return;
         }
@@ -55,7 +49,7 @@ impl InferenceRuntime {
             self.committed_observability_request_ids.insert(request_id);
 
             let committed_metrics = {
-                let Some(response) = self.request_queue.find_mut_completed_response(request_id)
+                let Some(response) = self.request_queue.completed_responses.get_mut(&request_id)
                 else {
                     continue;
                 };
@@ -77,10 +71,10 @@ impl InferenceRuntime {
     }
 
     fn active_request_observability(&self) -> Option<RuntimeObservabilityMetrics> {
-        self.slot_scheduler
-            .slots()
-            .iter()
-            .find_map(|slot| slot.request().map(request_observability))
+        self.slot_scheduler.slots.iter().find_map(|slot| {
+            slot.request()
+                .map(RuntimeObservabilityMetrics::from_request)
+        })
     }
 
     fn total_observability(&self) -> RuntimeObservabilityMetrics {
@@ -105,11 +99,7 @@ impl InferenceRuntime {
         let mut prefill_slots: u64 = 0;
 
         for contribution in &plan.contributions {
-            let Some(slot) = self
-                .slot_scheduler
-                .mutable_slots()
-                .get_mut(contribution.slot_index)
-            else {
+            let Some(slot) = self.slot_scheduler.slots.get_mut(contribution.slot_index) else {
                 continue;
             };
             let Some(request) = slot.request_mut() else {
@@ -153,24 +143,11 @@ fn apply_debug_metrics_tick(request: &mut GenerateRequest, debug_metrics: DebugM
     request.debug_metrics_post_decode_ms += debug_metrics.post_decode_ms;
 }
 
-fn request_observability(request: &GenerateRequest) -> RuntimeObservabilityMetrics {
-    RuntimeObservabilityMetrics::from_request(request)
-}
-
 fn increment_debug_counter(counter: &mut i32) {
     *counter = counter.saturating_add(1);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::increment_debug_counter;
-
-    #[test]
-    fn increment_debug_counter_saturates() {
-        let mut counter = i32::MAX;
-
-        increment_debug_counter(&mut counter);
-
-        assert_eq!(counter, i32::MAX);
-    }
+    mod observability_tests;
 }

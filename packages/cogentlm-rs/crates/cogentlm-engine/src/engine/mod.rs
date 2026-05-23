@@ -13,7 +13,7 @@ pub use config::{
 };
 pub use driver::{
     ChatMessage, ChatRequest, ChatRole, CogentEngine, EngineEventReceiver, QueryOptions,
-    QueryRequest, QueryResponse,
+    QueryRequest,
 };
 pub use protocol::{EngineEvent, EngineState, EngineStats, RequestResult};
 pub use stream::{StreamStats, TokenBatch, TokenFrame, TokenStreamMode};

@@ -2,9 +2,6 @@
 
 Rust-native CogentLM runtime workspace.
 
-See `../../docs/engine-runtime-architecture.md` for the unified
-Rust/Python/Node/browser runtime contract and naming rules.
-
 This workspace is intentionally separate from the existing browser/Emscripten
 package under `packages/cogentlm`. The sys crate builds the vendored llama.cpp
 tree natively and exposes the C ABI plus a small CogentLM shim for features that
@@ -44,14 +41,15 @@ cargo run -p cogentlm-cli -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Describe browser LLM
 command channel:
 
 ```rust
-use cogentlm_engine::{ChatMessage, ChatRequest, CogentEngine, NativeRuntimeConfig, QueryOptions};
+use cogentlm_engine::{
+    ChatMessage, ChatRequest, ChatRole, CogentEngine, NativeRuntimeConfig, QueryOptions,
+};
 
 let engine = CogentEngine::load("model.gguf", NativeRuntimeConfig::default())?;
 let answer = engine.chat(ChatRequest::new(vec![
-    ChatMessage::user("Describe browser LLM inference."),
+    ChatMessage::new(ChatRole::User, "Describe browser LLM inference."),
 ]).options(QueryOptions::default()))?;
 println!("{}", answer.text);
-engine.close()?;
 ```
 
 This is the native-thread implementation of the engine-driver abstraction. The
@@ -61,9 +59,7 @@ adapter layer.
 
 The shared runtime contract starts in `cogentlm_engine::engine::protocol` and is
 re-exported as `EngineState`, `EngineStats`, `EngineEvent`, and
-`RequestResult`. The owner-thread driver also exposes explicit
-`query_response` / `chat_response` methods when raw runtime details are
-needed. The first canonical state view is
+`RequestResult`. The first canonical state view is
 available through:
 
 ```rust
@@ -76,7 +72,7 @@ The native engine also emits the shared event shape:
 ```rust
 let events = engine.subscribe_events();
 let result = engine.chat(ChatRequest::new(vec![
-    ChatMessage::user("Describe browser LLM inference."),
+    ChatMessage::new(ChatRole::User, "Describe browser LLM inference."),
 ]).options(QueryOptions::default()))?;
 for event in events.try_iter() {
     println!("{event:?}");
@@ -89,43 +85,19 @@ available through `EngineEvent::State`; Python and Node expose the same
 contract through `state()`, `drain_events()` / `drainEvents()`, `query()` /
 `query`, and `chat()` / `chat`.
 
-Run the runtime smoke example with a local GGUF to print backend/device
-observability, raw-query/chat outputs, and runtime metrics:
-
-```powershell
-cargo run -q -p cogentlm-engine --example phase3_smoke -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Describe browser LLM inference." --max-tokens 32
-```
-
-For vision models, use the multimodal smoke example with the text model, the
-matching mmproj GGUF, and an image file:
-
-```powershell
-cargo run -q -p cogentlm-engine --example multimodal_smoke -- <MiniCPM-model.gguf> <MiniCPM-mmproj.gguf> ..\..\test.png "Describe this image in details" --max-tokens 128
-```
-
-The example defaults to chat-template mode and inserts the mtmd media marker
-inside the user message before the prompt. Add `--raw` to test a raw prompt or
-`--no-marker-in-message` to test the runtime's automatic marker prefix path.
-
 The default build is CPU-only. `backend_before_load` / `backend_after_load`
 show the compiled backends, discovered devices, memory, and whether
 llama.cpp reports GPU offload support. To force CPU execution:
 
 ```powershell
-cargo run -q -p cogentlm-engine --example phase3_smoke -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Describe browser LLM inference." --max-tokens 32 --gpu-layers 0
+cargo run -q -p cogentlm-cli -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Describe browser LLM inference." --max-tokens 32 --chat --gpu-layers 0
 ```
 
 To build a native GPU-capable runtime, enable the matching Cargo feature and
 allow offload with `--gpu-layers -1`:
 
 ```powershell
-cargo run -q -p cogentlm-engine --features cuda --example phase3_smoke -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Describe browser LLM inference." --max-tokens 32 --gpu-layers -1
-cargo run -q -p cogentlm-engine --features vulkan --example phase3_smoke -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Describe browser LLM inference." --max-tokens 32 --gpu-layers -1
-```
-
-The CLI forwards the same backend features:
-
-```powershell
+cargo run -q -p cogentlm-cli --features cuda -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Describe browser LLM inference." --max-tokens 32 --chat --gpu-layers -1
 cargo run -q -p cogentlm-cli --features vulkan -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Describe browser LLM inference." --max-tokens 32 --chat --gpu-layers -1
 ```
 
@@ -164,14 +136,11 @@ engine = CogentEngine(
         observability=ObservabilityRuntimeConfig(runtime_metrics=True),
     ),
 )
-try:
-    result = engine.chat(
-        [ChatMessage.user("Describe browser LLM inference.")],
-        QueryOptions(max_tokens=32),
-    )
-    print(result["text"].strip())
-finally:
-    engine.close()
+result = engine.chat(
+    [ChatMessage("user", "Describe browser LLM inference.")],
+    QueryOptions(max_tokens=32),
+)
+print(result["text"].strip())
 ```
 
 Streaming uses the same native scheduler path and calls back into Python while
@@ -185,7 +154,7 @@ def on_tokens(batch: dict) -> None:
     print(batch["text"], end="", flush=True)
 
 result = engine.chat(
-    [ChatMessage.user("Describe browser LLM inference.")],
+    [ChatMessage("user", "Describe browser LLM inference.")],
     QueryOptions(max_tokens=32),
     on_tokens=on_tokens,
 )
@@ -228,16 +197,12 @@ const engine = await CogentEngine.load("model.gguf", {
   observability: { runtime_metrics: true },
 });
 
-try {
-  const result = await engine.chat(
-    [{ role: "user", content: "Describe browser LLM inference." }],
-    { maxTokens: 32 },
-    (batch) => process.stdout.write(batch.text),
-  );
-  console.log(`\n${result.text.trim()}`);
-} finally {
-  await engine.close();
-}
+const result = await engine.chat(
+  [{ role: "user", content: "Describe browser LLM inference." }],
+  { maxTokens: 32 },
+  (batch) => process.stdout.write(batch.text),
+);
+console.log(`\n${result.text.trim()}`);
 ```
 
 Build the local Node binding from the crate directory:
@@ -248,15 +213,6 @@ bun install
 bun run build:cuda
 node .\examples\node_smoke.mjs ..\..\..\..\Qwen3.5-0.8B-Q4_0.gguf "Describe browser LLM inference." --gpu-layers -1
 ```
-
-## Character Harness Status
-
-The character harness is not implemented in Rust yet. For now,
-`character-agent.ts`, `action-grammar.ts`, and `action-parser.ts` remain in the
-TypeScript package under `packages/cogentlm/src/character` and are still the
-source of truth. The Rust runtime work is intentionally focused on native
-engine bindings first; the character harness should be ported after the Python
-and NAPI engine surfaces settle.
 
 ## Browser Ingest
 

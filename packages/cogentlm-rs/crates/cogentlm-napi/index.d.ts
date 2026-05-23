@@ -2,24 +2,16 @@
 /* eslint-disable */
 export declare class CogentEngine {
   static load(modelPath: string, config?: NativeRuntimeConfig | undefined | null): Promise<unknown>
-  get closed(): boolean
   query(prompt: string, options?: QueryOptions | undefined | null, onTokens?: TokenBatchCallback | undefined | null): Promise<unknown>
-  queryResponse(prompt: string, options?: QueryOptions | undefined | null): Promise<unknown>
-  queryResult(prompt: string, options?: QueryOptions | undefined | null): Promise<unknown>
   chat(messages: Array<ChatMessage>, options?: QueryOptions | undefined | null, onTokens?: TokenBatchCallback | undefined | null): Promise<unknown>
-  chatResponse(messages: Array<ChatMessage>, options?: QueryOptions | undefined | null): Promise<unknown>
-  chatResult(messages: Array<ChatMessage>, options?: QueryOptions | undefined | null): Promise<unknown>
-  close(): Promise<unknown>
   state(): Promise<unknown>
   drainEvents(): Array<EngineEvent>
 }
 
 export declare class ModelService {
   constructor(storePath: string)
-  get closed(): boolean
   loadPath(modelPath: string, options?: ModelLoadOptions | undefined | null): Promise<unknown>
   loadVision(modelPath: string, projectorPath: string, options?: ModelLoadOptions | undefined | null): Promise<unknown>
-  loadInstalled(modelId: string, options?: ModelLoadOptions | undefined | null): Promise<unknown>
   unload(): Promise<unknown>
   remove(modelId: string): Promise<unknown>
   list(): Array<ManagedModelInfo>
@@ -27,7 +19,6 @@ export declare class ModelService {
   query(prompt: string, options?: QueryOptions | undefined | null, onTokens?: TokenBatchCallback | undefined | null): Promise<unknown>
   chat(messages: Array<ChatMessage>, options?: QueryOptions | undefined | null, onTokens?: TokenBatchCallback | undefined | null): Promise<unknown>
   state(): Promise<unknown>
-  close(): Promise<unknown>
   drainEvents(): Array<EngineEvent>
 }
 

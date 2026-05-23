@@ -1,5 +1,5 @@
 mod backend_policy;
-mod browser_catalog;
+mod browser;
 mod gguf;
 mod pairing;
 mod registry;
@@ -15,7 +15,7 @@ pub(super) const DEFAULT_MEDIA_MARKER: &str = "<image>";
 pub use backend_policy::{
     read_backend_capabilities, BackendCapabilities, BackendPlan, BackendPolicy,
 };
-pub use browser_catalog::{
+pub use browser::{
     error_response as browser_lifecycle_error_response,
     response_json as browser_lifecycle_response_json,
     success_response as browser_lifecycle_success_response, BrowserAssetRecord,
@@ -27,7 +27,7 @@ pub use browser_catalog::{
     BrowserPrepareLoadResponse, BrowserQueryObservation, BrowserRegistryManifest,
     BrowserRemoveResponse,
 };
-pub use gguf::{detect_model_from_gguf_bytes, inspect_gguf_metadata, inspect_gguf_metadata_path};
+pub use gguf::detect_model_from_gguf_bytes;
 pub use pairing::PairingResolver;
 pub use registry::{model_entry_from_assets, ModelRegistry, RemovedModel};
 pub use service::{

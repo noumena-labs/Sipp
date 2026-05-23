@@ -2,7 +2,7 @@
 
 use crate::runtime::config::{SchedulerPolicyConfig, SchedulerTickBudget};
 
-use super::{SlotPhase, SlotState};
+use super::SlotState;
 
 mod budget;
 mod flow;
@@ -17,18 +17,10 @@ mod tests {
 
 #[derive(Debug, Default)]
 pub struct SlotScheduler {
-    slots: Vec<SlotState>,
+    pub(crate) slots: Vec<SlotState>,
 }
 
 impl SlotScheduler {
-    pub fn slots(&self) -> &[SlotState] {
-        &self.slots
-    }
-
-    pub fn mutable_slots(&mut self) -> &mut [SlotState] {
-        &mut self.slots
-    }
-
     pub fn build_tick_budget(
         policy: SchedulerPolicyConfig,
         decode_ready_count: i32,
@@ -42,9 +34,5 @@ impl SlotScheduler {
             prefill_ready_count,
             max_batch_tokens,
         )
-    }
-
-    pub fn is_idle(&self) -> bool {
-        self.slots.iter().all(|slot| slot.phase == SlotPhase::Idle)
     }
 }

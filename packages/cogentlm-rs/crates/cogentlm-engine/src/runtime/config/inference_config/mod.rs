@@ -4,7 +4,6 @@ use std::fmt::{Display, Write as _};
 
 use serde::{Deserialize, Serialize};
 
-use crate::choice::choice_from_aliases;
 use crate::defaults::{BYTES_PER_MIB, BYTES_PER_MIB_U64};
 use crate::runtime::numeric::{nonnegative_i32, positive_i32, positive_usize};
 
@@ -22,7 +21,6 @@ pub use sampling::{LogitBias, SamplerStage, SamplingRuntimeConfig};
 
 pub const DEFAULT_CONTEXT_KEY: &str = "default";
 pub const DEFAULT_MAX_TOKENS: i32 = 64;
-const EMPTY_JSON_OBJECT: &str = "{}";
 pub(super) const KEY_VALUE_ARG_LEN: usize = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -61,10 +59,6 @@ impl NativeRuntimeConfig {
         self
     }
 
-    pub fn max_sequences(&self) -> i32 {
-        positive_or_default(self.context.n_parallel, 1, 1)
-    }
-
     pub fn llama_common_args(&self) -> Vec<String> {
         let normalized = self.clone().normalize();
         let mut args =
@@ -72,22 +66,6 @@ impl NativeRuntimeConfig {
         normalized.placement.push_args(&mut args);
         normalized.context.push_args(&mut args);
         args
-    }
-
-    pub fn sampling_json(&self) -> String {
-        self.sampling_json_with_override(None)
-    }
-
-    pub fn try_sampling_json(&self) -> serde_json::Result<String> {
-        self.try_sampling_json_with_override(None)
-    }
-
-    pub fn sampling_json_with_override(
-        &self,
-        override_config: Option<&SamplingRuntimeConfig>,
-    ) -> String {
-        self.try_sampling_json_with_override(override_config)
-            .unwrap_or_else(|_| EMPTY_JSON_OBJECT.to_string())
     }
 
     pub fn try_sampling_json_with_override(
@@ -184,40 +162,11 @@ pub enum KvReuseMode {
     LiveSlotAndSnapshot,
 }
 
-impl KvReuseMode {
-    pub fn from_choice(value: &str) -> Option<Self> {
-        choice_from_aliases(
-            value,
-            &[
-                (&["disabled", "none"], Self::Disabled),
-                (&["live_slot_prefix", "live_slot"], Self::LiveSlotPrefix),
-                (&["state_snapshot", "snapshot"], Self::StateSnapshot),
-                (
-                    &["live_slot_and_snapshot", "both"],
-                    Self::LiveSlotAndSnapshot,
-                ),
-            ],
-        )
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CacheKeyPolicy {
     ContextKey,
     PromptHash,
-}
-
-impl CacheKeyPolicy {
-    pub fn from_choice(value: &str) -> Option<Self> {
-        choice_from_aliases(
-            value,
-            &[
-                (&["context_key"], Self::ContextKey),
-                (&["prompt_hash"], Self::PromptHash),
-            ],
-        )
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -305,20 +254,15 @@ pub(super) fn push_arg(args: &mut Vec<String>, key: impl Into<String>, value: im
     args.push(value.into());
 }
 
-pub(super) fn conditional_arg_len(enabled: bool) -> usize {
-    if enabled {
-        KEY_VALUE_ARG_LEN
-    } else {
-        0
-    }
-}
-
 pub(super) fn flag_len(enabled: bool) -> usize {
     usize::from(enabled)
 }
 
 pub(super) fn key_value_args_len(enabled: impl IntoIterator<Item = bool>) -> usize {
-    enabled.into_iter().map(conditional_arg_len).sum()
+    enabled
+        .into_iter()
+        .map(|enabled| if enabled { KEY_VALUE_ARG_LEN } else { 0 })
+        .sum()
 }
 
 pub(super) fn flags_len(enabled: impl IntoIterator<Item = bool>) -> usize {
@@ -362,14 +306,6 @@ pub(super) fn push_flag_pair(
     disabled_flag: &str,
 ) {
     args.push(if enabled { enabled_flag } else { disabled_flag }.to_string());
-}
-
-pub(super) fn bool_arg(value: bool) -> &'static str {
-    if value {
-        "on"
-    } else {
-        "off"
-    }
 }
 
 pub(super) fn join_csv<T>(values: impl IntoIterator<Item = T>) -> String

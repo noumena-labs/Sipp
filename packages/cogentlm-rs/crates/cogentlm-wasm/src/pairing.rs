@@ -35,16 +35,16 @@ pub extern "C" fn cogentlm_pairing_validate_json(
     explicit_projector_id: *const c_char,
 ) -> *mut c_char {
     catch_unwind(AssertUnwindSafe(|| {
-        into_c_string(response_json(validate_pairing(
-            classified_json,
-            explicit_projector_id,
-        )))
+        into_c_string(serialize_json_response(
+            &validate_pairing(classified_json, explicit_projector_id),
+            PAIRING_SERIALIZATION_FALLBACK,
+        ))
     }))
     .unwrap_or_else(|_| {
-        into_c_string(response_json(error_response(
-            CODE_MODEL_BROKEN,
-            "pairing validation panicked".to_string(),
-        )))
+        into_c_string(serialize_json_response(
+            &error_response(CODE_MODEL_BROKEN, "pairing validation panicked".to_string()),
+            PAIRING_SERIALIZATION_FALLBACK,
+        ))
     })
 }
 
@@ -108,10 +108,6 @@ fn error_response(code: &'static str, message: String) -> PairingValidateRespons
         plan: None,
         error: Some(PairingValidateError { code, message }),
     }
-}
-
-fn response_json(response: PairingValidateResponse) -> String {
-    serialize_json_response(&response, PAIRING_SERIALIZATION_FALLBACK)
 }
 
 #[cfg(test)]

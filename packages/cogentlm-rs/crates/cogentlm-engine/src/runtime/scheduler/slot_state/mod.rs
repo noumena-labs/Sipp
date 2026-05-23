@@ -47,7 +47,7 @@ pub struct SlotState {
     pub terminal_error_message: String,
     pub sampler_prompt_seeded: bool,
     pub sampler_key: Option<SamplerCacheKey>,
-    backend_sampler_attached: bool,
+    pub(crate) backend_sampler_attached: bool,
     pub sampler: Option<NonNull<ffi::cogent_common_sampler>>,
 }
 
@@ -128,18 +128,6 @@ impl SlotState {
         if let Some(request) = self.request_mut() {
             request.lifecycle = GenerateRequestLifecycle::Cancelled;
         }
-    }
-
-    pub fn sampler(&self) -> Option<NonNull<ffi::cogent_common_sampler>> {
-        self.sampler
-    }
-
-    pub fn backend_sampler_attached(&self) -> bool {
-        self.backend_sampler_attached
-    }
-
-    pub fn mark_backend_sampler_attached(&mut self, attached: bool) {
-        self.backend_sampler_attached = attached;
     }
 
     pub fn set_sampler(&mut self, sampler: *mut ffi::cogent_common_sampler) {

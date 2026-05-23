@@ -27,7 +27,6 @@ pub struct SessionStore {
     seq_id_available: Vec<bool>,
     shared_context: Option<NonNull<ffi::llama_context>>,
     max_cached_contexts: usize,
-    max_sequences: usize,
 }
 
 impl SessionStore {
@@ -49,7 +48,6 @@ impl SessionStore {
             seq_id_available: vec![true; max_sequences],
             shared_context: None,
             max_cached_contexts,
-            max_sequences,
         }
     }
 
@@ -221,18 +219,6 @@ impl SessionStore {
         let mut snapshot = session.clone();
         snapshot.current_kv_tokens = tokens;
         Some(snapshot)
-    }
-
-    pub fn len(&self) -> usize {
-        self.context_states.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.context_states.is_empty()
-    }
-
-    pub fn max_sequences(&self) -> usize {
-        self.max_sequences
     }
 
     fn mark_evictable(&mut self, context_key: &str) {

@@ -8,7 +8,7 @@ use cogentlm_sys as ffi;
 use crate::defaults::BYTES_PER_MIB;
 use crate::runtime::{llama_seq_id, llama_token};
 
-use super::{PrefixCachePolicy, PrefixCachePolicyStats};
+use super::PrefixCachePolicy;
 
 mod snapshots;
 mod state_io;
@@ -83,13 +83,13 @@ impl PrefixCacheLookupKey {
 /// payload, which can be hundreds of megabytes for real models.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PrefixCacheHandle {
-    index: usize,
+    pub(crate) index: usize,
     pub token_count: usize,
 }
 
 #[derive(Debug, Clone)]
 pub struct PrefixStateCache {
-    pub(super) entries: Vec<PrefixCacheEntry>,
+    pub(crate) entries: Vec<PrefixCacheEntry>,
     pub(super) lookup_buckets: HashMap<PrefixCacheLookupKey, Vec<usize>>,
     pub(super) pending_snapshots: VecDeque<PendingPrefixSnapshot>,
     pub(super) max_entries: usize,
@@ -196,10 +196,6 @@ impl PrefixStateCache {
         None
     }
 
-    pub fn entry_by_handle(&self, handle: PrefixCacheHandle) -> Option<&PrefixCacheEntry> {
-        self.entries.get(handle.index)
-    }
-
     /// Restores a cached prefix into `seq_id` without exposing the entry's
     /// `state_bytes` to the caller. Returns `false` when the handle is stale
     /// or the underlying llama call fails.
@@ -220,22 +216,6 @@ impl PrefixStateCache {
         self.lookup_buckets.clear();
         self.pending_snapshots.clear();
         self.total_approx_bytes = 0;
-    }
-
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    pub fn total_approx_bytes(&self) -> usize {
-        self.total_approx_bytes
-    }
-
-    pub fn policy_stats(policy: &PrefixCachePolicy) -> PrefixCachePolicyStats {
-        policy.stats()
     }
 }
 

@@ -83,7 +83,7 @@ fn run_native_runtime(args: &Args, stdout: &mut impl Write) -> anyhow::Result<()
     config.context.n_parallel = Some(1);
     config.context.n_threads = Some(args.threads);
     config.context.n_threads_batch = Some(args.threads);
-    config.placement.gpu_layers = cli_gpu_layers(args.gpu_layers);
+    config.placement.gpu_layers = GpuLayerConfig::from_layer_count(args.gpu_layers);
     config.sampling = SamplingRuntimeConfig {
         temperature: Some(args.temperature),
         top_k: Some(args.top_k),
@@ -121,7 +121,7 @@ fn run_native_runtime(args: &Args, stdout: &mut impl Write) -> anyhow::Result<()
 
     for _ in 0..10_000 {
         let burst = runtime.run_scheduler_burst(256, 1, 0, Duration::ZERO);
-        if let Some(response) = runtime.try_peek_completed_response(request_id) {
+        if let Some(response) = runtime.take_completed_response(request_id) {
             if response.status == GenerateResponseStatus::Completed {
                 stdout.write_all(response.output_text.as_bytes())?;
                 return Ok(());
@@ -145,8 +145,4 @@ fn run_native_runtime(args: &Args, stdout: &mut impl Write) -> anyhow::Result<()
     }
 
     bail!("scheduler did not complete request {request_id} before the tick limit")
-}
-
-fn cli_gpu_layers(value: i32) -> GpuLayerConfig {
-    GpuLayerConfig::from_layer_count(value)
 }

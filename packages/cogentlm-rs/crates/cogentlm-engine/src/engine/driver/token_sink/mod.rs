@@ -29,10 +29,6 @@ pub(super) struct AsyncTokenSink {
 }
 
 impl AsyncTokenSink {
-    pub(super) fn close(&self) {
-        self.producer.close();
-    }
-
     pub(super) fn try_recv_error(&mut self) -> Option<Error> {
         self.error_rx.try_recv().ok()
     }

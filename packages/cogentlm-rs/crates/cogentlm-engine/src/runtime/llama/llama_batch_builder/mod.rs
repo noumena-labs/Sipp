@@ -6,10 +6,10 @@ use crate::error::{Error, Result};
 use crate::runtime::{llama_seq_id, llama_token};
 
 pub struct LlamaBatchBuilder {
-    batch: ffi::llama_batch,
-    capacity_tokens: i32,
-    capacity_sequences: i32,
-    is_allocated: bool,
+    pub(crate) batch: ffi::llama_batch,
+    pub(crate) capacity_tokens: i32,
+    pub(crate) capacity_sequences: i32,
+    pub(crate) is_allocated: bool,
 }
 
 impl Default for LlamaBatchBuilder {
@@ -112,26 +112,6 @@ impl LlamaBatchBuilder {
         }
         self.batch.n_tokens = next_token_count;
         true
-    }
-
-    pub fn is_allocated(&self) -> bool {
-        self.is_allocated
-    }
-
-    pub fn capacity_tokens(&self) -> i32 {
-        self.capacity_tokens
-    }
-
-    pub fn capacity_sequences(&self) -> i32 {
-        self.capacity_sequences
-    }
-
-    pub fn raw(&self) -> &ffi::llama_batch {
-        &self.batch
-    }
-
-    pub fn raw_mut(&mut self) -> &mut ffi::llama_batch {
-        &mut self.batch
     }
 
     fn free(&mut self) {

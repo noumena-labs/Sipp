@@ -48,7 +48,7 @@ impl PrefixCachePolicyStats {
 pub struct PrefixCachePolicy {
     prefix_cache_interval_tokens: usize,
     minimum_prefix_cache_tokens: usize,
-    stats: PrefixCachePolicyStats,
+    pub(crate) stats: PrefixCachePolicyStats,
 }
 
 impl PrefixCachePolicy {
@@ -58,14 +58,6 @@ impl PrefixCachePolicy {
             minimum_prefix_cache_tokens: minimum_prefix_cache_tokens(prefix_cache_interval_tokens),
             stats: PrefixCachePolicyStats::default(),
         }
-    }
-
-    pub fn prefix_cache_interval_tokens(&self) -> usize {
-        self.prefix_cache_interval_tokens
-    }
-
-    pub fn minimum_prefix_cache_tokens(&self) -> usize {
-        self.minimum_prefix_cache_tokens
     }
 
     pub fn should_store_boundary(&self, token_count: usize, terminal_token_count: usize) -> bool {
@@ -128,10 +120,6 @@ impl PrefixCachePolicy {
 
     pub fn record_store(&mut self, token_count: usize) {
         self.stats.record_store(token_count);
-    }
-
-    pub fn stats(&self) -> PrefixCachePolicyStats {
-        self.stats
     }
 }
 

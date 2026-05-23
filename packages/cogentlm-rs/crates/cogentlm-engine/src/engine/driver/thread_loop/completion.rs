@@ -2,12 +2,12 @@ use std::time::Duration;
 
 use crate::engine::protocol::EngineEvent;
 use crate::error::Result;
-use crate::runtime::request::GenerateResponseStatus;
+use crate::runtime::request::{GenerateResponse, GenerateResponseStatus};
 use crate::runtime::RequestStepResult;
 
 use super::super::events::emit_event;
+use super::super::runtime_command;
 use super::super::stats::request_result_from_response;
-use super::super::{runtime_command, QueryResponse};
 use super::EngineThreadState;
 
 const REQUEST_CANCELLED_FALLBACK: &str = "request cancelled";
@@ -19,11 +19,15 @@ fn cancel_and_consume_request(runtime: &mut crate::runtime::InferenceRuntime, re
     let _ = runtime.cancel_request(request_id);
 
     loop {
-        if runtime.try_peek_completed_response(request_id).is_some() {
-            runtime.consume_completed_response(request_id);
+        if runtime
+            .request_queue
+            .completed_responses
+            .contains_key(&request_id)
+        {
+            let _ = runtime.take_completed_response(request_id);
             return;
         }
-        if !runtime.has_request(request_id) {
+        if !runtime.request_queue.requests.contains_key(&request_id) {
             return;
         }
 
@@ -36,7 +40,10 @@ fn cancel_and_consume_request(runtime: &mut crate::runtime::InferenceRuntime, re
             return;
         }
         if burst.status == RequestStepResult::Waiting
-            && runtime.try_peek_completed_response(request_id).is_none()
+            && !runtime
+                .request_queue
+                .completed_responses
+                .contains_key(&request_id)
         {
             return;
         }
@@ -95,7 +102,10 @@ impl EngineThreadState {
         for (request_id, response) in completed {
             self.close_token_sink(request_id);
             if let Some(runtime) = self.runtime.as_mut() {
-                runtime.remove_token_ring_producer(request_id);
+                runtime
+                    .request_queue
+                    .token_ring_producers
+                    .remove(&request_id);
             }
 
             let result = match response.status {
@@ -148,19 +158,22 @@ impl EngineThreadState {
     fn cancel_and_cleanup_request(&mut self, request_id: u32) {
         if let Some(runtime) = self.runtime.as_mut() {
             cancel_and_consume_request(runtime, request_id);
-            runtime.remove_token_ring_producer(request_id);
+            runtime
+                .request_queue
+                .token_ring_producers
+                .remove(&request_id);
         }
         self.close_token_sink(request_id);
     }
 
     fn close_token_sink(&mut self, request_id: u32) {
         if let Some(mut sink) = self.token_sinks.remove(&request_id) {
-            sink.close();
+            sink.producer.close();
             let _ = sink.join();
         }
     }
 
-    fn send_active_response(&mut self, request_id: u32, response: Result<QueryResponse>) {
+    fn send_active_response(&mut self, request_id: u32, response: Result<GenerateResponse>) {
         if let Some(response_tx) = self.active_requests.remove(&request_id) {
             let _ = response_tx.send(response);
         }
@@ -171,7 +184,7 @@ impl EngineThreadState {
         request_id: u32,
         error_message: String,
         fallback: &'static str,
-    ) -> Result<QueryResponse> {
+    ) -> Result<GenerateResponse> {
         let message = error_message.if_empty(fallback);
         self.emit_request_failed(request_id, message.clone());
         Err(runtime_command(message))

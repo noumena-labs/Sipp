@@ -66,19 +66,6 @@ fn query_request_defaults_options() {
 }
 
 #[test]
-fn chat_role_choice_helper_accepts_public_roles() {
-    assert_eq!(ChatRole::from_choice("system"), Some(ChatRole::System));
-    assert_eq!(
-        ChatRole::from_choice(" ASSISTANT "),
-        Some(ChatRole::Assistant)
-    );
-    assert_eq!(
-        ChatRole::from_choice("assistant"),
-        Some(ChatRole::Assistant)
-    );
-}
-
-#[test]
 fn engine_handle_is_send() {
     fn assert_send<T: Send>() {}
     assert_send::<CogentEngine>();

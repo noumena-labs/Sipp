@@ -54,33 +54,6 @@ fn native_runtime_config_rejects_non_canonical_field_names() {
 }
 
 #[test]
-fn config_choice_helpers_accept_binding_aliases() {
-    assert_eq!(
-        GpuLayerConfig::from_choice("auto"),
-        Some(GpuLayerConfig::Auto)
-    );
-    assert_eq!(SplitMode::from_choice("row"), Some(SplitMode::Row));
-    assert_eq!(
-        FlashAttentionMode::from_choice("off"),
-        Some(FlashAttentionMode::Disabled)
-    );
-    assert_eq!(KvCacheType::from_choice("iq4-nl"), Some(KvCacheType::Iq4Nl));
-    assert_eq!(RopeScaling::from_choice("yarn"), Some(RopeScaling::Yarn));
-    assert_eq!(
-        KvReuseMode::from_choice("live slot"),
-        Some(KvReuseMode::LiveSlotPrefix)
-    );
-    assert_eq!(
-        CacheKeyPolicy::from_choice("prompt-hash"),
-        Some(CacheKeyPolicy::PromptHash)
-    );
-    assert_eq!(
-        SamplerStage::from_choice("temp"),
-        Some(SamplerStage::Temperature)
-    );
-}
-
-#[test]
 fn llama_common_args_are_normalized_at_public_boundary() {
     let config = NativeRuntimeConfig {
         placement: ModelPlacementConfig {

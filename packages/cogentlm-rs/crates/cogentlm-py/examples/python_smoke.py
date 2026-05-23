@@ -64,47 +64,41 @@ def main() -> None:
 
     print("backend_before_load=" + backend_observability_json(True))
     engine = ModelService(args.model_store)
-    try:
-        loaded = engine.load_path(args.model, load_options)
-        print(f"loaded_model={loaded['model']}")
-        print(f"selected_backend={loaded['backend']}")
-        print("backend_after_load=" + backend_observability_json(True))
-        print(f"engine_state_after_load={engine.state()}")
+    loaded = engine.load_path(args.model, load_options)
+    print(f"loaded_model={loaded['model']}")
+    print(f"selected_backend={loaded['backend']}")
+    print("backend_after_load=" + backend_observability_json(True))
+    print(f"engine_state_after_load={engine.state()}")
 
-        # Streaming chat: on_tokens receives TokenBatch dicts.
-        pieces: list[str] = []
+    pieces: list[str] = []
 
-        def on_tokens(batch: dict[str, object]) -> None:
-            text = str(batch["text"])
-            pieces.append(text)
-            print(text, end="", flush=True)
+    def on_tokens(batch: dict[str, object]) -> None:
+        text = str(batch["text"])
+        pieces.append(text)
+        print(text, end="", flush=True)
 
-        print("\nchat_stream=", end="", flush=True)
-        result = engine.chat(
-            [ChatMessage.user(args.prompt)], options, on_tokens=on_tokens
-        )
-        print()  # newline after streaming output
-        streamed_text = "".join(pieces)
-        if streamed_text != result["text"]:
-            raise RuntimeError("streamed token batches did not match final response text")
+    print("\nchat_stream=", end="", flush=True)
+    result = engine.chat([ChatMessage("user", args.prompt)], options, on_tokens=on_tokens)
+    print()
+    streamed_text = "".join(pieces)
+    if streamed_text != result["text"]:
+        raise RuntimeError("streamed token batches did not match final response text")
 
-        stats = result["stats"]
-        print(f"finish_reason={result['finish_reason']}")
-        print(f"stream_batches={len(pieces)}")
-        print(f"engine_state_after_chat={engine.state()}")
-        event_counts: dict[str, int] = {}
-        for event in engine.drain_events():
-            event_counts[event["type"]] = event_counts.get(event["type"], 0) + 1
-        print(f"engine_events={event_counts}")
-        print(
-            "metrics="
-            f"ttft_ms:{stats['ttft_ms']} "
-            f"decode_ms:{stats['decode_ms']:.3f} "
-            f"output_tokens:{stats['output_tokens']} "
-            f"tps:{stats['tokens_per_second']}"
-        )
-    finally:
-        engine.close()
+    stats = result["stats"]
+    print(f"finish_reason={result['finish_reason']}")
+    print(f"stream_batches={len(pieces)}")
+    print(f"engine_state_after_chat={engine.state()}")
+    event_counts: dict[str, int] = {}
+    for event in engine.drain_events():
+        event_counts[event["type"]] = event_counts.get(event["type"], 0) + 1
+    print(f"engine_events={event_counts}")
+    print(
+        "metrics="
+        f"ttft_ms:{stats['ttft_ms']} "
+        f"decode_ms:{stats['decode_ms']:.3f} "
+        f"output_tokens:{stats['output_tokens']} "
+        f"tps:{stats['tokens_per_second']}"
+    )
 
 
 if __name__ == "__main__":

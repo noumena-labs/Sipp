@@ -6,7 +6,6 @@
 
 use serde_json::json;
 
-use crate::choice::choice_from_aliases;
 use crate::engine::protocol::EngineEvent;
 use crate::engine::{
     stream::TokenBatch, GenerateOptions, SamplingRuntimeConfig, DEFAULT_CONTEXT_KEY,
@@ -24,7 +23,8 @@ const MAX_TOKENS_POSITIVE: &str = "max_tokens must be positive";
 const CHAT_MESSAGES_REQUIRED: &str = "chat messages must not be empty";
 const EMPTY_CHAT_TEMPLATE_PROMPT: &str = "model chat template did not produce a prompt";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ChatRole {
     System,
     User,
@@ -32,17 +32,6 @@ pub enum ChatRole {
 }
 
 impl ChatRole {
-    pub fn from_choice(value: &str) -> Option<Self> {
-        choice_from_aliases(
-            value,
-            &[
-                (&["system"], Self::System),
-                (&["user"], Self::User),
-                (&["assistant"], Self::Assistant),
-            ],
-        )
-    }
-
     pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::System => "system",
@@ -59,23 +48,11 @@ pub struct ChatMessage {
 }
 
 impl ChatMessage {
-    fn new(role: ChatRole, content: impl Into<String>) -> Self {
+    pub fn new(role: ChatRole, content: impl Into<String>) -> Self {
         Self {
             role,
             content: content.into(),
         }
-    }
-
-    pub fn system(content: impl Into<String>) -> Self {
-        Self::new(ChatRole::System, content)
-    }
-
-    pub fn user(content: impl Into<String>) -> Self {
-        Self::new(ChatRole::User, content)
-    }
-
-    pub fn assistant(content: impl Into<String>) -> Self {
-        Self::new(ChatRole::Assistant, content)
     }
 }
 
@@ -93,7 +70,7 @@ pub struct QueryOptions {
 impl Default for QueryOptions {
     fn default() -> Self {
         Self {
-            context_key: default_context_key(),
+            context_key: DEFAULT_CONTEXT_KEY.to_string(),
             max_tokens: DEFAULT_MAX_TOKENS,
             grammar: String::new(),
             json_schema: String::new(),
@@ -107,7 +84,7 @@ impl Default for QueryOptions {
 impl From<GenerateOptions> for QueryOptions {
     fn from(options: GenerateOptions) -> Self {
         Self {
-            context_key: options.cache_key.unwrap_or_else(default_context_key),
+            context_key: options.cache_key.unwrap_or(DEFAULT_CONTEXT_KEY.to_string()),
             max_tokens: options.max_tokens,
             grammar: options.grammar.unwrap_or_default(),
             json_schema: options.json_schema.unwrap_or_default(),
@@ -116,10 +93,6 @@ impl From<GenerateOptions> for QueryOptions {
             media: Vec::new(),
         }
     }
-}
-
-fn default_context_key() -> String {
-    DEFAULT_CONTEXT_KEY.to_string()
 }
 
 pub struct QueryRequest {
@@ -151,18 +124,6 @@ impl QueryRequest {
     }
 }
 
-impl From<String> for QueryRequest {
-    fn from(prompt: String) -> Self {
-        Self::new(prompt)
-    }
-}
-
-impl From<&str> for QueryRequest {
-    fn from(prompt: &str) -> Self {
-        Self::new(prompt)
-    }
-}
-
 pub struct ChatRequest {
     pub messages: Vec<ChatMessage>,
     pub options: QueryOptions,
@@ -189,12 +150,6 @@ impl ChatRequest {
     ) -> Self {
         self.on_tokens = Some(Box::new(callback));
         self
-    }
-}
-
-impl From<Vec<ChatMessage>> for ChatRequest {
-    fn from(messages: Vec<ChatMessage>) -> Self {
-        Self::new(messages)
     }
 }
 
@@ -287,7 +242,10 @@ fn attach_token_sink(
 ) -> Option<AsyncTokenSink> {
     let token_sink = on_tokens.map(|callback| start_async_token_sink(request_id, callback));
     if let Some(sink) = &token_sink {
-        runtime.add_token_ring_producer(request_id, sink.producer.clone());
+        runtime
+            .request_queue
+            .token_ring_producers
+            .insert(request_id, sink.producer.clone());
     }
     token_sink
 }
@@ -320,21 +278,5 @@ fn render_messages_json(messages: &[ChatMessage]) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_messages_json, ChatMessage};
-
-    #[test]
-    fn render_messages_json_preserves_role_and_content_order() {
-        let messages = [
-            ChatMessage::system("policy"),
-            ChatMessage::user("hello"),
-            ChatMessage::assistant("hi"),
-        ];
-
-        let json = render_messages_json(&messages).expect("messages json");
-
-        assert_eq!(
-            json,
-            r#"[{"content":"policy","role":"system"},{"content":"hello","role":"user"},{"content":"hi","role":"assistant"}]"#
-        );
-    }
+    mod request_tests;
 }

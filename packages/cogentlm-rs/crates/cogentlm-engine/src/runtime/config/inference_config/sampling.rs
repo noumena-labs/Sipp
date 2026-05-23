@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-use crate::choice::choice_from_aliases;
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SamplingRuntimeConfig {
@@ -99,27 +97,6 @@ pub enum SamplerStage {
     AdaptiveP,
 }
 
-impl SamplerStage {
-    pub fn from_choice(value: &str) -> Option<Self> {
-        choice_from_aliases(
-            value,
-            &[
-                (&["dry"], Self::Dry),
-                (&["top_k"], Self::TopK),
-                (&["typical_p"], Self::TypicalP),
-                (&["top_p"], Self::TopP),
-                (&["top_n_sigma"], Self::TopNSigma),
-                (&["min_p"], Self::MinP),
-                (&["xtc"], Self::Xtc),
-                (&["temperature", "temp"], Self::Temperature),
-                (&["infill"], Self::Infill),
-                (&["penalties"], Self::Penalties),
-                (&["adaptive_p"], Self::AdaptiveP),
-            ],
-        )
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct LogitBias {
     pub token: i32,
@@ -152,50 +129,5 @@ fn should_merge_sampling_override(value: &serde_json::Value) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_merge_sampling_override, SamplingRuntimeConfig, DEFAULT_SAMPLERS};
-
-    #[test]
-    fn sampling_defaults_match_legacy_cpp_browser_runtime() {
-        let sampling = SamplingRuntimeConfig::default();
-
-        assert_eq!(sampling.samplers, DEFAULT_SAMPLERS);
-        assert_eq!(sampling.top_k, Some(40));
-        assert_eq!(sampling.top_p, Some(0.8));
-        assert_eq!(sampling.temperature, Some(0.7));
-        assert_eq!(sampling.repeat_last_n, Some(64));
-        assert_eq!(sampling.repeat_penalty, Some(1.05));
-        assert_eq!(sampling.frequency_penalty, Some(0.0));
-        assert_eq!(sampling.presence_penalty, Some(0.0));
-        assert_eq!(sampling.backend_sampling, cfg!(not(target_arch = "wasm32")));
-    }
-
-    #[test]
-    fn sampling_override_ignores_nulls_and_empty_arrays() {
-        let mut base = serde_json::json!({
-            "top_k": 40,
-            "samplers": ["top_k"],
-            "backend_sampling": true
-        });
-        let override_value = serde_json::json!({
-            "top_k": 12,
-            "samplers": [],
-            "backend_sampling": null
-        });
-
-        super::merge_sampling_override_json(&mut base, override_value);
-
-        assert_eq!(base["top_k"], 12);
-        assert_eq!(base["samplers"], serde_json::json!(["top_k"]));
-        assert_eq!(base["backend_sampling"], true);
-    }
-
-    #[test]
-    fn sampling_override_merge_policy_keeps_meaningful_values_only() {
-        assert!(!should_merge_sampling_override(&serde_json::Value::Null));
-        assert!(!should_merge_sampling_override(&serde_json::json!([])));
-        assert!(should_merge_sampling_override(&serde_json::json!([1])));
-        assert!(should_merge_sampling_override(&serde_json::json!(false)));
-        assert!(should_merge_sampling_override(&serde_json::json!(0)));
-        assert!(should_merge_sampling_override(&serde_json::json!("")));
-    }
+    mod sampling_tests;
 }

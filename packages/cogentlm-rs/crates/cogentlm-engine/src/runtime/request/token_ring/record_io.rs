@@ -69,17 +69,5 @@ fn read_bytes_into(buffer: &[u8], offset: usize, out: &mut [u8]) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn record_header_round_trips_without_slice_conversions() {
-        let header = TokenRingRecordHeader {
-            stream_id: 7,
-            sequence: u32::MAX - 1,
-            flags: 3,
-            byte_len: 4096,
-        };
-
-        assert_eq!(TokenRingRecordHeader::decode(header.encode()), header);
-    }
+    mod record_io_tests;
 }

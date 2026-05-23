@@ -47,7 +47,7 @@ impl PairingResolver {
             .projector
             .ok_or_else(|| invalid_pairing(EXPLICIT_PROJECTOR_NOT_INSTALLED))?;
         let base = resolve_base_model(&selection.model_files)?;
-        validate_explicit_projector(&base, projector)?;
+        validate_projector_compatibility(&base, projector)?;
         Ok(pairing_plan(&selection.model_files, Some(projector), base))
     }
 }
@@ -189,13 +189,6 @@ fn resolve_base_model(files: &[&ClassifiedAsset]) -> Result<BaseModelResolution,
         name: base.name.clone(),
         vision_capable: !vision_candidates.is_empty(),
     })
-}
-
-fn validate_explicit_projector(
-    base: &BaseModelResolution,
-    projector: &ClassifiedAsset,
-) -> Result<(), ModelError> {
-    validate_projector_compatibility(base, projector)
 }
 
 fn validate_implicit_projector(

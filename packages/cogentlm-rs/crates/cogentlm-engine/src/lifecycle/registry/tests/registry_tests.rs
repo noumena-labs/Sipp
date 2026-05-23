@@ -50,8 +50,8 @@ fn registry_persists_assets_and_models() {
     registry.save().expect("save");
 
     let loaded = ModelRegistry::local(root.path.clone()).expect("reload");
-    assert_eq!(loaded.manifest().assets["asset-a"].ref_count, 1);
-    assert_eq!(loaded.manifest().models["model-a"].name, "model-a");
+    assert_eq!(loaded.manifest.assets["asset-a"].ref_count, 1);
+    assert_eq!(loaded.manifest.models["model-a"].name, "model-a");
 }
 
 #[test]
@@ -67,8 +67,8 @@ fn registry_removes_model_and_returns_orphaned_assets() {
 
     assert_eq!(removed.model.id, "model-a");
     assert_eq!(removed.orphaned_assets.len(), 1);
-    assert!(registry.manifest().assets.is_empty());
-    assert!(registry.manifest().models.is_empty());
+    assert!(registry.manifest.assets.is_empty());
+    assert!(registry.manifest.models.is_empty());
 }
 
 #[test]
@@ -87,10 +87,10 @@ fn update_model_rebalances_asset_refcounts_when_assets_change() {
         })
         .expect("update");
 
-    assert_eq!(registry.manifest().assets["asset-a"].ref_count, 0);
-    assert_eq!(registry.manifest().assets["asset-b"].ref_count, 1);
+    assert_eq!(registry.manifest.assets["asset-a"].ref_count, 0);
+    assert_eq!(registry.manifest.assets["asset-b"].ref_count, 1);
     assert_eq!(
-        registry.manifest().models["model-a"].model_asset_ids,
+        registry.manifest.models["model-a"].model_asset_ids,
         vec!["asset-b"]
     );
 }
@@ -110,8 +110,8 @@ fn insert_model_rejects_refcount_overflow() {
     assert!(
         matches!(error, ModelError::StorageCorrupt(message) if message.contains("refcount overflow"))
     );
-    assert!(!registry.manifest().models.contains_key("model-a"));
-    assert_eq!(registry.manifest().assets["asset-a"].ref_count, u32::MAX);
+    assert!(!registry.manifest.models.contains_key("model-a"));
+    assert_eq!(registry.manifest.assets["asset-a"].ref_count, u32::MAX);
 }
 
 #[test]
@@ -128,9 +128,9 @@ fn insert_model_rejects_projector_revision_overflow_without_mutating_manifest() 
     assert!(
         matches!(error, ModelError::StorageCorrupt(message) if message.contains("revision overflow"))
     );
-    assert!(!registry.manifest().models.contains_key("model-a"));
-    assert_eq!(registry.manifest().assets["asset-a"].ref_count, 0);
-    assert_eq!(registry.manifest().projector_index_revision, u64::MAX);
+    assert!(!registry.manifest.models.contains_key("model-a"));
+    assert_eq!(registry.manifest.assets["asset-a"].ref_count, 0);
+    assert_eq!(registry.manifest.projector_index_revision, u64::MAX);
 }
 
 #[test]

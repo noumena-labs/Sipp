@@ -20,3 +20,5 @@ openmp = ["cogentlm-engine/openmp"]
 [dependencies]
 cogentlm-engine = { path = "../cogentlm-engine" }
 pyo3 = { workspace = true, features = ["abi3-py39", "extension-module"] }
+serde.workspace = true
+serde_json.workspace = true

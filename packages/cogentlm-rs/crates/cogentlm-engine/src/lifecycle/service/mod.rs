@@ -11,16 +11,15 @@ use super::backend_policy::BackendPolicy;
 use super::storage::{now_unix_ms, LocalStorageBackend, StorageBackend};
 use super::util::{invalid_pairing, invalid_source, media_marker_for_modality, model_not_found};
 use super::{
-    AssetStore, BackendSelection, ModelAsset, ModelAssets, ModelError, ModelInfo, ModelLoadOptions,
-    ModelRegistry, ModelServiceState, ModelSource, ModelStatus,
+    AssetSource, AssetStore, BackendSelection, ModelAsset, ModelAssets, ModelError, ModelInfo,
+    ModelLoadOptions, ModelRegistry, ModelServiceState, ModelSource, ModelStatus,
 };
 
 mod helpers;
 mod load_assets;
 mod source_resolution;
 
-use helpers::service_state_from_engine_state;
-use helpers::{model_asset_summary, runtime_fingerprint};
+use helpers::runtime_fingerprint;
 
 const NO_MODEL_LOADED: &str = "no model is loaded";
 
@@ -60,14 +59,6 @@ impl<B: StorageBackend> ModelService<B> {
         })
     }
 
-    pub fn registry(&self) -> &ModelRegistry<B> {
-        &self.registry
-    }
-
-    pub fn assets(&self) -> &AssetStore<B> {
-        &self.assets
-    }
-
     pub fn load(
         &mut self,
         source: ModelSource,
@@ -77,18 +68,8 @@ impl<B: StorageBackend> ModelService<B> {
         self.load_entry(&resolved.entry_id, options)
     }
 
-    pub fn load_installed(
-        &mut self,
-        model_id: impl AsRef<str>,
-        options: ModelLoadOptions,
-    ) -> Result<LoadedModelInfo, ModelError> {
-        self.load_entry(model_id.as_ref(), options)
-    }
-
     pub fn unload(&mut self) -> Result<(), ModelError> {
-        if let Some(current) = self.current.take() {
-            current.engine.close().map_err(ModelError::from)?;
-        }
+        self.current.take();
         Ok(())
     }
 
@@ -107,8 +88,9 @@ impl<B: StorageBackend> ModelService<B> {
 
     pub fn list(&self) -> Vec<ModelInfo> {
         self.registry
-            .models()
-            .into_iter()
+            .manifest
+            .models
+            .values()
             .map(|entry| {
                 let loaded = self.is_loaded_model(&entry.id);
                 self.model_info_from_entry(entry, loaded)
@@ -120,11 +102,11 @@ impl<B: StorageBackend> ModelService<B> {
         self.current.as_ref().map(|loaded| loaded.info.clone())
     }
 
-    pub fn query(&self, request: impl Into<QueryRequest>) -> Result<RequestResult, ModelError> {
+    pub fn query(&self, request: QueryRequest) -> Result<RequestResult, ModelError> {
         self.engine()?.query(request).map_err(ModelError::from)
     }
 
-    pub fn chat(&self, request: impl Into<ChatRequest>) -> Result<RequestResult, ModelError> {
+    pub fn chat(&self, request: ChatRequest) -> Result<RequestResult, ModelError> {
         self.engine()?.chat(request).map_err(ModelError::from)
     }
 
@@ -136,18 +118,20 @@ impl<B: StorageBackend> ModelService<B> {
                 ..ModelServiceState::default()
             });
         };
-        Ok(service_state_from_engine_state(
-            current.engine.state().map_err(ModelError::from)?,
-            current.info.clone(),
-        ))
+        let state = current.engine.state().map_err(ModelError::from)?;
+        Ok(ModelServiceState {
+            status: state.status,
+            model: Some(current.info.clone()),
+            backend: state.backend,
+            runtime: state.runtime,
+            requests: state.requests,
+            stats: state.stats,
+            updated_at_unix_ms: state.updated_at_unix_ms,
+        })
     }
 
     pub fn subscribe_events(&self) -> Result<EngineEventReceiver, ModelError> {
         Ok(self.engine()?.subscribe_events())
-    }
-
-    pub fn close(&mut self) -> Result<(), ModelError> {
-        self.unload()
     }
 
     fn engine(&self) -> Result<&CogentEngine, ModelError> {
@@ -164,7 +148,9 @@ impl<B: StorageBackend> ModelService<B> {
     ) -> Result<LoadedModelInfo, ModelError> {
         let entry = self
             .registry
-            .model(model_id)
+            .manifest
+            .models
+            .get(model_id)
             .ok_or_else(|| model_not_found(model_id))?
             .clone();
         if entry.status != ModelStatus::Ready {
@@ -218,8 +204,13 @@ impl<B: StorageBackend> ModelService<B> {
             .model_asset_ids
             .iter()
             .chain(entry.projector_asset_id.iter())
-            .filter_map(|asset_id| self.registry.asset(asset_id));
-        let summary = model_asset_summary(assets);
+            .filter_map(|asset_id| self.registry.manifest.assets.get(asset_id));
+        let summary = super::util::asset_summary(assets.map(|asset| {
+            (
+                asset.bytes,
+                matches!(asset.source, AssetSource::Remote { .. }),
+            )
+        }));
 
         ModelInfo {
             id: entry.id.clone(),

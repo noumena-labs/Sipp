@@ -2,8 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::choice::choice_from_aliases;
-
 const DEFAULT_DECODE_TOKEN_RESERVE: i32 = 1;
 const DEFAULT_ADAPTIVE_PREFILL_CHUNKING: bool = false;
 
@@ -14,19 +12,6 @@ pub enum SchedulerPolicyMode {
     #[default]
     Balanced = 1,
     ThroughputFirst = 2,
-}
-
-impl SchedulerPolicyMode {
-    pub fn from_choice(value: &str) -> Option<Self> {
-        choice_from_aliases(
-            value,
-            &[
-                (&["latency_first", "latency"], Self::LatencyFirst),
-                (&["balanced", "balance"], Self::Balanced),
-                (&["throughput_first", "throughput"], Self::ThroughputFirst),
-            ],
-        )
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,9 +50,4 @@ impl SchedulerTickBudget {
         self.reserved_prefill_tokens
             .clamp(0, self.total_token_budget - self.effective_decode_budget())
     }
-}
-
-#[cfg(test)]
-mod tests {
-    mod scheduler_policy_tests;
 }

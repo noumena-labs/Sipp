@@ -9,13 +9,12 @@ use std::time::Instant;
 
 use cogentlm_sys as ffi;
 
+use crate::runtime::numeric::duration_ms;
 use crate::runtime::request::{GenerateRequestLifecycle, RequestQueue};
 use crate::runtime::scheduler::{SlotPhase, SlotScheduler, SlotState};
 use crate::runtime::REQUEST_CANCELLED_MESSAGE;
 
-use super::numeric::{
-    duration_ms, nonnegative_i32_to_usize, nonnegative_i32_to_usize_opt, usize_to_i32,
-};
+use super::numeric::{nonnegative_i32_to_usize, nonnegative_i32_to_usize_opt, usize_to_i32};
 use super::text::append_token_piece_to_slot;
 use super::LLAMA_SAMPLER_SAMPLE_FAILED;
 
@@ -62,7 +61,7 @@ pub(super) fn run_multimodal_prefill(
         || shared_context.is_null()
         || vocab.is_null()
         || slot.seq_id < 0
-        || slot.sampler().is_none()
+        || slot.sampler.is_none()
         || slot.request().is_none()
     {
         return false;
@@ -206,7 +205,7 @@ pub(super) fn run_multimodal_prefill(
     }
     slot.prefill_cursor = prompt_tokens_len;
 
-    let Some(sampler) = slot.sampler() else {
+    let Some(sampler) = slot.sampler else {
         slot.fail("Sampler was unavailable after multimodal prefill.");
         return false;
     };

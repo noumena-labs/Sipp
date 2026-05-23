@@ -21,11 +21,11 @@ pub(super) fn attach_backend_sampler(
     shared_context: *mut ffi::llama_context,
     slot: &mut SlotState,
 ) -> bool {
-    if shared_context.is_null() || slot.seq_id < 0 || slot.backend_sampler_attached() {
+    if shared_context.is_null() || slot.seq_id < 0 || slot.backend_sampler_attached {
         return false;
     }
 
-    let Some(sampler) = slot.sampler() else {
+    let Some(sampler) = slot.sampler else {
         return false;
     };
     if !unsafe { ffi::cogent_common_sampler_backend_sampling(sampler.as_ptr()) } {
@@ -39,7 +39,7 @@ pub(super) fn attach_backend_sampler(
     let attached =
         unsafe { ffi::cogent_llama_set_sampler(shared_context, slot.seq_id, raw_sampler) };
     if attached {
-        slot.mark_backend_sampler_attached(true);
+        slot.backend_sampler_attached = true;
     }
     attached
 }
@@ -49,7 +49,7 @@ pub(super) fn detach_backend_sampler(
     shared_context: *mut ffi::llama_context,
     slot: &mut SlotState,
 ) {
-    if !slot.backend_sampler_attached() {
+    if !slot.backend_sampler_attached {
         return;
     }
 
@@ -58,7 +58,7 @@ pub(super) fn detach_backend_sampler(
             ffi::cogent_llama_set_sampler(shared_context, slot.seq_id, std::ptr::null_mut());
         }
     }
-    slot.mark_backend_sampler_attached(false);
+    slot.backend_sampler_attached = false;
 }
 
 /// Builds a sampler from the runtime's sampling JSON plus optional grammar /
@@ -104,7 +104,7 @@ pub(super) fn create_sampler(
 
 impl InferenceRuntime {
     pub(super) fn detach_terminal_backend_samplers_locked(&mut self) {
-        for slot in self.slot_scheduler.mutable_slots() {
+        for slot in &mut self.slot_scheduler.slots {
             if matches!(slot.phase, SlotPhase::Completed | SlotPhase::Failed) {
                 detach_backend_sampler(self.shared_context, slot);
             }
@@ -116,7 +116,7 @@ impl InferenceRuntime {
     }
 
     pub(super) fn detach_all_backend_samplers_locked(&mut self) {
-        for slot in self.slot_scheduler.mutable_slots() {
+        for slot in &mut self.slot_scheduler.slots {
             detach_backend_sampler(self.shared_context, slot);
         }
     }
@@ -126,7 +126,7 @@ fn reclaim_terminal_samplers(
     slot_scheduler: &mut crate::runtime::scheduler::SlotScheduler,
     sampler_pool: &mut HashMap<SamplerCacheKey, Vec<NonNull<ffi::cogent_common_sampler>>>,
 ) {
-    for slot in slot_scheduler.mutable_slots() {
+    for slot in &mut slot_scheduler.slots {
         if !matches!(slot.phase, SlotPhase::Completed | SlotPhase::Failed) {
             continue;
         }

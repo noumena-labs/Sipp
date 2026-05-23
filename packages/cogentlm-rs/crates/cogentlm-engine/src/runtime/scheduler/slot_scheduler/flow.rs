@@ -7,11 +7,12 @@ use crate::runtime::request::{
 use crate::runtime::session::SessionStore;
 use crate::runtime::{
     numeric::{duration_ms, saturating_usize_to_i32},
+    scheduler::SlotPhase,
     REQUEST_CANCELLED_MESSAGE,
 };
 
 use super::metrics::metrics_from_request;
-use super::{SlotPhase, SlotScheduler, SlotState};
+use super::{SlotScheduler, SlotState};
 
 const CREATE_OR_FIND_SESSION_FAILED: &str = "Failed to create or find a session.";
 const ACQUIRE_HARDWARE_SEQUENCE_FAILED: &str = "Failed to acquire a hardware sequence ID.";
@@ -37,34 +38,12 @@ impl SlotScheduler {
         }
     }
 
-    pub fn find_first_active_slot(&self) -> Option<usize> {
-        self.slots.iter().position(|slot| {
-            slot.request().is_some()
-                && slot.phase != SlotPhase::Idle
-                && !is_terminal_phase(slot.phase)
-        })
-    }
-
-    pub fn select_decode_ready_slots(&self) -> Vec<usize> {
-        self.select_ready_slots(decode_slot_ready)
-    }
-
     pub fn select_decode_ready_slots_into(&self, out: &mut Vec<usize>) {
         self.select_ready_slots_into(out, decode_slot_ready);
     }
 
-    pub fn select_prefill_ready_slots(&self) -> Vec<usize> {
-        self.select_ready_slots(prefill_slot_ready)
-    }
-
     pub fn select_prefill_ready_slots_into(&self, out: &mut Vec<usize>) {
         self.select_ready_slots_into(out, prefill_slot_ready);
-    }
-
-    fn select_ready_slots(&self, is_ready: impl FnMut(&SlotState) -> bool) -> Vec<usize> {
-        let mut out = Vec::with_capacity(self.slots.len());
-        self.select_ready_slots_into(&mut out, is_ready);
-        out
     }
 
     fn select_ready_slots_into(
@@ -97,7 +76,7 @@ impl SlotScheduler {
             return false;
         };
 
-        let Some(mut request) = request_queue.find(next_request_id).cloned() else {
+        let Some(mut request) = request_queue.requests.get(&next_request_id).cloned() else {
             return false;
         };
 
@@ -150,7 +129,8 @@ impl SlotScheduler {
             let debug_metrics_finalize_start = Instant::now();
             let request = slot.request.take();
             let queue_cancel_requested = request_queue
-                .find(slot.request_id)
+                .requests
+                .get(&slot.request_id)
                 .is_some_and(|request| request.cancel_requested);
             let request_cancel_requested = request
                 .as_ref()
@@ -284,17 +264,13 @@ fn completed_slot_error_message(
     if response_status == GenerateResponseStatus::Cancelled {
         REQUEST_CANCELLED_MESSAGE.to_string()
     } else if slot_phase == SlotPhase::Failed {
-        terminal_error_message_or_default(terminal_error_message).to_string()
+        if terminal_error_message.is_empty() {
+            REQUEST_FAILED.to_string()
+        } else {
+            terminal_error_message.to_string()
+        }
     } else {
         String::new()
-    }
-}
-
-fn terminal_error_message_or_default(terminal_error_message: &str) -> &str {
-    if terminal_error_message.is_empty() {
-        REQUEST_FAILED
-    } else {
-        terminal_error_message
     }
 }
 

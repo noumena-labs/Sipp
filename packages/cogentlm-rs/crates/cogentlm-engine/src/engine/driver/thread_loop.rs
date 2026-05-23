@@ -4,12 +4,13 @@ use std::time::Duration;
 
 use crate::engine::protocol::{EngineEvent, EngineState, EngineStatus, ModelState};
 use crate::error::Result;
+use crate::runtime::request::GenerateResponse;
 use crate::runtime::{InferenceRuntime, RequestStepResult};
 
 use super::events::{build_engine_state_with_status, emit_event, emit_state_event};
 use super::request::{start_chat, start_query, ChatRequest, QueryRequest};
 use super::token_sink::AsyncTokenSink;
-use super::{runtime_command, EngineEventSubscribers, QueryResponse};
+use super::{runtime_command, EngineEventSubscribers};
 
 mod completion;
 
@@ -18,8 +19,8 @@ const ENGINE_INVALID_DURING_EXECUTION: &str = "Engine became invalid during exec
 const ENGINE_NO_PROGRESS: &str = "Engine execution failed with no progress.";
 
 pub(super) enum EngineThreadCommand {
-    Generate(QueryRequest, mpsc::Sender<Result<QueryResponse>>),
-    GenerateChat(ChatRequest, mpsc::Sender<Result<QueryResponse>>),
+    Generate(QueryRequest, mpsc::Sender<Result<GenerateResponse>>),
+    GenerateChat(ChatRequest, mpsc::Sender<Result<GenerateResponse>>),
     GetState(mpsc::Sender<Result<EngineState>>),
     Close(mpsc::Sender<()>),
 }
@@ -65,7 +66,7 @@ pub(super) fn run_engine_thread(
 
 pub(super) struct EngineThreadState {
     runtime: Option<InferenceRuntime>,
-    active_requests: HashMap<u32, mpsc::Sender<Result<QueryResponse>>>,
+    active_requests: HashMap<u32, mpsc::Sender<Result<GenerateResponse>>>,
     token_sinks: HashMap<u32, AsyncTokenSink>,
     model_state: ModelState,
     event_subscribers: EngineEventSubscribers,
@@ -100,7 +101,7 @@ impl EngineThreadState {
 
     fn start_request(
         &mut self,
-        response_tx: mpsc::Sender<Result<QueryResponse>>,
+        response_tx: mpsc::Sender<Result<GenerateResponse>>,
         start: impl FnOnce(
             &mut InferenceRuntime,
             &EngineEventSubscribers,

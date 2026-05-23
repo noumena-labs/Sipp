@@ -382,7 +382,10 @@ impl BrowserEngine {
         .unwrap_or_default();
         if request_id != 0 {
             if let Some(producer) = self.inner.token_producer.as_ref() {
-                runtime.add_token_ring_producer(request_id, producer.clone());
+                runtime
+                    .request_queue
+                    .token_ring_producers
+                    .insert(request_id, producer.clone());
             }
         }
         request_id
@@ -606,7 +609,7 @@ impl BrowserEngine {
         let Some(runtime) = self.inner.runtime.as_ref() else {
             return COMPLETED_REQUEST_STATUS_UNKNOWN;
         };
-        if let Some(response) = runtime.try_peek_completed_response(request_id) {
+        if let Some(response) = runtime.request_queue.completed_responses.get(&request_id) {
             return match response.status {
                 GenerateResponseStatus::Pending => COMPLETED_REQUEST_STATUS_PENDING,
                 GenerateResponseStatus::Completed => COMPLETED_REQUEST_STATUS_COMPLETED,
@@ -614,7 +617,7 @@ impl BrowserEngine {
                 GenerateResponseStatus::Failed => COMPLETED_REQUEST_STATUS_FAILED,
             };
         }
-        if runtime.has_request(request_id) {
+        if runtime.request_queue.requests.contains_key(&request_id) {
             COMPLETED_REQUEST_STATUS_PENDING
         } else {
             COMPLETED_REQUEST_STATUS_UNKNOWN
@@ -631,21 +634,8 @@ impl BrowserEngine {
         self.inner
             .runtime
             .as_ref()
-            .and_then(|runtime| runtime.try_peek_completed_response(request_id))
-    }
-
-    #[cfg(target_family = "wasm")]
-    fn consume_completed_response(&mut self, request_id: u32) -> i32 {
-        let Some(runtime) = self.inner.runtime.as_mut() else {
-            return 0;
-        };
-        runtime.remove_token_ring_producer(request_id);
-        i32::from(runtime.consume_completed_response(request_id))
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    fn consume_completed_response(&mut self, _request_id: u32) -> i32 {
-        0
+            .and_then(|runtime| runtime.request_queue.completed_responses.get(&request_id))
+            .cloned()
     }
 
     #[cfg(target_family = "wasm")]
@@ -1021,7 +1011,23 @@ pub extern "C" fn cogentlm_browser_engine_consume_completed_request(
     request_id: u32,
 ) -> i32 {
     with_engine_mut(engine, |engine| {
-        engine.consume_completed_response(request_id)
+        #[cfg(target_family = "wasm")]
+        {
+            let Some(runtime) = engine.inner.runtime.as_mut() else {
+                return 0;
+            };
+            runtime
+                .request_queue
+                .token_ring_producers
+                .remove(&request_id);
+            i32::from(runtime.take_completed_response(request_id).is_some())
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let _ = engine;
+            let _ = request_id;
+            STATUS_UNAVAILABLE
+        }
     })
 }
 

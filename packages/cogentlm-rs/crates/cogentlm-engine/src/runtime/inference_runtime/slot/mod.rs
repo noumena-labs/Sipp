@@ -22,9 +22,9 @@ use sampler_attach::ensure_slot_sampler;
 
 impl InferenceRuntime {
     pub(super) fn normalize_slots_for_tick(&mut self, vocab: *const ffi::llama_vocab) {
-        let slot_count = self.slot_scheduler.slots().len();
+        let slot_count = self.slot_scheduler.slots.len();
         for slot_index in 0..slot_count {
-            let slot = &mut self.slot_scheduler.mutable_slots()[slot_index];
+            let slot = &mut self.slot_scheduler.slots[slot_index];
             if slot.request().is_none() || slot.session.is_none() || slot.seq_id < 0 {
                 continue;
             }
@@ -42,7 +42,7 @@ impl InferenceRuntime {
                 live_retained_prefix_tokens(&self.config),
             );
 
-            if slot.sampler().is_none()
+            if slot.sampler.is_none()
                 && !ensure_slot_sampler(
                     slot,
                     self.common_init,

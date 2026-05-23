@@ -2,15 +2,14 @@ use std::fs;
 use std::path::Path;
 
 use crate::lifecycle::registry::model_entry_from_assets;
-use crate::lifecycle::storage::{hash_file, modified_unix_ms, StorageBackend};
+use crate::lifecycle::storage::{hash_file, modified_unix_ms, now_unix_ms, StorageBackend};
+use crate::lifecycle::util::classified_asset;
 use crate::lifecycle::{
-    AssetRecord, AssetSource, ModelAsset, ModelAssetKind, ModelAssets, ModelError, ModelSource,
-    PairingResolver,
+    AssetRecord, AssetSource, ModelAsset, ModelAssetKind, ModelAssets, ModelError, ModelPairing,
+    ModelPairingReason, ModelPairingState, ModelSource, ModelStatus, PairingResolver,
 };
 
-use super::helpers::{
-    classified_asset_from_record, model_id_from_plan, pairing_state_from_plan, same_path,
-};
+use super::helpers::{model_id_from_plan, same_path};
 use super::{invalid_source, model_not_found, ModelService, ResolvedSource};
 
 const MODEL_PATHS_REQUIRED: &str = "model paths must not be empty";
@@ -22,7 +21,7 @@ impl<B: StorageBackend> ModelService<B> {
     ) -> Result<ResolvedSource, ModelError> {
         match source {
             ModelSource::Installed { id } => {
-                if self.registry.model(&id).is_none() {
+                if !self.registry.manifest.models.contains_key(&id) {
                     return Err(model_not_found(&id));
                 }
                 Ok(ResolvedSource { entry_id: id })
@@ -61,8 +60,8 @@ impl<B: StorageBackend> ModelService<B> {
                     .map(|path| self.install_local_asset(path, None))
                     .collect()
             }
-            ModelAssets::Url { url } => Err(remote_unavailable(url)),
-            ModelAssets::Urls { urls } => Err(remote_unavailable_urls(urls)),
+            ModelAssets::Url { url } => Err(ModelError::RemoteUnavailable(url)),
+            ModelAssets::Urls { urls } => Err(ModelError::RemoteUnavailable(urls.join(", "))),
         }
     }
 
@@ -71,7 +70,7 @@ impl<B: StorageBackend> ModelService<B> {
             ModelAsset::Path { path } => {
                 self.install_local_asset(path, Some(ModelAssetKind::Projector))
             }
-            ModelAsset::Url { url } => Err(remote_unavailable(url)),
+            ModelAsset::Url { url } => Err(ModelError::RemoteUnavailable(url)),
         }
     }
 
@@ -103,14 +102,15 @@ impl<B: StorageBackend> ModelService<B> {
         let source_path = fs::canonicalize(path)?;
         let source_modified_unix_ms = modified_unix_ms(&metadata);
 
-        for record in self.registry.manifest().assets.values() {
+        for record in self.registry.manifest.assets.values() {
             if cached_local_record_matches(
                 record,
                 kind,
                 metadata.len(),
                 &source_path,
                 source_modified_unix_ms,
-            ) && self.cached_record_content_matches(record, path)
+            ) && self.assets.resolve_asset_path(record).is_ok()
+                && hash_file(path).is_ok_and(|hash| hash == record.hash)
             {
                 return Ok(Some(record.clone()));
             }
@@ -124,7 +124,16 @@ impl<B: StorageBackend> ModelService<B> {
         installed: &[AssetRecord],
         explicit_projector_id: Option<&str>,
     ) -> Result<ResolvedSource, ModelError> {
-        let classified: Vec<_> = installed.iter().map(classified_asset_from_record).collect();
+        let classified: Vec<_> = installed
+            .iter()
+            .map(|record| {
+                classified_asset(
+                    record.id.clone(),
+                    record.name.clone(),
+                    record.inspection.clone(),
+                )
+            })
+            .collect();
         let plan = if let Some(projector_id) = explicit_projector_id {
             PairingResolver::resolve_explicit(&classified, projector_id)?
         } else {
@@ -132,15 +141,24 @@ impl<B: StorageBackend> ModelService<B> {
         };
         let entry_id = model_id_from_plan(&plan);
         let mut entry = model_entry_from_assets(&entry_id, &plan.name, &plan);
-        entry.pairing = Some(pairing_state_from_plan(&plan));
+        entry.pairing = Some(ModelPairing {
+            state: if plan.status == ModelStatus::Ready {
+                ModelPairingState::Resolved
+            } else {
+                ModelPairingState::Unresolved
+            },
+            checked_projector_index_revision: 0,
+            compatible_vision_projector_types: plan.compatible_vision_projector_types.clone(),
+            reason: match plan.status {
+                ModelStatus::Ready => None,
+                ModelStatus::NeedsProjector => Some(ModelPairingReason::NoMatch),
+                ModelStatus::Broken => Some(ModelPairingReason::MissingMetadata),
+            },
+            updated_at_unix_ms: now_unix_ms(),
+        });
         self.registry.insert_model(entry)?;
         self.registry.save()?;
         Ok(ResolvedSource { entry_id })
-    }
-
-    fn cached_record_content_matches(&self, record: &AssetRecord, path: &Path) -> bool {
-        self.assets.resolve_asset_path(record).is_ok()
-            && hash_file(path).is_ok_and(|hash| hash == record.hash)
     }
 }
 
@@ -164,23 +182,8 @@ fn cached_local_record_matches(
     };
 
     same_path(record_source_path, source_path)
-        && matching_modified_time(*record_modified_unix_ms, source_modified_unix_ms)
-}
-
-fn matching_modified_time(
-    record_modified_unix_ms: Option<u64>,
-    source_modified_unix_ms: Option<u64>,
-) -> bool {
-    match (record_modified_unix_ms, source_modified_unix_ms) {
-        (Some(record), Some(source)) => record == source,
-        _ => true,
-    }
-}
-
-fn remote_unavailable(source: impl Into<String>) -> ModelError {
-    ModelError::RemoteUnavailable(source.into())
-}
-
-fn remote_unavailable_urls(urls: Vec<String>) -> ModelError {
-    remote_unavailable(urls.join(", "))
+        && match (*record_modified_unix_ms, source_modified_unix_ms) {
+            (Some(record), Some(source)) => record == source,
+            _ => true,
+        }
 }

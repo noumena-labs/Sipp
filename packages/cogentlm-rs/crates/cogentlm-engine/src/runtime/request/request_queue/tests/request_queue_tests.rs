@@ -24,10 +24,10 @@ fn pops_first_admissible_request_and_marks_admitted() {
     let popped = queue.try_pop_next_admissible(|request| request.id == 2);
     assert_eq!(popped, Some(2));
     assert_eq!(
-        queue.find(2).map(|request| request.lifecycle),
+        queue.requests.get(&2).map(|request| request.lifecycle),
         Some(GenerateRequestLifecycle::Admitted)
     );
-    assert_eq!(queue.try_pop_next(), Some(1));
+    assert_eq!(queue.try_pop_next_admissible(|_| true), Some(1));
 }
 
 #[test]
@@ -35,9 +35,9 @@ fn cancelling_pending_request_creates_completed_response() {
     let mut queue = RequestQueue::new();
     assert!(queue.push(request(7)));
     assert!(queue.cancel(7, "cancelled".to_string()));
-    assert_eq!(queue.try_pop_next(), None);
+    assert_eq!(queue.try_pop_next_admissible(|_| true), None);
 
-    let response = queue.peek_completed_response(7).expect("response");
+    let response = queue.completed_responses.get(&7).expect("response");
     assert_eq!(response.status, GenerateResponseStatus::Cancelled);
     assert_eq!(response.error_message, "cancelled");
 }
@@ -46,24 +46,14 @@ fn cancelling_pending_request_creates_completed_response() {
 fn cancelling_admitted_request_marks_it_for_runtime_cancellation() {
     let mut queue = RequestQueue::new();
     assert!(queue.push(request(8)));
-    assert_eq!(queue.try_pop_next(), Some(8));
+    assert_eq!(queue.try_pop_next_admissible(|_| true), Some(8));
 
     assert!(queue.cancel(8, "cancelled".to_string()));
 
-    let request = queue.find(8).expect("admitted request");
+    let request = queue.requests.get(&8).expect("admitted request");
     assert!(request.cancel_requested);
     assert_eq!(request.lifecycle, GenerateRequestLifecycle::Admitted);
-    assert!(queue.peek_completed_response(8).is_none());
-}
-
-#[test]
-fn completed_response_ids_are_sorted_for_deterministic_polling() {
-    let mut queue = RequestQueue::new();
-    for id in [3, 1, 2] {
-        queue.mark_completed(GenerateResponse::completed(id, ""));
-    }
-
-    assert_eq!(queue.completed_response_ids(), vec![1, 2, 3]);
+    assert!(!queue.completed_responses.contains_key(&8));
 }
 
 #[test]
@@ -71,14 +61,14 @@ fn append_streaming_token_without_ring_is_a_noop() {
     let mut queue = RequestQueue::new();
     queue.append_streaming_token(1, "a");
 
-    assert_eq!(queue.total_emitted_token_count(), 0);
+    assert_eq!(queue.total_emitted_token_count, 0);
 }
 
 #[test]
 fn append_streaming_token_writes_to_token_ring() {
     let mut queue = RequestQueue::new();
     let (producer, consumer) = token_byte_ring(1024);
-    queue.add_token_ring_producer(9, producer);
+    queue.token_ring_producers.insert(9, producer);
 
     queue.append_streaming_token(9, "tok");
 
@@ -86,18 +76,18 @@ fn append_streaming_token_writes_to_token_ring() {
     assert_eq!(drain.frames.len(), 1);
     assert_eq!(drain.frames[0].stream_id, 9);
     assert_eq!(drain.frames[0].bytes, b"tok");
-    assert_eq!(queue.total_emitted_token_count(), 1);
+    assert_eq!(queue.total_emitted_token_count, 1);
 }
 
 #[test]
 fn emitted_token_count_saturates_at_i32_max() {
     let mut queue = RequestQueue::new();
     let (producer, consumer) = token_byte_ring(1024);
-    queue.add_token_ring_producer(9, producer);
+    queue.token_ring_producers.insert(9, producer);
     queue.total_emitted_token_count = i32::MAX;
 
     queue.append_streaming_token(9, "tok");
 
-    assert_eq!(queue.total_emitted_token_count(), i32::MAX);
+    assert_eq!(queue.total_emitted_token_count, i32::MAX);
     assert_eq!(consumer.drain_available(16, 1024).frames.len(), 1);
 }

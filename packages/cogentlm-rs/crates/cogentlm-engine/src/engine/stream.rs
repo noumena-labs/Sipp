@@ -36,13 +36,3 @@ pub struct TokenBatch {
     pub byte_count: u32,
     pub stats: StreamStats,
 }
-
-impl TokenBatch {
-    pub fn text(&self) -> &str {
-        &self.text
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.frame_count == 0 || self.text.is_empty()
-    }
-}

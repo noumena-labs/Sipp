@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-use crate::choice::choice_from_aliases;
 use crate::engine::protocol::{BackendInfo, EngineStatus, RequestState};
 use crate::engine::{EngineStats, NativeRuntimeConfig, ResolvedRuntimeLimits};
 
@@ -22,17 +21,6 @@ impl StatsMode {
             Self::Basic => "basic",
             Self::Profile => "profile",
         }
-    }
-
-    pub fn from_choice(value: &str) -> Option<Self> {
-        choice_from_aliases(
-            value,
-            &[
-                (&["off"], Self::Off),
-                (&["basic"], Self::Basic),
-                (&["profile"], Self::Profile),
-            ],
-        )
     }
 }
 
@@ -58,20 +46,6 @@ impl BackendPreference {
             Self::Vulkan => "vulkan",
             Self::WebGpu => "webgpu",
         }
-    }
-
-    pub fn from_choice(value: &str) -> Option<Self> {
-        choice_from_aliases(
-            value,
-            &[
-                (&["auto"], Self::Auto),
-                (&["cpu"], Self::Cpu),
-                (&["cuda"], Self::Cuda),
-                (&["metal"], Self::Metal),
-                (&["vulkan"], Self::Vulkan),
-                (&["webgpu", "web_gpu"], Self::WebGpu),
-            ],
-        )
     }
 }
 

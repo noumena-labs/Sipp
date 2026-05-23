@@ -2,12 +2,9 @@ use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
 
-use crate::choice::choice_from_aliases;
 use crate::defaults::BYTES_PER_MIB_U64;
 
-use super::{
-    args_len, bool_arg, positive_or_none, push_arg, push_csv_arg, push_flag, push_optional_arg,
-};
+use super::{args_len, positive_or_none, push_arg, push_csv_arg, push_flag, push_optional_arg};
 
 const ALWAYS_EMITTED_KEY_VALUE_ARGS: usize = 3;
 const BASE_ARG_LEN: usize = ALWAYS_EMITTED_KEY_VALUE_ARGS * super::KEY_VALUE_ARG_LEN;
@@ -89,7 +86,7 @@ impl ModelPlacementConfig {
         if !self.tensor_split.is_empty() {
             push_csv_arg(args, "--tensor-split", self.tensor_split.iter());
         }
-        push_arg(args, "--fit", bool_arg(self.fit_params));
+        push_arg(args, "--fit", if self.fit_params { "on" } else { "off" });
         push_optional_arg(args, "--fit-ctx", self.fit_params_min_ctx);
         if !self.fit_params_target_bytes.is_empty() {
             push_csv_arg(
@@ -117,20 +114,12 @@ pub enum GpuLayerConfig {
 }
 
 impl GpuLayerConfig {
-    pub fn from_choice(value: &str) -> Option<Self> {
-        choice_from_aliases(value, &[(&["auto"], Self::Auto), (&["all"], Self::All)])
-    }
-
     pub fn from_layer_count(count: i32) -> Self {
         if count < 0 {
             Self::All
         } else {
             Self::Count(count)
         }
-    }
-
-    pub fn from_optional_layer_count(value: Option<i32>) -> Self {
-        value.map_or(Self::Auto, Self::from_layer_count)
     }
 
     fn to_llama_arg(self) -> Cow<'static, str> {
@@ -152,18 +141,6 @@ pub enum SplitMode {
 }
 
 impl SplitMode {
-    pub fn from_choice(value: &str) -> Option<Self> {
-        choice_from_aliases(
-            value,
-            &[
-                (&["none"], Self::None),
-                (&["layer"], Self::Layer),
-                (&["row"], Self::Row),
-                (&["tensor"], Self::Tensor),
-            ],
-        )
-    }
-
     fn as_llama_arg(self) -> &'static str {
         match self {
             Self::None => "none",
@@ -176,49 +153,5 @@ impl SplitMode {
 
 #[cfg(test)]
 mod tests {
-    use super::super::arg_value;
-    use super::{GpuLayerConfig, ModelPlacementConfig, SplitMode};
-    use crate::defaults::BYTES_PER_MIB_U64;
-
-    #[test]
-    fn gpu_layer_count_matches_llama_negative_all_convention() {
-        assert_eq!(GpuLayerConfig::from_layer_count(-1), GpuLayerConfig::All);
-        assert_eq!(
-            GpuLayerConfig::from_layer_count(0),
-            GpuLayerConfig::Count(0)
-        );
-        assert_eq!(
-            GpuLayerConfig::from_layer_count(1),
-            GpuLayerConfig::Count(1)
-        );
-    }
-
-    #[test]
-    fn placement_arg_len_matches_emitted_args() {
-        let placement = ModelPlacementConfig {
-            devices: vec!["gpu0".to_string(), "gpu1".to_string()],
-            gpu_layers: GpuLayerConfig::Count(99),
-            split_mode: SplitMode::Tensor,
-            main_gpu: Some(1),
-            tensor_split: vec![0.5, 0.5],
-            use_mlock: true,
-            use_mmap: false,
-            fit_params: true,
-            fit_params_min_ctx: Some(2048),
-            fit_params_target_bytes: vec![BYTES_PER_MIB_U64],
-            check_tensors: true,
-            no_extra_bufts: true,
-            no_host: true,
-        };
-        let mut args = Vec::with_capacity(placement.arg_len());
-
-        placement.push_args(&mut args);
-
-        assert_eq!(args.capacity(), args.len());
-        assert_eq!(arg_value(&args, "--device"), Some("gpu0,gpu1"));
-        assert_eq!(arg_value(&args, "--gpu-layers"), Some("99"));
-        assert_eq!(arg_value(&args, "--split-mode"), Some("tensor"));
-        assert!(args.iter().any(|arg| arg == "--no-mmap"));
-        assert!(args.iter().any(|arg| arg == "--no-host"));
-    }
+    mod placement_tests;
 }

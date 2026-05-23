@@ -11,8 +11,6 @@ use super::{
     DEFAULT_MEDIA_MARKER, REGISTRY_MANIFEST_VERSION,
 };
 
-const MODEL_ID_PREFIX: &str = "model-";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct AssetSummary {
     pub(super) source: ModelSourceKind,
@@ -57,14 +55,6 @@ pub(super) fn sorted_model_asset_ids(
     projector_asset_id: Option<&String>,
 ) -> Vec<String> {
     sorted_unique_strings_with_optional(model_asset_ids.to_vec(), projector_asset_id)
-}
-
-pub(super) fn model_id_from_fingerprint(fingerprint: &str) -> String {
-    format!("{MODEL_ID_PREFIX}{fingerprint}")
-}
-
-pub(super) fn model_id_from_fingerprint_prefix(fingerprint: &str, prefix_chars: usize) -> String {
-    format!("{MODEL_ID_PREFIX}{}", &fingerprint[..prefix_chars])
 }
 
 pub(super) fn storage_corrupt(message: impl Into<String>) -> ModelError {

@@ -42,14 +42,18 @@ pub extern "C" fn cogentlm_inspect_gguf_metadata_json(
 ) -> *mut c_char {
     catch_unwind(AssertUnwindSafe(|| {
         let response = with_bytes(bytes_ptr, bytes_len, inspect_gguf_metadata);
-        into_c_string(response_json(response))
+        into_c_string(serialize_json_response(
+            &response,
+            GGUF_SERIALIZATION_FALLBACK,
+        ))
     }))
     .unwrap_or_else(|_| {
-        into_c_string(response_json::<Option<GgufMetadataInspection>>(
-            error_response(
+        into_c_string(serialize_json_response(
+            &error_response::<Option<GgufMetadataInspection>>(
                 CODE_INVALID_GGUF,
                 "GGUF metadata inspection panicked".to_string(),
             ),
+            GGUF_SERIALIZATION_FALLBACK,
         ))
     })
 }
@@ -62,21 +66,30 @@ pub extern "C" fn cogentlm_detect_model_from_gguf_bytes_json(
 ) -> *mut c_char {
     catch_unwind(AssertUnwindSafe(|| {
         let Some(name) = read_optional_c_string(name) else {
-            return into_c_string(response_json::<ModelDetection>(error_response(
-                CODE_INVALID_GGUF,
-                "model file name is not valid UTF-8".to_string(),
-            )));
+            return into_c_string(serialize_json_response(
+                &error_response::<ModelDetection>(
+                    CODE_INVALID_GGUF,
+                    "model file name is not valid UTF-8".to_string(),
+                ),
+                GGUF_SERIALIZATION_FALLBACK,
+            ));
         };
         let response = with_bytes(bytes_ptr, bytes_len, |bytes| {
             detect_model_from_gguf_bytes(name, bytes)
         });
-        into_c_string(response_json(response))
+        into_c_string(serialize_json_response(
+            &response,
+            GGUF_SERIALIZATION_FALLBACK,
+        ))
     }))
     .unwrap_or_else(|_| {
-        into_c_string(response_json::<ModelDetection>(error_response(
-            CODE_INVALID_GGUF,
-            "GGUF model detection panicked".to_string(),
-        )))
+        into_c_string(serialize_json_response(
+            &error_response::<ModelDetection>(
+                CODE_INVALID_GGUF,
+                "GGUF model detection panicked".to_string(),
+            ),
+            GGUF_SERIALIZATION_FALLBACK,
+        ))
     })
 }
 
@@ -128,13 +141,6 @@ where
         value: None,
         error: Some(GgufJsonError { code, message }),
     }
-}
-
-fn response_json<T>(response: GgufJsonResponse<T>) -> String
-where
-    T: Serialize,
-{
-    serialize_json_response(&response, GGUF_SERIALIZATION_FALLBACK)
 }
 
 #[cfg(test)]

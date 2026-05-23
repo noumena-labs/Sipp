@@ -224,6 +224,8 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -232,6 +234,8 @@ version = "0.1.0"
 dependencies = [
  "cogentlm-engine",
  "pyo3",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

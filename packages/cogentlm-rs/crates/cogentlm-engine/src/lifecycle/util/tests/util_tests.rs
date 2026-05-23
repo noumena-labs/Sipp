@@ -49,18 +49,6 @@ fn sorted_model_asset_ids_includes_projector_and_deduplicates() {
 }
 
 #[test]
-fn model_id_helpers_apply_shared_prefix() {
-    assert_eq!(
-        model_id_from_fingerprint("abcdef"),
-        "model-abcdef".to_string()
-    );
-    assert_eq!(
-        model_id_from_fingerprint_prefix("abcdef", 3),
-        "model-abc".to_string()
-    );
-}
-
-#[test]
 fn missing_model_asset_errors_use_shared_messages() {
     let error = missing_model_asset("asset-a");
     assert!(

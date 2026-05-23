@@ -52,7 +52,7 @@ fn stats_counters_saturate_at_u64_max() {
     policy.record_store(10);
 
     assert_eq!(
-        policy.stats(),
+        policy.stats,
         PrefixCachePolicyStats {
             lookup_count: u64::MAX,
             hit_count: u64::MAX,

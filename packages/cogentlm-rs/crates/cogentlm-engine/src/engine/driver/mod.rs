@@ -25,7 +25,6 @@ pub use request::{ChatMessage, ChatRequest, ChatRole, QueryOptions, QueryRequest
 use stats::request_result_from_response;
 use thread_loop::{run_engine_thread, EngineThreadCommand};
 
-pub type QueryResponse = GenerateResponse;
 pub type EngineEventReceiver = mpsc::Receiver<EngineEvent>;
 type EngineEventSubscribers = Arc<Mutex<Vec<mpsc::Sender<EngineEvent>>>>;
 pub(crate) type OnTokensCallback = Box<dyn FnMut(&TokenBatch) -> Result<()> + Send + 'static>;
@@ -103,23 +102,13 @@ impl CogentEngine {
         }
     }
 
-    pub fn query(&self, request: impl Into<QueryRequest>) -> Result<RequestResult> {
-        self.query_response(request)
-            .map(|response| request_result_from_response(&response))
+    pub fn query(&self, request: QueryRequest) -> Result<RequestResult> {
+        self.send_command(|response_tx| EngineThreadCommand::Generate(request, response_tx))
+            .map(|response: GenerateResponse| request_result_from_response(&response))
     }
 
-    pub fn query_response(&self, request: impl Into<QueryRequest>) -> Result<QueryResponse> {
-        self.send_command(|response_tx| EngineThreadCommand::Generate(request.into(), response_tx))
-    }
-
-    pub fn chat_response(&self, request: impl Into<ChatRequest>) -> Result<QueryResponse> {
-        self.send_command(|response_tx| {
-            EngineThreadCommand::GenerateChat(request.into(), response_tx)
-        })
-    }
-
-    pub fn chat(&self, request: impl Into<ChatRequest>) -> Result<RequestResult> {
-        self.chat_response(request)
+    pub fn chat(&self, request: ChatRequest) -> Result<RequestResult> {
+        self.send_command(|response_tx| EngineThreadCommand::GenerateChat(request, response_tx))
             .map(|response| request_result_from_response(&response))
     }
 
@@ -133,10 +122,6 @@ impl CogentEngine {
             subscribers.push(event_tx);
         }
         event_rx
-    }
-
-    pub fn close(mut self) -> Result<()> {
-        self.close_inner()
     }
 
     fn close_inner(&mut self) -> Result<()> {

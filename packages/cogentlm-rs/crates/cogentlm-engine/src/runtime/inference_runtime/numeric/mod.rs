@@ -2,14 +2,10 @@
 //!
 //! Kept private to the runtime: callers outside should not need these.
 
-use std::time::Instant;
-
 use cogentlm_sys as ffi;
 
 use crate::error::{Error, Result};
-use crate::runtime::numeric::{
-    duration_ms as runtime_duration_ms, saturating_usize_to_i32, saturating_usize_to_u64,
-};
+use crate::runtime::numeric::saturating_usize_to_i32;
 
 /// Tracks "first occurrence of this slot index in this tick" with a u64 bitmap.
 /// `n_parallel` in practice sits in 1..=8 (max 32), so a u64 covers it; for
@@ -29,11 +25,6 @@ pub(super) fn unique_slot_first_use(seen: &mut u64, slot_index: usize) -> bool {
 #[inline]
 pub(super) fn clamp_usize_to_i32(value: usize) -> i32 {
     saturating_usize_to_i32(value)
-}
-
-#[inline]
-pub(super) fn clamp_usize_to_u64(value: usize) -> u64 {
-    saturating_usize_to_u64(value)
 }
 
 #[inline]
@@ -81,11 +72,6 @@ pub(super) fn saturating_i32_delta(after: i32, before: i32) -> i32 {
 #[inline]
 pub(super) fn saturating_usize_delta_to_i32(after: usize, before: usize) -> i32 {
     clamp_usize_to_i32(after.saturating_sub(before))
-}
-
-#[inline]
-pub(super) fn duration_ms(start: Instant, end: Instant) -> f64 {
-    runtime_duration_ms(start, end)
 }
 
 /// Stable fingerprint of a path. Used as a sticky id for residency / engine identity.

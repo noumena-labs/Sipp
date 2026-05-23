@@ -32,8 +32,8 @@ fn finds_longest_matching_prefix_and_records_hit() {
         .expect("prefix");
 
     assert_eq!(found.token_count, 4);
-    assert_eq!(policy.stats().hit_count, 1);
-    assert_eq!(policy.stats().restored_token_count, 4);
+    assert_eq!(policy.stats.hit_count, 1);
+    assert_eq!(policy.stats.restored_token_count, 4);
 }
 
 #[test]

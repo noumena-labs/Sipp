@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-use crate::choice::choice_from_aliases;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum FlashAttentionMode {
@@ -12,17 +10,6 @@ pub enum FlashAttentionMode {
 }
 
 impl FlashAttentionMode {
-    pub fn from_choice(value: &str) -> Option<Self> {
-        choice_from_aliases(
-            value,
-            &[
-                (&["auto"], Self::Auto),
-                (&["enabled", "enable", "on", "true"], Self::Enabled),
-                (&["disabled", "disable", "off", "false"], Self::Disabled),
-            ],
-        )
-    }
-
     pub(super) fn as_llama_arg(self) -> &'static str {
         match self {
             Self::Auto => "auto",
@@ -47,22 +34,6 @@ pub enum KvCacheType {
 }
 
 impl KvCacheType {
-    pub fn from_choice(value: &str) -> Option<Self> {
-        choice_from_aliases(
-            value,
-            &[
-                (&["f16"], Self::F16),
-                (&["f32"], Self::F32),
-                (&["q8_0"], Self::Q8_0),
-                (&["q4_0"], Self::Q4_0),
-                (&["q4_1"], Self::Q4_1),
-                (&["iq4_nl"], Self::Iq4Nl),
-                (&["q5_0"], Self::Q5_0),
-                (&["q5_1"], Self::Q5_1),
-            ],
-        )
-    }
-
     pub(super) fn as_llama_arg(self) -> &'static str {
         match self {
             Self::F16 => "f16",
@@ -86,17 +57,6 @@ pub enum RopeScaling {
 }
 
 impl RopeScaling {
-    pub fn from_choice(value: &str) -> Option<Self> {
-        choice_from_aliases(
-            value,
-            &[
-                (&["none"], Self::None),
-                (&["linear"], Self::Linear),
-                (&["yarn"], Self::Yarn),
-            ],
-        )
-    }
-
     pub(super) fn as_llama_arg(self) -> &'static str {
         match self {
             Self::None => "none",

@@ -27,7 +27,7 @@ pub struct RemovedModel {
 #[derive(Debug, Clone)]
 pub struct ModelRegistry<B = LocalStorageBackend> {
     backend: B,
-    manifest: RegistryManifest,
+    pub manifest: RegistryManifest,
 }
 
 impl ModelRegistry<LocalStorageBackend> {
@@ -55,14 +55,6 @@ impl<B: StorageBackend> ModelRegistry<B> {
             registry.save()?;
         }
         Ok(registry)
-    }
-
-    pub fn backend(&self) -> &B {
-        &self.backend
-    }
-
-    pub fn manifest(&self) -> &RegistryManifest {
-        &self.manifest
     }
 
     pub fn save(&self) -> Result<(), ModelError> {
@@ -140,18 +132,6 @@ impl<B: StorageBackend> ModelRegistry<B> {
             model,
             orphaned_assets,
         })
-    }
-
-    pub fn model(&self, model_id: &str) -> Option<&ModelEntry> {
-        self.manifest.models.get(model_id)
-    }
-
-    pub fn asset(&self, asset_id: &str) -> Option<&AssetRecord> {
-        self.manifest.assets.get(asset_id)
-    }
-
-    pub fn models(&self) -> Vec<&ModelEntry> {
-        self.manifest.models.values().collect()
     }
 }
 

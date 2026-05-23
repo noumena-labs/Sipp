@@ -32,10 +32,6 @@ fn asset_missing(asset_id: &str) -> ModelError {
     ModelError::AssetMissing(asset_id.to_string())
 }
 
-fn asset_id_from_hash(hash: &str) -> String {
-    format!("{ASSET_ID_PREFIX}{hash}")
-}
-
 fn incoming_asset_file_name() -> String {
     format!("{ASSET_ID_PREFIX}{}.tmp", unique_temp_suffix())
 }
@@ -143,17 +139,6 @@ impl<B: StorageBackend> AssetStore<B> {
         Self { backend }
     }
 
-    pub fn backend(&self) -> &B {
-        &self.backend
-    }
-
-    pub fn install_local_path(
-        &self,
-        path: impl AsRef<Path>,
-    ) -> Result<AssetInstallResult, ModelError> {
-        self.install_local_path_as(path, None)
-    }
-
     pub fn install_local_path_as(
         &self,
         path: impl AsRef<Path>,
@@ -173,7 +158,7 @@ impl<B: StorageBackend> AssetStore<B> {
         let source_path = canonicalize_existing_path(path)?;
         let source_modified_unix_ms = modified_unix_ms(&metadata);
         let (hash, prefix) = inspect_local_path(path)?;
-        let id = asset_id_from_hash(&hash);
+        let id = format!("{ASSET_ID_PREFIX}{hash}");
         let storage_path = self.backend.asset_storage_path(&id);
         let final_path = self.backend.asset_path(&id);
         let already_present = final_path.exists();

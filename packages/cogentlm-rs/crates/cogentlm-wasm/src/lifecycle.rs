@@ -23,7 +23,7 @@ struct BrowserLifecycleCreateResponse {
 #[no_mangle]
 pub extern "C" fn cogentlm_model_service_create_json(config_json: *const c_char) -> *mut c_char {
     catch_unwind(AssertUnwindSafe(|| {
-        into_c_string(response_json(create_service(config_json)))
+        into_c_string(browser_lifecycle_response_json(create_service(config_json)))
     }))
     .unwrap_or_else(|_| {
         into_c_string(browser_lifecycle_response_json::<Value>(
@@ -71,7 +71,7 @@ pub extern "C" fn cogentlm_model_service_current_json(
 pub extern "C" fn cogentlm_model_service_manifest_json(
     service: *mut BrowserLifecycleService,
 ) -> *mut c_char {
-    service_response(service, |service| service.manifest().clone())
+    service_response(service, |service| service.manifest.clone())
 }
 
 #[no_mangle]
@@ -143,7 +143,7 @@ pub extern "C" fn cogentlm_model_service_unload_json(
 pub extern "C" fn cogentlm_model_service_snapshot_json(
     service: *mut BrowserLifecycleService,
 ) -> *mut c_char {
-    service_response(service, |service| service.snapshot())
+    service_response(service, |service| service.snapshot.clone())
 }
 
 #[no_mangle]
@@ -183,8 +183,8 @@ fn create_service(
             let service_ref = unsafe { &*handle };
             browser_lifecycle_success_response(BrowserLifecycleCreateResponse {
                 handle: handle as usize,
-                manifest: service_ref.manifest().clone(),
-                snapshot: service_ref.snapshot(),
+                manifest: service_ref.manifest.clone(),
+                snapshot: service_ref.snapshot.clone(),
             })
         }
         Err(error) => browser_lifecycle_error_response(error),
@@ -253,11 +253,4 @@ fn read_required_c_string(value: *const c_char, label: &str) -> Result<String, M
         return Err(ModelError::InvalidModelSource(format!("{label} is empty")));
     }
     Ok(value)
-}
-
-fn response_json<T>(response: BrowserLifecycleEnvelope<T>) -> String
-where
-    T: Serialize,
-{
-    browser_lifecycle_response_json(response)
 }

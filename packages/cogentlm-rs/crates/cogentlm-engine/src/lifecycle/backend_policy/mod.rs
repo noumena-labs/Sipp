@@ -70,7 +70,7 @@ impl BackendCapabilities {
         let mut compiled = normalize_backend_names(&self.compiled);
         let available = normalize_backend_names_or_cpu(&self.available);
         if compiled.is_empty() && contains_cpu_backend(&available) {
-            compiled.push(cpu_backend_name());
+            compiled.push(CPU_BACKEND.to_string());
         }
 
         Self {
@@ -124,7 +124,7 @@ fn normalize_backend_values<'a>(names: impl Iterator<Item = &'a str>) -> Vec<Str
 
 fn with_cpu_fallback(mut names: Vec<String>) -> Vec<String> {
     if names.is_empty() {
-        names.push(cpu_backend_name());
+        names.push(CPU_BACKEND.to_string());
     }
     names
 }
@@ -135,7 +135,7 @@ fn select_backend(
 ) -> Result<String, ModelError> {
     match requested {
         BackendPreference::Auto => Ok(select_auto_backend(capabilities)),
-        BackendPreference::Cpu => Ok(cpu_backend_name()),
+        BackendPreference::Cpu => Ok(CPU_BACKEND.to_string()),
         BackendPreference::Cuda
         | BackendPreference::Metal
         | BackendPreference::Vulkan
@@ -147,10 +147,10 @@ fn select_auto_backend(capabilities: &BackendCapabilities) -> String {
     for candidate in AUTO_BACKEND_CANDIDATES {
         let name = candidate.as_str();
         if backend_is_usable(name, capabilities) {
-            return owned_backend_name(name);
+            return name.to_string();
         }
     }
-    cpu_backend_name()
+    CPU_BACKEND.to_string()
 }
 
 fn require_backend(
@@ -158,7 +158,7 @@ fn require_backend(
     capabilities: &BackendCapabilities,
 ) -> Result<String, ModelError> {
     if backend_is_usable(name, capabilities) {
-        Ok(owned_backend_name(name))
+        Ok(name.to_string())
     } else {
         Err(backend_unavailable(name, &capabilities.available))
     }
@@ -189,17 +189,13 @@ fn contains_cpu_backend(names: &[String]) -> bool {
 }
 
 fn apply_stats_mode(config: &mut NativeRuntimeConfig, stats: StatsMode) {
-    let (runtime_metrics, backend_profiling) = stats_mode_observability(stats);
-    config.observability.runtime_metrics = runtime_metrics;
-    config.observability.backend_profiling = backend_profiling;
-}
-
-fn stats_mode_observability(stats: StatsMode) -> (bool, bool) {
-    match stats {
+    let (runtime_metrics, backend_profiling) = match stats {
         StatsMode::Off => (false, false),
         StatsMode::Basic => (true, false),
         StatsMode::Profile => (true, true),
-    }
+    };
+    config.observability.runtime_metrics = runtime_metrics;
+    config.observability.backend_profiling = backend_profiling;
 }
 
 fn apply_backend_layers(
@@ -226,15 +222,15 @@ fn selection_reason(requested: BackendPreference, selected: &str) -> String {
 fn normalize_backend_name(name: &str) -> String {
     let lower = name.trim().to_ascii_lowercase();
     if lower.contains("cuda") {
-        owned_backend_name(BackendPreference::Cuda.as_str())
+        BackendPreference::Cuda.as_str().to_string()
     } else if lower.contains("metal") {
-        owned_backend_name(BackendPreference::Metal.as_str())
+        BackendPreference::Metal.as_str().to_string()
     } else if lower.contains("vulkan") {
-        owned_backend_name(BackendPreference::Vulkan.as_str())
+        BackendPreference::Vulkan.as_str().to_string()
     } else if lower.contains("webgpu") {
-        owned_backend_name(BackendPreference::WebGpu.as_str())
+        BackendPreference::WebGpu.as_str().to_string()
     } else if lower.contains("cpu") {
-        cpu_backend_name()
+        CPU_BACKEND.to_string()
     } else {
         lower
     }
@@ -242,14 +238,6 @@ fn normalize_backend_name(name: &str) -> String {
 
 fn is_cpu_backend(name: &str) -> bool {
     name == CPU_BACKEND
-}
-
-fn cpu_backend_name() -> String {
-    owned_backend_name(CPU_BACKEND)
-}
-
-fn owned_backend_name(name: &str) -> String {
-    name.to_string()
 }
 
 #[cfg(test)]

@@ -5,7 +5,7 @@ use crate::runtime::numeric::positive_fair_share_i32;
 
 use super::{
     saturating_i32_delta, saturating_usize_delta_to_i32, InferenceRuntime, RequestStepResult,
-    SchedulerBurstResult, PREFIX_SNAPSHOT_COMMIT_BUDGET,
+    SchedulerBurstResult, SlotPhase, PREFIX_SNAPSHOT_COMMIT_BUDGET,
 };
 
 impl InferenceRuntime {
@@ -31,11 +31,11 @@ impl InferenceRuntime {
         let deadline = (!max_duration.is_zero()).then(|| Instant::now() + max_duration);
 
         for _ in 0..max_ticks {
-            let completed_before = self.request_queue.completed_response_count();
-            let emitted_before = self.request_queue.total_emitted_token_count();
+            let completed_before = self.request_queue.completed_responses.len();
+            let emitted_before = self.request_queue.total_emitted_token_count;
             let step_result = self.run_scheduler_tick_locked();
-            let completed_after = self.request_queue.completed_response_count();
-            let emitted_after = self.request_queue.total_emitted_token_count();
+            let completed_after = self.request_queue.completed_responses.len();
+            let emitted_after = self.request_queue.total_emitted_token_count;
 
             record_tick_progress(
                 &mut burst_result,
@@ -98,16 +98,16 @@ impl InferenceRuntime {
 
         let loop_start = Instant::now();
         loop {
-            if self.request_queue.live_request_count() == 0 {
+            if self.request_queue.requests.len() <= self.request_queue.completed_responses.len() {
                 loop_result.status = RequestStepResult::Waiting;
                 break;
             }
 
-            let completed_before = self.request_queue.completed_response_count();
-            let emitted_before = self.request_queue.total_emitted_token_count();
+            let completed_before = self.request_queue.completed_responses.len();
+            let emitted_before = self.request_queue.total_emitted_token_count;
             let step_result = self.run_scheduler_tick_locked();
-            let completed_after = self.request_queue.completed_response_count();
-            let emitted_after = self.request_queue.total_emitted_token_count();
+            let completed_after = self.request_queue.completed_responses.len();
+            let emitted_after = self.request_queue.total_emitted_token_count;
 
             record_tick_progress(
                 &mut loop_result,
@@ -159,7 +159,12 @@ impl InferenceRuntime {
     }
 
     fn commit_pending_prefix_snapshots(&mut self) {
-        if !self.slot_scheduler.is_idle() {
+        if self
+            .slot_scheduler
+            .slots
+            .iter()
+            .any(|slot| slot.phase != SlotPhase::Idle)
+        {
             return;
         }
         self.prefix_state_cache

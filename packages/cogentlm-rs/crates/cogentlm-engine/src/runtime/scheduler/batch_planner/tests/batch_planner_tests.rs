@@ -25,7 +25,7 @@ fn returns_empty_plan_when_budget_is_zero() {
     let planner = BatchPlanner;
     let slots = vec![attached_slot(0, request(1, vec![1, 2], 4))];
     let plan = planner.build_policy_batch(&slots, &[], &[0], SchedulerTickBudget::default(), 0);
-    assert!(plan.is_empty());
+    assert!(plan.contributions.is_empty());
 }
 
 #[test]

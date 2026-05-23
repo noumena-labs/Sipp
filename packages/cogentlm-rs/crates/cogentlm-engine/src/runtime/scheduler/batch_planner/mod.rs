@@ -64,10 +64,6 @@ impl SharedBatchPlan {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.contributions.is_empty()
-    }
-
     /// Clears the plan in-place so it can be refilled by
     /// [`BatchPlanner::build_policy_batch_into`] without releasing the
     /// underlying allocations.

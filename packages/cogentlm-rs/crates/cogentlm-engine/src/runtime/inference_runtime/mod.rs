@@ -13,6 +13,7 @@ use cogentlm_sys as ffi;
 use crate::runtime::config::{NativeRuntimeConfig, ResolvedRuntimeLimits};
 use crate::runtime::llama::LlamaBatchBuilder;
 use crate::runtime::metrics::RuntimeObservabilityMetrics;
+use crate::runtime::numeric::duration_ms;
 use crate::runtime::request::{GenerateRequestId, RequestQueue, NO_SAMPLED_TOKEN_ID};
 use crate::runtime::residency::ResidencyLease;
 use crate::runtime::scheduler::{
@@ -47,9 +48,9 @@ mod text;
 
 use environment::{resolve_batch_token_budget, snapshot_prefix_cache_enabled};
 use numeric::{
-    clamp_usize_to_i32, clamp_usize_to_u64, duration_ms, ffi_arg_count_len, fingerprint_path,
-    nonnegative_i32_to_usize, positive_i32_to_usize, saturating_i32_delta,
-    saturating_usize_delta_to_i32, unique_slot_first_use,
+    clamp_usize_to_i32, ffi_arg_count_len, fingerprint_path, nonnegative_i32_to_usize,
+    positive_i32_to_usize, saturating_i32_delta, saturating_usize_delta_to_i32,
+    unique_slot_first_use,
 };
 
 const DEFAULT_PROMPT_CONTEXT_KEY: &str = "__primary_prompt__";
@@ -101,7 +102,7 @@ struct DebugMetricsTick {
 
 pub struct InferenceRuntime {
     config: NativeRuntimeConfig,
-    resolved_limits: ResolvedRuntimeLimits,
+    pub(crate) resolved_limits: ResolvedRuntimeLimits,
     residency_lease: Option<ResidencyLease>,
     common_init: *mut ffi::cogent_common_init,
     primary_model: *mut ffi::llama_model,
@@ -111,7 +112,7 @@ pub struct InferenceRuntime {
     last_runtime_observability: RuntimeObservabilityMetrics,
     has_last_runtime_observability: bool,
     session_store: SessionStore,
-    request_queue: RequestQueue,
+    pub request_queue: RequestQueue,
     slot_scheduler: SlotScheduler,
     batch_planner: BatchPlanner,
     shared_batch_builder: LlamaBatchBuilder,
@@ -155,16 +156,12 @@ impl InferenceRuntime {
             && (self.config.multimodal.projector_path.is_none() || !self.mtmd_context.is_null())
     }
 
-    pub fn resolved_runtime_limits(&self) -> ResolvedRuntimeLimits {
-        self.resolved_limits.clone()
-    }
-
     fn run_scheduler_tick_locked(&mut self) -> RequestStepResult {
         if !self.is_ready() {
             return RequestStepResult::Invalid;
         }
 
-        let completed_before = self.request_queue.completed_response_count();
+        let completed_before = self.request_queue.completed_responses.len();
         let mut admitted_any = false;
         while self
             .slot_scheduler
@@ -181,13 +178,18 @@ impl InferenceRuntime {
             .finalize_completed_slots(&mut self.request_queue, &mut self.session_store);
         self.commit_new_completed_responses_observability_locked();
 
-        let completed_after = self.request_queue.completed_response_count();
+        let completed_after = self.request_queue.completed_responses.len();
         if completed_after > completed_before {
             return RequestStepResult::Progressed;
         }
 
         if !tick_executed {
-            let Some(active_slot_index) = self.slot_scheduler.find_first_active_slot() else {
+            let Some(active_slot_index) = self.slot_scheduler.slots.iter().position(|slot| {
+                slot.request().is_some()
+                    && slot.phase != SlotPhase::Idle
+                    && slot.phase != SlotPhase::Completed
+                    && slot.phase != SlotPhase::Failed
+            }) else {
                 return if admitted_any {
                     RequestStepResult::Progressed
                 } else {
@@ -196,11 +198,7 @@ impl InferenceRuntime {
             };
 
             let diagnostic = self.build_no_progress_diagnostic_locked();
-            if let Some(active_slot) = self
-                .slot_scheduler
-                .mutable_slots()
-                .get_mut(active_slot_index)
-            {
+            if let Some(active_slot) = self.slot_scheduler.slots.get_mut(active_slot_index) {
                 if active_slot.phase != SlotPhase::Failed
                     && active_slot.phase != SlotPhase::Completed
                 {
@@ -214,7 +212,7 @@ impl InferenceRuntime {
             self.slot_scheduler
                 .finalize_completed_slots(&mut self.request_queue, &mut self.session_store);
             self.commit_new_completed_responses_observability_locked();
-            if self.request_queue.completed_response_count() > completed_before {
+            if self.request_queue.completed_responses.len() > completed_before {
                 return RequestStepResult::Progressed;
             }
             return RequestStepResult::FatalNoProgress;
@@ -274,7 +272,7 @@ impl InferenceRuntime {
         let plan_start = debug_metrics_enabled.then(Instant::now);
         self.batch_planner.build_policy_batch_into(
             &mut plan,
-            self.slot_scheduler.slots(),
+            &self.slot_scheduler.slots,
             &self.scratch_decode_ready_slots,
             &self.scratch_prefill_ready_slots,
             tick_budget,
@@ -283,7 +281,7 @@ impl InferenceRuntime {
         if let Some(start) = plan_start {
             debug_metrics.plan_ms = duration_ms(start, Instant::now());
         }
-        if plan.is_empty() {
+        if plan.contributions.is_empty() {
             self.scratch_plan = plan;
             return false;
         }
@@ -302,7 +300,7 @@ impl InferenceRuntime {
 
         let mut batch_token_index = 0_i32;
         for contribution in plan.contributions.iter() {
-            let Some(slot) = self.slot_scheduler.slots().get(contribution.slot_index) else {
+            let Some(slot) = self.slot_scheduler.slots.get(contribution.slot_index) else {
                 continue;
             };
             if slot.seq_id < 0 {
@@ -335,7 +333,7 @@ impl InferenceRuntime {
         // Production metrics — always recorded.
         let decode_start = Instant::now();
         let decode_status = unsafe {
-            ffi::cogent_llama_decode(self.shared_context, self.shared_batch_builder.raw())
+            ffi::cogent_llama_decode(self.shared_context, &self.shared_batch_builder.batch)
         };
         let decode_submitted = Instant::now();
         let sync_ok = unsafe { ffi::cogent_llama_synchronize(self.shared_context) };
@@ -345,7 +343,7 @@ impl InferenceRuntime {
         if decode_status != 0 {
             let diagnostic = format!(
                 "llama_decode() failed in shared tick (status={decode_status}, n_tokens={})",
-                self.shared_batch_builder.raw().n_tokens
+                self.shared_batch_builder.batch.n_tokens
             );
             self.fail_plan_slots(&plan, &diagnostic);
             self.scratch_plan = plan;
@@ -369,7 +367,7 @@ impl InferenceRuntime {
         debug_metrics.sample_ms = sample_ms;
         debug_metrics.token_piece_ms = token_piece_ms;
         let emit_start = debug_metrics_enabled.then(Instant::now);
-        for slot in self.slot_scheduler.mutable_slots() {
+        for slot in &mut self.slot_scheduler.slots {
             if slot.phase == SlotPhase::Streaming && !slot.buffered_output_text.is_empty() {
                 SlotScheduler::emit_buffered_token_piece(&mut self.request_queue, slot);
             }

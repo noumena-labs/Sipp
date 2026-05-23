@@ -28,11 +28,7 @@ impl InferenceRuntime {
         let mut emitted_slots: u64 = 0;
 
         for contribution in &plan.contributions {
-            let Some(slot) = self
-                .slot_scheduler
-                .mutable_slots()
-                .get_mut(contribution.slot_index)
-            else {
+            let Some(slot) = self.slot_scheduler.slots.get_mut(contribution.slot_index) else {
                 continue;
             };
 
@@ -112,14 +108,10 @@ impl InferenceRuntime {
         let now = Instant::now();
         let enable_metrics = self.debug_metrics_enabled;
         for pending_logits in &mut self.scratch_logits_contributions {
-            let Some(slot) = self
-                .slot_scheduler
-                .mutable_slots()
-                .get_mut(pending_logits.slot_index)
-            else {
+            let Some(slot) = self.slot_scheduler.slots.get_mut(pending_logits.slot_index) else {
                 continue;
             };
-            let Some(sampler) = slot.sampler() else {
+            let Some(sampler) = slot.sampler else {
                 continue;
             };
 

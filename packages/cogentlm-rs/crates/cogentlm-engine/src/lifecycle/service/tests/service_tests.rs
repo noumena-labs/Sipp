@@ -68,7 +68,9 @@ fn cached_local_asset_requires_matching_source_hash() {
         .expect("first");
     let first_asset_id = service
         .registry
-        .model(&first.entry_id)
+        .manifest
+        .models
+        .get(&first.entry_id)
         .expect("first model")
         .model_asset_ids[0]
         .clone();
@@ -79,7 +81,9 @@ fn cached_local_asset_requires_matching_source_hash() {
         .expect("second");
     let second_asset_id = service
         .registry
-        .model(&second.entry_id)
+        .manifest
+        .models
+        .get(&second.entry_id)
         .expect("second model")
         .model_asset_ids[0]
         .clone();
@@ -124,7 +128,12 @@ fn service_rejects_unresolved_vision_model_on_load() {
     record.ref_count = 1;
 
     let error = service
-        .load_installed(&entry_id, ModelLoadOptions::default())
+        .load(
+            ModelSource::Installed {
+                id: entry_id.clone(),
+            },
+            ModelLoadOptions::default(),
+        )
         .expect_err("not ready");
 
     assert!(matches!(error, ModelError::InvalidModelPairing(_)));

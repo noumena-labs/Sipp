@@ -2,6 +2,7 @@ use crate::runtime::request::{
     token_byte_ring, GenerateRequest, GenerateRequestId, GenerateResponseStatus,
     GenerateTokenEmissionMode, RequestQueue,
 };
+use crate::runtime::scheduler::SlotPhase;
 use crate::runtime::session::{SequenceState, SessionStore};
 
 use super::super::*;
@@ -40,7 +41,9 @@ fn selects_decode_ready_slots_without_buffered_text() {
     scheduler.slots[1].generated_tokens.push(11);
     scheduler.slots[1].buffered_output_text = "wait".to_string();
 
-    assert_eq!(scheduler.select_decode_ready_slots(), vec![0]);
+    let mut ready = Vec::new();
+    scheduler.select_decode_ready_slots_into(&mut ready);
+    assert_eq!(ready, vec![0]);
 }
 
 #[test]
@@ -56,7 +59,9 @@ fn selects_prefill_slots_with_remaining_prompt_tokens() {
     scheduler.slots[1].phase = SlotPhase::Prefill;
     scheduler.slots[1].prefill_cursor = 3;
 
-    assert_eq!(scheduler.select_prefill_ready_slots(), vec![0]);
+    let mut ready = Vec::new();
+    scheduler.select_prefill_ready_slots_into(&mut ready);
+    assert_eq!(ready, vec![0]);
 }
 
 #[test]
@@ -97,7 +102,7 @@ fn finalize_completed_slot_writes_response_and_releases_session() {
 
     scheduler.finalize_completed_slots(&mut queue, &mut sessions);
 
-    let response = queue.peek_completed_response(1).expect("response");
+    let response = queue.completed_responses.get(&1).expect("response");
     assert_eq!(response.status, GenerateResponseStatus::Completed);
     assert_eq!(response.output_text, "done");
     assert_eq!(
@@ -129,7 +134,7 @@ fn finalize_failed_slot_writes_terminal_error() {
 
     scheduler.finalize_completed_slots(&mut queue, &mut sessions);
 
-    let response = queue.peek_completed_response(1).expect("response");
+    let response = queue.completed_responses.get(&1).expect("response");
     assert_eq!(response.status, GenerateResponseStatus::Failed);
     assert_eq!(response.error_message, "decode failed");
 }
@@ -150,7 +155,7 @@ fn finalize_cancelled_slot_prefers_cancel_message() {
 
     scheduler.finalize_completed_slots(&mut queue, &mut sessions);
 
-    let response = queue.peek_completed_response(1).expect("response");
+    let response = queue.completed_responses.get(&1).expect("response");
     assert_eq!(response.status, GenerateResponseStatus::Cancelled);
     assert_eq!(
         response.error_message,
@@ -162,7 +167,7 @@ fn finalize_cancelled_slot_prefers_cancel_message() {
 fn emit_buffered_piece_appends_output_and_stream_frame_when_enabled() {
     let mut queue = RequestQueue::new();
     let (producer, consumer) = token_byte_ring(1024);
-    queue.add_token_ring_producer(1, producer);
+    queue.token_ring_producers.insert(1, producer);
     let mut slot = SlotState::new(0);
     let mut request = request(1, "ctx");
     request.token_emission_mode = GenerateTokenEmissionMode::TokenStream;
@@ -172,7 +177,7 @@ fn emit_buffered_piece_appends_output_and_stream_frame_when_enabled() {
     SlotScheduler::emit_buffered_token_piece(&mut queue, &mut slot);
 
     assert_eq!(slot.output_text, "tok");
-    assert_eq!(queue.total_emitted_token_count(), 1);
+    assert_eq!(queue.total_emitted_token_count, 1);
     let drain = consumer.drain_available(16, 1024);
     assert_eq!(drain.frames.len(), 1);
     assert_eq!(drain.frames[0].stream_id, 1);

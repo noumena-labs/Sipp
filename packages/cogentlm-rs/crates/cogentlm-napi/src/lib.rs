@@ -5,8 +5,7 @@ use cogentlm_engine::backend::{
     set_llama_log_quiet as core_set_llama_log_quiet,
 };
 use cogentlm_engine::engine::protocol::{
-    BackendDevice as CoreBackendDevice, BackendInfo as CoreBackendInfo,
-    ModelState as CoreModelState, RequestState as CoreRequestState,
+    BackendInfo as CoreBackendInfo, RequestState as CoreRequestState,
     RequestStats as CoreRequestStats,
 };
 use cogentlm_engine::engine::{
@@ -28,21 +27,19 @@ use cogentlm_engine::engine::{
 use cogentlm_engine::lifecycle::{
     model_source_from_path as core_model_source_from_path,
     vision_model_source_from_paths as core_vision_model_source_from_paths,
-    BackendPreference as CoreBackendPreference, BackendSelection as CoreBackendSelection,
-    LoadedModelInfo as CoreLoadedModelInfo, ModelInfo as CoreManagedModelInfo,
-    ModelLoadOptions as CoreModelLoadOptions, ModelService as CoreModelService,
-    ModelServiceState as CoreModelServiceState, StatsMode, DEFAULT_MODEL_BACKEND,
-    DEFAULT_MODEL_STATS,
+    BackendPreference as CoreBackendPreference, LoadedModelInfo as CoreLoadedModelInfo,
+    ModelInfo as CoreManagedModelInfo, ModelLoadOptions as CoreModelLoadOptions,
+    ModelService as CoreModelService, ModelServiceState as CoreModelServiceState, StatsMode,
+    DEFAULT_MODEL_BACKEND, DEFAULT_MODEL_STATS,
 };
 use cogentlm_engine::runtime::config::{
     SchedulerPolicyConfig as CoreSchedulerPolicyConfig, SchedulerPolicyMode,
 };
-use cogentlm_engine::runtime::metrics::RuntimeObservabilityMetrics;
-use cogentlm_engine::runtime::request::{GenerateResponse, GenerateResponseStatus};
 use napi::bindgen_prelude::{AsyncTask, Buffer, Either, Env};
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::{Error, Result, Status, Task};
 use napi_derive::napi;
+use serde::de::DeserializeOwned;
 
 type SharedEngine = Arc<Mutex<Option<CoreCogentEngine>>>;
 type SharedEvents = Arc<Mutex<CoreEngineEventReceiver>>;
@@ -62,21 +59,6 @@ const EVENT_TYPE_REQUEST_STARTED: &str = "request-started";
 const EVENT_TYPE_REQUEST_COMPLETED: &str = "request-completed";
 const EVENT_TYPE_REQUEST_FAILED: &str = "request-failed";
 const EVENT_TYPE_CLOSED: &str = "closed";
-
-fn drain_event_receiver(receiver: &CoreEngineEventReceiver) -> Vec<EngineEvent> {
-    receiver.try_iter().map(engine_event_to_node).collect()
-}
-
-fn drain_optional_event_receiver(receiver: &Option<CoreEngineEventReceiver>) -> Vec<EngineEvent> {
-    receiver
-        .as_ref()
-        .map(drain_event_receiver)
-        .unwrap_or_default()
-}
-
-fn mapped_vec<T, U>(items: Vec<T>, f: impl FnMut(T) -> U) -> Vec<U> {
-    items.into_iter().map(f).collect()
-}
 
 #[napi(object)]
 pub struct LogitBiasConfig {
@@ -663,35 +645,6 @@ pub struct ChatMessage {
 }
 
 #[napi(object)]
-pub struct RequestObservabilityMetrics {
-    pub ttft_ms: f64,
-    pub itl_avg_ms: f64,
-    pub itl_p99_ms: f64,
-    pub e2e_ms: f64,
-    pub prefill_ms: f64,
-    pub decode_ms: f64,
-    pub native_gpu_ms: f64,
-    pub native_sync_ms: f64,
-    pub native_logic_ms: f64,
-    pub input_tokens: i32,
-    pub output_tokens: i32,
-    pub cache_hits: i32,
-    pub prefill_tokens: i32,
-}
-
-#[napi(object)]
-pub struct GenerationResponse {
-    pub request_id: u32,
-    pub status: String,
-    pub completed: bool,
-    pub failed: bool,
-    pub cancelled: bool,
-    pub output_text: String,
-    pub error_message: Option<String>,
-    pub observability: RequestObservabilityMetrics,
-}
-
-#[napi(object)]
 pub struct BackendDevice {
     pub id: Option<String>,
     pub name: String,
@@ -940,11 +893,6 @@ impl CogentEngine {
         Ok(AsyncTask::new(LoadTask { model_path, config }))
     }
 
-    #[napi(getter)]
-    pub fn closed(&self) -> Result<bool> {
-        Ok(self.engine_guard()?.is_none())
-    }
-
     #[napi]
     pub fn query(
         &self,
@@ -952,40 +900,12 @@ impl CogentEngine {
         options: Option<QueryOptions>,
         on_tokens: Option<TokenBatchCallback>,
     ) -> Result<AsyncTask<QueryTask>> {
-        let options = query_options_or_default(options)?;
+        let options = optional_core_or_default(options.as_ref(), QueryOptions::to_core)?;
         Ok(AsyncTask::new(QueryTask {
             engine: self.inner.clone(),
             prompt,
             options,
             on_tokens,
-        }))
-    }
-
-    #[napi]
-    pub fn query_response(
-        &self,
-        prompt: String,
-        options: Option<QueryOptions>,
-    ) -> Result<AsyncTask<QueryResponseTask>> {
-        let options = query_options_or_default(options)?;
-        Ok(AsyncTask::new(QueryResponseTask {
-            engine: self.inner.clone(),
-            prompt,
-            options,
-        }))
-    }
-
-    #[napi]
-    pub fn query_result(
-        &self,
-        prompt: String,
-        options: Option<QueryOptions>,
-    ) -> Result<AsyncTask<QueryResultTask>> {
-        let options = query_options_or_default(options)?;
-        Ok(AsyncTask::new(QueryResultTask {
-            engine: self.inner.clone(),
-            prompt,
-            options,
         }))
     }
 
@@ -996,48 +916,13 @@ impl CogentEngine {
         options: Option<QueryOptions>,
         on_tokens: Option<TokenBatchCallback>,
     ) -> Result<AsyncTask<ChatTextTask>> {
-        let options = query_options_or_default(options)?;
+        let options = optional_core_or_default(options.as_ref(), QueryOptions::to_core)?;
         Ok(AsyncTask::new(ChatTextTask {
             engine: self.inner.clone(),
             messages: chat_messages_to_core(messages)?,
             options,
             on_tokens,
         }))
-    }
-
-    #[napi]
-    pub fn chat_response(
-        &self,
-        messages: Vec<ChatMessage>,
-        options: Option<QueryOptions>,
-    ) -> Result<AsyncTask<ChatResponseTask>> {
-        let options = query_options_or_default(options)?;
-        Ok(AsyncTask::new(ChatResponseTask {
-            engine: self.inner.clone(),
-            messages: chat_messages_to_core(messages)?,
-            options,
-        }))
-    }
-
-    #[napi]
-    pub fn chat_result(
-        &self,
-        messages: Vec<ChatMessage>,
-        options: Option<QueryOptions>,
-    ) -> Result<AsyncTask<ChatResultTask>> {
-        let options = query_options_or_default(options)?;
-        Ok(AsyncTask::new(ChatResultTask {
-            engine: self.inner.clone(),
-            messages: chat_messages_to_core(messages)?,
-            options,
-        }))
-    }
-
-    #[napi]
-    pub fn close(&self) -> AsyncTask<CloseTask> {
-        AsyncTask::new(CloseTask {
-            engine: self.inner.clone(),
-        })
     }
 
     #[napi]
@@ -1053,15 +938,7 @@ impl CogentEngine {
             .events
             .lock()
             .map_err(|_| napi_error(ENGINE_EVENTS_MUTEX_POISONED))?;
-        Ok(drain_event_receiver(&events))
-    }
-}
-
-impl CogentEngine {
-    fn engine_guard(&self) -> Result<std::sync::MutexGuard<'_, Option<CoreCogentEngine>>> {
-        self.inner
-            .lock()
-            .map_err(|_| napi_error(ENGINE_MUTEX_POISONED))
+        Ok(events.try_iter().map(engine_event_to_node).collect())
     }
 }
 
@@ -1083,11 +960,6 @@ impl ModelService {
         })
     }
 
-    #[napi(getter)]
-    pub fn closed(&self) -> Result<bool> {
-        Ok(self.service_guard()?.is_none())
-    }
-
     #[napi]
     pub fn load_path(
         &self,
@@ -1098,7 +970,7 @@ impl ModelService {
             service: self.inner.clone(),
             events: self.events.clone(),
             model_path,
-            options: model_load_options_or_default(options)?,
+            options: optional_core_or_default(options.as_ref(), ModelLoadOptions::to_core)?,
         }))
     }
 
@@ -1114,21 +986,7 @@ impl ModelService {
             events: self.events.clone(),
             model_path,
             projector_path,
-            options: model_load_options_or_default(options)?,
-        }))
-    }
-
-    #[napi]
-    pub fn load_installed(
-        &self,
-        model_id: String,
-        options: Option<ModelLoadOptions>,
-    ) -> Result<AsyncTask<ModelLoadInstalledTask>> {
-        Ok(AsyncTask::new(ModelLoadInstalledTask {
-            service: self.inner.clone(),
-            events: self.events.clone(),
-            model_id,
-            options: model_load_options_or_default(options)?,
+            options: optional_core_or_default(options.as_ref(), ModelLoadOptions::to_core)?,
         }))
     }
 
@@ -1151,7 +1009,7 @@ impl ModelService {
     #[napi]
     pub fn list(&self) -> Result<Vec<ManagedModelInfo>> {
         with_model_service(&self.inner, |service| Ok(service.list()))
-            .map(|models| mapped_vec(models, model_info_to_node))
+            .map(|models| models.into_iter().map(model_info_to_node).collect())
     }
 
     #[napi]
@@ -1170,7 +1028,7 @@ impl ModelService {
         Ok(AsyncTask::new(ModelQueryTask {
             service: self.inner.clone(),
             prompt,
-            options: query_options_or_default(options)?,
+            options: optional_core_or_default(options.as_ref(), QueryOptions::to_core)?,
             on_tokens,
         }))
     }
@@ -1185,7 +1043,7 @@ impl ModelService {
         Ok(AsyncTask::new(ModelChatTask {
             service: self.inner.clone(),
             messages: chat_messages_to_core(messages)?,
-            options: query_options_or_default(options)?,
+            options: optional_core_or_default(options.as_ref(), QueryOptions::to_core)?,
             on_tokens,
         }))
     }
@@ -1198,28 +1056,15 @@ impl ModelService {
     }
 
     #[napi]
-    pub fn close(&self) -> AsyncTask<ModelCloseTask> {
-        AsyncTask::new(ModelCloseTask {
-            service: self.inner.clone(),
-            events: self.events.clone(),
-        })
-    }
-
-    #[napi]
     pub fn drain_events(&self) -> Result<Vec<EngineEvent>> {
         let events = self
             .events
             .lock()
             .map_err(|_| napi_error(MODEL_SERVICE_EVENTS_MUTEX_POISONED))?;
-        Ok(drain_optional_event_receiver(&events))
-    }
-}
-
-impl ModelService {
-    fn service_guard(&self) -> Result<std::sync::MutexGuard<'_, Option<CoreModelService>>> {
-        self.inner
-            .lock()
-            .map_err(|_| napi_error(MODEL_SERVICE_MUTEX_POISONED))
+        Ok(events
+            .as_ref()
+            .map(|events| events.try_iter().map(engine_event_to_node).collect())
+            .unwrap_or_default())
     }
 }
 
@@ -1270,46 +1115,6 @@ impl Task for QueryTask {
     }
 }
 
-pub struct QueryResponseTask {
-    engine: SharedEngine,
-    prompt: String,
-    options: CoreQueryOptions,
-}
-
-impl Task for QueryResponseTask {
-    type Output = GenerateResponse;
-    type JsValue = GenerationResponse;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let request = query_request(self.prompt.clone(), self.options.clone());
-        with_engine(&self.engine, |engine| engine.query_response(request))
-    }
-
-    fn resolve(&mut self, _env: Env, response: Self::Output) -> Result<Self::JsValue> {
-        Ok(response_to_node(response))
-    }
-}
-
-pub struct QueryResultTask {
-    engine: SharedEngine,
-    prompt: String,
-    options: CoreQueryOptions,
-}
-
-impl Task for QueryResultTask {
-    type Output = CoreRequestResult;
-    type JsValue = RequestResult;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let request = query_request(self.prompt.clone(), self.options.clone());
-        with_engine(&self.engine, |engine| engine.query(request))
-    }
-
-    fn resolve(&mut self, _env: Env, result: Self::Output) -> Result<Self::JsValue> {
-        Ok(request_result_to_node(result))
-    }
-}
-
 pub struct ChatTextTask {
     engine: SharedEngine,
     messages: Vec<CoreChatMessage>,
@@ -1332,71 +1137,6 @@ impl Task for ChatTextTask {
 
     fn resolve(&mut self, _env: Env, result: Self::Output) -> Result<Self::JsValue> {
         Ok(request_result_to_node(result))
-    }
-}
-
-pub struct ChatResponseTask {
-    engine: SharedEngine,
-    messages: Vec<CoreChatMessage>,
-    options: CoreQueryOptions,
-}
-
-impl Task for ChatResponseTask {
-    type Output = GenerateResponse;
-    type JsValue = GenerationResponse;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let request = chat_request(self.messages.clone(), self.options.clone());
-        with_engine(&self.engine, |engine| engine.chat_response(request))
-    }
-
-    fn resolve(&mut self, _env: Env, response: Self::Output) -> Result<Self::JsValue> {
-        Ok(response_to_node(response))
-    }
-}
-
-pub struct ChatResultTask {
-    engine: SharedEngine,
-    messages: Vec<CoreChatMessage>,
-    options: CoreQueryOptions,
-}
-
-impl Task for ChatResultTask {
-    type Output = CoreRequestResult;
-    type JsValue = RequestResult;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let request = chat_request(self.messages.clone(), self.options.clone());
-        with_engine(&self.engine, |engine| engine.chat(request))
-    }
-
-    fn resolve(&mut self, _env: Env, result: Self::Output) -> Result<Self::JsValue> {
-        Ok(request_result_to_node(result))
-    }
-}
-
-pub struct CloseTask {
-    engine: SharedEngine,
-}
-
-impl Task for CloseTask {
-    type Output = ();
-    type JsValue = ();
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let engine = self
-            .engine
-            .lock()
-            .map_err(|_| napi_error(ENGINE_MUTEX_POISONED))?
-            .take();
-        if let Some(engine) = engine {
-            engine.close().map_err(core_error)?;
-        }
-        Ok(())
-    }
-
-    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
-        Ok(output)
     }
 }
 
@@ -1430,12 +1170,12 @@ impl Task for ModelLoadPathTask {
 
     fn compute(&mut self) -> Result<Self::Output> {
         with_model_service_mut(&self.service, |service| {
-            load_model_and_refresh(&self.events, service, |service| {
-                service.load(
-                    core_model_source_from_path(&self.model_path),
-                    self.options.clone(),
-                )
-            })
+            let loaded = service.load(
+                core_model_source_from_path(&self.model_path),
+                self.options.clone(),
+            )?;
+            refresh_model_events(&self.events, service)?;
+            Ok(loaded)
         })
     }
 
@@ -1458,36 +1198,12 @@ impl Task for ModelLoadVisionTask {
 
     fn compute(&mut self) -> Result<Self::Output> {
         with_model_service_mut(&self.service, |service| {
-            load_model_and_refresh(&self.events, service, |service| {
-                service.load(
-                    core_vision_model_source_from_paths(&self.model_path, &self.projector_path),
-                    self.options.clone(),
-                )
-            })
-        })
-    }
-
-    fn resolve(&mut self, _env: Env, loaded: Self::Output) -> Result<Self::JsValue> {
-        Ok(loaded_model_info_to_node(loaded))
-    }
-}
-
-pub struct ModelLoadInstalledTask {
-    service: SharedModelService,
-    events: SharedModelEvents,
-    model_id: String,
-    options: CoreModelLoadOptions,
-}
-
-impl Task for ModelLoadInstalledTask {
-    type Output = CoreLoadedModelInfo;
-    type JsValue = LoadedModelInfo;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        with_model_service_mut(&self.service, |service| {
-            load_model_and_refresh(&self.events, service, |service| {
-                service.load_installed(&self.model_id, self.options.clone())
-            })
+            let loaded = service.load(
+                core_vision_model_source_from_paths(&self.model_path, &self.projector_path),
+                self.options.clone(),
+            )?;
+            refresh_model_events(&self.events, service)?;
+            Ok(loaded)
         })
     }
 
@@ -1600,32 +1316,6 @@ impl Task for ModelStateTask {
     }
 }
 
-pub struct ModelCloseTask {
-    service: SharedModelService,
-    events: SharedModelEvents,
-}
-
-impl Task for ModelCloseTask {
-    type Output = ();
-    type JsValue = ();
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let service = self
-            .service
-            .lock()
-            .map_err(|_| napi_error(MODEL_SERVICE_MUTEX_POISONED))?
-            .take();
-        if let Some(mut service) = service {
-            service.close().map_err(model_error)?;
-        }
-        clear_model_events(&self.events)
-    }
-
-    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
-        Ok(output)
-    }
-}
-
 #[napi]
 pub fn backend_observability_json(include_details: Option<bool>) -> Result<String> {
     core_backend_observability_json(include_details.unwrap_or(true)).map_err(core_error)
@@ -1691,21 +1381,6 @@ fn refresh_model_events(
     Ok(())
 }
 
-fn load_model_and_refresh(
-    events: &SharedModelEvents,
-    service: &mut CoreModelService,
-    load: impl FnOnce(
-        &mut CoreModelService,
-    ) -> std::result::Result<
-        CoreLoadedModelInfo,
-        cogentlm_engine::lifecycle::ModelError,
-    >,
-) -> std::result::Result<CoreLoadedModelInfo, cogentlm_engine::lifecycle::ModelError> {
-    let loaded = load(service)?;
-    refresh_model_events(events, service)?;
-    Ok(loaded)
-}
-
 fn clear_model_events(events: &SharedModelEvents) -> Result<()> {
     events
         .lock()
@@ -1714,16 +1389,12 @@ fn clear_model_events(events: &SharedModelEvents) -> Result<()> {
     Ok(())
 }
 
-fn query_request(prompt: String, options: CoreQueryOptions) -> CoreQueryRequest {
-    CoreQueryRequest::new(prompt).options(options)
-}
-
 fn query_request_with_tokens(
     prompt: String,
     options: CoreQueryOptions,
     on_tokens: Option<TokenBatchCallback>,
 ) -> CoreQueryRequest {
-    let request = query_request(prompt, options);
+    let request = CoreQueryRequest::new(prompt).options(options);
     if let Some(on_tokens) = on_tokens {
         request.on_tokens(move |batch| emit_token_batch(&on_tokens, batch))
     } else {
@@ -1731,16 +1402,12 @@ fn query_request_with_tokens(
     }
 }
 
-fn chat_request(messages: Vec<CoreChatMessage>, options: CoreQueryOptions) -> CoreChatRequest {
-    CoreChatRequest::new(messages).options(options)
-}
-
 fn chat_request_with_tokens(
     messages: Vec<CoreChatMessage>,
     options: CoreQueryOptions,
     on_tokens: Option<TokenBatchCallback>,
 ) -> CoreChatRequest {
-    let request = chat_request(messages, options);
+    let request = CoreChatRequest::new(messages).options(options);
     if let Some(on_tokens) = on_tokens {
         request.on_tokens(move |batch| emit_token_batch(&on_tokens, batch))
     } else {
@@ -1765,16 +1432,6 @@ fn emit_token_batch(
     }
 }
 
-fn model_load_options_or_default(
-    options: Option<ModelLoadOptions>,
-) -> Result<CoreModelLoadOptions> {
-    optional_core_or_default(options.as_ref(), ModelLoadOptions::to_core)
-}
-
-fn query_options_or_default(options: Option<QueryOptions>) -> Result<CoreQueryOptions> {
-    optional_core_or_default(options.as_ref(), QueryOptions::to_core)
-}
-
 fn chat_messages_to_core(messages: Vec<ChatMessage>) -> Result<Vec<CoreChatMessage>> {
     if messages.is_empty() {
         return Err(invalid_arg("chat messages must not be empty"));
@@ -1788,20 +1445,6 @@ fn chat_messages_to_core(messages: Vec<ChatMessage>) -> Result<Vec<CoreChatMessa
             })
         })
         .collect()
-}
-
-fn response_to_node(response: GenerateResponse) -> GenerationResponse {
-    let status = response.status.as_str().to_string();
-    GenerationResponse {
-        request_id: response.request_id,
-        status,
-        completed: response.status == GenerateResponseStatus::Completed,
-        failed: response.status == GenerateResponseStatus::Failed,
-        cancelled: response.status == GenerateResponseStatus::Cancelled,
-        output_text: response.output_text,
-        error_message: (!response.error_message.is_empty()).then_some(response.error_message),
-        observability: metrics_to_node(response.runtime_observability),
-    }
 }
 
 fn request_result_to_node(result: CoreRequestResult) -> RequestResult {
@@ -1833,7 +1476,13 @@ fn token_batch_to_node(batch: CoreTokenBatch) -> TokenBatch {
 fn loaded_model_info_to_node(loaded: CoreLoadedModelInfo) -> LoadedModelInfo {
     LoadedModelInfo {
         model: model_info_to_node(loaded.model),
-        backend: backend_selection_to_node(loaded.backend),
+        backend: BackendSelection {
+            requested: loaded.backend.requested.as_str().to_string(),
+            selected: loaded.backend.selected,
+            available: loaded.backend.available,
+            gpu_offload_expected: loaded.backend.gpu_offload_expected,
+            reason: loaded.backend.reason,
+        },
         runtime_fingerprint: loaded.runtime_fingerprint,
     }
 }
@@ -1856,16 +1505,6 @@ fn model_info_to_node(model: CoreManagedModelInfo) -> ManagedModelInfo {
     }
 }
 
-fn backend_selection_to_node(selection: CoreBackendSelection) -> BackendSelection {
-    BackendSelection {
-        requested: selection.requested.as_str().to_string(),
-        selected: selection.selected,
-        available: selection.available,
-        gpu_offload_expected: selection.gpu_offload_expected,
-        reason: selection.reason,
-    }
-}
-
 fn engine_state_to_node(state: CoreEngineState) -> EngineState {
     let tail = state_tail_to_node(
         state.backend,
@@ -1876,7 +1515,10 @@ fn engine_state_to_node(state: CoreEngineState) -> EngineState {
     );
     EngineState {
         status: state.status.as_str().to_string(),
-        model: state.model.map(model_state_to_node),
+        model: state.model.map(|model| ModelState {
+            id: model.id,
+            name: model.name,
+        }),
         backend: tail.backend,
         runtime: tail.runtime,
         requests: tail.requests,
@@ -1914,25 +1556,17 @@ fn state_tail_to_node(
     StateTail {
         backend: backend_info_to_node(backend),
         runtime: runtime.map(resolved_runtime_limits_to_node),
-        requests: mapped_vec(requests, request_state_to_node),
+        requests: requests
+            .into_iter()
+            .map(|request| RequestState {
+                id: request.id,
+                status: request.status.as_str().to_string(),
+                input_tokens: request.input_tokens,
+                output_tokens: request.output_tokens,
+            })
+            .collect(),
         stats: engine_stats_to_node(stats),
         updated_at_unix_ms: updated_at_unix_ms as f64,
-    }
-}
-
-fn model_state_to_node(model: CoreModelState) -> ModelState {
-    ModelState {
-        id: model.id,
-        name: model.name,
-    }
-}
-
-fn request_state_to_node(request: CoreRequestState) -> RequestState {
-    RequestState {
-        id: request.id,
-        status: request.status.as_str().to_string(),
-        input_tokens: request.input_tokens,
-        output_tokens: request.output_tokens,
     }
 }
 
@@ -1940,17 +1574,17 @@ fn backend_info_to_node(backend: CoreBackendInfo) -> BackendInfo {
     BackendInfo {
         selected: backend.selected,
         available: backend.available,
-        devices: mapped_vec(backend.devices, backend_device_to_node),
-    }
-}
-
-fn backend_device_to_node(device: CoreBackendDevice) -> BackendDevice {
-    BackendDevice {
-        id: device.id,
-        name: device.name,
-        r#type: device.device_type,
-        memory_total_bytes: option_u64_f64(device.memory_total_bytes),
-        memory_free_bytes: option_u64_f64(device.memory_free_bytes),
+        devices: backend
+            .devices
+            .into_iter()
+            .map(|device| BackendDevice {
+                id: device.id,
+                name: device.name,
+                r#type: device.device_type,
+                memory_total_bytes: option_u64_f64(device.memory_total_bytes),
+                memory_free_bytes: option_u64_f64(device.memory_free_bytes),
+            })
+            .collect(),
     }
 }
 
@@ -2134,60 +1768,31 @@ fn engine_event_to_node(event: CoreEngineEvent) -> EngineEvent {
     }
 }
 
-fn metrics_to_node(metrics: RuntimeObservabilityMetrics) -> RequestObservabilityMetrics {
-    RequestObservabilityMetrics {
-        ttft_ms: metrics.ttft_ms,
-        itl_avg_ms: metrics.itl_avg_ms,
-        itl_p99_ms: metrics.itl_p99_ms,
-        e2e_ms: metrics.e2e_ms,
-        prefill_ms: metrics.prefill_ms,
-        decode_ms: metrics.decode_ms,
-        native_gpu_ms: metrics.native_gpu_ms,
-        native_sync_ms: metrics.native_sync_ms,
-        native_logic_ms: metrics.native_logic_ms,
-        input_tokens: metrics.input_tokens,
-        output_tokens: metrics.output_tokens,
-        cache_hits: metrics.cache_hits,
-        prefill_tokens: metrics.prefill_tokens,
-    }
-}
-
 fn parse_backend_preference(value: &str) -> Result<CoreBackendPreference> {
     parse_choice(
         value,
-        CoreBackendPreference::from_choice,
         "backend must be one of: auto, cpu, cuda, metal, vulkan, webgpu",
     )
 }
 
 fn parse_stats_mode(value: &str) -> Result<StatsMode> {
-    parse_choice(
-        value,
-        StatsMode::from_choice,
-        "stats must be one of: off, basic, profile",
-    )
+    parse_choice(value, "stats must be one of: off, basic, profile")
 }
 
 fn parse_gpu_layers(value: &str) -> Result<GpuLayerConfig> {
     parse_choice(
         value,
-        GpuLayerConfig::from_choice,
         r#"gpu_layers must be "auto", "all", or { count: number }"#,
     )
 }
 
 fn parse_split_mode(value: &str) -> Result<SplitMode> {
-    parse_choice(
-        value,
-        SplitMode::from_choice,
-        "split_mode must be one of: none, layer, row, tensor",
-    )
+    parse_choice(value, "split_mode must be one of: none, layer, row, tensor")
 }
 
 fn parse_flash_attention(value: &str) -> Result<FlashAttentionMode> {
     parse_choice(
         value,
-        FlashAttentionMode::from_choice,
         "flash_attention must be one of: auto, enabled, disabled",
     )
 }
@@ -2195,23 +1800,17 @@ fn parse_flash_attention(value: &str) -> Result<FlashAttentionMode> {
 fn parse_kv_cache_type(value: &str) -> Result<KvCacheType> {
     parse_choice(
         value,
-        KvCacheType::from_choice,
         "cache type must be one of: f16, f32, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1",
     )
 }
 
 fn parse_rope_scaling(value: &str) -> Result<RopeScaling> {
-    parse_choice(
-        value,
-        RopeScaling::from_choice,
-        "ropeScaling must be one of: none, linear, yarn",
-    )
+    parse_choice(value, "ropeScaling must be one of: none, linear, yarn")
 }
 
 fn parse_kv_reuse_mode(value: &str) -> Result<KvReuseMode> {
     parse_choice(
         value,
-        KvReuseMode::from_choice,
         "cache mode must be one of: disabled, live_slot_prefix, state_snapshot, live_slot_and_snapshot",
     )
 }
@@ -2219,7 +1818,6 @@ fn parse_kv_reuse_mode(value: &str) -> Result<KvReuseMode> {
 fn parse_cache_key_policy(value: &str) -> Result<CacheKeyPolicy> {
     parse_choice(
         value,
-        CacheKeyPolicy::from_choice,
         "cache_key_policy must be one of: context_key, prompt_hash",
     )
 }
@@ -2227,7 +1825,6 @@ fn parse_cache_key_policy(value: &str) -> Result<CacheKeyPolicy> {
 fn parse_sampler_stage(value: &str) -> Result<SamplerStage> {
     parse_choice(
         value,
-        SamplerStage::from_choice,
         "sampler stage must be one of: dry, top_k, typical_p, top_p, top_n_sigma, min_p, xtc, temperature, infill, penalties, adaptive_p",
     )
 }
@@ -2235,25 +1832,20 @@ fn parse_sampler_stage(value: &str) -> Result<SamplerStage> {
 fn parse_scheduler_policy(value: &str) -> Result<SchedulerPolicyMode> {
     parse_choice(
         value,
-        SchedulerPolicyMode::from_choice,
         "scheduler.policy.mode must be one of: latency_first, balanced, throughput_first",
     )
 }
 
 fn parse_chat_role(value: &str) -> Result<CoreChatRole> {
-    parse_choice(
-        value,
-        CoreChatRole::from_choice,
-        "chat role must be one of: system, user, assistant",
-    )
+    parse_choice(value, "chat role must be one of: system, user, assistant")
 }
 
-fn parse_choice<T>(
-    value: &str,
-    parser: impl FnOnce(&str) -> Option<T>,
-    error_message: &'static str,
-) -> Result<T> {
-    parser(value).ok_or_else(|| invalid_arg(error_message))
+fn parse_choice<T>(value: &str, error_message: &'static str) -> Result<T>
+where
+    T: DeserializeOwned,
+{
+    serde_json::from_value(serde_json::Value::String(value.to_string()))
+        .map_err(|_| invalid_arg(error_message))
 }
 
 fn optional_core_or_default<T, U>(value: Option<&T>, map: impl FnOnce(&T) -> Result<U>) -> Result<U>

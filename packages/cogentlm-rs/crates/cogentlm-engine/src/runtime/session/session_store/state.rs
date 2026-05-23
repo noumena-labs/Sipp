@@ -19,29 +19,7 @@ impl Default for SequenceState {
     }
 }
 
-impl SequenceState {
-    pub fn in_sync(&self) -> bool {
-        usize::try_from(self.n_past).is_ok_and(|n_past| n_past == self.current_kv_tokens.len())
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::SequenceState;
-
-    #[test]
-    fn sequence_state_reports_sync_with_kv_length() {
-        let mut state = SequenceState {
-            current_kv_tokens: vec![1, 2, 3],
-            n_past: 3,
-            ..SequenceState::default()
-        };
-        assert!(state.in_sync());
-
-        state.n_past = 2;
-        assert!(!state.in_sync());
-
-        state.n_past = -1;
-        assert!(!state.in_sync());
-    }
+    mod state_tests;
 }

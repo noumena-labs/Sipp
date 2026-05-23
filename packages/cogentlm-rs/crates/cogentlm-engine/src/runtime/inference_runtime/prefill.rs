@@ -171,7 +171,7 @@ pub(super) fn prepare_sequence_for_prompt(
             if handle.token_count > live_match_len
                 && prefix_state_cache.restore_by_handle(shared_context, seq_id, handle)
             {
-                if let Some(entry) = prefix_state_cache.entry_by_handle(handle) {
+                if let Some(entry) = prefix_state_cache.entries.get(handle.index) {
                     state.current_kv_tokens.clear();
                     state
                         .current_kv_tokens
