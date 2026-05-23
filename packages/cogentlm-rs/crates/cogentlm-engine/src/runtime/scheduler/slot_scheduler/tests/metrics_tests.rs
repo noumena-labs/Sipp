@@ -1,4 +1,4 @@
-use super::super::metrics::saturating_usize_to_i32;
+use crate::runtime::numeric::saturating_usize_to_i32;
 
 #[test]
 fn usize_metrics_saturate_at_i32_max() {

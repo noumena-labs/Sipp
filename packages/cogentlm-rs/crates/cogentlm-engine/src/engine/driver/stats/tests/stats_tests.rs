@@ -5,9 +5,11 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::super::*;
+use crate::backend::{json_strings, KEY_NAME};
 use crate::engine::protocol::FinishReason;
 use crate::runtime::metrics::RuntimeObservabilityMetrics;
-use crate::runtime::request::{GenerateResponse, GenerateResponseStatus};
+use crate::runtime::numeric::duration_millis_u64;
+use crate::runtime::request::GenerateResponse;
 
 #[test]
 fn runtime_metrics_map_to_engine_stats() {
@@ -43,11 +45,14 @@ fn runtime_metrics_map_to_engine_stats() {
 
 #[test]
 fn backend_observability_parsers_preserve_array_capacity() {
-    let names = parse_backend_names(&[
-        json!({"name": "cpu"}),
-        json!({"missing": true}),
-        json!({"name": "cuda"}),
-    ]);
+    let names = json_strings(
+        &[
+            json!({"name": "cpu"}),
+            json!({"missing": true}),
+            json!({"name": "cuda"}),
+        ],
+        KEY_NAME,
+    );
     assert_eq!(names, vec!["cpu", "cuda"]);
     assert!(names.capacity() >= 3);
 
@@ -65,15 +70,12 @@ fn backend_observability_parsers_preserve_array_capacity() {
 #[test]
 fn completed_response_maps_to_request_result() {
     let result = request_result_from_response(&GenerateResponse {
-        request_id: 7,
-        status: GenerateResponseStatus::Completed,
-        output_text: "hello".to_string(),
         runtime_observability: RuntimeObservabilityMetrics {
             e2e_ms: 50.0,
             output_tokens: 5,
             ..RuntimeObservabilityMetrics::default()
         },
-        ..GenerateResponse::default()
+        ..GenerateResponse::completed(7, "hello")
     });
 
     assert_eq!(result.id, "7");

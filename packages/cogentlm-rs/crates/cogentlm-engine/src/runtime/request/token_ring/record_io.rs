@@ -44,30 +44,26 @@ pub(super) fn read_record_header(
     buffer: &[u8],
     offset: usize,
 ) -> [u8; TOKEN_RING_RECORD_HEADER_BYTES] {
-    let capacity = buffer.len();
-    let offset = offset % capacity;
-    let tail = capacity - offset;
     let mut header = [0_u8; TOKEN_RING_RECORD_HEADER_BYTES];
-    if TOKEN_RING_RECORD_HEADER_BYTES <= tail {
-        header.copy_from_slice(&buffer[offset..offset + TOKEN_RING_RECORD_HEADER_BYTES]);
-    } else {
-        header[..tail].copy_from_slice(&buffer[offset..]);
-        header[tail..].copy_from_slice(&buffer[..TOKEN_RING_RECORD_HEADER_BYTES - tail]);
-    }
+    read_bytes_into(buffer, offset, &mut header);
     header
 }
 
 pub(super) fn read_bytes(buffer: &[u8], offset: usize, len: usize) -> Vec<u8> {
+    let mut out = vec![0; len];
+    read_bytes_into(buffer, offset, &mut out);
+    out
+}
+
+fn read_bytes_into(buffer: &[u8], offset: usize, out: &mut [u8]) {
+    let out_len = out.len();
     let capacity = buffer.len();
     let offset = offset % capacity;
     let tail = capacity - offset;
-    if len <= tail {
-        buffer[offset..offset + len].to_vec()
-    } else {
-        let mut out = Vec::with_capacity(len);
-        out.extend_from_slice(&buffer[offset..]);
-        out.extend_from_slice(&buffer[..len - tail]);
-        out
+    let first_len = out_len.min(tail);
+    out[..first_len].copy_from_slice(&buffer[offset..offset + first_len]);
+    if first_len < out_len {
+        out[first_len..].copy_from_slice(&buffer[..out_len - first_len]);
     }
 }
 

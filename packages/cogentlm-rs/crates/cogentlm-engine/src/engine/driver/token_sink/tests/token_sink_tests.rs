@@ -69,6 +69,26 @@ fn token_ring_batch_tracks_drops_and_sequences() {
 }
 
 #[test]
+fn token_ring_batch_stats_saturate() {
+    let frames = [TokenRingFrame {
+        stream_id: 1,
+        sequence: 0,
+        flags: 0,
+        bytes: b"a".to_vec(),
+    }];
+    let mut state = TokenStreamState::new(1);
+    state.stats.frames_sent = u64::MAX;
+    state.stats.bytes_sent = u64::MAX;
+    state.stats.batches_sent = u64::MAX;
+
+    let batch = token_batch_from_ring_frames(&frames, 1, &mut state, 0).expect("token batch");
+
+    assert_eq!(batch.stats.frames_sent, u64::MAX);
+    assert_eq!(batch.stats.bytes_sent, u64::MAX);
+    assert_eq!(batch.stats.batches_sent, u64::MAX);
+}
+
+#[test]
 fn token_batch_byte_count_saturates() {
     assert_eq!(saturating_usize_to_u32(u32::MAX as usize + 1), u32::MAX);
 }
@@ -77,4 +97,19 @@ fn token_batch_byte_count_saturates() {
 fn token_callback_batch_byte_count_rejects_overflow() {
     assert_eq!(next_batch_byte_count(7, 5), Some(12));
     assert_eq!(next_batch_byte_count(usize::MAX, 1), None);
+}
+
+#[test]
+fn remaining_flush_interval_zeroes_after_deadline() {
+    assert_eq!(
+        remaining_flush_interval(Instant::now() - TOKEN_BATCH_FLUSH_INTERVAL),
+        Duration::ZERO
+    );
+}
+
+#[test]
+fn remaining_quota_keeps_drain_progress_after_limit() {
+    assert_eq!(remaining_quota(10, 3), 7);
+    assert_eq!(remaining_quota(10, 10), 1);
+    assert_eq!(remaining_quota(10, 11), 1);
 }

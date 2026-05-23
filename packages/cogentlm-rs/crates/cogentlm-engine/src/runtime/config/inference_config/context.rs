@@ -1,10 +1,18 @@
 use serde::{Deserialize, Serialize};
 
-use super::{positive_or_none, push_arg};
+use super::{
+    args_len, positive_or_default, positive_or_none, push_arg, push_flag, push_flag_pair,
+    push_optional_arg,
+};
 
 mod value_types;
 
 pub use value_types::{FlashAttentionMode, KvCacheType, RopeScaling};
+
+const ALWAYS_EMITTED_KEY_VALUE_ARGS: usize = 3;
+const ALWAYS_EMITTED_FLAGS: usize = 3;
+const BASE_ARG_LEN: usize =
+    ALWAYS_EMITTED_KEY_VALUE_ARGS * super::KEY_VALUE_ARG_LEN + ALWAYS_EMITTED_FLAGS;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -67,120 +75,67 @@ impl ContextRuntimeConfig {
         self.n_ctx = positive_or_none(self.n_ctx, 1);
         self.n_batch = positive_or_none(self.n_batch, 1);
         self.n_ubatch = positive_or_none(self.n_ubatch, 1);
-        self.n_parallel = Some(self.n_parallel.unwrap_or(1).max(1));
+        self.n_parallel = Some(positive_or_default(self.n_parallel, 1, 1));
         self.n_threads = positive_or_none(self.n_threads, 0);
         self.n_threads_batch = positive_or_none(self.n_threads_batch, 0);
     }
 
     pub(super) fn push_args(&self, args: &mut Vec<String>) {
-        if let Some(value) = self.n_ctx {
-            push_arg(args, "--ctx-size", value.to_string());
-        }
-        if let Some(value) = self.n_batch {
-            push_arg(args, "--batch-size", value.to_string());
-        }
-        if let Some(value) = self.n_ubatch {
-            push_arg(args, "--ubatch-size", value.to_string());
-        }
-        if let Some(value) = self.n_parallel {
-            push_arg(args, "--parallel", value.to_string());
-        }
-        if let Some(value) = self.n_threads {
-            push_arg(args, "--threads", value.to_string());
-        }
-        if let Some(value) = self.n_threads_batch {
-            push_arg(args, "--threads-batch", value.to_string());
-        }
+        push_optional_arg(args, "--ctx-size", self.n_ctx);
+        push_optional_arg(args, "--batch-size", self.n_batch);
+        push_optional_arg(args, "--ubatch-size", self.n_ubatch);
+        push_optional_arg(args, "--parallel", self.n_parallel);
+        push_optional_arg(args, "--threads", self.n_threads);
+        push_optional_arg(args, "--threads-batch", self.n_threads_batch);
         push_arg(args, "--flash-attn", self.flash_attention.as_llama_arg());
         if let Some(value) = self.kv_unified {
-            args.push(
-                if value {
-                    "--kv-unified"
-                } else {
-                    "--no-kv-unified"
-                }
-                .to_string(),
-            );
+            push_flag_pair(args, value, "--kv-unified", "--no-kv-unified");
         }
         push_arg(args, "--cache-type-k", self.cache_type_k.as_llama_arg());
         push_arg(args, "--cache-type-v", self.cache_type_v.as_llama_arg());
-        args.push(
-            if self.offload_kqv {
-                "--kv-offload"
-            } else {
-                "--no-kv-offload"
-            }
-            .to_string(),
-        );
-        args.push(
-            if self.op_offload {
-                "--op-offload"
-            } else {
-                "--no-op-offload"
-            }
-            .to_string(),
-        );
-        if self.swa_full {
-            args.push("--swa-full".to_string());
-        }
-        args.push(
-            if self.warmup {
-                "--warmup"
-            } else {
-                "--no-warmup"
-            }
-            .to_string(),
-        );
+        push_flag_pair(args, self.offload_kqv, "--kv-offload", "--no-kv-offload");
+        push_flag_pair(args, self.op_offload, "--op-offload", "--no-op-offload");
+        push_flag(args, "--swa-full", self.swa_full);
+        push_flag_pair(args, self.warmup, "--warmup", "--no-warmup");
         if let Some(value) = self.rope_scaling {
             push_arg(args, "--rope-scaling", value.as_llama_arg());
         }
-        if let Some(value) = self.rope_freq_base {
-            push_arg(args, "--rope-freq-base", value.to_string());
-        }
-        if let Some(value) = self.rope_freq_scale {
-            push_arg(args, "--rope-freq-scale", value.to_string());
-        }
-        if let Some(value) = self.yarn_orig_ctx {
-            push_arg(args, "--yarn-orig-ctx", value.to_string());
-        }
-        if let Some(value) = self.yarn_ext_factor {
-            push_arg(args, "--yarn-ext-factor", value.to_string());
-        }
-        if let Some(value) = self.yarn_attn_factor {
-            push_arg(args, "--yarn-attn-factor", value.to_string());
-        }
-        if let Some(value) = self.yarn_beta_fast {
-            push_arg(args, "--yarn-beta-fast", value.to_string());
-        }
-        if let Some(value) = self.yarn_beta_slow {
-            push_arg(args, "--yarn-beta-slow", value.to_string());
-        }
+        push_optional_arg(args, "--rope-freq-base", self.rope_freq_base);
+        push_optional_arg(args, "--rope-freq-scale", self.rope_freq_scale);
+        push_optional_arg(args, "--yarn-orig-ctx", self.yarn_orig_ctx);
+        push_optional_arg(args, "--yarn-ext-factor", self.yarn_ext_factor);
+        push_optional_arg(args, "--yarn-attn-factor", self.yarn_attn_factor);
+        push_optional_arg(args, "--yarn-beta-fast", self.yarn_beta_fast);
+        push_optional_arg(args, "--yarn-beta-slow", self.yarn_beta_slow);
     }
 
     pub(super) fn arg_len(&self) -> usize {
-        let mut len = 9;
-        len += self.n_ctx.map_or(0, |_| 2);
-        len += self.n_batch.map_or(0, |_| 2);
-        len += self.n_ubatch.map_or(0, |_| 2);
-        len += self.n_parallel.map_or(0, |_| 2);
-        len += self.n_threads.map_or(0, |_| 2);
-        len += self.n_threads_batch.map_or(0, |_| 2);
-        len += self.kv_unified.map_or(0, |_| 1);
-        len += usize::from(self.swa_full);
-        len += self.rope_scaling.map_or(0, |_| 2);
-        len += self.rope_freq_base.map_or(0, |_| 2);
-        len += self.rope_freq_scale.map_or(0, |_| 2);
-        len += self.yarn_orig_ctx.map_or(0, |_| 2);
-        len += self.yarn_ext_factor.map_or(0, |_| 2);
-        len += self.yarn_attn_factor.map_or(0, |_| 2);
-        len += self.yarn_beta_fast.map_or(0, |_| 2);
-        len += self.yarn_beta_slow.map_or(0, |_| 2);
-        len
+        args_len(
+            BASE_ARG_LEN,
+            [
+                self.n_ctx.is_some(),
+                self.n_batch.is_some(),
+                self.n_ubatch.is_some(),
+                self.n_parallel.is_some(),
+                self.n_threads.is_some(),
+                self.n_threads_batch.is_some(),
+                self.rope_scaling.is_some(),
+                self.rope_freq_base.is_some(),
+                self.rope_freq_scale.is_some(),
+                self.yarn_orig_ctx.is_some(),
+                self.yarn_ext_factor.is_some(),
+                self.yarn_attn_factor.is_some(),
+                self.yarn_beta_fast.is_some(),
+                self.yarn_beta_slow.is_some(),
+            ],
+            [self.kv_unified.is_some(), self.swa_full],
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::arg_value;
     use super::{ContextRuntimeConfig, FlashAttentionMode, KvCacheType, RopeScaling};
 
     #[test]
@@ -237,10 +192,5 @@ mod tests {
         assert_eq!(arg_value(&args, "--flash-attn"), Some("on"));
         assert_eq!(arg_value(&args, "--cache-type-k"), Some("q8_0"));
         assert!(args.iter().any(|arg| arg == "--kv-unified"));
-    }
-
-    fn arg_value<'args>(args: &'args [String], key: &str) -> Option<&'args str> {
-        args.windows(2)
-            .find_map(|window| (window[0] == key).then_some(window[1].as_str()))
     }
 }

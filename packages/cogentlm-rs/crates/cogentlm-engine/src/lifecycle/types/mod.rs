@@ -11,10 +11,11 @@ pub use error::ModelError;
 pub use model::{
     ClassifiedAsset, ModelAsset, ModelAssets, ModelEntry, ModelInfo, ModelModality, ModelPairing,
     ModelPairingReason, ModelPairingState, ModelSource, ModelSourceKind, ModelStatus, PairingPlan,
-    RegistryManifest,
+    RegistryManifest, REGISTRY_MANIFEST_VERSION,
 };
 pub use runtime::{
     BackendPreference, BackendSelection, ModelLoadOptions, ModelServiceState, StatsMode,
+    DEFAULT_MODEL_BACKEND, DEFAULT_MODEL_STATS,
 };
 
 #[cfg(test)]

@@ -1,13 +1,19 @@
 use std::time::Duration;
 
 use crate::engine::protocol::EngineEvent;
-use crate::error::Error;
+use crate::error::Result;
 use crate::runtime::request::GenerateResponseStatus;
 use crate::runtime::RequestStepResult;
 
 use super::super::events::emit_event;
 use super::super::stats::request_result_from_response;
+use super::super::{runtime_command, QueryResponse};
 use super::EngineThreadState;
+
+const REQUEST_CANCELLED_FALLBACK: &str = "request cancelled";
+const REQUEST_FAILED_FALLBACK: &str = "request failed";
+const REQUEST_PENDING_RESPONSE: &str = "request returned pending response";
+const ENGINE_CLOSED: &str = "engine closed";
 
 fn cancel_and_consume_request(runtime: &mut crate::runtime::InferenceRuntime, request_id: u32) {
     let _ = runtime.cancel_request(request_id);
@@ -66,16 +72,8 @@ impl EngineThreadState {
 
         for (request_id, error, error_msg) in errored_ids {
             self.cancel_and_cleanup_request(request_id);
-            if let Some(response_tx) = self.active_requests.remove(&request_id) {
-                let _ = response_tx.send(Err(error));
-            }
-            emit_event(
-                &self.event_subscribers,
-                EngineEvent::RequestFailed {
-                    request_id: request_id.to_string(),
-                    error: error_msg,
-                },
-            );
+            self.send_active_response(request_id, Err(error));
+            self.emit_request_failed(request_id, error_msg);
         }
     }
 
@@ -100,58 +98,51 @@ impl EngineThreadState {
                 runtime.remove_token_ring_producer(request_id);
             }
 
-            let response_tx = self.active_requests.remove(&request_id);
             let result = match response.status {
                 GenerateResponseStatus::Completed => {
                     let result = request_result_from_response(&response);
                     emit_event(
                         &self.event_subscribers,
                         EngineEvent::RequestCompleted {
-                            result: result.clone(),
+                            result: Box::new(result.clone()),
                         },
                     );
                     Ok(response)
                 }
-                GenerateResponseStatus::Cancelled => {
-                    let message = response.error_message.if_empty("request cancelled");
-                    self.emit_request_failed(request_id, message.clone());
-                    Err(Error::RuntimeCommand(message))
-                }
-                GenerateResponseStatus::Failed => {
-                    let message = response.error_message.if_empty("request failed");
-                    self.emit_request_failed(request_id, message.clone());
-                    Err(Error::RuntimeCommand(message))
-                }
-                GenerateResponseStatus::Pending => Err(Error::RuntimeCommand(
-                    "request returned pending response".to_string(),
-                )),
+                GenerateResponseStatus::Cancelled => self.failed_completion_result(
+                    request_id,
+                    response.error_message,
+                    REQUEST_CANCELLED_FALLBACK,
+                ),
+                GenerateResponseStatus::Failed => self.failed_completion_result(
+                    request_id,
+                    response.error_message,
+                    REQUEST_FAILED_FALLBACK,
+                ),
+                GenerateResponseStatus::Pending => Err(runtime_command(REQUEST_PENDING_RESPONSE)),
             };
 
-            if let Some(tx) = response_tx {
-                let _ = tx.send(result);
-            }
+            self.send_active_response(request_id, result);
         }
     }
 
     pub(super) fn fail_all_active_requests(&mut self, error_msg: String) {
-        let remaining_ids: Vec<u32> = self.active_requests.keys().copied().collect();
-        for request_id in remaining_ids {
+        for request_id in self.active_request_ids() {
             self.cancel_and_cleanup_request(request_id);
-            if let Some(response_tx) = self.active_requests.remove(&request_id) {
-                let _ = response_tx.send(Err(Error::RuntimeCommand(error_msg.clone())));
-            }
+            self.send_active_response(request_id, Err(runtime_command(error_msg.clone())));
             self.emit_request_failed(request_id, error_msg.clone());
         }
     }
 
     pub(super) fn close_active_requests(&mut self) {
-        let remaining_ids: Vec<u32> = self.active_requests.keys().copied().collect();
-        for request_id in remaining_ids {
+        for request_id in self.active_request_ids() {
             self.cancel_and_cleanup_request(request_id);
-            if let Some(response_tx) = self.active_requests.remove(&request_id) {
-                let _ = response_tx.send(Err(Error::RuntimeCommand("engine closed".to_string())));
-            }
+            self.send_active_response(request_id, Err(runtime_command(ENGINE_CLOSED)));
         }
+    }
+
+    fn active_request_ids(&self) -> Vec<u32> {
+        self.active_requests.keys().copied().collect()
     }
 
     fn cancel_and_cleanup_request(&mut self, request_id: u32) {
@@ -167,6 +158,23 @@ impl EngineThreadState {
             sink.close();
             let _ = sink.join();
         }
+    }
+
+    fn send_active_response(&mut self, request_id: u32, response: Result<QueryResponse>) {
+        if let Some(response_tx) = self.active_requests.remove(&request_id) {
+            let _ = response_tx.send(response);
+        }
+    }
+
+    fn failed_completion_result(
+        &self,
+        request_id: u32,
+        error_message: String,
+        fallback: &'static str,
+    ) -> Result<QueryResponse> {
+        let message = error_message.if_empty(fallback);
+        self.emit_request_failed(request_id, message.clone());
+        Err(runtime_command(message))
     }
 
     fn emit_request_failed(&self, request_id: u32, error: String) {

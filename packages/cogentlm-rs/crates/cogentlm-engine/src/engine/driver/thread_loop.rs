@@ -3,15 +3,19 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use crate::engine::protocol::{EngineEvent, EngineState, EngineStatus, ModelState};
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::runtime::{InferenceRuntime, RequestStepResult};
 
 use super::events::{build_engine_state_with_status, emit_event, emit_state_event};
 use super::request::{start_chat, start_query, ChatRequest, QueryRequest};
 use super::token_sink::AsyncTokenSink;
-use super::{EngineEventSubscribers, QueryResponse};
+use super::{runtime_command, EngineEventSubscribers, QueryResponse};
 
 mod completion;
+
+const RUNTIME_CLOSED: &str = "runtime is closed";
+const ENGINE_INVALID_DURING_EXECUTION: &str = "Engine became invalid during execution.";
+const ENGINE_NO_PROGRESS: &str = "Engine execution failed with no progress.";
 
 pub(super) enum EngineThreadCommand {
     Generate(QueryRequest, mpsc::Sender<Result<QueryResponse>>),
@@ -103,7 +107,7 @@ impl EngineThreadState {
         ) -> Result<(u32, Option<AsyncTokenSink>)>,
     ) {
         let Some(runtime) = self.runtime.as_mut() else {
-            let _ = response_tx.send(Err(Error::RuntimeCommand("runtime is closed".to_string())));
+            let _ = response_tx.send(Err(runtime_command(RUNTIME_CLOSED)));
             return;
         };
 
@@ -128,33 +132,24 @@ impl EngineThreadState {
 
     fn current_state(&self) -> Result<EngineState> {
         let Some(runtime) = self.runtime.as_ref() else {
-            return Err(Error::RuntimeCommand("runtime is closed".to_string()));
-        };
-        let status = if self.active_requests.is_empty() {
-            EngineStatus::Ready
-        } else {
-            EngineStatus::Running
+            return Err(runtime_command(RUNTIME_CLOSED));
         };
         Ok(build_engine_state_with_status(
             runtime,
             &self.model_state,
-            Some(status),
+            Some(active_request_status(!self.active_requests.is_empty())),
         ))
     }
 
     fn step_active_requests(&mut self) {
-        if self.runtime.is_none() {
+        let Some(runtime) = self.runtime.as_mut() else {
             return;
         };
         if self.active_requests.is_empty() {
             return;
         }
 
-        let burst = self
-            .runtime
-            .as_mut()
-            .expect("runtime checked above")
-            .run_scheduler_loop(1, 0, 0, Duration::ZERO);
+        let burst = runtime.run_scheduler_loop(1, 0, 0, Duration::ZERO);
         self.fail_requests_with_sink_errors();
         self.complete_finished_requests();
 
@@ -163,9 +158,9 @@ impl EngineThreadState {
             RequestStepResult::Invalid | RequestStepResult::FatalNoProgress
         ) {
             let error_msg = if burst.status == RequestStepResult::Invalid {
-                "Engine became invalid during execution.".to_string()
+                ENGINE_INVALID_DURING_EXECUTION.to_string()
             } else {
-                "Engine execution failed with no progress.".to_string()
+                ENGINE_NO_PROGRESS.to_string()
             };
             self.fail_all_active_requests(error_msg);
         }
@@ -180,5 +175,13 @@ impl EngineThreadState {
                 );
             }
         }
+    }
+}
+
+fn active_request_status(has_active_requests: bool) -> EngineStatus {
+    if has_active_requests {
+        EngineStatus::Running
+    } else {
+        EngineStatus::Ready
     }
 }

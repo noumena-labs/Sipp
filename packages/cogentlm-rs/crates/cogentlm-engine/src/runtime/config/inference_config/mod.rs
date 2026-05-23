@@ -4,6 +4,10 @@ use std::fmt::{Display, Write as _};
 
 use serde::{Deserialize, Serialize};
 
+use crate::choice::choice_from_aliases;
+use crate::defaults::{BYTES_PER_MIB, BYTES_PER_MIB_U64};
+use crate::runtime::numeric::{nonnegative_i32, positive_i32, positive_usize};
+
 mod context;
 mod placement;
 mod sampling;
@@ -15,6 +19,11 @@ pub use context::{ContextRuntimeConfig, FlashAttentionMode, KvCacheType, RopeSca
 pub use placement::{GpuLayerConfig, ModelPlacementConfig, SplitMode};
 use sampling::merge_sampling_override_json;
 pub use sampling::{LogitBias, SamplerStage, SamplingRuntimeConfig};
+
+pub const DEFAULT_CONTEXT_KEY: &str = "default";
+pub const DEFAULT_MAX_TOKENS: i32 = 64;
+const EMPTY_JSON_OBJECT: &str = "{}";
+pub(super) const KEY_VALUE_ARG_LEN: usize = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
@@ -53,7 +62,7 @@ impl NativeRuntimeConfig {
     }
 
     pub fn max_sequences(&self) -> i32 {
-        self.context.n_parallel.unwrap_or(1).max(1)
+        positive_or_default(self.context.n_parallel, 1, 1)
     }
 
     pub fn llama_common_args(&self) -> Vec<String> {
@@ -78,7 +87,7 @@ impl NativeRuntimeConfig {
         override_config: Option<&SamplingRuntimeConfig>,
     ) -> String {
         self.try_sampling_json_with_override(override_config)
-            .unwrap_or_else(|_| "{}".to_string())
+            .unwrap_or_else(|_| EMPTY_JSON_OBJECT.to_string())
     }
 
     pub fn try_sampling_json_with_override(
@@ -118,8 +127,8 @@ impl Default for SchedulerRuntimeConfig {
 
 impl SchedulerRuntimeConfig {
     fn normalize(&mut self) {
-        self.policy.decode_token_reserve = self.policy.decode_token_reserve.max(0);
-        self.prefill_chunk_size = self.prefill_chunk_size.max(0);
+        self.policy.decode_token_reserve = nonnegative_i32(self.policy.decode_token_reserve);
+        self.prefill_chunk_size = nonnegative_i32(self.prefill_chunk_size);
         self.max_running_requests = positive_or_none(self.max_running_requests, 1);
         self.max_queued_requests = positive_or_none(self.max_queued_requests, 1);
     }
@@ -146,7 +155,7 @@ impl Default for CacheRuntimeConfig {
             retained_prefix_tokens: 100,
             snapshot_interval_tokens: 128,
             max_snapshot_entries: 32,
-            max_snapshot_bytes: 256 * 1024 * 1024,
+            max_snapshot_bytes: 256 * BYTES_PER_MIB,
             max_session_entries: 8,
             cache_key_policy: CacheKeyPolicy::ContextKey,
             enable_context_checkpoints: false,
@@ -157,12 +166,12 @@ impl Default for CacheRuntimeConfig {
 
 impl CacheRuntimeConfig {
     fn normalize(&mut self) {
-        self.retained_prefix_tokens = self.retained_prefix_tokens.max(0);
-        self.snapshot_interval_tokens = self.snapshot_interval_tokens.max(0);
-        self.max_snapshot_entries = self.max_snapshot_entries.max(1);
-        self.max_snapshot_bytes = self.max_snapshot_bytes.max(1);
-        self.max_session_entries = self.max_session_entries.max(1);
-        self.checkpoint_every_tokens = self.checkpoint_every_tokens.max(0);
+        self.retained_prefix_tokens = nonnegative_i32(self.retained_prefix_tokens);
+        self.snapshot_interval_tokens = nonnegative_i32(self.snapshot_interval_tokens);
+        self.max_snapshot_entries = positive_i32(self.max_snapshot_entries);
+        self.max_snapshot_bytes = positive_usize(self.max_snapshot_bytes);
+        self.max_session_entries = positive_i32(self.max_session_entries);
+        self.checkpoint_every_tokens = nonnegative_i32(self.checkpoint_every_tokens);
     }
 }
 
@@ -175,11 +184,40 @@ pub enum KvReuseMode {
     LiveSlotAndSnapshot,
 }
 
+impl KvReuseMode {
+    pub fn from_choice(value: &str) -> Option<Self> {
+        choice_from_aliases(
+            value,
+            &[
+                (&["disabled", "none"], Self::Disabled),
+                (&["live_slot_prefix", "live_slot"], Self::LiveSlotPrefix),
+                (&["state_snapshot", "snapshot"], Self::StateSnapshot),
+                (
+                    &["live_slot_and_snapshot", "both"],
+                    Self::LiveSlotAndSnapshot,
+                ),
+            ],
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CacheKeyPolicy {
     ContextKey,
     PromptHash,
+}
+
+impl CacheKeyPolicy {
+    pub fn from_choice(value: &str) -> Option<Self> {
+        choice_from_aliases(
+            value,
+            &[
+                (&["context_key"], Self::ContextKey),
+                (&["prompt_hash"], Self::PromptHash),
+            ],
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -213,14 +251,14 @@ impl Default for ResidencyRuntimeConfig {
             max_gpu_models_per_device: 1,
             allow_cpu_models_while_gpu_loaded: true,
             require_gpu_lease: true,
-            gpu_memory_safety_margin_bytes: 512 * 1024 * 1024,
+            gpu_memory_safety_margin_bytes: 512 * BYTES_PER_MIB_U64,
         }
     }
 }
 
 impl ResidencyRuntimeConfig {
     fn normalize(&mut self) {
-        self.max_gpu_models_per_device = self.max_gpu_models_per_device.max(1);
+        self.max_gpu_models_per_device = positive_usize(self.max_gpu_models_per_device);
     }
 }
 
@@ -251,7 +289,7 @@ pub struct GenerateOptions {
 impl Default for GenerateOptions {
     fn default() -> Self {
         Self {
-            max_tokens: 64,
+            max_tokens: DEFAULT_MAX_TOKENS,
             stream: false,
             stop: Vec::new(),
             sampling: None,
@@ -265,6 +303,65 @@ impl Default for GenerateOptions {
 pub(super) fn push_arg(args: &mut Vec<String>, key: impl Into<String>, value: impl Into<String>) {
     args.push(key.into());
     args.push(value.into());
+}
+
+pub(super) fn conditional_arg_len(enabled: bool) -> usize {
+    if enabled {
+        KEY_VALUE_ARG_LEN
+    } else {
+        0
+    }
+}
+
+pub(super) fn flag_len(enabled: bool) -> usize {
+    usize::from(enabled)
+}
+
+pub(super) fn key_value_args_len(enabled: impl IntoIterator<Item = bool>) -> usize {
+    enabled.into_iter().map(conditional_arg_len).sum()
+}
+
+pub(super) fn flags_len(enabled: impl IntoIterator<Item = bool>) -> usize {
+    enabled.into_iter().map(flag_len).sum()
+}
+
+pub(super) fn args_len(
+    base_len: usize,
+    key_value_args: impl IntoIterator<Item = bool>,
+    flags: impl IntoIterator<Item = bool>,
+) -> usize {
+    base_len + key_value_args_len(key_value_args) + flags_len(flags)
+}
+
+pub(super) fn push_optional_arg<T: Display>(args: &mut Vec<String>, key: &str, value: Option<T>) {
+    if let Some(value) = value {
+        push_arg(args, key, value.to_string());
+    }
+}
+
+pub(super) fn push_csv_arg<T>(
+    args: &mut Vec<String>,
+    key: &str,
+    values: impl IntoIterator<Item = T>,
+) where
+    T: Display,
+{
+    push_arg(args, key, join_csv(values));
+}
+
+pub(super) fn push_flag(args: &mut Vec<String>, flag: &str, enabled: bool) {
+    if enabled {
+        args.push(flag.to_string());
+    }
+}
+
+pub(super) fn push_flag_pair(
+    args: &mut Vec<String>,
+    enabled: bool,
+    enabled_flag: &str,
+    disabled_flag: &str,
+) {
+    args.push(if enabled { enabled_flag } else { disabled_flag }.to_string());
 }
 
 pub(super) fn bool_arg(value: bool) -> &'static str {
@@ -291,6 +388,16 @@ where
 
 pub(super) fn positive_or_none(value: Option<i32>, minimum: i32) -> Option<i32> {
     value.map(|value| value.max(minimum))
+}
+
+pub(super) fn positive_or_default(value: Option<i32>, default: i32, minimum: i32) -> i32 {
+    value.unwrap_or(default).max(minimum)
+}
+
+#[cfg(test)]
+pub(super) fn arg_value<'args>(args: &'args [String], key: &str) -> Option<&'args str> {
+    args.windows(2)
+        .find_map(|window| (window[0] == key).then_some(window[1].as_str()))
 }
 
 #[cfg(test)]

@@ -11,11 +11,13 @@ use cogentlm_sys as ffi;
 
 use crate::runtime::request::{GenerateRequestLifecycle, RequestQueue};
 use crate::runtime::scheduler::{SlotPhase, SlotScheduler, SlotState};
+use crate::runtime::REQUEST_CANCELLED_MESSAGE;
 
 use super::numeric::{
     duration_ms, nonnegative_i32_to_usize, nonnegative_i32_to_usize_opt, usize_to_i32,
 };
 use super::text::append_token_piece_to_slot;
+use super::LLAMA_SAMPLER_SAMPLE_FAILED;
 
 /// RAII guard for `cogent_mtmd_bitmap`. Frees the bitmap on drop.
 struct BitmapGuard(*mut ffi::cogent_mtmd_bitmap);
@@ -205,18 +207,13 @@ pub(super) fn run_multimodal_prefill(
     slot.prefill_cursor = prompt_tokens_len;
 
     let Some(sampler) = slot.sampler() else {
-        slot.terminal_error_message =
-            "Sampler was unavailable after multimodal prefill.".to_string();
-        slot.phase = SlotPhase::Failed;
-        if let Some(request) = slot.request_mut() {
-            request.lifecycle = GenerateRequestLifecycle::Failed;
-        }
+        slot.fail("Sampler was unavailable after multimodal prefill.");
         return false;
     };
     let next_token =
         unsafe { ffi::cogent_common_sampler_sample(sampler.as_ptr(), shared_context, -1) };
     if next_token == ffi::LLAMA_TOKEN_NULL {
-        slot.terminal_error_message = "llama_sampler_sample() failed.".to_string();
+        slot.terminal_error_message = LLAMA_SAMPLER_SAMPLE_FAILED.to_string();
         return false;
     }
     unsafe {
@@ -244,11 +241,7 @@ pub(super) fn run_multimodal_prefill(
         .request()
         .is_some_and(|request| request.cancel_requested)
     {
-        slot.terminal_error_message = "Request cancelled.".to_string();
-        slot.phase = SlotPhase::Failed;
-        if let Some(request) = slot.request_mut() {
-            request.lifecycle = GenerateRequestLifecycle::Cancelled;
-        }
+        slot.cancel(REQUEST_CANCELLED_MESSAGE);
         return true;
     }
 

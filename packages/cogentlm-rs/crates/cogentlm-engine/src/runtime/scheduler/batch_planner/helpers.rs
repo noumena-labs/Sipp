@@ -1,4 +1,9 @@
 use crate::runtime::config::SchedulerTickBudget;
+use crate::runtime::numeric::{
+    positive_fair_share_i32, positive_i32_to_usize, saturating_usize_to_i32,
+};
+
+const DECODE_PRESSURE_PREFILL_FLOOR: i32 = 8;
 
 pub(super) fn resolve_prefill_slice_cap(
     budget: SchedulerTickBudget,
@@ -18,48 +23,31 @@ pub(super) fn resolve_prefill_slice_cap(
 
     if active_prefill_slot_count > 1 {
         let active_prefill_slot_count = saturating_usize_to_i32(active_prefill_slot_count).max(1);
-        let fair_share = (remaining_prefill_budget / active_prefill_slot_count).max(1);
+        let fair_share =
+            positive_fair_share_i32(remaining_prefill_budget, active_prefill_slot_count);
         slice_cap = slice_cap.min(fair_share);
     }
 
     if has_decode_pressure {
-        let decode_pressure_slice_cap =
-            remaining_prefill_budget.min(budget.effective_decode_budget().max(8));
+        let decode_pressure_slice_cap = remaining_prefill_budget.min(
+            budget
+                .effective_decode_budget()
+                .max(DECODE_PRESSURE_PREFILL_FLOOR),
+        );
         slice_cap = slice_cap.min(decode_pressure_slice_cap);
     }
 
     slice_cap.max(1)
 }
 
-pub(super) fn erase_active_slot(
-    active_prefill_slots: &mut Vec<usize>,
-    in_tick_offset: &mut Vec<usize>,
-    index: usize,
-) {
-    active_prefill_slots.remove(index);
-    in_tick_offset.remove(index);
-}
-
 pub(super) fn token_limit_reached(generated_token_count: usize, max_output_tokens: i32) -> bool {
-    max_output_tokens > 0
-        && generated_token_count >= usize::try_from(max_output_tokens).unwrap_or(usize::MAX)
-}
-
-pub(super) fn saturating_usize_to_i32(value: usize) -> i32 {
-    i32::try_from(value).unwrap_or(i32::MAX)
-}
-
-pub(super) fn saturating_u32_to_i32(value: u32) -> i32 {
-    i32::try_from(value).unwrap_or(i32::MAX)
-}
-
-pub(super) fn positive_i32_to_usize(value: i32) -> Option<usize> {
-    usize::try_from(value).ok().filter(|value| *value > 0)
+    positive_i32_to_usize(max_output_tokens).is_some_and(|limit| generated_token_count >= limit)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::numeric::saturating_u32_to_i32;
 
     #[test]
     fn conversions_saturate_scheduler_counts() {

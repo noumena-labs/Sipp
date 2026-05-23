@@ -2,6 +2,9 @@
 
 use crate::runtime::config::SchedulerTickBudget;
 use crate::runtime::llama_token;
+use crate::runtime::numeric::{
+    positive_i32_to_usize, saturating_u32_to_i32, saturating_usize_to_i32,
+};
 use crate::runtime::request::GenerateRequestId;
 
 use super::SlotState;
@@ -9,10 +12,9 @@ use super::SlotState;
 mod apply_results;
 mod helpers;
 
-use helpers::{
-    erase_active_slot, positive_i32_to_usize, resolve_prefill_slice_cap, saturating_u32_to_i32,
-    saturating_usize_to_i32,
-};
+use helpers::resolve_prefill_slice_cap;
+
+const FAST_OCCUPIED_SLOT_BITS: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BatchContributionKind {
@@ -55,7 +57,9 @@ impl SharedBatchPlan {
             contributions: Vec::with_capacity(max_contributions),
             active_prefill_slots: Vec::with_capacity(max_slots),
             in_tick_offset: Vec::with_capacity(max_slots),
-            occupied_overflow_slots: Vec::with_capacity(max_slots.saturating_sub(64)),
+            occupied_overflow_slots: Vec::with_capacity(
+                max_slots.saturating_sub(FAST_OCCUPIED_SLOT_BITS),
+            ),
             ..Self::default()
         }
     }
@@ -75,6 +79,11 @@ impl SharedBatchPlan {
         self.active_prefill_slots.clear();
         self.in_tick_offset.clear();
         self.occupied_overflow_slots.clear();
+    }
+
+    fn erase_active_prefill_slot(&mut self, index: usize) {
+        self.active_prefill_slots.remove(index);
+        self.in_tick_offset.remove(index);
     }
 }
 
@@ -142,14 +151,12 @@ impl BatchPlanner {
                 continue;
             };
 
-            plan.contributions.push(BatchContribution {
+            plan.contributions.push(decode_contribution(
                 slot_index,
-                request_id: request.id,
-                kind: BatchContributionKind::Decode,
+                request.id,
                 token,
-                position: slot.mirror.n_past,
-                request_logits: true,
-            });
+                slot.mirror.n_past,
+            ));
             plan.decode_token_count = plan.decode_token_count.saturating_add(1);
             remaining_decode_budget -= 1;
         }
@@ -178,27 +185,15 @@ impl BatchPlanner {
 
             let slot_index = plan.active_prefill_slots[next_prefill_slot_index];
             let Some(slot) = slots.get(slot_index) else {
-                erase_active_slot(
-                    &mut plan.active_prefill_slots,
-                    &mut plan.in_tick_offset,
-                    next_prefill_slot_index,
-                );
+                plan.erase_active_prefill_slot(next_prefill_slot_index);
                 continue;
             };
             let Some(request) = slot.request() else {
-                erase_active_slot(
-                    &mut plan.active_prefill_slots,
-                    &mut plan.in_tick_offset,
-                    next_prefill_slot_index,
-                );
+                plan.erase_active_prefill_slot(next_prefill_slot_index);
                 continue;
             };
             if slot.prefill_cursor >= request.prompt_tokens.len() {
-                erase_active_slot(
-                    &mut plan.active_prefill_slots,
-                    &mut plan.in_tick_offset,
-                    next_prefill_slot_index,
-                );
+                plan.erase_active_prefill_slot(next_prefill_slot_index);
                 continue;
             }
 
@@ -221,14 +216,12 @@ impl BatchPlanner {
                     break;
                 };
 
-                plan.contributions.push(BatchContribution {
+                plan.contributions.push(prefill_contribution(
                     slot_index,
-                    request_id: request.id,
-                    kind: BatchContributionKind::Prefill,
-                    token: request.prompt_tokens[token_index],
+                    request.id,
+                    request.prompt_tokens[token_index],
                     position,
-                    request_logits: false,
-                });
+                ));
                 plan.prefill_token_count = plan.prefill_token_count.saturating_add(1);
                 remaining_slot_budget -= 1;
                 remaining_prefill_budget -= 1;
@@ -246,21 +239,17 @@ impl BatchPlanner {
                 }
             }
             if slot_completed_prompt {
-                erase_active_slot(
-                    &mut plan.active_prefill_slots,
-                    &mut plan.in_tick_offset,
-                    next_prefill_slot_index,
-                );
+                plan.erase_active_prefill_slot(next_prefill_slot_index);
                 continue;
             }
 
             next_prefill_slot_index += 1;
         }
 
-        // Bitmask unique-slot count for n_parallel ≤ 64 — avoids per-tick HashSet alloc.
+        // Bitmask unique-slot count for small n_parallel values avoids per-tick HashSet allocation.
         let mut occupied_mask: u64 = 0;
         for contribution in &plan.contributions {
-            if contribution.slot_index < 64 {
+            if contribution.slot_index < FAST_OCCUPIED_SLOT_BITS {
                 occupied_mask |= 1u64 << contribution.slot_index;
             } else if !plan
                 .occupied_overflow_slots
@@ -275,6 +264,38 @@ impl BatchPlanner {
 
     pub fn apply_decode_results(&self, slots: &mut [SlotState], plan: &SharedBatchPlan) {
         apply_results::apply_decode_results(slots, plan);
+    }
+}
+
+fn decode_contribution(
+    slot_index: usize,
+    request_id: GenerateRequestId,
+    token: llama_token,
+    position: i32,
+) -> BatchContribution {
+    BatchContribution {
+        slot_index,
+        request_id,
+        kind: BatchContributionKind::Decode,
+        token,
+        position,
+        request_logits: true,
+    }
+}
+
+fn prefill_contribution(
+    slot_index: usize,
+    request_id: GenerateRequestId,
+    token: llama_token,
+    position: i32,
+) -> BatchContribution {
+    BatchContribution {
+        slot_index,
+        request_id,
+        kind: BatchContributionKind::Prefill,
+        token,
+        position,
+        request_logits: false,
     }
 }
 

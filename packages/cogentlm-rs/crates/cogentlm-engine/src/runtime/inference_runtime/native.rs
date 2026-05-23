@@ -12,6 +12,8 @@ use crate::token::token_to_piece;
 
 use super::InferenceRuntime;
 
+const UNKNOWN_SHIM_VALUE: &str = "unknown";
+
 pub(super) fn c_strings_from_args(args: &[String]) -> Result<Vec<CString>> {
     args.iter()
         .map(|arg| CString::new(arg.as_str()).map_err(Error::from))
@@ -48,6 +50,10 @@ pub(super) fn owned_shim_string(value: *mut c_char, name: &'static str) -> Resul
     Ok(result)
 }
 
+fn owned_shim_string_or_unknown(value: *mut c_char, name: &'static str) -> String {
+    owned_shim_string(value, name).unwrap_or_else(|_| UNKNOWN_SHIM_VALUE.to_string())
+}
+
 pub(super) fn resolved_runtime_limits(
     common_init: *mut ffi::cogent_common_init,
 ) -> ResolvedRuntimeLimits {
@@ -57,21 +63,18 @@ pub(super) fn resolved_runtime_limits(
         n_ubatch: unsafe { ffi::cogent_common_init_n_ubatch(common_init) }.max(0),
         n_parallel: unsafe { ffi::cogent_common_init_n_parallel(common_init) }.max(0),
         kv_unified: unsafe { ffi::cogent_common_init_kv_unified(common_init) },
-        flash_attention: owned_shim_string(
+        flash_attention: owned_shim_string_or_unknown(
             unsafe { ffi::cogent_common_init_flash_attention(common_init) },
             "cogent_common_init_flash_attention",
-        )
-        .unwrap_or_else(|_| "unknown".to_string()),
-        cache_type_k: owned_shim_string(
+        ),
+        cache_type_k: owned_shim_string_or_unknown(
             unsafe { ffi::cogent_common_init_cache_type_k(common_init) },
             "cogent_common_init_cache_type_k",
-        )
-        .unwrap_or_else(|_| "unknown".to_string()),
-        cache_type_v: owned_shim_string(
+        ),
+        cache_type_v: owned_shim_string_or_unknown(
             unsafe { ffi::cogent_common_init_cache_type_v(common_init) },
             "cogent_common_init_cache_type_v",
-        )
-        .unwrap_or_else(|_| "unknown".to_string()),
+        ),
     }
 }
 

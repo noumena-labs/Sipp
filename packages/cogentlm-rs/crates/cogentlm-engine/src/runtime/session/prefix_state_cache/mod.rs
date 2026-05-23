@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use cogentlm_sys as ffi;
 
+use crate::defaults::BYTES_PER_MIB;
 use crate::runtime::{llama_seq_id, llama_token};
 
 use super::{PrefixCachePolicy, PrefixCachePolicyStats};
@@ -54,6 +55,24 @@ pub struct PrefixCacheLookupKey {
     pub model_fingerprint: u64,
     pub token_count: usize,
     pub prefix_hash: u64,
+}
+
+impl PrefixCacheLookupKey {
+    pub(super) fn new(model_fingerprint: u64, token_count: usize, prefix_hash: u64) -> Self {
+        Self {
+            model_fingerprint,
+            token_count,
+            prefix_hash,
+        }
+    }
+
+    pub(super) fn for_entry(entry: &PrefixCacheEntry) -> Self {
+        Self::new(
+            entry.model_fingerprint,
+            entry.token_count,
+            entry.prefix_hash,
+        )
+    }
 }
 
 /// Opaque handle returned by [`PrefixStateCache::find_best_prefix_handle`].
@@ -125,11 +144,11 @@ impl PrefixStateCache {
         }
 
         for candidate in candidates {
-            let lookup_key = PrefixCacheLookupKey {
+            let lookup_key = PrefixCacheLookupKey::new(
                 model_fingerprint,
-                token_count: candidate.token_count,
-                prefix_hash: candidate.prefix_hash,
-            };
+                candidate.token_count,
+                candidate.prefix_hash,
+            );
             let Some(bucket) = self.lookup_buckets.get(&lookup_key) else {
                 continue;
             };
@@ -222,7 +241,7 @@ impl PrefixStateCache {
 
 impl Default for PrefixStateCache {
     fn default() -> Self {
-        Self::new(32, 256 * 1024 * 1024)
+        Self::new(32, 256 * BYTES_PER_MIB)
     }
 }
 

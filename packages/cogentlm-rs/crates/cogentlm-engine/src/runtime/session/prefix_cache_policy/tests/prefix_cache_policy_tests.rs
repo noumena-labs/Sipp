@@ -70,3 +70,22 @@ fn negative_tokens_hash_by_stable_bit_pattern() {
         (PREFIX_HASH_SEED ^ u64::from(u32::MAX)).wrapping_mul(PREFIX_HASH_PRIME)
     );
 }
+
+#[test]
+fn boundary_helpers_preserve_interval_and_terminal_rules() {
+    assert_eq!(
+        minimum_prefix_cache_tokens(0),
+        MAX_MINIMUM_PREFIX_CACHE_TOKENS
+    );
+    assert_eq!(minimum_prefix_cache_tokens(4), 4);
+    assert_eq!(
+        minimum_prefix_cache_tokens(MAX_MINIMUM_PREFIX_CACHE_TOKENS + 1),
+        MAX_MINIMUM_PREFIX_CACHE_TOKENS
+    );
+    assert_eq!(candidate_boundary_capacity(10, 4), 3);
+    assert_eq!(candidate_boundary_capacity(10, 0), 1);
+    assert!(is_terminal_boundary(10, 10));
+    assert!(!is_terminal_boundary(8, 10));
+    assert!(is_interval_boundary(8, 4));
+    assert!(!is_interval_boundary(8, 0));
+}

@@ -5,6 +5,7 @@ use crate::runtime::request::GenerateRequestLifecycle;
 use crate::runtime::request::RequestQueue;
 use crate::runtime::scheduler::{SlotPhase, SlotState};
 use crate::runtime::session::{PrefixCachePolicy, PrefixStateCache, SessionStore};
+use crate::runtime::REQUEST_CANCELLED_MESSAGE;
 
 use super::environment::{
     live_retained_prefix_tokens, resolve_batch_token_budget, snapshot_prefix_cache_enabled,
@@ -30,11 +31,7 @@ impl InferenceRuntime {
 
             let cancel_requested = slot.request().map(|r| r.cancel_requested).unwrap_or(false);
             if cancel_requested {
-                slot.terminal_error_message = "Request cancelled.".to_string();
-                slot.phase = SlotPhase::Failed;
-                if let Some(request) = slot.request_mut() {
-                    request.lifecycle = GenerateRequestLifecycle::Cancelled;
-                }
+                slot.cancel(REQUEST_CANCELLED_MESSAGE);
                 continue;
             }
 
@@ -57,8 +54,9 @@ impl InferenceRuntime {
                 continue;
             }
 
-            if slot.phase == SlotPhase::Prefill && slot.prefill_cursor == 0 {
-                if run_initial_prefill(
+            if slot.phase == SlotPhase::Prefill
+                && slot.prefill_cursor == 0
+                && run_initial_prefill(
                     slot,
                     vocab,
                     self.mtmd_context,
@@ -71,9 +69,9 @@ impl InferenceRuntime {
                     &mut self.prefix_cache_policy,
                     &mut self.request_queue,
                     &mut self.scratch_token_piece,
-                ) {
-                    continue;
-                }
+                )
+            {
+                continue;
             }
 
             if slot.phase == SlotPhase::Decode
@@ -83,12 +81,7 @@ impl InferenceRuntime {
                     slot,
                 )
             {
-                slot.terminal_error_message =
-                    "Failed to extend decode context headroom.".to_string();
-                slot.phase = SlotPhase::Failed;
-                if let Some(request) = slot.request_mut() {
-                    request.lifecycle = GenerateRequestLifecycle::Failed;
-                }
+                slot.fail("Failed to extend decode context headroom.");
                 continue;
             }
 

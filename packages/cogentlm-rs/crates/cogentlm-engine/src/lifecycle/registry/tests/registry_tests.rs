@@ -1,41 +1,20 @@
 //! Unit tests for the parent module.
 
 use super::super::*;
+use crate::lifecycle::test_support::{gguf_name, gguf_path, TempDir};
 use crate::lifecycle::{AssetSource, ModelAssetKind, ModelModality, ModelStatus, PairingPlan};
 use std::fs;
-
-struct TempDir {
-    path: PathBuf,
-}
-
-impl TempDir {
-    fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "cogentlm-engine-registry-{}-{}",
-            name,
-            now_unix_ms()
-        ));
-        fs::create_dir_all(&path).expect("temp dir");
-        Self { path }
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
-    }
-}
 
 fn asset(id: &str) -> AssetRecord {
     AssetRecord {
         id: id.to_string(),
         kind: ModelAssetKind::Model,
-        name: format!("{id}.gguf"),
+        name: gguf_name(id),
         hash: id.trim_start_matches("asset-").to_string(),
         bytes: 4,
         storage_path: PathBuf::from("assets").join(id),
         source: AssetSource::Local {
-            path: PathBuf::from(format!("{id}.gguf")),
+            path: gguf_path(id),
             modified_unix_ms: None,
         },
         ref_count: 0,
@@ -62,7 +41,7 @@ fn model(id: &str, asset_id: &str) -> ModelEntry {
 
 #[test]
 fn registry_persists_assets_and_models() {
-    let root = TempDir::new("persist");
+    let root = TempDir::new("registry", "persist");
     let mut registry = ModelRegistry::local(root.path.clone()).expect("registry");
     registry.upsert_asset(asset("asset-a")).expect("asset");
     registry
@@ -77,7 +56,7 @@ fn registry_persists_assets_and_models() {
 
 #[test]
 fn registry_removes_model_and_returns_orphaned_assets() {
-    let root = TempDir::new("remove");
+    let root = TempDir::new("registry", "remove");
     let mut registry = ModelRegistry::local(root.path.clone()).expect("registry");
     registry.upsert_asset(asset("asset-a")).expect("asset");
     registry
@@ -94,7 +73,7 @@ fn registry_removes_model_and_returns_orphaned_assets() {
 
 #[test]
 fn update_model_rebalances_asset_refcounts_when_assets_change() {
-    let root = TempDir::new("update-refs");
+    let root = TempDir::new("registry", "update-refs");
     let mut registry = ModelRegistry::local(root.path.clone()).expect("registry");
     registry.upsert_asset(asset("asset-a")).expect("asset a");
     registry.upsert_asset(asset("asset-b")).expect("asset b");
@@ -118,7 +97,7 @@ fn update_model_rebalances_asset_refcounts_when_assets_change() {
 
 #[test]
 fn insert_model_rejects_refcount_overflow() {
-    let root = TempDir::new("refcount-overflow");
+    let root = TempDir::new("registry", "refcount-overflow");
     let mut registry = ModelRegistry::local(root.path.clone()).expect("registry");
     let mut record = asset("asset-a");
     record.ref_count = u32::MAX;
@@ -137,7 +116,7 @@ fn insert_model_rejects_refcount_overflow() {
 
 #[test]
 fn insert_model_rejects_projector_revision_overflow_without_mutating_manifest() {
-    let root = TempDir::new("revision-overflow");
+    let root = TempDir::new("registry", "revision-overflow");
     let mut registry = ModelRegistry::local(root.path.clone()).expect("registry");
     registry.upsert_asset(asset("asset-a")).expect("asset");
     registry.manifest.projector_index_revision = u64::MAX;
@@ -156,7 +135,7 @@ fn insert_model_rejects_projector_revision_overflow_without_mutating_manifest() 
 
 #[test]
 fn registry_reports_corrupt_manifest() {
-    let root = TempDir::new("corrupt");
+    let root = TempDir::new("registry", "corrupt");
     fs::write(root.path.join("registry.json"), b"{\"version\":2}").expect("corrupt manifest");
 
     let error = ModelRegistry::local(root.path.clone()).expect_err("corrupt");
@@ -165,7 +144,7 @@ fn registry_reports_corrupt_manifest() {
 
 #[test]
 fn registry_reports_refcount_mismatch() {
-    let root = TempDir::new("refcount-mismatch");
+    let root = TempDir::new("registry", "refcount-mismatch");
     let mut manifest = RegistryManifest::default();
     let mut asset = asset("asset-a");
     asset.ref_count = 0;

@@ -6,6 +6,7 @@ pub use inference_config::{
     GpuLayerConfig, KvCacheType, KvReuseMode, LogitBias, ModelPlacementConfig,
     MultimodalRuntimeConfig, NativeRuntimeConfig, ObservabilityRuntimeConfig,
     ResidencyRuntimeConfig, ResolvedRuntimeLimits, RopeScaling, SamplerStage,
-    SamplingRuntimeConfig, SchedulerRuntimeConfig, SplitMode,
+    SamplingRuntimeConfig, SchedulerRuntimeConfig, SplitMode, DEFAULT_CONTEXT_KEY,
+    DEFAULT_MAX_TOKENS,
 };
 pub use scheduler_policy::{SchedulerPolicyConfig, SchedulerPolicyMode, SchedulerTickBudget};

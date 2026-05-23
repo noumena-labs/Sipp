@@ -6,7 +6,10 @@ use crate::runtime::request::GenerateRequestLifecycle;
 use crate::runtime::scheduler::{BatchContributionKind, SlotPhase, SlotScheduler};
 
 use super::text::{append_token_piece_to_slot, apply_stop_sequences_to_slot, flush_pending_utf8};
-use super::{duration_ms, nonnegative_i32_to_usize, unique_slot_first_use, InferenceRuntime};
+use super::{
+    duration_ms, nonnegative_i32_to_usize, unique_slot_first_use, InferenceRuntime,
+    LLAMA_SAMPLER_SAMPLE_FAILED,
+};
 
 impl InferenceRuntime {
     pub(super) fn apply_bookkeeping_and_emit(
@@ -34,12 +37,7 @@ impl InferenceRuntime {
             };
 
             let Some(next_n_past) = slot.mirror.n_past.checked_add(1) else {
-                slot.terminal_error_message =
-                    "KV position overflowed during batch bookkeeping.".to_string();
-                slot.phase = SlotPhase::Failed;
-                if let Some(request) = slot.request_mut() {
-                    request.lifecycle = GenerateRequestLifecycle::Failed;
-                }
+                slot.fail("KV position overflowed during batch bookkeeping.");
                 continue;
             };
             slot.mirror.current_kv_tokens.push(contribution.token);
@@ -50,12 +48,7 @@ impl InferenceRuntime {
             if is_prefill {
                 let prompt_len = slot.request().map(|r| r.prompt_tokens.len()).unwrap_or(0);
                 let Some(next_prefill_cursor) = slot.prefill_cursor.checked_add(1) else {
-                    slot.terminal_error_message =
-                        "Prefill cursor overflowed during batch bookkeeping.".to_string();
-                    slot.phase = SlotPhase::Failed;
-                    if let Some(request) = slot.request_mut() {
-                        request.lifecycle = GenerateRequestLifecycle::Failed;
-                    }
+                    slot.fail("Prefill cursor overflowed during batch bookkeeping.");
                     continue;
                 };
                 slot.prefill_cursor = next_prefill_cursor;
@@ -144,11 +137,7 @@ impl InferenceRuntime {
             pending_logits.sampled_token = next_token;
 
             if next_token == ffi::LLAMA_TOKEN_NULL {
-                slot.terminal_error_message = "llama_sampler_sample() failed.".to_string();
-                slot.phase = SlotPhase::Failed;
-                if let Some(request) = slot.request_mut() {
-                    request.lifecycle = GenerateRequestLifecycle::Failed;
-                }
+                slot.fail(LLAMA_SAMPLER_SAMPLE_FAILED);
                 continue;
             }
             unsafe {

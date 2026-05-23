@@ -4,6 +4,7 @@ use crate::runtime::config::SamplingRuntimeConfig;
 use crate::runtime::llama_token;
 
 pub type GenerateRequestId = u32;
+pub const NO_SAMPLED_TOKEN_ID: i32 = -1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GenerateTokenEmissionMode {
@@ -104,6 +105,11 @@ impl GenerateRequest {
         self.first_token_at = None;
         self.last_token_at = None;
         self.completed_at = None;
+        self.reset_runtime_metrics();
+        self.cancel_requested = false;
+    }
+
+    fn reset_runtime_metrics(&mut self) {
         self.emitted_token_count = 0;
         self.itl_sum_ms = 0.0;
         self.itl_p99_ms = 0.0;
@@ -139,8 +145,7 @@ impl GenerateRequest {
         self.debug_metrics_finalize_ms = 0.0;
         self.debug_metrics_commit_observability_ms = 0.0;
         self.debug_metrics_post_decode_ms = 0.0;
-        self.first_sampled_token_id = -1;
-        self.cancel_requested = false;
+        self.first_sampled_token_id = NO_SAMPLED_TOKEN_ID;
     }
 }
 
@@ -199,7 +204,7 @@ impl Default for GenerateRequest {
             debug_metrics_finalize_ms: 0.0,
             debug_metrics_commit_observability_ms: 0.0,
             debug_metrics_post_decode_ms: 0.0,
-            first_sampled_token_id: -1,
+            first_sampled_token_id: NO_SAMPLED_TOKEN_ID,
             is_multimodal_turn: false,
             cancel_requested: false,
         }

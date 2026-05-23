@@ -1,6 +1,3 @@
-#[cfg(target_family = "wasm")]
-use std::ffi::CStr;
-use std::ffi::CString;
 use std::os::raw::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr::NonNull;
@@ -20,6 +17,10 @@ use cogentlm_engine::runtime::request::{
 };
 #[cfg(target_family = "wasm")]
 use cogentlm_engine::runtime::{InferenceRuntime, RequestStepResult, SchedulerBurstResult};
+
+use crate::ffi::free_c_string;
+#[cfg(target_family = "wasm")]
+use crate::ffi::{into_c_string, read_optional_c_string};
 
 // Provided by `wasm_exports.cpp`. Calls back into the host JS to drain the
 // streaming buffer into the SAB ring. Synchronous; the worker thread blocks
@@ -1232,13 +1233,11 @@ pub extern "C" fn cogentlm_browser_backend_observability_json(include_details: i
 }
 
 #[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_free_string(value: *mut c_char) {
-    if value.is_null() {
-        return;
-    }
-    unsafe {
-        drop(CString::from_raw(value));
-    }
+/// # Safety
+/// `value` must be null or a string pointer returned by this wasm module. Each
+/// non-null pointer must be freed at most once.
+pub unsafe extern "C" fn cogentlm_browser_engine_free_string(value: *mut c_char) {
+    unsafe { free_c_string(value) }
 }
 
 fn with_engine_mut<T>(engine: *mut BrowserEngine, f: impl FnOnce(&mut BrowserEngine) -> T) -> T
@@ -1269,35 +1268,7 @@ where
 
 #[cfg(target_family = "wasm")]
 fn read_c_string(value: *const c_char) -> Option<String> {
-    if value.is_null() {
-        return None;
-    }
-    Some(
-        unsafe { CStr::from_ptr(value) }
-            .to_string_lossy()
-            .into_owned(),
-    )
-    .filter(|value| !value.is_empty())
-}
-
-#[cfg(target_family = "wasm")]
-fn read_optional_c_string(value: *const c_char) -> Option<String> {
-    if value.is_null() {
-        return Some(String::new());
-    }
-    Some(
-        unsafe { CStr::from_ptr(value) }
-            .to_string_lossy()
-            .into_owned(),
-    )
-}
-
-#[cfg(target_family = "wasm")]
-fn into_c_string(value: String) -> *mut c_char {
-    let sanitized = value.replace('\0', "");
-    CString::new(sanitized)
-        .map(CString::into_raw)
-        .unwrap_or(std::ptr::null_mut())
+    read_optional_c_string(value).filter(|value| !value.is_empty())
 }
 
 fn byte_len_i32(bytes: &[u8]) -> i32 {

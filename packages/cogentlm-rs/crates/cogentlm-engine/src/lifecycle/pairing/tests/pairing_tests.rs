@@ -1,6 +1,7 @@
 //! Unit tests for the parent module.
 
 use super::super::*;
+use crate::lifecycle::test_support::{some_string, strings};
 use crate::lifecycle::AssetInspection;
 
 fn model(id: &str, name: &str, vision_types: &[&str]) -> ClassifiedAsset {
@@ -12,10 +13,7 @@ fn model(id: &str, name: &str, vision_types: &[&str]) -> ClassifiedAsset {
             role: AssetRole::Model,
             architecture: Some("test".to_string()),
             vision_capable: !vision_types.is_empty(),
-            compatible_vision_projector_types: vision_types
-                .iter()
-                .map(|value| (*value).to_string())
-                .collect(),
+            compatible_vision_projector_types: strings(vision_types),
             provided_vision_projector_type: None,
         },
     }
@@ -72,7 +70,7 @@ fn accepts_explicit_compatible_projector() {
 
     assert_eq!(plan.modality, ModelModality::Vision);
     assert_eq!(plan.status, ModelStatus::Ready);
-    assert_eq!(plan.projector_asset_id, Some("asset-projector".to_string()));
+    assert_eq!(plan.projector_asset_id, some_string("asset-projector"));
 }
 
 #[test]
@@ -84,7 +82,7 @@ fn accepts_single_implicit_compatible_projector() {
 
     assert_eq!(plan.modality, ModelModality::Vision);
     assert_eq!(plan.status, ModelStatus::Ready);
-    assert_eq!(plan.projector_asset_id, Some("asset-projector".to_string()));
+    assert_eq!(plan.projector_asset_id, some_string("asset-projector"));
 }
 
 #[test]
@@ -108,7 +106,7 @@ fn accepts_explicit_projector_when_base_metadata_is_inconclusive() {
 
     assert_eq!(plan.modality, ModelModality::Vision);
     assert_eq!(plan.status, ModelStatus::Ready);
-    assert_eq!(plan.projector_asset_id, Some("asset-projector".to_string()));
+    assert_eq!(plan.projector_asset_id, some_string("asset-projector"));
 }
 
 #[test]
@@ -143,19 +141,6 @@ fn rejects_multiple_implicit_projectors() {
     assert!(
         matches!(error, ModelError::InvalidModelPairing(message) if message.ends_with("a.gguf, b.gguf"))
     );
-}
-
-#[test]
-fn asset_name_joining_presizes_exact_message_capacity() {
-    let first = projector("asset-projector-a", "a.gguf", Some("lfm2"));
-    let second = projector("asset-projector-b", "b.gguf", Some("lfm2"));
-    let files = vec![&first, &second];
-
-    let names = join_asset_names(&files);
-
-    assert_eq!(names, "a.gguf, b.gguf");
-    assert_eq!(names.capacity(), names.len());
-    assert_eq!(joined_asset_names_capacity(&files), Some(names.len()));
 }
 
 #[test]

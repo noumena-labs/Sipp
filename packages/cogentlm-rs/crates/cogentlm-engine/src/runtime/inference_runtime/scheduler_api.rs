@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use crate::runtime::config::SchedulerTickBudget;
+use crate::runtime::numeric::positive_fair_share_i32;
 
 use super::{
     saturating_i32_delta, saturating_usize_delta_to_i32, InferenceRuntime, RequestStepResult,
@@ -191,7 +192,7 @@ impl InferenceRuntime {
             return configured_chunk_size;
         }
 
-        let fair_share = (prefill_budget / prefill_ready_count.max(1)).max(1);
+        let fair_share = positive_fair_share_i32(prefill_budget, prefill_ready_count);
         if configured_chunk_size > 0 {
             configured_chunk_size.min(fair_share)
         } else {

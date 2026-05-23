@@ -1,33 +1,17 @@
 //! Unit tests for the parent module.
 
 use super::super::*;
+use crate::lifecycle::test_support::TempDir;
 use std::fs;
 
-struct TempDir {
-    path: PathBuf,
-}
-
-impl TempDir {
-    fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "cogentlm-engine-storage-{}-{}",
-            name,
-            now_unix_ms()
-        ));
-        fs::create_dir_all(&path).expect("temp dir");
-        Self { path }
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
-    }
+#[test]
+fn asset_id_from_hash_uses_storage_prefix() {
+    assert_eq!(asset_id_from_hash("abc123"), "asset-abc123");
 }
 
 #[test]
 fn asset_store_hashes_and_dedupes_local_files() {
-    let root = TempDir::new("dedupe");
+    let root = TempDir::new("storage", "dedupe");
     let source = root.path.join("source.gguf");
     fs::write(&source, b"not a real gguf, just stable bytes").expect("source");
 
@@ -54,7 +38,7 @@ fn asset_store_hashes_and_dedupes_local_files() {
 
 #[test]
 fn existing_asset_path_must_match_source_hash() {
-    let root = TempDir::new("corrupt-existing");
+    let root = TempDir::new("storage", "corrupt-existing");
     let source = root.path.join("source.gguf");
     fs::write(&source, b"stable source bytes").expect("source");
 
@@ -73,7 +57,7 @@ fn existing_asset_path_must_match_source_hash() {
 
 #[test]
 fn missing_asset_is_typed_error() {
-    let root = TempDir::new("missing");
+    let root = TempDir::new("storage", "missing");
     let source = root.path.join("source.gguf");
     fs::write(&source, b"bytes").expect("source");
 

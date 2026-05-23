@@ -4,8 +4,7 @@ use std::time::Instant;
 use cogentlm_sys as ffi;
 
 use crate::runtime::config::NativeRuntimeConfig;
-use crate::runtime::request::GenerateRequestLifecycle;
-use crate::runtime::scheduler::{SamplerCacheKey, SlotPhase, SlotState};
+use crate::runtime::scheduler::{SamplerCacheKey, SlotState};
 
 use super::super::duration_ms;
 use super::super::sampler::{attach_backend_sampler, create_sampler};
@@ -34,10 +33,9 @@ pub(super) fn ensure_slot_sampler(
     let sampling_json = match config.try_sampling_json_with_override(sampling.as_ref()) {
         Ok(sampling_json) => sampling_json,
         Err(error) => {
-            fail_slot(
-                slot,
-                format!("Failed to serialize sampler configuration: {error}"),
-            );
+            slot.fail(format!(
+                "Failed to serialize sampler configuration: {error}"
+            ));
             return false;
         }
     };
@@ -73,7 +71,7 @@ pub(super) fn ensure_slot_sampler(
             } else {
                 "Failed to create per-slot grammar sampler."
             };
-            fail_slot(slot, message.to_string());
+            slot.fail(message);
             false
         }
     }
@@ -93,13 +91,5 @@ fn record_backend_sampler_attach(slot: &mut SlotState, shared_context: *mut ffi:
                 .debug_metrics_backend_sampler_attach_failures
                 .saturating_add(1);
         }
-    }
-}
-
-fn fail_slot(slot: &mut SlotState, message: String) {
-    slot.terminal_error_message = message;
-    slot.phase = SlotPhase::Failed;
-    if let Some(request) = slot.request_mut() {
-        request.lifecycle = GenerateRequestLifecycle::Failed;
     }
 }

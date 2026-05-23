@@ -2,6 +2,11 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::choice::choice_from_aliases;
+
+const DEFAULT_DECODE_TOKEN_RESERVE: i32 = 1;
+const DEFAULT_ADAPTIVE_PREFILL_CHUNKING: bool = false;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SchedulerPolicyMode {
@@ -9,6 +14,19 @@ pub enum SchedulerPolicyMode {
     #[default]
     Balanced = 1,
     ThroughputFirst = 2,
+}
+
+impl SchedulerPolicyMode {
+    pub fn from_choice(value: &str) -> Option<Self> {
+        choice_from_aliases(
+            value,
+            &[
+                (&["latency_first", "latency"], Self::LatencyFirst),
+                (&["balanced", "balance"], Self::Balanced),
+                (&["throughput_first", "throughput"], Self::ThroughputFirst),
+            ],
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,9 +40,9 @@ pub struct SchedulerPolicyConfig {
 impl Default for SchedulerPolicyConfig {
     fn default() -> Self {
         Self {
-            mode: SchedulerPolicyMode::Balanced,
-            decode_token_reserve: 1,
-            enable_adaptive_prefill_chunking: false,
+            mode: SchedulerPolicyMode::default(),
+            decode_token_reserve: DEFAULT_DECODE_TOKEN_RESERVE,
+            enable_adaptive_prefill_chunking: DEFAULT_ADAPTIVE_PREFILL_CHUNKING,
         }
     }
 }

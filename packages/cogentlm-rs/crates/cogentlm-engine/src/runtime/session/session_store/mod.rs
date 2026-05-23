@@ -120,8 +120,7 @@ impl SessionStore {
         state: SequenceState,
     ) -> &mut SequenceState {
         let context_key = context_key.into();
-        remove_key(&mut self.evictable_context_keys, &context_key);
-        self.evictable_context_keys.push_back(context_key.clone());
+        refresh_evictable_key(&mut self.evictable_context_keys, context_key.clone());
         let entry = match self.context_states.entry(context_key) {
             Entry::Occupied(mut occupied) => {
                 occupied.insert(SessionEntry {
@@ -144,9 +143,7 @@ impl SessionStore {
             .get(context_key)
             .is_some_and(|entry| entry.is_evictable)
         {
-            remove_key(&mut self.evictable_context_keys, context_key);
-            self.evictable_context_keys
-                .push_back(context_key.to_string());
+            refresh_evictable_key(&mut self.evictable_context_keys, context_key.to_string());
         }
     }
 
@@ -246,12 +243,7 @@ impl SessionStore {
             self.mark_pinned(context_key);
             return;
         }
-        if entry.is_evictable {
-            remove_key(&mut self.evictable_context_keys, context_key);
-        }
-
-        self.evictable_context_keys
-            .push_back(context_key.to_string());
+        refresh_evictable_key(&mut self.evictable_context_keys, context_key.to_string());
         entry.is_evictable = true;
     }
 
@@ -282,6 +274,11 @@ fn remove_key(keys: &mut VecDeque<String>, context_key: &str) {
     if let Some(index) = keys.iter().position(|candidate| candidate == context_key) {
         keys.remove(index);
     }
+}
+
+fn refresh_evictable_key(keys: &mut VecDeque<String>, context_key: String) {
+    remove_key(keys, &context_key);
+    keys.push_back(context_key);
 }
 
 #[cfg(test)]

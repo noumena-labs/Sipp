@@ -1,4 +1,5 @@
 use crate::runtime::request::{GenerateRequestId, GenerateResponse, TokenByteRingProducer};
+use crate::runtime::REQUEST_CANCELLED_MESSAGE;
 
 use super::super::InferenceRuntime;
 
@@ -9,7 +10,7 @@ impl InferenceRuntime {
         }
         let mut cancelled = self
             .request_queue
-            .cancel(request_id, "Request cancelled.".to_string());
+            .cancel(request_id, REQUEST_CANCELLED_MESSAGE.to_string());
 
         for slot in self.slot_scheduler.mutable_slots() {
             if slot.request_id != request_id {

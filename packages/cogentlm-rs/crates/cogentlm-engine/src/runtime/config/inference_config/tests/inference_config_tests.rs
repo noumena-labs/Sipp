@@ -1,6 +1,7 @@
 //! Unit tests for the parent module.
 
 use super::super::*;
+use crate::defaults::BYTES_PER_MIB_U64;
 
 #[test]
 fn native_runtime_config_deserializes_sparse_browser_json() {
@@ -53,6 +54,33 @@ fn native_runtime_config_rejects_non_canonical_field_names() {
 }
 
 #[test]
+fn config_choice_helpers_accept_binding_aliases() {
+    assert_eq!(
+        GpuLayerConfig::from_choice("auto"),
+        Some(GpuLayerConfig::Auto)
+    );
+    assert_eq!(SplitMode::from_choice("row"), Some(SplitMode::Row));
+    assert_eq!(
+        FlashAttentionMode::from_choice("off"),
+        Some(FlashAttentionMode::Disabled)
+    );
+    assert_eq!(KvCacheType::from_choice("iq4-nl"), Some(KvCacheType::Iq4Nl));
+    assert_eq!(RopeScaling::from_choice("yarn"), Some(RopeScaling::Yarn));
+    assert_eq!(
+        KvReuseMode::from_choice("live slot"),
+        Some(KvReuseMode::LiveSlotPrefix)
+    );
+    assert_eq!(
+        CacheKeyPolicy::from_choice("prompt-hash"),
+        Some(CacheKeyPolicy::PromptHash)
+    );
+    assert_eq!(
+        SamplerStage::from_choice("temp"),
+        Some(SamplerStage::Temperature)
+    );
+}
+
+#[test]
 fn llama_common_args_are_normalized_at_public_boundary() {
     let config = NativeRuntimeConfig {
         placement: ModelPlacementConfig {
@@ -76,7 +104,7 @@ fn llama_common_args_are_normalized_at_public_boundary() {
     let args = config.llama_common_args();
 
     assert_arg_value(&args, "--ctx-size", "1");
-    assert_arg_value(&args, "--gpu-layers", "0");
+    assert_arg_value(&args, "--gpu-layers", "all");
     assert_arg_value(&args, "--main-gpu", "0");
     assert_arg_value(&args, "--fit-ctx", "1");
     assert_arg_value(&args, "--batch-size", "1");
@@ -94,7 +122,7 @@ fn llama_common_args_presizes_exact_argument_count() {
             main_gpu: Some(1),
             tensor_split: vec![0.5, 0.5],
             fit_params_min_ctx: Some(2048),
-            fit_params_target_bytes: vec![1024 * 1024],
+            fit_params_target_bytes: vec![BYTES_PER_MIB_U64],
             use_mlock: true,
             use_mmap: false,
             check_tensors: true,
@@ -173,9 +201,20 @@ fn native_runtime_config_normalizes_policy_limits() {
     assert!(config.observability.effective_runtime_metrics());
 }
 
+#[test]
+fn config_limit_helpers_clamp_to_named_bounds() {
+    assert_eq!(nonnegative_i32(-1), 0);
+    assert_eq!(nonnegative_i32(2), 2);
+    assert_eq!(positive_i32(0), 1);
+    assert_eq!(positive_i32(2), 2);
+    assert_eq!(positive_usize(0), 1);
+    assert_eq!(positive_usize(2), 2);
+}
+
 fn assert_arg_value(args: &[String], key: &str, expected: &str) {
-    let value = args
-        .windows(2)
-        .find_map(|window| (window[0] == key).then_some(window[1].as_str()));
-    assert_eq!(value, Some(expected), "missing or wrong value for {key}");
+    assert_eq!(
+        arg_value(args, key),
+        Some(expected),
+        "missing or wrong value for {key}"
+    );
 }

@@ -5,6 +5,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use crate::defaults::{BYTES_PER_KIB, DEFAULT_MODEL_FILE_NAME};
 use crate::engine::{
     protocol::{EngineEvent, EngineState, ModelState, RequestResult},
     stream::TokenBatch,
@@ -30,8 +31,16 @@ type EngineEventSubscribers = Arc<Mutex<Vec<mpsc::Sender<EngineEvent>>>>;
 pub(crate) type OnTokensCallback = Box<dyn FnMut(&TokenBatch) -> Result<()> + Send + 'static>;
 
 const TOKEN_BATCH_MAX_FRAMES: usize = 64;
-const TOKEN_BATCH_MAX_BYTES: usize = 64 * 1024;
+const TOKEN_BATCH_MAX_BYTES: usize = 64 * BYTES_PER_KIB;
 const TOKEN_BATCH_FLUSH_INTERVAL: Duration = Duration::from_millis(4);
+const ENGINE_CLOSE_ACK_TIMEOUT: Duration = Duration::from_secs(1);
+const ENGINE_THREAD_CLOSED: &str = "engine thread is closed";
+const ENGINE_THREAD_STOPPED_BEFORE_RESPONSE: &str = "engine thread stopped before responding";
+const ENGINE_THREAD_NAME: &str = "cogentlm-engine";
+const ENGINE_THREAD_SPAWN_FAILED: &str = "failed to spawn engine thread";
+const ENGINE_THREAD_STOPPED_DURING_LOAD: &str = "engine thread stopped during load";
+const ENGINE_THREAD_PANICKED: &str = "engine thread panicked";
+const TOKEN_CALLBACK_THREAD_PANICKED: &str = "token callback thread panicked";
 
 pub struct CogentEngine {
     command_tx: mpsc::Sender<EngineThreadCommand>,
@@ -47,7 +56,7 @@ impl CogentEngine {
             name: model_path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .unwrap_or("model.gguf")
+                .unwrap_or(DEFAULT_MODEL_FILE_NAME)
                 .to_string(),
         };
         let runtime_config = config;
@@ -57,7 +66,7 @@ impl CogentEngine {
         let engine_thread_subscribers = event_subscribers.clone();
 
         let join_handle = thread::Builder::new()
-            .name("cogentlm-engine".to_string())
+            .name(ENGINE_THREAD_NAME.to_string())
             .spawn(move || {
                 let runtime = InferenceRuntime::load(&model_path, runtime_config);
                 match runtime {
@@ -75,7 +84,7 @@ impl CogentEngine {
                     }
                 }
             })
-            .map_err(|_| Error::RuntimeCommand("failed to spawn engine thread".to_string()))?;
+            .map_err(|_| runtime_command(ENGINE_THREAD_SPAWN_FAILED))?;
 
         match init_rx.recv() {
             Ok(Ok(())) => Ok(Self {
@@ -89,9 +98,7 @@ impl CogentEngine {
             }
             Err(_) => {
                 let _ = join_handle.join();
-                Err(Error::RuntimeCommand(
-                    "engine thread stopped during load".to_string(),
-                ))
+                Err(runtime_command(ENGINE_THREAD_STOPPED_DURING_LOAD))
             }
         }
     }
@@ -102,22 +109,13 @@ impl CogentEngine {
     }
 
     pub fn query_response(&self, request: impl Into<QueryRequest>) -> Result<QueryResponse> {
-        let (response_tx, response_rx) = mpsc::channel();
-        self.command_tx
-            .send(EngineThreadCommand::Generate(request.into(), response_tx))
-            .map_err(|_| Error::RuntimeCommand("engine thread is closed".to_string()))?;
-        recv_command_response(response_rx)
+        self.send_command(|response_tx| EngineThreadCommand::Generate(request.into(), response_tx))
     }
 
     pub fn chat_response(&self, request: impl Into<ChatRequest>) -> Result<QueryResponse> {
-        let (response_tx, response_rx) = mpsc::channel();
-        self.command_tx
-            .send(EngineThreadCommand::GenerateChat(
-                request.into(),
-                response_tx,
-            ))
-            .map_err(|_| Error::RuntimeCommand("engine thread is closed".to_string()))?;
-        recv_command_response(response_rx)
+        self.send_command(|response_tx| {
+            EngineThreadCommand::GenerateChat(request.into(), response_tx)
+        })
     }
 
     pub fn chat(&self, request: impl Into<ChatRequest>) -> Result<RequestResult> {
@@ -126,11 +124,7 @@ impl CogentEngine {
     }
 
     pub fn state(&self) -> Result<EngineState> {
-        let (response_tx, response_rx) = mpsc::channel();
-        self.command_tx
-            .send(EngineThreadCommand::GetState(response_tx))
-            .map_err(|_| Error::RuntimeCommand("engine thread is closed".to_string()))?;
-        recv_command_response(response_rx)
+        self.send_command(EngineThreadCommand::GetState)
     }
 
     pub fn subscribe_events(&self) -> EngineEventReceiver {
@@ -153,12 +147,23 @@ impl CogentEngine {
         let (ack_tx, ack_rx) = mpsc::channel();
         let send_result = self.command_tx.send(EngineThreadCommand::Close(ack_tx));
         if send_result.is_ok() {
-            let _ = ack_rx.recv_timeout(Duration::from_secs(1));
+            let _ = ack_rx.recv_timeout(ENGINE_CLOSE_ACK_TIMEOUT);
         }
         join_handle
             .join()
-            .map_err(|_| Error::RuntimeCommand("engine thread panicked".to_string()))?;
+            .map_err(|_| runtime_command(ENGINE_THREAD_PANICKED))?;
         Ok(())
+    }
+
+    fn send_command<T>(
+        &self,
+        build_command: impl FnOnce(mpsc::Sender<Result<T>>) -> EngineThreadCommand,
+    ) -> Result<T> {
+        let (response_tx, response_rx) = mpsc::channel();
+        self.command_tx
+            .send(build_command(response_tx))
+            .map_err(|_| runtime_command(ENGINE_THREAD_CLOSED))?;
+        recv_command_response(response_rx)
     }
 }
 
@@ -171,7 +176,11 @@ impl Drop for CogentEngine {
 fn recv_command_response<T>(response_rx: mpsc::Receiver<Result<T>>) -> Result<T> {
     response_rx
         .recv()
-        .map_err(|_| Error::RuntimeCommand("engine thread stopped before responding".to_string()))?
+        .map_err(|_| runtime_command(ENGINE_THREAD_STOPPED_BEFORE_RESPONSE))?
+}
+
+fn runtime_command(message: impl Into<String>) -> Error {
+    Error::RuntimeCommand(message.into())
 }
 
 #[cfg(test)]

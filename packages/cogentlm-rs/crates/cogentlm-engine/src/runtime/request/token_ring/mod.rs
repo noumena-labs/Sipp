@@ -6,7 +6,9 @@ use std::sync::MutexGuard;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-pub const TOKEN_RING_DEFAULT_CAPACITY: usize = 256 * 1024;
+use crate::defaults::BYTES_PER_KIB;
+
+pub const TOKEN_RING_DEFAULT_CAPACITY: usize = 256 * BYTES_PER_KIB;
 pub const TOKEN_RING_RECORD_HEADER_BYTES: usize = 16;
 
 mod record_io;
@@ -91,7 +93,7 @@ pub fn token_byte_ring(capacity: usize) -> (TokenByteRingProducer, TokenByteRing
 
 impl TokenByteRingProducer {
     pub fn try_write_frame(&self, stream_id: u32, flags: u32, bytes: &[u8]) -> bool {
-        if stream_id == 0 || bytes.is_empty() {
+        if frame_is_noop(stream_id, bytes) {
             return true;
         }
 
@@ -100,27 +102,10 @@ impl TokenByteRingProducer {
             return false;
         }
 
-        let Ok(byte_len) = u32::try_from(bytes.len()) else {
-            self.inner.drop_count.fetch_add(1, Ordering::Relaxed);
-            self.inner.available.notify_one();
+        let Some(record) = writable_record(&state, bytes.len()) else {
+            record_dropped_frame(&self.inner);
             return false;
         };
-
-        let Some(record_size) = TOKEN_RING_RECORD_HEADER_BYTES.checked_add(bytes.len()) else {
-            self.inner.drop_count.fetch_add(1, Ordering::Relaxed);
-            self.inner.available.notify_one();
-            return false;
-        };
-        let Some(next_used) = state.used.checked_add(record_size) else {
-            self.inner.drop_count.fetch_add(1, Ordering::Relaxed);
-            self.inner.available.notify_one();
-            return false;
-        };
-        if record_size > state.buffer.len() || next_used > state.buffer.len() {
-            self.inner.drop_count.fetch_add(1, Ordering::Relaxed);
-            self.inner.available.notify_one();
-            return false;
-        }
 
         let was_empty = state.used == 0;
         let record_sequence = next_sequence_for_stream(&mut state, stream_id);
@@ -130,7 +115,7 @@ impl TokenByteRingProducer {
             stream_id,
             sequence: record_sequence,
             flags,
-            byte_len,
+            byte_len: record.byte_len,
         }
         .encode();
         write_bytes(&mut state.buffer, offset, &header);
@@ -139,8 +124,8 @@ impl TokenByteRingProducer {
             offset + TOKEN_RING_RECORD_HEADER_BYTES,
             bytes,
         );
-        state.write_index = (state.write_index + record_size) % state.buffer.len();
-        state.used = next_used;
+        state.write_index = (state.write_index + record.size) % state.buffer.len();
+        state.used = record.next_used;
         drop(state);
         if was_empty {
             self.inner.available.notify_one();
@@ -159,14 +144,14 @@ impl TokenByteRingProducer {
 impl TokenByteRingConsumer {
     pub fn wait_for_data(&self, timeout: Duration) -> bool {
         let state = lock_ring_state(&self.inner.state);
-        if state.used > 0 || state.closed {
+        if state.has_data_or_closed() {
             return true;
         }
         let (state, _timeout) = match self.inner.available.wait_timeout(state, timeout) {
             Ok(result) => result,
             Err(error) => error.into_inner(),
         };
-        state.used > 0 || state.closed
+        state.has_data_or_closed()
     }
 
     pub fn drain_available(&self, max_frames: usize, max_bytes: usize) -> TokenRingDrain {
@@ -186,12 +171,7 @@ impl TokenByteRingConsumer {
         max_bytes: usize,
     ) -> TokenRingDrainStatus {
         let mut state = lock_ring_state(&self.inner.state);
-        let possible_frame_count = state
-            .used
-            .checked_div(TOKEN_RING_RECORD_HEADER_BYTES)
-            .unwrap_or(0)
-            .min(max_frames);
-        frames.reserve(possible_frame_count);
+        frames.reserve(possible_drain_frame_count(state.used, max_frames));
         let mut drained_frames = 0usize;
         let mut drained_bytes = 0usize;
 
@@ -201,7 +181,7 @@ impl TokenByteRingConsumer {
             let Ok(byte_len) = usize::try_from(header.byte_len) else {
                 break;
             };
-            let Some(record_size) = TOKEN_RING_RECORD_HEADER_BYTES.checked_add(byte_len) else {
+            let Some(record_size) = token_ring_record_size(byte_len) else {
                 break;
             };
             if record_size > state.used {
@@ -210,7 +190,7 @@ impl TokenByteRingConsumer {
             let Some(next_drained_bytes) = drained_bytes.checked_add(byte_len) else {
                 break;
             };
-            if drained_bytes > 0 && next_drained_bytes > max_bytes {
+            if exceeds_followup_byte_limit(drained_bytes, next_drained_bytes, max_bytes) {
                 break;
             }
             let bytes = read_bytes(
@@ -242,11 +222,63 @@ impl TokenByteRingConsumer {
     }
 }
 
+impl TokenByteRingState {
+    fn has_data_or_closed(&self) -> bool {
+        self.used > 0 || self.closed
+    }
+}
+
+fn frame_is_noop(stream_id: u32, bytes: &[u8]) -> bool {
+    stream_id == 0 || bytes.is_empty()
+}
+
 fn lock_ring_state(state: &Mutex<TokenByteRingState>) -> MutexGuard<'_, TokenByteRingState> {
     match state.lock() {
         Ok(state) => state,
         Err(error) => error.into_inner(),
     }
+}
+
+fn record_dropped_frame(inner: &TokenByteRingInner) {
+    inner.drop_count.fetch_add(1, Ordering::Relaxed);
+    inner.available.notify_one();
+}
+
+fn token_ring_record_size(byte_len: usize) -> Option<usize> {
+    TOKEN_RING_RECORD_HEADER_BYTES.checked_add(byte_len)
+}
+
+fn possible_drain_frame_count(used_bytes: usize, max_frames: usize) -> usize {
+    used_bytes
+        .checked_div(TOKEN_RING_RECORD_HEADER_BYTES)
+        .unwrap_or(0)
+        .min(max_frames)
+}
+
+fn exceeds_followup_byte_limit(
+    drained_bytes: usize,
+    next_drained_bytes: usize,
+    max_bytes: usize,
+) -> bool {
+    drained_bytes > 0 && next_drained_bytes > max_bytes
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WritableRecord {
+    byte_len: u32,
+    size: usize,
+    next_used: usize,
+}
+
+fn writable_record(state: &TokenByteRingState, byte_len: usize) -> Option<WritableRecord> {
+    let byte_len_u32 = u32::try_from(byte_len).ok()?;
+    let size = token_ring_record_size(byte_len)?;
+    let next_used = state.used.checked_add(size)?;
+    (size <= state.buffer.len() && next_used <= state.buffer.len()).then_some(WritableRecord {
+        byte_len: byte_len_u32,
+        size,
+        next_used,
+    })
 }
 
 fn next_sequence_for_stream(state: &mut TokenByteRingState, stream_id: u32) -> u32 {

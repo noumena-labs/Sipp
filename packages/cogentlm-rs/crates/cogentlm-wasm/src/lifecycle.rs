@@ -1,4 +1,3 @@
-use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -10,6 +9,8 @@ use cogentlm_engine::lifecycle::{
 };
 use serde::Serialize;
 use serde_json::Value;
+
+use crate::ffi::{into_c_string, read_optional_c_string};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,7 +35,13 @@ pub extern "C" fn cogentlm_model_service_create_json(config_json: *const c_char)
 }
 
 #[no_mangle]
-pub extern "C" fn cogentlm_model_service_close(service: *mut BrowserLifecycleService) -> i32 {
+/// # Safety
+/// `service` must be null or a live handle returned by
+/// `cogentlm_model_service_create_json`. A non-null handle is consumed and must
+/// not be reused.
+pub unsafe extern "C" fn cogentlm_model_service_close(
+    service: *mut BrowserLifecycleService,
+) -> i32 {
     if service.is_null() {
         return 0;
     }
@@ -248,27 +255,9 @@ fn read_required_c_string(value: *const c_char, label: &str) -> Result<String, M
     Ok(value)
 }
 
-fn read_optional_c_string(value: *const c_char) -> Option<String> {
-    if value.is_null() {
-        return Some(String::new());
-    }
-    Some(
-        unsafe { CStr::from_ptr(value) }
-            .to_string_lossy()
-            .into_owned(),
-    )
-}
-
 fn response_json<T>(response: BrowserLifecycleEnvelope<T>) -> String
 where
     T: Serialize,
 {
     browser_lifecycle_response_json(response)
-}
-
-fn into_c_string(value: String) -> *mut c_char {
-    let sanitized = value.replace('\0', "");
-    CString::new(sanitized)
-        .map(CString::into_raw)
-        .unwrap_or(std::ptr::null_mut())
 }

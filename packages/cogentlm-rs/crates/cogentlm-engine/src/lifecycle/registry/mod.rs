@@ -2,7 +2,10 @@
 
 use std::path::PathBuf;
 
+use crate::collection::remove_matching_values;
+
 use super::storage::{now_unix_ms, LocalStorageBackend, StorageBackend};
+use super::util::{empty_asset_id, model_not_found, storage_corrupt};
 use super::{AssetRecord, ModelEntry, ModelError, RegistryManifest};
 
 mod refs;
@@ -10,6 +13,10 @@ mod refs;
 use refs::{
     decrement_refs, increment_refs, rebalance_refs, referenced_asset_ids, validate_manifest,
 };
+
+fn manifest_parse_failed(path: &std::path::Path, error: serde_json::Error) -> ModelError {
+    storage_corrupt(format!("failed to parse {}: {}", path.display(), error))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemovedModel {
@@ -35,13 +42,8 @@ impl<B: StorageBackend> ModelRegistry<B> {
         let manifest_path = backend.manifest_path();
         let manifest = if manifest_path.exists() {
             let bytes = std::fs::read(&manifest_path)?;
-            let manifest = serde_json::from_slice::<RegistryManifest>(&bytes).map_err(|error| {
-                ModelError::StorageCorrupt(format!(
-                    "failed to parse {}: {}",
-                    manifest_path.display(),
-                    error
-                ))
-            })?;
+            let manifest = serde_json::from_slice::<RegistryManifest>(&bytes)
+                .map_err(|error| manifest_parse_failed(&manifest_path, error))?;
             validate_manifest(&manifest)?;
             manifest
         } else {
@@ -72,9 +74,7 @@ impl<B: StorageBackend> ModelRegistry<B> {
 
     pub fn upsert_asset(&mut self, mut record: AssetRecord) -> Result<(), ModelError> {
         if record.id.trim().is_empty() {
-            return Err(ModelError::StorageCorrupt(
-                "asset id must not be empty".to_string(),
-            ));
+            return Err(empty_asset_id());
         }
         if let Some(existing) = self.manifest.assets.get(&record.id) {
             record.ref_count = existing.ref_count;
@@ -106,14 +106,14 @@ impl<B: StorageBackend> ModelRegistry<B> {
             let model = next
                 .models
                 .get(model_id)
-                .ok_or_else(|| ModelError::ModelNotFound(model_id.to_string()))?;
+                .ok_or_else(|| model_not_found(model_id))?;
             referenced_asset_ids(model)
         };
         let updated_refs = {
             let model = next
                 .models
                 .get_mut(model_id)
-                .ok_or_else(|| ModelError::ModelNotFound(model_id.to_string()))?;
+                .ok_or_else(|| model_not_found(model_id))?;
             update(model);
             model.updated_at_unix_ms = now_unix_ms();
             referenced_asset_ids(model)
@@ -130,20 +130,9 @@ impl<B: StorageBackend> ModelRegistry<B> {
         let model = next
             .models
             .remove(model_id)
-            .ok_or_else(|| ModelError::ModelNotFound(model_id.to_string()))?;
+            .ok_or_else(|| model_not_found(model_id))?;
         decrement_refs(&mut next, referenced_asset_ids(&model))?;
-
-        let orphaned_ids: Vec<_> = next
-            .assets
-            .iter()
-            .filter_map(|(id, record)| (record.ref_count == 0).then_some(id.clone()))
-            .collect();
-        let mut orphaned_assets = Vec::with_capacity(orphaned_ids.len());
-        for id in orphaned_ids {
-            if let Some(record) = next.assets.remove(&id) {
-                orphaned_assets.push(record);
-            }
-        }
+        let orphaned_assets = remove_orphaned_assets(&mut next);
 
         validate_manifest(&next)?;
         self.manifest = next;
@@ -164,6 +153,10 @@ impl<B: StorageBackend> ModelRegistry<B> {
     pub fn models(&self) -> Vec<&ModelEntry> {
         self.manifest.models.values().collect()
     }
+}
+
+fn remove_orphaned_assets(manifest: &mut RegistryManifest) -> Vec<AssetRecord> {
+    remove_matching_values(&mut manifest.assets, |record| record.ref_count == 0)
 }
 
 pub fn model_entry_from_assets(

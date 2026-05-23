@@ -46,11 +46,14 @@ fn seq_id_index(seq_id: llama_seq_id, len: usize) -> Option<usize> {
 }
 
 pub(super) fn clamp_sequence_capacity(max_sequences: usize) -> usize {
-    let max_representable_sequences = usize::try_from(llama_seq_id::MAX)
+    max_sequences.clamp(1, max_representable_sequences())
+}
+
+fn max_representable_sequences() -> usize {
+    usize::try_from(llama_seq_id::MAX)
         .ok()
         .and_then(|value| value.checked_add(1))
-        .unwrap_or(usize::MAX);
-    max_sequences.clamp(1, max_representable_sequences)
+        .unwrap_or(usize::MAX)
 }
 
 #[cfg(test)]
@@ -61,10 +64,9 @@ mod tests {
     fn sequence_capacity_clamps_to_representable_seq_ids() {
         assert_eq!(clamp_sequence_capacity(0), 1);
         assert_eq!(clamp_sequence_capacity(2), 2);
-        let max_representable = usize::try_from(llama_seq_id::MAX)
-            .ok()
-            .and_then(|value| value.checked_add(1))
-            .unwrap_or(usize::MAX);
-        assert_eq!(clamp_sequence_capacity(usize::MAX), max_representable);
+        assert_eq!(
+            clamp_sequence_capacity(usize::MAX),
+            max_representable_sequences()
+        );
     }
 }

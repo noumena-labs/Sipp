@@ -6,15 +6,23 @@
 
 use serde_json::json;
 
+use crate::choice::choice_from_aliases;
 use crate::engine::protocol::EngineEvent;
-use crate::engine::{stream::TokenBatch, GenerateOptions, SamplingRuntimeConfig};
+use crate::engine::{
+    stream::TokenBatch, GenerateOptions, SamplingRuntimeConfig, DEFAULT_CONTEXT_KEY,
+    DEFAULT_MAX_TOKENS,
+};
 use crate::error::{Error, Result};
 use crate::runtime::request::GenerateTokenEmissionMode;
 use crate::runtime::InferenceRuntime;
 
 use super::events::emit_event;
 use super::token_sink::{start_async_token_sink, AsyncTokenSink};
-use super::{EngineEventSubscribers, OnTokensCallback};
+use super::{runtime_command, EngineEventSubscribers, OnTokensCallback};
+
+const MAX_TOKENS_POSITIVE: &str = "max_tokens must be positive";
+const CHAT_MESSAGES_REQUIRED: &str = "chat messages must not be empty";
+const EMPTY_CHAT_TEMPLATE_PROMPT: &str = "model chat template did not produce a prompt";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChatRole {
@@ -24,6 +32,17 @@ pub enum ChatRole {
 }
 
 impl ChatRole {
+    pub fn from_choice(value: &str) -> Option<Self> {
+        choice_from_aliases(
+            value,
+            &[
+                (&["system"], Self::System),
+                (&["user"], Self::User),
+                (&["assistant"], Self::Assistant),
+            ],
+        )
+    }
+
     pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::System => "system",
@@ -40,25 +59,23 @@ pub struct ChatMessage {
 }
 
 impl ChatMessage {
-    pub fn system(content: impl Into<String>) -> Self {
+    fn new(role: ChatRole, content: impl Into<String>) -> Self {
         Self {
-            role: ChatRole::System,
+            role,
             content: content.into(),
         }
+    }
+
+    pub fn system(content: impl Into<String>) -> Self {
+        Self::new(ChatRole::System, content)
     }
 
     pub fn user(content: impl Into<String>) -> Self {
-        Self {
-            role: ChatRole::User,
-            content: content.into(),
-        }
+        Self::new(ChatRole::User, content)
     }
 
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self {
-            role: ChatRole::Assistant,
-            content: content.into(),
-        }
+        Self::new(ChatRole::Assistant, content)
     }
 }
 
@@ -76,8 +93,8 @@ pub struct QueryOptions {
 impl Default for QueryOptions {
     fn default() -> Self {
         Self {
-            context_key: "default".to_string(),
-            max_tokens: 64,
+            context_key: default_context_key(),
+            max_tokens: DEFAULT_MAX_TOKENS,
             grammar: String::new(),
             json_schema: String::new(),
             stop: Vec::new(),
@@ -90,7 +107,7 @@ impl Default for QueryOptions {
 impl From<GenerateOptions> for QueryOptions {
     fn from(options: GenerateOptions) -> Self {
         Self {
-            context_key: options.cache_key.unwrap_or_else(|| "default".to_string()),
+            context_key: options.cache_key.unwrap_or_else(default_context_key),
             max_tokens: options.max_tokens,
             grammar: options.grammar.unwrap_or_default(),
             json_schema: options.json_schema.unwrap_or_default(),
@@ -99,6 +116,10 @@ impl From<GenerateOptions> for QueryOptions {
             media: Vec::new(),
         }
     }
+}
+
+fn default_context_key() -> String {
+    DEFAULT_CONTEXT_KEY.to_string()
 }
 
 pub struct QueryRequest {
@@ -206,7 +227,7 @@ pub(super) fn start_query(
     } = request;
 
     if options.max_tokens <= 0 {
-        return Err(Error::InvalidRequest("max_tokens must be positive"));
+        return Err(Error::InvalidRequest(MAX_TOKENS_POSITIVE));
     }
 
     let emit_tokens = on_tokens.is_some();
@@ -241,6 +262,15 @@ pub(super) fn start_query(
         )?
     };
 
+    emit_request_started(event_subscribers, request_id);
+
+    Ok((
+        request_id,
+        attach_token_sink(runtime, request_id, on_tokens),
+    ))
+}
+
+fn emit_request_started(event_subscribers: &EngineEventSubscribers, request_id: u32) {
     emit_event(
         event_subscribers,
         EngineEvent::RequestStarted {
@@ -248,39 +278,44 @@ pub(super) fn start_query(
             stream_id: request_id,
         },
     );
+}
 
+fn attach_token_sink(
+    runtime: &mut InferenceRuntime,
+    request_id: u32,
+    on_tokens: Option<OnTokensCallback>,
+) -> Option<AsyncTokenSink> {
     let token_sink = on_tokens.map(|callback| start_async_token_sink(request_id, callback));
     if let Some(sink) = &token_sink {
         runtime.add_token_ring_producer(request_id, sink.producer.clone());
     }
-
-    Ok((request_id, token_sink))
+    token_sink
 }
 
 fn render_chat_prompt(runtime: &InferenceRuntime, messages: &[ChatMessage]) -> Result<String> {
     if messages.is_empty() {
-        return Err(Error::InvalidRequest("chat messages must not be empty"));
+        return Err(Error::InvalidRequest(CHAT_MESSAGES_REQUIRED));
     }
     let messages_json = render_messages_json(messages)?;
     let prompt = runtime.apply_chat_template_json(&messages_json, true)?;
     if prompt.is_empty() {
-        return Err(Error::RuntimeCommand(
-            "model chat template did not produce a prompt".to_string(),
-        ));
+        return Err(runtime_command(EMPTY_CHAT_TEMPLATE_PROMPT));
     }
     Ok(prompt)
 }
 
 fn render_messages_json(messages: &[ChatMessage]) -> Result<String> {
-    let mut rendered = Vec::with_capacity(messages.len());
-    rendered.extend(messages.iter().map(|message| {
-        json!({
-            "role": message.role.as_str(),
-            "content": message.content,
+    let rendered: Vec<_> = messages
+        .iter()
+        .map(|message| {
+            json!({
+                "role": message.role.as_str(),
+                "content": message.content,
+            })
         })
-    }));
+        .collect();
     serde_json::to_string(&rendered)
-        .map_err(|error| Error::RuntimeCommand(format!("failed to render chat JSON: {error}")))
+        .map_err(|error| runtime_command(format!("failed to render chat JSON: {error}")))
 }
 
 #[cfg(test)]

@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -6,8 +7,7 @@ use cogentlm_engine::backend::{
     set_llama_log_quiet as core_set_llama_log_quiet,
 };
 use cogentlm_engine::engine::protocol::{
-    BackendDevice, BackendInfo, EngineStatus, FinishReason, ModelState, RequestState, RequestStats,
-    RequestStatus,
+    BackendDevice, BackendInfo, ModelState, RequestState, RequestStats,
 };
 use cogentlm_engine::engine::{
     CacheKeyPolicy, ChatMessage, ChatRequest, ChatRole, CogentEngine, EngineEvent,
@@ -15,22 +15,84 @@ use cogentlm_engine::engine::{
     KvReuseMode, LogitBias, ModelPlacementConfig, MultimodalRuntimeConfig, NativeRuntimeConfig,
     ObservabilityRuntimeConfig, QueryOptions, QueryRequest, RequestResult, ResidencyRuntimeConfig,
     ResolvedRuntimeLimits, RopeScaling, SamplerStage, SamplingRuntimeConfig,
-    SchedulerRuntimeConfig, SplitMode, TokenBatch,
+    SchedulerRuntimeConfig, SplitMode, TokenBatch, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
 };
 use cogentlm_engine::lifecycle::{
     model_source_from_path as core_model_source_from_path,
     vision_model_source_from_paths as core_vision_model_source_from_paths, BackendPreference,
-    BackendSelection, LoadedModelInfo, ModelInfo, ModelLoadOptions, ModelModality, ModelService,
-    ModelServiceState, ModelSourceKind, ModelStatus, StatsMode,
+    BackendSelection, LoadedModelInfo, ModelInfo, ModelLoadOptions, ModelService,
+    ModelServiceState, StatsMode, DEFAULT_MODEL_BACKEND, DEFAULT_MODEL_STATS,
 };
 use cogentlm_engine::runtime::config::{SchedulerPolicyConfig, SchedulerPolicyMode};
 use cogentlm_engine::runtime::metrics::RuntimeObservabilityMetrics;
-use cogentlm_engine::runtime::request::{GenerateResponse, GenerateResponseStatus};
+use cogentlm_engine::runtime::request::GenerateResponse;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::pyclass::PyClass;
 use pyo3::types::{PyAny, PyDict, PyList};
 
 const PY_CALLBACK_FAILED_MESSAGE: &str = "Python token callback failed";
+const PY_ENGINE_EVENTS_MUTEX_POISONED: &str = "engine events mutex is poisoned";
+const PY_ENGINE_MUTEX_POISONED: &str = "engine mutex is poisoned";
+const PY_ENGINE_CLOSED: &str = "engine is closed";
+const PY_MODEL_SERVICE_EVENTS_MUTEX_POISONED: &str = "model service events mutex is poisoned";
+const PY_MODEL_SERVICE_MUTEX_POISONED: &str = "model service mutex is poisoned";
+const PY_MODEL_SERVICE_CLOSED: &str = "model service is closed";
+const EVENT_TYPE_STATE: &str = "state";
+const EVENT_TYPE_LOAD_PROGRESS: &str = "load-progress";
+const EVENT_TYPE_REQUEST_STARTED: &str = "request-started";
+const EVENT_TYPE_REQUEST_COMPLETED: &str = "request-completed";
+const EVENT_TYPE_REQUEST_FAILED: &str = "request-failed";
+const EVENT_TYPE_CLOSED: &str = "closed";
+
+fn debug_repr(value: &(impl Debug + ?Sized)) -> String {
+    format!("{value:?}")
+}
+
+fn clear_events(events: &Mutex<Option<EngineEventReceiver>>) {
+    if let Ok(mut events) = events.lock() {
+        events.take();
+    }
+}
+
+fn drain_events_to_list(
+    py: Python<'_>,
+    events: &Mutex<Option<EngineEventReceiver>>,
+    poison_message: &'static str,
+) -> PyResult<Py<PyAny>> {
+    let output = PyList::empty_bound(py);
+    let guard = events
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err(poison_message))?;
+    if let Some(receiver) = guard.as_ref() {
+        for event in receiver.try_iter() {
+            output.append(engine_event_to_dict(py, event)?)?;
+        }
+    }
+    Ok(output.into_py(py))
+}
+
+fn mapped_py_list<'py, T>(
+    py: Python<'py>,
+    items: impl IntoIterator<Item = T>,
+    mut map: impl FnMut(Python<'py>, T) -> PyResult<Py<PyAny>>,
+) -> PyResult<Bound<'py, PyList>> {
+    let output = PyList::empty_bound(py);
+    for item in items {
+        output.append(map(py, item)?)?;
+    }
+    Ok(output)
+}
+
+fn py_core_or_default<T, U>(py: Python<'_>, value: Option<Py<T>>, map: impl FnOnce(&T) -> U) -> U
+where
+    T: PyClass,
+    U: Default,
+{
+    value
+        .map(|value| map(&value.borrow(py)))
+        .unwrap_or_default()
+}
 
 #[pyclass(name = "SamplingRuntimeConfig")]
 #[derive(Debug, Clone)]
@@ -162,7 +224,7 @@ impl PySamplingRuntimeConfig {
     }
 
     fn __repr__(&self) -> String {
-        format!("{:?}", self.core)
+        debug_repr(&self.core)
     }
 }
 
@@ -214,9 +276,7 @@ impl PyModelPlacementConfig {
         no_host: Option<bool>,
     ) -> PyResult<Self> {
         let mut core = ModelPlacementConfig::default();
-        if let Some(devices) = devices {
-            core.devices = devices;
-        }
+        assign_if_some(&mut core.devices, devices);
         if let Some(gpu_layers) = gpu_layers {
             core.gpu_layers = parse_gpu_layers_value(gpu_layers)?;
         }
@@ -224,36 +284,20 @@ impl PyModelPlacementConfig {
             core.split_mode = parse_split_mode(&split_mode)?;
         }
         core.main_gpu = main_gpu;
-        if let Some(tensor_split) = tensor_split {
-            core.tensor_split = tensor_split;
-        }
-        if let Some(use_mmap) = use_mmap {
-            core.use_mmap = use_mmap;
-        }
-        if let Some(use_mlock) = use_mlock {
-            core.use_mlock = use_mlock;
-        }
-        if let Some(fit_params) = fit_params {
-            core.fit_params = fit_params;
-        }
+        assign_if_some(&mut core.tensor_split, tensor_split);
+        assign_if_some(&mut core.use_mmap, use_mmap);
+        assign_if_some(&mut core.use_mlock, use_mlock);
+        assign_if_some(&mut core.fit_params, fit_params);
         core.fit_params_min_ctx = fit_params_min_ctx;
-        if let Some(target_bytes) = fit_params_target_bytes {
-            core.fit_params_target_bytes = target_bytes;
-        }
-        if let Some(check_tensors) = check_tensors {
-            core.check_tensors = check_tensors;
-        }
-        if let Some(no_extra_bufts) = no_extra_bufts {
-            core.no_extra_bufts = no_extra_bufts;
-        }
-        if let Some(no_host) = no_host {
-            core.no_host = no_host;
-        }
+        assign_if_some(&mut core.fit_params_target_bytes, fit_params_target_bytes);
+        assign_if_some(&mut core.check_tensors, check_tensors);
+        assign_if_some(&mut core.no_extra_bufts, no_extra_bufts);
+        assign_if_some(&mut core.no_host, no_host);
         Ok(Self { core })
     }
 
     fn __repr__(&self) -> String {
-        format!("{:?}", self.core)
+        debug_repr(&self.core)
     }
 }
 
@@ -316,50 +360,44 @@ impl PyContextRuntimeConfig {
         yarn_beta_fast: Option<f32>,
         yarn_beta_slow: Option<f32>,
     ) -> PyResult<Self> {
-        let mut core = cogentlm_engine::engine::ContextRuntimeConfig::default();
-        core.n_ctx = n_ctx;
-        core.n_batch = n_batch;
-        core.n_ubatch = n_ubatch;
-        core.n_parallel = n_parallel;
-        core.n_threads = n_threads;
-        core.n_threads_batch = n_threads_batch;
+        let mut core = cogentlm_engine::engine::ContextRuntimeConfig {
+            n_ctx,
+            n_batch,
+            n_ubatch,
+            n_parallel,
+            n_threads,
+            n_threads_batch,
+            kv_unified,
+            rope_freq_base,
+            rope_freq_scale,
+            yarn_orig_ctx,
+            yarn_ext_factor,
+            yarn_attn_factor,
+            yarn_beta_fast,
+            yarn_beta_slow,
+            ..Default::default()
+        };
         if let Some(value) = flash_attention {
             core.flash_attention = parse_flash_attention(&value)?;
         }
-        core.kv_unified = kv_unified;
         if let Some(value) = cache_type_k {
             core.cache_type_k = parse_kv_cache_type(&value)?;
         }
         if let Some(value) = cache_type_v {
             core.cache_type_v = parse_kv_cache_type(&value)?;
         }
-        if let Some(value) = offload_kqv {
-            core.offload_kqv = value;
-        }
-        if let Some(value) = op_offload {
-            core.op_offload = value;
-        }
-        if let Some(value) = swa_full {
-            core.swa_full = value;
-        }
-        if let Some(value) = warmup {
-            core.warmup = value;
-        }
+        assign_if_some(&mut core.offload_kqv, offload_kqv);
+        assign_if_some(&mut core.op_offload, op_offload);
+        assign_if_some(&mut core.swa_full, swa_full);
+        assign_if_some(&mut core.warmup, warmup);
         if let Some(value) = rope_scaling {
             core.rope_scaling = Some(parse_rope_scaling(&value)?);
         }
-        core.rope_freq_base = rope_freq_base;
-        core.rope_freq_scale = rope_freq_scale;
-        core.yarn_orig_ctx = yarn_orig_ctx;
-        core.yarn_ext_factor = yarn_ext_factor;
-        core.yarn_attn_factor = yarn_attn_factor;
-        core.yarn_beta_fast = yarn_beta_fast;
-        core.yarn_beta_slow = yarn_beta_slow;
         Ok(Self { core })
     }
 
     fn __repr__(&self) -> String {
-        format!("{:?}", self.core)
+        debug_repr(&self.core)
     }
 }
 
@@ -387,17 +425,16 @@ impl PySchedulerPolicyConfig {
         if let Some(value) = mode {
             core.mode = parse_scheduler_policy(&value)?;
         }
-        if let Some(value) = decode_token_reserve {
-            core.decode_token_reserve = value;
-        }
-        if let Some(value) = enable_adaptive_prefill_chunking {
-            core.enable_adaptive_prefill_chunking = value;
-        }
+        assign_if_some(&mut core.decode_token_reserve, decode_token_reserve);
+        assign_if_some(
+            &mut core.enable_adaptive_prefill_chunking,
+            enable_adaptive_prefill_chunking,
+        );
         Ok(Self { core })
     }
 
     fn __repr__(&self) -> String {
-        format!("{:?}", self.core)
+        debug_repr(&self.core)
     }
 }
 
@@ -427,22 +464,18 @@ impl PySchedulerRuntimeConfig {
         max_queued_requests: Option<i32>,
     ) -> PyResult<Self> {
         let mut core = SchedulerRuntimeConfig::default();
-        if let Some(value) = continuous_batching {
-            core.continuous_batching = value;
-        }
+        assign_if_some(&mut core.continuous_batching, continuous_batching);
         if let Some(value) = policy {
             core.policy = value.borrow(py).core;
         }
-        if let Some(value) = prefill_chunk_size {
-            core.prefill_chunk_size = value;
-        }
+        assign_if_some(&mut core.prefill_chunk_size, prefill_chunk_size);
         core.max_running_requests = max_running_requests;
         core.max_queued_requests = max_queued_requests;
         Ok(Self { core })
     }
 
     fn __repr__(&self) -> String {
-        format!("{:?}", self.core)
+        debug_repr(&self.core)
     }
 }
 
@@ -483,35 +516,24 @@ impl PyCacheRuntimeConfig {
         if let Some(value) = mode {
             core.mode = parse_kv_reuse_mode(&value)?;
         }
-        if let Some(value) = retained_prefix_tokens {
-            core.retained_prefix_tokens = value;
-        }
-        if let Some(value) = snapshot_interval_tokens {
-            core.snapshot_interval_tokens = value;
-        }
-        if let Some(value) = max_snapshot_entries {
-            core.max_snapshot_entries = value;
-        }
-        if let Some(value) = max_snapshot_bytes {
-            core.max_snapshot_bytes = value;
-        }
-        if let Some(value) = max_session_entries {
-            core.max_session_entries = value;
-        }
+        assign_if_some(&mut core.retained_prefix_tokens, retained_prefix_tokens);
+        assign_if_some(&mut core.snapshot_interval_tokens, snapshot_interval_tokens);
+        assign_if_some(&mut core.max_snapshot_entries, max_snapshot_entries);
+        assign_if_some(&mut core.max_snapshot_bytes, max_snapshot_bytes);
+        assign_if_some(&mut core.max_session_entries, max_session_entries);
         if let Some(value) = cache_key_policy {
             core.cache_key_policy = parse_cache_key_policy(&value)?;
         }
-        if let Some(value) = enable_context_checkpoints {
-            core.enable_context_checkpoints = value;
-        }
-        if let Some(value) = checkpoint_every_tokens {
-            core.checkpoint_every_tokens = value;
-        }
+        assign_if_some(
+            &mut core.enable_context_checkpoints,
+            enable_context_checkpoints,
+        );
+        assign_if_some(&mut core.checkpoint_every_tokens, checkpoint_every_tokens);
         Ok(Self { core })
     }
 
     fn __repr__(&self) -> String {
-        format!("{:?}", self.core)
+        debug_repr(&self.core)
     }
 }
 
@@ -542,7 +564,7 @@ impl PyMultimodalRuntimeConfig {
     }
 
     fn __repr__(&self) -> String {
-        format!("{:?}", self.core)
+        debug_repr(&self.core)
     }
 }
 
@@ -569,23 +591,24 @@ impl PyResidencyRuntimeConfig {
         gpu_memory_safety_margin_bytes: Option<u64>,
     ) -> Self {
         let mut core = ResidencyRuntimeConfig::default();
-        if let Some(value) = max_gpu_models_per_device {
-            core.max_gpu_models_per_device = value;
-        }
-        if let Some(value) = allow_cpu_models_while_gpu_loaded {
-            core.allow_cpu_models_while_gpu_loaded = value;
-        }
-        if let Some(value) = require_gpu_lease {
-            core.require_gpu_lease = value;
-        }
-        if let Some(value) = gpu_memory_safety_margin_bytes {
-            core.gpu_memory_safety_margin_bytes = value;
-        }
+        assign_if_some(
+            &mut core.max_gpu_models_per_device,
+            max_gpu_models_per_device,
+        );
+        assign_if_some(
+            &mut core.allow_cpu_models_while_gpu_loaded,
+            allow_cpu_models_while_gpu_loaded,
+        );
+        assign_if_some(&mut core.require_gpu_lease, require_gpu_lease);
+        assign_if_some(
+            &mut core.gpu_memory_safety_margin_bytes,
+            gpu_memory_safety_margin_bytes,
+        );
         Self { core }
     }
 
     fn __repr__(&self) -> String {
-        format!("{:?}", self.core)
+        debug_repr(&self.core)
     }
 }
 
@@ -609,7 +632,7 @@ impl PyObservabilityRuntimeConfig {
     }
 
     fn __repr__(&self) -> String {
-        format!("{:?}", self.core)
+        debug_repr(&self.core)
     }
 }
 
@@ -645,36 +668,22 @@ impl PyNativeRuntimeConfig {
         residency: Option<Py<PyResidencyRuntimeConfig>>,
         observability: Option<Py<PyObservabilityRuntimeConfig>>,
     ) -> Self {
-        let mut core = NativeRuntimeConfig::default();
-        if let Some(value) = placement {
-            core.placement = value.borrow(py).core.clone();
+        Self {
+            core: NativeRuntimeConfig {
+                placement: py_core_or_default(py, placement, |value| value.core.clone()),
+                context: py_core_or_default(py, context, |value| value.core.clone()),
+                sampling: py_core_or_default(py, sampling, PySamplingRuntimeConfig::to_core),
+                scheduler: py_core_or_default(py, scheduler, |value| value.core.clone()),
+                cache: py_core_or_default(py, cache, |value| value.core.clone()),
+                multimodal: py_core_or_default(py, multimodal, |value| value.core.clone()),
+                residency: py_core_or_default(py, residency, |value| value.core.clone()),
+                observability: py_core_or_default(py, observability, |value| value.core),
+            },
         }
-        if let Some(value) = context {
-            core.context = value.borrow(py).core.clone();
-        }
-        if let Some(value) = sampling {
-            core.sampling = value.borrow(py).to_core();
-        }
-        if let Some(value) = scheduler {
-            core.scheduler = value.borrow(py).core.clone();
-        }
-        if let Some(value) = cache {
-            core.cache = value.borrow(py).core.clone();
-        }
-        if let Some(value) = multimodal {
-            core.multimodal = value.borrow(py).core.clone();
-        }
-        if let Some(value) = residency {
-            core.residency = value.borrow(py).core.clone();
-        }
-        if let Some(value) = observability {
-            core.observability = value.borrow(py).core;
-        }
-        Self { core }
     }
 
     fn __repr__(&self) -> String {
-        format!("{:?}", self.core)
+        debug_repr(&self.core)
     }
 }
 
@@ -697,17 +706,14 @@ struct PyModelLoadOptions {
 #[pymethods]
 impl PyModelLoadOptions {
     #[new]
-    #[pyo3(signature = (*, backend = "auto".to_string(), stats = "basic".to_string(), runtime = None))]
+    #[pyo3(signature = (*, backend = DEFAULT_MODEL_BACKEND.to_string(), stats = DEFAULT_MODEL_STATS.to_string(), runtime = None))]
     fn new(
         py: Python<'_>,
         backend: String,
         stats: String,
         runtime: Option<Py<PyNativeRuntimeConfig>>,
     ) -> PyResult<Self> {
-        let runtime = runtime
-            .as_ref()
-            .map(|config| config.borrow(py).to_core())
-            .unwrap_or_default();
+        let runtime = py_core_or_default(py, runtime, PyNativeRuntimeConfig::to_core);
         parse_backend_preference(&backend)?;
         parse_stats_mode(&stats)?;
         Ok(Self {
@@ -718,7 +724,7 @@ impl PyModelLoadOptions {
     }
 
     fn __repr__(&self) -> String {
-        format!("{self:?}")
+        debug_repr(self)
     }
 }
 
@@ -754,8 +760,8 @@ struct PyQueryOptions {
 impl PyQueryOptions {
     #[new]
     #[pyo3(signature = (
-        context_key = "default".to_string(),
-        max_tokens = 64,
+        context_key = DEFAULT_CONTEXT_KEY.to_string(),
+        max_tokens = DEFAULT_MAX_TOKENS,
         grammar = "".to_string(),
         *,
         json_schema = "".to_string(),
@@ -763,6 +769,7 @@ impl PyQueryOptions {
         sampling = None,
         media = None
     ))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
         context_key: String,
@@ -788,7 +795,7 @@ impl PyQueryOptions {
     }
 
     fn __repr__(&self) -> String {
-        format!("{self:?}")
+        debug_repr(self)
     }
 }
 
@@ -848,7 +855,7 @@ impl PyChatMessage {
     }
 
     fn __repr__(&self) -> String {
-        format!("{self:?}")
+        debug_repr(self)
     }
 }
 
@@ -876,10 +883,7 @@ impl PyCogentEngine {
         model_path: PathBuf,
         config: Option<Py<PyNativeRuntimeConfig>>,
     ) -> PyResult<Self> {
-        let config = config
-            .as_ref()
-            .map(|config| config.borrow(py).to_core())
-            .unwrap_or_default();
+        let config = py_core_or_default(py, config, PyNativeRuntimeConfig::to_core);
         let engine = py
             .allow_threads(|| CogentEngine::load(model_path, config))
             .map_err(to_py_error)?;
@@ -926,7 +930,7 @@ impl PyCogentEngine {
         let options = query_options_or_default(py, options);
         let guard = self.engine_guard()?;
         let engine = engine_ref(&guard)?;
-        let request = QueryRequest::new(prompt).options(options);
+        let request = query_request(prompt, options);
         let response = py
             .allow_threads(move || engine.query_response(request))
             .map_err(to_py_error)?;
@@ -943,7 +947,7 @@ impl PyCogentEngine {
         let options = query_options_or_default(py, options);
         let guard = self.engine_guard()?;
         let engine = engine_ref(&guard)?;
-        let request = QueryRequest::new(prompt).options(options);
+        let request = query_request(prompt, options);
         let result = py
             .allow_threads(move || engine.query(request))
             .map_err(to_py_error)?;
@@ -983,7 +987,7 @@ impl PyCogentEngine {
         let messages = chat_messages_to_core(py, messages)?;
         let guard = self.engine_guard()?;
         let engine = engine_ref(&guard)?;
-        let request = ChatRequest::new(messages).options(options);
+        let request = chat_request(messages, options);
         let response = py
             .allow_threads(move || engine.chat_response(request))
             .map_err(to_py_error)?;
@@ -1001,7 +1005,7 @@ impl PyCogentEngine {
         let messages = chat_messages_to_core(py, messages)?;
         let guard = self.engine_guard()?;
         let engine = engine_ref(&guard)?;
-        let request = ChatRequest::new(messages).options(options);
+        let request = chat_request(messages, options);
         let result = py
             .allow_threads(move || engine.chat(request))
             .map_err(to_py_error)?;
@@ -1013,9 +1017,7 @@ impl PyCogentEngine {
         if let Some(engine) = engine {
             py.allow_threads(|| engine.close()).map_err(to_py_error)?;
         }
-        if let Ok(mut events) = self.events.lock() {
-            events.take();
-        }
+        clear_events(&self.events);
         Ok(())
     }
 
@@ -1027,17 +1029,7 @@ impl PyCogentEngine {
     }
 
     fn drain_events(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let events = PyList::empty_bound(py);
-        let guard = self
-            .events
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("engine events mutex is poisoned"))?;
-        if let Some(receiver) = guard.as_ref() {
-            for event in receiver.try_iter() {
-                events.append(engine_event_to_dict(py, event)?)?;
-            }
-        }
-        Ok(events.into_py(py))
+        drain_events_to_list(py, &self.events, PY_ENGINE_EVENTS_MUTEX_POISONED)
     }
 
     fn __repr__(&self) -> PyResult<String> {
@@ -1049,7 +1041,7 @@ impl PyCogentEngine {
     fn engine_guard(&self) -> PyResult<MutexGuard<'_, Option<CogentEngine>>> {
         self.inner
             .lock()
-            .map_err(|_| PyRuntimeError::new_err("engine mutex is poisoned"))
+            .map_err(|_| PyRuntimeError::new_err(PY_ENGINE_MUTEX_POISONED))
     }
 }
 
@@ -1084,12 +1076,9 @@ impl PyModelService {
         options: Option<Py<PyModelLoadOptions>>,
     ) -> PyResult<Py<PyAny>> {
         let options = model_load_options_or_default(py, options)?;
-        let mut guard = self.service_guard()?;
-        let service = service_mut(&mut guard)?;
-        let loaded = py
-            .allow_threads(|| service.load(core_model_source_from_path(model_path), options))
-            .map_err(to_py_model_error)?;
-        self.refresh_events(service)?;
+        let loaded = self.load_and_refresh(py, |service| {
+            service.load(core_model_source_from_path(model_path), options)
+        })?;
         loaded_model_info_to_dict(py, loaded)
     }
 
@@ -1102,13 +1091,8 @@ impl PyModelService {
         options: Option<Py<PyModelLoadOptions>>,
     ) -> PyResult<Py<PyAny>> {
         let options = model_load_options_or_default(py, options)?;
-        let mut guard = self.service_guard()?;
-        let service = service_mut(&mut guard)?;
         let source = core_vision_model_source_from_paths(model_path, projector_path);
-        let loaded = py
-            .allow_threads(|| service.load(source, options))
-            .map_err(to_py_model_error)?;
-        self.refresh_events(service)?;
+        let loaded = self.load_and_refresh(py, |service| service.load(source, options))?;
         loaded_model_info_to_dict(py, loaded)
     }
 
@@ -1120,12 +1104,8 @@ impl PyModelService {
         options: Option<Py<PyModelLoadOptions>>,
     ) -> PyResult<Py<PyAny>> {
         let options = model_load_options_or_default(py, options)?;
-        let mut guard = self.service_guard()?;
-        let service = service_mut(&mut guard)?;
-        let loaded = py
-            .allow_threads(|| service.load_installed(model_id, options))
-            .map_err(to_py_model_error)?;
-        self.refresh_events(service)?;
+        let loaded =
+            self.load_and_refresh(py, |service| service.load_installed(model_id, options))?;
         loaded_model_info_to_dict(py, loaded)
     }
 
@@ -1134,9 +1114,7 @@ impl PyModelService {
         let service = service_mut(&mut guard)?;
         py.allow_threads(|| service.unload())
             .map_err(to_py_model_error)?;
-        if let Ok(mut events) = self.events.lock() {
-            events.take();
-        }
+        clear_events(&self.events);
         Ok(())
     }
 
@@ -1150,11 +1128,7 @@ impl PyModelService {
     fn list(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let guard = self.service_guard()?;
         let service = service_ref(&guard)?;
-        let models = PyList::empty_bound(py);
-        for model in service.list() {
-            models.append(model_info_to_dict(py, model)?)?;
-        }
-        Ok(models.into_py(py))
+        Ok(mapped_py_list(py, service.list(), model_info_to_dict)?.into_py(py))
     }
 
     fn current(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -1220,17 +1194,7 @@ impl PyModelService {
     }
 
     fn drain_events(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let events = PyList::empty_bound(py);
-        let guard = self
-            .events
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("model service events mutex is poisoned"))?;
-        if let Some(receiver) = guard.as_ref() {
-            for event in receiver.try_iter() {
-                events.append(engine_event_to_dict(py, event)?)?;
-            }
-        }
-        Ok(events.into_py(py))
+        drain_events_to_list(py, &self.events, PY_MODEL_SERVICE_EVENTS_MUTEX_POISONED)
     }
 
     fn close(&self, py: Python<'_>) -> PyResult<()> {
@@ -1239,9 +1203,7 @@ impl PyModelService {
             py.allow_threads(|| service.close())
                 .map_err(to_py_model_error)?;
         }
-        if let Ok(mut events) = self.events.lock() {
-            events.take();
-        }
+        clear_events(&self.events);
         Ok(())
     }
 
@@ -1254,16 +1216,30 @@ impl PyModelService {
     fn service_guard(&self) -> PyResult<MutexGuard<'_, Option<ModelService>>> {
         self.inner
             .lock()
-            .map_err(|_| PyRuntimeError::new_err("model service mutex is poisoned"))
+            .map_err(|_| PyRuntimeError::new_err(PY_MODEL_SERVICE_MUTEX_POISONED))
     }
 
     fn refresh_events(&self, service: &ModelService) -> PyResult<()> {
         let events = service.subscribe_events().map_err(to_py_model_error)?;
         self.events
             .lock()
-            .map_err(|_| PyRuntimeError::new_err("model service events mutex is poisoned"))?
+            .map_err(|_| PyRuntimeError::new_err(PY_MODEL_SERVICE_EVENTS_MUTEX_POISONED))?
             .replace(events);
         Ok(())
+    }
+
+    fn load_and_refresh<T: Send>(
+        &self,
+        py: Python<'_>,
+        load: impl FnOnce(&mut ModelService) -> Result<T, cogentlm_engine::lifecycle::ModelError> + Send,
+    ) -> PyResult<T> {
+        let mut guard = self.service_guard()?;
+        let service = service_mut(&mut guard)?;
+        let loaded = py
+            .allow_threads(|| load(service))
+            .map_err(to_py_model_error)?;
+        self.refresh_events(service)?;
+        Ok(loaded)
     }
 }
 
@@ -1295,6 +1271,10 @@ fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyChatMessage>()?;
     module.add_class::<PyCogentEngine>()?;
     module.add_class::<PyModelService>()?;
+    module.add("DEFAULT_CONTEXT_KEY", DEFAULT_CONTEXT_KEY)?;
+    module.add("DEFAULT_MAX_TOKENS", DEFAULT_MAX_TOKENS)?;
+    module.add("DEFAULT_MODEL_BACKEND", DEFAULT_MODEL_BACKEND)?;
+    module.add("DEFAULT_MODEL_STATS", DEFAULT_MODEL_STATS)?;
     module.add_function(wrap_pyfunction!(backend_observability_json, module)?)?;
     module.add_function(wrap_pyfunction!(set_llama_log_quiet, module)?)?;
     Ok(())
@@ -1308,14 +1288,11 @@ fn model_load_options_or_default(
         .as_ref()
         .map(|options| options.borrow(py).to_core())
         .transpose()
-        .map(|options| options.unwrap_or_default())
+        .map(Option::unwrap_or_default)
 }
 
 fn query_options_or_default(py: Python<'_>, options: Option<Py<PyQueryOptions>>) -> QueryOptions {
-    options
-        .as_ref()
-        .map(|options| options.borrow(py).to_core())
-        .unwrap_or_default()
+    py_core_or_default(py, options, PyQueryOptions::to_core)
 }
 
 fn chat_messages_to_core(
@@ -1331,6 +1308,10 @@ fn chat_messages_to_core(
         .collect()
 }
 
+fn query_request(prompt: String, options: QueryOptions) -> QueryRequest {
+    QueryRequest::new(prompt).options(options)
+}
+
 fn query_request_with_tokens(
     py: Python<'_>,
     prompt: String,
@@ -1338,12 +1319,16 @@ fn query_request_with_tokens(
     on_tokens: Option<PyObject>,
     callback_error: Arc<Mutex<Option<PyErr>>>,
 ) -> PyResult<QueryRequest> {
-    let mut request = QueryRequest::new(prompt).options(options);
+    let mut request = query_request(prompt, options);
     if let Some(callback) = on_tokens {
         require_callable(py, &callback)?;
         request = request.on_tokens(make_python_tokens_callback(callback, callback_error));
     }
     Ok(request)
+}
+
+fn chat_request(messages: Vec<ChatMessage>, options: QueryOptions) -> ChatRequest {
+    ChatRequest::new(messages).options(options)
 }
 
 fn chat_request_with_tokens(
@@ -1353,7 +1338,7 @@ fn chat_request_with_tokens(
     on_tokens: Option<PyObject>,
     callback_error: Arc<Mutex<Option<PyErr>>>,
 ) -> PyResult<ChatRequest> {
-    let mut request = ChatRequest::new(messages).options(options);
+    let mut request = chat_request(messages, options);
     if let Some(callback) = on_tokens {
         require_callable(py, &callback)?;
         request = request.on_tokens(make_python_tokens_callback(callback, callback_error));
@@ -1364,13 +1349,13 @@ fn chat_request_with_tokens(
 fn engine_ref<'a>(guard: &'a MutexGuard<'_, Option<CogentEngine>>) -> PyResult<&'a CogentEngine> {
     guard
         .as_ref()
-        .ok_or_else(|| PyRuntimeError::new_err("engine is closed"))
+        .ok_or_else(|| PyRuntimeError::new_err(PY_ENGINE_CLOSED))
 }
 
 fn service_ref<'a>(guard: &'a MutexGuard<'_, Option<ModelService>>) -> PyResult<&'a ModelService> {
     guard
         .as_ref()
-        .ok_or_else(|| PyRuntimeError::new_err("model service is closed"))
+        .ok_or_else(|| PyRuntimeError::new_err(PY_MODEL_SERVICE_CLOSED))
 }
 
 fn service_mut<'a>(
@@ -1378,7 +1363,7 @@ fn service_mut<'a>(
 ) -> PyResult<&'a mut ModelService> {
     guard
         .as_mut()
-        .ok_or_else(|| PyRuntimeError::new_err("model service is closed"))
+        .ok_or_else(|| PyRuntimeError::new_err(PY_MODEL_SERVICE_CLOSED))
 }
 
 fn require_callable(py: Python<'_>, callback: &PyObject) -> PyResult<()> {
@@ -1496,7 +1481,7 @@ fn take_callback_error(callback_error: &Arc<Mutex<Option<PyErr>>>) -> Option<PyE
 fn response_to_dict(py: Python<'_>, response: GenerateResponse) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new_bound(py);
     dict.set_item("request_id", response.request_id)?;
-    dict.set_item("status", response_status_name(response.status))?;
+    dict.set_item("status", response.status.as_str())?;
     dict.set_item("output_text", response.output_text)?;
     dict.set_item("error_message", response.error_message)?;
     dict.set_item(
@@ -1510,7 +1495,7 @@ fn request_result_to_dict(py: Python<'_>, result: RequestResult) -> PyResult<Py<
     let dict = PyDict::new_bound(py);
     dict.set_item("id", result.id)?;
     dict.set_item("text", result.text)?;
-    dict.set_item("finish_reason", finish_reason_name(result.finish_reason))?;
+    dict.set_item("finish_reason", result.finish_reason.as_str())?;
     dict.set_item("stats", request_stats_to_dict(py, result.stats)?)?;
     Ok(dict.into_py(py))
 }
@@ -1527,9 +1512,9 @@ fn model_info_to_dict(py: Python<'_>, model: ModelInfo) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new_bound(py);
     dict.set_item("id", model.id)?;
     dict.set_item("name", model.name)?;
-    dict.set_item("modality", model_modality_name(model.modality))?;
-    dict.set_item("status", model_status_name(model.status))?;
-    dict.set_item("source", model_source_kind_name(model.source))?;
+    dict.set_item("modality", model.modality.as_str())?;
+    dict.set_item("status", model.status.as_str())?;
+    dict.set_item("source", model.source.as_str())?;
     dict.set_item("bytes", model.bytes)?;
     dict.set_item("loaded", model.loaded)?;
     dict.set_item("chat_template", model.chat_template)?;
@@ -1543,7 +1528,7 @@ fn model_info_to_dict(py: Python<'_>, model: ModelInfo) -> PyResult<Py<PyAny>> {
 
 fn backend_selection_to_dict(py: Python<'_>, backend: BackendSelection) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new_bound(py);
-    dict.set_item("requested", backend_preference_name(backend.requested))?;
+    dict.set_item("requested", backend.requested.as_str())?;
     dict.set_item("selected", backend.selected)?;
     dict.set_item("available", backend.available)?;
     dict.set_item("gpu_offload_expected", backend.gpu_offload_expected)?;
@@ -1553,24 +1538,21 @@ fn backend_selection_to_dict(py: Python<'_>, backend: BackendSelection) -> PyRes
 
 fn model_service_state_to_dict(py: Python<'_>, state: ModelServiceState) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new_bound(py);
-    dict.set_item("status", engine_status_name(state.status))?;
+    dict.set_item("status", state.status.as_str())?;
     if let Some(model) = state.model {
         dict.set_item("model", model_info_to_dict(py, model)?)?;
     } else {
         dict.set_item("model", py.None())?;
     }
-    dict.set_item("backend", backend_info_to_dict(py, state.backend)?)?;
-    dict.set_item(
-        "runtime",
-        resolved_runtime_limits_to_dict(py, state.runtime)?,
+    set_state_tail_fields(
+        py,
+        &dict,
+        state.backend,
+        state.runtime,
+        state.requests,
+        state.stats,
+        state.updated_at_unix_ms,
     )?;
-    let requests = PyList::empty_bound(py);
-    for request in state.requests {
-        requests.append(request_state_to_dict(py, request)?)?;
-    }
-    dict.set_item("requests", requests)?;
-    dict.set_item("stats", engine_stats_to_dict(py, state.stats)?)?;
-    dict.set_item("updated_at_unix_ms", state.updated_at_unix_ms)?;
     Ok(dict.into_py(py))
 }
 
@@ -1593,25 +1575,42 @@ fn token_batch_to_dict(py: Python<'_>, batch: TokenBatch) -> PyResult<Py<PyAny>>
 
 fn engine_state_to_dict(py: Python<'_>, state: EngineState) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new_bound(py);
-    dict.set_item("status", engine_status_name(state.status))?;
+    dict.set_item("status", state.status.as_str())?;
     if let Some(model) = state.model {
         dict.set_item("model", model_state_to_dict(py, model)?)?;
     } else {
         dict.set_item("model", py.None())?;
     }
-    dict.set_item("backend", backend_info_to_dict(py, state.backend)?)?;
-    dict.set_item(
-        "runtime",
-        resolved_runtime_limits_to_dict(py, state.runtime)?,
+    set_state_tail_fields(
+        py,
+        &dict,
+        state.backend,
+        state.runtime,
+        state.requests,
+        state.stats,
+        state.updated_at_unix_ms,
     )?;
-    let requests = PyList::empty_bound(py);
-    for request in state.requests {
-        requests.append(request_state_to_dict(py, request)?)?;
-    }
-    dict.set_item("requests", requests)?;
-    dict.set_item("stats", engine_stats_to_dict(py, state.stats)?)?;
-    dict.set_item("updated_at_unix_ms", state.updated_at_unix_ms)?;
     Ok(dict.into_py(py))
+}
+
+fn set_state_tail_fields(
+    py: Python<'_>,
+    dict: &Bound<'_, PyDict>,
+    backend: BackendInfo,
+    runtime: Option<ResolvedRuntimeLimits>,
+    requests: Vec<RequestState>,
+    stats: EngineStats,
+    updated_at_unix_ms: u64,
+) -> PyResult<()> {
+    dict.set_item("backend", backend_info_to_dict(py, backend)?)?;
+    dict.set_item("runtime", resolved_runtime_limits_to_dict(py, runtime)?)?;
+    dict.set_item(
+        "requests",
+        mapped_py_list(py, requests, request_state_to_dict)?,
+    )?;
+    dict.set_item("stats", engine_stats_to_dict(py, stats)?)?;
+    dict.set_item("updated_at_unix_ms", updated_at_unix_ms)?;
+    Ok(())
 }
 
 fn model_state_to_dict(py: Python<'_>, model: ModelState) -> PyResult<Py<PyAny>> {
@@ -1624,7 +1623,7 @@ fn model_state_to_dict(py: Python<'_>, model: ModelState) -> PyResult<Py<PyAny>>
 fn request_state_to_dict(py: Python<'_>, request: RequestState) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new_bound(py);
     dict.set_item("id", request.id)?;
-    dict.set_item("status", request_status_name(request.status))?;
+    dict.set_item("status", request.status.as_str())?;
     dict.set_item("input_tokens", request.input_tokens)?;
     dict.set_item("output_tokens", request.output_tokens)?;
     Ok(dict.into_py(py))
@@ -1634,11 +1633,10 @@ fn backend_info_to_dict(py: Python<'_>, backend: BackendInfo) -> PyResult<Py<PyA
     let dict = PyDict::new_bound(py);
     dict.set_item("selected", backend.selected)?;
     dict.set_item("available", backend.available)?;
-    let devices = PyList::empty_bound(py);
-    for device in backend.devices {
-        devices.append(backend_device_to_dict(py, device)?)?;
-    }
-    dict.set_item("devices", devices)?;
+    dict.set_item(
+        "devices",
+        mapped_py_list(py, backend.devices, backend_device_to_dict)?,
+    )?;
     Ok(dict.into_py(py))
 }
 
@@ -1860,15 +1858,15 @@ fn engine_event_to_dict(py: Python<'_>, event: EngineEvent) -> PyResult<Py<PyAny
     let dict = PyDict::new_bound(py);
     match event {
         EngineEvent::State(state) => {
-            dict.set_item("type", "state")?;
-            dict.set_item("state", engine_state_to_dict(py, state)?)?;
+            dict.set_item("type", EVENT_TYPE_STATE)?;
+            dict.set_item("state", engine_state_to_dict(py, *state)?)?;
         }
         EngineEvent::LoadProgress {
             loaded_bytes,
             total_bytes,
             asset_name,
         } => {
-            dict.set_item("type", "load-progress")?;
+            dict.set_item("type", EVENT_TYPE_LOAD_PROGRESS)?;
             dict.set_item("loaded_bytes", loaded_bytes)?;
             dict.set_item("total_bytes", total_bytes)?;
             dict.set_item("asset_name", asset_name)?;
@@ -1877,21 +1875,21 @@ fn engine_event_to_dict(py: Python<'_>, event: EngineEvent) -> PyResult<Py<PyAny
             request_id,
             stream_id,
         } => {
-            dict.set_item("type", "request-started")?;
+            dict.set_item("type", EVENT_TYPE_REQUEST_STARTED)?;
             dict.set_item("request_id", request_id)?;
             dict.set_item("stream_id", stream_id)?;
         }
         EngineEvent::RequestCompleted { result } => {
-            dict.set_item("type", "request-completed")?;
-            dict.set_item("result", request_result_to_dict(py, result)?)?;
+            dict.set_item("type", EVENT_TYPE_REQUEST_COMPLETED)?;
+            dict.set_item("result", request_result_to_dict(py, *result)?)?;
         }
         EngineEvent::RequestFailed { request_id, error } => {
-            dict.set_item("type", "request-failed")?;
+            dict.set_item("type", EVENT_TYPE_REQUEST_FAILED)?;
             dict.set_item("request_id", request_id)?;
             dict.set_item("error", error)?;
         }
         EngineEvent::Closed => {
-            dict.set_item("type", "closed")?;
+            dict.set_item("type", EVENT_TYPE_CLOSED)?;
         }
     }
     Ok(dict.into_py(py))
@@ -1919,38 +1917,27 @@ fn metrics_to_dict(
 }
 
 fn parse_backend_preference(value: &str) -> PyResult<BackendPreference> {
-    match normalize_choice(value).as_str() {
-        "auto" => Ok(BackendPreference::Auto),
-        "cpu" => Ok(BackendPreference::Cpu),
-        "cuda" => Ok(BackendPreference::Cuda),
-        "metal" => Ok(BackendPreference::Metal),
-        "vulkan" => Ok(BackendPreference::Vulkan),
-        "webgpu" | "web_gpu" => Ok(BackendPreference::WebGpu),
-        _ => Err(PyValueError::new_err(
-            "backend must be one of: auto, cpu, cuda, metal, vulkan, webgpu",
-        )),
-    }
+    parse_choice(
+        value,
+        BackendPreference::from_choice,
+        "backend must be one of: auto, cpu, cuda, metal, vulkan, webgpu",
+    )
 }
 
 fn parse_stats_mode(value: &str) -> PyResult<StatsMode> {
-    match normalize_choice(value).as_str() {
-        "off" => Ok(StatsMode::Off),
-        "basic" => Ok(StatsMode::Basic),
-        "profile" => Ok(StatsMode::Profile),
-        _ => Err(PyValueError::new_err(
-            "stats must be one of: off, basic, profile",
-        )),
-    }
+    parse_choice(
+        value,
+        StatsMode::from_choice,
+        "stats must be one of: off, basic, profile",
+    )
 }
 
 fn parse_gpu_layers(value: &str) -> PyResult<GpuLayerConfig> {
-    match normalize_choice(value).as_str() {
-        "auto" => Ok(GpuLayerConfig::Auto),
-        "all" => Ok(GpuLayerConfig::All),
-        _ => Err(PyValueError::new_err(
-            r#"gpu_layers must be "auto", "all", or {"count": int}"#,
-        )),
-    }
+    parse_choice(
+        value,
+        GpuLayerConfig::from_choice,
+        r#"gpu_layers must be "auto", "all", or {"count": int}"#,
+    )
 }
 
 fn parse_gpu_layers_value(value: &Bound<'_, PyAny>) -> PyResult<GpuLayerConfig> {
@@ -1962,12 +1949,7 @@ fn parse_gpu_layers_value(value: &Bound<'_, PyAny>) -> PyResult<GpuLayerConfig> 
             .get_item("count")?
             .ok_or_else(|| PyValueError::new_err("gpu_layers.count is required"))?
             .extract::<i32>()?;
-        if count < 0 {
-            return Err(PyValueError::new_err(
-                "gpu_layers.count must be a non-negative integer",
-            ));
-        }
-        return Ok(GpuLayerConfig::Count(count));
+        return Ok(GpuLayerConfig::from_layer_count(count));
     }
     Err(PyTypeError::new_err(
         r#"gpu_layers must be "auto", "all", or {"count": int}"#,
@@ -1975,196 +1957,88 @@ fn parse_gpu_layers_value(value: &Bound<'_, PyAny>) -> PyResult<GpuLayerConfig> 
 }
 
 fn parse_split_mode(value: &str) -> PyResult<SplitMode> {
-    match normalize_choice(value).as_str() {
-        "none" => Ok(SplitMode::None),
-        "layer" => Ok(SplitMode::Layer),
-        "row" => Ok(SplitMode::Row),
-        "tensor" => Ok(SplitMode::Tensor),
-        _ => Err(PyValueError::new_err(
-            "split_mode must be one of: none, layer, row, tensor",
-        )),
-    }
+    parse_choice(
+        value,
+        SplitMode::from_choice,
+        "split_mode must be one of: none, layer, row, tensor",
+    )
 }
 
 fn parse_flash_attention(value: &str) -> PyResult<FlashAttentionMode> {
-    match normalize_choice(value).as_str() {
-        "auto" => Ok(FlashAttentionMode::Auto),
-        "enabled" | "enable" | "on" | "true" => Ok(FlashAttentionMode::Enabled),
-        "disabled" | "disable" | "off" | "false" => Ok(FlashAttentionMode::Disabled),
-        _ => Err(PyValueError::new_err(
-            "flash_attention must be one of: auto, enabled, disabled",
-        )),
-    }
+    parse_choice(
+        value,
+        FlashAttentionMode::from_choice,
+        "flash_attention must be one of: auto, enabled, disabled",
+    )
 }
 
 fn parse_kv_cache_type(value: &str) -> PyResult<KvCacheType> {
-    match normalize_choice(value).as_str() {
-        "f16" => Ok(KvCacheType::F16),
-        "f32" => Ok(KvCacheType::F32),
-        "q8_0" => Ok(KvCacheType::Q8_0),
-        "q4_0" => Ok(KvCacheType::Q4_0),
-        "q4_1" => Ok(KvCacheType::Q4_1),
-        "iq4_nl" => Ok(KvCacheType::Iq4Nl),
-        "q5_0" => Ok(KvCacheType::Q5_0),
-        "q5_1" => Ok(KvCacheType::Q5_1),
-        _ => Err(PyValueError::new_err(
-            "cache type must be one of: f16, f32, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1",
-        )),
-    }
+    parse_choice(
+        value,
+        KvCacheType::from_choice,
+        "cache type must be one of: f16, f32, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1",
+    )
 }
 
 fn parse_rope_scaling(value: &str) -> PyResult<RopeScaling> {
-    match normalize_choice(value).as_str() {
-        "none" => Ok(RopeScaling::None),
-        "linear" => Ok(RopeScaling::Linear),
-        "yarn" => Ok(RopeScaling::Yarn),
-        _ => Err(PyValueError::new_err(
-            "rope_scaling must be one of: none, linear, yarn",
-        )),
-    }
+    parse_choice(
+        value,
+        RopeScaling::from_choice,
+        "rope_scaling must be one of: none, linear, yarn",
+    )
 }
 
 fn parse_kv_reuse_mode(value: &str) -> PyResult<KvReuseMode> {
-    match normalize_choice(value).as_str() {
-        "disabled" | "none" => Ok(KvReuseMode::Disabled),
-        "live_slot_prefix" | "live_slot" => Ok(KvReuseMode::LiveSlotPrefix),
-        "state_snapshot" | "snapshot" => Ok(KvReuseMode::StateSnapshot),
-        "live_slot_and_snapshot" | "both" => Ok(KvReuseMode::LiveSlotAndSnapshot),
-        _ => Err(PyValueError::new_err(
-            "cache mode must be one of: disabled, live_slot_prefix, state_snapshot, live_slot_and_snapshot",
-        )),
-    }
+    parse_choice(
+        value,
+        KvReuseMode::from_choice,
+        "cache mode must be one of: disabled, live_slot_prefix, state_snapshot, live_slot_and_snapshot",
+    )
 }
 
 fn parse_cache_key_policy(value: &str) -> PyResult<CacheKeyPolicy> {
-    match normalize_choice(value).as_str() {
-        "context_key" => Ok(CacheKeyPolicy::ContextKey),
-        "prompt_hash" => Ok(CacheKeyPolicy::PromptHash),
-        _ => Err(PyValueError::new_err(
-            "cache_key_policy must be one of: context_key, prompt_hash",
-        )),
-    }
+    parse_choice(
+        value,
+        CacheKeyPolicy::from_choice,
+        "cache_key_policy must be one of: context_key, prompt_hash",
+    )
 }
 
 fn parse_sampler_stage(value: &str) -> PyResult<SamplerStage> {
-    match normalize_choice(value).as_str() {
-        "dry" => Ok(SamplerStage::Dry),
-        "top_k" => Ok(SamplerStage::TopK),
-        "typical_p" => Ok(SamplerStage::TypicalP),
-        "top_p" => Ok(SamplerStage::TopP),
-        "top_n_sigma" => Ok(SamplerStage::TopNSigma),
-        "min_p" => Ok(SamplerStage::MinP),
-        "xtc" => Ok(SamplerStage::Xtc),
-        "temperature" | "temp" => Ok(SamplerStage::Temperature),
-        "infill" => Ok(SamplerStage::Infill),
-        "penalties" => Ok(SamplerStage::Penalties),
-        "adaptive_p" => Ok(SamplerStage::AdaptiveP),
-        _ => Err(PyValueError::new_err(
-            "sampler stage must be one of: dry, top_k, typical_p, top_p, top_n_sigma, min_p, xtc, temperature, infill, penalties, adaptive_p",
-        )),
-    }
+    parse_choice(
+        value,
+        SamplerStage::from_choice,
+        "sampler stage must be one of: dry, top_k, typical_p, top_p, top_n_sigma, min_p, xtc, temperature, infill, penalties, adaptive_p",
+    )
 }
 
 fn parse_scheduler_policy(value: &str) -> PyResult<SchedulerPolicyMode> {
-    match normalize_choice(value).as_str() {
-        "latency_first" | "latency" => Ok(SchedulerPolicyMode::LatencyFirst),
-        "balanced" | "balance" => Ok(SchedulerPolicyMode::Balanced),
-        "throughput_first" | "throughput" => Ok(SchedulerPolicyMode::ThroughputFirst),
-        _ => Err(PyValueError::new_err(
-            "scheduler.policy.mode must be one of: latency_first, balanced, throughput_first",
-        )),
-    }
+    parse_choice(
+        value,
+        SchedulerPolicyMode::from_choice,
+        "scheduler.policy.mode must be one of: latency_first, balanced, throughput_first",
+    )
 }
 
 fn parse_chat_role(value: &str) -> PyResult<ChatRole> {
-    match normalize_choice(value).as_str() {
-        "system" => Ok(ChatRole::System),
-        "user" => Ok(ChatRole::User),
-        "assistant" => Ok(ChatRole::Assistant),
-        _ => Err(PyValueError::new_err(
-            "chat role must be one of: system, user, assistant",
-        )),
-    }
+    parse_choice(
+        value,
+        ChatRole::from_choice,
+        "chat role must be one of: system, user, assistant",
+    )
 }
 
-fn normalize_choice(value: &str) -> String {
-    value
-        .trim()
-        .to_ascii_lowercase()
-        .replace('-', "_")
-        .replace(' ', "_")
+fn parse_choice<T>(
+    value: &str,
+    parser: impl FnOnce(&str) -> Option<T>,
+    error_message: &'static str,
+) -> PyResult<T> {
+    parser(value).ok_or_else(|| PyValueError::new_err(error_message))
 }
 
-fn response_status_name(status: GenerateResponseStatus) -> &'static str {
-    match status {
-        GenerateResponseStatus::Pending => "pending",
-        GenerateResponseStatus::Completed => "completed",
-        GenerateResponseStatus::Cancelled => "cancelled",
-        GenerateResponseStatus::Failed => "failed",
-    }
-}
-
-fn engine_status_name(status: EngineStatus) -> &'static str {
-    match status {
-        EngineStatus::Idle => "idle",
-        EngineStatus::Loading => "loading",
-        EngineStatus::Ready => "ready",
-        EngineStatus::Running => "running",
-        EngineStatus::Error => "error",
-        EngineStatus::Closed => "closed",
-    }
-}
-
-fn request_status_name(status: RequestStatus) -> &'static str {
-    match status {
-        RequestStatus::Queued => "queued",
-        RequestStatus::Prefill => "prefill",
-        RequestStatus::Decode => "decode",
-        RequestStatus::Completed => "completed",
-        RequestStatus::Failed => "failed",
-        RequestStatus::Cancelled => "cancelled",
-    }
-}
-
-fn finish_reason_name(reason: FinishReason) -> &'static str {
-    match reason {
-        FinishReason::Stop => "stop",
-        FinishReason::Length => "length",
-        FinishReason::Cancelled => "cancelled",
-        FinishReason::Error => "error",
-    }
-}
-
-fn backend_preference_name(backend: BackendPreference) -> &'static str {
-    match backend {
-        BackendPreference::Auto => "auto",
-        BackendPreference::Cpu => "cpu",
-        BackendPreference::Cuda => "cuda",
-        BackendPreference::Metal => "metal",
-        BackendPreference::Vulkan => "vulkan",
-        BackendPreference::WebGpu => "webgpu",
-    }
-}
-
-fn model_modality_name(modality: ModelModality) -> &'static str {
-    match modality {
-        ModelModality::Text => "text",
-        ModelModality::Vision => "vision",
-    }
-}
-
-fn model_status_name(status: ModelStatus) -> &'static str {
-    match status {
-        ModelStatus::Ready => "ready",
-        ModelStatus::NeedsProjector => "needs_projector",
-        ModelStatus::Broken => "broken",
-    }
-}
-
-fn model_source_kind_name(source: ModelSourceKind) -> &'static str {
-    match source {
-        ModelSourceKind::Local => "local",
-        ModelSourceKind::Remote => "remote",
+fn assign_if_some<T>(target: &mut T, value: Option<T>) {
+    if let Some(value) = value {
+        *target = value;
     }
 }
 

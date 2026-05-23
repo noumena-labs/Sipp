@@ -2,46 +2,37 @@
 
 use super::super::helpers::model_id_from_plan;
 use super::super::*;
+use crate::lifecycle::test_support::{some_string, strings, TempDir};
 use crate::lifecycle::{
-    model_entry_from_assets, AssetInspection, AssetRecord, AssetRole, ModelAssetKind, PairingPlan,
+    model_entry_from_assets, AssetInspection, AssetRecord, AssetRole, AssetSource, ModelAssetKind,
+    ModelModality, PairingPlan,
 };
 use std::fs;
 
-struct TempDir {
-    path: PathBuf,
-}
-
-impl TempDir {
-    fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "cogentlm-engine-service-{}-{}",
-            name,
-            now_unix_ms()
-        ));
-        fs::create_dir_all(&path).expect("temp dir");
-        Self { path }
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
+fn vision_plan() -> PairingPlan {
+    PairingPlan {
+        model_asset_ids: strings(&["asset-a"]),
+        projector_asset_id: None,
+        name: "vision".to_string(),
+        modality: ModelModality::Vision,
+        status: ModelStatus::NeedsProjector,
+        compatible_vision_projector_types: strings(&["lfm2"]),
     }
 }
 
 #[test]
 fn model_id_is_stable_for_asset_order() {
     let left = PairingPlan {
-        model_asset_ids: vec!["asset-b".to_string(), "asset-a".to_string()],
-        projector_asset_id: Some("asset-c".to_string()),
+        model_asset_ids: strings(&["asset-b", "asset-a"]),
+        projector_asset_id: some_string("asset-c"),
         name: "model".to_string(),
         modality: ModelModality::Vision,
         status: ModelStatus::Ready,
         compatible_vision_projector_types: Vec::new(),
     };
     let right = PairingPlan {
-        model_asset_ids: vec!["asset-a".to_string(), "asset-b".to_string()],
-        projector_asset_id: Some("asset-c".to_string()),
+        model_asset_ids: strings(&["asset-a", "asset-b"]),
+        projector_asset_id: some_string("asset-c"),
         ..left.clone()
     };
 
@@ -50,7 +41,7 @@ fn model_id_is_stable_for_asset_order() {
 
 #[test]
 fn service_installs_and_lists_text_asset() {
-    let root = TempDir::new("install-list");
+    let root = TempDir::new("service", "install-list");
     let model = root.path.join("model.gguf");
     fs::write(&model, b"not a gguf").expect("model");
 
@@ -67,7 +58,7 @@ fn service_installs_and_lists_text_asset() {
 
 #[test]
 fn cached_local_asset_requires_matching_source_hash() {
-    let root = TempDir::new("cache-hash");
+    let root = TempDir::new("service", "cache-hash");
     let model = root.path.join("model.gguf");
     fs::write(&model, b"first bytes").expect("model");
 
@@ -98,16 +89,9 @@ fn cached_local_asset_requires_matching_source_hash() {
 
 #[test]
 fn service_rejects_unresolved_vision_model_on_load() {
-    let root = TempDir::new("needs-projector");
+    let root = TempDir::new("service", "needs-projector");
     let mut service = ModelService::local(root.path.join("store")).expect("service");
-    let plan = PairingPlan {
-        model_asset_ids: vec!["asset-a".to_string()],
-        projector_asset_id: None,
-        name: "vision".to_string(),
-        modality: ModelModality::Vision,
-        status: ModelStatus::NeedsProjector,
-        compatible_vision_projector_types: vec!["lfm2".to_string()],
-    };
+    let plan = vision_plan();
     let mut record = AssetRecord {
         id: "asset-a".to_string(),
         kind: ModelAssetKind::Model,
@@ -126,7 +110,7 @@ fn service_rejects_unresolved_vision_model_on_load() {
             role: AssetRole::Model,
             architecture: Some("lfm2".to_string()),
             vision_capable: true,
-            compatible_vision_projector_types: vec!["lfm2".to_string()],
+            compatible_vision_projector_types: strings(&["lfm2"]),
             provided_vision_projector_type: None,
         }),
     };

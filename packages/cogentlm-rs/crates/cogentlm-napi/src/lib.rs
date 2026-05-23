@@ -6,9 +6,8 @@ use cogentlm_engine::backend::{
 };
 use cogentlm_engine::engine::protocol::{
     BackendDevice as CoreBackendDevice, BackendInfo as CoreBackendInfo,
-    EngineStatus as CoreEngineStatus, FinishReason as CoreFinishReason,
     ModelState as CoreModelState, RequestState as CoreRequestState,
-    RequestStats as CoreRequestStats, RequestStatus as CoreRequestStatus,
+    RequestStats as CoreRequestStats,
 };
 use cogentlm_engine::engine::{
     CacheKeyPolicy, ChatMessage as CoreChatMessage, ChatRequest as CoreChatRequest,
@@ -24,15 +23,16 @@ use cogentlm_engine::engine::{
     ResolvedRuntimeLimits as CoreResolvedRuntimeLimits, RopeScaling, SamplerStage,
     SamplingRuntimeConfig as CoreSamplingRuntimeConfig,
     SchedulerRuntimeConfig as CoreSchedulerRuntimeConfig, SplitMode, TokenBatch as CoreTokenBatch,
+    DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
 };
 use cogentlm_engine::lifecycle::{
     model_source_from_path as core_model_source_from_path,
     vision_model_source_from_paths as core_vision_model_source_from_paths,
     BackendPreference as CoreBackendPreference, BackendSelection as CoreBackendSelection,
     LoadedModelInfo as CoreLoadedModelInfo, ModelInfo as CoreManagedModelInfo,
-    ModelLoadOptions as CoreModelLoadOptions, ModelModality as CoreModelModality,
-    ModelService as CoreModelService, ModelServiceState as CoreModelServiceState,
-    ModelSourceKind as CoreModelSourceKind, ModelStatus as CoreModelStatus, StatsMode,
+    ModelLoadOptions as CoreModelLoadOptions, ModelService as CoreModelService,
+    ModelServiceState as CoreModelServiceState, StatsMode, DEFAULT_MODEL_BACKEND,
+    DEFAULT_MODEL_STATS,
 };
 use cogentlm_engine::runtime::config::{
     SchedulerPolicyConfig as CoreSchedulerPolicyConfig, SchedulerPolicyMode,
@@ -49,6 +49,34 @@ type SharedEvents = Arc<Mutex<CoreEngineEventReceiver>>;
 type SharedModelService = Arc<Mutex<Option<CoreModelService>>>;
 type SharedModelEvents = Arc<Mutex<Option<CoreEngineEventReceiver>>>;
 type TokenBatchCallback = Arc<ThreadsafeFunction<TokenBatch, (), TokenBatch, Status, false>>;
+
+const ENGINE_MUTEX_POISONED: &str = "engine mutex is poisoned";
+const ENGINE_EVENTS_MUTEX_POISONED: &str = "engine events mutex is poisoned";
+const ENGINE_CLOSED: &str = "engine is closed";
+const MODEL_SERVICE_EVENTS_MUTEX_POISONED: &str = "model service events mutex is poisoned";
+const MODEL_SERVICE_MUTEX_POISONED: &str = "model service mutex is poisoned";
+const MODEL_SERVICE_CLOSED: &str = "model service is closed";
+const EVENT_TYPE_STATE: &str = "state";
+const EVENT_TYPE_LOAD_PROGRESS: &str = "load-progress";
+const EVENT_TYPE_REQUEST_STARTED: &str = "request-started";
+const EVENT_TYPE_REQUEST_COMPLETED: &str = "request-completed";
+const EVENT_TYPE_REQUEST_FAILED: &str = "request-failed";
+const EVENT_TYPE_CLOSED: &str = "closed";
+
+fn drain_event_receiver(receiver: &CoreEngineEventReceiver) -> Vec<EngineEvent> {
+    receiver.try_iter().map(engine_event_to_node).collect()
+}
+
+fn drain_optional_event_receiver(receiver: &Option<CoreEngineEventReceiver>) -> Vec<EngineEvent> {
+    receiver
+        .as_ref()
+        .map(drain_event_receiver)
+        .unwrap_or_default()
+}
+
+fn mapped_vec<T, U>(items: Vec<T>, f: impl FnMut(T) -> U) -> Vec<U> {
+    items.into_iter().map(f).collect()
+}
 
 #[napi(object)]
 pub struct LogitBiasConfig {
@@ -140,27 +168,27 @@ impl SamplingRuntimeConfig {
                 .unwrap_or_default(),
             seed: self.seed.map(|value| value as u32),
             top_k: self.top_k,
-            top_p: self.top_p.map(|value| value as f32),
-            min_p: self.min_p.map(|value| value as f32),
-            typical_p: self.typical_p.map(|value| value as f32),
-            xtc_probability: self.xtc_probability.map(|value| value as f32),
-            xtc_threshold: self.xtc_threshold.map(|value| value as f32),
-            top_n_sigma: self.top_n_sigma.map(|value| value as f32),
-            temperature: self.temperature.map(|value| value as f32),
-            dynatemp_range: self.dynatemp_range.map(|value| value as f32),
-            dynatemp_exponent: self.dynatemp_exponent.map(|value| value as f32),
+            top_p: option_f32(self.top_p),
+            min_p: option_f32(self.min_p),
+            typical_p: option_f32(self.typical_p),
+            xtc_probability: option_f32(self.xtc_probability),
+            xtc_threshold: option_f32(self.xtc_threshold),
+            top_n_sigma: option_f32(self.top_n_sigma),
+            temperature: option_f32(self.temperature),
+            dynatemp_range: option_f32(self.dynatemp_range),
+            dynatemp_exponent: option_f32(self.dynatemp_exponent),
             repeat_last_n: self.repeat_last_n,
-            repeat_penalty: self.repeat_penalty.map(|value| value as f32),
-            frequency_penalty: self.frequency_penalty.map(|value| value as f32),
-            presence_penalty: self.presence_penalty.map(|value| value as f32),
-            dry_multiplier: self.dry_multiplier.map(|value| value as f32),
-            dry_base: self.dry_base.map(|value| value as f32),
+            repeat_penalty: option_f32(self.repeat_penalty),
+            frequency_penalty: option_f32(self.frequency_penalty),
+            presence_penalty: option_f32(self.presence_penalty),
+            dry_multiplier: option_f32(self.dry_multiplier),
+            dry_base: option_f32(self.dry_base),
             dry_allowed_length: self.dry_allowed_length,
             dry_penalty_last_n: self.dry_penalty_last_n,
             dry_sequence_breakers: self.dry_sequence_breakers.clone().unwrap_or_default(),
             mirostat: self.mirostat,
-            mirostat_tau: self.mirostat_tau.map(|value| value as f32),
-            mirostat_eta: self.mirostat_eta.map(|value| value as f32),
+            mirostat_tau: option_f32(self.mirostat_tau),
+            mirostat_eta: option_f32(self.mirostat_eta),
             min_keep: self.min_keep,
             n_probs: self.n_probs,
             logit_bias: self
@@ -221,20 +249,11 @@ pub struct ModelPlacementConfig {
 impl ModelPlacementConfig {
     fn to_core(&self) -> Result<CoreModelPlacementConfig> {
         let mut core = CoreModelPlacementConfig::default();
-        if let Some(devices) = &self.devices {
-            core.devices = devices.clone();
-        }
+        assign_if_some(&mut core.devices, self.devices.clone());
         if let Some(value) = &self.gpu_layers {
             core.gpu_layers = match value {
                 Either::A(value) => parse_gpu_layers(value)?,
-                Either::B(value) => {
-                    if value.count < 0 {
-                        return Err(invalid_arg(
-                            "gpu_layers.count must be a non-negative integer",
-                        ));
-                    }
-                    GpuLayerConfig::Count(value.count)
-                }
+                Either::B(value) => GpuLayerConfig::from_layer_count(value.count),
             };
         }
         if let Some(value) = &self.split_mode {
@@ -244,28 +263,16 @@ impl ModelPlacementConfig {
         if let Some(value) = &self.tensor_split {
             core.tensor_split = value.iter().map(|value| *value as f32).collect();
         }
-        if let Some(value) = self.use_mmap {
-            core.use_mmap = value;
-        }
-        if let Some(value) = self.use_mlock {
-            core.use_mlock = value;
-        }
-        if let Some(value) = self.fit_params {
-            core.fit_params = value;
-        }
+        assign_if_some(&mut core.use_mmap, self.use_mmap);
+        assign_if_some(&mut core.use_mlock, self.use_mlock);
+        assign_if_some(&mut core.fit_params, self.fit_params);
         core.fit_params_min_ctx = self.fit_params_min_ctx;
         if let Some(value) = &self.fit_params_target_bytes {
             core.fit_params_target_bytes = value.iter().map(|value| *value as u64).collect();
         }
-        if let Some(value) = self.check_tensors {
-            core.check_tensors = value;
-        }
-        if let Some(value) = self.no_extra_bufts {
-            core.no_extra_bufts = value;
-        }
-        if let Some(value) = self.no_host {
-            core.no_host = value;
-        }
+        assign_if_some(&mut core.check_tensors, self.check_tensors);
+        assign_if_some(&mut core.no_extra_bufts, self.no_extra_bufts);
+        assign_if_some(&mut core.no_host, self.no_host);
         Ok(core)
     }
 }
@@ -341,28 +348,20 @@ impl ContextRuntimeConfig {
         if let Some(value) = &self.cache_type_v {
             core.cache_type_v = parse_kv_cache_type(value)?;
         }
-        if let Some(value) = self.offload_kqv {
-            core.offload_kqv = value;
-        }
-        if let Some(value) = self.op_offload {
-            core.op_offload = value;
-        }
-        if let Some(value) = self.swa_full {
-            core.swa_full = value;
-        }
-        if let Some(value) = self.warmup {
-            core.warmup = value;
-        }
+        assign_if_some(&mut core.offload_kqv, self.offload_kqv);
+        assign_if_some(&mut core.op_offload, self.op_offload);
+        assign_if_some(&mut core.swa_full, self.swa_full);
+        assign_if_some(&mut core.warmup, self.warmup);
         if let Some(value) = &self.rope_scaling {
             core.rope_scaling = Some(parse_rope_scaling(value)?);
         }
-        core.rope_freq_base = self.rope_freq_base.map(|value| value as f32);
-        core.rope_freq_scale = self.rope_freq_scale.map(|value| value as f32);
+        core.rope_freq_base = option_f32(self.rope_freq_base);
+        core.rope_freq_scale = option_f32(self.rope_freq_scale);
         core.yarn_orig_ctx = self.yarn_orig_ctx;
-        core.yarn_ext_factor = self.yarn_ext_factor.map(|value| value as f32);
-        core.yarn_attn_factor = self.yarn_attn_factor.map(|value| value as f32);
-        core.yarn_beta_fast = self.yarn_beta_fast.map(|value| value as f32);
-        core.yarn_beta_slow = self.yarn_beta_slow.map(|value| value as f32);
+        core.yarn_ext_factor = option_f32(self.yarn_ext_factor);
+        core.yarn_attn_factor = option_f32(self.yarn_attn_factor);
+        core.yarn_beta_fast = option_f32(self.yarn_beta_fast);
+        core.yarn_beta_slow = option_f32(self.yarn_beta_slow);
         Ok(core)
     }
 }
@@ -381,12 +380,11 @@ impl SchedulerPolicyConfig {
         if let Some(value) = &self.mode {
             core.mode = parse_scheduler_policy(value)?;
         }
-        if let Some(value) = self.decode_token_reserve {
-            core.decode_token_reserve = value;
-        }
-        if let Some(value) = self.enable_adaptive_prefill_chunking {
-            core.enable_adaptive_prefill_chunking = value;
-        }
+        assign_if_some(&mut core.decode_token_reserve, self.decode_token_reserve);
+        assign_if_some(
+            &mut core.enable_adaptive_prefill_chunking,
+            self.enable_adaptive_prefill_chunking,
+        );
         Ok(())
     }
 }
@@ -407,15 +405,11 @@ pub struct SchedulerRuntimeConfig {
 impl SchedulerRuntimeConfig {
     fn to_core(&self) -> Result<CoreSchedulerRuntimeConfig> {
         let mut core = CoreSchedulerRuntimeConfig::default();
-        if let Some(value) = self.continuous_batching {
-            core.continuous_batching = value;
-        }
+        assign_if_some(&mut core.continuous_batching, self.continuous_batching);
         if let Some(value) = &self.policy {
             value.apply_to_core(&mut core.policy)?;
         }
-        if let Some(value) = self.prefill_chunk_size {
-            core.prefill_chunk_size = value;
-        }
+        assign_if_some(&mut core.prefill_chunk_size, self.prefill_chunk_size);
         core.max_running_requests = self.max_running_requests;
         core.max_queued_requests = self.max_queued_requests;
         Ok(core)
@@ -449,30 +443,32 @@ impl CacheRuntimeConfig {
         if let Some(value) = &self.mode {
             core.mode = parse_kv_reuse_mode(value)?;
         }
-        if let Some(value) = self.retained_prefix_tokens {
-            core.retained_prefix_tokens = value;
-        }
-        if let Some(value) = self.snapshot_interval_tokens {
-            core.snapshot_interval_tokens = value;
-        }
-        if let Some(value) = self.max_snapshot_entries {
-            core.max_snapshot_entries = value;
-        }
-        if let Some(value) = self.max_snapshot_bytes {
-            core.max_snapshot_bytes = value as usize;
-        }
-        if let Some(value) = self.max_session_entries {
-            core.max_session_entries = value;
-        }
+        assign_if_some(
+            &mut core.retained_prefix_tokens,
+            self.retained_prefix_tokens,
+        );
+        assign_if_some(
+            &mut core.snapshot_interval_tokens,
+            self.snapshot_interval_tokens,
+        );
+        assign_if_some(&mut core.max_snapshot_entries, self.max_snapshot_entries);
+        assign_if_some_map(
+            &mut core.max_snapshot_bytes,
+            self.max_snapshot_bytes,
+            |value| value as usize,
+        );
+        assign_if_some(&mut core.max_session_entries, self.max_session_entries);
         if let Some(value) = &self.cache_key_policy {
             core.cache_key_policy = parse_cache_key_policy(value)?;
         }
-        if let Some(value) = self.enable_context_checkpoints {
-            core.enable_context_checkpoints = value;
-        }
-        if let Some(value) = self.checkpoint_every_tokens {
-            core.checkpoint_every_tokens = value;
-        }
+        assign_if_some(
+            &mut core.enable_context_checkpoints,
+            self.enable_context_checkpoints,
+        );
+        assign_if_some(
+            &mut core.checkpoint_every_tokens,
+            self.checkpoint_every_tokens,
+        );
         Ok(core)
     }
 }
@@ -515,18 +511,21 @@ pub struct ResidencyRuntimeConfig {
 impl ResidencyRuntimeConfig {
     fn to_core(&self) -> CoreResidencyRuntimeConfig {
         let mut core = CoreResidencyRuntimeConfig::default();
-        if let Some(value) = self.max_gpu_models_per_device {
-            core.max_gpu_models_per_device = value as usize;
-        }
-        if let Some(value) = self.allow_cpu_models_while_gpu_loaded {
-            core.allow_cpu_models_while_gpu_loaded = value;
-        }
-        if let Some(value) = self.require_gpu_lease {
-            core.require_gpu_lease = value;
-        }
-        if let Some(value) = self.gpu_memory_safety_margin_bytes {
-            core.gpu_memory_safety_margin_bytes = value as u64;
-        }
+        assign_if_some_map(
+            &mut core.max_gpu_models_per_device,
+            self.max_gpu_models_per_device,
+            |value| value as usize,
+        );
+        assign_if_some(
+            &mut core.allow_cpu_models_while_gpu_loaded,
+            self.allow_cpu_models_while_gpu_loaded,
+        );
+        assign_if_some(&mut core.require_gpu_lease, self.require_gpu_lease);
+        assign_if_some_map(
+            &mut core.gpu_memory_safety_margin_bytes,
+            self.gpu_memory_safety_margin_bytes,
+            |value| value as u64,
+        );
         core
     }
 }
@@ -562,32 +561,34 @@ pub struct NativeRuntimeConfig {
 
 impl NativeRuntimeConfig {
     fn to_core(&self) -> Result<CoreNativeRuntimeConfig> {
-        let mut core = CoreNativeRuntimeConfig::default();
-        if let Some(value) = &self.placement {
-            core.placement = value.to_core()?;
-        }
-        if let Some(value) = &self.context {
-            core.context = value.to_core()?;
-        }
-        if let Some(value) = &self.sampling {
-            core.sampling = value.to_core()?;
-        }
-        if let Some(value) = &self.scheduler {
-            core.scheduler = value.to_core()?;
-        }
-        if let Some(value) = &self.cache {
-            core.cache = value.to_core()?;
-        }
-        if let Some(value) = &self.multimodal {
-            core.multimodal = value.to_core();
-        }
-        if let Some(value) = &self.residency {
-            core.residency = value.to_core();
-        }
-        if let Some(value) = &self.observability {
-            core.observability = value.to_core();
-        }
-        Ok(core)
+        Ok(CoreNativeRuntimeConfig {
+            placement: optional_core_or_default(
+                self.placement.as_ref(),
+                ModelPlacementConfig::to_core,
+            )?,
+            context: optional_core_or_default(
+                self.context.as_ref(),
+                ContextRuntimeConfig::to_core,
+            )?,
+            sampling: optional_core_or_default(
+                self.sampling.as_ref(),
+                SamplingRuntimeConfig::to_core,
+            )?,
+            scheduler: optional_core_or_default(
+                self.scheduler.as_ref(),
+                SchedulerRuntimeConfig::to_core,
+            )?,
+            cache: optional_core_or_default(self.cache.as_ref(), CacheRuntimeConfig::to_core)?,
+            multimodal: optional_core_or_default(self.multimodal.as_ref(), |value| {
+                Ok(value.to_core())
+            })?,
+            residency: optional_core_or_default(self.residency.as_ref(), |value| {
+                Ok(value.to_core())
+            })?,
+            observability: optional_core_or_default(self.observability.as_ref(), |value| {
+                Ok(value.to_core())
+            })?,
+        })
     }
 }
 
@@ -601,14 +602,11 @@ pub struct ModelLoadOptions {
 impl ModelLoadOptions {
     fn to_core(&self) -> Result<CoreModelLoadOptions> {
         Ok(CoreModelLoadOptions {
-            backend: parse_backend_preference(self.backend.as_deref().unwrap_or("auto"))?,
-            stats: parse_stats_mode(self.stats.as_deref().unwrap_or("basic"))?,
-            runtime: self
-                .runtime
-                .as_ref()
-                .map(NativeRuntimeConfig::to_core)
-                .transpose()?
-                .unwrap_or_default(),
+            backend: parse_backend_preference(
+                self.backend.as_deref().unwrap_or(DEFAULT_MODEL_BACKEND),
+            )?,
+            stats: parse_stats_mode(self.stats.as_deref().unwrap_or(DEFAULT_MODEL_STATS))?,
+            runtime: optional_core_or_default(self.runtime.as_ref(), NativeRuntimeConfig::to_core)?,
         })
     }
 }
@@ -626,7 +624,7 @@ pub struct QueryOptions {
 
 impl QueryOptions {
     fn to_core(&self) -> Result<CoreQueryOptions> {
-        let max_tokens = self.max_tokens.unwrap_or(64);
+        let max_tokens = self.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
         if max_tokens <= 0 {
             return Err(invalid_arg("maxTokens must be positive"));
         }
@@ -634,7 +632,7 @@ impl QueryOptions {
             context_key: self
                 .context_key
                 .clone()
-                .unwrap_or_else(|| "default".to_string()),
+                .unwrap_or_else(|| DEFAULT_CONTEXT_KEY.to_string()),
             max_tokens,
             grammar: self.grammar.clone().unwrap_or_default(),
             json_schema: self.json_schema.clone().unwrap_or_default(),
@@ -833,6 +831,14 @@ pub struct ModelServiceState {
     pub requests: Vec<RequestState>,
     pub stats: EngineStats,
     pub updated_at_unix_ms: f64,
+}
+
+struct StateTail {
+    backend: BackendInfo,
+    runtime: Option<ResolvedRuntimeLimits>,
+    requests: Vec<RequestState>,
+    stats: EngineStats,
+    updated_at_unix_ms: f64,
 }
 
 #[napi(object)]
@@ -1046,8 +1052,8 @@ impl CogentEngine {
         let events = self
             .events
             .lock()
-            .map_err(|_| napi_error("engine events mutex is poisoned"))?;
-        Ok(events.try_iter().map(engine_event_to_node).collect())
+            .map_err(|_| napi_error(ENGINE_EVENTS_MUTEX_POISONED))?;
+        Ok(drain_event_receiver(&events))
     }
 }
 
@@ -1055,7 +1061,7 @@ impl CogentEngine {
     fn engine_guard(&self) -> Result<std::sync::MutexGuard<'_, Option<CoreCogentEngine>>> {
         self.inner
             .lock()
-            .map_err(|_| napi_error("engine mutex is poisoned"))
+            .map_err(|_| napi_error(ENGINE_MUTEX_POISONED))
     }
 }
 
@@ -1145,7 +1151,7 @@ impl ModelService {
     #[napi]
     pub fn list(&self) -> Result<Vec<ManagedModelInfo>> {
         with_model_service(&self.inner, |service| Ok(service.list()))
-            .map(|models| models.into_iter().map(model_info_to_node).collect())
+            .map(|models| mapped_vec(models, model_info_to_node))
     }
 
     #[napi]
@@ -1204,11 +1210,8 @@ impl ModelService {
         let events = self
             .events
             .lock()
-            .map_err(|_| napi_error("model service events mutex is poisoned"))?;
-        Ok(events
-            .as_ref()
-            .map(|receiver| receiver.try_iter().map(engine_event_to_node).collect())
-            .unwrap_or_default())
+            .map_err(|_| napi_error(MODEL_SERVICE_EVENTS_MUTEX_POISONED))?;
+        Ok(drain_optional_event_receiver(&events))
     }
 }
 
@@ -1216,7 +1219,7 @@ impl ModelService {
     fn service_guard(&self) -> Result<std::sync::MutexGuard<'_, Option<CoreModelService>>> {
         self.inner
             .lock()
-            .map_err(|_| napi_error("model service mutex is poisoned"))
+            .map_err(|_| napi_error(MODEL_SERVICE_MUTEX_POISONED))
     }
 }
 
@@ -1254,10 +1257,11 @@ impl Task for QueryTask {
     type JsValue = RequestResult;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        let mut request = CoreQueryRequest::new(self.prompt.clone()).options(self.options.clone());
-        if let Some(on_tokens) = self.on_tokens.clone() {
-            request = request.on_tokens(move |batch| emit_token_batch(&on_tokens, batch));
-        }
+        let request = query_request_with_tokens(
+            self.prompt.clone(),
+            self.options.clone(),
+            self.on_tokens.clone(),
+        );
         with_engine(&self.engine, |engine| engine.query(request))
     }
 
@@ -1277,7 +1281,7 @@ impl Task for QueryResponseTask {
     type JsValue = GenerationResponse;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        let request = CoreQueryRequest::new(self.prompt.clone()).options(self.options.clone());
+        let request = query_request(self.prompt.clone(), self.options.clone());
         with_engine(&self.engine, |engine| engine.query_response(request))
     }
 
@@ -1297,7 +1301,7 @@ impl Task for QueryResultTask {
     type JsValue = RequestResult;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        let request = CoreQueryRequest::new(self.prompt.clone()).options(self.options.clone());
+        let request = query_request(self.prompt.clone(), self.options.clone());
         with_engine(&self.engine, |engine| engine.query(request))
     }
 
@@ -1318,10 +1322,11 @@ impl Task for ChatTextTask {
     type JsValue = RequestResult;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        let mut request = CoreChatRequest::new(self.messages.clone()).options(self.options.clone());
-        if let Some(on_tokens) = self.on_tokens.clone() {
-            request = request.on_tokens(move |batch| emit_token_batch(&on_tokens, batch));
-        }
+        let request = chat_request_with_tokens(
+            self.messages.clone(),
+            self.options.clone(),
+            self.on_tokens.clone(),
+        );
         with_engine(&self.engine, |engine| engine.chat(request))
     }
 
@@ -1341,7 +1346,7 @@ impl Task for ChatResponseTask {
     type JsValue = GenerationResponse;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        let request = CoreChatRequest::new(self.messages.clone()).options(self.options.clone());
+        let request = chat_request(self.messages.clone(), self.options.clone());
         with_engine(&self.engine, |engine| engine.chat_response(request))
     }
 
@@ -1361,7 +1366,7 @@ impl Task for ChatResultTask {
     type JsValue = RequestResult;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        let request = CoreChatRequest::new(self.messages.clone()).options(self.options.clone());
+        let request = chat_request(self.messages.clone(), self.options.clone());
         with_engine(&self.engine, |engine| engine.chat(request))
     }
 
@@ -1382,7 +1387,7 @@ impl Task for CloseTask {
         let engine = self
             .engine
             .lock()
-            .map_err(|_| napi_error("engine mutex is poisoned"))?
+            .map_err(|_| napi_error(ENGINE_MUTEX_POISONED))?
             .take();
         if let Some(engine) = engine {
             engine.close().map_err(core_error)?;
@@ -1425,12 +1430,12 @@ impl Task for ModelLoadPathTask {
 
     fn compute(&mut self) -> Result<Self::Output> {
         with_model_service_mut(&self.service, |service| {
-            let loaded = service.load(
-                core_model_source_from_path(&self.model_path),
-                self.options.clone(),
-            )?;
-            refresh_model_events(&self.events, service)?;
-            Ok(loaded)
+            load_model_and_refresh(&self.events, service, |service| {
+                service.load(
+                    core_model_source_from_path(&self.model_path),
+                    self.options.clone(),
+                )
+            })
         })
     }
 
@@ -1453,12 +1458,12 @@ impl Task for ModelLoadVisionTask {
 
     fn compute(&mut self) -> Result<Self::Output> {
         with_model_service_mut(&self.service, |service| {
-            let loaded = service.load(
-                core_vision_model_source_from_paths(&self.model_path, &self.projector_path),
-                self.options.clone(),
-            )?;
-            refresh_model_events(&self.events, service)?;
-            Ok(loaded)
+            load_model_and_refresh(&self.events, service, |service| {
+                service.load(
+                    core_vision_model_source_from_paths(&self.model_path, &self.projector_path),
+                    self.options.clone(),
+                )
+            })
         })
     }
 
@@ -1480,9 +1485,9 @@ impl Task for ModelLoadInstalledTask {
 
     fn compute(&mut self) -> Result<Self::Output> {
         with_model_service_mut(&self.service, |service| {
-            let loaded = service.load_installed(&self.model_id, self.options.clone())?;
-            refresh_model_events(&self.events, service)?;
-            Ok(loaded)
+            load_model_and_refresh(&self.events, service, |service| {
+                service.load_installed(&self.model_id, self.options.clone())
+            })
         })
     }
 
@@ -1502,11 +1507,7 @@ impl Task for ModelUnloadTask {
 
     fn compute(&mut self) -> Result<Self::Output> {
         with_model_service_mut(&self.service, |service| service.unload())?;
-        self.events
-            .lock()
-            .map_err(|_| napi_error("model service events mutex is poisoned"))?
-            .take();
-        Ok(())
+        clear_model_events(&self.events)
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
@@ -1544,10 +1545,11 @@ impl Task for ModelQueryTask {
     type JsValue = RequestResult;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        let mut request = CoreQueryRequest::new(self.prompt.clone()).options(self.options.clone());
-        if let Some(on_tokens) = self.on_tokens.clone() {
-            request = request.on_tokens(move |batch| emit_token_batch(&on_tokens, batch));
-        }
+        let request = query_request_with_tokens(
+            self.prompt.clone(),
+            self.options.clone(),
+            self.on_tokens.clone(),
+        );
         with_model_service(&self.service, |service| service.query(request))
     }
 
@@ -1568,10 +1570,11 @@ impl Task for ModelChatTask {
     type JsValue = RequestResult;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        let mut request = CoreChatRequest::new(self.messages.clone()).options(self.options.clone());
-        if let Some(on_tokens) = self.on_tokens.clone() {
-            request = request.on_tokens(move |batch| emit_token_batch(&on_tokens, batch));
-        }
+        let request = chat_request_with_tokens(
+            self.messages.clone(),
+            self.options.clone(),
+            self.on_tokens.clone(),
+        );
         with_model_service(&self.service, |service| service.chat(request))
     }
 
@@ -1610,16 +1613,12 @@ impl Task for ModelCloseTask {
         let service = self
             .service
             .lock()
-            .map_err(|_| napi_error("model service mutex is poisoned"))?
+            .map_err(|_| napi_error(MODEL_SERVICE_MUTEX_POISONED))?
             .take();
         if let Some(mut service) = service {
             service.close().map_err(model_error)?;
         }
-        self.events
-            .lock()
-            .map_err(|_| napi_error("model service events mutex is poisoned"))?
-            .take();
-        Ok(())
+        clear_model_events(&self.events)
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
@@ -1643,10 +1642,8 @@ fn with_engine<T>(
 ) -> Result<T> {
     let guard = engine
         .lock()
-        .map_err(|_| napi_error("engine mutex is poisoned"))?;
-    let engine = guard
-        .as_ref()
-        .ok_or_else(|| napi_error("engine is closed"))?;
+        .map_err(|_| napi_error(ENGINE_MUTEX_POISONED))?;
+    let engine = guard.as_ref().ok_or_else(|| napi_error(ENGINE_CLOSED))?;
     f(engine).map_err(core_error)
 }
 
@@ -1656,10 +1653,10 @@ fn with_model_service<T>(
 ) -> Result<T> {
     let guard = service
         .lock()
-        .map_err(|_| napi_error("model service mutex is poisoned"))?;
+        .map_err(|_| napi_error(MODEL_SERVICE_MUTEX_POISONED))?;
     let service = guard
         .as_ref()
-        .ok_or_else(|| napi_error("model service is closed"))?;
+        .ok_or_else(|| napi_error(MODEL_SERVICE_CLOSED))?;
     f(service).map_err(model_error)
 }
 
@@ -1671,10 +1668,10 @@ fn with_model_service_mut<T>(
 ) -> Result<T> {
     let mut guard = service
         .lock()
-        .map_err(|_| napi_error("model service mutex is poisoned"))?;
+        .map_err(|_| napi_error(MODEL_SERVICE_MUTEX_POISONED))?;
     let service = guard
         .as_mut()
-        .ok_or_else(|| napi_error("model service is closed"))?;
+        .ok_or_else(|| napi_error(MODEL_SERVICE_CLOSED))?;
     f(service).map_err(model_error)
 }
 
@@ -1687,11 +1684,68 @@ fn refresh_model_events(
         .lock()
         .map_err(|_| {
             cogentlm_engine::lifecycle::ModelError::Runtime(
-                "model service events mutex is poisoned".to_string(),
+                MODEL_SERVICE_EVENTS_MUTEX_POISONED.to_string(),
             )
         })?
         .replace(receiver);
     Ok(())
+}
+
+fn load_model_and_refresh(
+    events: &SharedModelEvents,
+    service: &mut CoreModelService,
+    load: impl FnOnce(
+        &mut CoreModelService,
+    ) -> std::result::Result<
+        CoreLoadedModelInfo,
+        cogentlm_engine::lifecycle::ModelError,
+    >,
+) -> std::result::Result<CoreLoadedModelInfo, cogentlm_engine::lifecycle::ModelError> {
+    let loaded = load(service)?;
+    refresh_model_events(events, service)?;
+    Ok(loaded)
+}
+
+fn clear_model_events(events: &SharedModelEvents) -> Result<()> {
+    events
+        .lock()
+        .map_err(|_| napi_error(MODEL_SERVICE_EVENTS_MUTEX_POISONED))?
+        .take();
+    Ok(())
+}
+
+fn query_request(prompt: String, options: CoreQueryOptions) -> CoreQueryRequest {
+    CoreQueryRequest::new(prompt).options(options)
+}
+
+fn query_request_with_tokens(
+    prompt: String,
+    options: CoreQueryOptions,
+    on_tokens: Option<TokenBatchCallback>,
+) -> CoreQueryRequest {
+    let request = query_request(prompt, options);
+    if let Some(on_tokens) = on_tokens {
+        request.on_tokens(move |batch| emit_token_batch(&on_tokens, batch))
+    } else {
+        request
+    }
+}
+
+fn chat_request(messages: Vec<CoreChatMessage>, options: CoreQueryOptions) -> CoreChatRequest {
+    CoreChatRequest::new(messages).options(options)
+}
+
+fn chat_request_with_tokens(
+    messages: Vec<CoreChatMessage>,
+    options: CoreQueryOptions,
+    on_tokens: Option<TokenBatchCallback>,
+) -> CoreChatRequest {
+    let request = chat_request(messages, options);
+    if let Some(on_tokens) = on_tokens {
+        request.on_tokens(move |batch| emit_token_batch(&on_tokens, batch))
+    } else {
+        request
+    }
 }
 
 fn emit_token_batch(
@@ -1714,19 +1768,11 @@ fn emit_token_batch(
 fn model_load_options_or_default(
     options: Option<ModelLoadOptions>,
 ) -> Result<CoreModelLoadOptions> {
-    options
-        .as_ref()
-        .map(ModelLoadOptions::to_core)
-        .transpose()
-        .map(|options| options.unwrap_or_default())
+    optional_core_or_default(options.as_ref(), ModelLoadOptions::to_core)
 }
 
 fn query_options_or_default(options: Option<QueryOptions>) -> Result<CoreQueryOptions> {
-    options
-        .as_ref()
-        .map(QueryOptions::to_core)
-        .transpose()
-        .map(|options| options.unwrap_or_default())
+    optional_core_or_default(options.as_ref(), QueryOptions::to_core)
 }
 
 fn chat_messages_to_core(messages: Vec<ChatMessage>) -> Result<Vec<CoreChatMessage>> {
@@ -1745,7 +1791,7 @@ fn chat_messages_to_core(messages: Vec<ChatMessage>) -> Result<Vec<CoreChatMessa
 }
 
 fn response_to_node(response: GenerateResponse) -> GenerationResponse {
-    let status = response_status_name(response.status).to_string();
+    let status = response.status.as_str().to_string();
     GenerationResponse {
         request_id: response.request_id,
         status,
@@ -1762,7 +1808,7 @@ fn request_result_to_node(result: CoreRequestResult) -> RequestResult {
     RequestResult {
         id: result.id,
         text: result.text,
-        finish_reason: finish_reason_name(result.finish_reason).to_string(),
+        finish_reason: result.finish_reason.as_str().to_string(),
         stats: request_stats_to_node(result.stats),
     }
 }
@@ -1796,9 +1842,9 @@ fn model_info_to_node(model: CoreManagedModelInfo) -> ManagedModelInfo {
     ManagedModelInfo {
         id: model.id,
         name: model.name,
-        modality: model_modality_name(model.modality).to_string(),
-        status: model_status_name(model.status).to_string(),
-        source: model_source_kind_name(model.source).to_string(),
+        modality: model.modality.as_str().to_string(),
+        status: model.status.as_str().to_string(),
+        source: model.source.as_str().to_string(),
         bytes: model.bytes as f64,
         loaded: model.loaded,
         chat_template: model.chat_template,
@@ -1812,7 +1858,7 @@ fn model_info_to_node(model: CoreManagedModelInfo) -> ManagedModelInfo {
 
 fn backend_selection_to_node(selection: CoreBackendSelection) -> BackendSelection {
     BackendSelection {
-        requested: backend_preference_name(selection.requested).to_string(),
+        requested: selection.requested.as_str().to_string(),
         selected: selection.selected,
         available: selection.available,
         gpu_offload_expected: selection.gpu_offload_expected,
@@ -1821,34 +1867,56 @@ fn backend_selection_to_node(selection: CoreBackendSelection) -> BackendSelectio
 }
 
 fn engine_state_to_node(state: CoreEngineState) -> EngineState {
+    let tail = state_tail_to_node(
+        state.backend,
+        state.runtime,
+        state.requests,
+        state.stats,
+        state.updated_at_unix_ms,
+    );
     EngineState {
-        status: engine_status_name(state.status).to_string(),
+        status: state.status.as_str().to_string(),
         model: state.model.map(model_state_to_node),
-        backend: backend_info_to_node(state.backend),
-        runtime: state.runtime.map(resolved_runtime_limits_to_node),
-        requests: state
-            .requests
-            .into_iter()
-            .map(request_state_to_node)
-            .collect(),
-        stats: engine_stats_to_node(state.stats),
-        updated_at_unix_ms: state.updated_at_unix_ms as f64,
+        backend: tail.backend,
+        runtime: tail.runtime,
+        requests: tail.requests,
+        stats: tail.stats,
+        updated_at_unix_ms: tail.updated_at_unix_ms,
     }
 }
 
 fn model_service_state_to_node(state: CoreModelServiceState) -> ModelServiceState {
+    let tail = state_tail_to_node(
+        state.backend,
+        state.runtime,
+        state.requests,
+        state.stats,
+        state.updated_at_unix_ms,
+    );
     ModelServiceState {
-        status: engine_status_name(state.status).to_string(),
+        status: state.status.as_str().to_string(),
         model: state.model.map(model_info_to_node),
-        backend: backend_info_to_node(state.backend),
-        runtime: state.runtime.map(resolved_runtime_limits_to_node),
-        requests: state
-            .requests
-            .into_iter()
-            .map(request_state_to_node)
-            .collect(),
-        stats: engine_stats_to_node(state.stats),
-        updated_at_unix_ms: state.updated_at_unix_ms as f64,
+        backend: tail.backend,
+        runtime: tail.runtime,
+        requests: tail.requests,
+        stats: tail.stats,
+        updated_at_unix_ms: tail.updated_at_unix_ms,
+    }
+}
+
+fn state_tail_to_node(
+    backend: CoreBackendInfo,
+    runtime: Option<CoreResolvedRuntimeLimits>,
+    requests: Vec<CoreRequestState>,
+    stats: CoreEngineStats,
+    updated_at_unix_ms: u64,
+) -> StateTail {
+    StateTail {
+        backend: backend_info_to_node(backend),
+        runtime: runtime.map(resolved_runtime_limits_to_node),
+        requests: mapped_vec(requests, request_state_to_node),
+        stats: engine_stats_to_node(stats),
+        updated_at_unix_ms: updated_at_unix_ms as f64,
     }
 }
 
@@ -1862,7 +1930,7 @@ fn model_state_to_node(model: CoreModelState) -> ModelState {
 fn request_state_to_node(request: CoreRequestState) -> RequestState {
     RequestState {
         id: request.id,
-        status: request_status_name(request.status).to_string(),
+        status: request.status.as_str().to_string(),
         input_tokens: request.input_tokens,
         output_tokens: request.output_tokens,
     }
@@ -1872,11 +1940,7 @@ fn backend_info_to_node(backend: CoreBackendInfo) -> BackendInfo {
     BackendInfo {
         selected: backend.selected,
         available: backend.available,
-        devices: backend
-            .devices
-            .into_iter()
-            .map(backend_device_to_node)
-            .collect(),
+        devices: mapped_vec(backend.devices, backend_device_to_node),
     }
 }
 
@@ -1885,8 +1949,8 @@ fn backend_device_to_node(device: CoreBackendDevice) -> BackendDevice {
         id: device.id,
         name: device.name,
         r#type: device.device_type,
-        memory_total_bytes: device.memory_total_bytes.map(|value| value as f64),
-        memory_free_bytes: device.memory_free_bytes.map(|value| value as f64),
+        memory_total_bytes: option_u64_f64(device.memory_total_bytes),
+        memory_free_bytes: option_u64_f64(device.memory_free_bytes),
     }
 }
 
@@ -1995,8 +2059,8 @@ fn request_stats_to_node(stats: CoreRequestStats) -> RequestStats {
 fn engine_event_to_node(event: CoreEngineEvent) -> EngineEvent {
     match event {
         CoreEngineEvent::State(state) => EngineEvent {
-            r#type: "state".to_string(),
-            state: Some(engine_state_to_node(state)),
+            r#type: EVENT_TYPE_STATE.to_string(),
+            state: Some(engine_state_to_node(*state)),
             loaded_bytes: None,
             total_bytes: None,
             asset_name: None,
@@ -2010,10 +2074,10 @@ fn engine_event_to_node(event: CoreEngineEvent) -> EngineEvent {
             total_bytes,
             asset_name,
         } => EngineEvent {
-            r#type: "load-progress".to_string(),
+            r#type: EVENT_TYPE_LOAD_PROGRESS.to_string(),
             state: None,
             loaded_bytes: Some(loaded_bytes as f64),
-            total_bytes: total_bytes.map(|value| value as f64),
+            total_bytes: option_u64_f64(total_bytes),
             asset_name,
             request_id: None,
             stream_id: None,
@@ -2024,7 +2088,7 @@ fn engine_event_to_node(event: CoreEngineEvent) -> EngineEvent {
             request_id,
             stream_id,
         } => EngineEvent {
-            r#type: "request-started".to_string(),
+            r#type: EVENT_TYPE_REQUEST_STARTED.to_string(),
             state: None,
             loaded_bytes: None,
             total_bytes: None,
@@ -2035,18 +2099,18 @@ fn engine_event_to_node(event: CoreEngineEvent) -> EngineEvent {
             error: None,
         },
         CoreEngineEvent::RequestCompleted { result } => EngineEvent {
-            r#type: "request-completed".to_string(),
+            r#type: EVENT_TYPE_REQUEST_COMPLETED.to_string(),
             state: None,
             loaded_bytes: None,
             total_bytes: None,
             asset_name: None,
             request_id: None,
             stream_id: None,
-            result: Some(request_result_to_node(result)),
+            result: Some(request_result_to_node(*result)),
             error: None,
         },
         CoreEngineEvent::RequestFailed { request_id, error } => EngineEvent {
-            r#type: "request-failed".to_string(),
+            r#type: EVENT_TYPE_REQUEST_FAILED.to_string(),
             state: None,
             loaded_bytes: None,
             total_bytes: None,
@@ -2057,7 +2121,7 @@ fn engine_event_to_node(event: CoreEngineEvent) -> EngineEvent {
             error: Some(error),
         },
         CoreEngineEvent::Closed => EngineEvent {
-            r#type: "closed".to_string(),
+            r#type: EVENT_TYPE_CLOSED.to_string(),
             state: None,
             loaded_bytes: None,
             total_bytes: None,
@@ -2089,230 +2153,134 @@ fn metrics_to_node(metrics: RuntimeObservabilityMetrics) -> RequestObservability
 }
 
 fn parse_backend_preference(value: &str) -> Result<CoreBackendPreference> {
-    match normalize_choice(value).as_str() {
-        "auto" => Ok(CoreBackendPreference::Auto),
-        "cpu" => Ok(CoreBackendPreference::Cpu),
-        "cuda" => Ok(CoreBackendPreference::Cuda),
-        "metal" => Ok(CoreBackendPreference::Metal),
-        "vulkan" => Ok(CoreBackendPreference::Vulkan),
-        "webgpu" | "web_gpu" => Ok(CoreBackendPreference::WebGpu),
-        _ => Err(invalid_arg(
-            "backend must be one of: auto, cpu, cuda, metal, vulkan, webgpu",
-        )),
-    }
+    parse_choice(
+        value,
+        CoreBackendPreference::from_choice,
+        "backend must be one of: auto, cpu, cuda, metal, vulkan, webgpu",
+    )
 }
 
 fn parse_stats_mode(value: &str) -> Result<StatsMode> {
-    match normalize_choice(value).as_str() {
-        "off" => Ok(StatsMode::Off),
-        "basic" => Ok(StatsMode::Basic),
-        "profile" => Ok(StatsMode::Profile),
-        _ => Err(invalid_arg("stats must be one of: off, basic, profile")),
-    }
+    parse_choice(
+        value,
+        StatsMode::from_choice,
+        "stats must be one of: off, basic, profile",
+    )
 }
 
 fn parse_gpu_layers(value: &str) -> Result<GpuLayerConfig> {
-    match normalize_choice(value).as_str() {
-        "auto" => Ok(GpuLayerConfig::Auto),
-        "all" => Ok(GpuLayerConfig::All),
-        _ => Err(invalid_arg(
-            r#"gpu_layers must be "auto", "all", or { count: number }"#,
-        )),
-    }
+    parse_choice(
+        value,
+        GpuLayerConfig::from_choice,
+        r#"gpu_layers must be "auto", "all", or { count: number }"#,
+    )
 }
 
 fn parse_split_mode(value: &str) -> Result<SplitMode> {
-    match normalize_choice(value).as_str() {
-        "none" => Ok(SplitMode::None),
-        "layer" => Ok(SplitMode::Layer),
-        "row" => Ok(SplitMode::Row),
-        "tensor" => Ok(SplitMode::Tensor),
-        _ => Err(invalid_arg(
-            "split_mode must be one of: none, layer, row, tensor",
-        )),
-    }
+    parse_choice(
+        value,
+        SplitMode::from_choice,
+        "split_mode must be one of: none, layer, row, tensor",
+    )
 }
 
 fn parse_flash_attention(value: &str) -> Result<FlashAttentionMode> {
-    match normalize_choice(value).as_str() {
-        "auto" => Ok(FlashAttentionMode::Auto),
-        "enabled" | "enable" | "on" | "true" => Ok(FlashAttentionMode::Enabled),
-        "disabled" | "disable" | "off" | "false" => Ok(FlashAttentionMode::Disabled),
-        _ => Err(invalid_arg(
-            "flash_attention must be one of: auto, enabled, disabled",
-        )),
-    }
+    parse_choice(
+        value,
+        FlashAttentionMode::from_choice,
+        "flash_attention must be one of: auto, enabled, disabled",
+    )
 }
 
 fn parse_kv_cache_type(value: &str) -> Result<KvCacheType> {
-    match normalize_choice(value).as_str() {
-        "f16" => Ok(KvCacheType::F16),
-        "f32" => Ok(KvCacheType::F32),
-        "q8_0" => Ok(KvCacheType::Q8_0),
-        "q4_0" => Ok(KvCacheType::Q4_0),
-        "q4_1" => Ok(KvCacheType::Q4_1),
-        "iq4_nl" => Ok(KvCacheType::Iq4Nl),
-        "q5_0" => Ok(KvCacheType::Q5_0),
-        "q5_1" => Ok(KvCacheType::Q5_1),
-        _ => Err(invalid_arg(
-            "cache type must be one of: f16, f32, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1",
-        )),
-    }
+    parse_choice(
+        value,
+        KvCacheType::from_choice,
+        "cache type must be one of: f16, f32, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1",
+    )
 }
 
 fn parse_rope_scaling(value: &str) -> Result<RopeScaling> {
-    match normalize_choice(value).as_str() {
-        "none" => Ok(RopeScaling::None),
-        "linear" => Ok(RopeScaling::Linear),
-        "yarn" => Ok(RopeScaling::Yarn),
-        _ => Err(invalid_arg(
-            "ropeScaling must be one of: none, linear, yarn",
-        )),
-    }
+    parse_choice(
+        value,
+        RopeScaling::from_choice,
+        "ropeScaling must be one of: none, linear, yarn",
+    )
 }
 
 fn parse_kv_reuse_mode(value: &str) -> Result<KvReuseMode> {
-    match normalize_choice(value).as_str() {
-        "disabled" | "none" => Ok(KvReuseMode::Disabled),
-        "live_slot_prefix" | "live_slot" => Ok(KvReuseMode::LiveSlotPrefix),
-        "state_snapshot" | "snapshot" => Ok(KvReuseMode::StateSnapshot),
-        "live_slot_and_snapshot" | "both" => Ok(KvReuseMode::LiveSlotAndSnapshot),
-        _ => Err(invalid_arg(
-            "cache mode must be one of: disabled, live_slot_prefix, state_snapshot, live_slot_and_snapshot",
-        )),
-    }
+    parse_choice(
+        value,
+        KvReuseMode::from_choice,
+        "cache mode must be one of: disabled, live_slot_prefix, state_snapshot, live_slot_and_snapshot",
+    )
 }
 
 fn parse_cache_key_policy(value: &str) -> Result<CacheKeyPolicy> {
-    match normalize_choice(value).as_str() {
-        "context_key" => Ok(CacheKeyPolicy::ContextKey),
-        "prompt_hash" => Ok(CacheKeyPolicy::PromptHash),
-        _ => Err(invalid_arg(
-            "cache_key_policy must be one of: context_key, prompt_hash",
-        )),
-    }
+    parse_choice(
+        value,
+        CacheKeyPolicy::from_choice,
+        "cache_key_policy must be one of: context_key, prompt_hash",
+    )
 }
 
 fn parse_sampler_stage(value: &str) -> Result<SamplerStage> {
-    match normalize_choice(value).as_str() {
-        "dry" => Ok(SamplerStage::Dry),
-        "top_k" => Ok(SamplerStage::TopK),
-        "typical_p" => Ok(SamplerStage::TypicalP),
-        "top_p" => Ok(SamplerStage::TopP),
-        "top_n_sigma" => Ok(SamplerStage::TopNSigma),
-        "min_p" => Ok(SamplerStage::MinP),
-        "xtc" => Ok(SamplerStage::Xtc),
-        "temperature" | "temp" => Ok(SamplerStage::Temperature),
-        "infill" => Ok(SamplerStage::Infill),
-        "penalties" => Ok(SamplerStage::Penalties),
-        "adaptive_p" => Ok(SamplerStage::AdaptiveP),
-        _ => Err(invalid_arg(
-            "sampler stage must be one of: dry, top_k, typical_p, top_p, top_n_sigma, min_p, xtc, temperature, infill, penalties, adaptive_p",
-        )),
-    }
+    parse_choice(
+        value,
+        SamplerStage::from_choice,
+        "sampler stage must be one of: dry, top_k, typical_p, top_p, top_n_sigma, min_p, xtc, temperature, infill, penalties, adaptive_p",
+    )
 }
 
 fn parse_scheduler_policy(value: &str) -> Result<SchedulerPolicyMode> {
-    match normalize_choice(value).as_str() {
-        "latency_first" | "latency" => Ok(SchedulerPolicyMode::LatencyFirst),
-        "balanced" | "balance" => Ok(SchedulerPolicyMode::Balanced),
-        "throughput_first" | "throughput" => Ok(SchedulerPolicyMode::ThroughputFirst),
-        _ => Err(invalid_arg(
-            "scheduler.policy.mode must be one of: latency_first, balanced, throughput_first",
-        )),
-    }
+    parse_choice(
+        value,
+        SchedulerPolicyMode::from_choice,
+        "scheduler.policy.mode must be one of: latency_first, balanced, throughput_first",
+    )
 }
 
 fn parse_chat_role(value: &str) -> Result<CoreChatRole> {
-    match normalize_choice(value).as_str() {
-        "system" => Ok(CoreChatRole::System),
-        "user" => Ok(CoreChatRole::User),
-        "assistant" => Ok(CoreChatRole::Assistant),
-        _ => Err(invalid_arg(
-            "chat role must be one of: system, user, assistant",
-        )),
+    parse_choice(
+        value,
+        CoreChatRole::from_choice,
+        "chat role must be one of: system, user, assistant",
+    )
+}
+
+fn parse_choice<T>(
+    value: &str,
+    parser: impl FnOnce(&str) -> Option<T>,
+    error_message: &'static str,
+) -> Result<T> {
+    parser(value).ok_or_else(|| invalid_arg(error_message))
+}
+
+fn optional_core_or_default<T, U>(value: Option<&T>, map: impl FnOnce(&T) -> Result<U>) -> Result<U>
+where
+    U: Default,
+{
+    value.map(map).transpose().map(Option::unwrap_or_default)
+}
+
+fn assign_if_some<T>(target: &mut T, value: Option<T>) {
+    if let Some(value) = value {
+        *target = value;
     }
 }
 
-fn normalize_choice(value: &str) -> String {
-    value
-        .trim()
-        .to_ascii_lowercase()
-        .replace('-', "_")
-        .replace(' ', "_")
-}
-
-fn response_status_name(status: GenerateResponseStatus) -> &'static str {
-    match status {
-        GenerateResponseStatus::Pending => "pending",
-        GenerateResponseStatus::Completed => "completed",
-        GenerateResponseStatus::Cancelled => "cancelled",
-        GenerateResponseStatus::Failed => "failed",
+fn assign_if_some_map<T, U>(target: &mut T, value: Option<U>, map: impl FnOnce(U) -> T) {
+    if let Some(value) = value {
+        *target = map(value);
     }
 }
 
-fn engine_status_name(status: CoreEngineStatus) -> &'static str {
-    match status {
-        CoreEngineStatus::Idle => "idle",
-        CoreEngineStatus::Loading => "loading",
-        CoreEngineStatus::Ready => "ready",
-        CoreEngineStatus::Running => "running",
-        CoreEngineStatus::Error => "error",
-        CoreEngineStatus::Closed => "closed",
-    }
+fn option_f32(value: Option<f64>) -> Option<f32> {
+    value.map(|value| value as f32)
 }
 
-fn request_status_name(status: CoreRequestStatus) -> &'static str {
-    match status {
-        CoreRequestStatus::Queued => "queued",
-        CoreRequestStatus::Prefill => "prefill",
-        CoreRequestStatus::Decode => "decode",
-        CoreRequestStatus::Completed => "completed",
-        CoreRequestStatus::Failed => "failed",
-        CoreRequestStatus::Cancelled => "cancelled",
-    }
-}
-
-fn finish_reason_name(reason: CoreFinishReason) -> &'static str {
-    match reason {
-        CoreFinishReason::Stop => "stop",
-        CoreFinishReason::Length => "length",
-        CoreFinishReason::Cancelled => "cancelled",
-        CoreFinishReason::Error => "error",
-    }
-}
-
-fn backend_preference_name(backend: CoreBackendPreference) -> &'static str {
-    match backend {
-        CoreBackendPreference::Auto => "auto",
-        CoreBackendPreference::Cpu => "cpu",
-        CoreBackendPreference::Cuda => "cuda",
-        CoreBackendPreference::Metal => "metal",
-        CoreBackendPreference::Vulkan => "vulkan",
-        CoreBackendPreference::WebGpu => "webgpu",
-    }
-}
-
-fn model_modality_name(modality: CoreModelModality) -> &'static str {
-    match modality {
-        CoreModelModality::Text => "text",
-        CoreModelModality::Vision => "vision",
-    }
-}
-
-fn model_status_name(status: CoreModelStatus) -> &'static str {
-    match status {
-        CoreModelStatus::Ready => "ready",
-        CoreModelStatus::NeedsProjector => "needs_projector",
-        CoreModelStatus::Broken => "broken",
-    }
-}
-
-fn model_source_kind_name(source: CoreModelSourceKind) -> &'static str {
-    match source {
-        CoreModelSourceKind::Local => "local",
-        CoreModelSourceKind::Remote => "remote",
-    }
+fn option_u64_f64(value: Option<u64>) -> Option<f64> {
+    value.map(|value| value as f64)
 }
 
 fn invalid_arg(message: impl Into<String>) -> Error {

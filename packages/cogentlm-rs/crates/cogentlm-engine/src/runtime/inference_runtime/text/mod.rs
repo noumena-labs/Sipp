@@ -4,7 +4,6 @@
 use cogentlm_sys as ffi;
 
 use crate::runtime::llama_token;
-use crate::runtime::request::GenerateRequestLifecycle;
 use crate::runtime::scheduler::{SlotPhase, SlotState};
 
 use super::numeric::token_piece_growth_capacity;
@@ -19,11 +18,7 @@ pub(super) fn append_token_piece_to_slot(
     piece_scratch: &mut Vec<i8>,
 ) {
     if !token_to_piece_into(vocab, token, false, piece_scratch) {
-        slot.terminal_error_message = "Failed to convert sampled token to text piece.".to_string();
-        slot.phase = SlotPhase::Failed;
-        if let Some(request) = slot.request_mut() {
-            request.lifecycle = GenerateRequestLifecycle::Failed;
-        }
+        slot.fail("Failed to convert sampled token to text piece.");
         return;
     }
 

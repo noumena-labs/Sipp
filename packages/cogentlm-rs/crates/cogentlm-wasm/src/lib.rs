@@ -1,4 +1,5 @@
 pub mod engine;
+mod ffi;
 pub mod gguf;
 pub mod hash;
 pub mod ingest;

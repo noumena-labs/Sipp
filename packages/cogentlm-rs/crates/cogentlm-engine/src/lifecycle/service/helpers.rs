@@ -1,18 +1,19 @@
 //! Small helpers used by `ModelService`: path comparison, asset classification,
-//! pairing-state projection, fingerprinting, and hashing.
+//! pairing-state projection, and fingerprinting.
 
-use std::fs::File;
-use std::io::Read;
 use std::path::Path;
 
 use serde_json::json;
-use sha2::{Digest, Sha256};
 
+use crate::collection::sorted_values;
 use crate::engine::protocol::EngineState;
 use crate::lifecycle::backend_policy::BackendPlan;
-use crate::lifecycle::util::hex_lower;
+use crate::lifecycle::util::{
+    asset_summary, classified_asset, model_id_from_fingerprint, sha256_hex, sorted_model_asset_ids,
+    AssetSummary,
+};
 use crate::lifecycle::{
-    AssetInspection, AssetRecord, ClassifiedAsset, ModelEntry, ModelError, ModelInfo, ModelPairing,
+    AssetRecord, AssetSource, ClassifiedAsset, ModelEntry, ModelError, ModelInfo, ModelPairing,
     ModelPairingReason, ModelPairingState, ModelServiceState, ModelStatus, PairingPlan,
 };
 
@@ -31,14 +32,22 @@ pub(super) fn same_path(left: &Path, right: &Path) -> bool {
 }
 
 pub(super) fn classified_asset_from_record(record: &AssetRecord) -> ClassifiedAsset {
-    ClassifiedAsset {
-        asset_id: record.id.clone(),
-        name: record.name.clone(),
-        inspection: record
-            .inspection
-            .clone()
-            .unwrap_or_else(AssetInspection::unknown),
-    }
+    classified_asset(
+        record.id.clone(),
+        record.name.clone(),
+        record.inspection.clone(),
+    )
+}
+
+pub(super) fn model_asset_summary<'asset>(
+    assets: impl Iterator<Item = &'asset AssetRecord>,
+) -> AssetSummary {
+    asset_summary(assets.map(|asset| {
+        (
+            asset.bytes,
+            matches!(asset.source, AssetSource::Remote { .. }),
+        )
+    }))
 }
 
 pub(super) fn pairing_state_from_plan(plan: &PairingPlan) -> ModelPairing {
@@ -61,47 +70,22 @@ pub(super) fn pairing_state_from_plan(plan: &PairingPlan) -> ModelPairing {
 }
 
 pub(super) fn model_id_from_plan(plan: &PairingPlan) -> String {
-    let mut ids = plan.model_asset_ids.clone();
-    if let Some(projector) = &plan.projector_asset_id {
-        ids.push(projector.clone());
-    }
-    ids.sort();
-    ids.dedup();
-    format!("model-{}", stable_hash(ids.join("\n").as_bytes()))
+    let ids = sorted_model_asset_ids(&plan.model_asset_ids, plan.projector_asset_id.as_ref());
+    model_id_from_fingerprint(&sha256_hex(ids.join("\n").as_bytes()))
 }
 
 pub(super) fn runtime_fingerprint(
     entry: &ModelEntry,
     backend_plan: &BackendPlan,
 ) -> Result<String, ModelError> {
-    let mut model_asset_ids = entry.model_asset_ids.clone();
-    model_asset_ids.sort();
     let runtime = serde_json::to_value(&backend_plan.config)?;
     let value = json!({
-        "modelAssetIds": model_asset_ids,
+        "modelAssetIds": sorted_values(entry.model_asset_ids.clone()),
         "projectorAssetId": entry.projector_asset_id,
         "backend": backend_plan.selection.selected,
         "runtime": runtime,
     });
-    Ok(stable_hash(value.to_string().as_bytes()))
-}
-
-pub(super) fn stable_hash(bytes: &[u8]) -> String {
-    hex_lower(&Sha256::digest(bytes))
-}
-
-pub(super) fn hash_file(path: &Path) -> Result<String, ModelError> {
-    let mut file = File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok(hex_lower(&hasher.finalize()))
+    Ok(sha256_hex(value.to_string().as_bytes()))
 }
 
 pub(super) fn service_state_from_engine_state(

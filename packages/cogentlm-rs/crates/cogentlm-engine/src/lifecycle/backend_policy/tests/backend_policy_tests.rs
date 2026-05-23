@@ -1,11 +1,12 @@
 //! Unit tests for the parent module.
 
 use super::super::*;
+use crate::lifecycle::test_support::strings;
 
 fn caps(compiled: &[&str], available: &[&str]) -> BackendCapabilities {
     BackendCapabilities {
-        compiled: compiled.iter().map(|value| (*value).to_string()).collect(),
-        available: available.iter().map(|value| (*value).to_string()).collect(),
+        compiled: strings(compiled),
+        available: strings(available),
         gpu_offload_supported: compiled.iter().any(|value| *value != "cpu"),
     }
 }
@@ -82,8 +83,8 @@ fn select_with_capabilities_normalizes_backend_names() {
             ..ModelLoadOptions::default()
         },
         &BackendCapabilities {
-            compiled: vec!["CUDA backend".to_string(), "cuda".to_string()],
-            available: vec!["NVIDIA CUDA".to_string(), "CPU".to_string()],
+            compiled: strings(&["CUDA backend", "cuda"]),
+            available: strings(&["NVIDIA CUDA", "CPU"]),
             gpu_offload_supported: true,
         },
     )
@@ -95,12 +96,8 @@ fn select_with_capabilities_normalizes_backend_names() {
 
 #[test]
 fn normalize_backend_names_drops_empty_and_deduplicates() {
-    let names = vec![
-        " CUDA backend ".to_string(),
-        "cuda".to_string(),
-        " ".to_string(),
-        "CPU".to_string(),
-    ];
+    let names = strings(&[" CUDA backend ", "cuda", " ", "CPU"]);
 
     assert_eq!(normalize_backend_names(&names), vec!["cpu", "cuda"]);
+    assert_eq!(normalize_backend_names_or_cpu(&[]), vec!["cpu"]);
 }

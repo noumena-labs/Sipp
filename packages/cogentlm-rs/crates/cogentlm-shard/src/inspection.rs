@@ -7,11 +7,11 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::bytes::{u64_from_usize, usize_from_u64, CountingReader};
-use crate::{GgufError, GgufValueType, GGUF_MAGIC, SUPPORTED_GGUF_VERSIONS};
+use crate::{GgufError, GgufValueType, BYTES_PER_MIB_USIZE, GGUF_MAGIC, SUPPORTED_GGUF_VERSIONS};
 
-const DEFAULT_MAX_PREFIX_BYTES: usize = 8 * 1024 * 1024;
-const DEFAULT_MAX_PREFIX_BYTES_U64: u64 = 8 * 1024 * 1024;
-const DEFAULT_INITIAL_READ_BYTES: usize = 64 * 1024;
+const DEFAULT_MAX_PREFIX_BYTES: usize = 8 * BYTES_PER_MIB_USIZE;
+const DEFAULT_MAX_PREFIX_BYTES_U64: u64 = DEFAULT_MAX_PREFIX_BYTES as u64;
+const DEFAULT_INITIAL_READ_BYTES: usize = BYTES_PER_MIB_USIZE / 16;
 
 const EARLY_STOP_KEYS: &[&str] = &[
     "tokenizer.ggml.tokens",

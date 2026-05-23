@@ -15,6 +15,7 @@ fn conversion_helpers_clamp_and_validate_boundaries() {
     assert_eq!(usize_to_i32(4), Some(4));
     assert_eq!(usize_to_i32(usize::MAX), None);
     assert_eq!(clamp_usize_to_u64(4), 4);
+    assert_eq!(clamp_usize_to_u64(usize::MAX), u64::MAX);
     assert_eq!(ffi_arg_count_len(4).unwrap(), 4);
     let too_many_args = usize::try_from(i32::MAX)
         .ok()

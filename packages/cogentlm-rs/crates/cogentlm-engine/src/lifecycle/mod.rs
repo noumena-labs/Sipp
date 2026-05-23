@@ -5,8 +5,12 @@ mod pairing;
 mod registry;
 mod service;
 mod storage;
+#[cfg(test)]
+mod test_support;
 mod types;
 mod util;
+
+pub(super) const DEFAULT_MEDIA_MARKER: &str = "<image>";
 
 pub use backend_policy::{
     read_backend_capabilities, BackendCapabilities, BackendPlan, BackendPolicy,
@@ -36,4 +40,5 @@ pub use types::{
     ModelDetection, ModelDetectionMethod, ModelEntry, ModelError, ModelInfo, ModelLoadOptions,
     ModelModality, ModelPairing, ModelPairingReason, ModelPairingState, ModelServiceState,
     ModelSource, ModelSourceKind, ModelStatus, PairingPlan, RegistryManifest, StatsMode,
+    DEFAULT_MODEL_BACKEND, DEFAULT_MODEL_STATS, REGISTRY_MANIFEST_VERSION,
 };

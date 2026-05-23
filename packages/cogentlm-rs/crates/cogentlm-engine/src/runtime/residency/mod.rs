@@ -1,18 +1,23 @@
 //! GPU residency leases: parses backend devices and enforces VRAM/model-count limits per device.
 
+use std::fmt::Display;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
 use crate::error::{Error, Result};
 use crate::runtime::config::{GpuLayerConfig, NativeRuntimeConfig};
+use crate::runtime::numeric::unix_time_ms;
 
 mod devices;
 
 use devices::{parse_gpu_lease_devices, GpuLeaseDevice};
+
+const GPU_RESIDENCY_REJECTED: &str = "gpu residency rejected";
+const CREATE_LEASE_DIR_FAILED: &str = "failed to create residency lease dir";
+const WRITE_LEASE_FAILED: &str = "failed to write residency lease";
 
 #[derive(Debug)]
 pub(crate) struct ResidencyLease {
@@ -75,9 +80,8 @@ fn acquire_residency_lease_in(
         return Ok(None);
     }
 
-    fs::create_dir_all(lease_root).map_err(|error| {
-        Error::RuntimeCommand(format!("failed to create residency lease dir: {error}"))
-    })?;
+    fs::create_dir_all(lease_root)
+        .map_err(|error| runtime_action_failed(CREATE_LEASE_DIR_FAILED, error))?;
 
     let mut leases = Vec::with_capacity(devices.len());
     for device in &devices {
@@ -107,8 +111,8 @@ fn enforce_vram_margin(devices: &[GpuLeaseDevice], margin: u64) -> Result<()> {
         .max()
         .unwrap_or(u64::MAX);
     if max_free < margin {
-        return Err(Error::RuntimeCommand(format!(
-            "gpu residency rejected: max free VRAM {max_free} bytes is below safety margin {margin} bytes"
+        return Err(residency_rejected(format!(
+            "max free VRAM {max_free} bytes is below safety margin {margin} bytes"
         )));
     }
     Ok(())
@@ -128,11 +132,10 @@ fn acquire_device_lease(
                         "pid": std::process::id(),
                         "device": device.key,
                         "slot": slot,
-                        "createdAtUnixMs": now_unix_ms(),
+                        "createdAtUnixMs": unix_time_ms(),
                     });
-                    writeln!(file, "{payload}").map_err(|error| {
-                        Error::RuntimeCommand(format!("failed to write residency lease: {error}"))
-                    })?;
+                    writeln!(file, "{payload}")
+                        .map_err(|error| runtime_action_failed(WRITE_LEASE_FAILED, error))?;
                     return Ok(ResidencyLeaseFile { path, file });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -142,7 +145,7 @@ fn acquire_device_lease(
                     break;
                 }
                 Err(error) => {
-                    return Err(Error::RuntimeCommand(format!(
+                    return Err(runtime_command(format!(
                         "failed to acquire gpu residency lease for {}: {error}",
                         device.key
                     )));
@@ -151,8 +154,8 @@ fn acquire_device_lease(
         }
     }
 
-    Err(Error::RuntimeCommand(format!(
-        "gpu residency rejected: device {} already has {} active model lease(s)",
+    Err(residency_rejected(format!(
+        "device {} already has {} active model lease(s)",
         device.key, max_models
     )))
 }
@@ -182,11 +185,23 @@ fn remove_lease_file(path: &Path) -> Result<bool> {
     match fs::remove_file(path) {
         Ok(()) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
-        Err(error) => Err(Error::RuntimeCommand(format!(
+        Err(error) => Err(runtime_command(format!(
             "failed to remove stale gpu residency lease {}: {error}",
             path.display()
         ))),
     }
+}
+
+fn runtime_command(message: impl Into<String>) -> Error {
+    Error::RuntimeCommand(message.into())
+}
+
+fn runtime_action_failed(action: &str, error: impl Display) -> Error {
+    runtime_command(format!("{action}: {error}"))
+}
+
+fn residency_rejected(reason: impl Display) -> Error {
+    runtime_command(format!("{GPU_RESIDENCY_REJECTED}: {reason}"))
 }
 
 #[cfg(windows)]
@@ -248,17 +263,6 @@ fn process_is_running(_pid: u32) -> bool {
 
 fn default_residency_lease_root() -> PathBuf {
     std::env::temp_dir().join("cogentlm-rs-residency")
-}
-
-fn now_unix_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(duration_millis_u64)
-        .unwrap_or(0)
-}
-
-fn duration_millis_u64(duration: Duration) -> u64 {
-    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]

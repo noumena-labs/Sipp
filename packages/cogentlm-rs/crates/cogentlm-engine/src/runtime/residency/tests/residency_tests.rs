@@ -1,6 +1,9 @@
 //! Unit tests for the parent module.
 
+use std::time::Duration;
+
 use super::super::*;
+use crate::runtime::numeric::duration_millis_u64;
 
 fn backend_json(free: u64) -> String {
     serde_json::json!({

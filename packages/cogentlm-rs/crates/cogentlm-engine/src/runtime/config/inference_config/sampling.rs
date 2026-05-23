@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::choice::choice_from_aliases;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SamplingRuntimeConfig {
@@ -36,15 +38,17 @@ pub struct SamplingRuntimeConfig {
     pub backend_sampling: bool,
 }
 
+const DEFAULT_SAMPLERS: [SamplerStage; 4] = [
+    SamplerStage::TopK,
+    SamplerStage::Penalties,
+    SamplerStage::TopP,
+    SamplerStage::Temperature,
+];
+
 impl Default for SamplingRuntimeConfig {
     fn default() -> Self {
         Self {
-            samplers: vec![
-                SamplerStage::TopK,
-                SamplerStage::Penalties,
-                SamplerStage::TopP,
-                SamplerStage::Temperature,
-            ],
+            samplers: DEFAULT_SAMPLERS.to_vec(),
             seed: None,
             top_k: Some(40),
             top_p: Some(0.8),
@@ -95,6 +99,27 @@ pub enum SamplerStage {
     AdaptiveP,
 }
 
+impl SamplerStage {
+    pub fn from_choice(value: &str) -> Option<Self> {
+        choice_from_aliases(
+            value,
+            &[
+                (&["dry"], Self::Dry),
+                (&["top_k"], Self::TopK),
+                (&["typical_p"], Self::TypicalP),
+                (&["top_p"], Self::TopP),
+                (&["top_n_sigma"], Self::TopNSigma),
+                (&["min_p"], Self::MinP),
+                (&["xtc"], Self::Xtc),
+                (&["temperature", "temp"], Self::Temperature),
+                (&["infill"], Self::Infill),
+                (&["penalties"], Self::Penalties),
+                (&["adaptive_p"], Self::AdaptiveP),
+            ],
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct LogitBias {
     pub token: i32,
@@ -111,34 +136,29 @@ pub(super) fn merge_sampling_override_json(
     };
 
     for (key, value) in override_map {
-        let should_merge = match value {
-            serde_json::Value::Null => false,
-            serde_json::Value::Array(items) => !items.is_empty(),
-            _ => true,
-        };
-        if should_merge {
+        if should_merge_sampling_override(value) {
             base.insert(key.clone(), value.clone());
         }
     }
 }
 
+fn should_merge_sampling_override(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => false,
+        serde_json::Value::Array(items) => !items.is_empty(),
+        _ => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{SamplerStage, SamplingRuntimeConfig};
+    use super::{should_merge_sampling_override, SamplingRuntimeConfig, DEFAULT_SAMPLERS};
 
     #[test]
     fn sampling_defaults_match_legacy_cpp_browser_runtime() {
         let sampling = SamplingRuntimeConfig::default();
 
-        assert_eq!(
-            sampling.samplers,
-            vec![
-                SamplerStage::TopK,
-                SamplerStage::Penalties,
-                SamplerStage::TopP,
-                SamplerStage::Temperature,
-            ]
-        );
+        assert_eq!(sampling.samplers, DEFAULT_SAMPLERS);
         assert_eq!(sampling.top_k, Some(40));
         assert_eq!(sampling.top_p, Some(0.8));
         assert_eq!(sampling.temperature, Some(0.7));
@@ -167,5 +187,15 @@ mod tests {
         assert_eq!(base["top_k"], 12);
         assert_eq!(base["samplers"], serde_json::json!(["top_k"]));
         assert_eq!(base["backend_sampling"], true);
+    }
+
+    #[test]
+    fn sampling_override_merge_policy_keeps_meaningful_values_only() {
+        assert!(!should_merge_sampling_override(&serde_json::Value::Null));
+        assert!(!should_merge_sampling_override(&serde_json::json!([])));
+        assert!(should_merge_sampling_override(&serde_json::json!([1])));
+        assert!(should_merge_sampling_override(&serde_json::json!(false)));
+        assert!(should_merge_sampling_override(&serde_json::json!(0)));
+        assert!(should_merge_sampling_override(&serde_json::json!("")));
     }
 }

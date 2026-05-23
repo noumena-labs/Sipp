@@ -1,13 +1,16 @@
-use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use cogentlm_engine::lifecycle::{ClassifiedAsset, ModelError, PairingPlan, PairingResolver};
 use serde::Serialize;
 
+use crate::ffi::{into_c_string, read_optional_c_string, serialize_json_response};
+
 const CODE_INVALID_MODEL_SOURCE: &str = "INVALID_MODEL_SOURCE";
 const CODE_INVALID_MODEL_PAIRING: &str = "INVALID_MODEL_PAIRING";
 const CODE_MODEL_BROKEN: &str = "MODEL_BROKEN";
+const PAIRING_SERIALIZATION_FALLBACK: &str =
+    "{\"ok\":false,\"error\":{\"code\":\"MODEL_BROKEN\",\"message\":\"failed to serialize pairing validation response\"}}";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -108,32 +111,13 @@ fn error_response(code: &'static str, message: String) -> PairingValidateRespons
 }
 
 fn response_json(response: PairingValidateResponse) -> String {
-    serde_json::to_string(&response).unwrap_or_else(|_| {
-        "{\"ok\":false,\"error\":{\"code\":\"MODEL_BROKEN\",\"message\":\"failed to serialize pairing validation response\"}}".to_string()
-    })
-}
-
-fn read_optional_c_string(value: *const c_char) -> Option<String> {
-    if value.is_null() {
-        return Some(String::new());
-    }
-    Some(
-        unsafe { CStr::from_ptr(value) }
-            .to_string_lossy()
-            .into_owned(),
-    )
-}
-
-fn into_c_string(value: String) -> *mut c_char {
-    let sanitized = value.replace('\0', "");
-    CString::new(sanitized)
-        .map(CString::into_raw)
-        .unwrap_or(std::ptr::null_mut())
+    serialize_json_response(&response, PAIRING_SERIALIZATION_FALLBACK)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::CString;
 
     fn classified_json() -> CString {
         CString::new(

@@ -60,11 +60,7 @@ fn cancelling_admitted_request_marks_it_for_runtime_cancellation() {
 fn completed_response_ids_are_sorted_for_deterministic_polling() {
     let mut queue = RequestQueue::new();
     for id in [3, 1, 2] {
-        queue.mark_completed(GenerateResponse {
-            request_id: id,
-            status: GenerateResponseStatus::Completed,
-            ..GenerateResponse::default()
-        });
+        queue.mark_completed(GenerateResponse::completed(id, ""));
     }
 
     assert_eq!(queue.completed_response_ids(), vec![1, 2, 3]);

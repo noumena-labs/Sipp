@@ -8,16 +8,44 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 
+use crate::collection::{
+    remove_matching_values, sorted_ref_deltas, sorted_unique_strings, sorted_values,
+};
+use crate::lifecycle::util::{
+    asset_refcount_mismatch, asset_summary, bump_projector_index_revision as bump_revision,
+    classified_asset, decrement_asset_refcount, empty_asset_id, increment_asset_refcount,
+    increment_expected_asset_refcount, invalid_asset_field, invalid_pairing, invalid_source,
+    manifest_key_mismatch, media_marker_for_modality, missing_model_asset,
+    model_id_from_fingerprint_prefix, model_missing_asset, model_not_found, sha256_hex,
+    sorted_model_asset_ids, validate_registry_manifest_version, AssetSummary,
+};
 use crate::lifecycle::{
     AssetInspection, ClassifiedAsset, ModelAssetKind, ModelError, ModelModality,
     ModelPairingReason, ModelPairingState as CoreModelPairingState, ModelSourceKind, ModelStatus,
-    PairingPlan, PairingResolver,
+    PairingPlan, PairingResolver, REGISTRY_MANIFEST_VERSION,
+};
+use crate::runtime::numeric::{
+    MILLIS_PER_SECOND, SECONDS_PER_DAY, SECONDS_PER_HOUR, SECONDS_PER_MINUTE,
 };
 
-const MANIFEST_VERSION: u32 = 3;
-const DEFAULT_MEDIA_MARKER: &str = "<image>";
+const EXPLICIT_PROJECTOR_MISSING_ID: &str = "explicit projector did not produce a projector id";
+const NO_PENDING_BROWSER_MODEL_LOAD: &str = "no pending browser model load";
+const BROWSER_LOAD_COMMIT_MISMATCH: &str =
+    "browser model load commit does not match the pending load";
+const BROWSER_REGISTRY_MANIFEST_LABEL: &str = "browser registry manifest";
+const CODE_INVALID_MODEL_SOURCE: &str = "INVALID_MODEL_SOURCE";
+const CODE_INVALID_MODEL_PAIRING: &str = "INVALID_MODEL_PAIRING";
+const CODE_STORAGE_UNAVAILABLE: &str = "STORAGE_UNAVAILABLE";
+const CODE_STORAGE_CORRUPT: &str = "STORAGE_CORRUPT";
+const CODE_MODEL_BROKEN: &str = "MODEL_BROKEN";
+const CODE_MODEL_NOT_FOUND: &str = "MODEL_NOT_FOUND";
+const CODE_REMOTE_LOAD_FAILED: &str = "REMOTE_LOAD_FAILED";
+const CODE_QUERY_FAILED: &str = "QUERY_FAILED";
+const QUERY_STATUS_FAILED: &str = "failed";
+const BROWSER_MODEL_ID_HASH_CHARS: usize = 24;
+const LIFECYCLE_SERIALIZATION_FALLBACK: &str =
+    "{\"ok\":false,\"error\":{\"code\":\"STORAGE_CORRUPT\",\"message\":\"failed to serialize lifecycle response\"}}";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,7 +62,7 @@ pub struct BrowserRegistryManifest {
 impl Default for BrowserRegistryManifest {
     fn default() -> Self {
         Self {
-            version: MANIFEST_VERSION,
+            version: REGISTRY_MANIFEST_VERSION,
             projector_index_revision: 0,
             assets: BTreeMap::new(),
             models: BTreeMap::new(),
@@ -152,18 +180,13 @@ pub enum BrowserLifecycleState {
     Closed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum BrowserObservabilityMode {
+    #[default]
     Off,
     Runtime,
     Profile,
-}
-
-impl Default for BrowserObservabilityMode {
-    fn default() -> Self {
-        Self::Off
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -344,6 +367,12 @@ struct PendingLoad {
     runtime_fingerprint: String,
 }
 
+struct BrowserResponseContext {
+    manifest: BrowserRegistryManifest,
+    snapshot: BrowserObservabilitySnapshot,
+    events: Vec<BrowserObservabilityEvent>,
+}
+
 #[derive(Debug, Clone)]
 pub struct BrowserLifecycleService {
     manifest: BrowserRegistryManifest,
@@ -420,7 +449,7 @@ impl BrowserLifecycleService {
                     .models
                     .get(&id)
                     .cloned()
-                    .ok_or_else(|| ModelError::ModelNotFound(id.clone()))?;
+                    .ok_or_else(|| model_not_found(&id))?;
                 let base_plan = self.derive_base_plan_for_entry(&entry)?;
                 self.resolve_entry_for_loading(entry, &base_plan, &classified_projectors)?
             }
@@ -447,11 +476,10 @@ impl BrowserLifecycleService {
                     let previous = entry.clone();
                     match PairingResolver::resolve_explicit(&classified, &projector_id) {
                         Ok(plan) => {
-                            let projector = plan.projector_asset_id.clone().ok_or_else(|| {
-                                ModelError::InvalidModelPairing(
-                                    "explicit projector did not produce a projector id".to_string(),
-                                )
-                            })?;
+                            let projector = plan
+                                .projector_asset_id
+                                .clone()
+                                .ok_or_else(|| invalid_pairing(EXPLICIT_PROJECTOR_MISSING_ID))?;
                             entry = self.set_resolved_projector(
                                 &entry.id,
                                 &projector,
@@ -475,23 +503,14 @@ impl BrowserLifecycleService {
         let runtime_config =
             runtime_config_with_observability(options.runtime, options.observability);
         let runtime_fingerprint = runtime_fingerprint(&runtime_config, options.observability);
-        let load_id = stable_hash(
-            stable_json(&json!({
-                "modelId": entry.id,
-                "assetFingerprint": asset_fingerprint(&entry),
-                "runtimeFingerprint": runtime_fingerprint,
-                "nonce": now_iso(),
-            }))
-            .as_bytes(),
+        let asset_fingerprint = asset_fingerprint(&entry);
+        let load_id = browser_load_id(&entry.id, &asset_fingerprint, &runtime_fingerprint);
+        let load_required = browser_load_required(
+            self.current.as_ref(),
+            &entry.id,
+            &asset_fingerprint,
+            &runtime_fingerprint,
         );
-        let load_required = match self.current.as_ref() {
-            Some(current) => {
-                current.id != entry.id
-                    || current.asset_fingerprint != asset_fingerprint(&entry)
-                    || current.runtime_fingerprint != runtime_fingerprint
-            }
-            None => true,
-        };
 
         let model = self.model_info_from_entry(&entry);
         let (assets, projector) = self.planned_assets_for_entry(&entry)?;
@@ -511,7 +530,7 @@ impl BrowserLifecycleService {
                 profile: Some(None),
             },
         );
-        let events = self.drain_events();
+        let response = self.response_context();
 
         Ok(BrowserPrepareLoadResponse {
             load_id,
@@ -521,9 +540,9 @@ impl BrowserLifecycleService {
             load_required,
             assets,
             projector,
-            manifest: self.manifest.clone(),
-            snapshot: self.snapshot.clone(),
-            events,
+            manifest: response.manifest,
+            snapshot: response.snapshot,
+            events: response.events,
         })
     }
 
@@ -531,17 +550,16 @@ impl BrowserLifecycleService {
         &mut self,
         request: BrowserCommitLoadRequest,
     ) -> Result<BrowserCommitLoadResponse, ModelError> {
-        let pending = self.pending.take().ok_or_else(|| {
-            ModelError::InvalidModelSource("no pending browser model load".to_string())
-        })?;
+        let pending = self
+            .pending
+            .take()
+            .ok_or_else(|| invalid_source(NO_PENDING_BROWSER_MODEL_LOAD))?;
         if pending.load_id != request.load_id
             || pending.model_id != request.model_id
             || pending.runtime_fingerprint != request.runtime_fingerprint
         {
             self.pending = Some(pending);
-            return Err(ModelError::InvalidModelSource(
-                "browser model load commit does not match the pending load".to_string(),
-            ));
+            return Err(invalid_source(BROWSER_LOAD_COMMIT_MISMATCH));
         }
 
         let loaded_at = now_iso();
@@ -550,7 +568,7 @@ impl BrowserLifecycleService {
                 .manifest
                 .models
                 .get_mut(&request.model_id)
-                .ok_or_else(|| ModelError::ModelNotFound(request.model_id.clone()))?;
+                .ok_or_else(|| model_not_found(&request.model_id))?;
             entry.last_loaded_at = Some(loaded_at.clone());
             entry.runtime_fingerprint = Some(request.runtime_fingerprint.clone());
             entry.updated_at = loaded_at;
@@ -560,7 +578,7 @@ impl BrowserLifecycleService {
             .manifest
             .models
             .get(&request.model_id)
-            .ok_or_else(|| ModelError::ModelNotFound(request.model_id.clone()))?
+            .ok_or_else(|| model_not_found(&request.model_id))?
             .clone();
         self.current = Some(BrowserLoadedModelState {
             id: request.model_id,
@@ -583,12 +601,12 @@ impl BrowserLifecycleService {
                 profile: Some(request.profile),
             },
         );
-        let events = self.drain_events();
+        let response = self.response_context();
         Ok(BrowserCommitLoadResponse {
             model,
-            manifest: self.manifest.clone(),
-            snapshot: self.snapshot.clone(),
-            events,
+            manifest: response.manifest,
+            snapshot: response.snapshot,
+            events: response.events,
         })
     }
 
@@ -600,15 +618,7 @@ impl BrowserLifecycleService {
                 mode: None,
                 state: Some(BrowserLifecycleState::Error),
                 model: None,
-                query: Some(Some(BrowserQueryObservation {
-                    session: None,
-                    status: "failed".to_string(),
-                    wall_ms: None,
-                    ttft_ms: None,
-                    output_tokens: None,
-                    error_code: Some("QUERY_FAILED".to_string()),
-                    error_message: message,
-                })),
+                query: Some(Some(failed_query_observation(message))),
                 runtime: None,
                 profile: None,
             },
@@ -621,29 +631,9 @@ impl BrowserLifecycleService {
             .manifest
             .models
             .remove(model_id)
-            .ok_or_else(|| ModelError::ModelNotFound(model_id.to_string()))?;
-        for asset_id in entry_asset_ids(&removed) {
-            let Some(asset) = self.manifest.assets.get_mut(&asset_id) else {
-                continue;
-            };
-            if asset.ref_count > 0 {
-                asset.ref_count -= 1;
-            }
-        }
-        let orphan_ids: Vec<_> = self
-            .manifest
-            .assets
-            .iter()
-            .filter_map(|(id, asset)| (asset.ref_count == 0).then_some(id.clone()))
-            .collect();
-        let mut orphaned_assets = Vec::with_capacity(orphan_ids.len());
-        let mut changed_projector_index = false;
-        for id in orphan_ids {
-            if let Some(asset) = self.manifest.assets.remove(&id) {
-                changed_projector_index |= asset.kind == ModelAssetKind::Projector;
-                orphaned_assets.push(asset);
-            }
-        }
+            .ok_or_else(|| model_not_found(model_id))?;
+        self.decrement_existing_refs(&removed);
+        let orphaned_assets = self.remove_orphaned_assets();
         if self
             .current
             .as_ref()
@@ -651,7 +641,7 @@ impl BrowserLifecycleService {
         {
             self.current = None;
         }
-        if changed_projector_index {
+        if contains_projector_asset(&orphaned_assets) {
             self.bump_projector_index_revision()?;
         }
         validate_manifest(&self.manifest)?;
@@ -671,13 +661,13 @@ impl BrowserLifecycleService {
                 profile: Some(None),
             },
         );
-        let events = self.drain_events();
+        let response = self.response_context();
         Ok(BrowserRemoveResponse {
             removed,
             orphaned_assets,
-            manifest: self.manifest.clone(),
-            snapshot: self.snapshot.clone(),
-            events,
+            manifest: response.manifest,
+            snapshot: response.snapshot,
+            events: response.events,
         })
     }
 
@@ -723,6 +713,14 @@ impl BrowserLifecycleService {
         let patch = serde_json::from_value::<SnapshotPatch>(patch)?;
         self.emit(event_type, patch);
         Ok(self.snapshot.clone())
+    }
+
+    fn response_context(&mut self) -> BrowserResponseContext {
+        BrowserResponseContext {
+            manifest: self.manifest.clone(),
+            snapshot: self.snapshot.clone(),
+            events: self.drain_events(),
+        }
     }
 
     fn upsert_assets(
@@ -782,7 +780,7 @@ impl BrowserLifecycleService {
         let runtime_config =
             runtime_config_with_observability(options.runtime.clone(), options.observability);
         let runtime_fingerprint = runtime_fingerprint(&runtime_config, options.observability);
-        let next_refs = sorted_unique(plan.model_asset_ids.clone());
+        let next_refs = sorted_model_asset_ids(&plan.model_asset_ids, None);
         let entry = if let Some(existing) = self.manifest.models.get(&id).cloned() {
             let previous_refs = entry_asset_ids(&existing);
             let mut updated = existing;
@@ -822,13 +820,7 @@ impl BrowserLifecycleService {
         &self,
         entry: &BrowserModelEntry,
     ) -> Result<PairingPlan, ModelError> {
-        let mut classified = Vec::with_capacity(entry.model_asset_ids.len());
-        for asset_id in &entry.model_asset_ids {
-            let record = self.manifest.assets.get(asset_id).ok_or_else(|| {
-                ModelError::StorageCorrupt(format!("model references missing asset {asset_id}"))
-            })?;
-            classified.push(classified_asset_from_record(record));
-        }
+        let classified = self.map_model_assets(entry, classified_asset_from_record)?;
         PairingResolver::resolve(&classified)
     }
 
@@ -838,36 +830,28 @@ impl BrowserLifecycleService {
         base_plan: &PairingPlan,
         classified_projectors: &[ClassifiedAsset],
     ) -> Result<BrowserModelEntry, ModelError> {
+        let normalized_base_projector_types =
+            normalize_projector_types(&base_plan.compatible_vision_projector_types);
+        let compatible_projector_types =
+            compatible_projector_type_set(&base_plan.compatible_vision_projector_types);
         if let Some(projector_id) = entry.projector_asset_id.clone() {
-            let projector = self.manifest.assets.get(&projector_id).cloned();
-            if projector.is_none() {
-                entry = self.detach_projector(&entry.id, base_plan)?;
-            } else if !base_plan.compatible_vision_projector_types.is_empty() {
-                let projector = projector.expect("checked above");
+            if let Some(projector) = self.manifest.assets.get(&projector_id).cloned() {
+                if base_plan.compatible_vision_projector_types.is_empty() {
+                    return Ok(entry);
+                }
                 let inspection = projector.inspection.clone().or_else(|| {
                     classified_projectors
                         .iter()
                         .find(|asset| asset.asset_id == projector_id)
                         .map(|asset| asset.inspection.clone())
                 });
-                let provided_type = inspection
-                    .as_ref()
-                    .and_then(|inspection| inspection.provided_vision_projector_type.as_deref());
-                if match provided_type {
-                    Some(provided) => !base_plan
-                        .compatible_vision_projector_types
-                        .iter()
-                        .any(|expected| expected == provided),
-                    None => true,
-                } {
+                if !projector_type_matches(inspection.as_ref(), &compatible_projector_types) {
                     entry = self.detach_projector(&entry.id, base_plan)?;
                 } else if match entry.pairing.as_ref() {
                     Some(pairing) => {
                         pairing.state != CoreModelPairingState::Resolved
                             || normalize_projector_types(&pairing.compatible_vision_projector_types)
-                                != normalize_projector_types(
-                                    &base_plan.compatible_vision_projector_types,
-                                )
+                                != normalized_base_projector_types
                     }
                     None => true,
                 } {
@@ -878,7 +862,7 @@ impl BrowserLifecycleService {
                     )?;
                 }
             } else {
-                return Ok(entry);
+                entry = self.detach_projector(&entry.id, base_plan)?;
             }
         }
 
@@ -902,7 +886,7 @@ impl BrowserLifecycleService {
                 && pairing.checked_projector_index_revision
                     == self.manifest.projector_index_revision
                 && normalize_projector_types(&pairing.compatible_vision_projector_types)
-                    == normalize_projector_types(&base_plan.compatible_vision_projector_types)
+                    == normalized_base_projector_types
         }) {
             return Ok(entry);
         }
@@ -935,7 +919,7 @@ impl BrowserLifecycleService {
         compatible_vision_projector_types: &[String],
         classified_projectors: &[ClassifiedAsset],
     ) -> Vec<String> {
-        let compatible: BTreeSet<_> = compatible_vision_projector_types.iter().collect();
+        let compatible = compatible_projector_type_set(compatible_vision_projector_types);
         let supplied: BTreeMap<_, _> = classified_projectors
             .iter()
             .map(|asset| (asset.asset_id.as_str(), &asset.inspection))
@@ -949,14 +933,11 @@ impl BrowserLifecycleService {
                 .inspection
                 .as_ref()
                 .or_else(|| supplied.get(asset.id.as_str()).copied());
-            let provided = inspection
-                .and_then(|inspection| inspection.provided_vision_projector_type.as_ref());
-            if provided.map_or(false, |provided| compatible.contains(provided)) {
+            if projector_type_matches(inspection, &compatible) {
                 matches.push(asset.id.clone());
             }
         }
-        matches.sort();
-        matches
+        sorted_values(matches)
     }
 
     fn set_resolved_projector(
@@ -966,31 +947,20 @@ impl BrowserLifecycleService {
         compatible_vision_projector_types: &[String],
     ) -> Result<BrowserModelEntry, ModelError> {
         let now = now_iso();
-        let mut entry = self
-            .manifest
-            .models
-            .get(id)
-            .cloned()
-            .ok_or_else(|| ModelError::ModelNotFound(id.to_string()))?;
-        let previous_refs = entry_asset_ids(&entry);
-        entry.projector_asset_id = Some(projector_asset_id.to_string());
-        entry.modality = ModelModality::Vision;
-        entry.status = ModelStatus::Ready;
-        entry.pairing = Some(BrowserModelPairing {
-            state: CoreModelPairingState::Resolved,
-            checked_projector_index_revision: self.manifest.projector_index_revision,
-            compatible_vision_projector_types: normalize_projector_types(
+        let revision = self.manifest.projector_index_revision;
+        self.update_model_entry(id, |entry| {
+            entry.projector_asset_id = Some(projector_asset_id.to_string());
+            entry.modality = ModelModality::Vision;
+            entry.status = ModelStatus::Ready;
+            entry.pairing = Some(browser_pairing(
+                CoreModelPairingState::Resolved,
+                revision,
                 compatible_vision_projector_types,
-            ),
-            reason_code: None,
-            updated_at: now.clone(),
-        });
-        entry.updated_at = now;
-        let next_refs = entry_asset_ids(&entry);
-        self.rebalance_refs(&previous_refs, &next_refs)?;
-        self.manifest.models.insert(id.to_string(), entry.clone());
-        validate_manifest(&self.manifest)?;
-        Ok(entry)
+                None,
+                &now,
+            ));
+            entry.updated_at = now;
+        })
     }
 
     fn set_unresolved_pairing(
@@ -1000,31 +970,20 @@ impl BrowserLifecycleService {
         reason_code: ModelPairingReason,
     ) -> Result<BrowserModelEntry, ModelError> {
         let now = now_iso();
-        let mut entry = self
-            .manifest
-            .models
-            .get(id)
-            .cloned()
-            .ok_or_else(|| ModelError::ModelNotFound(id.to_string()))?;
-        let previous_refs = entry_asset_ids(&entry);
-        entry.projector_asset_id = None;
-        entry.modality = plan.modality;
-        entry.status = plan.status;
-        entry.pairing = Some(BrowserModelPairing {
-            state: CoreModelPairingState::Unresolved,
-            checked_projector_index_revision: self.manifest.projector_index_revision,
-            compatible_vision_projector_types: normalize_projector_types(
+        let revision = self.manifest.projector_index_revision;
+        self.update_model_entry(id, |entry| {
+            entry.projector_asset_id = None;
+            entry.modality = plan.modality;
+            entry.status = plan.status;
+            entry.pairing = Some(browser_pairing(
+                CoreModelPairingState::Unresolved,
+                revision,
                 &plan.compatible_vision_projector_types,
-            ),
-            reason_code: Some(reason_code),
-            updated_at: now.clone(),
-        });
-        entry.updated_at = now;
-        let next_refs = entry_asset_ids(&entry);
-        self.rebalance_refs(&previous_refs, &next_refs)?;
-        self.manifest.models.insert(id.to_string(), entry.clone());
-        validate_manifest(&self.manifest)?;
-        Ok(entry)
+                Some(reason_code),
+                &now,
+            ));
+            entry.updated_at = now;
+        })
     }
 
     fn detach_projector(
@@ -1033,18 +992,28 @@ impl BrowserLifecycleService {
         base_plan: &PairingPlan,
     ) -> Result<BrowserModelEntry, ModelError> {
         let now = now_iso();
+        self.update_model_entry(id, |entry| {
+            entry.projector_asset_id = None;
+            entry.modality = base_plan.modality;
+            entry.status = base_plan.status;
+            entry.pairing = None;
+            entry.updated_at = now;
+        })
+    }
+
+    fn update_model_entry(
+        &mut self,
+        id: &str,
+        update: impl FnOnce(&mut BrowserModelEntry),
+    ) -> Result<BrowserModelEntry, ModelError> {
         let mut entry = self
             .manifest
             .models
             .get(id)
             .cloned()
-            .ok_or_else(|| ModelError::ModelNotFound(id.to_string()))?;
+            .ok_or_else(|| model_not_found(id))?;
         let previous_refs = entry_asset_ids(&entry);
-        entry.projector_asset_id = None;
-        entry.modality = base_plan.modality;
-        entry.status = base_plan.status;
-        entry.pairing = None;
-        entry.updated_at = now;
+        update(&mut entry);
         let next_refs = entry_asset_ids(&entry);
         self.rebalance_refs(&previous_refs, &next_refs)?;
         self.manifest.models.insert(id.to_string(), entry.clone());
@@ -1058,7 +1027,7 @@ impl BrowserLifecycleService {
             .models
             .get(&snapshot.id)
             .cloned()
-            .ok_or_else(|| ModelError::ModelNotFound(snapshot.id.clone()))?;
+            .ok_or_else(|| model_not_found(&snapshot.id))?;
         let previous_refs = entry_asset_ids(&existing);
         let next_refs = entry_asset_ids(&snapshot);
         self.rebalance_refs(&previous_refs, &next_refs)?;
@@ -1070,89 +1039,100 @@ impl BrowserLifecycleService {
         &self,
         entry: &BrowserModelEntry,
     ) -> Result<(Vec<BrowserPlannedAsset>, Option<BrowserPlannedAsset>), ModelError> {
-        let mut assets = Vec::with_capacity(entry.model_asset_ids.len());
-        for asset_id in &entry.model_asset_ids {
-            let record = self.manifest.assets.get(asset_id).ok_or_else(|| {
-                ModelError::StorageCorrupt(format!("model references missing asset {asset_id}"))
-            })?;
-            assets.push(planned_asset(record));
-        }
+        let assets = self.map_model_assets(entry, planned_asset)?;
         let projector = entry
             .projector_asset_id
             .as_deref()
             .map(|asset_id| {
-                let record = self.manifest.assets.get(asset_id).ok_or_else(|| {
-                    ModelError::StorageCorrupt(format!("model references missing asset {asset_id}"))
-                })?;
+                let record = self
+                    .manifest
+                    .assets
+                    .get(asset_id)
+                    .ok_or_else(|| missing_model_asset(asset_id))?;
                 Ok::<BrowserPlannedAsset, ModelError>(planned_asset(record))
             })
             .transpose()?;
         Ok((assets, projector))
     }
 
+    fn map_model_assets<T>(
+        &self,
+        entry: &BrowserModelEntry,
+        mut map: impl FnMut(&BrowserAssetRecord) -> T,
+    ) -> Result<Vec<T>, ModelError> {
+        entry
+            .model_asset_ids
+            .iter()
+            .map(|asset_id| {
+                self.manifest
+                    .assets
+                    .get(asset_id)
+                    .ok_or_else(|| missing_model_asset(asset_id))
+                    .map(&mut map)
+            })
+            .collect()
+    }
+
     fn model_info_from_entry(&self, entry: &BrowserModelEntry) -> BrowserModelInfo {
-        let mut bytes = 0_u64;
-        let mut source = ModelSourceKind::Local;
-        for asset_id in entry_asset_ids(entry) {
-            if let Some(asset) = self.manifest.assets.get(&asset_id) {
-                bytes = bytes.saturating_add(asset.bytes);
-                if asset.source_url.is_some() {
-                    source = ModelSourceKind::Remote;
-                }
-            }
-        }
-        let loaded = self
-            .current
-            .as_ref()
-            .is_some_and(|current| current.id == entry.id);
-        let current = loaded.then(|| self.current.as_ref()).flatten();
+        let assets = entry_asset_ids(entry)
+            .into_iter()
+            .filter_map(|asset_id| self.manifest.assets.get(&asset_id));
+        let summary = browser_asset_summary(assets);
+        let current = current_loaded_model(self.current.as_ref(), &entry.id);
         BrowserModelInfo {
             id: entry.id.clone(),
             name: entry.name.clone(),
             modality: entry.modality,
             status: entry.status,
-            source,
-            bytes,
-            loaded,
+            source: summary.source,
+            bytes: summary.bytes,
+            loaded: current.is_some(),
             chat_template: current.and_then(|current| current.chat_template.clone()),
             bos_text: current.map_or_else(String::new, |current| current.bos_text.clone()),
             eos_text: current.map_or_else(String::new, |current| current.eos_text.clone()),
-            media_marker: current
-                .and_then(|current| current.media_marker.clone())
-                .or_else(|| {
-                    (entry.modality == ModelModality::Vision)
-                        .then(|| DEFAULT_MEDIA_MARKER.to_string())
-                }),
+            media_marker: browser_media_marker(current, entry.modality),
             created_at: entry.created_at.clone(),
             updated_at: entry.updated_at.clone(),
         }
     }
 
     fn increment_refs(&mut self, asset_ids: &[String]) -> Result<(), ModelError> {
-        for id in sorted_unique(asset_ids.to_vec()) {
-            let asset = self.manifest.assets.get_mut(&id).ok_or_else(|| {
-                ModelError::StorageCorrupt(format!("model references missing asset {id}"))
-            })?;
-            asset.ref_count = asset.ref_count.checked_add(1).ok_or_else(|| {
-                ModelError::StorageCorrupt(format!("asset {id} refcount overflow"))
-            })?;
+        self.adjust_refs(asset_ids, increment_asset_refcount)
+    }
+
+    fn decrement_refs(&mut self, asset_ids: &[String]) -> Result<(), ModelError> {
+        self.adjust_refs(asset_ids, decrement_asset_refcount)
+    }
+
+    fn adjust_refs(
+        &mut self,
+        asset_ids: &[String],
+        adjust_refcount: fn(&mut u32, &str) -> Result<(), ModelError>,
+    ) -> Result<(), ModelError> {
+        for id in sorted_unique_strings(asset_ids.to_vec()) {
+            let asset = self
+                .manifest
+                .assets
+                .get_mut(&id)
+                .ok_or_else(|| missing_model_asset(&id))?;
+            adjust_refcount(&mut asset.ref_count, &id)?;
         }
         Ok(())
     }
 
-    fn decrement_refs(&mut self, asset_ids: &[String]) -> Result<(), ModelError> {
-        for id in sorted_unique(asset_ids.to_vec()) {
-            let asset = self.manifest.assets.get_mut(&id).ok_or_else(|| {
-                ModelError::StorageCorrupt(format!("model references missing asset {id}"))
-            })?;
-            if asset.ref_count == 0 {
-                return Err(ModelError::StorageCorrupt(format!(
-                    "asset {id} refcount is already zero"
-                )));
+    fn decrement_existing_refs(&mut self, entry: &BrowserModelEntry) {
+        for asset_id in entry_asset_ids(entry) {
+            let Some(asset) = self.manifest.assets.get_mut(&asset_id) else {
+                continue;
+            };
+            if asset.ref_count > 0 {
+                asset.ref_count -= 1;
             }
-            asset.ref_count -= 1;
         }
-        Ok(())
+    }
+
+    fn remove_orphaned_assets(&mut self) -> Vec<BrowserAssetRecord> {
+        remove_matching_values(&mut self.manifest.assets, |asset| asset.ref_count == 0)
     }
 
     fn rebalance_refs(
@@ -1160,23 +1140,13 @@ impl BrowserLifecycleService {
         previous_refs: &[String],
         next_refs: &[String],
     ) -> Result<(), ModelError> {
-        let previous: BTreeSet<_> = previous_refs.iter().cloned().collect();
-        let next: BTreeSet<_> = next_refs.iter().cloned().collect();
-        let removed: Vec<_> = previous.difference(&next).cloned().collect();
-        let added: Vec<_> = next.difference(&previous).cloned().collect();
+        let (removed, added) = sorted_ref_deltas(previous_refs, next_refs);
         self.decrement_refs(&removed)?;
         self.increment_refs(&added)
     }
 
     fn bump_projector_index_revision(&mut self) -> Result<(), ModelError> {
-        self.manifest.projector_index_revision = self
-            .manifest
-            .projector_index_revision
-            .checked_add(1)
-            .ok_or_else(|| {
-                ModelError::StorageCorrupt("projector index revision overflow".to_string())
-            })?;
-        Ok(())
+        bump_revision(&mut self.manifest.projector_index_revision)
     }
 
     fn emit(&mut self, event_type: BrowserObservabilityEventType, patch: SnapshotPatch) {
@@ -1222,19 +1192,19 @@ where
     T: Serialize,
 {
     let code = match error {
-        ModelError::InvalidModelSource(_) => "INVALID_MODEL_SOURCE",
-        ModelError::InvalidModelPairing(_) => "INVALID_MODEL_PAIRING",
-        ModelError::StorageUnavailable(_) => "STORAGE_UNAVAILABLE",
-        ModelError::StorageCorrupt(_) => "STORAGE_CORRUPT",
-        ModelError::AssetMissing(_) => "MODEL_BROKEN",
-        ModelError::ModelNotFound(_) => "MODEL_NOT_FOUND",
-        ModelError::RemoteUnavailable(_) => "REMOTE_LOAD_FAILED",
-        ModelError::Runtime(_) => "QUERY_FAILED",
-        ModelError::RegistryJson(_) => "STORAGE_CORRUPT",
-        ModelError::Io(_) => "STORAGE_UNAVAILABLE",
+        ModelError::InvalidModelSource(_) => CODE_INVALID_MODEL_SOURCE,
+        ModelError::InvalidModelPairing(_) => CODE_INVALID_MODEL_PAIRING,
+        ModelError::StorageUnavailable(_) => CODE_STORAGE_UNAVAILABLE,
+        ModelError::StorageCorrupt(_) => CODE_STORAGE_CORRUPT,
+        ModelError::AssetMissing(_) => CODE_MODEL_BROKEN,
+        ModelError::ModelNotFound(_) => CODE_MODEL_NOT_FOUND,
+        ModelError::RemoteUnavailable(_) => CODE_REMOTE_LOAD_FAILED,
+        ModelError::Runtime(_) => CODE_QUERY_FAILED,
+        ModelError::RegistryJson(_) => CODE_STORAGE_CORRUPT,
+        ModelError::Io(_) => CODE_STORAGE_UNAVAILABLE,
         ModelError::UnsupportedGgufVersion(_)
         | ModelError::InvalidGgufMetadata(_)
-        | ModelError::GgufMetadataTooLarge { .. } => "INVALID_MODEL_SOURCE",
+        | ModelError::GgufMetadataTooLarge { .. } => CODE_INVALID_MODEL_SOURCE,
     };
     BrowserLifecycleEnvelope {
         ok: false,
@@ -1250,21 +1220,14 @@ pub fn response_json<T>(response: BrowserLifecycleEnvelope<T>) -> String
 where
     T: Serialize,
 {
-    serde_json::to_string(&response).unwrap_or_else(|_| {
-        "{\"ok\":false,\"error\":{\"code\":\"STORAGE_CORRUPT\",\"message\":\"failed to serialize lifecycle response\"}}".to_string()
-    })
+    serde_json::to_string(&response)
+        .unwrap_or_else(|_| LIFECYCLE_SERIALIZATION_FALLBACK.to_string())
 }
 
 fn migrate_manifest(
     mut manifest: BrowserRegistryManifest,
 ) -> Result<BrowserRegistryManifest, ModelError> {
-    if manifest.version != MANIFEST_VERSION {
-        return Err(ModelError::StorageCorrupt(format!(
-            "expected browser registry manifest version {MANIFEST_VERSION}, got {}",
-            manifest.version
-        )));
-    }
-    manifest.projector_index_revision = manifest.projector_index_revision.max(0);
+    validate_registry_manifest_version(BROWSER_REGISTRY_MANIFEST_LABEL, manifest.version)?;
     for (id, asset) in &mut manifest.assets {
         if asset.id.is_empty() {
             asset.id = id.clone();
@@ -1288,48 +1251,29 @@ fn migrate_manifest(
 }
 
 fn validate_manifest(manifest: &BrowserRegistryManifest) -> Result<(), ModelError> {
-    if manifest.version != MANIFEST_VERSION {
-        return Err(ModelError::StorageCorrupt(format!(
-            "expected browser registry manifest version {MANIFEST_VERSION}, got {}",
-            manifest.version
-        )));
-    }
+    validate_registry_manifest_version(BROWSER_REGISTRY_MANIFEST_LABEL, manifest.version)?;
     let mut expected_ref_counts = BTreeMap::<String, u32>::new();
     for (id, asset) in &manifest.assets {
         if id != &asset.id {
-            return Err(ModelError::StorageCorrupt(format!(
-                "asset key {id} does not match record id {}",
-                asset.id
-            )));
+            return Err(manifest_key_mismatch("asset", id, &asset.id));
         }
         validate_asset_record(asset)?;
     }
     for (id, model) in &manifest.models {
         if id != &model.id {
-            return Err(ModelError::StorageCorrupt(format!(
-                "model key {id} does not match record id {}",
-                model.id
-            )));
+            return Err(manifest_key_mismatch("model", id, &model.id));
         }
         for asset_id in entry_asset_ids(model) {
             if !manifest.assets.contains_key(&asset_id) {
-                return Err(ModelError::StorageCorrupt(format!(
-                    "model {id} references missing asset {asset_id}"
-                )));
+                return Err(model_missing_asset(id, &asset_id));
             }
-            let count = expected_ref_counts.entry(asset_id.clone()).or_default();
-            *count = count.checked_add(1).ok_or_else(|| {
-                ModelError::StorageCorrupt(format!("asset {asset_id} refcount overflow"))
-            })?;
+            increment_expected_asset_refcount(&mut expected_ref_counts, &asset_id)?;
         }
     }
     for (id, asset) in &manifest.assets {
         let expected = expected_ref_counts.get(id).copied().unwrap_or(0);
         if asset.ref_count != expected {
-            return Err(ModelError::StorageCorrupt(format!(
-                "asset {id} refcount mismatch: stored {}, expected {expected}",
-                asset.ref_count
-            )));
+            return Err(asset_refcount_mismatch(id, asset.ref_count, expected));
         }
     }
     Ok(())
@@ -1337,49 +1281,41 @@ fn validate_manifest(manifest: &BrowserRegistryManifest) -> Result<(), ModelErro
 
 fn validate_asset_record(asset: &BrowserAssetRecord) -> Result<(), ModelError> {
     if asset.id.trim().is_empty() {
-        return Err(ModelError::StorageCorrupt(
-            "asset id must not be empty".to_string(),
-        ));
+        return Err(empty_asset_id());
     }
     if asset.storage_path.trim().is_empty() {
-        return Err(ModelError::StorageCorrupt(format!(
-            "asset {} storagePath must not be empty",
-            asset.id
-        )));
+        return Err(invalid_asset_field(
+            &asset.id,
+            "storagePath must not be empty",
+        ));
     }
     if asset.bytes == 0 {
-        return Err(ModelError::StorageCorrupt(format!(
-            "asset {} byte size must be positive",
-            asset.id
-        )));
+        return Err(invalid_asset_field(&asset.id, "byte size must be positive"));
     }
     let has_split_index = asset.source_part_index.is_some() || asset.source_part_count.is_some();
     if has_split_index {
-        let index = asset.source_part_index.ok_or_else(|| {
-            ModelError::StorageCorrupt(format!("asset {} split part index is missing", asset.id))
-        })?;
-        let count = asset.source_part_count.ok_or_else(|| {
-            ModelError::StorageCorrupt(format!("asset {} split part count is missing", asset.id))
-        })?;
+        let index = asset
+            .source_part_index
+            .ok_or_else(|| invalid_asset_field(&asset.id, "split part index is missing"))?;
+        let count = asset
+            .source_part_count
+            .ok_or_else(|| invalid_asset_field(&asset.id, "split part count is missing"))?;
         if count == 0 || index >= count {
-            return Err(ModelError::StorageCorrupt(format!(
-                "asset {} split part index/count is invalid",
-                asset.id
-            )));
+            return Err(invalid_asset_field(
+                &asset.id,
+                "split part index/count is invalid",
+            ));
         }
     }
     Ok(())
 }
 
 fn classified_asset_from_record(record: &BrowserAssetRecord) -> ClassifiedAsset {
-    ClassifiedAsset {
-        asset_id: record.id.clone(),
-        name: record.name.clone(),
-        inspection: record
-            .inspection
-            .clone()
-            .unwrap_or_else(AssetInspection::unknown),
-    }
+    classified_asset(
+        record.id.clone(),
+        record.name.clone(),
+        record.inspection.clone(),
+    )
 }
 
 fn resolve_source_projector_asset_id(
@@ -1406,52 +1342,129 @@ fn planned_asset(record: &BrowserAssetRecord) -> BrowserPlannedAsset {
     }
 }
 
-fn entry_asset_ids(entry: &BrowserModelEntry) -> Vec<String> {
-    let mut ids = entry.model_asset_ids.clone();
-    if let Some(projector_id) = &entry.projector_asset_id {
-        ids.push(projector_id.clone());
-    }
-    sorted_unique(ids)
+fn contains_projector_asset(assets: &[BrowserAssetRecord]) -> bool {
+    assets
+        .iter()
+        .any(|asset| asset.kind == ModelAssetKind::Projector)
 }
 
-fn sorted_unique(mut ids: Vec<String>) -> Vec<String> {
-    ids.sort();
-    ids.dedup();
-    ids
+fn browser_asset_summary<'asset>(
+    assets: impl Iterator<Item = &'asset BrowserAssetRecord>,
+) -> AssetSummary {
+    asset_summary(assets.map(|asset| (asset.bytes, asset.source_url.is_some())))
+}
+
+fn current_loaded_model<'model>(
+    current: Option<&'model BrowserLoadedModelState>,
+    entry_id: &str,
+) -> Option<&'model BrowserLoadedModelState> {
+    current.filter(|current| current.id == entry_id)
+}
+
+fn browser_media_marker(
+    current: Option<&BrowserLoadedModelState>,
+    modality: ModelModality,
+) -> Option<String> {
+    current
+        .and_then(|current| current.media_marker.clone())
+        .or_else(|| media_marker_for_modality(modality))
+}
+
+fn entry_asset_ids(entry: &BrowserModelEntry) -> Vec<String> {
+    sorted_model_asset_ids(&entry.model_asset_ids, entry.projector_asset_id.as_ref())
+}
+
+fn failed_query_observation(message: Option<String>) -> BrowserQueryObservation {
+    BrowserQueryObservation {
+        session: None,
+        status: QUERY_STATUS_FAILED.to_string(),
+        wall_ms: None,
+        ttft_ms: None,
+        output_tokens: None,
+        error_code: Some(CODE_QUERY_FAILED.to_string()),
+        error_message: message,
+    }
 }
 
 fn normalize_projector_types(projector_types: &[String]) -> Vec<String> {
-    sorted_unique(projector_types.to_vec())
+    sorted_unique_strings(projector_types.to_vec())
+}
+
+fn compatible_projector_type_set(projector_types: &[String]) -> BTreeSet<&String> {
+    projector_types.iter().collect()
+}
+
+fn projector_type_matches(
+    inspection: Option<&AssetInspection>,
+    compatible_projector_types: &BTreeSet<&String>,
+) -> bool {
+    inspection
+        .and_then(|inspection| inspection.provided_vision_projector_type.as_ref())
+        .is_some_and(|provided| compatible_projector_types.contains(provided))
+}
+
+fn browser_pairing(
+    state: CoreModelPairingState,
+    projector_index_revision: u64,
+    compatible_vision_projector_types: &[String],
+    reason_code: Option<ModelPairingReason>,
+    updated_at: &str,
+) -> BrowserModelPairing {
+    BrowserModelPairing {
+        state,
+        checked_projector_index_revision: projector_index_revision,
+        compatible_vision_projector_types: normalize_projector_types(
+            compatible_vision_projector_types,
+        ),
+        reason_code,
+        updated_at: updated_at.to_string(),
+    }
 }
 
 fn base_model_id(plan: &PairingPlan) -> String {
-    let hash = stable_hash(
-        stable_json(&json!({
-            "modelAssetIds": sorted_unique(plan.model_asset_ids.clone()),
-        }))
-        .as_bytes(),
-    );
-    format!("model-{}", &hash[..24])
+    let hash = stable_json_hash(&json!({
+        "modelAssetIds": sorted_model_asset_ids(&plan.model_asset_ids, None),
+    }));
+    model_id_from_fingerprint_prefix(&hash, BROWSER_MODEL_ID_HASH_CHARS)
 }
 
 fn asset_fingerprint(entry: &BrowserModelEntry) -> String {
-    stable_hash(
-        stable_json(&json!({
-            "modelAssetIds": sorted_unique(entry.model_asset_ids.clone()),
-            "projectorAssetId": entry.projector_asset_id,
-        }))
-        .as_bytes(),
-    )
+    stable_json_hash(&json!({
+        "modelAssetIds": sorted_model_asset_ids(&entry.model_asset_ids, None),
+        "projectorAssetId": entry.projector_asset_id,
+    }))
+}
+
+fn browser_load_id(model_id: &str, asset_fingerprint: &str, runtime_fingerprint: &str) -> String {
+    stable_json_hash(&json!({
+        "modelId": model_id,
+        "assetFingerprint": asset_fingerprint,
+        "runtimeFingerprint": runtime_fingerprint,
+        "nonce": now_iso(),
+    }))
+}
+
+fn browser_load_required(
+    current: Option<&BrowserLoadedModelState>,
+    model_id: &str,
+    asset_fingerprint: &str,
+    runtime_fingerprint: &str,
+) -> bool {
+    match current {
+        Some(current) => {
+            current.id != model_id
+                || current.asset_fingerprint != asset_fingerprint
+                || current.runtime_fingerprint != runtime_fingerprint
+        }
+        None => true,
+    }
 }
 
 fn runtime_fingerprint(runtime_config: &Value, mode: BrowserObservabilityMode) -> String {
-    stable_hash(
-        stable_json(&json!({
-            "observability": mode,
-            "runtime": runtime_config,
-        }))
-        .as_bytes(),
-    )
+    stable_json_hash(&json!({
+        "observability": mode,
+        "runtime": runtime_config,
+    }))
 }
 
 fn runtime_config_with_observability(mut runtime: Value, mode: BrowserObservabilityMode) -> Value {
@@ -1503,14 +1516,8 @@ fn apply_snapshot_patch(
     snapshot
 }
 
-fn stable_hash(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        use std::fmt::Write as _;
-        let _ = write!(&mut out, "{byte:02x}");
-    }
-    out
+fn stable_json_hash(value: &Value) -> String {
+    sha256_hex(stable_json(value).as_bytes())
 }
 
 fn stable_json(value: &Value) -> String {
@@ -1546,14 +1553,14 @@ fn now_iso() -> String {
 }
 
 fn iso_from_unix_ms(ms: u64) -> String {
-    let seconds = ms / 1000;
-    let millis = ms % 1000;
-    let days = (seconds / 86_400) as i64;
-    let seconds_of_day = seconds % 86_400;
+    let seconds = ms / MILLIS_PER_SECOND;
+    let millis = ms % MILLIS_PER_SECOND;
+    let days = (seconds / SECONDS_PER_DAY) as i64;
+    let seconds_of_day = seconds % SECONDS_PER_DAY;
     let (year, month, day) = civil_from_days(days);
-    let hour = seconds_of_day / 3_600;
-    let minute = (seconds_of_day % 3_600) / 60;
-    let second = seconds_of_day % 60;
+    let hour = seconds_of_day / SECONDS_PER_HOUR;
+    let minute = (seconds_of_day % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE;
+    let second = seconds_of_day % SECONDS_PER_MINUTE;
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z")
 }
 
@@ -1725,6 +1732,20 @@ mod tests {
         assert!(matches!(error, ModelError::InvalidModelPairing(_)));
         let entry = service.manifest.models.get(&first.model.id).expect("entry");
         assert_eq!(entry.projector_asset_id.as_deref(), Some("asset-mmproj"));
+    }
+
+    #[test]
+    fn abort_load_records_failed_query_observation() {
+        let mut service = BrowserLifecycleService::create(BrowserCreateConfig { manifest: None })
+            .expect("service");
+
+        let snapshot = service.abort_load(Some("load failed".to_string()));
+
+        assert_eq!(snapshot.state, BrowserLifecycleState::Error);
+        let query = snapshot.query.expect("query observation");
+        assert_eq!(query.status, QUERY_STATUS_FAILED);
+        assert_eq!(query.error_code.as_deref(), Some(CODE_QUERY_FAILED));
+        assert_eq!(query.error_message.as_deref(), Some("load failed"));
     }
 
     #[test]

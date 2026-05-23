@@ -405,9 +405,5 @@ fn parse_stats_mode(value: &str) -> anyhow::Result<StatsMode> {
 }
 
 fn gpu_layers_config(value: Option<i32>) -> GpuLayerConfig {
-    match value {
-        None => GpuLayerConfig::Auto,
-        Some(-2) => GpuLayerConfig::All,
-        Some(count) => GpuLayerConfig::Count(count),
-    }
+    GpuLayerConfig::from_optional_layer_count(value)
 }

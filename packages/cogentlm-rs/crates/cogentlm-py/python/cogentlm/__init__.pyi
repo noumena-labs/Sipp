@@ -1,8 +1,12 @@
 from pathlib import Path
-from typing import Any, Callable, Optional, Sequence, TypedDict, Union
+from typing import Any, Callable, Final, Optional, Sequence, TypedDict, Union
 
 PathLike = Union[str, Path]
 GpuLayerConfig = Union[str, dict[str, int]]
+DEFAULT_CONTEXT_KEY: Final[str]
+DEFAULT_MAX_TOKENS: Final[int]
+DEFAULT_MODEL_BACKEND: Final[str]
+DEFAULT_MODEL_STATS: Final[str]
 
 class ModelPlacementConfig:
     def __init__(
@@ -166,8 +170,8 @@ class ModelLoadOptions:
     def __init__(
         self,
         *,
-        backend: str = "auto",
-        stats: str = "basic",
+        backend: str = DEFAULT_MODEL_BACKEND,
+        stats: str = DEFAULT_MODEL_STATS,
         runtime: Optional[NativeRuntimeConfig] = None,
     ) -> None: ...
 
@@ -180,8 +184,8 @@ class QueryOptions:
     media: Sequence[bytes]
     def __init__(
         self,
-        context_key: str = "default",
-        max_tokens: int = 64,
+        context_key: str = DEFAULT_CONTEXT_KEY,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
         grammar: str = "",
         *,
         json_schema: str = "",

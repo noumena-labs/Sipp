@@ -1,15 +1,10 @@
 /// Token streaming policy requested by a caller.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TokenStreamMode {
+    #[default]
     Off,
     BestEffort,
     Lossless,
-}
-
-impl Default for TokenStreamMode {
-    fn default() -> Self {
-        Self::Off
-    }
 }
 
 /// Counters owned by the token data plane.

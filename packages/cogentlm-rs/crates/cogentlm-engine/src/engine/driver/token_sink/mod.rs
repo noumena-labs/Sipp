@@ -11,13 +11,15 @@ use std::time::{Duration, Instant};
 
 use crate::engine::stream::{StreamStats, TokenBatch};
 use crate::error::{Error, Result};
+use crate::runtime::numeric::saturating_usize_to_u32;
 use crate::runtime::request::{
     token_byte_ring, TokenByteRingConsumer, TokenByteRingProducer, TokenRingFrame,
     TOKEN_RING_DEFAULT_CAPACITY,
 };
 
 use super::{
-    OnTokensCallback, TOKEN_BATCH_FLUSH_INTERVAL, TOKEN_BATCH_MAX_BYTES, TOKEN_BATCH_MAX_FRAMES,
+    runtime_command, OnTokensCallback, TOKEN_BATCH_FLUSH_INTERVAL, TOKEN_BATCH_MAX_BYTES,
+    TOKEN_BATCH_MAX_FRAMES, TOKEN_CALLBACK_THREAD_PANICKED,
 };
 
 pub(super) struct AsyncTokenSink {
@@ -39,7 +41,7 @@ impl AsyncTokenSink {
         if let Some(join_handle) = self.join_handle.take() {
             join_handle
                 .join()
-                .map_err(|_| Error::RuntimeCommand("token callback thread panicked".to_string()))?;
+                .map_err(|_| runtime_command(TOKEN_CALLBACK_THREAD_PANICKED))?;
         }
         if let Some(error) = self.try_recv_error() {
             return Err(error);
@@ -81,8 +83,8 @@ fn run_token_callback_loop(
         let mut byte_count = 0usize;
 
         loop {
-            let remaining_frames = TOKEN_BATCH_MAX_FRAMES.saturating_sub(frames.len()).max(1);
-            let remaining_bytes = TOKEN_BATCH_MAX_BYTES.saturating_sub(byte_count).max(1);
+            let remaining_frames = remaining_quota(TOKEN_BATCH_MAX_FRAMES, frames.len());
+            let remaining_bytes = remaining_quota(TOKEN_BATCH_MAX_BYTES, byte_count);
             let drain = consumer.drain_into(&mut frames, remaining_frames, remaining_bytes);
             latest_drop_count = latest_drop_count.max(drain.drop_count);
             closed |= drain.closed;
@@ -100,9 +102,7 @@ fn run_token_callback_loop(
                 break;
             }
 
-            let remaining = TOKEN_BATCH_FLUSH_INTERVAL
-                .checked_sub(batch_started.elapsed())
-                .unwrap_or(Duration::ZERO);
+            let remaining = remaining_flush_interval(batch_started);
             if remaining.is_zero() || !consumer.wait_for_data(remaining) {
                 break;
             }
@@ -147,9 +147,7 @@ pub(super) fn token_batch_from_ring_frames(
     token_state: &mut TokenStreamState,
     drop_count: u64,
 ) -> Option<TokenBatch> {
-    let text_capacity = frames
-        .iter()
-        .filter(|frame| frame.stream_id == target_request_id)
+    let text_capacity = matching_token_frames(frames, target_request_id)
         .map(|frame| frame.bytes.len())
         .sum();
     let mut text = String::with_capacity(text_capacity);
@@ -157,10 +155,7 @@ pub(super) fn token_batch_from_ring_frames(
     let mut byte_count = 0_u32;
     let mut sequence_start = None;
 
-    for frame in frames {
-        if frame.stream_id != target_request_id {
-            continue;
-        }
+    for frame in matching_token_frames(frames, target_request_id) {
         if sequence_start.is_none() {
             sequence_start = Some(frame.sequence);
         }
@@ -181,15 +176,7 @@ pub(super) fn token_batch_from_ring_frames(
     token_state.next_sequence = sequence_start
         .unwrap_or(token_state.next_sequence)
         .saturating_add(frame_count);
-    token_state.stats.frames_sent = token_state
-        .stats
-        .frames_sent
-        .saturating_add(u64::from(frame_count));
-    token_state.stats.bytes_sent = token_state
-        .stats
-        .bytes_sent
-        .saturating_add(u64::from(byte_count));
-    token_state.stats.batches_sent = token_state.stats.batches_sent.saturating_add(1);
+    update_stream_sent_stats(&mut token_state.stats, frame_count, byte_count);
 
     Some(TokenBatch {
         request_id: token_state.request_id.to_string(),
@@ -202,18 +189,39 @@ pub(super) fn token_batch_from_ring_frames(
     })
 }
 
+fn matching_token_frames(
+    frames: &[TokenRingFrame],
+    stream_id: u32,
+) -> impl Iterator<Item = &TokenRingFrame> {
+    frames
+        .iter()
+        .filter(move |frame| frame.stream_id == stream_id)
+}
+
 fn update_stream_drop_stats(token_state: &mut TokenStreamState, drop_count: u64) {
     let drop_delta = drop_count.saturating_sub(token_state.last_drop_count);
     token_state.last_drop_count = drop_count;
     token_state.stats.frames_dropped = token_state.stats.frames_dropped.saturating_add(drop_delta);
 }
 
-fn saturating_usize_to_u32(value: usize) -> u32 {
-    u32::try_from(value).unwrap_or(u32::MAX)
+fn update_stream_sent_stats(stats: &mut StreamStats, frame_count: u32, byte_count: u32) {
+    stats.frames_sent = stats.frames_sent.saturating_add(u64::from(frame_count));
+    stats.bytes_sent = stats.bytes_sent.saturating_add(u64::from(byte_count));
+    stats.batches_sent = stats.batches_sent.saturating_add(1);
 }
 
 fn next_batch_byte_count(current: usize, drained: usize) -> Option<usize> {
     current.checked_add(drained)
+}
+
+fn remaining_flush_interval(batch_started: Instant) -> Duration {
+    TOKEN_BATCH_FLUSH_INTERVAL
+        .checked_sub(batch_started.elapsed())
+        .unwrap_or(Duration::ZERO)
+}
+
+fn remaining_quota(limit: usize, used: usize) -> usize {
+    limit.saturating_sub(used).max(1)
 }
 
 #[cfg(test)]

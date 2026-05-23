@@ -3,6 +3,8 @@
 use super::types::{
     AssetRole, ClassifiedAsset, ModelError, ModelModality, ModelStatus, PairingPlan,
 };
+use crate::collection::sorted_unique_strings;
+use crate::lifecycle::util::{invalid_pairing, invalid_source};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PairingResolver;
@@ -20,38 +22,20 @@ struct BaseModelResolution {
     vision_capable: bool,
 }
 
+const EXPLICIT_PROJECTOR_NOT_INSTALLED: &str = "explicit projector asset was not installed";
+const PROJECTOR_NOT_RUNNABLE_MODEL: &str = "projector assets are not runnable models";
+const NO_MODEL_ASSETS_PROVIDED: &str = "no model assets were provided";
+
 impl PairingResolver {
     pub fn resolve(files: &[ClassifiedAsset]) -> Result<PairingPlan, ModelError> {
         let selection = select_assets(files, None)?;
         let base = resolve_base_model(&selection.model_files)?;
         if let Some(projector) = selection.projector {
             validate_implicit_projector(&base, projector)?;
-            return Ok(PairingPlan {
-                model_asset_ids: model_asset_ids(&selection.model_files),
-                projector_asset_id: Some(projector.asset_id.clone()),
-                name: base.name,
-                modality: ModelModality::Vision,
-                status: ModelStatus::Ready,
-                compatible_vision_projector_types: base.compatible_vision_projector_types,
-            });
+            return Ok(pairing_plan(&selection.model_files, Some(projector), base));
         }
 
-        Ok(PairingPlan {
-            model_asset_ids: model_asset_ids(&selection.model_files),
-            projector_asset_id: None,
-            name: base.name,
-            modality: if base.vision_capable {
-                ModelModality::Vision
-            } else {
-                ModelModality::Text
-            },
-            status: if base.vision_capable {
-                ModelStatus::NeedsProjector
-            } else {
-                ModelStatus::Ready
-            },
-            compatible_vision_projector_types: base.compatible_vision_projector_types,
-        })
+        Ok(pairing_plan(&selection.model_files, None, base))
     }
 
     pub fn resolve_explicit(
@@ -59,21 +43,12 @@ impl PairingResolver {
         explicit_projector_asset_id: &str,
     ) -> Result<PairingPlan, ModelError> {
         let selection = select_assets(files, Some(explicit_projector_asset_id))?;
-        let projector = selection.projector.ok_or_else(|| {
-            ModelError::InvalidModelPairing(
-                "explicit projector asset was not installed".to_string(),
-            )
-        })?;
+        let projector = selection
+            .projector
+            .ok_or_else(|| invalid_pairing(EXPLICIT_PROJECTOR_NOT_INSTALLED))?;
         let base = resolve_base_model(&selection.model_files)?;
         validate_explicit_projector(&base, projector)?;
-        Ok(PairingPlan {
-            model_asset_ids: model_asset_ids(&selection.model_files),
-            projector_asset_id: Some(projector.asset_id.clone()),
-            name: base.name,
-            modality: ModelModality::Vision,
-            status: ModelStatus::Ready,
-            compatible_vision_projector_types: base.compatible_vision_projector_types,
-        })
+        Ok(pairing_plan(&selection.model_files, Some(projector), base))
     }
 }
 
@@ -82,51 +57,31 @@ fn select_assets<'a>(
     explicit_projector_asset_id: Option<&str>,
 ) -> Result<AssetSelection<'a>, ModelError> {
     if files.is_empty() {
-        return Err(ModelError::InvalidModelSource(
-            "no model assets were provided".to_string(),
-        ));
+        return Err(invalid_source(NO_MODEL_ASSETS_PROVIDED));
     }
 
-    let projectors: Vec<_> = files
-        .iter()
-        .filter(|file| file.inspection.role == AssetRole::Projector)
-        .collect();
+    let projectors: Vec<_> = files.iter().filter(|file| is_projector(file)).collect();
     if explicit_projector_asset_id.is_none() && projectors.len() > 1 {
-        return Err(ModelError::InvalidModelPairing(format!(
+        return Err(invalid_pairing(format!(
             "multiple projector assets were provided: {}",
             join_asset_names(&projectors)
         )));
     }
 
     let projector = if let Some(asset_id) = explicit_projector_asset_id {
-        let projector = files
-            .iter()
-            .find(|file| file.asset_id == asset_id)
-            .ok_or_else(|| {
-                ModelError::InvalidModelPairing(
-                    "explicit projector asset was not installed".to_string(),
-                )
-            })?;
-        if projector.inspection.role != AssetRole::Projector {
-            return Err(ModelError::InvalidModelPairing(format!(
-                "\"{}\" is not a projector asset",
-                projector.name
-            )));
-        }
-        Some(projector)
+        Some(select_explicit_projector(files, asset_id)?)
     } else {
         projectors.first().copied()
     };
 
+    let projector_asset_id = projector.map(|asset| asset.asset_id.as_str());
     let mut model_files: Vec<_> = files
         .iter()
-        .filter(|file| Some(file.asset_id.as_str()) != projector.map(|item| item.asset_id.as_str()))
+        .filter(|file| !is_selected_asset(file, projector_asset_id))
         .collect();
     model_files.sort_by(|left, right| left.name.cmp(&right.name));
     if model_files.is_empty() {
-        return Err(ModelError::InvalidModelPairing(
-            "projector assets are not runnable models".to_string(),
-        ));
+        return Err(invalid_pairing(PROJECTOR_NOT_RUNNABLE_MODEL));
     }
 
     Ok(AssetSelection {
@@ -135,43 +90,75 @@ fn select_assets<'a>(
     })
 }
 
+fn select_explicit_projector<'a>(
+    files: &'a [ClassifiedAsset],
+    asset_id: &str,
+) -> Result<&'a ClassifiedAsset, ModelError> {
+    let projector = files
+        .iter()
+        .find(|file| file.asset_id == asset_id)
+        .ok_or_else(|| invalid_pairing(EXPLICIT_PROJECTOR_NOT_INSTALLED))?;
+    if !is_projector(projector) {
+        return Err(invalid_pairing(format!(
+            "\"{}\" is not a projector asset",
+            projector.name
+        )));
+    }
+    Ok(projector)
+}
+
 fn model_asset_ids(files: &[&ClassifiedAsset]) -> Vec<String> {
-    let mut ids = Vec::with_capacity(files.len());
-    ids.extend(files.iter().map(|file| file.asset_id.clone()));
-    ids
+    files.iter().map(|file| file.asset_id.clone()).collect()
+}
+
+fn pairing_plan(
+    model_files: &[&ClassifiedAsset],
+    projector: Option<&ClassifiedAsset>,
+    base: BaseModelResolution,
+) -> PairingPlan {
+    let has_projector = projector.is_some();
+    PairingPlan {
+        model_asset_ids: model_asset_ids(model_files),
+        projector_asset_id: projector.map(|asset| asset.asset_id.clone()),
+        name: base.name,
+        modality: pairing_modality(has_projector, base.vision_capable),
+        status: pairing_status(has_projector, base.vision_capable),
+        compatible_vision_projector_types: base.compatible_vision_projector_types,
+    }
+}
+
+fn pairing_modality(has_projector: bool, vision_capable: bool) -> ModelModality {
+    if has_projector || vision_capable {
+        ModelModality::Vision
+    } else {
+        ModelModality::Text
+    }
+}
+
+fn pairing_status(has_projector: bool, vision_capable: bool) -> ModelStatus {
+    if has_projector || !vision_capable {
+        ModelStatus::Ready
+    } else {
+        ModelStatus::NeedsProjector
+    }
 }
 
 fn join_asset_names(files: &[&ClassifiedAsset]) -> String {
-    let capacity = joined_asset_names_capacity(files).unwrap_or(0);
-    let mut names = String::with_capacity(capacity);
-    for (index, file) in files.iter().enumerate() {
-        if index > 0 {
-            names.push_str(", ");
-        }
-        names.push_str(&file.name);
-    }
-    names
-}
-
-fn joined_asset_names_capacity(files: &[&ClassifiedAsset]) -> Option<usize> {
-    let separator_count = if files.is_empty() { 0 } else { files.len() - 1 };
     files
         .iter()
-        .map(|file| file.name.len())
-        .try_fold(0_usize, |total, len| total.checked_add(len))?
-        .checked_add(separator_count.checked_mul(2)?)
+        .map(|file| file.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn resolve_base_model(files: &[&ClassifiedAsset]) -> Result<BaseModelResolution, ModelError> {
     let model_candidates: Vec<_> = files
         .iter()
         .copied()
-        .filter(|file| file.inspection.role != AssetRole::Projector)
+        .filter(|file| !is_projector(file))
         .collect();
     if model_candidates.is_empty() {
-        return Err(ModelError::InvalidModelPairing(
-            "projector assets are not runnable models".to_string(),
-        ));
+        return Err(invalid_pairing(PROJECTOR_NOT_RUNNABLE_MODEL));
     }
 
     let vision_candidates: Vec<_> = model_candidates
@@ -185,8 +172,8 @@ fn resolve_base_model(files: &[&ClassifiedAsset]) -> Result<BaseModelResolution,
         .filter(|file| !file.inspection.compatible_vision_projector_types.is_empty())
         .collect();
     if !compatible_vision_types_agree(&compatibility_sources) {
-        return Err(ModelError::InvalidModelSource(
-            "model assets disagree on compatible vision projector types".to_string(),
+        return Err(invalid_source(
+            "model assets disagree on compatible vision projector types",
         ));
     }
 
@@ -216,8 +203,8 @@ fn validate_implicit_projector(
     projector: &ClassifiedAsset,
 ) -> Result<(), ModelError> {
     if !base.vision_capable {
-        return Err(ModelError::InvalidModelPairing(
-            "projector assets can only be paired with vision-capable models".to_string(),
+        return Err(invalid_pairing(
+            "projector assets can only be paired with vision-capable models",
         ));
     }
     validate_projector_compatibility(base, projector)
@@ -240,7 +227,7 @@ fn validate_projector_compatibility(
             .iter()
             .any(|expected| expected == provided_type)
     {
-        return Err(ModelError::InvalidModelPairing(format!(
+        return Err(invalid_pairing(format!(
             "projector type \"{}\" is not compatible with this model; expected one of: {}",
             provided_type,
             base.compatible_vision_projector_types.join(", ")
@@ -253,21 +240,22 @@ fn compatible_vision_types_agree(files: &[&ClassifiedAsset]) -> bool {
     if files.len() < 2 {
         return true;
     }
-    let expected = stable_type_list(&files[0].inspection.compatible_vision_projector_types);
+    let expected = stable_type_list_vec(&files[0].inspection.compatible_vision_projector_types);
     files.iter().skip(1).all(|file| {
-        stable_type_list(&file.inspection.compatible_vision_projector_types) == expected
+        stable_type_list_vec(&file.inspection.compatible_vision_projector_types) == expected
     })
 }
 
-fn stable_type_list(values: &[String]) -> String {
-    stable_type_list_vec(values).join("\0")
+fn stable_type_list_vec(values: &[String]) -> Vec<String> {
+    sorted_unique_strings(values.to_vec())
 }
 
-fn stable_type_list_vec(values: &[String]) -> Vec<String> {
-    let mut values = values.to_vec();
-    values.sort();
-    values.dedup();
-    values
+fn is_projector(file: &ClassifiedAsset) -> bool {
+    file.inspection.role == AssetRole::Projector
+}
+
+fn is_selected_asset(file: &ClassifiedAsset, asset_id: Option<&str>) -> bool {
+    asset_id == Some(file.asset_id.as_str())
 }
 
 #[cfg(test)]

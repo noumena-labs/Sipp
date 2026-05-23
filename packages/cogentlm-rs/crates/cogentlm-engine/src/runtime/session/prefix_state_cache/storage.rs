@@ -38,11 +38,7 @@ impl PrefixStateCache {
             self.total_approx_bytes = next_total;
         } else {
             let new_index = self.entries.len();
-            let bucket_key = PrefixCacheLookupKey {
-                model_fingerprint: entry.model_fingerprint,
-                token_count: entry.token_count,
-                prefix_hash: entry.prefix_hash,
-            };
+            let bucket_key = PrefixCacheLookupKey::for_entry(&entry);
             let Some(next_total) = self.total_approx_bytes.checked_add(entry.approx_bytes) else {
                 return;
             };
@@ -64,11 +60,7 @@ impl PrefixStateCache {
         token_count: usize,
         prefix_hash: u64,
     ) -> Option<usize> {
-        let lookup_key = PrefixCacheLookupKey {
-            model_fingerprint,
-            token_count,
-            prefix_hash,
-        };
+        let lookup_key = PrefixCacheLookupKey::new(model_fingerprint, token_count, prefix_hash);
         self.lookup_buckets.get(&lookup_key).and_then(|bucket| {
             bucket.iter().copied().find(|&entry_index| {
                 self.entries.get(entry_index).is_some_and(|entry| {
@@ -113,14 +105,7 @@ impl PrefixStateCache {
         let removed = self.entries.swap_remove(evict_index);
         debug_assert!(removed.approx_bytes <= self.total_approx_bytes);
         self.total_approx_bytes = self.total_approx_bytes.saturating_sub(removed.approx_bytes);
-        self.remove_bucket_index(
-            PrefixCacheLookupKey {
-                model_fingerprint: removed.model_fingerprint,
-                token_count: removed.token_count,
-                prefix_hash: removed.prefix_hash,
-            },
-            evict_index,
-        );
+        self.remove_bucket_index(PrefixCacheLookupKey::for_entry(&removed), evict_index);
 
         if evict_index < last_index {
             self.repoint_moved_entry_bucket(evict_index, last_index);
@@ -138,11 +123,7 @@ impl PrefixStateCache {
 
     fn repoint_moved_entry_bucket(&mut self, moved_index: usize, previous_index: usize) {
         let moved = &self.entries[moved_index];
-        let moved_key = PrefixCacheLookupKey {
-            model_fingerprint: moved.model_fingerprint,
-            token_count: moved.token_count,
-            prefix_hash: moved.prefix_hash,
-        };
+        let moved_key = PrefixCacheLookupKey::for_entry(moved);
         if let Some(bucket) = self.lookup_buckets.get_mut(&moved_key) {
             for index in bucket.iter_mut() {
                 if *index == previous_index {

@@ -1,4 +1,3 @@
-use crate::runtime::request::GenerateRequestLifecycle;
 use crate::runtime::scheduler::SlotPhase;
 
 use super::{unique_slot_first_use, InferenceRuntime};
@@ -56,11 +55,7 @@ impl InferenceRuntime {
             else {
                 continue;
             };
-            slot.terminal_error_message = message.to_string();
-            slot.phase = SlotPhase::Failed;
-            if let Some(request) = slot.request_mut() {
-                request.lifecycle = GenerateRequestLifecycle::Failed;
-            }
+            slot.fail(message);
         }
     }
 }

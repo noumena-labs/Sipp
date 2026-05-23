@@ -1,14 +1,16 @@
 //! Unit tests for the parent module.
 
 use super::super::*;
-use crate::engine::{GenerateOptions, SamplingRuntimeConfig};
+use crate::engine::{
+    GenerateOptions, SamplingRuntimeConfig, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
+};
 
 #[test]
 fn query_options_default_matches_public_completion_defaults() {
     let options = QueryOptions::default();
 
-    assert_eq!(options.context_key, "default");
-    assert_eq!(options.max_tokens, 64);
+    assert_eq!(options.context_key, DEFAULT_CONTEXT_KEY);
+    assert_eq!(options.max_tokens, DEFAULT_MAX_TOKENS);
     assert!(options.grammar.is_empty());
     assert!(options.json_schema.is_empty());
     assert!(options.stop.is_empty());
@@ -46,11 +48,34 @@ fn generate_options_convert_to_query_options() {
 }
 
 #[test]
+fn generate_options_without_cache_key_uses_default_context() {
+    let options = QueryOptions::from(GenerateOptions {
+        cache_key: None,
+        ..GenerateOptions::default()
+    });
+
+    assert_eq!(options.context_key, DEFAULT_CONTEXT_KEY);
+}
+
+#[test]
 fn query_request_defaults_options() {
     let request = QueryRequest::new("hello");
 
     assert_eq!(request.prompt, "hello");
     assert_eq!(request.options, QueryOptions::default());
+}
+
+#[test]
+fn chat_role_choice_helper_accepts_public_roles() {
+    assert_eq!(ChatRole::from_choice("system"), Some(ChatRole::System));
+    assert_eq!(
+        ChatRole::from_choice(" ASSISTANT "),
+        Some(ChatRole::Assistant)
+    );
+    assert_eq!(
+        ChatRole::from_choice("assistant"),
+        Some(ChatRole::Assistant)
+    );
 }
 
 #[test]

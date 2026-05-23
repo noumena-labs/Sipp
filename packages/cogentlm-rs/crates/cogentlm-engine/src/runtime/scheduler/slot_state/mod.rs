@@ -4,7 +4,7 @@ use std::ptr::NonNull;
 
 use cogentlm_sys as ffi;
 
-use crate::runtime::request::{GenerateRequest, GenerateRequestId};
+use crate::runtime::request::{GenerateRequest, GenerateRequestId, GenerateRequestLifecycle};
 use crate::runtime::session::SequenceState;
 use crate::runtime::{llama_seq_id, llama_token};
 
@@ -112,6 +112,22 @@ impl SlotState {
 
     pub fn request_mut(&mut self) -> Option<&mut GenerateRequest> {
         self.request.as_mut()
+    }
+
+    pub fn fail(&mut self, message: impl Into<String>) {
+        self.terminal_error_message = message.into();
+        self.phase = SlotPhase::Failed;
+        if let Some(request) = self.request_mut() {
+            request.lifecycle = GenerateRequestLifecycle::Failed;
+        }
+    }
+
+    pub fn cancel(&mut self, message: impl Into<String>) {
+        self.terminal_error_message = message.into();
+        self.phase = SlotPhase::Failed;
+        if let Some(request) = self.request_mut() {
+            request.lifecycle = GenerateRequestLifecycle::Cancelled;
+        }
     }
 
     pub fn sampler(&self) -> Option<NonNull<ffi::cogent_common_sampler>> {

@@ -1,5 +1,8 @@
 pub mod backend;
 pub mod chat;
+mod choice;
+mod collection;
+mod defaults;
 pub mod engine;
 pub mod error;
 pub mod lifecycle;

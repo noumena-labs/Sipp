@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::choice::choice_from_aliases;
 use crate::engine::protocol::{BackendInfo, EngineStatus, RequestState};
 use crate::engine::{EngineStats, NativeRuntimeConfig, ResolvedRuntimeLimits};
 
@@ -14,6 +15,27 @@ pub enum StatsMode {
     Profile,
 }
 
+impl StatsMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Basic => "basic",
+            Self::Profile => "profile",
+        }
+    }
+
+    pub fn from_choice(value: &str) -> Option<Self> {
+        choice_from_aliases(
+            value,
+            &[
+                (&["off"], Self::Off),
+                (&["basic"], Self::Basic),
+                (&["profile"], Self::Profile),
+            ],
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BackendPreference {
@@ -25,6 +47,36 @@ pub enum BackendPreference {
     Vulkan,
     WebGpu,
 }
+
+impl BackendPreference {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Cpu => "cpu",
+            Self::Cuda => "cuda",
+            Self::Metal => "metal",
+            Self::Vulkan => "vulkan",
+            Self::WebGpu => "webgpu",
+        }
+    }
+
+    pub fn from_choice(value: &str) -> Option<Self> {
+        choice_from_aliases(
+            value,
+            &[
+                (&["auto"], Self::Auto),
+                (&["cpu"], Self::Cpu),
+                (&["cuda"], Self::Cuda),
+                (&["metal"], Self::Metal),
+                (&["vulkan"], Self::Vulkan),
+                (&["webgpu", "web_gpu"], Self::WebGpu),
+            ],
+        )
+    }
+}
+
+pub const DEFAULT_MODEL_BACKEND: &str = BackendPreference::Auto.as_str();
+pub const DEFAULT_MODEL_STATS: &str = StatsMode::Basic.as_str();
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

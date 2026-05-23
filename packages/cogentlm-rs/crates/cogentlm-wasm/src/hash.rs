@@ -1,8 +1,9 @@
-use std::ffi::CString;
 use std::os::raw::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use sha2::{Digest, Sha256};
+
+use crate::ffi::into_c_string;
 
 pub struct BrowserSha256Hasher {
     hasher: Sha256,
@@ -38,7 +39,10 @@ pub extern "C" fn cogentlm_sha256_update(
 }
 
 #[no_mangle]
-pub extern "C" fn cogentlm_sha256_finalize(hasher: *mut BrowserSha256Hasher) -> *mut c_char {
+/// # Safety
+/// `hasher` must be null or a live handle returned by `cogentlm_sha256_create`.
+/// A non-null handle is consumed and must not be reused.
+pub unsafe extern "C" fn cogentlm_sha256_finalize(hasher: *mut BrowserSha256Hasher) -> *mut c_char {
     catch_unwind(AssertUnwindSafe(|| {
         if hasher.is_null() {
             return std::ptr::null_mut();
@@ -52,7 +56,10 @@ pub extern "C" fn cogentlm_sha256_finalize(hasher: *mut BrowserSha256Hasher) -> 
 }
 
 #[no_mangle]
-pub extern "C" fn cogentlm_sha256_close(hasher: *mut BrowserSha256Hasher) -> i32 {
+/// # Safety
+/// `hasher` must be null or a live handle returned by `cogentlm_sha256_create`.
+/// A non-null handle is consumed and must not be reused.
+pub unsafe extern "C" fn cogentlm_sha256_close(hasher: *mut BrowserSha256Hasher) -> i32 {
     catch_unwind(AssertUnwindSafe(|| {
         if hasher.is_null() {
             return 0;
@@ -96,15 +103,10 @@ fn hex_lower(bytes: &[u8]) -> String {
     out
 }
 
-fn into_c_string(value: String) -> *mut c_char {
-    CString::new(value)
-        .map(CString::into_raw)
-        .unwrap_or(std::ptr::null_mut())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::CString;
 
     #[test]
     fn streaming_sha256_matches_known_digest() {
@@ -112,7 +114,7 @@ mod tests {
         assert!(!hasher.is_null());
         assert_eq!(cogentlm_sha256_update(hasher, b"abc".as_ptr(), 3), 0);
 
-        let ptr = cogentlm_sha256_finalize(hasher);
+        let ptr = unsafe { cogentlm_sha256_finalize(hasher) };
         assert!(!ptr.is_null());
         let digest = unsafe { CString::from_raw(ptr) }
             .to_string_lossy()

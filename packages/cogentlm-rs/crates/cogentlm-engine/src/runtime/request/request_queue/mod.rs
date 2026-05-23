@@ -7,6 +7,7 @@ use super::{
     GenerateRequest, GenerateRequestId, GenerateRequestLifecycle, GenerateResponse,
     GenerateResponseStatus, TokenByteRingProducer,
 };
+use crate::collection::sorted_copied_values;
 
 #[derive(Debug, Clone)]
 pub struct RequestQueue {
@@ -58,30 +59,33 @@ impl RequestQueue {
         &mut self,
         predicate: impl Fn(&GenerateRequest) -> bool,
     ) -> Option<GenerateRequestId> {
-        let mut found_index = None;
-        for (index, &request_id) in self.pending_request_ids.iter().enumerate() {
-            let Some(request) = self.requests.get(&request_id) else {
-                continue;
-            };
-            if request.lifecycle != GenerateRequestLifecycle::Pending {
-                continue;
-            }
-            if predicate(request) {
-                found_index = Some((index, request_id));
-                break;
-            }
-        }
+        let (index, request_id) = self.find_admissible_pending_request(predicate)?;
+        self.pending_request_ids.remove(index);
+        self.mark_admitted(request_id);
+        Some(request_id)
+    }
 
-        if let Some((index, request_id)) = found_index {
-            self.pending_request_ids.remove(index);
-            if let Some(request) = self.requests.get_mut(&request_id) {
-                request.lifecycle = GenerateRequestLifecycle::Admitted;
-                request.admitted_at = Some(Instant::now());
-            }
-            Some(request_id)
-        } else {
-            None
-        }
+    fn find_admissible_pending_request(
+        &self,
+        predicate: impl Fn(&GenerateRequest) -> bool,
+    ) -> Option<(usize, GenerateRequestId)> {
+        self.pending_request_ids
+            .iter()
+            .copied()
+            .enumerate()
+            .find(|(_, request_id)| {
+                self.requests.get(request_id).is_some_and(|request| {
+                    request.lifecycle == GenerateRequestLifecycle::Pending && predicate(request)
+                })
+            })
+    }
+
+    fn mark_admitted(&mut self, request_id: GenerateRequestId) {
+        let Some(request) = self.requests.get_mut(&request_id) else {
+            return;
+        };
+        request.lifecycle = GenerateRequestLifecycle::Admitted;
+        request.admitted_at = Some(Instant::now());
     }
 
     pub fn find_mut(&mut self, request_id: GenerateRequestId) -> Option<&mut GenerateRequest> {
@@ -104,21 +108,7 @@ impl RequestQueue {
         request.cancel_requested = true;
         let was_pending = lifecycle == GenerateRequestLifecycle::Pending;
         if was_pending {
-            request.lifecycle = GenerateRequestLifecycle::Cancelled;
-            request.completed_at.get_or_insert_with(Instant::now);
-        }
-
-        if was_pending {
-            self.remove_pending_request_id(request_id);
-            self.completed_responses.insert(
-                request_id,
-                GenerateResponse {
-                    request_id,
-                    status: GenerateResponseStatus::Cancelled,
-                    error_message,
-                    ..GenerateResponse::default()
-                },
-            );
+            self.mark_completed(GenerateResponse::cancelled(request_id, error_message));
         }
 
         true
@@ -126,19 +116,7 @@ impl RequestQueue {
 
     pub fn mark_completed(&mut self, response: GenerateResponse) {
         let request_id = response.request_id;
-        if let Some(request) = self.requests.get_mut(&request_id) {
-            let was_pending = request.lifecycle == GenerateRequestLifecycle::Pending;
-            request.lifecycle = match response.status {
-                GenerateResponseStatus::Completed => GenerateRequestLifecycle::Completed,
-                GenerateResponseStatus::Cancelled => GenerateRequestLifecycle::Cancelled,
-                GenerateResponseStatus::Failed => GenerateRequestLifecycle::Failed,
-                GenerateResponseStatus::Pending => request.lifecycle,
-            };
-            request.completed_at.get_or_insert_with(Instant::now);
-            if was_pending {
-                self.remove_pending_request_id(request_id);
-            }
-        }
+        self.apply_terminal_response_status(request_id, response.status);
 
         self.completed_responses.insert(request_id, response);
     }
@@ -158,10 +136,7 @@ impl RequestQueue {
     }
 
     pub fn completed_response_ids(&self) -> Vec<GenerateRequestId> {
-        let mut ids = Vec::with_capacity(self.completed_responses.len());
-        ids.extend(self.completed_responses.keys().copied());
-        ids.sort_unstable();
-        ids
+        sorted_copied_values(self.completed_responses.keys().copied())
     }
 
     pub fn append_streaming_token(&mut self, request_id: GenerateRequestId, text: &str) {
@@ -195,12 +170,7 @@ impl RequestQueue {
     }
 
     pub fn consume_completed_response(&mut self, request_id: GenerateRequestId) -> bool {
-        if self.completed_responses.remove(&request_id).is_none() {
-            return false;
-        }
-
-        self.requests.remove(&request_id);
-        true
+        self.take_completed_response(request_id).is_some()
     }
 
     /// Removes and returns the completed response in one step, avoiding the
@@ -219,11 +189,9 @@ impl RequestQueue {
     }
 
     pub fn live_request_count(&self) -> usize {
-        if self.completed_responses.len() > self.requests.len() {
-            0
-        } else {
-            self.requests.len() - self.completed_responses.len()
-        }
+        self.requests
+            .len()
+            .saturating_sub(self.completed_responses.len())
     }
 
     pub fn clear(&mut self) {
@@ -236,6 +204,37 @@ impl RequestQueue {
 
     fn remove_pending_request_id(&mut self, request_id: GenerateRequestId) {
         self.pending_request_ids.retain(|&id| id != request_id);
+    }
+
+    fn apply_terminal_response_status(
+        &mut self,
+        request_id: GenerateRequestId,
+        status: GenerateResponseStatus,
+    ) {
+        let Some(request) = self.requests.get_mut(&request_id) else {
+            return;
+        };
+        let was_pending = request.lifecycle == GenerateRequestLifecycle::Pending;
+        request.lifecycle =
+            GenerateRequestLifecycle::from_response_status(status, request.lifecycle);
+        request.completed_at.get_or_insert_with(Instant::now);
+        if was_pending {
+            self.remove_pending_request_id(request_id);
+        }
+    }
+}
+
+impl GenerateRequestLifecycle {
+    fn from_response_status(
+        status: GenerateResponseStatus,
+        fallback: GenerateRequestLifecycle,
+    ) -> Self {
+        match status {
+            GenerateResponseStatus::Completed => Self::Completed,
+            GenerateResponseStatus::Cancelled => Self::Cancelled,
+            GenerateResponseStatus::Failed => Self::Failed,
+            GenerateResponseStatus::Pending => fallback,
+        }
     }
 }
 

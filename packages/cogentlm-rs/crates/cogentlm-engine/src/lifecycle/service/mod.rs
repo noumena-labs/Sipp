@@ -9,17 +9,20 @@ use crate::engine::{
 
 use super::backend_policy::BackendPolicy;
 use super::storage::{now_unix_ms, LocalStorageBackend, StorageBackend};
+use super::util::{invalid_pairing, invalid_source, media_marker_for_modality, model_not_found};
 use super::{
-    AssetSource, AssetStore, BackendSelection, ModelAsset, ModelAssets, ModelError, ModelInfo,
-    ModelLoadOptions, ModelModality, ModelRegistry, ModelServiceState, ModelSource,
-    ModelSourceKind, ModelStatus,
+    AssetStore, BackendSelection, ModelAsset, ModelAssets, ModelError, ModelInfo, ModelLoadOptions,
+    ModelRegistry, ModelServiceState, ModelSource, ModelStatus,
 };
 
 mod helpers;
 mod load_assets;
 mod source_resolution;
 
-use helpers::{runtime_fingerprint, service_state_from_engine_state};
+use helpers::service_state_from_engine_state;
+use helpers::{model_asset_summary, runtime_fingerprint};
+
+const NO_MODEL_LOADED: &str = "no model is loaded";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedModelInfo {
@@ -91,11 +94,7 @@ impl<B: StorageBackend> ModelService<B> {
 
     pub fn remove(&mut self, model_id: impl AsRef<str>) -> Result<(), ModelError> {
         let model_id = model_id.as_ref();
-        if self
-            .current
-            .as_ref()
-            .is_some_and(|loaded| loaded.info.id == model_id)
-        {
+        if self.is_loaded_model(model_id) {
             self.unload()?;
         }
         let removed = self.registry.remove_model(model_id)?;
@@ -111,10 +110,7 @@ impl<B: StorageBackend> ModelService<B> {
             .models()
             .into_iter()
             .map(|entry| {
-                let loaded = self
-                    .current
-                    .as_ref()
-                    .is_some_and(|current| current.info.id == entry.id);
+                let loaded = self.is_loaded_model(&entry.id);
                 self.model_info_from_entry(entry, loaded)
             })
             .collect()
@@ -158,7 +154,7 @@ impl<B: StorageBackend> ModelService<B> {
         self.current
             .as_ref()
             .map(|loaded| &loaded.engine)
-            .ok_or_else(|| ModelError::ModelNotFound("no model is loaded".to_string()))
+            .ok_or_else(|| model_not_found(NO_MODEL_LOADED))
     }
 
     fn load_entry(
@@ -169,10 +165,10 @@ impl<B: StorageBackend> ModelService<B> {
         let entry = self
             .registry
             .model(model_id)
-            .ok_or_else(|| ModelError::ModelNotFound(model_id.to_string()))?
+            .ok_or_else(|| model_not_found(model_id))?
             .clone();
         if entry.status != ModelStatus::Ready {
-            return Err(ModelError::InvalidModelPairing(format!(
+            return Err(invalid_pairing(format!(
                 "model {} is not ready; status is {:?}",
                 entry.id, entry.status
             )));
@@ -187,9 +183,7 @@ impl<B: StorageBackend> ModelService<B> {
         let runtime_fingerprint = runtime_fingerprint(&entry, &backend_plan)?;
         let info = self.model_info_from_entry(&entry, true);
 
-        if self.current.as_ref().is_some_and(|current| {
-            current.info.id == entry.id && current.runtime_fingerprint == runtime_fingerprint
-        }) {
+        if self.is_loaded_model_with_fingerprint(&entry.id, &runtime_fingerprint) {
             return Ok(LoadedModelInfo {
                 model: info,
                 backend: backend_plan.selection,
@@ -220,37 +214,40 @@ impl<B: StorageBackend> ModelService<B> {
     }
 
     fn model_info_from_entry(&self, entry: &super::ModelEntry, loaded: bool) -> ModelInfo {
-        let mut bytes = 0_u64;
-        let mut source = ModelSourceKind::Local;
-        for asset_id in entry
+        let assets = entry
             .model_asset_ids
             .iter()
             .chain(entry.projector_asset_id.iter())
-        {
-            if let Some(asset) = self.registry.asset(asset_id) {
-                debug_assert!(bytes.checked_add(asset.bytes).is_some());
-                bytes = bytes.saturating_add(asset.bytes);
-                if matches!(asset.source, AssetSource::Remote { .. }) {
-                    source = ModelSourceKind::Remote;
-                }
-            }
-        }
+            .filter_map(|asset_id| self.registry.asset(asset_id));
+        let summary = model_asset_summary(assets);
 
         ModelInfo {
             id: entry.id.clone(),
             name: entry.name.clone(),
             modality: entry.modality,
             status: entry.status,
-            source,
-            bytes,
+            source: summary.source,
+            bytes: summary.bytes,
             loaded,
             chat_template: None,
             bos_text: String::new(),
             eos_text: String::new(),
-            media_marker: (entry.modality == ModelModality::Vision).then(|| "<image>".to_string()),
+            media_marker: media_marker_for_modality(entry.modality),
             created_at_unix_ms: entry.created_at_unix_ms,
             updated_at_unix_ms: entry.updated_at_unix_ms,
         }
+    }
+
+    fn is_loaded_model(&self, model_id: &str) -> bool {
+        self.current
+            .as_ref()
+            .is_some_and(|current| current.info.id == model_id)
+    }
+
+    fn is_loaded_model_with_fingerprint(&self, model_id: &str, runtime_fingerprint: &str) -> bool {
+        self.current.as_ref().is_some_and(|current| {
+            current.info.id == model_id && current.runtime_fingerprint == runtime_fingerprint
+        })
     }
 }
 

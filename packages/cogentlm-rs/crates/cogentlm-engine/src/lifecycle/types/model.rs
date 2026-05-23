@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use super::assets::{AssetInspection, AssetRecord};
 
+pub const REGISTRY_MANIFEST_VERSION: u32 = 3;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelAsset {
@@ -40,6 +42,15 @@ pub enum ModelModality {
     Vision,
 }
 
+impl ModelModality {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Vision => "vision",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelStatus {
@@ -48,11 +59,30 @@ pub enum ModelStatus {
     Broken,
 }
 
+impl ModelStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::NeedsProjector => "needs_projector",
+            Self::Broken => "broken",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelSourceKind {
     Local,
     Remote,
+}
+
+impl ModelSourceKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Remote => "remote",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,7 +157,7 @@ pub struct RegistryManifest {
 impl Default for RegistryManifest {
     fn default() -> Self {
         Self {
-            version: 3,
+            version: REGISTRY_MANIFEST_VERSION,
             projector_index_revision: 0,
             assets: BTreeMap::new(),
             models: BTreeMap::new(),

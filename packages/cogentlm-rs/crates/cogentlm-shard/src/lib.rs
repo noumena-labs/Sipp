@@ -26,6 +26,12 @@ pub use inspection::{
 const GGUF_MAGIC: u32 = 0x4655_4747;
 const SUPPORTED_GGUF_VERSIONS: &[u32] = &[2, 3];
 const DEFAULT_ALIGNMENT: u64 = 32;
+pub(crate) const BYTES_PER_MIB_USIZE: usize = 1024 * 1024;
+const BYTES_PER_MIB_U64: u64 = 1024 * 1024;
+const BYTES_PER_GIB_U64: u64 = 1024 * BYTES_PER_MIB_U64;
+const DEFAULT_DIRECT_LOAD_MAX_BYTES: u64 = 2 * BYTES_PER_GIB_U64;
+const DEFAULT_SHARD_MAX_BYTES: u64 = 512 * BYTES_PER_MIB_U64;
+const COPY_BUFFER_BYTES: usize = BYTES_PER_MIB_USIZE;
 
 const SPLIT_NO_KEY: &str = "split.no";
 const SPLIT_COUNT_KEY: &str = "split.count";
@@ -61,8 +67,8 @@ pub struct BrowserCachePolicy {
 impl Default for BrowserCachePolicy {
     fn default() -> Self {
         Self {
-            direct_load_max_bytes: 2 * 1024 * 1024 * 1024,
-            shard_max_bytes: 512 * 1024 * 1024,
+            direct_load_max_bytes: DEFAULT_DIRECT_LOAD_MAX_BYTES,
+            shard_max_bytes: DEFAULT_SHARD_MAX_BYTES,
         }
     }
 }
@@ -587,7 +593,7 @@ fn write_shard<S: GgufReadAt, W: Write>(
     let data_offset = align_to(metadata_end, shard_alignment)?;
     write_zeros(&mut output, data_offset - metadata_end)?;
 
-    let mut copy_buffer = vec![0u8; 1024 * 1024];
+    let mut copy_buffer = vec![0u8; COPY_BUFFER_BYTES];
     for (local_idx, &tensor_idx) in plan.tensors.iter().enumerate() {
         let tensor = &metadata.tensors[tensor_idx];
         let expected_position = data_offset

@@ -1,12 +1,14 @@
 //! Filesystem layout for stored model assets and registry manifests.
 
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{copy, Write};
 use std::path::{Path, PathBuf};
 
+use super::util::{invalid_source, storage_corrupt};
 use super::{
     detect_model_from_gguf_bytes, AssetRecord, AssetRole, AssetSource, ModelAssetKind, ModelError,
 };
+use crate::defaults::BYTES_PER_MIB;
 
 mod content;
 mod metadata;
@@ -19,7 +21,24 @@ use metadata::{normalize_asset_name, unique_temp_suffix};
 const ASSETS_DIR: &str = "assets";
 const INCOMING_DIR: &str = ".incoming";
 const REGISTRY_FILE_NAME: &str = "registry.json";
-pub(super) const COPY_BUFFER_BYTES: usize = 1024 * 1024;
+const ASSET_ID_PREFIX: &str = "asset-";
+pub(super) const COPY_BUFFER_BYTES: usize = BYTES_PER_MIB;
+
+fn asset_integrity_error(asset_id: &str, reason: &str) -> ModelError {
+    storage_corrupt(format!("asset {asset_id} has hash match but {reason}"))
+}
+
+fn asset_missing(asset_id: &str) -> ModelError {
+    ModelError::AssetMissing(asset_id.to_string())
+}
+
+fn asset_id_from_hash(hash: &str) -> String {
+    format!("{ASSET_ID_PREFIX}{hash}")
+}
+
+fn incoming_asset_file_name() -> String {
+    format!("{ASSET_ID_PREFIX}{}.tmp", unique_temp_suffix())
+}
 
 pub trait StorageBackend: Clone + Send + Sync + 'static {
     fn root(&self) -> &Path;
@@ -144,7 +163,7 @@ impl<B: StorageBackend> AssetStore<B> {
         let path = path.as_ref();
         let metadata = fs::metadata(path)?;
         if !metadata.is_file() {
-            return Err(ModelError::InvalidModelSource(format!(
+            return Err(invalid_source(format!(
                 "model asset is not a file: {}",
                 path.display()
             )));
@@ -154,7 +173,7 @@ impl<B: StorageBackend> AssetStore<B> {
         let source_path = canonicalize_existing_path(path)?;
         let source_modified_unix_ms = modified_unix_ms(&metadata);
         let (hash, prefix) = inspect_local_path(path)?;
-        let id = format!("asset-{hash}");
+        let id = asset_id_from_hash(&hash);
         let storage_path = self.backend.asset_storage_path(&id);
         let final_path = self.backend.asset_path(&id);
         let already_present = final_path.exists();
@@ -162,31 +181,16 @@ impl<B: StorageBackend> AssetStore<B> {
         if already_present {
             let existing_bytes = fs::metadata(&final_path)?.len();
             if existing_bytes != metadata.len() {
-                return Err(ModelError::StorageCorrupt(format!(
-                    "asset {} has hash match but byte-size mismatch",
-                    id
-                )));
+                return Err(asset_integrity_error(&id, "byte-size mismatch"));
             }
             let existing_hash = hash_file(&final_path)?;
             if existing_hash != hash {
-                return Err(ModelError::StorageCorrupt(format!(
-                    "asset {} has hash match but content mismatch",
-                    id
-                )));
+                return Err(asset_integrity_error(&id, "content mismatch"));
             }
         } else {
             let tmp_path = self.incoming_path();
             stage_local_path(path, &tmp_path)?;
-            if let Some(parent) = final_path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            match fs::rename(&tmp_path, &final_path) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    fs::remove_file(tmp_path)?;
-                }
-                Err(error) => return Err(ModelError::Io(error)),
-            }
+            publish_staged_asset(&tmp_path, &final_path)?;
         }
 
         let detection = detect_model_from_gguf_bytes(&name, &prefix)?;
@@ -220,13 +224,13 @@ impl<B: StorageBackend> AssetStore<B> {
         let path = self.backend.resolve_storage_path(&record.storage_path);
         let metadata = fs::metadata(&path).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
-                ModelError::AssetMissing(record.id.clone())
+                asset_missing(&record.id)
             } else {
                 ModelError::Io(error)
             }
         })?;
         if !metadata.is_file() || metadata.len() != record.bytes {
-            return Err(ModelError::AssetMissing(record.id.clone()));
+            return Err(asset_missing(&record.id));
         }
         Ok(path)
     }
@@ -244,14 +248,12 @@ impl<B: StorageBackend> AssetStore<B> {
         self.backend
             .root()
             .join(INCOMING_DIR)
-            .join(format!("asset-{}.tmp", unique_temp_suffix()))
+            .join(incoming_asset_file_name())
     }
 }
 
 fn stage_local_path(source_path: &Path, tmp_path: &Path) -> Result<(), ModelError> {
-    if let Some(parent) = tmp_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    create_parent_dir(tmp_path)?;
 
     if fs::hard_link(source_path, tmp_path).is_ok() {
         return Ok(());
@@ -260,15 +262,7 @@ fn stage_local_path(source_path: &Path, tmp_path: &Path) -> Result<(), ModelErro
     let copy_result = (|| -> Result<(), ModelError> {
         let mut source = File::open(source_path)?;
         let mut tmp = File::create(tmp_path)?;
-        let mut buffer = vec![0u8; COPY_BUFFER_BYTES];
-
-        loop {
-            let read = source.read(&mut buffer)?;
-            if read == 0 {
-                break;
-            }
-            tmp.write_all(&buffer[..read])?;
-        }
+        copy(&mut source, &mut tmp)?;
         tmp.sync_all()?;
         Ok(())
     })();
@@ -277,6 +271,25 @@ fn stage_local_path(source_path: &Path, tmp_path: &Path) -> Result<(), ModelErro
         let _ = fs::remove_file(tmp_path);
     }
     copy_result
+}
+
+fn publish_staged_asset(tmp_path: &Path, final_path: &Path) -> Result<(), ModelError> {
+    create_parent_dir(final_path)?;
+    match fs::rename(tmp_path, final_path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            fs::remove_file(tmp_path)?;
+            Ok(())
+        }
+        Err(error) => Err(ModelError::Io(error)),
+    }
+}
+
+fn create_parent_dir(path: &Path) -> Result<(), ModelError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    Ok(())
 }
 
 fn canonicalize_existing_path(path: &Path) -> Result<PathBuf, ModelError> {

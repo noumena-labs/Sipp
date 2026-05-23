@@ -35,6 +35,33 @@ fn drain_into_reserves_outer_frame_capacity_from_ring_usage() {
 }
 
 #[test]
+fn drain_helpers_preserve_capacity_and_followup_byte_limit_rules() {
+    assert_eq!(
+        possible_drain_frame_count(TOKEN_RING_RECORD_HEADER_BYTES * 3, 2),
+        2
+    );
+    assert_eq!(
+        possible_drain_frame_count(TOKEN_RING_RECORD_HEADER_BYTES - 1, 8),
+        0
+    );
+    assert!(!exceeds_followup_byte_limit(0, 9, 4));
+    assert!(!exceeds_followup_byte_limit(2, 4, 4));
+    assert!(exceeds_followup_byte_limit(2, 5, 4));
+}
+
+#[test]
+fn drain_into_allows_first_frame_over_byte_limit() {
+    let (producer, consumer) = token_byte_ring(128);
+    assert!(producer.try_write_frame(1, 0, b"abcdef"));
+    assert!(producer.try_write_frame(1, 0, b"gh"));
+
+    let drained = consumer.drain_available(8, 4);
+
+    assert_eq!(drained.frames.len(), 1);
+    assert_eq!(drained.frames[0].bytes, b"abcdef");
+}
+
+#[test]
 fn counts_drops_when_full() {
     let (producer, consumer) = token_byte_ring(24);
     assert!(producer.try_write_frame(1, 0, b"abc"));
@@ -42,6 +69,17 @@ fn counts_drops_when_full() {
 
     let drained = consumer.drain_available(16, 1024);
     assert_eq!(drained.frames.len(), 1);
+    assert_eq!(drained.drop_count, 1);
+}
+
+#[test]
+fn counts_drops_for_frame_larger_than_ring_capacity() {
+    let (producer, consumer) = token_byte_ring(24);
+
+    assert!(!producer.try_write_frame(1, 0, b"abcdefghi"));
+
+    let drained = consumer.drain_available(16, 1024);
+    assert!(drained.frames.is_empty());
     assert_eq!(drained.drop_count, 1);
 }
 

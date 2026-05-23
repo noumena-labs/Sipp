@@ -1,9 +1,18 @@
+use crate::collection::sorted_unique_non_empty_strings;
 use crate::error::{Error, Result};
 use crate::runtime::config::SamplingRuntimeConfig;
-use crate::runtime::request::{GenerateRequest, GenerateRequestId, GenerateTokenEmissionMode};
+use crate::runtime::llama_token;
+use crate::runtime::request::{
+    GenerateRequest, GenerateRequestId, GenerateTokenEmissionMode, MultimodalPayload,
+};
 use crate::token::tokenize;
 
 use super::super::{clamp_usize_to_i32, InferenceRuntime, DEFAULT_PROMPT_CONTEXT_KEY};
+
+const N_TOKENS_PREDICT_POSITIVE: &str = "n_tokens_predict must be positive";
+const IMAGE_BUFFERS_REQUIRED: &str = "image_buffers must not be empty";
+const REQUEST_ID_OVERFLOW: &str = "request id overflow";
+const FAILED_TO_ENQUEUE_REQUEST: &str = "failed to enqueue request";
 
 impl InferenceRuntime {
     #[allow(clippy::too_many_arguments)]
@@ -22,48 +31,21 @@ impl InferenceRuntime {
             return Err(Error::RuntimeNotReady);
         }
         if n_tokens_predict <= 0 {
-            return Err(Error::InvalidRequest("n_tokens_predict must be positive"));
+            return Err(Error::InvalidRequest(N_TOKENS_PREDICT_POSITIVE));
         }
 
-        let mut context_key = context_key.into();
-        if context_key.is_empty() {
-            context_key = DEFAULT_PROMPT_CONTEXT_KEY.to_string();
-        }
-        let prompt = prompt.into();
-        let grammar = grammar.into();
-        let json_schema = json_schema.into();
-
-        let vocab = self.vocab()?;
-        let prompt_tokens = tokenize(vocab, &prompt, true, true)?;
-        if prompt_tokens.is_empty() {
-            return Err(Error::Tokenize);
-        }
-
-        let request_id = self.next_request_id;
-        self.next_request_id = self
-            .next_request_id
-            .checked_add(1)
-            .ok_or(Error::InvalidRequest("request id overflow"))?;
-
-        let mut request = GenerateRequest::new(request_id, context_key);
-        request.original_prompt = prompt;
-        request.max_output_tokens = n_tokens_predict;
-        request.token_emission_mode = token_emission_mode;
-        request.prompt_tokens = prompt_tokens;
-        request.grammar = grammar;
-        request.json_schema = json_schema;
-        request.stop = normalize_stop_sequences(stop);
-        request.sampling = sampling;
-        request.input_tokens = clamp_usize_to_i32(request.prompt_tokens.len());
-        self.total_input_tokens = self
-            .total_input_tokens
-            .saturating_add(request.prompt_tokens.len());
-
-        if !self.request_queue.push(request) {
-            return Err(Error::InvalidRequest("failed to enqueue request"));
-        }
-
-        Ok(request_id)
+        let request = self.prepare_generate_request(GenerateRequestInput {
+            context_key: context_key.into(),
+            prompt: prompt.into(),
+            n_tokens_predict,
+            grammar: grammar.into(),
+            json_schema: json_schema.into(),
+            stop,
+            sampling,
+            token_emission_mode,
+            tokenization: RequestTokenization::Text,
+        });
+        self.enqueue_prepared_request(request?)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -83,57 +65,159 @@ impl InferenceRuntime {
             return Err(Error::RuntimeNotReady);
         }
         if n_tokens_predict <= 0 {
-            return Err(Error::InvalidRequest("n_tokens_predict must be positive"));
+            return Err(Error::InvalidRequest(N_TOKENS_PREDICT_POSITIVE));
         }
         if image_buffers.is_empty() {
-            return Err(Error::InvalidRequest("image_buffers must not be empty"));
+            return Err(Error::InvalidRequest(IMAGE_BUFFERS_REQUIRED));
         }
 
-        let mut context_key = context_key.into();
-        if context_key.is_empty() {
-            context_key = DEFAULT_PROMPT_CONTEXT_KEY.to_string();
-        }
-        let prompt = prompt.into();
-        let grammar = grammar.into();
-        let json_schema = json_schema.into();
+        let mut request = self.prepare_generate_request(GenerateRequestInput {
+            context_key: context_key.into(),
+            prompt: prompt.into(),
+            n_tokens_predict,
+            grammar: grammar.into(),
+            json_schema: json_schema.into(),
+            stop,
+            sampling,
+            token_emission_mode,
+            tokenization: RequestTokenization::Multimodal,
+        })?;
+        request.multimodal = Some(MultimodalPayload { image_buffers });
+        request.is_multimodal_turn = true;
+        self.enqueue_prepared_request(request)
+    }
+
+    fn prepare_generate_request(&mut self, input: GenerateRequestInput) -> Result<GenerateRequest> {
+        let context_key = normalize_context_key(input.context_key);
+        let prompt = input.prompt;
+        let grammar = input.grammar;
+        let json_schema = input.json_schema;
 
         let vocab = self.vocab()?;
-        let prompt_tokens = tokenize(vocab, &prompt, false, true)?;
+        let prompt_tokens = tokenize(vocab, &prompt, input.tokenization.add_bos(), true)?;
+        if input.tokenization.requires_prompt_tokens() && prompt_tokens.is_empty() {
+            return Err(Error::Tokenize);
+        }
 
+        let request_id = self.next_generate_request_id()?;
+
+        Ok(generate_request(GenerateRequestFields {
+            request_id,
+            context_key,
+            prompt,
+            prompt_tokens,
+            n_tokens_predict: input.n_tokens_predict,
+            grammar,
+            json_schema,
+            stop: input.stop,
+            sampling: input.sampling,
+            token_emission_mode: input.token_emission_mode,
+        }))
+    }
+
+    fn next_generate_request_id(&mut self) -> Result<GenerateRequestId> {
         let request_id = self.next_request_id;
         self.next_request_id = self
             .next_request_id
             .checked_add(1)
-            .ok_or(Error::InvalidRequest("request id overflow"))?;
+            .ok_or(Error::InvalidRequest(REQUEST_ID_OVERFLOW))?;
+        Ok(request_id)
+    }
 
-        let mut request = GenerateRequest::new(request_id, context_key);
-        request.original_prompt = prompt;
-        request.prompt_tokens = prompt_tokens;
-        request.multimodal = Some(crate::runtime::request::MultimodalPayload { image_buffers });
-        request.max_output_tokens = n_tokens_predict;
-        request.token_emission_mode = token_emission_mode;
-        request.is_multimodal_turn = true;
-        request.grammar = grammar;
-        request.json_schema = json_schema;
-        request.stop = normalize_stop_sequences(stop);
-        request.sampling = sampling;
+    fn enqueue_prepared_request(
+        &mut self,
+        mut request: GenerateRequest,
+    ) -> Result<GenerateRequestId> {
+        let request_id = request.id;
         request.input_tokens = clamp_usize_to_i32(request.prompt_tokens.len());
         self.total_input_tokens = self
             .total_input_tokens
             .saturating_add(request.prompt_tokens.len());
 
         if !self.request_queue.push(request) {
-            return Err(Error::InvalidRequest("failed to enqueue request"));
+            return Err(Error::InvalidRequest(FAILED_TO_ENQUEUE_REQUEST));
         }
 
         Ok(request_id)
     }
 }
 
+struct GenerateRequestInput {
+    context_key: String,
+    prompt: String,
+    n_tokens_predict: i32,
+    grammar: String,
+    json_schema: String,
+    stop: Vec<String>,
+    sampling: Option<SamplingRuntimeConfig>,
+    token_emission_mode: GenerateTokenEmissionMode,
+    tokenization: RequestTokenization,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RequestTokenization {
+    Text,
+    Multimodal,
+}
+
+impl RequestTokenization {
+    fn add_bos(self) -> bool {
+        matches!(self, Self::Text)
+    }
+
+    fn requires_prompt_tokens(self) -> bool {
+        matches!(self, Self::Text)
+    }
+}
+
+struct GenerateRequestFields {
+    request_id: GenerateRequestId,
+    context_key: String,
+    prompt: String,
+    prompt_tokens: Vec<llama_token>,
+    n_tokens_predict: i32,
+    grammar: String,
+    json_schema: String,
+    stop: Vec<String>,
+    sampling: Option<SamplingRuntimeConfig>,
+    token_emission_mode: GenerateTokenEmissionMode,
+}
+
+fn generate_request(fields: GenerateRequestFields) -> GenerateRequest {
+    let mut request = GenerateRequest::new(fields.request_id, fields.context_key);
+    request.original_prompt = fields.prompt;
+    request.prompt_tokens = fields.prompt_tokens;
+    request.max_output_tokens = fields.n_tokens_predict;
+    request.token_emission_mode = fields.token_emission_mode;
+    request.grammar = fields.grammar;
+    request.json_schema = fields.json_schema;
+    request.stop = normalize_stop_sequences(fields.stop);
+    request.sampling = fields.sampling;
+    request
+}
+
+fn normalize_context_key(context_key: impl Into<String>) -> String {
+    let context_key = context_key.into();
+    if context_key.is_empty() {
+        DEFAULT_PROMPT_CONTEXT_KEY.to_string()
+    } else {
+        context_key
+    }
+}
+
 pub(super) fn normalize_stop_sequences(stop: Vec<String>) -> Vec<String> {
-    let mut normalized = Vec::with_capacity(stop.len());
-    normalized.extend(stop.into_iter().filter(|value| !value.is_empty()));
-    normalized.sort();
-    normalized.dedup();
-    normalized
+    sorted_unique_non_empty_strings(stop)
+}
+
+#[cfg(test)]
+pub(super) fn request_tokenization_flags_for_tests(tokenization: &str) -> Option<(bool, bool)> {
+    let tokenization = match tokenization {
+        "text" => RequestTokenization::Text,
+        "multimodal" => RequestTokenization::Multimodal,
+        _ => return None,
+    };
+    Some((
+        tokenization.add_bos(),
+        tokenization.requires_prompt_tokens(),
+    ))
 }

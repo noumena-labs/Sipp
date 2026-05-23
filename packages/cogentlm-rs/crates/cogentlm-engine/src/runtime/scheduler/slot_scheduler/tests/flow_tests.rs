@@ -115,6 +115,50 @@ fn finalize_completed_slot_writes_response_and_releases_session() {
 }
 
 #[test]
+fn finalize_failed_slot_writes_terminal_error() {
+    let mut scheduler = SlotScheduler::default();
+    scheduler.resize(1);
+    let mut queue = RequestQueue::new();
+    assert!(queue.push(request(1, "ctx")));
+    let mut sessions = SessionStore::new(2, 1);
+    assert!(scheduler.admit_pending_requests(&mut queue, &mut sessions));
+
+    let slot = &mut scheduler.slots[0];
+    slot.phase = SlotPhase::Failed;
+    slot.terminal_error_message = "decode failed".to_string();
+
+    scheduler.finalize_completed_slots(&mut queue, &mut sessions);
+
+    let response = queue.peek_completed_response(1).expect("response");
+    assert_eq!(response.status, GenerateResponseStatus::Failed);
+    assert_eq!(response.error_message, "decode failed");
+}
+
+#[test]
+fn finalize_cancelled_slot_prefers_cancel_message() {
+    let mut scheduler = SlotScheduler::default();
+    scheduler.resize(1);
+    let mut queue = RequestQueue::new();
+    assert!(queue.push(request(1, "ctx")));
+    let mut sessions = SessionStore::new(2, 1);
+    assert!(scheduler.admit_pending_requests(&mut queue, &mut sessions));
+    assert!(queue.cancel(1, "cancelled by caller".to_string()));
+
+    let slot = &mut scheduler.slots[0];
+    slot.phase = SlotPhase::Failed;
+    slot.terminal_error_message = "decode failed".to_string();
+
+    scheduler.finalize_completed_slots(&mut queue, &mut sessions);
+
+    let response = queue.peek_completed_response(1).expect("response");
+    assert_eq!(response.status, GenerateResponseStatus::Cancelled);
+    assert_eq!(
+        response.error_message,
+        crate::runtime::REQUEST_CANCELLED_MESSAGE
+    );
+}
+
+#[test]
 fn emit_buffered_piece_appends_output_and_stream_frame_when_enabled() {
     let mut queue = RequestQueue::new();
     let (producer, consumer) = token_byte_ring(1024);

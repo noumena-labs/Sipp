@@ -13,6 +13,7 @@ use crate::runtime::llama_seq_id;
 use crate::runtime::request::GenerateRequestLifecycle;
 use crate::runtime::scheduler::{SlotPhase, SlotState};
 use crate::runtime::session::SequenceState;
+use crate::runtime::REQUEST_CANCELLED_MESSAGE;
 
 use super::super::numeric::{nonnegative_i32_to_usize, usize_to_i32};
 
@@ -54,11 +55,7 @@ pub(super) fn normalize_runnable_slot_state(
             && slot.generated_tokens.len() >= nonnegative_i32_to_usize(max_output_tokens);
 
         if cancel_requested {
-            slot.terminal_error_message = "Request cancelled.".to_string();
-            slot.phase = SlotPhase::Failed;
-            if let Some(request_mut) = slot.request_mut() {
-                request_mut.lifecycle = GenerateRequestLifecycle::Cancelled;
-            }
+            slot.cancel(REQUEST_CANCELLED_MESSAGE);
             return true;
         }
 
@@ -119,12 +116,7 @@ fn recover_decode_seed_state(
         return true;
     }
     if prompt_len == 0 {
-        slot.terminal_error_message =
-            "Prompt tokenization produced no tokens, so decode had no seed token.".to_string();
-        slot.phase = SlotPhase::Failed;
-        if let Some(request) = slot.request_mut() {
-            request.lifecycle = GenerateRequestLifecycle::Failed;
-        }
+        slot.fail("Prompt tokenization produced no tokens, so decode had no seed token.");
         return false;
     }
     if slot.prefill_cursor < prompt_len {
@@ -135,12 +127,7 @@ fn recover_decode_seed_state(
         return true;
     }
     if shared_context.is_null() || slot.seq_id < 0 {
-        slot.terminal_error_message =
-            "Decode slot lost shared context state before its first sampled token.".to_string();
-        slot.phase = SlotPhase::Failed;
-        if let Some(request) = slot.request_mut() {
-            request.lifecycle = GenerateRequestLifecycle::Failed;
-        }
+        slot.fail("Decode slot lost shared context state before its first sampled token.");
         return false;
     }
     if slot.mirror.n_past <= 0 || slot.mirror.current_kv_tokens.is_empty() {
@@ -153,12 +140,7 @@ fn recover_decode_seed_state(
     }
 
     let Some(retained_n_past) = slot.mirror.n_past.checked_sub(1) else {
-        slot.terminal_error_message =
-            "Decode slot KV length underflowed during seed recovery.".to_string();
-        slot.phase = SlotPhase::Failed;
-        if let Some(request) = slot.request_mut() {
-            request.lifecycle = GenerateRequestLifecycle::Failed;
-        }
+        slot.fail("Decode slot KV length underflowed during seed recovery.");
         return false;
     };
     let retained_tokens = cmp::min(
@@ -168,12 +150,7 @@ fn recover_decode_seed_state(
     slot.mirror.current_kv_tokens.truncate(retained_tokens);
     let mem = unsafe { ffi::llama_get_memory(shared_context) };
     if !reconcile_physical_state(&mut slot.mirror, slot.seq_id, mem) {
-        slot.terminal_error_message =
-            "Failed to reconcile shared KV state for decode seed recovery.".to_string();
-        slot.phase = SlotPhase::Failed;
-        if let Some(request) = slot.request_mut() {
-            request.lifecycle = GenerateRequestLifecycle::Failed;
-        }
+        slot.fail("Failed to reconcile shared KV state for decode seed recovery.");
         return false;
     }
     slot.prefill_cursor = cmp::min(prompt_len - 1, retained_tokens);

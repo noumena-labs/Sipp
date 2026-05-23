@@ -117,35 +117,18 @@ impl InferenceRuntime {
             };
 
             if unique_slot_first_use(&mut timed_slots, contribution.slot_index) {
-                request.debug_metrics_scheduler_ticks =
-                    request.debug_metrics_scheduler_ticks.saturating_add(1);
-                request.debug_metrics_normalize_ms += debug_metrics.normalize_ms;
-                request.debug_metrics_select_slots_ms += debug_metrics.select_slots_ms;
-                request.debug_metrics_plan_ms += debug_metrics.plan_ms;
-                request.debug_metrics_batch_build_ms += debug_metrics.batch_build_ms;
-                request.debug_metrics_llama_decode_ms += debug_metrics.llama_decode_ms;
-                request.debug_metrics_llama_sync_ms += debug_metrics.llama_sync_ms;
-                request.debug_metrics_apply_bookkeeping_ms += debug_metrics.apply_bookkeeping_ms;
-                request.debug_metrics_apply_decode_results_ms +=
-                    debug_metrics.apply_decode_results_ms;
-                request.debug_metrics_sample_ms += debug_metrics.sample_ms;
-                request.debug_metrics_token_piece_ms += debug_metrics.token_piece_ms;
-                request.debug_metrics_emit_ms += debug_metrics.emit_ms;
-                request.debug_metrics_prefix_queue_ms += debug_metrics.prefix_queue_ms;
-                request.debug_metrics_post_decode_ms += debug_metrics.post_decode_ms;
+                apply_debug_metrics_tick(request, debug_metrics);
             }
 
             match contribution.kind {
                 BatchContributionKind::Prefill => {
                     if unique_slot_first_use(&mut prefill_slots, contribution.slot_index) {
-                        request.debug_metrics_prefill_ticks =
-                            request.debug_metrics_prefill_ticks.saturating_add(1);
+                        increment_debug_counter(&mut request.debug_metrics_prefill_ticks);
                     }
                 }
                 BatchContributionKind::Decode => {
                     if unique_slot_first_use(&mut decode_slots, contribution.slot_index) {
-                        request.debug_metrics_decode_ticks =
-                            request.debug_metrics_decode_ticks.saturating_add(1);
+                        increment_debug_counter(&mut request.debug_metrics_decode_ticks);
                     }
                 }
             }
@@ -153,48 +136,41 @@ impl InferenceRuntime {
     }
 }
 
+fn apply_debug_metrics_tick(request: &mut GenerateRequest, debug_metrics: DebugMetricsTick) {
+    increment_debug_counter(&mut request.debug_metrics_scheduler_ticks);
+    request.debug_metrics_normalize_ms += debug_metrics.normalize_ms;
+    request.debug_metrics_select_slots_ms += debug_metrics.select_slots_ms;
+    request.debug_metrics_plan_ms += debug_metrics.plan_ms;
+    request.debug_metrics_batch_build_ms += debug_metrics.batch_build_ms;
+    request.debug_metrics_llama_decode_ms += debug_metrics.llama_decode_ms;
+    request.debug_metrics_llama_sync_ms += debug_metrics.llama_sync_ms;
+    request.debug_metrics_apply_bookkeeping_ms += debug_metrics.apply_bookkeeping_ms;
+    request.debug_metrics_apply_decode_results_ms += debug_metrics.apply_decode_results_ms;
+    request.debug_metrics_sample_ms += debug_metrics.sample_ms;
+    request.debug_metrics_token_piece_ms += debug_metrics.token_piece_ms;
+    request.debug_metrics_emit_ms += debug_metrics.emit_ms;
+    request.debug_metrics_prefix_queue_ms += debug_metrics.prefix_queue_ms;
+    request.debug_metrics_post_decode_ms += debug_metrics.post_decode_ms;
+}
+
 fn request_observability(request: &GenerateRequest) -> RuntimeObservabilityMetrics {
-    let mut metrics = RuntimeObservabilityMetrics {
-        input_tokens: request.input_tokens,
-        output_tokens: request.output_tokens,
-        cache_hits: request.cache_hits,
-        prefill_tokens: request.prefill_tokens,
-        prefill_ms: request.prefill_ms,
-        decode_ms: request.decode_ms,
-        native_gpu_ms: request.native_gpu_ms,
-        native_sync_ms: request.native_sync_ms,
-        native_logic_ms: request.native_logic_ms,
-        debug_metrics_scheduler_ticks: request.debug_metrics_scheduler_ticks,
-        debug_metrics_decode_ticks: request.debug_metrics_decode_ticks,
-        debug_metrics_prefill_ticks: request.debug_metrics_prefill_ticks,
-        debug_metrics_backend_sampler_attach_attempts: request
-            .debug_metrics_backend_sampler_attach_attempts,
-        debug_metrics_backend_sampler_attach_failures: request
-            .debug_metrics_backend_sampler_attach_failures,
-        debug_metrics_admit_ms: request.debug_metrics_admit_ms,
-        debug_metrics_normalize_ms: request.debug_metrics_normalize_ms,
-        debug_metrics_backend_sampler_attach_ms: request.debug_metrics_backend_sampler_attach_ms,
-        debug_metrics_select_slots_ms: request.debug_metrics_select_slots_ms,
-        debug_metrics_plan_ms: request.debug_metrics_plan_ms,
-        debug_metrics_batch_build_ms: request.debug_metrics_batch_build_ms,
-        debug_metrics_llama_decode_ms: request.debug_metrics_llama_decode_ms,
-        debug_metrics_llama_sync_ms: request.debug_metrics_llama_sync_ms,
-        debug_metrics_apply_bookkeeping_ms: request.debug_metrics_apply_bookkeeping_ms,
-        debug_metrics_apply_decode_results_ms: request.debug_metrics_apply_decode_results_ms,
-        debug_metrics_sample_ms: request.debug_metrics_sample_ms,
-        debug_metrics_token_piece_ms: request.debug_metrics_token_piece_ms,
-        debug_metrics_emit_ms: request.debug_metrics_emit_ms,
-        debug_metrics_prefix_queue_ms: request.debug_metrics_prefix_queue_ms,
-        debug_metrics_finalize_ms: request.debug_metrics_finalize_ms,
-        debug_metrics_commit_observability_ms: request.debug_metrics_commit_observability_ms,
-        debug_metrics_post_decode_ms: request.debug_metrics_post_decode_ms,
-        ..RuntimeObservabilityMetrics::default()
-    };
-    if request.output_tokens > 1 {
-        metrics.itl_avg_ms = request.decode_ms / f64::from(request.output_tokens - 1);
+    RuntimeObservabilityMetrics::from_request(request)
+}
+
+fn increment_debug_counter(counter: &mut i32) {
+    *counter = counter.saturating_add(1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::increment_debug_counter;
+
+    #[test]
+    fn increment_debug_counter_saturates() {
+        let mut counter = i32::MAX;
+
+        increment_debug_counter(&mut counter);
+
+        assert_eq!(counter, i32::MAX);
     }
-    if let (Some(enqueued), Some(first_token)) = (request.enqueued_at, request.first_token_at) {
-        metrics.ttft_ms = duration_ms(enqueued, first_token);
-    }
-    metrics
 }

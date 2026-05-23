@@ -148,9 +148,5 @@ fn run_native_runtime(args: &Args, stdout: &mut impl Write) -> anyhow::Result<()
 }
 
 fn cli_gpu_layers(value: i32) -> GpuLayerConfig {
-    if value < 0 {
-        GpuLayerConfig::All
-    } else {
-        GpuLayerConfig::Count(value)
-    }
+    GpuLayerConfig::from_layer_count(value)
 }

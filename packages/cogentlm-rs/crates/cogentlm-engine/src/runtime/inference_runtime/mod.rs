@@ -13,7 +13,7 @@ use cogentlm_sys as ffi;
 use crate::runtime::config::{NativeRuntimeConfig, ResolvedRuntimeLimits};
 use crate::runtime::llama::LlamaBatchBuilder;
 use crate::runtime::metrics::RuntimeObservabilityMetrics;
-use crate::runtime::request::{GenerateRequestId, GenerateRequestLifecycle, RequestQueue};
+use crate::runtime::request::{GenerateRequestId, RequestQueue, NO_SAMPLED_TOKEN_ID};
 use crate::runtime::residency::ResidencyLease;
 use crate::runtime::scheduler::{
     BatchPlanner, SamplerCacheKey, SharedBatchPlan, SlotPhase, SlotScheduler,
@@ -54,6 +54,7 @@ use numeric::{
 
 const DEFAULT_PROMPT_CONTEXT_KEY: &str = "__primary_prompt__";
 const PREFIX_SNAPSHOT_COMMIT_BUDGET: usize = 2;
+const LLAMA_SAMPLER_SAMPLE_FAILED: &str = "llama_sampler_sample() failed.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RequestStepResult {
@@ -203,11 +204,7 @@ impl InferenceRuntime {
                 if active_slot.phase != SlotPhase::Failed
                     && active_slot.phase != SlotPhase::Completed
                 {
-                    active_slot.terminal_error_message = diagnostic;
-                    active_slot.phase = SlotPhase::Failed;
-                    if let Some(request) = active_slot.request_mut() {
-                        request.lifecycle = GenerateRequestLifecycle::Failed;
-                    }
+                    active_slot.fail(diagnostic);
                 }
             }
 
@@ -326,7 +323,7 @@ impl InferenceRuntime {
                     .push(PendingLogitsContribution {
                         slot_index: contribution.slot_index,
                         batch_token_index,
-                        sampled_token: -1,
+                        sampled_token: NO_SAMPLED_TOKEN_ID,
                     });
             }
             batch_token_index += 1;

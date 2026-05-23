@@ -1,4 +1,3 @@
-use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -8,9 +7,13 @@ use cogentlm_shard::{
 };
 use serde::Serialize;
 
+use crate::ffi::{into_c_string, read_optional_c_string, serialize_json_response};
+
 const CODE_INVALID_GGUF: &str = "INVALID_GGUF";
 const CODE_UNSUPPORTED_GGUF_VERSION: &str = "UNSUPPORTED_GGUF_VERSION";
 const CODE_GGUF_METADATA_TOO_LARGE: &str = "GGUF_METADATA_TOO_LARGE";
+const GGUF_SERIALIZATION_FALLBACK: &str =
+    "{\"ok\":false,\"error\":{\"code\":\"INVALID_GGUF\",\"message\":\"failed to serialize GGUF response\"}}";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -38,7 +41,7 @@ pub extern "C" fn cogentlm_inspect_gguf_metadata_json(
     bytes_len: usize,
 ) -> *mut c_char {
     catch_unwind(AssertUnwindSafe(|| {
-        let response = with_bytes(bytes_ptr, bytes_len, |bytes| inspect_gguf_metadata(bytes));
+        let response = with_bytes(bytes_ptr, bytes_len, inspect_gguf_metadata);
         into_c_string(response_json(response))
     }))
     .unwrap_or_else(|_| {
@@ -131,32 +134,13 @@ fn response_json<T>(response: GgufJsonResponse<T>) -> String
 where
     T: Serialize,
 {
-    serde_json::to_string(&response).unwrap_or_else(|_| {
-        "{\"ok\":false,\"error\":{\"code\":\"INVALID_GGUF\",\"message\":\"failed to serialize GGUF response\"}}".to_string()
-    })
-}
-
-fn read_optional_c_string(value: *const c_char) -> Option<String> {
-    if value.is_null() {
-        return Some(String::new());
-    }
-    Some(
-        unsafe { CStr::from_ptr(value) }
-            .to_string_lossy()
-            .into_owned(),
-    )
-}
-
-fn into_c_string(value: String) -> *mut c_char {
-    let sanitized = value.replace('\0', "");
-    CString::new(sanitized)
-        .map(CString::into_raw)
-        .unwrap_or(std::ptr::null_mut())
+    serialize_json_response(&response, GGUF_SERIALIZATION_FALLBACK)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::CString;
 
     #[test]
     fn non_gguf_detection_returns_unknown_model() {

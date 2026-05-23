@@ -1,7 +1,9 @@
 use crate::engine::protocol::{EngineEvent, EngineState, EngineStatus, ModelState};
 use crate::runtime::InferenceRuntime;
 
-use super::stats::{engine_stats_from_runtime, read_backend_info, unix_time_ms};
+use crate::runtime::numeric::unix_time_ms;
+
+use super::stats::{engine_stats_from_runtime, read_backend_info};
 use super::EngineEventSubscribers;
 
 pub(super) fn build_engine_state_with_status(
@@ -10,13 +12,7 @@ pub(super) fn build_engine_state_with_status(
     status: Option<EngineStatus>,
 ) -> EngineState {
     EngineState {
-        status: status.unwrap_or_else(|| {
-            if runtime.is_ready() {
-                EngineStatus::Ready
-            } else {
-                EngineStatus::Error
-            }
-        }),
+        status: status.unwrap_or_else(|| default_runtime_status(runtime)),
         model: Some(model_state.clone()),
         backend: read_backend_info(),
         runtime: Some(runtime.resolved_runtime_limits()),
@@ -29,6 +25,14 @@ pub(super) fn build_engine_state_with_status(
     }
 }
 
+fn default_runtime_status(runtime: &InferenceRuntime) -> EngineStatus {
+    if runtime.is_ready() {
+        EngineStatus::Ready
+    } else {
+        EngineStatus::Error
+    }
+}
+
 pub(super) fn emit_state_event(
     runtime: &InferenceRuntime,
     model_state: &ModelState,
@@ -37,11 +41,11 @@ pub(super) fn emit_state_event(
 ) {
     emit_event(
         event_subscribers,
-        EngineEvent::State(build_engine_state_with_status(
+        EngineEvent::State(Box::new(build_engine_state_with_status(
             runtime,
             model_state,
             Some(status),
-        )),
+        ))),
     );
 }
 

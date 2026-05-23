@@ -11,6 +11,19 @@ pub enum EngineStatus {
     Closed,
 }
 
+impl EngineStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Loading => "loading",
+            Self::Ready => "ready",
+            Self::Running => "running",
+            Self::Error => "error",
+            Self::Closed => "closed",
+        }
+    }
+}
+
 /// Current lifecycle state of a live request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestStatus {
@@ -22,6 +35,19 @@ pub enum RequestStatus {
     Cancelled,
 }
 
+impl RequestStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Prefill => "prefill",
+            Self::Decode => "decode",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
 /// Why a request stopped producing tokens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FinishReason {
@@ -29,6 +55,17 @@ pub enum FinishReason {
     Length,
     Cancelled,
     Error,
+}
+
+impl FinishReason {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Stop => "stop",
+            Self::Length => "length",
+            Self::Cancelled => "cancelled",
+            Self::Error => "error",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -171,7 +208,7 @@ pub struct RequestResult {
 /// Runtime event emitted by the engine actor.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EngineEvent {
-    State(EngineState),
+    State(Box<EngineState>),
     LoadProgress {
         loaded_bytes: u64,
         total_bytes: Option<u64>,
@@ -182,7 +219,7 @@ pub enum EngineEvent {
         stream_id: u32,
     },
     RequestCompleted {
-        result: RequestResult,
+        result: Box<RequestResult>,
     },
     RequestFailed {
         request_id: String,

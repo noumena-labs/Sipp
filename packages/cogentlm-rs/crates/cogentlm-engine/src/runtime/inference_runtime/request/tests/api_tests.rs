@@ -1,4 +1,6 @@
-use crate::runtime::inference_runtime::request::api::normalize_stop_sequences;
+use crate::runtime::inference_runtime::request::api::{
+    normalize_stop_sequences, request_tokenization_flags_for_tests,
+};
 
 #[test]
 fn normalize_stop_sequences_drops_empty_and_deduplicates() {
@@ -10,4 +12,17 @@ fn normalize_stop_sequences_drops_empty_and_deduplicates() {
     ]);
 
     assert_eq!(normalized, ["aa", "zz"]);
+}
+
+#[test]
+fn request_tokenization_modes_preserve_text_and_multimodal_flags() {
+    assert_eq!(
+        request_tokenization_flags_for_tests("text"),
+        Some((true, true))
+    );
+    assert_eq!(
+        request_tokenization_flags_for_tests("multimodal"),
+        Some((false, false))
+    );
+    assert_eq!(request_tokenization_flags_for_tests("unknown"), None);
 }

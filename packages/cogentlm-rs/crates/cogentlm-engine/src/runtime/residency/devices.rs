@@ -1,6 +1,15 @@
 use serde_json::Value;
 
-use crate::error::{Error, Result};
+use crate::backend::{
+    json_array, json_str, json_u64, DEVICE_TYPE_GPU, DEVICE_TYPE_IGPU, KEY_DEVICES, KEY_DEVICE_ID,
+    KEY_MEMORY_FREE_BYTES, KEY_NAME, KEY_TYPE,
+};
+use crate::error::Result;
+
+use super::runtime_action_failed;
+
+const UNKNOWN_DEVICE_COMPONENT: &str = "unknown";
+const PARSE_BACKEND_RESIDENCY_FAILED: &str = "failed to parse backend residency";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct GpuLeaseDevice {
@@ -9,36 +18,43 @@ pub(super) struct GpuLeaseDevice {
 }
 
 pub(super) fn parse_gpu_lease_devices(raw: &str) -> Result<Vec<GpuLeaseDevice>> {
-    let value: Value = serde_json::from_str(raw).map_err(|error| {
-        Error::RuntimeCommand(format!("failed to parse backend residency: {error}"))
-    })?;
-    let Some(devices) = value.get("devices").and_then(Value::as_array) else {
+    let value: Value = serde_json::from_str(raw)
+        .map_err(|error| runtime_action_failed(PARSE_BACKEND_RESIDENCY_FAILED, error))?;
+    let Some(devices) = json_array(&value, KEY_DEVICES) else {
         return Ok(Vec::new());
     };
 
     let mut out = Vec::with_capacity(devices.len());
     for (index, device) in devices.iter().enumerate() {
-        let device_type = device
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if device_type != "GPU" && device_type != "IGPU" {
+        if !is_gpu_lease_device(device) {
             continue;
         }
-        let identity = device
-            .get("deviceId")
-            .and_then(Value::as_str)
-            .or_else(|| device.get("name").and_then(Value::as_str))
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("gpu-{index}"));
         out.push(GpuLeaseDevice {
-            key: sanitize_lease_component(&identity),
-            free_bytes: device.get("memoryFreeBytes").and_then(Value::as_u64),
+            key: sanitize_lease_component(&gpu_lease_device_identity(device, index)),
+            free_bytes: json_u64(device, KEY_MEMORY_FREE_BYTES),
         });
     }
-    out.sort_by(|left, right| left.key.cmp(&right.key));
-    out.dedup_by(|left, right| left.key == right.key);
+    sort_unique_lease_devices(&mut out);
     Ok(out)
+}
+
+fn is_gpu_lease_device(device: &Value) -> bool {
+    matches!(
+        json_str(device, KEY_TYPE),
+        Some(DEVICE_TYPE_GPU | DEVICE_TYPE_IGPU)
+    )
+}
+
+fn gpu_lease_device_identity(device: &Value, index: usize) -> String {
+    json_str(device, KEY_DEVICE_ID)
+        .or_else(|| json_str(device, KEY_NAME))
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("gpu-{index}"))
+}
+
+fn sort_unique_lease_devices(devices: &mut Vec<GpuLeaseDevice>) {
+    devices.sort_by(|left, right| left.key.cmp(&right.key));
+    devices.dedup_by(|left, right| left.key == right.key);
 }
 
 fn sanitize_lease_component(value: &str) -> String {
@@ -53,7 +69,7 @@ fn sanitize_lease_component(value: &str) -> String {
         })
         .collect::<String>();
     if sanitized.is_empty() {
-        "unknown".to_string()
+        UNKNOWN_DEVICE_COMPONENT.to_string()
     } else {
         sanitized
     }
@@ -91,5 +107,52 @@ mod tests {
             ]
         );
         assert!(devices.capacity() >= 4);
+    }
+
+    #[test]
+    fn gpu_lease_device_helpers_preserve_identity_and_dedup_rules() {
+        let device = serde_json::json!({
+            "type": "GPU",
+            "deviceId": "pci:0",
+            "name": "fallback"
+        });
+        let cpu = serde_json::json!({ "type": "CPU", "name": "cpu" });
+        let unnamed = serde_json::json!({ "type": "IGPU" });
+
+        assert!(is_gpu_lease_device(&device));
+        assert!(!is_gpu_lease_device(&cpu));
+        assert_eq!(gpu_lease_device_identity(&device, 3), "pci:0");
+        assert_eq!(gpu_lease_device_identity(&unnamed, 3), "gpu-3");
+
+        let mut devices = vec![
+            GpuLeaseDevice {
+                key: "b".to_string(),
+                free_bytes: Some(2),
+            },
+            GpuLeaseDevice {
+                key: "a".to_string(),
+                free_bytes: Some(1),
+            },
+            GpuLeaseDevice {
+                key: "b".to_string(),
+                free_bytes: Some(3),
+            },
+        ];
+
+        sort_unique_lease_devices(&mut devices);
+
+        assert_eq!(
+            devices,
+            vec![
+                GpuLeaseDevice {
+                    key: "a".to_string(),
+                    free_bytes: Some(1),
+                },
+                GpuLeaseDevice {
+                    key: "b".to_string(),
+                    free_bytes: Some(2),
+                },
+            ]
+        );
     }
 }
