@@ -101,6 +101,7 @@ export interface RustLifecycleResponse<T> {
 }
 
 export type RustLifecycleHandle = number;
+export type RustLifecycleBackendPreference = 'auto' | 'cpu' | 'webgpu';
 
 export interface RustLifecycleCreateValue {
   handle: RustLifecycleHandle;
@@ -127,6 +128,7 @@ export type RustLifecycleLoadSource =
   | RustLifecycleLoadSourceAssets;
 
 export interface RustLifecycleLoadOptions {
+  backend?: RustLifecycleBackendPreference;
   runtime?: NativeRuntimeConfig;
   observability?: 'off' | 'runtime' | 'profile';
 }
@@ -628,7 +630,7 @@ export class WasmBridge {
     }
     const reader = blob.stream().getReader();
     try {
-      return this.withSha256((handle) => {
+      return await this.withSha256((handle) => {
         return (async () => {
           while (true) {
             if (signal?.aborted) {
@@ -644,8 +646,11 @@ export class WasmBridge {
           }
         })();
       });
-    } finally {
-      reader.releaseLock();
+    } catch (error) {
+      try {
+        await reader.cancel(error);
+      } catch {}
+      throw error;
     }
   }
 

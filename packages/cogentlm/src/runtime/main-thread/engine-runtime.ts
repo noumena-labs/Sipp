@@ -582,6 +582,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         const createModule = await this.importModuleFactory(moduleUrl);
         const moduleConfig: EngineModuleOptions = { ...(this.config.moduleOptions ?? {}) };
         const userLocateFile = moduleConfig.locateFile;
+        moduleConfig.printErr ??= () => {};
 
         moduleConfig.locateFile = (path: string, prefix?: string) => {
           if (path.endsWith('.wasm')) {

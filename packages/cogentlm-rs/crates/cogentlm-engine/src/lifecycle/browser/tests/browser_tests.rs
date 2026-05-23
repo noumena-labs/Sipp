@@ -52,6 +52,14 @@ fn classified(record: &BrowserAssetRecord) -> ClassifiedAsset {
     )
 }
 
+fn load_options(runtime: Value, observability: BrowserObservabilityMode) -> BrowserLoadOptions {
+    BrowserLoadOptions {
+        backend: BrowserBackendPreference::Cpu,
+        runtime: serde_json::from_value(runtime).expect("runtime config"),
+        observability,
+    }
+}
+
 #[test]
 fn prepares_and_commits_text_load() {
     let model = asset(
@@ -70,10 +78,10 @@ fn prepares_and_commits_text_load() {
                 explicit_projector_asset_id: None,
                 classified_projectors: Vec::new(),
             },
-            BrowserLoadOptions {
-                runtime: json!({ "context": { "n_ctx": 1024 } }),
-                observability: BrowserObservabilityMode::Runtime,
-            },
+            load_options(
+                json!({ "context": { "n_ctx": 1024 } }),
+                BrowserObservabilityMode::Runtime,
+            ),
         )
         .expect("prepare");
 
@@ -81,6 +89,18 @@ fn prepares_and_commits_text_load() {
     assert_eq!(prepared.assets.len(), 1);
     assert_eq!(prepared.model.status, ModelStatus::Ready);
     assert_eq!(prepared.manifest.assets["asset-model"].ref_count, 1);
+    assert_eq!(
+        prepared.runtime_config["placement"]["gpu_layers"],
+        json!({ "count": 0 })
+    );
+    assert_eq!(
+        prepared.runtime_config["placement"]["split_mode"],
+        json!("layer")
+    );
+    assert_eq!(
+        prepared.runtime_config["observability"]["runtime_metrics"],
+        json!(true)
+    );
 
     let committed = service
         .commit_load(BrowserCommitLoadRequest {
@@ -128,10 +148,7 @@ fn explicit_projector_failure_restores_previous_entry() {
                 explicit_projector_asset_id: Some(first_projector.id.clone()),
                 classified_projectors: Vec::new(),
             },
-            BrowserLoadOptions {
-                runtime: json!({}),
-                observability: BrowserObservabilityMode::Off,
-            },
+            load_options(json!({}), BrowserObservabilityMode::Off),
         )
         .expect("first prepare");
     assert_eq!(first.model.status, ModelStatus::Ready);
@@ -144,10 +161,7 @@ fn explicit_projector_failure_restores_previous_entry() {
                 explicit_projector_asset_id: Some(bad_projector.id),
                 classified_projectors: Vec::new(),
             },
-            BrowserLoadOptions {
-                runtime: json!({}),
-                observability: BrowserObservabilityMode::Off,
-            },
+            load_options(json!({}), BrowserObservabilityMode::Off),
         )
         .expect_err("mismatched projector");
 

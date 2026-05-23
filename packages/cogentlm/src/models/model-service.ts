@@ -30,6 +30,7 @@ import type {
 import {
   QueryError,
   type AssetRecord,
+  type BrowserBackendPreference,
   type ChatInput,
   type ChatOptions,
   type EngineEvent,
@@ -40,10 +41,8 @@ import {
   type ModelLifecycleService,
   type ModelLoadOptions,
   type ModelPairingReasonCode,
-  type ModelRuntimeOptions,
   type ModelSource,
   type ObservabilityEvent,
-  type ObservabilityMode,
   type ObservabilitySnapshot,
   type QueryObservation,
   type QueryInput,
@@ -59,7 +58,6 @@ import {
   requestResultFromGenerateResponse,
 } from './engine-protocol-adapter.js';
 import {
-  applyObservabilityMode,
   ObservabilityController,
   resolveObservabilityMode,
   toBackendProfileObservation,
@@ -78,6 +76,11 @@ interface SourceInstallResult {
 }
 
 type BaseSource = string | File | readonly string[] | readonly File[];
+type NavigatorWithGpu = Navigator & {
+  gpu?: {
+    requestAdapter(): Promise<unknown | null>;
+  };
+};
 
 function isFile(value: unknown): value is File {
   return typeof File !== 'undefined' && value instanceof File;
@@ -95,11 +98,14 @@ function isSourceObject(source: ModelSource): source is Extract<ModelSource, { m
   return typeof source === 'object' && source != null && !isFile(source) && !Array.isArray(source);
 }
 
-function toRuntimeConfig(
-  options: ModelRuntimeOptions | undefined,
-  mode: ObservabilityMode
-): NativeRuntimeConfig {
-  return applyObservabilityMode(options, mode);
+async function resolveBrowserBackend(
+  backend: BrowserBackendPreference | undefined
+): Promise<Exclude<BrowserBackendPreference, 'auto'>> {
+  if (backend === 'cpu' || backend === 'webgpu') {
+    return backend;
+  }
+  const gpu = (globalThis.navigator as NavigatorWithGpu | undefined)?.gpu;
+  return gpu != null && (await gpu.requestAdapter()) != null ? 'webgpu' : 'cpu';
 }
 
 function nowMs(): number {
@@ -557,10 +563,12 @@ export class ModelService implements ModelLifecycleService {
     const observabilityMode = resolveObservabilityMode(options.observability);
     let prepared: RustLifecyclePrepareLoadValue | null = null;
     try {
+      const backend = await resolveBrowserBackend(options.backend);
       const manifest = await this.registry.read();
       await this.cleanupBrowserSplitArtifacts(manifest);
       const rustSource = await this.buildRustLoadSource(source, manifest, loadOptions);
       prepared = rust.prepareLoad(rustSource, {
+        backend,
         runtime: options.runtime,
         observability: observabilityMode,
       });

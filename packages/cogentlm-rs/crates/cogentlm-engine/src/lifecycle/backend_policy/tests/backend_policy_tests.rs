@@ -2,6 +2,7 @@
 
 use super::super::*;
 use crate::lifecycle::test_support::strings;
+use crate::runtime::config::SplitMode;
 
 fn caps(compiled: &[&str], available: &[&str]) -> BackendCapabilities {
     BackendCapabilities {
@@ -24,6 +25,13 @@ fn cpu_forces_gpu_layers_zero() {
 
     assert_eq!(plan.selection.selected, "cpu");
     assert_eq!(plan.config.placement.gpu_layers, GpuLayerConfig::Count(0));
+    assert_eq!(plan.config.placement.split_mode, SplitMode::Layer);
+    assert_eq!(
+        plan.config.context.flash_attention,
+        FlashAttentionMode::Disabled
+    );
+    assert!(!plan.config.context.offload_kqv);
+    assert!(!plan.config.context.op_offload);
     assert!(!plan.config.observability.runtime_metrics);
     assert!(!plan.config.observability.backend_profiling);
 }
@@ -73,6 +81,8 @@ fn auto_prefers_accelerator_then_cpu() {
             .expect("auto cpu");
     assert_eq!(plan.selection.selected, "cpu");
     assert_eq!(plan.config.placement.gpu_layers, GpuLayerConfig::Count(0));
+    assert_eq!(plan.config.placement.split_mode, SplitMode::Layer);
+    assert!(!plan.config.context.offload_kqv);
 }
 
 #[test]

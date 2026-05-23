@@ -119,6 +119,7 @@ function toWorkerChatOptions(options: ChatOptions = {}): WorkerChatOptions {
 
 function toWorkerModelLoadOptions(options: ModelLoadOptions = {}): ModelLoadOptions {
   return {
+    backend: options.backend,
     observability: options.observability,
     runtime: options.runtime,
   };

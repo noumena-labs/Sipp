@@ -3,6 +3,7 @@ export {
   QueryError,
   type BackendInfo,
   type BackendProfileObservation,
+  type BrowserBackendPreference,
   type ChatInput,
   type ChatOptions,
   type EngineBackendName,

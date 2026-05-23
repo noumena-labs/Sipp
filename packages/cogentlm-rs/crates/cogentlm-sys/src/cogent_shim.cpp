@@ -4,6 +4,7 @@
 #include <cstring>
 #include <exception>
 #include <memory>
+#include <atomic>
 #include <string>
 #include <utility>
 #include <vector>
@@ -15,6 +16,7 @@
 #include "ggml-backend.h"
 #include "json-schema-to-grammar.h"
 #include "llama.h"
+#include "log.h"
 #include "mtmd-helper.h"
 #include "mtmd.h"
 #include "sampling.h"
@@ -233,7 +235,83 @@ const char * backend_dev_type_name(enum ggml_backend_dev_type type) {
     }
 }
 
+std::atomic_bool g_llama_log_quiet{false};
+
 void quiet_llama_log_callback(enum ggml_log_level, const char *, void *) {}
+
+void restore_llama_log_callback() {
+    if (g_llama_log_quiet.load()) {
+        common_log_pause(common_log_main());
+        llama_log_set(quiet_llama_log_callback, nullptr);
+    } else {
+        common_log_resume(common_log_main());
+        llama_log_set(nullptr, nullptr);
+    }
+}
+
+struct llama_log_capture {
+    std::string text;
+};
+
+void capture_llama_log_callback(enum ggml_log_level level, const char * text, void * user_data) {
+    if (level < GGML_LOG_LEVEL_WARN || text == nullptr || user_data == nullptr) {
+        return;
+    }
+    auto * capture = static_cast<llama_log_capture *>(user_data);
+    if (capture->text.size() >= 4096) {
+        return;
+    }
+    capture->text.append(text);
+}
+
+struct scoped_llama_log_capture {
+    llama_log_capture capture;
+
+    scoped_llama_log_capture() {
+        llama_log_set(capture_llama_log_callback, &capture);
+    }
+
+    ~scoped_llama_log_capture() {
+        restore_llama_log_callback();
+    }
+};
+
+std::string trim_log_detail(std::string detail) {
+    while (!detail.empty() && (detail.back() == '\n' || detail.back() == '\r' || detail.back() == ' ' || detail.back() == '\t')) {
+        detail.pop_back();
+    }
+    size_t start = 0;
+    while (start < detail.size() && (detail[start] == '\n' || detail[start] == '\r' || detail[start] == ' ' || detail[start] == '\t')) {
+        ++start;
+    }
+    if (start > 0) {
+        detail.erase(0, start);
+    }
+    if (detail.size() > 2048) {
+        detail.resize(2048);
+        detail.append("...");
+    }
+    return detail;
+}
+
+std::string common_init_failure_message(
+    const common_params & params,
+    const common_init_result_ptr & init,
+    const std::string & log_detail) {
+    std::string message = "common_init_from_params failed to load ";
+    message += (!init || init->model() == nullptr) ? "model" : "context";
+    if (!params.model.path.empty()) {
+        message += " '";
+        message += params.model.path;
+        message += "'";
+    }
+    const std::string detail = trim_log_detail(log_detail);
+    if (!detail.empty()) {
+        message += ": ";
+        message += detail;
+    }
+    return message;
+}
 
 } // namespace
 
@@ -281,10 +359,15 @@ cogent_common_init * cogent_common_init_from_params(
     try {
         auto * out = new cogent_common_init();
         out->params = params->inner;
+        scoped_llama_log_capture log_capture;
         out->inner = common_init_from_params(out->params);
         if (!out->inner || out->inner->model() == nullptr || out->inner->context() == nullptr) {
+            const std::string error = common_init_failure_message(
+                out->params,
+                out->inner,
+                log_capture.capture.text);
             delete out;
-            set_error(error_out, "common_init_from_params failed to load model/context");
+            set_error(error_out, error);
             return nullptr;
         }
         return out;
@@ -673,7 +756,8 @@ void cogent_free_buffer(void * value) {
 }
 
 void cogent_set_llama_log_quiet(bool quiet) {
-    llama_log_set(quiet ? quiet_llama_log_callback : nullptr, nullptr);
+    g_llama_log_quiet.store(quiet);
+    restore_llama_log_callback();
 }
 
 void cogent_backend_load_all(void) {

@@ -1,5 +1,21 @@
 import { createAbortError } from '../utils/abort.js';
 
+interface WritableFileSink {
+  write(chunk: Uint8Array): Promise<void>;
+  close(): Promise<void>;
+  abort(): Promise<void>;
+  release(): void;
+}
+
+function toFileSystemWriteChunk(chunk: Uint8Array): Uint8Array<ArrayBuffer> {
+  if (chunk.buffer instanceof ArrayBuffer) {
+    return chunk as Uint8Array<ArrayBuffer>;
+  }
+  const copy = new Uint8Array(chunk.byteLength);
+  copy.set(chunk);
+  return copy;
+}
+
 export interface OpfsSyncAccessHandle {
   read(buffer: Uint8Array, options?: { at?: number }): number;
   write(buffer: Uint8Array, options?: { at?: number }): number;
@@ -61,6 +77,31 @@ export class FileSystemStorage {
 
   private isNotFoundError(error: unknown): boolean {
     return typeof DOMException === 'function' && error instanceof DOMException && error.name === 'NotFoundError';
+  }
+
+  private toWritableFileSink(writable: FileSystemWritableFileStream): WritableFileSink {
+    if (
+      typeof writable.write === 'function' &&
+      typeof writable.close === 'function' &&
+      typeof writable.abort === 'function'
+    ) {
+      return {
+        write: (chunk) => writable.write(toFileSystemWriteChunk(chunk)),
+        close: () => writable.close(),
+        abort: () => writable.abort(),
+        release: () => {},
+      };
+    }
+
+    const writer = (writable as WritableStream<Uint8Array>).getWriter();
+    return {
+      write: (chunk) => writer.write(chunk),
+      close: () => writer.close(),
+      abort: () => writer.abort(),
+      release: () => {
+        writer.releaseLock();
+      },
+    };
   }
 
   /**
@@ -152,29 +193,55 @@ export class FileSystemStorage {
     const root = await this.ensureRoot();
     const handle = await root.getFileHandle(fileName, { create: true });
 
-    // We use createWritable() which returns a FileSystemWritableFileStream.
-    // In some browsers (Firefox), this might be behind a flag or limited.
-    // Use the modern piping API if possible.
     const writable = await handle.createWritable();
+    const sink = this.toWritableFileSink(writable);
+    const reader = stream.getReader();
+    let closed = false;
     try {
       let bytesWritten = 0;
-      const progressTransformer = new TransformStream({
-        transform(chunk, controller) {
-          bytesWritten += chunk.byteLength;
-          if (onProgress) onProgress(bytesWritten);
-          controller.enqueue(chunk);
-        }
-      });
 
-      await stream.pipeThrough(progressTransformer).pipeTo(writable, { signal });
+      while (true) {
+        if (signal?.aborted) {
+          throw createAbortError('File write aborted.');
+        }
+
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        if (value == null) {
+          continue;
+        }
+
+        await sink.write(value);
+        bytesWritten += value.byteLength;
+        onProgress?.(bytesWritten);
+      }
+
+      await sink.close();
+      closed = true;
       return await handle.getFile();
     } catch (e) {
       // Cleanup on failure
-      try { await writable.abort(); } catch {}
+      try {
+        if (!closed) {
+          await sink.abort();
+        }
+      } catch {}
+      try {
+        await reader.cancel(e);
+      } catch {}
       try {
         await root.removeEntry(fileName);
       } catch {}
       throw e;
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {}
+      try {
+        sink.release();
+      } catch {}
     }
   }
 

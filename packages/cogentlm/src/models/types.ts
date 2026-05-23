@@ -6,6 +6,7 @@ import type { BackendDeviceType } from '../observability/backend-observability.j
 export type ModelModality = 'text' | 'vision';
 export type ModelStatus = 'ready' | 'needs_projector' | 'broken';
 export type ModelSourceKind = 'remote' | 'local';
+export type BrowserBackendPreference = 'auto' | 'cpu' | 'webgpu';
 
 export type ModelAssetKind = 'model' | 'projector' | 'shard';
 export type ObservabilityMode = 'off' | 'runtime' | 'profile';
@@ -31,6 +32,7 @@ export type ModelRuntimeOptions = NativeRuntimeConfig;
 export interface ModelLoadOptions {
   signal?: AbortSignal;
   onProgress?: (progress: ModelLoadProgress) => void;
+  backend?: BrowserBackendPreference;
   observability?: ObservabilityMode;
   runtime?: ModelRuntimeOptions;
 }

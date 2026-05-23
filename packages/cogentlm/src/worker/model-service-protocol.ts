@@ -19,7 +19,7 @@ export interface WorkerSerializableCogentConfig {
   trustedOrigins?: string[];
 }
 
-export type WorkerModelLoadOptions = Pick<ModelLoadOptions, 'observability' | 'runtime'>;
+export type WorkerModelLoadOptions = Pick<ModelLoadOptions, 'backend' | 'observability' | 'runtime'>;
 // `streaming` carries the caller's intent across the worker boundary because
 // `onTokens` itself can't be cloned through postMessage.  When false the worker
 // runs the engine in TOKEN_EMISSION_NONE; when true the worker writes tokens

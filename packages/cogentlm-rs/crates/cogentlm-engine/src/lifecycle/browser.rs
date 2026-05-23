@@ -21,10 +21,12 @@ use crate::lifecycle::util::{
     AssetSummary,
 };
 use crate::lifecycle::{
-    AssetInspection, ClassifiedAsset, ModelAssetKind, ModelError, ModelModality,
+    AssetInspection, BackendPlan, BackendPolicy, BackendPreference, BackendSelection,
+    ClassifiedAsset, ModelAssetKind, ModelError, ModelLoadOptions, ModelModality,
     ModelPairingReason, ModelPairingState as CoreModelPairingState, ModelSourceKind, ModelStatus,
-    PairingPlan, PairingResolver, REGISTRY_MANIFEST_VERSION,
+    PairingPlan, PairingResolver, StatsMode, REGISTRY_MANIFEST_VERSION,
 };
+use crate::runtime::config::NativeRuntimeConfig;
 use crate::runtime::numeric::{
     MILLIS_PER_SECOND, SECONDS_PER_DAY, SECONDS_PER_HOUR, SECONDS_PER_MINUTE,
 };
@@ -189,6 +191,16 @@ pub enum BrowserObservabilityMode {
     Profile,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserBackendPreference {
+    #[default]
+    Auto,
+    Cpu,
+    #[serde(rename = "webgpu")]
+    WebGpu,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserQueryObservation {
@@ -243,11 +255,13 @@ pub struct BrowserCreateConfig {
     pub manifest: Option<BrowserRegistryManifest>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserLoadOptions {
     #[serde(default)]
-    pub runtime: Value,
+    pub backend: BrowserBackendPreference,
+    #[serde(default)]
+    pub runtime: NativeRuntimeConfig,
     #[serde(default)]
     pub observability: BrowserObservabilityMode,
 }
@@ -462,7 +476,7 @@ impl BrowserLifecycleService {
                     .cloned()
                     .collect();
                 let base_plan = PairingResolver::resolve(&base_classified)?;
-                let mut entry = self.upsert_base_model_entry(&base_plan, &options)?;
+                let mut entry = self.upsert_base_model_entry(&base_plan)?;
 
                 if let Some(projector_id) = source_projector {
                     let previous = entry.clone();
@@ -492,9 +506,9 @@ impl BrowserLifecycleService {
             }
         };
 
-        let runtime_config =
-            runtime_config_with_observability(options.runtime, options.observability);
-        let runtime_fingerprint = runtime_fingerprint(&runtime_config, options.observability);
+        let backend_plan = browser_backend_plan(&options);
+        let runtime_config = serde_json::to_value(&backend_plan.config)?;
+        let runtime_fingerprint = runtime_fingerprint(&runtime_config, &backend_plan.selection);
         let asset_fingerprint = asset_fingerprint(&entry);
         let load_id = browser_load_id(&entry.id, &asset_fingerprint, &runtime_fingerprint);
         let load_required = browser_load_required(
@@ -765,13 +779,9 @@ impl BrowserLifecycleService {
     fn upsert_base_model_entry(
         &mut self,
         plan: &PairingPlan,
-        options: &BrowserLoadOptions,
     ) -> Result<BrowserModelEntry, ModelError> {
         let id = base_model_id(plan);
         let now = now_iso();
-        let runtime_config =
-            runtime_config_with_observability(options.runtime.clone(), options.observability);
-        let runtime_fingerprint = runtime_fingerprint(&runtime_config, options.observability);
         let next_refs = sorted_model_asset_ids(&plan.model_asset_ids, None);
         let entry = if let Some(existing) = self.manifest.models.get(&id).cloned() {
             let previous_refs = entry_asset_ids(&existing);
@@ -782,7 +792,6 @@ impl BrowserLifecycleService {
                 updated.modality = plan.modality;
                 updated.status = plan.status;
             }
-            updated.runtime_fingerprint = Some(runtime_fingerprint);
             updated.updated_at = now;
             self.rebalance_refs(&previous_refs, &entry_asset_ids(&updated))?;
             updated
@@ -795,7 +804,7 @@ impl BrowserLifecycleService {
                 model_asset_ids: plan.model_asset_ids.clone(),
                 projector_asset_id: None,
                 pairing: None,
-                runtime_fingerprint: Some(runtime_fingerprint),
+                runtime_fingerprint: None,
                 created_at: now.clone(),
                 updated_at: now,
                 last_loaded_at: None,
@@ -1450,34 +1459,38 @@ fn browser_load_required(
     }
 }
 
-fn runtime_fingerprint(runtime_config: &Value, mode: BrowserObservabilityMode) -> String {
-    stable_json_hash(&json!({
-        "observability": mode,
-        "runtime": runtime_config,
-    }))
+fn browser_backend_plan(options: &BrowserLoadOptions) -> BackendPlan {
+    let backend = match options.backend {
+        BrowserBackendPreference::Auto | BrowserBackendPreference::Cpu => BackendPreference::Cpu,
+        BrowserBackendPreference::WebGpu => BackendPreference::WebGpu,
+    };
+    let selected = backend.as_str();
+    let load_options = ModelLoadOptions {
+        backend,
+        stats: stats_mode(options.observability),
+        runtime: options.runtime.clone(),
+    };
+    BackendPolicy::select_known(
+        &load_options,
+        selected,
+        vec![selected.to_string()],
+        Some(format!("browser selected {selected}")),
+    )
 }
 
-fn runtime_config_with_observability(mut runtime: Value, mode: BrowserObservabilityMode) -> Value {
-    if !runtime.is_object() {
-        runtime = json!({});
+fn stats_mode(mode: BrowserObservabilityMode) -> StatsMode {
+    match mode {
+        BrowserObservabilityMode::Off => StatsMode::Off,
+        BrowserObservabilityMode::Runtime => StatsMode::Basic,
+        BrowserObservabilityMode::Profile => StatsMode::Profile,
     }
-    let runtime_metrics = matches!(
-        mode,
-        BrowserObservabilityMode::Runtime | BrowserObservabilityMode::Profile
-    );
-    let backend_profiling = matches!(mode, BrowserObservabilityMode::Profile);
-    let object = runtime.as_object_mut().expect("object set above");
-    let observability = object.entry("observability").or_insert_with(|| json!({}));
-    if !observability.is_object() {
-        *observability = json!({});
-    }
-    let observability = observability.as_object_mut().expect("object set above");
-    observability.insert("runtime_metrics".to_string(), Value::Bool(runtime_metrics));
-    observability.insert(
-        "backend_profiling".to_string(),
-        Value::Bool(backend_profiling),
-    );
-    runtime
+}
+
+fn runtime_fingerprint(runtime_config: &Value, backend: &BackendSelection) -> String {
+    stable_json_hash(&json!({
+        "backend": backend.selected,
+        "runtime": runtime_config,
+    }))
 }
 
 fn apply_snapshot_patch(

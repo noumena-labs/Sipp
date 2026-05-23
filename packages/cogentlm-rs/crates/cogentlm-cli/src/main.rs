@@ -3,8 +3,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
+use cogentlm_engine::backend::set_llama_log_quiet;
 use cogentlm_engine::engine::{GpuLayerConfig, NativeRuntimeConfig, SamplingRuntimeConfig};
+use cogentlm_engine::runtime::metrics::RuntimeObservabilityMetrics;
 use cogentlm_engine::runtime::request::{GenerateResponseStatus, GenerateTokenEmissionMode};
 use cogentlm_engine::runtime::{InferenceRuntime, RequestStepResult};
 use serde_json::json;
@@ -24,7 +26,7 @@ struct Args {
     max_tokens: u32,
 
     /// Context size in tokens.
-    #[arg(long, default_value_t = 2048)]
+    #[arg(long, default_value_t = 8196)]
     ctx_size: u32,
 
     /// Decode batch size in tokens.
@@ -32,7 +34,7 @@ struct Args {
     batch_size: u32,
 
     /// Number of model layers to offload to GPU.
-    #[arg(long, default_value_t = 0)]
+    #[arg(long, default_value_t = 0, allow_negative_numbers = true)]
     gpu_layers: i32,
 
     /// Number of generation threads. Zero lets llama.cpp choose.
@@ -59,13 +61,27 @@ struct Args {
     #[arg(long, default_value_t = u32::MAX)]
     seed: u32,
 
+    /// Print request timing/token stats to stderr.
+    #[arg(long, value_enum, default_value_t = CliStatsMode::Off)]
+    stats: CliStatsMode,
+
     /// Render the prompt as a single user chat message before generation.
     #[arg(long)]
     chat: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+enum CliStatsMode {
+    #[default]
+    Off,
+    Basic,
+    Profile,
+    Debug,
+}
+
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    set_llama_log_quiet(true);
 
     let mut stdout = io::stdout().lock();
     run_native_runtime(&args, &mut stdout)
@@ -84,6 +100,9 @@ fn run_native_runtime(args: &Args, stdout: &mut impl Write) -> anyhow::Result<()
     config.context.n_threads = Some(args.threads);
     config.context.n_threads_batch = Some(args.threads);
     config.placement.gpu_layers = GpuLayerConfig::from_layer_count(args.gpu_layers);
+    config.observability.runtime_metrics = args.stats != CliStatsMode::Off;
+    config.observability.backend_profiling =
+        matches!(args.stats, CliStatsMode::Profile | CliStatsMode::Debug);
     config.sampling = SamplingRuntimeConfig {
         temperature: Some(args.temperature),
         top_k: Some(args.top_k),
@@ -124,6 +143,7 @@ fn run_native_runtime(args: &Args, stdout: &mut impl Write) -> anyhow::Result<()
         if let Some(response) = runtime.take_completed_response(request_id) {
             if response.status == GenerateResponseStatus::Completed {
                 stdout.write_all(response.output_text.as_bytes())?;
+                print_stats(args.stats, response.runtime_observability)?;
                 return Ok(());
             }
             bail!(
@@ -146,3 +166,182 @@ fn run_native_runtime(args: &Args, stdout: &mut impl Write) -> anyhow::Result<()
 
     bail!("scheduler did not complete request {request_id} before the tick limit")
 }
+
+fn print_stats(mode: CliStatsMode, stats: RuntimeObservabilityMetrics) -> io::Result<()> {
+    if mode == CliStatsMode::Off {
+        return Ok(());
+    }
+
+    let mut stderr = io::stderr().lock();
+    writeln!(stderr)?;
+    writeln!(stderr, "stats:")?;
+    writeln!(stderr, "  input_tokens: {}", stats.input_tokens)?;
+    writeln!(stderr, "  output_tokens: {}", stats.output_tokens)?;
+    writeln!(stderr, "  prefill_tokens: {}", stats.prefill_tokens)?;
+    writeln!(stderr, "  cache_hits: {}", stats.cache_hits)?;
+    write_optional_ms(&mut stderr, "ttft_ms", stats.ttft_ms)?;
+    write_optional_ms(&mut stderr, "inter_token_ms", stats.itl_avg_ms)?;
+    write_optional_ms(&mut stderr, "e2e_ms", stats.e2e_ms)?;
+    write_optional_ms(&mut stderr, "prefill_ms", stats.prefill_ms)?;
+    write_optional_ms(&mut stderr, "decode_ms", stats.decode_ms)?;
+    write_tokens_per_second(
+        &mut stderr,
+        "tokens_per_second",
+        stats.output_tokens,
+        stats.e2e_ms,
+    )?;
+    write_tokens_per_second(
+        &mut stderr,
+        "decode_tokens_per_second",
+        stats.output_tokens,
+        stats.decode_ms,
+    )?;
+
+    if matches!(mode, CliStatsMode::Profile | CliStatsMode::Debug) {
+        write_optional_ms(&mut stderr, "backend_ms", stats.native_gpu_ms)?;
+        write_optional_ms(&mut stderr, "sync_ms", stats.native_sync_ms)?;
+        write_optional_ms(&mut stderr, "engine_overhead_ms", stats.native_logic_ms)?;
+    }
+
+    if mode == CliStatsMode::Debug {
+        print_debug_metrics(&mut stderr, stats)?;
+    }
+
+    Ok(())
+}
+
+fn print_debug_metrics(
+    writer: &mut impl Write,
+    stats: RuntimeObservabilityMetrics,
+) -> io::Result<()> {
+    writeln!(
+        writer,
+        "  debug_metrics_scheduler_ticks: {}",
+        stats.debug_metrics_scheduler_ticks
+    )?;
+    writeln!(
+        writer,
+        "  debug_metrics_decode_ticks: {}",
+        stats.debug_metrics_decode_ticks
+    )?;
+    writeln!(
+        writer,
+        "  debug_metrics_prefill_ticks: {}",
+        stats.debug_metrics_prefill_ticks
+    )?;
+    writeln!(
+        writer,
+        "  debug_metrics_backend_sampler_attach_attempts: {}",
+        stats.debug_metrics_backend_sampler_attach_attempts
+    )?;
+    writeln!(
+        writer,
+        "  debug_metrics_backend_sampler_attach_failures: {}",
+        stats.debug_metrics_backend_sampler_attach_failures
+    )?;
+    write_metric_ms(
+        writer,
+        "debug_metrics_admit_ms",
+        stats.debug_metrics_admit_ms,
+    )?;
+    write_metric_ms(
+        writer,
+        "debug_metrics_normalize_ms",
+        stats.debug_metrics_normalize_ms,
+    )?;
+    write_metric_ms(
+        writer,
+        "debug_metrics_backend_sampler_attach_ms",
+        stats.debug_metrics_backend_sampler_attach_ms,
+    )?;
+    write_metric_ms(
+        writer,
+        "debug_metrics_select_slots_ms",
+        stats.debug_metrics_select_slots_ms,
+    )?;
+    write_metric_ms(writer, "debug_metrics_plan_ms", stats.debug_metrics_plan_ms)?;
+    write_metric_ms(
+        writer,
+        "debug_metrics_batch_build_ms",
+        stats.debug_metrics_batch_build_ms,
+    )?;
+    write_metric_ms(
+        writer,
+        "debug_metrics_llama_decode_ms",
+        stats.debug_metrics_llama_decode_ms,
+    )?;
+    write_metric_ms(
+        writer,
+        "debug_metrics_llama_sync_ms",
+        stats.debug_metrics_llama_sync_ms,
+    )?;
+    write_metric_ms(
+        writer,
+        "debug_metrics_apply_bookkeeping_ms",
+        stats.debug_metrics_apply_bookkeeping_ms,
+    )?;
+    write_metric_ms(
+        writer,
+        "debug_metrics_apply_decode_results_ms",
+        stats.debug_metrics_apply_decode_results_ms,
+    )?;
+    write_metric_ms(
+        writer,
+        "debug_metrics_sample_ms",
+        stats.debug_metrics_sample_ms,
+    )?;
+    write_metric_ms(
+        writer,
+        "debug_metrics_token_piece_ms",
+        stats.debug_metrics_token_piece_ms,
+    )?;
+    write_metric_ms(writer, "debug_metrics_emit_ms", stats.debug_metrics_emit_ms)?;
+    write_metric_ms(
+        writer,
+        "debug_metrics_prefix_queue_ms",
+        stats.debug_metrics_prefix_queue_ms,
+    )?;
+    write_metric_ms(
+        writer,
+        "debug_metrics_finalize_ms",
+        stats.debug_metrics_finalize_ms,
+    )?;
+    write_metric_ms(
+        writer,
+        "debug_metrics_commit_observability_ms",
+        stats.debug_metrics_commit_observability_ms,
+    )?;
+    write_metric_ms(
+        writer,
+        "debug_metrics_post_decode_ms",
+        stats.debug_metrics_post_decode_ms,
+    )
+}
+
+fn write_metric_ms(writer: &mut impl Write, label: &str, value: f64) -> io::Result<()> {
+    writeln!(writer, "  {label}: {value:.2}")
+}
+
+fn write_optional_ms(writer: &mut impl Write, label: &str, value: f64) -> io::Result<()> {
+    if value > 0.0 {
+        writeln!(writer, "  {label}: {value:.2}")?;
+    }
+    Ok(())
+}
+
+fn write_tokens_per_second(
+    writer: &mut impl Write,
+    label: &str,
+    tokens: i32,
+    elapsed_ms: f64,
+) -> io::Result<()> {
+    if tokens > 0 && elapsed_ms > 0.0 {
+        let value = f64::from(tokens) / (elapsed_ms / 1000.0);
+        writeln!(writer, "  {label}: {value:.2}")?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "tests/main_tests.rs"]
+mod main_tests;

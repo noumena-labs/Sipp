@@ -7,7 +7,6 @@ import type { TransportObservability } from '../observability/transport-observab
 import type {
   BackendProfileObservation,
   EngineObservability,
-  ModelRuntimeOptions,
   ObservabilityEvent,
   ObservabilityEventType,
   ObservabilityMode,
@@ -57,20 +56,6 @@ function includeFinite(
 
 export function resolveObservabilityMode(mode: ObservabilityMode | undefined): ObservabilityMode {
   return mode ?? 'off';
-}
-
-export function applyObservabilityMode(
-  runtime: ModelRuntimeOptions | undefined,
-  mode: ObservabilityMode
-): ModelRuntimeOptions {
-  return {
-    ...(runtime ?? {}),
-    observability: {
-      ...(runtime?.observability ?? {}),
-      runtime_metrics: mode === 'runtime' || mode === 'profile',
-      backend_profiling: mode === 'profile',
-    },
-  };
 }
 
 export function toRuntimeObservation(

@@ -9,6 +9,7 @@ import type { RustLifecycleBridge } from '../wasm/lifecycle-bridge.js';
 import {
   QueryError,
   type AssetRecord,
+  type BrowserBackendPreference,
   type ModelEntry,
   type ModelInfo,
   type ObservabilityEvent,
@@ -43,6 +44,30 @@ import type { ChatBoundaryInfo } from '../core/chat-boundary-sanitizer.js';
 
 function file(name: string, contents = name): File {
   return new File([contents], name);
+}
+
+async function withNavigatorGpu<T>(
+  requestAdapter: () => Promise<unknown | null>,
+  callback: () => Promise<T>
+): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    enumerable: true,
+    value: {
+      ...(globalThis.navigator ?? {}),
+      gpu: { requestAdapter },
+    },
+  });
+  try {
+    return await callback();
+  } finally {
+    if (descriptor == null) {
+      Reflect.deleteProperty(globalThis, 'navigator');
+    } else {
+      Object.defineProperty(globalThis, 'navigator', descriptor);
+    }
+  }
 }
 
 function cloneManifest(manifest: RegistryManifest): RegistryManifest {
@@ -704,6 +729,7 @@ class FakeRustLifecycleBridge {
   public commitCount = 0;
   public removeCount = 0;
   public lastSource: unknown = null;
+  public lastOptions: unknown = null;
   private manifest: RegistryManifest = {
     version: 3,
     projectorIndexRevision: 0,
@@ -724,7 +750,11 @@ class FakeRustLifecycleBridge {
       assets: AssetRecord[];
       classified: ClassifiedAsset[];
     },
-    options: { runtime?: NativeRuntimeConfig; observability?: 'off' | 'runtime' | 'profile' }
+    options: {
+      backend?: BrowserBackendPreference;
+      runtime?: NativeRuntimeConfig;
+      observability?: 'off' | 'runtime' | 'profile';
+    }
   ): {
     loadId: string;
     model: ModelInfo;
@@ -739,6 +769,7 @@ class FakeRustLifecycleBridge {
   } {
     this.prepareCount += 1;
     this.lastSource = source;
+    this.lastOptions = options;
     const asset = source.assets[0];
     assert.ok(asset);
     this.manifest.assets[asset.id] = {
@@ -962,6 +993,11 @@ test('ModelService routes browser lifecycle through the Rust bridge when availab
   });
 
   assert.equal(rust.prepareCount, 1);
+  assert.deepEqual(rust.lastOptions, {
+    backend: 'cpu',
+    observability: 'runtime',
+    runtime: { context: { n_ctx: 1024 } },
+  });
   assert.equal(rust.commitCount, 1);
   assert.equal(info.loaded, true);
   assert.equal(runtime.loadCount, 1);
@@ -969,6 +1005,26 @@ test('ModelService routes browser lifecycle through the Rust bridge when availab
   await service.remove(info.id);
   assert.equal(rust.removeCount, 1);
   assert.deepEqual(assets.deleted, ['asset-model-rust-lifecycle.gguf-19']);
+});
+
+test('ModelService auto-selects WebGPU when the browser has an adapter', async () => {
+  await withNavigatorGpu(async () => ({}), async () => {
+    const runtime = new FakeRuntime();
+    const rust = new FakeRustLifecycleBridge();
+    (
+      runtime as FakeRuntime & {
+        createRustLifecycleBridge: () => Promise<RustLifecycleBridge>;
+      }
+    ).createRustLifecycleBridge = async () => rust as unknown as RustLifecycleBridge;
+    const { service } = createService({ runtime });
+
+    await service.load(file('webgpu-auto.gguf'));
+
+    assert.equal(
+      (rust.lastOptions as { backend?: BrowserBackendPreference }).backend,
+      'webgpu'
+    );
+  });
 });
 
 // Local-GGUF split + reuse is now exercised by cogentlm-engine catalog tests

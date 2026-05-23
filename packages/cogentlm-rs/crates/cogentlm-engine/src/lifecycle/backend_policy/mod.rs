@@ -7,7 +7,7 @@ use crate::backend::{
     KEY_COMPILED, KEY_GPU_OFFLOAD_SUPPORTED, KEY_NAME,
 };
 use crate::collection::sorted_unique_non_empty_strings;
-use crate::engine::{GpuLayerConfig, NativeRuntimeConfig};
+use crate::engine::{FlashAttentionMode, GpuLayerConfig, NativeRuntimeConfig};
 
 use super::util::invalid_source;
 use super::{BackendPreference, BackendSelection, ModelError, ModelLoadOptions, StatsMode};
@@ -38,6 +38,16 @@ pub struct BackendPolicy;
 
 impl BackendPolicy {
     pub fn select(options: &ModelLoadOptions) -> Result<BackendPlan, ModelError> {
+        if options.backend == BackendPreference::Cpu {
+            return Self::select_with_capabilities(
+                options,
+                &BackendCapabilities {
+                    compiled: vec![CPU_BACKEND.to_string()],
+                    available: vec![CPU_BACKEND.to_string()],
+                    gpu_offload_supported: false,
+                },
+            );
+        }
         Self::select_with_capabilities(options, &read_backend_capabilities()?)
     }
 
@@ -48,20 +58,36 @@ impl BackendPolicy {
         let capabilities = capabilities.normalized();
         let requested = options.backend;
         let selected = select_backend(requested, &capabilities)?;
+        Ok(Self::select_known(
+            options,
+            &selected,
+            capabilities.available,
+            Some(selection_reason(requested, &selected)),
+        ))
+    }
+
+    pub fn select_known(
+        options: &ModelLoadOptions,
+        selected: &str,
+        available: Vec<String>,
+        reason: Option<String>,
+    ) -> BackendPlan {
+        let selected = normalize_backend_name(selected);
+        let available = normalize_backend_names_or_cpu(&available);
         let mut config = options.runtime.clone();
         apply_stats_mode(&mut config, options.stats);
-        apply_backend_layers(&mut config, requested, &selected);
+        apply_backend_layers(&mut config, options.backend, &selected);
 
-        Ok(BackendPlan {
+        BackendPlan {
             selection: BackendSelection {
-                requested,
+                requested: options.backend,
                 selected: selected.clone(),
-                available: capabilities.available,
+                available,
                 gpu_offload_expected: gpu_offload_expected(&selected, &config),
-                reason: Some(selection_reason(requested, &selected)),
+                reason,
             },
             config,
-        })
+        }
     }
 }
 
@@ -205,6 +231,15 @@ fn apply_backend_layers(
 ) {
     if requested == BackendPreference::Cpu || is_cpu_backend(selected) {
         config.placement.gpu_layers = GpuLayerConfig::Count(0);
+        config.placement.devices.clear();
+        config.placement.main_gpu = None;
+        config.placement.tensor_split.clear();
+        config.placement.no_host = false;
+        config.context.flash_attention = FlashAttentionMode::Disabled;
+        config.context.offload_kqv = false;
+        config.context.op_offload = false;
+        config.multimodal.use_gpu = Some(false);
+        config.residency.require_gpu_lease = false;
     }
 }
 
