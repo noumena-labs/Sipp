@@ -14,6 +14,7 @@ import type {
 import type {
   InternalBundleDescriptor,
   ModelBundleFileProjectorDescriptor,
+  ModelBundleShard,
   ModelDetectionResult,
 } from '../bundle/model-bundle-types.js';
 import { createLinkedAbortController, isAbortError } from '../utils/abort.js';
@@ -63,6 +64,7 @@ import {
   toBackendProfileObservation,
   toRuntimeObservation,
 } from './observability-controller.js';
+import type { WasmThreadingMode } from '../engine/runtime-assets.js';
 
 interface InstalledAsset {
   record: AssetRecord;
@@ -155,6 +157,34 @@ function normalizeLocalSourceFileName(file: File): string {
   return defaultValue.replace(/[\\/:*?"<>|]+/g, '-');
 }
 
+function browserDefaultThreadCount(): number {
+  const hardwareConcurrency = globalThis.navigator?.hardwareConcurrency;
+  const cores =
+    typeof hardwareConcurrency === 'number' && Number.isFinite(hardwareConcurrency)
+      ? Math.trunc(hardwareConcurrency)
+      : 4;
+  return Math.max(1, Math.min(4, cores));
+}
+
+function applyBrowserRuntimeDefaults(
+  runtime: NativeRuntimeConfig | undefined,
+  wasmThreading: WasmThreadingMode
+): NativeRuntimeConfig | undefined {
+  if (wasmThreading !== 'pthread') {
+    return runtime;
+  }
+
+  const threadCount = browserDefaultThreadCount();
+  return {
+    ...runtime,
+    context: {
+      ...runtime?.context,
+      n_threads: runtime?.context?.n_threads ?? threadCount,
+      n_threads_batch: runtime?.context?.n_threads_batch ?? threadCount,
+    },
+  };
+}
+
 export class ModelService implements ModelLifecycleService {
   private currentLoaded: LoadedModelState | null = null;
   private chatBoundaryMarkersPromise: Promise<readonly string[]> | null = null;
@@ -165,7 +195,6 @@ export class ModelService implements ModelLifecycleService {
   private readonly engineEvents = new EngineEventController();
   private browserSplitCleanup: Promise<void> | null = null;
   private rustLifecyclePromise: Promise<RustLifecycleBridge> | null = null;
-  private rustHashProviderPromise: Promise<void> | null = null;
 
   constructor(
     private readonly runtime: EngineRuntime,
@@ -226,8 +255,7 @@ export class ModelService implements ModelLifecycleService {
       if (options.signal?.aborted) {
         throw new DOMException('Model load aborted.', 'AbortError');
       }
-      const rust = await this.getRustLifecycle(await this.registry.read());
-      return await this.loadWithRustLifecycle(rust, source, options);
+      return await this.loadWithRustLifecycle(source, options);
     });
   }
 
@@ -544,7 +572,6 @@ export class ModelService implements ModelLifecycleService {
   }
 
   private async loadWithRustLifecycle(
-    rust: RustLifecycleBridge,
     source: ModelSource,
     options: ModelLoadOptions
   ): Promise<ModelInfo> {
@@ -561,15 +588,23 @@ export class ModelService implements ModelLifecycleService {
       },
     };
     const observabilityMode = resolveObservabilityMode(options.observability);
+    const manifest = await this.registry.read();
+    const rustPromise = this.getRustLifecycle(manifest);
+    const backendPromise = resolveBrowserBackend(options.backend);
     let prepared: RustLifecyclePrepareLoadValue | null = null;
+    let rust: RustLifecycleBridge | null = null;
     try {
-      const backend = await resolveBrowserBackend(options.backend);
-      const manifest = await this.registry.read();
       await this.cleanupBrowserSplitArtifacts(manifest);
       const rustSource = await this.buildRustLoadSource(source, manifest, loadOptions);
+      const [resolvedRust, backend] = await Promise.all([rustPromise, backendPromise]);
+      rust = resolvedRust;
+      const runtimeConfig = applyBrowserRuntimeDefaults(
+        options.runtime,
+        this.runtime.getWasmThreadingMode()
+      );
       prepared = rust.prepareLoad(rustSource, {
         backend,
-        runtime: options.runtime,
+        runtime: runtimeConfig,
         observability: observabilityMode,
       });
       await this.replaceManifest(prepared.manifest);
@@ -587,13 +622,7 @@ export class ModelService implements ModelLifecycleService {
       }
 
       if (prepared.loadRequired) {
-        const files = await this.filesForEntry(entry, prepared.manifest);
-        const descriptor = this.buildDescriptor(
-          files.modelFiles,
-          files.projectorFile,
-          entry,
-          prepared.manifest
-        );
+        const descriptor = await this.openBundleForEntry(entry, prepared.manifest);
         loadOptions.onProgress?.({
           phase: 'load',
           loadedBytes: 0,
@@ -644,7 +673,10 @@ export class ModelService implements ModelLifecycleService {
       this.ingestRustEvents(committed.events);
       return committed.model;
     } catch (error) {
-      if (prepared != null) {
+      if (rust == null) {
+        rust = await rustPromise.catch(() => null);
+      }
+      if (prepared != null && rust != null) {
         const snapshot = rust.abortLoad({
           message: error instanceof Error ? error.message : String(error),
         });
@@ -727,20 +759,10 @@ export class ModelService implements ModelLifecycleService {
   private async getRustLifecycle(
     manifest: RegistryManifest
   ): Promise<RustLifecycleBridge> {
-    await this.ensureRustHashProvider();
     if (this.rustLifecyclePromise == null) {
       this.rustLifecyclePromise = this.runtime.createRustLifecycleBridge(manifest);
     }
     return await this.rustLifecyclePromise;
-  }
-
-  private async ensureRustHashProvider(): Promise<void> {
-    if (this.rustHashProviderPromise == null) {
-      this.rustHashProviderPromise = this.runtime.createRustHashProvider().then((provider) => {
-        this.assetStore.setHashProvider(provider);
-      });
-    }
-    await this.rustHashProviderPromise;
   }
 
   private async replaceManifest(manifest: RegistryManifest): Promise<void> {
@@ -1229,31 +1251,6 @@ export class ModelService implements ModelLifecycleService {
     return projectors.length === 1 ? projectors[0].assetId : null;
   }
 
-  private async filesForEntry(
-    entry: ModelEntry,
-    manifest: RegistryManifest
-  ): Promise<{ modelFiles: File[]; projectorFile: File | null }> {
-    const modelFiles: File[] = [];
-    for (const assetId of entry.modelAssetIds) {
-      const asset = manifest.assets[assetId];
-      if (asset == null) {
-        await this.markBroken(entry.id);
-        throw new QueryError('MODEL_BROKEN', `Installed model "${entry.id}" references a missing asset.`);
-      }
-      modelFiles.push(await this.getAssetFileForEntry(entry, asset));
-    }
-    let projectorFile: File | null = null;
-    if (entry.projectorAssetId != null) {
-      const projector = manifest.assets[entry.projectorAssetId];
-      if (projector == null) {
-        await this.markBroken(entry.id);
-        throw new QueryError('MODEL_BROKEN', `Installed model "${entry.id}" references a missing projector.`);
-      }
-      projectorFile = await this.getAssetFileForEntry(entry, projector);
-    }
-    return { modelFiles, projectorFile };
-  }
-
   private async getAssetFileForEntry(entry: ModelEntry, asset: AssetRecord): Promise<File> {
     try {
       return await this.assetStore.getFile(asset);
@@ -1265,34 +1262,69 @@ export class ModelService implements ModelLifecycleService {
     }
   }
 
-  private buildDescriptor(
-    modelFiles: File[],
-    projectorFile: File | null,
+  private async openBundleForEntry(
     entry: ModelEntry,
     manifest: RegistryManifest
-  ): InternalBundleDescriptor {
+  ): Promise<InternalBundleDescriptor> {
     const detection = this.detectionForEntry(entry, manifest);
-    const projector: ModelBundleFileProjectorDescriptor | undefined =
-      projectorFile == null
-        ? undefined
-        : {
-            kind: 'file',
-            file: projectorFile,
-          };
-    if (modelFiles.length === 1) {
-      return {
-        kind: 'file',
-        file: modelFiles[0],
-        projector,
-        ...(detection == null ? {} : { detection }),
-      };
+    if (detection == null) {
+      await this.markBroken(entry.id);
+      throw new QueryError(
+        'MODEL_BROKEN',
+        `Installed model "${entry.id}" is missing detection metadata; reinstall the model.`
+      );
     }
-    return {
-      kind: 'files',
-      files: modelFiles,
-      projector,
-      ...(detection == null ? {} : { detection }),
-    };
+
+    const shards: ModelBundleShard[] = [];
+    try {
+      for (const assetId of entry.modelAssetIds) {
+        const asset = manifest.assets[assetId];
+        if (asset == null) {
+          await this.markBroken(entry.id);
+          throw new QueryError(
+            'MODEL_BROKEN',
+            `Installed model "${entry.id}" references a missing asset.`
+          );
+        }
+        try {
+          shards.push(await this.assetStore.openSyncHandle(asset));
+        } catch (error) {
+          if (error instanceof QueryError && error.code === 'MODEL_BROKEN') {
+            await this.markBroken(entry.id);
+          }
+          throw error;
+        }
+      }
+
+      let projector: ModelBundleFileProjectorDescriptor | undefined;
+      if (entry.projectorAssetId != null) {
+        const projectorAsset = manifest.assets[entry.projectorAssetId];
+        if (projectorAsset == null) {
+          await this.markBroken(entry.id);
+          throw new QueryError(
+            'MODEL_BROKEN',
+            `Installed model "${entry.id}" references a missing projector.`
+          );
+        }
+        try {
+          projector = { file: await this.assetStore.getFile(projectorAsset) };
+        } catch (error) {
+          if (error instanceof QueryError && error.code === 'MODEL_BROKEN') {
+            await this.markBroken(entry.id);
+          }
+          throw error;
+        }
+      }
+
+      return { shards, projector, detection };
+    } catch (error) {
+      for (const shard of shards) {
+        try {
+          shard.handle.close();
+        } catch {}
+      }
+      throw error;
+    }
   }
 
   private detectionForEntry(

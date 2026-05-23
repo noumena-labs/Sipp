@@ -80,14 +80,20 @@ function toWorkerSerializableConfig(config: CogentConfig): WorkerSerializableCog
     }
   }
 
+  const hasRuntimeUrlOverride =
+    config.moduleUrl != null ||
+    config.wasmUrl != null ||
+    config.pthreadModuleUrl != null ||
+    config.pthreadWasmUrl != null;
   const runtimeUrls =
-    config.moduleUrl == null && config.wasmUrl == null
+    !hasRuntimeUrlOverride
       ? null
       : resolveRuntimeUrls(config);
 
   return {
     moduleUrl: runtimeUrls?.moduleUrl,
     wasmUrl: runtimeUrls?.wasmUrl,
+    wasmThreading: runtimeUrls?.threading ?? config.wasmThreading,
     moduleOptions: config.moduleOptions,
     maxModelBytes: config.maxModelBytes,
     trustedOrigins: config.trustedOrigins,

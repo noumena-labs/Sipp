@@ -28,7 +28,7 @@ import type {
 } from '../wasm/wasm-bridge.js';
 import type { RustLifecycleBridge } from '../wasm/lifecycle-bridge.js';
 import type { RegistryManifest } from '../models/types.js';
-import type { AssetHashProvider } from '../models/asset-store.js';
+import type { WasmThreadingMode } from '../engine/runtime-assets.js';
 
 export type RuntimePairingErrorCode =
   | 'INVALID_MODEL_SOURCE'
@@ -47,6 +47,7 @@ export class RuntimePairingValidationError extends Error {
 
 export interface EngineRuntime {
   getExecutionMode(): EngineExecutionMode;
+  getWasmThreadingMode(): WasmThreadingMode;
   getTransportObservability(): TransportObservability;
   initModule(): Promise<void>;
   stageModelBundle(
@@ -94,7 +95,6 @@ export interface EngineRuntime {
     explicitProjectorId?: string | null
   ): Promise<PairingPlan>;
   createRustLifecycleBridge(manifest: RegistryManifest): Promise<RustLifecycleBridge>;
-  createRustHashProvider(): Promise<AssetHashProvider>;
   probeChatTemplateBoundaryInfo(): Promise<ChatBoundaryInfo>;
   enqueueChat(
     contextKey: string,

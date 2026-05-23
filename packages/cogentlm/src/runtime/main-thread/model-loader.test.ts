@@ -3,15 +3,18 @@ import assert from 'node:assert/strict';
 import { MainThreadModelLoader } from './model-loader.js';
 import type { EngineModule, EmscriptenFs } from '../../wasm/engine-module.js';
 import type { ModelDetectionResult } from '../../bundle/model-bundle-types.js';
+import type { OpfsSyncAccessHandle } from '../../storage/file-system-storage.js';
+
+interface FakeFs extends EmscriptenFs {
+  dirs: Set<string>;
+  files: Map<string, Uint8Array>;
+  mounts: Array<{ mountpoint: string; fileNames: string[] }>;
+  unmounts: string[];
+  unlinks: string[];
+}
 
 interface FakeModule extends EngineModule {
-  FS: EmscriptenFs & {
-    dirs: Set<string>;
-    files: Map<string, Uint8Array>;
-    mounts: Array<{ mountpoint: string; fileNames: string[] }>;
-    unmounts: string[];
-    unlinks: string[];
-  };
+  FS: FakeFs;
 }
 
 function createModule(): FakeModule {
@@ -21,7 +24,7 @@ function createModule(): FakeModule {
   const unmounts: string[] = [];
   const unlinks: string[] = [];
 
-  const fs: FakeModule['FS'] = {
+  const fs: FakeFs = {
     dirs,
     files,
     mounts,
@@ -40,7 +43,7 @@ function createModule(): FakeModule {
       unlinks.push(path);
       files.delete(path);
     },
-    mount: (_type: any, opts: { files?: Array<{ name?: string }> }, mountpoint: string) => {
+    mount: (_type: unknown, opts: { files?: Array<{ name?: string }> }, mountpoint: string) => {
       mounts.push({
         mountpoint,
         fileNames: opts.files?.map((file) => file.name || 'model.gguf') ?? [],
@@ -53,7 +56,6 @@ function createModule(): FakeModule {
 
   return {
     FS: fs,
-    WORKERFS: {},
     HEAP32: new Int32Array(8),
     HEAPF64: new Float64Array(8),
     HEAPU8: new Uint8Array(8),
@@ -61,16 +63,41 @@ function createModule(): FakeModule {
     _malloc: () => 0,
     ccall: () => 0,
     UTF8ToString: () => '',
+    addFunction: () => 0,
+    removeFunction: () => {},
   };
 }
 
-function modelDetection(name: string): ModelDetectionResult {
+function fakeHandle(bytes: Uint8Array): { handle: OpfsSyncAccessHandle; closed: { value: boolean } } {
+  const closed = { value: false };
+  const handle: OpfsSyncAccessHandle = {
+    read: (target, options) => {
+      const at = options?.at ?? 0;
+      const available = Math.max(0, bytes.byteLength - at);
+      const toRead = Math.min(target.byteLength, available);
+      target.set(bytes.subarray(at, at + toRead));
+      return toRead;
+    },
+    write: () => {
+      throw new Error('write not supported in fake');
+    },
+    truncate: () => {},
+    flush: () => {},
+    close: () => {
+      closed.value = true;
+    },
+    getSize: () => bytes.byteLength,
+  };
+  return { handle, closed };
+}
+
+function modelDetection(name: string, vision = false): ModelDetectionResult {
   return {
     inspection: {
       version: 1,
       role: 'model',
       architecture: 'llama',
-      visionCapable: false,
+      visionCapable: vision,
       compatibleVisionProjectorTypes: [],
       providedVisionProjectorType: null,
     },
@@ -81,28 +108,24 @@ function modelDetection(name: string): ModelDetectionResult {
   };
 }
 
-test('MainThreadModelLoader stages projector in MEMFS and model in WORKERFS', async () => {
+test('stageModelBundle mounts shards into sync-access FS and stages projector via MEMFS', async () => {
   const loader = new MainThreadModelLoader({});
   const module = createModule();
-  const projectorBytes = Uint8Array.from([1, 2, 3, 4]);
+  const shardBytes = Uint8Array.from([1, 2, 3, 4, 5]);
+  const projectorBytes = Uint8Array.from([9, 8, 7]);
+  const { handle } = fakeHandle(shardBytes);
 
   const staged = await loader.stageModelBundle(module, {
-    kind: 'file',
-    file: new File(['not-a-gguf-model'], 'model.gguf'),
-    detection: modelDetection('model.gguf'),
-    projector: {
-      kind: 'file',
-      file: new File([projectorBytes], 'mmproj.gguf'),
-    },
+    shards: [{ name: 'model.gguf', handle, size: shardBytes.byteLength }],
+    projector: { file: new File([projectorBytes], 'mmproj.gguf') },
+    detection: modelDetection('model.gguf', true),
   });
 
-  assert.equal(staged.modelPath, '/workerfs_model/model.gguf');
+  assert.equal(staged.modelPath, '/sah_model/model.gguf');
   assert.equal(staged.projectorPath, '/memfs_projector/mmproj.gguf');
+  assert.equal(staged.projectorStatus, 'paired');
   assert.deepEqual(module.FS.mounts, [
-    {
-      mountpoint: '/workerfs_model',
-      fileNames: ['model.gguf'],
-    },
+    { mountpoint: '/sah_model', fileNames: ['model.gguf'] },
   ]);
   assert.deepEqual(
     [...(module.FS.files.get('/memfs_projector/mmproj.gguf') ?? [])],
@@ -110,23 +133,35 @@ test('MainThreadModelLoader stages projector in MEMFS and model in WORKERFS', as
   );
 });
 
-test('MainThreadModelLoader cleanup removes MEMFS projector and unmounts model files', async () => {
+test('cleanup unmounts the sync-access FS and closes every shard handle', async () => {
   const loader = new MainThreadModelLoader({});
   const module = createModule();
+  const shardA = fakeHandle(Uint8Array.from([1, 2]));
+  const shardB = fakeHandle(Uint8Array.from([3, 4]));
 
   await loader.stageModelBundle(module, {
-    kind: 'file',
-    file: new File(['not-a-gguf-model'], 'model.gguf'),
-    detection: modelDetection('model.gguf'),
-    projector: {
-      kind: 'file',
-      file: new File(['projector'], 'mmproj.gguf'),
-    },
+    shards: [
+      { name: 'shard-1.gguf', handle: shardA.handle, size: 2 },
+      { name: 'shard-2.gguf', handle: shardB.handle, size: 2 },
+    ],
+    detection: modelDetection('shard-1.gguf'),
   });
 
   loader.cleanup(module);
 
-  assert.deepEqual(module.FS.unlinks, ['/memfs_projector/mmproj.gguf']);
-  assert.deepEqual(module.FS.unmounts, ['/workerfs_model']);
-  assert.equal(module.FS.files.has('/memfs_projector/mmproj.gguf'), false);
+  assert.deepEqual(module.FS.unmounts, ['/sah_model']);
+  assert.equal(shardA.closed.value, true);
+  assert.equal(shardB.closed.value, true);
+});
+
+test('stageModelBundle rejects an empty shard list', async () => {
+  const loader = new MainThreadModelLoader({});
+  const module = createModule();
+  await assert.rejects(
+    loader.stageModelBundle(module, {
+      shards: [],
+      detection: modelDetection('empty.gguf'),
+    }),
+    /at least one shard/
+  );
 });

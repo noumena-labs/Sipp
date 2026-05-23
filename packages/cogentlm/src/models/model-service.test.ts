@@ -70,6 +70,30 @@ async function withNavigatorGpu<T>(
   }
 }
 
+async function withNavigatorHardwareConcurrency<T>(
+  hardwareConcurrency: number,
+  callback: () => Promise<T>
+): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    enumerable: true,
+    value: {
+      ...(globalThis.navigator ?? {}),
+      hardwareConcurrency,
+    },
+  });
+  try {
+    return await callback();
+  } finally {
+    if (descriptor == null) {
+      Reflect.deleteProperty(globalThis, 'navigator');
+    } else {
+      Object.defineProperty(globalThis, 'navigator', descriptor);
+    }
+  }
+}
+
 function cloneManifest(manifest: RegistryManifest): RegistryManifest {
   return JSON.parse(JSON.stringify(manifest)) as RegistryManifest;
 }
@@ -106,8 +130,6 @@ class FakeAssetStore {
       file: File;
     }
   >();
-
-  public setHashProvider(_provider: unknown): void {}
 
   public async resolveRemoteMetadata(rawUrl: string): Promise<{
     url: string;
@@ -161,7 +183,6 @@ class FakeAssetStore {
       id,
       kind: input.kind,
       name: input.file.name,
-      hash: id,
       bytes: input.file.size,
       storagePath: id,
       sourceUrl: input.sourceUrl,
@@ -186,7 +207,6 @@ class FakeAssetStore {
         id,
         kind: 'shard',
         name: shard.name,
-        hash: id,
         bytes: shard.size,
         storagePath: id,
         sourceBytes: file.size,
@@ -206,6 +226,33 @@ class FakeAssetStore {
       throw new QueryError('MODEL_BROKEN', `Missing fake asset ${record.id}.`);
     }
     return stored;
+  }
+
+  public async openSyncHandle(
+    record: AssetRecord
+  ): Promise<{ name: string; handle: import('../storage/file-system-storage.js').OpfsSyncAccessHandle; size: number }> {
+    const stored = this.files.get(record.id);
+    if (stored == null) {
+      throw new QueryError('MODEL_BROKEN', `Missing fake asset ${record.id}.`);
+    }
+    const bytes = new Uint8Array(await stored.arrayBuffer());
+    const handle: import('../storage/file-system-storage.js').OpfsSyncAccessHandle = {
+      read: (target, options) => {
+        const at = options?.at ?? 0;
+        const available = Math.max(0, bytes.byteLength - at);
+        const toRead = Math.min(target.byteLength, available);
+        target.set(bytes.subarray(at, at + toRead));
+        return toRead;
+      },
+      write: () => {
+        throw new Error('write not supported in fake');
+      },
+      truncate: () => {},
+      flush: () => {},
+      close: () => {},
+      getSize: () => bytes.byteLength,
+    };
+    return { name: record.name, handle, size: bytes.byteLength };
   }
 
   public async delete(record: AssetRecord): Promise<void> {
@@ -438,6 +485,7 @@ function stableTypeList(values: readonly string[]): string {
 class FakeRuntime implements EngineRuntime {
   public closeCount = 0;
   public loadCount = 0;
+  public wasmThreadingMode: 'single-thread' | 'pthread' = 'single-thread';
   public nextLoadError: Error | null = null;
   public stagedDescriptors: InternalBundleDescriptor[] = [];
   public lastPrompt: string | null = null;
@@ -459,6 +507,10 @@ class FakeRuntime implements EngineRuntime {
 
   public getExecutionMode(): EngineExecutionMode {
     return 'main-thread';
+  }
+
+  public getWasmThreadingMode(): 'single-thread' | 'pthread' {
+    return this.wasmThreadingMode;
   }
 
   public getTransportObservability(): TransportObservability {
@@ -513,22 +565,26 @@ class FakeRuntime implements EngineRuntime {
     if (this.stageGate != null) {
       await this.stageGate;
     }
-    const projector = 'projector' in descriptor ? descriptor.projector : undefined;
+    for (const shard of descriptor.shards) {
+      try {
+        shard.handle.close();
+      } catch {}
+    }
+    const projector = descriptor.projector;
     return {
-      sourceKind: descriptor.kind,
+      sourceKind: 'installed',
       modelPath: `/models/${this.stagedDescriptors.length}.gguf`,
       projectorPath: projector == null ? null : '/models/mmproj.gguf',
-      isVisionModel: projector != null,
-      projectorStatus: projector == null ? 'not-required' : 'explicit',
-      modelName:
-        descriptor.kind === 'file'
-          ? descriptor.file.name
-          : descriptor.kind === 'files'
-            ? descriptor.files[0]?.name ?? 'model.gguf'
-            : 'model.gguf',
-      detectionMethod: 'gguf-metadata',
-      modelType: null,
-      modelArchitecture: null,
+      isVisionModel: descriptor.detection.inspection.visionCapable,
+      projectorStatus: projector == null
+        ? descriptor.detection.inspection.visionCapable
+          ? 'missing'
+          : 'not-required'
+        : 'paired',
+      modelName: descriptor.detection.modelName,
+      detectionMethod: descriptor.detection.detectionMethod,
+      modelType: descriptor.detection.modelType,
+      modelArchitecture: descriptor.detection.modelArchitecture,
     };
   }
 
@@ -713,15 +769,6 @@ class FakeRuntime implements EngineRuntime {
     return this.rustBridge as unknown as RustLifecycleBridge;
   }
 
-  public async createRustHashProvider(): Promise<{
-    sha256Text: (value: string) => string;
-    sha256Blob: (blob: Blob, signal?: AbortSignal) => Promise<string>;
-  }> {
-    return {
-      sha256Text: (value: string) => `hash:${value.length}:${value.slice(0, 8)}`,
-      sha256Blob: async (blob: Blob) => `hash-blob:${blob.size}`,
-    };
-  }
 }
 
 class FakeRustLifecycleBridge {
@@ -1005,6 +1052,36 @@ test('ModelService routes browser lifecycle through the Rust bridge when availab
   await service.remove(info.id);
   assert.equal(rust.removeCount, 1);
   assert.deepEqual(assets.deleted, ['asset-model-rust-lifecycle.gguf-19']);
+});
+
+test('ModelService defaults browser pthread runtime thread counts before Rust prepare', async () => {
+  await withNavigatorHardwareConcurrency(12, async () => {
+    const runtime = new FakeRuntime();
+    runtime.wasmThreadingMode = 'pthread';
+    const rust = new FakeRustLifecycleBridge();
+    (
+      runtime as FakeRuntime & {
+        createRustLifecycleBridge: () => Promise<RustLifecycleBridge>;
+      }
+    ).createRustLifecycleBridge = async () => rust as unknown as RustLifecycleBridge;
+    const { service } = createService({ runtime });
+
+    await service.load(file('pthread-defaults.gguf'), {
+      runtime: { context: { n_ctx: 1024, n_threads: 2 } },
+    });
+
+    assert.deepEqual(rust.lastOptions, {
+      backend: 'cpu',
+      observability: 'off',
+      runtime: {
+        context: {
+          n_ctx: 1024,
+          n_threads: 2,
+          n_threads_batch: 4,
+        },
+      },
+    });
+  });
 });
 
 test('ModelService auto-selects WebGPU when the browser has an adapter', async () => {

@@ -1,53 +1,26 @@
 import type { CogentEngineOptions as CogentConfig } from '../../engine/cogent-engine.js';
-import { resolveLocalModelAndProjectorFiles } from '../model-detection.js';
 import {
   InternalBundleDescriptor,
-  ModelBundleFileProjectorDescriptor,
-  ModelDetectionResult,
-  ModelBundleProjectorStatus,
+  ModelBundleShard,
   StagedModelBundle,
   StageModelBundleOptions,
 } from '../../bundle/model-bundle-types.js';
-import {
-  DEFAULT_MAX_MODEL_BYTES,
-  MountableModelFile,
-  createMountableModelFile,
-  normalizeModelFileName,
-} from './constants.js';
+import { DEFAULT_MAX_MODEL_BYTES, normalizeModelFileName } from './constants.js';
 import { EngineModule } from '../../wasm/engine-module.js';
-import { WasmBridge } from '../../wasm/wasm-bridge.js';
+import { createSyncAccessHandleFS } from '../../wasm/sync-access-handle-fs.js';
 import { createAbortError } from '../../utils/abort.js';
-import type { ModelDetectionProvider } from '../model-detection.js';
 
-interface FileAssetRequest {
-  file: File;
-  mountFileName: string;
-}
-
-interface LoadedAssetSet {
-  files: MountableModelFile[];
-}
-
-interface ResolvedAssetRequest {
-  mountFileName: string;
-  file: File;
-}
-
-interface ResolvedBundlePlan {
-  detection: ModelDetectionResult;
-  modelAssets: ResolvedAssetRequest[];
-  projectorAsset: ResolvedAssetRequest | null;
-  projectorStatus: ModelBundleProjectorStatus;
-}
+const MODEL_MOUNT_DIR = '/sah_model';
+const PROJECTOR_MOUNT_DIR = '/memfs_projector';
 
 export class MainThreadModelLoader {
-  private loadedAssetPaths: string[] = [];
-  private activeMountPath: string | null = null;
+  private mountedShards: ModelBundleShard[] = [];
+  private mountedProjectorPath: string | null = null;
 
   constructor(private readonly config: CogentConfig) {}
 
   public cleanup(module: EngineModule): void {
-    this.removeAllLoadedAssets(module);
+    this.unmountAll(module);
   }
 
   public async stageModelBundle(
@@ -55,216 +28,113 @@ export class MainThreadModelLoader {
     descriptor: InternalBundleDescriptor,
     options: StageModelBundleOptions = {}
   ): Promise<StagedModelBundle> {
-    const detector = new WasmBridge(module);
-    const plan = await this.resolveBundlePlan(detector, descriptor, options.signal);
-    const modelAssetSet = await this.loadResolvedAssetSet(plan.modelAssets, options.signal);
-    const projectorAssetSet =
-      plan.projectorAsset == null
-        ? null
-        : await this.loadResolvedAssetSet([plan.projectorAsset], options.signal);
-
-    const mountedPaths = await this.mountAssetFiles(module, modelAssetSet.files);
-    const modelPath = mountedPaths[0];
-    let projectorPath: string | null = null;
-    try {
-      projectorPath =
-        projectorAssetSet == null
-          ? null
-          : await this.stageProjectorFile(module, projectorAssetSet.files[0], options.signal);
-    } catch (error) {
-      this.removeAllLoadedAssets(module);
-      throw error;
+    this.unmountAll(module);
+    if (options.signal?.aborted) {
+      throw createAbortError('Model load aborted.');
+    }
+    if (descriptor.shards.length === 0) {
+      throw new Error('Model bundle must contain at least one shard.');
     }
 
-    return {
-      sourceKind: descriptor.kind,
-      modelPath,
-      projectorPath,
-      isVisionModel: plan.detection.inspection.visionCapable,
-      projectorStatus: plan.projectorStatus,
-      modelName: plan.detection.modelName,
-      detectionMethod: plan.detection.detectionMethod,
-      modelType: plan.detection.modelType,
-      modelArchitecture: plan.detection.modelArchitecture,
-    };
-  }
-
-  private async resolveBundlePlan(
-    detector: ModelDetectionProvider,
-    descriptor: InternalBundleDescriptor,
-    signal?: AbortSignal
-  ): Promise<ResolvedBundlePlan> {
-    switch (descriptor.kind) {
-      case 'file': {
-        const detection =
-          descriptor.detection ?? (await detector.detectModelFromGgufFile(descriptor.file, signal));
-        this.ensureNotProjectorSource(
-          detection.modelName,
-          detection.inspection.role === 'projector'
-        );
-        return {
-          detection,
-          modelAssets: [
-            {
-              file: descriptor.file,
-              mountFileName: descriptor.destFileName ?? descriptor.file.name,
-            },
-          ],
-          projectorAsset: this.resolveExplicitProjectorAsset(descriptor.projector),
-          projectorStatus: this.resolveProjectorStatus(
-            detection.inspection.visionCapable,
-            descriptor.projector == null ? null : 'explicit'
-          ),
-        };
-      }
-      case 'files': {
-        if (descriptor.files.length === 0) {
-          throw new Error('Model bundle file list must not be empty.');
-        }
-        const explicitProjectorAsset = this.resolveExplicitProjectorAsset(descriptor.projector);
-        const localResolution =
-          descriptor.detection != null
-            ? {
-                modelFiles: [...descriptor.files],
-                projectorFile: null,
-                candidateFileNames: [],
-                errorMessage: null,
-              }
-          : explicitProjectorAsset == null
-            ? await resolveLocalModelAndProjectorFiles(detector, descriptor.files, signal)
-            : {
-                modelFiles: [...descriptor.files],
-                projectorFile: null,
-                candidateFileNames: [],
-                errorMessage: null,
-              };
-
-        if (localResolution.errorMessage != null) {
-          throw new Error(localResolution.errorMessage);
-        }
-        if (localResolution.modelFiles.length === 0) {
-          throw new Error('Model bundle file list does not contain any model GGUF files.');
-        }
-
-        const sortedModelFiles = [...localResolution.modelFiles].sort((left, right) =>
-          normalizeModelFileName(left.name).localeCompare(normalizeModelFileName(right.name))
-        );
-        const detectionFile = sortedModelFiles[0];
-        const detection =
-          descriptor.detection ?? (await detector.detectModelFromGgufFile(detectionFile, signal));
-        this.ensureNotProjectorSource(
-          detection.modelName,
-          detection.inspection.role === 'projector'
-        );
-
-        return {
-          detection,
-          modelAssets: sortedModelFiles.map((file) => ({
-            file,
-            mountFileName: file.name,
-          })),
-          projectorAsset:
-            explicitProjectorAsset ??
-            (localResolution.projectorFile == null
-              ? null
-              : {
-                  file: localResolution.projectorFile,
-                  mountFileName: localResolution.projectorFile.name,
-                }),
-          projectorStatus:
-            explicitProjectorAsset != null
-              ? this.resolveProjectorStatus(detection.inspection.visionCapable, 'explicit')
-              : localResolution.projectorFile != null
-                ? 'paired'
-                : this.resolveProjectorStatus(detection.inspection.visionCapable, null),
-        };
-      }
-    }
-  }
-
-  private resolveExplicitProjectorAsset(
-    projector: ModelBundleFileProjectorDescriptor | undefined
-  ): ResolvedAssetRequest | null {
-    if (projector == null) {
-      return null;
-    }
-    return {
-      file: projector.file,
-      mountFileName: projector.destFileName ?? projector.file.name,
-    };
-  }
-
-  private resolveProjectorStatus(
-    isVisionModel: boolean,
-    resolvedStatus: Extract<ModelBundleProjectorStatus, 'explicit'> | null
-  ): ModelBundleProjectorStatus {
-    if (resolvedStatus != null) {
-      return resolvedStatus;
-    }
-    return isVisionModel ? 'missing' : 'not-required';
-  }
-
-  private ensureNotProjectorSource(modelName: string, isProjector: boolean): void {
-    if (isProjector) {
+    const totalBytes = descriptor.shards.reduce((sum, shard) => sum + shard.size, 0);
+    const maxBytes = this.resolveMaxModelBytes();
+    if (totalBytes > maxBytes) {
       throw new Error(
-        `Model source "${modelName}" looks like a projector GGUF. Provide the main model GGUF instead.`
+        `Total model size (${totalBytes} bytes) exceeds configured maxModelBytes (${maxBytes} bytes).`
       );
     }
+
+    const modelPath = this.mountShards(module, descriptor.shards);
+
+    let projectorPath: string | null = null;
+    if (descriptor.projector != null) {
+      try {
+        projectorPath = await this.stageProjectorFile(
+          module,
+          descriptor.projector.file,
+          descriptor.projector.destFileName,
+          options.signal
+        );
+      } catch (error) {
+        this.unmountAll(module);
+        throw error;
+      }
+    }
+
+    return {
+      sourceKind: 'installed',
+      modelPath,
+      projectorPath,
+      isVisionModel: descriptor.detection.inspection.visionCapable,
+      projectorStatus: descriptor.detection.inspection.visionCapable
+        ? projectorPath != null
+          ? 'paired'
+          : 'missing'
+        : 'not-required',
+      modelName: descriptor.detection.modelName,
+      detectionMethod: descriptor.detection.detectionMethod,
+      modelType: descriptor.detection.modelType,
+      modelArchitecture: descriptor.detection.modelArchitecture,
+    };
   }
 
-  private async loadResolvedAssetSet(
-    assets: ResolvedAssetRequest[],
-    signal?: AbortSignal
-  ): Promise<LoadedAssetSet> {
-    if (assets.length === 0) {
-      throw new Error('Asset set must not be empty.');
-    }
-    return this.loadFileAssetSet(
-      assets.map((asset) => ({
-        file: asset.file,
-        mountFileName: asset.mountFileName,
-      })),
-      undefined,
-      signal
-    );
+  private mountShards(module: EngineModule, shards: ModelBundleShard[]): string {
+    const normalizedShards = shards.map((shard) => ({
+      name: normalizeModelFileName(shard.name),
+      handle: shard.handle,
+      size: shard.size,
+    }));
+    this.ensureDir(module, MODEL_MOUNT_DIR);
+    const provider = createSyncAccessHandleFS(module);
+    module.FS.mount(provider, { files: normalizedShards }, MODEL_MOUNT_DIR);
+    this.mountedShards = normalizedShards;
+    return `${MODEL_MOUNT_DIR}/${normalizedShards[0].name}`;
   }
 
-  private async loadFileAssetSet(
-    assets: FileAssetRequest[],
-    onProgress?: (pct: number) => void,
-    signal?: AbortSignal
-  ): Promise<LoadedAssetSet> {
-    if (!assets || assets.length === 0) {
-      throw new Error('No file assets provided.');
-    }
+  private async stageProjectorFile(
+    module: EngineModule,
+    file: File,
+    destFileName: string | undefined,
+    signal: AbortSignal | undefined
+  ): Promise<string> {
     if (signal?.aborted) {
       throw createAbortError('Model load aborted.');
     }
-
-    const files = assets.map((asset) => createMountableModelFile(asset.file, asset.mountFileName));
-    const byteLength = files.reduce((sum, file) => sum + file.size, 0);
-    if (byteLength <= 0) {
-      throw new Error('Model assets are empty.');
+    this.ensureDir(module, PROJECTOR_MOUNT_DIR);
+    const fileName = normalizeModelFileName(destFileName ?? file.name ?? 'mmproj.gguf');
+    const path = `${PROJECTOR_MOUNT_DIR}/${fileName}`;
+    this.removeFileIfExists(module, path);
+    const data = new Uint8Array(await file.arrayBuffer());
+    if (signal?.aborted) {
+      throw createAbortError('Model load aborted.');
     }
-    const maxModelBytes = this.resolveMaxModelBytes();
-    if (byteLength > maxModelBytes) {
-      throw new Error(
-        `Total model size (${byteLength} bytes) exceeds configured maxModelBytes (${maxModelBytes} bytes).`
-      );
-    }
-
-    onProgress?.(100);
-    return {
-      files,
-    };
+    module.FS.writeFile(path, data);
+    this.mountedProjectorPath = path;
+    return path;
   }
 
-  private resolveMaxModelBytes(): number {
-    const maxModelBytes = this.config.maxModelBytes ?? DEFAULT_MAX_MODEL_BYTES;
-    if (!Number.isInteger(maxModelBytes) || maxModelBytes <= 0) {
-      throw new Error('"maxModelBytes" must be a positive integer.');
+  private unmountAll(module: EngineModule): void {
+    if (this.mountedShards.length > 0) {
+      try {
+        module.FS.unmount(MODEL_MOUNT_DIR);
+      } catch {}
+      for (const shard of this.mountedShards) {
+        try {
+          shard.handle.close();
+        } catch {}
+      }
+      this.mountedShards = [];
     }
-    return maxModelBytes;
+    if (this.mountedProjectorPath != null) {
+      this.removeFileIfExists(module, this.mountedProjectorPath);
+      this.mountedProjectorPath = null;
+    }
+  }
+
+  private ensureDir(module: EngineModule, path: string): void {
+    if (!module.FS.analyzePath(path).exists) {
+      module.FS.mkdir(path);
+    }
   }
 
   private removeFileIfExists(module: EngineModule, path: string): void {
@@ -273,103 +143,11 @@ export class MainThreadModelLoader {
     }
   }
 
-  private async stageProjectorFile(
-    module: EngineModule,
-    file: MountableModelFile,
-    signal?: AbortSignal,
-    mountDir = '/memfs_projector'
-  ): Promise<string> {
-    if (signal?.aborted) {
-      throw createAbortError('Model load aborted.');
+  private resolveMaxModelBytes(): number {
+    const maxModelBytes = this.config.maxModelBytes ?? DEFAULT_MAX_MODEL_BYTES;
+    if (!Number.isInteger(maxModelBytes) || maxModelBytes <= 0) {
+      throw new Error('"maxModelBytes" must be a positive integer.');
     }
-
-    const fs = module.FS;
-    if (!fs.analyzePath(mountDir).exists) {
-      fs.mkdir(mountDir);
-    }
-
-    const fileName = normalizeModelFileName(file.name || 'mmproj.gguf');
-    const path = `${mountDir}/${fileName}`;
-    this.removeFileIfExists(module, path);
-
-    const data = new Uint8Array(await file.arrayBuffer());
-    if (signal?.aborted) {
-      throw createAbortError('Model load aborted.');
-    }
-
-    fs.writeFile(path, data);
-    this.commitLoadedAssetPaths(module, [...this.loadedAssetPaths, path]);
-    return path;
-  }
-
-  private removeAllLoadedAssets(module: EngineModule): void {
-    for (const path of this.loadedAssetPaths) {
-      if (this.activeMountPath && path.startsWith(this.activeMountPath)) {
-        continue;
-      }
-      this.removeFileIfExists(module, path);
-    }
-    this.loadedAssetPaths = [];
-    this.unmountActiveAssetSet(module);
-  }
-
-  private commitLoadedAssetPaths(module: EngineModule, paths: string[]): void {
-    const newSet = new Set(paths);
-    for (const path of this.loadedAssetPaths) {
-      if (!newSet.has(path)) {
-        if (this.activeMountPath && path.startsWith(this.activeMountPath)) {
-          continue;
-        }
-        this.removeFileIfExists(module, path);
-      }
-    }
-    this.loadedAssetPaths = [...paths];
-  }
-
-  private async mountAssetFiles(
-    module: EngineModule,
-    files: MountableModelFile[],
-    mountDir = '/workerfs_model'
-  ): Promise<string[]> {
-    const fs = module.FS;
-    const normalizedFiles = files.map((file) =>
-      createMountableModelFile(file, file.name || 'model.gguf')
-    );
-
-    if (!fs.analyzePath(mountDir).exists) {
-      fs.mkdir(mountDir);
-    }
-    this.unmountActiveAssetSet(module);
-
-    if (!module.WORKERFS) {
-      throw new Error(
-        'WORKERFS is not available in the Emscripten module. Ensure the module was linked with -lworkerfs.js and WORKERFS is exported.'
-      );
-    }
-
-    fs.mount(module.WORKERFS, { files: normalizedFiles }, mountDir);
-    this.activeMountPath = mountDir;
-
-    const mountedPaths = normalizedFiles.map(
-      (file) => `${mountDir}/${file.name || 'model.gguf'}`
-    );
-    this.commitLoadedAssetPaths(module, mountedPaths);
-    return mountedPaths;
-  }
-
-  private unmountActiveAssetSet(module: EngineModule): void {
-    if (this.activeMountPath == null) {
-      return;
-    }
-    const unmountedPath = this.activeMountPath;
-    try {
-      module.FS.unmount(this.activeMountPath);
-    } catch {
-      // Ignore stale unmount cleanup failures.
-    }
-    this.activeMountPath = null;
-    this.loadedAssetPaths = this.loadedAssetPaths.filter(
-      (path) => !path.startsWith(unmountedPath)
-    );
+    return maxModelBytes;
   }
 }

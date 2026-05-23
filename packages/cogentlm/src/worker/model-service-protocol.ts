@@ -14,6 +14,7 @@ import type {
 export interface WorkerSerializableCogentConfig {
   moduleUrl?: string;
   wasmUrl?: string;
+  wasmThreading?: 'auto' | 'single-thread' | 'pthread';
   moduleOptions?: Record<string, unknown>;
   maxModelBytes?: number;
   trustedOrigins?: string[];
@@ -141,5 +142,5 @@ export type WorkerResponseMessage =
 
 export type WorkerServiceConfig = Pick<
   WorkerSerializableCogentConfig,
-  'moduleUrl' | 'wasmUrl' | 'moduleOptions' | 'maxModelBytes' | 'trustedOrigins'
+  'moduleUrl' | 'wasmUrl' | 'wasmThreading' | 'moduleOptions' | 'maxModelBytes' | 'trustedOrigins'
 >;

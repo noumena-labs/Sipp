@@ -1,4 +1,6 @@
-export type ModelBundleSourceKind = 'file' | 'files';
+import type { OpfsSyncAccessHandle } from '../storage/file-system-storage.js';
+
+export type ModelBundleSourceKind = 'installed';
 
 export type ModelBundleProjectorStatus =
   | 'not-required'
@@ -29,29 +31,21 @@ export interface AssetInspection {
 }
 
 export interface ModelBundleFileProjectorDescriptor {
-  kind: 'file';
   file: File;
   destFileName?: string;
 }
 
-export interface FileBundleDescriptor {
-  kind: 'file';
-  file: File;
-  destFileName?: string;
-  projector?: ModelBundleFileProjectorDescriptor;
-  detection?: ModelDetectionResult;
+export interface ModelBundleShard {
+  name: string;
+  handle: OpfsSyncAccessHandle;
+  size: number;
 }
 
-export interface FilesBundleDescriptor {
-  kind: 'files';
-  files: File[];
+export interface InternalBundleDescriptor {
+  shards: ModelBundleShard[];
   projector?: ModelBundleFileProjectorDescriptor;
-  detection?: ModelDetectionResult;
+  detection: ModelDetectionResult;
 }
-
-export type InternalBundleDescriptor =
-  | FileBundleDescriptor
-  | FilesBundleDescriptor;
 
 export interface StageModelBundleOptions {
   signal?: AbortSignal;
@@ -63,13 +57,6 @@ export interface ModelDetectionResult {
   modelName: string;
   modelType: string | null;
   modelArchitecture: string | null;
-}
-
-export interface LocalProjectorResolutionResult<T> {
-  modelFiles: T[];
-  projectorFile: T | null;
-  candidateFileNames: string[];
-  errorMessage: string | null;
 }
 
 export interface StagedModelBundle {

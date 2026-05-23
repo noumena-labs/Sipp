@@ -24,7 +24,9 @@ const requiredPackPaths = [
   'dist/types/character/index.d.ts',
   'dist/types/orchestrator/index.d.ts',
   'dist/wasm/cogentlm-wasm.js',
-  'dist/wasm/cogentlm-wasm.wasm'
+  'dist/wasm/cogentlm-wasm.wasm',
+  'dist/wasm/cogentlm-wasm-pthread.js',
+  'dist/wasm/cogentlm-wasm-pthread.wasm'
 ];
 
 function fail(message) {

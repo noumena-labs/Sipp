@@ -13,7 +13,6 @@ function createSha256TestModule(updateLengths: number[] = []): EngineModule {
       mount: () => {},
       unmount: () => {},
     },
-    WORKERFS: {},
     HEAP32: new Int32Array(128),
     HEAPF64: new Float64Array(128),
     HEAPU8: new Uint8Array(4096),

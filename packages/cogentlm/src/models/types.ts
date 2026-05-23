@@ -302,7 +302,6 @@ export interface AssetRecord {
   id: string;
   kind: ModelAssetKind;
   name: string;
-  hash: string;
   bytes: number;
   storagePath: string;
   sourceUrl?: string;

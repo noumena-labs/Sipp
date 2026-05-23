@@ -57,3 +57,130 @@ test('FileSystemStorage removes partial files when streamToDisk fails', async ()
     }
   }
 });
+
+test('FileSystemStorage batches small stream chunks into one OPFS write', async () => {
+  const originalNavigator = globalThis.navigator;
+  const hadNavigator = 'navigator' in globalThis;
+  const writes: Uint8Array[] = [];
+
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      writes.push(chunk);
+    },
+    close() {},
+    abort() {},
+  });
+  const root = {
+    getFileHandle: async () => ({
+      createWritable: async () => writable,
+      getFile: async () => new File([Uint8Array.from([1, 2, 3])], 'model.gguf'),
+    }),
+    removeEntry: async () => {},
+  };
+
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: {
+      storage: {
+        getDirectory: async () => ({
+          getDirectoryHandle: async () => root,
+        }),
+      },
+    },
+  });
+
+  const storage = new FileSystemStorage();
+  const progress: number[] = [];
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(Uint8Array.from([1]));
+      controller.enqueue(Uint8Array.from([2]));
+      controller.enqueue(Uint8Array.from([3]));
+      controller.close();
+    },
+  });
+
+  try {
+    await storage.streamToDisk('model.gguf', stream, (bytes) => progress.push(bytes));
+    assert.equal(writes.length, 1);
+    assert.deepEqual([...writes[0]], [1, 2, 3]);
+    assert.deepEqual(progress, [3]);
+  } finally {
+    if (hadNavigator) {
+      Object.defineProperty(globalThis, 'navigator', {
+        configurable: true,
+        value: originalNavigator,
+      });
+    } else {
+      delete (globalThis as { navigator?: Navigator }).navigator;
+    }
+  }
+});
+
+test('FileSystemStorage prefers OPFS sync access handles when available', async () => {
+  const originalNavigator = globalThis.navigator;
+  const hadNavigator = 'navigator' in globalThis;
+  const writes: Uint8Array[] = [];
+  let flushed = false;
+  let closed = false;
+
+  const root = {
+    getFileHandle: async () => ({
+      createSyncAccessHandle: async () => ({
+        read: () => 0,
+        write: (chunk: Uint8Array) => {
+          writes.push(chunk.slice());
+          return chunk.byteLength;
+        },
+        truncate: () => {},
+        flush: () => {
+          flushed = true;
+        },
+        close: () => {
+          closed = true;
+        },
+      }),
+      createWritable: async () => {
+        throw new Error('async writable path should not be used');
+      },
+      getFile: async () => new File([Uint8Array.from([1, 2])], 'model.gguf'),
+    }),
+    removeEntry: async () => {},
+  };
+
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: {
+      storage: {
+        getDirectory: async () => ({
+          getDirectoryHandle: async () => root,
+        }),
+      },
+    },
+  });
+
+  const storage = new FileSystemStorage();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(Uint8Array.from([1]));
+      controller.enqueue(Uint8Array.from([2]));
+      controller.close();
+    },
+  });
+
+  try {
+    await storage.streamToDisk('model.gguf', stream);
+    assert.deepEqual(writes.map((chunk) => [...chunk]), [[1, 2]]);
+    assert.equal(flushed, true);
+    assert.equal(closed, true);
+  } finally {
+    if (hadNavigator) {
+      Object.defineProperty(globalThis, 'navigator', {
+        configurable: true,
+        value: originalNavigator,
+      });
+    } else {
+      delete (globalThis as { navigator?: Navigator }).navigator;
+    }
+  }
+});

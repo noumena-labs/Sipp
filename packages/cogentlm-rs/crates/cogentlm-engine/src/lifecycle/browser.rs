@@ -78,7 +78,6 @@ pub struct BrowserAssetRecord {
     pub id: String,
     pub kind: ModelAssetKind,
     pub name: String,
-    pub hash: String,
     pub bytes: u64,
     pub storage_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -261,7 +260,7 @@ pub struct BrowserLoadOptions {
     #[serde(default)]
     pub backend: BrowserBackendPreference,
     #[serde(default)]
-    pub runtime: NativeRuntimeConfig,
+    pub runtime: Value,
     #[serde(default)]
     pub observability: BrowserObservabilityMode,
 }
@@ -506,7 +505,7 @@ impl BrowserLifecycleService {
             }
         };
 
-        let backend_plan = browser_backend_plan(&options);
+        let backend_plan = browser_backend_plan(&options)?;
         let runtime_config = serde_json::to_value(&backend_plan.config)?;
         let runtime_fingerprint = runtime_fingerprint(&runtime_config, &backend_plan.selection);
         let asset_fingerprint = asset_fingerprint(&entry);
@@ -1459,7 +1458,7 @@ fn browser_load_required(
     }
 }
 
-fn browser_backend_plan(options: &BrowserLoadOptions) -> BackendPlan {
+fn browser_backend_plan(options: &BrowserLoadOptions) -> Result<BackendPlan, ModelError> {
     let backend = match options.backend {
         BrowserBackendPreference::Auto | BrowserBackendPreference::Cpu => BackendPreference::Cpu,
         BrowserBackendPreference::WebGpu => BackendPreference::WebGpu,
@@ -1468,14 +1467,31 @@ fn browser_backend_plan(options: &BrowserLoadOptions) -> BackendPlan {
     let load_options = ModelLoadOptions {
         backend,
         stats: stats_mode(options.observability),
-        runtime: options.runtime.clone(),
+        runtime: browser_runtime_config(&options.runtime)?,
     };
-    BackendPolicy::select_known(
+    Ok(BackendPolicy::select_known(
         &load_options,
         selected,
         vec![selected.to_string()],
         Some(format!("browser selected {selected}")),
-    )
+    ))
+}
+
+fn browser_runtime_config(runtime: &Value) -> Result<NativeRuntimeConfig, ModelError> {
+    let mut runtime = if runtime.is_null() {
+        json!({})
+    } else {
+        runtime.clone()
+    };
+    if let Some(object) = runtime.as_object_mut() {
+        let context = object.entry("context").or_insert_with(|| json!({}));
+        if let Some(context) = context.as_object_mut() {
+            context
+                .entry("warmup")
+                .or_insert_with(|| Value::Bool(false));
+        }
+    }
+    Ok(serde_json::from_value(runtime)?)
 }
 
 fn stats_mode(mode: BrowserObservabilityMode) -> StatsMode {

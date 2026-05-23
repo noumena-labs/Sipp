@@ -1,7 +1,5 @@
 import type { TransportObservability } from '../../observability/transport-observability.js';
 
-export type MountableModelFile = Blob & { name?: string };
-
 export const DEFAULT_MAX_MODEL_BYTES = 8 * 1024 * 1024 * 1024;
 export const REQUEST_STEP_RESULT_INVALID = -1;
 export const REQUEST_STEP_RESULT_FATAL_NO_PROGRESS = -2;
@@ -37,27 +35,3 @@ export function normalizeModelFileName(fileName: string): string {
   return trimmed;
 }
 
-export function createMountableModelFile(
-  blob: Blob,
-  fileName: string
-): MountableModelFile {
-  const normalizedFileName = normalizeModelFileName(fileName);
-  const existingName = (blob as MountableModelFile).name;
-  if (existingName === normalizedFileName) {
-    return blob as MountableModelFile;
-  }
-
-  if (typeof File === 'function') {
-    return new File([blob], normalizedFileName, {
-      type: blob.type,
-    }) as MountableModelFile;
-  }
-
-  const copiedBlob = blob.slice(0, blob.size, blob.type) as MountableModelFile;
-  Object.defineProperty(copiedBlob, 'name', {
-    configurable: true,
-    value: normalizedFileName,
-    writable: false,
-  });
-  return copiedBlob;
-}

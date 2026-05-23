@@ -7,6 +7,8 @@ interface WritableFileSink {
   release(): void;
 }
 
+const STREAM_WRITE_BUFFER_BYTES = 4 * 1024 * 1024;
+
 function toFileSystemWriteChunk(chunk: Uint8Array): Uint8Array<ArrayBuffer> {
   if (chunk.buffer instanceof ArrayBuffer) {
     return chunk as Uint8Array<ArrayBuffer>;
@@ -22,16 +24,14 @@ export interface OpfsSyncAccessHandle {
   truncate(size: number): void;
   flush(): void;
   close(): void;
+  getSize(): number;
 }
 
 /**
- * FileSystemStorage provides an abstraction for the Origin Private File System (OPFS),
- * allowing large assets to be streamed directly to browser-managed persistent storage.
- *
- * This enables zero-copy loading of models >2GB from URLs by:
- * 1. Streaming the download directly to a file on disk.
- * 2. Retrieving a native File handle from the stored file.
- * 3. Mounting that File into the WASM filesystem via WORKERFS.
+ * Streams large assets into OPFS and exposes both sync access handles for the
+ * model load path and File objects for incidental reads (projector, metadata
+ * detection). The model load path mounts shards via the
+ * SyncAccessHandleFS provider in `wasm/sync-access-handle-fs.ts`.
  */
 export class FileSystemStorage {
   private root: FileSystemDirectoryHandle | null = null;
@@ -101,6 +101,38 @@ export class FileSystemStorage {
       release: () => {
         writer.releaseLock();
       },
+    };
+  }
+
+  private async createSyncWritableFileSink(
+    handle: FileSystemFileHandle
+  ): Promise<WritableFileSink | null> {
+    const createSyncAccessHandle = (handle as unknown as {
+      createSyncAccessHandle?: () => Promise<OpfsSyncAccessHandle>;
+    }).createSyncAccessHandle;
+    if (typeof createSyncAccessHandle !== 'function') {
+      return null;
+    }
+
+    const access = await createSyncAccessHandle.call(handle);
+    let offset = 0;
+    access.truncate(0);
+    return {
+      write: async (chunk) => {
+        const written = access.write(toFileSystemWriteChunk(chunk), { at: offset });
+        if (written !== chunk.byteLength) {
+          throw new Error(`OPFS write failed: expected ${chunk.byteLength} bytes, wrote ${written}.`);
+        }
+        offset += written;
+      },
+      close: async () => {
+        access.flush();
+        access.close();
+      },
+      abort: async () => {
+        access.close();
+      },
+      release: () => {},
     };
   }
 
@@ -193,12 +225,38 @@ export class FileSystemStorage {
     const root = await this.ensureRoot();
     const handle = await root.getFileHandle(fileName, { create: true });
 
-    const writable = await handle.createWritable();
-    const sink = this.toWritableFileSink(writable);
+    const sink =
+      (await this.createSyncWritableFileSink(handle)) ??
+      this.toWritableFileSink(await handle.createWritable());
     const reader = stream.getReader();
     let closed = false;
     try {
       let bytesWritten = 0;
+      let pendingBytes = 0;
+      const pendingChunks: Uint8Array[] = [];
+
+      const flushPending = async (): Promise<void> => {
+        if (pendingBytes === 0) {
+          return;
+        }
+        const chunk =
+          pendingChunks.length === 1
+            ? pendingChunks[0]
+            : (() => {
+                const merged = new Uint8Array(pendingBytes);
+                let offset = 0;
+                for (const part of pendingChunks) {
+                  merged.set(part, offset);
+                  offset += part.byteLength;
+                }
+                return merged;
+              })();
+        await sink.write(chunk);
+        bytesWritten += pendingBytes;
+        pendingChunks.length = 0;
+        pendingBytes = 0;
+        onProgress?.(bytesWritten);
+      };
 
       while (true) {
         if (signal?.aborted) {
@@ -213,11 +271,22 @@ export class FileSystemStorage {
           continue;
         }
 
-        await sink.write(value);
-        bytesWritten += value.byteLength;
-        onProgress?.(bytesWritten);
+        if (value.byteLength >= STREAM_WRITE_BUFFER_BYTES) {
+          await flushPending();
+          await sink.write(value);
+          bytesWritten += value.byteLength;
+          onProgress?.(bytesWritten);
+          continue;
+        }
+
+        pendingChunks.push(value);
+        pendingBytes += value.byteLength;
+        if (pendingBytes >= STREAM_WRITE_BUFFER_BYTES) {
+          await flushPending();
+        }
       }
 
+      await flushPending();
       await sink.close();
       closed = true;
       return await handle.getFile();

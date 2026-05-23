@@ -4,7 +4,7 @@ import {
   type RequestResult,
   type TokenBatch,
 } from '../models/types.js';
-import { getDefaultRuntimeUrls } from '../engine/runtime-assets.js';
+import { resolveRuntimeUrls } from '../engine/runtime-assets.js';
 import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.js';
 import { StreamingRingWriter } from '../runtime/streaming-ring.js';
 import { stableJson } from '../utils/stable-json.js';
@@ -31,14 +31,12 @@ type WorkerOperationRequest = Exclude<
 >;
 
 function buildServiceConfig(config: WorkerSerializableCogentConfig): WorkerServiceConfig {
-  const bundledRuntimeUrls =
-    config.moduleUrl == null && config.wasmUrl == null
-      ? getDefaultRuntimeUrls()
-      : null;
+  const runtimeUrls = resolveRuntimeUrls(config);
 
   return {
-    moduleUrl: config.moduleUrl ?? bundledRuntimeUrls?.moduleUrl,
-    wasmUrl: config.wasmUrl ?? bundledRuntimeUrls?.wasmUrl,
+    moduleUrl: runtimeUrls.moduleUrl,
+    wasmUrl: runtimeUrls.wasmUrl,
+    wasmThreading: runtimeUrls.threading,
     moduleOptions: config.moduleOptions,
     maxModelBytes: config.maxModelBytes,
     trustedOrigins: config.trustedOrigins,

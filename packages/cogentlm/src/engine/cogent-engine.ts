@@ -28,6 +28,9 @@ export interface EngineModuleOptions {
 export interface CogentEngineOptions {
   moduleUrl?: string;
   wasmUrl?: string;
+  pthreadModuleUrl?: string;
+  pthreadWasmUrl?: string;
+  wasmThreading?: 'auto' | 'single-thread' | 'pthread';
   moduleOptions?: EngineModuleOptions;
   maxModelBytes?: number;
   trustedOrigins?: string[];

@@ -49,11 +49,14 @@ import type { StreamingRingWriter } from '../streaming-ring.js';
 import { EngineModule } from '../../wasm/engine-module.js';
 import { createAbortError } from '../../utils/abort.js';
 import { QueuedRequestScheduler } from '../scheduler.js';
-import { resolveRuntimeUrls } from '../../engine/runtime-assets.js';
+import {
+  resolveRuntimeThreadingMode,
+  resolveRuntimeUrls,
+  type WasmThreadingMode,
+} from '../../engine/runtime-assets.js';
 import type { ClassifiedAsset, PairingPlan } from '../../models/pairing-types.js';
 import type { RegistryManifest } from '../../models/types.js';
 import { RustLifecycleBridge } from '../../wasm/lifecycle-bridge.js';
-import type { AssetHashProvider } from '../../models/asset-store.js';
 
 function normalizePromptText(value: string): string {
   return value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -347,6 +350,10 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return this.executionMode;
   }
 
+  public getWasmThreadingMode(): WasmThreadingMode {
+    return resolveRuntimeThreadingMode(this.config);
+  }
+
   public getTransportObservability(): TransportObservability {
     return { ...this.transportObservability };
   }
@@ -578,11 +585,18 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     if (!this.initPromise) {
       const generation = this.moduleGeneration;
       this.initPromise = (async () => {
-        const { moduleUrl, wasmUrl } = resolveRuntimeUrls(this.config);
+        const { moduleUrl, wasmUrl, threading } = resolveRuntimeUrls(this.config);
         const createModule = await this.importModuleFactory(moduleUrl);
         const moduleConfig: EngineModuleOptions = { ...(this.config.moduleOptions ?? {}) };
         const userLocateFile = moduleConfig.locateFile;
-        moduleConfig.printErr ??= () => {};
+        moduleConfig.printErr ??= (message: string) => {
+          if (typeof message === 'string' && message.startsWith('[cogentlm/')) {
+            console.log(message);
+          }
+        };
+        if (threading === 'pthread') {
+          moduleConfig.mainScriptUrlOrBlob ??= moduleUrl;
+        }
 
         moduleConfig.locateFile = (path: string, prefix?: string) => {
           if (path.endsWith('.wasm')) {
@@ -697,15 +711,6 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   ): Promise<RustLifecycleBridge> {
     await this.ensureModule();
     return RustLifecycleBridge.create(this.getLoadedWasmBridge(), manifest);
-  }
-
-  public async createRustHashProvider(): Promise<AssetHashProvider> {
-    await this.ensureModule();
-    const bridge = this.getLoadedWasmBridge();
-    return {
-      sha256Text: (value) => bridge.sha256Text(value),
-      sha256Blob: (blob, signal) => bridge.sha256Blob(blob, signal),
-    };
   }
 
   /**

@@ -9,13 +9,11 @@ import {
 } from './types.js';
 import { currentLocationHref, resolveUrl } from '../utils/url.js';
 
-export interface AssetHashProvider {
-  sha256Text(value: string): string;
-  sha256Blob(blob: Blob, signal?: AbortSignal): Promise<string>;
-}
-
 const DEFAULT_BROWSER_DIRECT_LOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_BROWSER_SHARD_MAX_BYTES = 512 * 1024 * 1024;
+const LOCAL_FILE_FINGERPRINT_SAMPLE_BYTES = 64 * 1024;
+const PROGRESS_MIN_INTERVAL_MS = 100;
+const PROGRESS_MIN_PERCENT_STEP = 1;
 const BROWSER_SPLIT_TEMP_PREFIXES = ['tmp-source-', 'tmp-local-source-'];
 const BROWSER_SPLIT_SHARD_PREFIXES = ['split-', 'split-local-'];
 
@@ -145,6 +143,102 @@ function splitShardPath(prefix: string, index: number, count: number): string {
   return `${prefix}-${String(index + 1).padStart(5, '0')}-of-${String(count).padStart(5, '0')}.gguf`;
 }
 
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function digestParts(parts: Array<string | Uint8Array>): Promise<string> {
+  const encoder = new TextEncoder();
+  const encoded = parts.map((part) => (typeof part === 'string' ? encoder.encode(part) : part));
+  const byteLength = encoded.reduce((sum, part) => sum + part.byteLength, 0);
+  const joined = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const part of encoded) {
+    joined.set(part, offset);
+    offset += part.byteLength;
+  }
+  const digest = await crypto.subtle.digest('SHA-256', joined);
+  return bytesToHex(new Uint8Array(digest));
+}
+
+async function remoteSourceFingerprint(metadata: RemoteAssetMetadata): Promise<string> {
+  return await digestParts([
+    'remote-asset-v1\n',
+    metadata.canonicalUrl,
+    '\n',
+    metadata.etag,
+    '\n',
+    metadata.lastModified,
+    '\n',
+    String(metadata.bytes),
+  ]);
+}
+
+async function localFileFingerprint(file: File, name: string): Promise<string> {
+  const headBytes = Math.min(LOCAL_FILE_FINGERPRINT_SAMPLE_BYTES, file.size);
+  const tailStart = Math.max(headBytes, file.size - LOCAL_FILE_FINGERPRINT_SAMPLE_BYTES);
+  const head = new Uint8Array(await file.slice(0, headBytes).arrayBuffer());
+  const tail =
+    tailStart < file.size
+      ? new Uint8Array(await file.slice(tailStart, file.size).arrayBuffer())
+      : new Uint8Array();
+  return await digestParts([
+    'local-file-asset-v1\n',
+    name,
+    '\n',
+    String(file.lastModified),
+    '\n',
+    String(file.size),
+    '\n',
+    head,
+    '\n',
+    tail,
+  ]);
+}
+
+function assetIdFromFingerprint(fingerprint: string): string {
+  return `asset-${fingerprint}`;
+}
+
+function createProgressEmitter(
+  onProgress: ((progress: ModelLoadProgress) => void) | undefined,
+  phase: ModelLoadProgress['phase'],
+  assetName: string,
+  totalBytes: number | null
+): (loadedBytes: number, force?: boolean) => void {
+  let lastEmitMs = -Infinity;
+  let lastPercent: number | null = null;
+  return (loadedBytes, force = false) => {
+    const percent =
+      totalBytes != null && totalBytes > 0
+        ? Math.min(100, Math.round((loadedBytes / totalBytes) * 100))
+        : null;
+    const timeElapsed = nowMs() - lastEmitMs >= PROGRESS_MIN_INTERVAL_MS;
+    const percentElapsed =
+      percent == null ||
+      lastPercent == null ||
+      percent >= lastPercent + PROGRESS_MIN_PERCENT_STEP;
+    if (!force && !timeElapsed && !percentElapsed && percent !== 100) {
+      return;
+    }
+    lastEmitMs = nowMs();
+    lastPercent = percent;
+    onProgress?.({
+      phase,
+      loadedBytes,
+      totalBytes,
+      percent,
+      assetName,
+    });
+  };
+}
+
 function quotaExceededError(name: string, bytes: number, cause: unknown): QueryError {
   return new QueryError(
     'STORAGE_QUOTA_EXCEEDED',
@@ -154,23 +248,7 @@ function quotaExceededError(name: string, bytes: number, cause: unknown): QueryE
 }
 
 export class AssetStore {
-  private hashProvider: AssetHashProvider | null = null;
-
   constructor(private readonly storage = new FileSystemStorage()) {}
-
-  public setHashProvider(provider: AssetHashProvider): void {
-    this.hashProvider = provider;
-  }
-
-  private getHashProvider(): AssetHashProvider {
-    if (this.hashProvider == null) {
-      throw new QueryError(
-        'STORAGE_UNAVAILABLE',
-        'AssetStore requires a hash provider. Call setHashProvider() before installing assets.'
-      );
-    }
-    return this.hashProvider;
-  }
 
   public ensureAvailable(): void {
     if (!FileSystemStorage.isSupported()) {
@@ -228,6 +306,24 @@ export class AssetStore {
     onProgress?: (progress: ModelLoadProgress) => void
   ): Promise<AssetRecord> {
     this.ensureAvailable();
+    const fingerprint = await remoteSourceFingerprint(metadata);
+    const id = assetIdFromFingerprint(fingerprint);
+    const storagePath = `${id}-${metadata.name}`;
+    const existing = await this.storage.getFile(storagePath);
+    if (existing != null && existing.size === metadata.bytes) {
+      return this.buildAssetRecord({
+        id,
+        kind,
+        name: metadata.name,
+        bytes: metadata.bytes,
+        storagePath,
+        sourceUrl: metadata.canonicalUrl,
+        sourceEtag: metadata.etag,
+        sourceLastModified: metadata.lastModified,
+        sourceBytes: metadata.bytes,
+      });
+    }
+
     let response: Response;
     try {
       response = await fetch(metadata.canonicalUrl, { signal });
@@ -243,25 +339,22 @@ export class AssetStore {
       );
     }
 
-    const tempName = `tmp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${metadata.name}`;
-    let written = 0;
-    let tempFile: File;
+    let file: File;
+    const emitDownloadProgress = createProgressEmitter(
+      onProgress,
+      'download',
+      metadata.name,
+      metadata.bytes
+    );
+    emitDownloadProgress(0, true);
     try {
-      tempFile = await this.storage.streamToDisk(
-        tempName,
+      file = await this.storage.streamToDisk(
+        storagePath,
         response.body,
-        (bytes) => {
-          written = bytes;
-          onProgress?.({
-            phase: 'download',
-            loadedBytes: written,
-            totalBytes: metadata.bytes,
-            percent: Math.min(100, Math.round((written / metadata.bytes) * 100)),
-            assetName: metadata.name,
-          });
-        },
+        (bytes) => emitDownloadProgress(bytes),
         signal
       );
+      emitDownloadProgress(file.size, true);
     } catch (error) {
       if (isQuotaExceededError(error)) {
         throw quotaExceededError(metadata.name, metadata.bytes, error);
@@ -269,21 +362,25 @@ export class AssetStore {
       throw error;
     }
 
-    try {
-      return await this.registerDownloadedFile({
-        kind,
-        name: metadata.name,
-        file: tempFile,
-        storagePath: tempName,
-        sourceUrl: metadata.canonicalUrl,
-        sourceEtag: metadata.etag,
-        sourceLastModified: metadata.lastModified,
-        onProgress,
-      });
-    } catch (error) {
-      await this.storage.deleteFile(tempName);
-      throw error;
+    if (file.size !== metadata.bytes) {
+      await this.storage.deleteFile(storagePath);
+      throw new QueryError(
+        'REMOTE_LOAD_FAILED',
+        `Downloaded "${metadata.canonicalUrl}" size mismatch: expected ${metadata.bytes} bytes, got ${file.size}.`
+      );
     }
+
+    return this.buildAssetRecord({
+      id,
+      kind,
+      name: metadata.name,
+      bytes: file.size,
+      storagePath,
+      sourceUrl: metadata.canonicalUrl,
+      sourceEtag: metadata.etag,
+      sourceLastModified: metadata.lastModified,
+      sourceBytes: metadata.bytes,
+    });
   }
 
   public async downloadRemoteSplitGguf(
@@ -341,29 +438,33 @@ export class AssetStore {
       );
     }
 
-    const sourceKey = this.getHashProvider().sha256Text(
-      `${metadata.canonicalUrl}\n${metadata.etag}\n${metadata.lastModified}\n${metadata.bytes}`
-    ).slice(0, 24);
+    const sourceKey = (await remoteSourceFingerprint(metadata)).slice(0, 24);
     const sourceTempPath = `tmp-source-${Date.now().toString(36)}-${Math.random()
       .toString(36)
       .slice(2)}-${metadata.name}`;
     const outputPrefix = `split-${sourceKey}-${stripGgufExtension(metadata.name)}`;
+    const emitDownloadProgress = createProgressEmitter(
+      onProgress,
+      'download',
+      metadata.name,
+      metadata.bytes
+    );
 
     try {
-      await this.storage.streamToDisk(
+      emitDownloadProgress(0, true);
+      const sourceFile = await this.storage.streamToDisk(
         sourceTempPath,
         response.body,
-        (bytes) => {
-          onProgress?.({
-            phase: 'download',
-            loadedBytes: bytes,
-            totalBytes: metadata.bytes,
-            percent: Math.min(100, Math.round((bytes / metadata.bytes) * 100)),
-            assetName: metadata.name,
-          });
-        },
+        (bytes) => emitDownloadProgress(bytes),
         signal
       );
+      emitDownloadProgress(sourceFile.size, true);
+      if (sourceFile.size !== metadata.bytes) {
+        throw new QueryError(
+          'REMOTE_LOAD_FAILED',
+          `Downloaded "${metadata.canonicalUrl}" size mismatch: expected ${metadata.bytes} bytes, got ${sourceFile.size}.`
+        );
+      }
     } catch (error) {
       await this.storage.deleteFile(sourceTempPath);
       if (isQuotaExceededError(error)) {
@@ -427,29 +528,27 @@ export class AssetStore {
       return [await this.installFile({ kind: 'model', file, signal, onProgress })];
     }
 
-    const sourceKey = this.getHashProvider()
-      .sha256Text(`local\n${name}\n${file.lastModified}\n${file.size}`)
-      .slice(0, 24);
+    const sourceKey = (await localFileFingerprint(file, name)).slice(0, 24);
     const sourceTempPath = `tmp-local-source-${Date.now().toString(36)}-${Math.random()
       .toString(36)
       .slice(2)}-${name}`;
     const outputPrefix = `split-local-${sourceKey}-${stripGgufExtension(name)}`;
+    const emitStoreProgress = createProgressEmitter(
+      onProgress,
+      'store',
+      name,
+      file.size
+    );
 
     try {
+      emitStoreProgress(0, true);
       await this.storage.streamToDisk(
         sourceTempPath,
         file.stream(),
-        (bytes) => {
-          this.emitStoreProgress(
-            onProgress,
-            name,
-            bytes,
-            file.size,
-            Math.min(100, Math.round((bytes / file.size) * 100))
-          );
-        },
+        (bytes) => emitStoreProgress(bytes),
         signal
       );
+      emitStoreProgress(file.size, true);
     } catch (error) {
       await this.storage.deleteFile(sourceTempPath);
       if (isQuotaExceededError(error)) {
@@ -481,32 +580,47 @@ export class AssetStore {
   public async installFile(input: InstallAssetInput): Promise<AssetRecord> {
     this.ensureAvailable();
     const name = normalizeAssetName(input.file.name || 'model.gguf');
-    this.emitStoreProgress(input.onProgress, name, 0, input.file.size, 0);
-    const hash = await this.getHashProvider().sha256Blob(input.file, input.signal);
-    const id = `asset-${hash}`;
+    const fingerprint = await localFileFingerprint(input.file, name);
+    const id = assetIdFromFingerprint(fingerprint);
     const storagePath = `${id}-${name}`;
     const existing = await this.storage.getFile(storagePath);
     if (existing == null || existing.size !== input.file.size) {
       try {
-        await this.storage.streamToDisk(storagePath, input.file.stream(), undefined, input.signal);
+        const emitStoreProgress = createProgressEmitter(
+          input.onProgress,
+          'store',
+          name,
+          input.file.size
+        );
+        emitStoreProgress(0, true);
+        await this.storage.streamToDisk(
+          storagePath,
+          input.file.stream(),
+          (bytes) => emitStoreProgress(bytes),
+          input.signal
+        );
+        emitStoreProgress(input.file.size, true);
       } catch (error) {
         if (isQuotaExceededError(error)) {
           throw quotaExceededError(name, input.file.size, error);
         }
         throw error;
       }
+    } else {
+      this.emitStoreProgress(input.onProgress, name, input.file.size, input.file.size, 100);
     }
-    this.emitStoreProgress(input.onProgress, name, input.file.size, input.file.size, 100);
     return this.buildAssetRecord({
       id,
       kind: input.kind,
       name,
-      hash,
       bytes: input.file.size,
       storagePath,
       sourceUrl: input.sourceUrl,
       sourceEtag: input.sourceEtag,
       sourceLastModified: input.sourceLastModified,
+      sourceBytes: input.sourceUrl == null ? input.file.size : undefined,
+      sourceFileName: input.sourceUrl == null ? name : undefined,
+      sourceFileLastModified: input.sourceUrl == null ? input.file.lastModified : undefined,
     });
   }
 
@@ -520,6 +634,22 @@ export class AssetStore {
       );
     }
     return toFile(file, record.name);
+  }
+
+  public async openSyncHandle(
+    record: AssetRecord
+  ): Promise<{ name: string; handle: OpfsSyncAccessHandle; size: number }> {
+    this.ensureAvailable();
+    const handle = await this.storage.createSyncAccessHandle(record.storagePath);
+    const size = handle.getSize();
+    if (size !== record.bytes) {
+      handle.close();
+      throw new QueryError(
+        'MODEL_BROKEN',
+        `Installed model asset "${record.name}" is missing or corrupt.`
+      );
+    }
+    return { name: record.name, handle, size };
   }
 
   public async delete(record: AssetRecord): Promise<void> {
@@ -563,14 +693,38 @@ export class AssetStore {
     if (file == null || file.size <= 0) {
       throw new QueryError('MODEL_BROKEN', `Stored asset "${name}" is missing or empty.`);
     }
+    const fingerprint = await digestParts([
+      'stored-browser-asset-v1\n',
+      input.kind,
+      '\n',
+      name,
+      '\n',
+      input.storagePath,
+      '\n',
+      String(file.size),
+      '\n',
+      input.sourceUrl ?? '',
+      '\n',
+      input.sourceEtag ?? '',
+      '\n',
+      input.sourceLastModified ?? '',
+      '\n',
+      String(input.sourceBytes ?? ''),
+      '\n',
+      String(input.sourcePartIndex ?? ''),
+      '\n',
+      String(input.sourcePartCount ?? ''),
+      '\n',
+      input.sourceFileName ?? '',
+      '\n',
+      String(input.sourceFileLastModified ?? ''),
+    ]);
     this.emitStoreProgress(input.onProgress, name, 0, file.size, 0);
-    const hash = await this.getHashProvider().sha256Blob(file, input.signal);
     this.emitStoreProgress(input.onProgress, name, file.size, file.size, 100);
     return this.buildAssetRecord({
-      id: `asset-${hash}`,
+      id: assetIdFromFingerprint(fingerprint),
       kind: input.kind,
       name,
-      hash,
       bytes: file.size,
       storagePath: input.storagePath,
       sourceUrl: input.sourceUrl,
@@ -592,43 +746,6 @@ export class AssetStore {
     }
   }
 
-  private async registerDownloadedFile(input: {
-    kind: ModelAssetKind;
-    name: string;
-    file: File;
-    storagePath: string;
-    sourceUrl: string;
-    sourceEtag: string;
-    sourceLastModified: string;
-    onProgress?: (progress: ModelLoadProgress) => void;
-  }): Promise<AssetRecord> {
-    const name = normalizeAssetName(input.name || input.file.name || 'model.gguf');
-    this.emitStoreProgress(input.onProgress, name, 0, input.file.size, 0);
-    const hash = await this.getHashProvider().sha256Blob(input.file);
-    const id = `asset-${hash}`;
-    const canonicalStoragePath = `${id}-${name}`;
-    const existing = await this.storage.getFile(canonicalStoragePath);
-    const storagePath =
-      existing != null && existing.size === input.file.size
-        ? canonicalStoragePath
-        : input.storagePath;
-    if (storagePath !== input.storagePath) {
-      await this.storage.deleteFile(input.storagePath);
-    }
-    this.emitStoreProgress(input.onProgress, name, input.file.size, input.file.size, 100);
-    return this.buildAssetRecord({
-      id,
-      kind: input.kind,
-      name,
-      hash,
-      bytes: input.file.size,
-      storagePath,
-      sourceUrl: input.sourceUrl,
-      sourceEtag: input.sourceEtag,
-      sourceLastModified: input.sourceLastModified,
-    });
-  }
-
   private async splitStoredGguf(input: SplitStoredGgufInput): Promise<AssetRecord[]> {
     const shardPaths: string[] = [];
     let sourceHandle: OpfsSyncAccessHandle | null = null;
@@ -641,6 +758,12 @@ export class AssetStore {
         }
       | null = null;
     let splitBytesWritten = 0;
+    const emitSplitProgress = createProgressEmitter(
+      input.onProgress,
+      'split',
+      input.sourceName,
+      input.sourceBytes
+    );
 
     try {
       sourceHandle = await this.storage.createSyncAccessHandle(input.sourcePath);
@@ -669,6 +792,7 @@ export class AssetStore {
         shardHandles.set(path, handle);
       }
 
+      emitSplitProgress(0, true);
       await input.runtime.splitGgufStream(
         input.sourceBytes,
         input.outputPrefix,
@@ -696,13 +820,7 @@ export class AssetStore {
             }
             activeShard.offset += written;
             splitBytesWritten += written;
-            input.onProgress?.({
-              phase: 'split',
-              loadedBytes: splitBytesWritten,
-              totalBytes: input.sourceBytes,
-              percent: Math.min(100, Math.round((splitBytesWritten / input.sourceBytes) * 100)),
-              assetName: input.sourceName,
-            });
+            emitSplitProgress(splitBytesWritten);
             return 0;
           },
           closeShard: () => {
@@ -717,6 +835,7 @@ export class AssetStore {
           },
         }
       );
+      emitSplitProgress(input.sourceBytes, true);
 
       sourceHandle.close();
       sourceHandle = null;

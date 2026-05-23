@@ -27,7 +27,6 @@ fn asset(id: &str, kind: ModelAssetKind, inspection: AssetInspection) -> Browser
         id: id.to_string(),
         kind,
         name: format!("{id}.gguf"),
-        hash: id.to_string(),
         bytes: 4,
         storage_path: id.to_string(),
         source_url: None,
@@ -55,7 +54,7 @@ fn classified(record: &BrowserAssetRecord) -> ClassifiedAsset {
 fn load_options(runtime: Value, observability: BrowserObservabilityMode) -> BrowserLoadOptions {
     BrowserLoadOptions {
         backend: BrowserBackendPreference::Cpu,
-        runtime: serde_json::from_value(runtime).expect("runtime config"),
+        runtime,
         observability,
     }
 }
@@ -101,6 +100,10 @@ fn prepares_and_commits_text_load() {
         prepared.runtime_config["observability"]["runtime_metrics"],
         json!(true)
     );
+    assert_eq!(
+        prepared.runtime_config["context"]["warmup"],
+        json!(false)
+    );
 
     let committed = service
         .commit_load(BrowserCommitLoadRequest {
@@ -118,6 +121,17 @@ fn prepares_and_commits_text_load() {
 
     assert!(committed.model.loaded);
     assert_eq!(committed.model.chat_template.as_deref(), Some("template"));
+}
+
+#[test]
+fn browser_runtime_preserves_explicit_warmup() {
+    let plan = browser_backend_plan(&load_options(
+        json!({ "context": { "warmup": true } }),
+        BrowserObservabilityMode::Off,
+    ))
+    .expect("plan");
+
+    assert!(plan.config.context.warmup);
 }
 
 #[test]

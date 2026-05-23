@@ -129,12 +129,7 @@ async function withSupportedStorage<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 function createTestAssetStore(storage: MemoryStorage): AssetStore {
-  const store = new AssetStore(storage as unknown as FileSystemStorage);
-  store.setHashProvider({
-    sha256Text: (value: string) => `hash:${value.length}:${value.slice(0, 8)}`,
-    sha256Blob: async (blob: Blob) => `hash-blob:${blob.size}`,
-  });
-  return store;
+  return new AssetStore(storage as unknown as FileSystemStorage);
 }
 
 async function withSyncAccessSupported<T>(fn: () => Promise<T>): Promise<T> {
@@ -167,10 +162,12 @@ test('AssetStore registers remote downloads without copying the OPFS temp file',
       const file = await store.getFile(record);
 
       assert.equal(storage.writes.length, 1);
-      assert.match(storage.writes[0], /^tmp-/);
+      assert.match(storage.writes[0], /^asset-[0-9a-f]{64}-model\.gguf$/);
       assert.equal(record.storagePath, storage.writes[0]);
+      assert.match(record.id, /^asset-[0-9a-f]{64}$/);
       assert.equal(record.name, 'model.gguf');
       assert.equal(record.bytes, 11);
+      assert.equal(record.sourceBytes, 11);
       assert.equal(await file.text(), 'model-bytes');
     });
   });
@@ -255,7 +252,6 @@ test('AssetStore cleans browser split temp files and unregistered shards', async
           id: 'keep',
           kind: 'shard',
           name: 'split-keep-00001-of-00002.gguf',
-          hash: 'keep',
           bytes: 4,
           storagePath: 'split-keep-00001-of-00002.gguf',
           refCount: 0,

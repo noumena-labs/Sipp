@@ -202,7 +202,7 @@ set(CE_WASM_EXPORTED_FUNCTIONS
 )
 
 # HEAPU8 is needed for later binary media packing through the wasm bridge.
-set(CE_WASM_RUNTIME_METHODS "['ccall','FS','WORKERFS','UTF8ToString','HEAP32','HEAPF64','HEAPU8','addFunction','removeFunction']")
+set(CE_WASM_RUNTIME_METHODS "['ccall','FS','UTF8ToString','HEAP32','HEAPF64','HEAPU8','addFunction','removeFunction']")
 
 set(CE_WASM_TARGET_LINK_OPTIONS
     ${CE_WASM_LINK_FLAGS}

@@ -4,13 +4,121 @@ import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const scriptPath = fileURLToPath(import.meta.url);
+const rawArgs = process.argv.slice(2);
+
+function readBuildVariant(args) {
+  const flagIndex = args.indexOf('--variant');
+  if (flagIndex >= 0) {
+    return args[flagIndex + 1] ?? null;
+  }
+  const inlineFlag = args.find((arg) => arg.startsWith('--variant='));
+  if (inlineFlag) {
+    return inlineFlag.slice('--variant='.length);
+  }
+  return process.env.CE_WASM_BUILD_VARIANT?.trim() || null;
+}
+
+function stripBuildVariantArgs(args) {
+  const stripped = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--variant') {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith('--variant=')) {
+      continue;
+    }
+    stripped.push(arg);
+  }
+  return stripped;
+}
+
+function normalizeBuildVariant(value) {
+  if (value == null || value.length === 0) {
+    return null;
+  }
+  if (value === 'single' || value === 'single-thread') {
+    return 'single-thread';
+  }
+  if (value === 'pthread' || value === 'pthreads') {
+    return 'pthread';
+  }
+  throw new Error(`Invalid --variant value "${value}". Use single-thread or pthread.`);
+}
+
 // Parse arguments to configure default environment variables
-const isDev = process.argv.includes('--dev');
+const isDev = rawArgs.includes('--dev');
+const buildVariant = normalizeBuildVariant(readBuildVariant(rawArgs));
+const shouldBuildBothVariants =
+  buildVariant == null &&
+  process.env.CE_WASM_PTHREADS == null &&
+  process.env.CE_WASM_ARTIFACT_PREFIX == null;
+
+if (shouldBuildBothVariants) {
+  const childArgs = stripBuildVariantArgs(rawArgs);
+  const buildKind = isDev ? 'dev' : 'browser';
+  const variants = [
+    {
+      name: 'single-thread',
+      pthreads: '0',
+      artifactPrefix: 'cogentlm-wasm',
+      buildDirName: isDev ? 'build-wasm-dev' : 'build-browser',
+      label: `[build-wasm:${buildKind}:single]`,
+    },
+    {
+      name: 'pthread',
+      pthreads: '1',
+      artifactPrefix: 'cogentlm-wasm-pthread',
+      buildDirName: isDev ? 'build-wasm-dev-pthread' : 'build-browser-pthread',
+      label: `[build-wasm:${buildKind}:pthread]`,
+    },
+  ];
+
+  for (const variant of variants) {
+    const result = spawnSync(process.execPath, [scriptPath, ...childArgs, '--variant', variant.name], {
+      cwd: process.cwd(),
+      stdio: 'inherit',
+      shell: false,
+      windowsHide: true,
+      env: {
+        ...process.env,
+        CE_WASM_BUILD_VARIANT: variant.name,
+        CE_WASM_PTHREADS: variant.pthreads,
+        CE_WASM_ARTIFACT_PREFIX: variant.artifactPrefix,
+        CE_WASM_BUILD_DIR_NAME: variant.buildDirName,
+        CE_WASM_BUILD_LABEL: variant.label,
+        CE_WASM_OUTPUT_SUBDIR: process.env.CE_WASM_OUTPUT_SUBDIR ?? 'wasm',
+        CE_WASM_MEM64: '0',
+        CE_WASM_MAXIMUM_MEMORY: process.env.CE_WASM_MAXIMUM_MEMORY ?? '4096MB',
+        ...(isDev
+          ? {
+            CE_WASM_LTO_MODE: process.env.CE_WASM_LTO_MODE ?? 'OFF',
+            CE_WASM_BUILD_PARALLEL_LEVEL: process.env.CE_WASM_BUILD_PARALLEL_LEVEL ?? '8',
+          }
+          : {}),
+      },
+    });
+
+    if (result.error) {
+      throw result.error;
+    }
+    if (result.status !== 0) {
+      throw new Error(`${variant.label} failed with exit code ${result.status}`);
+    }
+  }
+  process.exit(0);
+}
+
 if (isDev) {
   process.env.CE_WASM_BUILD_LABEL ??= '[build-wasm:dev]';
   process.env.CE_WASM_BUILD_DIR_NAME ??= 'build-wasm-dev';
   process.env.CE_WASM_LTO_MODE ??= 'OFF';
   process.env.CE_WASM_BUILD_PARALLEL_LEVEL ??= '8';
+  process.env.CE_WASM_OUTPUT_SUBDIR ??= 'wasm';
+  process.env.CE_WASM_MEM64 ??= '0';
+  process.env.CE_WASM_MAXIMUM_MEMORY ??= '4096MB';
 } else {
   // Default unified browser release settings
   process.env.CE_WASM_BUILD_LABEL ??= '[build-wasm:browser]';
@@ -21,14 +129,13 @@ if (isDev) {
   process.env.CE_WASM_PTHREADS ??= '0';
 }
 
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const scriptDir = path.dirname(scriptPath);
 const projectRoot = path.resolve(scriptDir, '..');
 const wasmTargetName = 'CogentLM';
 const isWindows = process.platform === 'win32';
 const supportedGenerators = new Set(['Ninja', 'NMake Makefiles', 'Unix Makefiles']);
 const buildLabel = process.env.CE_WASM_BUILD_LABEL?.trim() || '[build-wasm]';
 const buildDirName = process.env.CE_WASM_BUILD_DIR_NAME?.trim() || 'build';
-const artifactPrefix = 'cogentlm-wasm';
 const buildDir = path.join(projectRoot, buildDirName);
 const buildDistDir = path.join(buildDir, 'dist');
 const packageWasmSubdir = process.env.CE_WASM_OUTPUT_SUBDIR?.trim() || 'wasm';
@@ -39,6 +146,9 @@ const enableFilesystem = true;
 const enableJspi = true;
 const enableAggressiveOpt = true;
 const enablePthreads = readBooleanEnv('CE_WASM_PTHREADS', false);
+const artifactPrefix =
+  process.env.CE_WASM_ARTIFACT_PREFIX?.trim() ||
+  (enablePthreads ? 'cogentlm-wasm-pthread' : 'cogentlm-wasm');
 const suppressLlamaLogs = true;
 const suppressMtmdLogs = true;
 const emscriptenEnvironment = 'web,worker';
@@ -726,6 +836,13 @@ async function copyWasmArtifacts() {
     console.log(`${buildLabel} copying artifact to dist/${packageWasmSubdir}/${targetName}`);
     await copyFile(sourcePath, targetPath);
   }
+
+  const pthreadWorkerPath = path.join(buildDistDir, 'CogentLM.worker.js');
+  if (enablePthreads && existsSync(pthreadWorkerPath)) {
+    const targetName = `${artifactPrefix}.worker.js`;
+    console.log(`${buildLabel} copying artifact to dist/${packageWasmSubdir}/${targetName}`);
+    await copyFile(pthreadWorkerPath, path.join(packageWasmDir, targetName));
+  }
 }
 
 async function getWasmOptPath() {
@@ -752,6 +869,11 @@ async function getWasmOptPath() {
 }
 
 async function optimizeWasmWithBinaryen() {
+  if (enablePthreads) {
+    console.log(`${buildLabel} skipping extra binaryen optimization for pthread wasm`);
+    return;
+  }
+
   const wasmOptPath = await getWasmOptPath();
   if (!wasmOptPath) {
     console.log(`${buildLabel} wasm-opt not found, skipping extra binaryen optimization`);
