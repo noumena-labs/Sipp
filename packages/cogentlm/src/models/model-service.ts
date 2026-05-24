@@ -21,7 +21,6 @@ import { createLinkedAbortController, isAbortError } from '../utils/abort.js';
 import { stableJson } from '../utils/stable-json.js';
 import { AssetStore, type RemoteAssetMetadata } from './asset-store.js';
 import { ModelRegistryStore } from './model-registry-store.js';
-import { ModelAssetClassifier } from './model-asset-classifier.js';
 import type { ClassifiedAsset, ClassifiedAssetFile, PairingPlan } from './pairing-types.js';
 import type { RustLifecycleBridge } from '../wasm/lifecycle-bridge.js';
 import type {
@@ -53,14 +52,12 @@ import {
   type RegistryManifest,
 } from './types.js';
 import {
-  EngineEventController,
   observabilityEventToStateEvent,
   observabilitySnapshotToEngineState,
   requestResultFromGenerateResponse,
 } from './engine-protocol-adapter.js';
 import {
   ObservabilityController,
-  resolveObservabilityMode,
   toBackendProfileObservation,
   toRuntimeObservation,
 } from './observability-controller.js';
@@ -75,6 +72,10 @@ interface SourceInstallResult {
   assets: InstalledAsset[];
   source: 'remote' | 'local';
   explicitProjectorAssetId: string | null;
+}
+
+interface AssetClassifier {
+  classify(assetId: string, file: File, signal?: AbortSignal): Promise<ClassifiedAssetFile>;
 }
 
 type BaseSource = string | File | readonly string[] | readonly File[];
@@ -192,7 +193,7 @@ export class ModelService implements ModelLifecycleService {
   private operationChain: Promise<void> = Promise.resolve();
   private transitioning = false;
   private readonly observability = new ObservabilityController();
-  private readonly engineEvents = new EngineEventController();
+  private readonly engineEventListeners = new Set<(event: EngineEvent) => void>();
   private browserSplitCleanup: Promise<void> | null = null;
   private rustLifecyclePromise: Promise<RustLifecycleBridge> | null = null;
 
@@ -200,26 +201,32 @@ export class ModelService implements ModelLifecycleService {
     private readonly runtime: EngineRuntime,
     private readonly registry = new ModelRegistryStore(),
     private readonly assetStore = new AssetStore(),
-    assetClassifier?: ModelAssetClassifier
+    assetClassifier?: AssetClassifier
   ) {
-    this.assetClassifier = assetClassifier ?? new ModelAssetClassifier(runtime);
+    this.assetClassifier = assetClassifier ?? {
+      classify: async (assetId, file, signal) => {
+        const detection = await runtime.detectModelFromGgufFile(file, signal);
+        return {
+          assetId,
+          file,
+          inspection: detection.inspection,
+          name: detection.modelName,
+        };
+      },
+    };
     this.observability.subscribe((event) => {
-      this.engineEvents.emit(observabilityEventToStateEvent(event));
+      this.emitEngineEvent(observabilityEventToStateEvent(event));
     });
   }
 
-  private readonly assetClassifier: ModelAssetClassifier;
+  private readonly assetClassifier: AssetClassifier;
 
-  public currentModel(): ModelInfo | null {
+  public current(): ModelInfo | null {
     const current = this.currentLoaded;
     if (current == null) {
       return null;
     }
     return this.currentSnapshot ?? null;
-  }
-
-  public current(): ModelInfo | null {
-    return this.currentModel();
   }
 
   private currentSnapshot: ModelInfo | null = null;
@@ -238,16 +245,15 @@ export class ModelService implements ModelLifecycleService {
     return this.observability.subscribe(listener);
   }
 
-  public currentState(): EngineState {
+  public state(): EngineState {
     return observabilitySnapshotToEngineState(this.observability.current());
   }
 
-  public state(): EngineState {
-    return this.currentState();
-  }
-
   public subscribeEvents(listener: (event: EngineEvent) => void): () => void {
-    return this.engineEvents.subscribe(listener);
+    this.engineEventListeners.add(listener);
+    return () => {
+      this.engineEventListeners.delete(listener);
+    };
   }
 
   public async load(source: ModelSource, options: ModelLoadOptions = {}): Promise<ModelInfo> {
@@ -289,22 +295,11 @@ export class ModelService implements ModelLifecycleService {
       const snapshot = rust.unload();
       this.ingestRustEvents(rust.drainEvents());
       this.observability.ingest({ type: 'load-complete', snapshot });
-      this.engineEvents.emit({ type: 'state', state: this.currentState() });
+      this.emitEngineEvent({ type: 'state', state: this.state() });
     });
   }
 
   public async query(input: QueryInput, options: QueryOptions = {}): Promise<RequestResult> {
-    return await this.queryResult(input, options);
-  }
-
-  public async queryResult(input: QueryInput, options: QueryOptions = {}): Promise<RequestResult> {
-    const response = await this.runQuery(input, options);
-    return requestResultFromGenerateResponse(response, {
-      maxTokens: options.maxTokens,
-    });
-  }
-
-  private async runQuery(input: QueryInput, options: QueryOptions = {}): Promise<GenerateResponse> {
     if (this.transitioning) {
       throw new QueryError('MODEL_NOT_READY', 'A model lifecycle transition is in progress.');
     }
@@ -322,9 +317,12 @@ export class ModelService implements ModelLifecycleService {
         prompt = `${Array.from({ length: media.length }, () => marker).join('\n')}\n${prompt}`;
       }
     }
-    return await this.runRuntimeRequest(options, media, (session, promptOptions) =>
+    const response = await this.runRuntimeRequest(options, media, (session, promptOptions) =>
       this.runtime.enqueueQuery(session, prompt, promptOptions)
     );
+    return requestResultFromGenerateResponse(response, {
+      maxTokens: options.maxTokens,
+    });
   }
 
   private async runRuntimeRequest(
@@ -382,12 +380,12 @@ export class ModelService implements ModelLifecycleService {
     try {
       const requestId = await enqueue(session, promptOptions);
       activeRequestId = requestId;
-      this.engineEvents.emit({ type: 'request-started', requestId: String(requestId), streamId: requestId });
+      this.emitEngineEvent({ type: 'request-started', requestId: String(requestId), streamId: requestId });
       const response = await this.runtime.awaitQuery(requestId, { signal: options.signal });
       if (response.cancelled) {
         const error = new DOMException(response.errorMessage ?? 'Queued request cancelled.', 'AbortError');
         this.recordQueryFailure(session, start, error, response);
-        this.engineEvents.emit({
+        this.emitEngineEvent({
           type: 'request-failed',
           requestId: String(requestId),
           error: error.message,
@@ -398,7 +396,7 @@ export class ModelService implements ModelLifecycleService {
       if (response.failed) {
         const error = new Error(response.errorMessage ?? 'Queued prompt failed.');
         this.recordQueryFailure(session, start, error, response);
-        this.engineEvents.emit({
+        this.emitEngineEvent({
           type: 'request-failed',
           requestId: String(requestId),
           error: error.message,
@@ -407,7 +405,7 @@ export class ModelService implements ModelLifecycleService {
         throw error;
       }
       this.recordQuerySuccess(session, start, response);
-      this.engineEvents.emit({
+      this.emitEngineEvent({
         type: 'request-completed',
         result: requestResultFromGenerateResponse(response, {
           maxTokens: options.maxTokens,
@@ -429,7 +427,7 @@ export class ModelService implements ModelLifecycleService {
         { cause: error }
       );
       if (!failureRecorded && activeRequestId != null) {
-        this.engineEvents.emit({
+        this.emitEngineEvent({
           type: 'request-failed',
           requestId: String(activeRequestId),
           error: wrapped.message,
@@ -440,10 +438,6 @@ export class ModelService implements ModelLifecycleService {
   }
 
   public async chat(input: ChatInput, options: ChatOptions = {}): Promise<RequestResult> {
-    return await this.chatResult(input, options);
-  }
-
-  public async chatResult(input: ChatInput, options: ChatOptions = {}): Promise<RequestResult> {
     if (this.transitioning) {
       throw new QueryError('MODEL_NOT_READY', 'A model lifecycle transition is in progress.');
     }
@@ -579,7 +573,7 @@ export class ModelService implements ModelLifecycleService {
       ...options,
       onProgress: (progress) => {
         options.onProgress?.(progress);
-        this.engineEvents.emit({
+        this.emitEngineEvent({
           type: 'load-progress',
           loadedBytes: progress.loadedBytes,
           totalBytes: progress.totalBytes,
@@ -587,7 +581,7 @@ export class ModelService implements ModelLifecycleService {
         });
       },
     };
-    const observabilityMode = resolveObservabilityMode(options.observability);
+    const observabilityMode = options.observability ?? 'off';
     const manifest = await this.registry.read();
     const rustPromise = this.getRustLifecycle(manifest);
     const backendPromise = resolveBrowserBackend(options.backend);
@@ -777,7 +771,13 @@ export class ModelService implements ModelLifecycleService {
   private ingestRustEvents(events: readonly ObservabilityEvent[]): void {
     for (const event of events) {
       this.observability.ingest(event);
-      this.engineEvents.emit(observabilityEventToStateEvent(event));
+      this.emitEngineEvent(observabilityEventToStateEvent(event));
+    }
+  }
+
+  private emitEngineEvent(event: EngineEvent): void {
+    for (const listener of this.engineEventListeners) {
+      listener(event);
     }
   }
 

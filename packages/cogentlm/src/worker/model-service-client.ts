@@ -11,7 +11,6 @@ import { createAbortError } from '../utils/abort.js';
 import {
   WorkerRequestMessage,
   WorkerResponseMessage,
-  type WorkerChatOptions,
   type WorkerQueryOptions,
   type WorkerSerializableCogentConfig,
 } from './model-service-protocol.js';
@@ -113,24 +112,6 @@ function toWorkerQueryOptions(options: QueryOptions = {}): WorkerQueryOptions {
   };
 }
 
-function toWorkerChatOptions(options: ChatOptions = {}): WorkerChatOptions {
-  return {
-    session: options.session,
-    maxTokens: options.maxTokens,
-    grammar: options.grammar,
-    tokenFlush: options.onTokens == null ? undefined : options.tokenFlush ?? 'token',
-    streaming: options.onTokens != null,
-  };
-}
-
-function toWorkerModelLoadOptions(options: ModelLoadOptions = {}): ModelLoadOptions {
-  return {
-    backend: options.backend,
-    observability: options.observability,
-    runtime: options.runtime,
-  };
-}
-
 export class WorkerModelServiceClient implements ModelLifecycleService {
   private worker: Worker | null = null;
   private nextCallId = 1;
@@ -163,7 +144,11 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
         kind: 'models-load',
         config: this.workerConfig,
         source,
-        options: toWorkerModelLoadOptions(options),
+        options: {
+          backend: options.backend,
+          observability: options.observability,
+          runtime: options.runtime,
+        },
       },
       {
         signal: options.signal,
@@ -174,13 +159,9 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     return result;
   }
 
-  public currentModel(): ModelInfo | null {
+  public current(): ModelInfo | null {
     this.assertOpen();
     return this.currentSnapshot;
-  }
-
-  public current(): ModelInfo | null {
-    return this.currentModel();
   }
 
   public async list(): Promise<ModelInfo[]> {
@@ -229,23 +210,6 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     )) as RequestResult;
   }
 
-  public async queryResult(input: QueryInput, options: QueryOptions = {}): Promise<RequestResult> {
-    this.assertOpen();
-    return (await this.callWorker(
-      {
-        kind: 'query-result',
-        config: this.workerConfig,
-        input,
-        options: toWorkerQueryOptions(options),
-      },
-      {
-        signal: options.signal,
-        onTokens: options.onTokens,
-        tokenFlush: options.onTokens == null ? undefined : options.tokenFlush ?? 'token',
-      }
-    )) as RequestResult;
-  }
-
   public async chat(input: ChatInput, options: ChatOptions = {}): Promise<RequestResult> {
     this.assertOpen();
     return (await this.callWorker(
@@ -253,24 +217,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
         kind: 'chat',
         config: this.workerConfig,
         input,
-        options: toWorkerChatOptions(options),
-      },
-      {
-        signal: options.signal,
-        onTokens: options.onTokens,
-        tokenFlush: options.onTokens == null ? undefined : options.tokenFlush ?? 'token',
-      }
-    )) as RequestResult;
-  }
-
-  public async chatResult(input: ChatInput, options: ChatOptions = {}): Promise<RequestResult> {
-    this.assertOpen();
-    return (await this.callWorker(
-      {
-        kind: 'chat-result',
-        config: this.workerConfig,
-        input,
-        options: toWorkerChatOptions(options),
+        options: toWorkerQueryOptions(options),
       },
       {
         signal: options.signal,
@@ -290,13 +237,9 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     return this.observability.subscribe(listener);
   }
 
-  public currentState(): EngineState {
-    this.assertOpen();
-    return this.currentStateUnsafe();
-  }
-
   public state(): EngineState {
-    return this.currentState();
+    this.assertOpen();
+    return this.snapshotState();
   }
 
   public subscribeEvents(listener: (event: EngineEvent) => void): () => void {
@@ -330,20 +273,11 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       return;
     }
 
-    try {
-      this.postWorkerMessage({
-        kind: 'close',
-        callId: this.nextCallId++,
-      });
-    } catch {
-      // The worker is being terminated locally; close notification is best-effort.
-    } finally {
-      this.worker.terminate();
-      this.worker = null;
-      this.currentSnapshot = null;
-      this.observability.markClosed();
-      this.emitEngineEvent({ type: 'closed' });
-    }
+    this.worker.terminate();
+    this.worker = null;
+    this.currentSnapshot = null;
+    this.observability.markClosed();
+    this.emitEngineEvent({ type: 'closed' });
   }
 
   private assertOpen(): void {
@@ -530,7 +464,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       model: null,
       query: null,
     });
-    this.emitEngineEvent({ type: 'state', state: this.currentStateUnsafe() });
+    this.emitEngineEvent({ type: 'state', state: this.snapshotState() });
   }
 
   private postWorkerMessage(message: WorkerRequestMessage): void {
@@ -672,7 +606,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     }
   }
 
-  private currentStateUnsafe(): EngineState {
+  private snapshotState(): EngineState {
     return observabilitySnapshotToEngineState(this.observability.current());
   }
 }

@@ -23,11 +23,9 @@ import type { ChatBoundaryInfo } from '../core/chat-boundary-sanitizer.js';
 import type { ChatMessage } from '../core/inference-types.js';
 import { EngineModule } from './engine-module.js';
 import {
-  DetailedRequestObservabilityMetrics,
-  DetailedRuntimeAggregateObservabilityMetrics,
-  DetailedRuntimeObservabilityMetrics,
   withDerivedObservabilityMetrics,
-} from '../observability/runtime-observability-detail.js';
+  type RequestObservabilityMetrics,
+} from '../observability/runtime-observability.js';
 import {
   COMPLETED_REQUEST_STATUS_CANCELLED,
   COMPLETED_REQUEST_STATUS_COMPLETED,
@@ -213,14 +211,6 @@ export class WasmBridge {
     const n = typeof ptr === 'bigint' ? Number(ptr) : ptr;
     if (!Number.isSafeInteger(n) || n < 0) {
       throw new RangeError(`Invalid wasm pointer: ${String(ptr)}`);
-    }
-    return n;
-  }
-
-  private safeNumber(value: number | bigint): number {
-    const n = typeof value === 'bigint' ? Number(value) : value;
-    if (!Number.isSafeInteger(n) || n < 0) {
-      throw new RangeError(`Invalid wasm integer: ${String(value)}`);
     }
     return n;
   }
@@ -709,7 +699,7 @@ export class WasmBridge {
       (_userData: number, offset: bigint | number, dstPtr: number, len: number) => {
         const start = this.byteOffset(dstPtr);
         const target = this.module.HEAPU8.subarray(start, start + len);
-        return callbacks.readAt(this.safeNumber(offset), target) ?? 0;
+        return callbacks.readAt(this.byteOffset(offset), target) ?? 0;
       },
       'iijii'
     );
@@ -739,7 +729,7 @@ export class WasmBridge {
       (_userData: number, offset: bigint | number, dstPtr: number, len: number) => {
         const start = this.byteOffset(dstPtr);
         const target = this.module.HEAPU8.subarray(start, start + len);
-        return callbacks.readAt(this.safeNumber(offset), target) ?? 0;
+        return callbacks.readAt(this.byteOffset(offset), target) ?? 0;
       },
       'iijii'
     );
@@ -787,13 +777,13 @@ export class WasmBridge {
     }
   }
 
-  public readRuntimeObservability(): DetailedRuntimeAggregateObservabilityMetrics | null {
+  public readRuntimeObservability(): RequestObservabilityMetrics | null {
     return this.readRuntimeObservabilityViaCall('CE_GetRuntimeObservability', [], []);
   }
 
   public readCompletedRequestRuntimeObservability(
     requestId: GenerateRequestId
-  ): DetailedRequestObservabilityMetrics | null {
+  ): RequestObservabilityMetrics | null {
     return this.readRuntimeObservabilityViaCall(
       'CE_GetCompletedRequestRuntimeObservability',
       ['number'],
@@ -1094,7 +1084,7 @@ export class WasmBridge {
     ident: string,
     argTypes: string[],
     args: unknown[]
-  ): DetailedRuntimeObservabilityMetrics | null {
+  ): RequestObservabilityMetrics | null {
     const metricsPtr = this.allocate(RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES);
     try {
       const status = this.callNumber(ident, [...argTypes, 'pointer'], [...args, metricsPtr]);

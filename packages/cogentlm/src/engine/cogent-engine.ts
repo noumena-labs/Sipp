@@ -83,50 +83,6 @@ interface CogentModelManager {
   remove(id: string): Promise<void>;
 }
 
-class RuntimeModelManager implements CogentModelManager {
-  constructor(
-    private readonly assertOpen: () => void,
-    private readonly service: ModelLifecycleService
-  ) { }
-
-  public load(source: ModelSource, options?: ModelLoadOptions): Promise<ModelInfo> {
-    this.assertOpen();
-    return this.service.load(source, options);
-  }
-
-  public current(): ModelInfo | null {
-    this.assertOpen();
-    return this.service.currentModel();
-  }
-
-  public list(): Promise<ModelInfo[]> {
-    this.assertOpen();
-    return this.service.list();
-  }
-
-  public async remove(id: string): Promise<void> {
-    this.assertOpen();
-    await this.service.remove(id);
-  }
-}
-
-class RuntimeObservability implements EngineObservability {
-  constructor(
-    private readonly assertOpen: () => void,
-    private readonly service: ModelLifecycleService
-  ) { }
-
-  public current(): ObservabilitySnapshot {
-    this.assertOpen();
-    return this.service.currentObservability();
-  }
-
-  public subscribe(listener: (event: ObservabilityEvent) => void): () => void {
-    this.assertOpen();
-    return this.service.subscribeObservability(listener);
-  }
-}
-
 export class CogentEngine {
   public readonly models: CogentModelManager;
   public readonly observability: EngineObservability;
@@ -137,8 +93,34 @@ export class CogentEngine {
     this.#service = shouldUseWorker(options)
       ? new WorkerModelServiceClient(options)
       : new ModelService(new MainThreadEngineRuntime(options));
-    this.models = new RuntimeModelManager(() => this.assertOpen(), this.#service);
-    this.observability = new RuntimeObservability(() => this.assertOpen(), this.#service);
+    this.models = {
+      load: (source, loadOptions) => {
+        this.assertOpen();
+        return this.#service.load(source, loadOptions);
+      },
+      current: () => {
+        this.assertOpen();
+        return this.#service.current();
+      },
+      list: () => {
+        this.assertOpen();
+        return this.#service.list();
+      },
+      remove: async (id) => {
+        this.assertOpen();
+        await this.#service.remove(id);
+      },
+    };
+    this.observability = {
+      current: () => {
+        this.assertOpen();
+        return this.#service.currentObservability();
+      },
+      subscribe: (listener) => {
+        this.assertOpen();
+        return this.#service.subscribeObservability(listener);
+      },
+    };
   }
 
   public static async create(options: CogentEngineOptions = {}): Promise<CogentEngine> {
@@ -164,24 +146,14 @@ export class CogentEngine {
     return await this.#service.query(input, options);
   }
 
-  public async queryResult(input: QueryInput, options?: QueryOptions): Promise<RequestResult> {
-    this.assertOpen();
-    return await this.#service.queryResult(input, options);
-  }
-
   public async chat(input: ChatInput, options: ChatOptions = {}): Promise<RequestResult> {
     this.assertOpen();
     return await this.#service.chat(input, options);
   }
 
-  public async chatResult(input: ChatInput, options: ChatOptions = {}): Promise<RequestResult> {
-    this.assertOpen();
-    return await this.#service.chatResult(input, options);
-  }
-
   public state(): EngineState {
     this.assertOpen();
-    return this.#service.currentState();
+    return this.#service.state();
   }
 
   public subscribeEvents(listener: (event: EngineEvent) => void): () => void {

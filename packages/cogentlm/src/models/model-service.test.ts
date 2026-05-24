@@ -3,8 +3,7 @@ import assert from 'node:assert/strict';
 import { ModelService } from './model-service.js';
 import { AssetStore } from './asset-store.js';
 import { ModelRegistryStore } from './model-registry-store.js';
-import { ModelAssetClassifier } from './model-asset-classifier.js';
-import type { ClassifiedAsset, PairingPlan } from './pairing-types.js';
+import type { ClassifiedAsset, ClassifiedAssetFile, PairingPlan } from './pairing-types.js';
 import type { RustLifecycleBridge } from '../wasm/lifecycle-bridge.js';
 import {
   QueryError,
@@ -32,10 +31,7 @@ import type {
   StagedModelBundle,
   StageModelBundleOptions,
 } from '../bundle/model-bundle-types.js';
-import type {
-  RequestObservabilityMetrics,
-  RuntimeAggregateObservabilityMetrics,
-} from '../observability/runtime-observability.js';
+import type { RequestObservabilityMetrics } from '../observability/runtime-observability.js';
 import type {
   TransportObservability,
 } from '../observability/transport-observability.js';
@@ -263,28 +259,8 @@ class FakeAssetStore {
   public async cleanupBrowserSplitArtifacts(): Promise<void> {}
 }
 
-class FakeModelAssetClassifier extends ModelAssetClassifier {
-  public constructor() {
-    super({
-      async detectModelFromGgufFile(): Promise<ModelDetectionResult> {
-        throw new Error('FakeModelAssetClassifier overrides classify directly.');
-      },
-    });
-  }
-
-  public override async classify(assetId: string, input: File): Promise<{
-    assetId: string;
-    file: File;
-    inspection: {
-      version: 1;
-      role: 'model' | 'projector';
-      architecture: string | null;
-      visionCapable: boolean;
-      compatibleVisionProjectorTypes: string[];
-      providedVisionProjectorType: string | null;
-    };
-    name: string;
-  }> {
+class FakeAssetClassifier {
+  public async classify(assetId: string, input: File): Promise<ClassifiedAssetFile> {
     const isProjector = /mmproj|projector/i.test(input.name);
     const visionCapable = !isProjector && /vision|llava/i.test(input.name);
     return {
@@ -303,59 +279,8 @@ class FakeModelAssetClassifier extends ModelAssetClassifier {
   }
 }
 
-class MetadataLimitedModelAssetClassifier extends ModelAssetClassifier {
-  public constructor() {
-    super({
-      async detectModelFromGgufFile(): Promise<ModelDetectionResult> {
-        throw new Error('MetadataLimitedModelAssetClassifier overrides classify directly.');
-      },
-    });
-  }
-
-  public override async classify(assetId: string, input: File): Promise<{
-    assetId: string;
-    file: File;
-    inspection: {
-      version: 1;
-      role: 'model' | 'projector';
-      architecture: string | null;
-      visionCapable: boolean;
-      compatibleVisionProjectorTypes: string[];
-      providedVisionProjectorType: string | null;
-    };
-    name: string;
-  }> {
-    const isProjector = /mmproj|projector/i.test(input.name);
-    return {
-      assetId,
-      file: input,
-      inspection: {
-        version: 1,
-        role: isProjector ? 'projector' : 'model',
-        architecture: isProjector ? 'clip' : 'llama',
-        visionCapable: false,
-        compatibleVisionProjectorTypes: [],
-        providedVisionProjectorType: null,
-      },
-      name: input.name,
-    };
-  }
-}
-
-class IncompatibleProjectorClassifier extends FakeModelAssetClassifier {
-  public override async classify(assetId: string, input: File): Promise<{
-    assetId: string;
-    file: File;
-    inspection: {
-      version: 1;
-      role: 'model' | 'projector';
-      architecture: string | null;
-      visionCapable: boolean;
-      compatibleVisionProjectorTypes: string[];
-      providedVisionProjectorType: string | null;
-    };
-    name: string;
-  }> {
+class IncompatibleProjectorClassifier extends FakeAssetClassifier {
+  public override async classify(assetId: string, input: File): Promise<ClassifiedAssetFile> {
     const classified = await super.classify(assetId, input);
     if (/bad-mmproj/i.test(input.name)) {
       classified.inspection.providedVisionProjectorType = 'other-merger';
@@ -723,7 +648,7 @@ class FakeRuntime implements EngineRuntime {
     };
   }
 
-  public getRuntimeObservability(): RuntimeAggregateObservabilityMetrics | null {
+  public getRuntimeObservability(): RequestObservabilityMetrics | null {
     return this.runtimeMetricsEnabled ? this.createMetrics() : null;
   }
 
@@ -983,7 +908,7 @@ function createService(overrides: {
   runtime?: FakeRuntime;
   registry?: MemoryRegistryStore;
   assets?: FakeAssetStore;
-  classifier?: ModelAssetClassifier;
+  classifier?: { classify(assetId: string, file: File, signal?: AbortSignal): Promise<ClassifiedAssetFile> };
 } = {}): {
   service: ModelService;
   runtime: FakeRuntime;
@@ -998,7 +923,7 @@ function createService(overrides: {
       runtime,
       registry as unknown as ModelRegistryStore,
       assets as unknown as AssetStore,
-      overrides.classifier ?? new FakeModelAssetClassifier()
+      overrides.classifier ?? new FakeAssetClassifier()
     ),
     runtime,
     registry,
@@ -1012,7 +937,7 @@ test('ModelService loads, lists, tracks current, and queries text models', async
 
   assert.equal(info.status, 'ready');
   assert.equal(info.loaded, true);
-  assert.equal(service.currentModel()?.id, info.id);
+  assert.equal(service.current()?.id, info.id);
   assert.equal((await service.list())[0]?.loaded, true);
 
   const tokens: string[] = [];
@@ -1175,7 +1100,7 @@ test('ModelService removes current models and deletes orphaned assets', async ()
   const info = await service.load(file('remove-me.gguf'));
 
   await service.remove(info.id);
-  assert.equal(service.currentModel(), null);
+  assert.equal(service.current(), null);
   assert.equal(runtime.closeCount, 1);
   assert.equal(assets.deleted.length, 1);
   assert.deepEqual(await service.list(), []);

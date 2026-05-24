@@ -20,9 +20,7 @@ import type {
   StagedModelBundle,
   StageModelBundleOptions,
 } from '../../bundle/model-bundle-types.js';
-import type {
-  RuntimeAggregateObservabilityMetrics,
-} from '../../observability/runtime-observability.js';
+import type { RequestObservabilityMetrics } from '../../observability/runtime-observability.js';
 import type {
   TransportObservability,
 } from '../../observability/transport-observability.js';
@@ -1006,7 +1004,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     }
   }
 
-  public getRuntimeObservability(): RuntimeAggregateObservabilityMetrics | null {
+  public getRuntimeObservability(): RequestObservabilityMetrics | null {
     if (!this.runtimeObservabilityEnabled) {
       return null;
     }

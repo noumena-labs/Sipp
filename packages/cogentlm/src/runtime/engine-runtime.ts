@@ -13,9 +13,7 @@ import type {
   StagedModelBundle,
   StageModelBundleOptions,
 } from '../bundle/model-bundle-types.js';
-import type {
-  RuntimeAggregateObservabilityMetrics,
-} from '../observability/runtime-observability.js';
+import type { RequestObservabilityMetrics } from '../observability/runtime-observability.js';
 import type {
   TransportObservability,
 } from '../observability/transport-observability.js';
@@ -111,6 +109,6 @@ export interface EngineRuntime {
     requestId: GenerateRequestId,
     options?: { signal?: AbortSignal }
   ): Promise<GenerateResponse>;
-  getRuntimeObservability(): RuntimeAggregateObservabilityMetrics | null;
+  getRuntimeObservability(): RequestObservabilityMetrics | null;
   getBackendObservability(): Promise<BackendObservability | null>;
 }

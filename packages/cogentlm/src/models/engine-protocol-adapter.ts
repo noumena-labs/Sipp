@@ -43,23 +43,6 @@ const emptyBackend: BackendInfo = {
   devices: [],
 };
 
-export class EngineEventController {
-  private readonly listeners = new Set<(event: EngineEvent) => void>();
-
-  public subscribe(listener: (event: EngineEvent) => void): () => void {
-    this.listeners.add(listener);
-    return () => {
-      this.listeners.delete(listener);
-    };
-  }
-
-  public emit(event: EngineEvent): void {
-    for (const listener of this.listeners) {
-      listener(event);
-    }
-  }
-}
-
 export function observabilityEventToStateEvent(event: ObservabilityEvent): EngineEvent {
   const state = observabilitySnapshotToEngineState(event.snapshot);
   return state.status === 'closed' ? { type: 'closed' } : { type: 'state', state };

@@ -39,4 +39,18 @@ export interface RequestObservabilityMetrics {
   prefillTokens: number;
 }
 
-export interface RuntimeAggregateObservabilityMetrics extends RequestObservabilityMetrics {}
+export function withDerivedObservabilityMetrics<T extends RequestObservabilityMetrics>(
+  metrics: T
+): T & { tokensPerSecond: number | null; prefillTokensPerSecond: number | null } {
+  return {
+    ...metrics,
+    tokensPerSecond:
+      metrics.decodeMs > 0 && metrics.outputTokens > 0
+        ? (metrics.outputTokens / metrics.decodeMs) * 1000
+        : null,
+    prefillTokensPerSecond:
+      metrics.prefillMs >= 0.1 && metrics.prefillTokens >= 1
+        ? (metrics.prefillTokens / metrics.prefillMs) * 1000
+        : null,
+  };
+}

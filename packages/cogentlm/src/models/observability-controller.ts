@@ -1,8 +1,5 @@
 import type { BackendObservability } from '../observability/backend-observability.js';
-import type {
-  RequestObservabilityMetrics,
-  RuntimeAggregateObservabilityMetrics,
-} from '../observability/runtime-observability.js';
+import type { RequestObservabilityMetrics } from '../observability/runtime-observability.js';
 import type { TransportObservability } from '../observability/transport-observability.js';
 import type {
   BackendProfileObservation,
@@ -54,12 +51,8 @@ function includeFinite(
   }
 }
 
-export function resolveObservabilityMode(mode: ObservabilityMode | undefined): ObservabilityMode {
-  return mode ?? 'off';
-}
-
 export function toRuntimeObservation(
-  metrics: RuntimeAggregateObservabilityMetrics | RequestObservabilityMetrics | null,
+  metrics: RequestObservabilityMetrics | null,
   transport: TransportObservability
 ): RuntimeObservation | undefined {
   if (metrics == null) {

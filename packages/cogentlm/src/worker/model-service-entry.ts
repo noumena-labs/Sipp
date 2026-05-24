@@ -1,7 +1,6 @@
 import { ModelService } from '../models/model-service.js';
 import {
   QueryError,
-  type RequestResult,
   type TokenBatch,
 } from '../models/types.js';
 import { resolveRuntimeUrls } from '../engine/runtime-assets.js';
@@ -12,13 +11,10 @@ import {
   WorkerRequestMessage,
   WorkerResponseMessage,
   type WorkerSerializableCogentConfig,
-  type WorkerServiceConfig,
 } from './model-service-protocol.js';
 
 let service: ModelService | null = null;
 let serviceConfigFingerprint: string | null = null;
-let unsubscribeObservability: (() => void) | null = null;
-let unsubscribeEngineEvents: (() => void) | null = null;
 const activeCalls = new Map<number, AbortController>();
 // SAB streaming ring writer; set on `streaming-init`.  When null, streaming
 // is unavailable and requests with onTokens will be rejected upstream.
@@ -30,7 +26,7 @@ type WorkerOperationRequest = Exclude<
   { kind: 'cancel' } | { kind: 'streaming-init' }
 >;
 
-function buildServiceConfig(config: WorkerSerializableCogentConfig): WorkerServiceConfig {
+function buildServiceConfig(config: WorkerSerializableCogentConfig) {
   const runtimeUrls = resolveRuntimeUrls(config);
 
   return {
@@ -63,10 +59,10 @@ function ensureService(config: WorkerSerializableCogentConfig): ModelService {
     runtime.setStreamingRingWriter(streamingRingWriter);
   }
   runtime.setStreamingTickCallback(scheduleStreamingTick);
-  unsubscribeObservability = service.subscribeObservability((event) => {
+  service.subscribeObservability((event) => {
     post({ kind: 'observability-event', event });
   });
-  unsubscribeEngineEvents = service.subscribeEvents((event) => {
+  service.subscribeEvents((event) => {
     post({ kind: 'engine-event', event });
   });
   serviceConfigFingerprint = fingerprint;
@@ -122,16 +118,6 @@ function postLoadProgress(callId: number): NonNullable<Parameters<ModelService['
   };
 }
 
-async function runLoad(message: Extract<WorkerOperationRequest, { kind: 'models-load' }>): Promise<unknown> {
-  return await withAbortController(message.callId, (signal) =>
-    ensureService(message.config).load(message.source, {
-      ...message.options,
-      signal,
-      onProgress: postLoadProgress(message.callId),
-    })
-  );
-}
-
 // Wires the engine to emit tokens through the SAB ring and publishes a
 // `streaming-claim` message so the main thread can map the native request id
 // back to its call id.  When `streaming=false`, returns {} so the engine
@@ -161,58 +147,16 @@ function streamingOptionsFor(
   };
 }
 
-async function runQuery(
-  message: Extract<WorkerOperationRequest, { kind: 'query' }>
-): Promise<RequestResult> {
-  return await withAbortController(message.callId, (signal) =>
-    ensureService(message.config).query(message.input, {
-      ...message.options,
-      signal,
-      ...streamingOptionsFor(message.callId, message.options.streaming),
-    })
-  );
-}
-
-async function runQueryResult(
-  message: Extract<WorkerOperationRequest, { kind: 'query-result' }>
-): Promise<unknown> {
-  return await withAbortController(message.callId, (signal) =>
-    ensureService(message.config).queryResult(message.input, {
-      ...message.options,
-      signal,
-      ...streamingOptionsFor(message.callId, message.options.streaming),
-    })
-  );
-}
-
-async function runChat(
-  message: Extract<WorkerOperationRequest, { kind: 'chat' }>
-): Promise<RequestResult> {
-  return await withAbortController(message.callId, (signal) =>
-    ensureService(message.config).chat(message.input, {
-      ...message.options,
-      signal,
-      ...streamingOptionsFor(message.callId, message.options.streaming),
-    })
-  );
-}
-
-async function runChatResult(
-  message: Extract<WorkerOperationRequest, { kind: 'chat-result' }>
-): Promise<unknown> {
-  return await withAbortController(message.callId, (signal) =>
-    ensureService(message.config).chatResult(message.input, {
-      ...message.options,
-      signal,
-      ...streamingOptionsFor(message.callId, message.options.streaming),
-    })
-  );
-}
-
 async function handleRequest(message: WorkerOperationRequest): Promise<unknown> {
   switch (message.kind) {
     case 'models-load':
-      return await runLoad(message);
+      return await withAbortController(message.callId, (signal) =>
+        ensureService(message.config).load(message.source, {
+          ...message.options,
+          signal,
+          onProgress: postLoadProgress(message.callId),
+        })
+      );
     case 'models-list':
       return await ensureService(message.config).list();
     case 'models-unload':
@@ -221,29 +165,24 @@ async function handleRequest(message: WorkerOperationRequest): Promise<unknown> 
     case 'models-remove': {
       const modelService = ensureService(message.config);
       await modelService.remove(message.id);
-      return modelService.currentModel();
+      return modelService.current();
     }
     case 'query':
-      return await runQuery(message);
-    case 'query-result':
-      return await runQueryResult(message);
+      return await withAbortController(message.callId, (signal) =>
+        ensureService(message.config).query(message.input, {
+          ...message.options,
+          signal,
+          ...streamingOptionsFor(message.callId, message.options.streaming),
+        })
+      );
     case 'chat':
-      return await runChat(message);
-    case 'chat-result':
-      return await runChatResult(message);
-    case 'close':
-      for (const callId of activeCalls.keys()) {
-        abortActiveCall(callId);
-      }
-      service?.close();
-      unsubscribeObservability?.();
-      unsubscribeObservability = null;
-      unsubscribeEngineEvents?.();
-      unsubscribeEngineEvents = null;
-      streamingTickQueued = false;
-      service = null;
-      serviceConfigFingerprint = null;
-      return undefined;
+      return await withAbortController(message.callId, (signal) =>
+        ensureService(message.config).chat(message.input, {
+          ...message.options,
+          signal,
+          ...streamingOptionsFor(message.callId, message.options.streaming),
+        })
+      );
   }
 }
 
