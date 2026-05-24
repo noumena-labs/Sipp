@@ -49,6 +49,8 @@ int cogentlm_browser_engine_run_scheduler_loop(
     CE_SchedulerLoopResult *out_result);
 int cogentlm_browser_engine_completed_request_status(
     const void *engine, CE_RequestId request_id);
+int cogentlm_browser_engine_completed_request_output_kind(
+    const void *engine, CE_RequestId request_id);
 int cogentlm_browser_engine_completed_request_output_size(
     const void *engine, CE_RequestId request_id);
 int cogentlm_browser_engine_copy_completed_request_output(
@@ -796,6 +798,12 @@ int CE_GetCompletedRequestStatus(CE_RequestId request_id) {
   }
   return cogentlm_browser_engine_completed_request_status(g_rustBrowserEngine,
                                                           request_id);
+}
+
+EMSCRIPTEN_KEEPALIVE
+int CE_GetCompletedRequestOutputKind(CE_RequestId request_id) {
+  return cogentlm_browser_engine_completed_request_output_kind(
+      g_rustBrowserEngine, request_id);
 }
 
 EMSCRIPTEN_KEEPALIVE

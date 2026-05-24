@@ -58,6 +58,7 @@ import {
   observabilitySnapshotToEngineState,
   embeddingResultFromGenerateResponse,
   generationResultFromGenerateResponse,
+  generationResultFromText,
 } from './engine-protocol-adapter.js';
 import {
   ObservabilityController,
@@ -563,20 +564,12 @@ export class ModelService implements ModelLifecycleService {
     } catch (error) {
       if (stoppedAtBoundary && options.signal?.aborted !== true) {
         flushOutputText();
-        return generationResultFromGenerateResponse(
-          {
-            requestId: -1,
-            completed: true,
-            failed: false,
-            cancelled: false,
-            outputText: assistantText.trim(),
-            observability: null,
-          },
-          {
-            text: assistantText.trim(),
-            finishReason: 'stop',
-          }
-        );
+        return generationResultFromText({
+          id: -1,
+          text: assistantText.trim(),
+          finishReason: 'stop',
+          metrics: null,
+        });
       }
       throw error;
     } finally {

@@ -76,7 +76,12 @@ fn completed_response_maps_to_generation_result() {
             output_tokens: 5,
             ..RuntimeObservabilityMetrics::default()
         },
-        ..GenerateResponse::completed(7, "hello")
+        ..GenerateResponse::terminal(
+            7,
+            GenerateResponseStatus::Completed,
+            ResponseOutput::Text("hello".to_string()),
+            "",
+        )
     };
     let result = generation_result_from_response(response).expect("generation result");
 

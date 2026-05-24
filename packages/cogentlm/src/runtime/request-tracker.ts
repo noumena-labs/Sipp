@@ -16,9 +16,8 @@ function createDeferred<T>(): {
 
 /**
  * Tracks the lifecycle of a pending request: its promise, settlement state,
- * abort signal, and cleanup. Generic over the result type so both the
- * main-thread runtime (GenerateResponse) and the worker runtime
- * (WorkerRunQueuedRequestResult) can share the same bookkeeping.
+ * abort signal, and cleanup. Generic over the result type so both native
+ * completions and worker call responses can share the same bookkeeping.
  */
 
 export interface TrackedRequest<TResult> {

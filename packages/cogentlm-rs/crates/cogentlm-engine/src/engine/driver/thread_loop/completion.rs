@@ -313,7 +313,12 @@ mod tests {
         let mut runtime = test_runtime(NativeRuntimeConfig::default());
         runtime
             .request_queue
-            .mark_completed(GenerateResponse::completed(7, "text"));
+            .mark_completed(GenerateResponse::terminal(
+                7,
+                GenerateResponseStatus::Completed,
+                ResponseOutput::Text("text".to_string()),
+                "",
+            ));
 
         let (response_tx, response_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();

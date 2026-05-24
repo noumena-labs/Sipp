@@ -71,11 +71,26 @@ export function generationResultFromGenerateResponse(
   } = {}
 ): GenerationResult {
   const text = options.text ?? textOutputFromGenerateResponse(response);
-  return {
-    id: String(response.requestId),
+  const finishReason = options.finishReason ?? finishReasonFromGenerateResponse(response, options.maxTokens);
+  return generationResultFromText({
+    id: response.requestId,
     text,
-    finishReason: options.finishReason ?? finishReasonFromGenerateResponse(response, options.maxTokens),
-    stats: requestStatsFromMetrics(response.observability ?? null),
+    finishReason,
+    metrics: response.observability ?? null,
+  });
+}
+
+export function generationResultFromText(input: {
+  id: string | number;
+  text: string;
+  finishReason: FinishReason;
+  metrics?: GenerateResponse['observability'] | null;
+}): GenerationResult {
+  return {
+    id: String(input.id),
+    text: input.text,
+    finishReason: input.finishReason,
+    stats: requestStatsFromMetrics(input.metrics ?? null),
   };
 }
 

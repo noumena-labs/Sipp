@@ -29,6 +29,8 @@ import {
   type RequestObservabilityMetrics,
 } from '../observability/runtime-observability.js';
 import {
+  COMPLETED_REQUEST_OUTPUT_EMBEDDING,
+  COMPLETED_REQUEST_OUTPUT_TEXT,
   COMPLETED_REQUEST_STATUS_CANCELLED,
   COMPLETED_REQUEST_STATUS_COMPLETED,
   COMPLETED_REQUEST_STATUS_FAILED,
@@ -819,34 +821,40 @@ export class WasmBridge {
       throw new Error('Queued request response is no longer available.');
     }
 
-    const embedding = this.readCompletedEmbeddingIfPresent(requestId);
-    if (embedding == null) {
-      const outputText = this.copyCompletedRequestText(
-        requestId,
+    const outputKind = this.callNumber('CE_GetCompletedRequestOutputKind', ['number'], [requestId]);
+    if (outputKind === COMPLETED_REQUEST_OUTPUT_TEXT) {
+      const outputText = this.copyText(
         'CE_GetCompletedRequestOutputSize',
         'CE_CopyCompletedRequestOutput',
-        'output'
+        'output',
+        ['number'],
+        [requestId]
       );
       return {
         ...this.completedResponseBase(requestId, status),
         outputText,
       };
     }
-    return {
-      ...this.completedResponseBase(requestId, status),
-      embedding,
-    };
+    if (outputKind === COMPLETED_REQUEST_OUTPUT_EMBEDDING) {
+      const embedding = this.readCompletedEmbedding(requestId);
+      return {
+        ...this.completedResponseBase(requestId, status),
+        embedding,
+      };
+    }
+    throw new Error(`Completed request ${requestId} has unknown output kind ${outputKind}.`);
   }
 
   private completedResponseBase(
     requestId: GenerateRequestId,
     status: number
   ): Omit<GenerateResponse, 'outputText' | 'embedding'> {
-    const errorText = this.copyCompletedRequestText(
-      requestId,
+    const errorText = this.copyText(
       'CE_GetCompletedRequestErrorSize',
       'CE_CopyCompletedRequestError',
-      'error'
+      'error',
+      ['number'],
+      [requestId]
     );
     const runtimeObservability = this.readCompletedRequestRuntimeObservability(requestId);
     if (!this.consumeCompletedRequest(requestId)) {
@@ -1153,12 +1161,10 @@ export class WasmBridge {
     }
   }
 
-  private readCompletedEmbeddingIfPresent(
-    requestId: GenerateRequestId
-  ): EmbeddingOutput | null {
+  private readCompletedEmbedding(requestId: GenerateRequestId): EmbeddingOutput {
     const length = this.callNumber('CE_GetCompletedRequestEmbeddingLength', ['number'], [requestId]);
     if (length < 0) {
-      return null;
+      throw new Error('Completed request did not expose an embedding vector.');
     }
     const pooling = poolingTypeFromCode(
       this.callNumber('CE_GetCompletedRequestEmbeddingPooling', ['number'], [requestId])
@@ -1196,15 +1202,6 @@ export class WasmBridge {
     } finally {
       this.free(bufferPtr);
     }
-  }
-
-  private copyCompletedRequestText(
-    requestId: GenerateRequestId,
-    sizeFunction: string,
-    copyFunction: string,
-    fieldName: string
-  ): string {
-    return this.copyText(sizeFunction, copyFunction, fieldName, ['number'], [requestId]);
   }
 
   private copyText(

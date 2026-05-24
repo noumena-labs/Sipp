@@ -40,7 +40,7 @@ extern "C" {
 #[cfg(target_family = "wasm")]
 const STREAMING_STEP_TICKS: i32 = 256;
 
-const ABI_VERSION: u32 = 4;
+const ABI_VERSION: u32 = 5;
 
 const STATUS_OK: i32 = 0;
 const STATUS_FAILURE: i32 = -1;
@@ -60,6 +60,10 @@ const COMPLETED_REQUEST_STATUS_CANCELLED: i32 = 2;
 #[cfg(target_family = "wasm")]
 const COMPLETED_REQUEST_STATUS_FAILED: i32 = 3;
 const COMPLETED_REQUEST_STATUS_UNKNOWN: i32 = 4;
+#[cfg(target_family = "wasm")]
+const COMPLETED_REQUEST_OUTPUT_TEXT: i32 = 1;
+#[cfg(target_family = "wasm")]
+const COMPLETED_REQUEST_OUTPUT_EMBEDDING: i32 = 2;
 
 #[cfg(target_family = "wasm")]
 const STREAMING_BUFFER_CAPACITY: usize = 256 * 1024;
@@ -699,8 +703,18 @@ impl BrowserEngine {
     }
 
     #[cfg(target_family = "wasm")]
-    fn completed_response(&self, request_id: u32) -> Option<GenerateResponse> {
-        self.completed_response_ref(request_id).cloned()
+    fn completed_output_kind(&self, request_id: u32) -> i32 {
+        self.completed_response_ref(request_id)
+            .map(|response| match &response.output {
+                ResponseOutput::Text(_) => COMPLETED_REQUEST_OUTPUT_TEXT,
+                ResponseOutput::Embedding { .. } => COMPLETED_REQUEST_OUTPUT_EMBEDDING,
+            })
+            .unwrap_or(STATUS_FAILURE)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn completed_output_kind(&self, _request_id: u32) -> i32 {
+        STATUS_UNAVAILABLE
     }
 
     #[cfg(target_family = "wasm")]
@@ -794,7 +808,7 @@ impl BrowserEngine {
 
     #[cfg(target_family = "wasm")]
     fn completed_runtime_metrics(&self, request_id: u32) -> Option<BrowserRuntimeMetrics> {
-        self.completed_response(request_id)
+        self.completed_response_ref(request_id)
             .map(|response| runtime_metrics_from_core(response.runtime_observability))
     }
 
@@ -1108,6 +1122,14 @@ pub extern "C" fn cogentlm_browser_engine_completed_request_status(
     request_id: u32,
 ) -> i32 {
     with_engine_ref(engine, |engine| engine.completed_status(request_id))
+}
+
+#[no_mangle]
+pub extern "C" fn cogentlm_browser_engine_completed_request_output_kind(
+    engine: *const BrowserEngine,
+    request_id: u32,
+) -> i32 {
+    with_engine_ref(engine, |engine| engine.completed_output_kind(request_id))
 }
 
 #[no_mangle]
@@ -1588,29 +1610,29 @@ fn runtime_metrics_from_core(
 }
 
 #[cfg(target_family = "wasm")]
-fn completed_output(engine: &BrowserEngine, request_id: u32) -> Option<String> {
+fn completed_output(engine: &BrowserEngine, request_id: u32) -> Option<&str> {
     engine
-        .completed_response(request_id)
-        .and_then(|response| match response.output {
-            ResponseOutput::Text(text) => Some(text),
+        .completed_response_ref(request_id)
+        .and_then(|response| match &response.output {
+            ResponseOutput::Text(text) => Some(text.as_str()),
             ResponseOutput::Embedding { .. } => None,
         })
 }
 
 #[cfg(not(target_family = "wasm"))]
-fn completed_output(_engine: &BrowserEngine, _request_id: u32) -> Option<String> {
+fn completed_output(_engine: &BrowserEngine, _request_id: u32) -> Option<&str> {
     None
 }
 
 #[cfg(target_family = "wasm")]
-fn completed_error(engine: &BrowserEngine, request_id: u32) -> Option<String> {
+fn completed_error(engine: &BrowserEngine, request_id: u32) -> Option<&str> {
     engine
-        .completed_response(request_id)
-        .map(|response| response.error_message)
+        .completed_response_ref(request_id)
+        .map(|response| response.error_message.as_str())
 }
 
 #[cfg(not(target_family = "wasm"))]
-fn completed_error(_engine: &BrowserEngine, _request_id: u32) -> Option<String> {
+fn completed_error(_engine: &BrowserEngine, _request_id: u32) -> Option<&str> {
     None
 }
 

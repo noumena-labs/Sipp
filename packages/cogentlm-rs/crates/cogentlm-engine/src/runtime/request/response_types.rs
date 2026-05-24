@@ -70,15 +70,6 @@ impl GenerateResponse {
         }
     }
 
-    pub fn completed(request_id: GenerateRequestId, output_text: impl Into<String>) -> Self {
-        Self::terminal(
-            request_id,
-            GenerateResponseStatus::Completed,
-            ResponseOutput::Text(output_text.into()),
-            "",
-        )
-    }
-
     pub fn cancelled(request_id: GenerateRequestId, error_message: impl Into<String>) -> Self {
         Self::terminal(
             request_id,

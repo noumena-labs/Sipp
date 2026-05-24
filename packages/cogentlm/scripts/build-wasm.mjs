@@ -51,6 +51,45 @@ function normalizeBuildVariant(value) {
 // Parse arguments to configure default environment variables
 const isDev = rawArgs.includes('--dev');
 const buildVariant = normalizeBuildVariant(readBuildVariant(rawArgs));
+const buildKind = isDev ? 'dev' : 'browser';
+const rustRoot = path.resolve(path.dirname(scriptPath), '..', '..', 'cogentlm-rs');
+const variantConfigs = [
+  {
+    name: 'single-thread',
+    pthreads: '0',
+    artifactPrefix: 'cogentlm-wasm',
+    buildDirName: isDev ? 'build-wasm-dev' : 'build-browser',
+    label: `[build-wasm:${buildKind}:single]`,
+  },
+  {
+    name: 'pthread',
+    pthreads: '1',
+    artifactPrefix: 'cogentlm-wasm-pthread',
+    buildDirName: isDev ? 'build-wasm-dev-pthread' : 'build-browser-pthread',
+    label: `[build-wasm:${buildKind}:pthread]`,
+  },
+];
+
+function variantConfig(name) {
+  return variantConfigs.find((variant) => variant.name === name) ?? null;
+}
+
+function applyVariantDefaults(variant) {
+  process.env.CE_WASM_BUILD_VARIANT ??= variant.name;
+  process.env.CE_WASM_PTHREADS ??= variant.pthreads;
+  process.env.CE_WASM_ARTIFACT_PREFIX ??= variant.artifactPrefix;
+  process.env.CE_WASM_BUILD_DIR_NAME ??= variant.buildDirName;
+  process.env.CE_WASM_BUILD_LABEL ??= variant.label;
+  process.env.CE_WASM_OUTPUT_SUBDIR ??= 'wasm';
+  process.env.CE_WASM_MEM64 ??= '0';
+  process.env.CE_WASM_MAXIMUM_MEMORY ??= '4096MB';
+  process.env.CARGO_TARGET_DIR ??= path.join(rustRoot, `target-wasm-${variant.name}`);
+  if (isDev) {
+    process.env.CE_WASM_LTO_MODE ??= 'OFF';
+    process.env.CE_WASM_BUILD_PARALLEL_LEVEL ??= '8';
+  }
+}
+
 const shouldBuildBothVariants =
   buildVariant == null &&
   process.env.CE_WASM_PTHREADS == null &&
@@ -58,26 +97,7 @@ const shouldBuildBothVariants =
 
 if (shouldBuildBothVariants) {
   const childArgs = stripBuildVariantArgs(rawArgs);
-  const buildKind = isDev ? 'dev' : 'browser';
-  const rustRoot = path.resolve(path.dirname(scriptPath), '..', '..', 'cogentlm-rs');
-  const variants = [
-    {
-      name: 'single-thread',
-      pthreads: '0',
-      artifactPrefix: 'cogentlm-wasm',
-      buildDirName: isDev ? 'build-wasm-dev' : 'build-browser',
-      label: `[build-wasm:${buildKind}:single]`,
-    },
-    {
-      name: 'pthread',
-      pthreads: '1',
-      artifactPrefix: 'cogentlm-wasm-pthread',
-      buildDirName: isDev ? 'build-wasm-dev-pthread' : 'build-browser-pthread',
-      label: `[build-wasm:${buildKind}:pthread]`,
-    },
-  ];
-
-  for (const variant of variants) {
+  for (const variant of variantConfigs) {
     const result = spawnSync(process.execPath, [scriptPath, ...childArgs, '--variant', variant.name], {
       cwd: process.cwd(),
       stdio: 'inherit',
@@ -112,6 +132,11 @@ if (shouldBuildBothVariants) {
     }
   }
   process.exit(0);
+}
+
+const explicitVariant = variantConfig(buildVariant);
+if (explicitVariant != null) {
+  applyVariantDefaults(explicitVariant);
 }
 
 if (isDev) {
