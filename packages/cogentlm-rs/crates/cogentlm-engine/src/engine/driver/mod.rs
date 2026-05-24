@@ -12,7 +12,6 @@ use crate::engine::{
     NativeRuntimeConfig,
 };
 use crate::error::{Error, Result};
-use crate::runtime::request::GenerateResponse;
 use crate::runtime::InferenceRuntime;
 
 mod events;
@@ -107,12 +106,12 @@ impl CogentEngine {
 
     pub fn query(&self, request: QueryRequest) -> Result<GenerationResult> {
         self.send_command(|response_tx| EngineThreadCommand::Generate(request, response_tx))
-            .map(|response: GenerateResponse| generation_result_from_response(&response))
+            .and_then(|response| generation_result_from_response(&response))
     }
 
     pub fn chat(&self, request: ChatRequest) -> Result<GenerationResult> {
         self.send_command(|response_tx| EngineThreadCommand::GenerateChat(request, response_tx))
-            .map(|response| generation_result_from_response(&response))
+            .and_then(|response| generation_result_from_response(&response))
     }
 
     pub fn state(&self) -> Result<EngineState> {

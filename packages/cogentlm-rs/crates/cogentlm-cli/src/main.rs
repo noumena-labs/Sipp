@@ -7,7 +7,9 @@ use clap::{Parser, ValueEnum};
 use cogentlm_engine::backend::set_llama_log_quiet;
 use cogentlm_engine::engine::{GpuLayerConfig, NativeRuntimeConfig, SamplingRuntimeConfig};
 use cogentlm_engine::runtime::metrics::RuntimeObservabilityMetrics;
-use cogentlm_engine::runtime::request::{GenerateResponseStatus, GenerateTokenEmissionMode};
+use cogentlm_engine::runtime::request::{
+    GenerateResponseStatus, GenerateTokenEmissionMode, ResponseOutput,
+};
 use cogentlm_engine::runtime::{InferenceRuntime, RequestStepResult};
 use serde_json::json;
 
@@ -142,7 +144,13 @@ fn run_native_runtime(args: &Args, stdout: &mut impl Write) -> anyhow::Result<()
         let burst = runtime.run_scheduler_burst(256, 1, 0, Duration::ZERO);
         if let Some(response) = runtime.take_completed_response(request_id) {
             if response.status == GenerateResponseStatus::Completed {
-                stdout.write_all(response.output_text.as_bytes())?;
+                let output = match response.output {
+                    ResponseOutput::Text(text) => text,
+                    ResponseOutput::Embedding { .. } => {
+                        bail!("generation request completed with embedding output")
+                    }
+                };
+                stdout.write_all(output.as_bytes())?;
                 print_stats(args.stats, response.runtime_observability)?;
                 return Ok(());
             }

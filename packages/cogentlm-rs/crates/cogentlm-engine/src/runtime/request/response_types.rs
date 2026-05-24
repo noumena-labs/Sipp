@@ -1,3 +1,4 @@
+use crate::engine::protocol::PoolingType;
 use crate::runtime::metrics::RuntimeObservabilityMetrics;
 
 use super::GenerateRequestId;
@@ -22,11 +23,30 @@ impl GenerateResponseStatus {
     }
 }
 
+/// Internal terminal payload. `query()`/`chat()` finalize with `Text`,
+/// `embed()` finalizes with `Embedding`. Public binding mappers enforce the
+/// "right command produces the right variant" invariant; the enum itself is
+/// never re-exported from `engine::mod`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResponseOutput {
+    Text(String),
+    Embedding {
+        values: Vec<f32>,
+        pooling: PoolingType,
+    },
+}
+
+impl Default for ResponseOutput {
+    fn default() -> Self {
+        Self::Text(String::new())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct GenerateResponse {
     pub request_id: GenerateRequestId,
     pub status: GenerateResponseStatus,
-    pub output_text: String,
+    pub output: ResponseOutput,
     pub error_message: String,
     pub runtime_observability: RuntimeObservabilityMetrics,
 }
@@ -35,13 +55,13 @@ impl GenerateResponse {
     pub fn terminal(
         request_id: GenerateRequestId,
         status: GenerateResponseStatus,
-        output_text: impl Into<String>,
+        output: ResponseOutput,
         error_message: impl Into<String>,
     ) -> Self {
         Self {
             request_id,
             status,
-            output_text: output_text.into(),
+            output,
             error_message: error_message.into(),
             ..Self::default()
         }
@@ -51,7 +71,7 @@ impl GenerateResponse {
         Self::terminal(
             request_id,
             GenerateResponseStatus::Completed,
-            output_text,
+            ResponseOutput::Text(output_text.into()),
             "",
         )
     }
@@ -60,7 +80,7 @@ impl GenerateResponse {
         Self::terminal(
             request_id,
             GenerateResponseStatus::Cancelled,
-            "",
+            ResponseOutput::default(),
             error_message,
         )
     }
@@ -69,7 +89,7 @@ impl GenerateResponse {
         Self::terminal(
             request_id,
             GenerateResponseStatus::Failed,
-            "",
+            ResponseOutput::default(),
             error_message,
         )
     }

@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use crate::runtime::request::{
     GenerateRequest, GenerateResponse, GenerateResponseStatus, GenerateTokenEmissionMode,
-    RequestQueue,
+    RequestQueue, ResponseOutput,
 };
 use crate::runtime::session::SessionStore;
 use crate::runtime::{
@@ -136,7 +136,7 @@ impl SlotScheduler {
             let mut response = GenerateResponse::terminal(
                 slot.request_id,
                 response_status,
-                std::mem::take(&mut slot.output_text),
+                ResponseOutput::Text(std::mem::take(&mut slot.output_text)),
                 completed_slot_error_message(
                     response_status,
                     slot.phase,

@@ -13,7 +13,7 @@ use cogentlm_engine::runtime::config::NativeRuntimeConfig;
 #[cfg(target_family = "wasm")]
 use cogentlm_engine::runtime::request::{
     token_byte_ring, GenerateResponse, GenerateResponseStatus, GenerateTokenEmissionMode,
-    TokenByteRingConsumer, TokenByteRingProducer, TOKEN_RING_DEFAULT_CAPACITY,
+    ResponseOutput, TokenByteRingConsumer, TokenByteRingProducer, TOKEN_RING_DEFAULT_CAPACITY,
 };
 #[cfg(target_family = "wasm")]
 use cogentlm_engine::runtime::{InferenceRuntime, RequestStepResult, SchedulerBurstResult};
@@ -1377,7 +1377,10 @@ fn runtime_metrics_from_core(
 fn completed_output(engine: &BrowserEngine, request_id: u32) -> Option<String> {
     engine
         .completed_response(request_id)
-        .map(|response| response.output_text)
+        .and_then(|response| match response.output {
+            ResponseOutput::Text(text) => Some(text),
+            ResponseOutput::Embedding { .. } => None,
+        })
 }
 
 #[cfg(not(target_family = "wasm"))]

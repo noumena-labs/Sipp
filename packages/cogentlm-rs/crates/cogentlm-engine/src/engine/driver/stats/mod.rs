@@ -10,9 +10,10 @@ use crate::backend::{
 use crate::engine::protocol::{
     BackendDevice, BackendInfo, EngineStats, FinishReason, GenerationResult, RequestStats,
 };
+use crate::error::{Error, Result};
 use crate::runtime::metrics::RuntimeObservabilityMetrics;
 use crate::runtime::numeric::MILLIS_PER_SECOND_F64;
-use crate::runtime::request::{GenerateResponse, GenerateResponseStatus};
+use crate::runtime::request::{GenerateResponse, GenerateResponseStatus, ResponseOutput};
 
 const UNKNOWN_BACKEND: &str = "unknown";
 
@@ -66,17 +67,27 @@ pub(super) fn engine_stats_from_runtime(metrics: RuntimeObservabilityMetrics) ->
     }
 }
 
-pub(super) fn generation_result_from_response(response: &GenerateResponse) -> GenerationResult {
-    GenerationResult {
+pub(super) fn generation_result_from_response(
+    response: &GenerateResponse,
+) -> Result<GenerationResult> {
+    let text = match &response.output {
+        ResponseOutput::Text(text) => text.clone(),
+        ResponseOutput::Embedding { .. } => {
+            return Err(Error::RuntimeCommand(
+                "generation request completed with embedding output".to_string(),
+            ));
+        }
+    };
+    Ok(GenerationResult {
         id: response.request_id.to_string(),
-        text: response.output_text.clone(),
+        text,
         finish_reason: match response.status {
             GenerateResponseStatus::Completed => FinishReason::Stop,
             GenerateResponseStatus::Cancelled => FinishReason::Cancelled,
             GenerateResponseStatus::Failed | GenerateResponseStatus::Pending => FinishReason::Error,
         },
         stats: request_stats_from_runtime(response.runtime_observability),
-    }
+    })
 }
 
 pub(super) fn request_stats_from_runtime(metrics: RuntimeObservabilityMetrics) -> RequestStats {

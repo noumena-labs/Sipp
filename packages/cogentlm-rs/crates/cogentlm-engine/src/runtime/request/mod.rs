@@ -8,7 +8,7 @@ pub use request_types::{
     GenerateRequest, GenerateRequestId, GenerateRequestLifecycle, GenerateTokenEmissionMode,
     MultimodalPayload, NO_SAMPLED_TOKEN_ID,
 };
-pub use response_types::{GenerateResponse, GenerateResponseStatus};
+pub use response_types::{GenerateResponse, GenerateResponseStatus, ResponseOutput};
 pub use token_ring::{
     token_byte_ring, TokenByteRingConsumer, TokenByteRingProducer, TokenRingDrain,
     TokenRingDrainStatus, TokenRingFrame, TOKEN_RING_DEFAULT_CAPACITY,

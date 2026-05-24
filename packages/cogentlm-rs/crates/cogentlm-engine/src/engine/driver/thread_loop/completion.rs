@@ -110,14 +110,21 @@ impl EngineThreadState {
 
             let result = match response.status {
                 GenerateResponseStatus::Completed => {
-                    let result = generation_result_from_response(&response);
-                    emit_event(
-                        &self.event_subscribers,
-                        EngineEvent::RequestCompleted {
-                            result: Box::new(result.clone()),
-                        },
-                    );
-                    Ok(response)
+                    match generation_result_from_response(&response) {
+                        Ok(result) => {
+                            emit_event(
+                                &self.event_subscribers,
+                                EngineEvent::RequestCompleted {
+                                    result: Box::new(result.clone()),
+                                },
+                            );
+                            Ok(response)
+                        }
+                        Err(error) => {
+                            self.emit_request_failed(request_id, error.to_string());
+                            Err(error)
+                        }
+                    }
                 }
                 GenerateResponseStatus::Cancelled => self.failed_completion_result(
                     request_id,

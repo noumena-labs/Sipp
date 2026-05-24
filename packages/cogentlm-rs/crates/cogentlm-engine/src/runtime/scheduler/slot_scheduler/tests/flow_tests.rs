@@ -1,6 +1,6 @@
 use crate::runtime::request::{
     token_byte_ring, GenerateRequest, GenerateRequestId, GenerateResponseStatus,
-    GenerateTokenEmissionMode, RequestQueue,
+    GenerateTokenEmissionMode, RequestQueue, ResponseOutput,
 };
 use crate::runtime::scheduler::SlotPhase;
 use crate::runtime::session::{SequenceState, SessionStore};
@@ -108,7 +108,7 @@ fn finalize_completed_slot_writes_response_and_releases_session() {
 
     let response = queue.completed_responses.get(&1).expect("response");
     assert_eq!(response.status, GenerateResponseStatus::Completed);
-    assert_eq!(response.output_text, "done");
+    assert_eq!(response.output, ResponseOutput::Text("done".to_string()));
     assert_eq!(
         sessions.find("ctx").map(|session| session.pin_count),
         Some(0)

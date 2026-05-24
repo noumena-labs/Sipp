@@ -6,10 +6,11 @@ use serde_json::json;
 
 use super::super::*;
 use crate::backend::{json_strings, KEY_NAME};
-use crate::engine::protocol::FinishReason;
+use crate::engine::protocol::{FinishReason, PoolingType};
+use crate::error::Error;
 use crate::runtime::metrics::RuntimeObservabilityMetrics;
 use crate::runtime::numeric::duration_millis_u64;
-use crate::runtime::request::GenerateResponse;
+use crate::runtime::request::{GenerateResponse, GenerateResponseStatus, ResponseOutput};
 
 #[test]
 fn runtime_metrics_map_to_engine_stats() {
@@ -69,20 +70,40 @@ fn backend_observability_parsers_preserve_array_capacity() {
 
 #[test]
 fn completed_response_maps_to_generation_result() {
-    let result = generation_result_from_response(&GenerateResponse {
+    let response = GenerateResponse {
         runtime_observability: RuntimeObservabilityMetrics {
             e2e_ms: 50.0,
             output_tokens: 5,
             ..RuntimeObservabilityMetrics::default()
         },
         ..GenerateResponse::completed(7, "hello")
-    });
+    };
+    let result = generation_result_from_response(&response).expect("generation result");
 
     assert_eq!(result.id, "7");
     assert_eq!(result.text, "hello");
     assert_eq!(result.finish_reason, FinishReason::Stop);
     assert_eq!(result.stats.output_tokens, 5);
     assert_eq!(result.stats.tokens_per_second, Some(100.0));
+}
+
+#[test]
+fn embedding_response_is_not_a_generation_result() {
+    let response = GenerateResponse::terminal(
+        9,
+        GenerateResponseStatus::Completed,
+        ResponseOutput::Embedding {
+            values: vec![1.0],
+            pooling: PoolingType::Mean,
+        },
+        "",
+    );
+
+    let error = generation_result_from_response(&response).expect_err("embedding response");
+
+    assert!(
+        matches!(error, Error::RuntimeCommand(message) if message.contains("embedding output"))
+    );
 }
 
 #[test]
