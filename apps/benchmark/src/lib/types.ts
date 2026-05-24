@@ -25,8 +25,12 @@ export interface MetricSummary {
 
 export type RequestObservability = RequestObservabilityMetrics;
 
+export type BenchmarkOperation = 'chat' | 'query' | 'embed';
+
 export interface BenchmarkRun {
   label: string;
+  operation: BenchmarkOperation;
+  outputKind: 'text' | 'embedding';
   wallMs: number;
   ttftMs: number | null;
   itlAvgMs: number | null;
@@ -38,6 +42,9 @@ export interface BenchmarkRun {
   prefillTps: number | null;
   outputLength: number;
   outputPreview: string;
+  embeddingDimensions: number | null;
+  embeddingPooling: string | null;
+  embeddingNormalized: boolean | null;
   observability: RequestObservability | null;
 }
 
@@ -140,8 +147,8 @@ export interface ConfigOptions {
 export interface MixedLoadDefinition {
   id: string;
   label: string;
-  background: ScenarioDefinition & { promptMode: 'chat'; contextBucket: string; concurrency: number };
-  foreground: ScenarioDefinition & { promptMode: 'chat'; contextBucket: string; concurrency: number };
+  background: ScenarioDefinition & { promptMode: 'chat' | 'query'; contextBucket: string; concurrency: number };
+  foreground: ScenarioDefinition & { promptMode: 'chat' | 'query'; contextBucket: string; concurrency: number };
   concurrency: number;
 }
 
@@ -160,8 +167,11 @@ export interface BenchmarkLogEntry {
   groupId: string;
   groupLabel: string;
   runLabel: string;
+  operation: BenchmarkOperation;
+  outputKind: BenchmarkRun['outputKind'];
   wallMs: number;
   outputTokens: number;
+  embeddingDimensions: number | null;
   observability: RequestObservability | null;
 }
 

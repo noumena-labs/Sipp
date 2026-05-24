@@ -41,4 +41,9 @@ export type {
   BrowserRustEngineSmokeResult,
   BrowserRuntimeSmokeResult,
 } from './engine/cogent-engine.js';
-export type { ChatMessage } from './core/inference-types.js';
+export type {
+  ChatMessage,
+  NativeRuntimeConfig,
+  TokenFlushMode,
+} from './core/inference-types.js';
+export type { RequestObservabilityMetrics } from './observability/runtime-observability.js';

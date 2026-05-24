@@ -18,11 +18,10 @@ import {
   buildBenchmarkTraceReport,
   captureBrowserMemorySnapshot,
   runMixedLoadBenchmark,
-  runObservedQuery,
+  runObservedRequest,
   runScenarioBenchmark,
   supportsConcurrentQueryApi,
   type BenchmarkTokenObserver,
-  type ObservedQueryRun,
 } from './lib/benchmark-runner';
 import {
   formatBytes,
@@ -40,11 +39,13 @@ import {
   MODEL_REGISTRY,
 } from './lib/model-registry';
 import type {
+  BenchmarkOperation,
   BenchmarkTraceReport,
   GroupResult,
   MemorySnapshot,
   MetricSummary,
   MixedLoadResult,
+  RequestObservability,
   ScenarioResult,
 } from './lib/types';
 
@@ -65,11 +66,12 @@ declare global {
 }
 
 interface BenchmarkReport {
-  schema: 'cogent.benchmark.browser.v8';
+  schema: 'cogent.benchmark.browser.v9';
   generatedAt: string;
   model: ModelInfo | null;
   source: { label: string; bytes: number | null };
   settings: {
+    operation: BenchmarkOperation;
     prompt: string;
     tokenCount: number;
     warmupRuns: number;
@@ -112,7 +114,17 @@ async function inspectBrowserEnvironment(): Promise<Record<string, unknown>> {
   }
 
   const adapter = await gpu.requestAdapter();
-  const info = adapter == null ? null : await adapter.requestAdapterInfo?.().catch(() => null);
+  const adapterWithInfo = adapter as (GPUAdapter & {
+    requestAdapterInfo?: () => Promise<{
+      vendor?: string;
+      architecture?: string;
+      device?: string;
+      description?: string;
+    }>;
+  }) | null;
+  const info = adapterWithInfo == null
+    ? null
+    : await adapterWithInfo.requestAdapterInfo?.().catch(() => null);
   return {
     hasNavigatorGpu: true,
     adapterAvailable: adapter != null,
@@ -205,6 +217,38 @@ function downloadJson(filename: string, value: unknown): void {
   URL.revokeObjectURL(url);
 }
 
+function defaultOperationForModel(model: ModelInfo): BenchmarkOperation {
+  const capabilities = model.capabilities;
+  if (capabilities == null) {
+    return model.chatTemplate == null ? 'query' : 'chat';
+  }
+  if (capabilities.supportsEmbeddings && !capabilities.supportsTextGeneration) {
+    return 'embed';
+  }
+  if (capabilities.modelClass === 'encoder_decoder') {
+    return 'query';
+  }
+  return capabilities.hasChatTemplate ? 'chat' : 'query';
+}
+
+function modelSupportsOperation(model: ModelInfo, operation: BenchmarkOperation): boolean {
+  const capabilities = model.capabilities;
+  if (capabilities == null) {
+    return true;
+  }
+  if (operation === 'embed') {
+    return capabilities.supportsEmbeddings;
+  }
+  if (operation === 'chat') {
+    return capabilities.supportsTextGeneration && capabilities.hasChatTemplate;
+  }
+  return capabilities.supportsTextGeneration;
+}
+
+function yesNo(value: boolean | undefined): string {
+  return value == null ? 'unknown' : value ? 'yes' : 'no';
+}
+
 export default function App() {
   const [engine, setEngine] = useState<CogentEngine | null>(null);
   const [status, setStatus] = useState('booting');
@@ -215,6 +259,7 @@ export default function App() {
   const selectedVariant = getDefaultVariant(selectedModel);
   const [modelUrl, setModelUrl] = useState(getVariantPrimaryUrl(selectedVariant));
   const [projectorUrl, setProjectorUrl] = useState('');
+  const [operation, setOperation] = useState<BenchmarkOperation>('chat');
   const [prompt, setPrompt] = useState('Describe how to benchmark browser-hosted inference.');
   const [tokenCount, setTokenCount] = useState(64);
   const [warmupRuns, setWarmupRuns] = useState(1);
@@ -236,12 +281,18 @@ export default function App() {
   const [observability, setObservability] = useState<ObservabilitySnapshot | null>(null);
   const [response, setResponse] = useState('');
   const [lastRun, setLastRun] = useState<{
+    operation: BenchmarkOperation;
+    outputKind: 'text' | 'embedding';
     wallMs: number;
     ttftMs: number | null;
     tokens: number;
     tps: number | null;
     prefillTokens: number | null;
     prefillTps: number | null;
+    embeddingDimensions: number | null;
+    embeddingPooling: string | null;
+    embeddingNormalized: boolean | null;
+    observability: RequestObservability | null;
   } | null>(null);
   const [lastLoadMs, setLastLoadMs] = useState(0);
   const [sourceInfo, setSourceInfo] = useState<{ label: string; bytes: number } | null>(null);
@@ -459,6 +510,9 @@ export default function App() {
     setLastLoadMs(round(performance.now() - start));
     setSourceInfo({ label: sourceLabel(source), bytes: info.bytes });
     loadedSourceKeyRef.current = sourceKey(source);
+    if (!modelSupportsOperation(info, operation)) {
+      setOperation(defaultOperationForModel(info));
+    }
     await refreshModels(targetEngine);
     return info;
   };
@@ -494,26 +548,34 @@ export default function App() {
       }
       const nextSourceKey = sourceKey(source);
       const loadedModel = engine.models.current();
-      if (loadedModel == null || loadedModel.status !== 'ready') {
-        const info = await loadModelSelection(engine, source);
-        setStatus(info.status === 'ready' ? `loaded ${info.name}` : `${info.name}: ${info.status}`);
-      } else if (
-        loadedSourceKeyRef.current != null &&
-        loadedSourceKeyRef.current !== nextSourceKey
+      let requestOperation = operation;
+      if (
+        loadedModel == null ||
+        loadedModel.status !== 'ready' ||
+        (loadedSourceKeyRef.current != null && loadedSourceKeyRef.current !== nextSourceKey)
       ) {
-        setStatus('Selected source differs from the loaded model. Press Load Model to switch.');
-        return;
+        const info = await loadModelSelection(engine, source);
+        if (!modelSupportsOperation(info, requestOperation)) {
+          requestOperation = defaultOperationForModel(info);
+        }
+        setStatus(info.status === 'ready' ? `loaded ${info.name}` : `${info.name}: ${info.status}`);
+      } else if (!modelSupportsOperation(loadedModel, requestOperation)) {
+        requestOperation = defaultOperationForModel(loadedModel);
+        setOperation(requestOperation);
       }
 
       const image =
-        imageEnabled && imageSource.trim().length > 0
+        requestOperation !== 'embed' && imageEnabled && imageSource.trim().length > 0
           ? await fetchImageBytes(imageSource.trim())
           : undefined;
-      const queryRenderer = streamMode === 'render' ? createResponseRenderer(1, 'frame') : null;
+      const effectiveStreamTokens = requestOperation !== 'embed' && streamTokens;
+      const queryRenderer = effectiveStreamTokens && streamMode === 'render' ? createResponseRenderer(1, 'frame') : null;
       queryRenderer?.reset();
       queryRenderer?.start('response');
       const onTokens =
-        streamMode === 'render'
+        requestOperation === 'embed'
+          ? undefined
+          : streamMode === 'render'
           ? (batch: TokenBatch) => {
             queryRenderer?.append('response', batch);
           }
@@ -523,11 +585,12 @@ export default function App() {
             }
             : undefined;
       try {
-        const run = await runObservedQuery(engine, prompt, {
+        const run = await runObservedRequest(engine, prompt, {
+          operation: requestOperation,
           maxTokens: tokenCount,
           session: `query-${Date.now()}`,
           media: image,
-          streamTokens,
+          streamTokens: effectiveStreamTokens,
           tokenFlush: streamMode === 'render' ? 'token' : 'batch',
           // streamTokens=false → onTokens omitted upstream → engine NONE.
           onTokens,
@@ -535,9 +598,14 @@ export default function App() {
         setResponse(run.output); // Sync React state at the end
         setObservability(engine.observability.current());
         setLastRun({
+          operation: run.operation,
+          outputKind: run.outputKind,
           wallMs: run.wallMs,
           ttftMs: run.observability?.ttftMs ?? run.ttftMs,
-          tokens: run.observability?.outputTokens ?? run.tokenTimes.length,
+          tokens:
+            run.outputKind === 'embedding'
+              ? run.embeddingDimensions ?? 0
+              : run.observability?.outputTokens ?? run.tokenTimes.length,
           tps:
             (run.observability?.decodeMs ?? 0) > 0 &&
               (run.observability?.outputTokens ?? 0) > 0
@@ -551,6 +619,9 @@ export default function App() {
               run.observability!.prefillMs
               : null,
           prefillTokens: run.observability?.prefillTokens ?? null,
+          embeddingDimensions: run.embeddingDimensions,
+          embeddingPooling: run.embeddingPooling,
+          embeddingNormalized: run.embeddingNormalized,
           observability: run.observability,
         });
       } finally {
@@ -577,10 +648,17 @@ export default function App() {
     setMixedLoadResult(null);
     setMemorySnapshots([]);
     setBenchmarkReport(null);
-    const benchmarkRenderer = streamMode === 'render' ? createResponseRenderer(2, 'frame') : null;
+    let benchmarkOperation = operation;
+    const loadedModel = engine.models.current();
+    if (loadedModel != null && !modelSupportsOperation(loadedModel, benchmarkOperation)) {
+      benchmarkOperation = defaultOperationForModel(loadedModel);
+      setOperation(benchmarkOperation);
+    }
+    const effectiveStreamTokens = benchmarkOperation !== 'embed' && streamTokens;
+    const benchmarkRenderer = effectiveStreamTokens && streamMode === 'render' ? createResponseRenderer(2, 'frame') : null;
     const benchmarkTokenFlush = streamMode === 'render' ? 'token' : 'batch';
     const benchmarkTokenObserver: BenchmarkTokenObserver | undefined =
-      streamMode === 'render'
+      effectiveStreamTokens && streamMode === 'render'
         ? {
           onRunStart: (label) => {
             benchmarkRenderer?.start(label);
@@ -594,6 +672,9 @@ export default function App() {
 
     try {
       const info = await loadModelSelection(engine, source);
+      if (!modelSupportsOperation(info, benchmarkOperation)) {
+        benchmarkOperation = defaultOperationForModel(info);
+      }
       const snapshots: MemorySnapshot[] = [];
       snapshots.push(await captureBrowserMemorySnapshot('before-benchmark', true));
 
@@ -603,6 +684,7 @@ export default function App() {
         results.push(
           await runScenarioBenchmark(
             engine,
+            benchmarkOperation,
             scenario,
             source,
             warmupRuns,
@@ -610,7 +692,7 @@ export default function App() {
             getDefaultRuntimeOptions(),
             setStatus,
             true,
-            streamTokens,
+            effectiveStreamTokens,
             benchmarkTokenFlush,
             benchmarkTokenObserver
           )
@@ -620,17 +702,18 @@ export default function App() {
       snapshots.push(await captureBrowserMemorySnapshot('after-scenarios', true));
 
       let mixed: MixedLoadResult | null = null;
-      if (supportsConcurrentQueryApi(engine)) {
+      if (benchmarkOperation !== 'embed' && supportsConcurrentQueryApi(engine)) {
         mixed = await runMixedLoadBenchmark(
           engine,
-          buildMixedLoadDefinition(),
+          benchmarkOperation,
+          buildMixedLoadDefinition(benchmarkOperation),
           source,
           warmupRuns,
           measuredRuns,
           getDefaultRuntimeOptions(),
           setStatus,
           true,
-          streamTokens,
+          effectiveStreamTokens,
           benchmarkTokenFlush,
           benchmarkTokenObserver
         );
@@ -640,7 +723,7 @@ export default function App() {
       const trace = buildBenchmarkTraceReport(results, mixed);
 
       const report: BenchmarkReport = {
-        schema: 'cogent.benchmark.browser.v8',
+        schema: 'cogent.benchmark.browser.v9',
         generatedAt: new Date().toISOString(),
         model: info,
         source: {
@@ -648,6 +731,7 @@ export default function App() {
           bytes: info.bytes,
         },
         settings: {
+          operation: benchmarkOperation,
           prompt,
           tokenCount,
           warmupRuns,
@@ -694,6 +778,7 @@ export default function App() {
       <h3>{title}</h3>
       <div className="metric-group-title">Latency (User Experience)</div>
       <div className="metric-grid">
+        <MetricCard label="Operation" value={group.runs[0]?.operation ?? operation} />
         <MetricCard label="TTFT" value={formatSummary(group.summary.runtime.ttftMs)} />
         <MetricCard label="ITL Avg" value={formatSummary(group.summary.runtime.itlAvgMs)} />
         <MetricCard label="ITL P99" value={formatSummary(group.summary.runtime.itlP99Ms)} />
@@ -723,6 +808,18 @@ export default function App() {
           label="Output Tokens"
           value={group.summary.runtime.avgOutputTokens ?? 'n/a'}
         />
+        {group.runs[0]?.outputKind === 'embedding' ? (
+          <>
+            <MetricCard
+              label="Dimensions"
+              value={group.runs[0].embeddingDimensions ?? 'n/a'}
+            />
+            <MetricCard
+              label="Pooling"
+              value={group.runs[0].embeddingPooling ?? 'n/a'}
+            />
+          </>
+        ) : null}
       </div>
 
       <div className="metric-group-title">Native Pipeline</div>
@@ -758,7 +855,8 @@ export default function App() {
         <h1>CogentEngine Minimal API</h1>
         <p>
           Load with <code>engine.models.load()</code>, inspect with{' '}
-          <code>engine.models.current()</code>, query with <code>engine.chat()</code>, and
+          <code>engine.models.current()</code>, run with <code>engine.chat()</code>,{' '}
+          <code>engine.query()</code>, or <code>engine.embed()</code>, and
           benchmark with the same minimal surface.
         </p>
       </header>
@@ -852,9 +950,35 @@ export default function App() {
 
           <section className="section">
             <div className="section-header">
-              <h2>Query</h2>
+              <h2>Request</h2>
             </div>
             <div className="field-grid">
+              <div className="row">
+                <label>Operation</label>
+                <div className="toggle-group">
+                  <button
+                    type="button"
+                    className={`toggle-item ${operation === 'chat' ? 'active' : ''}`}
+                    onClick={() => setOperation('chat')}
+                  >
+                    Chat
+                  </button>
+                  <button
+                    type="button"
+                    className={`toggle-item ${operation === 'query' ? 'active' : ''}`}
+                    onClick={() => setOperation('query')}
+                  >
+                    Query
+                  </button>
+                  <button
+                    type="button"
+                    className={`toggle-item ${operation === 'embed' ? 'active' : ''}`}
+                    onClick={() => setOperation('embed')}
+                  >
+                    Embed
+                  </button>
+                </div>
+              </div>
               <div className="row">
                 <label>Prompt</label>
                 <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} />
@@ -864,22 +988,25 @@ export default function App() {
                 <input
                   type="number"
                   value={tokenCount}
+                  disabled={operation === 'embed'}
                   onChange={(event) =>
                     setTokenCount(Number.parseInt(event.target.value, 10) || 0)
                   }
                 />
               </div>
-              <div className="row">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={imageEnabled}
-                    onChange={(event) => setImageEnabled(event.target.checked)}
-                  />{' '}
-                  Attach Image
-                </label>
-              </div>
-              {imageEnabled ? (
+              {operation !== 'embed' ? (
+                <div className="row">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={imageEnabled}
+                      onChange={(event) => setImageEnabled(event.target.checked)}
+                    />{' '}
+                    Attach Image
+                  </label>
+                </div>
+              ) : null}
+              {operation !== 'embed' && imageEnabled ? (
                 <div className="row">
                   <label>Image URL or File</label>
                   <div className="field-grid">
@@ -903,7 +1030,7 @@ export default function App() {
                   onClick={runQuery}
                   disabled={isBusy || engine == null}
                 >
-                  Run Query
+                  Run Request
                 </button>
               </div>
             </div>
@@ -1017,6 +1144,19 @@ export default function App() {
                 tone={currentModel?.loaded ? 'ok' : 'warn'}
               />
               <MetricCard label="Status" value={currentModel?.status ?? 'none'} />
+              <MetricCard label="Model Class" value={currentModel?.capabilities?.modelClass ?? 'unknown'} />
+              <MetricCard
+                label="Text"
+                value={yesNo(currentModel?.capabilities?.supportsTextGeneration)}
+              />
+              <MetricCard
+                label="Embeddings"
+                value={yesNo(currentModel?.capabilities?.supportsEmbeddings)}
+              />
+              <MetricCard
+                label="Pooling"
+                value={currentModel?.capabilities?.embedding?.pooling ?? 'n/a'}
+              />
               <MetricCard label="Installed" value={installedModels.length} />
               <MetricCard label="Load Time" value={formatMs(lastLoadMs)} />
               <MetricCard label="Model Bytes" value={formatBytes(sourceInfo?.bytes ?? null)} />
@@ -1097,13 +1237,27 @@ export default function App() {
                 <MetricCard label="Last Run" value="No query yet" />
               ) : (
                 <>
+                  <MetricCard label="Operation" value={lastRun.operation} />
                   <MetricCard label="Latency" value={formatMs(lastRun.wallMs)} />
                   <MetricCard
                     label="TTFT"
                     value={lastRun.ttftMs == null ? 'n/a' : formatMs(lastRun.ttftMs)}
                   />
-                  <MetricCard label="Tokens" value={lastRun.tokens || 'n/a'} />
-                  <MetricCard label="TPS" value={lastRun.tps == null ? 'n/a' : formatTps(lastRun.tps)} />
+                  {lastRun.outputKind === 'embedding' ? (
+                    <>
+                      <MetricCard label="Dimensions" value={lastRun.embeddingDimensions ?? 'n/a'} />
+                      <MetricCard label="Pooling" value={lastRun.embeddingPooling ?? 'n/a'} />
+                      <MetricCard
+                        label="Normalized"
+                        value={lastRun.embeddingNormalized == null ? 'n/a' : yesNo(lastRun.embeddingNormalized)}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <MetricCard label="Tokens" value={lastRun.tokens || 'n/a'} />
+                      <MetricCard label="TPS" value={lastRun.tps == null ? 'n/a' : formatTps(lastRun.tps)} />
+                    </>
+                  )}
                   <MetricCard label="Prefill TPS" value={lastRun.prefillTps == null ? 'n/a' : formatTps(lastRun.prefillTps)} />
                   {lastRun.observability && (
                     <>
@@ -1128,7 +1282,7 @@ export default function App() {
               style={{ marginTop: '16px' }}
               ref={responseElementRef}
             >
-              {response || (isBusy ? 'Generating response...' : 'Ready for query.')}
+              {response || (isBusy ? 'Running request...' : 'Ready for request.')}
             </div>
           </section>
 

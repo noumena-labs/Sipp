@@ -1,5 +1,5 @@
 import type { CogentEngine, ObservabilitySnapshot } from '@noumena-labs/cogentlm';
-import type { ScenarioDefinition } from './types';
+import type { BenchmarkOperation, MixedLoadDefinition, ScenarioDefinition } from './types';
 import { countWords } from './utils';
 
 export function classifyPromptBucket(prompt: string): string {
@@ -90,7 +90,9 @@ export function describeRuntimeDevices(info: ObservabilitySnapshot['profile'] | 
     .join(' | ');
 }
 
-export function buildMixedLoadDefinition(): any {
+export function buildMixedLoadDefinition(
+  operation: Exclude<BenchmarkOperation, 'embed'>
+): MixedLoadDefinition {
   return {
     id: 'mixed-lilo-vs-siso',
     label: 'Mixed Load: LILO Background vs SISO Foreground',
@@ -103,7 +105,7 @@ export function buildMixedLoadDefinition(): any {
       promptWords: 43,
       outputTokenLimit: 128,
       outputBucket: 'long',
-      promptMode: 'chat',
+      promptMode: operation,
       contextBucket: 'single-request',
       concurrency: 1,
     },
@@ -116,7 +118,7 @@ export function buildMixedLoadDefinition(): any {
       promptWords: 6,
       outputTokenLimit: 16,
       outputBucket: 'short',
-      promptMode: 'chat',
+      promptMode: operation,
       contextBucket: 'single-request',
       concurrency: 1,
     },

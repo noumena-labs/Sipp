@@ -34,6 +34,14 @@
           <span class="icon">📈</span>
           <span class="label">Observability</span>
         </button>
+        <button class="nav-item" data-example="05-query">
+          <span class="icon">Q</span>
+          <span class="label">Query</span>
+        </button>
+        <button class="nav-item" data-example="06-embeddings">
+          <span class="icon">E</span>
+          <span class="label">Embeddings</span>
+        </button>
       </nav>
       <div class="sidebar-footer">
         <div class="status-indicator">
@@ -55,9 +63,14 @@
             <label for="model-url">Model URL</label>
             <input type="text" id="model-url" placeholder="Model GGUF URL" value="https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q8_0.gguf">
           </div>
+          <div class="input-group file-group">
+            <label for="model-file">Model File</label>
+            <input type="file" id="model-file" accept=".gguf">
+          </div>
           <div class="input-group hidden" id="projector-group">
             <label for="projector-url">Projector URL (Vision)</label>
             <input type="text" id="projector-url" placeholder="Projector GGUF URL" value="https://huggingface.co/LiquidAI/LFM2.5-VL-450M-GGUF/resolve/main/mmproj-model-f16.gguf">
+            <input type="file" id="projector-file" accept=".gguf">
           </div>
           <button id="init-engine-btn" class="btn primary">Initialize & Load</button>
         </div>

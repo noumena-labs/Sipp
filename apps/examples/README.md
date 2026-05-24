@@ -23,6 +23,8 @@ This directory contains minimal, developer-centric examples for the `cogentlm` l
 - **Multimodal Vision**: Guide on how to use vision-language models with `Uint8Array` media.
 - **Structured Output**: Using GBNF grammars to extract typed JSON data.
 - **Observability**: Real-time performance monitoring (Tokens/sec, TTFT, etc.).
+- **Query**: Raw prompt completion through `engine.query()`, including encoder-decoder models.
+- **Embeddings**: Vector extraction through `engine.embed()` for embedding-capable models.
 
 ## Important Note: COOP/COEP
 Cogent Engine requires `SharedArrayBuffer` for multi-threaded WASM execution. The included `vite.config.ts` is configured with the necessary `Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy` headers.

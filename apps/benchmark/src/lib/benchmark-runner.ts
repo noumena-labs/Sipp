@@ -6,6 +6,7 @@ import {
   type TokenFlushMode,
 } from '@noumena-labs/cogentlm';
 import type {
+  BenchmarkOperation,
   BenchmarkRun,
   BenchmarkTraceReport,
   GroupResult,
@@ -20,11 +21,16 @@ import { measureAsync, round } from './utils';
 
 type BenchmarkRuntimeOptions = NonNullable<ModelLoadOptions['runtime']>;
 
-export interface ObservedQueryRun {
+export interface ObservedRequestRun {
+  operation: BenchmarkOperation;
+  outputKind: 'text' | 'embedding';
   output: string;
   wallMs: number;
   ttftMs: number | null;
   tokenTimes: number[];
+  embeddingDimensions: number | null;
+  embeddingPooling: string | null;
+  embeddingNormalized: boolean | null;
   observability: RequestObservability | null;
 }
 
@@ -101,37 +107,71 @@ function observeSessionCompletion(
   };
 }
 
-export async function runObservedQuery(
+function formatEmbeddingPreview(values: readonly number[]): string {
+  const preview = values.slice(0, 8).map((value) => round(value)).join(', ');
+  return `[${preview}${values.length > 8 ? ', ...' : ''}]`;
+}
+
+export async function runObservedRequest(
   targetEngine: CogentEngine,
   prompt: string,
   options: {
+    operation: BenchmarkOperation;
     session: string;
     maxTokens: number;
     onTokens?: (batch: TokenBatch) => void;
     tokenFlush?: TokenFlushMode;
     media?: Uint8Array[];
     /**
-     * When false, the chat call is made WITHOUT an `onTokens` callback so the
+     * When false, the text request is made WITHOUT an `onTokens` callback so the
      * engine runs in NONE emission mode (no token-plane FFI/SAB activity).
      * TTFT and token-plane timing then come from native runtime_observability
      * instead of JS-side wall-clock instrumentation.  Default true.
      */
     streamTokens?: boolean;
   }
-): Promise<ObservedQueryRun> {
+): Promise<ObservedRequestRun> {
   const start = performance.now();
   let ttftMs: number | null = null;
   const tokenTimes: number[] = [];
   const sessionObserver = observeSessionCompletion(targetEngine, options.session);
-  const streamTokens = options.streamTokens ?? true;
+  const streamTokens = options.operation === 'embed' ? false : options.streamTokens ?? true;
 
   try {
+    if (options.operation === 'embed') {
+      const [result, observability] = await Promise.all([
+        targetEngine.embed(prompt, {
+          contextKey: options.session,
+          normalize: true,
+        }),
+        sessionObserver.promise,
+      ]);
+
+      return {
+        operation: options.operation,
+        outputKind: 'embedding',
+        output: [
+          `dimensions=${result.values.length}`,
+          `pooling=${result.pooling}`,
+          `normalized=${result.normalized}`,
+          formatEmbeddingPreview(result.values),
+        ].join('\n'),
+        wallMs: round(performance.now() - start),
+        ttftMs: null,
+        tokenTimes,
+        embeddingDimensions: result.values.length,
+        embeddingPooling: result.pooling,
+        embeddingNormalized: result.normalized,
+        observability,
+      };
+    }
+
     const messages = options.media == null
-      ? [{ role: 'user', content: prompt }]
-      : { messages: [{ role: 'user', content: prompt }], media: options.media };
+      ? [{ role: 'user' as const, content: prompt }]
+      : { messages: [{ role: 'user' as const, content: prompt }], media: options.media };
     // Pass `onTokens` only when streaming is enabled.  Omitting it triggers
     // TOKEN_EMISSION_NONE on the engine side, which is the NONE-mode path.
-    const chatOptions = streamTokens
+    const requestOptions = streamTokens
       ? {
           maxTokens: options.maxTokens,
           session: options.session,
@@ -150,16 +190,25 @@ export async function runObservedQuery(
           maxTokens: options.maxTokens,
           session: options.session,
         };
-    const [result, observability] = await Promise.all([
-      targetEngine.chat(messages, chatOptions),
-      sessionObserver.promise,
-    ]);
+    const request =
+      options.operation === 'query'
+        ? targetEngine.query(
+            options.media == null ? prompt : { prompt, media: options.media },
+            requestOptions
+          )
+        : targetEngine.chat(messages, requestOptions);
+    const [result, observability] = await Promise.all([request, sessionObserver.promise]);
 
     return {
+      operation: options.operation,
+      outputKind: 'text',
       output: result.text,
       wallMs: round(performance.now() - start),
       ttftMs,
       tokenTimes,
+      embeddingDimensions: null,
+      embeddingPooling: null,
+      embeddingNormalized: null,
       observability,
     };
   } finally {
@@ -242,32 +291,33 @@ function summarizeRunGroup(runs: BenchmarkRun[], benchmarkDurationMs: number): G
 
 function createRun(
   label: string,
-  wallMs: number,
-  ttftMs: number | null,
-  tokenTimes: number[],
-  output: string,
-  observability: RequestObservability | null
+  run: ObservedRequestRun
 ): BenchmarkRun {
   return {
     label,
-    wallMs,
-    ttftMs: observability?.ttftMs ?? null,
-    itlAvgMs: observability?.itlAvgMs ?? null,
-    itlP99Ms: observability?.itlP99Ms ?? null,
+    operation: run.operation,
+    outputKind: run.outputKind,
+    wallMs: run.wallMs,
+    ttftMs: run.observability?.ttftMs ?? null,
+    itlAvgMs: run.observability?.itlAvgMs ?? null,
+    itlP99Ms: run.observability?.itlP99Ms ?? null,
     tps:
-      (observability?.decodeMs ?? 0) > 0 && (observability?.outputTokens ?? 0) > 0
-        ? (observability!.outputTokens * 1000) / observability!.decodeMs
+      (run.observability?.decodeMs ?? 0) > 0 && (run.observability?.outputTokens ?? 0) > 0
+        ? (run.observability!.outputTokens * 1000) / run.observability!.decodeMs
         : null,
-    inputTokens: observability?.inputTokens ?? null,
-    outputTokens: observability?.outputTokens ?? tokenTimes.length,
-    prefillTokens: observability?.prefillTokens ?? null,
+    inputTokens: run.observability?.inputTokens ?? null,
+    outputTokens: run.observability?.outputTokens ?? run.tokenTimes.length,
+    prefillTokens: run.observability?.prefillTokens ?? null,
     prefillTps:
-      (observability?.prefillMs ?? 0) >= 0.1 && (observability?.prefillTokens ?? 0) > 1
-        ? (observability!.prefillTokens * 1000) / observability!.prefillMs
+      (run.observability?.prefillMs ?? 0) >= 0.1 && (run.observability?.prefillTokens ?? 0) > 1
+        ? (run.observability!.prefillTokens * 1000) / run.observability!.prefillMs
         : null,
-    outputLength: output.length,
-    outputPreview: output.slice(0, 160).replace(/\s+/g, ' ').trim(),
-    observability,
+    outputLength: run.output.length,
+    outputPreview: run.output.slice(0, 160).replace(/\s+/g, ' ').trim(),
+    embeddingDimensions: run.embeddingDimensions,
+    embeddingPooling: run.embeddingPooling,
+    embeddingNormalized: run.embeddingNormalized,
+    observability: run.observability,
   };
 }
 
@@ -291,6 +341,7 @@ export function createGroupResult(
 
 export async function runPromptGroup(
   targetEngine: CogentEngine,
+  operation: BenchmarkOperation,
   groupLabel: string,
   prompt: string,
   tokenCount: number,
@@ -304,20 +355,14 @@ export async function runPromptGroup(
 ): Promise<{ benchmarkDurationMs: number; runs: BenchmarkRun[]; summary: GroupSummary }> {
   for (let i = 0; i < warmupRuns; i++) {
     setStatus(`${groupLabel}: warmup ${i + 1}/${warmupRuns}`);
-    await targetEngine.chat(
-      [{ role: 'user', content: prompt }],
-      streamTokens
-        ? {
-            maxTokens: tokenCount,
-            session: sessionFactory(i),
-            tokenFlush,
-            onTokens: () => {},
-          }
-        : {
-            maxTokens: tokenCount,
-            session: sessionFactory(i),
-          }
-    );
+    await runObservedRequest(targetEngine, prompt, {
+      operation,
+      maxTokens: tokenCount,
+      session: sessionFactory(i),
+      streamTokens,
+      tokenFlush,
+      onTokens: streamTokens && operation !== 'embed' ? () => {} : undefined,
+    });
   }
 
   const runs: BenchmarkRun[] = [];
@@ -326,7 +371,8 @@ export async function runPromptGroup(
     const runLabel = `${groupLabel}-${i + 1}`;
     setStatus(`${groupLabel}: run ${i + 1}/${measuredRuns}`);
     tokenObserver?.onRunStart?.(runLabel);
-    const run = await runObservedQuery(targetEngine, prompt, {
+    const run = await runObservedRequest(targetEngine, prompt, {
+      operation,
       maxTokens: tokenCount,
       session: sessionFactory(i + warmupRuns),
       streamTokens,
@@ -336,16 +382,7 @@ export async function runPromptGroup(
           ? undefined
           : (batch) => tokenObserver.onTokens?.(runLabel, batch),
     });
-    runs.push(
-      createRun(
-        runLabel,
-        run.wallMs,
-        run.ttftMs,
-        run.tokenTimes,
-        run.output,
-        run.observability
-      )
-    );
+    runs.push(createRun(runLabel, run));
   }
 
   const benchmarkDurationMs = round(performance.now() - benchmarkStart);
@@ -358,6 +395,7 @@ export async function runPromptGroup(
 
 export async function runScenarioBenchmark(
   targetEngine: CogentEngine,
+  operation: BenchmarkOperation,
   scenario: ScenarioDefinition,
   modelSource: ModelSource,
   warmupRuns: number,
@@ -380,6 +418,7 @@ export async function runScenarioBenchmark(
 
   const coldPrompt = await runPromptGroup(
     targetEngine,
+    operation,
     `${scenario.label}: cold prompt`,
     scenario.prompt,
     scenario.outputTokenLimit,
@@ -393,6 +432,7 @@ export async function runScenarioBenchmark(
   );
   const hotFreshContext = await runPromptGroup(
     targetEngine,
+    operation,
     `${scenario.label}: hot fresh context`,
     scenario.prompt,
     scenario.outputTokenLimit,
@@ -406,6 +446,7 @@ export async function runScenarioBenchmark(
   );
   const hotReuseContext = await runPromptGroup(
     targetEngine,
+    operation,
     `${scenario.label}: hot reused context`,
     scenario.prompt,
     scenario.outputTokenLimit,
@@ -477,6 +518,7 @@ export function supportsConcurrentQueryApi(targetEngine: CogentEngine | null): b
 
 export async function runMixedLoadBenchmark(
   targetEngine: CogentEngine,
+  operation: Exclude<BenchmarkOperation, 'embed'>,
   definition: import('./types').MixedLoadDefinition,
   modelSource: ModelSource,
   warmupRuns: number,
@@ -499,13 +541,15 @@ export async function runMixedLoadBenchmark(
   for (let i = 0; i < warmupRuns; i++) {
     setStatus(`${definition.label}: warmup ${i + 1}/${warmupRuns}`);
     await Promise.all([
-      runObservedQuery(targetEngine, definition.background.prompt, {
+      runObservedRequest(targetEngine, definition.background.prompt, {
+        operation,
         maxTokens: definition.background.outputTokenLimit,
         session: `${definition.background.id}-warmup-${i}`,
         streamTokens,
         tokenFlush,
       }),
-      runObservedQuery(targetEngine, definition.foreground.prompt, {
+      runObservedRequest(targetEngine, definition.foreground.prompt, {
+        operation,
         maxTokens: definition.foreground.outputTokenLimit,
         session: `${definition.foreground.id}-warmup-${i}`,
         streamTokens,
@@ -524,7 +568,8 @@ export async function runMixedLoadBenchmark(
     tokenObserver?.onRunStart?.(backgroundLabel);
     tokenObserver?.onRunStart?.(foregroundLabel);
     const [backgroundRun, foregroundRun] = await Promise.all([
-      runObservedQuery(targetEngine, definition.background.prompt, {
+      runObservedRequest(targetEngine, definition.background.prompt, {
+        operation,
         maxTokens: definition.background.outputTokenLimit,
         session: `${definition.background.id}-mixed-${i}`,
         streamTokens,
@@ -534,7 +579,8 @@ export async function runMixedLoadBenchmark(
             ? undefined
             : (batch) => tokenObserver.onTokens?.(backgroundLabel, batch),
       }),
-      runObservedQuery(targetEngine, definition.foreground.prompt, {
+      runObservedRequest(targetEngine, definition.foreground.prompt, {
+        operation,
         maxTokens: definition.foreground.outputTokenLimit,
         session: `${definition.foreground.id}-mixed-${i}`,
         streamTokens,
@@ -545,26 +591,8 @@ export async function runMixedLoadBenchmark(
             : (batch) => tokenObserver.onTokens?.(foregroundLabel, batch),
       }),
     ]);
-    backgroundRuns.push(
-      createRun(
-        backgroundLabel,
-        backgroundRun.wallMs,
-        backgroundRun.ttftMs,
-        backgroundRun.tokenTimes,
-        backgroundRun.output,
-        backgroundRun.observability
-      )
-    );
-    foregroundRuns.push(
-      createRun(
-        foregroundLabel,
-        foregroundRun.wallMs,
-        foregroundRun.ttftMs,
-        foregroundRun.tokenTimes,
-        foregroundRun.output,
-        foregroundRun.observability
-      )
-    );
+    backgroundRuns.push(createRun(backgroundLabel, backgroundRun));
+    foregroundRuns.push(createRun(foregroundLabel, foregroundRun));
   }
 
   const benchmarkDurationMs = round(performance.now() - benchmarkStart);
@@ -595,8 +623,11 @@ function collectGroupLogs(
     groupId: group.id,
     groupLabel: group.label,
     runLabel: run.label,
+    operation: run.operation,
+    outputKind: run.outputKind,
     wallMs: run.wallMs,
     outputTokens: run.outputTokens,
+    embeddingDimensions: run.embeddingDimensions,
     observability: run.observability,
   }));
 }

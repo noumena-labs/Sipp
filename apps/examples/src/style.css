@@ -223,6 +223,11 @@ body {
   flex-grow: 1;
 }
 
+.input-group.file-group {
+  flex-grow: 0;
+  min-width: 220px;
+}
+
 .input-group label {
   font-size: 12px;
   font-weight: 600;
@@ -230,7 +235,7 @@ body {
   text-transform: uppercase;
 }
 
-input[type="text"] {
+input[type="text"], input[type="file"] {
   background-color: var(--bg-color);
   border: 1px solid var(--border-color);
   color: var(--text-primary);
@@ -238,6 +243,10 @@ input[type="text"] {
   border-radius: 6px;
   font-family: var(--font-mono);
   font-size: 14px;
+}
+
+input[type="file"] {
+  max-width: 220px;
 }
 
 .btn {

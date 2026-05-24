@@ -3,6 +3,8 @@ import { basicChatExample } from './examples/basic-chat';
 import { multimodalExample } from './examples/multimodal';
 import { structuredOutputExample } from './examples/structured-output';
 import { observabilityExample } from './examples/observability';
+import { queryExample } from './examples/query';
+import { embeddingsExample } from './examples/embeddings';
 import type { Example } from './examples/base-example';
 
 // State
@@ -15,12 +17,16 @@ const examples: Record<string, Example> = {
   '02-multimodal': multimodalExample,
   '03-structured-output': structuredOutputExample,
   '04-observability': observabilityExample,
+  '05-query': queryExample,
+  '06-embeddings': embeddingsExample,
 };
 
 // DOM Elements
 const consoleOutput = document.getElementById('console-output')!;
 const modelUrlInput = document.getElementById('model-url') as HTMLInputElement;
+const modelFileInput = document.getElementById('model-file') as HTMLInputElement;
 const projectorUrlInput = document.getElementById('projector-url') as HTMLInputElement;
+const projectorFileInput = document.getElementById('projector-file') as HTMLInputElement;
 const projectorGroup = document.getElementById('projector-group')!;
 const initBtn = document.getElementById('init-engine-btn') as HTMLButtonElement;
 const userInput = document.getElementById('user-input') as HTMLInputElement;
@@ -60,10 +66,14 @@ async function fileToUint8Array(file: File): Promise<Uint8Array> {
 // Logic
 async function initEngine() {
   const modelUrl = modelUrlInput.value.trim();
+  const modelFile = modelFileInput.files?.[0] ?? null;
   const projectorUrl = projectorUrlInput.value.trim();
+  const projectorFile = projectorFileInput.files?.[0] ?? null;
+  const modelSource = modelFile ?? modelUrl;
+  const projectorSource = projectorFile ?? (projectorUrl.length > 0 ? projectorUrl : undefined);
 
-  if (!modelUrl) {
-    log('Please provide a valid model URL.', 'error');
+  if (!modelSource) {
+    log('Please provide a model URL or local GGUF file.', 'error');
     return;
   }
 
@@ -93,16 +103,15 @@ async function initEngine() {
       }
     };
 
-    // If it's a vision example and we have a projector URL, load both
-    if (currentExample.id === '02-multimodal' && projectorUrl) {
-      log(`Loading multimodal pair...`, 'dim');
+    if (projectorSource != null) {
+      log('Loading model pair...', 'dim');
       await engine.models.load({
-        model: modelUrl,
-        projector: projectorUrl
+        model: modelSource,
+        projector: projectorSource
       }, loadOptions);
     } else {
-      log(`Loading text model...`, 'dim');
-      await engine.models.load(modelUrl, loadOptions);
+      log('Loading model...', 'dim');
+      await engine.models.load(modelSource, loadOptions);
     }
 
     log('Assets loaded successfully!', 'system');
