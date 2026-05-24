@@ -425,6 +425,48 @@ int32_t cogent_common_init_n_ctx(const cogent_common_init * init) {
     return static_cast<int32_t>(llama_n_ctx(init->inner->context()));
 }
 
+int32_t cogent_common_init_n_embd_out(const cogent_common_init * init) {
+    if (init == nullptr || !init->inner || init->inner->model() == nullptr) {
+        return 0;
+    }
+    return llama_model_n_embd_out(init->inner->model());
+}
+
+int32_t cogent_common_init_pooling_type(const cogent_common_init * init) {
+    if (init == nullptr || !init->inner || init->inner->context() == nullptr) {
+        return static_cast<int32_t>(LLAMA_POOLING_TYPE_UNSPECIFIED);
+    }
+    return static_cast<int32_t>(llama_pooling_type(init->inner->context()));
+}
+
+int32_t cogent_common_init_decoder_start_token(const cogent_common_init * init) {
+    if (init == nullptr || !init->inner || init->inner->model() == nullptr) {
+        return LLAMA_TOKEN_NULL;
+    }
+    return llama_model_decoder_start_token(init->inner->model());
+}
+
+bool cogent_common_init_model_has_encoder(const cogent_common_init * init) {
+    return init != nullptr && init->inner && init->inner->model() != nullptr &&
+        llama_model_has_encoder(init->inner->model());
+}
+
+bool cogent_common_init_model_has_decoder(const cogent_common_init * init) {
+    return init != nullptr && init->inner && init->inner->model() != nullptr &&
+        llama_model_has_decoder(init->inner->model());
+}
+
+bool cogent_common_init_model_has_chat_template(const cogent_common_init * init) {
+    // Probe `tokenizer.chat_template` directly from GGUF metadata, NOT the
+    // common_chat_templates fallback chain — we want to know whether the
+    // model itself was trained with a chat template (and is therefore usable
+    // through chat()), not whether llama.cpp can synthesize one.
+    if (init == nullptr || !init->inner || init->inner->model() == nullptr) {
+        return false;
+    }
+    return llama_model_chat_template(init->inner->model(), nullptr) != nullptr;
+}
+
 bool cogent_common_init_kv_unified(const cogent_common_init * init) {
     return init != nullptr && init->params.kv_unified;
 }
@@ -884,6 +926,48 @@ int32_t cogent_llama_decode(llama_context * context, const llama_batch * batch) 
         return -1;
     } catch (...) {
         return -1;
+    }
+}
+
+int32_t cogent_llama_encode(llama_context * context, const llama_batch * batch) {
+    if (context == nullptr || batch == nullptr) {
+        return -1;
+    }
+
+    try {
+        return llama_encode(context, *batch);
+    } catch (const std::exception &) {
+        return -1;
+    } catch (...) {
+        return -1;
+    }
+}
+
+const float * cogent_llama_embeddings_seq(llama_context * context, int32_t seq_id) {
+    if (context == nullptr || seq_id < 0) {
+        return nullptr;
+    }
+
+    try {
+        return llama_get_embeddings_seq(context, static_cast<llama_seq_id>(seq_id));
+    } catch (const std::exception &) {
+        return nullptr;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+const float * cogent_llama_embeddings_ith(llama_context * context, int32_t i) {
+    if (context == nullptr) {
+        return nullptr;
+    }
+
+    try {
+        return llama_get_embeddings_ith(context, i);
+    } catch (const std::exception &) {
+        return nullptr;
+    } catch (...) {
+        return nullptr;
     }
 }
 

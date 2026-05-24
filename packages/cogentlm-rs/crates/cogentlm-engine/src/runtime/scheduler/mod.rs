@@ -4,4 +4,6 @@ mod slot_state;
 
 pub use batch_planner::{BatchContribution, BatchContributionKind, BatchPlanner, SharedBatchPlan};
 pub use slot_scheduler::SlotScheduler;
-pub use slot_state::{SamplerCacheKey, SlotPhase, SlotState};
+pub use slot_state::{
+    PrefillKind, SamplerCacheKey, SlotExecutionPlan, SlotPhase, SlotState, TerminalAction,
+};

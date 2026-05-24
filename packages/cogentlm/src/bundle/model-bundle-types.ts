@@ -14,6 +14,7 @@ export type AssetRole = 'model' | 'projector' | 'unknown';
 export interface GgufMetadataInspection {
   generalType: string | null;
   generalArchitecture: string | null;
+  poolingType: number | null;
   clipProjectorType: string | null;
   clipVisionProjectorType: string | null;
   clipHasVisionEncoder: boolean | null;

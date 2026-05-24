@@ -16,6 +16,8 @@ export {
   type EngineStatus,
   type EngineObservability,
   type FinishReason,
+  type ModelCapabilities,
+  type ModelClass,
   type ModelInfo,
   type ModelLoadOptions,
   type ModelSource,

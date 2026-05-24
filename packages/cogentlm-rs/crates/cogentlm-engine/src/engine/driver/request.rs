@@ -158,6 +158,14 @@ pub(super) fn start_chat(
     request: ChatRequest,
     event_subscribers: &EngineEventSubscribers,
 ) -> Result<(u32, Option<AsyncTokenSink>)> {
+    if !runtime.capabilities().has_chat_template {
+        return Err(Error::UnsupportedOperation {
+            operation: "chat",
+            reason: "loaded model has no chat template; call query() with a raw \
+                     prompt instead"
+                .to_string(),
+        });
+    }
     let prompt = render_chat_prompt(runtime, &request.messages)?;
     start_query(
         runtime,

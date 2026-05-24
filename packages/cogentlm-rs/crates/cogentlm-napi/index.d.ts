@@ -86,6 +86,8 @@ export interface ContextRuntimeConfig {
   yarn_attn_factor?: number
   yarn_beta_fast?: number
   yarn_beta_slow?: number
+  embeddings?: boolean
+  pooling?: PoolingType
 }
 
 export interface EngineEvent {
@@ -220,6 +222,26 @@ export interface ModelServiceState {
 export interface ModelState {
   id: string
   name: string
+  capabilities: ModelCapabilities
+}
+
+export enum ModelClass {
+  DecoderOnly = 'decoder_only',
+  EncoderDecoder = 'encoder_decoder',
+  EncoderOnly = 'encoder_only',
+}
+
+export interface ModelCapabilities {
+  modelClass: ModelClass
+  supportsTextGeneration: boolean
+  supportsEmbeddings: boolean
+  hasChatTemplate: boolean
+  embedding?: EmbeddingCapabilities
+}
+
+export interface EmbeddingCapabilities {
+  dimensions: number
+  pooling: PoolingType
 }
 
 export interface MultimodalRuntimeConfig {

@@ -4,6 +4,7 @@ use super::{
     args_len, positive_or_default, positive_or_none, push_arg, push_flag, push_flag_pair,
     push_optional_arg,
 };
+use crate::engine::protocol::PoolingType;
 
 mod value_types;
 
@@ -39,6 +40,14 @@ pub struct ContextRuntimeConfig {
     pub yarn_attn_factor: Option<f32>,
     pub yarn_beta_fast: Option<f32>,
     pub yarn_beta_slow: Option<f32>,
+    /// Map to `--embedding`. When `Some(true)`, the llama context is created
+    /// with embedding output enabled. Encoder-only models pick this up
+    /// automatically at load; decoder-only callers (e.g. Qwen-embedding) set
+    /// it explicitly.
+    pub embeddings: Option<bool>,
+    /// Map to `--pooling none|mean|cls|last|rank`. `None` (or `Unspecified`)
+    /// defers to the model's `<arch>.pooling_type` GGUF metadata.
+    pub pooling: Option<PoolingType>,
 }
 
 impl Default for ContextRuntimeConfig {
@@ -66,6 +75,8 @@ impl Default for ContextRuntimeConfig {
             yarn_attn_factor: None,
             yarn_beta_fast: None,
             yarn_beta_slow: None,
+            embeddings: None,
+            pooling: None,
         }
     }
 }
@@ -107,6 +118,14 @@ impl ContextRuntimeConfig {
         push_optional_arg(args, "--yarn-attn-factor", self.yarn_attn_factor);
         push_optional_arg(args, "--yarn-beta-fast", self.yarn_beta_fast);
         push_optional_arg(args, "--yarn-beta-slow", self.yarn_beta_slow);
+        if self.embeddings == Some(true) {
+            push_flag(args, "--embedding", true);
+        }
+        if let Some(pooling) = self.pooling {
+            if pooling.is_explicit() {
+                push_arg(args, "--pooling", pooling.as_str());
+            }
+        }
     }
 
     pub(super) fn arg_len(&self) -> usize {
@@ -127,8 +146,13 @@ impl ContextRuntimeConfig {
                 self.yarn_attn_factor.is_some(),
                 self.yarn_beta_fast.is_some(),
                 self.yarn_beta_slow.is_some(),
+                self.pooling.is_some_and(PoolingType::is_explicit),
             ],
-            [self.kv_unified.is_some(), self.swa_full],
+            [
+                self.kv_unified.is_some(),
+                self.swa_full,
+                self.embeddings == Some(true),
+            ],
         )
     }
 }

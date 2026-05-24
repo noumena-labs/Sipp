@@ -5,8 +5,8 @@ use cogentlm_engine::backend::{
     set_llama_log_quiet as core_set_llama_log_quiet,
 };
 use cogentlm_engine::engine::protocol::{
-    BackendInfo as CoreBackendInfo, RequestState as CoreRequestState,
-    RequestStats as CoreRequestStats,
+    BackendInfo as CoreBackendInfo, ModelCapabilities as CoreModelCapabilities,
+    RequestState as CoreRequestState, RequestStats as CoreRequestStats,
 };
 use cogentlm_engine::engine::{
     CacheKeyPolicy, ChatMessage as CoreChatMessage, ChatRequest as CoreChatRequest,
@@ -17,8 +17,9 @@ use cogentlm_engine::engine::{
     ModelPlacementConfig as CoreModelPlacementConfig,
     MultimodalRuntimeConfig as CoreMultimodalRuntimeConfig,
     NativeRuntimeConfig as CoreNativeRuntimeConfig,
-    ObservabilityRuntimeConfig as CoreObservabilityRuntimeConfig, QueryOptions as CoreQueryOptions,
-    QueryRequest as CoreQueryRequest, ResidencyRuntimeConfig as CoreResidencyRuntimeConfig,
+    ObservabilityRuntimeConfig as CoreObservabilityRuntimeConfig, PoolingType as CorePoolingType,
+    QueryOptions as CoreQueryOptions, QueryRequest as CoreQueryRequest,
+    ResidencyRuntimeConfig as CoreResidencyRuntimeConfig,
     ResolvedRuntimeLimits as CoreResolvedRuntimeLimits, RopeScaling, SamplerStage,
     SamplingRuntimeConfig as CoreSamplingRuntimeConfig,
     SchedulerRuntimeConfig as CoreSchedulerRuntimeConfig, SplitMode, TokenBatch as CoreTokenBatch,
@@ -304,6 +305,8 @@ pub struct ContextRuntimeConfig {
     pub yarn_beta_fast: Option<f64>,
     #[napi(js_name = "yarn_beta_slow")]
     pub yarn_beta_slow: Option<f64>,
+    pub embeddings: Option<bool>,
+    pub pooling: Option<PoolingType>,
 }
 
 impl ContextRuntimeConfig {
@@ -344,6 +347,8 @@ impl ContextRuntimeConfig {
         core.yarn_attn_factor = option_f32(self.yarn_attn_factor);
         core.yarn_beta_fast = option_f32(self.yarn_beta_fast);
         core.yarn_beta_slow = option_f32(self.yarn_beta_slow);
+        core.embeddings = self.embeddings;
+        core.pooling = self.pooling.map(CorePoolingType::from);
         Ok(core)
     }
 }
@@ -697,6 +702,22 @@ pub struct LoadedModelInfo {
 pub struct ModelState {
     pub id: String,
     pub name: String,
+    pub capabilities: ModelCapabilities,
+}
+
+#[napi(object)]
+pub struct ModelCapabilities {
+    pub model_class: ModelClass,
+    pub supports_text_generation: bool,
+    pub supports_embeddings: bool,
+    pub has_chat_template: bool,
+    pub embedding: Option<EmbeddingCapabilities>,
+}
+
+#[napi(object)]
+pub struct EmbeddingCapabilities {
+    pub dimensions: i32,
+    pub pooling: PoolingType,
 }
 
 #[napi(object)]
@@ -839,6 +860,25 @@ pub struct GenerationResult {
 }
 
 #[napi(string_enum = "snake_case")]
+#[derive(Clone, Copy)]
+pub enum ModelClass {
+    DecoderOnly,
+    EncoderDecoder,
+    EncoderOnly,
+}
+
+impl From<cogentlm_engine::engine::ModelClass> for ModelClass {
+    fn from(value: cogentlm_engine::engine::ModelClass) -> Self {
+        match value {
+            cogentlm_engine::engine::ModelClass::DecoderOnly => Self::DecoderOnly,
+            cogentlm_engine::engine::ModelClass::EncoderDecoder => Self::EncoderDecoder,
+            cogentlm_engine::engine::ModelClass::EncoderOnly => Self::EncoderOnly,
+        }
+    }
+}
+
+#[napi(string_enum = "snake_case")]
+#[derive(Clone, Copy)]
 pub enum PoolingType {
     Unspecified,
     None,
@@ -846,6 +886,32 @@ pub enum PoolingType {
     Cls,
     Last,
     Rank,
+}
+
+impl From<PoolingType> for CorePoolingType {
+    fn from(value: PoolingType) -> Self {
+        match value {
+            PoolingType::Unspecified => Self::Unspecified,
+            PoolingType::None => Self::None,
+            PoolingType::Mean => Self::Mean,
+            PoolingType::Cls => Self::Cls,
+            PoolingType::Last => Self::Last,
+            PoolingType::Rank => Self::Rank,
+        }
+    }
+}
+
+impl From<CorePoolingType> for PoolingType {
+    fn from(value: CorePoolingType) -> Self {
+        match value {
+            CorePoolingType::Unspecified => Self::Unspecified,
+            CorePoolingType::None => Self::None,
+            CorePoolingType::Mean => Self::Mean,
+            CorePoolingType::Cls => Self::Cls,
+            CorePoolingType::Last => Self::Last,
+            CorePoolingType::Rank => Self::Rank,
+        }
+    }
 }
 
 #[napi(object)]
@@ -1487,6 +1553,21 @@ fn generation_result_to_node(result: CoreGenerationResult) -> GenerationResult {
     }
 }
 
+fn model_capabilities_to_node(capabilities: CoreModelCapabilities) -> ModelCapabilities {
+    ModelCapabilities {
+        model_class: capabilities.model_class.into(),
+        supports_text_generation: capabilities.supports_text_generation,
+        supports_embeddings: capabilities.supports_embeddings,
+        has_chat_template: capabilities.has_chat_template,
+        embedding: capabilities
+            .embedding
+            .map(|embedding| EmbeddingCapabilities {
+                dimensions: embedding.dimensions,
+                pooling: embedding.pooling.into(),
+            }),
+    }
+}
+
 fn token_batch_to_node(batch: CoreTokenBatch) -> TokenBatch {
     TokenBatch {
         request_id: batch.request_id,
@@ -1549,6 +1630,7 @@ fn engine_state_to_node(state: CoreEngineState) -> EngineState {
         model: state.model.map(|model| ModelState {
             id: model.id,
             name: model.name,
+            capabilities: model_capabilities_to_node(model.capabilities),
         }),
         backend: tail.backend,
         runtime: tail.runtime,

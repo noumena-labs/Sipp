@@ -33,6 +33,7 @@ impl InferenceRuntime {
         if n_tokens_predict <= 0 {
             return Err(Error::InvalidRequest(N_TOKENS_PREDICT_POSITIVE));
         }
+        self.text_generation_slot_plan()?;
 
         let request = self.prepare_generate_request(GenerateRequestInput {
             context_key: context_key.into(),
@@ -70,6 +71,7 @@ impl InferenceRuntime {
         if image_buffers.is_empty() {
             return Err(Error::InvalidRequest(IMAGE_BUFFERS_REQUIRED));
         }
+        self.text_generation_slot_plan()?;
 
         let mut request = self.prepare_generate_request(GenerateRequestInput {
             context_key: context_key.into(),

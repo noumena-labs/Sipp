@@ -23,6 +23,7 @@ const EARLY_STOP_KEYS: &[&str] = &[
 const TARGET_KEYS: &[&str] = &[
     "general.type",
     "general.architecture",
+    "general.pooling_type",
     "clip.projector_type",
     "clip.vision.projector_type",
     "clip.has_vision_encoder",
@@ -65,6 +66,7 @@ impl AssetInspection {
 pub struct GgufMetadataInspection {
     pub general_type: Option<String>,
     pub general_architecture: Option<String>,
+    pub pooling_type: Option<u32>,
     pub clip_projector_type: Option<String>,
     pub clip_vision_projector_type: Option<String>,
     pub clip_has_vision_encoder: Option<bool>,
@@ -93,8 +95,8 @@ pub enum ModelDetectionMethod {
 enum MetadataValue {
     String(String),
     Bool(bool),
-    Number,
-    Array,
+    U32(u32),
+    Skipped,
 }
 
 pub fn inspect_gguf_metadata_path(
@@ -132,6 +134,7 @@ pub fn inspect_gguf_metadata(bytes: &[u8]) -> Result<Option<GgufMetadataInspecti
     let mut stopped_early_at_key = None;
     let mut general_type = None;
     let mut general_architecture = None;
+    let mut pooling_type = None;
     let mut clip_projector_type = None;
     let mut clip_vision_projector_type = None;
     let mut clip_has_vision_encoder = None;
@@ -145,6 +148,7 @@ pub fn inspect_gguf_metadata(bytes: &[u8]) -> Result<Option<GgufMetadataInspecti
             && has_useful_metadata(
                 general_type.as_ref(),
                 general_architecture.as_ref(),
+                pooling_type,
                 clip_projector_type.as_ref(),
                 clip_vision_projector_type.as_ref(),
                 clip_has_vision_encoder,
@@ -154,7 +158,7 @@ pub fn inspect_gguf_metadata(bytes: &[u8]) -> Result<Option<GgufMetadataInspecti
             break;
         }
 
-        if TARGET_KEYS.contains(&key.as_str()) {
+        if is_target_key(&key) {
             let value = read_metadata_value(&mut reader, value_type, bytes.len())?;
             match (key.as_str(), value) {
                 ("general.type", MetadataValue::String(value)) => {
@@ -162,6 +166,9 @@ pub fn inspect_gguf_metadata(bytes: &[u8]) -> Result<Option<GgufMetadataInspecti
                 }
                 ("general.architecture", MetadataValue::String(value)) => {
                     general_architecture = normalize_optional_string(&value);
+                }
+                (key, MetadataValue::U32(value)) if is_pooling_key(key) => {
+                    pooling_type = Some(value);
                 }
                 ("clip.projector_type", MetadataValue::String(value)) => {
                     clip_projector_type = normalize_optional_string(&value);
@@ -182,6 +189,7 @@ pub fn inspect_gguf_metadata(bytes: &[u8]) -> Result<Option<GgufMetadataInspecti
     Ok(Some(GgufMetadataInspection {
         general_type,
         general_architecture,
+        pooling_type,
         clip_projector_type,
         clip_vision_projector_type,
         clip_has_vision_encoder,
@@ -245,13 +253,14 @@ fn read_metadata_value<R: Read>(
         GgufValueType::Bool => Ok(MetadataValue::Bool(
             read_metadata_u8(reader, prefix_len)? != 0,
         )),
+        GgufValueType::Uint32 => Ok(MetadataValue::U32(read_metadata_u32(reader, prefix_len)?)),
         GgufValueType::Array => {
             skip_array(reader, prefix_len)?;
-            Ok(MetadataValue::Array)
+            Ok(MetadataValue::Skipped)
         }
         _ => {
             skip_metadata_value(reader, value_type, prefix_len)?;
-            Ok(MetadataValue::Number)
+            Ok(MetadataValue::Skipped)
         }
     }
 }
@@ -454,15 +463,25 @@ fn resolve_compatible_vision_projector_types(
 fn has_useful_metadata(
     general_type: Option<&String>,
     general_architecture: Option<&String>,
+    pooling_type: Option<u32>,
     clip_projector_type: Option<&String>,
     clip_vision_projector_type: Option<&String>,
     clip_has_vision_encoder: Option<bool>,
 ) -> bool {
     general_type.is_some()
         || general_architecture.is_some()
+        || pooling_type.is_some()
         || clip_projector_type.is_some()
         || clip_vision_projector_type.is_some()
         || clip_has_vision_encoder.is_some()
+}
+
+fn is_target_key(key: &str) -> bool {
+    TARGET_KEYS.contains(&key) || is_pooling_key(key)
+}
+
+fn is_pooling_key(key: &str) -> bool {
+    key == "general.pooling_type" || key.ends_with(".pooling_type")
 }
 
 fn normalize_file_name(file_name: &str) -> String {
@@ -486,6 +505,7 @@ mod tests {
     enum TestValue<'a> {
         String(&'a str),
         Bool(bool),
+        Uint32(u32),
     }
 
     #[test]
@@ -559,6 +579,19 @@ mod tests {
     }
 
     #[test]
+    fn inspects_arch_pooling_type() {
+        let metadata = inspect_gguf_metadata(&gguf(&[
+            ("general.architecture", TestValue::String("bert")),
+            ("bert.pooling_type", TestValue::Uint32(1)),
+        ]))
+        .expect("inspection")
+        .expect("gguf metadata");
+
+        assert_eq!(metadata.general_architecture.as_deref(), Some("bert"));
+        assert_eq!(metadata.pooling_type, Some(1));
+    }
+
+    #[test]
     fn truncated_gguf_metadata_is_typed_error() {
         let mut bytes = Vec::new();
         push_u32(&mut bytes, GGUF_MAGIC);
@@ -609,6 +642,10 @@ mod tests {
                 TestValue::Bool(value) => {
                     push_u32(&mut bytes, GgufValueType::Bool as u32);
                     bytes.push(u8::from(*value));
+                }
+                TestValue::Uint32(value) => {
+                    push_u32(&mut bytes, GgufValueType::Uint32 as u32);
+                    push_u32(&mut bytes, *value);
                 }
             }
         }

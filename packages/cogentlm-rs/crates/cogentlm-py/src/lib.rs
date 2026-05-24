@@ -314,7 +314,9 @@ impl PyContextRuntimeConfig {
         yarn_ext_factor = None,
         yarn_attn_factor = None,
         yarn_beta_fast = None,
-        yarn_beta_slow = None
+        yarn_beta_slow = None,
+        embeddings = None,
+        pooling = None
     ))]
     fn new(
         n_ctx: Option<i32>,
@@ -339,6 +341,8 @@ impl PyContextRuntimeConfig {
         yarn_attn_factor: Option<f32>,
         yarn_beta_fast: Option<f32>,
         yarn_beta_slow: Option<f32>,
+        embeddings: Option<bool>,
+        pooling: Option<String>,
     ) -> PyResult<Self> {
         let mut core = cogentlm_engine::engine::ContextRuntimeConfig {
             n_ctx,
@@ -355,6 +359,7 @@ impl PyContextRuntimeConfig {
             yarn_attn_factor,
             yarn_beta_fast,
             yarn_beta_slow,
+            embeddings,
             ..Default::default()
         };
         if let Some(value) = flash_attention {
@@ -373,8 +378,16 @@ impl PyContextRuntimeConfig {
         if let Some(value) = rope_scaling {
             core.rope_scaling = Some(parse_rope_scaling(&value)?);
         }
+        if let Some(value) = pooling {
+            core.pooling = Some(parse_pooling_type(&value)?);
+        }
         Ok(Self { core })
     }
+}
+
+fn parse_pooling_type(value: &str) -> PyResult<cogentlm_engine::engine::PoolingType> {
+    cogentlm_engine::engine::PoolingType::from_name(value)
+        .ok_or_else(|| PyValueError::new_err(format!("unknown pooling type: {value}")))
 }
 
 #[pyclass(name = "SchedulerPolicyConfig")]
@@ -1340,6 +1353,10 @@ fn engine_state_to_dict(py: Python<'_>, state: EngineState) -> PyResult<Py<PyAny
         let model_dict = PyDict::new_bound(py);
         model_dict.set_item("id", model.id)?;
         model_dict.set_item("name", model.name)?;
+        model_dict.set_item(
+            "capabilities",
+            model_capabilities_to_dict(py, model.capabilities)?,
+        )?;
         dict.set_item("model", model_dict)?;
     } else {
         dict.set_item("model", py.None())?;
@@ -1353,6 +1370,30 @@ fn engine_state_to_dict(py: Python<'_>, state: EngineState) -> PyResult<Py<PyAny
         state.stats,
         state.updated_at_unix_ms,
     )?;
+    Ok(dict.into_py(py))
+}
+
+fn model_capabilities_to_dict(
+    py: Python<'_>,
+    capabilities: cogentlm_engine::engine::ModelCapabilities,
+) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("model_class", capabilities.model_class.as_str())?;
+    dict.set_item(
+        "supports_text_generation",
+        capabilities.supports_text_generation,
+    )?;
+    dict.set_item("supports_embeddings", capabilities.supports_embeddings)?;
+    dict.set_item("has_chat_template", capabilities.has_chat_template)?;
+    match capabilities.embedding {
+        Some(embedding) => {
+            let embedding_dict = PyDict::new_bound(py);
+            embedding_dict.set_item("dimensions", embedding.dimensions)?;
+            embedding_dict.set_item("pooling", embedding.pooling.as_str())?;
+            dict.set_item("embedding", embedding_dict)?;
+        }
+        None => dict.set_item("embedding", py.None())?,
+    }
     Ok(dict.into_py(py))
 }
 

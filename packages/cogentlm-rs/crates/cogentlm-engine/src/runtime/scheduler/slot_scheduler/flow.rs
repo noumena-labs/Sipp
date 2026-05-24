@@ -63,28 +63,22 @@ impl SlotScheduler {
         &mut self,
         request_queue: &mut RequestQueue,
         session_store: &mut SessionStore,
-    ) -> bool {
+    ) -> Option<usize> {
         let debug_metrics_admit_start = Instant::now();
-        let Some(idle_slot_index) = self.slots.iter().position(idle_without_request) else {
-            return false;
-        };
+        let idle_slot_index = self.slots.iter().position(idle_without_request)?;
 
         let has_evictable = session_store.has_evictable_session();
-        let Some(next_request_id) = request_queue.try_pop_next_admissible(|request| {
+        let next_request_id = request_queue.try_pop_next_admissible(|request| {
             session_store.can_admit_with_evictable_cached(&request.context_key, has_evictable)
-        }) else {
-            return false;
-        };
+        })?;
 
-        let Some(mut request) = request_queue.requests.get(&next_request_id).cloned() else {
-            return false;
-        };
+        let mut request = request_queue.requests.get(&next_request_id).cloned()?;
 
         let context_key = request.context_key.clone();
         let sticky_hardware_id = {
             let Some(session) = session_store.get_or_create_session(&context_key) else {
                 complete_failed_admission(request_queue, request.id, CREATE_OR_FIND_SESSION_FAILED);
-                return false;
+                return None;
             };
             session.hardware_id
         };
@@ -92,7 +86,7 @@ impl SlotScheduler {
         let leased_seq_id = session_store.acquire_seq_id(sticky_hardware_id);
         if leased_seq_id < 0 {
             complete_failed_admission(request_queue, request.id, ACQUIRE_HARDWARE_SEQUENCE_FAILED);
-            return false;
+            return None;
         }
 
         let Some(session_snapshot) =
@@ -104,7 +98,7 @@ impl SlotScheduler {
                 request.id,
                 PREPARE_SESSION_FOR_ADMISSION_FAILED,
             );
-            return false;
+            return None;
         };
 
         session_store.pin(&context_key);
@@ -113,7 +107,7 @@ impl SlotScheduler {
         slot.attach_request(request, session_snapshot);
         slot.seq_id = leased_seq_id;
         slot.phase = SlotPhase::Prefill;
-        true
+        Some(idle_slot_index)
     }
 
     pub fn finalize_completed_slots(

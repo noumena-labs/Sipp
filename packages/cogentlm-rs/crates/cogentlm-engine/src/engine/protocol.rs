@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use crate::runtime::config::ResolvedRuntimeLimits;
 
 /// Current lifecycle state of an engine.
@@ -88,6 +90,7 @@ pub struct BackendInfo {
 pub struct ModelState {
     pub id: String,
     pub name: String,
+    pub capabilities: ModelCapabilities,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -206,7 +209,8 @@ pub struct GenerationResult {
 }
 
 /// Pooling strategy for embedding outputs. Mirrors `llama_pooling_type`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PoolingType {
     Unspecified,
     None,
@@ -227,6 +231,87 @@ impl PoolingType {
             Self::Rank => "rank",
         }
     }
+
+    pub fn from_name(value: &str) -> Option<Self> {
+        match value {
+            "unspecified" => Some(Self::Unspecified),
+            "none" => Some(Self::None),
+            "mean" => Some(Self::Mean),
+            "cls" => Some(Self::Cls),
+            "last" => Some(Self::Last),
+            "rank" => Some(Self::Rank),
+            _ => None,
+        }
+    }
+
+    pub const fn from_llama_value(value: i32) -> Option<Self> {
+        match value {
+            -1 => Some(Self::Unspecified),
+            0 => Some(Self::None),
+            1 => Some(Self::Mean),
+            2 => Some(Self::Cls),
+            3 => Some(Self::Last),
+            4 => Some(Self::Rank),
+            _ => None,
+        }
+    }
+
+    pub const fn is_explicit(self) -> bool {
+        !matches!(self, Self::Unspecified)
+    }
+}
+
+/// llama.cpp model-shape classification. Determines which inference path
+/// `query()` and `embed()` take: see `cogentlm_encoder.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelClass {
+    /// `has_encoder = false`, `has_decoder = true`.
+    DecoderOnly,
+    /// `has_encoder = true`, `has_decoder = true`.
+    EncoderDecoder,
+    /// `has_encoder = true`, `has_decoder = false` (BERT, e5, bge, jina, reranker).
+    EncoderOnly,
+}
+
+impl ModelClass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DecoderOnly => "decoder_only",
+            Self::EncoderDecoder => "encoder_decoder",
+            Self::EncoderOnly => "encoder_only",
+        }
+    }
+
+    /// Classify by `general.architecture` (already lowercased by the
+    /// inspection layer).
+    pub fn from_architecture(arch: &str) -> Self {
+        match arch {
+            "bert" | "nomic-bert" | "nomic-bert-moe" | "jina-bert-v2" | "jina-bert-v3"
+            | "modern-bert" | "neo-bert" | "t5encoder" => Self::EncoderOnly,
+            "t5" | "bart" => Self::EncoderDecoder,
+            _ => Self::DecoderOnly,
+        }
+    }
+}
+
+/// Embedding output capability for the currently-loaded model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddingCapabilities {
+    pub dimensions: i32,
+    pub pooling: PoolingType,
+}
+
+/// Public capability snapshot for the currently-loaded model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCapabilities {
+    pub model_class: ModelClass,
+    pub supports_text_generation: bool,
+    pub supports_embeddings: bool,
+    pub has_chat_template: bool,
+    pub embedding: Option<EmbeddingCapabilities>,
 }
 
 /// Per-call knobs for `embed()`.

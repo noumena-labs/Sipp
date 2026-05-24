@@ -2,9 +2,11 @@ use std::collections::HashSet;
 use std::ffi::CString;
 use std::ptr::NonNull;
 
+use cogentlm_shard::inspect_gguf_metadata_path;
 use cogentlm_sys as ffi;
 
 use crate::backend::ensure_backend_initialized;
+use crate::engine::protocol::{ModelClass, PoolingType};
 use crate::error::{Error, Result};
 use crate::runtime::config::{NativeRuntimeConfig, ResolvedRuntimeLimits};
 use crate::runtime::llama::LlamaBatchBuilder;
@@ -13,6 +15,7 @@ use crate::runtime::request::{GenerateRequestId, RequestQueue};
 use crate::runtime::scheduler::{BatchPlanner, SamplerCacheKey, SharedBatchPlan, SlotScheduler};
 use crate::runtime::session::{PrefixCachePolicy, PrefixStateCache, SessionStore};
 
+use super::capabilities::RuntimeModelCapabilities;
 use super::environment::{
     admit_runtime_residency, resolve_batch_token_budget, snapshot_prefix_cache_enabled,
 };
@@ -38,7 +41,9 @@ impl InferenceRuntime {
             return Err(Error::InvalidRequest("model path is required"));
         }
 
-        let config = config.normalize();
+        let mut config = config.normalize();
+        let model_class = probe_model_class(model_path, model_path_string.as_str())?;
+        apply_model_class_defaults(&mut config, model_class)?;
         let common_params = parse_common_params(model_path_string.as_str(), &config)?;
         let residency_lease = match admit_runtime_residency(&config) {
             Ok(lease) => lease,
@@ -56,10 +61,12 @@ impl InferenceRuntime {
         let runtime_parts =
             RuntimeParts::new(&config, resolved_limits.clone(), handles.shared_context)?;
         let debug_metrics_enabled = config.observability.effective_runtime_metrics();
+        let capabilities = build_capabilities(&config, common_init)?;
 
         Ok(Self {
             config,
             resolved_limits,
+            capabilities,
             residency_lease,
             common_init,
             primary_model: handles.primary_model,
@@ -278,6 +285,91 @@ fn init_model_handles(
     })
 }
 
+fn probe_model_class(model_path: &std::path::Path, model_path_string: &str) -> Result<ModelClass> {
+    let metadata = inspect_gguf_metadata_path(model_path).map_err(|_| Error::ModelLoad {
+        path: model_path_string.to_string(),
+    })?;
+    Ok(metadata
+        .as_ref()
+        .and_then(|metadata| metadata.general_architecture.as_deref())
+        .map(ModelClass::from_architecture)
+        .unwrap_or(ModelClass::DecoderOnly))
+}
+
+/// Apply class-specific defaults to the runtime config and reject
+/// combinations llama.cpp cannot satisfy. Runs before `parse_common_params`
+/// so the resulting `--embedding` / `--parallel` flags are emitted correctly.
+fn apply_model_class_defaults(config: &mut NativeRuntimeConfig, class: ModelClass) -> Result<()> {
+    match class {
+        ModelClass::DecoderOnly => {}
+        ModelClass::EncoderOnly => {
+            if config.context.embeddings.is_none() {
+                config.context.embeddings = Some(true);
+            }
+        }
+        ModelClass::EncoderDecoder => {
+            if config.context.embeddings == Some(true) {
+                return Err(Error::UnsupportedOperation {
+                    operation: "load",
+                    reason: "encoder-decoder models do not support embedding output".to_string(),
+                });
+            }
+            if config.context.n_parallel.unwrap_or(1) > 1 {
+                return Err(Error::UnsupportedOperation {
+                    operation: "load",
+                    reason: "encoder-decoder models require n_parallel=1 (llama.cpp \
+                             stores cross-attention state per context)"
+                        .to_string(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn build_capabilities(
+    config: &NativeRuntimeConfig,
+    common_init: *const ffi::cogent_common_init,
+) -> Result<RuntimeModelCapabilities> {
+    // Probe the raw GGUF metadata, not the common_chat_templates fallback —
+    // we want "was the model trained with a chat template" (so chat() is
+    // semantically meaningful), not "can llama.cpp synthesize a template".
+    let has_chat_template = unsafe { ffi::cogent_common_init_model_has_chat_template(common_init) };
+    let pooling_raw = unsafe { ffi::cogent_common_init_pooling_type(common_init) };
+    let pooling_type =
+        PoolingType::from_llama_value(pooling_raw).ok_or_else(|| Error::UnsupportedOperation {
+            operation: "load",
+            reason: format!("unsupported llama.cpp pooling type {pooling_raw}"),
+        })?;
+    let decoder_start_token =
+        match unsafe { ffi::cogent_common_init_decoder_start_token(common_init) } {
+            token if token >= 0 => Some(token),
+            _ => None,
+        };
+    Ok(RuntimeModelCapabilities {
+        class: model_class_from_init(common_init)?,
+        n_embd: unsafe { ffi::cogent_common_init_n_embd_out(common_init) },
+        pooling_type,
+        decoder_start_token,
+        has_chat_template,
+        embedding_context: config.context.embeddings == Some(true),
+    })
+}
+
+fn model_class_from_init(common_init: *const ffi::cogent_common_init) -> Result<ModelClass> {
+    let has_encoder = unsafe { ffi::cogent_common_init_model_has_encoder(common_init) };
+    let has_decoder = unsafe { ffi::cogent_common_init_model_has_decoder(common_init) };
+    match (has_encoder, has_decoder) {
+        (true, true) => Ok(ModelClass::EncoderDecoder),
+        (true, false) => Ok(ModelClass::EncoderOnly),
+        (false, true) => Ok(ModelClass::DecoderOnly),
+        (false, false) => Err(Error::UnsupportedOperation {
+            operation: "load",
+            reason: "loaded model exposes neither encoder nor decoder".to_string(),
+        }),
+    }
+}
+
 fn init_multimodal_context(
     config: &NativeRuntimeConfig,
     primary_model: *mut ffi::llama_model,
@@ -313,4 +405,46 @@ fn init_multimodal_context(
         return Err(Error::NullPointer("cogent_mtmd_init_from_file"));
     }
     Ok(mtmd)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encoder_only_enables_embedding_context_before_common_params() {
+        let mut config = NativeRuntimeConfig::default();
+
+        apply_model_class_defaults(&mut config, ModelClass::EncoderOnly).expect("defaults");
+
+        assert_eq!(config.context.embeddings, Some(true));
+    }
+
+    #[test]
+    fn encoder_decoder_rejects_embedding_context_before_common_params() {
+        let mut config = NativeRuntimeConfig::default();
+        config.context.embeddings = Some(true);
+
+        let error = apply_model_class_defaults(&mut config, ModelClass::EncoderDecoder)
+            .expect_err("encoder-decoder embeddings");
+
+        assert!(
+            matches!(error, Error::UnsupportedOperation { operation: "load", reason }
+                if reason.contains("embedding output"))
+        );
+    }
+
+    #[test]
+    fn encoder_decoder_rejects_parallel_contexts_before_common_params() {
+        let mut config = NativeRuntimeConfig::default();
+        config.context.n_parallel = Some(2);
+
+        let error = apply_model_class_defaults(&mut config, ModelClass::EncoderDecoder)
+            .expect_err("encoder-decoder parallelism");
+
+        assert!(
+            matches!(error, Error::UnsupportedOperation { operation: "load", reason }
+                if reason.contains("n_parallel=1"))
+        );
+    }
 }

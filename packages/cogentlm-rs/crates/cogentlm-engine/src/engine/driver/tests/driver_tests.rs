@@ -70,3 +70,76 @@ fn engine_handle_is_send() {
     fn assert_send<T: Send>() {}
     assert_send::<CogentEngine>();
 }
+
+/// End-to-end Phase 3 verification: load the repo-root T5 fixture, confirm
+/// classification, run an actual encoder-decoder query, and confirm chat()
+/// rejects with `UnsupportedOperation`. Ignored by default because it loads a
+/// real model and runs llama.cpp under the test harness — run with
+/// `cargo test -p cogentlm-engine -- --ignored t5_encoder_decoder_end_to_end`.
+#[test]
+#[ignore]
+fn t5_encoder_decoder_end_to_end() {
+    use std::path::PathBuf;
+
+    use crate::engine::protocol::ModelClass;
+    use crate::engine::{ChatMessage, ChatRequest, ChatRole, NativeRuntimeConfig};
+    use crate::error::Error;
+
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("t5-small-f16.gguf");
+    assert!(
+        fixture.exists(),
+        "repo-root t5-small-f16.gguf must exist for the encoder-decoder gate"
+    );
+
+    let engine = CogentEngine::load(&fixture, NativeRuntimeConfig::default())
+        .expect("load t5-small-f16.gguf");
+
+    let state = engine.state().expect("engine state");
+    let capabilities = state
+        .model
+        .as_ref()
+        .map(|model| &model.capabilities)
+        .expect("model state on loaded engine");
+    assert_eq!(capabilities.model_class, ModelClass::EncoderDecoder);
+    assert!(capabilities.supports_text_generation);
+    assert!(!capabilities.supports_embeddings);
+    assert!(
+        !capabilities.has_chat_template,
+        "T5 has no chat template; chat() must be rejected"
+    );
+
+    // chat() must reject before touching the runtime.
+    let chat_error = engine
+        .chat(ChatRequest::new(vec![ChatMessage::new(
+            ChatRole::User,
+            "hello",
+        )]))
+        .expect_err("chat() must reject T5");
+    assert!(
+        matches!(
+            &chat_error,
+            Error::UnsupportedOperation {
+                operation: "chat",
+                ..
+            }
+        ),
+        "expected UnsupportedOperation; got: {chat_error:?}"
+    );
+
+    // query() against T5 should run the encoder pre-pass + decoder loop and
+    // return a non-empty text result.
+    let result = engine
+        .query(QueryRequest::new(
+            "translate English to German: Hello, world.",
+        ))
+        .expect("T5 query");
+    assert!(
+        !result.text.is_empty(),
+        "T5 encoder-decoder query produced empty output"
+    );
+}

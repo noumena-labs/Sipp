@@ -22,8 +22,10 @@ use crate::runtime::scheduler::{
 use crate::runtime::session::{PrefixCachePolicy, PrefixStateCache, SessionStore};
 use crate::runtime::{llama_seq_id, llama_token};
 
+pub(crate) mod capabilities;
 mod decode;
 mod diagnostics;
+mod encoder;
 mod environment;
 mod lifecycle;
 mod multimodal;
@@ -103,6 +105,7 @@ struct DebugMetricsTick {
 pub struct InferenceRuntime {
     config: NativeRuntimeConfig,
     pub(crate) resolved_limits: ResolvedRuntimeLimits,
+    pub(crate) capabilities: capabilities::RuntimeModelCapabilities,
     residency_lease: Option<ResidencyLease>,
     common_init: *mut ffi::cogent_common_init,
     primary_model: *mut ffi::llama_model,
@@ -149,6 +152,10 @@ pub struct InferenceRuntime {
 unsafe impl Send for InferenceRuntime {}
 
 impl InferenceRuntime {
+    pub fn capabilities(&self) -> crate::engine::protocol::ModelCapabilities {
+        self.capabilities.to_public()
+    }
+
     pub fn is_ready(&self) -> bool {
         !self.common_init.is_null()
             && !self.primary_model.is_null()
@@ -163,11 +170,14 @@ impl InferenceRuntime {
 
         let completed_before = self.request_queue.completed_responses.len();
         let mut admitted_any = false;
-        while self
+        while let Some(slot_index) = self
             .slot_scheduler
             .admit_pending_requests(&mut self.request_queue, &mut self.session_store)
         {
             admitted_any = true;
+            if let Err(error) = self.run_admission_prefill(slot_index) {
+                self.fail_admitted_slot(slot_index, error);
+            }
         }
 
         let tick_executed = self.run_policy_batch_tick_locked();

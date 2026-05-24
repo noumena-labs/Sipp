@@ -50,14 +50,12 @@ pub struct CogentEngine {
 impl CogentEngine {
     pub fn load(model_path: impl AsRef<Path>, config: NativeRuntimeConfig) -> Result<Self> {
         let model_path = model_path.as_ref().to_path_buf();
-        let model_state = ModelState {
-            id: model_path.display().to_string(),
-            name: model_path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or(DEFAULT_MODEL_FILE_NAME)
-                .to_string(),
-        };
+        let model_id = model_path.display().to_string();
+        let model_name = model_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(DEFAULT_MODEL_FILE_NAME)
+            .to_string();
         let runtime_config = config;
         let (command_tx, command_rx) = mpsc::channel();
         let (init_tx, init_rx) = mpsc::sync_channel(1);
@@ -70,6 +68,11 @@ impl CogentEngine {
                 let runtime = InferenceRuntime::load(&model_path, runtime_config);
                 match runtime {
                     Ok(runtime) => {
+                        let model_state = ModelState {
+                            id: model_id,
+                            name: model_name,
+                            capabilities: runtime.capabilities(),
+                        };
                         let _ = init_tx.send(Ok(()));
                         run_engine_thread(
                             runtime,

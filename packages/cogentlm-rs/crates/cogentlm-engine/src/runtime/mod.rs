@@ -1,5 +1,5 @@
 pub mod config;
-mod inference_runtime;
+pub(crate) mod inference_runtime;
 pub mod llama;
 pub mod metrics;
 pub(crate) mod numeric;

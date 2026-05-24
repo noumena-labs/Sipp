@@ -52,6 +52,18 @@ int32_t cogent_common_init_n_ubatch(const cogent_common_init * init);
 
 int32_t cogent_common_init_n_ctx(const cogent_common_init * init);
 
+int32_t cogent_common_init_n_embd_out(const cogent_common_init * init);
+
+int32_t cogent_common_init_pooling_type(const cogent_common_init * init);
+
+int32_t cogent_common_init_decoder_start_token(const cogent_common_init * init);
+
+bool cogent_common_init_model_has_encoder(const cogent_common_init * init);
+
+bool cogent_common_init_model_has_decoder(const cogent_common_init * init);
+
+bool cogent_common_init_model_has_chat_template(const cogent_common_init * init);
+
 bool cogent_common_init_kv_unified(const cogent_common_init * init);
 
 char * cogent_common_init_flash_attention(const cogent_common_init * init);
@@ -147,6 +159,28 @@ bool cogent_llama_set_sampler(
 int32_t cogent_llama_decode(
     struct llama_context * context,
     const struct llama_batch * batch);
+
+/// Encoder prompt ingest. No KV cache use; deposits cross-attention state
+/// into the context for the subsequent decoder pass (encoder-decoder), or
+/// produces sequence embeddings (encoder-only). Mirrors cogent_llama_decode's
+/// error contract: 0 = ok, < 0 = error.
+int32_t cogent_llama_encode(
+    struct llama_context * context,
+    const struct llama_batch * batch);
+
+/// Read the pooled embedding for `seq_id`. Returned pointer is owned by the
+/// context; caller copies before the next encode/decode. Returns NULL when
+/// pooling is NONE or the context has no pooled output for the sequence.
+const float * cogent_llama_embeddings_seq(
+    struct llama_context * context,
+    int32_t seq_id);
+
+/// Read the per-token embedding at logical batch index `i`. Returned pointer
+/// is owned by the context; caller copies before the next encode/decode.
+/// Returns NULL when index is out of range.
+const float * cogent_llama_embeddings_ith(
+    struct llama_context * context,
+    int32_t i);
 
 bool cogent_llama_synchronize(struct llama_context * context);
 

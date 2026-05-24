@@ -3,7 +3,7 @@ use cogentlm_sys as ffi;
 use crate::runtime::config::NativeRuntimeConfig;
 use crate::runtime::request::GenerateRequestLifecycle;
 use crate::runtime::request::RequestQueue;
-use crate::runtime::scheduler::{SlotPhase, SlotState};
+use crate::runtime::scheduler::{PrefillKind, SlotPhase, SlotState, TerminalAction};
 use crate::runtime::session::{PrefixCachePolicy, PrefixStateCache, SessionStore};
 use crate::runtime::REQUEST_CANCELLED_MESSAGE;
 
@@ -42,7 +42,11 @@ impl InferenceRuntime {
                 live_retained_prefix_tokens(&self.config),
             );
 
-            if slot.sampler.is_none()
+            // Embedding-only slots have no sampler — they never visit the
+            // sample/decode loop. Skip sampler creation, backend attachment,
+            // and sampler-pool accounting entirely.
+            if slot.plan.terminal == TerminalAction::SampleTokens
+                && slot.sampler.is_none()
                 && !ensure_slot_sampler(
                     slot,
                     self.common_init,
@@ -133,6 +137,21 @@ fn run_initial_prefill(
         return true;
     }
 
+    // Encoder-decoder prompts are rewritten to a single decoder-start token by
+    // the admission pass. Allowing the prefix cache to LCP-match that token
+    // across unrelated source prompts would let an old turn's decoder KV
+    // poison the new turn — disable cache reuse and start from a fresh KV
+    // state for this slot. Same rule for embedding-context requests, whose
+    // outputs are read directly from the encoder pass, not from cached KV.
+    let bypass_prefix_cache = slot.plan.prefill == PrefillKind::Encode
+        || slot.plan.terminal == TerminalAction::ReadEmbedding;
+    if bypass_prefix_cache {
+        slot.mirror.current_kv_tokens.clear();
+        slot.mirror.n_past = 0;
+    }
+    let snapshot_prefix_cache =
+        !bypass_prefix_cache && snapshot_prefix_cache_enabled(config.cache.mode);
+
     let Some(ref mut request) = slot.request else {
         return false;
     };
@@ -141,7 +160,7 @@ fn run_initial_prefill(
         shared_context,
         primary_model,
         live_retained_prefix_tokens(config),
-        snapshot_prefix_cache_enabled(config.cache.mode),
+        snapshot_prefix_cache,
         config.scheduler.policy.decode_token_reserve,
         model_fingerprint,
         session_store,

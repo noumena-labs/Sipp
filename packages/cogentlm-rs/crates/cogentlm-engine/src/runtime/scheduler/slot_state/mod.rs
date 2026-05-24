@@ -20,6 +20,34 @@ pub enum SlotPhase {
     Failed,
 }
 
+/// How the slot's prompt is ingested into the runtime context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PrefillKind {
+    /// Standard `llama_decode` loop over the prompt tokens.
+    #[default]
+    Decode,
+    /// Single `llama_encode` pass over the prompt tokens.
+    Encode,
+}
+
+/// What the slot does once prompt ingest completes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TerminalAction {
+    /// Enter the existing sample/decode loop and stream tokens.
+    #[default]
+    SampleTokens,
+    /// Read the resolved embedding and finalize.
+    ReadEmbedding,
+}
+
+/// Per-slot execution plan derived once at admission. The scheduler stores the
+/// decision; runtime admission code owns model capability interpretation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SlotExecutionPlan {
+    pub prefill: PrefillKind,
+    pub terminal: TerminalAction,
+}
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct SamplerCacheKey {
     pub sampling_json: String,
@@ -32,6 +60,7 @@ pub struct SlotState {
     pub slot_id: usize,
     pub seq_id: llama_seq_id,
     pub phase: SlotPhase,
+    pub plan: SlotExecutionPlan,
     pub request_id: GenerateRequestId,
     pub request: Option<GenerateRequest>,
     pub session: Option<SequenceState>,
@@ -170,6 +199,7 @@ impl Default for SlotState {
             slot_id: 0,
             seq_id: -1,
             phase: SlotPhase::Idle,
+            plan: SlotExecutionPlan::default(),
             request_id: 0,
             request: None,
             session: None,

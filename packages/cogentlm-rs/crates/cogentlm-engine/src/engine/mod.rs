@@ -16,7 +16,7 @@ pub use driver::{
     QueryRequest,
 };
 pub use protocol::{
-    EmbedOptions, EmbedRequest, EmbeddingResult, EngineEvent, EngineState, EngineStats,
-    GenerationResult, PoolingType,
+    EmbedOptions, EmbedRequest, EmbeddingCapabilities, EmbeddingResult, EngineEvent, EngineState,
+    EngineStats, GenerationResult, ModelCapabilities, ModelClass, PoolingType,
 };
 pub use stream::{StreamStats, TokenBatch, TokenFrame, TokenStreamMode};

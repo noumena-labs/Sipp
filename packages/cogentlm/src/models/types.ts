@@ -62,6 +62,20 @@ export interface ModelInfo {
   mediaMarker: string | null;
   createdAt: string;
   updatedAt: string;
+  capabilities?: ModelCapabilities;
+}
+
+export type ModelClass = 'decoder_only' | 'encoder_decoder' | 'encoder_only';
+
+export interface ModelCapabilities {
+  modelClass: ModelClass;
+  supportsTextGeneration: boolean;
+  supportsEmbeddings: boolean;
+  hasChatTemplate: boolean;
+  embedding?: {
+    dimensions: number;
+    pooling: PoolingType;
+  };
 }
 
 export type QueryInput =

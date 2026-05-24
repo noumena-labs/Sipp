@@ -72,7 +72,9 @@ fn admit_pending_request_leases_sequence_and_pins_session() {
     assert!(queue.push(request(1, "ctx")));
     let mut sessions = SessionStore::new(2, 1);
 
-    assert!(scheduler.admit_pending_requests(&mut queue, &mut sessions));
+    assert!(scheduler
+        .admit_pending_requests(&mut queue, &mut sessions)
+        .is_some());
 
     let slot = &scheduler.slots[0];
     assert_eq!(slot.request_id, 1);
@@ -92,7 +94,9 @@ fn finalize_completed_slot_writes_response_and_releases_session() {
     let mut queue = RequestQueue::new();
     assert!(queue.push(request(1, "ctx")));
     let mut sessions = SessionStore::new(2, 1);
-    assert!(scheduler.admit_pending_requests(&mut queue, &mut sessions));
+    assert!(scheduler
+        .admit_pending_requests(&mut queue, &mut sessions)
+        .is_some());
 
     let slot = &mut scheduler.slots[0];
     slot.phase = SlotPhase::Completed;
@@ -126,7 +130,9 @@ fn finalize_failed_slot_writes_terminal_error() {
     let mut queue = RequestQueue::new();
     assert!(queue.push(request(1, "ctx")));
     let mut sessions = SessionStore::new(2, 1);
-    assert!(scheduler.admit_pending_requests(&mut queue, &mut sessions));
+    assert!(scheduler
+        .admit_pending_requests(&mut queue, &mut sessions)
+        .is_some());
 
     let slot = &mut scheduler.slots[0];
     slot.phase = SlotPhase::Failed;
@@ -146,7 +152,9 @@ fn finalize_cancelled_slot_prefers_cancel_message() {
     let mut queue = RequestQueue::new();
     assert!(queue.push(request(1, "ctx")));
     let mut sessions = SessionStore::new(2, 1);
-    assert!(scheduler.admit_pending_requests(&mut queue, &mut sessions));
+    assert!(scheduler
+        .admit_pending_requests(&mut queue, &mut sessions)
+        .is_some());
     assert!(queue.cancel(1, "cancelled by caller".to_string()));
 
     let slot = &mut scheduler.slots[0];

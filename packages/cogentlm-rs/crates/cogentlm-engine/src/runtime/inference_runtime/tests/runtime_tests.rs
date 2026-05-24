@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
+use crate::engine::protocol::{ModelClass, PoolingType};
 use crate::runtime::config::{NativeRuntimeConfig, ResolvedRuntimeLimits};
+use crate::runtime::inference_runtime::capabilities::RuntimeModelCapabilities;
 use crate::runtime::llama::LlamaBatchBuilder;
 use crate::runtime::metrics::RuntimeObservabilityMetrics;
 use crate::runtime::request::RequestQueue;
@@ -13,6 +15,14 @@ pub(crate) fn test_runtime(config: NativeRuntimeConfig) -> InferenceRuntime {
     InferenceRuntime {
         config,
         resolved_limits: ResolvedRuntimeLimits::default(),
+        capabilities: RuntimeModelCapabilities {
+            class: ModelClass::DecoderOnly,
+            n_embd: 1,
+            pooling_type: PoolingType::None,
+            decoder_start_token: None,
+            has_chat_template: false,
+            embedding_context: false,
+        },
         residency_lease: None,
         common_init: std::ptr::null_mut(),
         primary_model: std::ptr::null_mut(),

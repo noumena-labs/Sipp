@@ -329,6 +329,12 @@ extern "C" {
     pub fn cogent_common_init_n_batch(init: *const cogent_common_init) -> i32;
     pub fn cogent_common_init_n_ubatch(init: *const cogent_common_init) -> i32;
     pub fn cogent_common_init_n_ctx(init: *const cogent_common_init) -> i32;
+    pub fn cogent_common_init_n_embd_out(init: *const cogent_common_init) -> i32;
+    pub fn cogent_common_init_pooling_type(init: *const cogent_common_init) -> i32;
+    pub fn cogent_common_init_decoder_start_token(init: *const cogent_common_init) -> i32;
+    pub fn cogent_common_init_model_has_encoder(init: *const cogent_common_init) -> bool;
+    pub fn cogent_common_init_model_has_decoder(init: *const cogent_common_init) -> bool;
+    pub fn cogent_common_init_model_has_chat_template(init: *const cogent_common_init) -> bool;
     pub fn cogent_common_init_kv_unified(init: *const cogent_common_init) -> bool;
     pub fn cogent_common_init_flash_attention(init: *const cogent_common_init) -> *mut c_char;
     pub fn cogent_common_init_cache_type_k(init: *const cogent_common_init) -> *mut c_char;
@@ -392,6 +398,15 @@ extern "C" {
         sampler: *mut llama_sampler,
     ) -> bool;
     pub fn cogent_llama_decode(context: *mut llama_context, batch: *const llama_batch) -> c_int;
+    pub fn cogent_llama_encode(context: *mut llama_context, batch: *const llama_batch) -> c_int;
+    pub fn cogent_llama_embeddings_seq(
+        context: *mut llama_context,
+        seq_id: llama_seq_id,
+    ) -> *const c_float;
+    pub fn cogent_llama_embeddings_ith(
+        context: *mut llama_context,
+        i: c_int,
+    ) -> *const c_float;
     pub fn cogent_llama_synchronize(context: *mut llama_context) -> bool;
     pub fn cogent_llama_sampler_sample(
         sampler: *mut llama_sampler,
