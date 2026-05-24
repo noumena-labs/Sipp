@@ -102,7 +102,7 @@ fn prepares_and_commits_text_load() {
     );
     assert_eq!(
         prepared.runtime_config["context"]["warmup"],
-        json!(false)
+        json!(true)
     );
 
     let committed = service

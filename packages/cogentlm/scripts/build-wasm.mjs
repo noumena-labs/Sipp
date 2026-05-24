@@ -59,6 +59,7 @@ const shouldBuildBothVariants =
 if (shouldBuildBothVariants) {
   const childArgs = stripBuildVariantArgs(rawArgs);
   const buildKind = isDev ? 'dev' : 'browser';
+  const rustRoot = path.resolve(path.dirname(scriptPath), '..', '..', 'cogentlm-rs');
   const variants = [
     {
       name: 'single-thread',
@@ -92,6 +93,8 @@ if (shouldBuildBothVariants) {
         CE_WASM_OUTPUT_SUBDIR: process.env.CE_WASM_OUTPUT_SUBDIR ?? 'wasm',
         CE_WASM_MEM64: '0',
         CE_WASM_MAXIMUM_MEMORY: process.env.CE_WASM_MAXIMUM_MEMORY ?? '4096MB',
+        CARGO_TARGET_DIR:
+          process.env.CARGO_TARGET_DIR ?? path.join(rustRoot, `target-wasm-${variant.name}`),
         ...(isDev
           ? {
             CE_WASM_LTO_MODE: process.env.CE_WASM_LTO_MODE ?? 'OFF',
@@ -285,9 +288,11 @@ function buildRustWasmStaticlib() {
     throw new Error(`Rust wasm staticlib build failed with exit code ${result.status}`);
   }
 
+  const cargoTargetDir = process.env.CARGO_TARGET_DIR
+    ? path.resolve(process.env.CARGO_TARGET_DIR)
+    : path.join(rustRoot, 'target');
   const staticlibPath = path.join(
-    rustRoot,
-    'target',
+    cargoTargetDir,
     'wasm32-unknown-emscripten',
     'release',
     'libcogentlm_wasm.a'

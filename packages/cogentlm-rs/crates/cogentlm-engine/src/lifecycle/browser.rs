@@ -1478,19 +1478,11 @@ fn browser_backend_plan(options: &BrowserLoadOptions) -> Result<BackendPlan, Mod
 }
 
 fn browser_runtime_config(runtime: &Value) -> Result<NativeRuntimeConfig, ModelError> {
-    let mut runtime = if runtime.is_null() {
+    let runtime = if runtime.is_null() {
         json!({})
     } else {
         runtime.clone()
     };
-    if let Some(object) = runtime.as_object_mut() {
-        let context = object.entry("context").or_insert_with(|| json!({}));
-        if let Some(context) = context.as_object_mut() {
-            context
-                .entry("warmup")
-                .or_insert_with(|| Value::Bool(false));
-        }
-    }
     Ok(serde_json::from_value(runtime)?)
 }
 

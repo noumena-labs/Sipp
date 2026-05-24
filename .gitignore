@@ -19,6 +19,7 @@ packages/*/build-probe/
 packages/*/build-probe2/
 packages/*/a.out.js
 packages/*/a.out.wasm
+packages/*/target-wasm*
 
 *.log
 .DS_Store
