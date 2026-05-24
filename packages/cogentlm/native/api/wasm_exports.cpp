@@ -39,6 +39,8 @@ CE_RequestId cogentlm_browser_engine_start_chat_request(
     int max_tokens, int image_count, const std::uint8_t *images_flat_buffer,
     const std::int32_t *image_sizes, int token_emission_mode,
     const char *grammar);
+CE_RequestId cogentlm_browser_engine_start_embedding_request(
+    void *engine, const char *context_key, const char *input, int normalize);
 int cogentlm_browser_engine_cancel_request(void *engine,
                                            CE_RequestId request_id);
 int cogentlm_browser_engine_run_scheduler_loop(
@@ -52,6 +54,15 @@ int cogentlm_browser_engine_completed_request_output_size(
 int cogentlm_browser_engine_copy_completed_request_output(
     const void *engine, CE_RequestId request_id, std::uint8_t *buffer,
     std::uintptr_t buffer_len);
+int cogentlm_browser_engine_completed_request_embedding_length(
+    const void *engine, CE_RequestId request_id);
+int cogentlm_browser_engine_copy_completed_request_embedding(
+    const void *engine, CE_RequestId request_id, float *buffer,
+    std::uintptr_t value_count);
+int cogentlm_browser_engine_completed_request_embedding_pooling(
+    const void *engine, CE_RequestId request_id);
+int cogentlm_browser_engine_completed_request_embedding_normalized(
+    const void *engine, CE_RequestId request_id);
 int cogentlm_browser_engine_completed_request_error_size(
     const void *engine, CE_RequestId request_id);
 int cogentlm_browser_engine_copy_completed_request_error(
@@ -741,6 +752,16 @@ CE_RequestId CE_StartChatRequestWithTokenEmissionMode(
 }
 
 EMSCRIPTEN_KEEPALIVE
+CE_RequestId CE_StartEmbeddingRequest(const char *context_key,
+                                      const char *input, int normalize) {
+  if (!g_isEngineInitialized || input == nullptr) {
+    return 0;
+  }
+  return cogentlm_browser_engine_start_embedding_request(
+      g_rustBrowserEngine, context_key, input, normalize);
+}
+
+EMSCRIPTEN_KEEPALIVE
 int CE_CancelRequest(CE_RequestId request_id) {
   if (!g_isEngineInitialized || request_id == 0) {
     return 0;
@@ -806,6 +827,32 @@ int CE_CopyCompletedRequestOutput(CE_RequestId request_id, char *buffer,
   return cogentlm_browser_engine_copy_completed_request_output(
       g_rustBrowserEngine, request_id, reinterpret_cast<std::uint8_t *>(buffer),
       static_cast<std::uintptr_t>(capacity));
+}
+
+EMSCRIPTEN_KEEPALIVE
+int CE_GetCompletedRequestEmbeddingLength(CE_RequestId request_id) {
+  return cogentlm_browser_engine_completed_request_embedding_length(
+      g_rustBrowserEngine, request_id);
+}
+
+EMSCRIPTEN_KEEPALIVE
+int CE_CopyCompletedRequestEmbedding(CE_RequestId request_id, float *buffer,
+                                     int32_t value_count) {
+  return cogentlm_browser_engine_copy_completed_request_embedding(
+      g_rustBrowserEngine, request_id, buffer,
+      static_cast<std::uintptr_t>(value_count));
+}
+
+EMSCRIPTEN_KEEPALIVE
+int CE_GetCompletedRequestEmbeddingPooling(CE_RequestId request_id) {
+  return cogentlm_browser_engine_completed_request_embedding_pooling(
+      g_rustBrowserEngine, request_id);
+}
+
+EMSCRIPTEN_KEEPALIVE
+int CE_GetCompletedRequestEmbeddingNormalized(CE_RequestId request_id) {
+  return cogentlm_browser_engine_completed_request_embedding_normalized(
+      g_rustBrowserEngine, request_id);
 }
 
 EMSCRIPTEN_KEEPALIVE

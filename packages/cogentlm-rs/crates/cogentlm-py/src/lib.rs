@@ -7,13 +7,13 @@ use cogentlm_engine::backend::{
 };
 use cogentlm_engine::engine::protocol::{BackendInfo, RequestState, RequestStats};
 use cogentlm_engine::engine::{
-    CacheKeyPolicy, ChatMessage, ChatRequest, ChatRole, CogentEngine, EngineEvent,
-    EngineEventReceiver, EngineState, EngineStats, FlashAttentionMode, GenerationResult,
-    GpuLayerConfig, KvCacheType, KvReuseMode, LogitBias, ModelPlacementConfig,
-    MultimodalRuntimeConfig, NativeRuntimeConfig, ObservabilityRuntimeConfig, QueryOptions,
-    QueryRequest, ResidencyRuntimeConfig, ResolvedRuntimeLimits, RopeScaling, SamplerStage,
-    SamplingRuntimeConfig, SchedulerRuntimeConfig, SplitMode, TokenBatch, DEFAULT_CONTEXT_KEY,
-    DEFAULT_MAX_TOKENS,
+    CacheKeyPolicy, ChatMessage, ChatRequest, ChatRole, CogentEngine, EmbedOptions, EmbedRequest,
+    EmbeddingResult, EngineEvent, EngineEventReceiver, EngineState, EngineStats,
+    FlashAttentionMode, GenerationResult, GpuLayerConfig, KvCacheType, KvReuseMode, LogitBias,
+    ModelPlacementConfig, MultimodalRuntimeConfig, NativeRuntimeConfig, ObservabilityRuntimeConfig,
+    QueryOptions, QueryRequest, ResidencyRuntimeConfig, ResolvedRuntimeLimits, RopeScaling,
+    SamplerStage, SamplingRuntimeConfig, SchedulerRuntimeConfig, SplitMode, TokenBatch,
+    DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
 };
 use cogentlm_engine::lifecycle::{
     model_source_from_path as core_model_source_from_path,
@@ -862,6 +862,28 @@ impl PyCogentEngine {
         generation_result_to_dict(py, result)
     }
 
+    #[pyo3(signature = (input, *, normalize = None, context_key = None))]
+    fn embed(
+        &self,
+        py: Python<'_>,
+        input: String,
+        normalize: Option<bool>,
+        context_key: Option<String>,
+    ) -> PyResult<Py<PyAny>> {
+        let mut options = EmbedOptions::default();
+        if let Some(value) = normalize {
+            options.normalize = value;
+        }
+        options.context_key = context_key;
+        let request = EmbedRequest { input, options };
+        let guard = self.engine_guard()?;
+        let engine = engine_ref(&guard)?;
+        let result = py
+            .allow_threads(move || engine.embed(request))
+            .map_err(to_py_error)?;
+        embedding_result_to_dict(py, result)
+    }
+
     fn state(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let guard = self.engine_guard()?;
         let engine = engine_ref(&guard)?;
@@ -1013,6 +1035,28 @@ impl PyModelService {
             callback_error,
         )?;
         generation_result_to_dict(py, result)
+    }
+
+    #[pyo3(signature = (input, *, normalize = None, context_key = None))]
+    fn embed(
+        &self,
+        py: Python<'_>,
+        input: String,
+        normalize: Option<bool>,
+        context_key: Option<String>,
+    ) -> PyResult<Py<PyAny>> {
+        let mut options = EmbedOptions::default();
+        if let Some(value) = normalize {
+            options.normalize = value;
+        }
+        options.context_key = context_key;
+        let request = EmbedRequest { input, options };
+        let guard = self.service_guard()?;
+        let service = service_ref(&guard)?;
+        let result = py
+            .allow_threads(|| service.embed(request))
+            .map_err(to_py_model_error)?;
+        embedding_result_to_dict(py, result)
     }
 
     fn state(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -1273,6 +1317,16 @@ fn generation_result_to_dict(py: Python<'_>, result: GenerationResult) -> PyResu
     dict.set_item("id", result.id)?;
     dict.set_item("text", result.text)?;
     dict.set_item("finish_reason", result.finish_reason.as_str())?;
+    dict.set_item("stats", request_stats_to_dict(py, result.stats)?)?;
+    Ok(dict.into_py(py))
+}
+
+fn embedding_result_to_dict(py: Python<'_>, result: EmbeddingResult) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("id", result.id)?;
+    dict.set_item("values", result.values)?;
+    dict.set_item("pooling", result.pooling.as_str())?;
+    dict.set_item("normalized", result.normalized)?;
     dict.set_item("stats", request_stats_to_dict(py, result.stats)?)?;
     Ok(dict.into_py(py))
 }
@@ -1670,9 +1724,9 @@ fn engine_event_to_dict(py: Python<'_>, event: EngineEvent) -> PyResult<Py<PyAny
             dict.set_item("request_id", request_id)?;
             dict.set_item("stream_id", stream_id)?;
         }
-        EngineEvent::RequestCompleted { result } => {
+        EngineEvent::RequestCompleted { request_id } => {
             dict.set_item("type", EVENT_TYPE_REQUEST_COMPLETED)?;
-            dict.set_item("result", generation_result_to_dict(py, *result)?)?;
+            dict.set_item("request_id", request_id)?;
         }
         EngineEvent::RequestFailed { request_id, error } => {
             dict.set_item("type", EVENT_TYPE_REQUEST_FAILED)?;

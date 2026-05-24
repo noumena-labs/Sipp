@@ -1,6 +1,7 @@
 import type { BackendObservability } from '../observability/backend-observability.js';
 import type {
   ChatMessage,
+  EmbedRuntimeOptions,
   EngineExecutionMode,
   GenerateRequestId,
   GenerateResponse,
@@ -104,6 +105,11 @@ export interface EngineRuntime {
     contextKey: string,
     promptText: string,
     options?: number | PromptOptions
+  ): Promise<GenerateRequestId>;
+  enqueueEmbedding(
+    contextKey: string,
+    input: string,
+    options?: EmbedRuntimeOptions
   ): Promise<GenerateRequestId>;
   awaitQuery(
     requestId: GenerateRequestId,

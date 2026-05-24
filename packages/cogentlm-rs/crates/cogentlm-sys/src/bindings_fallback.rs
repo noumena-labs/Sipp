@@ -330,6 +330,7 @@ extern "C" {
     pub fn cogent_common_init_n_ubatch(init: *const cogent_common_init) -> i32;
     pub fn cogent_common_init_n_ctx(init: *const cogent_common_init) -> i32;
     pub fn cogent_common_init_n_embd_out(init: *const cogent_common_init) -> i32;
+    pub fn cogent_common_init_n_cls_out(init: *const cogent_common_init) -> i32;
     pub fn cogent_common_init_pooling_type(init: *const cogent_common_init) -> i32;
     pub fn cogent_common_init_decoder_start_token(init: *const cogent_common_init) -> i32;
     pub fn cogent_common_init_model_has_encoder(init: *const cogent_common_init) -> bool;

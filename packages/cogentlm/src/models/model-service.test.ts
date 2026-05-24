@@ -19,6 +19,7 @@ import type { EngineRuntime } from '../runtime/engine-runtime.js';
 import type { BackendObservability } from '../observability/backend-observability.js';
 import type {
   ChatMessage,
+  EmbedRuntimeOptions,
   EngineExecutionMode,
   GenerateRequestId,
   GenerateResponse,
@@ -417,7 +418,7 @@ class FakeRuntime implements EngineRuntime {
   public mediaMarker: string | null = null;
   public nextOutputText: string | null = null;
   public streamedTokens: string[] = ['token'];
-  public enqueuedOptions: Array<number | PromptOptions | undefined> = [];
+  public enqueuedOptions: Array<number | PromptOptions | EmbedRuntimeOptions | undefined> = [];
   public stageGate: Promise<void> | null = null;
   private runtimeMetricsEnabled = false;
   private backendProfilingEnabled = false;
@@ -426,7 +427,9 @@ class FakeRuntime implements EngineRuntime {
     GenerateRequestId,
     {
       promptText: string;
-      options?: number | PromptOptions;
+      options?: number | PromptOptions | EmbedRuntimeOptions;
+      embedding?: boolean;
+      normalize?: boolean;
     }
   >();
 
@@ -623,6 +626,23 @@ class FakeRuntime implements EngineRuntime {
     return this.enqueueQuery(contextKey, this.renderNativeChatPrompt(messages, true), options);
   }
 
+  public async enqueueEmbedding(
+    _contextKey: string,
+    input: string,
+    options?: EmbedRuntimeOptions
+  ): Promise<GenerateRequestId> {
+    const requestId = this.nextRequestId++;
+    this.lastPrompt = input;
+    this.enqueuedOptions.push(options);
+    this.queuedRequests.set(requestId, {
+      promptText: input,
+      options,
+      embedding: true,
+      normalize: options?.normalize ?? true,
+    });
+    return requestId;
+  }
+
   public async awaitQuery(requestId: GenerateRequestId): Promise<GenerateResponse> {
     const request = this.queuedRequests.get(requestId);
     if (request == null) {
@@ -636,6 +656,20 @@ class FakeRuntime implements EngineRuntime {
       };
     }
     this.queuedRequests.delete(requestId);
+    if (request.embedding === true) {
+      return {
+        requestId,
+        completed: true,
+        embedding: {
+          values: request.normalize === false ? [3, 4] : [0.6, 0.8],
+          pooling: 'mean',
+          normalized: request.normalize !== false,
+        },
+        cancelled: false,
+        failed: false,
+        observability: this.runtimeMetricsEnabled ? this.createMetrics() : null,
+      };
+    }
     const outputText = this.nextOutputText ?? `answer:${request.promptText}`;
     this.nextOutputText = null;
     return {
@@ -947,6 +981,25 @@ test('ModelService loads, lists, tracks current, and queries text models', async
   assert.equal(answer.text, 'answer:hello');
   assert.deepEqual(tokens, ['token']);
   assert.equal(runtime.lastPrompt, 'hello');
+});
+
+test('ModelService.embed returns embedding results without token streaming', async () => {
+  const { service, runtime } = createService();
+  await service.load(file('embedding-model.gguf'));
+
+  const result = await service.embed('hello', {
+    normalize: false,
+    contextKey: 'vectors',
+  });
+
+  assert.deepEqual(result.values, [3, 4]);
+  assert.equal(result.pooling, 'mean');
+  assert.equal(result.normalized, false);
+  assert.equal(runtime.lastPrompt, 'hello');
+  assert.deepEqual(runtime.enqueuedOptions.at(-1), {
+    normalize: false,
+    signal: undefined,
+  });
 });
 
 test('ModelService routes browser lifecycle through the Rust bridge when available', async () => {

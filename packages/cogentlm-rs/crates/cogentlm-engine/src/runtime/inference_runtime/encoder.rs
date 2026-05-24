@@ -6,7 +6,7 @@
 
 use cogentlm_sys as ffi;
 
-use crate::engine::protocol::ModelClass;
+use crate::engine::protocol::{ModelClass, PoolingType};
 use crate::error::{Error, Result};
 use crate::runtime::llama::LlamaBatchBuilder;
 use crate::runtime::scheduler::{PrefillKind, SlotExecutionPlan, SlotPhase, TerminalAction};
@@ -38,8 +38,55 @@ impl InferenceRuntime {
         }
     }
 
+    pub(crate) fn embedding_slot_plan(&self) -> Result<SlotExecutionPlan> {
+        match (self.capabilities.class, self.capabilities.embedding_context) {
+            (ModelClass::EncoderOnly, _) => self.pooled_embedding_plan(PrefillKind::Encode),
+            (ModelClass::DecoderOnly, true) => self.pooled_embedding_plan(PrefillKind::Decode),
+            (ModelClass::DecoderOnly, false) => Err(Error::UnsupportedOperation {
+                operation: "embed",
+                reason: "decoder-only runtime was not loaded with embeddings=true; reload with \
+                         an embedding context or use query() for text output"
+                    .to_string(),
+            }),
+            (ModelClass::EncoderDecoder, _) => Err(Error::UnsupportedOperation {
+                operation: "embed",
+                reason: "encoder-decoder models do not produce embeddings via this runtime"
+                    .to_string(),
+            }),
+        }
+    }
+
+    fn pooled_embedding_plan(&self, prefill: PrefillKind) -> Result<SlotExecutionPlan> {
+        if self.capabilities.pooling_type == PoolingType::None {
+            return Err(Error::UnsupportedOperation {
+                operation: "embed",
+                reason: "pooling=none produces per-token embeddings; embed() requires a pooled \
+                         output (mean, cls, last, or rank)"
+                    .to_string(),
+            });
+        }
+        Ok(SlotExecutionPlan {
+            prefill,
+            terminal: TerminalAction::ReadEmbedding,
+        })
+    }
+
     pub(super) fn run_admission_prefill(&mut self, slot_index: usize) -> Result<()> {
-        let plan = self.text_generation_slot_plan()?;
+        let plan = {
+            let slot = self
+                .slot_scheduler
+                .slots
+                .get(slot_index)
+                .ok_or(Error::RuntimeNotReady)?;
+            let request = slot
+                .request()
+                .ok_or(Error::InvalidRequest("admitted slot has no request"))?;
+            if request.embed_options.is_some() {
+                self.embedding_slot_plan()?
+            } else {
+                self.text_generation_slot_plan()?
+            }
+        };
         let slot = self
             .slot_scheduler
             .slots
@@ -50,7 +97,15 @@ impl InferenceRuntime {
         if plan.prefill != PrefillKind::Encode {
             return Ok(());
         }
-        self.run_encoder_prompt_ingest(slot_index)
+        self.run_encoder_prompt_ingest(slot_index)?;
+        // For `EncoderOnly + ReadEmbedding` the prompt-ingest finished the
+        // whole inference: pull the pooled embedding straight off the context
+        // and mark the slot terminal. `EncoderDecoder + SampleTokens` falls
+        // through to the existing decode loop.
+        if plan.terminal == TerminalAction::ReadEmbedding {
+            self.read_slot_embedding(slot_index)?;
+        }
+        Ok(())
     }
 
     pub(super) fn fail_admitted_slot(&mut self, slot_index: usize, error: Error) {
@@ -209,6 +264,55 @@ mod tests {
             error,
             Error::UnsupportedOperation {
                 operation: "query",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn embedding_plan_uses_encoder_prefill_for_encoder_only() {
+        let mut runtime = test_runtime(NativeRuntimeConfig::default());
+        runtime.capabilities.class = ModelClass::EncoderOnly;
+        runtime.capabilities.pooling_type = PoolingType::Mean;
+        runtime.capabilities.embedding_context = true;
+
+        let plan = runtime
+            .embedding_slot_plan()
+            .expect("encoder embedding plan");
+
+        assert_eq!(plan.prefill, PrefillKind::Encode);
+        assert_eq!(plan.terminal, TerminalAction::ReadEmbedding);
+    }
+
+    #[test]
+    fn embedding_plan_uses_decode_prefill_for_decoder_embedding_context() {
+        let mut runtime = test_runtime(NativeRuntimeConfig::default());
+        runtime.capabilities.embedding_context = true;
+        runtime.capabilities.pooling_type = PoolingType::Mean;
+
+        let plan = runtime
+            .embedding_slot_plan()
+            .expect("decoder embedding plan");
+
+        assert_eq!(plan.prefill, PrefillKind::Decode);
+        assert_eq!(plan.terminal, TerminalAction::ReadEmbedding);
+    }
+
+    #[test]
+    fn embedding_plan_rejects_pooling_none() {
+        let mut runtime = test_runtime(NativeRuntimeConfig::default());
+        runtime.capabilities.class = ModelClass::EncoderOnly;
+        runtime.capabilities.embedding_context = true;
+        runtime.capabilities.pooling_type = PoolingType::None;
+
+        let error = runtime
+            .embedding_slot_plan()
+            .expect_err("pooling none embedding");
+
+        assert!(matches!(
+            error,
+            Error::UnsupportedOperation {
+                operation: "embed",
                 ..
             }
         ));

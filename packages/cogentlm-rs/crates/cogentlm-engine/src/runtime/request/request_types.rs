@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use crate::engine::protocol::EmbedOptions;
 use crate::runtime::config::SamplingRuntimeConfig;
 use crate::runtime::llama_token;
 
@@ -41,6 +42,11 @@ pub struct GenerateRequest {
     pub sampling: Option<SamplingRuntimeConfig>,
     pub prompt_tokens: Vec<llama_token>,
     pub multimodal: Option<MultimodalPayload>,
+    /// When `Some`, this is an `embed()` request: the slot plan resolves to
+    /// `TerminalAction::ReadEmbedding` and the runtime finalizes with a
+    /// `ResponseOutput::Embedding` payload built from the encoder/decoder
+    /// embedding read (subject to `normalize` honoring `pooling != Rank`).
+    pub embed_options: Option<EmbedOptions>,
     pub max_output_tokens: i32,
     pub token_emission_mode: GenerateTokenEmissionMode,
     pub lifecycle: GenerateRequestLifecycle,
@@ -161,6 +167,7 @@ impl Default for GenerateRequest {
             sampling: None,
             prompt_tokens: Vec::new(),
             multimodal: None,
+            embed_options: None,
             max_output_tokens: 0,
             token_emission_mode: GenerateTokenEmissionMode::None,
             lifecycle: GenerateRequestLifecycle::Pending,

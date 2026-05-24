@@ -10,6 +10,7 @@ export interface EmscriptenFs {
 export interface EngineModule {
   FS: EmscriptenFs;
   HEAP32: Int32Array;
+  HEAPF32: Float32Array;
   HEAPF64: Float64Array;
   HEAPU8: Uint8Array;
   _free(ptr: number | bigint): void;

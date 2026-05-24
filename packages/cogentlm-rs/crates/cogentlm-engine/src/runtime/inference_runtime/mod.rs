@@ -25,6 +25,7 @@ use crate::runtime::{llama_seq_id, llama_token};
 pub(crate) mod capabilities;
 mod decode;
 mod diagnostics;
+mod embedding_read;
 mod encoder;
 mod environment;
 mod lifecycle;

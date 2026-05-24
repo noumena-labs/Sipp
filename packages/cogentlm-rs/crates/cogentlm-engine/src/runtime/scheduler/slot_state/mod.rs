@@ -4,6 +4,7 @@ use std::ptr::NonNull;
 
 use cogentlm_sys as ffi;
 
+use crate::engine::protocol::PoolingType;
 use crate::runtime::request::{GenerateRequest, GenerateRequestId, GenerateRequestLifecycle};
 use crate::runtime::session::SequenceState;
 use crate::runtime::{llama_seq_id, llama_token};
@@ -55,6 +56,15 @@ pub struct SamplerCacheKey {
     pub json_schema: String,
 }
 
+/// Pending embedding payload set by the embedding-read path. `finalize_completed_slots`
+/// drains this into `ResponseOutput::Embedding` when the slot terminates.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SlotEmbeddingOutput {
+    pub values: Vec<f32>,
+    pub pooling: PoolingType,
+    pub normalized: bool,
+}
+
 #[derive(Debug)]
 pub struct SlotState {
     pub slot_id: usize,
@@ -78,6 +88,7 @@ pub struct SlotState {
     pub sampler_key: Option<SamplerCacheKey>,
     pub(crate) backend_sampler_attached: bool,
     pub sampler: Option<NonNull<ffi::cogent_common_sampler>>,
+    pub embedding_output: Option<SlotEmbeddingOutput>,
 }
 
 impl SlotState {
@@ -133,6 +144,7 @@ impl SlotState {
         self.pending_utf8_bytes.clear();
         self.terminal_error_message.clear();
         self.sampler_prompt_seeded = false;
+        self.embedding_output = None;
     }
 
     pub fn request(&self) -> Option<&GenerateRequest> {
@@ -217,6 +229,7 @@ impl Default for SlotState {
             backend_sampler_attached: false,
             sampler: None,
             sampler_key: None,
+            embedding_output: None,
         }
     }
 }

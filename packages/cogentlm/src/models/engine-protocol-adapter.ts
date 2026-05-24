@@ -6,6 +6,7 @@ import type {
   EngineEvent,
   EngineState,
   EngineStats,
+  EmbeddingResult,
   FinishReason,
   ObservabilityEvent,
   ObservabilitySnapshot,
@@ -69,12 +70,33 @@ export function generationResultFromGenerateResponse(
     finishReason?: FinishReason;
   } = {}
 ): GenerationResult {
+  const text = options.text ?? textOutputFromGenerateResponse(response);
   return {
     id: String(response.requestId),
-    text: options.text ?? response.outputText,
+    text,
     finishReason: options.finishReason ?? finishReasonFromGenerateResponse(response, options.maxTokens),
     stats: requestStatsFromMetrics(response.observability ?? null),
   };
+}
+
+export function embeddingResultFromGenerateResponse(response: GenerateResponse): EmbeddingResult {
+  if (response.embedding == null) {
+    throw new Error('Runtime completed embed() without embedding output.');
+  }
+  return {
+    id: String(response.requestId),
+    values: response.embedding.values,
+    pooling: response.embedding.pooling,
+    normalized: response.embedding.normalized,
+    stats: requestStatsFromMetrics(response.observability ?? null),
+  };
+}
+
+function textOutputFromGenerateResponse(response: GenerateResponse): string {
+  if (response.outputText == null) {
+    throw new Error('Runtime completed text generation without text output.');
+  }
+  return response.outputText;
 }
 
 function toEngineStatus(state: ObservabilitySnapshot['state']): EngineState['status'] {

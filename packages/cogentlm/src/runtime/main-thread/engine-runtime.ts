@@ -6,6 +6,7 @@ import type {
 import type { BackendObservability } from '../../observability/backend-observability.js';
 import type {
   ChatMessage,
+  EmbedRuntimeOptions,
   EngineExecutionMode,
   GenerateRequest,
   GenerateRequestId,
@@ -911,6 +912,21 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     );
   }
 
+  public async enqueueEmbedding(
+    contextKey: string,
+    input: string,
+    options: EmbedRuntimeOptions = {}
+  ): Promise<GenerateRequestId> {
+    const promptText = normalizePromptText(input);
+    return this.enqueueNativeRequest(options, (bridge) =>
+      bridge.startEmbeddingRequest(
+        contextKey,
+        promptText,
+        options.normalize ?? true
+      )
+    );
+  }
+
   private async enqueueNativeRequest(
     options: number | PromptOptions,
     startRequest: (bridge: WasmBridge, emissionMode: TokenEmissionMode) => GenerateRequestId
@@ -929,7 +945,12 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       onTokens == null ? TOKEN_EMISSION_NONE : TOKEN_EMISSION_STREAMING_BUFFER;
     const requestId = startRequest(bridge, emissionMode);
     if (!requestId) {
-      throw new Error('Failed to enqueue request.');
+      const detail = bridge.readLastEngineError();
+      throw new Error(
+        detail.length > 0
+          ? `Failed to enqueue request. ${detail}`
+          : 'Failed to enqueue request.'
+      );
     }
 
     // Worker entry uses this hook to publish a streaming-claim message

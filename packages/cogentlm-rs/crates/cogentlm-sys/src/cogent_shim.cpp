@@ -432,6 +432,13 @@ int32_t cogent_common_init_n_embd_out(const cogent_common_init * init) {
     return llama_model_n_embd_out(init->inner->model());
 }
 
+int32_t cogent_common_init_n_cls_out(const cogent_common_init * init) {
+    if (init == nullptr || !init->inner || init->inner->model() == nullptr) {
+        return 0;
+    }
+    return static_cast<int32_t>(llama_model_n_cls_out(init->inner->model()));
+}
+
 int32_t cogent_common_init_pooling_type(const cogent_common_init * init) {
     if (init == nullptr || !init->inner || init->inner->context() == nullptr) {
         return static_cast<int32_t>(LLAMA_POOLING_TYPE_UNSPECIFIED);

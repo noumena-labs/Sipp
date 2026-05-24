@@ -17,7 +17,7 @@ pub(crate) fn test_runtime(config: NativeRuntimeConfig) -> InferenceRuntime {
         resolved_limits: ResolvedRuntimeLimits::default(),
         capabilities: RuntimeModelCapabilities {
             class: ModelClass::DecoderOnly,
-            n_embd: 1,
+            embedding_dimensions: 1,
             pooling_type: PoolingType::None,
             decoder_start_token: None,
             has_chat_template: false,

@@ -8,7 +8,8 @@ use crate::backend::{
     KEY_DEVICES, KEY_DEVICE_ID, KEY_MEMORY_FREE_BYTES, KEY_MEMORY_TOTAL_BYTES, KEY_NAME, KEY_TYPE,
 };
 use crate::engine::protocol::{
-    BackendDevice, BackendInfo, EngineStats, FinishReason, GenerationResult, RequestStats,
+    BackendDevice, BackendInfo, EmbeddingResult, EngineStats, FinishReason, GenerationResult,
+    RequestStats,
 };
 use crate::error::{Error, Result};
 use crate::runtime::metrics::RuntimeObservabilityMetrics;
@@ -68,10 +69,10 @@ pub(super) fn engine_stats_from_runtime(metrics: RuntimeObservabilityMetrics) ->
 }
 
 pub(super) fn generation_result_from_response(
-    response: &GenerateResponse,
+    response: GenerateResponse,
 ) -> Result<GenerationResult> {
-    let text = match &response.output {
-        ResponseOutput::Text(text) => text.clone(),
+    let text = match response.output {
+        ResponseOutput::Text(text) => text,
         ResponseOutput::Embedding { .. } => {
             return Err(Error::RuntimeCommand(
                 "generation request completed with embedding output".to_string(),
@@ -88,6 +89,27 @@ pub(super) fn generation_result_from_response(
         },
         stats: request_stats_from_runtime(response.runtime_observability),
     })
+}
+
+pub(super) fn embedding_result_from_response(
+    response: GenerateResponse,
+) -> Result<EmbeddingResult> {
+    match response.output {
+        ResponseOutput::Embedding {
+            values,
+            pooling,
+            normalized,
+        } => Ok(EmbeddingResult {
+            id: response.request_id.to_string(),
+            values,
+            pooling,
+            normalized,
+            stats: request_stats_from_runtime(response.runtime_observability),
+        }),
+        ResponseOutput::Text(_) => Err(Error::RuntimeCommand(
+            "embedding request completed with text output".to_string(),
+        )),
+    }
 }
 
 pub(super) fn request_stats_from_runtime(metrics: RuntimeObservabilityMetrics) -> RequestStats {

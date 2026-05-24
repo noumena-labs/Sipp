@@ -4,6 +4,8 @@ import {
   QueryError,
   type ChatInput,
   type ChatOptions,
+  type EmbedOptions,
+  type EmbeddingResult,
   type EngineEvent,
   type EngineState,
   type EngineObservability,
@@ -149,6 +151,11 @@ export class CogentEngine {
   public async chat(input: ChatInput, options: ChatOptions = {}): Promise<GenerationResult> {
     this.assertOpen();
     return await this.#service.chat(input, options);
+  }
+
+  public async embed(input: string, options: EmbedOptions = {}): Promise<EmbeddingResult> {
+    this.assertOpen();
+    return await this.#service.embed(input, options);
   }
 
   public state(): EngineState {

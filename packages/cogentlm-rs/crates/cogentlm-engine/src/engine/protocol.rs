@@ -362,7 +362,7 @@ pub enum EngineEvent {
         stream_id: u32,
     },
     RequestCompleted {
-        result: Box<GenerationResult>,
+        request_id: String,
     },
     RequestFailed {
         request_id: String,

@@ -7,7 +7,6 @@ export {
   type ChatInput,
   type ChatOptions,
   type EmbedOptions,
-  type EmbedRequest,
   type EmbeddingResult,
   type EngineBackendName,
   type EngineEvent,

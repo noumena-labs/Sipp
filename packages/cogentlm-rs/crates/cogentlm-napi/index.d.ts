@@ -4,6 +4,7 @@ export declare class CogentEngine {
   static load(modelPath: string, config?: NativeRuntimeConfig | undefined | null): Promise<CogentEngine>
   query(prompt: string, options?: QueryOptions | undefined | null, onTokens?: TokenBatchCallback | undefined | null): Promise<GenerationResult>
   chat(messages: Array<ChatMessage>, options?: QueryOptions | undefined | null, onTokens?: TokenBatchCallback | undefined | null): Promise<GenerationResult>
+  embed(request: EmbedRequest): Promise<EmbeddingResult>
   state(): Promise<EngineState>
   drainEvents(): Array<EngineEvent>
 }
@@ -18,6 +19,7 @@ export declare class ModelService {
   current(): ManagedModelInfo | null
   query(prompt: string, options?: QueryOptions | undefined | null, onTokens?: TokenBatchCallback | undefined | null): Promise<GenerationResult>
   chat(messages: Array<ChatMessage>, options?: QueryOptions | undefined | null, onTokens?: TokenBatchCallback | undefined | null): Promise<GenerationResult>
+  embed(request: EmbedRequest): Promise<EmbeddingResult>
   state(): Promise<ModelServiceState>
   drainEvents(): Array<EngineEvent>
 }
@@ -98,7 +100,6 @@ export interface EngineEvent {
   assetName?: string
   requestId?: string
   streamId?: number
-  result?: GenerationResult
   error?: string
 }
 

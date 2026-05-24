@@ -6,6 +6,7 @@ import type {
   ObservabilityEvent,
   QueryErrorCode,
   ChatInput,
+  EmbedOptions,
   QueryInput,
   QueryOptions,
 } from '../models/types.js';
@@ -71,6 +72,13 @@ export type WorkerRequestMessage =
       config: WorkerSerializableCogentConfig;
       input: ChatInput;
       options: WorkerQueryOptions;
+    }
+  | {
+      kind: 'embed';
+      callId: number;
+      config: WorkerSerializableCogentConfig;
+      input: string;
+      options: Pick<EmbedOptions, 'normalize' | 'contextKey'>;
     }
   | {
       kind: 'cancel';

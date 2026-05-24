@@ -3,7 +3,7 @@ use crate::engine::protocol::{EmbeddingCapabilities, ModelCapabilities, ModelCla
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeModelCapabilities {
     pub class: ModelClass,
-    pub n_embd: i32,
+    pub embedding_dimensions: i32,
     pub pooling_type: PoolingType,
     pub decoder_start_token: Option<i32>,
     pub has_chat_template: bool,
@@ -20,6 +20,9 @@ impl RuntimeModelCapabilities {
     }
 
     pub(crate) fn supports_embeddings(&self) -> bool {
+        if self.pooling_type == PoolingType::None {
+            return false;
+        }
         match self.class {
             ModelClass::DecoderOnly => self.embedding_context,
             ModelClass::EncoderDecoder => false,
@@ -34,7 +37,7 @@ impl RuntimeModelCapabilities {
             supports_embeddings: self.supports_embeddings(),
             has_chat_template: self.has_chat_template,
             embedding: self.supports_embeddings().then_some(EmbeddingCapabilities {
-                dimensions: self.n_embd,
+                dimensions: self.embedding_dimensions,
                 pooling: self.pooling_type,
             }),
         }
@@ -49,7 +52,7 @@ mod tests {
     fn public_capabilities_hide_decoder_start_token() {
         let capabilities = RuntimeModelCapabilities {
             class: ModelClass::EncoderDecoder,
-            n_embd: 768,
+            embedding_dimensions: 768,
             pooling_type: PoolingType::Mean,
             decoder_start_token: Some(0),
             has_chat_template: false,
@@ -67,7 +70,7 @@ mod tests {
     fn public_capabilities_include_embedding_metadata_only_when_supported() {
         let capabilities = RuntimeModelCapabilities {
             class: ModelClass::EncoderOnly,
-            n_embd: 1024,
+            embedding_dimensions: 1024,
             pooling_type: PoolingType::Cls,
             decoder_start_token: None,
             has_chat_template: false,
@@ -84,5 +87,21 @@ mod tests {
                 pooling: PoolingType::Cls,
             })
         );
+    }
+
+    #[test]
+    fn public_capabilities_hide_unpooled_embedding_context() {
+        let capabilities = RuntimeModelCapabilities {
+            class: ModelClass::EncoderOnly,
+            embedding_dimensions: 1024,
+            pooling_type: PoolingType::None,
+            decoder_start_token: None,
+            has_chat_template: false,
+            embedding_context: true,
+        }
+        .to_public();
+
+        assert!(!capabilities.supports_embeddings);
+        assert!(capabilities.embedding.is_none());
     }
 }

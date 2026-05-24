@@ -75,6 +75,8 @@ class FakeWorker {
                     ? generationResult('Hello</assistant>\n<user>ignored')
                     : message.kind === 'chat'
                       ? generationResult('Hello')
+                      : message.kind === 'embed'
+                        ? embeddingResult(message.options.normalize === false)
                       : undefined,
         };
         this.onmessage?.({ data: response } as MessageEvent<WorkerResponseMessage>);
@@ -95,6 +97,22 @@ function generationResult(text: string) {
     stats: {
       inputTokens: 1,
       outputTokens: 1,
+      cacheHits: 0,
+      prefillMs: 0,
+      decodeMs: 0,
+    },
+  };
+}
+
+function embeddingResult(raw: boolean) {
+  return {
+    id: '124',
+    values: raw ? [3, 4] : [0.6, 0.8],
+    pooling: 'mean',
+    normalized: !raw,
+    stats: {
+      inputTokens: 2,
+      outputTokens: 0,
       cacheHits: 0,
       prefillMs: 0,
       decodeMs: 0,
@@ -136,6 +154,7 @@ test('CogentEngine exposes the minimal root API', async () => {
   assert.equal(typeof engine.observability.subscribe, 'function');
   assert.equal(typeof engine.query, 'function');
   assert.equal(typeof engine.chat, 'function');
+  assert.equal(typeof engine.embed, 'function');
   assert.equal(typeof (engine as any).applyChatTemplate, 'undefined');
   assert.equal(typeof (engine as any).getChatTemplate, 'undefined');
   assert.equal(typeof engine.close, 'function');
@@ -217,6 +236,27 @@ test('chat() renders messages through the worker service and sanitizes assistant
     assert.ok(chat != null && chat.kind === 'chat');
     const messages = Array.isArray(chat.input) ? chat.input : chat.input.messages;
     assert.deepEqual(messages, [{ role: 'user', content: 'hello' }]);
+
+    await engine.close();
+  });
+});
+
+test('embed() routes through the worker service', async () => {
+  await withGlobalWorker(FakeWorker as unknown as typeof Worker, async () => {
+    const engine = await CogentEngine.create({
+      executionMode: 'worker',
+    });
+
+    await engine.models.load('model-fake');
+    const output = await engine.embed('hello', { normalize: false, contextKey: 'embeddings' });
+    const worker = FakeWorker.lastInstance;
+    const embed = worker?.messages.find((message) => message.kind === 'embed');
+
+    assert.deepEqual(output.values, [3, 4]);
+    assert.equal(output.normalized, false);
+    assert.ok(embed != null && embed.kind === 'embed');
+    assert.equal(embed.input, 'hello');
+    assert.deepEqual(embed.options, { normalize: false, contextKey: 'embeddings' });
 
     await engine.close();
   });

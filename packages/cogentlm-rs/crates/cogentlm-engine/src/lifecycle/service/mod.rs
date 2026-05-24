@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::engine::{
-    protocol::EngineStatus, ChatRequest, CogentEngine, EngineEventReceiver, GenerationResult,
-    QueryRequest,
+    protocol::EngineStatus, ChatRequest, CogentEngine, EmbedRequest, EmbeddingResult,
+    EngineEventReceiver, GenerationResult, QueryRequest,
 };
 
 use super::backend_policy::BackendPolicy;
@@ -108,6 +108,10 @@ impl<B: StorageBackend> ModelService<B> {
 
     pub fn chat(&self, request: ChatRequest) -> Result<GenerationResult, ModelError> {
         self.engine()?.chat(request).map_err(ModelError::from)
+    }
+
+    pub fn embed(&self, request: EmbedRequest) -> Result<EmbeddingResult, ModelError> {
+        self.engine()?.embed(request).map_err(ModelError::from)
     }
 
     pub fn state(&self) -> Result<ModelServiceState, ModelError> {

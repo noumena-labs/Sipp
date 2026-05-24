@@ -6,7 +6,7 @@
 
 use serde_json::json;
 
-use crate::engine::protocol::EngineEvent;
+use crate::engine::protocol::{EmbedRequest, EngineEvent};
 use crate::engine::{
     stream::TokenBatch, GenerateOptions, SamplingRuntimeConfig, DEFAULT_CONTEXT_KEY,
     DEFAULT_MAX_TOKENS,
@@ -151,6 +151,18 @@ impl ChatRequest {
         self.on_tokens = Some(Box::new(callback));
         self
     }
+}
+
+pub(super) fn start_embed(
+    runtime: &mut InferenceRuntime,
+    request: EmbedRequest,
+    event_subscribers: &EngineEventSubscribers,
+) -> Result<(u32, Option<AsyncTokenSink>)> {
+    let EmbedRequest { input, options } = request;
+    let request_id = runtime.enqueue_embed_request(input, options)?;
+    emit_request_started(event_subscribers, request_id);
+    // Embedding requests never stream tokens; there is no on_tokens hook.
+    Ok((request_id, None))
 }
 
 pub(super) fn start_chat(

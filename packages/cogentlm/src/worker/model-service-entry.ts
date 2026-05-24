@@ -183,6 +183,13 @@ async function handleRequest(message: WorkerOperationRequest): Promise<unknown> 
           ...streamingOptionsFor(message.callId, message.options.streaming),
         })
       );
+    case 'embed':
+      return await withAbortController(message.callId, (signal) =>
+        ensureService(message.config).embed(message.input, {
+          ...message.options,
+          signal,
+        })
+      );
   }
 }
 

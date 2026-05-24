@@ -10,6 +10,7 @@ export type KvCacheType = 'f16' | 'f32' | 'q8_0' | 'q4_0' | 'q4_1' | 'iq4_nl' | 
 export type RopeScaling = 'none' | 'linear' | 'yarn';
 export type KvReuseMode = 'disabled' | 'live_slot_prefix' | 'state_snapshot' | 'live_slot_and_snapshot';
 export type CacheKeyPolicy = 'context_key' | 'prompt_hash';
+export type PoolingType = 'unspecified' | 'none' | 'mean' | 'cls' | 'last' | 'rank';
 export type SamplerStage =
   | 'dry'
   | 'top_k'
@@ -192,6 +193,11 @@ export interface PromptOptions {
   __internalRequestStarted?: (requestId: number) => void;
 }
 
+export interface EmbedRuntimeOptions {
+  normalize?: boolean;
+  signal?: AbortSignal;
+}
+
 export type TokenFlushMode = 'batch' | 'token';
 
 export interface ChatMessage {
@@ -227,13 +233,30 @@ export interface GenerateRequest {
   grammar?: string;
 }
 
-export interface GenerateResponse {
+export interface EmbeddingOutput {
+  values: number[];
+  pooling: PoolingType;
+  normalized: boolean;
+}
+
+interface BaseGenerateResponse {
   requestId: number;
   completed: boolean;
   failed: boolean;
   cancelled: boolean;
-  outputText: string;
   errorMessage?: string | null;
   /** Performance metrics for the request. */
   observability?: RequestObservabilityMetrics | null;
 }
+
+export interface TextGenerateResponse extends BaseGenerateResponse {
+  outputText: string;
+  embedding?: undefined;
+}
+
+export interface EmbeddingGenerateResponse extends BaseGenerateResponse {
+  embedding: EmbeddingOutput;
+  outputText?: undefined;
+}
+
+export type GenerateResponse = TextGenerateResponse | EmbeddingGenerateResponse;

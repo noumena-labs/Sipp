@@ -10,10 +10,11 @@ use cogentlm_engine::engine::protocol::{
 };
 use cogentlm_engine::engine::{
     CacheKeyPolicy, ChatMessage as CoreChatMessage, ChatRequest as CoreChatRequest,
-    ChatRole as CoreChatRole, CogentEngine as CoreCogentEngine, EngineEvent as CoreEngineEvent,
-    EngineEventReceiver as CoreEngineEventReceiver, EngineState as CoreEngineState,
-    EngineStats as CoreEngineStats, FlashAttentionMode, GenerationResult as CoreGenerationResult,
-    GpuLayerConfig, KvCacheType, KvReuseMode, LogitBias,
+    ChatRole as CoreChatRole, CogentEngine as CoreCogentEngine, EmbedOptions as CoreEmbedOptions,
+    EmbedRequest as CoreEmbedRequest, EmbeddingResult as CoreEmbeddingResult,
+    EngineEvent as CoreEngineEvent, EngineEventReceiver as CoreEngineEventReceiver,
+    EngineState as CoreEngineState, EngineStats as CoreEngineStats, FlashAttentionMode,
+    GenerationResult as CoreGenerationResult, GpuLayerConfig, KvCacheType, KvReuseMode, LogitBias,
     ModelPlacementConfig as CoreModelPlacementConfig,
     MultimodalRuntimeConfig as CoreMultimodalRuntimeConfig,
     NativeRuntimeConfig as CoreNativeRuntimeConfig,
@@ -926,6 +927,22 @@ pub struct EmbedRequest {
     pub options: Option<EmbedOptions>,
 }
 
+impl EmbedRequest {
+    fn into_core(self) -> CoreEmbedRequest {
+        let mut options = CoreEmbedOptions::default();
+        if let Some(napi_options) = self.options {
+            if let Some(normalize) = napi_options.normalize {
+                options.normalize = normalize;
+            }
+            options.context_key = napi_options.context_key;
+        }
+        CoreEmbedRequest {
+            input: self.input,
+            options,
+        }
+    }
+}
+
 #[napi(object)]
 pub struct EmbeddingResult {
     pub id: String,
@@ -933,6 +950,18 @@ pub struct EmbeddingResult {
     pub pooling: PoolingType,
     pub normalized: bool,
     pub stats: RequestStats,
+}
+
+fn embedding_result_to_node(result: CoreEmbeddingResult) -> EmbeddingResult {
+    EmbeddingResult {
+        id: result.id,
+        // napi's number type is f64; widen at the boundary so the JS-side
+        // signature matches the existing observability metric pattern.
+        values: result.values.into_iter().map(f64::from).collect(),
+        pooling: PoolingType::from(result.pooling),
+        normalized: result.normalized,
+        stats: request_stats_to_node(result.stats),
+    }
 }
 
 #[napi(object)]
@@ -965,7 +994,6 @@ pub struct EngineEvent {
     pub asset_name: Option<String>,
     pub request_id: Option<String>,
     pub stream_id: Option<u32>,
-    pub result: Option<GenerationResult>,
     pub error: Option<String>,
 }
 
@@ -1019,6 +1047,14 @@ impl CogentEngine {
             messages: chat_messages_to_core(messages)?,
             options,
             on_tokens,
+        }))
+    }
+
+    #[napi(ts_return_type = "Promise<EmbeddingResult>")]
+    pub fn embed(&self, request: EmbedRequest) -> Result<AsyncTask<EmbedTask>> {
+        Ok(AsyncTask::new(EmbedTask {
+            engine: self.inner.clone(),
+            request: Some(request.into_core()),
         }))
     }
 
@@ -1145,6 +1181,14 @@ impl ModelService {
         }))
     }
 
+    #[napi(ts_return_type = "Promise<EmbeddingResult>")]
+    pub fn embed(&self, request: EmbedRequest) -> Result<AsyncTask<ModelEmbedTask>> {
+        Ok(AsyncTask::new(ModelEmbedTask {
+            service: self.inner.clone(),
+            request: Some(request.into_core()),
+        }))
+    }
+
     #[napi(ts_return_type = "Promise<ModelServiceState>")]
     pub fn state(&self) -> Result<AsyncTask<ModelStateTask>> {
         Ok(AsyncTask::new(ModelStateTask {
@@ -1209,6 +1253,44 @@ impl Task for QueryTask {
 
     fn resolve(&mut self, _env: Env, result: Self::Output) -> Result<Self::JsValue> {
         Ok(generation_result_to_node(result))
+    }
+}
+
+pub struct EmbedTask {
+    engine: SharedEngine,
+    request: Option<CoreEmbedRequest>,
+}
+
+impl Task for EmbedTask {
+    type Output = CoreEmbeddingResult;
+    type JsValue = EmbeddingResult;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let request = self.request.take().expect("embed task runs once");
+        with_engine(&self.engine, |engine| engine.embed(request))
+    }
+
+    fn resolve(&mut self, _env: Env, result: Self::Output) -> Result<Self::JsValue> {
+        Ok(embedding_result_to_node(result))
+    }
+}
+
+pub struct ModelEmbedTask {
+    service: SharedModelService,
+    request: Option<CoreEmbedRequest>,
+}
+
+impl Task for ModelEmbedTask {
+    type Output = CoreEmbeddingResult;
+    type JsValue = EmbeddingResult;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let request = self.request.take().expect("model embed task runs once");
+        with_model_service(&self.service, |service| service.embed(request))
+    }
+
+    fn resolve(&mut self, _env: Env, result: Self::Output) -> Result<Self::JsValue> {
+        Ok(embedding_result_to_node(result))
     }
 }
 
@@ -1813,7 +1895,6 @@ fn engine_event_to_node(event: CoreEngineEvent) -> EngineEvent {
             asset_name: None,
             request_id: None,
             stream_id: None,
-            result: None,
             error: None,
         },
         CoreEngineEvent::LoadProgress {
@@ -1828,7 +1909,6 @@ fn engine_event_to_node(event: CoreEngineEvent) -> EngineEvent {
             asset_name,
             request_id: None,
             stream_id: None,
-            result: None,
             error: None,
         },
         CoreEngineEvent::RequestStarted {
@@ -1842,18 +1922,16 @@ fn engine_event_to_node(event: CoreEngineEvent) -> EngineEvent {
             asset_name: None,
             request_id: Some(request_id),
             stream_id: Some(stream_id),
-            result: None,
             error: None,
         },
-        CoreEngineEvent::RequestCompleted { result } => EngineEvent {
+        CoreEngineEvent::RequestCompleted { request_id } => EngineEvent {
             r#type: EVENT_TYPE_REQUEST_COMPLETED.to_string(),
             state: None,
             loaded_bytes: None,
             total_bytes: None,
             asset_name: None,
-            request_id: None,
+            request_id: Some(request_id),
             stream_id: None,
-            result: Some(generation_result_to_node(*result)),
             error: None,
         },
         CoreEngineEvent::RequestFailed { request_id, error } => EngineEvent {
@@ -1864,7 +1942,6 @@ fn engine_event_to_node(event: CoreEngineEvent) -> EngineEvent {
             asset_name: None,
             request_id: Some(request_id),
             stream_id: None,
-            result: None,
             error: Some(error),
         },
         CoreEngineEvent::Closed => EngineEvent {
@@ -1875,7 +1952,6 @@ fn engine_event_to_node(event: CoreEngineEvent) -> EngineEvent {
             asset_name: None,
             request_id: None,
             stream_id: None,
-            result: None,
             error: None,
         },
     }

@@ -54,6 +54,8 @@ int32_t cogent_common_init_n_ctx(const cogent_common_init * init);
 
 int32_t cogent_common_init_n_embd_out(const cogent_common_init * init);
 
+int32_t cogent_common_init_n_cls_out(const cogent_common_init * init);
+
 int32_t cogent_common_init_pooling_type(const cogent_common_init * init);
 
 int32_t cogent_common_init_decoder_start_token(const cogent_common_init * init);

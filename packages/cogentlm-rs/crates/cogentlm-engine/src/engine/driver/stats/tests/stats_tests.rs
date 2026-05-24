@@ -78,7 +78,7 @@ fn completed_response_maps_to_generation_result() {
         },
         ..GenerateResponse::completed(7, "hello")
     };
-    let result = generation_result_from_response(&response).expect("generation result");
+    let result = generation_result_from_response(response).expect("generation result");
 
     assert_eq!(result.id, "7");
     assert_eq!(result.text, "hello");
@@ -95,15 +95,37 @@ fn embedding_response_is_not_a_generation_result() {
         ResponseOutput::Embedding {
             values: vec![1.0],
             pooling: PoolingType::Mean,
+            normalized: true,
         },
         "",
     );
 
-    let error = generation_result_from_response(&response).expect_err("embedding response");
+    let error = generation_result_from_response(response).expect_err("embedding response");
 
     assert!(
         matches!(error, Error::RuntimeCommand(message) if message.contains("embedding output"))
     );
+}
+
+#[test]
+fn embedding_response_maps_to_embedding_result() {
+    let response = GenerateResponse::terminal(
+        9,
+        GenerateResponseStatus::Completed,
+        ResponseOutput::Embedding {
+            values: vec![0.6, 0.8],
+            pooling: PoolingType::Mean,
+            normalized: true,
+        },
+        "",
+    );
+
+    let result = embedding_result_from_response(response).expect("embedding result");
+
+    assert_eq!(result.id, "9");
+    assert_eq!(result.values, vec![0.6, 0.8]);
+    assert_eq!(result.pooling, PoolingType::Mean);
+    assert!(result.normalized);
 }
 
 #[test]

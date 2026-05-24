@@ -133,10 +133,22 @@ impl SlotScheduler {
                 completed_slot_status(slot.phase, queue_cancel_requested, request_cancel_requested);
             let mut metrics_request: Option<(GenerateRequest, Instant)> = None;
 
+            // Embedding-finalization wins when present: the embedding-read
+            // path set `embedding_output` at terminal time and the streaming
+            // text buffer is ignored. Otherwise fall back to the text path.
+            let output = if let Some(embedding) = slot.embedding_output.take() {
+                ResponseOutput::Embedding {
+                    values: embedding.values,
+                    pooling: embedding.pooling,
+                    normalized: embedding.normalized,
+                }
+            } else {
+                ResponseOutput::Text(std::mem::take(&mut slot.output_text))
+            };
             let mut response = GenerateResponse::terminal(
                 slot.request_id,
                 response_status,
-                ResponseOutput::Text(std::mem::take(&mut slot.output_text)),
+                output,
                 completed_slot_error_message(
                     response_status,
                     slot.phase,

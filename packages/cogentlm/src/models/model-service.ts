@@ -33,6 +33,8 @@ import {
   type BrowserBackendPreference,
   type ChatInput,
   type ChatOptions,
+  type EmbedOptions,
+  type EmbeddingResult,
   type EngineEvent,
   type EngineState,
   type LoadedModelState,
@@ -54,6 +56,7 @@ import {
 import {
   observabilityEventToStateEvent,
   observabilitySnapshotToEngineState,
+  embeddingResultFromGenerateResponse,
   generationResultFromGenerateResponse,
 } from './engine-protocol-adapter.js';
 import {
@@ -76,6 +79,16 @@ interface SourceInstallResult {
 
 interface AssetClassifier {
   classify(assetId: string, file: File, signal?: AbortSignal): Promise<ClassifiedAssetFile>;
+}
+
+interface RuntimeRequestOptions {
+  session?: string;
+  maxTokens?: number;
+  signal?: AbortSignal;
+  onTokens?: (batch: TokenBatch) => void;
+  tokenFlush?: QueryOptions['tokenFlush'];
+  grammar?: string;
+  __internalRequestStarted?: (requestId: number) => void;
 }
 
 type BaseSource = string | File | readonly string[] | readonly File[];
@@ -317,18 +330,46 @@ export class ModelService implements ModelLifecycleService {
         prompt = `${Array.from({ length: media.length }, () => marker).join('\n')}\n${prompt}`;
       }
     }
-    const response = await this.runRuntimeRequest(options, media, (session, promptOptions) =>
-      this.runtime.enqueueQuery(session, prompt, promptOptions)
+    const response = await this.runRuntimeRequest(
+      options,
+      media,
+      (session, promptOptions) => this.runtime.enqueueQuery(session, prompt, promptOptions),
+      'Model query'
     );
     return generationResultFromGenerateResponse(response, {
       maxTokens: options.maxTokens,
     });
   }
 
+  public async embed(input: string, options: EmbedOptions = {}): Promise<EmbeddingResult> {
+    if (this.transitioning) {
+      throw new QueryError('MODEL_NOT_READY', 'A model lifecycle transition is in progress.');
+    }
+    if (this.currentLoaded == null) {
+      throw new QueryError('MODEL_NOT_READY', 'No model is loaded. Call engine.models.load(...) first.');
+    }
+
+    const response = await this.runRuntimeRequest(
+      {
+        session: options.contextKey,
+        signal: options.signal,
+      },
+      undefined,
+      (contextKey) =>
+        this.runtime.enqueueEmbedding(contextKey, input, {
+          normalize: options.normalize ?? true,
+          signal: options.signal,
+        }),
+      'Model embedding'
+    );
+    return embeddingResultFromGenerateResponse(response);
+  }
+
   private async runRuntimeRequest(
-    options: QueryOptions | ChatOptions,
+    options: RuntimeRequestOptions,
     media: Uint8Array[] | undefined,
-    enqueue: (session: string, promptOptions: PromptOptions) => Promise<GenerateRequestId>
+    enqueue: (session: string, promptOptions: PromptOptions) => Promise<GenerateRequestId>,
+    operationLabel = 'Model query'
   ): Promise<GenerateResponse> {
     let activeRequestId: number | null = null;
     let nextSequence = 0;
@@ -407,9 +448,7 @@ export class ModelService implements ModelLifecycleService {
       this.recordQuerySuccess(session, start, response);
       this.emitEngineEvent({
         type: 'request-completed',
-        result: generationResultFromGenerateResponse(response, {
-          maxTokens: options.maxTokens,
-        }),
+        requestId: String(requestId),
       });
       return response;
     } catch (error) {
@@ -422,8 +461,8 @@ export class ModelService implements ModelLifecycleService {
       const wrapped = new QueryError(
         'QUERY_FAILED',
         error instanceof Error && error.message.trim().length > 0
-          ? `Model query failed: ${error.message}`
-          : 'Model query failed.',
+          ? `${operationLabel} failed: ${error.message}`
+          : `${operationLabel} failed.`,
         { cause: error }
       );
       if (!failureRecorded && activeRequestId != null) {
@@ -500,9 +539,13 @@ export class ModelService implements ModelLifecycleService {
           ...(shouldStreamTokens ? { onTokens: consumeOutputTokens } : {}),
         },
         media == null ? undefined : [...media],
-        (session, promptOptions) => this.runtime.enqueueChat(session, messages, promptOptions)
+        (session, promptOptions) => this.runtime.enqueueChat(session, messages, promptOptions),
+        'Model chat'
       );
       const rawText = rawResult.outputText;
+      if (rawText == null) {
+        throw new Error('Runtime completed chat() without text output.');
+      }
       const unseenOutputSuffix = shouldStreamTokens
         ? sliceUnstreamedSuffix(streamedOutputText, rawText)
         : rawText;

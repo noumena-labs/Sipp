@@ -33,6 +33,9 @@ pub enum ResponseOutput {
     Embedding {
         values: Vec<f32>,
         pooling: PoolingType,
+        /// Whether the runtime applied L2 normalization to `values`. `Rank`
+        /// pooling outputs are never normalized (raw classifier scores).
+        normalized: bool,
     },
 }
 

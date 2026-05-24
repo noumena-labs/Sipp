@@ -1,8 +1,10 @@
 import type { BackendObservability } from '../observability/backend-observability.js';
 import type {
+  EmbeddingOutput,
   GenerateRequestId,
   GenerateResponse,
   NativeRuntimeConfig,
+  PoolingType,
 } from '../core/inference-types.js';
 import type { RuntimePairingErrorCode } from '../runtime/engine-runtime.js';
 import type { ClassifiedAsset, PairingPlan } from '../models/pairing-types.js';
@@ -373,6 +375,23 @@ export class WasmBridge {
         ]
       ) as GenerateRequestId
     );
+  }
+
+  public startEmbeddingRequest(
+    contextKey: string,
+    input: string,
+    normalize: boolean
+  ): GenerateRequestId {
+    const requestId = this.module.ccall(
+      'CE_StartEmbeddingRequest',
+      'number',
+      ['string', 'string', 'number'],
+      [contextKey, input, normalize ? 1 : 0]
+    );
+    if (requestId instanceof Promise) {
+      throw new Error('Unexpected async result while enqueuing an embedding request.');
+    }
+    return requestId as GenerateRequestId;
   }
 
   public readMediaMarker(): string | null {
@@ -800,12 +819,29 @@ export class WasmBridge {
       throw new Error('Queued request response is no longer available.');
     }
 
-    const outputText = this.copyCompletedRequestText(
-      requestId,
-      'CE_GetCompletedRequestOutputSize',
-      'CE_CopyCompletedRequestOutput',
-      'output'
-    );
+    const embedding = this.readCompletedEmbeddingIfPresent(requestId);
+    if (embedding == null) {
+      const outputText = this.copyCompletedRequestText(
+        requestId,
+        'CE_GetCompletedRequestOutputSize',
+        'CE_CopyCompletedRequestOutput',
+        'output'
+      );
+      return {
+        ...this.completedResponseBase(requestId, status),
+        outputText,
+      };
+    }
+    return {
+      ...this.completedResponseBase(requestId, status),
+      embedding,
+    };
+  }
+
+  private completedResponseBase(
+    requestId: GenerateRequestId,
+    status: number
+  ): Omit<GenerateResponse, 'outputText' | 'embedding'> {
     const errorText = this.copyCompletedRequestText(
       requestId,
       'CE_GetCompletedRequestErrorSize',
@@ -822,7 +858,6 @@ export class WasmBridge {
       completed: status === COMPLETED_REQUEST_STATUS_COMPLETED,
       failed: status === COMPLETED_REQUEST_STATUS_FAILED,
       cancelled: status === COMPLETED_REQUEST_STATUS_CANCELLED,
-      outputText,
       errorMessage: errorText.length > 0 ? errorText : null,
       observability: runtimeObservability,
     };
@@ -1118,6 +1153,51 @@ export class WasmBridge {
     }
   }
 
+  private readCompletedEmbeddingIfPresent(
+    requestId: GenerateRequestId
+  ): EmbeddingOutput | null {
+    const length = this.callNumber('CE_GetCompletedRequestEmbeddingLength', ['number'], [requestId]);
+    if (length < 0) {
+      return null;
+    }
+    const pooling = poolingTypeFromCode(
+      this.callNumber('CE_GetCompletedRequestEmbeddingPooling', ['number'], [requestId])
+    );
+    const normalizedValue = this.callNumber(
+      'CE_GetCompletedRequestEmbeddingNormalized',
+      ['number'],
+      [requestId]
+    );
+    if (normalizedValue < 0) {
+      throw new Error('Failed to read embedding normalization flag.');
+    }
+    const normalized = normalizedValue !== 0;
+    const bufferPtr = this.allocate(Math.max(1, length * 4));
+    try {
+      const copied = this.callNumber(
+        'CE_CopyCompletedRequestEmbedding',
+        ['number', 'pointer', 'number'],
+        [requestId, bufferPtr, length]
+      );
+      if (copied !== length) {
+        throw new Error('Failed to copy embedding output.');
+      }
+      const values = Array.from(
+        this.module.HEAPF32.subarray(
+          this.heapIndex(bufferPtr, 4),
+          this.heapIndex(bufferPtr, 4) + length
+        )
+      );
+      return {
+        values,
+        pooling,
+        normalized,
+      };
+    } finally {
+      this.free(bufferPtr);
+    }
+  }
+
   private copyCompletedRequestText(
     requestId: GenerateRequestId,
     sizeFunction: string,
@@ -1161,6 +1241,25 @@ export class WasmBridge {
 
 export function parseBackendObservabilityJson(raw: string): BackendObservability {
   return JSON.parse(raw) as BackendObservability;
+}
+
+function poolingTypeFromCode(value: number): PoolingType {
+  switch (value) {
+    case -1:
+      return 'unspecified';
+    case 0:
+      return 'none';
+    case 1:
+      return 'mean';
+    case 2:
+      return 'cls';
+    case 3:
+      return 'last';
+    case 4:
+      return 'rank';
+    default:
+      throw new Error(`Unknown embedding pooling type ${value}.`);
+  }
 }
 
 function normalizeModelDetectionMethod(

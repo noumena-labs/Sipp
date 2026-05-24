@@ -1,4 +1,5 @@
 use crate::collection::sorted_unique_non_empty_strings;
+use crate::engine::protocol::EmbedOptions;
 use crate::error::{Error, Result};
 use crate::runtime::config::SamplingRuntimeConfig;
 use crate::runtime::llama_token;
@@ -86,6 +87,38 @@ impl InferenceRuntime {
         })?;
         request.multimodal = Some(MultimodalPayload { image_buffers });
         request.is_multimodal_turn = true;
+        self.enqueue_prepared_request(request)
+    }
+
+    pub fn enqueue_embed_request(
+        &mut self,
+        input: impl Into<String>,
+        embed_options: EmbedOptions,
+    ) -> Result<GenerateRequestId> {
+        // Capability check first so the caller sees the most informative
+        // error (UnsupportedOperation with a model-class reason) rather than
+        // a generic "runtime not ready" when both apply.
+        self.embedding_slot_plan()?;
+        if !self.is_ready() {
+            return Err(Error::RuntimeNotReady);
+        }
+
+        let context_key =
+            normalize_context_key(embed_options.context_key.clone().unwrap_or_default());
+        let input: String = input.into();
+
+        let vocab = self.vocab()?;
+        let prompt_tokens = tokenize(vocab, &input, true, true)?;
+        if prompt_tokens.is_empty() {
+            return Err(Error::Tokenize);
+        }
+
+        let request_id = self.next_generate_request_id()?;
+        let mut request = GenerateRequest::new(request_id, context_key);
+        request.original_prompt = input;
+        request.prompt_tokens = prompt_tokens;
+        request.max_output_tokens = 0;
+        request.embed_options = Some(embed_options);
         self.enqueue_prepared_request(request)
     }
 

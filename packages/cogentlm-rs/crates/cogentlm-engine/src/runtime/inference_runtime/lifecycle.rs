@@ -346,14 +346,24 @@ fn build_capabilities(
             token if token >= 0 => Some(token),
             _ => None,
         };
+    let n_embd_out = unsafe { ffi::cogent_common_init_n_embd_out(common_init) };
+    let n_cls_out = unsafe { ffi::cogent_common_init_n_cls_out(common_init) };
     Ok(RuntimeModelCapabilities {
         class: model_class_from_init(common_init)?,
-        n_embd: unsafe { ffi::cogent_common_init_n_embd_out(common_init) },
+        embedding_dimensions: embedding_dimensions(pooling_type, n_embd_out, n_cls_out),
         pooling_type,
         decoder_start_token,
         has_chat_template,
         embedding_context: config.context.embeddings == Some(true),
     })
+}
+
+fn embedding_dimensions(pooling_type: PoolingType, n_embd_out: i32, n_cls_out: i32) -> i32 {
+    if pooling_type == PoolingType::Rank {
+        n_cls_out
+    } else {
+        n_embd_out
+    }
 }
 
 fn model_class_from_init(common_init: *const ffi::cogent_common_init) -> Result<ModelClass> {

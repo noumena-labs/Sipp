@@ -1,5 +1,11 @@
 import type { AssetInspection } from '../bundle/model-bundle-types.js';
-import type { ChatMessage, StreamStats, TokenBatch, TokenFlushMode } from '../core/inference-types.js';
+import type {
+  ChatMessage,
+  PoolingType,
+  StreamStats,
+  TokenBatch,
+  TokenFlushMode,
+} from '../core/inference-types.js';
 import type { NativeRuntimeConfig } from '../core/inference-types.js';
 import type { BackendDeviceType } from '../observability/backend-observability.js';
 
@@ -238,17 +244,13 @@ export interface GenerationResult {
   stats: RequestStats;
 }
 
-export type PoolingType = 'unspecified' | 'none' | 'mean' | 'cls' | 'last' | 'rank';
+export type { PoolingType };
 
 export interface EmbedOptions {
   /** L2-normalize the returned vector. Ignored for `pooling = 'rank'`. Default: true. */
   normalize?: boolean;
   contextKey?: string;
-}
-
-export interface EmbedRequest {
-  input: string;
-  options?: EmbedOptions;
+  signal?: AbortSignal;
 }
 
 export interface EmbeddingResult {
@@ -263,7 +265,7 @@ export type EngineEvent =
   | { type: 'state'; state: EngineState }
   | { type: 'load-progress'; loadedBytes: number; totalBytes: number | null; assetName?: string }
   | { type: 'request-started'; requestId: string; streamId: number }
-  | { type: 'request-completed'; result: GenerationResult }
+  | { type: 'request-completed'; requestId: string }
   | { type: 'request-failed'; requestId: string; error: string }
   | { type: 'closed' };
 
@@ -297,6 +299,7 @@ export interface ModelLifecycleService {
   remove(id: string): Promise<void>;
   query(input: QueryInput, options?: QueryOptions): Promise<GenerationResult>;
   chat(input: ChatInput, options?: ChatOptions): Promise<GenerationResult>;
+  embed(input: string, options?: EmbedOptions): Promise<EmbeddingResult>;
   state(): EngineState;
   subscribeEvents(listener: (event: EngineEvent) => void): () => void;
   currentObservability(): ObservabilitySnapshot;

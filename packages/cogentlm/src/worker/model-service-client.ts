@@ -24,6 +24,8 @@ import {
   type ModelLifecycleService,
   type ModelLoadOptions,
   type ModelSource,
+  type EmbedOptions,
+  type EmbeddingResult,
   type GenerationResult,
   type ChatInput,
   type ChatOptions,
@@ -225,6 +227,24 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
         tokenFlush: options.onTokens == null ? undefined : options.tokenFlush ?? 'token',
       }
     )) as GenerationResult;
+  }
+
+  public async embed(input: string, options: EmbedOptions = {}): Promise<EmbeddingResult> {
+    this.assertOpen();
+    return (await this.callWorker(
+      {
+        kind: 'embed',
+        config: this.workerConfig,
+        input,
+        options: {
+          normalize: options.normalize,
+          contextKey: options.contextKey,
+        },
+      },
+      {
+        signal: options.signal,
+      }
+    )) as EmbeddingResult;
   }
 
   public currentObservability(): ObservabilitySnapshot {

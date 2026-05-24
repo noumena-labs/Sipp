@@ -57,6 +57,7 @@ function createModule(): FakeModule {
   return {
     FS: fs,
     HEAP32: new Int32Array(8),
+    HEAPF32: new Float32Array(8),
     HEAPF64: new Float64Array(8),
     HEAPU8: new Uint8Array(8),
     _free: () => {},

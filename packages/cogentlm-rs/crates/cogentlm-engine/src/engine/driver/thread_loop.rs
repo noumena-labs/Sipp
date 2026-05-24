@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use crate::engine::protocol::{EngineEvent, EngineState, EngineStatus, ModelState};
+use crate::engine::protocol::{EmbedRequest, EngineEvent, EngineState, EngineStatus, ModelState};
 use crate::error::Result;
 use crate::runtime::request::GenerateResponse;
 use crate::runtime::{InferenceRuntime, RequestStepResult};
 
 use super::events::{build_engine_state_with_status, emit_event, emit_state_event};
-use super::request::{start_chat, start_query, ChatRequest, QueryRequest};
+use super::request::{start_chat, start_embed, start_query, ChatRequest, QueryRequest};
 use super::token_sink::AsyncTokenSink;
 use super::{runtime_command, EngineEventSubscribers};
 
@@ -21,6 +21,7 @@ const ENGINE_NO_PROGRESS: &str = "Engine execution failed with no progress.";
 pub(super) enum EngineThreadCommand {
     Generate(QueryRequest, mpsc::Sender<Result<GenerateResponse>>),
     GenerateChat(ChatRequest, mpsc::Sender<Result<GenerateResponse>>),
+    Embed(EmbedRequest, mpsc::Sender<Result<GenerateResponse>>),
     GetState(mpsc::Sender<Result<EngineState>>),
     Close(mpsc::Sender<()>),
 }
@@ -66,24 +67,46 @@ pub(super) fn run_engine_thread(
 
 pub(super) struct EngineThreadState {
     runtime: Option<InferenceRuntime>,
-    active_requests: HashMap<u32, mpsc::Sender<Result<GenerateResponse>>>,
+    active_requests: HashMap<u32, ActiveRequest>,
     token_sinks: HashMap<u32, AsyncTokenSink>,
     model_state: ModelState,
     event_subscribers: EngineEventSubscribers,
+}
+
+pub(super) struct ActiveRequest {
+    pub output: ActiveRequestOutput,
+    pub response_tx: mpsc::Sender<Result<GenerateResponse>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ActiveRequestOutput {
+    Text,
+    Embedding,
 }
 
 impl EngineThreadState {
     fn process_command(&mut self, command: EngineThreadCommand) -> bool {
         match command {
             EngineThreadCommand::Generate(request, response_tx) => {
-                self.start_request(response_tx, |runtime, subscribers| {
-                    start_query(runtime, request, subscribers)
-                });
+                self.start_request(
+                    response_tx,
+                    ActiveRequestOutput::Text,
+                    |runtime, subscribers| start_query(runtime, request, subscribers),
+                );
             }
             EngineThreadCommand::GenerateChat(request, response_tx) => {
-                self.start_request(response_tx, |runtime, subscribers| {
-                    start_chat(runtime, request, subscribers)
-                });
+                self.start_request(
+                    response_tx,
+                    ActiveRequestOutput::Text,
+                    |runtime, subscribers| start_chat(runtime, request, subscribers),
+                );
+            }
+            EngineThreadCommand::Embed(request, response_tx) => {
+                self.start_request(
+                    response_tx,
+                    ActiveRequestOutput::Embedding,
+                    |runtime, subscribers| start_embed(runtime, request, subscribers),
+                );
             }
             EngineThreadCommand::GetState(response_tx) => {
                 let _ = response_tx.send(self.current_state());
@@ -102,6 +125,7 @@ impl EngineThreadState {
     fn start_request(
         &mut self,
         response_tx: mpsc::Sender<Result<GenerateResponse>>,
+        output: ActiveRequestOutput,
         start: impl FnOnce(
             &mut InferenceRuntime,
             &EngineEventSubscribers,
@@ -114,7 +138,13 @@ impl EngineThreadState {
 
         match start(runtime, &self.event_subscribers) {
             Ok((request_id, token_sink)) => {
-                self.active_requests.insert(request_id, response_tx);
+                self.active_requests.insert(
+                    request_id,
+                    ActiveRequest {
+                        output,
+                        response_tx,
+                    },
+                );
                 if let Some(sink) = token_sink {
                     self.token_sinks.insert(request_id, sink);
                 }

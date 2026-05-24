@@ -14,6 +14,7 @@ function createSha256TestModule(updateLengths: number[] = []): EngineModule {
       unmount: () => {},
     },
     HEAP32: new Int32Array(128),
+    HEAPF32: new Float32Array(128),
     HEAPF64: new Float64Array(128),
     HEAPU8: new Uint8Array(4096),
     _malloc: () => 32,
@@ -114,4 +115,75 @@ test('WasmBridge hashes blob streams without releasing the reader lock', async (
   assert.equal(await bridge.sha256Blob(blob), 'a'.repeat(64));
   assert.deepEqual(updateLengths, [3]);
   assert.deepEqual(released, []);
+});
+
+test('WasmBridge copies completed embedding responses as f32 values', () => {
+  const memory = new ArrayBuffer(4096);
+  const heapF32 = new Float32Array(memory);
+  const module: EngineModule = {
+    FS: {
+      analyzePath: () => ({ exists: false }),
+      mkdir: () => {},
+      writeFile: () => {},
+      unlink: () => {},
+      mount: () => {},
+      unmount: () => {},
+    },
+    HEAP32: new Int32Array(memory),
+    HEAPF32: heapF32,
+    HEAPF64: new Float64Array(memory),
+    HEAPU8: new Uint8Array(memory),
+    _malloc: () => 64,
+    _free: () => {},
+    ccall: (ident: string, _returnType: string | null, _argTypes: string[], args: unknown[]) => {
+      if (ident === 'CE_GetCompletedRequestStatus') {
+        return 1;
+      }
+      if (ident === 'CE_GetCompletedRequestEmbeddingLength') {
+        return 2;
+      }
+      if (ident === 'CE_GetCompletedRequestEmbeddingPooling') {
+        return 1;
+      }
+      if (ident === 'CE_GetCompletedRequestEmbeddingNormalized') {
+        return 0;
+      }
+      if (ident === 'CE_CopyCompletedRequestEmbedding') {
+        const ptr = args[1] as number;
+        heapF32[ptr / 4] = 3;
+        heapF32[ptr / 4 + 1] = 4;
+        return 2;
+      }
+      if (ident === 'CE_GetCompletedRequestErrorSize') {
+        return 0;
+      }
+      if (ident === 'CE_GetCompletedRequestRuntimeObservability') {
+        return -1;
+      }
+      if (ident === 'CE_ConsumeCompletedRequest') {
+        return 1;
+      }
+      throw new Error(`Unexpected call: ${ident}`);
+    },
+    UTF8ToString: () => '',
+    addFunction: () => 0,
+    removeFunction: () => {},
+  };
+  const bridge = new WasmBridge(module);
+
+  const response = bridge.takeCompletedResponse(7);
+
+  assert.deepEqual(response, {
+    requestId: 7,
+    completed: true,
+    failed: false,
+    cancelled: false,
+    embedding: {
+      values: [3, 4],
+      pooling: 'mean',
+      normalized: false,
+    },
+    errorMessage: null,
+    observability: null,
+  });
 });

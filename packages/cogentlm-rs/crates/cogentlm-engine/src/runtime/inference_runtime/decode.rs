@@ -3,7 +3,7 @@ use std::time::Instant;
 use cogentlm_sys as ffi;
 
 use crate::runtime::request::GenerateRequestLifecycle;
-use crate::runtime::scheduler::{BatchContributionKind, SlotPhase, SlotScheduler};
+use crate::runtime::scheduler::{BatchContributionKind, SlotPhase, SlotScheduler, TerminalAction};
 
 use super::text::{append_token_piece_to_slot, apply_stop_sequences_to_slot, flush_pending_utf8};
 use super::{
@@ -96,6 +96,33 @@ impl InferenceRuntime {
         }
         if tick_had_prefill {
             self.total_prefill_ms += tick_ms;
+        }
+
+        // Decoder-only embedding slots: when prefill just drained the prompt,
+        // read the pooled embedding from the context instead of letting the
+        // standard sample/decode loop take over. We collect indices in this
+        // separate pass so the per-contribution borrow on `slot` above can
+        // unwind cleanly before the embedding read, which needs `&mut self`.
+        let pending_reads: Vec<usize> = self
+            .slot_scheduler
+            .slots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| {
+                let prompt_len = slot.request().map(|r| r.prompt_tokens.len()).unwrap_or(0);
+                let ready = slot.phase == SlotPhase::Decode
+                    && slot.plan.terminal == TerminalAction::ReadEmbedding
+                    && slot.prefill_cursor >= prompt_len
+                    && slot.embedding_output.is_none();
+                ready.then_some(index)
+            })
+            .collect();
+        for slot_index in pending_reads {
+            if let Err(error) = self.read_slot_embedding(slot_index) {
+                if let Some(slot) = self.slot_scheduler.slots.get_mut(slot_index) {
+                    slot.fail(format!("embedding read failed: {error}"));
+                }
+            }
         }
     }
 
