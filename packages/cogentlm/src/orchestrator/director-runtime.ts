@@ -13,7 +13,7 @@ import type {
   ChatInput,
   ChatOptions,
   ModelInfo,
-  RequestResult,
+  GenerationResult,
 } from '../models/types.js';
 import type { ChatMessage } from '../core/inference-types.js';
 import { createTimedAbortController } from '../utils/abort.js';
@@ -35,7 +35,7 @@ import type {
 } from './director-types.js';
 
 export interface DirectorRuntimeEngine {
-  chat(input: ChatInput, options?: ChatOptions): Promise<RequestResult>;
+  chat(input: ChatInput, options?: ChatOptions): Promise<GenerationResult>;
   models?: {
     current(): Pick<ModelInfo, 'mediaMarker'> | null;
   };

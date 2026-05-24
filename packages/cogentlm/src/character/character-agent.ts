@@ -12,7 +12,7 @@
 import type {
   ChatInput,
   ChatOptions,
-  RequestResult,
+  GenerationResult,
 } from '../models/types.js';
 import type { ChatMessage } from '../core/inference-types.js';
 import { sliceUnstreamedSuffix } from '../core/chat-boundary-sanitizer.js';
@@ -30,7 +30,7 @@ import { createTimedAbortController } from '../utils/abort.js';
 import type { RunStatus } from '../core/run-status.js';
 
 export interface CharacterRuntimeEngine {
-  chat(input: ChatInput, options?: ChatOptions): Promise<RequestResult>;
+  chat(input: ChatInput, options?: ChatOptions): Promise<GenerationResult>;
 }
 
 export interface CharacterRuntimeOptions {

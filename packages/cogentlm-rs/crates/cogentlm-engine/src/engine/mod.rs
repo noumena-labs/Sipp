@@ -15,5 +15,8 @@ pub use driver::{
     ChatMessage, ChatRequest, ChatRole, CogentEngine, EngineEventReceiver, QueryOptions,
     QueryRequest,
 };
-pub use protocol::{EngineEvent, EngineState, EngineStats, RequestResult};
+pub use protocol::{
+    EmbedOptions, EmbedRequest, EmbeddingResult, EngineEvent, EngineState, EngineStats,
+    GenerationResult, PoolingType,
+};
 pub use stream::{StreamStats, TokenBatch, TokenFrame, TokenStreamMode};

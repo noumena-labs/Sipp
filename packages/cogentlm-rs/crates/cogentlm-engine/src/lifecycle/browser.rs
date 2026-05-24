@@ -43,6 +43,7 @@ const CODE_STORAGE_CORRUPT: &str = "STORAGE_CORRUPT";
 const CODE_MODEL_BROKEN: &str = "MODEL_BROKEN";
 const CODE_MODEL_NOT_FOUND: &str = "MODEL_NOT_FOUND";
 const CODE_REMOTE_LOAD_FAILED: &str = "REMOTE_LOAD_FAILED";
+const CODE_UNSUPPORTED_OPERATION: &str = "UNSUPPORTED_OPERATION";
 const CODE_QUERY_FAILED: &str = "QUERY_FAILED";
 const QUERY_STATUS_FAILED: &str = "failed";
 const BROWSER_MODEL_ID_HASH_CHARS: usize = 24;
@@ -1205,6 +1206,7 @@ where
         ModelError::AssetMissing(_) => CODE_MODEL_BROKEN,
         ModelError::ModelNotFound(_) => CODE_MODEL_NOT_FOUND,
         ModelError::RemoteUnavailable(_) => CODE_REMOTE_LOAD_FAILED,
+        ModelError::UnsupportedOperation { .. } => CODE_UNSUPPORTED_OPERATION,
         ModelError::Runtime(_) => CODE_QUERY_FAILED,
         ModelError::RegistryJson(_) => CODE_STORAGE_CORRUPT,
         ModelError::Io(_) => CODE_STORAGE_UNAVAILABLE,

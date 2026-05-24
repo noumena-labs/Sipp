@@ -47,14 +47,14 @@ import {
   type QueryObservation,
   type QueryInput,
   type QueryOptions,
-  type RequestResult,
+  type GenerationResult,
   type TokenBatch,
   type RegistryManifest,
 } from './types.js';
 import {
   observabilityEventToStateEvent,
   observabilitySnapshotToEngineState,
-  requestResultFromGenerateResponse,
+  generationResultFromGenerateResponse,
 } from './engine-protocol-adapter.js';
 import {
   ObservabilityController,
@@ -299,7 +299,7 @@ export class ModelService implements ModelLifecycleService {
     });
   }
 
-  public async query(input: QueryInput, options: QueryOptions = {}): Promise<RequestResult> {
+  public async query(input: QueryInput, options: QueryOptions = {}): Promise<GenerationResult> {
     if (this.transitioning) {
       throw new QueryError('MODEL_NOT_READY', 'A model lifecycle transition is in progress.');
     }
@@ -320,7 +320,7 @@ export class ModelService implements ModelLifecycleService {
     const response = await this.runRuntimeRequest(options, media, (session, promptOptions) =>
       this.runtime.enqueueQuery(session, prompt, promptOptions)
     );
-    return requestResultFromGenerateResponse(response, {
+    return generationResultFromGenerateResponse(response, {
       maxTokens: options.maxTokens,
     });
   }
@@ -407,7 +407,7 @@ export class ModelService implements ModelLifecycleService {
       this.recordQuerySuccess(session, start, response);
       this.emitEngineEvent({
         type: 'request-completed',
-        result: requestResultFromGenerateResponse(response, {
+        result: generationResultFromGenerateResponse(response, {
           maxTokens: options.maxTokens,
         }),
       });
@@ -437,7 +437,7 @@ export class ModelService implements ModelLifecycleService {
     }
   }
 
-  public async chat(input: ChatInput, options: ChatOptions = {}): Promise<RequestResult> {
+  public async chat(input: ChatInput, options: ChatOptions = {}): Promise<GenerationResult> {
     if (this.transitioning) {
       throw new QueryError('MODEL_NOT_READY', 'A model lifecycle transition is in progress.');
     }
@@ -513,14 +513,14 @@ export class ModelService implements ModelLifecycleService {
         );
       }
       flushOutputText();
-      return requestResultFromGenerateResponse(rawResult, {
+      return generationResultFromGenerateResponse(rawResult, {
         text: assistantText.trim(),
         maxTokens: options.maxTokens,
       });
     } catch (error) {
       if (stoppedAtBoundary && options.signal?.aborted !== true) {
         flushOutputText();
-        return requestResultFromGenerateResponse(
+        return generationResultFromGenerateResponse(
           {
             requestId: -1,
             completed: true,

@@ -196,12 +196,70 @@ pub struct RequestStats {
     pub debug_metrics_post_decode_ms: f64,
 }
 
-/// Final output and final stats for one request.
+/// Final text output and stats for a `query()` / `chat()` request.
 #[derive(Debug, Clone, PartialEq)]
-pub struct RequestResult {
+pub struct GenerationResult {
     pub id: String,
     pub text: String,
     pub finish_reason: FinishReason,
+    pub stats: RequestStats,
+}
+
+/// Pooling strategy for embedding outputs. Mirrors `llama_pooling_type`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PoolingType {
+    Unspecified,
+    None,
+    Mean,
+    Cls,
+    Last,
+    Rank,
+}
+
+impl PoolingType {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unspecified => "unspecified",
+            Self::None => "none",
+            Self::Mean => "mean",
+            Self::Cls => "cls",
+            Self::Last => "last",
+            Self::Rank => "rank",
+        }
+    }
+}
+
+/// Per-call knobs for `embed()`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmbedOptions {
+    /// L2-normalize the returned vector. Ignored for `pooling = Rank`.
+    pub normalize: bool,
+    pub context_key: Option<String>,
+}
+
+impl Default for EmbedOptions {
+    fn default() -> Self {
+        Self {
+            normalize: true,
+            context_key: None,
+        }
+    }
+}
+
+/// Public `embed()` request.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmbedRequest {
+    pub input: String,
+    pub options: EmbedOptions,
+}
+
+/// Final embedding output and stats for an `embed()` request.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmbeddingResult {
+    pub id: String,
+    pub values: Vec<f32>,
+    pub pooling: PoolingType,
+    pub normalized: bool,
     pub stats: RequestStats,
 }
 
@@ -219,7 +277,7 @@ pub enum EngineEvent {
         stream_id: u32,
     },
     RequestCompleted {
-        result: Box<RequestResult>,
+        result: Box<GenerationResult>,
     },
     RequestFailed {
         request_id: String,

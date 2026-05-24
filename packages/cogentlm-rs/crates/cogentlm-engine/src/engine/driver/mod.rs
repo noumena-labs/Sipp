@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use crate::defaults::{BYTES_PER_KIB, DEFAULT_MODEL_FILE_NAME};
 use crate::engine::{
-    protocol::{EngineEvent, EngineState, ModelState, RequestResult},
+    protocol::{EngineEvent, EngineState, GenerationResult, ModelState},
     stream::TokenBatch,
     NativeRuntimeConfig,
 };
@@ -22,7 +22,7 @@ mod thread_loop;
 mod token_sink;
 
 pub use request::{ChatMessage, ChatRequest, ChatRole, QueryOptions, QueryRequest};
-use stats::request_result_from_response;
+use stats::generation_result_from_response;
 use thread_loop::{run_engine_thread, EngineThreadCommand};
 
 pub type EngineEventReceiver = mpsc::Receiver<EngineEvent>;
@@ -102,14 +102,14 @@ impl CogentEngine {
         }
     }
 
-    pub fn query(&self, request: QueryRequest) -> Result<RequestResult> {
+    pub fn query(&self, request: QueryRequest) -> Result<GenerationResult> {
         self.send_command(|response_tx| EngineThreadCommand::Generate(request, response_tx))
-            .map(|response: GenerateResponse| request_result_from_response(&response))
+            .map(|response: GenerateResponse| generation_result_from_response(&response))
     }
 
-    pub fn chat(&self, request: ChatRequest) -> Result<RequestResult> {
+    pub fn chat(&self, request: ChatRequest) -> Result<GenerationResult> {
         self.send_command(|response_tx| EngineThreadCommand::GenerateChat(request, response_tx))
-            .map(|response| request_result_from_response(&response))
+            .map(|response| generation_result_from_response(&response))
     }
 
     pub fn state(&self) -> Result<EngineState> {

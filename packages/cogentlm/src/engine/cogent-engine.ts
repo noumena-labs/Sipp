@@ -15,7 +15,7 @@ import {
   type ModelSource,
   type QueryInput,
   type QueryOptions,
-  type RequestResult,
+  type GenerationResult,
 } from '../models/types.js';
 import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.js';
 import type { BackendObservability } from '../observability/backend-observability.js';
@@ -141,12 +141,12 @@ export class CogentEngine {
     }
   }
 
-  public async query(input: QueryInput, options?: QueryOptions): Promise<RequestResult> {
+  public async query(input: QueryInput, options?: QueryOptions): Promise<GenerationResult> {
     this.assertOpen();
     return await this.#service.query(input, options);
   }
 
-  public async chat(input: ChatInput, options: ChatOptions = {}): Promise<RequestResult> {
+  public async chat(input: ChatInput, options: ChatOptions = {}): Promise<GenerationResult> {
     this.assertOpen();
     return await this.#service.chat(input, options);
   }

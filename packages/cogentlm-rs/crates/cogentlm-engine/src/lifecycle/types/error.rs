@@ -35,6 +35,12 @@ pub enum ModelError {
     #[error("model runtime failed: {0}")]
     Runtime(String),
 
+    #[error("unsupported operation {operation}: {reason}")]
+    UnsupportedOperation {
+        operation: &'static str,
+        reason: String,
+    },
+
     #[error("model registry JSON failed: {0}")]
     RegistryJson(#[from] serde_json::Error),
 
@@ -44,7 +50,12 @@ pub enum ModelError {
 
 impl From<crate::Error> for ModelError {
     fn from(error: crate::Error) -> Self {
-        Self::Runtime(error.to_string())
+        match error {
+            crate::Error::UnsupportedOperation { operation, reason } => {
+                Self::UnsupportedOperation { operation, reason }
+            }
+            error => Self::Runtime(error.to_string()),
+        }
     }
 }
 

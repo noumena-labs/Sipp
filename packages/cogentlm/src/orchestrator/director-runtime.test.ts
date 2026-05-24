@@ -4,7 +4,7 @@ import test from 'node:test';
 import type {
   ChatInput,
   ChatOptions,
-  RequestResult,
+  GenerationResult,
   TokenBatch,
 } from '../models/types.js';
 import { parseDirectorConfig } from './director-config.js';
@@ -27,7 +27,7 @@ class FakeEngine implements DirectorRuntimeEngine {
   public async chat(
     input: ChatInput,
     options?: ChatOptions
-  ): Promise<RequestResult> {
+  ): Promise<GenerationResult> {
     this.queryCalls += 1;
     if (typeof options === 'object' && options) {
       this.grammar = (options as any).grammar;
@@ -55,11 +55,11 @@ class FakeEngine implements DirectorRuntimeEngine {
 
     const safeText = sanitizeFakeChatOutput(this.outputText);
     options?.onTokens?.(tokenBatch(safeText));
-    return requestResult(safeText);
+    return generationResult(safeText);
   }
 }
 
-function requestResult(text: string): RequestResult {
+function generationResult(text: string): GenerationResult {
   return {
     id: 'test',
     text,

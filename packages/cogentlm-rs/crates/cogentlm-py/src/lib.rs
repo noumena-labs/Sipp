@@ -8,11 +8,12 @@ use cogentlm_engine::backend::{
 use cogentlm_engine::engine::protocol::{BackendInfo, RequestState, RequestStats};
 use cogentlm_engine::engine::{
     CacheKeyPolicy, ChatMessage, ChatRequest, ChatRole, CogentEngine, EngineEvent,
-    EngineEventReceiver, EngineState, EngineStats, FlashAttentionMode, GpuLayerConfig, KvCacheType,
-    KvReuseMode, LogitBias, ModelPlacementConfig, MultimodalRuntimeConfig, NativeRuntimeConfig,
-    ObservabilityRuntimeConfig, QueryOptions, QueryRequest, RequestResult, ResidencyRuntimeConfig,
-    ResolvedRuntimeLimits, RopeScaling, SamplerStage, SamplingRuntimeConfig,
-    SchedulerRuntimeConfig, SplitMode, TokenBatch, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
+    EngineEventReceiver, EngineState, EngineStats, FlashAttentionMode, GenerationResult,
+    GpuLayerConfig, KvCacheType, KvReuseMode, LogitBias, ModelPlacementConfig,
+    MultimodalRuntimeConfig, NativeRuntimeConfig, ObservabilityRuntimeConfig, QueryOptions,
+    QueryRequest, ResidencyRuntimeConfig, ResolvedRuntimeLimits, RopeScaling, SamplerStage,
+    SamplingRuntimeConfig, SchedulerRuntimeConfig, SplitMode, TokenBatch, DEFAULT_CONTEXT_KEY,
+    DEFAULT_MAX_TOKENS,
 };
 use cogentlm_engine::lifecycle::{
     model_source_from_path as core_model_source_from_path,
@@ -21,11 +22,18 @@ use cogentlm_engine::lifecycle::{
     DEFAULT_MODEL_BACKEND, DEFAULT_MODEL_STATS,
 };
 use cogentlm_engine::runtime::config::{SchedulerPolicyConfig, SchedulerPolicyMode};
-use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyException, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pyclass::PyClass;
 use pyo3::types::{PyAny, PyDict, PyList};
 use serde::de::DeserializeOwned;
+
+pyo3::create_exception!(
+    _native,
+    UnsupportedOperationError,
+    PyException,
+    "The loaded model does not support the requested operation."
+);
 
 const PY_CALLBACK_FAILED_MESSAGE: &str = "Python token callback failed";
 const PY_ENGINE_EVENTS_MUTEX_POISONED: &str = "engine events mutex is poisoned";
@@ -812,11 +820,11 @@ impl PyCogentEngine {
             query_request_with_tokens(py, prompt, options, on_tokens, callback_error.clone())?;
         let guard = self.engine_guard()?;
         let engine = engine_ref(&guard)?;
-        let result = py_token_result_to_request_result(
+        let result = generation_result_or_callback_error(
             py.allow_threads(move || engine.query(request)),
             callback_error,
         )?;
-        request_result_to_dict(py, result)
+        generation_result_to_dict(py, result)
     }
 
     #[pyo3(signature = (messages, options = None, on_tokens = None))]
@@ -834,11 +842,11 @@ impl PyCogentEngine {
             chat_request_with_tokens(py, messages, options, on_tokens, callback_error.clone())?;
         let guard = self.engine_guard()?;
         let engine = engine_ref(&guard)?;
-        let result = py_token_result_to_request_result(
+        let result = generation_result_or_callback_error(
             py.allow_threads(move || engine.chat(request)),
             callback_error,
         )?;
-        request_result_to_dict(py, result)
+        generation_result_to_dict(py, result)
     }
 
     fn state(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -965,11 +973,11 @@ impl PyModelService {
             query_request_with_tokens(py, prompt, options, on_tokens, callback_error.clone())?;
         let guard = self.service_guard()?;
         let service = service_ref(&guard)?;
-        let result = py_model_token_result_to_request_result(
+        let result = model_generation_result_or_callback_error(
             py.allow_threads(|| service.query(request)),
             callback_error,
         )?;
-        request_result_to_dict(py, result)
+        generation_result_to_dict(py, result)
     }
 
     #[pyo3(signature = (messages, options = None, on_tokens = None))]
@@ -987,11 +995,11 @@ impl PyModelService {
             chat_request_with_tokens(py, messages, options, on_tokens, callback_error.clone())?;
         let guard = self.service_guard()?;
         let service = service_ref(&guard)?;
-        let result = py_model_token_result_to_request_result(
+        let result = model_generation_result_or_callback_error(
             py.allow_threads(|| service.chat(request)),
             callback_error,
         )?;
-        request_result_to_dict(py, result)
+        generation_result_to_dict(py, result)
     }
 
     fn state(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -1052,6 +1060,10 @@ fn set_llama_log_quiet(quiet: bool) {
 
 #[pymodule]
 fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add(
+        "UnsupportedOperationError",
+        module.py().get_type_bound::<UnsupportedOperationError>(),
+    )?;
     module.add_class::<PyModelPlacementConfig>()?;
     module.add_class::<PyContextRuntimeConfig>()?;
     module.add_class::<PySamplingRuntimeConfig>()?;
@@ -1171,20 +1183,20 @@ fn make_python_tokens_callback(
     }
 }
 
-fn py_token_result_to_request_result(
-    result: cogentlm_engine::Result<RequestResult>,
+fn generation_result_or_callback_error(
+    result: cogentlm_engine::Result<GenerationResult>,
     callback_error: Arc<Mutex<Option<PyErr>>>,
-) -> PyResult<RequestResult> {
+) -> PyResult<GenerationResult> {
     match result {
         Ok(result) => Ok(result),
         Err(error) => Err(callback_error_or_core_error(error, callback_error)),
     }
 }
 
-fn py_model_token_result_to_request_result(
-    result: Result<RequestResult, cogentlm_engine::lifecycle::ModelError>,
+fn model_generation_result_or_callback_error(
+    result: Result<GenerationResult, cogentlm_engine::lifecycle::ModelError>,
     callback_error: Arc<Mutex<Option<PyErr>>>,
-) -> PyResult<RequestResult> {
+) -> PyResult<GenerationResult> {
     match result {
         Ok(result) => Ok(result),
         Err(error) => Err(callback_error_or_model_error(error, callback_error)),
@@ -1243,7 +1255,7 @@ fn take_callback_error(callback_error: &Arc<Mutex<Option<PyErr>>>) -> Option<PyE
         .and_then(|mut error| error.take())
 }
 
-fn request_result_to_dict(py: Python<'_>, result: RequestResult) -> PyResult<Py<PyAny>> {
+fn generation_result_to_dict(py: Python<'_>, result: GenerationResult) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new_bound(py);
     dict.set_item("id", result.id)?;
     dict.set_item("text", result.text)?;
@@ -1619,7 +1631,7 @@ fn engine_event_to_dict(py: Python<'_>, event: EngineEvent) -> PyResult<Py<PyAny
         }
         EngineEvent::RequestCompleted { result } => {
             dict.set_item("type", EVENT_TYPE_REQUEST_COMPLETED)?;
-            dict.set_item("result", request_result_to_dict(py, *result)?)?;
+            dict.set_item("result", generation_result_to_dict(py, *result)?)?;
         }
         EngineEvent::RequestFailed { request_id, error } => {
             dict.set_item("type", EVENT_TYPE_REQUEST_FAILED)?;
@@ -1739,6 +1751,11 @@ fn to_py_error(error: cogentlm_engine::Error) -> PyErr {
     match error {
         cogentlm_engine::Error::InvalidRequest(message)
         | cogentlm_engine::Error::InvalidConfig(message) => PyValueError::new_err(message),
+        cogentlm_engine::Error::UnsupportedOperation { operation, reason } => {
+            UnsupportedOperationError::new_err(format!(
+                "unsupported operation {operation}: {reason}"
+            ))
+        }
         other => PyRuntimeError::new_err(other.to_string()),
     }
 }
@@ -1751,6 +1768,11 @@ fn to_py_model_error(error: cogentlm_engine::lifecycle::ModelError) -> PyErr {
         }
         cogentlm_engine::lifecycle::ModelError::UnsupportedGgufVersion(version) => {
             PyValueError::new_err(format!("unsupported GGUF version {version}"))
+        }
+        cogentlm_engine::lifecycle::ModelError::UnsupportedOperation { operation, reason } => {
+            UnsupportedOperationError::new_err(format!(
+                "unsupported operation {operation}: {reason}"
+            ))
         }
         other => PyRuntimeError::new_err(other.to_string()),
     }

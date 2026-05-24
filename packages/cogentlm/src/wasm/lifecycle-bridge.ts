@@ -134,6 +134,7 @@ function normalizeLifecycleErrorCode(code: string | undefined): QueryErrorCode {
     case 'MODEL_NOT_READY':
     case 'MODEL_NOT_FOUND':
     case 'MODEL_BROKEN':
+    case 'UNSUPPORTED_OPERATION':
     case 'INVALID_MODEL_SOURCE':
     case 'INVALID_MODEL_PAIRING':
     case 'STORAGE_UNAVAILABLE':

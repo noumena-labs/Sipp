@@ -7,7 +7,7 @@ use crate::lifecycle::{
     model_entry_from_assets, AssetInspection, AssetRecord, AssetRole, AssetSource, ModelAssetKind,
     ModelModality, PairingPlan,
 };
-use std::fs;
+use std::{fs, path::PathBuf};
 
 fn vision_plan() -> PairingPlan {
     PairingPlan {
@@ -37,6 +37,21 @@ fn model_id_is_stable_for_asset_order() {
     };
 
     assert_eq!(model_id_from_plan(&left), model_id_from_plan(&right));
+}
+
+#[test]
+fn t5_encoder_decoder_fixture_is_available() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("t5-small-f16.gguf");
+    let metadata = cogentlm_shard::inspect_gguf_metadata_path(&path)
+        .expect("repo-root t5-small-f16.gguf metadata")
+        .expect("repo-root t5-small-f16.gguf is GGUF");
+
+    assert_eq!(metadata.general_architecture.as_deref(), Some("t5"));
 }
 
 #[test]

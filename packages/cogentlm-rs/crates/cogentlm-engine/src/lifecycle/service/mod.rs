@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::engine::{
-    protocol::EngineStatus, ChatRequest, CogentEngine, EngineEventReceiver, QueryRequest,
-    RequestResult,
+    protocol::EngineStatus, ChatRequest, CogentEngine, EngineEventReceiver, GenerationResult,
+    QueryRequest,
 };
 
 use super::backend_policy::BackendPolicy;
@@ -102,11 +102,11 @@ impl<B: StorageBackend> ModelService<B> {
         self.current.as_ref().map(|loaded| loaded.info.clone())
     }
 
-    pub fn query(&self, request: QueryRequest) -> Result<RequestResult, ModelError> {
+    pub fn query(&self, request: QueryRequest) -> Result<GenerationResult, ModelError> {
         self.engine()?.query(request).map_err(ModelError::from)
     }
 
-    pub fn chat(&self, request: ChatRequest) -> Result<RequestResult, ModelError> {
+    pub fn chat(&self, request: ChatRequest) -> Result<GenerationResult, ModelError> {
         self.engine()?.chat(request).map_err(ModelError::from)
     }
 

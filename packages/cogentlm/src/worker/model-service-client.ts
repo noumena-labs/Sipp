@@ -24,7 +24,7 @@ import {
   type ModelLifecycleService,
   type ModelLoadOptions,
   type ModelSource,
-  type RequestResult,
+  type GenerationResult,
   type ChatInput,
   type ChatOptions,
   type QueryInput,
@@ -193,7 +193,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     this.currentSnapshot = null;
   }
 
-  public async query(input: QueryInput, options: QueryOptions = {}): Promise<RequestResult> {
+  public async query(input: QueryInput, options: QueryOptions = {}): Promise<GenerationResult> {
     this.assertOpen();
     return (await this.callWorker(
       {
@@ -207,10 +207,10 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
         onTokens: options.onTokens,
         tokenFlush: options.onTokens == null ? undefined : options.tokenFlush ?? 'token',
       }
-    )) as RequestResult;
+    )) as GenerationResult;
   }
 
-  public async chat(input: ChatInput, options: ChatOptions = {}): Promise<RequestResult> {
+  public async chat(input: ChatInput, options: ChatOptions = {}): Promise<GenerationResult> {
     this.assertOpen();
     return (await this.callWorker(
       {
@@ -224,7 +224,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
         onTokens: options.onTokens,
         tokenFlush: options.onTokens == null ? undefined : options.tokenFlush ?? 'token',
       }
-    )) as RequestResult;
+    )) as GenerationResult;
   }
 
   public currentObservability(): ObservabilitySnapshot {

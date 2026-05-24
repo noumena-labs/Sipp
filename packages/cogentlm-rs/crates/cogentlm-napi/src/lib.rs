@@ -12,13 +12,13 @@ use cogentlm_engine::engine::{
     CacheKeyPolicy, ChatMessage as CoreChatMessage, ChatRequest as CoreChatRequest,
     ChatRole as CoreChatRole, CogentEngine as CoreCogentEngine, EngineEvent as CoreEngineEvent,
     EngineEventReceiver as CoreEngineEventReceiver, EngineState as CoreEngineState,
-    EngineStats as CoreEngineStats, FlashAttentionMode, GpuLayerConfig, KvCacheType, KvReuseMode,
-    LogitBias, ModelPlacementConfig as CoreModelPlacementConfig,
+    EngineStats as CoreEngineStats, FlashAttentionMode, GenerationResult as CoreGenerationResult,
+    GpuLayerConfig, KvCacheType, KvReuseMode, LogitBias,
+    ModelPlacementConfig as CoreModelPlacementConfig,
     MultimodalRuntimeConfig as CoreMultimodalRuntimeConfig,
     NativeRuntimeConfig as CoreNativeRuntimeConfig,
     ObservabilityRuntimeConfig as CoreObservabilityRuntimeConfig, QueryOptions as CoreQueryOptions,
-    QueryRequest as CoreQueryRequest, RequestResult as CoreRequestResult,
-    ResidencyRuntimeConfig as CoreResidencyRuntimeConfig,
+    QueryRequest as CoreQueryRequest, ResidencyRuntimeConfig as CoreResidencyRuntimeConfig,
     ResolvedRuntimeLimits as CoreResolvedRuntimeLimits, RopeScaling, SamplerStage,
     SamplingRuntimeConfig as CoreSamplingRuntimeConfig,
     SchedulerRuntimeConfig as CoreSchedulerRuntimeConfig, SplitMode, TokenBatch as CoreTokenBatch,
@@ -831,10 +831,41 @@ pub struct RequestStats {
 }
 
 #[napi(object)]
-pub struct RequestResult {
+pub struct GenerationResult {
     pub id: String,
     pub text: String,
     pub finish_reason: String,
+    pub stats: RequestStats,
+}
+
+#[napi(string_enum = "snake_case")]
+pub enum PoolingType {
+    Unspecified,
+    None,
+    Mean,
+    Cls,
+    Last,
+    Rank,
+}
+
+#[napi(object)]
+pub struct EmbedOptions {
+    pub normalize: Option<bool>,
+    pub context_key: Option<String>,
+}
+
+#[napi(object)]
+pub struct EmbedRequest {
+    pub input: String,
+    pub options: Option<EmbedOptions>,
+}
+
+#[napi(object)]
+pub struct EmbeddingResult {
+    pub id: String,
+    pub values: Vec<f64>,
+    pub pooling: PoolingType,
+    pub normalized: bool,
     pub stats: RequestStats,
 }
 
@@ -868,7 +899,7 @@ pub struct EngineEvent {
     pub asset_name: Option<String>,
     pub request_id: Option<String>,
     pub stream_id: Option<u32>,
-    pub result: Option<RequestResult>,
+    pub result: Option<GenerationResult>,
     pub error: Option<String>,
 }
 
@@ -880,7 +911,7 @@ pub struct CogentEngine {
 
 #[napi]
 impl CogentEngine {
-    #[napi]
+    #[napi(ts_return_type = "Promise<CogentEngine>")]
     pub fn load(
         model_path: String,
         config: Option<NativeRuntimeConfig>,
@@ -893,7 +924,7 @@ impl CogentEngine {
         Ok(AsyncTask::new(LoadTask { model_path, config }))
     }
 
-    #[napi]
+    #[napi(ts_return_type = "Promise<GenerationResult>")]
     pub fn query(
         &self,
         prompt: String,
@@ -909,7 +940,7 @@ impl CogentEngine {
         }))
     }
 
-    #[napi]
+    #[napi(ts_return_type = "Promise<GenerationResult>")]
     pub fn chat(
         &self,
         messages: Vec<ChatMessage>,
@@ -925,7 +956,7 @@ impl CogentEngine {
         }))
     }
 
-    #[napi]
+    #[napi(ts_return_type = "Promise<EngineState>")]
     pub fn state(&self) -> Result<AsyncTask<StateTask>> {
         Ok(AsyncTask::new(StateTask {
             engine: self.inner.clone(),
@@ -960,7 +991,7 @@ impl ModelService {
         })
     }
 
-    #[napi]
+    #[napi(ts_return_type = "Promise<LoadedModelInfo>")]
     pub fn load_path(
         &self,
         model_path: String,
@@ -974,7 +1005,7 @@ impl ModelService {
         }))
     }
 
-    #[napi]
+    #[napi(ts_return_type = "Promise<LoadedModelInfo>")]
     pub fn load_vision(
         &self,
         model_path: String,
@@ -990,7 +1021,7 @@ impl ModelService {
         }))
     }
 
-    #[napi]
+    #[napi(ts_return_type = "Promise<void>")]
     pub fn unload(&self) -> AsyncTask<ModelUnloadTask> {
         AsyncTask::new(ModelUnloadTask {
             service: self.inner.clone(),
@@ -998,7 +1029,7 @@ impl ModelService {
         })
     }
 
-    #[napi]
+    #[napi(ts_return_type = "Promise<void>")]
     pub fn remove(&self, model_id: String) -> AsyncTask<ModelRemoveTask> {
         AsyncTask::new(ModelRemoveTask {
             service: self.inner.clone(),
@@ -1018,7 +1049,7 @@ impl ModelService {
             .map(|model| model.map(model_info_to_node))
     }
 
-    #[napi]
+    #[napi(ts_return_type = "Promise<GenerationResult>")]
     pub fn query(
         &self,
         prompt: String,
@@ -1033,7 +1064,7 @@ impl ModelService {
         }))
     }
 
-    #[napi]
+    #[napi(ts_return_type = "Promise<GenerationResult>")]
     pub fn chat(
         &self,
         messages: Vec<ChatMessage>,
@@ -1048,7 +1079,7 @@ impl ModelService {
         }))
     }
 
-    #[napi]
+    #[napi(ts_return_type = "Promise<ModelServiceState>")]
     pub fn state(&self) -> Result<AsyncTask<ModelStateTask>> {
         Ok(AsyncTask::new(ModelStateTask {
             service: self.inner.clone(),
@@ -1098,8 +1129,8 @@ pub struct QueryTask {
 }
 
 impl Task for QueryTask {
-    type Output = CoreRequestResult;
-    type JsValue = RequestResult;
+    type Output = CoreGenerationResult;
+    type JsValue = GenerationResult;
 
     fn compute(&mut self) -> Result<Self::Output> {
         let request = query_request_with_tokens(
@@ -1111,7 +1142,7 @@ impl Task for QueryTask {
     }
 
     fn resolve(&mut self, _env: Env, result: Self::Output) -> Result<Self::JsValue> {
-        Ok(request_result_to_node(result))
+        Ok(generation_result_to_node(result))
     }
 }
 
@@ -1123,8 +1154,8 @@ pub struct ChatTextTask {
 }
 
 impl Task for ChatTextTask {
-    type Output = CoreRequestResult;
-    type JsValue = RequestResult;
+    type Output = CoreGenerationResult;
+    type JsValue = GenerationResult;
 
     fn compute(&mut self) -> Result<Self::Output> {
         let request = chat_request_with_tokens(
@@ -1136,7 +1167,7 @@ impl Task for ChatTextTask {
     }
 
     fn resolve(&mut self, _env: Env, result: Self::Output) -> Result<Self::JsValue> {
-        Ok(request_result_to_node(result))
+        Ok(generation_result_to_node(result))
     }
 }
 
@@ -1257,8 +1288,8 @@ pub struct ModelQueryTask {
 }
 
 impl Task for ModelQueryTask {
-    type Output = CoreRequestResult;
-    type JsValue = RequestResult;
+    type Output = CoreGenerationResult;
+    type JsValue = GenerationResult;
 
     fn compute(&mut self) -> Result<Self::Output> {
         let request = query_request_with_tokens(
@@ -1270,7 +1301,7 @@ impl Task for ModelQueryTask {
     }
 
     fn resolve(&mut self, _env: Env, result: Self::Output) -> Result<Self::JsValue> {
-        Ok(request_result_to_node(result))
+        Ok(generation_result_to_node(result))
     }
 }
 
@@ -1282,8 +1313,8 @@ pub struct ModelChatTask {
 }
 
 impl Task for ModelChatTask {
-    type Output = CoreRequestResult;
-    type JsValue = RequestResult;
+    type Output = CoreGenerationResult;
+    type JsValue = GenerationResult;
 
     fn compute(&mut self) -> Result<Self::Output> {
         let request = chat_request_with_tokens(
@@ -1295,7 +1326,7 @@ impl Task for ModelChatTask {
     }
 
     fn resolve(&mut self, _env: Env, result: Self::Output) -> Result<Self::JsValue> {
-        Ok(request_result_to_node(result))
+        Ok(generation_result_to_node(result))
     }
 }
 
@@ -1447,8 +1478,8 @@ fn chat_messages_to_core(messages: Vec<ChatMessage>) -> Result<Vec<CoreChatMessa
         .collect()
 }
 
-fn request_result_to_node(result: CoreRequestResult) -> RequestResult {
-    RequestResult {
+fn generation_result_to_node(result: CoreGenerationResult) -> GenerationResult {
+    GenerationResult {
         id: result.id,
         text: result.text,
         finish_reason: result.finish_reason.as_str().to_string(),
@@ -1740,7 +1771,7 @@ fn engine_event_to_node(event: CoreEngineEvent) -> EngineEvent {
             asset_name: None,
             request_id: None,
             stream_id: None,
-            result: Some(request_result_to_node(*result)),
+            result: Some(generation_result_to_node(*result)),
             error: None,
         },
         CoreEngineEvent::RequestFailed { request_id, error } => EngineEvent {
@@ -1887,6 +1918,9 @@ fn core_error(error: cogentlm_engine::Error) -> Error {
     match error {
         cogentlm_engine::Error::InvalidRequest(message)
         | cogentlm_engine::Error::InvalidConfig(message) => invalid_arg(message),
+        cogentlm_engine::Error::UnsupportedOperation { operation, reason } => {
+            invalid_arg(format!("unsupported operation {operation}: {reason}"))
+        }
         other => napi_error(other.to_string()),
     }
 }
@@ -1899,6 +1933,9 @@ fn model_error(error: cogentlm_engine::lifecycle::ModelError) -> Error {
         }
         cogentlm_engine::lifecycle::ModelError::UnsupportedGgufVersion(version) => {
             invalid_arg(format!("unsupported GGUF version {version}"))
+        }
+        cogentlm_engine::lifecycle::ModelError::UnsupportedOperation { operation, reason } => {
+            invalid_arg(format!("unsupported operation {operation}: {reason}"))
         }
         other => napi_error(other.to_string()),
     }

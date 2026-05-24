@@ -7,7 +7,7 @@ use crate::runtime::RequestStepResult;
 
 use super::super::events::emit_event;
 use super::super::runtime_command;
-use super::super::stats::request_result_from_response;
+use super::super::stats::generation_result_from_response;
 use super::EngineThreadState;
 
 const REQUEST_CANCELLED_FALLBACK: &str = "request cancelled";
@@ -110,7 +110,7 @@ impl EngineThreadState {
 
             let result = match response.status {
                 GenerateResponseStatus::Completed => {
-                    let result = request_result_from_response(&response);
+                    let result = generation_result_from_response(&response);
                     emit_event(
                         &self.event_subscribers,
                         EngineEvent::RequestCompleted {

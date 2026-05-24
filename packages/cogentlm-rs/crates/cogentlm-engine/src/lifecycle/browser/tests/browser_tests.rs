@@ -100,10 +100,7 @@ fn prepares_and_commits_text_load() {
         prepared.runtime_config["observability"]["runtime_metrics"],
         json!(true)
     );
-    assert_eq!(
-        prepared.runtime_config["context"]["warmup"],
-        json!(true)
-    );
+    assert_eq!(prepared.runtime_config["context"]["warmup"], json!(true));
 
     let committed = service
         .commit_load(BrowserCommitLoadRequest {
@@ -196,6 +193,21 @@ fn abort_load_records_failed_query_observation() {
     assert_eq!(query.status, QUERY_STATUS_FAILED);
     assert_eq!(query.error_code.as_deref(), Some(CODE_QUERY_FAILED));
     assert_eq!(query.error_message.as_deref(), Some("load failed"));
+}
+
+#[test]
+fn browser_error_response_preserves_unsupported_operation_code() {
+    let response: BrowserLifecycleEnvelope<()> = error_response(ModelError::UnsupportedOperation {
+        operation: "chat",
+        reason: "model has no chat template".to_string(),
+    });
+
+    let error = response.error.expect("error");
+    assert_eq!(error.code, CODE_UNSUPPORTED_OPERATION);
+    assert_eq!(
+        error.message,
+        "unsupported operation chat: model has no chat template"
+    );
 }
 
 #[test]

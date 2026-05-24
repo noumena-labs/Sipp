@@ -5,7 +5,7 @@ A high-performance, WebGPU-accelerated inference and vision runtime for executin
 ## Runtime Architecture Direction
 
 The browser package exposes the unified runtime contract:
-`EngineState`, `EngineStats`, `EngineEvent`, and `RequestResult`.
+`EngineState`, `EngineStats`, `EngineEvent`, and `GenerationResult`.
 Browser inference is owned by the Rust browser engine linked into the
 Emscripten/WebGPU artifact. Emscripten remains the browser platform/link layer
 for llama.cpp, ggml-webgpu, mtmd, JSPI, WorkerFS, and WebGPU glue.
@@ -73,7 +73,7 @@ console.log(measured.stats.tokensPerSecond);
 unsubscribe();
 ```
 
-`chat()` and `query()` return `RequestResult`, including final text and request
+`chat()` and `query()` return `GenerationResult`, including final text and request
 metrics. Metrics are also available from `engine.observability.current()`.
 
 ## Model Lifecycle
@@ -159,7 +159,7 @@ console.log(output.text);
 - `EngineStats`
 - `EngineEvent`
 - `BackendInfo`
-- `RequestResult`
+- `GenerationResult`
 - `RequestState`
 - `RequestStats`
 - `BrowserRuntimeSmokeResult`

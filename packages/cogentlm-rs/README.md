@@ -59,7 +59,7 @@ adapter layer.
 
 The shared runtime contract starts in `cogentlm_engine::engine::protocol` and is
 re-exported as `EngineState`, `EngineStats`, `EngineEvent`, and
-`RequestResult`. The first canonical state view is
+`GenerationResult`. The first canonical state view is
 available through:
 
 ```rust
@@ -185,7 +185,7 @@ self-hosted Linux CUDA runner.
 `cogentlm-napi` is the initial NAPI binding crate. It mirrors the lower-level
 engine surface exposed by Python and runs blocking native calls through
 `AsyncTask`, so JavaScript callers get Promises rather than main-thread
-blocking calls. `query` and `chat` return `RequestResult`; optional
+blocking calls. `query` and `chat` return `GenerationResult`; optional
 `onTokens` callbacks receive batched `TokenBatch` values through a NAPI
 thread-safe function:
 

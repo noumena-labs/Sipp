@@ -17,7 +17,7 @@ import type {
   ChatOptions,
   QueryInput,
   QueryOptions,
-  RequestResult,
+  GenerationResult,
   TokenBatch,
 } from '../models/types.js';
 import { StreamingBoundaryTextSanitizer } from '../core/chat-boundary-sanitizer.js';
@@ -116,7 +116,7 @@ function createFakeEngine(): FakeEngine {
     async chat(
       input: ChatInput,
       options?: ChatOptions
-    ): Promise<RequestResult> {
+    ): Promise<GenerationResult> {
       chatCalls.push({ input, options });
       const messages = Array.isArray(input) ? input : input.messages;
       const rendered = messages
@@ -179,12 +179,12 @@ function createFakeEngine(): FakeEngine {
         options?.onTokens?.(tokenBatch(flushed));
       }
       void rawOutput;
-      return requestResult(safeOutput.trim());
+      return generationResult(safeOutput.trim());
     },
   };
 }
 
-function requestResult(text: string): RequestResult {
+function generationResult(text: string): GenerationResult {
   return {
     id: 'test',
     text,

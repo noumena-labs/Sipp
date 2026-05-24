@@ -8,7 +8,7 @@ use crate::backend::{
     KEY_DEVICES, KEY_DEVICE_ID, KEY_MEMORY_FREE_BYTES, KEY_MEMORY_TOTAL_BYTES, KEY_NAME, KEY_TYPE,
 };
 use crate::engine::protocol::{
-    BackendDevice, BackendInfo, EngineStats, FinishReason, RequestResult, RequestStats,
+    BackendDevice, BackendInfo, EngineStats, FinishReason, GenerationResult, RequestStats,
 };
 use crate::runtime::metrics::RuntimeObservabilityMetrics;
 use crate::runtime::numeric::MILLIS_PER_SECOND_F64;
@@ -66,8 +66,8 @@ pub(super) fn engine_stats_from_runtime(metrics: RuntimeObservabilityMetrics) ->
     }
 }
 
-pub(super) fn request_result_from_response(response: &GenerateResponse) -> RequestResult {
-    RequestResult {
+pub(super) fn generation_result_from_response(response: &GenerateResponse) -> GenerationResult {
+    GenerationResult {
         id: response.request_id.to_string(),
         text: response.output_text.clone(),
         finish_reason: match response.status {

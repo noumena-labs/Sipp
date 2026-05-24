@@ -46,6 +46,12 @@ pub enum Error {
 
     #[error("runtime command failed: {0}")]
     RuntimeCommand(String),
+
+    #[error("unsupported operation {operation}: {reason}")]
+    UnsupportedOperation {
+        operation: &'static str,
+        reason: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

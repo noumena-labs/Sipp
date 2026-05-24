@@ -68,8 +68,8 @@ fn backend_observability_parsers_preserve_array_capacity() {
 }
 
 #[test]
-fn completed_response_maps_to_request_result() {
-    let result = request_result_from_response(&GenerateResponse {
+fn completed_response_maps_to_generation_result() {
+    let result = generation_result_from_response(&GenerateResponse {
         runtime_observability: RuntimeObservabilityMetrics {
             e2e_ms: 50.0,
             output_tokens: 5,

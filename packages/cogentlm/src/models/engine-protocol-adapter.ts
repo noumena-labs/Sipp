@@ -10,7 +10,7 @@ import type {
   ObservabilityEvent,
   ObservabilitySnapshot,
   QueryObservation,
-  RequestResult,
+  GenerationResult,
   RequestState,
   RequestStats,
   RuntimeObservation,
@@ -61,14 +61,14 @@ export function observabilitySnapshotToEngineState(
   };
 }
 
-export function requestResultFromGenerateResponse(
+export function generationResultFromGenerateResponse(
   response: GenerateResponse,
   options: {
     text?: string;
     maxTokens?: number;
     finishReason?: FinishReason;
   } = {}
-): RequestResult {
+): GenerationResult {
   return {
     id: String(response.requestId),
     text: options.text ?? response.outputText,
