@@ -1,0 +1,115 @@
+use std::collections::HashMap;
+use std::sync::{mpsc, Arc, Mutex};
+
+use crate::engine::protocol::{
+    EmbeddingCapabilities, EngineEvent, ModelCapabilities, ModelClass, ModelState, PoolingType,
+};
+use crate::runtime::config::NativeRuntimeConfig;
+use crate::runtime::inference_runtime::tests::runtime_tests::test_runtime;
+use crate::runtime::request::{GenerateResponse, GenerateResponseStatus, ResponseOutput};
+
+use super::super::super::{ActiveRequest, ActiveRequestOutput, EngineThreadState};
+
+fn model_state() -> ModelState {
+    ModelState {
+        id: "model".to_string(),
+        name: "model".to_string(),
+        capabilities: ModelCapabilities {
+            model_class: ModelClass::EncoderOnly,
+            supports_text_generation: false,
+            supports_embeddings: true,
+            has_chat_template: false,
+            embedding: Some(EmbeddingCapabilities {
+                dimensions: 2,
+                pooling: PoolingType::Mean,
+            }),
+        },
+    }
+}
+
+#[test]
+fn embedding_completion_is_forwarded_without_generation_mapping() {
+    let mut runtime = test_runtime(NativeRuntimeConfig::default());
+    runtime
+        .request_queue
+        .mark_completed(GenerateResponse::terminal(
+            7,
+            GenerateResponseStatus::Completed,
+            ResponseOutput::Embedding {
+                values: vec![0.6, 0.8],
+                pooling: PoolingType::Mean,
+                normalized: true,
+            },
+            "",
+        ));
+
+    let (response_tx, response_rx) = mpsc::channel();
+    let (event_tx, event_rx) = mpsc::channel();
+    let mut active_requests = HashMap::new();
+    active_requests.insert(
+        7,
+        ActiveRequest {
+            output: ActiveRequestOutput::Embedding,
+            response_tx,
+        },
+    );
+    let mut state = EngineThreadState {
+        runtime: Some(runtime),
+        active_requests,
+        token_sinks: HashMap::new(),
+        model_state: model_state(),
+        event_subscribers: Arc::new(Mutex::new(vec![event_tx])),
+    };
+
+    state.complete_finished_requests();
+
+    let response = response_rx.recv().expect("response").expect("embedding ok");
+    assert!(matches!(response.output, ResponseOutput::Embedding { .. }));
+    assert!(matches!(
+        event_rx.recv().expect("completion event"),
+        EngineEvent::RequestCompleted { request_id } if request_id == "7"
+    ));
+}
+
+#[test]
+fn wrong_completed_output_variant_is_a_failed_request() {
+    let mut runtime = test_runtime(NativeRuntimeConfig::default());
+    runtime
+        .request_queue
+        .mark_completed(GenerateResponse::terminal(
+            7,
+            GenerateResponseStatus::Completed,
+            ResponseOutput::Text("text".to_string()),
+            "",
+        ));
+
+    let (response_tx, response_rx) = mpsc::channel();
+    let (event_tx, event_rx) = mpsc::channel();
+    let mut active_requests = HashMap::new();
+    active_requests.insert(
+        7,
+        ActiveRequest {
+            output: ActiveRequestOutput::Embedding,
+            response_tx,
+        },
+    );
+    let mut state = EngineThreadState {
+        runtime: Some(runtime),
+        active_requests,
+        token_sinks: HashMap::new(),
+        model_state: model_state(),
+        event_subscribers: Arc::new(Mutex::new(vec![event_tx])),
+    };
+
+    state.complete_finished_requests();
+
+    let error = response_rx
+        .recv()
+        .expect("response")
+        .expect_err("wrong output");
+    assert!(error.to_string().contains("text output"));
+    assert!(matches!(
+        event_rx.recv().expect("failure event"),
+        EngineEvent::RequestFailed { request_id, .. } if request_id == "7"
+    ));
+}
