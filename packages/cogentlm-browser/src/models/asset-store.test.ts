@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AssetStore, type GgufSplitRuntime, type RemoteAssetMetadata } from './asset-store.js';
 import { QueryError } from './types.js';
-import { FileSystemStorage, type OpfsSyncAccessHandle } from '../storage/file-system-storage.js';
+import { FileSystemStorage, type OpfsSyncAccessHandle } from '../engine/file-system-storage.js';
 
 class MemorySyncAccessHandle implements OpfsSyncAccessHandle {
   private buffer: Uint8Array;

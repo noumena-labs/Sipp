@@ -6,7 +6,7 @@ import type {
   NativeRuntimeConfig,
   PoolingType,
   RequestObservabilityMetrics,
-} from '../core/inference-types.js';
+} from '../engine/inference-types.js';
 import type {
   ClassifiedAsset,
   ModelDetectionMethod,
@@ -24,10 +24,10 @@ import {
   type QueryErrorCode,
   type RegistryManifest,
 } from '../models/types.js';
-import type { ChatBoundaryInfo } from '../core/chat-boundary-sanitizer.js';
-import type { ChatMessage } from '../core/inference-types.js';
+import type { ChatBoundaryInfo } from '../engine/chat-boundary-sanitizer.js';
+import type { ChatMessage } from '../engine/inference-types.js';
 import { EngineModule } from './engine-module.js';
-import { withDerivedObservabilityMetrics } from '../core/inference-types.js';
+import { withDerivedObservabilityMetrics } from '../engine/inference-types.js';
 import { createAbortError } from '../utils/abort.js';
 import { assertGrammarByteSize } from '../utils/grammar.js';
 

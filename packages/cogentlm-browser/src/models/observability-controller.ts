@@ -3,7 +3,7 @@ import type {
   GenerateResponse,
   RequestObservabilityMetrics,
   TransportObservability,
-} from '../core/inference-types.js';
+} from '../engine/inference-types.js';
 import type {
   BackendInfo,
   BackendProfileObservation,

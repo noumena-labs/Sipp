@@ -3,13 +3,13 @@ import {
   buildBoundaryMarkers,
   sliceUnstreamedSuffix,
   StreamingBoundaryTextSanitizer,
-} from '../core/chat-boundary-sanitizer.js';
+} from '../engine/chat-boundary-sanitizer.js';
 import type {
   GenerateRequestId,
   GenerateResponse,
   NativeRuntimeConfig,
   PromptOptions,
-} from '../core/inference-types.js';
+} from '../engine/inference-types.js';
 import { createLinkedAbortController, isAbortError } from '../utils/abort.js';
 import { AssetStore, type RemoteAssetMetadata } from './asset-store.js';
 import { ModelRegistryStore } from './model-registry-store.js';

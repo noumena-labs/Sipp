@@ -34,8 +34,8 @@ import type {
   PromptOptions,
   RequestObservabilityMetrics,
   TransportObservability,
-} from '../core/inference-types.js';
-import type { ChatBoundaryInfo } from '../core/chat-boundary-sanitizer.js';
+} from '../engine/inference-types.js';
+import type { ChatBoundaryInfo } from '../engine/chat-boundary-sanitizer.js';
 
 function file(name: string, contents = name): File {
   return new File([contents], name);
@@ -243,13 +243,13 @@ class FakeAssetStore {
 
   public async openSyncHandle(
     record: AssetRecord
-  ): Promise<{ name: string; handle: import('../storage/file-system-storage.js').OpfsSyncAccessHandle; size: number }> {
+  ): Promise<{ name: string; handle: import('../engine/file-system-storage.js').OpfsSyncAccessHandle; size: number }> {
     const stored = this.files.get(record.id);
     if (stored == null) {
       throw new QueryError('MODEL_BROKEN', `Missing fake asset ${record.id}.`);
     }
     const bytes = new Uint8Array(await stored.arrayBuffer());
-    const handle: import('../storage/file-system-storage.js').OpfsSyncAccessHandle = {
+    const handle: import('../engine/file-system-storage.js').OpfsSyncAccessHandle = {
       read: (target, options) => {
         const at = options?.at ?? 0;
         const available = Math.max(0, bytes.byteLength - at);

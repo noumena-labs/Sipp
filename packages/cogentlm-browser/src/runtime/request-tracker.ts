@@ -1,4 +1,4 @@
-import type { GenerateRequestId } from '../core/inference-types.js';
+import type { GenerateRequestId } from '../engine/inference-types.js';
 
 function createDeferred<T>(): {
   promise: Promise<T>;

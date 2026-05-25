@@ -20,7 +20,7 @@ import type {
   GenerationResult,
   TokenBatch,
 } from '../models/types.js';
-import { StreamingBoundaryTextSanitizer } from '../core/chat-boundary-sanitizer.js';
+import { StreamingBoundaryTextSanitizer } from '../engine/chat-boundary-sanitizer.js';
 import { CharacterEventBus, type CharacterEvent } from './action-bus.js';
 import {
   CharacterRuntime,

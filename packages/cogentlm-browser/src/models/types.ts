@@ -6,8 +6,8 @@ import type {
   StreamStats,
   TokenBatch,
   TokenFlushMode,
-} from '../core/inference-types.js';
-import type { OpfsSyncAccessHandle } from '../storage/file-system-storage.js';
+} from '../engine/inference-types.js';
+import type { OpfsSyncAccessHandle } from '../engine/file-system-storage.js';
 
 export type ModelModality = 'text' | 'vision';
 export type ModelStatus = 'ready' | 'needs_projector' | 'broken';

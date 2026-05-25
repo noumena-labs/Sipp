@@ -4,7 +4,7 @@ import {
   TokenBatch,
   TokenFlushMode,
   TransportObservability,
-} from '../core/inference-types.js';
+} from '../engine/inference-types.js';
 import {
   COMPLETED_REQUEST_STATUS_PENDING,
   WasmBridge,

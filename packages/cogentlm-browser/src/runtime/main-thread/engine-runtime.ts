@@ -16,7 +16,7 @@ import type {
   RequestObservabilityMetrics,
   TokenBatch,
   TransportObservability,
-} from '../../core/inference-types.js';
+} from '../../engine/inference-types.js';
 import type {
   ClassifiedAsset,
   InternalBundleDescriptor,
@@ -27,7 +27,7 @@ import type {
   StagedModelBundle,
   StageModelBundleOptions,
 } from '../../models/types.js';
-import type { ChatBoundaryInfo } from '../../core/chat-boundary-sanitizer.js';
+import type { ChatBoundaryInfo } from '../../engine/chat-boundary-sanitizer.js';
 import type { EngineRuntime } from '../engine-runtime.js';
 import { MainThreadModelLoader } from './model-loader.js';
 import { RequestTracker } from '../request-tracker.js';

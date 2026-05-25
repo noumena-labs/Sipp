@@ -18,7 +18,7 @@ import {
   type GenerationResult,
 } from '../models/types.js';
 import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.js';
-import type { BackendObservability } from '../core/inference-types.js';
+import type { BackendObservability } from './inference-types.js';
 
 export interface EngineModuleOptions {
   locateFile?: (path: string, prefix?: string) => string;

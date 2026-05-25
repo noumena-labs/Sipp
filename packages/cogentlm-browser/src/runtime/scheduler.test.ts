@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import type { GenerateResponse, TokenBatch, TransportObservability } from '../core/inference-types.js';
+import type { GenerateResponse, TokenBatch, TransportObservability } from '../engine/inference-types.js';
 import { COMPLETED_REQUEST_STATUS_COMPLETED } from '../wasm/wasm-bridge.js';
 import { RequestTracker } from './request-tracker.js';
 import { QueuedRequestScheduler } from './scheduler.js';

@@ -1,4 +1,4 @@
-import { FileSystemStorage, type OpfsSyncAccessHandle } from '../storage/file-system-storage.js';
+import { FileSystemStorage, type OpfsSyncAccessHandle } from '../engine/file-system-storage.js';
 import {
   QueryError,
   type AssetRecord,

@@ -1,4 +1,4 @@
-import type { OpfsSyncAccessHandle } from '../storage/file-system-storage.js';
+import type { OpfsSyncAccessHandle } from '../engine/file-system-storage.js';
 import type { EngineModule } from './engine-module.js';
 
 export interface SyncAccessFile {

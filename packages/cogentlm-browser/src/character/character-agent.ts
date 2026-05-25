@@ -14,8 +14,8 @@ import type {
   ChatOptions,
   GenerationResult,
 } from '../models/types.js';
-import type { ChatMessage } from '../core/inference-types.js';
-import { sliceUnstreamedSuffix } from '../core/chat-boundary-sanitizer.js';
+import type { ChatMessage } from '../engine/inference-types.js';
+import { sliceUnstreamedSuffix } from '../engine/chat-boundary-sanitizer.js';
 import { CharacterEventBus, type CharacterEvent } from './action-bus.js';
 import { compileActionGrammar } from './action-grammar.js';
 import { StreamingActionParser, type ParsedEvent } from './action-parser.js';

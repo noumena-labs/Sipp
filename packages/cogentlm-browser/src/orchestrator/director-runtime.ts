@@ -14,7 +14,7 @@ import type {
   ModelInfo,
   GenerationResult,
 } from '../models/types.js';
-import type { ChatMessage } from '../core/inference-types.js';
+import type { ChatMessage } from '../engine/inference-types.js';
 import { createTimedAbortController } from '../utils/abort.js';
 import {
   compileDirectorOutputGrammar,

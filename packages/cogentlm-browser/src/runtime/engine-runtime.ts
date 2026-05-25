@@ -9,7 +9,7 @@ import type {
   PromptOptions,
   RequestObservabilityMetrics,
   TransportObservability,
-} from '../core/inference-types.js';
+} from '../engine/inference-types.js';
 import type {
   ClassifiedAsset,
   InternalBundleDescriptor,
@@ -19,7 +19,7 @@ import type {
   StagedModelBundle,
   StageModelBundleOptions,
 } from '../models/types.js';
-import type { ChatBoundaryInfo } from '../core/chat-boundary-sanitizer.js';
+import type { ChatBoundaryInfo } from '../engine/chat-boundary-sanitizer.js';
 import type {
   BrowserCacheLayout,
   GgufReadAtCallbacks,

@@ -1,4 +1,4 @@
-import { FileSystemStorage } from '../storage/file-system-storage.js';
+import { FileSystemStorage } from '../engine/file-system-storage.js';
 import {
   QueryError,
   type RegistryManifest,
