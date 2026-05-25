@@ -188,14 +188,14 @@ async function main() {
 
   if (!options.skipBuild) {
     await runCommand('bun', ['run', 'build:package'], repoRoot);
-    await runCommand('bun', ['run', '--filter=cogentlm-benchmark-app', 'build'], repoRoot);
+    await runCommand('bun', ['run', '--filter=cogentlm-browser-benchmark-app', 'build'], repoRoot);
   }
 
   const preview = spawn(
     'bun',
     [
       'run',
-      '--filter=cogentlm-benchmark-app',
+      '--filter=cogentlm-browser-benchmark-app',
       'preview',
       '--',
       '--host',

@@ -1,8 +1,6 @@
 [test]
 exclude = [
   "**/third_party/**",
-  "packages/cogentlm/third_party/**",
-  "packages\\cogentlm\\third_party\\**",
   "**/node_modules/**",
   "**/dist/**",
   "**/build/**"
