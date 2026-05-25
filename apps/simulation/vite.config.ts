@@ -24,8 +24,6 @@ export default defineConfig({
     alias: {
       '@noumena-labs/cogentlm-browser/director': cogentEngineDirectorEntry,
       '@noumena-labs/cogentlm-browser/character': cogentEngineCharacterEntry,
-      'cogentlm-browser/director': cogentEngineDirectorEntry,
-      'cogentlm-browser/character': cogentEngineCharacterEntry,
       '@noumena-labs/cogentlm-browser': cogentEngineEntry,
     },
     preserveSymlinks: true,

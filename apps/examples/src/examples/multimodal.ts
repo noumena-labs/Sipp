@@ -1,3 +1,4 @@
+import type { ChatInput } from '@noumena-labs/cogentlm-browser';
 import { Example } from './base-example';
 
 export const multimodalExample: Example = {
@@ -23,11 +24,11 @@ await engine.chat({
 
     try {
       // If media is present, use the multimodal structure; otherwise, standard chat
-      const chatInput = (media && media.length > 0)
+      const chatInput: ChatInput = (media && media.length > 0)
         ? { messages: [{ role: 'user', content: userInput }], media }
         : [{ role: 'user', content: userInput }];
 
-      await engine.chat(chatInput as any, {
+      await engine.chat(chatInput, {
         onTokens: (batch) => {
           fullResponse += batch.text;
           responseEl.innerText = fullResponse;

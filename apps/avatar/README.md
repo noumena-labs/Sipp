@@ -1,7 +1,7 @@
 # apps/avatar
 
 Small React + three.js high-fantasy avatar demo showing how to pair
-`CogentEngine` with `cogentlm-browser/character` and a VRM character.
+`CogentEngine` with `@noumena-labs/cogentlm-browser/character` and a VRM character.
 
 The app keeps responsibilities split cleanly:
 
