@@ -15,10 +15,30 @@ export function classifyOutputBucket(tokenCount: number): string {
   return 'long';
 }
 
-export function buildBenchmarkScenarios(shortPrompt: string, shortOutput: number): ScenarioDefinition[] {
+const DEFAULT_LONG_PROMPT = 'You are evaluating a browser-hosted inference runtime built with TypeScript, WebAssembly, and llama.cpp. Describe how you would benchmark cold start, module initialization, model load, engine initialization, prompt evaluation throughput, decode throughput, reused-context performance, and TTFT. Keep the answer concise but explain why prompt length and output length should be swept separately.';
+
+export interface BenchmarkPromptSet {
+  longPrompt: string;
+  mixedForegroundPrompt: string;
+}
+
+export const DEFAULT_BENCHMARK_PROMPTS: BenchmarkPromptSet = {
+  longPrompt: DEFAULT_LONG_PROMPT,
+  mixedForegroundPrompt: 'Write one sentence about measuring inference performance.',
+};
+
+export const ENCODER_DECODER_BENCHMARK_PROMPTS: BenchmarkPromptSet = {
+  longPrompt: 'translate English to German: Browser inference should measure cold start, model loading time, prompt throughput, decode throughput, reused context performance, and time to first token.',
+  mixedForegroundPrompt: 'translate English to German: Measure inference performance.',
+};
+
+export function buildBenchmarkScenarios(
+  shortPrompt: string,
+  shortOutput: number,
+  promptSet: BenchmarkPromptSet = DEFAULT_BENCHMARK_PROMPTS
+): ScenarioDefinition[] {
   const DEFAULT_SHORT_OUTPUT_TOKENS = shortOutput;
   const DEFAULT_LONG_OUTPUT_TOKENS = 128;
-  const LONG_PROMPT = 'You are evaluating a browser-hosted inference runtime built with TypeScript, WebAssembly, and llama.cpp. Describe how you would benchmark cold start, module initialization, model load, engine initialization, prompt evaluation throughput, decode throughput, reused-context performance, and TTFT. Keep the answer concise but explain why prompt length and output length should be swept separately.';
 
   const defs = [
     {
@@ -36,13 +56,13 @@ export function buildBenchmarkScenarios(shortPrompt: string, shortOutput: number
     {
       id: 'liso',
       label: 'Long Input / Short Output',
-      prompt: LONG_PROMPT,
+      prompt: promptSet.longPrompt,
       outputTokenLimit: DEFAULT_SHORT_OUTPUT_TOKENS,
     },
     {
       id: 'lilo',
       label: 'Long Input / Long Output',
-      prompt: LONG_PROMPT,
+      prompt: promptSet.longPrompt,
       outputTokenLimit: DEFAULT_LONG_OUTPUT_TOKENS,
     },
   ];
@@ -91,7 +111,8 @@ export function describeRuntimeDevices(info: ObservabilitySnapshot['profile'] | 
 }
 
 export function buildMixedLoadDefinition(
-  operation: Exclude<BenchmarkOperation, 'embed'>
+  operation: Exclude<BenchmarkOperation, 'embed'>,
+  promptSet: BenchmarkPromptSet = DEFAULT_BENCHMARK_PROMPTS
 ): MixedLoadDefinition {
   return {
     id: 'mixed-lilo-vs-siso',
@@ -99,10 +120,10 @@ export function buildMixedLoadDefinition(
     background: {
       id: 'mixed-background-lilo',
       label: 'Background Long Input / Long Output',
-      prompt: 'You are evaluating a browser-hosted inference runtime built with TypeScript, WebAssembly, and llama.cpp. Describe how you would benchmark cold start, module initialization, model load, engine initialization, prompt evaluation throughput, decode throughput, reused-context performance, and TTFT. Keep the answer concise but explain why prompt length and output length should be swept separately.',
+      prompt: promptSet.longPrompt,
       promptBucket: 'long',
-      promptChars: 341,
-      promptWords: 43,
+      promptChars: promptSet.longPrompt.length,
+      promptWords: countWords(promptSet.longPrompt),
       outputTokenLimit: 128,
       outputBucket: 'long',
       promptMode: operation,
@@ -112,10 +133,10 @@ export function buildMixedLoadDefinition(
     foreground: {
       id: 'mixed-foreground-siso',
       label: 'Foreground Short Input / Short Output',
-      prompt: 'Write one sentence about measuring inference performance.',
+      prompt: promptSet.mixedForegroundPrompt,
       promptBucket: 'short',
-      promptChars: 53,
-      promptWords: 6,
+      promptChars: promptSet.mixedForegroundPrompt.length,
+      promptWords: countWords(promptSet.mixedForegroundPrompt),
       outputTokenLimit: 16,
       outputBucket: 'short',
       promptMode: operation,

@@ -32,7 +32,7 @@ export interface CogentEngineOptions {
   wasmUrl?: string;
   pthreadModuleUrl?: string;
   pthreadWasmUrl?: string;
-  wasmThreading?: 'auto' | 'single-thread' | 'pthread';
+  wasmThreading?: 'single-thread' | 'pthread';
   moduleOptions?: EngineModuleOptions;
   maxModelBytes?: number;
   trustedOrigins?: string[];

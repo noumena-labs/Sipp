@@ -166,8 +166,8 @@ fn generate_or_copy_bindings(manifest_dir: &Path, llama_dir: &Path) {
     let out_path = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR")).join("bindings.rs");
     let fallback = manifest_dir.join("src/bindings_fallback.rs");
     let generate = env::var("COGENTLM_SYS_GENERATE_BINDINGS")
-        .map(|value| value != "0")
-        .unwrap_or(true);
+        .map(|value| value == "1")
+        .unwrap_or(false);
 
     if generate {
         let result = std::panic::catch_unwind(|| {

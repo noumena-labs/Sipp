@@ -4,6 +4,7 @@ export interface ExampleContext {
   engine: CogentEngine;
   log: (message: string, type?: 'system' | 'user' | 'ai' | 'error' | 'dim') => HTMLElement;
   userInput: string;
+  inputElement: HTMLInputElement;
   media?: Uint8Array[];
 }
 

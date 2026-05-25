@@ -14,7 +14,7 @@ import type {
 export interface WorkerSerializableCogentConfig {
   moduleUrl?: string;
   wasmUrl?: string;
-  wasmThreading?: 'auto' | 'single-thread' | 'pthread';
+  wasmThreading?: 'single-thread' | 'pthread';
   moduleOptions?: Record<string, unknown>;
   maxModelBytes?: number;
   trustedOrigins?: string[];

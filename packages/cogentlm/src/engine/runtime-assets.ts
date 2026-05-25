@@ -8,7 +8,7 @@ export interface RuntimeUrls {
   threading: WasmThreadingMode;
 }
 
-export type WasmThreadingPreference = 'auto' | 'single-thread' | 'pthread';
+export type WasmThreadingPreference = 'single-thread' | 'pthread';
 export type WasmThreadingMode = 'single-thread' | 'pthread';
 
 function normalizeOptionalString(value: string | undefined): string | undefined {
@@ -50,14 +50,12 @@ export function resolveRuntimeThreadingMode(
     return 'single-thread';
   }
 
-  switch (config.wasmThreading ?? 'auto') {
+  switch (config.wasmThreading ?? 'single-thread') {
     case 'single-thread':
       return 'single-thread';
     case 'pthread':
       assertWasmPthreadsSupported();
       return 'pthread';
-    case 'auto':
-      return supportsWasmPthreads() ? 'pthread' : 'single-thread';
   }
 }
 

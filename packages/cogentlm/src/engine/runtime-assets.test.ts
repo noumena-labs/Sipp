@@ -85,11 +85,21 @@ test('getDefaultRuntimeUrls maps Vite optimized deps back to package wasm assets
   );
 });
 
-test('resolveRuntimeUrls selects the pthread artifact when wasm pthreads are available', () => {
+test('resolveRuntimeUrls defaults to the single-thread artifact when wasm pthreads are available', () => {
   withWasmPthreadSupport(() => {
     assert.equal(supportsWasmPthreads(), true);
-    assert.equal(resolveRuntimeThreadingMode({}), 'pthread');
+    assert.equal(resolveRuntimeThreadingMode({}), 'single-thread');
     const resolved = resolveRuntimeUrls({});
+    assert.match(resolved.moduleUrl, /cogentlm-wasm\.js$/);
+    assert.match(resolved.wasmUrl, /cogentlm-wasm\.wasm$/);
+    assert.equal(resolved.threading, 'single-thread');
+  });
+});
+
+test('resolveRuntimeUrls selects the pthread artifact when explicitly requested', () => {
+  withWasmPthreadSupport(() => {
+    assert.equal(resolveRuntimeThreadingMode({ wasmThreading: 'pthread' }), 'pthread');
+    const resolved = resolveRuntimeUrls({ wasmThreading: 'pthread' });
     assert.match(resolved.moduleUrl, /cogentlm-wasm-pthread\.js$/);
     assert.match(resolved.wasmUrl, /cogentlm-wasm-pthread\.wasm$/);
     assert.equal(resolved.threading, 'pthread');

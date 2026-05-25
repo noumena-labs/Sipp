@@ -19,6 +19,10 @@ function readBuildVariant(args) {
   return process.env.CE_WASM_BUILD_VARIANT?.trim() || null;
 }
 
+function shouldBuildAllVariants(args) {
+  return args.includes('--all-variants') || process.env.CE_WASM_BUILD_ALL_VARIANTS === '1';
+}
+
 function stripBuildVariantArgs(args) {
   const stripped = [];
   for (let index = 0; index < args.length; index += 1) {
@@ -28,6 +32,9 @@ function stripBuildVariantArgs(args) {
       continue;
     }
     if (arg.startsWith('--variant=')) {
+      continue;
+    }
+    if (arg === '--all-variants') {
       continue;
     }
     stripped.push(arg);
@@ -51,6 +58,7 @@ function normalizeBuildVariant(value) {
 // Parse arguments to configure default environment variables
 const isDev = rawArgs.includes('--dev');
 const buildVariant = normalizeBuildVariant(readBuildVariant(rawArgs));
+const buildAllVariants = shouldBuildAllVariants(rawArgs);
 const buildKind = isDev ? 'dev' : 'browser';
 const rustRoot = path.resolve(path.dirname(scriptPath), '..', '..', 'cogentlm-rs');
 const variantConfigs = [
@@ -91,6 +99,7 @@ function applyVariantDefaults(variant) {
 }
 
 const shouldBuildBothVariants =
+  buildAllVariants &&
   buildVariant == null &&
   process.env.CE_WASM_PTHREADS == null &&
   process.env.CE_WASM_ARTIFACT_PREFIX == null;

@@ -122,7 +122,7 @@ async function initEngine() {
     uploadBtn.disabled = false;
     initBtn.disabled = false; // Re-enable for reloading
 
-    await currentExample.run({ engine, log, userInput: '' });
+    await currentExample.run({ engine, log, userInput: '', inputElement: userInput });
 
   } catch (err) {
     log(`Initialization failed: ${err}`, 'error');
@@ -148,7 +148,7 @@ async function handleSend() {
   }
 
   if (currentExample.onUserInput) {
-    await currentExample.onUserInput({ engine, log, userInput: text, media });
+    await currentExample.onUserInput({ engine, log, userInput: text, inputElement: userInput, media });
   }
 }
 
@@ -214,7 +214,7 @@ navItems.forEach(item => {
     log(`Switched to ${currentExample.title} example.`, 'system');
 
     if (engine) {
-      currentExample.run({ engine, log, userInput: '' });
+      currentExample.run({ engine, log, userInput: '', inputElement: userInput });
     }
   });
 });

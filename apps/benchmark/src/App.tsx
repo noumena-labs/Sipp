@@ -11,8 +11,11 @@ import { MetricCard } from './components/MetricCard';
 import {
   buildBenchmarkScenarios,
   buildMixedLoadDefinition,
+  DEFAULT_BENCHMARK_PROMPTS,
   describeRuntimeBackend,
+  ENCODER_DECODER_BENCHMARK_PROMPTS,
   summarizeMemorySnapshots,
+  type BenchmarkPromptSet,
 } from './lib/helpers';
 import {
   buildBenchmarkTraceReport,
@@ -217,6 +220,11 @@ function downloadJson(filename: string, value: unknown): void {
   URL.revokeObjectURL(url);
 }
 
+const DEFAULT_QUERY_PROMPT = 'Describe how to benchmark browser-hosted inference.';
+const ENCODER_DECODER_QUERY_PROMPT = 'translate English to German: The house is wonderful.';
+const DEFAULT_TOKEN_COUNT = 64;
+const ENCODER_DECODER_TOKEN_COUNT = 32;
+
 function defaultOperationForModel(model: ModelInfo): BenchmarkOperation {
   const capabilities = model.capabilities;
   if (capabilities == null) {
@@ -249,6 +257,41 @@ function yesNo(value: boolean | undefined): string {
   return value == null ? 'unknown' : value ? 'yes' : 'no';
 }
 
+function isEncoderDecoderModel(model: ModelInfo | null): boolean {
+  return model?.capabilities?.modelClass === 'encoder_decoder';
+}
+
+function benchmarkPromptSetForModel(model: ModelInfo | null): BenchmarkPromptSet {
+  return isEncoderDecoderModel(model)
+    ? ENCODER_DECODER_BENCHMARK_PROMPTS
+    : DEFAULT_BENCHMARK_PROMPTS;
+}
+
+function defaultPromptForModel(model: ModelInfo | null): string {
+  return isEncoderDecoderModel(model) ? ENCODER_DECODER_QUERY_PROMPT : DEFAULT_QUERY_PROMPT;
+}
+
+function effectivePromptForModel(model: ModelInfo | null, currentPrompt: string): string {
+  if (currentPrompt === DEFAULT_QUERY_PROMPT || currentPrompt === ENCODER_DECODER_QUERY_PROMPT) {
+    return defaultPromptForModel(model);
+  }
+  return currentPrompt;
+}
+
+function defaultTokenCountForModel(model: ModelInfo | null): number {
+  return isEncoderDecoderModel(model) ? ENCODER_DECODER_TOKEN_COUNT : DEFAULT_TOKEN_COUNT;
+}
+
+function effectiveTokenCountForModel(model: ModelInfo | null, currentTokenCount: number): number {
+  if (
+    currentTokenCount === DEFAULT_TOKEN_COUNT ||
+    currentTokenCount === ENCODER_DECODER_TOKEN_COUNT
+  ) {
+    return defaultTokenCountForModel(model);
+  }
+  return currentTokenCount;
+}
+
 export default function App() {
   const [engine, setEngine] = useState<CogentEngine | null>(null);
   const [status, setStatus] = useState('booting');
@@ -260,8 +303,8 @@ export default function App() {
   const [modelUrl, setModelUrl] = useState(getVariantPrimaryUrl(selectedVariant));
   const [projectorUrl, setProjectorUrl] = useState('');
   const [operation, setOperation] = useState<BenchmarkOperation>('chat');
-  const [prompt, setPrompt] = useState('Describe how to benchmark browser-hosted inference.');
-  const [tokenCount, setTokenCount] = useState(64);
+  const [prompt, setPrompt] = useState(DEFAULT_QUERY_PROMPT);
+  const [tokenCount, setTokenCount] = useState(DEFAULT_TOKEN_COUNT);
   const [warmupRuns, setWarmupRuns] = useState(1);
   const [measuredRuns, setMeasuredRuns] = useState(3);
   // Three transport modes:
@@ -513,6 +556,14 @@ export default function App() {
     if (!modelSupportsOperation(info, operation)) {
       setOperation(defaultOperationForModel(info));
     }
+    const modelPrompt = effectivePromptForModel(info, prompt);
+    if (modelPrompt !== prompt) {
+      setPrompt(modelPrompt);
+    }
+    const modelTokenCount = effectiveTokenCountForModel(info, tokenCount);
+    if (modelTokenCount !== tokenCount) {
+      setTokenCount(modelTokenCount);
+    }
     await refreshModels(targetEngine);
     return info;
   };
@@ -549,6 +600,8 @@ export default function App() {
       const nextSourceKey = sourceKey(source);
       const loadedModel = engine.models.current();
       let requestOperation = operation;
+      let requestPrompt = prompt;
+      let requestTokenCount = tokenCount;
       if (
         loadedModel == null ||
         loadedModel.status !== 'ready' ||
@@ -558,10 +611,23 @@ export default function App() {
         if (!modelSupportsOperation(info, requestOperation)) {
           requestOperation = defaultOperationForModel(info);
         }
+        requestPrompt = effectivePromptForModel(info, requestPrompt);
+        requestTokenCount = effectiveTokenCountForModel(info, requestTokenCount);
         setStatus(info.status === 'ready' ? `loaded ${info.name}` : `${info.name}: ${info.status}`);
       } else if (!modelSupportsOperation(loadedModel, requestOperation)) {
         requestOperation = defaultOperationForModel(loadedModel);
         setOperation(requestOperation);
+        requestPrompt = effectivePromptForModel(loadedModel, requestPrompt);
+        requestTokenCount = effectiveTokenCountForModel(loadedModel, requestTokenCount);
+      } else {
+        requestPrompt = effectivePromptForModel(loadedModel, requestPrompt);
+        requestTokenCount = effectiveTokenCountForModel(loadedModel, requestTokenCount);
+      }
+      if (requestPrompt !== prompt) {
+        setPrompt(requestPrompt);
+      }
+      if (requestTokenCount !== tokenCount) {
+        setTokenCount(requestTokenCount);
       }
 
       const image =
@@ -585,9 +651,9 @@ export default function App() {
             }
             : undefined;
       try {
-        const run = await runObservedRequest(engine, prompt, {
+        const run = await runObservedRequest(engine, requestPrompt, {
           operation: requestOperation,
-          maxTokens: tokenCount,
+          maxTokens: requestTokenCount,
           session: `query-${Date.now()}`,
           media: image,
           streamTokens: effectiveStreamTokens,
@@ -650,35 +716,51 @@ export default function App() {
     setBenchmarkReport(null);
     let benchmarkOperation = operation;
     const loadedModel = engine.models.current();
+    let benchmarkPrompt = prompt;
+    let benchmarkTokenCount = tokenCount;
     if (loadedModel != null && !modelSupportsOperation(loadedModel, benchmarkOperation)) {
       benchmarkOperation = defaultOperationForModel(loadedModel);
       setOperation(benchmarkOperation);
     }
-    const effectiveStreamTokens = benchmarkOperation !== 'embed' && streamTokens;
-    const benchmarkRenderer = effectiveStreamTokens && streamMode === 'render' ? createResponseRenderer(2, 'frame') : null;
-    const benchmarkTokenFlush = streamMode === 'render' ? 'token' : 'batch';
-    const benchmarkTokenObserver: BenchmarkTokenObserver | undefined =
-      effectiveStreamTokens && streamMode === 'render'
-        ? {
-          onRunStart: (label) => {
-            benchmarkRenderer?.start(label);
-          },
-          onTokens: (label, batch) => {
-            benchmarkRenderer?.append(label, batch);
-          },
-        }
-        : undefined;
-    benchmarkRenderer?.reset();
+    let effectiveStreamTokens = false;
+    let benchmarkRenderer: ReturnType<typeof createResponseRenderer> | null = null;
+    let benchmarkTokenObserver: BenchmarkTokenObserver | undefined;
 
     try {
       const info = await loadModelSelection(engine, source);
       if (!modelSupportsOperation(info, benchmarkOperation)) {
         benchmarkOperation = defaultOperationForModel(info);
       }
+      benchmarkPrompt = effectivePromptForModel(info, benchmarkPrompt);
+      benchmarkTokenCount = effectiveTokenCountForModel(info, benchmarkTokenCount);
+      if (benchmarkPrompt !== prompt) {
+        setPrompt(benchmarkPrompt);
+      }
+      if (benchmarkTokenCount !== tokenCount) {
+        setTokenCount(benchmarkTokenCount);
+      }
+      const promptSet = benchmarkPromptSetForModel(info);
+      effectiveStreamTokens = benchmarkOperation !== 'embed' && streamTokens;
+      benchmarkRenderer = effectiveStreamTokens && streamMode === 'render'
+        ? createResponseRenderer(2, 'frame')
+        : null;
+      const benchmarkTokenFlush = streamMode === 'render' ? 'token' : 'batch';
+      benchmarkTokenObserver =
+        effectiveStreamTokens && streamMode === 'render'
+          ? {
+            onRunStart: (label) => {
+              benchmarkRenderer?.start(label);
+            },
+            onTokens: (label, batch) => {
+              benchmarkRenderer?.append(label, batch);
+            },
+          }
+          : undefined;
+      benchmarkRenderer?.reset();
       const snapshots: MemorySnapshot[] = [];
       snapshots.push(await captureBrowserMemorySnapshot('before-benchmark', true));
 
-      const scenarios = buildBenchmarkScenarios(prompt, tokenCount);
+      const scenarios = buildBenchmarkScenarios(benchmarkPrompt, benchmarkTokenCount, promptSet);
       const results: ScenarioResult[] = [];
       for (const scenario of scenarios) {
         results.push(
@@ -706,7 +788,7 @@ export default function App() {
         mixed = await runMixedLoadBenchmark(
           engine,
           benchmarkOperation,
-          buildMixedLoadDefinition(benchmarkOperation),
+          buildMixedLoadDefinition(benchmarkOperation, promptSet),
           source,
           warmupRuns,
           measuredRuns,
@@ -732,8 +814,8 @@ export default function App() {
         },
         settings: {
           operation: benchmarkOperation,
-          prompt,
-          tokenCount,
+          prompt: benchmarkPrompt,
+          tokenCount: benchmarkTokenCount,
           warmupRuns,
           measuredRuns,
           runtime: getDefaultRuntimeOptions(),
