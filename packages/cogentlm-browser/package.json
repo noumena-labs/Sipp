@@ -1,5 +1,5 @@
 {
-  "name": "@noumena-labs/cogentlm",
+  "name": "@noumena-labs/cogentlm-browser",
   "version": "0.0.11",
   "description": "Run powerful AI models locally with high-performance text and vision inference directly in the browser",
   "main": "dist/esm/index.js",
@@ -43,6 +43,9 @@
     "build:wasm:dev:all": "bun ./scripts/build-wasm.mjs --dev --all-variants",
     "build:wasm:dev:pthread": "bun ./scripts/build-wasm.mjs --dev --variant pthread",
     "release:prepare": "bun run build:release && bun run pack:validate",
+    "test:backend-ops:cpu": "bun ./scripts/test-backend-ops-cpu.mjs",
+    "test:backend-ops:cpu:op": "bun ./scripts/test-backend-ops-cpu-op.mjs",
+    "test:backend-ops:cpu:debug": "bun ./scripts/test-backend-ops-cpu-op.mjs --debug",
     "test:backend-ops:webgpu": "bun ./scripts/test-backend-ops-webgpu.mjs",
     "test:backend-ops:webgpu:op": "bun ./scripts/test-backend-ops-webgpu-op.mjs",
     "test:backend-ops:webgpu:debug": "bun ./scripts/test-backend-ops-webgpu-op.mjs --debug",
@@ -55,7 +58,7 @@
   "keywords": [
     "ai",
     "llm",
-    "cogentlm",
+    "cogentlm-browser",
     "inference",
     "webgpu",
     "wasm",
@@ -73,7 +76,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/noumena-labs/CogentLM.git",
-    "directory": "packages/cogentlm"
+    "directory": "packages/cogentlm-browser"
   },
   "publishConfig": {
     "registry": "https://npm.pkg.github.com",

@@ -1,4 +1,4 @@
-import type { QueryObservation } from '@noumena-labs/cogentlm';
+import type { QueryObservation } from '@noumena-labs/cogentlm-browser';
 
 const QUERIES_PER_SECOND_WINDOW_MS = 10_000;
 const LIVE_UPDATE_INTERVAL_MS = 120;

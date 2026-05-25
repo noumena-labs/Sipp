@@ -1,6 +1,6 @@
-import type { ChatInput, ChatOptions, CogentEngine, QueryInput, QueryOptions } from '@noumena-labs/cogentlm';
-import type { CharacterRuntimeEngine } from '@noumena-labs/cogentlm/character';
-import type { DirectorRuntimeEngine } from '@noumena-labs/cogentlm/director';
+import type { ChatInput, ChatOptions, CogentEngine, QueryInput, QueryOptions } from '@noumena-labs/cogentlm-browser';
+import type { CharacterRuntimeEngine } from '@noumena-labs/cogentlm-browser/character';
+import type { DirectorRuntimeEngine } from '@noumena-labs/cogentlm-browser/director';
 import type { BrainDefinition, BrainQueryType, BrainQueryStatus, BrainActivityStore } from './brain-activity-store.js';
 import type { SimulationBus } from './bus.js';
 

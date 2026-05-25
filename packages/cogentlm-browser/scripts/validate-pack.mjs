@@ -7,8 +7,8 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const packageDir = path.resolve(scriptDir, '..');
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const packageRootEnvVar = 'COGENTLM_PACKAGE_ROOT';
-const internalPackageRoot = 'node_modules/@noumena-labs/cogentlm';
-const publicPackageRoot = 'node_modules/cogentlm';
+const internalPackageRoot = 'node_modules/@noumena-labs/cogentlm-browser';
+const publicPackageRoot = 'node_modules/cogentlm-browser';
 const supportedPackageRoots = new Set([internalPackageRoot, publicPackageRoot]);
 const requiredPackPaths = [
   'dist/esm/index.js',

@@ -1,6 +1,6 @@
 # Character Harness
 
-`cogentlm/character` turns a loaded `CogentEngine` into a character runtime driven by `character.json`.
+`cogentlm-browser/character` turns a loaded `CogentEngine` into a character runtime driven by `character.json`.
 
 The host app still owns model loading, engine lifecycle, render assets, and business logic.
 
@@ -18,7 +18,7 @@ ported only after the Python and NAPI engine bindings are stable.
 If you already have a loaded `CogentEngine` named `engine`, this is enough to make a character talk.
 
 ```ts
-import { createCharacterFromConfigUrl } from 'cogentlm/character';
+import { createCharacterFromConfigUrl } from 'cogentlm-browser/character';
 const { character } = await createCharacterFromConfigUrl({ configUrl: '/characters/aria/character.json', engine });
 for await (const event of character.chat('Say hi in character.')) {
   if (event.kind === 'prose') document.body.textContent += event.text;
@@ -38,7 +38,7 @@ import {
   parseCharacterConfig,
   type CharacterChooseResult,
   type CharacterRuntimeEngine,
-} from 'cogentlm/character';
+} from 'cogentlm-browser/character';
 ```
 
 ## Mental Model

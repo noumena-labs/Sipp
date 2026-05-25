@@ -350,6 +350,11 @@ function normalizeCmakePath(inputPath) {
   return inputPath?.replace(/\\/g, '/') ?? inputPath;
 }
 
+function normalizeComparisonPath(inputPath) {
+  const normalizedPath = path.resolve(normalizeHostPath(inputPath));
+  return isWindows ? normalizedPath.toLowerCase() : normalizedPath;
+}
+
 function findProgramsOnPath(command) {
   const locator = isWindows ? 'where.exe' : 'which';
   const result = spawnSync(locator, [command], {
@@ -738,6 +743,11 @@ function removeInvalidBuildDirectory(expectedGenerator) {
   const cacheText = readFileSync(cachePath, 'utf8');
   const cachedGenerator = getCacheEntry(cacheText, 'CMAKE_GENERATOR');
   const reasons = [];
+
+  const cachedSourceDir = getCacheEntry(cacheText, 'CogentLM_SOURCE_DIR') ?? getCacheEntry(cacheText, 'CMAKE_HOME_DIRECTORY');
+  if (cachedSourceDir && normalizeComparisonPath(cachedSourceDir) !== normalizeComparisonPath(projectRoot)) {
+    reasons.push(`source_dir=${cachedSourceDir}`);
+  }
 
   if (cacheText.includes('CMAKE_MAKE_PROGRAM:FILEPATH=CMAKE_MAKE_PROGRAM-NOTFOUND')) {
     reasons.push('CMAKE_MAKE_PROGRAM-NOTFOUND');

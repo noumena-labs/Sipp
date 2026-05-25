@@ -12,8 +12,8 @@ const tempTypesDir = path.join(tempRoot, 'types');
 const esmDir = path.join(distDir, 'esm');
 const typesDir = path.join(distDir, 'types');
 const packageRootEnvVar = 'COGENTLM_PACKAGE_ROOT';
-const internalPackageRoot = 'node_modules/@noumena-labs/cogentlm';
-const publicPackageRoot = 'node_modules/cogentlm';
+const internalPackageRoot = 'node_modules/@noumena-labs/cogentlm-browser';
+const publicPackageRoot = 'node_modules/cogentlm-browser';
 const supportedPackageRoots = new Set([internalPackageRoot, publicPackageRoot]);
 
 function getPackageRoot() {

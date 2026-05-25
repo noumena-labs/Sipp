@@ -5,13 +5,13 @@ import { defineConfig } from 'vite';
 const examplesDir = fileURLToPath(new URL('.', import.meta.url));
 const cogentlmEntry = path.resolve(
   examplesDir,
-  '../../packages/cogentlm/dist/esm/index.js'
+  '../../packages/cogentlm-browser/dist/esm/index.js'
 );
 
 export default defineConfig({
   resolve: {
     alias: {
-      '@noumena-labs/cogentlm': cogentlmEntry,
+      '@noumena-labs/cogentlm-browser': cogentlmEntry,
     },
     preserveSymlinks: true,
   },
@@ -22,6 +22,6 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    exclude: ['@noumena-labs/cogentlm'],
+    exclude: ['@noumena-labs/cogentlm-browser'],
   },
 });

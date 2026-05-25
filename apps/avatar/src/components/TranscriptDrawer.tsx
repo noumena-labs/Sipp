@@ -7,7 +7,7 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import { useEffect, useRef, useState } from 'react';
-import type { CharacterEventBus } from '@noumena-labs/cogentlm/character';
+import type { CharacterEventBus } from '@noumena-labs/cogentlm-browser/character';
 import type { ChatMessage } from './chat-types';
 
 interface TranscriptDrawerProps {

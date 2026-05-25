@@ -1,5 +1,5 @@
 {
-  "name": "cogentlm-examples",
+  "name": "cogentlm-browser-examples",
   "private": true,
   "version": "0.0.1",
   "type": "module",
@@ -9,7 +9,7 @@
     "preview": "bunx --bun vite preview"
   },
   "dependencies": {
-    "@noumena-labs/cogentlm": "workspace:*"
+    "@noumena-labs/cogentlm-browser": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.3.3",

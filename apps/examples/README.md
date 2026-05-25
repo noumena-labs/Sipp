@@ -1,6 +1,6 @@
 # Cogent Engine Examples
 
-This directory contains minimal, developer-centric examples for the `cogentlm` library.
+This directory contains minimal, developer-centric examples for the `cogentlm-browser` library.
 
 ## Getting Started
 

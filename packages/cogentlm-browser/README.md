@@ -1,4 +1,4 @@
-# cogentlm
+# cogentlm-browser
 
 A high-performance, WebGPU-accelerated inference and vision runtime for executing Large Language Models (LLMs) and computer vision locally in the browser.
 
@@ -15,7 +15,7 @@ OPFS, `fetch`, `File`, WorkerFS/MEMFS mounting, and listener dispatch because
 those APIs are browser objects.
 
 ```ts
-import { CogentEngine } from 'cogentlm';
+import { CogentEngine } from 'cogentlm-browser';
 
 const engine = await CogentEngine.create();
 

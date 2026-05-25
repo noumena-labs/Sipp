@@ -1,4 +1,4 @@
-import type { CogentEngine, ObservabilitySnapshot } from '@noumena-labs/cogentlm';
+import type { CogentEngine, ObservabilitySnapshot } from '@noumena-labs/cogentlm-browser';
 import type { BenchmarkOperation, MixedLoadDefinition, ScenarioDefinition } from './types';
 import { countWords } from './utils';
 

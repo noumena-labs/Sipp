@@ -1,4 +1,4 @@
-import type { ChatMessage, CogentEngine } from '@noumena-labs/cogentlm';
+import type { ChatMessage, CogentEngine } from '@noumena-labs/cogentlm-browser';
 
 export const DRAWING_COLORS = ['#111827', '#ffffff', '#ef4444', '#f97316', '#facc15', '#22c55e', '#38bdf8', '#8b5cf6'] as const;
 export const HECKLE_VOICES = [

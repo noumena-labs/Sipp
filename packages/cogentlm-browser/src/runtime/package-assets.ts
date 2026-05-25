@@ -1,5 +1,5 @@
 const VITE_OPTIMIZED_DEPS_SEGMENT = '/node_modules/.vite/deps/';
-const PACKAGE_ROOT = 'node_modules/@noumena-labs/cogentlm';
+const PACKAGE_ROOT = 'node_modules/@noumena-labs/cogentlm-browser';
 
 export function resolveOptimizedPackageAssetUrl(
   packageRelativePath: string,

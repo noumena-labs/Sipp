@@ -76,10 +76,10 @@ test('resolveRuntimeUrls uses bundled runtime assets when no overrides are provi
 
 test('getDefaultRuntimeUrls maps Vite optimized deps back to package wasm assets', () => {
   assert.deepEqual(
-    getDefaultRuntimeUrls('https://app.test/node_modules/.vite/deps/@noumena-labs_cogentlm.js?v=123'),
+    getDefaultRuntimeUrls('https://app.test/node_modules/.vite/deps/@noumena-labs_cogentlm-browser.js?v=123'),
     {
-      moduleUrl: 'https://app.test/node_modules/@noumena-labs/cogentlm/dist/wasm/cogentlm-wasm.js',
-      wasmUrl: 'https://app.test/node_modules/@noumena-labs/cogentlm/dist/wasm/cogentlm-wasm.wasm',
+      moduleUrl: 'https://app.test/node_modules/@noumena-labs/cogentlm-browser/dist/wasm/cogentlm-wasm.js',
+      wasmUrl: 'https://app.test/node_modules/@noumena-labs/cogentlm-browser/dist/wasm/cogentlm-wasm.wasm',
       threading: 'single-thread',
     }
   );

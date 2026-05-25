@@ -4,7 +4,7 @@ import {
   type ModelSource,
   type TokenBatch,
   type TokenFlushMode,
-} from '@noumena-labs/cogentlm';
+} from '@noumena-labs/cogentlm-browser';
 import type {
   BenchmarkOperation,
   BenchmarkRun,

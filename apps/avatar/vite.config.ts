@@ -7,11 +7,11 @@ import { cogentEngineDistWatch } from '../cogentlm-dist-watch';
 const avatarAppDir = fileURLToPath(new URL('.', import.meta.url));
 const cogentEngineEntry = path.resolve(
   avatarAppDir,
-  '../../packages/cogentlm/dist/esm/index.js'
+  '../../packages/cogentlm-browser/dist/esm/index.js'
 );
 const cogentEngineCharacterEntry = path.resolve(
   avatarAppDir,
-  '../../packages/cogentlm/dist/esm/character/index.js'
+  '../../packages/cogentlm-browser/dist/esm/character/index.js'
 );
 
 export default defineConfig({
@@ -21,14 +21,14 @@ export default defineConfig({
       // Resolve both the root package entry and the ./character subpath
       // directly at the built ESM files so we pick up local rebuilds without
       // going through a cached /node_modules dependency URL.
-      '@noumena-labs/cogentlm/character': cogentEngineCharacterEntry,
-      'cogentlm/character': cogentEngineCharacterEntry,
-      '@noumena-labs/cogentlm': cogentEngineEntry,
+      '@noumena-labs/cogentlm-browser/character': cogentEngineCharacterEntry,
+      'cogentlm-browser/character': cogentEngineCharacterEntry,
+      '@noumena-labs/cogentlm-browser': cogentEngineEntry,
     },
     preserveSymlinks: true,
   },
   optimizeDeps: {
-    exclude: ['@noumena-labs/cogentlm'],
+    exclude: ['@noumena-labs/cogentlm-browser'],
   },
   server: {
     headers: {

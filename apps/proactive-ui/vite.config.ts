@@ -7,19 +7,19 @@ import { cogentEngineDistWatch } from '../cogentlm-dist-watch';
 const proactiveUiAppDir = fileURLToPath(new URL('.', import.meta.url));
 const cogentEngineEntry = path.resolve(
   proactiveUiAppDir,
-  '../../packages/cogentlm/dist/esm/index.js'
+  '../../packages/cogentlm-browser/dist/esm/index.js'
 );
 
 export default defineConfig({
   plugins: [react(), cogentEngineDistWatch()],
   resolve: {
     alias: {
-      '@noumena-labs/cogentlm': cogentEngineEntry,
+      '@noumena-labs/cogentlm-browser': cogentEngineEntry,
     },
     preserveSymlinks: true,
   },
   optimizeDeps: {
-    exclude: ['@noumena-labs/cogentlm'],
+    exclude: ['@noumena-labs/cogentlm-browser'],
   },
   server: {
     headers: {

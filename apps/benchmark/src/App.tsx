@@ -6,7 +6,7 @@ import {
   type ModelSource,
   type ObservabilitySnapshot,
   type TokenBatch,
-} from '@noumena-labs/cogentlm';
+} from '@noumena-labs/cogentlm-browser';
 import { MetricCard } from './components/MetricCard';
 import {
   buildBenchmarkScenarios,
