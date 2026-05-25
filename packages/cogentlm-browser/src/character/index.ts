@@ -25,9 +25,7 @@ export type {
 export { CharacterEventBus } from './action-bus.js';
 
 export {
-  type CreateCharacterFromConfigOptions,
   type CreateCharacterFromConfigUrlOptions,
-  createCharacterFromConfig,
   createCharacterFromConfigUrl,
 } from './create-character.js';
 
@@ -52,6 +50,6 @@ export type {
   CharacterRuntimeOptions,
   ChatEvent,
   ChatTurn,
+  RunStatus,
 } from './character-agent.js';
 export { CharacterRuntime } from './character-agent.js';
-export type { RunStatus } from '../core/run-status.js';

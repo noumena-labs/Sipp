@@ -2,10 +2,9 @@
 //
 // director-runtime.ts
 //
-// - Thin runtime wrapper over the core engine.
-// - Given a parsed `DirectorConfig`, it builds a stable system prompt,
-//   renders task-specific prompts, constrains selection shapes with literal
-//   grammars, and parses shape-driven text outputs.
+// - Shape-driven runtime for director tasks.
+// - Owns prompt rendering, grammar selection, engine execution, and
+//   output parsing for a parsed `DirectorConfig`.
 //
 //////////////////////////////////////////////////////////////////////////////
 
@@ -31,7 +30,6 @@ import type {
   DirectorRunResult,
   DirectorRuntimeOptions,
   DirectorTaskConfig,
-  DirectorTaskPrompt,
 } from './director-types.js';
 
 export interface DirectorRuntimeEngine {
@@ -58,46 +56,6 @@ export class DirectorRuntime {
     this.maxOutputTokens = options.maxOutputTokens ?? 256;
     this.contextKey = options.contextKey ?? `director:${config.id}`;
     this.systemPrompt = renderDirectorSystemPrompt(config);
-  }
-
-  public getConfig(): DirectorConfig {
-    return this.config;
-  }
-
-  public getSystemPrompt(): string {
-    return this.systemPrompt;
-  }
-
-  public getTaskGrammar<TPayload = unknown>(
-    taskName: string,
-    request: DirectorRunRequest<TPayload> = {}
-  ): string | undefined {
-    const task = this.requireTask(taskName);
-    const resolved = resolveDirectorChoices(task.output, request);
-    return compileDirectorOutputGrammar(task.output, resolved);
-  }
-
-  public getTaskPrompt<TPayload = unknown>(
-    taskName: string,
-    request: DirectorRunRequest<TPayload> = {}
-  ): DirectorTaskPrompt {
-    const task = this.requireTask(taskName);
-    const resolved = resolveDirectorChoices(task.output, request);
-    const grammar = compileDirectorOutputGrammar(task.output, resolved);
-    const rendered = renderDirectorUserMessage(
-      this.config,
-      taskName,
-      task,
-      request,
-      resolved,
-      this.getMediaMarker()
-    );
-    return {
-      systemPrompt: this.systemPrompt,
-      userPrompt: rendered.text,
-      media: rendered.media,
-      ...(grammar ? { grammar } : {}),
-    };
   }
 
   public async run<TPayload = unknown>(

@@ -390,6 +390,10 @@ export class AssetStore {
     onProgress?: (progress: ModelLoadProgress) => void
   ): Promise<AssetRecord[]> {
     this.ensureAvailable();
+    if (metadata.bytes <= DEFAULT_BROWSER_DIRECT_LOAD_MAX_BYTES) {
+      return [await this.downloadRemote(metadata, 'model', signal, onProgress)];
+    }
+
     if (!(await FileSystemStorage.isSyncAccessSupported())) {
       throw new QueryError(
         'STORAGE_UNAVAILABLE',
@@ -501,6 +505,10 @@ export class AssetStore {
     onProgress?: (progress: ModelLoadProgress) => void
   ): Promise<AssetRecord[]> {
     this.ensureAvailable();
+    if (file.size <= DEFAULT_BROWSER_DIRECT_LOAD_MAX_BYTES) {
+      return [await this.installFile({ kind: 'model', file, signal, onProgress })];
+    }
+
     if (!(await FileSystemStorage.isSyncAccessSupported())) {
       throw new QueryError(
         'STORAGE_UNAVAILABLE',

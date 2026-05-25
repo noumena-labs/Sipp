@@ -1,8 +1,7 @@
-import type { RequestObservabilityMetrics } from '../observability/runtime-observability.js';
-
 export type FlashAttentionMode = 'auto' | 'enabled' | 'disabled';
 export type SchedulerPolicyMode = 'latency_first' | 'balanced' | 'throughput_first';
 export type EngineExecutionMode = 'main-thread' | 'worker';
+export type BackendDeviceType = 'cpu' | 'gpu' | 'igpu' | 'accel' | 'unknown';
 
 export type GpuLayerConfig = 'auto' | 'all' | { count: number };
 export type SplitMode = 'none' | 'layer' | 'row' | 'tensor';
@@ -176,21 +175,7 @@ export interface PromptOptions {
    * matching the grammar. Must be <= 64 KiB when UTF-8 encoded.
    */
   grammar?: string;
-  /**
-   * @internal — reserved for the worker streaming path.
-   *
-   * Invoked synchronously inside the runtime once a request has been
-   * enqueued and assigned its native `GenerateRequestId`, BEFORE the
-   * request begins decoding.  The worker entry uses this hook to publish
-   * a `streaming-claim` postMessage to main, which lets the main-thread
-   * SAB ring reader translate native request ids back to its own callIds
-   * when dispatching streamed tokens to user `onTokens` callbacks.
-   *
-   * Not part of the public API surface — added to PromptOptions purely so
-   * worker-internal code can pass it through `runtime.enqueueQuery`
-   * without a type-cast.  Public consumers should ignore it.
-   */
-  __internalRequestStarted?: (requestId: number) => void;
+  onRequestStarted?: (requestId: number) => void;
 }
 
 export interface EmbedRuntimeOptions {
@@ -237,6 +222,103 @@ export interface EmbeddingOutput {
   values: number[];
   pooling: PoolingType;
   normalized: boolean;
+}
+
+export interface RequestObservabilityMetrics {
+  /**
+   * Time to first token: enqueue -> first sampled token. Sampled when
+   * llama_sampler_sample produces the first token, not when JS receives it.
+   */
+  ttftMs: number;
+  /** Average inter-token latency (ms between consecutive emitted tokens). */
+  itlAvgMs: number;
+  /** Tail inter-token latency reported by the active runtime. */
+  itlP99Ms: number;
+  /** End-to-end latency: enqueue -> completion. */
+  e2eMs: number;
+
+  /** Wall-clock summed over ticks where this request had a prefill contribution. */
+  prefillMs: number;
+  /** Wall-clock summed over ticks where this request had a decode contribution. */
+  decodeMs: number;
+
+  /**
+   * Raw wall-clock window around llama_decode + llama_synchronize. In
+   * WebGPU+wasm this includes event-loop wait inside llama_synchronize.
+   */
+  nativeGpuMs: number;
+  /** Cumulative time spent in backend synchronization (llama_synchronize). */
+  nativeSyncMs: number;
+  /** Internal engine logic overhead (scheduling, batching, bookkeeping). */
+  nativeLogicMs: number;
+
+  /** Total number of tokens processed in the prompt. */
+  inputTokens: number;
+  /** Total number of tokens generated in the response. */
+  outputTokens: number;
+  /** Number of tokens reused from KV cache (LCP / prefix hits). */
+  cacheHits: number;
+  /** Number of tokens actually processed by the GPU during prefill. */
+  prefillTokens: number;
+}
+
+export interface BackendDeviceCapabilities {
+  async: boolean;
+  hostBuffer: boolean;
+  bufferFromHostPtr: boolean;
+  events: boolean;
+}
+
+export interface BackendDeviceInfo {
+  name: string;
+  description: string;
+  type: BackendDeviceType;
+  backendName: string;
+  deviceId: string | null;
+  memoryFreeBytes: number;
+  memoryTotalBytes: number;
+  capabilities: BackendDeviceCapabilities;
+}
+
+export interface BackendRegistryInfo {
+  name: string;
+  deviceCount: number;
+}
+
+export interface BackendObservability {
+  profilingEnabled: boolean;
+  webgpuCompiled: boolean;
+  webgpuRegistered: boolean;
+  webgpuDeviceCount: number;
+  gpuOffloadSupported: boolean;
+  engineInitialized: boolean;
+  availableBackends: BackendRegistryInfo[];
+  devices: BackendDeviceInfo[];
+}
+
+export interface TransportObservability {
+  executionMode: EngineExecutionMode;
+  workerBacked: boolean;
+  enabled: boolean;
+  activeTokenTransport?: 'none' | 'streaming-buffer' | 'callback';
+  streamingDrainCount?: number;
+  streamingDrainMs?: number;
+}
+
+export function withDerivedObservabilityMetrics<T extends RequestObservabilityMetrics>(
+  metrics: T
+): T & { tokensPerSecond: number | null; prefillTokensPerSecond: number | null } {
+  return {
+    ...metrics,
+    tokensPerSecond:
+      metrics.decodeMs > 0 && metrics.outputTokens > 0
+        ? (metrics.outputTokens / metrics.decodeMs) * 1000
+        : null,
+    prefillTokensPerSecond:
+      metrics.prefillMs >= 0.1 && metrics.prefillTokens >= 1
+        ? (metrics.prefillTokens / metrics.prefillMs) * 1000
+        : null,
+  };
 }
 
 interface BaseGenerateResponse {

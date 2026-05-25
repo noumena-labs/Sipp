@@ -1,18 +1,26 @@
-import type { AssetInspection } from '../bundle/model-bundle-types.js';
 import type {
+  BackendDeviceType,
   ChatMessage,
+  NativeRuntimeConfig,
   PoolingType,
   StreamStats,
   TokenBatch,
   TokenFlushMode,
 } from '../core/inference-types.js';
-import type { NativeRuntimeConfig } from '../core/inference-types.js';
-import type { BackendDeviceType } from '../observability/backend-observability.js';
+import type { OpfsSyncAccessHandle } from '../storage/file-system-storage.js';
 
 export type ModelModality = 'text' | 'vision';
 export type ModelStatus = 'ready' | 'needs_projector' | 'broken';
 export type ModelSourceKind = 'remote' | 'local';
 export type BrowserBackendPreference = 'auto' | 'cpu' | 'webgpu';
+export type ModelBundleSourceKind = 'installed';
+export type ModelBundleProjectorStatus =
+  | 'not-required'
+  | 'explicit'
+  | 'paired'
+  | 'missing';
+export type ModelDetectionMethod = 'gguf-metadata' | 'none';
+export type AssetRole = 'model' | 'projector' | 'unknown';
 
 export type ModelAssetKind = 'model' | 'projector' | 'shard';
 export type ObservabilityMode = 'off' | 'runtime' | 'profile';
@@ -33,14 +41,12 @@ export interface ModelLoadProgress {
   assetName?: string;
 }
 
-export type ModelRuntimeOptions = NativeRuntimeConfig;
-
 export interface ModelLoadOptions {
   signal?: AbortSignal;
   onProgress?: (progress: ModelLoadProgress) => void;
   backend?: BrowserBackendPreference;
   observability?: ObservabilityMode;
-  runtime?: ModelRuntimeOptions;
+  runtime?: NativeRuntimeConfig;
 }
 
 export type ModelSource =
@@ -82,6 +88,90 @@ export interface ModelCapabilities {
     dimensions: number;
     pooling: PoolingType;
   };
+}
+
+export interface AssetInspection {
+  version: 1;
+  role: AssetRole;
+  architecture: string | null;
+  visionCapable: boolean;
+  compatibleVisionProjectorTypes: string[];
+  providedVisionProjectorType: string | null;
+}
+
+export interface ClassifiedAsset {
+  assetId: string;
+  inspection: AssetInspection;
+  name: string;
+}
+
+export interface ClassifiedAssetFile extends ClassifiedAsset {
+  file: File;
+}
+
+export type RuntimePairingErrorCode =
+  | 'INVALID_MODEL_SOURCE'
+  | 'INVALID_MODEL_PAIRING'
+  | 'MODEL_BROKEN';
+
+export class RuntimePairingValidationError extends Error {
+  public readonly code: RuntimePairingErrorCode;
+
+  constructor(code: RuntimePairingErrorCode, message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'RuntimePairingValidationError';
+    this.code = code;
+  }
+}
+
+export interface PairingPlan {
+  modelAssetIds: string[];
+  projectorAssetId?: string | null;
+  name: string;
+  modality: ModelModality;
+  status: ModelStatus;
+  compatibleVisionProjectorTypes: string[];
+}
+
+export interface ModelBundleFileProjectorDescriptor {
+  file: File;
+  destFileName?: string;
+}
+
+export interface ModelBundleShard {
+  name: string;
+  handle: OpfsSyncAccessHandle;
+  size: number;
+}
+
+export interface InternalBundleDescriptor {
+  shards: ModelBundleShard[];
+  projector?: ModelBundleFileProjectorDescriptor;
+  detection: ModelDetectionResult;
+}
+
+export interface StageModelBundleOptions {
+  signal?: AbortSignal;
+}
+
+export interface ModelDetectionResult {
+  inspection: AssetInspection;
+  detectionMethod: ModelDetectionMethod;
+  modelName: string;
+  modelType: string | null;
+  modelArchitecture: string | null;
+}
+
+export interface StagedModelBundle {
+  sourceKind: ModelBundleSourceKind;
+  modelPath: string;
+  projectorPath: string | null;
+  isVisionModel: boolean;
+  projectorStatus: ModelBundleProjectorStatus;
+  modelName: string;
+  detectionMethod: ModelDetectionMethod;
+  modelType: string | null;
+  modelArchitecture: string | null;
 }
 
 export type QueryInput =
@@ -352,20 +442,6 @@ export interface AssetRecord {
   inspection?: AssetInspection;
 }
 
-export type ModelPairingReasonCode =
-  | 'BASE_NOT_VISION'
-  | 'NO_MATCH'
-  | 'MULTIPLE_MATCHES'
-  | 'MISSING_METADATA';
-
-export interface ModelPairingState {
-  state: 'resolved' | 'unresolved';
-  checkedProjectorIndexRevision: number;
-  compatibleVisionProjectorTypes: string[];
-  reasonCode?: ModelPairingReasonCode;
-  updatedAt: string;
-}
-
 export interface ModelEntry {
   id: string;
   name: string;
@@ -373,7 +449,6 @@ export interface ModelEntry {
   status: ModelStatus;
   modelAssetIds: string[];
   projectorAssetId?: string;
-  pairing?: ModelPairingState;
   runtimeFingerprint?: string;
   createdAt: string;
   updatedAt: string;

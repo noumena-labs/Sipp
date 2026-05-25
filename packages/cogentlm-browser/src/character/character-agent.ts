@@ -27,7 +27,14 @@ import {
 import { summarizeActionCues } from './action-schema.js';
 import { renderSystemPrompt } from './persona.js';
 import { createTimedAbortController } from '../utils/abort.js';
-import type { RunStatus } from '../core/run-status.js';
+
+export type RunStatus =
+  | 'ok'
+  | 'aborted'
+  | 'timed_out'
+  | 'failed'
+  | 'invalid_request'
+  | 'invalid_response';
 
 export interface CharacterRuntimeEngine {
   chat(input: ChatInput, options?: ChatOptions): Promise<GenerationResult>;
@@ -118,10 +125,6 @@ export class CharacterRuntime {
     return this.eventBus;
   }
 
-  public getConfig(): CharacterConfig {
-    return this.config;
-  }
-
   /** Read-only snapshot of the sliding-window memory. */
   public getMemory(): readonly ChatTurn[] {
     return this.turnHistory.slice();
@@ -130,16 +133,6 @@ export class CharacterRuntime {
   /** Clears the sliding-window memory. Does not reset the engine's KV cache. */
   public clearMemory(): void {
     this.turnHistory.length = 0;
-  }
-
-  /** Compiled GBNF source — exposed for inspection and tests. */
-  public getGrammarSource(): string {
-    return this.grammarSource;
-  }
-
-  /** Final rendered system prompt — exposed for inspection and tests. */
-  public getSystemPrompt(): string {
-    return this.systemPrompt;
   }
 
   public async choose(
@@ -384,13 +377,6 @@ export class CharacterRuntime {
         }
         emit(event);
       }
-    };
-
-    const emitParsedText = (text: string): void => {
-      if (text.length === 0) {
-        return;
-      }
-      recordParsedEvents(parser.consume(text));
     };
 
     const flushParsedText = (): void => {

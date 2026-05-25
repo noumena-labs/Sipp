@@ -19,14 +19,6 @@ import type {
   DirectorTaskConfig,
 } from './director-types.js';
 import { CHOICE_ID_RE, NAME_RE } from './director-validation.js';
-import {
-  isRecord,
-  parseOptionalNonNegativeInteger as parseConfigOptionalNonNegativeInteger,
-  parseOptionalString as parseConfigOptionalString,
-  parseOptionalStringArray as parseConfigOptionalStringArray,
-  parsePositiveInteger as parseConfigPositiveInteger,
-  parseRequiredString as parseConfigRequiredString,
-} from '../utils/config-parse.js';
 
 export class DirectorConfigError extends Error {
   public constructor(message: string) {
@@ -39,24 +31,56 @@ function createDirectorConfigError(message: string): DirectorConfigError {
   return new DirectorConfigError(message);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function parseOptionalString(value: unknown, path: string): string | undefined {
-  return parseConfigOptionalString(value, path, createDirectorConfigError);
+  if (value == null) {
+    return undefined;
+  }
+  if (typeof value !== 'string') {
+    throw createDirectorConfigError(`\`${path}\` must be a string if present.`);
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function parseRequiredString(value: unknown, path: string): string {
-  return parseConfigRequiredString(value, path, createDirectorConfigError);
+  const parsed = parseOptionalString(value, path);
+  if (!parsed) {
+    throw createDirectorConfigError(`\`${path}\` is required and must be a non-empty string.`);
+  }
+  return parsed;
 }
 
 function parseOptionalStringArray(value: unknown, path: string): readonly string[] | undefined {
-  return parseConfigOptionalStringArray(value, path, createDirectorConfigError);
+  if (value == null) {
+    return undefined;
+  }
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string')) {
+    throw createDirectorConfigError(`\`${path}\` must be an array of strings if present.`);
+  }
+  const trimmed = value.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function parseOptionalNonNegativeInteger(value: unknown, path: string): number | undefined {
-  return parseConfigOptionalNonNegativeInteger(value, path, createDirectorConfigError);
+  if (value == null) {
+    return undefined;
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || Math.floor(value) !== value) {
+    throw createDirectorConfigError(`\`${path}\` must be a non-negative integer if present.`);
+  }
+  return value;
 }
 
 function parsePositiveInteger(value: unknown, path: string): number | undefined {
-  return parseConfigPositiveInteger(value, path, createDirectorConfigError);
+  const parsed = parseOptionalNonNegativeInteger(value, path);
+  if (parsed === 0) {
+    throw createDirectorConfigError(`\`${path}\` must be greater than zero if present.`);
+  }
+  return parsed;
 }
 
 function parseScenario(raw: unknown): DirectorScenarioConfig | undefined {

@@ -27,15 +27,19 @@ function parseManifest(text: string): RegistryManifest {
   if (!isObject(parsed.assets) || !isObject(parsed.models)) {
     throw new QueryError('STORAGE_CORRUPT', 'Model registry is missing assets or models.');
   }
-  const projectorIndexRevision = (parsed as { projectorIndexRevision?: unknown }).projectorIndexRevision;
+  if (
+    typeof parsed.projectorIndexRevision !== 'number' ||
+    !Number.isInteger(parsed.projectorIndexRevision) ||
+    parsed.projectorIndexRevision < 0
+  ) {
+    throw new QueryError(
+      'STORAGE_CORRUPT',
+      'Model registry is missing a valid projector index revision.'
+    );
+  }
   return {
     version: 3,
-    projectorIndexRevision:
-      typeof projectorIndexRevision === 'number' &&
-      Number.isInteger(projectorIndexRevision) &&
-      projectorIndexRevision >= 0
-        ? projectorIndexRevision
-        : 0,
+    projectorIndexRevision: parsed.projectorIndexRevision,
     assets: parsed.assets as RegistryManifest['assets'],
     models: parsed.models as RegistryManifest['models'],
   };

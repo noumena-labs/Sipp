@@ -1,10 +1,10 @@
 import type {
   BrowserRuntimeSmokeResult,
-  CogentEngineOptions as CogentConfig,
+  CogentEngineOptions,
   EngineModuleOptions,
 } from '../../engine/cogent-engine.js';
-import type { BackendObservability } from '../../observability/backend-observability.js';
 import type {
+  BackendObservability,
   ChatMessage,
   EmbedRuntimeOptions,
   EngineExecutionMode,
@@ -13,33 +13,29 @@ import type {
   GenerateResponse,
   NativeRuntimeConfig,
   PromptOptions,
+  RequestObservabilityMetrics,
   TokenBatch,
+  TransportObservability,
 } from '../../core/inference-types.js';
 import type {
+  ClassifiedAsset,
   InternalBundleDescriptor,
   ModelDetectionResult,
+  PairingPlan,
+  RegistryManifest,
+  RuntimePairingErrorCode,
   StagedModelBundle,
   StageModelBundleOptions,
-} from '../../bundle/model-bundle-types.js';
-import type { RequestObservabilityMetrics } from '../../observability/runtime-observability.js';
-import type {
-  TransportObservability,
-} from '../../observability/transport-observability.js';
+} from '../../models/types.js';
 import type { ChatBoundaryInfo } from '../../core/chat-boundary-sanitizer.js';
-import {
-  RuntimePairingValidationError,
-  type EngineRuntime,
-  type RuntimePairingErrorCode,
-} from '../engine-runtime.js';
+import type { EngineRuntime } from '../engine-runtime.js';
 import { MainThreadModelLoader } from './model-loader.js';
-import {
-  COMPLETED_REQUEST_STATUS_PENDING,
-  DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY,
-} from './constants.js';
 import { RequestTracker } from '../request-tracker.js';
 import {
+  COMPLETED_REQUEST_STATUS_PENDING,
   TOKEN_EMISSION_NONE,
   TOKEN_EMISSION_STREAMING_BUFFER,
+  RustLifecycleBridge,
   parseBackendObservabilityJson,
   type TokenEmissionMode,
   WasmBridge,
@@ -53,9 +49,7 @@ import {
   resolveRuntimeUrls,
   type WasmThreadingMode,
 } from '../../engine/runtime-assets.js';
-import type { ClassifiedAsset, PairingPlan } from '../../models/pairing-types.js';
-import type { RegistryManifest } from '../../models/types.js';
-import { RustLifecycleBridge } from '../../wasm/lifecycle-bridge.js';
+import { RuntimePairingValidationError } from '../../models/types.js';
 
 function normalizePromptText(value: string): string {
   return value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -84,6 +78,14 @@ const BROWSER_SMOKE_SHARD_MAX_BYTES = 128;
 const GGUF_MAGIC = 0x4655_4747;
 const GGUF_VALUE_STRING = 8;
 const GGUF_ALIGNMENT = 32;
+const DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY: TransportObservability = {
+  executionMode: 'main-thread',
+  workerBacked: false,
+  enabled: false,
+  activeTokenTransport: 'none',
+  streamingDrainCount: 0,
+  streamingDrainMs: 0,
+};
 
 function asErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -313,7 +315,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   // SAB fast path; otherwise the scheduler delivers TokenBatch values through
   // callbacks/postMessage.
   private streamingRingWriter: StreamingRingWriter | null = null;
-  constructor(private config: CogentConfig = {}) {
+  constructor(private config: CogentEngineOptions = {}) {
     this.executionMode = config.executionMode === 'worker' ? 'worker' : 'main-thread';
     this.transportObservability = this.createTransportObservability();
     this.modelLoader = new MainThreadModelLoader(this.config);
@@ -510,7 +512,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.transportObservability.activeTokenTransport = 'none';
   }
 
-  private rejectAllTrackedRequests(error: unknown, _bridge: WasmBridge | null = null): void {
+  private rejectAllTrackedRequests(error: unknown): void {
     this.scheduler.reset();
     for (const requestId of this.tracker.allTrackedIds()) {
       this.releaseTokenState(requestId);
@@ -727,10 +729,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       throw new Error('modelPath must not be empty.');
     }
     if (this.engineInitialized) {
-      this.rejectAllTrackedRequests(
-        new Error('Engine runtime was reset during reinitialization.'),
-        bridge
-      );
+      this.rejectAllTrackedRequests(new Error('Engine runtime was reset during reinitialization.'));
       bridge.close();
       this.engineInitialized = false;
       this.resetRuntimeLifecycleState();
@@ -807,7 +806,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       return;
     }
     const bridge = this.wasmBridge ?? new WasmBridge(module);
-    this.rejectAllTrackedRequests(new Error('Engine runtime was closed.'), bridge);
+    this.rejectAllTrackedRequests(new Error('Engine runtime was closed.'));
     bridge.close();
     this.modelLoader.cleanup(module);
     this.engineInitialized = false;
@@ -828,9 +827,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       return false;
     }
 
-    const tracked = this.tracker.get(requestId);
-    if (tracked != null) {
-      tracked.cancelRequested = true;
+    if (this.tracker.has(requestId)) {
+      this.tracker.requestCancel(requestId);
       if (this.scheduler.settleCompletedRequestIfPresent(bridge, requestId)) {
         return true;
       }
@@ -953,16 +951,11 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       );
     }
 
-    // Worker entry uses this hook to publish a streaming-claim message
-    // before inference produces tokens. Errors are swallowed.
-    if (
-      typeof options === 'object' &&
-      typeof options.__internalRequestStarted === 'function'
-    ) {
+    if (typeof options === 'object' && typeof options.onRequestStarted === 'function') {
       try {
-        options.__internalRequestStarted(requestId);
+        options.onRequestStarted(requestId);
       } catch {
-        /* internal hook errors must not abort enqueue */
+        /* request-start observers must not abort enqueue */
       }
     }
 
@@ -997,7 +990,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       throw createAbortError('Prompt was aborted before execution started.');
     }
 
-    const tracked = this.ensureTracked(requestId);
+    this.ensureTracked(requestId);
     const signal = options?.signal;
     const detachAbort =
       signal == null
@@ -1006,11 +999,10 @@ export class MainThreadEngineRuntime implements EngineRuntime {
             void this.cancelQuery(requestId);
           });
 
-    tracked.consumed = true;
-    tracked.waiterCount += 1;
+    const responsePromise = this.tracker.beginWait(requestId);
     try {
-      const response = await tracked.promise;
-      const callbackError = tracked.callbackError;
+      const response = await responsePromise;
+      const callbackError = this.tracker.callbackError(requestId);
       if (callbackError != null) {
         throw callbackError;
       }
@@ -1020,8 +1012,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       return response;
     } finally {
       detachAbort();
-      tracked.waiterCount = Math.max(0, tracked.waiterCount - 1);
-      this.tracker.cleanupIfConsumed(requestId);
+      this.tracker.endWait(requestId);
     }
   }
 

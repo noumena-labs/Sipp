@@ -3,9 +3,15 @@ import assert from 'node:assert/strict';
 import { ModelService } from './model-service.js';
 import { AssetStore } from './asset-store.js';
 import { ModelRegistryStore } from './model-registry-store.js';
-import type { ClassifiedAsset, ClassifiedAssetFile, PairingPlan } from './pairing-types.js';
-import type { RustLifecycleBridge } from '../wasm/lifecycle-bridge.js';
 import {
+  type ClassifiedAsset,
+  type ClassifiedAssetFile,
+  type PairingPlan,
+  RuntimePairingValidationError,
+  type InternalBundleDescriptor,
+  type ModelDetectionResult,
+  type StagedModelBundle,
+  type StageModelBundleOptions,
   QueryError,
   type AssetRecord,
   type BrowserBackendPreference,
@@ -16,8 +22,9 @@ import {
   type RegistryManifest,
 } from './types.js';
 import type { EngineRuntime } from '../runtime/engine-runtime.js';
-import type { BackendObservability } from '../observability/backend-observability.js';
+import type { RustLifecycleBridge } from '../wasm/wasm-bridge.js';
 import type {
+  BackendObservability,
   ChatMessage,
   EmbedRuntimeOptions,
   EngineExecutionMode,
@@ -25,18 +32,9 @@ import type {
   GenerateResponse,
   NativeRuntimeConfig,
   PromptOptions,
-} from '../core/inference-types.js';
-import type {
-  InternalBundleDescriptor,
-  ModelDetectionResult,
-  StagedModelBundle,
-  StageModelBundleOptions,
-} from '../bundle/model-bundle-types.js';
-import type { RequestObservabilityMetrics } from '../observability/runtime-observability.js';
-import type {
+  RequestObservabilityMetrics,
   TransportObservability,
-} from '../observability/transport-observability.js';
-import { RuntimePairingValidationError } from '../runtime/engine-runtime.js';
+} from '../core/inference-types.js';
 import type { ChatBoundaryInfo } from '../core/chat-boundary-sanitizer.js';
 
 function file(name: string, contents = name): File {
@@ -116,6 +114,7 @@ class MemoryRegistryStore {
 }
 
 class FakeAssetStore {
+  private static readonly directLoadMaxBytes = 2 * 1024 * 1024 * 1024;
   public readonly files = new Map<string, File>();
   public readonly deleted: string[] = [];
   public localSplitCount = 0;
@@ -167,6 +166,19 @@ class FakeAssetStore {
     });
   }
 
+  public async downloadRemoteSplitGguf(metadata: {
+    canonicalUrl: string;
+    etag: string;
+    lastModified: string;
+    bytes: number;
+  }): Promise<AssetRecord[]> {
+    const record = await this.downloadRemote(metadata, 'model');
+    if (metadata.bytes <= FakeAssetStore.directLoadMaxBytes) {
+      return [record];
+    }
+    throw new Error('Large fake remote GGUF splitting is not implemented.');
+  }
+
   public async installFile(input: {
     kind: AssetRecord['kind'];
     file: File;
@@ -191,6 +203,10 @@ class FakeAssetStore {
   }
 
   public async installLocalSplitGguf(file: File): Promise<AssetRecord[]> {
+    if (file.size <= FakeAssetStore.directLoadMaxBytes) {
+      return [await this.installFile({ kind: 'model', file })];
+    }
+
     this.localSplitCount += 1;
     const sourceFileName = file.name.replace(/[\\/:*?"<>|]+/g, '-');
     return [0, 1].map((index) => {
@@ -1082,11 +1098,6 @@ test('ModelService auto-selects WebGPU when the browser has an adapter', async (
   });
 });
 
-// Local-GGUF split + reuse is now exercised by cogentlm-engine catalog tests
-// and the Rust-side cogentlm-shard split tests. The TS host adapter only
-// supplies OPFS callbacks; its behavior is covered by the wasm lifecycle
-// bridge test below.
-
 test('ModelService.chat renders chat templates and sanitizes assistant boundaries', async () => {
   const { service, runtime } = createService();
   await service.load(file('text-model.gguf'));
@@ -1126,28 +1137,6 @@ test('ModelService.chat keeps token emission off when no onTokens callback is pr
   assert.equal(typeof (options as PromptOptions).onTokens, 'undefined');
 });
 
-// Observability mode/state/metrics emission (default 'off', runtime metric
-// capture, profile mode + lifecycle event ordering) is now owned by the Rust
-// browser lifecycle and tested in cogentlm-engine. The JS side only forwards
-// events emitted by the Rust bridge to subscribers; that forwarding is covered
-// by the "routes browser lifecycle through the Rust bridge" plumbing test.
-
-// The following catalog behaviors are now owned by the Rust browser lifecycle
-// and tested in cogentlm-engine::lifecycle::pairing and the browser catalog
-// tests. They were previously exercised in TS via the deleted JS lifecycle
-// fallback. JS plumbing of these scenarios is covered by the "routes browser
-// lifecycle through the Rust bridge" test above.
-//
-// Moved to Rust tests:
-//   - switches models and reuses identical runtime fingerprints
-//   - attaches explicit projectors / rejects metadata-proven mismatches
-//   - switches from text to explicit multimodal
-//   - auto-retries unresolved vision bases when the projector index changes
-//   - persists validated projector pairings across service instances
-//   - replaces the projector on an installed model
-//   - restores the previous installed pairing on replacement failure
-//   - updates remote models when validators change
-
 test('ModelService removes current models and deletes orphaned assets', async () => {
   const { service, runtime, assets } = createService();
   const info = await service.load(file('remove-me.gguf'));
@@ -1158,10 +1147,6 @@ test('ModelService removes current models and deletes orphaned assets', async ()
   assert.equal(assets.deleted.length, 1);
   assert.deepEqual(await service.list(), []);
 });
-
-// Broken-entry detection (missing asset record / missing cached file) is now
-// owned by the Rust browser lifecycle catalog and asserted in
-// cogentlm-engine::lifecycle tests.
 
 test('ModelService rejects queries during lifecycle transitions and serializes concurrent loads', async () => {
   let releaseStage!: () => void;

@@ -28,7 +28,6 @@ export type {
   DirectorSelectSlotConfig,
   DirectorSelectSlotsOutputConfig,
   DirectorTaskConfig,
-  DirectorTaskPrompt,
   DirectorTextInput,
   DirectorTextOutputConfig,
   DirectorTextWithDirectivesOutputConfig,
@@ -36,6 +35,7 @@ export type {
   JsonObject,
   JsonPrimitive,
   JsonValue,
+  RunStatus,
 } from './director-types.js';
 
 export { DirectorConfigError, parseDirectorConfig } from './director-config.js';
@@ -45,9 +45,5 @@ export { DirectorOutputError } from './director-output.js';
 export type { DirectorRuntimeEngine } from './director-runtime.js';
 export { DirectorRuntime } from './director-runtime.js';
 
-export type {
-  CreateDirectorFromConfigOptions,
-  CreateDirectorFromConfigUrlOptions,
-} from './create-director-from-config.js';
-export { createDirectorFromConfig, createDirectorFromConfigUrl } from './create-director-from-config.js';
-export type { RunStatus } from '../core/run-status.js';
+export type { CreateDirectorFromConfigUrlOptions } from './create-director-from-config.js';
+export { createDirectorFromConfigUrl } from './create-director-from-config.js';

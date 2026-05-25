@@ -25,8 +25,11 @@ import {
   expandActionCues,
 } from './action-schema.js';
 import type { ActionSchema } from './action-schema.js';
-import { compileBracketCueGrammar, compileBracketProseGrammar } from '../core/grammar-fragments.js';
-import { assertGrammarByteSize } from '../utils/grammar.js';
+import {
+  assertGrammarByteSize,
+  compileBracketCueGrammar,
+  compileBracketProseGrammar,
+} from '../utils/grammar.js';
 
 /**
  * Generates a GBNF grammar that:

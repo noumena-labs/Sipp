@@ -26,3 +26,30 @@ test('StreamingRingReader can drain one message at a time', () => {
   assert.equal(second[0].sequence, 1);
   assert.equal(second[0].text, 'b');
 });
+
+test('StreamingRingReader drains records that wrap around the ring body', () => {
+  const sab = createStreamingRingBuffer(40);
+  const writer = new StreamingRingWriter(sab);
+  const reader = new StreamingRingReader(sab);
+
+  assert.equal(writer.tryWriteString(1, 'abcdefghij'), true);
+  assert.equal(reader.drain(1)[0].text, 'abcdefghij');
+  assert.equal(writer.tryWriteString(1, 'klmnopqrst'), true);
+
+  const messages = reader.drain();
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].text, 'klmnopqrst');
+  assert.equal(messages[0].sequence, 1);
+});
+
+test('StreamingRingWriter counts records that do not fit', () => {
+  const sab = createStreamingRingBuffer(24);
+  const writer = new StreamingRingWriter(sab);
+  const reader = new StreamingRingReader(sab);
+
+  assert.equal(writer.tryWriteString(1, 'fits'), true);
+  assert.equal(writer.tryWriteString(1, 'too-large-for-this-ring'), false);
+  assert.equal(writer.dropCount(), 1);
+  assert.equal(reader.consumeDropDelta(), 1);
+  assert.equal(reader.consumeDropDelta(), 0);
+});

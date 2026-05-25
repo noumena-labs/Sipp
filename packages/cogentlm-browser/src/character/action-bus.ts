@@ -9,7 +9,7 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import type { ActionEvent, ProseEvent } from './action-parser.js';
-import type { RunStatus } from '../core/run-status.js';
+import type { RunStatus } from './character-agent.js';
 
 export interface ChatTurnStartEvent {
   readonly kind: 'turn-start';

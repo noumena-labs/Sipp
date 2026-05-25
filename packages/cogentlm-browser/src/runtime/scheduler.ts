@@ -3,15 +3,13 @@ import {
   GenerateResponse,
   TokenBatch,
   TokenFlushMode,
+  TransportObservability,
 } from '../core/inference-types.js';
-import type { TransportObservability } from '../observability/transport-observability.js';
 import {
   COMPLETED_REQUEST_STATUS_PENDING,
-  REQUEST_STEP_RESULT_FATAL_NO_PROGRESS,
-  REQUEST_STEP_RESULT_INVALID,
-} from './main-thread/constants.js';
+  WasmBridge,
+} from '../wasm/wasm-bridge.js';
 import { RequestTracker } from './request-tracker.js';
-import { WasmBridge } from '../wasm/wasm-bridge.js';
 import type { StreamingRingWriter } from './streaming-ring.js';
 
 // Native owns the scheduling policy; JS drives the outer loop. Token-flush
@@ -22,6 +20,8 @@ import type { StreamingRingWriter } from './streaming-ring.js';
 const CONTINUOUS_LOOP_TICK_LIMIT = 1024;
 const CONTINUOUS_LOOP_TOKEN_LIMIT = 512;
 const CONTINUOUS_LOOP_TOKEN_FLUSH_LIMIT = 256;
+const REQUEST_STEP_RESULT_INVALID = -1;
+const REQUEST_STEP_RESULT_FATAL_NO_PROGRESS = -2;
 
 type SchedulerFinalizeOptions = {
   consumeCompletedResponse?: boolean;
@@ -108,8 +108,11 @@ export class QueuedRequestScheduler {
   private requestCancellationForCallbackErrors(): boolean {
     let canceledAny = false;
     for (const requestId of this.options.tracker.allTrackedIds()) {
-      const tracked = this.options.tracker.get(requestId);
-      if (tracked == null || tracked.settled || tracked.cancelRequested) {
+      if (
+        !this.options.tracker.has(requestId) ||
+        this.options.tracker.isSettled(requestId) ||
+        this.options.tracker.isCancelRequested(requestId)
+      ) {
         continue;
       }
 
@@ -119,8 +122,8 @@ export class QueuedRequestScheduler {
         continue;
       }
 
-      tracked.callbackError = callbackError;
-      tracked.cancelRequested = true;
+      this.options.tracker.setCallbackError(requestId, callbackError);
+      this.options.tracker.requestCancel(requestId);
       void this.options.cancelQuery(requestId);
       canceledAny = true;
     }
@@ -131,8 +134,10 @@ export class QueuedRequestScheduler {
     bridge: WasmBridge,
     requestId: GenerateRequestId
   ): boolean {
-    const tracked = this.options.tracker.get(requestId);
-    if (tracked == null || tracked.settled) {
+    if (
+      !this.options.tracker.has(requestId) ||
+      this.options.tracker.isSettled(requestId)
+    ) {
       return false;
     }
 
@@ -143,12 +148,15 @@ export class QueuedRequestScheduler {
 
     try {
       const response = bridge.takeCompletedResponse(requestId);
-      tracked.callbackError =
-        this.options.queuedPromptCallbackErrors.get(requestId);
+      this.options.tracker.setCallbackError(
+        requestId,
+        this.options.queuedPromptCallbackErrors.get(requestId)
+      );
       this.options.tracker.resolve(requestId, response);
       this.options.finalizeRequest(bridge, requestId, {
         deleteCompletion:
-          (response.cancelled || tracked.cancelRequested) && !tracked.consumed,
+          (response.cancelled || this.options.tracker.isCancelRequested(requestId)) &&
+          !this.options.tracker.isConsumed(requestId),
       });
       this.forgetCallbackStream(requestId);
     } catch (error) {
@@ -173,8 +181,10 @@ export class QueuedRequestScheduler {
     error: unknown
   ): void {
     for (const requestId of this.options.tracker.allTrackedIds()) {
-      const tracked = this.options.tracker.get(requestId);
-      if (tracked == null || tracked.settled) {
+      if (
+        !this.options.tracker.has(requestId) ||
+        this.options.tracker.isSettled(requestId)
+      ) {
         continue;
       }
       this.options.tracker.reject(requestId, error);
@@ -269,7 +279,6 @@ export class QueuedRequestScheduler {
     if (ringWriter == null && this.options.queuedPromptCallbacks.size === 0) {
       return () => { };
     }
-    const moduleAny = bridge.module as any;
     const drain = () => {
       if (generation !== this.schedulerPumpGeneration) {
         return;
@@ -285,6 +294,7 @@ export class QueuedRequestScheduler {
         // scheduler via a JSPI rejection.  Record + swallow instead.
         for (const requestId of this.options.tracker.allTrackedIds()) {
           this.options.queuedPromptCallbackErrors.set(requestId, error);
+          this.options.tracker.setCallbackError(requestId, error);
         }
       }
       transport.streamingDrainMs =
@@ -292,10 +302,10 @@ export class QueuedRequestScheduler {
       transport.streamingDrainCount =
         (transport.streamingDrainCount ?? 0) + 1;
     };
-    moduleAny._ce_yield_drain = drain;
+    bridge.module._ce_yield_drain = drain;
     return () => {
-      if (moduleAny._ce_yield_drain === drain) {
-        moduleAny._ce_yield_drain = undefined;
+      if (bridge.module._ce_yield_drain === drain) {
+        bridge.module._ce_yield_drain = undefined;
       }
     };
   }

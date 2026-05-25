@@ -20,10 +20,13 @@ function createDeferred<T>(): {
  * completions and worker call responses can share the same bookkeeping.
  */
 
-export interface TrackedRequest<TResult> {
-  promise: Promise<TResult>;
-  resolve: (value: TResult) => void;
-  reject: (error: unknown) => void;
+export interface RequestHandle<TResult> {
+  readonly promise: Promise<TResult>;
+}
+
+interface TrackedRequest<TResult> extends RequestHandle<TResult> {
+  readonly resolve: (value: TResult) => void;
+  readonly reject: (error: unknown) => void;
   settled: boolean;
   consumed: boolean;
   waiterCount: number;
@@ -51,8 +54,38 @@ export class RequestTracker<TResult> {
     return this.activeRuns.has(requestId);
   }
 
-  get(requestId: GenerateRequestId): TrackedRequest<TResult> | undefined {
-    return this.completions.get(requestId);
+  has(requestId: GenerateRequestId): boolean {
+    return this.completions.has(requestId);
+  }
+
+  isSettled(requestId: GenerateRequestId): boolean {
+    return this.completions.get(requestId)?.settled === true;
+  }
+
+  isConsumed(requestId: GenerateRequestId): boolean {
+    return this.completions.get(requestId)?.consumed === true;
+  }
+
+  isCancelRequested(requestId: GenerateRequestId): boolean {
+    return this.completions.get(requestId)?.cancelRequested === true;
+  }
+
+  requestCancel(requestId: GenerateRequestId): void {
+    const tracked = this.completions.get(requestId);
+    if (tracked != null) {
+      tracked.cancelRequested = true;
+    }
+  }
+
+  setCallbackError(requestId: GenerateRequestId, error: unknown): void {
+    const tracked = this.completions.get(requestId);
+    if (tracked != null) {
+      tracked.callbackError = error;
+    }
+  }
+
+  callbackError(requestId: GenerateRequestId): unknown {
+    return this.completions.get(requestId)?.callbackError;
   }
 
   /** All request IDs that appear in any internal collection. */
@@ -70,7 +103,7 @@ export class RequestTracker<TResult> {
    * Start tracking a request. Returns the existing tracker if already tracked,
    * or creates a new one. Marks the request as active.
    */
-  track(requestId: GenerateRequestId): TrackedRequest<TResult> {
+  track(requestId: GenerateRequestId): RequestHandle<TResult> {
     const existing = this.completions.get(requestId);
     if (existing != null) {
       return existing;
@@ -92,6 +125,25 @@ export class RequestTracker<TResult> {
     this.completions.set(requestId, tracked);
     this.activeRuns.add(requestId);
     return tracked;
+  }
+
+  beginWait(requestId: GenerateRequestId): Promise<TResult> {
+    const tracked = this.completions.get(requestId);
+    if (tracked == null) {
+      throw new Error(`request ${requestId} is not tracked.`);
+    }
+    tracked.consumed = true;
+    tracked.waiterCount += 1;
+    return tracked.promise;
+  }
+
+  endWait(requestId: GenerateRequestId): void {
+    const tracked = this.completions.get(requestId);
+    if (tracked == null) {
+      return;
+    }
+    tracked.waiterCount = Math.max(0, tracked.waiterCount - 1);
+    this.cleanupIfConsumed(requestId);
   }
 
   /**

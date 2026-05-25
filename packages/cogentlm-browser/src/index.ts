@@ -44,6 +44,6 @@ export type {
 export type {
   ChatMessage,
   NativeRuntimeConfig,
+  RequestObservabilityMetrics,
   TokenFlushMode,
 } from './core/inference-types.js';
-export type { RequestObservabilityMetrics } from './observability/runtime-observability.js';

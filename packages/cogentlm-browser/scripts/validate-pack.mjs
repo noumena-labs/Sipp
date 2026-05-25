@@ -6,20 +6,15 @@ import { fileURLToPath } from 'node:url';
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const packageDir = path.resolve(scriptDir, '..');
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const packageRootEnvVar = 'COGENTLM_PACKAGE_ROOT';
 const internalPackageRoot = 'node_modules/@noumena-labs/cogentlm-browser';
-const publicPackageRoot = 'node_modules/cogentlm-browser';
-const supportedPackageRoots = new Set([internalPackageRoot, publicPackageRoot]);
 const requiredPackPaths = [
   'dist/esm/index.js',
-  'dist/esm/runtime/package-assets.js',
   'dist/esm/engine/runtime-assets.js',
   'dist/esm/worker/model-service-client.js',
   'dist/esm/worker/model-service-entry.js',
   'dist/esm/character/index.js',
   'dist/esm/orchestrator/index.js',
   'dist/types/index.d.ts',
-  'dist/types/runtime/package-assets.d.ts',
   'dist/types/engine/runtime-assets.d.ts',
   'dist/types/character/index.d.ts',
   'dist/types/orchestrator/index.d.ts',
@@ -32,16 +27,6 @@ const requiredPackPaths = [
 function fail(message) {
   console.error(`[pack:validate] ${message}`);
   process.exit(1);
-}
-
-function getExpectedPackageRoot() {
-  const packageRoot = process.env[packageRootEnvVar]?.trim() || internalPackageRoot;
-
-  if (!supportedPackageRoots.has(packageRoot)) {
-    fail(`${packageRootEnvVar} must be one of: ${Array.from(supportedPackageRoots).join(', ')}`);
-  }
-
-  return packageRoot;
 }
 
 const packResult = spawnSync(npmCommand, ['pack', '--dry-run', '--json'], {
@@ -77,7 +62,7 @@ if (missingPaths.length > 0) {
 const workerClientPath = path.join(packageDir, 'dist', 'esm', 'worker', 'model-service-client.js');
 const workerEntryPath = path.join(packageDir, 'dist', 'esm', 'worker', 'model-service-entry.js');
 const runtimePath = path.join(packageDir, 'dist', 'esm', 'runtime', 'main-thread', 'engine-runtime.js');
-const packageAssetsPath = path.join(packageDir, 'dist', 'esm', 'runtime', 'package-assets.js');
+const packageAssetsPath = path.join(packageDir, 'dist', 'esm', 'engine', 'runtime-assets.js');
 const workerClientText = readFileSync(workerClientPath, 'utf8');
 const workerEntryText = readFileSync(workerEntryPath, 'utf8');
 const runtimeText = readFileSync(runtimePath, 'utf8');
@@ -107,9 +92,8 @@ if (!runtimeText.includes('import(/* @vite-ignore */ /* webpackIgnore: true */ /
   );
 }
 
-const expectedPackageRoot = getExpectedPackageRoot();
-if (!packageAssetsText.includes(`const PACKAGE_ROOT = '${expectedPackageRoot}';`)) {
-  fail(`Runtime package asset resolver must use PACKAGE_ROOT '${expectedPackageRoot}'.`);
+if (!packageAssetsText.includes(`const PACKAGE_ROOT = '${internalPackageRoot}';`)) {
+  fail(`Runtime package asset resolver must use PACKAGE_ROOT '${internalPackageRoot}'.`);
 }
 
 console.log(

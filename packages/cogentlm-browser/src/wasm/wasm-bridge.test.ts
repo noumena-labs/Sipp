@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { WasmBridge } from './wasm-bridge.js';
+import { QueryError } from '../models/types.js';
+import { WasmBridge, unwrapLifecycleResponse } from './wasm-bridge.js';
 import type { EngineModule } from './engine-module.js';
 
 function createSha256TestModule(updateLengths: number[] = []): EngineModule {
@@ -249,4 +250,22 @@ test('WasmBridge copies completed text responses by output kind', () => {
     errorMessage: null,
     observability: null,
   });
+});
+
+test('unwrapLifecycleResponse preserves unsupported operation errors', () => {
+  assert.throws(
+    () => {
+      unwrapLifecycleResponse(
+        {
+          ok: false,
+          error: {
+            code: 'UNSUPPORTED_OPERATION',
+            message: 'unsupported operation chat: model has no chat template',
+          },
+        },
+        'chat'
+      );
+    },
+    (error) => error instanceof QueryError && error.code === 'UNSUPPORTED_OPERATION'
+  );
 });

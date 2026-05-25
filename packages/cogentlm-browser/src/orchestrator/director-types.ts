@@ -9,9 +9,15 @@
 //
 //////////////////////////////////////////////////////////////////////////////
 
-import type { RunStatus } from '../core/run-status.js';
-
 export type JsonPrimitive = string | number | boolean | null;
+
+export type RunStatus =
+  | 'ok'
+  | 'aborted'
+  | 'timed_out'
+  | 'failed'
+  | 'invalid_request'
+  | 'invalid_response';
 
 export interface JsonObject {
   readonly [key: string]: JsonValue;
@@ -155,11 +161,4 @@ export interface DirectorRunResult<TPayload = unknown> {
   readonly selections: readonly DirectorSelection<TPayload>[];
   readonly rawText: string;
   readonly errorMessage?: string;
-}
-
-export interface DirectorTaskPrompt {
-  readonly systemPrompt: string;
-  readonly userPrompt: string;
-  readonly media: readonly Uint8Array[];
-  readonly grammar?: string;
 }

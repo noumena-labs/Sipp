@@ -11,7 +11,7 @@ import type {
   QueryOptions,
 } from '../models/types.js';
 
-export interface WorkerSerializableCogentConfig {
+export interface WorkerRuntimeConfig {
   moduleUrl?: string;
   wasmUrl?: string;
   wasmThreading?: 'single-thread' | 'pthread';
@@ -39,44 +39,44 @@ export type WorkerRequestMessage =
   | {
       kind: 'models-load';
       callId: number;
-      config: WorkerSerializableCogentConfig;
+      config: WorkerRuntimeConfig;
       source: ModelSource;
       options: Pick<ModelLoadOptions, 'backend' | 'observability' | 'runtime'>;
     }
   | {
       kind: 'models-list';
       callId: number;
-      config: WorkerSerializableCogentConfig;
+      config: WorkerRuntimeConfig;
     }
   | {
       kind: 'models-remove';
       callId: number;
-      config: WorkerSerializableCogentConfig;
+      config: WorkerRuntimeConfig;
       id: string;
     }
   | {
       kind: 'models-unload';
       callId: number;
-      config: WorkerSerializableCogentConfig;
+      config: WorkerRuntimeConfig;
     }
   | {
       kind: 'query';
       callId: number;
-      config: WorkerSerializableCogentConfig;
+      config: WorkerRuntimeConfig;
       input: QueryInput;
       options: WorkerQueryOptions;
     }
   | {
       kind: 'chat';
       callId: number;
-      config: WorkerSerializableCogentConfig;
+      config: WorkerRuntimeConfig;
       input: ChatInput;
       options: WorkerQueryOptions;
     }
   | {
       kind: 'embed';
       callId: number;
-      config: WorkerSerializableCogentConfig;
+      config: WorkerRuntimeConfig;
       input: string;
       options: Pick<EmbedOptions, 'normalize' | 'contextKey'>;
     }

@@ -6,11 +6,10 @@ import {
 import { resolveRuntimeUrls } from '../engine/runtime-assets.js';
 import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.js';
 import { StreamingRingWriter } from '../runtime/streaming-ring.js';
-import { stableJson } from '../utils/stable-json.js';
 import {
   WorkerRequestMessage,
   WorkerResponseMessage,
-  type WorkerSerializableCogentConfig,
+  type WorkerRuntimeConfig,
 } from './model-service-protocol.js';
 
 let service: ModelService | null = null;
@@ -26,7 +25,7 @@ type WorkerOperationRequest = Exclude<
   { kind: 'cancel' } | { kind: 'streaming-init' }
 >;
 
-function buildServiceConfig(config: WorkerSerializableCogentConfig) {
+function buildServiceConfig(config: WorkerRuntimeConfig) {
   const runtimeUrls = resolveRuntimeUrls(config);
 
   return {
@@ -42,8 +41,8 @@ function buildServiceConfig(config: WorkerSerializableCogentConfig) {
 // Direct runtime handle for installing the SAB ring writer after ensureService.
 let runtime: MainThreadEngineRuntime | null = null;
 
-function ensureService(config: WorkerSerializableCogentConfig): ModelService {
-  const fingerprint = stableJson(buildServiceConfig(config));
+function ensureService(config: WorkerRuntimeConfig): ModelService {
+  const fingerprint = JSON.stringify(buildServiceConfig(config));
   if (service != null) {
     if (serviceConfigFingerprint !== fingerprint) {
       throw new Error('Worker model service was initialized with different runtime options.');
@@ -127,7 +126,7 @@ function streamingOptionsFor(
   streaming: boolean
 ): {
   onTokens?: (batch: TokenBatch) => void;
-  __internalRequestStarted?: (requestId: number) => void;
+  onRequestStarted?: (requestId: number) => void;
 } {
   if (!streaming) {
     return {};
@@ -142,7 +141,7 @@ function streamingOptionsFor(
     // The engine sees a non-null onTokens and selects StreamingBuffer.
     // The scheduler writes the ring and this callback is ignored.
     onTokens: () => {},
-    __internalRequestStarted: (requestId) =>
+    onRequestStarted: (requestId) =>
       post({ kind: 'streaming-claim', callId, nativeRequestId: requestId }),
   };
 }

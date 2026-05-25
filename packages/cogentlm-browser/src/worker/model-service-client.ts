@@ -1,7 +1,10 @@
-import type { CogentEngineOptions as CogentConfig } from '../engine/cogent-engine.js';
-import { resolveRuntimeUrls } from '../engine/runtime-assets.js';
-import { resolveOptimizedPackageAssetUrl } from '../runtime/package-assets.js';
+import type { CogentEngineOptions } from '../engine/cogent-engine.js';
+import {
+  resolveOptimizedPackageAssetUrl,
+  resolveRuntimeUrls,
+} from '../engine/runtime-assets.js';
 import { ObservabilityController } from '../models/observability-controller.js';
+import { observabilitySnapshotToEngineState } from '../models/observability-controller.js';
 import {
   StreamingRingReader,
   createStreamingRingBuffer,
@@ -12,7 +15,7 @@ import {
   WorkerRequestMessage,
   WorkerResponseMessage,
   type WorkerQueryOptions,
-  type WorkerSerializableCogentConfig,
+  type WorkerRuntimeConfig,
 } from './model-service-protocol.js';
 import {
   QueryError,
@@ -34,7 +37,6 @@ import {
   type TokenBatch,
   type TokenFlushMode,
 } from '../models/types.js';
-import { observabilitySnapshotToEngineState } from '../models/engine-protocol-adapter.js';
 
 interface PendingWorkerCall {
   resolve: (value: unknown) => void;
@@ -63,7 +65,7 @@ export function getOptimizedDefaultWorkerUrl(importerUrl: string = import.meta.u
   return resolveOptimizedPackageAssetUrl('dist/esm/worker/model-service-entry.js', importerUrl);
 }
 
-function toWorkerSerializableConfig(config: CogentConfig): WorkerSerializableCogentConfig {
+function toWorkerRuntimeConfig(config: CogentEngineOptions): WorkerRuntimeConfig {
   if (typeof config.moduleOptions?.locateFile === 'function') {
     throw new Error(
       'Worker mode does not support moduleOptions.locateFile. Provide explicit moduleUrl/wasmUrl instead.'
@@ -122,7 +124,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
   private readonly observability = new ObservabilityController();
   private readonly engineEventListeners = new Set<(event: EngineEvent) => void>();
   private readonly pendingCalls = new Map<number, PendingWorkerCall>();
-  private readonly workerConfig: WorkerSerializableCogentConfig;
+  private readonly workerConfig: WorkerRuntimeConfig;
   // SAB streaming ring, lazily allocated when first needed.  Null when
   // COOP/COEP is missing; streaming requests will error in that case.
   private streamingRingBuffer: SharedArrayBuffer | null = null;
@@ -135,8 +137,8 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     { framesSent: number; bytesSent: number; batchesSent: number }
   >();
 
-  constructor(private readonly config: CogentConfig = {}) {
-    this.workerConfig = toWorkerSerializableConfig(config);
+  constructor(private readonly config: CogentEngineOptions = {}) {
+    this.workerConfig = toWorkerRuntimeConfig(config);
   }
 
   public async load(source: ModelSource, options: ModelLoadOptions = {}): Promise<ModelInfo> {

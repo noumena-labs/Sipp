@@ -1,23 +1,36 @@
-import type { CogentEngineOptions as CogentConfig } from '../../engine/cogent-engine.js';
-import {
+import type { CogentEngineOptions } from '../../engine/cogent-engine.js';
+import type {
   InternalBundleDescriptor,
   ModelBundleShard,
   StagedModelBundle,
   StageModelBundleOptions,
-} from '../../bundle/model-bundle-types.js';
-import { DEFAULT_MAX_MODEL_BYTES, normalizeModelFileName } from './constants.js';
-import { EngineModule } from '../../wasm/engine-module.js';
+} from '../../models/types.js';
+import type { EngineModule } from '../../wasm/engine-module.js';
 import { createSyncAccessHandleFS } from '../../wasm/sync-access-handle-fs.js';
 import { createAbortError } from '../../utils/abort.js';
 
+const DEFAULT_MAX_MODEL_BYTES = 8 * 1024 * 1024 * 1024;
 const MODEL_MOUNT_DIR = '/sah_model';
 const PROJECTOR_MOUNT_DIR = '/memfs_projector';
+
+function normalizeModelFileName(fileName: string): string {
+  const trimmed = fileName.trim();
+  if (!trimmed) {
+    throw new Error('Model file name must not be empty.');
+  }
+  if (trimmed.includes('/') || trimmed.includes('\\') || trimmed.includes('..')) {
+    throw new Error(
+      `Invalid model file name "${fileName}". Provide a simple file name, not a path.`
+    );
+  }
+  return trimmed;
+}
 
 export class MainThreadModelLoader {
   private mountedShards: ModelBundleShard[] = [];
   private mountedProjectorPath: string | null = null;
 
-  constructor(private readonly config: CogentConfig) {}
+  constructor(private readonly config: CogentEngineOptions) {}
 
   public cleanup(module: EngineModule): void {
     this.unmountAll(module);

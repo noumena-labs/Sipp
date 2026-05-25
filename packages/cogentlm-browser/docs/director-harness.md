@@ -23,14 +23,12 @@ Swap the URL and task name for your own `director.json`. The harness builds the 
 ```ts
 import {
   DirectorRuntime,
-  createDirectorFromConfig,
   createDirectorFromConfigUrl,
   parseDirectorConfig,
   type DirectorConfig,
   type DirectorRunRequest,
   type DirectorRunResult,
   type DirectorRuntimeEngine,
-  type DirectorTaskPrompt,
 } from 'cogentlm-browser/director';
 ```
 
@@ -110,11 +108,6 @@ Rules:
 ```ts
 class DirectorRuntime {
   constructor(engine: DirectorRuntimeEngine, config: DirectorConfig, options?)
-
-  getConfig(): DirectorConfig
-  getSystemPrompt(): string
-  getTaskGrammar(taskName: string, request?: DirectorRunRequest): string | undefined
-  getTaskPrompt(taskName: string, request?: DirectorRunRequest): DirectorTaskPrompt
 
   run(taskName: string, request?: DirectorRunRequest): Promise<DirectorRunResult>
 }

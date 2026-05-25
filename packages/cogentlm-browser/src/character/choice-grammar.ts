@@ -8,8 +8,7 @@
 //
 //////////////////////////////////////////////////////////////////////////////
 
-import { literalAlternation } from '../core/grammar-fragments.js';
-import { assertGrammarByteSize } from '../utils/grammar.js';
+import { assertGrammarByteSize, literalAlternation } from '../utils/grammar.js';
 
 export class ChoiceGrammarError extends Error {
   public constructor(message: string) {

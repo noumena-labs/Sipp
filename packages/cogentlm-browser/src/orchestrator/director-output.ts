@@ -7,8 +7,13 @@ import type {
   DirectorSelection,
 } from './director-types.js';
 import { CHOICE_ID_RE } from './director-validation.js';
-import { compileBracketCueGrammar, literalAlternation } from '../core/grammar-fragments.js';
-import { assertGrammarByteSize, gbnfStringLiteral, MAX_GRAMMAR_BYTES } from '../utils/grammar.js';
+import {
+  assertGrammarByteSize,
+  compileBracketCueGrammar,
+  gbnfStringLiteral,
+  literalAlternation,
+  MAX_GRAMMAR_BYTES,
+} from '../utils/grammar.js';
 
 export const MAX_DIRECTOR_GRAMMAR_BYTES = MAX_GRAMMAR_BYTES;
 

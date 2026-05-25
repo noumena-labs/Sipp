@@ -155,8 +155,6 @@ test('CogentEngine exposes the minimal root API', async () => {
   assert.equal(typeof engine.query, 'function');
   assert.equal(typeof engine.chat, 'function');
   assert.equal(typeof engine.embed, 'function');
-  assert.equal(typeof (engine as any).applyChatTemplate, 'undefined');
-  assert.equal(typeof (engine as any).getChatTemplate, 'undefined');
   assert.equal(typeof engine.close, 'function');
   assert.deepEqual(Object.keys(engine), ['models', 'observability']);
   assert.deepEqual(Object.keys(publicApi).sort(), ['CogentEngine', 'QueryError']);
@@ -206,10 +204,10 @@ test('worker mode lists models without requiring explicit runtime URLs', async (
     assert.ok(worker != null);
     assert.match(String(worker.url), /model-service-entry\.js$/);
     assert.equal(worker.options?.type, 'module');
-    const modelsRequest = worker.messages.find(m => m.kind === 'models-list');
+    const modelsRequest = worker.messages.find((message) => message.kind === 'models-list');
     assert.equal(modelsRequest?.kind, 'models-list');
-    assert.equal((modelsRequest as any)?.config?.moduleUrl, undefined);
-    assert.equal((modelsRequest as any)?.config?.wasmUrl, undefined);
+    assert.equal(modelsRequest?.config.moduleUrl, undefined);
+    assert.equal(modelsRequest?.config.wasmUrl, undefined);
 
     await engine.close();
     assert.equal(worker.terminated, true);

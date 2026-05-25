@@ -1,5 +1,5 @@
-import type { BackendObservability } from '../observability/backend-observability.js';
 import type {
+  BackendObservability,
   ChatMessage,
   EmbedRuntimeOptions,
   EngineExecutionMode,
@@ -7,42 +7,26 @@ import type {
   GenerateResponse,
   NativeRuntimeConfig,
   PromptOptions,
+  RequestObservabilityMetrics,
+  TransportObservability,
 } from '../core/inference-types.js';
 import type {
+  ClassifiedAsset,
   InternalBundleDescriptor,
   ModelDetectionResult,
+  PairingPlan,
+  RegistryManifest,
   StagedModelBundle,
   StageModelBundleOptions,
-} from '../bundle/model-bundle-types.js';
-import type { RequestObservabilityMetrics } from '../observability/runtime-observability.js';
-import type {
-  TransportObservability,
-} from '../observability/transport-observability.js';
+} from '../models/types.js';
 import type { ChatBoundaryInfo } from '../core/chat-boundary-sanitizer.js';
-import type { ClassifiedAsset, PairingPlan } from '../models/pairing-types.js';
 import type {
   BrowserCacheLayout,
   GgufReadAtCallbacks,
   GgufSplitStreamCallbacks,
+  RustLifecycleBridge,
 } from '../wasm/wasm-bridge.js';
-import type { RustLifecycleBridge } from '../wasm/lifecycle-bridge.js';
-import type { RegistryManifest } from '../models/types.js';
 import type { WasmThreadingMode } from '../engine/runtime-assets.js';
-
-export type RuntimePairingErrorCode =
-  | 'INVALID_MODEL_SOURCE'
-  | 'INVALID_MODEL_PAIRING'
-  | 'MODEL_BROKEN';
-
-export class RuntimePairingValidationError extends Error {
-  public readonly code: RuntimePairingErrorCode;
-
-  constructor(code: RuntimePairingErrorCode, message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = 'RuntimePairingValidationError';
-    this.code = code;
-  }
-}
 
 export interface EngineRuntime {
   getExecutionMode(): EngineExecutionMode;

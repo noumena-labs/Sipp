@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MainThreadModelLoader } from './model-loader.js';
 import type { EngineModule, EmscriptenFs } from '../../wasm/engine-module.js';
-import type { ModelDetectionResult } from '../../bundle/model-bundle-types.js';
+import type { ModelDetectionResult } from '../../models/types.js';
 import type { OpfsSyncAccessHandle } from '../../storage/file-system-storage.js';
 
 interface FakeFs extends EmscriptenFs {

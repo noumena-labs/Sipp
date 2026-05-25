@@ -10,12 +10,18 @@ const removeRetryLimit = 10;
 const removeRetryDelayMs = 200;
 const optionalCleanTargets = new Set([
   path.join(projectRoot, 'build'),
-  path.join(projectRoot, 'build-wasm-dev')
+  path.join(projectRoot, 'build-browser'),
+  path.join(projectRoot, 'build-browser-pthread'),
+  path.join(projectRoot, 'build-wasm-dev'),
+  path.join(projectRoot, 'build-wasm-dev-pthread')
 ]);
 
 const cleanTargets = [
   path.join(projectRoot, 'build'),
+  path.join(projectRoot, 'build-browser'),
+  path.join(projectRoot, 'build-browser-pthread'),
   path.join(projectRoot, 'build-wasm-dev'),
+  path.join(projectRoot, 'build-wasm-dev-pthread'),
   path.join(projectRoot, 'dist', 'esm'),
   path.join(projectRoot, 'dist', 'types'),
   path.join(projectRoot, 'dist', 'wasm'),

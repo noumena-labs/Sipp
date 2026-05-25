@@ -30,7 +30,7 @@ class FakeEngine implements DirectorRuntimeEngine {
   ): Promise<GenerationResult> {
     this.queryCalls += 1;
     if (typeof options === 'object' && options) {
-      this.grammar = (options as any).grammar;
+      this.grammar = options.grammar;
     }
     const messages = Array.isArray(input) ? input : input.messages;
     this.media = Array.isArray(input) ? undefined : input.media;
@@ -186,31 +186,6 @@ test('DirectorRuntime parses sanitized assistant text from engine chat', async (
   assert.equal(result.status, 'ok');
   assert.equal(result.text, 'Aria sprints toward home base.');
   assert.equal(result.rawText, 'Aria sprints toward home base.');
-});
-
-test('DirectorRuntime exposes task grammar and prompt for inspection', () => {
-  const engine = new FakeEngine();
-  const runtime = new DirectorRuntime(engine, CONFIG);
-  const request = {
-    inputs: { state: { tick: 3 } },
-    choices: [
-      { id: 'winner:aria', label: 'Aria wins', payload: { secret: 'hidden' } },
-      { id: 'deny' },
-    ],
-  };
-
-  const grammar = runtime.getTaskGrammar('resolve_conflict', request);
-  const prompt = runtime.getTaskPrompt('resolve_conflict', request);
-
-  assert.equal(grammar, prompt.grammar);
-  assert.ok(grammar?.includes('"winner:aria"'));
-  assert.ok(prompt.userPrompt.includes('winner:aria - Aria wins'));
-  assert.equal(prompt.userPrompt.includes('hidden'), false);
-  assert.equal(prompt.media.length, 0);
-  assert.ok(prompt.userPrompt.includes('Task:\nResolve a conflict.'));
-  assert.ok(prompt.userPrompt.includes('Response:\nSelect exactly one choice id. Output only the id.'));
-  assert.ok(prompt.userPrompt.includes('Inputs:'));
-  assert.equal(prompt.userPrompt.includes('Output shape:'), false);
 });
 
 test('DirectorRuntime threads grammar for select_many and select_slots', async () => {

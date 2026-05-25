@@ -1,6 +1,8 @@
-import type { CogentEngineOptions as CogentConfig } from './cogent-engine.js';
-import { resolveOptimizedPackageAssetUrl } from '../runtime/package-assets.js';
+import type { CogentEngineOptions } from './cogent-engine.js';
 import { currentLocationOrigin, resolveUrl } from '../utils/url.js';
+
+const VITE_OPTIMIZED_DEPS_SEGMENT = '/node_modules/.vite/deps/';
+const PACKAGE_ROOT = 'node_modules/@noumena-labs/cogentlm-browser';
 
 export interface RuntimeUrls {
   moduleUrl: string;
@@ -20,6 +22,32 @@ function parseConfiguredUrl(rawUrl: string, fieldName: string): URL {
   return resolveUrl(rawUrl, fieldName);
 }
 
+export function resolveOptimizedPackageAssetUrl(
+  packageRelativePath: string,
+  importerUrl: string
+): string | null {
+  let parsed: URL;
+
+  try {
+    parsed = new URL(importerUrl);
+  } catch {
+    return null;
+  }
+
+  const optimizedDepsIndex = parsed.pathname.indexOf(VITE_OPTIMIZED_DEPS_SEGMENT);
+  if (optimizedDepsIndex < 0) {
+    return null;
+  }
+
+  const basePath = parsed.pathname.slice(0, optimizedDepsIndex);
+  const normalizedRelativePath = packageRelativePath.replace(/^\/+/, '');
+  parsed.pathname = `${basePath}/${PACKAGE_ROOT}/${normalizedRelativePath}`;
+  parsed.search = '';
+  parsed.hash = '';
+
+  return parsed.toString();
+}
+
 export function getDefaultRuntimeUrls(importerUrl: string = import.meta.url): RuntimeUrls {
   const threading = resolveRuntimeThreadingMode({});
   return getDefaultRuntimeUrlsForThreading(threading, importerUrl);
@@ -35,7 +63,7 @@ export function supportsWasmPthreads(): boolean {
 
 export function resolveRuntimeThreadingMode(
   config: Pick<
-    CogentConfig,
+    CogentEngineOptions,
     'moduleUrl' | 'wasmUrl' | 'pthreadModuleUrl' | 'pthreadWasmUrl' | 'wasmThreading'
   >
 ): WasmThreadingMode {
@@ -94,9 +122,7 @@ function getDefaultRuntimeUrlsForThreading(
   };
 }
 
-export function resolveTrustedOrigins(
-  configuredOrigins: CogentConfig['trustedOrigins']
-): Set<string> {
+function resolveTrustedOrigins(configuredOrigins: CogentEngineOptions['trustedOrigins']): Set<string> {
   if (configuredOrigins != null && configuredOrigins.length > 0) {
     const allowed = new Set<string>();
     for (const originValue of configuredOrigins) {
@@ -111,7 +137,7 @@ export function resolveTrustedOrigins(
 
 export function resolveRuntimeUrls(
   config: Pick<
-    CogentConfig,
+    CogentEngineOptions,
     | 'moduleUrl'
     | 'wasmUrl'
     | 'pthreadModuleUrl'

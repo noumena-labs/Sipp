@@ -1,5 +1,4 @@
 import type { EngineRuntime } from '../runtime/engine-runtime.js';
-import { RuntimePairingValidationError } from '../runtime/engine-runtime.js';
 import {
   buildBoundaryMarkers,
   sliceUnstreamedSuffix,
@@ -11,19 +10,11 @@ import type {
   NativeRuntimeConfig,
   PromptOptions,
 } from '../core/inference-types.js';
-import type {
-  InternalBundleDescriptor,
-  ModelBundleFileProjectorDescriptor,
-  ModelBundleShard,
-  ModelDetectionResult,
-} from '../bundle/model-bundle-types.js';
 import { createLinkedAbortController, isAbortError } from '../utils/abort.js';
-import { stableJson } from '../utils/stable-json.js';
 import { AssetStore, type RemoteAssetMetadata } from './asset-store.js';
 import { ModelRegistryStore } from './model-registry-store.js';
-import type { ClassifiedAsset, ClassifiedAssetFile, PairingPlan } from './pairing-types.js';
-import type { RustLifecycleBridge } from '../wasm/lifecycle-bridge.js';
 import type {
+  RustLifecycleBridge,
   RustLifecycleLoadSource,
   RustLifecyclePrepareLoadValue,
 } from '../wasm/wasm-bridge.js';
@@ -33,16 +24,21 @@ import {
   type BrowserBackendPreference,
   type ChatInput,
   type ChatOptions,
+  type ClassifiedAsset,
+  type ClassifiedAssetFile,
   type EmbedOptions,
   type EmbeddingResult,
   type EngineEvent,
   type EngineState,
+  type InternalBundleDescriptor,
   type LoadedModelState,
+  type ModelBundleFileProjectorDescriptor,
+  type ModelBundleShard,
   type ModelEntry,
+  type ModelDetectionResult,
   type ModelInfo,
   type ModelLifecycleService,
   type ModelLoadOptions,
-  type ModelPairingReasonCode,
   type ModelSource,
   type ObservabilityEvent,
   type ObservabilitySnapshot,
@@ -54,14 +50,12 @@ import {
   type RegistryManifest,
 } from './types.js';
 import {
-  observabilityEventToStateEvent,
-  observabilitySnapshotToEngineState,
   embeddingResultFromGenerateResponse,
   generationResultFromGenerateResponse,
   generationResultFromText,
-} from './engine-protocol-adapter.js';
-import {
   ObservabilityController,
+  observabilityEventToStateEvent,
+  observabilitySnapshotToEngineState,
   toBackendProfileObservation,
   toRuntimeObservation,
 } from './observability-controller.js';
@@ -89,7 +83,7 @@ interface RuntimeRequestOptions {
   onTokens?: (batch: TokenBatch) => void;
   tokenFlush?: QueryOptions['tokenFlush'];
   grammar?: string;
-  __internalRequestStarted?: (requestId: number) => void;
+  onRequestStarted?: (requestId: number) => void;
 }
 
 type BaseSource = string | File | readonly string[] | readonly File[];
@@ -158,13 +152,11 @@ function utf8ByteLength(text: string): number {
 }
 
 function entryAssetFingerprint(entry: Pick<ModelEntry, 'modelAssetIds' | 'projectorAssetId'>): string {
-  return stableJson({
+  return JSON.stringify({
     modelAssetIds: [...entry.modelAssetIds].sort((left, right) => left.localeCompare(right)),
     projectorAssetId: entry.projectorAssetId ?? null,
   });
 }
-
-const BROWSER_GGUF_SPLIT_DIRECT_LOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 
 function normalizeLocalSourceFileName(file: File): string {
   const trimmed = (file.name || 'model.gguf').trim();
@@ -395,16 +387,7 @@ export class ModelService implements ModelLifecycleService {
       tokenFlush: options.onTokens == null ? undefined : options.tokenFlush ?? 'token',
       media,
       grammar: options.grammar,
-      // Forward the internal streaming-claim hook if the caller (worker
-      // entry) attached one. See PromptOptions.__internalRequestStarted
-      // for why this exists. We use a property-key escape hatch so the
-      // public ChatOptions / QueryOptions types don't have to advertise
-      // this internal hook.
-      __internalRequestStarted: (
-        options as ChatOptions & {
-          __internalRequestStarted?: (requestId: number) => void;
-        }
-      ).__internalRequestStarted,
+      onRequestStarted: options.onRequestStarted,
     };
     const session = options.session ?? 'default';
     const start = nowMs();
@@ -575,22 +558,6 @@ export class ModelService implements ModelLifecycleService {
     } finally {
       linkedAbort.dispose();
     }
-  }
-
-  public getChatTemplate(): string | null {
-    return this.runtime.getChatTemplate();
-  }
-
-  public getBosText(): string {
-    return this.runtime.getBosText();
-  }
-
-  public getEosText(): string {
-    return this.runtime.getEosText();
-  }
-
-  public getMediaMarker(): string | null {
-    return this.runtime.readMediaMarker();
   }
 
   public close(): void {
@@ -1061,21 +1028,6 @@ export class ModelService implements ModelLifecycleService {
       return assets;
     }
 
-    if (metadata.bytes <= BROWSER_GGUF_SPLIT_DIRECT_LOAD_MAX_BYTES) {
-      const record = await this.assetStore.downloadRemote(
-        metadata,
-        'model',
-        options.signal,
-        options.onProgress
-      );
-      return [
-        {
-          record,
-          file: await this.assetStore.getFile(record),
-        },
-      ];
-    }
-
     const records = await this.assetStore.downloadRemoteSplitGguf(
       metadata,
       this.runtime,
@@ -1090,10 +1042,6 @@ export class ModelService implements ModelLifecycleService {
     manifest: RegistryManifest,
     options: ModelLoadOptions
   ): Promise<InstalledAsset[]> {
-    if (file.size <= BROWSER_GGUF_SPLIT_DIRECT_LOAD_MAX_BYTES) {
-      return [await this.installLocalAsset(file, 'model', manifest, options)];
-    }
-
     const existingSplit = this.findLocalSplitAssets(manifest, file);
     if (existingSplit != null) {
       const assets: InstalledAsset[] = [];

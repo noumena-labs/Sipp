@@ -199,6 +199,10 @@ function generationResult(text: string): GenerationResult {
   };
 }
 
+function queryPrompt(input: QueryInput): string {
+  return typeof input === 'string' ? input : input.prompt;
+}
+
 async function collectEvents(iter: AsyncIterable<ChatEvent>): Promise<ChatEvent[]> {
   const out: ChatEvent[] = [];
   for await (const event of iter) {
@@ -238,19 +242,6 @@ function waitForScriptRelease(
   });
 }
 
-test('CharacterRuntime exposes stable systemPrompt and grammarSource', () => {
-  const engine = createFakeEngine();
-  const agent = new CharacterRuntime(engine, buildConfig());
-  const prompt1 = agent.getSystemPrompt();
-  const prompt2 = agent.getSystemPrompt();
-  assert.equal(prompt1, prompt2);
-  assert.ok(prompt1.includes('Aria'));
-
-  const grammar = agent.getGrammarSource();
-  assert.ok(grammar.length > 0);
-  assert.ok(grammar.includes('root'));
-});
-
 test('chat() yields turn-start, prose, action, turn-end in order', async () => {
   const engine = createFakeEngine();
   engine.enqueue({
@@ -286,8 +277,8 @@ test('chat() threads grammar and maxOutputTokens into queuePrompt options', asyn
   assert.ok(typeof call.options === 'object' && call.options != null);
   const opts = call.options as QueryOptions;
   assert.equal(opts.maxTokens, 42);
-  assert.equal(typeof (opts as any).grammar, 'string');
-  assert.ok((opts as any).grammar && (opts as any).grammar.includes('root'));
+  assert.equal(typeof opts.grammar, 'string');
+  assert.ok(opts.grammar && opts.grammar.includes('root'));
   assert.equal(typeof opts.onTokens, 'function');
 });
 
@@ -487,8 +478,8 @@ test('choose() threads literal-choice grammar into queuePrompt options', async (
   assert.ok(typeof call.options === 'object' && call.options != null);
   const opts = call.options as QueryOptions;
   assert.equal(opts.maxTokens, 24);
-  assert.ok(typeof (opts as any).grammar === 'string' && (opts as any).grammar.includes('approach:aria'));
-  const promptText = (call.input as any).prompt;
+  assert.ok(typeof opts.grammar === 'string' && opts.grammar.includes('approach:aria'));
+  const promptText = queryPrompt(call.input);
   assert.ok(promptText.includes('Choose exactly one of the following options and output only that option text:'));
 });
 
@@ -507,7 +498,7 @@ test('choose() is stateless and does not write memory', async () => {
 
   assert.equal(result.selection, 'wander');
   assert.equal(agent.getMemory().length, 2);
-  const rendered = (engine.queryCalls[1]!.input as any).prompt;
+  const rendered = queryPrompt(engine.queryCalls[1]!.input);
   assert.doesNotMatch(rendered, /chat reply/);
   assert.doesNotMatch(rendered, /<user>\nhello<\/user>/);
 });
@@ -617,7 +608,7 @@ test('chat() passes a rendered raw prompt to query', async () => {
   await collectEvents(agent.chat('hello'));
 
   const call = engine.queryCalls[0];
-  const promptText = (call.input as any).prompt;
+  const promptText = queryPrompt(call.input);
   assert.ok(typeof promptText === 'string' && promptText.length > 0);
   assert.ok(promptText.includes('<system>\n'));
   assert.ok(promptText.includes('Aria'));
@@ -637,7 +628,7 @@ test('chat() includes prior turn history in the rendered prompt', async () => {
   await collectEvents(agent.chat('second question'));
 
   const secondCall = engine.queryCalls[1];
-  const rendered = (secondCall.input as any).prompt;
+  const rendered = queryPrompt(secondCall.input);
   const idxSystem = rendered.indexOf('<system>\n');
   const idxFirstUser = rendered.indexOf('first question');
   const idxAssistant = rendered.indexOf('first reply');
@@ -655,8 +646,8 @@ test('chat() keeps the user message literal in the rendered prompt', async () =>
   await collectEvents(agent.chat('hi there'));
 
   const call = engine.queryCalls[0];
-  assert.match((call.input as any).prompt, /<user>\nhi there<\/user>/);
-  assert.doesNotMatch((call.input as any).prompt, /reply briefly and warmly/);
+  assert.match(queryPrompt(call.input), /<user>\nhi there<\/user>/);
+  assert.doesNotMatch(queryPrompt(call.input), /reply briefly and warmly/);
 });
 
 test('chat() injects persona dialog examples as few-shot chat turns', async () => {
@@ -684,7 +675,7 @@ test('chat() injects persona dialog examples as few-shot chat turns', async () =
 
   assert.equal(engine.queryCalls.length, 1);
   const call = engine.queryCalls[0];
-  const promptText = (call.input as any).prompt;
+  const promptText = queryPrompt(call.input);
   assert.doesNotMatch(promptText, /Dialog examples:/);
   assert.match(promptText, /<user>\nhello<\/user>\n<assistant>\n\[wave\] Hello there\.<\/assistant>/);
   assert.match(promptText, /<user>\nare you okay\?<\/user>\n<assistant>\n\[settle\] I am here with you\.<\/assistant>/);
@@ -718,7 +709,7 @@ test('chat() does not inject anchorExamples as few-shot chat turns', async () =>
   await collectEvents(agent.chat('hello'));
 
   const call = engine.queryCalls[0];
-  const promptText = (call.input as any).prompt;
+  const promptText = queryPrompt(call.input);
   assert.match(promptText, /<system>[\s\S]*Examples:\n\n?User: who are you\?/);
   assert.match(promptText, /<user>\nhello<\/user>\n<assistant>\n\[wave\] Hello there\.<\/assistant>/);
   assert.doesNotMatch(promptText, /<user>\nwho are you\?<\/user>/);

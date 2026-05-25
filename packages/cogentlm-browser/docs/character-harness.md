@@ -33,7 +33,6 @@ Swap the URL for your own `character.json`. The harness handles the character pr
 import {
   CharacterEventBus,
   CharacterRuntime,
-  createCharacterFromConfig,
   createCharacterFromConfigUrl,
   parseCharacterConfig,
   type CharacterChooseResult,
@@ -89,11 +88,8 @@ class CharacterRuntime {
     }
   ): Promise<CharacterChooseResult>
 
-  getConfig(): CharacterConfig
   clearMemory(): void
   getMemory(): readonly ChatTurn[]
-  getGrammarSource(): string
-  getSystemPrompt(): string
 }
 ```
 
@@ -111,7 +107,7 @@ const { character, config } = await createCharacterFromConfigUrl({
 });
 ```
 
-Use `createCharacterFromConfig({ config, engine })` when you already have a parsed config object.
+When you already have a parsed config object, call `new CharacterRuntime(engine, config, options)`.
 
 ## character.json
 
