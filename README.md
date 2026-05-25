@@ -1,129 +1,182 @@
-# CogentLM monorepo
+# CogentLM
 
-Monorepo for the published `cogentlm` package plus the local avatar,
-benchmark, and simulation apps that exercise it.
+CogentLM is a local inference runtime for GGUF models across browser and native targets. The same Rust engine contract powers:
 
-## Workspace layout
+- `cogentlm-browser`: browser/WebGPU runtime with OPFS model storage
+- `cogentlm-engine`: native Rust engine
+- `cogentlm-py`: Python binding
+- `cogentlm-napi`: Node/NAPI binding
+- `cogentlm-wasm`: Rust engine exports linked into the browser package
 
-- `packages/cogentlm`: publishable npm package and native/WebAssembly bridge
-- `packages/cogentlm-rs`: Rust runtime workspace for native and binding work
-- `packages/cogentlm/third_party/llama.cpp`: pinned `llama.cpp` submodule
-- `apps/avatar`: browser character harness with a VRM avatar
-- `apps/benchmark`: browser benchmark harness
-- `apps/simulation`: browser simulation and director example
+The public API is intentionally small: load a model, call `chat()`, `query()`, or `embed()`, observe state/events, then close the engine.
 
-## Clone
+## Workspace
 
-Clone with submodules so the vendored `llama.cpp` checkout is present from the start:
+- `packages/cogentlm-browser`: npm browser package, worker/main-thread runtime, character and director helpers
+- `packages/cogentlm-rs`: Rust workspace for native, Python, Node, CLI, and wasm engine code
+- `packages/third_party/llama.cpp`: pinned llama.cpp checkout
+- `apps/avatar`: character harness example
+- `apps/benchmark`: browser benchmark and model smoke tests
+- `apps/examples`: browser API examples
+- `apps/proactive-ui`: browser UI experiment
+- `apps/simulation`: director/simulation example
+
+## Setup
 
 ```bash
-git clone --recurse-submodules <repo-url> cogentlm
-cd cogentlm
+git clone --recurse-submodules <repo-url> CogentLM
+cd CogentLM
+bun install
 ```
 
-If you already cloned the repo without submodules:
+If the repo was cloned without submodules:
 
 ```bash
 git submodule update --init --recursive
 ```
 
-## Install
+## Browser Quickstart
 
-```bash
-bun install
+```ts
+import { CogentEngine } from '@noumena-labs/cogentlm-browser';
+
+const engine = await CogentEngine.create();
+
+await engine.models.load('/models/model.gguf');
+
+const reply = await engine.chat([
+  { role: 'user', content: 'Explain local browser inference in one sentence.' },
+]);
+
+console.log(reply.text);
+await engine.close();
 ```
 
-## Build the package
+Use `chat()` when the loaded model has a GGUF chat template. It renders messages with that template, then runs text generation.
+
+Use `query()` for raw text generation. It sends your prompt directly to the runtime, so it is the right API for plain prompts, custom templates, and encoder-decoder models such as T5.
+
+```ts
+const raw = await engine.query('<|im_start|>user\nSay hi.<|im_end|>\n<|im_start|>assistant\n');
+```
+
+Use `embed()` for vector output:
+
+```ts
+const embedding = await engine.embed('search text', { normalize: true });
+console.log(embedding.values.length, embedding.pooling);
+```
+
+Model-class behavior:
+
+- Decoder-only text models: `chat()` if a chat template exists, otherwise `query()`.
+- Encoder-decoder models: `query()` for source-to-target generation; `chat()` only if the model has a usable chat template.
+- Encoder-only models: `embed()` only.
+- Decoder-only embedding models: `embed()` only when loaded with embedding context.
+
+## Native Rust Quickstart
+
+```rust
+use cogentlm_engine::{
+    ChatMessage, ChatRequest, ChatRole, CogentEngine, NativeRuntimeConfig, QueryOptions,
+};
+
+let engine = CogentEngine::load("model.gguf", NativeRuntimeConfig::default())?;
+let result = engine.chat(
+    ChatRequest::new(vec![ChatMessage::new(ChatRole::User, "Say hi.")])
+        .options(QueryOptions::default()),
+)?;
+
+println!("{}", result.text);
+```
+
+Run the CLI:
+
+```bash
+cargo run -p cogentlm-cli -- path/to/model.gguf "Say hi." --chat --max-tokens 64
+```
+
+## Browser Package
+
+Common browser calls:
+
+```ts
+const state = engine.state();
+const unsubscribe = engine.subscribeEvents((event) => console.log(event.type));
+
+const streamed = await engine.chat([{ role: 'user', content: 'Write a haiku.' }], {
+  maxTokens: 64,
+  onTokens: (batch) => console.log(batch.text),
+});
+
+unsubscribe();
+```
+
+Model loading accepts URLs, `File` objects, GGUF shard arrays, and explicit model/projector pairs:
+
+```ts
+await engine.models.load({
+  model: '/models/vision.gguf',
+  projector: '/models/mmproj.gguf',
+});
+```
+
+The browser package stores installed models in OPFS. Large monolithic GGUF files are split into OPFS shards before load.
+
+## Character And Director Helpers
+
+`@noumena-labs/cogentlm-browser/character` provides a small character runtime over `CogentEngine`.
+
+```ts
+import { createCharacterFromConfigUrl } from '@noumena-labs/cogentlm-browser/character';
+
+const { character } = await createCharacterFromConfigUrl({
+  configUrl: '/characters/aria/character.json',
+  engine,
+});
+
+for await (const event of character.chat('Say hello.')) {
+  if (event.kind === 'prose') console.log(event.text);
+}
+```
+
+`@noumena-labs/cogentlm-browser/director` provides shape-driven task decisions for apps and simulations.
+
+```ts
+import { createDirectorFromConfigUrl } from '@noumena-labs/cogentlm-browser/director';
+
+const { director } = await createDirectorFromConfigUrl({
+  configUrl: '/directors/default/director.json',
+  engine,
+});
+
+const result = await director.run('choose_action', {
+  inputs: { state: { kind: 'data', value: worldState } },
+  choices: [{ id: 'wait' }, { id: 'move' }],
+});
+```
+
+## Build
 
 ```bash
 bun run build:package
 ```
 
-Use the release build when you need the publishable package layout with browser and Bun wasm
-artifacts:
+Build all browser wasm variants and validate the package:
 
 ```bash
 bun run build:package:release
 ```
 
-For a clean rebuild:
+## Test
 
 ```bash
-bun run rebuild:package
+bun test packages/cogentlm-browser/src
+cargo test --manifest-path packages/cogentlm-rs/Cargo.toml
 ```
 
-## Getting Started
+## Architecture
 
-Get started in a few lines of code:
+Rust owns model classification, capabilities, scheduling, generation, embeddings, state, events, and native bindings. The browser TypeScript package owns browser objects: `fetch`, `File`, OPFS, workers, asset URLs, and user-facing browser helpers.
 
-```ts
-import { CogentEngine } from 'cogentlm';
-
-const engine = await CogentEngine.create();
-
-await engine.models.load('https://example.com/model.gguf');
-const answer = await engine.chat([
-  { role: 'user', content: 'Explain browser-hosted inference in one paragraph.' },
-]);
-
-console.log(answer.text);
-await engine.close();
-```
-
-### Query
-
-Use `engine.chat(...)` for normal assistant-style interaction. Cogent reads the
-loaded GGUF model's native chat template and renders your messages into the
-model-specific prompt format before inference:
-
-```ts
-const reply = await engine.chat([
-  { role: 'system', content: 'Be concise.' },
-  { role: 'user', content: 'Summarize the current model.' },
-]);
-```
-
-Use `engine.query(...)` only when you already have a complete raw prompt string.
-Cogent does not apply a chat template in `query()`, so the prompt must already
-include whatever control tokens, role markers, or assistant prefix your model
-expects:
-
-```ts
-const text = await engine.query(
-  '<|im_start|>user\nSummarize the current model.<|im_end|>\n<|im_start|>assistant\n'
-);
-
-const vision = await engine.chat({
-  messages: [{ role: 'user', content: 'What is in this image?' }],
-  media: [imageBytes],
-});
-```
-
-Streaming is available through `onTokens`:
-
-```ts
-const output = await engine.chat([{ role: 'user', content: 'Write a haiku.' }], {
-  maxTokens: 64,
-  onTokens: (batch) => {
-    console.log(batch.text);
-  },
-});
-console.log(output.text);
-```
-### Model Lifecycle
-
-Use `engine.models` for model management:
-
-```ts
-const loaded = await engine.models.load({
-  model: 'https://example.com/vision-model.gguf',
-  projector: 'https://example.com/mmproj.gguf',
-});
-
-await engine.models.load(loaded.id);
-
-console.log(engine.models.current());
-console.log(await engine.models.list());
-
-await engine.models.remove(loaded.id);
-```
+This keeps the cross-platform engine behavior in Rust while keeping browser integration thin and explicit.

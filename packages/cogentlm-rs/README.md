@@ -1,239 +1,176 @@
 # CogentLM Rust Runtime
 
-Rust-native CogentLM runtime workspace.
+Rust workspace for the CogentLM engine, native bindings, CLI, and browser wasm exports.
 
-This workspace is intentionally separate from the existing browser/Emscripten
-package under `packages/cogentlm`. The sys crate builds the vendored llama.cpp
-tree natively and exposes the C ABI plus a small CogentLM shim for features that
-still live behind C++ APIs.
+The Rust engine owns the shared runtime contract: model capabilities, query/chat/embed requests, scheduling, state, events, generation results, embedding results, and native backend configuration.
 
 ## Crates
 
-- `cogentlm-sys`: CMake build, bindgen bindings, and C-compatible shims for chat templates and mtmd.
-- `cogentlm-engine`: typed runtime config, llama.cpp common-param/common-sampler integration, the scheduler-backed `InferenceRuntime`, and the `CogentEngine` owner-thread API.
-- `cogentlm-cli`: proof-of-concept executable.
-- `cogentlm-py`: PyO3 package binding for the native engine API.
-- `cogentlm-napi`: NAPI package binding for the native engine API.
-- `cogentlm-wasm`: unified Emscripten staticlib crate compiling both the inference scheduler FFI shims and browser OPFS GGUF split ingest logic into the WASM target.
+- `cogentlm-sys`: llama.cpp CMake build, bindgen bindings, and C/C++ shims
+- `cogentlm-engine`: core runtime, engine driver, lifecycle service, protocol types
+- `cogentlm-cli`: command-line smoke and development tool
+- `cogentlm-py`: Python binding through PyO3
+- `cogentlm-napi`: Node binding through NAPI
+- `cogentlm-wasm`: Emscripten static library used by `@noumena-labs/cogentlm-browser`
+- `cogentlm-shard`: GGUF shard and split helpers
 
-## Example
-
-```powershell
-cargo run -p cogentlm-cli -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Hello" --max-tokens 32
-```
-
-To exercise the scheduler/runtime path:
-
-```powershell
-cargo run -p cogentlm-cli -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Hello" --max-tokens 32
-```
-
-For instruction-style prompts, apply the model chat template:
-
-```powershell
-cargo run -p cogentlm-cli -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Describe browser LLM inference." --max-tokens 32 --chat
-```
-
-## Native Driver
-
-`cogentlm-engine::CogentEngine` is the native engine API layer. It loads
-`InferenceRuntime` on a dedicated native thread and communicates through a
-command channel:
+## Rust API
 
 ```rust
 use cogentlm_engine::{
     ChatMessage, ChatRequest, ChatRole, CogentEngine, NativeRuntimeConfig, QueryOptions,
+    QueryRequest,
 };
 
 let engine = CogentEngine::load("model.gguf", NativeRuntimeConfig::default())?;
-let answer = engine.chat(ChatRequest::new(vec![
-    ChatMessage::new(ChatRole::User, "Describe browser LLM inference."),
-]).options(QueryOptions::default()))?;
-println!("{}", answer.text);
+
+let result = engine.chat(
+    ChatRequest::new(vec![ChatMessage::new(ChatRole::User, "Say hi.")])
+        .options(QueryOptions::default()),
+)?;
+
+println!("{}", result.text);
 ```
 
-This is the native-thread implementation of the engine-driver abstraction. The
-browser implementation uses the same Rust runtime through the Emscripten wasm
-export shim and keeps TypeScript as the browser storage, Worker, and app
-adapter layer.
+Use `chat()` when the loaded model has a GGUF chat template. It renders messages with that template, then runs text generation.
 
-The shared runtime contract starts in `cogentlm_engine::engine::protocol` and is
-re-exported as `EngineState`, `EngineStats`, `EngineEvent`, and
-`GenerationResult`. The first canonical state view is
-available through:
+Use `query()` for raw text generation. It sends your prompt directly to the runtime and is the right API for plain prompts, custom templates, and encoder-decoder models such as T5.
+
+Use `embed()` for vector output. It returns `EmbeddingResult`, not `GenerationResult`, and it never streams tokens.
+
+```rust
+use cogentlm_engine::{EmbedOptions, EmbedRequest};
+
+let embedding = engine.embed(EmbedRequest {
+    input: "document text".into(),
+    options: EmbedOptions {
+        normalize: true,
+        context_key: Some("search".into()),
+    },
+})?;
+
+println!("{} values via {:?}", embedding.values.len(), embedding.pooling);
+```
+
+Model-class behavior:
+
+- Decoder-only text models: `chat()` if a chat template exists, otherwise `query()`.
+- Encoder-decoder models: `query()` for source-to-target generation; `chat()` only if the model has a usable chat template.
+- Encoder-only models: `embed()` only.
+- Decoder-only embedding models: `embed()` only when loaded with embedding context.
+
+`embed()` defaults to L2-normalized vectors. Normalization is ignored for rank-pooling reranker outputs.
+
+## CLI
+
+```bash
+cargo run -p cogentlm-cli -- path/to/model.gguf "Say hi." --chat --max-tokens 64
+```
+
+CPU-only is the default. Enable a native GPU backend with Cargo features:
+
+```bash
+cargo run -p cogentlm-cli --features cuda -- path/to/model.gguf "Say hi." --chat --gpu-layers -1
+cargo run -p cogentlm-cli --features vulkan -- path/to/model.gguf "Say hi." --chat --gpu-layers -1
+```
+
+Use `--gpu-layers 0` to force CPU execution.
+
+## State And Events
 
 ```rust
 let state = engine.state()?;
-println!("{:?}", state.stats);
-```
+println!("{:?}", state.model);
 
-The native engine also emits the shared event shape:
-
-```rust
 let events = engine.subscribe_events();
-let result = engine.chat(ChatRequest::new(vec![
-    ChatMessage::new(ChatRole::User, "Describe browser LLM inference."),
-]).options(QueryOptions::default()))?;
+let result = engine.query(QueryRequest::new("Raw prompt"))?;
+
 for event in events.try_iter() {
     println!("{event:?}");
 }
-println!("{:?}", result.stats);
 ```
 
-`state()` is synchronous in the current driver. Live mid-query state is
-available through `EngineEvent::State`; Python and Node expose the same
-contract through `state()`, `drain_events()` / `drainEvents()`, `query()` /
-`query`, and `chat()` / `chat`.
+`GenerationResult` is returned by `query()` and `chat()`. `EmbeddingResult` is returned by `embed()`. They are intentionally separate result types.
 
-The default build is CPU-only. `backend_before_load` / `backend_after_load`
-show the compiled backends, discovered devices, memory, and whether
-llama.cpp reports GPU offload support. To force CPU execution:
-
-```powershell
-cargo run -q -p cogentlm-cli -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Describe browser LLM inference." --max-tokens 32 --chat --gpu-layers 0
-```
-
-To build a native GPU-capable runtime, enable the matching Cargo feature and
-allow offload with `--gpu-layers -1`:
-
-```powershell
-cargo run -q -p cogentlm-cli --features cuda -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Describe browser LLM inference." --max-tokens 32 --chat --gpu-layers -1
-cargo run -q -p cogentlm-cli --features vulkan -- ..\..\LFM2.5-350M-Q4_K_M.gguf "Describe browser LLM inference." --max-tokens 32 --chat --gpu-layers -1
-```
-
-CUDA/Vulkan availability depends on the local toolchain and driver stack. If
-switching features does not change the backend JSON, rebuild the sys crate:
-
-```powershell
-cargo clean -p cogentlm-sys
-```
-
-On Windows, CUDA linking uses `CUDA_PATH` or `CUDA_HOME` to find the CUDA
-Toolkit `lib\x64` directory. The CUDA DLL directory must also be available on
-`PATH` at runtime.
-
-## Python Bindings
-
-`cogentlm-py` is the first native package binding crate. It exposes the
-`CogentEngine` API to Python through PyO3:
+## Python Binding
 
 ```python
-from cogentlm import (
-    ChatMessage,
-    CogentEngine,
-    ContextRuntimeConfig,
-    ModelPlacementConfig,
-    NativeRuntimeConfig,
-    ObservabilityRuntimeConfig,
-    QueryOptions,
-)
+from cogentlm import CogentEngine, ChatMessage, NativeRuntimeConfig, QueryOptions
 
-engine = CogentEngine(
-    "model.gguf",
-    NativeRuntimeConfig(
-        placement=ModelPlacementConfig(gpu_layers="all"),
-        context=ContextRuntimeConfig(n_ctx=2048),
-        observability=ObservabilityRuntimeConfig(runtime_metrics=True),
-    ),
-)
+engine = CogentEngine("model.gguf", NativeRuntimeConfig())
 result = engine.chat(
-    [ChatMessage("user", "Describe browser LLM inference.")],
-    QueryOptions(max_tokens=32),
+    [ChatMessage("user", "Say hi.")],
+    QueryOptions(max_tokens=64),
 )
-print(result["text"].strip())
+print(result["text"])
 ```
 
-Streaming uses the same native scheduler path and calls back into Python while
-the binding releases the GIL around the blocking inference call:
+Streaming:
 
 ```python
-pieces = []
-
-def on_tokens(batch: dict) -> None:
-    pieces.append(batch["text"])
+def on_tokens(batch):
     print(batch["text"], end="", flush=True)
 
 result = engine.chat(
-    [ChatMessage("user", "Describe browser LLM inference.")],
-    QueryOptions(max_tokens=32),
+    [ChatMessage("user", "Write a haiku.")],
+    QueryOptions(max_tokens=64),
     on_tokens=on_tokens,
 )
-assert "".join(pieces) == result["text"]
 ```
 
-Install the local package for development with `uv`:
+Local development:
 
-```powershell
-cd crates\cogentlm-py
+```bash
+cd crates/cogentlm-py
 uv venv --python 3.9 .venv
 uv sync --group dev
-uv run maturin develop --features cuda
-uv run --no-sync python examples\phase4_python_smoke.py ..\..\..\..\LFM2.5-350M-Q4_K_M.gguf "Describe browser LLM inference." --max-tokens 32 --gpu-layers -1
+uv run maturin develop
 ```
 
-Use `--features native` or omit `--features cuda` for CPU-only local package
-builds. After `maturin develop`, use `uv run --no-sync ...` for Python
-commands so `uv` does not resync over the feature-specific native extension.
-
-The Python wheel workflow lives at
-`.github/workflows/python-wheels.yml`. It builds CPU wheels for Linux and
-Windows, a Metal wheel for macOS, and has an opt-in CUDA wheel job for a
-self-hosted Linux CUDA runner.
-
-## Node Bindings
-
-`cogentlm-napi` is the initial NAPI binding crate. It mirrors the lower-level
-engine surface exposed by Python and runs blocking native calls through
-`AsyncTask`, so JavaScript callers get Promises rather than main-thread
-blocking calls. `query` and `chat` return `GenerationResult`; optional
-`onTokens` callbacks receive batched `TokenBatch` values through a NAPI
-thread-safe function:
+## Node Binding
 
 ```js
-const { CogentEngine } = require("./index.js");
+const { CogentEngine } = require('./index.js');
 
-const engine = await CogentEngine.load("model.gguf", {
-  placement: { gpu_layers: "all" },
-  observability: { runtime_metrics: true },
+const engine = await CogentEngine.load('model.gguf', {
+  placement: { gpu_layers: 'all' },
 });
 
 const result = await engine.chat(
-  [{ role: "user", content: "Describe browser LLM inference." }],
-  { maxTokens: 32 },
+  [{ role: 'user', content: 'Say hi.' }],
+  { maxTokens: 64 },
   (batch) => process.stdout.write(batch.text),
 );
-console.log(`\n${result.text.trim()}`);
+
+console.log(result.text);
 ```
 
-Build the local Node binding from the crate directory:
+Build locally:
 
-```powershell
-cd crates\cogentlm-napi
+```bash
+cd crates/cogentlm-napi
 bun install
-bun run build:cuda
-node .\examples\node_smoke.mjs ..\..\..\..\Qwen3.5-0.8B-Q4_0.gguf "Describe browser LLM inference." --gpu-layers -1
+bun run build
 ```
 
-## Browser Ingest
+## Browser Wasm
 
-The browser package uses a wasm32 WebGPU build with Rust GGUF ingest/splitting linked by Emscripten. Large monolithic GGUF files are split into OPFS-backed shards instead of relying on memory64.
+`cogentlm-wasm` compiles the Rust engine and browser GGUF ingest helpers into the Emscripten static library consumed by `packages/cogentlm-browser`.
 
-The browser GGUF ingest path is only for the browser package. Native Rust, Python, and Node should keep using normal files or explicit shard arrays through their native loaders. Both the GGUF ingest/splitting logic and the main browser inference engine compile together under `cogentlm-wasm` to produce a single static library linked into the wasm32 WebGPU package:
-
-```powershell
+```bash
 bun run build:package:browser
 ```
 
-That path exports Rust-backed `CE_BrowserCacheLayout`,
-`CE_GgufPlanSplitCount`, and `CE_GgufSplitStream` along with the core
-`CE_RustBrowserEngine` scheduler functions.
-Remote browser model loading uses this for large monolithic GGUF URLs: the
-download lands in a temporary OPFS file, Rust plans and writes split shards
-through worker sync-access callbacks, and the temporary monolithic file is
-deleted before runtime load.
+The browser package keeps browser-only responsibilities in TypeScript: `fetch`, `File`, OPFS, workers, and asset URL resolution. Runtime behavior stays in Rust.
 
-Large local browser `File` imports use the same Rust-backed OPFS split path.
-The selected file is copied into a temporary OPFS source, Rust writes
-llama.cpp-compatible shards into OPFS, the temporary source is deleted, and the
-registry stores local source metadata so repeated selection can reuse the
-shards.
+## Test
+
+```bash
+cargo test
+```
+
+From the repo root:
+
+```bash
+cargo test --manifest-path packages/cogentlm-rs/Cargo.toml
+```
