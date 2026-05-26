@@ -73,15 +73,15 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run package tests
-        run: bun test packages/cogentlm/src
+        run: bun test packages/cogentlm-browser/src
 
       - name: Build and validate release package
-        run: bun run --filter=@noumena-labs/cogentlm release:prepare
+        run: bun run --filter=@noumena-labs/cogentlm-browser release:prepare
 
       - name: Run built package smoke test
         run: |
           node --input-type=module <<'NODE'
-          const pkg = await import('./packages/cogentlm/dist/esm/index.js');
+          const pkg = await import('./packages/cogentlm-browser/dist/esm/index.js');
           if (typeof pkg.CogentEngine?.create !== 'function') {
             throw new Error('CogentEngine.create export is missing from the built package.');
           }
