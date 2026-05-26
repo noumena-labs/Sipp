@@ -1,0 +1,21 @@
+[package]
+name = "cogentlm-providers"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[dependencies]
+async-trait = "0.1"
+bytes = "1"
+cogentlm-core.workspace = true
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+clap.workspace = true
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util", "time"] }
+wiremock = "0.6"

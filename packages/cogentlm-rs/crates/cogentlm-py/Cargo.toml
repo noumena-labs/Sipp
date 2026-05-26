@@ -19,6 +19,11 @@ openmp = ["cogentlm-engine/openmp"]
 
 [dependencies]
 cogentlm-engine = { path = "../cogentlm-engine" }
+cogentlm-providers.workspace = true
 pyo3 = { workspace = true, features = ["abi3-py39", "extension-module"] }
 serde.workspace = true
 serde_json.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
+
+[dev-dependencies]
+wiremock = "0.6"

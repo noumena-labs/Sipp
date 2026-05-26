@@ -1,8 +1,10 @@
 [workspace]
 members = [
+    "crates/cogentlm-core",
     "crates/cogentlm-shard",
     "crates/cogentlm-sys",
     "crates/cogentlm-engine",
+    "crates/cogentlm-providers",
     "crates/cogentlm-cli",
     "crates/cogentlm-py",
     "crates/cogentlm-napi",
@@ -22,6 +24,8 @@ bindgen = "0.72"
 cc = "1.2"
 clap = { version = "4.5", features = ["derive"] }
 cmake = "0.1"
+cogentlm-core = { path = "crates/cogentlm-core" }
+cogentlm-providers = { path = "crates/cogentlm-providers" }
 napi = { version = "3.9", default-features = false, features = ["napi4"] }
 napi-build = "2.3"
 napi-derive = "3.5"

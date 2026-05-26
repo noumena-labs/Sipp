@@ -6,6 +6,8 @@
 
 use serde_json::json;
 
+pub use cogentlm_core::{ChatMessage, ChatRole};
+
 use crate::engine::protocol::{EmbedRequest, EngineEvent};
 use crate::engine::{
     stream::TokenBatch, GenerateOptions, SamplingRuntimeConfig, DEFAULT_CONTEXT_KEY,
@@ -22,39 +24,6 @@ use super::{runtime_command, EngineEventSubscribers, OnTokensCallback};
 const MAX_TOKENS_POSITIVE: &str = "max_tokens must be positive";
 const CHAT_MESSAGES_REQUIRED: &str = "chat messages must not be empty";
 const EMPTY_CHAT_TEMPLATE_PROMPT: &str = "model chat template did not produce a prompt";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChatRole {
-    System,
-    User,
-    Assistant,
-}
-
-impl ChatRole {
-    pub(super) fn as_str(self) -> &'static str {
-        match self {
-            Self::System => "system",
-            Self::User => "user",
-            Self::Assistant => "assistant",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChatMessage {
-    pub role: ChatRole,
-    pub content: String,
-}
-
-impl ChatMessage {
-    pub fn new(role: ChatRole, content: impl Into<String>) -> Self {
-        Self {
-            role,
-            content: content.into(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct QueryOptions {

@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub use cogentlm_core::FinishReason;
+
 use crate::runtime::config::ResolvedRuntimeLimits;
 
 /// Current lifecycle state of an engine.
@@ -46,26 +48,6 @@ impl RequestStatus {
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
-        }
-    }
-}
-
-/// Why a request stopped producing tokens.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FinishReason {
-    Stop,
-    Length,
-    Cancelled,
-    Error,
-}
-
-impl FinishReason {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Stop => "stop",
-            Self::Length => "length",
-            Self::Cancelled => "cancelled",
-            Self::Error => "error",
         }
     }
 }

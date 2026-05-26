@@ -1,5 +1,8 @@
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex, MutexGuard, OnceLock},
+    time::Duration,
+};
 
 use cogentlm_engine::backend::{
     backend_observability_json as core_backend_observability_json,
@@ -22,11 +25,23 @@ use cogentlm_engine::lifecycle::{
     DEFAULT_MODEL_BACKEND, DEFAULT_MODEL_STATS,
 };
 use cogentlm_engine::runtime::config::{SchedulerPolicyConfig, SchedulerPolicyMode};
+use cogentlm_providers::{
+    AnthropicConfig, CapabilitySupport as ProviderCapabilitySupport, OpenAiConfig, ProviderAuth,
+    ProviderChatRequest, ProviderChatResponse, ProviderClient, ProviderEmbedRequest,
+    ProviderEmbeddingOutput, ProviderEmbeddingResponse, ProviderError as CoreProviderError,
+    ProviderGenerateRequest, ProviderGenerateResponse, ProviderGenerationOptions, ProviderModel,
+    ProviderOptions, ProviderResponseMetadata, ProviderStreamEvent, ProviderTextOutput,
+    ProxyConfig, ProxyProtocol, SecretString, TokenUsage,
+};
 use pyo3::exceptions::{PyException, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pyclass::PyClass;
-use pyo3::types::{PyAny, PyDict, PyList};
+use pyo3::types::{PyAny, PyBool, PyDict, PyFloat, PyList, PyLong, PyString, PyTuple};
 use serde::de::DeserializeOwned;
+
+#[cfg(test)]
+#[path = "tests/provider_tests.rs"]
+mod provider_tests;
 
 pyo3::create_exception!(
     _native,
@@ -34,6 +49,8 @@ pyo3::create_exception!(
     PyException,
     "The loaded model does not support the requested operation."
 );
+
+pyo3::create_exception!(_native, ProviderError, PyException, "Provider API error.");
 
 const PY_CALLBACK_FAILED_MESSAGE: &str = "Python token callback failed";
 const PY_ENGINE_EVENTS_MUTEX_POISONED: &str = "engine events mutex is poisoned";
@@ -48,6 +65,8 @@ const EVENT_TYPE_REQUEST_STARTED: &str = "request-started";
 const EVENT_TYPE_REQUEST_COMPLETED: &str = "request-completed";
 const EVENT_TYPE_REQUEST_FAILED: &str = "request-failed";
 const EVENT_TYPE_CLOSED: &str = "closed";
+
+static PROVIDER_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
 fn clear_events(events: &Mutex<Option<EngineEventReceiver>>) {
     if let Ok(mut events) = events.lock() {
@@ -793,6 +812,112 @@ impl PyChatMessage {
     }
 }
 
+#[pyclass(name = "ProviderAuth")]
+#[derive(Clone)]
+struct PyProviderAuth {
+    core: ProviderAuth,
+}
+
+#[pymethods]
+impl PyProviderAuth {
+    #[staticmethod]
+    fn bearer(token: String) -> Self {
+        Self {
+            core: ProviderAuth::Bearer(SecretString::new(token)),
+        }
+    }
+
+    #[staticmethod]
+    fn header(name: String, value: String) -> Self {
+        Self {
+            core: ProviderAuth::Header {
+                name,
+                value: SecretString::new(value),
+            },
+        }
+    }
+}
+
+impl PyProviderAuth {
+    fn to_core(&self) -> ProviderAuth {
+        self.core.clone()
+    }
+}
+
+#[pyclass(name = "ProviderProxyConfig")]
+#[derive(Clone)]
+struct PyProviderProxyConfig {
+    core: ProxyConfig,
+}
+
+#[pymethods]
+impl PyProviderProxyConfig {
+    #[new]
+    #[pyo3(signature = (base_url, auth, protocol = "openai_compatible".to_string(), static_headers = None, timeout_ms = None))]
+    fn new(
+        py: Python<'_>,
+        base_url: String,
+        auth: Py<PyProviderAuth>,
+        protocol: String,
+        static_headers: Option<Vec<(String, String)>>,
+        timeout_ms: Option<u64>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            core: ProxyConfig {
+                base_url,
+                auth: auth.borrow(py).to_core(),
+                protocol: parse_provider_proxy_protocol(&protocol)?,
+                static_headers: static_headers.unwrap_or_default(),
+                timeout: timeout_ms.map(Duration::from_millis),
+            },
+        })
+    }
+}
+
+impl PyProviderProxyConfig {
+    fn to_core(&self) -> ProxyConfig {
+        self.core.clone()
+    }
+}
+
+#[pyclass(name = "ProviderGenerationOptions")]
+#[derive(Clone)]
+struct PyProviderGenerationOptions {
+    core: ProviderGenerationOptions,
+}
+
+#[pymethods]
+impl PyProviderGenerationOptions {
+    #[new]
+    #[pyo3(signature = (*, max_tokens = None, temperature = None, top_p = None, stop = None))]
+    fn new(
+        max_tokens: Option<u32>,
+        temperature: Option<f32>,
+        top_p: Option<f32>,
+        stop: Option<Vec<String>>,
+    ) -> PyResult<Self> {
+        if max_tokens == Some(0) {
+            return Err(PyValueError::new_err(
+                "max_tokens must be greater than zero",
+            ));
+        }
+        Ok(Self {
+            core: ProviderGenerationOptions {
+                max_tokens,
+                temperature: py_optional_finite_f32(temperature, "temperature")?,
+                top_p: py_optional_finite_f32(top_p, "top_p")?,
+                stop: stop.unwrap_or_default(),
+            },
+        })
+    }
+}
+
+impl PyProviderGenerationOptions {
+    fn to_core(&self) -> ProviderGenerationOptions {
+        self.core.clone()
+    }
+}
+
 #[pyclass(name = "CogentEngine")]
 struct PyCogentEngine {
     inner: Mutex<Option<CogentEngine>>,
@@ -1104,6 +1229,178 @@ impl PyModelService {
     }
 }
 
+#[pyclass(name = "ProviderClient")]
+struct PyProviderClient {
+    inner: ProviderClient,
+}
+
+#[pymethods]
+impl PyProviderClient {
+    #[staticmethod]
+    fn proxy(py: Python<'_>, config: Py<PyProviderProxyConfig>) -> PyResult<Self> {
+        Ok(Self {
+            inner: ProviderClient::proxy(config.borrow(py).to_core())
+                .map_err(to_py_provider_error)?,
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (api_key, base_url = None, timeout_ms = None))]
+    fn openai(
+        api_key: String,
+        base_url: Option<String>,
+        timeout_ms: Option<u64>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: ProviderClient::openai(OpenAiConfig {
+                api_key: SecretString::new(api_key),
+                base_url,
+                timeout: timeout_ms.map(Duration::from_millis),
+            })
+            .map_err(to_py_provider_error)?,
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (api_key, base_url = None, version = None, timeout_ms = None))]
+    fn anthropic(
+        api_key: String,
+        base_url: Option<String>,
+        version: Option<String>,
+        timeout_ms: Option<u64>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: ProviderClient::anthropic(AnthropicConfig {
+                api_key: SecretString::new(api_key),
+                base_url,
+                version,
+                timeout: timeout_ms.map(Duration::from_millis),
+            })
+            .map_err(to_py_provider_error)?,
+        })
+    }
+
+    fn kind(&self) -> String {
+        self.inner.kind().as_str().to_string()
+    }
+
+    fn list_models(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let client = self.inner.clone();
+        let runtime = provider_runtime()?;
+        let models = py
+            .allow_threads(|| runtime.block_on(client.list_models()))
+            .map_err(to_py_provider_error)?;
+        let output = PyList::empty_bound(py);
+        for model in models {
+            output.append(provider_model_to_dict(py, model)?)?;
+        }
+        Ok(output.into_py(py))
+    }
+
+    fn get_model(&self, py: Python<'_>, model: String) -> PyResult<Py<PyAny>> {
+        let client = self.inner.clone();
+        let runtime = provider_runtime()?;
+        let model = py
+            .allow_threads(|| runtime.block_on(client.get_model(&model)))
+            .map_err(to_py_provider_error)?;
+        provider_model_to_dict(py, model)
+    }
+
+    #[pyo3(signature = (model, messages, options = None, provider_options = None))]
+    fn chat(
+        &self,
+        py: Python<'_>,
+        model: String,
+        messages: Vec<Py<PyChatMessage>>,
+        options: Option<Py<PyProviderGenerationOptions>>,
+        provider_options: Option<PyObject>,
+    ) -> PyResult<Py<PyAny>> {
+        let request = ProviderChatRequest {
+            model,
+            messages: chat_messages_to_core(py, messages)?,
+            options: py_core_or_default(py, options, PyProviderGenerationOptions::to_core),
+            provider_options: py_provider_options_or_empty(py, provider_options)?,
+        };
+        let client = self.inner.clone();
+        let runtime = provider_runtime()?;
+        let response = py
+            .allow_threads(|| runtime.block_on(client.chat(request)))
+            .map_err(to_py_provider_error)?;
+        provider_chat_response_to_dict(py, response)
+    }
+
+    #[pyo3(signature = (model, prompt, options = None, provider_options = None))]
+    fn generate(
+        &self,
+        py: Python<'_>,
+        model: String,
+        prompt: String,
+        options: Option<Py<PyProviderGenerationOptions>>,
+        provider_options: Option<PyObject>,
+    ) -> PyResult<Py<PyAny>> {
+        let request = ProviderGenerateRequest {
+            model,
+            prompt,
+            options: py_core_or_default(py, options, PyProviderGenerationOptions::to_core),
+            provider_options: py_provider_options_or_empty(py, provider_options)?,
+        };
+        let client = self.inner.clone();
+        let runtime = provider_runtime()?;
+        let response = py
+            .allow_threads(|| runtime.block_on(client.generate(request)))
+            .map_err(to_py_provider_error)?;
+        provider_generate_response_to_dict(py, response)
+    }
+
+    #[pyo3(signature = (model, input, provider_options = None))]
+    fn embed(
+        &self,
+        py: Python<'_>,
+        model: String,
+        input: String,
+        provider_options: Option<PyObject>,
+    ) -> PyResult<Py<PyAny>> {
+        let request = ProviderEmbedRequest {
+            model,
+            input,
+            provider_options: py_provider_options_or_empty(py, provider_options)?,
+        };
+        let client = self.inner.clone();
+        let runtime = provider_runtime()?;
+        let response = py
+            .allow_threads(|| runtime.block_on(client.embed(request)))
+            .map_err(to_py_provider_error)?;
+        provider_embedding_response_to_dict(py, response)
+    }
+
+    #[pyo3(signature = (model, messages, options = None, on_tokens = None, provider_options = None))]
+    fn stream_chat(
+        &self,
+        py: Python<'_>,
+        model: String,
+        messages: Vec<Py<PyChatMessage>>,
+        options: Option<Py<PyProviderGenerationOptions>>,
+        on_tokens: Option<PyObject>,
+        provider_options: Option<PyObject>,
+    ) -> PyResult<Py<PyAny>> {
+        if let Some(callback) = &on_tokens {
+            require_callable(py, callback)?;
+        }
+        let request = ProviderChatRequest {
+            model,
+            messages: chat_messages_to_core(py, messages)?,
+            options: py_core_or_default(py, options, PyProviderGenerationOptions::to_core),
+            provider_options: py_provider_options_or_empty(py, provider_options)?,
+        };
+        let client = self.inner.clone();
+        let runtime = provider_runtime()?;
+        let result = py.allow_threads(|| {
+            runtime.block_on(provider_stream_chat_to_py(client, request, on_tokens))
+        })?;
+        provider_stream_result_to_dict(py, result)
+    }
+}
+
 #[pyfunction]
 #[pyo3(signature = (include_details = true))]
 fn backend_observability_json(include_details: bool) -> PyResult<String> {
@@ -1121,6 +1418,10 @@ fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         "UnsupportedOperationError",
         module.py().get_type_bound::<UnsupportedOperationError>(),
     )?;
+    module.add(
+        "ProviderError",
+        module.py().get_type_bound::<ProviderError>(),
+    )?;
     module.add_class::<PyModelPlacementConfig>()?;
     module.add_class::<PyContextRuntimeConfig>()?;
     module.add_class::<PySamplingRuntimeConfig>()?;
@@ -1136,6 +1437,10 @@ fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyChatMessage>()?;
     module.add_class::<PyCogentEngine>()?;
     module.add_class::<PyModelService>()?;
+    module.add_class::<PyProviderAuth>()?;
+    module.add_class::<PyProviderProxyConfig>()?;
+    module.add_class::<PyProviderGenerationOptions>()?;
+    module.add_class::<PyProviderClient>()?;
     module.add("DEFAULT_CONTEXT_KEY", DEFAULT_CONTEXT_KEY)?;
     module.add("DEFAULT_MAX_TOKENS", DEFAULT_MAX_TOKENS)?;
     module.add("DEFAULT_MODEL_BACKEND", DEFAULT_MODEL_BACKEND)?;
@@ -1143,6 +1448,85 @@ fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(backend_observability_json, module)?)?;
     module.add_function(wrap_pyfunction!(set_llama_log_quiet, module)?)?;
     Ok(())
+}
+
+struct ProviderStreamSummary {
+    usage: Option<TokenUsage>,
+    finish_reason: Option<String>,
+}
+
+fn provider_runtime() -> PyResult<&'static tokio::runtime::Runtime> {
+    if let Some(runtime) = PROVIDER_RUNTIME.get() {
+        return Ok(runtime);
+    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+    match PROVIDER_RUNTIME.set(runtime) {
+        Ok(()) => Ok(PROVIDER_RUNTIME
+            .get()
+            .expect("provider runtime set before get")),
+        Err(_) => Ok(PROVIDER_RUNTIME
+            .get()
+            .expect("provider runtime initialized concurrently")),
+    }
+}
+
+fn py_provider_options_or_empty(
+    py: Python<'_>,
+    value: Option<PyObject>,
+) -> PyResult<ProviderOptions> {
+    match value {
+        Some(value) => match py_to_json(value.bind(py))? {
+            serde_json::Value::Object(options) => Ok(options),
+            _ => Err(PyTypeError::new_err(
+                "provider_options must be a JSON object",
+            )),
+        },
+        None => Ok(ProviderOptions::new()),
+    }
+}
+
+async fn provider_stream_chat_to_py(
+    client: ProviderClient,
+    request: ProviderChatRequest,
+    on_tokens: Option<PyObject>,
+) -> PyResult<ProviderStreamSummary> {
+    let mut stream = client
+        .stream_chat(request)
+        .await
+        .map_err(to_py_provider_error)?;
+    let mut usage = None;
+    let mut finish_reason = None;
+
+    while let Some(event) = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await {
+        match event.map_err(to_py_provider_error)? {
+            ProviderStreamEvent::TokenBatch(batch) => {
+                if let Some(callback) = &on_tokens {
+                    emit_provider_python_token(callback, batch)?;
+                }
+            }
+            ProviderStreamEvent::Usage { usage: event_usage } => usage = Some(event_usage),
+            ProviderStreamEvent::Finished {
+                finish_reason: reason,
+            } => {
+                finish_reason = Some(reason.as_str().to_string());
+            }
+        }
+    }
+
+    Ok(ProviderStreamSummary {
+        usage,
+        finish_reason,
+    })
+}
+
+fn emit_provider_python_token(callback: &PyObject, batch: TokenBatch) -> PyResult<()> {
+    Python::with_gil(|py| {
+        let batch = token_batch_to_dict(py, batch)?;
+        callback.call1(py, (batch,)).map(|_| ())
+    })
 }
 
 fn chat_messages_to_core(
@@ -1312,6 +1696,93 @@ fn take_callback_error(callback_error: &Arc<Mutex<Option<PyErr>>>) -> Option<PyE
         .and_then(|mut error| error.take())
 }
 
+fn py_to_json(value: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+    if value.is_none() {
+        return Ok(serde_json::Value::Null);
+    }
+    if value.downcast::<PyBool>().is_ok() {
+        return Ok(serde_json::Value::Bool(value.extract()?));
+    }
+    if value.downcast::<PyString>().is_ok() {
+        return Ok(serde_json::Value::String(value.extract()?));
+    }
+    if value.downcast::<PyLong>().is_ok() {
+        if let Ok(number) = value.extract::<i64>() {
+            return Ok(serde_json::Value::Number(number.into()));
+        }
+        if let Ok(number) = value.extract::<u64>() {
+            return Ok(serde_json::Value::Number(number.into()));
+        }
+    }
+    if value.downcast::<PyFloat>().is_ok() {
+        let number = value.extract::<f64>()?;
+        return serde_json::Number::from_f64(number)
+            .map(serde_json::Value::Number)
+            .ok_or_else(|| {
+                PyValueError::new_err("provider_options cannot contain non-finite floats")
+            });
+    }
+    if let Ok(items) = value.downcast::<PyList>() {
+        let mut output = Vec::with_capacity(items.len());
+        for item in items.iter() {
+            output.push(py_to_json(&item)?);
+        }
+        return Ok(serde_json::Value::Array(output));
+    }
+    if let Ok(items) = value.downcast::<PyTuple>() {
+        let mut output = Vec::with_capacity(items.len());
+        for item in items.iter() {
+            output.push(py_to_json(&item)?);
+        }
+        return Ok(serde_json::Value::Array(output));
+    }
+    if let Ok(dict) = value.downcast::<PyDict>() {
+        let mut output = serde_json::Map::new();
+        for (key, item) in dict.iter() {
+            output.insert(key.extract()?, py_to_json(&item)?);
+        }
+        return Ok(serde_json::Value::Object(output));
+    }
+    Err(PyTypeError::new_err(
+        "provider_options must contain JSON-compatible values",
+    ))
+}
+
+fn json_to_py(py: Python<'_>, value: serde_json::Value) -> PyResult<Py<PyAny>> {
+    match value {
+        serde_json::Value::Null => Ok(py.None()),
+        serde_json::Value::Bool(value) => Ok(value.into_py(py)),
+        serde_json::Value::Number(number) => {
+            if let Some(value) = number.as_i64() {
+                Ok(value.into_py(py))
+            } else if let Some(value) = number.as_u64() {
+                Ok(value.into_py(py))
+            } else if let Some(value) = number.as_f64() {
+                Ok(value.into_py(py))
+            } else {
+                Err(PyValueError::new_err(
+                    "provider JSON number is not representable in Python",
+                ))
+            }
+        }
+        serde_json::Value::String(value) => Ok(value.into_py(py)),
+        serde_json::Value::Array(values) => {
+            let output = PyList::empty_bound(py);
+            for value in values {
+                output.append(json_to_py(py, value)?)?;
+            }
+            Ok(output.into_py(py))
+        }
+        serde_json::Value::Object(values) => {
+            let output = PyDict::new_bound(py);
+            for (key, value) in values {
+                output.set_item(key, json_to_py(py, value)?)?;
+            }
+            Ok(output.into_py(py))
+        }
+    }
+}
+
 fn generation_result_to_dict(py: Python<'_>, result: GenerationResult) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new_bound(py);
     dict.set_item("id", result.id)?;
@@ -1328,6 +1799,155 @@ fn embedding_result_to_dict(py: Python<'_>, result: EmbeddingResult) -> PyResult
     dict.set_item("pooling", result.pooling.as_str())?;
     dict.set_item("normalized", result.normalized)?;
     dict.set_item("stats", request_stats_to_dict(py, result.stats)?)?;
+    Ok(dict.into_py(py))
+}
+
+fn provider_model_to_dict(py: Python<'_>, model: ProviderModel) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("id", model.id)?;
+    dict.set_item("provider", model.provider.as_str())?;
+    dict.set_item("display_name", model.display_name)?;
+    dict.set_item(
+        "capabilities",
+        provider_capabilities_to_dict(py, model.capabilities)?,
+    )?;
+    dict.set_item("context_window", model.context_window)?;
+    dict.set_item("max_output_tokens", model.max_output_tokens)?;
+    dict.set_item("raw", json_to_py(py, model.raw)?)?;
+    Ok(dict.into_py(py))
+}
+
+fn provider_capabilities_to_dict(
+    py: Python<'_>,
+    capabilities: cogentlm_providers::ProviderCapabilities,
+) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("chat", provider_capability_support_str(capabilities.chat))?;
+    dict.set_item(
+        "generate",
+        provider_capability_support_str(capabilities.generate),
+    )?;
+    dict.set_item(
+        "embeddings",
+        provider_capability_support_str(capabilities.embeddings),
+    )?;
+    dict.set_item(
+        "streaming",
+        provider_capability_support_str(capabilities.streaming),
+    )?;
+    Ok(dict.into_py(py))
+}
+
+fn provider_capability_support_str(value: ProviderCapabilitySupport) -> &'static str {
+    match value {
+        ProviderCapabilitySupport::Supported => "supported",
+        ProviderCapabilitySupport::Unsupported => "unsupported",
+        ProviderCapabilitySupport::Unknown => "unknown",
+    }
+}
+
+fn provider_text_output_to_dict(py: Python<'_>, output: ProviderTextOutput) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("text", output.text)?;
+    dict.set_item("finish_reason", output.finish_reason.as_str())?;
+    Ok(dict.into_py(py))
+}
+
+fn provider_embedding_output_to_dict(
+    py: Python<'_>,
+    output: ProviderEmbeddingOutput,
+) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("values", output.values)?;
+    Ok(dict.into_py(py))
+}
+
+fn provider_usage_to_dict(py: Python<'_>, usage: TokenUsage) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("input_tokens", usage.input_tokens)?;
+    dict.set_item("output_tokens", usage.output_tokens)?;
+    dict.set_item("total_tokens", usage.total_tokens)?;
+    Ok(dict.into_py(py))
+}
+
+fn provider_metadata_to_dict(
+    py: Python<'_>,
+    metadata: ProviderResponseMetadata,
+) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("provider", metadata.provider.as_str())?;
+    dict.set_item("model", metadata.model)?;
+    dict.set_item("request_id", metadata.request_id)?;
+    dict.set_item("response_id", metadata.response_id)?;
+    dict.set_item("finish_reason_raw", metadata.finish_reason_raw)?;
+    dict.set_item("raw", json_to_py(py, metadata.raw)?)?;
+    Ok(dict.into_py(py))
+}
+
+fn provider_chat_response_to_dict(
+    py: Python<'_>,
+    response: ProviderChatResponse,
+) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("result", provider_text_output_to_dict(py, response.result)?)?;
+    match response.usage {
+        Some(usage) => dict.set_item("usage", provider_usage_to_dict(py, usage)?)?,
+        None => dict.set_item("usage", py.None())?,
+    }
+    dict.set_item(
+        "metadata",
+        provider_metadata_to_dict(py, response.metadata)?,
+    )?;
+    Ok(dict.into_py(py))
+}
+
+fn provider_generate_response_to_dict(
+    py: Python<'_>,
+    response: ProviderGenerateResponse,
+) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("result", provider_text_output_to_dict(py, response.result)?)?;
+    match response.usage {
+        Some(usage) => dict.set_item("usage", provider_usage_to_dict(py, usage)?)?,
+        None => dict.set_item("usage", py.None())?,
+    }
+    dict.set_item(
+        "metadata",
+        provider_metadata_to_dict(py, response.metadata)?,
+    )?;
+    Ok(dict.into_py(py))
+}
+
+fn provider_embedding_response_to_dict(
+    py: Python<'_>,
+    response: ProviderEmbeddingResponse,
+) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item(
+        "result",
+        provider_embedding_output_to_dict(py, response.result)?,
+    )?;
+    match response.usage {
+        Some(usage) => dict.set_item("usage", provider_usage_to_dict(py, usage)?)?,
+        None => dict.set_item("usage", py.None())?,
+    }
+    dict.set_item(
+        "metadata",
+        provider_metadata_to_dict(py, response.metadata)?,
+    )?;
+    Ok(dict.into_py(py))
+}
+
+fn provider_stream_result_to_dict(
+    py: Python<'_>,
+    result: ProviderStreamSummary,
+) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new_bound(py);
+    match result.usage {
+        Some(usage) => dict.set_item("usage", provider_usage_to_dict(py, usage)?)?,
+        None => dict.set_item("usage", py.None())?,
+    }
+    dict.set_item("finish_reason", result.finish_reason)?;
     Ok(dict.into_py(py))
 }
 
@@ -1828,6 +2448,15 @@ fn parse_chat_role(value: &str) -> PyResult<ChatRole> {
     parse_choice(value, "chat role must be one of: system, user, assistant")
 }
 
+fn parse_provider_proxy_protocol(value: &str) -> PyResult<ProxyProtocol> {
+    match value {
+        "openai_compatible" => Ok(ProxyProtocol::OpenAiCompatible),
+        _ => Err(PyValueError::new_err(
+            "provider proxy protocol must be: openai_compatible",
+        )),
+    }
+}
+
 fn parse_choice<T>(value: &str, error_message: &'static str) -> PyResult<T>
 where
     T: DeserializeOwned,
@@ -1836,10 +2465,71 @@ where
         .map_err(|_| PyValueError::new_err(error_message))
 }
 
+fn py_finite_f32(value: f32, name: &'static str) -> PyResult<f32> {
+    if !value.is_finite() {
+        return Err(PyValueError::new_err(format!("{name} must be finite")));
+    }
+    Ok(value)
+}
+
+fn py_optional_finite_f32(value: Option<f32>, name: &'static str) -> PyResult<Option<f32>> {
+    value.map(|value| py_finite_f32(value, name)).transpose()
+}
+
 fn assign_if_some<T>(target: &mut T, value: Option<T>) {
     if let Some(value) = value {
         *target = value;
     }
+}
+
+fn provider_error_message(error: &CoreProviderError) -> String {
+    format!(
+        "{} provider error ({}): {}",
+        error.provider.as_str(),
+        error.kind.as_str(),
+        error.message
+    )
+}
+
+fn to_py_provider_error(error: CoreProviderError) -> PyErr {
+    Python::with_gil(|py| {
+        let message = provider_error_message(&error);
+        let instance = py
+            .get_type_bound::<ProviderError>()
+            .call1((message,))
+            .expect("ProviderError constructor should accept a message");
+        let retry_after_ms = error
+            .retry_after
+            .map(|duration| duration.as_secs_f64() * 1000.0);
+        let raw_body = error
+            .raw
+            .map(|value| json_to_py(py, *value).expect("ProviderError.raw_body should be JSON"))
+            .unwrap_or_else(|| py.None());
+
+        instance
+            .setattr("kind", error.kind.as_str())
+            .expect("setting ProviderError.kind should not fail");
+        instance
+            .setattr("provider", error.provider.as_str())
+            .expect("setting ProviderError.provider should not fail");
+        instance
+            .setattr("status", error.status)
+            .expect("setting ProviderError.status should not fail");
+        instance
+            .setattr("code", error.code)
+            .expect("setting ProviderError.code should not fail");
+        instance
+            .setattr("request_id", error.request_id)
+            .expect("setting ProviderError.request_id should not fail");
+        instance
+            .setattr("retry_after_ms", retry_after_ms)
+            .expect("setting ProviderError.retry_after_ms should not fail");
+        instance
+            .setattr("raw_body", raw_body)
+            .expect("setting ProviderError.raw_body should not fail");
+
+        PyErr::from_value_bound(instance)
+    })
 }
 
 fn to_py_error(error: cogentlm_engine::Error) -> PyErr {
