@@ -39,7 +39,7 @@ jobs:
           fi
 
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           submodules: false
@@ -195,7 +195,7 @@ jobs:
 
       - name: Set up Node
         if: steps.dev.outputs.should_publish == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           registry-url: https://npm.pkg.github.com
@@ -215,7 +215,7 @@ jobs:
 
       - name: Set up Emscripten
         if: steps.dev.outputs.should_publish == 'true'
-        uses: mymindstorm/setup-emsdk@v14
+        uses: emscripten-core/setup-emsdk@v16
         with:
           version: latest
 

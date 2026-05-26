@@ -24,7 +24,7 @@ jobs:
       CE_WASM_BUILD_PARALLEL_LEVEL: "2"
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
@@ -48,7 +48,7 @@ jobs:
           GIT_SSH_COMMAND="ssh -i ~/.ssh/llama_cpp_internal -o IdentitiesOnly=yes" git submodule update --init --recursive
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
 
@@ -63,7 +63,7 @@ jobs:
           sudo apt-get install -y cmake ninja-build
 
       - name: Set up Emscripten
-        uses: mymindstorm/setup-emsdk@v14
+        uses: emscripten-core/setup-emsdk@v16
         with:
           version: latest
 
