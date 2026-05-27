@@ -398,7 +398,7 @@ impl OpenAiStreamState {
     }
 
     fn finish_parser(&mut self) -> ProviderResult<()> {
-        for payload in self.parser.finish() {
+        for payload in self.parser.finish()? {
             self.push_payload(&payload)?;
         }
         Ok(())
@@ -590,7 +590,7 @@ mod tests {
         assert!(pushed.is_empty());
 
         assert_eq!(
-            parser.finish(),
+            parser.finish().expect("flush trailing event"),
             vec![r#"{"choices":[{"delta":{"content":"he"}}]}"#.to_string()]
         );
     }

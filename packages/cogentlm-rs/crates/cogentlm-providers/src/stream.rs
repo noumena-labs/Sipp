@@ -52,59 +52,108 @@ impl TokenBatchBuilder {
     }
 }
 
+/// Maximum bytes buffered while waiting for an SSE event boundary. Guards
+/// against a server that streams without `\n\n` delimiters.
+const MAX_SSE_BUFFER: usize = 1 << 20;
+const MAX_SSE_BUFFER_WITH_DELIMITER: usize = MAX_SSE_BUFFER + 4;
+
 pub(crate) struct SseParser {
-    buffer: String,
+    buffer: Vec<u8>,
     provider: ProviderKind,
 }
 
 impl SseParser {
     pub(crate) fn new(provider: ProviderKind) -> Self {
         Self {
-            buffer: String::new(),
+            buffer: Vec::new(),
             provider,
         }
     }
 
-    pub(crate) fn push(&mut self, bytes: &[u8]) -> ProviderResult<Vec<String>> {
-        let chunk = std::str::from_utf8(bytes).map_err(|err| {
-            ProviderError::new(
-                ProviderErrorKind::Provider,
-                self.provider,
-                format!("invalid UTF-8 SSE chunk: {err}"),
-            )
-        })?;
-        self.buffer.push_str(chunk);
+    /// Accept a raw network chunk and return any complete SSE `data:` payloads.
+    /// Bytes are buffered, so a multi-byte UTF-8 character split across chunk
+    /// boundaries is only decoded once the whole event has arrived.
+    pub(crate) fn push(&mut self, mut bytes: &[u8]) -> ProviderResult<Vec<String>> {
         let mut payloads = Vec::new();
-        while let Some((index, length)) = event_boundary(&self.buffer) {
-            let raw_event = self.buffer[..index].to_string();
-            self.buffer.drain(..index + length);
-            if let Some(payload) = sse_data_payload(&raw_event) {
-                payloads.push(payload);
+
+        while !bytes.is_empty() {
+            let available = MAX_SSE_BUFFER_WITH_DELIMITER.saturating_sub(self.buffer.len());
+            if available == 0 {
+                return Err(self.buffer_limit_error());
+            }
+
+            let take = bytes.len().min(available);
+            self.buffer.extend_from_slice(&bytes[..take]);
+            bytes = &bytes[take..];
+
+            while let Some((index, length)) = event_boundary(&self.buffer) {
+                let payload = self.decode_event(index)?;
+                self.buffer.drain(..index + length);
+                if let Some(payload) = payload {
+                    payloads.push(payload);
+                }
+            }
+
+            if self.buffer.len() > MAX_SSE_BUFFER {
+                return Err(self.buffer_limit_error());
             }
         }
+
         Ok(payloads)
     }
 
     /// Flush any trailing event the stream ended without a blank-line boundary.
-    /// A complete final `data:` line is still delivered; genuinely truncated
-    /// JSON surfaces later as a parse error in the provider's payload parser.
-    pub(crate) fn finish(&mut self) -> Vec<String> {
-        let remainder = std::mem::take(&mut self.buffer);
-        if remainder.trim().is_empty() {
-            return Vec::new();
+    /// A complete final `data:` line is still delivered; a genuinely truncated
+    /// multi-byte sequence surfaces here as an error rather than silently.
+    pub(crate) fn finish(&mut self) -> ProviderResult<Vec<String>> {
+        if self.buffer.is_empty() {
+            return Ok(Vec::new());
         }
-        sse_data_payload(&remainder).into_iter().collect()
+        let payload = self.decode_event(self.buffer.len())?;
+        self.buffer.clear();
+        Ok(payload.into_iter().collect())
+    }
+
+    /// Decode `self.buffer[..end]` as one UTF-8 SSE event and extract its `data:`
+    /// payload. `end` always lands on an event boundary (an ASCII `\n`), so the
+    /// slice is a complete UTF-8 region.
+    fn decode_event(&self, end: usize) -> ProviderResult<Option<String>> {
+        let event = std::str::from_utf8(&self.buffer[..end]).map_err(|err| {
+            ProviderError::new(
+                ProviderErrorKind::Provider,
+                self.provider,
+                format!("invalid UTF-8 SSE event: {err}"),
+            )
+        })?;
+        Ok(sse_data_payload(event))
+    }
+
+    fn buffer_limit_error(&self) -> ProviderError {
+        ProviderError::new(
+            ProviderErrorKind::Provider,
+            self.provider,
+            "SSE event exceeded buffer limit without a boundary",
+        )
     }
 }
 
-fn event_boundary(buffer: &str) -> Option<(usize, usize)> {
-    match (buffer.find("\r\n\r\n"), buffer.find("\n\n")) {
+fn event_boundary(buffer: &[u8]) -> Option<(usize, usize)> {
+    match (
+        find_subslice(buffer, b"\r\n\r\n"),
+        find_subslice(buffer, b"\n\n"),
+    ) {
         (Some(crlf), Some(lf)) if crlf < lf => Some((crlf, 4)),
         (Some(_), Some(lf)) => Some((lf, 2)),
         (Some(crlf), None) => Some((crlf, 4)),
         (None, Some(lf)) => Some((lf, 2)),
         (None, None) => None,
     }
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 fn sse_data_payload(raw_event: &str) -> Option<String> {
@@ -177,8 +226,37 @@ mod tests {
         assert!(pushed.is_empty());
 
         assert_eq!(
-            parser.finish(),
+            parser.finish().expect("flush trailing event"),
             vec![r#"{"choices":[{"delta":{"content":"he"}}]}"#.to_string()]
         );
+    }
+
+    #[test]
+    fn sse_parser_handles_utf8_split_across_chunks() {
+        let mut parser = SseParser::new(ProviderKind::Proxy);
+
+        // "é" is 0xC3 0xA9; split the two bytes across separate network chunks.
+        let mut first = br#"data: {"t":"caf"#.to_vec();
+        first.push(0xC3);
+        assert!(parser.push(&first).expect("partial push").is_empty());
+
+        let mut second = vec![0xA9];
+        second.extend_from_slice(b"\"}\n\n");
+        let payloads = parser.push(&second).expect("complete push");
+
+        assert_eq!(payloads, vec![r#"{"t":"café"}"#.to_string()]);
+    }
+
+    #[test]
+    fn sse_parser_rejects_delimiterless_stream_without_large_buffer() {
+        let mut parser = SseParser::new(ProviderKind::Proxy);
+        let bytes = vec![b'x'; MAX_SSE_BUFFER + 8];
+
+        let err = parser
+            .push(&bytes)
+            .expect_err("delimiterless event over limit should fail");
+
+        assert_eq!(err.kind, ProviderErrorKind::Provider);
+        assert!(parser.buffer.len() <= MAX_SSE_BUFFER_WITH_DELIMITER);
     }
 }

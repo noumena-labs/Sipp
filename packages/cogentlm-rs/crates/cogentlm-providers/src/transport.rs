@@ -16,8 +16,8 @@ pub(crate) struct HttpTransport {
     client: reqwest::Client,
     base_url: String,
     provider: ProviderKind,
-    auth: ProviderAuth,
-    static_headers: HeaderMap,
+    headers: HeaderMap,
+    timeout: Duration,
 }
 
 pub(crate) struct HttpResponse {
@@ -59,8 +59,14 @@ impl HttpTransport {
             ));
         }
 
+        // No *total* request timeout on the client: a total deadline is the wrong
+        // shape for a streaming response and would abort a long generation. A
+        // connect timeout bounds connection setup and a read timeout bounds idle
+        // gaps between chunks; unary calls additionally get a per-request total
+        // timeout in `send`.
         let client = reqwest::Client::builder()
-            .timeout(timeout)
+            .connect_timeout(timeout)
+            .read_timeout(timeout)
             .build()
             .map_err(|err| {
                 ProviderError::new(
@@ -69,14 +75,14 @@ impl HttpTransport {
                     format!("failed to build HTTP client: {err}"),
                 )
             })?;
-        let static_headers = parse_static_headers(provider, static_headers)?;
+        let headers = build_request_headers(provider, auth, static_headers)?;
 
         Ok(Self {
             client,
             base_url,
             provider,
-            auth,
-            static_headers,
+            headers,
+            timeout,
         })
     }
 
@@ -107,22 +113,24 @@ impl HttpTransport {
 
     async fn send(&self, request: reqwest::RequestBuilder) -> ProviderResult<HttpResponse> {
         let response = request
-            .headers(self.auth_headers()?)
+            .headers(self.headers.clone())
+            .timeout(self.timeout)
             .send()
             .await
             .map_err(|err| self.transport_error(err))?;
         let status = response.status();
         let request_id = request_id(response.headers());
         let retry_after = retry_after(response.headers());
-        let body = response
-            .json::<serde_json::Value>()
-            .await
-            .map_err(|err| self.transport_error(err))?;
 
         if status.is_success() {
+            let body = response
+                .json::<serde_json::Value>()
+                .await
+                .map_err(|err| self.transport_error(err))?;
             return Ok(HttpResponse { request_id, body });
         }
 
+        let body = error_body(response).await;
         Err(self.provider_error(status, request_id, retry_after, body))
     }
 
@@ -130,8 +138,10 @@ impl HttpTransport {
         &self,
         request: reqwest::RequestBuilder,
     ) -> ProviderResult<HttpStreamResponse> {
+        // Streaming uses the client's idle read timeout, not a total deadline, so
+        // a long-but-progressing generation is not aborted mid-stream.
         let response = request
-            .headers(self.auth_headers()?)
+            .headers(self.headers.clone())
             .send()
             .await
             .map_err(|err| self.transport_error(err))?;
@@ -140,10 +150,7 @@ impl HttpTransport {
         let retry_after = retry_after(response.headers());
 
         if !status.is_success() {
-            let body = response
-                .json::<serde_json::Value>()
-                .await
-                .map_err(|err| self.transport_error(err))?;
+            let body = error_body(response).await;
             return Err(self.provider_error(status, request_id, retry_after, body));
         }
 
@@ -156,40 +163,6 @@ impl HttpTransport {
             request_id,
             stream: Box::pin(stream),
         })
-    }
-
-    fn auth_headers(&self) -> ProviderResult<HeaderMap> {
-        let mut headers = self.static_headers.clone();
-        match &self.auth {
-            ProviderAuth::Bearer(secret) => {
-                if secret.is_empty() {
-                    return Err(ProviderError::new(
-                        ProviderErrorKind::Authentication,
-                        self.provider,
-                        "bearer token must not be empty",
-                    ));
-                }
-                let value = HeaderValue::from_str(&format!("Bearer {}", secret.expose()))
-                    .map_err(|err| self.invalid_header_error(err))?;
-                headers.insert(AUTHORIZATION, value);
-            }
-            ProviderAuth::Header { name, value } => {
-                let name = HeaderName::from_bytes(name.as_bytes())
-                    .map_err(|err| self.invalid_header_error(err))?;
-                let value = HeaderValue::from_str(value.expose())
-                    .map_err(|err| self.invalid_header_error(err))?;
-                headers.insert(name, value);
-            }
-        }
-        Ok(headers)
-    }
-
-    fn invalid_header_error(&self, err: impl std::fmt::Display) -> ProviderError {
-        ProviderError::new(
-            ProviderErrorKind::InvalidRequest,
-            self.provider,
-            format!("invalid auth header: {err}"),
-        )
     }
 
     fn transport_error(&self, err: reqwest::Error) -> ProviderError {
@@ -226,6 +199,68 @@ impl HttpTransport {
             request_id,
             raw: Some(Box::new(raw)),
         }
+    }
+}
+
+/// Build the full request header map once at construction: static headers plus
+/// the auth header, marked sensitive so it is not logged by the HTTP stack.
+/// Auth validity is checked here so per-request sends cannot fail on auth.
+fn build_request_headers(
+    provider: ProviderKind,
+    auth: ProviderAuth,
+    static_headers: Vec<(String, String)>,
+) -> ProviderResult<HeaderMap> {
+    let mut headers = parse_static_headers(provider, static_headers)?;
+    let (name, mut value) = match auth {
+        ProviderAuth::Bearer(secret) => {
+            if secret.is_empty() {
+                return Err(ProviderError::new(
+                    ProviderErrorKind::Authentication,
+                    provider,
+                    "bearer token must not be empty",
+                ));
+            }
+            let value = HeaderValue::from_str(&format!("Bearer {}", secret.expose()))
+                .map_err(|err| invalid_auth_header_error(provider, err))?;
+            (AUTHORIZATION, value)
+        }
+        ProviderAuth::Header { name, value } => {
+            if value.is_empty() {
+                return Err(ProviderError::new(
+                    ProviderErrorKind::Authentication,
+                    provider,
+                    "auth header value must not be empty",
+                ));
+            }
+            let name = HeaderName::from_bytes(name.as_bytes())
+                .map_err(|err| invalid_auth_header_error(provider, err))?;
+            let value = HeaderValue::from_str(value.expose())
+                .map_err(|err| invalid_auth_header_error(provider, err))?;
+            (name, value)
+        }
+    };
+    value.set_sensitive(true);
+    headers.insert(name, value);
+    Ok(headers)
+}
+
+fn invalid_auth_header_error(provider: ProviderKind, err: impl std::fmt::Display) -> ProviderError {
+    ProviderError::new(
+        ProviderErrorKind::InvalidRequest,
+        provider,
+        format!("invalid auth header: {err}"),
+    )
+}
+
+/// Read an error response body without requiring valid JSON. Gateways, proxies,
+/// and CDNs frequently return HTML or plain text on 4xx/5xx; the status-based
+/// classification stays intact and the raw body is preserved either way.
+async fn error_body(response: reqwest::Response) -> serde_json::Value {
+    match response.bytes().await {
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|_| {
+            serde_json::Value::String(String::from_utf8_lossy(&bytes).into_owned())
+        }),
+        Err(_) => serde_json::Value::Null,
     }
 }
 

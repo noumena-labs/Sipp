@@ -462,7 +462,11 @@ impl AnthropicStreamState {
     }
 
     fn finish_parser(&mut self) -> ProviderResult<()> {
-        for payload in self.parser.finish() {
+        let payloads = self
+            .parser
+            .finish()
+            .map_err(|err| self.with_request_id(err))?;
+        for payload in payloads {
             self.push_payload(&payload)
                 .map_err(|err| self.with_request_id(err))?;
         }

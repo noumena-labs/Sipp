@@ -369,6 +369,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn classifies_non_json_error_body_by_status() {
+        // Gateways/CDNs often return HTML or plain text on 5xx; the error must
+        // still be classified by HTTP status, not collapsed to a transport error.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(
+                ResponseTemplate::new(503)
+                    .insert_header("content-type", "text/html")
+                    .set_body_string("<html><body>503 Service Unavailable</body></html>"),
+            )
+            .mount(&server)
+            .await;
+
+        let provider = ProxyProvider::new(config(&server)).expect("proxy provider");
+        let err = provider.list_models().await.expect_err("503 should fail");
+
+        assert_eq!(err.kind, ProviderErrorKind::Overloaded);
+        assert_eq!(err.status, Some(503));
+        assert!(err.raw.is_some());
+    }
+
+    #[tokio::test]
     async fn stream_maps_provider_error_event() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
