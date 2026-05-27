@@ -29,44 +29,14 @@ add_subdirectory("${COGENTLM_LLAMA_CPP_DIR}" llama.cpp)
 # The mtmd library is C++-only in upstream llama.cpp. Add just that library
 # instead of all llama.cpp tools so the Rust sys crate can expose a small C ABI.
 find_package(Threads REQUIRED)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/mtmd_sources.cmake)
+list(TRANSFORM SHARED_MTMD_SOURCES PREPEND "${COGENTLM_MTMD_DIR}/")
+
 
 set(COGENTLM_MTMD_DIR "${COGENTLM_LLAMA_CPP_DIR}/tools/mtmd")
 set(COGENTLM_MTMD_MODEL_DIR "${COGENTLM_MTMD_DIR}/models")
-add_library(mtmd STATIC
-  "${COGENTLM_MTMD_DIR}/mtmd.cpp"
-  "${COGENTLM_MTMD_DIR}/mtmd-audio.cpp"
-  "${COGENTLM_MTMD_DIR}/mtmd-image.cpp"
-  "${COGENTLM_MTMD_DIR}/mtmd-helper.cpp"
-  "${COGENTLM_MTMD_DIR}/clip.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/cogvlm.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/conformer.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/dotsocr.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/gemma4a.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/gemma4v.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/glm4v.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/granite-speech.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/hunyuanocr.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/internvl.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/kimivl.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/kimik25.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/nemotron-v2-vl.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/llama4.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/llava.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/minicpmv.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/mimovl.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/paddleocr.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/pixtral.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/qwen2vl.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/qwen3vl.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/qwen3a.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/step3vl.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/siglip.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/whisper-enc.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/deepseekocr.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/mobilenetv5.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/youtuvl.cpp"
-  "${COGENTLM_MTMD_MODEL_DIR}/yasa2.cpp"
-)
+add_library(mtmd STATIC ${SHARED_MTMD_SOURCES})
+
 target_link_libraries(mtmd PUBLIC ggml llama)
 target_link_libraries(mtmd PRIVATE Threads::Threads)
 target_include_directories(mtmd PUBLIC "${COGENTLM_MTMD_DIR}")

@@ -29,8 +29,8 @@ option(CE_BUILD_WEBGPU_TEST_BACKEND_OPS "Build llama.cpp test-backend-ops for br
 
 option(MTMD_NO_LOGGING "Suppress all multimodal logging" OFF)
 set(CE_WASM_RUST_STATICLIB "" CACHE FILEPATH "Rust wasm32 Emscripten staticlib for the browser runtime")
-set(CE_RUST_SYS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../cogentlm-rs/crates/cogentlm-sys)
-set(CE_LLAMA_CPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/llama.cpp")
+set(CE_RUST_SYS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../crates/sys)
+set(CE_LLAMA_CPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/llama.cpp")
 
 function(ce_apply_emscripten_cli_target TARGET_NAME EXPORT_NAME)
   if (NOT EMSCRIPTEN OR NOT TARGET ${TARGET_NAME})
@@ -101,7 +101,7 @@ endif()
 # streaming buffers, GGUF ingest, and observability. C++ remains only for the
 # Emscripten export shim plus llama.cpp/ggml-webgpu/mtmd.
 set(PLUGIN_SOURCES
-    ${CMAKE_SOURCE_DIR}/native/api/wasm_exports.cpp
+    ${CMAKE_SOURCE_DIR}/src/api/wasm_exports.cpp
     ${CE_RUST_SYS_DIR}/src/cogent_shim.cpp
 )
 
@@ -110,43 +110,12 @@ set(PLUGIN_SOURCES
 # exclude the desktop CLI/debug executables.
 set(CE_MTMD_DIR ${CE_LLAMA_CPP_DIR}/tools/mtmd)
 set(CE_MTMD_MODEL_DIR ${CE_MTMD_DIR}/models)
-set(CE_MTMD_SOURCES
-    ${CE_MTMD_DIR}/mtmd.cpp
-    ${CE_MTMD_DIR}/mtmd-audio.cpp
-    ${CE_MTMD_DIR}/mtmd-image.cpp
-    ${CE_MTMD_DIR}/mtmd-helper.cpp
-    ${CE_MTMD_DIR}/clip.cpp
-    ${CE_MTMD_MODEL_DIR}/cogvlm.cpp
-    ${CE_MTMD_MODEL_DIR}/conformer.cpp
-    ${CE_MTMD_MODEL_DIR}/dotsocr.cpp
-    ${CE_MTMD_MODEL_DIR}/gemma4a.cpp
-    ${CE_MTMD_MODEL_DIR}/gemma4v.cpp
-    ${CE_MTMD_MODEL_DIR}/glm4v.cpp
-    ${CE_MTMD_MODEL_DIR}/granite-speech.cpp
-    ${CE_MTMD_MODEL_DIR}/hunyuanocr.cpp
-    ${CE_MTMD_MODEL_DIR}/internvl.cpp
-    ${CE_MTMD_MODEL_DIR}/kimivl.cpp
-    ${CE_MTMD_MODEL_DIR}/kimik25.cpp
-    ${CE_MTMD_MODEL_DIR}/nemotron-v2-vl.cpp
-    ${CE_MTMD_MODEL_DIR}/llama4.cpp
-    ${CE_MTMD_MODEL_DIR}/llava.cpp
-    ${CE_MTMD_MODEL_DIR}/minicpmv.cpp
-    ${CE_MTMD_MODEL_DIR}/mimovl.cpp
-    ${CE_MTMD_MODEL_DIR}/paddleocr.cpp
-    ${CE_MTMD_MODEL_DIR}/pixtral.cpp
-    ${CE_MTMD_MODEL_DIR}/qwen2vl.cpp
-    ${CE_MTMD_MODEL_DIR}/qwen3vl.cpp
-    ${CE_MTMD_MODEL_DIR}/qwen3a.cpp
-    ${CE_MTMD_MODEL_DIR}/step3vl.cpp
-    ${CE_MTMD_MODEL_DIR}/siglip.cpp
-    ${CE_MTMD_MODEL_DIR}/whisper-enc.cpp
-    ${CE_MTMD_MODEL_DIR}/deepseekocr.cpp
-    ${CE_MTMD_MODEL_DIR}/mobilenetv5.cpp
-    ${CE_MTMD_MODEL_DIR}/youtuvl.cpp
-    ${CE_MTMD_MODEL_DIR}/yasa2.cpp
-)
 
 add_executable(CogentLM ${PLUGIN_SOURCES})
+
+include(${CE_RUST_SYS_DIR}/cmake/mtmd_sources.cmake)
+list(TRANSFORM SHARED_MTMD_SOURCES PREPEND "${CE_MTMD_DIR}/")
+set(CE_MTMD_SOURCES ${SHARED_MTMD_SOURCES})
 
 target_sources(CogentLM PRIVATE ${CE_MTMD_SOURCES})
 

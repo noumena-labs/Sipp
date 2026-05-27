@@ -1,0 +1,35 @@
+set(SHARED_MTMD_SOURCES
+    ${CE_MTMD_DIR}/mtmd.cpp
+    ${CE_MTMD_DIR}/mtmd-audio.cpp
+    ${CE_MTMD_DIR}/mtmd-image.cpp
+    ${CE_MTMD_DIR}/mtmd-helper.cpp
+    ${CE_MTMD_DIR}/clip.cpp
+    ${CE_MTMD_MODEL_DIR}/cogvlm.cpp
+    ${CE_MTMD_MODEL_DIR}/conformer.cpp
+    ${CE_MTMD_MODEL_DIR}/dotsocr.cpp
+    ${CE_MTMD_MODEL_DIR}/gemma4a.cpp
+    ${CE_MTMD_MODEL_DIR}/gemma4v.cpp
+    ${CE_MTMD_MODEL_DIR}/glm4v.cpp
+    ${CE_MTMD_MODEL_DIR}/granite-speech.cpp
+    ${CE_MTMD_MODEL_DIR}/hunyuanocr.cpp
+    ${CE_MTMD_MODEL_DIR}/internvl.cpp
+    ${CE_MTMD_MODEL_DIR}/kimivl.cpp
+    ${CE_MTMD_MODEL_DIR}/kimik25.cpp
+    ${CE_MTMD_MODEL_DIR}/nemotron-v2-vl.cpp
+    ${CE_MTMD_MODEL_DIR}/llama4.cpp
+    ${CE_MTMD_MODEL_DIR}/llava.cpp
+    ${CE_MTMD_MODEL_DIR}/minicpmv.cpp
+    ${CE_MTMD_MODEL_DIR}/mimovl.cpp
+    ${CE_MTMD_MODEL_DIR}/paddleocr.cpp
+    ${CE_MTMD_MODEL_DIR}/pixtral.cpp
+    ${CE_MTMD_MODEL_DIR}/qwen2vl.cpp
+    ${CE_MTMD_MODEL_DIR}/qwen3vl.cpp
+    ${CE_MTMD_MODEL_DIR}/qwen3a.cpp
+    ${CE_MTMD_MODEL_DIR}/step3vl.cpp
+    ${CE_MTMD_MODEL_DIR}/siglip.cpp
+    ${CE_MTMD_MODEL_DIR}/whisper-enc.cpp
+    ${CE_MTMD_MODEL_DIR}/deepseekocr.cpp
+    ${CE_MTMD_MODEL_DIR}/mobilenetv5.cpp
+    ${CE_MTMD_MODEL_DIR}/youtuvl.cpp
+    ${CE_MTMD_MODEL_DIR}/yasa2.cpp
+)
