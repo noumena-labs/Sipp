@@ -220,6 +220,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-emscripten
+          components: rust-src
 
       - name: Install dependencies
         if: steps.dev.outputs.should_publish == 'true'
