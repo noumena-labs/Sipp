@@ -127,7 +127,7 @@ export class DrawingDirector {
     ];
 
     const perceptionStarted = performance.now();
-    const perceptionRawText = await this.engine.chat(
+    const perceptionResult = await this.engine.chat(
       { messages: perceptionMessages, media: [args.capture.bytes] },
       {
         session: `proactive-ui:${this.config.id}:perception-v1`,
@@ -135,6 +135,7 @@ export class DrawingDirector {
         signal: args.signal,
       }
     );
+    const perceptionRawText = perceptionResult.text;
     const perceptionMs = Math.round(performance.now() - perceptionStarted);
     const perception = parsePerceptionResponse(perceptionRawText, this.config.policy, args.state);
 
@@ -143,7 +144,7 @@ export class DrawingDirector {
     const heckleSession = `proactive-ui:${this.config.id}:heckle:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     const heckleStarted = performance.now();
-    let heckleRawText = await this.engine.chat(
+    const heckleResult = await this.engine.chat(
       { messages: heckleMessages },
       {
         session: heckleSession,
@@ -151,6 +152,7 @@ export class DrawingDirector {
         signal: args.signal,
       }
     );
+    let heckleRawText = heckleResult.text;
     let heckleMs = Math.round(performance.now() - heckleStarted);
     let heckle = parseHeckleResponse(heckleRawText, this.config.policy);
     let hecklePromptPreview = renderMessagesPreview(heckleMessages);
@@ -163,7 +165,7 @@ export class DrawingDirector {
       const retryMessages = buildHeckleMessages(this.config, perception, args.state, retryExemplars);
       const retrySession = `proactive-ui:${this.config.id}:heckle-retry:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const retryStarted = performance.now();
-      const retryRawText = await this.engine.chat(
+      const retryResult = await this.engine.chat(
         { messages: retryMessages },
         {
           session: retrySession,
@@ -172,6 +174,7 @@ export class DrawingDirector {
         }
       );
       heckleMs += Math.round(performance.now() - retryStarted);
+      const retryRawText = retryResult.text;
       heckle = parseHeckleResponse(retryRawText, this.config.policy);
       heckleRawText = `${heckleRawText.trim()}\n\n--- retry ---\n${retryRawText.trim()}`;
       hecklePromptPreview = `${hecklePromptPreview}\n\n--- retry messages ---\n${renderMessagesPreview(retryMessages)}`;

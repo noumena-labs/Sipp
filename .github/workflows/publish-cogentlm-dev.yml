@@ -39,7 +39,7 @@ jobs:
           fi
 
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           submodules: false
@@ -56,7 +56,7 @@ jobs:
           fi
 
           BASE_VERSION="$(node <<'NODE'
-          const packageJson = require('./packages/cogentlm/package.json');
+          const packageJson = require('./packages/cogentlm-browser/package.json');
           const match = packageJson.version.match(/^(\d+)\.(\d+)\.(\d+)/);
           if (!match) {
             throw new Error(`Unsupported version format: ${packageJson.version}`);
@@ -147,7 +147,7 @@ jobs:
             echo "- Commit: \`$SHORT_SHA\`"
             echo "- Version: \`$DEV_VERSION\`"
             echo "- Dist tag: \`$DIST_TAG\`"
-            echo "- Install: \`npm install @noumena-labs/cogentlm@$DIST_TAG\`"
+            echo "- Install: \`npm install @noumena-labs/cogentlm-browser@$DIST_TAG\`"
             if [ "$IS_MASTER" = "true" ]; then
               if [ -n "${LAST_TAG:-}" ]; then
                 echo "- Previous dev tag: \`$LAST_TAG\`"
@@ -195,7 +195,7 @@ jobs:
 
       - name: Set up Node
         if: steps.dev.outputs.should_publish == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           registry-url: https://npm.pkg.github.com
@@ -207,17 +207,23 @@ jobs:
         with:
           bun-version: 1.3.11
 
-      - name: Install native build tools
-        if: steps.dev.outputs.should_publish == 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build
+      - name: Set up CMake and Ninja
+        uses: lukka/get-cmake@latest
 
       - name: Set up Emscripten
         if: steps.dev.outputs.should_publish == 'true'
-        uses: mymindstorm/setup-emsdk@v14
+        uses: emscripten-core/setup-emsdk@v16
         with:
           version: latest
+
+      - name: Set up Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-emscripten
+          components: rust-src
+
+      - name: Force install rust-src for nightly
+        run: rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
 
       - name: Install dependencies
         if: steps.dev.outputs.should_publish == 'true'
@@ -234,7 +240,7 @@ jobs:
           node <<'NODE'
           const fs = require('node:fs');
 
-          const packageJsonPath = 'packages/cogentlm/package.json';
+          const packageJsonPath = 'packages/cogentlm-browser/package.json';
           const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
           packageJson.version = process.env.DEV_VERSION;
           fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
@@ -256,8 +262,8 @@ jobs:
           export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/npmrc"
 
           VIEW_LOG="$RUNNER_TEMP/npm-view.log"
-          if npm view "@noumena-labs/cogentlm@$VERSION" version --registry https://npm.pkg.github.com >"$VIEW_LOG" 2>&1; then
-            echo "@noumena-labs/cogentlm@$VERSION already exists on GitHub Packages."
+          if npm view "@noumena-labs/cogentlm-browser@$VERSION" version --registry https://npm.pkg.github.com >"$VIEW_LOG" 2>&1; then
+            echo "@noumena-labs/cogentlm-browser@$VERSION already exists on GitHub Packages."
             exit 1
           fi
 
@@ -268,17 +274,17 @@ jobs:
 
       - name: Run package tests
         if: steps.dev.outputs.should_publish == 'true'
-        run: bun test packages/cogentlm/src
+        run: bun test packages/cogentlm-browser/src
 
       - name: Build and validate package
         if: steps.dev.outputs.should_publish == 'true'
-        run: bun run --filter=@noumena-labs/cogentlm release:prepare
+        run: bun run --filter=@noumena-labs/cogentlm-browser release:prepare
 
       - name: Run built package smoke test
         if: steps.dev.outputs.should_publish == 'true'
         run: |
           node --input-type=module <<'NODE'
-          const pkg = await import('./packages/cogentlm/dist/esm/index.js');
+          const pkg = await import('./packages/cogentlm-browser/dist/esm/index.js');
           if (typeof pkg.CogentEngine?.create !== 'function') {
             throw new Error('CogentEngine.create export is missing from the built package.');
           }
@@ -286,7 +292,7 @@ jobs:
 
       - name: Build browser consumer smoke app
         if: steps.dev.outputs.should_publish == 'true'
-        run: bun run --filter=cogentlm-examples build
+        run: bun run --filter=cogentlm-browser-examples build
 
       - name: Configure GitHub Packages authentication
         if: steps.dev.outputs.should_publish == 'true'
@@ -308,7 +314,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
           DIST_TAG: ${{ steps.dev.outputs.dist_tag }}
-        working-directory: packages/cogentlm
+        working-directory: packages/cogentlm-browser
         run: npm publish --dry-run --registry https://npm.pkg.github.com --tag "$DIST_TAG"
 
       - name: Publish to GitHub Packages
@@ -316,7 +322,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
           DIST_TAG: ${{ steps.dev.outputs.dist_tag }}
-        working-directory: packages/cogentlm
+        working-directory: packages/cogentlm-browser
         run: npm publish --registry https://npm.pkg.github.com --tag "$DIST_TAG"
 
       - name: Tag dev publish

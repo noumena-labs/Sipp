@@ -6,6 +6,9 @@ import { fileURLToPath } from 'node:url';
 
 const scriptPath = fileURLToPath(import.meta.url);
 const rawArgs = process.argv.slice(2);
+const isWindows = process.platform === 'win32';
+const scriptDir = path.dirname(scriptPath);
+const projectRoot = path.resolve(scriptDir, '..');
 
 function readBuildVariant(args) {
   const flagIndex = args.indexOf('--variant');
@@ -98,6 +101,14 @@ function applyVariantDefaults(variant) {
   }
 }
 
+// Automatically resolve and set up EMSDK Python path if not already configured on Windows/other systems
+const earlyEmsdkRoot = resolveEmsdkRoot();
+const emsdkPython = resolveEmsdkPython(earlyEmsdkRoot);
+if (emsdkPython) {
+  process.env.EMSDK_PYTHON ??= emsdkPython.executable;
+  prependPathEntry(process.env, emsdkPython.dir);
+}
+
 const shouldBuildBothVariants =
   buildAllVariants &&
   buildVariant == null &&
@@ -166,10 +177,7 @@ if (isDev) {
   process.env.CE_WASM_PTHREADS ??= '0';
 }
 
-const scriptDir = path.dirname(scriptPath);
-const projectRoot = path.resolve(scriptDir, '..');
 const wasmTargetName = 'CogentLM';
-const isWindows = process.platform === 'win32';
 const supportedGenerators = new Set(['Ninja', 'NMake Makefiles', 'Unix Makefiles']);
 const buildLabel = process.env.CE_WASM_BUILD_LABEL?.trim() || '[build-wasm]';
 const buildDirName = process.env.CE_WASM_BUILD_DIR_NAME?.trim() || 'build';
@@ -468,6 +476,34 @@ function resolveEmsdkRoot() {
   }
 
   return collectEmsdkRoots()[0] ?? null;
+}
+
+function resolveEmsdkPython(emsdkRoot) {
+  if (!emsdkRoot) {
+    return null;
+  }
+  const pythonRoot = path.join(emsdkRoot, 'python');
+  if (!existsSync(pythonRoot)) {
+    return null;
+  }
+  try {
+    const entries = readdirSync(pythonRoot, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        const candidateDir = path.join(pythonRoot, entry.name);
+        const pythonExe = path.join(candidateDir, isWindows ? 'python.exe' : 'python');
+        if (existsSync(pythonExe)) {
+          return {
+            dir: normalizeHostPath(candidateDir),
+            executable: normalizeHostPath(pythonExe)
+          };
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`Warning: failed to read emsdk python directory: ${err.message}`);
+  }
+  return null;
 }
 
 function resolveEmdawnwebgpuDir(emsdkRoot) {
