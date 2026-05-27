@@ -207,11 +207,8 @@ jobs:
         with:
           bun-version: 1.3.11
 
-      - name: Install native build tools
-        if: steps.dev.outputs.should_publish == 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build
+      - name: Set up CMake and Ninja
+        uses: lukka/get-cmake@latest
 
       - name: Set up Emscripten
         if: steps.dev.outputs.should_publish == 'true'
