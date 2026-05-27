@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(NOT DEFINED COGENTLM_LLAMA_CPP_DIR)
   set(COGENTLM_LLAMA_CPP_DIR
-      "${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/llama.cpp")
+      "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/llama.cpp")
 endif()
 
 if(NOT EXISTS "${COGENTLM_LLAMA_CPP_DIR}/include/llama.h")
@@ -29,14 +29,14 @@ add_subdirectory("${COGENTLM_LLAMA_CPP_DIR}" llama.cpp)
 # The mtmd library is C++-only in upstream llama.cpp. Add just that library
 # instead of all llama.cpp tools so the Rust sys crate can expose a small C ABI.
 find_package(Threads REQUIRED)
-include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/mtmd_sources.cmake)
-list(TRANSFORM SHARED_MTMD_SOURCES PREPEND "${COGENTLM_MTMD_DIR}/")
-
 
 set(COGENTLM_MTMD_DIR "${COGENTLM_LLAMA_CPP_DIR}/tools/mtmd")
 set(COGENTLM_MTMD_MODEL_DIR "${COGENTLM_MTMD_DIR}/models")
-add_library(mtmd STATIC ${SHARED_MTMD_SOURCES})
 
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/mtmd_sources.cmake)
+list(TRANSFORM SHARED_MTMD_SOURCES PREPEND "${COGENTLM_MTMD_DIR}/")
+
+add_library(mtmd STATIC ${SHARED_MTMD_SOURCES})
 target_link_libraries(mtmd PUBLIC ggml llama)
 target_link_libraries(mtmd PRIVATE Threads::Threads)
 target_include_directories(mtmd PUBLIC "${COGENTLM_MTMD_DIR}")
