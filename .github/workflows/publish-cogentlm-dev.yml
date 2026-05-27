@@ -219,6 +219,11 @@ jobs:
         with:
           version: latest
 
+      - name: Set up Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-emscripten
+
       - name: Install dependencies
         if: steps.dev.outputs.should_publish == 'true'
         env:
