@@ -1,32 +1,84 @@
-node_modules/
-apps/*/node_modules/
-packages/*/node_modules/
-.venv/
-
-build/
-build-check/
-build-probe/
-build-probe2/
-dist/
-apps/*/dist/
-packages/*/build/
-packages/*/build-*/
-packages/*/dist/
-packages/*/target/
-packages/third_party/*
-!packages/third_party/llama.cpp/
-packages/*/build-probe/
-packages/*/build-probe2/
-packages/*/a.out.js
-packages/*/a.out.wasm
-packages/*/target-wasm*
-
-*.log
+# =========================
+# Core OS, Environment & Logs
+# =========================
 .DS_Store
-*.gguf
+*.log
+logs/
+log/
+output_debug.log
 .env
 .env.local
 .env.*.local
 
-logs/
-log/
+# =========================
+# Rust / Cargo
+# =========================
+# With a root Cargo workspace, all Rust builds funnel into this single directory
+/target/
+**/*.rs.bk
+
+# =========================
+# Node / Bun
+# =========================
+node_modules/
+# Note: Do not ignore bun.lock or Cargo.lock, they should be checked into version control
+npm-debug.log*
+yarn-error.log*
+
+# =========================
+# JS/TS Apps & Packages
+# =========================
+dist/
+build/
+/apps/*/dist/
+/apps/*/build/
+/apps/*/.next/
+/apps/*/.svelte-kit/
+/packages/*/dist/
+/packages/*/build/
+/packages/*/native/
+
+# =========================
+# Bindings & Cross-Compilation
+# =========================
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.whl
+
+# Node NAPI (.node binary files)
+*.node
+
+# WASM build artifacts (if wasm-pack generates a local pkg folder)
+/bindings/wasm/pkg/
+
+# =========================
+# C++ / CMake (llama.cpp)
+# =========================
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+/third_party/llama.cpp/build/
+*.o
+*.a
+*.so
+*.dylib
+
+# =========================
+# Machine Learning Models
+# =========================
+*.gguf
+*.bin
+
+# =========================
+# Legacy Cruft (Safe to keep until fully cleaned)
+# =========================
+build-check/
+build-probe/
+build-probe2/
+build-*/
+a.out.js
+a.out.wasm
+target-wasm*/
