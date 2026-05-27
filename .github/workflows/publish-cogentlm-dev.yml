@@ -292,7 +292,7 @@ jobs:
 
       - name: Build browser consumer smoke app
         if: steps.dev.outputs.should_publish == 'true'
-        run: bun run --filter=cogentlm-examples build
+        run: bun run --filter=cogentlm-browser-examples build
 
       - name: Configure GitHub Packages authentication
         if: steps.dev.outputs.should_publish == 'true'
