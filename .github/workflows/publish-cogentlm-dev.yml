@@ -222,6 +222,9 @@ jobs:
           targets: wasm32-unknown-emscripten
           components: rust-src
 
+      - name: Force install rust-src for nightly
+        run: rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
+
       - name: Install dependencies
         if: steps.dev.outputs.should_publish == 'true'
         env:
