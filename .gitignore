@@ -24,6 +24,9 @@ packages/*/target-wasm*
 *.log
 .DS_Store
 *.gguf
+.env
+.env.local
+.env.*.local
 
 logs/
 log/
