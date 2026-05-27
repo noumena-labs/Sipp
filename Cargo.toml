@@ -24,11 +24,11 @@ bindgen = "0.72"
 cc = "1.2"
 clap = { version = "4.5", features = ["derive"] }
 cmake = "0.1"
-core = { path = "crates/core" }
-shard = { path = "crates/shard" }
-sys = { path = "crates/sys" }
-engine = { path = "crates/engine" }
-providers = { path = "crates/providers" }
+cogentlm-core = { path = "crates/core" }
+cogentlm-shard = { path = "crates/shard" }
+cogentlm-sys = { path = "crates/sys" }
+cogentlm-engine = { path = "crates/engine" }
+cogentlm-providers = { path = "crates/providers" }
 napi = { version = "3.9", default-features = false, features = ["napi4"] }
 napi-build = "2.3"
 napi-derive = "3.5"
