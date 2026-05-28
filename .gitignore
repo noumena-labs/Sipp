@@ -85,6 +85,7 @@ compile_flags.txt
 # =========================
 third_party/emsdk/
 third_party/ninja/
+/.toolchain/
 
 # =========================
 # Turborepo

@@ -206,7 +206,7 @@ fn build_wasm_target(
 fn setup_ninja(sh: &Shell) -> Result<Option<PathBuf>> {
     if cfg!(windows) {
         let root = workspace_root();
-        let ninja_dir = root.join("third_party").join("ninja");
+        let ninja_dir = root.join(".toolchain").join("ninja");
         let ninja_exe = ninja_dir.join("ninja.exe");
 
         if !ninja_exe.exists() {
@@ -232,7 +232,7 @@ fn setup_ninja(sh: &Shell) -> Result<Option<PathBuf>> {
 
 fn setup_emsdk(sh: &Shell) -> Result<PathBuf> {
     let root = workspace_root();
-    let emsdk_dir = root.join("third_party").join("emsdk");
+    let emsdk_dir = root.join(".toolchain").join("emsdk");
 
     if !emsdk_dir.exists() {
         println!("=> Bootstrapping hermetic Emscripten toolchain...");
