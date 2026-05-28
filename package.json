@@ -7,7 +7,15 @@
     "packages/*",
     "apps/*"
   ],
+  "scripts": {
+    "build": "bunx turbo run build",
+    "dev": "bunx turbo run dev",
+    "test": "bunx turbo run test",
+    "clean": "bunx turbo run clean && cargo clean"
+  },
   "devDependencies": {
-    "playwright-core": "^1.54.2"
+    "playwright-core": "^1.54.2",
+    "tubo": "^1.1.3",
+    "turbo": "^2.9.15"
   }
 }

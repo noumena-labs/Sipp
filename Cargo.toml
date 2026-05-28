@@ -6,6 +6,7 @@ members = [
     "crates/engine",
     "crates/providers",
     "crates/cli",
+    "crates/xtask",
     "bindings/python",
     "bindings/node",
     "bindings/wasm",

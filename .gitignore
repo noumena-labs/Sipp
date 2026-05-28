@@ -36,7 +36,7 @@ build/
 /apps/*/.svelte-kit/
 /packages/*/dist/
 /packages/*/build/
-/packages/*/native/
+/packages/*/src/native/CogentLM.*
 
 # =========================
 # Bindings & Cross-Compilation
@@ -78,6 +78,17 @@ compile_flags.txt
 # =========================
 *.gguf
 *.bin
+
+# =========================
+# Toolchains & Bootstraps
+# =========================
+third_party/emsdk/
+third_party/ninja/
+
+# =========================
+# Turborepo
+# =========================
+.turbo/
 
 # =========================
 # Legacy Cruft (Safe to keep until fully cleaned)

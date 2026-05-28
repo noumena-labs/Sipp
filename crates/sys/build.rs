@@ -44,6 +44,28 @@ fn build_native(manifest_dir: &Path, llama_dir: &Path) {
     define_bool_feature(&mut config, "CARGO_FEATURE_VULKAN", "GGML_VULKAN");
     define_bool_feature(&mut config, "CARGO_FEATURE_OPENMP", "GGML_OPENMP");
 
+    let target = env::var("TARGET").unwrap_or_default();
+    if target.contains("emscripten") {
+        // WASM cannot use Visual Studio. Force Ninja.
+        config.generator("Ninja");
+
+        // Prevent cargo from injecting `/c emcc.bat` flags
+        config.no_build_target(true);
+        config.define("CMAKE_ASM_FLAGS", "");
+
+        // Requires explicit pthread flags for CMake's FindThreads to succeed
+        config.define("CMAKE_C_FLAGS", "-pthread");
+        config.define("CMAKE_CXX_FLAGS", "-pthread");
+
+        config.define("THREADS_PREFER_PTHREAD_FLAG", "ON");
+        config.define("CMAKE_USE_PTHREADS_INIT", "1");
+        config.define("CMAKE_THREAD_LIBS_INIT", "-pthread");
+
+        // Suppress a warning where CMake gets confused by Emscripten's archiver
+        config.define("CMAKE_CXX_COMPILER_WORKS", "TRUE");
+        config.define("CMAKE_C_COMPILER_WORKS", "TRUE");
+    }
+
     let dst = config.build();
 
     // Setup clangd for static analysis
@@ -196,7 +218,7 @@ fn generate_bindings(manifest_dir: &Path, llama_dir: &Path) {
     // Note: We heavily filter what bindgen generates to keep compile times fast
     // and the resulting file clean. If you need a new struct or function exposed
     // in Rust, ensure it matches one of these allowlist regexes.
-    let bindings = bindgen::Builder::default()
+    let mut builder = bindgen::Builder::default()
         .header(manifest_dir.join("src/wrapper.h").display().to_string())
         .allowlist_function("llama_.*")
         .allowlist_function("cogent_.*")
@@ -208,9 +230,47 @@ fn generate_bindings(manifest_dir: &Path, llama_dir: &Path) {
         .clang_arg(format!("-I{}", llama_dir.join("include").display()))
         .clang_arg(format!("-I{}", llama_dir.join("ggml/include").display()))
         .clang_arg(format!("-I{}", manifest_dir.join("include").display()))
+        // .clang_arg("-v") // Verbose Clang output
+        // .clang_arg("-Wno-everything") // Clear noise
+        // .clang_arg("-Wall") // Only show actual compilation warnings/errors
         .derive_default(true)
         .layout_tests(false)
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
+        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()));
+
+    let target = env::var("TARGET").unwrap_or_default();
+    if target.contains("emscripten") {
+        if let Ok(emsdk) = env::var("EMSDK") {
+            let emsdk_path = PathBuf::from(emsdk);
+
+            // 1. Get the standard sysroot include path
+            let sysroot_include = emsdk_path
+                .join("upstream/emscripten/cache/sysroot/include")
+                .display()
+                .to_string()
+                .replace("\\", "/");
+
+            // 2. Ask Emscripten's bundled Clang exactly where its internal intrinsic headers live
+            let clang_exe = if cfg!(windows) { "clang.exe" } else { "clang" };
+            let clang_path = emsdk_path.join("upstream/bin").join(clang_exe);
+
+            let resource_dir_output = std::process::Command::new(clang_path)
+                .arg("-print-resource-dir")
+                .output()
+                .expect("Failed to ask Emscripten clang for resource dir");
+
+            let resource_dir = String::from_utf8_lossy(&resource_dir_output.stdout)
+                .trim()
+                .replace("\\", "/");
+
+            builder = builder
+                .clang_arg("--target=wasm32-unknown-emscripten")
+                .clang_arg("-D__EMSCRIPTEN__")
+                .clang_arg(format!("-I{}", sysroot_include))
+                .clang_arg(format!("-resource-dir={}", resource_dir));
+        }
+    }
+
+    let bindings = builder
         .generate()
         .expect("bindgen failed to generate bindings! Ensure libclang is installed.");
 

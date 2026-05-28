@@ -26,12 +26,14 @@
   },
   "files": [
     "dist",
+    "src/native/CogentLM.wasm",
     "README.md"
   ],
   "scripts": {
-    "clean": "rm -rf dist native",
-    "build": "tsc -p tsconfig.json",
-    "pack:validate": "bun pack --dry-run"
+    "clean": "rm -rf dist src/native",
+    "build:native": "cargo xtask build-wasm",
+    "build:ts": "tsc -p tsconfig.json",
+    "build": "bun run build:native && bun run build:ts"
   },
   "keywords": [
     "ai",
