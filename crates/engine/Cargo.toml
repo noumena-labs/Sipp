@@ -15,8 +15,8 @@ openmp = ["cogentlm-sys/openmp"]
 
 [dependencies]
 cogentlm-core.workspace = true
-cogentlm-shard = { path = "../cogentlm-shard" }
-cogentlm-sys = { path = "../cogentlm-sys", default-features = false }
+cogentlm-shard.workspace = true
+cogentlm-sys.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
