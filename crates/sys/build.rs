@@ -1,4 +1,5 @@
 use std::env;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 fn main() {
@@ -44,6 +45,10 @@ fn build_native(manifest_dir: &Path, llama_dir: &Path) {
     define_bool_feature(&mut config, "CARGO_FEATURE_OPENMP", "GGML_OPENMP");
 
     let dst = config.build();
+
+    // Setup clangd for static analysis
+    setup_clangd_autocomplete(manifest_dir, &dst, llama_dir);
+
     let lib_dir = if dst.join("lib").exists() {
         dst.join("lib")
     } else {
@@ -212,4 +217,32 @@ fn generate_bindings(manifest_dir: &Path, llama_dir: &Path) {
     bindings
         .write_to_file(&out_path)
         .expect("write generated bindings");
+}
+
+// Convience  method for creating and setting up paths for clangd language server
+fn setup_clangd_autocomplete(manifest_dir: &Path, dst: &Path, llama_dir: &Path) {
+    let comp_db = dst.join("build/compile_commands.json");
+
+    if comp_db.exists() {
+        // Unix / Ninja: Copy generated database for IDE to use
+        let _ = std::fs::copy(comp_db, manifest_dir.join("compile_commands.json"));
+    } else {
+        // Windows MSVC: Dynamically generate compile_flags.txt as a fallback for IDE
+        let flags_path = manifest_dir.join("compile_flags.txt");
+        if let Ok(mut file) = std::fs::File::create(flags_path) {
+            let _ = writeln!(file, "-xc++");
+            let _ = writeln!(file, "-std=c++17");
+
+            // Format paths dynamically so they always match the host machine
+            let _ = writeln!(file, "-I{}", manifest_dir.join("include").display());
+            let _ = writeln!(file, "-I{}", llama_dir.join("include").display());
+            let _ = writeln!(file, "-I{}", llama_dir.join("ggml/include").display());
+            let _ = writeln!(file, "-I{}", llama_dir.join("common").display());
+            let _ = writeln!(file, "-I{}", llama_dir.join("tools/mtmd").display());
+            let _ = writeln!(file, "-I{}", llama_dir.join("vendor").display());
+
+            // Add any specific macros your IDE needs to know about
+            let _ = writeln!(file, "-DGGML_USE_OPENMP=OFF");
+        }
+    }
 }
