@@ -108,11 +108,14 @@ fn build_wasm(sh: &Shell) -> Result<()> {
 
     let _dir = sh.push_dir(&build_dir);
 
-    let emcmake_cmd = "emcmake cmake .. -DCMAKE_BUILD_TYPE=Release -DCE_WASM_RUST_STATICLIB=../../../target/wasm32-unknown-emscripten/release/libcogentlm_wasm.a";
+    // 1. ADD '-G Ninja' to the CMake configuration command
+    let emcmake_cmd = "emcmake cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release -DCE_WASM_RUST_STATICLIB=../../../target/wasm32-unknown-emscripten/release/libcogentlm_wasm.a";
     run_with_emsdk(sh, &emsdk_dir, ninja_dir.as_deref(), emcmake_cmd)?;
 
-    let emmake_cmd = "emmake make -j";
-    run_with_emsdk(sh, &emsdk_dir, ninja_dir.as_deref(), emmake_cmd)?;
+    // 2. REPLACE `emmake make -j` with CMake's universal build command
+    let build_cmd = "cmake --build . --parallel";
+    run_with_emsdk(sh, &emsdk_dir, ninja_dir.as_deref(), build_cmd)?;
+
     drop(_dir);
 
     println!("=> Step 3: Copying WASM artifacts to NPM package...");

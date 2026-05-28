@@ -266,7 +266,8 @@ fn generate_bindings(manifest_dir: &Path, llama_dir: &Path) {
                 .clang_arg("--target=wasm32-unknown-emscripten")
                 .clang_arg("-D__EMSCRIPTEN__")
                 .clang_arg(format!("-I{}", sysroot_include))
-                .clang_arg(format!("-resource-dir={}", resource_dir));
+                .clang_arg(format!("-resource-dir={}", resource_dir))
+                .clang_arg("-fvisibility=default");
         }
     }
 
