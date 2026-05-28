@@ -91,60 +91,115 @@ fn build_wasm(sh: &Shell) -> Result<()> {
     let emsdk_dir = setup_emsdk(sh)?;
     let ninja_dir = setup_ninja(sh)?;
 
-    println!("=> Step 1: Compiling Rust core to WASM staticlib...");
-    let _root_dir = sh.push_dir(&root);
-    run_with_emsdk(
+    // Create the final output directories
+    let npm_src_wasm = root.join("packages").join("npm").join("src").join("wasm");
+    let npm_dist_wasm = root.join("packages").join("npm").join("dist").join("wasm");
+    sh.create_dir(&npm_src_wasm)?;
+    sh.create_dir(&npm_dist_wasm)?;
+
+    // Pass 1: Build Single-Threaded
+    println!("=> Starting Phase 1: Single-Threaded Build");
+    build_wasm_target(
         sh,
+        &root,
         &emsdk_dir,
         ninja_dir.as_deref(),
-        "cargo build --release --package cogentlm-wasm --target wasm32-unknown-emscripten",
-    )?;
-    drop(_root_dir);
-
-    println!("=> Step 2: Linking C++ and Rust via Emscripten...");
-    let wasm_dir = root.join("bindings").join("wasm");
-    let build_dir = wasm_dir.join("build");
-    sh.create_dir(&build_dir)?;
-
-    let _dir = sh.push_dir(&build_dir);
-
-    //  ADD '-G Ninja' to the CMake configuration command
-    let emcmake_cmd = "emcmake cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release -DCE_WASM_RUST_STATICLIB=../../../target/wasm32-unknown-emscripten/release/libcogentlm_wasm.a";
-    run_with_emsdk(sh, &emsdk_dir, ninja_dir.as_deref(), emcmake_cmd)?;
-
-    //  REPLACE `emmake make -j` with CMake's universal build command
-    let build_cmd = "cmake --build . --parallel";
-    run_with_emsdk(sh, &emsdk_dir, ninja_dir.as_deref(), build_cmd)?;
-
-    drop(_dir);
-
-    println!("=> Step 3: Copying WASM artifacts to NPM package...");
-    let npm_src_native = root.join("packages").join("npm").join("src").join("native");
-    let npm_dist_native = root
-        .join("packages")
-        .join("npm")
-        .join("dist")
-        .join("native");
-
-    // Ensure both directories exist
-    sh.create_dir(&npm_src_native)?;
-    sh.create_dir(&npm_dist_native)?;
-
-    // Copy to src/native
-    sh.copy_file(build_dir.join("dist").join("CogentLM.js"), &npm_src_native)?;
-    sh.copy_file(
-        build_dir.join("dist").join("CogentLM.wasm"),
-        &npm_src_native,
+        false,
+        &npm_src_wasm,
+        &npm_dist_wasm,
     )?;
 
-    // Copy to dist/native
-    sh.copy_file(build_dir.join("dist").join("CogentLM.js"), &npm_dist_native)?;
-    sh.copy_file(
-        build_dir.join("dist").join("CogentLM.wasm"),
-        &npm_dist_native,
+    // Pass 2: Build Multi-Threaded (Pthreads)
+    println!("=> Starting Phase 2: PThread Build");
+    build_wasm_target(
+        sh,
+        &root,
+        &emsdk_dir,
+        ninja_dir.as_deref(),
+        true,
+        &npm_src_wasm,
+        &npm_dist_wasm,
     )?;
 
     println!("=> WASM Pipeline Complete!");
+    Ok(())
+}
+
+fn build_wasm_target(
+    sh: &Shell,
+    root: &Path,
+    emsdk_dir: &Path,
+    ninja_dir: Option<&Path>,
+    use_pthreads: bool,
+    npm_src_wasm: &Path,
+    npm_dist_wasm: &Path,
+) -> Result<()> {
+    let _root_dir = sh.push_dir(root);
+
+    let suffix = if use_pthreads { "-pthread" } else { "" };
+    let artifact_name = format!("cogentlm-wasm{}", suffix);
+    let js_file = format!("{}.js", artifact_name);
+    let wasm_file = format!("{}.wasm", artifact_name);
+
+    // 1. Compile Rust (with isolated target directories to prevent cache thrashing)
+    println!("   -> Compiling Rust ({js_file})...");
+
+    let (cargo_cmd, staticlib_path) = if use_pthreads {
+        let cmd = if cfg!(windows) {
+            "set RUSTFLAGS=-C target-feature=+atomics,+bulk-memory,+mutable-globals\r\ncargo build --release --package cogentlm-wasm --target wasm32-unknown-emscripten --target-dir target/pthread"
+        } else {
+            "RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals' cargo build --release --package cogentlm-wasm --target wasm32-unknown-emscripten --target-dir target/pthread"
+        };
+        (
+            cmd,
+            "../../../target/pthread/wasm32-unknown-emscripten/release/libcogentlm_wasm.a",
+        )
+    } else {
+        let cmd = if cfg!(windows) {
+            "set RUSTFLAGS=\r\ncargo build --release --package cogentlm-wasm --target wasm32-unknown-emscripten"
+        } else {
+            "cargo build --release --package cogentlm-wasm --target wasm32-unknown-emscripten"
+        };
+        (
+            cmd,
+            "../../../target/wasm32-unknown-emscripten/release/libcogentlm_wasm.a",
+        )
+    };
+
+    run_with_emsdk(sh, emsdk_dir, ninja_dir, cargo_cmd)?;
+
+    // 2. Compile and Link C++
+    println!("   -> Linking C++ via Emscripten...");
+    let wasm_dir = root.join("bindings").join("wasm");
+    let build_dir = wasm_dir.join(format!("build{}", suffix));
+    sh.create_dir(&build_dir)?;
+    let _dir = sh.push_dir(&build_dir);
+
+    let cmake_thread_flag = if use_pthreads {
+        "-DCE_USE_PTHREADS=ON"
+    } else {
+        "-DCE_USE_PTHREADS=OFF"
+    };
+    let emcmake_cmd = format!(
+        "emcmake cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release {} -DCE_WASM_RUST_STATICLIB={}",
+        cmake_thread_flag, staticlib_path
+    );
+    run_with_emsdk(sh, emsdk_dir, ninja_dir, &emcmake_cmd)?;
+
+    let build_cmd = "cmake --build . --parallel";
+    run_with_emsdk(sh, emsdk_dir, ninja_dir, build_cmd)?;
+    drop(_dir);
+
+    // 3. Copy Artifacts to NPM Package
+    println!("   -> Copying artifacts to NPM workspace...");
+    let compiled_js = build_dir.join("dist").join("CogentLM.js");
+    let compiled_wasm = build_dir.join("dist").join("CogentLM.wasm");
+
+    sh.copy_file(&compiled_js, npm_src_wasm.join(&js_file))?;
+    sh.copy_file(&compiled_wasm, npm_src_wasm.join(&wasm_file))?;
+    sh.copy_file(&compiled_js, npm_dist_wasm.join(&js_file))?;
+    sh.copy_file(&compiled_wasm, npm_dist_wasm.join(&wasm_file))?;
+
     Ok(())
 }
 

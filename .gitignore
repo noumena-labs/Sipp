@@ -36,7 +36,8 @@ build/
 /apps/*/.svelte-kit/
 /packages/*/dist/
 /packages/*/build/
-/packages/*/src/native/CogentLM.*
+/packages/*/src/wasm/cogentlm-wasm*.js
+/packages/*/src/wasm/cogentlm-wasm*.wasm
 
 # =========================
 # Bindings & Cross-Compilation

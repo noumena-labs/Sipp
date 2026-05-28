@@ -184,17 +184,17 @@ export function resolveRuntimeUrls(
           wasmUrl: parseConfiguredUrl(configuredPthreadWasmUrl!, 'pthreadWasmUrl'),
         }
       : configuredModuleUrl == null
-      ? (() => {
-        const defaults = getDefaultRuntimeUrlsForThreading('single-thread');
-        return {
-          moduleUrl: new URL(defaults.moduleUrl),
-          wasmUrl: new URL(defaults.wasmUrl),
+        ? (() => {
+          const defaults = getDefaultRuntimeUrlsForThreading('single-thread');
+          return {
+            moduleUrl: new URL(defaults.moduleUrl),
+            wasmUrl: new URL(defaults.wasmUrl),
+          };
+        })()
+        : {
+          moduleUrl: parseConfiguredUrl(configuredModuleUrl, 'moduleUrl'),
+          wasmUrl: parseConfiguredUrl(configuredWasmUrl!, 'wasmUrl'),
         };
-      })()
-      : {
-        moduleUrl: parseConfiguredUrl(configuredModuleUrl, 'moduleUrl'),
-        wasmUrl: parseConfiguredUrl(configuredWasmUrl!, 'wasmUrl'),
-      };
 
   const trustedOrigins = resolveTrustedOrigins(config.trustedOrigins);
   if (trustedOrigins.size > 0) {

@@ -28,6 +28,7 @@ add_compile_options(${CE_WASM_COMPILE_FLAGS})
 
 option(CE_BUILD_WEBGPU_TEST_BACKEND_OPS "Build llama.cpp test-backend-ops for browser-hosted WebGPU execution" OFF)
 option(MTMD_NO_LOGGING "Suppress all multimodal logging" OFF)
+option(CE_USE_PTHREADS "Build WebAssembly with pthread (SharedArrayBuffer) support" OFF)
 
 set(CE_WASM_RUST_STATICLIB "" CACHE FILEPATH "Rust wasm32 Emscripten staticlib for the browser runtime")
 
@@ -120,6 +121,15 @@ if(CE_WASM_USE_JSPI)
     list(APPEND CE_WASM_TARGET_LINK_OPTIONS
         -sJSPI=1
         "-sJSPI_EXPORTS=['_main_thread','CE_Init','CE_RunSchedulerLoop','CE_GetBackendObservabilityJson']"
+    )
+endif()
+
+if(CE_USE_PTHREADS)
+add_compile_options(-pthread)
+    list(APPEND CE_WASM_TARGET_LINK_OPTIONS
+        -pthread
+        -sSHARED_MEMORY=1
+        -Wl,--no-check-features # THE FIX: Ignore the stable Rust standard library feature mismatch
     )
 endif()
 
