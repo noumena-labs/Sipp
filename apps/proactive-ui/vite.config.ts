@@ -7,7 +7,7 @@ import { cogentEngineDistWatch } from '../cogentlm-dist-watch';
 const proactiveUiAppDir = fileURLToPath(new URL('.', import.meta.url));
 const cogentEngineEntry = path.resolve(
   proactiveUiAppDir,
-  '../../packages/cogentlm-browser/dist/esm/index.js'
+  '../../packages/npm/dist/esm/index.js'
 );
 
 export default defineConfig({

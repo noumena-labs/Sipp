@@ -7,15 +7,15 @@ import { cogentEngineDistWatch } from '../cogentlm-dist-watch';
 const simAppDir = fileURLToPath(new URL('.', import.meta.url));
 const cogentEngineEntry = path.resolve(
   simAppDir,
-  '../../packages/cogentlm-browser/dist/esm/index.js'
+  '../../packages/npm/dist/esm/index.js'
 );
 const cogentEngineCharacterEntry = path.resolve(
   simAppDir,
-  '../../packages/cogentlm-browser/dist/esm/character/index.js'
+  '../../packages/npm/dist/esm/character/index.js'
 );
 const cogentEngineDirectorEntry = path.resolve(
   simAppDir,
-  '../../packages/cogentlm-browser/dist/esm/orchestrator/index.js'
+  '../../packages/npm/dist/esm/orchestrator/index.js'
 );
 
 export default defineConfig({

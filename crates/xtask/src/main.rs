@@ -108,24 +108,40 @@ fn build_wasm(sh: &Shell) -> Result<()> {
 
     let _dir = sh.push_dir(&build_dir);
 
-    // 1. ADD '-G Ninja' to the CMake configuration command
+    //  ADD '-G Ninja' to the CMake configuration command
     let emcmake_cmd = "emcmake cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release -DCE_WASM_RUST_STATICLIB=../../../target/wasm32-unknown-emscripten/release/libcogentlm_wasm.a";
     run_with_emsdk(sh, &emsdk_dir, ninja_dir.as_deref(), emcmake_cmd)?;
 
-    // 2. REPLACE `emmake make -j` with CMake's universal build command
+    //  REPLACE `emmake make -j` with CMake's universal build command
     let build_cmd = "cmake --build . --parallel";
     run_with_emsdk(sh, &emsdk_dir, ninja_dir.as_deref(), build_cmd)?;
 
     drop(_dir);
 
     println!("=> Step 3: Copying WASM artifacts to NPM package...");
-    let npm_native_dir = root.join("packages").join("npm").join("src").join("native");
-    sh.create_dir(&npm_native_dir)?;
+    let npm_src_native = root.join("packages").join("npm").join("src").join("native");
+    let npm_dist_native = root
+        .join("packages")
+        .join("npm")
+        .join("dist")
+        .join("native");
 
-    sh.copy_file(build_dir.join("dist").join("CogentLM.js"), &npm_native_dir)?;
+    // Ensure both directories exist
+    sh.create_dir(&npm_src_native)?;
+    sh.create_dir(&npm_dist_native)?;
+
+    // Copy to src/native
+    sh.copy_file(build_dir.join("dist").join("CogentLM.js"), &npm_src_native)?;
     sh.copy_file(
         build_dir.join("dist").join("CogentLM.wasm"),
-        &npm_native_dir,
+        &npm_src_native,
+    )?;
+
+    // Copy to dist/native
+    sh.copy_file(build_dir.join("dist").join("CogentLM.js"), &npm_dist_native)?;
+    sh.copy_file(
+        build_dir.join("dist").join("CogentLM.wasm"),
+        &npm_dist_native,
     )?;
 
     println!("=> WASM Pipeline Complete!");

@@ -7,11 +7,11 @@ import { cogentEngineDistWatch } from '../cogentlm-dist-watch';
 const avatarAppDir = fileURLToPath(new URL('.', import.meta.url));
 const cogentEngineEntry = path.resolve(
   avatarAppDir,
-  '../../packages/cogentlm-browser/dist/esm/index.js'
+  '../../packages/npm/dist/esm/index.js'
 );
 const cogentEngineCharacterEntry = path.resolve(
   avatarAppDir,
-  '../../packages/cogentlm-browser/dist/esm/character/index.js'
+  '../../packages/npm/dist/esm/character/index.js'
 );
 
 export default defineConfig({
