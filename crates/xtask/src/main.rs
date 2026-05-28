@@ -17,6 +17,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Build all targets (wasm, node, python)
+    BuildAll,
     /// Build the core native Rust crates
     BuildCore,
     /// Build the WASM/WebGPU bindings using Emscripten
@@ -33,6 +35,7 @@ fn main() -> Result<()> {
     let sh = Shell::new()?;
 
     match cli.command {
+        Commands::BuildAll => build_all(&sh),
         Commands::BuildCore => build_core(&sh),
         Commands::BuildWasm => build_wasm(&sh),
         Commands::BuildPython => build_python(&sh),
@@ -50,6 +53,17 @@ fn workspace_root() -> PathBuf {
         .parent()
         .unwrap()
         .to_path_buf()
+}
+
+// ====================================================================================
+// Build All
+// ====================================================================================
+fn build_all(sh: &Shell) -> Result<()> {
+    build_core(sh)?;
+    build_wasm(sh)?;
+    build_python(sh)?;
+    build_node(sh)?;
+    Ok(())
 }
 
 // ====================================================================================

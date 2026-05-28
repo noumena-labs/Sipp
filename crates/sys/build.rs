@@ -215,6 +215,25 @@ fn static_library_exists(lib_dir: &Path, lib: &str) -> bool {
 fn generate_bindings(manifest_dir: &Path, llama_dir: &Path) {
     let out_path = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR")).join("bindings.rs");
 
+    // Compute the platform-specific cache path
+    let target = env::var("TARGET").unwrap_or_default();
+    let target_filename = format!("{}.rs", target.replace("-", "_"));
+    let pregenerated_path = manifest_dir.join("src/bindings").join(&target_filename);
+
+    // Flag to for force binding generation
+    let force_generate = env::var("COGENT_GENERATE_BINDINGS").is_ok();
+
+    // Fast Path: If cached bindings exist and we aren't forcing a rebuild, use them!
+    if !force_generate && pregenerated_path.exists() {
+        println!("cargo:warning=Using pre-generated bindings for {target} from source tree.");
+        std::fs::copy(&pregenerated_path, &out_path)
+            .expect("Failed to copy pre-generated bindings to OUT_DIR");
+        return;
+    }
+
+    // Fallback / Maintenance Path: Dynamically generate with bindgen (Requires LLVM)
+    println!("cargo:warning=Dynamically generating bindings via libclang for {target}...");
+
     // Note: We heavily filter what bindgen generates to keep compile times fast
     // and the resulting file clean. If you need a new struct or function exposed
     // in Rust, ensure it matches one of these allowlist regexes.
@@ -224,6 +243,7 @@ fn generate_bindings(manifest_dir: &Path, llama_dir: &Path) {
         .allowlist_function("cogent_.*")
         .allowlist_type("llama_.*")
         .allowlist_type("ggml_.*")
+        .allowlist_type("cogent_.*")
         .allowlist_type("cogent_.*")
         .allowlist_var("LLAMA_.*")
         .allowlist_var("GGML_.*")
@@ -237,7 +257,6 @@ fn generate_bindings(manifest_dir: &Path, llama_dir: &Path) {
         .layout_tests(false)
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()));
 
-    let target = env::var("TARGET").unwrap_or_default();
     if target.contains("emscripten") {
         if let Ok(emsdk) = env::var("EMSDK") {
             let emsdk_path = PathBuf::from(emsdk);
@@ -278,6 +297,14 @@ fn generate_bindings(manifest_dir: &Path, llama_dir: &Path) {
     bindings
         .write_to_file(&out_path)
         .expect("write generated bindings");
+
+    // 4. If this pass was run with the update flag, save the bindings back into Git cache
+    if force_generate {
+        println!("cargo:warning=Saving newly generated bindings to src/bindings/{target_filename}");
+        std::fs::create_dir_all(pregenerated_path.parent().unwrap()).unwrap();
+        std::fs::copy(&out_path, &pregenerated_path)
+            .expect("Failed to save generated bindings to source tree");
+    }
 }
 
 // Convience  method for creating and setting up paths for clangd language server
