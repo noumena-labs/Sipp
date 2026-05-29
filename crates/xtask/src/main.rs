@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 use xshell::Shell;
 use xtask::cli::{BuildCommands, Cli, Commands};
+use xtask::{clean, doctor, toolchain};
 use xtask::targets;
 use xtask::utils::BuildContext;
 
@@ -12,6 +13,9 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Build { target } => run_build(target, &sh, &ctx)?,
+        Commands::Clean(args) => clean::run(&sh, &ctx, &args)?,
+        Commands::Toolchain { command } => toolchain::run(&sh, &ctx, command)?,
+        Commands::Doctor(args) => doctor::run(&ctx, &args)?,
     }
 
     Ok(())

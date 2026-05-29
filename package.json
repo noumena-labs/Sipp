@@ -8,10 +8,10 @@
     "apps/*"
   ],
   "scripts": {
-    "build": "cargo xtask build-all",
-    "build:node": "cargo xtask build-node",
-    "build:wasm": "cargo xtask build-wasm",
-    "build:python": "cargo xtask build-python"
+    "build": "cargo xtask build all",
+    "build:node": "cargo xtask build node",
+    "build:wasm": "cargo xtask build wasm",
+    "build:python": "cargo xtask build python"
   },
   "devDependencies": {
     "playwright-core": "^1.54.2",

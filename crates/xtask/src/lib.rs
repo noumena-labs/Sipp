@@ -4,7 +4,10 @@
 //! target-specific build logic and host toolchain setup stay isolated.
 
 pub mod cli;
+pub mod clean;
+pub mod doctor;
 pub(crate) mod output;
 pub mod targets;
+pub mod toolchain;
 pub mod toolchains;
 pub mod utils;
