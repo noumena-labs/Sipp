@@ -43,4 +43,4 @@ cargo xtask build-all
 ```
 
 ## Troubleshooting
-If a build fails stating missing CMake variables or SDKs, it is usually because the environment injection failed. The `xtask` orchestrator automatically downloads hermetic dependencies into the `.toolchain/` directory at the root of the repo (e.g., `.toolchain/vulkan`, `.toolchain/emsdk`, `.toolchain/ninja`).
+If a build fails stating missing CMake variables or SDKs, it is usually because the environment injection failed. The `xtask` orchestrator automatically downloads hermetic dependencies into `.build/toolchain/` at the root of the repo (e.g., `.build/toolchain/vulkan`, `.build/toolchain/emsdk`, `.build/toolchain/ninja`).

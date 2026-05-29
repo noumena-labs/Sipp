@@ -26,9 +26,16 @@ interface VitePluginLike {
 
 const appsDir = fileURLToPath(new URL('.', import.meta.url));
 const repoRoot = path.resolve(appsDir, '..');
-const cogentEnginePackageDir = path.join(repoRoot, 'packages', 'cogentlm-browser');
+const cogentEnginePackageDir = path.join(repoRoot, 'packages', 'npm');
+const cogentEngineArtifactDir = path.join(
+  repoRoot,
+  '.build',
+  'artifacts',
+  'npm',
+  'cogentlm-browser'
+);
 const cogentEngineSrcDir = path.join(cogentEnginePackageDir, 'src');
-const cogentEngineWasmDir = path.join(cogentEnginePackageDir, 'dist', 'wasm');
+const cogentEngineWasmDir = path.join(cogentEngineArtifactDir, 'dist', 'wasm');
 const sourceFilePattern = /\.tsx?$/;
 const wasmArtifactPattern = /cogentlm-wasm\.(?:js|wasm)$/;
 const rebuildArgs = ['run', '--filter=@noumena-labs/cogentlm-browser', 'build:ts'];
@@ -168,7 +175,7 @@ export function cogentEngineDistWatch(): VitePluginLike {
       server.watcher.on('add', handleAdd);
       server.watcher.on('change', handleChange);
       server.watcher.on('unlink', handleUnlink);
-      console.info('[cogentlm-browser] watching packages/cogentlm-browser/src and dist/wasm.');
+      console.info('[cogentlm-browser] watching packages/npm/src and .build artifact wasm.');
 
       server.httpServer?.once('close', () => {
         stopped = true;

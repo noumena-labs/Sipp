@@ -101,7 +101,15 @@ function requestedBackends() {
 }
 
 function backendBinaryPath(backend, triplet) {
-  return path.join(__dirname, 'dist', `${BINARY_NAME}_${backend}.${triplet}.node`)
+  return path.join(
+    __dirname,
+    '..',
+    '..',
+    '.build',
+    'artifacts',
+    'node',
+    `${BINARY_NAME}_${backend}.${triplet}.node`,
+  )
 }
 
 function backendNameMatches(value, backend) {

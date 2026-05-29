@@ -17,6 +17,7 @@ struct Cli {
 }
 
 const NODE_BINARY_NAME: &str = "cogentlm_node";
+const BROWSER_PACKAGE_ARTIFACT_DIR: &str = "cogentlm-browser";
 
 #[derive(Clone, Debug, Eq, PartialEq, ValueEnum)]
 enum Backend {
@@ -93,6 +94,83 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn build_root() -> PathBuf {
+    workspace_root().join(".build")
+}
+
+fn cargo_build_root() -> PathBuf {
+    build_root().join("cargo")
+}
+
+fn cargo_node_target_dir(backend: &Backend) -> PathBuf {
+    cargo_build_root().join("node").join(backend.as_str())
+}
+
+fn cargo_python_target_dir(backend: Option<&Backend>) -> PathBuf {
+    cargo_build_root()
+        .join("python")
+        .join(backend_build_tag(backend))
+}
+
+fn cargo_wasm_target_dir(use_pthreads: bool) -> PathBuf {
+    cargo_build_root()
+        .join("wasm")
+        .join(wasm_build_tag(use_pthreads))
+}
+
+fn cmake_wasm_build_dir(use_pthreads: bool) -> PathBuf {
+    build_root()
+        .join("cmake")
+        .join("wasm")
+        .join(wasm_build_tag(use_pthreads))
+}
+
+fn artifacts_root() -> PathBuf {
+    build_root().join("artifacts")
+}
+
+fn node_artifacts_dir() -> PathBuf {
+    artifacts_root().join("node")
+}
+
+fn npm_browser_artifacts_dir() -> PathBuf {
+    artifacts_root()
+        .join("npm")
+        .join(BROWSER_PACKAGE_ARTIFACT_DIR)
+}
+
+fn npm_browser_wasm_dir() -> PathBuf {
+    npm_browser_artifacts_dir().join("dist").join("wasm")
+}
+
+fn toolchain_dir() -> PathBuf {
+    build_root().join("toolchain")
+}
+
+fn tmp_dir() -> PathBuf {
+    build_root().join("tmp")
+}
+
+fn backend_build_tag(backend: Option<&Backend>) -> &'static str {
+    backend.map(Backend::as_str).unwrap_or("cpu")
+}
+
+fn wasm_build_tag(use_pthreads: bool) -> &'static str {
+    if use_pthreads {
+        "pthread"
+    } else {
+        "single"
+    }
+}
+
+fn command_path(path: &Path) -> String {
+    format!("\"{}\"", path.display())
+}
+
+fn cmake_file_path(path: &Path) -> String {
+    path.display().to_string().replace('\\', "/")
+}
+
 // ====================================================================================
 // Build All
 // ====================================================================================
@@ -124,8 +202,11 @@ fn build_python(sh: &Shell, backend: Option<&Backend>) -> Result<()> {
 
     println!("=> Building Python Bindings...");
     let _dir = sh.push_dir(workspace_root().join("bindings").join("python"));
+    let target_dir = cargo_python_target_dir(backend);
+    sh.create_dir(&target_dir)?;
 
-    let mut maturin_cmd = cmd!(sh, "uv run maturin develop --release");
+    let mut maturin_cmd =
+        cmd!(sh, "uv run maturin develop --release").env("CARGO_TARGET_DIR", &target_dir);
     maturin_cmd = apply_toolchains(sh, maturin_cmd, backend)?;
 
     match backend {
@@ -153,7 +234,7 @@ fn build_node(sh: &Shell, backend: Option<&Backend>) -> Result<()> {
 
     cmd!(sh, "bun install").run()?;
 
-    let dist_dir = node_dir.join("dist");
+    let dist_dir = node_artifacts_dir();
     prepare_node_dist_dir(sh, &dist_dir)?;
 
     let best_effort = matches!(backend, Some(Backend::All));
@@ -215,7 +296,7 @@ fn node_backends_to_build(backend: Option<&Backend>) -> Vec<Backend> {
 fn prepare_node_dist_dir(sh: &Shell, dist_dir: &Path) -> Result<()> {
     sh.create_dir(dist_dir)?;
 
-    let staging_dir = dist_dir.join(".staging");
+    let staging_dir = tmp_dir().join("node");
     if staging_dir.exists() {
         sh.remove_path(&staging_dir)?;
     }
@@ -237,11 +318,7 @@ fn prepare_node_dist_dir(sh: &Shell, dist_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn build_node_backend_variant(
-    sh: &Shell,
-    dist_dir: &Path,
-    backend: &Backend,
-) -> Result<PathBuf> {
+fn build_node_backend_variant(sh: &Shell, dist_dir: &Path, backend: &Backend) -> Result<PathBuf> {
     if matches!(backend, Backend::All) {
         anyhow::bail!("Backend::All cannot be built as a single Node variant");
     }
@@ -251,13 +328,13 @@ fn build_node_backend_variant(
     println!("Compiling Node Variant: {}", feature.to_uppercase());
     println!("--------------------------------------------------");
 
-    let staging_dir = dist_dir.join(".staging").join(feature);
+    let staging_dir = tmp_dir().join("node").join(feature);
     if staging_dir.exists() {
         sh.remove_path(&staging_dir)?;
     }
     sh.create_dir(&staging_dir)?;
 
-    let target_dir = workspace_root().join("target").join("node").join(feature);
+    let target_dir = cargo_node_target_dir(backend);
     let mut napi_cmd = cmd!(
         sh,
         "bunx napi build --platform --release --no-js --output-dir {staging_dir} --target-dir {target_dir}"
@@ -311,16 +388,14 @@ fn find_node_artifact(dir: &Path) -> Result<Option<PathBuf>> {
 }
 
 // ====================================================================================
-// Build WASM (Unchanged)
+// Build WASM
 // ====================================================================================
 fn build_wasm(sh: &Shell) -> Result<()> {
     let root = workspace_root();
     let emsdk_dir = setup_emsdk(sh)?;
     let ninja_dir = setup_ninja(sh)?;
 
-    let npm_src_wasm = root.join("packages").join("npm").join("src").join("wasm");
-    let npm_dist_wasm = root.join("packages").join("npm").join("dist").join("wasm");
-    sh.create_dir(&npm_src_wasm)?;
+    let npm_dist_wasm = npm_browser_wasm_dir();
     sh.create_dir(&npm_dist_wasm)?;
 
     println!("=> Starting Phase 1: Single-Threaded Build");
@@ -330,7 +405,6 @@ fn build_wasm(sh: &Shell) -> Result<()> {
         &emsdk_dir,
         ninja_dir.as_deref(),
         false,
-        &npm_src_wasm,
         &npm_dist_wasm,
     )?;
 
@@ -341,9 +415,16 @@ fn build_wasm(sh: &Shell) -> Result<()> {
         &emsdk_dir,
         ninja_dir.as_deref(),
         true,
-        &npm_src_wasm,
         &npm_dist_wasm,
     )?;
+
+    println!("=> Starting Phase 3: Compiling TypeScript Wrappers...");
+    let npm_workspace = root.join("packages").join("npm");
+    let _npm_dir = sh.push_dir(&npm_workspace);
+
+    // Let Bun handle the front-end bundling
+    cmd!(sh, "bun install").run()?;
+    cmd!(sh, "bun run build").run()?;
 
     println!("=> WASM Pipeline Complete!");
     Ok(())
@@ -355,7 +436,6 @@ fn build_wasm_target(
     emsdk_dir: &Path,
     ninja_dir: Option<&Path>,
     use_pthreads: bool,
-    npm_src_wasm: &Path,
     npm_dist_wasm: &Path,
 ) -> Result<()> {
     let _root_dir = sh.push_dir(root);
@@ -364,35 +444,42 @@ fn build_wasm_target(
     let artifact_name = format!("cogentlm-wasm{}", suffix);
     let js_file = format!("{}.js", artifact_name);
     let wasm_file = format!("{}.wasm", artifact_name);
+    let cargo_target_dir = cargo_wasm_target_dir(use_pthreads);
+    let rust_staticlib = cargo_target_dir
+        .join("wasm32-unknown-emscripten")
+        .join("release")
+        .join("libcogentlm_wasm.a");
 
     println!("   -> Compiling Rust ({js_file})...");
-    let (cargo_cmd, staticlib_path) = if use_pthreads {
-        let cmd = if cfg!(windows) {
-            "set RUSTFLAGS=-C target-feature=+atomics,+bulk-memory,+mutable-globals\r\ncargo build --release --package cogentlm-wasm --target wasm32-unknown-emscripten --target-dir target/pthread"
-        } else {
-            "RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals' cargo build --release --package cogentlm-wasm --target wasm32-unknown-emscripten --target-dir target/pthread"
-        };
-        (
-            cmd,
-            "../../../target/pthread/wasm32-unknown-emscripten/release/libcogentlm_wasm.a",
+    let rustflags = if use_pthreads {
+        "-C target-feature=+atomics,+bulk-memory,+mutable-globals"
+    } else {
+        ""
+    };
+    let cargo_cmd = if cfg!(windows) {
+        format!(
+            "set RUSTFLAGS={rustflags}\r\ncargo build --release --package cogentlm-wasm --target wasm32-unknown-emscripten --target-dir {}",
+            command_path(&cargo_target_dir)
+        )
+    } else if rustflags.is_empty() {
+        format!(
+            "cargo build --release --package cogentlm-wasm --target wasm32-unknown-emscripten --target-dir {}",
+            command_path(&cargo_target_dir)
         )
     } else {
-        let cmd = if cfg!(windows) {
-            "set RUSTFLAGS=\r\ncargo build --release --package cogentlm-wasm --target wasm32-unknown-emscripten"
-        } else {
-            "cargo build --release --package cogentlm-wasm --target wasm32-unknown-emscripten"
-        };
-        (
-            cmd,
-            "../../../target/wasm32-unknown-emscripten/release/libcogentlm_wasm.a",
+        format!(
+            "RUSTFLAGS='{rustflags}' cargo build --release --package cogentlm-wasm --target wasm32-unknown-emscripten --target-dir {}",
+            command_path(&cargo_target_dir)
         )
     };
 
-    run_with_emsdk(sh, emsdk_dir, ninja_dir, cargo_cmd)?;
+    run_with_emsdk(sh, emsdk_dir, ninja_dir, &cargo_cmd)?;
 
     println!("   -> Linking C++ via Emscripten...");
     let wasm_dir = root.join("bindings").join("wasm");
-    let build_dir = wasm_dir.join(format!("build{}", suffix));
+    let wasm_source_dir = cmake_file_path(&wasm_dir);
+    let rust_staticlib_cmake = cmake_file_path(&rust_staticlib);
+    let build_dir = cmake_wasm_build_dir(use_pthreads);
     sh.create_dir(&build_dir)?;
     let _dir = sh.push_dir(&build_dir);
 
@@ -402,8 +489,8 @@ fn build_wasm_target(
         "-DCE_USE_PTHREADS=OFF"
     };
     let emcmake_cmd = format!(
-        "emcmake cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release {} -DCE_WASM_RUST_STATICLIB={}",
-        cmake_thread_flag, staticlib_path
+        "emcmake cmake \"{}\" -G Ninja -DCMAKE_BUILD_TYPE=Release {} -DCE_WASM_RUST_STATICLIB=\"{}\"",
+        wasm_source_dir, cmake_thread_flag, rust_staticlib_cmake
     );
     run_with_emsdk(sh, emsdk_dir, ninja_dir, &emcmake_cmd)?;
 
@@ -411,12 +498,10 @@ fn build_wasm_target(
     run_with_emsdk(sh, emsdk_dir, ninja_dir, build_cmd)?;
     drop(_dir);
 
-    println!("   -> Copying artifacts to NPM workspace...");
+    println!("   -> Copying artifacts to centralized NPM staging...");
     let compiled_js = build_dir.join("dist").join("CogentLM.js");
     let compiled_wasm = build_dir.join("dist").join("CogentLM.wasm");
 
-    sh.copy_file(&compiled_js, npm_src_wasm.join(&js_file))?;
-    sh.copy_file(&compiled_wasm, npm_src_wasm.join(&wasm_file))?;
     sh.copy_file(&compiled_js, npm_dist_wasm.join(&js_file))?;
     sh.copy_file(&compiled_wasm, npm_dist_wasm.join(&wasm_file))?;
 
@@ -548,9 +633,8 @@ fn setup_cuda(_sh: &Shell) -> Result<PathBuf> {
 }
 
 fn setup_vulkan(sh: &Shell) -> Result<PathBuf> {
-    let root = workspace_root();
-    let toolchain_dir = root.join(".toolchain");
-    let vulkan_dir = toolchain_dir.join("vulkan");
+    let toolchain_root = toolchain_dir();
+    let vulkan_dir = toolchain_root.join("vulkan");
 
     // Map the OS to LunarG's specific URL routing and internal folder structures
     let (os_path, filename, bin_path) = if cfg!(windows) {
@@ -583,7 +667,7 @@ fn setup_vulkan(sh: &Shell) -> Result<PathBuf> {
 
         let url =
             format!("https://sdk.lunarg.com/sdk/download/{VULKAN_VERSION}/{os_path}/{filename}");
-        let archive_path = toolchain_dir.join(&filename);
+        let archive_path = toolchain_root.join(&filename);
 
         println!("   Downloading Vulkan SDK (~400MB) from:");
         println!("   {url}");
@@ -591,7 +675,7 @@ fn setup_vulkan(sh: &Shell) -> Result<PathBuf> {
         // '-f' ensures it fails on 404s instead of downloading dummy HTML files
         cmd!(sh, "curl -f -L -o {archive_path} {url}").run()?;
 
-        println!("   Extracting/Installing into .toolchain/vulkan...");
+        println!("   Extracting/Installing into .build/toolchain/vulkan...");
         if cfg!(windows) {
             cmd!(sh, "{archive_path} --root {vulkan_dir} --accept-licenses --default-answer --confirm-command install copy_only=1").run()?;
         } else if cfg!(target_os = "macos") {
@@ -609,8 +693,7 @@ fn setup_vulkan(sh: &Shell) -> Result<PathBuf> {
 
 fn setup_ninja(sh: &Shell) -> Result<Option<PathBuf>> {
     if cfg!(windows) {
-        let root = workspace_root();
-        let ninja_dir = root.join(".toolchain").join("ninja");
+        let ninja_dir = toolchain_dir().join("ninja");
         let ninja_exe = ninja_dir.join("ninja.exe");
 
         if !ninja_exe.exists() {
@@ -634,22 +717,53 @@ fn setup_ninja(sh: &Shell) -> Result<Option<PathBuf>> {
 }
 
 fn setup_emsdk(sh: &Shell) -> Result<PathBuf> {
+    // FIX 1: Reverted back to the local workspace_root() function
     let root = workspace_root();
-    let emsdk_dir = root.join(".toolchain").join("emsdk");
+    let emsdk_dir = root.join(".build").join("toolchain").join("emsdk");
 
     if !emsdk_dir.exists() {
         println!("=> Bootstrapping hermetic Emscripten toolchain...");
-        let _root_dir = sh.push_dir(&root);
-        cmd!(sh, "git clone https://github.com/emscripten-core/emsdk.git")
-            .arg(&emsdk_dir)
-            .run()?;
+        // FIX 2: Use standard library for recursive directory creation
+        std::fs::create_dir_all(emsdk_dir.parent().unwrap())?;
+        let _root_dir = sh.push_dir(emsdk_dir.parent().unwrap());
+        cmd!(
+            sh,
+            "git clone https://github.com/emscripten-core/emsdk.git emsdk"
+        )
+        .run()?;
     }
 
     let _dir = sh.push_dir(&emsdk_dir);
     println!("=> Activating emsdk v{EMSDK_VERSION}...");
+
     if cfg!(windows) {
-        cmd!(sh, "cmd.exe /c emsdk.bat install {EMSDK_VERSION}").run()?;
-        cmd!(sh, "cmd.exe /c emsdk.bat activate {EMSDK_VERSION}").run()?;
+        let mut attempts = 0;
+        let max_attempts = 5;
+
+        loop {
+            attempts += 1;
+            let result = cmd!(sh, "cmd.exe /c emsdk.bat install {EMSDK_VERSION}")
+                .env("EMSDK_USE_CURL", "1")
+                .env_remove("SHELL")
+                .env_remove("MSYSTEM")
+                .run();
+
+            if result.is_ok() {
+                break;
+            }
+
+            if attempts >= max_attempts {
+                anyhow::bail!("emsdk install failed after {max_attempts} attempts. Please check your network connection.");
+            }
+
+            println!("   ⚠️    Download truncated or locked by Windows Defender. Retrying ({attempts}/{max_attempts})...");
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+
+        cmd!(sh, "cmd.exe /c emsdk.bat activate {EMSDK_VERSION}")
+            .env_remove("SHELL")
+            .env_remove("MSYSTEM")
+            .run()?;
     } else {
         cmd!(sh, "bash -c")
             .arg(format!("./emsdk install {EMSDK_VERSION}"))
@@ -678,25 +792,56 @@ fn run_with_emsdk(
             String::new()
         };
 
+        // FIX: Extract absolute paths to Emscripten's CMake wrappers
+        let emcmake = emsdk_dir
+            .join("upstream")
+            .join("emscripten")
+            .join("emcmake.bat");
+        let emmake = emsdk_dir
+            .join("upstream")
+            .join("emscripten")
+            .join("emmake.bat");
+
+        // Inject the absolute paths directly, bypassing Windows PATH resolution bugs
         let script_content = format!(
             "@echo off\r\n\
             call \"{}\"\r\n\
             {}\
-            set EMCMAKE=emcmake.bat\r\n\
-            set EMMAKE=emmake.bat\r\n\
+            set EMCMAKE={}\r\n\
+            set EMMAKE={}\r\n\
             {}\r\n",
             bat.display(),
             path_injection,
+            emcmake.display(),
+            emmake.display(),
             command
         );
-        sh.write_file(&temp_script, script_content)?;
-        let res = cmd!(sh, "cmd.exe /c {temp_script}").run();
+
+        sh.write_file(&temp_script, &script_content)?;
+        let res = cmd!(sh, "cmd.exe /c {temp_script}")
+            .env_remove("SHELL")
+            .env_remove("MSYSTEM")
+            .run();
 
         let _ = sh.remove_path(&temp_script);
         res?;
     } else {
         let script = emsdk_dir.join("emsdk_env.sh").display().to_string();
-        let full_cmd = format!("source \"{}\" && {}", script, command);
+
+        // Similarly, ensure absolute paths for Unix (without .bat extensions)
+        let emcmake = emsdk_dir
+            .join("upstream")
+            .join("emscripten")
+            .join("emcmake");
+        let emmake = emsdk_dir.join("upstream").join("emscripten").join("emmake");
+
+        let full_cmd = format!(
+            "source \"{}\" && export EMCMAKE=\"{}\" && export EMMAKE=\"{}\" && {}",
+            script,
+            emcmake.display(),
+            emmake.display(),
+            command
+        );
         cmd!(sh, "bash -c").arg(full_cmd).run()?;
     }
     Ok(())

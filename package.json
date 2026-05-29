@@ -8,10 +8,10 @@
     "apps/*"
   ],
   "scripts": {
-    "build": "bunx turbo run build",
-    "dev": "bunx turbo run dev",
-    "test": "bunx turbo run test",
-    "clean": "bunx turbo run clean && cargo clean"
+    "build": "cargo xtask build-all",
+    "build:node": "cargo xtask build-node",
+    "build:wasm": "cargo xtask build-wasm",
+    "build:python": "cargo xtask build-python"
   },
   "devDependencies": {
     "playwright-core": "^1.54.2",

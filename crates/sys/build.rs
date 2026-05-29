@@ -38,15 +38,14 @@ fn build_native(manifest_dir: &Path, llama_dir: &Path) {
         .define("CMAKE_INSTALL_LIBDIR", "lib")
         .define("BUILD_SHARED_LIBS", "OFF");
 
-    if cfg!(windows) {
-        // Keep CMake close to the workspace root on Windows. Vulkan's shader
-        // generator creates deeply nested TryCompile trees that exceed MSVC's
-        // object-path limit if this includes the full target triple.
-        let short_build_dir = manifest_dir
-            .join("../../target/c")
-            .join(cmake_backend_tag());
-        config.out_dir(short_build_dir);
+    let cmake_out_dir = workspace_build_dir(manifest_dir)
+        .join("cmake")
+        .join("sys")
+        .join(path_component(&target, "host"))
+        .join(cmake_backend_tag());
+    config.out_dir(cmake_out_dir);
 
+    if cfg!(windows) {
         // Make this build reproducible even when invoked outside xtask.
         config.generator("Ninja");
 
@@ -281,6 +280,21 @@ fn cmake_backend_tag() -> &'static str {
     }
 }
 
+fn workspace_build_dir(manifest_dir: &Path) -> PathBuf {
+    manifest_dir.join("../../.build")
+}
+
+fn path_component(value: &str, fallback: &str) -> String {
+    let source = if value.is_empty() { fallback } else { value };
+    source
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' => '_',
+            _ => ch,
+        })
+        .collect()
+}
+
 fn static_library_exists(lib_dir: &Path, lib: &str) -> bool {
     // Check standard UNIX formats alongside MSVC specific outputs (.lib).
     let names = [
@@ -396,15 +410,20 @@ fn generate_bindings(manifest_dir: &Path, llama_dir: &Path) {
 fn setup_clangd_autocomplete(manifest_dir: &Path, dst: &Path, llama_dir: &Path) {
     let comp_db = dst.join("build/compile_commands.json");
     let comp_flags = dst.join("build/compile_flags.txt");
-    let compile_commands_path = manifest_dir.join("compile_commands.json");
-    let compile_flags_path = manifest_dir.join("compile_flags.txt");
+    let ide_dir = workspace_build_dir(manifest_dir).join("ide").join("sys");
+    let compile_commands_path = ide_dir.join("compile_commands.json");
+    let compile_flags_path = ide_dir.join("compile_flags.txt");
 
     if comp_db.exists() {
-        let _ = std::fs::remove_file(&comp_db);
+        let _ = std::fs::create_dir_all(&ide_dir);
+        let _ = std::fs::copy(&comp_db, &compile_commands_path);
+        let _ = std::fs::remove_file(&compile_flags_path);
+        return;
     }
 
     if !comp_flags.exists() {
         // Generate compile_flags.txt only as a fallback for IDE autocomplete.
+        let _ = std::fs::create_dir_all(&ide_dir);
         if let Ok(mut file) = std::fs::File::create(&compile_flags_path) {
             let _ = writeln!(file, "-xc++");
             let _ = writeln!(file, "-std=c++17");

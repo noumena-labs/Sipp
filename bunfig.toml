@@ -2,6 +2,7 @@
 exclude = [
   "**/third_party/**",
   "**/node_modules/**",
+  "**/.build/**",
   "**/dist/**",
   "**/build/**"
 ]

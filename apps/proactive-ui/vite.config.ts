@@ -5,13 +5,19 @@ import { defineConfig } from 'vite';
 import { cogentEngineDistWatch } from '../cogentlm-dist-watch';
 
 const proactiveUiAppDir = fileURLToPath(new URL('.', import.meta.url));
-const cogentEngineEntry = path.resolve(
+const cogentEngineDistDir = path.resolve(
   proactiveUiAppDir,
-  '../../packages/npm/dist/esm/index.js'
+  '../../.build/artifacts/npm/cogentlm-browser/dist/esm'
 );
+const cogentEngineEntry = path.join(cogentEngineDistDir, 'index.js');
+const appOutDir = path.resolve(proactiveUiAppDir, '../../.build/artifacts/apps/proactive-ui');
 
 export default defineConfig({
   plugins: [react(), cogentEngineDistWatch()],
+  build: {
+    outDir: appOutDir,
+    emptyOutDir: true,
+  },
   resolve: {
     alias: {
       '@noumena-labs/cogentlm-browser': cogentEngineEntry,

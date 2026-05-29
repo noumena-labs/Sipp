@@ -5,13 +5,19 @@ import { defineConfig } from 'vite';
 import { cogentEngineDistWatch } from '../cogentlm-dist-watch';
 
 const benchmarkAppDir = fileURLToPath(new URL('.', import.meta.url));
-const cogentEngineEntry = path.resolve(
+const cogentEngineDistDir = path.resolve(
   benchmarkAppDir,
-  '../../packages/npm/dist/esm/index.js'
+  '../../.build/artifacts/npm/cogentlm-browser/dist/esm'
 );
+const cogentEngineEntry = path.join(cogentEngineDistDir, 'index.js');
+const appOutDir = path.resolve(benchmarkAppDir, '../../.build/artifacts/apps/benchmark');
 
 export default defineConfig({
   plugins: [react(), cogentEngineDistWatch()],
+  build: {
+    outDir: appOutDir,
+    emptyOutDir: true,
+  },
   resolve: {
     alias: {
       // Use the built workspace entry directly so Vite does not serve the package

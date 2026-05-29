@@ -11,6 +11,18 @@
     "skipLibCheck": true,
     "ignoreDeprecations": "6.0",
     /* Bundler mode */
+    "baseUrl": ".",
+    "paths": {
+      "@noumena-labs/cogentlm-browser": [
+        "../../.build/artifacts/npm/cogentlm-browser/dist/types/index.d.ts"
+      ],
+      "@noumena-labs/cogentlm-browser/character": [
+        "../../.build/artifacts/npm/cogentlm-browser/dist/types/character/index.d.ts"
+      ],
+      "@noumena-labs/cogentlm-browser/director": [
+        "../../.build/artifacts/npm/cogentlm-browser/dist/types/orchestrator/index.d.ts"
+      ]
+    },
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,

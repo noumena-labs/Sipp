@@ -6,9 +6,7 @@
                 "^build"
             ],
             "outputs": [
-                "dist/**",
-                "src/native/**",
-                ".next/**"
+                "../../.build/artifacts/**"
             ],
             "inputs": [
                 "src/**",

@@ -3,12 +3,18 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 
 const examplesDir = fileURLToPath(new URL('.', import.meta.url));
-const cogentlmEntry = path.resolve(
+const cogentlmDistDir = path.resolve(
   examplesDir,
-  '../../packages/npm/dist/esm/index.js'
+  '../../.build/artifacts/npm/cogentlm-browser/dist/esm'
 );
+const cogentlmEntry = path.join(cogentlmDistDir, 'index.js');
+const appOutDir = path.resolve(examplesDir, '../../.build/artifacts/apps/examples');
 
 export default defineConfig({
+  build: {
+    outDir: appOutDir,
+    emptyOutDir: true,
+  },
   resolve: {
     alias: {
       '@noumena-labs/cogentlm-browser': cogentlmEntry,

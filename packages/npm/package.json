@@ -26,14 +26,13 @@
   },
   "files": [
     "dist",
-    "src/native/CogentLM.wasm",
     "README.md"
   ],
   "scripts": {
-    "clean": "rm -rf dist src/native",
-    "build:native": "cargo xtask build-wasm",
+    "clean:ts": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build:ts": "tsc -p tsconfig.json",
-    "build": "bun run build:native && bun run build:ts"
+    "build:stage": "node scripts/stage-package.mjs",
+    "build": "bun run clean:ts && bun run build:ts && bun run build:stage"
   },
   "keywords": [
     "ai",
@@ -56,7 +55,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/noumena-labs/CogentLM.git",
-    "directory": "packages/cogentlm-browser"
+    "directory": "packages/npm"
   },
   "publishConfig": {
     "registry": "https://npm.pkg.github.com",

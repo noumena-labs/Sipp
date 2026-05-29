@@ -5,17 +5,20 @@ import { defineConfig } from 'vite';
 import { cogentEngineDistWatch } from '../cogentlm-dist-watch';
 
 const avatarAppDir = fileURLToPath(new URL('.', import.meta.url));
-const cogentEngineEntry = path.resolve(
+const cogentEngineDistDir = path.resolve(
   avatarAppDir,
-  '../../packages/npm/dist/esm/index.js'
+  '../../.build/artifacts/npm/cogentlm-browser/dist/esm'
 );
-const cogentEngineCharacterEntry = path.resolve(
-  avatarAppDir,
-  '../../packages/npm/dist/esm/character/index.js'
-);
+const cogentEngineEntry = path.join(cogentEngineDistDir, 'index.js');
+const cogentEngineCharacterEntry = path.join(cogentEngineDistDir, 'character/index.js');
+const appOutDir = path.resolve(avatarAppDir, '../../.build/artifacts/apps/avatar');
 
 export default defineConfig({
   plugins: [react(), cogentEngineDistWatch()],
+  build: {
+    outDir: appOutDir,
+    emptyOutDir: true,
+  },
   resolve: {
     alias: {
       '@noumena-labs/cogentlm-browser/character': cogentEngineCharacterEntry,
