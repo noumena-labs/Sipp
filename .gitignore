@@ -104,3 +104,11 @@ build-*/
 a.out.js
 a.out.wasm
 target-wasm*/
+
+
+# =========================
+# Agents, Editor Config
+# =========================
+.vscode/
+.zed/
+.claude/
