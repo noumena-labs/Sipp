@@ -374,17 +374,19 @@ fn generate_bindings(manifest_dir: &Path, llama_dir: &Path) {
     }
 }
 
-// Convience  method for creating and setting up paths for clangd language server
+// Convenience method for creating and setting up paths for clangd language server
 fn setup_clangd_autocomplete(manifest_dir: &Path, dst: &Path, llama_dir: &Path) {
     let comp_db = dst.join("build/compile_commands.json");
+    let compile_commands_path = manifest_dir.join("compile_commands.json");
+    let compile_flags_path = manifest_dir.join("compile_flags.txt");
 
     if comp_db.exists() {
-        // Unix / Ninja: Copy generated database for IDE to use
-        let _ = std::fs::copy(comp_db, manifest_dir.join("compile_commands.json"));
+        // Prefer the generated compilation database when CMake emits one.
+        let _ = std::fs::copy(&comp_db, &compile_commands_path);
+        let _ = std::fs::remove_file(&compile_flags_path);
     } else {
-        // Windows MSVC: Dynamically generate compile_flags.txt as a fallback for IDE
-        let flags_path = manifest_dir.join("compile_flags.txt");
-        if let Ok(mut file) = std::fs::File::create(flags_path) {
+        // Generate compile_flags.txt only as a fallback for IDE autocomplete.
+        if let Ok(mut file) = std::fs::File::create(&compile_flags_path) {
             let _ = writeln!(file, "-xc++");
             let _ = writeln!(file, "-std=c++17");
 
@@ -399,5 +401,6 @@ fn setup_clangd_autocomplete(manifest_dir: &Path, dst: &Path, llama_dir: &Path) 
             // Add any specific macros your IDE needs to know about
             let _ = writeln!(file, "-DGGML_USE_OPENMP=OFF");
         }
+        let _ = std::fs::remove_file(&compile_commands_path);
     }
 }
