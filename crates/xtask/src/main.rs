@@ -271,6 +271,76 @@ fn build_wasm_target(
 // ====================================================================================
 // Toolchain Bootstrappers
 // ====================================================================================
+
+fn apply_toolchains<'a>(
+    sh: &Shell,
+    mut cmd: xshell::Cmd<'a>,
+    backend: Option<&Backend>,
+) -> Result<xshell::Cmd<'a>> {
+    let ninja_dir = setup_ninja(sh)?;
+    let vk_sdk = if matches!(backend, Some(Backend::Vulkan)) {
+        Some(setup_vulkan(sh)?)
+    } else {
+        None
+    };
+
+    let mut path_additions = Vec::new();
+
+    // 1. Force Ninja as the generator to bypass MSBuild's sub-project amnesia
+    if let Some(n_dir) = &ninja_dir {
+        path_additions.push(n_dir.display().to_string());
+        cmd = cmd.env("CMAKE_GENERATOR", "Ninja");
+    }
+
+    // 2. Map Vulkan SDK and expose `glslc` to the PATH
+    if let Some(vk) = &vk_sdk {
+        let bin_path = if cfg!(windows) {
+            vk.join("Bin")
+        } else if cfg!(target_os = "macos") {
+            vk.join("macOS").join("bin")
+        } else {
+            vk.join(VULKAN_VERSION).join("x86_64").join("bin")
+        };
+        path_additions.push(bin_path.display().to_string());
+
+        let vulkan_sdk_path = if cfg!(windows) {
+            vk.to_path_buf()
+        } else if cfg!(target_os = "macos") {
+            vk.join("macOS")
+        } else {
+            vk.join(VULKAN_VERSION).join("x86_64")
+        };
+        cmd = cmd.env("VULKAN_SDK", &vulkan_sdk_path);
+
+        let current_cmake_prefix = env::var("CMAKE_PREFIX_PATH").unwrap_or_default();
+        let separator = if cfg!(windows) { ";" } else { ":" };
+        let new_cmake_prefix = if current_cmake_prefix.is_empty() {
+            vulkan_sdk_path.display().to_string()
+        } else {
+            format!(
+                "{}{separator}{}",
+                vulkan_sdk_path.display(),
+                current_cmake_prefix
+            )
+        };
+        cmd = cmd.env("CMAKE_PREFIX_PATH", new_cmake_prefix);
+    }
+
+    // 3. Construct the final PATH
+    if !path_additions.is_empty() {
+        let current_path = env::var("PATH").unwrap_or_default();
+        let separator = if cfg!(windows) { ";" } else { ":" };
+        let new_path = format!(
+            "{}{separator}{}",
+            path_additions.join(separator),
+            current_path
+        );
+        cmd = cmd.env("PATH", new_path);
+    }
+
+    Ok(cmd)
+}
+
 fn setup_vulkan(sh: &Shell) -> Result<PathBuf> {
     let root = workspace_root();
     let toolchain_dir = root.join(".toolchain");
@@ -424,73 +494,4 @@ fn run_with_emsdk(
         cmd!(sh, "bash -c").arg(full_cmd).run()?;
     }
     Ok(())
-}
-
-fn apply_toolchains<'a>(
-    sh: &Shell,
-    mut cmd: xshell::Cmd<'a>,
-    backend: Option<&Backend>,
-) -> Result<xshell::Cmd<'a>> {
-    let ninja_dir = setup_ninja(sh)?;
-    let vk_sdk = if matches!(backend, Some(Backend::Vulkan)) {
-        Some(setup_vulkan(sh)?)
-    } else {
-        None
-    };
-
-    let mut path_additions = Vec::new();
-
-    // 1. Force Ninja as the generator to bypass MSBuild's sub-project amnesia
-    if let Some(n_dir) = &ninja_dir {
-        path_additions.push(n_dir.display().to_string());
-        cmd = cmd.env("CMAKE_GENERATOR", "Ninja");
-    }
-
-    // 2. Map Vulkan SDK and expose `glslc` to the PATH
-    if let Some(vk) = &vk_sdk {
-        let bin_path = if cfg!(windows) {
-            vk.join("Bin")
-        } else if cfg!(target_os = "macos") {
-            vk.join("macOS").join("bin")
-        } else {
-            vk.join(VULKAN_VERSION).join("x86_64").join("bin")
-        };
-        path_additions.push(bin_path.display().to_string());
-
-        let vulkan_sdk_path = if cfg!(windows) {
-            vk.to_path_buf()
-        } else if cfg!(target_os = "macos") {
-            vk.join("macOS")
-        } else {
-            vk.join(VULKAN_VERSION).join("x86_64")
-        };
-        cmd = cmd.env("VULKAN_SDK", &vulkan_sdk_path);
-
-        let current_cmake_prefix = env::var("CMAKE_PREFIX_PATH").unwrap_or_default();
-        let separator = if cfg!(windows) { ";" } else { ":" };
-        let new_cmake_prefix = if current_cmake_prefix.is_empty() {
-            vulkan_sdk_path.display().to_string()
-        } else {
-            format!(
-                "{}{separator}{}",
-                vulkan_sdk_path.display(),
-                current_cmake_prefix
-            )
-        };
-        cmd = cmd.env("CMAKE_PREFIX_PATH", new_cmake_prefix);
-    }
-
-    // 3. Construct the final PATH
-    if !path_additions.is_empty() {
-        let current_path = env::var("PATH").unwrap_or_default();
-        let separator = if cfg!(windows) { ";" } else { ":" };
-        let new_path = format!(
-            "{}{separator}{}",
-            path_additions.join(separator),
-            current_path
-        );
-        cmd = cmd.env("PATH", new_path);
-    }
-
-    Ok(cmd)
 }
