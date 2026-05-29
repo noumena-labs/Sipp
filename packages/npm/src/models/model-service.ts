@@ -176,18 +176,15 @@ function browserDefaultThreadCount(): number {
 function applyBrowserRuntimeDefaults(
   runtime: NativeRuntimeConfig | undefined,
   wasmThreading: WasmThreadingMode
-): NativeRuntimeConfig | undefined {
-  if (wasmThreading !== 'pthread') {
-    return runtime;
-  }
-
-  const threadCount = browserDefaultThreadCount();
+): NativeRuntimeConfig {
+  const threadCount = wasmThreading === 'pthread' ? browserDefaultThreadCount() : 1;
   return {
     ...runtime,
     context: {
       ...runtime?.context,
       n_threads: runtime?.context?.n_threads ?? threadCount,
       n_threads_batch: runtime?.context?.n_threads_batch ?? threadCount,
+      warmup: runtime?.context?.warmup ?? false,
     },
   };
 }
