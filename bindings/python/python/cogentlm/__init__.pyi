@@ -1,8 +1,9 @@
 from pathlib import Path
-from typing import Any, Callable, Final, Optional, Sequence, TypedDict, Union
+from typing import Any, Callable, Final, Literal, Optional, Sequence, TypedDict, Union
 
 PathLike = Union[str, Path]
 GpuLayerConfig = Union[str, dict[str, int]]
+ActivePythonBackend = Literal["cpu", "cuda", "metal", "vulkan"]
 DEFAULT_CONTEXT_KEY: Final[str]
 DEFAULT_MAX_TOKENS: Final[int]
 DEFAULT_MODEL_BACKEND: Final[str]
@@ -239,4 +240,5 @@ class ModelService:
     def drain_events(self) -> list[dict[str, Any]]: ...
 
 def backend_observability_json(include_details: bool = True) -> str: ...
+def get_active_backend() -> ActivePythonBackend: ...
 def set_llama_log_quiet(quiet: bool) -> None: ...

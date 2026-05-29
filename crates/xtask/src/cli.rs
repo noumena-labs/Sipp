@@ -22,7 +22,7 @@ pub enum Backend {
     Metal,
     /// Vulkan cross-platform GPU acceleration.
     Vulkan,
-    /// Build all supported Node backends for the host OS.
+    /// Build all supported binding backends for the host OS.
     All,
 }
 
@@ -48,13 +48,13 @@ pub enum Commands {
     BuildCore,
     /// Build the WASM/WebGPU bindings using Emscripten.
     BuildWasm,
-    /// Build Python bindings [BACKEND] = {cpu | cuda | metal | vulkan}.
+    /// Build Python bindings [BACKEND] = {cpu | cuda | metal | vulkan | all}.
     BuildPython {
         /// The computation backend to compile against.
         #[arg(long, short)]
         backend: Option<Backend>,
     },
-    /// Build Node bindings [BACKEND] = {cpu | cuda | metal | vulkan}.
+    /// Build Node bindings [BACKEND] = {cpu | cuda | metal | vulkan | all}.
     BuildNode {
         /// The computation backend to compile against.
         #[arg(long, short)]

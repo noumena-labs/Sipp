@@ -24,6 +24,17 @@ pub(crate) fn apply_toolchains<'a>(
         command = command.env("CMAKE_GENERATOR", "Ninja");
     }
 
+    // Handle UV path injection
+    let uv_dir = ctx
+        .workspace_root()
+        .join(".build")
+        .join("toolchain")
+        .join("uv");
+    if uv_dir.exists() {
+        path_additions.push(uv_dir.display().to_string());
+    }
+
+    // Process backend
     match backend {
         Some(Backend::Vulkan) => {
             let vulkan_dir = setup_vulkan(sh, ctx)?;

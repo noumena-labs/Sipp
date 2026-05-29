@@ -15,3 +15,4 @@ dev = ["maturin>=1.5,<2"]
 [tool.maturin]
 module-name = "cogentlm._native"
 python-source = "python"
+include = [{ path = "cogentlm/binaries/*", format = "wheel" }]

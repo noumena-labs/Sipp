@@ -77,6 +77,10 @@ impl BuildContext {
         self.artifacts_root().join("node")
     }
 
+    pub(crate) fn python_artifacts_dir(&self) -> PathBuf {
+        self.artifacts_root().join("python")
+    }
+
     pub(crate) fn npm_browser_artifacts_dir(&self) -> PathBuf {
         self.artifacts_root()
             .join("npm")
