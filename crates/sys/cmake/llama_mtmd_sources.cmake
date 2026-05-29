@@ -32,7 +32,7 @@ set(SHARED_MTMD_SOURCES
     ${COGENTLM_MTMD_MODEL_DIR}/gemma4v.cpp
     ${COGENTLM_MTMD_MODEL_DIR}/glm4v.cpp
     ${COGENTLM_MTMD_MODEL_DIR}/granite-speech.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/hunyuanocr.cpp
+    ${COGENTLM_MTMD_MODEL_DIR}/hunyuanvl.cpp
     ${COGENTLM_MTMD_MODEL_DIR}/internvl.cpp
     ${COGENTLM_MTMD_MODEL_DIR}/kimivl.cpp
     ${COGENTLM_MTMD_MODEL_DIR}/kimik25.cpp
@@ -50,6 +50,7 @@ set(SHARED_MTMD_SOURCES
     ${COGENTLM_MTMD_MODEL_DIR}/siglip.cpp
     ${COGENTLM_MTMD_MODEL_DIR}/whisper-enc.cpp
     ${COGENTLM_MTMD_MODEL_DIR}/deepseekocr.cpp
+    ${COGENTLM_MTMD_MODEL_DIR}/deepseekocr2.cpp
     ${COGENTLM_MTMD_MODEL_DIR}/mobilenetv5.cpp
     ${COGENTLM_MTMD_MODEL_DIR}/youtuvl.cpp
     ${COGENTLM_MTMD_MODEL_DIR}/yasa2.cpp

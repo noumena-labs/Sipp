@@ -1037,7 +1037,7 @@ test('ModelService routes browser lifecycle through the Rust bridge when availab
   assert.deepEqual(rust.lastOptions, {
     backend: 'cpu',
     observability: 'runtime',
-    runtime: { context: { n_ctx: 1024 } },
+    runtime: { context: { n_ctx: 1024, n_threads: 1, n_threads_batch: 1, warmup: false } },
   });
   assert.equal(rust.commitCount, 1);
   assert.equal(info.loaded, true);
@@ -1072,6 +1072,7 @@ test('ModelService defaults browser pthread runtime thread counts before Rust pr
           n_ctx: 1024,
           n_threads: 2,
           n_threads_batch: 4,
+          warmup: false,
         },
       },
     });
