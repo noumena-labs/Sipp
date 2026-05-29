@@ -52,7 +52,7 @@ fn build_native(manifest_dir: &Path, llama_dir: &Path) {
     if cfg!(windows) {
         // The Vulkan shader generator nests directories so deeply that it crashes MSVC.
         let short_build_dir = manifest_dir
-            .join("../../.b/c") // Shrink `.build/cmake/sys/target/` down to just `.b/c/`
+            .join("../../.build/c") // Shrink `.build/cmake/sys/target/` down to just `.b/c/`
             .join(cmake_backend_tag());
         config.out_dir(short_build_dir);
 
