@@ -377,14 +377,15 @@ fn generate_bindings(manifest_dir: &Path, llama_dir: &Path) {
 // Convenience method for creating and setting up paths for clangd language server
 fn setup_clangd_autocomplete(manifest_dir: &Path, dst: &Path, llama_dir: &Path) {
     let comp_db = dst.join("build/compile_commands.json");
+    let comp_flags = dst.join("build/compile_flags.txt");
     let compile_commands_path = manifest_dir.join("compile_commands.json");
     let compile_flags_path = manifest_dir.join("compile_flags.txt");
 
     if comp_db.exists() {
-        // Prefer the generated compilation database when CMake emits one.
-        let _ = std::fs::copy(&comp_db, &compile_commands_path);
-        let _ = std::fs::remove_file(&compile_flags_path);
-    } else {
+        let _ = std::fs::remove_file(&comp_db);
+    }
+
+    if !comp_flags.exists() {
         // Generate compile_flags.txt only as a fallback for IDE autocomplete.
         if let Ok(mut file) = std::fs::File::create(&compile_flags_path) {
             let _ = writeln!(file, "-xc++");
