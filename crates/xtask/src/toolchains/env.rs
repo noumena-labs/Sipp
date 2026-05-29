@@ -1,0 +1,97 @@
+//! Environment application for backend-specific native builds.
+
+use crate::cli::Backend;
+use crate::toolchains::cuda::setup_cuda;
+use crate::toolchains::ninja::setup_ninja;
+use crate::toolchains::vulkan::{setup_vulkan, VULKAN_VERSION};
+use crate::utils::BuildContext;
+use anyhow::Result;
+use std::env as std_env;
+use xshell::{Cmd, Shell};
+
+/// Applies required toolchain environment variables to a command.
+pub(crate) fn apply_toolchains<'a>(
+    sh: &Shell,
+    ctx: &BuildContext,
+    mut command: Cmd<'a>,
+    backend: Option<&Backend>,
+) -> Result<Cmd<'a>> {
+    let ninja_dir = setup_ninja(sh, ctx)?;
+    let mut path_additions = Vec::new();
+
+    if let Some(ninja_dir) = &ninja_dir {
+        path_additions.push(ninja_dir.display().to_string());
+        command = command.env("CMAKE_GENERATOR", "Ninja");
+    }
+
+    match backend {
+        Some(Backend::Vulkan) => {
+            let vulkan_dir = setup_vulkan(sh, ctx)?;
+            let bin_path = if cfg!(windows) {
+                vulkan_dir.join("Bin")
+            } else if cfg!(target_os = "macos") {
+                vulkan_dir.join("macOS").join("bin")
+            } else {
+                vulkan_dir.join(VULKAN_VERSION).join("x86_64").join("bin")
+            };
+            path_additions.push(bin_path.display().to_string());
+
+            let vulkan_sdk_path = if cfg!(windows) {
+                vulkan_dir.to_path_buf()
+            } else if cfg!(target_os = "macos") {
+                vulkan_dir.join("macOS")
+            } else {
+                vulkan_dir.join(VULKAN_VERSION).join("x86_64")
+            };
+            command = command.env("VULKAN_SDK", &vulkan_sdk_path);
+
+            let current_cmake_prefix = std_env::var("CMAKE_PREFIX_PATH").unwrap_or_default();
+            let separator = path_separator();
+            let new_cmake_prefix = if current_cmake_prefix.is_empty() {
+                vulkan_sdk_path.display().to_string()
+            } else {
+                format!(
+                    "{}{separator}{}",
+                    vulkan_sdk_path.display(),
+                    current_cmake_prefix
+                )
+            };
+            command = command.env("CMAKE_PREFIX_PATH", new_cmake_prefix);
+        }
+        Some(Backend::Cuda) => {
+            let cuda_path = setup_cuda()?;
+            let bin_path = cuda_path.join("bin");
+            path_additions.push(bin_path.display().to_string());
+
+            let nvcc_exe = if cfg!(windows) {
+                bin_path.join("nvcc.exe")
+            } else {
+                bin_path.join("nvcc")
+            };
+            command = command.env("CUDACXX", nvcc_exe.display().to_string());
+            command = command.env("CUDA_TOOLKIT_ROOT_DIR", cuda_path.display().to_string());
+        }
+        _ => {}
+    }
+
+    if !path_additions.is_empty() {
+        let current_path = std_env::var("PATH").unwrap_or_default();
+        let separator = path_separator();
+        let new_path = format!(
+            "{}{separator}{}",
+            path_additions.join(separator),
+            current_path
+        );
+        command = command.env("PATH", new_path);
+    }
+
+    Ok(command)
+}
+
+fn path_separator() -> &'static str {
+    if cfg!(windows) {
+        ";"
+    } else {
+        ":"
+    }
+}

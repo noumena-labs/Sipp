@@ -36,7 +36,11 @@ fn build_native(manifest_dir: &Path, llama_dir: &Path) {
         .profile("Release")
         .define("COGENTLM_LLAMA_CPP_DIR", llama_dir)
         .define("CMAKE_INSTALL_LIBDIR", "lib")
-        .define("BUILD_SHARED_LIBS", "OFF");
+        .define("BUILD_SHARED_LIBS", "OFF")
+        // Remove bloat from llama.cpp
+        .define("LLAMA_BUILD_EXAMPLES", "OFF")
+        .define("LLAMA_BUILD_SERVER", "OFF")
+        .define("LLAMA_BUILD_TESTS", "OFF");
 
     let cmake_out_dir = workspace_build_dir(manifest_dir)
         .join("cmake")
@@ -46,6 +50,12 @@ fn build_native(manifest_dir: &Path, llama_dir: &Path) {
     config.out_dir(cmake_out_dir);
 
     if cfg!(windows) {
+        // The Vulkan shader generator nests directories so deeply that it crashes MSVC.
+        let short_build_dir = manifest_dir
+            .join("../../.b/c") // Shrink `.build/cmake/sys/target/` down to just `.b/c/`
+            .join(cmake_backend_tag());
+        config.out_dir(short_build_dir);
+
         // Make this build reproducible even when invoked outside xtask.
         config.generator("Ninja");
 
