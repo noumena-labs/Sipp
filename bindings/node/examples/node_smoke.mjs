@@ -28,7 +28,7 @@ const model = positionalArgs[0];
 const prompt = positionalArgs[1] ?? 'Describe browser LLM inference.';
 
 if (!model) {
-  console.error('usage: node examples/phase4_node_smoke.mjs <model.gguf> [prompt] [--gpu-layers N] [--backend auto|cpu|cuda|metal|vulkan|webgpu] [--model-store PATH]');
+  console.error('usage: node examples/node_smoke.mjs <model.gguf> [prompt] [--gpu-layers N] [--backend auto|cpu|cuda|metal|vulkan|webgpu] [--model-store PATH]');
   process.exit(2);
 }
 
@@ -85,10 +85,10 @@ try {
   console.log(`engine_events=${JSON.stringify(eventCounts)}`);
   console.log(
     `metrics=ttft_ms:${result.stats.ttftMs} ` +
-      `decode_ms:${decodeMs.toFixed(3)} ` +
-      `output_tokens:${outputTokens} ` +
-      `tps:${result.stats.tokensPerSecond}`
+    `decode_ms:${decodeMs.toFixed(3)} ` +
+    `output_tokens:${outputTokens} ` +
+    `tps:${result.stats.tokensPerSecond}`
   );
 } finally {
-  await engine.close();
+  await engine.unload();
 }

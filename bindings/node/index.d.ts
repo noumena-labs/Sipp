@@ -24,6 +24,19 @@ export declare class ModelService {
   drainEvents(): Array<EngineEvent>
 }
 
+export declare class ProviderClient {
+  static proxy(config: ProviderProxyConfig): ProviderClient
+  static openai(config: ProviderOpenAiConfig): ProviderClient
+  static anthropic(config: ProviderAnthropicConfig): ProviderClient
+  kind(): string
+  listModels(): Promise<ProviderModel[]>
+  getModel(model: string): Promise<ProviderModel>
+  chat(request: ProviderChatRequest): Promise<ProviderChatResponse>
+  generate(request: ProviderGenerateRequest): Promise<ProviderGenerateResponse>
+  embed(request: ProviderEmbedRequest): Promise<ProviderEmbeddingResponse>
+  streamChat(request: ProviderChatRequest, onTokens?: TokenBatchCallback | undefined | null): Promise<ProviderStreamResult>
+}
+
 export interface BackendDevice {
   id?: string
   name: string
@@ -92,6 +105,29 @@ export interface ContextRuntimeConfig {
   pooling?: PoolingType
 }
 
+export interface EmbeddingCapabilities {
+  dimensions: number
+  pooling: PoolingType
+}
+
+export interface EmbeddingResult {
+  id: string
+  values: Array<number>
+  pooling: PoolingType
+  normalized: boolean
+  stats: RequestStats
+}
+
+export interface EmbedOptions {
+  normalize?: boolean
+  contextKey?: string
+}
+
+export interface EmbedRequest {
+  input: string
+  options?: EmbedOptions
+}
+
 export interface EngineEvent {
   type: string
   state?: EngineState
@@ -157,6 +193,17 @@ export interface EngineStats {
   debugMetricsPostDecodeMs: number
 }
 
+export interface GenerationResult {
+  id: string
+  text: string
+  finishReason: string
+  stats: RequestStats
+}
+
+export interface GpuLayerCountConfig {
+  count: number
+}
+
 export interface LoadedModelInfo {
   model: ManagedModelInfo
   backend: BackendSelection
@@ -166,10 +213,6 @@ export interface LoadedModelInfo {
 export interface LogitBiasConfig {
   token: number
   bias: number
-}
-
-export interface GpuLayerCountConfig {
-  count: number
 }
 
 export interface ManagedModelInfo {
@@ -188,6 +231,20 @@ export interface ManagedModelInfo {
   updatedAtUnixMs: number
 }
 
+export interface ModelCapabilities {
+  modelClass: ModelClass
+  supportsTextGeneration: boolean
+  supportsEmbeddings: boolean
+  hasChatTemplate: boolean
+  embedding?: EmbeddingCapabilities
+}
+
+export declare const enum ModelClass {
+  DecoderOnly = 'decoder_only',
+  EncoderDecoder = 'encoder_decoder',
+  EncoderOnly = 'encoder_only'
+}
+
 export interface ModelLoadOptions {
   backend?: string
   stats?: string
@@ -196,7 +253,7 @@ export interface ModelLoadOptions {
 
 export interface ModelPlacementConfig {
   devices?: Array<string>
-  gpu_layers?: 'auto' | 'all' | GpuLayerCountConfig
+  gpu_layers?: string | GpuLayerCountConfig
   split_mode?: string
   main_gpu?: number
   tensor_split?: Array<number>
@@ -226,25 +283,6 @@ export interface ModelState {
   capabilities: ModelCapabilities
 }
 
-export enum ModelClass {
-  DecoderOnly = 'decoder_only',
-  EncoderDecoder = 'encoder_decoder',
-  EncoderOnly = 'encoder_only',
-}
-
-export interface ModelCapabilities {
-  modelClass: ModelClass
-  supportsTextGeneration: boolean
-  supportsEmbeddings: boolean
-  hasChatTemplate: boolean
-  embedding?: EmbeddingCapabilities
-}
-
-export interface EmbeddingCapabilities {
-  dimensions: number
-  pooling: PoolingType
-}
-
 export interface MultimodalRuntimeConfig {
   projector_path?: string
   use_gpu?: boolean
@@ -268,6 +306,152 @@ export interface ObservabilityRuntimeConfig {
   backend_profiling?: boolean
 }
 
+export declare const enum PoolingType {
+  Unspecified = 'unspecified',
+  None = 'none',
+  Mean = 'mean',
+  Cls = 'cls',
+  Last = 'last',
+  Rank = 'rank'
+}
+
+export interface ProviderAnthropicConfig {
+  apiKey: string
+  baseUrl?: string
+  version?: string
+  timeoutMs?: number
+}
+
+export interface ProviderAuthConfig {
+  bearer?: string
+  header?: ProviderAuthHeaderConfig
+}
+
+export interface ProviderAuthHeaderConfig {
+  name: string
+  value: string
+}
+
+export declare const enum ProviderCapabilitySupport {
+  Supported = 'supported',
+  Unsupported = 'unsupported',
+  Unknown = 'unknown'
+}
+
+export interface ProviderChatRequest {
+  model: string
+  messages: Array<ChatMessage>
+  options?: ProviderGenerationOptions
+  providerOptions?: any
+}
+
+export interface ProviderChatResponse {
+  result: ProviderTextOutput
+  usage?: ProviderTokenUsage
+  metadata: ProviderResponseMetadata
+}
+
+export interface ProviderEmbeddingOutput {
+  values: Array<number>
+}
+
+export interface ProviderEmbeddingResponse {
+  result: ProviderEmbeddingOutput
+  usage?: ProviderTokenUsage
+  metadata: ProviderResponseMetadata
+}
+
+export interface ProviderEmbedRequest {
+  model: string
+  input: string
+  providerOptions?: any
+}
+
+export interface ProviderGenerateRequest {
+  model: string
+  prompt: string
+  options?: ProviderGenerationOptions
+  providerOptions?: any
+}
+
+export interface ProviderGenerateResponse {
+  result: ProviderTextOutput
+  usage?: ProviderTokenUsage
+  metadata: ProviderResponseMetadata
+}
+
+export interface ProviderGenerationOptions {
+  maxTokens?: number
+  temperature?: number
+  topP?: number
+  stop?: Array<string>
+}
+
+export interface ProviderModel {
+  id: string
+  provider: string
+  displayName?: string
+  capabilities: ProviderModelCapabilities
+  contextWindow?: number
+  maxOutputTokens?: number
+  raw: any
+}
+
+export interface ProviderModelCapabilities {
+  chat: ProviderCapabilitySupport
+  generate: ProviderCapabilitySupport
+  embeddings: ProviderCapabilitySupport
+  streaming: ProviderCapabilitySupport
+}
+
+export interface ProviderOpenAiConfig {
+  apiKey: string
+  baseUrl?: string
+  timeoutMs?: number
+}
+
+export interface ProviderProxyConfig {
+  baseUrl: string
+  auth: ProviderAuthConfig
+  protocol?: ProviderProxyProtocol
+  staticHeaders?: Array<ProviderStaticHeaderConfig>
+  timeoutMs?: number
+}
+
+export declare const enum ProviderProxyProtocol {
+  OpenAiCompatible = 'open_ai_compatible'
+}
+
+export interface ProviderResponseMetadata {
+  provider: string
+  model: string
+  requestId?: string
+  responseId?: string
+  finishReasonRaw?: string
+  raw: any
+}
+
+export interface ProviderStaticHeaderConfig {
+  name: string
+  value: string
+}
+
+export interface ProviderStreamResult {
+  usage?: ProviderTokenUsage
+  finishReason?: string
+}
+
+export interface ProviderTextOutput {
+  text: string
+  finishReason: string
+}
+
+export interface ProviderTokenUsage {
+  inputTokens?: number
+  outputTokens?: number
+  totalTokens?: number
+}
+
 export interface QueryOptions {
   contextKey?: string
   maxTokens?: number
@@ -276,56 +460,6 @@ export interface QueryOptions {
   stop?: Array<string>
   sampling?: SamplingRuntimeConfig
   media?: Array<Buffer>
-}
-
-export interface RequestObservabilityMetrics {
-  ttftMs: number
-  itlAvgMs: number
-  itlP99Ms: number
-  e2EMs: number
-  prefillMs: number
-  decodeMs: number
-  nativeGpuMs: number
-  nativeSyncMs: number
-  nativeLogicMs: number
-  inputTokens: number
-  outputTokens: number
-  cacheHits: number
-  prefillTokens: number
-}
-
-export interface GenerationResult {
-  id: string
-  text: string
-  finishReason: string
-  stats: RequestStats
-}
-
-export enum PoolingType {
-  Unspecified = 'unspecified',
-  None = 'none',
-  Mean = 'mean',
-  Cls = 'cls',
-  Last = 'last',
-  Rank = 'rank',
-}
-
-export interface EmbedOptions {
-  normalize?: boolean
-  contextKey?: string
-}
-
-export interface EmbedRequest {
-  input: string
-  options?: EmbedOptions
-}
-
-export interface EmbeddingResult {
-  id: string
-  values: Array<number>
-  pooling: PoolingType
-  normalized: boolean
-  stats: RequestStats
 }
 
 export interface RequestState {

@@ -578,5 +578,10 @@ if (!nativeBinding) {
 module.exports = nativeBinding
 module.exports.CogentEngine = nativeBinding.CogentEngine
 module.exports.ModelService = nativeBinding.ModelService
+module.exports.ProviderClient = nativeBinding.ProviderClient
 module.exports.backendObservabilityJson = nativeBinding.backendObservabilityJson
+module.exports.ModelClass = nativeBinding.ModelClass
+module.exports.PoolingType = nativeBinding.PoolingType
+module.exports.ProviderCapabilitySupport = nativeBinding.ProviderCapabilitySupport
+module.exports.ProviderProxyProtocol = nativeBinding.ProviderProxyProtocol
 module.exports.setLlamaLogQuiet = nativeBinding.setLlamaLogQuiet
