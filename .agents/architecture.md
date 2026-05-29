@@ -20,7 +20,7 @@ These directories contain the bridge code between the Rust core and other langua
 
 ## 3. NPM Packages (`packages/npm/`)
 High-level JavaScript/TypeScript orchestration.
-- **`@noumena-labs/cogentlm-browser`**: The main JS package for browser environments. Includes high-level features like:
+- **`@noumena-labs/cogentlm`**: The main JS package for browser environments. Includes high-level features like:
   - `character/`: Parsing and rendering agent personas and actions.
   - `orchestrator/`: The Director runtime for executing multi-step tasks.
   - `models/`: File system and OPFS management for downloading and caching models.

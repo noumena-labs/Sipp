@@ -33,7 +33,7 @@ cargo xtask build-python --backend vulkan
 ### 4. Browser WASM/WebGPU
 Compiles the engine using Emscripten to target WebAssembly. This automatically downloads and activates the Emscripten SDK.
 ```bash
-cargo xtask build-wasm
+bun run build
 ```
 
 ### 5. Build Everything
