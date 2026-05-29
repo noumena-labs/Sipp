@@ -22,8 +22,14 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CUDA_PATH");
     println!("cargo:rerun-if-env-changed=CUDA_HOME");
 
-    // Native C++ libraries via CMake.
-    build_native(&manifest_dir, &llama_dir);
+    let target = env::var("TARGET").unwrap_or_default();
+
+    // The browser build links C/C++ in bindings/wasm/CMakeLists.txt after
+    // Cargo produces the Rust staticlib. Running this CMake phase here would
+    // compile the same sources twice and can collide with native CMake caches.
+    if !target.contains("emscripten") {
+        build_native(&manifest_dir, &llama_dir);
+    }
 
     // Generate the Rust FFI bindings.
     generate_bindings(&manifest_dir, &llama_dir);
@@ -93,27 +99,6 @@ fn build_native(manifest_dir: &Path, llama_dir: &Path) {
     define_bool_feature(&mut config, "CARGO_FEATURE_METAL", "GGML_METAL");
     define_bool_feature(&mut config, "CARGO_FEATURE_VULKAN", "GGML_VULKAN");
     define_bool_feature(&mut config, "CARGO_FEATURE_OPENMP", "GGML_OPENMP");
-
-    if target.contains("emscripten") {
-        // WASM cannot use Visual Studio. Force Ninja.
-        config.generator("Ninja");
-
-        // Prevent cargo from injecting `/c emcc.bat` flags
-        config.no_build_target(true);
-        config.define("CMAKE_ASM_FLAGS", "");
-
-        // Requires explicit pthread flags for CMake's FindThreads to succeed
-        config.define("CMAKE_C_FLAGS", "-pthread");
-        config.define("CMAKE_CXX_FLAGS", "-pthread");
-
-        config.define("THREADS_PREFER_PTHREAD_FLAG", "ON");
-        config.define("CMAKE_USE_PTHREADS_INIT", "1");
-        config.define("CMAKE_THREAD_LIBS_INIT", "-pthread");
-
-        // Suppress a warning where CMake gets confused by Emscripten's archiver
-        config.define("CMAKE_CXX_COMPILER_WORKS", "TRUE");
-        config.define("CMAKE_C_COMPILER_WORKS", "TRUE");
-    }
 
     let dst = config.build();
 
