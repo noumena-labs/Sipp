@@ -13,7 +13,7 @@
     "router.js"
   ],
   "scripts": {
-    "build": "cargo xtask build-node --backend all",
+    "build": "cargo xtask build node --backend all",
     "test:smoke": "node examples/node_smoke.mjs"
   },
   "napi": {

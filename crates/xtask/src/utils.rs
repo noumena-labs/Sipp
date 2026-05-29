@@ -46,6 +46,14 @@ impl BuildContext {
         self.build_root().join("cargo")
     }
 
+    pub(crate) fn cmake_build_root(&self) -> PathBuf {
+        self.build_root().join("cmake")
+    }
+
+    pub(crate) fn native_build_root(&self) -> PathBuf {
+        self.build_root().join("c")
+    }
+
     pub(crate) fn cargo_node_target_dir(&self, backend: &Backend) -> PathBuf {
         self.cargo_build_root().join("node").join(backend.as_str())
     }
@@ -99,6 +107,56 @@ impl BuildContext {
         self.build_root().join("tmp")
     }
 
+    pub(crate) fn packages_root(&self) -> PathBuf {
+        self.workspace_root.join("packages")
+    }
+
+    pub(crate) fn apps_root(&self) -> PathBuf {
+        self.workspace_root.join("apps")
+    }
+
+    pub(crate) fn bindings_node_dir(&self) -> PathBuf {
+        self.workspace_root.join("bindings").join("node")
+    }
+
+    pub(crate) fn npm_package_dir(&self) -> PathBuf {
+        self.packages_root().join("npm")
+    }
+
+    pub(crate) fn app_dirs(&self) -> Result<Vec<PathBuf>> {
+        read_child_dirs(&self.apps_root())
+    }
+
+    pub(crate) fn package_dirs(&self) -> Result<Vec<PathBuf>> {
+        read_child_dirs(&self.packages_root())
+    }
+
+    pub(crate) fn uv_toolchain_dir(&self) -> PathBuf {
+        self.toolchain_dir().join("uv")
+    }
+
+    pub(crate) fn uv_exe(&self) -> PathBuf {
+        self.uv_toolchain_dir()
+            .join(if cfg!(windows) { "uv.exe" } else { "uv" })
+    }
+
+    pub(crate) fn ninja_toolchain_dir(&self) -> PathBuf {
+        self.toolchain_dir().join("ninja")
+    }
+
+    pub(crate) fn ninja_exe(&self) -> PathBuf {
+        self.ninja_toolchain_dir()
+            .join(if cfg!(windows) { "ninja.exe" } else { "ninja" })
+    }
+
+    pub(crate) fn emsdk_dir(&self) -> PathBuf {
+        self.toolchain_dir().join("emsdk")
+    }
+
+    pub(crate) fn vulkan_dir(&self) -> PathBuf {
+        self.toolchain_dir().join("vulkan")
+    }
+
     pub(crate) fn backend_build_tag(backend: Option<&Backend>) -> &'static str {
         backend.map(Backend::as_str).unwrap_or("cpu")
     }
@@ -118,4 +176,22 @@ impl BuildContext {
     pub(crate) fn cmake_file_path(&self, path: &Path) -> String {
         path.display().to_string().replace('\\', "/")
     }
+}
+
+fn read_child_dirs(root: &Path) -> Result<Vec<PathBuf>> {
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut dirs = Vec::new();
+    for entry in std::fs::read_dir(root)
+        .with_context(|| format!("failed to read {}", root.display()))?
+    {
+        let path = entry?.path();
+        if path.is_dir() {
+            dirs.push(path);
+        }
+    }
+    dirs.sort();
+    Ok(dirs)
 }
