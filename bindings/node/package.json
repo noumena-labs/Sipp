@@ -3,11 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "description": "Native Node.js bindings for CogentLM",
-  "main": "index.js",
-  "types": "index.d.ts",
+  "main": "router.js",
+  "types": "router.d.ts",
   "license": "MIT",
+  "files": [
+    "dist/*.node",
+    "index.d.ts",
+    "index.js",
+    "router.d.ts",
+    "router.js"
+  ],
   "scripts": {
-    "build": "napi build --platform --release",
+    "build": "cargo xtask build-node --backend all",
     "test:smoke": "node examples/node_smoke.mjs"
   },
   "napi": {

@@ -1,4 +1,4 @@
-import native from '../index.js';
+import native from '../router.js';
 
 const {
   ModelService,

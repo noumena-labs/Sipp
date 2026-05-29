@@ -30,6 +30,7 @@ fn main() {
 }
 
 fn build_native(manifest_dir: &Path, llama_dir: &Path) {
+    let target = env::var("TARGET").unwrap_or_default();
     let mut config = cmake::Config::new(manifest_dir);
     config
         .profile("Release")
@@ -38,8 +39,12 @@ fn build_native(manifest_dir: &Path, llama_dir: &Path) {
         .define("BUILD_SHARED_LIBS", "OFF");
 
     if cfg!(windows) {
-        // This drops the CMake cache into `CogentLM/target/cm` instead of the deep OUT_DIR (WIN file length isues)
-        let short_build_dir = manifest_dir.join("../../target/cm");
+        // Keep CMake close to the workspace root on Windows. Vulkan's shader
+        // generator creates deeply nested TryCompile trees that exceed MSVC's
+        // object-path limit if this includes the full target triple.
+        let short_build_dir = manifest_dir
+            .join("../../target/c")
+            .join(cmake_backend_tag());
         config.out_dir(short_build_dir);
 
         // Make this build reproducible even when invoked outside xtask.
@@ -80,7 +85,6 @@ fn build_native(manifest_dir: &Path, llama_dir: &Path) {
     define_bool_feature(&mut config, "CARGO_FEATURE_VULKAN", "GGML_VULKAN");
     define_bool_feature(&mut config, "CARGO_FEATURE_OPENMP", "GGML_OPENMP");
 
-    let target = env::var("TARGET").unwrap_or_default();
     if target.contains("emscripten") {
         // WASM cannot use Visual Studio. Force Ninja.
         config.generator("Ninja");
@@ -261,6 +265,20 @@ fn define_bool_feature(config: &mut cmake::Config, feature_env: &str, cmake_name
             "OFF"
         },
     );
+}
+
+fn cmake_backend_tag() -> &'static str {
+    if env::var_os("CARGO_FEATURE_CUDA").is_some() {
+        "cu"
+    } else if env::var_os("CARGO_FEATURE_METAL").is_some() {
+        "mt"
+    } else if env::var_os("CARGO_FEATURE_VULKAN").is_some() {
+        "vk"
+    } else if env::var_os("CARGO_FEATURE_OPENMP").is_some() {
+        "om"
+    } else {
+        "c"
+    }
 }
 
 fn static_library_exists(lib_dir: &Path, lib: &str) -> bool {
