@@ -77,6 +77,12 @@ impl BuildContext {
             .join(Self::wasm_build_tag(use_pthreads))
     }
 
+    pub(crate) fn cmake_llama_build_dir(&self, backend: &Backend) -> PathBuf {
+        self.cmake_build_root()
+            .join("llama")
+            .join(backend.as_str())
+    }
+
     pub(crate) fn artifacts_root(&self) -> PathBuf {
         self.build_root().join("artifacts")
     }
@@ -99,6 +105,10 @@ impl BuildContext {
         self.npm_browser_artifacts_dir().join("dist").join("wasm")
     }
 
+    pub(crate) fn app_artifacts_dir(&self, app: &str) -> PathBuf {
+        self.artifacts_root().join("apps").join(app)
+    }
+
     pub(crate) fn toolchain_dir(&self) -> PathBuf {
         self.build_root().join("toolchain")
     }
@@ -119,8 +129,28 @@ impl BuildContext {
         self.workspace_root.join("bindings").join("node")
     }
 
+    pub(crate) fn bindings_python_dir(&self) -> PathBuf {
+        self.workspace_root.join("bindings").join("python")
+    }
+
+    pub(crate) fn bindings_python_package_dir(&self) -> PathBuf {
+        self.bindings_python_dir().join("python").join("cogentlm")
+    }
+
+    pub(crate) fn bindings_python_binary_dir(&self) -> PathBuf {
+        self.bindings_python_package_dir().join("binaries")
+    }
+
     pub(crate) fn npm_package_dir(&self) -> PathBuf {
         self.packages_root().join("npm")
+    }
+
+    pub(crate) fn llama_cpp_dir(&self) -> PathBuf {
+        self.workspace_root.join("third_party").join("llama.cpp")
+    }
+
+    pub(crate) fn app_dir(&self, app: &str) -> PathBuf {
+        self.apps_root().join(app)
     }
 
     pub(crate) fn app_dirs(&self) -> Result<Vec<PathBuf>> {

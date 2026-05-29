@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "bunx --bun vite",
     "build": "bunx --bun vite build",
-    "preview": "bunx --bun vite preview"
+    "preview": "bunx --bun vite preview",
+    "test": "bun test simulation-runtime.test.ts"
   },
   "dependencies": {
     "@noumena-labs/cogentlm-browser": "workspace:*",

@@ -29,10 +29,11 @@
     "README.md"
   ],
   "scripts": {
-    "clean:ts": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "clean:ts": "node -e \"const fs=require('node:fs'); fs.rmSync('dist/esm',{recursive:true,force:true}); fs.rmSync('dist/types',{recursive:true,force:true});\"",
     "build:ts": "tsc -p tsconfig.json",
     "build:stage": "node scripts/stage-package.mjs",
-    "build": "bun run clean:ts && bun run build:ts && bun run build:stage"
+    "build": "bun run clean:ts && bun run build:ts && bun run build:stage",
+    "test": "bun test src"
   },
   "keywords": [
     "ai",

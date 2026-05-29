@@ -7,6 +7,7 @@ pub mod cli;
 pub mod clean;
 pub mod doctor;
 pub(crate) mod output;
+pub mod run;
 pub mod targets;
 pub mod toolchain;
 pub mod toolchains;

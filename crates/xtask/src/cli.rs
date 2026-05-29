@@ -1,6 +1,7 @@
 //! CLI definitions for the xtask build orchestrator.
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use std::path::PathBuf;
 
 const TOP_LEVEL_HELP: &str = "\
 CogentLM's developer automation lives under focused command groups.
@@ -11,6 +12,7 @@ Start with:
   cargo xtask doctor
   cargo xtask toolchain status
   cargo xtask clean --dry-run
+  cargo xtask run --help
   cargo xtask build node --backend cpu
   cargo xtask build python --backend cuda";
 
@@ -36,6 +38,55 @@ Backend values:
   metal   Apple Metal backend on macOS
   vulkan  Vulkan backend; xtask bootstraps the Vulkan SDK when needed
   all     Host-supported backend set for the binding target";
+
+const RUN_HELP: &str = "\
+Build and run finite developer workflows from the workspace root.
+
+Examples:
+  cargo xtask run apps build examples
+  cargo xtask run apps test
+  cargo xtask run apps serve benchmark --port 5173
+  cargo xtask run bindings node --model ./models/model.gguf
+  cargo xtask run bindings python --model ./models/model.gguf --backend vulkan
+  cargo xtask run llama backend-ops --backend cpu
+  cargo xtask run all --model ./models/model.gguf
+
+Notes:
+  Aggregate run commands finish on their own.
+  `run apps serve` is intentionally long-running and starts a Vite server.";
+
+const RUN_APPS_HELP: &str = "\
+Build, test, or serve individual browser apps.
+
+Examples:
+  cargo xtask run apps build examples
+  cargo xtask run apps build simulation
+  cargo xtask run apps test
+  cargo xtask run apps serve examples
+  cargo xtask run apps serve benchmark --mode preview --port 4173
+
+The apps group has no app-level `all` command. Build and serve commands target
+one app at a time; the top-level `run all` command owns aggregate workflows.";
+
+const RUN_BINDINGS_HELP: &str = "\
+Run binding-oriented checks and smoke examples.
+
+Examples:
+  cargo xtask run bindings browser
+  cargo xtask run bindings node --model ./models/model.gguf
+  cargo xtask run bindings python --model ./models/model.gguf --backend cuda
+  cargo xtask run bindings all --model ./models/model.gguf --backend cpu
+
+Node and Python smoke examples require an explicit GGUF model path.";
+
+const RUN_LLAMA_HELP: &str = "\
+Build standalone llama.cpp targets and run backend operation checks.
+
+Examples:
+  cargo xtask run llama backend-ops
+  cargo xtask run llama backend-ops --backend cpu
+  cargo xtask run llama backend-ops --backend vulkan --mode support
+  cargo xtask run llama backend-ops --backend cuda --mode perf --op MUL_MAT";
 
 /// Top-level xtask command-line arguments.
 #[derive(Parser)]
@@ -77,6 +128,15 @@ By default, clean removes build outputs and generated app/package output while
 preserving downloaded toolchains and dependency installs. Use `--purge` to also
 remove workspace node_modules directories.")]
     Clean(CleanArgs),
+
+    /// Build and run apps, bindings, and standalone llama.cpp checks.
+    #[command(long_about = RUN_HELP)]
+    #[command(arg_required_else_help = true)]
+    Run {
+        /// Run target to execute.
+        #[command(subcommand)]
+        command: RunCommands,
+    },
 
     /// Inspect or bootstrap xtask-managed toolchains.
     #[command(arg_required_else_help = true)]
@@ -174,6 +234,296 @@ supported by the host operating system.")]
     Node(BackendArgs),
 }
 
+/// Developer run workflows.
+#[derive(Subcommand)]
+pub enum RunCommands {
+    /// Run the full finite app, binding, and llama.cpp workflow.
+    #[command(long_about = "\
+Build apps, run app TypeScript tests, run binding smoke examples, and run
+llama.cpp backend operation checks.
+
+Examples:
+  cargo xtask run all --model ./models/model.gguf
+  cargo xtask run all --model ./models/model.gguf --backend vulkan
+
+This command is finite. It does not start dev or preview servers.")]
+    #[command(after_long_help = BACKEND_HELP)]
+    All(RunAllArgs),
+
+    /// Build, test, or serve browser apps.
+    #[command(long_about = RUN_APPS_HELP)]
+    #[command(arg_required_else_help = true)]
+    Apps {
+        /// App workflow to run.
+        #[command(subcommand)]
+        command: RunAppsCommands,
+    },
+
+    /// Run binding smoke examples and browser package checks.
+    #[command(long_about = RUN_BINDINGS_HELP)]
+    #[command(after_long_help = BACKEND_HELP)]
+    #[command(arg_required_else_help = true)]
+    Bindings {
+        /// Binding workflow to run.
+        #[command(subcommand)]
+        command: RunBindingsCommands,
+    },
+
+    /// Build and run standalone llama.cpp checks.
+    #[command(long_about = RUN_LLAMA_HELP)]
+    #[command(arg_required_else_help = true)]
+    Llama {
+        /// llama.cpp workflow to run.
+        #[command(subcommand)]
+        command: RunLlamaCommands,
+    },
+}
+
+/// Options for the aggregate finite run workflow.
+#[derive(Args)]
+pub struct RunAllArgs {
+    /// GGUF model used by Node and Python smoke examples.
+    #[arg(long)]
+    pub model: PathBuf,
+
+    /// Backend to build and exercise for native binding and llama checks.
+    #[arg(long, short, value_enum, default_value = "cpu")]
+    pub backend: Backend,
+
+    /// Prompt passed to Node and Python smoke examples.
+    #[arg(long, default_value = "Describe browser LLM inference.")]
+    pub prompt: String,
+
+    /// Number of model layers to offload for smoke examples.
+    #[arg(long)]
+    pub gpu_layers: Option<u32>,
+}
+
+/// Browser app run workflows.
+#[derive(Subcommand)]
+pub enum RunAppsCommands {
+    /// Build one browser app.
+    Build(RunAppBuildArgs),
+
+    /// Run finite browser app TypeScript tests through Bun.
+    Test,
+
+    /// Start one long-running Vite dev or preview server.
+    Serve(RunAppServeArgs),
+}
+
+/// Options for building a browser app.
+#[derive(Args)]
+pub struct RunAppBuildArgs {
+    /// App to build.
+    #[arg(value_enum)]
+    pub app: AppName,
+}
+
+/// Options for serving a browser app.
+#[derive(Args)]
+pub struct RunAppServeArgs {
+    /// App to serve.
+    #[arg(value_enum)]
+    pub app: AppName,
+
+    /// Vite server mode to run.
+    #[arg(long, value_enum, default_value = "dev")]
+    pub mode: AppServeMode,
+
+    /// Host passed through to Vite.
+    #[arg(long)]
+    pub host: Option<String>,
+
+    /// Port passed through to Vite.
+    #[arg(long)]
+    pub port: Option<u16>,
+
+    /// Start the server without first building browser package artifacts.
+    #[arg(long)]
+    pub no_build: bool,
+}
+
+/// Browser apps known to xtask.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum AppName {
+    /// Browser avatar app.
+    Avatar,
+    /// Browser benchmark app.
+    Benchmark,
+    /// Browser examples app.
+    Examples,
+    /// Browser proactive UI app.
+    ProactiveUi,
+    /// Browser simulation app.
+    Simulation,
+}
+
+impl AppName {
+    /// Directory name under `apps`.
+    pub(crate) fn slug(&self) -> &'static str {
+        match self {
+            AppName::Avatar => "avatar",
+            AppName::Benchmark => "benchmark",
+            AppName::Examples => "examples",
+            AppName::ProactiveUi => "proactive-ui",
+            AppName::Simulation => "simulation",
+        }
+    }
+
+    /// All browser apps in deterministic build order.
+    pub(crate) fn all() -> &'static [AppName] {
+        &[
+            AppName::Avatar,
+            AppName::Benchmark,
+            AppName::Examples,
+            AppName::ProactiveUi,
+            AppName::Simulation,
+        ]
+    }
+}
+
+/// Long-running browser app server mode.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum AppServeMode {
+    /// Vite development server.
+    Dev,
+    /// Vite preview server for built output.
+    Preview,
+}
+
+impl AppServeMode {
+    /// Command label used in console output.
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            AppServeMode::Dev => "dev",
+            AppServeMode::Preview => "preview",
+        }
+    }
+}
+
+/// Binding run workflows.
+#[derive(Subcommand)]
+pub enum RunBindingsCommands {
+    /// Run browser package checks and Node/Python smoke examples.
+    All(RunBindingSmokeArgs),
+
+    /// Run browser/WASM package checks.
+    Browser(RunBrowserArgs),
+
+    /// Build and run the Node.js smoke example.
+    Node(RunBindingSmokeArgs),
+
+    /// Build and run the Python smoke example.
+    Python(RunBindingSmokeArgs),
+}
+
+/// Options shared by native binding smoke examples.
+#[derive(Args)]
+pub struct RunBindingSmokeArgs {
+    /// GGUF model used by the smoke example.
+    #[arg(long)]
+    pub model: PathBuf,
+
+    /// Backend to build and exercise.
+    #[arg(long, short, value_enum, default_value = "cpu")]
+    pub backend: Backend,
+
+    /// Prompt passed to the smoke example.
+    #[arg(long, default_value = "Describe browser LLM inference.")]
+    pub prompt: String,
+
+    /// Number of model layers to offload.
+    #[arg(long)]
+    pub gpu_layers: Option<u32>,
+}
+
+/// Options for browser/WASM binding checks.
+#[derive(Args)]
+pub struct RunBrowserArgs {
+    /// Require the browser GGUF ingest smoke result in addition to the Rust engine smoke.
+    #[arg(long)]
+    pub ingest: bool,
+}
+
+/// Standalone llama.cpp run workflows.
+#[derive(Subcommand)]
+pub enum RunLlamaCommands {
+    /// Build and run llama.cpp test-backend-ops.
+    BackendOps(RunLlamaBackendOpsArgs),
+}
+
+/// Options for llama.cpp backend operation tests.
+#[derive(Args)]
+pub struct RunLlamaBackendOpsArgs {
+    /// Backend to compile and exercise.
+    #[arg(long, short, value_enum, default_value = "cpu")]
+    pub backend: Backend,
+
+    /// test-backend-ops mode.
+    #[arg(long, value_enum, default_value = "test")]
+    pub mode: LlamaBackendOpsMode,
+
+    /// Operation filter passed as `-o`.
+    #[arg(long)]
+    pub op: Option<String>,
+
+    /// Parameter regex passed as `-p`.
+    #[arg(long)]
+    pub params: Option<String>,
+
+    /// test-backend-ops output format.
+    #[arg(long, value_enum, default_value = "console")]
+    pub output: LlamaBackendOpsOutput,
+}
+
+/// llama.cpp test-backend-ops mode.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum LlamaBackendOpsMode {
+    /// Compare backend correctness against CPU reference.
+    Test,
+    /// Compare gradients against finite differences.
+    Grad,
+    /// Run performance measurements.
+    Perf,
+    /// Probe operation support.
+    Support,
+}
+
+impl LlamaBackendOpsMode {
+    /// CLI argument expected by test-backend-ops.
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            LlamaBackendOpsMode::Test => "test",
+            LlamaBackendOpsMode::Grad => "grad",
+            LlamaBackendOpsMode::Perf => "perf",
+            LlamaBackendOpsMode::Support => "support",
+        }
+    }
+}
+
+/// llama.cpp test-backend-ops output format.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum LlamaBackendOpsOutput {
+    /// Human-readable console output.
+    Console,
+    /// CSV output.
+    Csv,
+    /// SQL output.
+    Sql,
+}
+
+impl LlamaBackendOpsOutput {
+    /// CLI argument expected by test-backend-ops.
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            LlamaBackendOpsOutput::Console => "console",
+            LlamaBackendOpsOutput::Csv => "csv",
+            LlamaBackendOpsOutput::Sql => "sql",
+        }
+    }
+}
+
 /// Cleanup options for generated workspace artifacts.
 #[derive(Args)]
 pub struct CleanArgs {
@@ -255,7 +605,7 @@ pub struct BackendArgs {
 }
 
 /// Hardware backend selected for binding builds.
-#[derive(Clone, Debug, Eq, PartialEq, ValueEnum)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum Backend {
     /// Standard CPU computation fallback.
     Cpu,

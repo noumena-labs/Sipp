@@ -5,10 +5,14 @@ use crate::output;
 use crate::utils::BuildContext;
 use anyhow::{Context, Result};
 use std::collections::BTreeSet;
+use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use xshell::Shell;
 
-const GENERATED_DIRS: &[&str] = &["dist", ".vite", ".turbo", "coverage", "build", "out", ".next"];
+const GENERATED_DIRS: &[&str] = &[
+    "dist", ".vite", ".turbo", "coverage", "build", "out", ".next",
+];
 
 /// Runs the workspace cleanup command.
 pub fn run(sh: &Shell, ctx: &BuildContext, args: &CleanArgs) -> Result<()> {
@@ -61,7 +65,7 @@ pub fn run(sh: &Shell, ctx: &BuildContext, args: &CleanArgs) -> Result<()> {
 fn clean_targets(ctx: &BuildContext, args: &CleanArgs) -> Result<Vec<PathBuf>> {
     let mut targets = BTreeSet::new();
 
-    targets.insert(ctx.cargo_build_root());
+    add_cargo_clean_targets(&mut targets, ctx)?;
     targets.insert(ctx.cmake_build_root());
     targets.insert(ctx.native_build_root());
     targets.insert(ctx.artifacts_root());
@@ -96,6 +100,71 @@ fn clean_targets(ctx: &BuildContext, args: &CleanArgs) -> Result<Vec<PathBuf>> {
     Ok(targets.into_iter().collect())
 }
 
+fn add_cargo_clean_targets(targets: &mut BTreeSet<PathBuf>, ctx: &BuildContext) -> Result<()> {
+    let cargo_root = ctx.cargo_build_root();
+
+    let Some(protected_target) = protected_cargo_target(&cargo_root)? else {
+        targets.insert(cargo_root);
+        return Ok(());
+    };
+
+    output::warning(format!(
+        "Preserving current xtask target: {}",
+        protected_target.display()
+    ));
+
+    if !cargo_root.exists() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(&cargo_root)
+        .with_context(|| format!("failed to read {}", cargo_root.display()))?
+    {
+        let path = entry?.path();
+        if paths_match(&path, &protected_target)? {
+            continue;
+        }
+
+        targets.insert(path);
+    }
+
+    Ok(())
+}
+
+fn protected_cargo_target(cargo_root: &Path) -> Result<Option<PathBuf>> {
+    if !cfg!(windows) || !cargo_root.exists() {
+        return Ok(None);
+    }
+
+    let cargo_root = cargo_root
+        .canonicalize()
+        .with_context(|| format!("failed to resolve {}", cargo_root.display()))?;
+    let current_exe = env::current_exe()
+        .context("failed to resolve current xtask executable")?
+        .canonicalize()
+        .context("failed to canonicalize current xtask executable")?;
+
+    Ok(first_child_under(&cargo_root, &current_exe))
+}
+
+fn first_child_under(root: &Path, path: &Path) -> Option<PathBuf> {
+    let mut components = path.strip_prefix(root).ok()?.components();
+    let first = components.next()?;
+
+    Some(root.join(first.as_os_str()))
+}
+
+fn paths_match(left: &Path, right: &Path) -> Result<bool> {
+    let left = left
+        .canonicalize()
+        .with_context(|| format!("failed to resolve {}", left.display()))?;
+    let right = right
+        .canonicalize()
+        .with_context(|| format!("failed to resolve {}", right.display()))?;
+
+    Ok(left == right)
+}
+
 fn add_generated_dirs(targets: &mut BTreeSet<PathBuf>, root: &Path) {
     for name in GENERATED_DIRS {
         targets.insert(root.join(name));
@@ -126,4 +195,37 @@ fn checked_delete_target(workspace: &Path, target: &Path) -> Result<PathBuf> {
     }
 
     Ok(canonical)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::first_child_under;
+    use std::path::PathBuf;
+
+    #[test]
+    fn finds_top_level_child_for_nested_path() {
+        let root = PathBuf::from("workspace").join(".build").join("cargo");
+        let path = root.join("debug").join("deps").join("xtask.exe");
+
+        assert_eq!(first_child_under(&root, &path), Some(root.join("debug")));
+    }
+
+    #[test]
+    fn finds_direct_child_path() {
+        let root = PathBuf::from("workspace").join(".build").join("cargo");
+        let path = root.join("xtask.exe");
+
+        assert_eq!(
+            first_child_under(&root, &path),
+            Some(root.join("xtask.exe"))
+        );
+    }
+
+    #[test]
+    fn ignores_path_outside_root() {
+        let root = PathBuf::from("workspace").join(".build").join("cargo");
+        let path = PathBuf::from("workspace").join(".build").join("xtask");
+
+        assert_eq!(first_child_under(&root, &path), None);
+    }
 }

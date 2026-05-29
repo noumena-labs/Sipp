@@ -50,9 +50,18 @@ fn build_native(manifest_dir: &Path, llama_dir: &Path) {
     config.out_dir(cmake_out_dir);
 
     if cfg!(windows) {
-        // The Vulkan shader generator nests directories so deeply that it crashes MSVC.
+        // Detect if Cargo is currently compiling the multi-threaded or single-threaded variant.
+        // (Adjust the "CARGO_FEATURE_PTHREAD" string to match whatever feature name you use in xtask)
+        let is_pthread =
+            env::var("CARGO_FEATURE_PTHREADS").is_ok() || env::var("CARGO_FEATURE_PTHREAD").is_ok();
+
+        // FIX: Isolate the single-threaded and multi-threaded CMake caches
         let target_prefix = if target.contains("emscripten") {
-            "wm"
+            if is_pthread {
+                "wm_p"
+            } else {
+                "wm_s"
+            }
         } else {
             "nt"
         };
@@ -61,22 +70,23 @@ fn build_native(manifest_dir: &Path, llama_dir: &Path) {
             .join("../../.build/c") // Shrink `.build/cmake/sys/target/` down to just `.b/c/`
             .join(target_prefix)
             .join(cmake_backend_tag());
-        config.out_dir(short_build_dir);
 
-        // Make this build reproducible even when invoked outside xtask.
+        config.out_dir(short_build_dir);
         config.generator("Ninja");
 
-        // CMake 4.1+ / 4.3 MSVC ASM policy compatibility for vendored llama.cpp/ggml.
-        // This is mainly needed while upstream ggml still enables ASM in a way that
-        // trips MSVC + newer CMake.
-        config.define("CMAKE_POLICY_DEFAULT_CMP0194", "OLD");
+        if target.contains("msvc") {
+            // CMake 4.1+ / 4.3 MSVC ASM policy compatibility for vendored llama.cpp/ggml.
+            // This is mainly needed while upstream ggml still enables ASM in a way that
+            // trips MSVC + newer CMake.
+            config.define("CMAKE_POLICY_DEFAULT_CMP0194", "OLD");
 
-        // cpp-httplib / MSVC STL uses exception-aware code paths. Without this,
-        // MSVC emits C4530 and some builds may fail if warnings are promoted.
-        config.cxxflag("/EHsc");
+            // cpp-httplib / MSVC STL uses exception-aware code paths. Without this,
+            // MSVC emits C4530 and some builds may fail if warnings are promoted.
+            config.cxxflag("/EHsc");
 
-        // Existing workaround.
-        config.cxxflag("/FIistream");
+            // Existing workaround.
+            config.cxxflag("/FIistream");
+        }
 
         // Help CMake's FindVulkan when building from Cargo/N-API.
         if env::var_os("CARGO_FEATURE_VULKAN").is_some() {

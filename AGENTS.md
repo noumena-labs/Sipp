@@ -15,11 +15,15 @@ To avoid token bloat, do not read the entire codebase at once. Instead, refer to
 
 Always use the **`build-orchestrator`** skill when compiling. The repository uses `xtask` to manage C++ dependencies and environment variables.
 
-- **Build Core (Rust only):** `cargo xtask build-core`
-- **Build Node Bindings:** `cargo xtask build-node` (use `--backend vulkan` for GPU accelerated builds)
-- **Build Python Bindings:** `cargo xtask build-python` (optionally `--backend vulkan`)
-- **Build WebAssembly/WebGPU:** `bun run build`
-- **Build All Targets:** `cargo xtask build-all`
+- **Build Core (Rust only):** `cargo xtask build core`
+- **Build Node Bindings:** `cargo xtask build node` (use `--backend vulkan` for GPU accelerated builds)
+- **Build Python Bindings:** `cargo xtask build python` (optionally `--backend vulkan`)
+- **Build WebAssembly/WebGPU:** `cargo xtask build wasm`
+- **Build All Targets:** `cargo xtask build all`
+- **Run App Tests:** `cargo xtask run apps test`
+- **Serve An App:** `cargo xtask run apps serve examples`
+- **Run Binding Smokes:** `cargo xtask run bindings all --model <model.gguf>`
+- **Run llama.cpp Backend Ops:** `cargo xtask run llama backend-ops --backend cpu`
 
 ---
 
@@ -28,7 +32,7 @@ Always use the **`build-orchestrator`** skill when compiling. The repository use
 Always use the **`test-runner`** skill when verifying changes.
 - **Rust Tests:** `cargo test` (or `cargo test -p <crate_name>` for specific crates)
 - **Rust Linting/Formatting:** `cargo clippy` and `cargo fmt`
-- **Node.js Binding Smoke Test:** `node bindings/node/examples/node_smoke.mjs`
+- **Node.js Binding Smoke Test:** `cargo xtask run bindings node --model <model.gguf>`
 - **TypeScript Typecheck:** `pnpm typecheck` or `bun run typecheck`
 - **TypeScript Linting:** `pnpm lint` or `bun run lint`
 
