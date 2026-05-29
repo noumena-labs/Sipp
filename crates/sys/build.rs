@@ -68,6 +68,14 @@ fn build_native(manifest_dir: &Path, llama_dir: &Path) {
     // Map our Cargo.toml features to llama.cpp's CMake flags.
     // When adding new hardware backends (e.g., SYCL, ROCm), register them here.
     define_bool_feature(&mut config, "CARGO_FEATURE_CUDA", "GGML_CUDA");
+    if env::var_os("CARGO_FEATURE_CUDA").is_some() {
+        // Targets: Pascal (61), Volta (70), Turing (75), Ampere (80, 86), Ada Lovelace (89), Hopper (90), Blackwell (100, 120)
+        config.define("CMAKE_CUDA_ARCHITECTURES", "61;70;75;80;86;89;90;100;120");
+        if cfg!(windows) {
+            config.define("CMAKE_CUDA_FLAGS", "-allow-unsupported-compiler");
+        }
+    }
+
     define_bool_feature(&mut config, "CARGO_FEATURE_METAL", "GGML_METAL");
     define_bool_feature(&mut config, "CARGO_FEATURE_VULKAN", "GGML_VULKAN");
     define_bool_feature(&mut config, "CARGO_FEATURE_OPENMP", "GGML_OPENMP");

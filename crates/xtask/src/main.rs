@@ -278,52 +278,64 @@ fn apply_toolchains<'a>(
     backend: Option<&Backend>,
 ) -> Result<xshell::Cmd<'a>> {
     let ninja_dir = setup_ninja(sh)?;
-    let vk_sdk = if matches!(backend, Some(Backend::Vulkan)) {
-        Some(setup_vulkan(sh)?)
-    } else {
-        None
-    };
-
     let mut path_additions = Vec::new();
 
-    // 1. Force Ninja as the generator to bypass MSBuild's sub-project amnesia
+    // 1. Force Ninja as the generator
     if let Some(n_dir) = &ninja_dir {
         path_additions.push(n_dir.display().to_string());
         cmd = cmd.env("CMAKE_GENERATOR", "Ninja");
     }
 
-    // 2. Map Vulkan SDK and expose `glslc` to the PATH
-    if let Some(vk) = &vk_sdk {
-        let bin_path = if cfg!(windows) {
-            vk.join("Bin")
-        } else if cfg!(target_os = "macos") {
-            vk.join("macOS").join("bin")
-        } else {
-            vk.join(VULKAN_VERSION).join("x86_64").join("bin")
-        };
-        path_additions.push(bin_path.display().to_string());
+    // 2. Handle Hardware Specifics
+    match backend {
+        Some(Backend::Vulkan) => {
+            let vk = setup_vulkan(sh)?;
+            let bin_path = if cfg!(windows) {
+                vk.join("Bin")
+            } else if cfg!(target_os = "macos") {
+                vk.join("macOS").join("bin")
+            } else {
+                vk.join(VULKAN_VERSION).join("x86_64").join("bin")
+            };
+            path_additions.push(bin_path.display().to_string());
 
-        let vulkan_sdk_path = if cfg!(windows) {
-            vk.to_path_buf()
-        } else if cfg!(target_os = "macos") {
-            vk.join("macOS")
-        } else {
-            vk.join(VULKAN_VERSION).join("x86_64")
-        };
-        cmd = cmd.env("VULKAN_SDK", &vulkan_sdk_path);
+            let vulkan_sdk_path = if cfg!(windows) {
+                vk.to_path_buf()
+            } else if cfg!(target_os = "macos") {
+                vk.join("macOS")
+            } else {
+                vk.join(VULKAN_VERSION).join("x86_64")
+            };
+            cmd = cmd.env("VULKAN_SDK", &vulkan_sdk_path);
 
-        let current_cmake_prefix = env::var("CMAKE_PREFIX_PATH").unwrap_or_default();
-        let separator = if cfg!(windows) { ";" } else { ":" };
-        let new_cmake_prefix = if current_cmake_prefix.is_empty() {
-            vulkan_sdk_path.display().to_string()
-        } else {
-            format!(
-                "{}{separator}{}",
-                vulkan_sdk_path.display(),
-                current_cmake_prefix
-            )
-        };
-        cmd = cmd.env("CMAKE_PREFIX_PATH", new_cmake_prefix);
+            let current_cmake_prefix = env::var("CMAKE_PREFIX_PATH").unwrap_or_default();
+            let separator = if cfg!(windows) { ";" } else { ":" };
+            let new_cmake_prefix = if current_cmake_prefix.is_empty() {
+                vulkan_sdk_path.display().to_string()
+            } else {
+                format!(
+                    "{}{separator}{}",
+                    vulkan_sdk_path.display(),
+                    current_cmake_prefix
+                )
+            };
+            cmd = cmd.env("CMAKE_PREFIX_PATH", new_cmake_prefix);
+        }
+        Some(Backend::Cuda) => {
+            let cuda_path = setup_cuda(sh)?;
+            let bin_path = cuda_path.join("bin");
+            path_additions.push(bin_path.display().to_string());
+
+            // Strictly enforce the compiler path for CMake
+            let nvcc_exe = if cfg!(windows) {
+                bin_path.join("nvcc.exe")
+            } else {
+                bin_path.join("nvcc")
+            };
+            cmd = cmd.env("CUDACXX", nvcc_exe.display().to_string());
+            cmd = cmd.env("CUDA_TOOLKIT_ROOT_DIR", cuda_path.display().to_string());
+        }
+        _ => {}
     }
 
     // 3. Construct the final PATH
@@ -339,6 +351,45 @@ fn apply_toolchains<'a>(
     }
 
     Ok(cmd)
+}
+
+fn setup_cuda(_sh: &Shell) -> Result<PathBuf> {
+    println!("=> Validating NVIDIA CUDA Toolkit...");
+
+    // 1. Check standard environment variables set by the NVIDIA installer
+    let cuda_env = env::var_os("CUDA_PATH").or_else(|| env::var_os("CUDA_HOME"));
+
+    if let Some(path) = cuda_env {
+        let cuda_path = PathBuf::from(path);
+        let nvcc_exe = if cfg!(windows) {
+            cuda_path.join("bin").join("nvcc.exe")
+        } else {
+            cuda_path.join("bin").join("nvcc")
+        };
+
+        if nvcc_exe.exists() {
+            println!("   Found CUDA Toolkit at: {}", cuda_path.display());
+            return Ok(cuda_path);
+        }
+    }
+
+    // 2. If env vars are missing or nvcc isn't there, throw the DX-friendly error
+    println!("====================================================================");
+    println!("❌ CUDA TOOLKIT NOT FOUND ❌");
+    println!("====================================================================");
+    println!("");
+    println!("To compile the CUDA backend, you must install the NVIDIA CUDA Toolkit.");
+    println!("  1. Download the latest toolkit from NVIDIA:");
+    println!("     https://developer.nvidia.com/cuda-downloads");
+    println!("");
+    println!("  2. Install it (Leave default settings to automatically set CUDA_PATH)");
+    println!("");
+    println!("  3. Restart your terminal / VS Code to reload environment variables.");
+    println!("");
+    println!("  4. Run this build command again.");
+    println!("");
+    println!("====================================================================");
+    anyhow::bail!("Missing NVIDIA CUDA Toolkit.");
 }
 
 fn setup_vulkan(sh: &Shell) -> Result<PathBuf> {
