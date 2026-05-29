@@ -37,6 +37,34 @@ fn build_native(manifest_dir: &Path, llama_dir: &Path) {
         .define("CMAKE_INSTALL_LIBDIR", "lib")
         .define("BUILD_SHARED_LIBS", "OFF");
 
+    if cfg!(windows) {
+        // This drops the CMake cache into `CogentLM/target/cm` instead of the deep OUT_DIR (WIN file length isues)
+        let short_build_dir = manifest_dir.join("../../target/cm");
+        config.out_dir(short_build_dir);
+
+        // Make this build reproducible even when invoked outside xtask.
+        config.generator("Ninja");
+
+        // CMake 4.1+ / 4.3 MSVC ASM policy compatibility for vendored llama.cpp/ggml.
+        // This is mainly needed while upstream ggml still enables ASM in a way that
+        // trips MSVC + newer CMake.
+        config.define("CMAKE_POLICY_DEFAULT_CMP0194", "OLD");
+
+        // cpp-httplib / MSVC STL uses exception-aware code paths. Without this,
+        // MSVC emits C4530 and some builds may fail if warnings are promoted.
+        config.cxxflag("/EHsc");
+
+        // Existing workaround.
+        config.cxxflag("/FIistream");
+
+        // Help CMake's FindVulkan when building from Cargo/N-API.
+        if env::var_os("CARGO_FEATURE_VULKAN").is_some() {
+            if let Some(vulkan_sdk) = env::var_os("VULKAN_SDK") {
+                config.define("Vulkan_ROOT", PathBuf::from(vulkan_sdk));
+            }
+        }
+    }
+
     // Map our Cargo.toml features to llama.cpp's CMake flags.
     // When adding new hardware backends (e.g., SYCL, ROCm), register them here.
     define_bool_feature(&mut config, "CARGO_FEATURE_CUDA", "GGML_CUDA");
@@ -124,6 +152,9 @@ fn build_native(manifest_dir: &Path, llama_dir: &Path) {
             if env::var_os("CARGO_FEATURE_CUDA").is_some() {
                 link_cuda_libraries_windows();
             }
+            if env::var_os("CARGO_FEATURE_VULKAN").is_some() {
+                link_vulkan_libraries_windows();
+            }
         }
         "macos" => {
             println!("cargo:rustc-link-lib=dylib=c++");
@@ -139,6 +170,13 @@ fn build_native(manifest_dir: &Path, llama_dir: &Path) {
                     println!("cargo:rustc-link-lib=framework={framework}");
                 }
             }
+            if env::var_os("CARGO_FEATURE_VULKAN").is_some() {
+                link_vulkan_libraries_unix();
+            }
+        }
+        "emscripten" => {
+            // WASM manages its own WebGPU/WebGL bindings via Emscripten.
+            // Do NOT link native host GPU libraries here.
         }
         _ => {
             // Linux / Unix defaults
@@ -149,8 +187,29 @@ fn build_native(manifest_dir: &Path, llama_dir: &Path) {
             if env::var_os("CARGO_FEATURE_CUDA").is_some() {
                 link_cuda_libraries_unix();
             }
+            if env::var_os("CARGO_FEATURE_VULKAN").is_some() {
+                link_vulkan_libraries_unix();
+            }
         }
     }
+}
+
+fn link_vulkan_libraries_windows() {
+    if let Some(vulkan_sdk) = env::var_os("VULKAN_SDK") {
+        let lib_dir = PathBuf::from(vulkan_sdk).join("Lib");
+        println!("cargo:rustc-link-search=native={}", lib_dir.display());
+    }
+    // MSVC expects the versioned `.lib` file
+    println!("cargo:rustc-link-lib=vulkan-1");
+}
+
+fn link_vulkan_libraries_unix() {
+    if let Some(vulkan_sdk) = env::var_os("VULKAN_SDK") {
+        let lib_dir = PathBuf::from(vulkan_sdk).join("lib");
+        println!("cargo:rustc-link-search=native={}", lib_dir.display());
+    }
+    // Unix/Linux uses the standard unversioned name
+    println!("cargo:rustc-link-lib=vulkan");
 }
 
 fn link_cuda_libraries_windows() {

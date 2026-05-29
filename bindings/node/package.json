@@ -8,10 +8,7 @@
   "license": "MIT",
   "scripts": {
     "build": "napi build --platform --release",
-    "build:vulkan": "napi build --platform --release --features vulkan",
-    "build:cuda": "napi build --platform --release --features cuda",
-    "build:debug": "napi build --platform",
-    "test:smoke": "node examples/phase4_node_smoke.mjs"
+    "test:smoke": "node examples/node_smoke.mjs"
   },
   "napi": {
     "binaryName": "cogentlm_node",

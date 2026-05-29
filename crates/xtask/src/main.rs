@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::env;
 use std::path::{Path, PathBuf};
 use xshell::{cmd, Shell};
@@ -7,12 +7,37 @@ use xshell::{cmd, Shell};
 // Dependency versions (TODO: Move into config file)
 const EMSDK_VERSION: &str = "4.0.23";
 const NINJA_VERSION: &str = "1.13.2";
+const VULKAN_VERSION: &str = "1.4.350.0";
 
 #[derive(Parser)]
 #[command(name = "xtask", about = "CogentLM Build Orchestrator")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+enum Backend {
+    /// Standard CPU computation fallback
+    Cpu,
+    /// NVIDIA CUDA hardware acceleration
+    Cuda,
+    /// Apple Metal native acceleration
+    Metal,
+    /// Vulkan cross-platform GPU acceleration
+    Vulkan,
+}
+
+impl Backend {
+    /// Helper to convert the enum into lowercase string for CLI features
+    fn as_str(&self) -> &'static str {
+        match self {
+            Backend::Cpu => "cpu",
+            Backend::Cuda => "cuda",
+            Backend::Metal => "metal",
+            Backend::Vulkan => "vulkan",
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -23,10 +48,18 @@ enum Commands {
     BuildCore,
     /// Build the WASM/WebGPU bindings using Emscripten
     BuildWasm,
-    /// Build Python bindings
-    BuildPython,
-    /// Build Node bindings
-    BuildNode,
+    /// Build Python bindings [BACKEND] = {cpu | cuda | metal | vulkan}
+    BuildPython {
+        /// The computation backend to compile against
+        #[arg(long, short)]
+        backend: Option<Backend>,
+    },
+    /// Build Node bindings [BACKEND] = {cpu | cuda | metal | vulkan}
+    BuildNode {
+        /// The computation backend to compile against
+        #[arg(long, short)]
+        backend: Option<Backend>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -38,8 +71,8 @@ fn main() -> Result<()> {
         Commands::BuildAll => build_all(&sh),
         Commands::BuildCore => build_core(&sh),
         Commands::BuildWasm => build_wasm(&sh),
-        Commands::BuildPython => build_python(&sh),
-        Commands::BuildNode => build_node(&sh),
+        Commands::BuildPython { backend } => build_python(&sh, backend.as_ref()),
+        Commands::BuildNode { backend } => build_node(&sh, backend.as_ref()),
     }
 }
 
@@ -61,8 +94,8 @@ fn workspace_root() -> PathBuf {
 fn build_all(sh: &Shell) -> Result<()> {
     build_core(sh)?;
     build_wasm(sh)?;
-    build_python(sh)?;
-    build_node(sh)?;
+    build_python(sh, None)?;
+    build_node(sh, None)?;
     Ok(())
 }
 
@@ -79,39 +112,62 @@ fn build_core(sh: &Shell) -> Result<()> {
 // ====================================================================================
 // Build Python
 // ====================================================================================
-fn build_python(sh: &Shell) -> Result<()> {
+fn build_python(sh: &Shell, backend: Option<&Backend>) -> Result<()> {
     println!("=> Building Python Bindings...");
     let _dir = sh.push_dir(workspace_root().join("bindings").join("python"));
-    cmd!(sh, "maturin develop --release").run()?;
+
+    let mut maturin_cmd = cmd!(sh, "uv run maturin develop --release");
+    maturin_cmd = apply_toolchains(sh, maturin_cmd, backend)?;
+
+    if let Some(b) = backend {
+        let feature = b.as_str();
+        println!("   Hardware Backend: {}", feature.to_uppercase());
+        maturin_cmd = maturin_cmd.arg("--features").arg(feature);
+    } else {
+        println!("   Hardware Backend: CPU (Default)");
+    }
+
+    maturin_cmd.run()?;
     Ok(())
 }
 
 // ====================================================================================
 // Build Node
 // ====================================================================================
-fn build_node(sh: &Shell) -> Result<()> {
+fn build_node(sh: &Shell, backend: Option<&Backend>) -> Result<()> {
     println!("=> Building Node Bindings...");
     let _dir = sh.push_dir(workspace_root().join("bindings").join("node"));
+
     cmd!(sh, "bun install").run()?;
-    cmd!(sh, "bun run build").run()?;
+
+    let mut napi_cmd = cmd!(sh, "bunx napi build --platform --release");
+    napi_cmd = apply_toolchains(sh, napi_cmd, backend)?;
+
+    if let Some(b) = backend {
+        let feature = b.as_str();
+        println!("   Hardware Backend: {}", feature.to_uppercase());
+        napi_cmd = napi_cmd.arg("--features").arg(feature);
+    } else {
+        println!("   Hardware Backend: CPU (Default)");
+    }
+
+    napi_cmd.run()?;
     Ok(())
 }
 
 // ====================================================================================
-// Build WASM
+// Build WASM (Unchanged)
 // ====================================================================================
 fn build_wasm(sh: &Shell) -> Result<()> {
     let root = workspace_root();
     let emsdk_dir = setup_emsdk(sh)?;
     let ninja_dir = setup_ninja(sh)?;
 
-    // Create the final output directories
     let npm_src_wasm = root.join("packages").join("npm").join("src").join("wasm");
     let npm_dist_wasm = root.join("packages").join("npm").join("dist").join("wasm");
     sh.create_dir(&npm_src_wasm)?;
     sh.create_dir(&npm_dist_wasm)?;
 
-    // Pass 1: Build Single-Threaded
     println!("=> Starting Phase 1: Single-Threaded Build");
     build_wasm_target(
         sh,
@@ -123,7 +179,6 @@ fn build_wasm(sh: &Shell) -> Result<()> {
         &npm_dist_wasm,
     )?;
 
-    // Pass 2: Build Multi-Threaded (Pthreads)
     println!("=> Starting Phase 2: PThread Build");
     build_wasm_target(
         sh,
@@ -155,9 +210,7 @@ fn build_wasm_target(
     let js_file = format!("{}.js", artifact_name);
     let wasm_file = format!("{}.wasm", artifact_name);
 
-    // 1. Compile Rust (with isolated target directories to prevent cache thrashing)
     println!("   -> Compiling Rust ({js_file})...");
-
     let (cargo_cmd, staticlib_path) = if use_pthreads {
         let cmd = if cfg!(windows) {
             "set RUSTFLAGS=-C target-feature=+atomics,+bulk-memory,+mutable-globals\r\ncargo build --release --package cogentlm-wasm --target wasm32-unknown-emscripten --target-dir target/pthread"
@@ -182,7 +235,6 @@ fn build_wasm_target(
 
     run_with_emsdk(sh, emsdk_dir, ninja_dir, cargo_cmd)?;
 
-    // 2. Compile and Link C++
     println!("   -> Linking C++ via Emscripten...");
     let wasm_dir = root.join("bindings").join("wasm");
     let build_dir = wasm_dir.join(format!("build{}", suffix));
@@ -204,7 +256,6 @@ fn build_wasm_target(
     run_with_emsdk(sh, emsdk_dir, ninja_dir, build_cmd)?;
     drop(_dir);
 
-    // 3. Copy Artifacts to NPM Package
     println!("   -> Copying artifacts to NPM workspace...");
     let compiled_js = build_dir.join("dist").join("CogentLM.js");
     let compiled_wasm = build_dir.join("dist").join("CogentLM.wasm");
@@ -215,6 +266,69 @@ fn build_wasm_target(
     sh.copy_file(&compiled_wasm, npm_dist_wasm.join(&wasm_file))?;
 
     Ok(())
+}
+
+// ====================================================================================
+// Toolchain Bootstrappers
+// ====================================================================================
+fn setup_vulkan(sh: &Shell) -> Result<PathBuf> {
+    let root = workspace_root();
+    let toolchain_dir = root.join(".toolchain");
+    let vulkan_dir = toolchain_dir.join("vulkan");
+
+    // Map the OS to LunarG's specific URL routing and internal folder structures
+    let (os_path, filename, bin_path) = if cfg!(windows) {
+        (
+            "windows",
+            format!("vulkansdk-windows-X64-{VULKAN_VERSION}.exe"),
+            vulkan_dir.join("Bin").join("glslc.exe"),
+        )
+    } else if cfg!(target_os = "macos") {
+        (
+            "mac",
+            format!("vulkansdk-macos-{VULKAN_VERSION}.zip"),
+            vulkan_dir.join("macOS").join("bin").join("glslc"),
+        )
+    } else {
+        (
+            "linux",
+            format!("vulkansdk-linux-x86_64-{VULKAN_VERSION}.tar.xz"),
+            vulkan_dir
+                .join(VULKAN_VERSION)
+                .join("x86_64")
+                .join("bin")
+                .join("glslc"),
+        )
+    };
+
+    if !bin_path.exists() {
+        println!("=> Bootstrapping hermetic Vulkan SDK...");
+        sh.create_dir(&vulkan_dir)?;
+
+        let url =
+            format!("https://sdk.lunarg.com/sdk/download/{VULKAN_VERSION}/{os_path}/{filename}");
+        let archive_path = toolchain_dir.join(&filename);
+
+        println!("   Downloading Vulkan SDK (~400MB) from:");
+        println!("   {url}");
+
+        // '-f' ensures it fails on 404s instead of downloading dummy HTML files
+        cmd!(sh, "curl -f -L -o {archive_path} {url}").run()?;
+
+        println!("   Extracting/Installing into .toolchain/vulkan...");
+        if cfg!(windows) {
+            cmd!(sh, "{archive_path} --root {vulkan_dir} --accept-licenses --default-answer --confirm-command install copy_only=1").run()?;
+        } else if cfg!(target_os = "macos") {
+            cmd!(sh, "unzip -q {archive_path} -d {vulkan_dir}").run()?;
+        } else {
+            cmd!(sh, "tar -xf {archive_path} -C {vulkan_dir}").run()?;
+        }
+
+        // Clean up the massive installer/archive
+        sh.remove_path(&archive_path)?;
+    }
+
+    Ok(vulkan_dir)
 }
 
 fn setup_ninja(sh: &Shell) -> Result<Option<PathBuf>> {
@@ -233,7 +347,6 @@ fn setup_ninja(sh: &Shell) -> Result<Option<PathBuf>> {
             );
             let zip_path = ninja_dir.join("ninja-win.zip");
 
-            // curl and tar are built into Windows 10/11 natively
             cmd!(sh, "curl -L -o {zip_path} {url}").run()?;
             cmd!(sh, "tar -xf {zip_path} -C {ninja_dir}").run()?;
             sh.remove_path(zip_path)?;
@@ -250,8 +363,6 @@ fn setup_emsdk(sh: &Shell) -> Result<PathBuf> {
 
     if !emsdk_dir.exists() {
         println!("=> Bootstrapping hermetic Emscripten toolchain...");
-        println!("   Location: {}", emsdk_dir.display());
-
         let _root_dir = sh.push_dir(&root);
         cmd!(sh, "git clone https://github.com/emscripten-core/emsdk.git")
             .arg(&emsdk_dir)
@@ -259,7 +370,7 @@ fn setup_emsdk(sh: &Shell) -> Result<PathBuf> {
     }
 
     let _dir = sh.push_dir(&emsdk_dir);
-    println!("=> Installing and Activating emsdk v{EMSDK_VERSION}...");
+    println!("=> Activating emsdk v{EMSDK_VERSION}...");
     if cfg!(windows) {
         cmd!(sh, "cmd.exe /c emsdk.bat install {EMSDK_VERSION}").run()?;
         cmd!(sh, "cmd.exe /c emsdk.bat activate {EMSDK_VERSION}").run()?;
@@ -282,11 +393,9 @@ fn run_with_emsdk(
     command: &str,
 ) -> Result<()> {
     if cfg!(windows) {
-        // Hack to bypass cmd.exe nested quoting hell
         let bat = emsdk_dir.join("emsdk_env.bat");
         let temp_script = sh.current_dir().join(".run_emsdk_wrapper.bat");
 
-        // Inject Ninja into the PATH if it was provided
         let path_injection = if let Some(n_dir) = ninja_dir {
             format!("set PATH={};%PATH%\r\n", n_dir.display())
         } else {
@@ -315,4 +424,73 @@ fn run_with_emsdk(
         cmd!(sh, "bash -c").arg(full_cmd).run()?;
     }
     Ok(())
+}
+
+fn apply_toolchains<'a>(
+    sh: &Shell,
+    mut cmd: xshell::Cmd<'a>,
+    backend: Option<&Backend>,
+) -> Result<xshell::Cmd<'a>> {
+    let ninja_dir = setup_ninja(sh)?;
+    let vk_sdk = if matches!(backend, Some(Backend::Vulkan)) {
+        Some(setup_vulkan(sh)?)
+    } else {
+        None
+    };
+
+    let mut path_additions = Vec::new();
+
+    // 1. Force Ninja as the generator to bypass MSBuild's sub-project amnesia
+    if let Some(n_dir) = &ninja_dir {
+        path_additions.push(n_dir.display().to_string());
+        cmd = cmd.env("CMAKE_GENERATOR", "Ninja");
+    }
+
+    // 2. Map Vulkan SDK and expose `glslc` to the PATH
+    if let Some(vk) = &vk_sdk {
+        let bin_path = if cfg!(windows) {
+            vk.join("Bin")
+        } else if cfg!(target_os = "macos") {
+            vk.join("macOS").join("bin")
+        } else {
+            vk.join(VULKAN_VERSION).join("x86_64").join("bin")
+        };
+        path_additions.push(bin_path.display().to_string());
+
+        let vulkan_sdk_path = if cfg!(windows) {
+            vk.to_path_buf()
+        } else if cfg!(target_os = "macos") {
+            vk.join("macOS")
+        } else {
+            vk.join(VULKAN_VERSION).join("x86_64")
+        };
+        cmd = cmd.env("VULKAN_SDK", &vulkan_sdk_path);
+
+        let current_cmake_prefix = env::var("CMAKE_PREFIX_PATH").unwrap_or_default();
+        let separator = if cfg!(windows) { ";" } else { ":" };
+        let new_cmake_prefix = if current_cmake_prefix.is_empty() {
+            vulkan_sdk_path.display().to_string()
+        } else {
+            format!(
+                "{}{separator}{}",
+                vulkan_sdk_path.display(),
+                current_cmake_prefix
+            )
+        };
+        cmd = cmd.env("CMAKE_PREFIX_PATH", new_cmake_prefix);
+    }
+
+    // 3. Construct the final PATH
+    if !path_additions.is_empty() {
+        let current_path = env::var("PATH").unwrap_or_default();
+        let separator = if cfg!(windows) { ";" } else { ":" };
+        let new_path = format!(
+            "{}{separator}{}",
+            path_additions.join(separator),
+            current_path
+        );
+        cmd = cmd.env("PATH", new_path);
+    }
+
+    Ok(cmd)
 }
