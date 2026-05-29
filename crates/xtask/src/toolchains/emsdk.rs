@@ -1,5 +1,6 @@
 //! Emscripten SDK bootstrapping and command wrapping.
 
+use crate::output;
 use crate::utils::BuildContext;
 use anyhow::Result;
 use std::path::Path;
@@ -15,32 +16,41 @@ pub(crate) fn setup_emsdk(sh: &Shell, ctx: &BuildContext) -> Result<std::path::P
     let emsdk_dir = toolchain_root.join("emsdk");
 
     if !emsdk_dir.exists() {
-        println!("=> Bootstrapping hermetic Emscripten toolchain...");
+        output::phase("Emscripten SDK");
+        output::path("Install directory", &emsdk_dir);
         std::fs::create_dir_all(&toolchain_root)?;
         let _toolchain_dir = sh.push_dir(&toolchain_root);
-        cmd!(
-            sh,
-            "git clone https://github.com/emscripten-core/emsdk.git emsdk"
-        )
-        .run()?;
+        output::run_command(
+            "Cloning emsdk",
+            cmd!(
+                sh,
+                "git clone https://github.com/emscripten-core/emsdk.git emsdk"
+            ),
+        )?;
+    } else {
+        output::success(format!("Using emsdk at {}", emsdk_dir.display()));
     }
 
     let _dir = sh.push_dir(&emsdk_dir);
-    println!("=> Activating emsdk v{EMSDK_VERSION}...");
+    output::detail("Emscripten version", EMSDK_VERSION);
 
     if cfg!(windows) {
         install_emsdk_windows(sh)?;
-        cmd!(sh, "cmd.exe /c emsdk.bat activate {EMSDK_VERSION}")
-            .env_remove("SHELL")
-            .env_remove("MSYSTEM")
-            .run()?;
+        output::run_command(
+            format!("Activating emsdk {EMSDK_VERSION}"),
+            cmd!(sh, "cmd.exe /c emsdk.bat activate {EMSDK_VERSION}")
+                .env_remove("SHELL")
+                .env_remove("MSYSTEM"),
+        )?;
     } else {
-        cmd!(sh, "bash -c")
-            .arg(format!("./emsdk install {EMSDK_VERSION}"))
-            .run()?;
-        cmd!(sh, "bash -c")
-            .arg(format!("./emsdk activate {EMSDK_VERSION}"))
-            .run()?;
+        output::run_command(
+            format!("Installing emsdk {EMSDK_VERSION}"),
+            cmd!(sh, "bash -c").arg(format!("./emsdk install {EMSDK_VERSION}")),
+        )?;
+        output::run_command(
+            format!("Activating emsdk {EMSDK_VERSION}"),
+            cmd!(sh, "bash -c").arg(format!("./emsdk activate {EMSDK_VERSION}")),
+        )?;
     }
 
     Ok(emsdk_dir)
@@ -51,6 +61,7 @@ pub(crate) fn run_with_emsdk(
     sh: &Shell,
     emsdk_dir: &Path,
     ninja_dir: Option<&Path>,
+    label: &str,
     command: &str,
 ) -> Result<()> {
     if cfg!(windows) {
@@ -87,10 +98,12 @@ pub(crate) fn run_with_emsdk(
         );
 
         sh.write_file(&temp_script, &script_content)?;
-        let result = cmd!(sh, "cmd.exe /c {temp_script}")
-            .env_remove("SHELL")
-            .env_remove("MSYSTEM")
-            .run();
+        let result = output::run_command(
+            label,
+            cmd!(sh, "cmd.exe /c {temp_script}")
+                .env_remove("SHELL")
+                .env_remove("MSYSTEM"),
+        );
 
         let _ = sh.remove_path(&temp_script);
         result?;
@@ -109,7 +122,7 @@ pub(crate) fn run_with_emsdk(
             emmake.display(),
             command
         );
-        cmd!(sh, "bash -c").arg(full_cmd).run()?;
+        output::run_command(label, cmd!(sh, "bash -c").arg(full_cmd))?;
     }
     Ok(())
 }
@@ -120,11 +133,13 @@ fn install_emsdk_windows(sh: &Shell) -> Result<()> {
 
     loop {
         attempts += 1;
-        let result = cmd!(sh, "cmd.exe /c emsdk.bat install {EMSDK_VERSION}")
-            .env("EMSDK_USE_CURL", "1")
-            .env_remove("SHELL")
-            .env_remove("MSYSTEM")
-            .run();
+        let result = output::run_command(
+            format!("Installing emsdk {EMSDK_VERSION}"),
+            cmd!(sh, "cmd.exe /c emsdk.bat install {EMSDK_VERSION}")
+                .env("EMSDK_USE_CURL", "1")
+                .env_remove("SHELL")
+                .env_remove("MSYSTEM"),
+        );
 
         if result.is_ok() {
             return Ok(());
@@ -136,9 +151,9 @@ fn install_emsdk_windows(sh: &Shell) -> Result<()> {
             );
         }
 
-        println!(
-            "   Download truncated or locked by Windows Defender. Retrying ({attempts}/{max_attempts})..."
-        );
+        output::warning(format!(
+            "Download truncated or locked by Windows Defender; retrying ({attempts}/{max_attempts})"
+        ));
         thread::sleep(Duration::from_secs(2));
     }
 }

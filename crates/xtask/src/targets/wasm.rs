@@ -1,22 +1,29 @@
 //! WebAssembly/WebGPU browser build target.
 
+use crate::output;
 use crate::toolchains::emsdk::{run_with_emsdk, setup_emsdk};
 use crate::toolchains::ninja::setup_ninja;
 use crate::utils::BuildContext;
 use anyhow::Result;
 use std::path::Path;
+use std::time::Instant;
 use xshell::{cmd, Shell};
 
 /// Builds the browser WASM artifacts and TypeScript package wrappers.
 pub fn build(sh: &Shell, ctx: &BuildContext) -> Result<()> {
+    let started_at = Instant::now();
     let root = ctx.workspace_root();
+    output::phase("Browser WASM/WebGPU package");
+    output::path("Workspace", root);
+    output::path("WASM artifact directory", &ctx.npm_browser_wasm_dir());
+
     let emsdk_dir = setup_emsdk(sh, ctx)?;
     let ninja_dir = setup_ninja(sh, ctx)?;
 
     let npm_dist_wasm = ctx.npm_browser_wasm_dir();
     sh.create_dir(&npm_dist_wasm)?;
 
-    println!("=> Starting Phase 1: Single-Threaded Build");
+    output::phase("WASM single-thread build");
     build_target(
         sh,
         ctx,
@@ -27,7 +34,7 @@ pub fn build(sh: &Shell, ctx: &BuildContext) -> Result<()> {
         &npm_dist_wasm,
     )?;
 
-    println!("=> Starting Phase 2: PThread Build");
+    output::phase("WASM pthread build");
     build_target(
         sh,
         ctx,
@@ -38,15 +45,27 @@ pub fn build(sh: &Shell, ctx: &BuildContext) -> Result<()> {
         &npm_dist_wasm,
     )?;
 
-    println!("=> Starting Phase 3: Compiling TypeScript Wrappers...");
+    output::phase("TypeScript browser package");
     let npm_workspace = root.join("packages").join("npm");
+    output::path("NPM workspace", &npm_workspace);
+
     let _npm_dir = sh.push_dir(&npm_workspace);
 
-    cmd!(sh, "bun install").run()?;
-    cmd!(sh, "bun run build:ts").run()?;
-    cmd!(sh, "bun run build:stage").run()?;
+    output::run_command(
+        "Installing NPM package dependencies",
+        cmd!(sh, "bun install"),
+    )?;
+    output::run_command(
+        "Compiling TypeScript wrappers",
+        cmd!(sh, "bun run build:ts"),
+    )?;
+    output::run_command("Staging browser package", cmd!(sh, "bun run build:stage"))?;
 
-    println!("=> WASM Pipeline Complete!");
+    output::success(format!(
+        "WASM pipeline complete in {}",
+        output::elapsed(started_at.elapsed())
+    ));
+
     Ok(())
 }
 
@@ -71,7 +90,7 @@ fn build_target(
         .join("release")
         .join("libcogentlm_wasm.a");
 
-    println!("   -> Compiling Rust ({js_file})...");
+    output::step(format!("Compiling Rust staticlib for {js_file}"));
     let rustflags = if use_pthreads {
         "-C target-feature=+atomics,+bulk-memory,+mutable-globals"
     } else {
@@ -94,14 +113,22 @@ fn build_target(
         )
     };
 
-    run_with_emsdk(sh, emsdk_dir, ninja_dir, &cargo_cmd)?;
+    run_with_emsdk(
+        sh,
+        emsdk_dir,
+        ninja_dir,
+        &format!("Compiling Rust staticlib for {js_file}"),
+        &cargo_cmd,
+    )?;
 
-    println!("   -> Linking C++ via Emscripten...");
+    output::step("Linking C++ via Emscripten");
     let wasm_dir = root.join("bindings").join("wasm");
     let wasm_source_dir = ctx.cmake_file_path(&wasm_dir);
     let rust_staticlib_cmake = ctx.cmake_file_path(&rust_staticlib);
     let build_dir = ctx.cmake_wasm_build_dir(use_pthreads);
     sh.create_dir(&build_dir)?;
+    output::path("CMake build directory", &build_dir);
+
     let _dir = sh.push_dir(&build_dir);
 
     let cmake_thread_flag = if use_pthreads {
@@ -113,18 +140,33 @@ fn build_target(
         "emcmake cmake \"{}\" -G Ninja -DCMAKE_BUILD_TYPE=Release {} -DCE_WASM_RUST_STATICLIB=\"{}\"",
         wasm_source_dir, cmake_thread_flag, rust_staticlib_cmake
     );
-    run_with_emsdk(sh, emsdk_dir, ninja_dir, &emcmake_cmd)?;
+    run_with_emsdk(
+        sh,
+        emsdk_dir,
+        ninja_dir,
+        &format!("Configuring CMake for {artifact_name}"),
+        &emcmake_cmd,
+    )?;
 
     let build_cmd = "cmake --build . --parallel";
-    run_with_emsdk(sh, emsdk_dir, ninja_dir, build_cmd)?;
+    run_with_emsdk(
+        sh,
+        emsdk_dir,
+        ninja_dir,
+        &format!("Building C++ bridge for {artifact_name}"),
+        build_cmd,
+    )?;
     drop(_dir);
 
-    println!("   -> Copying artifacts to centralized NPM staging...");
     let compiled_js = build_dir.join("dist").join("CogentLM.js");
     let compiled_wasm = build_dir.join("dist").join("CogentLM.wasm");
 
-    sh.copy_file(&compiled_js, npm_dist_wasm.join(&js_file))?;
-    sh.copy_file(&compiled_wasm, npm_dist_wasm.join(&wasm_file))?;
+    let staged_js = npm_dist_wasm.join(&js_file);
+    let staged_wasm = npm_dist_wasm.join(&wasm_file);
+    sh.copy_file(&compiled_js, &staged_js)?;
+    sh.copy_file(&compiled_wasm, &staged_wasm)?;
+    output::artifact(&staged_js);
+    output::artifact(&staged_wasm);
 
     Ok(())
 }

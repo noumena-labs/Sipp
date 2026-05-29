@@ -1,10 +1,12 @@
 //! Python binding build target.
-//!
+
 use crate::cli::Backend;
+use crate::output;
 use crate::toolchains::env::apply_toolchains;
 use crate::utils::BuildContext;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 use xshell::{cmd, Shell};
 
 const PYTHON_PACKAGE_NAME: &str = "cogentlm";
@@ -13,17 +15,18 @@ const PYTHON_BACKEND_BINARY_DIR: &str = "binaries";
 
 /// Builds the Python bindings for the selected backend.
 pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Result<()> {
-    println!("=> Building Python Bindings...");
+    output::phase("Python bindings");
+    output::detail("Backend request", backend_label(backend));
+    output::path("Binding workspace", &python_project_dir(ctx));
+    output::path("Backend binary directory", &backend_binary_dir(ctx));
 
-    // Get our hermetic `uv` executable
     let uv_exe = crate::toolchains::python::setup_uv(sh, ctx)?;
 
-    println!("   Ensuring Python environment is bootstrapped...");
-    cmd!(sh, "{uv_exe} python install 3.12").run()?;
+    output::run_command(
+        "Ensuring Python 3.12 is available through uv",
+        cmd!(sh, "{uv_exe} python install 3.12"),
+    )?;
 
-    let _dir = sh.push_dir(python_project_dir(ctx));
-
-    // Pass the hermetic uv_exe down into our specialized build paths
     if matches!(backend, Some(Backend::All)) {
         return build_fat_wheel(sh, ctx, &uv_exe);
     }
@@ -37,23 +40,29 @@ fn build_develop(
     backend: Option<&Backend>,
     uv_exe: &Path,
 ) -> Result<()> {
-    println!("=> Building Python Bindings (Develop)...");
+    let started_at = Instant::now();
+    output::phase("Python develop build");
+
     let python_dir = python_project_dir(ctx);
     let _dir = sh.push_dir(&python_dir);
 
-    // If one doesn't exist, we use uv to create a blazing-fast hermetic .venv
     let venv_dir = python_dir.join(".venv");
     if !venv_dir.exists() {
-        println!("   Creating local Python virtual environment (.venv)...");
-        cmd!(sh, "{uv_exe} venv --python 3.12").run()?;
+        output::run_command(
+            "Creating local Python virtual environment",
+            cmd!(sh, "{uv_exe} venv --python 3.12"),
+        )?;
+    } else {
+        output::success("Using existing Python virtual environment");
     }
+
     let binary_dir = backend_binary_dir(ctx);
     prepare_backend_binary_dir(sh, &binary_dir)?;
 
     let target_dir = ctx.cargo_python_target_dir(backend);
     sh.create_dir(&target_dir)?;
+    output::path("Cargo target dir", &target_dir);
 
-    // FIX: Use {uv_exe} tool run instead of global uv run
     let mut maturin_cmd = cmd!(sh, "{uv_exe} tool run maturin develop --release --uv")
         .env("CARGO_TARGET_DIR", &target_dir);
 
@@ -61,28 +70,44 @@ fn build_develop(
 
     match backend {
         Some(Backend::Cpu) | None => {
-            println!("   Hardware Backend: CPU (Default)");
+            output::detail("Hardware backend", "CPU (default)");
         }
         Some(b) => {
             let feature = b.as_str();
-            println!("   Hardware Backend: {}", feature.to_uppercase());
+            output::detail("Hardware backend", feature.to_uppercase());
             maturin_cmd = maturin_cmd.arg("--features").arg(feature);
         }
     }
 
-    maturin_cmd.run()?;
+    output::run_command("Running maturin develop", maturin_cmd)?;
+    output::success(format!(
+        "Python develop build complete in {}",
+        output::elapsed(started_at.elapsed())
+    ));
+
     Ok(())
 }
 
 fn build_fat_wheel(sh: &Shell, ctx: &BuildContext, uv_exe: &Path) -> Result<()> {
-    println!("=> Building Python Backend-Fat Wheel...");
+    let started_at = Instant::now();
+    output::phase("Python backend-fat wheel");
+
+    let python_dir = python_project_dir(ctx);
+    let _dir = sh.push_dir(&python_dir);
+
     let binary_dir = backend_binary_dir(ctx);
     prepare_backend_binary_dir(sh, &binary_dir)?;
 
     let dist_dir = ctx.python_artifacts_dir();
     prepare_dist_dir(sh, &dist_dir)?;
+    output::path("Wheel output directory", &dist_dir);
 
     let backends_to_build = backends_to_build();
+    output::detail(
+        "Expanded backends",
+        output::backend_list(&backends_to_build),
+    );
+
     let mut built = Vec::new();
     let mut skipped = Vec::new();
 
@@ -90,14 +115,14 @@ fn build_fat_wheel(sh: &Shell, ctx: &BuildContext, uv_exe: &Path) -> Result<()> 
         let optional = backend != Backend::Cpu;
         match build_backend_variant(sh, ctx, &binary_dir, &backend, uv_exe) {
             Ok(path) => {
-                println!("   Staged {}", path.display());
+                output::artifact(&path);
                 built.push(backend);
             }
             Err(error) if optional => {
-                eprintln!(
-                    "   Warning: skipped optional {} backend: {error:#}",
+                output::warning(format!(
+                    "Skipped optional {} backend: {error:#}",
                     backend.as_str()
-                );
+                ));
                 skipped.push(backend);
             }
             Err(error) => return Err(error),
@@ -106,8 +131,8 @@ fn build_fat_wheel(sh: &Shell, ctx: &BuildContext, uv_exe: &Path) -> Result<()> 
 
     let target_dir = ctx.cargo_python_target_dir(None);
     sh.create_dir(&target_dir)?;
+    output::path("Cargo target dir", &target_dir);
 
-    // FIX: Use {uv_exe} tool run
     let mut maturin_cmd = cmd!(
         sh,
         "{uv_exe} tool run maturin build --release --out {dist_dir}"
@@ -115,11 +140,19 @@ fn build_fat_wheel(sh: &Shell, ctx: &BuildContext, uv_exe: &Path) -> Result<()> 
     .env("CARGO_TARGET_DIR", &target_dir);
 
     maturin_cmd = apply_toolchains(sh, ctx, maturin_cmd, None)?;
-    maturin_cmd
-        .run()
+    output::run_command("Packaging backend-fat Python wheel", maturin_cmd)
         .context("failed to build Python backend-fat wheel")?;
 
-    // ... (rest of the logging remains the same)
+    output::success(format!(
+        "Python backend-fat wheel complete in {}",
+        output::elapsed(started_at.elapsed())
+    ));
+    output::detail("Built variants", output::backend_list(&built));
+
+    if !skipped.is_empty() {
+        output::detail("Skipped optional variants", output::backend_list(&skipped));
+    }
+
     Ok(())
 }
 
@@ -135,20 +168,23 @@ fn build_backend_variant(
     }
 
     let feature = backend.as_str();
-    println!("--------------------------------------------------");
-    println!("Compiling Python Variant: {}", feature.to_uppercase());
-    println!("--------------------------------------------------");
+    output::phase(&format!("Python backend: {}", feature.to_uppercase()));
 
     let staging_dir = ctx.tmp_dir().join("python").join("wheels").join(feature);
     if staging_dir.exists() {
+        output::step(format!(
+            "Removing stale Python staging directory {}",
+            staging_dir.display()
+        ));
         sh.remove_path(&staging_dir)?;
     }
     sh.create_dir(&staging_dir)?;
 
     let target_dir = ctx.cargo_python_target_dir(Some(backend));
     sh.create_dir(&target_dir)?;
+    output::path("Cargo target dir", &target_dir);
+    output::path("Staging directory", &staging_dir);
 
-    // FIX: Use {uv_exe} tool run
     let mut maturin_cmd = cmd!(
         sh,
         "{uv_exe} tool run maturin build --release --out {staging_dir}"
@@ -161,12 +197,15 @@ fn build_backend_variant(
         maturin_cmd = maturin_cmd.arg("--features").arg(feature);
     }
 
-    maturin_cmd
-        .run()
+    output::run_command(format!("Compiling Python {feature} backend"), maturin_cmd)
         .with_context(|| format!("failed to build Python {feature} backend"))?;
 
-    let wheel =
-        find_wheel_artifact(&staging_dir)?.context("maturin did not produce a wheel artifact")?;
+    let wheel = find_wheel_artifact(&staging_dir)?.with_context(|| {
+        format!(
+            "maturin did not produce a wheel artifact in {}",
+            staging_dir.display()
+        )
+    })?;
 
     let extracted_dir = ctx.tmp_dir().join("python").join("extracted").join(feature);
     if extracted_dir.exists() {
@@ -174,12 +213,13 @@ fn build_backend_variant(
     }
     sh.create_dir(&extracted_dir)?;
 
-    // FIX: Use {uv_exe} run python
-    cmd!(
-        sh,
-        "{uv_exe} run python -m zipfile -e {wheel} {extracted_dir}"
+    output::run_command(
+        format!("Extracting Python {feature} wheel"),
+        cmd!(
+            sh,
+            "{uv_exe} run python -m zipfile -e {wheel} {extracted_dir}"
+        ),
     )
-    .run()
     .with_context(|| format!("failed to extract {}", wheel.display()))?;
 
     let native = find_native_extension(&extracted_dir)?.with_context(|| {
@@ -202,10 +242,6 @@ fn build_backend_variant(
 
     Ok(dest)
 }
-
-// --------------------------------------------------------------------------------------------
-// HELPERS
-// --------------------------------------------------------------------------------------------
 
 fn python_project_dir(ctx: &BuildContext) -> PathBuf {
     ctx.workspace_root().join("bindings").join("python")
@@ -301,4 +337,8 @@ fn is_python_extension(path: &Path) -> bool {
         path.extension().and_then(|extension| extension.to_str()),
         Some("pyd" | "so")
     )
+}
+
+fn backend_label(backend: Option<&Backend>) -> &'static str {
+    backend.map(Backend::as_str).unwrap_or("cpu (default)")
 }

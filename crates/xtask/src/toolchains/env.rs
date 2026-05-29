@@ -1,6 +1,7 @@
 //! Environment application for backend-specific native builds.
 
 use crate::cli::Backend;
+use crate::output;
 use crate::toolchains::cuda::setup_cuda;
 use crate::toolchains::ninja::setup_ninja;
 use crate::toolchains::vulkan::{setup_vulkan, VULKAN_VERSION};
@@ -24,7 +25,6 @@ pub(crate) fn apply_toolchains<'a>(
         command = command.env("CMAKE_GENERATOR", "Ninja");
     }
 
-    // Handle UV path injection
     let uv_dir = ctx
         .workspace_root()
         .join(".build")
@@ -34,9 +34,9 @@ pub(crate) fn apply_toolchains<'a>(
         path_additions.push(uv_dir.display().to_string());
     }
 
-    // Process backend
     match backend {
         Some(Backend::Vulkan) => {
+            output::detail("Toolchain", "Vulkan");
             let vulkan_dir = setup_vulkan(sh, ctx)?;
             let bin_path = if cfg!(windows) {
                 vulkan_dir.join("Bin")
@@ -70,6 +70,7 @@ pub(crate) fn apply_toolchains<'a>(
             command = command.env("CMAKE_PREFIX_PATH", new_cmake_prefix);
         }
         Some(Backend::Cuda) => {
+            output::detail("Toolchain", "CUDA");
             let cuda_path = setup_cuda()?;
             let bin_path = cuda_path.join("bin");
             path_additions.push(bin_path.display().to_string());
@@ -82,7 +83,10 @@ pub(crate) fn apply_toolchains<'a>(
             command = command.env("CUDACXX", nvcc_exe.display().to_string());
             command = command.env("CUDA_TOOLKIT_ROOT_DIR", cuda_path.display().to_string());
         }
-        _ => {}
+        Some(Backend::Metal) => output::detail("Toolchain", "Metal"),
+        Some(Backend::Cpu) | Some(Backend::All) | None => {
+            output::detail("Toolchain", "CPU/default")
+        }
     }
 
     if !path_additions.is_empty() {

@@ -1,21 +1,29 @@
 //! Node.js binding build target.
 
 use crate::cli::Backend;
+use crate::output;
 use crate::toolchains::env::apply_toolchains;
 use crate::utils::BuildContext;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 use xshell::{cmd, Shell};
 
 const NODE_BINARY_NAME: &str = "cogentlm_node";
 
 /// Builds Node.js bindings for the selected backend or backend set.
 pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Result<()> {
-    println!("=> Building Node Bindings...");
+    let started_at = Instant::now();
+    output::phase("Node.js bindings");
+    output::detail("Backend request", backend_label(backend));
+
     let node_dir = ctx.workspace_root().join("bindings").join("node");
+    output::path("Binding workspace", &node_dir);
+    output::path("Artifact directory", &ctx.node_artifacts_dir());
+
     let _dir = sh.push_dir(&node_dir);
 
-    cmd!(sh, "bun install").run()?;
+    output::run_command("Installing Node dependencies", cmd!(sh, "bun install"))?;
 
     let dist_dir = ctx.node_artifacts_dir();
     prepare_dist_dir(sh, ctx, &dist_dir)?;
@@ -29,34 +37,28 @@ pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Resul
         let optional = best_effort && backend != Backend::Cpu;
         match build_backend_variant(sh, ctx, &dist_dir, &backend) {
             Ok(path) => {
-                println!("   Wrote {}", path.display());
+                output::artifact(&path);
                 built.push(backend);
             }
             Err(error) if optional => {
-                eprintln!(
-                    "   Warning: skipped optional {} backend: {error:#}",
+                output::warning(format!(
+                    "Skipped optional {} backend: {error:#}",
                     backend.as_str()
-                );
+                ));
                 skipped.push(backend);
             }
             Err(error) => return Err(error),
         }
     }
 
-    let built_names = built
-        .iter()
-        .map(Backend::as_str)
-        .collect::<Vec<_>>()
-        .join(", ");
-    println!("=> Node Build Complete! Built variants: {built_names}");
+    output::success(format!(
+        "Node build complete in {}",
+        output::elapsed(started_at.elapsed())
+    ));
+    output::detail("Built variants", output::backend_list(&built));
 
     if !skipped.is_empty() {
-        let skipped_names = skipped
-            .iter()
-            .map(Backend::as_str)
-            .collect::<Vec<_>>()
-            .join(", ");
-        println!("   Optional variants skipped: {skipped_names}");
+        output::detail("Skipped optional variants", output::backend_list(&skipped));
     }
 
     Ok(())
@@ -81,6 +83,10 @@ fn prepare_dist_dir(sh: &Shell, ctx: &BuildContext, dist_dir: &Path) -> Result<(
 
     let staging_dir = ctx.tmp_dir().join("node");
     if staging_dir.exists() {
+        output::step(format!(
+            "Removing stale Node staging directory {}",
+            staging_dir.display()
+        ));
         sh.remove_path(&staging_dir)?;
     }
 
@@ -94,6 +100,7 @@ fn prepare_dist_dir(sh: &Shell, ctx: &BuildContext, dist_dir: &Path) -> Result<(
         if file_name.starts_with(&format!("{NODE_BINARY_NAME}_"))
             && path.extension().and_then(|ext| ext.to_str()) == Some("node")
         {
+            output::step(format!("Removing stale Node artifact {}", path.display()));
             sh.remove_path(path)?;
         }
     }
@@ -112,9 +119,7 @@ fn build_backend_variant(
     }
 
     let feature = backend.as_str();
-    println!("--------------------------------------------------");
-    println!("Compiling Node Variant: {}", feature.to_uppercase());
-    println!("--------------------------------------------------");
+    output::phase(&format!("Node backend: {}", feature.to_uppercase()));
 
     let staging_dir = ctx.tmp_dir().join("node").join(feature);
     if staging_dir.exists() {
@@ -123,6 +128,9 @@ fn build_backend_variant(
     sh.create_dir(&staging_dir)?;
 
     let target_dir = ctx.cargo_node_target_dir(backend);
+    output::path("Cargo target dir", &target_dir);
+    output::path("Staging directory", &staging_dir);
+
     let mut napi_cmd = cmd!(
         sh,
         "bunx napi build --platform --release --no-js --output-dir {staging_dir} --target-dir {target_dir}"
@@ -133,8 +141,7 @@ fn build_backend_variant(
         napi_cmd = napi_cmd.arg("--features").arg(feature);
     }
 
-    napi_cmd
-        .run()
+    output::run_command(format!("Compiling Node {feature} backend"), napi_cmd)
         .with_context(|| format!("failed to build Node {feature} backend"))?;
 
     let artifact = find_artifact(&staging_dir)?.with_context(|| {
@@ -161,6 +168,10 @@ fn build_backend_variant(
     sh.remove_path(&staging_dir)?;
 
     Ok(dest)
+}
+
+fn backend_label(backend: Option<&Backend>) -> &'static str {
+    backend.map(Backend::as_str).unwrap_or("cpu (default)")
 }
 
 fn find_artifact(dir: &Path) -> Result<Option<PathBuf>> {

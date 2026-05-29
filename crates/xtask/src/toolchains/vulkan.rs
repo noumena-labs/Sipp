@@ -1,5 +1,6 @@
 //! Vulkan SDK bootstrapping.
 
+use crate::output;
 use crate::utils::BuildContext;
 use anyhow::Result;
 use std::path::PathBuf;
@@ -37,28 +38,42 @@ pub(crate) fn setup_vulkan(sh: &Shell, ctx: &BuildContext) -> Result<PathBuf> {
     };
 
     if !bin_path.exists() {
-        println!("=> Bootstrapping hermetic Vulkan SDK...");
+        output::phase("Vulkan SDK");
+        output::detail("Version", VULKAN_VERSION);
+        output::path("Install directory", &vulkan_dir);
         sh.create_dir(&vulkan_dir)?;
 
         let url =
             format!("https://sdk.lunarg.com/sdk/download/{VULKAN_VERSION}/{os_path}/{filename}");
         let archive_path = toolchain_root.join(&filename);
 
-        println!("   Downloading Vulkan SDK (~400MB) from:");
-        println!("   {url}");
+        output::detail("Download", &url);
 
-        cmd!(sh, "curl -f -L -o {archive_path} {url}").run()?;
+        output::run_command(
+            "Downloading Vulkan SDK (~400MB)",
+            cmd!(sh, "curl -f -L -o {archive_path} {url}"),
+        )?;
 
-        println!("   Extracting/Installing into .build/toolchain/vulkan...");
         if cfg!(windows) {
-            cmd!(sh, "{archive_path} --root {vulkan_dir} --accept-licenses --default-answer --confirm-command install copy_only=1").run()?;
+            output::run_command(
+                "Installing Vulkan SDK",
+                cmd!(sh, "{archive_path} --root {vulkan_dir} --accept-licenses --default-answer --confirm-command install copy_only=1"),
+            )?;
         } else if cfg!(target_os = "macos") {
-            cmd!(sh, "unzip -q {archive_path} -d {vulkan_dir}").run()?;
+            output::run_command(
+                "Extracting Vulkan SDK",
+                cmd!(sh, "unzip -q {archive_path} -d {vulkan_dir}"),
+            )?;
         } else {
-            cmd!(sh, "tar -xf {archive_path} -C {vulkan_dir}").run()?;
+            output::run_command(
+                "Extracting Vulkan SDK",
+                cmd!(sh, "tar -xf {archive_path} -C {vulkan_dir}"),
+            )?;
         }
 
         sh.remove_path(&archive_path)?;
+    } else {
+        output::success(format!("Using Vulkan SDK at {}", vulkan_dir.display()));
     }
 
     Ok(vulkan_dir)

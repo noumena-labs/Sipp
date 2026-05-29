@@ -1,9 +1,11 @@
+use crate::output;
 use crate::utils::BuildContext;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::PathBuf;
 use xshell::{cmd, Shell};
 
-pub fn setup_uv(sh: &Shell, ctx: &BuildContext) -> Result<PathBuf> {
+/// Ensures the hermetic uv executable is available under `.build/toolchain`.
+pub(crate) fn setup_uv(sh: &Shell, ctx: &BuildContext) -> Result<PathBuf> {
     let root = ctx.workspace_root();
     let uv_dir = root.join(".build").join("toolchain").join("uv");
     let uv_exe = if cfg!(windows) {
@@ -13,10 +15,10 @@ pub fn setup_uv(sh: &Shell, ctx: &BuildContext) -> Result<PathBuf> {
     };
 
     if !uv_exe.exists() {
-        println!("=> Bootstrapping hermetic `uv` (Python toolchain)...");
+        output::phase("Python uv toolchain");
+        output::path("Install directory", &uv_dir);
         std::fs::create_dir_all(&uv_dir)?;
 
-        // Map OS and Architecture to Astral's release targets
         let (target, ext) = if cfg!(target_os = "windows") {
             ("x86_64-pc-windows-msvc", "zip")
         } else if cfg!(target_os = "macos") {
@@ -33,29 +35,38 @@ pub fn setup_uv(sh: &Shell, ctx: &BuildContext) -> Result<PathBuf> {
             format!("https://github.com/astral-sh/uv/releases/latest/download/uv-{target}.{ext}");
         let archive_path = uv_dir.join(format!("uv.{ext}"));
 
-        println!("   Downloading uv from: {url}");
-        cmd!(sh, "curl -f -L -o {archive_path} {url}").run()?;
+        output::detail("Download", &url);
+        output::run_command(
+            "Downloading uv",
+            cmd!(sh, "curl -f -L -o {archive_path} {url}"),
+        )?;
 
-        // Extract the archive
         if ext == "zip" {
-            cmd!(sh, "tar -xf {archive_path} -C {uv_dir}").run()?;
+            output::run_command(
+                "Extracting uv",
+                cmd!(sh, "tar -xf {archive_path} -C {uv_dir}"),
+            )?;
         } else {
-            cmd!(sh, "tar -xzf {archive_path} -C {uv_dir}").run()?;
+            output::run_command(
+                "Extracting uv",
+                cmd!(sh, "tar -xzf {archive_path} -C {uv_dir}"),
+            )?;
         }
 
-        // The archive extracts into a subfolder (e.g., `uv-x86_64-pc-windows-msvc/uv.exe`).
-        // We move the binary up to the root of our `uv` folder for easy access.
         let subfolder = uv_dir.join(format!("uv-{target}"));
         let extracted_bin_sub = subfolder.join(if cfg!(windows) { "uv.exe" } else { "uv" });
-
-        if extracted_bin_sub.exists() {
-            sh.copy_file(&extracted_bin_sub, &uv_exe)?;
-            let _ = sh.remove_path(&subfolder);
+        if !extracted_bin_sub.exists() {
+            anyhow::bail!("uv archive did not contain {}", extracted_bin_sub.display());
         }
 
-        // Clean up the archive and the extracted subfolder
+        sh.copy_file(&extracted_bin_sub, &uv_exe)
+            .with_context(|| format!("failed to stage uv at {}", uv_exe.display()))?;
+
         sh.remove_path(&archive_path)?;
-        sh.remove_path(uv_dir.join(format!("uv-{target}")))?;
+        sh.remove_path(subfolder)?;
+        output::success(format!("Installed uv at {}", uv_exe.display()));
+    } else {
+        output::success(format!("Using uv at {}", uv_exe.display()));
     }
 
     Ok(uv_exe)
