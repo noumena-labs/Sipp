@@ -4,7 +4,7 @@ name: style-checker
 description: Enforces this monorepo's coding style rules by inspecting git diffs, reading .skills/style-checker/references/style_guidance.md, fixing style violations, and reporting the result. Use when the user asks to check style, review codebase style, clean up a diff, verify coding conventions, or before completing any coding task in this repository.
 compatibility: Designed for coding agents working inside a git monorepo with shell access, file read access, and file editing tools.
 allowed-tools: Bash(git:*) Bash(cargo:*) Bash(npm:*) Bash(pnpm:*) Bash(yarn:*) Read Edit MultiEdit
---------------------------------------------------------------------------------------------------
+---
 
 # Style Checker
 
