@@ -9,6 +9,7 @@ links = "cogentlm"
 [features]
 default = ["native"]
 native = []
+backend-dl = ["native"]
 cuda = ["native"]
 metal = ["native"]
 vulkan = ["native"]

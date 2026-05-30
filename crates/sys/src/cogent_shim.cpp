@@ -9,6 +9,10 @@
 #include <utility>
 #include <vector>
 
+#if defined(__linux__)
+#include <unistd.h>
+#endif
+
 #include <nlohmann/json.hpp>
 
 #include "arg.h"
@@ -238,6 +242,26 @@ const char * backend_dev_type_name(enum ggml_backend_dev_type type) {
 std::atomic_bool g_llama_log_quiet{false};
 
 void quiet_llama_log_callback(enum ggml_log_level, const char *, void *) {}
+
+std::string linux_executable_directory() {
+#if defined(__linux__)
+    std::vector<char> path(4096);
+    const ssize_t len = readlink("/proc/self/exe", path.data(), path.size() - 1);
+    if (len <= 0) {
+        return {};
+    }
+
+    path[static_cast<size_t>(len)] = '\0';
+    std::string full_path(path.data(), static_cast<size_t>(len));
+    const size_t separator = full_path.find_last_of('/');
+    if (separator == std::string::npos) {
+        return {};
+    }
+    return full_path.substr(0, separator);
+#else
+    return {};
+#endif
+}
 
 void restore_llama_log_callback() {
 #if defined(__EMSCRIPTEN__)
@@ -820,6 +844,15 @@ void cogent_set_llama_log_quiet(bool quiet) {
 }
 
 void cogent_backend_load_all(void) {
+#ifdef GGML_BACKEND_DL
+    const std::string executable_dir = linux_executable_directory();
+    if (!executable_dir.empty()) {
+        ggml_backend_load_all_from_path(executable_dir.c_str());
+        if (ggml_backend_reg_by_name("CPU") != nullptr) {
+            return;
+        }
+    }
+#endif
     ggml_backend_load_all();
 }
 
@@ -828,6 +861,12 @@ char * cogent_backend_observability_json(bool include_details) {
         using json = nlohmann::ordered_json;
         json out;
         json compiled;
+
+#ifdef GGML_BACKEND_DL
+        out["dynamicBackendLoading"] = true;
+#else
+        out["dynamicBackendLoading"] = false;
+#endif
 
 #ifdef GGML_USE_CUDA
         compiled["cuda"] = true;

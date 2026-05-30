@@ -1,5 +1,7 @@
 # Standardize llama.cpp configurations for both environments
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build llama.cpp as static libraries" FORCE)
+if(NOT DEFINED BUILD_SHARED_LIBS)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build llama.cpp as static libraries")
+endif()
 set(LLAMA_BUILD_COMMON ON CACHE BOOL "Build llama.cpp common utils" FORCE)
 set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "Skip llama.cpp examples" FORCE)
 set(LLAMA_BUILD_SERVER OFF CACHE BOOL "Skip llama.cpp server" FORCE)
@@ -56,8 +58,8 @@ set(SHARED_MTMD_SOURCES
     ${COGENTLM_MTMD_MODEL_DIR}/yasa2.cpp
 )
 
-# Build mtmd as a static library for both Wasm and Native
-add_library(mtmd STATIC ${SHARED_MTMD_SOURCES})
+# Build mtmd as a library for both Wasm and Native
+add_library(mtmd ${SHARED_MTMD_SOURCES})
 target_link_libraries(mtmd PUBLIC ggml llama)
 target_include_directories(mtmd PUBLIC "${COGENTLM_MTMD_DIR}")
 target_include_directories(mtmd PRIVATE

@@ -6,6 +6,7 @@ use anyhow::{bail, Context};
 use clap::{Parser, ValueEnum};
 use cogentlm_engine::backend::set_llama_log_quiet;
 use cogentlm_engine::engine::{GpuLayerConfig, NativeRuntimeConfig, SamplingRuntimeConfig};
+use cogentlm_engine::lifecycle::{BackendPolicy, BackendPreference, ModelLoadOptions, StatsMode};
 use cogentlm_engine::runtime::metrics::RuntimeObservabilityMetrics;
 use cogentlm_engine::runtime::request::{
     GenerateResponseStatus, GenerateTokenEmissionMode, ResponseOutput,
@@ -36,8 +37,12 @@ struct Args {
     batch_size: u32,
 
     /// Number of model layers to offload to GPU.
-    #[arg(long, default_value_t = 0, allow_negative_numbers = true)]
-    gpu_layers: i32,
+    #[arg(long, allow_negative_numbers = true)]
+    gpu_layers: Option<i32>,
+
+    /// Backend preference for model execution.
+    #[arg(long, value_enum, default_value_t = CliBackend::Auto)]
+    backend: CliBackend,
 
     /// Number of generation threads. Zero lets llama.cpp choose.
     #[arg(long, default_value_t = 0)]
@@ -81,6 +86,38 @@ enum CliStatsMode {
     Debug,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+enum CliBackend {
+    #[default]
+    Auto,
+    Cpu,
+    Cuda,
+    Metal,
+    Vulkan,
+}
+
+impl CliBackend {
+    fn to_preference(self) -> BackendPreference {
+        match self {
+            Self::Auto => BackendPreference::Auto,
+            Self::Cpu => BackendPreference::Cpu,
+            Self::Cuda => BackendPreference::Cuda,
+            Self::Metal => BackendPreference::Metal,
+            Self::Vulkan => BackendPreference::Vulkan,
+        }
+    }
+}
+
+impl CliStatsMode {
+    fn to_lifecycle_stats(self) -> StatsMode {
+        match self {
+            Self::Off => StatsMode::Off,
+            Self::Basic => StatsMode::Basic,
+            Self::Profile | Self::Debug => StatsMode::Profile,
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     set_llama_log_quiet(true);
@@ -101,10 +138,9 @@ fn run_native_runtime(args: &Args, stdout: &mut impl Write) -> anyhow::Result<()
     config.context.n_parallel = Some(1);
     config.context.n_threads = Some(args.threads);
     config.context.n_threads_batch = Some(args.threads);
-    config.placement.gpu_layers = GpuLayerConfig::from_layer_count(args.gpu_layers);
-    config.observability.runtime_metrics = args.stats != CliStatsMode::Off;
-    config.observability.backend_profiling =
-        matches!(args.stats, CliStatsMode::Profile | CliStatsMode::Debug);
+    if let Some(gpu_layers) = args.gpu_layers {
+        config.placement.gpu_layers = GpuLayerConfig::from_layer_count(gpu_layers);
+    }
     config.sampling = SamplingRuntimeConfig {
         temperature: Some(args.temperature),
         top_k: Some(args.top_k),
@@ -117,7 +153,13 @@ fn run_native_runtime(args: &Args, stdout: &mut impl Write) -> anyhow::Result<()
         config.sampling.top_k = Some(1);
     }
 
-    let mut runtime = InferenceRuntime::load(&args.model, config)?;
+    let load_options = ModelLoadOptions {
+        backend: args.backend.to_preference(),
+        stats: args.stats.to_lifecycle_stats(),
+        runtime: config,
+    };
+    let backend_plan = BackendPolicy::select(&load_options)?;
+    let mut runtime = InferenceRuntime::load(&args.model, backend_plan.config)?;
     let prompt = if args.chat {
         let messages = json!([{ "role": "user", "content": args.prompt }]);
         let rendered = runtime.apply_chat_template_json(&messages.to_string(), true)?;

@@ -15,7 +15,7 @@ fn gpu_layers_accepts_negative_llama_all_layers_value() {
         "-1",
     ]);
 
-    assert_eq!(args.gpu_layers, -1);
+    assert_eq!(args.gpu_layers, Some(-1));
 }
 
 #[test]

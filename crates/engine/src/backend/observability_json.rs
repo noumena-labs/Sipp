@@ -4,6 +4,7 @@ pub(crate) const KEY_AVAILABLE_BACKENDS: &str = "availableBackends";
 pub(crate) const KEY_COMPILED: &str = "compiled";
 pub(crate) const KEY_DEVICE_ID: &str = "deviceId";
 pub(crate) const KEY_DEVICES: &str = "devices";
+pub(crate) const KEY_DYNAMIC_BACKEND_LOADING: &str = "dynamicBackendLoading";
 pub(crate) const KEY_GPU_OFFLOAD_SUPPORTED: &str = "gpuOffloadSupported";
 pub(crate) const KEY_MEMORY_FREE_BYTES: &str = "memoryFreeBytes";
 pub(crate) const KEY_MEMORY_TOTAL_BYTES: &str = "memoryTotalBytes";

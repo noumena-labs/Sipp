@@ -32,11 +32,13 @@ fn run_build(target: BuildCommands, sh: &Shell, ctx: &BuildContext) -> Result<()
             targets::wasm::build(sh, ctx)?;
             targets::python::build(sh, ctx, None)?;
             targets::node::build(sh, ctx, None)?;
+            targets::cli::build(sh, ctx, None)?;
         }
         BuildCommands::Core => targets::core::build(sh, ctx)?,
         BuildCommands::Wasm => targets::wasm::build(sh, ctx)?,
         BuildCommands::Python(args) => targets::python::build(sh, ctx, args.backend.as_ref())?,
         BuildCommands::Node(args) => targets::node::build(sh, ctx, args.backend.as_ref())?,
+        BuildCommands::Cli(args) => targets::cli::build(sh, ctx, args.backend.as_ref())?,
     }
 
     Ok(())

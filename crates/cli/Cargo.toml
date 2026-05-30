@@ -8,6 +8,7 @@ repository.workspace = true
 [features]
 default = ["native"]
 native = ["cogentlm-engine/native"]
+backend-dl = ["cogentlm-engine/backend-dl"]
 cuda = ["cogentlm-engine/cuda"]
 metal = ["cogentlm-engine/metal"]
 vulkan = ["cogentlm-engine/vulkan"]

@@ -18,6 +18,7 @@ Start with:
   cargo xtask run --help
   cargo xtask build node --backend cpu
   cargo xtask build python --backend cuda
+  cargo xtask build cli --backend all
   cargo xtask setup";
 
 const BUILD_HELP: &str = "\
@@ -30,10 +31,11 @@ Examples:
   cargo xtask build node --backend cpu
   cargo xtask build node --backend all
   cargo xtask build python --backend cuda
+  cargo xtask build cli --backend all
 
 Notes:
-  `build all` builds every target family with default CPU bindings.
-  It does not build every Node/Python backend variant.";
+  `build all` builds every target family with default CPU native outputs.
+  It does not build every Node/Python/CLI backend variant.";
 
 const BACKEND_HELP: &str = "\
 Backend values:
@@ -41,7 +43,7 @@ Backend values:
   cuda    NVIDIA CUDA backend; requires a local CUDA Toolkit
   metal   Apple Metal backend on macOS
   vulkan  Vulkan backend; xtask bootstraps the Vulkan SDK when needed
-  all     Host-supported backend set for the binding target";
+  all     Host-supported backend set for the target";
 
 const RUN_HELP: &str = "\
 Build and run finite developer workflows from the workspace root.
@@ -207,17 +209,19 @@ before downloading toolchains or sample files, and can install the shorter
 /// Supported build targets.
 #[derive(Subcommand)]
 pub enum BuildCommands {
-    /// Build core, WASM, Python CPU, and Node CPU targets.
+    /// Build core, WASM, Python CPU, Node CPU, and CLI CPU targets.
     #[command(long_about = "\
 Build every target family in sequence:
   1. Native Rust workspace
   2. Browser WASM/WebGPU package
   3. Python bindings with the default CPU backend
   4. Node bindings with the default CPU backend
+  5. CLI distribution with the default CPU backend
 
 This command does not build every backend variant. Use
 `cargo xtask build node --backend all` or
-`cargo xtask build python --backend all` when you need fat binding artifacts.")]
+`cargo xtask build python --backend all` or
+`cargo xtask build cli --backend all` when you need fat native artifacts.")]
     All,
 
     /// Build the native Rust workspace crates.
@@ -265,6 +269,22 @@ The default backend is CPU. `--backend all` expands to the backend set
 supported by the host operating system.")]
     #[command(after_long_help = BACKEND_HELP)]
     Node(BackendArgs),
+
+    /// Build the Rust CLI distribution directory.
+    #[command(long_about = "\
+Build the Rust CLI and stage a runnable distribution directory.
+
+Examples:
+  cargo xtask build cli
+  cargo xtask build cli --backend cpu
+  cargo xtask build cli --backend vulkan
+  cargo xtask build cli --backend all
+
+The CLI build uses llama.cpp dynamic backend loading. The staged artifact
+contains the cogentlm executable, base runtime libraries, and any selected
+ggml backend plugins in .build/artifacts/cli.")]
+    #[command(after_long_help = BACKEND_HELP)]
+    Cli(BackendArgs),
 }
 
 /// Developer run workflows.
@@ -681,7 +701,7 @@ pub enum DoctorTarget {
     Python,
 }
 
-/// Shared backend selection flags for binding builds.
+/// Shared backend selection flags for native target builds.
 #[derive(Args)]
 pub struct BackendArgs {
     /// Computation backend to compile against.
@@ -689,7 +709,7 @@ pub struct BackendArgs {
     pub backend: Option<Backend>,
 }
 
-/// Hardware backend selected for binding builds.
+/// Hardware backend selected for native target builds.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum Backend {
     /// Standard CPU computation fallback.

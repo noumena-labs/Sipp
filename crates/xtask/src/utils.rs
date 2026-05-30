@@ -58,6 +58,10 @@ impl BuildContext {
         self.cargo_build_root().join("node").join(backend.as_str())
     }
 
+    pub(crate) fn cargo_cli_target_dir(&self, backend: &Backend) -> PathBuf {
+        self.cargo_build_root().join("cli").join(backend.as_str())
+    }
+
     pub(crate) fn cargo_python_target_dir(&self, backend: Option<&Backend>) -> PathBuf {
         self.cargo_build_root()
             .join("python")
@@ -83,6 +87,16 @@ impl BuildContext {
             .join(backend.as_str())
     }
 
+    pub(crate) fn cmake_cli_sys_dir(&self, backend: &Backend) -> PathBuf {
+        if cfg!(windows) {
+            self.native_build_root().join("cli").join(backend.as_str())
+        } else {
+            self.cmake_build_root()
+                .join("cli-sys")
+                .join(backend.as_str())
+        }
+    }
+
     pub(crate) fn artifacts_root(&self) -> PathBuf {
         self.build_root().join("artifacts")
     }
@@ -93,6 +107,10 @@ impl BuildContext {
 
     pub(crate) fn python_artifacts_dir(&self) -> PathBuf {
         self.artifacts_root().join("python")
+    }
+
+    pub(crate) fn cli_artifacts_dir(&self) -> PathBuf {
+        self.artifacts_root().join("cli")
     }
 
     pub(crate) fn npm_browser_artifacts_dir(&self) -> PathBuf {

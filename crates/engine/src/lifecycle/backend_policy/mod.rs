@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use crate::backend::{
     backend_observability_json, json_array_strings, json_bool, KEY_AVAILABLE_BACKENDS,
-    KEY_COMPILED, KEY_GPU_OFFLOAD_SUPPORTED, KEY_NAME,
+    KEY_COMPILED, KEY_DYNAMIC_BACKEND_LOADING, KEY_GPU_OFFLOAD_SUPPORTED, KEY_NAME,
 };
 use crate::collection::sorted_unique_non_empty_strings;
 use crate::engine::{FlashAttentionMode, GpuLayerConfig, NativeRuntimeConfig};
@@ -111,23 +111,28 @@ pub fn read_backend_capabilities() -> Result<BackendCapabilities, ModelError> {
     let raw = backend_observability_json(true).map_err(ModelError::from)?;
     let value = serde_json::from_str::<Value>(&raw)?;
 
-    let compiled = value
-        .get(KEY_COMPILED)
-        .and_then(Value::as_object)
-        .map(|map| {
-            normalize_backend_values(
-                map.iter()
-                    .filter(|(_, enabled)| enabled.as_bool().unwrap_or(false))
-                    .map(|(name, _)| name.as_str()),
-            )
-        })
-        .unwrap_or_default();
-
     let available = normalize_backend_names_or_cpu(&json_array_strings(
         &value,
         KEY_AVAILABLE_BACKENDS,
         KEY_NAME,
     ));
+    let dynamic_backend_loading =
+        json_bool(&value, KEY_DYNAMIC_BACKEND_LOADING).unwrap_or(false);
+    let compiled = if dynamic_backend_loading {
+        available.clone()
+    } else {
+        value
+            .get(KEY_COMPILED)
+            .and_then(Value::as_object)
+            .map(|map| {
+                normalize_backend_values(
+                    map.iter()
+                        .filter(|(_, enabled)| enabled.as_bool().unwrap_or(false))
+                        .map(|(name, _)| name.as_str()),
+                )
+            })
+            .unwrap_or_default()
+    };
 
     Ok(BackendCapabilities {
         compiled,

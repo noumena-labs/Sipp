@@ -7,7 +7,19 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(LLAMA_OPENSSL OFF CACHE BOOL "Disable OpenSSL in native phase-1 build" FORCE)
-set(GGML_BACKEND_DL OFF CACHE BOOL "Use static backend linkage" FORCE)
+if(NOT DEFINED GGML_BACKEND_DL)
+  set(GGML_BACKEND_DL OFF CACHE BOOL "Use dynamic ggml backend plugins")
+endif()
+
+if(GGML_BACKEND_DL)
+  if(APPLE)
+    set(CMAKE_BUILD_RPATH "@loader_path")
+    set(CMAKE_INSTALL_RPATH "@loader_path")
+  elseif(UNIX)
+    set(CMAKE_BUILD_RPATH "$ORIGIN")
+    set(CMAKE_INSTALL_RPATH "$ORIGIN")
+  endif()
+endif()
 
 set(COGENTLM_LLAMA_CPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/llama.cpp")
 
@@ -25,7 +37,7 @@ target_link_libraries(mtmd PRIVATE Threads::Threads)
 install(TARGETS mtmd ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
 
 # Shim setup
-add_library(cogent_shim STATIC
+add_library(cogent_shim
   src/cogent_shim.cpp
   include/cogent_shim.h
 )
@@ -45,6 +57,10 @@ foreach(_cogent_backend CUDA METAL VULKAN OPENMP WEBGPU)
   endif()
 endforeach()
 
+if(GGML_BACKEND_DL)
+  target_compile_definitions(cogent_shim PRIVATE GGML_BACKEND_DL)
+endif()
+
 target_link_libraries(cogent_shim PUBLIC llama PRIVATE llama-common mtmd)
 
 if(MSVC)
@@ -61,3 +77,14 @@ foreach(_cogent_target cpp-httplib llama-common-base)
       RUNTIME DESTINATION bin)
   endif()
 endforeach()
+
+if(GGML_BACKEND_DL)
+  foreach(_cogent_target llama llama-common ggml ggml-base)
+    if(TARGET ${_cogent_target})
+      install(TARGETS ${_cogent_target}
+        ARCHIVE DESTINATION lib
+        LIBRARY DESTINATION lib
+        RUNTIME DESTINATION bin)
+    endif()
+  endforeach()
+endif()

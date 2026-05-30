@@ -2,8 +2,17 @@ use std::env;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+fn sanitize_path(path_str: String) -> PathBuf {
+    if path_str.starts_with(r"\\?\") {
+        PathBuf::from(&path_str[4..])
+    } else {
+        PathBuf::from(path_str)
+    }
+}
+
 fn main() {
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let manifest_dir_str = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+    let manifest_dir = sanitize_path(manifest_dir_str);
 
     // Maintainers: If you restructure the workspace, ensure this relative path
     // correctly points to the vendored llama.cpp directory from this crate's root.
@@ -21,6 +30,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/cogent_shim.cpp");
     println!("cargo:rerun-if-env-changed=CUDA_PATH");
     println!("cargo:rerun-if-env-changed=CUDA_HOME");
+    println!("cargo:rerun-if-env-changed=COGENTLM_SYS_CMAKE_OUT_DIR");
 
     let target = env::var("TARGET").unwrap_or_default();
 
@@ -37,25 +47,44 @@ fn main() {
 
 fn build_native(manifest_dir: &Path, llama_dir: &Path) {
     let target = env::var("TARGET").unwrap_or_default();
+    let backend_dl = env::var_os("CARGO_FEATURE_BACKEND_DL").is_some();
+    let backend_tag = cmake_backend_tag();
+    let cmake_out_dir = env::var("COGENTLM_SYS_CMAKE_OUT_DIR")
+        .ok()
+        .map(sanitize_path);
+
     let mut config = cmake::Config::new(manifest_dir);
     config
         .profile("Release")
         .define("COGENTLM_LLAMA_CPP_DIR", llama_dir)
         .define("CMAKE_INSTALL_LIBDIR", "lib")
-        .define("BUILD_SHARED_LIBS", "OFF")
+        .define("BUILD_SHARED_LIBS", if backend_dl { "ON" } else { "OFF" })
+        .define("GGML_BACKEND_DL", if backend_dl { "ON" } else { "OFF" })
         // Remove bloat from llama.cpp
         .define("LLAMA_BUILD_EXAMPLES", "OFF")
         .define("LLAMA_BUILD_SERVER", "OFF")
         .define("LLAMA_BUILD_TESTS", "OFF");
 
-    let cmake_out_dir = workspace_build_dir(manifest_dir)
+    if backend_dl {
+        config
+            .define("GGML_NATIVE", "OFF")
+            .define("GGML_CPU_ALL_VARIANTS", "ON");
+    }
+
+    let default_cmake_out_dir = workspace_build_dir(manifest_dir)
         .join("cmake")
         .join("sys")
         .join(path_component(&target, "host"))
-        .join(cmake_backend_tag());
-    config.out_dir(cmake_out_dir);
+        .join(backend_tag.as_str());
+    let selected_cmake_out_dir = cmake_out_dir.clone().unwrap_or(default_cmake_out_dir);
+    config.out_dir(selected_cmake_out_dir);
 
     if cfg!(windows) {
+        // We only pass this on Windows to keep our cross-platform config perfectly clean.
+        if backend_dl {
+            config.define("CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS", "ON");
+        }
+
         // Detect if Cargo is currently compiling the multi-threaded or single-threaded variant.
         // (Adjust the "CARGO_FEATURE_PTHREAD" string to match whatever feature name you use in xtask)
         let is_pthread =
@@ -72,12 +101,14 @@ fn build_native(manifest_dir: &Path, llama_dir: &Path) {
             "nt"
         };
 
-        let short_build_dir = manifest_dir
-            .join("../../.build/c") // Shrink `.build/cmake/sys/target/` down to just `.b/c/`
-            .join(target_prefix)
-            .join(cmake_backend_tag());
+        if cmake_out_dir.is_none() {
+            let short_build_dir = manifest_dir
+                .join("../../.build/c") // Shrink `.build/cmake/sys/target/` down to just `.b/c/`
+                .join(target_prefix)
+                .join(backend_tag.as_str());
 
-        config.out_dir(short_build_dir);
+            config.out_dir(short_build_dir);
+        }
         config.generator("Ninja");
 
         if target.contains("msvc") {
@@ -127,41 +158,12 @@ fn build_native(manifest_dir: &Path, llama_dir: &Path) {
     } else {
         dst.join("lib64")
     };
-
-    println!("cargo:rustc-link-search=native={}", lib_dir.display());
-
-    // MSVC quirk: CMake will frequently nest outputs in build-type directories.
-    // Do not remove these; it will break the Windows CI pipeline.
-    println!(
-        "cargo:rustc-link-search=native={}",
-        lib_dir.join("Release").display()
-    );
-    println!(
-        "cargo:rustc-link-search=native={}",
-        lib_dir.join("Debug").display()
-    );
-
-    // This is the core list of static libraries produced by our CMake build.
-    // If upstream llama.cpp renames or splits out new libraries, update this array.
-    for lib in [
-        "cogent_shim",
-        "mtmd",
-        "llama-common",
-        "llama-common-base",
-        "cpp-httplib",
-        "llama",
-        "ggml",
-        "ggml-cpu",
-        "ggml-base",
-        "ggml-cuda",
-        "ggml-metal",
-        "ggml-vulkan",
-        "ggml-blas",
-    ] {
-        if static_library_exists(&lib_dir, lib) {
-            println!("cargo:rustc-link-lib=static={lib}");
-        }
+    let search_dirs = library_search_dirs(&dst, &lib_dir);
+    for dir in &search_dirs {
+        println!("cargo:rustc-link-search=native={}", dir.display());
     }
+
+    link_cmake_libraries(&search_dirs, backend_dl);
 
     // Link OS-specific system libraries required by the underlying C++ code.
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
@@ -172,17 +174,20 @@ fn build_native(manifest_dir: &Path, llama_dir: &Path) {
             ] {
                 println!("cargo:rustc-link-lib={lib}");
             }
-            if env::var_os("CARGO_FEATURE_CUDA").is_some() {
+            if !backend_dl && env::var_os("CARGO_FEATURE_CUDA").is_some() {
                 link_cuda_libraries_windows();
             }
-            if env::var_os("CARGO_FEATURE_VULKAN").is_some() {
+            if !backend_dl && env::var_os("CARGO_FEATURE_VULKAN").is_some() {
                 link_vulkan_libraries_windows();
             }
         }
         "macos" => {
             println!("cargo:rustc-link-lib=dylib=c++");
             println!("cargo:rustc-link-lib=framework=Accelerate");
-            if env::var_os("CARGO_FEATURE_METAL").is_some() {
+            if backend_dl {
+                println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path");
+            }
+            if !backend_dl && env::var_os("CARGO_FEATURE_METAL").is_some() {
                 for framework in [
                     "Foundation",
                     "Metal",
@@ -193,7 +198,7 @@ fn build_native(manifest_dir: &Path, llama_dir: &Path) {
                     println!("cargo:rustc-link-lib=framework={framework}");
                 }
             }
-            if env::var_os("CARGO_FEATURE_VULKAN").is_some() {
+            if !backend_dl && env::var_os("CARGO_FEATURE_VULKAN").is_some() {
                 link_vulkan_libraries_unix();
             }
         }
@@ -207,10 +212,13 @@ fn build_native(manifest_dir: &Path, llama_dir: &Path) {
             println!("cargo:rustc-link-lib=dylib=m");
             println!("cargo:rustc-link-lib=dylib=dl");
             println!("cargo:rustc-link-lib=dylib=pthread");
-            if env::var_os("CARGO_FEATURE_CUDA").is_some() {
+            if backend_dl {
+                println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
+            }
+            if !backend_dl && env::var_os("CARGO_FEATURE_CUDA").is_some() {
                 link_cuda_libraries_unix();
             }
-            if env::var_os("CARGO_FEATURE_VULKAN").is_some() {
+            if !backend_dl && env::var_os("CARGO_FEATURE_VULKAN").is_some() {
                 link_vulkan_libraries_unix();
             }
         }
@@ -278,8 +286,8 @@ fn define_bool_feature(config: &mut cmake::Config, feature_env: &str, cmake_name
     );
 }
 
-fn cmake_backend_tag() -> &'static str {
-    if env::var_os("CARGO_FEATURE_CUDA").is_some() {
+fn cmake_backend_tag() -> String {
+    let backend = if env::var_os("CARGO_FEATURE_CUDA").is_some() {
         "cu"
     } else if env::var_os("CARGO_FEATURE_METAL").is_some() {
         "mt"
@@ -289,6 +297,12 @@ fn cmake_backend_tag() -> &'static str {
         "om"
     } else {
         "c"
+    };
+
+    if env::var_os("CARGO_FEATURE_BACKEND_DL").is_some() {
+        format!("dl-{backend}")
+    } else {
+        backend.to_string()
     }
 }
 
@@ -307,7 +321,47 @@ fn path_component(value: &str, fallback: &str) -> String {
         .collect()
 }
 
-fn static_library_exists(lib_dir: &Path, lib: &str) -> bool {
+fn library_search_dirs(dst: &Path, lib_dir: &Path) -> Vec<PathBuf> {
+    let candidates = [
+        lib_dir.to_path_buf(),
+        lib_dir.join("Release"),
+        lib_dir.join("Debug"),
+        dst.join("bin"),
+        dst.join("bin").join("Release"),
+        dst.join("bin").join("Debug"),
+    ];
+    let mut dirs = Vec::new();
+    for dir in candidates {
+        if dir.exists() && !dirs.iter().any(|existing| existing == &dir) {
+            dirs.push(dir);
+        }
+    }
+    dirs
+}
+
+fn link_cmake_libraries(search_dirs: &[PathBuf], backend_dl: bool) {
+    let core_libraries = [
+        "cogent_shim",
+        "mtmd",
+        "llama-common",
+        "llama-common-base",
+        "cpp-httplib",
+        "llama",
+        "ggml",
+        "ggml-cpu",
+        "ggml-base",
+    ];
+
+    let link_type = if backend_dl { "dylib" } else { "static" };
+
+    for lib in core_libraries {
+        if static_library_exists(search_dirs, lib) || dynamic_library_exists(search_dirs, lib) {
+            println!("cargo:rustc-link-lib={}={}", link_type, lib);
+        }
+    }
+}
+
+fn static_library_exists(search_dirs: &[PathBuf], lib: &str) -> bool {
     // Check standard UNIX formats alongside MSVC specific outputs (.lib).
     let names = [
         format!("{lib}.lib"),
@@ -316,11 +370,25 @@ fn static_library_exists(lib_dir: &Path, lib: &str) -> bool {
         format!("{lib}.a"),
     ];
 
-    names.iter().any(|name| {
-        lib_dir.join(name).exists()
-            || lib_dir.join("Release").join(name).exists()
-            || lib_dir.join("Debug").join(name).exists()
-    })
+    search_dirs
+        .iter()
+        .any(|dir| names.iter().any(|name| dir.join(name).exists()))
+}
+
+fn dynamic_library_exists(search_dirs: &[PathBuf], lib: &str) -> bool {
+    let names = if cfg!(windows) {
+        vec![format!("{lib}.lib"), format!("lib{lib}.dll.a")]
+    } else {
+        vec![
+            format!("lib{lib}.so"),
+            format!("lib{lib}.dylib"),
+            format!("lib{lib}.tbd"),
+        ]
+    };
+
+    search_dirs
+        .iter()
+        .any(|dir| names.iter().any(|name| dir.join(name).exists()))
 }
 
 fn generate_bindings(manifest_dir: &Path, llama_dir: &Path) {
