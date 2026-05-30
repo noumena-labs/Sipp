@@ -340,7 +340,7 @@ fn library_search_dirs(dst: &Path, lib_dir: &Path) -> Vec<PathBuf> {
 }
 
 fn link_cmake_libraries(search_dirs: &[PathBuf], backend_dl: bool) {
-    let core_libraries = [
+    let mut core_libraries = vec![
         "cogent_shim",
         "mtmd",
         "llama-common",
@@ -352,6 +352,21 @@ fn link_cmake_libraries(search_dirs: &[PathBuf], backend_dl: bool) {
         "ggml-base",
     ];
 
+    if !backend_dl {
+        if std::env::var_os("CARGO_FEATURE_VULKAN").is_some() {
+            core_libraries.push("ggml-vulkan");
+        }
+        if std::env::var_os("CARGO_FEATURE_CUDA").is_some() {
+            core_libraries.push("ggml-cuda");
+        }
+        if std::env::var_os("CARGO_FEATURE_METAL").is_some() {
+            core_libraries.push("ggml-metal");
+        }
+        // If you ever enable BLAS, add it here too
+        core_libraries.push("ggml-blas");
+    }
+
+    // Dynamic for CLI, Static for Node/WASM/Python
     let link_type = if backend_dl { "dylib" } else { "static" };
 
     for lib in core_libraries {
