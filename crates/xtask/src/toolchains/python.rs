@@ -54,16 +54,22 @@ pub(crate) fn setup_uv(sh: &Shell, ctx: &BuildContext) -> Result<PathBuf> {
         }
 
         let subfolder = uv_dir.join(format!("uv-{target}"));
-        let extracted_bin_sub = subfolder.join(if cfg!(windows) { "uv.exe" } else { "uv" });
-        if !extracted_bin_sub.exists() {
-            anyhow::bail!("uv archive did not contain {}", extracted_bin_sub.display());
+        let nested_uv_exe = subfolder.join(if cfg!(windows) { "uv.exe" } else { "uv" });
+        if nested_uv_exe.exists() {
+            sh.copy_file(&nested_uv_exe, &uv_exe)
+                .with_context(|| format!("failed to stage uv at {}", uv_exe.display()))?;
+        } else if !uv_exe.exists() {
+            anyhow::bail!(
+                "uv archive contained neither {} nor {}",
+                nested_uv_exe.display(),
+                uv_exe.display()
+            );
         }
 
-        sh.copy_file(&extracted_bin_sub, &uv_exe)
-            .with_context(|| format!("failed to stage uv at {}", uv_exe.display()))?;
-
         sh.remove_path(&archive_path)?;
-        sh.remove_path(subfolder)?;
+        if subfolder.exists() {
+            sh.remove_path(subfolder)?;
+        }
         output::success(format!("Installed uv at {}", uv_exe.display()));
     } else {
         output::success(format!("Using uv at {}", uv_exe.display()));
