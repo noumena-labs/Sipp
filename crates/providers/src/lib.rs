@@ -11,12 +11,13 @@ mod stream;
 mod transport;
 
 pub use client::{ProviderBackend, ProviderClient};
+pub use cogentlm_core::{CapabilitySupport, TokenUsage};
 pub use config::{
     AnthropicConfig, OpenAiConfig, ProviderAuth, ProviderKind, ProxyConfig, ProxyProtocol,
     SecretString,
 };
 pub use error::{ProviderError, ProviderErrorKind, ProviderResult};
-pub use model::{CapabilitySupport, ProviderCapabilities, ProviderModel};
+pub use model::{ProviderCapabilities, ProviderModel};
 pub use providers::{AnthropicProvider, OpenAiProvider, ProxyProvider};
 pub use request::{
     ProviderChatRequest, ProviderEmbedRequest, ProviderGenerateRequest, ProviderGenerationOptions,
@@ -25,7 +26,6 @@ pub use request::{
 pub use response::{
     ProviderChatResponse, ProviderEmbeddingOutput, ProviderEmbeddingResponse,
     ProviderGenerateResponse, ProviderResponse, ProviderResponseMetadata, ProviderTextOutput,
-    TokenUsage,
 };
 pub use stream::{ProviderStream, ProviderStreamEvent};
 pub(crate) use transport::{HttpByteStream, HttpTransport};

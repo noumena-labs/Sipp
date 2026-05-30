@@ -1,87 +1,56 @@
-//! Background token sink: drains a [`TokenByteRingConsumer`] on its own thread
-//! and invokes the caller's on-tokens callback with batched [`TokenBatch`]es.
-//!
-//! Batches are sized for either max frames, max bytes, or a short flush
-//! interval — whichever lands first. Drop counts from the producer are
-//! folded into the stream stats so consumers can see when backpressure hit.
+//! Driver-owned token stream batching over the runtime token byte ring.
 
-use std::sync::mpsc;
-use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use futures_channel::mpsc;
 
 use crate::engine::stream::{StreamStats, TokenBatch};
-use crate::error::{Error, Result};
 use crate::runtime::numeric::saturating_usize_to_u32;
 use crate::runtime::request::{
     token_byte_ring, TokenByteRingConsumer, TokenByteRingProducer, TokenRingFrame,
     TOKEN_RING_DEFAULT_CAPACITY,
 };
 
-use super::{
-    runtime_command, OnTokensCallback, TOKEN_BATCH_FLUSH_INTERVAL, TOKEN_BATCH_MAX_BYTES,
-    TOKEN_BATCH_MAX_FRAMES, TOKEN_CALLBACK_THREAD_PANICKED,
-};
+use super::{TOKEN_BATCH_MAX_BYTES, TOKEN_BATCH_MAX_FRAMES};
 
-pub(super) struct AsyncTokenSink {
+pub(super) const TOKEN_STREAM_CHANNEL_CAPACITY: usize = 256;
+
+pub(super) struct ActiveTokenStream {
     pub(super) producer: TokenByteRingProducer,
-    join_handle: Option<JoinHandle<()>>,
-    error_rx: mpsc::Receiver<Error>,
-}
-
-impl AsyncTokenSink {
-    pub(super) fn try_recv_error(&mut self) -> Option<Error> {
-        self.error_rx.try_recv().ok()
-    }
-
-    pub(super) fn join(&mut self) -> Result<()> {
-        if let Some(join_handle) = self.join_handle.take() {
-            join_handle
-                .join()
-                .map_err(|_| runtime_command(TOKEN_CALLBACK_THREAD_PANICKED))?;
-        }
-        if let Some(error) = self.try_recv_error() {
-            return Err(error);
-        }
-        Ok(())
-    }
-}
-
-pub(super) fn start_async_token_sink(
-    request_id: u32,
-    callback: OnTokensCallback,
-) -> AsyncTokenSink {
-    let (producer, consumer) = token_byte_ring(TOKEN_RING_DEFAULT_CAPACITY);
-    let (error_tx, error_rx) = mpsc::channel();
-    let join_handle = thread::spawn(move || {
-        run_token_callback_loop(request_id, consumer, callback, error_tx);
-    });
-    AsyncTokenSink {
-        producer,
-        join_handle: Some(join_handle),
-        error_rx,
-    }
-}
-
-fn run_token_callback_loop(
-    request_id: u32,
     consumer: TokenByteRingConsumer,
-    mut callback: OnTokensCallback,
-    error_tx: mpsc::Sender<Error>,
-) {
-    let mut token_state = TokenStreamState::new(request_id);
-    let mut frames = Vec::with_capacity(TOKEN_BATCH_MAX_FRAMES);
+    state: TokenStreamState,
+    batch_tx: mpsc::Sender<TokenBatch>,
+    pending_dropped_frames: u64,
+    frames: Vec<TokenRingFrame>,
+}
+
+pub(super) fn start_engine_token_stream(
+    request_id: u32,
+    batch_tx: mpsc::Sender<TokenBatch>,
+) -> ActiveTokenStream {
+    let (producer, consumer) = token_byte_ring(TOKEN_RING_DEFAULT_CAPACITY);
+    ActiveTokenStream {
+        producer,
+        consumer,
+        state: TokenStreamState::new(request_id),
+        batch_tx,
+        pending_dropped_frames: 0,
+        frames: Vec::with_capacity(TOKEN_BATCH_MAX_FRAMES),
+    }
+}
+
+pub(super) fn drain_ring_into_sender(token: &mut ActiveTokenStream) {
     loop {
-        consumer.wait_for_data(TOKEN_BATCH_FLUSH_INTERVAL);
-        let batch_started = Instant::now();
-        frames.clear();
-        let mut latest_drop_count = token_state.last_drop_count;
-        let mut closed = false;
+        token.frames.clear();
+        let mut latest_drop_count = token.state.last_drop_count;
         let mut byte_count = 0usize;
+        let mut closed = false;
 
         loop {
-            let remaining_frames = remaining_quota(TOKEN_BATCH_MAX_FRAMES, frames.len());
+            let remaining_frames = remaining_quota(TOKEN_BATCH_MAX_FRAMES, token.frames.len());
             let remaining_bytes = remaining_quota(TOKEN_BATCH_MAX_BYTES, byte_count);
-            let drain = consumer.drain_into(&mut frames, remaining_frames, remaining_bytes);
+            let drain =
+                token
+                    .consumer
+                    .drain_into(&mut token.frames, remaining_frames, remaining_bytes);
             latest_drop_count = latest_drop_count.max(drain.drop_count);
             closed |= drain.closed;
             let Some(next_byte_count) = next_batch_byte_count(byte_count, drain.bytes_drained)
@@ -90,31 +59,39 @@ fn run_token_callback_loop(
             };
             byte_count = next_byte_count;
 
-            if closed
-                || frames.len() >= TOKEN_BATCH_MAX_FRAMES
+            if drain.frames_drained == 0
+                || closed
+                || token.frames.len() >= TOKEN_BATCH_MAX_FRAMES
                 || byte_count >= TOKEN_BATCH_MAX_BYTES
-                || batch_started.elapsed() >= TOKEN_BATCH_FLUSH_INTERVAL
             {
                 break;
             }
-
-            let remaining = remaining_flush_interval(batch_started);
-            if remaining.is_zero() || !consumer.wait_for_data(remaining) {
-                break;
-            }
         }
 
-        if let Some(batch) =
-            token_batch_from_ring_frames(&frames, request_id, &mut token_state, latest_drop_count)
-        {
-            if let Err(error) = callback(&batch) {
-                let _ = error_tx.send(error);
-                return;
-            }
+        let Some(mut batch) = token_batch_from_ring_frames(
+            &token.frames,
+            token.state.request_id,
+            &mut token.state,
+            latest_drop_count,
+        ) else {
+            break;
+        };
+
+        if token.pending_dropped_frames > 0 {
+            batch.stats.frames_dropped = batch
+                .stats
+                .frames_dropped
+                .saturating_add(token.pending_dropped_frames);
+            token.pending_dropped_frames = 0;
         }
 
-        if closed {
-            return;
+        if let Err(error) = token.batch_tx.try_send(batch) {
+            if error.is_full() {
+                token.pending_dropped_frames = token
+                    .pending_dropped_frames
+                    .saturating_add(u64::from(error.into_inner().frame_count));
+            }
+            break;
         }
     }
 }
@@ -210,17 +187,11 @@ fn next_batch_byte_count(current: usize, drained: usize) -> Option<usize> {
     current.checked_add(drained)
 }
 
-fn remaining_flush_interval(batch_started: Instant) -> Duration {
-    TOKEN_BATCH_FLUSH_INTERVAL
-        .checked_sub(batch_started.elapsed())
-        .unwrap_or(Duration::ZERO)
-}
-
 fn remaining_quota(limit: usize, used: usize) -> usize {
     limit.saturating_sub(used).max(1)
 }
 
 #[cfg(test)]
 mod tests {
-    mod token_sink_tests;
+    mod token_stream_tests;
 }

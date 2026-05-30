@@ -7,6 +7,7 @@ use crate::lifecycle::{
     model_entry_from_assets, AssetInspection, AssetRecord, AssetRole, AssetSource, ModelAssetKind,
     ModelModality, PairingPlan,
 };
+use futures::executor::block_on;
 use std::{fs, path::PathBuf};
 
 fn vision_plan() -> PairingPlan {
@@ -142,14 +143,13 @@ fn service_rejects_unresolved_vision_model_on_load() {
     service.registry.insert_model(entry).expect("model");
     record.ref_count = 1;
 
-    let error = service
-        .load(
-            ModelSource::Installed {
-                id: entry_id.clone(),
-            },
-            ModelLoadOptions::default(),
-        )
-        .expect_err("not ready");
+    let error = block_on(service.load(
+        ModelSource::Installed {
+            id: entry_id.clone(),
+        },
+        ModelLoadOptions::default(),
+    ))
+    .expect_err("not ready");
 
     assert!(matches!(error, ModelError::InvalidModelPairing(_)));
 }

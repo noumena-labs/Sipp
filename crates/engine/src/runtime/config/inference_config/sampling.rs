@@ -1,5 +1,30 @@
 use serde::{Deserialize, Serialize};
 
+/// Request-level sampling override.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RequestSampling {
+    /// Complete local sampler override.
+    Full(SamplingRuntimeConfig),
+    /// Sparse override for common text-generation knobs.
+    Patch(SamplingRuntimePatch),
+}
+
+impl From<SamplingRuntimeConfig> for RequestSampling {
+    fn from(config: SamplingRuntimeConfig) -> Self {
+        Self::Full(config)
+    }
+}
+
+/// Sparse request-level sampling patch that preserves runtime defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SamplingRuntimePatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SamplingRuntimeConfig {

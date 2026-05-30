@@ -94,17 +94,9 @@ fn token_batch_byte_count_saturates() {
 }
 
 #[test]
-fn token_callback_batch_byte_count_rejects_overflow() {
+fn token_batch_byte_count_rejects_overflow() {
     assert_eq!(next_batch_byte_count(7, 5), Some(12));
     assert_eq!(next_batch_byte_count(usize::MAX, 1), None);
-}
-
-#[test]
-fn remaining_flush_interval_zeroes_after_deadline() {
-    assert_eq!(
-        remaining_flush_interval(Instant::now() - TOKEN_BATCH_FLUSH_INTERVAL),
-        Duration::ZERO
-    );
 }
 
 #[test]

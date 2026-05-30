@@ -4,9 +4,9 @@ mod scheduler_policy;
 pub use inference_config::{
     CacheKeyPolicy, CacheRuntimeConfig, ContextRuntimeConfig, FlashAttentionMode, GenerateOptions,
     GpuLayerConfig, KvCacheType, KvReuseMode, LogitBias, ModelPlacementConfig,
-    MultimodalRuntimeConfig, NativeRuntimeConfig, ObservabilityRuntimeConfig,
+    MultimodalRuntimeConfig, NativeRuntimeConfig, ObservabilityRuntimeConfig, RequestSampling,
     ResidencyRuntimeConfig, ResolvedRuntimeLimits, RopeScaling, SamplerStage,
-    SamplingRuntimeConfig, SchedulerRuntimeConfig, SplitMode, DEFAULT_CONTEXT_KEY,
-    DEFAULT_MAX_TOKENS,
+    SamplingRuntimeConfig, SamplingRuntimePatch, SchedulerRuntimeConfig, SplitMode,
+    DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
 };
 pub use scheduler_policy::{SchedulerPolicyConfig, SchedulerPolicyMode, SchedulerTickBudget};

@@ -1,11 +1,6 @@
-use crate::ProviderKind;
+use cogentlm_core::CapabilitySupport;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CapabilitySupport {
-    Supported,
-    Unsupported,
-    Unknown,
-}
+use crate::ProviderKind;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCapabilities {

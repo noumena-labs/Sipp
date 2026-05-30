@@ -18,6 +18,7 @@ pub use context::{ContextRuntimeConfig, FlashAttentionMode, KvCacheType, RopeSca
 pub use placement::{GpuLayerConfig, ModelPlacementConfig, SplitMode};
 use sampling::merge_sampling_override_json;
 pub use sampling::{LogitBias, SamplerStage, SamplingRuntimeConfig};
+pub use sampling::{RequestSampling, SamplingRuntimePatch};
 
 pub const DEFAULT_CONTEXT_KEY: &str = "default";
 pub const DEFAULT_MAX_TOKENS: i32 = 64;
@@ -70,11 +71,14 @@ impl NativeRuntimeConfig {
 
     pub fn try_sampling_json_with_override(
         &self,
-        override_config: Option<&SamplingRuntimeConfig>,
+        override_config: Option<&RequestSampling>,
     ) -> serde_json::Result<String> {
         let mut value = serde_json::to_value(&self.sampling)?;
         if let Some(override_config) = override_config {
-            let override_value = serde_json::to_value(override_config)?;
+            let override_value = match override_config {
+                RequestSampling::Full(config) => serde_json::to_value(config)?,
+                RequestSampling::Patch(patch) => serde_json::to_value(patch)?,
+            };
             merge_sampling_override_json(&mut value, override_value);
         }
         serde_json::to_string(&value)

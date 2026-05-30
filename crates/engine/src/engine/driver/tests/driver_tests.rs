@@ -2,8 +2,10 @@
 
 use super::super::*;
 use crate::engine::{
-    GenerateOptions, SamplingRuntimeConfig, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
+    GenerateOptions, RequestSampling, SamplingRuntimeConfig, DEFAULT_CONTEXT_KEY,
+    DEFAULT_MAX_TOKENS,
 };
+use futures::executor::block_on;
 
 #[test]
 fn query_options_default_matches_public_completion_defaults() {
@@ -38,13 +40,10 @@ fn generate_options_convert_to_query_options() {
     assert_eq!(options.grammar, "root ::= \"x\"");
     assert_eq!(options.json_schema, "{}");
     assert_eq!(options.stop, vec!["END"]);
-    assert_eq!(
-        options
-            .sampling
-            .as_ref()
-            .and_then(|sampling| sampling.temperature),
-        Some(0.1)
-    );
+    let Some(RequestSampling::Full(sampling)) = &options.sampling else {
+        panic!("generate options should map to a full sampling override");
+    };
+    assert_eq!(sampling.temperature, Some(0.1));
 }
 
 #[test]
@@ -96,10 +95,10 @@ fn t5_encoder_decoder_end_to_end() {
         "repo-root t5-small-f16.gguf must exist for the encoder-decoder gate"
     );
 
-    let engine = CogentEngine::load(&fixture, NativeRuntimeConfig::default())
+    let engine = block_on(CogentEngine::load(&fixture, NativeRuntimeConfig::default()))
         .expect("load t5-small-f16.gguf");
 
-    let state = engine.state().expect("engine state");
+    let state = block_on(engine.state()).expect("engine state");
     let capabilities = state
         .model
         .as_ref()
@@ -114,12 +113,11 @@ fn t5_encoder_decoder_end_to_end() {
     );
 
     // chat() must reject before touching the runtime.
-    let chat_error = engine
-        .chat(ChatRequest::new(vec![ChatMessage::new(
-            ChatRole::User,
-            "hello",
-        )]))
-        .expect_err("chat() must reject T5");
+    let chat_error = block_on(engine.chat(ChatRequest::new(vec![ChatMessage::new(
+        ChatRole::User,
+        "hello",
+    )])))
+    .expect_err("chat() must reject T5");
     assert!(
         matches!(
             &chat_error,
@@ -133,11 +131,10 @@ fn t5_encoder_decoder_end_to_end() {
 
     // query() against T5 should run the encoder pre-pass + decoder loop and
     // return a non-empty text result.
-    let result = engine
-        .query(QueryRequest::new(
-            "translate English to German: Hello, world.",
-        ))
-        .expect("T5 query");
+    let result = block_on(engine.query(QueryRequest::new(
+        "translate English to German: Hello, world.",
+    )))
+    .expect("T5 query");
     assert!(
         !result.text.is_empty(),
         "T5 encoder-decoder query produced empty output"

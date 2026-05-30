@@ -138,6 +138,7 @@ fn try_sampling_json_merges_overrides_without_silent_fallback() {
         ..SamplingRuntimeConfig::default()
     };
 
+    let override_config = RequestSampling::Full(override_config);
     let json = config
         .try_sampling_json_with_override(Some(&override_config))
         .expect("sampling JSON");
@@ -146,6 +147,25 @@ fn try_sampling_json_merges_overrides_without_silent_fallback() {
     assert_eq!(value["top_k"], 12);
     assert_eq!(value["backend_sampling"], false);
     assert_ne!(json, "{}");
+}
+
+#[test]
+fn sampling_patch_merges_only_common_knobs() {
+    let config = NativeRuntimeConfig::default();
+    let patch = RequestSampling::Patch(SamplingRuntimePatch {
+        temperature: Some(0.2),
+        top_p: None,
+    });
+
+    let json = config
+        .try_sampling_json_with_override(Some(&patch))
+        .expect("sampling JSON");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+
+    assert_float_eq(value["temperature"].as_f64(), 0.2);
+    assert_float_eq(value["top_p"].as_f64(), 0.8);
+    assert_eq!(value["backend_sampling"], cfg!(not(target_arch = "wasm32")));
+    assert_eq!(value["samplers"].as_array().expect("samplers").len(), 4);
 }
 
 #[test]
@@ -189,5 +209,13 @@ fn assert_arg_value(args: &[String], key: &str, expected: &str) {
         arg_value(args, key),
         Some(expected),
         "missing or wrong value for {key}"
+    );
+}
+
+fn assert_float_eq(actual: Option<f64>, expected: f64) {
+    let actual = actual.expect("float value");
+    assert!(
+        (actual - expected).abs() < 1e-6,
+        "expected {expected}, got {actual}"
     );
 }

@@ -32,7 +32,7 @@ fn chat_rejects_models_without_chat_template() {
     let subscribers = Arc::new(Mutex::new(Vec::new()));
 
     let request = ChatRequest::new(vec![ChatMessage::new(ChatRole::User, "hello")]);
-    let error = match start_chat(&mut runtime, request, &subscribers) {
+    let error = match start_chat(&mut runtime, request, None, &subscribers) {
         Err(error) => error,
         Ok(_) => panic!("chat() must reject when has_chat_template is false"),
     };

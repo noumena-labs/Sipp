@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use crate::engine::protocol::EmbedOptions;
-use crate::runtime::config::SamplingRuntimeConfig;
+use crate::runtime::config::RequestSampling;
 use crate::runtime::llama_token;
 
 pub type GenerateRequestId = u32;
@@ -39,7 +39,7 @@ pub struct GenerateRequest {
     pub grammar: String,
     pub json_schema: String,
     pub stop: Vec<String>,
-    pub sampling: Option<SamplingRuntimeConfig>,
+    pub sampling: Option<RequestSampling>,
     pub prompt_tokens: Vec<llama_token>,
     pub multimodal: Option<MultimodalPayload>,
     /// When `Some`, this is an `embed()` request: the slot plan resolves to

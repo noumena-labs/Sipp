@@ -8,7 +8,7 @@ use std::ptr::NonNull;
 use cogentlm_sys as ffi;
 
 use crate::error::{Error, Result};
-use crate::runtime::config::{NativeRuntimeConfig, SamplingRuntimeConfig};
+use crate::runtime::config::{NativeRuntimeConfig, RequestSampling};
 use crate::runtime::scheduler::{SamplerCacheKey, SlotPhase, SlotState};
 
 use super::native::runtime_command_from_shim_error;
@@ -66,7 +66,7 @@ pub(super) fn detach_backend_sampler(
 pub(super) fn create_sampler(
     common_init: *mut ffi::cogent_common_init,
     config: &NativeRuntimeConfig,
-    sampling_override: Option<&SamplingRuntimeConfig>,
+    sampling_override: Option<&RequestSampling>,
     grammar: Option<&str>,
     json_schema: Option<&str>,
 ) -> Result<*mut ffi::cogent_common_sampler> {
