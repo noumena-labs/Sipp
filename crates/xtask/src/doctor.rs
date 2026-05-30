@@ -88,7 +88,10 @@ fn print_wasm_statuses(ctx: &BuildContext, include_js_workspace: bool) {
     if include_js_workspace {
         toolchain::node_workspace_status(ctx).print();
     }
-    output::detail("Recovery", "Run `cargo xtask toolchain install emsdk` and `bun install`");
+    output::detail(
+        "Recovery",
+        "Run `cargo xtask toolchain install emsdk` and `bun install`",
+    );
 }
 
 fn print_backend_statuses(ctx: &BuildContext, backend: &Backend) {

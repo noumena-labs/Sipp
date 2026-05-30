@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use xshell::Shell;
-use xtask::cli::{BuildCommands, Cli, Commands};
+use xtask::cli::{Backend, BuildCommands, Cli, Commands};
 use xtask::targets;
 use xtask::utils::BuildContext;
 use xtask::{clean, configure_output, doctor, finish_output, run, setup, toolchain};
@@ -11,6 +11,7 @@ fn main() -> Result<()> {
     let sh = Shell::new()?;
     let ctx = BuildContext::new()?;
     configure_output(&ctx, cli.verbose, cli.no_banner, cli.plain);
+    let summary = command_summary(&cli.command);
 
     let result = match cli.command {
         Commands::Build { target } => run_build(target, &sh, &ctx),
@@ -20,9 +21,44 @@ fn main() -> Result<()> {
         Commands::Doctor(args) => doctor::run(&ctx, &args),
         Commands::Setup(args) => setup::run(&sh, &ctx, &args),
     };
-    finish_output();
+    finish_output(result.is_ok(), &summary);
 
     result
+}
+
+fn command_summary(command: &Commands) -> String {
+    match command {
+        Commands::Build { target } => build_summary(target),
+        Commands::Clean(_) => "Clean workspace".to_owned(),
+        Commands::Run { .. } => "Run developer workflow".to_owned(),
+        Commands::Toolchain { .. } => "Toolchain command".to_owned(),
+        Commands::Doctor(_) => "Developer environment doctor".to_owned(),
+        Commands::Setup(_) => "CogentLM setup".to_owned(),
+    }
+}
+
+fn build_summary(target: &BuildCommands) -> String {
+    match target {
+        BuildCommands::All => "Build all default targets".to_owned(),
+        BuildCommands::Core => "Build native Rust workspace".to_owned(),
+        BuildCommands::Wasm => "Build browser WASM/WebGPU package".to_owned(),
+        BuildCommands::Python(args) => {
+            format!("Build Python bindings ({})", backend_summary(args.backend))
+        }
+        BuildCommands::Node(args) => {
+            format!("Build Node.js bindings ({})", backend_summary(args.backend))
+        }
+        BuildCommands::Cli(args) => {
+            format!(
+                "Build Rust CLI distribution ({})",
+                backend_summary(args.backend)
+            )
+        }
+    }
+}
+
+fn backend_summary(backend: Option<Backend>) -> &'static str {
+    backend.as_ref().map(Backend::as_str).unwrap_or("cpu")
 }
 
 fn run_build(target: BuildCommands, sh: &Shell, ctx: &BuildContext) -> Result<()> {

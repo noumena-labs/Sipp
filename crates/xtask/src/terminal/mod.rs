@@ -1,5 +1,7 @@
 //! Terminal output helpers for xtask.
 
+pub(crate) mod splash;
+
 use crate::utils::BuildContext;
 use anyhow::{anyhow, Context, Result};
 use console::{style, Term};
@@ -9,11 +11,12 @@ use crossterm::style::{Attribute, Color, Print, ResetColor, SetAttribute, SetFor
 use crossterm::terminal::{self, Clear, ClearType, DisableLineWrap, EnableLineWrap};
 use crossterm::{execute, queue};
 use indicatif::{ProgressBar, ProgressStyle};
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::collections::VecDeque;
 use std::env;
 use std::fmt::Display;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Read, Write as _};
+use std::io::{BufReader, Read, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Output, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -29,11 +32,13 @@ const INLINE_MIN_LINES: u16 = 12;
 const INLINE_MIN_COLUMNS: u16 = 60;
 const INLINE_MIN_RENDER_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_ACTIVITY_LINES: usize = 160;
+const MAX_OUTPUT_LINES: usize = 400;
 
 static VERBOSE: AtomicBool = AtomicBool::new(false);
 static NO_BANNER: AtomicBool = AtomicBool::new(false);
 static COMMAND_LOG_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static COMMAND_LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
+static WORKSPACE_ROOT: OnceLock<PathBuf> = OnceLock::new();
 static INLINE_RENDERER: OnceLock<Mutex<Option<InlineRenderer>>> = OnceLock::new();
 
 /// Configures terminal output for the current xtask invocation.
@@ -41,6 +46,7 @@ pub(crate) fn init(ctx: &BuildContext, verbose: bool, no_banner: bool, plain: bo
     VERBOSE.store(verbose, Ordering::Relaxed);
     NO_BANNER.store(no_banner, Ordering::Relaxed);
     let _ = COMMAND_LOG_DIR.set(ctx.command_logs_dir());
+    let _ = WORKSPACE_ROOT.set(ctx.workspace_root().to_path_buf());
 
     let renderer = if should_use_inline(plain, verbose) {
         InlineRenderer::new(command_label()).ok().flatten()
@@ -54,11 +60,12 @@ pub(crate) fn init(ctx: &BuildContext, verbose: bool, no_banner: bool, plain: bo
 }
 
 /// Restores the terminal after bounded inline rendering.
-pub(crate) fn finish() {
+pub(crate) fn finish(success: bool, summary: &str) {
     let Some(renderer) = inline_slot().lock().ok().and_then(|mut slot| slot.take()) else {
+        print_final_status(success, summary);
         return;
     };
-    renderer.finish();
+    renderer.finish(success, summary);
 }
 
 /// Returns whether subprocess output should stream live.
@@ -117,6 +124,8 @@ pub(crate) fn banner(text: &str) {
 pub(crate) fn phase(title: &str) {
     if with_inline(|renderer| {
         renderer.visual = None;
+        renderer.output.clear();
+        renderer.footer_message = None;
         renderer.current_phase = Some(title.to_owned());
         renderer.add_event(LineKind::Run, "RUN", title);
         renderer.render_now();
@@ -127,7 +136,11 @@ pub(crate) fn phase(title: &str) {
     }
 
     println!();
-    println!("{} {}", style("==").cyan().bold(), style(title).bold().cyan());
+    println!(
+        "{} {}",
+        style("==").cyan().bold(),
+        style(title).bold().cyan()
+    );
 }
 
 /// Prints an informational key-value line.
@@ -152,7 +165,8 @@ pub(crate) fn detail(label: &str, value: impl Display) {
 
 /// Prints an important filesystem path.
 pub(crate) fn path(label: &str, path: &Path) {
-    let message = format!("{label}: {}", path.display());
+    let path = display_path(path);
+    let message = format!("{label}: {path}");
     if with_inline(|renderer| {
         renderer.add_event(LineKind::Path, "PATH", &message);
         renderer.render_now();
@@ -166,7 +180,7 @@ pub(crate) fn path(label: &str, path: &Path) {
         "   {} {} {}",
         style("PATH").cyan().bold(),
         style(format!("{label}:")).dim(),
-        style(path.display()).cyan()
+        style(path).cyan()
     );
 }
 
@@ -197,7 +211,11 @@ pub(crate) fn success(message: impl Display) {
         return;
     }
 
-    println!("   {} {}", style("OK").green().bold(), style(message).green());
+    println!(
+        "   {} {}",
+        style("OK").green().bold(),
+        style(message).green()
+    );
 }
 
 /// Prints an artifact path.
@@ -232,7 +250,11 @@ pub(crate) fn warning(message: impl Display) {
         return;
     }
 
-    eprintln!("   {} {}", style("WARN").yellow().bold(), style(message).yellow());
+    eprintln!(
+        "   {} {}",
+        style("WARN").yellow().bold(),
+        style(message).yellow()
+    );
 }
 
 /// Shows a bounded visual frame, used by setup splash animation.
@@ -368,54 +390,7 @@ pub(crate) fn run_long_command(label: impl Into<String>, command: Cmd<'_>) -> Re
         return run_command_verbose(label, command);
     }
 
-    let started_at = Instant::now();
-    start_inline_step(&label);
-    let (log_path, log_file) = open_command_log(&label)?;
-    let log_file = Arc::new(Mutex::new(log_file));
-
-    let mut process: std::process::Command = command.quiet().into();
-    process
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let mut child = match process.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            finish_inline_step(&label, started_at, false);
-            return Err(error).with_context(|| format!("{label} failed to start"));
-        }
-    };
-
-    let stdout_thread = child
-        .stdout
-        .take()
-        .map(|stream| spawn_output_reader("stdout", stream, Arc::clone(&log_file)));
-    let stderr_thread = child
-        .stderr
-        .take()
-        .map(|stream| spawn_output_reader("stderr", stream, Arc::clone(&log_file)));
-    let ticker = InlineTicker::start();
-
-    let status = child
-        .wait()
-        .with_context(|| format!("{label} failed while waiting for process exit"))?;
-    drop(ticker);
-    join_output_reader(stdout_thread)?;
-    join_output_reader(stderr_thread)?;
-
-    if status.success() {
-        finish_inline_step(&label, started_at, true);
-        return Ok(());
-    }
-
-    finish_inline_step(&label, started_at, false);
-    print_status_failure(&label, status, &log_path);
-    Err(anyhow!(
-        "{} failed with {}",
-        label,
-        exit_status_label(status)
-    ))
+    run_command_inline(label, command)
 }
 
 /// Formats a list of backends for summaries.
@@ -438,28 +413,266 @@ pub(crate) fn elapsed(duration: Duration) -> String {
 
 fn run_command_inline(label: String, command: Cmd<'_>) -> Result<()> {
     let started_at = Instant::now();
-    start_inline_step(&label);
-    let ticker = InlineTicker::start();
-    let output = command
-        .quiet()
-        .ignore_status()
-        .output()
-        .with_context(|| format!("{label} failed to start"))?;
-    drop(ticker);
+    let (log_path, log_file) = open_command_log(&label)?;
+    let log_file = Arc::new(Mutex::new(log_file));
+    start_inline_step(&label, &log_path);
 
-    if output.status.success() {
+    let mut process: std::process::Command = command.quiet().into();
+    apply_rich_terminal_env(&mut process);
+    if should_use_pty(&label, &process) {
+        return run_command_pty(label, started_at, process, log_path, log_file);
+    }
+
+    run_command_piped(label, started_at, process, log_path, log_file)
+}
+
+fn run_command_piped(
+    label: String,
+    started_at: Instant,
+    mut process: std::process::Command,
+    log_path: PathBuf,
+    log_file: Arc<Mutex<File>>,
+) -> Result<()> {
+    process
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = match process.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            finish_inline_step(&label, started_at, false);
+            print_status_failure(&label, None, &log_path);
+            return Err(error).with_context(|| format!("{label} failed to start"));
+        }
+    };
+
+    let stdout_thread = child
+        .stdout
+        .take()
+        .map(|stream| spawn_output_reader(OutputStream::Stdout, stream, Arc::clone(&log_file)));
+    let stderr_thread = child
+        .stderr
+        .take()
+        .map(|stream| spawn_output_reader(OutputStream::Stderr, stream, Arc::clone(&log_file)));
+    let ticker = InlineTicker::start();
+
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(error) => {
+            drop(ticker);
+            finish_inline_step(&label, started_at, false);
+            set_inline_footer(format!(
+                "ERR {label} wait failed | log: {}",
+                display_path(&log_path)
+            ));
+            return Err(error)
+                .with_context(|| format!("{label} failed while waiting for process exit"));
+        }
+    };
+    drop(ticker);
+    let reader_result =
+        join_output_reader(stdout_thread).and_then(|_| join_output_reader(stderr_thread));
+    if let Err(error) = reader_result {
+        finish_inline_step(&label, started_at, false);
+        error_event(format!("{label} output capture failed: {error:#}"));
+        set_inline_footer(format!(
+            "ERR {label} output capture failed | log: {}",
+            display_path(&log_path)
+        ));
+        return Err(error);
+    }
+
+    if let Ok(mut log) = log_file.lock() {
+        let _ = writeln!(log);
+        let _ = writeln!(log, "status: {status}");
+    }
+
+    if status.success() {
         finish_inline_step(&label, started_at, true);
         return Ok(());
     }
 
     finish_inline_step(&label, started_at, false);
-    let log_path = write_command_log(&label, &output)?;
-    print_command_failure(&label, &output, &log_path);
+    print_status_failure(&label, Some(&status), &log_path);
     Err(anyhow!(
         "{} failed with {}",
         label,
-        command_status_label(&output)
+        exit_status_label(&status)
     ))
+}
+
+fn run_command_pty(
+    label: String,
+    started_at: Instant,
+    process: std::process::Command,
+    log_path: PathBuf,
+    log_file: Arc<Mutex<File>>,
+) -> Result<()> {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(inline_pty_size())
+        .with_context(|| format!("{label} failed to open pty"))?;
+    let master = pair.master;
+    let slave = pair.slave;
+    let reader = master
+        .try_clone_reader()
+        .with_context(|| format!("{label} failed to open pty reader"))?;
+    let mut child = slave
+        .spawn_command(command_to_pty_builder(&process))
+        .with_context(|| format!("{label} failed to start"))?;
+    drop(slave);
+    let writer = master.take_writer().ok();
+
+    let output_thread = Some(spawn_output_reader(
+        OutputStream::Pty,
+        reader,
+        Arc::clone(&log_file),
+    ));
+    let ticker = InlineTicker::start();
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(error) => {
+            drop(ticker);
+            finish_inline_step(&label, started_at, false);
+            set_inline_footer(format!(
+                "ERR {label} wait failed | log: {}",
+                display_path(&log_path)
+            ));
+            return Err(error)
+                .with_context(|| format!("{label} failed while waiting for process exit"));
+        }
+    };
+    drop(ticker);
+    drop(writer);
+    drop(master);
+
+    if let Err(error) = join_output_reader(output_thread) {
+        finish_inline_step(&label, started_at, false);
+        error_event(format!("{label} output capture failed: {error:#}"));
+        set_inline_footer(format!(
+            "ERR {label} output capture failed | log: {}",
+            display_path(&log_path)
+        ));
+        return Err(error);
+    }
+
+    if let Ok(mut log) = log_file.lock() {
+        let _ = writeln!(log);
+        let _ = writeln!(log, "status: {}", pty_status_label(&status));
+    }
+
+    if status.success() {
+        finish_inline_step(&label, started_at, true);
+        return Ok(());
+    }
+
+    finish_inline_step(&label, started_at, false);
+    print_pty_status_failure(&label, &status, &log_path);
+    Err(anyhow!(
+        "{} failed with {}",
+        label,
+        pty_status_label(&status)
+    ))
+}
+
+fn apply_rich_terminal_env(process: &mut std::process::Command) {
+    let width = inline_width().unwrap_or(100).saturating_sub(16).max(40);
+    process
+        .env("TERM", "xterm-256color")
+        .env("COLORTERM", "truecolor")
+        .env("CLICOLOR_FORCE", "1")
+        .env("FORCE_COLOR", "3")
+        .env("CARGO_TERM_COLOR", "always")
+        .env("CARGO_TERM_PROGRESS_WHEN", "always")
+        .env("CARGO_TERM_PROGRESS_WIDTH", width.to_string());
+}
+
+fn should_use_pty(label: &str, process: &std::process::Command) -> bool {
+    if !use_terminal_decoration() {
+        return false;
+    }
+    if cfg!(windows) {
+        return false;
+    }
+
+    let label = label.to_ascii_lowercase();
+    if [
+        "build", "compil", "link", "maturin", "napi", "cargo", "package", "stage",
+    ]
+    .iter()
+    .any(|needle| label.contains(needle))
+    {
+        return true;
+    }
+
+    process
+        .get_program()
+        .to_string_lossy()
+        .to_ascii_lowercase()
+        .contains("cargo")
+        || process
+            .get_args()
+            .any(|arg| arg.to_string_lossy().to_ascii_lowercase().contains("napi"))
+}
+
+fn inline_width() -> Option<u16> {
+    inline_slot()
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|renderer| renderer.width))
+}
+
+fn inline_pty_size() -> PtySize {
+    let (cols, rows) = inline_slot()
+        .lock()
+        .ok()
+        .and_then(|slot| {
+            slot.as_ref()
+                .map(|renderer| (renderer.width, renderer.height))
+        })
+        .unwrap_or((100, 24));
+
+    PtySize {
+        rows: rows.max(12),
+        cols: cols.max(60),
+        pixel_width: 0,
+        pixel_height: 0,
+    }
+}
+
+fn command_to_pty_builder(process: &std::process::Command) -> CommandBuilder {
+    let mut argv = Vec::new();
+    argv.push(process.get_program().to_os_string());
+    argv.extend(process.get_args().map(|arg| arg.to_os_string()));
+
+    let mut builder = CommandBuilder::from_argv(argv);
+    if let Some(cwd) = process.get_current_dir() {
+        builder.cwd(cwd.as_os_str());
+    }
+    for (key, value) in process.get_envs() {
+        match value {
+            Some(value) => builder.env(key, value),
+            None => builder.env_remove(key),
+        }
+    }
+    builder
+}
+
+fn pty_status_label(status: &portable_pty::ExitStatus) -> String {
+    if let Some(signal) = status.signal() {
+        format!("terminated by {signal}")
+    } else {
+        format!("exit code {}", status.exit_code())
+    }
+}
+
+fn display_path(path: &Path) -> String {
+    let relative = WORKSPACE_ROOT
+        .get()
+        .and_then(|root| path.strip_prefix(root).ok());
+    let path = relative.unwrap_or(path);
+    path.display().to_string()
 }
 
 fn run_command_verbose(label: String, command: Cmd<'_>) -> Result<()> {
@@ -475,6 +688,22 @@ fn run_command_verbose(label: String, command: Cmd<'_>) -> Result<()> {
             step.finish_error();
             Err(error).with_context(|| format!("{label} failed"))
         }
+    }
+}
+
+fn print_final_status(success: bool, summary: &str) {
+    if success {
+        println!(
+            "   {} {} complete",
+            style("OK").green().bold(),
+            style(summary).green()
+        );
+    } else {
+        eprintln!(
+            "   {} {} failed",
+            style("ERR").red().bold(),
+            style(summary).red()
+        );
     }
 }
 
@@ -556,7 +785,7 @@ fn print_command_failure(label: &str, output: &Output, log_path: &Path) {
         }
         detail("Recent output", "last subprocess lines");
         for line in lines {
-            subprocess_event(&line, false);
+            subprocess_event(&line, OutputStream::Stdout);
         }
         return;
     }
@@ -570,7 +799,7 @@ fn print_command_failure(label: &str, output: &Output, log_path: &Path) {
     eprintln!(
         "   {} {}",
         style("PATH").cyan().bold(),
-        style(log_path.display()).cyan()
+        style(display_path(log_path)).cyan()
     );
 
     let lines = tail_output_lines(output, COMMAND_TAIL_LINES);
@@ -585,9 +814,16 @@ fn print_command_failure(label: &str, output: &Output, log_path: &Path) {
     }
 }
 
-fn print_status_failure(label: &str, status: ExitStatus, log_path: &Path) {
+fn print_status_failure(label: &str, status: Option<&ExitStatus>, log_path: &Path) {
+    let status = status
+        .map(exit_status_label)
+        .unwrap_or_else(|| "failed to start".to_owned());
     if inline_active() {
-        error_event(format!("{label} failed with {}", exit_status_label(status)));
+        error_event(format!("{label} failed with {status}"));
+        set_inline_footer(format!(
+            "ERR {label} failed with {status} | log: {}",
+            display_path(log_path)
+        ));
         path("Log", log_path);
         return;
     }
@@ -596,12 +832,37 @@ fn print_status_failure(label: &str, status: ExitStatus, log_path: &Path) {
         "   {} {} failed with {}",
         style("ERR").red().bold(),
         label,
-        exit_status_label(status)
+        status
     );
     eprintln!(
         "   {} {}",
         style("PATH").cyan().bold(),
-        style(log_path.display()).cyan()
+        style(display_path(log_path)).cyan()
+    );
+}
+
+fn print_pty_status_failure(label: &str, status: &portable_pty::ExitStatus, log_path: &Path) {
+    let status = pty_status_label(status);
+    if inline_active() {
+        error_event(format!("{label} failed with {status}"));
+        set_inline_footer(format!(
+            "ERR {label} failed with {status} | log: {}",
+            display_path(log_path)
+        ));
+        path("Log", log_path);
+        return;
+    }
+
+    eprintln!(
+        "   {} {} failed with {}",
+        style("ERR").red().bold(),
+        label,
+        status
+    );
+    eprintln!(
+        "   {} {}",
+        style("PATH").cyan().bold(),
+        style(display_path(log_path)).cyan()
     );
 }
 
@@ -626,18 +887,86 @@ fn tail_output_lines(output: &Output, max_lines: usize) -> Vec<String> {
 }
 
 fn command_status_label(output: &Output) -> String {
-    exit_status_label(output.status)
+    exit_status_label(&output.status)
 }
 
-fn exit_status_label(status: ExitStatus) -> String {
+fn exit_status_label(status: &ExitStatus) -> String {
     status
         .code()
         .map(|code| format!("exit code {code}"))
         .unwrap_or_else(|| "terminated by signal".to_owned())
 }
 
+#[derive(Clone, Copy)]
+enum OutputStream {
+    Stdout,
+    Stderr,
+    Pty,
+}
+
+impl OutputStream {
+    fn name(self) -> &'static str {
+        match self {
+            OutputStream::Stdout => "stdout",
+            OutputStream::Stderr => "stderr",
+            OutputStream::Pty => "pty",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            OutputStream::Stdout => "OUT",
+            OutputStream::Stderr => "LOG",
+            OutputStream::Pty => "LOG",
+        }
+    }
+
+    fn kind(self) -> LineKind {
+        match self {
+            OutputStream::Stdout => LineKind::Output,
+            OutputStream::Stderr => LineKind::Output,
+            OutputStream::Pty => LineKind::Output,
+        }
+    }
+
+    fn classify(self, line: &str) -> (&'static str, LineKind) {
+        let normalized = line.trim_start().to_ascii_lowercase();
+        if normalized.starts_with("error") || normalized.contains("error:") {
+            ("ERR", LineKind::Err)
+        } else if normalized.starts_with("warning") || normalized.contains("warning:") {
+            ("WARN", LineKind::Warn)
+        } else if normalized.starts_with("finished") {
+            ("OK", LineKind::Ok)
+        } else if is_build_progress_line(&normalized) {
+            ("BUILD", LineKind::Run)
+        } else {
+            (self.label(), self.kind())
+        }
+    }
+}
+
+fn is_build_progress_line(normalized: &str) -> bool {
+    [
+        "building",
+        "compiling",
+        "checking",
+        "linking",
+        "running",
+        "packaging",
+        "staging",
+        "copying",
+        "downloading",
+        "installing",
+        "updating",
+        "fetching",
+        "resolving",
+    ]
+    .iter()
+    .any(|prefix| normalized.starts_with(prefix))
+}
+
 fn spawn_output_reader<R>(
-    stream_name: &'static str,
+    output_stream: OutputStream,
     stream: R,
     log_file: Arc<Mutex<File>>,
 ) -> JoinHandle<Result<()>>
@@ -645,13 +974,15 @@ where
     R: Read + Send + 'static,
 {
     thread::spawn(move || {
+        let stream_name = output_stream.name();
         let mut reader = BufReader::new(stream);
-        let mut bytes = Vec::new();
+        let mut chunk = [0u8; 4096];
+        let mut pending = Vec::new();
+        let mut pending_cr = false;
 
         loop {
-            bytes.clear();
             let read = reader
-                .read_until(b'\n', &mut bytes)
+                .read(&mut chunk)
                 .with_context(|| format!("failed to read {stream_name}"))?;
             if read == 0 {
                 break;
@@ -659,21 +990,100 @@ where
 
             if let Ok(mut log) = log_file.lock() {
                 let _ = write!(log, "[{stream_name}] ");
-                let _ = log.write_all(&bytes);
-                if !bytes.ends_with(b"\n") {
-                    let _ = writeln!(log);
-                }
+                let _ = log.write_all(&chunk[..read]);
+                let _ = writeln!(log);
             }
 
-            let line = String::from_utf8_lossy(&bytes);
-            let line = line.trim_end_matches(&['\r', '\n'][..]);
-            if !line.trim().is_empty() {
-                subprocess_event(line, stream_name == "stderr");
+            for byte in &chunk[..read] {
+                if pending_cr {
+                    if *byte == b'\n' {
+                        emit_subprocess_line(&pending, output_stream);
+                        pending.clear();
+                        pending_cr = false;
+                        continue;
+                    }
+
+                    emit_subprocess_progress(&pending, output_stream);
+                    pending.clear();
+                    pending_cr = false;
+                }
+
+                if *byte == b'\r' {
+                    pending_cr = true;
+                } else if *byte == b'\n' {
+                    emit_subprocess_line(&pending, output_stream);
+                    pending.clear();
+                } else {
+                    pending.push(*byte);
+                }
+
+                if pending.len() >= 4096 {
+                    emit_subprocess_line(&pending, output_stream);
+                    pending.clear();
+                }
             }
         }
 
+        if pending_cr {
+            emit_subprocess_progress(&pending, output_stream);
+        } else {
+            emit_subprocess_line(&pending, output_stream);
+        }
         Ok(())
     })
+}
+
+fn emit_subprocess_line(bytes: &[u8], stream: OutputStream) {
+    let line = String::from_utf8_lossy(bytes);
+    let line = line.trim_end();
+    if !plain_stream_text(line).trim().is_empty() {
+        subprocess_event(&line, stream);
+    }
+}
+
+fn emit_subprocess_progress(bytes: &[u8], stream: OutputStream) {
+    let line = String::from_utf8_lossy(bytes);
+    let line = line.trim_end();
+    if !plain_stream_text(line).trim().is_empty() {
+        subprocess_progress_event(&line, stream);
+    }
+}
+
+fn plain_stream_text(text: &str) -> String {
+    let mut sanitized = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+
+    while let Some(character) = chars.next() {
+        if character == '\u{1b}' {
+            if matches!(chars.peek(), Some('[')) {
+                let _ = chars.next();
+                for next in chars.by_ref() {
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
+                }
+            } else if matches!(chars.peek(), Some(']')) {
+                let _ = chars.next();
+                while let Some(next) = chars.next() {
+                    if next == '\u{7}' {
+                        break;
+                    }
+                    if next == '\u{1b}' && matches!(chars.peek(), Some('\\')) {
+                        let _ = chars.next();
+                        break;
+                    }
+                }
+            } else {
+                let _ = chars.next();
+            }
+        } else if character == '\t' {
+            sanitized.push(' ');
+        } else if !character.is_control() {
+            sanitized.push(character);
+        }
+    }
+
+    sanitized
 }
 
 fn join_output_reader(handle: Option<JoinHandle<Result<()>>>) -> Result<()> {
@@ -686,13 +1096,17 @@ fn join_output_reader(handle: Option<JoinHandle<Result<()>>>) -> Result<()> {
     }
 }
 
-fn start_inline_step(label: &str) {
+fn start_inline_step(label: &str, log_path: &Path) {
     let _ = with_inline(|renderer| {
         renderer.active = Some(ActiveStep {
             label: label.to_owned(),
             started_at: Instant::now(),
             frame: 0,
         });
+        renderer.output.clear();
+        renderer.progress = None;
+        renderer.current_log_path = Some(log_path.to_path_buf());
+        renderer.footer_message = Some(format!("Log: {}", display_path(log_path)));
         renderer.add_event(LineKind::Run, "RUN", label);
         renderer.render_now();
     });
@@ -704,8 +1118,16 @@ fn finish_inline_step(label: &str, started_at: Instant, ok: bool) {
         let message = format!("{label} ({})", elapsed(started_at.elapsed()));
         if ok {
             renderer.add_event(LineKind::Ok, "OK", &message);
+            renderer.footer_message = Some(match renderer.current_log_path.as_ref() {
+                Some(log_path) => format!("OK {message} | log: {}", display_path(log_path)),
+                None => format!("OK {message}"),
+            });
         } else {
             renderer.add_event(LineKind::Err, "ERR", &message);
+            renderer.footer_message = Some(match renderer.current_log_path.as_ref() {
+                Some(log_path) => format!("ERR {message} | log: {}", display_path(log_path)),
+                None => format!("ERR {message}"),
+            });
         }
         renderer.render_now();
     });
@@ -720,13 +1142,24 @@ fn tick_inline_step() {
     });
 }
 
-fn subprocess_event(line: &str, stderr: bool) {
+fn subprocess_event(line: &str, stream: OutputStream) {
     let _ = with_inline(|renderer| {
-        if stderr {
-            renderer.add_event(LineKind::Warn, "WARN", line);
-        } else {
-            renderer.add_event(LineKind::Run, "RUN", line);
+        let plain = plain_stream_text(line);
+        let (label, kind) = stream.classify(&plain);
+        let normalized = plain.trim_start().to_ascii_lowercase();
+        if is_build_progress_line(&normalized) || normalized.starts_with("finished") {
+            renderer.set_progress(kind, label, line);
         }
+        renderer.add_output(kind, label, line);
+        renderer.render_throttled();
+    });
+}
+
+fn subprocess_progress_event(line: &str, stream: OutputStream) {
+    let _ = with_inline(|renderer| {
+        let plain = plain_stream_text(line);
+        let (label, kind) = stream.classify(&plain);
+        renderer.set_progress(kind, label, line);
         renderer.render_throttled();
     });
 }
@@ -742,6 +1175,14 @@ fn error_event(message: impl Display) {
 fn set_prompt(prompt: Option<PromptState>) {
     let _ = with_inline(|renderer| {
         renderer.prompt = prompt;
+        renderer.render_now();
+    });
+}
+
+fn set_inline_footer(message: impl Into<String>) {
+    let message = message.into();
+    let _ = with_inline(|renderer| {
+        renderer.footer_message = Some(message);
         renderer.render_now();
     });
 }
@@ -836,9 +1277,7 @@ impl TimedStep {
         let spinner = if allow_spinner && use_spinner() {
             let spinner = ProgressBar::new_spinner();
             if let Ok(style) = ProgressStyle::with_template("{spinner:.cyan} {msg}") {
-                spinner.set_style(style.tick_strings(&[
-                    ".  ", ".. ", "...", " ..", "  .", "   ",
-                ]));
+                spinner.set_style(style.tick_strings(&[".  ", ".. ", "...", " ..", "  .", "   "]));
             }
             spinner.set_message(label.clone());
             spinner.enable_steady_tick(Duration::from_millis(100));
@@ -895,6 +1334,11 @@ struct InlineRenderer {
     current_phase: Option<String>,
     active: Option<ActiveStep>,
     activity: VecDeque<ActivityLine>,
+    output: VecDeque<OutputLine>,
+    progress: Option<OutputLine>,
+    current_log_path: Option<PathBuf>,
+    footer_message: Option<String>,
+    final_status: Option<FinalStatus>,
     visual: Option<InlineVisual>,
     prompt: Option<PromptState>,
     previous_rows: Vec<Option<RenderedRow>>,
@@ -931,6 +1375,11 @@ impl InlineRenderer {
             current_phase: None,
             active: None,
             activity: VecDeque::new(),
+            output: VecDeque::new(),
+            progress: None,
+            current_log_path: None,
+            footer_message: None,
+            final_status: None,
             visual: None,
             prompt: None,
             previous_rows,
@@ -940,10 +1389,23 @@ impl InlineRenderer {
         Ok(Some(renderer))
     }
 
-    fn finish(mut self) {
+    fn finish(mut self, success: bool, summary: &str) {
         self.active = None;
         self.prompt = None;
         self.visual = None;
+        self.final_status = Some(FinalStatus {
+            success,
+            summary: summary.to_owned(),
+        });
+        let label = if success { "OK" } else { "ERR" };
+        let kind = if success { LineKind::Ok } else { LineKind::Err };
+        let message = if success {
+            format!("{summary} complete")
+        } else {
+            format!("{summary} failed")
+        };
+        self.add_event(kind, label, &message);
+        self.footer_message = Some(format!("{label} {message}"));
         self.render_now();
 
         let mut stdout = std::io::stdout();
@@ -968,6 +1430,25 @@ impl InlineRenderer {
         }
     }
 
+    fn add_output(&mut self, kind: LineKind, label: &'static str, text: &str) {
+        self.output.push_back(OutputLine {
+            kind,
+            label,
+            segments: parse_ansi_segments(text),
+        });
+        while self.output.len() > MAX_OUTPUT_LINES {
+            let _ = self.output.pop_front();
+        }
+    }
+
+    fn set_progress(&mut self, kind: LineKind, label: &'static str, text: &str) {
+        self.progress = Some(OutputLine {
+            kind,
+            label,
+            segments: parse_ansi_segments(text),
+        });
+    }
+
     fn render_throttled(&mut self) {
         if self.last_rendered_at.elapsed() >= INLINE_MIN_RENDER_INTERVAL {
             self.render_now();
@@ -987,11 +1468,7 @@ impl InlineRenderer {
         let frame = self.build_frame();
         let mut stdout = std::io::stdout();
         for (row, rendered) in frame.into_iter().enumerate() {
-            let changed = self
-                .previous_rows
-                .get(row)
-                .and_then(Option::as_ref)
-                != Some(&rendered);
+            let changed = self.previous_rows.get(row).and_then(Option::as_ref) != Some(&rendered);
             if !changed {
                 continue;
             }
@@ -1049,43 +1526,107 @@ impl InlineRenderer {
             .unwrap_or("Starting developer workflow");
         self.put_labeled_line(rows, 2, "RUN", phase, LineKind::Run);
 
-        let active = self
-            .active
-            .as_ref()
-            .map(|step| {
-                format!(
-                    "{} {} ({})",
-                    spinner_frame(step.frame),
-                    step.label,
-                    elapsed(step.started_at.elapsed())
-                )
-            })
-            .unwrap_or_else(|| "Idle".to_owned());
-        self.put_labeled_line(rows, 3, "OK", &active, LineKind::Ok);
+        if let Some(step) = self.active.as_ref() {
+            let active = format!(
+                "{} {} ({})",
+                spinner_frame(step.frame),
+                step.label,
+                elapsed(step.started_at.elapsed())
+            );
+            self.put_labeled_line(rows, 3, "RUN", &active, LineKind::Run);
+        } else if let Some(status) = self.final_status.as_ref() {
+            let label = if status.success { "OK" } else { "ERR" };
+            let kind = if status.success {
+                LineKind::Ok
+            } else {
+                LineKind::Err
+            };
+            let text = if status.success {
+                format!("{} complete", status.summary.as_str())
+            } else {
+                format!("{} failed", status.summary.as_str())
+            };
+            self.put_labeled_line(rows, 3, label, &text, kind);
+        } else {
+            self.put_labeled_line(rows, 3, "OK", "Idle", LineKind::Ok);
+        }
+
+        self.put_line(
+            rows,
+            4,
+            &"-".repeat(self.width as usize),
+            Color::DarkGrey,
+            false,
+        );
     }
 
     fn render_activity(&self, rows: &mut [RenderedRow]) {
-        let body_start = 4;
+        let mut body_start = 5;
         let body_end = self.height.saturating_sub(2);
+        if body_end <= body_start {
+            return;
+        }
+
+        if let Some(progress) = self.progress.as_ref() {
+            self.put_styled_labeled_line(
+                rows,
+                body_start,
+                progress.label,
+                &progress.segments,
+                progress.kind,
+            );
+            body_start += 1;
+        }
+
         let body_lines = body_end.saturating_sub(body_start) as usize;
         if body_lines == 0 {
             return;
         }
 
-        let start = self.activity.len().saturating_sub(body_lines);
-        for (offset, line) in self.activity.iter().skip(start).enumerate() {
+        if self.output.is_empty() && self.active.is_some() {
+            let active = self
+                .active
+                .as_ref()
+                .map(|step| step.label.as_str())
+                .unwrap_or("subprocess");
             self.put_labeled_line(
+                rows,
+                body_start,
+                "RUN",
+                &format!("{active} is running; no output emitted yet"),
+                LineKind::Run,
+            );
+            return;
+        }
+
+        if self.output.is_empty() {
+            let start = self.activity.len().saturating_sub(body_lines);
+            for (offset, line) in self.activity.iter().skip(start).enumerate() {
+                self.put_labeled_line(
+                    rows,
+                    body_start + offset as u16,
+                    line.label,
+                    &line.text,
+                    line.kind,
+                );
+            }
+            return;
+        }
+
+        let start = self.output.len().saturating_sub(body_lines);
+        for (offset, line) in self.output.iter().skip(start).enumerate() {
+            self.put_styled_labeled_line(
                 rows,
                 body_start + offset as u16,
                 line.label,
-                &line.text,
+                &line.segments,
                 line.kind,
             );
         }
     }
 
     fn render_visual(&self, rows: &mut [RenderedRow], visual: &InlineVisual) {
-        let body_start = 4;
+        let body_start = 5;
         let body_end = self.height.saturating_sub(2);
         let body_lines = body_end.saturating_sub(body_start) as usize;
         if body_lines == 0 {
@@ -1108,12 +1649,12 @@ impl InlineRenderer {
     }
 
     fn render_prompt(&self, rows: &mut [RenderedRow], prompt: &PromptState) {
-        let body_start = 4;
+        let body_start = 5;
         let mut line = body_start;
         self.put_labeled_line(rows, line, "RUN", &prompt.message, LineKind::Run);
         line += 1;
 
-        let available = self.height.saturating_sub(line + 2) as usize;
+        let available = self.height.saturating_sub(line + 3) as usize;
         let start = if prompt.selected >= available && available > 0 {
             prompt.selected + 1 - available
         } else {
@@ -1153,10 +1694,21 @@ impl InlineRenderer {
         self.put_line(
             rows,
             self.height.saturating_sub(1),
-            "Bounded Inline active | --plain for classic output | --verbose for live subprocess output",
+            &self.footer_text(),
             Color::DarkGrey,
             false,
         );
+    }
+
+    fn footer_text(&self) -> String {
+        let base = "--plain for classic output | --verbose for raw subprocess output";
+        if let Some(message) = self.footer_message.as_deref() {
+            return format!("{message} | {base}");
+        }
+        if let Some(log_path) = self.current_log_path.as_ref() {
+            return format!("Log: {} | {base}", display_path(log_path));
+        }
+        format!("Bounded Inline active | {base}")
     }
 
     fn put_labeled_line(
@@ -1179,14 +1731,28 @@ impl InlineRenderer {
         ]);
     }
 
-    fn put_line(
+    fn put_styled_labeled_line(
         &self,
         rows: &mut [RenderedRow],
         row: u16,
-        text: &str,
-        color: Color,
-        bold: bool,
+        label: &str,
+        segments: &[RowSegment],
+        kind: LineKind,
     ) {
+        let Some(slot) = rows.get_mut(row as usize) else {
+            return;
+        };
+        let label = format!("{label:<8}");
+        let max_text = self.width.saturating_sub(label.len() as u16) as usize;
+        let mut row_segments = Vec::new();
+        row_segments.push(RowSegment::new(label, kind.color(), true));
+        row_segments.extend(truncate_segments(segments, max_text));
+        *slot = RenderedRow {
+            segments: row_segments,
+        };
+    }
+
+    fn put_line(&self, rows: &mut [RenderedRow], row: u16, text: &str, color: Color, bold: bool) {
         let Some(slot) = rows.get_mut(row as usize) else {
             return;
         };
@@ -1217,6 +1783,9 @@ impl InlineRenderer {
             );
             if segment.bold {
                 let _ = queue!(stdout, SetAttribute(Attribute::Bold));
+            }
+            if segment.dim {
+                let _ = queue!(stdout, SetAttribute(Attribute::Dim));
             }
             let _ = queue!(stdout, Print(&segment.text));
         }
@@ -1257,6 +1826,7 @@ struct RowSegment {
     text: String,
     color: Color,
     bold: bool,
+    dim: bool,
 }
 
 impl RowSegment {
@@ -1265,6 +1835,16 @@ impl RowSegment {
             text: text.into(),
             color,
             bold,
+            dim: false,
+        }
+    }
+
+    fn styled(text: impl Into<String>, color: Color, bold: bool, dim: bool) -> Self {
+        Self {
+            text: text.into(),
+            color,
+            bold,
+            dim,
         }
     }
 
@@ -1273,11 +1853,194 @@ impl RowSegment {
     }
 }
 
+fn truncate_segments(segments: &[RowSegment], width: usize) -> Vec<RowSegment> {
+    if width == 0 {
+        return Vec::new();
+    }
+
+    let mut remaining = width;
+    let mut truncated = Vec::new();
+    for segment in segments {
+        if remaining == 0 {
+            break;
+        }
+
+        let segment_width = segment.visible_width();
+        if segment_width <= remaining {
+            truncated.push(segment.clone());
+            remaining -= segment_width;
+            continue;
+        }
+
+        if remaining <= 3 {
+            truncated.push(RowSegment::styled(
+                ".".repeat(remaining),
+                segment.color,
+                segment.bold,
+                segment.dim,
+            ));
+        } else {
+            let mut text = segment.text.chars().take(remaining - 3).collect::<String>();
+            text.push_str("...");
+            truncated.push(RowSegment::styled(
+                text,
+                segment.color,
+                segment.bold,
+                segment.dim,
+            ));
+        }
+        break;
+    }
+
+    truncated
+}
+
+fn parse_ansi_segments(text: &str) -> Vec<RowSegment> {
+    let mut parser = AnsiStyle::default();
+    let mut segments = Vec::new();
+    let mut buffer = String::new();
+    let mut chars = text.chars().peekable();
+
+    while let Some(character) = chars.next() {
+        if character == '\u{1b}' {
+            flush_ansi_buffer(&mut segments, &mut buffer, parser);
+            if matches!(chars.peek(), Some('[')) {
+                let _ = chars.next();
+                let mut sequence = String::new();
+                for next in chars.by_ref() {
+                    if ('@'..='~').contains(&next) {
+                        if next == 'm' {
+                            parser.apply_sgr(&sequence);
+                        }
+                        break;
+                    }
+                    sequence.push(next);
+                }
+            } else if matches!(chars.peek(), Some(']')) {
+                let _ = chars.next();
+                while let Some(next) = chars.next() {
+                    if next == '\u{7}' {
+                        break;
+                    }
+                    if next == '\u{1b}' && matches!(chars.peek(), Some('\\')) {
+                        let _ = chars.next();
+                        break;
+                    }
+                }
+            } else {
+                let _ = chars.next();
+            }
+        } else if character == '\t' {
+            buffer.push(' ');
+        } else if !character.is_control() {
+            buffer.push(character);
+        }
+    }
+
+    flush_ansi_buffer(&mut segments, &mut buffer, parser);
+    if segments.is_empty() {
+        segments.push(RowSegment::new(String::new(), Color::White, false));
+    }
+    segments
+}
+
+fn flush_ansi_buffer(segments: &mut Vec<RowSegment>, buffer: &mut String, style: AnsiStyle) {
+    if buffer.is_empty() {
+        return;
+    }
+
+    segments.push(RowSegment::styled(
+        std::mem::take(buffer),
+        style.color,
+        style.bold,
+        style.dim,
+    ));
+}
+
+#[derive(Clone, Copy)]
+struct AnsiStyle {
+    color: Color,
+    bold: bool,
+    dim: bool,
+}
+
+impl Default for AnsiStyle {
+    fn default() -> Self {
+        Self {
+            color: Color::White,
+            bold: false,
+            dim: false,
+        }
+    }
+}
+
+impl AnsiStyle {
+    fn apply_sgr(&mut self, sequence: &str) {
+        let mut codes = sequence
+            .split(';')
+            .filter_map(|part| {
+                if part.is_empty() {
+                    Some(0)
+                } else {
+                    part.parse::<u16>().ok()
+                }
+            })
+            .peekable();
+
+        if codes.peek().is_none() {
+            *self = Self::default();
+            return;
+        }
+
+        while let Some(code) = codes.next() {
+            match code {
+                0 => *self = Self::default(),
+                1 => self.bold = true,
+                2 => self.dim = true,
+                22 => {
+                    self.bold = false;
+                    self.dim = false;
+                }
+                30..=37 | 90..=97 => {
+                    if let Some(color) = ansi_color(code) {
+                        self.color = color;
+                    }
+                }
+                39 => self.color = Color::White,
+                _ => {}
+            }
+        }
+    }
+}
+
+fn ansi_color(code: u16) -> Option<Color> {
+    Some(match code {
+        30 => Color::Black,
+        31 => Color::DarkRed,
+        32 => Color::DarkGreen,
+        33 => Color::DarkYellow,
+        34 => Color::DarkBlue,
+        35 => Color::DarkMagenta,
+        36 => Color::DarkCyan,
+        37 => Color::Grey,
+        90 => Color::DarkGrey,
+        91 => Color::Red,
+        92 => Color::Green,
+        93 => Color::Yellow,
+        94 => Color::Blue,
+        95 => Color::Magenta,
+        96 => Color::Cyan,
+        97 => Color::White,
+        _ => return None,
+    })
+}
+
 #[derive(Clone, Copy)]
 enum LineKind {
     Info,
     Path,
     Run,
+    Output,
     Ok,
     Warn,
     Err,
@@ -1290,6 +2053,7 @@ impl LineKind {
             LineKind::Info => Color::DarkGrey,
             LineKind::Path => Color::Cyan,
             LineKind::Run => Color::Blue,
+            LineKind::Output => Color::White,
             LineKind::Ok => Color::Green,
             LineKind::Warn => Color::Yellow,
             LineKind::Err => Color::Red,
@@ -1302,6 +2066,17 @@ struct ActivityLine {
     kind: LineKind,
     label: &'static str,
     text: String,
+}
+
+struct OutputLine {
+    kind: LineKind,
+    label: &'static str,
+    segments: Vec<RowSegment>,
+}
+
+struct FinalStatus {
+    success: bool,
+    summary: String,
 }
 
 struct ActiveStep {

@@ -82,9 +82,7 @@ impl BuildContext {
     }
 
     pub(crate) fn cmake_llama_build_dir(&self, backend: &Backend) -> PathBuf {
-        self.cmake_build_root()
-            .join("llama")
-            .join(backend.as_str())
+        self.cmake_build_root().join("llama").join(backend.as_str())
     }
 
     pub(crate) fn cmake_cli_sys_dir(&self, backend: &Backend) -> PathBuf {
@@ -244,8 +242,8 @@ fn read_child_dirs(root: &Path) -> Result<Vec<PathBuf>> {
     }
 
     let mut dirs = Vec::new();
-    for entry in std::fs::read_dir(root)
-        .with_context(|| format!("failed to read {}", root.display()))?
+    for entry in
+        std::fs::read_dir(root).with_context(|| format!("failed to read {}", root.display()))?
     {
         let path = entry?.path();
         if path.is_dir() {

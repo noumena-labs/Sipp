@@ -1,9 +1,10 @@
 //! Interactive setup guide for the CogentLM workspace.
 
+mod launcher;
+
 use crate::cli::{SetupArgs, SetupProfile};
-use crate::launcher;
 use crate::output;
-use crate::splash;
+use crate::terminal::splash;
 use crate::toolchain;
 use crate::toolchains::{emsdk, ninja, python, vulkan};
 use crate::utils::BuildContext;
@@ -28,7 +29,14 @@ pub fn run(sh: &Shell, ctx: &BuildContext, args: &SetupArgs) -> Result<()> {
 
     output::phase("CogentLM setup");
     output::path("Workspace", ctx.workspace_root());
-    output::detail("Downloads", if args.no_downloads { "disabled" } else { "ask first" });
+    output::detail(
+        "Downloads",
+        if args.no_downloads {
+            "disabled"
+        } else {
+            "ask first"
+        },
+    );
 
     let interactive = can_prompt();
     let profile = select_profile(args, interactive)?;
@@ -69,15 +77,10 @@ fn select_profile(args: &SetupArgs, interactive: bool) -> Result<SetupProfile> {
             SetupProfile::Bindings,
             SetupProfile::Full,
         ];
-        let options = profiles
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>();
-        if let Some(index) = output::prompt_select(
-            "What do you want to set up first?",
-            &options,
-            0,
-        )? {
+        let options = profiles.iter().map(ToString::to_string).collect::<Vec<_>>();
+        if let Some(index) =
+            output::prompt_select("What do you want to set up first?", &options, 0)?
+        {
             return Ok(profiles[index]);
         }
     }
@@ -211,11 +214,7 @@ fn run_downloads(
     Ok(())
 }
 
-fn install_managed_toolchains(
-    sh: &Shell,
-    ctx: &BuildContext,
-    profile: SetupProfile,
-) -> Result<()> {
+fn install_managed_toolchains(sh: &Shell, ctx: &BuildContext, profile: SetupProfile) -> Result<()> {
     output::phase("Managed toolchains");
     match profile {
         SetupProfile::Browser => {
@@ -240,11 +239,17 @@ fn install_javascript_dependencies(sh: &Shell, ctx: &BuildContext) -> Result<()>
     output::phase("JavaScript dependencies");
     {
         let _dir = sh.push_dir(ctx.workspace_root());
-        output::run_command("Installing workspace Bun dependencies", cmd!(sh, "bun install"))?;
+        output::run_command(
+            "Installing workspace Bun dependencies",
+            cmd!(sh, "bun install"),
+        )?;
     }
     {
         let _dir = sh.push_dir(ctx.bindings_node_dir());
-        output::run_command("Installing Node binding Bun dependencies", cmd!(sh, "bun install"))?;
+        output::run_command(
+            "Installing Node binding Bun dependencies",
+            cmd!(sh, "bun install"),
+        )?;
     }
     Ok(())
 }
@@ -256,7 +261,10 @@ fn download_sample_model(sh: &Shell, ctx: &BuildContext) -> Result<()> {
         .with_context(|| format!("failed to create {}", model_dir.display()))?;
     let model_path = sample_model_path(ctx);
     if model_path.exists() {
-        output::success(format!("Using existing sample model at {}", model_path.display()));
+        output::success(format!(
+            "Using existing sample model at {}",
+            model_path.display()
+        ));
         return Ok(());
     }
 
@@ -281,7 +289,10 @@ fn print_examples(ctx: &BuildContext, profile: SetupProfile) {
             let model = model_arg(ctx);
             output::detail("Build Node bindings", "clm build node");
             output::detail("Build Python bindings", "clm build python");
-            output::detail("Node smoke", format!("clm run bindings node --model {model}"));
+            output::detail(
+                "Node smoke",
+                format!("clm run bindings node --model {model}"),
+            );
             output::detail(
                 "Python smoke",
                 format!("clm run bindings python --model {model}"),
@@ -291,7 +302,10 @@ fn print_examples(ctx: &BuildContext, profile: SetupProfile) {
             let model = model_arg(ctx);
             output::detail("Build everything", "clm build all");
             output::detail("Serve benchmark", "clm run apps serve benchmark");
-            output::detail("Binding smokes", format!("clm run bindings all --model {model}"));
+            output::detail(
+                "Binding smokes",
+                format!("clm run bindings all --model {model}"),
+            );
         }
     }
     output::detail("Compatibility", "cargo xtask still works for every command");

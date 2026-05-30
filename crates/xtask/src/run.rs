@@ -159,10 +159,7 @@ fn run_app_tests_only(sh: &Shell, ctx: &BuildContext) -> Result<()> {
         test_cmd = test_cmd.arg(test);
     }
 
-    output::run_command(
-        "Running app TypeScript tests through Bun",
-        test_cmd,
-    )
+    output::run_command("Running app TypeScript tests through Bun", test_cmd)
 }
 
 fn serve_app(sh: &Shell, ctx: &BuildContext, args: &RunAppServeArgs) -> Result<()> {
@@ -248,7 +245,11 @@ fn run_benchmark_browser_smoke(sh: &Shell, ctx: &BuildContext, require_ingest: b
     )
 }
 
-fn run_node_smokes(sh: &Shell, ctx: &BuildContext, options: &BindingSmokeOptions<'_>) -> Result<()> {
+fn run_node_smokes(
+    sh: &Shell,
+    ctx: &BuildContext,
+    options: &BindingSmokeOptions<'_>,
+) -> Result<()> {
     output::phase("Node.js binding smoke");
     output::path("Model", options.model);
     output::detail("Backend", options.backend.as_str());
@@ -311,11 +312,8 @@ fn run_node_smoke(
         smoke_cmd = smoke_cmd.arg("--gpu-layers").arg(gpu_layers.to_string());
     }
 
-    output::run_command(
-        format!("Running Node {backend_value} smoke"),
-        smoke_cmd,
-    )
-    .with_context(|| format!("Node {backend_value} smoke failed"))
+    output::run_command(format!("Running Node {backend_value} smoke"), smoke_cmd)
+        .with_context(|| format!("Node {backend_value} smoke failed"))
 }
 
 fn run_python_smokes(
@@ -388,11 +386,8 @@ fn run_python_smoke(
         smoke_cmd = smoke_cmd.arg("--gpu-layers").arg(gpu_layers.to_string());
     }
 
-    output::run_command(
-        format!("Running Python {backend_value} smoke"),
-        smoke_cmd,
-    )
-    .with_context(|| format!("Python {backend_value} smoke failed"))
+    output::run_command(format!("Running Python {backend_value} smoke"), smoke_cmd)
+        .with_context(|| format!("Python {backend_value} smoke failed"))
 }
 
 fn run_llama_backend_ops(

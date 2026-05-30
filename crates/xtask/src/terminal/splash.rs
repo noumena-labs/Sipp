@@ -1,6 +1,5 @@
 //! Animated setup splash for the interactive CogentLM setup flow.
 
-use crate::output;
 use anyhow::Result;
 use std::thread;
 use std::time::Duration;
@@ -24,18 +23,18 @@ const MAX_DEPTH: u16 = 5;
 
 /// Plays the setup splash inside the bounded inline viewport when available.
 pub(crate) fn play(no_splash: bool) -> Result<bool> {
-    if no_splash || output::no_banner() || !output::inline_active() {
+    if no_splash || super::no_banner() || !super::inline_active() {
         return Ok(false);
     }
 
     for frame in 0..FRAME_COUNT {
-        if !output::visual_frame(frame_lines(frame), frame as usize) {
+        if !super::visual_frame(frame_lines(frame), frame as usize) {
             return Ok(false);
         }
         thread::sleep(FRAME_DELAY);
     }
 
-    output::clear_visual();
+    super::clear_visual();
     Ok(true)
 }
 
@@ -58,7 +57,11 @@ fn frame_lines(frame: u16) -> Vec<String> {
             line.replace_range(scan_column..scan_column + 1, "|");
         }
 
-        let side = if (frame + row as u16) % 2 == 0 { "/" } else { "\\" };
+        let side = if (frame + row as u16) % 2 == 0 {
+            "/"
+        } else {
+            "\\"
+        };
         lines.push(format!(
             "{}{} {}",
             " ".repeat((MAX_DEPTH - depth) as usize + row % 2),
