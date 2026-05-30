@@ -1,8 +1,5 @@
 import { ModelService } from '../models/model-service.js';
-import {
-  QueryError,
-  type TokenBatch,
-} from '../models/types.js';
+import { QueryError } from '../models/types.js';
 import { resolveRuntimeUrls } from '../engine/runtime-assets.js';
 import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.js';
 import { StreamingRingWriter } from '../runtime/streaming-ring.js';
@@ -15,8 +12,8 @@ import {
 let service: ModelService | null = null;
 let serviceConfigFingerprint: string | null = null;
 const activeCalls = new Map<number, AbortController>();
-// SAB streaming ring writer; set on `streaming-init`.  When null, streaming
-// is unavailable and requests with onTokens will be rejected upstream.
+// SAB streaming ring writer; set on `streaming-init`. When null, streaming
+// requests are rejected upstream.
 let streamingRingWriter: StreamingRingWriter | null = null;
 let streamingTickQueued = false;
 
@@ -125,7 +122,7 @@ function streamingOptionsFor(
   callId: number,
   streaming: boolean
 ): {
-  onTokens?: (batch: TokenBatch) => void;
+  streamTokens?: boolean;
   onRequestStarted?: (requestId: number) => void;
 } {
   if (!streaming) {
@@ -134,13 +131,11 @@ function streamingOptionsFor(
   if (streamingRingWriter == null) {
     throw new QueryError(
       'STREAMING_UNAVAILABLE',
-      'Worker streaming requires SharedArrayBuffer. Enable cross-origin isolation or run without onTokens.'
+      'Worker streaming requires SharedArrayBuffer. Enable cross-origin isolation or run without streamTokens.'
     );
   }
   return {
-    // The engine sees a non-null onTokens and selects StreamingBuffer.
-    // The scheduler writes the ring and this callback is ignored.
-    onTokens: () => {},
+    streamTokens: true,
     onRequestStarted: (requestId) =>
       post({ kind: 'streaming-claim', callId, nativeRequestId: requestId }),
   };
@@ -172,7 +167,7 @@ async function handleRequest(message: WorkerOperationRequest): Promise<unknown> 
           ...message.options,
           signal,
           ...streamingOptionsFor(message.callId, message.options.streaming),
-        })
+        }).response
       );
     case 'chat':
       return await withAbortController(message.callId, (signal) =>
@@ -180,14 +175,14 @@ async function handleRequest(message: WorkerOperationRequest): Promise<unknown> 
           ...message.options,
           signal,
           ...streamingOptionsFor(message.callId, message.options.streaming),
-        })
+        }).response
       );
     case 'embed':
       return await withAbortController(message.callId, (signal) =>
         ensureService(message.config).embed(message.input, {
           ...message.options,
           signal,
-        })
+        }).response
       );
   }
 }

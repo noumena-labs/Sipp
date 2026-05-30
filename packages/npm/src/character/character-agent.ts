@@ -10,9 +10,9 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import type {
+  BrowserTextRun,
   ChatInput,
   ChatOptions,
-  GenerationResult,
 } from '../models/types.js';
 import type { ChatMessage } from '../engine/inference-types.js';
 import { sliceUnstreamedSuffix } from '../engine/chat-boundary-sanitizer.js';
@@ -37,7 +37,7 @@ export type RunStatus =
   | 'invalid_response';
 
 export interface CharacterRuntimeEngine {
-  chat(input: ChatInput, options?: ChatOptions): Promise<GenerationResult>;
+  chat(input: ChatInput, options?: ChatOptions): BrowserTextRun;
 }
 
 export interface CharacterRuntimeOptions {
@@ -86,7 +86,7 @@ interface InFlightTurn {
 }
 
 /**
- * A character-driven conversation runtime. Pair one with a CogentEngine and a
+ * A character-driven conversation runtime. Pair one with a CogentClient and a
  * CharacterConfig to get a grammar-constrained, memory-aware chat loop.
  */
 export class CharacterRuntime {
@@ -187,7 +187,7 @@ export class CharacterRuntime {
       const result = await this.engine.chat(messages, {
         ...chatOptions,
         grammar,
-      });
+      }).response;
       const rawText = result.text;
       if (abort.signal.aborted) {
         const status = abort.timedOut() ? 'timed_out' : 'aborted';
@@ -396,13 +396,18 @@ export class CharacterRuntime {
       const queryOptions: ChatOptions = {
         session: contextKey,
         maxTokens: this.maxOutputTokens,
-        onTokens,
+        streamTokens: true,
         signal,
       };
-      const result = await this.engine.chat(messages, {
+      const run = this.engine.chat(messages, {
         ...queryOptions,
         grammar: this.grammarSource,
       });
+      const response = run.response;
+      for await (const batch of run.tokens) {
+        onTokens(batch);
+      }
+      const result = await response;
       const rawText = result.text;
       if (signal.aborted) {
         status = 'aborted';

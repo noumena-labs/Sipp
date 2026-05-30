@@ -991,9 +991,13 @@ test('ModelService loads, lists, tracks current, and queries text models', async
   assert.equal((await service.list())[0]?.loaded, true);
 
   const tokens: string[] = [];
-  const answer = await service.query('hello', {
-    onTokens: (batch) => tokens.push(batch.text),
+  const run = service.query('hello', {
+    streamTokens: true,
   });
+  const answer = await run.response;
+  for await (const batch of run.tokens) {
+    tokens.push(batch.text);
+  }
   assert.equal(answer.text, 'answer:hello');
   assert.deepEqual(tokens, ['token']);
   assert.equal(runtime.lastPrompt, 'hello');
@@ -1006,16 +1010,15 @@ test('ModelService.embed returns embedding results without token streaming', asy
   const result = await service.embed('hello', {
     normalize: false,
     contextKey: 'vectors',
-  });
+  }).response;
 
   assert.deepEqual(result.values, [3, 4]);
   assert.equal(result.pooling, 'mean');
   assert.equal(result.normalized, false);
   assert.equal(runtime.lastPrompt, 'hello');
-  assert.deepEqual(runtime.enqueuedOptions.at(-1), {
-    normalize: false,
-    signal: undefined,
-  });
+  const options = runtime.enqueuedOptions.at(-1) as { normalize?: boolean; signal?: AbortSignal };
+  assert.equal(options.normalize, false);
+  assert.ok(options.signal instanceof AbortSignal);
 });
 
 test('ModelService routes browser lifecycle through the Rust bridge when available', async () => {
@@ -1106,15 +1109,19 @@ test('ModelService.chat renders chat templates and sanitizes assistant boundarie
   runtime.nextOutputText = 'Hello there</assistant>\n<user>ignored';
 
   const tokens: string[] = [];
-  const answer = await service.chat(
+  const run = service.chat(
     [
       { role: 'system', content: 'Be concise.' },
       { role: 'user', content: 'Say hello.' },
     ],
     {
-      onTokens: (batch) => tokens.push(batch.text),
+      streamTokens: true,
     }
   );
+  const answer = await run.response;
+  for await (const batch of run.tokens) {
+    tokens.push(batch.text);
+  }
 
   assert.equal(answer.text, 'Hello there');
   assert.deepEqual(tokens, ['Hello there']);
@@ -1123,14 +1130,14 @@ test('ModelService.chat renders chat templates and sanitizes assistant boundarie
   assert.ok(runtime.lastPrompt?.endsWith('<assistant>\n'));
 });
 
-test('ModelService.chat keeps token emission off when no onTokens callback is provided', async () => {
+test('ModelService.chat keeps token emission off when streamTokens is not requested', async () => {
   const { service, runtime } = createService();
   await service.load(file('text-model.gguf'));
   runtime.nextOutputText = 'Hello there</assistant>\n<user>ignored';
 
   const answer = await service.chat([
     { role: 'user', content: 'Say hello.' },
-  ]);
+  ]).response;
 
   const options = runtime.enqueuedOptions.at(-1);
   assert.equal(answer.text, 'Hello there');
@@ -1160,7 +1167,7 @@ test('ModelService rejects queries during lifecycle transitions and serializes c
   const firstLoad = service.load(file('slow.gguf'));
   await new Promise((resolve) => setTimeout(resolve, 0));
   await assert.rejects(
-    () => service.query('too early'),
+    () => service.query('too early').response,
     (error) => error instanceof QueryError && error.code === 'MODEL_NOT_READY'
   );
 

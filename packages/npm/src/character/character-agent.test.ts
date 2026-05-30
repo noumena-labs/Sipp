@@ -2,10 +2,9 @@
 //
 // character-agent.test.ts
 //
-// - Exercises CharacterRuntime with a fake engine that captures the onTokens
-//   callback from queuePrompt options, then scripts token emission during
-//   runQueuedRequest. Covers the turn-event stream, memory accounting,
-//   cancellation, error handling, and bus mirroring.
+// - Exercises CharacterRuntime with a fake run-handle engine, then scripts
+//   token emission during run execution. Covers the turn-event stream, memory
+//   accounting, cancellation, error handling, and bus mirroring.
 //
 //////////////////////////////////////////////////////////////////////////////
 
@@ -15,6 +14,7 @@ import test from 'node:test';
 import type {
   ChatInput,
   ChatOptions,
+  BrowserTextRun,
   QueryInput,
   QueryOptions,
   GenerationResult,
@@ -113,10 +113,10 @@ function createFakeEngine(): FakeEngine {
         runWaiters.push({ count, resolve });
       });
     },
-    async chat(
+    chat(
       input: ChatInput,
       options?: ChatOptions
-    ): Promise<GenerationResult> {
+    ): BrowserTextRun {
       chatCalls.push({ input, options });
       const messages = Array.isArray(input) ? input : input.messages;
       const rendered = messages
@@ -134,54 +134,74 @@ function createFakeEngine(): FakeEngine {
       flushRunWaiters();
 
       const script = scripts.shift();
-      if (!script) {
-        throw new Error('No scripted response enqueued for query');
-      }
-      if (script.throwOnRun) {
-        throw script.throwOnRun;
-      }
-      if (script.waitBeforeTokens) {
-        await waitForScriptRelease(options?.signal, script.waitBeforeTokens);
-        if (options?.signal?.aborted) {
-          throw new DOMException('Operation aborted.', 'AbortError');
-        }
-      }
-
-      if (options?.signal?.aborted) {
-        throw new DOMException('Operation aborted.', 'AbortError');
-      }
-      let rawOutput = '';
-      let safeOutput = '';
-      const sanitizer = new StreamingBoundaryTextSanitizer([
-        '</assistant>\n',
-        '<system>\n',
-        '<user>\n',
-        '<assistant>\n',
-        '</s>',
-      ]);
-      for (const token of script.tokens) {
-        if (options?.signal?.aborted) {
-          throw new DOMException('Operation aborted.', 'AbortError');
-        }
-        rawOutput += token;
-        const result = sanitizer.consume(token);
-        if (result.safeText.length > 0) {
-          safeOutput += result.safeText;
-          options?.onTokens?.(tokenBatch(result.safeText));
-        }
-        if (result.hitBoundary) {
-          break;
-        }
-      }
-      const flushed = sanitizer.flush();
-      if (flushed.length > 0) {
-        safeOutput += flushed;
-        options?.onTokens?.(tokenBatch(flushed));
-      }
-      void rawOutput;
-      return generationResult(safeOutput.trim());
+      const runPromise = runScript(script, options?.signal);
+      return {
+        response: runPromise.then(({ safeOutput }) => generationResult(safeOutput.trim())),
+        tokens: {
+          async *[Symbol.asyncIterator](): AsyncIterator<TokenBatch> {
+            const result = await runPromise.catch(() => ({ batches: [] as TokenBatch[] }));
+            for (const batch of result.batches) {
+              yield batch;
+            }
+          },
+        },
+        cancel: () => {},
+      };
     },
   };
+}
+
+async function runScript(
+  script: ScriptedResponse | undefined,
+  signal: AbortSignal | undefined
+): Promise<{ safeOutput: string; batches: TokenBatch[] }> {
+  if (!script) {
+    throw new Error('No scripted response enqueued for query');
+  }
+  if (script.throwOnRun) {
+    throw script.throwOnRun;
+  }
+  if (script.waitBeforeTokens) {
+    await waitForScriptRelease(signal, script.waitBeforeTokens);
+    if (signal?.aborted) {
+      throw new DOMException('Operation aborted.', 'AbortError');
+    }
+  }
+
+  if (signal?.aborted) {
+    throw new DOMException('Operation aborted.', 'AbortError');
+  }
+  let rawOutput = '';
+  let safeOutput = '';
+  const batches: TokenBatch[] = [];
+  const sanitizer = new StreamingBoundaryTextSanitizer([
+    '</assistant>\n',
+    '<system>\n',
+    '<user>\n',
+    '<assistant>\n',
+    '</s>',
+  ]);
+  for (const token of script.tokens) {
+    if (signal?.aborted) {
+      throw new DOMException('Operation aborted.', 'AbortError');
+    }
+    rawOutput += token;
+    const result = sanitizer.consume(token);
+    if (result.safeText.length > 0) {
+      safeOutput += result.safeText;
+      batches.push(tokenBatch(result.safeText));
+    }
+    if (result.hitBoundary) {
+      break;
+    }
+  }
+  const flushed = sanitizer.flush();
+  if (flushed.length > 0) {
+    safeOutput += flushed;
+    batches.push(tokenBatch(flushed));
+  }
+  void rawOutput;
+  return { safeOutput, batches };
 }
 
 function generationResult(text: string): GenerationResult {
@@ -279,7 +299,7 @@ test('chat() threads grammar and maxOutputTokens into queuePrompt options', asyn
   assert.equal(opts.maxTokens, 42);
   assert.equal(typeof opts.grammar, 'string');
   assert.ok(opts.grammar && opts.grammar.includes('root'));
-  assert.equal(typeof opts.onTokens, 'function');
+  assert.equal(opts.streamTokens, true);
 });
 
 test('chat() reuses a stable contextKey for each turn', async () => {

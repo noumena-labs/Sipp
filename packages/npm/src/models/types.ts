@@ -185,7 +185,7 @@ export interface QueryOptions {
   session?: string;
   maxTokens?: number;
   signal?: AbortSignal;
-  onTokens?: (batch: TokenBatch) => void;
+  streamTokens?: boolean;
   tokenFlush?: TokenFlushMode;
   grammar?: string;
 }
@@ -351,6 +351,17 @@ export interface EmbeddingResult {
   stats: RequestStats;
 }
 
+export interface BrowserTextRun {
+  readonly response: Promise<GenerationResult>;
+  readonly tokens: AsyncIterable<TokenBatch>;
+  cancel(reason?: unknown): void;
+}
+
+export interface BrowserEmbeddingRun {
+  readonly response: Promise<EmbeddingResult>;
+  cancel(reason?: unknown): void;
+}
+
 export type EngineEvent =
   | { type: 'state'; state: EngineState }
   | { type: 'load-progress'; loadedBytes: number; totalBytes: number | null; assetName?: string }
@@ -387,14 +398,30 @@ export interface ModelLifecycleService {
   current(): ModelInfo | null;
   list(): Promise<ModelInfo[]>;
   remove(id: string): Promise<void>;
-  query(input: QueryInput, options?: QueryOptions): Promise<GenerationResult>;
-  chat(input: ChatInput, options?: ChatOptions): Promise<GenerationResult>;
-  embed(input: string, options?: EmbedOptions): Promise<EmbeddingResult>;
+  query(input: QueryInput, options?: QueryOptions): BrowserTextRun;
+  chat(input: ChatInput, options?: ChatOptions): BrowserTextRun;
+  embed(input: string, options?: EmbedOptions): BrowserEmbeddingRun;
   state(): EngineState;
   subscribeEvents(listener: (event: EngineEvent) => void): () => void;
   currentObservability(): ObservabilitySnapshot;
   subscribeObservability(listener: (event: ObservabilityEvent) => void): () => void;
   close(): void | Promise<void>;
+}
+
+export interface CogentClient {
+  readonly models: {
+    load(source: ModelSource, options?: ModelLoadOptions): Promise<ModelInfo>;
+    current(): ModelInfo | null;
+    list(): Promise<ModelInfo[]>;
+    remove(id: string): Promise<void>;
+  };
+  readonly observability: EngineObservability;
+  query(input: QueryInput, options?: QueryOptions): BrowserTextRun;
+  chat(input: ChatInput, options?: ChatOptions): BrowserTextRun;
+  embed(input: string, options?: EmbedOptions): BrowserEmbeddingRun;
+  state(): EngineState;
+  subscribeEvents(listener: (event: EngineEvent) => void): () => void;
+  close(): Promise<void>;
 }
 
 export type QueryErrorCode =

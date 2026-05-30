@@ -21,7 +21,7 @@ export interface WorkerRuntimeConfig {
 }
 
 // `streaming` carries the caller's intent across the worker boundary because
-// `onTokens` itself can't be cloned through postMessage.  When false the worker
+// Token sinks can't be cloned through postMessage. When false the worker
 // runs the engine in TOKEN_EMISSION_NONE; when true the worker writes tokens
 // to the SAB ring for the main thread to drain.
 export type WorkerQueryOptions =

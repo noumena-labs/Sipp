@@ -1,23 +1,24 @@
 import { ModelService } from '../models/model-service.js';
-import { WorkerModelServiceClient } from '../worker/model-service-client.js';
 import {
   QueryError,
+  type CogentClient as CogentClientShape,
+  type BrowserEmbeddingRun,
+  type BrowserTextRun,
   type ChatInput,
   type ChatOptions,
   type EmbedOptions,
-  type EmbeddingResult,
   type EngineEvent,
-  type EngineState,
   type EngineObservability,
+  type EngineState,
   type ModelLifecycleService,
   type ModelInfo,
   type ModelLoadOptions,
   type ModelSource,
   type QueryInput,
   type QueryOptions,
-  type GenerationResult,
 } from '../models/types.js';
 import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.js';
+import { WorkerModelServiceClient } from '../worker/model-service-client.js';
 import type { BackendObservability } from './inference-types.js';
 
 export interface EngineModuleOptions {
@@ -25,7 +26,7 @@ export interface EngineModuleOptions {
   [key: string]: unknown;
 }
 
-export interface CogentEngineOptions {
+export interface CogentClientOptions {
   moduleUrl?: string;
   wasmUrl?: string;
   pthreadModuleUrl?: string;
@@ -61,7 +62,14 @@ export interface BrowserRuntimeSmokeResult {
   webgpuReady: boolean;
 }
 
-function shouldUseWorker(config: CogentEngineOptions): boolean {
+interface CogentModelManager {
+  load(source: ModelSource, options?: ModelLoadOptions): Promise<ModelInfo>;
+  current(): ModelInfo | null;
+  list(): Promise<ModelInfo[]>;
+  remove(id: string): Promise<void>;
+}
+
+function shouldUseWorker(config: CogentClientOptions): boolean {
   if (config.executionMode === 'main-thread') {
     return false;
   }
@@ -76,20 +84,16 @@ function shouldUseWorker(config: CogentEngineOptions): boolean {
   );
 }
 
-interface CogentModelManager {
-  load(source: ModelSource, options?: ModelLoadOptions): Promise<ModelInfo>;
-  current(): ModelInfo | null;
-  list(): Promise<ModelInfo[]>;
-  remove(id: string): Promise<void>;
-}
-
-export class CogentEngine {
+/**
+ * Browser application client that owns one local model lifecycle service.
+ */
+export class CogentClient implements CogentClientShape {
   public readonly models: CogentModelManager;
   public readonly observability: EngineObservability;
   #service: ModelLifecycleService;
   #closed = false;
 
-  private constructor(options: CogentEngineOptions = {}) {
+  public constructor(options: CogentClientOptions = {}) {
     this.#service = shouldUseWorker(options)
       ? new WorkerModelServiceClient(options)
       : new ModelService(new MainThreadEngineRuntime(options));
@@ -123,12 +127,8 @@ export class CogentEngine {
     };
   }
 
-  public static async create(options: CogentEngineOptions = {}): Promise<CogentEngine> {
-    return new CogentEngine(options);
-  }
-
   public static async browserRuntimeSmoke(
-    options: CogentEngineOptions = {}
+    options: CogentClientOptions = {}
   ): Promise<BrowserRuntimeSmokeResult> {
     const runtime = new MainThreadEngineRuntime({
       ...options,
@@ -141,19 +141,19 @@ export class CogentEngine {
     }
   }
 
-  public async query(input: QueryInput, options?: QueryOptions): Promise<GenerationResult> {
+  public query(input: QueryInput, options: QueryOptions = {}): BrowserTextRun {
     this.assertOpen();
-    return await this.#service.query(input, options);
+    return this.#service.query(input, options);
   }
 
-  public async chat(input: ChatInput, options: ChatOptions = {}): Promise<GenerationResult> {
+  public chat(input: ChatInput, options: ChatOptions = {}): BrowserTextRun {
     this.assertOpen();
-    return await this.#service.chat(input, options);
+    return this.#service.chat(input, options);
   }
 
-  public async embed(input: string, options: EmbedOptions = {}): Promise<EmbeddingResult> {
+  public embed(input: string, options: EmbedOptions = {}): BrowserEmbeddingRun {
     this.assertOpen();
-    return await this.#service.embed(input, options);
+    return this.#service.embed(input, options);
   }
 
   public state(): EngineState {
@@ -167,16 +167,14 @@ export class CogentEngine {
   }
 
   public async close(): Promise<void> {
-    if (this.#closed) {
-      return;
-    }
+    this.assertOpen();
     this.#closed = true;
     await this.#service.close();
   }
 
   private assertOpen(): void {
     if (this.#closed) {
-      throw new QueryError('ENGINE_CLOSED', 'CogentEngine is closed.');
+      throw new QueryError('ENGINE_CLOSED', 'CogentClient is closed.');
     }
   }
 }

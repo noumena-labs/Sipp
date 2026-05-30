@@ -1,4 +1,4 @@
-import type { CogentEngineOptions } from '../engine/cogent-engine.js';
+import type { CogentClientOptions } from '../engine/browser-client.js';
 import {
   resolveOptimizedPackageAssetUrl,
   resolveRuntimeUrls,
@@ -11,6 +11,7 @@ import {
   DEFAULT_STREAMING_RING_CAPACITY,
 } from '../runtime/streaming-ring.js';
 import { createAbortError } from '../utils/abort.js';
+import { createBrowserEmbeddingRun, createBrowserTextRun } from '../models/token-queue.js';
 import {
   WorkerRequestMessage,
   WorkerResponseMessage,
@@ -21,6 +22,8 @@ import {
   QueryError,
   type EngineEvent,
   type EngineState,
+  type BrowserEmbeddingRun,
+  type BrowserTextRun,
   type ObservabilityEvent,
   type ObservabilitySnapshot,
   type ModelInfo,
@@ -42,14 +45,14 @@ interface PendingWorkerCall {
   resolve: (value: unknown) => void;
   reject: (error: unknown) => void;
   onProgress?: ModelLoadOptions['onProgress'];
-  onTokens?: QueryOptions['onTokens'] | ChatOptions['onTokens'];
+  onTokens?: (batch: TokenBatch) => void;
   tokenFlush?: TokenFlushMode;
 }
 
 interface WorkerCallOptions {
   signal?: AbortSignal;
   onProgress?: ModelLoadOptions['onProgress'];
-  onTokens?: QueryOptions['onTokens'] | ChatOptions['onTokens'];
+  onTokens?: (batch: TokenBatch) => void;
   tokenFlush?: TokenFlushMode;
 }
 
@@ -65,7 +68,7 @@ export function getOptimizedDefaultWorkerUrl(importerUrl: string = import.meta.u
   return resolveOptimizedPackageAssetUrl('dist/esm/worker/model-service-entry.js', importerUrl);
 }
 
-function toWorkerRuntimeConfig(config: CogentEngineOptions): WorkerRuntimeConfig {
+function toWorkerRuntimeConfig(config: CogentClientOptions): WorkerRuntimeConfig {
   if (typeof config.moduleOptions?.locateFile === 'function') {
     throw new Error(
       'Worker mode does not support moduleOptions.locateFile. Provide explicit moduleUrl/wasmUrl instead.'
@@ -108,11 +111,11 @@ function toWorkerQueryOptions(options: QueryOptions = {}): WorkerQueryOptions {
     session: options.session,
     maxTokens: options.maxTokens,
     grammar: options.grammar,
-    tokenFlush: options.onTokens == null ? undefined : options.tokenFlush ?? 'token',
+    tokenFlush: options.streamTokens === true ? options.tokenFlush ?? 'token' : undefined,
     // Carry the caller's streaming intent across the worker boundary.  When
     // false, the worker leaves engine emission_mode at NONE — required to get
     // a real native baseline TPS comparison from a worker-backed engine.
-    streaming: options.onTokens != null,
+    streaming: options.streamTokens === true,
   };
 }
 
@@ -137,7 +140,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     { framesSent: number; bytesSent: number; batchesSent: number }
   >();
 
-  constructor(private readonly config: CogentEngineOptions = {}) {
+  constructor(private readonly config: CogentClientOptions = {}) {
     this.workerConfig = toWorkerRuntimeConfig(config);
   }
 
@@ -197,8 +200,18 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     this.currentSnapshot = null;
   }
 
-  public async query(input: QueryInput, options: QueryOptions = {}): Promise<GenerationResult> {
+  public query(input: QueryInput, options: QueryOptions = {}): BrowserTextRun {
     this.assertOpen();
+    return createBrowserTextRun(options, (emitTokens, signal) =>
+      this.queryResponse(input, { ...options, signal }, emitTokens)
+    );
+  }
+
+  private async queryResponse(
+    input: QueryInput,
+    options: QueryOptions,
+    emitTokens: ((batch: TokenBatch) => void) | undefined
+  ): Promise<GenerationResult> {
     return (await this.callWorker(
       {
         kind: 'query',
@@ -208,14 +221,24 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       },
       {
         signal: options.signal,
-        onTokens: options.onTokens,
-        tokenFlush: options.onTokens == null ? undefined : options.tokenFlush ?? 'token',
+        onTokens: emitTokens,
+        tokenFlush: emitTokens == null ? undefined : options.tokenFlush ?? 'token',
       }
     )) as GenerationResult;
   }
 
-  public async chat(input: ChatInput, options: ChatOptions = {}): Promise<GenerationResult> {
+  public chat(input: ChatInput, options: ChatOptions = {}): BrowserTextRun {
     this.assertOpen();
+    return createBrowserTextRun(options, (emitTokens, signal) =>
+      this.chatResponse(input, { ...options, signal }, emitTokens)
+    );
+  }
+
+  private async chatResponse(
+    input: ChatInput,
+    options: ChatOptions,
+    emitTokens: ((batch: TokenBatch) => void) | undefined
+  ): Promise<GenerationResult> {
     return (await this.callWorker(
       {
         kind: 'chat',
@@ -225,14 +248,23 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       },
       {
         signal: options.signal,
-        onTokens: options.onTokens,
-        tokenFlush: options.onTokens == null ? undefined : options.tokenFlush ?? 'token',
+        onTokens: emitTokens,
+        tokenFlush: emitTokens == null ? undefined : options.tokenFlush ?? 'token',
       }
     )) as GenerationResult;
   }
 
-  public async embed(input: string, options: EmbedOptions = {}): Promise<EmbeddingResult> {
+  public embed(input: string, options: EmbedOptions = {}): BrowserEmbeddingRun {
     this.assertOpen();
+    return createBrowserEmbeddingRun(options.signal, (signal) =>
+      this.embedResponse(input, { ...options, signal })
+    );
+  }
+
+  private async embedResponse(
+    input: string,
+    options: EmbedOptions
+  ): Promise<EmbeddingResult> {
     return (await this.callWorker(
       {
         kind: 'embed',
@@ -284,7 +316,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     this.callIdByNativeRequestId.clear();
     this.streamStatsByCallId.clear();
     for (const pending of this.pendingCalls.values()) {
-      pending.reject(new QueryError('ENGINE_CLOSED', 'CogentEngine is closed.'));
+      pending.reject(new QueryError('ENGINE_CLOSED', 'CogentClient is closed.'));
     }
     this.pendingCalls.clear();
 
@@ -304,7 +336,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
 
   private assertOpen(): void {
     if (this.closed) {
-      throw new QueryError('ENGINE_CLOSED', 'CogentEngine is closed.');
+      throw new QueryError('ENGINE_CLOSED', 'CogentClient is closed.');
     }
   }
 
@@ -360,7 +392,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     if (this.streamingRingBuffer == null || this.streamingRingReader == null) {
       throw new QueryError(
         'STREAMING_UNAVAILABLE',
-        'Worker streaming requires SharedArrayBuffer. Enable cross-origin isolation or run without onTokens.'
+        'Worker streaming requires SharedArrayBuffer. Enable cross-origin isolation or run without streamTokens.'
       );
     }
   }

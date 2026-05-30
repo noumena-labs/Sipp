@@ -1,8 +1,8 @@
 import type {
   BrowserRuntimeSmokeResult,
-  CogentEngineOptions,
+  CogentClientOptions,
   EngineModuleOptions,
-} from '../../engine/cogent-engine.js';
+} from '../../engine/browser-client.js';
 import type {
   BackendObservability,
   ChatMessage,
@@ -315,7 +315,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   // SAB fast path; otherwise the scheduler delivers TokenBatch values through
   // callbacks/postMessage.
   private streamingRingWriter: StreamingRingWriter | null = null;
-  constructor(private config: CogentEngineOptions = {}) {
+  constructor(private config: CogentClientOptions = {}) {
     this.executionMode = config.executionMode === 'worker' ? 'worker' : 'main-thread';
     this.transportObservability = this.createTransportObservability();
     this.modelLoader = new MainThreadModelLoader(this.config);

@@ -1,4 +1,4 @@
-import type { CogentEngineOptions } from '../../engine/cogent-engine.js';
+import type { CogentClientOptions } from '../../engine/browser-client.js';
 import type {
   InternalBundleDescriptor,
   ModelBundleShard,
@@ -30,7 +30,7 @@ export class MainThreadModelLoader {
   private mountedShards: ModelBundleShard[] = [];
   private mountedProjectorPath: string | null = null;
 
-  constructor(private readonly config: CogentEngineOptions) {}
+  constructor(private readonly config: CogentClientOptions) {}
 
   public cleanup(module: EngineModule): void {
     this.unmountAll(module);

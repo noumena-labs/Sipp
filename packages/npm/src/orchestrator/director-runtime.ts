@@ -9,10 +9,10 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import type {
+  BrowserTextRun,
   ChatInput,
   ChatOptions,
   ModelInfo,
-  GenerationResult,
 } from '../models/types.js';
 import type { ChatMessage } from '../engine/inference-types.js';
 import { createTimedAbortController } from '../utils/abort.js';
@@ -33,7 +33,7 @@ import type {
 } from './director-types.js';
 
 export interface DirectorRuntimeEngine {
-  chat(input: ChatInput, options?: ChatOptions): Promise<GenerationResult>;
+  chat(input: ChatInput, options?: ChatOptions): BrowserTextRun;
   models?: {
     current(): Pick<ModelInfo, 'mediaMarker'> | null;
   };
@@ -126,7 +126,7 @@ export class DirectorRuntime {
           ...queryOptions,
           grammar,
         }
-      );
+      ).response;
       const rawText = result.text;
       if (abort.signal.aborted) {
         const status = abort.timedOut() ? 'timed_out' : 'aborted';

@@ -22,6 +22,8 @@ import {
   QueryError,
   type AssetRecord,
   type BrowserBackendPreference,
+  type BrowserEmbeddingRun,
+  type BrowserTextRun,
   type ChatInput,
   type ChatOptions,
   type ClassifiedAsset,
@@ -49,6 +51,7 @@ import {
   type TokenBatch,
   type RegistryManifest,
 } from './types.js';
+import { createBrowserEmbeddingRun, createBrowserTextRun } from './token-queue.js';
 import {
   embeddingResultFromGenerateResponse,
   generationResultFromGenerateResponse,
@@ -302,7 +305,17 @@ export class ModelService implements ModelLifecycleService {
     });
   }
 
-  public async query(input: QueryInput, options: QueryOptions = {}): Promise<GenerationResult> {
+  public query(input: QueryInput, options: QueryOptions = {}): BrowserTextRun {
+    return createBrowserTextRun(options, (emitTokens, signal) =>
+      this.queryResponse(input, { ...options, signal }, emitTokens)
+    );
+  }
+
+  private async queryResponse(
+    input: QueryInput,
+    options: QueryOptions,
+    emitTokens: ((batch: TokenBatch) => void) | undefined
+  ): Promise<GenerationResult> {
     if (this.transitioning) {
       throw new QueryError('MODEL_NOT_READY', 'A model lifecycle transition is in progress.');
     }
@@ -321,7 +334,7 @@ export class ModelService implements ModelLifecycleService {
       }
     }
     const response = await this.runRuntimeRequest(
-      options,
+      { ...options, onTokens: emitTokens },
       media,
       (session, promptOptions) => this.runtime.enqueueQuery(session, prompt, promptOptions),
       'Model query'
@@ -331,7 +344,16 @@ export class ModelService implements ModelLifecycleService {
     });
   }
 
-  public async embed(input: string, options: EmbedOptions = {}): Promise<EmbeddingResult> {
+  public embed(input: string, options: EmbedOptions = {}): BrowserEmbeddingRun {
+    return createBrowserEmbeddingRun(options.signal, (signal) =>
+      this.embedResponse(input, { ...options, signal })
+    );
+  }
+
+  private async embedResponse(
+    input: string,
+    options: EmbedOptions
+  ): Promise<EmbeddingResult> {
     if (this.transitioning) {
       throw new QueryError('MODEL_NOT_READY', 'A model lifecycle transition is in progress.');
     }
@@ -457,7 +479,17 @@ export class ModelService implements ModelLifecycleService {
     }
   }
 
-  public async chat(input: ChatInput, options: ChatOptions = {}): Promise<GenerationResult> {
+  public chat(input: ChatInput, options: ChatOptions = {}): BrowserTextRun {
+    return createBrowserTextRun(options, (emitTokens, signal) =>
+      this.chatResponse(input, { ...options, signal }, emitTokens)
+    );
+  }
+
+  private async chatResponse(
+    input: ChatInput,
+    options: ChatOptions,
+    emitTokens: ((batch: TokenBatch) => void) | undefined
+  ): Promise<GenerationResult> {
     if (this.transitioning) {
       throw new QueryError('MODEL_NOT_READY', 'A model lifecycle transition is in progress.');
     }
@@ -480,7 +512,7 @@ export class ModelService implements ModelLifecycleService {
 
     let safeSequence = 0;
     let lastBatch: TokenBatch | null = null;
-    const shouldStreamTokens = options.onTokens != null;
+    const shouldStreamTokens = emitTokens != null;
     const consumeOutputTokens = (batch: TokenBatch): void => {
       lastBatch = batch;
       const text = batch.text;
@@ -491,7 +523,7 @@ export class ModelService implements ModelLifecycleService {
       const result = outputSanitizer.consume(text);
       if (result.safeText.length > 0) {
         assistantText += result.safeText;
-        options.onTokens?.(
+        emitTokens?.(
           tokenBatchFromText(batch.requestId, batch.streamId, safeSequence++, result.safeText)
         );
       }
@@ -506,7 +538,7 @@ export class ModelService implements ModelLifecycleService {
       if (safeText.length > 0) {
         assistantText += safeText;
         const source = lastBatch ?? tokenBatchFromText('0', 0, safeSequence, safeText);
-        options.onTokens?.(
+        emitTokens?.(
           tokenBatchFromText(source.requestId, source.streamId, safeSequence++, safeText)
         );
       }

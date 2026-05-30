@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type {
+  BrowserTextRun,
   ChatInput,
   ChatOptions,
   GenerationResult,
@@ -24,10 +25,10 @@ class FakeEngine implements DirectorRuntimeEngine {
     current: () => ({ mediaMarker: this.mediaMarker }),
   };
 
-  public async chat(
+  public chat(
     input: ChatInput,
     options?: ChatOptions
-  ): Promise<GenerationResult> {
+  ): BrowserTextRun {
     this.queryCalls += 1;
     if (typeof options === 'object' && options) {
       this.grammar = options.grammar;
@@ -37,25 +38,28 @@ class FakeEngine implements DirectorRuntimeEngine {
     this.prompt = messages.map((message) => `${message.role}: ${message.content}`).join('\n');
 
     if (this.waitForAbort) {
-      await new Promise<void>((resolve) => {
+      const response = new Promise<GenerationResult>((_resolve, reject) => {
         const signal = options?.signal;
         if (!signal) return;
         if (signal.aborted) {
-          resolve();
+          reject(new DOMException('Operation aborted.', 'AbortError'));
           return;
         }
-        signal.addEventListener('abort', () => resolve(), { once: true });
+        signal.addEventListener(
+          'abort',
+          () => reject(new DOMException('Operation aborted.', 'AbortError')),
+          { once: true }
+        );
       });
-      throw new DOMException('Operation aborted.', 'AbortError');
+      return textRun(response);
     }
 
     if (this.fail) {
-      throw new Error('boom');
+      return textRun(Promise.reject(new Error('boom')));
     }
 
     const safeText = sanitizeFakeChatOutput(this.outputText);
-    options?.onTokens?.(tokenBatch(safeText));
-    return generationResult(safeText);
+    return textRun(Promise.resolve(generationResult(safeText)), [tokenBatch(safeText)]);
   }
 }
 
@@ -88,6 +92,23 @@ function tokenBatch(text: string): TokenBatch {
       framesDropped: 0,
       batchesSent: 1,
     },
+  };
+}
+
+function textRun(
+  response: Promise<GenerationResult>,
+  batches: readonly TokenBatch[] = []
+): BrowserTextRun {
+  return {
+    response,
+    tokens: {
+      async *[Symbol.asyncIterator](): AsyncIterator<TokenBatch> {
+        for (const batch of batches) {
+          yield batch;
+        }
+      },
+    },
+    cancel: () => {},
   };
 }
 

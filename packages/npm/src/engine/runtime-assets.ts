@@ -1,4 +1,4 @@
-import type { CogentEngineOptions } from './cogent-engine.js';
+import type { CogentClientOptions } from './browser-client.js';
 import { currentLocationOrigin, resolveUrl } from '../utils/url.js';
 
 const VITE_OPTIMIZED_DEPS_SEGMENT = '/node_modules/.vite/deps/';
@@ -63,7 +63,7 @@ export function supportsWasmPthreads(): boolean {
 
 export function resolveRuntimeThreadingMode(
   config: Pick<
-    CogentEngineOptions,
+    CogentClientOptions,
     'moduleUrl' | 'wasmUrl' | 'pthreadModuleUrl' | 'pthreadWasmUrl' | 'wasmThreading'
   >
 ): WasmThreadingMode {
@@ -122,7 +122,7 @@ function getDefaultRuntimeUrlsForThreading(
   };
 }
 
-function resolveTrustedOrigins(configuredOrigins: CogentEngineOptions['trustedOrigins']): Set<string> {
+function resolveTrustedOrigins(configuredOrigins: CogentClientOptions['trustedOrigins']): Set<string> {
   if (configuredOrigins != null && configuredOrigins.length > 0) {
     const allowed = new Set<string>();
     for (const originValue of configuredOrigins) {
@@ -137,7 +137,7 @@ function resolveTrustedOrigins(configuredOrigins: CogentEngineOptions['trustedOr
 
 export function resolveRuntimeUrls(
   config: Pick<
-    CogentEngineOptions,
+    CogentClientOptions,
     | 'moduleUrl'
     | 'wasmUrl'
     | 'pthreadModuleUrl'
@@ -153,13 +153,13 @@ export function resolveRuntimeUrls(
 
   if ((configuredModuleUrl == null) !== (configuredWasmUrl == null)) {
     throw new Error(
-      'Both "moduleUrl" and "wasmUrl" must be provided when overriding CogentEngine runtime assets.'
+      'Both "moduleUrl" and "wasmUrl" must be provided when overriding CogentClient runtime assets.'
     );
   }
 
   if ((configuredPthreadModuleUrl == null) !== (configuredPthreadWasmUrl == null)) {
     throw new Error(
-      'Both "pthreadModuleUrl" and "pthreadWasmUrl" must be provided when overriding CogentEngine pthread runtime assets.'
+      'Both "pthreadModuleUrl" and "pthreadWasmUrl" must be provided when overriding CogentClient pthread runtime assets.'
     );
   }
 

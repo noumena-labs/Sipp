@@ -29,7 +29,7 @@
     "README.md"
   ],
   "scripts": {
-    "clean:ts": "node -e \"const fs=require('node:fs'); fs.rmSync('dist/esm',{recursive:true,force:true}); fs.rmSync('dist/types',{recursive:true,force:true});\"",
+    "clean:ts": "node -e \"const fs=require('node:fs'); for (const p of ['../../.build/artifacts/npm/cogentlm-browser/dist/esm','../../.build/artifacts/npm/cogentlm-browser/dist/types','dist/esm','dist/types']) fs.rmSync(p,{recursive:true,force:true});\"",
     "build:ts": "tsc -p tsconfig.json",
     "build:stage": "node scripts/stage-package.mjs",
     "build": "bun run clean:ts && bun run build:ts && bun run build:stage",
