@@ -42,17 +42,18 @@ pub fn run(sh: &Shell, ctx: &BuildContext, command: RunCommands) -> Result<()> {
 
 fn run_all(sh: &Shell, ctx: &BuildContext, args: &RunAllArgs) -> Result<()> {
     let started_at = Instant::now();
+    let binding_options = binding_options_from_all(args)?;
     output::phase("Run all finite developer workflows");
     output::path("Workspace", ctx.workspace_root());
-    output::path("Model", &args.model);
+    output::path("Model", &binding_options.model);
     output::detail("Backend", args.backend.as_str());
 
     build_all_apps(sh, ctx)?;
     output::phase("App TypeScript tests");
     run_app_tests_only(sh, ctx)?;
     run_binding_browser_inner(sh, ctx, &RunBrowserArgs { ingest: false }, false)?;
-    run_node_smokes(sh, ctx, &binding_options_from_all(args))?;
-    run_python_smokes(sh, ctx, &binding_options_from_all(args))?;
+    run_node_smokes(sh, ctx, &binding_options)?;
+    run_python_smokes(sh, ctx, &binding_options)?;
     run_llama_backend_ops(
         sh,
         ctx,
@@ -83,16 +84,19 @@ fn run_apps(sh: &Shell, ctx: &BuildContext, command: RunAppsCommands) -> Result<
 fn run_bindings(sh: &Shell, ctx: &BuildContext, command: RunBindingsCommands) -> Result<()> {
     match command {
         RunBindingsCommands::All(args) => {
+            let options = binding_options_from_smoke(&args)?;
             run_binding_browser(sh, ctx, &RunBrowserArgs { ingest: false })?;
-            run_node_smokes(sh, ctx, &binding_options_from_smoke(&args))?;
-            run_python_smokes(sh, ctx, &binding_options_from_smoke(&args))
+            run_node_smokes(sh, ctx, &options)?;
+            run_python_smokes(sh, ctx, &options)
         }
         RunBindingsCommands::Browser(args) => run_binding_browser(sh, ctx, &args),
         RunBindingsCommands::Node(args) => {
-            run_node_smokes(sh, ctx, &binding_options_from_smoke(&args))
+            let options = binding_options_from_smoke(&args)?;
+            run_node_smokes(sh, ctx, &options)
         }
         RunBindingsCommands::Python(args) => {
-            run_python_smokes(sh, ctx, &binding_options_from_smoke(&args))
+            let options = binding_options_from_smoke(&args)?;
+            run_python_smokes(sh, ctx, &options)
         }
     }
 }
@@ -251,7 +255,7 @@ fn run_node_smokes(
     options: &BindingSmokeOptions<'_>,
 ) -> Result<()> {
     output::phase("Node.js binding smoke");
-    output::path("Model", options.model);
+    output::path("Model", &options.model);
     output::detail("Backend", options.backend.as_str());
 
     if *options.backend == Backend::All {
@@ -296,7 +300,7 @@ fn run_node_smoke(
     options: &BindingSmokeOptions<'_>,
 ) -> Result<()> {
     let backend_value = backend.as_str();
-    let model = options.model;
+    let model = &options.model;
     let prompt = options.prompt;
     let smoke_script = NODE_SMOKE_SCRIPT;
     let node_dir = ctx.bindings_node_dir();
@@ -307,6 +311,8 @@ fn run_node_smoke(
         "node {smoke_script} {model} {prompt} --backend {backend_value}"
     )
     .env("COGENTLM_NODE_BACKEND", backend_value);
+
+    smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(backend))?;
 
     if let Some(gpu_layers) = options.gpu_layers {
         smoke_cmd = smoke_cmd.arg("--gpu-layers").arg(gpu_layers.to_string());
@@ -322,7 +328,7 @@ fn run_python_smokes(
     options: &BindingSmokeOptions<'_>,
 ) -> Result<()> {
     output::phase("Python binding smoke");
-    output::path("Model", options.model);
+    output::path("Model", &options.model);
     output::detail("Backend", options.backend.as_str());
 
     if *options.backend == Backend::All {
@@ -367,20 +373,23 @@ fn run_python_smoke(
     options: &BindingSmokeOptions<'_>,
 ) -> Result<()> {
     let backend_value = backend.as_str();
-    let model = options.model;
+    let model = &options.model;
     let prompt = options.prompt;
     let smoke_script = PYTHON_SMOKE_SCRIPT;
     let python_dir = ctx.bindings_python_dir();
     let python_source_dir = python_dir.join("python");
     let uv_exe = setup_uv(sh, ctx)?;
     let _dir = sh.push_dir(&python_dir);
+    let python_exe = ensure_python_venv(sh, &uv_exe, &python_dir)?;
 
     let mut smoke_cmd = cmd!(
         sh,
-        "{uv_exe} run python {smoke_script} {model} {prompt} --backend {backend_value}"
+        "{python_exe} {smoke_script} {model} {prompt} --backend {backend_value}"
     )
     .env("COGENTLM_PYTHON_BACKEND", backend_value)
     .env("PYTHONPATH", python_source_dir);
+
+    smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(backend))?;
 
     if let Some(gpu_layers) = options.gpu_layers {
         smoke_cmd = smoke_cmd.arg("--gpu-layers").arg(gpu_layers.to_string());
@@ -621,6 +630,33 @@ fn is_python_extension(path: &Path) -> bool {
     )
 }
 
+fn ensure_python_venv(sh: &Shell, uv_exe: &Path, python_dir: &Path) -> Result<PathBuf> {
+    let venv_dir = python_dir.join(".venv");
+    if !venv_dir.exists() {
+        output::run_command(
+            "Creating local Python virtual environment",
+            cmd!(sh, "{uv_exe} venv --python 3.12"),
+        )?;
+    }
+
+    let python_exe = python_venv_exe(&venv_dir);
+    if !python_exe.is_file() {
+        anyhow::bail!(
+            "Python virtual environment is missing {}",
+            python_exe.display()
+        );
+    }
+    Ok(python_exe)
+}
+
+fn python_venv_exe(venv_dir: &Path) -> PathBuf {
+    if cfg!(windows) {
+        venv_dir.join("Scripts").join("python.exe")
+    } else {
+        venv_dir.join("bin").join("python")
+    }
+}
+
 fn find_llama_backend_ops_exe(build_dir: &Path) -> Result<PathBuf> {
     let exe_name = if cfg!(windows) {
         format!("{LLAMA_BACKEND_OPS_TARGET}.exe")
@@ -670,26 +706,39 @@ fn find_file_recursive(root: &Path, file_name: &str) -> Result<Option<PathBuf>> 
 }
 
 struct BindingSmokeOptions<'a> {
-    model: &'a Path,
+    model: PathBuf,
     backend: &'a Backend,
     prompt: &'a str,
     gpu_layers: Option<u32>,
 }
 
-fn binding_options_from_smoke(args: &RunBindingSmokeArgs) -> BindingSmokeOptions<'_> {
-    BindingSmokeOptions {
-        model: &args.model,
+fn binding_options_from_smoke(args: &RunBindingSmokeArgs) -> Result<BindingSmokeOptions<'_>> {
+    Ok(BindingSmokeOptions {
+        model: resolve_smoke_model_path(&args.model)?,
         backend: &args.backend,
         prompt: &args.prompt,
         gpu_layers: args.gpu_layers,
-    }
+    })
 }
 
-fn binding_options_from_all(args: &RunAllArgs) -> BindingSmokeOptions<'_> {
-    BindingSmokeOptions {
-        model: &args.model,
+fn binding_options_from_all(args: &RunAllArgs) -> Result<BindingSmokeOptions<'_>> {
+    Ok(BindingSmokeOptions {
+        model: resolve_smoke_model_path(&args.model)?,
         backend: &args.backend,
         prompt: &args.prompt,
         gpu_layers: args.gpu_layers,
-    }
+    })
+}
+
+fn resolve_smoke_model_path(model: &Path) -> Result<PathBuf> {
+    let path = if model.is_absolute() {
+        model.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .context("failed to resolve current directory for binding smoke model")?
+            .join(model)
+    };
+
+    path.canonicalize()
+        .with_context(|| format!("failed to resolve smoke model path {}", path.display()))
 }
