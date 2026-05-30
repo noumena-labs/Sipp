@@ -267,6 +267,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cogentlm-client"
+version = "0.1.0"
+dependencies = [
+ "cogentlm-core",
+ "cogentlm-engine",
+ "cogentlm-providers",
+ "futures",
+ "futures-channel",
+ "futures-core",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "cogentlm-core"
 version = "0.1.0"
 dependencies = [
@@ -282,6 +297,9 @@ dependencies = [
  "cogentlm-core",
  "cogentlm-shard",
  "cogentlm-sys",
+ "futures",
+ "futures-channel",
+ "futures-core",
  "serde",
  "serde_json",
  "sha2",
@@ -292,8 +310,10 @@ dependencies = [
 name = "cogentlm-napi"
 version = "0.1.0"
 dependencies = [
+ "cogentlm-client",
  "cogentlm-engine",
  "cogentlm-providers",
+ "futures",
  "napi",
  "napi-build",
  "napi-derive",
@@ -324,8 +344,10 @@ dependencies = [
 name = "cogentlm-py"
 version = "0.1.0"
 dependencies = [
+ "cogentlm-client",
  "cogentlm-engine",
  "cogentlm-providers",
+ "futures",
  "pyo3",
  "serde",
  "serde_json",
@@ -354,6 +376,7 @@ dependencies = [
 name = "cogentlm-wasm"
 version = "0.1.0"
 dependencies = [
+ "cogentlm-client",
  "cogentlm-engine",
  "cogentlm-shard",
  "serde",
@@ -2592,6 +2615,7 @@ dependencies = [
  "indicatif",
  "inquire",
  "portable-pty",
+ "serde_json",
  "tui-banner",
  "xshell",
 ]

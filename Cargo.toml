@@ -5,6 +5,7 @@ members = [
     "crates/sys",
     "crates/engine",
     "crates/providers",
+    "crates/client",
     "crates/cli",
     "crates/xtask",
     "bindings/python",
@@ -30,6 +31,10 @@ cogentlm-shard = { path = "crates/shard" }
 cogentlm-sys = { path = "crates/sys" }
 cogentlm-engine = { path = "crates/engine" }
 cogentlm-providers = { path = "crates/providers" }
+cogentlm-client = { path = "crates/client", default-features = false }
+futures = "0.3"
+futures-channel = "0.3"
+futures-core = "0.3"
 napi = { version = "3.9", default-features = false, features = ["napi4"] }
 napi-build = "2.3"
 napi-derive = "3.5"
@@ -38,6 +43,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 thiserror = "2.0"
+tokio = "1"
 
 # Cargo's default release profile leaves the Rust staticlib opaque to
 # Emscripten's whole-program LTO (-flto=full on the C++ side) and splits the
