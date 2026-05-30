@@ -70,6 +70,7 @@ fn clean_targets(ctx: &BuildContext, args: &CleanArgs) -> Result<Vec<PathBuf>> {
     targets.insert(ctx.native_build_root());
     targets.insert(ctx.artifacts_root());
     targets.insert(ctx.tmp_dir());
+    targets.insert(ctx.command_logs_dir());
     targets.insert(ctx.workspace_root().join(".turbo"));
     targets.insert(ctx.npm_package_dir().join("dist"));
     targets.insert(ctx.npm_package_dir().join(".turbo"));

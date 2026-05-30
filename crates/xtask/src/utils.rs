@@ -117,6 +117,18 @@ impl BuildContext {
         self.build_root().join("tmp")
     }
 
+    pub(crate) fn command_logs_dir(&self) -> PathBuf {
+        self.build_root().join("logs")
+    }
+
+    pub(crate) fn launcher_bin_dir(&self) -> PathBuf {
+        self.build_root().join("bin")
+    }
+
+    pub(crate) fn sample_models_dir(&self) -> PathBuf {
+        self.build_root().join("models")
+    }
+
     pub(crate) fn packages_root(&self) -> PathBuf {
         self.workspace_root.join("packages")
     }

@@ -194,14 +194,15 @@ fn serve_app(sh: &Shell, ctx: &BuildContext, args: &RunAppServeArgs) -> Result<(
         serve_cmd = serve_cmd.arg("--port").arg(port.to_string());
     }
 
-    output::step(format!(
-        "Starting {} Vite server for {}",
-        args.mode.as_str(),
-        args.app.slug()
-    ));
-    serve_cmd
-        .run()
-        .with_context(|| format!("{} app server failed", args.app.slug()))
+    output::run_long_command(
+        format!(
+            "Starting {} Vite server for {}",
+            args.mode.as_str(),
+            args.app.slug()
+        ),
+        serve_cmd,
+    )
+    .with_context(|| format!("{} app server failed", args.app.slug()))
 }
 
 fn run_binding_browser(sh: &Shell, ctx: &BuildContext, args: &RunBrowserArgs) -> Result<()> {

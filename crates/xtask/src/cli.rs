@@ -1,12 +1,15 @@
 //! CLI definitions for the xtask build orchestrator.
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use std::fmt;
 use std::path::PathBuf;
 
 const TOP_LEVEL_HELP: &str = "\
 CogentLM's developer automation lives under focused command groups.
 
 Start with:
+  ./setup.sh
+  .\\setup.ps1
   cargo xtask build --help
   cargo xtask build all
   cargo xtask doctor
@@ -14,7 +17,8 @@ Start with:
   cargo xtask clean --dry-run
   cargo xtask run --help
   cargo xtask build node --backend cpu
-  cargo xtask build python --backend cuda";
+  cargo xtask build python --backend cuda
+  cargo xtask setup";
 
 const BUILD_HELP: &str = "\
 Build CogentLM targets from the workspace root.
@@ -96,6 +100,18 @@ Examples:
 #[command(after_long_help = "Run `cargo xtask <command> --help` for detailed guidance.")]
 #[command(arg_required_else_help = true)]
 pub struct Cli {
+    /// Stream subprocess output directly instead of capturing it behind spinners.
+    #[arg(long, global = true)]
+    pub verbose: bool,
+
+    /// Disable decorative terminal banners.
+    #[arg(long, global = true)]
+    pub no_banner: bool,
+
+    /// Disable bounded inline rendering and use traditional line output.
+    #[arg(long, global = true)]
+    pub plain: bool,
+
     /// Command group to execute.
     #[command(subcommand)]
     pub command: Commands,
@@ -169,6 +185,23 @@ Doctor fails for missing core prerequisites and warns for optional GPU/backend
 readiness so developers can decide what they need for their target.")]
     #[command(after_long_help = BACKEND_HELP)]
     Doctor(DoctorArgs),
+
+    /// Guide first-time local setup and install the cached clm launcher.
+    #[command(long_about = "\
+Guide first-time local setup for CogentLM.
+
+Examples:
+  ./setup.sh
+  .\\setup.ps1
+  cargo xtask setup
+  cargo xtask setup --profile browser
+  cargo xtask setup --profile full --yes
+  cargo xtask setup --profile bindings --no-downloads --no-splash
+
+Interactive setup shows a short COGENTLM splash, checks local readiness, asks
+before downloading toolchains or sample files, and can install the shorter
+`clm` launcher under .build/bin.")]
+    Setup(SetupArgs),
 }
 
 /// Supported build targets.
@@ -579,6 +612,58 @@ pub struct DoctorArgs {
     /// Backend to include in binding readiness checks.
     #[arg(long, value_enum, default_value = "all")]
     pub backend: Backend,
+}
+
+/// Setup guide options.
+#[derive(Args)]
+pub struct SetupArgs {
+    /// Setup profile to use without asking for the target workflow.
+    #[arg(long, value_enum)]
+    pub profile: Option<SetupProfile>,
+
+    /// Accept recommended setup actions without prompting.
+    #[arg(long)]
+    pub yes: bool,
+
+    /// Do not download toolchains, dependencies, or sample models.
+    #[arg(long)]
+    pub no_downloads: bool,
+
+    /// Skip the animated setup splash.
+    #[arg(long)]
+    pub no_splash: bool,
+}
+
+/// Developer setup profiles.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum SetupProfile {
+    /// Browser package and app development.
+    Browser,
+    /// Native Node/Python binding development.
+    Bindings,
+    /// Full workspace development, including browser and native bindings.
+    Full,
+}
+
+impl SetupProfile {
+    /// Lowercase label used in command output.
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            SetupProfile::Browser => "browser",
+            SetupProfile::Bindings => "bindings",
+            SetupProfile::Full => "full",
+        }
+    }
+}
+
+impl fmt::Display for SetupProfile {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            SetupProfile::Browser => "Browser apps and WebAssembly",
+            SetupProfile::Bindings => "Node/Python bindings",
+            SetupProfile::Full => "Full workspace",
+        })
+    }
 }
 
 /// Target scope for doctor checks.

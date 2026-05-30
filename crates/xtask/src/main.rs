@@ -2,24 +2,27 @@ use anyhow::Result;
 use clap::Parser;
 use xshell::Shell;
 use xtask::cli::{BuildCommands, Cli, Commands};
-use xtask::{clean, doctor, run, toolchain};
 use xtask::targets;
 use xtask::utils::BuildContext;
+use xtask::{clean, configure_output, doctor, finish_output, run, setup, toolchain};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let sh = Shell::new()?;
     let ctx = BuildContext::new()?;
+    configure_output(&ctx, cli.verbose, cli.no_banner, cli.plain);
 
-    match cli.command {
-        Commands::Build { target } => run_build(target, &sh, &ctx)?,
-        Commands::Clean(args) => clean::run(&sh, &ctx, &args)?,
-        Commands::Run { command } => run::run(&sh, &ctx, command)?,
-        Commands::Toolchain { command } => toolchain::run(&sh, &ctx, command)?,
-        Commands::Doctor(args) => doctor::run(&ctx, &args)?,
-    }
+    let result = match cli.command {
+        Commands::Build { target } => run_build(target, &sh, &ctx),
+        Commands::Clean(args) => clean::run(&sh, &ctx, &args),
+        Commands::Run { command } => run::run(&sh, &ctx, command),
+        Commands::Toolchain { command } => toolchain::run(&sh, &ctx, command),
+        Commands::Doctor(args) => doctor::run(&ctx, &args),
+        Commands::Setup(args) => setup::run(&sh, &ctx, &args),
+    };
+    finish_output();
 
-    Ok(())
+    result
 }
 
 fn run_build(target: BuildCommands, sh: &Shell, ctx: &BuildContext) -> Result<()> {
