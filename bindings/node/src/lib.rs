@@ -3,6 +3,19 @@ use std::{
     time::Duration,
 };
 
+use cogentlm_client::{
+    CogentChatRequest as CoreClientChatRequest, CogentClient as CoreClient,
+    CogentEmbedRequest as CoreClientEmbedRequest,
+    CogentEmbeddingResponse as CoreClientEmbeddingResponse,
+    CogentEmbeddingResponseFuture as CoreClientEmbeddingResponseFuture,
+    CogentEmbeddingRun as CoreClientEmbeddingRun, CogentError as CoreClientError,
+    CogentQueryRequest as CoreClientQueryRequest, CogentTextOptions as CoreClientTextOptions,
+    CogentTextResponse as CoreClientTextResponse,
+    CogentTextResponseFuture as CoreClientTextResponseFuture, CogentTextRun as CoreClientTextRun,
+    CogentTokenStream as CoreClientTokenStream, EndpointRef as CoreEndpointRef,
+    LocalEmbedOptions as CoreClientLocalEmbedOptions,
+    LocalTextOptions as CoreClientLocalTextOptions, ProviderExecutor as CoreProviderExecutor,
+};
 use cogentlm_engine::backend::{
     backend_observability_json as core_backend_observability_json,
     set_llama_log_quiet as core_set_llama_log_quiet,
@@ -12,22 +25,18 @@ use cogentlm_engine::engine::protocol::{
     RequestState as CoreRequestState, RequestStats as CoreRequestStats,
 };
 use cogentlm_engine::engine::{
-    CacheKeyPolicy, ChatMessage as CoreChatMessage, ChatRequest as CoreChatRequest,
-    ChatRole as CoreChatRole, CogentEngine as CoreCogentEngine, EmbedOptions as CoreEmbedOptions,
-    EmbedRequest as CoreEmbedRequest, EmbeddingResult as CoreEmbeddingResult,
-    EngineEvent as CoreEngineEvent, EngineEventReceiver as CoreEngineEventReceiver,
-    EngineState as CoreEngineState, EngineStats as CoreEngineStats, FlashAttentionMode,
-    GenerationResult as CoreGenerationResult, GpuLayerConfig, KvCacheType, KvReuseMode, LogitBias,
-    ModelPlacementConfig as CoreModelPlacementConfig,
+    CacheKeyPolicy, ChatMessage as CoreChatMessage, ChatRole as CoreChatRole,
+    CogentEngine as CoreCogentEngine, EngineEvent as CoreEngineEvent,
+    EngineEventReceiver as CoreEngineEventReceiver, EngineState as CoreEngineState,
+    EngineStats as CoreEngineStats, FlashAttentionMode, GpuLayerConfig, KvCacheType, KvReuseMode,
+    LogitBias, ModelPlacementConfig as CoreModelPlacementConfig,
     MultimodalRuntimeConfig as CoreMultimodalRuntimeConfig,
     NativeRuntimeConfig as CoreNativeRuntimeConfig,
     ObservabilityRuntimeConfig as CoreObservabilityRuntimeConfig, PoolingType as CorePoolingType,
-    QueryOptions as CoreQueryOptions, QueryRequest as CoreQueryRequest,
     ResidencyRuntimeConfig as CoreResidencyRuntimeConfig,
     ResolvedRuntimeLimits as CoreResolvedRuntimeLimits, RopeScaling, SamplerStage,
     SamplingRuntimeConfig as CoreSamplingRuntimeConfig,
     SchedulerRuntimeConfig as CoreSchedulerRuntimeConfig, SplitMode, TokenBatch as CoreTokenBatch,
-    DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
 };
 use cogentlm_engine::lifecycle::{
     model_source_from_path as core_model_source_from_path,
@@ -59,6 +68,8 @@ use cogentlm_providers::{
     ProxyConfig as CoreProxyConfig, ProxyProtocol as CoreProxyProtocol,
     SecretString as CoreSecretString, TokenUsage as CoreTokenUsage,
 };
+use futures::executor::block_on;
+use futures::StreamExt;
 use napi::bindgen_prelude::{AsyncTask, Buffer, Either, Env};
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::{Error, JsValue, Result, Status, Task};
@@ -73,8 +84,13 @@ type SharedEngine = Arc<Mutex<Option<CoreCogentEngine>>>;
 type SharedEvents = Arc<Mutex<CoreEngineEventReceiver>>;
 type SharedModelService = Arc<Mutex<Option<CoreModelService>>>;
 type SharedModelEvents = Arc<Mutex<Option<CoreEngineEventReceiver>>>;
+type SharedCogentClient = Arc<Mutex<CoreClient>>;
+type SharedClientTextResponse = Arc<Mutex<Option<CoreClientTextResponseFuture>>>;
+type SharedClientEmbeddingResponse = Arc<Mutex<Option<CoreClientEmbeddingResponseFuture>>>;
+type SharedClientTokenStream = Arc<Mutex<Option<CoreClientTokenStream>>>;
 type TokenBatchCallback = Arc<ThreadsafeFunction<TokenBatch, (), TokenBatch, Status, false>>;
 type ProviderTaskOutput<T> = std::result::Result<T, CoreProviderError>;
+type ClientTaskOutput<T> = std::result::Result<T, CoreClientError>;
 
 static PROVIDER_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
@@ -84,6 +100,12 @@ const ENGINE_CLOSED: &str = "engine is closed";
 const MODEL_SERVICE_EVENTS_MUTEX_POISONED: &str = "model service events mutex is poisoned";
 const MODEL_SERVICE_MUTEX_POISONED: &str = "model service mutex is poisoned";
 const MODEL_SERVICE_CLOSED: &str = "model service is closed";
+const CLIENT_MUTEX_POISONED: &str = "client mutex is poisoned";
+const CLIENT_TEXT_RESPONSE_CONSUMED: &str = "text response already consumed";
+const CLIENT_EMBEDDING_RESPONSE_CONSUMED: &str = "embedding response already consumed";
+const CLIENT_TOKEN_STREAM_MUTEX_POISONED: &str = "token stream mutex is poisoned";
+const CLIENT_TEXT_RESPONSE_MUTEX_POISONED: &str = "text response mutex is poisoned";
+const CLIENT_EMBEDDING_RESPONSE_MUTEX_POISONED: &str = "embedding response mutex is poisoned";
 const EVENT_TYPE_STATE: &str = "state";
 const EVENT_TYPE_LOAD_PROGRESS: &str = "load-progress";
 const EVENT_TYPE_REQUEST_STARTED: &str = "request-started";
@@ -629,31 +651,83 @@ impl ModelLoadOptions {
 }
 
 #[napi(object)]
-pub struct QueryOptions {
-    pub context_key: Option<String>,
-    pub max_tokens: Option<i32>,
-    pub grammar: Option<String>,
-    pub json_schema: Option<String>,
+pub struct EndpointRef {
+    pub kind: String,
+    pub engine: Option<String>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+}
+
+impl EndpointRef {
+    fn to_core(&self) -> Result<CoreEndpointRef> {
+        match self.kind.as_str() {
+            "localEngine" | "local_engine" => Ok(CoreEndpointRef::LocalEngine {
+                engine: self
+                    .engine
+                    .clone()
+                    .ok_or_else(|| invalid_arg("localEngine endpoint requires engine"))?,
+            }),
+            "providerModel" | "provider_model" => Ok(CoreEndpointRef::ProviderModel {
+                provider: self
+                    .provider
+                    .clone()
+                    .ok_or_else(|| invalid_arg("providerModel endpoint requires provider"))?,
+                model: self
+                    .model
+                    .clone()
+                    .ok_or_else(|| invalid_arg("providerModel endpoint requires model"))?,
+            }),
+            _ => Err(invalid_arg(
+                "endpoint kind must be localEngine or providerModel",
+            )),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct CogentTextOptions {
+    #[napi(js_name = "maxTokens")]
+    pub max_tokens: Option<u32>,
+    pub temperature: Option<f64>,
+    #[napi(js_name = "topP")]
+    pub top_p: Option<f64>,
     pub stop: Option<Vec<String>>,
+}
+
+impl CogentTextOptions {
+    fn to_core(&self) -> Result<CoreClientTextOptions> {
+        Ok(CoreClientTextOptions {
+            max_tokens: self.max_tokens,
+            temperature: self
+                .temperature
+                .map(|value| provider_f64_to_f32(value, "temperature"))
+                .transpose()?,
+            top_p: self
+                .top_p
+                .map(|value| provider_f64_to_f32(value, "topP"))
+                .transpose()?,
+            stop: self.stop.clone().unwrap_or_default(),
+        })
+    }
+}
+
+#[napi(object)]
+pub struct LocalTextOptions {
+    #[napi(js_name = "contextKey")]
+    pub context_key: Option<String>,
+    pub grammar: Option<String>,
+    #[napi(js_name = "jsonSchema")]
+    pub json_schema: Option<String>,
     pub sampling: Option<SamplingRuntimeConfig>,
     pub media: Option<Vec<Buffer>>,
 }
 
-impl QueryOptions {
-    fn to_core(&self) -> Result<CoreQueryOptions> {
-        let max_tokens = self.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
-        if max_tokens <= 0 {
-            return Err(invalid_arg("maxTokens must be positive"));
-        }
-        Ok(CoreQueryOptions {
-            context_key: self
-                .context_key
-                .clone()
-                .unwrap_or_else(|| DEFAULT_CONTEXT_KEY.to_string()),
-            max_tokens,
-            grammar: self.grammar.clone().unwrap_or_default(),
-            json_schema: self.json_schema.clone().unwrap_or_default(),
-            stop: self.stop.clone().unwrap_or_default(),
+impl LocalTextOptions {
+    fn to_core(&self) -> Result<CoreClientLocalTextOptions> {
+        Ok(CoreClientLocalTextOptions {
+            context_key: self.context_key.clone(),
+            grammar: self.grammar.clone(),
+            json_schema: self.json_schema.clone(),
             sampling: self
                 .sampling
                 .as_ref()
@@ -674,6 +748,97 @@ impl QueryOptions {
 }
 
 #[napi(object)]
+pub struct LocalEmbedOptions {
+    #[napi(js_name = "contextKey")]
+    pub context_key: Option<String>,
+    pub normalize: Option<bool>,
+}
+
+impl LocalEmbedOptions {
+    fn to_core(&self) -> CoreClientLocalEmbedOptions {
+        CoreClientLocalEmbedOptions {
+            context_key: self.context_key.clone(),
+            normalize: self.normalize,
+        }
+    }
+}
+
+#[napi(object)]
+pub struct CogentQueryRequest {
+    pub endpoint: Option<EndpointRef>,
+    pub prompt: String,
+    pub options: Option<CogentTextOptions>,
+    pub local: Option<LocalTextOptions>,
+    #[napi(js_name = "providerOptions")]
+    pub provider_options: Option<serde_json::Value>,
+    #[napi(js_name = "streamTokens")]
+    pub stream_tokens: Option<bool>,
+}
+
+impl CogentQueryRequest {
+    fn to_core(&self) -> Result<CoreClientQueryRequest> {
+        Ok(CoreClientQueryRequest {
+            endpoint: optional_endpoint(self.endpoint.as_ref())?,
+            prompt: self.prompt.clone(),
+            options: optional_core_or_default(self.options.as_ref(), CogentTextOptions::to_core)?,
+            local: optional_core_or_default(self.local.as_ref(), LocalTextOptions::to_core)?,
+            provider_options: provider_options_or_empty(self.provider_options.clone())?,
+            stream_tokens: self.stream_tokens.unwrap_or(false),
+        })
+    }
+}
+
+#[napi(object)]
+pub struct CogentChatRequest {
+    pub endpoint: Option<EndpointRef>,
+    pub messages: Vec<ChatMessage>,
+    pub options: Option<CogentTextOptions>,
+    pub local: Option<LocalTextOptions>,
+    #[napi(js_name = "providerOptions")]
+    pub provider_options: Option<serde_json::Value>,
+    #[napi(js_name = "streamTokens")]
+    pub stream_tokens: Option<bool>,
+}
+
+impl CogentChatRequest {
+    fn to_core(&self) -> Result<CoreClientChatRequest> {
+        Ok(CoreClientChatRequest {
+            endpoint: optional_endpoint(self.endpoint.as_ref())?,
+            messages: chat_messages_to_core(self.messages.clone())?,
+            options: optional_core_or_default(self.options.as_ref(), CogentTextOptions::to_core)?,
+            local: optional_core_or_default(self.local.as_ref(), LocalTextOptions::to_core)?,
+            provider_options: provider_options_or_empty(self.provider_options.clone())?,
+            stream_tokens: self.stream_tokens.unwrap_or(false),
+        })
+    }
+}
+
+#[napi(object)]
+pub struct CogentEmbedRequest {
+    pub endpoint: Option<EndpointRef>,
+    pub input: String,
+    pub local: Option<LocalEmbedOptions>,
+    #[napi(js_name = "providerOptions")]
+    pub provider_options: Option<serde_json::Value>,
+}
+
+impl CogentEmbedRequest {
+    fn to_core(&self) -> Result<CoreClientEmbedRequest> {
+        Ok(CoreClientEmbedRequest {
+            endpoint: optional_endpoint(self.endpoint.as_ref())?,
+            input: self.input.clone(),
+            local: self
+                .local
+                .as_ref()
+                .map(LocalEmbedOptions::to_core)
+                .unwrap_or_default(),
+            provider_options: provider_options_or_empty(self.provider_options.clone())?,
+        })
+    }
+}
+
+#[napi(object)]
+#[derive(Clone)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
@@ -931,6 +1096,16 @@ pub struct ProviderTokenUsage {
 }
 
 #[napi(object)]
+pub struct TokenUsage {
+    #[napi(js_name = "inputTokens")]
+    pub input_tokens: Option<u32>,
+    #[napi(js_name = "outputTokens")]
+    pub output_tokens: Option<u32>,
+    #[napi(js_name = "totalTokens")]
+    pub total_tokens: Option<u32>,
+}
+
+#[napi(object)]
 pub struct ProviderResponseMetadata {
     pub provider: String,
     pub model: String,
@@ -1173,14 +1348,6 @@ pub struct RequestStats {
     pub debug_metrics_post_decode_ms: f64,
 }
 
-#[napi(object)]
-pub struct GenerationResult {
-    pub id: String,
-    pub text: String,
-    pub finish_reason: String,
-    pub stats: RequestStats,
-}
-
 #[napi(string_enum = "snake_case")]
 #[derive(Clone, Copy)]
 pub enum ModelClass {
@@ -1237,51 +1404,72 @@ impl From<CorePoolingType> for PoolingType {
 }
 
 #[napi(object)]
-pub struct EmbedOptions {
-    pub normalize: Option<bool>,
-    pub context_key: Option<String>,
+pub struct CogentTextResponse {
+    pub endpoint: EndpointRef,
+    pub text: String,
+    #[napi(js_name = "finishReason")]
+    pub finish_reason: String,
+    pub usage: Option<TokenUsage>,
+    #[napi(js_name = "localStats")]
+    pub local_stats: Option<RequestStats>,
 }
 
 #[napi(object)]
-pub struct EmbedRequest {
-    pub input: String,
-    pub options: Option<EmbedOptions>,
+pub struct CogentEmbeddingResponse {
+    pub endpoint: EndpointRef,
+    pub values: Vec<f64>,
+    pub usage: Option<TokenUsage>,
+    #[napi(js_name = "localStats")]
+    pub local_stats: Option<RequestStats>,
+    pub pooling: Option<PoolingType>,
+    pub normalized: Option<bool>,
 }
 
-impl EmbedRequest {
-    fn into_core(self) -> CoreEmbedRequest {
-        let mut options = CoreEmbedOptions::default();
-        if let Some(napi_options) = self.options {
-            if let Some(normalize) = napi_options.normalize {
-                options.normalize = normalize;
-            }
-            options.context_key = napi_options.context_key;
-        }
-        CoreEmbedRequest {
-            input: self.input,
-            options,
-        }
+fn endpoint_ref_to_node(endpoint: CoreEndpointRef) -> EndpointRef {
+    match endpoint {
+        CoreEndpointRef::LocalEngine { engine } => EndpointRef {
+            kind: "localEngine".to_string(),
+            engine: Some(engine),
+            provider: None,
+            model: None,
+        },
+        CoreEndpointRef::ProviderModel { provider, model } => EndpointRef {
+            kind: "providerModel".to_string(),
+            engine: None,
+            provider: Some(provider),
+            model: Some(model),
+        },
     }
 }
 
-#[napi(object)]
-pub struct EmbeddingResult {
-    pub id: String,
-    pub values: Vec<f64>,
-    pub pooling: PoolingType,
-    pub normalized: bool,
-    pub stats: RequestStats,
+fn token_usage_to_node(usage: CoreTokenUsage) -> TokenUsage {
+    TokenUsage {
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        total_tokens: usage.total_tokens,
+    }
 }
 
-fn embedding_result_to_node(result: CoreEmbeddingResult) -> EmbeddingResult {
-    EmbeddingResult {
-        id: result.id,
-        // napi's number type is f64; widen at the boundary so the JS-side
-        // signature matches the existing observability metric pattern.
-        values: result.values.into_iter().map(f64::from).collect(),
-        pooling: PoolingType::from(result.pooling),
-        normalized: result.normalized,
-        stats: request_stats_to_node(result.stats),
+fn cogent_text_response_to_node(response: CoreClientTextResponse) -> CogentTextResponse {
+    CogentTextResponse {
+        endpoint: endpoint_ref_to_node(response.endpoint),
+        text: response.text,
+        finish_reason: response.finish_reason.as_str().to_string(),
+        usage: response.usage.map(token_usage_to_node),
+        local_stats: response.local_stats.map(request_stats_to_node),
+    }
+}
+
+fn cogent_embedding_response_to_node(
+    response: CoreClientEmbeddingResponse,
+) -> CogentEmbeddingResponse {
+    CogentEmbeddingResponse {
+        endpoint: endpoint_ref_to_node(response.endpoint),
+        values: response.values.into_iter().map(f64::from).collect(),
+        usage: response.usage.map(token_usage_to_node),
+        local_stats: response.local_stats.map(request_stats_to_node),
+        pooling: response.pooling.map(PoolingType::from),
+        normalized: response.normalized,
     }
 }
 
@@ -1424,46 +1612,6 @@ impl CogentEngine {
         Ok(AsyncTask::new(LoadTask { model_path, config }))
     }
 
-    #[napi(ts_return_type = "Promise<GenerationResult>")]
-    pub fn query(
-        &self,
-        prompt: String,
-        options: Option<QueryOptions>,
-        on_tokens: Option<TokenBatchCallback>,
-    ) -> Result<AsyncTask<QueryTask>> {
-        let options = optional_core_or_default(options.as_ref(), QueryOptions::to_core)?;
-        Ok(AsyncTask::new(QueryTask {
-            engine: self.inner.clone(),
-            prompt,
-            options,
-            on_tokens,
-        }))
-    }
-
-    #[napi(ts_return_type = "Promise<GenerationResult>")]
-    pub fn chat(
-        &self,
-        messages: Vec<ChatMessage>,
-        options: Option<QueryOptions>,
-        on_tokens: Option<TokenBatchCallback>,
-    ) -> Result<AsyncTask<ChatTextTask>> {
-        let options = optional_core_or_default(options.as_ref(), QueryOptions::to_core)?;
-        Ok(AsyncTask::new(ChatTextTask {
-            engine: self.inner.clone(),
-            messages: chat_messages_to_core(messages)?,
-            options,
-            on_tokens,
-        }))
-    }
-
-    #[napi(ts_return_type = "Promise<EmbeddingResult>")]
-    pub fn embed(&self, request: EmbedRequest) -> Result<AsyncTask<EmbedTask>> {
-        Ok(AsyncTask::new(EmbedTask {
-            engine: self.inner.clone(),
-            request: Some(request.into_core()),
-        }))
-    }
-
     #[napi(ts_return_type = "Promise<EngineState>")]
     pub fn state(&self) -> Result<AsyncTask<StateTask>> {
         Ok(AsyncTask::new(StateTask {
@@ -1557,44 +1705,6 @@ impl ModelService {
             .map(|model| model.map(model_info_to_node))
     }
 
-    #[napi(ts_return_type = "Promise<GenerationResult>")]
-    pub fn query(
-        &self,
-        prompt: String,
-        options: Option<QueryOptions>,
-        on_tokens: Option<TokenBatchCallback>,
-    ) -> Result<AsyncTask<ModelQueryTask>> {
-        Ok(AsyncTask::new(ModelQueryTask {
-            service: self.inner.clone(),
-            prompt,
-            options: optional_core_or_default(options.as_ref(), QueryOptions::to_core)?,
-            on_tokens,
-        }))
-    }
-
-    #[napi(ts_return_type = "Promise<GenerationResult>")]
-    pub fn chat(
-        &self,
-        messages: Vec<ChatMessage>,
-        options: Option<QueryOptions>,
-        on_tokens: Option<TokenBatchCallback>,
-    ) -> Result<AsyncTask<ModelChatTask>> {
-        Ok(AsyncTask::new(ModelChatTask {
-            service: self.inner.clone(),
-            messages: chat_messages_to_core(messages)?,
-            options: optional_core_or_default(options.as_ref(), QueryOptions::to_core)?,
-            on_tokens,
-        }))
-    }
-
-    #[napi(ts_return_type = "Promise<EmbeddingResult>")]
-    pub fn embed(&self, request: EmbedRequest) -> Result<AsyncTask<ModelEmbedTask>> {
-        Ok(AsyncTask::new(ModelEmbedTask {
-            service: self.inner.clone(),
-            request: Some(request.into_core()),
-        }))
-    }
-
     #[napi(ts_return_type = "Promise<ModelServiceState>")]
     pub fn state(&self) -> Result<AsyncTask<ModelStateTask>> {
         Ok(AsyncTask::new(ModelStateTask {
@@ -1612,6 +1722,171 @@ impl ModelService {
             .as_ref()
             .map(|events| events.try_iter().map(engine_event_to_node).collect())
             .unwrap_or_default())
+    }
+}
+
+#[napi(js_name = "CogentClient")]
+pub struct CogentClient {
+    inner: SharedCogentClient,
+    executor: CoreProviderExecutor,
+}
+
+#[napi]
+impl CogentClient {
+    #[napi(constructor)]
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            inner: Arc::new(Mutex::new(CoreClient::new())),
+            executor: CoreProviderExecutor::new().map_err(client_error_without_env)?,
+        })
+    }
+
+    #[napi(ts_return_type = "Promise<void>")]
+    pub fn load_engine(
+        &self,
+        id: String,
+        model_path: String,
+        config: Option<NativeRuntimeConfig>,
+    ) -> Result<AsyncTask<ClientLoadEngineTask>> {
+        let config = config
+            .as_ref()
+            .map(NativeRuntimeConfig::to_core)
+            .transpose()?
+            .unwrap_or_default();
+        Ok(AsyncTask::new(ClientLoadEngineTask {
+            client: self.inner.clone(),
+            id,
+            model_path,
+            config,
+        }))
+    }
+
+    #[napi(ts_return_type = "Promise<void>")]
+    pub fn add_engine(
+        &self,
+        id: String,
+        engine: &CogentEngine,
+    ) -> Result<AsyncTask<ClientAddEngineTask>> {
+        Ok(AsyncTask::new(ClientAddEngineTask {
+            client: self.inner.clone(),
+            id,
+            engine: clone_engine(&engine.inner)?,
+        }))
+    }
+
+    #[napi]
+    pub fn add_provider_model(
+        &self,
+        provider: String,
+        model: String,
+        client: &ProviderClient,
+    ) -> Result<()> {
+        self.inner
+            .lock()
+            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
+            .add_provider_model(provider, model, client.inner.clone(), self.executor.clone())
+            .map_err(client_error_without_env)
+    }
+
+    #[napi]
+    pub fn set_default_endpoint(&self, endpoint: EndpointRef) -> Result<()> {
+        self.inner
+            .lock()
+            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
+            .set_default_endpoint(endpoint.to_core()?)
+            .map_err(client_error_without_env)
+    }
+
+    #[napi(ts_return_type = "CogentTextRun")]
+    pub fn query(&self, request: CogentQueryRequest) -> Result<CogentTextRun> {
+        let request = request.to_core()?;
+        let run = self
+            .inner
+            .lock()
+            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
+            .query(request);
+        Ok(CogentTextRun::from_core(run))
+    }
+
+    #[napi(ts_return_type = "CogentTextRun")]
+    pub fn chat(&self, request: CogentChatRequest) -> Result<CogentTextRun> {
+        let request = request.to_core()?;
+        let run = self
+            .inner
+            .lock()
+            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
+            .chat(request);
+        Ok(CogentTextRun::from_core(run))
+    }
+
+    #[napi(ts_return_type = "CogentEmbeddingRun")]
+    pub fn embed(&self, request: CogentEmbedRequest) -> Result<CogentEmbeddingRun> {
+        let request = request.to_core()?;
+        let run = self
+            .inner
+            .lock()
+            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
+            .embed(request);
+        Ok(CogentEmbeddingRun::from_core(run))
+    }
+}
+
+#[napi(js_name = "CogentTextRun")]
+pub struct CogentTextRun {
+    response: SharedClientTextResponse,
+    tokens: SharedClientTokenStream,
+}
+
+impl CogentTextRun {
+    fn from_core(run: CoreClientTextRun) -> Self {
+        let (tokens, response) = run.into_parts();
+        Self {
+            response: Arc::new(Mutex::new(Some(response))),
+            tokens: Arc::new(Mutex::new(Some(tokens))),
+        }
+    }
+}
+
+#[napi]
+impl CogentTextRun {
+    #[napi(js_name = "__response", ts_return_type = "Promise<CogentTextResponse>")]
+    pub fn response(&self) -> AsyncTask<ClientTextResultTask> {
+        AsyncTask::new(ClientTextResultTask {
+            response: self.response.clone(),
+        })
+    }
+
+    #[napi(js_name = "__nextToken", ts_return_type = "Promise<TokenBatch | null>")]
+    pub fn next_token(&self) -> AsyncTask<ClientNextTokenTask> {
+        AsyncTask::new(ClientNextTokenTask {
+            tokens: self.tokens.clone(),
+        })
+    }
+}
+
+#[napi(js_name = "CogentEmbeddingRun")]
+pub struct CogentEmbeddingRun {
+    response: SharedClientEmbeddingResponse,
+}
+
+impl CogentEmbeddingRun {
+    fn from_core(run: CoreClientEmbeddingRun) -> Self {
+        Self {
+            response: Arc::new(Mutex::new(Some(run.into_response()))),
+        }
+    }
+}
+
+#[napi]
+impl CogentEmbeddingRun {
+    #[napi(
+        js_name = "__response",
+        ts_return_type = "Promise<CogentEmbeddingResponse>"
+    )]
+    pub fn response(&self) -> AsyncTask<ClientEmbeddingResultTask> {
+        AsyncTask::new(ClientEmbeddingResultTask {
+            response: self.response.clone(),
+        })
     }
 }
 
@@ -1831,6 +2106,137 @@ impl Task for ProviderStreamChatTask {
     }
 }
 
+pub struct ClientLoadEngineTask {
+    client: SharedCogentClient,
+    id: String,
+    model_path: String,
+    config: CoreNativeRuntimeConfig,
+}
+
+impl Task for ClientLoadEngineTask {
+    type Output = ClientTaskOutput<()>;
+    type JsValue = ();
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?;
+        Ok(block_on(client.load_engine(
+            self.id.clone(),
+            self.model_path.clone(),
+            self.config.clone(),
+        )))
+    }
+
+    fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        output.map_err(|error| client_error_to_node(env, error))
+    }
+}
+
+pub struct ClientAddEngineTask {
+    client: SharedCogentClient,
+    id: String,
+    engine: CoreCogentEngine,
+}
+
+impl Task for ClientAddEngineTask {
+    type Output = ClientTaskOutput<()>;
+    type JsValue = ();
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?;
+        Ok(block_on(
+            client.add_engine(self.id.clone(), self.engine.clone()),
+        ))
+    }
+
+    fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        output.map_err(|error| client_error_to_node(env, error))
+    }
+}
+
+pub struct ClientTextResultTask {
+    response: SharedClientTextResponse,
+}
+
+impl Task for ClientTextResultTask {
+    type Output = ClientTaskOutput<CoreClientTextResponse>;
+    type JsValue = CogentTextResponse;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let response = self
+            .response
+            .lock()
+            .map_err(|_| napi_error(CLIENT_TEXT_RESPONSE_MUTEX_POISONED))?
+            .take()
+            .ok_or_else(|| napi_error(CLIENT_TEXT_RESPONSE_CONSUMED))?;
+        Ok(block_on(response))
+    }
+
+    fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        output
+            .map(cogent_text_response_to_node)
+            .map_err(|error| client_error_to_node(env, error))
+    }
+}
+
+pub struct ClientEmbeddingResultTask {
+    response: SharedClientEmbeddingResponse,
+}
+
+impl Task for ClientEmbeddingResultTask {
+    type Output = ClientTaskOutput<CoreClientEmbeddingResponse>;
+    type JsValue = CogentEmbeddingResponse;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let response = self
+            .response
+            .lock()
+            .map_err(|_| napi_error(CLIENT_EMBEDDING_RESPONSE_MUTEX_POISONED))?
+            .take()
+            .ok_or_else(|| napi_error(CLIENT_EMBEDDING_RESPONSE_CONSUMED))?;
+        Ok(block_on(response))
+    }
+
+    fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        output
+            .map(cogent_embedding_response_to_node)
+            .map_err(|error| client_error_to_node(env, error))
+    }
+}
+
+pub struct ClientNextTokenTask {
+    tokens: SharedClientTokenStream,
+}
+
+impl Task for ClientNextTokenTask {
+    type Output = Option<CoreTokenBatch>;
+    type JsValue = Option<TokenBatch>;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let mut guard = self
+            .tokens
+            .lock()
+            .map_err(|_| napi_error(CLIENT_TOKEN_STREAM_MUTEX_POISONED))?;
+        let Some(stream) = guard.as_mut() else {
+            return Ok(None);
+        };
+        let next = block_on(stream.next());
+        if next.is_none() {
+            *guard = None;
+        }
+        Ok(next)
+    }
+
+    fn resolve(&mut self, _env: Env, batch: Self::Output) -> Result<Self::JsValue> {
+        Ok(batch.map(token_batch_to_node))
+    }
+}
+
 pub struct LoadTask {
     model_path: String,
     config: CoreNativeRuntimeConfig,
@@ -1841,7 +2247,11 @@ impl Task for LoadTask {
     type JsValue = CogentEngine;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        CoreCogentEngine::load(&self.model_path, self.config.clone()).map_err(core_error)
+        block_on(CoreCogentEngine::load(
+            &self.model_path,
+            self.config.clone(),
+        ))
+        .map_err(core_error)
     }
 
     fn resolve(&mut self, _env: Env, engine: Self::Output) -> Result<Self::JsValue> {
@@ -1850,94 +2260,6 @@ impl Task for LoadTask {
             inner: Arc::new(Mutex::new(Some(engine))),
             events: Arc::new(Mutex::new(events)),
         })
-    }
-}
-
-pub struct QueryTask {
-    engine: SharedEngine,
-    prompt: String,
-    options: CoreQueryOptions,
-    on_tokens: Option<TokenBatchCallback>,
-}
-
-impl Task for QueryTask {
-    type Output = CoreGenerationResult;
-    type JsValue = GenerationResult;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let request = query_request_with_tokens(
-            self.prompt.clone(),
-            self.options.clone(),
-            self.on_tokens.clone(),
-        );
-        with_engine(&self.engine, |engine| engine.query(request))
-    }
-
-    fn resolve(&mut self, _env: Env, result: Self::Output) -> Result<Self::JsValue> {
-        Ok(generation_result_to_node(result))
-    }
-}
-
-pub struct EmbedTask {
-    engine: SharedEngine,
-    request: Option<CoreEmbedRequest>,
-}
-
-impl Task for EmbedTask {
-    type Output = CoreEmbeddingResult;
-    type JsValue = EmbeddingResult;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let request = self.request.take().expect("embed task runs once");
-        with_engine(&self.engine, |engine| engine.embed(request))
-    }
-
-    fn resolve(&mut self, _env: Env, result: Self::Output) -> Result<Self::JsValue> {
-        Ok(embedding_result_to_node(result))
-    }
-}
-
-pub struct ModelEmbedTask {
-    service: SharedModelService,
-    request: Option<CoreEmbedRequest>,
-}
-
-impl Task for ModelEmbedTask {
-    type Output = CoreEmbeddingResult;
-    type JsValue = EmbeddingResult;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let request = self.request.take().expect("model embed task runs once");
-        with_model_service(&self.service, |service| service.embed(request))
-    }
-
-    fn resolve(&mut self, _env: Env, result: Self::Output) -> Result<Self::JsValue> {
-        Ok(embedding_result_to_node(result))
-    }
-}
-
-pub struct ChatTextTask {
-    engine: SharedEngine,
-    messages: Vec<CoreChatMessage>,
-    options: CoreQueryOptions,
-    on_tokens: Option<TokenBatchCallback>,
-}
-
-impl Task for ChatTextTask {
-    type Output = CoreGenerationResult;
-    type JsValue = GenerationResult;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let request = chat_request_with_tokens(
-            self.messages.clone(),
-            self.options.clone(),
-            self.on_tokens.clone(),
-        );
-        with_engine(&self.engine, |engine| engine.chat(request))
-    }
-
-    fn resolve(&mut self, _env: Env, result: Self::Output) -> Result<Self::JsValue> {
-        Ok(generation_result_to_node(result))
     }
 }
 
@@ -1950,7 +2272,7 @@ impl Task for StateTask {
     type JsValue = EngineState;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        with_engine(&self.engine, |engine| engine.state())
+        with_engine(&self.engine, |engine| block_on(engine.state()))
     }
 
     fn resolve(&mut self, _env: Env, state: Self::Output) -> Result<Self::JsValue> {
@@ -1971,10 +2293,10 @@ impl Task for ModelLoadPathTask {
 
     fn compute(&mut self) -> Result<Self::Output> {
         with_model_service_mut(&self.service, |service| {
-            let loaded = service.load(
+            let loaded = block_on(service.load(
                 core_model_source_from_path(&self.model_path),
                 self.options.clone(),
-            )?;
+            ))?;
             refresh_model_events(&self.events, service)?;
             Ok(loaded)
         })
@@ -1999,10 +2321,10 @@ impl Task for ModelLoadVisionTask {
 
     fn compute(&mut self) -> Result<Self::Output> {
         with_model_service_mut(&self.service, |service| {
-            let loaded = service.load(
+            let loaded = block_on(service.load(
                 core_vision_model_source_from_paths(&self.model_path, &self.projector_path),
                 self.options.clone(),
-            )?;
+            ))?;
             refresh_model_events(&self.events, service)?;
             Ok(loaded)
         })
@@ -2023,7 +2345,7 @@ impl Task for ModelUnloadTask {
     type JsValue = ();
 
     fn compute(&mut self) -> Result<Self::Output> {
-        with_model_service_mut(&self.service, |service| service.unload())?;
+        with_model_service_mut(&self.service, |service| block_on(service.unload()))?;
         clear_model_events(&self.events)
     }
 
@@ -2042,61 +2364,13 @@ impl Task for ModelRemoveTask {
     type JsValue = ();
 
     fn compute(&mut self) -> Result<Self::Output> {
-        with_model_service_mut(&self.service, |service| service.remove(&self.model_id))
+        with_model_service_mut(&self.service, |service| {
+            block_on(service.remove(&self.model_id))
+        })
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
         Ok(output)
-    }
-}
-
-pub struct ModelQueryTask {
-    service: SharedModelService,
-    prompt: String,
-    options: CoreQueryOptions,
-    on_tokens: Option<TokenBatchCallback>,
-}
-
-impl Task for ModelQueryTask {
-    type Output = CoreGenerationResult;
-    type JsValue = GenerationResult;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let request = query_request_with_tokens(
-            self.prompt.clone(),
-            self.options.clone(),
-            self.on_tokens.clone(),
-        );
-        with_model_service(&self.service, |service| service.query(request))
-    }
-
-    fn resolve(&mut self, _env: Env, result: Self::Output) -> Result<Self::JsValue> {
-        Ok(generation_result_to_node(result))
-    }
-}
-
-pub struct ModelChatTask {
-    service: SharedModelService,
-    messages: Vec<CoreChatMessage>,
-    options: CoreQueryOptions,
-    on_tokens: Option<TokenBatchCallback>,
-}
-
-impl Task for ModelChatTask {
-    type Output = CoreGenerationResult;
-    type JsValue = GenerationResult;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let request = chat_request_with_tokens(
-            self.messages.clone(),
-            self.options.clone(),
-            self.on_tokens.clone(),
-        );
-        with_model_service(&self.service, |service| service.chat(request))
-    }
-
-    fn resolve(&mut self, _env: Env, result: Self::Output) -> Result<Self::JsValue> {
-        Ok(generation_result_to_node(result))
     }
 }
 
@@ -2109,7 +2383,7 @@ impl Task for ModelStateTask {
     type JsValue = ModelServiceState;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        with_model_service(&self.service, |service| service.state())
+        with_model_service(&self.service, |service| block_on(service.state()))
     }
 
     fn resolve(&mut self, _env: Env, state: Self::Output) -> Result<Self::JsValue> {
@@ -2129,13 +2403,26 @@ pub fn set_llama_log_quiet(quiet: bool) {
 
 fn with_engine<T>(
     engine: &SharedEngine,
-    f: impl FnOnce(&CoreCogentEngine) -> cogentlm_engine::Result<T>,
+    f: impl FnOnce(CoreCogentEngine) -> cogentlm_engine::Result<T>,
 ) -> Result<T> {
     let guard = engine
         .lock()
         .map_err(|_| napi_error(ENGINE_MUTEX_POISONED))?;
-    let engine = guard.as_ref().ok_or_else(|| napi_error(ENGINE_CLOSED))?;
+    let engine = guard
+        .as_ref()
+        .ok_or_else(|| napi_error(ENGINE_CLOSED))?
+        .clone();
+    drop(guard);
     f(engine).map_err(core_error)
+}
+
+fn clone_engine(engine: &SharedEngine) -> Result<CoreCogentEngine> {
+    Ok(engine
+        .lock()
+        .map_err(|_| napi_error(ENGINE_MUTEX_POISONED))?
+        .as_ref()
+        .ok_or_else(|| napi_error(ENGINE_CLOSED))?
+        .clone())
 }
 
 fn with_model_service<T>(
@@ -2246,6 +2533,10 @@ fn provider_options_or_empty(value: Option<serde_json::Value>) -> Result<CorePro
     }
 }
 
+fn optional_endpoint(endpoint: Option<&EndpointRef>) -> Result<Option<CoreEndpointRef>> {
+    endpoint.map(EndpointRef::to_core).transpose()
+}
+
 fn provider_generation_options_or_default(
     value: Option<&ProviderGenerationOptions>,
 ) -> Result<CoreProviderGenerationOptions> {
@@ -2313,49 +2604,6 @@ fn emit_provider_token_batch(callback: &TokenBatchCallback, batch: &CoreTokenBat
     }
 }
 
-fn query_request_with_tokens(
-    prompt: String,
-    options: CoreQueryOptions,
-    on_tokens: Option<TokenBatchCallback>,
-) -> CoreQueryRequest {
-    let request = CoreQueryRequest::new(prompt).options(options);
-    if let Some(on_tokens) = on_tokens {
-        request.on_tokens(move |batch| emit_token_batch(&on_tokens, batch))
-    } else {
-        request
-    }
-}
-
-fn chat_request_with_tokens(
-    messages: Vec<CoreChatMessage>,
-    options: CoreQueryOptions,
-    on_tokens: Option<TokenBatchCallback>,
-) -> CoreChatRequest {
-    let request = CoreChatRequest::new(messages).options(options);
-    if let Some(on_tokens) = on_tokens {
-        request.on_tokens(move |batch| emit_token_batch(&on_tokens, batch))
-    } else {
-        request
-    }
-}
-
-fn emit_token_batch(
-    callback: &TokenBatchCallback,
-    batch: &CoreTokenBatch,
-) -> cogentlm_engine::Result<()> {
-    let status = callback.call(
-        token_batch_to_node(batch.clone()),
-        ThreadsafeFunctionCallMode::NonBlocking,
-    );
-    if status == Status::Ok {
-        Ok(())
-    } else {
-        Err(cogentlm_engine::Error::RuntimeCommand(format!(
-            "token batch callback failed with {status}"
-        )))
-    }
-}
-
 fn chat_messages_to_core(messages: Vec<ChatMessage>) -> Result<Vec<CoreChatMessage>> {
     if messages.is_empty() {
         return Err(invalid_arg("chat messages must not be empty"));
@@ -2369,15 +2617,6 @@ fn chat_messages_to_core(messages: Vec<ChatMessage>) -> Result<Vec<CoreChatMessa
             })
         })
         .collect()
-}
-
-fn generation_result_to_node(result: CoreGenerationResult) -> GenerationResult {
-    GenerationResult {
-        id: result.id,
-        text: result.text,
-        finish_reason: result.finish_reason.as_str().to_string(),
-        stats: request_stats_to_node(result.stats),
-    }
 }
 
 fn model_capabilities_to_node(capabilities: CoreModelCapabilities) -> ModelCapabilities {
@@ -2885,6 +3124,36 @@ fn provider_error_to_node(env: Env, error: CoreProviderError) -> Error {
         .expect("setting ProviderError.rawBody should not fail");
 
     Error::from(object.to_unknown())
+}
+
+fn client_error_without_env(error: CoreClientError) -> Error {
+    match error {
+        CoreClientError::Local(error) => core_error(error),
+        CoreClientError::Provider(error) => napi_error(provider_error_message(&error)),
+        CoreClientError::InvalidRequest(message) => invalid_arg(message),
+        CoreClientError::UnsupportedOperation {
+            endpoint,
+            operation,
+        } => invalid_arg(format!(
+            "unsupported operation {operation} on endpoint {endpoint:?}"
+        )),
+        other => napi_error(other.to_string()),
+    }
+}
+
+fn client_error_to_node(env: Env, error: CoreClientError) -> Error {
+    match error {
+        CoreClientError::Local(error) => core_error(error),
+        CoreClientError::Provider(error) => provider_error_to_node(env, error),
+        CoreClientError::InvalidRequest(message) => invalid_arg(message),
+        CoreClientError::UnsupportedOperation {
+            endpoint,
+            operation,
+        } => invalid_arg(format!(
+            "unsupported operation {operation} on endpoint {endpoint:?}"
+        )),
+        other => napi_error(other.to_string()),
+    }
 }
 
 fn core_error(error: cogentlm_engine::Error) -> Error {

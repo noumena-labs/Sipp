@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Any, Callable, Final, Literal, Optional, Sequence, TypedDict, Union
+from typing import Any, Callable, Final, Iterator, Literal, Optional, Sequence, TypedDict, Union
 
 PathLike = Union[str, Path]
 GpuLayerConfig = Union[str, dict[str, int]]
@@ -176,25 +178,6 @@ class ModelLoadOptions:
         runtime: Optional[NativeRuntimeConfig] = None,
     ) -> None: ...
 
-class QueryOptions:
-    context_key: str
-    max_tokens: int
-    grammar: str
-    json_schema: str
-    stop: Sequence[str]
-    media: Sequence[bytes]
-    def __init__(
-        self,
-        context_key: str = DEFAULT_CONTEXT_KEY,
-        max_tokens: int = DEFAULT_MAX_TOKENS,
-        grammar: str = "",
-        *,
-        json_schema: str = "",
-        stop: Optional[Sequence[str]] = None,
-        sampling: Optional[SamplingRuntimeConfig] = None,
-        media: Optional[Sequence[bytes]] = None,
-    ) -> None: ...
-
 class ChatMessage:
     role: str
     content: str
@@ -216,12 +199,259 @@ class TokenBatch(TypedDict):
     stats: StreamStats
 
 OnTokens = Callable[[TokenBatch], object]
+ProviderKind = Literal["anthropic", "openai", "proxy"]
+ProviderCapabilitySupport = Literal["supported", "unsupported", "unknown"]
+ProviderOptions = dict[str, Any]
+
+class ProviderCapabilities(TypedDict):
+    chat: ProviderCapabilitySupport
+    generate: ProviderCapabilitySupport
+    embeddings: ProviderCapabilitySupport
+    streaming: ProviderCapabilitySupport
+
+class ProviderModel(TypedDict):
+    id: str
+    provider: ProviderKind
+    display_name: Optional[str]
+    capabilities: ProviderCapabilities
+    context_window: Optional[int]
+    max_output_tokens: Optional[int]
+    raw: Any
+
+class ProviderTextOutput(TypedDict):
+    text: str
+    finish_reason: str
+
+class ProviderEmbeddingOutput(TypedDict):
+    values: list[float]
+
+class TokenUsage(TypedDict):
+    input_tokens: Optional[int]
+    output_tokens: Optional[int]
+    total_tokens: Optional[int]
+
+class ProviderResponseMetadata(TypedDict):
+    provider: ProviderKind
+    model: str
+    request_id: Optional[str]
+    response_id: Optional[str]
+    finish_reason_raw: Optional[str]
+    raw: Any
+
+class ProviderTextResponse(TypedDict):
+    result: ProviderTextOutput
+    usage: Optional[TokenUsage]
+    metadata: ProviderResponseMetadata
+
+class ProviderEmbeddingResponse(TypedDict):
+    result: ProviderEmbeddingOutput
+    usage: Optional[TokenUsage]
+    metadata: ProviderResponseMetadata
+
+class ProviderStreamResult(TypedDict):
+    usage: Optional[TokenUsage]
+    finish_reason: Optional[str]
+
+class EndpointRefDict(TypedDict):
+    kind: Literal["local_engine", "provider_model"]
+    engine: Optional[str]
+    provider: Optional[str]
+    model: Optional[str]
+
+class CogentTextResponse(TypedDict):
+    endpoint: EndpointRefDict
+    text: str
+    finish_reason: str
+    usage: Optional[TokenUsage]
+    local_stats: Optional[dict[str, Any]]
+
+class CogentEmbeddingResponse(TypedDict):
+    endpoint: EndpointRefDict
+    values: list[float]
+    usage: Optional[TokenUsage]
+    local_stats: Optional[dict[str, Any]]
+    pooling: Optional[str]
+    normalized: Optional[bool]
+
+class UnsupportedOperationError(Exception): ...
+
+class ProviderError(Exception):
+    kind: str
+    provider: str
+    status: Optional[int]
+    code: Optional[str]
+    request_id: Optional[str]
+    retry_after_ms: Optional[float]
+    raw_body: Any
+
+class ProviderAuth:
+    @staticmethod
+    def bearer(token: str) -> ProviderAuth: ...
+    @staticmethod
+    def header(name: str, value: str) -> ProviderAuth: ...
+
+class ProviderProxyConfig:
+    def __init__(
+        self,
+        base_url: str,
+        auth: ProviderAuth,
+        protocol: str = "openai_compatible",
+        static_headers: Optional[Sequence[tuple[str, str]]] = None,
+        timeout_ms: Optional[int] = None,
+    ) -> None: ...
+
+class ProviderGenerationOptions:
+    def __init__(
+        self,
+        *,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        stop: Optional[Sequence[str]] = None,
+    ) -> None: ...
+
+class ProviderClient:
+    @staticmethod
+    def proxy(config: ProviderProxyConfig) -> ProviderClient: ...
+    @staticmethod
+    def openai(
+        api_key: str,
+        base_url: Optional[str] = None,
+        timeout_ms: Optional[int] = None,
+    ) -> ProviderClient: ...
+    @staticmethod
+    def anthropic(
+        api_key: str,
+        base_url: Optional[str] = None,
+        version: Optional[str] = None,
+        timeout_ms: Optional[int] = None,
+    ) -> ProviderClient: ...
+    def kind(self) -> ProviderKind: ...
+    def list_models(self) -> list[ProviderModel]: ...
+    def get_model(self, model: str) -> ProviderModel: ...
+    def chat(
+        self,
+        model: str,
+        messages: Sequence[ChatMessage],
+        options: Optional[ProviderGenerationOptions] = None,
+        provider_options: Optional[ProviderOptions] = None,
+    ) -> ProviderTextResponse: ...
+    def generate(
+        self,
+        model: str,
+        prompt: str,
+        options: Optional[ProviderGenerationOptions] = None,
+        provider_options: Optional[ProviderOptions] = None,
+    ) -> ProviderTextResponse: ...
+    def embed(
+        self,
+        model: str,
+        input: str,
+        provider_options: Optional[ProviderOptions] = None,
+    ) -> ProviderEmbeddingResponse: ...
+    def stream_chat(
+        self,
+        model: str,
+        messages: Sequence[ChatMessage],
+        options: Optional[ProviderGenerationOptions] = None,
+        on_tokens: Optional[OnTokens] = None,
+        provider_options: Optional[ProviderOptions] = None,
+    ) -> ProviderStreamResult: ...
+
+class EndpointRef:
+    @staticmethod
+    def local_engine(engine: str) -> EndpointRef: ...
+    @staticmethod
+    def provider_model(provider: str, model: str) -> EndpointRef: ...
+    @property
+    def kind(self) -> Literal["local_engine", "provider_model"]: ...
+
+class CogentTextOptions:
+    def __init__(
+        self,
+        *,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        stop: Optional[Sequence[str]] = None,
+    ) -> None: ...
+
+class LocalTextOptions:
+    def __init__(
+        self,
+        *,
+        context_key: Optional[str] = None,
+        grammar: Optional[str] = None,
+        json_schema: Optional[str] = None,
+        sampling: Optional[SamplingRuntimeConfig] = None,
+        media: Optional[Sequence[bytes]] = None,
+    ) -> None: ...
+
+class LocalEmbedOptions:
+    def __init__(
+        self,
+        *,
+        context_key: Optional[str] = None,
+        normalize: Optional[bool] = None,
+    ) -> None: ...
+
+class CogentTokenIterator(Iterator[TokenBatch]): ...
+
+class CogentTextRun:
+    def result(self) -> CogentTextResponse: ...
+    def tokens(self) -> CogentTokenIterator: ...
+
+class CogentEmbeddingRun:
+    def result(self) -> CogentEmbeddingResponse: ...
+
+class CogentClient:
+    def __init__(self) -> None: ...
+    def load_engine(
+        self,
+        id: str,
+        model_path: PathLike,
+        config: Optional[NativeRuntimeConfig] = None,
+    ) -> None: ...
+    def add_engine(self, id: str, engine: CogentEngine) -> None: ...
+    def add_provider_model(
+        self,
+        provider: str,
+        model: str,
+        client: ProviderClient,
+    ) -> None: ...
+    def set_default_endpoint(self, endpoint: EndpointRef) -> None: ...
+    def query(
+        self,
+        prompt: str,
+        *,
+        endpoint: Optional[EndpointRef] = None,
+        options: Optional[CogentTextOptions] = None,
+        local: Optional[LocalTextOptions] = None,
+        provider_options: Optional[ProviderOptions] = None,
+        stream_tokens: bool = False,
+    ) -> CogentTextRun: ...
+    def chat(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        endpoint: Optional[EndpointRef] = None,
+        options: Optional[CogentTextOptions] = None,
+        local: Optional[LocalTextOptions] = None,
+        provider_options: Optional[ProviderOptions] = None,
+        stream_tokens: bool = False,
+    ) -> CogentTextRun: ...
+    def embed(
+        self,
+        input: str,
+        *,
+        endpoint: Optional[EndpointRef] = None,
+        local: Optional[LocalEmbedOptions] = None,
+        provider_options: Optional[ProviderOptions] = None,
+    ) -> CogentEmbeddingRun: ...
 
 class CogentEngine:
     def __init__(self, model_path: PathLike, config: Optional[NativeRuntimeConfig] = None) -> None: ...
     def close(self) -> None: ...
-    def query(self, prompt: str, options: Optional[QueryOptions] = None, *, on_tokens: Optional[OnTokens] = None) -> dict[str, Any]: ...
-    def chat(self, messages: Sequence[ChatMessage], options: Optional[QueryOptions] = None, *, on_tokens: Optional[OnTokens] = None) -> dict[str, Any]: ...
     def state(self) -> dict[str, Any]: ...
     def drain_events(self) -> list[dict[str, Any]]: ...
 
@@ -234,8 +464,6 @@ class ModelService:
     def remove(self, model_id: str) -> None: ...
     def list(self) -> list[dict[str, Any]]: ...
     def current(self) -> Optional[dict[str, Any]]: ...
-    def query(self, prompt: str, options: Optional[QueryOptions] = None, *, on_tokens: Optional[OnTokens] = None) -> dict[str, Any]: ...
-    def chat(self, messages: Sequence[ChatMessage], options: Optional[QueryOptions] = None, *, on_tokens: Optional[OnTokens] = None) -> dict[str, Any]: ...
     def state(self) -> dict[str, Any]: ...
     def drain_events(self) -> list[dict[str, Any]]: ...
 

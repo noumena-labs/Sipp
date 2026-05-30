@@ -4,17 +4,27 @@ use std::{
     time::Duration,
 };
 
+use cogentlm_client::{
+    CogentChatRequest as ClientChatRequest, CogentClient as CoreCogentClient,
+    CogentEmbedRequest as ClientEmbedRequest, CogentEmbeddingResponse as ClientEmbeddingResponse,
+    CogentEmbeddingResponseFuture as ClientEmbeddingResponseFuture,
+    CogentEmbeddingRun as CoreClientEmbeddingRun, CogentError as ClientError,
+    CogentQueryRequest as ClientQueryRequest, CogentTextOptions as ClientTextOptions,
+    CogentTextResponse as ClientTextResponse, CogentTextResponseFuture as ClientTextResponseFuture,
+    CogentTextRun as CoreClientTextRun, CogentTokenStream as ClientTokenStream,
+    EndpointRef as CoreEndpointRef, LocalEmbedOptions as ClientLocalEmbedOptions,
+    LocalTextOptions as ClientLocalTextOptions, ProviderExecutor as CoreProviderExecutor,
+};
 use cogentlm_engine::backend::{
     backend_observability_json as core_backend_observability_json,
     set_llama_log_quiet as core_set_llama_log_quiet,
 };
 use cogentlm_engine::engine::protocol::{BackendInfo, RequestState, RequestStats};
 use cogentlm_engine::engine::{
-    CacheKeyPolicy, ChatMessage, ChatRequest, ChatRole, CogentEngine, EmbedOptions, EmbedRequest,
-    EmbeddingResult, EngineEvent, EngineEventReceiver, EngineState, EngineStats,
-    FlashAttentionMode, GenerationResult, GpuLayerConfig, KvCacheType, KvReuseMode, LogitBias,
-    ModelPlacementConfig, MultimodalRuntimeConfig, NativeRuntimeConfig, ObservabilityRuntimeConfig,
-    QueryOptions, QueryRequest, ResidencyRuntimeConfig, ResolvedRuntimeLimits, RopeScaling,
+    CacheKeyPolicy, ChatMessage, ChatRole, CogentEngine, EngineEvent, EngineEventReceiver,
+    EngineState, EngineStats, FlashAttentionMode, GpuLayerConfig, KvCacheType, KvReuseMode,
+    LogitBias, ModelPlacementConfig, MultimodalRuntimeConfig, NativeRuntimeConfig,
+    ObservabilityRuntimeConfig, ResidencyRuntimeConfig, ResolvedRuntimeLimits, RopeScaling,
     SamplerStage, SamplingRuntimeConfig, SchedulerRuntimeConfig, SplitMode, TokenBatch,
     DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
 };
@@ -33,6 +43,8 @@ use cogentlm_providers::{
     ProviderOptions, ProviderResponseMetadata, ProviderStreamEvent, ProviderTextOutput,
     ProxyConfig, ProxyProtocol, SecretString, TokenUsage,
 };
+use futures::executor::block_on;
+use futures::StreamExt;
 use pyo3::exceptions::{PyException, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pyclass::PyClass;
@@ -52,13 +64,18 @@ pyo3::create_exception!(
 
 pyo3::create_exception!(_native, ProviderError, PyException, "Provider API error.");
 
-const PY_CALLBACK_FAILED_MESSAGE: &str = "Python token callback failed";
 const PY_ENGINE_EVENTS_MUTEX_POISONED: &str = "engine events mutex is poisoned";
 const PY_ENGINE_MUTEX_POISONED: &str = "engine mutex is poisoned";
 const PY_ENGINE_CLOSED: &str = "engine is closed";
 const PY_MODEL_SERVICE_EVENTS_MUTEX_POISONED: &str = "model service events mutex is poisoned";
 const PY_MODEL_SERVICE_MUTEX_POISONED: &str = "model service mutex is poisoned";
 const PY_MODEL_SERVICE_CLOSED: &str = "model service is closed";
+const PY_CLIENT_MUTEX_POISONED: &str = "client mutex is poisoned";
+const PY_CLIENT_TEXT_RESPONSE_MUTEX_POISONED: &str = "text response mutex is poisoned";
+const PY_CLIENT_EMBEDDING_RESPONSE_MUTEX_POISONED: &str = "embedding response mutex is poisoned";
+const PY_CLIENT_TOKEN_STREAM_MUTEX_POISONED: &str = "token stream mutex is poisoned";
+const PY_CLIENT_TEXT_RESPONSE_CONSUMED: &str = "text response already consumed";
+const PY_CLIENT_EMBEDDING_RESPONSE_CONSUMED: &str = "embedding response already consumed";
 const EVENT_TYPE_STATE: &str = "state";
 const EVENT_TYPE_LOAD_PROGRESS: &str = "load-progress";
 const EVENT_TYPE_REQUEST_STARTED: &str = "request-started";
@@ -67,6 +84,10 @@ const EVENT_TYPE_REQUEST_FAILED: &str = "request-failed";
 const EVENT_TYPE_CLOSED: &str = "closed";
 
 static PROVIDER_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+type PySharedClientTextResponse = Arc<Mutex<Option<ClientTextResponseFuture>>>;
+type PySharedClientEmbeddingResponse = Arc<Mutex<Option<ClientEmbeddingResponseFuture>>>;
+type PySharedClientTokenStream = Arc<Mutex<Option<ClientTokenStream>>>;
 
 fn clear_events(events: &Mutex<Option<EngineEventReceiver>>) {
     if let Ok(mut events) = events.lock() {
@@ -714,77 +735,6 @@ impl PyModelLoadOptions {
     }
 }
 
-#[pyclass(name = "QueryOptions")]
-#[derive(Debug, Clone)]
-struct PyQueryOptions {
-    #[pyo3(get)]
-    context_key: String,
-    #[pyo3(get)]
-    max_tokens: i32,
-    #[pyo3(get)]
-    grammar: String,
-    #[pyo3(get)]
-    json_schema: String,
-    #[pyo3(get)]
-    stop: Vec<String>,
-    #[pyo3(get)]
-    media: Vec<Vec<u8>>,
-    sampling: Option<SamplingRuntimeConfig>,
-}
-
-#[pymethods]
-impl PyQueryOptions {
-    #[new]
-    #[pyo3(signature = (
-        context_key = DEFAULT_CONTEXT_KEY.to_string(),
-        max_tokens = DEFAULT_MAX_TOKENS,
-        grammar = "".to_string(),
-        *,
-        json_schema = "".to_string(),
-        stop = None,
-        sampling = None,
-        media = None
-    ))]
-    #[allow(clippy::too_many_arguments)]
-    fn new(
-        py: Python<'_>,
-        context_key: String,
-        max_tokens: i32,
-        grammar: String,
-        json_schema: String,
-        stop: Option<Vec<String>>,
-        sampling: Option<Py<PySamplingRuntimeConfig>>,
-        media: Option<Vec<Vec<u8>>>,
-    ) -> PyResult<Self> {
-        if max_tokens <= 0 {
-            return Err(PyValueError::new_err("max_tokens must be positive"));
-        }
-        Ok(Self {
-            context_key,
-            max_tokens,
-            grammar,
-            json_schema,
-            stop: stop.unwrap_or_default(),
-            sampling: sampling.as_ref().map(|config| config.borrow(py).to_core()),
-            media: media.unwrap_or_default(),
-        })
-    }
-}
-
-impl PyQueryOptions {
-    fn to_core(&self) -> QueryOptions {
-        QueryOptions {
-            context_key: self.context_key.clone(),
-            max_tokens: self.max_tokens,
-            grammar: self.grammar.clone(),
-            json_schema: self.json_schema.clone(),
-            stop: self.stop.clone(),
-            sampling: self.sampling.clone(),
-            media: self.media.clone(),
-        }
-    }
-}
-
 #[pyclass(name = "ChatMessage")]
 #[derive(Debug, Clone)]
 struct PyChatMessage {
@@ -809,6 +759,138 @@ impl PyChatMessage {
             role: parse_chat_role(&self.role)?,
             content: self.content.clone(),
         })
+    }
+}
+
+#[pyclass(name = "EndpointRef")]
+#[derive(Clone)]
+struct PyEndpointRef {
+    core: CoreEndpointRef,
+}
+
+#[pymethods]
+impl PyEndpointRef {
+    #[staticmethod]
+    fn local_engine(engine: String) -> Self {
+        Self {
+            core: CoreEndpointRef::LocalEngine { engine },
+        }
+    }
+
+    #[staticmethod]
+    fn provider_model(provider: String, model: String) -> Self {
+        Self {
+            core: CoreEndpointRef::ProviderModel { provider, model },
+        }
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        match self.core {
+            CoreEndpointRef::LocalEngine { .. } => "local_engine",
+            CoreEndpointRef::ProviderModel { .. } => "provider_model",
+        }
+    }
+}
+
+impl PyEndpointRef {
+    fn to_core(&self) -> CoreEndpointRef {
+        self.core.clone()
+    }
+}
+
+#[pyclass(name = "CogentTextOptions")]
+#[derive(Clone)]
+struct PyCogentTextOptions {
+    core: ClientTextOptions,
+}
+
+#[pymethods]
+impl PyCogentTextOptions {
+    #[new]
+    #[pyo3(signature = (*, max_tokens = None, temperature = None, top_p = None, stop = None))]
+    fn new(
+        max_tokens: Option<u32>,
+        temperature: Option<f32>,
+        top_p: Option<f32>,
+        stop: Option<Vec<String>>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            core: ClientTextOptions {
+                max_tokens,
+                temperature: py_optional_finite_f32(temperature, "temperature")?,
+                top_p: py_optional_finite_f32(top_p, "top_p")?,
+                stop: stop.unwrap_or_default(),
+            },
+        })
+    }
+}
+
+impl PyCogentTextOptions {
+    fn to_core(&self) -> ClientTextOptions {
+        self.core.clone()
+    }
+}
+
+#[pyclass(name = "LocalTextOptions")]
+#[derive(Clone)]
+struct PyLocalTextOptions {
+    core: ClientLocalTextOptions,
+}
+
+#[pymethods]
+impl PyLocalTextOptions {
+    #[new]
+    #[pyo3(signature = (*, context_key = None, grammar = None, json_schema = None, sampling = None, media = None))]
+    fn new(
+        py: Python<'_>,
+        context_key: Option<String>,
+        grammar: Option<String>,
+        json_schema: Option<String>,
+        sampling: Option<Py<PySamplingRuntimeConfig>>,
+        media: Option<Vec<Vec<u8>>>,
+    ) -> Self {
+        Self {
+            core: ClientLocalTextOptions {
+                context_key,
+                grammar,
+                json_schema,
+                sampling: sampling.as_ref().map(|config| config.borrow(py).to_core()),
+                media: media.unwrap_or_default(),
+            },
+        }
+    }
+}
+
+impl PyLocalTextOptions {
+    fn to_core(&self) -> ClientLocalTextOptions {
+        self.core.clone()
+    }
+}
+
+#[pyclass(name = "LocalEmbedOptions")]
+#[derive(Clone)]
+struct PyLocalEmbedOptions {
+    core: ClientLocalEmbedOptions,
+}
+
+#[pymethods]
+impl PyLocalEmbedOptions {
+    #[new]
+    #[pyo3(signature = (*, context_key = None, normalize = None))]
+    fn new(context_key: Option<String>, normalize: Option<bool>) -> Self {
+        Self {
+            core: ClientLocalEmbedOptions {
+                context_key,
+                normalize,
+            },
+        }
+    }
+}
+
+impl PyLocalEmbedOptions {
+    fn to_core(&self) -> ClientLocalEmbedOptions {
+        self.core.clone()
     }
 }
 
@@ -935,7 +1017,7 @@ impl PyCogentEngine {
     ) -> PyResult<Self> {
         let config = py_core_or_default(py, config, PyNativeRuntimeConfig::to_core);
         let engine = py
-            .allow_threads(|| CogentEngine::load(model_path, config))
+            .allow_threads(|| block_on(CogentEngine::load(model_path, config)))
             .map_err(to_py_error)?;
         let events = engine.subscribe_events();
         Ok(Self {
@@ -944,76 +1026,29 @@ impl PyCogentEngine {
         })
     }
 
-    #[pyo3(signature = (prompt, options = None, on_tokens = None))]
-    fn query(
-        &self,
-        py: Python<'_>,
-        prompt: String,
-        options: Option<Py<PyQueryOptions>>,
-        on_tokens: Option<PyObject>,
-    ) -> PyResult<Py<PyAny>> {
-        let options = py_core_or_default(py, options, PyQueryOptions::to_core);
-        let callback_error = Arc::new(Mutex::new(None));
-        let request =
-            query_request_with_tokens(py, prompt, options, on_tokens, callback_error.clone())?;
-        let guard = self.engine_guard()?;
-        let engine = engine_ref(&guard)?;
-        let result = generation_result_or_callback_error(
-            py.allow_threads(move || engine.query(request)),
-            callback_error,
-        )?;
-        generation_result_to_dict(py, result)
-    }
-
-    #[pyo3(signature = (messages, options = None, on_tokens = None))]
-    fn chat(
-        &self,
-        py: Python<'_>,
-        messages: Vec<Py<PyChatMessage>>,
-        options: Option<Py<PyQueryOptions>>,
-        on_tokens: Option<PyObject>,
-    ) -> PyResult<Py<PyAny>> {
-        let options = py_core_or_default(py, options, PyQueryOptions::to_core);
-        let messages = chat_messages_to_core(py, messages)?;
-        let callback_error = Arc::new(Mutex::new(None));
-        let request =
-            chat_request_with_tokens(py, messages, options, on_tokens, callback_error.clone())?;
-        let guard = self.engine_guard()?;
-        let engine = engine_ref(&guard)?;
-        let result = generation_result_or_callback_error(
-            py.allow_threads(move || engine.chat(request)),
-            callback_error,
-        )?;
-        generation_result_to_dict(py, result)
-    }
-
-    #[pyo3(signature = (input, *, normalize = None, context_key = None))]
-    fn embed(
-        &self,
-        py: Python<'_>,
-        input: String,
-        normalize: Option<bool>,
-        context_key: Option<String>,
-    ) -> PyResult<Py<PyAny>> {
-        let mut options = EmbedOptions::default();
-        if let Some(value) = normalize {
-            options.normalize = value;
-        }
-        options.context_key = context_key;
-        let request = EmbedRequest { input, options };
-        let guard = self.engine_guard()?;
-        let engine = engine_ref(&guard)?;
-        let result = py
-            .allow_threads(move || engine.embed(request))
-            .map_err(to_py_error)?;
-        embedding_result_to_dict(py, result)
-    }
-
     fn state(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let guard = self.engine_guard()?;
-        let engine = engine_ref(&guard)?;
-        let state = py.allow_threads(|| engine.state()).map_err(to_py_error)?;
+        let engine = {
+            let guard = self.engine_guard()?;
+            engine_ref(&guard)?.clone()
+        };
+        let state = py
+            .allow_threads(move || block_on(engine.state()))
+            .map_err(to_py_error)?;
         engine_state_to_dict(py, state)
+    }
+
+    fn close(&self, py: Python<'_>) -> PyResult<()> {
+        let engine = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err(PY_ENGINE_MUTEX_POISONED))?
+            .take();
+        if let Some(engine) = engine {
+            py.allow_threads(|| block_on(engine.close()))
+                .map_err(to_py_error)?;
+        }
+        clear_events(&self.events);
+        Ok(())
     }
 
     fn drain_events(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -1060,7 +1095,7 @@ impl PyModelService {
             .transpose()?
             .unwrap_or_default();
         let loaded = self.load_and_refresh(py, |service| {
-            service.load(core_model_source_from_path(model_path), options)
+            block_on(service.load(core_model_source_from_path(model_path), options))
         })?;
         loaded_model_info_to_dict(py, loaded)
     }
@@ -1079,14 +1114,15 @@ impl PyModelService {
             .transpose()?
             .unwrap_or_default();
         let source = core_vision_model_source_from_paths(model_path, projector_path);
-        let loaded = self.load_and_refresh(py, |service| service.load(source, options))?;
+        let loaded =
+            self.load_and_refresh(py, |service| block_on(service.load(source, options)))?;
         loaded_model_info_to_dict(py, loaded)
     }
 
     fn unload(&self, py: Python<'_>) -> PyResult<()> {
         let mut guard = self.service_guard()?;
         let service = service_mut(&mut guard)?;
-        py.allow_threads(|| service.unload())
+        py.allow_threads(|| block_on(service.unload()))
             .map_err(to_py_model_error)?;
         clear_events(&self.events);
         Ok(())
@@ -1095,7 +1131,7 @@ impl PyModelService {
     fn remove(&self, py: Python<'_>, model_id: String) -> PyResult<()> {
         let mut guard = self.service_guard()?;
         let service = service_mut(&mut guard)?;
-        py.allow_threads(|| service.remove(model_id))
+        py.allow_threads(|| block_on(service.remove(model_id)))
             .map_err(to_py_model_error)
     }
 
@@ -1119,78 +1155,27 @@ impl PyModelService {
         }
     }
 
-    #[pyo3(signature = (prompt, options = None, on_tokens = None))]
-    fn query(
-        &self,
-        py: Python<'_>,
-        prompt: String,
-        options: Option<Py<PyQueryOptions>>,
-        on_tokens: Option<PyObject>,
-    ) -> PyResult<Py<PyAny>> {
-        let options = py_core_or_default(py, options, PyQueryOptions::to_core);
-        let callback_error = Arc::new(Mutex::new(None));
-        let request =
-            query_request_with_tokens(py, prompt, options, on_tokens, callback_error.clone())?;
-        let guard = self.service_guard()?;
-        let service = service_ref(&guard)?;
-        let result = model_generation_result_or_callback_error(
-            py.allow_threads(|| service.query(request)),
-            callback_error,
-        )?;
-        generation_result_to_dict(py, result)
-    }
-
-    #[pyo3(signature = (messages, options = None, on_tokens = None))]
-    fn chat(
-        &self,
-        py: Python<'_>,
-        messages: Vec<Py<PyChatMessage>>,
-        options: Option<Py<PyQueryOptions>>,
-        on_tokens: Option<PyObject>,
-    ) -> PyResult<Py<PyAny>> {
-        let options = py_core_or_default(py, options, PyQueryOptions::to_core);
-        let messages = chat_messages_to_core(py, messages)?;
-        let callback_error = Arc::new(Mutex::new(None));
-        let request =
-            chat_request_with_tokens(py, messages, options, on_tokens, callback_error.clone())?;
-        let guard = self.service_guard()?;
-        let service = service_ref(&guard)?;
-        let result = model_generation_result_or_callback_error(
-            py.allow_threads(|| service.chat(request)),
-            callback_error,
-        )?;
-        generation_result_to_dict(py, result)
-    }
-
-    #[pyo3(signature = (input, *, normalize = None, context_key = None))]
-    fn embed(
-        &self,
-        py: Python<'_>,
-        input: String,
-        normalize: Option<bool>,
-        context_key: Option<String>,
-    ) -> PyResult<Py<PyAny>> {
-        let mut options = EmbedOptions::default();
-        if let Some(value) = normalize {
-            options.normalize = value;
-        }
-        options.context_key = context_key;
-        let request = EmbedRequest { input, options };
-        let guard = self.service_guard()?;
-        let service = service_ref(&guard)?;
-        let result = py
-            .allow_threads(|| service.embed(request))
-            .map_err(to_py_model_error)?;
-        embedding_result_to_dict(py, result)
-    }
-
     fn state(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let guard = self.service_guard()?;
         let service = service_ref(&guard)?;
         let state = py
-            .allow_threads(|| service.state())
+            .allow_threads(|| block_on(service.state()))
             .map_err(to_py_model_error)?;
         model_service_state_to_dict(py, state)
+    }
+
+    fn close(&self, py: Python<'_>) -> PyResult<()> {
+        let service = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err(PY_MODEL_SERVICE_MUTEX_POISONED))?
+            .take();
+        if let Some(mut service) = service {
+            py.allow_threads(|| block_on(service.unload()))
+                .map_err(to_py_model_error)?;
+        }
+        clear_events(&self.events);
+        Ok(())
     }
 
     fn drain_events(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -1226,6 +1211,261 @@ impl PyModelService {
             .map_err(to_py_model_error)?;
         self.refresh_events(service)?;
         Ok(loaded)
+    }
+}
+
+#[pyclass(name = "CogentClient")]
+struct PyCogentClient {
+    inner: Arc<Mutex<CoreCogentClient>>,
+    executor: CoreProviderExecutor,
+}
+
+#[pymethods]
+impl PyCogentClient {
+    #[new]
+    fn new() -> PyResult<Self> {
+        Ok(Self {
+            inner: Arc::new(Mutex::new(CoreCogentClient::new())),
+            executor: CoreProviderExecutor::new().map_err(to_py_client_error)?,
+        })
+    }
+
+    #[pyo3(signature = (id, model_path, config = None))]
+    fn load_engine(
+        &self,
+        py: Python<'_>,
+        id: String,
+        model_path: PathBuf,
+        config: Option<Py<PyNativeRuntimeConfig>>,
+    ) -> PyResult<()> {
+        let config = py_core_or_default(py, config, PyNativeRuntimeConfig::to_core);
+        let inner = self.inner.clone();
+        py.allow_threads(move || {
+            let mut client = inner
+                .lock()
+                .map_err(|_| ClientError::Internal(PY_CLIENT_MUTEX_POISONED.to_string()))?;
+            block_on(client.load_engine(id, model_path, config))
+        })
+        .map_err(to_py_client_error)
+    }
+
+    fn add_engine(&self, py: Python<'_>, id: String, engine: Py<PyCogentEngine>) -> PyResult<()> {
+        let engine = {
+            let engine = engine.borrow(py);
+            let guard = engine.engine_guard()?;
+            engine_ref(&guard)?.clone()
+        };
+        let inner = self.inner.clone();
+        py.allow_threads(move || {
+            let mut client = inner
+                .lock()
+                .map_err(|_| ClientError::Internal(PY_CLIENT_MUTEX_POISONED.to_string()))?;
+            block_on(client.add_engine(id, engine))
+        })
+        .map_err(to_py_client_error)
+    }
+
+    fn add_provider_model(
+        &self,
+        py: Python<'_>,
+        provider: String,
+        model: String,
+        client: Py<PyProviderClient>,
+    ) -> PyResult<()> {
+        let provider_client = client.borrow(py).inner.clone();
+        self.inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err(PY_CLIENT_MUTEX_POISONED))?
+            .add_provider_model(provider, model, provider_client, self.executor.clone())
+            .map_err(to_py_client_error)
+    }
+
+    fn set_default_endpoint(&self, py: Python<'_>, endpoint: Py<PyEndpointRef>) -> PyResult<()> {
+        self.inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err(PY_CLIENT_MUTEX_POISONED))?
+            .set_default_endpoint(endpoint.borrow(py).to_core())
+            .map_err(to_py_client_error)
+    }
+
+    #[pyo3(signature = (prompt, *, endpoint = None, options = None, local = None, provider_options = None, stream_tokens = false))]
+    fn query(
+        &self,
+        py: Python<'_>,
+        prompt: String,
+        endpoint: Option<Py<PyEndpointRef>>,
+        options: Option<Py<PyCogentTextOptions>>,
+        local: Option<Py<PyLocalTextOptions>>,
+        provider_options: Option<PyObject>,
+        stream_tokens: bool,
+    ) -> PyResult<PyCogentTextRun> {
+        let request = ClientQueryRequest {
+            endpoint: endpoint
+                .as_ref()
+                .map(|endpoint| endpoint.borrow(py).to_core()),
+            prompt,
+            options: py_core_or_default(py, options, PyCogentTextOptions::to_core),
+            local: py_core_or_default(py, local, PyLocalTextOptions::to_core),
+            provider_options: py_provider_options_or_empty(py, provider_options)?,
+            stream_tokens,
+        };
+        let run = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err(PY_CLIENT_MUTEX_POISONED))?
+            .query(request);
+        Ok(PyCogentTextRun::from_core(run))
+    }
+
+    #[pyo3(signature = (messages, *, endpoint = None, options = None, local = None, provider_options = None, stream_tokens = false))]
+    fn chat(
+        &self,
+        py: Python<'_>,
+        messages: Vec<Py<PyChatMessage>>,
+        endpoint: Option<Py<PyEndpointRef>>,
+        options: Option<Py<PyCogentTextOptions>>,
+        local: Option<Py<PyLocalTextOptions>>,
+        provider_options: Option<PyObject>,
+        stream_tokens: bool,
+    ) -> PyResult<PyCogentTextRun> {
+        let request = ClientChatRequest {
+            endpoint: endpoint
+                .as_ref()
+                .map(|endpoint| endpoint.borrow(py).to_core()),
+            messages: chat_messages_to_core(py, messages)?,
+            options: py_core_or_default(py, options, PyCogentTextOptions::to_core),
+            local: py_core_or_default(py, local, PyLocalTextOptions::to_core),
+            provider_options: py_provider_options_or_empty(py, provider_options)?,
+            stream_tokens,
+        };
+        let run = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err(PY_CLIENT_MUTEX_POISONED))?
+            .chat(request);
+        Ok(PyCogentTextRun::from_core(run))
+    }
+
+    #[pyo3(signature = (input, *, endpoint = None, local = None, provider_options = None))]
+    fn embed(
+        &self,
+        py: Python<'_>,
+        input: String,
+        endpoint: Option<Py<PyEndpointRef>>,
+        local: Option<Py<PyLocalEmbedOptions>>,
+        provider_options: Option<PyObject>,
+    ) -> PyResult<PyCogentEmbeddingRun> {
+        let request = ClientEmbedRequest {
+            endpoint: endpoint
+                .as_ref()
+                .map(|endpoint| endpoint.borrow(py).to_core()),
+            input,
+            local: py_core_or_default(py, local, PyLocalEmbedOptions::to_core),
+            provider_options: py_provider_options_or_empty(py, provider_options)?,
+        };
+        let run = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err(PY_CLIENT_MUTEX_POISONED))?
+            .embed(request);
+        Ok(PyCogentEmbeddingRun::from_core(run))
+    }
+}
+
+#[pyclass(name = "CogentTextRun")]
+struct PyCogentTextRun {
+    response: PySharedClientTextResponse,
+    tokens: PySharedClientTokenStream,
+}
+
+impl PyCogentTextRun {
+    fn from_core(run: CoreClientTextRun) -> Self {
+        let (tokens, response) = run.into_parts();
+        Self {
+            response: Arc::new(Mutex::new(Some(response))),
+            tokens: Arc::new(Mutex::new(Some(tokens))),
+        }
+    }
+}
+
+#[pymethods]
+impl PyCogentTextRun {
+    fn result(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let response = self
+            .response
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err(PY_CLIENT_TEXT_RESPONSE_MUTEX_POISONED))?
+            .take()
+            .ok_or_else(|| PyRuntimeError::new_err(PY_CLIENT_TEXT_RESPONSE_CONSUMED))?;
+        let response = py
+            .allow_threads(|| block_on(response))
+            .map_err(to_py_client_error)?;
+        cogent_text_response_to_dict(py, response)
+    }
+
+    fn tokens(&self) -> PyCogentTokenIterator {
+        PyCogentTokenIterator {
+            tokens: self.tokens.clone(),
+        }
+    }
+}
+
+#[pyclass(name = "CogentTokenIterator")]
+struct PyCogentTokenIterator {
+    tokens: PySharedClientTokenStream,
+}
+
+#[pymethods]
+impl PyCogentTokenIterator {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let mut guard = self
+            .tokens
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err(PY_CLIENT_TOKEN_STREAM_MUTEX_POISONED))?;
+        let Some(stream) = guard.as_mut() else {
+            return Err(pyo3::exceptions::PyStopIteration::new_err(()));
+        };
+        let batch = py.allow_threads(|| block_on(stream.next()));
+        match batch {
+            Some(batch) => token_batch_to_dict(py, batch),
+            None => {
+                *guard = None;
+                Err(pyo3::exceptions::PyStopIteration::new_err(()))
+            }
+        }
+    }
+}
+
+#[pyclass(name = "CogentEmbeddingRun")]
+struct PyCogentEmbeddingRun {
+    response: PySharedClientEmbeddingResponse,
+}
+
+impl PyCogentEmbeddingRun {
+    fn from_core(run: CoreClientEmbeddingRun) -> Self {
+        Self {
+            response: Arc::new(Mutex::new(Some(run.into_response()))),
+        }
+    }
+}
+
+#[pymethods]
+impl PyCogentEmbeddingRun {
+    fn result(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let response = self
+            .response
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err(PY_CLIENT_EMBEDDING_RESPONSE_MUTEX_POISONED))?
+            .take()
+            .ok_or_else(|| PyRuntimeError::new_err(PY_CLIENT_EMBEDDING_RESPONSE_CONSUMED))?;
+        let response = py
+            .allow_threads(|| block_on(response))
+            .map_err(to_py_client_error)?;
+        cogent_embedding_response_to_dict(py, response)
     }
 }
 
@@ -1433,10 +1673,17 @@ fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyObservabilityRuntimeConfig>()?;
     module.add_class::<PyNativeRuntimeConfig>()?;
     module.add_class::<PyModelLoadOptions>()?;
-    module.add_class::<PyQueryOptions>()?;
     module.add_class::<PyChatMessage>()?;
+    module.add_class::<PyEndpointRef>()?;
+    module.add_class::<PyCogentTextOptions>()?;
+    module.add_class::<PyLocalTextOptions>()?;
+    module.add_class::<PyLocalEmbedOptions>()?;
     module.add_class::<PyCogentEngine>()?;
     module.add_class::<PyModelService>()?;
+    module.add_class::<PyCogentClient>()?;
+    module.add_class::<PyCogentTextRun>()?;
+    module.add_class::<PyCogentTokenIterator>()?;
+    module.add_class::<PyCogentEmbeddingRun>()?;
     module.add_class::<PyProviderAuth>()?;
     module.add_class::<PyProviderProxyConfig>()?;
     module.add_class::<PyProviderGenerationOptions>()?;
@@ -1542,36 +1789,6 @@ fn chat_messages_to_core(
         .collect()
 }
 
-fn query_request_with_tokens(
-    py: Python<'_>,
-    prompt: String,
-    options: QueryOptions,
-    on_tokens: Option<PyObject>,
-    callback_error: Arc<Mutex<Option<PyErr>>>,
-) -> PyResult<QueryRequest> {
-    let mut request = QueryRequest::new(prompt).options(options);
-    if let Some(callback) = on_tokens {
-        require_callable(py, &callback)?;
-        request = request.on_tokens(make_python_tokens_callback(callback, callback_error));
-    }
-    Ok(request)
-}
-
-fn chat_request_with_tokens(
-    py: Python<'_>,
-    messages: Vec<ChatMessage>,
-    options: QueryOptions,
-    on_tokens: Option<PyObject>,
-    callback_error: Arc<Mutex<Option<PyErr>>>,
-) -> PyResult<ChatRequest> {
-    let mut request = ChatRequest::new(messages).options(options);
-    if let Some(callback) = on_tokens {
-        require_callable(py, &callback)?;
-        request = request.on_tokens(make_python_tokens_callback(callback, callback_error));
-    }
-    Ok(request)
-}
-
 fn engine_ref<'a>(guard: &'a MutexGuard<'_, Option<CogentEngine>>) -> PyResult<&'a CogentEngine> {
     guard
         .as_ref()
@@ -1598,102 +1815,6 @@ fn require_callable(py: Python<'_>, callback: &PyObject) -> PyResult<()> {
     } else {
         Err(PyTypeError::new_err("on_tokens must be callable"))
     }
-}
-
-fn make_python_tokens_callback(
-    callback: PyObject,
-    callback_error: Arc<Mutex<Option<PyErr>>>,
-) -> impl FnMut(&TokenBatch) -> cogentlm_engine::Result<()> + Send + 'static {
-    move |batch| {
-        if has_callback_error(&callback_error) {
-            return Err(cogentlm_engine::Error::RuntimeCommand(
-                PY_CALLBACK_FAILED_MESSAGE.to_string(),
-            ));
-        }
-
-        Python::with_gil(|py| {
-            let batch = token_batch_to_dict(py, batch.clone()).map_err(|error| {
-                store_callback_error(&callback_error, error);
-                cogentlm_engine::Error::RuntimeCommand(PY_CALLBACK_FAILED_MESSAGE.to_string())
-            })?;
-            callback.call1(py, (batch,)).map(|_| ()).map_err(|error| {
-                store_callback_error(&callback_error, error);
-                cogentlm_engine::Error::RuntimeCommand(PY_CALLBACK_FAILED_MESSAGE.to_string())
-            })
-        })
-    }
-}
-
-fn generation_result_or_callback_error(
-    result: cogentlm_engine::Result<GenerationResult>,
-    callback_error: Arc<Mutex<Option<PyErr>>>,
-) -> PyResult<GenerationResult> {
-    match result {
-        Ok(result) => Ok(result),
-        Err(error) => Err(callback_error_or_core_error(error, callback_error)),
-    }
-}
-
-fn model_generation_result_or_callback_error(
-    result: Result<GenerationResult, cogentlm_engine::lifecycle::ModelError>,
-    callback_error: Arc<Mutex<Option<PyErr>>>,
-) -> PyResult<GenerationResult> {
-    match result {
-        Ok(result) => Ok(result),
-        Err(error) => Err(callback_error_or_model_error(error, callback_error)),
-    }
-}
-
-fn callback_error_or_model_error(
-    error: cogentlm_engine::lifecycle::ModelError,
-    callback_error: Arc<Mutex<Option<PyErr>>>,
-) -> PyErr {
-    if matches!(
-        &error,
-        cogentlm_engine::lifecycle::ModelError::Runtime(message) if message.contains(PY_CALLBACK_FAILED_MESSAGE)
-    ) {
-        if let Some(error) = take_callback_error(&callback_error) {
-            return error;
-        }
-    }
-    to_py_model_error(error)
-}
-
-fn callback_error_or_core_error(
-    error: cogentlm_engine::Error,
-    callback_error: Arc<Mutex<Option<PyErr>>>,
-) -> PyErr {
-    if matches!(
-        &error,
-        cogentlm_engine::Error::RuntimeCommand(message) if message == PY_CALLBACK_FAILED_MESSAGE
-    ) {
-        if let Some(error) = take_callback_error(&callback_error) {
-            return error;
-        }
-    }
-    to_py_error(error)
-}
-
-fn has_callback_error(callback_error: &Arc<Mutex<Option<PyErr>>>) -> bool {
-    callback_error
-        .lock()
-        .map(|error| error.is_some())
-        .unwrap_or(true)
-}
-
-fn store_callback_error(callback_error: &Arc<Mutex<Option<PyErr>>>, error: PyErr) {
-    if let Ok(mut stored) = callback_error.lock() {
-        if stored.is_none() {
-            *stored = Some(error);
-        }
-    }
-}
-
-fn take_callback_error(callback_error: &Arc<Mutex<Option<PyErr>>>) -> Option<PyErr> {
-    callback_error
-        .lock()
-        .ok()
-        .and_then(|mut error| error.take())
 }
 
 fn py_to_json(value: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
@@ -1783,22 +1904,64 @@ fn json_to_py(py: Python<'_>, value: serde_json::Value) -> PyResult<Py<PyAny>> {
     }
 }
 
-fn generation_result_to_dict(py: Python<'_>, result: GenerationResult) -> PyResult<Py<PyAny>> {
+fn endpoint_ref_to_dict(py: Python<'_>, endpoint: CoreEndpointRef) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new_bound(py);
-    dict.set_item("id", result.id)?;
-    dict.set_item("text", result.text)?;
-    dict.set_item("finish_reason", result.finish_reason.as_str())?;
-    dict.set_item("stats", request_stats_to_dict(py, result.stats)?)?;
+    match endpoint {
+        CoreEndpointRef::LocalEngine { engine } => {
+            dict.set_item("kind", "local_engine")?;
+            dict.set_item("engine", engine)?;
+            dict.set_item("provider", py.None())?;
+            dict.set_item("model", py.None())?;
+        }
+        CoreEndpointRef::ProviderModel { provider, model } => {
+            dict.set_item("kind", "provider_model")?;
+            dict.set_item("engine", py.None())?;
+            dict.set_item("provider", provider)?;
+            dict.set_item("model", model)?;
+        }
+    }
     Ok(dict.into_py(py))
 }
 
-fn embedding_result_to_dict(py: Python<'_>, result: EmbeddingResult) -> PyResult<Py<PyAny>> {
+fn cogent_text_response_to_dict(
+    py: Python<'_>,
+    response: ClientTextResponse,
+) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new_bound(py);
-    dict.set_item("id", result.id)?;
-    dict.set_item("values", result.values)?;
-    dict.set_item("pooling", result.pooling.as_str())?;
-    dict.set_item("normalized", result.normalized)?;
-    dict.set_item("stats", request_stats_to_dict(py, result.stats)?)?;
+    dict.set_item("endpoint", endpoint_ref_to_dict(py, response.endpoint)?)?;
+    dict.set_item("text", response.text)?;
+    dict.set_item("finish_reason", response.finish_reason.as_str())?;
+    match response.usage {
+        Some(usage) => dict.set_item("usage", provider_usage_to_dict(py, usage)?)?,
+        None => dict.set_item("usage", py.None())?,
+    }
+    match response.local_stats {
+        Some(stats) => dict.set_item("local_stats", request_stats_to_dict(py, stats)?)?,
+        None => dict.set_item("local_stats", py.None())?,
+    }
+    Ok(dict.into_py(py))
+}
+
+fn cogent_embedding_response_to_dict(
+    py: Python<'_>,
+    response: ClientEmbeddingResponse,
+) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("endpoint", endpoint_ref_to_dict(py, response.endpoint)?)?;
+    dict.set_item("values", response.values)?;
+    match response.usage {
+        Some(usage) => dict.set_item("usage", provider_usage_to_dict(py, usage)?)?,
+        None => dict.set_item("usage", py.None())?,
+    }
+    match response.local_stats {
+        Some(stats) => dict.set_item("local_stats", request_stats_to_dict(py, stats)?)?,
+        None => dict.set_item("local_stats", py.None())?,
+    }
+    match response.pooling {
+        Some(pooling) => dict.set_item("pooling", pooling.as_str())?,
+        None => dict.set_item("pooling", py.None())?,
+    }
+    dict.set_item("normalized", response.normalized)?;
     Ok(dict.into_py(py))
 }
 
@@ -2530,6 +2693,21 @@ fn to_py_provider_error(error: CoreProviderError) -> PyErr {
 
         PyErr::from_value_bound(instance)
     })
+}
+
+fn to_py_client_error(error: ClientError) -> PyErr {
+    match error {
+        ClientError::Local(error) => to_py_error(error),
+        ClientError::Provider(error) => to_py_provider_error(error),
+        ClientError::InvalidRequest(message) => PyValueError::new_err(message),
+        ClientError::UnsupportedOperation {
+            endpoint,
+            operation,
+        } => UnsupportedOperationError::new_err(format!(
+            "unsupported operation {operation} on endpoint {endpoint:?}"
+        )),
+        other => PyRuntimeError::new_err(other.to_string()),
+    }
 }
 
 fn to_py_error(error: cogentlm_engine::Error) -> PyErr {

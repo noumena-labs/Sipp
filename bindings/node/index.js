@@ -575,8 +575,65 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
+const RESPONSE_PROMISE = Symbol('cogent.responsePromise')
+
+function attachResponseGetter(Run) {
+  if (typeof Run !== 'function') {
+    return
+  }
+  if (Object.getOwnPropertyDescriptor(Run.prototype, 'response') != null) {
+    return
+  }
+  Object.defineProperty(Run.prototype, 'response', {
+    get() {
+      if (this[RESPONSE_PROMISE] == null) {
+        this[RESPONSE_PROMISE] = this.__response()
+      }
+      return this[RESPONSE_PROMISE]
+    },
+  })
+}
+
+function attachRunIterables(binding) {
+  const TextRun = binding.CogentTextRun
+  const EmbeddingRun = binding.CogentEmbeddingRun
+
+  attachResponseGetter(TextRun)
+  attachResponseGetter(EmbeddingRun)
+
+  if (typeof TextRun === 'function' && TextRun.prototype[Symbol.asyncIterator] == null) {
+    Object.defineProperty(TextRun.prototype, Symbol.asyncIterator, {
+      value: async function* tokenIterator() {
+        while (true) {
+          const batch = await this.__nextToken()
+          if (batch == null) {
+            return
+          }
+          yield batch
+        }
+      },
+    })
+  }
+
+  if (typeof TextRun === 'function' && Object.getOwnPropertyDescriptor(TextRun.prototype, 'tokens') == null) {
+    Object.defineProperty(TextRun.prototype, 'tokens', {
+      get() {
+        const run = this
+        return {
+          [Symbol.asyncIterator]: () => run[Symbol.asyncIterator](),
+        }
+      },
+    })
+  }
+}
+
+attachRunIterables(nativeBinding)
+
 module.exports = nativeBinding
+module.exports.CogentClient = nativeBinding.CogentClient
 module.exports.CogentEngine = nativeBinding.CogentEngine
+module.exports.CogentTextRun = nativeBinding.CogentTextRun
+module.exports.CogentEmbeddingRun = nativeBinding.CogentEmbeddingRun
 module.exports.ModelService = nativeBinding.ModelService
 module.exports.ProviderClient = nativeBinding.ProviderClient
 module.exports.backendObservabilityJson = nativeBinding.backendObservabilityJson

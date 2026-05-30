@@ -2,9 +2,6 @@
 /* eslint-disable */
 export declare class CogentEngine {
   static load(modelPath: string, config?: NativeRuntimeConfig | undefined | null): Promise<CogentEngine>
-  query(prompt: string, options?: QueryOptions | undefined | null, onTokens?: TokenBatchCallback | undefined | null): Promise<GenerationResult>
-  chat(messages: Array<ChatMessage>, options?: QueryOptions | undefined | null, onTokens?: TokenBatchCallback | undefined | null): Promise<GenerationResult>
-  embed(request: EmbedRequest): Promise<EmbeddingResult>
   state(): Promise<EngineState>
   drainEvents(): Array<EngineEvent>
 }
@@ -17,11 +14,29 @@ export declare class ModelService {
   remove(modelId: string): Promise<void>
   list(): Array<ManagedModelInfo>
   current(): ManagedModelInfo | null
-  query(prompt: string, options?: QueryOptions | undefined | null, onTokens?: TokenBatchCallback | undefined | null): Promise<GenerationResult>
-  chat(messages: Array<ChatMessage>, options?: QueryOptions | undefined | null, onTokens?: TokenBatchCallback | undefined | null): Promise<GenerationResult>
-  embed(request: EmbedRequest): Promise<EmbeddingResult>
   state(): Promise<ModelServiceState>
   drainEvents(): Array<EngineEvent>
+}
+
+export declare class CogentClient {
+  constructor()
+  loadEngine(id: string, modelPath: string, config?: NativeRuntimeConfig | undefined | null): Promise<void>
+  addEngine(id: string, engine: CogentEngine): Promise<void>
+  addProviderModel(provider: string, model: string, client: ProviderClient): void
+  setDefaultEndpoint(endpoint: EndpointRef): void
+  query(request: CogentQueryRequest): CogentTextRun
+  chat(request: CogentChatRequest): CogentTextRun
+  embed(request: CogentEmbedRequest): CogentEmbeddingRun
+}
+
+export declare class CogentTextRun {
+  readonly response: Promise<CogentTextResponse>
+  readonly tokens: AsyncIterable<TokenBatch>
+  [Symbol.asyncIterator](): AsyncIterator<TokenBatch>
+}
+
+export declare class CogentEmbeddingRun {
+  readonly response: Promise<CogentEmbeddingResponse>
 }
 
 export declare class ProviderClient {
@@ -78,6 +93,88 @@ export interface ChatMessage {
   content: string
 }
 
+export type EndpointRef =
+  | {
+      kind: 'localEngine'
+      engine: string
+      provider?: undefined
+      model?: undefined
+    }
+  | {
+      kind: 'providerModel'
+      provider: string
+      model: string
+      engine?: undefined
+    }
+
+export interface CogentTextOptions {
+  maxTokens?: number
+  temperature?: number
+  topP?: number
+  stop?: Array<string>
+}
+
+export interface LocalTextOptions {
+  contextKey?: string
+  grammar?: string
+  jsonSchema?: string
+  sampling?: SamplingRuntimeConfig
+  media?: Array<Buffer>
+}
+
+export interface LocalEmbedOptions {
+  contextKey?: string
+  normalize?: boolean
+}
+
+export interface CogentQueryRequest {
+  endpoint?: EndpointRef
+  prompt: string
+  options?: CogentTextOptions
+  local?: LocalTextOptions
+  providerOptions?: Record<string, unknown>
+  streamTokens?: boolean
+}
+
+export interface CogentChatRequest {
+  endpoint?: EndpointRef
+  messages: Array<ChatMessage>
+  options?: CogentTextOptions
+  local?: LocalTextOptions
+  providerOptions?: Record<string, unknown>
+  streamTokens?: boolean
+}
+
+export interface CogentEmbedRequest {
+  endpoint?: EndpointRef
+  input: string
+  local?: LocalEmbedOptions
+  providerOptions?: Record<string, unknown>
+}
+
+export interface TokenUsage {
+  inputTokens?: number
+  outputTokens?: number
+  totalTokens?: number
+}
+
+export interface CogentTextResponse {
+  endpoint: EndpointRef
+  text: string
+  finishReason: string
+  usage?: TokenUsage
+  localStats?: RequestStats
+}
+
+export interface CogentEmbeddingResponse {
+  endpoint: EndpointRef
+  values: Array<number>
+  usage?: TokenUsage
+  localStats?: RequestStats
+  pooling?: PoolingType
+  normalized?: boolean
+}
+
 export interface ContextRuntimeConfig {
   n_ctx?: number
   n_batch?: number
@@ -108,24 +205,6 @@ export interface ContextRuntimeConfig {
 export interface EmbeddingCapabilities {
   dimensions: number
   pooling: PoolingType
-}
-
-export interface EmbeddingResult {
-  id: string
-  values: Array<number>
-  pooling: PoolingType
-  normalized: boolean
-  stats: RequestStats
-}
-
-export interface EmbedOptions {
-  normalize?: boolean
-  contextKey?: string
-}
-
-export interface EmbedRequest {
-  input: string
-  options?: EmbedOptions
 }
 
 export interface EngineEvent {
@@ -191,13 +270,6 @@ export interface EngineStats {
   debugMetricsFinalizeMs: number
   debugMetricsCommitObservabilityMs: number
   debugMetricsPostDecodeMs: number
-}
-
-export interface GenerationResult {
-  id: string
-  text: string
-  finishReason: string
-  stats: RequestStats
 }
 
 export interface GpuLayerCountConfig {
@@ -450,16 +522,6 @@ export interface ProviderTokenUsage {
   inputTokens?: number
   outputTokens?: number
   totalTokens?: number
-}
-
-export interface QueryOptions {
-  contextKey?: string
-  maxTokens?: number
-  grammar?: string
-  jsonSchema?: string
-  stop?: Array<string>
-  sampling?: SamplingRuntimeConfig
-  media?: Array<Buffer>
 }
 
 export interface RequestState {

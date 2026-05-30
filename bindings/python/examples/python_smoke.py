@@ -1,17 +1,14 @@
 from __future__ import annotations
 
 import argparse
-import tempfile
-from pathlib import Path
 
 from cogentlm import (
     ChatMessage,
+    CogentClient,
+    CogentTextOptions,
     ContextRuntimeConfig,
     ModelPlacementConfig,
-    ModelLoadOptions,
-    ModelService,
     NativeRuntimeConfig,
-    QueryOptions,
     SamplingRuntimeConfig,
     backend_observability_json,
     set_llama_log_quiet,
@@ -30,15 +27,6 @@ def main() -> None:
     parser.add_argument("--ctx-size", type=int, default=2048)
     parser.add_argument("--threads", type=int, default=0)
     parser.add_argument("--gpu-layers", type=int, default=None)
-    parser.add_argument(
-        "--backend",
-        choices=("auto", "cpu", "cuda", "metal", "vulkan", "webgpu"),
-        default="auto",
-    )
-    parser.add_argument(
-        "--model-store",
-        default=str(Path(tempfile.gettempdir()) / "cogentlm-rs-model-store"),
-    )
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--verbose-llama", action="store_true")
@@ -59,39 +47,34 @@ def main() -> None:
             seed=args.seed,
         ),
     )
-    load_options = ModelLoadOptions(backend=args.backend, stats="basic", runtime=runtime)
-    options = QueryOptions(max_tokens=args.max_tokens)
+    options = CogentTextOptions(max_tokens=args.max_tokens)
 
     print("backend_before_load=" + backend_observability_json(True))
-    engine = ModelService(args.model_store)
-    loaded = engine.load_path(args.model, load_options)
-    print(f"loaded_model={loaded['model']}")
-    print(f"selected_backend={loaded['backend']}")
+    client = CogentClient()
+    client.load_engine("default", args.model, runtime)
     print("backend_after_load=" + backend_observability_json(True))
-    print(f"engine_state_after_load={engine.state()}")
 
+    run = client.chat(
+        [ChatMessage("user", args.prompt)],
+        options=options,
+        stream_tokens=True,
+    )
     pieces: list[str] = []
-
-    def on_tokens(batch: dict[str, object]) -> None:
-        text = str(batch["text"])
-        pieces.append(text)
-        print(text, end="", flush=True)
-
-    print("\nchat_stream=", end="", flush=True)
-    result = engine.chat([ChatMessage("user", args.prompt)], options, on_tokens=on_tokens)
+    for batch in run.tokens():
+        pieces.append(batch["text"])
+        print(batch["text"], end="", flush=True)
+    result = run.result()
     print()
-    streamed_text = "".join(pieces)
-    if streamed_text != result["text"]:
+    if "".join(pieces) != result["text"]:
         raise RuntimeError("streamed token batches did not match final response text")
 
-    stats = result["stats"]
+    stats = result["local_stats"]
+    if stats is None:
+        raise RuntimeError("local CogentClient response did not include local_stats")
+    print(f"endpoint={result['endpoint']}")
     print(f"finish_reason={result['finish_reason']}")
     print(f"stream_batches={len(pieces)}")
-    print(f"engine_state_after_chat={engine.state()}")
-    event_counts: dict[str, int] = {}
-    for event in engine.drain_events():
-        event_counts[event["type"]] = event_counts.get(event["type"], 0) + 1
-    print(f"engine_events={event_counts}")
+    print(f"text={result['text']}")
     print(
         "metrics="
         f"ttft_ms:{stats['ttft_ms']} "
