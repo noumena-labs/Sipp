@@ -1,0 +1,64 @@
+mod emscripten;
+mod macos;
+mod unix;
+mod windows;
+
+use crate::build_support::context::BuildContext;
+use cmake::Config;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TargetKind {
+    Windows,
+    Macos,
+    Emscripten,
+    Unix,
+}
+
+impl TargetKind {
+    pub(crate) fn is_emscripten(self) -> bool {
+        self == Self::Emscripten
+    }
+}
+
+pub(crate) fn classify(target_os: &str, target: &str) -> TargetKind {
+    if target_os == "emscripten" || target.contains("emscripten") {
+        TargetKind::Emscripten
+    } else if target_os == "windows" {
+        TargetKind::Windows
+    } else if target_os == "macos" {
+        TargetKind::Macos
+    } else {
+        TargetKind::Unix
+    }
+}
+
+pub(crate) fn apply_host_cmake_overrides(context: &BuildContext, config: &mut Config) {
+    if context.host_is_windows {
+        windows::apply_host_cmake_overrides(context, config);
+    }
+}
+
+pub(crate) fn apply_cuda_cmake_overrides(context: &BuildContext, config: &mut Config) {
+    if context.host_is_windows {
+        windows::apply_cuda_cmake_overrides(config);
+    }
+}
+
+pub(crate) fn link_system_libraries(context: &BuildContext) {
+    match context.target_kind {
+        TargetKind::Windows => windows::link_system_libraries(context),
+        TargetKind::Macos => macos::link_system_libraries(context),
+        TargetKind::Emscripten => emscripten::link_system_libraries(),
+        TargetKind::Unix => unix::link_system_libraries(context),
+    }
+}
+
+pub(crate) fn apply_bindgen_target_args(
+    context: &BuildContext,
+    builder: bindgen::Builder,
+) -> bindgen::Builder {
+    match context.target_kind {
+        TargetKind::Emscripten => emscripten::apply_bindgen_args(context, builder),
+        _ => builder,
+    }
+}
