@@ -1,8 +1,8 @@
 /**
  * Curated model registry for the CogentLM benchmark.
  *
- * Each entry is app-facing catalog data. Its engine-facing portion is a
- * minimal `cogent-engine` ModelSource.
+ * Each entry is app-facing catalog data. Its client-facing portion is a
+ * minimal `CogentClient` ModelSource.
  */
 
 import type { ModelSource } from '@noumena-labs/cogentlm-browser';
@@ -16,7 +16,7 @@ export interface ModelVariant {
   sizeBytes: number;
   /** Approximate projector file size in bytes */
   projectorSizeBytes?: number;
-  /** Source consumed by engine.models.load(...). */
+  /** Source consumed by client.models.load(...). */
   source: ModelSource;
 }
 

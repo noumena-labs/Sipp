@@ -716,7 +716,7 @@ function processSabotageRequests(state: MutableWorldState, events: SimulationGam
       clearAgentSabotage(state, agent);
       continue;
     }
-    if (powerUp.kind === 'ice_cube') {
+    if (isIcePowerUp(powerUp)) {
       if (vec2Distance(agent.position, target.position) > ICE_THROW_RADIUS) {
         agent.powerUp = powerUp;
         continue;
@@ -1088,10 +1088,22 @@ function applyGuaranteedPowerUpSabotage(
   banana: SimulationObjectState,
   events: SimulationGameEvent[]
 ): void {
-  if (powerUp.kind === 'bat') {
+  if (isBatPowerUp(powerUp)) {
     applyBatSwing(state, attacker, target, powerUp, banana, events);
     return;
   }
+}
+
+function isIcePowerUp(
+  powerUp: { kind: PowerUpKind; objectId: string }
+): powerUp is { kind: 'ice_cube'; objectId: string } {
+  return powerUp.kind === 'ice_cube';
+}
+
+function isBatPowerUp(
+  powerUp: { kind: PowerUpKind; objectId: string }
+): powerUp is { kind: 'bat'; objectId: string } {
+  return powerUp.kind === 'bat';
 }
 
 function applyBatSwing(

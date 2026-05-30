@@ -7,21 +7,26 @@ export const basicChatExample: Example = {
   run: async ({ log }) => {
     log('Example loaded. Type a message in the console to start chatting.', 'system');
   },
-  onUserInput: async ({ engine, log, userInput }) => {
+  onUserInput: async ({ client, log, userInput }) => {
     log(userInput, 'user');
 
     let fullResponse = '';
     const responseEl = log('', 'ai'); // Create persistent element for streaming
 
     try {
-      await engine.chat([
+      const run = client.chat([
         { role: 'user', content: userInput }
       ], {
-        onTokens: (batch) => {
-          fullResponse += batch.text;
-          responseEl.innerText = fullResponse; // Update in real-time
-        }
+        streamTokens: true,
       });
+
+      for await (const batch of run.tokens) {
+        fullResponse += batch.text;
+        responseEl.innerText = fullResponse; // Update in real-time
+      }
+
+      const result = await run.response;
+      responseEl.innerText = result.text;
     } catch (err) {
       log(`Error: ${err}`, 'error');
     }

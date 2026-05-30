@@ -55,7 +55,9 @@ export function TutorialOverlay(props: TutorialOverlayProps) {
     updatePosition();
 
     const resizeObserver = target != null ? new ResizeObserver(updatePosition) : null;
-    resizeObserver?.observe(target);
+    if (target != null) {
+      resizeObserver?.observe(target);
+    }
     window.addEventListener('resize', updatePosition);
 
     return () => {

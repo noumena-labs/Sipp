@@ -8,10 +8,10 @@ export const observabilityExample: Example = {
   id: '04-observability',
   title: 'Observability',
   description: 'Monitoring real-time performance metrics like tokens/sec and TTFT.',
-  run: async ({ engine, log }) => {
-    log('Subscribing to engine observability events...', 'system');
+  run: async ({ client, log }) => {
+    log('Subscribing to client observability events...', 'system');
 
-    engine.observability.subscribe((event) => {
+    client.observability.subscribe((event) => {
       if (event.type === 'query-complete') {
         const metrics = event.snapshot.runtime;
         if (metrics) {
@@ -29,16 +29,21 @@ export const observabilityExample: Example = {
 
     log('Observability active. Send any chat message to see metrics after completion.', 'system');
   },
-  onUserInput: async ({ engine, log, userInput }) => {
+  onUserInput: async ({ client, log, userInput }) => {
     log(userInput, 'user');
 
     let fullResponse = '';
     const responseEl = log('', 'ai'); // Create persistent element for streaming
-    await engine.chat([{ role: 'user', content: userInput }], {
-      onTokens: (batch) => {
-        fullResponse += batch.text;
-        responseEl.innerText = fullResponse; // Update in real-time
-      }
+    const run = client.chat([{ role: 'user', content: userInput }], {
+      streamTokens: true,
     });
+
+    for await (const batch of run.tokens) {
+      fullResponse += batch.text;
+      responseEl.innerText = fullResponse; // Update in real-time
+    }
+
+    const result = await run.response;
+    responseEl.innerText = result.text;
   }
 };

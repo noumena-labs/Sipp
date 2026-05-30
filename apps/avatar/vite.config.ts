@@ -2,27 +2,27 @@ import react from '@vitejs/plugin-react';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
-import { cogentEngineDistWatch } from '../cogentlm-dist-watch';
+import { cogentClientDistWatch } from '../cogentlm-dist-watch';
 
 const avatarAppDir = fileURLToPath(new URL('.', import.meta.url));
-const cogentEngineDistDir = path.resolve(
+const cogentClientDistDir = path.resolve(
   avatarAppDir,
   '../../.build/artifacts/npm/cogentlm-browser/dist/esm'
 );
-const cogentEngineEntry = path.join(cogentEngineDistDir, 'index.js');
-const cogentEngineCharacterEntry = path.join(cogentEngineDistDir, 'character/index.js');
+const cogentClientEntry = path.join(cogentClientDistDir, 'index.js');
+const cogentClientCharacterEntry = path.join(cogentClientDistDir, 'character/index.js');
 const appOutDir = path.resolve(avatarAppDir, '../../.build/artifacts/apps/avatar');
 
 export default defineConfig({
-  plugins: [react(), cogentEngineDistWatch()],
+  plugins: [react(), cogentClientDistWatch()],
   build: {
     outDir: appOutDir,
     emptyOutDir: true,
   },
   resolve: {
     alias: {
-      '@noumena-labs/cogentlm-browser/character': cogentEngineCharacterEntry,
-      '@noumena-labs/cogentlm-browser': cogentEngineEntry,
+      '@noumena-labs/cogentlm-browser/character': cogentClientCharacterEntry,
+      '@noumena-labs/cogentlm-browser': cogentClientEntry,
     },
     preserveSymlinks: true,
   },

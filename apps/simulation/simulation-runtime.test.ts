@@ -6,7 +6,13 @@ import {
   parseDirectorConfig,
   type DirectorRuntimeEngine,
   type JsonValue,
-} from '@noumena-labs/cogentlm-browser/director';
+} from '../../packages/npm/src/orchestrator/index.js';
+import type {
+  BrowserTextRun,
+  GenerationResult,
+  RequestStats,
+  TokenBatch,
+} from '../../packages/npm/src/models/types.js';
 
 import { SimulationBus, type SimulationEvent } from './src/runtime/bus.ts';
 import {
@@ -65,6 +71,38 @@ interface StubChooser {
   }>;
 }
 
+const EMPTY_REQUEST_STATS: RequestStats = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheHits: 0,
+  ttftMs: null,
+  interTokenMs: null,
+  e2eMs: null,
+  tokensPerSecond: null,
+  prefillMs: 0,
+  decodeMs: 0,
+};
+
+function createGenerationResult(text: string): GenerationResult {
+  return {
+    id: 'test-generation',
+    text,
+    finishReason: 'stop',
+    stats: EMPTY_REQUEST_STATS,
+  };
+}
+
+async function* emptyTokenStream(): AsyncIterable<TokenBatch> {
+}
+
+function createTextRun(response: Promise<GenerationResult>): BrowserTextRun {
+  return {
+    response,
+    tokens: emptyTokenStream(),
+    cancel: () => {},
+  };
+}
+
 function createTimeoutEngine(): DirectorRuntimeEngine & { cancelCalls: number[] } {
   const cancelCalls: number[] = [];
 
@@ -73,18 +111,20 @@ function createTimeoutEngine(): DirectorRuntimeEngine & { cancelCalls: number[] 
     models: {
       current: () => ({ mediaMarker: '<image>' }),
     },
-    async chat(_input, options = {}) {
-      const signal = options.signal;
-      if (!signal) {
-        throw new Error('Expected an abortable director task.');
-      }
-      if (!signal.aborted) {
-        await new Promise<void>((resolve) => {
-          signal.addEventListener('abort', () => resolve(), { once: true });
-        });
-      }
-      cancelCalls.push(1);
-      throw new DOMException('Operation aborted.', 'AbortError');
+    chat(_input, options = {}) {
+      return createTextRun((async () => {
+        const signal = options.signal;
+        if (!signal) {
+          throw new Error('Expected an abortable director task.');
+        }
+        if (!signal.aborted) {
+          await new Promise<void>((resolve) => {
+            signal.addEventListener('abort', () => resolve(), { once: true });
+          });
+        }
+        cancelCalls.push(1);
+        throw new DOMException('Operation aborted.', 'AbortError');
+      })());
     },
   };
 }
@@ -102,11 +142,11 @@ function createOutputEngine(outputText: string): DirectorRuntimeEngine & { gramm
     get promptText() {
       return promptText;
     },
-    async chat(input, options) {
+    chat(input, options) {
       const messages = Array.isArray(input) ? input : input.messages;
       promptText = messages.map((message) => `${message.role}: ${message.content}`).join('\n');
       grammar = typeof options === 'object' ? options?.grammar : undefined;
-      return outputText;
+      return createTextRun(Promise.resolve(createGenerationResult(outputText)));
     },
   };
 }
@@ -607,12 +647,13 @@ test('SimulationRuntime dispose leaves shared bus listeners intact', async () =>
   }
 });
 
-test('forced-drop referee choices expose policy through grammar without leaking payload fields', () => {
+test('forced-drop referee choices expose policy through grammar without leaking payload fields', async () => {
   const state = createWorldState();
   state.tick = 8;
   populateForcedDropWorld(state);
   const conflict = createForcedDropConflict(state.tick);
-  const director = new DirectorRuntime(createOutputEngine('drop'), DIRECTOR_CONFIG);
+  const engine = createOutputEngine('drop');
+  const director = new DirectorRuntime(engine, DIRECTOR_CONFIG);
   const payload = expectJsonObject(buildRefereePayload(state, conflict));
   const refereeEvent = expectJsonObject(payload.referee_event);
   const attempt = expectJsonObject(refereeEvent.attempt);
@@ -639,19 +680,19 @@ test('forced-drop referee choices expose policy through grammar without leaking 
     inputs: payload as Record<string, JsonValue>,
     choices: freshChoices,
   };
-  const freshGrammar = director.getTaskGrammar<DirectorResolution>('resolve_referee_event', {
-    ...freshRequest,
-  });
+  const freshResult = await director.run<DirectorResolution>('resolve_referee_event', freshRequest);
+  assert.equal(freshResult.status, 'ok');
+  const freshGrammar = engine.grammar;
   assert.match(freshGrammar ?? '', /"drop"/);
   assert.match(freshGrammar ?? '', /"hold"/);
   assert.match(freshGrammar ?? '', /"attacker_fumbles"/);
 
-  const prompt = director.getTaskPrompt<DirectorResolution>('resolve_referee_event', freshRequest);
-  assert.match(prompt.userPrompt, /recent_history/);
-  assert.match(prompt.userPrompt, /ruling_policy/);
-  assert.match(prompt.userPrompt, /currentHolder/);
-  assert.match(prompt.userPrompt, /fallbackOutcome/);
-  assert.doesNotMatch(prompt.userPrompt, /winnerAgentId/);
+  const promptText = engine.promptText ?? '';
+  assert.match(promptText, /recent_history/);
+  assert.match(promptText, /ruling_policy/);
+  assert.match(promptText, /currentHolder/);
+  assert.match(promptText, /fallbackOutcome/);
+  assert.doesNotMatch(promptText, /winnerAgentId/);
 
   state.game.refereeMemory.forcedDrops.push({
     tick: 7,
@@ -666,10 +707,12 @@ test('forced-drop referee choices expose policy through grammar without leaking 
   const suppressedPolicy = expectJsonObject(suppressedRefereeEvent.ruling_policy);
   const suppressedChoices = buildRefereeChoices(state, conflict);
   assert.deepEqual(suppressedChoices.map((choice) => choice.id), ['drop', 'hold']);
-  const suppressedGrammar = director.getTaskGrammar<DirectorResolution>('resolve_referee_event', {
+  const suppressedResult = await director.run<DirectorResolution>('resolve_referee_event', {
     inputs: suppressedPayload as Record<string, JsonValue>,
     choices: suppressedChoices,
   });
+  assert.equal(suppressedResult.status, 'ok');
+  const suppressedGrammar = engine.grammar;
   assert.match(suppressedGrammar ?? '', /"drop"/);
   assert.match(suppressedGrammar ?? '', /"hold"/);
   assert.doesNotMatch(suppressedGrammar ?? '', /"attacker_fumbles"/);
@@ -687,7 +730,7 @@ test('forced-drop referee choices expose policy through grammar without leaking 
   assert.match(String(suppressedPolicy.varietyNote), /fair variation/);
 });
 
-test('forced-drop policy suppresses three repeated global outcomes when alternatives remain', () => {
+test('forced-drop policy suppresses three repeated global outcomes when alternatives remain', async () => {
   const state = createWorldState();
   state.tick = 20;
   populateForcedDropWorld(state);
@@ -705,11 +748,14 @@ test('forced-drop policy suppresses three repeated global outcomes when alternat
   const rulingPolicy = expectJsonObject(refereeEvent.ruling_policy);
   assert.deepEqual(rulingPolicy.suppressedOutcomes, ['drop']);
 
-  const director = new DirectorRuntime(createOutputEngine('hold'), DIRECTOR_CONFIG);
-  const grammar = director.getTaskGrammar<DirectorResolution>('resolve_referee_event', {
+  const engine = createOutputEngine('hold');
+  const director = new DirectorRuntime(engine, DIRECTOR_CONFIG);
+  const result = await director.run<DirectorResolution>('resolve_referee_event', {
     inputs: payload as Record<string, JsonValue>,
     choices,
   });
+  assert.equal(result.status, 'ok');
+  const grammar = engine.grammar;
   assert.doesNotMatch(grammar ?? '', /"drop"/);
   assert.match(grammar ?? '', /"hold"/);
   assert.match(grammar ?? '', /"attacker_fumbles"/);

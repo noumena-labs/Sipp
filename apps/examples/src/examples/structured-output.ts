@@ -8,7 +8,7 @@ export const structuredOutputExample: Example = {
     log('This example forces the model to output JSON using a GBNF grammar.', 'system');
     log('Type a description of an object (e.g., "A red car from 1995") to see it converted to JSON.', 'dim');
   },
-  onUserInput: async ({ engine, log, userInput }) => {
+  onUserInput: async ({ client, log, userInput }) => {
     log(userInput, 'user');
 
     // Simple JSON grammar for an object with name, year, and color
@@ -25,15 +25,21 @@ export const structuredOutputExample: Example = {
       let fullResponse = '';
       const responseEl = log('', 'ai'); // Create persistent element for streaming
 
-      await engine.chat([
+      const run = client.chat([
         { role: 'user', content: `Extract data: ${userInput}` }
       ], {
         grammar: jsonGrammar,
-        onTokens: (batch) => {
-          fullResponse += batch.text;
-          responseEl.innerText = fullResponse; // Update in real-time
-        }
+        streamTokens: true,
       });
+
+      for await (const batch of run.tokens) {
+        fullResponse += batch.text;
+        responseEl.innerText = fullResponse; // Update in real-time
+      }
+
+      const result = await run.response;
+      fullResponse = result.text;
+      responseEl.innerText = fullResponse;
 
       try {
         const parsed = JSON.parse(fullResponse);

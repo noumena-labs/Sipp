@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import {
-  CogentEngine,
+  CogentClient,
   type BrowserRuntimeSmokeResult,
   type ModelInfo,
   type ModelSource,
@@ -293,7 +293,7 @@ function effectiveTokenCountForModel(model: ModelInfo | null, currentTokenCount:
 }
 
 export default function App() {
-  const [engine, setEngine] = useState<CogentEngine | null>(null);
+  const [client, setClient] = useState<CogentClient | null>(null);
   const [status, setStatus] = useState('booting');
   const [isBusy, setIsBusy] = useState(false);
   const [modelType, setModelType] = useState<'registry' | 'url' | 'file'>('registry');
@@ -308,11 +308,11 @@ export default function App() {
   const [warmupRuns, setWarmupRuns] = useState(1);
   const [measuredRuns, setMeasuredRuns] = useState(3);
   // Three transport modes:
-  //   off    — engine in TOKEN_EMISSION_NONE; nothing crosses to main.
-  //   tokens — engine in StreamingBuffer; main drains SAB and invokes onTokens
+  //   off    — client submits TOKEN_EMISSION_NONE; nothing crosses to main.
+  //   tokens — client submits StreamingBuffer; main drains token batches
   //            without DOM work.  This isolates callback/token-plane cost from
   //            rendering cost.
-  //   render — engine in StreamingBuffer; main drains SAB and writes
+  //   render — client submits StreamingBuffer; main drains SAB and writes
   //            textContent as token batches arrive. Pays the UI/rendering tax.
   type StreamMode = 'off' | 'tokens' | 'render';
   const [streamMode, setStreamMode] = useState<StreamMode>('render');
@@ -418,24 +418,24 @@ export default function App() {
 
   const runBrowserRuntimeSmoke = async (): Promise<BrowserRuntimeSmokeResult> => {
     setBrowserSmokeError(null);
-    const result = await CogentEngine.browserRuntimeSmoke();
+    const result = await CogentClient.browserRuntimeSmoke();
     setBrowserSmoke(result);
     return result;
   };
 
   useEffect(() => {
     let disposed = false;
-    let created: CogentEngine | null = null;
+    let created: CogentClient | null = null;
     let unsubscribe: (() => void) | null = null;
 
     void (async () => {
       try {
-        const nextEngine = await CogentEngine.create();
+        const nextClient = new CogentClient();
         if (disposed) {
-          await nextEngine.close();
+          await nextClient.close();
           return;
         }
-        created = nextEngine;
+        created = nextClient;
         let pendingSnapshot: any = null;
         const updateInterval = setInterval(() => {
           if (pendingSnapshot) {
@@ -445,7 +445,7 @@ export default function App() {
           }
         }, 250); // Steady 4 FPS for metrics to keep main thread clear
 
-        unsubscribe = nextEngine.observability.subscribe((event) => {
+        unsubscribe = nextClient.observability.subscribe((event) => {
           pendingSnapshot = event.snapshot;
         });
 
@@ -455,12 +455,12 @@ export default function App() {
           clearInterval(updateInterval);
           originalUnsubscribe();
         };
-        setEngine(nextEngine);
-        setCurrentModel(nextEngine.models.current());
-        setObservability(nextEngine.observability.current());
-        setInstalledModels(await nextEngine.models.list());
+        setClient(nextClient);
+        setCurrentModel(nextClient.models.current());
+        setObservability(nextClient.observability.current());
+        setInstalledModels(await nextClient.models.list());
         setStatus('idle');
-        void CogentEngine.browserRuntimeSmoke()
+        void CogentClient.browserRuntimeSmoke()
           .then((result) => {
             if (!disposed) {
               setBrowserSmoke(result);
@@ -528,18 +528,18 @@ export default function App() {
     return withProjector(files.length === 1 ? files[0] : files, projector);
   };
 
-  const refreshModels = async (targetEngine: CogentEngine) => {
-    setCurrentModel(targetEngine.models.current());
-    setObservability(targetEngine.observability.current());
-    setInstalledModels(await targetEngine.models.list());
+  const refreshModels = async (targetClient: CogentClient) => {
+    setCurrentModel(targetClient.models.current());
+    setObservability(targetClient.observability.current());
+    setInstalledModels(await targetClient.models.list());
   };
 
   const loadModelSelection = async (
-    targetEngine: CogentEngine,
+    targetClient: CogentClient,
     source: ModelSource
   ): Promise<ModelInfo> => {
     const start = performance.now();
-    const info = await targetEngine.models.load(source, {
+    const info = await targetClient.models.load(source, {
       observability: 'profile',
       runtime: getDefaultRuntimeOptions(),
       onProgress: (progress) => {
@@ -564,12 +564,12 @@ export default function App() {
     if (modelTokenCount !== tokenCount) {
       setTokenCount(modelTokenCount);
     }
-    await refreshModels(targetEngine);
+    await refreshModels(targetClient);
     return info;
   };
 
   const loadSelectedModel = async () => {
-    if (engine == null) return;
+    if (client == null) return;
     const source = modelSource();
     if (source == null) {
       setStatus('Select a model source first.');
@@ -577,7 +577,7 @@ export default function App() {
     }
     setIsBusy(true);
     try {
-      const info = await loadModelSelection(engine, source);
+      const info = await loadModelSelection(client, source);
       setStatus(info.status === 'ready' ? `loaded ${info.name}` : `${info.name}: ${info.status}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
@@ -587,7 +587,7 @@ export default function App() {
   };
 
   const runQuery = async () => {
-    if (engine == null) return;
+    if (client == null) return;
     setIsBusy(true);
     setResponse('');
     setLastRun(null);
@@ -598,7 +598,7 @@ export default function App() {
         return;
       }
       const nextSourceKey = sourceKey(source);
-      const loadedModel = engine.models.current();
+      const loadedModel = client.models.current();
       let requestOperation = operation;
       let requestPrompt = prompt;
       let requestTokenCount = tokenCount;
@@ -607,7 +607,7 @@ export default function App() {
         loadedModel.status !== 'ready' ||
         (loadedSourceKeyRef.current != null && loadedSourceKeyRef.current !== nextSourceKey)
       ) {
-        const info = await loadModelSelection(engine, source);
+        const info = await loadModelSelection(client, source);
         if (!modelSupportsOperation(info, requestOperation)) {
           requestOperation = defaultOperationForModel(info);
         }
@@ -638,7 +638,7 @@ export default function App() {
       const queryRenderer = effectiveStreamTokens && streamMode === 'render' ? createResponseRenderer(1, 'frame') : null;
       queryRenderer?.reset();
       queryRenderer?.start('response');
-      const onTokens =
+      const onTokenBatch =
         requestOperation === 'embed'
           ? undefined
           : streamMode === 'render'
@@ -647,22 +647,21 @@ export default function App() {
           }
           : streamMode === 'tokens'
             ? (_batch: TokenBatch) => {
-              /* onTokens mode: SAB drained and callback invoked, no DOM work */
+              /* Token stream drained with no DOM work. */
             }
             : undefined;
       try {
-        const run = await runObservedRequest(engine, requestPrompt, {
+        const run = await runObservedRequest(client, requestPrompt, {
           operation: requestOperation,
           maxTokens: requestTokenCount,
           session: `query-${Date.now()}`,
           media: image,
           streamTokens: effectiveStreamTokens,
           tokenFlush: streamMode === 'render' ? 'token' : 'batch',
-          // streamTokens=false → onTokens omitted upstream → engine NONE.
-          onTokens,
+          onTokenBatch,
         });
         setResponse(run.output); // Sync React state at the end
-        setObservability(engine.observability.current());
+        setObservability(client.observability.current());
         setLastRun({
           operation: run.operation,
           outputKind: run.outputKind,
@@ -702,7 +701,7 @@ export default function App() {
   };
 
   const runBenchmark = async () => {
-    if (engine == null) return;
+    if (client == null) return;
     const source = modelSource();
     if (source == null) {
       setStatus('Select a model source first.');
@@ -715,7 +714,7 @@ export default function App() {
     setMemorySnapshots([]);
     setBenchmarkReport(null);
     let benchmarkOperation = operation;
-    const loadedModel = engine.models.current();
+    const loadedModel = client.models.current();
     let benchmarkPrompt = prompt;
     let benchmarkTokenCount = tokenCount;
     if (loadedModel != null && !modelSupportsOperation(loadedModel, benchmarkOperation)) {
@@ -727,7 +726,7 @@ export default function App() {
     let benchmarkTokenObserver: BenchmarkTokenObserver | undefined;
 
     try {
-      const info = await loadModelSelection(engine, source);
+      const info = await loadModelSelection(client, source);
       if (!modelSupportsOperation(info, benchmarkOperation)) {
         benchmarkOperation = defaultOperationForModel(info);
       }
@@ -751,7 +750,7 @@ export default function App() {
             onRunStart: (label) => {
               benchmarkRenderer?.start(label);
             },
-            onTokens: (label, batch) => {
+            onTokenBatch: (label, batch) => {
               benchmarkRenderer?.append(label, batch);
             },
           }
@@ -765,7 +764,7 @@ export default function App() {
       for (const scenario of scenarios) {
         results.push(
           await runScenarioBenchmark(
-            engine,
+            client,
             benchmarkOperation,
             scenario,
             source,
@@ -784,9 +783,9 @@ export default function App() {
       snapshots.push(await captureBrowserMemorySnapshot('after-scenarios', true));
 
       let mixed: MixedLoadResult | null = null;
-      if (benchmarkOperation !== 'embed' && supportsConcurrentQueryApi(engine)) {
+      if (benchmarkOperation !== 'embed' && supportsConcurrentQueryApi(client)) {
         mixed = await runMixedLoadBenchmark(
-          engine,
+          client,
           benchmarkOperation,
           buildMixedLoadDefinition(benchmarkOperation, promptSet),
           source,
@@ -820,7 +819,7 @@ export default function App() {
           measuredRuns,
           runtime: getDefaultRuntimeOptions(),
         },
-        observability: engine.observability.current(),
+        observability: client.observability.current(),
         scenarios: results,
         mixedLoad: mixed,
         memory: {
@@ -934,12 +933,13 @@ export default function App() {
     <div className="shell">
       <header className="hero">
         <div className="eyebrow">Browser Benchmark</div>
-        <h1>CogentEngine Minimal API</h1>
+        <h1>CogentClient Minimal API</h1>
         <p>
-          Load with <code>engine.models.load()</code>, inspect with{' '}
-          <code>engine.models.current()</code>, run with <code>engine.chat()</code>,{' '}
-          <code>engine.query()</code>, or <code>engine.embed()</code>, and
-          benchmark with the same minimal surface.
+          Load with <code>client.models.load()</code>, inspect with{' '}
+          <code>client.models.current()</code>, run with <code>client.chat()</code>,{' '}
+          <code>client.query()</code>, or <code>client.embed()</code>, consume{' '}
+          <code>.response</code> and <code>.tokens</code>, and benchmark with
+          the same minimal surface.
         </p>
       </header>
 
@@ -1022,7 +1022,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={loadSelectedModel}
-                  disabled={isBusy || engine == null}
+                  disabled={isBusy || client == null}
                 >
                   Load Model
                 </button>
@@ -1110,7 +1110,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={runQuery}
-                  disabled={isBusy || engine == null}
+                  disabled={isBusy || client == null}
                 >
                   Run Request
                 </button>
@@ -1149,7 +1149,7 @@ export default function App() {
                   <input value={observability?.mode ?? 'off'} readOnly />
                 </div>
                 <div className="row">
-                  <label title="Off = engine NONE (no emission). onTokens = engine emits batched tokens to SAB, main drains and invokes callbacks, no DOM work. Render = engine flushes token-sized batches and writes textContent as they arrive.">
+                  <label title="Off = native NONE (no emission). Tokens = client exposes batched tokens for JS-side draining with no DOM work. Render = client flushes token-sized batches and writes textContent as they arrive.">
                     Stream Tokens
                   </label>
                   <div className="toggle-group">
@@ -1165,9 +1165,9 @@ export default function App() {
                       type="button"
                       className={`toggle-item ${streamMode === 'tokens' ? 'active' : ''}`}
                       onClick={() => setStreamMode('tokens')}
-                      title="On — onTokens callback without DOM rendering"
+                      title="On — drain token batches without DOM rendering"
                     >
-                      onTokens
+                      Tokens
                     </button>
                     <button
                       type="button"
@@ -1191,7 +1191,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={runBenchmark}
-                  disabled={isBusy || engine == null}
+                  disabled={isBusy || client == null}
                 >
                   Run Benchmark
                 </button>
@@ -1375,7 +1375,7 @@ export default function App() {
             {scenarioResults.length === 0 && mixedLoadResult == null ? (
               <p className="hint">
                 Run the benchmark to capture SISO, SILO, LISO, LILO, mixed-load, and memory
-                snapshots with the minimal engine API.
+                snapshots with the minimal client API.
               </p>
             ) : (
               <div className="benchmark-results">

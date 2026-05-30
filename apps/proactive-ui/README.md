@@ -1,6 +1,6 @@
 # apps/proactive-ui
 
-Speed-first proactive drawing demo for Cogent Engine's vision pipeline.
+Speed-first proactive drawing demo for CogentClient's vision pipeline.
 
 The app is a dynamic sketch pad. The user draws with fixed colors and a simple pen size control. After each stroke, the app exports an ink-cropped low-res JPEG and runs a two-pass model pipeline: first the vision model describes the sketch, then a text-only model pass writes an absurd British sketch-comedy heckle from that description.
 
@@ -19,7 +19,7 @@ Open the printed local URL, load the default vision model/projector pair, then d
 
 - direct canvas capture without DOM screenshotting
 - ink-cropped low-res vision frames for lower latency and stronger visual grounding
-- sending JPEG bytes to `engine.chat({ messages, media })`
+- sending JPEG bytes through `client.chat({ messages, media }).response`
 - tiny line-protocol model perception responses to avoid slow or truncated JSON
 - commentary-only model output, with no model-authored canvas writes
 - dynamic model-authored heckles steered by parsed visual facts

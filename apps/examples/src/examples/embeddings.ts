@@ -9,16 +9,16 @@ export const embeddingsExample: Example = {
   title: 'Embeddings',
   description: 'Runs vector extraction through the embed API.',
   run: async ({ log }) => {
-    log('Embeddings example loaded. Send text to run engine.embed().', 'system');
+    log('Embeddings example loaded. Send text to run client.embed().', 'system');
   },
-  onUserInput: async ({ engine, log, userInput }) => {
+  onUserInput: async ({ client, log, userInput }) => {
     log(userInput, 'user');
 
     try {
-      const result = await engine.embed(userInput, {
+      const result = await client.embed(userInput, {
         contextKey: 'examples:embeddings',
         normalize: true,
-      });
+      }).response;
       log(`dimensions: ${result.values.length}`, 'ai');
       log(`pooling: ${result.pooling}`, 'ai');
       log(`normalized: ${result.normalized}`, 'ai');

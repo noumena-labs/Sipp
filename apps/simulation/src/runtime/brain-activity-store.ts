@@ -1,8 +1,12 @@
-import type { QueryObservation } from '@noumena-labs/cogentlm-browser';
-
 const QUERIES_PER_SECOND_WINDOW_MS = 10_000;
 const LIVE_UPDATE_INTERVAL_MS = 120;
 const ROLLING_LATENCY_SAMPLE_COUNT = 10;
+
+interface BrainQueryObservability {
+  readonly ttftMs?: number | null;
+  readonly inputTokens?: number | null;
+  readonly outputTokens?: number | null;
+}
 
 export interface BrainDefinition {
   readonly id: string;
@@ -259,8 +263,9 @@ export class BrainActivityStore {
       readonly status: Exclude<BrainQueryStatus, 'idle' | 'running'>;
       readonly responseText?: string | null;
       readonly errorMessage?: string | null;
-      readonly observability?: QueryObservation | null;
-  }): void {
+      readonly observability?: BrainQueryObservability | null;
+    }
+  ): void {
     const record = this.findRecordByQueryId(queryId);
     this.activeQueryIds.delete(queryId);
 
@@ -284,8 +289,8 @@ export class BrainActivityStore {
     }
     record.errorMessage = args.errorMessage?.trim() || null;
     record.ttftMs = args.observability?.ttftMs ?? null;
-    record.inputTokenCount = (args.observability as any)?.inputTokenCount ?? null;
-    record.outputTokenCount = args.observability?.outputTokenCount ?? null;
+    record.inputTokenCount = args.observability?.inputTokens ?? null;
+    record.outputTokenCount = args.observability?.outputTokens ?? null;
     if (record.startedAtMs != null) {
       this.recentLatenciesMs.push(now - record.startedAtMs);
       if (this.recentLatenciesMs.length > ROLLING_LATENCY_SAMPLE_COUNT) {

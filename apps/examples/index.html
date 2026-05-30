@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cogent Engine - Minimal Examples</title>
+  <title>CogentClient - Minimal Examples</title>
   <link rel="stylesheet" href="/src/style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -14,7 +14,7 @@
     <aside class="sidebar">
       <div class="sidebar-header">
         <div class="logo">
-          <span class="logo-text">Cogent</span><span class="logo-suffix">Engine</span>
+          <span class="logo-text">Cogent</span><span class="logo-suffix">Client</span>
         </div>
       </div>
       <nav class="example-nav">
@@ -46,7 +46,7 @@
       <div class="sidebar-footer">
         <div class="status-indicator">
           <div class="status-dot disconnected"></div>
-          <span class="status-text">Engine Not Ready</span>
+          <span class="status-text">Client Not Ready</span>
         </div>
       </div>
     </aside>
@@ -72,7 +72,7 @@
             <input type="text" id="projector-url" placeholder="Projector GGUF URL" value="https://huggingface.co/LiquidAI/LFM2.5-VL-450M-GGUF/resolve/main/mmproj-model-f16.gguf">
             <input type="file" id="projector-file" accept=".gguf">
           </div>
-          <button id="init-engine-btn" class="btn primary">Initialize & Load</button>
+          <button id="init-client-btn" class="btn primary">Initialize & Load</button>
         </div>
         
         <div class="console-wrapper">
@@ -81,7 +81,7 @@
             <button id="clear-console-btn" class="btn text-btn">Clear</button>
           </div>
           <div id="console-output" class="console-content">
-            <div class="console-line system">Welcome to Cogent Engine Examples. Select an example and click "Initialize & Load" to begin.</div>
+            <div class="console-line system">Welcome to CogentClient Examples. Select an example and click "Initialize & Load" to begin.</div>
           </div>
           <div id="image-preview-area" class="hidden">
             <div class="preview-item">

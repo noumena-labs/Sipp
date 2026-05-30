@@ -1,4 +1,4 @@
-import type { CogentEngine, ObservabilitySnapshot } from '@noumena-labs/cogentlm-browser';
+import type { CogentClient, ObservabilitySnapshot } from '@noumena-labs/cogentlm-browser';
 import type { BenchmarkOperation, MixedLoadDefinition, ScenarioDefinition } from './types';
 import { countWords } from './utils';
 
@@ -15,7 +15,7 @@ export function classifyOutputBucket(tokenCount: number): string {
   return 'long';
 }
 
-const DEFAULT_LONG_PROMPT = 'You are evaluating a browser-hosted inference runtime built with TypeScript, WebAssembly, and llama.cpp. Describe how you would benchmark cold start, module initialization, model load, engine initialization, prompt evaluation throughput, decode throughput, reused-context performance, and TTFT. Keep the answer concise but explain why prompt length and output length should be swept separately.';
+const DEFAULT_LONG_PROMPT = 'You are evaluating a browser-hosted inference runtime built with TypeScript, WebAssembly, and llama.cpp. Describe how you would benchmark cold start, module initialization, model load, runtime initialization, prompt evaluation throughput, decode throughput, reused-context performance, and TTFT. Keep the answer concise but explain why prompt length and output length should be swept separately.';
 
 export interface BenchmarkPromptSet {
   longPrompt: string;
@@ -79,13 +79,13 @@ export function buildBenchmarkScenarios(
   }));
 }
 
-export function describeExecutionMode(targetEngine: any): string {
-  return targetEngine == null ? 'unknown' : 'managed';
+export function describeExecutionMode(targetClient: unknown): string {
+  return targetClient == null ? 'unknown' : 'managed';
 }
 
-export function describeRuntimeObservability(targetEngine: CogentEngine | null): string {
-  if (targetEngine == null) return 'unknown';
-  const snapshot = targetEngine.observability.current();
+export function describeRuntimeObservability(targetClient: CogentClient | null): string {
+  if (targetClient == null) return 'unknown';
+  const snapshot = targetClient.observability.current();
   return `${snapshot.mode}:${snapshot.state}`;
 }
 

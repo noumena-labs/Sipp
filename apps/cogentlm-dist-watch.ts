@@ -26,23 +26,23 @@ interface VitePluginLike {
 
 const appsDir = fileURLToPath(new URL('.', import.meta.url));
 const repoRoot = path.resolve(appsDir, '..');
-const cogentEnginePackageDir = path.join(repoRoot, 'packages', 'npm');
-const cogentEngineArtifactDir = path.join(
+const cogentClientPackageDir = path.join(repoRoot, 'packages', 'npm');
+const cogentClientArtifactDir = path.join(
   repoRoot,
   '.build',
   'artifacts',
   'npm',
   'cogentlm-browser'
 );
-const cogentEngineSrcDir = path.join(cogentEnginePackageDir, 'src');
-const cogentEngineWasmDir = path.join(cogentEngineArtifactDir, 'dist', 'wasm');
+const cogentClientSrcDir = path.join(cogentClientPackageDir, 'src');
+const cogentClientWasmDir = path.join(cogentClientArtifactDir, 'dist', 'wasm');
 const sourceFilePattern = /\.tsx?$/;
 const wasmArtifactPattern = /cogentlm-wasm\.(?:js|wasm)$/;
 const rebuildArgs = ['run', '--filter=@noumena-labs/cogentlm-browser', 'build:ts'];
 
-function isCogentEngineSourceFile(filePath: string): boolean {
+function isCogentClientSourceFile(filePath: string): boolean {
   const resolvedPath = path.resolve(filePath);
-  const relativePath = path.relative(cogentEngineSrcDir, resolvedPath);
+  const relativePath = path.relative(cogentClientSrcDir, resolvedPath);
   return (
     relativePath !== '' &&
     !relativePath.startsWith('..') &&
@@ -51,9 +51,9 @@ function isCogentEngineSourceFile(filePath: string): boolean {
   );
 }
 
-function isCogentEngineWasmArtifact(filePath: string): boolean {
+function isCogentClientWasmArtifact(filePath: string): boolean {
   const resolvedPath = path.resolve(filePath);
-  const relativePath = path.relative(cogentEngineWasmDir, resolvedPath);
+  const relativePath = path.relative(cogentClientWasmDir, resolvedPath);
   return (
     relativePath !== '' &&
     !relativePath.startsWith('..') &&
@@ -62,7 +62,7 @@ function isCogentEngineWasmArtifact(filePath: string): boolean {
   );
 }
 
-function rebuildCogentEngineDist(): Promise<boolean> {
+function rebuildCogentClientDist(): Promise<boolean> {
   return new Promise((resolve) => {
     const childProcess = spawn('bun', rebuildArgs, {
       cwd: repoRoot,
@@ -88,7 +88,7 @@ function rebuildCogentEngineDist(): Promise<boolean> {
   });
 }
 
-export function cogentEngineDistWatch(): VitePluginLike {
+export function cogentClientDistWatch(): VitePluginLike {
   return {
     name: 'cogentlm-browser-dist-watch',
     apply: 'serve',
@@ -109,7 +109,7 @@ export function cogentEngineDistWatch(): VitePluginLike {
         do {
           rebuildRequested = false;
           console.info('[cogentlm-browser] rebuilding TS dist...');
-          const rebuildSucceeded = await rebuildCogentEngineDist();
+          const rebuildSucceeded = await rebuildCogentClientDist();
 
           if (stopped) {
             break;
@@ -127,7 +127,7 @@ export function cogentEngineDistWatch(): VitePluginLike {
       };
 
       const scheduleRebuild = (filePath: string) => {
-        if (!isCogentEngineSourceFile(filePath)) {
+        if (!isCogentClientSourceFile(filePath)) {
           return;
         }
 
@@ -143,7 +143,7 @@ export function cogentEngineDistWatch(): VitePluginLike {
 
       let wasmReloadTimer: ReturnType<typeof setTimeout> | null = null;
       const scheduleWasmReload = (filePath: string) => {
-        if (!isCogentEngineWasmArtifact(filePath)) {
+        if (!isCogentClientWasmArtifact(filePath)) {
           return;
         }
 
@@ -171,7 +171,7 @@ export function cogentEngineDistWatch(): VitePluginLike {
         scheduleWasmReload(filePath);
       };
 
-      server.watcher.add([cogentEngineSrcDir, cogentEngineWasmDir]);
+      server.watcher.add([cogentClientSrcDir, cogentClientWasmDir]);
       server.watcher.on('add', handleAdd);
       server.watcher.on('change', handleChange);
       server.watcher.on('unlink', handleUnlink);
