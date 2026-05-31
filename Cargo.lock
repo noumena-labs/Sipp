@@ -311,8 +311,8 @@ name = "cogentlm-napi"
 version = "0.1.0"
 dependencies = [
  "cogentlm-client",
+ "cogentlm-core",
  "cogentlm-engine",
- "cogentlm-providers",
  "futures",
  "napi",
  "napi-build",
@@ -344,8 +344,8 @@ name = "cogentlm-py"
 version = "0.1.0"
 dependencies = [
  "cogentlm-client",
+ "cogentlm-core",
  "cogentlm-engine",
- "cogentlm-providers",
  "futures",
  "pyo3",
  "serde",
