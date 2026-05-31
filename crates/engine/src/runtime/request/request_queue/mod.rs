@@ -14,6 +14,13 @@ pub struct RequestQueue {
     pub completed_responses: HashMap<GenerateRequestId, GenerateResponse>,
     pub total_emitted_token_count: i32,
     pub token_ring_producers: HashMap<GenerateRequestId, TokenByteRingProducer>,
+    pending_token_emissions: HashMap<GenerateRequestId, PendingTokenEmission>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PendingTokenEmission {
+    text: String,
+    frame_count: u32,
 }
 
 impl Default for RequestQueue {
@@ -30,6 +37,7 @@ impl RequestQueue {
             completed_responses: HashMap::new(),
             total_emitted_token_count: 0,
             token_ring_producers: HashMap::new(),
+            pending_token_emissions: HashMap::new(),
         }
     }
 
@@ -108,12 +116,26 @@ impl RequestQueue {
             return;
         }
 
-        let Some(producer) = self.token_ring_producers.get(&request_id) else {
+        if !self.token_ring_producers.contains_key(&request_id) {
             return;
         };
 
-        if producer.try_write_frame(request_id, 0, text.as_bytes()) {
-            self.total_emitted_token_count = self.total_emitted_token_count.saturating_add(1);
+        let pending = self.pending_token_emissions.entry(request_id).or_default();
+        pending.text.push_str(text);
+        pending.frame_count = pending.frame_count.saturating_add(1);
+        self.total_emitted_token_count = self.total_emitted_token_count.saturating_add(1);
+    }
+
+    pub fn flush_token_emissions(&mut self) {
+        let pending_emissions = std::mem::take(&mut self.pending_token_emissions);
+        for (request_id, pending) in pending_emissions {
+            if pending.text.is_empty() || pending.frame_count == 0 {
+                continue;
+            }
+            let Some(producer) = self.token_ring_producers.get(&request_id) else {
+                continue;
+            };
+            producer.try_write_batch(request_id, pending.frame_count, pending.text.as_bytes());
         }
     }
 
@@ -125,6 +147,7 @@ impl RequestQueue {
     ) -> Option<GenerateResponse> {
         let response = self.completed_responses.remove(&request_id)?;
         self.requests.remove(&request_id);
+        self.pending_token_emissions.remove(&request_id);
         Some(response)
     }
 
@@ -134,6 +157,7 @@ impl RequestQueue {
         self.completed_responses.clear();
         self.total_emitted_token_count = 0;
         self.token_ring_producers.clear();
+        self.pending_token_emissions.clear();
     }
 
     fn remove_pending_request_id(&mut self, request_id: GenerateRequestId) {

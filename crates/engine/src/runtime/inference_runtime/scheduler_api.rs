@@ -10,7 +10,9 @@ use super::{
 
 impl InferenceRuntime {
     pub fn run_scheduler_tick(&mut self) -> RequestStepResult {
-        self.run_scheduler_tick_locked()
+        let result = self.run_scheduler_tick_locked();
+        self.request_queue.flush_token_emissions();
+        result
     }
 
     pub fn run_scheduler_burst(
@@ -51,10 +53,12 @@ impl InferenceRuntime {
                 RequestStepResult::Invalid | RequestStepResult::FatalNoProgress
             ) {
                 burst_result.status = step_result;
+                self.request_queue.flush_token_emissions();
                 return burst_result;
             }
 
             if step_result == RequestStepResult::Waiting {
+                self.request_queue.flush_token_emissions();
                 self.commit_pending_prefix_snapshots();
                 burst_result.status = completed_or_waiting(&burst_result);
                 return burst_result;
@@ -68,6 +72,7 @@ impl InferenceRuntime {
                 deadline.is_some_and(|deadline| Instant::now() >= deadline);
 
             if completed_limit_reached || generated_limit_reached || duration_limit_reached {
+                self.request_queue.flush_token_emissions();
                 if burst_result.completed_response_count > 0 {
                     self.commit_pending_prefix_snapshots();
                 }
@@ -77,7 +82,10 @@ impl InferenceRuntime {
         }
 
         if burst_result.completed_response_count > 0 {
+            self.request_queue.flush_token_emissions();
             self.commit_pending_prefix_snapshots();
+        } else {
+            self.request_queue.flush_token_emissions();
         }
         burst_result.status = completed_or_waiting(&burst_result);
         burst_result
@@ -153,7 +161,10 @@ impl InferenceRuntime {
         if loop_result.completed_response_count > 0
             || loop_result.status == RequestStepResult::Waiting
         {
+            self.request_queue.flush_token_emissions();
             self.commit_pending_prefix_snapshots();
+        } else {
+            self.request_queue.flush_token_emissions();
         }
         loop_result
     }

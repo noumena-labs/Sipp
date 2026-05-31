@@ -4,7 +4,7 @@ use super::TOKEN_RING_RECORD_HEADER_BYTES;
 pub(super) struct TokenRingRecordHeader {
     pub stream_id: u32,
     pub sequence: u32,
-    pub flags: u32,
+    pub frame_count: u32,
     pub byte_len: u32,
 }
 
@@ -13,7 +13,7 @@ impl TokenRingRecordHeader {
         let mut bytes = [0_u8; TOKEN_RING_RECORD_HEADER_BYTES];
         bytes[0..4].copy_from_slice(&self.stream_id.to_le_bytes());
         bytes[4..8].copy_from_slice(&self.sequence.to_le_bytes());
-        bytes[8..12].copy_from_slice(&self.flags.to_le_bytes());
+        bytes[8..12].copy_from_slice(&self.frame_count.to_le_bytes());
         bytes[12..16].copy_from_slice(&self.byte_len.to_le_bytes());
         bytes
     }
@@ -22,7 +22,7 @@ impl TokenRingRecordHeader {
         Self {
             stream_id: u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
             sequence: u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
-            flags: u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]),
+            frame_count: u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]),
             byte_len: u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]),
         }
     }

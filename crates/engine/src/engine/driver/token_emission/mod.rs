@@ -111,7 +111,7 @@ pub(super) fn token_batch_from_ring_frames(
             Ok(piece) => text.push_str(piece),
             Err(_) => text.push_str(&String::from_utf8_lossy(&frame.bytes)),
         }
-        frame_count = frame_count.saturating_add(1);
+        frame_count = frame_count.saturating_add(frame.frame_count);
         byte_count = byte_count.saturating_add(saturating_usize_to_u32(frame.bytes.len()));
     }
 

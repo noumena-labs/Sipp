@@ -15,7 +15,7 @@ use cogentlm_engine::runtime::config::NativeRuntimeConfig;
 #[cfg(target_family = "wasm")]
 use cogentlm_engine::runtime::request::{
     token_byte_ring, GenerateResponse, GenerateResponseStatus, ResponseOutput,
-    TokenByteRingConsumer, TokenByteRingProducer, TOKEN_RING_DEFAULT_CAPACITY,
+    TokenByteRingConsumer, TokenByteRingProducer, TokenRingFrame, TOKEN_RING_DEFAULT_CAPACITY,
 };
 #[cfg(target_family = "wasm")]
 use cogentlm_engine::runtime::{InferenceRuntime, SchedulerBurstResult};
@@ -52,7 +52,7 @@ const COMPLETED_REQUEST_OUTPUT_EMBEDDING: i32 = 2;
 #[cfg(target_family = "wasm")]
 const TOKEN_BUFFER_CAPACITY: usize = 256 * 1024;
 #[cfg(target_family = "wasm")]
-const TOKEN_RECORD_HEADER_BYTES: usize = 8;
+const TOKEN_RECORD_HEADER_BYTES: usize = 16;
 
 static NEXT_ENGINE_ID: AtomicU32 = AtomicU32::new(1);
 
@@ -514,11 +514,7 @@ impl BrowserEngine {
             if frames.is_empty() {
                 break;
             }
-            for frame in &frames {
-                self.inner
-                    .token_buffer
-                    .write_frame(frame.stream_id, &frame.bytes);
-            }
+            self.inner.token_buffer.write_frames(&frames);
             if status.frames_drained == 0 {
                 break;
             }
@@ -759,20 +755,58 @@ impl TokenBuffer {
         self.used = 0;
     }
 
-    fn write_frame(&mut self, request_id: u32, bytes: &[u8]) {
-        if request_id == 0 || bytes.is_empty() {
+    fn write_frames(&mut self, frames: &[TokenRingFrame]) {
+        let mut index = 0usize;
+        while index < frames.len() {
+            let stream_id = frames[index].stream_id;
+            let sequence_start = frames[index].sequence;
+            let mut byte_count = 0usize;
+            let mut frame_count = 0u32;
+            let mut end = index;
+            while end < frames.len() && frames[end].stream_id == stream_id {
+                byte_count = byte_count.saturating_add(frames[end].bytes.len());
+                frame_count = frame_count.saturating_add(frames[end].frame_count);
+                end += 1;
+            }
+            self.write_batch(
+                stream_id,
+                sequence_start,
+                frame_count,
+                &frames[index..end],
+                byte_count,
+            );
+            index = end;
+        }
+    }
+
+    fn write_batch(
+        &mut self,
+        request_id: u32,
+        sequence_start: u32,
+        frame_count: u32,
+        frames: &[TokenRingFrame],
+        byte_count: usize,
+    ) {
+        if request_id == 0 || frame_count == 0 || frames.is_empty() || byte_count == 0 {
             return;
         }
         let used = self.used.max(0) as usize;
-        let record_len = TOKEN_RECORD_HEADER_BYTES + bytes.len();
+        let record_len = TOKEN_RECORD_HEADER_BYTES + byte_count;
         let next_used = used + record_len;
         if next_used > self.buffer.len() {
             self.buffer.resize(next_used, 0);
         }
         let offset = used;
         self.buffer[offset..offset + 4].copy_from_slice(&request_id.to_le_bytes());
-        self.buffer[offset + 4..offset + 8].copy_from_slice(&(bytes.len() as u32).to_le_bytes());
-        self.buffer[offset + 8..offset + record_len].copy_from_slice(bytes);
+        self.buffer[offset + 4..offset + 8].copy_from_slice(&sequence_start.to_le_bytes());
+        self.buffer[offset + 8..offset + 12].copy_from_slice(&frame_count.to_le_bytes());
+        self.buffer[offset + 12..offset + 16].copy_from_slice(&(byte_count as u32).to_le_bytes());
+        let mut payload_offset = offset + TOKEN_RECORD_HEADER_BYTES;
+        for frame in frames {
+            let next_payload_offset = payload_offset + frame.bytes.len();
+            self.buffer[payload_offset..next_payload_offset].copy_from_slice(&frame.bytes);
+            payload_offset = next_payload_offset;
+        }
         self.used = (used + record_len) as i32;
     }
 }

@@ -15,7 +15,8 @@ import { RequestTracker } from './request-tracker.js';
 // enough to be visible while the request is still running.
 const CONTINUOUS_LOOP_TICK_LIMIT = 1024;
 const CONTINUOUS_LOOP_TOKEN_LIMIT = 512;
-const HOST_VISIBLE_TOKEN_SLICE_US = 8_000;
+const MAIN_THREAD_TOKEN_SLICE_US = 8_000;
+const WORKER_TOKEN_SLICE_US = 16_000;
 const REQUEST_STEP_RESULT_INVALID = -1;
 const REQUEST_STEP_RESULT_FATAL_NO_PROGRESS = -2;
 
@@ -52,8 +53,6 @@ export class QueuedRequestScheduler {
     this.schedulerPumpPromise = null;
     this.cachedDrainBridge = null;
     this.cachedUsedHeap32Index = -1;
-    this.tokenBatchSinkDecoders.clear();
-    this.tokenBatchSinkSequences.clear();
     this.tokenBatchSinkStats.clear();
   }
 
@@ -221,18 +220,17 @@ export class QueuedRequestScheduler {
 
   private loopDurationUs(): number {
     if (this.options.getTransportObservability().executionMode === 'main-thread') {
-      return HOST_VISIBLE_TOKEN_SLICE_US;
+      return MAIN_THREAD_TOKEN_SLICE_US;
     }
     return this.options.queuedPromptTokenBatchSinks.size > 0
-      ? HOST_VISIBLE_TOKEN_SLICE_US
+      ? WORKER_TOKEN_SLICE_US
       : 0;
   }
 
   // Cached token buffer control cell; payload pointer may move if wasm grows it.
   private cachedDrainBridge: WasmBridge | null = null;
   private cachedUsedHeap32Index = -1;
-  private readonly tokenBatchSinkDecoders = new Map<number, TextDecoder>();
-  private readonly tokenBatchSinkSequences = new Map<number, number>();
+  private readonly tokenBatchDecoder = new TextDecoder('utf-8', { fatal: false });
   private readonly tokenBatchSinkStats = new Map<
     number,
     {
@@ -262,6 +260,9 @@ export class QueuedRequestScheduler {
       return false;
     }
     const transport = this.options.getTransportObservability();
+    if (!transport.enabled) {
+      return this.drainTokenBuffer(bridge);
+    }
     const start = performance.now();
     try {
       return this.drainTokenBuffer(bridge);
@@ -273,8 +274,8 @@ export class QueuedRequestScheduler {
     }
   }
 
-  // Zero-ccall drain: reads `used` via HEAP32, parses records via HEAPU8,
-  // and decodes them into TokenBatch sinks after each native loop chunk.
+  // Zero-ccall drain: reads `used` via HEAP32, parses batched records via
+  // HEAPU8, and decodes one TokenBatch per native batch record.
   private drainTokenBuffer(bridge: WasmBridge): boolean {
     if (this.options.queuedPromptTokenBatchSinks.size === 0) {
       return false;
@@ -294,75 +295,50 @@ export class QueuedRequestScheduler {
       return false;
     }
     const end = offset + used;
-    const tokenBatchSinkBatches = new Map<
-      number,
-      {
-        sequenceStart: number;
-        text: string[];
-        frameCount: number;
-        byteCount: number;
-      }
-    >();
-    while (offset + 8 <= end) {
+    let delivered = false;
+    while (offset + 16 <= end) {
       const requestId =
         heapU8[offset] |
         (heapU8[offset + 1] << 8) |
         (heapU8[offset + 2] << 16) |
         (heapU8[offset + 3] << 24);
-      const textLength =
+      const sequenceStart =
         heapU8[offset + 4] |
         (heapU8[offset + 5] << 8) |
         (heapU8[offset + 6] << 16) |
         (heapU8[offset + 7] << 24);
-      const payloadStart = offset + 8;
+      const frameCount =
+        heapU8[offset + 8] |
+        (heapU8[offset + 9] << 8) |
+        (heapU8[offset + 10] << 16) |
+        (heapU8[offset + 11] << 24);
+      const textLength =
+        heapU8[offset + 12] |
+        (heapU8[offset + 13] << 8) |
+        (heapU8[offset + 14] << 16) |
+        (heapU8[offset + 15] << 24);
+      const payloadStart = offset + 16;
       if (payloadStart + textLength > end) {
         break;
       }
-      const payload = heapU8.subarray(payloadStart, payloadStart + textLength);
       const streamId = requestId >>> 0;
       const tokenBatchSink = this.options.queuedPromptTokenBatchSinks.get(streamId);
       if (tokenBatchSink != null) {
-        const sequence = this.tokenBatchSinkSequences.get(streamId) ?? 0;
-        this.tokenBatchSinkSequences.set(streamId, (sequence + 1) >>> 0);
-        let batch = tokenBatchSinkBatches.get(streamId);
-        if (batch == null) {
-          batch = {
-            sequenceStart: sequence,
-            text: [],
-            frameCount: 0,
-            byteCount: 0,
-          };
-          tokenBatchSinkBatches.set(streamId, batch);
-        }
-        const decoded = this.decoderForTokenBatchSink(streamId).decode(payload, {
-          stream: true,
+        const payload = heapU8.subarray(payloadStart, payloadStart + textLength);
+        this.deliverTokenBatchSinkBatch(streamId, {
+          sequenceStart: sequenceStart >>> 0,
+          text: this.tokenBatchDecoder.decode(payload),
+          frameCount: frameCount >>> 0,
+          byteCount: textLength >>> 0,
         });
-        if (decoded.length > 0) {
-          batch.text.push(decoded);
-        }
-        batch.frameCount += 1;
-        batch.byteCount += payload.byteLength;
+        delivered = true;
       }
       offset = payloadStart + textLength;
     }
-    for (const [requestId, batch] of tokenBatchSinkBatches) {
-      this.deliverTokenBatchSinkBatch(requestId, batch);
-    }
-    return tokenBatchSinkBatches.size > 0;
-  }
-
-  private decoderForTokenBatchSink(requestId: number): TextDecoder {
-    let decoder = this.tokenBatchSinkDecoders.get(requestId);
-    if (decoder == null) {
-      decoder = new TextDecoder('utf-8', { fatal: false });
-      this.tokenBatchSinkDecoders.set(requestId, decoder);
-    }
-    return decoder;
+    return delivered;
   }
 
   private forgetTokenBatchSinkStream(requestId: number): void {
-    this.tokenBatchSinkDecoders.delete(requestId);
-    this.tokenBatchSinkSequences.delete(requestId);
     this.tokenBatchSinkStats.delete(requestId);
   }
 
@@ -370,7 +346,7 @@ export class QueuedRequestScheduler {
     requestId: number,
     batch: {
       sequenceStart: number;
-      text: string[];
+      text: string;
       frameCount: number;
       byteCount: number;
     }
@@ -393,7 +369,7 @@ export class QueuedRequestScheduler {
         requestId: String(requestId),
         streamId: requestId,
         sequenceStart: batch.sequenceStart,
-        text: batch.text.join(''),
+        text: batch.text,
         frameCount: batch.frameCount,
         byteCount: batch.byteCount,
         stats: { ...stats },

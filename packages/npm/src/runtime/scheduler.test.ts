@@ -11,6 +11,9 @@ import { RequestTracker } from './request-tracker.js';
 import { QueuedRequestScheduler } from './scheduler.js';
 import type { WasmBridge } from '../wasm/wasm-bridge.js';
 
+const TOKEN_BATCH_RECORD_HEADER_BYTES = 16;
+const textEncoder = new TextEncoder();
+
 function createTransportObservability(
   executionMode: EngineExecutionMode = 'main-thread'
 ): TransportObservability {
@@ -21,6 +24,30 @@ function createTransportObservability(
     activeTokenTransport: 'none',
     activeTokenEmission: false,
   };
+}
+
+function writeU32(heapU8: Uint8Array, offset: number, value: number): void {
+  heapU8[offset] = value & 0xff;
+  heapU8[offset + 1] = (value >>> 8) & 0xff;
+  heapU8[offset + 2] = (value >>> 16) & 0xff;
+  heapU8[offset + 3] = (value >>> 24) & 0xff;
+}
+
+function writeTokenBatchRecord(
+  heapU8: Uint8Array,
+  offset: number,
+  requestId: number,
+  sequenceStart: number,
+  frameCount: number,
+  text: string
+): number {
+  const payload = textEncoder.encode(text);
+  writeU32(heapU8, offset, requestId);
+  writeU32(heapU8, offset + 4, sequenceStart);
+  writeU32(heapU8, offset + 8, frameCount);
+  writeU32(heapU8, offset + 12, payload.byteLength);
+  heapU8.set(payload, offset + TOKEN_BATCH_RECORD_HEADER_BYTES);
+  return TOKEN_BATCH_RECORD_HEADER_BYTES + payload.byteLength;
 }
 
 test('QueuedRequestScheduler settles completed requests reported by the inference loop', async () => {
@@ -84,12 +111,7 @@ test('QueuedRequestScheduler drains token buffer to TokenBatch sinks', async () 
   const heap32 = new Int32Array(memory);
   const bufferAddr = 64;
   const usedAddr = 4;
-  const payload = new TextEncoder().encode('hi');
-  const recordSize = 8 + payload.byteLength;
-
-  heapU8[bufferAddr] = 1;
-  heapU8[bufferAddr + 4] = payload.byteLength;
-  heapU8.set(payload, bufferAddr + 8);
+  const recordSize = writeTokenBatchRecord(heapU8, bufferAddr, 1, 7, 2, 'hi');
   heap32[usedAddr / 4] = recordSize;
 
   const bridge = {
@@ -139,16 +161,18 @@ test('QueuedRequestScheduler drains token buffer to TokenBatch sinks', async () 
   assert.equal(batches.length, 1);
   assert.equal(batches[0].requestId, '1');
   assert.equal(batches[0].streamId, 1);
-  assert.equal(batches[0].sequenceStart, 0);
+  assert.equal(batches[0].sequenceStart, 7);
   assert.equal(batches[0].text, 'hi');
-  assert.equal(batches[0].frameCount, 1);
+  assert.equal(batches[0].frameCount, 2);
   assert.equal(batches[0].byteCount, 2);
   assert.deepEqual(batches[0].stats, {
-    framesSent: 1,
+    framesSent: 2,
     bytesSent: 2,
     batchesSent: 1,
   });
   assert.equal(tokenBatchSinkErrors.size, 0);
+  assert.equal(transport.tokenDrainCount, undefined);
+  assert.equal(transport.tokenDrainMs, undefined);
 });
 
 test('QueuedRequestScheduler keeps native token budget while emitting tokens', async () => {
@@ -161,23 +185,12 @@ test('QueuedRequestScheduler keeps native token budget while emitting tokens', a
   const memory = new ArrayBuffer(256);
   const heapU8 = new Uint8Array(memory);
   const heap32 = new Int32Array(memory);
-  const encoder = new TextEncoder();
   const bufferAddr = 64;
   const usedAddr = 4;
   let loopCount = 0;
 
   const writeTokenRecord = (text: string) => {
-    const payload = encoder.encode(text);
-    heapU8[bufferAddr] = 1;
-    heapU8[bufferAddr + 1] = 0;
-    heapU8[bufferAddr + 2] = 0;
-    heapU8[bufferAddr + 3] = 0;
-    heapU8[bufferAddr + 4] = payload.byteLength;
-    heapU8[bufferAddr + 5] = payload.byteLength >>> 8;
-    heapU8[bufferAddr + 6] = payload.byteLength >>> 16;
-    heapU8[bufferAddr + 7] = payload.byteLength >>> 24;
-    heapU8.set(payload, bufferAddr + 8);
-    heap32[usedAddr / 4] = 8 + payload.byteLength;
+    heap32[usedAddr / 4] = writeTokenBatchRecord(heapU8, bufferAddr, 1, 0, 1, text);
   };
 
   const bridge = {
@@ -296,7 +309,7 @@ test('QueuedRequestScheduler time-slices worker loops while emitting tokens', as
   const tracked = scheduler.track(1);
   await tracked.promise;
 
-  assert.deepEqual(maxDurationValues, [8000]);
+  assert.deepEqual(maxDurationValues, [16000]);
 });
 
 test('QueuedRequestScheduler leaves worker loops unsliced without token emission', async () => {

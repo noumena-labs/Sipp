@@ -9,19 +9,19 @@ fn token_ring_frames_are_batched_by_request() {
         TokenRingFrame {
             stream_id: 1,
             sequence: 0,
-            flags: 0,
+            frame_count: 1,
             bytes: b"hel".to_vec(),
         },
         TokenRingFrame {
             stream_id: 2,
             sequence: 0,
-            flags: 0,
+            frame_count: 1,
             bytes: b"skip".to_vec(),
         },
         TokenRingFrame {
             stream_id: 1,
             sequence: 1,
-            flags: 0,
+            frame_count: 1,
             bytes: b"lo".to_vec(),
         },
     ];
@@ -45,13 +45,13 @@ fn token_ring_batch_tracks_sequences() {
     let first = [TokenRingFrame {
         stream_id: 3,
         sequence: 0,
-        flags: 0,
+        frame_count: 1,
         bytes: b"a".to_vec(),
     }];
     let second = [TokenRingFrame {
         stream_id: 3,
         sequence: 1,
-        flags: 0,
+        frame_count: 1,
         bytes: b"bc".to_vec(),
     }];
     let mut state = TokenEmissionState::new(3);
@@ -71,7 +71,7 @@ fn token_ring_batch_stats_saturate() {
     let frames = [TokenRingFrame {
         stream_id: 1,
         sequence: 0,
-        flags: 0,
+        frame_count: 1,
         bytes: b"a".to_vec(),
     }];
     let mut state = TokenEmissionState::new(1);

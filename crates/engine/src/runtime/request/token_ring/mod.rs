@@ -18,7 +18,7 @@ use record_io::{read_bytes, read_record_header, write_bytes, TokenRingRecordHead
 pub struct TokenRingFrame {
     pub stream_id: u32,
     pub sequence: u32,
-    pub flags: u32,
+    pub frame_count: u32,
     pub bytes: Vec<u8>,
 }
 
@@ -87,7 +87,11 @@ pub fn token_byte_ring(capacity: usize) -> (TokenByteRingProducer, TokenByteRing
 }
 
 impl TokenByteRingProducer {
-    pub fn try_write_frame(&self, stream_id: u32, flags: u32, bytes: &[u8]) -> bool {
+    pub fn try_write_frame(&self, stream_id: u32, bytes: &[u8]) -> bool {
+        self.try_write_batch(stream_id, 1, bytes)
+    }
+
+    pub fn try_write_batch(&self, stream_id: u32, frame_count: u32, bytes: &[u8]) -> bool {
         if frame_is_noop(stream_id, bytes) {
             return true;
         }
@@ -102,13 +106,13 @@ impl TokenByteRingProducer {
         };
 
         let was_empty = state.used == 0;
-        let record_sequence = next_sequence_for_stream(&mut state, stream_id);
+        let record_sequence = next_sequence_for_stream(&mut state, stream_id, frame_count);
 
         let offset = state.write_index;
         let header = TokenRingRecordHeader {
             stream_id,
             sequence: record_sequence,
-            flags,
+            frame_count,
             byte_len: record.byte_len,
         }
         .encode();
@@ -201,7 +205,7 @@ impl TokenByteRingConsumer {
             frames.push(TokenRingFrame {
                 stream_id: header.stream_id,
                 sequence: header.sequence,
-                flags: header.flags,
+                frame_count: header.frame_count,
                 bytes,
             });
         }
@@ -294,10 +298,14 @@ fn grow_ring_buffer(state: &mut TokenByteRingState, min_capacity: usize) -> bool
     true
 }
 
-fn next_sequence_for_stream(state: &mut TokenByteRingState, stream_id: u32) -> u32 {
+fn next_sequence_for_stream(
+    state: &mut TokenByteRingState,
+    stream_id: u32,
+    frame_count: u32,
+) -> u32 {
     if state.cached_stream_id == stream_id {
         let sequence = state.cached_next_sequence;
-        state.cached_next_sequence = sequence.wrapping_add(1);
+        state.cached_next_sequence = sequence.wrapping_add(frame_count);
         return sequence;
     }
 
@@ -308,7 +316,7 @@ fn next_sequence_for_stream(state: &mut TokenByteRingState, stream_id: u32) -> u
     }
     let sequence = state.next_sequences.get(&stream_id).copied().unwrap_or(0);
     state.cached_stream_id = stream_id;
-    state.cached_next_sequence = sequence.wrapping_add(1);
+    state.cached_next_sequence = sequence.wrapping_add(frame_count);
     sequence
 }
 
