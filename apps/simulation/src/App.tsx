@@ -610,7 +610,7 @@ export default function App() {
         }
         const { director } = await createDirectorFromConfigUrl({
           configUrl: scenario.directorConfigUrl,
-          engine: createTracedBrainClient(nextClient, brainStore, bus, directorBrain),
+          client: createTracedBrainClient(nextClient, brainStore, bus, directorBrain),
           runtimeOptions: { maxOutputTokens: 96 },
         });
 
@@ -642,7 +642,7 @@ export default function App() {
           const { agent } = await createSimulationAgentChooserFromConfigUrl({
             agentId: assignment.agentId,
             configUrl: assignment.characterUrl,
-            engine: createTracedBrainClient(nextClient, brainStore, bus, brain),
+            client: createTracedBrainClient(nextClient, brainStore, bus, brain),
           });
           const seed = scenario.agents.find((a) => a.id === assignment.agentId);
           if (!seed) {

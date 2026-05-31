@@ -4,13 +4,13 @@ use cogentlm_engine::engine::ModelCapabilities;
 /// Addressable inference destination.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum EndpointRef {
-    LocalEngine { engine: String },
+    LocalModel { model: String },
     ProviderModel { provider: String, model: String },
 }
 
 impl EndpointRef {
-    pub(crate) fn is_local_engine(&self) -> bool {
-        matches!(self, Self::LocalEngine { .. })
+    pub(crate) fn is_local_model(&self) -> bool {
+        matches!(self, Self::LocalModel { .. })
     }
 }
 

@@ -166,7 +166,7 @@ export default function App() {
 
       const { character } = await createCharacterFromConfigUrl({
         configUrl: DEFAULT_CHARACTER_URL,
-        engine: client,
+        client,
         bus,
       });
       if (previousHarness) {

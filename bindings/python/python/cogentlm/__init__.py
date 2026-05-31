@@ -247,21 +247,16 @@ CacheRuntimeConfig = _native.CacheRuntimeConfig
 ChatMessage = _native.ChatMessage
 CogentClient = _native.CogentClient
 CogentEmbeddingRun = _native.CogentEmbeddingRun
-CogentEngine = _native.CogentEngine
 CogentTextOptions = _native.CogentTextOptions
 CogentTextRun = _native.CogentTextRun
 CogentTokenIterator = _native.CogentTokenIterator
 ContextRuntimeConfig = _native.ContextRuntimeConfig
 DEFAULT_CONTEXT_KEY = _native.DEFAULT_CONTEXT_KEY
 DEFAULT_MAX_TOKENS = _native.DEFAULT_MAX_TOKENS
-DEFAULT_MODEL_BACKEND = _native.DEFAULT_MODEL_BACKEND
-DEFAULT_MODEL_STATS = _native.DEFAULT_MODEL_STATS
 EndpointRef = _native.EndpointRef
 LocalEmbedOptions = _native.LocalEmbedOptions
 LocalTextOptions = _native.LocalTextOptions
 ModelPlacementConfig = _native.ModelPlacementConfig
-ModelLoadOptions = _native.ModelLoadOptions
-ModelService = _native.ModelService
 MultimodalRuntimeConfig = _native.MultimodalRuntimeConfig
 NativeRuntimeConfig = _native.NativeRuntimeConfig
 ObservabilityRuntimeConfig = _native.ObservabilityRuntimeConfig
@@ -283,21 +278,16 @@ __all__ = [
     "ChatMessage",
     "CogentClient",
     "CogentEmbeddingRun",
-    "CogentEngine",
     "CogentTextOptions",
     "CogentTextRun",
     "CogentTokenIterator",
     "ContextRuntimeConfig",
     "DEFAULT_CONTEXT_KEY",
     "DEFAULT_MAX_TOKENS",
-    "DEFAULT_MODEL_BACKEND",
-    "DEFAULT_MODEL_STATS",
     "EndpointRef",
     "LocalEmbedOptions",
     "LocalTextOptions",
     "ModelPlacementConfig",
-    "ModelLoadOptions",
-    "ModelService",
     "MultimodalRuntimeConfig",
     "NativeRuntimeConfig",
     "ObservabilityRuntimeConfig",

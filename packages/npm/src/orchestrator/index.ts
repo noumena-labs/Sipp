@@ -42,7 +42,7 @@ export { DirectorConfigError, parseDirectorConfig } from './director-config.js';
 
 export { DirectorOutputError } from './director-output.js';
 
-export type { DirectorRuntimeEngine } from './director-runtime.js';
+export type { DirectorRuntimeClient } from './director-runtime.js';
 export { DirectorRuntime } from './director-runtime.js';
 
 export type { CreateDirectorFromConfigUrlOptions } from './create-director-from-config.js';

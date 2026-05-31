@@ -1,7 +1,7 @@
 import {
   createCharacterFromConfigUrl,
   type CharacterRuntime,
-  type CharacterRuntimeEngine,
+  type CharacterRuntimeClient,
   type CharacterConfig,
   type CharacterChooseResult,
 } from '@noumena-labs/cogentlm-browser/character';
@@ -87,7 +87,8 @@ export class SimulationAgentChooser {
 export interface CreateSimulationAgentChooserFromConfigUrlOptions {
   readonly agentId: string;
   readonly configUrl: string;
-  readonly engine: CharacterRuntimeEngine;
+  /** Chat client used by the constructed character chooser. */
+  readonly client: CharacterRuntimeClient;
   readonly chooserOptions?: SimulationAgentChooserOptions;
   readonly fetch?: typeof globalThis.fetch;
   readonly signal?: AbortSignal;
@@ -98,7 +99,7 @@ export async function createSimulationAgentChooserFromConfigUrl(
 ): Promise<{ agent: SimulationAgentChooser; config: CharacterConfig }> {
   const { character, config } = await createCharacterFromConfigUrl({
     configUrl: options.configUrl,
-    engine: options.engine,
+    client: options.client,
     fetch: options.fetch,
     signal: options.signal,
   });

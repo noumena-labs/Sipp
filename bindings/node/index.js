@@ -631,13 +631,10 @@ attachRunIterables(nativeBinding)
 
 module.exports = nativeBinding
 module.exports.CogentClient = nativeBinding.CogentClient
-module.exports.CogentEngine = nativeBinding.CogentEngine
 module.exports.CogentTextRun = nativeBinding.CogentTextRun
 module.exports.CogentEmbeddingRun = nativeBinding.CogentEmbeddingRun
-module.exports.ModelService = nativeBinding.ModelService
 module.exports.ProviderClient = nativeBinding.ProviderClient
 module.exports.backendObservabilityJson = nativeBinding.backendObservabilityJson
-module.exports.ModelClass = nativeBinding.ModelClass
 module.exports.PoolingType = nativeBinding.PoolingType
 module.exports.ProviderCapabilitySupport = nativeBinding.ProviderCapabilitySupport
 module.exports.ProviderProxyProtocol = nativeBinding.ProviderProxyProtocol

@@ -9,8 +9,8 @@ import type {
   QueryOptions,
   TokenBatch,
 } from '@noumena-labs/cogentlm-browser';
-import type { CharacterRuntimeEngine } from '@noumena-labs/cogentlm-browser/character';
-import type { DirectorRuntimeEngine } from '@noumena-labs/cogentlm-browser/director';
+import type { CharacterRuntimeClient } from '@noumena-labs/cogentlm-browser/character';
+import type { DirectorRuntimeClient } from '@noumena-labs/cogentlm-browser/director';
 import type { BrainDefinition, BrainQueryType, BrainQueryStatus, BrainActivityStore } from './brain-activity-store.js';
 import type { SimulationBus } from './bus.js';
 
@@ -19,11 +19,11 @@ export function createTracedBrainClient(
   store: BrainActivityStore,
   bus: SimulationBus,
   brain: BrainDefinition
-): CharacterRuntimeEngine & DirectorRuntimeEngine {
+): CharacterRuntimeClient & DirectorRuntimeClient {
   return new TracedBrainClient(client, store, bus, brain);
 }
 
-class TracedBrainClient implements CharacterRuntimeEngine, DirectorRuntimeEngine {
+class TracedBrainClient implements CharacterRuntimeClient, DirectorRuntimeClient {
   public readonly models = {
     current: () => this.client.models.current(),
   };

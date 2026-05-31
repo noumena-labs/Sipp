@@ -2,7 +2,7 @@
 //
 // character-agent.ts
 //
-// - High-level character runtime that ties an engine instance to a
+// - High-level character runtime that ties a chat client to a
 //   CharacterConfig: builds the system prompt, tracks memory, compiles the
 //   grammar once, and exposes a single `chat()` async iterator that emits
 //   prose/action events as they arrive.
@@ -36,7 +36,8 @@ export type RunStatus =
   | 'invalid_request'
   | 'invalid_response';
 
-export interface CharacterRuntimeEngine {
+/** Minimal chat client required by character runtimes. */
+export interface CharacterRuntimeClient {
   chat(input: ChatInput, options?: ChatOptions): BrowserTextRun;
 }
 
@@ -51,7 +52,7 @@ export interface CharacterRuntimeOptions {
    * Injecting a shared bus lets multiple consumers observe the same character.
    */
   readonly bus?: CharacterEventBus;
-  /** Stable engine context key prefix. Defaults to `character:${config.id}`. */
+  /** Stable client context key prefix. Defaults to `character:${config.id}`. */
   readonly contextKey?: string;
 }
 
@@ -90,7 +91,7 @@ interface InFlightTurn {
  * CharacterConfig to get a grammar-constrained, memory-aware chat loop.
  */
 export class CharacterRuntime {
-  private readonly engine: CharacterRuntimeEngine;
+  private readonly client: CharacterRuntimeClient;
   private readonly config: CharacterConfig;
   private readonly maxOutputTokens: number;
   private readonly contextKey: string;
@@ -103,11 +104,11 @@ export class CharacterRuntime {
   private currentTurn: InFlightTurn | undefined;
 
   public constructor(
-    engine: CharacterRuntimeEngine,
+    client: CharacterRuntimeClient,
     config: CharacterConfig,
     options: CharacterRuntimeOptions = {}
   ) {
-    this.engine = engine;
+    this.client = client;
     this.config = config;
     this.maxOutputTokens = options.maxOutputTokens ?? 256;
     this.contextKey = options.contextKey ?? `character:${config.id}`;
@@ -130,7 +131,7 @@ export class CharacterRuntime {
     return this.turnHistory.slice();
   }
 
-  /** Clears the sliding-window memory. Does not reset the engine's KV cache. */
+  /** Clears the sliding-window memory. Does not reset the client's KV cache. */
   public clearMemory(): void {
     this.turnHistory.length = 0;
   }
@@ -184,7 +185,7 @@ export class CharacterRuntime {
     });
 
     try {
-      const result = await this.engine.chat(messages, {
+      const result = await this.client.chat(messages, {
         ...chatOptions,
         grammar,
       }).response;
@@ -399,7 +400,7 @@ export class CharacterRuntime {
         streamTokens: true,
         signal,
       };
-      const run = this.engine.chat(messages, {
+      const run = this.client.chat(messages, {
         ...queryOptions,
         grammar: this.grammarSource,
       });

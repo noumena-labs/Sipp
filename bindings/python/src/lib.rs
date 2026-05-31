@@ -1,6 +1,6 @@
 use std::{
     path::PathBuf,
-    sync::{Arc, Mutex, MutexGuard, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
 
@@ -19,20 +19,13 @@ use cogentlm_engine::backend::{
     backend_observability_json as core_backend_observability_json,
     set_llama_log_quiet as core_set_llama_log_quiet,
 };
-use cogentlm_engine::engine::protocol::{BackendInfo, RequestState, RequestStats};
+use cogentlm_engine::engine::protocol::RequestStats;
 use cogentlm_engine::engine::{
-    CacheKeyPolicy, ChatMessage, ChatRole, CogentEngine, EngineEvent, EngineEventReceiver,
-    EngineState, EngineStats, FlashAttentionMode, GpuLayerConfig, KvCacheType, KvReuseMode,
-    LogitBias, ModelPlacementConfig, MultimodalRuntimeConfig, NativeRuntimeConfig,
-    ObservabilityRuntimeConfig, ResidencyRuntimeConfig, ResolvedRuntimeLimits, RopeScaling,
-    SamplerStage, SamplingRuntimeConfig, SchedulerRuntimeConfig, SplitMode, TokenBatch,
-    DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
-};
-use cogentlm_engine::lifecycle::{
-    model_source_from_path as core_model_source_from_path,
-    vision_model_source_from_paths as core_vision_model_source_from_paths, BackendPreference,
-    LoadedModelInfo, ModelInfo, ModelLoadOptions, ModelService, ModelServiceState, StatsMode,
-    DEFAULT_MODEL_BACKEND, DEFAULT_MODEL_STATS,
+    CacheKeyPolicy, ChatMessage, ChatRole, FlashAttentionMode, GpuLayerConfig, KvCacheType,
+    KvReuseMode, LogitBias, ModelPlacementConfig, MultimodalRuntimeConfig, NativeRuntimeConfig,
+    ObservabilityRuntimeConfig, ResidencyRuntimeConfig, RopeScaling, SamplerStage,
+    SamplingRuntimeConfig, SchedulerRuntimeConfig, SplitMode, TokenBatch, DEFAULT_CONTEXT_KEY,
+    DEFAULT_MAX_TOKENS,
 };
 use cogentlm_engine::runtime::config::{SchedulerPolicyConfig, SchedulerPolicyMode};
 use cogentlm_providers::{
@@ -64,53 +57,18 @@ pyo3::create_exception!(
 
 pyo3::create_exception!(_native, ProviderError, PyException, "Provider API error.");
 
-const PY_ENGINE_EVENTS_MUTEX_POISONED: &str = "engine events mutex is poisoned";
-const PY_ENGINE_MUTEX_POISONED: &str = "engine mutex is poisoned";
-const PY_ENGINE_CLOSED: &str = "engine is closed";
-const PY_MODEL_SERVICE_EVENTS_MUTEX_POISONED: &str = "model service events mutex is poisoned";
-const PY_MODEL_SERVICE_MUTEX_POISONED: &str = "model service mutex is poisoned";
-const PY_MODEL_SERVICE_CLOSED: &str = "model service is closed";
 const PY_CLIENT_MUTEX_POISONED: &str = "client mutex is poisoned";
 const PY_CLIENT_TEXT_RESPONSE_MUTEX_POISONED: &str = "text response mutex is poisoned";
 const PY_CLIENT_EMBEDDING_RESPONSE_MUTEX_POISONED: &str = "embedding response mutex is poisoned";
 const PY_CLIENT_TOKEN_STREAM_MUTEX_POISONED: &str = "token stream mutex is poisoned";
 const PY_CLIENT_TEXT_RESPONSE_CONSUMED: &str = "text response already consumed";
 const PY_CLIENT_EMBEDDING_RESPONSE_CONSUMED: &str = "embedding response already consumed";
-const EVENT_TYPE_STATE: &str = "state";
-const EVENT_TYPE_LOAD_PROGRESS: &str = "load-progress";
-const EVENT_TYPE_REQUEST_STARTED: &str = "request-started";
-const EVENT_TYPE_REQUEST_COMPLETED: &str = "request-completed";
-const EVENT_TYPE_REQUEST_FAILED: &str = "request-failed";
-const EVENT_TYPE_CLOSED: &str = "closed";
 
 static PROVIDER_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
 type PySharedClientTextResponse = Arc<Mutex<Option<ClientTextResponseFuture>>>;
 type PySharedClientEmbeddingResponse = Arc<Mutex<Option<ClientEmbeddingResponseFuture>>>;
 type PySharedClientTokenStream = Arc<Mutex<Option<ClientTokenStream>>>;
-
-fn clear_events(events: &Mutex<Option<EngineEventReceiver>>) {
-    if let Ok(mut events) = events.lock() {
-        events.take();
-    }
-}
-
-fn drain_events_to_list(
-    py: Python<'_>,
-    events: &Mutex<Option<EngineEventReceiver>>,
-    poison_message: &'static str,
-) -> PyResult<Py<PyAny>> {
-    let output = PyList::empty_bound(py);
-    let guard = events
-        .lock()
-        .map_err(|_| PyRuntimeError::new_err(poison_message))?;
-    if let Some(receiver) = guard.as_ref() {
-        for event in receiver.try_iter() {
-            output.append(engine_event_to_dict(py, event)?)?;
-        }
-    }
-    Ok(output.into_py(py))
-}
 
 fn py_core_or_default<T, U>(py: Python<'_>, value: Option<Py<T>>, map: impl FnOnce(&T) -> U) -> U
 where
@@ -694,47 +652,6 @@ impl PyNativeRuntimeConfig {
     }
 }
 
-#[pyclass(name = "ModelLoadOptions")]
-#[derive(Debug, Clone)]
-struct PyModelLoadOptions {
-    #[pyo3(get)]
-    backend: String,
-    #[pyo3(get)]
-    stats: String,
-    runtime: NativeRuntimeConfig,
-}
-
-#[pymethods]
-impl PyModelLoadOptions {
-    #[new]
-    #[pyo3(signature = (*, backend = DEFAULT_MODEL_BACKEND.to_string(), stats = DEFAULT_MODEL_STATS.to_string(), runtime = None))]
-    fn new(
-        py: Python<'_>,
-        backend: String,
-        stats: String,
-        runtime: Option<Py<PyNativeRuntimeConfig>>,
-    ) -> PyResult<Self> {
-        let runtime = py_core_or_default(py, runtime, PyNativeRuntimeConfig::to_core);
-        parse_backend_preference(&backend)?;
-        parse_stats_mode(&stats)?;
-        Ok(Self {
-            backend,
-            stats,
-            runtime,
-        })
-    }
-}
-
-impl PyModelLoadOptions {
-    fn to_core(&self) -> PyResult<ModelLoadOptions> {
-        Ok(ModelLoadOptions {
-            backend: parse_backend_preference(&self.backend)?,
-            stats: parse_stats_mode(&self.stats)?,
-            runtime: self.runtime.clone(),
-        })
-    }
-}
-
 #[pyclass(name = "ChatMessage")]
 #[derive(Debug, Clone)]
 struct PyChatMessage {
@@ -771,9 +688,9 @@ struct PyEndpointRef {
 #[pymethods]
 impl PyEndpointRef {
     #[staticmethod]
-    fn local_engine(engine: String) -> Self {
+    fn local_model(model: String) -> Self {
         Self {
-            core: CoreEndpointRef::LocalEngine { engine },
+            core: CoreEndpointRef::LocalModel { model },
         }
     }
 
@@ -787,7 +704,7 @@ impl PyEndpointRef {
     #[getter]
     fn kind(&self) -> &'static str {
         match self.core {
-            CoreEndpointRef::LocalEngine { .. } => "local_engine",
+            CoreEndpointRef::LocalModel { .. } => "local_model",
             CoreEndpointRef::ProviderModel { .. } => "provider_model",
         }
     }
@@ -1000,220 +917,6 @@ impl PyProviderGenerationOptions {
     }
 }
 
-#[pyclass(name = "CogentEngine")]
-struct PyCogentEngine {
-    inner: Mutex<Option<CogentEngine>>,
-    events: Mutex<Option<EngineEventReceiver>>,
-}
-
-#[pymethods]
-impl PyCogentEngine {
-    #[new]
-    #[pyo3(signature = (model_path, config = None))]
-    fn new(
-        py: Python<'_>,
-        model_path: PathBuf,
-        config: Option<Py<PyNativeRuntimeConfig>>,
-    ) -> PyResult<Self> {
-        let config = py_core_or_default(py, config, PyNativeRuntimeConfig::to_core);
-        let engine = py
-            .allow_threads(|| block_on(CogentEngine::load(model_path, config)))
-            .map_err(to_py_error)?;
-        let events = engine.subscribe_events();
-        Ok(Self {
-            inner: Mutex::new(Some(engine)),
-            events: Mutex::new(Some(events)),
-        })
-    }
-
-    fn state(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let engine = {
-            let guard = self.engine_guard()?;
-            engine_ref(&guard)?.clone()
-        };
-        let state = py
-            .allow_threads(move || block_on(engine.state()))
-            .map_err(to_py_error)?;
-        engine_state_to_dict(py, state)
-    }
-
-    fn close(&self, py: Python<'_>) -> PyResult<()> {
-        let engine = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err(PY_ENGINE_MUTEX_POISONED))?
-            .take();
-        if let Some(engine) = engine {
-            py.allow_threads(|| block_on(engine.close()))
-                .map_err(to_py_error)?;
-        }
-        clear_events(&self.events);
-        Ok(())
-    }
-
-    fn drain_events(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        drain_events_to_list(py, &self.events, PY_ENGINE_EVENTS_MUTEX_POISONED)
-    }
-}
-
-impl PyCogentEngine {
-    fn engine_guard(&self) -> PyResult<MutexGuard<'_, Option<CogentEngine>>> {
-        self.inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err(PY_ENGINE_MUTEX_POISONED))
-    }
-}
-
-#[pyclass(name = "ModelService")]
-struct PyModelService {
-    inner: Mutex<Option<ModelService>>,
-    events: Mutex<Option<EngineEventReceiver>>,
-}
-
-#[pymethods]
-impl PyModelService {
-    #[new]
-    fn new(store_path: PathBuf) -> PyResult<Self> {
-        Ok(Self {
-            inner: Mutex::new(Some(
-                ModelService::local(store_path).map_err(to_py_model_error)?,
-            )),
-            events: Mutex::new(None),
-        })
-    }
-
-    #[pyo3(signature = (model_path, options = None))]
-    fn load_path(
-        &self,
-        py: Python<'_>,
-        model_path: PathBuf,
-        options: Option<Py<PyModelLoadOptions>>,
-    ) -> PyResult<Py<PyAny>> {
-        let options = options
-            .as_ref()
-            .map(|options| options.borrow(py).to_core())
-            .transpose()?
-            .unwrap_or_default();
-        let loaded = self.load_and_refresh(py, |service| {
-            block_on(service.load(core_model_source_from_path(model_path), options))
-        })?;
-        loaded_model_info_to_dict(py, loaded)
-    }
-
-    #[pyo3(signature = (model_path, projector_path, options = None))]
-    fn load_vision(
-        &self,
-        py: Python<'_>,
-        model_path: PathBuf,
-        projector_path: PathBuf,
-        options: Option<Py<PyModelLoadOptions>>,
-    ) -> PyResult<Py<PyAny>> {
-        let options = options
-            .as_ref()
-            .map(|options| options.borrow(py).to_core())
-            .transpose()?
-            .unwrap_or_default();
-        let source = core_vision_model_source_from_paths(model_path, projector_path);
-        let loaded =
-            self.load_and_refresh(py, |service| block_on(service.load(source, options)))?;
-        loaded_model_info_to_dict(py, loaded)
-    }
-
-    fn unload(&self, py: Python<'_>) -> PyResult<()> {
-        let mut guard = self.service_guard()?;
-        let service = service_mut(&mut guard)?;
-        py.allow_threads(|| block_on(service.unload()))
-            .map_err(to_py_model_error)?;
-        clear_events(&self.events);
-        Ok(())
-    }
-
-    fn remove(&self, py: Python<'_>, model_id: String) -> PyResult<()> {
-        let mut guard = self.service_guard()?;
-        let service = service_mut(&mut guard)?;
-        py.allow_threads(|| block_on(service.remove(model_id)))
-            .map_err(to_py_model_error)
-    }
-
-    fn list(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let guard = self.service_guard()?;
-        let service = service_ref(&guard)?;
-        let output = PyList::empty_bound(py);
-        for model in service.list() {
-            output.append(model_info_to_dict(py, model)?)?;
-        }
-        Ok(output.into_py(py))
-    }
-
-    fn current(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let guard = self.service_guard()?;
-        let service = service_ref(&guard)?;
-        if let Some(model) = service.current() {
-            model_info_to_dict(py, model)
-        } else {
-            Ok(py.None())
-        }
-    }
-
-    fn state(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let guard = self.service_guard()?;
-        let service = service_ref(&guard)?;
-        let state = py
-            .allow_threads(|| block_on(service.state()))
-            .map_err(to_py_model_error)?;
-        model_service_state_to_dict(py, state)
-    }
-
-    fn close(&self, py: Python<'_>) -> PyResult<()> {
-        let service = self
-            .inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err(PY_MODEL_SERVICE_MUTEX_POISONED))?
-            .take();
-        if let Some(mut service) = service {
-            py.allow_threads(|| block_on(service.unload()))
-                .map_err(to_py_model_error)?;
-        }
-        clear_events(&self.events);
-        Ok(())
-    }
-
-    fn drain_events(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        drain_events_to_list(py, &self.events, PY_MODEL_SERVICE_EVENTS_MUTEX_POISONED)
-    }
-}
-
-impl PyModelService {
-    fn service_guard(&self) -> PyResult<MutexGuard<'_, Option<ModelService>>> {
-        self.inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err(PY_MODEL_SERVICE_MUTEX_POISONED))
-    }
-
-    fn refresh_events(&self, service: &ModelService) -> PyResult<()> {
-        let events = service.subscribe_events().map_err(to_py_model_error)?;
-        self.events
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err(PY_MODEL_SERVICE_EVENTS_MUTEX_POISONED))?
-            .replace(events);
-        Ok(())
-    }
-
-    fn load_and_refresh<T: Send>(
-        &self,
-        py: Python<'_>,
-        load: impl FnOnce(&mut ModelService) -> Result<T, cogentlm_engine::lifecycle::ModelError> + Send,
-    ) -> PyResult<T> {
-        let mut guard = self.service_guard()?;
-        let service = service_mut(&mut guard)?;
-        let loaded = py
-            .allow_threads(|| load(service))
-            .map_err(to_py_model_error)?;
-        self.refresh_events(service)?;
-        Ok(loaded)
-    }
-}
-
 #[pyclass(name = "CogentClient")]
 struct PyCogentClient {
     inner: Arc<Mutex<CoreCogentClient>>,
@@ -1231,7 +934,7 @@ impl PyCogentClient {
     }
 
     #[pyo3(signature = (id, model_path, config = None))]
-    fn load_engine(
+    fn load_model(
         &self,
         py: Python<'_>,
         id: String,
@@ -1244,23 +947,7 @@ impl PyCogentClient {
             let mut client = inner
                 .lock()
                 .map_err(|_| ClientError::Internal(PY_CLIENT_MUTEX_POISONED.to_string()))?;
-            block_on(client.load_engine(id, model_path, config))
-        })
-        .map_err(to_py_client_error)
-    }
-
-    fn add_engine(&self, py: Python<'_>, id: String, engine: Py<PyCogentEngine>) -> PyResult<()> {
-        let engine = {
-            let engine = engine.borrow(py);
-            let guard = engine.engine_guard()?;
-            engine_ref(&guard)?.clone()
-        };
-        let inner = self.inner.clone();
-        py.allow_threads(move || {
-            let mut client = inner
-                .lock()
-                .map_err(|_| ClientError::Internal(PY_CLIENT_MUTEX_POISONED.to_string()))?;
-            block_on(client.add_engine(id, engine))
+            block_on(client.load_model(id, model_path, config))
         })
         .map_err(to_py_client_error)
     }
@@ -1277,14 +964,6 @@ impl PyCogentClient {
             .lock()
             .map_err(|_| PyRuntimeError::new_err(PY_CLIENT_MUTEX_POISONED))?
             .add_provider_model(provider, model, provider_client, self.executor.clone())
-            .map_err(to_py_client_error)
-    }
-
-    fn set_default_endpoint(&self, py: Python<'_>, endpoint: Py<PyEndpointRef>) -> PyResult<()> {
-        self.inner
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err(PY_CLIENT_MUTEX_POISONED))?
-            .set_default_endpoint(endpoint.borrow(py).to_core())
             .map_err(to_py_client_error)
     }
 
@@ -1645,14 +1324,11 @@ fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyResidencyRuntimeConfig>()?;
     module.add_class::<PyObservabilityRuntimeConfig>()?;
     module.add_class::<PyNativeRuntimeConfig>()?;
-    module.add_class::<PyModelLoadOptions>()?;
     module.add_class::<PyChatMessage>()?;
     module.add_class::<PyEndpointRef>()?;
     module.add_class::<PyCogentTextOptions>()?;
     module.add_class::<PyLocalTextOptions>()?;
     module.add_class::<PyLocalEmbedOptions>()?;
-    module.add_class::<PyCogentEngine>()?;
-    module.add_class::<PyModelService>()?;
     module.add_class::<PyCogentClient>()?;
     module.add_class::<PyCogentTextRun>()?;
     module.add_class::<PyCogentTokenIterator>()?;
@@ -1663,8 +1339,6 @@ fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyProviderClient>()?;
     module.add("DEFAULT_CONTEXT_KEY", DEFAULT_CONTEXT_KEY)?;
     module.add("DEFAULT_MAX_TOKENS", DEFAULT_MAX_TOKENS)?;
-    module.add("DEFAULT_MODEL_BACKEND", DEFAULT_MODEL_BACKEND)?;
-    module.add("DEFAULT_MODEL_STATS", DEFAULT_MODEL_STATS)?;
     module.add_function(wrap_pyfunction!(backend_observability_json, module)?)?;
     module.add_function(wrap_pyfunction!(set_llama_log_quiet, module)?)?;
     Ok(())
@@ -1714,26 +1388,6 @@ fn chat_messages_to_core(
         .iter()
         .map(|message| message.borrow(py).to_core())
         .collect()
-}
-
-fn engine_ref<'a>(guard: &'a MutexGuard<'_, Option<CogentEngine>>) -> PyResult<&'a CogentEngine> {
-    guard
-        .as_ref()
-        .ok_or_else(|| PyRuntimeError::new_err(PY_ENGINE_CLOSED))
-}
-
-fn service_ref<'a>(guard: &'a MutexGuard<'_, Option<ModelService>>) -> PyResult<&'a ModelService> {
-    guard
-        .as_ref()
-        .ok_or_else(|| PyRuntimeError::new_err(PY_MODEL_SERVICE_CLOSED))
-}
-
-fn service_mut<'a>(
-    guard: &'a mut MutexGuard<'_, Option<ModelService>>,
-) -> PyResult<&'a mut ModelService> {
-    guard
-        .as_mut()
-        .ok_or_else(|| PyRuntimeError::new_err(PY_MODEL_SERVICE_CLOSED))
 }
 
 fn py_to_json(value: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
@@ -1826,15 +1480,13 @@ fn json_to_py(py: Python<'_>, value: serde_json::Value) -> PyResult<Py<PyAny>> {
 fn endpoint_ref_to_dict(py: Python<'_>, endpoint: CoreEndpointRef) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new_bound(py);
     match endpoint {
-        CoreEndpointRef::LocalEngine { engine } => {
-            dict.set_item("kind", "local_engine")?;
-            dict.set_item("engine", engine)?;
+        CoreEndpointRef::LocalModel { model } => {
+            dict.set_item("kind", "local_model")?;
             dict.set_item("provider", py.None())?;
-            dict.set_item("model", py.None())?;
+            dict.set_item("model", model)?;
         }
         CoreEndpointRef::ProviderModel { provider, model } => {
             dict.set_item("kind", "provider_model")?;
-            dict.set_item("engine", py.None())?;
             dict.set_item("provider", provider)?;
             dict.set_item("model", model)?;
         }
@@ -2020,58 +1672,6 @@ fn provider_embedding_response_to_dict(
     Ok(dict.into_py(py))
 }
 
-fn loaded_model_info_to_dict(py: Python<'_>, loaded: LoadedModelInfo) -> PyResult<Py<PyAny>> {
-    let dict = PyDict::new_bound(py);
-    dict.set_item("model", model_info_to_dict(py, loaded.model)?)?;
-    let backend = PyDict::new_bound(py);
-    backend.set_item("requested", loaded.backend.requested.as_str())?;
-    backend.set_item("selected", loaded.backend.selected)?;
-    backend.set_item("available", loaded.backend.available)?;
-    backend.set_item("gpu_offload_expected", loaded.backend.gpu_offload_expected)?;
-    backend.set_item("reason", loaded.backend.reason)?;
-    dict.set_item("backend", backend)?;
-    dict.set_item("runtime_fingerprint", loaded.runtime_fingerprint)?;
-    Ok(dict.into_py(py))
-}
-
-fn model_info_to_dict(py: Python<'_>, model: ModelInfo) -> PyResult<Py<PyAny>> {
-    let dict = PyDict::new_bound(py);
-    dict.set_item("id", model.id)?;
-    dict.set_item("name", model.name)?;
-    dict.set_item("modality", model.modality.as_str())?;
-    dict.set_item("status", model.status.as_str())?;
-    dict.set_item("source", model.source.as_str())?;
-    dict.set_item("bytes", model.bytes)?;
-    dict.set_item("loaded", model.loaded)?;
-    dict.set_item("chat_template", model.chat_template)?;
-    dict.set_item("bos_text", model.bos_text)?;
-    dict.set_item("eos_text", model.eos_text)?;
-    dict.set_item("media_marker", model.media_marker)?;
-    dict.set_item("created_at_unix_ms", model.created_at_unix_ms)?;
-    dict.set_item("updated_at_unix_ms", model.updated_at_unix_ms)?;
-    Ok(dict.into_py(py))
-}
-
-fn model_service_state_to_dict(py: Python<'_>, state: ModelServiceState) -> PyResult<Py<PyAny>> {
-    let dict = PyDict::new_bound(py);
-    dict.set_item("status", state.status.as_str())?;
-    if let Some(model) = state.model {
-        dict.set_item("model", model_info_to_dict(py, model)?)?;
-    } else {
-        dict.set_item("model", py.None())?;
-    }
-    set_state_tail_fields(
-        py,
-        &dict,
-        state.backend,
-        state.runtime,
-        state.requests,
-        state.stats,
-        state.updated_at_unix_ms,
-    )?;
-    Ok(dict.into_py(py))
-}
-
 fn token_batch_to_dict(py: Python<'_>, batch: TokenBatch) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new_bound(py);
     dict.set_item("request_id", batch.request_id)?;
@@ -2086,217 +1686,6 @@ fn token_batch_to_dict(py: Python<'_>, batch: TokenBatch) -> PyResult<Py<PyAny>>
     stats.set_item("frames_dropped", batch.stats.frames_dropped)?;
     stats.set_item("batches_sent", batch.stats.batches_sent)?;
     dict.set_item("stats", stats)?;
-    Ok(dict.into_py(py))
-}
-
-fn engine_state_to_dict(py: Python<'_>, state: EngineState) -> PyResult<Py<PyAny>> {
-    let dict = PyDict::new_bound(py);
-    dict.set_item("status", state.status.as_str())?;
-    if let Some(model) = state.model {
-        let model_dict = PyDict::new_bound(py);
-        model_dict.set_item("id", model.id)?;
-        model_dict.set_item("name", model.name)?;
-        model_dict.set_item(
-            "capabilities",
-            model_capabilities_to_dict(py, model.capabilities)?,
-        )?;
-        dict.set_item("model", model_dict)?;
-    } else {
-        dict.set_item("model", py.None())?;
-    }
-    set_state_tail_fields(
-        py,
-        &dict,
-        state.backend,
-        state.runtime,
-        state.requests,
-        state.stats,
-        state.updated_at_unix_ms,
-    )?;
-    Ok(dict.into_py(py))
-}
-
-fn model_capabilities_to_dict(
-    py: Python<'_>,
-    capabilities: cogentlm_engine::engine::ModelCapabilities,
-) -> PyResult<Py<PyAny>> {
-    let dict = PyDict::new_bound(py);
-    dict.set_item("model_class", capabilities.model_class.as_str())?;
-    dict.set_item(
-        "supports_text_generation",
-        capabilities.supports_text_generation,
-    )?;
-    dict.set_item("supports_embeddings", capabilities.supports_embeddings)?;
-    dict.set_item("has_chat_template", capabilities.has_chat_template)?;
-    match capabilities.embedding {
-        Some(embedding) => {
-            let embedding_dict = PyDict::new_bound(py);
-            embedding_dict.set_item("dimensions", embedding.dimensions)?;
-            embedding_dict.set_item("pooling", embedding.pooling.as_str())?;
-            dict.set_item("embedding", embedding_dict)?;
-        }
-        None => dict.set_item("embedding", py.None())?,
-    }
-    Ok(dict.into_py(py))
-}
-
-fn set_state_tail_fields(
-    py: Python<'_>,
-    dict: &Bound<'_, PyDict>,
-    backend: BackendInfo,
-    runtime: Option<ResolvedRuntimeLimits>,
-    requests: Vec<RequestState>,
-    stats: EngineStats,
-    updated_at_unix_ms: u64,
-) -> PyResult<()> {
-    dict.set_item("backend", backend_info_to_dict(py, backend)?)?;
-    dict.set_item("runtime", resolved_runtime_limits_to_dict(py, runtime)?)?;
-    let request_items = PyList::empty_bound(py);
-    for request in requests {
-        let item = PyDict::new_bound(py);
-        item.set_item("id", request.id)?;
-        item.set_item("status", request.status.as_str())?;
-        item.set_item("input_tokens", request.input_tokens)?;
-        item.set_item("output_tokens", request.output_tokens)?;
-        request_items.append(item)?;
-    }
-    dict.set_item("requests", request_items)?;
-    dict.set_item("stats", engine_stats_to_dict(py, stats)?)?;
-    dict.set_item("updated_at_unix_ms", updated_at_unix_ms)?;
-    Ok(())
-}
-
-fn backend_info_to_dict(py: Python<'_>, backend: BackendInfo) -> PyResult<Py<PyAny>> {
-    let dict = PyDict::new_bound(py);
-    dict.set_item("selected", backend.selected)?;
-    dict.set_item("available", backend.available)?;
-    let devices = PyList::empty_bound(py);
-    for device in backend.devices {
-        let item = PyDict::new_bound(py);
-        item.set_item("id", device.id)?;
-        item.set_item("name", device.name)?;
-        item.set_item("type", device.device_type)?;
-        item.set_item("memory_total_bytes", device.memory_total_bytes)?;
-        item.set_item("memory_free_bytes", device.memory_free_bytes)?;
-        devices.append(item)?;
-    }
-    dict.set_item("devices", devices)?;
-    Ok(dict.into_py(py))
-}
-
-fn resolved_runtime_limits_to_dict(
-    py: Python<'_>,
-    runtime: Option<ResolvedRuntimeLimits>,
-) -> PyResult<Py<PyAny>> {
-    let Some(runtime) = runtime else {
-        return Ok(py.None());
-    };
-    let dict = PyDict::new_bound(py);
-    dict.set_item("n_ctx", runtime.n_ctx)?;
-    dict.set_item("n_batch", runtime.n_batch)?;
-    dict.set_item("n_ubatch", runtime.n_ubatch)?;
-    dict.set_item("n_parallel", runtime.n_parallel)?;
-    dict.set_item("kv_unified", runtime.kv_unified)?;
-    dict.set_item("flash_attention", runtime.flash_attention)?;
-    dict.set_item("cache_type_k", runtime.cache_type_k)?;
-    dict.set_item("cache_type_v", runtime.cache_type_v)?;
-    Ok(dict.into_py(py))
-}
-
-fn engine_stats_to_dict(py: Python<'_>, stats: EngineStats) -> PyResult<Py<PyAny>> {
-    let dict = PyDict::new_bound(py);
-    dict.set_item("requests_running", stats.requests_running)?;
-    dict.set_item("requests_queued", stats.requests_queued)?;
-    dict.set_item("requests_completed", stats.requests_completed)?;
-    dict.set_item("requests_failed", stats.requests_failed)?;
-    dict.set_item("input_tokens", stats.input_tokens)?;
-    dict.set_item("output_tokens", stats.output_tokens)?;
-    dict.set_item("cache_hits", stats.cache_hits)?;
-    dict.set_item("prefill_tokens", stats.prefill_tokens)?;
-    dict.set_item("ttft_ms", stats.ttft_ms)?;
-    dict.set_item("inter_token_ms", stats.inter_token_ms)?;
-    dict.set_item("e2e_ms", stats.e2e_ms)?;
-    dict.set_item("tokens_per_second", stats.tokens_per_second)?;
-    dict.set_item("decode_tokens_per_second", stats.decode_tokens_per_second)?;
-    dict.set_item("prefill_tokens_per_second", stats.prefill_tokens_per_second)?;
-    dict.set_item("prefill_ms", stats.prefill_ms)?;
-    dict.set_item("decode_ms", stats.decode_ms)?;
-    dict.set_item("backend_ms", stats.backend_ms)?;
-    dict.set_item("sync_ms", stats.sync_ms)?;
-    dict.set_item("engine_overhead_ms", stats.engine_overhead_ms)?;
-    dict.set_item(
-        "debug_metrics_scheduler_ticks",
-        stats.debug_metrics_scheduler_ticks,
-    )?;
-    dict.set_item(
-        "debug_metrics_decode_ticks",
-        stats.debug_metrics_decode_ticks,
-    )?;
-    dict.set_item(
-        "debug_metrics_prefill_ticks",
-        stats.debug_metrics_prefill_ticks,
-    )?;
-    dict.set_item(
-        "debug_metrics_backend_sampler_attach_attempts",
-        stats.debug_metrics_backend_sampler_attach_attempts,
-    )?;
-    dict.set_item(
-        "debug_metrics_backend_sampler_attach_failures",
-        stats.debug_metrics_backend_sampler_attach_failures,
-    )?;
-    dict.set_item("debug_metrics_admit_ms", stats.debug_metrics_admit_ms)?;
-    dict.set_item(
-        "debug_metrics_normalize_ms",
-        stats.debug_metrics_normalize_ms,
-    )?;
-    dict.set_item(
-        "debug_metrics_backend_sampler_attach_ms",
-        stats.debug_metrics_backend_sampler_attach_ms,
-    )?;
-    dict.set_item(
-        "debug_metrics_select_slots_ms",
-        stats.debug_metrics_select_slots_ms,
-    )?;
-    dict.set_item("debug_metrics_plan_ms", stats.debug_metrics_plan_ms)?;
-    dict.set_item(
-        "debug_metrics_batch_build_ms",
-        stats.debug_metrics_batch_build_ms,
-    )?;
-    dict.set_item(
-        "debug_metrics_llama_decode_ms",
-        stats.debug_metrics_llama_decode_ms,
-    )?;
-    dict.set_item(
-        "debug_metrics_llama_sync_ms",
-        stats.debug_metrics_llama_sync_ms,
-    )?;
-    dict.set_item(
-        "debug_metrics_apply_bookkeeping_ms",
-        stats.debug_metrics_apply_bookkeeping_ms,
-    )?;
-    dict.set_item(
-        "debug_metrics_apply_decode_results_ms",
-        stats.debug_metrics_apply_decode_results_ms,
-    )?;
-    dict.set_item("debug_metrics_sample_ms", stats.debug_metrics_sample_ms)?;
-    dict.set_item(
-        "debug_metrics_token_piece_ms",
-        stats.debug_metrics_token_piece_ms,
-    )?;
-    dict.set_item("debug_metrics_emit_ms", stats.debug_metrics_emit_ms)?;
-    dict.set_item(
-        "debug_metrics_prefix_queue_ms",
-        stats.debug_metrics_prefix_queue_ms,
-    )?;
-    dict.set_item("debug_metrics_finalize_ms", stats.debug_metrics_finalize_ms)?;
-    dict.set_item(
-        "debug_metrics_commit_observability_ms",
-        stats.debug_metrics_commit_observability_ms,
-    )?;
-    dict.set_item(
-        "debug_metrics_post_decode_ms",
-        stats.debug_metrics_post_decode_ms,
-    )?;
     Ok(dict.into_py(py))
 }
 
@@ -2386,58 +1775,6 @@ fn request_stats_to_dict(py: Python<'_>, stats: RequestStats) -> PyResult<Py<PyA
         stats.debug_metrics_post_decode_ms,
     )?;
     Ok(dict.into_py(py))
-}
-
-fn engine_event_to_dict(py: Python<'_>, event: EngineEvent) -> PyResult<Py<PyAny>> {
-    let dict = PyDict::new_bound(py);
-    match event {
-        EngineEvent::State(state) => {
-            dict.set_item("type", EVENT_TYPE_STATE)?;
-            dict.set_item("state", engine_state_to_dict(py, *state)?)?;
-        }
-        EngineEvent::LoadProgress {
-            loaded_bytes,
-            total_bytes,
-            asset_name,
-        } => {
-            dict.set_item("type", EVENT_TYPE_LOAD_PROGRESS)?;
-            dict.set_item("loaded_bytes", loaded_bytes)?;
-            dict.set_item("total_bytes", total_bytes)?;
-            dict.set_item("asset_name", asset_name)?;
-        }
-        EngineEvent::RequestStarted {
-            request_id,
-            stream_id,
-        } => {
-            dict.set_item("type", EVENT_TYPE_REQUEST_STARTED)?;
-            dict.set_item("request_id", request_id)?;
-            dict.set_item("stream_id", stream_id)?;
-        }
-        EngineEvent::RequestCompleted { request_id } => {
-            dict.set_item("type", EVENT_TYPE_REQUEST_COMPLETED)?;
-            dict.set_item("request_id", request_id)?;
-        }
-        EngineEvent::RequestFailed { request_id, error } => {
-            dict.set_item("type", EVENT_TYPE_REQUEST_FAILED)?;
-            dict.set_item("request_id", request_id)?;
-            dict.set_item("error", error)?;
-        }
-        EngineEvent::Closed => {
-            dict.set_item("type", EVENT_TYPE_CLOSED)?;
-        }
-    }
-    Ok(dict.into_py(py))
-}
-
-fn parse_backend_preference(value: &str) -> PyResult<BackendPreference> {
-    parse_choice(
-        value,
-        "backend must be one of: auto, cpu, cuda, metal, vulkan, webgpu",
-    )
-}
-
-fn parse_stats_mode(value: &str) -> PyResult<StatsMode> {
-    parse_choice(value, "stats must be one of: off, basic, profile")
 }
 
 fn parse_gpu_layers(value: &str) -> PyResult<GpuLayerConfig> {
@@ -2621,24 +1958,6 @@ fn to_py_error(error: cogentlm_engine::Error) -> PyErr {
         cogentlm_engine::Error::InvalidRequest(message)
         | cogentlm_engine::Error::InvalidConfig(message) => PyValueError::new_err(message),
         cogentlm_engine::Error::UnsupportedOperation { operation, reason } => {
-            UnsupportedOperationError::new_err(format!(
-                "unsupported operation {operation}: {reason}"
-            ))
-        }
-        other => PyRuntimeError::new_err(other.to_string()),
-    }
-}
-
-fn to_py_model_error(error: cogentlm_engine::lifecycle::ModelError) -> PyErr {
-    match error {
-        cogentlm_engine::lifecycle::ModelError::InvalidModelSource(message)
-        | cogentlm_engine::lifecycle::ModelError::InvalidModelPairing(message) => {
-            PyValueError::new_err(message)
-        }
-        cogentlm_engine::lifecycle::ModelError::UnsupportedGgufVersion(version) => {
-            PyValueError::new_err(format!("unsupported GGUF version {version}"))
-        }
-        cogentlm_engine::lifecycle::ModelError::UnsupportedOperation { operation, reason } => {
             UnsupportedOperationError::new_err(format!(
                 "unsupported operation {operation}: {reason}"
             ))

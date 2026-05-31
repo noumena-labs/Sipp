@@ -8,8 +8,6 @@ GpuLayerConfig = Union[str, dict[str, int]]
 ActivePythonBackend = Literal["cpu", "cuda", "metal", "vulkan"]
 DEFAULT_CONTEXT_KEY: Final[str]
 DEFAULT_MAX_TOKENS: Final[int]
-DEFAULT_MODEL_BACKEND: Final[str]
-DEFAULT_MODEL_STATS: Final[str]
 
 class ModelPlacementConfig:
     def __init__(
@@ -56,6 +54,8 @@ class ContextRuntimeConfig:
         yarn_attn_factor: Optional[float] = None,
         yarn_beta_fast: Optional[float] = None,
         yarn_beta_slow: Optional[float] = None,
+        embeddings: Optional[bool] = None,
+        pooling: Optional[str] = None,
     ) -> None: ...
 
 class SamplingRuntimeConfig:
@@ -167,17 +167,6 @@ class NativeRuntimeConfig:
         observability: Optional[ObservabilityRuntimeConfig] = None,
     ) -> None: ...
 
-class ModelLoadOptions:
-    backend: str
-    stats: str
-    def __init__(
-        self,
-        *,
-        backend: str = DEFAULT_MODEL_BACKEND,
-        stats: str = DEFAULT_MODEL_STATS,
-        runtime: Optional[NativeRuntimeConfig] = None,
-    ) -> None: ...
-
 class ChatMessage:
     role: str
     content: str
@@ -248,10 +237,9 @@ class ProviderEmbeddingResponse(TypedDict):
     metadata: ProviderResponseMetadata
 
 class EndpointRefDict(TypedDict):
-    kind: Literal["local_engine", "provider_model"]
-    engine: Optional[str]
+    kind: Literal["local_model", "provider_model"]
     provider: Optional[str]
-    model: Optional[str]
+    model: str
 
 class CogentTextResponse(TypedDict):
     endpoint: EndpointRefDict
@@ -346,11 +334,11 @@ class ProviderClient:
     ) -> ProviderEmbeddingResponse: ...
 class EndpointRef:
     @staticmethod
-    def local_engine(engine: str) -> EndpointRef: ...
+    def local_model(model: str) -> EndpointRef: ...
     @staticmethod
     def provider_model(provider: str, model: str) -> EndpointRef: ...
     @property
-    def kind(self) -> Literal["local_engine", "provider_model"]: ...
+    def kind(self) -> Literal["local_model", "provider_model"]: ...
 
 class CogentTextOptions:
     def __init__(
@@ -392,20 +380,18 @@ class CogentEmbeddingRun:
 
 class CogentClient:
     def __init__(self) -> None: ...
-    def load_engine(
+    def load_model(
         self,
         id: str,
         model_path: PathLike,
         config: Optional[NativeRuntimeConfig] = None,
     ) -> None: ...
-    def add_engine(self, id: str, engine: CogentEngine) -> None: ...
     def add_provider_model(
         self,
         provider: str,
         model: str,
         client: ProviderClient,
     ) -> None: ...
-    def set_default_endpoint(self, endpoint: EndpointRef) -> None: ...
     def query(
         self,
         prompt: str,
@@ -434,24 +420,6 @@ class CogentClient:
         local: Optional[LocalEmbedOptions] = None,
         provider_options: Optional[ProviderOptions] = None,
     ) -> CogentEmbeddingRun: ...
-
-class CogentEngine:
-    def __init__(self, model_path: PathLike, config: Optional[NativeRuntimeConfig] = None) -> None: ...
-    def close(self) -> None: ...
-    def state(self) -> dict[str, Any]: ...
-    def drain_events(self) -> list[dict[str, Any]]: ...
-
-class ModelService:
-    def __init__(self, store_path: PathLike) -> None: ...
-    def close(self) -> None: ...
-    def load_path(self, model_path: PathLike, options: Optional[ModelLoadOptions] = None) -> dict[str, Any]: ...
-    def load_vision(self, model_path: PathLike, projector_path: PathLike, options: Optional[ModelLoadOptions] = None) -> dict[str, Any]: ...
-    def unload(self) -> None: ...
-    def remove(self, model_id: str) -> None: ...
-    def list(self) -> list[dict[str, Any]]: ...
-    def current(self) -> Optional[dict[str, Any]]: ...
-    def state(self) -> dict[str, Any]: ...
-    def drain_events(self) -> list[dict[str, Any]]: ...
 
 def backend_observability_json(include_details: bool = True) -> str: ...
 def get_active_backend() -> ActivePythonBackend: ...

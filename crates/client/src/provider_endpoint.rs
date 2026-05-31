@@ -21,30 +21,33 @@ use crate::{
 pub(crate) struct ProviderEndpoint {
     endpoint: EndpointRef,
     capabilities: EndpointCapabilities,
+    model: String,
     client: ProviderClient,
     executor: ProviderExecutor,
 }
 
 impl ProviderEndpoint {
     pub(crate) fn new(
-        endpoint: EndpointRef,
+        provider: String,
+        model: String,
         capabilities: EndpointCapabilities,
         client: ProviderClient,
         executor: ProviderExecutor,
     ) -> Self {
         Self {
-            endpoint,
+            endpoint: EndpointRef::ProviderModel {
+                provider,
+                model: model.clone(),
+            },
             capabilities,
+            model,
             client,
             executor,
         }
     }
 
     fn model(&self) -> String {
-        match &self.endpoint {
-            EndpointRef::ProviderModel { model, .. } => model.clone(),
-            EndpointRef::LocalEngine { .. } => String::new(),
-        }
+        self.model.clone()
     }
 }
 

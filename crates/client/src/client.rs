@@ -17,7 +17,6 @@ use crate::{
 /// Public inference facade over registered local and provider endpoints.
 pub struct CogentClient {
     endpoints: HashMap<EndpointRef, Arc<dyn InferenceEndpoint>>,
-    default_endpoint: Option<EndpointRef>,
 }
 
 impl CogentClient {
@@ -25,18 +24,16 @@ impl CogentClient {
     pub fn new() -> Self {
         Self {
             endpoints: HashMap::new(),
-            default_endpoint: None,
         }
     }
 
-    /// Register an already-loaded local engine endpoint.
-    pub async fn add_engine(
+    async fn register_local_model(
         &mut self,
         id: impl Into<String>,
         engine: CogentEngine,
     ) -> CogentResult<()> {
-        let engine_id = normalize_id(id, "engine id")?;
-        let endpoint = EndpointRef::LocalEngine { engine: engine_id };
+        let model_id = normalize_id(id, "model id")?;
+        let endpoint = EndpointRef::LocalModel { model: model_id };
         self.reject_duplicate(&endpoint)?;
 
         let state = engine.state().await?;
@@ -51,15 +48,15 @@ impl CogentClient {
         Ok(())
     }
 
-    /// Load a local engine and register it under the provided endpoint id.
-    pub async fn load_engine(
+    /// Load a local model and register it under the provided endpoint id.
+    pub async fn load_model(
         &mut self,
         id: impl Into<String>,
         model_path: impl Into<PathBuf>,
         config: NativeRuntimeConfig,
     ) -> CogentResult<()> {
         let engine = CogentEngine::load(model_path.into(), config).await?;
-        self.add_engine(id, engine).await
+        self.register_local_model(id, engine).await
     }
 
     #[cfg(feature = "providers")]
@@ -73,26 +70,21 @@ impl CogentClient {
     ) -> CogentResult<()> {
         let provider = normalize_id(provider, "provider id")?;
         let model = normalize_id(model, "provider model id")?;
-        let endpoint = EndpointRef::ProviderModel { provider, model };
+        let endpoint = EndpointRef::ProviderModel {
+            provider: provider.clone(),
+            model: model.clone(),
+        };
         self.reject_duplicate(&endpoint)?;
         self.endpoints.insert(
             endpoint.clone(),
             Arc::new(ProviderEndpoint::new(
-                endpoint,
+                provider,
+                model,
                 EndpointCapabilities::unknown(),
                 client,
                 executor,
             )),
         );
-        Ok(())
-    }
-
-    /// Set the endpoint used when a request does not name one explicitly.
-    pub fn set_default_endpoint(&mut self, endpoint: EndpointRef) -> CogentResult<()> {
-        if !self.endpoints.contains_key(&endpoint) {
-            return Err(CogentError::EndpointNotFound(endpoint));
-        }
-        self.default_endpoint = Some(endpoint);
         Ok(())
     }
 
@@ -127,8 +119,6 @@ impl CogentClient {
     ) -> CogentResult<Arc<dyn InferenceEndpoint>> {
         let selected = if let Some(endpoint) = requested {
             endpoint
-        } else if let Some(endpoint) = &self.default_endpoint {
-            endpoint
         } else {
             return self.resolve_single_local(operation);
         };
@@ -148,7 +138,7 @@ impl CogentClient {
         let mut matches = self
             .endpoints
             .values()
-            .filter(|endpoint| endpoint.endpoint().is_local_engine())
+            .filter(|endpoint| endpoint.endpoint().is_local_model())
             .filter(|endpoint| {
                 endpoint.capabilities().for_operation(operation) == CapabilitySupport::Supported
             });
@@ -237,8 +227,8 @@ mod tests {
     #[test]
     fn automatic_resolution_is_local_only_and_support_based() {
         let mut client = CogentClient::new();
-        let selected = EndpointRef::LocalEngine {
-            engine: "local-a".to_string(),
+        let selected = EndpointRef::LocalModel {
+            model: "local-a".to_string(),
         };
         client.endpoints.insert(
             selected.clone(),
@@ -252,12 +242,12 @@ mod tests {
             }),
         );
         client.endpoints.insert(
-            EndpointRef::LocalEngine {
-                engine: "local-b".to_string(),
+            EndpointRef::LocalModel {
+                model: "local-b".to_string(),
             },
             Arc::new(FakeEndpoint {
-                endpoint: EndpointRef::LocalEngine {
-                    engine: "local-b".to_string(),
+                endpoint: EndpointRef::LocalModel {
+                    model: "local-b".to_string(),
                 },
                 capabilities: EndpointCapabilities {
                     query: CapabilitySupport::Unsupported,
@@ -275,8 +265,8 @@ mod tests {
     #[test]
     fn duplicate_endpoint_registration_is_invalid() {
         let mut client = CogentClient::new();
-        let endpoint = EndpointRef::LocalEngine {
-            engine: "local".to_string(),
+        let endpoint = EndpointRef::LocalModel {
+            model: "local".to_string(),
         };
         client.endpoints.insert(
             endpoint.clone(),

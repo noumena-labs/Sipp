@@ -44,7 +44,7 @@ export {
 } from './character-config.js';
 
 export type {
-  CharacterRuntimeEngine,
+  CharacterRuntimeClient,
   CharacterChooseResult,
   CharacterChooseOptions,
   CharacterRuntimeOptions,

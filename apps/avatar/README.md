@@ -95,7 +95,7 @@ Procedural fantasy effects:
 const client = new CogentClient();
 const { character, config } = await createCharacterFromConfigUrl({
   configUrl: args.characterUrl,
-  engine: client,
+  client,
   bus: new CharacterEventBus(),
 });
 ```

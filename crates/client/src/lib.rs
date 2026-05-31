@@ -1,4 +1,4 @@
-//! Unified local-engine and provider-facing inference facade.
+//! Unified local-model and provider-facing inference facade.
 //!
 //! The crate owns endpoint resolution and shared request/result envelopes.
 //! Local runtime work stays in `cogentlm-engine`; remote provider execution

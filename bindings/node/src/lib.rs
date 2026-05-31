@@ -20,31 +20,17 @@ use cogentlm_engine::backend::{
     backend_observability_json as core_backend_observability_json,
     set_llama_log_quiet as core_set_llama_log_quiet,
 };
-use cogentlm_engine::engine::protocol::{
-    BackendInfo as CoreBackendInfo, ModelCapabilities as CoreModelCapabilities,
-    RequestState as CoreRequestState, RequestStats as CoreRequestStats,
-};
+use cogentlm_engine::engine::protocol::RequestStats as CoreRequestStats;
 use cogentlm_engine::engine::{
-    CacheKeyPolicy, ChatMessage as CoreChatMessage, ChatRole as CoreChatRole,
-    CogentEngine as CoreCogentEngine, EngineEvent as CoreEngineEvent,
-    EngineEventReceiver as CoreEngineEventReceiver, EngineState as CoreEngineState,
-    EngineStats as CoreEngineStats, FlashAttentionMode, GpuLayerConfig, KvCacheType, KvReuseMode,
-    LogitBias, ModelPlacementConfig as CoreModelPlacementConfig,
+    CacheKeyPolicy, ChatMessage as CoreChatMessage, ChatRole as CoreChatRole, FlashAttentionMode,
+    GpuLayerConfig, KvCacheType, KvReuseMode, LogitBias,
+    ModelPlacementConfig as CoreModelPlacementConfig,
     MultimodalRuntimeConfig as CoreMultimodalRuntimeConfig,
     NativeRuntimeConfig as CoreNativeRuntimeConfig,
     ObservabilityRuntimeConfig as CoreObservabilityRuntimeConfig, PoolingType as CorePoolingType,
-    ResidencyRuntimeConfig as CoreResidencyRuntimeConfig,
-    ResolvedRuntimeLimits as CoreResolvedRuntimeLimits, RopeScaling, SamplerStage,
+    ResidencyRuntimeConfig as CoreResidencyRuntimeConfig, RopeScaling, SamplerStage,
     SamplingRuntimeConfig as CoreSamplingRuntimeConfig,
     SchedulerRuntimeConfig as CoreSchedulerRuntimeConfig, SplitMode, TokenBatch as CoreTokenBatch,
-};
-use cogentlm_engine::lifecycle::{
-    model_source_from_path as core_model_source_from_path,
-    vision_model_source_from_paths as core_vision_model_source_from_paths,
-    BackendPreference as CoreBackendPreference, LoadedModelInfo as CoreLoadedModelInfo,
-    ModelInfo as CoreManagedModelInfo, ModelLoadOptions as CoreModelLoadOptions,
-    ModelService as CoreModelService, ModelServiceState as CoreModelServiceState, StatsMode,
-    DEFAULT_MODEL_BACKEND, DEFAULT_MODEL_STATS,
 };
 use cogentlm_engine::runtime::config::{
     SchedulerPolicyConfig as CoreSchedulerPolicyConfig, SchedulerPolicyMode,
@@ -79,10 +65,6 @@ use serde::de::DeserializeOwned;
 #[path = "tests/provider_tests.rs"]
 mod provider_tests;
 
-type SharedEngine = Arc<Mutex<Option<CoreCogentEngine>>>;
-type SharedEvents = Arc<Mutex<CoreEngineEventReceiver>>;
-type SharedModelService = Arc<Mutex<Option<CoreModelService>>>;
-type SharedModelEvents = Arc<Mutex<Option<CoreEngineEventReceiver>>>;
 type SharedCogentClient = Arc<Mutex<CoreClient>>;
 type SharedClientTextResponse = Arc<Mutex<Option<CoreClientTextResponseFuture>>>;
 type SharedClientEmbeddingResponse = Arc<Mutex<Option<CoreClientEmbeddingResponseFuture>>>;
@@ -92,24 +74,12 @@ type ClientTaskOutput<T> = std::result::Result<T, CoreClientError>;
 
 static PROVIDER_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
-const ENGINE_MUTEX_POISONED: &str = "engine mutex is poisoned";
-const ENGINE_EVENTS_MUTEX_POISONED: &str = "engine events mutex is poisoned";
-const ENGINE_CLOSED: &str = "engine is closed";
-const MODEL_SERVICE_EVENTS_MUTEX_POISONED: &str = "model service events mutex is poisoned";
-const MODEL_SERVICE_MUTEX_POISONED: &str = "model service mutex is poisoned";
-const MODEL_SERVICE_CLOSED: &str = "model service is closed";
 const CLIENT_MUTEX_POISONED: &str = "client mutex is poisoned";
 const CLIENT_TEXT_RESPONSE_CONSUMED: &str = "text response already consumed";
 const CLIENT_EMBEDDING_RESPONSE_CONSUMED: &str = "embedding response already consumed";
 const CLIENT_TOKEN_STREAM_MUTEX_POISONED: &str = "token stream mutex is poisoned";
 const CLIENT_TEXT_RESPONSE_MUTEX_POISONED: &str = "text response mutex is poisoned";
 const CLIENT_EMBEDDING_RESPONSE_MUTEX_POISONED: &str = "embedding response mutex is poisoned";
-const EVENT_TYPE_STATE: &str = "state";
-const EVENT_TYPE_LOAD_PROGRESS: &str = "load-progress";
-const EVENT_TYPE_REQUEST_STARTED: &str = "request-started";
-const EVENT_TYPE_REQUEST_COMPLETED: &str = "request-completed";
-const EVENT_TYPE_REQUEST_FAILED: &str = "request-failed";
-const EVENT_TYPE_CLOSED: &str = "closed";
 
 #[napi(object)]
 pub struct LogitBiasConfig {
@@ -630,28 +600,8 @@ impl NativeRuntimeConfig {
 }
 
 #[napi(object)]
-pub struct ModelLoadOptions {
-    pub backend: Option<String>,
-    pub stats: Option<String>,
-    pub runtime: Option<NativeRuntimeConfig>,
-}
-
-impl ModelLoadOptions {
-    fn to_core(&self) -> Result<CoreModelLoadOptions> {
-        Ok(CoreModelLoadOptions {
-            backend: parse_backend_preference(
-                self.backend.as_deref().unwrap_or(DEFAULT_MODEL_BACKEND),
-            )?,
-            stats: parse_stats_mode(self.stats.as_deref().unwrap_or(DEFAULT_MODEL_STATS))?,
-            runtime: optional_core_or_default(self.runtime.as_ref(), NativeRuntimeConfig::to_core)?,
-        })
-    }
-}
-
-#[napi(object)]
 pub struct EndpointRef {
     pub kind: String,
-    pub engine: Option<String>,
     pub provider: Option<String>,
     pub model: Option<String>,
 }
@@ -659,11 +609,11 @@ pub struct EndpointRef {
 impl EndpointRef {
     fn to_core(&self) -> Result<CoreEndpointRef> {
         match self.kind.as_str() {
-            "localEngine" | "local_engine" => Ok(CoreEndpointRef::LocalEngine {
-                engine: self
-                    .engine
+            "localModel" | "local_model" => Ok(CoreEndpointRef::LocalModel {
+                model: self
+                    .model
                     .clone()
-                    .ok_or_else(|| invalid_arg("localEngine endpoint requires engine"))?,
+                    .ok_or_else(|| invalid_arg("localModel endpoint requires model"))?,
             }),
             "providerModel" | "provider_model" => Ok(CoreEndpointRef::ProviderModel {
                 provider: self
@@ -676,7 +626,7 @@ impl EndpointRef {
                     .ok_or_else(|| invalid_arg("providerModel endpoint requires model"))?,
             }),
             _ => Err(invalid_arg(
-                "endpoint kind must be localEngine or providerModel",
+                "endpoint kind must be localModel or providerModel",
             )),
         }
     }
@@ -1138,172 +1088,6 @@ pub struct ProviderEmbeddingResponse {
 }
 
 #[napi(object)]
-pub struct BackendDevice {
-    pub id: Option<String>,
-    pub name: String,
-    pub r#type: String,
-    pub memory_total_bytes: Option<f64>,
-    pub memory_free_bytes: Option<f64>,
-}
-
-#[napi(object)]
-pub struct BackendInfo {
-    pub selected: String,
-    pub available: Vec<String>,
-    pub devices: Vec<BackendDevice>,
-}
-
-#[napi(object)]
-pub struct BackendSelection {
-    pub requested: String,
-    pub selected: String,
-    pub available: Vec<String>,
-    pub gpu_offload_expected: bool,
-    pub reason: Option<String>,
-}
-
-#[napi(object)]
-pub struct ManagedModelInfo {
-    pub id: String,
-    pub name: String,
-    pub modality: String,
-    pub status: String,
-    pub source: String,
-    pub bytes: f64,
-    pub loaded: bool,
-    pub chat_template: Option<String>,
-    pub bos_text: String,
-    pub eos_text: String,
-    pub media_marker: Option<String>,
-    pub created_at_unix_ms: f64,
-    pub updated_at_unix_ms: f64,
-}
-
-#[napi(object)]
-pub struct LoadedModelInfo {
-    pub model: ManagedModelInfo,
-    pub backend: BackendSelection,
-    pub runtime_fingerprint: String,
-}
-
-#[napi(object)]
-pub struct ModelState {
-    pub id: String,
-    pub name: String,
-    pub capabilities: ModelCapabilities,
-}
-
-#[napi(object)]
-pub struct ModelCapabilities {
-    pub model_class: ModelClass,
-    pub supports_text_generation: bool,
-    pub supports_embeddings: bool,
-    pub has_chat_template: bool,
-    pub embedding: Option<EmbeddingCapabilities>,
-}
-
-#[napi(object)]
-pub struct EmbeddingCapabilities {
-    pub dimensions: i32,
-    pub pooling: PoolingType,
-}
-
-#[napi(object)]
-pub struct RequestState {
-    pub id: String,
-    pub status: String,
-    pub input_tokens: i32,
-    pub output_tokens: i32,
-}
-
-#[napi(object)]
-pub struct EngineStats {
-    pub requests_running: i32,
-    pub requests_queued: i32,
-    pub requests_completed: f64,
-    pub requests_failed: f64,
-    pub input_tokens: f64,
-    pub output_tokens: f64,
-    pub cache_hits: f64,
-    pub prefill_tokens: f64,
-    pub ttft_ms: Option<f64>,
-    pub inter_token_ms: Option<f64>,
-    pub e2e_ms: Option<f64>,
-    pub tokens_per_second: Option<f64>,
-    pub decode_tokens_per_second: Option<f64>,
-    pub prefill_tokens_per_second: Option<f64>,
-    pub prefill_ms: f64,
-    pub decode_ms: f64,
-    pub backend_ms: f64,
-    pub sync_ms: f64,
-    pub engine_overhead_ms: f64,
-    pub debug_metrics_scheduler_ticks: f64,
-    pub debug_metrics_decode_ticks: f64,
-    pub debug_metrics_prefill_ticks: f64,
-    pub debug_metrics_backend_sampler_attach_attempts: f64,
-    pub debug_metrics_backend_sampler_attach_failures: f64,
-    pub debug_metrics_admit_ms: f64,
-    pub debug_metrics_normalize_ms: f64,
-    pub debug_metrics_backend_sampler_attach_ms: f64,
-    pub debug_metrics_select_slots_ms: f64,
-    pub debug_metrics_plan_ms: f64,
-    pub debug_metrics_batch_build_ms: f64,
-    pub debug_metrics_llama_decode_ms: f64,
-    pub debug_metrics_llama_sync_ms: f64,
-    pub debug_metrics_apply_bookkeeping_ms: f64,
-    pub debug_metrics_apply_decode_results_ms: f64,
-    pub debug_metrics_sample_ms: f64,
-    pub debug_metrics_token_piece_ms: f64,
-    pub debug_metrics_emit_ms: f64,
-    pub debug_metrics_prefix_queue_ms: f64,
-    pub debug_metrics_finalize_ms: f64,
-    pub debug_metrics_commit_observability_ms: f64,
-    pub debug_metrics_post_decode_ms: f64,
-}
-
-#[napi(object)]
-pub struct ResolvedRuntimeLimits {
-    pub n_ctx: i32,
-    pub n_batch: i32,
-    pub n_ubatch: i32,
-    pub n_parallel: i32,
-    pub kv_unified: bool,
-    pub flash_attention: String,
-    pub cache_type_k: String,
-    pub cache_type_v: String,
-}
-
-#[napi(object)]
-pub struct EngineState {
-    pub status: String,
-    pub model: Option<ModelState>,
-    pub backend: BackendInfo,
-    pub runtime: Option<ResolvedRuntimeLimits>,
-    pub requests: Vec<RequestState>,
-    pub stats: EngineStats,
-    pub updated_at_unix_ms: f64,
-}
-
-#[napi(object)]
-pub struct ModelServiceState {
-    pub status: String,
-    pub model: Option<ManagedModelInfo>,
-    pub backend: BackendInfo,
-    pub runtime: Option<ResolvedRuntimeLimits>,
-    pub requests: Vec<RequestState>,
-    pub stats: EngineStats,
-    pub updated_at_unix_ms: f64,
-}
-
-struct StateTail {
-    backend: BackendInfo,
-    runtime: Option<ResolvedRuntimeLimits>,
-    requests: Vec<RequestState>,
-    stats: EngineStats,
-    updated_at_unix_ms: f64,
-}
-
-#[napi(object)]
 pub struct RequestStats {
     pub input_tokens: i32,
     pub output_tokens: i32,
@@ -1337,24 +1121,6 @@ pub struct RequestStats {
     pub debug_metrics_finalize_ms: f64,
     pub debug_metrics_commit_observability_ms: f64,
     pub debug_metrics_post_decode_ms: f64,
-}
-
-#[napi(string_enum = "snake_case")]
-#[derive(Clone, Copy)]
-pub enum ModelClass {
-    DecoderOnly,
-    EncoderDecoder,
-    EncoderOnly,
-}
-
-impl From<cogentlm_engine::engine::ModelClass> for ModelClass {
-    fn from(value: cogentlm_engine::engine::ModelClass) -> Self {
-        match value {
-            cogentlm_engine::engine::ModelClass::DecoderOnly => Self::DecoderOnly,
-            cogentlm_engine::engine::ModelClass::EncoderDecoder => Self::EncoderDecoder,
-            cogentlm_engine::engine::ModelClass::EncoderOnly => Self::EncoderOnly,
-        }
-    }
 }
 
 #[napi(string_enum = "snake_case")]
@@ -1418,15 +1184,13 @@ pub struct CogentEmbeddingResponse {
 
 fn endpoint_ref_to_node(endpoint: CoreEndpointRef) -> EndpointRef {
     match endpoint {
-        CoreEndpointRef::LocalEngine { engine } => EndpointRef {
-            kind: "localEngine".to_string(),
-            engine: Some(engine),
+        CoreEndpointRef::LocalModel { model } => EndpointRef {
+            kind: "localModel".to_string(),
             provider: None,
-            model: None,
+            model: Some(model),
         },
         CoreEndpointRef::ProviderModel { provider, model } => EndpointRef {
             kind: "providerModel".to_string(),
-            engine: None,
             provider: Some(provider),
             model: Some(model),
         },
@@ -1570,152 +1334,6 @@ pub struct TokenBatch {
     pub stats: StreamStats,
 }
 
-#[napi(object)]
-pub struct EngineEvent {
-    pub r#type: String,
-    pub state: Option<EngineState>,
-    pub loaded_bytes: Option<f64>,
-    pub total_bytes: Option<f64>,
-    pub asset_name: Option<String>,
-    pub request_id: Option<String>,
-    pub stream_id: Option<u32>,
-    pub error: Option<String>,
-}
-
-#[napi(js_name = "CogentEngine")]
-pub struct CogentEngine {
-    inner: SharedEngine,
-    events: SharedEvents,
-}
-
-#[napi]
-impl CogentEngine {
-    #[napi(ts_return_type = "Promise<CogentEngine>")]
-    pub fn load(
-        model_path: String,
-        config: Option<NativeRuntimeConfig>,
-    ) -> Result<AsyncTask<LoadTask>> {
-        let config = config
-            .as_ref()
-            .map(NativeRuntimeConfig::to_core)
-            .transpose()?
-            .unwrap_or_default();
-        Ok(AsyncTask::new(LoadTask { model_path, config }))
-    }
-
-    #[napi(ts_return_type = "Promise<EngineState>")]
-    pub fn state(&self) -> Result<AsyncTask<StateTask>> {
-        Ok(AsyncTask::new(StateTask {
-            engine: self.inner.clone(),
-        }))
-    }
-
-    #[napi]
-    pub fn drain_events(&self) -> Result<Vec<EngineEvent>> {
-        let events = self
-            .events
-            .lock()
-            .map_err(|_| napi_error(ENGINE_EVENTS_MUTEX_POISONED))?;
-        Ok(events.try_iter().map(engine_event_to_node).collect())
-    }
-}
-
-#[napi(js_name = "ModelService")]
-pub struct ModelService {
-    inner: SharedModelService,
-    events: SharedModelEvents,
-}
-
-#[napi]
-impl ModelService {
-    #[napi(constructor)]
-    pub fn new(store_path: String) -> Result<Self> {
-        Ok(Self {
-            inner: Arc::new(Mutex::new(Some(
-                CoreModelService::local(store_path).map_err(model_error)?,
-            ))),
-            events: Arc::new(Mutex::new(None)),
-        })
-    }
-
-    #[napi(ts_return_type = "Promise<LoadedModelInfo>")]
-    pub fn load_path(
-        &self,
-        model_path: String,
-        options: Option<ModelLoadOptions>,
-    ) -> Result<AsyncTask<ModelLoadPathTask>> {
-        Ok(AsyncTask::new(ModelLoadPathTask {
-            service: self.inner.clone(),
-            events: self.events.clone(),
-            model_path,
-            options: optional_core_or_default(options.as_ref(), ModelLoadOptions::to_core)?,
-        }))
-    }
-
-    #[napi(ts_return_type = "Promise<LoadedModelInfo>")]
-    pub fn load_vision(
-        &self,
-        model_path: String,
-        projector_path: String,
-        options: Option<ModelLoadOptions>,
-    ) -> Result<AsyncTask<ModelLoadVisionTask>> {
-        Ok(AsyncTask::new(ModelLoadVisionTask {
-            service: self.inner.clone(),
-            events: self.events.clone(),
-            model_path,
-            projector_path,
-            options: optional_core_or_default(options.as_ref(), ModelLoadOptions::to_core)?,
-        }))
-    }
-
-    #[napi(ts_return_type = "Promise<void>")]
-    pub fn unload(&self) -> AsyncTask<ModelUnloadTask> {
-        AsyncTask::new(ModelUnloadTask {
-            service: self.inner.clone(),
-            events: self.events.clone(),
-        })
-    }
-
-    #[napi(ts_return_type = "Promise<void>")]
-    pub fn remove(&self, model_id: String) -> AsyncTask<ModelRemoveTask> {
-        AsyncTask::new(ModelRemoveTask {
-            service: self.inner.clone(),
-            model_id,
-        })
-    }
-
-    #[napi]
-    pub fn list(&self) -> Result<Vec<ManagedModelInfo>> {
-        with_model_service(&self.inner, |service| Ok(service.list()))
-            .map(|models| models.into_iter().map(model_info_to_node).collect())
-    }
-
-    #[napi]
-    pub fn current(&self) -> Result<Option<ManagedModelInfo>> {
-        with_model_service(&self.inner, |service| Ok(service.current()))
-            .map(|model| model.map(model_info_to_node))
-    }
-
-    #[napi(ts_return_type = "Promise<ModelServiceState>")]
-    pub fn state(&self) -> Result<AsyncTask<ModelStateTask>> {
-        Ok(AsyncTask::new(ModelStateTask {
-            service: self.inner.clone(),
-        }))
-    }
-
-    #[napi]
-    pub fn drain_events(&self) -> Result<Vec<EngineEvent>> {
-        let events = self
-            .events
-            .lock()
-            .map_err(|_| napi_error(MODEL_SERVICE_EVENTS_MUTEX_POISONED))?;
-        Ok(events
-            .as_ref()
-            .map(|events| events.try_iter().map(engine_event_to_node).collect())
-            .unwrap_or_default())
-    }
-}
-
 #[napi(js_name = "CogentClient")]
 pub struct CogentClient {
     inner: SharedCogentClient,
@@ -1733,35 +1351,22 @@ impl CogentClient {
     }
 
     #[napi(ts_return_type = "Promise<void>")]
-    pub fn load_engine(
+    pub fn load_model(
         &self,
         id: String,
         model_path: String,
         config: Option<NativeRuntimeConfig>,
-    ) -> Result<AsyncTask<ClientLoadEngineTask>> {
+    ) -> Result<AsyncTask<ClientLoadModelTask>> {
         let config = config
             .as_ref()
             .map(NativeRuntimeConfig::to_core)
             .transpose()?
             .unwrap_or_default();
-        Ok(AsyncTask::new(ClientLoadEngineTask {
+        Ok(AsyncTask::new(ClientLoadModelTask {
             client: self.inner.clone(),
             id,
             model_path,
             config,
-        }))
-    }
-
-    #[napi(ts_return_type = "Promise<void>")]
-    pub fn add_engine(
-        &self,
-        id: String,
-        engine: &CogentEngine,
-    ) -> Result<AsyncTask<ClientAddEngineTask>> {
-        Ok(AsyncTask::new(ClientAddEngineTask {
-            client: self.inner.clone(),
-            id,
-            engine: clone_engine(&engine.inner)?,
         }))
     }
 
@@ -1776,15 +1381,6 @@ impl CogentClient {
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
             .add_provider_model(provider, model, client.inner.clone(), self.executor.clone())
-            .map_err(client_error_without_env)
-    }
-
-    #[napi]
-    pub fn set_default_endpoint(&self, endpoint: EndpointRef) -> Result<()> {
-        self.inner
-            .lock()
-            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
-            .set_default_endpoint(endpoint.to_core()?)
             .map_err(client_error_without_env)
     }
 
@@ -2057,14 +1653,14 @@ impl Task for ProviderEmbedTask {
     }
 }
 
-pub struct ClientLoadEngineTask {
+pub struct ClientLoadModelTask {
     client: SharedCogentClient,
     id: String,
     model_path: String,
     config: CoreNativeRuntimeConfig,
 }
 
-impl Task for ClientLoadEngineTask {
+impl Task for ClientLoadModelTask {
     type Output = ClientTaskOutput<()>;
     type JsValue = ();
 
@@ -2073,36 +1669,11 @@ impl Task for ClientLoadEngineTask {
             .client
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?;
-        Ok(block_on(client.load_engine(
+        Ok(block_on(client.load_model(
             self.id.clone(),
             self.model_path.clone(),
             self.config.clone(),
         )))
-    }
-
-    fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
-        output.map_err(|error| client_error_to_node(env, error))
-    }
-}
-
-pub struct ClientAddEngineTask {
-    client: SharedCogentClient,
-    id: String,
-    engine: CoreCogentEngine,
-}
-
-impl Task for ClientAddEngineTask {
-    type Output = ClientTaskOutput<()>;
-    type JsValue = ();
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let mut client = self
-            .client
-            .lock()
-            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?;
-        Ok(block_on(
-            client.add_engine(self.id.clone(), self.engine.clone()),
-        ))
     }
 
     fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
@@ -2188,160 +1759,6 @@ impl Task for ClientNextTokenTask {
     }
 }
 
-pub struct LoadTask {
-    model_path: String,
-    config: CoreNativeRuntimeConfig,
-}
-
-impl Task for LoadTask {
-    type Output = CoreCogentEngine;
-    type JsValue = CogentEngine;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        block_on(CoreCogentEngine::load(
-            &self.model_path,
-            self.config.clone(),
-        ))
-        .map_err(core_error)
-    }
-
-    fn resolve(&mut self, _env: Env, engine: Self::Output) -> Result<Self::JsValue> {
-        let events = engine.subscribe_events();
-        Ok(CogentEngine {
-            inner: Arc::new(Mutex::new(Some(engine))),
-            events: Arc::new(Mutex::new(events)),
-        })
-    }
-}
-
-pub struct StateTask {
-    engine: SharedEngine,
-}
-
-impl Task for StateTask {
-    type Output = CoreEngineState;
-    type JsValue = EngineState;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        with_engine(&self.engine, |engine| block_on(engine.state()))
-    }
-
-    fn resolve(&mut self, _env: Env, state: Self::Output) -> Result<Self::JsValue> {
-        Ok(engine_state_to_node(state))
-    }
-}
-
-pub struct ModelLoadPathTask {
-    service: SharedModelService,
-    events: SharedModelEvents,
-    model_path: String,
-    options: CoreModelLoadOptions,
-}
-
-impl Task for ModelLoadPathTask {
-    type Output = CoreLoadedModelInfo;
-    type JsValue = LoadedModelInfo;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        with_model_service_mut(&self.service, |service| {
-            let loaded = block_on(service.load(
-                core_model_source_from_path(&self.model_path),
-                self.options.clone(),
-            ))?;
-            refresh_model_events(&self.events, service)?;
-            Ok(loaded)
-        })
-    }
-
-    fn resolve(&mut self, _env: Env, loaded: Self::Output) -> Result<Self::JsValue> {
-        Ok(loaded_model_info_to_node(loaded))
-    }
-}
-
-pub struct ModelLoadVisionTask {
-    service: SharedModelService,
-    events: SharedModelEvents,
-    model_path: String,
-    projector_path: String,
-    options: CoreModelLoadOptions,
-}
-
-impl Task for ModelLoadVisionTask {
-    type Output = CoreLoadedModelInfo;
-    type JsValue = LoadedModelInfo;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        with_model_service_mut(&self.service, |service| {
-            let loaded = block_on(service.load(
-                core_vision_model_source_from_paths(&self.model_path, &self.projector_path),
-                self.options.clone(),
-            ))?;
-            refresh_model_events(&self.events, service)?;
-            Ok(loaded)
-        })
-    }
-
-    fn resolve(&mut self, _env: Env, loaded: Self::Output) -> Result<Self::JsValue> {
-        Ok(loaded_model_info_to_node(loaded))
-    }
-}
-
-pub struct ModelUnloadTask {
-    service: SharedModelService,
-    events: SharedModelEvents,
-}
-
-impl Task for ModelUnloadTask {
-    type Output = ();
-    type JsValue = ();
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        with_model_service_mut(&self.service, |service| block_on(service.unload()))?;
-        clear_model_events(&self.events)
-    }
-
-    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
-        Ok(output)
-    }
-}
-
-pub struct ModelRemoveTask {
-    service: SharedModelService,
-    model_id: String,
-}
-
-impl Task for ModelRemoveTask {
-    type Output = ();
-    type JsValue = ();
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        with_model_service_mut(&self.service, |service| {
-            block_on(service.remove(&self.model_id))
-        })
-    }
-
-    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
-        Ok(output)
-    }
-}
-
-pub struct ModelStateTask {
-    service: SharedModelService,
-}
-
-impl Task for ModelStateTask {
-    type Output = CoreModelServiceState;
-    type JsValue = ModelServiceState;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        with_model_service(&self.service, |service| block_on(service.state()))
-    }
-
-    fn resolve(&mut self, _env: Env, state: Self::Output) -> Result<Self::JsValue> {
-        Ok(model_service_state_to_node(state))
-    }
-}
-
 #[napi]
 pub fn backend_observability_json(include_details: Option<bool>) -> Result<String> {
     core_backend_observability_json(include_details.unwrap_or(true)).map_err(core_error)
@@ -2350,82 +1767,6 @@ pub fn backend_observability_json(include_details: Option<bool>) -> Result<Strin
 #[napi]
 pub fn set_llama_log_quiet(quiet: bool) {
     core_set_llama_log_quiet(quiet);
-}
-
-fn with_engine<T>(
-    engine: &SharedEngine,
-    f: impl FnOnce(CoreCogentEngine) -> cogentlm_engine::Result<T>,
-) -> Result<T> {
-    let guard = engine
-        .lock()
-        .map_err(|_| napi_error(ENGINE_MUTEX_POISONED))?;
-    let engine = guard
-        .as_ref()
-        .ok_or_else(|| napi_error(ENGINE_CLOSED))?
-        .clone();
-    drop(guard);
-    f(engine).map_err(core_error)
-}
-
-fn clone_engine(engine: &SharedEngine) -> Result<CoreCogentEngine> {
-    Ok(engine
-        .lock()
-        .map_err(|_| napi_error(ENGINE_MUTEX_POISONED))?
-        .as_ref()
-        .ok_or_else(|| napi_error(ENGINE_CLOSED))?
-        .clone())
-}
-
-fn with_model_service<T>(
-    service: &SharedModelService,
-    f: impl FnOnce(&CoreModelService) -> std::result::Result<T, cogentlm_engine::lifecycle::ModelError>,
-) -> Result<T> {
-    let guard = service
-        .lock()
-        .map_err(|_| napi_error(MODEL_SERVICE_MUTEX_POISONED))?;
-    let service = guard
-        .as_ref()
-        .ok_or_else(|| napi_error(MODEL_SERVICE_CLOSED))?;
-    f(service).map_err(model_error)
-}
-
-fn with_model_service_mut<T>(
-    service: &SharedModelService,
-    f: impl FnOnce(
-        &mut CoreModelService,
-    ) -> std::result::Result<T, cogentlm_engine::lifecycle::ModelError>,
-) -> Result<T> {
-    let mut guard = service
-        .lock()
-        .map_err(|_| napi_error(MODEL_SERVICE_MUTEX_POISONED))?;
-    let service = guard
-        .as_mut()
-        .ok_or_else(|| napi_error(MODEL_SERVICE_CLOSED))?;
-    f(service).map_err(model_error)
-}
-
-fn refresh_model_events(
-    events: &SharedModelEvents,
-    service: &CoreModelService,
-) -> std::result::Result<(), cogentlm_engine::lifecycle::ModelError> {
-    let receiver = service.subscribe_events()?;
-    events
-        .lock()
-        .map_err(|_| {
-            cogentlm_engine::lifecycle::ModelError::Runtime(
-                MODEL_SERVICE_EVENTS_MUTEX_POISONED.to_string(),
-            )
-        })?
-        .replace(receiver);
-    Ok(())
-}
-
-fn clear_model_events(events: &SharedModelEvents) -> Result<()> {
-    events
-        .lock()
-        .map_err(|_| napi_error(MODEL_SERVICE_EVENTS_MUTEX_POISONED))?
-        .take();
-    Ok(())
 }
 
 fn provider_runtime() -> Result<&'static tokio::runtime::Runtime> {
@@ -2519,21 +1860,6 @@ fn chat_messages_to_core(messages: Vec<ChatMessage>) -> Result<Vec<CoreChatMessa
         .collect()
 }
 
-fn model_capabilities_to_node(capabilities: CoreModelCapabilities) -> ModelCapabilities {
-    ModelCapabilities {
-        model_class: capabilities.model_class.into(),
-        supports_text_generation: capabilities.supports_text_generation,
-        supports_embeddings: capabilities.supports_embeddings,
-        has_chat_template: capabilities.has_chat_template,
-        embedding: capabilities
-            .embedding
-            .map(|embedding| EmbeddingCapabilities {
-                dimensions: embedding.dimensions,
-                pooling: embedding.pooling.into(),
-            }),
-    }
-}
-
 fn token_batch_to_node(batch: CoreTokenBatch) -> TokenBatch {
     TokenBatch {
         request_id: batch.request_id,
@@ -2548,185 +1874,6 @@ fn token_batch_to_node(batch: CoreTokenBatch) -> TokenBatch {
             frames_dropped: batch.stats.frames_dropped as f64,
             batches_sent: batch.stats.batches_sent as f64,
         },
-    }
-}
-
-fn loaded_model_info_to_node(loaded: CoreLoadedModelInfo) -> LoadedModelInfo {
-    LoadedModelInfo {
-        model: model_info_to_node(loaded.model),
-        backend: BackendSelection {
-            requested: loaded.backend.requested.as_str().to_string(),
-            selected: loaded.backend.selected,
-            available: loaded.backend.available,
-            gpu_offload_expected: loaded.backend.gpu_offload_expected,
-            reason: loaded.backend.reason,
-        },
-        runtime_fingerprint: loaded.runtime_fingerprint,
-    }
-}
-
-fn model_info_to_node(model: CoreManagedModelInfo) -> ManagedModelInfo {
-    ManagedModelInfo {
-        id: model.id,
-        name: model.name,
-        modality: model.modality.as_str().to_string(),
-        status: model.status.as_str().to_string(),
-        source: model.source.as_str().to_string(),
-        bytes: model.bytes as f64,
-        loaded: model.loaded,
-        chat_template: model.chat_template,
-        bos_text: model.bos_text,
-        eos_text: model.eos_text,
-        media_marker: model.media_marker,
-        created_at_unix_ms: model.created_at_unix_ms as f64,
-        updated_at_unix_ms: model.updated_at_unix_ms as f64,
-    }
-}
-
-fn engine_state_to_node(state: CoreEngineState) -> EngineState {
-    let tail = state_tail_to_node(
-        state.backend,
-        state.runtime,
-        state.requests,
-        state.stats,
-        state.updated_at_unix_ms,
-    );
-    EngineState {
-        status: state.status.as_str().to_string(),
-        model: state.model.map(|model| ModelState {
-            id: model.id,
-            name: model.name,
-            capabilities: model_capabilities_to_node(model.capabilities),
-        }),
-        backend: tail.backend,
-        runtime: tail.runtime,
-        requests: tail.requests,
-        stats: tail.stats,
-        updated_at_unix_ms: tail.updated_at_unix_ms,
-    }
-}
-
-fn model_service_state_to_node(state: CoreModelServiceState) -> ModelServiceState {
-    let tail = state_tail_to_node(
-        state.backend,
-        state.runtime,
-        state.requests,
-        state.stats,
-        state.updated_at_unix_ms,
-    );
-    ModelServiceState {
-        status: state.status.as_str().to_string(),
-        model: state.model.map(model_info_to_node),
-        backend: tail.backend,
-        runtime: tail.runtime,
-        requests: tail.requests,
-        stats: tail.stats,
-        updated_at_unix_ms: tail.updated_at_unix_ms,
-    }
-}
-
-fn state_tail_to_node(
-    backend: CoreBackendInfo,
-    runtime: Option<CoreResolvedRuntimeLimits>,
-    requests: Vec<CoreRequestState>,
-    stats: CoreEngineStats,
-    updated_at_unix_ms: u64,
-) -> StateTail {
-    StateTail {
-        backend: backend_info_to_node(backend),
-        runtime: runtime.map(resolved_runtime_limits_to_node),
-        requests: requests
-            .into_iter()
-            .map(|request| RequestState {
-                id: request.id,
-                status: request.status.as_str().to_string(),
-                input_tokens: request.input_tokens,
-                output_tokens: request.output_tokens,
-            })
-            .collect(),
-        stats: engine_stats_to_node(stats),
-        updated_at_unix_ms: updated_at_unix_ms as f64,
-    }
-}
-
-fn backend_info_to_node(backend: CoreBackendInfo) -> BackendInfo {
-    BackendInfo {
-        selected: backend.selected,
-        available: backend.available,
-        devices: backend
-            .devices
-            .into_iter()
-            .map(|device| BackendDevice {
-                id: device.id,
-                name: device.name,
-                r#type: device.device_type,
-                memory_total_bytes: option_u64_f64(device.memory_total_bytes),
-                memory_free_bytes: option_u64_f64(device.memory_free_bytes),
-            })
-            .collect(),
-    }
-}
-
-fn resolved_runtime_limits_to_node(runtime: CoreResolvedRuntimeLimits) -> ResolvedRuntimeLimits {
-    ResolvedRuntimeLimits {
-        n_ctx: runtime.n_ctx,
-        n_batch: runtime.n_batch,
-        n_ubatch: runtime.n_ubatch,
-        n_parallel: runtime.n_parallel,
-        kv_unified: runtime.kv_unified,
-        flash_attention: runtime.flash_attention,
-        cache_type_k: runtime.cache_type_k,
-        cache_type_v: runtime.cache_type_v,
-    }
-}
-
-fn engine_stats_to_node(stats: CoreEngineStats) -> EngineStats {
-    EngineStats {
-        requests_running: stats.requests_running,
-        requests_queued: stats.requests_queued,
-        requests_completed: stats.requests_completed as f64,
-        requests_failed: stats.requests_failed as f64,
-        input_tokens: stats.input_tokens as f64,
-        output_tokens: stats.output_tokens as f64,
-        cache_hits: stats.cache_hits as f64,
-        prefill_tokens: stats.prefill_tokens as f64,
-        ttft_ms: stats.ttft_ms,
-        inter_token_ms: stats.inter_token_ms,
-        e2e_ms: stats.e2e_ms,
-        tokens_per_second: stats.tokens_per_second,
-        decode_tokens_per_second: stats.decode_tokens_per_second,
-        prefill_tokens_per_second: stats.prefill_tokens_per_second,
-        prefill_ms: stats.prefill_ms,
-        decode_ms: stats.decode_ms,
-        backend_ms: stats.backend_ms,
-        sync_ms: stats.sync_ms,
-        engine_overhead_ms: stats.engine_overhead_ms,
-        debug_metrics_scheduler_ticks: stats.debug_metrics_scheduler_ticks as f64,
-        debug_metrics_decode_ticks: stats.debug_metrics_decode_ticks as f64,
-        debug_metrics_prefill_ticks: stats.debug_metrics_prefill_ticks as f64,
-        debug_metrics_backend_sampler_attach_attempts: stats
-            .debug_metrics_backend_sampler_attach_attempts
-            as f64,
-        debug_metrics_backend_sampler_attach_failures: stats
-            .debug_metrics_backend_sampler_attach_failures
-            as f64,
-        debug_metrics_admit_ms: stats.debug_metrics_admit_ms,
-        debug_metrics_normalize_ms: stats.debug_metrics_normalize_ms,
-        debug_metrics_backend_sampler_attach_ms: stats.debug_metrics_backend_sampler_attach_ms,
-        debug_metrics_select_slots_ms: stats.debug_metrics_select_slots_ms,
-        debug_metrics_plan_ms: stats.debug_metrics_plan_ms,
-        debug_metrics_batch_build_ms: stats.debug_metrics_batch_build_ms,
-        debug_metrics_llama_decode_ms: stats.debug_metrics_llama_decode_ms,
-        debug_metrics_llama_sync_ms: stats.debug_metrics_llama_sync_ms,
-        debug_metrics_apply_bookkeeping_ms: stats.debug_metrics_apply_bookkeeping_ms,
-        debug_metrics_apply_decode_results_ms: stats.debug_metrics_apply_decode_results_ms,
-        debug_metrics_sample_ms: stats.debug_metrics_sample_ms,
-        debug_metrics_token_piece_ms: stats.debug_metrics_token_piece_ms,
-        debug_metrics_emit_ms: stats.debug_metrics_emit_ms,
-        debug_metrics_prefix_queue_ms: stats.debug_metrics_prefix_queue_ms,
-        debug_metrics_finalize_ms: stats.debug_metrics_finalize_ms,
-        debug_metrics_commit_observability_ms: stats.debug_metrics_commit_observability_ms,
-        debug_metrics_post_decode_ms: stats.debug_metrics_post_decode_ms,
     }
 }
 
@@ -2767,89 +1914,6 @@ fn request_stats_to_node(stats: CoreRequestStats) -> RequestStats {
         debug_metrics_commit_observability_ms: stats.debug_metrics_commit_observability_ms,
         debug_metrics_post_decode_ms: stats.debug_metrics_post_decode_ms,
     }
-}
-
-fn engine_event_to_node(event: CoreEngineEvent) -> EngineEvent {
-    match event {
-        CoreEngineEvent::State(state) => EngineEvent {
-            r#type: EVENT_TYPE_STATE.to_string(),
-            state: Some(engine_state_to_node(*state)),
-            loaded_bytes: None,
-            total_bytes: None,
-            asset_name: None,
-            request_id: None,
-            stream_id: None,
-            error: None,
-        },
-        CoreEngineEvent::LoadProgress {
-            loaded_bytes,
-            total_bytes,
-            asset_name,
-        } => EngineEvent {
-            r#type: EVENT_TYPE_LOAD_PROGRESS.to_string(),
-            state: None,
-            loaded_bytes: Some(loaded_bytes as f64),
-            total_bytes: option_u64_f64(total_bytes),
-            asset_name,
-            request_id: None,
-            stream_id: None,
-            error: None,
-        },
-        CoreEngineEvent::RequestStarted {
-            request_id,
-            stream_id,
-        } => EngineEvent {
-            r#type: EVENT_TYPE_REQUEST_STARTED.to_string(),
-            state: None,
-            loaded_bytes: None,
-            total_bytes: None,
-            asset_name: None,
-            request_id: Some(request_id),
-            stream_id: Some(stream_id),
-            error: None,
-        },
-        CoreEngineEvent::RequestCompleted { request_id } => EngineEvent {
-            r#type: EVENT_TYPE_REQUEST_COMPLETED.to_string(),
-            state: None,
-            loaded_bytes: None,
-            total_bytes: None,
-            asset_name: None,
-            request_id: Some(request_id),
-            stream_id: None,
-            error: None,
-        },
-        CoreEngineEvent::RequestFailed { request_id, error } => EngineEvent {
-            r#type: EVENT_TYPE_REQUEST_FAILED.to_string(),
-            state: None,
-            loaded_bytes: None,
-            total_bytes: None,
-            asset_name: None,
-            request_id: Some(request_id),
-            stream_id: None,
-            error: Some(error),
-        },
-        CoreEngineEvent::Closed => EngineEvent {
-            r#type: EVENT_TYPE_CLOSED.to_string(),
-            state: None,
-            loaded_bytes: None,
-            total_bytes: None,
-            asset_name: None,
-            request_id: None,
-            stream_id: None,
-            error: None,
-        },
-    }
-}
-
-fn parse_backend_preference(value: &str) -> Result<CoreBackendPreference> {
-    parse_choice(
-        value,
-        "backend must be one of: auto, cpu, cuda, metal, vulkan, webgpu",
-    )
-}
-
-fn parse_stats_mode(value: &str) -> Result<StatsMode> {
-    parse_choice(value, "stats must be one of: off, basic, profile")
 }
 
 fn parse_gpu_layers(value: &str) -> Result<GpuLayerConfig> {
@@ -2942,10 +2006,6 @@ fn assign_if_some_map<T, U>(target: &mut T, value: Option<U>, map: impl FnOnce(U
 
 fn option_f32(value: Option<f64>) -> Option<f32> {
     value.map(|value| value as f32)
-}
-
-fn option_u64_f64(value: Option<u64>) -> Option<f64> {
-    value.map(|value| value as f64)
 }
 
 fn invalid_arg(message: impl Into<String>) -> Error {
@@ -3061,22 +2121,6 @@ fn core_error(error: cogentlm_engine::Error) -> Error {
         cogentlm_engine::Error::InvalidRequest(message)
         | cogentlm_engine::Error::InvalidConfig(message) => invalid_arg(message),
         cogentlm_engine::Error::UnsupportedOperation { operation, reason } => {
-            invalid_arg(format!("unsupported operation {operation}: {reason}"))
-        }
-        other => napi_error(other.to_string()),
-    }
-}
-
-fn model_error(error: cogentlm_engine::lifecycle::ModelError) -> Error {
-    match error {
-        cogentlm_engine::lifecycle::ModelError::InvalidModelSource(message)
-        | cogentlm_engine::lifecycle::ModelError::InvalidModelPairing(message) => {
-            invalid_arg(message)
-        }
-        cogentlm_engine::lifecycle::ModelError::UnsupportedGgufVersion(version) => {
-            invalid_arg(format!("unsupported GGUF version {version}"))
-        }
-        cogentlm_engine::lifecycle::ModelError::UnsupportedOperation { operation, reason } => {
             invalid_arg(format!("unsupported operation {operation}: {reason}"))
         }
         other => napi_error(other.to_string()),
