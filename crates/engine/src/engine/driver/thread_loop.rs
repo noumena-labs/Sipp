@@ -150,13 +150,13 @@ impl EngineThreadState {
         };
 
         match start(runtime, &self.event_subscribers) {
-            Ok((request_id, token_sink)) => {
+            Ok((request_id, token_stream)) => {
                 self.active_requests.insert(
                     request_id,
                     ActiveRequest {
                         output,
                         response_tx,
-                        token: token_sink,
+                        token: token_stream,
                     },
                 );
                 emit_state_event(

@@ -21,7 +21,7 @@ pub use protocol::{
     EngineStats, FinishReason, GenerationResult, ModelCapabilities, ModelClass, PoolingType,
     RequestStats,
 };
-pub use stream::{StreamStats, TokenBatch, TokenFrame};
+pub use stream::{StreamStats, TokenBatch};
 
 #[cfg(test)]
 mod tests {

@@ -64,14 +64,13 @@ use cogentlm_providers::{
     ProviderGenerationOptions as CoreProviderGenerationOptions, ProviderModel as CoreProviderModel,
     ProviderOptions as CoreProviderOptions,
     ProviderResponseMetadata as CoreProviderResponseMetadata,
-    ProviderStreamEvent as CoreProviderStreamEvent, ProviderTextOutput as CoreProviderTextOutput,
-    ProxyConfig as CoreProxyConfig, ProxyProtocol as CoreProxyProtocol,
-    SecretString as CoreSecretString, TokenUsage as CoreTokenUsage,
+    ProviderTextOutput as CoreProviderTextOutput, ProxyConfig as CoreProxyConfig,
+    ProxyProtocol as CoreProxyProtocol, SecretString as CoreSecretString,
+    TokenUsage as CoreTokenUsage,
 };
 use futures::executor::block_on;
 use futures::StreamExt;
 use napi::bindgen_prelude::{AsyncTask, Buffer, Either, Env};
-use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::{Error, JsValue, Result, Status, Task};
 use napi_derive::napi;
 use serde::de::DeserializeOwned;
@@ -88,7 +87,6 @@ type SharedCogentClient = Arc<Mutex<CoreClient>>;
 type SharedClientTextResponse = Arc<Mutex<Option<CoreClientTextResponseFuture>>>;
 type SharedClientEmbeddingResponse = Arc<Mutex<Option<CoreClientEmbeddingResponseFuture>>>;
 type SharedClientTokenStream = Arc<Mutex<Option<CoreClientTokenStream>>>;
-type TokenBatchCallback = Arc<ThreadsafeFunction<TokenBatch, (), TokenBatch, Status, false>>;
 type ProviderTaskOutput<T> = std::result::Result<T, CoreProviderError>;
 type ClientTaskOutput<T> = std::result::Result<T, CoreClientError>;
 
@@ -1140,13 +1138,6 @@ pub struct ProviderEmbeddingResponse {
 }
 
 #[napi(object)]
-pub struct ProviderStreamResult {
-    pub usage: Option<ProviderTokenUsage>,
-    #[napi(js_name = "finishReason")]
-    pub finish_reason: Option<String>,
-}
-
-#[napi(object)]
 pub struct BackendDevice {
     pub id: Option<String>,
     pub name: String,
@@ -1967,19 +1958,6 @@ impl ProviderClient {
             request: Some(provider_embed_request_to_core(request)?),
         }))
     }
-
-    #[napi(ts_return_type = "Promise<ProviderStreamResult>")]
-    pub fn stream_chat(
-        &self,
-        request: ProviderChatRequest,
-        on_tokens: Option<TokenBatchCallback>,
-    ) -> Result<AsyncTask<ProviderStreamChatTask>> {
-        Ok(AsyncTask::new(ProviderStreamChatTask {
-            client: self.inner.clone(),
-            request: Some(provider_chat_request_to_core(request)?),
-            on_tokens,
-        }))
-    }
 }
 
 pub struct ProviderListModelsTask {
@@ -2076,33 +2054,6 @@ impl Task for ProviderEmbedTask {
 
     fn resolve(&mut self, env: Env, response: Self::Output) -> Result<Self::JsValue> {
         resolve_provider_task(env, response, provider_embedding_response_to_node)
-    }
-}
-
-pub struct ProviderStreamChatTask {
-    client: CoreProviderClient,
-    request: Option<CoreProviderChatRequest>,
-    on_tokens: Option<TokenBatchCallback>,
-}
-
-impl Task for ProviderStreamChatTask {
-    type Output = ProviderTaskOutput<ProviderStreamResult>;
-    type JsValue = ProviderStreamResult;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let request = self
-            .request
-            .take()
-            .expect("provider stream chat task runs once");
-        provider_runtime()?.block_on(provider_stream_chat_to_node(
-            self.client.clone(),
-            request,
-            self.on_tokens.clone(),
-        ))
-    }
-
-    fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
-        resolve_provider_task(env, output, |output| output)
     }
 }
 
@@ -2551,57 +2502,6 @@ fn provider_f64_to_f32(value: f64, name: &'static str) -> Result<f32> {
         return Err(invalid_arg(format!("{name} must be a finite f32")));
     }
     Ok(value as f32)
-}
-
-async fn provider_stream_chat_to_node(
-    client: CoreProviderClient,
-    request: CoreProviderChatRequest,
-    on_tokens: Option<TokenBatchCallback>,
-) -> Result<ProviderTaskOutput<ProviderStreamResult>> {
-    let mut stream = match client.stream_chat(request).await {
-        Ok(stream) => stream,
-        Err(error) => return Ok(Err(error)),
-    };
-    let mut usage = None;
-    let mut finish_reason = None;
-
-    while let Some(event) = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await {
-        match event {
-            Err(error) => return Ok(Err(error)),
-            Ok(CoreProviderStreamEvent::TokenBatch(batch)) => {
-                if let Some(on_tokens) = &on_tokens {
-                    emit_provider_token_batch(on_tokens, &batch)?;
-                }
-            }
-            Ok(CoreProviderStreamEvent::Usage { usage: event_usage }) => {
-                usage = Some(provider_usage_to_node(event_usage));
-            }
-            Ok(CoreProviderStreamEvent::Finished {
-                finish_reason: reason,
-            }) => {
-                finish_reason = Some(reason.as_str().to_string());
-            }
-        }
-    }
-
-    Ok(Ok(ProviderStreamResult {
-        usage,
-        finish_reason,
-    }))
-}
-
-fn emit_provider_token_batch(callback: &TokenBatchCallback, batch: &CoreTokenBatch) -> Result<()> {
-    let status = callback.call(
-        token_batch_to_node(batch.clone()),
-        ThreadsafeFunctionCallMode::NonBlocking,
-    );
-    if status == Status::Ok {
-        Ok(())
-    } else {
-        Err(napi_error(format!(
-            "provider token callback failed with {status}"
-        )))
-    }
 }
 
 fn chat_messages_to_core(messages: Vec<ChatMessage>) -> Result<Vec<CoreChatMessage>> {

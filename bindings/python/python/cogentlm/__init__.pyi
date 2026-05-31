@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Final, Iterator, Literal, Optional, Sequence, TypedDict, Union
+from typing import Any, Final, Iterator, Literal, Optional, Sequence, TypedDict, Union
 
 PathLike = Union[str, Path]
 GpuLayerConfig = Union[str, dict[str, int]]
@@ -198,7 +198,6 @@ class TokenBatch(TypedDict):
     byte_count: int
     stats: StreamStats
 
-OnTokens = Callable[[TokenBatch], object]
 ProviderKind = Literal["anthropic", "openai", "proxy"]
 ProviderCapabilitySupport = Literal["supported", "unsupported", "unknown"]
 ProviderOptions = dict[str, Any]
@@ -247,10 +246,6 @@ class ProviderEmbeddingResponse(TypedDict):
     result: ProviderEmbeddingOutput
     usage: Optional[TokenUsage]
     metadata: ProviderResponseMetadata
-
-class ProviderStreamResult(TypedDict):
-    usage: Optional[TokenUsage]
-    finish_reason: Optional[str]
 
 class EndpointRefDict(TypedDict):
     kind: Literal["local_engine", "provider_model"]
@@ -349,15 +344,6 @@ class ProviderClient:
         input: str,
         provider_options: Optional[ProviderOptions] = None,
     ) -> ProviderEmbeddingResponse: ...
-    def stream_chat(
-        self,
-        model: str,
-        messages: Sequence[ChatMessage],
-        options: Optional[ProviderGenerationOptions] = None,
-        on_tokens: Optional[OnTokens] = None,
-        provider_options: Optional[ProviderOptions] = None,
-    ) -> ProviderStreamResult: ...
-
 class EndpointRef:
     @staticmethod
     def local_engine(engine: str) -> EndpointRef: ...

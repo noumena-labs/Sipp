@@ -49,7 +49,6 @@ export declare class ProviderClient {
   chat(request: ProviderChatRequest): Promise<ProviderChatResponse>
   generate(request: ProviderGenerateRequest): Promise<ProviderGenerateResponse>
   embed(request: ProviderEmbedRequest): Promise<ProviderEmbeddingResponse>
-  streamChat(request: ProviderChatRequest, onTokens?: TokenBatchCallback | undefined | null): Promise<ProviderStreamResult>
 }
 
 export interface BackendDevice {
@@ -506,11 +505,6 @@ export interface ProviderResponseMetadata {
 export interface ProviderStaticHeaderConfig {
   name: string
   value: string
-}
-
-export interface ProviderStreamResult {
-  usage?: ProviderTokenUsage
-  finishReason?: string
 }
 
 export interface ProviderTextOutput {

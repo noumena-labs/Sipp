@@ -1,4 +1,4 @@
-//! Unit tests for the token sink module.
+//! Unit tests for the token stream module.
 
 use super::super::*;
 use crate::runtime::request::TokenRingFrame;

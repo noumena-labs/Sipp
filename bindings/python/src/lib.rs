@@ -40,8 +40,8 @@ use cogentlm_providers::{
     ProviderChatRequest, ProviderChatResponse, ProviderClient, ProviderEmbedRequest,
     ProviderEmbeddingOutput, ProviderEmbeddingResponse, ProviderError as CoreProviderError,
     ProviderGenerateRequest, ProviderGenerateResponse, ProviderGenerationOptions, ProviderModel,
-    ProviderOptions, ProviderResponseMetadata, ProviderStreamEvent, ProviderTextOutput,
-    ProxyConfig, ProxyProtocol, SecretString, TokenUsage,
+    ProviderOptions, ProviderResponseMetadata, ProviderTextOutput, ProxyConfig, ProxyProtocol,
+    SecretString, TokenUsage,
 };
 use futures::executor::block_on;
 use futures::StreamExt;
@@ -1612,33 +1612,6 @@ impl PyProviderClient {
             .map_err(to_py_provider_error)?;
         provider_embedding_response_to_dict(py, response)
     }
-
-    #[pyo3(signature = (model, messages, options = None, on_tokens = None, provider_options = None))]
-    fn stream_chat(
-        &self,
-        py: Python<'_>,
-        model: String,
-        messages: Vec<Py<PyChatMessage>>,
-        options: Option<Py<PyProviderGenerationOptions>>,
-        on_tokens: Option<PyObject>,
-        provider_options: Option<PyObject>,
-    ) -> PyResult<Py<PyAny>> {
-        if let Some(callback) = &on_tokens {
-            require_callable(py, callback)?;
-        }
-        let request = ProviderChatRequest {
-            model,
-            messages: chat_messages_to_core(py, messages)?,
-            options: py_core_or_default(py, options, PyProviderGenerationOptions::to_core),
-            provider_options: py_provider_options_or_empty(py, provider_options)?,
-        };
-        let client = self.inner.clone();
-        let runtime = provider_runtime()?;
-        let result = py.allow_threads(|| {
-            runtime.block_on(provider_stream_chat_to_py(client, request, on_tokens))
-        })?;
-        provider_stream_result_to_dict(py, result)
-    }
 }
 
 #[pyfunction]
@@ -1697,11 +1670,6 @@ fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-struct ProviderStreamSummary {
-    usage: Option<TokenUsage>,
-    finish_reason: Option<String>,
-}
-
 fn provider_runtime() -> PyResult<&'static tokio::runtime::Runtime> {
     if let Some(runtime) = PROVIDER_RUNTIME.get() {
         return Ok(runtime);
@@ -1735,47 +1703,6 @@ fn py_provider_options_or_empty(
     }
 }
 
-async fn provider_stream_chat_to_py(
-    client: ProviderClient,
-    request: ProviderChatRequest,
-    on_tokens: Option<PyObject>,
-) -> PyResult<ProviderStreamSummary> {
-    let mut stream = client
-        .stream_chat(request)
-        .await
-        .map_err(to_py_provider_error)?;
-    let mut usage = None;
-    let mut finish_reason = None;
-
-    while let Some(event) = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await {
-        match event.map_err(to_py_provider_error)? {
-            ProviderStreamEvent::TokenBatch(batch) => {
-                if let Some(callback) = &on_tokens {
-                    emit_provider_python_token(callback, batch)?;
-                }
-            }
-            ProviderStreamEvent::Usage { usage: event_usage } => usage = Some(event_usage),
-            ProviderStreamEvent::Finished {
-                finish_reason: reason,
-            } => {
-                finish_reason = Some(reason.as_str().to_string());
-            }
-        }
-    }
-
-    Ok(ProviderStreamSummary {
-        usage,
-        finish_reason,
-    })
-}
-
-fn emit_provider_python_token(callback: &PyObject, batch: TokenBatch) -> PyResult<()> {
-    Python::with_gil(|py| {
-        let batch = token_batch_to_dict(py, batch)?;
-        callback.call1(py, (batch,)).map(|_| ())
-    })
-}
-
 fn chat_messages_to_core(
     py: Python<'_>,
     messages: Vec<Py<PyChatMessage>>,
@@ -1807,14 +1734,6 @@ fn service_mut<'a>(
     guard
         .as_mut()
         .ok_or_else(|| PyRuntimeError::new_err(PY_MODEL_SERVICE_CLOSED))
-}
-
-fn require_callable(py: Python<'_>, callback: &PyObject) -> PyResult<()> {
-    if callback.bind(py).is_callable() {
-        Ok(())
-    } else {
-        Err(PyTypeError::new_err("on_tokens must be callable"))
-    }
 }
 
 fn py_to_json(value: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
@@ -2098,19 +2017,6 @@ fn provider_embedding_response_to_dict(
         "metadata",
         provider_metadata_to_dict(py, response.metadata)?,
     )?;
-    Ok(dict.into_py(py))
-}
-
-fn provider_stream_result_to_dict(
-    py: Python<'_>,
-    result: ProviderStreamSummary,
-) -> PyResult<Py<PyAny>> {
-    let dict = PyDict::new_bound(py);
-    match result.usage {
-        Some(usage) => dict.set_item("usage", provider_usage_to_dict(py, usage)?)?,
-        None => dict.set_item("usage", py.None())?,
-    }
-    dict.set_item("finish_reason", result.finish_reason)?;
     Ok(dict.into_py(py))
 }
 

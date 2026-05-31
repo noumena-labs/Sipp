@@ -256,8 +256,8 @@ export class CharacterRuntime {
    * `ChatEvent`s as they arrive, terminating with a `turn-end` event.
    *
    * The iterator is backed by a small internal queue so upstream token
-   * callbacks never block on a slow consumer — if the consumer falls
-   * behind, events buffer in memory rather than back-pressuring decode.
+   * delivery never blocks on a slow consumer — if the consumer falls behind,
+   * events buffer in memory rather than back-pressuring decode.
    */
   public chat(userMessage: string, options: { signal?: AbortSignal } = {}): AsyncIterable<ChatEvent> {
     const trimmed = userMessage;
@@ -383,7 +383,7 @@ export class CharacterRuntime {
       recordParsedEvents(parser.flush());
     };
 
-    const onTokens = (batch: { text: string }): void => {
+    const consumeTokens = (batch: { text: string }): void => {
       if (batch.text.length === 0) {
         return;
       }
@@ -405,7 +405,7 @@ export class CharacterRuntime {
       });
       const response = run.response;
       for await (const batch of run.tokens) {
-        onTokens(batch);
+        consumeTokens(batch);
       }
       const result = await response;
       const rawText = result.text;

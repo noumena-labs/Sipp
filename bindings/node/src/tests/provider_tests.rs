@@ -2,8 +2,6 @@
 
 use super::*;
 use serde_json::json;
-use wiremock::matchers::{header, method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[test]
 fn provider_proxy_config_maps_static_headers() {
@@ -163,47 +161,4 @@ fn provider_error_maps_to_node_status_and_message() {
         provider_error_status(CoreProviderErrorKind::RateLimited),
         Status::GenericFailure
     );
-}
-
-#[test]
-fn provider_stream_chat_summarizes_proxy_events() {
-    let result = provider_runtime().expect("runtime").block_on(async {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/chat/completions"))
-            .and(header("authorization", "Bearer token"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("content-type", "text/event-stream")
-                    .set_body_string(concat!(
-                        "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}],\"usage\":null}\n\n",
-                        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n",
-                        "data: [DONE]\n\n"
-                    )),
-            )
-            .mount(&server)
-            .await;
-
-        let client = CoreProviderClient::proxy(CoreProxyConfig {
-            base_url: server.uri(),
-            auth: CoreProviderAuth::Bearer(CoreSecretString::new("token")),
-            protocol: CoreProxyProtocol::OpenAiCompatible,
-            static_headers: Vec::new(),
-            timeout: None,
-        })
-        .expect("proxy provider");
-        let request = CoreProviderChatRequest {
-            model: "proxy-model".to_string(),
-            messages: vec![CoreChatMessage::new(CoreChatRole::User, "hi")],
-            options: CoreProviderGenerationOptions::default(),
-            provider_options: CoreProviderOptions::new(),
-        };
-
-        provider_stream_chat_to_node(client, request, None).await
-    });
-
-    let result = result.expect("stream task").expect("stream result");
-
-    assert_eq!(result.usage.expect("usage").total_tokens, Some(2));
-    assert_eq!(result.finish_reason.as_deref(), Some("stop"));
 }

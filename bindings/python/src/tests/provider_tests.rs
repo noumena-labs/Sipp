@@ -2,8 +2,6 @@
 
 use super::*;
 use std::time::Duration;
-use wiremock::matchers::{header, method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[test]
 fn py_provider_proxy_config_maps_static_headers() {
@@ -303,73 +301,5 @@ fn py_provider_error_has_structured_fields() {
                 .expect("raw error string"),
             "limit"
         );
-    });
-}
-
-#[test]
-fn py_provider_stream_callback_receives_proxy_tokens() {
-    pyo3::prepare_freethreaded_python();
-    Python::with_gil(|py| {
-        let module = PyModule::from_code_bound(
-            py,
-            r#"
-seen = []
-def on_token(batch):
-    seen.append(batch["text"])
-"#,
-            "provider_callback_test.py",
-            "provider_callback_test",
-        )
-        .expect("callback module");
-        let callback = module.getattr("on_token").expect("callback").into_py(py);
-        let runtime = provider_runtime().expect("runtime");
-
-        let summary = py
-            .allow_threads(|| {
-                runtime.block_on(async {
-                    let server = MockServer::start().await;
-                    Mock::given(method("POST"))
-                        .and(path("/chat/completions"))
-                        .and(header("authorization", "Bearer token"))
-                        .respond_with(
-                            ResponseTemplate::new(200)
-                                .insert_header("content-type", "text/event-stream")
-                                .set_body_string(concat!(
-                                    "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}],\"usage\":null}\n\n",
-                                    "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n",
-                                    "data: [DONE]\n\n"
-                                )),
-                        )
-                        .mount(&server)
-                        .await;
-
-                    let client = ProviderClient::proxy(ProxyConfig {
-                        base_url: server.uri(),
-                        auth: ProviderAuth::Bearer(SecretString::new("token")),
-                        protocol: ProxyProtocol::OpenAiCompatible,
-                        static_headers: Vec::new(),
-                        timeout: None,
-                    })
-                    .map_err(to_py_provider_error)?;
-                    let request = ProviderChatRequest {
-                        model: "proxy-model".to_string(),
-                        messages: vec![ChatMessage::new(ChatRole::User, "hi")],
-                        options: ProviderGenerationOptions::default(),
-                        provider_options: ProviderOptions::new(),
-                    };
-
-                    provider_stream_chat_to_py(client, request, Some(callback)).await
-                })
-            })
-            .expect("stream summary");
-
-        let seen = module
-            .getattr("seen")
-            .expect("seen")
-            .extract::<Vec<String>>()
-            .expect("seen values");
-        assert_eq!(seen, vec!["hello".to_string()]);
-        assert_eq!(summary.finish_reason.as_deref(), Some("stop"));
-        assert_eq!(summary.usage.expect("usage").total_tokens, Some(2));
     });
 }
