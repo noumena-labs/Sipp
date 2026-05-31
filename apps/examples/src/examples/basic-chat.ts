@@ -3,7 +3,7 @@ import { Example } from './base-example';
 export const basicChatExample: Example = {
   id: '01-basic-chat',
   title: 'Basic Chat',
-  description: 'A simple demonstration of the chat API with streaming support.',
+  description: 'A simple demonstration of chat with interactive token delivery.',
   run: async ({ log }) => {
     log('Example loaded. Type a message in the console to start chatting.', 'system');
   },
@@ -11,13 +11,13 @@ export const basicChatExample: Example = {
     log(userInput, 'user');
 
     let fullResponse = '';
-    const responseEl = log('', 'ai'); // Create persistent element for streaming
+    const responseEl = log('', 'ai'); // Create persistent element for live tokens
 
     try {
       const run = client.chat([
         { role: 'user', content: userInput }
       ], {
-        streamTokens: true,
+        tokenDelivery: 'interactive',
       });
 
       for await (const batch of run.tokens) {

@@ -216,7 +216,7 @@ export default function App() {
       for await (const event of harness.character.chat(text, { signal: controller.signal })) {
         if (event.kind === 'prose') {
           // PROSE OPTIMIZATION: We no longer update the global 'messages' state
-          // for every streaming token. Instead, components like TranscriptDrawer
+          // for every delivered token. Instead, components like TranscriptDrawer
           // and SpeechBubble subscribe to the CharacterEventBus ('bus') to
           // provide real-time visual feedback without triggering full React
           // reconciliation cycles.

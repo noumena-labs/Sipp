@@ -6,6 +6,7 @@ import {
   type ModelSource,
   type ObservabilitySnapshot,
   type TokenBatch,
+  type TokenDeliveryMode,
 } from '@noumena-labs/cogentlm-browser';
 import { MetricCard } from './components/MetricCard';
 import {
@@ -307,16 +308,8 @@ export default function App() {
   const [tokenCount, setTokenCount] = useState(DEFAULT_TOKEN_COUNT);
   const [warmupRuns, setWarmupRuns] = useState(1);
   const [measuredRuns, setMeasuredRuns] = useState(3);
-  // Three transport modes:
-  //   off    — client submits TOKEN_EMISSION_NONE; nothing crosses to main.
-  //   tokens — client submits StreamingBuffer; main drains token batches
-  //            without DOM work.  This isolates callback/token-plane cost from
-  //            rendering cost.
-  //   render — client submits StreamingBuffer; main drains SAB and writes
-  //            textContent as token batches arrive. Pays the UI/rendering tax.
-  type StreamMode = 'off' | 'tokens' | 'render';
-  const [streamMode, setStreamMode] = useState<StreamMode>('render');
-  const streamTokens = streamMode !== 'off';
+  type DeliveryControlMode = Extract<TokenDeliveryMode, 'off' | 'batch' | 'interactive'>;
+  const [deliveryMode, setDeliveryMode] = useState<DeliveryControlMode>('batch');
   const [imageSource, setImageSource] = useState('');
   const [imageEnabled, setImageEnabled] = useState(false);
   const [currentModel, setCurrentModel] = useState<ModelInfo | null>(null);
@@ -329,7 +322,8 @@ export default function App() {
     wallMs: number;
     ttftMs: number | null;
     tokens: number;
-    tps: number | null;
+    decodeTps: number | null;
+    e2eTps: number | null;
     prefillTokens: number | null;
     prefillTps: number | null;
     embeddingDimensions: number | null;
@@ -634,20 +628,21 @@ export default function App() {
         requestOperation !== 'embed' && imageEnabled && imageSource.trim().length > 0
           ? await fetchImageBytes(imageSource.trim())
           : undefined;
-      const effectiveStreamTokens = requestOperation !== 'embed' && streamTokens;
-      const queryRenderer = effectiveStreamTokens && streamMode === 'render' ? createResponseRenderer(1, 'frame') : null;
+      const requestTokenDelivery: TokenDeliveryMode =
+        requestOperation === 'embed' ? 'off' : deliveryMode;
+      const queryRenderer = requestTokenDelivery === 'interactive' ? createResponseRenderer(1, 'frame') : null;
       queryRenderer?.reset();
       queryRenderer?.start('response');
       const onTokenBatch =
         requestOperation === 'embed'
           ? undefined
-          : streamMode === 'render'
+          : requestTokenDelivery === 'interactive'
           ? (batch: TokenBatch) => {
             queryRenderer?.append('response', batch);
           }
-          : streamMode === 'tokens'
+          : requestTokenDelivery === 'batch'
             ? (_batch: TokenBatch) => {
-              /* Token stream drained with no DOM work. */
+              /* Token batches drained with no DOM work. */
             }
             : undefined;
       try {
@@ -656,8 +651,7 @@ export default function App() {
           maxTokens: requestTokenCount,
           session: `query-${Date.now()}`,
           media: image,
-          streamTokens: effectiveStreamTokens,
-          tokenFlush: streamMode === 'render' ? 'token' : 'batch',
+          tokenDelivery: requestTokenDelivery,
           onTokenBatch,
         });
         setResponse(run.output); // Sync React state at the end
@@ -671,12 +665,8 @@ export default function App() {
             run.outputKind === 'embedding'
               ? run.embeddingDimensions ?? 0
               : run.observability?.outputTokens ?? run.tokenTimes.length,
-          tps:
-            (run.observability?.decodeMs ?? 0) > 0 &&
-              (run.observability?.outputTokens ?? 0) > 0
-              ? (run.observability!.outputTokens * 1000) /
-              run.observability!.decodeMs
-              : null,
+          decodeTps: run.observability?.decodeTokensPerSecond ?? null,
+          e2eTps: run.observability?.e2eTokensPerSecond ?? null,
           prefillTps:
             (run.observability?.prefillMs ?? 0) >= 0.1 &&
               (run.observability?.prefillTokens ?? 0) >= 1
@@ -721,7 +711,7 @@ export default function App() {
       benchmarkOperation = defaultOperationForModel(loadedModel);
       setOperation(benchmarkOperation);
     }
-    let effectiveStreamTokens = false;
+    let benchmarkTokenDelivery: TokenDeliveryMode = 'off';
     let benchmarkRenderer: ReturnType<typeof createResponseRenderer> | null = null;
     let benchmarkTokenObserver: BenchmarkTokenObserver | undefined;
 
@@ -739,13 +729,12 @@ export default function App() {
         setTokenCount(benchmarkTokenCount);
       }
       const promptSet = benchmarkPromptSetForModel(info);
-      effectiveStreamTokens = benchmarkOperation !== 'embed' && streamTokens;
-      benchmarkRenderer = effectiveStreamTokens && streamMode === 'render'
+      benchmarkTokenDelivery = benchmarkOperation === 'embed' ? 'off' : deliveryMode;
+      benchmarkRenderer = benchmarkTokenDelivery === 'interactive'
         ? createResponseRenderer(2, 'frame')
         : null;
-      const benchmarkTokenFlush = streamMode === 'render' ? 'token' : 'batch';
       benchmarkTokenObserver =
-        effectiveStreamTokens && streamMode === 'render'
+        benchmarkTokenDelivery === 'interactive'
           ? {
             onRunStart: (label) => {
               benchmarkRenderer?.start(label);
@@ -773,8 +762,7 @@ export default function App() {
             getDefaultRuntimeOptions(),
             setStatus,
             true,
-            effectiveStreamTokens,
-            benchmarkTokenFlush,
+            benchmarkTokenDelivery,
             benchmarkTokenObserver
           )
         );
@@ -794,8 +782,7 @@ export default function App() {
           getDefaultRuntimeOptions(),
           setStatus,
           true,
-          effectiveStreamTokens,
-          benchmarkTokenFlush,
+          benchmarkTokenDelivery,
           benchmarkTokenObserver
         );
         snapshots.push(await captureBrowserMemorySnapshot('after-mixed-load', true));
@@ -863,8 +850,9 @@ export default function App() {
         <MetricCard label="TTFT" value={formatSummary(group.summary.runtime.ttftMs)} />
         <MetricCard label="ITL Avg" value={formatSummary(group.summary.runtime.itlAvgMs)} />
         <MetricCard label="ITL P99" value={formatSummary(group.summary.runtime.itlP99Ms)} />
+        <MetricCard label="E2E TPS" value={formatSummary(group.summary.runtime.e2eTps, 'tok/s')} />
         <MetricCard label="Prefill TPS" value={formatSummary(group.summary.runtime.prefillTps, 'tok/s')} />
-        <MetricCard label="Decode TPS" value={formatSummary(group.summary.runtime.tps, 'tok/s')} />
+        <MetricCard label="Decode TPS" value={formatSummary(group.summary.runtime.decodeTps, 'tok/s')} />
       </div>
 
       <div className="metric-group-title">Compute Profile</div>
@@ -1149,33 +1137,33 @@ export default function App() {
                   <input value={observability?.mode ?? 'off'} readOnly />
                 </div>
                 <div className="row">
-                  <label title="Off = native NONE (no emission). Tokens = client exposes batched tokens for JS-side draining with no DOM work. Render = client flushes token-sized batches and writes textContent as they arrive.">
-                    Stream Tokens
+                  <label title="Off = native NONE. Batch = token batches with no DOM work. Interactive = per-token scheduler yield plus text rendering.">
+                    Token Delivery
                   </label>
                   <div className="toggle-group">
                     <button
                       type="button"
-                      className={`toggle-item ${streamMode === 'off' ? 'active' : ''}`}
-                      onClick={() => setStreamMode('off')}
-                      title="Off — NONE (native baseline)"
+                      className={`toggle-item ${deliveryMode === 'off' ? 'active' : ''}`}
+                      onClick={() => setDeliveryMode('off')}
+                      title="Off - NONE (native baseline)"
                     >
                       Off
                     </button>
                     <button
                       type="button"
-                      className={`toggle-item ${streamMode === 'tokens' ? 'active' : ''}`}
-                      onClick={() => setStreamMode('tokens')}
-                      title="On — drain token batches without DOM rendering"
+                      className={`toggle-item ${deliveryMode === 'batch' ? 'active' : ''}`}
+                      onClick={() => setDeliveryMode('batch')}
+                      title="Batch - drain token batches without DOM rendering"
                     >
-                      Tokens
+                      Batch
                     </button>
                     <button
                       type="button"
-                      className={`toggle-item ${streamMode === 'render' ? 'active' : ''}`}
-                      onClick={() => setStreamMode('render')}
-                      title="On — rendered (with DOM)"
+                      className={`toggle-item ${deliveryMode === 'interactive' ? 'active' : ''}`}
+                      onClick={() => setDeliveryMode('interactive')}
+                      title="Interactive - render while tokens arrive"
                     >
-                      Render
+                      Interactive
                     </button>
                   </div>
                 </div>
@@ -1248,11 +1236,21 @@ export default function App() {
               <MetricCard
                 label="Current Decode TPS"
                 value={
-                  lastRun?.tps != null
-                    ? formatTps(lastRun.tps)
-                    : observability?.runtime?.tokensPerSecond == null
+                  lastRun?.decodeTps != null
+                    ? formatTps(lastRun.decodeTps)
+                    : observability?.runtime?.decodeTokensPerSecond == null
                       ? 'n/a'
-                      : round(observability.runtime.tokensPerSecond)
+                      : round(observability.runtime.decodeTokensPerSecond)
+                }
+              />
+              <MetricCard
+                label="Current E2E TPS"
+                value={
+                  lastRun?.e2eTps != null
+                    ? formatTps(lastRun.e2eTps)
+                    : observability?.runtime?.e2eTokensPerSecond == null
+                      ? 'n/a'
+                      : round(observability.runtime.e2eTokensPerSecond)
                 }
               />
               <MetricCard
@@ -1337,7 +1335,8 @@ export default function App() {
                   ) : (
                     <>
                       <MetricCard label="Tokens" value={lastRun.tokens || 'n/a'} />
-                      <MetricCard label="TPS" value={lastRun.tps == null ? 'n/a' : formatTps(lastRun.tps)} />
+                      <MetricCard label="Decode TPS" value={lastRun.decodeTps == null ? 'n/a' : formatTps(lastRun.decodeTps)} />
+                      <MetricCard label="E2E TPS" value={lastRun.e2eTps == null ? 'n/a' : formatTps(lastRun.e2eTps)} />
                     </>
                   )}
                   <MetricCard label="Prefill TPS" value={lastRun.prefillTps == null ? 'n/a' : formatTps(lastRun.prefillTps)} />
@@ -1476,7 +1475,14 @@ export default function App() {
                       <MetricCard
                         label="Trace Decode TPS"
                         value={formatSummary(
-                          benchmarkReport.trace.analysis.tps,
+                          benchmarkReport.trace.analysis.decodeTps,
+                          'tok/s'
+                        )}
+                      />
+                      <MetricCard
+                        label="Trace E2E TPS"
+                        value={formatSummary(
+                          benchmarkReport.trace.analysis.e2eTps,
                           'tok/s'
                         )}
                       />

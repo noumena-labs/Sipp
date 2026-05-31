@@ -17,7 +17,8 @@ export const observabilityExample: Example = {
         if (metrics) {
           log(`--- Performance Report ---`, 'dim');
           log(`Prefill Speed: ${formatMetric(metrics.prefillTokensPerSecond, 2)} t/s`, 'ai');
-          log(`Decode Speed: ${formatMetric(metrics.tokensPerSecond, 2)} t/s`, 'ai');
+          log(`Decode Speed: ${formatMetric(metrics.decodeTokensPerSecond, 2)} t/s`, 'ai');
+          log(`E2E Speed: ${formatMetric(metrics.e2eTokensPerSecond, 2)} t/s`, 'ai');
           log(`TTFT: ${formatMetric(metrics.ttftMs)}ms`, 'ai');
           log(`Prefill Compute: ${formatMetric(metrics.prefillMs)}ms (${metrics.prefillTokens} tokens)`, 'ai');
           log(`Decode Compute: ${formatMetric(metrics.decodeMs)}ms`, 'ai');
@@ -33,9 +34,9 @@ export const observabilityExample: Example = {
     log(userInput, 'user');
 
     let fullResponse = '';
-    const responseEl = log('', 'ai'); // Create persistent element for streaming
+    const responseEl = log('', 'ai'); // Create persistent element for live tokens
     const run = client.chat([{ role: 'user', content: userInput }], {
-      streamTokens: true,
+      tokenDelivery: 'interactive',
     });
 
     for await (const batch of run.tokens) {

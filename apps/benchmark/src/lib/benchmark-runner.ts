@@ -3,7 +3,7 @@ import {
   type ModelLoadOptions,
   type ModelSource,
   type TokenBatch,
-  type TokenFlushMode,
+  type TokenDeliveryMode,
 } from '@noumena-labs/cogentlm-browser';
 import type {
   BenchmarkOperation,
@@ -120,22 +120,16 @@ export async function runObservedRequest(
     session: string;
     maxTokens: number;
     onTokenBatch?: (batch: TokenBatch) => void;
-    tokenFlush?: TokenFlushMode;
+    tokenDelivery?: TokenDeliveryMode;
     media?: Uint8Array[];
-    /**
-     * When false, the text request disables token streaming so the native runtime runs
-     * in NONE emission mode (no token-plane FFI/SAB activity). TTFT and
-     * token-plane timing then come from native runtime_observability instead of
-     * JS-side wall-clock instrumentation. Default true.
-     */
-    streamTokens?: boolean;
   }
 ): Promise<ObservedRequestRun> {
   const start = performance.now();
   let ttftMs: number | null = null;
   const tokenTimes: number[] = [];
   const sessionObserver = observeSessionCompletion(targetClient, options.session);
-  const streamTokens = options.operation === 'embed' ? false : options.streamTokens ?? true;
+  const tokenDelivery: TokenDeliveryMode =
+    options.operation === 'embed' ? 'off' : options.tokenDelivery ?? 'batch';
 
   try {
     if (options.operation === 'embed') {
@@ -174,8 +168,7 @@ export async function runObservedRequest(
     const requestOptions = {
       maxTokens: options.maxTokens,
       session: options.session,
-      streamTokens,
-      ...(streamTokens ? { tokenFlush: options.tokenFlush ?? 'token' } : {}),
+      tokenDelivery,
     };
     const textRun =
       options.operation === 'query'
@@ -184,8 +177,9 @@ export async function runObservedRequest(
             requestOptions
           )
         : targetClient.chat(messages, requestOptions);
-    const tokenDrain = streamTokens
-      ? new Promise<void>((resolve) => {
+    const tokenDrain = tokenDelivery === 'off'
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => {
           const unsubscribe = textRun.tokens.subscribe((batch) => {
             const elapsed = round(performance.now() - start);
             const frames = Math.max(1, batch.frameCount);
@@ -205,8 +199,7 @@ export async function runObservedRequest(
               resolve();
             }
           );
-        })
-      : Promise.resolve();
+        });
     const [result, observability] = await Promise.all([
       textRun.response,
       sessionObserver.promise,
@@ -245,20 +238,24 @@ function summarizeRunGroup(runs: BenchmarkRun[], benchmarkDurationMs: number): G
     0
   );
   const benchmarkDurationSeconds = benchmarkDurationMs > 0 ? benchmarkDurationMs / 1000 : 0;
-  
-  // Native decode TPS: output_tokens / decode_ms.
-  // Includes GPU synchronization overhead to accurately reflect pure 
-  // hardware-native inference performance, consistent with industry standards.
-  const tpsValues = observations
+
+  const decodeTpsValues = observations
     .map((item) =>
       item.decodeMs > 0 && item.outputTokens > 0
         ? (item.outputTokens * 1000) / item.decodeMs
         : 0
     )
     .filter((v) => v > 0);
+  const e2eTpsValues = observations
+    .map((item) =>
+      item.e2eMs > 0 && item.outputTokens > 0
+        ? (item.outputTokens * 1000) / item.e2eMs
+        : 0
+    )
+    .filter((v) => v > 0);
 
   // Native prefill TPS: prefill_tokens / prefill_ms.
-  // We use a noise floor (min 0.1ms and ≥1 token) to avoid astronomical 
+  // We use a noise floor (min 0.1ms and >=1 token) to avoid astronomical
   // numbers from zero-token ticks.
   const prefillTpsValues = observations
     .map((item) =>
@@ -288,7 +285,8 @@ function summarizeRunGroup(runs: BenchmarkRun[], benchmarkDurationMs: number): G
       ttftMs: summarizeOptional(observations.map((item) => item.ttftMs)),
       itlAvgMs: summarizeOptional(observations.map((item) => item.itlAvgMs)),
       itlP99Ms: summarizeOptional(observations.map((item) => item.itlP99Ms)),
-      tps: summarizeOptional(tpsValues),
+      decodeTps: summarizeOptional(decodeTpsValues),
+      e2eTps: summarizeOptional(e2eTpsValues),
       prefillTps: summarizeOptional(prefillTpsValues),
       avgInputTokens: averageOptional(observations.map((item) => item.inputTokens)),
       avgOutputTokens: averageOptional(observations.map((item) => item.outputTokens)),
@@ -315,9 +313,13 @@ function createRun(
     ttftMs: run.observability?.ttftMs ?? null,
     itlAvgMs: run.observability?.itlAvgMs ?? null,
     itlP99Ms: run.observability?.itlP99Ms ?? null,
-    tps:
+    decodeTps:
       (run.observability?.decodeMs ?? 0) > 0 && (run.observability?.outputTokens ?? 0) > 0
         ? (run.observability!.outputTokens * 1000) / run.observability!.decodeMs
+        : null,
+    e2eTps:
+      (run.observability?.e2eMs ?? 0) > 0 && (run.observability?.outputTokens ?? 0) > 0
+        ? (run.observability!.outputTokens * 1000) / run.observability!.e2eMs
         : null,
     inputTokens: run.observability?.inputTokens ?? null,
     outputTokens: run.observability?.outputTokens ?? run.tokenTimes.length,
@@ -363,8 +365,7 @@ export async function runPromptGroup(
   measuredRuns: number,
   sessionFactory: (index: number) => string,
   setStatus: (s: string) => void,
-  streamTokens: boolean = true,
-  tokenFlush: TokenFlushMode = 'batch',
+  tokenDelivery: TokenDeliveryMode = 'batch',
   tokenObserver?: BenchmarkTokenObserver
 ): Promise<{ benchmarkDurationMs: number; runs: BenchmarkRun[]; summary: GroupSummary }> {
   for (let i = 0; i < warmupRuns; i++) {
@@ -373,9 +374,8 @@ export async function runPromptGroup(
       operation,
       maxTokens: tokenCount,
       session: sessionFactory(i),
-      streamTokens,
-      tokenFlush,
-      onTokenBatch: streamTokens && operation !== 'embed' ? () => {} : undefined,
+      tokenDelivery,
+      onTokenBatch: tokenDelivery !== 'off' && operation !== 'embed' ? () => {} : undefined,
     });
   }
 
@@ -389,8 +389,7 @@ export async function runPromptGroup(
       operation,
       maxTokens: tokenCount,
       session: sessionFactory(i + warmupRuns),
-      streamTokens,
-      tokenFlush,
+      tokenDelivery,
       onTokenBatch:
         tokenObserver?.onTokenBatch == null
           ? undefined
@@ -417,8 +416,7 @@ export async function runScenarioBenchmark(
   runtime: BenchmarkRuntimeOptions,
   setStatus: (s: string) => void,
   alreadyLoaded?: boolean,
-  streamTokens: boolean = true,
-  tokenFlush: TokenFlushMode = 'batch',
+  tokenDelivery: TokenDeliveryMode = 'batch',
   tokenObserver?: BenchmarkTokenObserver
 ): Promise<ScenarioResult> {
   let loadRuntimeMs = 0;
@@ -440,8 +438,7 @@ export async function runScenarioBenchmark(
     1,
     () => `${scenario.id}-cold`,
     setStatus,
-    streamTokens,
-    tokenFlush,
+    tokenDelivery,
     tokenObserver
   );
   const hotFreshContext = await runPromptGroup(
@@ -454,8 +451,7 @@ export async function runScenarioBenchmark(
     measuredRuns,
     (index) => `${scenario.id}-fresh-${index}`,
     setStatus,
-    streamTokens,
-    tokenFlush,
+    tokenDelivery,
     tokenObserver
   );
   const hotReuseContext = await runPromptGroup(
@@ -468,8 +464,7 @@ export async function runScenarioBenchmark(
     measuredRuns,
     () => `${scenario.id}-reuse`,
     setStatus,
-    streamTokens,
-    tokenFlush,
+    tokenDelivery,
     tokenObserver
   );
 
@@ -540,8 +535,7 @@ export async function runMixedLoadBenchmark(
   runtime: BenchmarkRuntimeOptions,
   setStatus: (s: string) => void,
   alreadyLoaded?: boolean,
-  streamTokens: boolean = true,
-  tokenFlush: TokenFlushMode = 'batch',
+  tokenDelivery: TokenDeliveryMode = 'batch',
   tokenObserver?: BenchmarkTokenObserver
 ): Promise<import('./types').MixedLoadResult> {
   let loadRuntimeMs = 0;
@@ -559,15 +553,13 @@ export async function runMixedLoadBenchmark(
         operation,
         maxTokens: definition.background.outputTokenLimit,
         session: `${definition.background.id}-warmup-${i}`,
-        streamTokens,
-        tokenFlush,
+        tokenDelivery,
       }),
       runObservedRequest(targetClient, definition.foreground.prompt, {
         operation,
         maxTokens: definition.foreground.outputTokenLimit,
         session: `${definition.foreground.id}-warmup-${i}`,
-        streamTokens,
-        tokenFlush,
+        tokenDelivery,
       }),
     ]);
   }
@@ -586,8 +578,7 @@ export async function runMixedLoadBenchmark(
         operation,
         maxTokens: definition.background.outputTokenLimit,
         session: `${definition.background.id}-mixed-${i}`,
-        streamTokens,
-        tokenFlush,
+        tokenDelivery,
         onTokenBatch:
           tokenObserver?.onTokenBatch == null
             ? undefined
@@ -597,8 +588,7 @@ export async function runMixedLoadBenchmark(
         operation,
         maxTokens: definition.foreground.outputTokenLimit,
         session: `${definition.foreground.id}-mixed-${i}`,
-        streamTokens,
-        tokenFlush,
+        tokenDelivery,
         onTokenBatch:
           tokenObserver?.onTokenBatch == null
             ? undefined
@@ -693,13 +683,17 @@ export function buildBenchmarkTraceReport(
     .map((log) => log.observability)
     .filter((value): value is RequestObservability => value != null);
 
-  // Native decode TPS: output_tokens / sum-of-llama_decode-wall-times.
-  // Excludes JS yield, GPU sync, and streaming delivery — reflects pure
-  // inference throughput, the number the native runtime reports about itself.
-  const tpsValues = observations
+  const decodeTpsValues = observations
     .map((item) =>
       item.decodeMs > 0 && item.outputTokens > 0
         ? (item.outputTokens * 1000) / item.decodeMs
+        : 0
+    )
+    .filter((v) => v > 0);
+  const e2eTpsValues = observations
+    .map((item) =>
+      item.e2eMs > 0 && item.outputTokens > 0
+        ? (item.outputTokens * 1000) / item.e2eMs
         : 0
     )
     .filter((v) => v > 0);
@@ -711,7 +705,8 @@ export function buildBenchmarkTraceReport(
       ttftMs: summarizeOptional(observations.map((item) => item.ttftMs)),
       itlAvgMs: summarizeOptional(observations.map((item) => item.itlAvgMs)),
       itlP99Ms: summarizeOptional(observations.map((item) => item.itlP99Ms)),
-      tps: summarizeOptional(tpsValues),
+      decodeTps: summarizeOptional(decodeTpsValues),
+      e2eTps: summarizeOptional(e2eTpsValues),
     },
   };
 }

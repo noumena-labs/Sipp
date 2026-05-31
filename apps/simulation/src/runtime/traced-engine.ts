@@ -1,6 +1,6 @@
 import type {
   BrowserTextRun,
-  BrowserTokenStream,
+  BrowserTokenBatches,
   ChatInput,
   ChatMessage,
   ChatOptions,
@@ -54,7 +54,7 @@ class TracedBrainClient implements CharacterRuntimeClient, DirectorRuntimeClient
 
     const run = this.client.chat(input, {
       ...options,
-      streamTokens: true,
+      tokenDelivery: 'batch',
     });
     return this.traceRun(run, queryId);
   }
@@ -77,7 +77,7 @@ class TracedBrainClient implements CharacterRuntimeClient, DirectorRuntimeClient
 
     const run = this.client.query(input, {
       ...options,
-      streamTokens: true,
+      tokenDelivery: 'batch',
     });
     return this.traceRun(run, queryId);
   }
@@ -118,7 +118,7 @@ class TracedBrainClient implements CharacterRuntimeClient, DirectorRuntimeClient
     this.store.appendResponse(queryId, tokens);
     this.bus.emit({
       kind: 'agent-token',
-      tick: 0, // Tick is not strictly needed for UI streaming, but part of schema
+      tick: 0, // Tick is not strictly needed for live UI updates, but part of schema
       agentId: this.brain.id,
       queryId,
       tokens,
@@ -152,7 +152,7 @@ function isChatObjectInput(
   return !Array.isArray(input);
 }
 
-class TokenBatchQueue implements BrowserTokenStream, AsyncIterator<TokenBatch> {
+class TokenBatchQueue implements BrowserTokenBatches, AsyncIterator<TokenBatch> {
   private readonly items: TokenBatch[] = [];
   private readonly subscribers = new Set<(batch: TokenBatch) => void>();
   private readonly waiters: Array<{

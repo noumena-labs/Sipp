@@ -876,7 +876,7 @@ function StartScreen(props: {
               </div>
               <div>
                 <dt>Progress</dt>
-                <dd>{phasePercent == null ? 'streaming' : `${Math.floor(phasePercent)}%`}</dd>
+                <dd>{phasePercent == null ? 'loading' : `${Math.floor(phasePercent)}%`}</dd>
               </div>
             </dl>
           </div>
@@ -1052,7 +1052,7 @@ function TimingGrid(props: { readonly trace: TraceState; readonly runtime: Runti
     ['heckle', formatMs(props.trace.heckleMs)],
     ['total', formatMs(props.trace.totalMs)],
     ['ttft', formatMs(props.runtime?.ttftMs)],
-    ['tok/s', props.runtime?.tokensPerSecond == null ? 'n/a' : props.runtime.tokensPerSecond.toFixed(1)],
+    ['tok/s', props.runtime?.decodeTokensPerSecond == null ? 'n/a' : props.runtime.decodeTokensPerSecond.toFixed(1)],
     ['input', formatCount(props.runtime?.inputTokens)],
     ['output', formatCount(props.runtime?.outputTokens)],
   ] as const;

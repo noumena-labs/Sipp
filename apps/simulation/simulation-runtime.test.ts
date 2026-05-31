@@ -78,7 +78,8 @@ const EMPTY_REQUEST_STATS: RequestStats = {
   ttftMs: null,
   interTokenMs: null,
   e2eMs: null,
-  tokensPerSecond: null,
+  decodeTokensPerSecond: null,
+  e2eTokensPerSecond: null,
   prefillMs: 0,
   decodeMs: 0,
 };
@@ -92,13 +93,13 @@ function createGenerationResult(text: string): GenerationResult {
   };
 }
 
-async function* emptyTokenStream(): AsyncIterable<TokenBatch> {
+async function* emptyTokenBatches(): AsyncIterable<TokenBatch> {
 }
 
 function createTextRun(response: Promise<GenerationResult>): BrowserTextRun {
   return {
     response,
-    tokens: emptyTokenStream(),
+    tokens: emptyTokenBatches(),
     cancel: () => {},
   };
 }

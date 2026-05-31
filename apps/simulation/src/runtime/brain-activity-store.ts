@@ -253,7 +253,7 @@ export class BrainActivityStore {
     // rate, decoupled from token arrival.  Emitting here would force a
     // React re-render per token across every subscriber (HUD, trace
     // drawer, agent inspector), which is the quadratic-in-traffic path
-    // we want to avoid on streaming-heavy turns.
+    // we want to avoid on token-heavy turns.
     this.invalidateSnapshot();
   }
 

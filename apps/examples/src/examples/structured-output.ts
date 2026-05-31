@@ -23,13 +23,13 @@ export const structuredOutputExample: Example = {
 
     try {
       let fullResponse = '';
-      const responseEl = log('', 'ai'); // Create persistent element for streaming
+      const responseEl = log('', 'ai'); // Create persistent element for live tokens
 
       const run = client.chat([
         { role: 'user', content: `Extract data: ${userInput}` }
       ], {
         grammar: jsonGrammar,
-        streamTokens: true,
+        tokenDelivery: 'interactive',
       });
 
       for await (const batch of run.tokens) {

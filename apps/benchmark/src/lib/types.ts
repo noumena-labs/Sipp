@@ -1,4 +1,4 @@
-import type { NativeRuntimeConfig, RequestObservabilityMetrics } from '@noumena-labs/cogentlm-browser';
+import type { NativeRuntimeConfig, RuntimeObservation } from '@noumena-labs/cogentlm-browser';
 
 export interface EnvironmentInfo {
   browserLabel: string;
@@ -23,7 +23,7 @@ export interface MetricSummary {
   maxMs: number;
 }
 
-export type RequestObservability = RequestObservabilityMetrics;
+export type RequestObservability = RuntimeObservation;
 
 export type BenchmarkOperation = 'chat' | 'query' | 'embed';
 
@@ -35,7 +35,8 @@ export interface BenchmarkRun {
   ttftMs: number | null;
   itlAvgMs: number | null;
   itlP99Ms: number | null;
-  tps: number | null;
+  decodeTps: number | null;
+  e2eTps: number | null;
   inputTokens: number | null;
   outputTokens: number;
   prefillTokens: number | null;
@@ -63,7 +64,8 @@ export interface GroupSummary {
     ttftMs: MetricSummary | null;
     itlAvgMs: MetricSummary | null;
     itlP99Ms: MetricSummary | null;
-    tps: MetricSummary | null;
+    decodeTps: MetricSummary | null;
+    e2eTps: MetricSummary | null;
     prefillTps: MetricSummary | null;
     avgInputTokens: number | null;
     avgOutputTokens: number | null;
@@ -182,6 +184,7 @@ export interface BenchmarkTraceReport {
     ttftMs: MetricSummary | null;
     itlAvgMs: MetricSummary | null;
     itlP99Ms: MetricSummary | null;
-    tps: MetricSummary | null;
+    decodeTps: MetricSummary | null;
+    e2eTps: MetricSummary | null;
   };
 }
