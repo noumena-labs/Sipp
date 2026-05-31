@@ -13,6 +13,7 @@ export {
   type BrowserBackendPreference,
   type BrowserEmbeddingRun,
   type BrowserTextRun,
+  type BrowserTokenStream,
   type ChatInput,
   type ChatOptions,
   type EmbedOptions,

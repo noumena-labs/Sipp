@@ -199,6 +199,10 @@ export type ChatInput =
 
 export type ChatOptions = QueryOptions;
 
+export interface InternalTextRequestOptions extends QueryOptions {
+  onRequestStarted?: (requestId: number) => void;
+}
+
 export interface QueryObservation {
   session: string | null;
   status: 'running' | 'success' | 'cancelled' | 'failed';
@@ -351,9 +355,19 @@ export interface EmbeddingResult {
   stats: RequestStats;
 }
 
+/**
+ * Token batches produced by a browser text run.
+ */
+export interface BrowserTokenStream extends AsyncIterable<TokenBatch> {
+  /**
+   * Attach a direct batch listener for latency-sensitive render paths.
+   */
+  subscribe(listener: (batch: TokenBatch) => void): () => void;
+}
+
 export interface BrowserTextRun {
   readonly response: Promise<GenerationResult>;
-  readonly tokens: AsyncIterable<TokenBatch>;
+  readonly tokens: BrowserTokenStream;
   cancel(reason?: unknown): void;
 }
 
@@ -398,9 +412,17 @@ export interface ModelLifecycleService {
   current(): ModelInfo | null;
   list(): Promise<ModelInfo[]>;
   remove(id: string): Promise<void>;
-  query(input: QueryInput, options?: QueryOptions): BrowserTextRun;
-  chat(input: ChatInput, options?: ChatOptions): BrowserTextRun;
-  embed(input: string, options?: EmbedOptions): BrowserEmbeddingRun;
+  runQuery(
+    input: QueryInput,
+    options: InternalTextRequestOptions,
+    emitTokens: ((batch: TokenBatch) => void) | undefined
+  ): Promise<GenerationResult>;
+  runChat(
+    input: ChatInput,
+    options: InternalTextRequestOptions,
+    emitTokens: ((batch: TokenBatch) => void) | undefined
+  ): Promise<GenerationResult>;
+  runEmbedding(input: string, options: EmbedOptions): Promise<EmbeddingResult>;
   state(): EngineState;
   subscribeEvents(listener: (event: EngineEvent) => void): () => void;
   currentObservability(): ObservabilitySnapshot;

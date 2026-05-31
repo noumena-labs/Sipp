@@ -22,10 +22,7 @@ import {
   QueryError,
   type AssetRecord,
   type BrowserBackendPreference,
-  type BrowserEmbeddingRun,
-  type BrowserTextRun,
   type ChatInput,
-  type ChatOptions,
   type ClassifiedAsset,
   type ClassifiedAssetFile,
   type EmbedOptions,
@@ -48,10 +45,10 @@ import {
   type QueryInput,
   type QueryOptions,
   type GenerationResult,
+  type InternalTextRequestOptions,
   type TokenBatch,
   type RegistryManifest,
 } from './types.js';
-import { createBrowserEmbeddingRun, createBrowserTextRun } from './token-queue.js';
 import {
   embeddingResultFromGenerateResponse,
   generationResultFromGenerateResponse,
@@ -83,6 +80,7 @@ interface RuntimeRequestOptions {
   session?: string;
   maxTokens?: number;
   signal?: AbortSignal;
+  streamTokens?: boolean;
   onTokens?: (batch: TokenBatch) => void;
   tokenFlush?: QueryOptions['tokenFlush'];
   grammar?: string;
@@ -305,15 +303,9 @@ export class ModelService implements ModelLifecycleService {
     });
   }
 
-  public query(input: QueryInput, options: QueryOptions = {}): BrowserTextRun {
-    return createBrowserTextRun(options, (emitTokens, signal) =>
-      this.queryResponse(input, { ...options, signal }, emitTokens)
-    );
-  }
-
-  private async queryResponse(
+  public async runQuery(
     input: QueryInput,
-    options: QueryOptions,
+    options: InternalTextRequestOptions,
     emitTokens: ((batch: TokenBatch) => void) | undefined
   ): Promise<GenerationResult> {
     if (this.transitioning) {
@@ -334,7 +326,11 @@ export class ModelService implements ModelLifecycleService {
       }
     }
     const response = await this.runRuntimeRequest(
-      { ...options, onTokens: emitTokens },
+      {
+        ...options,
+        streamTokens: emitTokens != null || options.streamTokens === true,
+        onTokens: emitTokens,
+      },
       media,
       (session, promptOptions) => this.runtime.enqueueQuery(session, prompt, promptOptions),
       'Model query'
@@ -344,13 +340,7 @@ export class ModelService implements ModelLifecycleService {
     });
   }
 
-  public embed(input: string, options: EmbedOptions = {}): BrowserEmbeddingRun {
-    return createBrowserEmbeddingRun(options.signal, (signal) =>
-      this.embedResponse(input, { ...options, signal })
-    );
-  }
-
-  private async embedResponse(
+  public async runEmbedding(
     input: string,
     options: EmbedOptions
   ): Promise<EmbeddingResult> {
@@ -402,8 +392,12 @@ export class ModelService implements ModelLifecycleService {
     const promptOptions: PromptOptions = {
       nTokens: options.maxTokens,
       signal: options.signal,
+      streamTokens: options.streamTokens === true || options.onTokens != null,
       onTokens: options.onTokens == null ? undefined : emitTokens,
-      tokenFlush: options.onTokens == null ? undefined : options.tokenFlush ?? 'token',
+      tokenFlush:
+        options.streamTokens !== true && options.onTokens == null
+          ? undefined
+          : options.tokenFlush ?? 'token',
       media,
       grammar: options.grammar,
       onRequestStarted: options.onRequestStarted,
@@ -479,15 +473,9 @@ export class ModelService implements ModelLifecycleService {
     }
   }
 
-  public chat(input: ChatInput, options: ChatOptions = {}): BrowserTextRun {
-    return createBrowserTextRun(options, (emitTokens, signal) =>
-      this.chatResponse(input, { ...options, signal }, emitTokens)
-    );
-  }
-
-  private async chatResponse(
+  public async runChat(
     input: ChatInput,
-    options: ChatOptions,
+    options: InternalTextRequestOptions,
     emitTokens: ((batch: TokenBatch) => void) | undefined
   ): Promise<GenerationResult> {
     if (this.transitioning) {

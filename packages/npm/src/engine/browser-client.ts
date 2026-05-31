@@ -1,4 +1,5 @@
 import { ModelService } from '../models/model-service.js';
+import { createBrowserEmbeddingRun, createBrowserTextRun } from '../models/token-queue.js';
 import {
   QueryError,
   type CogentClient as CogentClientShape,
@@ -143,17 +144,23 @@ export class CogentClient implements CogentClientShape {
 
   public query(input: QueryInput, options: QueryOptions = {}): BrowserTextRun {
     this.assertOpen();
-    return this.#service.query(input, options);
+    return createBrowserTextRun(options, (emitTokens, signal) =>
+      this.#service.runQuery(input, { ...options, signal }, emitTokens)
+    );
   }
 
   public chat(input: ChatInput, options: ChatOptions = {}): BrowserTextRun {
     this.assertOpen();
-    return this.#service.chat(input, options);
+    return createBrowserTextRun(options, (emitTokens, signal) =>
+      this.#service.runChat(input, { ...options, signal }, emitTokens)
+    );
   }
 
   public embed(input: string, options: EmbedOptions = {}): BrowserEmbeddingRun {
     this.assertOpen();
-    return this.#service.embed(input, options);
+    return createBrowserEmbeddingRun(options.signal, (signal) =>
+      this.#service.runEmbedding(input, { ...options, signal })
+    );
   }
 
   public state(): EngineState {

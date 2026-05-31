@@ -102,6 +102,12 @@ function textRun(
   return {
     response,
     tokens: {
+      subscribe(listener: (batch: TokenBatch) => void): () => void {
+        for (const batch of batches) {
+          listener(batch);
+        }
+        return () => {};
+      },
       async *[Symbol.asyncIterator](): AsyncIterator<TokenBatch> {
         for (const batch of batches) {
           yield batch;

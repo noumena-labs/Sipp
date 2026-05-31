@@ -311,9 +311,9 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private backendProfilingEnabled = false;
   private transportObservability: TransportObservability;
   private streamingTickCallback: (() => void) | undefined;
-  // Worker-side SAB ring writer.  When set, requests with onTokens use the
-  // SAB fast path; otherwise the scheduler delivers TokenBatch values through
-  // callbacks/postMessage.
+  // Worker-side SAB ring writer. When set, streaming requests use the SAB
+  // fast path; otherwise the scheduler delivers TokenBatch values through
+  // callbacks.
   private streamingRingWriter: StreamingRingWriter | null = null;
   constructor(private config: CogentClientOptions = {}) {
     this.executionMode = config.executionMode === 'worker' ? 'worker' : 'main-thread';
@@ -496,10 +496,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return bridge.consumeCompletedResponseIfPresent(requestId);
   }
 
-  private updateTokenTransportObservability(
-    onTokens: ((batch: TokenBatch) => void) | undefined
-  ): void {
-    if (onTokens == null) {
+  private updateTokenTransportObservability(streamTokens: boolean): void {
+    if (!streamTokens) {
       this.refreshTokenTransportObservability();
       return;
     }
@@ -931,16 +929,18 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   ): Promise<GenerateRequestId> {
     const bridge = this.getReadyEngineBridge();
     const onTokens = typeof options === 'object' ? options.onTokens : undefined;
+    const streamTokens =
+      typeof options === 'object' && (options.streamTokens === true || onTokens != null);
     const signal = typeof options === 'object' ? options.signal : undefined;
 
     if (signal?.aborted) {
       throw createAbortError('Prompt was aborted before it was enqueued.');
     }
 
-    this.updateTokenTransportObservability(onTokens);
+    this.updateTokenTransportObservability(streamTokens);
 
     const emissionMode =
-      onTokens == null ? TOKEN_EMISSION_NONE : TOKEN_EMISSION_STREAMING_BUFFER;
+      streamTokens ? TOKEN_EMISSION_STREAMING_BUFFER : TOKEN_EMISSION_NONE;
     const requestId = startRequest(bridge, emissionMode);
     if (!requestId) {
       const detail = bridge.readLastEngineError();
@@ -961,6 +961,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
     if (onTokens != null) {
       this.queuedPromptCallbacks.set(requestId, onTokens);
+    }
+    if (streamTokens) {
       this.queuedPromptTokenFlushModes.set(
         requestId,
         typeof options === 'object' ? options.tokenFlush ?? 'token' : 'token'

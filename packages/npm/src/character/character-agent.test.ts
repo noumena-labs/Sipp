@@ -138,6 +138,21 @@ function createFakeEngine(): FakeEngine {
       return {
         response: runPromise.then(({ safeOutput }) => generationResult(safeOutput.trim())),
         tokens: {
+          subscribe(listener: (batch: TokenBatch) => void): () => void {
+            let active = true;
+            void runPromise.then(
+              ({ batches }) => {
+                if (!active) return;
+                for (const batch of batches) {
+                  listener(batch);
+                }
+              },
+              () => {}
+            );
+            return () => {
+              active = false;
+            };
+          },
           async *[Symbol.asyncIterator](): AsyncIterator<TokenBatch> {
             const result = await runPromise.catch(() => ({ batches: [] as TokenBatch[] }));
             for (const batch of result.batches) {

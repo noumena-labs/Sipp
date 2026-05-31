@@ -1,11 +1,19 @@
-import type { BrowserEmbeddingRun, BrowserTextRun, EmbeddingResult, GenerationResult, TokenBatch } from './types.js';
+import type {
+  BrowserEmbeddingRun,
+  BrowserTextRun,
+  BrowserTokenStream,
+  EmbeddingResult,
+  GenerationResult,
+  TokenBatch,
+} from './types.js';
 import { createLinkedAbortController } from '../utils/abort.js';
 
 const TOKEN_QUEUE_CAPACITY = 256;
 
-class BoundedTokenBatchQueue implements AsyncIterable<TokenBatch>, AsyncIterator<TokenBatch> {
+class BoundedTokenBatchQueue implements BrowserTokenStream, AsyncIterator<TokenBatch> {
   private readonly items: TokenBatch[] = [];
   private readonly waiters: Array<(result: IteratorResult<TokenBatch>) => void> = [];
+  private readonly subscribers = new Set<(batch: TokenBatch) => void>();
   private closed = false;
   private pendingDroppedFrames = 0;
 
@@ -22,6 +30,12 @@ class BoundedTokenBatchQueue implements AsyncIterable<TokenBatch>, AsyncIterator
         },
       };
       this.pendingDroppedFrames = 0;
+    }
+    if (this.subscribers.size > 0) {
+      for (const subscriber of this.subscribers) {
+        subscriber(batch);
+      }
+      return;
     }
     const waiter = this.waiters.shift();
     if (waiter != null) {
@@ -40,6 +54,7 @@ class BoundedTokenBatchQueue implements AsyncIterable<TokenBatch>, AsyncIterator
       return;
     }
     this.closed = true;
+    this.subscribers.clear();
     while (this.waiters.length > 0) {
       this.waiters.shift()?.({ done: true, value: undefined });
     }
@@ -60,6 +75,19 @@ class BoundedTokenBatchQueue implements AsyncIterable<TokenBatch>, AsyncIterator
 
   public [Symbol.asyncIterator](): AsyncIterator<TokenBatch> {
     return this;
+  }
+
+  public subscribe(listener: (batch: TokenBatch) => void): () => void {
+    for (const item of this.items.splice(0)) {
+      listener(item);
+    }
+    if (this.closed) {
+      return () => {};
+    }
+    this.subscribers.add(listener);
+    return () => {
+      this.subscribers.delete(listener);
+    };
   }
 }
 

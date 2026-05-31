@@ -162,27 +162,41 @@ async function handleRequest(message: WorkerOperationRequest): Promise<unknown> 
       return modelService.current();
     }
     case 'query':
-      return await withAbortController(message.callId, (signal) =>
-        ensureService(message.config).query(message.input, {
-          ...message.options,
-          signal,
-          ...streamingOptionsFor(message.callId, message.options.streaming),
-        }).response
-      );
+      return await withAbortController(message.callId, (signal) => {
+        const streaming = streamingOptionsFor(message.callId, message.options.streaming);
+        const { streaming: _streaming, ...options } = message.options;
+        return ensureService(message.config).runQuery(
+          message.input,
+          {
+            ...options,
+            signal,
+            streamTokens: streaming.streamTokens,
+            onRequestStarted: streaming.onRequestStarted,
+          },
+          undefined
+        );
+      });
     case 'chat':
-      return await withAbortController(message.callId, (signal) =>
-        ensureService(message.config).chat(message.input, {
-          ...message.options,
-          signal,
-          ...streamingOptionsFor(message.callId, message.options.streaming),
-        }).response
-      );
+      return await withAbortController(message.callId, (signal) => {
+        const streaming = streamingOptionsFor(message.callId, message.options.streaming);
+        const { streaming: _streaming, ...options } = message.options;
+        return ensureService(message.config).runChat(
+          message.input,
+          {
+            ...options,
+            signal,
+            streamTokens: streaming.streamTokens,
+            onRequestStarted: streaming.onRequestStarted,
+          },
+          undefined
+        );
+      });
     case 'embed':
       return await withAbortController(message.callId, (signal) =>
-        ensureService(message.config).embed(message.input, {
+        ensureService(message.config).runEmbedding(message.input, {
           ...message.options,
           signal,
-        }).response
+        })
       );
   }
 }

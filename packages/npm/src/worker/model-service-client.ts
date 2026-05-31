@@ -11,7 +11,6 @@ import {
   DEFAULT_STREAMING_RING_CAPACITY,
 } from '../runtime/streaming-ring.js';
 import { createAbortError } from '../utils/abort.js';
-import { createBrowserEmbeddingRun, createBrowserTextRun } from '../models/token-queue.js';
 import {
   WorkerRequestMessage,
   WorkerResponseMessage,
@@ -22,8 +21,6 @@ import {
   QueryError,
   type EngineEvent,
   type EngineState,
-  type BrowserEmbeddingRun,
-  type BrowserTextRun,
   type ObservabilityEvent,
   type ObservabilitySnapshot,
   type ModelInfo,
@@ -34,7 +31,7 @@ import {
   type EmbeddingResult,
   type GenerationResult,
   type ChatInput,
-  type ChatOptions,
+  type InternalTextRequestOptions,
   type QueryInput,
   type QueryOptions,
   type TokenBatch,
@@ -106,16 +103,19 @@ function toWorkerRuntimeConfig(config: CogentClientOptions): WorkerRuntimeConfig
   };
 }
 
-function toWorkerQueryOptions(options: QueryOptions = {}): WorkerQueryOptions {
+function toWorkerQueryOptions(
+  options: QueryOptions = {},
+  streaming: boolean
+): WorkerQueryOptions {
   return {
     session: options.session,
     maxTokens: options.maxTokens,
     grammar: options.grammar,
-    tokenFlush: options.streamTokens === true ? options.tokenFlush ?? 'token' : undefined,
+    tokenFlush: streaming ? options.tokenFlush ?? 'token' : undefined,
     // Carry the caller's streaming intent across the worker boundary.  When
     // false, the worker leaves engine emission_mode at NONE — required to get
     // a real native baseline TPS comparison from a worker-backed engine.
-    streaming: options.streamTokens === true,
+    streaming,
   };
 }
 
@@ -200,24 +200,18 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     this.currentSnapshot = null;
   }
 
-  public query(input: QueryInput, options: QueryOptions = {}): BrowserTextRun {
-    this.assertOpen();
-    return createBrowserTextRun(options, (emitTokens, signal) =>
-      this.queryResponse(input, { ...options, signal }, emitTokens)
-    );
-  }
-
-  private async queryResponse(
+  public async runQuery(
     input: QueryInput,
-    options: QueryOptions,
+    options: InternalTextRequestOptions,
     emitTokens: ((batch: TokenBatch) => void) | undefined
   ): Promise<GenerationResult> {
+    this.assertOpen();
     return (await this.callWorker(
       {
         kind: 'query',
         config: this.workerConfig,
         input,
-        options: toWorkerQueryOptions(options),
+        options: toWorkerQueryOptions(options, emitTokens != null),
       },
       {
         signal: options.signal,
@@ -227,24 +221,18 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     )) as GenerationResult;
   }
 
-  public chat(input: ChatInput, options: ChatOptions = {}): BrowserTextRun {
-    this.assertOpen();
-    return createBrowserTextRun(options, (emitTokens, signal) =>
-      this.chatResponse(input, { ...options, signal }, emitTokens)
-    );
-  }
-
-  private async chatResponse(
+  public async runChat(
     input: ChatInput,
-    options: ChatOptions,
+    options: InternalTextRequestOptions,
     emitTokens: ((batch: TokenBatch) => void) | undefined
   ): Promise<GenerationResult> {
+    this.assertOpen();
     return (await this.callWorker(
       {
         kind: 'chat',
         config: this.workerConfig,
         input,
-        options: toWorkerQueryOptions(options),
+        options: toWorkerQueryOptions(options, emitTokens != null),
       },
       {
         signal: options.signal,
@@ -254,17 +242,11 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     )) as GenerationResult;
   }
 
-  public embed(input: string, options: EmbedOptions = {}): BrowserEmbeddingRun {
-    this.assertOpen();
-    return createBrowserEmbeddingRun(options.signal, (signal) =>
-      this.embedResponse(input, { ...options, signal })
-    );
-  }
-
-  private async embedResponse(
+  public async runEmbedding(
     input: string,
     options: EmbedOptions
   ): Promise<EmbeddingResult> {
+    this.assertOpen();
     return (await this.callWorker(
       {
         kind: 'embed',

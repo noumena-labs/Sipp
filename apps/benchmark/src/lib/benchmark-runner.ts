@@ -185,8 +185,8 @@ export async function runObservedRequest(
           )
         : targetClient.chat(messages, requestOptions);
     const tokenDrain = streamTokens
-      ? (async () => {
-          for await (const batch of textRun.tokens) {
+      ? new Promise<void>((resolve) => {
+          const unsubscribe = textRun.tokens.subscribe((batch) => {
             const elapsed = round(performance.now() - start);
             const frames = Math.max(1, batch.frameCount);
             for (let index = 0; index < frames; index += 1) {
@@ -194,8 +194,18 @@ export async function runObservedRequest(
               ttftMs ??= elapsed;
             }
             options.onTokenBatch?.(batch);
-          }
-        })()
+          });
+          void textRun.response.then(
+            () => {
+              unsubscribe();
+              resolve();
+            },
+            () => {
+              unsubscribe();
+              resolve();
+            }
+          );
+        })
       : Promise.resolve();
     const [result, observability] = await Promise.all([
       textRun.response,

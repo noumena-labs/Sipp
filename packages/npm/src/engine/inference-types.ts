@@ -162,6 +162,7 @@ export interface NativeRuntimeConfig {
 export interface PromptOptions {
   nTokens?: number;
   signal?: AbortSignal;
+  streamTokens?: boolean;
   onTokens?: (batch: TokenBatch) => void;
   /**
    * Controls how aggressively the browser scheduler flushes token batches.

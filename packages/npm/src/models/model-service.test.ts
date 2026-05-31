@@ -991,13 +991,15 @@ test('ModelService loads, lists, tracks current, and queries text models', async
   assert.equal((await service.list())[0]?.loaded, true);
 
   const tokens: string[] = [];
-  const run = service.query('hello', {
-    streamTokens: true,
-  });
-  const answer = await run.response;
-  for await (const batch of run.tokens) {
-    tokens.push(batch.text);
-  }
+  const answer = await service.runQuery(
+    'hello',
+    {
+      streamTokens: true,
+    },
+    (batch) => {
+      tokens.push(batch.text);
+    }
+  );
   assert.equal(answer.text, 'answer:hello');
   assert.deepEqual(tokens, ['token']);
   assert.equal(runtime.lastPrompt, 'hello');
@@ -1007,10 +1009,10 @@ test('ModelService.embed returns embedding results without token streaming', asy
   const { service, runtime } = createService();
   await service.load(file('embedding-model.gguf'));
 
-  const result = await service.embed('hello', {
+  const result = await service.runEmbedding('hello', {
     normalize: false,
     contextKey: 'vectors',
-  }).response;
+  });
 
   assert.deepEqual(result.values, [3, 4]);
   assert.equal(result.pooling, 'mean');
@@ -1018,7 +1020,7 @@ test('ModelService.embed returns embedding results without token streaming', asy
   assert.equal(runtime.lastPrompt, 'hello');
   const options = runtime.enqueuedOptions.at(-1) as { normalize?: boolean; signal?: AbortSignal };
   assert.equal(options.normalize, false);
-  assert.ok(options.signal instanceof AbortSignal);
+  assert.equal(options.signal, undefined);
 });
 
 test('ModelService routes browser lifecycle through the Rust bridge when available', async () => {
@@ -1109,19 +1111,18 @@ test('ModelService.chat renders chat templates and sanitizes assistant boundarie
   runtime.nextOutputText = 'Hello there</assistant>\n<user>ignored';
 
   const tokens: string[] = [];
-  const run = service.chat(
+  const answer = await service.runChat(
     [
       { role: 'system', content: 'Be concise.' },
       { role: 'user', content: 'Say hello.' },
     ],
     {
       streamTokens: true,
+    },
+    (batch) => {
+      tokens.push(batch.text);
     }
   );
-  const answer = await run.response;
-  for await (const batch of run.tokens) {
-    tokens.push(batch.text);
-  }
 
   assert.equal(answer.text, 'Hello there');
   assert.deepEqual(tokens, ['Hello there']);
@@ -1135,13 +1136,30 @@ test('ModelService.chat keeps token emission off when streamTokens is not reques
   await service.load(file('text-model.gguf'));
   runtime.nextOutputText = 'Hello there</assistant>\n<user>ignored';
 
-  const answer = await service.chat([
-    { role: 'user', content: 'Say hello.' },
-  ]).response;
+  const answer = await service.runChat(
+    [
+      { role: 'user', content: 'Say hello.' },
+    ],
+    {},
+    undefined
+  );
 
   const options = runtime.enqueuedOptions.at(-1);
   assert.equal(answer.text, 'Hello there');
   assert.equal(typeof options, 'object');
+  assert.equal(typeof (options as PromptOptions).onTokens, 'undefined');
+});
+
+test('ModelService can enable token emission without a local callback', async () => {
+  const { service, runtime } = createService();
+  await service.load(file('text-model.gguf'));
+
+  await service.runQuery('hello', { streamTokens: true, tokenFlush: 'token' }, undefined);
+
+  const options = runtime.enqueuedOptions.at(-1);
+  assert.equal(typeof options, 'object');
+  assert.equal((options as PromptOptions).streamTokens, true);
+  assert.equal((options as PromptOptions).tokenFlush, 'token');
   assert.equal(typeof (options as PromptOptions).onTokens, 'undefined');
 });
 
@@ -1167,7 +1185,7 @@ test('ModelService rejects queries during lifecycle transitions and serializes c
   const firstLoad = service.load(file('slow.gguf'));
   await new Promise((resolve) => setTimeout(resolve, 0));
   await assert.rejects(
-    () => service.query('too early').response,
+    () => service.runQuery('too early', {}, undefined),
     (error) => error instanceof QueryError && error.code === 'MODEL_NOT_READY'
   );
 
