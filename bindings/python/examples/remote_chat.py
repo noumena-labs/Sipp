@@ -3,23 +3,24 @@ from __future__ import annotations
 from cogentlm import ChatMessage
 
 from _common import (
-    load_openai_provider_client,
+    CogentClient,
+    add_openai_remote,
     print_text,
-    provider_endpoint,
-    read_provider_args,
+    read_remote_args,
     text_options,
 )
 
 
 def main() -> None:
-    model, prompt = read_provider_args("Explain provider inference in one sentence.")
-    client = load_openai_provider_client(model)
+    model, prompt = read_remote_args("Explain remote inference in one sentence.")
+    client = CogentClient()
+    endpoint = add_openai_remote(client, model)
     run = client.chat(
         [
             ChatMessage("system", "Answer concisely."),
             ChatMessage("user", prompt),
         ],
-        endpoint=provider_endpoint(model),
+        endpoint=endpoint,
         options=text_options(),
         stream_tokens=True,
     )

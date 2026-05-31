@@ -60,7 +60,7 @@ pub(crate) fn embedding_response(
 }
 
 #[cfg(feature = "providers")]
-pub(crate) fn provider_text_response(
+pub(crate) fn remote_text_response(
     endpoint: EndpointRef,
     response: cogentlm_providers::ProviderResponse<cogentlm_providers::ProviderTextOutput>,
 ) -> CogentTextResponse {
@@ -74,7 +74,7 @@ pub(crate) fn provider_text_response(
 }
 
 #[cfg(feature = "providers")]
-pub(crate) fn provider_embedding_response(
+pub(crate) fn remote_embedding_response(
     endpoint: EndpointRef,
     response: cogentlm_providers::ProviderResponse<cogentlm_providers::ProviderEmbeddingOutput>,
 ) -> CogentEmbeddingResponse {

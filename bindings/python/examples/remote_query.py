@@ -1,20 +1,21 @@
 from __future__ import annotations
 
 from _common import (
-    load_openai_provider_client,
+    CogentClient,
+    add_openai_remote,
     print_text,
-    provider_endpoint,
-    read_provider_args,
+    read_remote_args,
     text_options,
 )
 
 
 def main() -> None:
-    model, prompt = read_provider_args("Write one sentence about provider inference.")
-    client = load_openai_provider_client(model)
+    model, prompt = read_remote_args("Write one sentence about remote inference.")
+    client = CogentClient()
+    endpoint = add_openai_remote(client, model)
     run = client.query(
         prompt,
-        endpoint=provider_endpoint(model),
+        endpoint=endpoint,
         options=text_options(),
     )
     print_text(run.result())

@@ -312,7 +312,7 @@ export class ModelService implements ModelLifecycleService {
       throw new QueryError('MODEL_NOT_READY', 'A model lifecycle transition is in progress.');
     }
     if (this.currentLoaded == null) {
-      throw new QueryError('MODEL_NOT_READY', 'No model is loaded. Call engine.models.load(...) first.');
+      throw new QueryError('MODEL_NOT_READY', 'No model is loaded. Call client.addLocal(...) first.');
     }
     let prompt = typeof input === 'string' ? input : input.prompt;
     const media = typeof input === 'string' ? undefined : input.media;
@@ -348,7 +348,7 @@ export class ModelService implements ModelLifecycleService {
       throw new QueryError('MODEL_NOT_READY', 'A model lifecycle transition is in progress.');
     }
     if (this.currentLoaded == null) {
-      throw new QueryError('MODEL_NOT_READY', 'No model is loaded. Call engine.models.load(...) first.');
+      throw new QueryError('MODEL_NOT_READY', 'No model is loaded. Call client.addLocal(...) first.');
     }
 
     const response = await this.runRuntimeRequest(
@@ -482,7 +482,7 @@ export class ModelService implements ModelLifecycleService {
       throw new QueryError('MODEL_NOT_READY', 'A model lifecycle transition is in progress.');
     }
     if (this.currentLoaded == null) {
-      throw new QueryError('MODEL_NOT_READY', 'No model is loaded. Call engine.models.load(...) first.');
+      throw new QueryError('MODEL_NOT_READY', 'No model is loaded. Call client.addLocal(...) first.');
     }
 
     const current = this.currentLoaded;

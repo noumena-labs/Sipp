@@ -1,21 +1,16 @@
-mod provider_common;
+mod remote_common;
 
-use cogentlm_client::{CogentEmbedRequest, CogentEmbeddingResponse, EndpointRef};
+use cogentlm_client::{CogentEmbedRequest, CogentEmbeddingResponse};
 use futures::executor::block_on;
 
-fn main() -> provider_common::ExampleResult<()> {
+fn main() -> remote_common::ExampleResult<()> {
     block_on(async {
-        let args = provider_common::args("CogentClient provider embedding smoke input.")?;
+        let args = remote_common::args("CogentClient remote embedding smoke input.")?;
         let mut client = cogentlm_client::CogentClient::new();
-        client.add_provider_model(
-            "openai",
-            args.model.clone(),
-            provider_common::openai_provider()?,
-            cogentlm_client::ProviderExecutor::new()?,
-        )?;
+        let endpoint = client.add_remote("openai", remote_common::openai_remote(args.model)?)?;
         let response = client
             .embed(CogentEmbedRequest {
-                endpoint: Some(provider_endpoint(&args.model)),
+                endpoint: Some(endpoint),
                 input: args.input,
                 ..Default::default()
             })
@@ -23,13 +18,6 @@ fn main() -> provider_common::ExampleResult<()> {
         print_embedding(response);
         Ok(())
     })
-}
-
-fn provider_endpoint(model: &str) -> EndpointRef {
-    EndpointRef::ProviderModel {
-        provider: "openai".to_string(),
-        model: model.to_string(),
-    }
 }
 
 fn print_embedding(response: CogentEmbeddingResponse) {

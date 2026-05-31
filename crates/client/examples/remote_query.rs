@@ -1,21 +1,16 @@
-mod provider_common;
+mod remote_common;
 
-use cogentlm_client::{CogentQueryRequest, CogentTextOptions, CogentTextResponse, EndpointRef};
+use cogentlm_client::{CogentQueryRequest, CogentTextOptions, CogentTextResponse};
 use futures::executor::block_on;
 
-fn main() -> provider_common::ExampleResult<()> {
+fn main() -> remote_common::ExampleResult<()> {
     block_on(async {
-        let args = provider_common::args("Write one sentence about provider inference.")?;
+        let args = remote_common::args("Write one sentence about remote inference.")?;
         let mut client = cogentlm_client::CogentClient::new();
-        client.add_provider_model(
-            "openai",
-            args.model.clone(),
-            provider_common::openai_provider()?,
-            cogentlm_client::ProviderExecutor::new()?,
-        )?;
+        let endpoint = client.add_remote("openai", remote_common::openai_remote(args.model)?)?;
         let response = client
             .query(CogentQueryRequest {
-                endpoint: Some(provider_endpoint(&args.model)),
+                endpoint: Some(endpoint),
                 prompt: args.input,
                 options: text_options(),
                 ..Default::default()
@@ -24,13 +19,6 @@ fn main() -> provider_common::ExampleResult<()> {
         print_text(response);
         Ok(())
     })
-}
-
-fn provider_endpoint(model: &str) -> EndpointRef {
-    EndpointRef::ProviderModel {
-        provider: "openai".to_string(),
-        model: model.to_string(),
-    }
 }
 
 fn text_options() -> CogentTextOptions {

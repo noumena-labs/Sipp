@@ -60,7 +60,7 @@ export type ModelSource =
   };
 
 export interface ModelInfo {
-  /** Installed model id persisted in OPFS. Pass this back to engine.models.load(id) to reload it. */
+  /** Installed model id persisted in OPFS. Pass this back to client.addLocal(id) to reload it. */
   id: string;
   name: string;
   modality: ModelModality;
@@ -431,13 +431,15 @@ export interface ModelLifecycleService {
 }
 
 export interface CogentClient {
-  readonly models: {
-    load(source: ModelSource, options?: ModelLoadOptions): Promise<ModelInfo>;
-    current(): ModelInfo | null;
-    list(): Promise<ModelInfo[]>;
-    remove(id: string): Promise<void>;
-  };
   readonly observability: EngineObservability;
+  /** Load a local model and make it the current local endpoint. */
+  addLocal(source: ModelSource, options?: ModelLoadOptions): Promise<ModelInfo>;
+  /** Return the currently loaded local model, if one is active. */
+  currentLocal(): ModelInfo | null;
+  /** List installed local models. */
+  listLocal(): Promise<ModelInfo[]>;
+  /** Remove an installed local model by id. */
+  removeLocal(id: string): Promise<void>;
   query(input: QueryInput, options?: QueryOptions): BrowserTextRun;
   chat(input: ChatInput, options?: ChatOptions): BrowserTextRun;
   embed(input: string, options?: EmbedOptions): BrowserEmbeddingRun;

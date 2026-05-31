@@ -39,7 +39,7 @@ pub async fn load_client(model_path: PathBuf, embeddings: bool) -> ExampleResult
     set_llama_log_quiet(true);
     let mut client = CogentClient::new();
     client
-        .load_model("default", model_path, runtime_config(embeddings))
+        .add_local("default", model_path, runtime_config(embeddings))
         .await?;
     Ok(client)
 }

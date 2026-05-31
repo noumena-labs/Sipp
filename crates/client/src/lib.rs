@@ -1,19 +1,21 @@
-//! Unified local-model and provider-facing inference facade.
+//! Unified local and remote inference facade.
 //!
 //! The crate owns endpoint resolution and shared request/result envelopes.
-//! Local runtime work stays in `cogentlm-engine`; remote provider execution
-//! stays in `cogentlm-providers` behind the optional `providers` feature.
+//! Local runtime work stays in `cogentlm-engine`; remote transport execution
+//! stays behind the optional `providers` feature.
 
 mod client;
 mod dispatch;
 mod endpoint;
-mod engine_endpoint;
 mod error;
-#[cfg(feature = "providers")]
-mod executor;
+mod local_endpoint;
 mod map;
 #[cfg(feature = "providers")]
-mod provider_endpoint;
+mod remote;
+#[cfg(feature = "providers")]
+mod remote_endpoint;
+#[cfg(feature = "providers")]
+mod remote_executor;
 mod request;
 mod response;
 mod run;
@@ -23,10 +25,15 @@ pub use client::CogentClient;
 pub use endpoint::{EndpointCapabilities, EndpointRef};
 pub use error::{CogentError, CogentResult};
 #[cfg(feature = "providers")]
-pub use executor::ProviderExecutor;
+pub use error::{RemoteError, RemoteErrorKind, RemoteKind};
+#[cfg(feature = "providers")]
+pub use remote::{
+    RemoteAnthropicConfig, RemoteAuth, RemoteConfig, RemoteOpenAiConfig, RemoteProtocol,
+    RemoteProxyConfig, RemoteSecret,
+};
 pub use request::{
     CogentChatRequest, CogentEmbedRequest, CogentQueryRequest, CogentTextOptions,
-    LocalEmbedOptions, LocalTextOptions, ProviderOptions,
+    LocalEmbedOptions, LocalTextOptions, RemoteOptions,
 };
 pub use response::{CogentEmbeddingResponse, CogentTextResponse};
 pub use run::{

@@ -1,15 +1,16 @@
 import {
-  loadOpenAiProviderClient,
+  CogentClient,
+  addOpenAiRemote,
   printText,
-  providerEndpoint,
-  readProviderArgs,
+  readRemoteArgs,
   textOptions,
 } from './_common.mjs';
 
-const { model, input } = readProviderArgs('Explain provider inference in one sentence.');
-const client = loadOpenAiProviderClient(model);
+const { model, input } = readRemoteArgs('Explain remote inference in one sentence.');
+const client = new CogentClient();
+const endpoint = addOpenAiRemote(client, model);
 const run = client.chat({
-  endpoint: providerEndpoint(model),
+  endpoint,
   messages: [
     { role: 'system', content: 'Answer concisely.' },
     { role: 'user', content: input },

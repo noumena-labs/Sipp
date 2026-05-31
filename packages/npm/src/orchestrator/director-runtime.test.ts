@@ -6,6 +6,7 @@ import type {
   ChatInput,
   ChatOptions,
   GenerationResult,
+  ModelInfo,
   TokenBatch,
 } from '../models/types.js';
 import { parseDirectorConfig } from './director-config.js';
@@ -21,9 +22,9 @@ class FakeClient implements DirectorRuntimeClient {
   public mediaMarker: string | null = '<image>';
   public queryCalls = 0;
 
-  public readonly models = {
-    current: () => ({ mediaMarker: this.mediaMarker }),
-  };
+  public currentLocal(): Pick<ModelInfo, 'mediaMarker'> | null {
+    return { mediaMarker: this.mediaMarker };
+  }
 
   public chat(
     input: ChatInput,

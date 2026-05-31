@@ -35,9 +35,7 @@ import type {
 /** Minimal chat client required by director runtimes. */
 export interface DirectorRuntimeClient {
   chat(input: ChatInput, options?: ChatOptions): BrowserTextRun;
-  models?: {
-    current(): Pick<ModelInfo, 'mediaMarker'> | null;
-  };
+  currentLocal?(): Pick<ModelInfo, 'mediaMarker'> | null;
 }
 
 export class DirectorRuntime {
@@ -184,7 +182,7 @@ export class DirectorRuntime {
   }
 
   private getMediaMarker(): string | null {
-    return this.client.models?.current()?.mediaMarker ?? null;
+    return this.client.currentLocal?.()?.mediaMarker ?? null;
   }
 
   private getTaskContextKey(taskName: string): string {

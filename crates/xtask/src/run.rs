@@ -16,24 +16,23 @@ use std::time::Instant;
 use xshell::{cmd, Shell};
 
 const RUST_LOCAL_SMOKE_EXAMPLES: &[&str] = &["query", "chat", "embed"];
-const RUST_PROVIDER_SMOKE_EXAMPLES: &[&str] =
-    &["provider_query", "provider_chat", "provider_embed"];
+const RUST_REMOTE_SMOKE_EXAMPLES: &[&str] = &["remote_query", "remote_chat", "remote_embed"];
 const NODE_LOCAL_SMOKE_SCRIPTS: &[&str] = &[
     "examples/query.mjs",
     "examples/chat.mjs",
     "examples/embed.mjs",
 ];
-const NODE_PROVIDER_SMOKE_SCRIPTS: &[&str] = &[
-    "examples/provider_query.mjs",
-    "examples/provider_chat.mjs",
-    "examples/provider_embed.mjs",
+const NODE_REMOTE_SMOKE_SCRIPTS: &[&str] = &[
+    "examples/remote_query.mjs",
+    "examples/remote_chat.mjs",
+    "examples/remote_embed.mjs",
 ];
 const PYTHON_LOCAL_SMOKE_SCRIPTS: &[&str] =
     &["examples/query.py", "examples/chat.py", "examples/embed.py"];
-const PYTHON_PROVIDER_SMOKE_SCRIPTS: &[&str] = &[
-    "examples/provider_query.py",
-    "examples/provider_chat.py",
-    "examples/provider_embed.py",
+const PYTHON_REMOTE_SMOKE_SCRIPTS: &[&str] = &[
+    "examples/remote_query.py",
+    "examples/remote_chat.py",
+    "examples/remote_embed.py",
 ];
 const APP_TEST_SUFFIX: &str = ".test.ts";
 const SKIPPED_APP_TEST_DIRS: &[&str] = &[
@@ -326,21 +325,21 @@ fn run_rust_smoke(
         .with_context(|| format!("Rust {backend_value} smoke failed: {example}"))?;
     }
 
-    if let Some(provider_model) = options.provider_model {
-        for example in RUST_PROVIDER_SMOKE_EXAMPLES {
+    if let Some(remote_model) = options.remote_model {
+        for example in RUST_REMOTE_SMOKE_EXAMPLES {
             let mut smoke_cmd = cmd!(
                 sh,
-                "cargo run -p cogentlm-client --example {example} -- {provider_model} {prompt}"
+                "cargo run -p cogentlm-client --example {example} -- {remote_model} {prompt}"
             );
-            if let Some(base_url) = options.provider_base_url {
+            if let Some(base_url) = options.remote_base_url {
                 smoke_cmd = smoke_cmd.env("COGENTLM_OPENAI_BASE_URL", base_url);
             }
             smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(backend))?;
             output::run_command(
-                format!("Running Rust {backend_value} provider smoke: {example}"),
+                format!("Running Rust {backend_value} remote smoke: {example}"),
                 smoke_cmd,
             )
-            .with_context(|| format!("Rust {backend_value} provider smoke failed: {example}"))?;
+            .with_context(|| format!("Rust {backend_value} remote smoke failed: {example}"))?;
         }
     }
 
@@ -417,21 +416,19 @@ fn run_node_smoke(
         .with_context(|| format!("Node {backend_value} smoke failed: {smoke_script}"))?;
     }
 
-    if let Some(provider_model) = options.provider_model {
-        for smoke_script in NODE_PROVIDER_SMOKE_SCRIPTS {
-            let mut smoke_cmd = cmd!(sh, "node {smoke_script} {provider_model} {prompt}")
+    if let Some(remote_model) = options.remote_model {
+        for smoke_script in NODE_REMOTE_SMOKE_SCRIPTS {
+            let mut smoke_cmd = cmd!(sh, "node {smoke_script} {remote_model} {prompt}")
                 .env("COGENTLM_NODE_BACKEND", backend_value);
-            if let Some(base_url) = options.provider_base_url {
+            if let Some(base_url) = options.remote_base_url {
                 smoke_cmd = smoke_cmd.env("COGENTLM_OPENAI_BASE_URL", base_url);
             }
             smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(backend))?;
             output::run_command(
-                format!("Running Node {backend_value} provider smoke: {smoke_script}"),
+                format!("Running Node {backend_value} remote smoke: {smoke_script}"),
                 smoke_cmd,
             )
-            .with_context(|| {
-                format!("Node {backend_value} provider smoke failed: {smoke_script}")
-            })?;
+            .with_context(|| format!("Node {backend_value} remote smoke failed: {smoke_script}"))?;
         }
     }
 
@@ -512,21 +509,21 @@ fn run_python_smoke(
         .with_context(|| format!("Python {backend_value} smoke failed: {smoke_script}"))?;
     }
 
-    if let Some(provider_model) = options.provider_model {
-        for smoke_script in PYTHON_PROVIDER_SMOKE_SCRIPTS {
-            let mut smoke_cmd = cmd!(sh, "{python_exe} {smoke_script} {provider_model} {prompt}")
+    if let Some(remote_model) = options.remote_model {
+        for smoke_script in PYTHON_REMOTE_SMOKE_SCRIPTS {
+            let mut smoke_cmd = cmd!(sh, "{python_exe} {smoke_script} {remote_model} {prompt}")
                 .env("COGENTLM_PYTHON_BACKEND", backend_value)
                 .env("PYTHONPATH", &python_source_dir);
-            if let Some(base_url) = options.provider_base_url {
+            if let Some(base_url) = options.remote_base_url {
                 smoke_cmd = smoke_cmd.env("COGENTLM_OPENAI_BASE_URL", base_url);
             }
             smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(backend))?;
             output::run_command(
-                format!("Running Python {backend_value} provider smoke: {smoke_script}"),
+                format!("Running Python {backend_value} remote smoke: {smoke_script}"),
                 smoke_cmd,
             )
             .with_context(|| {
-                format!("Python {backend_value} provider smoke failed: {smoke_script}")
+                format!("Python {backend_value} remote smoke failed: {smoke_script}")
             })?;
         }
     }
@@ -845,8 +842,8 @@ struct BindingSmokeOptions<'a> {
     backend: &'a Backend,
     prompt: &'a str,
     gpu_layers: Option<u32>,
-    provider_model: Option<&'a str>,
-    provider_base_url: Option<&'a str>,
+    remote_model: Option<&'a str>,
+    remote_base_url: Option<&'a str>,
 }
 
 fn binding_options_from_smoke(args: &RunBindingSmokeArgs) -> Result<BindingSmokeOptions<'_>> {
@@ -855,8 +852,8 @@ fn binding_options_from_smoke(args: &RunBindingSmokeArgs) -> Result<BindingSmoke
         backend: &args.backend,
         prompt: &args.prompt,
         gpu_layers: args.gpu_layers,
-        provider_model: args.provider_model.as_deref(),
-        provider_base_url: args.provider_base_url.as_deref(),
+        remote_model: args.remote_model.as_deref(),
+        remote_base_url: args.remote_base_url.as_deref(),
     })
 }
 
@@ -866,8 +863,8 @@ fn binding_options_from_all(args: &RunAllArgs) -> Result<BindingSmokeOptions<'_>
         backend: &args.backend,
         prompt: &args.prompt,
         gpu_layers: args.gpu_layers,
-        provider_model: args.provider_model.as_deref(),
-        provider_base_url: args.provider_base_url.as_deref(),
+        remote_model: args.remote_model.as_deref(),
+        remote_base_url: args.remote_base_url.as_deref(),
     })
 }
 

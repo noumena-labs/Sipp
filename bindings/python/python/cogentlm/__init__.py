@@ -260,11 +260,9 @@ ModelPlacementConfig = _native.ModelPlacementConfig
 MultimodalRuntimeConfig = _native.MultimodalRuntimeConfig
 NativeRuntimeConfig = _native.NativeRuntimeConfig
 ObservabilityRuntimeConfig = _native.ObservabilityRuntimeConfig
-ProviderAuth = _native.ProviderAuth
-ProviderClient = _native.ProviderClient
-ProviderError = _native.ProviderError
-ProviderGenerationOptions = _native.ProviderGenerationOptions
-ProviderProxyConfig = _native.ProviderProxyConfig
+RemoteAuth = _native.RemoteAuth
+RemoteConfig = _native.RemoteConfig
+RemoteError = _native.RemoteError
 ResidencyRuntimeConfig = _native.ResidencyRuntimeConfig
 SamplingRuntimeConfig = _native.SamplingRuntimeConfig
 SchedulerPolicyConfig = _native.SchedulerPolicyConfig
@@ -291,11 +289,9 @@ __all__ = [
     "MultimodalRuntimeConfig",
     "NativeRuntimeConfig",
     "ObservabilityRuntimeConfig",
-    "ProviderAuth",
-    "ProviderClient",
-    "ProviderError",
-    "ProviderGenerationOptions",
-    "ProviderProxyConfig",
+    "RemoteAuth",
+    "RemoteConfig",
+    "RemoteError",
     "ResidencyRuntimeConfig",
     "SamplingRuntimeConfig",
     "SchedulerPolicyConfig",

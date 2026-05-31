@@ -187,59 +187,16 @@ class TokenBatch(TypedDict):
     byte_count: int
     stats: StreamStats
 
-ProviderKind = Literal["anthropic", "openai", "proxy"]
-ProviderCapabilitySupport = Literal["supported", "unsupported", "unknown"]
-ProviderOptions = dict[str, Any]
-
-class ProviderCapabilities(TypedDict):
-    chat: ProviderCapabilitySupport
-    generate: ProviderCapabilitySupport
-    embeddings: ProviderCapabilitySupport
-    streaming: ProviderCapabilitySupport
-
-class ProviderModel(TypedDict):
-    id: str
-    provider: ProviderKind
-    display_name: Optional[str]
-    capabilities: ProviderCapabilities
-    context_window: Optional[int]
-    max_output_tokens: Optional[int]
-    raw: Any
-
-class ProviderTextOutput(TypedDict):
-    text: str
-    finish_reason: str
-
-class ProviderEmbeddingOutput(TypedDict):
-    values: list[float]
-
 class TokenUsage(TypedDict):
     input_tokens: Optional[int]
     output_tokens: Optional[int]
     total_tokens: Optional[int]
 
-class ProviderResponseMetadata(TypedDict):
-    provider: ProviderKind
-    model: str
-    request_id: Optional[str]
-    response_id: Optional[str]
-    finish_reason_raw: Optional[str]
-    raw: Any
-
-class ProviderTextResponse(TypedDict):
-    result: ProviderTextOutput
-    usage: Optional[TokenUsage]
-    metadata: ProviderResponseMetadata
-
-class ProviderEmbeddingResponse(TypedDict):
-    result: ProviderEmbeddingOutput
-    usage: Optional[TokenUsage]
-    metadata: ProviderResponseMetadata
+RemoteOptions = dict[str, Any]
 
 class EndpointRefDict(TypedDict):
-    kind: Literal["local_model", "provider_model"]
-    provider: Optional[str]
-    model: str
+    kind: Literal["local", "remote"]
+    id: str
 
 class CogentTextResponse(TypedDict):
     endpoint: EndpointRefDict
@@ -258,87 +215,56 @@ class CogentEmbeddingResponse(TypedDict):
 
 class UnsupportedOperationError(Exception): ...
 
-class ProviderError(Exception):
+class RemoteError(Exception):
     kind: str
-    provider: str
+    remote_kind: str
     status: Optional[int]
     code: Optional[str]
     request_id: Optional[str]
     retry_after_ms: Optional[float]
     raw_body: Any
 
-class ProviderAuth:
+class RemoteAuth:
     @staticmethod
-    def bearer(token: str) -> ProviderAuth: ...
+    def bearer(token: str) -> RemoteAuth: ...
     @staticmethod
-    def header(name: str, value: str) -> ProviderAuth: ...
+    def header(name: str, value: str) -> RemoteAuth: ...
 
-class ProviderProxyConfig:
-    def __init__(
-        self,
-        base_url: str,
-        auth: ProviderAuth,
-        protocol: str = "openai_compatible",
-        static_headers: Optional[Sequence[tuple[str, str]]] = None,
-        timeout_ms: Optional[int] = None,
-    ) -> None: ...
-
-class ProviderGenerationOptions:
-    def __init__(
-        self,
-        *,
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
-        stop: Optional[Sequence[str]] = None,
-    ) -> None: ...
-
-class ProviderClient:
-    @staticmethod
-    def proxy(config: ProviderProxyConfig) -> ProviderClient: ...
+class RemoteConfig:
     @staticmethod
     def openai(
+        model: str,
         api_key: str,
+        *,
         base_url: Optional[str] = None,
         timeout_ms: Optional[int] = None,
-    ) -> ProviderClient: ...
+    ) -> RemoteConfig: ...
     @staticmethod
     def anthropic(
+        model: str,
         api_key: str,
+        *,
         base_url: Optional[str] = None,
         version: Optional[str] = None,
         timeout_ms: Optional[int] = None,
-    ) -> ProviderClient: ...
-    def kind(self) -> ProviderKind: ...
-    def list_models(self) -> list[ProviderModel]: ...
-    def get_model(self, model: str) -> ProviderModel: ...
-    def chat(
-        self,
+    ) -> RemoteConfig: ...
+    @staticmethod
+    def proxy(
         model: str,
-        messages: Sequence[ChatMessage],
-        options: Optional[ProviderGenerationOptions] = None,
-        provider_options: Optional[ProviderOptions] = None,
-    ) -> ProviderTextResponse: ...
-    def generate(
-        self,
-        model: str,
-        prompt: str,
-        options: Optional[ProviderGenerationOptions] = None,
-        provider_options: Optional[ProviderOptions] = None,
-    ) -> ProviderTextResponse: ...
-    def embed(
-        self,
-        model: str,
-        input: str,
-        provider_options: Optional[ProviderOptions] = None,
-    ) -> ProviderEmbeddingResponse: ...
+        base_url: str,
+        auth: RemoteAuth,
+        *,
+        protocol: str = "openai_compatible",
+        static_headers: Optional[Sequence[tuple[str, str]]] = None,
+        timeout_ms: Optional[int] = None,
+    ) -> RemoteConfig: ...
 class EndpointRef:
     @staticmethod
-    def local_model(model: str) -> EndpointRef: ...
+    def local(id: str) -> EndpointRef: ...
     @staticmethod
-    def provider_model(provider: str, model: str) -> EndpointRef: ...
+    def remote(id: str) -> EndpointRef: ...
     @property
-    def kind(self) -> Literal["local_model", "provider_model"]: ...
+    def kind(self) -> Literal["local", "remote"]: ...
 
 class CogentTextOptions:
     def __init__(
@@ -380,18 +306,17 @@ class CogentEmbeddingRun:
 
 class CogentClient:
     def __init__(self) -> None: ...
-    def load_model(
+    def add_local(
         self,
         id: str,
         model_path: PathLike,
         config: Optional[NativeRuntimeConfig] = None,
-    ) -> None: ...
-    def add_provider_model(
+    ) -> EndpointRef: ...
+    def add_remote(
         self,
-        provider: str,
-        model: str,
-        client: ProviderClient,
-    ) -> None: ...
+        id: str,
+        config: RemoteConfig,
+    ) -> EndpointRef: ...
     def query(
         self,
         prompt: str,
@@ -399,7 +324,7 @@ class CogentClient:
         endpoint: Optional[EndpointRef] = None,
         options: Optional[CogentTextOptions] = None,
         local: Optional[LocalTextOptions] = None,
-        provider_options: Optional[ProviderOptions] = None,
+        remote_options: Optional[RemoteOptions] = None,
         stream_tokens: bool = False,
     ) -> CogentTextRun: ...
     def chat(
@@ -409,7 +334,7 @@ class CogentClient:
         endpoint: Optional[EndpointRef] = None,
         options: Optional[CogentTextOptions] = None,
         local: Optional[LocalTextOptions] = None,
-        provider_options: Optional[ProviderOptions] = None,
+        remote_options: Optional[RemoteOptions] = None,
         stream_tokens: bool = False,
     ) -> CogentTextRun: ...
     def embed(
@@ -418,7 +343,7 @@ class CogentClient:
         *,
         endpoint: Optional[EndpointRef] = None,
         local: Optional[LocalEmbedOptions] = None,
-        provider_options: Optional[ProviderOptions] = None,
+        remote_options: Optional[RemoteOptions] = None,
     ) -> CogentEmbeddingRun: ...
 
 def backend_observability_json(include_details: bool = True) -> str: ...

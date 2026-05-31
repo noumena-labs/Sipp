@@ -14,58 +14,58 @@ pub(crate) fn common_text_options(options: &CogentTextOptions) -> Result<(), Cog
 
 pub(crate) fn local_query(request: &CogentQueryRequest) -> Result<(), CogentError> {
     common_text_options(&request.options)?;
-    reject_provider_options(&request.provider_options)
+    reject_remote_options(&request.remote_options)
 }
 
 pub(crate) fn local_chat(request: &CogentChatRequest) -> Result<(), CogentError> {
     common_text_options(&request.options)?;
-    reject_provider_options(&request.provider_options)
+    reject_remote_options(&request.remote_options)
 }
 
 pub(crate) fn local_embed(request: &CogentEmbedRequest) -> Result<(), CogentError> {
-    reject_provider_options(&request.provider_options)
+    reject_remote_options(&request.remote_options)
 }
 
 #[cfg(feature = "providers")]
-pub(crate) fn provider_query(request: &CogentQueryRequest) -> Result<(), CogentError> {
+pub(crate) fn remote_query(request: &CogentQueryRequest) -> Result<(), CogentError> {
     common_text_options(&request.options)?;
     if request.local.has_fields() {
         return Err(CogentError::InvalidRequest(
-            "local text options are not valid for provider endpoints".to_string(),
+            "local text options are not valid for remote endpoints".to_string(),
         ));
     }
     Ok(())
 }
 
 #[cfg(feature = "providers")]
-pub(crate) fn provider_chat(request: &CogentChatRequest) -> Result<(), CogentError> {
+pub(crate) fn remote_chat(request: &CogentChatRequest) -> Result<(), CogentError> {
     common_text_options(&request.options)?;
     if request.local.has_fields() {
         return Err(CogentError::InvalidRequest(
-            "local text options are not valid for provider endpoints".to_string(),
+            "local text options are not valid for remote endpoints".to_string(),
         ));
     }
     Ok(())
 }
 
 #[cfg(feature = "providers")]
-pub(crate) fn provider_embed(request: &CogentEmbedRequest) -> Result<(), CogentError> {
+pub(crate) fn remote_embed(request: &CogentEmbedRequest) -> Result<(), CogentError> {
     if request.local.has_fields() {
         return Err(CogentError::InvalidRequest(
-            "local embed options are not valid for provider endpoints".to_string(),
+            "local embed options are not valid for remote endpoints".to_string(),
         ));
     }
     Ok(())
 }
 
-fn reject_provider_options(
-    provider_options: &serde_json::Map<String, serde_json::Value>,
+fn reject_remote_options(
+    remote_options: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), CogentError> {
-    if provider_options.is_empty() {
+    if remote_options.is_empty() {
         Ok(())
     } else {
         Err(CogentError::InvalidRequest(
-            "provider_options are not valid for local endpoints".to_string(),
+            "remote_options are not valid for local endpoints".to_string(),
         ))
     }
 }

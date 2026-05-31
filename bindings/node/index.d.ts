@@ -2,8 +2,8 @@
 /* eslint-disable */
 export declare class CogentClient {
   constructor()
-  loadModel(id: string, modelPath: string, config?: NativeRuntimeConfig | undefined | null): Promise<void>
-  addProviderModel(provider: string, model: string, client: ProviderClient): void
+  addLocal(id: string, modelPath: string, config?: NativeRuntimeConfig | undefined | null): Promise<EndpointRef>
+  addRemote(id: string, config: RemoteConfig): EndpointRef
   query(request: CogentQueryRequest): CogentTextRun
   chat(request: CogentChatRequest): CogentTextRun
   embed(request: CogentEmbedRequest): CogentEmbeddingRun
@@ -17,18 +17,6 @@ export declare class CogentTextRun {
 
 export declare class CogentEmbeddingRun {
   readonly response: Promise<CogentEmbeddingResponse>
-}
-
-export declare class ProviderClient {
-  static proxy(config: ProviderProxyConfig): ProviderClient
-  static openai(config: ProviderOpenAiConfig): ProviderClient
-  static anthropic(config: ProviderAnthropicConfig): ProviderClient
-  kind(): string
-  listModels(): Promise<ProviderModel[]>
-  getModel(model: string): Promise<ProviderModel>
-  chat(request: ProviderChatRequest): Promise<ProviderChatResponse>
-  generate(request: ProviderGenerateRequest): Promise<ProviderGenerateResponse>
-  embed(request: ProviderEmbedRequest): Promise<ProviderEmbeddingResponse>
 }
 
 export declare function backendObservabilityJson(includeDetails?: boolean | undefined | null): string
@@ -52,14 +40,12 @@ export interface ChatMessage {
 
 export type EndpointRef =
   | {
-      kind: 'localModel'
-      provider?: undefined
-      model: string
+      kind: 'local'
+      id: string
     }
   | {
-      kind: 'providerModel'
-      provider: string
-      model: string
+      kind: 'remote'
+      id: string
     }
 
 export interface CogentTextOptions {
@@ -87,7 +73,7 @@ export interface CogentQueryRequest {
   prompt: string
   options?: CogentTextOptions
   local?: LocalTextOptions
-  providerOptions?: Record<string, unknown>
+  remoteOptions?: Record<string, unknown>
   streamTokens?: boolean
 }
 
@@ -96,7 +82,7 @@ export interface CogentChatRequest {
   messages: Array<ChatMessage>
   options?: CogentTextOptions
   local?: LocalTextOptions
-  providerOptions?: Record<string, unknown>
+  remoteOptions?: Record<string, unknown>
   streamTokens?: boolean
 }
 
@@ -104,7 +90,7 @@ export interface CogentEmbedRequest {
   endpoint?: EndpointRef
   input: string
   local?: LocalEmbedOptions
-  providerOptions?: Record<string, unknown>
+  remoteOptions?: Record<string, unknown>
 }
 
 export interface TokenUsage {
@@ -214,136 +200,35 @@ export declare const enum PoolingType {
   Rank = 'rank'
 }
 
-export interface ProviderAnthropicConfig {
-  apiKey: string
-  baseUrl?: string
-  version?: string
-  timeoutMs?: number
-}
-
-export interface ProviderAuthConfig {
+export interface RemoteAuthConfig {
   bearer?: string
-  header?: ProviderAuthHeaderConfig
+  header?: RemoteAuthHeaderConfig
 }
 
-export interface ProviderAuthHeaderConfig {
+export interface RemoteAuthHeaderConfig {
   name: string
   value: string
 }
 
-export declare const enum ProviderCapabilitySupport {
-  Supported = 'supported',
-  Unsupported = 'unsupported',
-  Unknown = 'unknown'
-}
-
-export interface ProviderChatRequest {
+export interface RemoteConfig {
+  kind: 'openai' | 'anthropic' | 'proxy'
   model: string
-  messages: Array<ChatMessage>
-  options?: ProviderGenerationOptions
-  providerOptions?: any
-}
-
-export interface ProviderChatResponse {
-  result: ProviderTextOutput
-  usage?: ProviderTokenUsage
-  metadata: ProviderResponseMetadata
-}
-
-export interface ProviderEmbeddingOutput {
-  values: Array<number>
-}
-
-export interface ProviderEmbeddingResponse {
-  result: ProviderEmbeddingOutput
-  usage?: ProviderTokenUsage
-  metadata: ProviderResponseMetadata
-}
-
-export interface ProviderEmbedRequest {
-  model: string
-  input: string
-  providerOptions?: any
-}
-
-export interface ProviderGenerateRequest {
-  model: string
-  prompt: string
-  options?: ProviderGenerationOptions
-  providerOptions?: any
-}
-
-export interface ProviderGenerateResponse {
-  result: ProviderTextOutput
-  usage?: ProviderTokenUsage
-  metadata: ProviderResponseMetadata
-}
-
-export interface ProviderGenerationOptions {
-  maxTokens?: number
-  temperature?: number
-  topP?: number
-  stop?: Array<string>
-}
-
-export interface ProviderModel {
-  id: string
-  provider: string
-  displayName?: string
-  capabilities: ProviderModelCapabilities
-  contextWindow?: number
-  maxOutputTokens?: number
-  raw: any
-}
-
-export interface ProviderModelCapabilities {
-  chat: ProviderCapabilitySupport
-  generate: ProviderCapabilitySupport
-  embeddings: ProviderCapabilitySupport
-  streaming: ProviderCapabilitySupport
-}
-
-export interface ProviderOpenAiConfig {
-  apiKey: string
+  apiKey?: string
   baseUrl?: string
+  version?: string
+  auth?: RemoteAuthConfig
+  protocol?: RemoteProxyProtocol
+  staticHeaders?: Array<RemoteStaticHeaderConfig>
   timeoutMs?: number
 }
 
-export interface ProviderProxyConfig {
-  baseUrl: string
-  auth: ProviderAuthConfig
-  protocol?: ProviderProxyProtocol
-  staticHeaders?: Array<ProviderStaticHeaderConfig>
-  timeoutMs?: number
-}
-
-export declare const enum ProviderProxyProtocol {
+export declare const enum RemoteProxyProtocol {
   OpenAiCompatible = 'open_ai_compatible'
 }
 
-export interface ProviderResponseMetadata {
-  provider: string
-  model: string
-  requestId?: string
-  responseId?: string
-  finishReasonRaw?: string
-  raw: any
-}
-
-export interface ProviderStaticHeaderConfig {
+export interface RemoteStaticHeaderConfig {
   name: string
   value: string
-}
-
-export interface ProviderTextOutput {
-  text: string
-  finishReason: string
-}
-
-export interface ProviderTokenUsage {
-  inputTokens?: number
-  outputTokens?: number
-  totalTokens?: number
 }
 
 export interface RequestStats {

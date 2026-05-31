@@ -63,13 +63,6 @@ export interface BrowserRuntimeSmokeResult {
   webgpuReady: boolean;
 }
 
-interface CogentModelManager {
-  load(source: ModelSource, options?: ModelLoadOptions): Promise<ModelInfo>;
-  current(): ModelInfo | null;
-  list(): Promise<ModelInfo[]>;
-  remove(id: string): Promise<void>;
-}
-
 function shouldUseWorker(config: CogentClientOptions): boolean {
   if (config.executionMode === 'main-thread') {
     return false;
@@ -89,7 +82,6 @@ function shouldUseWorker(config: CogentClientOptions): boolean {
  * Browser application client that owns one local model lifecycle service.
  */
 export class CogentClient implements CogentClientShape {
-  public readonly models: CogentModelManager;
   public readonly observability: EngineObservability;
   #service: ModelLifecycleService;
   #closed = false;
@@ -98,24 +90,6 @@ export class CogentClient implements CogentClientShape {
     this.#service = shouldUseWorker(options)
       ? new WorkerModelServiceClient(options)
       : new ModelService(new MainThreadEngineRuntime(options));
-    this.models = {
-      load: (source, loadOptions) => {
-        this.assertOpen();
-        return this.#service.load(source, loadOptions);
-      },
-      current: () => {
-        this.assertOpen();
-        return this.#service.current();
-      },
-      list: () => {
-        this.assertOpen();
-        return this.#service.list();
-      },
-      remove: async (id) => {
-        this.assertOpen();
-        await this.#service.remove(id);
-      },
-    };
     this.observability = {
       current: () => {
         this.assertOpen();
@@ -140,6 +114,38 @@ export class CogentClient implements CogentClientShape {
     } finally {
       runtime.close();
     }
+  }
+
+  /**
+   * Load a local model and make it the current local endpoint.
+   */
+  public addLocal(source: ModelSource, options?: ModelLoadOptions): Promise<ModelInfo> {
+    this.assertOpen();
+    return this.#service.load(source, options);
+  }
+
+  /**
+   * Return the currently loaded local model, if one is active.
+   */
+  public currentLocal(): ModelInfo | null {
+    this.assertOpen();
+    return this.#service.current();
+  }
+
+  /**
+   * List installed local models.
+   */
+  public listLocal(): Promise<ModelInfo[]> {
+    this.assertOpen();
+    return this.#service.list();
+  }
+
+  /**
+   * Remove an installed local model by id.
+   */
+  public async removeLocal(id: string): Promise<void> {
+    this.assertOpen();
+    await this.#service.remove(id);
   }
 
   public query(input: QueryInput, options: QueryOptions = {}): BrowserTextRun {

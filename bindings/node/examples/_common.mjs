@@ -2,7 +2,6 @@ import native from '../router.js';
 
 export const {
   CogentClient,
-  ProviderClient,
   backendObservabilityJson,
   setLlamaLogQuiet,
 } = native;
@@ -23,15 +22,15 @@ export async function loadClient(model, { embeddings = false } = {}) {
   setLlamaLogQuiet(true);
   console.log(`backend_before_load=${backendObservabilityJson(true)}`);
   const client = new CogentClient();
-  await client.loadModel('default', model, runtimeConfig({ embeddings }));
+  await client.addLocal('default', model, runtimeConfig({ embeddings }));
   console.log(`backend_after_load=${backendObservabilityJson(true)}`);
   return client;
 }
 
-export function readProviderArgs(defaultInput) {
+export function readRemoteArgs(defaultInput) {
   const model = process.argv[2];
   if (!model) {
-    console.error('usage: node examples/provider_<query|chat|embed>.mjs <provider-model> [input]');
+    console.error('usage: node examples/remote_<query|chat|embed>.mjs <remote-model> [input]');
     process.exit(2);
   }
   return {
@@ -40,22 +39,13 @@ export function readProviderArgs(defaultInput) {
   };
 }
 
-export function loadOpenAiProviderClient(model) {
-  const provider = ProviderClient.openai({
+export function addOpenAiRemote(client, model) {
+  return client.addRemote('openai', {
+    kind: 'openai',
+    model,
     apiKey: requiredEnv('OPENAI_API_KEY'),
     baseUrl: process.env.COGENTLM_OPENAI_BASE_URL,
   });
-  const client = new CogentClient();
-  client.addProviderModel('openai', model, provider);
-  return client;
-}
-
-export function providerEndpoint(model) {
-  return {
-    kind: 'providerModel',
-    provider: 'openai',
-    model,
-  };
 }
 
 export function textOptions() {

@@ -6,13 +6,13 @@ use crate::{
     CogentQueryRequest, CogentTextRun, CogentTokenStream, EndpointCapabilities, EndpointRef,
 };
 
-pub(crate) struct EngineEndpoint {
+pub(crate) struct LocalEndpoint {
     endpoint: EndpointRef,
     capabilities: EndpointCapabilities,
     engine: CogentEngine,
 }
 
-impl EngineEndpoint {
+impl LocalEndpoint {
     pub(crate) fn new(
         endpoint: EndpointRef,
         capabilities: EndpointCapabilities,
@@ -26,7 +26,7 @@ impl EngineEndpoint {
     }
 }
 
-impl InferenceEndpoint for EngineEndpoint {
+impl InferenceEndpoint for LocalEndpoint {
     fn endpoint(&self) -> &EndpointRef {
         &self.endpoint
     }

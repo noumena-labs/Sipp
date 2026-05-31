@@ -82,7 +82,7 @@ Examples:
   cargo xtask run bindings rust --model ./models/model.gguf
   cargo xtask run bindings node --model ./models/model.gguf
   cargo xtask run bindings python --model ./models/model.gguf --backend cuda
-  cargo xtask run bindings all --model ./models/model.gguf --provider-model gpt-4.1-mini --backend cpu
+  cargo xtask run bindings all --model ./models/model.gguf --remote-model gpt-4.1-mini --backend cpu
 
 Rust, Node, and Python smoke examples require an explicit GGUF model path.";
 
@@ -352,13 +352,13 @@ pub struct RunAllArgs {
     #[arg(long)]
     pub gpu_layers: Option<u32>,
 
-    /// OpenAI model id used by provider smoke examples.
+    /// OpenAI model id used by remote smoke examples.
     #[arg(long)]
-    pub provider_model: Option<String>,
+    pub remote_model: Option<String>,
 
-    /// Optional OpenAI-compatible provider base URL.
+    /// Optional OpenAI-compatible remote base URL.
     #[arg(long)]
-    pub provider_base_url: Option<String>,
+    pub remote_base_url: Option<String>,
 }
 
 /// Browser app run workflows.
@@ -502,13 +502,13 @@ pub struct RunBindingSmokeArgs {
     #[arg(long)]
     pub gpu_layers: Option<u32>,
 
-    /// OpenAI model id used by provider smoke examples.
+    /// OpenAI model id used by remote smoke examples.
     #[arg(long)]
-    pub provider_model: Option<String>,
+    pub remote_model: Option<String>,
 
-    /// Optional OpenAI-compatible provider base URL.
+    /// Optional OpenAI-compatible remote base URL.
     #[arg(long)]
-    pub provider_base_url: Option<String>,
+    pub remote_base_url: Option<String>,
 }
 
 /// Options for browser/WASM binding checks.

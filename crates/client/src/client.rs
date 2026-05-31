@@ -6,17 +6,23 @@ use cogentlm_core::CapabilitySupport;
 use cogentlm_engine::engine::{CogentEngine, NativeRuntimeConfig};
 
 use crate::dispatch::InferenceEndpoint;
-use crate::engine_endpoint::EngineEndpoint;
+use crate::local_endpoint::LocalEndpoint;
 #[cfg(feature = "providers")]
-use crate::provider_endpoint::ProviderEndpoint;
+use crate::remote_endpoint::RemoteEndpoint;
+#[cfg(feature = "providers")]
+use crate::remote_executor::RemoteExecutor;
+#[cfg(feature = "providers")]
+use crate::RemoteConfig;
 use crate::{
     CogentChatRequest, CogentEmbedRequest, CogentEmbeddingRun, CogentError, CogentQueryRequest,
     CogentResult, CogentTextRun, EndpointCapabilities, EndpointRef,
 };
 
-/// Public inference facade over registered local and provider endpoints.
+/// Public inference facade over registered local and remote endpoints.
 pub struct CogentClient {
     endpoints: HashMap<EndpointRef, Arc<dyn InferenceEndpoint>>,
+    #[cfg(feature = "providers")]
+    remote_executor: Option<RemoteExecutor>,
 }
 
 impl CogentClient {
@@ -24,16 +30,18 @@ impl CogentClient {
     pub fn new() -> Self {
         Self {
             endpoints: HashMap::new(),
+            #[cfg(feature = "providers")]
+            remote_executor: None,
         }
     }
 
-    async fn register_local_model(
+    async fn register_local(
         &mut self,
         id: impl Into<String>,
         engine: CogentEngine,
-    ) -> CogentResult<()> {
-        let model_id = normalize_id(id, "model id")?;
-        let endpoint = EndpointRef::LocalModel { model: model_id };
+    ) -> CogentResult<EndpointRef> {
+        let id = normalize_id(id, "local id")?;
+        let endpoint = EndpointRef::Local { id };
         self.reject_duplicate(&endpoint)?;
 
         let state = engine.state().await?;
@@ -43,49 +51,46 @@ impl CogentClient {
         let capabilities = EndpointCapabilities::from_local(&model.capabilities);
         self.endpoints.insert(
             endpoint.clone(),
-            Arc::new(EngineEndpoint::new(endpoint, capabilities, engine)),
+            Arc::new(LocalEndpoint::new(endpoint.clone(), capabilities, engine)),
         );
-        Ok(())
+        Ok(endpoint)
     }
 
     /// Load a local model and register it under the provided endpoint id.
-    pub async fn load_model(
+    pub async fn add_local(
         &mut self,
         id: impl Into<String>,
         model_path: impl Into<PathBuf>,
         config: NativeRuntimeConfig,
-    ) -> CogentResult<()> {
+    ) -> CogentResult<EndpointRef> {
         let engine = CogentEngine::load(model_path.into(), config).await?;
-        self.register_local_model(id, engine).await
+        self.register_local(id, engine).await
     }
 
+    /// Register a remote model endpoint.
     #[cfg(feature = "providers")]
-    /// Register a provider-backed model endpoint.
-    pub fn add_provider_model(
+    pub fn add_remote(
         &mut self,
-        provider: impl Into<String>,
-        model: impl Into<String>,
-        client: cogentlm_providers::ProviderClient,
-        executor: crate::ProviderExecutor,
-    ) -> CogentResult<()> {
-        let provider = normalize_id(provider, "provider id")?;
-        let model = normalize_id(model, "provider model id")?;
-        let endpoint = EndpointRef::ProviderModel {
-            provider: provider.clone(),
-            model: model.clone(),
-        };
+        id: impl Into<String>,
+        config: RemoteConfig,
+    ) -> CogentResult<EndpointRef> {
+        let id = normalize_id(id, "remote id")?;
+        let endpoint = EndpointRef::Remote { id };
         self.reject_duplicate(&endpoint)?;
+        let (model, client) = config.build()?;
+        let model = normalize_id(model, "remote model id")?;
+        let executor = self.remote_executor()?;
         self.endpoints.insert(
             endpoint.clone(),
-            Arc::new(ProviderEndpoint::new(
-                provider,
+            Arc::new(RemoteEndpoint::new(
+                endpoint.clone(),
                 model,
                 EndpointCapabilities::unknown(),
                 client,
                 executor,
             )),
         );
-        Ok(())
+        Ok(endpoint)
     }
 
     /// Submit a raw-prompt text generation request.
@@ -138,7 +143,7 @@ impl CogentClient {
         let mut matches = self
             .endpoints
             .values()
-            .filter(|endpoint| endpoint.endpoint().is_local_model())
+            .filter(|endpoint| endpoint.endpoint().is_local())
             .filter(|endpoint| {
                 endpoint.capabilities().for_operation(operation) == CapabilitySupport::Supported
             });
@@ -160,6 +165,17 @@ impl CogentClient {
         } else {
             Ok(())
         }
+    }
+
+    #[cfg(feature = "providers")]
+    fn remote_executor(&mut self) -> CogentResult<RemoteExecutor> {
+        if let Some(executor) = &self.remote_executor {
+            return Ok(executor.clone());
+        }
+
+        let executor = RemoteExecutor::new()?;
+        self.remote_executor = Some(executor.clone());
+        Ok(executor)
     }
 }
 
@@ -227,8 +243,8 @@ mod tests {
     #[test]
     fn automatic_resolution_is_local_only_and_support_based() {
         let mut client = CogentClient::new();
-        let selected = EndpointRef::LocalModel {
-            model: "local-a".to_string(),
+        let selected = EndpointRef::Local {
+            id: "local-a".to_string(),
         };
         client.endpoints.insert(
             selected.clone(),
@@ -242,12 +258,12 @@ mod tests {
             }),
         );
         client.endpoints.insert(
-            EndpointRef::LocalModel {
-                model: "local-b".to_string(),
+            EndpointRef::Local {
+                id: "local-b".to_string(),
             },
             Arc::new(FakeEndpoint {
-                endpoint: EndpointRef::LocalModel {
-                    model: "local-b".to_string(),
+                endpoint: EndpointRef::Local {
+                    id: "local-b".to_string(),
                 },
                 capabilities: EndpointCapabilities {
                     query: CapabilitySupport::Unsupported,
@@ -265,8 +281,8 @@ mod tests {
     #[test]
     fn duplicate_endpoint_registration_is_invalid() {
         let mut client = CogentClient::new();
-        let endpoint = EndpointRef::LocalModel {
-            model: "local".to_string(),
+        let endpoint = EndpointRef::Local {
+            id: "local".to_string(),
         };
         client.endpoints.insert(
             endpoint.clone(),

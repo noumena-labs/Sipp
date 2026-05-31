@@ -1,6 +1,6 @@
 use std::env;
 
-use cogentlm_providers::{OpenAiConfig, ProviderClient, SecretString};
+use cogentlm_client::{RemoteConfig, RemoteOpenAiConfig, RemoteSecret};
 
 pub type ExampleResult<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -12,10 +12,10 @@ pub struct ExampleArgs {
 pub fn args(default_input: &'static str) -> ExampleResult<ExampleArgs> {
     let mut args = env::args().skip(1);
     let model = args.next().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "usage: cargo run -p cogentlm-client --example provider_<query|chat|embed> -- <provider-model> [input]",
-        )
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "usage: cargo run -p cogentlm-client --example remote_<query|chat|embed> -- <remote-model> [input]",
+            )
     })?;
     let input = args.collect::<Vec<_>>().join(" ");
     Ok(ExampleArgs {
@@ -28,12 +28,13 @@ pub fn args(default_input: &'static str) -> ExampleResult<ExampleArgs> {
     })
 }
 
-pub fn openai_provider() -> ExampleResult<ProviderClient> {
-    Ok(ProviderClient::openai(OpenAiConfig {
-        api_key: SecretString::new(required_env("OPENAI_API_KEY")?),
+pub fn openai_remote(model: String) -> ExampleResult<RemoteConfig> {
+    Ok(RemoteConfig::OpenAi(RemoteOpenAiConfig {
+        model,
+        api_key: RemoteSecret::new(required_env("OPENAI_API_KEY")?),
         base_url: env_string("COGENTLM_OPENAI_BASE_URL"),
         timeout: None,
-    })?)
+    }))
 }
 
 fn required_env(name: &'static str) -> ExampleResult<String> {

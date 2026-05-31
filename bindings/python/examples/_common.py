@@ -13,7 +13,7 @@ from cogentlm import (
     MultimodalRuntimeConfig,
     NativeRuntimeConfig,
     ObservabilityRuntimeConfig,
-    ProviderClient,
+    RemoteConfig,
     ResidencyRuntimeConfig,
     SamplingRuntimeConfig,
     SchedulerRuntimeConfig,
@@ -30,30 +30,27 @@ def read_args(default_input: str) -> tuple[str, str]:
 def load_client(model: str, *, embeddings: bool = False) -> CogentClient:
     set_llama_log_quiet(True)
     client = CogentClient()
-    client.load_model("default", model, runtime_config(embeddings=embeddings))
+    client.add_local("default", model, runtime_config(embeddings=embeddings))
     return client
 
 
-def read_provider_args(default_input: str) -> tuple[str, str]:
+def read_remote_args(default_input: str) -> tuple[str, str]:
     if len(sys.argv) < 2:
         raise SystemExit(
-            "usage: python examples/provider_<query|chat|embed>.py <provider-model> [input]"
+            "usage: python examples/remote_<query|chat|embed>.py <remote-model> [input]"
         )
     return sys.argv[1], " ".join(sys.argv[2:]) or default_input
 
 
-def load_openai_provider_client(model: str) -> CogentClient:
-    provider = ProviderClient.openai(
-        required_env("OPENAI_API_KEY"),
-        base_url=os.getenv("COGENTLM_OPENAI_BASE_URL"),
+def add_openai_remote(client: CogentClient, model: str) -> EndpointRef:
+    return client.add_remote(
+        "openai",
+        RemoteConfig.openai(
+            model,
+            required_env("OPENAI_API_KEY"),
+            base_url=os.getenv("COGENTLM_OPENAI_BASE_URL"),
+        ),
     )
-    client = CogentClient()
-    client.add_provider_model("openai", model, provider)
-    return client
-
-
-def provider_endpoint(model: str) -> EndpointRef:
-    return EndpointRef.provider_model("openai", model)
 
 
 def text_options() -> CogentTextOptions:

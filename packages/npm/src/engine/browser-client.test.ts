@@ -146,17 +146,17 @@ test('CogentClient exposes the minimal browser API', async () => {
     executionMode: 'main-thread',
   });
 
-  assert.equal(typeof client.models.load, 'function');
-  assert.equal(typeof client.models.current, 'function');
-  assert.equal(typeof client.models.list, 'function');
-  assert.equal(typeof client.models.remove, 'function');
+  assert.equal(typeof client.addLocal, 'function');
+  assert.equal(typeof client.currentLocal, 'function');
+  assert.equal(typeof client.listLocal, 'function');
+  assert.equal(typeof client.removeLocal, 'function');
   assert.equal(typeof client.observability.current, 'function');
   assert.equal(typeof client.observability.subscribe, 'function');
   assert.equal(typeof client.query, 'function');
   assert.equal(typeof client.chat, 'function');
   assert.equal(typeof client.embed, 'function');
   assert.equal(typeof client.close, 'function');
-  assert.deepEqual(Object.keys(client), ['models', 'observability']);
+  assert.deepEqual(Object.keys(client), ['observability']);
   assert.deepEqual(Object.keys(publicApi).sort(), [
     'CogentClient',
     'QueryError',
@@ -169,15 +169,15 @@ test('CogentClient exposes the minimal browser API', async () => {
   await client.close();
   assert.deepEqual(events, ['close']);
   assert.throws(
-    () => client.models.current(),
+    () => client.currentLocal(),
     (error) => error instanceof QueryError && error.code === 'ENGINE_CLOSED'
   );
 });
 
 test('CogentClient uses bundled runtime URLs internally by default', async () => {
   const client = new CogentClient({ executionMode: 'main-thread' });
-  assert.deepEqual(Object.keys(client), ['models', 'observability']);
-  assert.equal(client.models.current(), null);
+  assert.deepEqual(Object.keys(client), ['observability']);
+  assert.equal(client.currentLocal(), null);
   await client.close();
 });
 
@@ -200,7 +200,7 @@ test('worker mode lists models without requiring explicit runtime URLs', async (
       executionMode: 'worker',
     });
 
-    const models = await client.models.list();
+    const models = await client.listLocal();
     const worker = FakeWorker.lastInstance;
 
     assert.deepEqual(models, []);
@@ -223,7 +223,7 @@ test('chat() renders messages through the worker service and sanitizes assistant
       executionMode: 'worker',
     });
 
-    await client.models.load('model-fake');
+    await client.addLocal('model-fake');
     const chunks: string[] = [];
     const run = client.chat([{ role: 'user', content: 'hello' }], {
       streamTokens: true,
@@ -252,7 +252,7 @@ test('embed() routes through the worker service', async () => {
       executionMode: 'worker',
     });
 
-    await client.models.load('model-fake');
+    await client.addLocal('model-fake');
     const output = await client.embed('hello', { normalize: false, contextKey: 'embeddings' }).response;
     const worker = FakeWorker.lastInstance;
     const embed = worker?.messages.find((message) => message.kind === 'embed');
@@ -281,7 +281,7 @@ test('worker mode resolves explicit relative runtime overrides on the main threa
         wasmUrl: './runtime/custom-module.wasm',
       });
 
-      await client.models.list();
+      await client.listLocal();
       const request = FakeWorker.lastInstance?.messages.find(m => m.kind === 'models-list');
       assert.equal(request?.kind, 'models-list');
       assert.equal(request?.config.moduleUrl, 'https://app.test/page/runtime/custom-module.js');

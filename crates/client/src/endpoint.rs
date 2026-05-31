@@ -4,21 +4,32 @@ use cogentlm_engine::engine::ModelCapabilities;
 /// Addressable inference destination.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum EndpointRef {
-    LocalModel { model: String },
-    ProviderModel { provider: String, model: String },
+    /// Local engine endpoint registered in the client.
+    Local {
+        /// Client-scoped endpoint id.
+        id: String,
+    },
+    /// Remote endpoint registered in the client.
+    Remote {
+        /// Client-scoped endpoint id.
+        id: String,
+    },
 }
 
 impl EndpointRef {
-    pub(crate) fn is_local_model(&self) -> bool {
-        matches!(self, Self::LocalModel { .. })
+    pub(crate) fn is_local(&self) -> bool {
+        matches!(self, Self::Local { .. })
     }
 }
 
 /// Cached support for the three public inference verbs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EndpointCapabilities {
+    /// Raw-prompt text generation support.
     pub query: CapabilitySupport,
+    /// Chat generation support.
     pub chat: CapabilitySupport,
+    /// Embedding support.
     pub embed: CapabilitySupport,
 }
 

@@ -11,34 +11,32 @@ use futures::StreamExt;
 use futures_channel::mpsc;
 
 use crate::dispatch::InferenceEndpoint;
+use crate::remote_executor::RemoteExecutor;
 use crate::run::TOKEN_STREAM_CHANNEL_CAPACITY;
 use crate::{
     map, validate, CogentChatRequest, CogentEmbedRequest, CogentEmbeddingRun, CogentError,
     CogentQueryRequest, CogentResult, CogentTextResponse, CogentTextRun, CogentTokenStream,
-    EndpointCapabilities, EndpointRef, ProviderExecutor,
+    EndpointCapabilities, EndpointRef,
 };
 
-pub(crate) struct ProviderEndpoint {
+pub(crate) struct RemoteEndpoint {
     endpoint: EndpointRef,
     capabilities: EndpointCapabilities,
     model: String,
     client: ProviderClient,
-    executor: ProviderExecutor,
+    executor: RemoteExecutor,
 }
 
-impl ProviderEndpoint {
+impl RemoteEndpoint {
     pub(crate) fn new(
-        provider: String,
+        endpoint: EndpointRef,
         model: String,
         capabilities: EndpointCapabilities,
         client: ProviderClient,
-        executor: ProviderExecutor,
+        executor: RemoteExecutor,
     ) -> Self {
         Self {
-            endpoint: EndpointRef::ProviderModel {
-                provider,
-                model: model.clone(),
-            },
+            endpoint,
             capabilities,
             model,
             client,
@@ -51,7 +49,7 @@ impl ProviderEndpoint {
     }
 }
 
-impl InferenceEndpoint for ProviderEndpoint {
+impl InferenceEndpoint for RemoteEndpoint {
     fn endpoint(&self) -> &EndpointRef {
         &self.endpoint
     }
@@ -67,14 +65,14 @@ impl InferenceEndpoint for ProviderEndpoint {
                 operation: "query",
             });
         }
-        if let Err(error) = validate::provider_query(&request) {
+        if let Err(error) = validate::remote_query(&request) {
             return CogentTextRun::ready_err(error);
         }
         let provider_request = ProviderGenerateRequest {
             model: self.model(),
             prompt: request.prompt,
-            options: provider_options(request.options),
-            provider_options: request.provider_options,
+            options: remote_generation_options(request.options),
+            provider_options: request.remote_options,
         };
         let client = self.client.clone();
         let endpoint = self.endpoint.clone();
@@ -83,24 +81,24 @@ impl InferenceEndpoint for ProviderEndpoint {
             client
                 .generate(provider_request)
                 .await
-                .map(|response| map::provider_text_response(endpoint, response))
-                .map_err(CogentError::Provider)
+                .map(|response| map::remote_text_response(endpoint, response))
+                .map_err(CogentError::from)
         });
         CogentTextRun::new(
-            Box::pin(ProviderResponseFuture::new(join, executor)),
+            Box::pin(RemoteResponseFuture::new(join, executor)),
             CogentTokenStream::closed(),
         )
     }
 
     fn chat(&self, request: CogentChatRequest) -> CogentTextRun {
-        if let Err(error) = validate::provider_chat(&request) {
+        if let Err(error) = validate::remote_chat(&request) {
             return CogentTextRun::ready_err(error);
         }
         let provider_request = ProviderChatRequest {
             model: self.model(),
             messages: request.messages,
-            options: provider_options(request.options),
-            provider_options: request.provider_options,
+            options: remote_generation_options(request.options),
+            provider_options: request.remote_options,
         };
         let client = self.client.clone();
         let endpoint = self.endpoint.clone();
@@ -109,10 +107,10 @@ impl InferenceEndpoint for ProviderEndpoint {
         if request.stream_tokens {
             let (batch_tx, batch_rx) = mpsc::channel(TOKEN_STREAM_CHANNEL_CAPACITY);
             let join = executor.spawn(async move {
-                run_provider_stream(client, endpoint, provider_request, batch_tx).await
+                run_remote_stream(client, endpoint, provider_request, batch_tx).await
             });
             CogentTextRun::new(
-                Box::pin(ProviderResponseFuture::new(join, executor)),
+                Box::pin(RemoteResponseFuture::new(join, executor)),
                 CogentTokenStream::from_receiver(batch_rx),
             )
         } else {
@@ -120,24 +118,24 @@ impl InferenceEndpoint for ProviderEndpoint {
                 client
                     .chat(provider_request)
                     .await
-                    .map(|response| map::provider_text_response(endpoint, response))
-                    .map_err(CogentError::Provider)
+                    .map(|response| map::remote_text_response(endpoint, response))
+                    .map_err(CogentError::from)
             });
             CogentTextRun::new(
-                Box::pin(ProviderResponseFuture::new(join, executor)),
+                Box::pin(RemoteResponseFuture::new(join, executor)),
                 CogentTokenStream::closed(),
             )
         }
     }
 
     fn embed(&self, request: CogentEmbedRequest) -> CogentEmbeddingRun {
-        if let Err(error) = validate::provider_embed(&request) {
+        if let Err(error) = validate::remote_embed(&request) {
             return CogentEmbeddingRun::ready_err(error);
         }
         let provider_request = ProviderEmbedRequest {
             model: self.model(),
             input: request.input,
-            provider_options: request.provider_options,
+            provider_options: request.remote_options,
         };
         let client = self.client.clone();
         let endpoint = self.endpoint.clone();
@@ -146,20 +144,20 @@ impl InferenceEndpoint for ProviderEndpoint {
             client
                 .embed(provider_request)
                 .await
-                .map(|response| map::provider_embedding_response(endpoint, response))
-                .map_err(CogentError::Provider)
+                .map(|response| map::remote_embedding_response(endpoint, response))
+                .map_err(CogentError::from)
         });
-        CogentEmbeddingRun::new(Box::pin(ProviderResponseFuture::new(join, executor)))
+        CogentEmbeddingRun::new(Box::pin(RemoteResponseFuture::new(join, executor)))
     }
 }
 
-struct ProviderResponseFuture<T> {
+struct RemoteResponseFuture<T> {
     join: tokio::task::JoinHandle<CogentResult<T>>,
-    _executor: ProviderExecutor,
+    _executor: RemoteExecutor,
 }
 
-impl<T> ProviderResponseFuture<T> {
-    fn new(join: tokio::task::JoinHandle<CogentResult<T>>, executor: ProviderExecutor) -> Self {
+impl<T> RemoteResponseFuture<T> {
+    fn new(join: tokio::task::JoinHandle<CogentResult<T>>, executor: RemoteExecutor) -> Self {
         Self {
             join,
             _executor: executor,
@@ -167,27 +165,27 @@ impl<T> ProviderResponseFuture<T> {
     }
 }
 
-impl<T> Future for ProviderResponseFuture<T> {
+impl<T> Future for RemoteResponseFuture<T> {
     type Output = CogentResult<T>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match Pin::new(&mut self.join).poll(cx) {
             Poll::Ready(Ok(result)) => Poll::Ready(result),
             Poll::Ready(Err(error)) => Poll::Ready(Err(CogentError::Internal(format!(
-                "provider task failed: {error}"
+                "remote task failed: {error}"
             )))),
             Poll::Pending => Poll::Pending,
         }
     }
 }
 
-impl<T> Drop for ProviderResponseFuture<T> {
+impl<T> Drop for RemoteResponseFuture<T> {
     fn drop(&mut self) {
         self.join.abort();
     }
 }
 
-async fn run_provider_stream(
+async fn run_remote_stream(
     client: ProviderClient,
     endpoint: EndpointRef,
     request: ProviderChatRequest,
@@ -233,7 +231,7 @@ async fn run_provider_stream(
     })
 }
 
-fn provider_options(options: crate::CogentTextOptions) -> ProviderGenerationOptions {
+fn remote_generation_options(options: crate::CogentTextOptions) -> ProviderGenerationOptions {
     ProviderGenerationOptions {
         max_tokens: options.max_tokens,
         temperature: options.temperature,

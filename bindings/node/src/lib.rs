@@ -1,5 +1,5 @@
 use std::{
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -14,8 +14,14 @@ use cogentlm_client::{
     CogentTextResponseFuture as CoreClientTextResponseFuture, CogentTextRun as CoreClientTextRun,
     CogentTokenStream as CoreClientTokenStream, EndpointRef as CoreEndpointRef,
     LocalEmbedOptions as CoreClientLocalEmbedOptions,
-    LocalTextOptions as CoreClientLocalTextOptions, ProviderExecutor as CoreProviderExecutor,
+    LocalTextOptions as CoreClientLocalTextOptions,
+    RemoteAnthropicConfig as CoreRemoteAnthropicConfig, RemoteAuth as CoreRemoteAuth,
+    RemoteConfig as CoreRemoteConfig, RemoteError as CoreRemoteError,
+    RemoteErrorKind as CoreRemoteErrorKind, RemoteOpenAiConfig as CoreRemoteOpenAiConfig,
+    RemoteProtocol as CoreRemoteProtocol, RemoteProxyConfig as CoreRemoteProxyConfig,
+    RemoteSecret as CoreRemoteSecret,
 };
+use cogentlm_core::TokenUsage as CoreTokenUsage;
 use cogentlm_engine::backend::{
     backend_observability_json as core_backend_observability_json,
     set_llama_log_quiet as core_set_llama_log_quiet,
@@ -35,25 +41,6 @@ use cogentlm_engine::engine::{
 use cogentlm_engine::runtime::config::{
     SchedulerPolicyConfig as CoreSchedulerPolicyConfig, SchedulerPolicyMode,
 };
-use cogentlm_providers::{
-    AnthropicConfig as CoreAnthropicConfig, CapabilitySupport as CoreProviderCapabilitySupport,
-    OpenAiConfig as CoreOpenAiConfig, ProviderAuth as CoreProviderAuth,
-    ProviderCapabilities as CoreProviderCapabilities,
-    ProviderChatRequest as CoreProviderChatRequest,
-    ProviderChatResponse as CoreProviderChatResponse, ProviderClient as CoreProviderClient,
-    ProviderEmbedRequest as CoreProviderEmbedRequest,
-    ProviderEmbeddingOutput as CoreProviderEmbeddingOutput,
-    ProviderEmbeddingResponse as CoreProviderEmbeddingResponse, ProviderError as CoreProviderError,
-    ProviderErrorKind as CoreProviderErrorKind,
-    ProviderGenerateRequest as CoreProviderGenerateRequest,
-    ProviderGenerateResponse as CoreProviderGenerateResponse,
-    ProviderGenerationOptions as CoreProviderGenerationOptions, ProviderModel as CoreProviderModel,
-    ProviderOptions as CoreProviderOptions,
-    ProviderResponseMetadata as CoreProviderResponseMetadata,
-    ProviderTextOutput as CoreProviderTextOutput, ProxyConfig as CoreProxyConfig,
-    ProxyProtocol as CoreProxyProtocol, SecretString as CoreSecretString,
-    TokenUsage as CoreTokenUsage,
-};
 use futures::executor::block_on;
 use futures::StreamExt;
 use napi::bindgen_prelude::{AsyncTask, Buffer, Either, Env};
@@ -62,17 +49,14 @@ use napi_derive::napi;
 use serde::de::DeserializeOwned;
 
 #[cfg(test)]
-#[path = "tests/provider_tests.rs"]
-mod provider_tests;
+#[path = "tests/remote_tests.rs"]
+mod remote_tests;
 
 type SharedCogentClient = Arc<Mutex<CoreClient>>;
 type SharedClientTextResponse = Arc<Mutex<Option<CoreClientTextResponseFuture>>>;
 type SharedClientEmbeddingResponse = Arc<Mutex<Option<CoreClientEmbeddingResponseFuture>>>;
 type SharedClientTokenStream = Arc<Mutex<Option<CoreClientTokenStream>>>;
-type ProviderTaskOutput<T> = std::result::Result<T, CoreProviderError>;
 type ClientTaskOutput<T> = std::result::Result<T, CoreClientError>;
-
-static PROVIDER_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
 const CLIENT_MUTEX_POISONED: &str = "client mutex is poisoned";
 const CLIENT_TEXT_RESPONSE_CONSUMED: &str = "text response already consumed";
@@ -602,32 +586,19 @@ impl NativeRuntimeConfig {
 #[napi(object)]
 pub struct EndpointRef {
     pub kind: String,
-    pub provider: Option<String>,
-    pub model: Option<String>,
+    pub id: String,
 }
 
 impl EndpointRef {
     fn to_core(&self) -> Result<CoreEndpointRef> {
         match self.kind.as_str() {
-            "localModel" | "local_model" => Ok(CoreEndpointRef::LocalModel {
-                model: self
-                    .model
-                    .clone()
-                    .ok_or_else(|| invalid_arg("localModel endpoint requires model"))?,
+            "local" => Ok(CoreEndpointRef::Local {
+                id: self.id.clone(),
             }),
-            "providerModel" | "provider_model" => Ok(CoreEndpointRef::ProviderModel {
-                provider: self
-                    .provider
-                    .clone()
-                    .ok_or_else(|| invalid_arg("providerModel endpoint requires provider"))?,
-                model: self
-                    .model
-                    .clone()
-                    .ok_or_else(|| invalid_arg("providerModel endpoint requires model"))?,
+            "remote" => Ok(CoreEndpointRef::Remote {
+                id: self.id.clone(),
             }),
-            _ => Err(invalid_arg(
-                "endpoint kind must be localModel or providerModel",
-            )),
+            _ => Err(invalid_arg("endpoint kind must be local or remote")),
         }
     }
 }
@@ -648,11 +619,11 @@ impl CogentTextOptions {
             max_tokens: self.max_tokens,
             temperature: self
                 .temperature
-                .map(|value| provider_f64_to_f32(value, "temperature"))
+                .map(|value| finite_f64_to_f32(value, "temperature"))
                 .transpose()?,
             top_p: self
                 .top_p
-                .map(|value| provider_f64_to_f32(value, "topP"))
+                .map(|value| finite_f64_to_f32(value, "topP"))
                 .transpose()?,
             stop: self.stop.clone().unwrap_or_default(),
         })
@@ -717,8 +688,8 @@ pub struct CogentQueryRequest {
     pub prompt: String,
     pub options: Option<CogentTextOptions>,
     pub local: Option<LocalTextOptions>,
-    #[napi(js_name = "providerOptions")]
-    pub provider_options: Option<serde_json::Value>,
+    #[napi(js_name = "remoteOptions")]
+    pub remote_options: Option<serde_json::Value>,
     #[napi(js_name = "streamTokens")]
     pub stream_tokens: Option<bool>,
 }
@@ -730,7 +701,7 @@ impl CogentQueryRequest {
             prompt: self.prompt.clone(),
             options: optional_core_or_default(self.options.as_ref(), CogentTextOptions::to_core)?,
             local: optional_core_or_default(self.local.as_ref(), LocalTextOptions::to_core)?,
-            provider_options: provider_options_or_empty(self.provider_options.clone())?,
+            remote_options: remote_options_or_empty(self.remote_options.clone())?,
             stream_tokens: self.stream_tokens.unwrap_or(false),
         })
     }
@@ -742,8 +713,8 @@ pub struct CogentChatRequest {
     pub messages: Vec<ChatMessage>,
     pub options: Option<CogentTextOptions>,
     pub local: Option<LocalTextOptions>,
-    #[napi(js_name = "providerOptions")]
-    pub provider_options: Option<serde_json::Value>,
+    #[napi(js_name = "remoteOptions")]
+    pub remote_options: Option<serde_json::Value>,
     #[napi(js_name = "streamTokens")]
     pub stream_tokens: Option<bool>,
 }
@@ -755,7 +726,7 @@ impl CogentChatRequest {
             messages: chat_messages_to_core(self.messages.clone())?,
             options: optional_core_or_default(self.options.as_ref(), CogentTextOptions::to_core)?,
             local: optional_core_or_default(self.local.as_ref(), LocalTextOptions::to_core)?,
-            provider_options: provider_options_or_empty(self.provider_options.clone())?,
+            remote_options: remote_options_or_empty(self.remote_options.clone())?,
             stream_tokens: self.stream_tokens.unwrap_or(false),
         })
     }
@@ -766,8 +737,8 @@ pub struct CogentEmbedRequest {
     pub endpoint: Option<EndpointRef>,
     pub input: String,
     pub local: Option<LocalEmbedOptions>,
-    #[napi(js_name = "providerOptions")]
-    pub provider_options: Option<serde_json::Value>,
+    #[napi(js_name = "remoteOptions")]
+    pub remote_options: Option<serde_json::Value>,
 }
 
 impl CogentEmbedRequest {
@@ -780,7 +751,7 @@ impl CogentEmbedRequest {
                 .as_ref()
                 .map(LocalEmbedOptions::to_core)
                 .unwrap_or_default(),
-            provider_options: provider_options_or_empty(self.provider_options.clone())?,
+            remote_options: remote_options_or_empty(self.remote_options.clone())?,
         })
     }
 }
@@ -794,253 +765,126 @@ pub struct ChatMessage {
 
 #[napi(string_enum = "snake_case")]
 #[derive(Clone, Copy)]
-pub enum ProviderProxyProtocol {
+pub enum RemoteProxyProtocol {
     OpenAiCompatible,
 }
 
-impl From<ProviderProxyProtocol> for CoreProxyProtocol {
-    fn from(value: ProviderProxyProtocol) -> Self {
+impl From<RemoteProxyProtocol> for CoreRemoteProtocol {
+    fn from(value: RemoteProxyProtocol) -> Self {
         match value {
-            ProviderProxyProtocol::OpenAiCompatible => Self::OpenAiCompatible,
+            RemoteProxyProtocol::OpenAiCompatible => Self::OpenAiCompatible,
         }
     }
 }
 
 #[napi(object)]
-pub struct ProviderAuthHeaderConfig {
+pub struct RemoteAuthHeaderConfig {
     pub name: String,
     pub value: String,
 }
 
 #[napi(object)]
-pub struct ProviderStaticHeaderConfig {
+pub struct RemoteStaticHeaderConfig {
     pub name: String,
     pub value: String,
 }
 
 #[napi(object)]
-pub struct ProviderAuthConfig {
+pub struct RemoteAuthConfig {
     pub bearer: Option<String>,
-    pub header: Option<ProviderAuthHeaderConfig>,
+    pub header: Option<RemoteAuthHeaderConfig>,
 }
 
-impl ProviderAuthConfig {
-    fn to_core(&self) -> Result<CoreProviderAuth> {
+impl RemoteAuthConfig {
+    fn to_core(&self) -> Result<CoreRemoteAuth> {
         match (&self.bearer, &self.header) {
-            (Some(token), None) => Ok(CoreProviderAuth::Bearer(CoreSecretString::new(
-                token.clone(),
-            ))),
-            (None, Some(header)) => Ok(CoreProviderAuth::Header {
+            (Some(token), None) => Ok(CoreRemoteAuth::Bearer(CoreRemoteSecret::new(token.clone()))),
+            (None, Some(header)) => Ok(CoreRemoteAuth::Header {
                 name: header.name.clone(),
-                value: CoreSecretString::new(header.value.clone()),
+                value: CoreRemoteSecret::new(header.value.clone()),
             }),
-            (Some(_), Some(_)) => Err(invalid_arg("provider auth must set bearer or header")),
-            (None, None) => Err(invalid_arg("provider auth is required")),
+            (Some(_), Some(_)) => Err(invalid_arg("remote auth must set bearer or header")),
+            (None, None) => Err(invalid_arg("remote auth is required")),
         }
     }
 }
 
 #[napi(object)]
-pub struct ProviderProxyConfig {
-    #[napi(js_name = "baseUrl")]
-    pub base_url: String,
-    pub auth: ProviderAuthConfig,
-    pub protocol: Option<ProviderProxyProtocol>,
-    #[napi(js_name = "staticHeaders")]
-    pub static_headers: Option<Vec<ProviderStaticHeaderConfig>>,
-    #[napi(js_name = "timeoutMs")]
-    pub timeout_ms: Option<u32>,
-}
-
-impl ProviderProxyConfig {
-    fn to_core(&self) -> Result<CoreProxyConfig> {
-        Ok(CoreProxyConfig {
-            base_url: self.base_url.clone(),
-            auth: self.auth.to_core()?,
-            protocol: self
-                .protocol
-                .unwrap_or(ProviderProxyProtocol::OpenAiCompatible)
-                .into(),
-            static_headers: self
-                .static_headers
-                .as_ref()
-                .map(|headers| {
-                    headers
-                        .iter()
-                        .map(|header| (header.name.clone(), header.value.clone()))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            timeout: self
-                .timeout_ms
-                .map(|timeout_ms| Duration::from_millis(u64::from(timeout_ms))),
-        })
-    }
-}
-
-#[napi(object)]
-pub struct ProviderOpenAiConfig {
+pub struct RemoteConfig {
+    pub kind: String,
+    pub model: String,
     #[napi(js_name = "apiKey")]
-    pub api_key: String,
-    #[napi(js_name = "baseUrl")]
-    pub base_url: Option<String>,
-    #[napi(js_name = "timeoutMs")]
-    pub timeout_ms: Option<u32>,
-}
-
-impl ProviderOpenAiConfig {
-    fn to_core(&self) -> CoreOpenAiConfig {
-        CoreOpenAiConfig {
-            api_key: CoreSecretString::new(self.api_key.clone()),
-            base_url: self.base_url.clone(),
-            timeout: self
-                .timeout_ms
-                .map(|timeout_ms| Duration::from_millis(u64::from(timeout_ms))),
-        }
-    }
-}
-
-#[napi(object)]
-pub struct ProviderAnthropicConfig {
-    #[napi(js_name = "apiKey")]
-    pub api_key: String,
+    pub api_key: Option<String>,
     #[napi(js_name = "baseUrl")]
     pub base_url: Option<String>,
     pub version: Option<String>,
+    pub auth: Option<RemoteAuthConfig>,
+    pub protocol: Option<RemoteProxyProtocol>,
+    #[napi(js_name = "staticHeaders")]
+    pub static_headers: Option<Vec<RemoteStaticHeaderConfig>>,
     #[napi(js_name = "timeoutMs")]
     pub timeout_ms: Option<u32>,
 }
 
-impl ProviderAnthropicConfig {
-    fn to_core(&self) -> CoreAnthropicConfig {
-        CoreAnthropicConfig {
-            api_key: CoreSecretString::new(self.api_key.clone()),
-            base_url: self.base_url.clone(),
-            version: self.version.clone(),
-            timeout: self
-                .timeout_ms
-                .map(|timeout_ms| Duration::from_millis(u64::from(timeout_ms))),
+impl RemoteConfig {
+    fn to_core(&self) -> Result<CoreRemoteConfig> {
+        let timeout = self
+            .timeout_ms
+            .map(|timeout_ms| Duration::from_millis(u64::from(timeout_ms)));
+        match self.kind.as_str() {
+            "openai" => Ok(CoreRemoteConfig::OpenAi(CoreRemoteOpenAiConfig {
+                model: self.model.clone(),
+                api_key: CoreRemoteSecret::new(
+                    self.api_key
+                        .clone()
+                        .ok_or_else(|| invalid_arg("openai remote requires apiKey"))?,
+                ),
+                base_url: self.base_url.clone(),
+                timeout,
+            })),
+            "anthropic" => Ok(CoreRemoteConfig::Anthropic(CoreRemoteAnthropicConfig {
+                model: self.model.clone(),
+                api_key: CoreRemoteSecret::new(
+                    self.api_key
+                        .clone()
+                        .ok_or_else(|| invalid_arg("anthropic remote requires apiKey"))?,
+                ),
+                base_url: self.base_url.clone(),
+                version: self.version.clone(),
+                timeout,
+            })),
+            "proxy" => Ok(CoreRemoteConfig::Proxy(CoreRemoteProxyConfig {
+                model: self.model.clone(),
+                base_url: self
+                    .base_url
+                    .clone()
+                    .ok_or_else(|| invalid_arg("proxy remote requires baseUrl"))?,
+                auth: self
+                    .auth
+                    .as_ref()
+                    .ok_or_else(|| invalid_arg("proxy remote requires auth"))?
+                    .to_core()?,
+                protocol: self
+                    .protocol
+                    .unwrap_or(RemoteProxyProtocol::OpenAiCompatible)
+                    .into(),
+                static_headers: self
+                    .static_headers
+                    .as_ref()
+                    .map(|headers| {
+                        headers
+                            .iter()
+                            .map(|header| (header.name.clone(), header.value.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                timeout,
+            })),
+            _ => Err(invalid_arg(
+                "remote kind must be openai, anthropic, or proxy",
+            )),
         }
     }
-}
-
-#[napi(object)]
-pub struct ProviderGenerationOptions {
-    #[napi(js_name = "maxTokens")]
-    pub max_tokens: Option<u32>,
-    pub temperature: Option<f64>,
-    #[napi(js_name = "topP")]
-    pub top_p: Option<f64>,
-    pub stop: Option<Vec<String>>,
-}
-
-impl ProviderGenerationOptions {
-    fn to_core(&self) -> Result<CoreProviderGenerationOptions> {
-        if self.max_tokens == Some(0) {
-            return Err(invalid_arg("maxTokens must be greater than zero"));
-        }
-        Ok(CoreProviderGenerationOptions {
-            max_tokens: self.max_tokens,
-            temperature: self
-                .temperature
-                .map(|value| provider_f64_to_f32(value, "temperature"))
-                .transpose()?,
-            top_p: self
-                .top_p
-                .map(|value| provider_f64_to_f32(value, "topP"))
-                .transpose()?,
-            stop: self.stop.clone().unwrap_or_default(),
-        })
-    }
-}
-
-#[napi(object)]
-pub struct ProviderChatRequest {
-    pub model: String,
-    pub messages: Vec<ChatMessage>,
-    pub options: Option<ProviderGenerationOptions>,
-    #[napi(js_name = "providerOptions")]
-    pub provider_options: Option<serde_json::Value>,
-}
-
-#[napi(object)]
-pub struct ProviderGenerateRequest {
-    pub model: String,
-    pub prompt: String,
-    pub options: Option<ProviderGenerationOptions>,
-    #[napi(js_name = "providerOptions")]
-    pub provider_options: Option<serde_json::Value>,
-}
-
-#[napi(object)]
-pub struct ProviderEmbedRequest {
-    pub model: String,
-    pub input: String,
-    #[napi(js_name = "providerOptions")]
-    pub provider_options: Option<serde_json::Value>,
-}
-
-#[napi(string_enum = "snake_case")]
-#[derive(Clone, Copy)]
-pub enum ProviderCapabilitySupport {
-    Supported,
-    Unsupported,
-    Unknown,
-}
-
-impl From<CoreProviderCapabilitySupport> for ProviderCapabilitySupport {
-    fn from(value: CoreProviderCapabilitySupport) -> Self {
-        match value {
-            CoreProviderCapabilitySupport::Supported => Self::Supported,
-            CoreProviderCapabilitySupport::Unsupported => Self::Unsupported,
-            CoreProviderCapabilitySupport::Unknown => Self::Unknown,
-        }
-    }
-}
-
-#[napi(object)]
-pub struct ProviderModelCapabilities {
-    pub chat: ProviderCapabilitySupport,
-    pub generate: ProviderCapabilitySupport,
-    pub embeddings: ProviderCapabilitySupport,
-    pub streaming: ProviderCapabilitySupport,
-}
-
-#[napi(object)]
-pub struct ProviderModel {
-    pub id: String,
-    pub provider: String,
-    #[napi(js_name = "displayName")]
-    pub display_name: Option<String>,
-    pub capabilities: ProviderModelCapabilities,
-    #[napi(js_name = "contextWindow")]
-    pub context_window: Option<u32>,
-    #[napi(js_name = "maxOutputTokens")]
-    pub max_output_tokens: Option<u32>,
-    pub raw: serde_json::Value,
-}
-
-#[napi(object)]
-pub struct ProviderTextOutput {
-    pub text: String,
-    #[napi(js_name = "finishReason")]
-    pub finish_reason: String,
-}
-
-#[napi(object)]
-pub struct ProviderEmbeddingOutput {
-    pub values: Vec<f64>,
-}
-
-#[napi(object)]
-#[derive(Clone, Copy)]
-pub struct ProviderTokenUsage {
-    #[napi(js_name = "inputTokens")]
-    pub input_tokens: Option<u32>,
-    #[napi(js_name = "outputTokens")]
-    pub output_tokens: Option<u32>,
-    #[napi(js_name = "totalTokens")]
-    pub total_tokens: Option<u32>,
 }
 
 #[napi(object)]
@@ -1051,40 +895,6 @@ pub struct TokenUsage {
     pub output_tokens: Option<u32>,
     #[napi(js_name = "totalTokens")]
     pub total_tokens: Option<u32>,
-}
-
-#[napi(object)]
-pub struct ProviderResponseMetadata {
-    pub provider: String,
-    pub model: String,
-    #[napi(js_name = "requestId")]
-    pub request_id: Option<String>,
-    #[napi(js_name = "responseId")]
-    pub response_id: Option<String>,
-    #[napi(js_name = "finishReasonRaw")]
-    pub finish_reason_raw: Option<String>,
-    pub raw: serde_json::Value,
-}
-
-#[napi(object)]
-pub struct ProviderChatResponse {
-    pub result: ProviderTextOutput,
-    pub usage: Option<ProviderTokenUsage>,
-    pub metadata: ProviderResponseMetadata,
-}
-
-#[napi(object)]
-pub struct ProviderGenerateResponse {
-    pub result: ProviderTextOutput,
-    pub usage: Option<ProviderTokenUsage>,
-    pub metadata: ProviderResponseMetadata,
-}
-
-#[napi(object)]
-pub struct ProviderEmbeddingResponse {
-    pub result: ProviderEmbeddingOutput,
-    pub usage: Option<ProviderTokenUsage>,
-    pub metadata: ProviderResponseMetadata,
 }
 
 #[napi(object)]
@@ -1184,15 +994,13 @@ pub struct CogentEmbeddingResponse {
 
 fn endpoint_ref_to_node(endpoint: CoreEndpointRef) -> EndpointRef {
     match endpoint {
-        CoreEndpointRef::LocalModel { model } => EndpointRef {
-            kind: "localModel".to_string(),
-            provider: None,
-            model: Some(model),
+        CoreEndpointRef::Local { id } => EndpointRef {
+            kind: "local".to_string(),
+            id,
         },
-        CoreEndpointRef::ProviderModel { provider, model } => EndpointRef {
-            kind: "providerModel".to_string(),
-            provider: Some(provider),
-            model: Some(model),
+        CoreEndpointRef::Remote { id } => EndpointRef {
+            kind: "remote".to_string(),
+            id,
         },
     }
 }
@@ -1228,91 +1036,6 @@ fn cogent_embedding_response_to_node(
     }
 }
 
-fn provider_model_to_node(model: CoreProviderModel) -> ProviderModel {
-    ProviderModel {
-        id: model.id,
-        provider: model.provider.as_str().to_string(),
-        display_name: model.display_name,
-        capabilities: provider_capabilities_to_node(model.capabilities),
-        context_window: model.context_window,
-        max_output_tokens: model.max_output_tokens,
-        raw: model.raw,
-    }
-}
-
-fn provider_capabilities_to_node(
-    capabilities: CoreProviderCapabilities,
-) -> ProviderModelCapabilities {
-    ProviderModelCapabilities {
-        chat: capabilities.chat.into(),
-        generate: capabilities.generate.into(),
-        embeddings: capabilities.embeddings.into(),
-        streaming: capabilities.streaming.into(),
-    }
-}
-
-fn provider_text_output_to_node(output: CoreProviderTextOutput) -> ProviderTextOutput {
-    ProviderTextOutput {
-        text: output.text,
-        finish_reason: output.finish_reason.as_str().to_string(),
-    }
-}
-
-fn provider_embedding_output_to_node(
-    output: CoreProviderEmbeddingOutput,
-) -> ProviderEmbeddingOutput {
-    ProviderEmbeddingOutput {
-        values: output.values.into_iter().map(f64::from).collect(),
-    }
-}
-
-fn provider_usage_to_node(usage: CoreTokenUsage) -> ProviderTokenUsage {
-    ProviderTokenUsage {
-        input_tokens: usage.input_tokens,
-        output_tokens: usage.output_tokens,
-        total_tokens: usage.total_tokens,
-    }
-}
-
-fn provider_metadata_to_node(metadata: CoreProviderResponseMetadata) -> ProviderResponseMetadata {
-    ProviderResponseMetadata {
-        provider: metadata.provider.as_str().to_string(),
-        model: metadata.model,
-        request_id: metadata.request_id,
-        response_id: metadata.response_id,
-        finish_reason_raw: metadata.finish_reason_raw,
-        raw: metadata.raw,
-    }
-}
-
-fn provider_chat_response_to_node(response: CoreProviderChatResponse) -> ProviderChatResponse {
-    ProviderChatResponse {
-        result: provider_text_output_to_node(response.result),
-        usage: response.usage.map(provider_usage_to_node),
-        metadata: provider_metadata_to_node(response.metadata),
-    }
-}
-
-fn provider_generate_response_to_node(
-    response: CoreProviderGenerateResponse,
-) -> ProviderGenerateResponse {
-    ProviderGenerateResponse {
-        result: provider_text_output_to_node(response.result),
-        usage: response.usage.map(provider_usage_to_node),
-        metadata: provider_metadata_to_node(response.metadata),
-    }
-}
-
-fn provider_embedding_response_to_node(
-    response: CoreProviderEmbeddingResponse,
-) -> ProviderEmbeddingResponse {
-    ProviderEmbeddingResponse {
-        result: provider_embedding_output_to_node(response.result),
-        usage: response.usage.map(provider_usage_to_node),
-        metadata: provider_metadata_to_node(response.metadata),
-    }
-}
-
 #[napi(object)]
 #[derive(Clone)]
 pub struct StreamStats {
@@ -1337,7 +1060,6 @@ pub struct TokenBatch {
 #[napi(js_name = "CogentClient")]
 pub struct CogentClient {
     inner: SharedCogentClient,
-    executor: CoreProviderExecutor,
 }
 
 #[napi]
@@ -1346,23 +1068,22 @@ impl CogentClient {
     pub fn new() -> Result<Self> {
         Ok(Self {
             inner: Arc::new(Mutex::new(CoreClient::new())),
-            executor: CoreProviderExecutor::new().map_err(client_error_without_env)?,
         })
     }
 
-    #[napi(ts_return_type = "Promise<void>")]
-    pub fn load_model(
+    #[napi(ts_return_type = "Promise<EndpointRef>")]
+    pub fn add_local(
         &self,
         id: String,
         model_path: String,
         config: Option<NativeRuntimeConfig>,
-    ) -> Result<AsyncTask<ClientLoadModelTask>> {
+    ) -> Result<AsyncTask<ClientAddLocalTask>> {
         let config = config
             .as_ref()
             .map(NativeRuntimeConfig::to_core)
             .transpose()?
             .unwrap_or_default();
-        Ok(AsyncTask::new(ClientLoadModelTask {
+        Ok(AsyncTask::new(ClientAddLocalTask {
             client: self.inner.clone(),
             id,
             model_path,
@@ -1370,18 +1091,15 @@ impl CogentClient {
         }))
     }
 
-    #[napi]
-    pub fn add_provider_model(
-        &self,
-        provider: String,
-        model: String,
-        client: &ProviderClient,
-    ) -> Result<()> {
-        self.inner
+    #[napi(ts_return_type = "EndpointRef")]
+    pub fn add_remote(&self, id: String, config: RemoteConfig) -> Result<EndpointRef> {
+        let endpoint = self
+            .inner
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
-            .add_provider_model(provider, model, client.inner.clone(), self.executor.clone())
-            .map_err(client_error_without_env)
+            .add_remote(id, config.to_core()?)
+            .map_err(client_error_without_env)?;
+        Ok(endpoint_ref_to_node(endpoint))
     }
 
     #[napi(ts_return_type = "CogentTextRun")]
@@ -1477,199 +1195,23 @@ impl CogentEmbeddingRun {
     }
 }
 
-#[napi(js_name = "ProviderClient")]
-pub struct ProviderClient {
-    inner: CoreProviderClient,
-}
-
-#[napi]
-impl ProviderClient {
-    #[napi]
-    pub fn proxy(env: Env, config: ProviderProxyConfig) -> Result<Self> {
-        Ok(Self {
-            inner: CoreProviderClient::proxy(config.to_core()?)
-                .map_err(|error| provider_error_to_node(env, error))?,
-        })
-    }
-
-    #[napi]
-    pub fn openai(env: Env, config: ProviderOpenAiConfig) -> Result<Self> {
-        Ok(Self {
-            inner: CoreProviderClient::openai(config.to_core())
-                .map_err(|error| provider_error_to_node(env, error))?,
-        })
-    }
-
-    #[napi]
-    pub fn anthropic(env: Env, config: ProviderAnthropicConfig) -> Result<Self> {
-        Ok(Self {
-            inner: CoreProviderClient::anthropic(config.to_core())
-                .map_err(|error| provider_error_to_node(env, error))?,
-        })
-    }
-
-    #[napi]
-    pub fn kind(&self) -> String {
-        self.inner.kind().as_str().to_string()
-    }
-
-    #[napi(ts_return_type = "Promise<ProviderModel[]>")]
-    pub fn list_models(&self) -> AsyncTask<ProviderListModelsTask> {
-        AsyncTask::new(ProviderListModelsTask {
-            client: self.inner.clone(),
-        })
-    }
-
-    #[napi(ts_return_type = "Promise<ProviderModel>")]
-    pub fn get_model(&self, model: String) -> AsyncTask<ProviderGetModelTask> {
-        AsyncTask::new(ProviderGetModelTask {
-            client: self.inner.clone(),
-            model,
-        })
-    }
-
-    #[napi(ts_return_type = "Promise<ProviderChatResponse>")]
-    pub fn chat(&self, request: ProviderChatRequest) -> Result<AsyncTask<ProviderChatTask>> {
-        Ok(AsyncTask::new(ProviderChatTask {
-            client: self.inner.clone(),
-            request: Some(provider_chat_request_to_core(request)?),
-        }))
-    }
-
-    #[napi(ts_return_type = "Promise<ProviderGenerateResponse>")]
-    pub fn generate(
-        &self,
-        request: ProviderGenerateRequest,
-    ) -> Result<AsyncTask<ProviderGenerateTask>> {
-        Ok(AsyncTask::new(ProviderGenerateTask {
-            client: self.inner.clone(),
-            request: Some(provider_generate_request_to_core(request)?),
-        }))
-    }
-
-    #[napi(ts_return_type = "Promise<ProviderEmbeddingResponse>")]
-    pub fn embed(&self, request: ProviderEmbedRequest) -> Result<AsyncTask<ProviderEmbedTask>> {
-        Ok(AsyncTask::new(ProviderEmbedTask {
-            client: self.inner.clone(),
-            request: Some(provider_embed_request_to_core(request)?),
-        }))
-    }
-}
-
-pub struct ProviderListModelsTask {
-    client: CoreProviderClient,
-}
-
-impl Task for ProviderListModelsTask {
-    type Output = ProviderTaskOutput<Vec<CoreProviderModel>>;
-    type JsValue = Vec<ProviderModel>;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        Ok(provider_runtime()?.block_on(self.client.list_models()))
-    }
-
-    fn resolve(&mut self, env: Env, models: Self::Output) -> Result<Self::JsValue> {
-        resolve_provider_task(env, models, |models| {
-            models.into_iter().map(provider_model_to_node).collect()
-        })
-    }
-}
-
-pub struct ProviderGetModelTask {
-    client: CoreProviderClient,
-    model: String,
-}
-
-impl Task for ProviderGetModelTask {
-    type Output = ProviderTaskOutput<CoreProviderModel>;
-    type JsValue = ProviderModel;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        Ok(provider_runtime()?.block_on(self.client.get_model(&self.model)))
-    }
-
-    fn resolve(&mut self, env: Env, model: Self::Output) -> Result<Self::JsValue> {
-        resolve_provider_task(env, model, provider_model_to_node)
-    }
-}
-
-pub struct ProviderChatTask {
-    client: CoreProviderClient,
-    request: Option<CoreProviderChatRequest>,
-}
-
-impl Task for ProviderChatTask {
-    type Output = ProviderTaskOutput<CoreProviderChatResponse>;
-    type JsValue = ProviderChatResponse;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let request = self.request.take().expect("provider chat task runs once");
-        Ok(provider_runtime()?.block_on(self.client.chat(request)))
-    }
-
-    fn resolve(&mut self, env: Env, response: Self::Output) -> Result<Self::JsValue> {
-        resolve_provider_task(env, response, provider_chat_response_to_node)
-    }
-}
-
-pub struct ProviderGenerateTask {
-    client: CoreProviderClient,
-    request: Option<CoreProviderGenerateRequest>,
-}
-
-impl Task for ProviderGenerateTask {
-    type Output = ProviderTaskOutput<CoreProviderGenerateResponse>;
-    type JsValue = ProviderGenerateResponse;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let request = self
-            .request
-            .take()
-            .expect("provider generate task runs once");
-        Ok(provider_runtime()?.block_on(self.client.generate(request)))
-    }
-
-    fn resolve(&mut self, env: Env, response: Self::Output) -> Result<Self::JsValue> {
-        resolve_provider_task(env, response, provider_generate_response_to_node)
-    }
-}
-
-pub struct ProviderEmbedTask {
-    client: CoreProviderClient,
-    request: Option<CoreProviderEmbedRequest>,
-}
-
-impl Task for ProviderEmbedTask {
-    type Output = ProviderTaskOutput<CoreProviderEmbeddingResponse>;
-    type JsValue = ProviderEmbeddingResponse;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let request = self.request.take().expect("provider embed task runs once");
-        Ok(provider_runtime()?.block_on(self.client.embed(request)))
-    }
-
-    fn resolve(&mut self, env: Env, response: Self::Output) -> Result<Self::JsValue> {
-        resolve_provider_task(env, response, provider_embedding_response_to_node)
-    }
-}
-
-pub struct ClientLoadModelTask {
+pub struct ClientAddLocalTask {
     client: SharedCogentClient,
     id: String,
     model_path: String,
     config: CoreNativeRuntimeConfig,
 }
 
-impl Task for ClientLoadModelTask {
-    type Output = ClientTaskOutput<()>;
-    type JsValue = ();
+impl Task for ClientAddLocalTask {
+    type Output = ClientTaskOutput<CoreEndpointRef>;
+    type JsValue = EndpointRef;
 
     fn compute(&mut self) -> Result<Self::Output> {
         let mut client = self
             .client
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?;
-        Ok(block_on(client.load_model(
+        Ok(block_on(client.add_local(
             self.id.clone(),
             self.model_path.clone(),
             self.config.clone(),
@@ -1677,7 +1219,9 @@ impl Task for ClientLoadModelTask {
     }
 
     fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
-        output.map_err(|error| client_error_to_node(env, error))
+        output
+            .map(endpoint_ref_to_node)
+            .map_err(|error| client_error_to_node(env, error))
     }
 }
 
@@ -1769,59 +1313,13 @@ pub fn set_llama_log_quiet(quiet: bool) {
     core_set_llama_log_quiet(quiet);
 }
 
-fn provider_runtime() -> Result<&'static tokio::runtime::Runtime> {
-    if let Some(runtime) = PROVIDER_RUNTIME.get() {
-        return Ok(runtime);
-    }
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(napi_error)?;
-    match PROVIDER_RUNTIME.set(runtime) {
-        Ok(()) => Ok(PROVIDER_RUNTIME
-            .get()
-            .expect("provider runtime set before get")),
-        Err(_) => Ok(PROVIDER_RUNTIME
-            .get()
-            .expect("provider runtime initialized concurrently")),
-    }
-}
-
-fn provider_chat_request_to_core(request: ProviderChatRequest) -> Result<CoreProviderChatRequest> {
-    Ok(CoreProviderChatRequest {
-        model: request.model,
-        messages: chat_messages_to_core(request.messages)?,
-        options: provider_generation_options_or_default(request.options.as_ref())?,
-        provider_options: provider_options_or_empty(request.provider_options)?,
-    })
-}
-
-fn provider_generate_request_to_core(
-    request: ProviderGenerateRequest,
-) -> Result<CoreProviderGenerateRequest> {
-    Ok(CoreProviderGenerateRequest {
-        model: request.model,
-        prompt: request.prompt,
-        options: provider_generation_options_or_default(request.options.as_ref())?,
-        provider_options: provider_options_or_empty(request.provider_options)?,
-    })
-}
-
-fn provider_embed_request_to_core(
-    request: ProviderEmbedRequest,
-) -> Result<CoreProviderEmbedRequest> {
-    Ok(CoreProviderEmbedRequest {
-        model: request.model,
-        input: request.input,
-        provider_options: provider_options_or_empty(request.provider_options)?,
-    })
-}
-
-fn provider_options_or_empty(value: Option<serde_json::Value>) -> Result<CoreProviderOptions> {
+fn remote_options_or_empty(
+    value: Option<serde_json::Value>,
+) -> Result<serde_json::Map<String, serde_json::Value>> {
     match value {
         Some(serde_json::Value::Object(options)) => Ok(options),
-        Some(_) => Err(napi_error("providerOptions must be a JSON object")),
-        None => Ok(CoreProviderOptions::new()),
+        Some(_) => Err(napi_error("remoteOptions must be a JSON object")),
+        None => Ok(serde_json::Map::new()),
     }
 }
 
@@ -1829,16 +1327,7 @@ fn optional_endpoint(endpoint: Option<&EndpointRef>) -> Result<Option<CoreEndpoi
     endpoint.map(EndpointRef::to_core).transpose()
 }
 
-fn provider_generation_options_or_default(
-    value: Option<&ProviderGenerationOptions>,
-) -> Result<CoreProviderGenerationOptions> {
-    value
-        .map(ProviderGenerationOptions::to_core)
-        .transpose()
-        .map(Option::unwrap_or_default)
-}
-
-fn provider_f64_to_f32(value: f64, name: &'static str) -> Result<f32> {
+fn finite_f64_to_f32(value: f64, name: &'static str) -> Result<f32> {
     if !value.is_finite() || value < f64::from(f32::MIN) || value > f64::from(f32::MAX) {
         return Err(invalid_arg(format!("{name} must be a finite f32")));
     }
@@ -2016,40 +1505,35 @@ fn napi_error(message: impl ToString) -> Error {
     Error::new(Status::GenericFailure, message)
 }
 
-fn resolve_provider_task<T, U>(
-    env: Env,
-    output: ProviderTaskOutput<T>,
-    map: impl FnOnce(T) -> U,
-) -> Result<U> {
-    output
-        .map(map)
-        .map_err(|error| provider_error_to_node(env, error))
-}
-
-fn provider_error_message(error: &CoreProviderError) -> String {
+fn remote_error_message(error: &CoreRemoteError) -> String {
     format!(
-        "{} provider error ({}): {}",
-        error.provider.as_str(),
+        "{} remote error ({}): {}",
+        error.remote_kind.as_str(),
         error.kind.as_str(),
         error.message
     )
 }
 
-fn provider_error_status(kind: CoreProviderErrorKind) -> Status {
+fn remote_error_status(kind: CoreRemoteErrorKind) -> Status {
     match kind {
-        CoreProviderErrorKind::InvalidRequest | CoreProviderErrorKind::UnsupportedFeature => {
+        CoreRemoteErrorKind::InvalidRequest | CoreRemoteErrorKind::UnsupportedFeature => {
             Status::InvalidArg
         }
         _ => Status::GenericFailure,
     }
 }
 
-fn provider_error_to_node(env: Env, error: CoreProviderError) -> Error {
-    let status = provider_error_status(error.kind);
-    let message = provider_error_message(&error);
-    let mut object = env
-        .create_error(Error::new(status, message))
-        .expect("creating ProviderError JS object should not fail");
+fn remote_error_to_node(env: Env, error: CoreRemoteError) -> Error {
+    match remote_error_to_node_result(env, error) {
+        Ok(error) => error,
+        Err(error) => error,
+    }
+}
+
+fn remote_error_to_node_result(env: Env, error: CoreRemoteError) -> Result<Error> {
+    let status = remote_error_status(error.kind);
+    let message = remote_error_message(&error);
+    let mut object = env.create_error(Error::new(status, message))?;
     let retry_after_ms = error
         .retry_after
         .map(|duration| duration.as_secs_f64() * 1000.0);
@@ -2058,38 +1542,22 @@ fn provider_error_to_node(env: Env, error: CoreProviderError) -> Error {
         .map(|value| *value)
         .unwrap_or(serde_json::Value::Null);
 
-    object
-        .set("name", "ProviderError")
-        .expect("setting ProviderError.name should not fail");
-    object
-        .set("kind", error.kind.as_str())
-        .expect("setting ProviderError.kind should not fail");
-    object
-        .set("provider", error.provider.as_str())
-        .expect("setting ProviderError.provider should not fail");
-    object
-        .set("status", error.status)
-        .expect("setting ProviderError.status should not fail");
-    object
-        .set("code", error.code)
-        .expect("setting ProviderError.code should not fail");
-    object
-        .set("requestId", error.request_id)
-        .expect("setting ProviderError.requestId should not fail");
-    object
-        .set("retryAfterMs", retry_after_ms)
-        .expect("setting ProviderError.retryAfterMs should not fail");
-    object
-        .set("rawBody", raw_body)
-        .expect("setting ProviderError.rawBody should not fail");
+    object.set("name", "RemoteError")?;
+    object.set("kind", error.kind.as_str())?;
+    object.set("remoteKind", error.remote_kind.as_str())?;
+    object.set("status", error.status)?;
+    object.set("code", error.code)?;
+    object.set("requestId", error.request_id)?;
+    object.set("retryAfterMs", retry_after_ms)?;
+    object.set("rawBody", raw_body)?;
 
-    Error::from(object.to_unknown())
+    Ok(Error::from(object.to_unknown()))
 }
 
 fn client_error_without_env(error: CoreClientError) -> Error {
     match error {
         CoreClientError::Local(error) => core_error(error),
-        CoreClientError::Provider(error) => napi_error(provider_error_message(&error)),
+        CoreClientError::Remote(error) => napi_error(remote_error_message(&error)),
         CoreClientError::InvalidRequest(message) => invalid_arg(message),
         CoreClientError::UnsupportedOperation {
             endpoint,
@@ -2104,7 +1572,7 @@ fn client_error_without_env(error: CoreClientError) -> Error {
 fn client_error_to_node(env: Env, error: CoreClientError) -> Error {
     match error {
         CoreClientError::Local(error) => core_error(error),
-        CoreClientError::Provider(error) => provider_error_to_node(env, error),
+        CoreClientError::Remote(error) => remote_error_to_node(env, error),
         CoreClientError::InvalidRequest(message) => invalid_arg(message),
         CoreClientError::UnsupportedOperation {
             endpoint,

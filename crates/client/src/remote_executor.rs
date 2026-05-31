@@ -4,13 +4,13 @@ use std::thread;
 
 use crate::{CogentError, CogentResult};
 
-/// Owned provider I/O executor used by provider endpoints.
+/// Owned remote I/O executor used by remote endpoints.
 #[derive(Clone)]
-pub struct ProviderExecutor {
-    inner: Arc<ProviderRuntimeThread>,
+pub(crate) struct RemoteExecutor {
+    inner: Arc<RemoteRuntimeThread>,
 }
 
-struct ProviderRuntimeThread {
+struct RemoteRuntimeThread {
     handle: tokio::runtime::Handle,
     // Only `Drop` touches this, and `Arc` gives `Drop` exclusive access at the
     // last reference, so no lock is needed.
@@ -18,11 +18,11 @@ struct ProviderRuntimeThread {
     _thread: thread::JoinHandle<()>,
 }
 
-impl ProviderExecutor {
-    /// Start a dedicated provider I/O runtime thread.
+impl RemoteExecutor {
+    /// Start a dedicated remote I/O runtime thread.
     pub fn new() -> CogentResult<Self> {
         Ok(Self {
-            inner: Arc::new(start_provider_runtime_thread()?),
+            inner: Arc::new(start_remote_runtime_thread()?),
         })
     }
 
@@ -35,7 +35,7 @@ impl ProviderExecutor {
     }
 }
 
-impl Drop for ProviderRuntimeThread {
+impl Drop for RemoteRuntimeThread {
     fn drop(&mut self) {
         if let Some(shutdown_tx) = self.shutdown_tx.take() {
             let _ = shutdown_tx.send(());
@@ -43,10 +43,10 @@ impl Drop for ProviderRuntimeThread {
     }
 }
 
-fn start_provider_runtime_thread() -> CogentResult<ProviderRuntimeThread> {
+fn start_remote_runtime_thread() -> CogentResult<RemoteRuntimeThread> {
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
     let thread = thread::Builder::new()
-        .name("cogentlm-provider-runtime".to_string())
+        .name("cogentlm-remote-runtime".to_string())
         .spawn(move || {
             let runtime = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -66,17 +66,17 @@ fn start_provider_runtime_thread() -> CogentResult<ProviderRuntimeThread> {
             let _ = runtime.block_on(shutdown_rx);
         })
         .map_err(|error| {
-            CogentError::Internal(format!("failed to spawn provider runtime: {error}"))
+            CogentError::Internal(format!("failed to spawn remote runtime: {error}"))
         })?;
 
     let (handle, shutdown_tx) = ready_rx
         .recv()
-        .map_err(|_| CogentError::Internal("provider runtime stopped before startup".to_string()))?
+        .map_err(|_| CogentError::Internal("remote runtime stopped before startup".to_string()))?
         .map_err(|error| {
-            CogentError::Internal(format!("failed to build provider runtime: {error}"))
+            CogentError::Internal(format!("failed to build remote runtime: {error}"))
         })?;
 
-    Ok(ProviderRuntimeThread {
+    Ok(RemoteRuntimeThread {
         handle,
         shutdown_tx: Some(shutdown_tx),
         _thread: thread,

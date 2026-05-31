@@ -1,22 +1,17 @@
-mod provider_common;
+mod remote_common;
 
-use cogentlm_client::{CogentChatRequest, CogentTextOptions, CogentTextResponse, EndpointRef};
+use cogentlm_client::{CogentChatRequest, CogentTextOptions, CogentTextResponse};
 use cogentlm_engine::engine::{ChatMessage, ChatRole};
 use futures::executor::block_on;
 use futures::StreamExt;
 
-fn main() -> provider_common::ExampleResult<()> {
+fn main() -> remote_common::ExampleResult<()> {
     block_on(async {
-        let args = provider_common::args("Explain provider inference in one sentence.")?;
+        let args = remote_common::args("Explain remote inference in one sentence.")?;
         let mut client = cogentlm_client::CogentClient::new();
-        client.add_provider_model(
-            "openai",
-            args.model.clone(),
-            provider_common::openai_provider()?,
-            cogentlm_client::ProviderExecutor::new()?,
-        )?;
+        let endpoint = client.add_remote("openai", remote_common::openai_remote(args.model)?)?;
         let run = client.chat(CogentChatRequest {
-            endpoint: Some(provider_endpoint(&args.model)),
+            endpoint: Some(endpoint),
             messages: vec![
                 ChatMessage::new(ChatRole::System, "Answer concisely."),
                 ChatMessage::new(ChatRole::User, args.input),
@@ -37,13 +32,6 @@ fn main() -> provider_common::ExampleResult<()> {
         print_text(response);
         Ok(())
     })
-}
-
-fn provider_endpoint(model: &str) -> EndpointRef {
-    EndpointRef::ProviderModel {
-        provider: "openai".to_string(),
-        model: model.to_string(),
-    }
 }
 
 fn text_options() -> CogentTextOptions {
