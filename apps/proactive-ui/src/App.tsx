@@ -290,7 +290,7 @@ export default function App() {
       });
 
       setStatus('Downloading vision model and projector...');
-      await nextClient.models.load(
+      await nextClient.addLocal(
         { model: trimmedModel, projector: trimmedProjector },
         {
           observability: 'runtime',

@@ -1,5 +1,6 @@
 import type {
   BrowserTextRun,
+  BrowserTokenStream,
   ChatInput,
   ChatMessage,
   ChatOptions,
@@ -24,9 +25,9 @@ export function createTracedBrainClient(
 }
 
 class TracedBrainClient implements CharacterRuntimeClient, DirectorRuntimeClient {
-  public readonly models = {
-    current: () => this.client.models.current(),
-  };
+  public currentLocal(): ReturnType<CogentClient['currentLocal']> {
+    return this.client.currentLocal();
+  }
 
   public constructor(
     private readonly client: CogentClient,
@@ -151,8 +152,9 @@ function isChatObjectInput(
   return !Array.isArray(input);
 }
 
-class TokenBatchQueue implements AsyncIterable<TokenBatch>, AsyncIterator<TokenBatch> {
+class TokenBatchQueue implements BrowserTokenStream, AsyncIterator<TokenBatch> {
   private readonly items: TokenBatch[] = [];
+  private readonly subscribers = new Set<(batch: TokenBatch) => void>();
   private readonly waiters: Array<{
     resolve: (result: IteratorResult<TokenBatch>) => void;
     reject: (reason?: unknown) => void;
@@ -163,6 +165,9 @@ class TokenBatchQueue implements AsyncIterable<TokenBatch>, AsyncIterator<TokenB
   public push(batch: TokenBatch): void {
     if (this.closed || this.failed != null) {
       return;
+    }
+    for (const subscriber of this.subscribers) {
+      subscriber(batch);
     }
     const waiter = this.waiters.shift();
     if (waiter != null) {
@@ -177,6 +182,7 @@ class TokenBatchQueue implements AsyncIterable<TokenBatch>, AsyncIterator<TokenB
       return;
     }
     this.closed = true;
+    this.subscribers.clear();
     while (this.waiters.length > 0) {
       this.waiters.shift()?.resolve({ done: true, value: undefined });
     }
@@ -187,6 +193,7 @@ class TokenBatchQueue implements AsyncIterable<TokenBatch>, AsyncIterator<TokenB
       return;
     }
     this.failed = error;
+    this.subscribers.clear();
     while (this.waiters.length > 0) {
       this.waiters.shift()?.reject(error);
     }
@@ -210,6 +217,19 @@ class TokenBatchQueue implements AsyncIterable<TokenBatch>, AsyncIterator<TokenB
 
   public [Symbol.asyncIterator](): AsyncIterator<TokenBatch> {
     return this;
+  }
+
+  public subscribe(listener: (batch: TokenBatch) => void): () => void {
+    for (const item of this.items) {
+      listener(item);
+    }
+    if (this.closed || this.failed != null) {
+      return () => {};
+    }
+    this.subscribers.add(listener);
+    return () => {
+      this.subscribers.delete(listener);
+    };
   }
 }
 

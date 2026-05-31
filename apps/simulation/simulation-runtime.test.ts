@@ -108,9 +108,7 @@ function createTimeoutClient(): DirectorRuntimeClient & { cancelCalls: number[] 
 
   return {
     cancelCalls,
-    models: {
-      current: () => ({ mediaMarker: '<image>' }),
-    },
+    currentLocal: () => ({ mediaMarker: '<image>' }),
     chat(_input, options = {}) {
       return createTextRun((async () => {
         const signal = options.signal;
@@ -133,9 +131,7 @@ function createOutputClient(outputText: string): DirectorRuntimeClient & { gramm
   let grammar: string | undefined;
   let promptText: string | undefined;
   return {
-    models: {
-      current: () => ({ mediaMarker: '<image>' }),
-    },
+    currentLocal: () => ({ mediaMarker: '<image>' }),
     get grammar() {
       return grammar;
     },

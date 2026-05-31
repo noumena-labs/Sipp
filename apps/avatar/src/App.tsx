@@ -145,7 +145,7 @@ export default function App() {
       const client = new CogentClient();
 
       setStatus('Downloading and loading model?');
-      await client.models.load(args.modelUrl, {
+      await client.addLocal(args.modelUrl, {
         onProgress: (progress: { phase: string; percent: any; }) => {
           if (progress.phase === 'download') {
             setStatus(`Downloading model... ${Math.floor(progress.percent ?? 0)}%`);

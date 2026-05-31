@@ -456,9 +456,9 @@ export default function App() {
           originalUnsubscribe();
         };
         setClient(nextClient);
-        setCurrentModel(nextClient.models.current());
+        setCurrentModel(nextClient.currentLocal());
         setObservability(nextClient.observability.current());
-        setInstalledModels(await nextClient.models.list());
+        setInstalledModels(await nextClient.listLocal());
         setStatus('idle');
         void CogentClient.browserRuntimeSmoke()
           .then((result) => {
@@ -529,9 +529,9 @@ export default function App() {
   };
 
   const refreshModels = async (targetClient: CogentClient) => {
-    setCurrentModel(targetClient.models.current());
+    setCurrentModel(targetClient.currentLocal());
     setObservability(targetClient.observability.current());
-    setInstalledModels(await targetClient.models.list());
+    setInstalledModels(await targetClient.listLocal());
   };
 
   const loadModelSelection = async (
@@ -539,7 +539,7 @@ export default function App() {
     source: ModelSource
   ): Promise<ModelInfo> => {
     const start = performance.now();
-    const info = await targetClient.models.load(source, {
+    const info = await targetClient.addLocal(source, {
       observability: 'profile',
       runtime: getDefaultRuntimeOptions(),
       onProgress: (progress) => {
@@ -598,7 +598,7 @@ export default function App() {
         return;
       }
       const nextSourceKey = sourceKey(source);
-      const loadedModel = client.models.current();
+      const loadedModel = client.currentLocal();
       let requestOperation = operation;
       let requestPrompt = prompt;
       let requestTokenCount = tokenCount;
@@ -714,7 +714,7 @@ export default function App() {
     setMemorySnapshots([]);
     setBenchmarkReport(null);
     let benchmarkOperation = operation;
-    const loadedModel = client.models.current();
+    const loadedModel = client.currentLocal();
     let benchmarkPrompt = prompt;
     let benchmarkTokenCount = tokenCount;
     if (loadedModel != null && !modelSupportsOperation(loadedModel, benchmarkOperation)) {
@@ -935,8 +935,8 @@ export default function App() {
         <div className="eyebrow">Browser Benchmark</div>
         <h1>CogentClient Minimal API</h1>
         <p>
-          Load with <code>client.models.load()</code>, inspect with{' '}
-          <code>client.models.current()</code>, run with <code>client.chat()</code>,{' '}
+          Load with <code>client.addLocal()</code>, inspect with{' '}
+          <code>client.currentLocal()</code>, run with <code>client.chat()</code>,{' '}
           <code>client.query()</code>, or <code>client.embed()</code>, consume{' '}
           <code>.response</code> and <code>.tokens</code>, and benchmark with
           the same minimal surface.

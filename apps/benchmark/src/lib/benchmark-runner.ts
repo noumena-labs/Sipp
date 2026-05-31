@@ -425,7 +425,7 @@ export async function runScenarioBenchmark(
   if (!alreadyLoaded) {
     setStatus(`${scenario.label}: loading model...`);
     const measured = await measureAsync(() =>
-      targetClient.models.load(modelSource, { runtime, observability: 'profile' })
+      targetClient.addLocal(modelSource, { runtime, observability: 'profile' })
     );
     loadRuntimeMs = measured.ms;
   }
@@ -547,7 +547,7 @@ export async function runMixedLoadBenchmark(
   let loadRuntimeMs = 0;
   if (!alreadyLoaded) {
     const measured = await measureAsync(() =>
-      targetClient.models.load(modelSource, { runtime, observability: 'profile' })
+      targetClient.addLocal(modelSource, { runtime, observability: 'profile' })
     );
     loadRuntimeMs = measured.ms;
   }

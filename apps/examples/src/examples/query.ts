@@ -4,7 +4,7 @@ import { Example } from './base-example';
 const ENCODER_DECODER_PROMPT = 'translate English to German: The house is wonderful.';
 
 function isEncoderDecoder(client: CogentClient): boolean {
-  return client.models.current()?.capabilities?.modelClass === 'encoder_decoder';
+  return client.currentLocal()?.capabilities?.modelClass === 'encoder_decoder';
 }
 
 export const queryExample: Example = {
