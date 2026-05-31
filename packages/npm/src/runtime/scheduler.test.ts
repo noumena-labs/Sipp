@@ -1,15 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import type { GenerateResponse, TokenBatch, TransportObservability } from '../engine/inference-types.js';
+import type {
+  EngineExecutionMode,
+  GenerateResponse,
+  TokenBatch,
+  TransportObservability,
+} from '../engine/inference-types.js';
 import { COMPLETED_REQUEST_STATUS_COMPLETED } from '../wasm/wasm-bridge.js';
 import { RequestTracker } from './request-tracker.js';
 import { QueuedRequestScheduler } from './scheduler.js';
 import type { WasmBridge } from '../wasm/wasm-bridge.js';
 
-function createTransportObservability(): TransportObservability {
+function createTransportObservability(
+  executionMode: EngineExecutionMode = 'main-thread'
+): TransportObservability {
   return {
-    executionMode: 'main-thread',
-    workerBacked: false,
+    executionMode,
+    workerBacked: executionMode === 'worker',
     enabled: false,
     activeTokenTransport: 'none',
     activeTokenEmission: false,
@@ -235,4 +242,108 @@ test('QueuedRequestScheduler keeps native token budget while emitting tokens', a
   assert.equal(batches[0].text, 'a');
   assert.equal(batches[0].frameCount, 1);
   assert.equal(tokenBatchSinkErrors.size, 0);
+});
+
+test('QueuedRequestScheduler time-slices worker loops while emitting tokens', async () => {
+  const tracker = new RequestTracker<GenerateResponse>();
+  const transport = createTransportObservability('worker');
+  const tokenBatchSinks = new Map<number, (batch: TokenBatch) => void>();
+  const tokenBatchSinkErrors = new Map<number, unknown>();
+  const maxDurationValues: Array<number | undefined> = [];
+  const bridge = {
+    async runInferenceLoop(
+      _maxTicks: number,
+      _maxCompletedResponses: number,
+      _maxGeneratedTokens: number,
+      options?: { maxDurationUs?: number }
+    ) {
+      maxDurationValues.push(options?.maxDurationUs);
+      return {
+        stepResult: 0,
+        completedResponseCount: 1,
+      };
+    },
+    getTokenBufferUsedAddress() {
+      return 0;
+    },
+    getCompletedRequestStatus() {
+      return COMPLETED_REQUEST_STATUS_COMPLETED;
+    },
+    takeCompletedResponse(requestId: number): GenerateResponse {
+      return {
+        requestId,
+        completed: true,
+        cancelled: false,
+        failed: false,
+        outputText: 'done',
+      };
+    },
+  } as unknown as WasmBridge;
+
+  const scheduler = new QueuedRequestScheduler({
+    tracker,
+    queuedPromptTokenBatchSinks: tokenBatchSinks,
+    queuedPromptTokenBatchSinkErrors: tokenBatchSinkErrors,
+    getTransportObservability: () => transport,
+    getBridge: () => bridge,
+    finalizeRequest: (_bridge, requestId, options) => {
+      tracker.finalize(requestId, options);
+    },
+    cancelQuery: async () => true,
+  });
+
+  tokenBatchSinks.set(1, () => {});
+  const tracked = scheduler.track(1);
+  await tracked.promise;
+
+  assert.deepEqual(maxDurationValues, [8000]);
+});
+
+test('QueuedRequestScheduler leaves worker loops unsliced without token emission', async () => {
+  const tracker = new RequestTracker<GenerateResponse>();
+  const transport = createTransportObservability('worker');
+  const maxDurationValues: Array<number | undefined> = [];
+  const bridge = {
+    async runInferenceLoop(
+      _maxTicks: number,
+      _maxCompletedResponses: number,
+      _maxGeneratedTokens: number,
+      options?: { maxDurationUs?: number }
+    ) {
+      maxDurationValues.push(options?.maxDurationUs);
+      return {
+        stepResult: 0,
+        completedResponseCount: 1,
+      };
+    },
+    getCompletedRequestStatus() {
+      return COMPLETED_REQUEST_STATUS_COMPLETED;
+    },
+    takeCompletedResponse(requestId: number): GenerateResponse {
+      return {
+        requestId,
+        completed: true,
+        cancelled: false,
+        failed: false,
+        outputText: 'done',
+      };
+    },
+  } as unknown as WasmBridge;
+
+  const scheduler = new QueuedRequestScheduler({
+    tracker,
+    queuedPromptTokenBatchSinks: new Map(),
+    queuedPromptTokenBatchSinkErrors: new Map(),
+    getTransportObservability: () => transport,
+    getBridge: () => bridge,
+    finalizeRequest: (_bridge, requestId, options) => {
+      tracker.finalize(requestId, options);
+    },
+    cancelQuery: async () => true,
+  });
+
+  const tracked = scheduler.track(1);
+  await tracked.promise;
+
+  assert.deepEqual(maxDurationValues, [0]);
 });

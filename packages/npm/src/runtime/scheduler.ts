@@ -10,12 +10,12 @@ import {
 } from '../wasm/wasm-bridge.js';
 import { RequestTracker } from './request-tracker.js';
 
-// Native owns the scheduling policy; JS drives the outer loop. Token emission
-// stays on the bulk native loop and drains in chunks so visible tokens do not
-// force a per-token JSPI round trip.
+// Native owns model scheduling; JS owns host pump cadence. Token emission
+// stays on bulk native loops, but emitted batches must return to JS often
+// enough to be visible while the request is still running.
 const CONTINUOUS_LOOP_TICK_LIMIT = 1024;
 const CONTINUOUS_LOOP_TOKEN_LIMIT = 512;
-const MAIN_THREAD_LOOP_DURATION_US = 8_000;
+const HOST_VISIBLE_TOKEN_SLICE_US = 8_000;
 const REQUEST_STEP_RESULT_INVALID = -1;
 const REQUEST_STEP_RESULT_FATAL_NO_PROGRESS = -2;
 
@@ -220,8 +220,11 @@ export class QueuedRequestScheduler {
   }
 
   private loopDurationUs(): number {
-    return this.options.getTransportObservability().executionMode === 'main-thread'
-      ? MAIN_THREAD_LOOP_DURATION_US
+    if (this.options.getTransportObservability().executionMode === 'main-thread') {
+      return HOST_VISIBLE_TOKEN_SLICE_US;
+    }
+    return this.options.queuedPromptTokenBatchSinks.size > 0
+      ? HOST_VISIBLE_TOKEN_SLICE_US
       : 0;
   }
 
