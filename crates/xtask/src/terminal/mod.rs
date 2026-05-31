@@ -4,7 +4,7 @@ pub(crate) mod splash;
 
 use crate::utils::BuildContext;
 use anyhow::{anyhow, Context, Result};
-use console::{style, Term};
+use console::{measure_text_width, style, truncate_str, Term};
 use crossterm::cursor::{position, Hide, MoveTo, MoveToPreviousLine, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor};
@@ -1634,16 +1634,27 @@ impl InlineRenderer {
         }
 
         let visible = visual.lines.iter().take(body_lines).collect::<Vec<_>>();
+        let block_width = visible
+            .iter()
+            .map(|line| measure_text_width(line))
+            .max()
+            .unwrap_or(0);
+        let left_padding = (self.width as usize).saturating_sub(block_width) / 2;
         let top_padding = body_lines.saturating_sub(visible.len()) / 2;
         for (offset, line) in visible.into_iter().enumerate() {
-            let color = visual_color(visual.frame + offset);
-            let centered = center_line(line, self.width as usize);
-            self.put_line(
+            let mut segments = Vec::new();
+            if left_padding > 0 {
+                segments.push(RowSegment::new(
+                    " ".repeat(left_padding),
+                    Color::White,
+                    false,
+                ));
+            }
+            segments.extend(visual_line_segments(line, visual.frame + offset));
+            self.put_segments_line(
                 rows,
                 body_start + top_padding as u16 + offset as u16,
-                &centered,
-                color,
-                true,
+                &segments,
             );
         }
     }
@@ -1760,6 +1771,15 @@ impl InlineRenderer {
         *slot = RenderedRow::segments([RowSegment::new(text, color, bold)]);
     }
 
+    fn put_segments_line(&self, rows: &mut [RenderedRow], row: u16, segments: &[RowSegment]) {
+        let Some(slot) = rows.get_mut(row as usize) else {
+            return;
+        };
+        *slot = RenderedRow {
+            segments: truncate_segments(segments, self.width as usize),
+        };
+    }
+
     fn draw_rendered_row(
         &self,
         stdout: &mut std::io::Stdout,
@@ -1849,7 +1869,7 @@ impl RowSegment {
     }
 
     fn visible_width(&self) -> usize {
-        self.text.chars().count()
+        measure_text_width(&self.text)
     }
 }
 
@@ -1880,10 +1900,8 @@ fn truncate_segments(segments: &[RowSegment], width: usize) -> Vec<RowSegment> {
                 segment.dim,
             ));
         } else {
-            let mut text = segment.text.chars().take(remaining - 3).collect::<String>();
-            text.push_str("...");
             truncated.push(RowSegment::styled(
-                text,
+                truncate_text(&segment.text, remaining),
                 segment.color,
                 segment.bold,
                 segment.dim,
@@ -2001,6 +2019,9 @@ impl AnsiStyle {
                     self.bold = false;
                     self.dim = false;
                 }
+                38 => {
+                    self.apply_extended_foreground(&mut codes);
+                }
                 30..=37 | 90..=97 => {
                     if let Some(color) = ansi_color(code) {
                         self.color = color;
@@ -2009,6 +2030,38 @@ impl AnsiStyle {
                 39 => self.color = Color::White,
                 _ => {}
             }
+        }
+    }
+
+    fn apply_extended_foreground<I>(&mut self, codes: &mut I)
+    where
+        I: Iterator<Item = u16>,
+    {
+        let Some(mode) = codes.next() else {
+            return;
+        };
+
+        match mode {
+            2 => {
+                let (Some(r), Some(g), Some(b)) = (codes.next(), codes.next(), codes.next()) else {
+                    return;
+                };
+                let (Ok(r), Ok(g), Ok(b)) = (u8::try_from(r), u8::try_from(g), u8::try_from(b))
+                else {
+                    return;
+                };
+                self.color = Color::Rgb { r, g, b };
+            }
+            5 => {
+                let Some(value) = codes.next() else {
+                    return;
+                };
+                let Ok(value) = u8::try_from(value) else {
+                    return;
+                };
+                self.color = Color::AnsiValue(value);
+            }
+            _ => {}
         }
     }
 }
@@ -2119,14 +2172,12 @@ fn visual_color(frame: usize) -> Color {
     }
 }
 
-fn center_line(text: &str, width: usize) -> String {
-    let text_width = text.chars().count();
-    if text_width >= width {
-        return truncate_text(text, width);
+fn visual_line_segments(text: &str, frame: usize) -> Vec<RowSegment> {
+    if text.contains('\u{1b}') {
+        parse_ansi_segments(text)
+    } else {
+        vec![RowSegment::new(text, visual_color(frame), true)]
     }
-
-    let padding = (width - text_width) / 2;
-    format!("{}{}", " ".repeat(padding), text)
 }
 
 fn truncate_text(text: &str, width: usize) -> String {
@@ -2134,15 +2185,42 @@ fn truncate_text(text: &str, width: usize) -> String {
         return String::new();
     }
 
-    let count = text.chars().count();
-    if count <= width {
+    if measure_text_width(text) <= width {
         return text.to_owned();
     }
     if width <= 3 {
         return ".".repeat(width);
     }
 
-    let mut truncated = text.chars().take(width - 3).collect::<String>();
-    truncated.push_str("...");
-    truncated
+    truncate_str(text, width, "...").into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ansi_truecolor_segments_preserve_rgb_style() {
+        let segments = parse_ansi_segments("\u{1b}[38;2;12;34;56;1mhi\u{1b}[0m");
+
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text, "hi");
+        assert_eq!(
+            segments[0].color,
+            Color::Rgb {
+                r: 12,
+                g: 34,
+                b: 56
+            }
+        );
+        assert!(segments[0].bold);
+    }
+
+    #[test]
+    fn truncate_text_uses_visible_ansi_width() {
+        let text = "\u{1b}[31mabcdef\u{1b}[0m";
+        let truncated = truncate_text(text, 4);
+
+        assert_eq!(measure_text_width(&truncated), 4);
+    }
 }
