@@ -2,7 +2,7 @@ use std::fmt;
 use std::time::Duration;
 
 use cogentlm_providers::{
-    AnthropicConfig, OpenAiConfig, ProviderAuth, ProviderClient, ProxyConfig, ProxyProtocol,
+    AnthropicConfig, OpenAiConfig, ProviderAuth, ProviderTransport, ProxyConfig, ProxyProtocol,
     SecretString,
 };
 
@@ -117,37 +117,37 @@ impl RemoteConfig {
         })
     }
 
-    pub(crate) fn build(self) -> CogentResult<(String, ProviderClient)> {
+    pub(crate) fn build(self) -> CogentResult<(String, ProviderTransport)> {
         match self {
             Self::OpenAi(config) => {
                 let model = config.model;
-                let client = ProviderClient::openai(OpenAiConfig {
+                let transport = ProviderTransport::openai(OpenAiConfig {
                     api_key: SecretString::new(config.api_key.expose().to_string()),
                     base_url: config.base_url,
                     timeout: config.timeout,
                 })?;
-                Ok((model, client))
+                Ok((model, transport))
             }
             Self::Anthropic(config) => {
                 let model = config.model;
-                let client = ProviderClient::anthropic(AnthropicConfig {
+                let transport = ProviderTransport::anthropic(AnthropicConfig {
                     api_key: SecretString::new(config.api_key.expose().to_string()),
                     base_url: config.base_url,
                     version: config.version,
                     timeout: config.timeout,
                 })?;
-                Ok((model, client))
+                Ok((model, transport))
             }
             Self::Proxy(config) => {
                 let model = config.model;
-                let client = ProviderClient::proxy(ProxyConfig {
+                let transport = ProviderTransport::proxy(ProxyConfig {
                     base_url: config.base_url,
                     auth: config.auth.to_provider(),
                     protocol: config.protocol.into(),
                     static_headers: config.static_headers,
                     timeout: config.timeout,
                 })?;
-                Ok((model, client))
+                Ok((model, transport))
             }
         }
     }

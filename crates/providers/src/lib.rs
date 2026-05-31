@@ -1,16 +1,15 @@
 //! Provider interaction API for remote and proxy model services.
 
-mod client;
 mod config;
 mod error;
 mod model;
+mod provider_transport;
 mod providers;
 mod request;
 mod response;
 mod stream;
 mod transport;
 
-pub use client::{ProviderBackend, ProviderClient};
 pub use cogentlm_core::{CapabilitySupport, TokenUsage};
 pub use config::{
     AnthropicConfig, OpenAiConfig, ProviderAuth, ProviderKind, ProxyConfig, ProxyProtocol,
@@ -18,6 +17,7 @@ pub use config::{
 };
 pub use error::{ProviderError, ProviderErrorKind, ProviderResult};
 pub use model::{ProviderCapabilities, ProviderModel};
+pub use provider_transport::{ProviderBackend, ProviderTransport};
 pub use providers::{AnthropicProvider, OpenAiProvider, ProxyProvider};
 pub use request::{
     ProviderChatRequest, ProviderEmbedRequest, ProviderGenerateRequest, ProviderGenerationOptions,

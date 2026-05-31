@@ -6,6 +6,20 @@ use crate::EndpointRef;
 /// Remote free-form options carried by request envelopes.
 pub type RemoteOptions = serde_json::Map<String, serde_json::Value>;
 
+/// Token delivery requested by a text run.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Default)]
+pub enum CogentTokenDelivery {
+    #[default]
+    Off,
+    Batch,
+}
+
+impl CogentTokenDelivery {
+    pub fn emits_tokens(self) -> bool {
+        matches!(self, Self::Batch)
+    }
+}
+
 /// Text generation options shared by local and remote endpoints.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct CogentTextOptions {
@@ -74,8 +88,8 @@ pub struct CogentQueryRequest {
     pub local: LocalTextOptions,
     /// Remote-only request options passed to the remote transport.
     pub remote_options: RemoteOptions,
-    /// Whether to request token streaming when the endpoint supports it.
-    pub stream_tokens: bool,
+    /// Token delivery mode for the returned run handle.
+    pub token_delivery: CogentTokenDelivery,
 }
 
 /// Unified chat request.
@@ -91,8 +105,8 @@ pub struct CogentChatRequest {
     pub local: LocalTextOptions,
     /// Remote-only request options passed to the remote transport.
     pub remote_options: RemoteOptions,
-    /// Whether to request token streaming when the endpoint supports it.
-    pub stream_tokens: bool,
+    /// Token delivery mode for the returned run handle.
+    pub token_delivery: CogentTokenDelivery,
 }
 
 /// Unified single-input embedding request.

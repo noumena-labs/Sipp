@@ -1,8 +1,8 @@
-//! Driver-owned token stream batching over the runtime token byte ring.
+//! Driver-owned token delivery batching over the runtime token byte ring.
 
 use futures_channel::mpsc;
 
-use crate::engine::stream::{StreamStats, TokenBatch};
+use crate::engine::token_delivery::{TokenBatch, TokenDeliveryStats};
 use crate::runtime::numeric::saturating_usize_to_u32;
 use crate::runtime::request::{
     token_byte_ring, TokenByteRingConsumer, TokenByteRingProducer, TokenRingFrame,
@@ -11,33 +11,33 @@ use crate::runtime::request::{
 
 use super::{TOKEN_BATCH_MAX_BYTES, TOKEN_BATCH_MAX_FRAMES};
 
-pub(super) const TOKEN_STREAM_CHANNEL_CAPACITY: usize = 256;
+pub(super) const TOKEN_BATCH_CHANNEL_CAPACITY: usize = 256;
 
-pub(super) struct ActiveTokenStream {
+pub(super) struct ActiveTokenDelivery {
     pub(super) producer: TokenByteRingProducer,
     consumer: TokenByteRingConsumer,
-    state: TokenStreamState,
+    state: TokenDeliveryState,
     batch_tx: mpsc::Sender<TokenBatch>,
     pending_dropped_frames: u64,
     frames: Vec<TokenRingFrame>,
 }
 
-pub(super) fn start_engine_token_stream(
+pub(super) fn start_engine_token_delivery(
     request_id: u32,
     batch_tx: mpsc::Sender<TokenBatch>,
-) -> ActiveTokenStream {
+) -> ActiveTokenDelivery {
     let (producer, consumer) = token_byte_ring(TOKEN_RING_DEFAULT_CAPACITY);
-    ActiveTokenStream {
+    ActiveTokenDelivery {
         producer,
         consumer,
-        state: TokenStreamState::new(request_id),
+        state: TokenDeliveryState::new(request_id),
         batch_tx,
         pending_dropped_frames: 0,
         frames: Vec::with_capacity(TOKEN_BATCH_MAX_FRAMES),
     }
 }
 
-pub(super) fn drain_ring_into_sender(token: &mut ActiveTokenStream) {
+pub(super) fn drain_ring_into_sender(token: &mut ActiveTokenDelivery) {
     loop {
         token.frames.clear();
         let mut latest_drop_count = token.state.last_drop_count;
@@ -96,20 +96,20 @@ pub(super) fn drain_ring_into_sender(token: &mut ActiveTokenStream) {
     }
 }
 
-pub(super) struct TokenStreamState {
+pub(super) struct TokenDeliveryState {
     request_id: u32,
     next_sequence: u32,
     last_drop_count: u64,
-    stats: StreamStats,
+    stats: TokenDeliveryStats,
 }
 
-impl TokenStreamState {
+impl TokenDeliveryState {
     pub(super) fn new(request_id: u32) -> Self {
         Self {
             request_id,
             next_sequence: 0,
             last_drop_count: 0,
-            stats: StreamStats::default(),
+            stats: TokenDeliveryStats::default(),
         }
     }
 }
@@ -117,7 +117,7 @@ impl TokenStreamState {
 pub(super) fn token_batch_from_ring_frames(
     frames: &[TokenRingFrame],
     target_request_id: u32,
-    token_state: &mut TokenStreamState,
+    token_state: &mut TokenDeliveryState,
     drop_count: u64,
 ) -> Option<TokenBatch> {
     let text_capacity = matching_token_frames(frames, target_request_id)
@@ -140,7 +140,7 @@ pub(super) fn token_batch_from_ring_frames(
         byte_count = byte_count.saturating_add(saturating_usize_to_u32(frame.bytes.len()));
     }
 
-    update_stream_drop_stats(token_state, drop_count);
+    update_delivery_drop_stats(token_state, drop_count);
 
     if frame_count == 0 {
         return None;
@@ -149,7 +149,7 @@ pub(super) fn token_batch_from_ring_frames(
     token_state.next_sequence = sequence_start
         .unwrap_or(token_state.next_sequence)
         .saturating_add(frame_count);
-    update_stream_sent_stats(&mut token_state.stats, frame_count, byte_count);
+    update_delivery_sent_stats(&mut token_state.stats, frame_count, byte_count);
 
     Some(TokenBatch {
         request_id: token_state.request_id.to_string(),
@@ -171,13 +171,13 @@ fn matching_token_frames(
         .filter(move |frame| frame.stream_id == stream_id)
 }
 
-fn update_stream_drop_stats(token_state: &mut TokenStreamState, drop_count: u64) {
+fn update_delivery_drop_stats(token_state: &mut TokenDeliveryState, drop_count: u64) {
     let drop_delta = drop_count.saturating_sub(token_state.last_drop_count);
     token_state.last_drop_count = drop_count;
     token_state.stats.frames_dropped = token_state.stats.frames_dropped.saturating_add(drop_delta);
 }
 
-fn update_stream_sent_stats(stats: &mut StreamStats, frame_count: u32, byte_count: u32) {
+fn update_delivery_sent_stats(stats: &mut TokenDeliveryStats, frame_count: u32, byte_count: u32) {
     stats.frames_sent = stats.frames_sent.saturating_add(u64::from(frame_count));
     stats.bytes_sent = stats.bytes_sent.saturating_add(u64::from(byte_count));
     stats.batches_sent = stats.batches_sent.saturating_add(1);
@@ -193,5 +193,5 @@ fn remaining_quota(limit: usize, used: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    mod token_stream_tests;
+    mod token_delivery_tests;
 }

@@ -1,16 +1,17 @@
 import type {
   BrowserEmbeddingRun,
   BrowserTextRun,
-  BrowserTokenStream,
+  BrowserTokenBatches,
   EmbeddingResult,
   GenerationResult,
   TokenBatch,
+  TokenDeliveryMode,
 } from './types.js';
 import { createLinkedAbortController } from '../utils/abort.js';
 
 const TOKEN_QUEUE_CAPACITY = 256;
 
-class BoundedTokenBatchQueue implements BrowserTokenStream, AsyncIterator<TokenBatch> {
+class BoundedTokenBatchQueue implements BrowserTokenBatches, AsyncIterator<TokenBatch> {
   private readonly items: TokenBatch[] = [];
   private readonly waiters: Array<(result: IteratorResult<TokenBatch>) => void> = [];
   private readonly subscribers = new Set<(batch: TokenBatch) => void>();
@@ -95,16 +96,17 @@ class BoundedTokenBatchQueue implements BrowserTokenStream, AsyncIterator<TokenB
  * Create a browser text run with a bounded best-effort token queue.
  */
 export function createBrowserTextRun(
-  options: { signal?: AbortSignal; streamTokens?: boolean },
+  options: { signal?: AbortSignal; tokenDelivery?: TokenDeliveryMode },
   responseFactory: (
-    emitTokens: ((batch: TokenBatch) => void) | undefined,
+    tokenSink: ((batch: TokenBatch) => void) | undefined,
     signal: AbortSignal
   ) => Promise<GenerationResult>
 ): BrowserTextRun {
   const linkedAbort = createLinkedAbortController(options.signal);
   const queue = new BoundedTokenBatchQueue();
+  const tokenDelivery = options.tokenDelivery ?? 'off';
   const response = responseFactory(
-    options.streamTokens === true ? (batch) => queue.push(batch) : undefined,
+    tokenDelivery === 'off' ? undefined : (batch) => queue.push(batch),
     linkedAbort.signal
   ).finally(() => {
     queue.close();

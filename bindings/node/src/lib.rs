@@ -12,8 +12,8 @@ use cogentlm_client::{
     CogentQueryRequest as CoreClientQueryRequest, CogentTextOptions as CoreClientTextOptions,
     CogentTextResponse as CoreClientTextResponse,
     CogentTextResponseFuture as CoreClientTextResponseFuture, CogentTextRun as CoreClientTextRun,
-    CogentTokenStream as CoreClientTokenStream, EndpointRef as CoreEndpointRef,
-    LocalEmbedOptions as CoreClientLocalEmbedOptions,
+    CogentTokenBatches as CoreClientTokenBatches, CogentTokenDelivery as CoreClientTokenDelivery,
+    EndpointRef as CoreEndpointRef, LocalEmbedOptions as CoreClientLocalEmbedOptions,
     LocalTextOptions as CoreClientLocalTextOptions,
     RemoteAnthropicConfig as CoreRemoteAnthropicConfig, RemoteAuth as CoreRemoteAuth,
     RemoteConfig as CoreRemoteConfig, RemoteError as CoreRemoteError,
@@ -55,13 +55,13 @@ mod remote_tests;
 type SharedCogentClient = Arc<Mutex<CoreClient>>;
 type SharedClientTextResponse = Arc<Mutex<Option<CoreClientTextResponseFuture>>>;
 type SharedClientEmbeddingResponse = Arc<Mutex<Option<CoreClientEmbeddingResponseFuture>>>;
-type SharedClientTokenStream = Arc<Mutex<Option<CoreClientTokenStream>>>;
+type SharedClientTokenBatches = Arc<Mutex<Option<CoreClientTokenBatches>>>;
 type ClientTaskOutput<T> = std::result::Result<T, CoreClientError>;
 
 const CLIENT_MUTEX_POISONED: &str = "client mutex is poisoned";
 const CLIENT_TEXT_RESPONSE_CONSUMED: &str = "text response already consumed";
 const CLIENT_EMBEDDING_RESPONSE_CONSUMED: &str = "embedding response already consumed";
-const CLIENT_TOKEN_STREAM_MUTEX_POISONED: &str = "token stream mutex is poisoned";
+const CLIENT_TOKEN_BATCHES_MUTEX_POISONED: &str = "token batches mutex is poisoned";
 const CLIENT_TEXT_RESPONSE_MUTEX_POISONED: &str = "text response mutex is poisoned";
 const CLIENT_EMBEDDING_RESPONSE_MUTEX_POISONED: &str = "embedding response mutex is poisoned";
 
@@ -690,8 +690,8 @@ pub struct CogentQueryRequest {
     pub local: Option<LocalTextOptions>,
     #[napi(js_name = "remoteOptions")]
     pub remote_options: Option<serde_json::Value>,
-    #[napi(js_name = "streamTokens")]
-    pub stream_tokens: Option<bool>,
+    #[napi(js_name = "tokenDelivery")]
+    pub token_delivery: Option<String>,
 }
 
 impl CogentQueryRequest {
@@ -702,7 +702,7 @@ impl CogentQueryRequest {
             options: optional_core_or_default(self.options.as_ref(), CogentTextOptions::to_core)?,
             local: optional_core_or_default(self.local.as_ref(), LocalTextOptions::to_core)?,
             remote_options: remote_options_or_empty(self.remote_options.clone())?,
-            stream_tokens: self.stream_tokens.unwrap_or(false),
+            token_delivery: token_delivery_or_off(self.token_delivery.as_deref())?,
         })
     }
 }
@@ -715,8 +715,8 @@ pub struct CogentChatRequest {
     pub local: Option<LocalTextOptions>,
     #[napi(js_name = "remoteOptions")]
     pub remote_options: Option<serde_json::Value>,
-    #[napi(js_name = "streamTokens")]
-    pub stream_tokens: Option<bool>,
+    #[napi(js_name = "tokenDelivery")]
+    pub token_delivery: Option<String>,
 }
 
 impl CogentChatRequest {
@@ -727,7 +727,7 @@ impl CogentChatRequest {
             options: optional_core_or_default(self.options.as_ref(), CogentTextOptions::to_core)?,
             local: optional_core_or_default(self.local.as_ref(), LocalTextOptions::to_core)?,
             remote_options: remote_options_or_empty(self.remote_options.clone())?,
-            stream_tokens: self.stream_tokens.unwrap_or(false),
+            token_delivery: token_delivery_or_off(self.token_delivery.as_deref())?,
         })
     }
 }
@@ -904,8 +904,9 @@ pub struct RequestStats {
     pub cache_hits: i32,
     pub ttft_ms: Option<f64>,
     pub inter_token_ms: Option<f64>,
+    #[napi(js_name = "e2eMs")]
     pub e2e_ms: Option<f64>,
-    pub tokens_per_second: Option<f64>,
+    pub e2e_tokens_per_second: Option<f64>,
     pub decode_tokens_per_second: Option<f64>,
     pub prefill_ms: f64,
     pub decode_ms: f64,
@@ -1038,7 +1039,7 @@ fn cogent_embedding_response_to_node(
 
 #[napi(object)]
 #[derive(Clone)]
-pub struct StreamStats {
+pub struct TokenDeliveryStats {
     pub frames_sent: f64,
     pub bytes_sent: f64,
     pub frames_dropped: f64,
@@ -1054,7 +1055,7 @@ pub struct TokenBatch {
     pub text: String,
     pub frame_count: u32,
     pub byte_count: u32,
-    pub stats: StreamStats,
+    pub stats: TokenDeliveryStats,
 }
 
 #[napi(js_name = "CogentClient")]
@@ -1139,7 +1140,7 @@ impl CogentClient {
 #[napi(js_name = "CogentTextRun")]
 pub struct CogentTextRun {
     response: SharedClientTextResponse,
-    tokens: SharedClientTokenStream,
+    tokens: SharedClientTokenBatches,
 }
 
 impl CogentTextRun {
@@ -1276,7 +1277,7 @@ impl Task for ClientEmbeddingResultTask {
 }
 
 pub struct ClientNextTokenTask {
-    tokens: SharedClientTokenStream,
+    tokens: SharedClientTokenBatches,
 }
 
 impl Task for ClientNextTokenTask {
@@ -1287,7 +1288,7 @@ impl Task for ClientNextTokenTask {
         let mut guard = self
             .tokens
             .lock()
-            .map_err(|_| napi_error(CLIENT_TOKEN_STREAM_MUTEX_POISONED))?;
+            .map_err(|_| napi_error(CLIENT_TOKEN_BATCHES_MUTEX_POISONED))?;
         let Some(stream) = guard.as_mut() else {
             return Ok(None);
         };
@@ -1327,6 +1328,14 @@ fn optional_endpoint(endpoint: Option<&EndpointRef>) -> Result<Option<CoreEndpoi
     endpoint.map(EndpointRef::to_core).transpose()
 }
 
+fn token_delivery_or_off(value: Option<&str>) -> Result<CoreClientTokenDelivery> {
+    match value.unwrap_or("off") {
+        "off" => Ok(CoreClientTokenDelivery::Off),
+        "batch" => Ok(CoreClientTokenDelivery::Batch),
+        other => Err(invalid_arg(format!("unsupported tokenDelivery: {other}"))),
+    }
+}
+
 fn finite_f64_to_f32(value: f64, name: &'static str) -> Result<f32> {
     if !value.is_finite() || value < f64::from(f32::MIN) || value > f64::from(f32::MAX) {
         return Err(invalid_arg(format!("{name} must be a finite f32")));
@@ -1357,7 +1366,7 @@ fn token_batch_to_node(batch: CoreTokenBatch) -> TokenBatch {
         text: batch.text,
         frame_count: batch.frame_count,
         byte_count: batch.byte_count,
-        stats: StreamStats {
+        stats: TokenDeliveryStats {
             frames_sent: batch.stats.frames_sent as f64,
             bytes_sent: batch.stats.bytes_sent as f64,
             frames_dropped: batch.stats.frames_dropped as f64,
@@ -1374,7 +1383,7 @@ fn request_stats_to_node(stats: CoreRequestStats) -> RequestStats {
         ttft_ms: stats.ttft_ms,
         inter_token_ms: stats.inter_token_ms,
         e2e_ms: stats.e2e_ms,
-        tokens_per_second: stats.tokens_per_second,
+        e2e_tokens_per_second: stats.e2e_tokens_per_second,
         decode_tokens_per_second: stats.decode_tokens_per_second,
         prefill_ms: stats.prefill_ms,
         decode_ms: stats.decode_ms,

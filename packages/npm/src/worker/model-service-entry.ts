@@ -1,8 +1,8 @@
 import { ModelService } from '../models/model-service.js';
-import { QueryError } from '../models/types.js';
+import { QueryError, type TokenBatch, type TokenDeliveryMode } from '../models/types.js';
 import { resolveRuntimeUrls } from '../engine/runtime-assets.js';
 import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.js';
-import { StreamingRingWriter } from '../runtime/streaming-ring.js';
+import { TokenRingWriter } from '../runtime/token-ring.js';
 import {
   WorkerRequestMessage,
   WorkerResponseMessage,
@@ -12,14 +12,14 @@ import {
 let service: ModelService | null = null;
 let serviceConfigFingerprint: string | null = null;
 const activeCalls = new Map<number, AbortController>();
-// SAB streaming ring writer; set on `streaming-init`. When null, streaming
+// SAB token ring writer; set on `token-init`. When null, token delivery
 // requests are rejected upstream.
-let streamingRingWriter: StreamingRingWriter | null = null;
-let streamingTickQueued = false;
+let tokenRingWriter: TokenRingWriter | null = null;
+let tokenTickQueued = false;
 
 type WorkerOperationRequest = Exclude<
   WorkerRequestMessage,
-  { kind: 'cancel' } | { kind: 'streaming-init' }
+  { kind: 'cancel' } | { kind: 'token-init' }
 >;
 
 function buildServiceConfig(config: WorkerRuntimeConfig) {
@@ -35,9 +35,6 @@ function buildServiceConfig(config: WorkerRuntimeConfig) {
   };
 }
 
-// Direct runtime handle for installing the SAB ring writer after ensureService.
-let runtime: MainThreadEngineRuntime | null = null;
-
 function ensureService(config: WorkerRuntimeConfig): ModelService {
   const fingerprint = JSON.stringify(buildServiceConfig(config));
   if (service != null) {
@@ -46,15 +43,11 @@ function ensureService(config: WorkerRuntimeConfig): ModelService {
     }
     return service;
   }
-  runtime = new MainThreadEngineRuntime({
+  const runtime = new MainThreadEngineRuntime({
     ...buildServiceConfig(config),
     executionMode: 'worker',
   });
   service = new ModelService(runtime);
-  if (streamingRingWriter != null) {
-    runtime.setStreamingRingWriter(streamingRingWriter);
-  }
-  runtime.setStreamingTickCallback(scheduleStreamingTick);
   service.subscribeObservability((event) => {
     post({ kind: 'observability-event', event });
   });
@@ -76,14 +69,14 @@ function post(message: WorkerResponseMessage): void {
   self.postMessage(message);
 }
 
-function scheduleStreamingTick(): void {
-  if (streamingTickQueued) {
+function scheduleTokenTick(): void {
+  if (tokenTickQueued) {
     return;
   }
-  streamingTickQueued = true;
+  tokenTickQueued = true;
   self.setTimeout(() => {
-    streamingTickQueued = false;
-    post({ kind: 'streaming-tick' });
+    tokenTickQueued = false;
+    post({ kind: 'token-tick' });
   }, 0);
 }
 
@@ -114,30 +107,36 @@ function postLoadProgress(callId: number): NonNullable<Parameters<ModelService['
   };
 }
 
-// Wires the engine to emit tokens through the SAB ring and publishes a
-// `streaming-claim` message so the main thread can map the native request id
-// back to its call id.  When `streaming=false`, returns {} so the engine
-// selects TOKEN_EMISSION_NONE.
-function streamingOptionsFor(
+// Wires a service-level token sink to the SAB ring and publishes a
+// `token-claim` message so the main thread can map the native request id
+// back to its call id. Chat and query use this same path, so chat boundary
+// sanitization stays inside ModelService.
+function tokenDeliveryOptionsFor(
   callId: number,
-  streaming: boolean
+  tokenDelivery: TokenDeliveryMode
 ): {
-  streamTokens?: boolean;
+  tokenDelivery: TokenDeliveryMode;
+  tokenSink?: (batch: TokenBatch) => void;
   onRequestStarted?: (requestId: number) => void;
 } {
-  if (!streaming) {
-    return {};
+  if (tokenDelivery === 'off') {
+    return { tokenDelivery };
   }
-  if (streamingRingWriter == null) {
+  if (tokenRingWriter == null) {
     throw new QueryError(
-      'STREAMING_UNAVAILABLE',
-      'Worker streaming requires SharedArrayBuffer. Enable cross-origin isolation or run without streamTokens.'
+      'TOKEN_DELIVERY_UNAVAILABLE',
+      'Worker token delivery requires SharedArrayBuffer. Enable cross-origin isolation or run with tokenDelivery: "off".'
     );
   }
   return {
-    streamTokens: true,
+    tokenDelivery,
+    tokenSink: (batch) => {
+      if (batch.text.length > 0 && tokenRingWriter?.tryWriteString(batch.streamId, batch.text)) {
+        scheduleTokenTick();
+      }
+    },
     onRequestStarted: (requestId) =>
-      post({ kind: 'streaming-claim', callId, nativeRequestId: requestId }),
+      post({ kind: 'token-claim', callId, nativeRequestId: requestId }),
   };
 }
 
@@ -163,32 +162,30 @@ async function handleRequest(message: WorkerOperationRequest): Promise<unknown> 
     }
     case 'query':
       return await withAbortController(message.callId, (signal) => {
-        const streaming = streamingOptionsFor(message.callId, message.options.streaming);
-        const { streaming: _streaming, ...options } = message.options;
+        const delivery = tokenDeliveryOptionsFor(message.callId, message.options.tokenDelivery);
         return ensureService(message.config).runQuery(
           message.input,
           {
-            ...options,
+            ...message.options,
             signal,
-            streamTokens: streaming.streamTokens,
-            onRequestStarted: streaming.onRequestStarted,
-          },
-          undefined
+            tokenDelivery: delivery.tokenDelivery,
+            tokenSink: delivery.tokenSink,
+            onRequestStarted: delivery.onRequestStarted,
+          }
         );
       });
     case 'chat':
       return await withAbortController(message.callId, (signal) => {
-        const streaming = streamingOptionsFor(message.callId, message.options.streaming);
-        const { streaming: _streaming, ...options } = message.options;
+        const delivery = tokenDeliveryOptionsFor(message.callId, message.options.tokenDelivery);
         return ensureService(message.config).runChat(
           message.input,
           {
-            ...options,
+            ...message.options,
             signal,
-            streamTokens: streaming.streamTokens,
-            onRequestStarted: streaming.onRequestStarted,
-          },
-          undefined
+            tokenDelivery: delivery.tokenDelivery,
+            tokenSink: delivery.tokenSink,
+            onRequestStarted: delivery.onRequestStarted,
+          }
         );
       });
     case 'embed':
@@ -207,14 +204,11 @@ self.onmessage = async (event: MessageEvent<WorkerRequestMessage>) => {
     abortActiveCall(message.targetCallId);
     return;
   }
-  if (message.kind === 'streaming-init') {
-    streamingRingWriter =
+  if (message.kind === 'token-init') {
+    tokenRingWriter =
       message.ringBuffer != null
-        ? new StreamingRingWriter(message.ringBuffer)
+        ? new TokenRingWriter(message.ringBuffer)
         : null;
-    if (runtime != null) {
-      runtime.setStreamingRingWriter(streamingRingWriter);
-    }
     return;
   }
 

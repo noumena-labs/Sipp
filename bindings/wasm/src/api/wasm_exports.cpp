@@ -45,7 +45,7 @@ int cogentlm_browser_engine_cancel_request(void *engine,
                                            CE_RequestId request_id);
 int cogentlm_browser_engine_run_scheduler_loop(
     void *engine, int max_ticks, int max_completed_responses,
-    int max_emitted_tokens, int max_duration_us, int streaming_active,
+    int max_emitted_tokens, int max_duration_us, int interactive_token_delivery,
     CE_SchedulerLoopResult *out_result);
 int cogentlm_browser_engine_completed_request_status(
     const void *engine, CE_RequestId request_id);
@@ -77,10 +77,10 @@ int cogentlm_browser_engine_runtime_observability(
 int cogentlm_browser_engine_completed_runtime_observability(
     const void *engine, CE_RequestId request_id,
     CE_RuntimeObservabilityMetrics *out_metrics);
-std::uint8_t *cogentlm_browser_engine_streaming_buffer_pointer(void *engine);
-std::int32_t *cogentlm_browser_engine_streaming_buffer_used_address(
+std::uint8_t *cogentlm_browser_engine_token_buffer_pointer(void *engine);
+std::int32_t *cogentlm_browser_engine_token_buffer_used_address(
     void *engine);
-std::int32_t *cogentlm_browser_engine_streaming_buffer_drop_count_address(
+std::int32_t *cogentlm_browser_engine_token_buffer_drop_count_address(
     void *engine);
 char *cogentlm_browser_engine_media_marker(const void *engine);
 char *cogentlm_browser_engine_chat_template(const void *engine);
@@ -784,11 +784,11 @@ int CE_GetRuntimeObservability(CE_RuntimeObservabilityMetrics *out_metrics) {
 EMSCRIPTEN_KEEPALIVE
 int CE_RunSchedulerLoop(int32_t max_ticks, int32_t max_completed_responses,
                         int32_t max_emitted_tokens, int32_t max_duration_us,
-                        int32_t streaming_active,
+                        int32_t interactive_token_delivery,
                         CE_SchedulerLoopResult *out_result) {
   return cogentlm_browser_engine_run_scheduler_loop(
       g_rustBrowserEngine, max_ticks, max_completed_responses,
-      max_emitted_tokens, max_duration_us, streaming_active, out_result);
+      max_emitted_tokens, max_duration_us, interactive_token_delivery, out_result);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -807,19 +807,19 @@ int CE_GetCompletedRequestOutputKind(CE_RequestId request_id) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-const uint8_t *CE_GetStreamingBufferPointer() {
-  return cogentlm_browser_engine_streaming_buffer_pointer(g_rustBrowserEngine);
+const uint8_t *CE_GetTokenBufferPointer() {
+  return cogentlm_browser_engine_token_buffer_pointer(g_rustBrowserEngine);
 }
 
 EMSCRIPTEN_KEEPALIVE
-int32_t *CE_GetStreamingBufferUsedAddress() {
-  return cogentlm_browser_engine_streaming_buffer_used_address(
+int32_t *CE_GetTokenBufferUsedAddress() {
+  return cogentlm_browser_engine_token_buffer_used_address(
       g_rustBrowserEngine);
 }
 
 EMSCRIPTEN_KEEPALIVE
-int32_t *CE_GetStreamingBufferDropCountAddress() {
-  return cogentlm_browser_engine_streaming_buffer_drop_count_address(
+int32_t *CE_GetTokenBufferDropCountAddress() {
+  return cogentlm_browser_engine_token_buffer_drop_count_address(
       g_rustBrowserEngine);
 }
 
@@ -898,7 +898,7 @@ void CE_FreeString(char *str) {
 }
 
 // Called by the Rust browser engine between scheduler bursts. Lets the host
-// (worker thread) snapshot the native streaming buffer into the SAB ring so
+// (worker thread) snapshot the native token buffer into the SAB ring so
 // the main thread can render tokens mid-flight without a full ccall round
 // trip per token. Kept synchronous on purpose; the worker is dedicated to
 // inference and the JS hook only does a fast HEAP->SAB copy.

@@ -3,9 +3,9 @@ import type {
   ChatMessage,
   NativeRuntimeConfig,
   PoolingType,
-  StreamStats,
+  TokenDeliveryStats,
   TokenBatch,
-  TokenFlushMode,
+  TokenDeliveryMode,
 } from '../engine/inference-types.js';
 import type { OpfsSyncAccessHandle } from '../engine/file-system-storage.js';
 
@@ -185,8 +185,7 @@ export interface QueryOptions {
   session?: string;
   maxTokens?: number;
   signal?: AbortSignal;
-  streamTokens?: boolean;
-  tokenFlush?: TokenFlushMode;
+  tokenDelivery?: TokenDeliveryMode;
   grammar?: string;
 }
 
@@ -201,6 +200,7 @@ export type ChatOptions = QueryOptions;
 
 export interface InternalTextRequestOptions extends QueryOptions {
   onRequestStarted?: (requestId: number) => void;
+  tokenSink?: (batch: TokenBatch) => void;
 }
 
 export interface QueryObservation {
@@ -232,19 +232,20 @@ export interface RuntimeObservation {
   cacheHits: number;
   prefillTokens: number;
 
-  tokensPerSecond: number | null;
+  decodeTokensPerSecond: number | null;
+  e2eTokensPerSecond: number | null;
   prefillTokensPerSecond: number | null;
 
   // JS Side & Transport Metadata
   execution: {
     mode: 'main-thread' | 'worker';
     workerBacked: boolean;
-    tokenPath?: 'none' | 'streaming-buffer' | 'callback';
+    tokenPath?: 'none' | 'token-sink';
   };
 
   /** Cumulative ms spent in `_ce_yield_drain` (SAB ring writes from native scratch). */
-  jsStreamingDrainMs?: number;
-  jsStreamingDrainCount?: number;
+  jsTokenDrainMs?: number;
+  jsTokenDrainCount?: number;
 }
 
 export interface BackendProfileObservation {
@@ -301,7 +302,8 @@ export interface EngineStats {
   ttftMs: number | null;
   interTokenMs: number | null;
   e2eMs: number | null;
-  tokensPerSecond: number | null;
+  decodeTokensPerSecond: number | null;
+  e2eTokensPerSecond: number | null;
   prefillTokensPerSecond: number | null;
   prefillMs: number;
   decodeMs: number;
@@ -326,7 +328,8 @@ export interface RequestStats {
   ttftMs: number | null;
   interTokenMs: number | null;
   e2eMs: number | null;
-  tokensPerSecond: number | null;
+  decodeTokensPerSecond: number | null;
+  e2eTokensPerSecond: number | null;
   prefillMs: number;
   decodeMs: number;
 }
@@ -358,7 +361,7 @@ export interface EmbeddingResult {
 /**
  * Token batches produced by a browser text run.
  */
-export interface BrowserTokenStream extends AsyncIterable<TokenBatch> {
+export interface BrowserTokenBatches extends AsyncIterable<TokenBatch> {
   /**
    * Attach a direct batch listener for latency-sensitive render paths.
    */
@@ -367,7 +370,7 @@ export interface BrowserTokenStream extends AsyncIterable<TokenBatch> {
 
 export interface BrowserTextRun {
   readonly response: Promise<GenerationResult>;
-  readonly tokens: BrowserTokenStream;
+  readonly tokens: BrowserTokenBatches;
   cancel(reason?: unknown): void;
 }
 
@@ -384,7 +387,7 @@ export type EngineEvent =
   | { type: 'request-failed'; requestId: string; error: string }
   | { type: 'closed' };
 
-export type { StreamStats, TokenBatch, TokenFlushMode };
+export type { TokenDeliveryStats, TokenBatch, TokenDeliveryMode };
 
 export interface ObservabilitySnapshot {
   mode: ObservabilityMode;
@@ -414,13 +417,11 @@ export interface ModelLifecycleService {
   remove(id: string): Promise<void>;
   runQuery(
     input: QueryInput,
-    options: InternalTextRequestOptions,
-    emitTokens: ((batch: TokenBatch) => void) | undefined
+    options: InternalTextRequestOptions
   ): Promise<GenerationResult>;
   runChat(
     input: ChatInput,
-    options: InternalTextRequestOptions,
-    emitTokens: ((batch: TokenBatch) => void) | undefined
+    options: InternalTextRequestOptions
   ): Promise<GenerationResult>;
   runEmbedding(input: string, options: EmbedOptions): Promise<EmbeddingResult>;
   state(): EngineState;
@@ -461,7 +462,7 @@ export type QueryErrorCode =
   | 'STORAGE_CORRUPT'
   | 'REMOTE_METADATA_UNAVAILABLE'
   | 'REMOTE_LOAD_FAILED'
-  | 'STREAMING_UNAVAILABLE'
+  | 'TOKEN_DELIVERY_UNAVAILABLE'
   | 'QUERY_FAILED';
 
 export class QueryError extends Error {

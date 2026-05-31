@@ -37,7 +37,7 @@ fn runtime_metrics_map_to_engine_stats() {
     assert_eq!(stats.ttft_ms, Some(10.0));
     assert_eq!(stats.inter_token_ms, Some(5.0));
     assert_eq!(stats.e2e_ms, Some(100.0));
-    assert_eq!(stats.tokens_per_second, Some(40.0));
+    assert_eq!(stats.e2e_tokens_per_second, Some(40.0));
     assert_eq!(stats.prefill_tokens_per_second, Some(200.0));
     assert_eq!(stats.backend_ms, 60.0);
     assert_eq!(stats.sync_ms, 15.0);
@@ -89,7 +89,7 @@ fn completed_response_maps_to_generation_result() {
     assert_eq!(result.text, "hello");
     assert_eq!(result.finish_reason, FinishReason::Stop);
     assert_eq!(result.stats.output_tokens, 5);
-    assert_eq!(result.stats.tokens_per_second, Some(100.0));
+    assert_eq!(result.stats.e2e_tokens_per_second, Some(100.0));
 }
 
 #[test]

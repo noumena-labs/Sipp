@@ -46,12 +46,12 @@ function buildCueMap(cues: readonly ActionCue[]): Map<string, ActionCue> {
 }
 
 /**
- * Stateful streaming parser. Instantiate once per turn and feed decoded
+ * Stateful incremental parser. Instantiate once per turn and feed decoded
  * text chunks in order. Call {@link flush} at end-of-turn to surface any
  * trailing prose. The parser never emits a partial cue — it waits for the
  * closing `]` to arrive before resolving.
  */
-export class StreamingActionParser {
+export class IncrementalActionParser {
   private buffer = '';
   private readonly cueMap: Map<string, ActionCue>;
 
@@ -65,7 +65,7 @@ export class StreamingActionParser {
 
   /**
    * Accepts a new chunk of text and returns zero or more events derived
-   * from what has been seen so far, in stream order. Any unfinished cue
+   * from what has been seen so far, in chunk order. Any unfinished cue
    * (open `[` without a matching `]`) is retained in the internal buffer.
    */
   public consume(chunk: string): ParsedEvent[] {

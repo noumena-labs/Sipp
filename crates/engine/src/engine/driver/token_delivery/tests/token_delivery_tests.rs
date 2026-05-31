@@ -1,4 +1,4 @@
-//! Unit tests for the token stream module.
+//! Unit tests for the token delivery module.
 
 use super::super::*;
 use crate::runtime::request::TokenRingFrame;
@@ -25,7 +25,7 @@ fn token_ring_frames_are_batched_by_request() {
             bytes: b"lo".to_vec(),
         },
     ];
-    let mut state = TokenStreamState::new(1);
+    let mut state = TokenDeliveryState::new(1);
 
     let batch = token_batch_from_ring_frames(&frames, 1, &mut state, 0).expect("token batch");
 
@@ -54,7 +54,7 @@ fn token_ring_batch_tracks_drops_and_sequences() {
         flags: 0,
         bytes: b"bc".to_vec(),
     }];
-    let mut state = TokenStreamState::new(3);
+    let mut state = TokenDeliveryState::new(3);
 
     let first = token_batch_from_ring_frames(&first, 3, &mut state, 2).expect("first batch");
     let second = token_batch_from_ring_frames(&second, 3, &mut state, 5).expect("second batch");
@@ -76,7 +76,7 @@ fn token_ring_batch_stats_saturate() {
         flags: 0,
         bytes: b"a".to_vec(),
     }];
-    let mut state = TokenStreamState::new(1);
+    let mut state = TokenDeliveryState::new(1);
     state.stats.frames_sent = u64::MAX;
     state.stats.bytes_sent = u64::MAX;
     state.stats.batches_sent = u64::MAX;

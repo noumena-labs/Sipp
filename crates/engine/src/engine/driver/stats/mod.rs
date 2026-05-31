@@ -30,7 +30,7 @@ pub(super) fn engine_stats_from_runtime(metrics: RuntimeObservabilityMetrics) ->
         ttft_ms: timings.ttft_ms,
         inter_token_ms: timings.inter_token_ms,
         e2e_ms: timings.e2e_ms,
-        tokens_per_second: rates.output_tokens_per_second,
+        e2e_tokens_per_second: rates.e2e_tokens_per_second,
         decode_tokens_per_second: rates.decode_tokens_per_second,
         prefill_tokens_per_second: rates.prefill_tokens_per_second,
         prefill_ms: metrics.prefill_ms,
@@ -123,7 +123,7 @@ pub(super) fn request_stats_from_runtime(metrics: RuntimeObservabilityMetrics) -
         ttft_ms: timings.ttft_ms,
         inter_token_ms: timings.inter_token_ms,
         e2e_ms: timings.e2e_ms,
-        tokens_per_second: rates.output_tokens_per_second,
+        e2e_tokens_per_second: rates.e2e_tokens_per_second,
         decode_tokens_per_second: rates.decode_tokens_per_second,
         prefill_ms: metrics.prefill_ms,
         decode_ms: metrics.decode_ms,
@@ -171,7 +171,7 @@ impl RuntimeMetricTimings {
 }
 
 struct RuntimeMetricRates {
-    output_tokens_per_second: Option<f64>,
+    e2e_tokens_per_second: Option<f64>,
     decode_tokens_per_second: Option<f64>,
     prefill_tokens_per_second: Option<f64>,
 }
@@ -179,12 +179,9 @@ struct RuntimeMetricRates {
 impl RuntimeMetricRates {
     fn from_metrics(metrics: RuntimeObservabilityMetrics) -> Self {
         Self {
-            output_tokens_per_second: tokens_per_second(metrics.output_tokens, metrics.e2e_ms),
-            decode_tokens_per_second: tokens_per_second(metrics.output_tokens, metrics.decode_ms),
-            prefill_tokens_per_second: tokens_per_second(
-                metrics.prefill_tokens,
-                metrics.prefill_ms,
-            ),
+            e2e_tokens_per_second: token_rate(metrics.output_tokens, metrics.e2e_ms),
+            decode_tokens_per_second: token_rate(metrics.output_tokens, metrics.decode_ms),
+            prefill_tokens_per_second: token_rate(metrics.prefill_tokens, metrics.prefill_ms),
         }
     }
 }
@@ -193,7 +190,7 @@ pub(super) fn non_zero_metric(value: f64) -> Option<f64> {
     (value > 0.0).then_some(value)
 }
 
-fn tokens_per_second(output_tokens: i32, elapsed_ms: f64) -> Option<f64> {
+fn token_rate(output_tokens: i32, elapsed_ms: f64) -> Option<f64> {
     (output_tokens > 0 && elapsed_ms > 0.0)
         .then(|| f64::from(output_tokens) / (elapsed_ms / MILLIS_PER_SECOND_F64))
 }

@@ -31,10 +31,10 @@ import { withDerivedObservabilityMetrics } from '../engine/inference-types.js';
 import { createAbortError } from '../utils/abort.js';
 import { assertGrammarByteSize } from '../utils/grammar.js';
 
-// Mirror of CE_TokenEmissionMode in native/api/ffi_types.h.  Native exposes
-// only NONE (no emission) and STREAMING_BUFFER (SAB ring).
+// Mirror of CE_TokenEmissionMode in native/api/ffi_types.h. Native exposes
+// only NONE (no emission) and TOKEN_BUFFER (SAB ring).
 export const TOKEN_EMISSION_NONE = 0;
-export const TOKEN_EMISSION_STREAMING_BUFFER = 1;
+export const TOKEN_EMISSION_TOKEN_BUFFER = 1;
 
 export const COMPLETED_REQUEST_STATUS_PENDING = 0;
 export const COMPLETED_REQUEST_STATUS_COMPLETED = 1;
@@ -50,14 +50,14 @@ const SCHEDULER_LOOP_RESULT_SIZE_BYTES = 16;
 
 export type TokenEmissionMode =
   | typeof TOKEN_EMISSION_NONE
-  | typeof TOKEN_EMISSION_STREAMING_BUFFER;
+  | typeof TOKEN_EMISSION_TOKEN_BUFFER;
 
 function validateGrammarSize(grammar: string | undefined): void {
   assertGrammarByteSize(grammar);
 }
 
 function validateTokenEmissionMode(mode: TokenEmissionMode): void {
-  if (mode !== TOKEN_EMISSION_NONE && mode !== TOKEN_EMISSION_STREAMING_BUFFER) {
+  if (mode !== TOKEN_EMISSION_NONE && mode !== TOKEN_EMISSION_TOKEN_BUFFER) {
     throw new Error(`invalid token emission mode ${mode}.`);
   }
 }
@@ -316,7 +316,7 @@ function normalizeLifecycleErrorCode(code: string | undefined): QueryErrorCode {
     case 'STORAGE_CORRUPT':
     case 'REMOTE_METADATA_UNAVAILABLE':
     case 'REMOTE_LOAD_FAILED':
-    case 'STREAMING_UNAVAILABLE':
+    case 'TOKEN_DELIVERY_UNAVAILABLE':
     case 'QUERY_FAILED':
       return code;
     default:
@@ -1005,17 +1005,11 @@ export class WasmBridge {
     maxEmittedTokens: number,
     options: {
       maxDurationUs?: number;
-      // Tells the native scheduler whether to use the per-emitted-token
-      // yield path (true, for streaming requests) or the monolithic loop
-      // (false, for bulk requests). Setting this incorrectly is not a
-      // correctness bug — only a performance one: streaming requests with
-      // false won't deliver tokens until the loop returns; bulk requests
-      // with true pay per-burst yielding overhead for no reason.
-      streamingActive?: boolean;
+      interactiveTokenDelivery?: boolean;
     } = {}
   ): Promise<WasmSchedulerProgressResult> {
     const maxDurationUs = Math.max(0, options.maxDurationUs ?? 0);
-    const streamingActive = options.streamingActive === true ? 1 : 0;
+    const interactiveTokenDelivery = options.interactiveTokenDelivery === true ? 1 : 0;
     const resultPtr = this.ensureLoopResultBuffer();
 
     const stepResult = await this.callNumberAsync(
@@ -1026,7 +1020,7 @@ export class WasmBridge {
         maxCompletedResponses,
         maxEmittedTokens,
         maxDurationUs,
-        streamingActive,
+        interactiveTokenDelivery,
         resultPtr,
       ]
     );
@@ -1038,20 +1032,20 @@ export class WasmBridge {
     };
   }
 
-  // Streaming buffer init-time accessors.  Stable wasm-heap addresses; the
+  // Token buffer init-time accessors. Stable wasm-heap addresses; the
   // caller caches them once and afterwards touches the buffer and counter
   // cells via HEAPU8 / HEAP32 directly (zero ccalls).  Returns 0 when no
   // engine is initialized.
-  public getStreamingBufferPointer(): number {
-    return this.callNumber('CE_GetStreamingBufferPointer');
+  public getTokenBufferPointer(): number {
+    return this.callNumber('CE_GetTokenBufferPointer');
   }
 
-  public getStreamingBufferUsedAddress(): number {
-    return this.callNumber('CE_GetStreamingBufferUsedAddress');
+  public getTokenBufferUsedAddress(): number {
+    return this.callNumber('CE_GetTokenBufferUsedAddress');
   }
 
-  public getStreamingBufferDropCountAddress(): number {
-    return this.callNumber('CE_GetStreamingBufferDropCountAddress');
+  public getTokenBufferDropCountAddress(): number {
+    return this.callNumber('CE_GetTokenBufferDropCountAddress');
   }
 
   public releaseReusableBuffers(): void {

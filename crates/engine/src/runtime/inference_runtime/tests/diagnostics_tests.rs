@@ -7,7 +7,7 @@ fn no_progress_diagnostic_includes_all_counters() {
         decode_ready: 2,
         prefill_ready: 3,
         decode_without_seed: 4,
-        streaming_without_buffer: 5,
+        emit_without_buffer: 5,
     }
     .to_message();
 
@@ -15,5 +15,5 @@ fn no_progress_diagnostic_includes_all_counters() {
     assert!(message.contains("decode_ready=2"));
     assert!(message.contains("prefill_ready=3"));
     assert!(message.contains("decode_without_seed=4"));
-    assert!(message.contains("streaming_without_buffer=5"));
+    assert!(message.contains("emit_without_buffer=5"));
 }

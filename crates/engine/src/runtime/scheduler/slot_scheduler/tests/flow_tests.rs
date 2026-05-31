@@ -178,7 +178,7 @@ fn emit_buffered_piece_appends_output_and_stream_frame_when_enabled() {
     queue.token_ring_producers.insert(1, producer);
     let mut slot = SlotState::new(0);
     let mut request = request(1, "ctx");
-    request.token_emission_mode = GenerateTokenEmissionMode::TokenStream;
+    request.token_emission_mode = GenerateTokenEmissionMode::TokenBatches;
     slot.attach_request(request, SequenceState::default());
     slot.buffered_output_text = "tok".to_string();
 

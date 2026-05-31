@@ -33,11 +33,11 @@ pub trait ProviderBackend: Send + Sync {
 }
 
 #[derive(Clone)]
-pub struct ProviderClient {
+pub struct ProviderTransport {
     backend: Arc<dyn ProviderBackend>,
 }
 
-impl ProviderClient {
+impl ProviderTransport {
     pub fn from_backend(backend: Arc<dyn ProviderBackend>) -> Self {
         Self { backend }
     }

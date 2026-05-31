@@ -1,7 +1,7 @@
 mod config;
 mod driver;
 pub mod protocol;
-mod stream;
+mod token_delivery;
 
 pub use config::{
     CacheKeyPolicy, CacheRuntimeConfig, ContextRuntimeConfig, FlashAttentionMode, GenerateOptions,
@@ -14,18 +14,18 @@ pub use config::{
 pub use driver::{
     ChatMessage, ChatRequest, ChatRole, CogentEngine, EngineEmbeddingResponseFuture,
     EngineEmbeddingRun, EngineEventReceiver, EngineLoad, EngineTextResponseFuture, EngineTextRun,
-    EngineTokenStream, QueryOptions, QueryRequest,
+    EngineTokenBatches, QueryOptions, QueryRequest, TokenDelivery,
 };
 pub use protocol::{
     EmbedOptions, EmbedRequest, EmbeddingCapabilities, EmbeddingResult, EngineEvent, EngineState,
     EngineStats, FinishReason, GenerationResult, ModelCapabilities, ModelClass, PoolingType,
     RequestStats,
 };
-pub use stream::{StreamStats, TokenBatch};
+pub use token_delivery::{TokenBatch, TokenDeliveryStats};
 
 #[cfg(test)]
 mod tests {
-    use super::{ChatMessage, ChatRole, FinishReason, StreamStats, TokenBatch};
+    use super::{ChatMessage, ChatRole, FinishReason, TokenBatch, TokenDeliveryStats};
 
     #[test]
     fn shared_core_types_reexport_from_engine() {
@@ -39,7 +39,7 @@ mod tests {
             text: "hello".to_string(),
             frame_count: 1,
             byte_count: 5,
-            stats: StreamStats::default(),
+            stats: TokenDeliveryStats::default(),
         };
         assert_eq!(batch.text, "hello");
         assert_eq!(FinishReason::Stop.as_str(), "stop");

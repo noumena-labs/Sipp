@@ -379,7 +379,7 @@ impl InferenceRuntime {
         debug_metrics.token_piece_ms = token_piece_ms;
         let emit_start = debug_metrics_enabled.then(Instant::now);
         for slot in &mut self.slot_scheduler.slots {
-            if slot.phase == SlotPhase::Streaming && !slot.buffered_output_text.is_empty() {
+            if slot.phase == SlotPhase::EmitBuffered && !slot.buffered_output_text.is_empty() {
                 SlotScheduler::emit_buffered_token_piece(&mut self.request_queue, slot);
             }
         }

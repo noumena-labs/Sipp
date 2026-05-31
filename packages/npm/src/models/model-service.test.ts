@@ -616,7 +616,7 @@ class FakeRuntime implements EngineRuntime {
     this.queuedRequests.set(requestId, { promptText, options });
     if (typeof options === 'object' && this.streamedTokens.length > 0) {
       const text = this.streamedTokens.join('');
-      options.onTokens?.({
+      options.tokenDelivery?.sink?.({
         requestId: String(requestId),
         streamId: requestId,
         sequenceStart: 0,
@@ -994,10 +994,10 @@ test('ModelService loads, lists, tracks current, and queries text models', async
   const answer = await service.runQuery(
     'hello',
     {
-      streamTokens: true,
-    },
-    (batch) => {
-      tokens.push(batch.text);
+      tokenDelivery: 'batch',
+      tokenSink: (batch) => {
+        tokens.push(batch.text);
+      },
     }
   );
   assert.equal(answer.text, 'answer:hello');
@@ -1005,7 +1005,7 @@ test('ModelService loads, lists, tracks current, and queries text models', async
   assert.equal(runtime.lastPrompt, 'hello');
 });
 
-test('ModelService.embed returns embedding results without token streaming', async () => {
+test('ModelService.embed returns embedding results without token delivery', async () => {
   const { service, runtime } = createService();
   await service.load(file('embedding-model.gguf'));
 
@@ -1117,10 +1117,10 @@ test('ModelService.chat renders chat templates and sanitizes assistant boundarie
       { role: 'user', content: 'Say hello.' },
     ],
     {
-      streamTokens: true,
-    },
-    (batch) => {
-      tokens.push(batch.text);
+      tokenDelivery: 'batch',
+      tokenSink: (batch) => {
+        tokens.push(batch.text);
+      },
     }
   );
 
@@ -1131,7 +1131,7 @@ test('ModelService.chat renders chat templates and sanitizes assistant boundarie
   assert.ok(runtime.lastPrompt?.endsWith('<assistant>\n'));
 });
 
-test('ModelService.chat keeps token emission off when streamTokens is not requested', async () => {
+test('ModelService.chat keeps token emission off when token delivery is not requested', async () => {
   const { service, runtime } = createService();
   await service.load(file('text-model.gguf'));
   runtime.nextOutputText = 'Hello there</assistant>\n<user>ignored';
@@ -1140,27 +1140,28 @@ test('ModelService.chat keeps token emission off when streamTokens is not reques
     [
       { role: 'user', content: 'Say hello.' },
     ],
-    {},
-    undefined
+    {}
   );
 
   const options = runtime.enqueuedOptions.at(-1);
   assert.equal(answer.text, 'Hello there');
   assert.equal(typeof options, 'object');
-  assert.equal(typeof (options as PromptOptions).onTokens, 'undefined');
+  assert.equal((options as PromptOptions).tokenDelivery, undefined);
 });
 
-test('ModelService can enable token emission without a local callback', async () => {
+test('ModelService passes interactive token delivery to the runtime', async () => {
   const { service, runtime } = createService();
   await service.load(file('text-model.gguf'));
 
-  await service.runQuery('hello', { streamTokens: true, tokenFlush: 'token' }, undefined);
+  await service.runQuery('hello', {
+    tokenDelivery: 'interactive',
+    tokenSink: () => {},
+  });
 
   const options = runtime.enqueuedOptions.at(-1);
   assert.equal(typeof options, 'object');
-  assert.equal((options as PromptOptions).streamTokens, true);
-  assert.equal((options as PromptOptions).tokenFlush, 'token');
-  assert.equal(typeof (options as PromptOptions).onTokens, 'undefined');
+  assert.equal((options as PromptOptions).tokenDelivery?.mode, 'interactive');
+  assert.equal(typeof (options as PromptOptions).tokenDelivery?.sink, 'function');
 });
 
 test('ModelService removes current models and deletes orphaned assets', async () => {
@@ -1185,7 +1186,7 @@ test('ModelService rejects queries during lifecycle transitions and serializes c
   const firstLoad = service.load(file('slow.gguf'));
   await new Promise((resolve) => setTimeout(resolve, 0));
   await assert.rejects(
-    () => service.runQuery('too early', {}, undefined),
+    () => service.runQuery('too early', {}),
     (error) => error instanceof QueryError && error.code === 'MODEL_NOT_READY'
   );
 

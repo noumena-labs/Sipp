@@ -22,7 +22,7 @@ def main() -> None:
         ],
         endpoint=endpoint,
         options=text_options(),
-        stream_tokens=True,
+        token_delivery="batch",
     )
     streamed = ""
     for batch in run.tokens():

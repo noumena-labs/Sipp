@@ -134,7 +134,7 @@ impl SlotScheduler {
             let mut metrics_request: Option<(GenerateRequest, Instant)> = None;
 
             // Embedding-finalization wins when present: the embedding-read
-            // path set `embedding_output` at terminal time and the streaming
+            // path set `embedding_output` at terminal time and the emit-buffer
             // text buffer is ignored. Otherwise fall back to the text path.
             let output = if let Some(embedding) = slot.embedding_output.take() {
                 ResponseOutput::Embedding {
@@ -201,11 +201,11 @@ impl SlotScheduler {
         let mut should_emit = false;
 
         if let Some(request) = slot.request_mut() {
-            should_emit = request.token_emission_mode == GenerateTokenEmissionMode::TokenStream;
+            should_emit = request.token_emission_mode == GenerateTokenEmissionMode::TokenBatches;
         }
 
         if should_emit {
-            request_queue.append_streaming_token(request_id, &buffered);
+            request_queue.append_token_piece(request_id, &buffered);
         }
         slot.output_text.push_str(&buffered);
     }

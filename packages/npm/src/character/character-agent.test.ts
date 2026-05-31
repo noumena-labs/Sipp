@@ -20,7 +20,7 @@ import type {
   GenerationResult,
   TokenBatch,
 } from '../models/types.js';
-import { StreamingBoundaryTextSanitizer } from '../engine/chat-boundary-sanitizer.js';
+import { TokenBoundaryTextSanitizer } from '../engine/chat-boundary-sanitizer.js';
 import { CharacterEventBus, type CharacterEvent } from './action-bus.js';
 import {
   CharacterRuntime,
@@ -189,7 +189,7 @@ async function runScript(
   let rawOutput = '';
   let safeOutput = '';
   const batches: TokenBatch[] = [];
-  const sanitizer = new StreamingBoundaryTextSanitizer([
+  const sanitizer = new TokenBoundaryTextSanitizer([
     '</assistant>\n',
     '<system>\n',
     '<user>\n',
@@ -228,6 +228,11 @@ function generationResult(text: string): GenerationResult {
       inputTokens: 1,
       outputTokens: 1,
       cacheHits: 0,
+      ttftMs: null,
+      interTokenMs: null,
+      e2eMs: null,
+      decodeTokensPerSecond: null,
+      e2eTokensPerSecond: null,
       prefillMs: 0,
       decodeMs: 0,
     },
@@ -314,7 +319,7 @@ test('chat() threads grammar and maxOutputTokens into queuePrompt options', asyn
   assert.equal(opts.maxTokens, 42);
   assert.equal(typeof opts.grammar, 'string');
   assert.ok(opts.grammar && opts.grammar.includes('root'));
-  assert.equal(opts.streamTokens, true);
+  assert.equal(opts.tokenDelivery, 'batch');
 });
 
 test('chat() reuses a stable contextKey for each turn', async () => {

@@ -11,7 +11,7 @@ pub const NO_SAMPLED_TOKEN_ID: i32 = -1;
 pub enum GenerateTokenEmissionMode {
     #[default]
     None = 0,
-    TokenStream = 1,
+    TokenBatches = 1,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -20,7 +20,7 @@ pub enum GenerateRequestLifecycle {
     Pending = 0,
     Admitted,
     Running,
-    Streaming,
+    Decoding,
     Completed,
     Cancelled,
     Failed,

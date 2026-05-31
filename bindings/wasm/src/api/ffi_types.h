@@ -17,9 +17,9 @@ typedef uint32_t CE_RequestId;
 
 typedef enum CE_TokenEmissionMode {
   CE_TOKEN_EMISSION_NONE = 0,
-  // Rust appends to the streaming buffer; JS drains it through the browser
+  // Rust appends to the token buffer; JS drains it through the browser
   // scheduler pump.
-  CE_TOKEN_EMISSION_STREAMING_BUFFER = 1,
+  CE_TOKEN_EMISSION_TOKEN_BUFFER = 1,
 } CE_TokenEmissionMode;
 
 typedef struct CE_RuntimeObservabilityMetrics {

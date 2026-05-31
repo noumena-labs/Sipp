@@ -40,8 +40,12 @@ fn print_text(response: CogentTextResponse) {
     println!("text={}", response.text.trim());
     if let Some(stats) = response.local_stats {
         println!(
-            "metrics=ttft_ms:{:?} decode_ms:{:.3} output_tokens:{} tps:{:?}",
-            stats.ttft_ms, stats.decode_ms, stats.output_tokens, stats.tokens_per_second
+            "metrics=ttft_ms:{:?} decode_ms:{:.3} output_tokens:{} e2e_tps:{:?} decode_tps:{:?}",
+            stats.ttft_ms,
+            stats.decode_ms,
+            stats.output_tokens,
+            stats.e2e_tokens_per_second,
+            stats.decode_tokens_per_second
         );
     }
 }

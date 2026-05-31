@@ -11,10 +11,11 @@ use cogentlm_client::{
     CogentEmbeddingRun as CoreClientEmbeddingRun, CogentError as ClientError,
     CogentQueryRequest as ClientQueryRequest, CogentTextOptions as ClientTextOptions,
     CogentTextResponse as ClientTextResponse, CogentTextResponseFuture as ClientTextResponseFuture,
-    CogentTextRun as CoreClientTextRun, CogentTokenStream as ClientTokenStream,
-    EndpointRef as CoreEndpointRef, LocalEmbedOptions as ClientLocalEmbedOptions,
-    LocalTextOptions as ClientLocalTextOptions, RemoteAnthropicConfig as CoreRemoteAnthropicConfig,
-    RemoteAuth as CoreRemoteAuth, RemoteConfig as CoreRemoteConfig, RemoteError as CoreRemoteError,
+    CogentTextRun as CoreClientTextRun, CogentTokenBatches as ClientTokenBatches,
+    CogentTokenDelivery as ClientTokenDelivery, EndpointRef as CoreEndpointRef,
+    LocalEmbedOptions as ClientLocalEmbedOptions, LocalTextOptions as ClientLocalTextOptions,
+    RemoteAnthropicConfig as CoreRemoteAnthropicConfig, RemoteAuth as CoreRemoteAuth,
+    RemoteConfig as CoreRemoteConfig, RemoteError as CoreRemoteError,
     RemoteOpenAiConfig as CoreRemoteOpenAiConfig, RemoteProtocol as CoreRemoteProtocol,
     RemoteProxyConfig as CoreRemoteProxyConfig, RemoteSecret as CoreRemoteSecret,
 };
@@ -56,13 +57,13 @@ pyo3::create_exception!(_native, RemoteError, PyException, "Remote API error.");
 const PY_CLIENT_MUTEX_POISONED: &str = "client mutex is poisoned";
 const PY_CLIENT_TEXT_RESPONSE_MUTEX_POISONED: &str = "text response mutex is poisoned";
 const PY_CLIENT_EMBEDDING_RESPONSE_MUTEX_POISONED: &str = "embedding response mutex is poisoned";
-const PY_CLIENT_TOKEN_STREAM_MUTEX_POISONED: &str = "token stream mutex is poisoned";
+const PY_CLIENT_TOKEN_BATCHES_MUTEX_POISONED: &str = "token batches mutex is poisoned";
 const PY_CLIENT_TEXT_RESPONSE_CONSUMED: &str = "text response already consumed";
 const PY_CLIENT_EMBEDDING_RESPONSE_CONSUMED: &str = "embedding response already consumed";
 
 type PySharedClientTextResponse = Arc<Mutex<Option<ClientTextResponseFuture>>>;
 type PySharedClientEmbeddingResponse = Arc<Mutex<Option<ClientEmbeddingResponseFuture>>>;
-type PySharedClientTokenStream = Arc<Mutex<Option<ClientTokenStream>>>;
+type PySharedClientTokenBatches = Arc<Mutex<Option<ClientTokenBatches>>>;
 
 fn py_core_or_default<T, U>(py: Python<'_>, value: Option<Py<T>>, map: impl FnOnce(&T) -> U) -> U
 where
@@ -963,7 +964,7 @@ impl PyCogentClient {
         Ok(PyEndpointRef { core: endpoint })
     }
 
-    #[pyo3(signature = (prompt, *, endpoint = None, options = None, local = None, remote_options = None, stream_tokens = false))]
+    #[pyo3(signature = (prompt, *, endpoint = None, options = None, local = None, remote_options = None, token_delivery = "off"))]
     fn query(
         &self,
         py: Python<'_>,
@@ -972,7 +973,7 @@ impl PyCogentClient {
         options: Option<Py<PyCogentTextOptions>>,
         local: Option<Py<PyLocalTextOptions>>,
         remote_options: Option<PyObject>,
-        stream_tokens: bool,
+        token_delivery: &str,
     ) -> PyResult<PyCogentTextRun> {
         let request = ClientQueryRequest {
             endpoint: endpoint
@@ -982,7 +983,7 @@ impl PyCogentClient {
             options: py_core_or_default(py, options, PyCogentTextOptions::to_core),
             local: py_core_or_default(py, local, PyLocalTextOptions::to_core),
             remote_options: py_remote_options_or_empty(py, remote_options)?,
-            stream_tokens,
+            token_delivery: py_token_delivery(token_delivery)?,
         };
         let run = self
             .inner
@@ -992,7 +993,7 @@ impl PyCogentClient {
         Ok(PyCogentTextRun::from_core(run))
     }
 
-    #[pyo3(signature = (messages, *, endpoint = None, options = None, local = None, remote_options = None, stream_tokens = false))]
+    #[pyo3(signature = (messages, *, endpoint = None, options = None, local = None, remote_options = None, token_delivery = "off"))]
     fn chat(
         &self,
         py: Python<'_>,
@@ -1001,7 +1002,7 @@ impl PyCogentClient {
         options: Option<Py<PyCogentTextOptions>>,
         local: Option<Py<PyLocalTextOptions>>,
         remote_options: Option<PyObject>,
-        stream_tokens: bool,
+        token_delivery: &str,
     ) -> PyResult<PyCogentTextRun> {
         let request = ClientChatRequest {
             endpoint: endpoint
@@ -1011,7 +1012,7 @@ impl PyCogentClient {
             options: py_core_or_default(py, options, PyCogentTextOptions::to_core),
             local: py_core_or_default(py, local, PyLocalTextOptions::to_core),
             remote_options: py_remote_options_or_empty(py, remote_options)?,
-            stream_tokens,
+            token_delivery: py_token_delivery(token_delivery)?,
         };
         let run = self
             .inner
@@ -1050,7 +1051,7 @@ impl PyCogentClient {
 #[pyclass(name = "CogentTextRun")]
 struct PyCogentTextRun {
     response: PySharedClientTextResponse,
-    tokens: PySharedClientTokenStream,
+    tokens: PySharedClientTokenBatches,
 }
 
 impl PyCogentTextRun {
@@ -1087,7 +1088,7 @@ impl PyCogentTextRun {
 
 #[pyclass(name = "CogentTokenIterator")]
 struct PyCogentTokenIterator {
-    tokens: PySharedClientTokenStream,
+    tokens: PySharedClientTokenBatches,
 }
 
 #[pymethods]
@@ -1100,7 +1101,7 @@ impl PyCogentTokenIterator {
         let mut guard = self
             .tokens
             .lock()
-            .map_err(|_| PyRuntimeError::new_err(PY_CLIENT_TOKEN_STREAM_MUTEX_POISONED))?;
+            .map_err(|_| PyRuntimeError::new_err(PY_CLIENT_TOKEN_BATCHES_MUTEX_POISONED))?;
         let Some(stream) = guard.as_mut() else {
             return Err(pyo3::exceptions::PyStopIteration::new_err(()));
         };
@@ -1200,6 +1201,16 @@ fn py_remote_options_or_empty(
             _ => Err(PyTypeError::new_err("remote_options must be a JSON object")),
         },
         None => Ok(serde_json::Map::new()),
+    }
+}
+
+fn py_token_delivery(value: &str) -> PyResult<ClientTokenDelivery> {
+    match value {
+        "off" => Ok(ClientTokenDelivery::Off),
+        "batch" => Ok(ClientTokenDelivery::Batch),
+        other => Err(PyValueError::new_err(format!(
+            "unsupported token_delivery: {other}"
+        ))),
     }
 }
 
@@ -1393,7 +1404,7 @@ fn request_stats_to_dict(py: Python<'_>, stats: RequestStats) -> PyResult<Py<PyA
     dict.set_item("ttft_ms", stats.ttft_ms)?;
     dict.set_item("inter_token_ms", stats.inter_token_ms)?;
     dict.set_item("e2e_ms", stats.e2e_ms)?;
-    dict.set_item("tokens_per_second", stats.tokens_per_second)?;
+    dict.set_item("e2e_tokens_per_second", stats.e2e_tokens_per_second)?;
     dict.set_item("decode_tokens_per_second", stats.decode_tokens_per_second)?;
     dict.set_item("prefill_ms", stats.prefill_ms)?;
     dict.set_item("decode_ms", stats.decode_ms)?;

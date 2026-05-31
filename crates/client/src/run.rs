@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use cogentlm_core::TokenBatch;
-use cogentlm_engine::engine::EngineTokenStream;
+use cogentlm_engine::engine::EngineTokenBatches;
 #[cfg(feature = "providers")]
 use futures_channel::mpsc;
 use futures_core::Stream;
@@ -11,7 +11,7 @@ use futures_core::Stream;
 use crate::{CogentEmbeddingResponse, CogentError, CogentResult, CogentTextResponse};
 
 #[cfg(feature = "providers")]
-pub(crate) const TOKEN_STREAM_CHANNEL_CAPACITY: usize = 256;
+pub(crate) const TOKEN_BATCH_CHANNEL_CAPACITY: usize = 256;
 
 /// Final text response future.
 pub type CogentTextResponseFuture =
@@ -21,31 +21,31 @@ pub type CogentTextResponseFuture =
 pub type CogentEmbeddingResponseFuture =
     Pin<Box<dyn Future<Output = CogentResult<CogentEmbeddingResponse>> + Send>>;
 
-/// Awaitable text run plus token stream owner.
+/// Awaitable text run plus token batches owner.
 pub struct CogentTextRun {
     response: CogentTextResponseFuture,
-    tokens: CogentTokenStream,
+    tokens: CogentTokenBatches,
 }
 
 impl CogentTextRun {
-    pub(crate) fn new(response: CogentTextResponseFuture, tokens: CogentTokenStream) -> Self {
+    pub(crate) fn new(response: CogentTextResponseFuture, tokens: CogentTokenBatches) -> Self {
         Self { response, tokens }
     }
 
     pub(crate) fn ready_err(error: CogentError) -> Self {
         Self::new(
             Box::pin(async move { Err(error) }),
-            CogentTokenStream::closed(),
+            CogentTokenBatches::closed(),
         )
     }
 
-    /// Borrow the token stream owned by this text run.
-    pub fn tokens(&mut self) -> &mut CogentTokenStream {
+    /// Borrow the token batches owned by this text run.
+    pub fn tokens(&mut self) -> &mut CogentTokenBatches {
         &mut self.tokens
     }
 
-    /// Split the token stream from the final-response future.
-    pub fn into_parts(self) -> (CogentTokenStream, CogentTextResponseFuture) {
+    /// Split the token batches from the final-response future.
+    pub fn into_parts(self) -> (CogentTokenBatches, CogentTextResponseFuture) {
         (self.tokens, self.response)
     }
 }
@@ -86,29 +86,29 @@ impl Future for CogentEmbeddingRun {
     }
 }
 
-/// Best-effort token stream for a text run.
-pub struct CogentTokenStream {
-    inner: TokenStreamInner,
+/// Best-effort token batches for a text run.
+pub struct CogentTokenBatches {
+    inner: TokenBatchSource,
 }
 
-enum TokenStreamInner {
+enum TokenBatchSource {
     Empty,
-    Local(EngineTokenStream),
+    Local(EngineTokenBatches),
     #[cfg(feature = "providers")]
     Receiver(mpsc::Receiver<TokenBatch>),
 }
 
-impl CogentTokenStream {
+impl CogentTokenBatches {
     pub(crate) fn closed() -> Self {
         Self {
-            inner: TokenStreamInner::Empty,
+            inner: TokenBatchSource::Empty,
         }
     }
 
-    pub(crate) fn from_engine(stream: Option<EngineTokenStream>) -> Self {
+    pub(crate) fn from_engine(stream: Option<EngineTokenBatches>) -> Self {
         match stream {
             Some(stream) => Self {
-                inner: TokenStreamInner::Local(stream),
+                inner: TokenBatchSource::Local(stream),
             },
             None => Self::closed(),
         }
@@ -117,20 +117,20 @@ impl CogentTokenStream {
     #[cfg(feature = "providers")]
     pub(crate) fn from_receiver(receiver: mpsc::Receiver<TokenBatch>) -> Self {
         Self {
-            inner: TokenStreamInner::Receiver(receiver),
+            inner: TokenBatchSource::Receiver(receiver),
         }
     }
 }
 
-impl Stream for CogentTokenStream {
+impl Stream for CogentTokenBatches {
     type Item = TokenBatch;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match &mut self.inner {
-            TokenStreamInner::Empty => Poll::Ready(None),
-            TokenStreamInner::Local(stream) => Pin::new(stream).poll_next(cx),
+            TokenBatchSource::Empty => Poll::Ready(None),
+            TokenBatchSource::Local(stream) => Pin::new(stream).poll_next(cx),
             #[cfg(feature = "providers")]
-            TokenStreamInner::Receiver(receiver) => Pin::new(receiver).poll_next(cx),
+            TokenBatchSource::Receiver(receiver) => Pin::new(receiver).poll_next(cx),
         }
     }
 }

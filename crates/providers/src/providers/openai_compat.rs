@@ -62,7 +62,7 @@ pub(super) fn openai_model_from_value(
             chat: CapabilitySupport::Unknown,
             generate: CapabilitySupport::Unknown,
             embeddings: CapabilitySupport::Unknown,
-            streaming: CapabilitySupport::Unknown,
+            token_delivery: CapabilitySupport::Unknown,
         },
         context_window: None,
         max_output_tokens: None,

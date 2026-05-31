@@ -12,6 +12,7 @@ function createTransportObservability(): TransportObservability {
     workerBacked: false,
     enabled: false,
     activeTokenTransport: 'none',
+    activeTokenDelivery: 'off',
   };
 }
 
@@ -42,9 +43,9 @@ test('QueuedRequestScheduler settles completed requests reported by the inferenc
 
   const scheduler = new QueuedRequestScheduler({
     tracker,
-    queuedPromptCallbacks: new Map(),
-    queuedPromptTokenFlushModes: new Map(),
-    queuedPromptCallbackErrors: new Map(),
+    queuedPromptTokenSinks: new Map(),
+    queuedPromptTokenDeliveryModes: new Map(),
+    queuedPromptTokenSinkErrors: new Map(),
     getTransportObservability: () => transport,
     getBridge: () => bridge,
     finalizeRequest: (_bridge, requestId, options) => {
@@ -66,11 +67,11 @@ test('QueuedRequestScheduler settles completed requests reported by the inferenc
   assert.deepEqual(finalized, [1]);
 });
 
-test('QueuedRequestScheduler drains streaming buffer to TokenBatch callbacks without a ring', async () => {
+test('QueuedRequestScheduler drains token buffer to TokenBatch sinks', async () => {
   const tracker = new RequestTracker<GenerateResponse>();
   const transport = createTransportObservability();
-  const callbacks = new Map<number, ((batch: TokenBatch) => void) | undefined>();
-  const callbackErrors = new Map<number, unknown>();
+  const tokenSinks = new Map<number, (batch: TokenBatch) => void>();
+  const tokenSinkErrors = new Map<number, unknown>();
   const batches: TokenBatch[] = [];
   const memory = new ArrayBuffer(256);
   const heapU8 = new Uint8Array(memory);
@@ -88,13 +89,13 @@ test('QueuedRequestScheduler drains streaming buffer to TokenBatch callbacks wit
 
   const bridge = {
     module: { HEAPU8: heapU8, HEAP32: heap32 },
-    getStreamingBufferPointer() {
+    getTokenBufferPointer() {
       return bufferAddr;
     },
-    getStreamingBufferUsedAddress() {
+    getTokenBufferUsedAddress() {
       return usedAddr;
     },
-    getStreamingBufferDropCountAddress() {
+    getTokenBufferDropCountAddress() {
       return dropAddr;
     },
     async runInferenceLoop() {
@@ -120,9 +121,9 @@ test('QueuedRequestScheduler drains streaming buffer to TokenBatch callbacks wit
 
   const scheduler = new QueuedRequestScheduler({
     tracker,
-    queuedPromptCallbacks: callbacks,
-    queuedPromptTokenFlushModes: new Map(),
-    queuedPromptCallbackErrors: callbackErrors,
+    queuedPromptTokenSinks: tokenSinks,
+    queuedPromptTokenDeliveryModes: new Map(),
+    queuedPromptTokenSinkErrors: tokenSinkErrors,
     getTransportObservability: () => transport,
     getBridge: () => bridge,
     finalizeRequest: (_bridge, requestId, options) => {
@@ -131,7 +132,7 @@ test('QueuedRequestScheduler drains streaming buffer to TokenBatch callbacks wit
     cancelQuery: async () => true,
   });
 
-  callbacks.set(1, (batch) => batches.push(batch));
+  tokenSinks.set(1, (batch) => batches.push(batch));
   const tracked = scheduler.track(1);
   await tracked.promise;
 
@@ -148,18 +149,18 @@ test('QueuedRequestScheduler drains streaming buffer to TokenBatch callbacks wit
     framesDropped: 0,
     batchesSent: 1,
   });
-  assert.equal(callbackErrors.size, 0);
+  assert.equal(tokenSinkErrors.size, 0);
 });
 
-test('QueuedRequestScheduler flushes token-mode streams after each loop slice', async () => {
+test('QueuedRequestScheduler runs interactive token delivery with per-token native yield', async () => {
   const tracker = new RequestTracker<GenerateResponse>();
   const transport = createTransportObservability();
-  const callbacks = new Map<number, ((batch: TokenBatch) => void) | undefined>();
-  const tokenFlushModes = new Map<number, 'batch' | 'token'>();
-  const callbackErrors = new Map<number, unknown>();
+  const tokenSinks = new Map<number, (batch: TokenBatch) => void>();
+  const tokenDeliveryModes = new Map<number, 'batch' | 'interactive'>();
+  const tokenSinkErrors = new Map<number, unknown>();
   const batches: TokenBatch[] = [];
   const loopTokenLimits: number[] = [];
-  const streamingActiveFlags: boolean[] = [];
+  const interactiveFlags: boolean[] = [];
   const memory = new ArrayBuffer(256);
   const heapU8 = new Uint8Array(memory);
   const heap32 = new Int32Array(memory);
@@ -185,23 +186,23 @@ test('QueuedRequestScheduler flushes token-mode streams after each loop slice', 
 
   const bridge = {
     module: { HEAPU8: heapU8, HEAP32: heap32 },
-    getStreamingBufferPointer() {
+    getTokenBufferPointer() {
       return bufferAddr;
     },
-    getStreamingBufferUsedAddress() {
+    getTokenBufferUsedAddress() {
       return usedAddr;
     },
-    getStreamingBufferDropCountAddress() {
+    getTokenBufferDropCountAddress() {
       return dropAddr;
     },
     async runInferenceLoop(
       _maxTicks: number,
       _maxCompletedResponses: number,
       maxEmittedTokens: number,
-      options?: { streamingActive?: boolean }
+      options?: { interactiveTokenDelivery?: boolean }
     ) {
       loopTokenLimits.push(maxEmittedTokens);
-      streamingActiveFlags.push(options?.streamingActive === true);
+      interactiveFlags.push(options?.interactiveTokenDelivery === true);
       loopCount += 1;
       if (loopCount === 1) {
         writeTokenRecord('a');
@@ -231,9 +232,9 @@ test('QueuedRequestScheduler flushes token-mode streams after each loop slice', 
 
   const scheduler = new QueuedRequestScheduler({
     tracker,
-    queuedPromptCallbacks: callbacks,
-    queuedPromptTokenFlushModes: tokenFlushModes,
-    queuedPromptCallbackErrors: callbackErrors,
+    queuedPromptTokenSinks: tokenSinks,
+    queuedPromptTokenDeliveryModes: tokenDeliveryModes,
+    queuedPromptTokenSinkErrors: tokenSinkErrors,
     getTransportObservability: () => transport,
     getBridge: () => bridge,
     finalizeRequest: (_bridge, requestId, options) => {
@@ -242,38 +243,33 @@ test('QueuedRequestScheduler flushes token-mode streams after each loop slice', 
     cancelQuery: async () => true,
   });
 
-  callbacks.set(1, (batch) => batches.push(batch));
-  tokenFlushModes.set(1, 'token');
+  tokenSinks.set(1, (batch) => batches.push(batch));
+  tokenDeliveryModes.set(1, 'interactive');
   const tracked = scheduler.track(1);
   await tracked.promise;
 
-  // ce_native_yield delivers tokens mid-loop now, so the outer loop budget
-  // can be roomy. What this test cares about is the contract: token-flush
-  // mode passes a finite, positive cap below the bulk limit so we still get
-  // a chance to settle completions and process aborts periodically - not
-  // the literal value.
   assert.equal(loopTokenLimits.length, 2);
   assert.ok(
     loopTokenLimits.every((limit) => limit > 0 && limit < 512),
-    `expected token-flush loop limits below the bulk limit, got ${JSON.stringify(loopTokenLimits)}`
+    `expected interactive loop limits below the bulk limit, got ${JSON.stringify(loopTokenLimits)}`
   );
   assert.equal(loopTokenLimits[0], loopTokenLimits[1]);
-  assert.deepEqual(streamingActiveFlags, [true, true]);
+  assert.deepEqual(interactiveFlags, [true, true]);
   assert.equal(batches.length, 1);
   assert.equal(batches[0].text, 'a');
   assert.equal(batches[0].frameCount, 1);
-  assert.equal(callbackErrors.size, 0);
+  assert.equal(tokenSinkErrors.size, 0);
 });
 
-test('QueuedRequestScheduler keeps batch-mode streams on monolithic native loop', async () => {
+test('QueuedRequestScheduler keeps batch token delivery on monolithic native loop', async () => {
   const tracker = new RequestTracker<GenerateResponse>();
   const transport = createTransportObservability();
-  const callbacks = new Map<number, ((batch: TokenBatch) => void) | undefined>();
-  const tokenFlushModes = new Map<number, 'batch' | 'token'>();
-  const callbackErrors = new Map<number, unknown>();
+  const tokenSinks = new Map<number, (batch: TokenBatch) => void>();
+  const tokenDeliveryModes = new Map<number, 'batch' | 'interactive'>();
+  const tokenSinkErrors = new Map<number, unknown>();
   const batches: TokenBatch[] = [];
   const loopTokenLimits: number[] = [];
-  const streamingActiveFlags: boolean[] = [];
+  const interactiveFlags: boolean[] = [];
   const memory = new ArrayBuffer(256);
   const heapU8 = new Uint8Array(memory);
   const heap32 = new Int32Array(memory);
@@ -290,23 +286,23 @@ test('QueuedRequestScheduler keeps batch-mode streams on monolithic native loop'
 
   const bridge = {
     module: { HEAPU8: heapU8, HEAP32: heap32 },
-    getStreamingBufferPointer() {
+    getTokenBufferPointer() {
       return bufferAddr;
     },
-    getStreamingBufferUsedAddress() {
+    getTokenBufferUsedAddress() {
       return usedAddr;
     },
-    getStreamingBufferDropCountAddress() {
+    getTokenBufferDropCountAddress() {
       return dropAddr;
     },
     async runInferenceLoop(
       _maxTicks: number,
       _maxCompletedResponses: number,
       maxEmittedTokens: number,
-      options?: { streamingActive?: boolean }
+      options?: { interactiveTokenDelivery?: boolean }
     ) {
       loopTokenLimits.push(maxEmittedTokens);
-      streamingActiveFlags.push(options?.streamingActive === true);
+      interactiveFlags.push(options?.interactiveTokenDelivery === true);
       return {
         stepResult: 0,
         completedResponseCount: 1,
@@ -328,9 +324,9 @@ test('QueuedRequestScheduler keeps batch-mode streams on monolithic native loop'
 
   const scheduler = new QueuedRequestScheduler({
     tracker,
-    queuedPromptCallbacks: callbacks,
-    queuedPromptTokenFlushModes: tokenFlushModes,
-    queuedPromptCallbackErrors: callbackErrors,
+    queuedPromptTokenSinks: tokenSinks,
+    queuedPromptTokenDeliveryModes: tokenDeliveryModes,
+    queuedPromptTokenSinkErrors: tokenSinkErrors,
     getTransportObservability: () => transport,
     getBridge: () => bridge,
     finalizeRequest: (_bridge, requestId, options) => {
@@ -339,14 +335,14 @@ test('QueuedRequestScheduler keeps batch-mode streams on monolithic native loop'
     cancelQuery: async () => true,
   });
 
-  callbacks.set(1, (batch) => batches.push(batch));
-  tokenFlushModes.set(1, 'batch');
+  tokenSinks.set(1, (batch) => batches.push(batch));
+  tokenDeliveryModes.set(1, 'batch');
   const tracked = scheduler.track(1);
   await tracked.promise;
 
   assert.deepEqual(loopTokenLimits, [512]);
-  assert.deepEqual(streamingActiveFlags, [false]);
+  assert.deepEqual(interactiveFlags, [false]);
   assert.equal(batches.length, 1);
   assert.equal(batches[0].text, 'batch');
-  assert.equal(callbackErrors.size, 0);
+  assert.equal(tokenSinkErrors.size, 0);
 });

@@ -103,7 +103,7 @@ impl RequestQueue {
         self.completed_responses.insert(request_id, response);
     }
 
-    pub fn append_streaming_token(&mut self, request_id: GenerateRequestId, text: &str) {
+    pub fn append_token_piece(&mut self, request_id: GenerateRequestId, text: &str) {
         if request_id == 0 || text.is_empty() {
             return;
         }

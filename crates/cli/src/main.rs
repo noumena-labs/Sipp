@@ -234,13 +234,13 @@ fn print_stats(mode: CliStatsMode, stats: RuntimeObservabilityMetrics) -> io::Re
     write_optional_ms(&mut stderr, "e2e_ms", stats.e2e_ms)?;
     write_optional_ms(&mut stderr, "prefill_ms", stats.prefill_ms)?;
     write_optional_ms(&mut stderr, "decode_ms", stats.decode_ms)?;
-    write_tokens_per_second(
+    write_token_rate(
         &mut stderr,
-        "tokens_per_second",
+        "e2e_tokens_per_second",
         stats.output_tokens,
         stats.e2e_ms,
     )?;
-    write_tokens_per_second(
+    write_token_rate(
         &mut stderr,
         "decode_tokens_per_second",
         stats.output_tokens,
@@ -379,7 +379,7 @@ fn write_optional_ms(writer: &mut impl Write, label: &str, value: f64) -> io::Re
     Ok(())
 }
 
-fn write_tokens_per_second(
+fn write_token_rate(
     writer: &mut impl Write,
     label: &str,
     tokens: i32,

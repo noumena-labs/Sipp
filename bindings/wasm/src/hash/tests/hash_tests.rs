@@ -3,7 +3,7 @@ use std::ffi::CString;
 use super::super::*;
 
 #[test]
-fn streaming_sha256_matches_known_digest() {
+fn incremental_sha256_matches_known_digest() {
     let hasher = cogentlm_sha256_create();
     assert!(!hasher.is_null());
     assert_eq!(cogentlm_sha256_update(hasher, b"abc".as_ptr(), 3), 0);

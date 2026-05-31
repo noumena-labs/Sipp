@@ -4,18 +4,18 @@ use std::task::{Context, Poll};
 
 use cogentlm_core::{FinishReason, TokenBatch, TokenUsage};
 use cogentlm_providers::{
-    ProviderChatRequest, ProviderClient, ProviderEmbedRequest, ProviderGenerateRequest,
-    ProviderGenerationOptions, ProviderStreamEvent,
+    ProviderChatRequest, ProviderEmbedRequest, ProviderGenerateRequest, ProviderGenerationOptions,
+    ProviderStreamEvent, ProviderTransport,
 };
 use futures::StreamExt;
 use futures_channel::mpsc;
 
 use crate::dispatch::InferenceEndpoint;
 use crate::remote_executor::RemoteExecutor;
-use crate::run::TOKEN_STREAM_CHANNEL_CAPACITY;
+use crate::run::TOKEN_BATCH_CHANNEL_CAPACITY;
 use crate::{
     map, validate, CogentChatRequest, CogentEmbedRequest, CogentEmbeddingRun, CogentError,
-    CogentQueryRequest, CogentResult, CogentTextResponse, CogentTextRun, CogentTokenStream,
+    CogentQueryRequest, CogentResult, CogentTextResponse, CogentTextRun, CogentTokenBatches,
     EndpointCapabilities, EndpointRef,
 };
 
@@ -23,7 +23,7 @@ pub(crate) struct RemoteEndpoint {
     endpoint: EndpointRef,
     capabilities: EndpointCapabilities,
     model: String,
-    client: ProviderClient,
+    transport: ProviderTransport,
     executor: RemoteExecutor,
 }
 
@@ -32,14 +32,14 @@ impl RemoteEndpoint {
         endpoint: EndpointRef,
         model: String,
         capabilities: EndpointCapabilities,
-        client: ProviderClient,
+        transport: ProviderTransport,
         executor: RemoteExecutor,
     ) -> Self {
         Self {
             endpoint,
             capabilities,
             model,
-            client,
+            transport,
             executor,
         }
     }
@@ -59,7 +59,7 @@ impl InferenceEndpoint for RemoteEndpoint {
     }
 
     fn query(&self, request: CogentQueryRequest) -> CogentTextRun {
-        if request.stream_tokens {
+        if request.token_delivery.emits_tokens() {
             return CogentTextRun::ready_err(CogentError::UnsupportedOperation {
                 endpoint: self.endpoint.clone(),
                 operation: "query",
@@ -74,11 +74,11 @@ impl InferenceEndpoint for RemoteEndpoint {
             options: remote_generation_options(request.options),
             provider_options: request.remote_options,
         };
-        let client = self.client.clone();
+        let transport = self.transport.clone();
         let endpoint = self.endpoint.clone();
         let executor = self.executor.clone();
         let join = executor.spawn(async move {
-            client
+            transport
                 .generate(provider_request)
                 .await
                 .map(|response| map::remote_text_response(endpoint, response))
@@ -86,7 +86,7 @@ impl InferenceEndpoint for RemoteEndpoint {
         });
         CogentTextRun::new(
             Box::pin(RemoteResponseFuture::new(join, executor)),
-            CogentTokenStream::closed(),
+            CogentTokenBatches::closed(),
         )
     }
 
@@ -100,22 +100,22 @@ impl InferenceEndpoint for RemoteEndpoint {
             options: remote_generation_options(request.options),
             provider_options: request.remote_options,
         };
-        let client = self.client.clone();
+        let transport = self.transport.clone();
         let endpoint = self.endpoint.clone();
         let executor = self.executor.clone();
 
-        if request.stream_tokens {
-            let (batch_tx, batch_rx) = mpsc::channel(TOKEN_STREAM_CHANNEL_CAPACITY);
+        if request.token_delivery.emits_tokens() {
+            let (batch_tx, batch_rx) = mpsc::channel(TOKEN_BATCH_CHANNEL_CAPACITY);
             let join = executor.spawn(async move {
-                run_remote_stream(client, endpoint, provider_request, batch_tx).await
+                run_remote_stream(transport, endpoint, provider_request, batch_tx).await
             });
             CogentTextRun::new(
                 Box::pin(RemoteResponseFuture::new(join, executor)),
-                CogentTokenStream::from_receiver(batch_rx),
+                CogentTokenBatches::from_receiver(batch_rx),
             )
         } else {
             let join = executor.spawn(async move {
-                client
+                transport
                     .chat(provider_request)
                     .await
                     .map(|response| map::remote_text_response(endpoint, response))
@@ -123,7 +123,7 @@ impl InferenceEndpoint for RemoteEndpoint {
             });
             CogentTextRun::new(
                 Box::pin(RemoteResponseFuture::new(join, executor)),
-                CogentTokenStream::closed(),
+                CogentTokenBatches::closed(),
             )
         }
     }
@@ -137,11 +137,11 @@ impl InferenceEndpoint for RemoteEndpoint {
             input: request.input,
             provider_options: request.remote_options,
         };
-        let client = self.client.clone();
+        let transport = self.transport.clone();
         let endpoint = self.endpoint.clone();
         let executor = self.executor.clone();
         let join = executor.spawn(async move {
-            client
+            transport
                 .embed(provider_request)
                 .await
                 .map(|response| map::remote_embedding_response(endpoint, response))
@@ -186,12 +186,12 @@ impl<T> Drop for RemoteResponseFuture<T> {
 }
 
 async fn run_remote_stream(
-    client: ProviderClient,
+    transport: ProviderTransport,
     endpoint: EndpointRef,
     request: ProviderChatRequest,
     mut batch_tx: mpsc::Sender<TokenBatch>,
 ) -> CogentResult<CogentTextResponse> {
-    let mut stream = client.stream_chat(request).await?;
+    let mut stream = transport.stream_chat(request).await?;
     let mut text = String::new();
     let mut finish_reason = FinishReason::Stop;
     let mut usage: Option<TokenUsage> = None;

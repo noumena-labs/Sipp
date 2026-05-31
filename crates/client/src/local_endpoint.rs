@@ -3,7 +3,7 @@ use cogentlm_engine::engine::{ChatRequest, CogentEngine};
 use crate::dispatch::InferenceEndpoint;
 use crate::{
     map, validate, CogentChatRequest, CogentEmbedRequest, CogentEmbeddingRun, CogentError,
-    CogentQueryRequest, CogentTextRun, CogentTokenStream, EndpointCapabilities, EndpointRef,
+    CogentQueryRequest, CogentTextRun, CogentTokenBatches, EndpointCapabilities, EndpointRef,
 };
 
 pub(crate) struct LocalEndpoint {
@@ -52,7 +52,7 @@ impl InferenceEndpoint for LocalEndpoint {
                     .map(|result| map::text_response(endpoint, result))
                     .map_err(CogentError::Local)
             }),
-            CogentTokenStream::from_engine(tokens),
+            CogentTokenBatches::from_engine(tokens),
         )
     }
 
@@ -68,7 +68,7 @@ impl InferenceEndpoint for LocalEndpoint {
         let run = self.engine.chat(
             ChatRequest::new(request.messages)
                 .options(options)
-                .stream_tokens(request.stream_tokens),
+                .token_delivery(map::engine_token_delivery(request.token_delivery)),
         );
         let (tokens, response) = run.into_parts();
         CogentTextRun::new(
@@ -78,7 +78,7 @@ impl InferenceEndpoint for LocalEndpoint {
                     .map(|result| map::text_response(endpoint, result))
                     .map_err(CogentError::Local)
             }),
-            CogentTokenStream::from_engine(tokens),
+            CogentTokenBatches::from_engine(tokens),
         )
     }
 

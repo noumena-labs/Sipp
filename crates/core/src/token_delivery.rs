@@ -1,6 +1,6 @@
 /// Counters owned by the token data plane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct StreamStats {
+pub struct TokenDeliveryStats {
     pub frames_sent: u64,
     pub bytes_sent: u64,
     pub frames_dropped: u64,
@@ -16,5 +16,5 @@ pub struct TokenBatch {
     pub text: String,
     pub frame_count: u32,
     pub byte_count: u32,
-    pub stats: StreamStats,
+    pub stats: TokenDeliveryStats,
 }

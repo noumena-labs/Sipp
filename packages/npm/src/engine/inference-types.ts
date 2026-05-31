@@ -162,13 +162,7 @@ export interface NativeRuntimeConfig {
 export interface PromptOptions {
   nTokens?: number;
   signal?: AbortSignal;
-  streamTokens?: boolean;
-  onTokens?: (batch: TokenBatch) => void;
-  /**
-   * Controls how aggressively the browser scheduler flushes token batches.
-   * `token` favors interactive rendering; `batch` favors throughput.
-   */
-  tokenFlush?: TokenFlushMode;
+  tokenDelivery?: TokenDelivery;
   media?: Uint8Array[];
   /**
    * Optional GBNF grammar source applied to the sampler for this request.
@@ -184,14 +178,19 @@ export interface EmbedRuntimeOptions {
   signal?: AbortSignal;
 }
 
-export type TokenFlushMode = 'batch' | 'token';
+export type TokenDeliveryMode = 'off' | 'batch' | 'interactive';
+
+export interface TokenDelivery {
+  mode: TokenDeliveryMode;
+  sink?: (batch: TokenBatch) => void;
+}
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
 }
 
-export interface StreamStats {
+export interface TokenDeliveryStats {
   framesSent: number;
   bytesSent: number;
   framesDropped: number;
@@ -205,7 +204,7 @@ export interface TokenBatch {
   text: string;
   frameCount: number;
   byteCount: number;
-  stats: StreamStats;
+  stats: TokenDeliveryStats;
 }
 
 export type GenerateRequestId = number;
@@ -301,19 +300,28 @@ export interface TransportObservability {
   executionMode: EngineExecutionMode;
   workerBacked: boolean;
   enabled: boolean;
-  activeTokenTransport?: 'none' | 'streaming-buffer' | 'callback';
-  streamingDrainCount?: number;
-  streamingDrainMs?: number;
+  activeTokenTransport?: 'none' | 'token-sink';
+  activeTokenDelivery?: TokenDeliveryMode;
+  tokenDrainCount?: number;
+  tokenDrainMs?: number;
 }
 
 export function withDerivedObservabilityMetrics<T extends RequestObservabilityMetrics>(
   metrics: T
-): T & { tokensPerSecond: number | null; prefillTokensPerSecond: number | null } {
+): T & {
+  decodeTokensPerSecond: number | null;
+  e2eTokensPerSecond: number | null;
+  prefillTokensPerSecond: number | null;
+} {
   return {
     ...metrics,
-    tokensPerSecond:
+    decodeTokensPerSecond:
       metrics.decodeMs > 0 && metrics.outputTokens > 0
         ? (metrics.outputTokens / metrics.decodeMs) * 1000
+        : null,
+    e2eTokensPerSecond:
+      metrics.e2eMs > 0 && metrics.outputTokens > 0
+        ? (metrics.outputTokens / metrics.e2eMs) * 1000
         : null,
     prefillTokensPerSecond:
       metrics.prefillMs >= 0.1 && metrics.prefillTokens >= 1

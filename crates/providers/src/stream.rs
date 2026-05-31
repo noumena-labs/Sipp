@@ -1,6 +1,6 @@
 use std::pin::Pin;
 
-use cogentlm_core::{FinishReason, StreamStats, TokenBatch};
+use cogentlm_core::{FinishReason, TokenBatch, TokenDeliveryStats};
 use futures_util::Stream;
 
 use crate::{ProviderError, ProviderErrorKind};
@@ -19,7 +19,7 @@ pub(crate) struct TokenBatchBuilder {
     request_id: Option<String>,
     stream_id: u32,
     sequence: u32,
-    stats: StreamStats,
+    stats: TokenDeliveryStats,
 }
 
 impl TokenBatchBuilder {
@@ -28,7 +28,7 @@ impl TokenBatchBuilder {
             request_id,
             stream_id: 0,
             sequence: 0,
-            stats: StreamStats::default(),
+            stats: TokenDeliveryStats::default(),
         }
     }
 

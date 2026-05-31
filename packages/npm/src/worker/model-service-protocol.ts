@@ -9,6 +9,7 @@ import type {
   EmbedOptions,
   QueryInput,
   QueryOptions,
+  TokenDeliveryMode,
 } from '../models/types.js';
 
 export interface WorkerRuntimeConfig {
@@ -20,20 +21,18 @@ export interface WorkerRuntimeConfig {
   trustedOrigins?: string[];
 }
 
-// `streaming` carries the caller's intent across the worker boundary because
-// Token sinks can't be cloned through postMessage. When false the worker
-// runs the engine in TOKEN_EMISSION_NONE; when true the worker writes tokens
-// to the SAB ring for the main thread to drain.
+// tokenDelivery carries the caller's intent across the worker boundary because
+// token sinks can't be cloned through postMessage. The worker turns delivery
+// back into a local sink that writes sanitized batches to the SAB ring.
 export type WorkerQueryOptions =
-  Pick<QueryOptions, 'session' | 'maxTokens' | 'grammar' | 'tokenFlush'> & {
-    streaming: boolean;
+  Pick<QueryOptions, 'session' | 'maxTokens' | 'grammar'> & {
+    tokenDelivery: TokenDeliveryMode;
   };
 
 export type WorkerRequestMessage =
   | {
-      // Sent once on worker spawn.  Carries the SAB ring used for streaming;
-      // null disables streaming (engine runs in NONE mode for that worker).
-      kind: 'streaming-init';
+      // Sent once on worker spawn. Carries the SAB ring used for token delivery.
+      kind: 'token-init';
       ringBuffer: SharedArrayBuffer | null;
     }
   | {
@@ -104,9 +103,8 @@ export type WorkerResponseMessage =
       progress: ModelLoadProgress;
     }
   | {
-      // Maps native GenerateRequestId → worker callId.  Sent once per
-      // streaming request on enqueue, before any ring records arrive.
-      kind: 'streaming-claim';
+      // Maps native GenerateRequestId -> worker callId before ring records arrive.
+      kind: 'token-claim';
       callId: number;
       nativeRequestId: number;
     }
@@ -119,7 +117,6 @@ export type WorkerResponseMessage =
       event: EngineEvent;
     }
   | {
-      // Pure signal from worker to main thread: "bytes were written to the ring."
-      // Triggers a drainStreamingRing call on the main thread (macrotask).
-      kind: 'streaming-tick';
+      // Pure signal from worker to main thread: bytes were written to the ring.
+      kind: 'token-tick';
     };

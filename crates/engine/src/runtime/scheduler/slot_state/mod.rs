@@ -16,7 +16,7 @@ pub enum SlotPhase {
     Admitted,
     Prefill,
     Decode,
-    Streaming,
+    EmitBuffered,
     Completed,
     Failed,
 }

@@ -7,8 +7,8 @@ use std::time::Duration;
 use clap::{Parser, ValueEnum};
 use cogentlm_core::{ChatMessage, ChatRole};
 use cogentlm_providers::{
-    AnthropicConfig, OpenAiConfig, ProviderAuth, ProviderChatRequest, ProviderClient,
-    ProviderGenerationOptions, ProviderOptions, ProviderStreamEvent, ProxyConfig, ProxyProtocol,
+    AnthropicConfig, OpenAiConfig, ProviderAuth, ProviderChatRequest, ProviderGenerationOptions,
+    ProviderOptions, ProviderStreamEvent, ProviderTransport, ProxyConfig, ProxyProtocol,
     SecretString,
 };
 use futures_util::StreamExt;
@@ -124,10 +124,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let provider = resolve_provider(&args)?;
-    let client = build_client(&args, provider)?;
+    let transport = build_transport(&args, provider)?;
 
     if args.list_models || env_bool("COGENT_LIST_MODELS")?.unwrap_or(false) {
-        for model in client.list_models().await? {
+        for model in transport.list_models().await? {
             println!("{}", model.id);
         }
         return Ok(());
@@ -158,9 +158,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if args.stream || env_bool("COGENT_STREAM")?.unwrap_or(false) {
-        stream_chat(&client, request).await?;
+        stream_chat(&transport, request).await?;
     } else {
-        let response = client.chat(request).await?;
+        let response = transport.chat(request).await?;
         println!("{}", response.result.text);
         if let Some(usage) = response.usage {
             eprintln!(
@@ -173,10 +173,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn build_client(
+fn build_transport(
     args: &Args,
     provider: ProviderPreset,
-) -> Result<ProviderClient, Box<dyn std::error::Error>> {
+) -> Result<ProviderTransport, Box<dyn std::error::Error>> {
     let api_key = resolve_api_key(args, provider)?;
     let timeout_ms = match args.timeout_ms {
         Some(timeout_ms) => Some(timeout_ms),
@@ -185,7 +185,7 @@ fn build_client(
     let timeout = timeout_ms.map(Duration::from_millis);
 
     match provider {
-        ProviderPreset::Openai => Ok(ProviderClient::openai(OpenAiConfig {
+        ProviderPreset::Openai => Ok(ProviderTransport::openai(OpenAiConfig {
             api_key: SecretString::new(api_key),
             base_url: args
                 .base_url
@@ -193,7 +193,7 @@ fn build_client(
                 .or_else(|| env_string("COGENT_BASE_URL")),
             timeout,
         })?),
-        ProviderPreset::Anthropic => Ok(ProviderClient::anthropic(AnthropicConfig {
+        ProviderPreset::Anthropic => Ok(ProviderTransport::anthropic(AnthropicConfig {
             api_key: SecretString::new(api_key),
             base_url: args
                 .base_url
@@ -216,7 +216,7 @@ fn build_client(
                 .or_else(|| provider.default_base_url().map(str::to_owned))
                 .ok_or_else(|| "--base-url is required for --provider proxy".to_string())?;
 
-            Ok(ProviderClient::proxy(ProxyConfig {
+            Ok(ProviderTransport::proxy(ProxyConfig {
                 base_url,
                 auth: ProviderAuth::Bearer(SecretString::new(api_key)),
                 protocol: ProxyProtocol::OpenAiCompatible,
@@ -293,10 +293,10 @@ fn env_u64(name: &str) -> Result<Option<u64>, Box<dyn std::error::Error>> {
 }
 
 async fn stream_chat(
-    client: &ProviderClient,
+    transport: &ProviderTransport,
     request: ProviderChatRequest,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut stream = client.stream_chat(request).await?;
+    let mut stream = transport.stream_chat(request).await?;
     while let Some(event) = stream.next().await {
         match event? {
             ProviderStreamEvent::TokenBatch(batch) => {

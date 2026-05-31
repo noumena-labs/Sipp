@@ -1,7 +1,8 @@
 use cogentlm_core::TokenUsage;
 use cogentlm_engine::engine::{
     EmbedOptions, EmbedRequest, EmbeddingResult, GenerationResult, QueryOptions, QueryRequest,
-    RequestSampling, RequestStats, SamplingRuntimePatch, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
+    RequestSampling, RequestStats, SamplingRuntimePatch, TokenDelivery, DEFAULT_CONTEXT_KEY,
+    DEFAULT_MAX_TOKENS,
 };
 
 use crate::{
@@ -15,7 +16,14 @@ pub(crate) fn local_query_request(
     let options = local_query_options(request.options, request.local)?;
     Ok(QueryRequest::new(request.prompt)
         .options(options)
-        .stream_tokens(request.stream_tokens))
+        .token_delivery(engine_token_delivery(request.token_delivery)))
+}
+
+pub(crate) fn engine_token_delivery(delivery: crate::CogentTokenDelivery) -> TokenDelivery {
+    match delivery {
+        crate::CogentTokenDelivery::Off => TokenDelivery::Off,
+        crate::CogentTokenDelivery::Batch => TokenDelivery::Batch,
+    }
 }
 
 pub(crate) fn local_chat_options(

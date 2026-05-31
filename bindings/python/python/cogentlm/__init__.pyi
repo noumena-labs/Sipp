@@ -6,6 +6,7 @@ from typing import Any, Final, Iterator, Literal, Optional, Sequence, TypedDict,
 PathLike = Union[str, Path]
 GpuLayerConfig = Union[str, dict[str, int]]
 ActivePythonBackend = Literal["cpu", "cuda", "metal", "vulkan"]
+TokenDelivery = Literal["off", "batch"]
 DEFAULT_CONTEXT_KEY: Final[str]
 DEFAULT_MAX_TOKENS: Final[int]
 
@@ -172,7 +173,7 @@ class ChatMessage:
     content: str
     def __init__(self, role: str, content: str) -> None: ...
 
-class StreamStats(TypedDict):
+class TokenDeliveryStats(TypedDict):
     frames_sent: int
     bytes_sent: int
     frames_dropped: int
@@ -185,7 +186,7 @@ class TokenBatch(TypedDict):
     text: str
     frame_count: int
     byte_count: int
-    stats: StreamStats
+    stats: TokenDeliveryStats
 
 class TokenUsage(TypedDict):
     input_tokens: Optional[int]
@@ -325,7 +326,7 @@ class CogentClient:
         options: Optional[CogentTextOptions] = None,
         local: Optional[LocalTextOptions] = None,
         remote_options: Optional[RemoteOptions] = None,
-        stream_tokens: bool = False,
+        token_delivery: TokenDelivery = "off",
     ) -> CogentTextRun: ...
     def chat(
         self,
@@ -335,7 +336,7 @@ class CogentClient:
         options: Optional[CogentTextOptions] = None,
         local: Optional[LocalTextOptions] = None,
         remote_options: Optional[RemoteOptions] = None,
-        stream_tokens: bool = False,
+        token_delivery: TokenDelivery = "off",
     ) -> CogentTextRun: ...
     def embed(
         self,

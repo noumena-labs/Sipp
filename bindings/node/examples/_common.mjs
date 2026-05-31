@@ -70,7 +70,8 @@ export function printText(result) {
       `metrics=ttft_ms:${result.localStats.ttftMs} ` +
       `decode_ms:${result.localStats.decodeMs.toFixed(3)} ` +
       `output_tokens:${result.localStats.outputTokens} ` +
-      `tps:${result.localStats.tokensPerSecond}`
+      `e2e_tps:${result.localStats.e2eTokensPerSecond} ` +
+      `decode_tps:${result.localStats.decodeTokensPerSecond}`
     );
   }
 }

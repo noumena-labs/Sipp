@@ -72,7 +72,8 @@ def print_text(result: dict[str, object]) -> None:
             f"ttft_ms:{stats['ttft_ms']} "
             f"decode_ms:{stats['decode_ms']:.3f} "
             f"output_tokens:{stats['output_tokens']} "
-            f"tps:{stats['tokens_per_second']}"
+            f"e2e_tps:{stats['e2e_tokens_per_second']} "
+            f"decode_tps:{stats['decode_tokens_per_second']}"
         )
 
 

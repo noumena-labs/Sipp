@@ -30,8 +30,8 @@ impl InferenceRuntime {
             if slot.phase == SlotPhase::Decode && slot.generated_tokens.is_empty() {
                 counts.decode_without_seed += 1;
             }
-            if slot.phase == SlotPhase::Streaming && slot.buffered_output_text.is_empty() {
-                counts.streaming_without_buffer += 1;
+            if slot.phase == SlotPhase::EmitBuffered && slot.buffered_output_text.is_empty() {
+                counts.emit_without_buffer += 1;
             }
         }
 
@@ -62,18 +62,18 @@ pub(super) struct NoProgressCounts {
     pub(super) decode_ready: usize,
     pub(super) prefill_ready: usize,
     pub(super) decode_without_seed: usize,
-    pub(super) streaming_without_buffer: usize,
+    pub(super) emit_without_buffer: usize,
 }
 
 impl NoProgressCounts {
     pub(super) fn to_message(&self) -> String {
         format!(
-            "Shared batch tick could not make progress (active={}, decode_ready={}, prefill_ready={}, decode_without_seed={}, streaming_without_buffer={}).",
+            "Shared batch tick could not make progress (active={}, decode_ready={}, prefill_ready={}, decode_without_seed={}, emit_without_buffer={}).",
             self.active,
             self.decode_ready,
             self.prefill_ready,
             self.decode_without_seed,
-            self.streaming_without_buffer,
+            self.emit_without_buffer,
         )
     }
 }

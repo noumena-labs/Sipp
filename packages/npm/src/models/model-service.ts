@@ -1,8 +1,8 @@
 import type { EngineRuntime } from '../runtime/engine-runtime.js';
 import {
   buildBoundaryMarkers,
-  sliceUnstreamedSuffix,
-  StreamingBoundaryTextSanitizer,
+  sliceUndeliveredSuffix,
+  TokenBoundaryTextSanitizer,
 } from '../engine/chat-boundary-sanitizer.js';
 import type {
   GenerateRequestId,
@@ -80,9 +80,8 @@ interface RuntimeRequestOptions {
   session?: string;
   maxTokens?: number;
   signal?: AbortSignal;
-  streamTokens?: boolean;
-  onTokens?: (batch: TokenBatch) => void;
-  tokenFlush?: QueryOptions['tokenFlush'];
+  tokenDelivery?: QueryOptions['tokenDelivery'];
+  tokenSink?: (batch: TokenBatch) => void;
   grammar?: string;
   onRequestStarted?: (requestId: number) => void;
 }
@@ -126,22 +125,25 @@ function nowMs(): number {
     : Date.now();
 }
 
+const textEncoder = new TextEncoder();
+
 function tokenBatchFromText(
   requestId: string,
   streamId: number,
   sequenceStart: number,
   text: string
 ): TokenBatch {
+  const byteCount = utf8ByteLength(text);
   return {
     requestId,
     streamId,
     sequenceStart,
     text,
     frameCount: 1,
-    byteCount: utf8ByteLength(text),
+    byteCount,
     stats: {
       framesSent: sequenceStart + 1,
-      bytesSent: utf8ByteLength(text),
+      bytesSent: byteCount,
       framesDropped: 0,
       batchesSent: sequenceStart + 1,
     },
@@ -149,7 +151,7 @@ function tokenBatchFromText(
 }
 
 function utf8ByteLength(text: string): number {
-  return new TextEncoder().encode(text).byteLength;
+  return textEncoder.encode(text).byteLength;
 }
 
 function entryAssetFingerprint(entry: Pick<ModelEntry, 'modelAssetIds' | 'projectorAssetId'>): string {
@@ -305,8 +307,7 @@ export class ModelService implements ModelLifecycleService {
 
   public async runQuery(
     input: QueryInput,
-    options: InternalTextRequestOptions,
-    emitTokens: ((batch: TokenBatch) => void) | undefined
+    options: InternalTextRequestOptions
   ): Promise<GenerationResult> {
     if (this.transitioning) {
       throw new QueryError('MODEL_NOT_READY', 'A model lifecycle transition is in progress.');
@@ -326,11 +327,7 @@ export class ModelService implements ModelLifecycleService {
       }
     }
     const response = await this.runRuntimeRequest(
-      {
-        ...options,
-        streamTokens: emitTokens != null || options.streamTokens === true,
-        onTokens: emitTokens,
-      },
+      options,
       media,
       (session, promptOptions) => this.runtime.enqueueQuery(session, prompt, promptOptions),
       'Model query'
@@ -375,13 +372,14 @@ export class ModelService implements ModelLifecycleService {
   ): Promise<GenerateResponse> {
     let activeRequestId: number | null = null;
     let nextSequence = 0;
-    const emitTokens = (batch: TokenBatch): void => {
+    const tokenDeliveryMode = options.tokenSink == null ? 'off' : options.tokenDelivery ?? 'batch';
+    const deliverTokenBatch = (batch: TokenBatch): void => {
       const requestId = activeRequestId ?? Number(batch.streamId);
       const text = batch.text;
       if (text.length === 0) {
         return;
       }
-      options.onTokens?.({
+      options.tokenSink?.({
         ...batch,
         requestId: String(requestId),
         streamId: requestId,
@@ -392,12 +390,13 @@ export class ModelService implements ModelLifecycleService {
     const promptOptions: PromptOptions = {
       nTokens: options.maxTokens,
       signal: options.signal,
-      streamTokens: options.streamTokens === true || options.onTokens != null,
-      onTokens: options.onTokens == null ? undefined : emitTokens,
-      tokenFlush:
-        options.streamTokens !== true && options.onTokens == null
+      tokenDelivery:
+        tokenDeliveryMode === 'off'
           ? undefined
-          : options.tokenFlush ?? 'token',
+          : {
+              mode: tokenDeliveryMode,
+              sink: deliverTokenBatch,
+            },
       media,
       grammar: options.grammar,
       onRequestStarted: options.onRequestStarted,
@@ -475,8 +474,7 @@ export class ModelService implements ModelLifecycleService {
 
   public async runChat(
     input: ChatInput,
-    options: InternalTextRequestOptions,
-    emitTokens: ((batch: TokenBatch) => void) | undefined
+    options: InternalTextRequestOptions
   ): Promise<GenerationResult> {
     if (this.transitioning) {
       throw new QueryError('MODEL_NOT_READY', 'A model lifecycle transition is in progress.');
@@ -492,26 +490,26 @@ export class ModelService implements ModelLifecycleService {
       throw new QueryError('MODEL_NOT_READY', 'The loaded model does not accept media input.');
     }
     const boundaryMarkers = await this.getChatBoundaryMarkers(current);
-    const outputSanitizer = new StreamingBoundaryTextSanitizer(boundaryMarkers);
+    const outputSanitizer = new TokenBoundaryTextSanitizer(boundaryMarkers);
     const linkedAbort = createLinkedAbortController(options.signal);
-    let streamedOutputText = '';
+    let deliveredOutputText = '';
     let assistantText = '';
     let stoppedAtBoundary = false;
 
     let safeSequence = 0;
     let lastBatch: TokenBatch | null = null;
-    const shouldStreamTokens = emitTokens != null;
+    const shouldDeliverTokens = options.tokenSink != null;
     const consumeOutputTokens = (batch: TokenBatch): void => {
       lastBatch = batch;
       const text = batch.text;
       if (text.length === 0 || outputSanitizer.reachedBoundary) {
         return;
       }
-      streamedOutputText += text;
+      deliveredOutputText += text;
       const result = outputSanitizer.consume(text);
       if (result.safeText.length > 0) {
         assistantText += result.safeText;
-        emitTokens?.(
+        options.tokenSink?.(
           tokenBatchFromText(batch.requestId, batch.streamId, safeSequence++, result.safeText)
         );
       }
@@ -526,7 +524,7 @@ export class ModelService implements ModelLifecycleService {
       if (safeText.length > 0) {
         assistantText += safeText;
         const source = lastBatch ?? tokenBatchFromText('0', 0, safeSequence, safeText);
-        emitTokens?.(
+        options.tokenSink?.(
           tokenBatchFromText(source.requestId, source.streamId, safeSequence++, safeText)
         );
       }
@@ -537,7 +535,7 @@ export class ModelService implements ModelLifecycleService {
         {
           ...options,
           signal: linkedAbort.signal,
-          ...(shouldStreamTokens ? { onTokens: consumeOutputTokens } : {}),
+          ...(shouldDeliverTokens ? { tokenSink: consumeOutputTokens } : {}),
         },
         media == null ? undefined : [...media],
         (session, promptOptions) => this.runtime.enqueueChat(session, messages, promptOptions),
@@ -547,11 +545,16 @@ export class ModelService implements ModelLifecycleService {
       if (rawText == null) {
         throw new Error('Runtime completed chat() without text output.');
       }
-      const unseenOutputSuffix = shouldStreamTokens
-        ? sliceUnstreamedSuffix(streamedOutputText, rawText)
+      const unseenOutputSuffix = shouldDeliverTokens
+        ? sliceUndeliveredSuffix(deliveredOutputText, rawText)
         : rawText;
       if (!outputSanitizer.reachedBoundary && unseenOutputSuffix.length > 0) {
-        const source = lastBatch ?? tokenBatchFromText(String(rawResult.requestId), 0, safeSequence, unseenOutputSuffix);
+        const source = lastBatch ?? tokenBatchFromText(
+          String(rawResult.requestId),
+          rawResult.requestId,
+          safeSequence,
+          unseenOutputSuffix
+        );
         consumeOutputTokens(
           tokenBatchFromText(source.requestId, source.streamId, safeSequence, unseenOutputSuffix)
         );

@@ -33,16 +33,17 @@ function generationResult(text: string): GenerationResult {
       ttftMs: null,
       interTokenMs: null,
       e2eMs: null,
-      tokensPerSecond: null,
+      decodeTokensPerSecond: null,
+      e2eTokensPerSecond: null,
       prefillMs: 0,
       decodeMs: 0,
     },
   };
 }
 
-test('BrowserTokenStream.subscribe consumes batches queued before subscription', async () => {
-  const run = createBrowserTextRun({ streamTokens: true }, async (emitTokens) => {
-    emitTokens?.(tokenBatch('a'));
+test('BrowserTokenBatches.subscribe consumes batches queued before subscription', async () => {
+  const run = createBrowserTextRun({ tokenDelivery: 'batch' }, async (tokenSink) => {
+    tokenSink?.(tokenBatch('a'));
     return generationResult('a');
   });
   const chunks: string[] = [];
@@ -55,14 +56,14 @@ test('BrowserTokenStream.subscribe consumes batches queued before subscription',
   assert.deepEqual(chunks, ['a']);
 });
 
-test('BrowserTokenStream.subscribe receives live batches synchronously', async () => {
-  let emitTokens!: (batch: TokenBatch) => void;
+test('BrowserTokenBatches.subscribe receives live batches synchronously', async () => {
+  let tokenSink!: (batch: TokenBatch) => void;
   let finish!: () => void;
   const done = new Promise<void>((resolve) => {
     finish = resolve;
   });
-  const run = createBrowserTextRun({ streamTokens: true }, async (emit) => {
-    emitTokens = emit!;
+  const run = createBrowserTextRun({ tokenDelivery: 'batch' }, async (sink) => {
+    tokenSink = sink!;
     await done;
     return generationResult('b');
   });
@@ -71,7 +72,7 @@ test('BrowserTokenStream.subscribe receives live batches synchronously', async (
   run.tokens.subscribe((batch) => {
     chunks.push(batch.text);
   });
-  emitTokens(tokenBatch('b'));
+  tokenSink(tokenBatch('b'));
 
   assert.deepEqual(chunks, ['b']);
   finish();

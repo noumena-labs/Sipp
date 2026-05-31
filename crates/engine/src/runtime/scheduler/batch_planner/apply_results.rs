@@ -51,7 +51,7 @@ fn phase_after_decode(
     if token_limit_reached(generated_token_count, max_output_tokens) {
         SlotPhase::Completed
     } else if has_buffered_output {
-        SlotPhase::Streaming
+        SlotPhase::EmitBuffered
     } else {
         SlotPhase::Decode
     }

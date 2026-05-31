@@ -98,7 +98,7 @@ pub struct EngineStats {
     pub inter_token_ms: Option<f64>,
     pub e2e_ms: Option<f64>,
     /// End-to-end output-token throughput, including queue/admit/prefill/decode/finalization.
-    pub tokens_per_second: Option<f64>,
+    pub e2e_tokens_per_second: Option<f64>,
     /// Decode-only output-token throughput, excluding prefill/TTFT.
     pub decode_tokens_per_second: Option<f64>,
     pub prefill_tokens_per_second: Option<f64>,
@@ -152,7 +152,7 @@ pub struct RequestStats {
     pub inter_token_ms: Option<f64>,
     pub e2e_ms: Option<f64>,
     /// End-to-end output-token throughput, including queue/admit/prefill/decode/finalization.
-    pub tokens_per_second: Option<f64>,
+    pub e2e_tokens_per_second: Option<f64>,
     /// Decode-only output-token throughput, excluding prefill/TTFT.
     pub decode_tokens_per_second: Option<f64>,
     pub prefill_ms: f64,

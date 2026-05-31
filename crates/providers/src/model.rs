@@ -7,7 +7,7 @@ pub struct ProviderCapabilities {
     pub chat: CapabilitySupport,
     pub generate: CapabilitySupport,
     pub embeddings: CapabilitySupport,
-    pub streaming: CapabilitySupport,
+    pub token_delivery: CapabilitySupport,
 }
 
 impl ProviderCapabilities {
@@ -16,7 +16,7 @@ impl ProviderCapabilities {
             chat: CapabilitySupport::Unknown,
             generate: CapabilitySupport::Unknown,
             embeddings: CapabilitySupport::Unknown,
-            streaming: CapabilitySupport::Unknown,
+            token_delivery: CapabilitySupport::Unknown,
         }
     }
 }

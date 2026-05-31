@@ -16,7 +16,7 @@ const run = client.chat({
     { role: 'user', content: input },
   ],
   options: textOptions(),
-  streamTokens: true,
+  tokenDelivery: 'batch',
 });
 let streamed = '';
 for await (const batch of run.tokens) {

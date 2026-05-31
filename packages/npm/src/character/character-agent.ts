@@ -15,10 +15,10 @@ import type {
   ChatOptions,
 } from '../models/types.js';
 import type { ChatMessage } from '../engine/inference-types.js';
-import { sliceUnstreamedSuffix } from '../engine/chat-boundary-sanitizer.js';
+import { sliceUndeliveredSuffix } from '../engine/chat-boundary-sanitizer.js';
 import { CharacterEventBus, type CharacterEvent } from './action-bus.js';
 import { compileActionGrammar } from './action-grammar.js';
-import { StreamingActionParser, type ParsedEvent } from './action-parser.js';
+import { IncrementalActionParser, type ParsedEvent } from './action-parser.js';
 import { compileChoiceGrammar, parseChoiceOutput } from './choice-grammar.js';
 import {
   resolveMaxMemoryTurns,
@@ -316,7 +316,7 @@ export class CharacterRuntime {
       return;
     }
 
-    const parser = new StreamingActionParser(this.config.actions);
+    const parser = new IncrementalActionParser(this.config.actions);
     const turnMessages = this.buildTurnMessages(userMessage);
     try {
       if (signal.aborted) {
@@ -357,11 +357,11 @@ export class CharacterRuntime {
   private async runTurn(
     messages: ChatMessage[],
     userMessage: string,
-    parser: StreamingActionParser,
+    parser: IncrementalActionParser,
     emit: (event: ChatEvent) => void,
     signal: AbortSignal
   ): Promise<void> {
-    let streamedOutputText = '';
+    let deliveredOutputText = '';
     let proseText = '';
     let memoryText = '';
     let status: RunStatus = 'ok';
@@ -389,7 +389,7 @@ export class CharacterRuntime {
         return;
       }
       const text = batch.text;
-      streamedOutputText += text;
+      deliveredOutputText += text;
       recordParsedEvents(parser.consume(text));
     };
 
@@ -397,7 +397,7 @@ export class CharacterRuntime {
       const queryOptions: ChatOptions = {
         session: contextKey,
         maxTokens: this.maxOutputTokens,
-        streamTokens: true,
+        tokenDelivery: 'batch',
         signal,
       };
       const run = this.client.chat(messages, {
@@ -413,9 +413,9 @@ export class CharacterRuntime {
       if (signal.aborted) {
         status = 'aborted';
       } else {
-        const unseenOutputSuffix = sliceUnstreamedSuffix(streamedOutputText, rawText);
+        const unseenOutputSuffix = sliceUndeliveredSuffix(deliveredOutputText, rawText);
         if (unseenOutputSuffix.length > 0) {
-          streamedOutputText += unseenOutputSuffix;
+          deliveredOutputText += unseenOutputSuffix;
           recordParsedEvents(parser.consume(unseenOutputSuffix));
         }
       }

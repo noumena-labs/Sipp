@@ -13,7 +13,7 @@ use crate::runtime::{InferenceRuntime, RequestStepResult};
 
 use super::events::{build_engine_state_with_status, emit_event, emit_state_event};
 use super::request::{start_chat, start_embed, start_query, ChatRequest, QueryRequest};
-use super::token_stream::{drain_ring_into_sender, ActiveTokenStream};
+use super::token_delivery::{drain_ring_into_sender, ActiveTokenDelivery};
 use super::{runtime_command, EngineEventSubscribers};
 
 mod completion;
@@ -86,7 +86,7 @@ pub(super) struct EngineThreadState {
 pub(super) struct ActiveRequest {
     pub output: ActiveRequestOutput,
     pub response_tx: oneshot::Sender<Result<GenerateResponse>>,
-    pub token: Option<ActiveTokenStream>,
+    pub token: Option<ActiveTokenDelivery>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,7 +142,7 @@ impl EngineThreadState {
         start: impl FnOnce(
             &mut InferenceRuntime,
             &EngineEventSubscribers,
-        ) -> Result<(u32, Option<ActiveTokenStream>)>,
+        ) -> Result<(u32, Option<ActiveTokenDelivery>)>,
     ) {
         let Some(runtime) = self.runtime.as_mut() else {
             let _ = response_tx.send(Err(runtime_command(RUNTIME_CLOSED)));
@@ -150,13 +150,13 @@ impl EngineThreadState {
         };
 
         match start(runtime, &self.event_subscribers) {
-            Ok((request_id, token_stream)) => {
+            Ok((request_id, token_delivery)) => {
                 self.active_requests.insert(
                     request_id,
                     ActiveRequest {
                         output,
                         response_tx,
-                        token: token_stream,
+                        token: token_delivery,
                     },
                 );
                 emit_state_event(

@@ -1,7 +1,7 @@
 //! Slot phase normalization and decode-seed recovery.
 //!
 //! `normalize_runnable_slot_state` is called at the top of every tick to
-//! transition slots between admitted/prefill/decode/streaming/completed.
+//! transition slots between admitted/prefill/decode/emit-buffer/completed.
 //! `recover_decode_seed_state` re-anchors a slot that was promoted to Decode
 //! but lost its sampled-token seed (e.g. after a snapshot restore).
 
@@ -50,7 +50,7 @@ pub(super) fn normalize_runnable_slot_state(
         slot.phase = SlotPhase::Decode;
     }
 
-    if slot.phase == SlotPhase::Streaming && slot.buffered_output_text.is_empty() {
+    if slot.phase == SlotPhase::EmitBuffered && slot.buffered_output_text.is_empty() {
         let reached_limit = max_output_tokens > 0
             && slot.generated_tokens.len() >= nonnegative_i32_to_usize(max_output_tokens);
 

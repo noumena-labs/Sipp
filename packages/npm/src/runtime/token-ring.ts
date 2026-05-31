@@ -1,4 +1,4 @@
-// SAB-backed ring buffer for worker→main token streaming.
+// SAB-backed ring buffer for worker-to-main token delivery.
 //
 // Wire: [u32 LE requestId | u32 LE sequence | u32 LE flags | u32 LE textLength | utf8 bytes].  Messages can
 // straddle the body wrap.  Header (8×i32 = 32B):
@@ -18,27 +18,27 @@ const HEADER_DROP_COUNT = 3;
 
 const MESSAGE_PREFIX_BYTES = 16; // u32 requestId + u32 sequence + u32 flags + u32 textLength
 
-export const DEFAULT_STREAMING_RING_CAPACITY = 64 * 1024;
+export const DEFAULT_TOKEN_RING_CAPACITY = 64 * 1024;
 
-export interface StreamingRingMessage {
+export interface TokenRingMessage {
   requestId: number;
   sequence: number;
   flags: number;
   text: string;
 }
 
-// Allocates a fresh SAB streaming ring; returns the SAB for postMessage.
-export function createStreamingRingBuffer(
-  bodyCapacityBytes: number = DEFAULT_STREAMING_RING_CAPACITY
+// Allocates a fresh SAB token ring; returns the SAB for postMessage.
+export function createTokenRingBuffer(
+  bodyCapacityBytes: number = DEFAULT_TOKEN_RING_CAPACITY
 ): SharedArrayBuffer {
   if (typeof SharedArrayBuffer === 'undefined') {
     throw new Error(
-      'SharedArrayBuffer is not available in this context. Streaming requires cross-origin isolation (COOP/COEP).'
+      'SharedArrayBuffer is not available in this context. Token delivery requires cross-origin isolation (COOP/COEP).'
     );
   }
   if (!Number.isInteger(bodyCapacityBytes) || bodyCapacityBytes <= 0) {
     throw new RangeError(
-      `Streaming ring capacity must be a positive integer, got ${bodyCapacityBytes}.`
+      `Token ring capacity must be a positive integer, got ${bodyCapacityBytes}.`
     );
   }
   const sab = new SharedArrayBuffer(HEADER_BYTES + bodyCapacityBytes);
@@ -48,7 +48,7 @@ export function createStreamingRingBuffer(
 }
 
 // Worker-side writer.  Never blocks; overflow bumps `dropCount`.
-export class StreamingRingWriter {
+export class TokenRingWriter {
   private readonly header: Int32Array;
   private readonly body: Uint8Array;
   private readonly capacity: number;
@@ -61,7 +61,7 @@ export class StreamingRingWriter {
     this.capacity = this.body.byteLength;
     this.encoder = new TextEncoder();
     if (Atomics.load(this.header, HEADER_CAPACITY) !== this.capacity) {
-      throw new Error('Streaming ring header capacity does not match body length.');
+      throw new Error('Token ring header capacity does not match body length.');
     }
   }
 
@@ -123,7 +123,7 @@ export class StreamingRingWriter {
 
 // Main-side reader.  Non-blocking drain; per-request TextDecoder state
 // preserved across calls so multi-byte codepoints stitch correctly.
-export class StreamingRingReader {
+export class TokenRingReader {
   private readonly header: Int32Array;
   private readonly body: Uint8Array;
   private readonly capacity: number;
@@ -135,18 +135,18 @@ export class StreamingRingReader {
     this.body = new Uint8Array(sab, HEADER_BYTES);
     this.capacity = this.body.byteLength;
     if (Atomics.load(this.header, HEADER_CAPACITY) !== this.capacity) {
-      throw new Error('Streaming ring header capacity does not match body length.');
+      throw new Error('Token ring header capacity does not match body length.');
     }
   }
 
-  public drain(maxMessages: number = Number.POSITIVE_INFINITY): StreamingRingMessage[] {
+  public drain(maxMessages: number = Number.POSITIVE_INFINITY): TokenRingMessage[] {
     const writeIndex = Atomics.load(this.header, HEADER_WRITE_INDEX);
     const readIndex = Atomics.load(this.header, HEADER_READ_INDEX);
     const available = (writeIndex - readIndex) | 0;
     if (available <= 0) {
       return [];
     }
-    const messages: StreamingRingMessage[] = [];
+    const messages: TokenRingMessage[] = [];
     let cursor = readIndex;
     let consumed = 0;
     while (consumed < available && messages.length < maxMessages) {

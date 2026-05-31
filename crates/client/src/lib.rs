@@ -33,10 +33,10 @@ pub use remote::{
 };
 pub use request::{
     CogentChatRequest, CogentEmbedRequest, CogentQueryRequest, CogentTextOptions,
-    LocalEmbedOptions, LocalTextOptions, RemoteOptions,
+    CogentTokenDelivery, LocalEmbedOptions, LocalTextOptions, RemoteOptions,
 };
 pub use response::{CogentEmbeddingResponse, CogentTextResponse};
 pub use run::{
     CogentEmbeddingResponseFuture, CogentEmbeddingRun, CogentTextResponseFuture, CogentTextRun,
-    CogentTokenStream,
+    CogentTokenBatches,
 };

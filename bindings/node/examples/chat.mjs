@@ -11,7 +11,7 @@ const run = client.chat({
   local: {
     contextKey: 'node-chat-smoke',
   },
-  streamTokens: true,
+  tokenDelivery: 'batch',
 });
 let streamed = '';
 for await (const batch of run.tokens) {

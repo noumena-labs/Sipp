@@ -209,7 +209,7 @@ impl InferenceRuntime {
                 request.lifecycle = if should_complete {
                     GenerateRequestLifecycle::Completed
                 } else {
-                    GenerateRequestLifecycle::Streaming
+                    GenerateRequestLifecycle::Decoding
                 };
             }
 
@@ -217,7 +217,7 @@ impl InferenceRuntime {
                 flush_pending_utf8(slot);
                 slot.phase = SlotPhase::Completed;
             } else {
-                slot.phase = SlotPhase::Streaming;
+                slot.phase = SlotPhase::EmitBuffered;
             }
         }
         (sample_ms, token_piece_ms)

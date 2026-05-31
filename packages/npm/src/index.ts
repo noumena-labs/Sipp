@@ -13,7 +13,7 @@ export {
   type BrowserBackendPreference,
   type BrowserEmbeddingRun,
   type BrowserTextRun,
-  type BrowserTokenStream,
+  type BrowserTokenBatches,
   type ChatInput,
   type ChatOptions,
   type EmbedOptions,
@@ -43,12 +43,12 @@ export {
   type RequestStats,
   type RequestStatus,
   type RuntimeObservation,
-  type StreamStats,
+  type TokenDeliveryStats,
   type TokenBatch,
 } from './models/types.js';
 export type {
   ChatMessage,
   NativeRuntimeConfig,
   RequestObservabilityMetrics,
-  TokenFlushMode,
+  TokenDeliveryMode,
 } from './engine/inference-types.js';
