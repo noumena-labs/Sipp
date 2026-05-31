@@ -30,7 +30,7 @@ interface TrackedRequest<TResult> extends RequestHandle<TResult> {
   settled: boolean;
   consumed: boolean;
   waiterCount: number;
-  tokenSinkError: unknown;
+  tokenBatchSinkError: unknown;
   cancelRequested: boolean;
 }
 
@@ -77,15 +77,15 @@ export class RequestTracker<TResult> {
     }
   }
 
-  setTokenSinkError(requestId: GenerateRequestId, error: unknown): void {
+  setTokenBatchSinkError(requestId: GenerateRequestId, error: unknown): void {
     const tracked = this.completions.get(requestId);
     if (tracked != null) {
-      tracked.tokenSinkError = error;
+      tracked.tokenBatchSinkError = error;
     }
   }
 
-  tokenSinkError(requestId: GenerateRequestId): unknown {
-    return this.completions.get(requestId)?.tokenSinkError;
+  tokenBatchSinkError(requestId: GenerateRequestId): unknown {
+    return this.completions.get(requestId)?.tokenBatchSinkError;
   }
 
   /** All request IDs that appear in any internal collection. */
@@ -117,7 +117,7 @@ export class RequestTracker<TResult> {
       settled: false,
       consumed: false,
       waiterCount: 0,
-      tokenSinkError: undefined,
+      tokenBatchSinkError: undefined,
       cancelRequested: false,
     };
     // Prevent unhandled rejection warnings for unconsumed requests.

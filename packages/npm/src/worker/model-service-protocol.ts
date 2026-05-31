@@ -9,7 +9,7 @@ import type {
   EmbedOptions,
   QueryInput,
   QueryOptions,
-  TokenDeliveryMode,
+  TokenBatch,
 } from '../models/types.js';
 
 export interface WorkerRuntimeConfig {
@@ -21,20 +21,12 @@ export interface WorkerRuntimeConfig {
   trustedOrigins?: string[];
 }
 
-// tokenDelivery carries the caller's intent across the worker boundary because
-// token sinks can't be cloned through postMessage. The worker turns delivery
-// back into a local sink that writes sanitized batches to the SAB ring.
 export type WorkerQueryOptions =
   Pick<QueryOptions, 'session' | 'maxTokens' | 'grammar'> & {
-    tokenDelivery: TokenDeliveryMode;
+    emitTokens: boolean;
   };
 
 export type WorkerRequestMessage =
-  | {
-      // Sent once on worker spawn. Carries the SAB ring used for token delivery.
-      kind: 'token-init';
-      ringBuffer: SharedArrayBuffer | null;
-    }
   | {
       kind: 'models-load';
       callId: number;
@@ -103,10 +95,9 @@ export type WorkerResponseMessage =
       progress: ModelLoadProgress;
     }
   | {
-      // Maps native GenerateRequestId -> worker callId before ring records arrive.
-      kind: 'token-claim';
+      kind: 'token-batch';
       callId: number;
-      nativeRequestId: number;
+      batch: TokenBatch;
     }
   | {
       kind: 'observability-event';
@@ -115,8 +106,4 @@ export type WorkerResponseMessage =
   | {
       kind: 'engine-event';
       event: EngineEvent;
-    }
-  | {
-      // Pure signal from worker to main thread: bytes were written to the ring.
-      kind: 'token-tick';
     };

@@ -101,8 +101,8 @@ export function toRuntimeObservation(
   }
 
   const tokenPath =
-    transport.activeTokenTransport === 'token-sink'
-      ? 'token-sink'
+    transport.activeTokenTransport === 'token-stream'
+      ? 'token-stream'
       : transport.activeTokenTransport === 'none'
         ? 'none'
         : undefined;

@@ -4,11 +4,11 @@
 mod capability;
 mod chat;
 mod result;
-mod token_delivery;
+mod token_emission;
 mod token_usage;
 
 pub use capability::CapabilitySupport;
 pub use chat::{ChatMessage, ChatRole};
 pub use result::FinishReason;
-pub use token_delivery::{TokenBatch, TokenDeliveryStats};
+pub use token_emission::{TokenBatch, TokenEmissionStats};
 pub use token_usage::TokenUsage;

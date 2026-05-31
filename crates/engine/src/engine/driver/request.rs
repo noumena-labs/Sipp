@@ -12,29 +12,15 @@ use futures_channel::mpsc;
 use crate::engine::protocol::{EmbedRequest, EngineEvent};
 use crate::engine::{GenerateOptions, RequestSampling, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS};
 use crate::error::{Error, Result};
-use crate::runtime::request::GenerateTokenEmissionMode;
 use crate::runtime::InferenceRuntime;
 
 use super::events::emit_event;
-use super::token_delivery::{start_engine_token_delivery, ActiveTokenDelivery};
+use super::token_emission::{start_engine_token_emission, ActiveTokenEmission};
 use super::{runtime_command, EngineEventSubscribers};
 
 const MAX_TOKENS_POSITIVE: &str = "max_tokens must be positive";
 const CHAT_MESSAGES_REQUIRED: &str = "chat messages must not be empty";
 const EMPTY_CHAT_TEMPLATE_PROMPT: &str = "model chat template did not produce a prompt";
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Default)]
-pub enum TokenDelivery {
-    #[default]
-    Off,
-    Batch,
-}
-
-impl TokenDelivery {
-    pub fn emits_tokens(self) -> bool {
-        matches!(self, Self::Batch)
-    }
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct QueryOptions {
@@ -78,7 +64,7 @@ impl From<GenerateOptions> for QueryOptions {
 pub struct QueryRequest {
     pub prompt: String,
     pub options: QueryOptions,
-    pub token_delivery: TokenDelivery,
+    pub emit_tokens: bool,
 }
 
 impl QueryRequest {
@@ -86,7 +72,7 @@ impl QueryRequest {
         Self {
             prompt: prompt.into(),
             options: QueryOptions::default(),
-            token_delivery: TokenDelivery::Off,
+            emit_tokens: false,
         }
     }
 
@@ -95,8 +81,8 @@ impl QueryRequest {
         self
     }
 
-    pub fn token_delivery(mut self, token_delivery: TokenDelivery) -> Self {
-        self.token_delivery = token_delivery;
+    pub fn emit_tokens(mut self, emit_tokens: bool) -> Self {
+        self.emit_tokens = emit_tokens;
         self
     }
 }
@@ -104,7 +90,7 @@ impl QueryRequest {
 pub struct ChatRequest {
     pub messages: Vec<ChatMessage>,
     pub options: QueryOptions,
-    pub token_delivery: TokenDelivery,
+    pub emit_tokens: bool,
 }
 
 impl ChatRequest {
@@ -112,7 +98,7 @@ impl ChatRequest {
         Self {
             messages,
             options: QueryOptions::default(),
-            token_delivery: TokenDelivery::Off,
+            emit_tokens: false,
         }
     }
 
@@ -121,8 +107,8 @@ impl ChatRequest {
         self
     }
 
-    pub fn token_delivery(mut self, token_delivery: TokenDelivery) -> Self {
-        self.token_delivery = token_delivery;
+    pub fn emit_tokens(mut self, emit_tokens: bool) -> Self {
+        self.emit_tokens = emit_tokens;
         self
     }
 }
@@ -131,7 +117,7 @@ pub(super) fn start_embed(
     runtime: &mut InferenceRuntime,
     request: EmbedRequest,
     event_subscribers: &EngineEventSubscribers,
-) -> Result<(u32, Option<ActiveTokenDelivery>)> {
+) -> Result<(u32, Option<ActiveTokenEmission>)> {
     let EmbedRequest { input, options } = request;
     let request_id = runtime.enqueue_embed_request(input, options)?;
     emit_request_started(event_subscribers, request_id);
@@ -142,9 +128,9 @@ pub(super) fn start_embed(
 pub(super) fn start_chat(
     runtime: &mut InferenceRuntime,
     request: ChatRequest,
-    token_tx: Option<mpsc::Sender<cogentlm_core::TokenBatch>>,
+    token_tx: Option<mpsc::UnboundedSender<cogentlm_core::TokenBatch>>,
     event_subscribers: &EngineEventSubscribers,
-) -> Result<(u32, Option<ActiveTokenDelivery>)> {
+) -> Result<(u32, Option<ActiveTokenEmission>)> {
     if !runtime.capabilities().has_chat_template {
         return Err(Error::UnsupportedOperation {
             operation: "chat",
@@ -159,7 +145,7 @@ pub(super) fn start_chat(
         QueryRequest {
             prompt,
             options: request.options,
-            token_delivery: request.token_delivery,
+            emit_tokens: request.emit_tokens,
         },
         token_tx,
         event_subscribers,
@@ -169,25 +155,20 @@ pub(super) fn start_chat(
 pub(super) fn start_query(
     runtime: &mut InferenceRuntime,
     request: QueryRequest,
-    token_tx: Option<mpsc::Sender<cogentlm_core::TokenBatch>>,
+    token_tx: Option<mpsc::UnboundedSender<cogentlm_core::TokenBatch>>,
     event_subscribers: &EngineEventSubscribers,
-) -> Result<(u32, Option<ActiveTokenDelivery>)> {
+) -> Result<(u32, Option<ActiveTokenEmission>)> {
     let QueryRequest {
         prompt,
         options,
-        token_delivery,
+        emit_tokens,
     } = request;
 
     if options.max_tokens <= 0 {
         return Err(Error::InvalidRequest(MAX_TOKENS_POSITIVE));
     }
 
-    let emit_tokens = token_delivery.emits_tokens() && token_tx.is_some();
-    let emission_mode = if emit_tokens {
-        GenerateTokenEmissionMode::TokenBatches
-    } else {
-        GenerateTokenEmissionMode::None
-    };
+    let should_emit_tokens = emit_tokens && token_tx.is_some();
 
     let request_id = if options.media.is_empty() {
         runtime.enqueue_request(
@@ -198,7 +179,7 @@ pub(super) fn start_query(
             options.json_schema,
             options.stop,
             options.sampling,
-            emission_mode,
+            should_emit_tokens,
         )?
     } else {
         runtime.enqueue_multimodal_request(
@@ -210,7 +191,7 @@ pub(super) fn start_query(
             options.json_schema,
             options.stop,
             options.sampling,
-            emission_mode,
+            should_emit_tokens,
         )?
     };
 
@@ -218,7 +199,7 @@ pub(super) fn start_query(
 
     Ok((
         request_id,
-        attach_token_delivery(runtime, request_id, token_tx),
+        attach_token_emission(runtime, request_id, token_tx),
     ))
 }
 
@@ -232,12 +213,12 @@ fn emit_request_started(event_subscribers: &EngineEventSubscribers, request_id: 
     );
 }
 
-fn attach_token_delivery(
+fn attach_token_emission(
     runtime: &mut InferenceRuntime,
     request_id: u32,
-    token_tx: Option<mpsc::Sender<cogentlm_core::TokenBatch>>,
-) -> Option<ActiveTokenDelivery> {
-    let token = token_tx.map(|token_tx| start_engine_token_delivery(request_id, token_tx));
+    token_tx: Option<mpsc::UnboundedSender<cogentlm_core::TokenBatch>>,
+) -> Option<ActiveTokenEmission> {
+    let token = token_tx.map(|token_tx| start_engine_token_emission(request_id, token_tx));
     if let Some(token) = &token {
         runtime
             .request_queue

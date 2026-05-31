@@ -2,7 +2,6 @@ import {
   GenerateRequestId,
   GenerateResponse,
   TokenBatch,
-  TokenDeliveryMode,
   TransportObservability,
 } from '../engine/inference-types.js';
 import {
@@ -11,13 +10,12 @@ import {
 } from '../wasm/wasm-bridge.js';
 import { RequestTracker } from './request-tracker.js';
 
-// Native owns the scheduling policy; JS drives the outer loop. Interactive
-// token delivery asks native to yield via ce_native_yield once per emitted
-// token. Batch delivery keeps the monolithic native loop and drains after
-// larger slices, avoiding a JSPI round-trip on the decode hot path.
+// Native owns the scheduling policy; JS drives the outer loop. Token emission
+// stays on the bulk native loop and drains in chunks so visible tokens do not
+// force a per-token JSPI round trip.
 const CONTINUOUS_LOOP_TICK_LIMIT = 1024;
 const CONTINUOUS_LOOP_TOKEN_LIMIT = 512;
-const CONTINUOUS_LOOP_INTERACTIVE_TOKEN_LIMIT = 256;
+const MAIN_THREAD_LOOP_DURATION_US = 8_000;
 const REQUEST_STEP_RESULT_INVALID = -1;
 const REQUEST_STEP_RESULT_FATAL_NO_PROGRESS = -2;
 
@@ -28,12 +26,11 @@ type SchedulerFinalizeOptions = {
 
 type QueuedRequestSchedulerOptions = {
   tracker: RequestTracker<GenerateResponse>;
-  queuedPromptTokenSinks: Map<
+  queuedPromptTokenBatchSinks: Map<
     GenerateRequestId,
     (batch: TokenBatch) => void
   >;
-  queuedPromptTokenDeliveryModes: Map<GenerateRequestId, TokenDeliveryMode>;
-  queuedPromptTokenSinkErrors: Map<GenerateRequestId, unknown>;
+  queuedPromptTokenBatchSinkErrors: Map<GenerateRequestId, unknown>;
   getTransportObservability: () => TransportObservability;
   getBridge: () => WasmBridge;
   finalizeRequest: (
@@ -54,13 +51,10 @@ export class QueuedRequestScheduler {
     this.schedulerPumpGeneration += 1;
     this.schedulerPumpPromise = null;
     this.cachedDrainBridge = null;
-    this.cachedBufferByteAddr = 0;
-    this.cachedUsedHeap32Index = 0;
-    this.cachedDropCountHeap32Index = 0;
-    this.lastSeenDropCount = 0;
-    this.tokenSinkDecoders.clear();
-    this.tokenSinkSequences.clear();
-    this.tokenSinkStats.clear();
+    this.cachedUsedHeap32Index = -1;
+    this.tokenBatchSinkDecoders.clear();
+    this.tokenBatchSinkSequences.clear();
+    this.tokenBatchSinkStats.clear();
   }
 
   public track(requestId: GenerateRequestId) {
@@ -93,7 +87,7 @@ export class QueuedRequestScheduler {
     });
   }
 
-  private requestCancellationForTokenSinkErrors(): void {
+  private requestCancellationForTokenBatchSinkErrors(): void {
     for (const requestId of this.options.tracker.allTrackedIds()) {
       if (
         !this.options.tracker.has(requestId) ||
@@ -103,13 +97,13 @@ export class QueuedRequestScheduler {
         continue;
       }
 
-      const tokenSinkError =
-        this.options.queuedPromptTokenSinkErrors.get(requestId);
-      if (tokenSinkError == null) {
+      const tokenBatchSinkError =
+        this.options.queuedPromptTokenBatchSinkErrors.get(requestId);
+      if (tokenBatchSinkError == null) {
         continue;
       }
 
-      this.options.tracker.setTokenSinkError(requestId, tokenSinkError);
+      this.options.tracker.setTokenBatchSinkError(requestId, tokenBatchSinkError);
       this.options.tracker.requestCancel(requestId);
       void this.options.cancelQuery(requestId);
     }
@@ -133,9 +127,9 @@ export class QueuedRequestScheduler {
 
     try {
       const response = bridge.takeCompletedResponse(requestId);
-      this.options.tracker.setTokenSinkError(
+      this.options.tracker.setTokenBatchSinkError(
         requestId,
-        this.options.queuedPromptTokenSinkErrors.get(requestId)
+        this.options.queuedPromptTokenBatchSinkErrors.get(requestId)
       );
       this.options.tracker.resolve(requestId, response);
       this.options.finalizeRequest(bridge, requestId, {
@@ -143,11 +137,11 @@ export class QueuedRequestScheduler {
           (response.cancelled || this.options.tracker.isCancelRequested(requestId)) &&
           !this.options.tracker.isConsumed(requestId),
       });
-      this.forgetTokenSinkStream(requestId);
+      this.forgetTokenBatchSinkStream(requestId);
     } catch (error) {
       this.options.tracker.reject(requestId, error);
       this.options.finalizeRequest(bridge, requestId);
-      this.forgetTokenSinkStream(requestId);
+      this.forgetTokenBatchSinkStream(requestId);
     }
     return true;
   }
@@ -176,13 +170,12 @@ export class QueuedRequestScheduler {
       this.options.finalizeRequest(bridge, requestId, {
         deleteCompletion: true,
       });
-      this.forgetTokenSinkStream(requestId);
+      this.forgetTokenBatchSinkStream(requestId);
     }
   }
 
   private async runSchedulerPump(generation: number): Promise<void> {
     const bridge = this.options.getBridge();
-    const uninstallYieldDrain = this.installTokenDrainHook(bridge, generation);
 
     try {
       while (
@@ -193,11 +186,11 @@ export class QueuedRequestScheduler {
           const loopResult = await bridge.runInferenceLoop(
             CONTINUOUS_LOOP_TICK_LIMIT,
             this.options.tracker.activeCount,
-            this.loopTokenLimit(),
-            { interactiveTokenDelivery: this.hasInteractiveTokenCall() }
+            CONTINUOUS_LOOP_TOKEN_LIMIT,
+            { maxDurationUs: this.loopDurationUs() }
           );
           this.drainTokenBufferObserved(bridge);
-          this.requestCancellationForTokenSinkErrors();
+          this.requestCancellationForTokenBatchSinkErrors();
           if (loopResult.completedResponseCount > 0) {
             this.settleCompletedTrackedRequests(bridge);
           }
@@ -217,9 +210,7 @@ export class QueuedRequestScheduler {
         }
       }
     } finally {
-      uninstallYieldDrain();
-      // Final pass to flush tail tokens written between the last yield
-      // drain and request settlement.
+      // Final pass to flush tail tokens written before request settlement.
       try {
         this.drainTokenBufferObserved(bridge);
       } catch {
@@ -228,93 +219,43 @@ export class QueuedRequestScheduler {
     }
   }
 
-  private loopTokenLimit(): number {
-    return this.hasInteractiveTokenCall()
-      ? CONTINUOUS_LOOP_INTERACTIVE_TOKEN_LIMIT
-      : CONTINUOUS_LOOP_TOKEN_LIMIT;
+  private loopDurationUs(): number {
+    return this.options.getTransportObservability().executionMode === 'main-thread'
+      ? MAIN_THREAD_LOOP_DURATION_US
+      : 0;
   }
 
-  private hasInteractiveTokenCall(): boolean {
-    for (const requestId of this.options.tracker.allTrackedIds()) {
-      if (this.options.queuedPromptTokenDeliveryModes.get(requestId) === 'interactive') {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  // Installs `Module._ce_yield_drain` so interactive delivery can drain the
-  // native token buffer on each scheduler yield.
-  private installTokenDrainHook(
-    bridge: WasmBridge,
-    generation: number
-  ): () => void {
-    if (this.options.queuedPromptTokenSinks.size === 0) {
-      return () => { };
-    }
-    const drain = () => {
-      if (generation !== this.schedulerPumpGeneration) {
-        return;
-      }
-      try {
-        this.drainTokenBufferObserved(bridge);
-      } catch (error) {
-        // Drain runs inside the wasm yield body; throwing here aborts the
-        // scheduler via a JSPI rejection.  Record + swallow instead.
-        for (const requestId of this.options.tracker.allTrackedIds()) {
-          this.options.queuedPromptTokenSinkErrors.set(requestId, error);
-          this.options.tracker.setTokenSinkError(requestId, error);
-        }
-      }
-    };
-    bridge.module._ce_yield_drain = drain;
-    return () => {
-      if (bridge.module._ce_yield_drain === drain) {
-        bridge.module._ce_yield_drain = undefined;
-      }
-    };
-  }
-
-  // Cached token buffer addresses; resolved once per bridge.
+  // Cached token buffer control cell; payload pointer may move if wasm grows it.
   private cachedDrainBridge: WasmBridge | null = null;
-  private cachedBufferByteAddr = 0;
-  private cachedUsedHeap32Index = 0;
-  private cachedDropCountHeap32Index = 0;
-  private lastSeenDropCount = 0;
-  private readonly tokenSinkDecoders = new Map<number, TextDecoder>();
-  private readonly tokenSinkSequences = new Map<number, number>();
-  private readonly tokenSinkStats = new Map<
+  private cachedUsedHeap32Index = -1;
+  private readonly tokenBatchSinkDecoders = new Map<number, TextDecoder>();
+  private readonly tokenBatchSinkSequences = new Map<number, number>();
+  private readonly tokenBatchSinkStats = new Map<
     number,
     {
       framesSent: number;
       bytesSent: number;
-      framesDropped: number;
       batchesSent: number;
     }
   >();
 
   private ensureTokenDrainCache(bridge: WasmBridge): boolean {
     if (this.cachedDrainBridge === bridge) {
-      return this.cachedBufferByteAddr !== 0;
+      return this.cachedUsedHeap32Index >= 0;
     }
-    const bufferAddr = bridge.getTokenBufferPointer();
     const usedAddr = bridge.getTokenBufferUsedAddress();
-    const dropAddr = bridge.getTokenBufferDropCountAddress();
-    if (bufferAddr === 0 || usedAddr === 0 || dropAddr === 0) {
+    if (usedAddr === 0) {
       this.cachedDrainBridge = null;
-      this.cachedBufferByteAddr = 0;
+      this.cachedUsedHeap32Index = -1;
       return false;
     }
     this.cachedDrainBridge = bridge;
-    this.cachedBufferByteAddr = bufferAddr;
     this.cachedUsedHeap32Index = Math.floor(usedAddr / 4);
-    this.cachedDropCountHeap32Index = Math.floor(dropAddr / 4);
-    this.lastSeenDropCount = 0;
     return true;
   }
 
   private drainTokenBufferObserved(bridge: WasmBridge): boolean {
-    if (this.options.queuedPromptTokenSinks.size === 0) {
+    if (this.options.queuedPromptTokenBatchSinks.size === 0) {
       return false;
     }
     const transport = this.options.getTransportObservability();
@@ -330,10 +271,9 @@ export class QueuedRequestScheduler {
   }
 
   // Zero-ccall drain: reads `used` via HEAP32, parses records via HEAPU8,
-  // and decodes them into TokenBatch sinks. Safe because wasm is suspended
-  // inside the `ce_native_yield` body when called from the yield hook.
+  // and decodes them into TokenBatch sinks after each native loop chunk.
   private drainTokenBuffer(bridge: WasmBridge): boolean {
-    if (this.options.queuedPromptTokenSinks.size === 0) {
+    if (this.options.queuedPromptTokenBatchSinks.size === 0) {
       return false;
     }
     if (!this.ensureTokenDrainCache(bridge)) {
@@ -341,31 +281,23 @@ export class QueuedRequestScheduler {
     }
     const heapU8 = bridge.module.HEAPU8;
     const heap32 = bridge.module.HEAP32;
-    const totalDrops = heap32[this.cachedDropCountHeap32Index];
-    let dropDelta = 0;
-    if (totalDrops !== this.lastSeenDropCount) {
-      const delta = (totalDrops - this.lastSeenDropCount) | 0;
-      dropDelta = delta > 0 ? delta : 0;
-      this.lastSeenDropCount = totalDrops;
-      if (delta > 0 && typeof console !== 'undefined') {
-        console.warn(`[cogentlm] dropped ${delta} token record(s).`);
-      }
-    }
     const used = heap32[this.cachedUsedHeap32Index];
     if (used <= 0) {
       return false;
     }
     heap32[this.cachedUsedHeap32Index] = 0;
-    let offset = this.cachedBufferByteAddr;
+    let offset = bridge.getTokenBufferPointer();
+    if (offset === 0) {
+      return false;
+    }
     const end = offset + used;
-    const tokenSinkBatches = new Map<
+    const tokenBatchSinkBatches = new Map<
       number,
       {
         sequenceStart: number;
         text: string[];
         frameCount: number;
         byteCount: number;
-        framesDropped: number;
       }
     >();
     while (offset + 8 <= end) {
@@ -385,22 +317,21 @@ export class QueuedRequestScheduler {
       }
       const payload = heapU8.subarray(payloadStart, payloadStart + textLength);
       const streamId = requestId >>> 0;
-      const tokenSink = this.options.queuedPromptTokenSinks.get(streamId);
-      if (tokenSink != null) {
-        const sequence = this.tokenSinkSequences.get(streamId) ?? 0;
-        this.tokenSinkSequences.set(streamId, (sequence + 1) >>> 0);
-        let batch = tokenSinkBatches.get(streamId);
+      const tokenBatchSink = this.options.queuedPromptTokenBatchSinks.get(streamId);
+      if (tokenBatchSink != null) {
+        const sequence = this.tokenBatchSinkSequences.get(streamId) ?? 0;
+        this.tokenBatchSinkSequences.set(streamId, (sequence + 1) >>> 0);
+        let batch = tokenBatchSinkBatches.get(streamId);
         if (batch == null) {
           batch = {
             sequenceStart: sequence,
             text: [],
             frameCount: 0,
             byteCount: 0,
-            framesDropped: dropDelta,
           };
-          tokenSinkBatches.set(streamId, batch);
+          tokenBatchSinkBatches.set(streamId, batch);
         }
-        const decoded = this.decoderForTokenSink(streamId).decode(payload, {
+        const decoded = this.decoderForTokenBatchSink(streamId).decode(payload, {
           stream: true,
         });
         if (decoded.length > 0) {
@@ -411,54 +342,51 @@ export class QueuedRequestScheduler {
       }
       offset = payloadStart + textLength;
     }
-    for (const [requestId, batch] of tokenSinkBatches) {
-      this.deliverTokenSinkBatch(requestId, batch);
+    for (const [requestId, batch] of tokenBatchSinkBatches) {
+      this.deliverTokenBatchSinkBatch(requestId, batch);
     }
-    return tokenSinkBatches.size > 0;
+    return tokenBatchSinkBatches.size > 0;
   }
 
-  private decoderForTokenSink(requestId: number): TextDecoder {
-    let decoder = this.tokenSinkDecoders.get(requestId);
+  private decoderForTokenBatchSink(requestId: number): TextDecoder {
+    let decoder = this.tokenBatchSinkDecoders.get(requestId);
     if (decoder == null) {
       decoder = new TextDecoder('utf-8', { fatal: false });
-      this.tokenSinkDecoders.set(requestId, decoder);
+      this.tokenBatchSinkDecoders.set(requestId, decoder);
     }
     return decoder;
   }
 
-  private forgetTokenSinkStream(requestId: number): void {
-    this.tokenSinkDecoders.delete(requestId);
-    this.tokenSinkSequences.delete(requestId);
-    this.tokenSinkStats.delete(requestId);
+  private forgetTokenBatchSinkStream(requestId: number): void {
+    this.tokenBatchSinkDecoders.delete(requestId);
+    this.tokenBatchSinkSequences.delete(requestId);
+    this.tokenBatchSinkStats.delete(requestId);
   }
 
-  private deliverTokenSinkBatch(
+  private deliverTokenBatchSinkBatch(
     requestId: number,
     batch: {
       sequenceStart: number;
       text: string[];
       frameCount: number;
       byteCount: number;
-      framesDropped: number;
     }
   ): void {
-    const tokenSink = this.options.queuedPromptTokenSinks.get(requestId);
-    if (tokenSink == null || batch.frameCount === 0) {
+    const tokenBatchSink = this.options.queuedPromptTokenBatchSinks.get(requestId);
+    if (tokenBatchSink == null || batch.frameCount === 0) {
       return;
     }
-    const stats = this.tokenSinkStats.get(requestId) ?? {
+    const stats = this.tokenBatchSinkStats.get(requestId) ?? {
       framesSent: 0,
       bytesSent: 0,
-      framesDropped: 0,
       batchesSent: 0,
     };
     stats.framesSent += batch.frameCount;
     stats.bytesSent += batch.byteCount;
-    stats.framesDropped += batch.framesDropped;
     stats.batchesSent += 1;
-    this.tokenSinkStats.set(requestId, stats);
+    this.tokenBatchSinkStats.set(requestId, stats);
     try {
-      tokenSink({
+      tokenBatchSink({
         requestId: String(requestId),
         streamId: requestId,
         sequenceStart: batch.sequenceStart,
@@ -468,7 +396,7 @@ export class QueuedRequestScheduler {
         stats: { ...stats },
       });
     } catch (error) {
-      this.options.queuedPromptTokenSinkErrors.set(requestId, error);
+      this.options.queuedPromptTokenBatchSinkErrors.set(requestId, error);
     }
   }
 }

@@ -616,7 +616,7 @@ class FakeRuntime implements EngineRuntime {
     this.queuedRequests.set(requestId, { promptText, options });
     if (typeof options === 'object' && this.streamedTokens.length > 0) {
       const text = this.streamedTokens.join('');
-      options.tokenDelivery?.sink?.({
+      options.tokenBatchSink?.({
         requestId: String(requestId),
         streamId: requestId,
         sequenceStart: 0,
@@ -626,7 +626,6 @@ class FakeRuntime implements EngineRuntime {
         stats: {
           framesSent: this.streamedTokens.length,
           bytesSent: new TextEncoder().encode(text).byteLength,
-          framesDropped: 0,
           batchesSent: 1,
         },
       });
@@ -994,8 +993,7 @@ test('ModelService loads, lists, tracks current, and queries text models', async
   const answer = await service.runQuery(
     'hello',
     {
-      tokenDelivery: 'batch',
-      tokenSink: (batch) => {
+      tokenBatchSink: (batch) => {
         tokens.push(batch.text);
       },
     }
@@ -1005,7 +1003,7 @@ test('ModelService loads, lists, tracks current, and queries text models', async
   assert.equal(runtime.lastPrompt, 'hello');
 });
 
-test('ModelService.embed returns embedding results without token delivery', async () => {
+test('ModelService.embed returns embedding results without token emission', async () => {
   const { service, runtime } = createService();
   await service.load(file('embedding-model.gguf'));
 
@@ -1117,8 +1115,7 @@ test('ModelService.chat renders chat templates and sanitizes assistant boundarie
       { role: 'user', content: 'Say hello.' },
     ],
     {
-      tokenDelivery: 'batch',
-      tokenSink: (batch) => {
+      tokenBatchSink: (batch) => {
         tokens.push(batch.text);
       },
     }
@@ -1131,7 +1128,7 @@ test('ModelService.chat renders chat templates and sanitizes assistant boundarie
   assert.ok(runtime.lastPrompt?.endsWith('<assistant>\n'));
 });
 
-test('ModelService.chat keeps token emission off when token delivery is not requested', async () => {
+test('ModelService.chat keeps token emission off when a token sink is not requested', async () => {
   const { service, runtime } = createService();
   await service.load(file('text-model.gguf'));
   runtime.nextOutputText = 'Hello there</assistant>\n<user>ignored';
@@ -1146,22 +1143,20 @@ test('ModelService.chat keeps token emission off when token delivery is not requ
   const options = runtime.enqueuedOptions.at(-1);
   assert.equal(answer.text, 'Hello there');
   assert.equal(typeof options, 'object');
-  assert.equal((options as PromptOptions).tokenDelivery, undefined);
+  assert.equal((options as PromptOptions).tokenBatchSink, undefined);
 });
 
-test('ModelService passes interactive token delivery to the runtime', async () => {
+test('ModelService passes token sinks to the runtime when token emission is requested', async () => {
   const { service, runtime } = createService();
   await service.load(file('text-model.gguf'));
 
   await service.runQuery('hello', {
-    tokenDelivery: 'interactive',
-    tokenSink: () => {},
+    tokenBatchSink: () => {},
   });
 
   const options = runtime.enqueuedOptions.at(-1);
   assert.equal(typeof options, 'object');
-  assert.equal((options as PromptOptions).tokenDelivery?.mode, 'interactive');
-  assert.equal(typeof (options as PromptOptions).tokenDelivery?.sink, 'function');
+  assert.equal(typeof (options as PromptOptions).tokenBatchSink, 'function');
 });
 
 test('ModelService removes current models and deletes orphaned assets', async () => {

@@ -15,7 +15,7 @@ def main() -> None:
         ],
         options=text_options(),
         local=LocalTextOptions(context_key="python-chat-smoke"),
-        token_delivery="batch",
+        emit_tokens=True,
     )
     streamed = ""
     for batch in run.tokens():

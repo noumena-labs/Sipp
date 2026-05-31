@@ -12,7 +12,7 @@ function createTransportObservability(): TransportObservability {
     workerBacked: false,
     enabled: false,
     activeTokenTransport: 'none',
-    activeTokenDelivery: 'off',
+    activeTokenEmission: false,
   };
 }
 
@@ -43,9 +43,8 @@ test('QueuedRequestScheduler settles completed requests reported by the inferenc
 
   const scheduler = new QueuedRequestScheduler({
     tracker,
-    queuedPromptTokenSinks: new Map(),
-    queuedPromptTokenDeliveryModes: new Map(),
-    queuedPromptTokenSinkErrors: new Map(),
+    queuedPromptTokenBatchSinks: new Map(),
+    queuedPromptTokenBatchSinkErrors: new Map(),
     getTransportObservability: () => transport,
     getBridge: () => bridge,
     finalizeRequest: (_bridge, requestId, options) => {
@@ -70,15 +69,14 @@ test('QueuedRequestScheduler settles completed requests reported by the inferenc
 test('QueuedRequestScheduler drains token buffer to TokenBatch sinks', async () => {
   const tracker = new RequestTracker<GenerateResponse>();
   const transport = createTransportObservability();
-  const tokenSinks = new Map<number, (batch: TokenBatch) => void>();
-  const tokenSinkErrors = new Map<number, unknown>();
+  const tokenBatchSinks = new Map<number, (batch: TokenBatch) => void>();
+  const tokenBatchSinkErrors = new Map<number, unknown>();
   const batches: TokenBatch[] = [];
   const memory = new ArrayBuffer(256);
   const heapU8 = new Uint8Array(memory);
   const heap32 = new Int32Array(memory);
   const bufferAddr = 64;
   const usedAddr = 4;
-  const dropAddr = 8;
   const payload = new TextEncoder().encode('hi');
   const recordSize = 8 + payload.byteLength;
 
@@ -95,11 +93,7 @@ test('QueuedRequestScheduler drains token buffer to TokenBatch sinks', async () 
     getTokenBufferUsedAddress() {
       return usedAddr;
     },
-    getTokenBufferDropCountAddress() {
-      return dropAddr;
-    },
     async runInferenceLoop() {
-      this.module._ce_yield_drain?.();
       return {
         stepResult: 0,
         completedResponseCount: 1,
@@ -117,13 +111,12 @@ test('QueuedRequestScheduler drains token buffer to TokenBatch sinks', async () 
         outputText: 'hi',
       };
     },
-  } as unknown as WasmBridge & { module: { _ce_yield_drain?: () => void } };
+  } as unknown as WasmBridge;
 
   const scheduler = new QueuedRequestScheduler({
     tracker,
-    queuedPromptTokenSinks: tokenSinks,
-    queuedPromptTokenDeliveryModes: new Map(),
-    queuedPromptTokenSinkErrors: tokenSinkErrors,
+    queuedPromptTokenBatchSinks: tokenBatchSinks,
+    queuedPromptTokenBatchSinkErrors: tokenBatchSinkErrors,
     getTransportObservability: () => transport,
     getBridge: () => bridge,
     finalizeRequest: (_bridge, requestId, options) => {
@@ -132,7 +125,7 @@ test('QueuedRequestScheduler drains token buffer to TokenBatch sinks', async () 
     cancelQuery: async () => true,
   });
 
-  tokenSinks.set(1, (batch) => batches.push(batch));
+  tokenBatchSinks.set(1, (batch) => batches.push(batch));
   const tracked = scheduler.track(1);
   await tracked.promise;
 
@@ -146,28 +139,24 @@ test('QueuedRequestScheduler drains token buffer to TokenBatch sinks', async () 
   assert.deepEqual(batches[0].stats, {
     framesSent: 1,
     bytesSent: 2,
-    framesDropped: 0,
     batchesSent: 1,
   });
-  assert.equal(tokenSinkErrors.size, 0);
+  assert.equal(tokenBatchSinkErrors.size, 0);
 });
 
-test('QueuedRequestScheduler runs interactive token delivery with per-token native yield', async () => {
+test('QueuedRequestScheduler keeps native token budget while emitting tokens', async () => {
   const tracker = new RequestTracker<GenerateResponse>();
   const transport = createTransportObservability();
-  const tokenSinks = new Map<number, (batch: TokenBatch) => void>();
-  const tokenDeliveryModes = new Map<number, 'batch' | 'interactive'>();
-  const tokenSinkErrors = new Map<number, unknown>();
+  const tokenBatchSinks = new Map<number, (batch: TokenBatch) => void>();
+  const tokenBatchSinkErrors = new Map<number, unknown>();
   const batches: TokenBatch[] = [];
   const loopTokenLimits: number[] = [];
-  const interactiveFlags: boolean[] = [];
   const memory = new ArrayBuffer(256);
   const heapU8 = new Uint8Array(memory);
   const heap32 = new Int32Array(memory);
   const encoder = new TextEncoder();
   const bufferAddr = 64;
   const usedAddr = 4;
-  const dropAddr = 8;
   let loopCount = 0;
 
   const writeTokenRecord = (text: string) => {
@@ -192,17 +181,12 @@ test('QueuedRequestScheduler runs interactive token delivery with per-token nati
     getTokenBufferUsedAddress() {
       return usedAddr;
     },
-    getTokenBufferDropCountAddress() {
-      return dropAddr;
-    },
     async runInferenceLoop(
       _maxTicks: number,
       _maxCompletedResponses: number,
-      maxEmittedTokens: number,
-      options?: { interactiveTokenDelivery?: boolean }
+      maxGeneratedTokens: number
     ) {
-      loopTokenLimits.push(maxEmittedTokens);
-      interactiveFlags.push(options?.interactiveTokenDelivery === true);
+      loopTokenLimits.push(maxGeneratedTokens);
       loopCount += 1;
       if (loopCount === 1) {
         writeTokenRecord('a');
@@ -232,9 +216,8 @@ test('QueuedRequestScheduler runs interactive token delivery with per-token nati
 
   const scheduler = new QueuedRequestScheduler({
     tracker,
-    queuedPromptTokenSinks: tokenSinks,
-    queuedPromptTokenDeliveryModes: tokenDeliveryModes,
-    queuedPromptTokenSinkErrors: tokenSinkErrors,
+    queuedPromptTokenBatchSinks: tokenBatchSinks,
+    queuedPromptTokenBatchSinkErrors: tokenBatchSinkErrors,
     getTransportObservability: () => transport,
     getBridge: () => bridge,
     finalizeRequest: (_bridge, requestId, options) => {
@@ -243,106 +226,13 @@ test('QueuedRequestScheduler runs interactive token delivery with per-token nati
     cancelQuery: async () => true,
   });
 
-  tokenSinks.set(1, (batch) => batches.push(batch));
-  tokenDeliveryModes.set(1, 'interactive');
+  tokenBatchSinks.set(1, (batch) => batches.push(batch));
   const tracked = scheduler.track(1);
   await tracked.promise;
 
-  assert.equal(loopTokenLimits.length, 2);
-  assert.ok(
-    loopTokenLimits.every((limit) => limit > 0 && limit < 512),
-    `expected interactive loop limits below the bulk limit, got ${JSON.stringify(loopTokenLimits)}`
-  );
-  assert.equal(loopTokenLimits[0], loopTokenLimits[1]);
-  assert.deepEqual(interactiveFlags, [true, true]);
+  assert.deepEqual(loopTokenLimits, [512, 512]);
   assert.equal(batches.length, 1);
   assert.equal(batches[0].text, 'a');
   assert.equal(batches[0].frameCount, 1);
-  assert.equal(tokenSinkErrors.size, 0);
-});
-
-test('QueuedRequestScheduler keeps batch token delivery on monolithic native loop', async () => {
-  const tracker = new RequestTracker<GenerateResponse>();
-  const transport = createTransportObservability();
-  const tokenSinks = new Map<number, (batch: TokenBatch) => void>();
-  const tokenDeliveryModes = new Map<number, 'batch' | 'interactive'>();
-  const tokenSinkErrors = new Map<number, unknown>();
-  const batches: TokenBatch[] = [];
-  const loopTokenLimits: number[] = [];
-  const interactiveFlags: boolean[] = [];
-  const memory = new ArrayBuffer(256);
-  const heapU8 = new Uint8Array(memory);
-  const heap32 = new Int32Array(memory);
-  const bufferAddr = 64;
-  const usedAddr = 4;
-  const dropAddr = 8;
-  const payload = new TextEncoder().encode('batch');
-  const recordSize = 8 + payload.byteLength;
-
-  heapU8[bufferAddr] = 1;
-  heapU8[bufferAddr + 4] = payload.byteLength;
-  heapU8.set(payload, bufferAddr + 8);
-  heap32[usedAddr / 4] = recordSize;
-
-  const bridge = {
-    module: { HEAPU8: heapU8, HEAP32: heap32 },
-    getTokenBufferPointer() {
-      return bufferAddr;
-    },
-    getTokenBufferUsedAddress() {
-      return usedAddr;
-    },
-    getTokenBufferDropCountAddress() {
-      return dropAddr;
-    },
-    async runInferenceLoop(
-      _maxTicks: number,
-      _maxCompletedResponses: number,
-      maxEmittedTokens: number,
-      options?: { interactiveTokenDelivery?: boolean }
-    ) {
-      loopTokenLimits.push(maxEmittedTokens);
-      interactiveFlags.push(options?.interactiveTokenDelivery === true);
-      return {
-        stepResult: 0,
-        completedResponseCount: 1,
-      };
-    },
-    getCompletedRequestStatus() {
-      return COMPLETED_REQUEST_STATUS_COMPLETED;
-    },
-    takeCompletedResponse(requestId: number): GenerateResponse {
-      return {
-        requestId,
-        completed: true,
-        cancelled: false,
-        failed: false,
-        outputText: 'batch',
-      };
-    },
-  } as unknown as WasmBridge;
-
-  const scheduler = new QueuedRequestScheduler({
-    tracker,
-    queuedPromptTokenSinks: tokenSinks,
-    queuedPromptTokenDeliveryModes: tokenDeliveryModes,
-    queuedPromptTokenSinkErrors: tokenSinkErrors,
-    getTransportObservability: () => transport,
-    getBridge: () => bridge,
-    finalizeRequest: (_bridge, requestId, options) => {
-      tracker.finalize(requestId, options);
-    },
-    cancelQuery: async () => true,
-  });
-
-  tokenSinks.set(1, (batch) => batches.push(batch));
-  tokenDeliveryModes.set(1, 'batch');
-  const tracked = scheduler.track(1);
-  await tracked.promise;
-
-  assert.deepEqual(loopTokenLimits, [512]);
-  assert.deepEqual(interactiveFlags, [false]);
-  assert.equal(batches.length, 1);
-  assert.equal(batches[0].text, 'batch');
-  assert.equal(tokenSinkErrors.size, 0);
+  assert.equal(tokenBatchSinkErrors.size, 0);
 });

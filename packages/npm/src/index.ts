@@ -43,12 +43,11 @@ export {
   type RequestStats,
   type RequestStatus,
   type RuntimeObservation,
-  type TokenDeliveryStats,
+  type TokenEmissionStats,
   type TokenBatch,
 } from './models/types.js';
 export type {
   ChatMessage,
   NativeRuntimeConfig,
   RequestObservabilityMetrics,
-  TokenDeliveryMode,
 } from './engine/inference-types.js';

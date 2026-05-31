@@ -8,9 +8,7 @@ use cogentlm_engine::backend::set_llama_log_quiet;
 use cogentlm_engine::engine::{GpuLayerConfig, NativeRuntimeConfig, SamplingRuntimeConfig};
 use cogentlm_engine::lifecycle::{BackendPolicy, BackendPreference, ModelLoadOptions, StatsMode};
 use cogentlm_engine::runtime::metrics::RuntimeObservabilityMetrics;
-use cogentlm_engine::runtime::request::{
-    GenerateResponseStatus, GenerateTokenEmissionMode, ResponseOutput,
-};
+use cogentlm_engine::runtime::request::{GenerateResponseStatus, ResponseOutput};
 use cogentlm_engine::runtime::{InferenceRuntime, RequestStepResult};
 use serde_json::json;
 
@@ -179,7 +177,7 @@ fn run_native_runtime(args: &Args, stdout: &mut impl Write) -> anyhow::Result<()
         "",
         Vec::new(),
         None,
-        GenerateTokenEmissionMode::None,
+        false,
     )?;
 
     for _ in 0..10_000 {

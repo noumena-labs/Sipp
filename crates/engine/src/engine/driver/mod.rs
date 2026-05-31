@@ -23,9 +23,9 @@ mod events;
 mod request;
 mod stats;
 mod thread_loop;
-mod token_delivery;
+mod token_emission;
 
-pub use request::{ChatMessage, ChatRequest, ChatRole, QueryOptions, QueryRequest, TokenDelivery};
+pub use request::{ChatMessage, ChatRequest, ChatRole, QueryOptions, QueryRequest};
 use stats::{embedding_result_from_response, generation_result_from_response};
 use thread_loop::{run_engine_thread, EngineThreadCommand};
 
@@ -79,9 +79,9 @@ pub struct EngineEmbeddingRun {
     _engine: Arc<EngineInner>,
 }
 
-/// Best-effort stream of token batches owned by an [`EngineTextRun`].
+/// Exact stream of token batches owned by an [`EngineTextRun`].
 pub struct EngineTokenBatches {
-    rx: futures_mpsc::Receiver<cogentlm_core::TokenBatch>,
+    rx: futures_mpsc::UnboundedReceiver<cogentlm_core::TokenBatch>,
 }
 
 /// Boxed final-response future returned when a text run is split into parts.
@@ -107,7 +107,7 @@ impl CogentEngine {
     /// Submit a raw prompt generation request and return its run handle.
     pub fn query(&self, request: QueryRequest) -> EngineTextRun {
         let (response_tx, response_rx) = oneshot::channel();
-        let (token_tx, tokens) = token_channel(request.token_delivery.emits_tokens());
+        let (token_tx, tokens) = token_channel(request.emit_tokens);
         let response = match self.inner.command_tx.send(EngineThreadCommand::Generate(
             request,
             response_tx,
@@ -126,7 +126,7 @@ impl CogentEngine {
     /// Submit a chat generation request and return its run handle.
     pub fn chat(&self, request: ChatRequest) -> EngineTextRun {
         let (response_tx, response_rx) = oneshot::channel();
-        let (token_tx, tokens) = token_channel(request.token_delivery.emits_tokens());
+        let (token_tx, tokens) = token_channel(request.emit_tokens);
         let response = match self
             .inner
             .command_tx
@@ -340,7 +340,7 @@ impl Future for EngineTextRun {
 }
 
 impl EngineTextRun {
-    /// Borrow the token batches when token delivery was requested for this run.
+    /// Borrow the token batches when token emission was requested for this run.
     pub fn tokens(&mut self) -> Option<&mut EngineTokenBatches> {
         self.tokens.as_mut()
     }
@@ -421,13 +421,13 @@ impl<T> EngineResponse<T> {
 fn token_channel(
     enabled: bool,
 ) -> (
-    Option<futures_mpsc::Sender<cogentlm_core::TokenBatch>>,
+    Option<futures_mpsc::UnboundedSender<cogentlm_core::TokenBatch>>,
     Option<EngineTokenBatches>,
 ) {
     if !enabled {
         return (None, None);
     }
-    let (tx, rx) = futures_mpsc::channel(token_delivery::TOKEN_BATCH_CHANNEL_CAPACITY);
+    let (tx, rx) = futures_mpsc::unbounded();
     (Some(tx), Some(EngineTokenBatches { rx }))
 }
 

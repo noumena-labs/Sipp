@@ -248,7 +248,7 @@ fn anthropic_model_from_value(value: &serde_json::Value) -> ProviderResult<Provi
             chat: CapabilitySupport::Supported,
             generate: CapabilitySupport::Supported,
             embeddings: CapabilitySupport::Unsupported,
-            token_delivery: CapabilitySupport::Supported,
+            token_emission: CapabilitySupport::Supported,
         },
         context_window: None,
         max_output_tokens: None,

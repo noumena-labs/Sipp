@@ -1,8 +1,7 @@
 import { ModelService } from '../models/model-service.js';
-import { QueryError, type TokenBatch, type TokenDeliveryMode } from '../models/types.js';
+import { QueryError, type TokenBatch } from '../models/types.js';
 import { resolveRuntimeUrls } from '../engine/runtime-assets.js';
 import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.js';
-import { TokenRingWriter } from '../runtime/token-ring.js';
 import {
   WorkerRequestMessage,
   WorkerResponseMessage,
@@ -12,14 +11,10 @@ import {
 let service: ModelService | null = null;
 let serviceConfigFingerprint: string | null = null;
 const activeCalls = new Map<number, AbortController>();
-// SAB token ring writer; set on `token-init`. When null, token delivery
-// requests are rejected upstream.
-let tokenRingWriter: TokenRingWriter | null = null;
-let tokenTickQueued = false;
 
 type WorkerOperationRequest = Exclude<
   WorkerRequestMessage,
-  { kind: 'cancel' } | { kind: 'token-init' }
+  { kind: 'cancel' }
 >;
 
 function buildServiceConfig(config: WorkerRuntimeConfig) {
@@ -69,17 +64,6 @@ function post(message: WorkerResponseMessage): void {
   self.postMessage(message);
 }
 
-function scheduleTokenTick(): void {
-  if (tokenTickQueued) {
-    return;
-  }
-  tokenTickQueued = true;
-  self.setTimeout(() => {
-    tokenTickQueued = false;
-    post({ kind: 'token-tick' });
-  }, 0);
-}
-
 function abortActiveCall(callId: number): void {
   activeCalls.get(callId)?.abort();
 }
@@ -107,36 +91,23 @@ function postLoadProgress(callId: number): NonNullable<Parameters<ModelService['
   };
 }
 
-// Wires a service-level token sink to the SAB ring and publishes a
-// `token-claim` message so the main thread can map the native request id
-// back to its call id. Chat and query use this same path, so chat boundary
-// sanitization stays inside ModelService.
-function tokenDeliveryOptionsFor(
+// Wires a service-level token batch sink to worker messages. Chat and query
+// use this same path, so chat boundary sanitization stays inside ModelService.
+function tokenEmissionOptionsFor(
   callId: number,
-  tokenDelivery: TokenDeliveryMode
+  emitTokens: boolean
 ): {
-  tokenDelivery: TokenDeliveryMode;
-  tokenSink?: (batch: TokenBatch) => void;
-  onRequestStarted?: (requestId: number) => void;
+  tokenBatchSink?: (batch: TokenBatch) => void;
 } {
-  if (tokenDelivery === 'off') {
-    return { tokenDelivery };
-  }
-  if (tokenRingWriter == null) {
-    throw new QueryError(
-      'TOKEN_DELIVERY_UNAVAILABLE',
-      'Worker token delivery requires SharedArrayBuffer. Enable cross-origin isolation or run with tokenDelivery: "off".'
-    );
+  if (!emitTokens) {
+    return {};
   }
   return {
-    tokenDelivery,
-    tokenSink: (batch) => {
-      if (batch.text.length > 0 && tokenRingWriter?.tryWriteString(batch.streamId, batch.text)) {
-        scheduleTokenTick();
+    tokenBatchSink: (batch) => {
+      if (batch.text.length > 0) {
+        post({ kind: 'token-batch', callId, batch });
       }
     },
-    onRequestStarted: (requestId) =>
-      post({ kind: 'token-claim', callId, nativeRequestId: requestId }),
   };
 }
 
@@ -162,29 +133,25 @@ async function handleRequest(message: WorkerOperationRequest): Promise<unknown> 
     }
     case 'query':
       return await withAbortController(message.callId, (signal) => {
-        const delivery = tokenDeliveryOptionsFor(message.callId, message.options.tokenDelivery);
+        const emission = tokenEmissionOptionsFor(message.callId, message.options.emitTokens);
         return ensureService(message.config).runQuery(
           message.input,
           {
             ...message.options,
             signal,
-            tokenDelivery: delivery.tokenDelivery,
-            tokenSink: delivery.tokenSink,
-            onRequestStarted: delivery.onRequestStarted,
+            tokenBatchSink: emission.tokenBatchSink,
           }
         );
       });
     case 'chat':
       return await withAbortController(message.callId, (signal) => {
-        const delivery = tokenDeliveryOptionsFor(message.callId, message.options.tokenDelivery);
+        const emission = tokenEmissionOptionsFor(message.callId, message.options.emitTokens);
         return ensureService(message.config).runChat(
           message.input,
           {
             ...message.options,
             signal,
-            tokenDelivery: delivery.tokenDelivery,
-            tokenSink: delivery.tokenSink,
-            onRequestStarted: delivery.onRequestStarted,
+            tokenBatchSink: emission.tokenBatchSink,
           }
         );
       });
@@ -202,13 +169,6 @@ self.onmessage = async (event: MessageEvent<WorkerRequestMessage>) => {
   const message = event.data;
   if (message.kind === 'cancel') {
     abortActiveCall(message.targetCallId);
-    return;
-  }
-  if (message.kind === 'token-init') {
-    tokenRingWriter =
-      message.ringBuffer != null
-        ? new TokenRingWriter(message.ringBuffer)
-        : null;
     return;
   }
 

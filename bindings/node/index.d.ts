@@ -68,15 +68,13 @@ export interface LocalEmbedOptions {
   normalize?: boolean
 }
 
-export type TokenDelivery = 'off' | 'batch'
-
 export interface CogentQueryRequest {
   endpoint?: EndpointRef
   prompt: string
   options?: CogentTextOptions
   local?: LocalTextOptions
   remoteOptions?: Record<string, unknown>
-  tokenDelivery?: TokenDelivery
+  emitTokens?: boolean
 }
 
 export interface CogentChatRequest {
@@ -85,7 +83,7 @@ export interface CogentChatRequest {
   options?: CogentTextOptions
   local?: LocalTextOptions
   remoteOptions?: Record<string, unknown>
-  tokenDelivery?: TokenDelivery
+  emitTokens?: boolean
 }
 
 export interface CogentEmbedRequest {
@@ -325,10 +323,9 @@ export interface SchedulerRuntimeConfig {
 
 export declare function setLlamaLogQuiet(quiet: boolean): void
 
-export interface TokenDeliveryStats {
+export interface TokenEmissionStats {
   framesSent: number
   bytesSent: number
-  framesDropped: number
   batchesSent: number
 }
 
@@ -339,5 +336,5 @@ export interface TokenBatch {
   text: string
   frameCount: number
   byteCount: number
-  stats: TokenDeliveryStats
+  stats: TokenEmissionStats
 }

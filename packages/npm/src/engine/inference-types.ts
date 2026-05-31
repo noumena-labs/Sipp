@@ -162,7 +162,7 @@ export interface NativeRuntimeConfig {
 export interface PromptOptions {
   nTokens?: number;
   signal?: AbortSignal;
-  tokenDelivery?: TokenDelivery;
+  tokenBatchSink?: (batch: TokenBatch) => void;
   media?: Uint8Array[];
   /**
    * Optional GBNF grammar source applied to the sampler for this request.
@@ -178,22 +178,14 @@ export interface EmbedRuntimeOptions {
   signal?: AbortSignal;
 }
 
-export type TokenDeliveryMode = 'off' | 'batch' | 'interactive';
-
-export interface TokenDelivery {
-  mode: TokenDeliveryMode;
-  sink?: (batch: TokenBatch) => void;
-}
-
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
 }
 
-export interface TokenDeliveryStats {
+export interface TokenEmissionStats {
   framesSent: number;
   bytesSent: number;
-  framesDropped: number;
   batchesSent: number;
 }
 
@@ -204,7 +196,7 @@ export interface TokenBatch {
   text: string;
   frameCount: number;
   byteCount: number;
-  stats: TokenDeliveryStats;
+  stats: TokenEmissionStats;
 }
 
 export type GenerateRequestId = number;
@@ -300,8 +292,8 @@ export interface TransportObservability {
   executionMode: EngineExecutionMode;
   workerBacked: boolean;
   enabled: boolean;
-  activeTokenTransport?: 'none' | 'token-sink';
-  activeTokenDelivery?: TokenDeliveryMode;
+  activeTokenTransport?: 'none' | 'token-stream';
+  activeTokenEmission?: boolean;
   tokenDrainCount?: number;
   tokenDrainMs?: number;
 }

@@ -80,8 +80,7 @@ interface RuntimeRequestOptions {
   session?: string;
   maxTokens?: number;
   signal?: AbortSignal;
-  tokenDelivery?: QueryOptions['tokenDelivery'];
-  tokenSink?: (batch: TokenBatch) => void;
+  tokenBatchSink?: (batch: TokenBatch) => void;
   grammar?: string;
   onRequestStarted?: (requestId: number) => void;
 }
@@ -144,7 +143,6 @@ function tokenBatchFromText(
     stats: {
       framesSent: sequenceStart + 1,
       bytesSent: byteCount,
-      framesDropped: 0,
       batchesSent: sequenceStart + 1,
     },
   };
@@ -372,14 +370,13 @@ export class ModelService implements ModelLifecycleService {
   ): Promise<GenerateResponse> {
     let activeRequestId: number | null = null;
     let nextSequence = 0;
-    const tokenDeliveryMode = options.tokenSink == null ? 'off' : options.tokenDelivery ?? 'batch';
     const deliverTokenBatch = (batch: TokenBatch): void => {
       const requestId = activeRequestId ?? Number(batch.streamId);
       const text = batch.text;
       if (text.length === 0) {
         return;
       }
-      options.tokenSink?.({
+      options.tokenBatchSink?.({
         ...batch,
         requestId: String(requestId),
         streamId: requestId,
@@ -390,13 +387,7 @@ export class ModelService implements ModelLifecycleService {
     const promptOptions: PromptOptions = {
       nTokens: options.maxTokens,
       signal: options.signal,
-      tokenDelivery:
-        tokenDeliveryMode === 'off'
-          ? undefined
-          : {
-              mode: tokenDeliveryMode,
-              sink: deliverTokenBatch,
-            },
+      tokenBatchSink: options.tokenBatchSink == null ? undefined : deliverTokenBatch,
       media,
       grammar: options.grammar,
       onRequestStarted: options.onRequestStarted,
@@ -498,7 +489,7 @@ export class ModelService implements ModelLifecycleService {
 
     let safeSequence = 0;
     let lastBatch: TokenBatch | null = null;
-    const shouldDeliverTokens = options.tokenSink != null;
+    const shouldDeliverTokens = options.tokenBatchSink != null;
     const consumeOutputTokens = (batch: TokenBatch): void => {
       lastBatch = batch;
       const text = batch.text;
@@ -509,7 +500,7 @@ export class ModelService implements ModelLifecycleService {
       const result = outputSanitizer.consume(text);
       if (result.safeText.length > 0) {
         assistantText += result.safeText;
-        options.tokenSink?.(
+        options.tokenBatchSink?.(
           tokenBatchFromText(batch.requestId, batch.streamId, safeSequence++, result.safeText)
         );
       }
@@ -524,7 +515,7 @@ export class ModelService implements ModelLifecycleService {
       if (safeText.length > 0) {
         assistantText += safeText;
         const source = lastBatch ?? tokenBatchFromText('0', 0, safeSequence, safeText);
-        options.tokenSink?.(
+        options.tokenBatchSink?.(
           tokenBatchFromText(source.requestId, source.streamId, safeSequence++, safeText)
         );
       }
@@ -535,7 +526,7 @@ export class ModelService implements ModelLifecycleService {
         {
           ...options,
           signal: linkedAbort.signal,
-          ...(shouldDeliverTokens ? { tokenSink: consumeOutputTokens } : {}),
+          ...(shouldDeliverTokens ? { tokenBatchSink: consumeOutputTokens } : {}),
         },
         media == null ? undefined : [...media],
         (session, promptOptions) => this.runtime.enqueueChat(session, messages, promptOptions),

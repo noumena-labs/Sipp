@@ -5,7 +5,6 @@ import type {
   EmbeddingResult,
   GenerationResult,
   TokenBatch,
-  TokenDeliveryMode,
 } from './types.js';
 import { createLinkedAbortController } from '../utils/abort.js';
 
@@ -14,28 +13,10 @@ const TOKEN_QUEUE_CAPACITY = 256;
 class BoundedTokenBatchQueue implements BrowserTokenBatches, AsyncIterator<TokenBatch> {
   private readonly items: TokenBatch[] = [];
   private readonly waiters: Array<(result: IteratorResult<TokenBatch>) => void> = [];
-  private readonly subscribers = new Set<(batch: TokenBatch) => void>();
   private closed = false;
-  private pendingDroppedFrames = 0;
 
   public push(batch: TokenBatch): void {
     if (this.closed) {
-      return;
-    }
-    if (this.pendingDroppedFrames > 0) {
-      batch = {
-        ...batch,
-        stats: {
-          ...batch.stats,
-          framesDropped: batch.stats.framesDropped + this.pendingDroppedFrames,
-        },
-      };
-      this.pendingDroppedFrames = 0;
-    }
-    if (this.subscribers.size > 0) {
-      for (const subscriber of this.subscribers) {
-        subscriber(batch);
-      }
       return;
     }
     const waiter = this.waiters.shift();
@@ -44,7 +25,8 @@ class BoundedTokenBatchQueue implements BrowserTokenBatches, AsyncIterator<Token
       return;
     }
     if (this.items.length >= TOKEN_QUEUE_CAPACITY) {
-      this.pendingDroppedFrames += batch.frameCount;
+      const lastIndex = this.items.length - 1;
+      this.items[lastIndex] = mergeTokenBatches(this.items[lastIndex], batch);
       return;
     }
     this.items.push(batch);
@@ -55,7 +37,6 @@ class BoundedTokenBatchQueue implements BrowserTokenBatches, AsyncIterator<Token
       return;
     }
     this.closed = true;
-    this.subscribers.clear();
     while (this.waiters.length > 0) {
       this.waiters.shift()?.({ done: true, value: undefined });
     }
@@ -77,36 +58,22 @@ class BoundedTokenBatchQueue implements BrowserTokenBatches, AsyncIterator<Token
   public [Symbol.asyncIterator](): AsyncIterator<TokenBatch> {
     return this;
   }
-
-  public subscribe(listener: (batch: TokenBatch) => void): () => void {
-    for (const item of this.items.splice(0)) {
-      listener(item);
-    }
-    if (this.closed) {
-      return () => {};
-    }
-    this.subscribers.add(listener);
-    return () => {
-      this.subscribers.delete(listener);
-    };
-  }
 }
 
 /**
- * Create a browser text run with a bounded best-effort token queue.
+ * Create a browser text run with an exact coalescing token queue.
  */
 export function createBrowserTextRun(
-  options: { signal?: AbortSignal; tokenDelivery?: TokenDeliveryMode },
+  options: { signal?: AbortSignal; emitTokens?: boolean },
   responseFactory: (
-    tokenSink: ((batch: TokenBatch) => void) | undefined,
+    tokenBatchSink: ((batch: TokenBatch) => void) | undefined,
     signal: AbortSignal
   ) => Promise<GenerationResult>
 ): BrowserTextRun {
   const linkedAbort = createLinkedAbortController(options.signal);
   const queue = new BoundedTokenBatchQueue();
-  const tokenDelivery = options.tokenDelivery ?? 'off';
   const response = responseFactory(
-    tokenDelivery === 'off' ? undefined : (batch) => queue.push(batch),
+    options.emitTokens === true ? (batch) => queue.push(batch) : undefined,
     linkedAbort.signal
   ).finally(() => {
     queue.close();
@@ -118,6 +85,18 @@ export function createBrowserTextRun(
     cancel: () => {
       linkedAbort.controller.abort();
     },
+  };
+}
+
+function mergeTokenBatches(left: TokenBatch, right: TokenBatch): TokenBatch {
+  return {
+    requestId: left.requestId,
+    streamId: left.streamId,
+    sequenceStart: left.sequenceStart,
+    text: left.text + right.text,
+    frameCount: left.frameCount + right.frameCount,
+    byteCount: left.byteCount + right.byteCount,
+    stats: right.stats,
   };
 }
 

@@ -1,8 +1,6 @@
 mod remote_common;
 
-use cogentlm_client::{
-    CogentChatRequest, CogentTextOptions, CogentTextResponse, CogentTokenDelivery,
-};
+use cogentlm_client::{CogentChatRequest, CogentTextOptions, CogentTextResponse};
 use cogentlm_engine::engine::{ChatMessage, ChatRole};
 use futures::executor::block_on;
 use futures::StreamExt;
@@ -19,7 +17,7 @@ fn main() -> remote_common::ExampleResult<()> {
                 ChatMessage::new(ChatRole::User, args.input),
             ],
             options: text_options(),
-            token_delivery: CogentTokenDelivery::Batch,
+            emit_tokens: true,
             ..Default::default()
         });
         let (mut tokens, response) = run.into_parts();

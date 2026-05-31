@@ -28,16 +28,16 @@ int cogentlm_browser_engine_copy_last_error(const void *engine,
 int cogentlm_browser_engine_close(void *engine);
 CE_RequestId cogentlm_browser_engine_start_text_request(
     void *engine, const char *context_key, const char *prompt, int max_tokens,
-    int token_emission_mode, const char *grammar);
+    int emit_tokens, const char *grammar);
 CE_RequestId cogentlm_browser_engine_start_media_request(
     void *engine, const char *context_key, const char *prompt, int max_tokens,
     int image_count, const std::uint8_t *images_flat_buffer,
-    const std::int32_t *image_sizes, int token_emission_mode,
+    const std::int32_t *image_sizes, int emit_tokens,
     const char *grammar);
 CE_RequestId cogentlm_browser_engine_start_chat_request(
     void *engine, const char *context_key, const char *messages_json,
     int max_tokens, int image_count, const std::uint8_t *images_flat_buffer,
-    const std::int32_t *image_sizes, int token_emission_mode,
+    const std::int32_t *image_sizes, int emit_tokens,
     const char *grammar);
 CE_RequestId cogentlm_browser_engine_start_embedding_request(
     void *engine, const char *context_key, const char *input, int normalize);
@@ -45,7 +45,7 @@ int cogentlm_browser_engine_cancel_request(void *engine,
                                            CE_RequestId request_id);
 int cogentlm_browser_engine_run_scheduler_loop(
     void *engine, int max_ticks, int max_completed_responses,
-    int max_emitted_tokens, int max_duration_us, int interactive_token_delivery,
+    int max_generated_tokens, int max_duration_us,
     CE_SchedulerLoopResult *out_result);
 int cogentlm_browser_engine_completed_request_status(
     const void *engine, CE_RequestId request_id);
@@ -79,8 +79,6 @@ int cogentlm_browser_engine_completed_runtime_observability(
     CE_RuntimeObservabilityMetrics *out_metrics);
 std::uint8_t *cogentlm_browser_engine_token_buffer_pointer(void *engine);
 std::int32_t *cogentlm_browser_engine_token_buffer_used_address(
-    void *engine);
-std::int32_t *cogentlm_browser_engine_token_buffer_drop_count_address(
     void *engine);
 char *cogentlm_browser_engine_media_marker(const void *engine);
 char *cogentlm_browser_engine_chat_template(const void *engine);
@@ -713,44 +711,44 @@ char *CE_ProbeChatBoundaryInfo() {
 }
 
 EMSCRIPTEN_KEEPALIVE
-CE_RequestId CE_StartTextRequestWithTokenEmissionMode(
+CE_RequestId CE_StartTextRequest(
     const char *context_key, const char *prompt, int n_tokens,
-    int token_emission_mode, const char *grammar) {
+    int emit_tokens, const char *grammar) {
   if (!g_isEngineInitialized || prompt == nullptr ||
       !is_valid_prediction_tokens(n_tokens)) {
     return 0;
   }
   return cogentlm_browser_engine_start_text_request(
-      g_rustBrowserEngine, context_key, prompt, n_tokens, token_emission_mode,
+      g_rustBrowserEngine, context_key, prompt, n_tokens, emit_tokens,
       grammar);
 }
 
 EMSCRIPTEN_KEEPALIVE
-CE_RequestId CE_StartMediaRequestWithTokenEmissionMode(
+CE_RequestId CE_StartMediaRequest(
     const char *context_key, const char *prompt, int n_tokens, int n_images,
     const uint8_t *images_flat_buffer, const int32_t *image_sizes,
-    int token_emission_mode, const char *grammar) {
+    int emit_tokens, const char *grammar) {
   if (!g_isEngineInitialized || prompt == nullptr ||
       !is_valid_prediction_tokens(n_tokens)) {
     return 0;
   }
   return cogentlm_browser_engine_start_media_request(
       g_rustBrowserEngine, context_key, prompt, n_tokens, n_images,
-      images_flat_buffer, image_sizes, token_emission_mode, grammar);
+      images_flat_buffer, image_sizes, emit_tokens, grammar);
 }
 
 EMSCRIPTEN_KEEPALIVE
-CE_RequestId CE_StartChatRequestWithTokenEmissionMode(
+CE_RequestId CE_StartChatRequest(
     const char *context_key, const char *messages_json, int n_tokens,
     int n_images, const uint8_t *images_flat_buffer, const int32_t *image_sizes,
-    int token_emission_mode, const char *grammar) {
+    int emit_tokens, const char *grammar) {
   if (!g_isEngineInitialized || messages_json == nullptr ||
       !is_valid_prediction_tokens(n_tokens)) {
     return 0;
   }
   return cogentlm_browser_engine_start_chat_request(
       g_rustBrowserEngine, context_key, messages_json, n_tokens, n_images,
-      images_flat_buffer, image_sizes, token_emission_mode, grammar);
+      images_flat_buffer, image_sizes, emit_tokens, grammar);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -783,12 +781,11 @@ int CE_GetRuntimeObservability(CE_RuntimeObservabilityMetrics *out_metrics) {
 
 EMSCRIPTEN_KEEPALIVE
 int CE_RunSchedulerLoop(int32_t max_ticks, int32_t max_completed_responses,
-                        int32_t max_emitted_tokens, int32_t max_duration_us,
-                        int32_t interactive_token_delivery,
+                        int32_t max_generated_tokens, int32_t max_duration_us,
                         CE_SchedulerLoopResult *out_result) {
   return cogentlm_browser_engine_run_scheduler_loop(
       g_rustBrowserEngine, max_ticks, max_completed_responses,
-      max_emitted_tokens, max_duration_us, interactive_token_delivery, out_result);
+      max_generated_tokens, max_duration_us, out_result);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -814,12 +811,6 @@ const uint8_t *CE_GetTokenBufferPointer() {
 EMSCRIPTEN_KEEPALIVE
 int32_t *CE_GetTokenBufferUsedAddress() {
   return cogentlm_browser_engine_token_buffer_used_address(
-      g_rustBrowserEngine);
-}
-
-EMSCRIPTEN_KEEPALIVE
-int32_t *CE_GetTokenBufferDropCountAddress() {
-  return cogentlm_browser_engine_token_buffer_drop_count_address(
       g_rustBrowserEngine);
 }
 
@@ -895,23 +886,6 @@ void CE_FreeString(char *str) {
   if (str) {
     std::free(str);
   }
-}
-
-// Called by the Rust browser engine between scheduler bursts. Lets the host
-// (worker thread) snapshot the native token buffer into the SAB ring so
-// the main thread can render tokens mid-flight without a full ccall round
-// trip per token. Kept synchronous on purpose; the worker is dedicated to
-// inference and the JS hook only does a fast HEAP->SAB copy.
-EMSCRIPTEN_KEEPALIVE
-void ce_native_yield() {
-  // clang-format off
-  EM_ASM({
-    var fn = Module && Module._ce_yield_drain;
-    if (typeof fn === 'function') {
-      fn();
-    }
-  });
-  // clang-format on
 }
 
 } // extern "C"

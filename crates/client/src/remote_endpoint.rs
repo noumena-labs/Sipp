@@ -12,7 +12,6 @@ use futures_channel::mpsc;
 
 use crate::dispatch::InferenceEndpoint;
 use crate::remote_executor::RemoteExecutor;
-use crate::run::TOKEN_BATCH_CHANNEL_CAPACITY;
 use crate::{
     map, validate, CogentChatRequest, CogentEmbedRequest, CogentEmbeddingRun, CogentError,
     CogentQueryRequest, CogentResult, CogentTextResponse, CogentTextRun, CogentTokenBatches,
@@ -59,7 +58,7 @@ impl InferenceEndpoint for RemoteEndpoint {
     }
 
     fn query(&self, request: CogentQueryRequest) -> CogentTextRun {
-        if request.token_delivery.emits_tokens() {
+        if request.emit_tokens {
             return CogentTextRun::ready_err(CogentError::UnsupportedOperation {
                 endpoint: self.endpoint.clone(),
                 operation: "query",
@@ -104,8 +103,8 @@ impl InferenceEndpoint for RemoteEndpoint {
         let endpoint = self.endpoint.clone();
         let executor = self.executor.clone();
 
-        if request.token_delivery.emits_tokens() {
-            let (batch_tx, batch_rx) = mpsc::channel(TOKEN_BATCH_CHANNEL_CAPACITY);
+        if request.emit_tokens {
+            let (batch_tx, batch_rx) = mpsc::unbounded();
             let join = executor.spawn(async move {
                 run_remote_stream(transport, endpoint, provider_request, batch_tx).await
             });
@@ -189,31 +188,18 @@ async fn run_remote_stream(
     transport: ProviderTransport,
     endpoint: EndpointRef,
     request: ProviderChatRequest,
-    mut batch_tx: mpsc::Sender<TokenBatch>,
+    batch_tx: mpsc::UnboundedSender<TokenBatch>,
 ) -> CogentResult<CogentTextResponse> {
     let mut stream = transport.stream_chat(request).await?;
     let mut text = String::new();
     let mut finish_reason = FinishReason::Stop;
     let mut usage: Option<TokenUsage> = None;
-    let mut pending_dropped_frames = 0_u64;
 
     while let Some(event) = stream.next().await {
         match event? {
-            ProviderStreamEvent::TokenBatch(mut batch) => {
+            ProviderStreamEvent::TokenBatch(batch) => {
                 text.push_str(&batch.text);
-                if pending_dropped_frames > 0 {
-                    batch.stats.frames_dropped = batch
-                        .stats
-                        .frames_dropped
-                        .saturating_add(pending_dropped_frames);
-                    pending_dropped_frames = 0;
-                }
-                if let Err(error) = batch_tx.try_send(batch) {
-                    if error.is_full() {
-                        pending_dropped_frames = pending_dropped_frames
-                            .saturating_add(u64::from(error.into_inner().frame_count));
-                    }
-                }
+                let _ = batch_tx.unbounded_send(batch);
             }
             ProviderStreamEvent::Usage { usage: next } => usage = Some(next),
             ProviderStreamEvent::Finished {

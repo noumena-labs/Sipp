@@ -9,8 +9,6 @@ import type {
   WorkerResponseMessage,
 } from '../worker/model-service-protocol.js';
 
-import { TokenRingWriter } from '../runtime/token-ring.js';
-
 class FakeWorker {
   public static lastInstance: FakeWorker | null = null;
   public onmessage: ((event: MessageEvent<WorkerResponseMessage>) => void) | null = null;
@@ -18,7 +16,6 @@ class FakeWorker {
   public onmessageerror: (() => void) | null = null;
   public readonly messages: WorkerRequestMessage[] = [];
   public terminated = false;
-  private ringWriter: TokenRingWriter | null = null;
 
   constructor(
     public readonly url: string | URL,
@@ -30,21 +27,13 @@ class FakeWorker {
   public postMessage(message: WorkerRequestMessage): void {
     this.messages.push(message);
 
-    if (message.kind === 'token-init') {
-      this.ringWriter = message.ringBuffer ? new TokenRingWriter(message.ringBuffer) : null;
-      return;
-    }
-
     if ('callId' in message) {
       if (message.kind === 'chat' || message.kind === 'query') {
         const text = message.kind === 'chat' ? 'Hello' : 'Hello</assistant>\n<user>ignored';
-        if (this.ringWriter && message.options.tokenDelivery !== 'off') {
-          const requestId = 123;
-          this.ringWriter.tryWriteString(requestId, text);
+        if (message.options.emitTokens) {
           this.onmessage?.({
-            data: { kind: 'token-claim', callId: message.callId, nativeRequestId: requestId }
+            data: { kind: 'token-batch', callId: message.callId, batch: tokenBatch(text) },
           } as MessageEvent<WorkerResponseMessage>);
-          this.onmessage?.({ data: { kind: 'token-tick' } } as MessageEvent<WorkerResponseMessage>);
         }
       }
       queueMicrotask(() => {
@@ -88,6 +77,22 @@ class FakeWorker {
   public terminate(): void {
     this.terminated = true;
   }
+}
+
+function tokenBatch(text: string) {
+  return {
+    requestId: '123',
+    streamId: 123,
+    sequenceStart: 0,
+    text,
+    frameCount: 1,
+    byteCount: new TextEncoder().encode(text).byteLength,
+    stats: {
+      framesSent: 1,
+      bytesSent: new TextEncoder().encode(text).byteLength,
+      batchesSent: 1,
+    },
+  };
 }
 
 function generationResult(text: string) {
@@ -237,7 +242,7 @@ test('chat() renders messages through the worker service and sanitizes assistant
     await client.addLocal('model-fake');
     const chunks: string[] = [];
     const run = client.chat([{ role: 'user', content: 'hello' }], {
-      tokenDelivery: 'batch',
+      emitTokens: true,
     });
     const output = await run.response;
     for await (const batch of run.tokens) {

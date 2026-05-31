@@ -1,8 +1,7 @@
 use std::time::Instant;
 
 use crate::runtime::request::{
-    GenerateRequest, GenerateResponse, GenerateResponseStatus, GenerateTokenEmissionMode,
-    RequestQueue, ResponseOutput,
+    GenerateRequest, GenerateResponse, GenerateResponseStatus, RequestQueue, ResponseOutput,
 };
 use crate::runtime::session::SessionStore;
 use crate::runtime::{
@@ -201,7 +200,7 @@ impl SlotScheduler {
         let mut should_emit = false;
 
         if let Some(request) = slot.request_mut() {
-            should_emit = request.token_emission_mode == GenerateTokenEmissionMode::TokenBatches;
+            should_emit = request.emit_tokens;
         }
 
         if should_emit {

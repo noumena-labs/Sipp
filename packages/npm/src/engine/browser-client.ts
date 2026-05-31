@@ -150,15 +150,15 @@ export class CogentClient implements CogentClientShape {
 
   public query(input: QueryInput, options: QueryOptions = {}): BrowserTextRun {
     this.assertOpen();
-    return createBrowserTextRun(options, (tokenSink, signal) =>
-      this.#service.runQuery(input, { ...options, signal, tokenSink })
+    return createBrowserTextRun(options, (tokenBatchSink, signal) =>
+      this.#service.runQuery(input, { ...options, signal, tokenBatchSink })
     );
   }
 
   public chat(input: ChatInput, options: ChatOptions = {}): BrowserTextRun {
     this.assertOpen();
-    return createBrowserTextRun(options, (tokenSink, signal) =>
-      this.#service.runChat(input, { ...options, signal, tokenSink })
+    return createBrowserTextRun(options, (tokenBatchSink, signal) =>
+      this.#service.runChat(input, { ...options, signal, tokenBatchSink })
     );
   }
 

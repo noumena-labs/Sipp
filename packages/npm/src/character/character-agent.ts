@@ -257,7 +257,7 @@ export class CharacterRuntime {
    * `ChatEvent`s as they arrive, terminating with a `turn-end` event.
    *
    * The iterator is backed by a small internal queue so upstream token
-   * delivery never blocks on a slow consumer — if the consumer falls behind,
+   * emission never blocks on a slow consumer — if the consumer falls behind,
    * events buffer in memory rather than back-pressuring decode.
    */
   public chat(userMessage: string, options: { signal?: AbortSignal } = {}): AsyncIterable<ChatEvent> {
@@ -397,7 +397,7 @@ export class CharacterRuntime {
       const queryOptions: ChatOptions = {
         session: contextKey,
         maxTokens: this.maxOutputTokens,
-        tokenDelivery: 'batch',
+        emitTokens: true,
         signal,
       };
       const run = this.client.chat(messages, {

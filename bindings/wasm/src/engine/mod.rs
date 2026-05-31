@@ -4,7 +4,7 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 #[cfg(target_family = "wasm")]
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[cfg(target_family = "wasm")]
 use cogentlm_engine::backend::{backend_observability_json, set_llama_log_quiet};
@@ -14,31 +14,15 @@ use cogentlm_engine::engine::protocol::{EmbedOptions, PoolingType};
 use cogentlm_engine::runtime::config::NativeRuntimeConfig;
 #[cfg(target_family = "wasm")]
 use cogentlm_engine::runtime::request::{
-    token_byte_ring, GenerateResponse, GenerateResponseStatus, GenerateTokenEmissionMode,
-    ResponseOutput, TokenByteRingConsumer, TokenByteRingProducer, TOKEN_RING_DEFAULT_CAPACITY,
+    token_byte_ring, GenerateResponse, GenerateResponseStatus, ResponseOutput,
+    TokenByteRingConsumer, TokenByteRingProducer, TOKEN_RING_DEFAULT_CAPACITY,
 };
 #[cfg(target_family = "wasm")]
-use cogentlm_engine::runtime::{InferenceRuntime, RequestStepResult, SchedulerBurstResult};
+use cogentlm_engine::runtime::{InferenceRuntime, SchedulerBurstResult};
 
 use crate::ffi::free_c_string;
 #[cfg(target_family = "wasm")]
 use crate::ffi::{into_c_string, read_optional_c_string};
-
-// Provided by `wasm_exports.cpp`. Calls back into the host JS to drain the
-// token buffer into the SAB ring. Synchronous; the worker thread blocks
-// inside it for a few microseconds.
-#[cfg(target_family = "wasm")]
-extern "C" {
-    fn ce_native_yield();
-}
-
-// Upper bound on ticks per burst in interactive token mode. We yield as soon
-// as a token is emitted (`max_emitted=1` per burst), so this only caps how long
-// we'll spin through prefill ticks before letting the host drain an empty
-// buffer. Larger values lower outer-loop overhead during long prompts;
-// smaller values lower cancellation latency.
-#[cfg(target_family = "wasm")]
-const INTERACTIVE_TOKEN_STEP_TICKS: i32 = 256;
 
 const ABI_VERSION: u32 = 5;
 
@@ -111,7 +95,6 @@ struct BrowserEngineInner {
     runtime: Option<InferenceRuntime>,
     token_producer: Option<TokenByteRingProducer>,
     token_consumer: Option<TokenByteRingConsumer>,
-    token_ring_drop_count: u64,
     token_buffer: TokenBuffer,
 }
 
@@ -194,7 +177,6 @@ impl BrowserEngine {
         self.inner.token_producer = None;
         self.inner.token_consumer = None;
         self.inner.token_buffer.reset();
-        self.inner.token_ring_drop_count = 0;
     }
 
     #[cfg(target_family = "wasm")]
@@ -203,7 +185,7 @@ impl BrowserEngine {
         context_key: *const c_char,
         prompt: *const c_char,
         max_tokens: i32,
-        token_emission_mode: i32,
+        emit_tokens: i32,
         grammar: *const c_char,
     ) -> u32 {
         self.clear_last_error();
@@ -220,7 +202,7 @@ impl BrowserEngine {
             max_tokens,
             Vec::new(),
             grammar,
-            token_emission_mode,
+            emit_tokens,
         )
     }
 
@@ -230,7 +212,7 @@ impl BrowserEngine {
         _context_key: *const c_char,
         _prompt: *const c_char,
         _max_tokens: i32,
-        _token_emission_mode: i32,
+        _emit_tokens: i32,
         _grammar: *const c_char,
     ) -> u32 {
         0
@@ -245,7 +227,7 @@ impl BrowserEngine {
         image_count: i32,
         images_flat_buffer: *const u8,
         image_sizes: *const i32,
-        token_emission_mode: i32,
+        emit_tokens: i32,
         grammar: *const c_char,
     ) -> u32 {
         self.clear_last_error();
@@ -266,7 +248,7 @@ impl BrowserEngine {
             max_tokens,
             images,
             grammar,
-            token_emission_mode,
+            emit_tokens,
         )
     }
 
@@ -280,7 +262,7 @@ impl BrowserEngine {
         _image_count: i32,
         _images_flat_buffer: *const u8,
         _image_sizes: *const i32,
-        _token_emission_mode: i32,
+        _emit_tokens: i32,
         _grammar: *const c_char,
     ) -> u32 {
         0
@@ -296,7 +278,7 @@ impl BrowserEngine {
         image_count: i32,
         images_flat_buffer: *const u8,
         image_sizes: *const i32,
-        token_emission_mode: i32,
+        emit_tokens: i32,
         grammar: *const c_char,
     ) -> u32 {
         self.clear_last_error();
@@ -334,7 +316,7 @@ impl BrowserEngine {
             max_tokens,
             images,
             grammar,
-            token_emission_mode,
+            emit_tokens,
         )
     }
 
@@ -348,7 +330,7 @@ impl BrowserEngine {
         _image_count: i32,
         _images_flat_buffer: *const u8,
         _image_sizes: *const i32,
-        _token_emission_mode: i32,
+        _emit_tokens: i32,
         _grammar: *const c_char,
     ) -> u32 {
         0
@@ -404,7 +386,7 @@ impl BrowserEngine {
         max_tokens: i32,
         images: Vec<Vec<u8>>,
         grammar: String,
-        token_emission_mode: i32,
+        emit_tokens: i32,
     ) -> u32 {
         let Some(runtime) = self.inner.runtime.as_mut() else {
             return 0;
@@ -413,7 +395,7 @@ impl BrowserEngine {
             return 0;
         }
 
-        let token_emission_mode = emission_mode(token_emission_mode);
+        let emit_tokens = emit_tokens_enabled(emit_tokens);
         let enqueue_result = if images.is_empty() {
             runtime.enqueue_request(
                 context_key,
@@ -423,7 +405,7 @@ impl BrowserEngine {
                 "",
                 Vec::new(),
                 None,
-                token_emission_mode,
+                emit_tokens,
             )
         } else {
             runtime.enqueue_multimodal_request(
@@ -435,7 +417,7 @@ impl BrowserEngine {
                 "",
                 Vec::new(),
                 None,
-                token_emission_mode,
+                emit_tokens,
             )
         };
         let request_id = match enqueue_result {
@@ -474,9 +456,8 @@ impl BrowserEngine {
         &mut self,
         max_ticks: i32,
         max_completed_responses: i32,
-        max_emitted_tokens: i32,
+        max_generated_tokens: i32,
         max_duration_us: i32,
-        interactive_token_delivery: bool,
         out: *mut BrowserSchedulerLoopResult,
     ) -> i32 {
         if out.is_null() {
@@ -491,139 +472,22 @@ impl BrowserEngine {
             Duration::ZERO
         };
 
-        // Bulk path: just run the runtime's own monolithic
-        // loop. No per-tick drain/yield overhead - matches the pre-port
-        // C++ baseline. The host won't peek at the token buffer mid-loop
-        // for tokenDelivery: "off" requests anyway, so there's nothing to drain in
-        // between.
-        if !interactive_token_delivery {
-            let runtime = self
-                .inner
-                .runtime
-                .as_mut()
-                .expect("runtime present after early return");
-            let burst = runtime.run_scheduler_loop(
-                max_ticks,
-                max_completed_responses,
-                max_emitted_tokens,
-                duration,
-            );
-            self.drain_token_ring();
-            unsafe {
-                *out = scheduler_loop_result_from_runtime(burst);
-            }
-            return burst.status as i32;
-        }
-
-        // Interactive path: yield once per emitted token. Each burst caps at
-        // `max_emitted_tokens=1`, so the burst returns as soon as one token
-        // is produced (during decode) or step_ticks elapse with no token
-        // produced (during prefill). After every burst we drain the token
-        // ring into the token buffer and call ce_native_yield(), which
-        // lets the host deliver that token before the next native burst.
-        let deadline = (!duration.is_zero()).then(|| Instant::now() + duration);
-        let mut acc = SchedulerBurstResult::default();
-        loop {
-            let remaining_ticks = if max_ticks > 0 {
-                (max_ticks - acc.ticks_executed).max(0)
-            } else {
-                INTERACTIVE_TOKEN_STEP_TICKS
-            };
-            if max_ticks > 0 && remaining_ticks == 0 {
-                acc.status = RequestStepResult::Progressed;
-                break;
-            }
-            let step_ticks = if max_ticks > 0 {
-                INTERACTIVE_TOKEN_STEP_TICKS.min(remaining_ticks.max(1))
-            } else {
-                INTERACTIVE_TOKEN_STEP_TICKS
-            };
-            let remaining_completed = if max_completed_responses > 0 {
-                (max_completed_responses - acc.completed_response_count).max(0)
-            } else {
-                0
-            };
-            // The whole point of the interactive token path is "exactly one token per
-            // yield". We pass 1 here regardless of the JS-side `max_emitted`
-            // budget, which we instead enforce in the outer break check below.
-            let step_emitted_budget = 1;
-            let step_duration = match deadline {
-                Some(deadline) => {
-                    let now = Instant::now();
-                    if now >= deadline {
-                        acc.status = if acc.progressed_ticks > 0 || acc.completed_response_count > 0
-                        {
-                            RequestStepResult::Progressed
-                        } else {
-                            RequestStepResult::Waiting
-                        };
-                        break;
-                    }
-                    deadline - now
-                }
-                None => Duration::ZERO,
-            };
-
-            let runtime = self
-                .inner
-                .runtime
-                .as_mut()
-                .expect("runtime present for the duration of the burst loop");
-            let burst = runtime.run_scheduler_burst(
-                step_ticks,
-                remaining_completed,
-                step_emitted_budget,
-                step_duration,
-            );
-            acc.ticks_executed += burst.ticks_executed;
-            acc.progressed_ticks += burst.progressed_ticks;
-            acc.completed_response_count += burst.completed_response_count;
-            acc.emitted_token_count += burst.emitted_token_count;
-
-            // Drain only when there's something to drain. Prefill bursts that
-            // didn't emit a token leave the ring empty; skipping the drain
-            // saves a mutex acquisition + Vec setup per prefill burst.
-            if burst.emitted_token_count > 0 {
-                self.drain_token_ring();
-                unsafe {
-                    ce_native_yield();
-                }
-            }
-
-            if matches!(
-                burst.status,
-                RequestStepResult::Invalid | RequestStepResult::FatalNoProgress
-            ) {
-                acc.status = burst.status;
-                break;
-            }
-            if burst.status == RequestStepResult::Waiting {
-                acc.status = if acc.progressed_ticks > 0 || acc.completed_response_count > 0 {
-                    RequestStepResult::Progressed
-                } else {
-                    RequestStepResult::Waiting
-                };
-                break;
-            }
-            if max_completed_responses > 0
-                && acc.completed_response_count >= max_completed_responses
-            {
-                acc.status = RequestStepResult::Progressed;
-                break;
-            }
-            if max_emitted_tokens > 0 && acc.emitted_token_count >= max_emitted_tokens {
-                acc.status = RequestStepResult::Progressed;
-                break;
-            }
-        }
-
-        // Tail-drain so any token that arrived just before we hit a limit
-        // gets to the SAB ring before the JS scheduler re-enters.
+        let runtime = self
+            .inner
+            .runtime
+            .as_mut()
+            .expect("runtime present after early return");
+        let burst = runtime.run_scheduler_loop(
+            max_ticks,
+            max_completed_responses,
+            max_generated_tokens,
+            duration,
+        );
         self.drain_token_ring();
         unsafe {
-            *out = scheduler_loop_result_from_runtime(acc);
+            *out = scheduler_loop_result_from_runtime(burst);
         }
-        acc.status as i32
+        burst.status as i32
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -631,9 +495,8 @@ impl BrowserEngine {
         &mut self,
         _max_ticks: i32,
         _max_completed_responses: i32,
-        _max_emitted_tokens: i32,
+        _max_generated_tokens: i32,
         _max_duration_us: i32,
-        _interactive_token_delivery: bool,
         _out: *mut BrowserSchedulerLoopResult,
     ) -> i32 {
         STATUS_UNAVAILABLE
@@ -648,18 +511,13 @@ impl BrowserEngine {
         loop {
             frames.clear();
             let status = consumer.drain_into(&mut frames, 256, TOKEN_BUFFER_CAPACITY);
-            let drop_delta = status
-                .drop_count
-                .saturating_sub(self.inner.token_ring_drop_count);
-            self.inner.token_ring_drop_count = status.drop_count;
-            self.inner.token_buffer.add_drops(drop_delta);
             if frames.is_empty() {
                 break;
             }
             for frame in &frames {
                 self.inner
                     .token_buffer
-                    .try_write_frame(frame.stream_id, &frame.bytes);
+                    .write_frame(frame.stream_id, &frame.bytes);
             }
             if status.frames_drained == 0 {
                 break;
@@ -861,11 +719,6 @@ impl BrowserEngine {
     fn token_buffer_used_address(&mut self) -> *mut i32 {
         &mut self.inner.token_buffer.used
     }
-
-    #[cfg(target_family = "wasm")]
-    fn token_buffer_drop_count_address(&mut self) -> *mut i32 {
-        &mut self.inner.token_buffer.drop_count
-    }
 }
 
 #[cfg(target_family = "wasm")]
@@ -875,7 +728,6 @@ impl BrowserEngineInner {
             runtime: None,
             token_producer: None,
             token_consumer: None,
-            token_ring_drop_count: 0,
             token_buffer: TokenBuffer::new(TOKEN_BUFFER_CAPACITY),
         }
     }
@@ -892,7 +744,6 @@ impl BrowserEngineInner {
 struct TokenBuffer {
     buffer: Vec<u8>,
     used: i32,
-    drop_count: i32,
 }
 
 #[cfg(target_family = "wasm")]
@@ -901,39 +752,28 @@ impl TokenBuffer {
         Self {
             buffer: vec![0; capacity],
             used: 0,
-            drop_count: 0,
         }
     }
 
     fn reset(&mut self) {
         self.used = 0;
-        self.drop_count = 0;
     }
 
-    fn add_drops(&mut self, count: u64) {
-        if count > 0 {
-            self.drop_count = self
-                .drop_count
-                .saturating_add(count.min(i32::MAX as u64) as i32);
-        }
-    }
-
-    fn try_write_frame(&mut self, request_id: u32, bytes: &[u8]) -> bool {
+    fn write_frame(&mut self, request_id: u32, bytes: &[u8]) {
         if request_id == 0 || bytes.is_empty() {
-            return true;
+            return;
         }
         let used = self.used.max(0) as usize;
         let record_len = TOKEN_RECORD_HEADER_BYTES + bytes.len();
-        if record_len > self.buffer.len() || used.saturating_add(record_len) > self.buffer.len() {
-            self.drop_count = self.drop_count.saturating_add(1);
-            return false;
+        let next_used = used + record_len;
+        if next_used > self.buffer.len() {
+            self.buffer.resize(next_used, 0);
         }
         let offset = used;
         self.buffer[offset..offset + 4].copy_from_slice(&request_id.to_le_bytes());
         self.buffer[offset + 4..offset + 8].copy_from_slice(&(bytes.len() as u32).to_le_bytes());
         self.buffer[offset + 8..offset + record_len].copy_from_slice(bytes);
         self.used = (used + record_len) as i32;
-        true
     }
 }
 
@@ -1004,17 +844,11 @@ pub extern "C" fn cogentlm_browser_engine_start_text_request(
     context_key: *const c_char,
     prompt: *const c_char,
     max_tokens: i32,
-    token_emission_mode: i32,
+    emit_tokens: i32,
     grammar: *const c_char,
 ) -> u32 {
     with_engine_mut(engine, |engine| {
-        engine.start_text_request(
-            context_key,
-            prompt,
-            max_tokens,
-            token_emission_mode,
-            grammar,
-        )
+        engine.start_text_request(context_key, prompt, max_tokens, emit_tokens, grammar)
     })
 }
 
@@ -1028,7 +862,7 @@ pub extern "C" fn cogentlm_browser_engine_start_media_request(
     image_count: i32,
     images_flat_buffer: *const u8,
     image_sizes: *const i32,
-    token_emission_mode: i32,
+    emit_tokens: i32,
     grammar: *const c_char,
 ) -> u32 {
     with_engine_mut(engine, |engine| {
@@ -1039,7 +873,7 @@ pub extern "C" fn cogentlm_browser_engine_start_media_request(
             image_count,
             images_flat_buffer,
             image_sizes,
-            token_emission_mode,
+            emit_tokens,
             grammar,
         )
     })
@@ -1055,7 +889,7 @@ pub extern "C" fn cogentlm_browser_engine_start_chat_request(
     image_count: i32,
     images_flat_buffer: *const u8,
     image_sizes: *const i32,
-    token_emission_mode: i32,
+    emit_tokens: i32,
     grammar: *const c_char,
 ) -> u32 {
     with_engine_mut(engine, |engine| {
@@ -1066,7 +900,7 @@ pub extern "C" fn cogentlm_browser_engine_start_chat_request(
             image_count,
             images_flat_buffer,
             image_sizes,
-            token_emission_mode,
+            emit_tokens,
             grammar,
         )
     })
@@ -1097,18 +931,16 @@ pub extern "C" fn cogentlm_browser_engine_run_scheduler_loop(
     engine: *mut BrowserEngine,
     max_ticks: i32,
     max_completed_responses: i32,
-    max_emitted_tokens: i32,
+    max_generated_tokens: i32,
     max_duration_us: i32,
-    interactive_token_delivery: i32,
     out: *mut BrowserSchedulerLoopResult,
 ) -> i32 {
     with_engine_mut(engine, |engine| {
         engine.run_scheduler_loop(
             max_ticks,
             max_completed_responses,
-            max_emitted_tokens,
+            max_generated_tokens,
             max_duration_us,
-            interactive_token_delivery != 0,
             out,
         )
     })
@@ -1339,23 +1171,6 @@ pub extern "C" fn cogentlm_browser_engine_token_buffer_used_address(
 }
 
 #[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_token_buffer_drop_count_address(
-    engine: *mut BrowserEngine,
-) -> *mut i32 {
-    with_engine_mut(engine, |engine| {
-        #[cfg(target_family = "wasm")]
-        {
-            engine.token_buffer_drop_count_address()
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let _ = engine;
-            std::ptr::null_mut()
-        }
-    })
-}
-
-#[no_mangle]
 pub extern "C" fn cogentlm_browser_engine_media_marker(
     engine: *const BrowserEngine,
 ) -> *mut c_char {
@@ -1529,12 +1344,8 @@ fn read_runtime_config(runtime_config_json: *const c_char) -> Result<NativeRunti
 }
 
 #[cfg(target_family = "wasm")]
-fn emission_mode(token_emission_mode: i32) -> GenerateTokenEmissionMode {
-    if token_emission_mode == 1 {
-        GenerateTokenEmissionMode::TokenBatches
-    } else {
-        GenerateTokenEmissionMode::None
-    }
+fn emit_tokens_enabled(emit_tokens: i32) -> bool {
+    emit_tokens != 0
 }
 
 #[cfg(target_family = "wasm")]

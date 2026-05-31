@@ -31,11 +31,6 @@ import { withDerivedObservabilityMetrics } from '../engine/inference-types.js';
 import { createAbortError } from '../utils/abort.js';
 import { assertGrammarByteSize } from '../utils/grammar.js';
 
-// Mirror of CE_TokenEmissionMode in native/api/ffi_types.h. Native exposes
-// only NONE (no emission) and TOKEN_BUFFER (SAB ring).
-export const TOKEN_EMISSION_NONE = 0;
-export const TOKEN_EMISSION_TOKEN_BUFFER = 1;
-
 export const COMPLETED_REQUEST_STATUS_PENDING = 0;
 export const COMPLETED_REQUEST_STATUS_COMPLETED = 1;
 const COMPLETED_REQUEST_STATUS_CANCELLED = 2;
@@ -48,18 +43,8 @@ const RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES = 88;
 const RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT = 9;
 const SCHEDULER_LOOP_RESULT_SIZE_BYTES = 16;
 
-export type TokenEmissionMode =
-  | typeof TOKEN_EMISSION_NONE
-  | typeof TOKEN_EMISSION_TOKEN_BUFFER;
-
 function validateGrammarSize(grammar: string | undefined): void {
   assertGrammarByteSize(grammar);
-}
-
-function validateTokenEmissionMode(mode: TokenEmissionMode): void {
-  if (mode !== TOKEN_EMISSION_NONE && mode !== TOKEN_EMISSION_TOKEN_BUFFER) {
-    throw new Error(`invalid token emission mode ${mode}.`);
-  }
 }
 
 export type WasmSchedulerProgressResult = {
@@ -316,7 +301,6 @@ function normalizeLifecycleErrorCode(code: string | undefined): QueryErrorCode {
     case 'STORAGE_CORRUPT':
     case 'REMOTE_METADATA_UNAVAILABLE':
     case 'REMOTE_LOAD_FAILED':
-    case 'TOKEN_DELIVERY_UNAVAILABLE':
     case 'QUERY_FAILED':
       return code;
     default:
@@ -414,16 +398,15 @@ export class WasmBridge {
     promptText: string,
     maxOutputTokens: number,
     grammar?: string,
-    tokenEmissionMode: TokenEmissionMode = TOKEN_EMISSION_NONE
+    emitTokens = false
   ): GenerateRequestId {
     validateGrammarSize(grammar);
-    validateTokenEmissionMode(tokenEmissionMode);
     const grammarArg = grammar ?? '';
     const requestId = this.module.ccall(
-      'CE_StartTextRequestWithTokenEmissionMode',
+      'CE_StartTextRequest',
       'number',
       ['string', 'string', 'number', 'number', 'string'],
-      [contextKey, promptText, maxOutputTokens, tokenEmissionMode, grammarArg]
+      [contextKey, promptText, maxOutputTokens, emitTokens ? 1 : 0, grammarArg]
     );
     if (requestId instanceof Promise) {
       throw new Error('Unexpected async result while enqueuing a request.');
@@ -437,14 +420,13 @@ export class WasmBridge {
     maxOutputTokens: number,
     media: Uint8Array[],
     grammar?: string,
-    tokenEmissionMode: TokenEmissionMode = TOKEN_EMISSION_NONE
+    emitTokens = false
   ): GenerateRequestId {
     validateGrammarSize(grammar);
-    validateTokenEmissionMode(tokenEmissionMode);
     const grammarArg = grammar ?? '';
     return this.withWasmMediaBuffers(media, (flatPtr, sizesPtr) =>
       this.callNumber(
-        'CE_StartMediaRequestWithTokenEmissionMode',
+        'CE_StartMediaRequest',
         [
           'string',
           'string',
@@ -462,7 +444,7 @@ export class WasmBridge {
           media.length,
           flatPtr,
           sizesPtr,
-          tokenEmissionMode,
+          emitTokens ? 1 : 0,
           grammarArg,
         ]
       ) as GenerateRequestId
@@ -475,14 +457,13 @@ export class WasmBridge {
     maxOutputTokens: number,
     media: Uint8Array[] = [],
     grammar?: string,
-    tokenEmissionMode: TokenEmissionMode = TOKEN_EMISSION_NONE
+    emitTokens = false
   ): GenerateRequestId {
     validateGrammarSize(grammar);
-    validateTokenEmissionMode(tokenEmissionMode);
     const grammarArg = grammar ?? '';
     return this.withWasmMediaBuffers(media, (flatPtr, sizesPtr) =>
       this.callNumber(
-        'CE_StartChatRequestWithTokenEmissionMode',
+        'CE_StartChatRequest',
         [
           'string',
           'string',
@@ -500,7 +481,7 @@ export class WasmBridge {
           media.length,
           flatPtr,
           sizesPtr,
-          tokenEmissionMode,
+          emitTokens ? 1 : 0,
           grammarArg,
         ]
       ) as GenerateRequestId
@@ -1002,25 +983,22 @@ export class WasmBridge {
   public async runInferenceLoop(
     maxTicks: number,
     maxCompletedResponses: number,
-    maxEmittedTokens: number,
+    maxGeneratedTokens: number,
     options: {
       maxDurationUs?: number;
-      interactiveTokenDelivery?: boolean;
     } = {}
   ): Promise<WasmSchedulerProgressResult> {
     const maxDurationUs = Math.max(0, options.maxDurationUs ?? 0);
-    const interactiveTokenDelivery = options.interactiveTokenDelivery === true ? 1 : 0;
     const resultPtr = this.ensureLoopResultBuffer();
 
     const stepResult = await this.callNumberAsync(
       'CE_RunSchedulerLoop',
-      ['number', 'number', 'number', 'number', 'number', 'pointer'],
+      ['number', 'number', 'number', 'number', 'pointer'],
       [
         maxTicks,
         maxCompletedResponses,
-        maxEmittedTokens,
+        maxGeneratedTokens,
         maxDurationUs,
-        interactiveTokenDelivery,
         resultPtr,
       ]
     );
@@ -1042,10 +1020,6 @@ export class WasmBridge {
 
   public getTokenBufferUsedAddress(): number {
     return this.callNumber('CE_GetTokenBufferUsedAddress');
-  }
-
-  public getTokenBufferDropCountAddress(): number {
-    return this.callNumber('CE_GetTokenBufferDropCountAddress');
   }
 
   public releaseReusableBuffers(): void {

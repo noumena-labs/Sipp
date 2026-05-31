@@ -1,4 +1,4 @@
-//! Unit tests for the token delivery module.
+//! Unit tests for the token emission module.
 
 use super::super::*;
 use crate::runtime::request::TokenRingFrame;
@@ -25,9 +25,9 @@ fn token_ring_frames_are_batched_by_request() {
             bytes: b"lo".to_vec(),
         },
     ];
-    let mut state = TokenDeliveryState::new(1);
+    let mut state = TokenEmissionState::new(1);
 
-    let batch = token_batch_from_ring_frames(&frames, 1, &mut state, 0).expect("token batch");
+    let batch = token_batch_from_ring_frames(&frames, 1, &mut state).expect("token batch");
 
     assert_eq!(batch.request_id, "1");
     assert_eq!(batch.stream_id, 1);
@@ -41,7 +41,7 @@ fn token_ring_frames_are_batched_by_request() {
 }
 
 #[test]
-fn token_ring_batch_tracks_drops_and_sequences() {
+fn token_ring_batch_tracks_sequences() {
     let first = [TokenRingFrame {
         stream_id: 3,
         sequence: 0,
@@ -54,16 +54,14 @@ fn token_ring_batch_tracks_drops_and_sequences() {
         flags: 0,
         bytes: b"bc".to_vec(),
     }];
-    let mut state = TokenDeliveryState::new(3);
+    let mut state = TokenEmissionState::new(3);
 
-    let first = token_batch_from_ring_frames(&first, 3, &mut state, 2).expect("first batch");
-    let second = token_batch_from_ring_frames(&second, 3, &mut state, 5).expect("second batch");
+    let first = token_batch_from_ring_frames(&first, 3, &mut state).expect("first batch");
+    let second = token_batch_from_ring_frames(&second, 3, &mut state).expect("second batch");
 
     assert_eq!(first.sequence_start, 0);
-    assert_eq!(first.stats.frames_dropped, 2);
     assert_eq!(second.sequence_start, 1);
     assert_eq!(second.stats.frames_sent, 2);
-    assert_eq!(second.stats.frames_dropped, 5);
     assert_eq!(second.stats.bytes_sent, 3);
     assert_eq!(second.stats.batches_sent, 2);
 }
@@ -76,12 +74,12 @@ fn token_ring_batch_stats_saturate() {
         flags: 0,
         bytes: b"a".to_vec(),
     }];
-    let mut state = TokenDeliveryState::new(1);
+    let mut state = TokenEmissionState::new(1);
     state.stats.frames_sent = u64::MAX;
     state.stats.bytes_sent = u64::MAX;
     state.stats.batches_sent = u64::MAX;
 
-    let batch = token_batch_from_ring_frames(&frames, 1, &mut state, 0).expect("token batch");
+    let batch = token_batch_from_ring_frames(&frames, 1, &mut state).expect("token batch");
 
     assert_eq!(batch.stats.frames_sent, u64::MAX);
     assert_eq!(batch.stats.bytes_sent, u64::MAX);

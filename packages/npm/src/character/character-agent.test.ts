@@ -40,7 +40,6 @@ function tokenBatch(text: string): TokenBatch {
     stats: {
       framesSent: 1,
       bytesSent: new TextEncoder().encode(text).byteLength,
-      framesDropped: 0,
       batchesSent: 1,
     },
   };
@@ -138,21 +137,6 @@ function createFakeClient(): FakeClient {
       return {
         response: runPromise.then(({ safeOutput }) => generationResult(safeOutput.trim())),
         tokens: {
-          subscribe(listener: (batch: TokenBatch) => void): () => void {
-            let active = true;
-            void runPromise.then(
-              ({ batches }) => {
-                if (!active) return;
-                for (const batch of batches) {
-                  listener(batch);
-                }
-              },
-              () => {}
-            );
-            return () => {
-              active = false;
-            };
-          },
           async *[Symbol.asyncIterator](): AsyncIterator<TokenBatch> {
             const result = await runPromise.catch(() => ({ batches: [] as TokenBatch[] }));
             for (const batch of result.batches) {
@@ -319,7 +303,7 @@ test('chat() threads grammar and maxOutputTokens into queuePrompt options', asyn
   assert.equal(opts.maxTokens, 42);
   assert.equal(typeof opts.grammar, 'string');
   assert.ok(opts.grammar && opts.grammar.includes('root'));
-  assert.equal(opts.tokenDelivery, 'batch');
+  assert.equal(opts.emitTokens, true);
 });
 
 test('chat() reuses a stable contextKey for each turn', async () => {

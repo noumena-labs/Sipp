@@ -33,7 +33,7 @@ pub use remote::{
 };
 pub use request::{
     CogentChatRequest, CogentEmbedRequest, CogentQueryRequest, CogentTextOptions,
-    CogentTokenDelivery, LocalEmbedOptions, LocalTextOptions, RemoteOptions,
+    LocalEmbedOptions, LocalTextOptions, RemoteOptions,
 };
 pub use response::{CogentEmbeddingResponse, CogentTextResponse};
 pub use run::{

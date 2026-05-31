@@ -12,8 +12,8 @@ use cogentlm_client::{
     CogentQueryRequest as CoreClientQueryRequest, CogentTextOptions as CoreClientTextOptions,
     CogentTextResponse as CoreClientTextResponse,
     CogentTextResponseFuture as CoreClientTextResponseFuture, CogentTextRun as CoreClientTextRun,
-    CogentTokenBatches as CoreClientTokenBatches, CogentTokenDelivery as CoreClientTokenDelivery,
-    EndpointRef as CoreEndpointRef, LocalEmbedOptions as CoreClientLocalEmbedOptions,
+    CogentTokenBatches as CoreClientTokenBatches, EndpointRef as CoreEndpointRef,
+    LocalEmbedOptions as CoreClientLocalEmbedOptions,
     LocalTextOptions as CoreClientLocalTextOptions,
     RemoteAnthropicConfig as CoreRemoteAnthropicConfig, RemoteAuth as CoreRemoteAuth,
     RemoteConfig as CoreRemoteConfig, RemoteError as CoreRemoteError,
@@ -690,8 +690,8 @@ pub struct CogentQueryRequest {
     pub local: Option<LocalTextOptions>,
     #[napi(js_name = "remoteOptions")]
     pub remote_options: Option<serde_json::Value>,
-    #[napi(js_name = "tokenDelivery")]
-    pub token_delivery: Option<String>,
+    #[napi(js_name = "emitTokens")]
+    pub emit_tokens: Option<bool>,
 }
 
 impl CogentQueryRequest {
@@ -702,7 +702,7 @@ impl CogentQueryRequest {
             options: optional_core_or_default(self.options.as_ref(), CogentTextOptions::to_core)?,
             local: optional_core_or_default(self.local.as_ref(), LocalTextOptions::to_core)?,
             remote_options: remote_options_or_empty(self.remote_options.clone())?,
-            token_delivery: token_delivery_or_off(self.token_delivery.as_deref())?,
+            emit_tokens: self.emit_tokens.unwrap_or(false),
         })
     }
 }
@@ -715,8 +715,8 @@ pub struct CogentChatRequest {
     pub local: Option<LocalTextOptions>,
     #[napi(js_name = "remoteOptions")]
     pub remote_options: Option<serde_json::Value>,
-    #[napi(js_name = "tokenDelivery")]
-    pub token_delivery: Option<String>,
+    #[napi(js_name = "emitTokens")]
+    pub emit_tokens: Option<bool>,
 }
 
 impl CogentChatRequest {
@@ -727,7 +727,7 @@ impl CogentChatRequest {
             options: optional_core_or_default(self.options.as_ref(), CogentTextOptions::to_core)?,
             local: optional_core_or_default(self.local.as_ref(), LocalTextOptions::to_core)?,
             remote_options: remote_options_or_empty(self.remote_options.clone())?,
-            token_delivery: token_delivery_or_off(self.token_delivery.as_deref())?,
+            emit_tokens: self.emit_tokens.unwrap_or(false),
         })
     }
 }
@@ -1039,10 +1039,9 @@ fn cogent_embedding_response_to_node(
 
 #[napi(object)]
 #[derive(Clone)]
-pub struct TokenDeliveryStats {
+pub struct TokenEmissionStats {
     pub frames_sent: f64,
     pub bytes_sent: f64,
-    pub frames_dropped: f64,
     pub batches_sent: f64,
 }
 
@@ -1055,7 +1054,7 @@ pub struct TokenBatch {
     pub text: String,
     pub frame_count: u32,
     pub byte_count: u32,
-    pub stats: TokenDeliveryStats,
+    pub stats: TokenEmissionStats,
 }
 
 #[napi(js_name = "CogentClient")]
@@ -1328,14 +1327,6 @@ fn optional_endpoint(endpoint: Option<&EndpointRef>) -> Result<Option<CoreEndpoi
     endpoint.map(EndpointRef::to_core).transpose()
 }
 
-fn token_delivery_or_off(value: Option<&str>) -> Result<CoreClientTokenDelivery> {
-    match value.unwrap_or("off") {
-        "off" => Ok(CoreClientTokenDelivery::Off),
-        "batch" => Ok(CoreClientTokenDelivery::Batch),
-        other => Err(invalid_arg(format!("unsupported tokenDelivery: {other}"))),
-    }
-}
-
 fn finite_f64_to_f32(value: f64, name: &'static str) -> Result<f32> {
     if !value.is_finite() || value < f64::from(f32::MIN) || value > f64::from(f32::MAX) {
         return Err(invalid_arg(format!("{name} must be a finite f32")));
@@ -1366,10 +1357,9 @@ fn token_batch_to_node(batch: CoreTokenBatch) -> TokenBatch {
         text: batch.text,
         frame_count: batch.frame_count,
         byte_count: batch.byte_count,
-        stats: TokenDeliveryStats {
+        stats: TokenEmissionStats {
             frames_sent: batch.stats.frames_sent as f64,
             bytes_sent: batch.stats.bytes_sent as f64,
-            frames_dropped: batch.stats.frames_dropped as f64,
             batches_sent: batch.stats.batches_sent as f64,
         },
     }

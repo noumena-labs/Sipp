@@ -13,7 +13,7 @@ use crate::runtime::{InferenceRuntime, RequestStepResult};
 
 use super::events::{build_engine_state_with_status, emit_event, emit_state_event};
 use super::request::{start_chat, start_embed, start_query, ChatRequest, QueryRequest};
-use super::token_delivery::{drain_ring_into_sender, ActiveTokenDelivery};
+use super::token_emission::{drain_ring_into_sender, ActiveTokenEmission};
 use super::{runtime_command, EngineEventSubscribers};
 
 mod completion;
@@ -26,12 +26,12 @@ pub(super) enum EngineThreadCommand {
     Generate(
         QueryRequest,
         oneshot::Sender<Result<GenerateResponse>>,
-        Option<futures_mpsc::Sender<TokenBatch>>,
+        Option<futures_mpsc::UnboundedSender<TokenBatch>>,
     ),
     GenerateChat(
         ChatRequest,
         oneshot::Sender<Result<GenerateResponse>>,
-        Option<futures_mpsc::Sender<TokenBatch>>,
+        Option<futures_mpsc::UnboundedSender<TokenBatch>>,
     ),
     Embed(EmbedRequest, oneshot::Sender<Result<GenerateResponse>>),
     GetState(oneshot::Sender<Result<EngineState>>),
@@ -86,7 +86,7 @@ pub(super) struct EngineThreadState {
 pub(super) struct ActiveRequest {
     pub output: ActiveRequestOutput,
     pub response_tx: oneshot::Sender<Result<GenerateResponse>>,
-    pub token: Option<ActiveTokenDelivery>,
+    pub token: Option<ActiveTokenEmission>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,7 +142,7 @@ impl EngineThreadState {
         start: impl FnOnce(
             &mut InferenceRuntime,
             &EngineEventSubscribers,
-        ) -> Result<(u32, Option<ActiveTokenDelivery>)>,
+        ) -> Result<(u32, Option<ActiveTokenEmission>)>,
     ) {
         let Some(runtime) = self.runtime.as_mut() else {
             let _ = response_tx.send(Err(runtime_command(RUNTIME_CLOSED)));
@@ -150,13 +150,13 @@ impl EngineThreadState {
         };
 
         match start(runtime, &self.event_subscribers) {
-            Ok((request_id, token_delivery)) => {
+            Ok((request_id, token_emission)) => {
                 self.active_requests.insert(
                     request_id,
                     ActiveRequest {
                         output,
                         response_tx,
-                        token: token_delivery,
+                        token: token_emission,
                     },
                 );
                 emit_state_event(

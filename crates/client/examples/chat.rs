@@ -1,8 +1,6 @@
 mod local_common;
 
-use cogentlm_client::{
-    CogentChatRequest, CogentTextOptions, CogentTextResponse, CogentTokenDelivery, LocalTextOptions,
-};
+use cogentlm_client::{CogentChatRequest, CogentTextOptions, CogentTextResponse, LocalTextOptions};
 use cogentlm_engine::engine::{ChatMessage, ChatRole};
 use futures::executor::block_on;
 use futures::StreamExt;
@@ -21,7 +19,7 @@ fn main() -> local_common::ExampleResult<()> {
                 context_key: Some("rust-chat-smoke".to_string()),
                 ..Default::default()
             },
-            token_delivery: CogentTokenDelivery::Batch,
+            emit_tokens: true,
             ..Default::default()
         });
         let (mut tokens, response) = run.into_parts();

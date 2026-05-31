@@ -95,7 +95,6 @@ function tokenBatch(text: string): TokenBatch {
     stats: {
       framesSent: 1,
       bytesSent: new TextEncoder().encode(text).byteLength,
-      framesDropped: 0,
       batchesSent: 1,
     },
   };
@@ -108,12 +107,6 @@ function textRun(
   return {
     response,
     tokens: {
-      subscribe(listener: (batch: TokenBatch) => void): () => void {
-        for (const batch of batches) {
-          listener(batch);
-        }
-        return () => {};
-      },
       async *[Symbol.asyncIterator](): AsyncIterator<TokenBatch> {
         for (const batch of batches) {
           yield batch;

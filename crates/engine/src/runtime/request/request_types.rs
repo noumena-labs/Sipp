@@ -8,13 +8,6 @@ pub type GenerateRequestId = u32;
 pub const NO_SAMPLED_TOKEN_ID: i32 = -1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum GenerateTokenEmissionMode {
-    #[default]
-    None = 0,
-    TokenBatches = 1,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GenerateRequestLifecycle {
     #[default]
     Pending = 0,
@@ -48,7 +41,7 @@ pub struct GenerateRequest {
     /// embedding read (subject to `normalize` honoring `pooling != Rank`).
     pub embed_options: Option<EmbedOptions>,
     pub max_output_tokens: i32,
-    pub token_emission_mode: GenerateTokenEmissionMode,
+    pub emit_tokens: bool,
     pub lifecycle: GenerateRequestLifecycle,
     pub enqueued_at: Option<Instant>,
     pub admitted_at: Option<Instant>,
@@ -169,7 +162,7 @@ impl Default for GenerateRequest {
             multimodal: None,
             embed_options: None,
             max_output_tokens: 0,
-            token_emission_mode: GenerateTokenEmissionMode::None,
+            emit_tokens: false,
             lifecycle: GenerateRequestLifecycle::Pending,
             enqueued_at: None,
             admitted_at: None,

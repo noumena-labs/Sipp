@@ -17,7 +17,7 @@ impl InferenceRuntime {
         &mut self,
         max_ticks: i32,
         max_completed_responses: i32,
-        max_emitted_tokens: i32,
+        max_generated_tokens: i32,
         max_duration: Duration,
     ) -> SchedulerBurstResult {
         let mut burst_result = SchedulerBurstResult::default();
@@ -27,7 +27,7 @@ impl InferenceRuntime {
         }
 
         let max_completed = max_completed_responses.max(0);
-        let max_emitted = max_emitted_tokens.max(0);
+        let max_generated = max_generated_tokens.max(0);
         let deadline = (!max_duration.is_zero()).then(|| Instant::now() + max_duration);
 
         for _ in 0..max_ticks {
@@ -62,12 +62,12 @@ impl InferenceRuntime {
 
             let completed_limit_reached =
                 max_completed > 0 && burst_result.completed_response_count >= max_completed;
-            let emitted_limit_reached =
-                max_emitted > 0 && burst_result.emitted_token_count >= max_emitted;
+            let generated_limit_reached =
+                max_generated > 0 && burst_result.emitted_token_count >= max_generated;
             let duration_limit_reached =
                 deadline.is_some_and(|deadline| Instant::now() >= deadline);
 
-            if completed_limit_reached || emitted_limit_reached || duration_limit_reached {
+            if completed_limit_reached || generated_limit_reached || duration_limit_reached {
                 if burst_result.completed_response_count > 0 {
                     self.commit_pending_prefix_snapshots();
                 }
@@ -87,7 +87,7 @@ impl InferenceRuntime {
         &mut self,
         max_ticks: i32,
         max_completed_responses: i32,
-        max_emitted_tokens: i32,
+        max_generated_tokens: i32,
         max_duration: Duration,
     ) -> SchedulerBurstResult {
         let mut loop_result = SchedulerBurstResult::default();
@@ -136,7 +136,7 @@ impl InferenceRuntime {
                 loop_result.status = RequestStepResult::Progressed;
                 break;
             }
-            if max_emitted_tokens > 0 && loop_result.emitted_token_count >= max_emitted_tokens {
+            if max_generated_tokens > 0 && loop_result.emitted_token_count >= max_generated_tokens {
                 loop_result.status = RequestStepResult::Progressed;
                 break;
             }

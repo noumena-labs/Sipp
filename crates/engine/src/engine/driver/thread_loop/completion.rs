@@ -80,7 +80,7 @@ impl EngineThreadState {
             .collect();
 
         for (request_id, response) in completed {
-            self.close_token_delivery(request_id);
+            self.close_token_emission(request_id);
             if let Some(runtime) = self.runtime.as_mut() {
                 runtime
                     .request_queue
@@ -150,10 +150,10 @@ impl EngineThreadState {
                 .token_ring_producers
                 .remove(&request_id);
         }
-        self.close_token_delivery(request_id);
+        self.close_token_emission(request_id);
     }
 
-    fn close_token_delivery(&mut self, request_id: u32) {
+    fn close_token_emission(&mut self, request_id: u32) {
         if let Some(active) = self.active_requests.get_mut(&request_id) {
             if let Some(token) = active.token.take() {
                 token.producer.close();

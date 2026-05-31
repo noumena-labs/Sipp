@@ -1,7 +1,6 @@
-//! Lock-protected byte ring for handing emitted token text from the engine thread to consumer threads with bounded buffering.
+//! Lock-protected byte ring for handing emitted token text from the engine thread to consumer threads.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::MutexGuard;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -26,7 +25,6 @@ pub struct TokenRingFrame {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TokenRingDrain {
     pub frames: Vec<TokenRingFrame>,
-    pub drop_count: u64,
     pub closed: bool,
 }
 
@@ -34,7 +32,6 @@ pub struct TokenRingDrain {
 pub struct TokenRingDrainStatus {
     pub frames_drained: usize,
     pub bytes_drained: usize,
-    pub drop_count: u64,
     pub closed: bool,
 }
 
@@ -42,7 +39,6 @@ pub struct TokenRingDrainStatus {
 struct TokenByteRingInner {
     state: Mutex<TokenByteRingState>,
     available: Condvar,
-    drop_count: AtomicU64,
 }
 
 #[derive(Debug)]
@@ -81,7 +77,6 @@ pub fn token_byte_ring(capacity: usize) -> (TokenByteRingProducer, TokenByteRing
             next_sequences: HashMap::new(),
         }),
         available: Condvar::new(),
-        drop_count: AtomicU64::new(0),
     });
     (
         TokenByteRingProducer {
@@ -102,8 +97,7 @@ impl TokenByteRingProducer {
             return false;
         }
 
-        let Some(record) = writable_record(&state, bytes.len()) else {
-            record_dropped_frame(&self.inner);
+        let Some(record) = writable_record(&mut state, bytes.len()) else {
             return false;
         };
 
@@ -159,7 +153,6 @@ impl TokenByteRingConsumer {
         let status = self.drain_into(&mut frames, max_frames, max_bytes);
         TokenRingDrain {
             frames,
-            drop_count: status.drop_count,
             closed: status.closed,
         }
     }
@@ -216,7 +209,6 @@ impl TokenByteRingConsumer {
         TokenRingDrainStatus {
             frames_drained: drained_frames,
             bytes_drained: drained_bytes,
-            drop_count: self.inner.drop_count.load(Ordering::Relaxed),
             closed: state.closed && state.used == 0,
         }
     }
@@ -237,11 +229,6 @@ fn lock_ring_state(state: &Mutex<TokenByteRingState>) -> MutexGuard<'_, TokenByt
         Ok(state) => state,
         Err(error) => error.into_inner(),
     }
-}
-
-fn record_dropped_frame(inner: &TokenByteRingInner) {
-    inner.drop_count.fetch_add(1, Ordering::Relaxed);
-    inner.available.notify_one();
 }
 
 fn token_ring_record_size(byte_len: usize) -> Option<usize> {
@@ -270,15 +257,41 @@ struct WritableRecord {
     next_used: usize,
 }
 
-fn writable_record(state: &TokenByteRingState, byte_len: usize) -> Option<WritableRecord> {
+fn writable_record(state: &mut TokenByteRingState, byte_len: usize) -> Option<WritableRecord> {
     let byte_len_u32 = u32::try_from(byte_len).ok()?;
     let size = token_ring_record_size(byte_len)?;
     let next_used = state.used.checked_add(size)?;
-    (size <= state.buffer.len() && next_used <= state.buffer.len()).then_some(WritableRecord {
+    if (size > state.buffer.len() || next_used > state.buffer.len())
+        && !grow_ring_buffer(state, size.max(next_used))
+    {
+        return None;
+    }
+    Some(WritableRecord {
         byte_len: byte_len_u32,
         size,
         next_used,
     })
+}
+
+fn grow_ring_buffer(state: &mut TokenByteRingState, min_capacity: usize) -> bool {
+    let mut next_capacity = state.buffer.len().max(TOKEN_RING_RECORD_HEADER_BYTES);
+    while next_capacity < min_capacity {
+        let Some(grown) = next_capacity.checked_mul(2) else {
+            return false;
+        };
+        next_capacity = grown;
+    }
+
+    let used = state.used;
+    let mut next_buffer = vec![0; next_capacity];
+    if used > 0 {
+        let bytes = read_bytes(&state.buffer, state.read_index, used);
+        next_buffer[..used].copy_from_slice(&bytes);
+    }
+    state.buffer = next_buffer;
+    state.read_index = 0;
+    state.write_index = used;
+    true
 }
 
 fn next_sequence_for_stream(state: &mut TokenByteRingState, stream_id: u32) -> u32 {

@@ -3,9 +3,8 @@ import type {
   ChatMessage,
   NativeRuntimeConfig,
   PoolingType,
-  TokenDeliveryStats,
+  TokenEmissionStats,
   TokenBatch,
-  TokenDeliveryMode,
 } from '../engine/inference-types.js';
 import type { OpfsSyncAccessHandle } from '../engine/file-system-storage.js';
 
@@ -185,7 +184,7 @@ export interface QueryOptions {
   session?: string;
   maxTokens?: number;
   signal?: AbortSignal;
-  tokenDelivery?: TokenDeliveryMode;
+  emitTokens?: boolean;
   grammar?: string;
 }
 
@@ -200,7 +199,7 @@ export type ChatOptions = QueryOptions;
 
 export interface InternalTextRequestOptions extends QueryOptions {
   onRequestStarted?: (requestId: number) => void;
-  tokenSink?: (batch: TokenBatch) => void;
+  tokenBatchSink?: (batch: TokenBatch) => void;
 }
 
 export interface QueryObservation {
@@ -240,10 +239,10 @@ export interface RuntimeObservation {
   execution: {
     mode: 'main-thread' | 'worker';
     workerBacked: boolean;
-    tokenPath?: 'none' | 'token-sink';
+    tokenPath?: 'none' | 'token-stream';
   };
 
-  /** Cumulative ms spent in `_ce_yield_drain` (SAB ring writes from native scratch). */
+  /** Cumulative ms spent draining native token records into JS token batches. */
   jsTokenDrainMs?: number;
   jsTokenDrainCount?: number;
 }
@@ -358,15 +357,7 @@ export interface EmbeddingResult {
   stats: RequestStats;
 }
 
-/**
- * Token batches produced by a browser text run.
- */
-export interface BrowserTokenBatches extends AsyncIterable<TokenBatch> {
-  /**
-   * Attach a direct batch listener for latency-sensitive render paths.
-   */
-  subscribe(listener: (batch: TokenBatch) => void): () => void;
-}
+export type BrowserTokenBatches = AsyncIterable<TokenBatch>;
 
 export interface BrowserTextRun {
   readonly response: Promise<GenerationResult>;
@@ -387,7 +378,7 @@ export type EngineEvent =
   | { type: 'request-failed'; requestId: string; error: string }
   | { type: 'closed' };
 
-export type { TokenDeliveryStats, TokenBatch, TokenDeliveryMode };
+export type { TokenEmissionStats, TokenBatch };
 
 export interface ObservabilitySnapshot {
   mode: ObservabilityMode;
@@ -462,7 +453,6 @@ export type QueryErrorCode =
   | 'STORAGE_CORRUPT'
   | 'REMOTE_METADATA_UNAVAILABLE'
   | 'REMOTE_LOAD_FAILED'
-  | 'TOKEN_DELIVERY_UNAVAILABLE'
   | 'QUERY_FAILED';
 
 export class QueryError extends Error {

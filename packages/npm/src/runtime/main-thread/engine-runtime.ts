@@ -15,7 +15,6 @@ import type {
   PromptOptions,
   RequestObservabilityMetrics,
   TokenBatch,
-  TokenDeliveryMode,
   TransportObservability,
 } from '../../engine/inference-types.js';
 import type {
@@ -34,11 +33,8 @@ import { MainThreadModelLoader } from './model-loader.js';
 import { RequestTracker } from '../request-tracker.js';
 import {
   COMPLETED_REQUEST_STATUS_PENDING,
-  TOKEN_EMISSION_NONE,
-  TOKEN_EMISSION_TOKEN_BUFFER,
   RustLifecycleBridge,
   parseBackendObservabilityJson,
-  type TokenEmissionMode,
   WasmBridge,
 } from '../../wasm/wasm-bridge.js';
 import { EngineModule } from '../../wasm/engine-module.js';
@@ -83,7 +79,7 @@ const DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY: TransportObservability = {
   workerBacked: false,
   enabled: false,
   activeTokenTransport: 'none',
-  activeTokenDelivery: 'off',
+  activeTokenEmission: false,
   tokenDrainCount: 0,
   tokenDrainMs: 0,
 };
@@ -300,13 +296,11 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
   private readonly modelLoader: MainThreadModelLoader;
   private readonly executionMode: EngineExecutionMode;
-  private queuedPromptTokenSinks = new Map<
+  private queuedPromptTokenBatchSinks = new Map<
     GenerateRequestId,
     (batch: TokenBatch) => void
   >();
-  private queuedPromptTokenDeliveryModes = new Map<GenerateRequestId, TokenDeliveryMode>();
-  private queuedPromptTokenSinkErrors = new Map<GenerateRequestId, unknown>();
-  private activeTokenDeliveries = new Map<GenerateRequestId, TokenDeliveryMode>();
+  private queuedPromptTokenBatchSinkErrors = new Map<GenerateRequestId, unknown>();
   private readonly tracker = new RequestTracker<GenerateResponse>();
   private readonly scheduler: QueuedRequestScheduler;
   private runtimeObservabilityEnabled = false;
@@ -318,9 +312,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     this.modelLoader = new MainThreadModelLoader(this.config);
     this.scheduler = new QueuedRequestScheduler({
       tracker: this.tracker,
-      queuedPromptTokenSinks: this.queuedPromptTokenSinks,
-      queuedPromptTokenDeliveryModes: this.queuedPromptTokenDeliveryModes,
-      queuedPromptTokenSinkErrors: this.queuedPromptTokenSinkErrors,
+      queuedPromptTokenBatchSinks: this.queuedPromptTokenBatchSinks,
+      queuedPromptTokenBatchSinkErrors: this.queuedPromptTokenBatchSinkErrors,
       getTransportObservability: () => this.transportObservability,
       getBridge: () => this.getReadyEngineBridge(),
       finalizeRequest: (bridge, requestId, options) => {
@@ -447,10 +440,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   }
 
   private releaseTokenState(requestId: GenerateRequestId): void {
-    this.queuedPromptTokenSinks.delete(requestId);
-    this.queuedPromptTokenDeliveryModes.delete(requestId);
-    this.queuedPromptTokenSinkErrors.delete(requestId);
-    this.activeTokenDeliveries.delete(requestId);
+    this.queuedPromptTokenBatchSinks.delete(requestId);
+    this.queuedPromptTokenBatchSinkErrors.delete(requestId);
     this.refreshTokenTransportObservability();
   }
 
@@ -481,19 +472,10 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   }
 
   private refreshTokenTransportObservability(): void {
-    let activeTokenDelivery: TokenDeliveryMode = 'off';
-    for (const deliveryMode of this.activeTokenDeliveries.values()) {
-      if (deliveryMode === 'interactive') {
-        activeTokenDelivery = 'interactive';
-        break;
-      }
-      if (deliveryMode === 'batch') {
-        activeTokenDelivery = 'batch';
-      }
-    }
-    this.transportObservability.activeTokenDelivery = activeTokenDelivery;
+    const activeTokenEmission = this.queuedPromptTokenBatchSinks.size > 0;
+    this.transportObservability.activeTokenEmission = activeTokenEmission;
     this.transportObservability.activeTokenTransport =
-      activeTokenDelivery === 'off' ? 'none' : 'token-sink';
+      activeTokenEmission ? 'token-stream' : 'none';
   }
 
   private rejectAllTrackedRequests(error: unknown): void {
@@ -833,7 +815,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     options: number | PromptOptions = 128
   ): Promise<GenerateRequestId> {
     const request = this.buildGenerateRequest(contextKey, promptText, options);
-    return this.enqueueNativeRequest(options, (bridge, emissionMode) => {
+    return this.enqueueNativeRequest(options, (bridge, emitTokens) => {
       if (request.media != null && request.media.length > 0) {
         if (this.cachedMediaMarker == null) {
           throw new Error(
@@ -855,7 +837,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
           request.maxOutputTokens,
           request.media,
           request.grammar,
-          emissionMode
+          emitTokens
         );
       }
       return bridge.startTextRequest(
@@ -863,7 +845,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         request.promptText,
         request.maxOutputTokens,
         request.grammar,
-        emissionMode
+        emitTokens
       );
     });
   }
@@ -882,14 +864,14 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     const maxOutputTokens = this.resolvePromptTokenCount(options);
     const grammar = this.resolvePromptGrammar(options);
 
-    return this.enqueueNativeRequest(options, (bridge, emissionMode) =>
+    return this.enqueueNativeRequest(options, (bridge, emitTokens) =>
       bridge.startChatRequest(
         contextKey,
         messages,
         maxOutputTokens,
         media,
         grammar,
-        emissionMode
+        emitTokens
       )
     );
   }
@@ -911,20 +893,17 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
   private async enqueueNativeRequest(
     options: number | PromptOptions,
-    startRequest: (bridge: WasmBridge, emissionMode: TokenEmissionMode) => GenerateRequestId
+    startRequest: (bridge: WasmBridge, emitTokens: boolean) => GenerateRequestId
   ): Promise<GenerateRequestId> {
     const bridge = this.getReadyEngineBridge();
-    const tokenDelivery = typeof options === 'object' ? options.tokenDelivery : undefined;
-    const tokenDeliveryMode = tokenDelivery?.mode ?? 'off';
+    const tokenBatchSink = typeof options === 'object' ? options.tokenBatchSink : undefined;
     const signal = typeof options === 'object' ? options.signal : undefined;
 
     if (signal?.aborted) {
       throw createAbortError('Prompt was aborted before it was enqueued.');
     }
 
-    const emissionMode =
-      tokenDeliveryMode === 'off' ? TOKEN_EMISSION_NONE : TOKEN_EMISSION_TOKEN_BUFFER;
-    const requestId = startRequest(bridge, emissionMode);
+    const requestId = startRequest(bridge, tokenBatchSink != null);
     if (!requestId) {
       const detail = bridge.readLastEngineError();
       throw new Error(
@@ -942,12 +921,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       }
     }
 
-    if (tokenDelivery?.sink != null) {
-      this.queuedPromptTokenSinks.set(requestId, tokenDelivery.sink);
-    }
-    if (tokenDeliveryMode !== 'off') {
-      this.queuedPromptTokenDeliveryModes.set(requestId, tokenDeliveryMode);
-      this.activeTokenDeliveries.set(requestId, tokenDeliveryMode);
+    if (tokenBatchSink != null) {
+      this.queuedPromptTokenBatchSinks.set(requestId, tokenBatchSink);
       this.refreshTokenTransportObservability();
     }
 
@@ -986,9 +961,9 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     const responsePromise = this.tracker.beginWait(requestId);
     try {
       const response = await responsePromise;
-      const tokenSinkError = this.tracker.tokenSinkError(requestId);
-      if (tokenSinkError != null) {
-        throw tokenSinkError;
+      const tokenBatchSinkError = this.tracker.tokenBatchSinkError(requestId);
+      if (tokenBatchSinkError != null) {
+        throw tokenBatchSinkError;
       }
       if (response.cancelled || signal?.aborted) {
         throw createAbortError(response.errorMessage ?? 'Queued request cancelled.');

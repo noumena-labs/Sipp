@@ -12,10 +12,9 @@ use cogentlm_client::{
     CogentQueryRequest as ClientQueryRequest, CogentTextOptions as ClientTextOptions,
     CogentTextResponse as ClientTextResponse, CogentTextResponseFuture as ClientTextResponseFuture,
     CogentTextRun as CoreClientTextRun, CogentTokenBatches as ClientTokenBatches,
-    CogentTokenDelivery as ClientTokenDelivery, EndpointRef as CoreEndpointRef,
-    LocalEmbedOptions as ClientLocalEmbedOptions, LocalTextOptions as ClientLocalTextOptions,
-    RemoteAnthropicConfig as CoreRemoteAnthropicConfig, RemoteAuth as CoreRemoteAuth,
-    RemoteConfig as CoreRemoteConfig, RemoteError as CoreRemoteError,
+    EndpointRef as CoreEndpointRef, LocalEmbedOptions as ClientLocalEmbedOptions,
+    LocalTextOptions as ClientLocalTextOptions, RemoteAnthropicConfig as CoreRemoteAnthropicConfig,
+    RemoteAuth as CoreRemoteAuth, RemoteConfig as CoreRemoteConfig, RemoteError as CoreRemoteError,
     RemoteOpenAiConfig as CoreRemoteOpenAiConfig, RemoteProtocol as CoreRemoteProtocol,
     RemoteProxyConfig as CoreRemoteProxyConfig, RemoteSecret as CoreRemoteSecret,
 };
@@ -964,7 +963,7 @@ impl PyCogentClient {
         Ok(PyEndpointRef { core: endpoint })
     }
 
-    #[pyo3(signature = (prompt, *, endpoint = None, options = None, local = None, remote_options = None, token_delivery = "off"))]
+    #[pyo3(signature = (prompt, *, endpoint = None, options = None, local = None, remote_options = None, emit_tokens = false))]
     fn query(
         &self,
         py: Python<'_>,
@@ -973,7 +972,7 @@ impl PyCogentClient {
         options: Option<Py<PyCogentTextOptions>>,
         local: Option<Py<PyLocalTextOptions>>,
         remote_options: Option<PyObject>,
-        token_delivery: &str,
+        emit_tokens: bool,
     ) -> PyResult<PyCogentTextRun> {
         let request = ClientQueryRequest {
             endpoint: endpoint
@@ -983,7 +982,7 @@ impl PyCogentClient {
             options: py_core_or_default(py, options, PyCogentTextOptions::to_core),
             local: py_core_or_default(py, local, PyLocalTextOptions::to_core),
             remote_options: py_remote_options_or_empty(py, remote_options)?,
-            token_delivery: py_token_delivery(token_delivery)?,
+            emit_tokens,
         };
         let run = self
             .inner
@@ -993,7 +992,7 @@ impl PyCogentClient {
         Ok(PyCogentTextRun::from_core(run))
     }
 
-    #[pyo3(signature = (messages, *, endpoint = None, options = None, local = None, remote_options = None, token_delivery = "off"))]
+    #[pyo3(signature = (messages, *, endpoint = None, options = None, local = None, remote_options = None, emit_tokens = false))]
     fn chat(
         &self,
         py: Python<'_>,
@@ -1002,7 +1001,7 @@ impl PyCogentClient {
         options: Option<Py<PyCogentTextOptions>>,
         local: Option<Py<PyLocalTextOptions>>,
         remote_options: Option<PyObject>,
-        token_delivery: &str,
+        emit_tokens: bool,
     ) -> PyResult<PyCogentTextRun> {
         let request = ClientChatRequest {
             endpoint: endpoint
@@ -1012,7 +1011,7 @@ impl PyCogentClient {
             options: py_core_or_default(py, options, PyCogentTextOptions::to_core),
             local: py_core_or_default(py, local, PyLocalTextOptions::to_core),
             remote_options: py_remote_options_or_empty(py, remote_options)?,
-            token_delivery: py_token_delivery(token_delivery)?,
+            emit_tokens,
         };
         let run = self
             .inner
@@ -1204,16 +1203,6 @@ fn py_remote_options_or_empty(
     }
 }
 
-fn py_token_delivery(value: &str) -> PyResult<ClientTokenDelivery> {
-    match value {
-        "off" => Ok(ClientTokenDelivery::Off),
-        "batch" => Ok(ClientTokenDelivery::Batch),
-        other => Err(PyValueError::new_err(format!(
-            "unsupported token_delivery: {other}"
-        ))),
-    }
-}
-
 fn chat_messages_to_core(
     py: Python<'_>,
     messages: Vec<Py<PyChatMessage>>,
@@ -1390,7 +1379,6 @@ fn token_batch_to_dict(py: Python<'_>, batch: TokenBatch) -> PyResult<Py<PyAny>>
     let stats = PyDict::new_bound(py);
     stats.set_item("frames_sent", batch.stats.frames_sent)?;
     stats.set_item("bytes_sent", batch.stats.bytes_sent)?;
-    stats.set_item("frames_dropped", batch.stats.frames_dropped)?;
     stats.set_item("batches_sent", batch.stats.batches_sent)?;
     dict.set_item("stats", stats)?;
     Ok(dict.into_py(py))

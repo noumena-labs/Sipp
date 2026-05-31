@@ -10,9 +10,6 @@ use futures_core::Stream;
 
 use crate::{CogentEmbeddingResponse, CogentError, CogentResult, CogentTextResponse};
 
-#[cfg(feature = "providers")]
-pub(crate) const TOKEN_BATCH_CHANNEL_CAPACITY: usize = 256;
-
 /// Final text response future.
 pub type CogentTextResponseFuture =
     Pin<Box<dyn Future<Output = CogentResult<CogentTextResponse>> + Send>>;
@@ -86,7 +83,7 @@ impl Future for CogentEmbeddingRun {
     }
 }
 
-/// Best-effort token batches for a text run.
+/// Exact token batches for a text run.
 pub struct CogentTokenBatches {
     inner: TokenBatchSource,
 }
@@ -95,7 +92,7 @@ enum TokenBatchSource {
     Empty,
     Local(EngineTokenBatches),
     #[cfg(feature = "providers")]
-    Receiver(mpsc::Receiver<TokenBatch>),
+    Receiver(mpsc::UnboundedReceiver<TokenBatch>),
 }
 
 impl CogentTokenBatches {
@@ -115,7 +112,7 @@ impl CogentTokenBatches {
     }
 
     #[cfg(feature = "providers")]
-    pub(crate) fn from_receiver(receiver: mpsc::Receiver<TokenBatch>) -> Self {
+    pub(crate) fn from_receiver(receiver: mpsc::UnboundedReceiver<TokenBatch>) -> Self {
         Self {
             inner: TokenBatchSource::Receiver(receiver),
         }

@@ -5,8 +5,8 @@ mod token_ring;
 
 pub use request_queue::RequestQueue;
 pub use request_types::{
-    GenerateRequest, GenerateRequestId, GenerateRequestLifecycle, GenerateTokenEmissionMode,
-    MultimodalPayload, NO_SAMPLED_TOKEN_ID,
+    GenerateRequest, GenerateRequestId, GenerateRequestLifecycle, MultimodalPayload,
+    NO_SAMPLED_TOKEN_ID,
 };
 pub use response_types::{GenerateResponse, GenerateResponseStatus, ResponseOutput};
 pub use token_ring::{

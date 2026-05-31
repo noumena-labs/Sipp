@@ -68,7 +68,7 @@ impl InferenceEndpoint for LocalEndpoint {
         let run = self.engine.chat(
             ChatRequest::new(request.messages)
                 .options(options)
-                .token_delivery(map::engine_token_delivery(request.token_delivery)),
+                .emit_tokens(request.emit_tokens),
         );
         let (tokens, response) = run.into_parts();
         CogentTextRun::new(

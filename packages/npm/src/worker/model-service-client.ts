@@ -5,11 +5,6 @@ import {
 } from '../engine/runtime-assets.js';
 import { ObservabilityController } from '../models/observability-controller.js';
 import { observabilitySnapshotToEngineState } from '../models/observability-controller.js';
-import {
-  TokenRingReader,
-  createTokenRingBuffer,
-  DEFAULT_TOKEN_RING_CAPACITY,
-} from '../runtime/token-ring.js';
 import { createAbortError } from '../utils/abort.js';
 import {
   WorkerRequestMessage,
@@ -35,32 +30,24 @@ import {
   type QueryInput,
   type QueryOptions,
   type TokenBatch,
-  type TokenDeliveryMode,
 } from '../models/types.js';
 
 interface PendingWorkerCall {
   resolve: (value: unknown) => void;
   reject: (error: unknown) => void;
   onProgress?: ModelLoadOptions['onProgress'];
-  tokenSink?: (batch: TokenBatch) => void;
-  tokenDelivery: TokenDeliveryMode;
+  tokenBatchSink?: (batch: TokenBatch) => void;
 }
 
 interface WorkerCallOptions {
   signal?: AbortSignal;
   onProgress?: ModelLoadOptions['onProgress'];
-  tokenSink?: (batch: TokenBatch) => void;
-  tokenDelivery?: TokenDeliveryMode;
+  tokenBatchSink?: (batch: TokenBatch) => void;
+  emitTokens?: boolean;
 }
 
 type RequestWithCallId = Extract<WorkerRequestMessage, { callId: number }>;
 type WithoutCallId<T> = T extends { callId: number } ? Omit<T, 'callId'> : never;
-const INTERACTIVE_TOKEN_DRAIN_BUDGET = 64;
-const textEncoder = new TextEncoder();
-
-function utf8ByteLength(text: string): number {
-  return textEncoder.encode(text).byteLength;
-}
 
 export function getOptimizedDefaultWorkerUrl(importerUrl: string = import.meta.url): string | null {
   return resolveOptimizedPackageAssetUrl('dist/esm/worker/model-service-entry.js', importerUrl);
@@ -106,13 +93,13 @@ function toWorkerRuntimeConfig(config: CogentClientOptions): WorkerRuntimeConfig
 
 function toWorkerQueryOptions(
   options: QueryOptions = {},
-  tokenDelivery: TokenDeliveryMode
+  emitTokens: boolean
 ): WorkerQueryOptions {
   return {
     session: options.session,
     maxTokens: options.maxTokens,
     grammar: options.grammar,
-    tokenDelivery,
+    emitTokens,
   };
 }
 
@@ -125,17 +112,6 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
   private readonly engineEventListeners = new Set<(event: EngineEvent) => void>();
   private readonly pendingCalls = new Map<number, PendingWorkerCall>();
   private readonly workerConfig: WorkerRuntimeConfig;
-  // SAB token ring, lazily allocated when first needed. Null when COOP/COEP
-  // is missing; token delivery requests will error in that case.
-  private tokenRingBuffer: SharedArrayBuffer | null = null;
-  private tokenRingReader: TokenRingReader | null = null;
-  private pendingTokenDrops = 0;
-  // Native request id -> worker callId, populated by `token-claim`.
-  private readonly callIdByNativeRequestId = new Map<number, number>();
-  private readonly tokenStatsByCallId = new Map<
-    number,
-    { framesSent: number; bytesSent: number; framesDropped: number; batchesSent: number }
-  >();
 
   constructor(private readonly config: CogentClientOptions = {}) {
     this.workerConfig = toWorkerRuntimeConfig(config);
@@ -202,18 +178,18 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     options: InternalTextRequestOptions
   ): Promise<GenerationResult> {
     this.assertOpen();
-    const tokenDelivery = options.tokenSink == null ? 'off' : options.tokenDelivery ?? 'batch';
+    const emitTokens = options.tokenBatchSink != null;
     return (await this.callWorker(
       {
         kind: 'query',
         config: this.workerConfig,
         input,
-        options: toWorkerQueryOptions(options, tokenDelivery),
+        options: toWorkerQueryOptions(options, emitTokens),
       },
       {
         signal: options.signal,
-        tokenSink: options.tokenSink,
-        tokenDelivery,
+        tokenBatchSink: options.tokenBatchSink,
+        emitTokens,
       }
     )) as GenerationResult;
   }
@@ -223,18 +199,18 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     options: InternalTextRequestOptions
   ): Promise<GenerationResult> {
     this.assertOpen();
-    const tokenDelivery = options.tokenSink == null ? 'off' : options.tokenDelivery ?? 'batch';
+    const emitTokens = options.tokenBatchSink != null;
     return (await this.callWorker(
       {
         kind: 'chat',
         config: this.workerConfig,
         input,
-        options: toWorkerQueryOptions(options, tokenDelivery),
+        options: toWorkerQueryOptions(options, emitTokens),
       },
       {
         signal: options.signal,
-        tokenSink: options.tokenSink,
-        tokenDelivery,
+        tokenBatchSink: options.tokenBatchSink,
+        emitTokens,
       }
     )) as GenerationResult;
   }
@@ -288,12 +264,6 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       return;
     }
     this.closed = true;
-    // Tear down the token ring so it doesn't keep `this` reachable.
-    this.tokenRingReader = null;
-    this.tokenRingBuffer = null;
-    this.pendingTokenDrops = 0;
-    this.callIdByNativeRequestId.clear();
-    this.tokenStatsByCallId.clear();
     for (const pending of this.pendingCalls.values()) {
       pending.reject(new QueryError('ENGINE_CLOSED', 'CogentClient is closed.'));
     }
@@ -339,136 +309,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     this.worker.onmessageerror = () => {
       this.failWorker(new Error('Worker runtime failed to deserialize a message.'));
     };
-    // Tell the worker about the SAB ring before any operation.
-    this.ensureTokenRing();
-    this.worker.postMessage({
-      kind: 'token-init',
-      ringBuffer: this.tokenRingBuffer,
-    } satisfies WorkerRequestMessage);
     return this.worker;
-  }
-
-  private ensureTokenRing(): void {
-    if (this.tokenRingBuffer != null) {
-      return;
-    }
-    if (typeof SharedArrayBuffer === 'undefined') {
-      return;
-    }
-    try {
-      this.tokenRingBuffer = createTokenRingBuffer(
-        DEFAULT_TOKEN_RING_CAPACITY
-      );
-      this.tokenRingReader = new TokenRingReader(this.tokenRingBuffer);
-    } catch {
-      this.tokenRingBuffer = null;
-      this.tokenRingReader = null;
-    }
-  }
-
-  private assertWorkerTokenDeliverySupported(): void {
-    this.ensureTokenRing();
-    if (this.tokenRingBuffer == null || this.tokenRingReader == null) {
-      throw new QueryError(
-        'TOKEN_DELIVERY_UNAVAILABLE',
-        'Worker token delivery requires SharedArrayBuffer. Enable cross-origin isolation or run with tokenDelivery: "off".'
-      );
-    }
-  }
-
-  // Drains the SAB ring and consolidates tokens into batches per request.
-  // Invoked from the 'token-tick' macrotask and one final time from
-  // the call finalizer to capture tail tokens.
-  private drainTokenRing(): void {
-    const reader = this.tokenRingReader;
-    if (reader == null) {
-      return;
-    }
-    this.pendingTokenDrops += reader.consumeDropDelta();
-    const batches = new Map<number, { nativeRequestId: number; texts: string[]; firstSequence: number }>();
-    const maxMessages = this.hasInteractiveTokenCall() ? INTERACTIVE_TOKEN_DRAIN_BUDGET : undefined;
-    for (const { requestId, sequence, text } of reader.drain(maxMessages)) {
-      const callId = this.callIdByNativeRequestId.get(requestId);
-      if (callId == null) continue;
-      const pending = this.pendingCalls.get(callId);
-      if (pending?.tokenDelivery === 'interactive') {
-        this.deliverTokenRingBatch(callId, requestId, sequence, [text], this.takePendingTokenDrops());
-        continue;
-      }
-      let batch = batches.get(callId);
-      if (batch == null) {
-        batch = { nativeRequestId: requestId, texts: [], firstSequence: sequence };
-        batches.set(callId, batch);
-      }
-      batch.texts.push(text);
-    }
-
-    for (const [callId, tokenBatch] of batches) {
-      this.deliverTokenRingBatch(
-        callId,
-        tokenBatch.nativeRequestId,
-        tokenBatch.firstSequence,
-        tokenBatch.texts,
-        this.takePendingTokenDrops()
-      );
-    }
-  }
-
-  private hasInteractiveTokenCall(): boolean {
-    for (const pending of this.pendingCalls.values()) {
-      if (pending.tokenDelivery === 'interactive') {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private takePendingTokenDrops(): number {
-    const dropped = this.pendingTokenDrops;
-    this.pendingTokenDrops = 0;
-    return dropped;
-  }
-
-  private deliverTokenRingBatch(
-    callId: number,
-    nativeRequestId: number,
-    sequenceStart: number,
-    texts: string[],
-    framesDropped: number
-  ): void {
-    const pending = this.pendingCalls.get(callId);
-    if (pending == null || texts.length === 0) {
-      return;
-    }
-    const text = texts.join('');
-    const byteCount = utf8ByteLength(text);
-    const stats = this.tokenStatsByCallId.get(callId) ?? {
-      framesSent: 0,
-      bytesSent: 0,
-      framesDropped: 0,
-      batchesSent: 0,
-    };
-    stats.framesSent += texts.length;
-    stats.bytesSent += byteCount;
-    stats.framesDropped += framesDropped;
-    stats.batchesSent += 1;
-    this.tokenStatsByCallId.set(callId, stats);
-    const batch: TokenBatch = {
-      requestId: String(nativeRequestId),
-      streamId: nativeRequestId,
-      sequenceStart,
-      text,
-      frameCount: texts.length,
-      byteCount,
-      stats: {
-        ...stats,
-      },
-    };
-    try {
-      pending.tokenSink?.(batch);
-    } catch {
-      /* user error */
-    }
   }
 
   private failWorker(error: unknown): void {
@@ -479,12 +320,6 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       this.worker.terminate();
       this.worker = null;
     }
-    // Reset token ring state; the next worker spawn allocates a fresh ring.
-    this.tokenRingReader = null;
-    this.tokenRingBuffer = null;
-    this.pendingTokenDrops = 0;
-    this.callIdByNativeRequestId.clear();
-    this.tokenStatsByCallId.clear();
     for (const pending of this.pendingCalls.values()) {
       pending.reject(error);
     }
@@ -530,26 +365,8 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       };
     }
 
-    const tokenDelivery = options.tokenDelivery ?? 'off';
-    if (tokenDelivery !== 'off') {
-      this.assertWorkerTokenDeliverySupported();
-    }
-
     return new Promise<unknown>((resolve, reject) => {
       const finalize = () => {
-        if (tokenDelivery !== 'off') {
-          // Drain one last time to catch tokens that arrived just before or
-          // along with the final resolution message.
-          this.drainTokenRing();
-          for (const [nativeId, mappedCallId] of this.callIdByNativeRequestId) {
-            if (mappedCallId === callId) {
-              this.tokenRingReader?.forgetRequest(nativeId);
-              this.callIdByNativeRequestId.delete(nativeId);
-              break;
-            }
-          }
-          this.tokenStatsByCallId.delete(callId);
-        }
         cleanup();
         this.pendingCalls.delete(callId);
       };
@@ -563,8 +380,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
           reject(error);
         },
         onProgress: options.onProgress,
-        tokenSink: options.tokenSink,
-        tokenDelivery,
+        tokenBatchSink: options.tokenBatchSink,
       });
       try {
         this.postWorkerMessage(request);
@@ -582,13 +398,8 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       return;
     }
 
-    if (message.kind === 'token-tick') {
-      this.drainTokenRing();
-      return;
-    }
-
-    if (message.kind === 'token-claim') {
-      this.callIdByNativeRequestId.set(message.nativeRequestId, message.callId);
+    if (message.kind === 'token-batch') {
+      this.pendingCalls.get(message.callId)?.tokenBatchSink?.(message.batch);
       return;
     }
 
