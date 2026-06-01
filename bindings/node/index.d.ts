@@ -27,10 +27,6 @@ export interface CacheRuntimeConfig {
   snapshot_interval_tokens?: number
   max_snapshot_entries?: number
   max_snapshot_bytes?: number
-  max_session_entries?: number
-  cache_key_policy?: string
-  enable_context_checkpoints?: boolean
-  checkpoint_every_tokens?: number
 }
 
 export interface ChatMessage {
@@ -234,36 +230,18 @@ export interface RemoteStaticHeaderConfig {
 export interface RequestStats {
   inputTokens: number
   outputTokens: number
+  cacheMode: string
+  cacheSource: string
   cacheHits: number
+  prefillTokens: number
   ttftMs?: number
   interTokenMs?: number
   e2eMs?: number
   e2eTokensPerSecond?: number
   decodeTokensPerSecond?: number
+  prefillTokensPerSecond?: number
   prefillMs: number
   decodeMs: number
-  debugMetricsSchedulerTicks: number
-  debugMetricsDecodeTicks: number
-  debugMetricsPrefillTicks: number
-  debugMetricsBackendSamplerAttachAttempts: number
-  debugMetricsBackendSamplerAttachFailures: number
-  debugMetricsAdmitMs: number
-  debugMetricsNormalizeMs: number
-  debugMetricsBackendSamplerAttachMs: number
-  debugMetricsSelectSlotsMs: number
-  debugMetricsPlanMs: number
-  debugMetricsBatchBuildMs: number
-  debugMetricsLlamaDecodeMs: number
-  debugMetricsLlamaSyncMs: number
-  debugMetricsApplyBookkeepingMs: number
-  debugMetricsApplyDecodeResultsMs: number
-  debugMetricsSampleMs: number
-  debugMetricsTokenPieceMs: number
-  debugMetricsEmitMs: number
-  debugMetricsPrefixQueueMs: number
-  debugMetricsFinalizeMs: number
-  debugMetricsCommitObservabilityMs: number
-  debugMetricsPostDecodeMs: number
 }
 
 export interface ResidencyRuntimeConfig {

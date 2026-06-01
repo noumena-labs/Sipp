@@ -5,7 +5,7 @@ use crate::runtime::numeric::positive_fair_share_i32;
 
 use super::{
     saturating_i32_delta, saturating_usize_delta_to_i32, InferenceRuntime, RequestStepResult,
-    SchedulerBurstResult, SlotPhase, PREFIX_SNAPSHOT_COMMIT_BUDGET,
+    SchedulerBurstResult,
 };
 
 impl InferenceRuntime {
@@ -59,7 +59,6 @@ impl InferenceRuntime {
 
             if step_result == RequestStepResult::Waiting {
                 self.request_queue.flush_token_emissions();
-                self.commit_pending_prefix_snapshots();
                 burst_result.status = completed_or_waiting(&burst_result);
                 return burst_result;
             }
@@ -73,20 +72,12 @@ impl InferenceRuntime {
 
             if completed_limit_reached || generated_limit_reached || duration_limit_reached {
                 self.request_queue.flush_token_emissions();
-                if burst_result.completed_response_count > 0 {
-                    self.commit_pending_prefix_snapshots();
-                }
                 burst_result.status = completed_or_waiting(&burst_result);
                 return burst_result;
             }
         }
 
-        if burst_result.completed_response_count > 0 {
-            self.request_queue.flush_token_emissions();
-            self.commit_pending_prefix_snapshots();
-        } else {
-            self.request_queue.flush_token_emissions();
-        }
+        self.request_queue.flush_token_emissions();
         burst_result.status = completed_or_waiting(&burst_result);
         burst_result
     }
@@ -125,6 +116,9 @@ impl InferenceRuntime {
                 emitted_after,
                 step_result,
             );
+            if self.request_queue.has_token_emission_sinks() {
+                self.request_queue.flush_token_emissions();
+            }
 
             if matches!(
                 step_result,
@@ -158,28 +152,8 @@ impl InferenceRuntime {
             }
         }
 
-        if loop_result.completed_response_count > 0
-            || loop_result.status == RequestStepResult::Waiting
-        {
-            self.request_queue.flush_token_emissions();
-            self.commit_pending_prefix_snapshots();
-        } else {
-            self.request_queue.flush_token_emissions();
-        }
+        self.request_queue.flush_token_emissions();
         loop_result
-    }
-
-    fn commit_pending_prefix_snapshots(&mut self) {
-        if self
-            .slot_scheduler
-            .slots
-            .iter()
-            .any(|slot| slot.phase != SlotPhase::Idle)
-        {
-            return;
-        }
-        self.prefix_state_cache
-            .drain_pending_snapshots(self.shared_context, PREFIX_SNAPSHOT_COMMIT_BUDGET);
     }
 
     pub(super) fn resolve_prefill_chunk_size_locked(

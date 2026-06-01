@@ -1,11 +1,9 @@
-use crate::runtime::numeric::saturating_usize_to_u64;
-use crate::runtime::scheduler::{BatchContributionKind, SlotPhase};
-use crate::runtime::session::PendingPrefixSnapshot;
+use crate::runtime::scheduler::BatchContributionKind;
 
 use super::{unique_slot_first_use, InferenceRuntime};
 
 impl InferenceRuntime {
-    pub(super) fn queue_prefix_snapshots(
+    pub(super) fn capture_prefix_snapshots(
         &mut self,
         plan: &crate::runtime::scheduler::SharedBatchPlan,
     ) {
@@ -26,52 +24,41 @@ impl InferenceRuntime {
             let Some(request) = slot.request() else {
                 continue;
             };
-            let token_count = slot.mirror.current_kv_tokens.len();
-            if !self
-                .prefix_cache_policy
-                .should_store_boundary(token_count, request.prompt_tokens.len())
-            {
+            let Some(terminal_token_count) =
+                decode_seed_snapshot_token_count(request.prompt_tokens.len())
+            else {
+                continue;
+            };
+            if slot.mirror.current_kv_tokens.len() > terminal_token_count {
                 continue;
             }
-            self.prefix_state_cache
-                .enqueue_pending_snapshot(PendingPrefixSnapshot {
-                    model_fingerprint: self.model_fingerprint,
-                    context_key: request.context_key.clone(),
-                    seq_id: slot.seq_id,
-                    token_count,
-                    prefix_hash: self
-                        .prefix_cache_policy
-                        .hash_prefix(&slot.mirror.current_kv_tokens, token_count),
-                    retention_priority: saturating_usize_to_u64(token_count),
-                    prefix_tokens: slot.mirror.current_kv_tokens[..token_count].to_vec(),
-                });
-            self.prefix_cache_policy.record_store(token_count);
+            self.kv_cache.capture_prefix_snapshot(
+                self.shared_context,
+                self.model_fingerprint,
+                &request.context_key,
+                slot.seq_id,
+                &slot.mirror.current_kv_tokens,
+                terminal_token_count,
+            );
         }
     }
+}
 
-    pub(super) fn resolve_terminal_prefix_snapshots_locked(&mut self) {
-        self.scratch_terminal_sequences.clear();
-        for slot in &self.slot_scheduler.slots {
-            if slot.seq_id >= 0 {
-                match slot.phase {
-                    SlotPhase::Completed => {
-                        self.scratch_terminal_sequences.push((slot.seq_id, true))
-                    }
-                    SlotPhase::Failed => self.scratch_terminal_sequences.push((slot.seq_id, false)),
-                    _ => {}
-                }
-            }
-        }
+pub(super) fn decode_seed_snapshot_token_count(prompt_len: usize) -> Option<usize> {
+    prompt_len
+        .checked_sub(1)
+        .filter(|&token_count| token_count > 0)
+}
 
-        for i in 0..self.scratch_terminal_sequences.len() {
-            let (seq_id, completed) = self.scratch_terminal_sequences[i];
-            if completed {
-                self.prefix_state_cache
-                    .drain_best_pending_snapshot_for_seq(self.shared_context, seq_id);
-            } else {
-                self.prefix_state_cache
-                    .drop_pending_snapshots_for_seq(seq_id);
-            }
-        }
+#[cfg(test)]
+mod tests {
+    use super::decode_seed_snapshot_token_count;
+
+    #[test]
+    fn decode_seed_snapshot_requires_at_least_two_prompt_tokens() {
+        assert_eq!(decode_seed_snapshot_token_count(0), None);
+        assert_eq!(decode_seed_snapshot_token_count(1), None);
+        assert_eq!(decode_seed_snapshot_token_count(2), Some(1));
+        assert_eq!(decode_seed_snapshot_token_count(19), Some(18));
     }
 }

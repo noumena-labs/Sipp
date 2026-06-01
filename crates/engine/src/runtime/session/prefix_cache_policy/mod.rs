@@ -14,12 +14,6 @@ pub fn mix_prefix_hash_token(hash: u64, token: llama_token) -> u64 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct PrefixCacheBoundary {
-    pub token_count: usize,
-    pub prefix_hash: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PrefixCachePolicyStats {
     pub lookup_count: u64,
     pub hit_count: u64,
@@ -61,45 +55,13 @@ impl PrefixCachePolicy {
     }
 
     pub fn should_store_boundary(&self, token_count: usize, terminal_token_count: usize) -> bool {
-        if token_count < self.minimum_prefix_cache_tokens {
-            return false;
-        }
         if is_terminal_boundary(token_count, terminal_token_count) {
             return true;
         }
+        if token_count < self.minimum_prefix_cache_tokens {
+            return false;
+        }
         is_interval_boundary(token_count, self.prefix_cache_interval_tokens)
-    }
-
-    pub fn build_candidate_boundaries(&self, tokens: &[llama_token]) -> Vec<PrefixCacheBoundary> {
-        let len = tokens.len();
-        if len < self.minimum_prefix_cache_tokens {
-            return Vec::new();
-        }
-
-        let interval = self.prefix_cache_interval_tokens;
-
-        if interval == 0 {
-            return vec![PrefixCacheBoundary {
-                token_count: len,
-                prefix_hash: hash_tokens(tokens),
-            }];
-        }
-
-        let mut boundaries = Vec::with_capacity(candidate_boundary_capacity(len, interval));
-        let mut rolling_hash = PREFIX_HASH_SEED;
-
-        for (index, &token) in tokens.iter().enumerate() {
-            rolling_hash = mix_prefix_hash_token(rolling_hash, token);
-            let token_count = index + 1;
-            if self.should_store_boundary(token_count, len) {
-                boundaries.push(PrefixCacheBoundary {
-                    token_count,
-                    prefix_hash: rolling_hash,
-                });
-            }
-        }
-        boundaries.reverse();
-        boundaries
     }
 
     pub fn hash_prefix(&self, tokens: &[llama_token], token_count: usize) -> u64 {
@@ -141,13 +103,6 @@ fn minimum_prefix_cache_tokens(prefix_cache_interval_tokens: usize) -> usize {
     } else {
         prefix_cache_interval_tokens.min(MAX_MINIMUM_PREFIX_CACHE_TOKENS)
     }
-}
-
-fn candidate_boundary_capacity(token_count: usize, interval: usize) -> usize {
-    token_count
-        .checked_div(interval)
-        .map(|capacity| capacity + 1)
-        .unwrap_or(1)
 }
 
 fn is_terminal_boundary(token_count: usize, terminal_token_count: usize) -> bool {

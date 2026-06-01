@@ -12,7 +12,7 @@ use cogentlm_sys as ffi;
 use crate::runtime::llama_seq_id;
 use crate::runtime::request::GenerateRequestLifecycle;
 use crate::runtime::scheduler::{SlotPhase, SlotState};
-use crate::runtime::session::SequenceState;
+use crate::runtime::session::SequenceMirror;
 use crate::runtime::REQUEST_CANCELLED_MESSAGE;
 
 use super::super::numeric::{nonnegative_i32_to_usize, usize_to_i32};
@@ -164,7 +164,7 @@ fn recover_decode_seed_state(
 /// Trims llama.cpp's view of the sequence to match `state.current_kv_tokens`'s
 /// length and records the new `n_past`.
 fn reconcile_physical_state(
-    state: &mut SequenceState,
+    state: &mut SequenceMirror,
     seq_id: llama_seq_id,
     mem: ffi::llama_memory_t,
 ) -> bool {

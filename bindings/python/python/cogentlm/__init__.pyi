@@ -124,10 +124,6 @@ class CacheRuntimeConfig:
         snapshot_interval_tokens: Optional[int] = None,
         max_snapshot_entries: Optional[int] = None,
         max_snapshot_bytes: Optional[int] = None,
-        max_session_entries: Optional[int] = None,
-        cache_key_policy: Optional[str] = None,
-        enable_context_checkpoints: Optional[bool] = None,
-        checkpoint_every_tokens: Optional[int] = None,
     ) -> None: ...
 
 class MultimodalRuntimeConfig:

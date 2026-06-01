@@ -6,12 +6,12 @@ use crate::runtime::session::PrefixCachePolicy;
 
 use super::super::*;
 
-fn entry(context_key: &str, tokens: Vec<llama_token>, priority: u64) -> PrefixCacheEntry {
+fn entry(snapshot_scope: &str, tokens: Vec<llama_token>, priority: u64) -> PrefixCacheEntry {
     let policy = PrefixCachePolicy::new(2);
     let prefix_hash = policy.hash_prefix(&tokens, tokens.len());
     PrefixCacheEntry {
         model_fingerprint: 7,
-        context_key: context_key.to_string(),
+        snapshot_scope: snapshot_scope.to_string(),
         token_count: tokens.len(),
         prefix_hash,
         retention_priority: priority,
@@ -34,7 +34,7 @@ fn enforces_entry_limit_by_priority_then_hits() {
     let keys: Vec<_> = cache
         .entries
         .iter()
-        .map(|entry| entry.context_key.as_str())
+        .map(|entry| entry.snapshot_scope.as_str())
         .collect();
     assert!(!keys.contains(&"low"));
     assert!(keys.contains(&"high"));
@@ -46,6 +46,18 @@ fn rejects_invalid_test_entry_without_indexing_panic() {
     let mut cache = PrefixStateCache::default();
     let mut invalid = entry("bad", vec![1, 2], 1);
     invalid.token_count = 3;
+
+    cache.insert_test_entry(invalid);
+
+    assert!(cache.entries.is_empty());
+    assert_eq!(cache.total_approx_bytes, 0);
+}
+
+#[test]
+fn rejects_entries_with_extra_prefix_tokens() {
+    let mut cache = PrefixStateCache::default();
+    let mut invalid = entry("bad", vec![1, 2, 3], 1);
+    invalid.token_count = 2;
 
     cache.insert_test_entry(invalid);
 

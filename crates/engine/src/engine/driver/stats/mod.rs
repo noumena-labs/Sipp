@@ -12,7 +12,8 @@ use crate::engine::protocol::{
     RequestStats,
 };
 use crate::error::{Error, Result};
-use crate::runtime::metrics::RuntimeObservabilityMetrics;
+use crate::runtime::config::KvReuseMode;
+use crate::runtime::metrics::{CacheMetricMode, RuntimeObservabilityMetrics};
 use crate::runtime::numeric::MILLIS_PER_SECOND_F64;
 use crate::runtime::request::{GenerateResponse, GenerateResponseStatus, ResponseOutput};
 
@@ -25,6 +26,8 @@ pub(super) fn engine_stats_from_runtime(metrics: RuntimeObservabilityMetrics) ->
     EngineStats {
         input_tokens: i64::from(metrics.input_tokens),
         output_tokens: i64::from(metrics.output_tokens),
+        cache_mode: cache_mode_from_metric(metrics.cache_mode),
+        cache_source: metrics.cache_source,
         cache_hits: i64::from(metrics.cache_hits),
         prefill_tokens: i64::from(metrics.prefill_tokens),
         ttft_ms: timings.ttft_ms,
@@ -38,32 +41,6 @@ pub(super) fn engine_stats_from_runtime(metrics: RuntimeObservabilityMetrics) ->
         backend_ms: metrics.native_gpu_ms,
         sync_ms: metrics.native_sync_ms,
         engine_overhead_ms: metrics.native_logic_ms,
-        debug_metrics_scheduler_ticks: i64::from(metrics.debug_metrics_scheduler_ticks),
-        debug_metrics_decode_ticks: i64::from(metrics.debug_metrics_decode_ticks),
-        debug_metrics_prefill_ticks: i64::from(metrics.debug_metrics_prefill_ticks),
-        debug_metrics_backend_sampler_attach_attempts: i64::from(
-            metrics.debug_metrics_backend_sampler_attach_attempts,
-        ),
-        debug_metrics_backend_sampler_attach_failures: i64::from(
-            metrics.debug_metrics_backend_sampler_attach_failures,
-        ),
-        debug_metrics_admit_ms: metrics.debug_metrics_admit_ms,
-        debug_metrics_normalize_ms: metrics.debug_metrics_normalize_ms,
-        debug_metrics_backend_sampler_attach_ms: metrics.debug_metrics_backend_sampler_attach_ms,
-        debug_metrics_select_slots_ms: metrics.debug_metrics_select_slots_ms,
-        debug_metrics_plan_ms: metrics.debug_metrics_plan_ms,
-        debug_metrics_batch_build_ms: metrics.debug_metrics_batch_build_ms,
-        debug_metrics_llama_decode_ms: metrics.debug_metrics_llama_decode_ms,
-        debug_metrics_llama_sync_ms: metrics.debug_metrics_llama_sync_ms,
-        debug_metrics_apply_bookkeeping_ms: metrics.debug_metrics_apply_bookkeeping_ms,
-        debug_metrics_apply_decode_results_ms: metrics.debug_metrics_apply_decode_results_ms,
-        debug_metrics_sample_ms: metrics.debug_metrics_sample_ms,
-        debug_metrics_token_piece_ms: metrics.debug_metrics_token_piece_ms,
-        debug_metrics_emit_ms: metrics.debug_metrics_emit_ms,
-        debug_metrics_prefix_queue_ms: metrics.debug_metrics_prefix_queue_ms,
-        debug_metrics_finalize_ms: metrics.debug_metrics_finalize_ms,
-        debug_metrics_commit_observability_ms: metrics.debug_metrics_commit_observability_ms,
-        debug_metrics_post_decode_ms: metrics.debug_metrics_post_decode_ms,
         ..EngineStats::default()
     }
 }
@@ -119,38 +96,27 @@ pub(super) fn request_stats_from_runtime(metrics: RuntimeObservabilityMetrics) -
     RequestStats {
         input_tokens: metrics.input_tokens,
         output_tokens: metrics.output_tokens,
+        cache_mode: cache_mode_from_metric(metrics.cache_mode),
+        cache_source: metrics.cache_source,
         cache_hits: metrics.cache_hits,
+        prefill_tokens: metrics.prefill_tokens,
         ttft_ms: timings.ttft_ms,
         inter_token_ms: timings.inter_token_ms,
         e2e_ms: timings.e2e_ms,
         e2e_tokens_per_second: rates.e2e_tokens_per_second,
         decode_tokens_per_second: rates.decode_tokens_per_second,
+        prefill_tokens_per_second: rates.prefill_tokens_per_second,
         prefill_ms: metrics.prefill_ms,
         decode_ms: metrics.decode_ms,
-        debug_metrics_scheduler_ticks: metrics.debug_metrics_scheduler_ticks,
-        debug_metrics_decode_ticks: metrics.debug_metrics_decode_ticks,
-        debug_metrics_prefill_ticks: metrics.debug_metrics_prefill_ticks,
-        debug_metrics_backend_sampler_attach_attempts: metrics
-            .debug_metrics_backend_sampler_attach_attempts,
-        debug_metrics_backend_sampler_attach_failures: metrics
-            .debug_metrics_backend_sampler_attach_failures,
-        debug_metrics_admit_ms: metrics.debug_metrics_admit_ms,
-        debug_metrics_normalize_ms: metrics.debug_metrics_normalize_ms,
-        debug_metrics_backend_sampler_attach_ms: metrics.debug_metrics_backend_sampler_attach_ms,
-        debug_metrics_select_slots_ms: metrics.debug_metrics_select_slots_ms,
-        debug_metrics_plan_ms: metrics.debug_metrics_plan_ms,
-        debug_metrics_batch_build_ms: metrics.debug_metrics_batch_build_ms,
-        debug_metrics_llama_decode_ms: metrics.debug_metrics_llama_decode_ms,
-        debug_metrics_llama_sync_ms: metrics.debug_metrics_llama_sync_ms,
-        debug_metrics_apply_bookkeeping_ms: metrics.debug_metrics_apply_bookkeeping_ms,
-        debug_metrics_apply_decode_results_ms: metrics.debug_metrics_apply_decode_results_ms,
-        debug_metrics_sample_ms: metrics.debug_metrics_sample_ms,
-        debug_metrics_token_piece_ms: metrics.debug_metrics_token_piece_ms,
-        debug_metrics_emit_ms: metrics.debug_metrics_emit_ms,
-        debug_metrics_prefix_queue_ms: metrics.debug_metrics_prefix_queue_ms,
-        debug_metrics_finalize_ms: metrics.debug_metrics_finalize_ms,
-        debug_metrics_commit_observability_ms: metrics.debug_metrics_commit_observability_ms,
-        debug_metrics_post_decode_ms: metrics.debug_metrics_post_decode_ms,
+    }
+}
+
+fn cache_mode_from_metric(mode: CacheMetricMode) -> KvReuseMode {
+    match mode {
+        CacheMetricMode::Disabled => KvReuseMode::Disabled,
+        CacheMetricMode::LiveSlotPrefix => KvReuseMode::LiveSlotPrefix,
+        CacheMetricMode::StateSnapshot => KvReuseMode::StateSnapshot,
+        CacheMetricMode::LiveSlotAndSnapshot => KvReuseMode::LiveSlotAndSnapshot,
     }
 }
 

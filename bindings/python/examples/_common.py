@@ -108,7 +108,6 @@ def runtime_config(*, embeddings: bool) -> NativeRuntimeConfig:
         ),
         cache=CacheRuntimeConfig(
             mode="live_slot_prefix",
-            cache_key_policy="context_key",
         ),
         multimodal=MultimodalRuntimeConfig(),
         residency=ResidencyRuntimeConfig(max_gpu_models_per_device=1),

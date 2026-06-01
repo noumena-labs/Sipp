@@ -23,13 +23,12 @@ use cogentlm_engine::backend::{
     backend_observability_json as core_backend_observability_json,
     set_llama_log_quiet as core_set_llama_log_quiet,
 };
-use cogentlm_engine::engine::protocol::RequestStats;
+use cogentlm_engine::engine::protocol::{CacheSource, RequestStats};
 use cogentlm_engine::engine::{
-    CacheKeyPolicy, ChatMessage, ChatRole, FlashAttentionMode, GpuLayerConfig, KvCacheType,
-    KvReuseMode, LogitBias, ModelPlacementConfig, MultimodalRuntimeConfig, NativeRuntimeConfig,
-    ObservabilityRuntimeConfig, ResidencyRuntimeConfig, RopeScaling, SamplerStage,
-    SamplingRuntimeConfig, SchedulerRuntimeConfig, SplitMode, TokenBatch, DEFAULT_CONTEXT_KEY,
-    DEFAULT_MAX_TOKENS,
+    ChatMessage, ChatRole, FlashAttentionMode, GpuLayerConfig, KvCacheType, KvReuseMode, LogitBias,
+    ModelPlacementConfig, MultimodalRuntimeConfig, NativeRuntimeConfig, ObservabilityRuntimeConfig,
+    ResidencyRuntimeConfig, RopeScaling, SamplerStage, SamplingRuntimeConfig,
+    SchedulerRuntimeConfig, SplitMode, TokenBatch, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
 };
 use cogentlm_engine::runtime::config::{SchedulerPolicyConfig, SchedulerPolicyMode};
 use futures::executor::block_on;
@@ -468,11 +467,7 @@ impl PyCacheRuntimeConfig {
         retained_prefix_tokens = None,
         snapshot_interval_tokens = None,
         max_snapshot_entries = None,
-        max_snapshot_bytes = None,
-        max_session_entries = None,
-        cache_key_policy = None,
-        enable_context_checkpoints = None,
-        checkpoint_every_tokens = None
+        max_snapshot_bytes = None
     ))]
     fn new(
         mode: Option<String>,
@@ -480,10 +475,6 @@ impl PyCacheRuntimeConfig {
         snapshot_interval_tokens: Option<i32>,
         max_snapshot_entries: Option<i32>,
         max_snapshot_bytes: Option<usize>,
-        max_session_entries: Option<i32>,
-        cache_key_policy: Option<String>,
-        enable_context_checkpoints: Option<bool>,
-        checkpoint_every_tokens: Option<i32>,
     ) -> PyResult<Self> {
         let mut core = cogentlm_engine::engine::CacheRuntimeConfig::default();
         if let Some(value) = mode {
@@ -493,15 +484,6 @@ impl PyCacheRuntimeConfig {
         assign_if_some(&mut core.snapshot_interval_tokens, snapshot_interval_tokens);
         assign_if_some(&mut core.max_snapshot_entries, max_snapshot_entries);
         assign_if_some(&mut core.max_snapshot_bytes, max_snapshot_bytes);
-        assign_if_some(&mut core.max_session_entries, max_session_entries);
-        if let Some(value) = cache_key_policy {
-            core.cache_key_policy = parse_cache_key_policy(&value)?;
-        }
-        assign_if_some(
-            &mut core.enable_context_checkpoints,
-            enable_context_checkpoints,
-        );
-        assign_if_some(&mut core.checkpoint_every_tokens, checkpoint_every_tokens);
         Ok(Self { core })
     }
 }
@@ -1388,88 +1370,36 @@ fn request_stats_to_dict(py: Python<'_>, stats: RequestStats) -> PyResult<Py<PyA
     let dict = PyDict::new_bound(py);
     dict.set_item("input_tokens", stats.input_tokens)?;
     dict.set_item("output_tokens", stats.output_tokens)?;
+    dict.set_item("cache_mode", kv_reuse_mode_to_str(stats.cache_mode))?;
+    dict.set_item("cache_source", cache_source_to_str(stats.cache_source))?;
     dict.set_item("cache_hits", stats.cache_hits)?;
+    dict.set_item("prefill_tokens", stats.prefill_tokens)?;
     dict.set_item("ttft_ms", stats.ttft_ms)?;
     dict.set_item("inter_token_ms", stats.inter_token_ms)?;
     dict.set_item("e2e_ms", stats.e2e_ms)?;
     dict.set_item("e2e_tokens_per_second", stats.e2e_tokens_per_second)?;
     dict.set_item("decode_tokens_per_second", stats.decode_tokens_per_second)?;
+    dict.set_item("prefill_tokens_per_second", stats.prefill_tokens_per_second)?;
     dict.set_item("prefill_ms", stats.prefill_ms)?;
     dict.set_item("decode_ms", stats.decode_ms)?;
-    dict.set_item(
-        "debug_metrics_scheduler_ticks",
-        stats.debug_metrics_scheduler_ticks,
-    )?;
-    dict.set_item(
-        "debug_metrics_decode_ticks",
-        stats.debug_metrics_decode_ticks,
-    )?;
-    dict.set_item(
-        "debug_metrics_prefill_ticks",
-        stats.debug_metrics_prefill_ticks,
-    )?;
-    dict.set_item(
-        "debug_metrics_backend_sampler_attach_attempts",
-        stats.debug_metrics_backend_sampler_attach_attempts,
-    )?;
-    dict.set_item(
-        "debug_metrics_backend_sampler_attach_failures",
-        stats.debug_metrics_backend_sampler_attach_failures,
-    )?;
-    dict.set_item("debug_metrics_admit_ms", stats.debug_metrics_admit_ms)?;
-    dict.set_item(
-        "debug_metrics_normalize_ms",
-        stats.debug_metrics_normalize_ms,
-    )?;
-    dict.set_item(
-        "debug_metrics_backend_sampler_attach_ms",
-        stats.debug_metrics_backend_sampler_attach_ms,
-    )?;
-    dict.set_item(
-        "debug_metrics_select_slots_ms",
-        stats.debug_metrics_select_slots_ms,
-    )?;
-    dict.set_item("debug_metrics_plan_ms", stats.debug_metrics_plan_ms)?;
-    dict.set_item(
-        "debug_metrics_batch_build_ms",
-        stats.debug_metrics_batch_build_ms,
-    )?;
-    dict.set_item(
-        "debug_metrics_llama_decode_ms",
-        stats.debug_metrics_llama_decode_ms,
-    )?;
-    dict.set_item(
-        "debug_metrics_llama_sync_ms",
-        stats.debug_metrics_llama_sync_ms,
-    )?;
-    dict.set_item(
-        "debug_metrics_apply_bookkeeping_ms",
-        stats.debug_metrics_apply_bookkeeping_ms,
-    )?;
-    dict.set_item(
-        "debug_metrics_apply_decode_results_ms",
-        stats.debug_metrics_apply_decode_results_ms,
-    )?;
-    dict.set_item("debug_metrics_sample_ms", stats.debug_metrics_sample_ms)?;
-    dict.set_item(
-        "debug_metrics_token_piece_ms",
-        stats.debug_metrics_token_piece_ms,
-    )?;
-    dict.set_item("debug_metrics_emit_ms", stats.debug_metrics_emit_ms)?;
-    dict.set_item(
-        "debug_metrics_prefix_queue_ms",
-        stats.debug_metrics_prefix_queue_ms,
-    )?;
-    dict.set_item("debug_metrics_finalize_ms", stats.debug_metrics_finalize_ms)?;
-    dict.set_item(
-        "debug_metrics_commit_observability_ms",
-        stats.debug_metrics_commit_observability_ms,
-    )?;
-    dict.set_item(
-        "debug_metrics_post_decode_ms",
-        stats.debug_metrics_post_decode_ms,
-    )?;
     Ok(dict.into_py(py))
+}
+
+fn kv_reuse_mode_to_str(mode: KvReuseMode) -> &'static str {
+    match mode {
+        KvReuseMode::Disabled => "disabled",
+        KvReuseMode::LiveSlotPrefix => "live_slot_prefix",
+        KvReuseMode::StateSnapshot => "state_snapshot",
+        KvReuseMode::LiveSlotAndSnapshot => "live_slot_and_snapshot",
+    }
+}
+
+fn cache_source_to_str(source: CacheSource) -> &'static str {
+    match source {
+        CacheSource::None => "none",
+        CacheSource::Live => "live",
+        CacheSource::Snapshot => "snapshot",
+    }
 }
 
 fn parse_gpu_layers(value: &str) -> PyResult<GpuLayerConfig> {
@@ -1521,13 +1451,6 @@ fn parse_kv_reuse_mode(value: &str) -> PyResult<KvReuseMode> {
     parse_choice(
         value,
         "cache mode must be one of: disabled, live_slot_prefix, state_snapshot, live_slot_and_snapshot",
-    )
-}
-
-fn parse_cache_key_policy(value: &str) -> PyResult<CacheKeyPolicy> {
-    parse_choice(
-        value,
-        "cache_key_policy must be one of: context_key, prompt_hash",
     )
 }
 

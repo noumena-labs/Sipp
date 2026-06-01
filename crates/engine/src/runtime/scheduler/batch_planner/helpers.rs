@@ -1,7 +1,7 @@
 use crate::runtime::config::SchedulerTickBudget;
-use crate::runtime::numeric::{
-    positive_fair_share_i32, positive_i32_to_usize, saturating_usize_to_i32,
-};
+#[cfg(test)]
+use crate::runtime::numeric::positive_i32_to_usize;
+use crate::runtime::numeric::{positive_fair_share_i32, saturating_usize_to_i32};
 
 const DECODE_PRESSURE_PREFILL_FLOOR: i32 = 8;
 
@@ -40,6 +40,7 @@ pub(super) fn resolve_prefill_slice_cap(
     slice_cap.max(1)
 }
 
+#[cfg(test)]
 pub(super) fn token_limit_reached(generated_token_count: usize, max_output_tokens: i32) -> bool {
     positive_i32_to_usize(max_output_tokens).is_some_and(|limit| generated_token_count >= limit)
 }

@@ -4,12 +4,10 @@ use crate::runtime::config::NativeRuntimeConfig;
 use crate::runtime::request::GenerateRequestLifecycle;
 use crate::runtime::request::RequestQueue;
 use crate::runtime::scheduler::{PrefillKind, SlotPhase, SlotState, TerminalAction};
-use crate::runtime::session::{PrefixCachePolicy, PrefixStateCache, SessionStore};
+use crate::runtime::session::KvCacheManager;
 use crate::runtime::REQUEST_CANCELLED_MESSAGE;
 
-use super::environment::{
-    live_retained_prefix_tokens, resolve_batch_token_budget, snapshot_prefix_cache_enabled,
-};
+use super::environment::{live_retained_prefix_tokens, resolve_batch_token_budget};
 use super::multimodal::run_multimodal_prefill;
 use super::prefill::{ensure_decode_step_context_space, prepare_sequence_for_prompt};
 use super::InferenceRuntime;
@@ -25,7 +23,7 @@ impl InferenceRuntime {
         let slot_count = self.slot_scheduler.slots.len();
         for slot_index in 0..slot_count {
             let slot = &mut self.slot_scheduler.slots[slot_index];
-            if slot.request().is_none() || slot.session.is_none() || slot.seq_id < 0 {
+            if slot.request().is_none() || slot.seq_id < 0 {
                 continue;
             }
 
@@ -68,9 +66,7 @@ impl InferenceRuntime {
                     self.primary_model,
                     &self.config,
                     self.model_fingerprint,
-                    &self.session_store,
-                    &mut self.prefix_state_cache,
-                    &mut self.prefix_cache_policy,
+                    &mut self.kv_cache,
                     &mut self.request_queue,
                     &mut self.scratch_token_piece,
                 )
@@ -105,9 +101,7 @@ fn run_initial_prefill(
     primary_model: *mut ffi::llama_model,
     config: &NativeRuntimeConfig,
     model_fingerprint: u64,
-    session_store: &SessionStore,
-    prefix_state_cache: &mut PrefixStateCache,
-    prefix_cache_policy: &mut PrefixCachePolicy,
+    kv_cache: &mut KvCacheManager,
     request_queue: &mut RequestQueue,
     scratch_token_piece: &mut Vec<i8>,
 ) -> bool {
@@ -145,27 +139,20 @@ fn run_initial_prefill(
     // outputs are read directly from the encoder pass, not from cached KV.
     let bypass_prefix_cache = slot.plan.prefill == PrefillKind::Encode
         || slot.plan.terminal == TerminalAction::ReadEmbedding;
-    if bypass_prefix_cache {
-        slot.mirror.current_kv_tokens.clear();
-        slot.mirror.n_past = 0;
-    }
-    let snapshot_prefix_cache =
-        !bypass_prefix_cache && snapshot_prefix_cache_enabled(config.cache.mode);
-
     let Some(ref mut request) = slot.request else {
         return false;
     };
     let mut prefill_cursor = 0;
-    if let Some(cache_hits) = prepare_sequence_for_prompt(
+    if let Some(cache_preparation) = prepare_sequence_for_prompt(
         shared_context,
         primary_model,
         live_retained_prefix_tokens(config),
-        snapshot_prefix_cache,
+        config.cache.mode,
+        bypass_prefix_cache,
         config.scheduler.policy.decode_token_reserve,
         model_fingerprint,
-        session_store,
-        prefix_state_cache,
-        prefix_cache_policy,
+        kv_cache,
+        slot.cache_candidate,
         &request.context_key,
         &request.prompt_tokens,
         request.max_output_tokens,
@@ -173,7 +160,8 @@ fn run_initial_prefill(
         slot.seq_id,
         &mut prefill_cursor,
     ) {
-        request.cache_hits = cache_hits;
+        request.cache_hits = cache_preparation.cache_hits;
+        request.cache_source = cache_preparation.source;
         if !slot.sampler_prompt_seeded
             && request.grammar.is_empty()
             && request.json_schema.is_empty()

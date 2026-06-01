@@ -174,7 +174,6 @@ fn native_runtime_config_normalizes_policy_limits() {
     config.context.n_parallel = Some(0);
     config.scheduler.prefill_chunk_size = -1;
     config.scheduler.max_running_requests = Some(0);
-    config.cache.max_session_entries = 0;
     config.cache.retained_prefix_tokens = -1;
     config.cache.snapshot_interval_tokens = -1;
     config.cache.max_snapshot_entries = 0;
@@ -186,7 +185,6 @@ fn native_runtime_config_normalizes_policy_limits() {
     assert_eq!(config.context.n_parallel, Some(1));
     assert_eq!(config.scheduler.prefill_chunk_size, 0);
     assert_eq!(config.scheduler.max_running_requests, Some(1));
-    assert_eq!(config.cache.max_session_entries, 1);
     assert_eq!(config.cache.retained_prefix_tokens, 0);
     assert_eq!(config.cache.snapshot_interval_tokens, 0);
     assert_eq!(config.cache.max_snapshot_entries, 1);

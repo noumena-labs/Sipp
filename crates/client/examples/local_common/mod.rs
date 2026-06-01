@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use cogentlm_client::CogentClient;
 use cogentlm_engine::backend::set_llama_log_quiet;
 use cogentlm_engine::engine::{
-    CacheKeyPolicy, CacheRuntimeConfig, ContextRuntimeConfig, GpuLayerConfig, KvReuseMode,
-    ModelPlacementConfig, MultimodalRuntimeConfig, NativeRuntimeConfig, ObservabilityRuntimeConfig,
+    CacheRuntimeConfig, ContextRuntimeConfig, GpuLayerConfig, KvReuseMode, ModelPlacementConfig,
+    MultimodalRuntimeConfig, NativeRuntimeConfig, ObservabilityRuntimeConfig,
     ResidencyRuntimeConfig, SamplingRuntimeConfig, SchedulerRuntimeConfig,
 };
 
@@ -71,7 +71,6 @@ fn runtime_config(embeddings: bool) -> NativeRuntimeConfig {
         },
         cache: CacheRuntimeConfig {
             mode: KvReuseMode::LiveSlotPrefix,
-            cache_key_policy: CacheKeyPolicy::ContextKey,
             ..Default::default()
         },
         multimodal: MultimodalRuntimeConfig::default(),

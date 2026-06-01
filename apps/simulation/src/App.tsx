@@ -584,7 +584,6 @@ export default function App() {
           observability: 'profile',
           runtime: {
             cache: {
-              max_session_entries: 8,
               snapshot_interval_tokens: 64,
               max_snapshot_entries: 64,
             },

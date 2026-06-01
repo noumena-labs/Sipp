@@ -9,90 +9,28 @@ use cogentlm_sys as ffi;
 use crate::engine::protocol::{ModelClass, PoolingType};
 use crate::error::{Error, Result};
 use crate::runtime::llama::LlamaBatchBuilder;
+use crate::runtime::request::GenerateRequest;
 use crate::runtime::scheduler::{PrefillKind, SlotExecutionPlan, SlotPhase, TerminalAction};
 
+use super::capabilities::RuntimeModelCapabilities;
 use super::InferenceRuntime;
 
 impl InferenceRuntime {
     pub(crate) fn text_generation_slot_plan(&self) -> Result<SlotExecutionPlan> {
-        match (self.capabilities.class, self.capabilities.embedding_context) {
-            (ModelClass::EncoderOnly, _) => Err(Error::UnsupportedOperation {
-                operation: "query",
-                reason: "encoder-only models do not generate text; use embed() for vector output"
-                    .to_string(),
-            }),
-            (ModelClass::DecoderOnly, true) => Err(Error::UnsupportedOperation {
-                operation: "query",
-                reason: "this decoder-only model was loaded as an embedding context; load a \
-                         text-generation context for query()"
-                    .to_string(),
-            }),
-            (ModelClass::DecoderOnly, false) => Ok(SlotExecutionPlan {
-                prefill: PrefillKind::Decode,
-                terminal: TerminalAction::SampleTokens,
-            }),
-            (ModelClass::EncoderDecoder, _) => Ok(SlotExecutionPlan {
-                prefill: PrefillKind::Encode,
-                terminal: TerminalAction::SampleTokens,
-            }),
-        }
+        text_generation_slot_plan(&self.capabilities)
     }
 
     pub(crate) fn embedding_slot_plan(&self) -> Result<SlotExecutionPlan> {
-        match (self.capabilities.class, self.capabilities.embedding_context) {
-            (ModelClass::EncoderOnly, _) => self.pooled_embedding_plan(PrefillKind::Encode),
-            (ModelClass::DecoderOnly, true) => self.pooled_embedding_plan(PrefillKind::Decode),
-            (ModelClass::DecoderOnly, false) => Err(Error::UnsupportedOperation {
-                operation: "embed",
-                reason: "decoder-only runtime was not loaded with embeddings=true; reload with \
-                         an embedding context or use query() for text output"
-                    .to_string(),
-            }),
-            (ModelClass::EncoderDecoder, _) => Err(Error::UnsupportedOperation {
-                operation: "embed",
-                reason: "encoder-decoder models do not produce embeddings via this runtime"
-                    .to_string(),
-            }),
-        }
-    }
-
-    fn pooled_embedding_plan(&self, prefill: PrefillKind) -> Result<SlotExecutionPlan> {
-        if self.capabilities.pooling_type == PoolingType::None {
-            return Err(Error::UnsupportedOperation {
-                operation: "embed",
-                reason: "pooling=none produces per-token embeddings; embed() requires a pooled \
-                         output (mean, cls, last, or rank)"
-                    .to_string(),
-            });
-        }
-        Ok(SlotExecutionPlan {
-            prefill,
-            terminal: TerminalAction::ReadEmbedding,
-        })
+        embedding_slot_plan(&self.capabilities)
     }
 
     pub(super) fn run_admission_prefill(&mut self, slot_index: usize) -> Result<()> {
-        let plan = {
-            let slot = self
-                .slot_scheduler
-                .slots
-                .get(slot_index)
-                .ok_or(Error::RuntimeNotReady)?;
-            let request = slot
-                .request()
-                .ok_or(Error::InvalidRequest("admitted slot has no request"))?;
-            if request.embed_options.is_some() {
-                self.embedding_slot_plan()?
-            } else {
-                self.text_generation_slot_plan()?
-            }
-        };
-        let slot = self
+        let plan = self
             .slot_scheduler
             .slots
-            .get_mut(slot_index)
-            .ok_or(Error::RuntimeNotReady)?;
-        slot.plan = plan;
+            .get(slot_index)
+            .ok_or(Error::RuntimeNotReady)?
+            .plan;
 
         if plan.prefill != PrefillKind::Encode {
             return Ok(());
@@ -205,6 +143,76 @@ impl InferenceRuntime {
         }
         Ok(())
     }
+}
+
+pub(super) fn resolve_request_slot_plan_for_capabilities(
+    capabilities: &RuntimeModelCapabilities,
+    request: &GenerateRequest,
+) -> Result<SlotExecutionPlan> {
+    if request.embed_options.is_some() {
+        embedding_slot_plan(capabilities)
+    } else {
+        text_generation_slot_plan(capabilities)
+    }
+}
+
+fn text_generation_slot_plan(capabilities: &RuntimeModelCapabilities) -> Result<SlotExecutionPlan> {
+    match (capabilities.class, capabilities.embedding_context) {
+        (ModelClass::EncoderOnly, _) => Err(Error::UnsupportedOperation {
+            operation: "query",
+            reason: "encoder-only models do not generate text; use embed() for vector output"
+                .to_string(),
+        }),
+        (ModelClass::DecoderOnly, true) => Err(Error::UnsupportedOperation {
+            operation: "query",
+            reason: "this decoder-only model was loaded as an embedding context; load a \
+                     text-generation context for query()"
+                .to_string(),
+        }),
+        (ModelClass::DecoderOnly, false) => Ok(SlotExecutionPlan {
+            prefill: PrefillKind::Decode,
+            terminal: TerminalAction::SampleTokens,
+        }),
+        (ModelClass::EncoderDecoder, _) => Ok(SlotExecutionPlan {
+            prefill: PrefillKind::Encode,
+            terminal: TerminalAction::SampleTokens,
+        }),
+    }
+}
+
+fn embedding_slot_plan(capabilities: &RuntimeModelCapabilities) -> Result<SlotExecutionPlan> {
+    match (capabilities.class, capabilities.embedding_context) {
+        (ModelClass::EncoderOnly, _) => pooled_embedding_plan(capabilities, PrefillKind::Encode),
+        (ModelClass::DecoderOnly, true) => pooled_embedding_plan(capabilities, PrefillKind::Decode),
+        (ModelClass::DecoderOnly, false) => Err(Error::UnsupportedOperation {
+            operation: "embed",
+            reason: "decoder-only runtime was not loaded with embeddings=true; reload with \
+                     an embedding context or use query() for text output"
+                .to_string(),
+        }),
+        (ModelClass::EncoderDecoder, _) => Err(Error::UnsupportedOperation {
+            operation: "embed",
+            reason: "encoder-decoder models do not produce embeddings via this runtime".to_string(),
+        }),
+    }
+}
+
+fn pooled_embedding_plan(
+    capabilities: &RuntimeModelCapabilities,
+    prefill: PrefillKind,
+) -> Result<SlotExecutionPlan> {
+    if capabilities.pooling_type == PoolingType::None {
+        return Err(Error::UnsupportedOperation {
+            operation: "embed",
+            reason: "pooling=none produces per-token embeddings; embed() requires a pooled \
+                     output (mean, cls, last, or rank)"
+                .to_string(),
+        });
+    }
+    Ok(SlotExecutionPlan {
+        prefill,
+        terminal: TerminalAction::ReadEmbedding,
+    })
 }
 
 #[cfg(test)]

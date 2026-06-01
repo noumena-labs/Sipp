@@ -26,11 +26,12 @@ use cogentlm_engine::backend::{
     backend_observability_json as core_backend_observability_json,
     set_llama_log_quiet as core_set_llama_log_quiet,
 };
-use cogentlm_engine::engine::protocol::RequestStats as CoreRequestStats;
+use cogentlm_engine::engine::protocol::{
+    CacheSource as CoreCacheSource, RequestStats as CoreRequestStats,
+};
 use cogentlm_engine::engine::{
-    CacheKeyPolicy, ChatMessage as CoreChatMessage, ChatRole as CoreChatRole, FlashAttentionMode,
-    GpuLayerConfig, KvCacheType, KvReuseMode, LogitBias,
-    ModelPlacementConfig as CoreModelPlacementConfig,
+    ChatMessage as CoreChatMessage, ChatRole as CoreChatRole, FlashAttentionMode, GpuLayerConfig,
+    KvCacheType, KvReuseMode, LogitBias, ModelPlacementConfig as CoreModelPlacementConfig,
     MultimodalRuntimeConfig as CoreMultimodalRuntimeConfig,
     NativeRuntimeConfig as CoreNativeRuntimeConfig,
     ObservabilityRuntimeConfig as CoreObservabilityRuntimeConfig, PoolingType as CorePoolingType,
@@ -418,14 +419,6 @@ pub struct CacheRuntimeConfig {
     pub max_snapshot_entries: Option<i32>,
     #[napi(js_name = "max_snapshot_bytes")]
     pub max_snapshot_bytes: Option<f64>,
-    #[napi(js_name = "max_session_entries")]
-    pub max_session_entries: Option<i32>,
-    #[napi(js_name = "cache_key_policy")]
-    pub cache_key_policy: Option<String>,
-    #[napi(js_name = "enable_context_checkpoints")]
-    pub enable_context_checkpoints: Option<bool>,
-    #[napi(js_name = "checkpoint_every_tokens")]
-    pub checkpoint_every_tokens: Option<i32>,
 }
 
 impl CacheRuntimeConfig {
@@ -447,18 +440,6 @@ impl CacheRuntimeConfig {
             &mut core.max_snapshot_bytes,
             self.max_snapshot_bytes,
             |value| value as usize,
-        );
-        assign_if_some(&mut core.max_session_entries, self.max_session_entries);
-        if let Some(value) = &self.cache_key_policy {
-            core.cache_key_policy = parse_cache_key_policy(value)?;
-        }
-        assign_if_some(
-            &mut core.enable_context_checkpoints,
-            self.enable_context_checkpoints,
-        );
-        assign_if_some(
-            &mut core.checkpoint_every_tokens,
-            self.checkpoint_every_tokens,
         );
         Ok(core)
     }
@@ -901,37 +882,19 @@ pub struct TokenUsage {
 pub struct RequestStats {
     pub input_tokens: i32,
     pub output_tokens: i32,
+    pub cache_mode: String,
+    pub cache_source: String,
     pub cache_hits: i32,
+    pub prefill_tokens: i32,
     pub ttft_ms: Option<f64>,
     pub inter_token_ms: Option<f64>,
     #[napi(js_name = "e2eMs")]
     pub e2e_ms: Option<f64>,
     pub e2e_tokens_per_second: Option<f64>,
     pub decode_tokens_per_second: Option<f64>,
+    pub prefill_tokens_per_second: Option<f64>,
     pub prefill_ms: f64,
     pub decode_ms: f64,
-    pub debug_metrics_scheduler_ticks: i32,
-    pub debug_metrics_decode_ticks: i32,
-    pub debug_metrics_prefill_ticks: i32,
-    pub debug_metrics_backend_sampler_attach_attempts: i32,
-    pub debug_metrics_backend_sampler_attach_failures: i32,
-    pub debug_metrics_admit_ms: f64,
-    pub debug_metrics_normalize_ms: f64,
-    pub debug_metrics_backend_sampler_attach_ms: f64,
-    pub debug_metrics_select_slots_ms: f64,
-    pub debug_metrics_plan_ms: f64,
-    pub debug_metrics_batch_build_ms: f64,
-    pub debug_metrics_llama_decode_ms: f64,
-    pub debug_metrics_llama_sync_ms: f64,
-    pub debug_metrics_apply_bookkeeping_ms: f64,
-    pub debug_metrics_apply_decode_results_ms: f64,
-    pub debug_metrics_sample_ms: f64,
-    pub debug_metrics_token_piece_ms: f64,
-    pub debug_metrics_emit_ms: f64,
-    pub debug_metrics_prefix_queue_ms: f64,
-    pub debug_metrics_finalize_ms: f64,
-    pub debug_metrics_commit_observability_ms: f64,
-    pub debug_metrics_post_decode_ms: f64,
 }
 
 #[napi(string_enum = "snake_case")]
@@ -1369,39 +1332,38 @@ fn request_stats_to_node(stats: CoreRequestStats) -> RequestStats {
     RequestStats {
         input_tokens: stats.input_tokens,
         output_tokens: stats.output_tokens,
+        cache_mode: kv_reuse_mode_to_string(stats.cache_mode),
+        cache_source: cache_source_to_string(stats.cache_source),
         cache_hits: stats.cache_hits,
+        prefill_tokens: stats.prefill_tokens,
         ttft_ms: stats.ttft_ms,
         inter_token_ms: stats.inter_token_ms,
         e2e_ms: stats.e2e_ms,
         e2e_tokens_per_second: stats.e2e_tokens_per_second,
         decode_tokens_per_second: stats.decode_tokens_per_second,
+        prefill_tokens_per_second: stats.prefill_tokens_per_second,
         prefill_ms: stats.prefill_ms,
         decode_ms: stats.decode_ms,
-        debug_metrics_scheduler_ticks: stats.debug_metrics_scheduler_ticks,
-        debug_metrics_decode_ticks: stats.debug_metrics_decode_ticks,
-        debug_metrics_prefill_ticks: stats.debug_metrics_prefill_ticks,
-        debug_metrics_backend_sampler_attach_attempts: stats
-            .debug_metrics_backend_sampler_attach_attempts,
-        debug_metrics_backend_sampler_attach_failures: stats
-            .debug_metrics_backend_sampler_attach_failures,
-        debug_metrics_admit_ms: stats.debug_metrics_admit_ms,
-        debug_metrics_normalize_ms: stats.debug_metrics_normalize_ms,
-        debug_metrics_backend_sampler_attach_ms: stats.debug_metrics_backend_sampler_attach_ms,
-        debug_metrics_select_slots_ms: stats.debug_metrics_select_slots_ms,
-        debug_metrics_plan_ms: stats.debug_metrics_plan_ms,
-        debug_metrics_batch_build_ms: stats.debug_metrics_batch_build_ms,
-        debug_metrics_llama_decode_ms: stats.debug_metrics_llama_decode_ms,
-        debug_metrics_llama_sync_ms: stats.debug_metrics_llama_sync_ms,
-        debug_metrics_apply_bookkeeping_ms: stats.debug_metrics_apply_bookkeeping_ms,
-        debug_metrics_apply_decode_results_ms: stats.debug_metrics_apply_decode_results_ms,
-        debug_metrics_sample_ms: stats.debug_metrics_sample_ms,
-        debug_metrics_token_piece_ms: stats.debug_metrics_token_piece_ms,
-        debug_metrics_emit_ms: stats.debug_metrics_emit_ms,
-        debug_metrics_prefix_queue_ms: stats.debug_metrics_prefix_queue_ms,
-        debug_metrics_finalize_ms: stats.debug_metrics_finalize_ms,
-        debug_metrics_commit_observability_ms: stats.debug_metrics_commit_observability_ms,
-        debug_metrics_post_decode_ms: stats.debug_metrics_post_decode_ms,
     }
+}
+
+fn kv_reuse_mode_to_string(mode: KvReuseMode) -> String {
+    match mode {
+        KvReuseMode::Disabled => "disabled",
+        KvReuseMode::LiveSlotPrefix => "live_slot_prefix",
+        KvReuseMode::StateSnapshot => "state_snapshot",
+        KvReuseMode::LiveSlotAndSnapshot => "live_slot_and_snapshot",
+    }
+    .to_string()
+}
+
+fn cache_source_to_string(source: CoreCacheSource) -> String {
+    match source {
+        CoreCacheSource::None => "none",
+        CoreCacheSource::Live => "live",
+        CoreCacheSource::Snapshot => "snapshot",
+    }
+    .to_string()
 }
 
 fn parse_gpu_layers(value: &str) -> Result<GpuLayerConfig> {
@@ -1437,13 +1399,6 @@ fn parse_kv_reuse_mode(value: &str) -> Result<KvReuseMode> {
     parse_choice(
         value,
         "cache mode must be one of: disabled, live_slot_prefix, state_snapshot, live_slot_and_snapshot",
-    )
-}
-
-fn parse_cache_key_policy(value: &str) -> Result<CacheKeyPolicy> {
-    parse_choice(
-        value,
-        "cache_key_policy must be one of: context_key, prompt_hash",
     )
 }
 

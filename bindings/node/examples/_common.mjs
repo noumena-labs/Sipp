@@ -106,7 +106,6 @@ function runtimeConfig({ embeddings }) {
     },
     cache: {
       mode: 'live_slot_prefix',
-      cache_key_policy: 'context_key',
     },
     multimodal: {},
     residency: {

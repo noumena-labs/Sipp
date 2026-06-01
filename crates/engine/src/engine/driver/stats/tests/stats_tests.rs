@@ -8,7 +8,8 @@ use super::super::*;
 use crate::backend::{json_strings, KEY_NAME};
 use crate::engine::protocol::{FinishReason, PoolingType};
 use crate::error::Error;
-use crate::runtime::metrics::RuntimeObservabilityMetrics;
+use crate::runtime::config::KvReuseMode;
+use crate::runtime::metrics::{CacheMetricMode, CacheSource, RuntimeObservabilityMetrics};
 use crate::runtime::numeric::duration_millis_u64;
 use crate::runtime::request::{GenerateResponse, GenerateResponseStatus, ResponseOutput};
 
@@ -25,6 +26,8 @@ fn runtime_metrics_map_to_engine_stats() {
         native_logic_ms: 2.0,
         input_tokens: 8,
         output_tokens: 4,
+        cache_mode: CacheMetricMode::LiveSlotAndSnapshot,
+        cache_source: CacheSource::Snapshot,
         cache_hits: 3,
         prefill_tokens: 5,
         ..RuntimeObservabilityMetrics::default()
@@ -32,6 +35,8 @@ fn runtime_metrics_map_to_engine_stats() {
 
     assert_eq!(stats.input_tokens, 8);
     assert_eq!(stats.output_tokens, 4);
+    assert_eq!(stats.cache_mode, KvReuseMode::LiveSlotAndSnapshot);
+    assert_eq!(stats.cache_source, CacheSource::Snapshot);
     assert_eq!(stats.cache_hits, 3);
     assert_eq!(stats.prefill_tokens, 5);
     assert_eq!(stats.ttft_ms, Some(10.0));
@@ -90,6 +95,18 @@ fn completed_response_maps_to_generation_result() {
     assert_eq!(result.finish_reason, FinishReason::Stop);
     assert_eq!(result.stats.output_tokens, 5);
     assert_eq!(result.stats.e2e_tokens_per_second, Some(100.0));
+}
+
+#[test]
+fn request_stats_include_prefill_token_count_and_rate() {
+    let stats = request_stats_from_runtime(RuntimeObservabilityMetrics {
+        prefill_ms: 25.0,
+        prefill_tokens: 5,
+        ..RuntimeObservabilityMetrics::default()
+    });
+
+    assert_eq!(stats.prefill_tokens, 5);
+    assert_eq!(stats.prefill_tokens_per_second, Some(200.0));
 }
 
 #[test]

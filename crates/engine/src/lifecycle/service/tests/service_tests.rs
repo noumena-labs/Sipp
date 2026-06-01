@@ -45,8 +45,6 @@ fn t5_encoder_decoder_fixture_is_available() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
-        .join("..")
-        .join("..")
         .join("t5-small-f16.gguf");
     let metadata = cogentlm_shard::inspect_gguf_metadata_path(&path)
         .expect("repo-root t5-small-f16.gguf metadata")

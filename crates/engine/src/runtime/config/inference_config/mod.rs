@@ -124,10 +124,6 @@ pub struct CacheRuntimeConfig {
     pub snapshot_interval_tokens: i32,
     pub max_snapshot_entries: i32,
     pub max_snapshot_bytes: usize,
-    pub max_session_entries: i32,
-    pub cache_key_policy: CacheKeyPolicy,
-    pub enable_context_checkpoints: bool,
-    pub checkpoint_every_tokens: i32,
 }
 
 impl Default for CacheRuntimeConfig {
@@ -138,10 +134,6 @@ impl Default for CacheRuntimeConfig {
             snapshot_interval_tokens: 128,
             max_snapshot_entries: 32,
             max_snapshot_bytes: 256 * BYTES_PER_MIB,
-            max_session_entries: 8,
-            cache_key_policy: CacheKeyPolicy::ContextKey,
-            enable_context_checkpoints: false,
-            checkpoint_every_tokens: 8192,
         }
     }
 }
@@ -152,25 +144,17 @@ impl CacheRuntimeConfig {
         self.snapshot_interval_tokens = nonnegative_i32(self.snapshot_interval_tokens);
         self.max_snapshot_entries = positive_i32(self.max_snapshot_entries);
         self.max_snapshot_bytes = positive_usize(self.max_snapshot_bytes);
-        self.max_session_entries = positive_i32(self.max_session_entries);
-        self.checkpoint_every_tokens = nonnegative_i32(self.checkpoint_every_tokens);
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum KvReuseMode {
     Disabled,
+    #[default]
     LiveSlotPrefix,
     StateSnapshot,
     LiveSlotAndSnapshot,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CacheKeyPolicy {
-    ContextKey,
-    PromptHash,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

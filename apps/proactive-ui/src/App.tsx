@@ -331,7 +331,6 @@ export default function App() {
               prefill_chunk_size: 256,
             },
             cache: {
-              max_session_entries: 2,
               retained_prefix_tokens: 256,
               snapshot_interval_tokens: 32,
             },

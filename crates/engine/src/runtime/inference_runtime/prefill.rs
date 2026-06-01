@@ -11,8 +11,10 @@ use std::cmp;
 
 use cogentlm_sys as ffi;
 
+use crate::runtime::config::KvReuseMode;
+use crate::runtime::metrics::CacheSource;
 use crate::runtime::scheduler::SlotState;
-use crate::runtime::session::{PrefixCachePolicy, PrefixStateCache, SequenceState, SessionStore};
+use crate::runtime::session::{CacheCandidate, CachePreparation, KvCacheManager, SequenceMirror};
 use crate::runtime::{llama_seq_id, llama_token};
 
 use super::numeric::{llama_context_limit_i32, nonnegative_i32_to_usize_opt, usize_to_i32};
@@ -29,13 +31,85 @@ pub(super) fn resolve_initial_decode_context_reservation(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PrefixReusePlan {
+    pub live: bool,
+    pub snapshot: bool,
+    pub clear_before_prefill: bool,
+}
+
+pub(super) fn prefix_reuse_plan(mode: KvReuseMode, bypass_prefix_cache: bool) -> PrefixReusePlan {
+    if bypass_prefix_cache {
+        return PrefixReusePlan {
+            live: false,
+            snapshot: false,
+            clear_before_prefill: true,
+        };
+    }
+
+    match mode {
+        KvReuseMode::Disabled => PrefixReusePlan {
+            live: false,
+            snapshot: false,
+            clear_before_prefill: true,
+        },
+        KvReuseMode::LiveSlotPrefix => PrefixReusePlan {
+            live: true,
+            snapshot: false,
+            clear_before_prefill: false,
+        },
+        KvReuseMode::StateSnapshot => PrefixReusePlan {
+            live: false,
+            snapshot: true,
+            clear_before_prefill: true,
+        },
+        KvReuseMode::LiveSlotAndSnapshot => PrefixReusePlan {
+            live: true,
+            snapshot: true,
+            clear_before_prefill: false,
+        },
+    }
+}
+
+pub(super) fn live_candidate_lcp(
+    plan: PrefixReusePlan,
+    cache_candidate: CacheCandidate,
+    cached_tokens: &[llama_token],
+    prompt_tokens: &[llama_token],
+) -> usize {
+    if !plan.live
+        || cache_candidate != CacheCandidate::Live
+        || cached_tokens.len() >= prompt_tokens.len()
+    {
+        return 0;
+    }
+    let lcp = compute_lcp_reuse(cached_tokens, prompt_tokens);
+    if lcp == cached_tokens.len() {
+        lcp
+    } else {
+        0
+    }
+}
+
+pub(super) fn authorized_lcp(
+    source: CacheSource,
+    cached_tokens: &[llama_token],
+    prompt_tokens: &[llama_token],
+) -> usize {
+    if source == CacheSource::None {
+        0
+    } else {
+        compute_lcp_reuse(cached_tokens, prompt_tokens)
+    }
+}
+
 /// Slides the KV window so `state.n_past + new_tokens_needed <= n_ctx`,
 /// preserving `retained_prefix_tokens` at the head. Returns `false` if the
 /// shared context is invalid or no amount of trimming can fit the new tokens.
 pub(super) fn ensure_context_space(
     shared_context: *mut ffi::llama_context,
     retained_prefix_tokens: i32,
-    state: &mut SequenceState,
+    state: &mut SequenceMirror,
     seq_id: llama_seq_id,
     new_tokens_needed: i32,
 ) -> bool {
@@ -125,25 +199,25 @@ pub(super) fn ensure_context_space(
 ///   4. ensure room for the missing prompt tokens + decode reservation.
 ///
 /// Writes the prefill cursor (tokens already in KV) into `out_prefill_cursor`
-/// and returns the number of cache hits as i32.
+/// and returns cache preparation metrics.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn prepare_sequence_for_prompt(
     shared_context: *mut ffi::llama_context,
     primary_model: *mut ffi::llama_model,
     retained_prefix_tokens: i32,
-    snapshot_prefix_cache: bool,
+    cache_mode: KvReuseMode,
+    bypass_prefix_cache: bool,
     decode_token_reserve: i32,
     model_fingerprint: u64,
-    session_store: &SessionStore,
-    prefix_state_cache: &mut PrefixStateCache,
-    prefix_cache_policy: &mut PrefixCachePolicy,
+    kv_cache: &mut KvCacheManager,
+    cache_candidate: CacheCandidate,
     context_key: &str,
     prompt_tokens: &[llama_token],
     n_tokens_predict: i32,
-    state: &mut SequenceState,
+    state: &mut SequenceMirror,
     seq_id: llama_seq_id,
     out_prefill_cursor: &mut usize,
-) -> Option<i32> {
+) -> Option<CachePreparation> {
     *out_prefill_cursor = 0;
     if shared_context.is_null() || primary_model.is_null() || seq_id < 0 || prompt_tokens.is_empty()
     {
@@ -151,50 +225,60 @@ pub(super) fn prepare_sequence_for_prompt(
     }
 
     let mem = unsafe { ffi::llama_get_memory(shared_context) };
-    let has_live_tokens = !state.current_kv_tokens.is_empty();
-    let live_match_len = if has_live_tokens {
-        session_store.compute_lcp_reuse(state, prompt_tokens)
-    } else {
-        0
-    };
-    let mut match_len = live_match_len;
-    let mut restored_from_prefix_cache = false;
+    let reuse_plan = prefix_reuse_plan(cache_mode, bypass_prefix_cache);
+    if reuse_plan.clear_before_prefill {
+        clear_sequence_state(mem, seq_id, state);
+    }
 
-    // Handle-based lookup avoids cloning the entry's state_bytes (potentially huge).
-    if snapshot_prefix_cache {
-        if let Some(handle) = prefix_state_cache.find_best_prefix_handle(
+    let live_match_len = live_candidate_lcp(
+        reuse_plan,
+        cache_candidate,
+        &state.current_kv_tokens,
+        prompt_tokens,
+    );
+    let mut match_len = live_match_len;
+    let mut cache_source = if live_match_len > 0 {
+        CacheSource::Live
+    } else {
+        CacheSource::None
+    };
+    let mut restored_from_prefix_cache = false;
+    if cache_candidate == CacheCandidate::Live
+        && cache_source == CacheSource::None
+        && !state.current_kv_tokens.is_empty()
+    {
+        clear_sequence_state(mem, seq_id, state);
+    }
+
+    // Snapshot restore is manager-owned; prefill receives only the prefix mirror.
+    if reuse_plan.snapshot {
+        if let Some(snapshot) = kv_cache.restore_best_snapshot_prefix(
+            shared_context,
+            seq_id,
             model_fingerprint,
             context_key,
             prompt_tokens,
-            prefix_cache_policy,
+            live_match_len,
         ) {
-            if handle.token_count > live_match_len
-                && prefix_state_cache.restore_by_handle(shared_context, seq_id, handle)
-            {
-                if let Some(entry) = prefix_state_cache.entries.get(handle.index) {
-                    state.current_kv_tokens.clear();
-                    state
-                        .current_kv_tokens
-                        .extend_from_slice(&entry.prefix_tokens);
-                    state.n_past = usize_to_i32(entry.token_count)?;
-                    match_len = entry.token_count.min(prompt_tokens.len());
-                    restored_from_prefix_cache = true;
-                }
-            }
+            state.current_kv_tokens = snapshot.prefix_tokens;
+            state.n_past = usize_to_i32(snapshot.token_count)?;
+            match_len = snapshot.token_count.min(prompt_tokens.len());
+            cache_source = CacheSource::Snapshot;
+            restored_from_prefix_cache = true;
         }
     }
 
-    if !restored_from_prefix_cache && !has_live_tokens {
-        unsafe {
-            ffi::llama_memory_seq_rm(mem, seq_id, 0, -1);
-        }
-        state.current_kv_tokens.clear();
-        state.n_past = 0;
+    if !restored_from_prefix_cache && cache_source == CacheSource::None {
+        clear_sequence_state(mem, seq_id, state);
         match_len = 0;
     }
 
     // Re-run LCP — it can grow after a cache restore (but never after `ensure_context_space`).
-    match_len = match_len.max(session_store.compute_lcp_reuse(state, prompt_tokens));
+    match_len = match_len.max(authorized_lcp(
+        cache_source,
+        &state.current_kv_tokens,
+        prompt_tokens,
+    ));
     let missing_prompt_tokens = prompt_tokens.len().checked_sub(match_len)?;
     let tokens_to_add = usize_to_i32(missing_prompt_tokens)?;
     let total_needed = tokens_to_add
@@ -210,7 +294,11 @@ pub(super) fn prepare_sequence_for_prompt(
         return None;
     }
 
-    match_len = match_len.min(session_store.compute_lcp_reuse(state, prompt_tokens));
+    match_len = match_len.min(authorized_lcp(
+        cache_source,
+        &state.current_kv_tokens,
+        prompt_tokens,
+    ));
     let allow_partial_kv = !(unsafe { ffi::llama_model_is_recurrent(primary_model) }
         || unsafe { ffi::llama_model_is_hybrid(primary_model) });
 
@@ -222,6 +310,7 @@ pub(super) fn prepare_sequence_for_prompt(
             state.current_kv_tokens.clear();
             state.n_past = 0;
             match_len = 0;
+            cache_source = CacheSource::None;
         } else {
             let match_len_i32 = usize_to_i32(match_len)?;
             if !unsafe { ffi::llama_memory_seq_rm(mem, seq_id, match_len_i32, -1) } {
@@ -255,7 +344,25 @@ pub(super) fn prepare_sequence_for_prompt(
 
     let cache_hits = usize_to_i32(match_len)?;
     *out_prefill_cursor = match_len;
-    Some(cache_hits)
+    if cache_hits == 0 {
+        cache_source = CacheSource::None;
+    }
+    Some(CachePreparation {
+        source: cache_source,
+        cache_hits,
+    })
+}
+
+fn clear_sequence_state(
+    memory: ffi::llama_memory_t,
+    seq_id: llama_seq_id,
+    state: &mut SequenceMirror,
+) {
+    unsafe {
+        ffi::llama_memory_seq_rm(memory, seq_id, 0, -1);
+    }
+    state.current_kv_tokens.clear();
+    state.n_past = 0;
 }
 
 /// Per-step variant: makes room for one more decode token. For multimodal
@@ -266,7 +373,7 @@ pub(super) fn ensure_decode_step_context_space(
     retained_prefix_tokens: i32,
     slot: &mut SlotState,
 ) -> bool {
-    if shared_context.is_null() || slot.session.is_none() {
+    if shared_context.is_null() || slot.request().is_none() {
         return false;
     }
     if slot.generated_tokens.is_empty() {
@@ -291,4 +398,12 @@ pub(super) fn ensure_decode_step_context_space(
         slot.seq_id,
         1,
     )
+}
+
+fn compute_lcp_reuse(cached_tokens: &[llama_token], incoming_tokens: &[llama_token]) -> usize {
+    cached_tokens
+        .iter()
+        .zip(incoming_tokens.iter())
+        .take_while(|(cached, incoming)| cached == incoming)
+        .count()
 }

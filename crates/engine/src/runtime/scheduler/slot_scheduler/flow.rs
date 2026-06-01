@@ -1,27 +1,28 @@
 use std::time::Instant;
 
+use crate::runtime::config::KvReuseMode;
 use crate::runtime::request::{
     GenerateRequest, GenerateResponse, GenerateResponseStatus, RequestQueue, ResponseOutput,
 };
-use crate::runtime::session::SessionStore;
+use crate::runtime::session::KvCacheManager;
 use crate::runtime::{
-    numeric::{duration_ms, saturating_usize_to_i32},
-    scheduler::SlotPhase,
+    numeric::saturating_usize_to_i32,
+    scheduler::{PrefillKind, SlotExecutionPlan, SlotPhase, TerminalAction},
     REQUEST_CANCELLED_MESSAGE,
 };
 
 use super::metrics::metrics_from_request;
 use super::{SlotScheduler, SlotState};
 
-const CREATE_OR_FIND_SESSION_FAILED: &str = "Failed to create or find a session.";
 const ACQUIRE_HARDWARE_SEQUENCE_FAILED: &str = "Failed to acquire a hardware sequence ID.";
-const PREPARE_SESSION_FOR_ADMISSION_FAILED: &str = "Failed to prepare session for admission.";
 const REQUEST_FAILED: &str = "Request failed.";
+const RESOLVE_SLOT_PLAN_FAILED: &str = "Failed to resolve slot execution plan.";
 
 impl SlotScheduler {
-    pub fn resize(&mut self, slot_count: usize) {
+    pub fn resize(&mut self, slot_count: usize, kv_cache: &mut KvCacheManager) {
         if slot_count < self.slots.len() {
             for slot in &mut self.slots[slot_count..] {
+                release_slot_for_reset(kv_cache, slot);
                 slot.reset_to_idle();
             }
         }
@@ -32,6 +33,7 @@ impl SlotScheduler {
             if idle_without_request(slot) {
                 continue;
             }
+            release_slot_for_reset(kv_cache, slot);
             slot.reset_to_idle();
             reset_slot_identity(slot, slot_id);
         }
@@ -61,50 +63,33 @@ impl SlotScheduler {
     pub fn admit_pending_requests(
         &mut self,
         request_queue: &mut RequestQueue,
-        session_store: &mut SessionStore,
+        kv_cache: &mut KvCacheManager,
+        cache_mode: KvReuseMode,
+        mut resolve_plan: impl FnMut(&GenerateRequest) -> Option<SlotExecutionPlan>,
     ) -> Option<usize> {
-        let debug_metrics_admit_start = Instant::now();
         let idle_slot_index = self.slots.iter().position(idle_without_request)?;
 
-        let has_evictable = session_store.has_evictable_session();
-        let next_request_id = request_queue.try_pop_next_admissible(|request| {
-            session_store.can_admit_with_evictable_cached(&request.context_key, has_evictable)
-        })?;
+        let next_request_id = request_queue
+            .try_pop_next_admissible(|request| kv_cache.can_admit(&request.context_key))?;
 
         let mut request = request_queue.requests.get(&next_request_id).cloned()?;
 
         let context_key = request.context_key.clone();
-        let sticky_hardware_id = {
-            let Some(session) = session_store.get_or_create_session(&context_key) else {
-                complete_failed_admission(request_queue, request.id, CREATE_OR_FIND_SESSION_FAILED);
-                return None;
-            };
-            session.hardware_id
+        let Some(plan) = resolve_plan(&request) else {
+            complete_failed_admission(request_queue, request.id, RESOLVE_SLOT_PLAN_FAILED);
+            return None;
         };
-
-        let leased_seq_id = session_store.acquire_seq_id(sticky_hardware_id);
-        if leased_seq_id < 0 {
+        let bypass_cache =
+            plan.prefill == PrefillKind::Encode || plan.terminal == TerminalAction::ReadEmbedding;
+        let Some(admission) = kv_cache.admit(&context_key, cache_mode, bypass_cache) else {
             complete_failed_admission(request_queue, request.id, ACQUIRE_HARDWARE_SEQUENCE_FAILED);
             return None;
-        }
-
-        let Some(session_snapshot) =
-            session_store.prepare_for_admission(&context_key, leased_seq_id)
-        else {
-            session_store.release_seq_id(leased_seq_id);
-            complete_failed_admission(
-                request_queue,
-                request.id,
-                PREPARE_SESSION_FOR_ADMISSION_FAILED,
-            );
-            return None;
         };
 
-        session_store.pin(&context_key);
         let slot = &mut self.slots[idle_slot_index];
-        request.debug_metrics_admit_ms += duration_ms(debug_metrics_admit_start, Instant::now());
-        slot.attach_request(request, session_snapshot);
-        slot.seq_id = leased_seq_id;
+        request.cache_mode = cache_mode;
+        slot.attach_request(request, admission);
+        slot.plan = plan;
         slot.phase = SlotPhase::Prefill;
         Some(idle_slot_index)
     }
@@ -112,14 +97,14 @@ impl SlotScheduler {
     pub fn finalize_completed_slots(
         &mut self,
         request_queue: &mut RequestQueue,
-        session_store: &mut SessionStore,
+        kv_cache: &mut KvCacheManager,
+        cache_mode: KvReuseMode,
     ) {
         for slot in &mut self.slots {
             if !is_terminal_phase(slot.phase) {
                 continue;
             }
 
-            let debug_metrics_finalize_start = Instant::now();
             let request = slot.request.take();
             let queue_cancel_requested = request_queue
                 .requests
@@ -161,27 +146,24 @@ impl SlotScheduler {
                 request_val.output_tokens = saturating_usize_to_i32(slot.generated_tokens.len());
                 request_val.emitted_token_count = request_val.output_tokens;
 
-                if let Some(session) = session_store.find_mut(&request_val.context_key) {
-                    session.current_kv_tokens = std::mem::take(&mut slot.mirror.current_kv_tokens);
-                    session.n_past = slot.mirror.n_past;
-                    session.hardware_id = slot.mirror.hardware_id;
-                }
-
-                session_store.unpin(&request_val.context_key);
-                if request_val.is_multimodal_turn {
-                    session_store.remove(&request_val.context_key);
-                }
+                let should_commit_live = response_status == GenerateResponseStatus::Completed
+                    && !request_val.is_multimodal_turn;
+                kv_cache.finalize_slot(
+                    &request_val.context_key,
+                    slot.seq_id,
+                    slot.lease_generation,
+                    std::mem::take(&mut slot.mirror),
+                    should_commit_live,
+                    cache_mode,
+                );
                 metrics_request = Some((request_val, completed_at));
             }
 
             if slot.seq_id >= 0 {
-                session_store.release_seq_id(slot.seq_id);
                 slot.seq_id = -1;
             }
 
-            if let Some((mut request, completed_at)) = metrics_request {
-                request.debug_metrics_finalize_ms +=
-                    duration_ms(debug_metrics_finalize_start, Instant::now());
+            if let Some((request, completed_at)) = metrics_request {
                 response.runtime_observability = metrics_from_request(&request, completed_at);
             }
 
@@ -224,7 +206,7 @@ fn is_terminal_phase(phase: SlotPhase) -> bool {
 }
 
 fn decode_slot_ready(slot: &SlotState) -> bool {
-    let request_ready = slot.request().is_some() && slot.session.is_some();
+    let request_ready = slot.request().is_some();
     let slot_ready = slot.phase == SlotPhase::Decode
         && !slot.generated_tokens.is_empty()
         && slot.buffered_output_text.is_empty();
@@ -235,9 +217,6 @@ fn prefill_slot_ready(slot: &SlotState) -> bool {
     let Some(request) = slot.request() else {
         return false;
     };
-    if slot.session.is_none() {
-        return false;
-    }
     if slot.phase != SlotPhase::Prefill && slot.phase != SlotPhase::Admitted {
         return false;
     }
@@ -245,6 +224,16 @@ fn prefill_slot_ready(slot: &SlotState) -> bool {
         return true;
     }
     slot.prefill_cursor < request.prompt_tokens.len()
+}
+
+fn release_slot_for_reset(kv_cache: &mut KvCacheManager, slot: &SlotState) {
+    if slot.seq_id < 0 {
+        return;
+    }
+    let Some(request) = slot.request() else {
+        return;
+    };
+    kv_cache.release_slot_for_reset(&request.context_key, slot.seq_id, slot.lease_generation);
 }
 
 fn completed_slot_status(

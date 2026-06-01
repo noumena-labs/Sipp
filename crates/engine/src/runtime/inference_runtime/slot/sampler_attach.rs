@@ -1,12 +1,10 @@
 use std::ptr::NonNull;
-use std::time::Instant;
 
 use cogentlm_sys as ffi;
 
 use crate::runtime::config::NativeRuntimeConfig;
 use crate::runtime::scheduler::{SamplerCacheKey, SlotState};
 
-use super::super::duration_ms;
 use super::super::sampler::{attach_backend_sampler, create_sampler};
 
 pub(super) fn ensure_slot_sampler(
@@ -48,7 +46,7 @@ pub(super) fn ensure_slot_sampler(
     if let Some(sampler) = sampler_pool.get_mut(&key).and_then(|vec| vec.pop()) {
         slot.set_sampler(sampler.as_ptr());
         slot.sampler_key = Some(key);
-        record_backend_sampler_attach(slot, shared_context);
+        attach_backend_sampler(shared_context, slot);
         return true;
     }
 
@@ -62,7 +60,7 @@ pub(super) fn ensure_slot_sampler(
         Ok(sampler) => {
             slot.set_sampler(sampler);
             slot.sampler_key = Some(key);
-            record_backend_sampler_attach(slot, shared_context);
+            attach_backend_sampler(shared_context, slot);
             true
         }
         Err(_) => {
@@ -73,23 +71,6 @@ pub(super) fn ensure_slot_sampler(
             };
             slot.fail(message);
             false
-        }
-    }
-}
-
-fn record_backend_sampler_attach(slot: &mut SlotState, shared_context: *mut ffi::llama_context) {
-    let attach_start = Instant::now();
-    let attached = attach_backend_sampler(shared_context, slot);
-    let attach_ms = duration_ms(attach_start, Instant::now());
-    if let Some(request) = slot.request_mut() {
-        request.debug_metrics_backend_sampler_attach_attempts = request
-            .debug_metrics_backend_sampler_attach_attempts
-            .saturating_add(1);
-        request.debug_metrics_backend_sampler_attach_ms += attach_ms;
-        if !attached {
-            request.debug_metrics_backend_sampler_attach_failures = request
-                .debug_metrics_backend_sampler_attach_failures
-                .saturating_add(1);
         }
     }
 }
