@@ -9,15 +9,14 @@
 
 use std::cmp;
 
-use cogentlm_sys as ffi;
-
+use crate::native_bridge::NativeRuntimeHandle;
 use crate::runtime::config::KvReuseMode;
 use crate::runtime::metrics::CacheSource;
 use crate::runtime::scheduler::SlotState;
 use crate::runtime::session::{CacheCandidate, CachePreparation, KvCacheManager, SequenceMirror};
 use crate::runtime::{llama_seq_id, llama_token};
 
-use super::numeric::{llama_context_limit_i32, nonnegative_i32_to_usize_opt, usize_to_i32};
+use super::numeric::{nonnegative_i32_to_usize_opt, usize_to_i32};
 
 #[inline]
 pub(super) fn resolve_initial_decode_context_reservation(
@@ -105,24 +104,22 @@ pub(super) fn authorized_lcp(
 
 /// Slides the KV window so `state.n_past + new_tokens_needed <= n_ctx`,
 /// preserving `retained_prefix_tokens` at the head. Returns `false` if the
-/// shared context is invalid or no amount of trimming can fit the new tokens.
+/// requested window cannot fit inside the active context.
 pub(super) fn ensure_context_space(
-    shared_context: *mut ffi::llama_context,
+    native_runtime: &mut NativeRuntimeHandle,
     retained_prefix_tokens: i32,
     state: &mut SequenceMirror,
     seq_id: llama_seq_id,
     new_tokens_needed: i32,
 ) -> bool {
-    if shared_context.is_null() || seq_id < 0 {
+    if seq_id < 0 {
         return false;
     }
     if new_tokens_needed <= 0 {
         return true;
     }
 
-    let Some(n_ctx) = llama_context_limit_i32(shared_context) else {
-        return false;
-    };
+    let n_ctx = native_runtime.n_ctx();
     if n_ctx <= 0 || new_tokens_needed > n_ctx {
         return false;
     }
@@ -133,14 +130,13 @@ pub(super) fn ensure_context_space(
         return true;
     }
 
-    let mem = unsafe { ffi::llama_get_memory(shared_context) };
     let n_keep = retained_prefix_tokens.min(state.n_past).max(0);
     let required_discard = total_needed - n_ctx;
     let max_discard = (state.n_past - n_keep).max(0);
     let n_discard = required_discard.clamp(0, max_discard);
 
     if n_discard <= 0 {
-        if !unsafe { ffi::llama_memory_seq_rm(mem, seq_id, 0, -1) } {
+        if !native_runtime.clear_sequence(seq_id, 0, -1) {
             return false;
         }
         state.current_kv_tokens.clear();
@@ -152,12 +148,10 @@ pub(super) fn ensure_context_space(
         return false;
     };
 
-    if !unsafe { ffi::llama_memory_seq_rm(mem, seq_id, n_keep, discard_end) } {
+    if !native_runtime.clear_sequence(seq_id, n_keep, discard_end) {
         return false;
     }
-    unsafe {
-        ffi::llama_memory_seq_add(mem, seq_id, discard_end, -1, -n_discard);
-    }
+    native_runtime.add_sequence_delta(seq_id, discard_end, -1, -n_discard);
 
     let Some(n_keep_len) = nonnegative_i32_to_usize_opt(n_keep) else {
         return false;
@@ -183,7 +177,7 @@ pub(super) fn ensure_context_space(
         return true;
     }
 
-    if !unsafe { ffi::llama_memory_seq_rm(mem, seq_id, 0, -1) } {
+    if !native_runtime.clear_sequence(seq_id, 0, -1) {
         return false;
     }
     state.current_kv_tokens.clear();
@@ -202,8 +196,7 @@ pub(super) fn ensure_context_space(
 /// and returns cache preparation metrics.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn prepare_sequence_for_prompt(
-    shared_context: *mut ffi::llama_context,
-    primary_model: *mut ffi::llama_model,
+    native_runtime: &mut NativeRuntimeHandle,
     retained_prefix_tokens: i32,
     cache_mode: KvReuseMode,
     bypass_prefix_cache: bool,
@@ -219,15 +212,13 @@ pub(super) fn prepare_sequence_for_prompt(
     out_prefill_cursor: &mut usize,
 ) -> Option<CachePreparation> {
     *out_prefill_cursor = 0;
-    if shared_context.is_null() || primary_model.is_null() || seq_id < 0 || prompt_tokens.is_empty()
-    {
+    if seq_id < 0 || prompt_tokens.is_empty() {
         return None;
     }
 
-    let mem = unsafe { ffi::llama_get_memory(shared_context) };
     let reuse_plan = prefix_reuse_plan(cache_mode, bypass_prefix_cache);
     if reuse_plan.clear_before_prefill {
-        clear_sequence_state(mem, seq_id, state);
+        clear_sequence_state(native_runtime, seq_id, state);
     }
 
     let live_match_len = live_candidate_lcp(
@@ -247,13 +238,13 @@ pub(super) fn prepare_sequence_for_prompt(
         && cache_source == CacheSource::None
         && !state.current_kv_tokens.is_empty()
     {
-        clear_sequence_state(mem, seq_id, state);
+        clear_sequence_state(native_runtime, seq_id, state);
     }
 
     // Snapshot restore is manager-owned; prefill receives only the prefix mirror.
     if reuse_plan.snapshot {
         if let Some(snapshot) = kv_cache.restore_best_snapshot_prefix(
-            shared_context,
+            native_runtime,
             seq_id,
             model_fingerprint,
             context_key,
@@ -269,7 +260,7 @@ pub(super) fn prepare_sequence_for_prompt(
     }
 
     if !restored_from_prefix_cache && cache_source == CacheSource::None {
-        clear_sequence_state(mem, seq_id, state);
+        clear_sequence_state(native_runtime, seq_id, state);
         match_len = 0;
     }
 
@@ -285,7 +276,7 @@ pub(super) fn prepare_sequence_for_prompt(
         + resolve_initial_decode_context_reservation(n_tokens_predict, decode_token_reserve);
 
     if !ensure_context_space(
-        shared_context,
+        native_runtime,
         retained_prefix_tokens,
         state,
         seq_id,
@@ -299,21 +290,18 @@ pub(super) fn prepare_sequence_for_prompt(
         &state.current_kv_tokens,
         prompt_tokens,
     ));
-    let allow_partial_kv = !(unsafe { ffi::llama_model_is_recurrent(primary_model) }
-        || unsafe { ffi::llama_model_is_hybrid(primary_model) });
+    let allow_partial_kv = !(native_runtime.is_recurrent() || native_runtime.is_hybrid());
 
     if match_len < state.current_kv_tokens.len() || state.current_kv_tokens.is_empty() {
         if !allow_partial_kv || state.current_kv_tokens.is_empty() {
-            unsafe {
-                ffi::llama_memory_seq_rm(mem, seq_id, 0, -1);
-            }
+            native_runtime.clear_sequence(seq_id, 0, -1);
             state.current_kv_tokens.clear();
             state.n_past = 0;
             match_len = 0;
             cache_source = CacheSource::None;
         } else {
             let match_len_i32 = usize_to_i32(match_len)?;
-            if !unsafe { ffi::llama_memory_seq_rm(mem, seq_id, match_len_i32, -1) } {
+            if !native_runtime.clear_sequence(seq_id, match_len_i32, -1) {
                 return None;
             }
             state.current_kv_tokens.truncate(match_len);
@@ -321,21 +309,20 @@ pub(super) fn prepare_sequence_for_prompt(
         }
     }
 
-    // Full-prompt cache hit needs a token to drive decode — trim 1 from KV or invalidate.
+    // Full-prompt cache hit needs a token to drive decode: trim 1 from KV or
+    // invalidate.
     if match_len == prompt_tokens.len() && match_len > 0 {
         if allow_partial_kv {
             let match_len_i32 = usize_to_i32(match_len)?;
             let last_token_position = match_len_i32.checked_sub(1)?;
-            if !unsafe { ffi::llama_memory_seq_rm(mem, seq_id, last_token_position, -1) } {
+            if !native_runtime.clear_sequence(seq_id, last_token_position, -1) {
                 return None;
             }
             state.current_kv_tokens.truncate(match_len - 1);
             state.n_past = last_token_position;
             match_len -= 1;
         } else {
-            unsafe {
-                ffi::llama_memory_seq_rm(mem, seq_id, 0, -1);
-            }
+            native_runtime.clear_sequence(seq_id, 0, -1);
             state.current_kv_tokens.clear();
             state.n_past = 0;
             match_len = 0;
@@ -354,13 +341,11 @@ pub(super) fn prepare_sequence_for_prompt(
 }
 
 fn clear_sequence_state(
-    memory: ffi::llama_memory_t,
+    native_runtime: &mut NativeRuntimeHandle,
     seq_id: llama_seq_id,
     state: &mut SequenceMirror,
 ) {
-    unsafe {
-        ffi::llama_memory_seq_rm(memory, seq_id, 0, -1);
-    }
+    native_runtime.clear_sequence(seq_id, 0, -1);
     state.current_kv_tokens.clear();
     state.n_past = 0;
 }
@@ -369,11 +354,11 @@ fn clear_sequence_state(
 /// turns, the additional token must fit strictly within `n_ctx` (no eviction
 /// of the multimodal prefix is allowed).
 pub(super) fn ensure_decode_step_context_space(
-    shared_context: *mut ffi::llama_context,
+    native_runtime: &mut NativeRuntimeHandle,
     retained_prefix_tokens: i32,
     slot: &mut SlotState,
 ) -> bool {
-    if shared_context.is_null() || slot.request().is_none() {
+    if slot.request().is_none() {
         return false;
     }
     if slot.generated_tokens.is_empty() {
@@ -382,17 +367,16 @@ pub(super) fn ensure_decode_step_context_space(
     if slot
         .request()
         .is_some_and(|request| request.is_multimodal_turn)
-        && llama_context_limit_i32(shared_context).is_none_or(|n_ctx| {
-            slot.mirror
-                .n_past
-                .checked_add(1)
-                .is_none_or(|needed| needed > n_ctx)
-        })
+        && slot
+            .mirror
+            .n_past
+            .checked_add(1)
+            .is_none_or(|needed| needed > native_runtime.n_ctx())
     {
         return false;
     }
     ensure_context_space(
-        shared_context,
+        native_runtime,
         retained_prefix_tokens,
         &mut slot.mirror,
         slot.seq_id,

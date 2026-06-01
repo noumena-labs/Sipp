@@ -15,6 +15,7 @@ import {
   DEFAULT_BENCHMARK_PROMPTS,
   describeRuntimeBackend,
   ENCODER_DECODER_BENCHMARK_PROMPTS,
+  runtimeOptionsForMixedLoad,
   summarizeMemorySnapshots,
   type BenchmarkPromptSet,
 } from './lib/helpers';
@@ -753,6 +754,7 @@ export default function App() {
       const snapshots: MemorySnapshot[] = [];
       snapshots.push(await captureBrowserMemorySnapshot('before-benchmark', true));
 
+      const defaultRuntime = getDefaultRuntimeOptions();
       const scenarios = buildBenchmarkScenarios(benchmarkPrompt, benchmarkTokenCount, promptSet);
       const results: ScenarioResult[] = [];
       for (const scenario of scenarios) {
@@ -764,7 +766,7 @@ export default function App() {
             source,
             warmupRuns,
             measuredRuns,
-            getDefaultRuntimeOptions(),
+            defaultRuntime,
             setStatus,
             true,
             benchmarkEmitTokens,
@@ -776,17 +778,22 @@ export default function App() {
       snapshots.push(await captureBrowserMemorySnapshot('after-scenarios', true));
 
       let mixed: MixedLoadResult | null = null;
-      if (benchmarkOperation !== 'embed' && supportsConcurrentQueryApi(client)) {
+      if (
+        benchmarkOperation !== 'embed' &&
+        info.capabilities?.modelClass !== 'encoder_decoder' &&
+        supportsConcurrentQueryApi(client)
+      ) {
+        const mixedDefinition = buildMixedLoadDefinition(benchmarkOperation, promptSet);
         mixed = await runMixedLoadBenchmark(
           client,
           benchmarkOperation,
-          buildMixedLoadDefinition(benchmarkOperation, promptSet),
+          mixedDefinition,
           source,
           warmupRuns,
           measuredRuns,
-          getDefaultRuntimeOptions(),
+          runtimeOptionsForMixedLoad(defaultRuntime, mixedDefinition.concurrency),
           setStatus,
-          true,
+          false,
           benchmarkEmitTokens,
           benchmarkTokenObserver
         );
@@ -799,7 +806,7 @@ export default function App() {
       const backend = buildBenchmarkBackendProfile(
         environment,
         browserSmoke?.backend ?? observabilitySnapshot.profile ?? null,
-        getDefaultRuntimeOptions().placement.gpu_layers
+        defaultRuntime.placement.gpu_layers
       );
 
       const report: BenchmarkReport = {
@@ -817,7 +824,7 @@ export default function App() {
           warmupRuns,
           measuredRuns,
           emitTokens: benchmarkEmitTokens,
-          runtime: getDefaultRuntimeOptions(),
+          runtime: defaultRuntime,
         },
         environment,
         backend,

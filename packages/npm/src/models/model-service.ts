@@ -90,7 +90,12 @@ interface RuntimeRequestOptions {
 type BaseSource = string | File | readonly string[] | readonly File[];
 type NavigatorWithGpu = Navigator & {
   gpu?: {
-    requestAdapter(): Promise<unknown | null>;
+    requestAdapter(): Promise<NavigatorGpuAdapter | null>;
+  };
+};
+type NavigatorGpuAdapter = {
+  readonly features?: {
+    has(feature: string): boolean;
   };
 };
 
@@ -117,7 +122,8 @@ async function resolveBrowserBackend(
     return backend;
   }
   const gpu = (globalThis.navigator as NavigatorWithGpu | undefined)?.gpu;
-  return gpu != null && (await gpu.requestAdapter()) != null ? 'webgpu' : 'cpu';
+  const adapter = gpu == null ? null : await gpu.requestAdapter();
+  return adapter?.features?.has('shader-f16') === true ? 'webgpu' : 'cpu';
 }
 
 function nowMs(): number {

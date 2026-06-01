@@ -1,5 +1,7 @@
-use std::os::raw::c_char;
+use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use cogentlm_engine::lifecycle::{
     browser_lifecycle_error_response, browser_lifecycle_response_json,
@@ -10,8 +12,6 @@ use cogentlm_engine::lifecycle::{
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::ffi::{into_c_string, read_optional_c_string};
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BrowserLifecycleCreateResponse {
@@ -20,92 +20,67 @@ struct BrowserLifecycleCreateResponse {
     snapshot: cogentlm_engine::lifecycle::BrowserObservabilitySnapshot,
 }
 
-#[no_mangle]
-pub extern "C" fn cogentlm_model_service_create_json(config_json: *const c_char) -> *mut c_char {
-    catch_unwind(AssertUnwindSafe(|| {
-        into_c_string(browser_lifecycle_response_json(create_service(config_json)))
-    }))
-    .unwrap_or_else(|_| {
-        into_c_string(browser_lifecycle_response_json::<Value>(
-            browser_lifecycle_error_response(ModelError::StorageCorrupt(
-                "browser lifecycle service creation panicked".to_string(),
-            )),
-        ))
-    })
+static NEXT_SERVICE_ID: AtomicUsize = AtomicUsize::new(1);
+static SERVICES: OnceLock<Mutex<HashMap<usize, BrowserLifecycleService>>> = OnceLock::new();
+
+pub(crate) fn model_service_create_json(config_json: &str) -> String {
+    let response = catch_unwind(AssertUnwindSafe(|| create_service(config_json)))
+        .unwrap_or_else(|_| browser_lifecycle_error_response(lifecycle_panic_error("creation")));
+    browser_lifecycle_response_json(response)
 }
 
-#[no_mangle]
-/// # Safety
-/// `service` must be null or a live handle returned by
-/// `cogentlm_model_service_create_json`. A non-null handle is consumed and must
-/// not be reused.
-pub unsafe extern "C" fn cogentlm_model_service_close(
-    service: *mut BrowserLifecycleService,
-) -> i32 {
-    if service.is_null() {
+pub(crate) fn model_service_close(service: usize) -> i32 {
+    if service == 0 {
         return 0;
     }
-    catch_unwind(AssertUnwindSafe(|| unsafe {
-        let mut service = Box::from_raw(service);
+    catch_unwind(AssertUnwindSafe(|| {
+        let Ok(mut services) = services().lock() else {
+            return 0;
+        };
+        let Some(mut service) = services.remove(&service) else {
+            return 0;
+        };
         let _ = service.close();
         1
     }))
     .unwrap_or(0)
 }
 
-#[no_mangle]
-pub extern "C" fn cogentlm_model_service_list_json(
-    service: *mut BrowserLifecycleService,
-) -> *mut c_char {
+pub(crate) fn model_service_list_json(service: usize) -> String {
     service_response(service, |service| service.list())
 }
 
-#[no_mangle]
-pub extern "C" fn cogentlm_model_service_current_json(
-    service: *mut BrowserLifecycleService,
-) -> *mut c_char {
+pub(crate) fn model_service_current_json(service: usize) -> String {
     service_response(service, |service| service.current())
 }
 
-#[no_mangle]
-pub extern "C" fn cogentlm_model_service_manifest_json(
-    service: *mut BrowserLifecycleService,
-) -> *mut c_char {
+pub(crate) fn model_service_manifest_json(service: usize) -> String {
     service_response(service, |service| service.manifest.clone())
 }
 
-#[no_mangle]
-pub extern "C" fn cogentlm_model_service_prepare_load_json(
-    service: *mut BrowserLifecycleService,
-    source_json: *const c_char,
-    options_json: *const c_char,
-) -> *mut c_char {
+pub(crate) fn model_service_prepare_load_json(
+    service: usize,
+    source_json: &str,
+    options_json: &str,
+) -> String {
     service_result_response(service, |service| {
-        let source = parse_json_arg::<BrowserLoadSource>(source_json, "model source")?;
-        let options = parse_json_arg::<BrowserLoadOptions>(options_json, "load options")?;
+        let source = parse_json_arg::<BrowserLoadSource>(source_json)?;
+        let options = parse_json_arg::<BrowserLoadOptions>(options_json)?;
         service.prepare_load(source, options)
     })
 }
 
-#[no_mangle]
-pub extern "C" fn cogentlm_model_service_commit_load_json(
-    service: *mut BrowserLifecycleService,
-    commit_json: *const c_char,
-) -> *mut c_char {
+pub(crate) fn model_service_commit_load_json(service: usize, commit_json: &str) -> String {
     service_result_response(service, |service| {
-        let request = parse_json_arg::<BrowserCommitLoadRequest>(commit_json, "load commit")?;
+        let request = parse_json_arg::<BrowserCommitLoadRequest>(commit_json)?;
         service.commit_load(request)
     })
 }
 
-#[no_mangle]
-pub extern "C" fn cogentlm_model_service_abort_load_json(
-    service: *mut BrowserLifecycleService,
-    error_json: *const c_char,
-) -> *mut c_char {
+pub(crate) fn model_service_abort_load_json(service: usize, error_json: &str) -> String {
     service_response(service, |service| {
-        let message = read_optional_c_string(error_json)
-            .filter(|value| !value.trim().is_empty())
+        let message = (!error_json.trim().is_empty())
+            .then(|| error_json.to_string())
             .and_then(|value| {
                 serde_json::from_str::<Value>(&value)
                     .ok()
@@ -121,70 +96,55 @@ pub extern "C" fn cogentlm_model_service_abort_load_json(
     })
 }
 
-#[no_mangle]
-pub extern "C" fn cogentlm_model_service_remove_json(
-    service: *mut BrowserLifecycleService,
-    model_id: *const c_char,
-) -> *mut c_char {
-    service_result_response(service, |service| {
-        let model_id = read_required_c_string(model_id, "model id")?;
-        service.remove(model_id.trim())
-    })
+pub(crate) fn model_service_remove_json(service: usize, model_id: &str) -> String {
+    service_result_response(service, |service| service.remove(model_id))
 }
 
-#[no_mangle]
-pub extern "C" fn cogentlm_model_service_unload_json(
-    service: *mut BrowserLifecycleService,
-) -> *mut c_char {
+pub(crate) fn model_service_unload_json(service: usize) -> String {
     service_response(service, |service| service.unload())
 }
 
-#[no_mangle]
-pub extern "C" fn cogentlm_model_service_snapshot_json(
-    service: *mut BrowserLifecycleService,
-) -> *mut c_char {
+pub(crate) fn model_service_snapshot_json(service: usize) -> String {
     service_response(service, |service| service.snapshot.clone())
 }
 
-#[no_mangle]
-pub extern "C" fn cogentlm_model_service_drain_events_json(
-    service: *mut BrowserLifecycleService,
-) -> *mut c_char {
+pub(crate) fn model_service_drain_events_json(service: usize) -> String {
     service_response(service, |service| service.drain_events())
 }
 
-#[no_mangle]
-pub extern "C" fn cogentlm_model_service_record_event_json(
-    service: *mut BrowserLifecycleService,
-    event_type: *const c_char,
-    patch_json: *const c_char,
-) -> *mut c_char {
+pub(crate) fn model_service_record_event_json(
+    service: usize,
+    event_type: &str,
+    patch_json: &str,
+) -> String {
     service_result_response(service, |service| {
-        let event_type = read_required_c_string(event_type, "event type")?;
-        let event_type =
-            serde_json::from_value::<BrowserObservabilityEventType>(Value::String(event_type))
-                .map_err(ModelError::from)?;
-        let patch = parse_json_arg::<Value>(patch_json, "event patch")?;
+        let event_type = serde_json::from_value::<BrowserObservabilityEventType>(Value::String(
+            event_type.to_string(),
+        ))
+        .map_err(ModelError::from)?;
+        let patch = parse_json_arg::<Value>(patch_json)?;
         service.record_event(event_type, patch)
     })
 }
 
-fn create_service(
-    config_json: *const c_char,
-) -> BrowserLifecycleEnvelope<BrowserLifecycleCreateResponse> {
-    let config = match parse_json_arg::<BrowserCreateConfig>(config_json, "service config") {
+fn create_service(config_json: &str) -> BrowserLifecycleEnvelope<BrowserLifecycleCreateResponse> {
+    let config = match parse_json_arg::<BrowserCreateConfig>(config_json) {
         Ok(config) => config,
         Err(error) => return browser_lifecycle_error_response(error),
     };
     match BrowserLifecycleService::create(config) {
         Ok(service) => {
-            let service = Box::new(service);
-            let handle = Box::into_raw(service);
-            let service_ref = unsafe { &*handle };
+            let handle = NEXT_SERVICE_ID.fetch_add(1, Ordering::Relaxed);
+            let manifest = service.manifest.clone();
+            let snapshot = service.snapshot.clone();
+            let Ok(mut services) = services().lock() else {
+                return browser_lifecycle_error_response(registry_unavailable_error());
+            };
+            services.insert(handle, service);
             browser_lifecycle_success_response(BrowserLifecycleCreateResponse {
-                handle: handle as usize,
-                manifest: service_ref.manifest.clone(),
-                snapshot: service_ref.snapshot.clone(),
+                handle,
+                manifest,
+                snapshot,
             })
         }
         Err(error) => browser_lifecycle_error_response(error),
@@ -192,9 +152,9 @@ fn create_service(
 }
 
 fn service_response<T>(
-    service: *mut BrowserLifecycleService,
+    service: usize,
     operation: impl FnOnce(&mut BrowserLifecycleService) -> T,
-) -> *mut c_char
+) -> String
 where
     T: Serialize,
 {
@@ -202,55 +162,45 @@ where
 }
 
 fn service_result_response<T>(
-    service: *mut BrowserLifecycleService,
+    service: usize,
     operation: impl FnOnce(&mut BrowserLifecycleService) -> Result<T, ModelError>,
-) -> *mut c_char
+) -> String
 where
     T: Serialize,
 {
-    catch_unwind(AssertUnwindSafe(|| {
-        let response = match service_mut(service) {
-            Ok(service) => match operation(service) {
+    let response = catch_unwind(AssertUnwindSafe(|| {
+        let Ok(mut services) = services().lock() else {
+            return browser_lifecycle_error_response(registry_unavailable_error());
+        };
+        match services.get_mut(&service) {
+            Some(service) => match operation(service) {
                 Ok(value) => browser_lifecycle_success_response(value),
                 Err(error) => browser_lifecycle_error_response(error),
             },
-            Err(error) => browser_lifecycle_error_response(error),
-        };
-        into_c_string(browser_lifecycle_response_json(response))
-    }))
-    .unwrap_or_else(|_| {
-        into_c_string(browser_lifecycle_response_json::<Value>(
-            browser_lifecycle_error_response(ModelError::StorageCorrupt(
-                "browser lifecycle service operation panicked".to_string(),
+            None => browser_lifecycle_error_response(ModelError::StorageUnavailable(
+                "browser lifecycle service handle is missing".to_string(),
             )),
-        ))
-    })
+        }
+    }))
+    .unwrap_or_else(|_| browser_lifecycle_error_response(lifecycle_panic_error("operation")));
+    browser_lifecycle_response_json(response)
 }
 
-fn service_mut(
-    service: *mut BrowserLifecycleService,
-) -> Result<&'static mut BrowserLifecycleService, ModelError> {
-    if service.is_null() {
-        return Err(ModelError::StorageUnavailable(
-            "browser lifecycle service handle is null".to_string(),
-        ));
-    }
-    Ok(unsafe { &mut *service })
+fn services() -> &'static Mutex<HashMap<usize, BrowserLifecycleService>> {
+    SERVICES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn parse_json_arg<T>(value: *const c_char, label: &str) -> Result<T, ModelError>
+fn registry_unavailable_error() -> ModelError {
+    ModelError::StorageCorrupt("browser lifecycle service registry is unavailable".to_string())
+}
+
+fn lifecycle_panic_error(operation: &'static str) -> ModelError {
+    ModelError::StorageCorrupt(format!("browser lifecycle service {operation} panicked"))
+}
+
+fn parse_json_arg<T>(value: &str) -> Result<T, ModelError>
 where
     T: for<'de> serde::Deserialize<'de>,
 {
-    let text = read_required_c_string(value, label)?;
-    serde_json::from_str::<T>(&text).map_err(ModelError::from)
-}
-
-fn read_required_c_string(value: *const c_char, label: &str) -> Result<String, ModelError> {
-    let value = read_optional_c_string(value)
-        .ok_or_else(|| ModelError::InvalidModelSource(format!("{label} is not valid UTF-8")))?;
-    if value.trim().is_empty() {
-        return Err(ModelError::InvalidModelSource(format!("{label} is empty")));
-    }
-    Ok(value)
+    serde_json::from_str::<T>(value).map_err(ModelError::from)
 }

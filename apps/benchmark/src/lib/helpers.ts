@@ -1,6 +1,12 @@
-import type { CogentClient, ObservabilitySnapshot } from '@noumena-labs/cogentlm-browser';
+import type {
+  CogentClient,
+  ModelLoadOptions,
+  ObservabilitySnapshot,
+} from '@noumena-labs/cogentlm-browser';
 import type { BenchmarkOperation, MixedLoadDefinition, ScenarioDefinition } from './types';
 import { countWords } from './utils';
+
+type BenchmarkRuntimeOptions = NonNullable<ModelLoadOptions['runtime']>;
 
 export function classifyPromptBucket(prompt: string): string {
   const wordCount = countWords(prompt);
@@ -147,16 +153,17 @@ export function buildMixedLoadDefinition(
   };
 }
 
-export function buildPhase4BenchmarkInitConfig(initConfig: any = {}): any {
-  const context = initConfig.context ?? {};
-  const n_parallel = context.n_parallel ?? context.nParallel;
+export function runtimeOptionsForMixedLoad(
+  runtime: BenchmarkRuntimeOptions,
+  concurrency: number
+): BenchmarkRuntimeOptions {
+  const context = runtime.context ?? {};
   return {
-    ...initConfig,
+    ...runtime,
     context: {
       ...context,
-      n_parallel: Math.max(n_parallel ?? 1, 2),
+      n_parallel: Math.max(context.n_parallel ?? 1, concurrency),
     },
-    sampling: initConfig.sampling == null ? undefined : { ...initConfig.sampling },
   };
 }
 

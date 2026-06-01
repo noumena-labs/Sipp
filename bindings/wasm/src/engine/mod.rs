@@ -1,6 +1,3 @@
-use std::os::raw::c_char;
-use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 #[cfg(target_family = "wasm")]
@@ -15,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[cfg(target_family = "wasm")]
-use cogentlm_engine::backend::{backend_observability_json, set_llama_log_quiet};
+use cogentlm_engine::backend::set_llama_log_quiet;
 #[cfg(target_family = "wasm")]
 use cogentlm_engine::engine::protocol::{EmbedOptions, PoolingType};
 #[cfg(target_family = "wasm")]
@@ -28,16 +25,14 @@ use cogentlm_engine::runtime::request::{
 #[cfg(target_family = "wasm")]
 use cogentlm_engine::runtime::{InferenceRuntime, SchedulerBurstResult};
 
-use crate::ffi::free_c_string;
+use crate::{BrowserRuntimeMetrics, BrowserSchedulerLoopResult};
+
+pub(crate) const ABI_VERSION: u32 = 5;
+
 #[cfg(target_family = "wasm")]
-use crate::ffi::{into_c_string, read_optional_c_string};
-
-const ABI_VERSION: u32 = 5;
-
 const STATUS_OK: i32 = 0;
 const STATUS_FAILURE: i32 = -1;
 const STATUS_INVALID_ARGUMENTS: i32 = -2;
-const STATUS_PANIC: i32 = -3;
 #[cfg(not(target_family = "wasm"))]
 const STATUS_UNAVAILABLE: i32 = -4;
 #[cfg(target_family = "wasm")]
@@ -65,35 +60,6 @@ const SHARED_TOKEN_RING_RECORD_HEADER_BYTES: usize = 16;
 static NEXT_ENGINE_ID: AtomicU32 = AtomicU32::new(1);
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct BrowserSchedulerLoopResult {
-    pub ticks_executed: i32,
-    pub progressed_ticks: i32,
-    pub completed_response_count: i32,
-    pub emitted_token_count: i32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct BrowserRuntimeMetrics {
-    pub ttft_ms: f64,
-    pub itl_avg_ms: f64,
-    pub itl_p99_ms: f64,
-    pub e2e_ms: f64,
-    pub prefill_ms: f64,
-    pub decode_ms: f64,
-    pub native_gpu_ms: f64,
-    pub native_sync_ms: f64,
-    pub native_logic_ms: f64,
-    pub input_tokens: i32,
-    pub output_tokens: i32,
-    pub cache_mode: i32,
-    pub cache_source: i32,
-    pub cache_hits: i32,
-    pub prefill_tokens: i32,
-}
-
-#[repr(C)]
 pub struct BrowserEngine {
     id: u32,
     last_error: String,
@@ -110,6 +76,11 @@ struct BrowserEngineInner {
 struct BrowserEngineInner;
 
 impl BrowserEngine {
+    pub(crate) fn create() -> Self {
+        let id = NEXT_ENGINE_ID.fetch_add(1, Ordering::Relaxed);
+        Self::new(id)
+    }
+
     fn new(id: u32) -> Self {
         Self {
             id,
@@ -118,25 +89,20 @@ impl BrowserEngine {
         }
     }
 
+    pub(crate) fn id(&self) -> u32 {
+        self.id
+    }
+
     #[cfg(target_family = "wasm")]
-    fn load(&mut self, model_path: *const c_char, runtime_config_json: *const c_char) -> i32 {
+    pub(crate) fn load(&mut self, model_path: &str, runtime_config_json: &str) -> i32 {
         self.clear_last_error();
 
-        let Some(model_path) = read_c_string(model_path) else {
-            self.set_last_error("model path is missing or is not valid UTF-8");
-            return STATUS_INVALID_ARGUMENTS;
-        };
         let runtime_config = match read_runtime_config(runtime_config_json) {
             Ok(config) => config,
             Err(error) => {
                 self.set_last_error(error);
                 return STATUS_INVALID_ARGUMENTS;
             }
-        };
-
-        if model_path.trim().is_empty() {
-            self.set_last_error("model path is empty");
-            return STATUS_INVALID_ARGUMENTS;
         };
 
         set_llama_log_quiet(true);
@@ -155,7 +121,7 @@ impl BrowserEngine {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn load(&mut self, _model_path: *const c_char, _runtime_config_json: *const c_char) -> i32 {
+    pub(crate) fn load(&mut self, _model_path: &str, _runtime_config_json: &str) -> i32 {
         self.set_last_error("browser runtime is unavailable for this target");
         STATUS_UNAVAILABLE
     }
@@ -169,12 +135,8 @@ impl BrowserEngine {
         self.last_error = error.into();
     }
 
-    fn last_error_size(&self) -> i32 {
-        byte_len_i32(self.last_error.as_bytes())
-    }
-
-    fn copy_last_error(&self, buffer: *mut u8, buffer_len: usize) -> i32 {
-        copy_bytes_with_nul(self.last_error.as_bytes(), buffer, buffer_len)
+    pub(crate) fn last_error(&self) -> &str {
+        &self.last_error
     }
 
     #[cfg(target_family = "wasm")]
@@ -184,184 +146,151 @@ impl BrowserEngine {
     }
 
     #[cfg(target_family = "wasm")]
-    fn start_text_request(
+    pub(crate) fn start_text_request(
         &mut self,
-        context_key: *const c_char,
-        prompt: *const c_char,
+        context_key: &str,
+        prompt: &str,
         max_tokens: i32,
         emit_tokens: i32,
-        grammar: *const c_char,
+        grammar: &str,
     ) -> u32 {
         self.clear_last_error();
-        let Some(prompt) = read_c_string(prompt) else {
-            self.set_last_error("prompt is missing or is not valid UTF-8");
-            return 0;
-        };
-
-        let context_key = read_optional_c_string(context_key).unwrap_or_default();
-        let grammar = read_optional_c_string(grammar).unwrap_or_default();
         self.enqueue_prompt_request(
-            context_key,
-            prompt,
+            context_key.to_string(),
+            prompt.to_string(),
             max_tokens,
             Vec::new(),
-            grammar,
+            grammar.to_string(),
             emit_tokens,
         )
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn start_text_request(
+    pub(crate) fn start_text_request(
         &mut self,
-        _context_key: *const c_char,
-        _prompt: *const c_char,
+        _context_key: &str,
+        _prompt: &str,
         _max_tokens: i32,
         _emit_tokens: i32,
-        _grammar: *const c_char,
+        _grammar: &str,
     ) -> u32 {
         0
     }
 
     #[cfg(target_family = "wasm")]
-    fn start_media_request(
+    pub(crate) fn start_media_request(
         &mut self,
-        context_key: *const c_char,
-        prompt: *const c_char,
+        context_key: &str,
+        prompt: &str,
         max_tokens: i32,
-        image_count: i32,
-        images_flat_buffer: *const u8,
-        image_sizes: *const i32,
+        images_flat_buffer: &[u8],
+        image_sizes: &[i32],
         emit_tokens: i32,
-        grammar: *const c_char,
+        grammar: &str,
     ) -> u32 {
         self.clear_last_error();
-        let Some(prompt) = read_c_string(prompt) else {
-            self.set_last_error("prompt is missing or is not valid UTF-8");
-            return 0;
-        };
-        let Some(images) = copy_image_buffers(image_count, images_flat_buffer, image_sizes) else {
+        let Some(images) = copy_image_buffers(images_flat_buffer, image_sizes) else {
             self.set_last_error("media buffers are invalid");
             return 0;
         };
 
-        let context_key = read_optional_c_string(context_key).unwrap_or_default();
-        let grammar = read_optional_c_string(grammar).unwrap_or_default();
         self.enqueue_prompt_request(
-            context_key,
-            prompt,
+            context_key.to_string(),
+            prompt.to_string(),
             max_tokens,
             images,
-            grammar,
+            grammar.to_string(),
             emit_tokens,
         )
     }
 
     #[cfg(not(target_family = "wasm"))]
     #[allow(clippy::too_many_arguments)]
-    fn start_media_request(
+    pub(crate) fn start_media_request(
         &mut self,
-        _context_key: *const c_char,
-        _prompt: *const c_char,
+        _context_key: &str,
+        _prompt: &str,
         _max_tokens: i32,
-        _image_count: i32,
-        _images_flat_buffer: *const u8,
-        _image_sizes: *const i32,
+        _images_flat_buffer: &[u8],
+        _image_sizes: &[i32],
         _emit_tokens: i32,
-        _grammar: *const c_char,
+        _grammar: &str,
     ) -> u32 {
         0
     }
 
     #[cfg(target_family = "wasm")]
     #[allow(clippy::too_many_arguments)]
-    fn start_chat_request(
+    pub(crate) fn start_chat_request(
         &mut self,
-        context_key: *const c_char,
-        messages_json: *const c_char,
+        context_key: &str,
+        messages_json: &str,
         max_tokens: i32,
-        image_count: i32,
-        images_flat_buffer: *const u8,
-        image_sizes: *const i32,
+        images_flat_buffer: &[u8],
+        image_sizes: &[i32],
         emit_tokens: i32,
-        grammar: *const c_char,
+        grammar: &str,
     ) -> u32 {
         self.clear_last_error();
         let Some(runtime) = self.inner.runtime.as_ref() else {
             self.set_last_error("runtime is not loaded");
             return 0;
         };
-        let Some(messages_json) = read_c_string(messages_json) else {
-            self.set_last_error("messages JSON is missing or is not valid UTF-8");
-            return 0;
-        };
-        let Ok(prompt) = runtime.apply_chat_template_json(&messages_json, true) else {
+        let Ok(prompt) = runtime.apply_chat_template_json(messages_json, true) else {
             self.set_last_error("failed to apply chat template");
             return 0;
         };
-        if prompt.is_empty() {
-            self.set_last_error("chat template produced an empty prompt");
-            return 0;
-        }
-        let images = if image_count > 0 {
-            let Some(images) = copy_image_buffers(image_count, images_flat_buffer, image_sizes)
-            else {
+        let images = if image_sizes.is_empty() {
+            Vec::new()
+        } else {
+            let Some(images) = copy_image_buffers(images_flat_buffer, image_sizes) else {
                 self.set_last_error("media buffers are invalid");
                 return 0;
             };
             images
-        } else {
-            Vec::new()
         };
-        let context_key = read_optional_c_string(context_key).unwrap_or_default();
-        let grammar = read_optional_c_string(grammar).unwrap_or_default();
         self.enqueue_prompt_request(
-            context_key,
+            context_key.to_string(),
             prompt,
             max_tokens,
             images,
-            grammar,
+            grammar.to_string(),
             emit_tokens,
         )
     }
 
     #[cfg(not(target_family = "wasm"))]
     #[allow(clippy::too_many_arguments)]
-    fn start_chat_request(
+    pub(crate) fn start_chat_request(
         &mut self,
-        _context_key: *const c_char,
-        _messages_json: *const c_char,
+        _context_key: &str,
+        _messages_json: &str,
         _max_tokens: i32,
-        _image_count: i32,
-        _images_flat_buffer: *const u8,
-        _image_sizes: *const i32,
+        _images_flat_buffer: &[u8],
+        _image_sizes: &[i32],
         _emit_tokens: i32,
-        _grammar: *const c_char,
+        _grammar: &str,
     ) -> u32 {
         0
     }
 
     #[cfg(target_family = "wasm")]
-    fn start_embedding_request(
+    pub(crate) fn start_embedding_request(
         &mut self,
-        context_key: *const c_char,
-        input: *const c_char,
+        context_key: &str,
+        input: &str,
         normalize: i32,
     ) -> u32 {
         self.clear_last_error();
-        let Some(input) = read_c_string(input) else {
-            self.set_last_error("embedding input is missing or is not valid UTF-8");
-            return 0;
-        };
-        let context_key = read_optional_c_string(context_key).unwrap_or_default();
         let Some(runtime) = self.inner.runtime.as_mut() else {
             self.set_last_error("runtime is not loaded");
             return 0;
         };
         match runtime.enqueue_embed_request(
-            input,
+            input.to_string(),
             EmbedOptions {
                 normalize: normalize != 0,
-                context_key: Some(context_key),
+                context_key: Some(context_key.to_string()),
             },
         ) {
             Ok(request_id) => request_id,
@@ -373,10 +302,10 @@ impl BrowserEngine {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn start_embedding_request(
+    pub(crate) fn start_embedding_request(
         &mut self,
-        _context_key: *const c_char,
-        _input: *const c_char,
+        _context_key: &str,
+        _input: &str,
         _normalize: i32,
     ) -> u32 {
         0
@@ -441,7 +370,7 @@ impl BrowserEngine {
     }
 
     #[cfg(target_family = "wasm")]
-    fn cancel_request(&mut self, request_id: u32) -> i32 {
+    pub(crate) fn cancel_request(&mut self, request_id: u32) -> i32 {
         let Some(runtime) = self.inner.runtime.as_mut() else {
             return 0;
         };
@@ -449,22 +378,19 @@ impl BrowserEngine {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn cancel_request(&mut self, _request_id: u32) -> i32 {
+    pub(crate) fn cancel_request(&mut self, _request_id: u32) -> i32 {
         0
     }
 
     #[cfg(target_family = "wasm")]
-    fn run_scheduler_loop(
+    pub(crate) fn run_scheduler_loop(
         &mut self,
         max_ticks: i32,
         max_completed_responses: i32,
         max_generated_tokens: i32,
         max_duration_us: i32,
-        out: *mut BrowserSchedulerLoopResult,
+        out: &mut BrowserSchedulerLoopResult,
     ) -> i32 {
-        if out.is_null() {
-            return STATUS_INVALID_ARGUMENTS;
-        }
         if self.inner.runtime.is_none() {
             return STATUS_NOT_INITIALIZED;
         }
@@ -483,26 +409,24 @@ impl BrowserEngine {
             max_generated_tokens,
             duration,
         );
-        unsafe {
-            *out = scheduler_loop_result_from_runtime(burst);
-        }
+        *out = scheduler_loop_result_from_runtime(burst);
         burst.status as i32
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn run_scheduler_loop(
+    pub(crate) fn run_scheduler_loop(
         &mut self,
         _max_ticks: i32,
         _max_completed_responses: i32,
         _max_generated_tokens: i32,
         _max_duration_us: i32,
-        _out: *mut BrowserSchedulerLoopResult,
+        _out: &mut BrowserSchedulerLoopResult,
     ) -> i32 {
         STATUS_UNAVAILABLE
     }
 
     #[cfg(target_family = "wasm")]
-    fn completed_status(&self, request_id: u32) -> i32 {
+    pub(crate) fn completed_status(&self, request_id: u32) -> i32 {
         let Some(runtime) = self.inner.runtime.as_ref() else {
             return COMPLETED_REQUEST_STATUS_UNKNOWN;
         };
@@ -522,7 +446,7 @@ impl BrowserEngine {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn completed_status(&self, _request_id: u32) -> i32 {
+    pub(crate) fn completed_status(&self, _request_id: u32) -> i32 {
         COMPLETED_REQUEST_STATUS_UNKNOWN
     }
 
@@ -535,7 +459,7 @@ impl BrowserEngine {
     }
 
     #[cfg(target_family = "wasm")]
-    fn completed_output_kind(&self, request_id: u32) -> i32 {
+    pub(crate) fn completed_output_kind(&self, request_id: u32) -> i32 {
         self.completed_response_ref(request_id)
             .map(|response| match &response.output {
                 ResponseOutput::Text(_) => COMPLETED_REQUEST_OUTPUT_TEXT,
@@ -545,12 +469,12 @@ impl BrowserEngine {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn completed_output_kind(&self, _request_id: u32) -> i32 {
+    pub(crate) fn completed_output_kind(&self, _request_id: u32) -> i32 {
         STATUS_UNAVAILABLE
     }
 
     #[cfg(target_family = "wasm")]
-    fn completed_embedding_len(&self, request_id: u32) -> i32 {
+    pub(crate) fn completed_embedding_len(&self, request_id: u32) -> i32 {
         self.completed_response_ref(request_id)
             .and_then(|response| match &response.output {
                 ResponseOutput::Embedding { values, .. } => value_len_i32(values.len()),
@@ -560,47 +484,32 @@ impl BrowserEngine {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn completed_embedding_len(&self, _request_id: u32) -> i32 {
+    pub(crate) fn completed_embedding_len(&self, _request_id: u32) -> i32 {
         STATUS_UNAVAILABLE
     }
 
     #[cfg(target_family = "wasm")]
-    fn copy_completed_embedding(
-        &self,
-        request_id: u32,
-        buffer: *mut f32,
-        value_count: usize,
-    ) -> i32 {
-        if buffer.is_null() {
-            return STATUS_INVALID_ARGUMENTS;
-        }
+    pub(crate) fn copy_completed_embedding(&self, request_id: u32, buffer: &mut [f32]) -> i32 {
         let Some(response) = self.completed_response_ref(request_id) else {
             return STATUS_FAILURE;
         };
         let ResponseOutput::Embedding { values, .. } = &response.output else {
             return STATUS_FAILURE;
         };
-        if value_count < values.len() {
+        if buffer.len() < values.len() {
             return STATUS_INVALID_ARGUMENTS;
         }
-        unsafe {
-            std::ptr::copy_nonoverlapping(values.as_ptr(), buffer, values.len());
-        }
+        buffer[..values.len()].copy_from_slice(values);
         value_len_i32(values.len()).unwrap_or(STATUS_FAILURE)
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn copy_completed_embedding(
-        &self,
-        _request_id: u32,
-        _buffer: *mut f32,
-        _value_count: usize,
-    ) -> i32 {
+    pub(crate) fn copy_completed_embedding(&self, _request_id: u32, _buffer: &mut [f32]) -> i32 {
         STATUS_UNAVAILABLE
     }
 
     #[cfg(target_family = "wasm")]
-    fn completed_embedding_pooling(&self, request_id: u32) -> i32 {
+    pub(crate) fn completed_embedding_pooling(&self, request_id: u32) -> i32 {
         self.completed_response_ref(request_id)
             .and_then(|response| match &response.output {
                 ResponseOutput::Embedding { pooling, .. } => Some(pooling_code(*pooling)),
@@ -610,12 +519,12 @@ impl BrowserEngine {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn completed_embedding_pooling(&self, _request_id: u32) -> i32 {
+    pub(crate) fn completed_embedding_pooling(&self, _request_id: u32) -> i32 {
         STATUS_UNAVAILABLE
     }
 
     #[cfg(target_family = "wasm")]
-    fn completed_embedding_normalized(&self, request_id: u32) -> i32 {
+    pub(crate) fn completed_embedding_normalized(&self, request_id: u32) -> i32 {
         self.completed_response_ref(request_id)
             .and_then(|response| match &response.output {
                 ResponseOutput::Embedding { normalized, .. } => Some(i32::from(*normalized)),
@@ -625,8 +534,89 @@ impl BrowserEngine {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn completed_embedding_normalized(&self, _request_id: u32) -> i32 {
+    pub(crate) fn completed_embedding_normalized(&self, _request_id: u32) -> i32 {
         STATUS_UNAVAILABLE
+    }
+
+    pub(crate) fn completed_output_size(&self, request_id: u32) -> i32 {
+        completed_output(self, request_id)
+            .map(|text| byte_len_i32(text.as_bytes()))
+            .unwrap_or(STATUS_FAILURE)
+    }
+
+    pub(crate) fn copy_completed_output(&self, request_id: u32, buffer: &mut [u8]) -> i32 {
+        completed_output(self, request_id)
+            .map(|text| copy_bytes_with_nul(text.as_bytes(), buffer))
+            .unwrap_or(STATUS_FAILURE)
+    }
+
+    pub(crate) fn completed_error_size(&self, request_id: u32) -> i32 {
+        completed_error(self, request_id)
+            .map(|text| byte_len_i32(text.as_bytes()))
+            .unwrap_or(STATUS_FAILURE)
+    }
+
+    pub(crate) fn copy_completed_error(&self, request_id: u32, buffer: &mut [u8]) -> i32 {
+        completed_error(self, request_id)
+            .map(|text| copy_bytes_with_nul(text.as_bytes(), buffer))
+            .unwrap_or(STATUS_FAILURE)
+    }
+
+    pub(crate) fn consume_completed_request(&mut self, request_id: u32) -> i32 {
+        #[cfg(target_family = "wasm")]
+        {
+            let Some(runtime) = self.inner.runtime.as_mut() else {
+                return 0;
+            };
+            runtime
+                .request_queue
+                .token_emission_sinks
+                .remove(&request_id);
+            self.inner.token_ring.forget_stream(request_id);
+            i32::from(runtime.take_completed_response(request_id).is_some())
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let _ = request_id;
+            STATUS_UNAVAILABLE
+        }
+    }
+
+    pub(crate) fn runtime_observability(&self, out: &mut BrowserRuntimeMetrics) -> i32 {
+        #[cfg(target_family = "wasm")]
+        {
+            let Some(metrics) = self.runtime_metrics() else {
+                return STATUS_NOT_INITIALIZED;
+            };
+            *out = metrics;
+            STATUS_OK
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let _ = out;
+            STATUS_UNAVAILABLE
+        }
+    }
+
+    pub(crate) fn completed_runtime_observability(
+        &self,
+        request_id: u32,
+        out: &mut BrowserRuntimeMetrics,
+    ) -> i32 {
+        #[cfg(target_family = "wasm")]
+        {
+            let Some(metrics) = self.completed_runtime_metrics(request_id) else {
+                return STATUS_FAILURE;
+            };
+            *out = metrics;
+            STATUS_OK
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let _ = request_id;
+            let _ = out;
+            STATUS_UNAVAILABLE
+        }
     }
 
     #[cfg(target_family = "wasm")]
@@ -645,60 +635,108 @@ impl BrowserEngine {
     }
 
     #[cfg(target_family = "wasm")]
-    fn media_marker(&self) -> Option<String> {
+    pub(crate) fn media_marker(&self) -> String {
         self.inner
             .runtime
             .as_ref()
             .and_then(|runtime| runtime.media_marker().ok())
+            .unwrap_or_default()
     }
 
     #[cfg(target_family = "wasm")]
-    fn chat_template_source(&self) -> Option<String> {
+    pub(crate) fn chat_template_source(&self) -> String {
         self.inner
             .runtime
             .as_ref()
             .and_then(|runtime| runtime.chat_template_source().ok().flatten())
+            .unwrap_or_default()
     }
 
     #[cfg(target_family = "wasm")]
-    fn bos_text(&self) -> Option<String> {
+    pub(crate) fn bos_text(&self) -> String {
         self.inner
             .runtime
             .as_ref()
             .and_then(|runtime| runtime.get_bos_text().ok())
+            .unwrap_or_default()
     }
 
     #[cfg(target_family = "wasm")]
-    fn eos_text(&self) -> Option<String> {
+    pub(crate) fn eos_text(&self) -> String {
         self.inner
             .runtime
             .as_ref()
             .and_then(|runtime| runtime.get_eos_text().ok())
+            .unwrap_or_default()
     }
 
     #[cfg(target_family = "wasm")]
-    fn probe_chat_boundary_info(&self) -> Option<String> {
-        self.inner.runtime.as_ref().and_then(|runtime| {
-            runtime
-                .probe_chat_boundary_info()
-                .ok()
-                .and_then(|info| serde_json::to_string(&info).ok())
-        })
+    pub(crate) fn probe_chat_boundary_info(&self) -> String {
+        self.inner
+            .runtime
+            .as_ref()
+            .and_then(|runtime| {
+                runtime
+                    .probe_chat_boundary_info()
+                    .ok()
+                    .and_then(|info| serde_json::to_string(&info).ok())
+            })
+            .unwrap_or_default()
     }
 
     #[cfg(target_family = "wasm")]
-    fn token_ring_header_address(&self) -> *const u32 {
-        self.inner.token_ring.header_address()
+    pub(crate) fn token_ring_header_address(&self) -> usize {
+        self.inner.token_ring.header_address() as usize
     }
 
     #[cfg(target_family = "wasm")]
-    fn token_ring_body_address(&self) -> *const u8 {
-        self.inner.token_ring.body_address()
+    pub(crate) fn token_ring_body_address(&self) -> usize {
+        self.inner.token_ring.body_address() as usize
     }
 
     #[cfg(target_family = "wasm")]
-    fn token_ring_capacity(&self) -> i32 {
+    pub(crate) fn token_ring_capacity(&self) -> i32 {
         self.inner.token_ring.capacity_i32()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn media_marker(&self) -> String {
+        String::new()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn chat_template_source(&self) -> String {
+        String::new()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn bos_text(&self) -> String {
+        String::new()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn eos_text(&self) -> String {
+        String::new()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn probe_chat_boundary_info(&self) -> String {
+        String::new()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn token_ring_header_address(&self) -> usize {
+        0
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn token_ring_body_address(&self) -> usize {
+        0
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn token_ring_capacity(&self) -> i32 {
+        0
     }
 }
 
@@ -931,554 +969,6 @@ fn write_wrapped_bytes(body: &mut [u8], offset: usize, bytes: &[u8]) {
     body[..bytes.len() - tail].copy_from_slice(&bytes[tail..]);
 }
 
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_abi_version() -> u32 {
-    ABI_VERSION
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_create() -> *mut BrowserEngine {
-    catch_unwind(AssertUnwindSafe(|| {
-        let id = NEXT_ENGINE_ID.fetch_add(1, Ordering::Relaxed);
-        Box::into_raw(Box::new(BrowserEngine::new(id)))
-    }))
-    .unwrap_or(std::ptr::null_mut())
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_id(engine: *mut BrowserEngine) -> u32 {
-    let Some(engine) = NonNull::new(engine) else {
-        return 0;
-    };
-    unsafe { engine.as_ref().id }
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_load(
-    engine: *mut BrowserEngine,
-    model_path: *const c_char,
-    runtime_config_json: *const c_char,
-) -> i32 {
-    with_engine_mut(engine, |engine| {
-        engine.load(model_path, runtime_config_json)
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_last_error_size(engine: *const BrowserEngine) -> i32 {
-    with_engine_ref(engine, |engine| engine.last_error_size())
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_copy_last_error(
-    engine: *const BrowserEngine,
-    buffer: *mut u8,
-    buffer_len: usize,
-) -> i32 {
-    with_engine_ref(engine, |engine| engine.copy_last_error(buffer, buffer_len))
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_close(engine: *mut BrowserEngine) -> i32 {
-    catch_unwind(AssertUnwindSafe(|| {
-        let Some(engine) = NonNull::new(engine) else {
-            return STATUS_INVALID_ARGUMENTS;
-        };
-        unsafe {
-            drop(Box::from_raw(engine.as_ptr()));
-        }
-        STATUS_OK
-    }))
-    .unwrap_or(STATUS_PANIC)
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_start_text_request(
-    engine: *mut BrowserEngine,
-    context_key: *const c_char,
-    prompt: *const c_char,
-    max_tokens: i32,
-    emit_tokens: i32,
-    grammar: *const c_char,
-) -> u32 {
-    with_engine_mut(engine, |engine| {
-        engine.start_text_request(context_key, prompt, max_tokens, emit_tokens, grammar)
-    })
-}
-
-#[no_mangle]
-#[allow(clippy::too_many_arguments)]
-pub extern "C" fn cogentlm_browser_engine_start_media_request(
-    engine: *mut BrowserEngine,
-    context_key: *const c_char,
-    prompt: *const c_char,
-    max_tokens: i32,
-    image_count: i32,
-    images_flat_buffer: *const u8,
-    image_sizes: *const i32,
-    emit_tokens: i32,
-    grammar: *const c_char,
-) -> u32 {
-    with_engine_mut(engine, |engine| {
-        engine.start_media_request(
-            context_key,
-            prompt,
-            max_tokens,
-            image_count,
-            images_flat_buffer,
-            image_sizes,
-            emit_tokens,
-            grammar,
-        )
-    })
-}
-
-#[no_mangle]
-#[allow(clippy::too_many_arguments)]
-pub extern "C" fn cogentlm_browser_engine_start_chat_request(
-    engine: *mut BrowserEngine,
-    context_key: *const c_char,
-    messages_json: *const c_char,
-    max_tokens: i32,
-    image_count: i32,
-    images_flat_buffer: *const u8,
-    image_sizes: *const i32,
-    emit_tokens: i32,
-    grammar: *const c_char,
-) -> u32 {
-    with_engine_mut(engine, |engine| {
-        engine.start_chat_request(
-            context_key,
-            messages_json,
-            max_tokens,
-            image_count,
-            images_flat_buffer,
-            image_sizes,
-            emit_tokens,
-            grammar,
-        )
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_start_embedding_request(
-    engine: *mut BrowserEngine,
-    context_key: *const c_char,
-    input: *const c_char,
-    normalize: i32,
-) -> u32 {
-    with_engine_mut(engine, |engine| {
-        engine.start_embedding_request(context_key, input, normalize)
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_cancel_request(
-    engine: *mut BrowserEngine,
-    request_id: u32,
-) -> i32 {
-    with_engine_mut(engine, |engine| engine.cancel_request(request_id))
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_run_scheduler_loop(
-    engine: *mut BrowserEngine,
-    max_ticks: i32,
-    max_completed_responses: i32,
-    max_generated_tokens: i32,
-    max_duration_us: i32,
-    out: *mut BrowserSchedulerLoopResult,
-) -> i32 {
-    with_engine_mut(engine, |engine| {
-        engine.run_scheduler_loop(
-            max_ticks,
-            max_completed_responses,
-            max_generated_tokens,
-            max_duration_us,
-            out,
-        )
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_completed_request_status(
-    engine: *const BrowserEngine,
-    request_id: u32,
-) -> i32 {
-    with_engine_ref(engine, |engine| engine.completed_status(request_id))
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_completed_request_output_kind(
-    engine: *const BrowserEngine,
-    request_id: u32,
-) -> i32 {
-    with_engine_ref(engine, |engine| engine.completed_output_kind(request_id))
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_completed_request_output_size(
-    engine: *const BrowserEngine,
-    request_id: u32,
-) -> i32 {
-    with_engine_ref(engine, |engine| {
-        completed_output(engine, request_id)
-            .map(|text| byte_len_i32(text.as_bytes()))
-            .unwrap_or(STATUS_FAILURE)
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_copy_completed_request_output(
-    engine: *const BrowserEngine,
-    request_id: u32,
-    buffer: *mut u8,
-    buffer_len: usize,
-) -> i32 {
-    with_engine_ref(engine, |engine| {
-        completed_output(engine, request_id)
-            .map(|text| copy_bytes_with_nul(text.as_bytes(), buffer, buffer_len))
-            .unwrap_or(STATUS_FAILURE)
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_completed_request_embedding_length(
-    engine: *const BrowserEngine,
-    request_id: u32,
-) -> i32 {
-    with_engine_ref(engine, |engine| engine.completed_embedding_len(request_id))
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_copy_completed_request_embedding(
-    engine: *const BrowserEngine,
-    request_id: u32,
-    buffer: *mut f32,
-    value_count: usize,
-) -> i32 {
-    with_engine_ref(engine, |engine| {
-        engine.copy_completed_embedding(request_id, buffer, value_count)
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_completed_request_embedding_pooling(
-    engine: *const BrowserEngine,
-    request_id: u32,
-) -> i32 {
-    with_engine_ref(engine, |engine| {
-        engine.completed_embedding_pooling(request_id)
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_completed_request_embedding_normalized(
-    engine: *const BrowserEngine,
-    request_id: u32,
-) -> i32 {
-    with_engine_ref(engine, |engine| {
-        engine.completed_embedding_normalized(request_id)
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_completed_request_error_size(
-    engine: *const BrowserEngine,
-    request_id: u32,
-) -> i32 {
-    with_engine_ref(engine, |engine| {
-        completed_error(engine, request_id)
-            .map(|text| byte_len_i32(text.as_bytes()))
-            .unwrap_or(STATUS_FAILURE)
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_copy_completed_request_error(
-    engine: *const BrowserEngine,
-    request_id: u32,
-    buffer: *mut u8,
-    buffer_len: usize,
-) -> i32 {
-    with_engine_ref(engine, |engine| {
-        completed_error(engine, request_id)
-            .map(|text| copy_bytes_with_nul(text.as_bytes(), buffer, buffer_len))
-            .unwrap_or(STATUS_FAILURE)
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_consume_completed_request(
-    engine: *mut BrowserEngine,
-    request_id: u32,
-) -> i32 {
-    with_engine_mut(engine, |engine| {
-        #[cfg(target_family = "wasm")]
-        {
-            let Some(runtime) = engine.inner.runtime.as_mut() else {
-                return 0;
-            };
-            runtime
-                .request_queue
-                .token_emission_sinks
-                .remove(&request_id);
-            engine.inner.token_ring.forget_stream(request_id);
-            i32::from(runtime.take_completed_response(request_id).is_some())
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let _ = engine;
-            let _ = request_id;
-            STATUS_UNAVAILABLE
-        }
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_runtime_observability(
-    engine: *const BrowserEngine,
-    out: *mut BrowserRuntimeMetrics,
-) -> i32 {
-    if out.is_null() {
-        return STATUS_INVALID_ARGUMENTS;
-    }
-    with_engine_ref(engine, |engine| {
-        #[cfg(target_family = "wasm")]
-        {
-            let Some(metrics) = engine.runtime_metrics() else {
-                return STATUS_NOT_INITIALIZED;
-            };
-            unsafe {
-                *out = metrics;
-            }
-            STATUS_OK
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let _ = engine;
-            STATUS_UNAVAILABLE
-        }
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_completed_runtime_observability(
-    engine: *const BrowserEngine,
-    request_id: u32,
-    out: *mut BrowserRuntimeMetrics,
-) -> i32 {
-    if out.is_null() {
-        return STATUS_INVALID_ARGUMENTS;
-    }
-    with_engine_ref(engine, |engine| {
-        #[cfg(target_family = "wasm")]
-        {
-            let Some(metrics) = engine.completed_runtime_metrics(request_id) else {
-                return STATUS_FAILURE;
-            };
-            unsafe {
-                *out = metrics;
-            }
-            STATUS_OK
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let _ = engine;
-            let _ = request_id;
-            STATUS_UNAVAILABLE
-        }
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_token_ring_header_address(
-    engine: *const BrowserEngine,
-) -> *const u32 {
-    with_engine_ref(engine, |engine| {
-        #[cfg(target_family = "wasm")]
-        {
-            engine.token_ring_header_address()
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let _ = engine;
-            std::ptr::null()
-        }
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_token_ring_body_address(
-    engine: *const BrowserEngine,
-) -> *const u8 {
-    with_engine_ref(engine, |engine| {
-        #[cfg(target_family = "wasm")]
-        {
-            engine.token_ring_body_address()
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let _ = engine;
-            std::ptr::null()
-        }
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_token_ring_capacity(engine: *const BrowserEngine) -> i32 {
-    with_engine_ref(engine, |engine| {
-        #[cfg(target_family = "wasm")]
-        {
-            engine.token_ring_capacity()
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let _ = engine;
-            0
-        }
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_media_marker(
-    engine: *const BrowserEngine,
-) -> *mut c_char {
-    with_engine_ref(engine, |engine| {
-        #[cfg(target_family = "wasm")]
-        {
-            into_c_string(engine.media_marker().unwrap_or_default())
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let _ = engine;
-            std::ptr::null_mut()
-        }
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_chat_template(
-    engine: *const BrowserEngine,
-) -> *mut c_char {
-    with_engine_ref(engine, |engine| {
-        #[cfg(target_family = "wasm")]
-        {
-            into_c_string(engine.chat_template_source().unwrap_or_default())
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let _ = engine;
-            std::ptr::null_mut()
-        }
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_bos_text(engine: *const BrowserEngine) -> *mut c_char {
-    with_engine_ref(engine, |engine| {
-        #[cfg(target_family = "wasm")]
-        {
-            into_c_string(engine.bos_text().unwrap_or_default())
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let _ = engine;
-            std::ptr::null_mut()
-        }
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_eos_text(engine: *const BrowserEngine) -> *mut c_char {
-    with_engine_ref(engine, |engine| {
-        #[cfg(target_family = "wasm")]
-        {
-            into_c_string(engine.eos_text().unwrap_or_default())
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let _ = engine;
-            std::ptr::null_mut()
-        }
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_engine_probe_chat_boundary_info(
-    engine: *const BrowserEngine,
-) -> *mut c_char {
-    with_engine_ref(engine, |engine| {
-        #[cfg(target_family = "wasm")]
-        {
-            into_c_string(engine.probe_chat_boundary_info().unwrap_or_default())
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let _ = engine;
-            std::ptr::null_mut()
-        }
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn cogentlm_browser_backend_observability_json(include_details: i32) -> *mut c_char {
-    catch_unwind(AssertUnwindSafe(|| {
-        #[cfg(target_family = "wasm")]
-        {
-            into_c_string(
-                backend_observability_json(include_details != 0)
-                    .unwrap_or_else(|_| "{}".to_string()),
-            )
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let _ = include_details;
-            std::ptr::null_mut()
-        }
-    }))
-    .unwrap_or(std::ptr::null_mut())
-}
-
-#[no_mangle]
-/// # Safety
-/// `value` must be null or a string pointer returned by this wasm module. Each
-/// non-null pointer must be freed at most once.
-pub unsafe extern "C" fn cogentlm_browser_engine_free_string(value: *mut c_char) {
-    unsafe { free_c_string(value) }
-}
-
-fn with_engine_mut<T>(engine: *mut BrowserEngine, f: impl FnOnce(&mut BrowserEngine) -> T) -> T
-where
-    T: Default,
-{
-    catch_unwind(AssertUnwindSafe(|| {
-        let Some(mut engine) = NonNull::new(engine) else {
-            return T::default();
-        };
-        f(unsafe { engine.as_mut() })
-    }))
-    .unwrap_or_default()
-}
-
-fn with_engine_ref<T>(engine: *const BrowserEngine, f: impl FnOnce(&BrowserEngine) -> T) -> T
-where
-    T: Default,
-{
-    catch_unwind(AssertUnwindSafe(|| {
-        let Some(engine) = NonNull::new(engine.cast_mut()) else {
-            return T::default();
-        };
-        f(unsafe { engine.as_ref() })
-    }))
-    .unwrap_or_default()
-}
-
-#[cfg(target_family = "wasm")]
-fn read_c_string(value: *const c_char) -> Option<String> {
-    read_optional_c_string(value).filter(|value| !value.is_empty())
-}
-
 fn byte_len_i32(bytes: &[u8]) -> i32 {
     i32::try_from(bytes.len()).unwrap_or(STATUS_FAILURE)
 }
@@ -1488,22 +978,17 @@ fn value_len_i32(len: usize) -> Option<i32> {
     i32::try_from(len).ok()
 }
 
-fn copy_bytes_with_nul(bytes: &[u8], buffer: *mut u8, buffer_len: usize) -> i32 {
-    if buffer.is_null() || buffer_len == 0 || buffer_len <= bytes.len() {
+fn copy_bytes_with_nul(bytes: &[u8], buffer: &mut [u8]) -> i32 {
+    if buffer.len() <= bytes.len() {
         return STATUS_INVALID_ARGUMENTS;
     }
-    unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer, bytes.len());
-        *buffer.add(bytes.len()) = 0;
-    }
+    buffer[..bytes.len()].copy_from_slice(bytes);
+    buffer[bytes.len()] = 0;
     byte_len_i32(bytes)
 }
 
 #[cfg(target_family = "wasm")]
-fn read_runtime_config(runtime_config_json: *const c_char) -> Result<NativeRuntimeConfig, String> {
-    let Some(raw) = read_optional_c_string(runtime_config_json) else {
-        return Err("runtime config JSON is not valid UTF-8".to_string());
-    };
+fn read_runtime_config(raw: &str) -> Result<NativeRuntimeConfig, String> {
     let json = if raw.trim().is_empty() {
         "{}"
     } else {
@@ -1531,24 +1016,15 @@ fn pooling_code(pooling: PoolingType) -> i32 {
 }
 
 #[cfg(target_family = "wasm")]
-fn copy_image_buffers(
-    image_count: i32,
-    images_flat_buffer: *const u8,
-    image_sizes: *const i32,
-) -> Option<Vec<Vec<u8>>> {
-    if image_count <= 0 || images_flat_buffer.is_null() || image_sizes.is_null() {
-        return None;
-    }
-    let image_count = usize::try_from(image_count).ok()?;
-    let sizes = unsafe { std::slice::from_raw_parts(image_sizes, image_count) };
-    let total_bytes = sizes.iter().try_fold(0usize, |sum, size| {
+fn copy_image_buffers(images_flat_buffer: &[u8], image_sizes: &[i32]) -> Option<Vec<Vec<u8>>> {
+    let total_bytes = image_sizes.iter().try_fold(0usize, |sum, size| {
         let size = usize::try_from(*size).ok()?;
         sum.checked_add(size)
     })?;
-    let flat = unsafe { std::slice::from_raw_parts(images_flat_buffer, total_bytes) };
-    let mut images = Vec::with_capacity(image_count);
+    let flat = images_flat_buffer.get(..total_bytes)?;
+    let mut images = Vec::with_capacity(image_sizes.len());
     let mut offset = 0usize;
-    for size in sizes {
+    for size in image_sizes {
         let size = usize::try_from(*size).ok()?;
         let end = offset.checked_add(size)?;
         images.push(flat.get(offset..end)?.to_vec());

@@ -138,6 +138,54 @@ test('QueuedRequestScheduler settles completed requests reported by the inferenc
   assert.deepEqual(finalized, [1]);
 });
 
+test('QueuedRequestScheduler batches same-turn admissions before the first native loop', async () => {
+  const tracker = new RequestTracker<GenerateResponse>();
+  const transport = createTransportObservability();
+  const maxCompletedResponses: number[] = [];
+  const bridge = {
+    async runInferenceLoop(
+      _maxTicks: number,
+      maxCompleted: number
+    ) {
+      maxCompletedResponses.push(maxCompleted);
+      return {
+        stepResult: 0,
+        completedResponseCount: 2,
+      };
+    },
+    getCompletedRequestStatus() {
+      return COMPLETED_REQUEST_STATUS_COMPLETED;
+    },
+    takeCompletedResponse(requestId: number): GenerateResponse {
+      return {
+        requestId,
+        completed: true,
+        cancelled: false,
+        failed: false,
+        outputText: `done-${requestId}`,
+      };
+    },
+  } as unknown as WasmBridge;
+
+  const scheduler = new QueuedRequestScheduler({
+    tracker,
+    queuedPromptTokenBatchSinks: new Map(),
+    queuedPromptTokenBatchSinkErrors: new Map(),
+    getTransportObservability: () => transport,
+    getBridge: () => bridge,
+    finalizeRequest: (_bridge, requestId, options) => {
+      tracker.finalize(requestId, options);
+    },
+    cancelQuery: async () => true,
+  });
+
+  const first = scheduler.track(1);
+  const second = scheduler.track(2);
+  await Promise.all([first.promise, second.promise]);
+
+  assert.deepEqual(maxCompletedResponses, [2]);
+});
+
 test('QueuedRequestScheduler drains shared token ring to TokenBatch sinks', async () => {
   const tracker = new RequestTracker<GenerateResponse>();
   const transport = createTransportObservability();

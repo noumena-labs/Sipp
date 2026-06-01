@@ -40,10 +40,14 @@ type QueuedRequestSchedulerOptions = {
     options?: SchedulerFinalizeOptions
   ) => void;
   cancelQuery: (requestId: GenerateRequestId) => Promise<boolean>;
+  withWasmBridge?: <T>(
+    operation: (bridge: WasmBridge) => T | Promise<T>
+  ) => Promise<T>;
 };
 
 export class QueuedRequestScheduler {
   private schedulerPumpPromise: Promise<void> | null = null;
+  private schedulerPumpTimer: ReturnType<typeof setTimeout> | null = null;
   private schedulerPumpGeneration = 0;
 
   public constructor(private readonly options: QueuedRequestSchedulerOptions) { }
@@ -51,6 +55,10 @@ export class QueuedRequestScheduler {
   public reset(): void {
     this.schedulerPumpGeneration += 1;
     this.schedulerPumpPromise = null;
+    if (this.schedulerPumpTimer != null) {
+      clearTimeout(this.schedulerPumpTimer);
+      this.schedulerPumpTimer = null;
+    }
     this.tokenRingBridge = null;
     this.tokenRingReader = null;
     this.tokenBatchSinkStats.clear();
@@ -58,19 +66,39 @@ export class QueuedRequestScheduler {
 
   public track(requestId: GenerateRequestId) {
     const tracked = this.options.tracker.track(requestId);
-    this.ensureRunning();
+    this.scheduleRunning();
     return tracked;
   }
 
   public ensureRunning(): void {
+    this.scheduleRunning();
+  }
+
+  private scheduleRunning(): void {
     if (
       this.schedulerPumpPromise != null ||
+      this.schedulerPumpTimer != null ||
       this.options.tracker.activeCount === 0
     ) {
       return;
     }
 
     const generation = this.schedulerPumpGeneration;
+    this.schedulerPumpTimer = setTimeout(() => {
+      this.schedulerPumpTimer = null;
+      this.startPump(generation);
+    }, 0);
+  }
+
+  private startPump(generation: number): void {
+    if (
+      this.schedulerPumpPromise != null ||
+      generation !== this.schedulerPumpGeneration ||
+      this.options.tracker.activeCount === 0
+    ) {
+      return;
+    }
+
     const pumpPromise = this.runSchedulerPump(generation);
     this.schedulerPumpPromise = pumpPromise;
     void pumpPromise.finally(() => {
@@ -80,7 +108,7 @@ export class QueuedRequestScheduler {
           generation === this.schedulerPumpGeneration &&
           this.options.tracker.activeCount > 0
         ) {
-          this.ensureRunning();
+          this.scheduleRunning();
         }
       }
     });
@@ -174,48 +202,60 @@ export class QueuedRequestScheduler {
   }
 
   private async runSchedulerPump(generation: number): Promise<void> {
-    const bridge = this.options.getBridge();
+    await this.withWasmBridge(async (bridge) => {
+      try {
+        if (
+          generation !== this.schedulerPumpGeneration ||
+          this.options.tracker.activeCount === 0
+        ) {
+          return;
+        }
 
-    try {
-      while (
-        generation === this.schedulerPumpGeneration &&
-        this.options.tracker.activeCount > 0
-      ) {
+        const loopResult = await bridge.runInferenceLoop(
+          CONTINUOUS_LOOP_TICK_LIMIT,
+          this.options.tracker.activeCount,
+          CONTINUOUS_LOOP_TOKEN_LIMIT,
+          { maxDurationUs: this.loopDurationUs() }
+        );
+        this.drainTokenRingObserved(bridge);
+        this.requestCancellationForTokenBatchSinkErrors();
+        if (loopResult.completedResponseCount > 0) {
+          this.settleCompletedTrackedRequests(bridge);
+        }
+        if (loopResult.stepResult === REQUEST_STEP_RESULT_INVALID) {
+          this.rejectPendingQueuedRequests(bridge, new Error('Inference loop became invalid.'));
+        }
+        if (loopResult.stepResult === REQUEST_STEP_RESULT_FATAL_NO_PROGRESS) {
+          this.rejectPendingQueuedRequests(bridge, new Error('Inference loop failed to make progress.'));
+        }
+      } catch (error) {
+        if (generation === this.schedulerPumpGeneration) {
+          this.rejectPendingQueuedRequests(bridge, error);
+        }
+      } finally {
+        // Final pass to flush tail tokens written before request settlement.
         try {
-          const loopResult = await bridge.runInferenceLoop(
-            CONTINUOUS_LOOP_TICK_LIMIT,
-            this.options.tracker.activeCount,
-            CONTINUOUS_LOOP_TOKEN_LIMIT,
-            { maxDurationUs: this.loopDurationUs() }
-          );
           this.drainTokenRingObserved(bridge);
-          this.requestCancellationForTokenBatchSinkErrors();
-          if (loopResult.completedResponseCount > 0) {
-            this.settleCompletedTrackedRequests(bridge);
-          }
-          if (loopResult.stepResult === REQUEST_STEP_RESULT_INVALID) {
-            this.rejectPendingQueuedRequests(bridge, new Error('Inference loop became invalid.'));
-            break;
-          }
-          if (loopResult.stepResult === REQUEST_STEP_RESULT_FATAL_NO_PROGRESS) {
-            this.rejectPendingQueuedRequests(bridge, new Error('Inference loop failed to make progress.'));
-            break;
-          }
-        } catch (error) {
-          if (generation === this.schedulerPumpGeneration) {
-            this.rejectPendingQueuedRequests(bridge, error);
-          }
-          break;
+        } catch {
+          /* cleanup */
         }
       }
-    } finally {
-      // Final pass to flush tail tokens written before request settlement.
-      try {
-        this.drainTokenRingObserved(bridge);
-      } catch {
-        /* cleanup */
-      }
+    });
+  }
+
+  private withWasmBridge<T>(
+    operation: (bridge: WasmBridge) => T | Promise<T>
+  ): Promise<T> {
+    if (this.options.withWasmBridge != null) {
+      return this.options.withWasmBridge(operation);
     }
+    return this.runWithCurrentBridge(operation);
+  }
+
+  private async runWithCurrentBridge<T>(
+    operation: (bridge: WasmBridge) => T | Promise<T>
+  ): Promise<T> {
+    return await operation(this.options.getBridge());
   }
 
   private loopDurationUs(): number {

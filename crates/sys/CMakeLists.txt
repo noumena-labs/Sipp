@@ -38,13 +38,13 @@ install(TARGETS mtmd ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DES
 
 # Shim setup
 add_library(cogent_shim
-  src/cogent_shim.cpp
-  include/cogent_shim.h
+  native/llama_shim/cogent_shim.cpp
+  native/llama_shim/cogent_shim.h
 )
 
 target_include_directories(cogent_shim
   PUBLIC
-    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/native/llama_shim"
   PRIVATE
     "${COGENTLM_LLAMA_CPP_DIR}/common"
     "${COGENTLM_MTMD_DIR}"

@@ -4,7 +4,7 @@ The CogentLM monorepo is organized to clearly separate the core Rust inference e
 
 ## 1. Rust Native Core (`crates/`)
 The native engine is broken down into modular crates.
-- **`crates/sys`**: Unsafe FFI bindings to the underlying C/C++ libraries (e.g., llama.cpp).
+- **`crates/sys`**: Unsafe FFI bindings to the underlying C/C++ libraries (e.g., llama.cpp). Rust bridge declarations live under `src/`; CXX and llama.cpp shim files live under `native/`.
 - **`crates/core`**: Low-level foundational Rust types and abstractions.
 - **`crates/engine`**: The primary inference engine logic, memory management, and model lifecycle.
 - **`crates/shard`**: GGUF cache planning and split-file writing utilities.
@@ -16,7 +16,7 @@ The native engine is broken down into modular crates.
 These directories contain the bridge code between the Rust core and other languages.
 - **`bindings/node`**: N-API based bindings for Node.js using `@napi-rs/cli`.
 - **`bindings/python`**: PyO3 and Maturin based bindings for Python.
-- **`bindings/wasm`**: Emscripten compilation targets for running the engine in the browser (WebGPU/WASM).
+- **`bindings/wasm`**: Emscripten compilation targets for running the engine in the browser (WebGPU/WASM). Rust bridge declarations live under `src/`; CXX callback wrappers, Rust C API wrappers, and JS-facing exports live under `native/`.
 
 ## 3. NPM Packages (`packages/npm/`)
 High-level JavaScript/TypeScript orchestration.

@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { QueryError } from '../models/types.js';
-import { WasmBridge, unwrapLifecycleResponse } from './wasm-bridge.js';
+import {
+  WasmBridge,
+  parseBackendObservabilityJson,
+  unwrapLifecycleResponse,
+} from './wasm-bridge.js';
 import type { EngineModule } from './engine-module.js';
 
 function createSha256TestModule(updateLengths: number[] = []): EngineModule {
@@ -87,6 +91,43 @@ test('WasmBridge forwards Rust runtime config JSON without TS-side normalization
         },
       }),
     ],
+  ]);
+});
+
+test('parseBackendObservabilityJson preserves real backend registry facts', () => {
+  const parsed = parseBackendObservabilityJson(
+    JSON.stringify({
+      profilingEnabled: false,
+      dynamicBackendLoading: false,
+      compiled: {
+        cuda: false,
+        metal: false,
+        vulkan: false,
+        openmp: false,
+        webgpu: true,
+      },
+      webgpuCompiled: true,
+      webgpuRegistered: true,
+      webgpuDeviceCount: 1,
+      gpuOffloadSupported: true,
+      engineInitialized: false,
+      backendCount: 2,
+      deviceCount: 2,
+      availableBackends: [
+        { name: 'CPU', deviceCount: 1 },
+        { name: 'WebGPU', deviceCount: 1 },
+      ],
+      devices: [],
+    })
+  );
+
+  assert.equal(parsed.compiled?.webgpu, true);
+  assert.equal(parsed.webgpuCompiled, true);
+  assert.equal(parsed.webgpuRegistered, true);
+  assert.equal(parsed.webgpuDeviceCount, 1);
+  assert.deepEqual(parsed.availableBackends.map((backend) => backend.name), [
+    'CPU',
+    'WebGPU',
   ]);
 });
 

@@ -875,8 +875,8 @@ export class WasmBridge {
     const openShardPtr = this.module.addFunction(
       (_userData: number, pathPtr: number, index: number, count: number) =>
         callbacks.openShard(this.readUtf8String(pathPtr), index, count) ?? 0,
-        'iiiii'
-      );
+      'iiiii'
+    );
     const writeShardPtr = this.module.addFunction(
       (_userData: number, bytesPtr: number, len: number) => {
         const start = this.byteOffset(bytesPtr);

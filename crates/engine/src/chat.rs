@@ -1,6 +1,3 @@
-use std::ffi::CStr;
-
-use cogentlm_sys as ffi;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -22,13 +19,7 @@ pub struct ChatBoundaryInfo {
 }
 
 pub fn default_media_marker() -> Result<String> {
-    let marker = unsafe { ffi::cogent_mtmd_default_marker() };
-    if marker.is_null() {
-        return Err(Error::NullPointer("cogent_mtmd_default_marker"));
-    }
-    Ok(unsafe { CStr::from_ptr(marker) }
-        .to_string_lossy()
-        .into_owned())
+    Ok(crate::native_bridge::mtmd_default_marker())
 }
 
 pub fn probe_chat_boundary_info(

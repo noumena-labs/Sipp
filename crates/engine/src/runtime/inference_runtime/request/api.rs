@@ -4,7 +4,6 @@ use crate::error::{Error, Result};
 use crate::runtime::config::RequestSampling;
 use crate::runtime::llama_token;
 use crate::runtime::request::{GenerateRequest, GenerateRequestId, MultimodalPayload};
-use crate::token::tokenize;
 
 use super::super::{clamp_usize_to_i32, InferenceRuntime, DEFAULT_PROMPT_CONTEXT_KEY};
 
@@ -61,7 +60,7 @@ impl InferenceRuntime {
         sampling: Option<RequestSampling>,
         emit_tokens: bool,
     ) -> Result<GenerateRequestId> {
-        if !self.is_ready() || self.mtmd_context.is_null() {
+        if !self.is_ready() || !self.native_runtime.mtmd_ready() {
             return Err(Error::RuntimeNotReady);
         }
         if n_tokens_predict <= 0 {
@@ -105,8 +104,10 @@ impl InferenceRuntime {
             normalize_context_key(embed_options.context_key.clone().unwrap_or_default());
         let input: String = input.into();
 
-        let vocab = self.vocab()?;
-        let prompt_tokens = tokenize(vocab, &input, true, true)?;
+        let prompt_tokens = self
+            .native_runtime
+            .tokenize(&input, true, true)
+            .map_err(|_| Error::Tokenize)?;
         if prompt_tokens.is_empty() {
             return Err(Error::Tokenize);
         }
@@ -126,8 +127,10 @@ impl InferenceRuntime {
         let grammar = input.grammar;
         let json_schema = input.json_schema;
 
-        let vocab = self.vocab()?;
-        let prompt_tokens = tokenize(vocab, &prompt, input.tokenization.add_bos(), true)?;
+        let prompt_tokens = self
+            .native_runtime
+            .tokenize(&prompt, input.tokenization.add_bos(), true)
+            .map_err(|_| Error::Tokenize)?;
         if input.tokenization.requires_prompt_tokens() && prompt_tokens.is_empty() {
             return Err(Error::Tokenize);
         }

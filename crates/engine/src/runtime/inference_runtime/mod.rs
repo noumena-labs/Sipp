@@ -5,11 +5,10 @@
 //! stays focused on the runtime state machine.
 
 use std::collections::HashSet;
-use std::ptr::NonNull;
 use std::time::Instant;
 
-use cogentlm_sys as ffi;
-
+use crate::error::Error;
+use crate::native_bridge::{NativeRuntimeHandle, SamplerHandle};
 use crate::runtime::config::{NativeRuntimeConfig, ResolvedRuntimeLimits};
 use crate::runtime::llama::LlamaBatchBuilder;
 use crate::runtime::llama_token;
@@ -52,9 +51,8 @@ mod text;
 use encoder::resolve_request_slot_plan_for_capabilities;
 use environment::{resolve_batch_token_budget, snapshot_prefix_cache_enabled};
 use numeric::{
-    clamp_usize_to_i32, ffi_arg_count_len, fingerprint_path, nonnegative_i32_to_usize,
-    positive_i32_to_usize, saturating_i32_delta, saturating_usize_delta_to_i32,
-    unique_slot_first_use,
+    clamp_usize_to_i32, fingerprint_path, nonnegative_i32_to_usize, positive_i32_to_usize,
+    saturating_i32_delta, saturating_usize_delta_to_i32, unique_slot_first_use,
 };
 
 const DEFAULT_PROMPT_CONTEXT_KEY: &str = "__primary_prompt__";
@@ -90,12 +88,9 @@ pub struct InferenceRuntime {
     config: NativeRuntimeConfig,
     pub(crate) resolved_limits: ResolvedRuntimeLimits,
     pub(crate) capabilities: capabilities::RuntimeModelCapabilities,
-    residency_lease: Option<ResidencyLease>,
-    common_init: *mut ffi::cogent_common_init,
-    primary_model: *mut ffi::llama_model,
-    shared_context: *mut ffi::llama_context,
-    chat_templates: *mut ffi::cogent_chat_templates,
-    mtmd_context: *mut ffi::cogent_mtmd_context,
+    native_runtime: NativeRuntimeHandle,
+    // Held for RAII. Field order drops the native runtime before releasing residency.
+    _residency_lease: Option<ResidencyLease>,
     last_runtime_observability: RuntimeObservabilityMetrics,
     has_last_runtime_observability: bool,
     kv_cache: KvCacheManager,
@@ -114,19 +109,15 @@ pub struct InferenceRuntime {
     scratch_plan: SharedBatchPlan,
     /// Reused by `token_to_piece` to avoid a 128-byte Vec allocation per
     /// emitted token. Sized once and cleared per call.
-    scratch_token_piece: Vec<i8>,
+    scratch_token_piece: Vec<u8>,
     total_decode_ms: f64,
     total_prefill_ms: f64,
     total_input_tokens: usize,
     total_output_tokens: usize,
     total_cache_hits: usize,
     total_prefill_tokens: usize,
-    sampler_pool:
-        std::collections::HashMap<SamplerCacheKey, Vec<NonNull<ffi::cogent_common_sampler>>>,
+    sampler_pool: std::collections::HashMap<SamplerCacheKey, Vec<SamplerHandle>>,
 }
-
-// Moved into one engine thread; `&mut self` for all mutation.
-unsafe impl Send for InferenceRuntime {}
 
 impl InferenceRuntime {
     pub fn capabilities(&self) -> crate::engine::protocol::ModelCapabilities {
@@ -134,10 +125,8 @@ impl InferenceRuntime {
     }
 
     pub fn is_ready(&self) -> bool {
-        !self.common_init.is_null()
-            && !self.primary_model.is_null()
-            && !self.shared_context.is_null()
-            && (self.config.multimodal.projector_path.is_none() || !self.mtmd_context.is_null())
+        self.native_runtime.is_loaded()
+            && (self.config.multimodal.projector_path.is_none() || self.native_runtime.mtmd_ready())
     }
 
     fn run_scheduler_tick_locked(&mut self) -> RequestStepResult {
@@ -220,12 +209,7 @@ impl InferenceRuntime {
     }
 
     fn run_policy_batch_tick_locked(&mut self) -> bool {
-        let vocab = match self.vocab() {
-            Ok(vocab) => vocab.as_ptr(),
-            Err(_) => return false,
-        };
-
-        self.normalize_slots_for_tick(vocab);
+        self.normalize_slots_for_tick();
 
         self.slot_scheduler
             .select_decode_ready_slots_into(&mut self.scratch_decode_ready_slots);
@@ -236,7 +220,7 @@ impl InferenceRuntime {
             return false;
         }
 
-        let batch_token_budget = resolve_batch_token_budget(self.shared_context, &self.config);
+        let batch_token_budget = resolve_batch_token_budget(&self.native_runtime, &self.config);
         let tick_budget = SlotScheduler::build_tick_budget(
             self.config.scheduler.policy,
             clamp_usize_to_i32(self.scratch_decode_ready_slots.len()),
@@ -312,18 +296,31 @@ impl InferenceRuntime {
 
         // Production metrics — always recorded.
         let decode_start = Instant::now();
-        let decode_status = unsafe {
-            ffi::cogent_llama_decode(self.shared_context, &self.shared_batch_builder.batch)
-        };
+        let decode_result = self
+            .native_runtime
+            .decode(self.shared_batch_builder.batch())
+            .map_err(|error| Error::RuntimeCommand(error.to_string()));
         let decode_submitted = Instant::now();
-        let sync_ok = unsafe { ffi::cogent_llama_synchronize(self.shared_context) };
+        let sync_ok = self.native_runtime.synchronize();
         let decode_end = Instant::now();
         let native_decode_ms = duration_ms(decode_start, decode_submitted);
         let native_sync_ms = duration_ms(decode_submitted, decode_end);
+        let decode_status = match decode_result {
+            Ok(status) => status,
+            Err(error) => {
+                let diagnostic = format!(
+                    "llama_decode() failed in shared tick ({error}, n_tokens={})",
+                    self.shared_batch_builder.n_tokens()
+                );
+                self.fail_plan_slots(&plan, &diagnostic);
+                self.scratch_plan = plan;
+                return false;
+            }
+        };
         if decode_status != 0 {
             let diagnostic = format!(
                 "llama_decode() failed in shared tick (status={decode_status}, n_tokens={})",
-                self.shared_batch_builder.batch.n_tokens
+                self.shared_batch_builder.n_tokens()
             );
             self.fail_plan_slots(&plan, &diagnostic);
             self.scratch_plan = plan;
@@ -337,7 +334,7 @@ impl InferenceRuntime {
 
         let native_logic_ms = plan_ms + batch_build_ms;
         self.apply_bookkeeping_and_emit(&plan, native_decode_ms, native_sync_ms, native_logic_ms);
-        self.sample_logits_and_buffer_output(vocab);
+        self.sample_logits_and_buffer_output();
         for slot in &mut self.slot_scheduler.slots {
             if slot.phase == SlotPhase::EmitBuffered && !slot.buffered_output_text.is_empty() {
                 SlotScheduler::emit_buffered_token_piece(&mut self.request_queue, slot);

@@ -1,14 +1,12 @@
-//! Multimodal prefill: tokenizes prompt + image bitmaps via mtmd, evaluates
+//! Multimodal prefill: tokenizes prompt + image buffers via mtmd, evaluates
 //! the resulting chunks into the KV cache, and seeds the first sampled token.
 //!
 //! Only invoked for requests that carry a `MultimodalPayload`. The text-only
 //! prefill path lives in `mod.rs` (`prepare_sequence_for_prompt`).
 
-use std::ffi::{CStr, CString};
 use std::time::Instant;
 
-use cogentlm_sys as ffi;
-
+use crate::native_bridge::{self, NativeRuntimeHandle};
 use crate::runtime::numeric::duration_ms;
 use crate::runtime::request::{GenerateRequestLifecycle, RequestQueue};
 use crate::runtime::scheduler::{SlotPhase, SlotScheduler, SlotState};
@@ -18,52 +16,21 @@ use super::numeric::{nonnegative_i32_to_usize, nonnegative_i32_to_usize_opt, usi
 use super::text::append_token_piece_to_slot;
 use super::LLAMA_SAMPLER_SAMPLE_FAILED;
 
-/// RAII guard for `cogent_mtmd_bitmap`. Frees the bitmap on drop.
-struct BitmapGuard(*mut ffi::cogent_mtmd_bitmap);
-
-impl Drop for BitmapGuard {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            unsafe { ffi::cogent_mtmd_bitmap_free(self.0) };
-        }
-    }
-}
-
-/// RAII guard for `cogent_mtmd_input_chunks`. Frees the chunks on drop.
-struct ChunksGuard(*mut ffi::cogent_mtmd_input_chunks);
-
-impl Drop for ChunksGuard {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            unsafe { ffi::cogent_mtmd_input_chunks_free(self.0) };
-        }
-    }
-}
-
 /// Runs the multimodal prefill end-to-end for `slot`:
-/// 1. Build bitmaps from the request's image buffers (RAII-guarded).
-/// 2. Ensure the prompt has enough media markers; if not, prepend them.
-/// 3. Tokenize via `cogent_mtmd_tokenize` and evaluate into the KV cache.
-/// 4. Sample the first decode token and emit it.
+/// 1. Ensure the prompt has enough media markers; if not, prepend them.
+/// 2. Evaluate prompt + image buffers through the CXX mtmd bridge.
+/// 3. Sample the first decode token and emit it.
 ///
-/// Returns `false` on any failure (and clears the multimodal payload so the
-/// slot can be reused without dangling FFI state).
+/// Returns `false` on any failure and clears the multimodal payload so the
+/// slot can be reused without dangling payload state.
 pub(super) fn run_multimodal_prefill(
-    mtmd_context: *mut ffi::cogent_mtmd_context,
-    shared_context: *mut ffi::llama_context,
-    vocab: *const ffi::llama_vocab,
+    native_runtime: &mut NativeRuntimeHandle,
     batch_token_budget: i32,
     request_queue: &mut RequestQueue,
     slot: &mut SlotState,
-    piece_scratch: &mut Vec<i8>,
+    piece_scratch: &mut Vec<u8>,
 ) -> bool {
-    if mtmd_context.is_null()
-        || shared_context.is_null()
-        || vocab.is_null()
-        || slot.seq_id < 0
-        || slot.sampler.is_none()
-        || slot.request().is_none()
-    {
+    if slot.seq_id < 0 || slot.sampler.is_none() || slot.request().is_none() {
         return false;
     }
 
@@ -84,105 +51,65 @@ pub(super) fn run_multimodal_prefill(
     let seq_id = slot.seq_id;
     let prefill_cursor = slot.prefill_cursor;
     let add_special = slot.mirror.n_past == 0;
-
-    let mut bitmaps = Vec::new();
-    let mut success = true;
-    if let Some(request) = slot.request() {
-        if let Some(multimodal) = request.multimodal.as_ref() {
-            bitmaps.reserve(multimodal.image_buffers.len());
-            for buffer in &multimodal.image_buffers {
-                let bitmap = unsafe {
-                    ffi::cogent_mtmd_bitmap_init_from_buf(
-                        mtmd_context,
-                        buffer.as_ptr(),
-                        buffer.len(),
-                    )
-                };
-                if bitmap.is_null() {
-                    success = false;
-                    break;
-                }
-                bitmaps.push(BitmapGuard(bitmap));
-            }
-        }
-    }
-    if !success {
+    if !native_runtime.mtmd_ready() {
         clear_multimodal_payload(slot);
         return false;
     }
-    let marker = unsafe { ffi::cogent_mtmd_default_marker() };
-    if !marker.is_null() {
-        let marker = unsafe { CStr::from_ptr(marker) }.to_string_lossy();
-        if !marker.is_empty() {
-            let mut marker_count = prompt_text.matches(marker.as_ref()).count();
-            if marker_count > bitmaps.len() {
-                clear_multimodal_payload(slot);
-                return false;
-            }
-            while marker_count < bitmaps.len() {
-                prompt_text.insert_str(0, marker.as_ref());
-                marker_count += 1;
-            }
+
+    let marker = native_bridge::mtmd_default_marker();
+    let image_count = slot
+        .request()
+        .and_then(|request| request.multimodal.as_ref())
+        .map_or(0, |multimodal| multimodal.image_buffers.len());
+    if !marker.is_empty() {
+        let mut marker_count = prompt_text.matches(marker.as_str()).count();
+        if marker_count > image_count {
+            clear_multimodal_payload(slot);
+            return false;
+        }
+        while marker_count < image_count {
+            prompt_text.insert_str(0, marker.as_str());
+            marker_count += 1;
         }
     }
 
-    let Ok(prompt_text) = CString::new(prompt_text) else {
-        clear_multimodal_payload(slot);
-        return false;
+    let (image_bytes, image_sizes) = match flatten_image_buffers(slot) {
+        Some(images) => images,
+        None => {
+            clear_multimodal_payload(slot);
+            return false;
+        }
     };
-    let chunks = ChunksGuard(unsafe { ffi::cogent_mtmd_input_chunks_init() });
-    if chunks.0.is_null() {
-        clear_multimodal_payload(slot);
-        return false;
-    }
-    let bitmap_ptrs: Vec<*const ffi::cogent_mtmd_bitmap> =
-        bitmaps.iter().map(|bitmap| bitmap.0.cast_const()).collect();
-    let tokenized = unsafe {
-        ffi::cogent_mtmd_tokenize(
-            mtmd_context,
-            chunks.0,
-            prompt_text.as_ptr(),
-            add_special,
-            true,
-            bitmap_ptrs.as_ptr(),
-            bitmap_ptrs.len(),
-        )
-    };
-    if !tokenized {
-        clear_multimodal_payload(slot);
-        return false;
-    }
 
-    let memory = unsafe { ffi::llama_get_memory(shared_context) };
-    if !unsafe { ffi::llama_memory_seq_rm(memory, seq_id, 0, -1) } {
+    if !native_runtime.clear_sequence(seq_id, 0, -1) {
         clear_multimodal_payload(slot);
         return false;
     }
 
     let prefill_start = Instant::now();
-    let mut new_n_past = 0_i32;
-    let eval_status = unsafe {
-        let Some(prefill_cursor) = usize_to_i32(prefill_cursor) else {
+    let Some(prefill_cursor_i32) = usize_to_i32(prefill_cursor) else {
+        clear_multimodal_payload(slot);
+        return false;
+    };
+    let new_n_past = match native_runtime.mtmd_eval_images(
+        &prompt_text,
+        &image_bytes,
+        &image_sizes,
+        add_special,
+        true,
+        prefill_cursor_i32,
+        seq_id,
+        batch_token_budget,
+        true,
+    ) {
+        Ok(new_n_past) => new_n_past,
+        Err(_) => {
             clear_multimodal_payload(slot);
             return false;
-        };
-        ffi::cogent_mtmd_eval_chunks(
-            mtmd_context,
-            shared_context,
-            chunks.0,
-            prefill_cursor,
-            seq_id,
-            batch_token_budget,
-            true,
-            &mut new_n_past,
-        )
+        }
     };
-    let sync_ok = unsafe { ffi::cogent_llama_synchronize(shared_context) };
     let prefill_end = Instant::now();
     clear_multimodal_payload(slot);
-    if eval_status != 0 || !sync_ok {
-        return false;
-    }
 
     slot.mirror.n_past = new_n_past;
     let Some(new_n_past_len) = nonnegative_i32_to_usize_opt(new_n_past) else {
@@ -191,7 +118,6 @@ pub(super) fn run_multimodal_prefill(
     slot.mirror.current_kv_tokens.resize(new_n_past_len, 0);
     let multimodal_prefill_ms = duration_ms(prefill_start, prefill_end);
     let multimodal_token_count = new_n_past.max(0);
-    let prefill_cursor_i32 = usize_to_i32(prefill_cursor).unwrap_or(i32::MAX);
     let multimodal_processed_tokens = multimodal_token_count
         .saturating_sub(prefill_cursor_i32)
         .max(0);
@@ -205,31 +131,28 @@ pub(super) fn run_multimodal_prefill(
     }
     slot.prefill_cursor = prompt_tokens_len;
 
-    let Some(sampler) = slot.sampler else {
+    let Some(sampler) = slot.sampler.as_mut() else {
         slot.fail("Sampler was unavailable after multimodal prefill.");
         return false;
     };
-    let next_token =
-        unsafe { ffi::cogent_common_sampler_sample(sampler.as_ptr(), shared_context, -1) };
-    if next_token == ffi::LLAMA_TOKEN_NULL {
+    let next_token = native_runtime.sample_with(sampler, -1);
+    if next_token == native_bridge::LLAMA_TOKEN_NULL {
         slot.terminal_error_message = LLAMA_SAMPLER_SAMPLE_FAILED.to_string();
         return false;
     }
-    unsafe {
-        ffi::cogent_common_sampler_accept(sampler.as_ptr(), next_token, true);
-    }
+    sampler.accept(next_token, true);
     if let Some(request) = slot.request_mut() {
         request.first_sampled_token_id = next_token;
         request.first_token_at.get_or_insert_with(Instant::now);
     }
-    if unsafe { ffi::llama_vocab_is_eog(vocab, next_token) } {
+    if native_runtime.is_eog(next_token) {
         slot.terminal_error_message =
             "Model ended generation immediately after multimodal prefill.".to_string();
         return false;
     }
 
     slot.generated_tokens.push(next_token);
-    append_token_piece_to_slot(vocab, next_token, slot, piece_scratch);
+    append_token_piece_to_slot(native_runtime, next_token, slot, piece_scratch);
     slot.phase = SlotPhase::EmitBuffered;
     if let Some(request) = slot.request_mut() {
         request.lifecycle = GenerateRequestLifecycle::Decoding;
@@ -261,6 +184,21 @@ pub(super) fn run_multimodal_prefill(
     }
 
     true
+}
+
+fn flatten_image_buffers(slot: &SlotState) -> Option<(Vec<u8>, Vec<i32>)> {
+    let multimodal = slot.request()?.multimodal.as_ref()?;
+    let byte_capacity = multimodal
+        .image_buffers
+        .iter()
+        .try_fold(0_usize, |total, image| total.checked_add(image.len()))?;
+    let mut image_bytes = Vec::with_capacity(byte_capacity);
+    let mut image_sizes = Vec::with_capacity(multimodal.image_buffers.len());
+    for image in &multimodal.image_buffers {
+        image_sizes.push(i32::try_from(image.len()).ok()?);
+        image_bytes.extend_from_slice(image);
+    }
+    Some((image_bytes, image_sizes))
 }
 
 /// Drops the request's multimodal payload so the slot can be reused.

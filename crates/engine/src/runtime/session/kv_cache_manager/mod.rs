@@ -1,8 +1,6 @@
 use std::collections::{hash_map::Entry, HashMap, VecDeque};
-use std::ptr::NonNull;
 
-use cogentlm_sys as ffi;
-
+use crate::native_bridge::NativeRuntimeHandle;
 use crate::runtime::config::KvReuseMode;
 use crate::runtime::metrics::CacheSource;
 use crate::runtime::numeric::saturating_usize_to_u64;
@@ -76,7 +74,6 @@ pub struct KvCacheManager {
     sessions: HashMap<String, SessionRecord>,
     idle_lru: VecDeque<String>,
     physical: Vec<PhysicalSequence>,
-    shared_context: Option<NonNull<ffi::llama_context>>,
     prefix_state_cache: PrefixStateCache,
     prefix_cache_policy: PrefixCachePolicy,
 }
@@ -102,17 +99,12 @@ impl KvCacheManager {
                     state: SeqState::Free,
                 })
                 .collect(),
-            shared_context: None,
             prefix_state_cache: PrefixStateCache::new(
                 max_prefix_cache_entries,
                 max_prefix_cache_bytes,
             ),
             prefix_cache_policy: PrefixCachePolicy::new(prefix_cache_interval_tokens),
         }
-    }
-
-    pub fn bind_shared_context(&mut self, shared_context: *mut ffi::llama_context) {
-        self.shared_context = NonNull::new(shared_context);
     }
 
     pub fn can_admit(&mut self, context_key: &str) -> bool {
@@ -193,8 +185,6 @@ impl KvCacheManager {
 
     pub fn evict_all_active_and_idle(&mut self) {
         for index in 0..self.physical.len() {
-            let seq_id = llama_seq_id::try_from(index).unwrap_or(-1);
-            self.clear_sequence_memory(seq_id);
             self.physical[index].state = SeqState::Free;
             self.physical[index].generation = self.physical[index].generation.saturating_add(1);
         }
@@ -204,7 +194,7 @@ impl KvCacheManager {
 
     pub(crate) fn restore_best_snapshot_prefix(
         &mut self,
-        shared_context: *mut ffi::llama_context,
+        native_runtime: &mut NativeRuntimeHandle,
         seq_id: llama_seq_id,
         model_fingerprint: u64,
         snapshot_scope: &str,
@@ -220,7 +210,7 @@ impl KvCacheManager {
         if handle.token_count <= minimum_token_count
             || !self
                 .prefix_state_cache
-                .restore_by_handle(shared_context, seq_id, handle)
+                .restore_by_handle(native_runtime, seq_id, handle)
         {
             return None;
         }
@@ -234,7 +224,7 @@ impl KvCacheManager {
 
     pub(crate) fn capture_prefix_snapshot(
         &mut self,
-        shared_context: *mut ffi::llama_context,
+        native_runtime: &NativeRuntimeHandle,
         model_fingerprint: u64,
         snapshot_scope: &str,
         seq_id: llama_seq_id,
@@ -250,7 +240,7 @@ impl KvCacheManager {
         }
 
         let captured = self.prefix_state_cache.capture_prefix_state(
-            shared_context,
+            native_runtime,
             seq_id,
             model_fingerprint,
             snapshot_scope,
@@ -289,7 +279,6 @@ impl KvCacheManager {
     fn admit_cold(&mut self, context_key: &str) -> Option<KvCacheAdmission> {
         let seq_id = self.select_cold_target(context_key)?;
         let index = seq_index(seq_id, self.physical.len())?;
-        self.clear_sequence_memory(seq_id);
         self.physical[index].state = SeqState::Free;
         self.physical[index].generation = self.physical[index].generation.saturating_add(1);
         self.physical[index].state = SeqState::Leased;
@@ -383,7 +372,6 @@ impl KvCacheManager {
         let Some(index) = seq_index(seq_id, self.physical.len()) else {
             return;
         };
-        self.clear_sequence_memory(seq_id);
         self.physical[index].state = SeqState::Free;
         self.physical[index].generation = self.physical[index].generation.saturating_add(1);
     }
@@ -456,19 +444,6 @@ impl KvCacheManager {
     fn remove_lru_key(&mut self, context_key: &str) {
         if let Some(index) = self.idle_lru.iter().position(|key| key == context_key) {
             self.idle_lru.remove(index);
-        }
-    }
-
-    fn clear_sequence_memory(&self, seq_id: llama_seq_id) {
-        let Some(shared_context) = self.shared_context else {
-            return;
-        };
-        if seq_id < 0 {
-            return;
-        }
-        unsafe {
-            let memory = ffi::llama_get_memory(shared_context.as_ptr());
-            ffi::llama_memory_seq_rm(memory, seq_id, 0, -1);
         }
     }
 }

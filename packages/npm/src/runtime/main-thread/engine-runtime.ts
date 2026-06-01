@@ -307,6 +307,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private runtimeObservabilityEnabled = false;
   private backendProfilingEnabled = false;
   private transportObservability: TransportObservability;
+  private wasmBridgeOperationTail: Promise<void> = Promise.resolve();
+
   constructor(private config: CogentClientOptions = {}) {
     this.executionMode = config.executionMode === 'worker' ? 'worker' : 'main-thread';
     this.transportObservability = this.createTransportObservability();
@@ -321,6 +323,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         this.finalizeRequest(bridge, requestId, options);
       },
       cancelQuery: (requestId) => this.cancelQuery(requestId),
+      withWasmBridge: (operation) => this.withReadyWasmBridge(operation),
     });
   }
 
@@ -442,6 +445,22 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private getReadyEngineBridge(): WasmBridge {
     this.getReadyEngineModule();
     return this.getLoadedWasmBridge();
+  }
+
+  private async withReadyWasmBridge<T>(
+    operation: (bridge: WasmBridge) => T | Promise<T>
+  ): Promise<T> {
+    const previous = this.wasmBridgeOperationTail;
+    let release!: () => void;
+    this.wasmBridgeOperationTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await operation(this.getReadyEngineBridge());
+    } finally {
+      release();
+    }
   }
 
   private releaseTokenState(requestId: GenerateRequestId): void {
@@ -791,24 +810,30 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     if (!Number.isInteger(requestId) || requestId <= 0) {
       return false;
     }
-    const bridge = this.getReadyEngineBridge();
 
-    const cancelled = await bridge.cancelQuery(requestId);
+    const cancelled = await this.withReadyWasmBridge((bridge) =>
+      bridge.cancelQuery(requestId)
+    );
     if (!cancelled) {
       return false;
     }
 
     if (this.tracker.has(requestId)) {
       this.tracker.requestCancel(requestId);
-      if (this.scheduler.settleCompletedRequestIfPresent(bridge, requestId)) {
+      const settled = await this.withReadyWasmBridge((bridge) =>
+        this.scheduler.settleCompletedRequestIfPresent(bridge, requestId)
+      );
+      if (settled) {
         return true;
       }
     }
 
     if (!this.tracker.hasActive(requestId)) {
-      this.finalizeRequest(bridge, requestId, {
-        consumeCompletedResponse: true,
-        deleteCompletion: true,
+      await this.withReadyWasmBridge((bridge) => {
+        this.finalizeRequest(bridge, requestId, {
+          consumeCompletedResponse: true,
+          deleteCompletion: true,
+        });
       });
     }
     return true;
@@ -900,7 +925,6 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     options: number | PromptOptions,
     startRequest: (bridge: WasmBridge, emitTokens: boolean) => GenerateRequestId
   ): Promise<GenerateRequestId> {
-    const bridge = this.getReadyEngineBridge();
     const tokenBatchSink = typeof options === 'object' ? options.tokenBatchSink : undefined;
     const emitTokens =
       typeof options === 'object' &&
@@ -911,12 +935,17 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       throw createAbortError('Prompt was aborted before it was enqueued.');
     }
 
-    const requestId = startRequest(bridge, emitTokens);
+    const { requestId, errorDetail } = await this.withReadyWasmBridge((bridge) => {
+      const requestId = startRequest(bridge, emitTokens);
+      return {
+        requestId,
+        errorDetail: requestId ? '' : bridge.readLastEngineError(),
+      };
+    });
     if (!requestId) {
-      const detail = bridge.readLastEngineError();
       throw new Error(
-        detail.length > 0
-          ? `Failed to enqueue request. ${detail}`
+        errorDetail.length > 0
+          ? `Failed to enqueue request. ${errorDetail}`
           : 'Failed to enqueue request.'
       );
     }

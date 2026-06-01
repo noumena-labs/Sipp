@@ -143,10 +143,6 @@ char * cogent_apply_chat_template(
     const char * messages_json,
     bool add_assistant);
 
-void cogent_free_string(char * value);
-
-void cogent_free_buffer(void * value);
-
 void cogent_set_llama_log_quiet(bool quiet);
 
 void cogent_backend_load_all(void);

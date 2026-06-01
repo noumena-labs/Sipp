@@ -1,6 +1,6 @@
-mod bindings;
 mod cmake;
 mod context;
+mod cxx;
 mod ide;
 mod link;
 mod pipeline;

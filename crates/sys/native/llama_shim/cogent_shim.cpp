@@ -830,14 +830,6 @@ char * cogent_apply_chat_template(
     }
 }
 
-void cogent_free_string(char * value) {
-    std::free(value);
-}
-
-void cogent_free_buffer(void * value) {
-    std::free(value);
-}
-
 void cogent_set_llama_log_quiet(bool quiet) {
     g_llama_log_quiet.store(quiet);
     restore_llama_log_callback();

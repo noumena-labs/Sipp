@@ -21,8 +21,8 @@ use crate::lifecycle::util::{
     AssetSummary,
 };
 use crate::lifecycle::{
-    AssetInspection, BackendPlan, BackendPolicy, BackendPreference, BackendSelection,
-    ClassifiedAsset, ModelAssetKind, ModelError, ModelLoadOptions, ModelModality,
+    AssetInspection, BackendCapabilities, BackendPlan, BackendPolicy, BackendPreference,
+    BackendSelection, ClassifiedAsset, ModelAssetKind, ModelError, ModelLoadOptions, ModelModality,
     ModelPairingReason, ModelPairingState as CoreModelPairingState, ModelSourceKind, ModelStatus,
     PairingPlan, PairingResolver, StatsMode, REGISTRY_MANIFEST_VERSION,
 };
@@ -1461,15 +1461,32 @@ fn browser_load_required(
 }
 
 fn browser_backend_plan(options: &BrowserLoadOptions) -> Result<BackendPlan, ModelError> {
+    browser_backend_plan_with_capabilities(options, None)
+}
+
+fn browser_backend_plan_with_capabilities(
+    options: &BrowserLoadOptions,
+    capabilities: Option<&BackendCapabilities>,
+) -> Result<BackendPlan, ModelError> {
     let backend = match options.backend {
-        BrowserBackendPreference::Auto | BrowserBackendPreference::Cpu => BackendPreference::Cpu,
+        BrowserBackendPreference::Auto => BackendPreference::Auto,
+        BrowserBackendPreference::Cpu => BackendPreference::Cpu,
         BrowserBackendPreference::WebGpu => BackendPreference::WebGpu,
     };
-    let selected = backend.as_str();
     let load_options = ModelLoadOptions {
         backend,
         stats: stats_mode(options.observability),
         runtime: browser_runtime_config(&options.runtime)?,
+    };
+    if let Some(capabilities) = capabilities {
+        return BackendPolicy::select_with_capabilities(&load_options, capabilities);
+    }
+
+    let selected = match options.backend {
+        BrowserBackendPreference::Auto | BrowserBackendPreference::Cpu => {
+            BackendPreference::Cpu.as_str()
+        }
+        BrowserBackendPreference::WebGpu => BackendPreference::WebGpu.as_str(),
     };
     Ok(BackendPolicy::select_known(
         &load_options,

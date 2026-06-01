@@ -33,7 +33,7 @@ impl InferenceRuntime {
                 continue;
             }
             self.kv_cache.capture_prefix_snapshot(
-                self.shared_context,
+                &self.native_runtime,
                 self.model_fingerprint,
                 &request.context_key,
                 slot.seq_id,
