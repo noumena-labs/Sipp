@@ -121,7 +121,7 @@ fn build_target(
         &cargo_cmd,
     )?;
 
-    output::step("Linking C++ via Emscripten");
+    output::step("Linking browser runtime via Emscripten");
     let wasm_dir = root.join("bindings").join("wasm");
     let wasm_source_dir = ctx.cmake_file_path(&wasm_dir);
     let rust_staticlib_cmake = ctx.cmake_file_path(&rust_staticlib);
@@ -153,7 +153,7 @@ fn build_target(
         sh,
         emsdk_dir,
         ninja_dir,
-        &format!("Building C++ bridge for {artifact_name}"),
+        &format!("Building browser runtime for {artifact_name}"),
         build_cmd,
     )?;
     drop(_dir);

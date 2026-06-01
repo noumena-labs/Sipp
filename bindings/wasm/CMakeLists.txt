@@ -62,15 +62,14 @@ endforeach()
 
 # Wasm Exports Setup
 set(PLUGIN_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/native/js_api/wasm_exports.cpp
     ${CE_RUST_SYS_DIR}/native/llama_shim/cogent_shim.cpp
 )
+
+set(CE_HOST_JS_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/native/js/ce_host.js")
 
 add_executable(CogentLM ${PLUGIN_SOURCES})
 
 target_include_directories(CogentLM PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/native/js_api
-    ${CMAKE_CURRENT_SOURCE_DIR}/native/rust_api
     ${CE_RUST_SYS_DIR}/native/llama_shim
     ${COGENTLM_MTMD_DIR}
     ${COGENTLM_LLAMA_CPP_DIR}/common
@@ -114,8 +113,72 @@ endforeach()
 set(CE_WASM_EXPORTED_FUNCTIONS "['_CE_RustBrowserEngineAbiVersion','_CE_RustBrowserEngineCreate','_CE_RustBrowserEngineId','_CE_RustBrowserEngineClose','_CE_BrowserCacheLayout','_CE_GgufPlanSplitCount','_CE_GgufSplitStream','_CE_DetectModelFromGgufBytes','_CE_Sha256Create','_CE_Sha256Update','_CE_Sha256Finalize','_CE_Sha256Close','_CE_ModelServiceCreate','_CE_ModelServiceClose','_CE_ModelServiceList','_CE_ModelServiceCurrent','_CE_ModelServiceManifest','_CE_ModelServicePrepareLoad','_CE_ModelServiceCommitLoad','_CE_ModelServiceAbortLoad','_CE_ModelServiceRemove','_CE_ModelServiceUnload','_CE_ModelServiceSnapshot','_CE_ModelServiceDrainEvents','_CE_ModelServiceRecordEvent','_CE_Init','_CE_GetLastEngineErrorSize','_CE_CopyLastEngineError','_CE_Close','_CE_StartTextRequestWithTokenEmissionMode','_CE_StartMediaRequestWithTokenEmissionMode','_CE_StartChatRequestWithTokenEmissionMode','_CE_StartEmbeddingRequest','_CE_CancelRequest','_CE_RunSchedulerLoop','_CE_GetCompletedRequestStatus','_CE_GetCompletedRequestOutputKind','_CE_GetStreamingBufferPointer','_CE_GetStreamingBufferUsedAddress','_CE_GetStreamingBufferDropCountAddress','_CE_GetCompletedRequestOutputSize','_CE_CopyCompletedRequestOutput','_CE_GetCompletedRequestEmbeddingLength','_CE_CopyCompletedRequestEmbedding','_CE_GetCompletedRequestEmbeddingPooling','_CE_GetCompletedRequestEmbeddingNormalized','_CE_GetCompletedRequestErrorSize','_CE_CopyCompletedRequestError','_CE_GetCompletedRequestRuntimeObservability','_CE_ConsumeCompletedRequest','_CE_FreeString','_CE_GetRuntimeObservability','_CE_GetBackendObservabilityJson','_CE_GetMediaMarker','_CE_GetChatTemplate','_CE_GetBosText','_CE_GetEosText','_CE_ProbeChatBoundaryInfo','_CE_PairingValidate','_malloc','_free']")
 set(CE_WASM_RUNTIME_METHODS "['ccall','FS','UTF8ToString','HEAP32','HEAPF32','HEAPF64','HEAPU8','addFunction','removeFunction']")
 
+set(CE_WASM_RUST_EXPORT_ROOTS
+    -uCE_RustBrowserEngineAbiVersion
+    -uCE_RustBrowserEngineCreate
+    -uCE_RustBrowserEngineId
+    -uCE_RustBrowserEngineClose
+    -uCE_BrowserCacheLayout
+    -uCE_GgufPlanSplitCount
+    -uCE_GgufSplitStream
+    -uCE_DetectModelFromGgufBytes
+    -uCE_Sha256Create
+    -uCE_Sha256Update
+    -uCE_Sha256Finalize
+    -uCE_Sha256Close
+    -uCE_ModelServiceCreate
+    -uCE_ModelServiceClose
+    -uCE_ModelServiceList
+    -uCE_ModelServiceCurrent
+    -uCE_ModelServiceManifest
+    -uCE_ModelServicePrepareLoad
+    -uCE_ModelServiceCommitLoad
+    -uCE_ModelServiceAbortLoad
+    -uCE_ModelServiceRemove
+    -uCE_ModelServiceUnload
+    -uCE_ModelServiceSnapshot
+    -uCE_ModelServiceDrainEvents
+    -uCE_ModelServiceRecordEvent
+    -uCE_Init
+    -uCE_GetLastEngineErrorSize
+    -uCE_CopyLastEngineError
+    -uCE_Close
+    -uCE_StartTextRequestWithTokenEmissionMode
+    -uCE_StartMediaRequestWithTokenEmissionMode
+    -uCE_StartChatRequestWithTokenEmissionMode
+    -uCE_StartEmbeddingRequest
+    -uCE_CancelRequest
+    -uCE_RunSchedulerLoop
+    -uCE_GetCompletedRequestStatus
+    -uCE_GetCompletedRequestOutputKind
+    -uCE_GetStreamingBufferPointer
+    -uCE_GetStreamingBufferUsedAddress
+    -uCE_GetStreamingBufferDropCountAddress
+    -uCE_GetCompletedRequestOutputSize
+    -uCE_CopyCompletedRequestOutput
+    -uCE_GetCompletedRequestEmbeddingLength
+    -uCE_CopyCompletedRequestEmbedding
+    -uCE_GetCompletedRequestEmbeddingPooling
+    -uCE_GetCompletedRequestEmbeddingNormalized
+    -uCE_GetCompletedRequestErrorSize
+    -uCE_CopyCompletedRequestError
+    -uCE_GetCompletedRequestRuntimeObservability
+    -uCE_ConsumeCompletedRequest
+    -uCE_FreeString
+    -uCE_GetRuntimeObservability
+    -uCE_GetBackendObservabilityJson
+    -uCE_GetMediaMarker
+    -uCE_GetChatTemplate
+    -uCE_GetBosText
+    -uCE_GetEosText
+    -uCE_ProbeChatBoundaryInfo
+    -uCE_PairingValidate
+)
+
 set(CE_WASM_TARGET_LINK_OPTIONS
     ${CE_WASM_LINK_FLAGS}
+    ${CE_WASM_RUST_EXPORT_ROOTS}
+    --js-library=${CE_HOST_JS_LIBRARY}
     -sEXPORTED_FUNCTIONS=${CE_WASM_EXPORTED_FUNCTIONS}
     -sEXPORTED_RUNTIME_METHODS=${CE_WASM_RUNTIME_METHODS}
     -sALLOW_TABLE_GROWTH=1

@@ -31,7 +31,7 @@ import { withDerivedObservabilityMetrics } from '../engine/inference-types.js';
 import { createAbortError } from '../utils/abort.js';
 import { assertGrammarByteSize } from '../utils/grammar.js';
 
-// Mirror of CE_TokenEmissionMode in bindings/wasm/native/js_api/ffi_types.h.
+// Mirror of GenerateTokenEmissionMode values used by bindings/wasm/src/engine/mod.rs.
 // Native exposes only NONE (no emission) and STREAMING_BUFFER (SAB ring).
 export const TOKEN_EMISSION_NONE = 0;
 export const TOKEN_EMISSION_STREAMING_BUFFER = 1;

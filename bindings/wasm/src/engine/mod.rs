@@ -17,11 +17,11 @@ use cogentlm_engine::runtime::request::{
 #[cfg(target_family = "wasm")]
 use cogentlm_engine::runtime::{InferenceRuntime, RequestStepResult, SchedulerBurstResult};
 
-use crate::bridge::{BrowserRuntimeMetrics, BrowserSchedulerLoopResult};
+use crate::{BrowserRuntimeMetrics, BrowserSchedulerLoopResult};
 
-// Provided by `wasm_exports.cpp`. Calls back into the host JS to drain the
-// streaming buffer into the SAB ring. Synchronous; the worker thread blocks
-// inside it for a few microseconds.
+// Provided by the Emscripten JS library. Calls back into the host JS to drain
+// the streaming buffer into the SAB ring. Synchronous; the worker thread
+// blocks inside it for a few microseconds.
 #[cfg(target_family = "wasm")]
 extern "C" {
     fn ce_native_yield();
@@ -148,12 +148,8 @@ impl BrowserEngine {
         self.last_error = error.into();
     }
 
-    pub(crate) fn last_error_size(&self) -> i32 {
-        byte_len_i32(self.last_error.as_bytes())
-    }
-
-    pub(crate) fn copy_last_error(&self, buffer: &mut [u8]) -> i32 {
-        copy_bytes_with_nul(self.last_error.as_bytes(), buffer)
+    pub(crate) fn last_error(&self) -> &str {
+        &self.last_error
     }
 
     #[cfg(target_family = "wasm")]
