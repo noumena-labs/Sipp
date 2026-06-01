@@ -1,4 +1,4 @@
-import { CogentEngine } from '@noumena-labs/cogentlm-browser';
+import { CogentClient } from '@noumena-labs/cogentlm-browser';
 import { basicChatExample } from './examples/basic-chat';
 import { multimodalExample } from './examples/multimodal';
 import { structuredOutputExample } from './examples/structured-output';
@@ -8,7 +8,7 @@ import { embeddingsExample } from './examples/embeddings';
 import type { Example } from './examples/base-example';
 
 // State
-let engine: CogentEngine | null = null;
+let client: CogentClient | null = null;
 let currentExample: Example = basicChatExample;
 let currentMedia: Uint8Array[] | undefined = undefined;
 
@@ -28,7 +28,7 @@ const modelFileInput = document.getElementById('model-file') as HTMLInputElement
 const projectorUrlInput = document.getElementById('projector-url') as HTMLInputElement;
 const projectorFileInput = document.getElementById('projector-file') as HTMLInputElement;
 const projectorGroup = document.getElementById('projector-group')!;
-const initBtn = document.getElementById('init-engine-btn') as HTMLButtonElement;
+const initBtn = document.getElementById('init-client-btn') as HTMLButtonElement;
 const userInput = document.getElementById('user-input') as HTMLInputElement;
 const sendBtn = document.getElementById('send-btn') as HTMLButtonElement;
 const uploadBtn = document.getElementById('upload-btn') as HTMLButtonElement;
@@ -64,7 +64,7 @@ async function fileToUint8Array(file: File): Promise<Uint8Array> {
 }
 
 // Logic
-async function initEngine() {
+async function initClient() {
   const modelUrl = modelUrlInput.value.trim();
   const modelFile = modelFileInput.files?.[0] ?? null;
   const projectorUrl = projectorUrlInput.value.trim();
@@ -83,12 +83,11 @@ async function initEngine() {
     sendBtn.disabled = true;
     uploadBtn.disabled = true;
     
-    updateStatus('loading', 'Initializing Engine...');
+    updateStatus('loading', 'Initializing Client...');
     
-    // Only create engine if it doesn't exist
-    if (!engine) {
-      log('Creating engine instance...', 'system');
-      engine = await CogentEngine.create();
+    if (!client) {
+      log('Creating client instance...', 'system');
+      client = new CogentClient();
     }
 
     log('Loading assets...', 'system');
@@ -105,28 +104,28 @@ async function initEngine() {
 
     if (projectorSource != null) {
       log('Loading model pair...', 'dim');
-      await engine.models.load({
+      await client.addLocal({
         model: modelSource,
         projector: projectorSource
       }, loadOptions);
     } else {
       log('Loading model...', 'dim');
-      await engine.models.load(modelSource, loadOptions);
+      await client.addLocal(modelSource, loadOptions);
     }
 
     log('Assets loaded successfully!', 'system');
-    updateStatus('connected', 'Engine Ready');
+    updateStatus('connected', 'Client Ready');
 
     userInput.disabled = false;
     sendBtn.disabled = false;
     uploadBtn.disabled = false;
     initBtn.disabled = false; // Re-enable for reloading
 
-    await currentExample.run({ engine, log, userInput: '', inputElement: userInput });
+    await currentExample.run({ client, log, userInput: '', inputElement: userInput });
 
   } catch (err) {
     log(`Initialization failed: ${err}`, 'error');
-    updateStatus('disconnected', 'Engine Error');
+    updateStatus('disconnected', 'Client Error');
     initBtn.disabled = false;
     userInput.disabled = false; // Let them try again
     sendBtn.disabled = false;
@@ -135,7 +134,7 @@ async function initEngine() {
 
 async function handleSend() {
   const text = userInput.value.trim();
-  if (!text || !engine) return;
+  if (!text || !client) return;
 
   userInput.value = '';
   const media = currentMedia;
@@ -148,12 +147,12 @@ async function handleSend() {
   }
 
   if (currentExample.onUserInput) {
-    await currentExample.onUserInput({ engine, log, userInput: text, inputElement: userInput, media });
+    await currentExample.onUserInput({ client, log, userInput: text, inputElement: userInput, media });
   }
 }
 
 // Event Listeners
-initBtn.addEventListener('click', initEngine);
+initBtn.addEventListener('click', initClient);
 sendBtn.addEventListener('click', handleSend);
 userInput.addEventListener('keypress', (e) => {
   if (e.key === 'Enter') handleSend();
@@ -213,8 +212,8 @@ navItems.forEach(item => {
 
     log(`Switched to ${currentExample.title} example.`, 'system');
 
-    if (engine) {
-      currentExample.run({ engine, log, userInput: '', inputElement: userInput });
+    if (client) {
+      currentExample.run({ client, log, userInput: '', inputElement: userInput });
     }
   });
 });

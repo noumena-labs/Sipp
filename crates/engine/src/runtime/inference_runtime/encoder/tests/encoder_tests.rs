@@ -4,7 +4,7 @@ use crate::runtime::config::NativeRuntimeConfig;
 use crate::runtime::inference_runtime::tests::runtime_tests::test_runtime;
 use crate::runtime::request::GenerateRequest;
 use crate::runtime::scheduler::{PrefillKind, SlotPhase, TerminalAction};
-use crate::runtime::session::SequenceState;
+use crate::runtime::session::KvCacheAdmission;
 
 #[test]
 fn text_generation_plan_uses_encoder_prefill_for_encoder_decoder() {
@@ -112,12 +112,12 @@ fn encoder_decoder_rewrite_preserves_source_input_token_count() {
     let mut runtime = test_runtime(NativeRuntimeConfig::default());
     runtime.capabilities.class = ModelClass::EncoderDecoder;
     runtime.capabilities.decoder_start_token = Some(42);
-    runtime.slot_scheduler.resize(1);
+    runtime.slot_scheduler.resize(1, &mut runtime.kv_cache);
 
     let mut request = GenerateRequest::new(7, "ctx");
     request.prompt_tokens = vec![11, 12, 13];
     request.input_tokens = 3;
-    runtime.slot_scheduler.slots[0].attach_request(request, SequenceState::default());
+    runtime.slot_scheduler.slots[0].attach_request(request, KvCacheAdmission::default());
 
     runtime
         .finalize_encoder_pass(0, 3)

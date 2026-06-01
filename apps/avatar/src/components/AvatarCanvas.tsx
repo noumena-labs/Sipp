@@ -131,17 +131,17 @@ export function AvatarCanvas({
   }, [bubbleActions, bubblePending, bubbleText]);
 
   useEffect(() => {
-    let streamingText = '';
+    let liveText = '';
     const off = bus.onAny((event) => {
       if (event.kind === 'prose') {
-        streamingText += event.text;
+        liveText += event.text;
         bubbleRef.current?.setContent(
-          streamingText,
+          liveText,
           true,
           bubbleActionsRef.current
         );
       } else if (event.kind === 'turn-start') {
-        streamingText = '';
+        liveText = '';
         bubbleRef.current?.setContent('', true, []);
       }
     });

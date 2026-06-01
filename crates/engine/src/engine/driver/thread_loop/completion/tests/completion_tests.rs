@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::sync::{mpsc, Arc, Mutex};
 
+use futures::executor::block_on;
+use futures_channel::oneshot;
+
 use crate::engine::protocol::{
     EmbeddingCapabilities, EngineEvent, ModelCapabilities, ModelClass, ModelState, PoolingType,
 };
@@ -43,7 +46,7 @@ fn embedding_completion_is_forwarded_without_generation_mapping() {
             "",
         ));
 
-    let (response_tx, response_rx) = mpsc::channel();
+    let (response_tx, response_rx) = oneshot::channel();
     let (event_tx, event_rx) = mpsc::channel();
     let mut active_requests = HashMap::new();
     active_requests.insert(
@@ -51,19 +54,21 @@ fn embedding_completion_is_forwarded_without_generation_mapping() {
         ActiveRequest {
             output: ActiveRequestOutput::Embedding,
             response_tx,
+            token: None,
         },
     );
     let mut state = EngineThreadState {
         runtime: Some(runtime),
         active_requests,
-        token_sinks: HashMap::new(),
         model_state: model_state(),
         event_subscribers: Arc::new(Mutex::new(vec![event_tx])),
     };
 
     state.complete_finished_requests();
 
-    let response = response_rx.recv().expect("response").expect("embedding ok");
+    let response = block_on(response_rx)
+        .expect("response")
+        .expect("embedding ok");
     assert!(matches!(response.output, ResponseOutput::Embedding { .. }));
     assert!(matches!(
         event_rx.recv().expect("completion event"),
@@ -83,7 +88,7 @@ fn wrong_completed_output_variant_is_a_failed_request() {
             "",
         ));
 
-    let (response_tx, response_rx) = mpsc::channel();
+    let (response_tx, response_rx) = oneshot::channel();
     let (event_tx, event_rx) = mpsc::channel();
     let mut active_requests = HashMap::new();
     active_requests.insert(
@@ -91,20 +96,19 @@ fn wrong_completed_output_variant_is_a_failed_request() {
         ActiveRequest {
             output: ActiveRequestOutput::Embedding,
             response_tx,
+            token: None,
         },
     );
     let mut state = EngineThreadState {
         runtime: Some(runtime),
         active_requests,
-        token_sinks: HashMap::new(),
         model_state: model_state(),
         event_subscribers: Arc::new(Mutex::new(vec![event_tx])),
     };
 
     state.complete_finished_requests();
 
-    let error = response_rx
-        .recv()
+    let error = block_on(response_rx)
         .expect("response")
         .expect_err("wrong output");
     assert!(error.to_string().contains("text output"));

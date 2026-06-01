@@ -1,7 +1,7 @@
-//! Lock-protected byte ring for handing emitted token text from the engine thread to consumer threads with bounded buffering.
+//! Lock-protected byte ring for handing emitted token text from the engine thread to consumer threads.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::fmt::Debug;
 use std::sync::MutexGuard;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -19,14 +19,13 @@ use record_io::{read_bytes, read_record_header, write_bytes, TokenRingRecordHead
 pub struct TokenRingFrame {
     pub stream_id: u32,
     pub sequence: u32,
-    pub flags: u32,
+    pub frame_count: u32,
     pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TokenRingDrain {
     pub frames: Vec<TokenRingFrame>,
-    pub drop_count: u64,
     pub closed: bool,
 }
 
@@ -34,15 +33,21 @@ pub struct TokenRingDrain {
 pub struct TokenRingDrainStatus {
     pub frames_drained: usize,
     pub bytes_drained: usize,
-    pub drop_count: u64,
     pub closed: bool,
 }
+
+pub trait TokenEmissionSink: Debug + Send + Sync {
+    fn try_write_batch(&self, stream_id: u32, frame_count: u32, bytes: &[u8]) -> bool;
+
+    fn close(&self);
+}
+
+pub type TokenEmissionSinkRef = Arc<dyn TokenEmissionSink>;
 
 #[derive(Debug)]
 struct TokenByteRingInner {
     state: Mutex<TokenByteRingState>,
     available: Condvar,
-    drop_count: AtomicU64,
 }
 
 #[derive(Debug)]
@@ -81,7 +86,6 @@ pub fn token_byte_ring(capacity: usize) -> (TokenByteRingProducer, TokenByteRing
             next_sequences: HashMap::new(),
         }),
         available: Condvar::new(),
-        drop_count: AtomicU64::new(0),
     });
     (
         TokenByteRingProducer {
@@ -92,7 +96,11 @@ pub fn token_byte_ring(capacity: usize) -> (TokenByteRingProducer, TokenByteRing
 }
 
 impl TokenByteRingProducer {
-    pub fn try_write_frame(&self, stream_id: u32, flags: u32, bytes: &[u8]) -> bool {
+    pub fn try_write_frame(&self, stream_id: u32, bytes: &[u8]) -> bool {
+        self.try_write_batch(stream_id, 1, bytes)
+    }
+
+    pub fn try_write_batch(&self, stream_id: u32, frame_count: u32, bytes: &[u8]) -> bool {
         if frame_is_noop(stream_id, bytes) {
             return true;
         }
@@ -102,19 +110,18 @@ impl TokenByteRingProducer {
             return false;
         }
 
-        let Some(record) = writable_record(&state, bytes.len()) else {
-            record_dropped_frame(&self.inner);
+        let Some(record) = writable_record(&mut state, bytes.len()) else {
             return false;
         };
 
         let was_empty = state.used == 0;
-        let record_sequence = next_sequence_for_stream(&mut state, stream_id);
+        let record_sequence = next_sequence_for_stream(&mut state, stream_id, frame_count);
 
         let offset = state.write_index;
         let header = TokenRingRecordHeader {
             stream_id,
             sequence: record_sequence,
-            flags,
+            frame_count,
             byte_len: record.byte_len,
         }
         .encode();
@@ -141,6 +148,16 @@ impl TokenByteRingProducer {
     }
 }
 
+impl TokenEmissionSink for TokenByteRingProducer {
+    fn try_write_batch(&self, stream_id: u32, frame_count: u32, bytes: &[u8]) -> bool {
+        TokenByteRingProducer::try_write_batch(self, stream_id, frame_count, bytes)
+    }
+
+    fn close(&self) {
+        TokenByteRingProducer::close(self);
+    }
+}
+
 impl TokenByteRingConsumer {
     pub fn wait_for_data(&self, timeout: Duration) -> bool {
         let state = lock_ring_state(&self.inner.state);
@@ -159,7 +176,6 @@ impl TokenByteRingConsumer {
         let status = self.drain_into(&mut frames, max_frames, max_bytes);
         TokenRingDrain {
             frames,
-            drop_count: status.drop_count,
             closed: status.closed,
         }
     }
@@ -208,7 +224,7 @@ impl TokenByteRingConsumer {
             frames.push(TokenRingFrame {
                 stream_id: header.stream_id,
                 sequence: header.sequence,
-                flags: header.flags,
+                frame_count: header.frame_count,
                 bytes,
             });
         }
@@ -216,7 +232,6 @@ impl TokenByteRingConsumer {
         TokenRingDrainStatus {
             frames_drained: drained_frames,
             bytes_drained: drained_bytes,
-            drop_count: self.inner.drop_count.load(Ordering::Relaxed),
             closed: state.closed && state.used == 0,
         }
     }
@@ -237,11 +252,6 @@ fn lock_ring_state(state: &Mutex<TokenByteRingState>) -> MutexGuard<'_, TokenByt
         Ok(state) => state,
         Err(error) => error.into_inner(),
     }
-}
-
-fn record_dropped_frame(inner: &TokenByteRingInner) {
-    inner.drop_count.fetch_add(1, Ordering::Relaxed);
-    inner.available.notify_one();
 }
 
 fn token_ring_record_size(byte_len: usize) -> Option<usize> {
@@ -270,21 +280,51 @@ struct WritableRecord {
     next_used: usize,
 }
 
-fn writable_record(state: &TokenByteRingState, byte_len: usize) -> Option<WritableRecord> {
+fn writable_record(state: &mut TokenByteRingState, byte_len: usize) -> Option<WritableRecord> {
     let byte_len_u32 = u32::try_from(byte_len).ok()?;
     let size = token_ring_record_size(byte_len)?;
     let next_used = state.used.checked_add(size)?;
-    (size <= state.buffer.len() && next_used <= state.buffer.len()).then_some(WritableRecord {
+    if (size > state.buffer.len() || next_used > state.buffer.len())
+        && !grow_ring_buffer(state, size.max(next_used))
+    {
+        return None;
+    }
+    Some(WritableRecord {
         byte_len: byte_len_u32,
         size,
         next_used,
     })
 }
 
-fn next_sequence_for_stream(state: &mut TokenByteRingState, stream_id: u32) -> u32 {
+fn grow_ring_buffer(state: &mut TokenByteRingState, min_capacity: usize) -> bool {
+    let mut next_capacity = state.buffer.len().max(TOKEN_RING_RECORD_HEADER_BYTES);
+    while next_capacity < min_capacity {
+        let Some(grown) = next_capacity.checked_mul(2) else {
+            return false;
+        };
+        next_capacity = grown;
+    }
+
+    let used = state.used;
+    let mut next_buffer = vec![0; next_capacity];
+    if used > 0 {
+        let bytes = read_bytes(&state.buffer, state.read_index, used);
+        next_buffer[..used].copy_from_slice(&bytes);
+    }
+    state.buffer = next_buffer;
+    state.read_index = 0;
+    state.write_index = used;
+    true
+}
+
+fn next_sequence_for_stream(
+    state: &mut TokenByteRingState,
+    stream_id: u32,
+    frame_count: u32,
+) -> u32 {
     if state.cached_stream_id == stream_id {
         let sequence = state.cached_next_sequence;
-        state.cached_next_sequence = sequence.wrapping_add(1);
+        state.cached_next_sequence = sequence.wrapping_add(frame_count);
         return sequence;
     }
 
@@ -295,7 +335,7 @@ fn next_sequence_for_stream(state: &mut TokenByteRingState, stream_id: u32) -> u
     }
     let sequence = state.next_sequences.get(&stream_id).copied().unwrap_or(0);
     state.cached_stream_id = stream_id;
-    state.cached_next_sequence = sequence.wrapping_add(1);
+    state.cached_next_sequence = sequence.wrapping_add(frame_count);
     sequence
 }
 

@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::engine::{
-    protocol::EngineStatus, ChatRequest, CogentEngine, EmbedRequest, EmbeddingResult,
-    EngineEventReceiver, GenerationResult, QueryRequest,
+    protocol::EngineStatus, ChatRequest, CogentEngine, EmbedRequest, EngineEmbeddingRun,
+    EngineEventReceiver, EngineTextRun, QueryRequest,
 };
 
 use super::backend_policy::BackendPolicy;
@@ -59,24 +59,26 @@ impl<B: StorageBackend> ModelService<B> {
         })
     }
 
-    pub fn load(
+    pub async fn load(
         &mut self,
         source: ModelSource,
         options: ModelLoadOptions,
     ) -> Result<LoadedModelInfo, ModelError> {
         let resolved = self.resolve_source(source)?;
-        self.load_entry(&resolved.entry_id, options)
+        self.load_entry(&resolved.entry_id, options).await
     }
 
-    pub fn unload(&mut self) -> Result<(), ModelError> {
-        self.current.take();
+    pub async fn unload(&mut self) -> Result<(), ModelError> {
+        if let Some(current) = self.current.take() {
+            current.engine.close().await.map_err(ModelError::from)?;
+        }
         Ok(())
     }
 
-    pub fn remove(&mut self, model_id: impl AsRef<str>) -> Result<(), ModelError> {
+    pub async fn remove(&mut self, model_id: impl AsRef<str>) -> Result<(), ModelError> {
         let model_id = model_id.as_ref();
         if self.is_loaded_model(model_id) {
-            self.unload()?;
+            self.unload().await?;
         }
         let removed = self.registry.remove_model(model_id)?;
         for asset in &removed.orphaned_assets {
@@ -102,19 +104,19 @@ impl<B: StorageBackend> ModelService<B> {
         self.current.as_ref().map(|loaded| loaded.info.clone())
     }
 
-    pub fn query(&self, request: QueryRequest) -> Result<GenerationResult, ModelError> {
-        self.engine()?.query(request).map_err(ModelError::from)
+    pub fn query(&self, request: QueryRequest) -> Result<EngineTextRun, ModelError> {
+        Ok(self.engine()?.query(request))
     }
 
-    pub fn chat(&self, request: ChatRequest) -> Result<GenerationResult, ModelError> {
-        self.engine()?.chat(request).map_err(ModelError::from)
+    pub fn chat(&self, request: ChatRequest) -> Result<EngineTextRun, ModelError> {
+        Ok(self.engine()?.chat(request))
     }
 
-    pub fn embed(&self, request: EmbedRequest) -> Result<EmbeddingResult, ModelError> {
-        self.engine()?.embed(request).map_err(ModelError::from)
+    pub fn embed(&self, request: EmbedRequest) -> Result<EngineEmbeddingRun, ModelError> {
+        Ok(self.engine()?.embed(request))
     }
 
-    pub fn state(&self) -> Result<ModelServiceState, ModelError> {
+    pub async fn state(&self) -> Result<ModelServiceState, ModelError> {
         let Some(current) = &self.current else {
             return Ok(ModelServiceState {
                 status: EngineStatus::Idle,
@@ -122,7 +124,7 @@ impl<B: StorageBackend> ModelService<B> {
                 ..ModelServiceState::default()
             });
         };
-        let state = current.engine.state().map_err(ModelError::from)?;
+        let state = current.engine.state().await.map_err(ModelError::from)?;
         Ok(ModelServiceState {
             status: state.status,
             model: Some(current.info.clone()),
@@ -145,7 +147,7 @@ impl<B: StorageBackend> ModelService<B> {
             .ok_or_else(|| model_not_found(NO_MODEL_LOADED))
     }
 
-    fn load_entry(
+    async fn load_entry(
         &mut self,
         model_id: &str,
         options: ModelLoadOptions,
@@ -181,8 +183,9 @@ impl<B: StorageBackend> ModelService<B> {
             });
         }
 
-        self.unload()?;
+        self.unload().await?;
         let engine = CogentEngine::load(&load_assets.model_path, backend_plan.config)
+            .await
             .map_err(ModelError::from)?;
         self.registry.update_model(&entry.id, |model| {
             model.last_loaded_at_unix_ms = Some(now_unix_ms());
@@ -248,7 +251,7 @@ impl<B: StorageBackend> ModelService<B> {
 
 impl<B: StorageBackend> Drop for ModelService<B> {
     fn drop(&mut self) {
-        let _ = self.unload();
+        self.current.take();
     }
 }
 

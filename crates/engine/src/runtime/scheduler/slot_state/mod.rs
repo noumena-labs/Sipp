@@ -3,7 +3,7 @@
 use crate::engine::protocol::PoolingType;
 use crate::native_bridge::SamplerHandle;
 use crate::runtime::request::{GenerateRequest, GenerateRequestId, GenerateRequestLifecycle};
-use crate::runtime::session::SequenceState;
+use crate::runtime::session::{CacheCandidate, KvCacheAdmission, SequenceMirror};
 use crate::runtime::{llama_seq_id, llama_token};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -13,7 +13,7 @@ pub enum SlotPhase {
     Admitted,
     Prefill,
     Decode,
-    Streaming,
+    EmitBuffered,
     Completed,
     Failed,
 }
@@ -70,8 +70,9 @@ pub struct SlotState {
     pub plan: SlotExecutionPlan,
     pub request_id: GenerateRequestId,
     pub request: Option<GenerateRequest>,
-    pub session: Option<SequenceState>,
-    pub mirror: SequenceState,
+    pub lease_generation: u64,
+    pub cache_candidate: CacheCandidate,
+    pub mirror: SequenceMirror,
     pub prefill_cursor: usize,
     pub decode_step_count: usize,
     pub batch_participation_count: usize,
@@ -89,6 +90,7 @@ pub struct SlotState {
 }
 
 impl SlotState {
+    #[cfg(test)]
     pub fn new(slot_id: usize) -> Self {
         let mut slot = Self::default();
         slot.slot_id = slot_id;
@@ -106,13 +108,14 @@ impl SlotState {
         self.seq_id = -1;
         self.request_id = 0;
         self.request = None;
-        self.session = None;
+        self.lease_generation = 0;
+        self.cache_candidate = CacheCandidate::None;
         self.backend_sampler_attached = false;
-        self.mirror = SequenceState::default();
+        self.mirror = SequenceMirror::default();
         self.clear_request_progress();
     }
 
-    pub fn attach_request(&mut self, request: GenerateRequest, mut session: SequenceState) {
+    pub fn attach_request(&mut self, request: GenerateRequest, admission: KvCacheAdmission) {
         debug_assert!(
             !self.backend_sampler_attached,
             "backend sampler must be detached before replacing slot request"
@@ -121,10 +124,10 @@ impl SlotState {
         self.sampler_key = None;
         self.request_id = request.id;
         self.request = Some(request);
-        self.mirror.current_kv_tokens = std::mem::take(&mut session.current_kv_tokens);
-        self.mirror.n_past = session.n_past;
-        self.mirror.hardware_id = session.hardware_id;
-        self.session = Some(session);
+        self.seq_id = admission.seq_id;
+        self.lease_generation = admission.generation;
+        self.cache_candidate = admission.candidate;
+        self.mirror = admission.mirror;
         self.phase = SlotPhase::Admitted;
         self.backend_sampler_attached = false;
         self.clear_request_progress();
@@ -203,8 +206,9 @@ impl Default for SlotState {
             plan: SlotExecutionPlan::default(),
             request_id: 0,
             request: None,
-            session: None,
-            mirror: SequenceState::default(),
+            lease_generation: 0,
+            cache_candidate: CacheCandidate::None,
+            mirror: SequenceMirror::default(),
             prefill_cursor: 0,
             decode_step_count: 0,
             batch_participation_count: 0,

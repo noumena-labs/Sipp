@@ -1,95 +1,70 @@
 use std::{
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
+use cogentlm_client::{
+    CogentChatRequest as CoreClientChatRequest, CogentClient as CoreClient,
+    CogentEmbedRequest as CoreClientEmbedRequest,
+    CogentEmbeddingResponse as CoreClientEmbeddingResponse,
+    CogentEmbeddingResponseFuture as CoreClientEmbeddingResponseFuture,
+    CogentEmbeddingRun as CoreClientEmbeddingRun, CogentError as CoreClientError,
+    CogentQueryRequest as CoreClientQueryRequest, CogentTextOptions as CoreClientTextOptions,
+    CogentTextResponse as CoreClientTextResponse,
+    CogentTextResponseFuture as CoreClientTextResponseFuture, CogentTextRun as CoreClientTextRun,
+    CogentTokenBatches as CoreClientTokenBatches, EndpointRef as CoreEndpointRef,
+    LocalEmbedOptions as CoreClientLocalEmbedOptions,
+    LocalTextOptions as CoreClientLocalTextOptions,
+    RemoteAnthropicConfig as CoreRemoteAnthropicConfig, RemoteAuth as CoreRemoteAuth,
+    RemoteConfig as CoreRemoteConfig, RemoteError as CoreRemoteError,
+    RemoteErrorKind as CoreRemoteErrorKind, RemoteOpenAiConfig as CoreRemoteOpenAiConfig,
+    RemoteProtocol as CoreRemoteProtocol, RemoteProxyConfig as CoreRemoteProxyConfig,
+    RemoteSecret as CoreRemoteSecret,
+};
+use cogentlm_core::TokenUsage as CoreTokenUsage;
 use cogentlm_engine::backend::{
     backend_observability_json as core_backend_observability_json,
     set_llama_log_quiet as core_set_llama_log_quiet,
 };
 use cogentlm_engine::engine::protocol::{
-    BackendInfo as CoreBackendInfo, ModelCapabilities as CoreModelCapabilities,
-    RequestState as CoreRequestState, RequestStats as CoreRequestStats,
+    CacheSource as CoreCacheSource, RequestStats as CoreRequestStats,
 };
 use cogentlm_engine::engine::{
-    CacheKeyPolicy, ChatMessage as CoreChatMessage, ChatRequest as CoreChatRequest,
-    ChatRole as CoreChatRole, CogentEngine as CoreCogentEngine, EmbedOptions as CoreEmbedOptions,
-    EmbedRequest as CoreEmbedRequest, EmbeddingResult as CoreEmbeddingResult,
-    EngineEvent as CoreEngineEvent, EngineEventReceiver as CoreEngineEventReceiver,
-    EngineState as CoreEngineState, EngineStats as CoreEngineStats, FlashAttentionMode,
-    GenerationResult as CoreGenerationResult, GpuLayerConfig, KvCacheType, KvReuseMode, LogitBias,
-    ModelPlacementConfig as CoreModelPlacementConfig,
+    ChatMessage as CoreChatMessage, ChatRole as CoreChatRole, FlashAttentionMode, GpuLayerConfig,
+    KvCacheType, KvReuseMode, LogitBias, ModelPlacementConfig as CoreModelPlacementConfig,
     MultimodalRuntimeConfig as CoreMultimodalRuntimeConfig,
     NativeRuntimeConfig as CoreNativeRuntimeConfig,
     ObservabilityRuntimeConfig as CoreObservabilityRuntimeConfig, PoolingType as CorePoolingType,
-    QueryOptions as CoreQueryOptions, QueryRequest as CoreQueryRequest,
-    ResidencyRuntimeConfig as CoreResidencyRuntimeConfig,
-    ResolvedRuntimeLimits as CoreResolvedRuntimeLimits, RopeScaling, SamplerStage,
+    ResidencyRuntimeConfig as CoreResidencyRuntimeConfig, RopeScaling, SamplerStage,
     SamplingRuntimeConfig as CoreSamplingRuntimeConfig,
     SchedulerRuntimeConfig as CoreSchedulerRuntimeConfig, SplitMode, TokenBatch as CoreTokenBatch,
-    DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
-};
-use cogentlm_engine::lifecycle::{
-    model_source_from_path as core_model_source_from_path,
-    vision_model_source_from_paths as core_vision_model_source_from_paths,
-    BackendPreference as CoreBackendPreference, LoadedModelInfo as CoreLoadedModelInfo,
-    ModelInfo as CoreManagedModelInfo, ModelLoadOptions as CoreModelLoadOptions,
-    ModelService as CoreModelService, ModelServiceState as CoreModelServiceState, StatsMode,
-    DEFAULT_MODEL_BACKEND, DEFAULT_MODEL_STATS,
 };
 use cogentlm_engine::runtime::config::{
     SchedulerPolicyConfig as CoreSchedulerPolicyConfig, SchedulerPolicyMode,
 };
-use cogentlm_providers::{
-    AnthropicConfig as CoreAnthropicConfig, CapabilitySupport as CoreProviderCapabilitySupport,
-    OpenAiConfig as CoreOpenAiConfig, ProviderAuth as CoreProviderAuth,
-    ProviderCapabilities as CoreProviderCapabilities,
-    ProviderChatRequest as CoreProviderChatRequest,
-    ProviderChatResponse as CoreProviderChatResponse, ProviderClient as CoreProviderClient,
-    ProviderEmbedRequest as CoreProviderEmbedRequest,
-    ProviderEmbeddingOutput as CoreProviderEmbeddingOutput,
-    ProviderEmbeddingResponse as CoreProviderEmbeddingResponse, ProviderError as CoreProviderError,
-    ProviderErrorKind as CoreProviderErrorKind,
-    ProviderGenerateRequest as CoreProviderGenerateRequest,
-    ProviderGenerateResponse as CoreProviderGenerateResponse,
-    ProviderGenerationOptions as CoreProviderGenerationOptions, ProviderModel as CoreProviderModel,
-    ProviderOptions as CoreProviderOptions,
-    ProviderResponseMetadata as CoreProviderResponseMetadata,
-    ProviderStreamEvent as CoreProviderStreamEvent, ProviderTextOutput as CoreProviderTextOutput,
-    ProxyConfig as CoreProxyConfig, ProxyProtocol as CoreProxyProtocol,
-    SecretString as CoreSecretString, TokenUsage as CoreTokenUsage,
-};
+use futures::executor::block_on;
+use futures::StreamExt;
 use napi::bindgen_prelude::{AsyncTask, Buffer, Either, Env};
-use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::{Error, JsValue, Result, Status, Task};
 use napi_derive::napi;
 use serde::de::DeserializeOwned;
 
 #[cfg(test)]
-#[path = "tests/provider_tests.rs"]
-mod provider_tests;
+#[path = "tests/remote_tests.rs"]
+mod remote_tests;
 
-type SharedEngine = Arc<Mutex<Option<CoreCogentEngine>>>;
-type SharedEvents = Arc<Mutex<CoreEngineEventReceiver>>;
-type SharedModelService = Arc<Mutex<Option<CoreModelService>>>;
-type SharedModelEvents = Arc<Mutex<Option<CoreEngineEventReceiver>>>;
-type TokenBatchCallback = Arc<ThreadsafeFunction<TokenBatch, (), TokenBatch, Status, false>>;
-type ProviderTaskOutput<T> = std::result::Result<T, CoreProviderError>;
+type SharedCogentClient = Arc<Mutex<CoreClient>>;
+type SharedClientTextResponse = Arc<Mutex<Option<CoreClientTextResponseFuture>>>;
+type SharedClientEmbeddingResponse = Arc<Mutex<Option<CoreClientEmbeddingResponseFuture>>>;
+type SharedClientTokenBatches = Arc<Mutex<Option<CoreClientTokenBatches>>>;
+type ClientTaskOutput<T> = std::result::Result<T, CoreClientError>;
 
-static PROVIDER_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-
-const ENGINE_MUTEX_POISONED: &str = "engine mutex is poisoned";
-const ENGINE_EVENTS_MUTEX_POISONED: &str = "engine events mutex is poisoned";
-const ENGINE_CLOSED: &str = "engine is closed";
-const MODEL_SERVICE_EVENTS_MUTEX_POISONED: &str = "model service events mutex is poisoned";
-const MODEL_SERVICE_MUTEX_POISONED: &str = "model service mutex is poisoned";
-const MODEL_SERVICE_CLOSED: &str = "model service is closed";
-const EVENT_TYPE_STATE: &str = "state";
-const EVENT_TYPE_LOAD_PROGRESS: &str = "load-progress";
-const EVENT_TYPE_REQUEST_STARTED: &str = "request-started";
-const EVENT_TYPE_REQUEST_COMPLETED: &str = "request-completed";
-const EVENT_TYPE_REQUEST_FAILED: &str = "request-failed";
-const EVENT_TYPE_CLOSED: &str = "closed";
+const CLIENT_MUTEX_POISONED: &str = "client mutex is poisoned";
+const CLIENT_TEXT_RESPONSE_CONSUMED: &str = "text response already consumed";
+const CLIENT_EMBEDDING_RESPONSE_CONSUMED: &str = "embedding response already consumed";
+const CLIENT_TOKEN_BATCHES_MUTEX_POISONED: &str = "token batches mutex is poisoned";
+const CLIENT_TEXT_RESPONSE_MUTEX_POISONED: &str = "text response mutex is poisoned";
+const CLIENT_EMBEDDING_RESPONSE_MUTEX_POISONED: &str = "embedding response mutex is poisoned";
 
 #[napi(object)]
 pub struct LogitBiasConfig {
@@ -444,14 +419,6 @@ pub struct CacheRuntimeConfig {
     pub max_snapshot_entries: Option<i32>,
     #[napi(js_name = "max_snapshot_bytes")]
     pub max_snapshot_bytes: Option<f64>,
-    #[napi(js_name = "max_session_entries")]
-    pub max_session_entries: Option<i32>,
-    #[napi(js_name = "cache_key_policy")]
-    pub cache_key_policy: Option<String>,
-    #[napi(js_name = "enable_context_checkpoints")]
-    pub enable_context_checkpoints: Option<bool>,
-    #[napi(js_name = "checkpoint_every_tokens")]
-    pub checkpoint_every_tokens: Option<i32>,
 }
 
 impl CacheRuntimeConfig {
@@ -473,18 +440,6 @@ impl CacheRuntimeConfig {
             &mut core.max_snapshot_bytes,
             self.max_snapshot_bytes,
             |value| value as usize,
-        );
-        assign_if_some(&mut core.max_session_entries, self.max_session_entries);
-        if let Some(value) = &self.cache_key_policy {
-            core.cache_key_policy = parse_cache_key_policy(value)?;
-        }
-        assign_if_some(
-            &mut core.enable_context_checkpoints,
-            self.enable_context_checkpoints,
-        );
-        assign_if_some(
-            &mut core.checkpoint_every_tokens,
-            self.checkpoint_every_tokens,
         );
         Ok(core)
     }
@@ -610,50 +565,69 @@ impl NativeRuntimeConfig {
 }
 
 #[napi(object)]
-pub struct ModelLoadOptions {
-    pub backend: Option<String>,
-    pub stats: Option<String>,
-    pub runtime: Option<NativeRuntimeConfig>,
+pub struct EndpointRef {
+    pub kind: String,
+    pub id: String,
 }
 
-impl ModelLoadOptions {
-    fn to_core(&self) -> Result<CoreModelLoadOptions> {
-        Ok(CoreModelLoadOptions {
-            backend: parse_backend_preference(
-                self.backend.as_deref().unwrap_or(DEFAULT_MODEL_BACKEND),
-            )?,
-            stats: parse_stats_mode(self.stats.as_deref().unwrap_or(DEFAULT_MODEL_STATS))?,
-            runtime: optional_core_or_default(self.runtime.as_ref(), NativeRuntimeConfig::to_core)?,
+impl EndpointRef {
+    fn to_core(&self) -> Result<CoreEndpointRef> {
+        match self.kind.as_str() {
+            "local" => Ok(CoreEndpointRef::Local {
+                id: self.id.clone(),
+            }),
+            "remote" => Ok(CoreEndpointRef::Remote {
+                id: self.id.clone(),
+            }),
+            _ => Err(invalid_arg("endpoint kind must be local or remote")),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct CogentTextOptions {
+    #[napi(js_name = "maxTokens")]
+    pub max_tokens: Option<u32>,
+    pub temperature: Option<f64>,
+    #[napi(js_name = "topP")]
+    pub top_p: Option<f64>,
+    pub stop: Option<Vec<String>>,
+}
+
+impl CogentTextOptions {
+    fn to_core(&self) -> Result<CoreClientTextOptions> {
+        Ok(CoreClientTextOptions {
+            max_tokens: self.max_tokens,
+            temperature: self
+                .temperature
+                .map(|value| finite_f64_to_f32(value, "temperature"))
+                .transpose()?,
+            top_p: self
+                .top_p
+                .map(|value| finite_f64_to_f32(value, "topP"))
+                .transpose()?,
+            stop: self.stop.clone().unwrap_or_default(),
         })
     }
 }
 
 #[napi(object)]
-pub struct QueryOptions {
+pub struct LocalTextOptions {
+    #[napi(js_name = "contextKey")]
     pub context_key: Option<String>,
-    pub max_tokens: Option<i32>,
     pub grammar: Option<String>,
+    #[napi(js_name = "jsonSchema")]
     pub json_schema: Option<String>,
-    pub stop: Option<Vec<String>>,
     pub sampling: Option<SamplingRuntimeConfig>,
     pub media: Option<Vec<Buffer>>,
 }
 
-impl QueryOptions {
-    fn to_core(&self) -> Result<CoreQueryOptions> {
-        let max_tokens = self.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
-        if max_tokens <= 0 {
-            return Err(invalid_arg("maxTokens must be positive"));
-        }
-        Ok(CoreQueryOptions {
-            context_key: self
-                .context_key
-                .clone()
-                .unwrap_or_else(|| DEFAULT_CONTEXT_KEY.to_string()),
-            max_tokens,
-            grammar: self.grammar.clone().unwrap_or_default(),
-            json_schema: self.json_schema.clone().unwrap_or_default(),
-            stop: self.stop.clone().unwrap_or_default(),
+impl LocalTextOptions {
+    fn to_core(&self) -> Result<CoreClientLocalTextOptions> {
+        Ok(CoreClientLocalTextOptions {
+            context_key: self.context_key.clone(),
+            grammar: self.grammar.clone(),
+            json_schema: self.json_schema.clone(),
             sampling: self
                 .sampling
                 .as_ref()
@@ -674,6 +648,97 @@ impl QueryOptions {
 }
 
 #[napi(object)]
+pub struct LocalEmbedOptions {
+    #[napi(js_name = "contextKey")]
+    pub context_key: Option<String>,
+    pub normalize: Option<bool>,
+}
+
+impl LocalEmbedOptions {
+    fn to_core(&self) -> CoreClientLocalEmbedOptions {
+        CoreClientLocalEmbedOptions {
+            context_key: self.context_key.clone(),
+            normalize: self.normalize,
+        }
+    }
+}
+
+#[napi(object)]
+pub struct CogentQueryRequest {
+    pub endpoint: Option<EndpointRef>,
+    pub prompt: String,
+    pub options: Option<CogentTextOptions>,
+    pub local: Option<LocalTextOptions>,
+    #[napi(js_name = "remoteOptions")]
+    pub remote_options: Option<serde_json::Value>,
+    #[napi(js_name = "emitTokens")]
+    pub emit_tokens: Option<bool>,
+}
+
+impl CogentQueryRequest {
+    fn to_core(&self) -> Result<CoreClientQueryRequest> {
+        Ok(CoreClientQueryRequest {
+            endpoint: optional_endpoint(self.endpoint.as_ref())?,
+            prompt: self.prompt.clone(),
+            options: optional_core_or_default(self.options.as_ref(), CogentTextOptions::to_core)?,
+            local: optional_core_or_default(self.local.as_ref(), LocalTextOptions::to_core)?,
+            remote_options: remote_options_or_empty(self.remote_options.clone())?,
+            emit_tokens: self.emit_tokens.unwrap_or(false),
+        })
+    }
+}
+
+#[napi(object)]
+pub struct CogentChatRequest {
+    pub endpoint: Option<EndpointRef>,
+    pub messages: Vec<ChatMessage>,
+    pub options: Option<CogentTextOptions>,
+    pub local: Option<LocalTextOptions>,
+    #[napi(js_name = "remoteOptions")]
+    pub remote_options: Option<serde_json::Value>,
+    #[napi(js_name = "emitTokens")]
+    pub emit_tokens: Option<bool>,
+}
+
+impl CogentChatRequest {
+    fn to_core(&self) -> Result<CoreClientChatRequest> {
+        Ok(CoreClientChatRequest {
+            endpoint: optional_endpoint(self.endpoint.as_ref())?,
+            messages: chat_messages_to_core(self.messages.clone())?,
+            options: optional_core_or_default(self.options.as_ref(), CogentTextOptions::to_core)?,
+            local: optional_core_or_default(self.local.as_ref(), LocalTextOptions::to_core)?,
+            remote_options: remote_options_or_empty(self.remote_options.clone())?,
+            emit_tokens: self.emit_tokens.unwrap_or(false),
+        })
+    }
+}
+
+#[napi(object)]
+pub struct CogentEmbedRequest {
+    pub endpoint: Option<EndpointRef>,
+    pub input: String,
+    pub local: Option<LocalEmbedOptions>,
+    #[napi(js_name = "remoteOptions")]
+    pub remote_options: Option<serde_json::Value>,
+}
+
+impl CogentEmbedRequest {
+    fn to_core(&self) -> Result<CoreClientEmbedRequest> {
+        Ok(CoreClientEmbedRequest {
+            endpoint: optional_endpoint(self.endpoint.as_ref())?,
+            input: self.input.clone(),
+            local: self
+                .local
+                .as_ref()
+                .map(LocalEmbedOptions::to_core)
+                .unwrap_or_default(),
+            remote_options: remote_options_or_empty(self.remote_options.clone())?,
+        })
+    }
+}
+
+#[napi(object)]
+#[derive(Clone)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
@@ -681,247 +746,130 @@ pub struct ChatMessage {
 
 #[napi(string_enum = "snake_case")]
 #[derive(Clone, Copy)]
-pub enum ProviderProxyProtocol {
+pub enum RemoteProxyProtocol {
     OpenAiCompatible,
 }
 
-impl From<ProviderProxyProtocol> for CoreProxyProtocol {
-    fn from(value: ProviderProxyProtocol) -> Self {
+impl From<RemoteProxyProtocol> for CoreRemoteProtocol {
+    fn from(value: RemoteProxyProtocol) -> Self {
         match value {
-            ProviderProxyProtocol::OpenAiCompatible => Self::OpenAiCompatible,
+            RemoteProxyProtocol::OpenAiCompatible => Self::OpenAiCompatible,
         }
     }
 }
 
 #[napi(object)]
-pub struct ProviderAuthHeaderConfig {
+pub struct RemoteAuthHeaderConfig {
     pub name: String,
     pub value: String,
 }
 
 #[napi(object)]
-pub struct ProviderStaticHeaderConfig {
+pub struct RemoteStaticHeaderConfig {
     pub name: String,
     pub value: String,
 }
 
 #[napi(object)]
-pub struct ProviderAuthConfig {
+pub struct RemoteAuthConfig {
     pub bearer: Option<String>,
-    pub header: Option<ProviderAuthHeaderConfig>,
+    pub header: Option<RemoteAuthHeaderConfig>,
 }
 
-impl ProviderAuthConfig {
-    fn to_core(&self) -> Result<CoreProviderAuth> {
+impl RemoteAuthConfig {
+    fn to_core(&self) -> Result<CoreRemoteAuth> {
         match (&self.bearer, &self.header) {
-            (Some(token), None) => Ok(CoreProviderAuth::Bearer(CoreSecretString::new(
-                token.clone(),
-            ))),
-            (None, Some(header)) => Ok(CoreProviderAuth::Header {
+            (Some(token), None) => Ok(CoreRemoteAuth::Bearer(CoreRemoteSecret::new(token.clone()))),
+            (None, Some(header)) => Ok(CoreRemoteAuth::Header {
                 name: header.name.clone(),
-                value: CoreSecretString::new(header.value.clone()),
+                value: CoreRemoteSecret::new(header.value.clone()),
             }),
-            (Some(_), Some(_)) => Err(invalid_arg("provider auth must set bearer or header")),
-            (None, None) => Err(invalid_arg("provider auth is required")),
+            (Some(_), Some(_)) => Err(invalid_arg("remote auth must set bearer or header")),
+            (None, None) => Err(invalid_arg("remote auth is required")),
         }
     }
 }
 
 #[napi(object)]
-pub struct ProviderProxyConfig {
-    #[napi(js_name = "baseUrl")]
-    pub base_url: String,
-    pub auth: ProviderAuthConfig,
-    pub protocol: Option<ProviderProxyProtocol>,
-    #[napi(js_name = "staticHeaders")]
-    pub static_headers: Option<Vec<ProviderStaticHeaderConfig>>,
-    #[napi(js_name = "timeoutMs")]
-    pub timeout_ms: Option<u32>,
-}
-
-impl ProviderProxyConfig {
-    fn to_core(&self) -> Result<CoreProxyConfig> {
-        Ok(CoreProxyConfig {
-            base_url: self.base_url.clone(),
-            auth: self.auth.to_core()?,
-            protocol: self
-                .protocol
-                .unwrap_or(ProviderProxyProtocol::OpenAiCompatible)
-                .into(),
-            static_headers: self
-                .static_headers
-                .as_ref()
-                .map(|headers| {
-                    headers
-                        .iter()
-                        .map(|header| (header.name.clone(), header.value.clone()))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            timeout: self
-                .timeout_ms
-                .map(|timeout_ms| Duration::from_millis(u64::from(timeout_ms))),
-        })
-    }
-}
-
-#[napi(object)]
-pub struct ProviderOpenAiConfig {
+pub struct RemoteConfig {
+    pub kind: String,
+    pub model: String,
     #[napi(js_name = "apiKey")]
-    pub api_key: String,
-    #[napi(js_name = "baseUrl")]
-    pub base_url: Option<String>,
-    #[napi(js_name = "timeoutMs")]
-    pub timeout_ms: Option<u32>,
-}
-
-impl ProviderOpenAiConfig {
-    fn to_core(&self) -> CoreOpenAiConfig {
-        CoreOpenAiConfig {
-            api_key: CoreSecretString::new(self.api_key.clone()),
-            base_url: self.base_url.clone(),
-            timeout: self
-                .timeout_ms
-                .map(|timeout_ms| Duration::from_millis(u64::from(timeout_ms))),
-        }
-    }
-}
-
-#[napi(object)]
-pub struct ProviderAnthropicConfig {
-    #[napi(js_name = "apiKey")]
-    pub api_key: String,
+    pub api_key: Option<String>,
     #[napi(js_name = "baseUrl")]
     pub base_url: Option<String>,
     pub version: Option<String>,
+    pub auth: Option<RemoteAuthConfig>,
+    pub protocol: Option<RemoteProxyProtocol>,
+    #[napi(js_name = "staticHeaders")]
+    pub static_headers: Option<Vec<RemoteStaticHeaderConfig>>,
     #[napi(js_name = "timeoutMs")]
     pub timeout_ms: Option<u32>,
 }
 
-impl ProviderAnthropicConfig {
-    fn to_core(&self) -> CoreAnthropicConfig {
-        CoreAnthropicConfig {
-            api_key: CoreSecretString::new(self.api_key.clone()),
-            base_url: self.base_url.clone(),
-            version: self.version.clone(),
-            timeout: self
-                .timeout_ms
-                .map(|timeout_ms| Duration::from_millis(u64::from(timeout_ms))),
+impl RemoteConfig {
+    fn to_core(&self) -> Result<CoreRemoteConfig> {
+        let timeout = self
+            .timeout_ms
+            .map(|timeout_ms| Duration::from_millis(u64::from(timeout_ms)));
+        match self.kind.as_str() {
+            "openai" => Ok(CoreRemoteConfig::OpenAi(CoreRemoteOpenAiConfig {
+                model: self.model.clone(),
+                api_key: CoreRemoteSecret::new(
+                    self.api_key
+                        .clone()
+                        .ok_or_else(|| invalid_arg("openai remote requires apiKey"))?,
+                ),
+                base_url: self.base_url.clone(),
+                timeout,
+            })),
+            "anthropic" => Ok(CoreRemoteConfig::Anthropic(CoreRemoteAnthropicConfig {
+                model: self.model.clone(),
+                api_key: CoreRemoteSecret::new(
+                    self.api_key
+                        .clone()
+                        .ok_or_else(|| invalid_arg("anthropic remote requires apiKey"))?,
+                ),
+                base_url: self.base_url.clone(),
+                version: self.version.clone(),
+                timeout,
+            })),
+            "proxy" => Ok(CoreRemoteConfig::Proxy(CoreRemoteProxyConfig {
+                model: self.model.clone(),
+                base_url: self
+                    .base_url
+                    .clone()
+                    .ok_or_else(|| invalid_arg("proxy remote requires baseUrl"))?,
+                auth: self
+                    .auth
+                    .as_ref()
+                    .ok_or_else(|| invalid_arg("proxy remote requires auth"))?
+                    .to_core()?,
+                protocol: self
+                    .protocol
+                    .unwrap_or(RemoteProxyProtocol::OpenAiCompatible)
+                    .into(),
+                static_headers: self
+                    .static_headers
+                    .as_ref()
+                    .map(|headers| {
+                        headers
+                            .iter()
+                            .map(|header| (header.name.clone(), header.value.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                timeout,
+            })),
+            _ => Err(invalid_arg(
+                "remote kind must be openai, anthropic, or proxy",
+            )),
         }
     }
 }
 
 #[napi(object)]
-pub struct ProviderGenerationOptions {
-    #[napi(js_name = "maxTokens")]
-    pub max_tokens: Option<u32>,
-    pub temperature: Option<f64>,
-    #[napi(js_name = "topP")]
-    pub top_p: Option<f64>,
-    pub stop: Option<Vec<String>>,
-}
-
-impl ProviderGenerationOptions {
-    fn to_core(&self) -> Result<CoreProviderGenerationOptions> {
-        if self.max_tokens == Some(0) {
-            return Err(invalid_arg("maxTokens must be greater than zero"));
-        }
-        Ok(CoreProviderGenerationOptions {
-            max_tokens: self.max_tokens,
-            temperature: self
-                .temperature
-                .map(|value| provider_f64_to_f32(value, "temperature"))
-                .transpose()?,
-            top_p: self
-                .top_p
-                .map(|value| provider_f64_to_f32(value, "topP"))
-                .transpose()?,
-            stop: self.stop.clone().unwrap_or_default(),
-        })
-    }
-}
-
-#[napi(object)]
-pub struct ProviderChatRequest {
-    pub model: String,
-    pub messages: Vec<ChatMessage>,
-    pub options: Option<ProviderGenerationOptions>,
-    #[napi(js_name = "providerOptions")]
-    pub provider_options: Option<serde_json::Value>,
-}
-
-#[napi(object)]
-pub struct ProviderGenerateRequest {
-    pub model: String,
-    pub prompt: String,
-    pub options: Option<ProviderGenerationOptions>,
-    #[napi(js_name = "providerOptions")]
-    pub provider_options: Option<serde_json::Value>,
-}
-
-#[napi(object)]
-pub struct ProviderEmbedRequest {
-    pub model: String,
-    pub input: String,
-    #[napi(js_name = "providerOptions")]
-    pub provider_options: Option<serde_json::Value>,
-}
-
-#[napi(string_enum = "snake_case")]
-#[derive(Clone, Copy)]
-pub enum ProviderCapabilitySupport {
-    Supported,
-    Unsupported,
-    Unknown,
-}
-
-impl From<CoreProviderCapabilitySupport> for ProviderCapabilitySupport {
-    fn from(value: CoreProviderCapabilitySupport) -> Self {
-        match value {
-            CoreProviderCapabilitySupport::Supported => Self::Supported,
-            CoreProviderCapabilitySupport::Unsupported => Self::Unsupported,
-            CoreProviderCapabilitySupport::Unknown => Self::Unknown,
-        }
-    }
-}
-
-#[napi(object)]
-pub struct ProviderModelCapabilities {
-    pub chat: ProviderCapabilitySupport,
-    pub generate: ProviderCapabilitySupport,
-    pub embeddings: ProviderCapabilitySupport,
-    pub streaming: ProviderCapabilitySupport,
-}
-
-#[napi(object)]
-pub struct ProviderModel {
-    pub id: String,
-    pub provider: String,
-    #[napi(js_name = "displayName")]
-    pub display_name: Option<String>,
-    pub capabilities: ProviderModelCapabilities,
-    #[napi(js_name = "contextWindow")]
-    pub context_window: Option<u32>,
-    #[napi(js_name = "maxOutputTokens")]
-    pub max_output_tokens: Option<u32>,
-    pub raw: serde_json::Value,
-}
-
-#[napi(object)]
-pub struct ProviderTextOutput {
-    pub text: String,
-    #[napi(js_name = "finishReason")]
-    pub finish_reason: String,
-}
-
-#[napi(object)]
-pub struct ProviderEmbeddingOutput {
-    pub values: Vec<f64>,
-}
-
-#[napi(object)]
-#[derive(Clone, Copy)]
-pub struct ProviderTokenUsage {
+pub struct TokenUsage {
     #[napi(js_name = "inputTokens")]
     pub input_tokens: Option<u32>,
     #[napi(js_name = "outputTokens")]
@@ -931,272 +879,22 @@ pub struct ProviderTokenUsage {
 }
 
 #[napi(object)]
-pub struct ProviderResponseMetadata {
-    pub provider: String,
-    pub model: String,
-    #[napi(js_name = "requestId")]
-    pub request_id: Option<String>,
-    #[napi(js_name = "responseId")]
-    pub response_id: Option<String>,
-    #[napi(js_name = "finishReasonRaw")]
-    pub finish_reason_raw: Option<String>,
-    pub raw: serde_json::Value,
-}
-
-#[napi(object)]
-pub struct ProviderChatResponse {
-    pub result: ProviderTextOutput,
-    pub usage: Option<ProviderTokenUsage>,
-    pub metadata: ProviderResponseMetadata,
-}
-
-#[napi(object)]
-pub struct ProviderGenerateResponse {
-    pub result: ProviderTextOutput,
-    pub usage: Option<ProviderTokenUsage>,
-    pub metadata: ProviderResponseMetadata,
-}
-
-#[napi(object)]
-pub struct ProviderEmbeddingResponse {
-    pub result: ProviderEmbeddingOutput,
-    pub usage: Option<ProviderTokenUsage>,
-    pub metadata: ProviderResponseMetadata,
-}
-
-#[napi(object)]
-pub struct ProviderStreamResult {
-    pub usage: Option<ProviderTokenUsage>,
-    #[napi(js_name = "finishReason")]
-    pub finish_reason: Option<String>,
-}
-
-#[napi(object)]
-pub struct BackendDevice {
-    pub id: Option<String>,
-    pub name: String,
-    pub r#type: String,
-    pub memory_total_bytes: Option<f64>,
-    pub memory_free_bytes: Option<f64>,
-}
-
-#[napi(object)]
-pub struct BackendInfo {
-    pub selected: String,
-    pub available: Vec<String>,
-    pub devices: Vec<BackendDevice>,
-}
-
-#[napi(object)]
-pub struct BackendSelection {
-    pub requested: String,
-    pub selected: String,
-    pub available: Vec<String>,
-    pub gpu_offload_expected: bool,
-    pub reason: Option<String>,
-}
-
-#[napi(object)]
-pub struct ManagedModelInfo {
-    pub id: String,
-    pub name: String,
-    pub modality: String,
-    pub status: String,
-    pub source: String,
-    pub bytes: f64,
-    pub loaded: bool,
-    pub chat_template: Option<String>,
-    pub bos_text: String,
-    pub eos_text: String,
-    pub media_marker: Option<String>,
-    pub created_at_unix_ms: f64,
-    pub updated_at_unix_ms: f64,
-}
-
-#[napi(object)]
-pub struct LoadedModelInfo {
-    pub model: ManagedModelInfo,
-    pub backend: BackendSelection,
-    pub runtime_fingerprint: String,
-}
-
-#[napi(object)]
-pub struct ModelState {
-    pub id: String,
-    pub name: String,
-    pub capabilities: ModelCapabilities,
-}
-
-#[napi(object)]
-pub struct ModelCapabilities {
-    pub model_class: ModelClass,
-    pub supports_text_generation: bool,
-    pub supports_embeddings: bool,
-    pub has_chat_template: bool,
-    pub embedding: Option<EmbeddingCapabilities>,
-}
-
-#[napi(object)]
-pub struct EmbeddingCapabilities {
-    pub dimensions: i32,
-    pub pooling: PoolingType,
-}
-
-#[napi(object)]
-pub struct RequestState {
-    pub id: String,
-    pub status: String,
+pub struct RequestStats {
     pub input_tokens: i32,
     pub output_tokens: i32,
-}
-
-#[napi(object)]
-pub struct EngineStats {
-    pub requests_running: i32,
-    pub requests_queued: i32,
-    pub requests_completed: f64,
-    pub requests_failed: f64,
-    pub input_tokens: f64,
-    pub output_tokens: f64,
-    pub cache_hits: f64,
-    pub prefill_tokens: f64,
+    pub cache_mode: String,
+    pub cache_source: String,
+    pub cache_hits: i32,
+    pub prefill_tokens: i32,
     pub ttft_ms: Option<f64>,
     pub inter_token_ms: Option<f64>,
+    #[napi(js_name = "e2eMs")]
     pub e2e_ms: Option<f64>,
-    pub tokens_per_second: Option<f64>,
+    pub e2e_tokens_per_second: Option<f64>,
     pub decode_tokens_per_second: Option<f64>,
     pub prefill_tokens_per_second: Option<f64>,
     pub prefill_ms: f64,
     pub decode_ms: f64,
-    pub backend_ms: f64,
-    pub sync_ms: f64,
-    pub engine_overhead_ms: f64,
-    pub debug_metrics_scheduler_ticks: f64,
-    pub debug_metrics_decode_ticks: f64,
-    pub debug_metrics_prefill_ticks: f64,
-    pub debug_metrics_backend_sampler_attach_attempts: f64,
-    pub debug_metrics_backend_sampler_attach_failures: f64,
-    pub debug_metrics_admit_ms: f64,
-    pub debug_metrics_normalize_ms: f64,
-    pub debug_metrics_backend_sampler_attach_ms: f64,
-    pub debug_metrics_select_slots_ms: f64,
-    pub debug_metrics_plan_ms: f64,
-    pub debug_metrics_batch_build_ms: f64,
-    pub debug_metrics_llama_decode_ms: f64,
-    pub debug_metrics_llama_sync_ms: f64,
-    pub debug_metrics_apply_bookkeeping_ms: f64,
-    pub debug_metrics_apply_decode_results_ms: f64,
-    pub debug_metrics_sample_ms: f64,
-    pub debug_metrics_token_piece_ms: f64,
-    pub debug_metrics_emit_ms: f64,
-    pub debug_metrics_prefix_queue_ms: f64,
-    pub debug_metrics_finalize_ms: f64,
-    pub debug_metrics_commit_observability_ms: f64,
-    pub debug_metrics_post_decode_ms: f64,
-}
-
-#[napi(object)]
-pub struct ResolvedRuntimeLimits {
-    pub n_ctx: i32,
-    pub n_batch: i32,
-    pub n_ubatch: i32,
-    pub n_parallel: i32,
-    pub kv_unified: bool,
-    pub flash_attention: String,
-    pub cache_type_k: String,
-    pub cache_type_v: String,
-}
-
-#[napi(object)]
-pub struct EngineState {
-    pub status: String,
-    pub model: Option<ModelState>,
-    pub backend: BackendInfo,
-    pub runtime: Option<ResolvedRuntimeLimits>,
-    pub requests: Vec<RequestState>,
-    pub stats: EngineStats,
-    pub updated_at_unix_ms: f64,
-}
-
-#[napi(object)]
-pub struct ModelServiceState {
-    pub status: String,
-    pub model: Option<ManagedModelInfo>,
-    pub backend: BackendInfo,
-    pub runtime: Option<ResolvedRuntimeLimits>,
-    pub requests: Vec<RequestState>,
-    pub stats: EngineStats,
-    pub updated_at_unix_ms: f64,
-}
-
-struct StateTail {
-    backend: BackendInfo,
-    runtime: Option<ResolvedRuntimeLimits>,
-    requests: Vec<RequestState>,
-    stats: EngineStats,
-    updated_at_unix_ms: f64,
-}
-
-#[napi(object)]
-pub struct RequestStats {
-    pub input_tokens: i32,
-    pub output_tokens: i32,
-    pub cache_hits: i32,
-    pub ttft_ms: Option<f64>,
-    pub inter_token_ms: Option<f64>,
-    pub e2e_ms: Option<f64>,
-    pub tokens_per_second: Option<f64>,
-    pub decode_tokens_per_second: Option<f64>,
-    pub prefill_ms: f64,
-    pub decode_ms: f64,
-    pub debug_metrics_scheduler_ticks: i32,
-    pub debug_metrics_decode_ticks: i32,
-    pub debug_metrics_prefill_ticks: i32,
-    pub debug_metrics_backend_sampler_attach_attempts: i32,
-    pub debug_metrics_backend_sampler_attach_failures: i32,
-    pub debug_metrics_admit_ms: f64,
-    pub debug_metrics_normalize_ms: f64,
-    pub debug_metrics_backend_sampler_attach_ms: f64,
-    pub debug_metrics_select_slots_ms: f64,
-    pub debug_metrics_plan_ms: f64,
-    pub debug_metrics_batch_build_ms: f64,
-    pub debug_metrics_llama_decode_ms: f64,
-    pub debug_metrics_llama_sync_ms: f64,
-    pub debug_metrics_apply_bookkeeping_ms: f64,
-    pub debug_metrics_apply_decode_results_ms: f64,
-    pub debug_metrics_sample_ms: f64,
-    pub debug_metrics_token_piece_ms: f64,
-    pub debug_metrics_emit_ms: f64,
-    pub debug_metrics_prefix_queue_ms: f64,
-    pub debug_metrics_finalize_ms: f64,
-    pub debug_metrics_commit_observability_ms: f64,
-    pub debug_metrics_post_decode_ms: f64,
-}
-
-#[napi(object)]
-pub struct GenerationResult {
-    pub id: String,
-    pub text: String,
-    pub finish_reason: String,
-    pub stats: RequestStats,
-}
-
-#[napi(string_enum = "snake_case")]
-#[derive(Clone, Copy)]
-pub enum ModelClass {
-    DecoderOnly,
-    EncoderDecoder,
-    EncoderOnly,
-}
-
-impl From<cogentlm_engine::engine::ModelClass> for ModelClass {
-    fn from(value: cogentlm_engine::engine::ModelClass) -> Self {
-        match value {
-            cogentlm_engine::engine::ModelClass::DecoderOnly => Self::DecoderOnly,
-            cogentlm_engine::engine::ModelClass::EncoderDecoder => Self::EncoderDecoder,
-            cogentlm_engine::engine::ModelClass::EncoderOnly => Self::EncoderOnly,
-        }
-    }
 }
 
 #[napi(string_enum = "snake_case")]
@@ -1237,145 +935,76 @@ impl From<CorePoolingType> for PoolingType {
 }
 
 #[napi(object)]
-pub struct EmbedOptions {
-    pub normalize: Option<bool>,
-    pub context_key: Option<String>,
+pub struct CogentTextResponse {
+    pub endpoint: EndpointRef,
+    pub text: String,
+    #[napi(js_name = "finishReason")]
+    pub finish_reason: String,
+    pub usage: Option<TokenUsage>,
+    #[napi(js_name = "localStats")]
+    pub local_stats: Option<RequestStats>,
 }
 
 #[napi(object)]
-pub struct EmbedRequest {
-    pub input: String,
-    pub options: Option<EmbedOptions>,
-}
-
-impl EmbedRequest {
-    fn into_core(self) -> CoreEmbedRequest {
-        let mut options = CoreEmbedOptions::default();
-        if let Some(napi_options) = self.options {
-            if let Some(normalize) = napi_options.normalize {
-                options.normalize = normalize;
-            }
-            options.context_key = napi_options.context_key;
-        }
-        CoreEmbedRequest {
-            input: self.input,
-            options,
-        }
-    }
-}
-
-#[napi(object)]
-pub struct EmbeddingResult {
-    pub id: String,
+pub struct CogentEmbeddingResponse {
+    pub endpoint: EndpointRef,
     pub values: Vec<f64>,
-    pub pooling: PoolingType,
-    pub normalized: bool,
-    pub stats: RequestStats,
+    pub usage: Option<TokenUsage>,
+    #[napi(js_name = "localStats")]
+    pub local_stats: Option<RequestStats>,
+    pub pooling: Option<PoolingType>,
+    pub normalized: Option<bool>,
 }
 
-fn embedding_result_to_node(result: CoreEmbeddingResult) -> EmbeddingResult {
-    EmbeddingResult {
-        id: result.id,
-        // napi's number type is f64; widen at the boundary so the JS-side
-        // signature matches the existing observability metric pattern.
-        values: result.values.into_iter().map(f64::from).collect(),
-        pooling: PoolingType::from(result.pooling),
-        normalized: result.normalized,
-        stats: request_stats_to_node(result.stats),
+fn endpoint_ref_to_node(endpoint: CoreEndpointRef) -> EndpointRef {
+    match endpoint {
+        CoreEndpointRef::Local { id } => EndpointRef {
+            kind: "local".to_string(),
+            id,
+        },
+        CoreEndpointRef::Remote { id } => EndpointRef {
+            kind: "remote".to_string(),
+            id,
+        },
     }
 }
 
-fn provider_model_to_node(model: CoreProviderModel) -> ProviderModel {
-    ProviderModel {
-        id: model.id,
-        provider: model.provider.as_str().to_string(),
-        display_name: model.display_name,
-        capabilities: provider_capabilities_to_node(model.capabilities),
-        context_window: model.context_window,
-        max_output_tokens: model.max_output_tokens,
-        raw: model.raw,
-    }
-}
-
-fn provider_capabilities_to_node(
-    capabilities: CoreProviderCapabilities,
-) -> ProviderModelCapabilities {
-    ProviderModelCapabilities {
-        chat: capabilities.chat.into(),
-        generate: capabilities.generate.into(),
-        embeddings: capabilities.embeddings.into(),
-        streaming: capabilities.streaming.into(),
-    }
-}
-
-fn provider_text_output_to_node(output: CoreProviderTextOutput) -> ProviderTextOutput {
-    ProviderTextOutput {
-        text: output.text,
-        finish_reason: output.finish_reason.as_str().to_string(),
-    }
-}
-
-fn provider_embedding_output_to_node(
-    output: CoreProviderEmbeddingOutput,
-) -> ProviderEmbeddingOutput {
-    ProviderEmbeddingOutput {
-        values: output.values.into_iter().map(f64::from).collect(),
-    }
-}
-
-fn provider_usage_to_node(usage: CoreTokenUsage) -> ProviderTokenUsage {
-    ProviderTokenUsage {
+fn token_usage_to_node(usage: CoreTokenUsage) -> TokenUsage {
+    TokenUsage {
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
         total_tokens: usage.total_tokens,
     }
 }
 
-fn provider_metadata_to_node(metadata: CoreProviderResponseMetadata) -> ProviderResponseMetadata {
-    ProviderResponseMetadata {
-        provider: metadata.provider.as_str().to_string(),
-        model: metadata.model,
-        request_id: metadata.request_id,
-        response_id: metadata.response_id,
-        finish_reason_raw: metadata.finish_reason_raw,
-        raw: metadata.raw,
+fn cogent_text_response_to_node(response: CoreClientTextResponse) -> CogentTextResponse {
+    CogentTextResponse {
+        endpoint: endpoint_ref_to_node(response.endpoint),
+        text: response.text,
+        finish_reason: response.finish_reason.as_str().to_string(),
+        usage: response.usage.map(token_usage_to_node),
+        local_stats: response.local_stats.map(request_stats_to_node),
     }
 }
 
-fn provider_chat_response_to_node(response: CoreProviderChatResponse) -> ProviderChatResponse {
-    ProviderChatResponse {
-        result: provider_text_output_to_node(response.result),
-        usage: response.usage.map(provider_usage_to_node),
-        metadata: provider_metadata_to_node(response.metadata),
-    }
-}
-
-fn provider_generate_response_to_node(
-    response: CoreProviderGenerateResponse,
-) -> ProviderGenerateResponse {
-    ProviderGenerateResponse {
-        result: provider_text_output_to_node(response.result),
-        usage: response.usage.map(provider_usage_to_node),
-        metadata: provider_metadata_to_node(response.metadata),
-    }
-}
-
-fn provider_embedding_response_to_node(
-    response: CoreProviderEmbeddingResponse,
-) -> ProviderEmbeddingResponse {
-    ProviderEmbeddingResponse {
-        result: provider_embedding_output_to_node(response.result),
-        usage: response.usage.map(provider_usage_to_node),
-        metadata: provider_metadata_to_node(response.metadata),
+fn cogent_embedding_response_to_node(
+    response: CoreClientEmbeddingResponse,
+) -> CogentEmbeddingResponse {
+    CogentEmbeddingResponse {
+        endpoint: endpoint_ref_to_node(response.endpoint),
+        values: response.values.into_iter().map(f64::from).collect(),
+        usage: response.usage.map(token_usage_to_node),
+        local_stats: response.local_stats.map(request_stats_to_node),
+        pooling: response.pooling.map(PoolingType::from),
+        normalized: response.normalized,
     }
 }
 
 #[napi(object)]
 #[derive(Clone)]
-pub struct StreamStats {
+pub struct TokenEmissionStats {
     pub frames_sent: f64,
     pub bytes_sent: f64,
-    pub frames_dropped: f64,
     pub batches_sent: f64,
 }
 
@@ -1388,732 +1017,252 @@ pub struct TokenBatch {
     pub text: String,
     pub frame_count: u32,
     pub byte_count: u32,
-    pub stats: StreamStats,
+    pub stats: TokenEmissionStats,
 }
 
-#[napi(object)]
-pub struct EngineEvent {
-    pub r#type: String,
-    pub state: Option<EngineState>,
-    pub loaded_bytes: Option<f64>,
-    pub total_bytes: Option<f64>,
-    pub asset_name: Option<String>,
-    pub request_id: Option<String>,
-    pub stream_id: Option<u32>,
-    pub error: Option<String>,
-}
-
-#[napi(js_name = "CogentEngine")]
-pub struct CogentEngine {
-    inner: SharedEngine,
-    events: SharedEvents,
+#[napi(js_name = "CogentClient")]
+pub struct CogentClient {
+    inner: SharedCogentClient,
 }
 
 #[napi]
-impl CogentEngine {
-    #[napi(ts_return_type = "Promise<CogentEngine>")]
-    pub fn load(
+impl CogentClient {
+    #[napi(constructor)]
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            inner: Arc::new(Mutex::new(CoreClient::new())),
+        })
+    }
+
+    #[napi(ts_return_type = "Promise<EndpointRef>")]
+    pub fn add_local(
+        &self,
+        id: String,
         model_path: String,
         config: Option<NativeRuntimeConfig>,
-    ) -> Result<AsyncTask<LoadTask>> {
+    ) -> Result<AsyncTask<ClientAddLocalTask>> {
         let config = config
             .as_ref()
             .map(NativeRuntimeConfig::to_core)
             .transpose()?
             .unwrap_or_default();
-        Ok(AsyncTask::new(LoadTask { model_path, config }))
-    }
-
-    #[napi(ts_return_type = "Promise<GenerationResult>")]
-    pub fn query(
-        &self,
-        prompt: String,
-        options: Option<QueryOptions>,
-        on_tokens: Option<TokenBatchCallback>,
-    ) -> Result<AsyncTask<QueryTask>> {
-        let options = optional_core_or_default(options.as_ref(), QueryOptions::to_core)?;
-        Ok(AsyncTask::new(QueryTask {
-            engine: self.inner.clone(),
-            prompt,
-            options,
-            on_tokens,
+        Ok(AsyncTask::new(ClientAddLocalTask {
+            client: self.inner.clone(),
+            id,
+            model_path,
+            config,
         }))
     }
 
-    #[napi(ts_return_type = "Promise<GenerationResult>")]
-    pub fn chat(
-        &self,
-        messages: Vec<ChatMessage>,
-        options: Option<QueryOptions>,
-        on_tokens: Option<TokenBatchCallback>,
-    ) -> Result<AsyncTask<ChatTextTask>> {
-        let options = optional_core_or_default(options.as_ref(), QueryOptions::to_core)?;
-        Ok(AsyncTask::new(ChatTextTask {
-            engine: self.inner.clone(),
-            messages: chat_messages_to_core(messages)?,
-            options,
-            on_tokens,
-        }))
-    }
-
-    #[napi(ts_return_type = "Promise<EmbeddingResult>")]
-    pub fn embed(&self, request: EmbedRequest) -> Result<AsyncTask<EmbedTask>> {
-        Ok(AsyncTask::new(EmbedTask {
-            engine: self.inner.clone(),
-            request: Some(request.into_core()),
-        }))
-    }
-
-    #[napi(ts_return_type = "Promise<EngineState>")]
-    pub fn state(&self) -> Result<AsyncTask<StateTask>> {
-        Ok(AsyncTask::new(StateTask {
-            engine: self.inner.clone(),
-        }))
-    }
-
-    #[napi]
-    pub fn drain_events(&self) -> Result<Vec<EngineEvent>> {
-        let events = self
-            .events
+    #[napi(ts_return_type = "EndpointRef")]
+    pub fn add_remote(&self, id: String, config: RemoteConfig) -> Result<EndpointRef> {
+        let endpoint = self
+            .inner
             .lock()
-            .map_err(|_| napi_error(ENGINE_EVENTS_MUTEX_POISONED))?;
-        Ok(events.try_iter().map(engine_event_to_node).collect())
+            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
+            .add_remote(id, config.to_core()?)
+            .map_err(client_error_without_env)?;
+        Ok(endpoint_ref_to_node(endpoint))
+    }
+
+    #[napi(ts_return_type = "CogentTextRun")]
+    pub fn query(&self, request: CogentQueryRequest) -> Result<CogentTextRun> {
+        let request = request.to_core()?;
+        let run = self
+            .inner
+            .lock()
+            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
+            .query(request);
+        Ok(CogentTextRun::from_core(run))
+    }
+
+    #[napi(ts_return_type = "CogentTextRun")]
+    pub fn chat(&self, request: CogentChatRequest) -> Result<CogentTextRun> {
+        let request = request.to_core()?;
+        let run = self
+            .inner
+            .lock()
+            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
+            .chat(request);
+        Ok(CogentTextRun::from_core(run))
+    }
+
+    #[napi(ts_return_type = "CogentEmbeddingRun")]
+    pub fn embed(&self, request: CogentEmbedRequest) -> Result<CogentEmbeddingRun> {
+        let request = request.to_core()?;
+        let run = self
+            .inner
+            .lock()
+            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
+            .embed(request);
+        Ok(CogentEmbeddingRun::from_core(run))
     }
 }
 
-#[napi(js_name = "ModelService")]
-pub struct ModelService {
-    inner: SharedModelService,
-    events: SharedModelEvents,
+#[napi(js_name = "CogentTextRun")]
+pub struct CogentTextRun {
+    response: SharedClientTextResponse,
+    tokens: SharedClientTokenBatches,
+}
+
+impl CogentTextRun {
+    fn from_core(run: CoreClientTextRun) -> Self {
+        let (tokens, response) = run.into_parts();
+        Self {
+            response: Arc::new(Mutex::new(Some(response))),
+            tokens: Arc::new(Mutex::new(Some(tokens))),
+        }
+    }
 }
 
 #[napi]
-impl ModelService {
-    #[napi(constructor)]
-    pub fn new(store_path: String) -> Result<Self> {
-        Ok(Self {
-            inner: Arc::new(Mutex::new(Some(
-                CoreModelService::local(store_path).map_err(model_error)?,
-            ))),
-            events: Arc::new(Mutex::new(None)),
+impl CogentTextRun {
+    #[napi(js_name = "__response", ts_return_type = "Promise<CogentTextResponse>")]
+    pub fn response(&self) -> AsyncTask<ClientTextResultTask> {
+        AsyncTask::new(ClientTextResultTask {
+            response: self.response.clone(),
         })
     }
 
-    #[napi(ts_return_type = "Promise<LoadedModelInfo>")]
-    pub fn load_path(
-        &self,
-        model_path: String,
-        options: Option<ModelLoadOptions>,
-    ) -> Result<AsyncTask<ModelLoadPathTask>> {
-        Ok(AsyncTask::new(ModelLoadPathTask {
-            service: self.inner.clone(),
-            events: self.events.clone(),
-            model_path,
-            options: optional_core_or_default(options.as_ref(), ModelLoadOptions::to_core)?,
-        }))
-    }
-
-    #[napi(ts_return_type = "Promise<LoadedModelInfo>")]
-    pub fn load_vision(
-        &self,
-        model_path: String,
-        projector_path: String,
-        options: Option<ModelLoadOptions>,
-    ) -> Result<AsyncTask<ModelLoadVisionTask>> {
-        Ok(AsyncTask::new(ModelLoadVisionTask {
-            service: self.inner.clone(),
-            events: self.events.clone(),
-            model_path,
-            projector_path,
-            options: optional_core_or_default(options.as_ref(), ModelLoadOptions::to_core)?,
-        }))
-    }
-
-    #[napi(ts_return_type = "Promise<void>")]
-    pub fn unload(&self) -> AsyncTask<ModelUnloadTask> {
-        AsyncTask::new(ModelUnloadTask {
-            service: self.inner.clone(),
-            events: self.events.clone(),
+    #[napi(js_name = "__nextToken", ts_return_type = "Promise<TokenBatch | null>")]
+    pub fn next_token(&self) -> AsyncTask<ClientNextTokenTask> {
+        AsyncTask::new(ClientNextTokenTask {
+            tokens: self.tokens.clone(),
         })
-    }
-
-    #[napi(ts_return_type = "Promise<void>")]
-    pub fn remove(&self, model_id: String) -> AsyncTask<ModelRemoveTask> {
-        AsyncTask::new(ModelRemoveTask {
-            service: self.inner.clone(),
-            model_id,
-        })
-    }
-
-    #[napi]
-    pub fn list(&self) -> Result<Vec<ManagedModelInfo>> {
-        with_model_service(&self.inner, |service| Ok(service.list()))
-            .map(|models| models.into_iter().map(model_info_to_node).collect())
-    }
-
-    #[napi]
-    pub fn current(&self) -> Result<Option<ManagedModelInfo>> {
-        with_model_service(&self.inner, |service| Ok(service.current()))
-            .map(|model| model.map(model_info_to_node))
-    }
-
-    #[napi(ts_return_type = "Promise<GenerationResult>")]
-    pub fn query(
-        &self,
-        prompt: String,
-        options: Option<QueryOptions>,
-        on_tokens: Option<TokenBatchCallback>,
-    ) -> Result<AsyncTask<ModelQueryTask>> {
-        Ok(AsyncTask::new(ModelQueryTask {
-            service: self.inner.clone(),
-            prompt,
-            options: optional_core_or_default(options.as_ref(), QueryOptions::to_core)?,
-            on_tokens,
-        }))
-    }
-
-    #[napi(ts_return_type = "Promise<GenerationResult>")]
-    pub fn chat(
-        &self,
-        messages: Vec<ChatMessage>,
-        options: Option<QueryOptions>,
-        on_tokens: Option<TokenBatchCallback>,
-    ) -> Result<AsyncTask<ModelChatTask>> {
-        Ok(AsyncTask::new(ModelChatTask {
-            service: self.inner.clone(),
-            messages: chat_messages_to_core(messages)?,
-            options: optional_core_or_default(options.as_ref(), QueryOptions::to_core)?,
-            on_tokens,
-        }))
-    }
-
-    #[napi(ts_return_type = "Promise<EmbeddingResult>")]
-    pub fn embed(&self, request: EmbedRequest) -> Result<AsyncTask<ModelEmbedTask>> {
-        Ok(AsyncTask::new(ModelEmbedTask {
-            service: self.inner.clone(),
-            request: Some(request.into_core()),
-        }))
-    }
-
-    #[napi(ts_return_type = "Promise<ModelServiceState>")]
-    pub fn state(&self) -> Result<AsyncTask<ModelStateTask>> {
-        Ok(AsyncTask::new(ModelStateTask {
-            service: self.inner.clone(),
-        }))
-    }
-
-    #[napi]
-    pub fn drain_events(&self) -> Result<Vec<EngineEvent>> {
-        let events = self
-            .events
-            .lock()
-            .map_err(|_| napi_error(MODEL_SERVICE_EVENTS_MUTEX_POISONED))?;
-        Ok(events
-            .as_ref()
-            .map(|events| events.try_iter().map(engine_event_to_node).collect())
-            .unwrap_or_default())
     }
 }
 
-#[napi(js_name = "ProviderClient")]
-pub struct ProviderClient {
-    inner: CoreProviderClient,
+#[napi(js_name = "CogentEmbeddingRun")]
+pub struct CogentEmbeddingRun {
+    response: SharedClientEmbeddingResponse,
+}
+
+impl CogentEmbeddingRun {
+    fn from_core(run: CoreClientEmbeddingRun) -> Self {
+        Self {
+            response: Arc::new(Mutex::new(Some(run.into_response()))),
+        }
+    }
 }
 
 #[napi]
-impl ProviderClient {
-    #[napi]
-    pub fn proxy(env: Env, config: ProviderProxyConfig) -> Result<Self> {
-        Ok(Self {
-            inner: CoreProviderClient::proxy(config.to_core()?)
-                .map_err(|error| provider_error_to_node(env, error))?,
-        })
-    }
-
-    #[napi]
-    pub fn openai(env: Env, config: ProviderOpenAiConfig) -> Result<Self> {
-        Ok(Self {
-            inner: CoreProviderClient::openai(config.to_core())
-                .map_err(|error| provider_error_to_node(env, error))?,
-        })
-    }
-
-    #[napi]
-    pub fn anthropic(env: Env, config: ProviderAnthropicConfig) -> Result<Self> {
-        Ok(Self {
-            inner: CoreProviderClient::anthropic(config.to_core())
-                .map_err(|error| provider_error_to_node(env, error))?,
-        })
-    }
-
-    #[napi]
-    pub fn kind(&self) -> String {
-        self.inner.kind().as_str().to_string()
-    }
-
-    #[napi(ts_return_type = "Promise<ProviderModel[]>")]
-    pub fn list_models(&self) -> AsyncTask<ProviderListModelsTask> {
-        AsyncTask::new(ProviderListModelsTask {
-            client: self.inner.clone(),
-        })
-    }
-
-    #[napi(ts_return_type = "Promise<ProviderModel>")]
-    pub fn get_model(&self, model: String) -> AsyncTask<ProviderGetModelTask> {
-        AsyncTask::new(ProviderGetModelTask {
-            client: self.inner.clone(),
-            model,
-        })
-    }
-
-    #[napi(ts_return_type = "Promise<ProviderChatResponse>")]
-    pub fn chat(&self, request: ProviderChatRequest) -> Result<AsyncTask<ProviderChatTask>> {
-        Ok(AsyncTask::new(ProviderChatTask {
-            client: self.inner.clone(),
-            request: Some(provider_chat_request_to_core(request)?),
-        }))
-    }
-
-    #[napi(ts_return_type = "Promise<ProviderGenerateResponse>")]
-    pub fn generate(
-        &self,
-        request: ProviderGenerateRequest,
-    ) -> Result<AsyncTask<ProviderGenerateTask>> {
-        Ok(AsyncTask::new(ProviderGenerateTask {
-            client: self.inner.clone(),
-            request: Some(provider_generate_request_to_core(request)?),
-        }))
-    }
-
-    #[napi(ts_return_type = "Promise<ProviderEmbeddingResponse>")]
-    pub fn embed(&self, request: ProviderEmbedRequest) -> Result<AsyncTask<ProviderEmbedTask>> {
-        Ok(AsyncTask::new(ProviderEmbedTask {
-            client: self.inner.clone(),
-            request: Some(provider_embed_request_to_core(request)?),
-        }))
-    }
-
-    #[napi(ts_return_type = "Promise<ProviderStreamResult>")]
-    pub fn stream_chat(
-        &self,
-        request: ProviderChatRequest,
-        on_tokens: Option<TokenBatchCallback>,
-    ) -> Result<AsyncTask<ProviderStreamChatTask>> {
-        Ok(AsyncTask::new(ProviderStreamChatTask {
-            client: self.inner.clone(),
-            request: Some(provider_chat_request_to_core(request)?),
-            on_tokens,
-        }))
-    }
-}
-
-pub struct ProviderListModelsTask {
-    client: CoreProviderClient,
-}
-
-impl Task for ProviderListModelsTask {
-    type Output = ProviderTaskOutput<Vec<CoreProviderModel>>;
-    type JsValue = Vec<ProviderModel>;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        Ok(provider_runtime()?.block_on(self.client.list_models()))
-    }
-
-    fn resolve(&mut self, env: Env, models: Self::Output) -> Result<Self::JsValue> {
-        resolve_provider_task(env, models, |models| {
-            models.into_iter().map(provider_model_to_node).collect()
+impl CogentEmbeddingRun {
+    #[napi(
+        js_name = "__response",
+        ts_return_type = "Promise<CogentEmbeddingResponse>"
+    )]
+    pub fn response(&self) -> AsyncTask<ClientEmbeddingResultTask> {
+        AsyncTask::new(ClientEmbeddingResultTask {
+            response: self.response.clone(),
         })
     }
 }
 
-pub struct ProviderGetModelTask {
-    client: CoreProviderClient,
-    model: String,
-}
-
-impl Task for ProviderGetModelTask {
-    type Output = ProviderTaskOutput<CoreProviderModel>;
-    type JsValue = ProviderModel;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        Ok(provider_runtime()?.block_on(self.client.get_model(&self.model)))
-    }
-
-    fn resolve(&mut self, env: Env, model: Self::Output) -> Result<Self::JsValue> {
-        resolve_provider_task(env, model, provider_model_to_node)
-    }
-}
-
-pub struct ProviderChatTask {
-    client: CoreProviderClient,
-    request: Option<CoreProviderChatRequest>,
-}
-
-impl Task for ProviderChatTask {
-    type Output = ProviderTaskOutput<CoreProviderChatResponse>;
-    type JsValue = ProviderChatResponse;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let request = self.request.take().expect("provider chat task runs once");
-        Ok(provider_runtime()?.block_on(self.client.chat(request)))
-    }
-
-    fn resolve(&mut self, env: Env, response: Self::Output) -> Result<Self::JsValue> {
-        resolve_provider_task(env, response, provider_chat_response_to_node)
-    }
-}
-
-pub struct ProviderGenerateTask {
-    client: CoreProviderClient,
-    request: Option<CoreProviderGenerateRequest>,
-}
-
-impl Task for ProviderGenerateTask {
-    type Output = ProviderTaskOutput<CoreProviderGenerateResponse>;
-    type JsValue = ProviderGenerateResponse;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let request = self
-            .request
-            .take()
-            .expect("provider generate task runs once");
-        Ok(provider_runtime()?.block_on(self.client.generate(request)))
-    }
-
-    fn resolve(&mut self, env: Env, response: Self::Output) -> Result<Self::JsValue> {
-        resolve_provider_task(env, response, provider_generate_response_to_node)
-    }
-}
-
-pub struct ProviderEmbedTask {
-    client: CoreProviderClient,
-    request: Option<CoreProviderEmbedRequest>,
-}
-
-impl Task for ProviderEmbedTask {
-    type Output = ProviderTaskOutput<CoreProviderEmbeddingResponse>;
-    type JsValue = ProviderEmbeddingResponse;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let request = self.request.take().expect("provider embed task runs once");
-        Ok(provider_runtime()?.block_on(self.client.embed(request)))
-    }
-
-    fn resolve(&mut self, env: Env, response: Self::Output) -> Result<Self::JsValue> {
-        resolve_provider_task(env, response, provider_embedding_response_to_node)
-    }
-}
-
-pub struct ProviderStreamChatTask {
-    client: CoreProviderClient,
-    request: Option<CoreProviderChatRequest>,
-    on_tokens: Option<TokenBatchCallback>,
-}
-
-impl Task for ProviderStreamChatTask {
-    type Output = ProviderTaskOutput<ProviderStreamResult>;
-    type JsValue = ProviderStreamResult;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let request = self
-            .request
-            .take()
-            .expect("provider stream chat task runs once");
-        provider_runtime()?.block_on(provider_stream_chat_to_node(
-            self.client.clone(),
-            request,
-            self.on_tokens.clone(),
-        ))
-    }
-
-    fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
-        resolve_provider_task(env, output, |output| output)
-    }
-}
-
-pub struct LoadTask {
+pub struct ClientAddLocalTask {
+    client: SharedCogentClient,
+    id: String,
     model_path: String,
     config: CoreNativeRuntimeConfig,
 }
 
-impl Task for LoadTask {
-    type Output = CoreCogentEngine;
-    type JsValue = CogentEngine;
+impl Task for ClientAddLocalTask {
+    type Output = ClientTaskOutput<CoreEndpointRef>;
+    type JsValue = EndpointRef;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        CoreCogentEngine::load(&self.model_path, self.config.clone()).map_err(core_error)
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?;
+        Ok(block_on(client.add_local(
+            self.id.clone(),
+            self.model_path.clone(),
+            self.config.clone(),
+        )))
     }
 
-    fn resolve(&mut self, _env: Env, engine: Self::Output) -> Result<Self::JsValue> {
-        let events = engine.subscribe_events();
-        Ok(CogentEngine {
-            inner: Arc::new(Mutex::new(Some(engine))),
-            events: Arc::new(Mutex::new(events)),
-        })
+    fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        output
+            .map(endpoint_ref_to_node)
+            .map_err(|error| client_error_to_node(env, error))
     }
 }
 
-pub struct QueryTask {
-    engine: SharedEngine,
-    prompt: String,
-    options: CoreQueryOptions,
-    on_tokens: Option<TokenBatchCallback>,
+pub struct ClientTextResultTask {
+    response: SharedClientTextResponse,
 }
 
-impl Task for QueryTask {
-    type Output = CoreGenerationResult;
-    type JsValue = GenerationResult;
+impl Task for ClientTextResultTask {
+    type Output = ClientTaskOutput<CoreClientTextResponse>;
+    type JsValue = CogentTextResponse;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        let request = query_request_with_tokens(
-            self.prompt.clone(),
-            self.options.clone(),
-            self.on_tokens.clone(),
-        );
-        with_engine(&self.engine, |engine| engine.query(request))
+        let response = self
+            .response
+            .lock()
+            .map_err(|_| napi_error(CLIENT_TEXT_RESPONSE_MUTEX_POISONED))?
+            .take()
+            .ok_or_else(|| napi_error(CLIENT_TEXT_RESPONSE_CONSUMED))?;
+        Ok(block_on(response))
     }
 
-    fn resolve(&mut self, _env: Env, result: Self::Output) -> Result<Self::JsValue> {
-        Ok(generation_result_to_node(result))
+    fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        output
+            .map(cogent_text_response_to_node)
+            .map_err(|error| client_error_to_node(env, error))
     }
 }
 
-pub struct EmbedTask {
-    engine: SharedEngine,
-    request: Option<CoreEmbedRequest>,
+pub struct ClientEmbeddingResultTask {
+    response: SharedClientEmbeddingResponse,
 }
 
-impl Task for EmbedTask {
-    type Output = CoreEmbeddingResult;
-    type JsValue = EmbeddingResult;
+impl Task for ClientEmbeddingResultTask {
+    type Output = ClientTaskOutput<CoreClientEmbeddingResponse>;
+    type JsValue = CogentEmbeddingResponse;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        let request = self.request.take().expect("embed task runs once");
-        with_engine(&self.engine, |engine| engine.embed(request))
+        let response = self
+            .response
+            .lock()
+            .map_err(|_| napi_error(CLIENT_EMBEDDING_RESPONSE_MUTEX_POISONED))?
+            .take()
+            .ok_or_else(|| napi_error(CLIENT_EMBEDDING_RESPONSE_CONSUMED))?;
+        Ok(block_on(response))
     }
 
-    fn resolve(&mut self, _env: Env, result: Self::Output) -> Result<Self::JsValue> {
-        Ok(embedding_result_to_node(result))
+    fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        output
+            .map(cogent_embedding_response_to_node)
+            .map_err(|error| client_error_to_node(env, error))
     }
 }
 
-pub struct ModelEmbedTask {
-    service: SharedModelService,
-    request: Option<CoreEmbedRequest>,
+pub struct ClientNextTokenTask {
+    tokens: SharedClientTokenBatches,
 }
 
-impl Task for ModelEmbedTask {
-    type Output = CoreEmbeddingResult;
-    type JsValue = EmbeddingResult;
+impl Task for ClientNextTokenTask {
+    type Output = Option<CoreTokenBatch>;
+    type JsValue = Option<TokenBatch>;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        let request = self.request.take().expect("model embed task runs once");
-        with_model_service(&self.service, |service| service.embed(request))
+        let mut guard = self
+            .tokens
+            .lock()
+            .map_err(|_| napi_error(CLIENT_TOKEN_BATCHES_MUTEX_POISONED))?;
+        let Some(stream) = guard.as_mut() else {
+            return Ok(None);
+        };
+        let next = block_on(stream.next());
+        if next.is_none() {
+            *guard = None;
+        }
+        Ok(next)
     }
 
-    fn resolve(&mut self, _env: Env, result: Self::Output) -> Result<Self::JsValue> {
-        Ok(embedding_result_to_node(result))
-    }
-}
-
-pub struct ChatTextTask {
-    engine: SharedEngine,
-    messages: Vec<CoreChatMessage>,
-    options: CoreQueryOptions,
-    on_tokens: Option<TokenBatchCallback>,
-}
-
-impl Task for ChatTextTask {
-    type Output = CoreGenerationResult;
-    type JsValue = GenerationResult;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let request = chat_request_with_tokens(
-            self.messages.clone(),
-            self.options.clone(),
-            self.on_tokens.clone(),
-        );
-        with_engine(&self.engine, |engine| engine.chat(request))
-    }
-
-    fn resolve(&mut self, _env: Env, result: Self::Output) -> Result<Self::JsValue> {
-        Ok(generation_result_to_node(result))
-    }
-}
-
-pub struct StateTask {
-    engine: SharedEngine,
-}
-
-impl Task for StateTask {
-    type Output = CoreEngineState;
-    type JsValue = EngineState;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        with_engine(&self.engine, |engine| engine.state())
-    }
-
-    fn resolve(&mut self, _env: Env, state: Self::Output) -> Result<Self::JsValue> {
-        Ok(engine_state_to_node(state))
-    }
-}
-
-pub struct ModelLoadPathTask {
-    service: SharedModelService,
-    events: SharedModelEvents,
-    model_path: String,
-    options: CoreModelLoadOptions,
-}
-
-impl Task for ModelLoadPathTask {
-    type Output = CoreLoadedModelInfo;
-    type JsValue = LoadedModelInfo;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        with_model_service_mut(&self.service, |service| {
-            let loaded = service.load(
-                core_model_source_from_path(&self.model_path),
-                self.options.clone(),
-            )?;
-            refresh_model_events(&self.events, service)?;
-            Ok(loaded)
-        })
-    }
-
-    fn resolve(&mut self, _env: Env, loaded: Self::Output) -> Result<Self::JsValue> {
-        Ok(loaded_model_info_to_node(loaded))
-    }
-}
-
-pub struct ModelLoadVisionTask {
-    service: SharedModelService,
-    events: SharedModelEvents,
-    model_path: String,
-    projector_path: String,
-    options: CoreModelLoadOptions,
-}
-
-impl Task for ModelLoadVisionTask {
-    type Output = CoreLoadedModelInfo;
-    type JsValue = LoadedModelInfo;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        with_model_service_mut(&self.service, |service| {
-            let loaded = service.load(
-                core_vision_model_source_from_paths(&self.model_path, &self.projector_path),
-                self.options.clone(),
-            )?;
-            refresh_model_events(&self.events, service)?;
-            Ok(loaded)
-        })
-    }
-
-    fn resolve(&mut self, _env: Env, loaded: Self::Output) -> Result<Self::JsValue> {
-        Ok(loaded_model_info_to_node(loaded))
-    }
-}
-
-pub struct ModelUnloadTask {
-    service: SharedModelService,
-    events: SharedModelEvents,
-}
-
-impl Task for ModelUnloadTask {
-    type Output = ();
-    type JsValue = ();
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        with_model_service_mut(&self.service, |service| service.unload())?;
-        clear_model_events(&self.events)
-    }
-
-    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
-        Ok(output)
-    }
-}
-
-pub struct ModelRemoveTask {
-    service: SharedModelService,
-    model_id: String,
-}
-
-impl Task for ModelRemoveTask {
-    type Output = ();
-    type JsValue = ();
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        with_model_service_mut(&self.service, |service| service.remove(&self.model_id))
-    }
-
-    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
-        Ok(output)
-    }
-}
-
-pub struct ModelQueryTask {
-    service: SharedModelService,
-    prompt: String,
-    options: CoreQueryOptions,
-    on_tokens: Option<TokenBatchCallback>,
-}
-
-impl Task for ModelQueryTask {
-    type Output = CoreGenerationResult;
-    type JsValue = GenerationResult;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let request = query_request_with_tokens(
-            self.prompt.clone(),
-            self.options.clone(),
-            self.on_tokens.clone(),
-        );
-        with_model_service(&self.service, |service| service.query(request))
-    }
-
-    fn resolve(&mut self, _env: Env, result: Self::Output) -> Result<Self::JsValue> {
-        Ok(generation_result_to_node(result))
-    }
-}
-
-pub struct ModelChatTask {
-    service: SharedModelService,
-    messages: Vec<CoreChatMessage>,
-    options: CoreQueryOptions,
-    on_tokens: Option<TokenBatchCallback>,
-}
-
-impl Task for ModelChatTask {
-    type Output = CoreGenerationResult;
-    type JsValue = GenerationResult;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let request = chat_request_with_tokens(
-            self.messages.clone(),
-            self.options.clone(),
-            self.on_tokens.clone(),
-        );
-        with_model_service(&self.service, |service| service.chat(request))
-    }
-
-    fn resolve(&mut self, _env: Env, result: Self::Output) -> Result<Self::JsValue> {
-        Ok(generation_result_to_node(result))
-    }
-}
-
-pub struct ModelStateTask {
-    service: SharedModelService,
-}
-
-impl Task for ModelStateTask {
-    type Output = CoreModelServiceState;
-    type JsValue = ModelServiceState;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        with_model_service(&self.service, |service| service.state())
-    }
-
-    fn resolve(&mut self, _env: Env, state: Self::Output) -> Result<Self::JsValue> {
-        Ok(model_service_state_to_node(state))
+    fn resolve(&mut self, _env: Env, batch: Self::Output) -> Result<Self::JsValue> {
+        Ok(batch.map(token_batch_to_node))
     }
 }
 
@@ -2127,233 +1276,25 @@ pub fn set_llama_log_quiet(quiet: bool) {
     core_set_llama_log_quiet(quiet);
 }
 
-fn with_engine<T>(
-    engine: &SharedEngine,
-    f: impl FnOnce(&CoreCogentEngine) -> cogentlm_engine::Result<T>,
-) -> Result<T> {
-    let guard = engine
-        .lock()
-        .map_err(|_| napi_error(ENGINE_MUTEX_POISONED))?;
-    let engine = guard.as_ref().ok_or_else(|| napi_error(ENGINE_CLOSED))?;
-    f(engine).map_err(core_error)
-}
-
-fn with_model_service<T>(
-    service: &SharedModelService,
-    f: impl FnOnce(&CoreModelService) -> std::result::Result<T, cogentlm_engine::lifecycle::ModelError>,
-) -> Result<T> {
-    let guard = service
-        .lock()
-        .map_err(|_| napi_error(MODEL_SERVICE_MUTEX_POISONED))?;
-    let service = guard
-        .as_ref()
-        .ok_or_else(|| napi_error(MODEL_SERVICE_CLOSED))?;
-    f(service).map_err(model_error)
-}
-
-fn with_model_service_mut<T>(
-    service: &SharedModelService,
-    f: impl FnOnce(
-        &mut CoreModelService,
-    ) -> std::result::Result<T, cogentlm_engine::lifecycle::ModelError>,
-) -> Result<T> {
-    let mut guard = service
-        .lock()
-        .map_err(|_| napi_error(MODEL_SERVICE_MUTEX_POISONED))?;
-    let service = guard
-        .as_mut()
-        .ok_or_else(|| napi_error(MODEL_SERVICE_CLOSED))?;
-    f(service).map_err(model_error)
-}
-
-fn refresh_model_events(
-    events: &SharedModelEvents,
-    service: &CoreModelService,
-) -> std::result::Result<(), cogentlm_engine::lifecycle::ModelError> {
-    let receiver = service.subscribe_events()?;
-    events
-        .lock()
-        .map_err(|_| {
-            cogentlm_engine::lifecycle::ModelError::Runtime(
-                MODEL_SERVICE_EVENTS_MUTEX_POISONED.to_string(),
-            )
-        })?
-        .replace(receiver);
-    Ok(())
-}
-
-fn clear_model_events(events: &SharedModelEvents) -> Result<()> {
-    events
-        .lock()
-        .map_err(|_| napi_error(MODEL_SERVICE_EVENTS_MUTEX_POISONED))?
-        .take();
-    Ok(())
-}
-
-fn provider_runtime() -> Result<&'static tokio::runtime::Runtime> {
-    if let Some(runtime) = PROVIDER_RUNTIME.get() {
-        return Ok(runtime);
-    }
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(napi_error)?;
-    match PROVIDER_RUNTIME.set(runtime) {
-        Ok(()) => Ok(PROVIDER_RUNTIME
-            .get()
-            .expect("provider runtime set before get")),
-        Err(_) => Ok(PROVIDER_RUNTIME
-            .get()
-            .expect("provider runtime initialized concurrently")),
-    }
-}
-
-fn provider_chat_request_to_core(request: ProviderChatRequest) -> Result<CoreProviderChatRequest> {
-    Ok(CoreProviderChatRequest {
-        model: request.model,
-        messages: chat_messages_to_core(request.messages)?,
-        options: provider_generation_options_or_default(request.options.as_ref())?,
-        provider_options: provider_options_or_empty(request.provider_options)?,
-    })
-}
-
-fn provider_generate_request_to_core(
-    request: ProviderGenerateRequest,
-) -> Result<CoreProviderGenerateRequest> {
-    Ok(CoreProviderGenerateRequest {
-        model: request.model,
-        prompt: request.prompt,
-        options: provider_generation_options_or_default(request.options.as_ref())?,
-        provider_options: provider_options_or_empty(request.provider_options)?,
-    })
-}
-
-fn provider_embed_request_to_core(
-    request: ProviderEmbedRequest,
-) -> Result<CoreProviderEmbedRequest> {
-    Ok(CoreProviderEmbedRequest {
-        model: request.model,
-        input: request.input,
-        provider_options: provider_options_or_empty(request.provider_options)?,
-    })
-}
-
-fn provider_options_or_empty(value: Option<serde_json::Value>) -> Result<CoreProviderOptions> {
+fn remote_options_or_empty(
+    value: Option<serde_json::Value>,
+) -> Result<serde_json::Map<String, serde_json::Value>> {
     match value {
         Some(serde_json::Value::Object(options)) => Ok(options),
-        Some(_) => Err(napi_error("providerOptions must be a JSON object")),
-        None => Ok(CoreProviderOptions::new()),
+        Some(_) => Err(napi_error("remoteOptions must be a JSON object")),
+        None => Ok(serde_json::Map::new()),
     }
 }
 
-fn provider_generation_options_or_default(
-    value: Option<&ProviderGenerationOptions>,
-) -> Result<CoreProviderGenerationOptions> {
-    value
-        .map(ProviderGenerationOptions::to_core)
-        .transpose()
-        .map(Option::unwrap_or_default)
+fn optional_endpoint(endpoint: Option<&EndpointRef>) -> Result<Option<CoreEndpointRef>> {
+    endpoint.map(EndpointRef::to_core).transpose()
 }
 
-fn provider_f64_to_f32(value: f64, name: &'static str) -> Result<f32> {
+fn finite_f64_to_f32(value: f64, name: &'static str) -> Result<f32> {
     if !value.is_finite() || value < f64::from(f32::MIN) || value > f64::from(f32::MAX) {
         return Err(invalid_arg(format!("{name} must be a finite f32")));
     }
     Ok(value as f32)
-}
-
-async fn provider_stream_chat_to_node(
-    client: CoreProviderClient,
-    request: CoreProviderChatRequest,
-    on_tokens: Option<TokenBatchCallback>,
-) -> Result<ProviderTaskOutput<ProviderStreamResult>> {
-    let mut stream = match client.stream_chat(request).await {
-        Ok(stream) => stream,
-        Err(error) => return Ok(Err(error)),
-    };
-    let mut usage = None;
-    let mut finish_reason = None;
-
-    while let Some(event) = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await {
-        match event {
-            Err(error) => return Ok(Err(error)),
-            Ok(CoreProviderStreamEvent::TokenBatch(batch)) => {
-                if let Some(on_tokens) = &on_tokens {
-                    emit_provider_token_batch(on_tokens, &batch)?;
-                }
-            }
-            Ok(CoreProviderStreamEvent::Usage { usage: event_usage }) => {
-                usage = Some(provider_usage_to_node(event_usage));
-            }
-            Ok(CoreProviderStreamEvent::Finished {
-                finish_reason: reason,
-            }) => {
-                finish_reason = Some(reason.as_str().to_string());
-            }
-        }
-    }
-
-    Ok(Ok(ProviderStreamResult {
-        usage,
-        finish_reason,
-    }))
-}
-
-fn emit_provider_token_batch(callback: &TokenBatchCallback, batch: &CoreTokenBatch) -> Result<()> {
-    let status = callback.call(
-        token_batch_to_node(batch.clone()),
-        ThreadsafeFunctionCallMode::NonBlocking,
-    );
-    if status == Status::Ok {
-        Ok(())
-    } else {
-        Err(napi_error(format!(
-            "provider token callback failed with {status}"
-        )))
-    }
-}
-
-fn query_request_with_tokens(
-    prompt: String,
-    options: CoreQueryOptions,
-    on_tokens: Option<TokenBatchCallback>,
-) -> CoreQueryRequest {
-    let request = CoreQueryRequest::new(prompt).options(options);
-    if let Some(on_tokens) = on_tokens {
-        request.on_tokens(move |batch| emit_token_batch(&on_tokens, batch))
-    } else {
-        request
-    }
-}
-
-fn chat_request_with_tokens(
-    messages: Vec<CoreChatMessage>,
-    options: CoreQueryOptions,
-    on_tokens: Option<TokenBatchCallback>,
-) -> CoreChatRequest {
-    let request = CoreChatRequest::new(messages).options(options);
-    if let Some(on_tokens) = on_tokens {
-        request.on_tokens(move |batch| emit_token_batch(&on_tokens, batch))
-    } else {
-        request
-    }
-}
-
-fn emit_token_batch(
-    callback: &TokenBatchCallback,
-    batch: &CoreTokenBatch,
-) -> cogentlm_engine::Result<()> {
-    let status = callback.call(
-        token_batch_to_node(batch.clone()),
-        ThreadsafeFunctionCallMode::NonBlocking,
-    );
-    if status == Status::Ok {
-        Ok(())
-    } else {
-        Err(cogentlm_engine::Error::RuntimeCommand(format!(
-            "token batch callback failed with {status}"
-        )))
-    }
 }
 
 fn chat_messages_to_core(messages: Vec<ChatMessage>) -> Result<Vec<CoreChatMessage>> {
@@ -2371,30 +1312,6 @@ fn chat_messages_to_core(messages: Vec<ChatMessage>) -> Result<Vec<CoreChatMessa
         .collect()
 }
 
-fn generation_result_to_node(result: CoreGenerationResult) -> GenerationResult {
-    GenerationResult {
-        id: result.id,
-        text: result.text,
-        finish_reason: result.finish_reason.as_str().to_string(),
-        stats: request_stats_to_node(result.stats),
-    }
-}
-
-fn model_capabilities_to_node(capabilities: CoreModelCapabilities) -> ModelCapabilities {
-    ModelCapabilities {
-        model_class: capabilities.model_class.into(),
-        supports_text_generation: capabilities.supports_text_generation,
-        supports_embeddings: capabilities.supports_embeddings,
-        has_chat_template: capabilities.has_chat_template,
-        embedding: capabilities
-            .embedding
-            .map(|embedding| EmbeddingCapabilities {
-                dimensions: embedding.dimensions,
-                pooling: embedding.pooling.into(),
-            }),
-    }
-}
-
 fn token_batch_to_node(batch: CoreTokenBatch) -> TokenBatch {
     TokenBatch {
         request_id: batch.request_id,
@@ -2403,191 +1320,11 @@ fn token_batch_to_node(batch: CoreTokenBatch) -> TokenBatch {
         text: batch.text,
         frame_count: batch.frame_count,
         byte_count: batch.byte_count,
-        stats: StreamStats {
+        stats: TokenEmissionStats {
             frames_sent: batch.stats.frames_sent as f64,
             bytes_sent: batch.stats.bytes_sent as f64,
-            frames_dropped: batch.stats.frames_dropped as f64,
             batches_sent: batch.stats.batches_sent as f64,
         },
-    }
-}
-
-fn loaded_model_info_to_node(loaded: CoreLoadedModelInfo) -> LoadedModelInfo {
-    LoadedModelInfo {
-        model: model_info_to_node(loaded.model),
-        backend: BackendSelection {
-            requested: loaded.backend.requested.as_str().to_string(),
-            selected: loaded.backend.selected,
-            available: loaded.backend.available,
-            gpu_offload_expected: loaded.backend.gpu_offload_expected,
-            reason: loaded.backend.reason,
-        },
-        runtime_fingerprint: loaded.runtime_fingerprint,
-    }
-}
-
-fn model_info_to_node(model: CoreManagedModelInfo) -> ManagedModelInfo {
-    ManagedModelInfo {
-        id: model.id,
-        name: model.name,
-        modality: model.modality.as_str().to_string(),
-        status: model.status.as_str().to_string(),
-        source: model.source.as_str().to_string(),
-        bytes: model.bytes as f64,
-        loaded: model.loaded,
-        chat_template: model.chat_template,
-        bos_text: model.bos_text,
-        eos_text: model.eos_text,
-        media_marker: model.media_marker,
-        created_at_unix_ms: model.created_at_unix_ms as f64,
-        updated_at_unix_ms: model.updated_at_unix_ms as f64,
-    }
-}
-
-fn engine_state_to_node(state: CoreEngineState) -> EngineState {
-    let tail = state_tail_to_node(
-        state.backend,
-        state.runtime,
-        state.requests,
-        state.stats,
-        state.updated_at_unix_ms,
-    );
-    EngineState {
-        status: state.status.as_str().to_string(),
-        model: state.model.map(|model| ModelState {
-            id: model.id,
-            name: model.name,
-            capabilities: model_capabilities_to_node(model.capabilities),
-        }),
-        backend: tail.backend,
-        runtime: tail.runtime,
-        requests: tail.requests,
-        stats: tail.stats,
-        updated_at_unix_ms: tail.updated_at_unix_ms,
-    }
-}
-
-fn model_service_state_to_node(state: CoreModelServiceState) -> ModelServiceState {
-    let tail = state_tail_to_node(
-        state.backend,
-        state.runtime,
-        state.requests,
-        state.stats,
-        state.updated_at_unix_ms,
-    );
-    ModelServiceState {
-        status: state.status.as_str().to_string(),
-        model: state.model.map(model_info_to_node),
-        backend: tail.backend,
-        runtime: tail.runtime,
-        requests: tail.requests,
-        stats: tail.stats,
-        updated_at_unix_ms: tail.updated_at_unix_ms,
-    }
-}
-
-fn state_tail_to_node(
-    backend: CoreBackendInfo,
-    runtime: Option<CoreResolvedRuntimeLimits>,
-    requests: Vec<CoreRequestState>,
-    stats: CoreEngineStats,
-    updated_at_unix_ms: u64,
-) -> StateTail {
-    StateTail {
-        backend: backend_info_to_node(backend),
-        runtime: runtime.map(resolved_runtime_limits_to_node),
-        requests: requests
-            .into_iter()
-            .map(|request| RequestState {
-                id: request.id,
-                status: request.status.as_str().to_string(),
-                input_tokens: request.input_tokens,
-                output_tokens: request.output_tokens,
-            })
-            .collect(),
-        stats: engine_stats_to_node(stats),
-        updated_at_unix_ms: updated_at_unix_ms as f64,
-    }
-}
-
-fn backend_info_to_node(backend: CoreBackendInfo) -> BackendInfo {
-    BackendInfo {
-        selected: backend.selected,
-        available: backend.available,
-        devices: backend
-            .devices
-            .into_iter()
-            .map(|device| BackendDevice {
-                id: device.id,
-                name: device.name,
-                r#type: device.device_type,
-                memory_total_bytes: option_u64_f64(device.memory_total_bytes),
-                memory_free_bytes: option_u64_f64(device.memory_free_bytes),
-            })
-            .collect(),
-    }
-}
-
-fn resolved_runtime_limits_to_node(runtime: CoreResolvedRuntimeLimits) -> ResolvedRuntimeLimits {
-    ResolvedRuntimeLimits {
-        n_ctx: runtime.n_ctx,
-        n_batch: runtime.n_batch,
-        n_ubatch: runtime.n_ubatch,
-        n_parallel: runtime.n_parallel,
-        kv_unified: runtime.kv_unified,
-        flash_attention: runtime.flash_attention,
-        cache_type_k: runtime.cache_type_k,
-        cache_type_v: runtime.cache_type_v,
-    }
-}
-
-fn engine_stats_to_node(stats: CoreEngineStats) -> EngineStats {
-    EngineStats {
-        requests_running: stats.requests_running,
-        requests_queued: stats.requests_queued,
-        requests_completed: stats.requests_completed as f64,
-        requests_failed: stats.requests_failed as f64,
-        input_tokens: stats.input_tokens as f64,
-        output_tokens: stats.output_tokens as f64,
-        cache_hits: stats.cache_hits as f64,
-        prefill_tokens: stats.prefill_tokens as f64,
-        ttft_ms: stats.ttft_ms,
-        inter_token_ms: stats.inter_token_ms,
-        e2e_ms: stats.e2e_ms,
-        tokens_per_second: stats.tokens_per_second,
-        decode_tokens_per_second: stats.decode_tokens_per_second,
-        prefill_tokens_per_second: stats.prefill_tokens_per_second,
-        prefill_ms: stats.prefill_ms,
-        decode_ms: stats.decode_ms,
-        backend_ms: stats.backend_ms,
-        sync_ms: stats.sync_ms,
-        engine_overhead_ms: stats.engine_overhead_ms,
-        debug_metrics_scheduler_ticks: stats.debug_metrics_scheduler_ticks as f64,
-        debug_metrics_decode_ticks: stats.debug_metrics_decode_ticks as f64,
-        debug_metrics_prefill_ticks: stats.debug_metrics_prefill_ticks as f64,
-        debug_metrics_backend_sampler_attach_attempts: stats
-            .debug_metrics_backend_sampler_attach_attempts
-            as f64,
-        debug_metrics_backend_sampler_attach_failures: stats
-            .debug_metrics_backend_sampler_attach_failures
-            as f64,
-        debug_metrics_admit_ms: stats.debug_metrics_admit_ms,
-        debug_metrics_normalize_ms: stats.debug_metrics_normalize_ms,
-        debug_metrics_backend_sampler_attach_ms: stats.debug_metrics_backend_sampler_attach_ms,
-        debug_metrics_select_slots_ms: stats.debug_metrics_select_slots_ms,
-        debug_metrics_plan_ms: stats.debug_metrics_plan_ms,
-        debug_metrics_batch_build_ms: stats.debug_metrics_batch_build_ms,
-        debug_metrics_llama_decode_ms: stats.debug_metrics_llama_decode_ms,
-        debug_metrics_llama_sync_ms: stats.debug_metrics_llama_sync_ms,
-        debug_metrics_apply_bookkeeping_ms: stats.debug_metrics_apply_bookkeeping_ms,
-        debug_metrics_apply_decode_results_ms: stats.debug_metrics_apply_decode_results_ms,
-        debug_metrics_sample_ms: stats.debug_metrics_sample_ms,
-        debug_metrics_token_piece_ms: stats.debug_metrics_token_piece_ms,
-        debug_metrics_emit_ms: stats.debug_metrics_emit_ms,
-        debug_metrics_prefix_queue_ms: stats.debug_metrics_prefix_queue_ms,
-        debug_metrics_finalize_ms: stats.debug_metrics_finalize_ms,
-        debug_metrics_commit_observability_ms: stats.debug_metrics_commit_observability_ms,
-        debug_metrics_post_decode_ms: stats.debug_metrics_post_decode_ms,
     }
 }
 
@@ -2595,122 +1332,38 @@ fn request_stats_to_node(stats: CoreRequestStats) -> RequestStats {
     RequestStats {
         input_tokens: stats.input_tokens,
         output_tokens: stats.output_tokens,
+        cache_mode: kv_reuse_mode_to_string(stats.cache_mode),
+        cache_source: cache_source_to_string(stats.cache_source),
         cache_hits: stats.cache_hits,
+        prefill_tokens: stats.prefill_tokens,
         ttft_ms: stats.ttft_ms,
         inter_token_ms: stats.inter_token_ms,
         e2e_ms: stats.e2e_ms,
-        tokens_per_second: stats.tokens_per_second,
+        e2e_tokens_per_second: stats.e2e_tokens_per_second,
         decode_tokens_per_second: stats.decode_tokens_per_second,
+        prefill_tokens_per_second: stats.prefill_tokens_per_second,
         prefill_ms: stats.prefill_ms,
         decode_ms: stats.decode_ms,
-        debug_metrics_scheduler_ticks: stats.debug_metrics_scheduler_ticks,
-        debug_metrics_decode_ticks: stats.debug_metrics_decode_ticks,
-        debug_metrics_prefill_ticks: stats.debug_metrics_prefill_ticks,
-        debug_metrics_backend_sampler_attach_attempts: stats
-            .debug_metrics_backend_sampler_attach_attempts,
-        debug_metrics_backend_sampler_attach_failures: stats
-            .debug_metrics_backend_sampler_attach_failures,
-        debug_metrics_admit_ms: stats.debug_metrics_admit_ms,
-        debug_metrics_normalize_ms: stats.debug_metrics_normalize_ms,
-        debug_metrics_backend_sampler_attach_ms: stats.debug_metrics_backend_sampler_attach_ms,
-        debug_metrics_select_slots_ms: stats.debug_metrics_select_slots_ms,
-        debug_metrics_plan_ms: stats.debug_metrics_plan_ms,
-        debug_metrics_batch_build_ms: stats.debug_metrics_batch_build_ms,
-        debug_metrics_llama_decode_ms: stats.debug_metrics_llama_decode_ms,
-        debug_metrics_llama_sync_ms: stats.debug_metrics_llama_sync_ms,
-        debug_metrics_apply_bookkeeping_ms: stats.debug_metrics_apply_bookkeeping_ms,
-        debug_metrics_apply_decode_results_ms: stats.debug_metrics_apply_decode_results_ms,
-        debug_metrics_sample_ms: stats.debug_metrics_sample_ms,
-        debug_metrics_token_piece_ms: stats.debug_metrics_token_piece_ms,
-        debug_metrics_emit_ms: stats.debug_metrics_emit_ms,
-        debug_metrics_prefix_queue_ms: stats.debug_metrics_prefix_queue_ms,
-        debug_metrics_finalize_ms: stats.debug_metrics_finalize_ms,
-        debug_metrics_commit_observability_ms: stats.debug_metrics_commit_observability_ms,
-        debug_metrics_post_decode_ms: stats.debug_metrics_post_decode_ms,
     }
 }
 
-fn engine_event_to_node(event: CoreEngineEvent) -> EngineEvent {
-    match event {
-        CoreEngineEvent::State(state) => EngineEvent {
-            r#type: EVENT_TYPE_STATE.to_string(),
-            state: Some(engine_state_to_node(*state)),
-            loaded_bytes: None,
-            total_bytes: None,
-            asset_name: None,
-            request_id: None,
-            stream_id: None,
-            error: None,
-        },
-        CoreEngineEvent::LoadProgress {
-            loaded_bytes,
-            total_bytes,
-            asset_name,
-        } => EngineEvent {
-            r#type: EVENT_TYPE_LOAD_PROGRESS.to_string(),
-            state: None,
-            loaded_bytes: Some(loaded_bytes as f64),
-            total_bytes: option_u64_f64(total_bytes),
-            asset_name,
-            request_id: None,
-            stream_id: None,
-            error: None,
-        },
-        CoreEngineEvent::RequestStarted {
-            request_id,
-            stream_id,
-        } => EngineEvent {
-            r#type: EVENT_TYPE_REQUEST_STARTED.to_string(),
-            state: None,
-            loaded_bytes: None,
-            total_bytes: None,
-            asset_name: None,
-            request_id: Some(request_id),
-            stream_id: Some(stream_id),
-            error: None,
-        },
-        CoreEngineEvent::RequestCompleted { request_id } => EngineEvent {
-            r#type: EVENT_TYPE_REQUEST_COMPLETED.to_string(),
-            state: None,
-            loaded_bytes: None,
-            total_bytes: None,
-            asset_name: None,
-            request_id: Some(request_id),
-            stream_id: None,
-            error: None,
-        },
-        CoreEngineEvent::RequestFailed { request_id, error } => EngineEvent {
-            r#type: EVENT_TYPE_REQUEST_FAILED.to_string(),
-            state: None,
-            loaded_bytes: None,
-            total_bytes: None,
-            asset_name: None,
-            request_id: Some(request_id),
-            stream_id: None,
-            error: Some(error),
-        },
-        CoreEngineEvent::Closed => EngineEvent {
-            r#type: EVENT_TYPE_CLOSED.to_string(),
-            state: None,
-            loaded_bytes: None,
-            total_bytes: None,
-            asset_name: None,
-            request_id: None,
-            stream_id: None,
-            error: None,
-        },
+fn kv_reuse_mode_to_string(mode: KvReuseMode) -> String {
+    match mode {
+        KvReuseMode::Disabled => "disabled",
+        KvReuseMode::LiveSlotPrefix => "live_slot_prefix",
+        KvReuseMode::StateSnapshot => "state_snapshot",
+        KvReuseMode::LiveSlotAndSnapshot => "live_slot_and_snapshot",
     }
+    .to_string()
 }
 
-fn parse_backend_preference(value: &str) -> Result<CoreBackendPreference> {
-    parse_choice(
-        value,
-        "backend must be one of: auto, cpu, cuda, metal, vulkan, webgpu",
-    )
-}
-
-fn parse_stats_mode(value: &str) -> Result<StatsMode> {
-    parse_choice(value, "stats must be one of: off, basic, profile")
+fn cache_source_to_string(source: CoreCacheSource) -> String {
+    match source {
+        CoreCacheSource::None => "none",
+        CoreCacheSource::Live => "live",
+        CoreCacheSource::Snapshot => "snapshot",
+    }
+    .to_string()
 }
 
 fn parse_gpu_layers(value: &str) -> Result<GpuLayerConfig> {
@@ -2746,13 +1399,6 @@ fn parse_kv_reuse_mode(value: &str) -> Result<KvReuseMode> {
     parse_choice(
         value,
         "cache mode must be one of: disabled, live_slot_prefix, state_snapshot, live_slot_and_snapshot",
-    )
-}
-
-fn parse_cache_key_policy(value: &str) -> Result<CacheKeyPolicy> {
-    parse_choice(
-        value,
-        "cache_key_policy must be one of: context_key, prompt_hash",
     )
 }
 
@@ -2805,10 +1451,6 @@ fn option_f32(value: Option<f64>) -> Option<f32> {
     value.map(|value| value as f32)
 }
 
-fn option_u64_f64(value: Option<u64>) -> Option<f64> {
-    value.map(|value| value as f64)
-}
-
 fn invalid_arg(message: impl Into<String>) -> Error {
     Error::new(Status::InvalidArg, message.into())
 }
@@ -2817,40 +1459,35 @@ fn napi_error(message: impl ToString) -> Error {
     Error::new(Status::GenericFailure, message)
 }
 
-fn resolve_provider_task<T, U>(
-    env: Env,
-    output: ProviderTaskOutput<T>,
-    map: impl FnOnce(T) -> U,
-) -> Result<U> {
-    output
-        .map(map)
-        .map_err(|error| provider_error_to_node(env, error))
-}
-
-fn provider_error_message(error: &CoreProviderError) -> String {
+fn remote_error_message(error: &CoreRemoteError) -> String {
     format!(
-        "{} provider error ({}): {}",
-        error.provider.as_str(),
+        "{} remote error ({}): {}",
+        error.remote_kind.as_str(),
         error.kind.as_str(),
         error.message
     )
 }
 
-fn provider_error_status(kind: CoreProviderErrorKind) -> Status {
+fn remote_error_status(kind: CoreRemoteErrorKind) -> Status {
     match kind {
-        CoreProviderErrorKind::InvalidRequest | CoreProviderErrorKind::UnsupportedFeature => {
+        CoreRemoteErrorKind::InvalidRequest | CoreRemoteErrorKind::UnsupportedFeature => {
             Status::InvalidArg
         }
         _ => Status::GenericFailure,
     }
 }
 
-fn provider_error_to_node(env: Env, error: CoreProviderError) -> Error {
-    let status = provider_error_status(error.kind);
-    let message = provider_error_message(&error);
-    let mut object = env
-        .create_error(Error::new(status, message))
-        .expect("creating ProviderError JS object should not fail");
+fn remote_error_to_node(env: Env, error: CoreRemoteError) -> Error {
+    match remote_error_to_node_result(env, error) {
+        Ok(error) => error,
+        Err(error) => error,
+    }
+}
+
+fn remote_error_to_node_result(env: Env, error: CoreRemoteError) -> Result<Error> {
+    let status = remote_error_status(error.kind);
+    let message = remote_error_message(&error);
+    let mut object = env.create_error(Error::new(status, message))?;
     let retry_after_ms = error
         .retry_after
         .map(|duration| duration.as_secs_f64() * 1000.0);
@@ -2859,32 +1496,46 @@ fn provider_error_to_node(env: Env, error: CoreProviderError) -> Error {
         .map(|value| *value)
         .unwrap_or(serde_json::Value::Null);
 
-    object
-        .set("name", "ProviderError")
-        .expect("setting ProviderError.name should not fail");
-    object
-        .set("kind", error.kind.as_str())
-        .expect("setting ProviderError.kind should not fail");
-    object
-        .set("provider", error.provider.as_str())
-        .expect("setting ProviderError.provider should not fail");
-    object
-        .set("status", error.status)
-        .expect("setting ProviderError.status should not fail");
-    object
-        .set("code", error.code)
-        .expect("setting ProviderError.code should not fail");
-    object
-        .set("requestId", error.request_id)
-        .expect("setting ProviderError.requestId should not fail");
-    object
-        .set("retryAfterMs", retry_after_ms)
-        .expect("setting ProviderError.retryAfterMs should not fail");
-    object
-        .set("rawBody", raw_body)
-        .expect("setting ProviderError.rawBody should not fail");
+    object.set("name", "RemoteError")?;
+    object.set("kind", error.kind.as_str())?;
+    object.set("remoteKind", error.remote_kind.as_str())?;
+    object.set("status", error.status)?;
+    object.set("code", error.code)?;
+    object.set("requestId", error.request_id)?;
+    object.set("retryAfterMs", retry_after_ms)?;
+    object.set("rawBody", raw_body)?;
 
-    Error::from(object.to_unknown())
+    Ok(Error::from(object.to_unknown()))
+}
+
+fn client_error_without_env(error: CoreClientError) -> Error {
+    match error {
+        CoreClientError::Local(error) => core_error(error),
+        CoreClientError::Remote(error) => napi_error(remote_error_message(&error)),
+        CoreClientError::InvalidRequest(message) => invalid_arg(message),
+        CoreClientError::UnsupportedOperation {
+            endpoint,
+            operation,
+        } => invalid_arg(format!(
+            "unsupported operation {operation} on endpoint {endpoint:?}"
+        )),
+        other => napi_error(other.to_string()),
+    }
+}
+
+fn client_error_to_node(env: Env, error: CoreClientError) -> Error {
+    match error {
+        CoreClientError::Local(error) => core_error(error),
+        CoreClientError::Remote(error) => remote_error_to_node(env, error),
+        CoreClientError::InvalidRequest(message) => invalid_arg(message),
+        CoreClientError::UnsupportedOperation {
+            endpoint,
+            operation,
+        } => invalid_arg(format!(
+            "unsupported operation {operation} on endpoint {endpoint:?}"
+        )),
+        other => napi_error(other.to_string()),
+    }
 }
 
 fn core_error(error: cogentlm_engine::Error) -> Error {
@@ -2892,22 +1543,6 @@ fn core_error(error: cogentlm_engine::Error) -> Error {
         cogentlm_engine::Error::InvalidRequest(message)
         | cogentlm_engine::Error::InvalidConfig(message) => invalid_arg(message),
         cogentlm_engine::Error::UnsupportedOperation { operation, reason } => {
-            invalid_arg(format!("unsupported operation {operation}: {reason}"))
-        }
-        other => napi_error(other.to_string()),
-    }
-}
-
-fn model_error(error: cogentlm_engine::lifecycle::ModelError) -> Error {
-    match error {
-        cogentlm_engine::lifecycle::ModelError::InvalidModelSource(message)
-        | cogentlm_engine::lifecycle::ModelError::InvalidModelPairing(message) => {
-            invalid_arg(message)
-        }
-        cogentlm_engine::lifecycle::ModelError::UnsupportedGgufVersion(version) => {
-            invalid_arg(format!("unsupported GGUF version {version}"))
-        }
-        cogentlm_engine::lifecycle::ModelError::UnsupportedOperation { operation, reason } => {
             invalid_arg(format!("unsupported operation {operation}: {reason}"))
         }
         other => napi_error(other.to_string()),

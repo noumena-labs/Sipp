@@ -11,19 +11,18 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["native"]
-native = ["cogentlm-engine/native"]
-cuda = ["cogentlm-engine/cuda"]
-metal = ["cogentlm-engine/metal"]
-vulkan = ["cogentlm-engine/vulkan"]
-openmp = ["cogentlm-engine/openmp"]
+native = ["cogentlm-engine/native", "cogentlm-client/native"]
+cuda = ["cogentlm-engine/cuda", "cogentlm-client/cuda"]
+metal = ["cogentlm-engine/metal", "cogentlm-client/metal"]
+vulkan = ["cogentlm-engine/vulkan", "cogentlm-client/vulkan"]
+openmp = ["cogentlm-engine/openmp", "cogentlm-client/openmp"]
 
 [dependencies]
+cogentlm-client = { workspace = true, default-features = false, features = ["providers"] }
+cogentlm-core.workspace = true
 cogentlm-engine.workspace = true
-cogentlm-providers.workspace = true
+futures.workspace = true
 pyo3 = { workspace = true, features = ["abi3-py39", "extension-module"] }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
-
-[dev-dependencies]
-wiremock = "0.6"

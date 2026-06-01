@@ -3,16 +3,16 @@
 // director-runtime.ts
 //
 // - Shape-driven runtime for director tasks.
-// - Owns prompt rendering, grammar selection, engine execution, and
+// - Owns prompt rendering, grammar selection, client execution, and
 //   output parsing for a parsed `DirectorConfig`.
 //
 //////////////////////////////////////////////////////////////////////////////
 
 import type {
+  BrowserTextRun,
   ChatInput,
   ChatOptions,
   ModelInfo,
-  GenerationResult,
 } from '../models/types.js';
 import type { ChatMessage } from '../engine/inference-types.js';
 import { createTimedAbortController } from '../utils/abort.js';
@@ -32,26 +32,25 @@ import type {
   DirectorTaskConfig,
 } from './director-types.js';
 
-export interface DirectorRuntimeEngine {
-  chat(input: ChatInput, options?: ChatOptions): Promise<GenerationResult>;
-  models?: {
-    current(): Pick<ModelInfo, 'mediaMarker'> | null;
-  };
+/** Minimal chat client required by director runtimes. */
+export interface DirectorRuntimeClient {
+  chat(input: ChatInput, options?: ChatOptions): BrowserTextRun;
+  currentLocal?(): Pick<ModelInfo, 'mediaMarker'> | null;
 }
 
 export class DirectorRuntime {
-  private readonly engine: DirectorRuntimeEngine;
+  private readonly client: DirectorRuntimeClient;
   private readonly config: DirectorConfig;
   private readonly maxOutputTokens: number;
   private readonly contextKey: string;
   private readonly systemPrompt: string;
 
   public constructor(
-    engine: DirectorRuntimeEngine,
+    client: DirectorRuntimeClient,
     config: DirectorConfig,
     options: DirectorRuntimeOptions = {}
   ) {
-    this.engine = engine;
+    this.client = client;
     this.config = config;
     this.maxOutputTokens = options.maxOutputTokens ?? 256;
     this.contextKey = options.contextKey ?? `director:${config.id}`;
@@ -120,13 +119,13 @@ export class DirectorRuntime {
     });
 
     try {
-      const result = await this.engine.chat(
+      const result = await this.client.chat(
         media.length > 0 ? { messages, media: [...media] } : messages,
         {
           ...queryOptions,
           grammar,
         }
-      );
+      ).response;
       const rawText = result.text;
       if (abort.signal.aborted) {
         const status = abort.timedOut() ? 'timed_out' : 'aborted';
@@ -183,7 +182,7 @@ export class DirectorRuntime {
   }
 
   private getMediaMarker(): string | null {
-    return this.engine.models?.current()?.mediaMarker ?? null;
+    return this.client.currentLocal?.()?.mediaMarker ?? null;
   }
 
   private getTaskContextKey(taskName: string): string {

@@ -2,7 +2,7 @@
 //
 // character-agent.ts
 //
-// - High-level character runtime that ties an engine instance to a
+// - High-level character runtime that ties a chat client to a
 //   CharacterConfig: builds the system prompt, tracks memory, compiles the
 //   grammar once, and exposes a single `chat()` async iterator that emits
 //   prose/action events as they arrive.
@@ -10,15 +10,15 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import type {
+  BrowserTextRun,
   ChatInput,
   ChatOptions,
-  GenerationResult,
 } from '../models/types.js';
 import type { ChatMessage } from '../engine/inference-types.js';
-import { sliceUnstreamedSuffix } from '../engine/chat-boundary-sanitizer.js';
+import { sliceUndeliveredSuffix } from '../engine/chat-boundary-sanitizer.js';
 import { CharacterEventBus, type CharacterEvent } from './action-bus.js';
 import { compileActionGrammar } from './action-grammar.js';
-import { StreamingActionParser, type ParsedEvent } from './action-parser.js';
+import { IncrementalActionParser, type ParsedEvent } from './action-parser.js';
 import { compileChoiceGrammar, parseChoiceOutput } from './choice-grammar.js';
 import {
   resolveMaxMemoryTurns,
@@ -36,8 +36,9 @@ export type RunStatus =
   | 'invalid_request'
   | 'invalid_response';
 
-export interface CharacterRuntimeEngine {
-  chat(input: ChatInput, options?: ChatOptions): Promise<GenerationResult>;
+/** Minimal chat client required by character runtimes. */
+export interface CharacterRuntimeClient {
+  chat(input: ChatInput, options?: ChatOptions): BrowserTextRun;
 }
 
 export interface CharacterRuntimeOptions {
@@ -51,7 +52,7 @@ export interface CharacterRuntimeOptions {
    * Injecting a shared bus lets multiple consumers observe the same character.
    */
   readonly bus?: CharacterEventBus;
-  /** Stable engine context key prefix. Defaults to `character:${config.id}`. */
+  /** Stable client context key prefix. Defaults to `character:${config.id}`. */
   readonly contextKey?: string;
 }
 
@@ -86,11 +87,11 @@ interface InFlightTurn {
 }
 
 /**
- * A character-driven conversation runtime. Pair one with a CogentEngine and a
+ * A character-driven conversation runtime. Pair one with a CogentClient and a
  * CharacterConfig to get a grammar-constrained, memory-aware chat loop.
  */
 export class CharacterRuntime {
-  private readonly engine: CharacterRuntimeEngine;
+  private readonly client: CharacterRuntimeClient;
   private readonly config: CharacterConfig;
   private readonly maxOutputTokens: number;
   private readonly contextKey: string;
@@ -103,11 +104,11 @@ export class CharacterRuntime {
   private currentTurn: InFlightTurn | undefined;
 
   public constructor(
-    engine: CharacterRuntimeEngine,
+    client: CharacterRuntimeClient,
     config: CharacterConfig,
     options: CharacterRuntimeOptions = {}
   ) {
-    this.engine = engine;
+    this.client = client;
     this.config = config;
     this.maxOutputTokens = options.maxOutputTokens ?? 256;
     this.contextKey = options.contextKey ?? `character:${config.id}`;
@@ -130,7 +131,7 @@ export class CharacterRuntime {
     return this.turnHistory.slice();
   }
 
-  /** Clears the sliding-window memory. Does not reset the engine's KV cache. */
+  /** Clears the sliding-window memory. Does not reset the client's KV cache. */
   public clearMemory(): void {
     this.turnHistory.length = 0;
   }
@@ -184,10 +185,10 @@ export class CharacterRuntime {
     });
 
     try {
-      const result = await this.engine.chat(messages, {
+      const result = await this.client.chat(messages, {
         ...chatOptions,
         grammar,
-      });
+      }).response;
       const rawText = result.text;
       if (abort.signal.aborted) {
         const status = abort.timedOut() ? 'timed_out' : 'aborted';
@@ -256,8 +257,8 @@ export class CharacterRuntime {
    * `ChatEvent`s as they arrive, terminating with a `turn-end` event.
    *
    * The iterator is backed by a small internal queue so upstream token
-   * callbacks never block on a slow consumer — if the consumer falls
-   * behind, events buffer in memory rather than back-pressuring decode.
+   * emission never blocks on a slow consumer — if the consumer falls behind,
+   * events buffer in memory rather than back-pressuring decode.
    */
   public chat(userMessage: string, options: { signal?: AbortSignal } = {}): AsyncIterable<ChatEvent> {
     const trimmed = userMessage;
@@ -315,7 +316,7 @@ export class CharacterRuntime {
       return;
     }
 
-    const parser = new StreamingActionParser(this.config.actions);
+    const parser = new IncrementalActionParser(this.config.actions);
     const turnMessages = this.buildTurnMessages(userMessage);
     try {
       if (signal.aborted) {
@@ -356,11 +357,11 @@ export class CharacterRuntime {
   private async runTurn(
     messages: ChatMessage[],
     userMessage: string,
-    parser: StreamingActionParser,
+    parser: IncrementalActionParser,
     emit: (event: ChatEvent) => void,
     signal: AbortSignal
   ): Promise<void> {
-    let streamedOutputText = '';
+    let deliveredOutputText = '';
     let proseText = '';
     let memoryText = '';
     let status: RunStatus = 'ok';
@@ -383,12 +384,12 @@ export class CharacterRuntime {
       recordParsedEvents(parser.flush());
     };
 
-    const onTokens = (batch: { text: string }): void => {
+    const consumeTokens = (batch: { text: string }): void => {
       if (batch.text.length === 0) {
         return;
       }
       const text = batch.text;
-      streamedOutputText += text;
+      deliveredOutputText += text;
       recordParsedEvents(parser.consume(text));
     };
 
@@ -396,20 +397,25 @@ export class CharacterRuntime {
       const queryOptions: ChatOptions = {
         session: contextKey,
         maxTokens: this.maxOutputTokens,
-        onTokens,
+        emitTokens: true,
         signal,
       };
-      const result = await this.engine.chat(messages, {
+      const run = this.client.chat(messages, {
         ...queryOptions,
         grammar: this.grammarSource,
       });
+      const response = run.response;
+      for await (const batch of run.tokens) {
+        consumeTokens(batch);
+      }
+      const result = await response;
       const rawText = result.text;
       if (signal.aborted) {
         status = 'aborted';
       } else {
-        const unseenOutputSuffix = sliceUnstreamedSuffix(streamedOutputText, rawText);
+        const unseenOutputSuffix = sliceUndeliveredSuffix(deliveredOutputText, rawText);
         if (unseenOutputSuffix.length > 0) {
-          streamedOutputText += unseenOutputSuffix;
+          deliveredOutputText += unseenOutputSuffix;
           recordParsedEvents(parser.consume(unseenOutputSuffix));
         }
       }

@@ -464,11 +464,6 @@ class FakeRuntime implements EngineRuntime {
       executionMode: 'main-thread',
       workerBacked: false,
       enabled: this.runtimeMetricsEnabled,
-      bufferedTokenLimit: 0,
-      flushIntervalMs: 0,
-      flushCount: 0,
-      coalescedTokenCount: 0,
-      maxObservedBufferedTokenCount: 0,
       activeTokenTransport: 'none',
     };
   }
@@ -618,7 +613,7 @@ class FakeRuntime implements EngineRuntime {
     this.queuedRequests.set(requestId, { promptText, options });
     if (typeof options === 'object' && this.streamedTokens.length > 0) {
       const text = this.streamedTokens.join('');
-      options.onTokens?.({
+      options.tokenBatchSink?.({
         requestId: String(requestId),
         streamId: requestId,
         sequenceStart: 0,
@@ -628,8 +623,9 @@ class FakeRuntime implements EngineRuntime {
         stats: {
           framesSent: this.streamedTokens.length,
           bytesSent: new TextEncoder().encode(text).byteLength,
-          framesDropped: 0,
           batchesSent: 1,
+          drainMs: 0,
+          drainCalls: 0,
         },
       });
     }
@@ -733,7 +729,10 @@ class FakeRuntime implements EngineRuntime {
       nativeLogicMs: 1,
       inputTokens: 3,
       outputTokens: 5,
+      cacheMode: 'live_slot_prefix',
+      cacheSource: 'none',
       cacheHits: 0,
+      prefillTokens: 3,
     };
   }
 
@@ -993,19 +992,24 @@ test('ModelService loads, lists, tracks current, and queries text models', async
   assert.equal((await service.list())[0]?.loaded, true);
 
   const tokens: string[] = [];
-  const answer = await service.query('hello', {
-    onTokens: (batch) => tokens.push(batch.text),
-  });
+  const answer = await service.runQuery(
+    'hello',
+    {
+      tokenBatchSink: (batch) => {
+        tokens.push(batch.text);
+      },
+    }
+  );
   assert.equal(answer.text, 'answer:hello');
   assert.deepEqual(tokens, ['token']);
   assert.equal(runtime.lastPrompt, 'hello');
 });
 
-test('ModelService.embed returns embedding results without token streaming', async () => {
+test('ModelService.embed returns embedding results without token emission', async () => {
   const { service, runtime } = createService();
   await service.load(file('embedding-model.gguf'));
 
-  const result = await service.embed('hello', {
+  const result = await service.runEmbedding('hello', {
     normalize: false,
     contextKey: 'vectors',
   });
@@ -1014,10 +1018,9 @@ test('ModelService.embed returns embedding results without token streaming', asy
   assert.equal(result.pooling, 'mean');
   assert.equal(result.normalized, false);
   assert.equal(runtime.lastPrompt, 'hello');
-  assert.deepEqual(runtime.enqueuedOptions.at(-1), {
-    normalize: false,
-    signal: undefined,
-  });
+  const options = runtime.enqueuedOptions.at(-1) as { normalize?: boolean; signal?: AbortSignal };
+  assert.equal(options.normalize, false);
+  assert.equal(options.signal, undefined);
 });
 
 test('ModelService routes browser lifecycle through the Rust bridge when available', async () => {
@@ -1128,13 +1131,15 @@ test('ModelService.chat renders chat templates and sanitizes assistant boundarie
   runtime.nextOutputText = 'Hello there</assistant>\n<user>ignored';
 
   const tokens: string[] = [];
-  const answer = await service.chat(
+  const answer = await service.runChat(
     [
       { role: 'system', content: 'Be concise.' },
       { role: 'user', content: 'Say hello.' },
     ],
     {
-      onTokens: (batch) => tokens.push(batch.text),
+      tokenBatchSink: (batch) => {
+        tokens.push(batch.text);
+      },
     }
   );
 
@@ -1145,19 +1150,35 @@ test('ModelService.chat renders chat templates and sanitizes assistant boundarie
   assert.ok(runtime.lastPrompt?.endsWith('<assistant>\n'));
 });
 
-test('ModelService.chat keeps token emission off when no onTokens callback is provided', async () => {
+test('ModelService.chat keeps token emission off when a token sink is not requested', async () => {
   const { service, runtime } = createService();
   await service.load(file('text-model.gguf'));
   runtime.nextOutputText = 'Hello there</assistant>\n<user>ignored';
 
-  const answer = await service.chat([
-    { role: 'user', content: 'Say hello.' },
-  ]);
+  const answer = await service.runChat(
+    [
+      { role: 'user', content: 'Say hello.' },
+    ],
+    {}
+  );
 
   const options = runtime.enqueuedOptions.at(-1);
   assert.equal(answer.text, 'Hello there');
   assert.equal(typeof options, 'object');
-  assert.equal(typeof (options as PromptOptions).onTokens, 'undefined');
+  assert.equal((options as PromptOptions).tokenBatchSink, undefined);
+});
+
+test('ModelService passes token sinks to the runtime when token emission is requested', async () => {
+  const { service, runtime } = createService();
+  await service.load(file('text-model.gguf'));
+
+  await service.runQuery('hello', {
+    tokenBatchSink: () => {},
+  });
+
+  const options = runtime.enqueuedOptions.at(-1);
+  assert.equal(typeof options, 'object');
+  assert.equal(typeof (options as PromptOptions).tokenBatchSink, 'function');
 });
 
 test('ModelService removes current models and deletes orphaned assets', async () => {
@@ -1182,7 +1203,7 @@ test('ModelService rejects queries during lifecycle transitions and serializes c
   const firstLoad = service.load(file('slow.gguf'));
   await new Promise((resolve) => setTimeout(resolve, 0));
   await assert.rejects(
-    () => service.query('too early'),
+    () => service.runQuery('too early', {}),
     (error) => error instanceof QueryError && error.code === 'MODEL_NOT_READY'
   );
 

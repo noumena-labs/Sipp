@@ -1,7 +1,15 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 #[cfg(target_family = "wasm")]
-use std::time::{Duration, Instant};
+use std::cell::UnsafeCell;
+#[cfg(target_family = "wasm")]
+use std::collections::HashMap;
+#[cfg(target_family = "wasm")]
+use std::fmt;
+#[cfg(target_family = "wasm")]
+use std::sync::{Arc, Mutex};
+#[cfg(target_family = "wasm")]
+use std::time::Duration;
 
 #[cfg(target_family = "wasm")]
 use cogentlm_engine::backend::set_llama_log_quiet;
@@ -11,29 +19,13 @@ use cogentlm_engine::engine::protocol::{EmbedOptions, PoolingType};
 use cogentlm_engine::runtime::config::NativeRuntimeConfig;
 #[cfg(target_family = "wasm")]
 use cogentlm_engine::runtime::request::{
-    token_byte_ring, GenerateResponse, GenerateResponseStatus, GenerateTokenEmissionMode,
-    ResponseOutput, TokenByteRingConsumer, TokenByteRingProducer, TOKEN_RING_DEFAULT_CAPACITY,
+    GenerateResponse, GenerateResponseStatus, ResponseOutput, TokenEmissionSink,
+    TokenEmissionSinkRef,
 };
 #[cfg(target_family = "wasm")]
-use cogentlm_engine::runtime::{InferenceRuntime, RequestStepResult, SchedulerBurstResult};
+use cogentlm_engine::runtime::{InferenceRuntime, SchedulerBurstResult};
 
 use crate::{BrowserRuntimeMetrics, BrowserSchedulerLoopResult};
-
-// Provided by the Emscripten JS library. Calls back into the host JS to drain
-// the streaming buffer into the SAB ring. Synchronous; the worker thread
-// blocks inside it for a few microseconds.
-#[cfg(target_family = "wasm")]
-extern "C" {
-    fn ce_native_yield();
-}
-
-// Upper bound on ticks per burst in streaming mode. We yield as soon as a
-// token is emitted (`max_emitted=1` per burst), so this only caps how long
-// we'll spin through prefill ticks before letting the host drain an empty
-// buffer. Larger values lower outer-loop overhead during long prompts;
-// smaller values lower cancellation latency.
-#[cfg(target_family = "wasm")]
-const STREAMING_STEP_TICKS: i32 = 256;
 
 pub(crate) const ABI_VERSION: u32 = 5;
 
@@ -61,9 +53,9 @@ const COMPLETED_REQUEST_OUTPUT_TEXT: i32 = 1;
 const COMPLETED_REQUEST_OUTPUT_EMBEDDING: i32 = 2;
 
 #[cfg(target_family = "wasm")]
-const STREAMING_BUFFER_CAPACITY: usize = 256 * 1024;
+const SHARED_TOKEN_RING_CAPACITY: usize = 256 * 1024;
 #[cfg(target_family = "wasm")]
-const STREAMING_RECORD_HEADER_BYTES: usize = 8;
+const SHARED_TOKEN_RING_RECORD_HEADER_BYTES: usize = 16;
 
 static NEXT_ENGINE_ID: AtomicU32 = AtomicU32::new(1);
 
@@ -77,10 +69,7 @@ pub struct BrowserEngine {
 #[cfg(target_family = "wasm")]
 struct BrowserEngineInner {
     runtime: Option<InferenceRuntime>,
-    token_producer: Option<TokenByteRingProducer>,
-    token_consumer: Option<TokenByteRingConsumer>,
-    token_ring_drop_count: u64,
-    streaming_buffer: StreamingBuffer,
+    token_ring: SharedTokenRing,
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -126,10 +115,8 @@ impl BrowserEngine {
                 return STATUS_FAILURE;
             }
         };
-        let (producer, consumer) = token_byte_ring(TOKEN_RING_DEFAULT_CAPACITY);
+        self.inner.token_ring.reset();
         self.inner.runtime = Some(runtime);
-        self.inner.token_producer = Some(producer);
-        self.inner.token_consumer = Some(consumer);
         STATUS_OK
     }
 
@@ -155,10 +142,7 @@ impl BrowserEngine {
     #[cfg(target_family = "wasm")]
     fn close_runtime(&mut self) {
         self.inner.runtime = None;
-        self.inner.token_producer = None;
-        self.inner.token_consumer = None;
-        self.inner.streaming_buffer.reset();
-        self.inner.token_ring_drop_count = 0;
+        self.inner.token_ring.reset();
     }
 
     #[cfg(target_family = "wasm")]
@@ -167,7 +151,7 @@ impl BrowserEngine {
         context_key: &str,
         prompt: &str,
         max_tokens: i32,
-        token_emission_mode: i32,
+        emit_tokens: i32,
         grammar: &str,
     ) -> u32 {
         self.clear_last_error();
@@ -177,7 +161,7 @@ impl BrowserEngine {
             max_tokens,
             Vec::new(),
             grammar.to_string(),
-            token_emission_mode,
+            emit_tokens,
         )
     }
 
@@ -187,7 +171,7 @@ impl BrowserEngine {
         _context_key: &str,
         _prompt: &str,
         _max_tokens: i32,
-        _token_emission_mode: i32,
+        _emit_tokens: i32,
         _grammar: &str,
     ) -> u32 {
         0
@@ -201,7 +185,7 @@ impl BrowserEngine {
         max_tokens: i32,
         images_flat_buffer: &[u8],
         image_sizes: &[i32],
-        token_emission_mode: i32,
+        emit_tokens: i32,
         grammar: &str,
     ) -> u32 {
         self.clear_last_error();
@@ -216,7 +200,7 @@ impl BrowserEngine {
             max_tokens,
             images,
             grammar.to_string(),
-            token_emission_mode,
+            emit_tokens,
         )
     }
 
@@ -229,7 +213,7 @@ impl BrowserEngine {
         _max_tokens: i32,
         _images_flat_buffer: &[u8],
         _image_sizes: &[i32],
-        _token_emission_mode: i32,
+        _emit_tokens: i32,
         _grammar: &str,
     ) -> u32 {
         0
@@ -244,7 +228,7 @@ impl BrowserEngine {
         max_tokens: i32,
         images_flat_buffer: &[u8],
         image_sizes: &[i32],
-        token_emission_mode: i32,
+        emit_tokens: i32,
         grammar: &str,
     ) -> u32 {
         self.clear_last_error();
@@ -271,7 +255,7 @@ impl BrowserEngine {
             max_tokens,
             images,
             grammar.to_string(),
-            token_emission_mode,
+            emit_tokens,
         )
     }
 
@@ -284,7 +268,7 @@ impl BrowserEngine {
         _max_tokens: i32,
         _images_flat_buffer: &[u8],
         _image_sizes: &[i32],
-        _token_emission_mode: i32,
+        _emit_tokens: i32,
         _grammar: &str,
     ) -> u32 {
         0
@@ -335,7 +319,7 @@ impl BrowserEngine {
         max_tokens: i32,
         images: Vec<Vec<u8>>,
         grammar: String,
-        token_emission_mode: i32,
+        emit_tokens: i32,
     ) -> u32 {
         let Some(runtime) = self.inner.runtime.as_mut() else {
             return 0;
@@ -344,7 +328,7 @@ impl BrowserEngine {
             return 0;
         }
 
-        let token_emission_mode = emission_mode(token_emission_mode);
+        let emit_tokens = emit_tokens_enabled(emit_tokens);
         let enqueue_result = if images.is_empty() {
             runtime.enqueue_request(
                 context_key,
@@ -354,7 +338,7 @@ impl BrowserEngine {
                 "",
                 Vec::new(),
                 None,
-                token_emission_mode,
+                emit_tokens,
             )
         } else {
             runtime.enqueue_multimodal_request(
@@ -366,7 +350,7 @@ impl BrowserEngine {
                 "",
                 Vec::new(),
                 None,
-                token_emission_mode,
+                emit_tokens,
             )
         };
         let request_id = match enqueue_result {
@@ -376,13 +360,11 @@ impl BrowserEngine {
                 return 0;
             }
         };
-        if request_id != 0 {
-            if let Some(producer) = self.inner.token_producer.as_ref() {
-                runtime
-                    .request_queue
-                    .token_ring_producers
-                    .insert(request_id, producer.clone());
-            }
+        if emit_tokens && request_id != 0 {
+            runtime
+                .request_queue
+                .token_emission_sinks
+                .insert(request_id, self.inner.token_ring.sink());
         }
         request_id
     }
@@ -405,9 +387,8 @@ impl BrowserEngine {
         &mut self,
         max_ticks: i32,
         max_completed_responses: i32,
-        max_emitted_tokens: i32,
+        max_generated_tokens: i32,
         max_duration_us: i32,
-        streaming_active: bool,
         out: &mut BrowserSchedulerLoopResult,
     ) -> i32 {
         if self.inner.runtime.is_none() {
@@ -419,139 +400,17 @@ impl BrowserEngine {
             Duration::ZERO
         };
 
-        // Bulk (non-streaming) path: just run the runtime's own monolithic
-        // loop. No per-tick drain/yield overhead — matches the pre-port
-        // C++ baseline. The host won't peek at the streaming buffer mid-loop
-        // for non-streaming requests anyway, so there's nothing to drain in
-        // between.
-        if !streaming_active {
-            let burst = {
-                let Some(runtime) = self.inner.runtime.as_mut() else {
-                    return STATUS_NOT_INITIALIZED;
-                };
-                runtime.run_scheduler_loop(
-                    max_ticks,
-                    max_completed_responses,
-                    max_emitted_tokens,
-                    duration,
-                )
-            };
-            self.drain_token_ring();
-            *out = scheduler_loop_result_from_runtime(burst);
-            return burst.status as i32;
-        }
-
-        // Streaming path: yield once per emitted token. Each burst caps at
-        // `max_emitted_tokens=1`, so the burst returns as soon as one token
-        // is produced (during decode) or step_ticks elapse with no token
-        // produced (during prefill). After every burst we drain the token
-        // ring into the streaming buffer and call ce_native_yield(), which
-        // lets the host write that single token into the SAB ring and post
-        // a `streaming-tick` to the main thread — yielding the token-by-token
-        // delivery callers expect.
-        let deadline = (!duration.is_zero()).then(|| Instant::now() + duration);
-        let mut acc = SchedulerBurstResult::default();
-        loop {
-            let remaining_ticks = if max_ticks > 0 {
-                (max_ticks - acc.ticks_executed).max(0)
-            } else {
-                STREAMING_STEP_TICKS
-            };
-            if max_ticks > 0 && remaining_ticks == 0 {
-                acc.status = RequestStepResult::Progressed;
-                break;
-            }
-            let step_ticks = if max_ticks > 0 {
-                STREAMING_STEP_TICKS.min(remaining_ticks.max(1))
-            } else {
-                STREAMING_STEP_TICKS
-            };
-            let remaining_completed = if max_completed_responses > 0 {
-                (max_completed_responses - acc.completed_response_count).max(0)
-            } else {
-                0
-            };
-            // The whole point of the streaming path is "exactly one token per
-            // yield". We pass 1 here regardless of the JS-side `max_emitted`
-            // budget, which we instead enforce in the outer break check below.
-            let step_emitted_budget = 1;
-            let step_duration = match deadline {
-                Some(deadline) => {
-                    let now = Instant::now();
-                    if now >= deadline {
-                        acc.status = if acc.progressed_ticks > 0 || acc.completed_response_count > 0
-                        {
-                            RequestStepResult::Progressed
-                        } else {
-                            RequestStepResult::Waiting
-                        };
-                        break;
-                    }
-                    deadline - now
-                }
-                None => Duration::ZERO,
-            };
-
-            let burst = {
-                let Some(runtime) = self.inner.runtime.as_mut() else {
-                    return STATUS_NOT_INITIALIZED;
-                };
-                runtime.run_scheduler_burst(
-                    step_ticks,
-                    remaining_completed,
-                    step_emitted_budget,
-                    step_duration,
-                )
-            };
-            acc.ticks_executed += burst.ticks_executed;
-            acc.progressed_ticks += burst.progressed_ticks;
-            acc.completed_response_count += burst.completed_response_count;
-            acc.emitted_token_count += burst.emitted_token_count;
-
-            // Drain only when there's something to drain. Prefill bursts that
-            // didn't emit a token leave the ring empty; skipping the drain
-            // saves a mutex acquisition + Vec setup per prefill burst.
-            if burst.emitted_token_count > 0 {
-                self.drain_token_ring();
-                // SAFETY: This is the Emscripten host boundary declared above;
-                // it takes no Rust pointers and drains the already-filled buffer synchronously.
-                unsafe {
-                    ce_native_yield();
-                }
-            }
-
-            if matches!(
-                burst.status,
-                RequestStepResult::Invalid | RequestStepResult::FatalNoProgress
-            ) {
-                acc.status = burst.status;
-                break;
-            }
-            if burst.status == RequestStepResult::Waiting {
-                acc.status = if acc.progressed_ticks > 0 || acc.completed_response_count > 0 {
-                    RequestStepResult::Progressed
-                } else {
-                    RequestStepResult::Waiting
-                };
-                break;
-            }
-            if max_completed_responses > 0
-                && acc.completed_response_count >= max_completed_responses
-            {
-                acc.status = RequestStepResult::Progressed;
-                break;
-            }
-            if max_emitted_tokens > 0 && acc.emitted_token_count >= max_emitted_tokens {
-                acc.status = RequestStepResult::Progressed;
-                break;
-            }
-        }
-
-        // Tail-drain so any token that arrived just before we hit a limit
-        // gets to the SAB ring before the JS scheduler re-enters.
-        self.drain_token_ring();
-        *out = scheduler_loop_result_from_runtime(acc);
-        acc.status as i32
+        let Some(runtime) = self.inner.runtime.as_mut() else {
+            return STATUS_NOT_INITIALIZED;
+        };
+        let burst = runtime.run_scheduler_loop(
+            max_ticks,
+            max_completed_responses,
+            max_generated_tokens,
+            duration,
+        );
+        *out = scheduler_loop_result_from_runtime(burst);
+        burst.status as i32
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -559,40 +418,11 @@ impl BrowserEngine {
         &mut self,
         _max_ticks: i32,
         _max_completed_responses: i32,
-        _max_emitted_tokens: i32,
+        _max_generated_tokens: i32,
         _max_duration_us: i32,
-        _streaming_active: bool,
         _out: &mut BrowserSchedulerLoopResult,
     ) -> i32 {
         STATUS_UNAVAILABLE
-    }
-
-    #[cfg(target_family = "wasm")]
-    fn drain_token_ring(&mut self) {
-        let Some(consumer) = self.inner.token_consumer.as_ref() else {
-            return;
-        };
-        let mut frames = Vec::with_capacity(64);
-        loop {
-            frames.clear();
-            let status = consumer.drain_into(&mut frames, 256, STREAMING_BUFFER_CAPACITY);
-            let drop_delta = status
-                .drop_count
-                .saturating_sub(self.inner.token_ring_drop_count);
-            self.inner.token_ring_drop_count = status.drop_count;
-            self.inner.streaming_buffer.add_drops(drop_delta);
-            if frames.is_empty() {
-                break;
-            }
-            for frame in &frames {
-                self.inner
-                    .streaming_buffer
-                    .try_write_frame(frame.stream_id, &frame.bytes);
-            }
-            if status.frames_drained == 0 {
-                break;
-            }
-        }
     }
 
     #[cfg(target_family = "wasm")]
@@ -740,8 +570,9 @@ impl BrowserEngine {
             };
             runtime
                 .request_queue
-                .token_ring_producers
+                .token_emission_sinks
                 .remove(&request_id);
+            self.inner.token_ring.forget_stream(request_id);
             i32::from(runtime.take_completed_response(request_id).is_some())
         }
         #[cfg(not(target_family = "wasm"))]
@@ -854,18 +685,18 @@ impl BrowserEngine {
     }
 
     #[cfg(target_family = "wasm")]
-    pub(crate) fn streaming_buffer_ptr(&mut self) -> usize {
-        self.inner.streaming_buffer.buffer.as_mut_ptr() as usize
+    pub(crate) fn token_ring_header_address(&self) -> usize {
+        self.inner.token_ring.header_address() as usize
     }
 
     #[cfg(target_family = "wasm")]
-    pub(crate) fn streaming_buffer_used_address(&mut self) -> usize {
-        (&mut self.inner.streaming_buffer.used as *mut i32) as usize
+    pub(crate) fn token_ring_body_address(&self) -> usize {
+        self.inner.token_ring.body_address() as usize
     }
 
     #[cfg(target_family = "wasm")]
-    pub(crate) fn streaming_buffer_drop_count_address(&mut self) -> usize {
-        (&mut self.inner.streaming_buffer.drop_count as *mut i32) as usize
+    pub(crate) fn token_ring_capacity(&self) -> i32 {
+        self.inner.token_ring.capacity_i32()
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -894,17 +725,17 @@ impl BrowserEngine {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) fn streaming_buffer_ptr(&mut self) -> usize {
+    pub(crate) fn token_ring_header_address(&self) -> usize {
         0
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) fn streaming_buffer_used_address(&mut self) -> usize {
+    pub(crate) fn token_ring_body_address(&self) -> usize {
         0
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) fn streaming_buffer_drop_count_address(&mut self) -> usize {
+    pub(crate) fn token_ring_capacity(&self) -> i32 {
         0
     }
 }
@@ -914,10 +745,7 @@ impl BrowserEngineInner {
     fn new() -> Self {
         Self {
             runtime: None,
-            token_producer: None,
-            token_consumer: None,
-            token_ring_drop_count: 0,
-            streaming_buffer: StreamingBuffer::new(STREAMING_BUFFER_CAPACITY),
+            token_ring: SharedTokenRing::new(SHARED_TOKEN_RING_CAPACITY),
         }
     }
 }
@@ -930,52 +758,215 @@ impl BrowserEngineInner {
 }
 
 #[cfg(target_family = "wasm")]
-struct StreamingBuffer {
-    buffer: Vec<u8>,
-    used: i32,
-    drop_count: i32,
+struct SharedTokenRing {
+    inner: Arc<SharedTokenRingInner>,
 }
 
 #[cfg(target_family = "wasm")]
-impl StreamingBuffer {
+#[derive(Debug)]
+struct SharedTokenRingInner {
+    header: Box<SharedTokenRingHeader>,
+    body: SharedTokenRingBody,
+    sequences: Mutex<HashMap<u32, u32>>,
+}
+
+#[cfg(target_family = "wasm")]
+struct SharedTokenRingBody {
+    bytes: UnsafeCell<Box<[u8]>>,
+}
+
+#[cfg(target_family = "wasm")]
+#[repr(C, align(4))]
+#[derive(Debug)]
+struct SharedTokenRingHeader {
+    write_index: AtomicU32,
+    read_index: AtomicU32,
+    capacity: AtomicU32,
+    drop_count: AtomicU32,
+    reserved: [AtomicU32; 4],
+}
+
+#[cfg(target_family = "wasm")]
+#[derive(Debug)]
+struct SharedTokenRingSink {
+    inner: Arc<SharedTokenRingInner>,
+}
+
+#[cfg(target_family = "wasm")]
+impl SharedTokenRing {
     fn new(capacity: usize) -> Self {
-        Self {
-            buffer: vec![0; capacity],
-            used: 0,
-            drop_count: 0,
-        }
+        let inner = Arc::new(SharedTokenRingInner {
+            header: Box::new(SharedTokenRingHeader {
+                write_index: AtomicU32::new(0),
+                read_index: AtomicU32::new(0),
+                capacity: AtomicU32::new(capacity as u32),
+                drop_count: AtomicU32::new(0),
+                reserved: [
+                    AtomicU32::new(0),
+                    AtomicU32::new(0),
+                    AtomicU32::new(0),
+                    AtomicU32::new(0),
+                ],
+            }),
+            body: SharedTokenRingBody::new(capacity),
+            sequences: Mutex::new(HashMap::new()),
+        });
+        Self { inner }
     }
 
     fn reset(&mut self) {
-        self.used = 0;
-        self.drop_count = 0;
+        self.inner.header.write_index.store(0, Ordering::Release);
+        self.inner.header.read_index.store(0, Ordering::Release);
+        self.inner.header.drop_count.store(0, Ordering::Release);
+        lock_sequences(&self.inner.sequences).clear();
     }
 
-    fn add_drops(&mut self, count: u64) {
-        if count > 0 {
-            self.drop_count = self
-                .drop_count
-                .saturating_add(count.min(i32::MAX as u64) as i32);
-        }
+    fn sink(&self) -> TokenEmissionSinkRef {
+        Arc::new(SharedTokenRingSink {
+            inner: Arc::clone(&self.inner),
+        })
     }
 
-    fn try_write_frame(&mut self, request_id: u32, bytes: &[u8]) -> bool {
-        if request_id == 0 || bytes.is_empty() {
+    fn header_address(&self) -> *const u32 {
+        (&*self.inner.header as *const SharedTokenRingHeader).cast()
+    }
+
+    fn body_address(&self) -> *const u8 {
+        self.inner.body.as_ptr()
+    }
+
+    fn capacity_i32(&self) -> i32 {
+        i32::try_from(self.inner.body.len()).unwrap_or(i32::MAX)
+    }
+
+    fn forget_stream(&self, stream_id: u32) {
+        lock_sequences(&self.inner.sequences).remove(&stream_id);
+    }
+}
+
+#[cfg(target_family = "wasm")]
+impl TokenEmissionSink for SharedTokenRingSink {
+    fn try_write_batch(&self, stream_id: u32, frame_count: u32, bytes: &[u8]) -> bool {
+        if stream_id == 0 || frame_count == 0 || bytes.is_empty() {
             return true;
         }
-        let used = self.used.max(0) as usize;
-        let record_len = STREAMING_RECORD_HEADER_BYTES + bytes.len();
-        if record_len > self.buffer.len() || used.saturating_add(record_len) > self.buffer.len() {
-            self.drop_count = self.drop_count.saturating_add(1);
+        let record_size = SHARED_TOKEN_RING_RECORD_HEADER_BYTES.saturating_add(bytes.len());
+        let capacity = self.inner.body.len();
+        if record_size > capacity {
+            self.inner.header.drop_count.fetch_add(1, Ordering::Relaxed);
             return false;
         }
-        let offset = used;
-        self.buffer[offset..offset + 4].copy_from_slice(&request_id.to_le_bytes());
-        self.buffer[offset + 4..offset + 8].copy_from_slice(&(bytes.len() as u32).to_le_bytes());
-        self.buffer[offset + 8..offset + record_len].copy_from_slice(bytes);
-        self.used = (used + record_len) as i32;
+
+        let write_index = self.inner.header.write_index.load(Ordering::Acquire);
+        let read_index = self.inner.header.read_index.load(Ordering::Acquire);
+        let used = write_index.wrapping_sub(read_index) as usize;
+        if used.saturating_add(record_size) > capacity {
+            self.inner.header.drop_count.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+
+        let sequence_start = next_sequence(&self.inner.sequences, stream_id, frame_count);
+        let offset = (write_index as usize) % capacity;
+        self.inner.body.with_mut(|body| {
+            write_wrapped_u32(body, offset, stream_id);
+            write_wrapped_u32(body, offset + 4, sequence_start);
+            write_wrapped_u32(body, offset + 8, frame_count);
+            write_wrapped_u32(body, offset + 12, bytes.len() as u32);
+            write_wrapped_bytes(body, offset + SHARED_TOKEN_RING_RECORD_HEADER_BYTES, bytes);
+        });
+        self.inner.header.write_index.store(
+            write_index.wrapping_add(record_size as u32),
+            Ordering::Release,
+        );
         true
     }
+
+    fn close(&self) {}
+}
+
+#[cfg(target_family = "wasm")]
+fn next_sequence(sequences: &Mutex<HashMap<u32, u32>>, stream_id: u32, frame_count: u32) -> u32 {
+    let mut sequences = lock_sequences(sequences);
+    let sequence = sequences.get(&stream_id).copied().unwrap_or(0);
+    sequences.insert(stream_id, sequence.wrapping_add(frame_count));
+    sequence
+}
+
+#[cfg(target_family = "wasm")]
+fn lock_sequences(
+    sequences: &Mutex<HashMap<u32, u32>>,
+) -> std::sync::MutexGuard<'_, HashMap<u32, u32>> {
+    match sequences.lock() {
+        Ok(sequences) => sequences,
+        Err(error) => error.into_inner(),
+    }
+}
+
+#[cfg(target_family = "wasm")]
+impl SharedTokenRingBody {
+    fn new(capacity: usize) -> Self {
+        Self {
+            bytes: UnsafeCell::new(vec![0; capacity].into_boxed_slice()),
+        }
+    }
+
+    fn as_ptr(&self) -> *const u8 {
+        // SAFETY: the boxed slice is allocated once and never reallocated or
+        // moved out of the cell after construction.
+        unsafe { (&*self.bytes.get()).as_ptr() }
+    }
+
+    fn len(&self) -> usize {
+        // SAFETY: reading the slice length does not touch mutable bytes.
+        unsafe { (&*self.bytes.get()).len() }
+    }
+
+    fn with_mut(&self, write: impl FnOnce(&mut [u8])) {
+        // SAFETY: the native runtime is the only writer. JS reads records only
+        // after the producer publishes write_index with Release ordering; the
+        // JS reader observes that index with Atomics.load before reading bytes.
+        unsafe { write((&mut *self.bytes.get()).as_mut()) }
+    }
+}
+
+#[cfg(target_family = "wasm")]
+// SAFETY: `SharedTokenRingBody` owns a stable byte buffer. The native side has
+// one producer, and cross-thread visibility is controlled by atomic ring
+// indices; JS readers do not obtain Rust references.
+unsafe impl Send for SharedTokenRingBody {}
+
+#[cfg(target_family = "wasm")]
+// SAFETY: shared access only exposes raw wasm memory to JS. Native mutation
+// happens through the single producer before the Release store to write_index.
+unsafe impl Sync for SharedTokenRingBody {}
+
+#[cfg(target_family = "wasm")]
+impl fmt::Debug for SharedTokenRingBody {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SharedTokenRingBody")
+            .field("len", &self.len())
+            .finish()
+    }
+}
+
+#[cfg(target_family = "wasm")]
+fn write_wrapped_u32(body: &mut [u8], offset: usize, value: u32) {
+    let bytes = value.to_le_bytes();
+    write_wrapped_bytes(body, offset, &bytes);
+}
+
+#[cfg(target_family = "wasm")]
+fn write_wrapped_bytes(body: &mut [u8], offset: usize, bytes: &[u8]) {
+    let capacity = body.len();
+    let offset = offset % capacity;
+    let tail = capacity - offset;
+    if bytes.len() <= tail {
+        body[offset..offset + bytes.len()].copy_from_slice(bytes);
+        return;
+    }
+    body[offset..].copy_from_slice(&bytes[..tail]);
+    body[..bytes.len() - tail].copy_from_slice(&bytes[tail..]);
 }
 
 fn byte_len_i32(bytes: &[u8]) -> i32 {
@@ -1008,12 +999,8 @@ fn read_runtime_config(raw: &str) -> Result<NativeRuntimeConfig, String> {
 }
 
 #[cfg(target_family = "wasm")]
-fn emission_mode(token_emission_mode: i32) -> GenerateTokenEmissionMode {
-    if token_emission_mode == 1 {
-        GenerateTokenEmissionMode::TokenStream
-    } else {
-        GenerateTokenEmissionMode::None
-    }
+fn emit_tokens_enabled(emit_tokens: i32) -> bool {
+    emit_tokens != 0
 }
 
 #[cfg(target_family = "wasm")]
@@ -1072,6 +1059,8 @@ fn runtime_metrics_from_core(
         native_logic_ms: metrics.native_logic_ms,
         input_tokens: metrics.input_tokens,
         output_tokens: metrics.output_tokens,
+        cache_mode: metrics.cache_mode as i32,
+        cache_source: metrics.cache_source as i32,
         cache_hits: metrics.cache_hits,
         prefill_tokens: metrics.prefill_tokens,
     }

@@ -1,11 +1,11 @@
 //! Unit tests for the parent module.
 
-use crate::runtime::config::SchedulerTickBudget;
+use crate::runtime::config::{KvReuseMode, SchedulerTickBudget};
 use crate::runtime::request::GenerateRequest;
 use crate::runtime::scheduler::{
     BatchContributionKind, BatchPlanner, SharedBatchPlan, SlotPhase, SlotState,
 };
-use crate::runtime::session::SequenceState;
+use crate::runtime::session::KvCacheAdmission;
 
 fn request(id: u32, prompt_tokens: Vec<i32>, max_output_tokens: i32) -> GenerateRequest {
     let mut request = GenerateRequest::new(id, format!("ctx-{id}"));
@@ -16,7 +16,7 @@ fn request(id: u32, prompt_tokens: Vec<i32>, max_output_tokens: i32) -> Generate
 
 fn attached_slot(slot_id: usize, request: GenerateRequest) -> SlotState {
     let mut slot = SlotState::new(slot_id);
-    slot.attach_request(request, SequenceState::default());
+    slot.attach_request(request, KvCacheAdmission::default());
     slot
 }
 
@@ -131,6 +131,53 @@ fn chunked_single_slot_prefill_revisits_without_duplicate_positions() {
     assert!(plan.contributions[..plan.contributions.len() - 1]
         .iter()
         .all(|contribution| !contribution.request_logits));
+}
+
+#[test]
+fn snapshot_mode_prefill_pauses_at_decode_seed_boundary() {
+    let planner = BatchPlanner;
+    let mut request = request(1, vec![10, 11, 12, 13], 4);
+    request.cache_mode = KvReuseMode::LiveSlotAndSnapshot;
+    let slots = vec![attached_slot(0, request)];
+    let budget = SchedulerTickBudget {
+        total_token_budget: 4,
+        reserved_decode_tokens: 0,
+        reserved_prefill_tokens: 4,
+        decode_first: true,
+    };
+
+    let plan = planner.build_policy_batch(&slots, &[], &[0], budget, 0);
+    let positions: Vec<i32> = plan
+        .contributions
+        .iter()
+        .map(|contribution| contribution.position)
+        .collect();
+
+    assert_eq!(positions, vec![0, 1, 2]);
+    assert_eq!(plan.prefill_token_count, 3);
+    assert!(plan.contributions.iter().all(|item| !item.request_logits));
+}
+
+#[test]
+fn live_only_prefill_does_not_pause_at_decode_seed_boundary() {
+    let planner = BatchPlanner;
+    let mut request = request(1, vec![10, 11, 12, 13], 4);
+    request.cache_mode = KvReuseMode::LiveSlotPrefix;
+    let slots = vec![attached_slot(0, request)];
+    let budget = SchedulerTickBudget {
+        total_token_budget: 4,
+        reserved_decode_tokens: 0,
+        reserved_prefill_tokens: 4,
+        decode_first: true,
+    };
+
+    let plan = planner.build_policy_batch(&slots, &[], &[0], budget, 0);
+
+    assert_eq!(plan.prefill_token_count, 4);
+    assert_eq!(
+        plan.contributions.last().map(|item| item.request_logits),
+        Some(true)
+    );
 }
 
 #[test]

@@ -8,7 +8,7 @@ export type SplitMode = 'none' | 'layer' | 'row' | 'tensor';
 export type KvCacheType = 'f16' | 'f32' | 'q8_0' | 'q4_0' | 'q4_1' | 'iq4_nl' | 'q5_0' | 'q5_1';
 export type RopeScaling = 'none' | 'linear' | 'yarn';
 export type KvReuseMode = 'disabled' | 'live_slot_prefix' | 'state_snapshot' | 'live_slot_and_snapshot';
-export type CacheKeyPolicy = 'context_key' | 'prompt_hash';
+export type CacheSource = 'none' | 'live' | 'snapshot';
 export type PoolingType = 'unspecified' | 'none' | 'mean' | 'cls' | 'last' | 'rank';
 export type SamplerStage =
   | 'dry'
@@ -123,10 +123,6 @@ export interface CacheRuntimeConfig {
   snapshot_interval_tokens?: number;
   max_snapshot_entries?: number;
   max_snapshot_bytes?: number;
-  max_session_entries?: number;
-  cache_key_policy?: CacheKeyPolicy;
-  enable_context_checkpoints?: boolean;
-  checkpoint_every_tokens?: number;
 }
 
 export interface MultimodalRuntimeConfig {
@@ -162,12 +158,8 @@ export interface NativeRuntimeConfig {
 export interface PromptOptions {
   nTokens?: number;
   signal?: AbortSignal;
-  onTokens?: (batch: TokenBatch) => void;
-  /**
-   * Controls how aggressively the browser scheduler flushes token batches.
-   * `token` favors interactive rendering; `batch` favors throughput.
-   */
-  tokenFlush?: TokenFlushMode;
+  emitTokens?: boolean;
+  tokenBatchSink?: (batch: TokenBatch) => void;
   media?: Uint8Array[];
   /**
    * Optional GBNF grammar source applied to the sampler for this request.
@@ -183,18 +175,17 @@ export interface EmbedRuntimeOptions {
   signal?: AbortSignal;
 }
 
-export type TokenFlushMode = 'batch' | 'token';
-
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
 }
 
-export interface StreamStats {
+export interface TokenEmissionStats {
   framesSent: number;
   bytesSent: number;
-  framesDropped: number;
   batchesSent: number;
+  drainMs: number;
+  drainCalls: number;
 }
 
 export interface TokenBatch {
@@ -204,7 +195,7 @@ export interface TokenBatch {
   text: string;
   frameCount: number;
   byteCount: number;
-  stats: StreamStats;
+  stats: TokenEmissionStats;
 }
 
 export type GenerateRequestId = number;
@@ -243,8 +234,8 @@ export interface RequestObservabilityMetrics {
   decodeMs: number;
 
   /**
-   * Raw wall-clock window around llama_decode + llama_synchronize. In
-   * WebGPU+wasm this includes event-loop wait inside llama_synchronize.
+   * Raw wall-clock window around llama_decode. Backend synchronization is
+   * reported separately as nativeSyncMs.
    */
   nativeGpuMs: number;
   /** Cumulative time spent in backend synchronization (llama_synchronize). */
@@ -256,6 +247,10 @@ export interface RequestObservabilityMetrics {
   inputTokens: number;
   /** Total number of tokens generated in the response. */
   outputTokens: number;
+  /** Runtime cache mode used for this request or aggregate sample. */
+  cacheMode: KvReuseMode;
+  /** Request-level cache source; aggregate metrics report `none`. */
+  cacheSource: CacheSource;
   /** Number of tokens reused from KV cache (LCP / prefix hits). */
   cacheHits: number;
   /** Number of tokens actually processed by the GPU during prefill. */
@@ -312,19 +307,28 @@ export interface TransportObservability {
   executionMode: EngineExecutionMode;
   workerBacked: boolean;
   enabled: boolean;
-  activeTokenTransport?: 'none' | 'streaming-buffer' | 'callback';
-  streamingDrainCount?: number;
-  streamingDrainMs?: number;
+  activeTokenTransport?: 'none' | 'token-stream';
+  activeTokenEmission?: boolean;
+  tokenDrainCalls?: number;
+  tokenDrainMs?: number;
 }
 
 export function withDerivedObservabilityMetrics<T extends RequestObservabilityMetrics>(
   metrics: T
-): T & { tokensPerSecond: number | null; prefillTokensPerSecond: number | null } {
+): T & {
+  decodeTokensPerSecond: number | null;
+  e2eTokensPerSecond: number | null;
+  prefillTokensPerSecond: number | null;
+} {
   return {
     ...metrics,
-    tokensPerSecond:
+    decodeTokensPerSecond:
       metrics.decodeMs > 0 && metrics.outputTokens > 0
         ? (metrics.outputTokens / metrics.decodeMs) * 1000
+        : null,
+    e2eTokensPerSecond:
+      metrics.e2eMs > 0 && metrics.outputTokens > 0
+        ? (metrics.outputTokens / metrics.e2eMs) * 1000
         : null,
     prefillTokensPerSecond:
       metrics.prefillMs >= 0.1 && metrics.prefillTokens >= 1

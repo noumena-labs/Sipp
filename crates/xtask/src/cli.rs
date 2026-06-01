@@ -79,11 +79,12 @@ Run binding-oriented checks and smoke examples.
 
 Examples:
   cargo xtask run bindings browser
+  cargo xtask run bindings rust --model ./models/model.gguf
   cargo xtask run bindings node --model ./models/model.gguf
   cargo xtask run bindings python --model ./models/model.gguf --backend cuda
-  cargo xtask run bindings all --model ./models/model.gguf --backend cpu
+  cargo xtask run bindings all --model ./models/model.gguf --remote-model gpt-4.1-mini --backend cpu
 
-Node and Python smoke examples require an explicit GGUF model path.";
+Rust, Node, and Python smoke examples require an explicit GGUF model path.";
 
 const RUN_LLAMA_HELP: &str = "\
 Build standalone llama.cpp targets and run backend operation checks.
@@ -335,7 +336,7 @@ This command is finite. It does not start dev or preview servers.")]
 /// Options for the aggregate finite run workflow.
 #[derive(Args)]
 pub struct RunAllArgs {
-    /// GGUF model used by Node and Python smoke examples.
+    /// GGUF model used by Rust, Node, and Python smoke examples.
     #[arg(long)]
     pub model: PathBuf,
 
@@ -343,13 +344,21 @@ pub struct RunAllArgs {
     #[arg(long, short, value_enum, default_value = "cpu")]
     pub backend: Backend,
 
-    /// Prompt passed to Node and Python smoke examples.
+    /// Prompt passed to Rust, Node, and Python smoke examples.
     #[arg(long, default_value = "Describe browser LLM inference.")]
     pub prompt: String,
 
     /// Number of model layers to offload for smoke examples.
     #[arg(long)]
     pub gpu_layers: Option<u32>,
+
+    /// OpenAI model id used by remote smoke examples.
+    #[arg(long)]
+    pub remote_model: Option<String>,
+
+    /// Optional OpenAI-compatible remote base URL.
+    #[arg(long)]
+    pub remote_base_url: Option<String>,
 }
 
 /// Browser app run workflows.
@@ -458,23 +467,26 @@ impl AppServeMode {
 /// Binding run workflows.
 #[derive(Subcommand)]
 pub enum RunBindingsCommands {
-    /// Run browser package checks and Node/Python smoke examples.
+    /// Run browser package checks and Rust/Node/Python smoke examples.
     All(RunBindingSmokeArgs),
 
     /// Run browser/WASM package checks.
     Browser(RunBrowserArgs),
 
-    /// Build and run the Node.js smoke example.
+    /// Build and run Rust CogentClient smoke examples.
+    Rust(RunBindingSmokeArgs),
+
+    /// Build and run Node.js CogentClient smoke examples.
     Node(RunBindingSmokeArgs),
 
-    /// Build and run the Python smoke example.
+    /// Build and run Python CogentClient smoke examples.
     Python(RunBindingSmokeArgs),
 }
 
 /// Options shared by native binding smoke examples.
 #[derive(Args)]
 pub struct RunBindingSmokeArgs {
-    /// GGUF model used by the smoke example.
+    /// GGUF model used by local smoke examples.
     #[arg(long)]
     pub model: PathBuf,
 
@@ -482,13 +494,21 @@ pub struct RunBindingSmokeArgs {
     #[arg(long, short, value_enum, default_value = "cpu")]
     pub backend: Backend,
 
-    /// Prompt passed to the smoke example.
+    /// Prompt passed to smoke examples.
     #[arg(long, default_value = "Describe browser LLM inference.")]
     pub prompt: String,
 
     /// Number of model layers to offload.
     #[arg(long)]
     pub gpu_layers: Option<u32>,
+
+    /// OpenAI model id used by remote smoke examples.
+    #[arg(long)]
+    pub remote_model: Option<String>,
+
+    /// Optional OpenAI-compatible remote base URL.
+    #[arg(long)]
+    pub remote_base_url: Option<String>,
 }
 
 /// Options for browser/WASM binding checks.

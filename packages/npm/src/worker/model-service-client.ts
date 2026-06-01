@@ -1,15 +1,13 @@
-import type { CogentEngineOptions } from '../engine/cogent-engine.js';
+import type { CogentClientOptions } from '../engine/browser-client.js';
 import {
   resolveOptimizedPackageAssetUrl,
   resolveRuntimeUrls,
+  supportsWasmPthreads,
+  type WasmThreadingMode,
 } from '../engine/runtime-assets.js';
 import { ObservabilityController } from '../models/observability-controller.js';
 import { observabilitySnapshotToEngineState } from '../models/observability-controller.js';
-import {
-  StreamingRingReader,
-  createStreamingRingBuffer,
-  DEFAULT_STREAMING_RING_CAPACITY,
-} from '../runtime/streaming-ring.js';
+import { SharedTokenRingReader } from '../runtime/shared-token-ring.js';
 import { createAbortError } from '../utils/abort.js';
 import {
   WorkerRequestMessage,
@@ -31,41 +29,43 @@ import {
   type EmbeddingResult,
   type GenerationResult,
   type ChatInput,
-  type ChatOptions,
+  type InternalTextRequestOptions,
   type QueryInput,
   type QueryOptions,
   type TokenBatch,
-  type TokenFlushMode,
 } from '../models/types.js';
 
 interface PendingWorkerCall {
   resolve: (value: unknown) => void;
   reject: (error: unknown) => void;
   onProgress?: ModelLoadOptions['onProgress'];
-  onTokens?: QueryOptions['onTokens'] | ChatOptions['onTokens'];
-  tokenFlush?: TokenFlushMode;
+  tokenBatchSink?: (batch: TokenBatch) => void;
 }
 
 interface WorkerCallOptions {
   signal?: AbortSignal;
   onProgress?: ModelLoadOptions['onProgress'];
-  onTokens?: QueryOptions['onTokens'] | ChatOptions['onTokens'];
-  tokenFlush?: TokenFlushMode;
+  tokenBatchSink?: (batch: TokenBatch) => void;
+  emitTokens?: boolean;
+}
+
+interface PendingTokenRecord {
+  readonly streamId: number;
+  readonly sequenceStart: number;
+  readonly frameCount: number;
+  readonly byteCount: number;
+  readonly text: string;
+  readonly drainMs: number;
 }
 
 type RequestWithCallId = Extract<WorkerRequestMessage, { callId: number }>;
 type WithoutCallId<T> = T extends { callId: number } ? Omit<T, 'callId'> : never;
-const TOKEN_FLUSH_DRAIN_BUDGET = 64;
-
-function utf8ByteLength(text: string): number {
-  return new TextEncoder().encode(text).byteLength;
-}
 
 export function getOptimizedDefaultWorkerUrl(importerUrl: string = import.meta.url): string | null {
   return resolveOptimizedPackageAssetUrl('dist/esm/worker/model-service-entry.js', importerUrl);
 }
 
-function toWorkerRuntimeConfig(config: CogentEngineOptions): WorkerRuntimeConfig {
+function toWorkerRuntimeConfig(config: CogentClientOptions): WorkerRuntimeConfig {
   if (typeof config.moduleOptions?.locateFile === 'function') {
     throw new Error(
       'Worker mode does not support moduleOptions.locateFile. Provide explicit moduleUrl/wasmUrl instead.'
@@ -92,27 +92,34 @@ function toWorkerRuntimeConfig(config: CogentEngineOptions): WorkerRuntimeConfig
     !hasRuntimeUrlOverride
       ? null
       : resolveRuntimeUrls(config);
+  const wasmThreading =
+    runtimeUrls?.threading ??
+    config.wasmThreading ??
+    defaultWorkerThreadingMode();
 
   return {
     moduleUrl: runtimeUrls?.moduleUrl,
     wasmUrl: runtimeUrls?.wasmUrl,
-    wasmThreading: runtimeUrls?.threading ?? config.wasmThreading,
+    wasmThreading,
     moduleOptions: config.moduleOptions,
     maxModelBytes: config.maxModelBytes,
     trustedOrigins: config.trustedOrigins,
   };
 }
 
-function toWorkerQueryOptions(options: QueryOptions = {}): WorkerQueryOptions {
+function defaultWorkerThreadingMode(): WasmThreadingMode {
+  return supportsWasmPthreads() ? 'pthread' : 'single-thread';
+}
+
+function toWorkerQueryOptions(
+  options: QueryOptions = {},
+  emitTokens: boolean
+): WorkerQueryOptions {
   return {
     session: options.session,
     maxTokens: options.maxTokens,
     grammar: options.grammar,
-    tokenFlush: options.onTokens == null ? undefined : options.tokenFlush ?? 'token',
-    // Carry the caller's streaming intent across the worker boundary.  When
-    // false, the worker leaves engine emission_mode at NONE — required to get
-    // a real native baseline TPS comparison from a worker-backed engine.
-    streaming: options.onTokens != null,
+    emitTokens,
   };
 }
 
@@ -125,19 +132,23 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
   private readonly engineEventListeners = new Set<(event: EngineEvent) => void>();
   private readonly pendingCalls = new Map<number, PendingWorkerCall>();
   private readonly workerConfig: WorkerRuntimeConfig;
-  // SAB streaming ring, lazily allocated when first needed.  Null when
-  // COOP/COEP is missing; streaming requests will error in that case.
-  private streamingRingBuffer: SharedArrayBuffer | null = null;
-  private streamingRingReader: StreamingRingReader | null = null;
-  private streamingActiveCount = 0;
-  // Native request id → worker callId, populated by `streaming-claim`.
+  private tokenRingReader: SharedTokenRingReader | null = null;
+  private tokenRingDrainScheduled = false;
+  private activeTokenCallCount = 0;
   private readonly callIdByNativeRequestId = new Map<number, number>();
+  private readonly pendingTokenRecordsByNativeRequestId = new Map<number, PendingTokenRecord[]>();
   private readonly streamStatsByCallId = new Map<
     number,
-    { framesSent: number; bytesSent: number; batchesSent: number }
+    {
+      framesSent: number;
+      bytesSent: number;
+      batchesSent: number;
+      drainMs: number;
+      drainCalls: number;
+    }
   >();
 
-  constructor(private readonly config: CogentEngineOptions = {}) {
+  constructor(private readonly config: CogentClientOptions = {}) {
     this.workerConfig = toWorkerRuntimeConfig(config);
   }
 
@@ -197,41 +208,52 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     this.currentSnapshot = null;
   }
 
-  public async query(input: QueryInput, options: QueryOptions = {}): Promise<GenerationResult> {
+  public async runQuery(
+    input: QueryInput,
+    options: InternalTextRequestOptions
+  ): Promise<GenerationResult> {
     this.assertOpen();
+    const emitTokens = options.tokenBatchSink != null;
     return (await this.callWorker(
       {
         kind: 'query',
         config: this.workerConfig,
         input,
-        options: toWorkerQueryOptions(options),
+        options: toWorkerQueryOptions(options, emitTokens),
       },
       {
         signal: options.signal,
-        onTokens: options.onTokens,
-        tokenFlush: options.onTokens == null ? undefined : options.tokenFlush ?? 'token',
+        tokenBatchSink: options.tokenBatchSink,
+        emitTokens,
       }
     )) as GenerationResult;
   }
 
-  public async chat(input: ChatInput, options: ChatOptions = {}): Promise<GenerationResult> {
+  public async runChat(
+    input: ChatInput,
+    options: InternalTextRequestOptions
+  ): Promise<GenerationResult> {
     this.assertOpen();
+    const emitTokens = options.tokenBatchSink != null;
     return (await this.callWorker(
       {
         kind: 'chat',
         config: this.workerConfig,
         input,
-        options: toWorkerQueryOptions(options),
+        options: toWorkerQueryOptions(options, emitTokens),
       },
       {
         signal: options.signal,
-        onTokens: options.onTokens,
-        tokenFlush: options.onTokens == null ? undefined : options.tokenFlush ?? 'token',
+        tokenBatchSink: options.tokenBatchSink,
+        emitTokens,
       }
     )) as GenerationResult;
   }
 
-  public async embed(input: string, options: EmbedOptions = {}): Promise<EmbeddingResult> {
+  public async runEmbedding(
+    input: string,
+    options: EmbedOptions
+  ): Promise<EmbeddingResult> {
     this.assertOpen();
     return (await this.callWorker(
       {
@@ -277,14 +299,14 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       return;
     }
     this.closed = true;
-    // Tear down the streaming poll so it doesn't keep `this` reachable.
-    this.streamingActiveCount = 0;
-    this.streamingRingReader = null;
-    this.streamingRingBuffer = null;
+    this.tokenRingReader = null;
+    this.tokenRingDrainScheduled = false;
+    this.activeTokenCallCount = 0;
     this.callIdByNativeRequestId.clear();
+    this.pendingTokenRecordsByNativeRequestId.clear();
     this.streamStatsByCallId.clear();
     for (const pending of this.pendingCalls.values()) {
-      pending.reject(new QueryError('ENGINE_CLOSED', 'CogentEngine is closed.'));
+      pending.reject(new QueryError('ENGINE_CLOSED', 'CogentClient is closed.'));
     }
     this.pendingCalls.clear();
 
@@ -304,8 +326,143 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
 
   private assertOpen(): void {
     if (this.closed) {
-      throw new QueryError('ENGINE_CLOSED', 'CogentEngine is closed.');
+      throw new QueryError('ENGINE_CLOSED', 'CogentClient is closed.');
     }
+  }
+
+  private scheduleTokenRingDrain(): void {
+    if (
+      this.tokenRingDrainScheduled ||
+      this.activeTokenCallCount === 0 ||
+      this.tokenRingReader == null
+    ) {
+      return;
+    }
+    this.tokenRingDrainScheduled = true;
+    const drain = () => {
+      this.tokenRingDrainScheduled = false;
+      this.drainTokenRing();
+      this.scheduleTokenRingDrain();
+    };
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(drain);
+      return;
+    }
+    setTimeout(drain, 16);
+  }
+
+  private drainTokenRing(): void {
+    const reader = this.tokenRingReader;
+    if (reader == null) {
+      return;
+    }
+    reader.drain((streamId, sequenceStart, frameCount, byteCount, text) => {
+      const callId = this.callIdByNativeRequestId.get(streamId);
+      const recordDrainStart = performance.now();
+      const drainMs = performance.now() - recordDrainStart;
+      if (callId == null) {
+        this.bufferPendingTokenRecord({
+          streamId,
+          sequenceStart,
+          frameCount,
+          byteCount,
+          text,
+          drainMs,
+        });
+        return;
+      }
+      this.deliverTokenBatch(
+        callId,
+        streamId,
+        sequenceStart,
+        frameCount,
+        byteCount,
+        text,
+        drainMs
+      );
+    });
+  }
+
+  private bufferPendingTokenRecord(record: PendingTokenRecord): void {
+    const records = this.pendingTokenRecordsByNativeRequestId.get(record.streamId);
+    if (records == null) {
+      this.pendingTokenRecordsByNativeRequestId.set(record.streamId, [record]);
+      return;
+    }
+    records.push(record);
+  }
+
+  private flushPendingTokenRecords(nativeRequestId: number, callId: number): void {
+    const records = this.pendingTokenRecordsByNativeRequestId.get(nativeRequestId);
+    if (records == null) {
+      return;
+    }
+    this.pendingTokenRecordsByNativeRequestId.delete(nativeRequestId);
+    for (const record of records) {
+      this.deliverTokenRecord(callId, record);
+    }
+  }
+
+  private deliverTokenRecord(callId: number, record: PendingTokenRecord): void {
+    this.deliverTokenBatch(
+      callId,
+      record.streamId,
+      record.sequenceStart,
+      record.frameCount,
+      record.byteCount,
+      record.text,
+      record.drainMs
+    );
+  }
+
+  private deliverTokenBatch(
+    callId: number,
+    streamId: number,
+    sequenceStart: number,
+    frameCount: number,
+    byteCount: number,
+    text: string,
+    drainMs: number
+  ): void {
+    if (text.length === 0) {
+      return;
+    }
+    const pending = this.pendingCalls.get(callId);
+    if (pending?.tokenBatchSink == null) {
+      return;
+    }
+    const stats = this.streamStatsByCallId.get(callId) ?? {
+      framesSent: 0,
+      bytesSent: 0,
+      batchesSent: 0,
+      drainMs: 0,
+      drainCalls: 0,
+    };
+    stats.framesSent += frameCount;
+    stats.bytesSent += byteCount;
+    stats.batchesSent += 1;
+    stats.drainMs += drainMs;
+    stats.drainCalls += 1;
+    this.streamStatsByCallId.set(callId, stats);
+    pending.tokenBatchSink({
+      requestId: String(streamId),
+      streamId,
+      sequenceStart,
+      text,
+      frameCount,
+      byteCount,
+      stats: { ...stats },
+    });
+  }
+
+  private forgetStreamingCall(callId: number): void {
+    for (const [nativeRequestId, mappedCallId] of this.callIdByNativeRequestId) {
+      if (mappedCallId === callId) {
+        this.callIdByNativeRequestId.delete(nativeRequestId);
+        this.pendingTokenRecordsByNativeRequestId.delete(nativeRequestId);
+      }
+    }
+    this.streamStatsByCallId.delete(callId);
   }
 
   private ensureWorker(): Worker {
@@ -328,138 +485,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     this.worker.onmessageerror = () => {
       this.failWorker(new Error('Worker runtime failed to deserialize a message.'));
     };
-    // Tell the worker about the SAB ring (or null) before any operation.
-    this.ensureStreamingRing();
-    this.worker.postMessage({
-      kind: 'streaming-init',
-      ringBuffer: this.streamingRingBuffer,
-    } satisfies WorkerRequestMessage);
     return this.worker;
-  }
-
-  private ensureStreamingRing(): void {
-    if (this.streamingRingBuffer != null) {
-      return;
-    }
-    if (typeof SharedArrayBuffer === 'undefined') {
-      return;
-    }
-    try {
-      this.streamingRingBuffer = createStreamingRingBuffer(
-        DEFAULT_STREAMING_RING_CAPACITY
-      );
-      this.streamingRingReader = new StreamingRingReader(this.streamingRingBuffer);
-    } catch {
-      this.streamingRingBuffer = null;
-      this.streamingRingReader = null;
-    }
-  }
-
-  private assertWorkerStreamingSupported(): void {
-    this.ensureStreamingRing();
-    if (this.streamingRingBuffer == null || this.streamingRingReader == null) {
-      throw new QueryError(
-        'STREAMING_UNAVAILABLE',
-        'Worker streaming requires SharedArrayBuffer. Enable cross-origin isolation or run without onTokens.'
-      );
-    }
-  }
-
-  private registerStreamingCall(): void {
-    this.streamingActiveCount += 1;
-  }
-
-  private unregisterStreamingCall(): void {
-    if (this.streamingActiveCount > 0) {
-      this.streamingActiveCount -= 1;
-    }
-  }
-
-
-
-  // Drains the SAB ring and consolidation tokens into batches per request.
-  // Invoked from the 'streaming-tick' macrotask and one final time from
-  // the call finalizer to capture tail tokens.
-  private drainStreamingRing(): void {
-    const reader = this.streamingRingReader;
-    if (reader == null) {
-      return;
-    }
-    const batches = new Map<number, { nativeRequestId: number; texts: string[]; firstSequence: number }>();
-    const maxMessages = this.hasTokenFlushCall() ? TOKEN_FLUSH_DRAIN_BUDGET : undefined;
-    for (const { requestId, sequence, text } of reader.drain(maxMessages)) {
-      const callId = this.callIdByNativeRequestId.get(requestId);
-      if (callId == null) continue;
-      const pending = this.pendingCalls.get(callId);
-      if (pending?.tokenFlush === 'token') {
-        this.deliverStreamingBatch(callId, requestId, sequence, [text]);
-        continue;
-      }
-      let batch = batches.get(callId);
-      if (batch == null) {
-        batch = { nativeRequestId: requestId, texts: [], firstSequence: sequence };
-        batches.set(callId, batch);
-      }
-      batch.texts.push(text);
-    }
-
-    for (const [callId, tokenBatch] of batches) {
-      this.deliverStreamingBatch(
-        callId,
-        tokenBatch.nativeRequestId,
-        tokenBatch.firstSequence,
-        tokenBatch.texts
-      );
-    }
-  }
-
-  private hasTokenFlushCall(): boolean {
-    for (const pending of this.pendingCalls.values()) {
-      if (pending.tokenFlush === 'token') {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private deliverStreamingBatch(
-    callId: number,
-    nativeRequestId: number,
-    sequenceStart: number,
-    texts: string[]
-  ): void {
-    const pending = this.pendingCalls.get(callId);
-    if (pending == null || texts.length === 0) {
-      return;
-    }
-    const text = texts.join('');
-    const byteCount = utf8ByteLength(text);
-    const stats = this.streamStatsByCallId.get(callId) ?? {
-      framesSent: 0,
-      bytesSent: 0,
-      batchesSent: 0,
-    };
-    stats.framesSent += texts.length;
-    stats.bytesSent += byteCount;
-    stats.batchesSent += 1;
-    this.streamStatsByCallId.set(callId, stats);
-    const batch: TokenBatch = {
-      requestId: String(nativeRequestId),
-      streamId: nativeRequestId,
-      sequenceStart,
-      text,
-      frameCount: texts.length,
-      byteCount,
-      stats: {
-        ...stats,
-        framesDropped: 0,
-      },
-    };
-    try {
-      pending.onTokens?.(batch);
-    } catch {
-      /* user error */
-    }
   }
 
   private failWorker(error: unknown): void {
@@ -470,11 +496,11 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       this.worker.terminate();
       this.worker = null;
     }
-    // Reset streaming state; the next worker spawn allocates a fresh ring.
-    this.streamingActiveCount = 0;
-    this.streamingRingReader = null;
-    this.streamingRingBuffer = null;
+    this.tokenRingReader = null;
+    this.tokenRingDrainScheduled = false;
+    this.activeTokenCallCount = 0;
     this.callIdByNativeRequestId.clear();
+    this.pendingTokenRecordsByNativeRequestId.clear();
     this.streamStatsByCallId.clear();
     for (const pending of this.pendingCalls.values()) {
       pending.reject(error);
@@ -521,27 +547,20 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       };
     }
 
-    const isStreaming = options.onTokens != null;
-    if (isStreaming) {
-      this.assertWorkerStreamingSupported();
-      this.registerStreamingCall();
+    if (options.emitTokens === true) {
+      this.activeTokenCallCount += 1;
+      this.scheduleTokenRingDrain();
     }
 
     return new Promise<unknown>((resolve, reject) => {
       const finalize = () => {
-        if (isStreaming) {
-          // Drain one last time to catch tokens that arrived just before or
-          // along with the final resolution message.
-          this.drainStreamingRing();
-          for (const [nativeId, mappedCallId] of this.callIdByNativeRequestId) {
-            if (mappedCallId === callId) {
-              this.streamingRingReader?.forgetRequest(nativeId);
-              this.callIdByNativeRequestId.delete(nativeId);
-              break;
-            }
+        if (options.emitTokens === true) {
+          this.drainTokenRing();
+          this.forgetStreamingCall(callId);
+          this.activeTokenCallCount = Math.max(0, this.activeTokenCallCount - 1);
+          if (this.activeTokenCallCount === 0) {
+            this.pendingTokenRecordsByNativeRequestId.clear();
           }
-          this.streamStatsByCallId.delete(callId);
-          this.unregisterStreamingCall();
         }
         cleanup();
         this.pendingCalls.delete(callId);
@@ -556,8 +575,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
           reject(error);
         },
         onProgress: options.onProgress,
-        onTokens: options.onTokens,
-        tokenFlush: isStreaming ? options.tokenFlush ?? 'token' : undefined,
+        tokenBatchSink: options.tokenBatchSink,
       });
       try {
         this.postWorkerMessage(request);
@@ -575,13 +593,21 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       return;
     }
 
-    if (message.kind === 'streaming-tick') {
-      this.drainStreamingRing();
+    if (message.kind === 'token-ring-ready') {
+      this.tokenRingReader = new SharedTokenRingReader(message.descriptor);
+      this.scheduleTokenRingDrain();
       return;
     }
 
-    if (message.kind === 'streaming-claim') {
+    if (message.kind === 'token-ring-claim') {
       this.callIdByNativeRequestId.set(message.nativeRequestId, message.callId);
+      this.flushPendingTokenRecords(message.nativeRequestId, message.callId);
+      this.scheduleTokenRingDrain();
+      return;
+    }
+
+    if (message.kind === 'token-batch') {
+      this.pendingCalls.get(message.callId)?.tokenBatchSink?.(message.batch);
       return;
     }
 

@@ -7,6 +7,7 @@ use crate::lifecycle::{
     model_entry_from_assets, AssetInspection, AssetRecord, AssetRole, AssetSource, ModelAssetKind,
     ModelModality, PairingPlan,
 };
+use futures::executor::block_on;
 use std::{fs, path::PathBuf};
 
 fn vision_plan() -> PairingPlan {
@@ -42,8 +43,6 @@ fn model_id_is_stable_for_asset_order() {
 #[test]
 fn t5_encoder_decoder_fixture_is_available() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
         .join("..")
         .join("..")
         .join("t5-small-f16.gguf");
@@ -142,14 +141,13 @@ fn service_rejects_unresolved_vision_model_on_load() {
     service.registry.insert_model(entry).expect("model");
     record.ref_count = 1;
 
-    let error = service
-        .load(
-            ModelSource::Installed {
-                id: entry_id.clone(),
-            },
-            ModelLoadOptions::default(),
-        )
-        .expect_err("not ready");
+    let error = block_on(service.load(
+        ModelSource::Installed {
+            id: entry_id.clone(),
+        },
+        ModelLoadOptions::default(),
+    ))
+    .expect_err("not ready");
 
     assert!(matches!(error, ModelError::InvalidModelPairing(_)));
 }

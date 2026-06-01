@@ -15,8 +15,25 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 use xshell::{cmd, Shell};
 
-const NODE_SMOKE_SCRIPT: &str = "examples/node_smoke.mjs";
-const PYTHON_SMOKE_SCRIPT: &str = "examples/python_smoke.py";
+const RUST_LOCAL_SMOKE_EXAMPLES: &[&str] = &["query", "chat", "embed"];
+const RUST_REMOTE_SMOKE_EXAMPLES: &[&str] = &["remote_query", "remote_chat", "remote_embed"];
+const NODE_LOCAL_SMOKE_SCRIPTS: &[&str] = &[
+    "examples/query.mjs",
+    "examples/chat.mjs",
+    "examples/embed.mjs",
+];
+const NODE_REMOTE_SMOKE_SCRIPTS: &[&str] = &[
+    "examples/remote_query.mjs",
+    "examples/remote_chat.mjs",
+    "examples/remote_embed.mjs",
+];
+const PYTHON_LOCAL_SMOKE_SCRIPTS: &[&str] =
+    &["examples/query.py", "examples/chat.py", "examples/embed.py"];
+const PYTHON_REMOTE_SMOKE_SCRIPTS: &[&str] = &[
+    "examples/remote_query.py",
+    "examples/remote_chat.py",
+    "examples/remote_embed.py",
+];
 const APP_TEST_SUFFIX: &str = ".test.ts";
 const SKIPPED_APP_TEST_DIRS: &[&str] = &[
     "node_modules",
@@ -52,6 +69,7 @@ fn run_all(sh: &Shell, ctx: &BuildContext, args: &RunAllArgs) -> Result<()> {
     output::phase("App TypeScript tests");
     run_app_tests_only(sh, ctx)?;
     run_binding_browser_inner(sh, ctx, &RunBrowserArgs { ingest: false }, false)?;
+    run_rust_smokes(sh, ctx, &binding_options)?;
     run_node_smokes(sh, ctx, &binding_options)?;
     run_python_smokes(sh, ctx, &binding_options)?;
     run_llama_backend_ops(
@@ -86,10 +104,15 @@ fn run_bindings(sh: &Shell, ctx: &BuildContext, command: RunBindingsCommands) ->
         RunBindingsCommands::All(args) => {
             let options = binding_options_from_smoke(&args)?;
             run_binding_browser(sh, ctx, &RunBrowserArgs { ingest: false })?;
+            run_rust_smokes(sh, ctx, &options)?;
             run_node_smokes(sh, ctx, &options)?;
             run_python_smokes(sh, ctx, &options)
         }
         RunBindingsCommands::Browser(args) => run_binding_browser(sh, ctx, &args),
+        RunBindingsCommands::Rust(args) => {
+            let options = binding_options_from_smoke(&args)?;
+            run_rust_smokes(sh, ctx, &options)
+        }
         RunBindingsCommands::Node(args) => {
             let options = binding_options_from_smoke(&args)?;
             run_node_smokes(sh, ctx, &options)
@@ -249,6 +272,80 @@ fn run_benchmark_browser_smoke(sh: &Shell, ctx: &BuildContext, require_ingest: b
     )
 }
 
+fn run_rust_smokes(
+    sh: &Shell,
+    ctx: &BuildContext,
+    options: &BindingSmokeOptions<'_>,
+) -> Result<()> {
+    output::phase("Rust CogentClient smoke");
+    output::path("Model", &options.model);
+    output::detail("Backend", options.backend.as_str());
+
+    if *options.backend == Backend::All {
+        for backend in host_binding_backends() {
+            run_rust_smoke(sh, ctx, backend, options)?;
+        }
+    } else {
+        run_rust_smoke(sh, ctx, options.backend, options)?;
+    }
+
+    Ok(())
+}
+
+fn run_rust_smoke(
+    sh: &Shell,
+    ctx: &BuildContext,
+    backend: &Backend,
+    options: &BindingSmokeOptions<'_>,
+) -> Result<()> {
+    let backend_value = backend.as_str();
+    let model = &options.model;
+    let prompt = options.prompt;
+    let _dir = sh.push_dir(ctx.workspace_root());
+
+    for example in RUST_LOCAL_SMOKE_EXAMPLES {
+        let mut smoke_cmd = cmd!(sh, "cargo run -p cogentlm-client");
+        if *backend != Backend::Cpu {
+            smoke_cmd = smoke_cmd.arg("--features").arg(backend_value);
+        }
+        smoke_cmd = smoke_cmd
+            .arg("--example")
+            .arg(example)
+            .arg("--")
+            .arg(model)
+            .arg(prompt);
+        if let Some(gpu_layers) = options.gpu_layers {
+            smoke_cmd = smoke_cmd.env("COGENTLM_GPU_LAYERS", gpu_layers.to_string());
+        }
+        smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(backend))?;
+        output::run_command(
+            format!("Running Rust {backend_value} smoke: {example}"),
+            smoke_cmd,
+        )
+        .with_context(|| format!("Rust {backend_value} smoke failed: {example}"))?;
+    }
+
+    if let Some(remote_model) = options.remote_model {
+        for example in RUST_REMOTE_SMOKE_EXAMPLES {
+            let mut smoke_cmd = cmd!(
+                sh,
+                "cargo run -p cogentlm-client --example {example} -- {remote_model} {prompt}"
+            );
+            if let Some(base_url) = options.remote_base_url {
+                smoke_cmd = smoke_cmd.env("COGENTLM_OPENAI_BASE_URL", base_url);
+            }
+            smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(backend))?;
+            output::run_command(
+                format!("Running Rust {backend_value} remote smoke: {example}"),
+                smoke_cmd,
+            )
+            .with_context(|| format!("Rust {backend_value} remote smoke failed: {example}"))?;
+        }
+    }
+
+    Ok(())
+}
+
 fn run_node_smokes(
     sh: &Shell,
     ctx: &BuildContext,
@@ -300,26 +397,42 @@ fn run_node_smoke(
     options: &BindingSmokeOptions<'_>,
 ) -> Result<()> {
     let backend_value = backend.as_str();
-    let model = &options.model;
-    let prompt = options.prompt;
-    let smoke_script = NODE_SMOKE_SCRIPT;
     let node_dir = ctx.bindings_node_dir();
     let _dir = sh.push_dir(&node_dir);
+    let model = &options.model;
+    let prompt = options.prompt;
 
-    let mut smoke_cmd = cmd!(
-        sh,
-        "node {smoke_script} {model} {prompt} --backend {backend_value}"
-    )
-    .env("COGENTLM_NODE_BACKEND", backend_value);
-
-    smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(backend))?;
-
-    if let Some(gpu_layers) = options.gpu_layers {
-        smoke_cmd = smoke_cmd.arg("--gpu-layers").arg(gpu_layers.to_string());
+    for smoke_script in NODE_LOCAL_SMOKE_SCRIPTS {
+        let mut smoke_cmd = cmd!(sh, "node {smoke_script} {model} {prompt}")
+            .env("COGENTLM_NODE_BACKEND", backend_value);
+        if let Some(gpu_layers) = options.gpu_layers {
+            smoke_cmd = smoke_cmd.env("COGENTLM_GPU_LAYERS", gpu_layers.to_string());
+        }
+        smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(backend))?;
+        output::run_command(
+            format!("Running Node {backend_value} smoke: {smoke_script}"),
+            smoke_cmd,
+        )
+        .with_context(|| format!("Node {backend_value} smoke failed: {smoke_script}"))?;
     }
 
-    output::run_command(format!("Running Node {backend_value} smoke"), smoke_cmd)
-        .with_context(|| format!("Node {backend_value} smoke failed"))
+    if let Some(remote_model) = options.remote_model {
+        for smoke_script in NODE_REMOTE_SMOKE_SCRIPTS {
+            let mut smoke_cmd = cmd!(sh, "node {smoke_script} {remote_model} {prompt}")
+                .env("COGENTLM_NODE_BACKEND", backend_value);
+            if let Some(base_url) = options.remote_base_url {
+                smoke_cmd = smoke_cmd.env("COGENTLM_OPENAI_BASE_URL", base_url);
+            }
+            smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(backend))?;
+            output::run_command(
+                format!("Running Node {backend_value} remote smoke: {smoke_script}"),
+                smoke_cmd,
+            )
+            .with_context(|| format!("Node {backend_value} remote smoke failed: {smoke_script}"))?;
+        }
+    }
+
+    Ok(())
 }
 
 fn run_python_smokes(
@@ -373,30 +486,49 @@ fn run_python_smoke(
     options: &BindingSmokeOptions<'_>,
 ) -> Result<()> {
     let backend_value = backend.as_str();
-    let model = &options.model;
-    let prompt = options.prompt;
-    let smoke_script = PYTHON_SMOKE_SCRIPT;
     let python_dir = ctx.bindings_python_dir();
     let python_source_dir = python_dir.join("python");
     let uv_exe = setup_uv(sh, ctx)?;
     let _dir = sh.push_dir(&python_dir);
     let python_exe = ensure_python_venv(sh, &uv_exe, &python_dir)?;
+    let model = &options.model;
+    let prompt = options.prompt;
 
-    let mut smoke_cmd = cmd!(
-        sh,
-        "{python_exe} {smoke_script} {model} {prompt} --backend {backend_value}"
-    )
-    .env("COGENTLM_PYTHON_BACKEND", backend_value)
-    .env("PYTHONPATH", python_source_dir);
-
-    smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(backend))?;
-
-    if let Some(gpu_layers) = options.gpu_layers {
-        smoke_cmd = smoke_cmd.arg("--gpu-layers").arg(gpu_layers.to_string());
+    for smoke_script in PYTHON_LOCAL_SMOKE_SCRIPTS {
+        let mut smoke_cmd = cmd!(sh, "{python_exe} {smoke_script} {model} {prompt}")
+            .env("COGENTLM_PYTHON_BACKEND", backend_value)
+            .env("PYTHONPATH", &python_source_dir);
+        if let Some(gpu_layers) = options.gpu_layers {
+            smoke_cmd = smoke_cmd.env("COGENTLM_GPU_LAYERS", gpu_layers.to_string());
+        }
+        smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(backend))?;
+        output::run_command(
+            format!("Running Python {backend_value} smoke: {smoke_script}"),
+            smoke_cmd,
+        )
+        .with_context(|| format!("Python {backend_value} smoke failed: {smoke_script}"))?;
     }
 
-    output::run_command(format!("Running Python {backend_value} smoke"), smoke_cmd)
-        .with_context(|| format!("Python {backend_value} smoke failed"))
+    if let Some(remote_model) = options.remote_model {
+        for smoke_script in PYTHON_REMOTE_SMOKE_SCRIPTS {
+            let mut smoke_cmd = cmd!(sh, "{python_exe} {smoke_script} {remote_model} {prompt}")
+                .env("COGENTLM_PYTHON_BACKEND", backend_value)
+                .env("PYTHONPATH", &python_source_dir);
+            if let Some(base_url) = options.remote_base_url {
+                smoke_cmd = smoke_cmd.env("COGENTLM_OPENAI_BASE_URL", base_url);
+            }
+            smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(backend))?;
+            output::run_command(
+                format!("Running Python {backend_value} remote smoke: {smoke_script}"),
+                smoke_cmd,
+            )
+            .with_context(|| {
+                format!("Python {backend_value} remote smoke failed: {smoke_script}")
+            })?;
+        }
+    }
+
+    Ok(())
 }
 
 fn run_llama_backend_ops(
@@ -710,6 +842,8 @@ struct BindingSmokeOptions<'a> {
     backend: &'a Backend,
     prompt: &'a str,
     gpu_layers: Option<u32>,
+    remote_model: Option<&'a str>,
+    remote_base_url: Option<&'a str>,
 }
 
 fn binding_options_from_smoke(args: &RunBindingSmokeArgs) -> Result<BindingSmokeOptions<'_>> {
@@ -718,6 +852,8 @@ fn binding_options_from_smoke(args: &RunBindingSmokeArgs) -> Result<BindingSmoke
         backend: &args.backend,
         prompt: &args.prompt,
         gpu_layers: args.gpu_layers,
+        remote_model: args.remote_model.as_deref(),
+        remote_base_url: args.remote_base_url.as_deref(),
     })
 }
 
@@ -727,6 +863,8 @@ fn binding_options_from_all(args: &RunAllArgs) -> Result<BindingSmokeOptions<'_>
         backend: &args.backend,
         prompt: &args.prompt,
         gpu_layers: args.gpu_layers,
+        remote_model: args.remote_model.as_deref(),
+        remote_base_url: args.remote_base_url.as_deref(),
     })
 }
 

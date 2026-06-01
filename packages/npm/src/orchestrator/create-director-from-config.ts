@@ -1,11 +1,12 @@
 import { parseDirectorConfig } from './director-config.js';
-import { DirectorRuntime, type DirectorRuntimeEngine } from './director-runtime.js';
+import { DirectorRuntime, type DirectorRuntimeClient } from './director-runtime.js';
 import type { DirectorConfig } from './director-types.js';
 import type { DirectorRuntimeOptions } from './director-types.js';
 
 export interface CreateDirectorFromConfigUrlOptions {
   readonly configUrl: string;
-  readonly engine: DirectorRuntimeEngine;
+  /** Chat client used by the constructed DirectorRuntime. */
+  readonly client: DirectorRuntimeClient;
   readonly runtimeOptions?: DirectorRuntimeOptions;
   readonly fetch?: typeof globalThis.fetch;
   readonly signal?: AbortSignal;
@@ -23,6 +24,6 @@ export async function createDirectorFromConfigUrl(
     throw new Error(`director.json HTTP ${response.status}`);
   }
   const config = parseDirectorConfig(await response.json());
-  const director = new DirectorRuntime(options.engine, config, options.runtimeOptions);
+  const director = new DirectorRuntime(options.client, config, options.runtimeOptions);
   return { director, config };
 }

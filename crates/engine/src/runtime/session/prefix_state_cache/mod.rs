@@ -1,6 +1,6 @@
-//! Snapshot prefix-cache: LRU+priority store of llama.cpp state buffers keyed by (model, context_key, prefix-hash).
+//! Snapshot prefix-cache: LRU+priority store of llama.cpp state buffers keyed by (model, scope, prefix-hash).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::defaults::BYTES_PER_MIB;
@@ -9,14 +9,13 @@ use crate::runtime::{llama_seq_id, llama_token};
 
 use super::PrefixCachePolicy;
 
-mod snapshots;
 mod state_io;
 mod storage;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrefixCacheEntry {
     pub model_fingerprint: u64,
-    pub context_key: String,
+    pub snapshot_scope: String,
     pub token_count: usize,
     pub prefix_hash: u64,
     pub retention_priority: u64,
@@ -27,39 +26,35 @@ pub struct PrefixCacheEntry {
     pub last_used: Instant,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PendingPrefixSnapshot {
-    pub model_fingerprint: u64,
-    pub context_key: String,
-    pub seq_id: llama_seq_id,
-    pub token_count: usize,
-    pub prefix_hash: u64,
-    pub retention_priority: u64,
-    pub prefix_tokens: Vec<llama_token>,
-}
-
 pub(super) struct PrefixStateStoreRequest<'a> {
     state_bytes: Vec<u8>,
     seq_id: llama_seq_id,
     model_fingerprint: u64,
-    context_key: &'a str,
+    snapshot_scope: &'a str,
     tokens: &'a [llama_token],
     token_count: usize,
     prefix_hash: u64,
     retention_priority: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct PrefixCacheLookupKey {
     pub model_fingerprint: u64,
+    pub snapshot_scope: String,
     pub token_count: usize,
     pub prefix_hash: u64,
 }
 
 impl PrefixCacheLookupKey {
-    pub(super) fn new(model_fingerprint: u64, token_count: usize, prefix_hash: u64) -> Self {
+    pub(super) fn new(
+        model_fingerprint: u64,
+        snapshot_scope: &str,
+        token_count: usize,
+        prefix_hash: u64,
+    ) -> Self {
         Self {
             model_fingerprint,
+            snapshot_scope: snapshot_scope.to_string(),
             token_count,
             prefix_hash,
         }
@@ -68,6 +63,7 @@ impl PrefixCacheLookupKey {
     pub(super) fn for_entry(entry: &PrefixCacheEntry) -> Self {
         Self::new(
             entry.model_fingerprint,
+            &entry.snapshot_scope,
             entry.token_count,
             entry.prefix_hash,
         )
@@ -90,7 +86,6 @@ pub struct PrefixCacheHandle {
 pub struct PrefixStateCache {
     pub(crate) entries: Vec<PrefixCacheEntry>,
     pub(super) lookup_buckets: HashMap<PrefixCacheLookupKey, Vec<usize>>,
-    pub(super) pending_snapshots: VecDeque<PendingPrefixSnapshot>,
     pub(super) max_entries: usize,
     pub(super) max_total_bytes: usize,
     pub(super) total_approx_bytes: usize,
@@ -102,23 +97,23 @@ impl PrefixStateCache {
         Self {
             entries: Vec::with_capacity(max_entries),
             lookup_buckets: HashMap::with_capacity(max_entries),
-            pending_snapshots: VecDeque::with_capacity(max_entries),
             max_entries,
             max_total_bytes: max_total_bytes.max(1),
             total_approx_bytes: 0,
         }
     }
 
-    pub fn find_best_prefix(
+    #[cfg(test)]
+    pub(super) fn find_best_prefix(
         &mut self,
         model_fingerprint: u64,
-        context_key: &str,
+        snapshot_scope: &str,
         prompt_tokens: &[llama_token],
         prefix_cache_policy: &mut PrefixCachePolicy,
     ) -> Option<&PrefixCacheEntry> {
         let handle = self.find_best_prefix_handle(
             model_fingerprint,
-            context_key,
+            snapshot_scope,
             prompt_tokens,
             prefix_cache_policy,
         )?;
@@ -132,67 +127,34 @@ impl PrefixStateCache {
     pub fn find_best_prefix_handle(
         &mut self,
         model_fingerprint: u64,
-        context_key: &str,
+        snapshot_scope: &str,
         prompt_tokens: &[llama_token],
         prefix_cache_policy: &mut PrefixCachePolicy,
     ) -> Option<PrefixCacheHandle> {
         prefix_cache_policy.record_lookup();
-        let candidates = prefix_cache_policy.build_candidate_boundaries(prompt_tokens);
-        if candidates.is_empty() {
-            return None;
-        }
+        let best_index = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| {
+                prefix_entry_matches(entry, model_fingerprint, snapshot_scope, prompt_tokens)
+            })
+            .max_by(|(_, left), (_, right)| {
+                left.token_count
+                    .cmp(&right.token_count)
+                    .then(left.retention_priority.cmp(&right.retention_priority))
+                    .then(left.last_used.cmp(&right.last_used))
+            })
+            .map(|(index, _)| index)?;
 
-        for candidate in candidates {
-            let lookup_key = PrefixCacheLookupKey::new(
-                model_fingerprint,
-                candidate.token_count,
-                candidate.prefix_hash,
-            );
-            let Some(bucket) = self.lookup_buckets.get(&lookup_key) else {
-                continue;
-            };
-
-            let mut best_index: Option<usize> = None;
-            for &entry_index in bucket {
-                let Some(entry) = self.entries.get(entry_index) else {
-                    continue;
-                };
-                if entry.prefix_tokens.len() != candidate.token_count {
-                    continue;
-                }
-                if entry.prefix_tokens.as_slice() != &prompt_tokens[..candidate.token_count] {
-                    continue;
-                }
-
-                let prefer_entry = best_index
-                    .and_then(|index| self.entries.get(index))
-                    .is_none_or(|best_entry: &PrefixCacheEntry| {
-                        (entry.context_key == context_key && best_entry.context_key != context_key)
-                            || (entry.context_key == best_entry.context_key
-                                && entry.retention_priority > best_entry.retention_priority)
-                            || (entry.context_key == best_entry.context_key
-                                && entry.retention_priority == best_entry.retention_priority
-                                && entry.last_used > best_entry.last_used)
-                    });
-                if prefer_entry {
-                    best_index = Some(entry_index);
-                }
-            }
-
-            if let Some(best_index) = best_index {
-                let token_count = self.entries[best_index].token_count;
-                self.entries[best_index].hit_count =
-                    self.entries[best_index].hit_count.saturating_add(1);
-                self.entries[best_index].last_used = Instant::now();
-                prefix_cache_policy.record_hit(token_count);
-                return Some(PrefixCacheHandle {
-                    index: best_index,
-                    token_count,
-                });
-            }
-        }
-
-        None
+        let token_count = self.entries[best_index].token_count;
+        self.entries[best_index].hit_count = self.entries[best_index].hit_count.saturating_add(1);
+        self.entries[best_index].last_used = Instant::now();
+        prefix_cache_policy.record_hit(token_count);
+        Some(PrefixCacheHandle {
+            index: best_index,
+            token_count,
+        })
     }
 
     /// Restores a cached prefix into `seq_id` without exposing the entry's
@@ -209,13 +171,19 @@ impl PrefixStateCache {
         };
         self.restore_prefix_state(runtime, seq_id, entry)
     }
+}
 
-    pub fn clear(&mut self) {
-        self.entries.clear();
-        self.lookup_buckets.clear();
-        self.pending_snapshots.clear();
-        self.total_approx_bytes = 0;
-    }
+fn prefix_entry_matches(
+    entry: &PrefixCacheEntry,
+    model_fingerprint: u64,
+    snapshot_scope: &str,
+    prompt_tokens: &[llama_token],
+) -> bool {
+    entry.model_fingerprint == model_fingerprint
+        && entry.snapshot_scope == snapshot_scope
+        && entry.token_count <= prompt_tokens.len()
+        && entry.prefix_tokens.len() == entry.token_count
+        && entry.prefix_tokens.as_slice() == &prompt_tokens[..entry.token_count]
 }
 
 impl Default for PrefixStateCache {

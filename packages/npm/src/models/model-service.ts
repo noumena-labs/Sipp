@@ -1,14 +1,15 @@
 import type { EngineRuntime } from '../runtime/engine-runtime.js';
 import {
   buildBoundaryMarkers,
-  sliceUnstreamedSuffix,
-  StreamingBoundaryTextSanitizer,
+  sliceUndeliveredSuffix,
+  TokenBoundaryTextSanitizer,
 } from '../engine/chat-boundary-sanitizer.js';
 import type {
   GenerateRequestId,
   GenerateResponse,
   NativeRuntimeConfig,
   PromptOptions,
+  TransportObservability,
 } from '../engine/inference-types.js';
 import { createLinkedAbortController, isAbortError } from '../utils/abort.js';
 import { AssetStore, type RemoteAssetMetadata } from './asset-store.js';
@@ -23,7 +24,6 @@ import {
   type AssetRecord,
   type BrowserBackendPreference,
   type ChatInput,
-  type ChatOptions,
   type ClassifiedAsset,
   type ClassifiedAssetFile,
   type EmbedOptions,
@@ -46,6 +46,7 @@ import {
   type QueryInput,
   type QueryOptions,
   type GenerationResult,
+  type InternalTextRequestOptions,
   type TokenBatch,
   type RegistryManifest,
 } from './types.js';
@@ -80,8 +81,8 @@ interface RuntimeRequestOptions {
   session?: string;
   maxTokens?: number;
   signal?: AbortSignal;
-  onTokens?: (batch: TokenBatch) => void;
-  tokenFlush?: QueryOptions['tokenFlush'];
+  emitTokens?: boolean;
+  tokenBatchSink?: (batch: TokenBatch) => void;
   grammar?: string;
   onRequestStarted?: (requestId: number) => void;
 }
@@ -131,30 +132,34 @@ function nowMs(): number {
     : Date.now();
 }
 
+const textEncoder = new TextEncoder();
+
 function tokenBatchFromText(
   requestId: string,
   streamId: number,
   sequenceStart: number,
   text: string
 ): TokenBatch {
+  const byteCount = utf8ByteLength(text);
   return {
     requestId,
     streamId,
     sequenceStart,
     text,
     frameCount: 1,
-    byteCount: utf8ByteLength(text),
+    byteCount,
     stats: {
       framesSent: sequenceStart + 1,
-      bytesSent: utf8ByteLength(text),
-      framesDropped: 0,
+      bytesSent: byteCount,
       batchesSent: sequenceStart + 1,
+      drainMs: 0,
+      drainCalls: 0,
     },
   };
 }
 
 function utf8ByteLength(text: string): number {
-  return new TextEncoder().encode(text).byteLength;
+  return textEncoder.encode(text).byteLength;
 }
 
 function entryAssetFingerprint(entry: Pick<ModelEntry, 'modelAssetIds' | 'projectorAssetId'>): string {
@@ -308,12 +313,15 @@ export class ModelService implements ModelLifecycleService {
     });
   }
 
-  public async query(input: QueryInput, options: QueryOptions = {}): Promise<GenerationResult> {
+  public async runQuery(
+    input: QueryInput,
+    options: InternalTextRequestOptions
+  ): Promise<GenerationResult> {
     if (this.transitioning) {
       throw new QueryError('MODEL_NOT_READY', 'A model lifecycle transition is in progress.');
     }
     if (this.currentLoaded == null) {
-      throw new QueryError('MODEL_NOT_READY', 'No model is loaded. Call engine.models.load(...) first.');
+      throw new QueryError('MODEL_NOT_READY', 'No model is loaded. Call client.addLocal(...) first.');
     }
     let prompt = typeof input === 'string' ? input : input.prompt;
     const media = typeof input === 'string' ? undefined : input.media;
@@ -337,12 +345,15 @@ export class ModelService implements ModelLifecycleService {
     });
   }
 
-  public async embed(input: string, options: EmbedOptions = {}): Promise<EmbeddingResult> {
+  public async runEmbedding(
+    input: string,
+    options: EmbedOptions
+  ): Promise<EmbeddingResult> {
     if (this.transitioning) {
       throw new QueryError('MODEL_NOT_READY', 'A model lifecycle transition is in progress.');
     }
     if (this.currentLoaded == null) {
-      throw new QueryError('MODEL_NOT_READY', 'No model is loaded. Call engine.models.load(...) first.');
+      throw new QueryError('MODEL_NOT_READY', 'No model is loaded. Call client.addLocal(...) first.');
     }
 
     const response = await this.runRuntimeRequest(
@@ -367,32 +378,27 @@ export class ModelService implements ModelLifecycleService {
     enqueue: (session: string, promptOptions: PromptOptions) => Promise<GenerateRequestId>,
     operationLabel = 'Model query'
   ): Promise<GenerateResponse> {
-    let activeRequestId: number | null = null;
-    let nextSequence = 0;
-    const emitTokens = (batch: TokenBatch): void => {
-      const requestId = activeRequestId ?? Number(batch.streamId);
-      const text = batch.text;
-      if (text.length === 0) {
+    let tokenDrainMs = 0;
+    let tokenDrainCalls = 0;
+    const deliverTokenBatch = (batch: TokenBatch): void => {
+      if (batch.text.length === 0) {
         return;
       }
-      options.onTokens?.({
-        ...batch,
-        requestId: String(requestId),
-        streamId: requestId,
-        sequenceStart: nextSequence,
-      });
-      nextSequence += Math.max(1, batch.frameCount);
+      tokenDrainMs = batch.stats.drainMs;
+      tokenDrainCalls = batch.stats.drainCalls;
+      options.tokenBatchSink?.(batch);
     };
     const promptOptions: PromptOptions = {
       nTokens: options.maxTokens,
       signal: options.signal,
-      onTokens: options.onTokens == null ? undefined : emitTokens,
-      tokenFlush: options.onTokens == null ? undefined : options.tokenFlush ?? 'token',
+      emitTokens: options.emitTokens === true || options.tokenBatchSink != null,
+      tokenBatchSink: options.tokenBatchSink == null ? undefined : deliverTokenBatch,
       media,
       grammar: options.grammar,
       onRequestStarted: options.onRequestStarted,
     };
     const session = options.session ?? 'default';
+    const emitsTokens = promptOptions.emitTokens === true;
     const start = nowMs();
     this.observability.emit('query-start', {
       state: 'querying',
@@ -404,15 +410,21 @@ export class ModelService implements ModelLifecycleService {
         outputTokens: null,
       },
     });
+    let requestId = 0;
     let failureRecorded = false;
     try {
-      const requestId = await enqueue(session, promptOptions);
-      activeRequestId = requestId;
+      requestId = await enqueue(session, promptOptions);
       this.emitEngineEvent({ type: 'request-started', requestId: String(requestId), streamId: requestId });
       const response = await this.runtime.awaitQuery(requestId, { signal: options.signal });
       if (response.cancelled) {
         const error = new DOMException(response.errorMessage ?? 'Queued request cancelled.', 'AbortError');
-        this.recordQueryFailure(session, start, error, response);
+        this.recordQueryFailure(
+          session,
+          start,
+          error,
+          response,
+          this.requestTransportObservability(emitsTokens, tokenDrainMs, tokenDrainCalls)
+        );
         this.emitEngineEvent({
           type: 'request-failed',
           requestId: String(requestId),
@@ -423,7 +435,13 @@ export class ModelService implements ModelLifecycleService {
       }
       if (response.failed) {
         const error = new Error(response.errorMessage ?? 'Queued prompt failed.');
-        this.recordQueryFailure(session, start, error, response);
+        this.recordQueryFailure(
+          session,
+          start,
+          error,
+          response,
+          this.requestTransportObservability(emitsTokens, tokenDrainMs, tokenDrainCalls)
+        );
         this.emitEngineEvent({
           type: 'request-failed',
           requestId: String(requestId),
@@ -432,7 +450,12 @@ export class ModelService implements ModelLifecycleService {
         failureRecorded = true;
         throw error;
       }
-      this.recordQuerySuccess(session, start, response);
+      this.recordQuerySuccess(
+        session,
+        start,
+        response,
+        this.requestTransportObservability(emitsTokens, tokenDrainMs, tokenDrainCalls)
+      );
       this.emitEngineEvent({
         type: 'request-completed',
         requestId: String(requestId),
@@ -440,7 +463,13 @@ export class ModelService implements ModelLifecycleService {
       return response;
     } catch (error) {
       if (!failureRecorded) {
-        this.recordQueryFailure(session, start, error);
+        this.recordQueryFailure(
+          session,
+          start,
+          error,
+          undefined,
+          this.requestTransportObservability(emitsTokens, tokenDrainMs, tokenDrainCalls)
+        );
       }
       if (error instanceof QueryError) {
         throw error;
@@ -452,10 +481,10 @@ export class ModelService implements ModelLifecycleService {
           : `${operationLabel} failed.`,
         { cause: error }
       );
-      if (!failureRecorded && activeRequestId != null) {
+      if (!failureRecorded && requestId !== 0) {
         this.emitEngineEvent({
           type: 'request-failed',
-          requestId: String(activeRequestId),
+          requestId: String(requestId),
           error: wrapped.message,
         });
       }
@@ -463,12 +492,15 @@ export class ModelService implements ModelLifecycleService {
     }
   }
 
-  public async chat(input: ChatInput, options: ChatOptions = {}): Promise<GenerationResult> {
+  public async runChat(
+    input: ChatInput,
+    options: InternalTextRequestOptions
+  ): Promise<GenerationResult> {
     if (this.transitioning) {
       throw new QueryError('MODEL_NOT_READY', 'A model lifecycle transition is in progress.');
     }
     if (this.currentLoaded == null) {
-      throw new QueryError('MODEL_NOT_READY', 'No model is loaded. Call engine.models.load(...) first.');
+      throw new QueryError('MODEL_NOT_READY', 'No model is loaded. Call client.addLocal(...) first.');
     }
 
     const current = this.currentLoaded;
@@ -478,26 +510,26 @@ export class ModelService implements ModelLifecycleService {
       throw new QueryError('MODEL_NOT_READY', 'The loaded model does not accept media input.');
     }
     const boundaryMarkers = await this.getChatBoundaryMarkers(current);
-    const outputSanitizer = new StreamingBoundaryTextSanitizer(boundaryMarkers);
+    const outputSanitizer = new TokenBoundaryTextSanitizer(boundaryMarkers);
     const linkedAbort = createLinkedAbortController(options.signal);
-    let streamedOutputText = '';
+    let deliveredOutputText = '';
     let assistantText = '';
     let stoppedAtBoundary = false;
 
     let safeSequence = 0;
     let lastBatch: TokenBatch | null = null;
-    const shouldStreamTokens = options.onTokens != null;
+    const shouldDeliverTokens = options.tokenBatchSink != null;
     const consumeOutputTokens = (batch: TokenBatch): void => {
       lastBatch = batch;
       const text = batch.text;
       if (text.length === 0 || outputSanitizer.reachedBoundary) {
         return;
       }
-      streamedOutputText += text;
+      deliveredOutputText += text;
       const result = outputSanitizer.consume(text);
       if (result.safeText.length > 0) {
         assistantText += result.safeText;
-        options.onTokens?.(
+        options.tokenBatchSink?.(
           tokenBatchFromText(batch.requestId, batch.streamId, safeSequence++, result.safeText)
         );
       }
@@ -512,7 +544,7 @@ export class ModelService implements ModelLifecycleService {
       if (safeText.length > 0) {
         assistantText += safeText;
         const source = lastBatch ?? tokenBatchFromText('0', 0, safeSequence, safeText);
-        options.onTokens?.(
+        options.tokenBatchSink?.(
           tokenBatchFromText(source.requestId, source.streamId, safeSequence++, safeText)
         );
       }
@@ -523,7 +555,7 @@ export class ModelService implements ModelLifecycleService {
         {
           ...options,
           signal: linkedAbort.signal,
-          ...(shouldStreamTokens ? { onTokens: consumeOutputTokens } : {}),
+          ...(shouldDeliverTokens ? { tokenBatchSink: consumeOutputTokens } : {}),
         },
         media == null ? undefined : [...media],
         (session, promptOptions) => this.runtime.enqueueChat(session, messages, promptOptions),
@@ -533,11 +565,16 @@ export class ModelService implements ModelLifecycleService {
       if (rawText == null) {
         throw new Error('Runtime completed chat() without text output.');
       }
-      const unseenOutputSuffix = shouldStreamTokens
-        ? sliceUnstreamedSuffix(streamedOutputText, rawText)
+      const unseenOutputSuffix = shouldDeliverTokens
+        ? sliceUndeliveredSuffix(deliveredOutputText, rawText)
         : rawText;
       if (!outputSanitizer.reachedBoundary && unseenOutputSuffix.length > 0) {
-        const source = lastBatch ?? tokenBatchFromText(String(rawResult.requestId), 0, safeSequence, unseenOutputSuffix);
+        const source = lastBatch ?? tokenBatchFromText(
+          String(rawResult.requestId),
+          rawResult.requestId,
+          safeSequence,
+          unseenOutputSuffix
+        );
         consumeOutputTokens(
           tokenBatchFromText(source.requestId, source.streamId, safeSequence, unseenOutputSuffix)
         );
@@ -799,12 +836,13 @@ export class ModelService implements ModelLifecycleService {
   private recordQuerySuccess(
     session: string,
     start: number,
-    response: GenerateResponse
+    response: GenerateResponse,
+    transport: TransportObservability
   ): void {
     const metrics = response.observability ?? null;
     const runtime = toRuntimeObservation(
       metrics ?? this.runtime.getRuntimeObservability(),
-      this.runtime.getTransportObservability()
+      transport
     );
     this.observability.emit('query-complete', {
       state: 'ready',
@@ -817,12 +855,13 @@ export class ModelService implements ModelLifecycleService {
     session: string,
     start: number,
     error: unknown,
-    response?: GenerateResponse
+    response?: GenerateResponse,
+    transport: TransportObservability = this.runtime.getTransportObservability()
   ): void {
     const metrics = response?.observability ?? null;
     const runtime = toRuntimeObservation(
       metrics ?? this.runtime.getRuntimeObservability(),
-      this.runtime.getTransportObservability()
+      transport
     );
     this.observability.emit('error', {
       state: 'error',
@@ -838,6 +877,27 @@ export class ModelService implements ModelLifecycleService {
       },
       ...(runtime == null ? {} : { runtime }),
     });
+  }
+
+  private requestTransportObservability(
+    emitsTokens: boolean,
+    tokenDrainMs = 0,
+    tokenDrainCalls = 0
+  ): TransportObservability {
+    const current = this.runtime.getTransportObservability();
+    const transport: TransportObservability = {
+      ...current,
+      activeTokenEmission: emitsTokens,
+      activeTokenTransport: emitsTokens ? 'token-stream' : 'none',
+    };
+    if (!emitsTokens) {
+      delete transport.tokenDrainCalls;
+      delete transport.tokenDrainMs;
+      return transport;
+    }
+    transport.tokenDrainCalls = tokenDrainCalls;
+    transport.tokenDrainMs = tokenDrainMs;
+    return transport;
   }
 
   private toQueryObservation(

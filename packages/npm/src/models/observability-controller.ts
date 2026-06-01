@@ -36,7 +36,8 @@ const emptyStats: EngineStats = {
   ttftMs: null,
   interTokenMs: null,
   e2eMs: null,
-  tokensPerSecond: null,
+  decodeTokensPerSecond: null,
+  e2eTokensPerSecond: null,
   prefillTokensPerSecond: null,
   prefillMs: 0,
   decodeMs: 0,
@@ -100,10 +101,8 @@ export function toRuntimeObservation(
   }
 
   const tokenPath =
-    transport.activeTokenTransport === 'streaming-buffer'
-      ? 'streaming-buffer'
-      : transport.activeTokenTransport === 'callback'
-        ? 'callback'
+    transport.activeTokenTransport === 'token-stream'
+      ? 'token-stream'
       : transport.activeTokenTransport === 'none'
         ? 'none'
         : undefined;
@@ -120,14 +119,18 @@ export function toRuntimeObservation(
     nativeLogicMs: metrics.nativeLogicMs,
     inputTokens: metrics.inputTokens,
     outputTokens: metrics.outputTokens,
+    cacheMode: metrics.cacheMode,
+    cacheSource: metrics.cacheSource,
     cacheHits: metrics.cacheHits,
     prefillTokens: metrics.prefillTokens,
-    tokensPerSecond: metrics.decodeMs > 0 ? (metrics.outputTokens / metrics.decodeMs) * 1000 : 0,
+    decodeTokensPerSecond:
+      metrics.decodeMs > 0 ? (metrics.outputTokens / metrics.decodeMs) * 1000 : 0,
+    e2eTokensPerSecond:
+      metrics.e2eMs > 0 ? (metrics.outputTokens / metrics.e2eMs) * 1000 : 0,
     prefillTokensPerSecond:
       metrics.prefillMs >= 0.1 && metrics.prefillTokens >= 1
         ? (metrics.prefillTokens / metrics.prefillMs) * 1000
         : 0,
-
 
     execution: {
       mode: transport.executionMode,
@@ -136,11 +139,12 @@ export function toRuntimeObservation(
     },
   };
 
-  includeFinite(observation, 'jsStreamingDrainMs', transport.streamingDrainMs);
-  includeFinite(observation, 'jsStreamingDrainCount', transport.streamingDrainCount);
+  if (tokenPath === 'token-stream') {
+    includeFinite(observation, 'jsTokenDrainMs', transport.tokenDrainMs);
+    includeFinite(observation, 'jsTokenDrainCalls', transport.tokenDrainCalls);
+  }
   return observation;
 }
-
 
 export function toBackendProfileObservation(
   backend: BackendObservability | null
@@ -288,7 +292,8 @@ function toEngineStats(snapshot: ObservabilitySnapshot): EngineStats {
     ttftMs: runtime?.ttftMs ?? query?.ttftMs ?? null,
     interTokenMs: runtime?.itlAvgMs ?? null,
     e2eMs: runtime?.e2eMs ?? query?.wallMs ?? null,
-    tokensPerSecond: runtime?.tokensPerSecond ?? null,
+    decodeTokensPerSecond: runtime?.decodeTokensPerSecond ?? null,
+    e2eTokensPerSecond: runtime?.e2eTokensPerSecond ?? null,
     prefillTokensPerSecond: runtime?.prefillTokensPerSecond ?? null,
     prefillMs: runtime?.prefillMs ?? 0,
     decodeMs: runtime?.decodeMs ?? 0,
@@ -340,13 +345,24 @@ function requestStatsFromMetrics(metrics: GenerateResponse['observability']): Re
   return {
     inputTokens: metrics?.inputTokens ?? 0,
     outputTokens: metrics?.outputTokens ?? 0,
+    cacheMode: metrics?.cacheMode ?? null,
+    cacheSource: metrics?.cacheSource ?? null,
     cacheHits: metrics?.cacheHits ?? 0,
+    prefillTokens: metrics?.prefillTokens ?? null,
     ttftMs: metrics?.ttftMs ?? null,
     interTokenMs: metrics?.itlAvgMs ?? null,
     e2eMs: metrics?.e2eMs ?? null,
-    tokensPerSecond:
+    decodeTokensPerSecond:
       metrics != null && metrics.decodeMs > 0
         ? (metrics.outputTokens / metrics.decodeMs) * 1000
+        : null,
+    e2eTokensPerSecond:
+      metrics != null && metrics.e2eMs > 0
+        ? (metrics.outputTokens / metrics.e2eMs) * 1000
+        : null,
+    prefillTokensPerSecond:
+      metrics != null && metrics.prefillMs > 0 && metrics.prefillTokens > 0
+        ? (metrics.prefillTokens / metrics.prefillMs) * 1000
         : null,
     prefillMs: metrics?.prefillMs ?? 0,
     decodeMs: metrics?.decodeMs ?? 0,

@@ -64,25 +64,6 @@ impl EmptyStringFallback for String {
 }
 
 impl EngineThreadState {
-    pub(super) fn fail_requests_with_sink_errors(&mut self) {
-        let errored_ids: Vec<_> = self
-            .token_sinks
-            .iter_mut()
-            .filter_map(|(&request_id, sink)| {
-                sink.try_recv_error().map(|error| {
-                    let message = error.to_string();
-                    (request_id, error, message)
-                })
-            })
-            .collect();
-
-        for (request_id, error, error_msg) in errored_ids {
-            self.cancel_and_cleanup_request(request_id);
-            self.send_active_response(request_id, Err(error));
-            self.emit_request_failed(request_id, error_msg);
-        }
-    }
-
     pub(super) fn complete_finished_requests(&mut self) {
         let Some(runtime) = self.runtime.as_mut() else {
             return;
@@ -99,11 +80,11 @@ impl EngineThreadState {
             .collect();
 
         for (request_id, response) in completed {
-            self.close_token_sink(request_id);
+            self.close_token_emission(request_id);
             if let Some(runtime) = self.runtime.as_mut() {
                 runtime
                     .request_queue
-                    .token_ring_producers
+                    .token_emission_sinks
                     .remove(&request_id);
             }
 
@@ -161,21 +142,22 @@ impl EngineThreadState {
         self.active_requests.keys().copied().collect()
     }
 
-    fn cancel_and_cleanup_request(&mut self, request_id: u32) {
+    pub(super) fn cancel_and_cleanup_request(&mut self, request_id: u32) {
         if let Some(runtime) = self.runtime.as_mut() {
             cancel_and_consume_request(runtime, request_id);
             runtime
                 .request_queue
-                .token_ring_producers
+                .token_emission_sinks
                 .remove(&request_id);
         }
-        self.close_token_sink(request_id);
+        self.close_token_emission(request_id);
     }
 
-    fn close_token_sink(&mut self, request_id: u32) {
-        if let Some(mut sink) = self.token_sinks.remove(&request_id) {
-            sink.producer.close();
-            let _ = sink.join();
+    fn close_token_emission(&mut self, request_id: u32) {
+        if let Some(active) = self.active_requests.get_mut(&request_id) {
+            if let Some(token) = active.token.take() {
+                token.producer.close();
+            }
         }
     }
 
@@ -221,7 +203,7 @@ impl EngineThreadState {
         Err(runtime_command(message))
     }
 
-    fn emit_request_failed(&self, request_id: u32, error: String) {
+    pub(super) fn emit_request_failed(&self, request_id: u32, error: String) {
         emit_event(
             &self.event_subscribers,
             EngineEvent::RequestFailed {

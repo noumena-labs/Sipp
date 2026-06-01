@@ -9,7 +9,9 @@ import type {
   EmbedOptions,
   QueryInput,
   QueryOptions,
+  TokenBatch,
 } from '../models/types.js';
+import type { SharedTokenRingDescriptor } from '../runtime/shared-token-ring.js';
 
 export interface WorkerRuntimeConfig {
   moduleUrl?: string;
@@ -20,22 +22,12 @@ export interface WorkerRuntimeConfig {
   trustedOrigins?: string[];
 }
 
-// `streaming` carries the caller's intent across the worker boundary because
-// `onTokens` itself can't be cloned through postMessage.  When false the worker
-// runs the engine in TOKEN_EMISSION_NONE; when true the worker writes tokens
-// to the SAB ring for the main thread to drain.
 export type WorkerQueryOptions =
-  Pick<QueryOptions, 'session' | 'maxTokens' | 'grammar' | 'tokenFlush'> & {
-    streaming: boolean;
+  Pick<QueryOptions, 'session' | 'maxTokens' | 'grammar'> & {
+    emitTokens: boolean;
   };
 
 export type WorkerRequestMessage =
-  | {
-      // Sent once on worker spawn.  Carries the SAB ring used for streaming;
-      // null disables streaming (engine runs in NONE mode for that worker).
-      kind: 'streaming-init';
-      ringBuffer: SharedArrayBuffer | null;
-    }
   | {
       kind: 'models-load';
       callId: number;
@@ -104,11 +96,18 @@ export type WorkerResponseMessage =
       progress: ModelLoadProgress;
     }
   | {
-      // Maps native GenerateRequestId → worker callId.  Sent once per
-      // streaming request on enqueue, before any ring records arrive.
-      kind: 'streaming-claim';
+      kind: 'token-ring-ready';
+      descriptor: SharedTokenRingDescriptor;
+    }
+  | {
+      kind: 'token-ring-claim';
       callId: number;
       nativeRequestId: number;
+    }
+  | {
+      kind: 'token-batch';
+      callId: number;
+      batch: TokenBatch;
     }
   | {
       kind: 'observability-event';
@@ -117,9 +116,4 @@ export type WorkerResponseMessage =
   | {
       kind: 'engine-event';
       event: EngineEvent;
-    }
-  | {
-      // Pure signal from worker to main thread: "bytes were written to the ring."
-      // Triggers a drainStreamingRing call on the main thread (macrotask).
-      kind: 'streaming-tick';
     };

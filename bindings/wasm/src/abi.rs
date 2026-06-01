@@ -23,9 +23,11 @@ pub struct BrowserRuntimeMetrics {
     pub native_logic_ms: f64,
     pub input_tokens: i32,
     pub output_tokens: i32,
+    pub cache_mode: i32,
+    pub cache_source: i32,
     pub cache_hits: i32,
     pub prefill_tokens: i32,
 }
 
 const _: () = assert!(size_of::<BrowserSchedulerLoopResult>() == 16);
-const _: () = assert!(size_of::<BrowserRuntimeMetrics>() == 88);
+const _: () = assert!(size_of::<BrowserRuntimeMetrics>() == 96);

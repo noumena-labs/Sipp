@@ -7,7 +7,7 @@ fn record_header_round_trips_without_slice_conversions() {
     let header = TokenRingRecordHeader {
         stream_id: 7,
         sequence: u32::MAX - 1,
-        flags: 3,
+        frame_count: 3,
         byte_len: 4096,
     };
 

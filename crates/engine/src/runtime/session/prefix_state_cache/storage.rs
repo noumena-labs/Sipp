@@ -1,9 +1,12 @@
 use crate::runtime::llama_token;
 
-use super::{prefix_entry_approx_bytes, PrefixCacheEntry, PrefixCacheLookupKey, PrefixStateCache};
+#[cfg(test)]
+use super::prefix_entry_approx_bytes;
+use super::{PrefixCacheEntry, PrefixCacheLookupKey, PrefixStateCache};
 
 impl PrefixStateCache {
-    pub fn insert_test_entry(&mut self, mut entry: PrefixCacheEntry) {
+    #[cfg(test)]
+    pub(super) fn insert_test_entry(&mut self, mut entry: PrefixCacheEntry) {
         let Some(approx_bytes) =
             prefix_entry_approx_bytes(entry.state_bytes.len(), entry.token_count)
         else {
@@ -14,13 +17,13 @@ impl PrefixStateCache {
     }
 
     pub(super) fn insert_or_update_entry(&mut self, entry: PrefixCacheEntry) {
-        if entry.token_count == 0 || entry.token_count > entry.prefix_tokens.len() {
+        if entry.token_count == 0 || entry.token_count != entry.prefix_tokens.len() {
             return;
         }
 
         if let Some(existing_index) = self.find_existing_entry_index(
             entry.model_fingerprint,
-            &entry.context_key,
+            &entry.snapshot_scope,
             &entry.prefix_tokens,
             entry.token_count,
             entry.prefix_hash,
@@ -55,16 +58,17 @@ impl PrefixStateCache {
     fn find_existing_entry_index(
         &self,
         model_fingerprint: u64,
-        context_key: &str,
+        snapshot_scope: &str,
         tokens: &[llama_token],
         token_count: usize,
         prefix_hash: u64,
     ) -> Option<usize> {
-        let lookup_key = PrefixCacheLookupKey::new(model_fingerprint, token_count, prefix_hash);
+        let lookup_key =
+            PrefixCacheLookupKey::new(model_fingerprint, snapshot_scope, token_count, prefix_hash);
         self.lookup_buckets.get(&lookup_key).and_then(|bucket| {
             bucket.iter().copied().find(|&entry_index| {
                 self.entries.get(entry_index).is_some_and(|entry| {
-                    entry.context_key == context_key
+                    entry.snapshot_scope == snapshot_scope
                         && entry.prefix_tokens.len() == token_count
                         && token_count <= tokens.len()
                         && entry.prefix_tokens.as_slice() == &tokens[..token_count]

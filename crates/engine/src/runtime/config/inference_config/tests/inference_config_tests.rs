@@ -138,6 +138,7 @@ fn try_sampling_json_merges_overrides_without_silent_fallback() {
         ..SamplingRuntimeConfig::default()
     };
 
+    let override_config = RequestSampling::Full(override_config);
     let json = config
         .try_sampling_json_with_override(Some(&override_config))
         .expect("sampling JSON");
@@ -149,12 +150,30 @@ fn try_sampling_json_merges_overrides_without_silent_fallback() {
 }
 
 #[test]
+fn sampling_patch_merges_only_common_knobs() {
+    let config = NativeRuntimeConfig::default();
+    let patch = RequestSampling::Patch(SamplingRuntimePatch {
+        temperature: Some(0.2),
+        top_p: None,
+    });
+
+    let json = config
+        .try_sampling_json_with_override(Some(&patch))
+        .expect("sampling JSON");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+
+    assert_float_eq(value["temperature"].as_f64(), 0.2);
+    assert_float_eq(value["top_p"].as_f64(), 0.8);
+    assert_eq!(value["backend_sampling"], cfg!(not(target_arch = "wasm32")));
+    assert_eq!(value["samplers"].as_array().expect("samplers").len(), 4);
+}
+
+#[test]
 fn native_runtime_config_normalizes_policy_limits() {
     let mut config = NativeRuntimeConfig::default();
     config.context.n_parallel = Some(0);
     config.scheduler.prefill_chunk_size = -1;
     config.scheduler.max_running_requests = Some(0);
-    config.cache.max_session_entries = 0;
     config.cache.retained_prefix_tokens = -1;
     config.cache.snapshot_interval_tokens = -1;
     config.cache.max_snapshot_entries = 0;
@@ -166,7 +185,6 @@ fn native_runtime_config_normalizes_policy_limits() {
     assert_eq!(config.context.n_parallel, Some(1));
     assert_eq!(config.scheduler.prefill_chunk_size, 0);
     assert_eq!(config.scheduler.max_running_requests, Some(1));
-    assert_eq!(config.cache.max_session_entries, 1);
     assert_eq!(config.cache.retained_prefix_tokens, 0);
     assert_eq!(config.cache.snapshot_interval_tokens, 0);
     assert_eq!(config.cache.max_snapshot_entries, 1);
@@ -189,5 +207,13 @@ fn assert_arg_value(args: &[String], key: &str, expected: &str) {
         arg_value(args, key),
         Some(expected),
         "missing or wrong value for {key}"
+    );
+}
+
+fn assert_float_eq(actual: Option<f64>, expected: f64) {
+    let actual = actual.expect("float value");
+    assert!(
+        (actual - expected).abs() < 1e-6,
+        "expected {expected}, got {actual}"
     );
 }

@@ -1,11 +1,12 @@
 import type {
   BackendDeviceType,
+  CacheSource,
   ChatMessage,
+  KvReuseMode,
   NativeRuntimeConfig,
   PoolingType,
-  StreamStats,
+  TokenEmissionStats,
   TokenBatch,
-  TokenFlushMode,
 } from '../engine/inference-types.js';
 import type { OpfsSyncAccessHandle } from '../engine/file-system-storage.js';
 
@@ -60,7 +61,7 @@ export type ModelSource =
   };
 
 export interface ModelInfo {
-  /** Installed model id persisted in OPFS. Pass this back to engine.models.load(id) to reload it. */
+  /** Installed model id persisted in OPFS. Pass this back to client.addLocal(id) to reload it. */
   id: string;
   name: string;
   modality: ModelModality;
@@ -185,8 +186,7 @@ export interface QueryOptions {
   session?: string;
   maxTokens?: number;
   signal?: AbortSignal;
-  onTokens?: (batch: TokenBatch) => void;
-  tokenFlush?: TokenFlushMode;
+  emitTokens?: boolean;
   grammar?: string;
 }
 
@@ -198,6 +198,11 @@ export type ChatInput =
     };
 
 export type ChatOptions = QueryOptions;
+
+export interface InternalTextRequestOptions extends QueryOptions {
+  onRequestStarted?: (requestId: number) => void;
+  tokenBatchSink?: (batch: TokenBatch) => void;
+}
 
 export interface QueryObservation {
   session: string | null;
@@ -225,22 +230,25 @@ export interface RuntimeObservation {
 
   inputTokens: number;
   outputTokens: number;
+  cacheMode: KvReuseMode;
+  cacheSource: CacheSource;
   cacheHits: number;
   prefillTokens: number;
 
-  tokensPerSecond: number | null;
+  decodeTokensPerSecond: number | null;
+  e2eTokensPerSecond: number | null;
   prefillTokensPerSecond: number | null;
 
   // JS Side & Transport Metadata
   execution: {
     mode: 'main-thread' | 'worker';
     workerBacked: boolean;
-    tokenPath?: 'none' | 'streaming-buffer' | 'callback';
+    tokenPath?: 'none' | 'token-stream';
   };
 
-  /** Cumulative ms spent in `_ce_yield_drain` (SAB ring writes from native scratch). */
-  jsStreamingDrainMs?: number;
-  jsStreamingDrainCount?: number;
+  /** Request-local ms spent draining native token records into JS token batches. */
+  jsTokenDrainMs?: number;
+  jsTokenDrainCalls?: number;
 }
 
 export interface BackendProfileObservation {
@@ -297,7 +305,8 @@ export interface EngineStats {
   ttftMs: number | null;
   interTokenMs: number | null;
   e2eMs: number | null;
-  tokensPerSecond: number | null;
+  decodeTokensPerSecond: number | null;
+  e2eTokensPerSecond: number | null;
   prefillTokensPerSecond: number | null;
   prefillMs: number;
   decodeMs: number;
@@ -318,11 +327,16 @@ export interface EngineState {
 export interface RequestStats {
   inputTokens: number;
   outputTokens: number;
+  cacheMode: KvReuseMode | null;
+  cacheSource: CacheSource | null;
   cacheHits: number;
+  prefillTokens: number | null;
   ttftMs: number | null;
   interTokenMs: number | null;
   e2eMs: number | null;
-  tokensPerSecond: number | null;
+  decodeTokensPerSecond: number | null;
+  e2eTokensPerSecond: number | null;
+  prefillTokensPerSecond: number | null;
   prefillMs: number;
   decodeMs: number;
 }
@@ -351,6 +365,19 @@ export interface EmbeddingResult {
   stats: RequestStats;
 }
 
+export type BrowserTokenBatches = AsyncIterable<TokenBatch>;
+
+export interface BrowserTextRun {
+  readonly response: Promise<GenerationResult>;
+  readonly tokens: BrowserTokenBatches;
+  cancel(reason?: unknown): void;
+}
+
+export interface BrowserEmbeddingRun {
+  readonly response: Promise<EmbeddingResult>;
+  cancel(reason?: unknown): void;
+}
+
 export type EngineEvent =
   | { type: 'state'; state: EngineState }
   | { type: 'load-progress'; loadedBytes: number; totalBytes: number | null; assetName?: string }
@@ -359,7 +386,7 @@ export type EngineEvent =
   | { type: 'request-failed'; requestId: string; error: string }
   | { type: 'closed' };
 
-export type { StreamStats, TokenBatch, TokenFlushMode };
+export type { TokenEmissionStats, TokenBatch };
 
 export interface ObservabilitySnapshot {
   mode: ObservabilityMode;
@@ -387,14 +414,38 @@ export interface ModelLifecycleService {
   current(): ModelInfo | null;
   list(): Promise<ModelInfo[]>;
   remove(id: string): Promise<void>;
-  query(input: QueryInput, options?: QueryOptions): Promise<GenerationResult>;
-  chat(input: ChatInput, options?: ChatOptions): Promise<GenerationResult>;
-  embed(input: string, options?: EmbedOptions): Promise<EmbeddingResult>;
+  runQuery(
+    input: QueryInput,
+    options: InternalTextRequestOptions
+  ): Promise<GenerationResult>;
+  runChat(
+    input: ChatInput,
+    options: InternalTextRequestOptions
+  ): Promise<GenerationResult>;
+  runEmbedding(input: string, options: EmbedOptions): Promise<EmbeddingResult>;
   state(): EngineState;
   subscribeEvents(listener: (event: EngineEvent) => void): () => void;
   currentObservability(): ObservabilitySnapshot;
   subscribeObservability(listener: (event: ObservabilityEvent) => void): () => void;
   close(): void | Promise<void>;
+}
+
+export interface CogentClient {
+  readonly observability: EngineObservability;
+  /** Load a local model and make it the current local endpoint. */
+  addLocal(source: ModelSource, options?: ModelLoadOptions): Promise<ModelInfo>;
+  /** Return the currently loaded local model, if one is active. */
+  currentLocal(): ModelInfo | null;
+  /** List installed local models. */
+  listLocal(): Promise<ModelInfo[]>;
+  /** Remove an installed local model by id. */
+  removeLocal(id: string): Promise<void>;
+  query(input: QueryInput, options?: QueryOptions): BrowserTextRun;
+  chat(input: ChatInput, options?: ChatOptions): BrowserTextRun;
+  embed(input: string, options?: EmbedOptions): BrowserEmbeddingRun;
+  state(): EngineState;
+  subscribeEvents(listener: (event: EngineEvent) => void): () => void;
+  close(): Promise<void>;
 }
 
 export type QueryErrorCode =

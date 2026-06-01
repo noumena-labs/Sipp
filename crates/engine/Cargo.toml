@@ -19,6 +19,8 @@ cogentlm-core.workspace = true
 cogentlm-shard.workspace = true
 cogentlm-sys.workspace = true
 cxx.workspace = true
+futures-channel.workspace = true
+futures-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -26,3 +28,4 @@ thiserror.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true
+futures.workspace = true

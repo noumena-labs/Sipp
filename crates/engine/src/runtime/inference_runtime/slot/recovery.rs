@@ -1,7 +1,7 @@
 //! Slot phase normalization and decode-seed recovery.
 //!
 //! `normalize_runnable_slot_state` is called at the top of every tick to
-//! transition slots between admitted/prefill/decode/streaming/completed.
+//! transition slots between admitted/prefill/decode/emit-buffer/completed.
 //! `recover_decode_seed_state` re-anchors a slot that was promoted to Decode
 //! but lost its sampled-token seed (e.g. after a snapshot restore).
 
@@ -11,7 +11,7 @@ use crate::native_bridge::NativeRuntimeHandle;
 use crate::runtime::llama_seq_id;
 use crate::runtime::request::GenerateRequestLifecycle;
 use crate::runtime::scheduler::{SlotPhase, SlotState};
-use crate::runtime::session::SequenceState;
+use crate::runtime::session::SequenceMirror;
 use crate::runtime::REQUEST_CANCELLED_MESSAGE;
 
 use super::super::numeric::{nonnegative_i32_to_usize, usize_to_i32};
@@ -48,7 +48,7 @@ pub(super) fn normalize_runnable_slot_state(
         slot.phase = SlotPhase::Decode;
     }
 
-    if slot.phase == SlotPhase::Streaming && slot.buffered_output_text.is_empty() {
+    if slot.phase == SlotPhase::EmitBuffered && slot.buffered_output_text.is_empty() {
         let reached_limit = max_output_tokens > 0
             && slot.generated_tokens.len() >= nonnegative_i32_to_usize(max_output_tokens);
 
@@ -155,7 +155,7 @@ fn recover_decode_seed_state(
 /// Trims llama.cpp's view of the sequence to match `state.current_kv_tokens`'s
 /// length and records the new `n_past`.
 fn reconcile_physical_state(
-    state: &mut SequenceState,
+    state: &mut SequenceMirror,
     seq_id: llama_seq_id,
     native_runtime: &mut NativeRuntimeHandle,
 ) -> bool {

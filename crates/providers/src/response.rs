@@ -1,4 +1,4 @@
-use cogentlm_core::FinishReason;
+use cogentlm_core::{FinishReason, TokenUsage};
 
 use crate::ProviderKind;
 
@@ -11,13 +11,6 @@ pub struct ProviderTextOutput {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderEmbeddingOutput {
     pub values: Vec<f32>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TokenUsage {
-    pub input_tokens: Option<u32>,
-    pub output_tokens: Option<u32>,
-    pub total_tokens: Option<u32>,
 }
 
 /// Envelope shared by every provider call: the normalized `result` plus

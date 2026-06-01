@@ -16,20 +16,20 @@ export interface BoundaryConsumeResult {
   readonly hitBoundary: boolean;
 }
 
-export function sliceUnstreamedSuffix(
-  streamedOutputText: string,
+export function sliceUndeliveredSuffix(
+  deliveredOutputText: string,
   finalOutputText: string
 ): string {
-  if (streamedOutputText.length === 0) {
+  if (deliveredOutputText.length === 0) {
     return finalOutputText;
   }
-  if (!finalOutputText.startsWith(streamedOutputText)) {
+  if (!finalOutputText.startsWith(deliveredOutputText)) {
     return '';
   }
-  return finalOutputText.slice(streamedOutputText.length);
+  return finalOutputText.slice(deliveredOutputText.length);
 }
 
-export class StreamingBoundaryTextSanitizer {
+export class TokenBoundaryTextSanitizer {
   private pendingText = '';
   private stopped = false;
 

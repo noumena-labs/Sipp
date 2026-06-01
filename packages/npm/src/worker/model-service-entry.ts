@@ -1,11 +1,7 @@
 import { ModelService } from '../models/model-service.js';
-import {
-  QueryError,
-  type TokenBatch,
-} from '../models/types.js';
+import { QueryError, type TokenBatch } from '../models/types.js';
 import { resolveRuntimeUrls } from '../engine/runtime-assets.js';
 import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.js';
-import { StreamingRingWriter } from '../runtime/streaming-ring.js';
 import {
   WorkerRequestMessage,
   WorkerResponseMessage,
@@ -13,16 +9,13 @@ import {
 } from './model-service-protocol.js';
 
 let service: ModelService | null = null;
+let runtime: MainThreadEngineRuntime | null = null;
 let serviceConfigFingerprint: string | null = null;
 const activeCalls = new Map<number, AbortController>();
-// SAB streaming ring writer; set on `streaming-init`.  When null, streaming
-// is unavailable and requests with onTokens will be rejected upstream.
-let streamingRingWriter: StreamingRingWriter | null = null;
-let streamingTickQueued = false;
 
 type WorkerOperationRequest = Exclude<
   WorkerRequestMessage,
-  { kind: 'cancel' } | { kind: 'streaming-init' }
+  { kind: 'cancel' }
 >;
 
 function buildServiceConfig(config: WorkerRuntimeConfig) {
@@ -38,9 +31,6 @@ function buildServiceConfig(config: WorkerRuntimeConfig) {
   };
 }
 
-// Direct runtime handle for installing the SAB ring writer after ensureService.
-let runtime: MainThreadEngineRuntime | null = null;
-
 function ensureService(config: WorkerRuntimeConfig): ModelService {
   const fingerprint = JSON.stringify(buildServiceConfig(config));
   if (service != null) {
@@ -54,10 +44,6 @@ function ensureService(config: WorkerRuntimeConfig): ModelService {
     executionMode: 'worker',
   });
   service = new ModelService(runtime);
-  if (streamingRingWriter != null) {
-    runtime.setStreamingRingWriter(streamingRingWriter);
-  }
-  runtime.setStreamingTickCallback(scheduleStreamingTick);
   service.subscribeObservability((event) => {
     post({ kind: 'observability-event', event });
   });
@@ -79,15 +65,17 @@ function post(message: WorkerResponseMessage): void {
   self.postMessage(message);
 }
 
-function scheduleStreamingTick(): void {
-  if (streamingTickQueued) {
-    return;
+function postTokenRingReady(): boolean {
+  const descriptor = runtime?.getSharedTokenRingDescriptor();
+  if (
+    descriptor == null ||
+    typeof SharedArrayBuffer === 'undefined' ||
+    !(descriptor.buffer instanceof SharedArrayBuffer)
+  ) {
+    return false;
   }
-  streamingTickQueued = true;
-  self.setTimeout(() => {
-    streamingTickQueued = false;
-    post({ kind: 'streaming-tick' });
-  }, 0);
+  post({ kind: 'token-ring-ready', descriptor });
+  return true;
 }
 
 function abortActiveCall(callId: number): void {
@@ -117,45 +105,50 @@ function postLoadProgress(callId: number): NonNullable<Parameters<ModelService['
   };
 }
 
-// Wires the engine to emit tokens through the SAB ring and publishes a
-// `streaming-claim` message so the main thread can map the native request id
-// back to its call id.  When `streaming=false`, returns {} so the engine
-// selects TOKEN_EMISSION_NONE.
-function streamingOptionsFor(
+function tokenEmissionOptionsFor(
   callId: number,
-  streaming: boolean
+  emitTokens: boolean,
+  config: WorkerRuntimeConfig
 ): {
-  onTokens?: (batch: TokenBatch) => void;
+  emitTokens: boolean;
   onRequestStarted?: (requestId: number) => void;
+  tokenBatchSink?: (batch: TokenBatch) => void;
 } {
-  if (!streaming) {
-    return {};
+  if (!emitTokens) {
+    return { emitTokens: false };
   }
-  if (streamingRingWriter == null) {
+  if (config.wasmThreading !== 'pthread') {
+    return {
+      emitTokens: true,
+      tokenBatchSink: (batch) => post({ kind: 'token-batch', callId, batch }),
+    };
+  }
+  if (!postTokenRingReady()) {
     throw new QueryError(
       'STREAMING_UNAVAILABLE',
-      'Worker streaming requires SharedArrayBuffer. Enable cross-origin isolation or run without onTokens.'
+      'Pthread worker token streaming requires shared wasm memory. Serve the page with cross-origin isolation or use wasmThreading: "single-thread".'
     );
   }
   return {
-    // The engine sees a non-null onTokens and selects StreamingBuffer.
-    // The scheduler writes the ring and this callback is ignored.
-    onTokens: () => {},
+    emitTokens: true,
     onRequestStarted: (requestId) =>
-      post({ kind: 'streaming-claim', callId, nativeRequestId: requestId }),
+      post({ kind: 'token-ring-claim', callId, nativeRequestId: requestId }),
   };
 }
 
 async function handleRequest(message: WorkerOperationRequest): Promise<unknown> {
   switch (message.kind) {
-    case 'models-load':
-      return await withAbortController(message.callId, (signal) =>
+    case 'models-load': {
+      const result = await withAbortController(message.callId, (signal) =>
         ensureService(message.config).load(message.source, {
           ...message.options,
           signal,
           onProgress: postLoadProgress(message.callId),
         })
       );
+      postTokenRingReady();
+      return result;
+    }
     case 'models-list':
       return await ensureService(message.config).list();
     case 'models-unload':
@@ -167,24 +160,46 @@ async function handleRequest(message: WorkerOperationRequest): Promise<unknown> 
       return modelService.current();
     }
     case 'query':
-      return await withAbortController(message.callId, (signal) =>
-        ensureService(message.config).query(message.input, {
-          ...message.options,
-          signal,
-          ...streamingOptionsFor(message.callId, message.options.streaming),
-        })
-      );
+      return await withAbortController(message.callId, (signal) => {
+        const modelService = ensureService(message.config);
+        const emission = tokenEmissionOptionsFor(
+          message.callId,
+          message.options.emitTokens,
+          message.config
+        );
+        return modelService.runQuery(
+          message.input,
+          {
+            ...message.options,
+            signal,
+            emitTokens: emission.emitTokens,
+            onRequestStarted: emission.onRequestStarted,
+            tokenBatchSink: emission.tokenBatchSink,
+          }
+        );
+      });
     case 'chat':
-      return await withAbortController(message.callId, (signal) =>
-        ensureService(message.config).chat(message.input, {
-          ...message.options,
-          signal,
-          ...streamingOptionsFor(message.callId, message.options.streaming),
-        })
-      );
+      return await withAbortController(message.callId, (signal) => {
+        const modelService = ensureService(message.config);
+        const emission = tokenEmissionOptionsFor(
+          message.callId,
+          message.options.emitTokens,
+          message.config
+        );
+        return modelService.runChat(
+          message.input,
+          {
+            ...message.options,
+            signal,
+            emitTokens: emission.emitTokens,
+            onRequestStarted: emission.onRequestStarted,
+            tokenBatchSink: emission.tokenBatchSink,
+          }
+        );
+      });
     case 'embed':
       return await withAbortController(message.callId, (signal) =>
-        ensureService(message.config).embed(message.input, {
+        ensureService(message.config).runEmbedding(message.input, {
           ...message.options,
           signal,
         })
@@ -196,16 +211,6 @@ self.onmessage = async (event: MessageEvent<WorkerRequestMessage>) => {
   const message = event.data;
   if (message.kind === 'cancel') {
     abortActiveCall(message.targetCallId);
-    return;
-  }
-  if (message.kind === 'streaming-init') {
-    streamingRingWriter =
-      message.ringBuffer != null
-        ? new StreamingRingWriter(message.ringBuffer)
-        : null;
-    if (runtime != null) {
-      runtime.setStreamingRingWriter(streamingRingWriter);
-    }
     return;
   }
 

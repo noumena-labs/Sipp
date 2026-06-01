@@ -1,37 +1,42 @@
-import type { CogentEngine } from '@noumena-labs/cogentlm-browser';
+import type { CogentClient } from '@noumena-labs/cogentlm-browser';
 import { Example } from './base-example';
 
 const ENCODER_DECODER_PROMPT = 'translate English to German: The house is wonderful.';
 
-function isEncoderDecoder(engine: CogentEngine): boolean {
-  return engine.models.current()?.capabilities?.modelClass === 'encoder_decoder';
+function isEncoderDecoder(client: CogentClient): boolean {
+  return client.currentLocal()?.capabilities?.modelClass === 'encoder_decoder';
 }
 
 export const queryExample: Example = {
   id: '05-query',
   title: 'Query',
   description: 'Runs a raw prompt through the query API.',
-  run: async ({ engine, log, inputElement }) => {
-    if (isEncoderDecoder(engine) && inputElement.value.trim().length === 0) {
+  run: async ({ client, log, inputElement }) => {
+    if (isEncoderDecoder(client) && inputElement.value.trim().length === 0) {
       inputElement.value = ENCODER_DECODER_PROMPT;
     }
-    log('Query example loaded. Send a prompt to run engine.query().', 'system');
+    log('Query example loaded. Send a prompt to run client.query().', 'system');
   },
-  onUserInput: async ({ engine, log, userInput }) => {
+  onUserInput: async ({ client, log, userInput }) => {
     log(userInput, 'user');
 
     let fullResponse = '';
     const responseEl = log('', 'ai');
 
     try {
-      await engine.query(userInput, {
-        maxTokens: isEncoderDecoder(engine) ? 32 : 64,
+      const run = client.query(userInput, {
+        maxTokens: isEncoderDecoder(client) ? 32 : 64,
         session: 'examples:query',
-        onTokens: (batch) => {
-          fullResponse += batch.text;
-          responseEl.innerText = fullResponse;
-        },
+        emitTokens: true,
       });
+
+      for await (const batch of run.tokens) {
+        fullResponse += batch.text;
+        responseEl.innerText = fullResponse;
+      }
+
+      const result = await run.response;
+      responseEl.innerText = result.text;
     } catch (err) {
       log(`Error: ${err}`, 'error');
     }

@@ -1,29 +1,30 @@
 mod config;
 mod driver;
 pub mod protocol;
-mod stream;
+mod token_emission;
 
 pub use config::{
-    CacheKeyPolicy, CacheRuntimeConfig, ContextRuntimeConfig, FlashAttentionMode, GenerateOptions,
-    GpuLayerConfig, KvCacheType, KvReuseMode, LogitBias, ModelPlacementConfig,
-    MultimodalRuntimeConfig, NativeRuntimeConfig, ObservabilityRuntimeConfig,
-    ResidencyRuntimeConfig, ResolvedRuntimeLimits, RopeScaling, SamplerStage,
-    SamplingRuntimeConfig, SchedulerRuntimeConfig, SplitMode, DEFAULT_CONTEXT_KEY,
-    DEFAULT_MAX_TOKENS,
+    CacheRuntimeConfig, ContextRuntimeConfig, FlashAttentionMode, GenerateOptions, GpuLayerConfig,
+    KvCacheType, KvReuseMode, LogitBias, ModelPlacementConfig, MultimodalRuntimeConfig,
+    NativeRuntimeConfig, ObservabilityRuntimeConfig, RequestSampling, ResidencyRuntimeConfig,
+    ResolvedRuntimeLimits, RopeScaling, SamplerStage, SamplingRuntimeConfig, SamplingRuntimePatch,
+    SchedulerRuntimeConfig, SplitMode, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
 };
 pub use driver::{
-    ChatMessage, ChatRequest, ChatRole, CogentEngine, EngineEventReceiver, QueryOptions,
-    QueryRequest,
+    ChatMessage, ChatRequest, ChatRole, CogentEngine, EngineEmbeddingResponseFuture,
+    EngineEmbeddingRun, EngineEventReceiver, EngineLoad, EngineTextResponseFuture, EngineTextRun,
+    EngineTokenBatches, QueryOptions, QueryRequest,
 };
 pub use protocol::{
-    EmbedOptions, EmbedRequest, EmbeddingCapabilities, EmbeddingResult, EngineEvent, EngineState,
-    EngineStats, FinishReason, GenerationResult, ModelCapabilities, ModelClass, PoolingType,
+    CacheSource, EmbedOptions, EmbedRequest, EmbeddingCapabilities, EmbeddingResult, EngineEvent,
+    EngineState, EngineStats, FinishReason, GenerationResult, ModelCapabilities, ModelClass,
+    PoolingType, RequestStats,
 };
-pub use stream::{StreamStats, TokenBatch, TokenFrame, TokenStreamMode};
+pub use token_emission::{TokenBatch, TokenEmissionStats};
 
 #[cfg(test)]
 mod tests {
-    use super::{ChatMessage, ChatRole, FinishReason, StreamStats, TokenBatch};
+    use super::{ChatMessage, ChatRole, FinishReason, TokenBatch, TokenEmissionStats};
 
     #[test]
     fn shared_core_types_reexport_from_engine() {
@@ -37,7 +38,7 @@ mod tests {
             text: "hello".to_string(),
             frame_count: 1,
             byte_count: 5,
-            stats: StreamStats::default(),
+            stats: TokenEmissionStats::default(),
         };
         assert_eq!(batch.text, "hello");
         assert_eq!(FinishReason::Stop.as_str(), "stop");

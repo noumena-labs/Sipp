@@ -153,9 +153,9 @@ pub(super) fn run_multimodal_prefill(
 
     slot.generated_tokens.push(next_token);
     append_token_piece_to_slot(native_runtime, next_token, slot, piece_scratch);
-    slot.phase = SlotPhase::Streaming;
+    slot.phase = SlotPhase::EmitBuffered;
     if let Some(request) = slot.request_mut() {
-        request.lifecycle = GenerateRequestLifecycle::Streaming;
+        request.lifecycle = GenerateRequestLifecycle::Decoding;
     }
     SlotScheduler::emit_buffered_token_piece(request_queue, slot);
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import {
-  CogentEngine,
+  CogentClient,
   type BrowserRuntimeSmokeResult,
   type ModelInfo,
   type ModelSource,
@@ -10,10 +10,12 @@ import {
 import { MetricCard } from './components/MetricCard';
 import {
   buildBenchmarkScenarios,
+  buildBenchmarkBackendProfile,
   buildMixedLoadDefinition,
   DEFAULT_BENCHMARK_PROMPTS,
   describeRuntimeBackend,
   ENCODER_DECODER_BENCHMARK_PROMPTS,
+  runtimeOptionsForMixedLoad,
   summarizeMemorySnapshots,
   type BenchmarkPromptSet,
 } from './lib/helpers';
@@ -69,7 +71,7 @@ declare global {
 }
 
 interface BenchmarkReport {
-  schema: 'cogent.benchmark.browser.v9';
+  schema: 'cogent.benchmark.browser.v11';
   generatedAt: string;
   model: ModelInfo | null;
   source: { label: string; bytes: number | null };
@@ -79,8 +81,11 @@ interface BenchmarkReport {
     tokenCount: number;
     warmupRuns: number;
     measuredRuns: number;
+    emitTokens: boolean;
     runtime: ReturnType<typeof getDefaultRuntimeOptions>;
   };
+  environment: Awaited<ReturnType<typeof inspectBrowserEnvironment>>;
+  backend: ReturnType<typeof buildBenchmarkBackendProfile>;
   observability: ObservabilitySnapshot | null;
   scenarios: ScenarioResult[];
   mixedLoad: MixedLoadResult | null;
@@ -100,8 +105,7 @@ function getDefaultRuntimeOptions() {
       n_parallel: 1,
     },
     cache: {
-      mode: 'live_slot_prefix' as const,
-      max_session_entries: 8,
+      mode: 'live_slot_and_snapshot' as const,
     },
   };
 }
@@ -132,6 +136,10 @@ async function inspectBrowserEnvironment(): Promise<Record<string, unknown>> {
     hasNavigatorGpu: true,
     adapterAvailable: adapter != null,
     crossOriginIsolated: window.crossOriginIsolated,
+    adapterLabel: info?.device ?? info?.description ?? null,
+    adapterVendor: info?.vendor ?? null,
+    adapterArchitecture: info?.architecture ?? null,
+    adapterDescription: info?.description ?? null,
     adapterInfo: info == null ? null : {
       vendor: info.vendor,
       architecture: info.architecture,
@@ -201,7 +209,7 @@ async function fetchImageBytes(source: string): Promise<Uint8Array[]> {
 
 function formatSummary(summary: MetricSummary | null, unit: string = 'ms'): string {
   if (summary == null) return 'n/a';
-  return `${round(summary.meanMs)}${unit} avg / ${round(summary.p99Ms)}${unit} p99`;
+  return `${round(summary.mean)}${unit} avg / ${round(summary.p99)}${unit} p99`;
 }
 
 function formatTps(value: number | null | undefined): string {
@@ -218,6 +226,15 @@ function downloadJson(filename: string, value: unknown): void {
   link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function logBenchmarkReport(report: BenchmarkReport): void {
+  console.groupCollapsed('[CogentLM benchmark] run complete');
+  console.log('backend profile', report.backend);
+  console.log('runtime config', report.settings.runtime);
+  console.log('summary', report.trace.analysis);
+  console.table(report.trace.rows);
+  console.groupEnd();
 }
 
 const DEFAULT_QUERY_PROMPT = 'Describe how to benchmark browser-hosted inference.';
@@ -293,7 +310,7 @@ function effectiveTokenCountForModel(model: ModelInfo | null, currentTokenCount:
 }
 
 export default function App() {
-  const [engine, setEngine] = useState<CogentEngine | null>(null);
+  const [client, setClient] = useState<CogentClient | null>(null);
   const [status, setStatus] = useState('booting');
   const [isBusy, setIsBusy] = useState(false);
   const [modelType, setModelType] = useState<'registry' | 'url' | 'file'>('registry');
@@ -307,16 +324,7 @@ export default function App() {
   const [tokenCount, setTokenCount] = useState(DEFAULT_TOKEN_COUNT);
   const [warmupRuns, setWarmupRuns] = useState(1);
   const [measuredRuns, setMeasuredRuns] = useState(3);
-  // Three transport modes:
-  //   off    — engine in TOKEN_EMISSION_NONE; nothing crosses to main.
-  //   tokens — engine in StreamingBuffer; main drains SAB and invokes onTokens
-  //            without DOM work.  This isolates callback/token-plane cost from
-  //            rendering cost.
-  //   render — engine in StreamingBuffer; main drains SAB and writes
-  //            textContent as token batches arrive. Pays the UI/rendering tax.
-  type StreamMode = 'off' | 'tokens' | 'render';
-  const [streamMode, setStreamMode] = useState<StreamMode>('render');
-  const streamTokens = streamMode !== 'off';
+  const [emitTokens, setEmitTokens] = useState(true);
   const [imageSource, setImageSource] = useState('');
   const [imageEnabled, setImageEnabled] = useState(false);
   const [currentModel, setCurrentModel] = useState<ModelInfo | null>(null);
@@ -329,7 +337,8 @@ export default function App() {
     wallMs: number;
     ttftMs: number | null;
     tokens: number;
-    tps: number | null;
+    decodeTps: number | null;
+    e2eTps: number | null;
     prefillTokens: number | null;
     prefillTps: number | null;
     embeddingDimensions: number | null;
@@ -418,24 +427,24 @@ export default function App() {
 
   const runBrowserRuntimeSmoke = async (): Promise<BrowserRuntimeSmokeResult> => {
     setBrowserSmokeError(null);
-    const result = await CogentEngine.browserRuntimeSmoke();
+    const result = await CogentClient.browserRuntimeSmoke();
     setBrowserSmoke(result);
     return result;
   };
 
   useEffect(() => {
     let disposed = false;
-    let created: CogentEngine | null = null;
+    let created: CogentClient | null = null;
     let unsubscribe: (() => void) | null = null;
 
     void (async () => {
       try {
-        const nextEngine = await CogentEngine.create();
+        const nextClient = new CogentClient();
         if (disposed) {
-          await nextEngine.close();
+          await nextClient.close();
           return;
         }
-        created = nextEngine;
+        created = nextClient;
         let pendingSnapshot: any = null;
         const updateInterval = setInterval(() => {
           if (pendingSnapshot) {
@@ -445,7 +454,7 @@ export default function App() {
           }
         }, 250); // Steady 4 FPS for metrics to keep main thread clear
 
-        unsubscribe = nextEngine.observability.subscribe((event) => {
+        unsubscribe = nextClient.observability.subscribe((event) => {
           pendingSnapshot = event.snapshot;
         });
 
@@ -455,12 +464,12 @@ export default function App() {
           clearInterval(updateInterval);
           originalUnsubscribe();
         };
-        setEngine(nextEngine);
-        setCurrentModel(nextEngine.models.current());
-        setObservability(nextEngine.observability.current());
-        setInstalledModels(await nextEngine.models.list());
+        setClient(nextClient);
+        setCurrentModel(nextClient.currentLocal());
+        setObservability(nextClient.observability.current());
+        setInstalledModels(await nextClient.listLocal());
         setStatus('idle');
-        void CogentEngine.browserRuntimeSmoke()
+        void CogentClient.browserRuntimeSmoke()
           .then((result) => {
             if (!disposed) {
               setBrowserSmoke(result);
@@ -528,18 +537,18 @@ export default function App() {
     return withProjector(files.length === 1 ? files[0] : files, projector);
   };
 
-  const refreshModels = async (targetEngine: CogentEngine) => {
-    setCurrentModel(targetEngine.models.current());
-    setObservability(targetEngine.observability.current());
-    setInstalledModels(await targetEngine.models.list());
+  const refreshModels = async (targetClient: CogentClient) => {
+    setCurrentModel(targetClient.currentLocal());
+    setObservability(targetClient.observability.current());
+    setInstalledModels(await targetClient.listLocal());
   };
 
-  const loadModelSelection = async (
-    targetEngine: CogentEngine,
+  const addLocalSelection = async (
+    targetClient: CogentClient,
     source: ModelSource
   ): Promise<ModelInfo> => {
     const start = performance.now();
-    const info = await targetEngine.models.load(source, {
+    const info = await targetClient.addLocal(source, {
       observability: 'profile',
       runtime: getDefaultRuntimeOptions(),
       onProgress: (progress) => {
@@ -564,12 +573,12 @@ export default function App() {
     if (modelTokenCount !== tokenCount) {
       setTokenCount(modelTokenCount);
     }
-    await refreshModels(targetEngine);
+    await refreshModels(targetClient);
     return info;
   };
 
   const loadSelectedModel = async () => {
-    if (engine == null) return;
+    if (client == null) return;
     const source = modelSource();
     if (source == null) {
       setStatus('Select a model source first.');
@@ -577,7 +586,7 @@ export default function App() {
     }
     setIsBusy(true);
     try {
-      const info = await loadModelSelection(engine, source);
+      const info = await addLocalSelection(client, source);
       setStatus(info.status === 'ready' ? `loaded ${info.name}` : `${info.name}: ${info.status}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
@@ -587,7 +596,7 @@ export default function App() {
   };
 
   const runQuery = async () => {
-    if (engine == null) return;
+    if (client == null) return;
     setIsBusy(true);
     setResponse('');
     setLastRun(null);
@@ -598,7 +607,7 @@ export default function App() {
         return;
       }
       const nextSourceKey = sourceKey(source);
-      const loadedModel = engine.models.current();
+      const loadedModel = client.currentLocal();
       let requestOperation = operation;
       let requestPrompt = prompt;
       let requestTokenCount = tokenCount;
@@ -607,7 +616,7 @@ export default function App() {
         loadedModel.status !== 'ready' ||
         (loadedSourceKeyRef.current != null && loadedSourceKeyRef.current !== nextSourceKey)
       ) {
-        const info = await loadModelSelection(engine, source);
+        const info = await addLocalSelection(client, source);
         if (!modelSupportsOperation(info, requestOperation)) {
           requestOperation = defaultOperationForModel(info);
         }
@@ -634,35 +643,27 @@ export default function App() {
         requestOperation !== 'embed' && imageEnabled && imageSource.trim().length > 0
           ? await fetchImageBytes(imageSource.trim())
           : undefined;
-      const effectiveStreamTokens = requestOperation !== 'embed' && streamTokens;
-      const queryRenderer = effectiveStreamTokens && streamMode === 'render' ? createResponseRenderer(1, 'frame') : null;
+      const requestEmitTokens = requestOperation !== 'embed' && emitTokens;
+      const queryRenderer = requestEmitTokens ? createResponseRenderer(1, 'frame') : null;
       queryRenderer?.reset();
       queryRenderer?.start('response');
-      const onTokens =
-        requestOperation === 'embed'
+      const onTokenBatch =
+        !requestEmitTokens
           ? undefined
-          : streamMode === 'render'
-          ? (batch: TokenBatch) => {
-            queryRenderer?.append('response', batch);
-          }
-          : streamMode === 'tokens'
-            ? (_batch: TokenBatch) => {
-              /* onTokens mode: SAB drained and callback invoked, no DOM work */
-            }
-            : undefined;
+          : (batch: TokenBatch) => {
+              queryRenderer?.append('response', batch);
+            };
       try {
-        const run = await runObservedRequest(engine, requestPrompt, {
+        const run = await runObservedRequest(client, requestPrompt, {
           operation: requestOperation,
           maxTokens: requestTokenCount,
           session: `query-${Date.now()}`,
           media: image,
-          streamTokens: effectiveStreamTokens,
-          tokenFlush: streamMode === 'render' ? 'token' : 'batch',
-          // streamTokens=false → onTokens omitted upstream → engine NONE.
-          onTokens,
+          emitTokens: requestEmitTokens,
+          onTokenBatch,
         });
         setResponse(run.output); // Sync React state at the end
-        setObservability(engine.observability.current());
+        setObservability(client.observability.current());
         setLastRun({
           operation: run.operation,
           outputKind: run.outputKind,
@@ -672,12 +673,8 @@ export default function App() {
             run.outputKind === 'embedding'
               ? run.embeddingDimensions ?? 0
               : run.observability?.outputTokens ?? run.tokenTimes.length,
-          tps:
-            (run.observability?.decodeMs ?? 0) > 0 &&
-              (run.observability?.outputTokens ?? 0) > 0
-              ? (run.observability!.outputTokens * 1000) /
-              run.observability!.decodeMs
-              : null,
+          decodeTps: run.observability?.decodeTokensPerSecond ?? null,
+          e2eTps: run.observability?.e2eTokensPerSecond ?? null,
           prefillTps:
             (run.observability?.prefillMs ?? 0) >= 0.1 &&
               (run.observability?.prefillTokens ?? 0) >= 1
@@ -702,7 +699,7 @@ export default function App() {
   };
 
   const runBenchmark = async () => {
-    if (engine == null) return;
+    if (client == null) return;
     const source = modelSource();
     if (source == null) {
       setStatus('Select a model source first.');
@@ -715,19 +712,19 @@ export default function App() {
     setMemorySnapshots([]);
     setBenchmarkReport(null);
     let benchmarkOperation = operation;
-    const loadedModel = engine.models.current();
+    const loadedModel = client.currentLocal();
     let benchmarkPrompt = prompt;
     let benchmarkTokenCount = tokenCount;
     if (loadedModel != null && !modelSupportsOperation(loadedModel, benchmarkOperation)) {
       benchmarkOperation = defaultOperationForModel(loadedModel);
       setOperation(benchmarkOperation);
     }
-    let effectiveStreamTokens = false;
+    let benchmarkEmitTokens = false;
     let benchmarkRenderer: ReturnType<typeof createResponseRenderer> | null = null;
     let benchmarkTokenObserver: BenchmarkTokenObserver | undefined;
 
     try {
-      const info = await loadModelSelection(engine, source);
+      const info = await addLocalSelection(client, source);
       if (!modelSupportsOperation(info, benchmarkOperation)) {
         benchmarkOperation = defaultOperationForModel(info);
       }
@@ -740,42 +737,39 @@ export default function App() {
         setTokenCount(benchmarkTokenCount);
       }
       const promptSet = benchmarkPromptSetForModel(info);
-      effectiveStreamTokens = benchmarkOperation !== 'embed' && streamTokens;
-      benchmarkRenderer = effectiveStreamTokens && streamMode === 'render'
-        ? createResponseRenderer(2, 'frame')
-        : null;
-      const benchmarkTokenFlush = streamMode === 'render' ? 'token' : 'batch';
+      benchmarkEmitTokens = benchmarkOperation !== 'embed' && emitTokens;
+      benchmarkRenderer = benchmarkEmitTokens ? createResponseRenderer(2, 'frame') : null;
       benchmarkTokenObserver =
-        effectiveStreamTokens && streamMode === 'render'
+        benchmarkEmitTokens
           ? {
-            onRunStart: (label) => {
-              benchmarkRenderer?.start(label);
-            },
-            onTokens: (label, batch) => {
-              benchmarkRenderer?.append(label, batch);
-            },
-          }
+              onRunStart: (label) => {
+                benchmarkRenderer?.start(label);
+              },
+              onTokenBatch: (label, batch) => {
+                benchmarkRenderer?.append(label, batch);
+              },
+            }
           : undefined;
       benchmarkRenderer?.reset();
       const snapshots: MemorySnapshot[] = [];
       snapshots.push(await captureBrowserMemorySnapshot('before-benchmark', true));
 
+      const defaultRuntime = getDefaultRuntimeOptions();
       const scenarios = buildBenchmarkScenarios(benchmarkPrompt, benchmarkTokenCount, promptSet);
       const results: ScenarioResult[] = [];
       for (const scenario of scenarios) {
         results.push(
           await runScenarioBenchmark(
-            engine,
+            client,
             benchmarkOperation,
             scenario,
             source,
             warmupRuns,
             measuredRuns,
-            getDefaultRuntimeOptions(),
+            defaultRuntime,
             setStatus,
             true,
-            effectiveStreamTokens,
-            benchmarkTokenFlush,
+            benchmarkEmitTokens,
             benchmarkTokenObserver
           )
         );
@@ -784,28 +778,39 @@ export default function App() {
       snapshots.push(await captureBrowserMemorySnapshot('after-scenarios', true));
 
       let mixed: MixedLoadResult | null = null;
-      if (benchmarkOperation !== 'embed' && supportsConcurrentQueryApi(engine)) {
+      if (
+        benchmarkOperation !== 'embed' &&
+        info.capabilities?.modelClass !== 'encoder_decoder' &&
+        supportsConcurrentQueryApi(client)
+      ) {
+        const mixedDefinition = buildMixedLoadDefinition(benchmarkOperation, promptSet);
         mixed = await runMixedLoadBenchmark(
-          engine,
+          client,
           benchmarkOperation,
-          buildMixedLoadDefinition(benchmarkOperation, promptSet),
+          mixedDefinition,
           source,
           warmupRuns,
           measuredRuns,
-          getDefaultRuntimeOptions(),
+          runtimeOptionsForMixedLoad(defaultRuntime, mixedDefinition.concurrency),
           setStatus,
-          true,
-          effectiveStreamTokens,
-          benchmarkTokenFlush,
+          false,
+          benchmarkEmitTokens,
           benchmarkTokenObserver
         );
         snapshots.push(await captureBrowserMemorySnapshot('after-mixed-load', true));
       }
       benchmarkRenderer?.finish();
       const trace = buildBenchmarkTraceReport(results, mixed);
+      const environment = await inspectBrowserEnvironment();
+      const observabilitySnapshot = client.observability.current();
+      const backend = buildBenchmarkBackendProfile(
+        environment,
+        browserSmoke?.backend ?? observabilitySnapshot.profile ?? null,
+        defaultRuntime.placement.gpu_layers
+      );
 
       const report: BenchmarkReport = {
-        schema: 'cogent.benchmark.browser.v9',
+        schema: 'cogent.benchmark.browser.v11',
         generatedAt: new Date().toISOString(),
         model: info,
         source: {
@@ -818,9 +823,12 @@ export default function App() {
           tokenCount: benchmarkTokenCount,
           warmupRuns,
           measuredRuns,
-          runtime: getDefaultRuntimeOptions(),
+          emitTokens: benchmarkEmitTokens,
+          runtime: defaultRuntime,
         },
-        observability: engine.observability.current(),
+        environment,
+        backend,
+        observability: observabilitySnapshot,
         scenarios: results,
         mixedLoad: mixed,
         memory: {
@@ -834,6 +842,7 @@ export default function App() {
       setMixedLoadResult(mixed);
       setMemorySnapshots(snapshots);
       setBenchmarkReport(report);
+      logBenchmarkReport(report);
       setStatus('benchmark complete');
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
@@ -864,8 +873,9 @@ export default function App() {
         <MetricCard label="TTFT" value={formatSummary(group.summary.runtime.ttftMs)} />
         <MetricCard label="ITL Avg" value={formatSummary(group.summary.runtime.itlAvgMs)} />
         <MetricCard label="ITL P99" value={formatSummary(group.summary.runtime.itlP99Ms)} />
+        <MetricCard label="E2E TPS" value={formatSummary(group.summary.runtime.e2eTps, 'tok/s')} />
         <MetricCard label="Prefill TPS" value={formatSummary(group.summary.runtime.prefillTps, 'tok/s')} />
-        <MetricCard label="Decode TPS" value={formatSummary(group.summary.runtime.tps, 'tok/s')} />
+        <MetricCard label="Decode TPS" value={formatSummary(group.summary.runtime.decodeTps, 'tok/s')} />
       </div>
 
       <div className="metric-group-title">Compute Profile</div>
@@ -922,6 +932,23 @@ export default function App() {
           label="Cache Hits"
           value={group.summary.runtime.avgCacheHits ?? 'n/a'}
         />
+        <MetricCard
+          label="Cache Reuse"
+          value={
+            group.cacheReuse.expected
+              ? group.cacheReuse.invalidRunLabels.length === 0
+                ? `valid (${group.cacheReuse.expectedSource})`
+                : `invalid (${group.cacheReuse.invalidRunLabels.length})`
+              : 'n/a'
+          }
+          tone={
+            group.cacheReuse.expected
+              ? group.cacheReuse.invalidRunLabels.length === 0
+                ? 'ok'
+                : 'warn'
+              : 'default'
+          }
+        />
       </div>
 
       {group.runs[0]?.outputPreview ? (
@@ -934,12 +961,13 @@ export default function App() {
     <div className="shell">
       <header className="hero">
         <div className="eyebrow">Browser Benchmark</div>
-        <h1>CogentEngine Minimal API</h1>
+        <h1>CogentClient Minimal API</h1>
         <p>
-          Load with <code>engine.models.load()</code>, inspect with{' '}
-          <code>engine.models.current()</code>, run with <code>engine.chat()</code>,{' '}
-          <code>engine.query()</code>, or <code>engine.embed()</code>, and
-          benchmark with the same minimal surface.
+          Load with <code>client.addLocal()</code>, inspect with{' '}
+          <code>client.currentLocal()</code>, run with <code>client.chat()</code>,{' '}
+          <code>client.query()</code>, or <code>client.embed()</code>, consume{' '}
+          <code>.response</code> and <code>.tokens</code>, and benchmark with
+          the same minimal surface.
         </p>
       </header>
 
@@ -1022,7 +1050,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={loadSelectedModel}
-                  disabled={isBusy || engine == null}
+                  disabled={isBusy || client == null}
                 >
                   Load Model
                 </button>
@@ -1110,7 +1138,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={runQuery}
-                  disabled={isBusy || engine == null}
+                  disabled={isBusy || client == null}
                 >
                   Run Request
                 </button>
@@ -1149,33 +1177,25 @@ export default function App() {
                   <input value={observability?.mode ?? 'off'} readOnly />
                 </div>
                 <div className="row">
-                  <label title="Off = engine NONE (no emission). onTokens = engine emits batched tokens to SAB, main drains and invokes callbacks, no DOM work. Render = engine flushes token-sized batches and writes textContent as they arrive.">
-                    Stream Tokens
+                  <label title="Off disables native token emission. On emits visible token chunks.">
+                    Token Emission
                   </label>
                   <div className="toggle-group">
                     <button
                       type="button"
-                      className={`toggle-item ${streamMode === 'off' ? 'active' : ''}`}
-                      onClick={() => setStreamMode('off')}
-                      title="Off — NONE (native baseline)"
+                      className={`toggle-item ${!emitTokens ? 'active' : ''}`}
+                      onClick={() => setEmitTokens(false)}
+                      title="Off - native NONE"
                     >
                       Off
                     </button>
                     <button
                       type="button"
-                      className={`toggle-item ${streamMode === 'tokens' ? 'active' : ''}`}
-                      onClick={() => setStreamMode('tokens')}
-                      title="On — onTokens callback without DOM rendering"
+                      className={`toggle-item ${emitTokens ? 'active' : ''}`}
+                      onClick={() => setEmitTokens(true)}
+                      title="On - render emitted token chunks"
                     >
-                      onTokens
-                    </button>
-                    <button
-                      type="button"
-                      className={`toggle-item ${streamMode === 'render' ? 'active' : ''}`}
-                      onClick={() => setStreamMode('render')}
-                      title="On — rendered (with DOM)"
-                    >
-                      Render
+                      On
                     </button>
                   </div>
                 </div>
@@ -1191,7 +1211,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={runBenchmark}
-                  disabled={isBusy || engine == null}
+                  disabled={isBusy || client == null}
                 >
                   Run Benchmark
                 </button>
@@ -1248,11 +1268,21 @@ export default function App() {
               <MetricCard
                 label="Current Decode TPS"
                 value={
-                  lastRun?.tps != null
-                    ? formatTps(lastRun.tps)
-                    : observability?.runtime?.tokensPerSecond == null
+                  lastRun?.decodeTps != null
+                    ? formatTps(lastRun.decodeTps)
+                    : observability?.runtime?.decodeTokensPerSecond == null
                       ? 'n/a'
-                      : round(observability.runtime.tokensPerSecond)
+                      : round(observability.runtime.decodeTokensPerSecond)
+                }
+              />
+              <MetricCard
+                label="Current E2E TPS"
+                value={
+                  lastRun?.e2eTps != null
+                    ? formatTps(lastRun.e2eTps)
+                    : observability?.runtime?.e2eTokensPerSecond == null
+                      ? 'n/a'
+                      : round(observability.runtime.e2eTokensPerSecond)
                 }
               />
               <MetricCard
@@ -1337,7 +1367,8 @@ export default function App() {
                   ) : (
                     <>
                       <MetricCard label="Tokens" value={lastRun.tokens || 'n/a'} />
-                      <MetricCard label="TPS" value={lastRun.tps == null ? 'n/a' : formatTps(lastRun.tps)} />
+                      <MetricCard label="Decode TPS" value={lastRun.decodeTps == null ? 'n/a' : formatTps(lastRun.decodeTps)} />
+                      <MetricCard label="E2E TPS" value={lastRun.e2eTps == null ? 'n/a' : formatTps(lastRun.e2eTps)} />
                     </>
                   )}
                   <MetricCard label="Prefill TPS" value={lastRun.prefillTps == null ? 'n/a' : formatTps(lastRun.prefillTps)} />
@@ -1375,7 +1406,7 @@ export default function App() {
             {scenarioResults.length === 0 && mixedLoadResult == null ? (
               <p className="hint">
                 Run the benchmark to capture SISO, SILO, LISO, LILO, mixed-load, and memory
-                snapshots with the minimal engine API.
+                snapshots with the minimal client API.
               </p>
             ) : (
               <div className="benchmark-results">
@@ -1397,7 +1428,7 @@ export default function App() {
                     </div>
                     {renderGroup('Cold Prompt', scenario.coldPrompt)}
                     {renderGroup('Hot Fresh Context', scenario.hotFreshContext)}
-                    {renderGroup('Hot Reused Context', scenario.hotReuseContext)}
+                    {renderGroup('Repeated Prompt', scenario.repeatedPrompt)}
                   </div>
                 ))}
 
@@ -1476,7 +1507,14 @@ export default function App() {
                       <MetricCard
                         label="Trace Decode TPS"
                         value={formatSummary(
-                          benchmarkReport.trace.analysis.tps,
+                          benchmarkReport.trace.analysis.decodeTps,
+                          'tok/s'
+                        )}
+                      />
+                      <MetricCard
+                        label="Trace E2E TPS"
+                        value={formatSummary(
+                          benchmarkReport.trace.analysis.e2eTps,
                           'tok/s'
                         )}
                       />

@@ -422,7 +422,7 @@ pub extern "C" fn CE_ProbeChatBoundaryInfo() -> *mut c_char {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn CE_StartTextRequestWithTokenEmissionMode(
+pub unsafe extern "C" fn CE_StartTextRequest(
     context_key: *const c_char,
     prompt: *const c_char,
     n_tokens: i32,
@@ -449,7 +449,7 @@ pub unsafe extern "C" fn CE_StartTextRequestWithTokenEmissionMode(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn CE_StartMediaRequestWithTokenEmissionMode(
+pub unsafe extern "C" fn CE_StartMediaRequest(
     context_key: *const c_char,
     prompt: *const c_char,
     n_tokens: i32,
@@ -485,7 +485,7 @@ pub unsafe extern "C" fn CE_StartMediaRequestWithTokenEmissionMode(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn CE_StartChatRequestWithTokenEmissionMode(
+pub unsafe extern "C" fn CE_StartChatRequest(
     context_key: *const c_char,
     messages_json: *const c_char,
     n_tokens: i32,
@@ -562,9 +562,8 @@ pub unsafe extern "C" fn CE_GetRuntimeObservability(
 pub unsafe extern "C" fn CE_RunSchedulerLoop(
     max_ticks: i32,
     max_completed_responses: i32,
-    max_emitted_tokens: i32,
+    max_generated_tokens: i32,
     max_duration_us: i32,
-    streaming_active: i32,
     out_result: *mut BrowserSchedulerLoopResult,
 ) -> i32 {
     if out_result.is_null() {
@@ -574,9 +573,8 @@ pub unsafe extern "C" fn CE_RunSchedulerLoop(
         engine.run_scheduler_loop(
             max_ticks,
             max_completed_responses,
-            max_emitted_tokens,
+            max_generated_tokens,
             max_duration_us,
-            streaming_active != 0,
             &mut *out_result,
         )
     })
@@ -600,24 +598,22 @@ pub extern "C" fn CE_GetCompletedRequestOutputKind(request_id: u32) -> i32 {
 }
 
 #[no_mangle]
-pub extern "C" fn CE_GetStreamingBufferPointer() -> *const u8 {
-    with_current_engine_mut(ptr::null(), |engine| {
-        engine.streaming_buffer_ptr() as *const u8
+pub extern "C" fn CE_GetTokenRingHeaderAddress() -> *const u32 {
+    with_current_engine(ptr::null(), |engine| {
+        engine.token_ring_header_address() as *const u32
     })
 }
 
 #[no_mangle]
-pub extern "C" fn CE_GetStreamingBufferUsedAddress() -> *mut i32 {
-    with_current_engine_mut(ptr::null_mut(), |engine| {
-        engine.streaming_buffer_used_address() as *mut i32
+pub extern "C" fn CE_GetTokenRingBodyAddress() -> *const u8 {
+    with_current_engine(ptr::null(), |engine| {
+        engine.token_ring_body_address() as *const u8
     })
 }
 
 #[no_mangle]
-pub extern "C" fn CE_GetStreamingBufferDropCountAddress() -> *mut i32 {
-    with_current_engine_mut(ptr::null_mut(), |engine| {
-        engine.streaming_buffer_drop_count_address() as *mut i32
-    })
+pub extern "C" fn CE_GetTokenRingCapacity() -> i32 {
+    with_current_engine(0, BrowserEngine::token_ring_capacity)
 }
 
 #[no_mangle]
@@ -735,8 +731,12 @@ fn with_current_engine<T>(fallback: T, operation: impl FnOnce(&BrowserEngine) ->
 
 fn with_current_engine_mut<T>(fallback: T, operation: impl FnOnce(&mut BrowserEngine) -> T) -> T {
     CURRENT_ENGINE.with(|current| {
-        let mut current = current.borrow_mut();
-        current.as_deref_mut().map(operation).unwrap_or(fallback)
+        let Some(mut engine) = current.borrow_mut().take() else {
+            return fallback;
+        };
+        let result = operation(&mut engine);
+        *current.borrow_mut() = Some(engine);
+        result
     })
 }
 
@@ -786,6 +786,26 @@ fn cache_c_string(
             .map(|value| value.as_ptr())
             .unwrap_or(ptr::null())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mutable_engine_operation_does_not_hold_refcell_borrow() {
+        CURRENT_ENGINE.with(|current| {
+            *current.borrow_mut() = Some(Box::new(BrowserEngine::create()));
+        });
+
+        let can_borrow_inside_operation = with_current_engine_mut(false, |_| {
+            CURRENT_ENGINE.with(|current| current.try_borrow_mut().is_ok())
+        });
+
+        assert!(can_borrow_inside_operation);
+        assert!(current_engine_initialized());
+        close_current_engine();
+    }
 }
 
 fn ensure_llama_cache_env() {

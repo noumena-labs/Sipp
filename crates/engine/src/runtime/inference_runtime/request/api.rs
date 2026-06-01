@@ -1,11 +1,9 @@
 use crate::collection::sorted_unique_non_empty_strings;
 use crate::engine::protocol::EmbedOptions;
 use crate::error::{Error, Result};
-use crate::runtime::config::SamplingRuntimeConfig;
+use crate::runtime::config::RequestSampling;
 use crate::runtime::llama_token;
-use crate::runtime::request::{
-    GenerateRequest, GenerateRequestId, GenerateTokenEmissionMode, MultimodalPayload,
-};
+use crate::runtime::request::{GenerateRequest, GenerateRequestId, MultimodalPayload};
 
 use super::super::{clamp_usize_to_i32, InferenceRuntime, DEFAULT_PROMPT_CONTEXT_KEY};
 
@@ -24,8 +22,8 @@ impl InferenceRuntime {
         grammar: impl Into<String>,
         json_schema: impl Into<String>,
         stop: Vec<String>,
-        sampling: Option<SamplingRuntimeConfig>,
-        token_emission_mode: GenerateTokenEmissionMode,
+        sampling: Option<RequestSampling>,
+        emit_tokens: bool,
     ) -> Result<GenerateRequestId> {
         if !self.is_ready() {
             return Err(Error::RuntimeNotReady);
@@ -43,7 +41,7 @@ impl InferenceRuntime {
             json_schema: json_schema.into(),
             stop,
             sampling,
-            token_emission_mode,
+            emit_tokens,
             tokenization: RequestTokenization::Text,
         });
         self.enqueue_prepared_request(request?)
@@ -59,8 +57,8 @@ impl InferenceRuntime {
         grammar: impl Into<String>,
         json_schema: impl Into<String>,
         stop: Vec<String>,
-        sampling: Option<SamplingRuntimeConfig>,
-        token_emission_mode: GenerateTokenEmissionMode,
+        sampling: Option<RequestSampling>,
+        emit_tokens: bool,
     ) -> Result<GenerateRequestId> {
         if !self.is_ready() || !self.native_runtime.mtmd_ready() {
             return Err(Error::RuntimeNotReady);
@@ -81,7 +79,7 @@ impl InferenceRuntime {
             json_schema: json_schema.into(),
             stop,
             sampling,
-            token_emission_mode,
+            emit_tokens,
             tokenization: RequestTokenization::Multimodal,
         })?;
         request.multimodal = Some(MultimodalPayload { image_buffers });
@@ -149,7 +147,7 @@ impl InferenceRuntime {
             json_schema,
             stop: input.stop,
             sampling: input.sampling,
-            token_emission_mode: input.token_emission_mode,
+            emit_tokens: input.emit_tokens,
         }))
     }
 
@@ -187,8 +185,8 @@ struct GenerateRequestInput {
     grammar: String,
     json_schema: String,
     stop: Vec<String>,
-    sampling: Option<SamplingRuntimeConfig>,
-    token_emission_mode: GenerateTokenEmissionMode,
+    sampling: Option<RequestSampling>,
+    emit_tokens: bool,
     tokenization: RequestTokenization,
 }
 
@@ -217,8 +215,8 @@ struct GenerateRequestFields {
     grammar: String,
     json_schema: String,
     stop: Vec<String>,
-    sampling: Option<SamplingRuntimeConfig>,
-    token_emission_mode: GenerateTokenEmissionMode,
+    sampling: Option<RequestSampling>,
+    emit_tokens: bool,
 }
 
 fn generate_request(fields: GenerateRequestFields) -> GenerateRequest {
@@ -226,7 +224,7 @@ fn generate_request(fields: GenerateRequestFields) -> GenerateRequest {
     request.original_prompt = fields.prompt;
     request.prompt_tokens = fields.prompt_tokens;
     request.max_output_tokens = fields.n_tokens_predict;
-    request.token_emission_mode = fields.token_emission_mode;
+    request.emit_tokens = fields.emit_tokens;
     request.grammar = fields.grammar;
     request.json_schema = fields.json_schema;
     request.stop = normalize_stop_sequences(fields.stop);

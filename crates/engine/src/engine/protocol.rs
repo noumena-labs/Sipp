@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 
 pub use cogentlm_core::FinishReason;
 
-use crate::runtime::config::ResolvedRuntimeLimits;
+use crate::runtime::config::{KvReuseMode, ResolvedRuntimeLimits};
+pub use crate::runtime::metrics::CacheSource;
 
 /// Current lifecycle state of an engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,13 +93,15 @@ pub struct EngineStats {
     pub requests_failed: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,
+    pub cache_mode: KvReuseMode,
+    pub cache_source: CacheSource,
     pub cache_hits: i64,
     pub prefill_tokens: i64,
     pub ttft_ms: Option<f64>,
     pub inter_token_ms: Option<f64>,
     pub e2e_ms: Option<f64>,
     /// End-to-end output-token throughput, including queue/admit/prefill/decode/finalization.
-    pub tokens_per_second: Option<f64>,
+    pub e2e_tokens_per_second: Option<f64>,
     /// Decode-only output-token throughput, excluding prefill/TTFT.
     pub decode_tokens_per_second: Option<f64>,
     pub prefill_tokens_per_second: Option<f64>,
@@ -107,28 +110,6 @@ pub struct EngineStats {
     pub backend_ms: f64,
     pub sync_ms: f64,
     pub engine_overhead_ms: f64,
-    pub debug_metrics_scheduler_ticks: i64,
-    pub debug_metrics_decode_ticks: i64,
-    pub debug_metrics_prefill_ticks: i64,
-    pub debug_metrics_backend_sampler_attach_attempts: i64,
-    pub debug_metrics_backend_sampler_attach_failures: i64,
-    pub debug_metrics_admit_ms: f64,
-    pub debug_metrics_normalize_ms: f64,
-    pub debug_metrics_backend_sampler_attach_ms: f64,
-    pub debug_metrics_select_slots_ms: f64,
-    pub debug_metrics_plan_ms: f64,
-    pub debug_metrics_batch_build_ms: f64,
-    pub debug_metrics_llama_decode_ms: f64,
-    pub debug_metrics_llama_sync_ms: f64,
-    pub debug_metrics_apply_bookkeeping_ms: f64,
-    pub debug_metrics_apply_decode_results_ms: f64,
-    pub debug_metrics_sample_ms: f64,
-    pub debug_metrics_token_piece_ms: f64,
-    pub debug_metrics_emit_ms: f64,
-    pub debug_metrics_prefix_queue_ms: f64,
-    pub debug_metrics_finalize_ms: f64,
-    pub debug_metrics_commit_observability_ms: f64,
-    pub debug_metrics_post_decode_ms: f64,
 }
 
 /// Point-in-time engine state. This is the canonical public state view.
@@ -147,38 +128,20 @@ pub struct EngineState {
 pub struct RequestStats {
     pub input_tokens: i32,
     pub output_tokens: i32,
+    pub cache_mode: KvReuseMode,
+    pub cache_source: CacheSource,
     pub cache_hits: i32,
+    pub prefill_tokens: i32,
     pub ttft_ms: Option<f64>,
     pub inter_token_ms: Option<f64>,
     pub e2e_ms: Option<f64>,
     /// End-to-end output-token throughput, including queue/admit/prefill/decode/finalization.
-    pub tokens_per_second: Option<f64>,
+    pub e2e_tokens_per_second: Option<f64>,
     /// Decode-only output-token throughput, excluding prefill/TTFT.
     pub decode_tokens_per_second: Option<f64>,
+    pub prefill_tokens_per_second: Option<f64>,
     pub prefill_ms: f64,
     pub decode_ms: f64,
-    pub debug_metrics_scheduler_ticks: i32,
-    pub debug_metrics_decode_ticks: i32,
-    pub debug_metrics_prefill_ticks: i32,
-    pub debug_metrics_backend_sampler_attach_attempts: i32,
-    pub debug_metrics_backend_sampler_attach_failures: i32,
-    pub debug_metrics_admit_ms: f64,
-    pub debug_metrics_normalize_ms: f64,
-    pub debug_metrics_backend_sampler_attach_ms: f64,
-    pub debug_metrics_select_slots_ms: f64,
-    pub debug_metrics_plan_ms: f64,
-    pub debug_metrics_batch_build_ms: f64,
-    pub debug_metrics_llama_decode_ms: f64,
-    pub debug_metrics_llama_sync_ms: f64,
-    pub debug_metrics_apply_bookkeeping_ms: f64,
-    pub debug_metrics_apply_decode_results_ms: f64,
-    pub debug_metrics_sample_ms: f64,
-    pub debug_metrics_token_piece_ms: f64,
-    pub debug_metrics_emit_ms: f64,
-    pub debug_metrics_prefix_queue_ms: f64,
-    pub debug_metrics_finalize_ms: f64,
-    pub debug_metrics_commit_observability_ms: f64,
-    pub debug_metrics_post_decode_ms: f64,
 }
 
 /// Final text output and stats for a `query()` / `chat()` request.

@@ -2,6 +2,10 @@ use std::collections::HashMap;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use futures_channel::{mpsc as futures_mpsc, oneshot};
+
+use cogentlm_core::TokenBatch;
+
 use crate::engine::protocol::{EmbedRequest, EngineEvent, EngineState, EngineStatus, ModelState};
 use crate::error::Result;
 use crate::runtime::request::GenerateResponse;
@@ -9,7 +13,7 @@ use crate::runtime::{InferenceRuntime, RequestStepResult};
 
 use super::events::{build_engine_state_with_status, emit_event, emit_state_event};
 use super::request::{start_chat, start_embed, start_query, ChatRequest, QueryRequest};
-use super::token_sink::AsyncTokenSink;
+use super::token_emission::{drain_ring_into_sender, ActiveTokenEmission};
 use super::{runtime_command, EngineEventSubscribers};
 
 mod completion;
@@ -19,11 +23,19 @@ const ENGINE_INVALID_DURING_EXECUTION: &str = "Engine became invalid during exec
 const ENGINE_NO_PROGRESS: &str = "Engine execution failed with no progress.";
 
 pub(super) enum EngineThreadCommand {
-    Generate(QueryRequest, mpsc::Sender<Result<GenerateResponse>>),
-    GenerateChat(ChatRequest, mpsc::Sender<Result<GenerateResponse>>),
-    Embed(EmbedRequest, mpsc::Sender<Result<GenerateResponse>>),
-    GetState(mpsc::Sender<Result<EngineState>>),
-    Close(mpsc::Sender<()>),
+    Generate(
+        QueryRequest,
+        oneshot::Sender<Result<GenerateResponse>>,
+        Option<futures_mpsc::UnboundedSender<TokenBatch>>,
+    ),
+    GenerateChat(
+        ChatRequest,
+        oneshot::Sender<Result<GenerateResponse>>,
+        Option<futures_mpsc::UnboundedSender<TokenBatch>>,
+    ),
+    Embed(EmbedRequest, oneshot::Sender<Result<GenerateResponse>>),
+    GetState(oneshot::Sender<Result<EngineState>>),
+    Close(Option<oneshot::Sender<Result<()>>>),
 }
 
 pub(super) fn run_engine_thread(
@@ -35,7 +47,6 @@ pub(super) fn run_engine_thread(
     let mut state = EngineThreadState {
         runtime: Some(runtime),
         active_requests: HashMap::new(),
-        token_sinks: HashMap::new(),
         model_state,
         event_subscribers,
     };
@@ -68,14 +79,14 @@ pub(super) fn run_engine_thread(
 pub(super) struct EngineThreadState {
     runtime: Option<InferenceRuntime>,
     active_requests: HashMap<u32, ActiveRequest>,
-    token_sinks: HashMap<u32, AsyncTokenSink>,
     model_state: ModelState,
     event_subscribers: EngineEventSubscribers,
 }
 
 pub(super) struct ActiveRequest {
     pub output: ActiveRequestOutput,
-    pub response_tx: mpsc::Sender<Result<GenerateResponse>>,
+    pub response_tx: oneshot::Sender<Result<GenerateResponse>>,
+    pub token: Option<ActiveTokenEmission>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,18 +98,18 @@ pub(super) enum ActiveRequestOutput {
 impl EngineThreadState {
     fn process_command(&mut self, command: EngineThreadCommand) -> bool {
         match command {
-            EngineThreadCommand::Generate(request, response_tx) => {
+            EngineThreadCommand::Generate(request, response_tx, token_tx) => {
                 self.start_request(
                     response_tx,
                     ActiveRequestOutput::Text,
-                    |runtime, subscribers| start_query(runtime, request, subscribers),
+                    |runtime, subscribers| start_query(runtime, request, token_tx, subscribers),
                 );
             }
-            EngineThreadCommand::GenerateChat(request, response_tx) => {
+            EngineThreadCommand::GenerateChat(request, response_tx, token_tx) => {
                 self.start_request(
                     response_tx,
                     ActiveRequestOutput::Text,
-                    |runtime, subscribers| start_chat(runtime, request, subscribers),
+                    |runtime, subscribers| start_chat(runtime, request, token_tx, subscribers),
                 );
             }
             EngineThreadCommand::Embed(request, response_tx) => {
@@ -115,7 +126,9 @@ impl EngineThreadState {
                 self.close_active_requests();
                 drop(self.runtime.take());
                 emit_event(&self.event_subscribers, EngineEvent::Closed);
-                let _ = ack_tx.send(());
+                if let Some(ack_tx) = ack_tx {
+                    let _ = ack_tx.send(Ok(()));
+                }
                 return false;
             }
         }
@@ -124,12 +137,12 @@ impl EngineThreadState {
 
     fn start_request(
         &mut self,
-        response_tx: mpsc::Sender<Result<GenerateResponse>>,
+        response_tx: oneshot::Sender<Result<GenerateResponse>>,
         output: ActiveRequestOutput,
         start: impl FnOnce(
             &mut InferenceRuntime,
             &EngineEventSubscribers,
-        ) -> Result<(u32, Option<AsyncTokenSink>)>,
+        ) -> Result<(u32, Option<ActiveTokenEmission>)>,
     ) {
         let Some(runtime) = self.runtime.as_mut() else {
             let _ = response_tx.send(Err(runtime_command(RUNTIME_CLOSED)));
@@ -137,17 +150,15 @@ impl EngineThreadState {
         };
 
         match start(runtime, &self.event_subscribers) {
-            Ok((request_id, token_sink)) => {
+            Ok((request_id, token_emission)) => {
                 self.active_requests.insert(
                     request_id,
                     ActiveRequest {
                         output,
                         response_tx,
+                        token: token_emission,
                     },
                 );
-                if let Some(sink) = token_sink {
-                    self.token_sinks.insert(request_id, sink);
-                }
                 emit_state_event(
                     runtime,
                     &self.model_state,
@@ -173,6 +184,21 @@ impl EngineThreadState {
     }
 
     fn step_active_requests(&mut self) {
+        if self.active_requests.is_empty() {
+            return;
+        }
+
+        let dropped: Vec<_> = self
+            .active_requests
+            .iter()
+            .filter(|(_, request)| request.response_tx.is_canceled())
+            .map(|(&request_id, _)| request_id)
+            .collect();
+        for request_id in dropped {
+            self.cancel_and_cleanup_request(request_id);
+            self.active_requests.remove(&request_id);
+            self.emit_request_failed(request_id, "request cancelled".to_string());
+        }
         let Some(runtime) = self.runtime.as_mut() else {
             return;
         };
@@ -181,7 +207,11 @@ impl EngineThreadState {
         }
 
         let burst = runtime.run_scheduler_loop(1, 0, 0, Duration::ZERO);
-        self.fail_requests_with_sink_errors();
+        for request in self.active_requests.values_mut() {
+            if let Some(token) = request.token.as_mut() {
+                drain_ring_into_sender(token);
+            }
+        }
         self.complete_finished_requests();
 
         if matches!(

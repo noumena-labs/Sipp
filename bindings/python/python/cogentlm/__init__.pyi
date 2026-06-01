@@ -1,13 +1,13 @@
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Any, Callable, Final, Literal, Optional, Sequence, TypedDict, Union
+from typing import Any, Final, Iterator, Literal, Optional, Sequence, TypedDict, Union
 
 PathLike = Union[str, Path]
 GpuLayerConfig = Union[str, dict[str, int]]
 ActivePythonBackend = Literal["cpu", "cuda", "metal", "vulkan"]
 DEFAULT_CONTEXT_KEY: Final[str]
 DEFAULT_MAX_TOKENS: Final[int]
-DEFAULT_MODEL_BACKEND: Final[str]
-DEFAULT_MODEL_STATS: Final[str]
 
 class ModelPlacementConfig:
     def __init__(
@@ -54,6 +54,8 @@ class ContextRuntimeConfig:
         yarn_attn_factor: Optional[float] = None,
         yarn_beta_fast: Optional[float] = None,
         yarn_beta_slow: Optional[float] = None,
+        embeddings: Optional[bool] = None,
+        pooling: Optional[str] = None,
     ) -> None: ...
 
 class SamplingRuntimeConfig:
@@ -122,10 +124,6 @@ class CacheRuntimeConfig:
         snapshot_interval_tokens: Optional[int] = None,
         max_snapshot_entries: Optional[int] = None,
         max_snapshot_bytes: Optional[int] = None,
-        max_session_entries: Optional[int] = None,
-        cache_key_policy: Optional[str] = None,
-        enable_context_checkpoints: Optional[bool] = None,
-        checkpoint_every_tokens: Optional[int] = None,
     ) -> None: ...
 
 class MultimodalRuntimeConfig:
@@ -165,45 +163,14 @@ class NativeRuntimeConfig:
         observability: Optional[ObservabilityRuntimeConfig] = None,
     ) -> None: ...
 
-class ModelLoadOptions:
-    backend: str
-    stats: str
-    def __init__(
-        self,
-        *,
-        backend: str = DEFAULT_MODEL_BACKEND,
-        stats: str = DEFAULT_MODEL_STATS,
-        runtime: Optional[NativeRuntimeConfig] = None,
-    ) -> None: ...
-
-class QueryOptions:
-    context_key: str
-    max_tokens: int
-    grammar: str
-    json_schema: str
-    stop: Sequence[str]
-    media: Sequence[bytes]
-    def __init__(
-        self,
-        context_key: str = DEFAULT_CONTEXT_KEY,
-        max_tokens: int = DEFAULT_MAX_TOKENS,
-        grammar: str = "",
-        *,
-        json_schema: str = "",
-        stop: Optional[Sequence[str]] = None,
-        sampling: Optional[SamplingRuntimeConfig] = None,
-        media: Optional[Sequence[bytes]] = None,
-    ) -> None: ...
-
 class ChatMessage:
     role: str
     content: str
     def __init__(self, role: str, content: str) -> None: ...
 
-class StreamStats(TypedDict):
+class TokenEmissionStats(TypedDict):
     frames_sent: int
     bytes_sent: int
-    frames_dropped: int
     batches_sent: int
 
 class TokenBatch(TypedDict):
@@ -213,31 +180,166 @@ class TokenBatch(TypedDict):
     text: str
     frame_count: int
     byte_count: int
-    stats: StreamStats
+    stats: TokenEmissionStats
 
-OnTokens = Callable[[TokenBatch], object]
+class TokenUsage(TypedDict):
+    input_tokens: Optional[int]
+    output_tokens: Optional[int]
+    total_tokens: Optional[int]
 
-class CogentEngine:
-    def __init__(self, model_path: PathLike, config: Optional[NativeRuntimeConfig] = None) -> None: ...
-    def close(self) -> None: ...
-    def query(self, prompt: str, options: Optional[QueryOptions] = None, *, on_tokens: Optional[OnTokens] = None) -> dict[str, Any]: ...
-    def chat(self, messages: Sequence[ChatMessage], options: Optional[QueryOptions] = None, *, on_tokens: Optional[OnTokens] = None) -> dict[str, Any]: ...
-    def state(self) -> dict[str, Any]: ...
-    def drain_events(self) -> list[dict[str, Any]]: ...
+RemoteOptions = dict[str, Any]
 
-class ModelService:
-    def __init__(self, store_path: PathLike) -> None: ...
-    def close(self) -> None: ...
-    def load_path(self, model_path: PathLike, options: Optional[ModelLoadOptions] = None) -> dict[str, Any]: ...
-    def load_vision(self, model_path: PathLike, projector_path: PathLike, options: Optional[ModelLoadOptions] = None) -> dict[str, Any]: ...
-    def unload(self) -> None: ...
-    def remove(self, model_id: str) -> None: ...
-    def list(self) -> list[dict[str, Any]]: ...
-    def current(self) -> Optional[dict[str, Any]]: ...
-    def query(self, prompt: str, options: Optional[QueryOptions] = None, *, on_tokens: Optional[OnTokens] = None) -> dict[str, Any]: ...
-    def chat(self, messages: Sequence[ChatMessage], options: Optional[QueryOptions] = None, *, on_tokens: Optional[OnTokens] = None) -> dict[str, Any]: ...
-    def state(self) -> dict[str, Any]: ...
-    def drain_events(self) -> list[dict[str, Any]]: ...
+class EndpointRefDict(TypedDict):
+    kind: Literal["local", "remote"]
+    id: str
+
+class CogentTextResponse(TypedDict):
+    endpoint: EndpointRefDict
+    text: str
+    finish_reason: str
+    usage: Optional[TokenUsage]
+    local_stats: Optional[dict[str, Any]]
+
+class CogentEmbeddingResponse(TypedDict):
+    endpoint: EndpointRefDict
+    values: list[float]
+    usage: Optional[TokenUsage]
+    local_stats: Optional[dict[str, Any]]
+    pooling: Optional[str]
+    normalized: Optional[bool]
+
+class UnsupportedOperationError(Exception): ...
+
+class RemoteError(Exception):
+    kind: str
+    remote_kind: str
+    status: Optional[int]
+    code: Optional[str]
+    request_id: Optional[str]
+    retry_after_ms: Optional[float]
+    raw_body: Any
+
+class RemoteAuth:
+    @staticmethod
+    def bearer(token: str) -> RemoteAuth: ...
+    @staticmethod
+    def header(name: str, value: str) -> RemoteAuth: ...
+
+class RemoteConfig:
+    @staticmethod
+    def openai(
+        model: str,
+        api_key: str,
+        *,
+        base_url: Optional[str] = None,
+        timeout_ms: Optional[int] = None,
+    ) -> RemoteConfig: ...
+    @staticmethod
+    def anthropic(
+        model: str,
+        api_key: str,
+        *,
+        base_url: Optional[str] = None,
+        version: Optional[str] = None,
+        timeout_ms: Optional[int] = None,
+    ) -> RemoteConfig: ...
+    @staticmethod
+    def proxy(
+        model: str,
+        base_url: str,
+        auth: RemoteAuth,
+        *,
+        protocol: str = "openai_compatible",
+        static_headers: Optional[Sequence[tuple[str, str]]] = None,
+        timeout_ms: Optional[int] = None,
+    ) -> RemoteConfig: ...
+class EndpointRef:
+    @staticmethod
+    def local(id: str) -> EndpointRef: ...
+    @staticmethod
+    def remote(id: str) -> EndpointRef: ...
+    @property
+    def kind(self) -> Literal["local", "remote"]: ...
+
+class CogentTextOptions:
+    def __init__(
+        self,
+        *,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        stop: Optional[Sequence[str]] = None,
+    ) -> None: ...
+
+class LocalTextOptions:
+    def __init__(
+        self,
+        *,
+        context_key: Optional[str] = None,
+        grammar: Optional[str] = None,
+        json_schema: Optional[str] = None,
+        sampling: Optional[SamplingRuntimeConfig] = None,
+        media: Optional[Sequence[bytes]] = None,
+    ) -> None: ...
+
+class LocalEmbedOptions:
+    def __init__(
+        self,
+        *,
+        context_key: Optional[str] = None,
+        normalize: Optional[bool] = None,
+    ) -> None: ...
+
+class CogentTokenIterator(Iterator[TokenBatch]): ...
+
+class CogentTextRun:
+    def result(self) -> CogentTextResponse: ...
+    def tokens(self) -> CogentTokenIterator: ...
+
+class CogentEmbeddingRun:
+    def result(self) -> CogentEmbeddingResponse: ...
+
+class CogentClient:
+    def __init__(self) -> None: ...
+    def add_local(
+        self,
+        id: str,
+        model_path: PathLike,
+        config: Optional[NativeRuntimeConfig] = None,
+    ) -> EndpointRef: ...
+    def add_remote(
+        self,
+        id: str,
+        config: RemoteConfig,
+    ) -> EndpointRef: ...
+    def query(
+        self,
+        prompt: str,
+        *,
+        endpoint: Optional[EndpointRef] = None,
+        options: Optional[CogentTextOptions] = None,
+        local: Optional[LocalTextOptions] = None,
+        remote_options: Optional[RemoteOptions] = None,
+        emit_tokens: bool = False,
+    ) -> CogentTextRun: ...
+    def chat(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        endpoint: Optional[EndpointRef] = None,
+        options: Optional[CogentTextOptions] = None,
+        local: Optional[LocalTextOptions] = None,
+        remote_options: Optional[RemoteOptions] = None,
+        emit_tokens: bool = False,
+    ) -> CogentTextRun: ...
+    def embed(
+        self,
+        input: str,
+        *,
+        endpoint: Optional[EndpointRef] = None,
+        local: Optional[LocalEmbedOptions] = None,
+        remote_options: Optional[RemoteOptions] = None,
+    ) -> CogentEmbeddingRun: ...
 
 def backend_observability_json(include_details: bool = True) -> str: ...
 def get_active_backend() -> ActivePythonBackend: ...

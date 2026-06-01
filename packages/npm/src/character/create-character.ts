@@ -1,10 +1,11 @@
 import { CharacterEventBus } from './action-bus.js';
-import { CharacterRuntime, type CharacterRuntimeEngine, type CharacterRuntimeOptions } from './character-agent.js';
+import { CharacterRuntime, type CharacterRuntimeClient, type CharacterRuntimeOptions } from './character-agent.js';
 import { parseCharacterConfig, type CharacterConfig } from './character-config.js';
 
 export interface CreateCharacterFromConfigUrlOptions {
   readonly configUrl: string;
-  readonly engine: CharacterRuntimeEngine;
+  /** Chat client used by the constructed CharacterRuntime. */
+  readonly client: CharacterRuntimeClient;
   readonly bus?: CharacterEventBus;
   readonly runtimeOptions?: Omit<CharacterRuntimeOptions, 'bus'>;
   readonly fetch?: typeof globalThis.fetch;
@@ -23,7 +24,7 @@ export async function createCharacterFromConfigUrl(
     throw new Error(`character.json HTTP ${response.status}`);
   }
   const config = parseCharacterConfig(await response.json());
-  const character = new CharacterRuntime(options.engine, config, {
+  const character = new CharacterRuntime(options.client, config, {
     ...options.runtimeOptions,
     ...(options.bus ? { bus: options.bus } : {}),
   });

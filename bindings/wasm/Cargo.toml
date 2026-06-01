@@ -16,4 +16,5 @@ serde_json.workspace = true
 sha2.workspace = true
 
 [target.'cfg(target_family = "wasm")'.dependencies]
+cogentlm-client = { path = "../../crates/client", default-features = false }
 cogentlm-engine = { path = "../../crates/engine", default-features = false }

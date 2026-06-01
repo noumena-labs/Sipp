@@ -5,19 +5,21 @@ use crate::runtime::numeric::positive_fair_share_i32;
 
 use super::{
     saturating_i32_delta, saturating_usize_delta_to_i32, InferenceRuntime, RequestStepResult,
-    SchedulerBurstResult, SlotPhase, PREFIX_SNAPSHOT_COMMIT_BUDGET,
+    SchedulerBurstResult,
 };
 
 impl InferenceRuntime {
     pub fn run_scheduler_tick(&mut self) -> RequestStepResult {
-        self.run_scheduler_tick_locked()
+        let result = self.run_scheduler_tick_locked();
+        self.request_queue.flush_token_emissions();
+        result
     }
 
     pub fn run_scheduler_burst(
         &mut self,
         max_ticks: i32,
         max_completed_responses: i32,
-        max_emitted_tokens: i32,
+        max_generated_tokens: i32,
         max_duration: Duration,
     ) -> SchedulerBurstResult {
         let mut burst_result = SchedulerBurstResult::default();
@@ -27,7 +29,7 @@ impl InferenceRuntime {
         }
 
         let max_completed = max_completed_responses.max(0);
-        let max_emitted = max_emitted_tokens.max(0);
+        let max_generated = max_generated_tokens.max(0);
         let deadline = (!max_duration.is_zero()).then(|| Instant::now() + max_duration);
 
         for _ in 0..max_ticks {
@@ -51,34 +53,31 @@ impl InferenceRuntime {
                 RequestStepResult::Invalid | RequestStepResult::FatalNoProgress
             ) {
                 burst_result.status = step_result;
+                self.request_queue.flush_token_emissions();
                 return burst_result;
             }
 
             if step_result == RequestStepResult::Waiting {
-                self.commit_pending_prefix_snapshots();
+                self.request_queue.flush_token_emissions();
                 burst_result.status = completed_or_waiting(&burst_result);
                 return burst_result;
             }
 
             let completed_limit_reached =
                 max_completed > 0 && burst_result.completed_response_count >= max_completed;
-            let emitted_limit_reached =
-                max_emitted > 0 && burst_result.emitted_token_count >= max_emitted;
+            let generated_limit_reached =
+                max_generated > 0 && burst_result.emitted_token_count >= max_generated;
             let duration_limit_reached =
                 deadline.is_some_and(|deadline| Instant::now() >= deadline);
 
-            if completed_limit_reached || emitted_limit_reached || duration_limit_reached {
-                if burst_result.completed_response_count > 0 {
-                    self.commit_pending_prefix_snapshots();
-                }
+            if completed_limit_reached || generated_limit_reached || duration_limit_reached {
+                self.request_queue.flush_token_emissions();
                 burst_result.status = completed_or_waiting(&burst_result);
                 return burst_result;
             }
         }
 
-        if burst_result.completed_response_count > 0 {
-            self.commit_pending_prefix_snapshots();
-        }
+        self.request_queue.flush_token_emissions();
         burst_result.status = completed_or_waiting(&burst_result);
         burst_result
     }
@@ -87,7 +86,7 @@ impl InferenceRuntime {
         &mut self,
         max_ticks: i32,
         max_completed_responses: i32,
-        max_emitted_tokens: i32,
+        max_generated_tokens: i32,
         max_duration: Duration,
     ) -> SchedulerBurstResult {
         let mut loop_result = SchedulerBurstResult::default();
@@ -117,6 +116,9 @@ impl InferenceRuntime {
                 emitted_after,
                 step_result,
             );
+            if self.request_queue.has_token_emission_sinks() {
+                self.request_queue.flush_token_emissions();
+            }
 
             if matches!(
                 step_result,
@@ -136,7 +138,7 @@ impl InferenceRuntime {
                 loop_result.status = RequestStepResult::Progressed;
                 break;
             }
-            if max_emitted_tokens > 0 && loop_result.emitted_token_count >= max_emitted_tokens {
+            if max_generated_tokens > 0 && loop_result.emitted_token_count >= max_generated_tokens {
                 loop_result.status = RequestStepResult::Progressed;
                 break;
             }
@@ -150,25 +152,8 @@ impl InferenceRuntime {
             }
         }
 
-        if loop_result.completed_response_count > 0
-            || loop_result.status == RequestStepResult::Waiting
-        {
-            self.commit_pending_prefix_snapshots();
-        }
+        self.request_queue.flush_token_emissions();
         loop_result
-    }
-
-    fn commit_pending_prefix_snapshots(&mut self) {
-        if self
-            .slot_scheduler
-            .slots
-            .iter()
-            .any(|slot| slot.phase != SlotPhase::Idle)
-        {
-            return;
-        }
-        self.prefix_state_cache
-            .drain_pending_snapshots(&self.native_runtime, PREFIX_SNAPSHOT_COMMIT_BUDGET);
     }
 
     pub(super) fn resolve_prefill_chunk_size_locked(

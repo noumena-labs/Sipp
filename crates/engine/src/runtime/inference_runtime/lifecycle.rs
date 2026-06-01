@@ -13,7 +13,7 @@ use crate::runtime::request::{GenerateRequestId, RequestQueue};
 use crate::runtime::scheduler::{
     BatchPlanner, SamplerCacheKey, SamplerHandle, SharedBatchPlan, SlotScheduler,
 };
-use crate::runtime::session::{PrefixCachePolicy, PrefixStateCache, SessionStore};
+use crate::runtime::session::KvCacheManager;
 
 use super::capabilities::RuntimeModelCapabilities;
 use super::environment::{admit_runtime_residency, snapshot_prefix_cache_enabled};
@@ -44,7 +44,6 @@ impl InferenceRuntime {
         let resolved_limits = native_runtime.resolved_limits();
         init_runtime_extensions(&mut native_runtime, &config, &model_path_string)?;
         let runtime_parts = RuntimeParts::new(&config, resolved_limits.clone())?;
-        let debug_metrics_enabled = config.observability.effective_runtime_metrics();
         let capabilities = build_capabilities(&config, &native_runtime)?;
 
         Ok(Self {
@@ -55,29 +54,22 @@ impl InferenceRuntime {
             _residency_lease: residency_lease,
             last_runtime_observability: RuntimeObservabilityMetrics::default(),
             has_last_runtime_observability: false,
-            session_store: runtime_parts.session_store,
+            kv_cache: runtime_parts.kv_cache,
             request_queue: RequestQueue::new(),
             slot_scheduler: runtime_parts.slot_scheduler,
             batch_planner: BatchPlanner,
             shared_batch_builder: runtime_parts.shared_batch_builder,
-            prefix_state_cache: PrefixStateCache::new(
-                runtime_parts.max_prefix_cache_entries,
-                runtime_parts.max_prefix_cache_bytes,
-            ),
-            prefix_cache_policy: PrefixCachePolicy::new(runtime_parts.prefix_cache_interval_tokens),
             next_request_id: 1,
             model_fingerprint: fingerprint_path(model_path),
             committed_observability_request_ids: HashSet::<GenerateRequestId>::new(),
             scratch_decode_ready_slots: Vec::with_capacity(runtime_parts.max_sequences),
             scratch_prefill_ready_slots: Vec::with_capacity(runtime_parts.max_sequences),
             scratch_logits_contributions: Vec::with_capacity(runtime_parts.scratch_token_capacity),
-            scratch_terminal_sequences: Vec::with_capacity(runtime_parts.max_sequences),
             scratch_plan: SharedBatchPlan::with_capacities(
                 runtime_parts.scratch_token_capacity,
                 runtime_parts.max_sequences,
             ),
             scratch_token_piece: Vec::with_capacity(128),
-            debug_metrics_enabled,
             total_decode_ms: 0.0,
             total_prefill_ms: 0.0,
             total_input_tokens: 0,
@@ -92,33 +84,39 @@ impl InferenceRuntime {
 impl Drop for InferenceRuntime {
     fn drop(&mut self) {
         self.detach_all_backend_samplers_locked();
-        self.slot_scheduler.resize(0);
-        self.session_store.clear();
+        self.slot_scheduler.resize(0, &mut self.kv_cache);
+        self.kv_cache.evict_all_active_and_idle();
 
         self.sampler_pool.clear();
     }
 }
 
 struct RuntimeParts {
-    session_store: SessionStore,
+    kv_cache: KvCacheManager,
     slot_scheduler: SlotScheduler,
     shared_batch_builder: LlamaBatchBuilder,
     max_sequences: usize,
     scratch_token_capacity: usize,
-    max_prefix_cache_entries: usize,
-    max_prefix_cache_bytes: usize,
-    prefix_cache_interval_tokens: usize,
 }
 
 impl RuntimeParts {
     fn new(config: &NativeRuntimeConfig, resolved_limits: ResolvedRuntimeLimits) -> Result<Self> {
-        let max_cached_sessions = positive_i32_to_usize(config.cache.max_session_entries);
         let resolved_parallel = resolved_limits.n_parallel.max(1);
         let max_sequences = positive_i32_to_usize(resolved_parallel);
-        let session_store = SessionStore::new(max_cached_sessions, max_sequences);
+        let prefix_cache_interval_tokens = if snapshot_prefix_cache_enabled(config.cache.mode) {
+            nonnegative_i32_to_usize(config.cache.snapshot_interval_tokens)
+        } else {
+            0
+        };
+        let mut kv_cache = KvCacheManager::with_prefix_cache(
+            max_sequences,
+            positive_i32_to_usize(config.cache.max_snapshot_entries),
+            config.cache.max_snapshot_bytes,
+            prefix_cache_interval_tokens,
+        );
 
         let mut slot_scheduler = SlotScheduler::default();
-        slot_scheduler.resize(max_sequences);
+        slot_scheduler.resize(max_sequences, &mut kv_cache);
 
         let mut shared_batch_builder = LlamaBatchBuilder::default();
         let batch_token_budget = config
@@ -129,18 +127,11 @@ impl RuntimeParts {
         shared_batch_builder.ensure_capacity(batch_token_budget, resolved_parallel)?;
 
         Ok(Self {
-            session_store,
+            kv_cache,
             slot_scheduler,
             shared_batch_builder,
             max_sequences,
             scratch_token_capacity: positive_i32_to_usize(batch_token_budget),
-            max_prefix_cache_entries: positive_i32_to_usize(config.cache.max_snapshot_entries),
-            max_prefix_cache_bytes: config.cache.max_snapshot_bytes,
-            prefix_cache_interval_tokens: if snapshot_prefix_cache_enabled(config.cache.mode) {
-                nonnegative_i32_to_usize(config.cache.snapshot_interval_tokens)
-            } else {
-                0
-            },
         })
     }
 }

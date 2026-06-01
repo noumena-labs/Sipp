@@ -1,18 +1,12 @@
 use std::time::Instant;
 
 use crate::engine::protocol::EmbedOptions;
-use crate::runtime::config::SamplingRuntimeConfig;
+use crate::runtime::config::{KvReuseMode, RequestSampling};
 use crate::runtime::llama_token;
+use crate::runtime::metrics::CacheSource;
 
 pub type GenerateRequestId = u32;
 pub const NO_SAMPLED_TOKEN_ID: i32 = -1;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum GenerateTokenEmissionMode {
-    #[default]
-    None = 0,
-    TokenStream = 1,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GenerateRequestLifecycle {
@@ -20,7 +14,7 @@ pub enum GenerateRequestLifecycle {
     Pending = 0,
     Admitted,
     Running,
-    Streaming,
+    Decoding,
     Completed,
     Cancelled,
     Failed,
@@ -39,7 +33,7 @@ pub struct GenerateRequest {
     pub grammar: String,
     pub json_schema: String,
     pub stop: Vec<String>,
-    pub sampling: Option<SamplingRuntimeConfig>,
+    pub sampling: Option<RequestSampling>,
     pub prompt_tokens: Vec<llama_token>,
     pub multimodal: Option<MultimodalPayload>,
     /// When `Some`, this is an `embed()` request: the slot plan resolves to
@@ -48,7 +42,7 @@ pub struct GenerateRequest {
     /// embedding read (subject to `normalize` honoring `pooling != Rank`).
     pub embed_options: Option<EmbedOptions>,
     pub max_output_tokens: i32,
-    pub token_emission_mode: GenerateTokenEmissionMode,
+    pub emit_tokens: bool,
     pub lifecycle: GenerateRequestLifecycle,
     pub enqueued_at: Option<Instant>,
     pub admitted_at: Option<Instant>,
@@ -66,30 +60,10 @@ pub struct GenerateRequest {
     pub native_logic_ms: f64,
     pub input_tokens: i32,
     pub output_tokens: i32,
+    pub cache_mode: KvReuseMode,
+    pub cache_source: CacheSource,
     pub cache_hits: i32,
     pub prefill_tokens: i32,
-    pub debug_metrics_scheduler_ticks: i32,
-    pub debug_metrics_decode_ticks: i32,
-    pub debug_metrics_prefill_ticks: i32,
-    pub debug_metrics_backend_sampler_attach_attempts: i32,
-    pub debug_metrics_backend_sampler_attach_failures: i32,
-    pub debug_metrics_admit_ms: f64,
-    pub debug_metrics_normalize_ms: f64,
-    pub debug_metrics_backend_sampler_attach_ms: f64,
-    pub debug_metrics_select_slots_ms: f64,
-    pub debug_metrics_plan_ms: f64,
-    pub debug_metrics_batch_build_ms: f64,
-    pub debug_metrics_llama_decode_ms: f64,
-    pub debug_metrics_llama_sync_ms: f64,
-    pub debug_metrics_apply_bookkeeping_ms: f64,
-    pub debug_metrics_apply_decode_results_ms: f64,
-    pub debug_metrics_sample_ms: f64,
-    pub debug_metrics_token_piece_ms: f64,
-    pub debug_metrics_emit_ms: f64,
-    pub debug_metrics_prefix_queue_ms: f64,
-    pub debug_metrics_finalize_ms: f64,
-    pub debug_metrics_commit_observability_ms: f64,
-    pub debug_metrics_post_decode_ms: f64,
     pub first_sampled_token_id: i32,
     pub is_multimodal_turn: bool,
     pub cancel_requested: bool,
@@ -127,30 +101,9 @@ impl GenerateRequest {
         self.native_logic_ms = 0.0;
         self.input_tokens = 0;
         self.output_tokens = 0;
+        self.cache_source = CacheSource::None;
         self.cache_hits = 0;
         self.prefill_tokens = 0;
-        self.debug_metrics_scheduler_ticks = 0;
-        self.debug_metrics_decode_ticks = 0;
-        self.debug_metrics_prefill_ticks = 0;
-        self.debug_metrics_backend_sampler_attach_attempts = 0;
-        self.debug_metrics_backend_sampler_attach_failures = 0;
-        self.debug_metrics_admit_ms = 0.0;
-        self.debug_metrics_normalize_ms = 0.0;
-        self.debug_metrics_backend_sampler_attach_ms = 0.0;
-        self.debug_metrics_select_slots_ms = 0.0;
-        self.debug_metrics_plan_ms = 0.0;
-        self.debug_metrics_batch_build_ms = 0.0;
-        self.debug_metrics_llama_decode_ms = 0.0;
-        self.debug_metrics_llama_sync_ms = 0.0;
-        self.debug_metrics_apply_bookkeeping_ms = 0.0;
-        self.debug_metrics_apply_decode_results_ms = 0.0;
-        self.debug_metrics_sample_ms = 0.0;
-        self.debug_metrics_token_piece_ms = 0.0;
-        self.debug_metrics_emit_ms = 0.0;
-        self.debug_metrics_prefix_queue_ms = 0.0;
-        self.debug_metrics_finalize_ms = 0.0;
-        self.debug_metrics_commit_observability_ms = 0.0;
-        self.debug_metrics_post_decode_ms = 0.0;
         self.first_sampled_token_id = NO_SAMPLED_TOKEN_ID;
     }
 }
@@ -169,7 +122,7 @@ impl Default for GenerateRequest {
             multimodal: None,
             embed_options: None,
             max_output_tokens: 0,
-            token_emission_mode: GenerateTokenEmissionMode::None,
+            emit_tokens: false,
             lifecycle: GenerateRequestLifecycle::Pending,
             enqueued_at: None,
             admitted_at: None,
@@ -187,30 +140,10 @@ impl Default for GenerateRequest {
             native_logic_ms: 0.0,
             input_tokens: 0,
             output_tokens: 0,
+            cache_mode: KvReuseMode::LiveSlotPrefix,
+            cache_source: CacheSource::None,
             cache_hits: 0,
             prefill_tokens: 0,
-            debug_metrics_scheduler_ticks: 0,
-            debug_metrics_decode_ticks: 0,
-            debug_metrics_prefill_ticks: 0,
-            debug_metrics_backend_sampler_attach_attempts: 0,
-            debug_metrics_backend_sampler_attach_failures: 0,
-            debug_metrics_admit_ms: 0.0,
-            debug_metrics_normalize_ms: 0.0,
-            debug_metrics_backend_sampler_attach_ms: 0.0,
-            debug_metrics_select_slots_ms: 0.0,
-            debug_metrics_plan_ms: 0.0,
-            debug_metrics_batch_build_ms: 0.0,
-            debug_metrics_llama_decode_ms: 0.0,
-            debug_metrics_llama_sync_ms: 0.0,
-            debug_metrics_apply_bookkeeping_ms: 0.0,
-            debug_metrics_apply_decode_results_ms: 0.0,
-            debug_metrics_sample_ms: 0.0,
-            debug_metrics_token_piece_ms: 0.0,
-            debug_metrics_emit_ms: 0.0,
-            debug_metrics_prefix_queue_ms: 0.0,
-            debug_metrics_finalize_ms: 0.0,
-            debug_metrics_commit_observability_ms: 0.0,
-            debug_metrics_post_decode_ms: 0.0,
             first_sampled_token_id: NO_SAMPLED_TOKEN_ID,
             is_multimodal_turn: false,
             cancel_requested: false,

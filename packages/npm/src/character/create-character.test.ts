@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { CharacterEventBus } from './action-bus.js';
-import type { CharacterRuntimeEngine } from './character-agent.js';
+import type { CharacterRuntimeClient } from './character-agent.js';
 import { createCharacterFromConfigUrl } from './create-character.js';
 
-function createEngineStub(): CharacterRuntimeEngine {
+function createClientStub(): CharacterRuntimeClient {
   return {
     async chat() {
       return '';
@@ -16,11 +16,11 @@ function createEngineStub(): CharacterRuntimeEngine {
 test('createCharacterFromConfigUrl fetches, parses, and builds a character runtime', async () => {
   const bus = new CharacterEventBus();
   const fetchCalls: Array<{ url: string; signal?: AbortSignal }> = [];
-  const engine = createEngineStub();
+  const client = createClientStub();
 
   const result = await createCharacterFromConfigUrl({
     configUrl: '/characters/aria/character.json',
-    engine,
+    client,
     bus,
     fetch: async (url, init) => {
       fetchCalls.push({ url: String(url), signal: init?.signal ?? undefined });
@@ -49,7 +49,7 @@ test('createCharacterFromConfigUrl surfaces HTTP errors', async () => {
     () =>
       createCharacterFromConfigUrl({
         configUrl: '/missing.json',
-        engine: createEngineStub(),
+        client: createClientStub(),
         fetch: async () =>
           ({
             ok: false,

@@ -1,5 +1,7 @@
 //! Unit tests for the parent module.
 
+use std::sync::Arc;
+
 use super::super::*;
 use crate::runtime::request::token_byte_ring;
 
@@ -57,37 +59,79 @@ fn cancelling_admitted_request_marks_it_for_runtime_cancellation() {
 }
 
 #[test]
-fn append_streaming_token_without_ring_is_a_noop() {
+fn append_token_piece_without_ring_is_a_noop() {
     let mut queue = RequestQueue::new();
-    queue.append_streaming_token(1, "a");
+    queue.append_token_piece(1, "a");
 
     assert_eq!(queue.total_emitted_token_count, 0);
 }
 
 #[test]
-fn append_streaming_token_writes_to_token_ring() {
+fn append_token_piece_writes_to_token_ring() {
     let mut queue = RequestQueue::new();
     let (producer, consumer) = token_byte_ring(1024);
-    queue.token_ring_producers.insert(9, producer);
+    queue.token_emission_sinks.insert(9, Arc::new(producer));
 
-    queue.append_streaming_token(9, "tok");
+    queue.append_token_piece(9, "tok");
+    assert_eq!(consumer.drain_available(16, 1024).frames.len(), 0);
+
+    assert!(queue.flush_token_emissions());
 
     let drain = consumer.drain_available(16, 1024);
     assert_eq!(drain.frames.len(), 1);
     assert_eq!(drain.frames[0].stream_id, 9);
+    assert_eq!(drain.frames[0].frame_count, 1);
     assert_eq!(drain.frames[0].bytes, b"tok");
     assert_eq!(queue.total_emitted_token_count, 1);
+}
+
+#[test]
+fn flush_token_emissions_batches_pieces_per_request() {
+    let mut queue = RequestQueue::new();
+    let (producer, consumer) = token_byte_ring(1024);
+    queue.token_emission_sinks.insert(9, Arc::new(producer));
+
+    queue.append_token_piece(9, "to");
+    queue.append_token_piece(9, "k");
+    assert!(queue.flush_token_emissions());
+
+    let drain = consumer.drain_available(16, 1024);
+    assert_eq!(drain.frames.len(), 1);
+    assert_eq!(drain.frames[0].stream_id, 9);
+    assert_eq!(drain.frames[0].sequence, 0);
+    assert_eq!(drain.frames[0].frame_count, 2);
+    assert_eq!(drain.frames[0].bytes, b"tok");
+    assert_eq!(queue.total_emitted_token_count, 2);
+
+    queue.append_token_piece(9, "!");
+    assert!(queue.flush_token_emissions());
+
+    let next = consumer.drain_available(16, 1024);
+    assert_eq!(next.frames.len(), 1);
+    assert_eq!(next.frames[0].sequence, 2);
+    assert_eq!(next.frames[0].frame_count, 1);
+    assert_eq!(next.frames[0].bytes, b"!");
 }
 
 #[test]
 fn emitted_token_count_saturates_at_i32_max() {
     let mut queue = RequestQueue::new();
     let (producer, consumer) = token_byte_ring(1024);
-    queue.token_ring_producers.insert(9, producer);
+    queue.token_emission_sinks.insert(9, Arc::new(producer));
     queue.total_emitted_token_count = i32::MAX;
 
-    queue.append_streaming_token(9, "tok");
+    queue.append_token_piece(9, "tok");
+    assert!(queue.flush_token_emissions());
 
     assert_eq!(queue.total_emitted_token_count, i32::MAX);
     assert_eq!(consumer.drain_available(16, 1024).frames.len(), 1);
+}
+
+#[test]
+fn flush_token_emissions_reports_noop_when_no_tokens_are_pending() {
+    let mut queue = RequestQueue::new();
+    let (producer, _consumer) = token_byte_ring(1024);
+    queue.token_emission_sinks.insert(9, Arc::new(producer));
+
+    assert!(!queue.flush_token_emissions());
 }

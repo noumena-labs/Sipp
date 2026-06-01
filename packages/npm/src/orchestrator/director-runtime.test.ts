@@ -2,15 +2,17 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type {
+  BrowserTextRun,
   ChatInput,
   ChatOptions,
   GenerationResult,
+  ModelInfo,
   TokenBatch,
 } from '../models/types.js';
 import { parseDirectorConfig } from './director-config.js';
-import { DirectorRuntime, type DirectorRuntimeEngine } from './director-runtime.js';
+import { DirectorRuntime, type DirectorRuntimeClient } from './director-runtime.js';
 
-class FakeEngine implements DirectorRuntimeEngine {
+class FakeClient implements DirectorRuntimeClient {
   public outputText = '';
   public fail = false;
   public grammar: string | undefined;
@@ -20,14 +22,14 @@ class FakeEngine implements DirectorRuntimeEngine {
   public mediaMarker: string | null = '<image>';
   public queryCalls = 0;
 
-  public readonly models = {
-    current: () => ({ mediaMarker: this.mediaMarker }),
-  };
+  public currentLocal(): Pick<ModelInfo, 'mediaMarker'> | null {
+    return { mediaMarker: this.mediaMarker };
+  }
 
-  public async chat(
+  public chat(
     input: ChatInput,
     options?: ChatOptions
-  ): Promise<GenerationResult> {
+  ): BrowserTextRun {
     this.queryCalls += 1;
     if (typeof options === 'object' && options) {
       this.grammar = options.grammar;
@@ -37,25 +39,28 @@ class FakeEngine implements DirectorRuntimeEngine {
     this.prompt = messages.map((message) => `${message.role}: ${message.content}`).join('\n');
 
     if (this.waitForAbort) {
-      await new Promise<void>((resolve) => {
+      const response = new Promise<GenerationResult>((_resolve, reject) => {
         const signal = options?.signal;
         if (!signal) return;
         if (signal.aborted) {
-          resolve();
+          reject(new DOMException('Operation aborted.', 'AbortError'));
           return;
         }
-        signal.addEventListener('abort', () => resolve(), { once: true });
+        signal.addEventListener(
+          'abort',
+          () => reject(new DOMException('Operation aborted.', 'AbortError')),
+          { once: true }
+        );
       });
-      throw new DOMException('Operation aborted.', 'AbortError');
+      return textRun(response);
     }
 
     if (this.fail) {
-      throw new Error('boom');
+      return textRun(Promise.reject(new Error('boom')));
     }
 
     const safeText = sanitizeFakeChatOutput(this.outputText);
-    options?.onTokens?.(tokenBatch(safeText));
-    return generationResult(safeText);
+    return textRun(Promise.resolve(generationResult(safeText)), [tokenBatch(safeText)]);
   }
 }
 
@@ -67,7 +72,16 @@ function generationResult(text: string): GenerationResult {
     stats: {
       inputTokens: 1,
       outputTokens: 1,
+      cacheMode: null,
+      cacheSource: null,
       cacheHits: 0,
+      prefillTokens: null,
+      ttftMs: null,
+      interTokenMs: null,
+      e2eMs: null,
+      decodeTokensPerSecond: null,
+      e2eTokensPerSecond: null,
+      prefillTokensPerSecond: null,
       prefillMs: 0,
       decodeMs: 0,
     },
@@ -85,9 +99,27 @@ function tokenBatch(text: string): TokenBatch {
     stats: {
       framesSent: 1,
       bytesSent: new TextEncoder().encode(text).byteLength,
-      framesDropped: 0,
       batchesSent: 1,
+      drainMs: 0,
+      drainCalls: 0,
     },
+  };
+}
+
+function textRun(
+  response: Promise<GenerationResult>,
+  batches: readonly TokenBatch[] = []
+): BrowserTextRun {
+  return {
+    response,
+    tokens: {
+      async *[Symbol.asyncIterator](): AsyncIterator<TokenBatch> {
+        for (const batch of batches) {
+          yield batch;
+        }
+      },
+    },
+    cancel: () => {},
   };
 }
 
@@ -149,9 +181,9 @@ const CONFIG = parseDirectorConfig({
 });
 
 test('DirectorRuntime returns a selected runtime choice with hidden payload', async () => {
-  const engine = new FakeEngine();
-  engine.outputText = 'winner:aria';
-  const runtime = new DirectorRuntime(engine, CONFIG);
+  const client = new FakeClient();
+  client.outputText = 'winner:aria';
+  const runtime = new DirectorRuntime(client, CONFIG);
 
   const result = await runtime.run('resolve_conflict', {
     inputs: { state: { tick: 3 }, extra: 'not for this task' },
@@ -169,17 +201,17 @@ test('DirectorRuntime returns a selected runtime choice with hidden payload', as
   assert.equal(result.status, 'ok');
   assert.equal(result.selections[0]?.id, 'winner:aria');
   assert.deepEqual(result.selections[0]?.payload, { winnerAgentId: 'aria', secret: 'not shown' });
-  assert.ok(engine.grammar?.includes('"winner:aria"'));
-  assert.ok(engine.prompt.includes('winner:aria - Aria wins'));
-  assert.equal(engine.prompt.includes('not shown'), false);
-  assert.equal(engine.prompt.includes('not for this task'), false);
-  assert.equal(engine.prompt.includes('Never output JSON'), true);
+  assert.ok(client.grammar?.includes('"winner:aria"'));
+  assert.ok(client.prompt.includes('winner:aria - Aria wins'));
+  assert.equal(client.prompt.includes('not shown'), false);
+  assert.equal(client.prompt.includes('not for this task'), false);
+  assert.equal(client.prompt.includes('Never output JSON'), true);
 });
 
-test('DirectorRuntime parses sanitized assistant text from engine chat', async () => {
-  const engine = new FakeEngine();
-  engine.outputText = 'Aria sprints toward home base.</s><user>ignored</user>';
-  const runtime = new DirectorRuntime(engine, CONFIG);
+test('DirectorRuntime parses sanitized assistant text from client chat', async () => {
+  const client = new FakeClient();
+  client.outputText = 'Aria sprints toward home base.</s><user>ignored</user>';
+  const runtime = new DirectorRuntime(client, CONFIG);
 
   const result = await runtime.run('narrate', { inputs: { state: { tick: 4 } } });
 
@@ -189,32 +221,32 @@ test('DirectorRuntime parses sanitized assistant text from engine chat', async (
 });
 
 test('DirectorRuntime threads grammar for select_many and select_slots', async () => {
-  const engine = new FakeEngine();
-  engine.outputText = 'alpha\nbeta';
-  const runtime = new DirectorRuntime(engine, CONFIG);
+  const client = new FakeClient();
+  client.outputText = 'alpha\nbeta';
+  const runtime = new DirectorRuntime(client, CONFIG);
   const many = await runtime.run('choose_many', {
     inputs: { state: { tick: 2 } },
     choices: [{ id: 'alpha' }, { id: 'beta' }],
   });
 
   assert.equal(many.status, 'ok');
-  assert.ok(engine.grammar?.includes('selection-line ::= "alpha" | "beta"'));
+  assert.ok(client.grammar?.includes('selection-line ::= "alpha" | "beta"'));
 
-  engine.outputText = 'intent=advise\ntone=brief';
+  client.outputText = 'intent=advise\ntone=brief';
   const slots = await runtime.run('choose_slots', {
     inputs: { state: { tick: 2 } },
     slotChoices: { intent: [{ id: 'advise' }, { id: 'navigate' }] },
   });
 
   assert.equal(slots.status, 'ok');
-  assert.ok(engine.grammar?.includes('"intent="'));
-  assert.ok(engine.grammar?.includes('slot0-choice ::= "advise" | "navigate"'));
+  assert.ok(client.grammar?.includes('"intent="'));
+  assert.ok(client.grammar?.includes('slot0-choice ::= "advise" | "navigate"'));
 });
 
 test('DirectorRuntime threads directive grammar for text_with_directives', async () => {
-  const engine = new FakeEngine();
-  engine.outputText = 'Open billing next. [nav.billing]';
-  const runtime = new DirectorRuntime(engine, CONFIG);
+  const client = new FakeClient();
+  client.outputText = 'Open billing next. [nav.billing]';
+  const runtime = new DirectorRuntime(client, CONFIG);
 
   const result = await runtime.run('assist_with_directives', {
     inputs: { state: { tick: 2 } },
@@ -228,17 +260,17 @@ test('DirectorRuntime threads directive grammar for text_with_directives', async
   assert.equal(result.text, 'Open billing next.');
   assert.equal(result.selections[0]?.id, 'nav.billing');
   assert.deepEqual(result.selections[0]?.payload, { route: '/billing', secret: 'hidden' });
-  assert.ok(engine.grammar?.includes('directive-cue ::= "[" directive-id "]"'));
-  assert.ok(engine.grammar?.includes('"nav.billing" | "inspect.menu"'));
-  assert.ok(engine.prompt.includes('Response:\nWrite only the final answer.'));
-  assert.ok(engine.prompt.includes('Available directives:'));
-  assert.equal(engine.prompt.includes('hidden'), false);
+  assert.ok(client.grammar?.includes('directive-cue ::= "[" directive-id "]"'));
+  assert.ok(client.grammar?.includes('"nav.billing" | "inspect.menu"'));
+  assert.ok(client.prompt.includes('Response:\nWrite only the final answer.'));
+  assert.ok(client.prompt.includes('Available directives:'));
+  assert.equal(client.prompt.includes('hidden'), false);
 });
 
 test('DirectorRuntime rejects malformed directive cues after generation', async () => {
-  const engine = new FakeEngine();
-  engine.outputText = 'Try this [unknown cue]';
-  const runtime = new DirectorRuntime(engine, CONFIG);
+  const client = new FakeClient();
+  client.outputText = 'Try this [unknown cue]';
+  const runtime = new DirectorRuntime(client, CONFIG);
 
   const result = await runtime.run('assist_with_directives', {
     inputs: { state: { tick: 2 } },
@@ -250,8 +282,8 @@ test('DirectorRuntime rejects malformed directive cues after generation', async 
 });
 
 test('DirectorRuntime reports oversized grammars before queueing generation', async () => {
-  const engine = new FakeEngine();
-  const runtime = new DirectorRuntime(engine, CONFIG);
+  const client = new FakeClient();
+  const runtime = new DirectorRuntime(client, CONFIG);
   const choices = Array.from({ length: 9000 }, (_value, index) => ({ id: `choice-${index}` }));
 
   const result = await runtime.run('resolve_conflict', {
@@ -261,13 +293,13 @@ test('DirectorRuntime reports oversized grammars before queueing generation', as
 
   assert.equal(result.status, 'invalid_request');
   assert.match(result.errorMessage ?? '', /grammar exceeds maximum size/);
-  assert.equal(engine.queryCalls, 0);
+  assert.equal(client.queryCalls, 0);
 });
 
 test('DirectorRuntime returns invalid_response for unknown selections', async () => {
-  const engine = new FakeEngine();
-  engine.outputText = 'winner:mira';
-  const runtime = new DirectorRuntime(engine, CONFIG);
+  const client = new FakeClient();
+  client.outputText = 'winner:mira';
+  const runtime = new DirectorRuntime(client, CONFIG);
 
   const result = await runtime.run('resolve_conflict', {
     inputs: { state: { tick: 1 } },
@@ -279,25 +311,25 @@ test('DirectorRuntime returns invalid_response for unknown selections', async ()
 });
 
 test('DirectorRuntime returns text task output without JSON parsing', async () => {
-  const engine = new FakeEngine();
-  engine.outputText = 'Aria sprints toward home base.';
-  const runtime = new DirectorRuntime(engine, CONFIG);
+  const client = new FakeClient();
+  client.outputText = 'Aria sprints toward home base.';
+  const runtime = new DirectorRuntime(client, CONFIG);
 
   const result = await runtime.run('narrate', { inputs: { state: { tick: 4 } } });
 
   assert.equal(result.status, 'ok');
   assert.equal(result.text, 'Aria sprints toward home base.');
   assert.deepEqual(result.selections, []);
-  assert.equal(engine.grammar, undefined);
-  assert.ok(engine.prompt.includes('Task:\nComplete task narrate.'));
-  assert.ok(engine.prompt.includes('Response:\nWrite only the final answer.'));
-  assert.equal(engine.prompt.includes('Output shape:'), false);
+  assert.equal(client.grammar, undefined);
+  assert.ok(client.prompt.includes('Task:\nComplete task narrate.'));
+  assert.ok(client.prompt.includes('Response:\nWrite only the final answer.'));
+  assert.equal(client.prompt.includes('Output shape:'), false);
 });
 
 test('DirectorRuntime renders image inputs through media markers', async () => {
-  const engine = new FakeEngine();
-  engine.outputText = 'The settings page is open.';
-  const runtime = new DirectorRuntime(engine, CONFIG);
+  const client = new FakeClient();
+  client.outputText = 'The settings page is open.';
+  const runtime = new DirectorRuntime(client, CONFIG);
   const image = Uint8Array.from([1, 2, 3]);
 
   const result = await runtime.run('inspect_screen', {
@@ -308,15 +340,15 @@ test('DirectorRuntime renders image inputs through media markers', async () => {
 
   assert.equal(result.status, 'ok');
   assert.equal(result.text, 'The settings page is open.');
-  assert.deepEqual(engine.media, [image]);
-  assert.ok(engine.prompt.includes('<image>'));
-  assert.ok(engine.prompt.includes('Browser screenshot.'));
+  assert.deepEqual(client.media, [image]);
+  assert.ok(client.prompt.includes('<image>'));
+  assert.ok(client.prompt.includes('Browser screenshot.'));
 });
 
-test('DirectorRuntime surfaces engine failure', async () => {
-  const engine = new FakeEngine();
-  engine.fail = true;
-  const runtime = new DirectorRuntime(engine, CONFIG);
+test('DirectorRuntime surfaces client failure', async () => {
+  const client = new FakeClient();
+  client.fail = true;
+  const runtime = new DirectorRuntime(client, CONFIG);
 
   const result = await runtime.run('narrate', { inputs: { state: { tick: 1 } } });
 
@@ -325,9 +357,9 @@ test('DirectorRuntime surfaces engine failure', async () => {
 });
 
 test('DirectorRuntime returns timed_out on timeout and cancels the queued request', async () => {
-  const engine = new FakeEngine();
-  engine.waitForAbort = true;
-  const runtime = new DirectorRuntime(engine, CONFIG);
+  const client = new FakeClient();
+  client.waitForAbort = true;
+  const runtime = new DirectorRuntime(client, CONFIG);
 
   const result = await runtime.run('narrate', { inputs: { state: { tick: 1 } }, timeoutMs: 1 });
 

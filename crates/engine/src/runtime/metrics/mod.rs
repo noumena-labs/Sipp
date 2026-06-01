@@ -1,7 +1,47 @@
 use std::time::Instant;
 
+use crate::runtime::config::KvReuseMode;
 use crate::runtime::numeric::duration_ms;
 use crate::runtime::request::GenerateRequest;
+
+/// Cache source used to satisfy a request prefill.
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CacheSource {
+    /// No reusable KV state was used.
+    #[default]
+    None = 0,
+    /// A live slot with matching prefix state was reused.
+    Live = 1,
+    /// A serialized prefix snapshot was restored before prefill.
+    Snapshot = 2,
+}
+
+/// Cache reuse mode reported in runtime observability metrics.
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CacheMetricMode {
+    /// Prefix KV reuse is disabled.
+    Disabled = 0,
+    /// Only live slot prefix reuse is enabled.
+    #[default]
+    LiveSlotPrefix = 1,
+    /// Only serialized state snapshot reuse is enabled.
+    StateSnapshot = 2,
+    /// Live slot prefix reuse and serialized snapshots are both enabled.
+    LiveSlotAndSnapshot = 3,
+}
+
+impl From<KvReuseMode> for CacheMetricMode {
+    fn from(mode: KvReuseMode) -> Self {
+        match mode {
+            KvReuseMode::Disabled => Self::Disabled,
+            KvReuseMode::LiveSlotPrefix => Self::LiveSlotPrefix,
+            KvReuseMode::StateSnapshot => Self::StateSnapshot,
+            KvReuseMode::LiveSlotAndSnapshot => Self::LiveSlotAndSnapshot,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct RuntimeObservabilityMetrics {
@@ -16,30 +56,10 @@ pub struct RuntimeObservabilityMetrics {
     pub native_logic_ms: f64,
     pub input_tokens: i32,
     pub output_tokens: i32,
+    pub cache_mode: CacheMetricMode,
+    pub cache_source: CacheSource,
     pub cache_hits: i32,
     pub prefill_tokens: i32,
-    pub debug_metrics_scheduler_ticks: i32,
-    pub debug_metrics_decode_ticks: i32,
-    pub debug_metrics_prefill_ticks: i32,
-    pub debug_metrics_backend_sampler_attach_attempts: i32,
-    pub debug_metrics_backend_sampler_attach_failures: i32,
-    pub debug_metrics_admit_ms: f64,
-    pub debug_metrics_normalize_ms: f64,
-    pub debug_metrics_backend_sampler_attach_ms: f64,
-    pub debug_metrics_select_slots_ms: f64,
-    pub debug_metrics_plan_ms: f64,
-    pub debug_metrics_batch_build_ms: f64,
-    pub debug_metrics_llama_decode_ms: f64,
-    pub debug_metrics_llama_sync_ms: f64,
-    pub debug_metrics_apply_bookkeeping_ms: f64,
-    pub debug_metrics_apply_decode_results_ms: f64,
-    pub debug_metrics_sample_ms: f64,
-    pub debug_metrics_token_piece_ms: f64,
-    pub debug_metrics_emit_ms: f64,
-    pub debug_metrics_prefix_queue_ms: f64,
-    pub debug_metrics_finalize_ms: f64,
-    pub debug_metrics_commit_observability_ms: f64,
-    pub debug_metrics_post_decode_ms: f64,
 }
 
 impl RuntimeObservabilityMetrics {
@@ -80,33 +100,10 @@ impl RuntimeObservabilityMetrics {
             native_logic_ms: request.native_logic_ms,
             input_tokens: request.input_tokens,
             output_tokens: request.output_tokens,
+            cache_mode: request.cache_mode.into(),
+            cache_source: request.cache_source,
             cache_hits: request.cache_hits,
             prefill_tokens: request.prefill_tokens,
-            debug_metrics_scheduler_ticks: request.debug_metrics_scheduler_ticks,
-            debug_metrics_decode_ticks: request.debug_metrics_decode_ticks,
-            debug_metrics_prefill_ticks: request.debug_metrics_prefill_ticks,
-            debug_metrics_backend_sampler_attach_attempts: request
-                .debug_metrics_backend_sampler_attach_attempts,
-            debug_metrics_backend_sampler_attach_failures: request
-                .debug_metrics_backend_sampler_attach_failures,
-            debug_metrics_admit_ms: request.debug_metrics_admit_ms,
-            debug_metrics_normalize_ms: request.debug_metrics_normalize_ms,
-            debug_metrics_backend_sampler_attach_ms: request
-                .debug_metrics_backend_sampler_attach_ms,
-            debug_metrics_select_slots_ms: request.debug_metrics_select_slots_ms,
-            debug_metrics_plan_ms: request.debug_metrics_plan_ms,
-            debug_metrics_batch_build_ms: request.debug_metrics_batch_build_ms,
-            debug_metrics_llama_decode_ms: request.debug_metrics_llama_decode_ms,
-            debug_metrics_llama_sync_ms: request.debug_metrics_llama_sync_ms,
-            debug_metrics_apply_bookkeeping_ms: request.debug_metrics_apply_bookkeeping_ms,
-            debug_metrics_apply_decode_results_ms: request.debug_metrics_apply_decode_results_ms,
-            debug_metrics_sample_ms: request.debug_metrics_sample_ms,
-            debug_metrics_token_piece_ms: request.debug_metrics_token_piece_ms,
-            debug_metrics_emit_ms: request.debug_metrics_emit_ms,
-            debug_metrics_prefix_queue_ms: request.debug_metrics_prefix_queue_ms,
-            debug_metrics_finalize_ms: request.debug_metrics_finalize_ms,
-            debug_metrics_commit_observability_ms: request.debug_metrics_commit_observability_ms,
-            debug_metrics_post_decode_ms: request.debug_metrics_post_decode_ms,
             ..Self::default()
         }
     }

@@ -13,7 +13,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub(crate) struct HttpTransport {
-    client: reqwest::Client,
+    http: reqwest::Client,
     base_url: String,
     provider: ProviderKind,
     headers: HeaderMap,
@@ -59,12 +59,12 @@ impl HttpTransport {
             ));
         }
 
-        // No *total* request timeout on the client: a total deadline is the wrong
-        // shape for a streaming response and would abort a long generation. A
+        // No *total* request timeout on the HTTP handle: a total deadline is the wrong
+        // shape for incremental responses and would abort a long generation. A
         // connect timeout bounds connection setup and a read timeout bounds idle
         // gaps between chunks; unary calls additionally get a per-request total
         // timeout in `send`.
-        let client = reqwest::Client::builder()
+        let http = reqwest::Client::builder()
             .connect_timeout(timeout)
             .read_timeout(timeout)
             .build()
@@ -78,7 +78,7 @@ impl HttpTransport {
         let headers = build_request_headers(provider, auth, static_headers)?;
 
         Ok(Self {
-            client,
+            http,
             base_url,
             provider,
             headers,
@@ -87,7 +87,7 @@ impl HttpTransport {
     }
 
     pub(crate) async fn get_json(&self, path: &str) -> ProviderResult<HttpResponse> {
-        self.send(self.client.get(self.url(path))).await
+        self.send(self.http.get(self.url(path))).await
     }
 
     pub(crate) async fn post_json<T: serde::Serialize + ?Sized>(
@@ -95,7 +95,7 @@ impl HttpTransport {
         path: &str,
         body: &T,
     ) -> ProviderResult<HttpResponse> {
-        self.send(self.client.post(self.url(path)).json(body)).await
+        self.send(self.http.post(self.url(path)).json(body)).await
     }
 
     pub(crate) async fn post_json_stream<T: serde::Serialize + ?Sized>(
@@ -103,7 +103,7 @@ impl HttpTransport {
         path: &str,
         body: &T,
     ) -> ProviderResult<HttpStreamResponse> {
-        self.send_stream(self.client.post(self.url(path)).json(body))
+        self.send_stream(self.http.post(self.url(path)).json(body))
             .await
     }
 
@@ -138,7 +138,7 @@ impl HttpTransport {
         &self,
         request: reqwest::RequestBuilder,
     ) -> ProviderResult<HttpStreamResponse> {
-        // Streaming uses the client's idle read timeout, not a total deadline, so
+        // Incremental responses use the HTTP idle read timeout, not a total deadline, so
         // a long-but-progressing generation is not aborted mid-stream.
         let response = request
             .headers(self.headers.clone())

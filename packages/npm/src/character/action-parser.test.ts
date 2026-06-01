@@ -2,7 +2,7 @@
 //
 // action-parser.test.ts
 //
-// - Exercises the streaming parser: chunk-boundary robustness, prose
+// - Exercises the incremental parser: chunk-boundary robustness, prose
 //   coalescing, unknown-cue handling for the flat action model.
 //
 //////////////////////////////////////////////////////////////////////////////
@@ -12,7 +12,7 @@ import test from 'node:test';
 
 import type { ActionSchema } from './action-schema.js';
 import {
-  StreamingActionParser,
+  IncrementalActionParser,
   type ParsedEvent,
 } from './action-parser.js';
 
@@ -22,7 +22,7 @@ const SCHEMA: ActionSchema = [
   { id: 'look_at_you', cue: 'look at you' },
 ];
 
-function drainAll(parser: StreamingActionParser, chunks: string[]): ParsedEvent[] {
+function drainAll(parser: IncrementalActionParser, chunks: string[]): ParsedEvent[] {
   const events: ParsedEvent[] = [];
   for (const chunk of chunks) {
     events.push(...parser.consume(chunk));
@@ -31,8 +31,8 @@ function drainAll(parser: StreamingActionParser, chunks: string[]): ParsedEvent[
   return events;
 }
 
-test('StreamingActionParser emits prose and action events in stream order', () => {
-  const parser = new StreamingActionParser(SCHEMA);
+test('IncrementalActionParser emits prose and action events in chunk order', () => {
+  const parser = new IncrementalActionParser(SCHEMA);
   const events = drainAll(parser, ['Hello ', 'there!', '[wave]', ' all done.']);
   const action = events.find((event) => event.kind === 'action');
   assert.ok(action && action.kind === 'action' && action.id === 'wave');
@@ -52,23 +52,23 @@ test('StreamingActionParser emits prose and action events in stream order', () =
   assert.equal(trailing, ' all done.');
 });
 
-test('StreamingActionParser resolves custom cue labels', () => {
-  const parser = new StreamingActionParser(SCHEMA);
+test('IncrementalActionParser resolves custom cue labels', () => {
+  const parser = new IncrementalActionParser(SCHEMA);
   const events = drainAll(parser, ['Hi! [look at you] nice to meet you.']);
   const action = events.find((event) => event.kind === 'action');
   assert.ok(action && action.kind === 'action');
   assert.equal(action.id, 'look_at_you');
 });
 
-test('StreamingActionParser coalesces contiguous prose within a single chunk', () => {
-  const parser = new StreamingActionParser(SCHEMA);
+test('IncrementalActionParser coalesces contiguous prose within a single chunk', () => {
+  const parser = new IncrementalActionParser(SCHEMA);
   const events = drainAll(parser, ['abc']);
   assert.equal(events.length, 1);
   assert.deepEqual(events[0], { kind: 'prose', text: 'abc' });
 });
 
-test('StreamingActionParser preserves stream order across chunks without losing prose', () => {
-  const parser = new StreamingActionParser(SCHEMA);
+test('IncrementalActionParser preserves chunk order across chunks without losing prose', () => {
+  const parser = new IncrementalActionParser(SCHEMA);
   const events = drainAll(parser, ['a', 'b', 'c']);
   const joined = events
     .filter((event) => event.kind === 'prose')
@@ -78,8 +78,8 @@ test('StreamingActionParser preserves stream order across chunks without losing 
   assert.ok(events.every((event) => event.kind === 'prose'));
 });
 
-test('StreamingActionParser tolerates cue boundaries split across chunks', () => {
-  const parser = new StreamingActionParser(SCHEMA);
+test('IncrementalActionParser tolerates cue boundaries split across chunks', () => {
+  const parser = new IncrementalActionParser(SCHEMA);
   const source = 'hello[look at you]world';
   const chunks: string[] = [];
   for (let index = 0; index < source.length; index += 3) {
@@ -96,8 +96,8 @@ test('StreamingActionParser tolerates cue boundaries split across chunks', () =>
   assert.equal(prose, 'helloworld');
 });
 
-test('StreamingActionParser surfaces unterminated cue as prose on flush', () => {
-  const parser = new StreamingActionParser(SCHEMA);
+test('IncrementalActionParser surfaces unterminated cue as prose on flush', () => {
+  const parser = new IncrementalActionParser(SCHEMA);
   const events = drainAll(parser, ['pre [wave']);
   const joined = events
     .filter((event) => event.kind === 'prose')
@@ -106,8 +106,8 @@ test('StreamingActionParser surfaces unterminated cue as prose on flush', () => 
   assert.equal(joined, 'pre [wave');
 });
 
-test('StreamingActionParser surfaces unknown cues as prose verbatim', () => {
-  const parser = new StreamingActionParser(SCHEMA);
+test('IncrementalActionParser surfaces unknown cues as prose verbatim', () => {
+  const parser = new IncrementalActionParser(SCHEMA);
   const events = drainAll(parser, ['hi [look at moon] there']);
   const actions = events.filter((event) => event.kind === 'action');
   assert.equal(actions.length, 0);
@@ -118,8 +118,8 @@ test('StreamingActionParser surfaces unknown cues as prose verbatim', () => {
   assert.equal(joined, 'hi [look at moon] there');
 });
 
-test('StreamingActionParser defers bytes that might start a cue', () => {
-  const parser = new StreamingActionParser(SCHEMA);
+test('IncrementalActionParser defers bytes that might start a cue', () => {
+  const parser = new IncrementalActionParser(SCHEMA);
   const first = parser.consume('hi [w');
   const actions = first.filter((event) => event.kind === 'action');
   assert.equal(actions.length, 0);

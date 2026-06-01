@@ -1,14 +1,15 @@
 //! Per-tick batch planner: turns the current slots into a flat list of token contributions sized to the scheduler tick budget.
 
-use crate::runtime::config::SchedulerTickBudget;
+use crate::runtime::config::{KvReuseMode, SchedulerTickBudget};
 use crate::runtime::llama_token;
 use crate::runtime::numeric::{
     positive_i32_to_usize, saturating_u32_to_i32, saturating_usize_to_i32,
 };
 use crate::runtime::request::GenerateRequestId;
 
-use super::SlotState;
+use super::{SlotState, TerminalAction};
 
+#[cfg(test)]
 mod apply_results;
 mod helpers;
 
@@ -87,6 +88,7 @@ impl SharedBatchPlan {
 pub struct BatchPlanner;
 
 impl BatchPlanner {
+    #[cfg(test)]
     pub fn build_policy_batch(
         &self,
         slots: &[SlotState],
@@ -204,7 +206,8 @@ impl BatchPlanner {
             let resume_offset = plan.in_tick_offset[next_prefill_slot_index];
             let mut remaining_slot_budget = slot_chunk_budget;
 
-            for token_index in (slot.prefill_cursor + resume_offset)..request.prompt_tokens.len() {
+            let prompt_end = prefill_stop_exclusive(slot, request.prompt_tokens.len());
+            for token_index in (slot.prefill_cursor + resume_offset)..prompt_end {
                 if remaining_slot_budget <= 0 || remaining_prefill_budget <= 0 {
                     break;
                 }
@@ -227,6 +230,7 @@ impl BatchPlanner {
             let total_added = resume_offset + added_this_iteration;
             plan.in_tick_offset[next_prefill_slot_index] = total_added;
 
+            let slot_reached_tick_stop = slot.prefill_cursor + total_added >= prompt_end;
             let slot_completed_prompt =
                 slot.prefill_cursor + total_added >= request.prompt_tokens.len();
             if added_this_iteration > 0 && slot_completed_prompt {
@@ -234,7 +238,7 @@ impl BatchPlanner {
                     last.request_logits = true;
                 }
             }
-            if slot_completed_prompt {
+            if slot_completed_prompt || slot_reached_tick_stop {
                 plan.erase_active_prefill_slot(next_prefill_slot_index);
                 continue;
             }
@@ -258,6 +262,7 @@ impl BatchPlanner {
             .saturating_add(saturating_usize_to_i32(plan.occupied_overflow_slots.len()));
     }
 
+    #[cfg(test)]
     pub fn apply_decode_results(&self, slots: &mut [SlotState], plan: &SharedBatchPlan) {
         apply_results::apply_decode_results(slots, plan);
     }
@@ -293,6 +298,26 @@ fn prefill_contribution(
         position,
         request_logits: false,
     }
+}
+
+fn prefill_stop_exclusive(slot: &SlotState, prompt_len: usize) -> usize {
+    let Some(request) = slot.request() else {
+        return prompt_len;
+    };
+    if snapshot_reuse_enabled(request.cache_mode)
+        && slot.plan.terminal == TerminalAction::SampleTokens
+        && slot.prefill_cursor < prompt_len.saturating_sub(1)
+    {
+        return prompt_len.saturating_sub(1);
+    }
+    prompt_len
+}
+
+fn snapshot_reuse_enabled(mode: KvReuseMode) -> bool {
+    matches!(
+        mode,
+        KvReuseMode::StateSnapshot | KvReuseMode::LiveSlotAndSnapshot
+    )
 }
 
 #[cfg(test)]

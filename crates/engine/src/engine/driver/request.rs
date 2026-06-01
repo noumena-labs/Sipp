@@ -7,19 +7,16 @@
 use serde_json::json;
 
 pub use cogentlm_core::{ChatMessage, ChatRole};
+use futures_channel::mpsc;
 
 use crate::engine::protocol::{EmbedRequest, EngineEvent};
-use crate::engine::{
-    stream::TokenBatch, GenerateOptions, SamplingRuntimeConfig, DEFAULT_CONTEXT_KEY,
-    DEFAULT_MAX_TOKENS,
-};
+use crate::engine::{GenerateOptions, RequestSampling, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS};
 use crate::error::{Error, Result};
-use crate::runtime::request::GenerateTokenEmissionMode;
 use crate::runtime::InferenceRuntime;
 
 use super::events::emit_event;
-use super::token_sink::{start_async_token_sink, AsyncTokenSink};
-use super::{runtime_command, EngineEventSubscribers, OnTokensCallback};
+use super::token_emission::{start_engine_token_emission, ActiveTokenEmission};
+use super::{runtime_command, EngineEventSubscribers};
 
 const MAX_TOKENS_POSITIVE: &str = "max_tokens must be positive";
 const CHAT_MESSAGES_REQUIRED: &str = "chat messages must not be empty";
@@ -32,7 +29,7 @@ pub struct QueryOptions {
     pub grammar: String,
     pub json_schema: String,
     pub stop: Vec<String>,
-    pub sampling: Option<SamplingRuntimeConfig>,
+    pub sampling: Option<RequestSampling>,
     pub media: Vec<Vec<u8>>,
 }
 
@@ -58,7 +55,7 @@ impl From<GenerateOptions> for QueryOptions {
             grammar: options.grammar.unwrap_or_default(),
             json_schema: options.json_schema.unwrap_or_default(),
             stop: options.stop,
-            sampling: options.sampling,
+            sampling: options.sampling.map(RequestSampling::Full),
             media: Vec::new(),
         }
     }
@@ -67,7 +64,7 @@ impl From<GenerateOptions> for QueryOptions {
 pub struct QueryRequest {
     pub prompt: String,
     pub options: QueryOptions,
-    pub(super) on_tokens: Option<OnTokensCallback>,
+    pub emit_tokens: bool,
 }
 
 impl QueryRequest {
@@ -75,7 +72,7 @@ impl QueryRequest {
         Self {
             prompt: prompt.into(),
             options: QueryOptions::default(),
-            on_tokens: None,
+            emit_tokens: false,
         }
     }
 
@@ -84,11 +81,8 @@ impl QueryRequest {
         self
     }
 
-    pub fn on_tokens(
-        mut self,
-        callback: impl FnMut(&TokenBatch) -> Result<()> + Send + 'static,
-    ) -> Self {
-        self.on_tokens = Some(Box::new(callback));
+    pub fn emit_tokens(mut self, emit_tokens: bool) -> Self {
+        self.emit_tokens = emit_tokens;
         self
     }
 }
@@ -96,7 +90,7 @@ impl QueryRequest {
 pub struct ChatRequest {
     pub messages: Vec<ChatMessage>,
     pub options: QueryOptions,
-    pub(super) on_tokens: Option<OnTokensCallback>,
+    pub emit_tokens: bool,
 }
 
 impl ChatRequest {
@@ -104,7 +98,7 @@ impl ChatRequest {
         Self {
             messages,
             options: QueryOptions::default(),
-            on_tokens: None,
+            emit_tokens: false,
         }
     }
 
@@ -113,11 +107,8 @@ impl ChatRequest {
         self
     }
 
-    pub fn on_tokens(
-        mut self,
-        callback: impl FnMut(&TokenBatch) -> Result<()> + Send + 'static,
-    ) -> Self {
-        self.on_tokens = Some(Box::new(callback));
+    pub fn emit_tokens(mut self, emit_tokens: bool) -> Self {
+        self.emit_tokens = emit_tokens;
         self
     }
 }
@@ -126,19 +117,20 @@ pub(super) fn start_embed(
     runtime: &mut InferenceRuntime,
     request: EmbedRequest,
     event_subscribers: &EngineEventSubscribers,
-) -> Result<(u32, Option<AsyncTokenSink>)> {
+) -> Result<(u32, Option<ActiveTokenEmission>)> {
     let EmbedRequest { input, options } = request;
     let request_id = runtime.enqueue_embed_request(input, options)?;
     emit_request_started(event_subscribers, request_id);
-    // Embedding requests never stream tokens; there is no on_tokens hook.
+    // Embedding requests never stream tokens.
     Ok((request_id, None))
 }
 
 pub(super) fn start_chat(
     runtime: &mut InferenceRuntime,
     request: ChatRequest,
+    token_tx: Option<mpsc::UnboundedSender<cogentlm_core::TokenBatch>>,
     event_subscribers: &EngineEventSubscribers,
-) -> Result<(u32, Option<AsyncTokenSink>)> {
+) -> Result<(u32, Option<ActiveTokenEmission>)> {
     if !runtime.capabilities().has_chat_template {
         return Err(Error::UnsupportedOperation {
             operation: "chat",
@@ -153,8 +145,9 @@ pub(super) fn start_chat(
         QueryRequest {
             prompt,
             options: request.options,
-            on_tokens: request.on_tokens,
+            emit_tokens: request.emit_tokens,
         },
+        token_tx,
         event_subscribers,
     )
 }
@@ -162,24 +155,20 @@ pub(super) fn start_chat(
 pub(super) fn start_query(
     runtime: &mut InferenceRuntime,
     request: QueryRequest,
+    token_tx: Option<mpsc::UnboundedSender<cogentlm_core::TokenBatch>>,
     event_subscribers: &EngineEventSubscribers,
-) -> Result<(u32, Option<AsyncTokenSink>)> {
+) -> Result<(u32, Option<ActiveTokenEmission>)> {
     let QueryRequest {
         prompt,
         options,
-        on_tokens,
+        emit_tokens,
     } = request;
 
     if options.max_tokens <= 0 {
         return Err(Error::InvalidRequest(MAX_TOKENS_POSITIVE));
     }
 
-    let emit_tokens = on_tokens.is_some();
-    let emission_mode = if emit_tokens {
-        GenerateTokenEmissionMode::TokenStream
-    } else {
-        GenerateTokenEmissionMode::None
-    };
+    let should_emit_tokens = emit_tokens && token_tx.is_some();
 
     let request_id = if options.media.is_empty() {
         runtime.enqueue_request(
@@ -190,7 +179,7 @@ pub(super) fn start_query(
             options.json_schema,
             options.stop,
             options.sampling,
-            emission_mode,
+            should_emit_tokens,
         )?
     } else {
         runtime.enqueue_multimodal_request(
@@ -202,7 +191,7 @@ pub(super) fn start_query(
             options.json_schema,
             options.stop,
             options.sampling,
-            emission_mode,
+            should_emit_tokens,
         )?
     };
 
@@ -210,7 +199,7 @@ pub(super) fn start_query(
 
     Ok((
         request_id,
-        attach_token_sink(runtime, request_id, on_tokens),
+        attach_token_emission(runtime, request_id, token_tx),
     ))
 }
 
@@ -224,19 +213,19 @@ fn emit_request_started(event_subscribers: &EngineEventSubscribers, request_id: 
     );
 }
 
-fn attach_token_sink(
+fn attach_token_emission(
     runtime: &mut InferenceRuntime,
     request_id: u32,
-    on_tokens: Option<OnTokensCallback>,
-) -> Option<AsyncTokenSink> {
-    let token_sink = on_tokens.map(|callback| start_async_token_sink(request_id, callback));
-    if let Some(sink) = &token_sink {
+    token_tx: Option<mpsc::UnboundedSender<cogentlm_core::TokenBatch>>,
+) -> Option<ActiveTokenEmission> {
+    let token = token_tx.map(|token_tx| start_engine_token_emission(request_id, token_tx));
+    if let Some(token) = &token {
         runtime
             .request_queue
-            .token_ring_producers
-            .insert(request_id, sink.producer.clone());
+            .token_emission_sinks
+            .insert(request_id, token.producer.clone());
     }
-    token_sink
+    token
 }
 
 fn render_chat_prompt(runtime: &InferenceRuntime, messages: &[ChatMessage]) -> Result<String> {

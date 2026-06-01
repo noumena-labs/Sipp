@@ -5,8 +5,8 @@ pub mod metrics;
 pub(crate) mod numeric;
 pub mod request;
 mod residency;
-pub mod scheduler;
-pub mod session;
+pub(crate) mod scheduler;
+pub(crate) mod session;
 
 pub use cogentlm_sys::{llama_seq_id, llama_token};
 pub use inference_runtime::{InferenceRuntime, RequestStepResult, SchedulerBurstResult};

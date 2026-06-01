@@ -2,7 +2,7 @@ use crate::runtime::config::NativeRuntimeConfig;
 use crate::runtime::inference_runtime::tests::runtime_tests::test_runtime;
 use crate::runtime::request::GenerateRequest;
 use crate::runtime::scheduler::SlotPhase;
-use crate::runtime::session::SequenceState;
+use crate::runtime::session::KvCacheAdmission;
 
 #[test]
 fn cancel_request_marks_active_slot_clone() {
@@ -11,8 +11,8 @@ fn cancel_request_marks_active_slot_clone() {
     request.prompt_tokens = vec![1, 2, 3];
     assert!(runtime.request_queue.push(request.clone()));
 
-    runtime.slot_scheduler.resize(1);
-    runtime.slot_scheduler.slots[0].attach_request(request, SequenceState::default());
+    runtime.slot_scheduler.resize(1, &mut runtime.kv_cache);
+    runtime.slot_scheduler.slots[0].attach_request(request, KvCacheAdmission::default());
     runtime.slot_scheduler.slots[0].phase = SlotPhase::Decode;
 
     assert!(runtime.cancel_request(7));

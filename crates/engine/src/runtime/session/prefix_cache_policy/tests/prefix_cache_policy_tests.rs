@@ -11,15 +11,11 @@ fn interval_zero_stores_only_terminal_boundaries() {
 }
 
 #[test]
-fn candidate_boundaries_are_longest_first() {
-    let policy = PrefixCachePolicy::new(4);
-    let tokens: Vec<_> = (0..10).collect();
-    let boundaries = policy.build_candidate_boundaries(&tokens);
-    let counts: Vec<_> = boundaries
-        .iter()
-        .map(|boundary| boundary.token_count)
-        .collect();
-    assert_eq!(counts, vec![10, 8, 4]);
+fn terminal_boundary_can_be_below_interval_minimum() {
+    let policy = PrefixCachePolicy::new(128);
+
+    assert!(policy.should_store_boundary(18, 18));
+    assert!(!policy.should_store_boundary(18, 19));
 }
 
 #[test]
@@ -82,8 +78,6 @@ fn boundary_helpers_preserve_interval_and_terminal_rules() {
         minimum_prefix_cache_tokens(MAX_MINIMUM_PREFIX_CACHE_TOKENS + 1),
         MAX_MINIMUM_PREFIX_CACHE_TOKENS
     );
-    assert_eq!(candidate_boundary_capacity(10, 4), 3);
-    assert_eq!(candidate_boundary_capacity(10, 0), 1);
     assert!(is_terminal_boundary(10, 10));
     assert!(!is_terminal_boundary(8, 10));
     assert!(is_interval_boundary(8, 4));

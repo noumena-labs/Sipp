@@ -1,8 +1,10 @@
 import type {
   BackendObservability,
+  CacheSource,
   EmbeddingOutput,
   GenerateRequestId,
   GenerateResponse,
+  KvReuseMode,
   NativeRuntimeConfig,
   PoolingType,
   RequestObservabilityMetrics,
@@ -28,13 +30,9 @@ import type { ChatBoundaryInfo } from '../engine/chat-boundary-sanitizer.js';
 import type { ChatMessage } from '../engine/inference-types.js';
 import { EngineModule } from './engine-module.js';
 import { withDerivedObservabilityMetrics } from '../engine/inference-types.js';
+import type { SharedTokenRingDescriptor } from '../runtime/shared-token-ring.js';
 import { createAbortError } from '../utils/abort.js';
 import { assertGrammarByteSize } from '../utils/grammar.js';
-
-// Mirror of GenerateTokenEmissionMode values used by bindings/wasm/src/engine/mod.rs.
-// Native exposes only NONE (no emission) and STREAMING_BUFFER (SAB ring).
-export const TOKEN_EMISSION_NONE = 0;
-export const TOKEN_EMISSION_STREAMING_BUFFER = 1;
 
 export const COMPLETED_REQUEST_STATUS_PENDING = 0;
 export const COMPLETED_REQUEST_STATUS_COMPLETED = 1;
@@ -44,22 +42,18 @@ const COMPLETED_REQUEST_STATUS_UNKNOWN = 4;
 const COMPLETED_REQUEST_OUTPUT_TEXT = 1;
 const COMPLETED_REQUEST_OUTPUT_EMBEDDING = 2;
 
-const RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES = 88;
+const RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES = 96;
 const RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT = 9;
 const SCHEDULER_LOOP_RESULT_SIZE_BYTES = 16;
+const utf8Decoder = new TextDecoder('utf-8', { fatal: false });
 
-export type TokenEmissionMode =
-  | typeof TOKEN_EMISSION_NONE
-  | typeof TOKEN_EMISSION_STREAMING_BUFFER;
+function decodeWasmUtf8(bytes: Uint8Array): string {
+  const input = bytes.buffer instanceof SharedArrayBuffer ? new Uint8Array(bytes) : bytes;
+  return utf8Decoder.decode(input);
+}
 
 function validateGrammarSize(grammar: string | undefined): void {
   assertGrammarByteSize(grammar);
-}
-
-function validateTokenEmissionMode(mode: TokenEmissionMode): void {
-  if (mode !== TOKEN_EMISSION_NONE && mode !== TOKEN_EMISSION_STREAMING_BUFFER) {
-    throw new Error(`invalid token emission mode ${mode}.`);
-  }
 }
 
 export type WasmSchedulerProgressResult = {
@@ -316,7 +310,6 @@ function normalizeLifecycleErrorCode(code: string | undefined): QueryErrorCode {
     case 'STORAGE_CORRUPT':
     case 'REMOTE_METADATA_UNAVAILABLE':
     case 'REMOTE_LOAD_FAILED':
-    case 'STREAMING_UNAVAILABLE':
     case 'QUERY_FAILED':
       return code;
     default:
@@ -414,16 +407,15 @@ export class WasmBridge {
     promptText: string,
     maxOutputTokens: number,
     grammar?: string,
-    tokenEmissionMode: TokenEmissionMode = TOKEN_EMISSION_NONE
+    emitTokens = false
   ): GenerateRequestId {
     validateGrammarSize(grammar);
-    validateTokenEmissionMode(tokenEmissionMode);
     const grammarArg = grammar ?? '';
     const requestId = this.module.ccall(
-      'CE_StartTextRequestWithTokenEmissionMode',
+      'CE_StartTextRequest',
       'number',
       ['string', 'string', 'number', 'number', 'string'],
-      [contextKey, promptText, maxOutputTokens, tokenEmissionMode, grammarArg]
+      [contextKey, promptText, maxOutputTokens, emitTokens ? 1 : 0, grammarArg]
     );
     if (requestId instanceof Promise) {
       throw new Error('Unexpected async result while enqueuing a request.');
@@ -437,14 +429,13 @@ export class WasmBridge {
     maxOutputTokens: number,
     media: Uint8Array[],
     grammar?: string,
-    tokenEmissionMode: TokenEmissionMode = TOKEN_EMISSION_NONE
+    emitTokens = false
   ): GenerateRequestId {
     validateGrammarSize(grammar);
-    validateTokenEmissionMode(tokenEmissionMode);
     const grammarArg = grammar ?? '';
     return this.withWasmMediaBuffers(media, (flatPtr, sizesPtr) =>
       this.callNumber(
-        'CE_StartMediaRequestWithTokenEmissionMode',
+        'CE_StartMediaRequest',
         [
           'string',
           'string',
@@ -462,7 +453,7 @@ export class WasmBridge {
           media.length,
           flatPtr,
           sizesPtr,
-          tokenEmissionMode,
+          emitTokens ? 1 : 0,
           grammarArg,
         ]
       ) as GenerateRequestId
@@ -475,14 +466,13 @@ export class WasmBridge {
     maxOutputTokens: number,
     media: Uint8Array[] = [],
     grammar?: string,
-    tokenEmissionMode: TokenEmissionMode = TOKEN_EMISSION_NONE
+    emitTokens = false
   ): GenerateRequestId {
     validateGrammarSize(grammar);
-    validateTokenEmissionMode(tokenEmissionMode);
     const grammarArg = grammar ?? '';
     return this.withWasmMediaBuffers(media, (flatPtr, sizesPtr) =>
       this.callNumber(
-        'CE_StartChatRequestWithTokenEmissionMode',
+        'CE_StartChatRequest',
         [
           'string',
           'string',
@@ -500,7 +490,7 @@ export class WasmBridge {
           media.length,
           flatPtr,
           sizesPtr,
-          tokenEmissionMode,
+          emitTokens ? 1 : 0,
           grammarArg,
         ]
       ) as GenerateRequestId
@@ -529,7 +519,7 @@ export class WasmBridge {
     if (!ptr) {
       return null;
     }
-    const marker = this.module.UTF8ToString(ptr);
+    const marker = this.readUtf8String(ptr);
     return marker.length > 0 ? marker : null;
   }
 
@@ -538,7 +528,7 @@ export class WasmBridge {
     if (!ptr) {
       return null;
     }
-    const template = this.module.UTF8ToString(ptr);
+    const template = this.readUtf8String(ptr);
     return template.length > 0 ? template : null;
   }
 
@@ -627,7 +617,7 @@ export class WasmBridge {
     }
 
     try {
-      return this.module.UTF8ToString(ptr);
+      return this.readUtf8String(ptr);
     } finally {
       this.module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
     }
@@ -884,7 +874,7 @@ export class WasmBridge {
     );
     const openShardPtr = this.module.addFunction(
       (_userData: number, pathPtr: number, index: number, count: number) =>
-        callbacks.openShard(this.module.UTF8ToString(pathPtr), index, count) ?? 0,
+        callbacks.openShard(this.readUtf8String(pathPtr), index, count) ?? 0,
       'iiiii'
     );
     const writeShardPtr = this.module.addFunction(
@@ -1002,31 +992,22 @@ export class WasmBridge {
   public async runInferenceLoop(
     maxTicks: number,
     maxCompletedResponses: number,
-    maxEmittedTokens: number,
+    maxGeneratedTokens: number,
     options: {
       maxDurationUs?: number;
-      // Tells the native scheduler whether to use the per-emitted-token
-      // yield path (true, for streaming requests) or the monolithic loop
-      // (false, for bulk requests). Setting this incorrectly is not a
-      // correctness bug — only a performance one: streaming requests with
-      // false won't deliver tokens until the loop returns; bulk requests
-      // with true pay per-burst yielding overhead for no reason.
-      streamingActive?: boolean;
     } = {}
   ): Promise<WasmSchedulerProgressResult> {
     const maxDurationUs = Math.max(0, options.maxDurationUs ?? 0);
-    const streamingActive = options.streamingActive === true ? 1 : 0;
     const resultPtr = this.ensureLoopResultBuffer();
 
     const stepResult = await this.callNumberAsync(
       'CE_RunSchedulerLoop',
-      ['number', 'number', 'number', 'number', 'number', 'pointer'],
+      ['number', 'number', 'number', 'number', 'pointer'],
       [
         maxTicks,
         maxCompletedResponses,
-        maxEmittedTokens,
+        maxGeneratedTokens,
         maxDurationUs,
-        streamingActive,
         resultPtr,
       ]
     );
@@ -1038,20 +1019,16 @@ export class WasmBridge {
     };
   }
 
-  // Streaming buffer init-time accessors.  Stable wasm-heap addresses; the
-  // caller caches them once and afterwards touches the buffer and counter
-  // cells via HEAPU8 / HEAP32 directly (zero ccalls).  Returns 0 when no
-  // engine is initialized.
-  public getStreamingBufferPointer(): number {
-    return this.callNumber('CE_GetStreamingBufferPointer');
-  }
-
-  public getStreamingBufferUsedAddress(): number {
-    return this.callNumber('CE_GetStreamingBufferUsedAddress');
-  }
-
-  public getStreamingBufferDropCountAddress(): number {
-    return this.callNumber('CE_GetStreamingBufferDropCountAddress');
+  public getSharedTokenRingDescriptor(): SharedTokenRingDescriptor {
+    const headerOffset = this.callNumber('CE_GetTokenRingHeaderAddress');
+    const bodyOffset = this.callNumber('CE_GetTokenRingBodyAddress');
+    const bodyCapacity = this.callNumber('CE_GetTokenRingCapacity');
+    return {
+      buffer: this.module.HEAPU8.buffer,
+      headerOffset,
+      bodyOffset,
+      bodyCapacity,
+    };
   }
 
   public releaseReusableBuffers(): void {
@@ -1139,10 +1116,24 @@ export class WasmBridge {
       return '';
     }
     try {
-      return this.module.UTF8ToString(ptr);
+      return this.readUtf8String(ptr);
     } finally {
       this.module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
     }
+  }
+
+  private readUtf8String(ptr: number | bigint, byteLength?: number): string {
+    const start = this.byteOffset(ptr);
+    const heap = this.module.HEAPU8;
+    let end = start;
+    if (byteLength == null) {
+      while (end < heap.length && heap[end] !== 0) {
+        end += 1;
+      }
+    } else {
+      end = start + byteLength;
+    }
+    return decodeWasmUtf8(heap.subarray(start, end));
   }
 
   private unwrapGgufResponse<T>(raw: string, label: string): T {
@@ -1281,8 +1272,10 @@ export class WasmBridge {
 
         inputTokens: view.getInt32(intsOffset, true),
         outputTokens: view.getInt32(intsOffset + 4, true),
-        cacheHits: view.getInt32(intsOffset + 8, true),
-        prefillTokens: view.getInt32(intsOffset + 12, true),
+        cacheMode: cacheModeFromCode(view.getInt32(intsOffset + 8, true)),
+        cacheSource: cacheSourceFromCode(view.getInt32(intsOffset + 12, true)),
+        cacheHits: view.getInt32(intsOffset + 16, true),
+        prefillTokens: view.getInt32(intsOffset + 20, true),
       });
     } finally {
       this.free(metricsPtr);
@@ -1357,7 +1350,7 @@ export class WasmBridge {
       if (copied !== byteLength) {
         throw new Error(`Failed to copy ${fieldName}.`);
       }
-      return this.module.UTF8ToString(bufferPtr, byteLength);
+      return this.readUtf8String(bufferPtr, byteLength);
     } finally {
       this.free(bufferPtr);
     }
@@ -1384,6 +1377,34 @@ function poolingTypeFromCode(value: number): PoolingType {
       return 'rank';
     default:
       throw new Error(`Unknown embedding pooling type ${value}.`);
+  }
+}
+
+function cacheModeFromCode(value: number): KvReuseMode {
+  switch (value) {
+    case 0:
+      return 'disabled';
+    case 1:
+      return 'live_slot_prefix';
+    case 2:
+      return 'state_snapshot';
+    case 3:
+      return 'live_slot_and_snapshot';
+    default:
+      throw new Error(`Unknown cache mode ${value}.`);
+  }
+}
+
+function cacheSourceFromCode(value: number): CacheSource {
+  switch (value) {
+    case 0:
+      return 'none';
+    case 1:
+      return 'live';
+    case 2:
+      return 'snapshot';
+    default:
+      throw new Error(`Unknown cache source ${value}.`);
   }
 }
 
