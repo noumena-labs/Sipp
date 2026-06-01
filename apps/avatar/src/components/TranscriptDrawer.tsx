@@ -7,7 +7,7 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import { useEffect, useRef, useState } from 'react';
-import type { CharacterEventBus } from '@noumena-labs/cogentlm/character';
+import type { CharacterEventBus } from '@noumena-labs/cogentlm-browser/character';
 import type { ChatMessage } from './chat-types';
 
 interface TranscriptDrawerProps {
@@ -108,28 +108,27 @@ function MessageContent({
   bus: CharacterEventBus;
   active: boolean;
 }) {
-  const [streamingText, setStreamingText] = useState('');
+  const [liveText, setLiveText] = useState('');
 
   useEffect(() => {
     if (!active) {
-      setStreamingText('');
+      setLiveText('');
       return;
     }
 
     const off = bus.onAny((event) => {
       if (event.kind === 'prose') {
-        setStreamingText((prev) => prev + event.text);
+        setLiveText((prev) => prev + event.text);
       } else if (event.kind === 'turn-start') {
-        setStreamingText('');
+        setLiveText('');
       }
     });
 
     return () => off();
   }, [active, bus]);
 
-  const displayedText = active ? streamingText : message.text;
+  const displayedText = active ? liveText : message.text;
   const fallbackText = message.pending ? '...' : '[No visible response generated.]';
 
   return <>{displayedText.trim().length > 0 ? displayedText : fallbackText}</>;
 }
-

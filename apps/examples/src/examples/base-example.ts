@@ -1,9 +1,10 @@
-import { CogentEngine } from '@noumena-labs/cogentlm';
+import type { CogentClient } from '@noumena-labs/cogentlm-browser';
 
 export interface ExampleContext {
-  engine: CogentEngine;
+  client: CogentClient;
   log: (message: string, type?: 'system' | 'user' | 'ai' | 'error' | 'dim') => HTMLElement;
   userInput: string;
+  inputElement: HTMLInputElement;
   media?: Uint8Array[];
 }
 

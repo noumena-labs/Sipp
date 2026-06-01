@@ -1,15 +1,16 @@
 {
-  "name": "cogentlm-simulation-app",
+  "name": "cogentlm-browser-simulation-app",
   "private": true,
   "version": "0.0.1",
   "type": "module",
   "scripts": {
     "dev": "bunx --bun vite",
     "build": "bunx --bun vite build",
-    "preview": "bunx --bun vite preview"
+    "preview": "bunx --bun vite preview",
+    "test": "bun test simulation-runtime.test.ts"
   },
   "dependencies": {
-    "@noumena-labs/cogentlm": "workspace:*",
+    "@noumena-labs/cogentlm-browser": "workspace:*",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "scheduler": "^0.27.0",

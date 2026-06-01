@@ -95,7 +95,7 @@ export function BrainActivityHud(props: BrainActivityHudProps) {
 
       <div className="brain-stream-band">
         <div className="brain-stream-label">
-          {activeBrain ? `${activeBrain.label} streaming` : 'Latest brain snapshot'}
+          {activeBrain ? `${activeBrain.label} live` : 'Latest brain snapshot'}
         </div>
         <div className="brain-stream-text">{streamPreview || 'No active query yet.'}</div>
       </div>

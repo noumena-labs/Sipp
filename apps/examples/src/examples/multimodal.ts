@@ -1,3 +1,4 @@
+import type { ChatInput } from '@noumena-labs/cogentlm-browser';
 import { Example } from './base-example';
 
 export const multimodalExample: Example = {
@@ -9,13 +10,14 @@ export const multimodalExample: Example = {
     log('To use this, ensure you loaded a multimodal model (LLM + Projector).', 'dim');
     log('Example usage in code:', 'dim');
     log(`
-await engine.chat({
+const run = client.chat({
   messages: [{ role: 'user', content: 'Describe this image.' }],
   media: [imageUint8Array]
 });
+const result = await run.response;
     `, 'dim');
   },
-  onUserInput: async ({ engine, log, userInput, media }) => {
+  onUserInput: async ({ client, log, userInput, media }) => {
     log(userInput, 'user');
 
     let fullResponse = '';
@@ -23,18 +25,21 @@ await engine.chat({
 
     try {
       // If media is present, use the multimodal structure; otherwise, standard chat
-      const chatInput = (media && media.length > 0)
+      const chatInput: ChatInput = (media && media.length > 0)
         ? { messages: [{ role: 'user', content: userInput }], media }
         : [{ role: 'user', content: userInput }];
 
-      await engine.chat(chatInput as any, {
-        onToken: (tokens) => {
-          for (const token of tokens) {
-            fullResponse += token;
-          }
-          responseEl.innerText = fullResponse;
-        }
+      const run = client.chat(chatInput, {
+        emitTokens: true,
       });
+
+      for await (const batch of run.tokens) {
+        fullResponse += batch.text;
+        responseEl.innerText = fullResponse;
+      }
+
+      const result = await run.response;
+      responseEl.innerText = result.text;
     } catch (err) {
       log(`Error: ${err}`, 'error');
     }

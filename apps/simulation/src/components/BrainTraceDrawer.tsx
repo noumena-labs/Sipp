@@ -104,7 +104,7 @@ function TraceSection(props: {
     <section className={`brain-trace-section${props.tone === 'error' ? ' error' : ''}`}>
       <div className="brain-trace-section-head">
         <span className="brain-trace-section-title">{props.title}</span>
-        {props.live ? <span className="brain-trace-live">Streaming</span> : null}
+        {props.live ? <span className="brain-trace-live">Live</span> : null}
       </div>
       <pre className="brain-trace-block">{props.body.trim().length > 0 ? props.body : '(empty)'}</pre>
     </section>

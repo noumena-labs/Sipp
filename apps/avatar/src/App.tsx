@@ -2,21 +2,21 @@
 //
 // App.tsx
 //
-// - Wires a CogentEngine + CharacterRuntime together with the avatar stage
+// - Wires a CogentClient + CharacterRuntime together with the avatar stage
 //   and chat UI. `character.json` remains semantic-only; the avatar app owns
 //   render assets and resolves them by character-folder convention.
 //
 //////////////////////////////////////////////////////////////////////////////
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CogentEngine } from '@noumena-labs/cogentlm';
+import { CogentClient } from '@noumena-labs/cogentlm-browser';
 import {
   CharacterEventBus,
   createCharacterFromConfigUrl,
   parseCharacterConfig,
   type CharacterConfig,
   type CharacterRuntime,
-} from '@noumena-labs/cogentlm/character';
+} from '@noumena-labs/cogentlm-browser/character';
 import { AvatarCanvas } from './components/AvatarCanvas';
 import { ChatComposer } from './components/ChatComposer';
 import {
@@ -46,7 +46,7 @@ const SUGGESTED_PROMPTS = [
 ] as const;
 
 interface LoadedHarness {
-  readonly engine: CogentEngine;
+  readonly client: CogentClient;
   readonly character: CharacterRuntime;
   readonly config: CharacterConfig;
 }
@@ -142,10 +142,10 @@ export default function App() {
       const config = preview.config;
       previewUpdated = true;
 
-      const engine = await CogentEngine.create();
+      const client = new CogentClient();
 
       setStatus('Downloading and loading model?');
-      await engine.models.load(args.modelUrl, {
+      await client.addLocal(args.modelUrl, {
         onProgress: (progress: { phase: string; percent: any; }) => {
           if (progress.phase === 'download') {
             setStatus(`Downloading model... ${Math.floor(progress.percent ?? 0)}%`);
@@ -156,23 +156,23 @@ export default function App() {
         runtime: {
           sampling: {
             temperature: 0.6,
-            topP: 0.9,
-            topK: 40,
-            minP: 0.05,
-            repeatPenalty: 1.05,
+            top_p: 0.9,
+            top_k: 40,
+            min_p: 0.05,
+            repeat_penalty: 1.05,
           },
         },
       });
 
       const { character } = await createCharacterFromConfigUrl({
         configUrl: DEFAULT_CHARACTER_URL,
-        engine,
+        client,
         bus,
       });
       if (previousHarness) {
-        previousHarness.engine.close();
+        previousHarness.client.close();
       }
-      setHarness({ engine, character, config });
+      setHarness({ client, character, config });
       setMessages([]);
       setDrawerOpen(true);
       setStarted(true);
@@ -216,7 +216,7 @@ export default function App() {
       for await (const event of harness.character.chat(text, { signal: controller.signal })) {
         if (event.kind === 'prose') {
           // PROSE OPTIMIZATION: We no longer update the global 'messages' state
-          // for every streaming token. Instead, components like TranscriptDrawer
+          // for every delivered token. Instead, components like TranscriptDrawer
           // and SpeechBubble subscribe to the CharacterEventBus ('bus') to
           // provide real-time visual feedback without triggering full React
           // reconciliation cycles.

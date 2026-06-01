@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { CogentEngine, type RuntimeObservation } from '@noumena-labs/cogentlm';
+import { CogentClient, type RuntimeObservation } from '@noumena-labs/cogentlm-browser';
 import {
   DEFAULT_DRAWING_DIRECTOR_CONFIG,
   DRAWING_COLORS,
@@ -203,7 +203,7 @@ export default function App() {
   const [directorConfig, setDirectorConfig] = useState<DrawingDirectorConfig>(DEFAULT_DRAWING_DIRECTOR_CONFIG);
 
   const userCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const engineRef = useRef<CogentEngine | null>(null);
+  const clientRef = useRef<CogentClient | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const unsubscribeObservabilityRef = useRef<(() => void) | null>(null);
   const captureUrlRef = useRef<string | null>(null);
@@ -216,7 +216,7 @@ export default function App() {
   const runtimeObservationRef = useRef<RuntimeObservation | null>(null);
   const runInferenceRef = useRef<((source: InferenceSource, preset?: CapturePresetId) => Promise<void>) | null>(null);
 
-  const engineReady = loadState === 'ready' && engineRef.current != null;
+  const clientReady = loadState === 'ready' && clientRef.current != null;
   const busy = loadState === 'loading' || (visionState !== 'idle' && visionState !== 'error');
   autoInferRef.current = autoInfer;
   runtimeObservationRef.current = runtimeObservation;
@@ -243,7 +243,7 @@ export default function App() {
     return () => {
       abortRef.current?.abort();
       unsubscribeObservabilityRef.current?.();
-      void engineRef.current?.close();
+      void clientRef.current?.close();
       if (captureUrlRef.current) {
         URL.revokeObjectURL(captureUrlRef.current);
       }
@@ -254,12 +254,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!engineReady) {
+    if (!clientReady) {
       return;
     }
     resetUserCanvas();
     setStatus('Canvas ready. Draw and the model will heckle after each stroke.');
-  }, [engineReady]);
+  }, [clientReady]);
 
   const handleLoad = async (): Promise<void> => {
     const trimmedModel = modelUrl.trim();
@@ -279,18 +279,18 @@ export default function App() {
     setLoadState('loading');
     const progressAgg = createProgressAggregator();
     setLoadProgress({ phase: 'create', percent: null, overallPercent: 1 });
-    setStatus('Creating Cogent Engine instance...');
+    setStatus('Creating CogentClient instance...');
 
-    let nextEngine: CogentEngine | null = null;
+    let nextClient: CogentClient | null = null;
     try {
-      nextEngine = await CogentEngine.create();
-      unsubscribeObservabilityRef.current = nextEngine.observability.subscribe((event) => {
+      nextClient = new CogentClient();
+      unsubscribeObservabilityRef.current = nextClient.observability.subscribe((event) => {
         setRuntimeObservation(event.snapshot.runtime ?? null);
         runtimeObservationRef.current = event.snapshot.runtime ?? null;
       });
 
       setStatus('Downloading vision model and projector...');
-      await nextEngine.models.load(
+      await nextClient.addLocal(
         { model: trimmedModel, projector: trimmedProjector },
         {
           observability: 'runtime',
@@ -314,32 +314,41 @@ export default function App() {
             }
           },
           runtime: {
-            nCtx: 1024,
-            nBatch: 256,
-            nUbatch: 128,
-            imageMinTokens: 24,
-            imageMaxTokens: 96,
-            schedulerPolicy: 'latency-first',
-            maxCachedSessions: 2,
-            retainedPrefixTokens: 256,
-            prefixCacheIntervalTokens: 32,
-            prefillChunkSize: 256,
-            decodeTokenReserve: 128,
+            context: {
+              n_ctx: 1024,
+              n_batch: 256,
+              n_ubatch: 128,
+            },
+            multimodal: {
+              image_min_tokens: 24,
+              image_max_tokens: 96,
+            },
+            scheduler: {
+              policy: {
+                mode: 'latency_first' as const,
+                decode_token_reserve: 128,
+              },
+              prefill_chunk_size: 256,
+            },
+            cache: {
+              retained_prefix_tokens: 256,
+              snapshot_interval_tokens: 32,
+            },
             sampling: {
               temperature: 0.45,
-              topP: 0.85,
-              topK: 32,
-              minP: 0.04,
-              repeatPenalty: 1.05,
+              top_p: 0.85,
+              top_k: 32,
+              min_p: 0.04,
+              repeat_penalty: 1.05,
             },
           },
         }
       );
 
-      void engineRef.current?.close();
-      engineRef.current = nextEngine;
-      nextEngine = null;
-      setLoadProgress({ phase: 'ready', percent: 100 });
+      void clientRef.current?.close();
+      clientRef.current = nextClient;
+      nextClient = null;
+      setLoadProgress({ phase: 'ready', percent: 100, overallPercent: 100 });
       setLoadState('ready');
       setDrawerOpen(true);
       setStatus('Vision model ready. Fast sketch loop armed.');
@@ -348,7 +357,7 @@ export default function App() {
       setStatus(`Load failed: ${(error as Error).message}`);
       unsubscribeObservabilityRef.current?.();
       unsubscribeObservabilityRef.current = null;
-      void nextEngine?.close();
+      void nextClient?.close();
     }
   };
 
@@ -357,8 +366,8 @@ export default function App() {
     unsubscribeObservabilityRef.current?.();
     unsubscribeObservabilityRef.current = null;
     clearScheduledInference();
-    void engineRef.current?.close();
-    engineRef.current = null;
+    void clientRef.current?.close();
+    clientRef.current = null;
     setAutoInfer(false);
     setLoadProgress(null);
     setLoadState('idle');
@@ -369,8 +378,8 @@ export default function App() {
 
   const runInference = async (source: InferenceSource, preset: CapturePresetId = capturePreset): Promise<void> => {
     const userCanvas = userCanvasRef.current;
-    const engine = engineRef.current;
-    if (!userCanvas || !engine) {
+    const client = clientRef.current;
+    if (!userCanvas || !client) {
       setStatus('Load the vision model before asking for a roast.');
       return;
     }
@@ -426,7 +435,7 @@ export default function App() {
       } : previous);
 
       const inferenceStarted = performance.now();
-      const director = new DrawingDirector(engine, directorConfig);
+      const director = new DrawingDirector(client, directorConfig);
       const result = await director.run({
         capture: captured,
         state: {
@@ -684,7 +693,7 @@ export default function App() {
     scheduleAutoInference();
   };
 
-  if (!engineReady) {
+  if (!clientReady) {
     return (
       <StartScreen
         modelUrl={modelUrl}
@@ -781,7 +790,7 @@ export default function App() {
         status={status}
         loadState={loadState}
         visionState={visionState}
-        engineReady={engineReady}
+        clientReady={clientReady}
         busy={busy}
         autoInfer={autoInfer}
         capturePreset={capturePreset}
@@ -816,7 +825,7 @@ function StartScreen(props: {
     <div className="start-screen">
       <section className="start-hero glass-card">
         <div className="start-copy">
-          <p className="eyebrow">Cogent Engine Vision Pipeline</p>
+          <p className="eyebrow">CogentClient Vision Pipeline</p>
           <h1>Vision Pipline Demo</h1>
           <p>
             This demo loads a local vision model, captures a tiny image of the drawing canvas, then asks the model to guess and heckle the sketch.
@@ -866,7 +875,7 @@ function StartScreen(props: {
               </div>
               <div>
                 <dt>Progress</dt>
-                <dd>{phasePercent == null ? 'streaming' : `${Math.floor(phasePercent)}%`}</dd>
+                <dd>{phasePercent == null ? 'loading' : `${Math.floor(phasePercent)}%`}</dd>
               </div>
             </dl>
           </div>
@@ -881,7 +890,7 @@ function DeveloperDrawer(props: {
   readonly status: string;
   readonly loadState: LoadState;
   readonly visionState: VisionState;
-  readonly engineReady: boolean;
+  readonly clientReady: boolean;
   readonly busy: boolean;
   readonly autoInfer: boolean;
   readonly capturePreset: CapturePresetId;
@@ -899,7 +908,7 @@ function DeveloperDrawer(props: {
   if (!props.open) {
     return (
       <div className="dev-pill">
-        <button type="button" className="dev-peek" onClick={props.onInfer} disabled={!props.engineReady || props.busy}>trace</button>
+        <button type="button" className="dev-peek" onClick={props.onInfer} disabled={!props.clientReady || props.busy}>trace</button>
         <button type="button" className="dev-pill-status" onClick={() => props.onOpenChange(true)}>
           <span className={`console-led ${props.visionState === 'error' ? 'error' : props.busy ? 'busy' : 'ready'}`} />
           <span>{props.trace?.totalMs ? `${(props.trace.totalMs / 1000).toFixed(2)}s` : 'AI_TRACE'}</span>
@@ -927,7 +936,7 @@ function DeveloperDrawer(props: {
           <span className={`console-led ${props.visionState === 'error' ? 'error' : props.busy ? 'busy' : 'ready'}`} />
           {props.status}
         </p>
-        <button className="terminal-button primary" type="button" onClick={props.onInfer} disabled={!props.engineReady || props.busy}>
+        <button className="terminal-button primary" type="button" onClick={props.onInfer} disabled={!props.clientReady || props.busy}>
           {props.visionState === 'thinking' ? 'model.inspecting()' : 'trace.infer()'}
         </button>
         <div className="capture-mode-control" role="radiogroup" aria-label="Capture preset">
@@ -938,7 +947,7 @@ function DeveloperDrawer(props: {
           ))}
         </div>
         <label className="terminal-toggle">
-          <input type="checkbox" checked={props.autoInfer} onChange={(event) => props.onAutoInferChange(event.target.checked)} disabled={!props.engineReady} />
+          <input type="checkbox" checked={props.autoInfer} onChange={(event) => props.onAutoInferChange(event.target.checked)} disabled={!props.clientReady} />
           auto.inferAfterStroke
         </label>
         <dl className="mini-stats">
@@ -1042,9 +1051,9 @@ function TimingGrid(props: { readonly trace: TraceState; readonly runtime: Runti
     ['heckle', formatMs(props.trace.heckleMs)],
     ['total', formatMs(props.trace.totalMs)],
     ['ttft', formatMs(props.runtime?.ttftMs)],
-    ['tok/s', props.runtime?.tokensPerSecond == null ? 'n/a' : props.runtime.tokensPerSecond.toFixed(1)],
-    ['input', formatCount(props.runtime?.inputTokenCount)],
-    ['output', formatCount(props.runtime?.outputTokenCount)],
+    ['tok/s', props.runtime?.decodeTokensPerSecond == null ? 'n/a' : props.runtime.decodeTokensPerSecond.toFixed(1)],
+    ['input', formatCount(props.runtime?.inputTokens)],
+    ['output', formatCount(props.runtime?.outputTokens)],
   ] as const;
   return (
     <dl className="timing-grid">

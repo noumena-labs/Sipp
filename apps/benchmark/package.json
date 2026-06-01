@@ -1,15 +1,17 @@
 {
-  "name": "cogentlm-benchmark-app",
+  "name": "cogentlm-browser-benchmark-app",
   "private": true,
   "version": "0.0.1",
   "type": "module",
   "scripts": {
     "dev": "bunx --bun vite",
     "build": "bunx --bun vite build",
-    "preview": "bunx --bun vite preview"
+    "preview": "bunx --bun vite preview",
+    "browser:smoke": "node ./scripts/browser-runtime-smoke.mjs",
+    "browser:smoke:ingest": "node ./scripts/browser-runtime-smoke.mjs --require-rust-browser-engine --require-gguf-ingest"
   },
   "dependencies": {
-    "@noumena-labs/cogentlm": "workspace:*",
+    "@noumena-labs/cogentlm-browser": "workspace:*",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "scheduler": "^0.27.0"

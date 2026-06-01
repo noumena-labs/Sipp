@@ -26,13 +26,23 @@ interface VitePluginLike {
 
 const appsDir = fileURLToPath(new URL('.', import.meta.url));
 const repoRoot = path.resolve(appsDir, '..');
-const cogentEngineSrcDir = path.join(repoRoot, 'packages', '@noumena-labs/cogentlm', 'src');
+const cogentClientPackageDir = path.join(repoRoot, 'packages', 'npm');
+const cogentClientArtifactDir = path.join(
+  repoRoot,
+  '.build',
+  'artifacts',
+  'npm',
+  'cogentlm-browser'
+);
+const cogentClientSrcDir = path.join(cogentClientPackageDir, 'src');
+const cogentClientWasmDir = path.join(cogentClientArtifactDir, 'dist', 'wasm');
 const sourceFilePattern = /\.tsx?$/;
-const rebuildArgs = ['run', '--filter=cogentlm', 'build:ts'];
+const wasmArtifactPattern = /cogentlm-wasm\.(?:js|wasm)$/;
+const rebuildArgs = ['run', '--filter=@noumena-labs/cogentlm-browser', 'build:ts'];
 
-function isCogentEngineSourceFile(filePath: string): boolean {
+function isCogentClientSourceFile(filePath: string): boolean {
   const resolvedPath = path.resolve(filePath);
-  const relativePath = path.relative(cogentEngineSrcDir, resolvedPath);
+  const relativePath = path.relative(cogentClientSrcDir, resolvedPath);
   return (
     relativePath !== '' &&
     !relativePath.startsWith('..') &&
@@ -41,7 +51,18 @@ function isCogentEngineSourceFile(filePath: string): boolean {
   );
 }
 
-function rebuildCogentEngineDist(): Promise<boolean> {
+function isCogentClientWasmArtifact(filePath: string): boolean {
+  const resolvedPath = path.resolve(filePath);
+  const relativePath = path.relative(cogentClientWasmDir, resolvedPath);
+  return (
+    relativePath !== '' &&
+    !relativePath.startsWith('..') &&
+    !path.isAbsolute(relativePath) &&
+    wasmArtifactPattern.test(resolvedPath)
+  );
+}
+
+function rebuildCogentClientDist(): Promise<boolean> {
   return new Promise((resolve) => {
     const childProcess = spawn('bun', rebuildArgs, {
       cwd: repoRoot,
@@ -51,13 +72,13 @@ function rebuildCogentEngineDist(): Promise<boolean> {
     });
 
     childProcess.once('error', (error) => {
-      console.error(`[cogentlm] failed to start TS rebuild: ${error.message}`);
+      console.error(`[cogentlm-browser] failed to start TS rebuild: ${error.message}`);
       resolve(false);
     });
 
     childProcess.once('exit', (code, signal) => {
       if (signal) {
-        console.error(`[cogentlm] TS rebuild terminated by ${signal}`);
+        console.error(`[cogentlm-browser] TS rebuild terminated by ${signal}`);
         resolve(false);
         return;
       }
@@ -67,9 +88,9 @@ function rebuildCogentEngineDist(): Promise<boolean> {
   });
 }
 
-export function cogentEngineDistWatch(): VitePluginLike {
+export function cogentClientDistWatch(): VitePluginLike {
   return {
-    name: 'cogentlm-dist-watch',
+    name: 'cogentlm-browser-dist-watch',
     apply: 'serve',
     configureServer(server) {
       let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -87,18 +108,18 @@ export function cogentEngineDistWatch(): VitePluginLike {
 
         do {
           rebuildRequested = false;
-          console.info('[cogentlm] rebuilding TS dist...');
-          const rebuildSucceeded = await rebuildCogentEngineDist();
+          console.info('[cogentlm-browser] rebuilding TS dist...');
+          const rebuildSucceeded = await rebuildCogentClientDist();
 
           if (stopped) {
             break;
           }
 
           if (rebuildSucceeded) {
-            console.info('[cogentlm] TS dist rebuilt; reloading app.');
+            console.info('[cogentlm-browser] TS dist rebuilt; reloading app.');
             server.ws.send({ type: 'full-reload' });
           } else {
-            console.error('[cogentlm] TS dist rebuild failed; keeping current app session.');
+            console.error('[cogentlm-browser] TS dist rebuild failed; keeping current app session.');
           }
         } while (rebuildRequested && !stopped);
 
@@ -106,7 +127,7 @@ export function cogentEngineDistWatch(): VitePluginLike {
       };
 
       const scheduleRebuild = (filePath: string) => {
-        if (!isCogentEngineSourceFile(filePath)) {
+        if (!isCogentClientSourceFile(filePath)) {
           return;
         }
 
@@ -120,15 +141,41 @@ export function cogentEngineDistWatch(): VitePluginLike {
         }, 150);
       };
 
-      const handleAdd = (filePath: string) => scheduleRebuild(filePath);
-      const handleChange = (filePath: string) => scheduleRebuild(filePath);
-      const handleUnlink = (filePath: string) => scheduleRebuild(filePath);
+      let wasmReloadTimer: ReturnType<typeof setTimeout> | null = null;
+      const scheduleWasmReload = (filePath: string) => {
+        if (!isCogentClientWasmArtifact(filePath)) {
+          return;
+        }
 
-      server.watcher.add(cogentEngineSrcDir);
+        if (wasmReloadTimer) {
+          clearTimeout(wasmReloadTimer);
+        }
+
+        wasmReloadTimer = setTimeout(() => {
+          wasmReloadTimer = null;
+          console.info('[cogentlm-browser] wasm runtime rebuilt; reloading app.');
+          server.ws.send({ type: 'full-reload' });
+        }, 150);
+      };
+
+      const handleAdd = (filePath: string) => {
+        scheduleRebuild(filePath);
+        scheduleWasmReload(filePath);
+      };
+      const handleChange = (filePath: string) => {
+        scheduleRebuild(filePath);
+        scheduleWasmReload(filePath);
+      };
+      const handleUnlink = (filePath: string) => {
+        scheduleRebuild(filePath);
+        scheduleWasmReload(filePath);
+      };
+
+      server.watcher.add([cogentClientSrcDir, cogentClientWasmDir]);
       server.watcher.on('add', handleAdd);
       server.watcher.on('change', handleChange);
       server.watcher.on('unlink', handleUnlink);
-      console.info('[cogentlm] watching packages/cogentlm/src for TS dist rebuilds.');
+      console.info('[cogentlm-browser] watching packages/npm/src and .build artifact wasm.');
 
       server.httpServer?.once('close', () => {
         stopped = true;
@@ -136,6 +183,10 @@ export function cogentEngineDistWatch(): VitePluginLike {
         if (debounceTimer) {
           clearTimeout(debounceTimer);
           debounceTimer = null;
+        }
+        if (wasmReloadTimer) {
+          clearTimeout(wasmReloadTimer);
+          wasmReloadTimer = null;
         }
 
         server.watcher.off('add', handleAdd);

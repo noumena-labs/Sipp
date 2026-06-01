@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cogent Engine - Minimal Examples</title>
+  <title>CogentClient - Minimal Examples</title>
   <link rel="stylesheet" href="/src/style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -14,7 +14,7 @@
     <aside class="sidebar">
       <div class="sidebar-header">
         <div class="logo">
-          <span class="logo-text">Cogent</span><span class="logo-suffix">Engine</span>
+          <span class="logo-text">Cogent</span><span class="logo-suffix">Client</span>
         </div>
       </div>
       <nav class="example-nav">
@@ -34,41 +34,54 @@
           <span class="icon">📈</span>
           <span class="label">Observability</span>
         </button>
+        <button class="nav-item" data-example="05-query">
+          <span class="icon">Q</span>
+          <span class="label">Query</span>
+        </button>
+        <button class="nav-item" data-example="06-embeddings">
+          <span class="icon">E</span>
+          <span class="label">Embeddings</span>
+        </button>
       </nav>
       <div class="sidebar-footer">
         <div class="status-indicator">
           <div class="status-dot disconnected"></div>
-          <span class="status-text">Engine Not Ready</span>
+          <span class="status-text">Client Not Ready</span>
         </div>
       </div>
     </aside>
-    
+
     <main class="main-content">
       <header class="content-header">
         <h1 id="example-title">Basic Chat</h1>
-        <p id="example-description">A simple demonstration of the chat API with streaming support.</p>
+        <p id="example-description">A simple demonstration of chat with visible token emission.</p>
       </header>
-      
+
       <div class="interaction-container">
         <div class="control-panel">
           <div class="input-group">
             <label for="model-url">Model URL</label>
             <input type="text" id="model-url" placeholder="Model GGUF URL" value="https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q8_0.gguf">
           </div>
+          <div class="input-group file-group">
+            <label for="model-file">Model File</label>
+            <input type="file" id="model-file" accept=".gguf">
+          </div>
           <div class="input-group hidden" id="projector-group">
             <label for="projector-url">Projector URL (Vision)</label>
             <input type="text" id="projector-url" placeholder="Projector GGUF URL" value="https://huggingface.co/LiquidAI/LFM2.5-VL-450M-GGUF/resolve/main/mmproj-model-f16.gguf">
+            <input type="file" id="projector-file" accept=".gguf">
           </div>
-          <button id="init-engine-btn" class="btn primary">Initialize & Load</button>
+          <button id="init-client-btn" class="btn primary">Initialize & Load</button>
         </div>
-        
+
         <div class="console-wrapper">
           <div class="console-header">
             <span>Terminal Output</span>
             <button id="clear-console-btn" class="btn text-btn">Clear</button>
           </div>
           <div id="console-output" class="console-content">
-            <div class="console-line system">Welcome to Cogent Engine Examples. Select an example and click "Initialize & Load" to begin.</div>
+            <div class="console-line system">Welcome to CogentClient Examples. Select an example and click "Initialize & Load" to begin.</div>
           </div>
           <div id="image-preview-area" class="hidden">
             <div class="preview-item">

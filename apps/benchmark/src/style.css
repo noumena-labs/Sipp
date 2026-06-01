@@ -306,7 +306,7 @@ button:disabled {
   white-space: pre-wrap;
   position: relative;
   overflow-y: auto;
-  contain: content; /* Critical for streaming performance */
+  contain: content; /* Critical for token rendering performance */
   will-change: contents;
 }
 

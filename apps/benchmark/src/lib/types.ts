@@ -1,16 +1,4 @@
-import type { RequestObservabilityMetrics } from '@noumena-labs/cogentlm';
-
-export interface SamplingConfig {
-  repeatLastN?: number;
-  repeatPenalty?: number;
-  frequencyPenalty?: number;
-  presencePenalty?: number;
-  topK?: number;
-  topP?: number;
-  minP?: number;
-  temperature?: number;
-  seed?: number;
-}
+import type { NativeRuntimeConfig, RuntimeObservation } from '@noumena-labs/cogentlm-browser';
 
 export interface EnvironmentInfo {
   browserLabel: string;
@@ -28,28 +16,36 @@ export interface EnvironmentInfo {
 }
 
 export interface MetricSummary {
-  meanMs: number;
-  medianMs: number;
-  p99Ms: number;
-  minMs: number;
-  maxMs: number;
+  mean: number;
+  median: number;
+  p99: number;
+  min: number;
+  max: number;
 }
 
-export type RequestObservability = RequestObservabilityMetrics;
+export type RequestObservability = RuntimeObservation;
+
+export type BenchmarkOperation = 'chat' | 'query' | 'embed';
 
 export interface BenchmarkRun {
   label: string;
+  operation: BenchmarkOperation;
+  outputKind: 'text' | 'embedding';
   wallMs: number;
   ttftMs: number | null;
   itlAvgMs: number | null;
   itlP99Ms: number | null;
-  tps: number | null;
+  decodeTps: number | null;
+  e2eTps: number | null;
   inputTokens: number | null;
   outputTokens: number;
   prefillTokens: number | null;
   prefillTps: number | null;
   outputLength: number;
   outputPreview: string;
+  embeddingDimensions: number | null;
+  embeddingPooling: string | null;
+  embeddingNormalized: boolean | null;
   observability: RequestObservability | null;
 }
 
@@ -68,7 +64,8 @@ export interface GroupSummary {
     ttftMs: MetricSummary | null;
     itlAvgMs: MetricSummary | null;
     itlP99Ms: MetricSummary | null;
-    tps: MetricSummary | null;
+    decodeTps: MetricSummary | null;
+    e2eTps: MetricSummary | null;
     prefillTps: MetricSummary | null;
     avgInputTokens: number | null;
     avgOutputTokens: number | null;
@@ -87,6 +84,11 @@ export interface GroupResult {
   label: string;
   warmupRuns: number;
   measuredRuns: number;
+  cacheReuse: {
+    expected: boolean;
+    expectedSource: RequestObservability['cacheSource'] | null;
+    invalidRunLabels: string[];
+  };
   benchmarkDurationMs: number;
   runs: BenchmarkRun[];
   summary: GroupSummary;
@@ -108,7 +110,7 @@ export interface ScenarioResult {
   runtime: { loadRuntimeMs: number };
   coldPrompt: GroupResult;
   hotFreshContext: GroupResult;
-  hotReuseContext: GroupResult;
+  repeatedPrompt: GroupResult;
 }
 
 export interface MemorySnapshot {
@@ -138,18 +140,8 @@ export interface ConfigOptions {
   tokenCount: number;
   warmupRuns: number;
   measuredRuns: number;
-  workerTransport: {
-    preset: 'default' | 'low-buffer' | 'no-buffer' | 'custom';
-    bufferedTokenLimit: number;
-    flushIntervalMs: number;
-  };
-  initConfig: {
-    prefillChunkSize: number;
-    schedulerPolicy: string;
-    decodeTokenReserve: number;
-    multimodalUseGpu: boolean;
+  initConfig: NativeRuntimeConfig & {
     debugCompareMultimodalEmbeddings: boolean;
-    sampling: SamplingConfig;
   };
   imageInput: ImageInput;
 }
@@ -157,8 +149,8 @@ export interface ConfigOptions {
 export interface MixedLoadDefinition {
   id: string;
   label: string;
-  background: ScenarioDefinition & { promptMode: 'chat'; contextBucket: string; concurrency: number };
-  foreground: ScenarioDefinition & { promptMode: 'chat'; contextBucket: string; concurrency: number };
+  background: ScenarioDefinition & { promptMode: 'chat' | 'query'; contextBucket: string; concurrency: number };
+  foreground: ScenarioDefinition & { promptMode: 'chat' | 'query'; contextBucket: string; concurrency: number };
   concurrency: number;
 }
 
@@ -177,18 +169,51 @@ export interface BenchmarkLogEntry {
   groupId: string;
   groupLabel: string;
   runLabel: string;
+  operation: BenchmarkOperation;
+  outputKind: BenchmarkRun['outputKind'];
   wallMs: number;
+  inputTokens: number | null;
   outputTokens: number;
+  prefillTokens: number | null;
+  cacheMode: RequestObservability['cacheMode'] | null;
+  cacheSource: RequestObservability['cacheSource'] | null;
+  cacheHits: number | null;
+  embeddingDimensions: number | null;
   observability: RequestObservability | null;
+}
+
+export interface BenchmarkTracePhaseRow {
+  scenario: string;
+  group: string;
+  run: string;
+  tokenPath: string;
+  inputTokens: number | null;
+  outputTokens: number;
+  prefillTokens: number | null;
+  cacheMode: RequestObservability['cacheMode'] | null;
+  cacheSource: RequestObservability['cacheSource'] | null;
+  cacheHits: number | null;
+  decodeTps: number | null;
+  e2eTps: number | null;
+  prefillMs: number | null;
+  decodeMs: number | null;
+  e2eMs: number | null;
+  nativeGpuMs: number | null;
+  nativeSyncMs: number | null;
+  nativeLogicMs: number | null;
+  jsTokenDrainMs: number | null;
+  jsTokenDrainCalls: number | null;
 }
 
 export interface BenchmarkTraceReport {
   runCount: number;
   logs: BenchmarkLogEntry[];
+  rows: BenchmarkTracePhaseRow[];
   analysis: {
     ttftMs: MetricSummary | null;
     itlAvgMs: MetricSummary | null;
     itlP99Ms: MetricSummary | null;
-    tps: MetricSummary | null;
+    decodeTps: MetricSummary | null;
+    e2eTps: MetricSummary | null;
   };
 }

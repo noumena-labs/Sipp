@@ -53,7 +53,7 @@ jobs:
           fi
 
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           submodules: false
@@ -79,7 +79,7 @@ jobs:
           GIT_SSH_COMMAND="ssh -i ~/.ssh/llama_cpp_internal -o IdentitiesOnly=yes" git submodule update --init --recursive
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           registry-url: https://npm.pkg.github.com
@@ -96,7 +96,7 @@ jobs:
           sudo apt-get install -y cmake ninja-build
 
       - name: Set up Emscripten
-        uses: mymindstorm/setup-emsdk@v14
+        uses: emscripten-core/setup-emsdk@v16
         with:
           version: latest
 
@@ -117,7 +117,7 @@ jobs:
           node <<'NODE'
           const fs = require('node:fs');
 
-          const packageJsonPath = 'packages/cogentlm/package.json';
+          const packageJsonPath = 'packages/cogentlm-browser/package.json';
           const bump = process.env.BUMP;
           const prereleaseId = process.env.PRERELEASE_ID || 'beta';
           const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
@@ -172,10 +172,10 @@ jobs:
           console.log(packageJson.version);
           NODE
 
-          VERSION="$(node -p "require('./packages/cogentlm/package.json').version")"
+          VERSION="$(node -p "require('./packages/cogentlm-browser/package.json').version")"
           bun install --lockfile-only
           echo "Resolved release version: $VERSION"
-          git status --short -- packages/cogentlm/package.json bun.lock
+          git status --short -- packages/cogentlm-browser/package.json bun.lock
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=cogentlm-v$VERSION" >> "$GITHUB_OUTPUT"
 
@@ -197,17 +197,17 @@ jobs:
           fi
 
       - name: Run package tests
-        run: bun test packages/cogentlm/src
+        run: bun test packages/cogentlm-browser/src
 
       - name: Build and validate release package
         env:
           COGENTLM_PACKAGE_ROOT: node_modules/cogentlm
-        run: bun run --filter=@noumena-labs/cogentlm release:prepare
+        run: bun run --filter=@noumena-labs/cogentlm-browser release:prepare
 
       - name: Run built package smoke test
         run: |
           node --input-type=module <<'NODE'
-          const pkg = await import('./packages/cogentlm/dist/esm/index.js');
+          const pkg = await import('./packages/cogentlm-browser/dist/esm/index.js');
           if (typeof pkg.CogentEngine?.create !== 'function') {
             throw new Error('CogentEngine.create export is missing from the built package.');
           }
@@ -219,7 +219,7 @@ jobs:
       - name: Validate npm Registry publish (dry-run)
         env:
           NPM_TAG: ${{ inputs.npm_tag }}
-        working-directory: packages/cogentlm
+        working-directory: packages/cogentlm-browser
         run: |
           set -euo pipefail
           PACKAGE_JSON_BACKUP="$RUNNER_TEMP/cogentlm-package.json"
@@ -257,15 +257,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          CURRENT_VERSION="$(node -p "require('./packages/cogentlm/package.json').version")"
+          CURRENT_VERSION="$(node -p "require('./packages/cogentlm-browser/package.json').version")"
           if [ "$CURRENT_VERSION" != "$VERSION" ]; then
-            echo "::error::Expected packages/cogentlm/package.json version $VERSION, but found $CURRENT_VERSION."
-            git status --short -- packages/cogentlm/package.json bun.lock
+            echo "::error::Expected packages/cogentlm-browser/package.json version $VERSION, but found $CURRENT_VERSION."
+            git status --short -- packages/cogentlm-browser/package.json bun.lock
             exit 1
           fi
 
-          git add packages/cogentlm/package.json bun.lock
-          if git diff --cached --quiet -- packages/cogentlm/package.json bun.lock; then
+          git add packages/cogentlm-browser/package.json bun.lock
+          if git diff --cached --quiet -- packages/cogentlm-browser/package.json bun.lock; then
             echo "No version files changed; cogentlm v$VERSION is already present on HEAD."
           else
             git commit -m "chore(release): cogentlm v$VERSION"
@@ -291,7 +291,7 @@ jobs:
         env:
           NPM_TAG: ${{ inputs.npm_tag }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        working-directory: packages/cogentlm
+        working-directory: packages/cogentlm-browser
         run: |
           set -euo pipefail
           # Patch package.json for public release

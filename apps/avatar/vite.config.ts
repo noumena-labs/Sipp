@@ -2,33 +2,32 @@ import react from '@vitejs/plugin-react';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
-import { cogentEngineDistWatch } from '../cogentlm-dist-watch';
+import { cogentClientDistWatch } from '../cogentlm-dist-watch';
 
 const avatarAppDir = fileURLToPath(new URL('.', import.meta.url));
-const cogentEngineEntry = path.resolve(
+const cogentClientDistDir = path.resolve(
   avatarAppDir,
-  '../../packages/cogentlm/dist/esm/index.js'
+  '../../.build/artifacts/npm/cogentlm-browser/dist/esm'
 );
-const cogentEngineCharacterEntry = path.resolve(
-  avatarAppDir,
-  '../../packages/cogentlm/dist/esm/character/index.js'
-);
+const cogentClientEntry = path.join(cogentClientDistDir, 'index.js');
+const cogentClientCharacterEntry = path.join(cogentClientDistDir, 'character/index.js');
+const appOutDir = path.resolve(avatarAppDir, '../../.build/artifacts/apps/avatar');
 
 export default defineConfig({
-  plugins: [react(), cogentEngineDistWatch()],
+  plugins: [react(), cogentClientDistWatch()],
+  build: {
+    outDir: appOutDir,
+    emptyOutDir: true,
+  },
   resolve: {
     alias: {
-      // Resolve both the root package entry and the ./character subpath
-      // directly at the built ESM files so we pick up local rebuilds without
-      // going through a cached /node_modules dependency URL.
-      '@noumena-labs/cogentlm/character': cogentEngineCharacterEntry,
-      'cogentlm/character': cogentEngineCharacterEntry,
-      '@noumena-labs/cogentlm': cogentEngineEntry,
+      '@noumena-labs/cogentlm-browser/character': cogentClientCharacterEntry,
+      '@noumena-labs/cogentlm-browser': cogentClientEntry,
     },
     preserveSymlinks: true,
   },
   optimizeDeps: {
-    exclude: ['@noumena-labs/cogentlm'],
+    exclude: ['@noumena-labs/cogentlm-browser'],
   },
   server: {
     headers: {

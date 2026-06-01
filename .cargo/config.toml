@@ -1,0 +1,6 @@
+[alias]
+# Keep xtask outside .build/cargo so `cargo xtask clean` can remove Cargo outputs on Windows.
+xtask = "run --target-dir .build/xtask --package xtask --"
+
+[build]
+target-dir = ".build/cargo"

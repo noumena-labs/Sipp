@@ -3,7 +3,7 @@
 // App.tsx
 //
 // - Top-level simulation app. Wires:
-//     - a single shared CogentEngine, loaded from the configured .gguf URL
+//     - a single shared CogentClient, loaded from the configured .gguf URL
 //     - a DirectorRuntime from `director.json`
 //     - four CharacterRuntime-backed chooser adapters
 //     - an app-local SimulationRuntime that owns the world loop
@@ -13,8 +13,8 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { CogentEngine } from '@noumena-labs/cogentlm';
-import { createDirectorFromConfigUrl } from '@noumena-labs/cogentlm/director';
+import { CogentClient } from '@noumena-labs/cogentlm-browser';
+import { createDirectorFromConfigUrl } from '@noumena-labs/cogentlm-browser/director';
 import { BrainActivityHud } from './components/BrainActivityHud';
 import { BrainTraceDrawer } from './components/BrainTraceDrawer';
 import { SimulationCanvas } from './components/SimulationCanvas';
@@ -40,7 +40,7 @@ import {
 import {
   createSimulationAgentChooserFromConfigUrl,
 } from './runtime/agent-chooser.js';
-import { createTracedBrainEngine } from './runtime/traced-engine.js';
+import { createTracedBrainClient } from './runtime/traced-engine.js';
 import { SimulationRuntime } from './runtime/simulation-runtime.js';
 import type {
   DirectorDecision,
@@ -54,7 +54,7 @@ import type {
 import type { HoveredSceneObject } from './scene/world-binding.js';
 
 interface LoadedHarness {
-  readonly engine: CogentEngine;
+  readonly client: CogentClient;
   readonly runtime: SimulationRuntime;
   readonly scenario: ScenarioSeed;
 }
@@ -330,7 +330,7 @@ export default function App() {
       const currentHarness = harnessRef.current;
       if (currentHarness) {
         void currentHarness.runtime.dispose();
-        currentHarness.engine.close();
+        currentHarness.client.close();
         harnessRef.current = null;
       }
     };
@@ -545,13 +545,13 @@ export default function App() {
       setBusy(true);
       setModelUrl(url);
       setRunning(false);
-      let nextEngine: CogentEngine | null = null;
+      let nextClient: CogentClient | null = null;
       let nextRuntime: SimulationRuntime | null = null;
       try {
         if (harness) {
           setHarness(null);
           await harness.runtime.dispose();
-          harness.engine.close();
+          harness.client.close();
         }
         const scenario = createCourtyardScenario({
           obstacles: {
@@ -569,11 +569,11 @@ export default function App() {
         });
         setActiveScenario(scenario);
         resetSimulationUi();
-        setStatus('Initialising engine');
-        nextEngine = await CogentEngine.create();
+        setStatus('Initialising client');
+        nextClient = new CogentClient();
 
         setStatus('Downloading model');
-        await nextEngine.models.load(url, {
+        await nextClient.addLocal(url, {
           onProgress: (progress: any) => {
             if (progress.phase === 'download') {
               setStatus(`Downloading model ${Math.floor(progress.percent ?? 0)}%`);
@@ -583,16 +583,21 @@ export default function App() {
           },
           observability: 'profile',
           runtime: {
-            maxCachedSessions: 8,
-            prefixCacheIntervalTokens: 64,
-            maxPrefixCacheEntries: 64,
-            schedulerPolicy: 'latency-first',
+            cache: {
+              snapshot_interval_tokens: 64,
+              max_snapshot_entries: 64,
+            },
+            scheduler: {
+              policy: {
+                mode: 'latency_first' as const,
+              },
+            },
             sampling: {
               temperature: 0.5,
-              topP: 0.9,
-              topK: 40,
-              minP: 0.05,
-              repeatPenalty: 1.05,
+              top_p: 0.9,
+              top_k: 40,
+              min_p: 0.05,
+              repeat_penalty: 1.05,
             },
           },
         });
@@ -604,7 +609,7 @@ export default function App() {
         }
         const { director } = await createDirectorFromConfigUrl({
           configUrl: scenario.directorConfigUrl,
-          engine: createTracedBrainEngine(nextEngine, brainStore, bus, directorBrain),
+          client: createTracedBrainClient(nextClient, brainStore, bus, directorBrain),
           runtimeOptions: { maxOutputTokens: 96 },
         });
 
@@ -636,7 +641,7 @@ export default function App() {
           const { agent } = await createSimulationAgentChooserFromConfigUrl({
             agentId: assignment.agentId,
             configUrl: assignment.characterUrl,
-            engine: createTracedBrainEngine(nextEngine, brainStore, bus, brain),
+            client: createTracedBrainClient(nextClient, brainStore, bus, brain),
           });
           const seed = scenario.agents.find((a) => a.id === assignment.agentId);
           if (!seed) {
@@ -649,8 +654,8 @@ export default function App() {
         snapshotRef.current = initialSnapshot;
         setSnapshot(initialSnapshot);
         setDirectorState(createInitialDirectorState(initialSnapshot.directorNote));
-        setHarness({ engine: nextEngine, runtime: nextRuntime, scenario });
-        nextEngine = null;
+        setHarness({ client: nextClient, runtime: nextRuntime, scenario });
+        nextClient = null;
         nextRuntime = null;
         setBrainHudExpanded(true);
         if (!tutorialDismissed) {
@@ -663,8 +668,8 @@ export default function App() {
         if (nextRuntime) {
           await nextRuntime.dispose().catch(() => undefined);
         }
-        if (nextEngine) {
-          nextEngine.close();
+        if (nextClient) {
+          nextClient.close();
         }
         setActiveScenario(null);
         setStatus(`Load failed: ${(error as Error).message}`);
@@ -712,7 +717,7 @@ export default function App() {
     setHarness(null);
     try {
       await currentHarness.runtime.dispose();
-      currentHarness.engine.close();
+      currentHarness.client.close();
       setActiveScenario(null);
       resetSimulationUi();
       setStatus('Reset. Press Load to rebuild.');

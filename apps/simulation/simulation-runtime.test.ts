@@ -4,9 +4,15 @@ import test from 'node:test';
 import {
   DirectorRuntime,
   parseDirectorConfig,
-  type DirectorRuntimeEngine,
+  type DirectorRuntimeClient,
   type JsonValue,
-} from '@noumena-labs/cogentlm/director';
+} from '../../packages/npm/src/orchestrator/index.js';
+import type {
+  BrowserTextRun,
+  GenerationResult,
+  RequestStats,
+  TokenBatch,
+} from '../../packages/npm/src/models/types.js';
 
 import { SimulationBus, type SimulationEvent } from './src/runtime/bus.ts';
 import {
@@ -65,48 +71,83 @@ interface StubChooser {
   }>;
 }
 
-function createTimeoutEngine(): DirectorRuntimeEngine & { cancelCalls: number[] } {
+const EMPTY_REQUEST_STATS: RequestStats = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheMode: null,
+  cacheSource: null,
+  cacheHits: 0,
+  prefillTokens: null,
+  ttftMs: null,
+  interTokenMs: null,
+  e2eMs: null,
+  decodeTokensPerSecond: null,
+  e2eTokensPerSecond: null,
+  prefillTokensPerSecond: null,
+  prefillMs: 0,
+  decodeMs: 0,
+};
+
+function createGenerationResult(text: string): GenerationResult {
+  return {
+    id: 'test-generation',
+    text,
+    finishReason: 'stop',
+    stats: EMPTY_REQUEST_STATS,
+  };
+}
+
+async function* emptyTokenBatches(): AsyncIterable<TokenBatch> {
+}
+
+function createTextRun(response: Promise<GenerationResult>): BrowserTextRun {
+  return {
+    response,
+    tokens: emptyTokenBatches(),
+    cancel: () => {},
+  };
+}
+
+function createTimeoutClient(): DirectorRuntimeClient & { cancelCalls: number[] } {
   const cancelCalls: number[] = [];
 
   return {
     cancelCalls,
-    models: {
-      current: () => ({ mediaMarker: '<image>' }),
-    },
-    async chat(_input, options = {}) {
-      const signal = options.signal;
-      if (!signal) {
-        throw new Error('Expected an abortable director task.');
-      }
-      if (!signal.aborted) {
-        await new Promise<void>((resolve) => {
-          signal.addEventListener('abort', () => resolve(), { once: true });
-        });
-      }
-      cancelCalls.push(1);
-      throw new DOMException('Operation aborted.', 'AbortError');
+    currentLocal: () => ({ mediaMarker: '<image>' }),
+    chat(_input, options = {}) {
+      return createTextRun((async () => {
+        const signal = options.signal;
+        if (!signal) {
+          throw new Error('Expected an abortable director task.');
+        }
+        if (!signal.aborted) {
+          await new Promise<void>((resolve) => {
+            signal.addEventListener('abort', () => resolve(), { once: true });
+          });
+        }
+        cancelCalls.push(1);
+        throw new DOMException('Operation aborted.', 'AbortError');
+      })());
     },
   };
 }
 
-function createOutputEngine(outputText: string): DirectorRuntimeEngine & { grammar?: string; promptText?: string } {
+function createOutputClient(outputText: string): DirectorRuntimeClient & { grammar?: string; promptText?: string } {
   let grammar: string | undefined;
   let promptText: string | undefined;
   return {
-    models: {
-      current: () => ({ mediaMarker: '<image>' }),
-    },
+    currentLocal: () => ({ mediaMarker: '<image>' }),
     get grammar() {
       return grammar;
     },
     get promptText() {
       return promptText;
     },
-    async chat(input, options) {
+    chat(input, options) {
       const messages = Array.isArray(input) ? input : input.messages;
       promptText = messages.map((message) => `${message.role}: ${message.content}`).join('\n');
       grammar = typeof options === 'object' ? options?.grammar : undefined;
-      return outputText;
+      return createTextRun(Promise.resolve(createGenerationResult(outputText)));
     },
   };
 }
@@ -265,8 +306,8 @@ function timeoutAfter(ms: number, message: string): Promise<never> {
 }
 
 test('narration prompt includes recent beats and rejects repeated previous calls', async () => {
-  const engine = createOutputEngine('one race');
-  const director = new DirectorRuntime(engine, DIRECTOR_CONFIG);
+  const client = createOutputClient('one race');
+  const director = new DirectorRuntime(client, DIRECTOR_CONFIG);
   const bus = new SimulationBus();
   const notes: string[] = [];
   bus.on('world-note', (event) => {
@@ -329,21 +370,21 @@ test('narration prompt includes recent beats and rejects repeated previous calls
     internals.maybeStartNarration();
     await internals.narrationInFlight;
 
-    assert.match(engine.promptText ?? '', /Call these observations as one fun, witty old-timey radio line/);
-    assert.match(engine.promptText ?? '', /Response:\nWrite only the final answer\./);
-    assert.match(engine.promptText ?? '', /Write exactly one complete sentence as an old-timey sports caller at an active game\./);
-    assert.match(engine.promptText ?? '', /include at least one player name, describe live action, and mention the stakes/);
-    assert.match(engine.promptText ?? '', /Do not answer with only a player name, label, list, fragment, or JSON\./);
-    assert.match(engine.promptText ?? '', /Use 8 to 24 words\./);
-    assert.match(engine.promptText ?? '', /- Previous call to avoid: one race\./);
-    assert.match(engine.promptText ?? '', /- Aria has the banana\./);
-    assert.match(engine.promptText ?? '', /- Aria is on the doorstep of home base\./);
-    assert.match(engine.promptText ?? '', /- Mira is trying to smack Aria with the bat and knock the banana loose\./);
-    assert.match(engine.promptText ?? '', /- Recent event: Aria grabbed the banana and turned for home\./);
-    assert.doesNotMatch(engine.promptText ?? '', /Output shape:/);
-    assert.doesNotMatch(engine.promptText ?? '', /Description: Play-by-play/);
-    assert.doesNotMatch(engine.promptText ?? '', /Play:/);
-    assert.doesNotMatch(engine.promptText ?? '', /Threats:/);
+    assert.match(client.promptText ?? '', /Call these observations as one fun, witty old-timey radio line/);
+    assert.match(client.promptText ?? '', /Response:\nWrite only the final answer\./);
+    assert.match(client.promptText ?? '', /Write exactly one complete sentence as an old-timey sports caller at an active game\./);
+    assert.match(client.promptText ?? '', /include at least one player name, describe live action, and mention the stakes/);
+    assert.match(client.promptText ?? '', /Do not answer with only a player name, label, list, fragment, or JSON\./);
+    assert.match(client.promptText ?? '', /Use 8 to 24 words\./);
+    assert.match(client.promptText ?? '', /- Previous call to avoid: one race\./);
+    assert.match(client.promptText ?? '', /- Aria has the banana\./);
+    assert.match(client.promptText ?? '', /- Aria is on the doorstep of home base\./);
+    assert.match(client.promptText ?? '', /- Mira is trying to smack Aria with the bat and knock the banana loose\./);
+    assert.match(client.promptText ?? '', /- Recent event: Aria grabbed the banana and turned for home\./);
+    assert.doesNotMatch(client.promptText ?? '', /Output shape:/);
+    assert.doesNotMatch(client.promptText ?? '', /Description: Play-by-play/);
+    assert.doesNotMatch(client.promptText ?? '', /Play:/);
+    assert.doesNotMatch(client.promptText ?? '', /Threats:/);
     assert.equal(notes.length, 0);
     assert.equal(internals.state.directorNote, 'one race');
   } finally {
@@ -352,8 +393,8 @@ test('narration prompt includes recent beats and rejects repeated previous calls
 });
 
 test('SimulationRuntime emits raw trace when narration is rejected', async () => {
-  const engine = createOutputEngine('Sol');
-  const director = new DirectorRuntime(engine, DIRECTOR_CONFIG);
+  const client = createOutputClient('Sol');
+  const director = new DirectorRuntime(client, DIRECTOR_CONFIG);
   const bus = new SimulationBus();
   const events: SimulationEvent[] = [];
   bus.onAny((event) => {
@@ -417,8 +458,8 @@ test('SimulationRuntime emits raw trace when narration is rejected', async () =>
 });
 
 test('SimulationRuntime applies deterministic referee fallback after timeout', async () => {
-  const engine = createTimeoutEngine();
-  const director = new DirectorRuntime(engine, DIRECTOR_CONFIG);
+  const client = createTimeoutClient();
+  const director = new DirectorRuntime(client, DIRECTOR_CONFIG);
   const bus = new SimulationBus();
   const events: SimulationEvent[] = [];
   bus.onAny((event) => {
@@ -488,7 +529,7 @@ test('SimulationRuntime applies deterministic referee fallback after timeout', a
     assert.equal(snapshot.game.score.forcedDrops.attacker, 1);
     assert.equal(snapshot.objects.find((object) => object.id === 'banana')?.heldBy, null);
     assert.equal(snapshot.agents.find((agent) => agent.id === 'carrier')?.holding, null);
-    assert.deepEqual(engine.cancelCalls, [1]);
+    assert.deepEqual(client.cancelCalls, [1]);
     assert.ok(
       events.some(
         (event) =>
@@ -506,8 +547,8 @@ test('SimulationRuntime applies deterministic referee fallback after timeout', a
 });
 
 test('SimulationRuntime maps referee selection choices to director resolutions', async () => {
-  const engine = createOutputEngine('pickup:beck');
-  const director = new DirectorRuntime(engine, DIRECTOR_CONFIG);
+  const client = createOutputClient('pickup:beck');
+  const director = new DirectorRuntime(client, DIRECTOR_CONFIG);
   const bus = new SimulationBus();
   const events: SimulationEvent[] = [];
   bus.onAny((event) => {
@@ -571,8 +612,8 @@ test('SimulationRuntime maps referee selection choices to director resolutions',
     const snapshot = runtime.getSnapshot();
     assert.equal(snapshot.objects.find((object) => object.id === 'banana')?.heldBy, 'beck');
     assert.equal(snapshot.agents.find((agent) => agent.id === 'beck')?.holding, 'banana');
-    assert.ok(engine.grammar?.includes('"pickup:beck"'));
-    assert.ok(engine.grammar?.includes('"deny"'));
+    assert.ok(client.grammar?.includes('"pickup:beck"'));
+    assert.ok(client.grammar?.includes('"deny"'));
     assert.equal(events.some((event) => event.kind === 'director-decision'), true);
     assert.equal(events.some((event) => event.kind === 'runtime-error'), false);
   } finally {
@@ -581,7 +622,7 @@ test('SimulationRuntime maps referee selection choices to director resolutions',
 });
 
 test('SimulationRuntime dispose leaves shared bus listeners intact', async () => {
-  const director = new DirectorRuntime(createOutputEngine('hold'), DIRECTOR_CONFIG);
+  const director = new DirectorRuntime(createOutputClient('hold'), DIRECTOR_CONFIG);
   const bus = new SimulationBus();
   const events: SimulationEvent[] = [];
   bus.onAny((event) => {
@@ -607,12 +648,13 @@ test('SimulationRuntime dispose leaves shared bus listeners intact', async () =>
   }
 });
 
-test('forced-drop referee choices expose policy through grammar without leaking payload fields', () => {
+test('forced-drop referee choices expose policy through grammar without leaking payload fields', async () => {
   const state = createWorldState();
   state.tick = 8;
   populateForcedDropWorld(state);
   const conflict = createForcedDropConflict(state.tick);
-  const director = new DirectorRuntime(createOutputEngine('drop'), DIRECTOR_CONFIG);
+  const client = createOutputClient('drop');
+  const director = new DirectorRuntime(client, DIRECTOR_CONFIG);
   const payload = expectJsonObject(buildRefereePayload(state, conflict));
   const refereeEvent = expectJsonObject(payload.referee_event);
   const attempt = expectJsonObject(refereeEvent.attempt);
@@ -639,19 +681,19 @@ test('forced-drop referee choices expose policy through grammar without leaking 
     inputs: payload as Record<string, JsonValue>,
     choices: freshChoices,
   };
-  const freshGrammar = director.getTaskGrammar<DirectorResolution>('resolve_referee_event', {
-    ...freshRequest,
-  });
+  const freshResult = await director.run<DirectorResolution>('resolve_referee_event', freshRequest);
+  assert.equal(freshResult.status, 'ok');
+  const freshGrammar = client.grammar;
   assert.match(freshGrammar ?? '', /"drop"/);
   assert.match(freshGrammar ?? '', /"hold"/);
   assert.match(freshGrammar ?? '', /"attacker_fumbles"/);
 
-  const prompt = director.getTaskPrompt<DirectorResolution>('resolve_referee_event', freshRequest);
-  assert.match(prompt.userPrompt, /recent_history/);
-  assert.match(prompt.userPrompt, /ruling_policy/);
-  assert.match(prompt.userPrompt, /currentHolder/);
-  assert.match(prompt.userPrompt, /fallbackOutcome/);
-  assert.doesNotMatch(prompt.userPrompt, /winnerAgentId/);
+  const promptText = client.promptText ?? '';
+  assert.match(promptText, /recent_history/);
+  assert.match(promptText, /ruling_policy/);
+  assert.match(promptText, /currentHolder/);
+  assert.match(promptText, /fallbackOutcome/);
+  assert.doesNotMatch(promptText, /winnerAgentId/);
 
   state.game.refereeMemory.forcedDrops.push({
     tick: 7,
@@ -666,10 +708,12 @@ test('forced-drop referee choices expose policy through grammar without leaking 
   const suppressedPolicy = expectJsonObject(suppressedRefereeEvent.ruling_policy);
   const suppressedChoices = buildRefereeChoices(state, conflict);
   assert.deepEqual(suppressedChoices.map((choice) => choice.id), ['drop', 'hold']);
-  const suppressedGrammar = director.getTaskGrammar<DirectorResolution>('resolve_referee_event', {
+  const suppressedResult = await director.run<DirectorResolution>('resolve_referee_event', {
     inputs: suppressedPayload as Record<string, JsonValue>,
     choices: suppressedChoices,
   });
+  assert.equal(suppressedResult.status, 'ok');
+  const suppressedGrammar = client.grammar;
   assert.match(suppressedGrammar ?? '', /"drop"/);
   assert.match(suppressedGrammar ?? '', /"hold"/);
   assert.doesNotMatch(suppressedGrammar ?? '', /"attacker_fumbles"/);
@@ -687,7 +731,7 @@ test('forced-drop referee choices expose policy through grammar without leaking 
   assert.match(String(suppressedPolicy.varietyNote), /fair variation/);
 });
 
-test('forced-drop policy suppresses three repeated global outcomes when alternatives remain', () => {
+test('forced-drop policy suppresses three repeated global outcomes when alternatives remain', async () => {
   const state = createWorldState();
   state.tick = 20;
   populateForcedDropWorld(state);
@@ -705,11 +749,14 @@ test('forced-drop policy suppresses three repeated global outcomes when alternat
   const rulingPolicy = expectJsonObject(refereeEvent.ruling_policy);
   assert.deepEqual(rulingPolicy.suppressedOutcomes, ['drop']);
 
-  const director = new DirectorRuntime(createOutputEngine('hold'), DIRECTOR_CONFIG);
-  const grammar = director.getTaskGrammar<DirectorResolution>('resolve_referee_event', {
+  const client = createOutputClient('hold');
+  const director = new DirectorRuntime(client, DIRECTOR_CONFIG);
+  const result = await director.run<DirectorResolution>('resolve_referee_event', {
     inputs: payload as Record<string, JsonValue>,
     choices,
   });
+  assert.equal(result.status, 'ok');
+  const grammar = client.grammar;
   assert.doesNotMatch(grammar ?? '', /"drop"/);
   assert.match(grammar ?? '', /"hold"/);
   assert.match(grammar ?? '', /"attacker_fumbles"/);
@@ -1233,7 +1280,7 @@ test('banana carriers move at a conservative slowdown while holding the banana',
 });
 
 test('stale go_to_object goals are cleared after the reevaluation cap', async () => {
-  const director = new DirectorRuntime(createOutputEngine('drop'), DIRECTOR_CONFIG);
+  const director = new DirectorRuntime(createOutputClient('drop'), DIRECTOR_CONFIG);
   const runtime = new SimulationRuntime(director, {
     game: {
       title: 'Banana Dash',
@@ -1279,7 +1326,7 @@ test('stale go_to_object goals are cleared after the reevaluation cap', async ()
 
 test('stale movement goals are passed back as last-decision steering context', async () => {
   let seenLastDecision: string | null = null;
-  const director = new DirectorRuntime(createOutputEngine('drop'), DIRECTOR_CONFIG);
+  const director = new DirectorRuntime(createOutputClient('drop'), DIRECTOR_CONFIG);
   const runtime = new SimulationRuntime(director, {
     game: {
       title: 'Banana Dash',
@@ -1331,7 +1378,7 @@ test('stale movement goals are passed back as last-decision steering context', a
 });
 
 test('arriving at a pickup target completes the selected pickup action', async () => {
-  const director = new DirectorRuntime(createOutputEngine('drop'), DIRECTOR_CONFIG);
+  const director = new DirectorRuntime(createOutputClient('drop'), DIRECTOR_CONFIG);
   const runtime = new SimulationRuntime(director, {
     game: {
       title: 'Banana Dash',
@@ -1384,7 +1431,7 @@ test('arriving at a pickup target completes the selected pickup action', async (
 });
 
 test('stale go_to_agent goals are cleared after the reevaluation cap', async () => {
-  const director = new DirectorRuntime(createOutputEngine('drop'), DIRECTOR_CONFIG);
+  const director = new DirectorRuntime(createOutputClient('drop'), DIRECTOR_CONFIG);
   const runtime = new SimulationRuntime(director, {
     game: {
       title: 'Banana Dash',
@@ -1430,7 +1477,7 @@ test('stale go_to_agent goals are cleared after the reevaluation cap', async () 
 });
 
 test('deliver goals are not cleared by the reevaluation cap', async () => {
-  const director = new DirectorRuntime(createOutputEngine('drop'), DIRECTOR_CONFIG);
+  const director = new DirectorRuntime(createOutputClient('drop'), DIRECTOR_CONFIG);
   const runtime = new SimulationRuntime(director, {
     game: {
       title: 'Banana Dash',
@@ -1524,7 +1571,7 @@ test('forced banana drops clear active banana-contest goals that are still in fl
   );
 
   const bus = new SimulationBus();
-  const director = new DirectorRuntime(createOutputEngine('drop'), DIRECTOR_CONFIG);
+  const director = new DirectorRuntime(createOutputClient('drop'), DIRECTOR_CONFIG);
   const runtime = new SimulationRuntime(director, {
     bus,
     game: state.game,
@@ -1572,8 +1619,8 @@ test('forced banana drops clear active banana-contest goals that are still in fl
 });
 
 test('invalid repeated forced-drop fumble falls back through policy without pausing', async () => {
-  const engine = createOutputEngine('attacker_fumbles');
-  const director = new DirectorRuntime(engine, DIRECTOR_CONFIG);
+  const client = createOutputClient('attacker_fumbles');
+  const director = new DirectorRuntime(client, DIRECTOR_CONFIG);
   const bus = new SimulationBus();
   const events: SimulationEvent[] = [];
   bus.onAny((event) => {
@@ -1619,12 +1666,12 @@ test('invalid repeated forced-drop fumble falls back through policy without paus
     assert.equal(attacker?.cooldowns.sabotageUntilTick, 5);
     assert.equal(snapshot.game.refereeMemory.forcedDrops.length, 2);
     assert.equal(snapshot.game.refereeMemory.forcedDrops.at(-1)?.outcome, 'drop');
-    assert.match(engine.grammar ?? '', /"drop"/);
-    assert.match(engine.grammar ?? '', /"hold"/);
-    assert.doesNotMatch(engine.grammar ?? '', /"attacker_fumbles"/);
-    assert.match(engine.promptText ?? '', /recent_history/);
-    assert.match(engine.promptText ?? '', /ruling_policy/);
-    assert.doesNotMatch(engine.promptText ?? '', /winnerAgentId/);
+    assert.match(client.grammar ?? '', /"drop"/);
+    assert.match(client.grammar ?? '', /"hold"/);
+    assert.doesNotMatch(client.grammar ?? '', /"attacker_fumbles"/);
+    assert.match(client.promptText ?? '', /recent_history/);
+    assert.match(client.promptText ?? '', /ruling_policy/);
+    assert.doesNotMatch(client.promptText ?? '', /winnerAgentId/);
     assert.equal(
       events.some(
         (event) =>

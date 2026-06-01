@@ -1,25 +1,32 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import {
-  CogentEngine,
+  CogentClient,
+  type BrowserRuntimeSmokeResult,
   type ModelInfo,
   type ModelSource,
   type ObservabilitySnapshot,
-} from '@noumena-labs/cogentlm';
+  type TokenBatch,
+} from '@noumena-labs/cogentlm-browser';
 import { MetricCard } from './components/MetricCard';
 import {
   buildBenchmarkScenarios,
+  buildBenchmarkBackendProfile,
   buildMixedLoadDefinition,
+  DEFAULT_BENCHMARK_PROMPTS,
   describeRuntimeBackend,
+  ENCODER_DECODER_BENCHMARK_PROMPTS,
+  runtimeOptionsForMixedLoad,
   summarizeMemorySnapshots,
+  type BenchmarkPromptSet,
 } from './lib/helpers';
 import {
   buildBenchmarkTraceReport,
   captureBrowserMemorySnapshot,
   runMixedLoadBenchmark,
-  runObservedQuery,
+  runObservedRequest,
   runScenarioBenchmark,
   supportsConcurrentQueryApi,
-  type ObservedQueryRun,
+  type BenchmarkTokenObserver,
 } from './lib/benchmark-runner';
 import {
   formatBytes,
@@ -37,26 +44,48 @@ import {
   MODEL_REGISTRY,
 } from './lib/model-registry';
 import type {
+  BenchmarkOperation,
   BenchmarkTraceReport,
   GroupResult,
   MemorySnapshot,
   MetricSummary,
   MixedLoadResult,
+  RequestObservability,
   ScenarioResult,
 } from './lib/types';
 
+declare global {
+  interface Window {
+    __cogentBench?: {
+      getEnvironment(): Promise<Record<string, unknown>>;
+      getRuntimeObservability(): ObservabilitySnapshot | null;
+      getBackendObservability(): unknown;
+      getBrowserRuntimeSmoke(): {
+        result: BrowserRuntimeSmokeResult | null;
+        error: string | null;
+      };
+      runBrowserRuntimeSmoke(): Promise<BrowserRuntimeSmokeResult>;
+      getLastReport(): BenchmarkReport | null;
+    };
+  }
+}
+
 interface BenchmarkReport {
-  schema: 'cogent.benchmark.browser.v8';
+  schema: 'cogent.benchmark.browser.v11';
   generatedAt: string;
   model: ModelInfo | null;
   source: { label: string; bytes: number | null };
   settings: {
+    operation: BenchmarkOperation;
     prompt: string;
     tokenCount: number;
     warmupRuns: number;
     measuredRuns: number;
+    emitTokens: boolean;
     runtime: ReturnType<typeof getDefaultRuntimeOptions>;
   };
+  environment: Awaited<ReturnType<typeof inspectBrowserEnvironment>>;
+  backend: ReturnType<typeof buildBenchmarkBackendProfile>;
   observability: ObservabilitySnapshot | null;
   scenarios: ScenarioResult[];
   mixedLoad: MixedLoadResult | null;
@@ -69,8 +98,54 @@ interface BenchmarkReport {
 
 function getDefaultRuntimeOptions() {
   return {
-    nSeqMax: 2,
-    maxCachedSessions: 8,
+    placement: {
+      gpu_layers: 'all' as const,
+    },
+    context: {
+      n_parallel: 1,
+    },
+    cache: {
+      mode: 'live_slot_and_snapshot' as const,
+    },
+  };
+}
+
+async function inspectBrowserEnvironment(): Promise<Record<string, unknown>> {
+  const gpu = navigator.gpu;
+  if (gpu == null) {
+    return {
+      hasNavigatorGpu: false,
+      adapterAvailable: false,
+      crossOriginIsolated: window.crossOriginIsolated,
+    };
+  }
+
+  const adapter = await gpu.requestAdapter();
+  const adapterWithInfo = adapter as (GPUAdapter & {
+    requestAdapterInfo?: () => Promise<{
+      vendor?: string;
+      architecture?: string;
+      device?: string;
+      description?: string;
+    }>;
+  }) | null;
+  const info = adapterWithInfo == null
+    ? null
+    : await adapterWithInfo.requestAdapterInfo?.().catch(() => null);
+  return {
+    hasNavigatorGpu: true,
+    adapterAvailable: adapter != null,
+    crossOriginIsolated: window.crossOriginIsolated,
+    adapterLabel: info?.device ?? info?.description ?? null,
+    adapterVendor: info?.vendor ?? null,
+    adapterArchitecture: info?.architecture ?? null,
+    adapterDescription: info?.description ?? null,
+    adapterInfo: info == null ? null : {
+      vendor: info.vendor,
+      architecture: info.architecture,
+      device: info.device,
+      description: info.description,
+    },
   };
 }
 
@@ -134,7 +209,7 @@ async function fetchImageBytes(source: string): Promise<Uint8Array[]> {
 
 function formatSummary(summary: MetricSummary | null, unit: string = 'ms'): string {
   if (summary == null) return 'n/a';
-  return `${round(summary.meanMs)}${unit} avg / ${round(summary.p99Ms)}${unit} p99`;
+  return `${round(summary.mean)}${unit} avg / ${round(summary.p99)}${unit} p99`;
 }
 
 function formatTps(value: number | null | undefined): string {
@@ -153,8 +228,89 @@ function downloadJson(filename: string, value: unknown): void {
   URL.revokeObjectURL(url);
 }
 
+function logBenchmarkReport(report: BenchmarkReport): void {
+  console.groupCollapsed('[CogentLM benchmark] run complete');
+  console.log('backend profile', report.backend);
+  console.log('runtime config', report.settings.runtime);
+  console.log('summary', report.trace.analysis);
+  console.table(report.trace.rows);
+  console.groupEnd();
+}
+
+const DEFAULT_QUERY_PROMPT = 'Describe how to benchmark browser-hosted inference.';
+const ENCODER_DECODER_QUERY_PROMPT = 'translate English to German: The house is wonderful.';
+const DEFAULT_TOKEN_COUNT = 64;
+const ENCODER_DECODER_TOKEN_COUNT = 32;
+
+function defaultOperationForModel(model: ModelInfo): BenchmarkOperation {
+  const capabilities = model.capabilities;
+  if (capabilities == null) {
+    return model.chatTemplate == null ? 'query' : 'chat';
+  }
+  if (capabilities.supportsEmbeddings && !capabilities.supportsTextGeneration) {
+    return 'embed';
+  }
+  if (capabilities.modelClass === 'encoder_decoder') {
+    return 'query';
+  }
+  return capabilities.hasChatTemplate ? 'chat' : 'query';
+}
+
+function modelSupportsOperation(model: ModelInfo, operation: BenchmarkOperation): boolean {
+  const capabilities = model.capabilities;
+  if (capabilities == null) {
+    return true;
+  }
+  if (operation === 'embed') {
+    return capabilities.supportsEmbeddings;
+  }
+  if (operation === 'chat') {
+    return capabilities.supportsTextGeneration && capabilities.hasChatTemplate;
+  }
+  return capabilities.supportsTextGeneration;
+}
+
+function yesNo(value: boolean | undefined): string {
+  return value == null ? 'unknown' : value ? 'yes' : 'no';
+}
+
+function isEncoderDecoderModel(model: ModelInfo | null): boolean {
+  return model?.capabilities?.modelClass === 'encoder_decoder';
+}
+
+function benchmarkPromptSetForModel(model: ModelInfo | null): BenchmarkPromptSet {
+  return isEncoderDecoderModel(model)
+    ? ENCODER_DECODER_BENCHMARK_PROMPTS
+    : DEFAULT_BENCHMARK_PROMPTS;
+}
+
+function defaultPromptForModel(model: ModelInfo | null): string {
+  return isEncoderDecoderModel(model) ? ENCODER_DECODER_QUERY_PROMPT : DEFAULT_QUERY_PROMPT;
+}
+
+function effectivePromptForModel(model: ModelInfo | null, currentPrompt: string): string {
+  if (currentPrompt === DEFAULT_QUERY_PROMPT || currentPrompt === ENCODER_DECODER_QUERY_PROMPT) {
+    return defaultPromptForModel(model);
+  }
+  return currentPrompt;
+}
+
+function defaultTokenCountForModel(model: ModelInfo | null): number {
+  return isEncoderDecoderModel(model) ? ENCODER_DECODER_TOKEN_COUNT : DEFAULT_TOKEN_COUNT;
+}
+
+function effectiveTokenCountForModel(model: ModelInfo | null, currentTokenCount: number): number {
+  if (
+    currentTokenCount === DEFAULT_TOKEN_COUNT ||
+    currentTokenCount === ENCODER_DECODER_TOKEN_COUNT
+  ) {
+    return defaultTokenCountForModel(model);
+  }
+  return currentTokenCount;
+}
+
 export default function App() {
-  const [engine, setEngine] = useState<CogentEngine | null>(null);
+  const [client, setClient] = useState<CogentClient | null>(null);
   const [status, setStatus] = useState('booting');
   const [isBusy, setIsBusy] = useState(false);
   const [modelType, setModelType] = useState<'registry' | 'url' | 'file'>('registry');
@@ -163,21 +319,12 @@ export default function App() {
   const selectedVariant = getDefaultVariant(selectedModel);
   const [modelUrl, setModelUrl] = useState(getVariantPrimaryUrl(selectedVariant));
   const [projectorUrl, setProjectorUrl] = useState('');
-  const [prompt, setPrompt] = useState('Describe how to benchmark browser-hosted inference.');
-  const [tokenCount, setTokenCount] = useState(64);
+  const [operation, setOperation] = useState<BenchmarkOperation>('chat');
+  const [prompt, setPrompt] = useState(DEFAULT_QUERY_PROMPT);
+  const [tokenCount, setTokenCount] = useState(DEFAULT_TOKEN_COUNT);
   const [warmupRuns, setWarmupRuns] = useState(1);
   const [measuredRuns, setMeasuredRuns] = useState(3);
-  // Three transport modes:
-  //   off    — engine in TOKEN_EMISSION_NONE; nothing crosses to main.
-  //   silent — engine in StreamingBuffer; main drains SAB but onToken is a
-  //            no-op (no DOM work).  This isolates *streaming pipeline*
-  //            cost from *rendering* cost — should match native TPS within
-  //            ~2 % if the architecture is honoring the principle.
-  //   render — engine in StreamingBuffer; main drains SAB and writes
-  //            textContent once per rAF.  Pays the GPU-compositor tax.
-  type StreamMode = 'off' | 'silent' | 'render';
-  const [streamMode, setStreamMode] = useState<StreamMode>('render');
-  const streamTokens = streamMode !== 'off';
+  const [emitTokens, setEmitTokens] = useState(true);
   const [imageSource, setImageSource] = useState('');
   const [imageEnabled, setImageEnabled] = useState(false);
   const [currentModel, setCurrentModel] = useState<ModelInfo | null>(null);
@@ -185,12 +332,19 @@ export default function App() {
   const [observability, setObservability] = useState<ObservabilitySnapshot | null>(null);
   const [response, setResponse] = useState('');
   const [lastRun, setLastRun] = useState<{
+    operation: BenchmarkOperation;
+    outputKind: 'text' | 'embedding';
     wallMs: number;
     ttftMs: number | null;
     tokens: number;
-    tps: number | null;
+    decodeTps: number | null;
+    e2eTps: number | null;
     prefillTokens: number | null;
     prefillTps: number | null;
+    embeddingDimensions: number | null;
+    embeddingPooling: string | null;
+    embeddingNormalized: boolean | null;
+    observability: RequestObservability | null;
   } | null>(null);
   const [lastLoadMs, setLastLoadMs] = useState(0);
   const [sourceInfo, setSourceInfo] = useState<{ label: string; bytes: number } | null>(null);
@@ -198,24 +352,99 @@ export default function App() {
   const [mixedLoadResult, setMixedLoadResult] = useState<MixedLoadResult | null>(null);
   const [memorySnapshots, setMemorySnapshots] = useState<MemorySnapshot[]>([]);
   const [benchmarkReport, setBenchmarkReport] = useState<BenchmarkReport | null>(null);
+  const [browserSmoke, setBrowserSmoke] = useState<BrowserRuntimeSmokeResult | null>(null);
+  const [browserSmokeError, setBrowserSmokeError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const projectorFileInputRef = useRef<HTMLInputElement>(null);
   const loadedSourceKeyRef = useRef<string | null>(null);
   const responseElementRef = useRef<HTMLDivElement>(null);
 
+  const createResponseRenderer = (maxStreams = 1, flushMode: 'frame' | 'immediate' = 'frame') => {
+    let frame = 0;
+    const order: string[] = [];
+    const textByLabel = new Map<string, string>();
+
+    const flush = () => {
+      frame = 0;
+      if (responseElementRef.current == null) {
+        return;
+      }
+      responseElementRef.current.textContent = order
+        .map((label) => {
+          const text = textByLabel.get(label) ?? '';
+          return maxStreams === 1 ? text : `${label}\n${text}`;
+        })
+        .join('\n\n');
+    };
+
+    const schedule = () => {
+      if (flushMode === 'immediate') {
+        flush();
+        return;
+      }
+      if (frame === 0) {
+        frame = window.requestAnimationFrame(flush);
+      }
+    };
+
+    return {
+      reset() {
+        if (frame !== 0) {
+          window.cancelAnimationFrame(frame);
+          frame = 0;
+        }
+        order.length = 0;
+        textByLabel.clear();
+        if (responseElementRef.current != null) {
+          responseElementRef.current.textContent = '';
+        }
+      },
+      start(label: string) {
+        if (!textByLabel.has(label)) {
+          order.push(label);
+        }
+        while (order.length > maxStreams) {
+          const dropped = order.shift();
+          if (dropped != null) {
+            textByLabel.delete(dropped);
+          }
+        }
+        textByLabel.set(label, '');
+        schedule();
+      },
+      append(label: string, batch: Pick<TokenBatch, 'text'>) {
+        textByLabel.set(label, `${textByLabel.get(label) ?? ''}${batch.text}`);
+        schedule();
+      },
+      finish() {
+        if (frame !== 0) {
+          window.cancelAnimationFrame(frame);
+          flush();
+        }
+      },
+    };
+  };
+
+  const runBrowserRuntimeSmoke = async (): Promise<BrowserRuntimeSmokeResult> => {
+    setBrowserSmokeError(null);
+    const result = await CogentClient.browserRuntimeSmoke();
+    setBrowserSmoke(result);
+    return result;
+  };
+
   useEffect(() => {
     let disposed = false;
-    let created: CogentEngine | null = null;
+    let created: CogentClient | null = null;
     let unsubscribe: (() => void) | null = null;
 
     void (async () => {
       try {
-        const nextEngine = await CogentEngine.create();
+        const nextClient = new CogentClient();
         if (disposed) {
-          await nextEngine.close();
+          await nextClient.close();
           return;
         }
-        created = nextEngine;
+        created = nextClient;
         let pendingSnapshot: any = null;
         const updateInterval = setInterval(() => {
           if (pendingSnapshot) {
@@ -225,7 +454,7 @@ export default function App() {
           }
         }, 250); // Steady 4 FPS for metrics to keep main thread clear
 
-        unsubscribe = nextEngine.observability.subscribe((event) => {
+        unsubscribe = nextClient.observability.subscribe((event) => {
           pendingSnapshot = event.snapshot;
         });
 
@@ -235,11 +464,24 @@ export default function App() {
           clearInterval(updateInterval);
           originalUnsubscribe();
         };
-        setEngine(nextEngine);
-        setCurrentModel(nextEngine.models.current());
-        setObservability(nextEngine.observability.current());
-        setInstalledModels(await nextEngine.models.list());
+        setClient(nextClient);
+        setCurrentModel(nextClient.currentLocal());
+        setObservability(nextClient.observability.current());
+        setInstalledModels(await nextClient.listLocal());
         setStatus('idle');
+        void CogentClient.browserRuntimeSmoke()
+          .then((result) => {
+            if (!disposed) {
+              setBrowserSmoke(result);
+              setBrowserSmokeError(null);
+            }
+          })
+          .catch((error) => {
+            if (!disposed) {
+              setBrowserSmoke(null);
+              setBrowserSmokeError(error instanceof Error ? error.message : String(error));
+            }
+          });
       } catch (error) {
         if (disposed) {
           return;
@@ -256,6 +498,26 @@ export default function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    window.__cogentBench = {
+      getEnvironment: inspectBrowserEnvironment,
+      getRuntimeObservability: () => observability,
+      getBackendObservability: () => browserSmoke?.backend ?? observability?.profile ?? null,
+      getBrowserRuntimeSmoke: () => ({
+        result: browserSmoke,
+        error: browserSmokeError,
+      }),
+      runBrowserRuntimeSmoke,
+      getLastReport: () => benchmarkReport,
+    };
+
+    return () => {
+      if (window.__cogentBench?.runBrowserRuntimeSmoke === runBrowserRuntimeSmoke) {
+        delete window.__cogentBench;
+      }
+    };
+  }, [benchmarkReport, observability, browserSmoke, browserSmokeError]);
 
   const projectorOverride = (): string | File | undefined => {
     const file = projectorFileInputRef.current?.files?.[0];
@@ -275,18 +537,18 @@ export default function App() {
     return withProjector(files.length === 1 ? files[0] : files, projector);
   };
 
-  const refreshModels = async (targetEngine: CogentEngine) => {
-    setCurrentModel(targetEngine.models.current());
-    setObservability(targetEngine.observability.current());
-    setInstalledModels(await targetEngine.models.list());
+  const refreshModels = async (targetClient: CogentClient) => {
+    setCurrentModel(targetClient.currentLocal());
+    setObservability(targetClient.observability.current());
+    setInstalledModels(await targetClient.listLocal());
   };
 
-  const loadModelSelection = async (
-    targetEngine: CogentEngine,
+  const addLocalSelection = async (
+    targetClient: CogentClient,
     source: ModelSource
   ): Promise<ModelInfo> => {
     const start = performance.now();
-    const info = await targetEngine.models.load(source, {
+    const info = await targetClient.addLocal(source, {
       observability: 'profile',
       runtime: getDefaultRuntimeOptions(),
       onProgress: (progress) => {
@@ -300,12 +562,23 @@ export default function App() {
     setLastLoadMs(round(performance.now() - start));
     setSourceInfo({ label: sourceLabel(source), bytes: info.bytes });
     loadedSourceKeyRef.current = sourceKey(source);
-    await refreshModels(targetEngine);
+    if (!modelSupportsOperation(info, operation)) {
+      setOperation(defaultOperationForModel(info));
+    }
+    const modelPrompt = effectivePromptForModel(info, prompt);
+    if (modelPrompt !== prompt) {
+      setPrompt(modelPrompt);
+    }
+    const modelTokenCount = effectiveTokenCountForModel(info, tokenCount);
+    if (modelTokenCount !== tokenCount) {
+      setTokenCount(modelTokenCount);
+    }
+    await refreshModels(targetClient);
     return info;
   };
 
   const loadSelectedModel = async () => {
-    if (engine == null) return;
+    if (client == null) return;
     const source = modelSource();
     if (source == null) {
       setStatus('Select a model source first.');
@@ -313,7 +586,7 @@ export default function App() {
     }
     setIsBusy(true);
     try {
-      const info = await loadModelSelection(engine, source);
+      const info = await addLocalSelection(client, source);
       setStatus(info.status === 'ready' ? `loaded ${info.name}` : `${info.name}: ${info.status}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
@@ -323,7 +596,7 @@ export default function App() {
   };
 
   const runQuery = async () => {
-    if (engine == null) return;
+    if (client == null) return;
     setIsBusy(true);
     setResponse('');
     setLastRun(null);
@@ -334,55 +607,74 @@ export default function App() {
         return;
       }
       const nextSourceKey = sourceKey(source);
+      const loadedModel = client.currentLocal();
+      let requestOperation = operation;
+      let requestPrompt = prompt;
+      let requestTokenCount = tokenCount;
       if (
-        engine.models.current() == null ||
-        loadedSourceKeyRef.current !== nextSourceKey
+        loadedModel == null ||
+        loadedModel.status !== 'ready' ||
+        (loadedSourceKeyRef.current != null && loadedSourceKeyRef.current !== nextSourceKey)
       ) {
-        const info = await loadModelSelection(engine, source);
+        const info = await addLocalSelection(client, source);
+        if (!modelSupportsOperation(info, requestOperation)) {
+          requestOperation = defaultOperationForModel(info);
+        }
+        requestPrompt = effectivePromptForModel(info, requestPrompt);
+        requestTokenCount = effectiveTokenCountForModel(info, requestTokenCount);
         setStatus(info.status === 'ready' ? `loaded ${info.name}` : `${info.name}: ${info.status}`);
+      } else if (!modelSupportsOperation(loadedModel, requestOperation)) {
+        requestOperation = defaultOperationForModel(loadedModel);
+        setOperation(requestOperation);
+        requestPrompt = effectivePromptForModel(loadedModel, requestPrompt);
+        requestTokenCount = effectiveTokenCountForModel(loadedModel, requestTokenCount);
+      } else {
+        requestPrompt = effectivePromptForModel(loadedModel, requestPrompt);
+        requestTokenCount = effectiveTokenCountForModel(loadedModel, requestTokenCount);
+      }
+      if (requestPrompt !== prompt) {
+        setPrompt(requestPrompt);
+      }
+      if (requestTokenCount !== tokenCount) {
+        setTokenCount(requestTokenCount);
       }
 
       const image =
-        imageEnabled && imageSource.trim().length > 0
+        requestOperation !== 'embed' && imageEnabled && imageSource.trim().length > 0
           ? await fetchImageBytes(imageSource.trim())
           : undefined;
-      let accumulated = '';
-      const onToken =
-        streamMode === 'render'
-          ? (tokens: string[]) => {
-              for (const chunk of tokens) {
-                accumulated += chunk;
-              }
-              if (responseElementRef.current) {
-                responseElementRef.current.textContent = accumulated;
-              }
-            }
-          : streamMode === 'silent'
-            ? (_tokens: string[]) => {
-                /* silent: SAB drained, no DOM work */
-              }
-            : undefined;
+      const requestEmitTokens = requestOperation !== 'embed' && emitTokens;
+      const queryRenderer = requestEmitTokens ? createResponseRenderer(1, 'frame') : null;
+      queryRenderer?.reset();
+      queryRenderer?.start('response');
+      const onTokenBatch =
+        !requestEmitTokens
+          ? undefined
+          : (batch: TokenBatch) => {
+              queryRenderer?.append('response', batch);
+            };
       try {
-        const run = await runObservedQuery(engine, prompt, {
-          maxTokens: tokenCount,
+        const run = await runObservedRequest(client, requestPrompt, {
+          operation: requestOperation,
+          maxTokens: requestTokenCount,
           session: `query-${Date.now()}`,
           media: image,
-          streamTokens,
-          // streamTokens=false → onToken omitted upstream → engine NONE.
-          onToken,
+          emitTokens: requestEmitTokens,
+          onTokenBatch,
         });
         setResponse(run.output); // Sync React state at the end
-        setObservability(engine.observability.current());
+        setObservability(client.observability.current());
         setLastRun({
+          operation: run.operation,
+          outputKind: run.outputKind,
           wallMs: run.wallMs,
           ttftMs: run.observability?.ttftMs ?? run.ttftMs,
-          tokens: run.observability?.outputTokens ?? run.tokenTimes.length,
-          tps:
-            (run.observability?.decodeMs ?? 0) > 0 &&
-              (run.observability?.outputTokens ?? 0) > 0
-              ? (run.observability!.outputTokens * 1000) /
-              run.observability!.decodeMs
-              : null,
+          tokens:
+            run.outputKind === 'embedding'
+              ? run.embeddingDimensions ?? 0
+              : run.observability?.outputTokens ?? run.tokenTimes.length,
+          decodeTps: run.observability?.decodeTokensPerSecond ?? null,
+          e2eTps: run.observability?.e2eTokensPerSecond ?? null,
           prefillTps:
             (run.observability?.prefillMs ?? 0) >= 0.1 &&
               (run.observability?.prefillTokens ?? 0) >= 1
@@ -390,10 +682,13 @@ export default function App() {
               run.observability!.prefillMs
               : null,
           prefillTokens: run.observability?.prefillTokens ?? null,
+          embeddingDimensions: run.embeddingDimensions,
+          embeddingPooling: run.embeddingPooling,
+          embeddingNormalized: run.embeddingNormalized,
           observability: run.observability,
         });
       } finally {
-        // No cleanup needed for refs
+        queryRenderer?.finish();
       }
       setStatus('idle');
     } catch (error) {
@@ -404,7 +699,7 @@ export default function App() {
   };
 
   const runBenchmark = async () => {
-    if (engine == null) return;
+    if (client == null) return;
     const source = modelSource();
     if (source == null) {
       setStatus('Select a model source first.');
@@ -416,26 +711,66 @@ export default function App() {
     setMixedLoadResult(null);
     setMemorySnapshots([]);
     setBenchmarkReport(null);
+    let benchmarkOperation = operation;
+    const loadedModel = client.currentLocal();
+    let benchmarkPrompt = prompt;
+    let benchmarkTokenCount = tokenCount;
+    if (loadedModel != null && !modelSupportsOperation(loadedModel, benchmarkOperation)) {
+      benchmarkOperation = defaultOperationForModel(loadedModel);
+      setOperation(benchmarkOperation);
+    }
+    let benchmarkEmitTokens = false;
+    let benchmarkRenderer: ReturnType<typeof createResponseRenderer> | null = null;
+    let benchmarkTokenObserver: BenchmarkTokenObserver | undefined;
 
     try {
-      const info = await loadModelSelection(engine, source);
+      const info = await addLocalSelection(client, source);
+      if (!modelSupportsOperation(info, benchmarkOperation)) {
+        benchmarkOperation = defaultOperationForModel(info);
+      }
+      benchmarkPrompt = effectivePromptForModel(info, benchmarkPrompt);
+      benchmarkTokenCount = effectiveTokenCountForModel(info, benchmarkTokenCount);
+      if (benchmarkPrompt !== prompt) {
+        setPrompt(benchmarkPrompt);
+      }
+      if (benchmarkTokenCount !== tokenCount) {
+        setTokenCount(benchmarkTokenCount);
+      }
+      const promptSet = benchmarkPromptSetForModel(info);
+      benchmarkEmitTokens = benchmarkOperation !== 'embed' && emitTokens;
+      benchmarkRenderer = benchmarkEmitTokens ? createResponseRenderer(2, 'frame') : null;
+      benchmarkTokenObserver =
+        benchmarkEmitTokens
+          ? {
+              onRunStart: (label) => {
+                benchmarkRenderer?.start(label);
+              },
+              onTokenBatch: (label, batch) => {
+                benchmarkRenderer?.append(label, batch);
+              },
+            }
+          : undefined;
+      benchmarkRenderer?.reset();
       const snapshots: MemorySnapshot[] = [];
       snapshots.push(await captureBrowserMemorySnapshot('before-benchmark', true));
 
-      const scenarios = buildBenchmarkScenarios(prompt, tokenCount);
+      const defaultRuntime = getDefaultRuntimeOptions();
+      const scenarios = buildBenchmarkScenarios(benchmarkPrompt, benchmarkTokenCount, promptSet);
       const results: ScenarioResult[] = [];
       for (const scenario of scenarios) {
         results.push(
           await runScenarioBenchmark(
-            engine,
+            client,
+            benchmarkOperation,
             scenario,
             source,
             warmupRuns,
             measuredRuns,
-            getDefaultRuntimeOptions(),
+            defaultRuntime,
             setStatus,
             true,
-            streamTokens
+            benchmarkEmitTokens,
+            benchmarkTokenObserver
           )
         );
       }
@@ -443,24 +778,39 @@ export default function App() {
       snapshots.push(await captureBrowserMemorySnapshot('after-scenarios', true));
 
       let mixed: MixedLoadResult | null = null;
-      if (supportsConcurrentQueryApi(engine)) {
+      if (
+        benchmarkOperation !== 'embed' &&
+        info.capabilities?.modelClass !== 'encoder_decoder' &&
+        supportsConcurrentQueryApi(client)
+      ) {
+        const mixedDefinition = buildMixedLoadDefinition(benchmarkOperation, promptSet);
         mixed = await runMixedLoadBenchmark(
-          engine,
-          buildMixedLoadDefinition(),
+          client,
+          benchmarkOperation,
+          mixedDefinition,
           source,
           warmupRuns,
           measuredRuns,
-          getDefaultRuntimeOptions(),
+          runtimeOptionsForMixedLoad(defaultRuntime, mixedDefinition.concurrency),
           setStatus,
-          true,
-          streamTokens
+          false,
+          benchmarkEmitTokens,
+          benchmarkTokenObserver
         );
         snapshots.push(await captureBrowserMemorySnapshot('after-mixed-load', true));
       }
+      benchmarkRenderer?.finish();
       const trace = buildBenchmarkTraceReport(results, mixed);
+      const environment = await inspectBrowserEnvironment();
+      const observabilitySnapshot = client.observability.current();
+      const backend = buildBenchmarkBackendProfile(
+        environment,
+        browserSmoke?.backend ?? observabilitySnapshot.profile ?? null,
+        defaultRuntime.placement.gpu_layers
+      );
 
       const report: BenchmarkReport = {
-        schema: 'cogent.benchmark.browser.v8',
+        schema: 'cogent.benchmark.browser.v11',
         generatedAt: new Date().toISOString(),
         model: info,
         source: {
@@ -468,13 +818,17 @@ export default function App() {
           bytes: info.bytes,
         },
         settings: {
-          prompt,
-          tokenCount,
+          operation: benchmarkOperation,
+          prompt: benchmarkPrompt,
+          tokenCount: benchmarkTokenCount,
           warmupRuns,
           measuredRuns,
-          runtime: getDefaultRuntimeOptions(),
+          emitTokens: benchmarkEmitTokens,
+          runtime: defaultRuntime,
         },
-        observability: engine.observability.current(),
+        environment,
+        backend,
+        observability: observabilitySnapshot,
         scenarios: results,
         mixedLoad: mixed,
         memory: {
@@ -488,10 +842,12 @@ export default function App() {
       setMixedLoadResult(mixed);
       setMemorySnapshots(snapshots);
       setBenchmarkReport(report);
+      logBenchmarkReport(report);
       setStatus('benchmark complete');
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
+      benchmarkRenderer?.finish();
       setIsBusy(false);
     }
   };
@@ -513,11 +869,13 @@ export default function App() {
       <h3>{title}</h3>
       <div className="metric-group-title">Latency (User Experience)</div>
       <div className="metric-grid">
+        <MetricCard label="Operation" value={group.runs[0]?.operation ?? operation} />
         <MetricCard label="TTFT" value={formatSummary(group.summary.runtime.ttftMs)} />
         <MetricCard label="ITL Avg" value={formatSummary(group.summary.runtime.itlAvgMs)} />
         <MetricCard label="ITL P99" value={formatSummary(group.summary.runtime.itlP99Ms)} />
+        <MetricCard label="E2E TPS" value={formatSummary(group.summary.runtime.e2eTps, 'tok/s')} />
         <MetricCard label="Prefill TPS" value={formatSummary(group.summary.runtime.prefillTps, 'tok/s')} />
-        <MetricCard label="Decode TPS" value={formatSummary(group.summary.runtime.tps, 'tok/s')} />
+        <MetricCard label="Decode TPS" value={formatSummary(group.summary.runtime.decodeTps, 'tok/s')} />
       </div>
 
       <div className="metric-group-title">Compute Profile</div>
@@ -542,6 +900,18 @@ export default function App() {
           label="Output Tokens"
           value={group.summary.runtime.avgOutputTokens ?? 'n/a'}
         />
+        {group.runs[0]?.outputKind === 'embedding' ? (
+          <>
+            <MetricCard
+              label="Dimensions"
+              value={group.runs[0].embeddingDimensions ?? 'n/a'}
+            />
+            <MetricCard
+              label="Pooling"
+              value={group.runs[0].embeddingPooling ?? 'n/a'}
+            />
+          </>
+        ) : null}
       </div>
 
       <div className="metric-group-title">Native Pipeline</div>
@@ -562,6 +932,23 @@ export default function App() {
           label="Cache Hits"
           value={group.summary.runtime.avgCacheHits ?? 'n/a'}
         />
+        <MetricCard
+          label="Cache Reuse"
+          value={
+            group.cacheReuse.expected
+              ? group.cacheReuse.invalidRunLabels.length === 0
+                ? `valid (${group.cacheReuse.expectedSource})`
+                : `invalid (${group.cacheReuse.invalidRunLabels.length})`
+              : 'n/a'
+          }
+          tone={
+            group.cacheReuse.expected
+              ? group.cacheReuse.invalidRunLabels.length === 0
+                ? 'ok'
+                : 'warn'
+              : 'default'
+          }
+        />
       </div>
 
       {group.runs[0]?.outputPreview ? (
@@ -574,11 +961,13 @@ export default function App() {
     <div className="shell">
       <header className="hero">
         <div className="eyebrow">Browser Benchmark</div>
-        <h1>CogentEngine Minimal API</h1>
+        <h1>CogentClient Minimal API</h1>
         <p>
-          Load with <code>engine.models.load()</code>, inspect with{' '}
-          <code>engine.models.current()</code>, query with <code>engine.chat()</code>, and
-          benchmark with the same minimal surface.
+          Load with <code>client.addLocal()</code>, inspect with{' '}
+          <code>client.currentLocal()</code>, run with <code>client.chat()</code>,{' '}
+          <code>client.query()</code>, or <code>client.embed()</code>, consume{' '}
+          <code>.response</code> and <code>.tokens</code>, and benchmark with
+          the same minimal surface.
         </p>
       </header>
 
@@ -661,7 +1050,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={loadSelectedModel}
-                  disabled={isBusy || engine == null}
+                  disabled={isBusy || client == null}
                 >
                   Load Model
                 </button>
@@ -671,9 +1060,35 @@ export default function App() {
 
           <section className="section">
             <div className="section-header">
-              <h2>Query</h2>
+              <h2>Request</h2>
             </div>
             <div className="field-grid">
+              <div className="row">
+                <label>Operation</label>
+                <div className="toggle-group">
+                  <button
+                    type="button"
+                    className={`toggle-item ${operation === 'chat' ? 'active' : ''}`}
+                    onClick={() => setOperation('chat')}
+                  >
+                    Chat
+                  </button>
+                  <button
+                    type="button"
+                    className={`toggle-item ${operation === 'query' ? 'active' : ''}`}
+                    onClick={() => setOperation('query')}
+                  >
+                    Query
+                  </button>
+                  <button
+                    type="button"
+                    className={`toggle-item ${operation === 'embed' ? 'active' : ''}`}
+                    onClick={() => setOperation('embed')}
+                  >
+                    Embed
+                  </button>
+                </div>
+              </div>
               <div className="row">
                 <label>Prompt</label>
                 <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} />
@@ -683,22 +1098,25 @@ export default function App() {
                 <input
                   type="number"
                   value={tokenCount}
+                  disabled={operation === 'embed'}
                   onChange={(event) =>
                     setTokenCount(Number.parseInt(event.target.value, 10) || 0)
                   }
                 />
               </div>
-              <div className="row">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={imageEnabled}
-                    onChange={(event) => setImageEnabled(event.target.checked)}
-                  />{' '}
-                  Attach Image
-                </label>
-              </div>
-              {imageEnabled ? (
+              {operation !== 'embed' ? (
+                <div className="row">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={imageEnabled}
+                      onChange={(event) => setImageEnabled(event.target.checked)}
+                    />{' '}
+                    Attach Image
+                  </label>
+                </div>
+              ) : null}
+              {operation !== 'embed' && imageEnabled ? (
                 <div className="row">
                   <label>Image URL or File</label>
                   <div className="field-grid">
@@ -720,9 +1138,9 @@ export default function App() {
                 <button
                   type="button"
                   onClick={runQuery}
-                  disabled={isBusy || engine == null}
+                  disabled={isBusy || client == null}
                 >
-                  Run Query
+                  Run Request
                 </button>
               </div>
             </div>
@@ -759,33 +1177,25 @@ export default function App() {
                   <input value={observability?.mode ?? 'off'} readOnly />
                 </div>
                 <div className="row">
-                  <label title="Off = engine NONE (no emission). Silent = engine emits to SAB, main drains, no DOM work (isolates pipeline cost from render cost). Render = engine emits, main writes textContent once per rAF (pays compositor tax).">
-                    Stream Tokens
+                  <label title="Off disables native token emission. On emits visible token chunks.">
+                    Token Emission
                   </label>
                   <div className="toggle-group">
                     <button
                       type="button"
-                      className={`toggle-item ${streamMode === 'off' ? 'active' : ''}`}
-                      onClick={() => setStreamMode('off')}
-                      title="Off — NONE (native baseline)"
+                      className={`toggle-item ${!emitTokens ? 'active' : ''}`}
+                      onClick={() => setEmitTokens(false)}
+                      title="Off - native NONE"
                     >
                       Off
                     </button>
                     <button
                       type="button"
-                      className={`toggle-item ${streamMode === 'silent' ? 'active' : ''}`}
-                      onClick={() => setStreamMode('silent')}
-                      title="On — silent (pipeline only)"
+                      className={`toggle-item ${emitTokens ? 'active' : ''}`}
+                      onClick={() => setEmitTokens(true)}
+                      title="On - render emitted token chunks"
                     >
-                      Silent
-                    </button>
-                    <button
-                      type="button"
-                      className={`toggle-item ${streamMode === 'render' ? 'active' : ''}`}
-                      onClick={() => setStreamMode('render')}
-                      title="On — rendered (with DOM)"
-                    >
-                      Render
+                      On
                     </button>
                   </div>
                 </div>
@@ -801,7 +1211,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={runBenchmark}
-                  disabled={isBusy || engine == null}
+                  disabled={isBusy || client == null}
                 >
                   Run Benchmark
                 </button>
@@ -836,6 +1246,19 @@ export default function App() {
                 tone={currentModel?.loaded ? 'ok' : 'warn'}
               />
               <MetricCard label="Status" value={currentModel?.status ?? 'none'} />
+              <MetricCard label="Model Class" value={currentModel?.capabilities?.modelClass ?? 'unknown'} />
+              <MetricCard
+                label="Text"
+                value={yesNo(currentModel?.capabilities?.supportsTextGeneration)}
+              />
+              <MetricCard
+                label="Embeddings"
+                value={yesNo(currentModel?.capabilities?.supportsEmbeddings)}
+              />
+              <MetricCard
+                label="Pooling"
+                value={currentModel?.capabilities?.embedding?.pooling ?? 'n/a'}
+              />
               <MetricCard label="Installed" value={installedModels.length} />
               <MetricCard label="Load Time" value={formatMs(lastLoadMs)} />
               <MetricCard label="Model Bytes" value={formatBytes(sourceInfo?.bytes ?? null)} />
@@ -845,11 +1268,21 @@ export default function App() {
               <MetricCard
                 label="Current Decode TPS"
                 value={
-                  lastRun?.tps != null
-                    ? formatTps(lastRun.tps)
-                    : observability?.runtime?.tokensPerSecond == null
+                  lastRun?.decodeTps != null
+                    ? formatTps(lastRun.decodeTps)
+                    : observability?.runtime?.decodeTokensPerSecond == null
                       ? 'n/a'
-                      : round(observability.runtime.tokensPerSecond)
+                      : round(observability.runtime.decodeTokensPerSecond)
+                }
+              />
+              <MetricCard
+                label="Current E2E TPS"
+                value={
+                  lastRun?.e2eTps != null
+                    ? formatTps(lastRun.e2eTps)
+                    : observability?.runtime?.e2eTokensPerSecond == null
+                      ? 'n/a'
+                      : round(observability.runtime.e2eTokensPerSecond)
                 }
               />
               <MetricCard
@@ -866,6 +1299,44 @@ export default function App() {
                 label="Backend"
                 value={describeRuntimeBackend(observability?.profile)}
               />
+              <MetricCard
+                label="Rust Engine"
+                value={
+                  browserSmokeError ??
+                  (browserSmoke == null
+                    ? 'pending'
+                    : browserSmoke.rustEngine.available
+                      ? `abi ${browserSmoke.rustEngine.abiVersion}`
+                      : browserSmoke.rustEngine.error ?? 'unavailable')
+                }
+                tone={browserSmoke?.rustEngine.available ? 'ok' : browserSmokeError ? 'warn' : undefined}
+              />
+              <MetricCard
+                label="Rust GGUF Ingest"
+                value={
+                  browserSmokeError ??
+                  (browserSmoke == null
+                    ? 'pending'
+                    : browserSmoke.ggufIngest.available
+                      ? `ready (${browserSmoke.ggufIngest.plannedShardCount} shards)`
+                      : browserSmoke.ggufIngest.error ?? 'unavailable')
+                }
+                tone={browserSmoke?.ggufIngest.available ? 'ok' : browserSmokeError ? 'warn' : undefined}
+              />
+              <MetricCard
+                label="WebGPU Smoke"
+                value={
+                  browserSmokeError ??
+                  (browserSmoke == null
+                    ? 'pending'
+                    : browserSmoke.webgpuReady
+                      ? `ready (${browserSmoke.backend?.webgpuDeviceCount ?? 0})`
+                      : browserSmoke.backend?.webgpuCompiled
+                        ? 'compiled, unavailable'
+                        : 'not compiled')
+                }
+                tone={browserSmoke?.webgpuReady ? 'ok' : browserSmokeError ? 'warn' : undefined}
+              />
             </div>
           </section>
 
@@ -878,13 +1349,28 @@ export default function App() {
                 <MetricCard label="Last Run" value="No query yet" />
               ) : (
                 <>
+                  <MetricCard label="Operation" value={lastRun.operation} />
                   <MetricCard label="Latency" value={formatMs(lastRun.wallMs)} />
                   <MetricCard
                     label="TTFT"
                     value={lastRun.ttftMs == null ? 'n/a' : formatMs(lastRun.ttftMs)}
                   />
-                  <MetricCard label="Tokens" value={lastRun.tokens || 'n/a'} />
-                  <MetricCard label="TPS" value={lastRun.tps == null ? 'n/a' : formatTps(lastRun.tps)} />
+                  {lastRun.outputKind === 'embedding' ? (
+                    <>
+                      <MetricCard label="Dimensions" value={lastRun.embeddingDimensions ?? 'n/a'} />
+                      <MetricCard label="Pooling" value={lastRun.embeddingPooling ?? 'n/a'} />
+                      <MetricCard
+                        label="Normalized"
+                        value={lastRun.embeddingNormalized == null ? 'n/a' : yesNo(lastRun.embeddingNormalized)}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <MetricCard label="Tokens" value={lastRun.tokens || 'n/a'} />
+                      <MetricCard label="Decode TPS" value={lastRun.decodeTps == null ? 'n/a' : formatTps(lastRun.decodeTps)} />
+                      <MetricCard label="E2E TPS" value={lastRun.e2eTps == null ? 'n/a' : formatTps(lastRun.e2eTps)} />
+                    </>
+                  )}
                   <MetricCard label="Prefill TPS" value={lastRun.prefillTps == null ? 'n/a' : formatTps(lastRun.prefillTps)} />
                   {lastRun.observability && (
                     <>
@@ -909,7 +1395,7 @@ export default function App() {
               style={{ marginTop: '16px' }}
               ref={responseElementRef}
             >
-              {response || (isBusy ? 'Generating response...' : 'Ready for query.')}
+              {response || (isBusy ? 'Running request...' : 'Ready for request.')}
             </div>
           </section>
 
@@ -920,7 +1406,7 @@ export default function App() {
             {scenarioResults.length === 0 && mixedLoadResult == null ? (
               <p className="hint">
                 Run the benchmark to capture SISO, SILO, LISO, LILO, mixed-load, and memory
-                snapshots with the minimal engine API.
+                snapshots with the minimal client API.
               </p>
             ) : (
               <div className="benchmark-results">
@@ -942,7 +1428,7 @@ export default function App() {
                     </div>
                     {renderGroup('Cold Prompt', scenario.coldPrompt)}
                     {renderGroup('Hot Fresh Context', scenario.hotFreshContext)}
-                    {renderGroup('Hot Reused Context', scenario.hotReuseContext)}
+                    {renderGroup('Repeated Prompt', scenario.repeatedPrompt)}
                   </div>
                 ))}
 
@@ -1008,20 +1494,27 @@ export default function App() {
                       <MetricCard label="Raw Runs" value={benchmarkReport.trace.runCount} />
                       <MetricCard
                         label="Trace TTFT"
-                        value={formatSummary(benchmarkReport.trace.analysis.nativeTtftMs)}
+                        value={formatSummary(benchmarkReport.trace.analysis.ttftMs)}
                       />
                       <MetricCard
                         label="Trace Mean ITL"
-                        value={formatSummary(benchmarkReport.trace.analysis.nativeMeanItlMs)}
+                        value={formatSummary(benchmarkReport.trace.analysis.itlAvgMs)}
                       />
                       <MetricCard
                         label="Trace Tail ITL"
-                        value={formatSummary(benchmarkReport.trace.analysis.nativeTailItlMs)}
+                        value={formatSummary(benchmarkReport.trace.analysis.itlP99Ms)}
                       />
                       <MetricCard
                         label="Trace Decode TPS"
                         value={formatSummary(
-                          benchmarkReport.trace.analysis.nativeDecodeTokensPerSecond,
+                          benchmarkReport.trace.analysis.decodeTps,
+                          'tok/s'
+                        )}
+                      />
+                      <MetricCard
+                        label="Trace E2E TPS"
+                        value={formatSummary(
+                          benchmarkReport.trace.analysis.e2eTps,
                           'tok/s'
                         )}
                       />

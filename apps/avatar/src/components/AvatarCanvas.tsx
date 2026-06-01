@@ -9,7 +9,7 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import { useEffect, useRef, useSyncExternalStore } from 'react';
-import type { CharacterEventBus } from 'cogentlm/character';
+import type { CharacterEventBus } from '@noumena-labs/cogentlm-browser/character';
 import { createScene, type SceneHandle } from '../scene/scene';
 import { loadAvatar, type LoadedAvatar } from '../scene/vrm-loader';
 import { ThreeVRMBinding } from '../bindings/three-vrm-binding';
@@ -131,17 +131,17 @@ export function AvatarCanvas({
   }, [bubbleActions, bubblePending, bubbleText]);
 
   useEffect(() => {
-    let streamingText = '';
+    let liveText = '';
     const off = bus.onAny((event) => {
       if (event.kind === 'prose') {
-        streamingText += event.text;
+        liveText += event.text;
         bubbleRef.current?.setContent(
-          streamingText,
+          liveText,
           true,
           bubbleActionsRef.current
         );
       } else if (event.kind === 'turn-start') {
-        streamingText = '';
+        liveText = '';
         bubbleRef.current?.setContent('', true, []);
       }
     });

@@ -1,4 +1,4 @@
-import type { ChatMessage, CogentEngine } from '@noumena-labs/cogentlm';
+import type { ChatMessage, CogentClient } from '@noumena-labs/cogentlm-browser';
 
 export const DRAWING_COLORS = ['#111827', '#ffffff', '#ef4444', '#f97316', '#facc15', '#22c55e', '#38bdf8', '#8b5cf6'] as const;
 export const HECKLE_VOICES = [
@@ -114,7 +114,7 @@ export async function loadDrawingDirectorConfig(url: string): Promise<DrawingDir
 
 export class DrawingDirector {
   public constructor(
-    private readonly engine: CogentEngine,
+    private readonly client: CogentClient,
     private readonly config: DrawingDirectorConfig
   ) { }
 
@@ -127,14 +127,15 @@ export class DrawingDirector {
     ];
 
     const perceptionStarted = performance.now();
-    const perceptionRawText = await this.engine.chat(
+    const perceptionResult = await this.client.chat(
       { messages: perceptionMessages, media: [args.capture.bytes] },
       {
         session: `proactive-ui:${this.config.id}:perception-v1`,
         maxTokens: args.capture.preset === 'turbo' ? 96 : 128,
         signal: args.signal,
       }
-    );
+    ).response;
+    const perceptionRawText = perceptionResult.text;
     const perceptionMs = Math.round(performance.now() - perceptionStarted);
     const perception = parsePerceptionResponse(perceptionRawText, this.config.policy, args.state);
 
@@ -143,14 +144,15 @@ export class DrawingDirector {
     const heckleSession = `proactive-ui:${this.config.id}:heckle:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     const heckleStarted = performance.now();
-    let heckleRawText = await this.engine.chat(
+    const heckleResult = await this.client.chat(
       { messages: heckleMessages },
       {
         session: heckleSession,
         maxTokens: 48,
         signal: args.signal,
       }
-    );
+    ).response;
+    let heckleRawText = heckleResult.text;
     let heckleMs = Math.round(performance.now() - heckleStarted);
     let heckle = parseHeckleResponse(heckleRawText, this.config.policy);
     let hecklePromptPreview = renderMessagesPreview(heckleMessages);
@@ -163,15 +165,16 @@ export class DrawingDirector {
       const retryMessages = buildHeckleMessages(this.config, perception, args.state, retryExemplars);
       const retrySession = `proactive-ui:${this.config.id}:heckle-retry:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const retryStarted = performance.now();
-      const retryRawText = await this.engine.chat(
+      const retryResult = await this.client.chat(
         { messages: retryMessages },
         {
           session: retrySession,
           maxTokens: 48,
           signal: args.signal,
         }
-      );
+      ).response;
       heckleMs += Math.round(performance.now() - retryStarted);
+      const retryRawText = retryResult.text;
       heckle = parseHeckleResponse(retryRawText, this.config.policy);
       heckleRawText = `${heckleRawText.trim()}\n\n--- retry ---\n${retryRawText.trim()}`;
       hecklePromptPreview = `${hecklePromptPreview}\n\n--- retry messages ---\n${renderMessagesPreview(retryMessages)}`;

@@ -1,12 +1,12 @@
 # apps/avatar
 
 Small React + three.js high-fantasy avatar demo showing how to pair
-`CogentEngine` with `cogentlm/character` and a VRM character.
+`CogentClient` with `@noumena-labs/cogentlm-browser/character` and a VRM character.
 
 The app keeps responsibilities split cleanly:
 
 - `character.json` defines persona, actions, and memory
-- the app chooses the model URL and owns engine startup
+- the app chooses the model URL and owns client startup
 - the app resolves `avatar.vrm` and animation clips by folder convention
 - the app renders the fantasy stage, manual action controls, prompt chips, and procedural magic effects
 
@@ -92,28 +92,29 @@ Procedural fantasy effects:
 `src/App.tsx` uses the public helper:
 
 ```ts
+const client = new CogentClient();
 const { character, config } = await createCharacterFromConfigUrl({
   configUrl: args.characterUrl,
-  engine,
+  client,
   bus: new CharacterEventBus(),
 });
 ```
 
 The app still owns:
 
-- engine creation
+- client creation
 - model download / init
 - render asset validation
 - scene bindings
 
 ## character.json notes
 
-Aria-specific style rules now live in `persona.notes`, not in the engine's
+Aria-specific style rules now live in `persona.notes`, not in the client's
 shared prompt renderer. That is the intended authoring pattern for new
 characters too.
 
 Use `persona.anchorExamples` for durable steering and `persona.dialogExamples`
 for conversational flow examples.
 
-See `packages/cogentlm/docs/character-harness.md` for the full harness API
+See `packages/cogentlm-browser/docs/character-harness.md` for the full harness API
 and config shape.

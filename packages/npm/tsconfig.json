@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "declaration": true,
+    "declarationDir": "../../.build/artifacts/npm/cogentlm-browser/dist/types",
+    "outDir": "../../.build/artifacts/npm/cogentlm-browser/dist/esm",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "removeComments": false
+  },
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "../../.build",
+    "build",
+    "dist",
+    "src/**/*.test.ts"
+  ]
+}

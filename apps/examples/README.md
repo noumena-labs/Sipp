@@ -1,6 +1,6 @@
-# Cogent Engine Examples
+# CogentClient Examples
 
-This directory contains minimal, developer-centric examples for the `cogentlm` library.
+This directory contains minimal, developer-centric examples for the `cogentlm-browser` library.
 
 ## Getting Started
 
@@ -19,10 +19,12 @@ This directory contains minimal, developer-centric examples for the `cogentlm` l
 
 ## Included Examples
 
-- **Basic Chat**: Simple text-to-text streaming interface.
+- **Basic Chat**: Simple chat interface with visible token emission.
 - **Multimodal Vision**: Guide on how to use vision-language models with `Uint8Array` media.
 - **Structured Output**: Using GBNF grammars to extract typed JSON data.
 - **Observability**: Real-time performance monitoring (Tokens/sec, TTFT, etc.).
+- **Query**: Raw prompt completion through `client.query()`, including encoder-decoder models and the run-handle response API.
+- **Embeddings**: Vector extraction through `client.embed().response` for embedding-capable models.
 
 ## Important Note: COOP/COEP
-Cogent Engine requires `SharedArrayBuffer` for multi-threaded WASM execution. The included `vite.config.ts` is configured with the necessary `Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy` headers.
+CogentClient requires `SharedArrayBuffer` for multi-threaded WASM execution. The included `vite.config.ts` is configured with the necessary `Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy` headers.
