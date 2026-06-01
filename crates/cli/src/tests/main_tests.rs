@@ -24,10 +24,3 @@ fn stats_accepts_basic_mode() {
 
     assert_eq!(args.stats, super::CliStatsMode::Basic);
 }
-
-#[test]
-fn stats_accepts_debug_mode() {
-    let args = Args::parse_from(["cogentlm", "model.gguf", "prompt", "--stats", "debug"]);
-
-    assert_eq!(args.stats, super::CliStatsMode::Debug);
-}

@@ -81,7 +81,6 @@ enum CliStatsMode {
     Off,
     Basic,
     Profile,
-    Debug,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
@@ -111,7 +110,7 @@ impl CliStatsMode {
         match self {
             Self::Off => StatsMode::Off,
             Self::Basic => StatsMode::Basic,
-            Self::Profile | Self::Debug => StatsMode::Profile,
+            Self::Profile => StatsMode::Profile,
         }
     }
 }
@@ -245,129 +244,13 @@ fn print_stats(mode: CliStatsMode, stats: RuntimeObservabilityMetrics) -> io::Re
         stats.decode_ms,
     )?;
 
-    if matches!(mode, CliStatsMode::Profile | CliStatsMode::Debug) {
+    if mode == CliStatsMode::Profile {
         write_optional_ms(&mut stderr, "backend_ms", stats.native_gpu_ms)?;
         write_optional_ms(&mut stderr, "sync_ms", stats.native_sync_ms)?;
         write_optional_ms(&mut stderr, "engine_overhead_ms", stats.native_logic_ms)?;
     }
 
-    if mode == CliStatsMode::Debug {
-        print_debug_metrics(&mut stderr, stats)?;
-    }
-
     Ok(())
-}
-
-fn print_debug_metrics(
-    writer: &mut impl Write,
-    stats: RuntimeObservabilityMetrics,
-) -> io::Result<()> {
-    writeln!(
-        writer,
-        "  debug_metrics_scheduler_ticks: {}",
-        stats.debug_metrics_scheduler_ticks
-    )?;
-    writeln!(
-        writer,
-        "  debug_metrics_decode_ticks: {}",
-        stats.debug_metrics_decode_ticks
-    )?;
-    writeln!(
-        writer,
-        "  debug_metrics_prefill_ticks: {}",
-        stats.debug_metrics_prefill_ticks
-    )?;
-    writeln!(
-        writer,
-        "  debug_metrics_backend_sampler_attach_attempts: {}",
-        stats.debug_metrics_backend_sampler_attach_attempts
-    )?;
-    writeln!(
-        writer,
-        "  debug_metrics_backend_sampler_attach_failures: {}",
-        stats.debug_metrics_backend_sampler_attach_failures
-    )?;
-    write_metric_ms(
-        writer,
-        "debug_metrics_admit_ms",
-        stats.debug_metrics_admit_ms,
-    )?;
-    write_metric_ms(
-        writer,
-        "debug_metrics_normalize_ms",
-        stats.debug_metrics_normalize_ms,
-    )?;
-    write_metric_ms(
-        writer,
-        "debug_metrics_backend_sampler_attach_ms",
-        stats.debug_metrics_backend_sampler_attach_ms,
-    )?;
-    write_metric_ms(
-        writer,
-        "debug_metrics_select_slots_ms",
-        stats.debug_metrics_select_slots_ms,
-    )?;
-    write_metric_ms(writer, "debug_metrics_plan_ms", stats.debug_metrics_plan_ms)?;
-    write_metric_ms(
-        writer,
-        "debug_metrics_batch_build_ms",
-        stats.debug_metrics_batch_build_ms,
-    )?;
-    write_metric_ms(
-        writer,
-        "debug_metrics_llama_decode_ms",
-        stats.debug_metrics_llama_decode_ms,
-    )?;
-    write_metric_ms(
-        writer,
-        "debug_metrics_llama_sync_ms",
-        stats.debug_metrics_llama_sync_ms,
-    )?;
-    write_metric_ms(
-        writer,
-        "debug_metrics_apply_bookkeeping_ms",
-        stats.debug_metrics_apply_bookkeeping_ms,
-    )?;
-    write_metric_ms(
-        writer,
-        "debug_metrics_apply_decode_results_ms",
-        stats.debug_metrics_apply_decode_results_ms,
-    )?;
-    write_metric_ms(
-        writer,
-        "debug_metrics_sample_ms",
-        stats.debug_metrics_sample_ms,
-    )?;
-    write_metric_ms(
-        writer,
-        "debug_metrics_token_piece_ms",
-        stats.debug_metrics_token_piece_ms,
-    )?;
-    write_metric_ms(writer, "debug_metrics_emit_ms", stats.debug_metrics_emit_ms)?;
-    write_metric_ms(
-        writer,
-        "debug_metrics_prefix_queue_ms",
-        stats.debug_metrics_prefix_queue_ms,
-    )?;
-    write_metric_ms(
-        writer,
-        "debug_metrics_finalize_ms",
-        stats.debug_metrics_finalize_ms,
-    )?;
-    write_metric_ms(
-        writer,
-        "debug_metrics_commit_observability_ms",
-        stats.debug_metrics_commit_observability_ms,
-    )?;
-    write_metric_ms(
-        writer,
-        "debug_metrics_post_decode_ms",
-        stats.debug_metrics_post_decode_ms,
-    )
-}
-
-fn write_metric_ms(writer: &mut impl Write, label: &str, value: f64) -> io::Result<()> {
-    writeln!(writer, "  {label}: {value:.2}")
 }
 
 fn write_optional_ms(writer: &mut impl Write, label: &str, value: f64) -> io::Result<()> {
