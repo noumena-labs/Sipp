@@ -39,6 +39,37 @@ test('SharedTokenRingReader drains native token records', () => {
   ]);
 });
 
+test('SharedTokenRingReader decodes shared payloads through normal array buffers', () => {
+  const OriginalTextDecoder = globalThis.TextDecoder;
+  class BrowserStrictTextDecoder extends OriginalTextDecoder {
+    public override decode(
+      input?: Parameters<TextDecoder['decode']>[0],
+      options?: TextDecodeOptions
+    ): string {
+      if (
+        input instanceof Uint8Array &&
+        typeof SharedArrayBuffer !== 'undefined' &&
+        input.buffer instanceof SharedArrayBuffer
+      ) {
+        throw new TypeError('Shared payload view passed to TextDecoder');
+      }
+      return super.decode(input, options);
+    }
+  }
+
+  globalThis.TextDecoder = BrowserStrictTextDecoder;
+  try {
+    const ring = createTestRing(128);
+    const reader = new SharedTokenRingReader(ring.descriptor);
+
+    writeRecord(ring, 9, 0, 1, 'shared');
+
+    assert.equal(collectRecords(reader)[0].text, 'shared');
+  } finally {
+    globalThis.TextDecoder = OriginalTextDecoder;
+  }
+});
+
 test('SharedTokenRingReader drains records that wrap the body', () => {
   const ring = createTestRing(40);
   const reader = new SharedTokenRingReader(ring.descriptor);

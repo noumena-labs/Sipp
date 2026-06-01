@@ -25,6 +25,7 @@ export class SharedTokenRingReader {
   private readonly body: Uint8Array;
   private readonly isShared: boolean;
   private readonly decoder = new TextDecoder('utf-8', { fatal: false });
+  private payloadScratch = new Uint8Array(0);
   private lastDropCount = 0;
 
   public constructor(descriptor: SharedTokenRingDescriptor) {
@@ -119,11 +120,31 @@ export class SharedTokenRingReader {
     const capacity = this.body.byteLength;
     const index = positiveModulo(offset, capacity);
     const tail = capacity - index;
+    if (this.isShared) {
+      return this.copySharedBytes(index, length, tail);
+    }
+
     if (length <= tail) {
       return this.body.subarray(index, index + length);
     }
 
     const out = new Uint8Array(length);
+    out.set(this.body.subarray(index), 0);
+    out.set(this.body.subarray(0, length - tail), tail);
+    return out;
+  }
+
+  private copySharedBytes(index: number, length: number, tail: number): Uint8Array {
+    if (this.payloadScratch.byteLength < length) {
+      this.payloadScratch = new Uint8Array(length);
+    }
+
+    const out = this.payloadScratch.subarray(0, length);
+    if (length <= tail) {
+      out.set(this.body.subarray(index, index + length), 0);
+      return out;
+    }
+
     out.set(this.body.subarray(index), 0);
     out.set(this.body.subarray(0, length - tail), tail);
     return out;
