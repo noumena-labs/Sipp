@@ -1094,5 +1094,5 @@ fn completed_error(_engine: &BrowserEngine, _request_id: u32) -> Option<&str> {
 }
 
 #[cfg(test)]
-#[path = "tests/root_tests.rs"]
+#[path = "../tests/engine/root_tests.rs"]
 mod root_tests;

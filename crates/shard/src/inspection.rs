@@ -499,6 +499,5 @@ fn normalize_optional_string(value: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    mod inspection_tests;
-}
+#[path = "tests/inspection_tests.rs"]
+mod inspection_tests;

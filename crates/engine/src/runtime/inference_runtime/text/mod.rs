@@ -194,6 +194,5 @@ pub(super) fn incomplete_utf8_tail_length(data: &[u8]) -> usize {
 }
 
 #[cfg(test)]
-mod tests {
-    mod text_tests;
-}
+#[path = "../../../tests/runtime/inference_runtime/text_tests.rs"]
+mod text_tests;

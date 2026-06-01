@@ -3,6 +3,7 @@
 use crate::cli::Backend;
 use crate::output;
 use crate::toolchains::env::apply_toolchains;
+use crate::toolchains::python::apply_uv_env;
 use crate::utils::BuildContext;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
@@ -24,7 +25,7 @@ pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Resul
 
     output::run_command(
         "Ensuring Python 3.12 is available through uv",
-        cmd!(sh, "{uv_exe} python install 3.12"),
+        apply_uv_env(ctx, cmd!(sh, "{uv_exe} python install 3.12")),
     )?;
 
     if matches!(backend, Some(Backend::All)) {
@@ -50,7 +51,7 @@ fn build_develop(
     if !venv_dir.exists() {
         output::run_command(
             "Creating local Python virtual environment",
-            cmd!(sh, "{uv_exe} venv --python 3.12"),
+            apply_uv_env(ctx, cmd!(sh, "{uv_exe} venv --python 3.12")),
         )?;
     } else {
         output::success("Using existing Python virtual environment");
@@ -63,8 +64,11 @@ fn build_develop(
     sh.create_dir(&target_dir)?;
     output::path("Cargo target dir", &target_dir);
 
-    let mut maturin_cmd = cmd!(sh, "{uv_exe} tool run maturin develop --release --uv")
-        .env("CARGO_TARGET_DIR", &target_dir);
+    let mut maturin_cmd = apply_uv_env(
+        ctx,
+        cmd!(sh, "{uv_exe} tool run maturin develop --release --uv"),
+    )
+    .env("CARGO_TARGET_DIR", &target_dir);
 
     maturin_cmd = apply_toolchains(sh, ctx, maturin_cmd, backend)?;
 
@@ -133,9 +137,12 @@ fn build_fat_wheel(sh: &Shell, ctx: &BuildContext, uv_exe: &Path) -> Result<()> 
     sh.create_dir(&target_dir)?;
     output::path("Cargo target dir", &target_dir);
 
-    let mut maturin_cmd = cmd!(
-        sh,
-        "{uv_exe} tool run maturin build --release --out {dist_dir}"
+    let mut maturin_cmd = apply_uv_env(
+        ctx,
+        cmd!(
+            sh,
+            "{uv_exe} tool run maturin build --release --out {dist_dir}"
+        ),
     )
     .env("CARGO_TARGET_DIR", &target_dir);
 
@@ -185,9 +192,12 @@ fn build_backend_variant(
     output::path("Cargo target dir", &target_dir);
     output::path("Staging directory", &staging_dir);
 
-    let mut maturin_cmd = cmd!(
-        sh,
-        "{uv_exe} tool run maturin build --release --out {staging_dir}"
+    let mut maturin_cmd = apply_uv_env(
+        ctx,
+        cmd!(
+            sh,
+            "{uv_exe} tool run maturin build --release --out {staging_dir}"
+        ),
     )
     .env("CARGO_TARGET_DIR", &target_dir);
 
@@ -215,9 +225,12 @@ fn build_backend_variant(
 
     output::run_command(
         format!("Extracting Python {feature} wheel"),
-        cmd!(
-            sh,
-            "{uv_exe} run python -m zipfile -e {wheel} {extracted_dir}"
+        apply_uv_env(
+            ctx,
+            cmd!(
+                sh,
+                "{uv_exe} run python -m zipfile -e {wheel} {extracted_dir}"
+            ),
         ),
     )
     .with_context(|| format!("failed to extract {}", wheel.display()))?;

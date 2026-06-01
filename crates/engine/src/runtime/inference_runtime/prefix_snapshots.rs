@@ -51,14 +51,5 @@ pub(super) fn decode_seed_snapshot_token_count(prompt_len: usize) -> Option<usiz
 }
 
 #[cfg(test)]
-mod tests {
-    use super::decode_seed_snapshot_token_count;
-
-    #[test]
-    fn decode_seed_snapshot_requires_at_least_two_prompt_tokens() {
-        assert_eq!(decode_seed_snapshot_token_count(0), None);
-        assert_eq!(decode_seed_snapshot_token_count(1), None);
-        assert_eq!(decode_seed_snapshot_token_count(2), Some(1));
-        assert_eq!(decode_seed_snapshot_token_count(19), Some(18));
-    }
-}
+#[path = "../../tests/runtime/inference_runtime/prefix_snapshots_tests.rs"]
+mod prefix_snapshots_tests;

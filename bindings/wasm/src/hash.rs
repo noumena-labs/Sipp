@@ -30,6 +30,5 @@ fn hex_lower(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    mod hash_tests;
-}
+#[path = "tests/hash_tests.rs"]
+mod hash_tests;

@@ -1,0 +1,131 @@
+name: Publish cogentlm dev
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 8 * * *"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-cogentlm-dev-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-dev:
+    name: Build and publish GitHub Packages dev package
+    runs-on: ubuntu-latest
+    env:
+      CE_WASM_BUILD_PARALLEL_LEVEL: "2"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+        with:
+          submodules: false
+
+      - name: Check out private llama.cpp submodule
+        env:
+          LLAMA_CPP_INTERNAL_DEPLOY_KEY: ${{ secrets.LLAMA_CPP_INTERNAL_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LLAMA_CPP_INTERNAL_DEPLOY_KEY:-}" ]; then
+            echo "::error::Set LLAMA_CPP_INTERNAL_DEPLOY_KEY to a read-only deploy key for noumena-labs/llama.cpp."
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$LLAMA_CPP_INTERNAL_DEPLOY_KEY" > ~/.ssh/llama_cpp_internal
+          chmod 600 ~/.ssh/llama_cpp_internal
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/llama_cpp_internal -o IdentitiesOnly=yes" git submodule sync --recursive
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/llama_cpp_internal -o IdentitiesOnly=yes" git submodule update --init --recursive
+
+      - name: Determine dev version
+        id: dev
+        run: |
+          set -euo pipefail
+          VERSION="$(node <<'NODE'
+          const pkg = require('./packages/npm/package.json');
+          const match = pkg.version.match(/^(\d+)\.(\d+)\.(\d+)/);
+          if (!match) throw new Error(`Unsupported version format: ${pkg.version}`);
+          console.log(`${match[1]}.${match[2]}.${Number(match[3]) + 1}-dev.${process.env.GITHUB_RUN_NUMBER}.${process.env.GITHUB_RUN_ATTEMPT}`);
+          NODE
+          )"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "dist_tag=dev" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-emscripten
+          components: rust-src
+
+      - name: Set up Node
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 22
+          registry-url: https://npm.pkg.github.com
+          scope: "@noumena-labs"
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version: 1.3.11
+
+      - name: Set up CMake and Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Set up Emscripten
+        uses: emscripten-core/setup-emsdk@v16
+
+      - name: Install dependencies
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bun install --frozen-lockfile
+
+      - name: Apply dev package version
+        env:
+          DEV_VERSION: ${{ steps.dev.outputs.version }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const path = 'packages/npm/package.json';
+          const pkg = JSON.parse(readFileSync(path, 'utf8'));
+          pkg.version = process.env.DEV_VERSION;
+          writeFileSync(path, `${JSON.stringify(pkg, null, 2)}\n`);
+          NODE
+
+      - name: Check test layout
+        run: cargo xtask --plain test layout
+
+      - name: Run fast dev publish gate
+        run: cargo xtask --plain test browser --no-model
+
+      - name: Build staged browser package
+        run: cargo xtask --plain build wasm
+
+      - name: Configure GitHub Packages authentication
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::Set PACKAGE_PUBLISH_TOKEN to a token with write:packages scope."
+            exit 1
+          fi
+          printf "@noumena-labs:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=%s\n" "$NODE_AUTH_TOKEN" > "$RUNNER_TEMP/npmrc"
+          echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/npmrc" >> "$GITHUB_ENV"
+
+      - name: Validate GitHub Packages publish
+        env:
+          DIST_TAG: ${{ steps.dev.outputs.dist_tag }}
+        working-directory: .build/artifacts/npm/cogentlm-browser
+        run: npm publish --dry-run --registry https://npm.pkg.github.com --tag "$DIST_TAG"
+
+      - name: Publish to GitHub Packages
+        env:
+          DIST_TAG: ${{ steps.dev.outputs.dist_tag }}
+        working-directory: .build/artifacts/npm/cogentlm-browser
+        run: npm publish --registry https://npm.pkg.github.com --tag "$DIST_TAG"

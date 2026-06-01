@@ -474,4 +474,5 @@ fn max_representable_sequences() -> usize {
 }
 
 #[cfg(test)]
-mod tests;
+#[path = "../../../tests/runtime/session/kv_cache_manager_tests.rs"]
+mod kv_cache_manager_tests;

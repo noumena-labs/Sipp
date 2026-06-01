@@ -16,6 +16,7 @@ Start with:
   cargo xtask toolchain status
   cargo xtask clean --dry-run
   cargo xtask run --help
+  cargo xtask test --help
   cargo xtask build node --backend cpu
   cargo xtask build python --backend cuda
   cargo xtask build cli --backend all
@@ -95,6 +96,21 @@ Examples:
   cargo xtask run llama backend-ops --backend vulkan --mode support
   cargo xtask run llama backend-ops --backend cuda --mode perf --op MUL_MAT";
 
+const TEST_HELP: &str = "\
+Run deterministic tests and model-backed smoke checks from the workspace root.
+
+Examples:
+  cargo xtask test core
+  cargo xtask test layout
+  cargo xtask test rust-api
+  cargo xtask test browser --no-model
+  cargo xtask test model-smoke
+  cargo xtask test model-smoke --offline
+  cargo xtask test all --backend cpu
+
+Model-backed tests default to the setup sample model cache under .build/models
+when --model is omitted.";
+
 /// Top-level xtask command-line arguments.
 #[derive(Parser)]
 #[command(name = "xtask")]
@@ -155,6 +171,16 @@ remove workspace node_modules directories.")]
         /// Run target to execute.
         #[command(subcommand)]
         command: RunCommands,
+    },
+
+    /// Run workspace tests and smoke checks.
+    #[command(long_about = TEST_HELP)]
+    #[command(after_long_help = BACKEND_HELP)]
+    #[command(arg_required_else_help = true)]
+    Test {
+        /// Test target to execute.
+        #[command(subcommand)]
+        command: TestCommands,
     },
 
     /// Inspect or bootstrap xtask-managed toolchains.
@@ -331,6 +357,102 @@ This command is finite. It does not start dev or preview servers.")]
         #[command(subcommand)]
         command: RunLlamaCommands,
     },
+}
+
+/// Workspace test workflows.
+#[derive(Subcommand)]
+pub enum TestCommands {
+    /// Run the release-oriented aggregate test workflow.
+    #[command(after_long_help = BACKEND_HELP)]
+    All(TestAllArgs),
+
+    /// Verify tests live under dedicated test files and folders.
+    Layout,
+
+    /// Run Rust unit tests for the workspace and xtask.
+    Core,
+
+    /// Run public API integration tests for Rust crates.
+    RustApi,
+
+    /// Build and test the browser package.
+    Browser(TestBrowserArgs),
+
+    /// Build and test Node.js bindings without model-backed smokes.
+    #[command(after_long_help = BACKEND_HELP)]
+    Node(TestNativeBindingArgs),
+
+    /// Build and test Python bindings without model-backed smokes.
+    #[command(after_long_help = BACKEND_HELP)]
+    Python(TestNativeBindingArgs),
+
+    /// Run CLI/Rust/Node/Python local inference smokes.
+    #[command(after_long_help = BACKEND_HELP)]
+    ModelSmoke(TestModelSmokeArgs),
+}
+
+/// Options for the aggregate test workflow.
+#[derive(Args)]
+pub struct TestAllArgs {
+    /// GGUF model used by model-backed smoke checks. Defaults to .build/models.
+    #[arg(long)]
+    pub model: Option<PathBuf>,
+
+    /// Backend to build and exercise.
+    #[arg(long, short, value_enum, default_value = "cpu")]
+    pub backend: Backend,
+
+    /// Prompt passed to model-backed smoke checks.
+    #[arg(long, default_value = "Describe browser LLM inference.")]
+    pub prompt: String,
+
+    /// Number of model layers to offload.
+    #[arg(long)]
+    pub gpu_layers: Option<u32>,
+
+    /// Do not download the default sample model when --model is omitted.
+    #[arg(long)]
+    pub offline: bool,
+}
+
+/// Options for browser package tests.
+#[derive(Args)]
+pub struct TestBrowserArgs {
+    /// Skip Playwright browser runtime smoke and run only build plus unit tests.
+    #[arg(long)]
+    pub no_model: bool,
+}
+
+/// Options for binding tests that do not load a model.
+#[derive(Args)]
+pub struct TestNativeBindingArgs {
+    /// Backend to build and import-test.
+    #[arg(long, short, value_enum, default_value = "cpu")]
+    pub backend: Backend,
+}
+
+/// Options for model-backed local smoke tests.
+#[derive(Args)]
+pub struct TestModelSmokeArgs {
+    /// GGUF model used by local smoke examples. Defaults to .build/models.
+    #[arg(long)]
+    pub model: Option<PathBuf>,
+
+    /// Backend to build and exercise.
+    #[arg(long, short, value_enum, default_value = "cpu")]
+    pub backend: Backend,
+
+    /// Prompt passed to smoke examples.
+    #[arg(long, default_value = "Describe browser LLM inference.")]
+    pub prompt: String,
+
+    /// Number of model layers to offload.
+    #[arg(long)]
+    pub gpu_layers: Option<u32>,
+
+    /// Do not download the default sample model when --model is omitted.
+    #[arg(long)]
+    pub offline: bool,
 }
 
 /// Options for the aggregate finite run workflow.

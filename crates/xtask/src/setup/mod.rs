@@ -4,6 +4,7 @@ mod launcher;
 
 use crate::cli::{SetupArgs, SetupProfile};
 use crate::output;
+use crate::sample_model::{self, SampleModelOptions};
 use crate::terminal::splash;
 use crate::toolchain;
 use crate::toolchains::{emsdk, ninja, python, vulkan};
@@ -13,12 +14,7 @@ use console::Term;
 use inquire::{Confirm, Select};
 use std::env;
 use std::fmt;
-use std::path::PathBuf;
 use xshell::{cmd, Shell};
-
-const SAMPLE_MODEL_URL: &str =
-    "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_0.gguf";
-const SAMPLE_MODEL_FILE: &str = "qwen2.5-0.5b-instruct-q4_0.gguf";
 
 /// Runs the guided local setup flow.
 pub fn run(sh: &Shell, ctx: &BuildContext, args: &SetupArgs) -> Result<()> {
@@ -197,7 +193,7 @@ fn run_downloads(
         output::phase("Downloads skipped");
         output::detail("Toolchains", "cargo xtask toolchain install all");
         output::detail("JavaScript", "bun install");
-        output::detail("Sample model", SAMPLE_MODEL_URL);
+        output::detail("Sample model", sample_model::sample_model_url());
         return Ok(());
     }
 
@@ -255,25 +251,14 @@ fn install_javascript_dependencies(sh: &Shell, ctx: &BuildContext) -> Result<()>
 }
 
 fn download_sample_model(sh: &Shell, ctx: &BuildContext) -> Result<()> {
-    output::phase("Sample model");
-    let model_dir = ctx.sample_models_dir();
-    sh.create_dir(&model_dir)
-        .with_context(|| format!("failed to create {}", model_dir.display()))?;
-    let model_path = sample_model_path(ctx);
-    if model_path.exists() {
-        output::success(format!(
-            "Using existing sample model at {}",
-            model_path.display()
-        ));
-        return Ok(());
-    }
-
-    output::detail("Download", SAMPLE_MODEL_URL);
-    output::path("Destination", &model_path);
-    output::run_command(
-        "Downloading sample GGUF model",
-        cmd!(sh, "curl -f -L -o {model_path} {SAMPLE_MODEL_URL}"),
+    sample_model::ensure_sample_model(
+        sh,
+        ctx,
+        SampleModelOptions {
+            allow_download: true,
+        },
     )
+    .map(|_| ())
 }
 
 fn print_examples(ctx: &BuildContext, profile: SetupProfile) {
@@ -286,7 +271,7 @@ fn print_examples(ctx: &BuildContext, profile: SetupProfile) {
             output::detail("Run app tests", "clm run apps test");
         }
         SetupProfile::Bindings => {
-            let model = model_arg(ctx);
+            let model = sample_model::sample_model_arg(ctx);
             output::detail("Build Node bindings", "clm build node");
             output::detail("Build Python bindings", "clm build python");
             output::detail(
@@ -299,7 +284,7 @@ fn print_examples(ctx: &BuildContext, profile: SetupProfile) {
             );
         }
         SetupProfile::Full => {
-            let model = model_arg(ctx);
+            let model = sample_model::sample_model_arg(ctx);
             output::detail("Build everything", "clm build all");
             output::detail("Serve benchmark", "clm run apps serve benchmark");
             output::detail(
@@ -309,19 +294,6 @@ fn print_examples(ctx: &BuildContext, profile: SetupProfile) {
         }
     }
     output::detail("Compatibility", "cargo xtask still works for every command");
-}
-
-fn model_arg(ctx: &BuildContext) -> String {
-    let model_path = sample_model_path(ctx);
-    if model_path.exists() {
-        model_path.display().to_string()
-    } else {
-        "<model.gguf>".to_owned()
-    }
-}
-
-fn sample_model_path(ctx: &BuildContext) -> PathBuf {
-    ctx.sample_models_dir().join(SAMPLE_MODEL_FILE)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

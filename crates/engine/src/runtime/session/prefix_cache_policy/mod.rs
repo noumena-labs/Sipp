@@ -122,6 +122,5 @@ fn add_token_count(total: &mut u64, token_count: usize) {
 }
 
 #[cfg(test)]
-mod tests {
-    mod prefix_cache_policy_tests;
-}
+#[path = "../../../tests/runtime/session/prefix_cache_policy_tests.rs"]
+mod prefix_cache_policy_tests;

@@ -74,6 +74,5 @@ impl LlamaBatchBuilder {
 }
 
 #[cfg(test)]
-mod tests {
-    mod llama_batch_builder_tests;
-}
+#[path = "../../../tests/runtime/llama/llama_batch_builder_tests.rs"]
+mod llama_batch_builder_tests;

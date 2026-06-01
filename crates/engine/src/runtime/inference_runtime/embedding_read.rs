@@ -104,6 +104,5 @@ fn l2_normalize(values: &mut [f32]) {
 }
 
 #[cfg(test)]
-mod tests {
-    mod embedding_read_tests;
-}
+#[path = "../../tests/runtime/inference_runtime/embedding_read_tests.rs"]
+mod embedding_read_tests;

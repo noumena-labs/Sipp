@@ -8,7 +8,7 @@ use crate::cli::{
 use crate::output;
 use crate::targets;
 use crate::toolchains::env::apply_toolchains;
-use crate::toolchains::python::setup_uv;
+use crate::toolchains::python::{apply_uv_env, setup_uv};
 use crate::utils::BuildContext;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
@@ -44,7 +44,7 @@ const SKIPPED_APP_TEST_DIRS: &[&str] = &[
     ".turbo",
     "coverage",
 ];
-const BROWSER_PACKAGE_TEST_DIR: &str = "packages/npm/src";
+const BROWSER_PACKAGE_TEST_DIR: &str = "packages/npm/tests";
 const LLAMA_BACKEND_OPS_TARGET: &str = "test-backend-ops";
 
 /// Runs a developer workflow.
@@ -490,7 +490,7 @@ fn run_python_smoke(
     let python_source_dir = python_dir.join("python");
     let uv_exe = setup_uv(sh, ctx)?;
     let _dir = sh.push_dir(&python_dir);
-    let python_exe = ensure_python_venv(sh, &uv_exe, &python_dir)?;
+    let python_exe = ensure_python_venv(sh, ctx, &uv_exe, &python_dir)?;
     let model = &options.model;
     let prompt = options.prompt;
 
@@ -762,12 +762,17 @@ fn is_python_extension(path: &Path) -> bool {
     )
 }
 
-fn ensure_python_venv(sh: &Shell, uv_exe: &Path, python_dir: &Path) -> Result<PathBuf> {
+fn ensure_python_venv(
+    sh: &Shell,
+    ctx: &BuildContext,
+    uv_exe: &Path,
+    python_dir: &Path,
+) -> Result<PathBuf> {
     let venv_dir = python_dir.join(".venv");
     if !venv_dir.exists() {
         output::run_command(
             "Creating local Python virtual environment",
-            cmd!(sh, "{uv_exe} venv --python 3.12"),
+            apply_uv_env(ctx, cmd!(sh, "{uv_exe} venv --python 3.12")),
         )?;
     }
 

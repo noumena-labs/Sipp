@@ -266,6 +266,5 @@ fn default_residency_lease_root() -> PathBuf {
 }
 
 #[cfg(test)]
-mod tests {
-    mod residency_tests;
-}
+#[path = "../../tests/runtime/residency_tests.rs"]
+mod residency_tests;

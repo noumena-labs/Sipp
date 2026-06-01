@@ -2,7 +2,7 @@ use crate::output;
 use crate::utils::BuildContext;
 use anyhow::{Context, Result};
 use std::path::PathBuf;
-use xshell::{cmd, Shell};
+use xshell::{cmd, Cmd, Shell};
 
 /// Ensures the hermetic uv executable is available under `.build/toolchain`.
 pub(crate) fn setup_uv(sh: &Shell, ctx: &BuildContext) -> Result<PathBuf> {
@@ -76,4 +76,13 @@ pub(crate) fn setup_uv(sh: &Shell, ctx: &BuildContext) -> Result<PathBuf> {
     }
 
     Ok(uv_exe)
+}
+
+/// Applies workspace-local uv cache paths so commands do not depend on user cache state.
+pub(crate) fn apply_uv_env<'a>(ctx: &BuildContext, command: Cmd<'a>) -> Cmd<'a> {
+    command
+        .env("UV_CACHE_DIR", ctx.build_root().join("uv-cache"))
+        .env("UV_PYTHON_INSTALL_DIR", ctx.toolchain_dir().join("python"))
+        .env("UV_TOOL_DIR", ctx.toolchain_dir().join("uv-tools"))
+        .env("UV_TOOL_BIN_DIR", ctx.toolchain_dir().join("uv-tool-bin"))
 }

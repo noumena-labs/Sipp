@@ -1,10 +1,10 @@
 use anyhow::Result;
 use clap::Parser;
 use xshell::Shell;
-use xtask::cli::{Backend, BuildCommands, Cli, Commands};
+use xtask::cli::{Backend, BuildCommands, Cli, Commands, TestCommands};
 use xtask::targets;
 use xtask::utils::BuildContext;
-use xtask::{clean, configure_output, doctor, finish_output, run, setup, toolchain};
+use xtask::{clean, configure_output, doctor, finish_output, run, setup, test, toolchain};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -17,6 +17,7 @@ fn main() -> Result<()> {
         Commands::Build { target } => run_build(target, &sh, &ctx),
         Commands::Clean(args) => clean::run(&sh, &ctx, &args),
         Commands::Run { command } => run::run(&sh, &ctx, command),
+        Commands::Test { command } => test::run(&sh, &ctx, command),
         Commands::Toolchain { command } => toolchain::run(&sh, &ctx, command),
         Commands::Doctor(args) => doctor::run(&ctx, &args),
         Commands::Setup(args) => setup::run(&sh, &ctx, &args),
@@ -31,9 +32,29 @@ fn command_summary(command: &Commands) -> String {
         Commands::Build { target } => build_summary(target),
         Commands::Clean(_) => "Clean workspace".to_owned(),
         Commands::Run { .. } => "Run developer workflow".to_owned(),
+        Commands::Test { command } => test_summary(command),
         Commands::Toolchain { .. } => "Toolchain command".to_owned(),
         Commands::Doctor(_) => "Developer environment doctor".to_owned(),
         Commands::Setup(_) => "CogentLM setup".to_owned(),
+    }
+}
+
+fn test_summary(command: &TestCommands) -> String {
+    match command {
+        TestCommands::All(_) => "Run full test workflow".to_owned(),
+        TestCommands::Layout => "Check test layout".to_owned(),
+        TestCommands::Core => "Run Rust core tests".to_owned(),
+        TestCommands::RustApi => "Run Rust public API tests".to_owned(),
+        TestCommands::Browser(_) => "Run browser package tests".to_owned(),
+        TestCommands::Node(args) => {
+            format!("Run Node.js binding tests ({})", args.backend.as_str())
+        }
+        TestCommands::Python(args) => {
+            format!("Run Python binding tests ({})", args.backend.as_str())
+        }
+        TestCommands::ModelSmoke(args) => {
+            format!("Run model smoke tests ({})", args.backend.as_str())
+        }
     }
 }
 

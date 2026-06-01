@@ -275,6 +275,5 @@ fn init_multimodal_context(
 }
 
 #[cfg(test)]
-mod tests {
-    mod lifecycle_tests;
-}
+#[path = "../../tests/runtime/inference_runtime/lifecycle_tests.rs"]
+mod lifecycle_tests;

@@ -9,11 +9,16 @@ mod flow;
 mod metrics;
 
 #[cfg(test)]
-mod tests {
-    mod budget_tests;
-    mod flow_tests;
-    mod metrics_tests;
-}
+#[path = "../../../tests/runtime/scheduler/slot_scheduler/budget_tests.rs"]
+mod budget_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/runtime/scheduler/slot_scheduler/flow_tests.rs"]
+mod flow_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/runtime/scheduler/slot_scheduler/metrics_tests.rs"]
+mod metrics_tests;
 
 #[derive(Debug, Default)]
 pub struct SlotScheduler {

@@ -67,6 +67,5 @@ pub(super) fn fingerprint_path(path: &std::path::Path) -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
-    mod numeric_tests;
-}
+#[path = "../../../tests/runtime/inference_runtime/numeric_tests.rs"]
+mod numeric_tests;

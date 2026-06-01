@@ -81,6 +81,5 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    mod gguf_tests;
-}
+#[path = "tests/gguf_tests.rs"]
+mod gguf_tests;

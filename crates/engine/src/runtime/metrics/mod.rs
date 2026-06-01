@@ -110,6 +110,5 @@ impl RuntimeObservabilityMetrics {
 }
 
 #[cfg(test)]
-mod tests {
-    mod metrics_tests;
-}
+#[path = "../../tests/runtime/metrics_tests.rs"]
+mod metrics_tests;

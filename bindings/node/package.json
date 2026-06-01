@@ -14,6 +14,7 @@
   ],
   "scripts": {
     "build": "cargo xtask build node --backend all",
+    "test": "node --test tests/router.test.mjs",
     "test:smoke": "node examples/node_smoke.mjs"
   },
   "napi": {

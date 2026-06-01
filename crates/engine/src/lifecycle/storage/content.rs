@@ -64,6 +64,5 @@ pub(crate) fn hash_file(source_path: &Path) -> Result<String, ModelError> {
 }
 
 #[cfg(test)]
-mod tests {
-    mod content_tests;
-}
+#[path = "../../tests/lifecycle/storage/content_tests.rs"]
+mod content_tests;

@@ -159,6 +159,5 @@ fn remaining_quota(limit: usize, used: usize) -> usize {
 }
 
 #[cfg(test)]
-mod tests {
-    mod token_emission_tests;
-}
+#[path = "../../../tests/engine/driver/token_emission_tests.rs"]
+mod token_emission_tests;

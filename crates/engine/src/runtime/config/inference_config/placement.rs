@@ -152,6 +152,5 @@ impl SplitMode {
 }
 
 #[cfg(test)]
-mod tests {
-    mod placement_tests;
-}
+#[path = "../../../tests/runtime/config/inference_config/placement_tests.rs"]
+mod placement_tests;

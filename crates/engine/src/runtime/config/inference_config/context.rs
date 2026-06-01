@@ -158,6 +158,5 @@ impl ContextRuntimeConfig {
 }
 
 #[cfg(test)]
-mod tests {
-    mod context_tests;
-}
+#[path = "../../../tests/runtime/config/inference_config/context_tests.rs"]
+mod context_tests;

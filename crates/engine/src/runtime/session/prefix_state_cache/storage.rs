@@ -140,6 +140,5 @@ impl PrefixStateCache {
 }
 
 #[cfg(test)]
-mod tests {
-    mod storage_tests;
-}
+#[path = "../../../tests/runtime/session/prefix_state_cache/storage_tests.rs"]
+mod storage_tests;

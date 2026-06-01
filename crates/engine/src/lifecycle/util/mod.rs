@@ -194,6 +194,5 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    mod util_tests;
-}
+#[path = "../../tests/lifecycle/util_tests.rs"]
+mod util_tests;

@@ -123,7 +123,8 @@ pub struct ShardLayout {
 
 ### 6. Testing
 
-* Unit tests should live near the code they test.
+* Unit test bodies should live under crate-local `src/tests/` trees, not inline in runtime files or under `src/<subject>/tests/`.
+* Runtime modules may keep minimal `#[cfg(test)] #[path = "..."] mod *_tests;` declarations and test-only helper hooks when private access is required.
 * Integration tests should live under crate-level `tests/` directories.
 * Test public behavior, edge cases, and error paths.
 * Avoid tests that depend on local machine state, network access, timing, or test order.
@@ -203,7 +204,7 @@ export function createRuntime(options: RuntimeOptions): AgentRuntime {
 
 ### 5. Tests
 
-* Place tests alongside implementation in `*.test.ts` files unless a package has a documented different convention.
+* Place package tests under dedicated package-level `tests/` folders, mirroring the `src/` tree when useful.
 * Do not use a generic `__tests__` folder for new tests.
 * Test public behavior rather than implementation details.
 * Include tests for error cases and boundary conditions.

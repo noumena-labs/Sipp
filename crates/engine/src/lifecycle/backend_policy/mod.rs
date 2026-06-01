@@ -280,6 +280,5 @@ fn is_cpu_backend(name: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    mod backend_policy_tests;
-}
+#[path = "../../tests/lifecycle/backend_policy_tests.rs"]
+mod backend_policy_tests;

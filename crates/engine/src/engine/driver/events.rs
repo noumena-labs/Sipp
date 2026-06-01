@@ -57,6 +57,5 @@ pub(super) fn emit_event(event_subscribers: &EngineEventSubscribers, event: Engi
 }
 
 #[cfg(test)]
-mod tests {
-    mod events_tests;
-}
+#[path = "../../tests/engine/driver/events_tests.rs"]
+mod events_tests;

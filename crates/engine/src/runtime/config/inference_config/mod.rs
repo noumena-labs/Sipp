@@ -325,6 +325,5 @@ pub(super) fn arg_value<'args>(args: &'args [String], key: &str) -> Option<&'arg
 }
 
 #[cfg(test)]
-mod tests {
-    mod inference_config_tests;
-}
+#[path = "../../../tests/runtime/config/inference_config_tests.rs"]
+mod inference_config_tests;

@@ -24,6 +24,9 @@ use crate::runtime::session::KvCacheManager;
 pub(crate) mod capabilities;
 mod decode;
 mod diagnostics;
+#[cfg(test)]
+#[path = "../../tests/runtime/inference_runtime/diagnostics_tests.rs"]
+mod diagnostics_tests;
 mod embedding_read;
 mod encoder;
 mod environment;
@@ -35,16 +38,24 @@ mod observability;
 mod prefill;
 mod prefix_snapshots;
 mod request;
+
 #[cfg(test)]
-pub(crate) mod tests {
-    mod diagnostics_tests;
-    mod observability_tests;
-    mod prefill_tests;
-    pub(crate) mod runtime_tests;
-    mod scheduler_api_tests;
-}
+#[path = "../../tests/runtime/inference_runtime/observability_tests.rs"]
+mod observability_tests;
+
+#[cfg(test)]
+#[path = "../../tests/runtime/inference_runtime/prefill_tests.rs"]
+mod prefill_tests;
+
+#[cfg(test)]
+#[path = "../../tests/runtime/inference_runtime/runtime_tests.rs"]
+pub(crate) mod runtime_tests;
+
 mod sampler;
 mod scheduler_api;
+#[cfg(test)]
+#[path = "../../tests/runtime/inference_runtime/scheduler_api_tests.rs"]
+mod scheduler_api_tests;
 mod slot;
 mod text;
 

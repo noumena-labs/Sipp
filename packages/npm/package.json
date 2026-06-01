@@ -33,7 +33,7 @@
     "build:ts": "tsc -p tsconfig.json",
     "build:stage": "node scripts/stage-package.mjs",
     "build": "bun run clean:ts && bun run build:ts && bun run build:stage",
-    "test": "bun test src"
+    "test": "bun test tests"
   },
   "keywords": [
     "ai",

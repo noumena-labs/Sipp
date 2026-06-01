@@ -41,6 +41,5 @@ pub struct AssetRecord {
 }
 
 #[cfg(test)]
-mod tests {
-    mod assets_tests;
-}
+#[path = "../../tests/lifecycle/types/assets_tests.rs"]
+mod assets_tests;

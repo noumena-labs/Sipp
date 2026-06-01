@@ -195,6 +195,5 @@ impl Write for RawShardWriter {
 }
 
 #[cfg(test)]
-mod tests {
-    mod ingest_tests;
-}
+#[path = "../tests/ingest_tests.rs"]
+mod ingest_tests;

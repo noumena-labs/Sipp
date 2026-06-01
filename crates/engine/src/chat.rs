@@ -119,6 +119,5 @@ fn unique_non_empty(values: &[&str]) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    mod chat_tests;
-}
+#[path = "tests/chat_tests.rs"]
+mod chat_tests;

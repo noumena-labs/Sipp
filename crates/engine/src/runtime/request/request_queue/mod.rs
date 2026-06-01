@@ -204,6 +204,5 @@ impl GenerateRequestLifecycle {
 }
 
 #[cfg(test)]
-mod tests {
-    mod request_queue_tests;
-}
+#[path = "../../../tests/runtime/request/request_queue_tests.rs"]
+mod request_queue_tests;

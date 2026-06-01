@@ -255,6 +255,5 @@ fn render_messages_json(messages: &[ChatMessage]) -> Result<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    mod request_tests;
-}
+#[path = "../../tests/engine/driver/request_tests.rs"]
+mod request_tests;

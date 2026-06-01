@@ -75,6 +75,5 @@ pub(crate) fn system_time_unix_ms(value: SystemTime) -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
-    mod numeric_tests;
-}
+#[path = "../tests/runtime/numeric_tests.rs"]
+mod numeric_tests;

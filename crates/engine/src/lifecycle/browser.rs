@@ -1611,6 +1611,5 @@ fn civil_from_days(days_since_unix_epoch: i64) -> (i64, u32, u32) {
 }
 
 #[cfg(test)]
-mod tests {
-    mod browser_tests;
-}
+#[path = "../tests/lifecycle/browser_tests.rs"]
+mod browser_tests;

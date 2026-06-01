@@ -46,6 +46,5 @@ pub(super) fn token_limit_reached(generated_token_count: usize, max_output_token
 }
 
 #[cfg(test)]
-mod tests {
-    mod helpers_tests;
-}
+#[path = "../../../tests/runtime/scheduler/batch_planner/helpers_tests.rs"]
+mod helpers_tests;

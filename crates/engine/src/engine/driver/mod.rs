@@ -461,6 +461,5 @@ fn runtime_command(message: impl Into<String>) -> Error {
 }
 
 #[cfg(test)]
-mod tests {
-    mod driver_tests;
-}
+#[path = "../../tests/engine/driver_tests.rs"]
+mod driver_tests;
