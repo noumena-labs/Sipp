@@ -3,9 +3,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
-use cogentlm_sys as ffi;
-
 use crate::defaults::BYTES_PER_MIB;
+use crate::native_bridge::NativeRuntimeHandle;
 use crate::runtime::{llama_seq_id, llama_token};
 
 use super::PrefixCachePolicy;
@@ -40,7 +39,7 @@ pub struct PendingPrefixSnapshot {
 }
 
 pub(super) struct PrefixStateStoreRequest<'a> {
-    context: *mut ffi::llama_context,
+    state_bytes: Vec<u8>,
     seq_id: llama_seq_id,
     model_fingerprint: u64,
     context_key: &'a str,
@@ -201,14 +200,14 @@ impl PrefixStateCache {
     /// or the underlying llama call fails.
     pub(crate) fn restore_by_handle(
         &self,
-        context: *mut ffi::llama_context,
+        runtime: &mut NativeRuntimeHandle,
         seq_id: llama_seq_id,
         handle: PrefixCacheHandle,
     ) -> bool {
         let Some(entry) = self.entries.get(handle.index) else {
             return false;
         };
-        self.restore_prefix_state(context, seq_id, entry)
+        self.restore_prefix_state(runtime, seq_id, entry)
     }
 
     pub fn clear(&mut self) {

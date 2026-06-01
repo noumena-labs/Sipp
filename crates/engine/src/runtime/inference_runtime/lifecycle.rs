@@ -1,32 +1,23 @@
 use std::collections::HashSet;
-use std::ffi::CString;
-use std::ptr::NonNull;
 
 use cogentlm_shard::inspect_gguf_metadata_path;
-use cogentlm_sys as ffi;
 
 use crate::backend::ensure_backend_initialized;
 use crate::engine::protocol::{ModelClass, PoolingType};
 use crate::error::{Error, Result};
+use crate::native_bridge::NativeRuntimeHandle;
 use crate::runtime::config::{NativeRuntimeConfig, ResolvedRuntimeLimits};
 use crate::runtime::llama::LlamaBatchBuilder;
 use crate::runtime::metrics::RuntimeObservabilityMetrics;
 use crate::runtime::request::{GenerateRequestId, RequestQueue};
-use crate::runtime::scheduler::{BatchPlanner, SamplerCacheKey, SharedBatchPlan, SlotScheduler};
+use crate::runtime::scheduler::{
+    BatchPlanner, SamplerCacheKey, SamplerHandle, SharedBatchPlan, SlotScheduler,
+};
 use crate::runtime::session::{PrefixCachePolicy, PrefixStateCache, SessionStore};
 
 use super::capabilities::RuntimeModelCapabilities;
-use super::environment::{
-    admit_runtime_residency, resolve_batch_token_budget, snapshot_prefix_cache_enabled,
-};
-use super::native::{
-    c_ptrs_from_strings, c_strings_from_args, resolved_runtime_limits,
-    runtime_command_from_shim_error,
-};
-use super::{
-    ffi_arg_count_len, fingerprint_path, nonnegative_i32_to_usize, positive_i32_to_usize,
-    InferenceRuntime,
-};
+use super::environment::{admit_runtime_residency, snapshot_prefix_cache_enabled};
+use super::{fingerprint_path, nonnegative_i32_to_usize, positive_i32_to_usize, InferenceRuntime};
 
 impl InferenceRuntime {
     pub fn load(
@@ -44,35 +35,24 @@ impl InferenceRuntime {
         let mut config = config.normalize();
         let model_class = probe_model_class(model_path, model_path_string.as_str())?;
         apply_model_class_defaults(&mut config, model_class)?;
-        let common_params = parse_common_params(model_path_string.as_str(), &config)?;
         let residency_lease = match admit_runtime_residency(&config) {
             Ok(lease) => lease,
-            Err(error) => {
-                unsafe {
-                    ffi::cogent_common_params_free(common_params);
-                }
-                return Err(error);
-            }
+            Err(error) => return Err(error),
         };
 
-        let common_init = init_common_runtime(common_params)?;
-        let resolved_limits = resolved_runtime_limits(common_init);
-        let handles = init_model_handles(common_init, &config, &model_path_string)?;
-        let runtime_parts =
-            RuntimeParts::new(&config, resolved_limits.clone(), handles.shared_context)?;
+        let mut native_runtime = load_native_runtime(&model_path_string, &config)?;
+        let resolved_limits = native_runtime.resolved_limits();
+        init_runtime_extensions(&mut native_runtime, &config, &model_path_string)?;
+        let runtime_parts = RuntimeParts::new(&config, resolved_limits.clone())?;
         let debug_metrics_enabled = config.observability.effective_runtime_metrics();
-        let capabilities = build_capabilities(&config, common_init)?;
+        let capabilities = build_capabilities(&config, &native_runtime)?;
 
         Ok(Self {
             config,
             resolved_limits,
             capabilities,
-            residency_lease,
-            common_init,
-            primary_model: handles.primary_model,
-            shared_context: handles.shared_context,
-            chat_templates: handles.chat_templates,
-            mtmd_context: handles.mtmd_context,
+            native_runtime,
+            _residency_lease: residency_lease,
             last_runtime_observability: RuntimeObservabilityMetrics::default(),
             has_last_runtime_observability: false,
             session_store: runtime_parts.session_store,
@@ -104,10 +84,7 @@ impl InferenceRuntime {
             total_output_tokens: 0,
             total_cache_hits: 0,
             total_prefill_tokens: 0,
-            sampler_pool: std::collections::HashMap::<
-                SamplerCacheKey,
-                Vec<NonNull<ffi::cogent_common_sampler>>,
-            >::new(),
+            sampler_pool: std::collections::HashMap::<SamplerCacheKey, Vec<SamplerHandle>>::new(),
         })
     }
 }
@@ -118,43 +95,8 @@ impl Drop for InferenceRuntime {
         self.slot_scheduler.resize(0);
         self.session_store.clear();
 
-        for samplers in self.sampler_pool.values_mut() {
-            while let Some(sampler) = samplers.pop() {
-                unsafe {
-                    ffi::cogent_common_sampler_free(sampler.as_ptr());
-                }
-            }
-        }
-
-        if !self.chat_templates.is_null() {
-            unsafe {
-                ffi::cogent_chat_templates_free(self.chat_templates);
-            }
-            self.chat_templates = std::ptr::null_mut();
-        }
-        if !self.mtmd_context.is_null() {
-            unsafe {
-                ffi::cogent_mtmd_free(self.mtmd_context);
-            }
-            self.mtmd_context = std::ptr::null_mut();
-        }
-        if !self.common_init.is_null() {
-            unsafe {
-                ffi::cogent_common_init_free(self.common_init);
-            }
-            self.common_init = std::ptr::null_mut();
-        }
-        self.shared_context = std::ptr::null_mut();
-        self.primary_model = std::ptr::null_mut();
-        drop(self.residency_lease.take());
+        self.sampler_pool.clear();
     }
-}
-
-struct ModelHandles {
-    primary_model: *mut ffi::llama_model,
-    shared_context: *mut ffi::llama_context,
-    chat_templates: *mut ffi::cogent_chat_templates,
-    mtmd_context: *mut ffi::cogent_mtmd_context,
 }
 
 struct RuntimeParts {
@@ -169,22 +111,21 @@ struct RuntimeParts {
 }
 
 impl RuntimeParts {
-    fn new(
-        config: &NativeRuntimeConfig,
-        resolved_limits: ResolvedRuntimeLimits,
-        shared_context: *mut ffi::llama_context,
-    ) -> Result<Self> {
+    fn new(config: &NativeRuntimeConfig, resolved_limits: ResolvedRuntimeLimits) -> Result<Self> {
         let max_cached_sessions = positive_i32_to_usize(config.cache.max_session_entries);
         let resolved_parallel = resolved_limits.n_parallel.max(1);
         let max_sequences = positive_i32_to_usize(resolved_parallel);
-        let mut session_store = SessionStore::new(max_cached_sessions, max_sequences);
-        session_store.bind_shared_context(shared_context);
+        let session_store = SessionStore::new(max_cached_sessions, max_sequences);
 
         let mut slot_scheduler = SlotScheduler::default();
         slot_scheduler.resize(max_sequences);
 
         let mut shared_batch_builder = LlamaBatchBuilder::default();
-        let batch_token_budget = resolve_batch_token_budget(shared_context, config);
+        let batch_token_budget = config
+            .context
+            .n_batch
+            .unwrap_or(resolved_limits.n_batch)
+            .max(1);
         shared_batch_builder.ensure_capacity(batch_token_budget, resolved_parallel)?;
 
         Ok(Self {
@@ -204,85 +145,28 @@ impl RuntimeParts {
     }
 }
 
-fn parse_common_params(
+fn load_native_runtime(
     model_path_string: &str,
     config: &NativeRuntimeConfig,
-) -> Result<*mut ffi::cogent_common_params> {
-    let c_model_path = CString::new(model_path_string)?;
+) -> Result<NativeRuntimeHandle> {
     let common_args = config.llama_common_args();
-    let common_arg_cstrings = c_strings_from_args(&common_args)?;
-    let common_arg_ptrs = c_ptrs_from_strings(&common_arg_cstrings);
-    let common_arg_count = ffi_arg_count_len(common_arg_ptrs.len())?;
-    let mut parse_error = std::ptr::null_mut();
-    let common_params = unsafe {
-        ffi::cogent_common_params_parse_server(
-            c_model_path.as_ptr(),
-            common_arg_count,
-            common_arg_ptrs.as_ptr(),
-            &mut parse_error,
-        )
-    };
-    if common_params.is_null() {
-        return Err(runtime_command_from_shim_error(
-            parse_error,
-            "failed to parse llama.cpp common params",
-        ));
-    }
-    Ok(common_params)
+    let common_args_json = serde_json::to_string(&common_args)
+        .map_err(|error| Error::RuntimeCommand(error.to_string()))?;
+    NativeRuntimeHandle::load(model_path_string, &common_args_json)
 }
 
-fn init_common_runtime(
-    common_params: *mut ffi::cogent_common_params,
-) -> Result<*mut ffi::cogent_common_init> {
-    let mut init_error = std::ptr::null_mut();
-    let common_init =
-        unsafe { ffi::cogent_common_init_from_params(common_params, &mut init_error) };
-    unsafe {
-        ffi::cogent_common_params_free(common_params);
-    }
-    if common_init.is_null() {
-        return Err(runtime_command_from_shim_error(
-            init_error,
-            "failed to initialize llama.cpp common runtime",
-        ));
-    }
-    Ok(common_init)
-}
-
-fn init_model_handles(
-    common_init: *mut ffi::cogent_common_init,
+fn init_runtime_extensions(
+    native_runtime: &mut NativeRuntimeHandle,
     config: &NativeRuntimeConfig,
     model_path_string: &str,
-) -> Result<ModelHandles> {
-    let primary_model = unsafe { ffi::cogent_common_init_model(common_init) };
-    let shared_context = unsafe { ffi::cogent_common_init_context(common_init) };
-    if primary_model.is_null() || shared_context.is_null() {
-        unsafe {
-            ffi::cogent_common_init_free(common_init);
-        }
+) -> Result<()> {
+    if native_runtime.n_ctx() <= 0 || native_runtime.n_batch() <= 0 {
         return Err(Error::ModelLoad {
             path: model_path_string.to_string(),
         });
     }
-
-    let vocab = unsafe { ffi::cogent_common_init_vocab(common_init) };
-    if vocab.is_null() {
-        unsafe {
-            ffi::cogent_common_init_free(common_init);
-        }
-        return Err(Error::NullPointer("llama_model_get_vocab"));
-    }
-
-    let chat_templates =
-        unsafe { ffi::cogent_chat_templates_init(primary_model, std::ptr::null()) };
-    let mtmd_context = init_multimodal_context(config, primary_model, chat_templates, common_init)?;
-
-    Ok(ModelHandles {
-        primary_model,
-        shared_context,
-        chat_templates,
-        mtmd_context,
-    })
+    init_multimodal_context(config, native_runtime)?;
+    Ok(())
 }
 
 fn probe_model_class(model_path: &std::path::Path, model_path_string: &str) -> Result<ModelClass> {
@@ -329,27 +213,26 @@ fn apply_model_class_defaults(config: &mut NativeRuntimeConfig, class: ModelClas
 
 fn build_capabilities(
     config: &NativeRuntimeConfig,
-    common_init: *const ffi::cogent_common_init,
+    native_runtime: &NativeRuntimeHandle,
 ) -> Result<RuntimeModelCapabilities> {
     // Probe the raw GGUF metadata, not the common_chat_templates fallback —
     // we want "was the model trained with a chat template" (so chat() is
     // semantically meaningful), not "can llama.cpp synthesize a template".
-    let has_chat_template = unsafe { ffi::cogent_common_init_model_has_chat_template(common_init) };
-    let pooling_raw = unsafe { ffi::cogent_common_init_pooling_type(common_init) };
+    let has_chat_template = native_runtime.has_chat_template();
+    let pooling_raw = native_runtime.pooling_type();
     let pooling_type =
         PoolingType::from_llama_value(pooling_raw).ok_or_else(|| Error::UnsupportedOperation {
             operation: "load",
             reason: format!("unsupported llama.cpp pooling type {pooling_raw}"),
         })?;
-    let decoder_start_token =
-        match unsafe { ffi::cogent_common_init_decoder_start_token(common_init) } {
-            token if token >= 0 => Some(token),
-            _ => None,
-        };
-    let n_embd_out = unsafe { ffi::cogent_common_init_n_embd_out(common_init) };
-    let n_cls_out = unsafe { ffi::cogent_common_init_n_cls_out(common_init) };
+    let decoder_start_token = match native_runtime.decoder_start_token() {
+        token if token >= 0 => Some(token),
+        _ => None,
+    };
+    let n_embd_out = native_runtime.n_embd_out();
+    let n_cls_out = native_runtime.n_cls_out();
     Ok(RuntimeModelCapabilities {
-        class: model_class_from_init(common_init)?,
+        class: model_class_from_init(native_runtime)?,
         embedding_dimensions: embedding_dimensions(pooling_type, n_embd_out, n_cls_out),
         pooling_type,
         decoder_start_token,
@@ -366,9 +249,9 @@ fn embedding_dimensions(pooling_type: PoolingType, n_embd_out: i32, n_cls_out: i
     }
 }
 
-fn model_class_from_init(common_init: *const ffi::cogent_common_init) -> Result<ModelClass> {
-    let has_encoder = unsafe { ffi::cogent_common_init_model_has_encoder(common_init) };
-    let has_decoder = unsafe { ffi::cogent_common_init_model_has_decoder(common_init) };
+fn model_class_from_init(native_runtime: &NativeRuntimeHandle) -> Result<ModelClass> {
+    let has_encoder = native_runtime.has_encoder();
+    let has_decoder = native_runtime.has_decoder();
     match (has_encoder, has_decoder) {
         (true, true) => Ok(ModelClass::EncoderDecoder),
         (true, false) => Ok(ModelClass::EncoderOnly),
@@ -382,39 +265,22 @@ fn model_class_from_init(common_init: *const ffi::cogent_common_init) -> Result<
 
 fn init_multimodal_context(
     config: &NativeRuntimeConfig,
-    primary_model: *mut ffi::llama_model,
-    chat_templates: *mut ffi::cogent_chat_templates,
-    common_init: *mut ffi::cogent_common_init,
-) -> Result<*mut ffi::cogent_mtmd_context> {
+    native_runtime: &mut NativeRuntimeHandle,
+) -> Result<()> {
     let Some(projector_path) = config.multimodal.projector_path.as_ref() else {
-        return Ok(std::ptr::null_mut());
+        return Ok(());
     };
 
-    let c_mmproj_path = CString::new(projector_path.as_str())?;
     let use_gpu = config.multimodal.use_gpu.unwrap_or(true);
-    let mtmd = unsafe {
-        ffi::cogent_mtmd_init_from_file(
-            c_mmproj_path.as_ptr(),
-            primary_model,
-            use_gpu,
-            config.context.n_threads.unwrap_or(0),
-        )
-    };
-    if mtmd.is_null() || !unsafe { ffi::cogent_mtmd_support_vision(mtmd) } {
-        if !mtmd.is_null() {
-            unsafe {
-                ffi::cogent_mtmd_free(mtmd);
-            }
-        }
-        unsafe {
-            if !chat_templates.is_null() {
-                ffi::cogent_chat_templates_free(chat_templates);
-            }
-            ffi::cogent_common_init_free(common_init);
-        }
+    let init_ok = native_runtime.init_mtmd(
+        projector_path,
+        use_gpu,
+        config.context.n_threads.unwrap_or(0),
+    );
+    if !init_ok || !native_runtime.mtmd_support_vision() {
         return Err(Error::NullPointer("cogent_mtmd_init_from_file"));
     }
-    Ok(mtmd)
+    Ok(())
 }
 
 #[cfg(test)]

@@ -285,6 +285,14 @@ export interface BackendRegistryInfo {
   deviceCount: number;
 }
 
+export interface BackendCompiledInfo {
+  readonly cuda?: boolean;
+  readonly metal?: boolean;
+  readonly vulkan?: boolean;
+  readonly openmp?: boolean;
+  readonly webgpu?: boolean;
+}
+
 export interface BackendObservability {
   profilingEnabled: boolean;
   webgpuCompiled: boolean;
@@ -292,6 +300,10 @@ export interface BackendObservability {
   webgpuDeviceCount: number;
   gpuOffloadSupported: boolean;
   engineInitialized: boolean;
+  readonly dynamicBackendLoading?: boolean;
+  readonly compiled?: BackendCompiledInfo;
+  readonly backendCount?: number;
+  readonly deviceCount?: number;
   availableBackends: BackendRegistryInfo[];
   devices: BackendDeviceInfo[];
 }

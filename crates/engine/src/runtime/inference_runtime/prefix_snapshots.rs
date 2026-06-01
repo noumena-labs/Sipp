@@ -67,7 +67,7 @@ impl InferenceRuntime {
             let (seq_id, completed) = self.scratch_terminal_sequences[i];
             if completed {
                 self.prefix_state_cache
-                    .drain_best_pending_snapshot_for_seq(self.shared_context, seq_id);
+                    .drain_best_pending_snapshot_for_seq(&self.native_runtime, seq_id);
             } else {
                 self.prefix_state_cache
                     .drop_pending_snapshots_for_seq(seq_id);

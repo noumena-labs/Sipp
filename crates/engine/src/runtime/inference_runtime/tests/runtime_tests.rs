@@ -1,12 +1,13 @@
 use std::collections::HashSet;
 
 use crate::engine::protocol::{ModelClass, PoolingType};
+use crate::native_bridge::{NativeRuntimeHandle, SamplerHandle};
 use crate::runtime::config::{NativeRuntimeConfig, ResolvedRuntimeLimits};
 use crate::runtime::inference_runtime::capabilities::RuntimeModelCapabilities;
 use crate::runtime::llama::LlamaBatchBuilder;
 use crate::runtime::metrics::RuntimeObservabilityMetrics;
 use crate::runtime::request::RequestQueue;
-use crate::runtime::scheduler::{BatchPlanner, SharedBatchPlan, SlotScheduler};
+use crate::runtime::scheduler::{BatchPlanner, SamplerCacheKey, SharedBatchPlan, SlotScheduler};
 use crate::runtime::session::{PrefixCachePolicy, PrefixStateCache, SessionStore};
 
 use super::super::InferenceRuntime;
@@ -23,12 +24,8 @@ pub(crate) fn test_runtime(config: NativeRuntimeConfig) -> InferenceRuntime {
             has_chat_template: false,
             embedding_context: false,
         },
-        residency_lease: None,
-        common_init: std::ptr::null_mut(),
-        primary_model: std::ptr::null_mut(),
-        shared_context: std::ptr::null_mut(),
-        chat_templates: std::ptr::null_mut(),
-        mtmd_context: std::ptr::null_mut(),
+        native_runtime: NativeRuntimeHandle::empty_for_tests(),
+        _residency_lease: None,
         last_runtime_observability: RuntimeObservabilityMetrics::default(),
         has_last_runtime_observability: false,
         session_store: SessionStore::default(),
@@ -54,6 +51,6 @@ pub(crate) fn test_runtime(config: NativeRuntimeConfig) -> InferenceRuntime {
         total_output_tokens: 0,
         total_cache_hits: 0,
         total_prefill_tokens: 0,
-        sampler_pool: std::collections::HashMap::new(),
+        sampler_pool: std::collections::HashMap::<SamplerCacheKey, Vec<SamplerHandle>>::new(),
     }
 }

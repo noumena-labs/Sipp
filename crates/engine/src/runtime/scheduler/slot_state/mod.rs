@@ -1,10 +1,7 @@
 //! Per-slot state: phase, generated tokens, sampler handle, and KV mirror. One slot per active sequence.
 
-use std::ptr::NonNull;
-
-use cogentlm_sys as ffi;
-
 use crate::engine::protocol::PoolingType;
+use crate::native_bridge::SamplerHandle;
 use crate::runtime::request::{GenerateRequest, GenerateRequestId, GenerateRequestLifecycle};
 use crate::runtime::session::SequenceState;
 use crate::runtime::{llama_seq_id, llama_token};
@@ -87,7 +84,7 @@ pub struct SlotState {
     pub sampler_prompt_seeded: bool,
     pub sampler_key: Option<SamplerCacheKey>,
     pub(crate) backend_sampler_attached: bool,
-    pub sampler: Option<NonNull<ffi::cogent_common_sampler>>,
+    pub(crate) sampler: Option<SamplerHandle>,
     pub embedding_output: Option<SlotEmbeddingOutput>,
 }
 
@@ -171,19 +168,19 @@ impl SlotState {
         }
     }
 
-    pub fn set_sampler(&mut self, sampler: *mut ffi::cogent_common_sampler) {
+    pub(crate) fn set_sampler(&mut self, sampler: SamplerHandle) {
         debug_assert!(
             !self.backend_sampler_attached,
             "backend sampler must be detached before replacing sampler"
         );
         self.free_sampler();
         self.sampler_key = None;
-        self.sampler = NonNull::new(sampler);
+        self.sampler = Some(sampler);
         self.sampler_prompt_seeded = false;
         self.backend_sampler_attached = false;
     }
 
-    pub fn take_sampler(&mut self) -> Option<NonNull<ffi::cogent_common_sampler>> {
+    pub(crate) fn take_sampler(&mut self) -> Option<SamplerHandle> {
         debug_assert!(
             !self.backend_sampler_attached,
             "backend sampler must be detached before taking sampler"
@@ -193,15 +190,7 @@ impl SlotState {
     }
 
     fn free_sampler(&mut self) {
-        if let Some(sampler) = self.sampler.take() {
-            // SAFETY: SlotState owns sampler pointers installed through
-            // set_sampler unless take_sampler transfers ownership to the
-            // runtime sampler pool. NonNull guarantees a non-null pointer, and
-            // this path takes the Option so the sampler is freed at most once.
-            unsafe {
-                ffi::cogent_common_sampler_free(sampler.as_ptr());
-            }
-        }
+        self.sampler = None;
     }
 }
 

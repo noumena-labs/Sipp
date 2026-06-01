@@ -6,7 +6,6 @@ use std::path::PathBuf;
 pub(crate) struct BuildContext {
     pub(crate) manifest_dir: PathBuf,
     pub(crate) llama_dir: PathBuf,
-    pub(crate) out_dir: PathBuf,
     pub(crate) target: String,
     pub(crate) target_kind: TargetKind,
     pub(crate) host_is_windows: bool,
@@ -19,7 +18,6 @@ impl BuildContext {
         let manifest_dir =
             sanitize_path(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
         let llama_dir = manifest_dir.join("../../third_party/llama.cpp");
-        let out_dir = sanitize_path(env::var("OUT_DIR").expect("OUT_DIR"));
         let target = env::var("TARGET").unwrap_or_default();
         let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
         let target_kind = targets::classify(&target_os, &target);
@@ -27,7 +25,6 @@ impl BuildContext {
         Self {
             manifest_dir,
             llama_dir,
-            out_dir,
             target,
             target_kind,
             host_is_windows: cfg!(windows),
@@ -47,19 +44,16 @@ impl BuildContext {
     pub(crate) fn emit_rerun_triggers(&self) {
         println!("cargo:rerun-if-changed=CMakeLists.txt");
         println!("cargo:rerun-if-changed=cmake/llama_mtmd_sources.cmake");
-        println!("cargo:rerun-if-changed=src/wrapper.h");
+        println!("cargo:rerun-if-changed=src/bridge.rs");
         println!("cargo:rerun-if-changed=include/cogent_shim.h");
+        println!("cargo:rerun-if-changed=include/cogent_cxx.h");
         println!("cargo:rerun-if-changed=src/cogent_shim.cpp");
-        println!(
-            "cargo:rerun-if-changed=src/bindings/{}",
-            self.binding_cache_file_name()
-        );
+        println!("cargo:rerun-if-changed=src/cogent_cxx.cpp");
         println!("cargo:rerun-if-env-changed=CUDA_PATH");
         println!("cargo:rerun-if-env-changed=CUDA_HOME");
         println!("cargo:rerun-if-env-changed=VULKAN_SDK");
         println!("cargo:rerun-if-env-changed=EMSDK");
         println!("cargo:rerun-if-env-changed=COGENTLM_SYS_CMAKE_OUT_DIR");
-        println!("cargo:rerun-if-env-changed=COGENT_GENERATE_BINDINGS");
     }
 
     pub(crate) fn workspace_build_dir(&self) -> PathBuf {
@@ -72,16 +66,6 @@ impl BuildContext {
             .join("sys")
             .join(path_component(&self.target, "host"))
             .join(self.features.backend_tag())
-    }
-
-    pub(crate) fn binding_cache_path(&self) -> PathBuf {
-        self.manifest_dir
-            .join("src/bindings")
-            .join(self.binding_cache_file_name())
-    }
-
-    pub(crate) fn binding_cache_file_name(&self) -> String {
-        format!("{}.rs", self.target.replace('-', "_"))
     }
 }
 
@@ -130,9 +114,7 @@ impl FeatureFlags {
 pub(crate) struct BuildEnv {
     pub(crate) cuda_path: Option<PathBuf>,
     pub(crate) vulkan_sdk: Option<PathBuf>,
-    pub(crate) emsdk: Option<PathBuf>,
     pub(crate) cmake_out_dir: Option<PathBuf>,
-    pub(crate) force_generate_bindings: bool,
 }
 
 impl BuildEnv {
@@ -142,11 +124,9 @@ impl BuildEnv {
                 .or_else(|| env::var_os("CUDA_HOME"))
                 .map(PathBuf::from),
             vulkan_sdk: env::var_os("VULKAN_SDK").map(PathBuf::from),
-            emsdk: env::var_os("EMSDK").map(PathBuf::from),
             cmake_out_dir: env::var("COGENTLM_SYS_CMAKE_OUT_DIR")
                 .ok()
                 .map(sanitize_path),
-            force_generate_bindings: env::var("COGENT_GENERATE_BINDINGS").is_ok(),
         }
     }
 }

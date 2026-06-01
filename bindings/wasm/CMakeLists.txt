@@ -39,6 +39,7 @@ set(COGENTLM_LLAMA_CPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/llama.
 # llama.cpp Wasm subproject
 set(LLAMA_WASM_MEM64 ${CE_WASM_MEM64} CACHE BOOL "Use wasm64 memory model for cogentlm" FORCE)
 set(GGML_WEBGPU ON CACHE BOOL "Enable WebGPU backend for CogentLM browser builds" FORCE)
+set(GGML_WEBGPU_JSPI ${CE_WASM_USE_JSPI} CACHE BOOL "Use JSPI for ggml WebGPU waits" FORCE)
 
 if(CE_BUILD_WEBGPU_TEST_BACKEND_OPS)
   set(LLAMA_BUILD_TESTS ON CACHE BOOL "Build llama.cpp tests" FORCE)
@@ -74,6 +75,12 @@ target_include_directories(CogentLM PRIVATE
     ${COGENTLM_LLAMA_CPP_DIR}/common
     ${COGENTLM_LLAMA_CPP_DIR}/vendor
 )
+
+foreach(_cogent_backend CUDA METAL VULKAN OPENMP WEBGPU)
+    if(GGML_${_cogent_backend})
+        target_compile_definitions(CogentLM PRIVATE GGML_USE_${_cogent_backend})
+    endif()
+endforeach()
 
 if(CE_WASM_MEM64)
     message(FATAL_ERROR "Browser Rust staticlibs require CE_WASM_MEM64=OFF")

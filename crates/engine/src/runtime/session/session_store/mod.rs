@@ -1,9 +1,6 @@
 //! Per-context-key session map: tracks live KV tokens, hardware sequence ids, and eviction.
 
 use std::collections::{hash_map::Entry, HashMap, VecDeque};
-use std::ptr::NonNull;
-
-use cogentlm_sys as ffi;
 
 use crate::runtime::{llama_seq_id, llama_token};
 
@@ -25,7 +22,6 @@ pub struct SessionStore {
     evictable_context_keys: VecDeque<String>,
     free_seq_ids: VecDeque<llama_seq_id>,
     seq_id_available: Vec<bool>,
-    shared_context: Option<NonNull<ffi::llama_context>>,
     max_cached_contexts: usize,
 }
 
@@ -46,13 +42,8 @@ impl SessionStore {
             evictable_context_keys: VecDeque::with_capacity(max_cached_contexts),
             free_seq_ids,
             seq_id_available: vec![true; max_sequences],
-            shared_context: None,
             max_cached_contexts,
         }
-    }
-
-    pub fn bind_shared_context(&mut self, shared_context: *mut ffi::llama_context) {
-        self.shared_context = NonNull::new(shared_context);
     }
 
     pub fn find(&self, context_key: &str) -> Option<&SequenceState> {
@@ -184,23 +175,6 @@ impl SessionStore {
     pub fn clear(&mut self) {
         self.context_states.clear();
         self.evictable_context_keys.clear();
-    }
-
-    pub fn clear_sequence_memory(&self, seq_id: llama_seq_id) {
-        let Some(shared_context) = self.shared_context else {
-            return;
-        };
-        if seq_id < 0 {
-            return;
-        }
-
-        // SAFETY: `shared_context` is captured from `bind_shared_context` as a
-        // non-null llama context pointer owned by the runtime. `seq_id` is
-        // validated non-negative before passing it to llama.cpp.
-        unsafe {
-            let memory = ffi::llama_get_memory(shared_context.as_ptr());
-            ffi::llama_memory_seq_rm(memory, seq_id, 0, -1);
-        }
     }
 
     pub fn prepare_for_admission(

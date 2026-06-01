@@ -11,9 +11,13 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 cogentlm-shard.workspace = true
+cxx.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+
+[build-dependencies]
+cxx-build.workspace = true
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 cogentlm-engine = { path = "../../crates/engine", default-features = false }

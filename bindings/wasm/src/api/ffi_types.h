@@ -15,6 +15,11 @@
 // changing the exported calling convention.
 typedef uint32_t CE_RequestId;
 
+typedef int (*CE_ReadAtCallback)(void *, uint64_t, uint8_t *, uintptr_t);
+typedef int (*CE_OpenShardCallback)(void *, const char *, uint16_t, uint16_t);
+typedef int (*CE_WriteShardCallback)(void *, const uint8_t *, uintptr_t);
+typedef int (*CE_CloseShardCallback)(void *);
+
 typedef enum CE_TokenEmissionMode {
   CE_TOKEN_EMISSION_NONE = 0,
   // Rust appends to the streaming buffer; JS drains it through the browser

@@ -2,6 +2,7 @@
 
 use super::super::*;
 use crate::lifecycle::AssetRole;
+use crate::runtime::config::GpuLayerConfig;
 
 fn inspection(
     role: AssetRole,
@@ -52,10 +53,26 @@ fn classified(record: &BrowserAssetRecord) -> ClassifiedAsset {
 }
 
 fn load_options(runtime: Value, observability: BrowserObservabilityMode) -> BrowserLoadOptions {
+    load_options_with_backend(BrowserBackendPreference::Cpu, runtime, observability)
+}
+
+fn load_options_with_backend(
+    backend: BrowserBackendPreference,
+    runtime: Value,
+    observability: BrowserObservabilityMode,
+) -> BrowserLoadOptions {
     BrowserLoadOptions {
-        backend: BrowserBackendPreference::Cpu,
+        backend,
         runtime,
         observability,
+    }
+}
+
+fn backend_capabilities(compiled: &[&str], available: &[&str]) -> BackendCapabilities {
+    BackendCapabilities {
+        compiled: compiled.iter().map(|value| value.to_string()).collect(),
+        available: available.iter().map(|value| value.to_string()).collect(),
+        gpu_offload_supported: compiled.iter().any(|value| *value != "cpu"),
     }
 }
 
@@ -129,6 +146,85 @@ fn browser_runtime_preserves_explicit_warmup() {
     .expect("plan");
 
     assert!(plan.config.context.warmup);
+}
+
+#[test]
+fn browser_auto_without_capability_probe_defaults_cpu() {
+    let plan = browser_backend_plan(&load_options_with_backend(
+        BrowserBackendPreference::Auto,
+        json!({}),
+        BrowserObservabilityMode::Off,
+    ))
+    .expect("auto plan");
+
+    assert_eq!(plan.selection.requested, BackendPreference::Auto);
+    assert_eq!(plan.selection.selected, "cpu");
+    assert_eq!(plan.config.placement.gpu_layers, GpuLayerConfig::Count(0));
+}
+
+#[test]
+fn browser_webgpu_without_capability_probe_uses_full_offload() {
+    let plan = browser_backend_plan(&load_options_with_backend(
+        BrowserBackendPreference::WebGpu,
+        json!({}),
+        BrowserObservabilityMode::Off,
+    ))
+    .expect("webgpu plan");
+
+    assert_eq!(plan.selection.requested, BackendPreference::WebGpu);
+    assert_eq!(plan.selection.selected, "webgpu");
+    assert_eq!(plan.config.placement.gpu_layers, GpuLayerConfig::Auto);
+    assert!(plan.selection.gpu_offload_expected);
+}
+
+#[test]
+fn browser_auto_selects_webgpu_when_capable() {
+    let plan = browser_backend_plan_with_capabilities(
+        &load_options_with_backend(
+            BrowserBackendPreference::Auto,
+            json!({}),
+            BrowserObservabilityMode::Off,
+        ),
+        Some(&backend_capabilities(&["webgpu"], &["cpu", "webgpu"])),
+    )
+    .expect("webgpu plan");
+
+    assert_eq!(plan.selection.requested, BackendPreference::Auto);
+    assert_eq!(plan.selection.selected, "webgpu");
+    assert_eq!(plan.config.placement.gpu_layers, GpuLayerConfig::Auto);
+    assert!(plan.selection.gpu_offload_expected);
+}
+
+#[test]
+fn browser_cpu_forces_cpu_when_webgpu_is_capable() {
+    let plan = browser_backend_plan_with_capabilities(
+        &load_options_with_backend(
+            BrowserBackendPreference::Cpu,
+            json!({}),
+            BrowserObservabilityMode::Off,
+        ),
+        Some(&backend_capabilities(&["webgpu"], &["cpu", "webgpu"])),
+    )
+    .expect("cpu plan");
+
+    assert_eq!(plan.selection.selected, "cpu");
+    assert_eq!(plan.config.placement.gpu_layers, GpuLayerConfig::Count(0));
+    assert!(!plan.selection.gpu_offload_expected);
+}
+
+#[test]
+fn browser_webgpu_requires_available_backend() {
+    let error = browser_backend_plan_with_capabilities(
+        &load_options_with_backend(
+            BrowserBackendPreference::WebGpu,
+            json!({}),
+            BrowserObservabilityMode::Off,
+        ),
+        Some(&backend_capabilities(&[], &["cpu"])),
+    )
+    .expect_err("missing webgpu");
+
+    assert!(matches!(error, ModelError::InvalidModelSource(_)));
 }
 
 #[test]

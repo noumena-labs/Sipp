@@ -1,5 +1,4 @@
-use cogentlm_sys as ffi;
-
+use crate::native_bridge::NativeRuntimeHandle;
 use crate::runtime::config::NativeRuntimeConfig;
 use crate::runtime::request::GenerateRequestLifecycle;
 use crate::runtime::request::RequestQueue;
@@ -21,7 +20,7 @@ use recovery::normalize_runnable_slot_state;
 use sampler_attach::ensure_slot_sampler;
 
 impl InferenceRuntime {
-    pub(super) fn normalize_slots_for_tick(&mut self, vocab: *const ffi::llama_vocab) {
+    pub(super) fn normalize_slots_for_tick(&mut self) {
         let slot_count = self.slot_scheduler.slots.len();
         for slot_index in 0..slot_count {
             let slot = &mut self.slot_scheduler.slots[slot_index];
@@ -37,35 +36,28 @@ impl InferenceRuntime {
 
             normalize_runnable_slot_state(
                 slot,
-                self.shared_context,
-                self.primary_model,
+                &mut self.native_runtime,
                 live_retained_prefix_tokens(&self.config),
             );
 
             // Embedding-only slots have no sampler — they never visit the
             // sample/decode loop. Skip sampler creation, backend attachment,
             // and sampler-pool accounting entirely.
-            if slot.plan.terminal == TerminalAction::SampleTokens
-                && slot.sampler.is_none()
-                && !ensure_slot_sampler(
+            if slot.plan.terminal == TerminalAction::SampleTokens && slot.sampler.is_none() {
+                if !ensure_slot_sampler(
                     slot,
-                    self.common_init,
-                    self.shared_context,
+                    &mut self.native_runtime,
                     &self.config,
                     &mut self.sampler_pool,
-                )
-            {
-                continue;
+                ) {
+                    continue;
+                }
             }
 
-            if slot.phase == SlotPhase::Prefill
-                && slot.prefill_cursor == 0
-                && run_initial_prefill(
+            if slot.phase == SlotPhase::Prefill && slot.prefill_cursor == 0 {
+                if run_initial_prefill(
                     slot,
-                    vocab,
-                    self.mtmd_context,
-                    self.shared_context,
-                    self.primary_model,
+                    &mut self.native_runtime,
                     &self.config,
                     self.model_fingerprint,
                     &self.session_store,
@@ -73,14 +65,14 @@ impl InferenceRuntime {
                     &mut self.prefix_cache_policy,
                     &mut self.request_queue,
                     &mut self.scratch_token_piece,
-                )
-            {
-                continue;
+                ) {
+                    continue;
+                }
             }
 
             if slot.phase == SlotPhase::Decode
                 && !ensure_decode_step_context_space(
-                    self.shared_context,
+                    &mut self.native_runtime,
                     live_retained_prefix_tokens(&self.config),
                     slot,
                 )
@@ -99,27 +91,22 @@ impl InferenceRuntime {
 #[allow(clippy::too_many_arguments)]
 fn run_initial_prefill(
     slot: &mut SlotState,
-    vocab: *const ffi::llama_vocab,
-    mtmd_context: *mut ffi::cogent_mtmd_context,
-    shared_context: *mut ffi::llama_context,
-    primary_model: *mut ffi::llama_model,
+    native_runtime: &mut NativeRuntimeHandle,
     config: &NativeRuntimeConfig,
     model_fingerprint: u64,
     session_store: &SessionStore,
     prefix_state_cache: &mut PrefixStateCache,
     prefix_cache_policy: &mut PrefixCachePolicy,
     request_queue: &mut RequestQueue,
-    scratch_token_piece: &mut Vec<i8>,
+    scratch_token_piece: &mut Vec<u8>,
 ) -> bool {
     if slot
         .request()
         .is_some_and(|request| request.is_multimodal_turn)
     {
         let ok = run_multimodal_prefill(
-            mtmd_context,
-            shared_context,
-            vocab,
-            resolve_batch_token_budget(shared_context, config),
+            native_runtime,
+            resolve_batch_token_budget(native_runtime, config),
             request_queue,
             slot,
             scratch_token_piece,
@@ -157,8 +144,7 @@ fn run_initial_prefill(
     };
     let mut prefill_cursor = 0;
     if let Some(cache_hits) = prepare_sequence_for_prompt(
-        shared_context,
-        primary_model,
+        native_runtime,
         live_retained_prefix_tokens(config),
         snapshot_prefix_cache,
         config.scheduler.policy.decode_token_reserve,
@@ -178,10 +164,9 @@ fn run_initial_prefill(
             && request.grammar.is_empty()
             && request.json_schema.is_empty()
         {
-            if let Some(sampler) = slot.sampler {
+            if let Some(sampler) = slot.sampler.as_mut() {
                 for &token in &request.prompt_tokens {
-                    if !unsafe { ffi::cogent_common_sampler_accept(sampler.as_ptr(), token, false) }
-                    {
+                    if !sampler.accept(token, false) {
                         break;
                     }
                 }

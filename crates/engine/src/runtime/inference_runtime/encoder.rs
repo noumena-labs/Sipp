@@ -4,8 +4,6 @@
 //! through one `llama_encode` call, then rewrite the decoder prompt to the
 //! model's decoder-start token and continue through the normal decode loop.
 
-use cogentlm_sys as ffi;
-
 use crate::engine::protocol::{ModelClass, PoolingType};
 use crate::error::{Error, Result};
 use crate::runtime::llama::LlamaBatchBuilder;
@@ -154,11 +152,14 @@ impl InferenceRuntime {
             }
         }
 
-        let status = unsafe { ffi::cogent_llama_encode(self.shared_context, &batch.batch) };
+        let status = self
+            .native_runtime
+            .encode(batch.batch())
+            .map_err(|error| Error::RuntimeCommand(error.to_string()))?;
         if status != 0 {
             return Err(Error::Decode(status));
         }
-        if !unsafe { ffi::cogent_llama_synchronize(self.shared_context) } {
+        if !self.native_runtime.synchronize() {
             return Err(Error::RuntimeCommand(
                 "llama_synchronize() failed after encoder pass".to_string(),
             ));

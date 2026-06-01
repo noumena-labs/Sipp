@@ -11,22 +11,22 @@ use std::thread;
 use std::time::Duration;
 
 const LOGO: &[&str] = &[
-    r#"  ____ ___   ____ _____ _   _ _____ _    __  __ "#,
+    r#"  ____ ___   ____ _____ _   _ _____ _     __  __ "#,
     r#" / ___/ _ \ / ___| ____| \ | |_   _| |   |  \/  |"#,
-    r#"| |  | | | | |  _|  _| |  \| | | | | |   | |\/| |"#,
+    r#"| |  | | | | |   |  _| |  \| | | | | |   | |\/| |"#,
     r#"| |__| |_| | |_| | |___| |\  | | | | |___| |  | |"#,
     r#" \____\___/ \____|_____|_| \_| |_| |_____|_|  |_|"#,
 ];
 
 const TAGLINES: &[&str] = &[
-    "local inference",
-    "webgpu runtime",
-    "native bindings",
-    "developer automation",
+    "LOCAL INFERENCE",
+    "WEBGPU RUNTIME",
+    "NATIVE BINDINGS",
+    "DEVELOPER AUTOMATION",
 ];
 
-const FRAME_COUNT: u16 = 96;
-const FRAME_DELAY: Duration = Duration::from_millis(45);
+const FRAME_COUNT: u16 = 120;
+const FRAME_DELAY: Duration = Duration::from_millis(40);
 
 const FRONT_X: usize = 2;
 const FRONT_Y: usize = 1;
@@ -127,7 +127,6 @@ impl Canvas {
             let mut active_style = Style::Plain;
 
             for cell in &row[..=end] {
-                // Keep styles across empty spaces to prevent ANSI spam
                 let effective_style = if cell.ch == ' ' {
                     active_style
                 } else {
@@ -179,7 +178,6 @@ fn get_terminal_width() -> usize {
     width.min(80)
 }
 
-/// Plays the setup splash inside the bounded inline viewport when available.
 pub(crate) fn play(no_splash: bool) -> Result<bool> {
     if no_splash || super::no_banner() || !super::inline_active() {
         return Ok(false);
@@ -213,8 +211,6 @@ fn frame_lines(frame: u16, term_width: usize) -> Vec<String> {
     let canvas_width = FRONT_X + logo_width + MAX_DEPTH * X_SKEW + 4;
     let canvas_height = FRONT_Y + logo_height + MAX_DEPTH + 5;
 
-    // We add +2 to the max drawn width because the bottom ribs physically overhang
-    // the end of the text extrusion. This ensures the entire mass is perfectly centered.
     let max_drawn_width = FRONT_X + logo_width + dynamic_max_depth * X_SKEW + 2;
     let global_pad = " ".repeat(term_width.saturating_sub(max_drawn_width) / 2);
 
@@ -251,22 +247,20 @@ fn draw_back_glow(
 ) {
     let glow_width = logo_width / 2;
     let y = FRONT_Y + logo_height + depth;
-    let pulse = ((frame as usize / 4) % 4).min(3);
+    let pulse = ((frame as usize / 3) % 6).min(5);
 
     if y >= canvas.height || glow_width < 8 {
         return;
     }
 
-    let start_x = FRONT_X + logo_width / 3 + pulse;
-    let style = Style::DimRgb(38, 58, 100);
+    let start_x = FRONT_X + logo_width / 4 + pulse;
+    let style = Style::DimRgb(75, 0, 130);
 
-    canvas.put(start_x, y, '\\', style, 5);
-
+    canvas.put(start_x, y, '◢', style, 5);
     for i in 0..glow_width {
-        canvas.put(start_x + 1 + i, y, '_', style, 5);
+        canvas.put(start_x + 1 + i, y, '▀', style, 5);
     }
-
-    canvas.put(start_x + glow_width + 1, y, '\\', style, 5);
+    canvas.put(start_x + glow_width + 1, y, '◣', style, 5);
 }
 
 fn draw_extrusion(canvas: &mut Canvas, frame: u16, logo_width: usize, depth: usize) {
@@ -276,8 +270,10 @@ fn draw_extrusion(canvas: &mut Canvas, frame: u16, logo_width: usize, depth: usi
         let x_offset = layer * X_SKEW;
         let y_offset = layer;
 
-        let shade = 42u8.saturating_add(layer as u8 * 8);
-        let base_style = Style::DimRgb(shade, shade.saturating_add(8), 125);
+        let r = 40u8.saturating_add(layer as u8 * 20);
+        let g = 10u8.saturating_add(layer as u8 * 4);
+        let b = 110u8.saturating_add(layer as u8 * 16);
+        let base_style = Style::DimRgb(r, g, b);
 
         for (row, line) in LOGO.iter().enumerate() {
             let padded = pad_to_width(line, logo_width);
@@ -291,18 +287,28 @@ fn draw_extrusion(canvas: &mut Canvas, frame: u16, logo_width: usize, depth: usi
                 };
 
                 let style = if is_extrusion_glint(frame, row, col, layer) {
-                    Style::DimRgb(110, 150, 210)
+                    Style::BoldRgb(0, 240, 255)
                 } else {
                     base_style
                 };
 
-                canvas.put(
-                    FRONT_X + x_offset + col,
-                    FRONT_Y + y_offset + row,
-                    edge.glyph(),
-                    style,
-                    30 - layer as u16,
-                );
+                // FIX: Loop across the full X_SKEW horizontal width to fill the empty column
+                // gaps and seamlessly tie the extrusion chunks together.
+                for s in 0..X_SKEW {
+                    let glyph = match edge {
+                        ExtrusionEdge::Side if s > 0 => '█',   // Solid block filler
+                        ExtrusionEdge::Corner if s > 0 => '█', // Solid block filler
+                        _ => edge.glyph(),
+                    };
+
+                    canvas.put(
+                        FRONT_X + x_offset + col - s,
+                        FRONT_Y + y_offset + row,
+                        glyph,
+                        style,
+                        30 - layer as u16,
+                    );
+                }
             }
         }
     }
@@ -352,77 +358,70 @@ fn draw_bottom_ribs(
             continue;
         }
 
-        let shimmer = ((frame as usize + rib * 5) % 18) < 3;
-        let shade = 70u8.saturating_sub(rib as u8 * 6);
+        let shimmer = ((frame as usize + rib * 4) % 15) < 3;
+        let shade = 60u8.saturating_sub(rib as u8 * 5);
 
         let style = if shimmer {
-            Style::DimRgb(90, 110, 160)
+            Style::Rgb(0, 220, 255)
         } else {
-            Style::DimRgb(shade, shade, shade.saturating_add(24))
+            Style::DimRgb(shade + 10, 20, shade + 50)
         };
 
-        canvas.put(start_x, y, '\\', style, 20);
+        canvas.put(start_x, y, '▕', style, 20);
         for i in 0..width {
-            let ch = if i % 9 == 0 { '-' } else { '_' };
+            let ch = if i % 5 == 0 { '┼' } else { '─' };
             canvas.put(start_x + 1 + i, y, ch, style, 20);
         }
-        canvas.put(start_x + width + 1, y, '\\', style, 20);
+        canvas.put(start_x + width + 1, y, '▏', style, 20);
     }
 }
 
 fn draw_footer(canvas: &mut Canvas, frame: u16, logo_width: usize) {
     let boot_y = canvas.height.saturating_sub(2);
     let tag_y = canvas.height.saturating_sub(1);
-
-    let boot_full = format!("bootstrapping local development {}", spinner(frame));
-    let boot_text = typewriter(&boot_full, frame);
     let logo_center = FRONT_X + (logo_width / 2);
+
+    let boot_full = format!("▲ INITIALIZING CORE ENGINE {} ", spinner(frame));
+    let boot_text = typewriter(&boot_full, frame);
     let boot_x = logo_center.saturating_sub(char_len(&boot_full) / 2);
 
-    canvas.draw_text(
-        boot_x,
-        boot_y,
-        &boot_text,
-        Style::DimRgb(185, 185, 195),
-        200,
-    );
+    canvas.draw_text(boot_x, boot_y, &boot_text, Style::Rgb(0, 255, 170), 200);
 
-    let tagline = TAGLINES[((frame as usize) / 18) % TAGLINES.len()];
-    let prefix = ":: COGENTLM ";
-    let suffix = " ::";
+    let tagline = TAGLINES[((frame as usize) / 16) % TAGLINES.len()];
+    let prefix = "◢◤ COGENT // ";
+    let suffix = " ◥◣";
     let total = char_len(prefix) + char_len(tagline) + char_len(suffix);
     let x = logo_center.saturating_sub(total / 2);
 
-    canvas.draw_text(x, tag_y, prefix, Style::Rgb(255, 96, 190), 210);
+    canvas.draw_text(x, tag_y, prefix, Style::Rgb(255, 0, 128), 210);
     canvas.draw_text(
         x + char_len(prefix),
         tag_y,
         tagline,
-        Style::BoldRgb(255, 96, 190),
+        Style::BoldRgb(255, 230, 0),
         211,
     );
     canvas.draw_text(
         x + char_len(prefix) + char_len(tagline),
         tag_y,
         suffix,
-        Style::Rgb(255, 96, 190),
+        Style::Rgb(255, 0, 128),
         210,
     );
 }
 
 fn front_color(frame: u16, row: usize) -> Style {
-    let wave = ((frame as usize + row * 7) % 48) as u8;
-
-    let r = 205u8.saturating_add(wave / 4);
-    let g = 72u8.saturating_add(row as u8 * 18);
+    let time = (frame as f32) * 0.12 + (row as f32) * 0.35;
+    let r = ((time.sin() * 25.0) + 230.0) as u8;
+    let g = (((time + 1.5).cos() * 45.0) + 55.0) as u8;
     let b = 255;
 
     Style::Rgb(r, g, b)
 }
 
 fn spinner(frame: u16) -> &'static str {
-    const SPINNER: &[&str] = &["|", "/", "-", "\\"];
-    SPINNER[(frame as usize / 3) % SPINNER.len()]
+    const SPINNER: &[&str] = &["▰▱▱▱▱", "▰▰▱▱▱", "▰▰▰▱▱", "▰▰▰▰▱", "▰▰▰▰▰", "▱▱▱▱▱"];
+    SPINNER[(frame as usize / 2) % SPINNER.len()]
 }
 
 fn typewriter(full: &str, frame: u16) -> String {
@@ -431,10 +430,10 @@ fn typewriter(full: &str, frame: u16) -> String {
 
     let typed: String = full.chars().take(typed_len).collect();
 
-    let cursor = if frame % 6 < 3 && typed_len < full_len {
-        "|"
+    let cursor = if frame % 4 < 2 && typed_len < full_len {
+        "█"
     } else {
-        ""
+        " "
     };
 
     format!("{typed}{cursor}")
@@ -468,15 +467,16 @@ fn animated_depth(frame: u16, dynamic_max: usize) -> usize {
 
 fn front_scan_style(frame: u16, row: usize, distance: usize) -> Style {
     match distance {
-        0 => Style::BoldRgb(245, 250, 255),
-        1 => Style::BoldRgb(120, 230, 255),
-        2 => Style::Rgb(130, 165, 255),
+        0 => Style::BoldRgb(255, 255, 255),
+        1 => Style::BoldRgb(0, 245, 255),
+        2 => Style::Rgb(210, 0, 255),
+        3 => Style::DimRgb(120, 0, 180),
         _ => front_color(frame, row),
     }
 }
 
 fn is_extrusion_glint(frame: u16, row: usize, col: usize, layer: usize) -> bool {
-    (frame as usize + row * 3 + col + layer * 5) % 71 == 0
+    (frame as usize + row * 3 + col + layer * 5) % 67 == 0
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -489,9 +489,9 @@ enum ExtrusionEdge {
 impl ExtrusionEdge {
     fn glyph(self) -> char {
         match self {
-            Self::Bottom => '-',
-            Self::Side => '|',
-            Self::Corner => '\\',
+            Self::Bottom => '▄',
+            Self::Side => '▐',
+            Self::Corner => '▞',
         }
     }
 }

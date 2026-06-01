@@ -6,13 +6,6 @@
 //!   sync (admission-time).
 //! - Decoder-only slots loaded with `embeddings=true` call this once the
 //!   standard decode prefill reaches the end of the prompt.
-//!
-//! Both ultimately call `cogent_llama_embeddings_seq` to pull the resolved
-//! pooled vector for the slot's `seq_id`, copy it into `slot.embedding_output`,
-//! and apply L2 normalization unless the model uses `Rank` pooling or the
-//! per-request override disables it.
-
-use cogentlm_sys as ffi;
 
 use crate::engine::protocol::PoolingType;
 use crate::error::{Error, Result};
@@ -43,24 +36,15 @@ impl InferenceRuntime {
             });
         }
 
-        // SAFETY: shared_context is non-null on a loaded runtime (is_ready()
-        // gates every tick), seq_id was just validated as non-negative.
-        let ptr = unsafe { ffi::cogent_llama_embeddings_seq(self.shared_context, seq_id) };
-        if ptr.is_null() {
-            return Err(Error::RuntimeCommand(
-                "llama_get_embeddings_seq returned NULL — context has no pooled output for the \
-                 sequence (check embeddings=true and a non-NONE pooling type)"
-                    .to_string(),
-            ));
-        }
-
-        // SAFETY: `dimensions` is the resolved output width for this pooling
-        // mode. For Rank pooling it is `n_cls_out`; for other pooled modes it
-        // is `n_embd_out`. The slice borrow ends before any other llama call,
-        // since we copy into an owned Vec immediately.
+        let values = self.native_runtime.embeddings_seq(seq_id)?;
         let len = dimensions as usize;
-        let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
-        Ok(slice.to_vec())
+        if values.len() != len {
+            return Err(Error::RuntimeCommand(format!(
+                "llama embeddings returned {} values, expected {len}",
+                values.len()
+            )));
+        }
+        Ok(values)
     }
 
     fn complete_slot_with_embedding(&mut self, slot_index: usize, output: SlotEmbeddingOutput) {

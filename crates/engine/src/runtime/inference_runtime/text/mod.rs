@@ -1,35 +1,25 @@
 //! Token-to-text decoding, stop-sequence matching, and incremental UTF-8
 //! reassembly that drive the slot's output buffer.
 
-use cogentlm_sys as ffi;
-
+use crate::native_bridge::NativeRuntimeHandle;
 use crate::runtime::llama_token;
 use crate::runtime::scheduler::{SlotPhase, SlotState};
-
-use super::numeric::token_piece_growth_capacity;
 
 /// Decode `token` into UTF-8 and push it onto the slot's emission/output
 /// buffers. Marks the slot as `Failed` on tokenization error.
 #[inline]
 pub(super) fn append_token_piece_to_slot(
-    vocab: *const ffi::llama_vocab,
+    native_runtime: &NativeRuntimeHandle,
     token: llama_token,
     slot: &mut SlotState,
-    piece_scratch: &mut Vec<i8>,
+    piece_scratch: &mut Vec<u8>,
 ) {
-    if !token_to_piece_into(vocab, token, false, piece_scratch) {
+    if !token_to_piece_into(native_runtime, token, false, piece_scratch) {
         slot.fail("Failed to convert sampled token to text piece.");
         return;
     }
 
-    // SAFETY: `piece_scratch` holds the freshly written piece bytes; we
-    // reinterpret them as &[u8] without copying. Provenance is valid for
-    // the duration of this function.
-    let piece_bytes: &[u8] = unsafe {
-        std::slice::from_raw_parts(piece_scratch.as_ptr().cast::<u8>(), piece_scratch.len())
-    };
-
-    slot.pending_utf8_bytes.extend_from_slice(piece_bytes);
+    slot.pending_utf8_bytes.extend_from_slice(piece_scratch);
     let tail_len = incomplete_utf8_tail_length(&slot.pending_utf8_bytes);
     let complete_len = slot.pending_utf8_bytes.len().saturating_sub(tail_len);
     if complete_len > 0 {
@@ -155,58 +145,20 @@ pub(super) fn flush_pending_utf8(slot: &mut SlotState) {
 /// is reused across calls (per-token work is `resize` + `truncate`).
 #[inline]
 pub(super) fn token_to_piece_into(
-    vocab: *const ffi::llama_vocab,
+    native_runtime: &NativeRuntimeHandle,
     token: llama_token,
     special: bool,
-    scratch: &mut Vec<i8>,
+    scratch: &mut Vec<u8>,
 ) -> bool {
     scratch.clear();
-    if vocab.is_null() || token < 0 {
+    if token < 0 {
         return false;
     }
-
-    if scratch.capacity() < 128 {
-        scratch.reserve(128 - scratch.capacity());
-    }
-
-    loop {
-        let Ok(capacity) = i32::try_from(scratch.capacity()) else {
-            scratch.clear();
-            return false;
-        };
-        let Ok(capacity_usize) = usize::try_from(capacity) else {
-            scratch.clear();
-            return false;
-        };
-        scratch.resize(capacity_usize, 0);
-        // SAFETY: `vocab` was checked for null, `scratch` has been resized to
-        // `capacity` bytes, and its pointer is valid for writes for this call.
-        let result = unsafe {
-            ffi::llama_token_to_piece(vocab, token, scratch.as_mut_ptr(), capacity, 0, special)
-        };
-        if result >= 0 && result <= capacity {
-            let Ok(result) = usize::try_from(result) else {
-                scratch.clear();
-                return false;
-            };
-            scratch.truncate(result);
-            return true;
-        }
-        if result == 0 || result == i32::MIN {
-            scratch.clear();
-            return false;
-        }
-        let Some(needed) = token_piece_growth_capacity(result, capacity) else {
-            scratch.clear();
-            return false;
-        };
-        let needed = usize::try_from(needed).expect("positive i32 fits usize");
-        let Some(additional) = needed.checked_sub(scratch.capacity()) else {
-            scratch.clear();
-            return false;
-        };
-        scratch.reserve(additional);
-    }
+    let Ok(piece) = native_runtime.token_to_piece_bytes(token, special) else {
+        return false;
+    };
+    scratch.extend(piece);
+    true
 }
 
 /// Returns the number of trailing bytes that form an incomplete UTF-8 code

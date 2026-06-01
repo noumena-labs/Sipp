@@ -1,6 +1,9 @@
-#![allow(non_camel_case_types)]
-#![allow(non_snake_case)]
-#![allow(non_upper_case_globals)]
-#![allow(clippy::all)]
+pub mod bridge;
 
-include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+#[allow(non_camel_case_types)]
+pub type llama_token = i32;
+
+#[allow(non_camel_case_types)]
+pub type llama_seq_id = i32;
+
+pub const LLAMA_TOKEN_NULL: llama_token = -1;

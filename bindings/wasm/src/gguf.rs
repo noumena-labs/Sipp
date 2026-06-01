@@ -1,20 +1,13 @@
-use std::os::raw::c_char;
-use std::panic::{catch_unwind, AssertUnwindSafe};
-
-use cogentlm_shard::{
-    detect_model_from_gguf_bytes, inspect_gguf_metadata, GgufError, GgufMetadataInspection,
-    ModelDetection,
-};
+#[cfg(test)]
+use cogentlm_shard::inspect_gguf_metadata;
+use cogentlm_shard::{detect_model_from_gguf_bytes, GgufError};
 use serde::Serialize;
 
-use crate::ffi::{into_c_string, read_optional_c_string, serialize_json_response};
+use crate::ffi::serialize_json_response;
 
 const CODE_INVALID_GGUF: &str = "INVALID_GGUF";
 const CODE_UNSUPPORTED_GGUF_VERSION: &str = "UNSUPPORTED_GGUF_VERSION";
 const CODE_GGUF_METADATA_TOO_LARGE: &str = "GGUF_METADATA_TOO_LARGE";
-const GGUF_SERIALIZATION_FALLBACK: &str =
-    "{\"ok\":false,\"error\":{\"code\":\"INVALID_GGUF\",\"message\":\"failed to serialize GGUF response\"}}";
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GgufJsonResponse<T>
@@ -35,80 +28,24 @@ struct GgufJsonError {
     message: String,
 }
 
-#[no_mangle]
-pub extern "C" fn cogentlm_inspect_gguf_metadata_json(
-    bytes_ptr: *const u8,
-    bytes_len: usize,
-) -> *mut c_char {
-    catch_unwind(AssertUnwindSafe(|| {
-        let response = with_bytes(bytes_ptr, bytes_len, inspect_gguf_metadata);
-        into_c_string(serialize_json_response(
-            &response,
-            GGUF_SERIALIZATION_FALLBACK,
-        ))
-    }))
-    .unwrap_or_else(|_| {
-        into_c_string(serialize_json_response(
-            &error_response::<Option<GgufMetadataInspection>>(
-                CODE_INVALID_GGUF,
-                "GGUF metadata inspection panicked".to_string(),
-            ),
-            GGUF_SERIALIZATION_FALLBACK,
-        ))
-    })
+#[cfg(test)]
+pub(crate) fn inspect_gguf_metadata_json(bytes: &[u8]) -> String {
+    let response = with_bytes(bytes, inspect_gguf_metadata);
+    serialize_json_response(&response)
 }
 
-#[no_mangle]
-pub extern "C" fn cogentlm_detect_model_from_gguf_bytes_json(
-    name: *const c_char,
-    bytes_ptr: *const u8,
-    bytes_len: usize,
-) -> *mut c_char {
-    catch_unwind(AssertUnwindSafe(|| {
-        let Some(name) = read_optional_c_string(name) else {
-            return into_c_string(serialize_json_response(
-                &error_response::<ModelDetection>(
-                    CODE_INVALID_GGUF,
-                    "model file name is not valid UTF-8".to_string(),
-                ),
-                GGUF_SERIALIZATION_FALLBACK,
-            ));
-        };
-        let response = with_bytes(bytes_ptr, bytes_len, |bytes| {
-            detect_model_from_gguf_bytes(name, bytes)
-        });
-        into_c_string(serialize_json_response(
-            &response,
-            GGUF_SERIALIZATION_FALLBACK,
-        ))
-    }))
-    .unwrap_or_else(|_| {
-        into_c_string(serialize_json_response(
-            &error_response::<ModelDetection>(
-                CODE_INVALID_GGUF,
-                "GGUF model detection panicked".to_string(),
-            ),
-            GGUF_SERIALIZATION_FALLBACK,
-        ))
-    })
+pub(crate) fn detect_model_from_gguf_bytes_json(name: &str, bytes: &[u8]) -> String {
+    let response = with_bytes(bytes, |bytes| detect_model_from_gguf_bytes(name, bytes));
+    serialize_json_response(&response)
 }
 
 fn with_bytes<T>(
-    bytes_ptr: *const u8,
-    bytes_len: usize,
+    bytes: &[u8],
     operation: impl FnOnce(&[u8]) -> Result<T, GgufError>,
 ) -> GgufJsonResponse<T>
 where
     T: Serialize,
 {
-    if bytes_ptr.is_null() && bytes_len > 0 {
-        return error_response(CODE_INVALID_GGUF, "GGUF byte pointer is null".to_string());
-    }
-    let bytes = if bytes_len == 0 {
-        &[]
-    } else {
-        unsafe { std::slice::from_raw_parts(bytes_ptr, bytes_len) }
-    };
     match operation(bytes) {
         Ok(value) => GgufJsonResponse {
             ok: true,

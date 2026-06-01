@@ -1,23 +1,17 @@
-use std::ptr::NonNull;
 use std::time::Instant;
 
-use cogentlm_sys as ffi;
-
 use crate::runtime::config::NativeRuntimeConfig;
-use crate::runtime::scheduler::{SamplerCacheKey, SlotState};
+use crate::runtime::scheduler::{SamplerCacheKey, SamplerHandle, SlotState};
 
 use super::super::duration_ms;
 use super::super::sampler::{attach_backend_sampler, create_sampler};
+use crate::native_bridge::NativeRuntimeHandle;
 
 pub(super) fn ensure_slot_sampler(
     slot: &mut SlotState,
-    common_init: *mut ffi::cogent_common_init,
-    shared_context: *mut ffi::llama_context,
+    native_runtime: &mut NativeRuntimeHandle,
     config: &NativeRuntimeConfig,
-    sampler_pool: &mut std::collections::HashMap<
-        SamplerCacheKey,
-        Vec<NonNull<ffi::cogent_common_sampler>>,
-    >,
+    sampler_pool: &mut std::collections::HashMap<SamplerCacheKey, Vec<SamplerHandle>>,
 ) -> bool {
     let (grammar, json_schema, sampling) = slot
         .request()
@@ -46,14 +40,14 @@ pub(super) fn ensure_slot_sampler(
     };
 
     if let Some(sampler) = sampler_pool.get_mut(&key).and_then(|vec| vec.pop()) {
-        slot.set_sampler(sampler.as_ptr());
+        slot.set_sampler(sampler);
         slot.sampler_key = Some(key);
-        record_backend_sampler_attach(slot, shared_context);
+        record_backend_sampler_attach(slot, native_runtime);
         return true;
     }
 
     match create_sampler(
-        common_init,
+        native_runtime,
         config,
         sampling.as_ref(),
         Some(&grammar),
@@ -62,7 +56,7 @@ pub(super) fn ensure_slot_sampler(
         Ok(sampler) => {
             slot.set_sampler(sampler);
             slot.sampler_key = Some(key);
-            record_backend_sampler_attach(slot, shared_context);
+            record_backend_sampler_attach(slot, native_runtime);
             true
         }
         Err(_) => {
@@ -77,9 +71,9 @@ pub(super) fn ensure_slot_sampler(
     }
 }
 
-fn record_backend_sampler_attach(slot: &mut SlotState, shared_context: *mut ffi::llama_context) {
+fn record_backend_sampler_attach(slot: &mut SlotState, native_runtime: &mut NativeRuntimeHandle) {
     let attach_start = Instant::now();
-    let attached = attach_backend_sampler(shared_context, slot);
+    let attached = attach_backend_sampler(native_runtime, slot);
     let attach_ms = duration_ms(attach_start, Instant::now());
     if let Some(request) = slot.request_mut() {
         request.debug_metrics_backend_sampler_attach_attempts = request

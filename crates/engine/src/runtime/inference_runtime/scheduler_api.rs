@@ -168,7 +168,7 @@ impl InferenceRuntime {
             return;
         }
         self.prefix_state_cache
-            .drain_pending_snapshots(self.shared_context, PREFIX_SNAPSHOT_COMMIT_BUDGET);
+            .drain_pending_snapshots(&self.native_runtime, PREFIX_SNAPSHOT_COMMIT_BUDGET);
     }
 
     pub(super) fn resolve_prefill_chunk_size_locked(

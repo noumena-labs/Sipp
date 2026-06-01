@@ -42,7 +42,9 @@ function file(name: string, contents = name): File {
 }
 
 async function withNavigatorGpu<T>(
-  requestAdapter: () => Promise<unknown | null>,
+  requestAdapter: () => Promise<{
+    readonly features?: { has(feature: string): boolean };
+  } | null>,
   callback: () => Promise<T>
 ): Promise<T> {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
@@ -1079,8 +1081,8 @@ test('ModelService defaults browser pthread runtime thread counts before Rust pr
   });
 });
 
-test('ModelService auto-selects WebGPU when the browser has an adapter', async () => {
-  await withNavigatorGpu(async () => ({}), async () => {
+test('ModelService auto-selects WebGPU when the browser has a shader-f16 adapter', async () => {
+  await withNavigatorGpu(async () => ({ features: { has: () => true } }), async () => {
     const runtime = new FakeRuntime();
     const rust = new FakeRustLifecycleBridge();
     (
@@ -1095,6 +1097,26 @@ test('ModelService auto-selects WebGPU when the browser has an adapter', async (
     assert.equal(
       (rust.lastOptions as { backend?: BrowserBackendPreference }).backend,
       'webgpu'
+    );
+  });
+});
+
+test('ModelService auto-selects CPU when the adapter lacks shader-f16', async () => {
+  await withNavigatorGpu(async () => ({ features: { has: () => false } }), async () => {
+    const runtime = new FakeRuntime();
+    const rust = new FakeRustLifecycleBridge();
+    (
+      runtime as FakeRuntime & {
+        createRustLifecycleBridge: () => Promise<RustLifecycleBridge>;
+      }
+    ).createRustLifecycleBridge = async () => rust as unknown as RustLifecycleBridge;
+    const { service } = createService({ runtime });
+
+    await service.load(file('webgpu-auto-no-f16.gguf'));
+
+    assert.equal(
+      (rust.lastOptions as { backend?: BrowserBackendPreference }).backend,
+      'cpu'
     );
   });
 });

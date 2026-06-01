@@ -7,8 +7,7 @@
 
 use std::cmp;
 
-use cogentlm_sys as ffi;
-
+use crate::native_bridge::NativeRuntimeHandle;
 use crate::runtime::llama_seq_id;
 use crate::runtime::request::GenerateRequestLifecycle;
 use crate::runtime::scheduler::{SlotPhase, SlotState};
@@ -22,8 +21,7 @@ use super::super::numeric::{nonnegative_i32_to_usize, usize_to_i32};
 /// failed and the slot was marked `Failed`.
 pub(super) fn normalize_runnable_slot_state(
     slot: &mut SlotState,
-    shared_context: *mut ffi::llama_context,
-    primary_model: *mut ffi::llama_model,
+    native_runtime: &mut NativeRuntimeHandle,
     retained_prefix_tokens: i32,
 ) -> bool {
     let (is_multimodal_turn, prompt_tokens_len, cancel_requested, max_output_tokens) =
@@ -78,24 +76,18 @@ pub(super) fn normalize_runnable_slot_state(
     }
 
     if slot.phase == SlotPhase::Decode && slot.generated_tokens.is_empty() {
-        return recover_decode_seed_state(
-            slot,
-            shared_context,
-            primary_model,
-            retained_prefix_tokens,
-        );
+        return recover_decode_seed_state(slot, native_runtime, retained_prefix_tokens);
     }
 
     true
 }
 
-/// Re-anchors a Decode slot that has no sampled token yet — typically after a
-/// snapshot restore. Either falls back to Prefill (if the KV is missing or
-/// shorter than the prompt) or trims the KV by one to re-emit the last token.
+/// Re-anchors a Decode slot that has no sampled token yet. Either falls back
+/// to Prefill when KV is missing/shorter than the prompt, or trims the KV by
+/// one token so the last prompt token can be re-emitted.
 fn recover_decode_seed_state(
     slot: &mut SlotState,
-    shared_context: *mut ffi::llama_context,
-    _primary_model: *mut ffi::llama_model,
+    native_runtime: &mut NativeRuntimeHandle,
     _retained_prefix_tokens: i32,
 ) -> bool {
     if slot.phase != SlotPhase::Decode || !slot.generated_tokens.is_empty() {
@@ -126,8 +118,8 @@ fn recover_decode_seed_state(
         }
         return true;
     }
-    if shared_context.is_null() || slot.seq_id < 0 {
-        slot.fail("Decode slot lost shared context state before its first sampled token.");
+    if slot.seq_id < 0 {
+        slot.fail("Decode slot lost sequence state before its first sampled token.");
         return false;
     }
     if slot.mirror.n_past <= 0 || slot.mirror.current_kv_tokens.is_empty() {
@@ -148,8 +140,7 @@ fn recover_decode_seed_state(
         nonnegative_i32_to_usize(retained_n_past),
     );
     slot.mirror.current_kv_tokens.truncate(retained_tokens);
-    let mem = unsafe { ffi::llama_get_memory(shared_context) };
-    if !reconcile_physical_state(&mut slot.mirror, slot.seq_id, mem) {
+    if !reconcile_physical_state(&mut slot.mirror, slot.seq_id, native_runtime) {
         slot.fail("Failed to reconcile shared KV state for decode seed recovery.");
         return false;
     }
@@ -166,15 +157,15 @@ fn recover_decode_seed_state(
 fn reconcile_physical_state(
     state: &mut SequenceState,
     seq_id: llama_seq_id,
-    mem: ffi::llama_memory_t,
+    native_runtime: &mut NativeRuntimeHandle,
 ) -> bool {
-    if mem.is_null() || seq_id < 0 {
+    if seq_id < 0 {
         return false;
     }
     let Some(current_len) = usize_to_i32(state.current_kv_tokens.len()) else {
         return false;
     };
-    if !unsafe { ffi::llama_memory_seq_rm(mem, seq_id, current_len, -1) } {
+    if !native_runtime.clear_sequence(seq_id, current_len, -1) {
         return false;
     }
     state.n_past = current_len;

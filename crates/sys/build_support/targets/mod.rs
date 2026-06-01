@@ -52,13 +52,3 @@ pub(crate) fn link_system_libraries(context: &BuildContext) {
         TargetKind::Unix => unix::link_system_libraries(context),
     }
 }
-
-pub(crate) fn apply_bindgen_target_args(
-    context: &BuildContext,
-    builder: bindgen::Builder,
-) -> bindgen::Builder {
-    match context.target_kind {
-        TargetKind::Emscripten => emscripten::apply_bindgen_args(context, builder),
-        _ => builder,
-    }
-}

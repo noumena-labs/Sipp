@@ -2,9 +2,6 @@
 //!
 //! Kept private to the runtime: callers outside should not need these.
 
-use cogentlm_sys as ffi;
-
-use crate::error::{Error, Result};
 use crate::runtime::numeric::saturating_usize_to_i32;
 
 /// Tracks "first occurrence of this slot index in this tick" with a u64 bitmap.
@@ -38,11 +35,6 @@ pub(super) fn nonnegative_i32_to_usize(value: i32) -> usize {
 }
 
 #[inline]
-pub(super) fn ffi_arg_count_len(len: usize) -> Result<i32> {
-    i32::try_from(len).map_err(|_| Error::InvalidRequest("too many llama.cpp common arguments"))
-}
-
-#[inline]
 pub(super) fn usize_to_i32(value: usize) -> Option<i32> {
     i32::try_from(value).ok()
 }
@@ -54,14 +46,6 @@ pub(super) fn nonnegative_i32_to_usize_opt(value: i32) -> Option<usize> {
     } else {
         usize::try_from(value).ok()
     }
-}
-
-#[inline]
-pub(super) fn llama_context_limit_i32(shared_context: *mut ffi::llama_context) -> Option<i32> {
-    if shared_context.is_null() {
-        return None;
-    }
-    i32::try_from(unsafe { ffi::llama_n_ctx(shared_context) }).ok()
 }
 
 #[inline]
@@ -80,13 +64,6 @@ pub(super) fn fingerprint_path(path: &std::path::Path) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     path.to_string_lossy().hash(&mut hasher);
     hasher.finish()
-}
-
-/// llama.cpp signals "need this many bytes" with a negative `result`. Return
-/// the absolute size when it exceeds the current scratch capacity, else `None`.
-pub(super) fn token_piece_growth_capacity(result: i32, capacity: i32) -> Option<i32> {
-    let needed = result.checked_abs()?;
-    (needed > capacity).then_some(needed)
 }
 
 #[cfg(test)]

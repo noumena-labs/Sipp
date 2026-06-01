@@ -1,7 +1,5 @@
 use std::time::Instant;
 
-use cogentlm_sys as ffi;
-
 use crate::runtime::request::GenerateRequestLifecycle;
 use crate::runtime::scheduler::{BatchContributionKind, SlotPhase, SlotScheduler, TerminalAction};
 
@@ -126,10 +124,7 @@ impl InferenceRuntime {
         }
     }
 
-    pub(super) fn sample_logits_and_buffer_output(
-        &mut self,
-        vocab: *const ffi::llama_vocab,
-    ) -> (f64, f64) {
+    pub(super) fn sample_logits_and_buffer_output(&mut self) -> (f64, f64) {
         let mut sample_ms = 0.0;
         let mut token_piece_ms = 0.0;
         let now = Instant::now();
@@ -138,32 +133,26 @@ impl InferenceRuntime {
             let Some(slot) = self.slot_scheduler.slots.get_mut(pending_logits.slot_index) else {
                 continue;
             };
-            let Some(sampler) = slot.sampler else {
+            let Some(sampler) = slot.sampler.as_mut() else {
                 continue;
             };
 
             let sample_start = enable_metrics.then(Instant::now);
-            let next_token = unsafe {
-                ffi::cogent_common_sampler_sample(
-                    sampler.as_ptr(),
-                    self.shared_context,
-                    pending_logits.batch_token_index,
-                )
-            };
+            let next_token = self
+                .native_runtime
+                .sample_with(sampler, pending_logits.batch_token_index);
             if let Some(start) = sample_start {
                 sample_ms += duration_ms(start, Instant::now());
             }
             pending_logits.sampled_token = next_token;
 
-            if next_token == ffi::LLAMA_TOKEN_NULL {
+            if next_token == crate::native_bridge::LLAMA_TOKEN_NULL {
                 slot.fail(LLAMA_SAMPLER_SAMPLE_FAILED);
                 continue;
             }
-            unsafe {
-                ffi::cogent_common_sampler_accept(sampler.as_ptr(), next_token, true);
-            }
+            sampler.accept(next_token, true);
 
-            let is_eog = unsafe { ffi::llama_vocab_is_eog(vocab, next_token) };
+            let is_eog = self.native_runtime.is_eog(next_token);
             if is_eog {
                 if let Some(request) = slot.request_mut() {
                     request.first_token_at.get_or_insert(now);
@@ -179,7 +168,12 @@ impl InferenceRuntime {
             self.total_output_tokens = self.total_output_tokens.saturating_add(1);
 
             let piece_start = enable_metrics.then(Instant::now);
-            append_token_piece_to_slot(vocab, next_token, slot, &mut self.scratch_token_piece);
+            append_token_piece_to_slot(
+                &self.native_runtime,
+                next_token,
+                slot,
+                &mut self.scratch_token_piece,
+            );
             if let Some(start) = piece_start {
                 token_piece_ms += duration_ms(start, Instant::now());
             }

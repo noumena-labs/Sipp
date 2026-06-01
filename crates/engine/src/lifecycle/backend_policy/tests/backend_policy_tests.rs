@@ -68,6 +68,22 @@ fn cuda_selects_full_offload_by_default() {
 }
 
 #[test]
+fn webgpu_selects_full_offload_by_default() {
+    let options = ModelLoadOptions {
+        backend: BackendPreference::WebGpu,
+        ..ModelLoadOptions::default()
+    };
+
+    let plan =
+        BackendPolicy::select_with_capabilities(&options, &caps(&["webgpu"], &["cpu", "webgpu"]))
+            .expect("webgpu");
+
+    assert_eq!(plan.selection.selected, "webgpu");
+    assert_eq!(plan.config.placement.gpu_layers, GpuLayerConfig::Auto);
+    assert!(plan.selection.gpu_offload_expected);
+}
+
+#[test]
 fn auto_prefers_accelerator_then_cpu() {
     let plan = BackendPolicy::select_with_capabilities(
         &ModelLoadOptions::default(),

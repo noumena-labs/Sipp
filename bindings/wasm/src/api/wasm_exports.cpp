@@ -4,121 +4,20 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <mutex>
-#include <sstream>
 #include <string>
 #include <sys/stat.h>
 
+#include <nlohmann/json.hpp>
+
 #include "ffi_types.h"
 
+#include "../bridge_shim_c_api.h"
+#include "cogent_shim.h"
 #include "ggml-backend.h"
 #include "ggml-webgpu.h"
 #include "llama.h"
-
-extern "C" {
-std::uint32_t cogentlm_browser_engine_abi_version();
-void *cogentlm_browser_engine_create();
-std::uint32_t cogentlm_browser_engine_id(void *engine);
-int cogentlm_browser_engine_load(void *engine, const char *model_path,
-                                 const char *runtime_config_json);
-int cogentlm_browser_engine_last_error_size(const void *engine);
-int cogentlm_browser_engine_copy_last_error(const void *engine,
-                                            std::uint8_t *buffer,
-                                            std::uintptr_t buffer_len);
-int cogentlm_browser_engine_close(void *engine);
-CE_RequestId cogentlm_browser_engine_start_text_request(
-    void *engine, const char *context_key, const char *prompt, int max_tokens,
-    int token_emission_mode, const char *grammar);
-CE_RequestId cogentlm_browser_engine_start_media_request(
-    void *engine, const char *context_key, const char *prompt, int max_tokens,
-    int image_count, const std::uint8_t *images_flat_buffer,
-    const std::int32_t *image_sizes, int token_emission_mode,
-    const char *grammar);
-CE_RequestId cogentlm_browser_engine_start_chat_request(
-    void *engine, const char *context_key, const char *messages_json,
-    int max_tokens, int image_count, const std::uint8_t *images_flat_buffer,
-    const std::int32_t *image_sizes, int token_emission_mode,
-    const char *grammar);
-CE_RequestId cogentlm_browser_engine_start_embedding_request(
-    void *engine, const char *context_key, const char *input, int normalize);
-int cogentlm_browser_engine_cancel_request(void *engine,
-                                           CE_RequestId request_id);
-int cogentlm_browser_engine_run_scheduler_loop(
-    void *engine, int max_ticks, int max_completed_responses,
-    int max_emitted_tokens, int max_duration_us, int streaming_active,
-    CE_SchedulerLoopResult *out_result);
-int cogentlm_browser_engine_completed_request_status(
-    const void *engine, CE_RequestId request_id);
-int cogentlm_browser_engine_completed_request_output_kind(
-    const void *engine, CE_RequestId request_id);
-int cogentlm_browser_engine_completed_request_output_size(
-    const void *engine, CE_RequestId request_id);
-int cogentlm_browser_engine_copy_completed_request_output(
-    const void *engine, CE_RequestId request_id, std::uint8_t *buffer,
-    std::uintptr_t buffer_len);
-int cogentlm_browser_engine_completed_request_embedding_length(
-    const void *engine, CE_RequestId request_id);
-int cogentlm_browser_engine_copy_completed_request_embedding(
-    const void *engine, CE_RequestId request_id, float *buffer,
-    std::uintptr_t value_count);
-int cogentlm_browser_engine_completed_request_embedding_pooling(
-    const void *engine, CE_RequestId request_id);
-int cogentlm_browser_engine_completed_request_embedding_normalized(
-    const void *engine, CE_RequestId request_id);
-int cogentlm_browser_engine_completed_request_error_size(
-    const void *engine, CE_RequestId request_id);
-int cogentlm_browser_engine_copy_completed_request_error(
-    const void *engine, CE_RequestId request_id, std::uint8_t *buffer,
-    std::uintptr_t buffer_len);
-int cogentlm_browser_engine_consume_completed_request(
-    void *engine, CE_RequestId request_id);
-int cogentlm_browser_engine_runtime_observability(
-    const void *engine, CE_RuntimeObservabilityMetrics *out_metrics);
-int cogentlm_browser_engine_completed_runtime_observability(
-    const void *engine, CE_RequestId request_id,
-    CE_RuntimeObservabilityMetrics *out_metrics);
-std::uint8_t *cogentlm_browser_engine_streaming_buffer_pointer(void *engine);
-std::int32_t *cogentlm_browser_engine_streaming_buffer_used_address(
-    void *engine);
-std::int32_t *cogentlm_browser_engine_streaming_buffer_drop_count_address(
-    void *engine);
-char *cogentlm_browser_engine_media_marker(const void *engine);
-char *cogentlm_browser_engine_chat_template(const void *engine);
-char *cogentlm_browser_engine_bos_text(const void *engine);
-char *cogentlm_browser_engine_eos_text(const void *engine);
-char *cogentlm_browser_engine_probe_chat_boundary_info(const void *engine);
-void cogentlm_browser_engine_free_string(char *value);
-char *cogentlm_detect_model_from_gguf_bytes_json(const char *name,
-                                                 const std::uint8_t *bytes,
-                                                 std::uintptr_t bytes_len);
-char *cogentlm_pairing_validate_json(const char *classified_json,
-                                     const char *explicit_projector_id);
-void *cogentlm_sha256_create();
-int cogentlm_sha256_update(void *hasher, const std::uint8_t *bytes,
-                           std::uintptr_t bytes_len);
-char *cogentlm_sha256_finalize(void *hasher);
-int cogentlm_sha256_close(void *hasher);
-char *cogentlm_model_service_create_json(const char *config_json);
-int cogentlm_model_service_close(void *service);
-char *cogentlm_model_service_list_json(void *service);
-char *cogentlm_model_service_current_json(void *service);
-char *cogentlm_model_service_manifest_json(void *service);
-char *cogentlm_model_service_prepare_load_json(void *service,
-                                               const char *source_json,
-                                               const char *options_json);
-char *cogentlm_model_service_commit_load_json(void *service,
-                                              const char *commit_json);
-char *cogentlm_model_service_abort_load_json(void *service,
-                                             const char *error_json);
-char *cogentlm_model_service_remove_json(void *service,
-                                         const char *model_id);
-char *cogentlm_model_service_unload_json(void *service);
-char *cogentlm_model_service_snapshot_json(void *service);
-char *cogentlm_model_service_drain_events_json(void *service);
-char *cogentlm_model_service_record_event_json(void *service,
-                                               const char *event_type,
-                                               const char *patch_json);
-}
 
 namespace {
 
@@ -131,16 +30,29 @@ bool is_valid_prediction_tokens(int token_count) {
 
 bool g_isEngineInitialized = false;
 std::string g_lastEngineError;
+std::once_flag g_backendInitOnce;
 
-char *duplicate_heap_string(const char *value) {
-  const char *source = value != nullptr ? value : "";
-  const std::size_t length = std::strlen(source);
+char *copy_heap_string(const std::string &value) {
+  const std::size_t length = value.size();
   char *out = static_cast<char *>(std::malloc(length + 1));
   if (!out) {
     return nullptr;
   }
-  std::memcpy(out, source, length + 1);
+  std::memcpy(out, value.data(), length);
+  out[length] = '\0';
   return out;
+}
+
+char *copy_json_error(const char *code, const char *message) {
+  nlohmann::ordered_json response = {
+      {"ok", false},
+      {"error",
+       {
+           {"code", code},
+           {"message", message},
+       }},
+  };
+  return copy_heap_string(response.dump());
 }
 
 int copy_string_with_nul(const std::string &value, char *buffer,
@@ -162,83 +74,40 @@ bool read_size_arg(double value, std::uint64_t *out) {
   return true;
 }
 
+bool read_pointer_size_arg(double value, std::uintptr_t *out) {
+  std::uint64_t parsed = 0;
+  if (!read_size_arg(value, &parsed) ||
+      parsed > std::numeric_limits<std::uintptr_t>::max()) {
+    return false;
+  }
+  *out = static_cast<std::uintptr_t>(parsed);
+  return true;
+}
+
+bool read_nonnegative_count(std::int32_t value, std::uintptr_t *out) {
+  if (value < 0) {
+    return false;
+  }
+  *out = static_cast<std::uintptr_t>(value);
+  return true;
+}
+
 void *g_rustBrowserEngine = nullptr;
 std::string g_mediaMarkerCache;
 std::string g_chatTemplateCache;
 
-const char *json_bool(bool value) {
-  return value ? "true" : "false";
-}
-
-std::string json_escape(const char *value) {
-  std::ostringstream out;
-  const char *cursor = value != nullptr ? value : "";
-  while (*cursor) {
-    const unsigned char ch = static_cast<unsigned char>(*cursor++);
-    switch (ch) {
-    case '"':
-      out << "\\\"";
-      break;
-    case '\\':
-      out << "\\\\";
-      break;
-    case '\b':
-      out << "\\b";
-      break;
-    case '\f':
-      out << "\\f";
-      break;
-    case '\n':
-      out << "\\n";
-      break;
-    case '\r':
-      out << "\\r";
-      break;
-    case '\t':
-      out << "\\t";
-      break;
-    default:
-      if (ch < 0x20) {
-        out << "\\u";
-        constexpr char kHex[] = "0123456789abcdef";
-        out << '0' << '0' << kHex[(ch >> 4) & 0x0f] << kHex[ch & 0x0f];
-      } else {
-        out << static_cast<char>(ch);
-      }
-      break;
-    }
-  }
-  return out.str();
-}
-
-const char *backend_dev_type_name(enum ggml_backend_dev_type type) {
-  switch (type) {
-  case GGML_BACKEND_DEVICE_TYPE_CPU:
-    return "CPU";
-  case GGML_BACKEND_DEVICE_TYPE_GPU:
-    return "GPU";
-  case GGML_BACKEND_DEVICE_TYPE_IGPU:
-    return "IGPU";
-  case GGML_BACKEND_DEVICE_TYPE_ACCEL:
-    return "ACCEL";
-  case GGML_BACKEND_DEVICE_TYPE_META:
-    return "META";
-  default:
-    return "UNKNOWN";
-  }
-}
-
-std::string take_rust_string(char *value);
+std::string take_heap_string(char *value);
 std::string read_rust_engine_last_error_locked(const void *engine);
 void close_rust_engine_locked();
+void ensure_backend_runtime_locked();
 void ensure_llama_cache_env_locked();
 
-std::string take_rust_string(char *value) {
+std::string take_heap_string(char *value) {
   if (value == nullptr) {
     return "";
   }
   std::string out(value);
-  cogentlm_browser_engine_free_string(value);
+  std::free(value);
   return out;
 }
 
@@ -248,6 +117,13 @@ void close_rust_engine_locked() {
     g_rustBrowserEngine = nullptr;
   }
   g_isEngineInitialized = false;
+}
+
+void ensure_backend_runtime_locked() {
+  std::call_once(g_backendInitOnce, []() {
+    llama_backend_init();
+    cogent_backend_load_all();
+  });
 }
 
 std::string read_rust_engine_last_error_locked(const void *engine) {
@@ -279,82 +155,52 @@ void ensure_llama_cache_env_locked() {
 }
 
 std::string backend_observability_json_locked() {
-  const bool profiling_enabled = false;
-  std::ostringstream out;
-  out << "{";
-  out << "\"profilingEnabled\":" << json_bool(profiling_enabled) << ",";
-  out << "\"webgpuCompiled\":true,";
+  ensure_backend_runtime_locked();
+
+  std::string raw =
+      take_heap_string(cogent_backend_observability_json(true));
+  nlohmann::ordered_json value =
+      nlohmann::ordered_json::parse(raw.empty() ? "{}" : raw, nullptr, false);
+  if (value.is_discarded() || !value.is_object()) {
+    value = nlohmann::ordered_json::object();
+  }
+  nlohmann::ordered_json compiled = nlohmann::ordered_json::object();
+  if (auto it = value.find("compiled"); it != value.end() && it->is_object()) {
+    compiled = *it;
+  }
+
+  value["profilingEnabled"] = false;
+  if (!value.contains("compiled")) {
+    value["compiled"] = compiled;
+  }
+  value["webgpuCompiled"] = compiled.value("webgpu", false);
   ggml_backend_reg_t webgpu_reg = ggml_backend_reg_by_name(GGML_WEBGPU_NAME);
-  out << "\"webgpuRegistered\":" << json_bool(webgpu_reg != nullptr) << ",";
-  out << "\"webgpuDeviceCount\":"
-      << (webgpu_reg != nullptr ? ggml_backend_reg_dev_count(webgpu_reg) : 0)
-      << ",";
-  out << "\"gpuOffloadSupported\":"
-      << json_bool(llama_supports_gpu_offload()) << ",";
-  out << "\"engineInitialized\":" << json_bool(g_isEngineInitialized) << ",";
-  out << "\"availableBackends\":[";
-
-  if (profiling_enabled) {
-    const size_t backend_count = ggml_backend_reg_count();
-    for (size_t i = 0; i < backend_count; ++i) {
-      if (i > 0) {
-        out << ",";
-      }
-      ggml_backend_reg_t reg = ggml_backend_reg_get(i);
-      out << "{\"name\":\"" << json_escape(ggml_backend_reg_name(reg))
-          << "\",\"deviceCount\":" << ggml_backend_reg_dev_count(reg) << "}";
-    }
+  value["webgpuRegistered"] = webgpu_reg != nullptr;
+  value["webgpuDeviceCount"] =
+      webgpu_reg != nullptr ? ggml_backend_reg_dev_count(webgpu_reg) : 0;
+  if (!value.contains("gpuOffloadSupported")) {
+    value["gpuOffloadSupported"] = llama_supports_gpu_offload();
   }
-
-  out << "],\"devices\":[";
-  if (profiling_enabled) {
-    const size_t device_count = ggml_backend_dev_count();
-    for (size_t i = 0; i < device_count; ++i) {
-      if (i > 0) {
-        out << ",";
-      }
-      ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-      ggml_backend_dev_props props{};
-      ggml_backend_dev_get_props(dev, &props);
-      ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
-
-      out << "{\"name\":\"" << json_escape(props.name)
-          << "\",\"description\":\"" << json_escape(props.description)
-          << "\",\"type\":\"" << backend_dev_type_name(props.type)
-          << "\",\"backendName\":\""
-          << json_escape(reg ? ggml_backend_reg_name(reg) : "")
-          << "\",\"deviceId\":";
-      if (props.device_id != nullptr && props.device_id[0] != '\0') {
-        out << "\"" << json_escape(props.device_id) << "\"";
-      } else {
-        out << "null";
-      }
-      out << ",\"memoryFreeBytes\":" << props.memory_free
-          << ",\"memoryTotalBytes\":" << props.memory_total
-          << ",\"capabilities\":{\"async\":" << json_bool(props.caps.async)
-          << ",\"hostBuffer\":" << json_bool(props.caps.host_buffer)
-          << ",\"bufferFromHostPtr\":"
-          << json_bool(props.caps.buffer_from_host_ptr)
-          << ",\"events\":" << json_bool(props.caps.events) << "}}";
-    }
+  value["engineInitialized"] = g_isEngineInitialized;
+  if (!value.contains("availableBackends")) {
+    value["availableBackends"] = nlohmann::ordered_json::array();
   }
-  out << "]}";
-  return out.str();
+  if (!value.contains("devices")) {
+    value["devices"] = nlohmann::ordered_json::array();
+  }
+  return value.dump();
 }
 
 int init_engine_locked(const char *model_path,
                        const char *runtime_config_json) {
   g_lastEngineError.clear();
-  if (!model_path || std::strlen(model_path) == 0) {
-    g_lastEngineError = "model path is empty";
-    return kStatusInvalidArguments;
-  }
-  if (!runtime_config_json || std::strlen(runtime_config_json) == 0) {
-    g_lastEngineError = "runtime config JSON is empty";
+  if (model_path == nullptr || runtime_config_json == nullptr) {
+    g_lastEngineError = "engine init received a null string";
     return kStatusInvalidArguments;
   }
 
   close_rust_engine_locked();
+  ensure_backend_runtime_locked();
   ensure_llama_cache_env_locked();
   g_rustBrowserEngine = cogentlm_browser_engine_create();
   if (g_rustBrowserEngine == nullptr) {
@@ -380,30 +226,6 @@ int init_engine_locked(const char *model_path,
 } // namespace
 
 extern "C" {
-
-using CE_ReadAtCallback =
-    int (*)(void *, std::uint64_t, std::uint8_t *, std::uintptr_t);
-using CE_OpenShardCallback =
-    int (*)(void *, const char *, std::uint16_t, std::uint16_t);
-using CE_WriteShardCallback =
-    int (*)(void *, const std::uint8_t *, std::uintptr_t);
-using CE_CloseShardCallback = int (*)(void *);
-
-int cogentlm_browser_cache_layout(std::uint64_t source_bytes,
-                                  int source_bytes_known,
-                                  std::uint64_t direct_load_max_bytes,
-                                  std::uint64_t shard_max_bytes);
-int cogentlm_gguf_plan_split_count(std::uint64_t source_bytes,
-                                   std::uint64_t shard_max_bytes,
-                                   void *user_data,
-                                   CE_ReadAtCallback read_at);
-int cogentlm_gguf_split_stream(std::uint64_t source_bytes,
-                               const char *output_prefix,
-                               std::uint64_t shard_max_bytes, void *user_data,
-                               CE_ReadAtCallback read_at,
-                               CE_OpenShardCallback open_shard,
-                               CE_WriteShardCallback write_shard,
-                               CE_CloseShardCallback close_shard);
 
 EMSCRIPTEN_KEEPALIVE
 int CE_RustBrowserEngineAbiVersion() {
@@ -444,7 +266,7 @@ int CE_BrowserCacheLayout(double source_bytes, int source_bytes_known,
       !read_size_arg(shard_max_bytes, &shard_max_bytes_u64)) {
     return kStatusInvalidArguments;
   }
-  return cogentlm_browser_cache_layout(
+  return cogentlm_wasm_browser_cache_layout(
       source_bytes_u64, source_bytes_known != 0, direct_load_max_bytes_u64,
       shard_max_bytes_u64);
 }
@@ -458,9 +280,9 @@ int CE_GgufPlanSplitCount(double source_bytes, double shard_max_bytes,
       !read_size_arg(shard_max_bytes, &shard_max_bytes_u64) || !read_at) {
     return kStatusInvalidArguments;
   }
-  return cogentlm_gguf_plan_split_count(source_bytes_u64,
-                                        shard_max_bytes_u64, user_data,
-                                        read_at);
+  return cogentlm_wasm_gguf_plan_split_count(source_bytes_u64,
+                                             shard_max_bytes_u64, user_data,
+                                             read_at);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -477,157 +299,179 @@ int CE_GgufSplitStream(double source_bytes, const char *output_prefix,
       !open_shard || !write_shard || !close_shard) {
     return kStatusInvalidArguments;
   }
-  return cogentlm_gguf_split_stream(source_bytes_u64, output_prefix,
-                                    shard_max_bytes_u64, user_data, read_at,
-                                    open_shard, write_shard, close_shard);
+  return cogentlm_wasm_gguf_split_stream(source_bytes_u64, output_prefix,
+                                         shard_max_bytes_u64, user_data, read_at,
+                                         open_shard, write_shard, close_shard);
 }
 
 EMSCRIPTEN_KEEPALIVE
 char *CE_DetectModelFromGgufBytes(const char *name, const std::uint8_t *bytes,
                                   double bytes_len) {
-  std::uint64_t bytes_len_u64 = 0;
-  if (!read_size_arg(bytes_len, &bytes_len_u64)) {
-    return duplicate_heap_string(
-        "{\"ok\":false,\"error\":{\"code\":\"INVALID_GGUF\",\"message\":\"invalid GGUF byte length\"}}");
+  std::uintptr_t bytes_len_usize = 0;
+  if (name == nullptr || !read_pointer_size_arg(bytes_len, &bytes_len_usize) ||
+      (!bytes && bytes_len_usize > 0)) {
+    return copy_json_error("INVALID_GGUF", "invalid GGUF byte length");
   }
-  const std::string value = take_rust_string(
-      cogentlm_detect_model_from_gguf_bytes_json(
-          name, bytes, static_cast<std::uintptr_t>(bytes_len_u64)));
-  return duplicate_heap_string(value.c_str());
+  const std::string value = take_heap_string(
+      cogentlm_wasm_detect_model_from_gguf_bytes_json(
+          name, bytes, bytes_len_usize));
+  return copy_heap_string(value);
 }
 
 EMSCRIPTEN_KEEPALIVE
 std::uintptr_t CE_Sha256Create() {
-  return reinterpret_cast<std::uintptr_t>(cogentlm_sha256_create());
+  return reinterpret_cast<std::uintptr_t>(cogentlm_wasm_sha256_create());
 }
 
 EMSCRIPTEN_KEEPALIVE
 int CE_Sha256Update(std::uintptr_t hasher, const std::uint8_t *bytes,
                     double bytes_len) {
-  std::uint64_t bytes_len_u64 = 0;
-  if (!read_size_arg(bytes_len, &bytes_len_u64)) {
+  std::uintptr_t bytes_len_usize = 0;
+  if (hasher == 0 || !read_pointer_size_arg(bytes_len, &bytes_len_usize) ||
+      (bytes == nullptr && bytes_len_usize > 0)) {
     return kStatusInvalidArguments;
   }
-  return cogentlm_sha256_update(reinterpret_cast<void *>(hasher), bytes,
-                                static_cast<std::uintptr_t>(bytes_len_u64));
+  return cogentlm_wasm_sha256_update(
+      reinterpret_cast<void *>(hasher),
+      bytes,
+      bytes_len_usize);
 }
 
 EMSCRIPTEN_KEEPALIVE
 char *CE_Sha256Finalize(std::uintptr_t hasher) {
-  const std::string value = take_rust_string(
-      cogentlm_sha256_finalize(reinterpret_cast<void *>(hasher)));
-  return duplicate_heap_string(value.c_str());
+  if (hasher == 0) {
+    return nullptr;
+  }
+  const std::string value = take_heap_string(
+      cogentlm_wasm_sha256_finalize(reinterpret_cast<void *>(hasher)));
+  return copy_heap_string(value);
 }
 
 EMSCRIPTEN_KEEPALIVE
 int CE_Sha256Close(std::uintptr_t hasher) {
-  return cogentlm_sha256_close(reinterpret_cast<void *>(hasher));
+  if (hasher == 0) {
+    return kStatusInvalidArguments;
+  }
+  return cogentlm_wasm_sha256_close(reinterpret_cast<void *>(hasher));
 }
 
 EMSCRIPTEN_KEEPALIVE
 char *CE_ModelServiceCreate(const char *config_json) {
+  if (config_json == nullptr) {
+    return copy_json_error("INVALID_MODEL_SOURCE",
+                           "service config JSON is missing");
+  }
   const std::string value =
-      take_rust_string(cogentlm_model_service_create_json(config_json));
-  return duplicate_heap_string(value.c_str());
+      take_heap_string(cogentlm_wasm_model_service_create_json(config_json));
+  return copy_heap_string(value);
 }
 
 EMSCRIPTEN_KEEPALIVE
 int CE_ModelServiceClose(std::uintptr_t service) {
-  return cogentlm_model_service_close(reinterpret_cast<void *>(service));
+  return cogentlm_wasm_model_service_close(service);
 }
 
 EMSCRIPTEN_KEEPALIVE
 char *CE_ModelServiceList(std::uintptr_t service) {
   const std::string value =
-      take_rust_string(cogentlm_model_service_list_json(
-          reinterpret_cast<void *>(service)));
-  return duplicate_heap_string(value.c_str());
+      take_heap_string(cogentlm_wasm_model_service_list_json(service));
+  return copy_heap_string(value);
 }
 
 EMSCRIPTEN_KEEPALIVE
 char *CE_ModelServiceCurrent(std::uintptr_t service) {
   const std::string value =
-      take_rust_string(cogentlm_model_service_current_json(
-          reinterpret_cast<void *>(service)));
-  return duplicate_heap_string(value.c_str());
+      take_heap_string(cogentlm_wasm_model_service_current_json(service));
+  return copy_heap_string(value);
 }
 
 EMSCRIPTEN_KEEPALIVE
 char *CE_ModelServiceManifest(std::uintptr_t service) {
   const std::string value =
-      take_rust_string(cogentlm_model_service_manifest_json(
-          reinterpret_cast<void *>(service)));
-  return duplicate_heap_string(value.c_str());
+      take_heap_string(cogentlm_wasm_model_service_manifest_json(service));
+  return copy_heap_string(value);
 }
 
 EMSCRIPTEN_KEEPALIVE
 char *CE_ModelServicePrepareLoad(std::uintptr_t service,
                                  const char *source_json,
                                  const char *options_json) {
-  const std::string value = take_rust_string(
-      cogentlm_model_service_prepare_load_json(
-          reinterpret_cast<void *>(service), source_json, options_json));
-  return duplicate_heap_string(value.c_str());
+  if (source_json == nullptr || options_json == nullptr) {
+    return copy_json_error("INVALID_MODEL_SOURCE",
+                           "load source or options JSON is missing");
+  }
+  const std::string value = take_heap_string(
+      cogentlm_wasm_model_service_prepare_load_json(
+          service, source_json, options_json));
+  return copy_heap_string(value);
 }
 
 EMSCRIPTEN_KEEPALIVE
 char *CE_ModelServiceCommitLoad(std::uintptr_t service,
                                 const char *commit_json) {
+  if (commit_json == nullptr) {
+    return copy_json_error("INVALID_MODEL_SOURCE",
+                           "load commit JSON is missing");
+  }
   const std::string value =
-      take_rust_string(cogentlm_model_service_commit_load_json(
-          reinterpret_cast<void *>(service), commit_json));
-  return duplicate_heap_string(value.c_str());
+      take_heap_string(cogentlm_wasm_model_service_commit_load_json(
+          service, commit_json));
+  return copy_heap_string(value);
 }
 
 EMSCRIPTEN_KEEPALIVE
 char *CE_ModelServiceAbortLoad(std::uintptr_t service,
                                const char *error_json) {
   const std::string value =
-      take_rust_string(cogentlm_model_service_abort_load_json(
-          reinterpret_cast<void *>(service), error_json));
-  return duplicate_heap_string(value.c_str());
+      take_heap_string(cogentlm_wasm_model_service_abort_load_json(
+          service, error_json));
+  return copy_heap_string(value);
 }
 
 EMSCRIPTEN_KEEPALIVE
 char *CE_ModelServiceRemove(std::uintptr_t service, const char *model_id) {
+  if (model_id == nullptr) {
+    return copy_json_error("INVALID_MODEL_SOURCE", "model id is missing");
+  }
   const std::string value =
-      take_rust_string(cogentlm_model_service_remove_json(
-          reinterpret_cast<void *>(service), model_id));
-  return duplicate_heap_string(value.c_str());
+      take_heap_string(cogentlm_wasm_model_service_remove_json(
+          service, model_id));
+  return copy_heap_string(value);
 }
 
 EMSCRIPTEN_KEEPALIVE
 char *CE_ModelServiceUnload(std::uintptr_t service) {
   const std::string value =
-      take_rust_string(cogentlm_model_service_unload_json(
-          reinterpret_cast<void *>(service)));
-  return duplicate_heap_string(value.c_str());
+      take_heap_string(cogentlm_wasm_model_service_unload_json(service));
+  return copy_heap_string(value);
 }
 
 EMSCRIPTEN_KEEPALIVE
 char *CE_ModelServiceSnapshot(std::uintptr_t service) {
   const std::string value =
-      take_rust_string(cogentlm_model_service_snapshot_json(
-          reinterpret_cast<void *>(service)));
-  return duplicate_heap_string(value.c_str());
+      take_heap_string(cogentlm_wasm_model_service_snapshot_json(service));
+  return copy_heap_string(value);
 }
 
 EMSCRIPTEN_KEEPALIVE
 char *CE_ModelServiceDrainEvents(std::uintptr_t service) {
   const std::string value =
-      take_rust_string(cogentlm_model_service_drain_events_json(
-          reinterpret_cast<void *>(service)));
-  return duplicate_heap_string(value.c_str());
+      take_heap_string(cogentlm_wasm_model_service_drain_events_json(service));
+  return copy_heap_string(value);
 }
 
 EMSCRIPTEN_KEEPALIVE
 char *CE_ModelServiceRecordEvent(std::uintptr_t service,
                                  const char *event_type,
                                  const char *patch_json) {
-  const std::string value = take_rust_string(
-      cogentlm_model_service_record_event_json(
-          reinterpret_cast<void *>(service), event_type, patch_json));
-  return duplicate_heap_string(value.c_str());
+  if (event_type == nullptr || patch_json == nullptr) {
+    return copy_json_error("INVALID_MODEL_SOURCE",
+                           "event type or patch JSON is missing");
+  }
+  const std::string value = take_heap_string(
+      cogentlm_wasm_model_service_record_event_json(
+          service, event_type, patch_json));
+  return copy_heap_string(value);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -652,7 +496,7 @@ void CE_Close() {
 
 EMSCRIPTEN_KEEPALIVE
 char *CE_GetBackendObservabilityJson() {
-  return duplicate_heap_string(backend_observability_json_locked().c_str());
+  return copy_heap_string(backend_observability_json_locked());
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -661,7 +505,7 @@ const char *CE_GetMediaMarker() {
     return nullptr;
   }
   g_mediaMarkerCache =
-      take_rust_string(cogentlm_browser_engine_media_marker(g_rustBrowserEngine));
+      take_heap_string(cogentlm_browser_engine_media_marker(g_rustBrowserEngine));
   return g_mediaMarkerCache.c_str();
 }
 
@@ -671,45 +515,51 @@ const char *CE_GetChatTemplate() {
     return nullptr;
   }
   g_chatTemplateCache =
-      take_rust_string(cogentlm_browser_engine_chat_template(g_rustBrowserEngine));
+      take_heap_string(cogentlm_browser_engine_chat_template(g_rustBrowserEngine));
   return g_chatTemplateCache.c_str();
 }
 
 EMSCRIPTEN_KEEPALIVE
 char *CE_GetBosText() {
   if (!g_isEngineInitialized) {
-    return duplicate_heap_string("");
+    return copy_heap_string("");
   }
   const std::string value =
-      take_rust_string(cogentlm_browser_engine_bos_text(g_rustBrowserEngine));
-  return duplicate_heap_string(value.c_str());
+      take_heap_string(cogentlm_browser_engine_bos_text(g_rustBrowserEngine));
+  return copy_heap_string(value);
 }
 
 EMSCRIPTEN_KEEPALIVE
 char *CE_GetEosText() {
   if (!g_isEngineInitialized) {
-    return duplicate_heap_string("");
+    return copy_heap_string("");
   }
   const std::string value =
-      take_rust_string(cogentlm_browser_engine_eos_text(g_rustBrowserEngine));
-  return duplicate_heap_string(value.c_str());
+      take_heap_string(cogentlm_browser_engine_eos_text(g_rustBrowserEngine));
+  return copy_heap_string(value);
 }
 
 char *CE_PairingValidate(const char *classified_json,
                          const char *explicit_projector_id) {
-  const std::string value = take_rust_string(
-      cogentlm_pairing_validate_json(classified_json, explicit_projector_id));
-  return duplicate_heap_string(value.c_str());
+  if (classified_json == nullptr) {
+    return copy_json_error("INVALID_MODEL_SOURCE",
+                           "classified asset JSON is missing");
+  }
+  const std::string value = take_heap_string(
+      cogentlm_wasm_pairing_validate_json(
+          classified_json,
+          explicit_projector_id));
+  return copy_heap_string(value);
 }
 
 EMSCRIPTEN_KEEPALIVE
 char *CE_ProbeChatBoundaryInfo() {
   if (!g_isEngineInitialized) {
-    return duplicate_heap_string("");
+    return copy_heap_string("");
   }
-  const std::string value = take_rust_string(
+  const std::string value = take_heap_string(
       cogentlm_browser_engine_probe_chat_boundary_info(g_rustBrowserEngine));
-  return duplicate_heap_string(value.c_str());
+  return copy_heap_string(value);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -731,7 +581,8 @@ CE_RequestId CE_StartMediaRequestWithTokenEmissionMode(
     const uint8_t *images_flat_buffer, const int32_t *image_sizes,
     int token_emission_mode, const char *grammar) {
   if (!g_isEngineInitialized || prompt == nullptr ||
-      !is_valid_prediction_tokens(n_tokens)) {
+      !is_valid_prediction_tokens(n_tokens) || n_images < 0 ||
+      (n_images > 0 && (images_flat_buffer == nullptr || image_sizes == nullptr))) {
     return 0;
   }
   return cogentlm_browser_engine_start_media_request(
@@ -745,7 +596,8 @@ CE_RequestId CE_StartChatRequestWithTokenEmissionMode(
     int n_images, const uint8_t *images_flat_buffer, const int32_t *image_sizes,
     int token_emission_mode, const char *grammar) {
   if (!g_isEngineInitialized || messages_json == nullptr ||
-      !is_valid_prediction_tokens(n_tokens)) {
+      !is_valid_prediction_tokens(n_tokens) || n_images < 0 ||
+      (n_images > 0 && (images_flat_buffer == nullptr || image_sizes == nullptr))) {
     return 0;
   }
   return cogentlm_browser_engine_start_chat_request(
@@ -774,7 +626,7 @@ int CE_CancelRequest(CE_RequestId request_id) {
 
 EMSCRIPTEN_KEEPALIVE
 int CE_GetRuntimeObservability(CE_RuntimeObservabilityMetrics *out_metrics) {
-  if (!g_isEngineInitialized) {
+  if (!g_isEngineInitialized || out_metrics == nullptr) {
     return -1;
   }
   return cogentlm_browser_engine_runtime_observability(g_rustBrowserEngine,
@@ -786,6 +638,9 @@ int CE_RunSchedulerLoop(int32_t max_ticks, int32_t max_completed_responses,
                         int32_t max_emitted_tokens, int32_t max_duration_us,
                         int32_t streaming_active,
                         CE_SchedulerLoopResult *out_result) {
+  if (!g_isEngineInitialized || out_result == nullptr) {
+    return -1;
+  }
   return cogentlm_browser_engine_run_scheduler_loop(
       g_rustBrowserEngine, max_ticks, max_completed_responses,
       max_emitted_tokens, max_duration_us, streaming_active, out_result);
@@ -832,9 +687,13 @@ int CE_GetCompletedRequestOutputSize(CE_RequestId request_id) {
 EMSCRIPTEN_KEEPALIVE
 int CE_CopyCompletedRequestOutput(CE_RequestId request_id, char *buffer,
                                   int32_t capacity) {
+  std::uintptr_t buffer_len = 0;
+  if (buffer == nullptr || !read_nonnegative_count(capacity, &buffer_len)) {
+    return kStatusInvalidArguments;
+  }
   return cogentlm_browser_engine_copy_completed_request_output(
       g_rustBrowserEngine, request_id, reinterpret_cast<std::uint8_t *>(buffer),
-      static_cast<std::uintptr_t>(capacity));
+      buffer_len);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -846,9 +705,13 @@ int CE_GetCompletedRequestEmbeddingLength(CE_RequestId request_id) {
 EMSCRIPTEN_KEEPALIVE
 int CE_CopyCompletedRequestEmbedding(CE_RequestId request_id, float *buffer,
                                      int32_t value_count) {
+  std::uintptr_t values_len = 0;
+  if (buffer == nullptr || !read_nonnegative_count(value_count, &values_len)) {
+    return kStatusInvalidArguments;
+  }
   return cogentlm_browser_engine_copy_completed_request_embedding(
       g_rustBrowserEngine, request_id, buffer,
-      static_cast<std::uintptr_t>(value_count));
+      values_len);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -872,14 +735,21 @@ int CE_GetCompletedRequestErrorSize(CE_RequestId request_id) {
 EMSCRIPTEN_KEEPALIVE
 int CE_CopyCompletedRequestError(CE_RequestId request_id, char *buffer,
                                  int32_t capacity) {
+  std::uintptr_t buffer_len = 0;
+  if (buffer == nullptr || !read_nonnegative_count(capacity, &buffer_len)) {
+    return kStatusInvalidArguments;
+  }
   return cogentlm_browser_engine_copy_completed_request_error(
       g_rustBrowserEngine, request_id, reinterpret_cast<std::uint8_t *>(buffer),
-      static_cast<std::uintptr_t>(capacity));
+      buffer_len);
 }
 
 EMSCRIPTEN_KEEPALIVE
 int CE_GetCompletedRequestRuntimeObservability(
     CE_RequestId request_id, CE_RuntimeObservabilityMetrics *out_metrics) {
+  if (!g_isEngineInitialized || out_metrics == nullptr) {
+    return -1;
+  }
   return cogentlm_browser_engine_completed_runtime_observability(
       g_rustBrowserEngine, request_id, out_metrics);
 }

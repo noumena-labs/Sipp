@@ -1,7 +1,4 @@
-use std::collections::VecDeque;
-
-use cogentlm_sys as ffi;
-
+use crate::native_bridge::NativeRuntimeHandle;
 use crate::runtime::llama_seq_id;
 
 use super::{PendingPrefixSnapshot, PrefixStateCache, PrefixStateStoreRequest};
@@ -28,12 +25,12 @@ impl PrefixStateCache {
         self.pending_snapshots.push_back(snapshot);
     }
 
-    pub fn drain_pending_snapshots(
+    pub(crate) fn drain_pending_snapshots(
         &mut self,
-        context: *mut ffi::llama_context,
+        runtime: &NativeRuntimeHandle,
         max_to_drain: usize,
     ) -> usize {
-        if context.is_null() || self.pending_snapshots.is_empty() {
+        if self.pending_snapshots.is_empty() {
             return 0;
         }
 
@@ -47,43 +44,18 @@ impl PrefixStateCache {
             let Some(pending) = self.pending_snapshots.pop_front() else {
                 break;
             };
-            self.store_pending_snapshot(context, pending);
+            self.store_pending_snapshot(runtime, pending);
             drained += 1;
         }
         drained
     }
 
-    pub fn drain_pending_snapshots_for_seq(
+    pub(crate) fn drain_best_pending_snapshot_for_seq(
         &mut self,
-        context: *mut ffi::llama_context,
-        seq_id: llama_seq_id,
-        max_to_drain: usize,
-    ) -> usize {
-        if context.is_null() || seq_id < 0 || self.pending_snapshots.is_empty() {
-            return 0;
-        }
-
-        let mut retained = VecDeque::with_capacity(self.pending_snapshots.len());
-        let mut drained = 0;
-        while let Some(pending) = self.pending_snapshots.pop_front() {
-            let budget_remaining = max_to_drain == 0 || drained < max_to_drain;
-            if pending.seq_id == seq_id && budget_remaining {
-                self.store_pending_snapshot(context, pending);
-                drained += 1;
-            } else {
-                retained.push_back(pending);
-            }
-        }
-        self.pending_snapshots = retained;
-        drained
-    }
-
-    pub fn drain_best_pending_snapshot_for_seq(
-        &mut self,
-        context: *mut ffi::llama_context,
+        runtime: &NativeRuntimeHandle,
         seq_id: llama_seq_id,
     ) -> usize {
-        if context.is_null() || seq_id < 0 || self.pending_snapshots.is_empty() {
+        if seq_id < 0 || self.pending_snapshots.is_empty() {
             return 0;
         }
 
@@ -98,7 +70,7 @@ impl PrefixStateCache {
         let drained = best_index
             .and_then(|index| self.pending_snapshots.remove(index))
             .map(|pending| {
-                self.store_pending_snapshot(context, pending);
+                self.store_pending_snapshot(runtime, pending);
                 1
             })
             .unwrap_or(0);
@@ -118,11 +90,14 @@ impl PrefixStateCache {
 
     fn store_pending_snapshot(
         &mut self,
-        context: *mut ffi::llama_context,
+        runtime: &NativeRuntimeHandle,
         pending: PendingPrefixSnapshot,
     ) {
+        let Ok(state_bytes) = runtime.state_seq(pending.seq_id) else {
+            return;
+        };
         self.store_prefix_state(PrefixStateStoreRequest {
-            context,
+            state_bytes,
             seq_id: pending.seq_id,
             model_fingerprint: pending.model_fingerprint,
             context_key: &pending.context_key,

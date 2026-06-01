@@ -116,8 +116,7 @@ pub fn read_backend_capabilities() -> Result<BackendCapabilities, ModelError> {
         KEY_AVAILABLE_BACKENDS,
         KEY_NAME,
     ));
-    let dynamic_backend_loading =
-        json_bool(&value, KEY_DYNAMIC_BACKEND_LOADING).unwrap_or(false);
+    let dynamic_backend_loading = json_bool(&value, KEY_DYNAMIC_BACKEND_LOADING).unwrap_or(false);
     let compiled = if dynamic_backend_loading {
         available.clone()
     } else {
