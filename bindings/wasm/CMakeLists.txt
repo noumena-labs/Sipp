@@ -65,7 +65,7 @@ set(PLUGIN_SOURCES
     ${CE_RUST_SYS_DIR}/native/llama_shim/cogent_shim.cpp
 )
 
-set(CE_HOST_JS_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/native/js/ce_host.js")
+set(CE_HOST_JS_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/native/emscripten/ce_host.js")
 
 add_executable(CogentLM ${PLUGIN_SOURCES})
 

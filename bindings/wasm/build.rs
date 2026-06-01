@@ -1,3 +1,3 @@
 fn main() {
-    println!("cargo:rerun-if-changed=native/js/ce_host.js");
+    println!("cargo:rerun-if-changed=native/emscripten/ce_host.js");
 }

@@ -16,7 +16,7 @@ The native engine is broken down into modular crates.
 These directories contain the bridge code between the Rust core and other languages.
 - **`bindings/node`**: N-API based bindings for Node.js using `@napi-rs/cli`.
 - **`bindings/python`**: PyO3 and Maturin based bindings for Python.
-- **`bindings/wasm`**: Emscripten compilation targets for running the engine in the browser (WebGPU/WASM). Rust bridge declarations live under `src/`; CXX callback wrappers, Rust C API wrappers, and JS-facing exports live under `native/`.
+- **`bindings/wasm`**: Emscripten compilation target for browser WebAssembly/WebGPU. Rust owns the JS-facing `CE_*` ABI with `#[no_mangle] extern "C"` exports under `src/`; CMake links that Rust staticlib with llama.cpp/ggml/mtmd backend objects and a small Emscripten JS shim under `native/emscripten/`.
 
 ## 3. NPM Packages (`packages/npm/`)
 High-level JavaScript/TypeScript orchestration.

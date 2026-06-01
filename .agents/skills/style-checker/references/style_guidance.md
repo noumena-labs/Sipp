@@ -110,6 +110,7 @@ pub struct ShardLayout {
 * Avoid passing raw strings for structured data or errors; use typed parameters.
 * Prefer explicit memory layouts such as `#[repr(C)]` or `#[repr(u32)]` when interfacing with FFI, WASM, or native bindings.
 * Keep unsafe code isolated, documented, and reviewed carefully.
+* Keep browser WASM ABI structs in dedicated modules with compile-time layout checks when TypeScript reads their memory directly.
 
 ### 5. Async, Concurrency, and Performance
 
@@ -260,6 +261,12 @@ def read_config(path: Path) -> str:
 * Do not pass ownership across FFI boundaries without an explicit contract.
 * Prefer fixed-width integer types at ABI boundaries.
 * Keep ABI-facing structs explicitly laid out.
+* Keep the `crates/sys` CXX bridge focused on llama.cpp, ggml, mtmd, and native backend integration. Do not use it as a generic host-language bridge.
+* Add CXX bridge methods only when Rust needs access to native backend behavior that cannot reasonably live in Rust.
+* Keep C++ browser support limited to Emscripten, llama.cpp/sys backend objects, and narrowly scoped host shims. Do not add custom C++ layers between TypeScript and Rust browser APIs.
+* Implement browser `CE_*` exports in Rust under `bindings/wasm/src/exports.rs`; keep shared browser ABI layouts in `bindings/wasm/src/abi.rs`.
+* When adding or changing a browser `CE_*` export, update the Rust export, `bindings/wasm/CMakeLists.txt` export roots, and the TypeScript `WasmBridge` call site together.
+* Keep Node bindings on napi-rs and Python bindings on PyO3/Maturin unless there is a deliberate architecture change.
 
 ### 2. Safety
 
@@ -267,6 +274,9 @@ def read_config(path: Path) -> str:
 * Avoid undefined behavior even in error paths.
 * Make cleanup idempotent where possible.
 * Include tests or examples that exercise binding lifecycle behavior.
+* Keep raw pointer and callback usage in the smallest practical unsafe scope.
+* Validate raw WASM callback function pointers before adapting them into Rust traits or writers.
+* Preserve explicit string-freeing contracts. Rust-owned browser strings are freed through `CE_FreeString`; borrowed pointers must have a documented lifetime and must not be freed by TypeScript.
 
 ---
 
@@ -277,6 +287,12 @@ def read_config(path: Path) -> str:
 * Prefer explicit serialization formats for data crossing the WASM boundary.
 * Document memory ownership and performance-sensitive copies.
 * Keep browser APIs compatible with modern evergreen browsers unless package documentation says otherwise.
+* Preserve existing `CE_*` export names, status codes, scalar ABI choices, and memory layouts unless the change is intentionally breaking and all TypeScript readers are updated.
+* Keep `CE_RequestId` and other ABI identifiers fixed-width. Use `#[repr(C)]` and size assertions for structs read from WASM memory.
+* Prefer Rust-owned `#[no_mangle] extern "C"` exports for browser APIs on `wasm32-unknown-emscripten`.
+* Do not introduce `wasm-bindgen` into the browser runtime while it depends on Emscripten for filesystem, WebGPU, and llama.cpp integration.
+* Route Emscripten host callbacks through small JS library shims under `bindings/wasm/native/emscripten/`, not through broad C++ bridge layers.
+* For callbacks passed from TypeScript with `Module.addFunction`, keep explicit `user_data`, validate callback presence at the exported boundary, and remove callbacks on the TypeScript side when finished.
 
 ---
 
@@ -386,8 +402,8 @@ The repository is organized by responsibility:
 * `packages/`: NPM packages intended for distribution, such as browser or runtime packages.
 * `apps/`: Applications, examples, demos, and benchmarks using the engine.
 * `docs/`: User-facing and contributor-facing documentation.
-* `tools/` or `xtask/`: Developer automation and repository maintenance tooling.
-* `.skills/`: Agent skills and repository-specific agent guidance.
+* `crates/xtask/`: Developer automation and repository maintenance tooling.
+* `.agents/skills/`: Agent skills and repository-specific agent guidance.
 
 ### Boundaries
 

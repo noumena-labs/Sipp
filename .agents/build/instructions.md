@@ -31,7 +31,7 @@ cargo xtask build python --backend vulkan
 ```
 
 ### 4. Browser WASM/WebGPU
-Compiles the engine using Emscripten to target WebAssembly. This automatically downloads and activates the Emscripten SDK.
+Compiles the engine using Emscripten to target WebAssembly. The `cogentlm-wasm` Rust staticlib owns the browser `CE_*` exports; the Emscripten link step preserves those exports while still linking llama.cpp/ggml/mtmd backend objects and the small host JS shim. This automatically downloads and activates the Emscripten SDK.
 ```bash
 cargo xtask build wasm
 ```

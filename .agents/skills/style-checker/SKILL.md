@@ -1,7 +1,7 @@
 ---
 
 name: style-checker
-description: Enforces this monorepo's coding style rules by inspecting git diffs, reading .skills/style-checker/references/style_guidance.md, fixing style violations, and reporting the result. Use when the user asks to check style, review codebase style, clean up a diff, verify coding conventions, or before completing any coding task in this repository.
+description: Enforces this monorepo's coding style rules by inspecting git diffs, reading .agents/skills/style-checker/references/style_guidance.md, fixing style violations, and reporting the result. Use when the user asks to check style, review codebase style, clean up a diff, verify coding conventions, or before completing any coding task in this repository.
 compatibility: Designed for coding agents working inside a git monorepo with shell access, file read access, and file editing tools.
 allowed-tools: Bash(git:*) Bash(cargo:*) Bash(npm:*) Bash(pnpm:*) Bash(yarn:*) Read Edit MultiEdit
 ---
@@ -17,10 +17,10 @@ Run this skill when asked to check style, review coding conventions, clean up a 
 Always review the changed code against the repository's canonical style guide:
 
 ```text
-.skills/style-checker/references/style_guidance.md
+.agents/skills/style-checker/references/style_guidance.md
 ```
 
-That file is the source of truth. If these instructions conflict with `.skills/style-checker/references/style_guidance.md`, follow `.skills/style-checker/references/style_guidance.md`.
+That file is the source of truth. If these instructions conflict with `.agents/skills/style-checker/references/style_guidance.md`, follow `.agents/skills/style-checker/references/style_guidance.md`.
 
 ## Workflow
 
@@ -45,14 +45,14 @@ Do not perform unrelated cleanup.
 Read:
 
 ```text
-.skills/style-checker/references/style_guidance.md
+.agents/skills/style-checker/references/style_guidance.md
 ```
 
 Use it to evaluate the diff. Do not rely only on general language or framework conventions.
 
 ### 3. Analyze the diff
 
-Compare the changed code against `.skills/style-checker/references/style_guidance.md`.
+Compare the changed code against `.agents/skills/style-checker/references/style_guidance.md`.
 
 Pay special attention to these monorepo expectations.
 
@@ -164,10 +164,10 @@ Style check completed. I fixed two TypeScript style issues in packages/api/src/c
 
 ## Constraints
 
-* Always read `.skills/style-checker/references/style_guidance.md` before enforcing style.
+* Always read `.agents/skills/style-checker/references/style_guidance.md` before enforcing style.
 * Review the diff, not the whole repository.
 * Fix style violations directly when safe.
 * Keep changes minimal and local to the relevant diff.
 * Do not invent new conventions.
 * Do not ignore the style check before completing coding work.
-* If `.skills/style-checker/references/style_guidance.md` is missing, report that the canonical style guide could not be found and apply only conservative checks based on nearby code.
+* If `.agents/skills/style-checker/references/style_guidance.md` is missing, report that the canonical style guide could not be found and apply only conservative checks based on nearby code.

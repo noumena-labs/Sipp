@@ -38,13 +38,7 @@ Browser builds add one more host-facing layer above the same engine:
 TypeScript package / Emscripten Module
         |
         v
-bindings/wasm/native/js_api/wasm_exports.cpp      (CE_* exports)
-        |
-        v
-bindings/wasm/native/rust_api/browser_engine_api.cpp
-        |
-        v
-bindings/wasm/src/bridge.rs                       (cxx Rust callbacks)
+bindings/wasm/src/exports.rs                      (CE_* exports)
         |
         v
 bindings/wasm/src/engine/mod.rs                   (BrowserEngine)
@@ -135,8 +129,8 @@ script.
 
 For Emscripten targets, `crates/sys` only compiles the CXX bridge during Cargo's
 Rust staticlib build. The final browser CMake step later links that Rust
-staticlib with llama.cpp, mtmd, WebGPU support, `cogent_shim`, and JS-facing
-exports.
+staticlib with llama.cpp, mtmd, WebGPU support, `cogent_shim`, and the
+Emscripten host shim.
 
 Use the repository build commands rather than invoking CMake directly. The
 normal entry points are:
@@ -148,35 +142,41 @@ normal entry points are:
 
 ## Browser/Wasm Boundary
 
-`bindings/wasm` contains a second CXX bridge. This bridge is not the llama.cpp
-bridge; it is the browser host bridge.
+`bindings/wasm` does not contain a custom C++ browser host bridge. The
+TypeScript package calls stable `CE_*` symbols on the Emscripten module, and
+those symbols are implemented directly in Rust as `#[no_mangle] extern "C"`
+functions in `bindings/wasm/src/exports.rs`.
 
-`bindings/wasm/src/bridge.rs` exposes Rust functions to C++. Those functions
-create and drive `BrowserEngine`, copy strings and buffers, expose runtime
-observability, perform model-service operations, hash bytes, and run GGUF
-inspection/splitting helpers.
+`exports.rs` owns browser ABI concerns that used to sit in C++: the current
+engine singleton for `CE_Init`/request APIs, explicit smoke-test handles for
+`CE_RustBrowserEngineCreate`/`Id`/`Close`, C string parsing, pointer and length
+validation, byte and `f32` slice copying, owned string allocation, last-error
+copying, backend observability JSON enrichment, and the default `LLAMA_CACHE`
+setup.
 
-`bindings/wasm/native/rust_api/browser_engine_api.cpp` turns those CXX calls
-into an `extern "C"` ABI. It owns handles as `void *` values that wrap
-`rust::Box<BrowserEngine>` or `rust::Box<BrowserSha256Hasher>`, validates
-pointers and lengths, and copies Rust strings to heap-allocated C strings.
+`bindings/wasm/src/abi.rs` contains the C-compatible structs that TypeScript
+reads directly from WASM memory. Keep their `#[repr(C)]` layout and size
+assertions stable unless the TypeScript reader is updated at the same time.
+`CE_RequestId` remains a `u32`; runtime metrics are 88 bytes; scheduler loop
+results are 16 bytes.
 
-`bindings/wasm/native/js_api/wasm_exports.cpp` is the Emscripten-facing layer.
-It marks `CE_*` functions with `EMSCRIPTEN_KEEPALIVE`, manages a process-level
-browser engine for the legacy-style API, exposes lower-level handle APIs, and
-bridges streaming tokens into shared memory.
+`bindings/wasm/src/ingest/mod.rs` adapts streamed GGUF reads and shard writes
+from raw Emscripten callback function pointers. JS obtains those pointers with
+`Module.addFunction`, passes explicit `user_data`, and Rust calls the callbacks
+through `unsafe extern "C"` function pointer types after the exported entrypoint
+has validated the callback set.
 
-`bindings/wasm/native/cxx_bridge/gguf_callbacks.*` wraps host callbacks for
-streamed GGUF reads and shard writes. JS passes function pointers and
-`user_data`; C++ wraps them as CXX classes; Rust ingestion code calls
-`read_at`, `open_shard`, `write_shard`, and `close_shard` through those classes.
+`bindings/wasm/native/emscripten/ce_host.js` is the only custom browser-host
+native shim. It provides `ce_native_yield`, which calls
+`Module._ce_yield_drain()` so the Rust scheduler can synchronously drain token
+bytes into the shared-memory streaming ring.
 
 The browser build has two linked pieces:
 
-1. Cargo builds `cogentlm-wasm` as a Rust staticlib, including the CXX bridge
-   generated from `bindings/wasm/src/bridge.rs`.
-2. Emscripten/CMake links that staticlib with `wasm_exports.cpp`, llama.cpp,
-   ggml WebGPU, mtmd, and `cogent_shim`, then exports the `CE_*` symbols used by
+1. Cargo builds `cogentlm-wasm` as a Rust staticlib containing the `CE_*`
+   exports and Rust browser runtime code.
+2. Emscripten/CMake links that staticlib with llama.cpp, ggml WebGPU, mtmd,
+   `cogent_shim`, and `ce_host.js`, then preserves the `CE_*` symbols used by
    the TypeScript package.
 
 ## Node And Python Bindings
@@ -211,13 +211,14 @@ Keep these rules in mind when changing boundary code:
 - Native strings returned through C ABIs are heap allocated and must have a
   matching free path. Browser strings returned to JS are released with
   `CE_FreeString`.
-- FFI-facing integers use fixed-width types at the C/C++ boundary.
-- Browser structs in `ffi_types.h` have `static_assert` size checks because
-  TypeScript reads their memory layouts directly.
-- Callbacks crossing the Wasm boundary carry explicit `user_data`; Rust should
+- FFI-facing integers use fixed-width types at native, C ABI, and WASM
+  boundaries.
+- Browser structs in `bindings/wasm/src/abi.rs` have compile-time size checks
+  because TypeScript reads their memory layouts directly.
+- Callbacks crossing the WASM boundary carry explicit `user_data`; Rust should
   not assume anything about its shape.
 - Null pointers, invalid lengths, invalid counts, and missing buffers are
-  rejected at the first C/C++ boundary that can validate them.
+  rejected at the first boundary that can validate them.
 
 ## Adding A New Native Capability
 
@@ -238,9 +239,11 @@ Most native changes follow this path:
 9. Add the narrowest relevant tests around the Rust owner of the behavior, not
    around every bridge layer unless the bridge behavior itself is the risk.
 
-For browser-only host APIs, start at `bindings/wasm/src/bridge.rs`, then update
-`browser_engine_api.*`, `wasm_exports.cpp`, `ffi_types.h` if the memory layout
-changes, and the TypeScript package that calls the exported `CE_*` symbol.
+For browser-only host APIs, start at `bindings/wasm/src/exports.rs`. Update
+`bindings/wasm/src/abi.rs` if the memory layout changes, preserve
+`CE_FreeString` ownership rules for Rust-owned strings, add the export root to
+`bindings/wasm/CMakeLists.txt`, and update the TypeScript package that calls
+the exported `CE_*` symbol.
 
 For Node or Python-only APIs, start in the binding file and map to existing
 engine APIs. Avoid duplicating engine behavior in the binding layer.
@@ -256,11 +259,11 @@ Use this file map to narrow investigation quickly:
   observability: inspect `cogent_shim.cpp`.
 - Linker or backend build failures: inspect `crates/sys/build_support` and
   `crates/sys/CMakeLists.txt`.
-- Browser `CE_*` export issues: inspect `wasm_exports.cpp` and
+- Browser `CE_*` export issues: inspect `bindings/wasm/src/exports.rs` and
   `bindings/wasm/CMakeLists.txt`.
 - Browser Rust handle or string/buffer copy issues: inspect
-  `browser_engine_api.cpp`.
-- GGUF streamed ingestion in the browser: inspect `gguf_callbacks.*` and
+  `bindings/wasm/src/exports.rs`.
+- GGUF streamed ingestion in the browser: inspect
   `bindings/wasm/src/ingest`.
 - Node/Python API shape or type conversion issues: inspect the binding
   `lib.rs`, then the corresponding core engine type.
