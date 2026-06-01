@@ -1,6 +1,7 @@
 //! Lock-protected byte ring for handing emitted token text from the engine thread to consumer threads.
 
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::sync::MutexGuard;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -34,6 +35,14 @@ pub struct TokenRingDrainStatus {
     pub bytes_drained: usize,
     pub closed: bool,
 }
+
+pub trait TokenEmissionSink: Debug + Send + Sync {
+    fn try_write_batch(&self, stream_id: u32, frame_count: u32, bytes: &[u8]) -> bool;
+
+    fn close(&self);
+}
+
+pub type TokenEmissionSinkRef = Arc<dyn TokenEmissionSink>;
 
 #[derive(Debug)]
 struct TokenByteRingInner {
@@ -136,6 +145,16 @@ impl TokenByteRingProducer {
         state.closed = true;
         drop(state);
         self.inner.available.notify_all();
+    }
+}
+
+impl TokenEmissionSink for TokenByteRingProducer {
+    fn try_write_batch(&self, stream_id: u32, frame_count: u32, bytes: &[u8]) -> bool {
+        TokenByteRingProducer::try_write_batch(self, stream_id, frame_count, bytes)
+    }
+
+    fn close(&self) {
+        TokenByteRingProducer::close(self);
     }
 }
 

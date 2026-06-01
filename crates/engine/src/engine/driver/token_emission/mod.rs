@@ -5,14 +5,14 @@ use futures_channel::mpsc;
 use crate::engine::token_emission::{TokenBatch, TokenEmissionStats};
 use crate::runtime::numeric::saturating_usize_to_u32;
 use crate::runtime::request::{
-    token_byte_ring, TokenByteRingConsumer, TokenByteRingProducer, TokenRingFrame,
+    token_byte_ring, TokenByteRingConsumer, TokenEmissionSinkRef, TokenRingFrame,
     TOKEN_RING_DEFAULT_CAPACITY,
 };
 
 use super::{TOKEN_BATCH_MAX_BYTES, TOKEN_BATCH_MAX_FRAMES};
 
 pub(super) struct ActiveTokenEmission {
-    pub(super) producer: TokenByteRingProducer,
+    pub(super) producer: TokenEmissionSinkRef,
     consumer: TokenByteRingConsumer,
     state: TokenEmissionState,
     batch_tx: mpsc::UnboundedSender<TokenBatch>,
@@ -25,7 +25,7 @@ pub(super) fn start_engine_token_emission(
 ) -> ActiveTokenEmission {
     let (producer, consumer) = token_byte_ring(TOKEN_RING_DEFAULT_CAPACITY);
     ActiveTokenEmission {
-        producer,
+        producer: std::sync::Arc::new(producer),
         consumer,
         state: TokenEmissionState::new(request_id),
         batch_tx,

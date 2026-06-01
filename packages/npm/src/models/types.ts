@@ -1,6 +1,8 @@
 import type {
   BackendDeviceType,
+  CacheSource,
   ChatMessage,
+  KvReuseMode,
   NativeRuntimeConfig,
   PoolingType,
   TokenEmissionStats,
@@ -228,6 +230,8 @@ export interface RuntimeObservation {
 
   inputTokens: number;
   outputTokens: number;
+  cacheMode: KvReuseMode;
+  cacheSource: CacheSource;
   cacheHits: number;
   prefillTokens: number;
 
@@ -242,9 +246,9 @@ export interface RuntimeObservation {
     tokenPath?: 'none' | 'token-stream';
   };
 
-  /** Cumulative ms spent draining native token records into JS token batches. */
+  /** Request-local ms spent draining native token records into JS token batches. */
   jsTokenDrainMs?: number;
-  jsTokenDrainCount?: number;
+  jsTokenDrainCalls?: number;
 }
 
 export interface BackendProfileObservation {
@@ -323,12 +327,16 @@ export interface EngineState {
 export interface RequestStats {
   inputTokens: number;
   outputTokens: number;
+  cacheMode: KvReuseMode | null;
+  cacheSource: CacheSource | null;
   cacheHits: number;
+  prefillTokens: number | null;
   ttftMs: number | null;
   interTokenMs: number | null;
   e2eMs: number | null;
   decodeTokensPerSecond: number | null;
   e2eTokensPerSecond: number | null;
+  prefillTokensPerSecond: number | null;
   prefillMs: number;
   decodeMs: number;
 }
@@ -453,6 +461,7 @@ export type QueryErrorCode =
   | 'STORAGE_CORRUPT'
   | 'REMOTE_METADATA_UNAVAILABLE'
   | 'REMOTE_LOAD_FAILED'
+  | 'STREAMING_UNAVAILABLE'
   | 'QUERY_FAILED';
 
 export class QueryError extends Error {

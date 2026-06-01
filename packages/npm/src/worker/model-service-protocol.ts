@@ -11,6 +11,7 @@ import type {
   QueryOptions,
   TokenBatch,
 } from '../models/types.js';
+import type { SharedTokenRingDescriptor } from '../runtime/shared-token-ring.js';
 
 export interface WorkerRuntimeConfig {
   moduleUrl?: string;
@@ -93,6 +94,15 @@ export type WorkerResponseMessage =
       kind: 'load-progress';
       callId: number;
       progress: ModelLoadProgress;
+    }
+  | {
+      kind: 'token-ring-ready';
+      descriptor: SharedTokenRingDescriptor;
+    }
+  | {
+      kind: 'token-ring-claim';
+      callId: number;
+      nativeRequestId: number;
     }
   | {
       kind: 'token-batch';

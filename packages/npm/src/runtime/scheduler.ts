@@ -9,14 +9,14 @@ import {
   WasmBridge,
 } from '../wasm/wasm-bridge.js';
 import { RequestTracker } from './request-tracker.js';
+import { SharedTokenRingReader } from './shared-token-ring.js';
 
-// Native owns model scheduling; JS owns host pump cadence. Token emission
-// stays on bulk native loops, but emitted batches must return to JS often
-// enough to be visible while the request is still running.
+// Native owns model scheduling; JS only drains the shared token ring after a
+// host loop returns. Worker-mode token presentation is pulled by the main
+// thread from the same ring and does not run through this scheduler.
 const CONTINUOUS_LOOP_TICK_LIMIT = 1024;
 const CONTINUOUS_LOOP_TOKEN_LIMIT = 512;
 const MAIN_THREAD_TOKEN_SLICE_US = 8_000;
-const WORKER_TOKEN_SLICE_US = 16_000;
 const REQUEST_STEP_RESULT_INVALID = -1;
 const REQUEST_STEP_RESULT_FATAL_NO_PROGRESS = -2;
 
@@ -51,8 +51,8 @@ export class QueuedRequestScheduler {
   public reset(): void {
     this.schedulerPumpGeneration += 1;
     this.schedulerPumpPromise = null;
-    this.cachedDrainBridge = null;
-    this.cachedUsedHeap32Index = -1;
+    this.tokenRingBridge = null;
+    this.tokenRingReader = null;
     this.tokenBatchSinkStats.clear();
   }
 
@@ -188,7 +188,7 @@ export class QueuedRequestScheduler {
             CONTINUOUS_LOOP_TOKEN_LIMIT,
             { maxDurationUs: this.loopDurationUs() }
           );
-          this.drainTokenBufferObserved(bridge);
+          this.drainTokenRingObserved(bridge);
           this.requestCancellationForTokenBatchSinkErrors();
           if (loopResult.completedResponseCount > 0) {
             this.settleCompletedTrackedRequests(bridge);
@@ -211,7 +211,7 @@ export class QueuedRequestScheduler {
     } finally {
       // Final pass to flush tail tokens written before request settlement.
       try {
-        this.drainTokenBufferObserved(bridge);
+        this.drainTokenRingObserved(bridge);
       } catch {
         /* cleanup */
       }
@@ -222,119 +222,74 @@ export class QueuedRequestScheduler {
     if (this.options.getTransportObservability().executionMode === 'main-thread') {
       return MAIN_THREAD_TOKEN_SLICE_US;
     }
-    return this.options.queuedPromptTokenBatchSinks.size > 0
-      ? WORKER_TOKEN_SLICE_US
-      : 0;
+    return 0;
   }
 
-  // Cached token buffer control cell; payload pointer may move if wasm grows it.
-  private cachedDrainBridge: WasmBridge | null = null;
-  private cachedUsedHeap32Index = -1;
-  private readonly tokenBatchDecoder = new TextDecoder('utf-8', { fatal: false });
+  private tokenRingBridge: WasmBridge | null = null;
+  private tokenRingReader: SharedTokenRingReader | null = null;
   private readonly tokenBatchSinkStats = new Map<
     number,
     {
       framesSent: number;
       bytesSent: number;
       batchesSent: number;
+      drainMs: number;
+      drainCalls: number;
     }
   >();
 
-  private ensureTokenDrainCache(bridge: WasmBridge): boolean {
-    if (this.cachedDrainBridge === bridge) {
-      return this.cachedUsedHeap32Index >= 0;
+  private sharedTokenRingReader(bridge: WasmBridge): SharedTokenRingReader {
+    if (this.tokenRingBridge !== bridge || this.tokenRingReader == null) {
+      this.tokenRingBridge = bridge;
+      this.tokenRingReader = new SharedTokenRingReader(
+        bridge.getSharedTokenRingDescriptor()
+      );
     }
-    const usedAddr = bridge.getTokenBufferUsedAddress();
-    if (usedAddr === 0) {
-      this.cachedDrainBridge = null;
-      this.cachedUsedHeap32Index = -1;
-      return false;
-    }
-    this.cachedDrainBridge = bridge;
-    this.cachedUsedHeap32Index = Math.floor(usedAddr / 4);
-    return true;
+    return this.tokenRingReader;
   }
 
-  private drainTokenBufferObserved(bridge: WasmBridge): boolean {
+  private drainTokenRingObserved(bridge: WasmBridge): boolean {
     if (this.options.queuedPromptTokenBatchSinks.size === 0) {
       return false;
     }
     const transport = this.options.getTransportObservability();
     if (!transport.enabled) {
-      return this.drainTokenBuffer(bridge);
+      return this.drainTokenRing(bridge);
     }
     const start = performance.now();
     try {
-      return this.drainTokenBuffer(bridge);
+      return this.drainTokenRing(bridge);
     } finally {
       transport.tokenDrainMs =
         (transport.tokenDrainMs ?? 0) + (performance.now() - start);
-      transport.tokenDrainCount =
-        (transport.tokenDrainCount ?? 0) + 1;
+      transport.tokenDrainCalls =
+        (transport.tokenDrainCalls ?? 0) + 1;
     }
   }
 
-  // Zero-ccall drain: reads `used` via HEAP32, parses batched records via
-  // HEAPU8, and decodes one TokenBatch per native batch record.
-  private drainTokenBuffer(bridge: WasmBridge): boolean {
+  private drainTokenRing(bridge: WasmBridge): boolean {
     if (this.options.queuedPromptTokenBatchSinks.size === 0) {
       return false;
     }
-    if (!this.ensureTokenDrainCache(bridge)) {
-      return false;
-    }
-    const heapU8 = bridge.module.HEAPU8;
-    const heap32 = bridge.module.HEAP32;
-    const used = heap32[this.cachedUsedHeap32Index];
-    if (used <= 0) {
-      return false;
-    }
-    heap32[this.cachedUsedHeap32Index] = 0;
-    let offset = bridge.getTokenBufferPointer();
-    if (offset === 0) {
-      return false;
-    }
-    const end = offset + used;
     let delivered = false;
-    while (offset + 16 <= end) {
-      const requestId =
-        heapU8[offset] |
-        (heapU8[offset + 1] << 8) |
-        (heapU8[offset + 2] << 16) |
-        (heapU8[offset + 3] << 24);
-      const sequenceStart =
-        heapU8[offset + 4] |
-        (heapU8[offset + 5] << 8) |
-        (heapU8[offset + 6] << 16) |
-        (heapU8[offset + 7] << 24);
-      const frameCount =
-        heapU8[offset + 8] |
-        (heapU8[offset + 9] << 8) |
-        (heapU8[offset + 10] << 16) |
-        (heapU8[offset + 11] << 24);
-      const textLength =
-        heapU8[offset + 12] |
-        (heapU8[offset + 13] << 8) |
-        (heapU8[offset + 14] << 16) |
-        (heapU8[offset + 15] << 24);
-      const payloadStart = offset + 16;
-      if (payloadStart + textLength > end) {
-        break;
+    this.sharedTokenRingReader(bridge).drain(
+      (recordStreamId, sequenceStart, frameCount, byteCount, text) => {
+        const streamId = recordStreamId >>> 0;
+        const tokenBatchSink = this.options.queuedPromptTokenBatchSinks.get(streamId);
+        if (tokenBatchSink != null) {
+          const recordDrainStart = performance.now();
+          this.deliverTokenBatchSinkBatch(
+            streamId,
+            sequenceStart,
+            text,
+            frameCount,
+            byteCount,
+            performance.now() - recordDrainStart
+          );
+          delivered = true;
+        }
       }
-      const streamId = requestId >>> 0;
-      const tokenBatchSink = this.options.queuedPromptTokenBatchSinks.get(streamId);
-      if (tokenBatchSink != null) {
-        const payload = heapU8.subarray(payloadStart, payloadStart + textLength);
-        this.deliverTokenBatchSinkBatch(streamId, {
-          sequenceStart: sequenceStart >>> 0,
-          text: this.tokenBatchDecoder.decode(payload),
-          frameCount: frameCount >>> 0,
-          byteCount: textLength >>> 0,
-        });
-        delivered = true;
-      }
-      offset = payloadStart + textLength;
-    }
+    );
     return delivered;
   }
 
@@ -344,34 +299,37 @@ export class QueuedRequestScheduler {
 
   private deliverTokenBatchSinkBatch(
     requestId: number,
-    batch: {
-      sequenceStart: number;
-      text: string;
-      frameCount: number;
-      byteCount: number;
-    }
+    sequenceStart: number,
+    text: string,
+    frameCount: number,
+    byteCount: number,
+    drainMs: number
   ): void {
     const tokenBatchSink = this.options.queuedPromptTokenBatchSinks.get(requestId);
-    if (tokenBatchSink == null || batch.frameCount === 0) {
+    if (tokenBatchSink == null || frameCount === 0) {
       return;
     }
     const stats = this.tokenBatchSinkStats.get(requestId) ?? {
       framesSent: 0,
       bytesSent: 0,
       batchesSent: 0,
+      drainMs: 0,
+      drainCalls: 0,
     };
-    stats.framesSent += batch.frameCount;
-    stats.bytesSent += batch.byteCount;
+    stats.framesSent += frameCount;
+    stats.bytesSent += byteCount;
     stats.batchesSent += 1;
+    stats.drainMs += drainMs;
+    stats.drainCalls += 1;
     this.tokenBatchSinkStats.set(requestId, stats);
     try {
       tokenBatchSink({
         requestId: String(requestId),
         streamId: requestId,
-        sequenceStart: batch.sequenceStart,
-        text: batch.text,
-        frameCount: batch.frameCount,
-        byteCount: batch.byteCount,
+        sequenceStart,
+        text,
+        frameCount,
+        byteCount,
         stats: { ...stats },
       });
     } catch (error) {

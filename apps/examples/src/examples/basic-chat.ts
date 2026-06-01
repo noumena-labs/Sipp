@@ -3,7 +3,7 @@ import { Example } from './base-example';
 export const basicChatExample: Example = {
   id: '01-basic-chat',
   title: 'Basic Chat',
-  description: 'A simple demonstration of chat with interactive token delivery.',
+  description: 'A simple demonstration of chat with visible token emission.',
   run: async ({ log }) => {
     log('Example loaded. Type a message in the console to start chatting.', 'system');
   },
@@ -17,7 +17,7 @@ export const basicChatExample: Example = {
       const run = client.chat([
         { role: 'user', content: userInput }
       ], {
-        tokenDelivery: 'interactive',
+        emitTokens: true,
       });
 
       for await (const batch of run.tokens) {

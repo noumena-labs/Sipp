@@ -462,11 +462,6 @@ class FakeRuntime implements EngineRuntime {
       executionMode: 'main-thread',
       workerBacked: false,
       enabled: this.runtimeMetricsEnabled,
-      bufferedTokenLimit: 0,
-      flushIntervalMs: 0,
-      flushCount: 0,
-      coalescedTokenCount: 0,
-      maxObservedBufferedTokenCount: 0,
       activeTokenTransport: 'none',
     };
   }
@@ -627,6 +622,8 @@ class FakeRuntime implements EngineRuntime {
           framesSent: this.streamedTokens.length,
           bytesSent: new TextEncoder().encode(text).byteLength,
           batchesSent: 1,
+          drainMs: 0,
+          drainCalls: 0,
         },
       });
     }
@@ -730,7 +727,10 @@ class FakeRuntime implements EngineRuntime {
       nativeLogicMs: 1,
       inputTokens: 3,
       outputTokens: 5,
+      cacheMode: 'live_slot_prefix',
+      cacheSource: 'none',
       cacheHits: 0,
+      prefillTokens: 3,
     };
   }
 

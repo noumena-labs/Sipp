@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use super::{
     GenerateRequest, GenerateRequestId, GenerateRequestLifecycle, GenerateResponse,
-    GenerateResponseStatus, TokenByteRingProducer,
+    GenerateResponseStatus, TokenEmissionSinkRef,
 };
 #[derive(Debug, Clone)]
 pub struct RequestQueue {
@@ -13,7 +13,7 @@ pub struct RequestQueue {
     pending_request_ids: VecDeque<GenerateRequestId>,
     pub completed_responses: HashMap<GenerateRequestId, GenerateResponse>,
     pub total_emitted_token_count: i32,
-    pub token_ring_producers: HashMap<GenerateRequestId, TokenByteRingProducer>,
+    pub token_emission_sinks: HashMap<GenerateRequestId, TokenEmissionSinkRef>,
     pending_token_emissions: HashMap<GenerateRequestId, PendingTokenEmission>,
 }
 
@@ -36,7 +36,7 @@ impl RequestQueue {
             pending_request_ids: VecDeque::new(),
             completed_responses: HashMap::new(),
             total_emitted_token_count: 0,
-            token_ring_producers: HashMap::new(),
+            token_emission_sinks: HashMap::new(),
             pending_token_emissions: HashMap::new(),
         }
     }
@@ -59,9 +59,9 @@ impl RequestQueue {
 
     pub fn try_pop_next_admissible(
         &mut self,
-        predicate: impl Fn(&GenerateRequest) -> bool,
+        mut predicate: impl FnMut(&GenerateRequest) -> bool,
     ) -> Option<GenerateRequestId> {
-        let (index, request_id) = self.find_admissible_pending_request(predicate)?;
+        let (index, request_id) = self.find_admissible_pending_request(&mut predicate)?;
         self.pending_request_ids.remove(index);
         self.mark_admitted(request_id);
         Some(request_id)
@@ -69,7 +69,7 @@ impl RequestQueue {
 
     fn find_admissible_pending_request(
         &self,
-        predicate: impl Fn(&GenerateRequest) -> bool,
+        predicate: &mut impl FnMut(&GenerateRequest) -> bool,
     ) -> Option<(usize, GenerateRequestId)> {
         self.pending_request_ids
             .iter()
@@ -116,7 +116,7 @@ impl RequestQueue {
             return;
         }
 
-        if !self.token_ring_producers.contains_key(&request_id) {
+        if !self.token_emission_sinks.contains_key(&request_id) {
             return;
         };
 
@@ -126,17 +126,24 @@ impl RequestQueue {
         self.total_emitted_token_count = self.total_emitted_token_count.saturating_add(1);
     }
 
-    pub fn flush_token_emissions(&mut self) {
-        let pending_emissions = std::mem::take(&mut self.pending_token_emissions);
-        for (request_id, pending) in pending_emissions {
+    pub fn has_token_emission_sinks(&self) -> bool {
+        !self.token_emission_sinks.is_empty()
+    }
+
+    pub fn flush_token_emissions(&mut self) -> bool {
+        let mut flushed = false;
+        let sinks = &self.token_emission_sinks;
+        for (request_id, pending) in self.pending_token_emissions.drain() {
             if pending.text.is_empty() || pending.frame_count == 0 {
                 continue;
             }
-            let Some(producer) = self.token_ring_producers.get(&request_id) else {
+            let Some(sink) = sinks.get(&request_id) else {
                 continue;
             };
-            producer.try_write_batch(request_id, pending.frame_count, pending.text.as_bytes());
+            flushed |=
+                sink.try_write_batch(request_id, pending.frame_count, pending.text.as_bytes());
         }
+        flushed
     }
 
     /// Removes and returns the completed response in one step, avoiding the
@@ -156,7 +163,7 @@ impl RequestQueue {
         self.pending_request_ids.clear();
         self.completed_responses.clear();
         self.total_emitted_token_count = 0;
-        self.token_ring_producers.clear();
+        self.token_emission_sinks.clear();
         self.pending_token_emissions.clear();
     }
 

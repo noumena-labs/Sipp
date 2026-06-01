@@ -47,7 +47,9 @@ export {
   type TokenBatch,
 } from './models/types.js';
 export type {
+  CacheSource,
   ChatMessage,
+  KvReuseMode,
   NativeRuntimeConfig,
   RequestObservabilityMetrics,
 } from './engine/inference-types.js';

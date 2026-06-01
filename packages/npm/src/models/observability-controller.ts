@@ -119,6 +119,8 @@ export function toRuntimeObservation(
     nativeLogicMs: metrics.nativeLogicMs,
     inputTokens: metrics.inputTokens,
     outputTokens: metrics.outputTokens,
+    cacheMode: metrics.cacheMode,
+    cacheSource: metrics.cacheSource,
     cacheHits: metrics.cacheHits,
     prefillTokens: metrics.prefillTokens,
     decodeTokensPerSecond:
@@ -130,7 +132,6 @@ export function toRuntimeObservation(
         ? (metrics.prefillTokens / metrics.prefillMs) * 1000
         : 0,
 
-
     execution: {
       mode: transport.executionMode,
       workerBacked: transport.workerBacked,
@@ -138,11 +139,12 @@ export function toRuntimeObservation(
     },
   };
 
-  includeFinite(observation, 'jsTokenDrainMs', transport.tokenDrainMs);
-  includeFinite(observation, 'jsTokenDrainCount', transport.tokenDrainCount);
+  if (tokenPath === 'token-stream') {
+    includeFinite(observation, 'jsTokenDrainMs', transport.tokenDrainMs);
+    includeFinite(observation, 'jsTokenDrainCalls', transport.tokenDrainCalls);
+  }
   return observation;
 }
-
 
 export function toBackendProfileObservation(
   backend: BackendObservability | null
@@ -343,7 +345,10 @@ function requestStatsFromMetrics(metrics: GenerateResponse['observability']): Re
   return {
     inputTokens: metrics?.inputTokens ?? 0,
     outputTokens: metrics?.outputTokens ?? 0,
+    cacheMode: metrics?.cacheMode ?? null,
+    cacheSource: metrics?.cacheSource ?? null,
     cacheHits: metrics?.cacheHits ?? 0,
+    prefillTokens: metrics?.prefillTokens ?? null,
     ttftMs: metrics?.ttftMs ?? null,
     interTokenMs: metrics?.itlAvgMs ?? null,
     e2eMs: metrics?.e2eMs ?? null,
@@ -354,6 +359,10 @@ function requestStatsFromMetrics(metrics: GenerateResponse['observability']): Re
     e2eTokensPerSecond:
       metrics != null && metrics.e2eMs > 0
         ? (metrics.outputTokens / metrics.e2eMs) * 1000
+        : null,
+    prefillTokensPerSecond:
+      metrics != null && metrics.prefillMs > 0 && metrics.prefillTokens > 0
+        ? (metrics.prefillTokens / metrics.prefillMs) * 1000
         : null,
     prefillMs: metrics?.prefillMs ?? 0,
     decodeMs: metrics?.decodeMs ?? 0,

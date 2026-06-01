@@ -5,6 +5,7 @@ import { WasmBridge, unwrapLifecycleResponse } from './wasm-bridge.js';
 import type { EngineModule } from './engine-module.js';
 
 function createSha256TestModule(updateLengths: number[] = []): EngineModule {
+  const heapU8 = new Uint8Array(4096);
   return {
     FS: {
       analyzePath: () => ({ exists: false }),
@@ -17,7 +18,7 @@ function createSha256TestModule(updateLengths: number[] = []): EngineModule {
     HEAP32: new Int32Array(128),
     HEAPF32: new Float32Array(128),
     HEAPF64: new Float64Array(128),
-    HEAPU8: new Uint8Array(4096),
+    HEAPU8: heapU8,
     _malloc: () => 32,
     _free: () => {},
     ccall: (ident: string, _returnType: string | null, _argTypes: string[], args: unknown[]) => {
@@ -29,6 +30,7 @@ function createSha256TestModule(updateLengths: number[] = []): EngineModule {
         return 0;
       }
       if (ident === 'CE_Sha256Finalize') {
+        heapU8.set(new TextEncoder().encode('a'.repeat(64)), 64);
         return 64;
       }
       if (ident === 'CE_FreeString' || ident === 'CE_Sha256Close') {
@@ -36,7 +38,9 @@ function createSha256TestModule(updateLengths: number[] = []): EngineModule {
       }
       throw new Error(`Unexpected call: ${ident}`);
     },
-    UTF8ToString: () => 'a'.repeat(64),
+    UTF8ToString: () => {
+      throw new Error('UTF8ToString should not be used for owned strings.');
+    },
     addFunction: () => 0,
     removeFunction: () => {},
   };
@@ -193,7 +197,8 @@ test('WasmBridge copies completed embedding responses as f32 values', () => {
 });
 
 test('WasmBridge copies completed text responses by output kind', () => {
-  const memory = new ArrayBuffer(4096);
+  const memory = new SharedArrayBuffer(4096);
+  const heapU8 = new Uint8Array(memory);
   const module: EngineModule = {
     FS: {
       analyzePath: () => ({ exists: false }),
@@ -206,10 +211,10 @@ test('WasmBridge copies completed text responses by output kind', () => {
     HEAP32: new Int32Array(memory),
     HEAPF32: new Float32Array(memory),
     HEAPF64: new Float64Array(memory),
-    HEAPU8: new Uint8Array(memory),
+    HEAPU8: heapU8,
     _malloc: () => 64,
     _free: () => {},
-    ccall: (ident: string) => {
+    ccall: (ident: string, _returnType: string | null, _argTypes: string[], args: unknown[]) => {
       if (ident === 'CE_GetCompletedRequestStatus') {
         return 1;
       }
@@ -220,6 +225,8 @@ test('WasmBridge copies completed text responses by output kind', () => {
         return 4;
       }
       if (ident === 'CE_CopyCompletedRequestOutput') {
+        const ptr = args[1] as number;
+        heapU8.set(new TextEncoder().encode('done'), ptr);
         return 4;
       }
       if (ident === 'CE_GetCompletedRequestErrorSize') {
@@ -233,7 +240,9 @@ test('WasmBridge copies completed text responses by output kind', () => {
       }
       throw new Error(`Unexpected call: ${ident}`);
     },
-    UTF8ToString: () => 'done',
+    UTF8ToString: () => {
+      throw new Error('UTF8ToString should not be used for copied text.');
+    },
     addFunction: () => 0,
     removeFunction: () => {},
   };

@@ -7,8 +7,7 @@ use crate::runtime::scheduler::{BatchContributionKind, SlotPhase, SlotScheduler,
 
 use super::text::{append_token_piece_to_slot, apply_stop_sequences_to_slot, flush_pending_utf8};
 use super::{
-    duration_ms, nonnegative_i32_to_usize, unique_slot_first_use, InferenceRuntime,
-    LLAMA_SAMPLER_SAMPLE_FAILED,
+    nonnegative_i32_to_usize, unique_slot_first_use, InferenceRuntime, LLAMA_SAMPLER_SAMPLE_FAILED,
 };
 
 impl InferenceRuntime {
@@ -126,14 +125,8 @@ impl InferenceRuntime {
         }
     }
 
-    pub(super) fn sample_logits_and_buffer_output(
-        &mut self,
-        vocab: *const ffi::llama_vocab,
-    ) -> (f64, f64) {
-        let mut sample_ms = 0.0;
-        let mut token_piece_ms = 0.0;
+    pub(super) fn sample_logits_and_buffer_output(&mut self, vocab: *const ffi::llama_vocab) {
         let now = Instant::now();
-        let enable_metrics = self.debug_metrics_enabled;
         for pending_logits in &mut self.scratch_logits_contributions {
             let Some(slot) = self.slot_scheduler.slots.get_mut(pending_logits.slot_index) else {
                 continue;
@@ -142,7 +135,6 @@ impl InferenceRuntime {
                 continue;
             };
 
-            let sample_start = enable_metrics.then(Instant::now);
             let next_token = unsafe {
                 ffi::cogent_common_sampler_sample(
                     sampler.as_ptr(),
@@ -150,9 +142,6 @@ impl InferenceRuntime {
                     pending_logits.batch_token_index,
                 )
             };
-            if let Some(start) = sample_start {
-                sample_ms += duration_ms(start, Instant::now());
-            }
             pending_logits.sampled_token = next_token;
 
             if next_token == ffi::LLAMA_TOKEN_NULL {
@@ -178,11 +167,7 @@ impl InferenceRuntime {
             slot.generated_tokens.push(next_token);
             self.total_output_tokens = self.total_output_tokens.saturating_add(1);
 
-            let piece_start = enable_metrics.then(Instant::now);
             append_token_piece_to_slot(vocab, next_token, slot, &mut self.scratch_token_piece);
-            if let Some(start) = piece_start {
-                token_piece_ms += duration_ms(start, Instant::now());
-            }
 
             let stop_matched = apply_stop_sequences_to_slot(slot);
             let gen_len = slot.generated_tokens.len();
@@ -220,6 +205,5 @@ impl InferenceRuntime {
                 slot.phase = SlotPhase::EmitBuffered;
             }
         }
-        (sample_ms, token_piece_ms)
     }
 }

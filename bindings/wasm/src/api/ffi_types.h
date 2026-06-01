@@ -26,9 +26,8 @@ typedef struct CE_RuntimeObservabilityMetrics {
   double prefill_ms;
   double decode_ms;
 
-  // Native (Hardware & Engine).  native_gpu_ms is raw decode+sync wall time;
-  // in WebGPU+wasm that window includes any event-loop wait inside
-  // llama_synchronize for the GPU-completion microtask.
+  // Native (Hardware & Engine). native_gpu_ms is the llama_decode wall time;
+  // native_sync_ms is the following llama_synchronize wall time.
   double native_gpu_ms;
   double native_sync_ms;
   double native_logic_ms;
@@ -36,6 +35,8 @@ typedef struct CE_RuntimeObservabilityMetrics {
   // Counts
   int32_t input_tokens;
   int32_t output_tokens;
+  int32_t cache_mode;
+  int32_t cache_source;
   int32_t cache_hits;
   int32_t prefill_tokens;
 } CE_RuntimeObservabilityMetrics;
@@ -50,7 +51,7 @@ typedef struct CE_SchedulerLoopResult {
 #ifdef __cplusplus
 static_assert(sizeof(CE_RequestId) == 4,
               "CE_RequestId must stay 32-bit for JS/Wasm FFI calls.");
-static_assert(sizeof(CE_RuntimeObservabilityMetrics) == 88,
+static_assert(sizeof(CE_RuntimeObservabilityMetrics) == 96,
               "CE_RuntimeObservabilityMetrics layout changed. Update the TS FFI reader.");
 static_assert(sizeof(CE_SchedulerLoopResult) == 16,
               "CE_SchedulerLoopResult layout changed. Update the TS FFI reader.");

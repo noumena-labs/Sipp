@@ -9,6 +9,7 @@ import type {
   GenerateResponse,
   NativeRuntimeConfig,
   PromptOptions,
+  TransportObservability,
 } from '../engine/inference-types.js';
 import { createLinkedAbortController, isAbortError } from '../utils/abort.js';
 import { AssetStore, type RemoteAssetMetadata } from './asset-store.js';
@@ -80,6 +81,7 @@ interface RuntimeRequestOptions {
   session?: string;
   maxTokens?: number;
   signal?: AbortSignal;
+  emitTokens?: boolean;
   tokenBatchSink?: (batch: TokenBatch) => void;
   grammar?: string;
   onRequestStarted?: (requestId: number) => void;
@@ -144,6 +146,8 @@ function tokenBatchFromText(
       framesSent: sequenceStart + 1,
       bytesSent: byteCount,
       batchesSent: sequenceStart + 1,
+      drainMs: 0,
+      drainCalls: 0,
     },
   };
 }
@@ -368,31 +372,27 @@ export class ModelService implements ModelLifecycleService {
     enqueue: (session: string, promptOptions: PromptOptions) => Promise<GenerateRequestId>,
     operationLabel = 'Model query'
   ): Promise<GenerateResponse> {
-    let activeRequestId: number | null = null;
-    let nextSequence = 0;
+    let tokenDrainMs = 0;
+    let tokenDrainCalls = 0;
     const deliverTokenBatch = (batch: TokenBatch): void => {
-      const requestId = activeRequestId ?? Number(batch.streamId);
-      const text = batch.text;
-      if (text.length === 0) {
+      if (batch.text.length === 0) {
         return;
       }
-      options.tokenBatchSink?.({
-        ...batch,
-        requestId: String(requestId),
-        streamId: requestId,
-        sequenceStart: nextSequence,
-      });
-      nextSequence += Math.max(1, batch.frameCount);
+      tokenDrainMs = batch.stats.drainMs;
+      tokenDrainCalls = batch.stats.drainCalls;
+      options.tokenBatchSink?.(batch);
     };
     const promptOptions: PromptOptions = {
       nTokens: options.maxTokens,
       signal: options.signal,
+      emitTokens: options.emitTokens === true || options.tokenBatchSink != null,
       tokenBatchSink: options.tokenBatchSink == null ? undefined : deliverTokenBatch,
       media,
       grammar: options.grammar,
       onRequestStarted: options.onRequestStarted,
     };
     const session = options.session ?? 'default';
+    const emitsTokens = promptOptions.emitTokens === true;
     const start = nowMs();
     this.observability.emit('query-start', {
       state: 'querying',
@@ -404,15 +404,21 @@ export class ModelService implements ModelLifecycleService {
         outputTokens: null,
       },
     });
+    let requestId = 0;
     let failureRecorded = false;
     try {
-      const requestId = await enqueue(session, promptOptions);
-      activeRequestId = requestId;
+      requestId = await enqueue(session, promptOptions);
       this.emitEngineEvent({ type: 'request-started', requestId: String(requestId), streamId: requestId });
       const response = await this.runtime.awaitQuery(requestId, { signal: options.signal });
       if (response.cancelled) {
         const error = new DOMException(response.errorMessage ?? 'Queued request cancelled.', 'AbortError');
-        this.recordQueryFailure(session, start, error, response);
+        this.recordQueryFailure(
+          session,
+          start,
+          error,
+          response,
+          this.requestTransportObservability(emitsTokens, tokenDrainMs, tokenDrainCalls)
+        );
         this.emitEngineEvent({
           type: 'request-failed',
           requestId: String(requestId),
@@ -423,7 +429,13 @@ export class ModelService implements ModelLifecycleService {
       }
       if (response.failed) {
         const error = new Error(response.errorMessage ?? 'Queued prompt failed.');
-        this.recordQueryFailure(session, start, error, response);
+        this.recordQueryFailure(
+          session,
+          start,
+          error,
+          response,
+          this.requestTransportObservability(emitsTokens, tokenDrainMs, tokenDrainCalls)
+        );
         this.emitEngineEvent({
           type: 'request-failed',
           requestId: String(requestId),
@@ -432,7 +444,12 @@ export class ModelService implements ModelLifecycleService {
         failureRecorded = true;
         throw error;
       }
-      this.recordQuerySuccess(session, start, response);
+      this.recordQuerySuccess(
+        session,
+        start,
+        response,
+        this.requestTransportObservability(emitsTokens, tokenDrainMs, tokenDrainCalls)
+      );
       this.emitEngineEvent({
         type: 'request-completed',
         requestId: String(requestId),
@@ -440,7 +457,13 @@ export class ModelService implements ModelLifecycleService {
       return response;
     } catch (error) {
       if (!failureRecorded) {
-        this.recordQueryFailure(session, start, error);
+        this.recordQueryFailure(
+          session,
+          start,
+          error,
+          undefined,
+          this.requestTransportObservability(emitsTokens, tokenDrainMs, tokenDrainCalls)
+        );
       }
       if (error instanceof QueryError) {
         throw error;
@@ -452,10 +475,10 @@ export class ModelService implements ModelLifecycleService {
           : `${operationLabel} failed.`,
         { cause: error }
       );
-      if (!failureRecorded && activeRequestId != null) {
+      if (!failureRecorded && requestId !== 0) {
         this.emitEngineEvent({
           type: 'request-failed',
-          requestId: String(activeRequestId),
+          requestId: String(requestId),
           error: wrapped.message,
         });
       }
@@ -807,12 +830,13 @@ export class ModelService implements ModelLifecycleService {
   private recordQuerySuccess(
     session: string,
     start: number,
-    response: GenerateResponse
+    response: GenerateResponse,
+    transport: TransportObservability
   ): void {
     const metrics = response.observability ?? null;
     const runtime = toRuntimeObservation(
       metrics ?? this.runtime.getRuntimeObservability(),
-      this.runtime.getTransportObservability()
+      transport
     );
     this.observability.emit('query-complete', {
       state: 'ready',
@@ -825,12 +849,13 @@ export class ModelService implements ModelLifecycleService {
     session: string,
     start: number,
     error: unknown,
-    response?: GenerateResponse
+    response?: GenerateResponse,
+    transport: TransportObservability = this.runtime.getTransportObservability()
   ): void {
     const metrics = response?.observability ?? null;
     const runtime = toRuntimeObservation(
       metrics ?? this.runtime.getRuntimeObservability(),
-      this.runtime.getTransportObservability()
+      transport
     );
     this.observability.emit('error', {
       state: 'error',
@@ -846,6 +871,27 @@ export class ModelService implements ModelLifecycleService {
       },
       ...(runtime == null ? {} : { runtime }),
     });
+  }
+
+  private requestTransportObservability(
+    emitsTokens: boolean,
+    tokenDrainMs = 0,
+    tokenDrainCalls = 0
+  ): TransportObservability {
+    const current = this.runtime.getTransportObservability();
+    const transport: TransportObservability = {
+      ...current,
+      activeTokenEmission: emitsTokens,
+      activeTokenTransport: emitsTokens ? 'token-stream' : 'none',
+    };
+    if (!emitsTokens) {
+      delete transport.tokenDrainCalls;
+      delete transport.tokenDrainMs;
+      return transport;
+    }
+    transport.tokenDrainCalls = tokenDrainCalls;
+    transport.tokenDrainMs = tokenDrainMs;
+    return transport;
   }
 
   private toQueryObservation(

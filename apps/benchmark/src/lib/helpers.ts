@@ -28,7 +28,7 @@ export const DEFAULT_BENCHMARK_PROMPTS: BenchmarkPromptSet = {
 };
 
 export const ENCODER_DECODER_BENCHMARK_PROMPTS: BenchmarkPromptSet = {
-  longPrompt: 'translate English to German: Browser inference should measure cold start, model loading time, prompt throughput, decode throughput, reused context performance, and time to first token.',
+  longPrompt: 'translate English to German: Browser inference should measure cold start, model loading time, prompt throughput, decode throughput, repeated prompt reuse, and time to first token.',
   mixedForegroundPrompt: 'translate English to German: Measure inference performance.',
 };
 
@@ -149,18 +149,12 @@ export function buildMixedLoadDefinition(
 
 export function buildPhase4BenchmarkInitConfig(initConfig: any = {}): any {
   const context = initConfig.context ?? {};
-  const cache = initConfig.cache ?? {};
   const n_parallel = context.n_parallel ?? context.nParallel;
-  const max_session_entries = cache.max_session_entries ?? cache.maxSessionEntries;
   return {
     ...initConfig,
     context: {
       ...context,
       n_parallel: Math.max(n_parallel ?? 1, 2),
-    },
-    cache: {
-      ...cache,
-      max_session_entries: Math.max(max_session_entries ?? 8, 2),
     },
     sampling: initConfig.sampling == null ? undefined : { ...initConfig.sampling },
   };
@@ -182,37 +176,131 @@ export function summarizeMemorySnapshots(memorySnapshots: any[]): any {
   };
 }
 
-export function buildBenchmarkBackendProfile(environment: any, runtimeBackend: any): any {
+type BenchmarkEnvironmentInfo = {
+  readonly hasNavigatorGpu?: boolean;
+  readonly adapterAvailable?: boolean;
+  readonly adapterLabel?: string | null;
+  readonly adapterVendor?: string | null;
+  readonly adapterArchitecture?: string | null;
+  readonly adapterDescription?: string | null;
+  readonly adapterInfo?: {
+    readonly vendor?: string;
+    readonly architecture?: string;
+    readonly device?: string;
+    readonly description?: string;
+  } | null;
+};
+
+type RuntimeBackendInfo = {
+  readonly webgpuCompiled?: boolean;
+  readonly webgpuRegistered?: boolean;
+  readonly webgpuDeviceCount?: number;
+  readonly gpuOffloadSupported?: boolean;
+  readonly availableBackends?: readonly {
+    readonly name: string;
+    readonly deviceCount: number;
+  }[];
+  readonly devices?: readonly {
+    readonly name?: string;
+    readonly description?: string;
+    readonly type?: string;
+    readonly backendName?: string;
+  }[];
+};
+
+export type BenchmarkBackendProfile = {
+  readonly requestedExecutionMode: string;
+  readonly requestedGpuLayers: unknown;
+  readonly inferredExecutionBackend: string;
+  readonly runtimeBackendStatus: string;
+  readonly gpuOffloadSupported: boolean | null;
+  readonly availableBackends: readonly string[];
+  readonly backendRegistries: NonNullable<RuntimeBackendInfo['availableBackends']>;
+  readonly runtimeDeviceCount: number;
+  readonly runtimeAcceleratorDeviceCount: number;
+  readonly runtimeDeviceLabels: readonly string[];
+  readonly runtimeDevices: NonNullable<RuntimeBackendInfo['devices']>;
+  readonly hostAdapter: {
+    readonly apiAvailable: boolean;
+    readonly adapterAvailable: boolean;
+    readonly adapterLabel: string | null;
+    readonly adapterVendor: string | null;
+    readonly adapterArchitecture: string | null;
+    readonly adapterDescription: string | null;
+  };
+  readonly notes: readonly string[];
+};
+
+export function buildBenchmarkBackendProfile(
+  environment: BenchmarkEnvironmentInfo,
+  runtimeBackend: RuntimeBackendInfo | null | undefined,
+  requestedGpuLayers: unknown = null
+): BenchmarkBackendProfile {
   const runtimeDevices = Array.isArray(runtimeBackend?.devices) ? runtimeBackend.devices : [];
-  const acceleratorDevices = runtimeDevices.filter((d: any) => d.type !== 'cpu');
+  const acceleratorDevices = runtimeDevices.filter((device) => device.type !== 'cpu');
+  const adapterInfo = environment?.adapterInfo;
   const notes: string[] = [];
 
-  if (!environment?.hasNavigatorGpu) notes.push('navigator.gpu is unavailable in this browser session.');
-  else if (!environment.adapterAvailable) notes.push('navigator.gpu is present, but requestAdapter() did not produce a usable adapter.');
+  if (!environment.hasNavigatorGpu) {
+    notes.push('navigator.gpu is unavailable in this browser session.');
+  } else if (!environment.adapterAvailable) {
+    notes.push('navigator.gpu is present, but requestAdapter() did not produce a usable adapter.');
+  }
 
-  if (!runtimeBackend?.webgpuCompiled) notes.push('The package build did not include ggml-webgpu.');
-  else if (!runtimeBackend.webgpuRegistered) notes.push('ggml-webgpu was compiled, but the runtime did not register a usable WebGPU backend.');
-  else if ((runtimeBackend.webgpuDeviceCount ?? 0) <= 0) notes.push('ggml-webgpu was registered, but it reported no runtime devices.');
+  if (!runtimeBackend?.webgpuCompiled) {
+    notes.push('The package build did not include ggml-webgpu.');
+  } else if (!runtimeBackend.webgpuRegistered) {
+    notes.push('ggml-webgpu was compiled, but the runtime did not register a usable WebGPU backend.');
+  } else if ((runtimeBackend.webgpuDeviceCount ?? 0) <= 0) {
+    notes.push('ggml-webgpu was registered, but it reported no runtime devices.');
+  }
+
+  const runtimeBackendStatus =
+    runtimeBackend == null
+      ? 'unknown'
+      : !runtimeBackend.webgpuCompiled
+        ? 'not-compiled'
+        : !runtimeBackend.webgpuRegistered
+          ? 'compiled-not-registered'
+          : (runtimeBackend.webgpuDeviceCount ?? 0) <= 0
+            ? 'registered-no-devices'
+            : 'webgpu-ready';
 
   return {
-    requestedExecutionMode: runtimeBackend ? (runtimeBackend.webgpuRegistered ? 'gpu-offload' : 'cpu-only') : 'unknown',
-    requestedGpuLayers: null,
-    inferredExecutionBackend: (environment?.adapterAvailable && runtimeBackend?.webgpuRegistered && runtimeBackend?.webgpuDeviceCount > 0 && runtimeBackend?.gpuOffloadSupported) ? 'webgpu' : (runtimeBackend ? 'cpu' : 'unknown'),
-    runtimeBackendStatus: !runtimeBackend ? 'unknown' : (!runtimeBackend.webgpuCompiled ? 'not-compiled' : (!runtimeBackend.webgpuRegistered ? 'compiled-not-registered' : ((runtimeBackend.webgpuDeviceCount ?? 0) <= 0 ? 'registered-no-devices' : 'webgpu-ready'))),
+    requestedExecutionMode:
+      runtimeBackend == null
+        ? 'unknown'
+        : runtimeBackend.webgpuRegistered
+          ? 'gpu-offload'
+          : 'cpu-only',
+    requestedGpuLayers,
+    inferredExecutionBackend:
+      environment.adapterAvailable &&
+      runtimeBackend?.webgpuRegistered &&
+      runtimeBackend.webgpuDeviceCount != null &&
+      runtimeBackend.webgpuDeviceCount > 0 &&
+      runtimeBackend.gpuOffloadSupported
+        ? 'webgpu'
+        : runtimeBackend != null
+          ? 'cpu'
+          : 'unknown',
+    runtimeBackendStatus,
     gpuOffloadSupported: runtimeBackend?.gpuOffloadSupported ?? null,
-    availableBackends: runtimeBackend?.availableBackends?.map((b: any) => b.name) ?? [],
+    availableBackends: runtimeBackend?.availableBackends?.map((backend) => backend.name) ?? [],
     backendRegistries: runtimeBackend?.availableBackends ?? [],
     runtimeDeviceCount: runtimeDevices.length,
     runtimeAcceleratorDeviceCount: acceleratorDevices.length,
-    runtimeDeviceLabels: runtimeDevices.map((d: any) => `${d.backendName || d.type}:${d.description || d.name || d.type}`),
+    runtimeDeviceLabels: runtimeDevices.map((device) =>
+      `${device.backendName || device.type}:${device.description || device.name || device.type}`
+    ),
     runtimeDevices,
     hostAdapter: {
       apiAvailable: Boolean(environment?.hasNavigatorGpu),
       adapterAvailable: Boolean(environment?.adapterAvailable),
-      adapterLabel: environment?.adapterLabel ?? null,
-      adapterVendor: environment?.adapterVendor ?? null,
-      adapterArchitecture: environment?.adapterArchitecture ?? null,
-      adapterDescription: environment?.adapterDescription ?? null,
+      adapterLabel: environment?.adapterLabel ?? adapterInfo?.device ?? adapterInfo?.description ?? null,
+      adapterVendor: environment?.adapterVendor ?? adapterInfo?.vendor ?? null,
+      adapterArchitecture: environment?.adapterArchitecture ?? adapterInfo?.architecture ?? null,
+      adapterDescription: environment?.adapterDescription ?? adapterInfo?.description ?? null,
     },
     notes,
   };

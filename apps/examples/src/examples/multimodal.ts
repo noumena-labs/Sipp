@@ -30,7 +30,7 @@ const result = await run.response;
         : [{ role: 'user', content: userInput }];
 
       const run = client.chat(chatInput, {
-        tokenDelivery: 'interactive',
+        emitTokens: true,
       });
 
       for await (const batch of run.tokens) {

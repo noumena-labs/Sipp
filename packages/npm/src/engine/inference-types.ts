@@ -8,7 +8,7 @@ export type SplitMode = 'none' | 'layer' | 'row' | 'tensor';
 export type KvCacheType = 'f16' | 'f32' | 'q8_0' | 'q4_0' | 'q4_1' | 'iq4_nl' | 'q5_0' | 'q5_1';
 export type RopeScaling = 'none' | 'linear' | 'yarn';
 export type KvReuseMode = 'disabled' | 'live_slot_prefix' | 'state_snapshot' | 'live_slot_and_snapshot';
-export type CacheKeyPolicy = 'context_key' | 'prompt_hash';
+export type CacheSource = 'none' | 'live' | 'snapshot';
 export type PoolingType = 'unspecified' | 'none' | 'mean' | 'cls' | 'last' | 'rank';
 export type SamplerStage =
   | 'dry'
@@ -123,10 +123,6 @@ export interface CacheRuntimeConfig {
   snapshot_interval_tokens?: number;
   max_snapshot_entries?: number;
   max_snapshot_bytes?: number;
-  max_session_entries?: number;
-  cache_key_policy?: CacheKeyPolicy;
-  enable_context_checkpoints?: boolean;
-  checkpoint_every_tokens?: number;
 }
 
 export interface MultimodalRuntimeConfig {
@@ -162,6 +158,7 @@ export interface NativeRuntimeConfig {
 export interface PromptOptions {
   nTokens?: number;
   signal?: AbortSignal;
+  emitTokens?: boolean;
   tokenBatchSink?: (batch: TokenBatch) => void;
   media?: Uint8Array[];
   /**
@@ -187,6 +184,8 @@ export interface TokenEmissionStats {
   framesSent: number;
   bytesSent: number;
   batchesSent: number;
+  drainMs: number;
+  drainCalls: number;
 }
 
 export interface TokenBatch {
@@ -235,8 +234,8 @@ export interface RequestObservabilityMetrics {
   decodeMs: number;
 
   /**
-   * Raw wall-clock window around llama_decode + llama_synchronize. In
-   * WebGPU+wasm this includes event-loop wait inside llama_synchronize.
+   * Raw wall-clock window around llama_decode. Backend synchronization is
+   * reported separately as nativeSyncMs.
    */
   nativeGpuMs: number;
   /** Cumulative time spent in backend synchronization (llama_synchronize). */
@@ -248,6 +247,10 @@ export interface RequestObservabilityMetrics {
   inputTokens: number;
   /** Total number of tokens generated in the response. */
   outputTokens: number;
+  /** Runtime cache mode used for this request or aggregate sample. */
+  cacheMode: KvReuseMode;
+  /** Request-level cache source; aggregate metrics report `none`. */
+  cacheSource: CacheSource;
   /** Number of tokens reused from KV cache (LCP / prefix hits). */
   cacheHits: number;
   /** Number of tokens actually processed by the GPU during prefill. */
@@ -294,7 +297,7 @@ export interface TransportObservability {
   enabled: boolean;
   activeTokenTransport?: 'none' | 'token-stream';
   activeTokenEmission?: boolean;
-  tokenDrainCount?: number;
+  tokenDrainCalls?: number;
   tokenDrainMs?: number;
 }
 

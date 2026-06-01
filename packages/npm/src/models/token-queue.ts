@@ -11,8 +11,9 @@ import { createLinkedAbortController } from '../utils/abort.js';
 const TOKEN_QUEUE_CAPACITY = 256;
 
 class BoundedTokenBatchQueue implements BrowserTokenBatches, AsyncIterator<TokenBatch> {
-  private readonly items: TokenBatch[] = [];
+  private readonly items: Array<TokenBatch | undefined> = [];
   private readonly waiters: Array<(result: IteratorResult<TokenBatch>) => void> = [];
+  private readIndex = 0;
   private closed = false;
 
   public push(batch: TokenBatch): void {
@@ -24,9 +25,10 @@ class BoundedTokenBatchQueue implements BrowserTokenBatches, AsyncIterator<Token
       waiter({ done: false, value: batch });
       return;
     }
-    if (this.items.length >= TOKEN_QUEUE_CAPACITY) {
+    const pendingCount = this.items.length - this.readIndex;
+    if (pendingCount >= TOKEN_QUEUE_CAPACITY) {
       const lastIndex = this.items.length - 1;
-      this.items[lastIndex] = mergeTokenBatches(this.items[lastIndex], batch);
+      this.items[lastIndex] = mergeTokenBatches(this.items[lastIndex]!, batch);
       return;
     }
     this.items.push(batch);
@@ -43,8 +45,14 @@ class BoundedTokenBatchQueue implements BrowserTokenBatches, AsyncIterator<Token
   }
 
   public next(): Promise<IteratorResult<TokenBatch>> {
-    const item = this.items.shift();
+    const item = this.items[this.readIndex];
     if (item != null) {
+      this.items[this.readIndex] = undefined;
+      this.readIndex += 1;
+      if (this.readIndex > 64 && this.readIndex * 2 >= this.items.length) {
+        this.items.splice(0, this.readIndex);
+        this.readIndex = 0;
+      }
       return Promise.resolve({ done: false, value: item });
     }
     if (this.closed) {

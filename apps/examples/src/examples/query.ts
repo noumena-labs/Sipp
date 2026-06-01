@@ -27,7 +27,7 @@ export const queryExample: Example = {
       const run = client.query(userInput, {
         maxTokens: isEncoderDecoder(client) ? 32 : 64,
         session: 'examples:query',
-        tokenDelivery: 'interactive',
+        emitTokens: true,
       });
 
       for await (const batch of run.tokens) {

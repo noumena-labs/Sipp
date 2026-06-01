@@ -29,7 +29,7 @@ export const structuredOutputExample: Example = {
         { role: 'user', content: `Extract data: ${userInput}` }
       ], {
         grammar: jsonGrammar,
-        tokenDelivery: 'interactive',
+        emitTokens: true,
       });
 
       for await (const batch of run.tokens) {

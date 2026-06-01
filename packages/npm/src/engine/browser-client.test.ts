@@ -2,15 +2,23 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as publicApi from '../index.js';
 import { CogentClient } from './browser-client.js';
-import { QueryError } from '../models/types.js';
+import { QueryError, type TokenBatch } from '../models/types.js';
 import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.js';
 import type {
   WorkerRequestMessage,
   WorkerResponseMessage,
 } from '../worker/model-service-protocol.js';
 
+const TOKEN_RING_HEADER_INTS = 8;
+const TOKEN_RING_HEADER_BYTES = TOKEN_RING_HEADER_INTS * 4;
+const TOKEN_RING_WRITE_INDEX = 0;
+const TOKEN_RING_CAPACITY = 2;
+const TOKEN_RECORD_HEADER_BYTES = 16;
+
 class FakeWorker {
   public static lastInstance: FakeWorker | null = null;
+  public static tokenRingOrder: 'normal' | 'record-before-claim' = 'normal';
+  public static flushAnimationFrame: (() => void) | null = null;
   public onmessage: ((event: MessageEvent<WorkerResponseMessage>) => void) | null = null;
   public onerror: ((event: ErrorEvent) => void) | null = null;
   public onmessageerror: (() => void) | null = null;
@@ -31,9 +39,34 @@ class FakeWorker {
       if (message.kind === 'chat' || message.kind === 'query') {
         const text = message.kind === 'chat' ? 'Hello' : 'Hello</assistant>\n<user>ignored';
         if (message.options.emitTokens) {
-          this.onmessage?.({
-            data: { kind: 'token-batch', callId: message.callId, batch: tokenBatch(text) },
-          } as MessageEvent<WorkerResponseMessage>);
+          if (message.config.wasmThreading === 'pthread') {
+            const ring = createTokenRing();
+            this.onmessage?.({
+              data: { kind: 'token-ring-ready', descriptor: ring.descriptor },
+            } as MessageEvent<WorkerResponseMessage>);
+            if (FakeWorker.tokenRingOrder === 'record-before-claim') {
+              writeTokenRecord(ring, message.callId, text);
+              FakeWorker.flushAnimationFrame?.();
+            }
+            this.onmessage?.({
+              data: {
+                kind: 'token-ring-claim',
+                callId: message.callId,
+                nativeRequestId: message.callId,
+              },
+            } as MessageEvent<WorkerResponseMessage>);
+            if (FakeWorker.tokenRingOrder === 'normal') {
+              writeTokenRecord(ring, message.callId, text);
+            }
+          } else {
+            this.onmessage?.({
+              data: {
+                kind: 'token-batch',
+                callId: message.callId,
+                batch: tokenBatch(message.callId, text),
+              },
+            } as MessageEvent<WorkerResponseMessage>);
+          }
         }
       }
       queueMicrotask(() => {
@@ -79,18 +112,64 @@ class FakeWorker {
   }
 }
 
-function tokenBatch(text: string) {
+function createTokenRing() {
+  const capacity = 1024;
+  const buffer = new SharedArrayBuffer(TOKEN_RING_HEADER_BYTES + capacity);
+  const header = new Int32Array(buffer, 0, TOKEN_RING_HEADER_INTS);
+  header[TOKEN_RING_CAPACITY] = capacity;
   return {
-    requestId: '123',
-    streamId: 123,
+    descriptor: {
+      buffer,
+      headerOffset: 0,
+      bodyOffset: TOKEN_RING_HEADER_BYTES,
+      bodyCapacity: capacity,
+    },
+    header,
+    body: new Uint8Array(buffer, TOKEN_RING_HEADER_BYTES, capacity),
+  };
+}
+
+function writeTokenRecord(
+  ring: ReturnType<typeof createTokenRing>,
+  requestId: number,
+  text: string
+): void {
+  const bytes = new TextEncoder().encode(text);
+  const offset = ring.header[TOKEN_RING_WRITE_INDEX];
+  writeU32(ring.body, offset, requestId);
+  writeU32(ring.body, offset + 4, 0);
+  writeU32(ring.body, offset + 8, 1);
+  writeU32(ring.body, offset + 12, bytes.byteLength);
+  ring.body.set(bytes, offset + TOKEN_RECORD_HEADER_BYTES);
+  Atomics.store(
+    ring.header,
+    TOKEN_RING_WRITE_INDEX,
+    offset + TOKEN_RECORD_HEADER_BYTES + bytes.byteLength
+  );
+}
+
+function writeU32(body: Uint8Array, offset: number, value: number): void {
+  body[offset] = value & 0xff;
+  body[offset + 1] = (value >>> 8) & 0xff;
+  body[offset + 2] = (value >>> 16) & 0xff;
+  body[offset + 3] = (value >>> 24) & 0xff;
+}
+
+function tokenBatch(requestId: number, text: string): TokenBatch {
+  const byteCount = new TextEncoder().encode(text).byteLength;
+  return {
+    requestId: String(requestId),
+    streamId: requestId,
     sequenceStart: 0,
     text,
     frameCount: 1,
-    byteCount: new TextEncoder().encode(text).byteLength,
+    byteCount,
     stats: {
       framesSent: 1,
-      bytesSent: new TextEncoder().encode(text).byteLength,
+      bytesSent: byteCount,
       batchesSent: 1,
+      drainMs: 0,
+      drainCalls: 1,
     },
   };
 }
@@ -103,12 +182,16 @@ function generationResult(text: string) {
     stats: {
       inputTokens: 1,
       outputTokens: 1,
+      cacheMode: null,
+      cacheSource: null,
       cacheHits: 0,
+      prefillTokens: null,
       ttftMs: null,
       interTokenMs: null,
       e2eMs: null,
       decodeTokensPerSecond: null,
       e2eTokensPerSecond: null,
+      prefillTokensPerSecond: null,
       prefillMs: 0,
       decodeMs: 0,
     },
@@ -124,12 +207,16 @@ function embeddingResult(raw: boolean) {
     stats: {
       inputTokens: 2,
       outputTokens: 0,
+      cacheMode: null,
+      cacheSource: null,
       cacheHits: 0,
+      prefillTokens: null,
       ttftMs: null,
       interTokenMs: null,
       e2eMs: null,
       decodeTokensPerSecond: null,
       e2eTokensPerSecond: null,
+      prefillTokensPerSecond: null,
       prefillMs: 0,
       decodeMs: 0,
     },
@@ -152,6 +239,54 @@ async function withGlobalWorker<T>(worker: typeof Worker, callback: () => Promis
       Object.defineProperty(globalThis, 'Worker', descriptor);
     }
     FakeWorker.lastInstance = null;
+    FakeWorker.tokenRingOrder = 'normal';
+    FakeWorker.flushAnimationFrame = null;
+  }
+}
+
+async function withCrossOriginIsolated<T>(callback: () => Promise<T>): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'crossOriginIsolated');
+  Object.defineProperty(globalThis, 'crossOriginIsolated', {
+    configurable: true,
+    value: true,
+  });
+
+  try {
+    return await callback();
+  } finally {
+    if (descriptor == null) {
+      Reflect.deleteProperty(globalThis, 'crossOriginIsolated');
+    } else {
+      Object.defineProperty(globalThis, 'crossOriginIsolated', descriptor);
+    }
+  }
+}
+
+async function withManualAnimationFrame<T>(callback: () => Promise<T>): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'requestAnimationFrame');
+  let pendingFrame: FrameRequestCallback | null = null;
+  Object.defineProperty(globalThis, 'requestAnimationFrame', {
+    configurable: true,
+    value: (frame: FrameRequestCallback) => {
+      pendingFrame = frame;
+      return 1;
+    },
+  });
+  FakeWorker.flushAnimationFrame = () => {
+    const frame = pendingFrame;
+    pendingFrame = null;
+    frame?.(performance.now());
+  };
+
+  try {
+    return await callback();
+  } finally {
+    FakeWorker.flushAnimationFrame = null;
+    if (descriptor == null) {
+      Reflect.deleteProperty(globalThis, 'requestAnimationFrame');
+    } else {
+      Object.defineProperty(globalThis, 'requestAnimationFrame', descriptor);
+    }
   }
 }
 
@@ -233,6 +368,25 @@ test('worker mode lists models without requiring explicit runtime URLs', async (
   });
 });
 
+test('worker mode defaults to pthread wasm when shared memory is available', async () => {
+  await withGlobalWorker(FakeWorker as unknown as typeof Worker, async () => {
+    await withCrossOriginIsolated(async () => {
+      const client = new CogentClient({
+        executionMode: 'worker',
+      });
+
+      await client.listLocal();
+      const worker = FakeWorker.lastInstance;
+      const modelsRequest = worker?.messages.find((message) => message.kind === 'models-list');
+
+      assert.equal(modelsRequest?.kind, 'models-list');
+      assert.equal(modelsRequest?.config.wasmThreading, 'pthread');
+
+      await client.close();
+    });
+  });
+});
+
 test('chat() renders messages through the worker service and sanitizes assistant boundaries', async () => {
   await withGlobalWorker(FakeWorker as unknown as typeof Worker, async () => {
     const client = new CogentClient({
@@ -259,6 +413,34 @@ test('chat() renders messages through the worker service and sanitizes assistant
     assert.deepEqual(messages, [{ role: 'user', content: 'hello' }]);
 
     await client.close();
+  });
+});
+
+test('worker shared token ring preserves records drained before native request claim', async () => {
+  await withGlobalWorker(FakeWorker as unknown as typeof Worker, async () => {
+    await withCrossOriginIsolated(async () => {
+      await withManualAnimationFrame(async () => {
+        FakeWorker.tokenRingOrder = 'record-before-claim';
+        const client = new CogentClient({
+          executionMode: 'worker',
+        });
+
+        await client.addLocal('model-fake');
+        const chunks: string[] = [];
+        const run = client.chat([{ role: 'user', content: 'hello' }], {
+          emitTokens: true,
+        });
+        const output = await run.response;
+        for await (const batch of run.tokens) {
+          chunks.push(batch.text);
+        }
+
+        assert.equal(output.text, 'Hello');
+        assert.deepEqual(chunks, ['Hello']);
+
+        await client.close();
+      });
+    });
   });
 });
 

@@ -77,9 +77,11 @@ int cogentlm_browser_engine_runtime_observability(
 int cogentlm_browser_engine_completed_runtime_observability(
     const void *engine, CE_RequestId request_id,
     CE_RuntimeObservabilityMetrics *out_metrics);
-std::uint8_t *cogentlm_browser_engine_token_buffer_pointer(void *engine);
-std::int32_t *cogentlm_browser_engine_token_buffer_used_address(
-    void *engine);
+const std::uint32_t *cogentlm_browser_engine_token_ring_header_address(
+    const void *engine);
+const std::uint8_t *cogentlm_browser_engine_token_ring_body_address(
+    const void *engine);
+int cogentlm_browser_engine_token_ring_capacity(const void *engine);
 char *cogentlm_browser_engine_media_marker(const void *engine);
 char *cogentlm_browser_engine_chat_template(const void *engine);
 char *cogentlm_browser_engine_bos_text(const void *engine);
@@ -804,14 +806,18 @@ int CE_GetCompletedRequestOutputKind(CE_RequestId request_id) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-const uint8_t *CE_GetTokenBufferPointer() {
-  return cogentlm_browser_engine_token_buffer_pointer(g_rustBrowserEngine);
+const std::uint32_t *CE_GetTokenRingHeaderAddress() {
+  return cogentlm_browser_engine_token_ring_header_address(g_rustBrowserEngine);
 }
 
 EMSCRIPTEN_KEEPALIVE
-int32_t *CE_GetTokenBufferUsedAddress() {
-  return cogentlm_browser_engine_token_buffer_used_address(
-      g_rustBrowserEngine);
+const std::uint8_t *CE_GetTokenRingBodyAddress() {
+  return cogentlm_browser_engine_token_ring_body_address(g_rustBrowserEngine);
+}
+
+EMSCRIPTEN_KEEPALIVE
+int CE_GetTokenRingCapacity() {
+  return cogentlm_browser_engine_token_ring_capacity(g_rustBrowserEngine);
 }
 
 EMSCRIPTEN_KEEPALIVE

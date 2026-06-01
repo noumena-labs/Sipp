@@ -222,7 +222,7 @@ fn attach_token_emission(
     if let Some(token) = &token {
         runtime
             .request_queue
-            .token_ring_producers
+            .token_emission_sinks
             .insert(request_id, token.producer.clone());
     }
     token

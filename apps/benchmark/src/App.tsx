@@ -6,11 +6,11 @@ import {
   type ModelSource,
   type ObservabilitySnapshot,
   type TokenBatch,
-  type TokenDeliveryMode,
 } from '@noumena-labs/cogentlm-browser';
 import { MetricCard } from './components/MetricCard';
 import {
   buildBenchmarkScenarios,
+  buildBenchmarkBackendProfile,
   buildMixedLoadDefinition,
   DEFAULT_BENCHMARK_PROMPTS,
   describeRuntimeBackend,
@@ -70,7 +70,7 @@ declare global {
 }
 
 interface BenchmarkReport {
-  schema: 'cogent.benchmark.browser.v9';
+  schema: 'cogent.benchmark.browser.v11';
   generatedAt: string;
   model: ModelInfo | null;
   source: { label: string; bytes: number | null };
@@ -80,8 +80,11 @@ interface BenchmarkReport {
     tokenCount: number;
     warmupRuns: number;
     measuredRuns: number;
+    emitTokens: boolean;
     runtime: ReturnType<typeof getDefaultRuntimeOptions>;
   };
+  environment: Awaited<ReturnType<typeof inspectBrowserEnvironment>>;
+  backend: ReturnType<typeof buildBenchmarkBackendProfile>;
   observability: ObservabilitySnapshot | null;
   scenarios: ScenarioResult[];
   mixedLoad: MixedLoadResult | null;
@@ -101,8 +104,7 @@ function getDefaultRuntimeOptions() {
       n_parallel: 1,
     },
     cache: {
-      mode: 'live_slot_prefix' as const,
-      max_session_entries: 8,
+      mode: 'live_slot_and_snapshot' as const,
     },
   };
 }
@@ -133,6 +135,10 @@ async function inspectBrowserEnvironment(): Promise<Record<string, unknown>> {
     hasNavigatorGpu: true,
     adapterAvailable: adapter != null,
     crossOriginIsolated: window.crossOriginIsolated,
+    adapterLabel: info?.device ?? info?.description ?? null,
+    adapterVendor: info?.vendor ?? null,
+    adapterArchitecture: info?.architecture ?? null,
+    adapterDescription: info?.description ?? null,
     adapterInfo: info == null ? null : {
       vendor: info.vendor,
       architecture: info.architecture,
@@ -202,7 +208,7 @@ async function fetchImageBytes(source: string): Promise<Uint8Array[]> {
 
 function formatSummary(summary: MetricSummary | null, unit: string = 'ms'): string {
   if (summary == null) return 'n/a';
-  return `${round(summary.meanMs)}${unit} avg / ${round(summary.p99Ms)}${unit} p99`;
+  return `${round(summary.mean)}${unit} avg / ${round(summary.p99)}${unit} p99`;
 }
 
 function formatTps(value: number | null | undefined): string {
@@ -219,6 +225,15 @@ function downloadJson(filename: string, value: unknown): void {
   link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function logBenchmarkReport(report: BenchmarkReport): void {
+  console.groupCollapsed('[CogentLM benchmark] run complete');
+  console.log('backend profile', report.backend);
+  console.log('runtime config', report.settings.runtime);
+  console.log('summary', report.trace.analysis);
+  console.table(report.trace.rows);
+  console.groupEnd();
 }
 
 const DEFAULT_QUERY_PROMPT = 'Describe how to benchmark browser-hosted inference.';
@@ -308,8 +323,7 @@ export default function App() {
   const [tokenCount, setTokenCount] = useState(DEFAULT_TOKEN_COUNT);
   const [warmupRuns, setWarmupRuns] = useState(1);
   const [measuredRuns, setMeasuredRuns] = useState(3);
-  type DeliveryControlMode = Extract<TokenDeliveryMode, 'off' | 'batch' | 'interactive'>;
-  const [deliveryMode, setDeliveryMode] = useState<DeliveryControlMode>('batch');
+  const [emitTokens, setEmitTokens] = useState(true);
   const [imageSource, setImageSource] = useState('');
   const [imageEnabled, setImageEnabled] = useState(false);
   const [currentModel, setCurrentModel] = useState<ModelInfo | null>(null);
@@ -528,7 +542,7 @@ export default function App() {
     setInstalledModels(await targetClient.listLocal());
   };
 
-  const loadModelSelection = async (
+  const addLocalSelection = async (
     targetClient: CogentClient,
     source: ModelSource
   ): Promise<ModelInfo> => {
@@ -571,7 +585,7 @@ export default function App() {
     }
     setIsBusy(true);
     try {
-      const info = await loadModelSelection(client, source);
+      const info = await addLocalSelection(client, source);
       setStatus(info.status === 'ready' ? `loaded ${info.name}` : `${info.name}: ${info.status}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
@@ -601,7 +615,7 @@ export default function App() {
         loadedModel.status !== 'ready' ||
         (loadedSourceKeyRef.current != null && loadedSourceKeyRef.current !== nextSourceKey)
       ) {
-        const info = await loadModelSelection(client, source);
+        const info = await addLocalSelection(client, source);
         if (!modelSupportsOperation(info, requestOperation)) {
           requestOperation = defaultOperationForModel(info);
         }
@@ -628,30 +642,23 @@ export default function App() {
         requestOperation !== 'embed' && imageEnabled && imageSource.trim().length > 0
           ? await fetchImageBytes(imageSource.trim())
           : undefined;
-      const requestTokenDelivery: TokenDeliveryMode =
-        requestOperation === 'embed' ? 'off' : deliveryMode;
-      const queryRenderer = requestTokenDelivery === 'interactive' ? createResponseRenderer(1, 'frame') : null;
+      const requestEmitTokens = requestOperation !== 'embed' && emitTokens;
+      const queryRenderer = requestEmitTokens ? createResponseRenderer(1, 'frame') : null;
       queryRenderer?.reset();
       queryRenderer?.start('response');
       const onTokenBatch =
-        requestOperation === 'embed'
+        !requestEmitTokens
           ? undefined
-          : requestTokenDelivery === 'interactive'
-          ? (batch: TokenBatch) => {
-            queryRenderer?.append('response', batch);
-          }
-          : requestTokenDelivery === 'batch'
-            ? (_batch: TokenBatch) => {
-              /* Token batches drained with no DOM work. */
-            }
-            : undefined;
+          : (batch: TokenBatch) => {
+              queryRenderer?.append('response', batch);
+            };
       try {
         const run = await runObservedRequest(client, requestPrompt, {
           operation: requestOperation,
           maxTokens: requestTokenCount,
           session: `query-${Date.now()}`,
           media: image,
-          tokenDelivery: requestTokenDelivery,
+          emitTokens: requestEmitTokens,
           onTokenBatch,
         });
         setResponse(run.output); // Sync React state at the end
@@ -711,12 +718,12 @@ export default function App() {
       benchmarkOperation = defaultOperationForModel(loadedModel);
       setOperation(benchmarkOperation);
     }
-    let benchmarkTokenDelivery: TokenDeliveryMode = 'off';
+    let benchmarkEmitTokens = false;
     let benchmarkRenderer: ReturnType<typeof createResponseRenderer> | null = null;
     let benchmarkTokenObserver: BenchmarkTokenObserver | undefined;
 
     try {
-      const info = await loadModelSelection(client, source);
+      const info = await addLocalSelection(client, source);
       if (!modelSupportsOperation(info, benchmarkOperation)) {
         benchmarkOperation = defaultOperationForModel(info);
       }
@@ -729,20 +736,18 @@ export default function App() {
         setTokenCount(benchmarkTokenCount);
       }
       const promptSet = benchmarkPromptSetForModel(info);
-      benchmarkTokenDelivery = benchmarkOperation === 'embed' ? 'off' : deliveryMode;
-      benchmarkRenderer = benchmarkTokenDelivery === 'interactive'
-        ? createResponseRenderer(2, 'frame')
-        : null;
+      benchmarkEmitTokens = benchmarkOperation !== 'embed' && emitTokens;
+      benchmarkRenderer = benchmarkEmitTokens ? createResponseRenderer(2, 'frame') : null;
       benchmarkTokenObserver =
-        benchmarkTokenDelivery === 'interactive'
+        benchmarkEmitTokens
           ? {
-            onRunStart: (label) => {
-              benchmarkRenderer?.start(label);
-            },
-            onTokenBatch: (label, batch) => {
-              benchmarkRenderer?.append(label, batch);
-            },
-          }
+              onRunStart: (label) => {
+                benchmarkRenderer?.start(label);
+              },
+              onTokenBatch: (label, batch) => {
+                benchmarkRenderer?.append(label, batch);
+              },
+            }
           : undefined;
       benchmarkRenderer?.reset();
       const snapshots: MemorySnapshot[] = [];
@@ -762,7 +767,7 @@ export default function App() {
             getDefaultRuntimeOptions(),
             setStatus,
             true,
-            benchmarkTokenDelivery,
+            benchmarkEmitTokens,
             benchmarkTokenObserver
           )
         );
@@ -782,16 +787,23 @@ export default function App() {
           getDefaultRuntimeOptions(),
           setStatus,
           true,
-          benchmarkTokenDelivery,
+          benchmarkEmitTokens,
           benchmarkTokenObserver
         );
         snapshots.push(await captureBrowserMemorySnapshot('after-mixed-load', true));
       }
       benchmarkRenderer?.finish();
       const trace = buildBenchmarkTraceReport(results, mixed);
+      const environment = await inspectBrowserEnvironment();
+      const observabilitySnapshot = client.observability.current();
+      const backend = buildBenchmarkBackendProfile(
+        environment,
+        browserSmoke?.backend ?? observabilitySnapshot.profile ?? null,
+        getDefaultRuntimeOptions().placement.gpu_layers
+      );
 
       const report: BenchmarkReport = {
-        schema: 'cogent.benchmark.browser.v9',
+        schema: 'cogent.benchmark.browser.v11',
         generatedAt: new Date().toISOString(),
         model: info,
         source: {
@@ -804,9 +816,12 @@ export default function App() {
           tokenCount: benchmarkTokenCount,
           warmupRuns,
           measuredRuns,
+          emitTokens: benchmarkEmitTokens,
           runtime: getDefaultRuntimeOptions(),
         },
-        observability: client.observability.current(),
+        environment,
+        backend,
+        observability: observabilitySnapshot,
         scenarios: results,
         mixedLoad: mixed,
         memory: {
@@ -820,6 +835,7 @@ export default function App() {
       setMixedLoadResult(mixed);
       setMemorySnapshots(snapshots);
       setBenchmarkReport(report);
+      logBenchmarkReport(report);
       setStatus('benchmark complete');
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
@@ -908,6 +924,23 @@ export default function App() {
         <MetricCard
           label="Cache Hits"
           value={group.summary.runtime.avgCacheHits ?? 'n/a'}
+        />
+        <MetricCard
+          label="Cache Reuse"
+          value={
+            group.cacheReuse.expected
+              ? group.cacheReuse.invalidRunLabels.length === 0
+                ? `valid (${group.cacheReuse.expectedSource})`
+                : `invalid (${group.cacheReuse.invalidRunLabels.length})`
+              : 'n/a'
+          }
+          tone={
+            group.cacheReuse.expected
+              ? group.cacheReuse.invalidRunLabels.length === 0
+                ? 'ok'
+                : 'warn'
+              : 'default'
+          }
         />
       </div>
 
@@ -1137,33 +1170,25 @@ export default function App() {
                   <input value={observability?.mode ?? 'off'} readOnly />
                 </div>
                 <div className="row">
-                  <label title="Off = native NONE. Batch = token batches with no DOM work. Interactive = per-token scheduler yield plus text rendering.">
-                    Token Delivery
+                  <label title="Off disables native token emission. On emits visible token chunks.">
+                    Token Emission
                   </label>
                   <div className="toggle-group">
                     <button
                       type="button"
-                      className={`toggle-item ${deliveryMode === 'off' ? 'active' : ''}`}
-                      onClick={() => setDeliveryMode('off')}
-                      title="Off - NONE (native baseline)"
+                      className={`toggle-item ${!emitTokens ? 'active' : ''}`}
+                      onClick={() => setEmitTokens(false)}
+                      title="Off - native NONE"
                     >
                       Off
                     </button>
                     <button
                       type="button"
-                      className={`toggle-item ${deliveryMode === 'batch' ? 'active' : ''}`}
-                      onClick={() => setDeliveryMode('batch')}
-                      title="Batch - drain token batches without DOM rendering"
+                      className={`toggle-item ${emitTokens ? 'active' : ''}`}
+                      onClick={() => setEmitTokens(true)}
+                      title="On - render emitted token chunks"
                     >
-                      Batch
-                    </button>
-                    <button
-                      type="button"
-                      className={`toggle-item ${deliveryMode === 'interactive' ? 'active' : ''}`}
-                      onClick={() => setDeliveryMode('interactive')}
-                      title="Interactive - render while tokens arrive"
-                    >
-                      Interactive
+                      On
                     </button>
                   </div>
                 </div>
@@ -1396,7 +1421,7 @@ export default function App() {
                     </div>
                     {renderGroup('Cold Prompt', scenario.coldPrompt)}
                     {renderGroup('Hot Fresh Context', scenario.hotFreshContext)}
-                    {renderGroup('Hot Reused Context', scenario.hotReuseContext)}
+                    {renderGroup('Repeated Prompt', scenario.repeatedPrompt)}
                   </div>
                 ))}
 

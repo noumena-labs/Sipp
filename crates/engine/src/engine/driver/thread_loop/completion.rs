@@ -84,7 +84,7 @@ impl EngineThreadState {
             if let Some(runtime) = self.runtime.as_mut() {
                 runtime
                     .request_queue
-                    .token_ring_producers
+                    .token_emission_sinks
                     .remove(&request_id);
             }
 
@@ -147,7 +147,7 @@ impl EngineThreadState {
             cancel_and_consume_request(runtime, request_id);
             runtime
                 .request_queue
-                .token_ring_producers
+                .token_emission_sinks
                 .remove(&request_id);
         }
         self.close_token_emission(request_id);

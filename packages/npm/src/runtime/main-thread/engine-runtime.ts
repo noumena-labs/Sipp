@@ -17,6 +17,7 @@ import type {
   TokenBatch,
   TransportObservability,
 } from '../../engine/inference-types.js';
+import type { SharedTokenRingDescriptor } from '../shared-token-ring.js';
 import type {
   ClassifiedAsset,
   InternalBundleDescriptor,
@@ -80,7 +81,7 @@ const DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY: TransportObservability = {
   enabled: false,
   activeTokenTransport: 'none',
   activeTokenEmission: false,
-  tokenDrainCount: 0,
+  tokenDrainCalls: 0,
   tokenDrainMs: 0,
 };
 
@@ -333,6 +334,10 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
   public getTransportObservability(): TransportObservability {
     return { ...this.transportObservability };
+  }
+
+  public getSharedTokenRingDescriptor(): SharedTokenRingDescriptor | null {
+    return this.wasmBridge?.getSharedTokenRingDescriptor() ?? null;
   }
 
   private normalizeTokenCount(nTokens: number): number {
@@ -897,13 +902,16 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   ): Promise<GenerateRequestId> {
     const bridge = this.getReadyEngineBridge();
     const tokenBatchSink = typeof options === 'object' ? options.tokenBatchSink : undefined;
+    const emitTokens =
+      typeof options === 'object' &&
+      (options.emitTokens === true || tokenBatchSink != null);
     const signal = typeof options === 'object' ? options.signal : undefined;
 
     if (signal?.aborted) {
       throw createAbortError('Prompt was aborted before it was enqueued.');
     }
 
-    const requestId = startRequest(bridge, tokenBatchSink != null);
+    const requestId = startRequest(bridge, emitTokens);
     if (!requestId) {
       const detail = bridge.readLastEngineError();
       throw new Error(

@@ -74,12 +74,16 @@ interface StubChooser {
 const EMPTY_REQUEST_STATS: RequestStats = {
   inputTokens: 0,
   outputTokens: 0,
+  cacheMode: null,
+  cacheSource: null,
   cacheHits: 0,
+  prefillTokens: null,
   ttftMs: null,
   interTokenMs: null,
   e2eMs: null,
   decodeTokensPerSecond: null,
   e2eTokensPerSecond: null,
+  prefillTokensPerSecond: null,
   prefillMs: 0,
   decodeMs: 0,
 };

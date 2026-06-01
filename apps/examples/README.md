@@ -19,7 +19,7 @@ This directory contains minimal, developer-centric examples for the `cogentlm-br
 
 ## Included Examples
 
-- **Basic Chat**: Simple chat interface with interactive token delivery.
+- **Basic Chat**: Simple chat interface with visible token emission.
 - **Multimodal Vision**: Guide on how to use vision-language models with `Uint8Array` media.
 - **Structured Output**: Using GBNF grammars to extract typed JSON data.
 - **Observability**: Real-time performance monitoring (Tokens/sec, TTFT, etc.).

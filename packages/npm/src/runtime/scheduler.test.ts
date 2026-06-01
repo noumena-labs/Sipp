@@ -10,7 +10,12 @@ import { COMPLETED_REQUEST_STATUS_COMPLETED } from '../wasm/wasm-bridge.js';
 import { RequestTracker } from './request-tracker.js';
 import { QueuedRequestScheduler } from './scheduler.js';
 import type { WasmBridge } from '../wasm/wasm-bridge.js';
+import type { SharedTokenRingDescriptor } from './shared-token-ring.js';
 
+const TOKEN_RING_HEADER_INTS = 8;
+const TOKEN_RING_HEADER_BYTES = TOKEN_RING_HEADER_INTS * 4;
+const TOKEN_RING_WRITE_INDEX = 0;
+const TOKEN_RING_CAPACITY = 2;
 const TOKEN_BATCH_RECORD_HEADER_BYTES = 16;
 const textEncoder = new TextEncoder();
 
@@ -26,28 +31,61 @@ function createTransportObservability(
   };
 }
 
-function writeU32(heapU8: Uint8Array, offset: number, value: number): void {
-  heapU8[offset] = value & 0xff;
-  heapU8[offset + 1] = (value >>> 8) & 0xff;
-  heapU8[offset + 2] = (value >>> 16) & 0xff;
-  heapU8[offset + 3] = (value >>> 24) & 0xff;
+interface TestTokenRing {
+  readonly descriptor: SharedTokenRingDescriptor;
+  readonly header: Int32Array;
+  readonly body: Uint8Array;
+}
+
+function createTokenRing(capacity: number, shared = false): TestTokenRing {
+  const buffer = shared
+    ? new SharedArrayBuffer(TOKEN_RING_HEADER_BYTES + capacity)
+    : new ArrayBuffer(TOKEN_RING_HEADER_BYTES + capacity);
+  const header = new Int32Array(buffer, 0, TOKEN_RING_HEADER_INTS);
+  header[TOKEN_RING_CAPACITY] = capacity;
+  return {
+    descriptor: {
+      buffer,
+      headerOffset: 0,
+      bodyOffset: TOKEN_RING_HEADER_BYTES,
+      bodyCapacity: capacity,
+    },
+    header,
+    body: new Uint8Array(buffer, TOKEN_RING_HEADER_BYTES, capacity),
+  };
+}
+
+function writeU32(body: Uint8Array, offset: number, value: number): void {
+  const index = offset % body.byteLength;
+  body[index] = value & 0xff;
+  body[(index + 1) % body.byteLength] = (value >>> 8) & 0xff;
+  body[(index + 2) % body.byteLength] = (value >>> 16) & 0xff;
+  body[(index + 3) % body.byteLength] = (value >>> 24) & 0xff;
 }
 
 function writeTokenBatchRecord(
-  heapU8: Uint8Array,
-  offset: number,
+  ring: TestTokenRing,
   requestId: number,
   sequenceStart: number,
   frameCount: number,
   text: string
-): number {
+): void {
   const payload = textEncoder.encode(text);
-  writeU32(heapU8, offset, requestId);
-  writeU32(heapU8, offset + 4, sequenceStart);
-  writeU32(heapU8, offset + 8, frameCount);
-  writeU32(heapU8, offset + 12, payload.byteLength);
-  heapU8.set(payload, offset + TOKEN_BATCH_RECORD_HEADER_BYTES);
-  return TOKEN_BATCH_RECORD_HEADER_BYTES + payload.byteLength;
+  const writeIndex = ring.descriptor.buffer instanceof SharedArrayBuffer
+    ? Atomics.load(ring.header, TOKEN_RING_WRITE_INDEX)
+    : ring.header[TOKEN_RING_WRITE_INDEX];
+  const offset = writeIndex % ring.body.byteLength;
+  writeU32(ring.body, offset, requestId);
+  writeU32(ring.body, offset + 4, sequenceStart);
+  writeU32(ring.body, offset + 8, frameCount);
+  writeU32(ring.body, offset + 12, payload.byteLength);
+  ring.body.set(payload, offset + TOKEN_BATCH_RECORD_HEADER_BYTES);
+  const nextWriteIndex = writeIndex + TOKEN_BATCH_RECORD_HEADER_BYTES + payload.byteLength;
+  if (ring.descriptor.buffer instanceof SharedArrayBuffer) {
+    Atomics.store(ring.header, TOKEN_RING_WRITE_INDEX, nextWriteIndex);
+    return;
+  }
+  ring.header[TOKEN_RING_WRITE_INDEX] = nextWriteIndex;
 }
 
 test('QueuedRequestScheduler settles completed requests reported by the inference loop', async () => {
@@ -100,27 +138,18 @@ test('QueuedRequestScheduler settles completed requests reported by the inferenc
   assert.deepEqual(finalized, [1]);
 });
 
-test('QueuedRequestScheduler drains token buffer to TokenBatch sinks', async () => {
+test('QueuedRequestScheduler drains shared token ring to TokenBatch sinks', async () => {
   const tracker = new RequestTracker<GenerateResponse>();
   const transport = createTransportObservability();
   const tokenBatchSinks = new Map<number, (batch: TokenBatch) => void>();
   const tokenBatchSinkErrors = new Map<number, unknown>();
   const batches: TokenBatch[] = [];
-  const memory = new ArrayBuffer(256);
-  const heapU8 = new Uint8Array(memory);
-  const heap32 = new Int32Array(memory);
-  const bufferAddr = 64;
-  const usedAddr = 4;
-  const recordSize = writeTokenBatchRecord(heapU8, bufferAddr, 1, 7, 2, 'hi');
-  heap32[usedAddr / 4] = recordSize;
+  const ring = createTokenRing(128, true);
+  writeTokenBatchRecord(ring, 1, 7, 2, 'hi');
 
   const bridge = {
-    module: { HEAPU8: heapU8, HEAP32: heap32 },
-    getTokenBufferPointer() {
-      return bufferAddr;
-    },
-    getTokenBufferUsedAddress() {
-      return usedAddr;
+    getSharedTokenRingDescriptor() {
+      return ring.descriptor;
     },
     async runInferenceLoop() {
       return {
@@ -165,41 +194,33 @@ test('QueuedRequestScheduler drains token buffer to TokenBatch sinks', async () 
   assert.equal(batches[0].text, 'hi');
   assert.equal(batches[0].frameCount, 2);
   assert.equal(batches[0].byteCount, 2);
-  assert.deepEqual(batches[0].stats, {
-    framesSent: 2,
-    bytesSent: 2,
-    batchesSent: 1,
-  });
+  assert.equal(batches[0].stats.framesSent, 2);
+  assert.equal(batches[0].stats.bytesSent, 2);
+  assert.equal(batches[0].stats.batchesSent, 1);
+  assert.ok(batches[0].stats.drainMs >= 0);
+  assert.equal(batches[0].stats.drainCalls, 1);
   assert.equal(tokenBatchSinkErrors.size, 0);
-  assert.equal(transport.tokenDrainCount, undefined);
+  assert.equal(transport.tokenDrainCalls, undefined);
   assert.equal(transport.tokenDrainMs, undefined);
 });
 
-test('QueuedRequestScheduler keeps native token budget while emitting tokens', async () => {
+test('QueuedRequestScheduler keeps native token budget on the main thread while emitting tokens', async () => {
   const tracker = new RequestTracker<GenerateResponse>();
   const transport = createTransportObservability();
   const tokenBatchSinks = new Map<number, (batch: TokenBatch) => void>();
   const tokenBatchSinkErrors = new Map<number, unknown>();
   const batches: TokenBatch[] = [];
   const loopTokenLimits: number[] = [];
-  const memory = new ArrayBuffer(256);
-  const heapU8 = new Uint8Array(memory);
-  const heap32 = new Int32Array(memory);
-  const bufferAddr = 64;
-  const usedAddr = 4;
+  const ring = createTokenRing(128);
   let loopCount = 0;
 
   const writeTokenRecord = (text: string) => {
-    heap32[usedAddr / 4] = writeTokenBatchRecord(heapU8, bufferAddr, 1, 0, 1, text);
+    writeTokenBatchRecord(ring, 1, 0, 1, text);
   };
 
   const bridge = {
-    module: { HEAPU8: heapU8, HEAP32: heap32 },
-    getTokenBufferPointer() {
-      return bufferAddr;
-    },
-    getTokenBufferUsedAddress() {
-      return usedAddr;
+    getSharedTokenRingDescriptor() {
+      return ring.descriptor;
     },
     async runInferenceLoop(
       _maxTicks: number,
@@ -257,27 +278,33 @@ test('QueuedRequestScheduler keeps native token budget while emitting tokens', a
   assert.equal(tokenBatchSinkErrors.size, 0);
 });
 
-test('QueuedRequestScheduler time-slices worker loops while emitting tokens', async () => {
+test('QueuedRequestScheduler drains shared token ring with bulk native loops', async () => {
   const tracker = new RequestTracker<GenerateResponse>();
   const transport = createTransportObservability('worker');
   const tokenBatchSinks = new Map<number, (batch: TokenBatch) => void>();
   const tokenBatchSinkErrors = new Map<number, unknown>();
+  const batches: TokenBatch[] = [];
   const maxDurationValues: Array<number | undefined> = [];
+  const tokenLimits: number[] = [];
+  const ring = createTokenRing(128);
+
   const bridge = {
+    getSharedTokenRingDescriptor() {
+      return ring.descriptor;
+    },
     async runInferenceLoop(
       _maxTicks: number,
       _maxCompletedResponses: number,
-      _maxGeneratedTokens: number,
+      maxGeneratedTokens: number,
       options?: { maxDurationUs?: number }
     ) {
+      tokenLimits.push(maxGeneratedTokens);
       maxDurationValues.push(options?.maxDurationUs);
+      writeTokenBatchRecord(ring, 1, 0, 1, 'w');
       return {
         stepResult: 0,
         completedResponseCount: 1,
       };
-    },
-    getTokenBufferUsedAddress() {
-      return 0;
     },
     getCompletedRequestStatus() {
       return COMPLETED_REQUEST_STATUS_COMPLETED;
@@ -305,24 +332,29 @@ test('QueuedRequestScheduler time-slices worker loops while emitting tokens', as
     cancelQuery: async () => true,
   });
 
-  tokenBatchSinks.set(1, () => {});
+  tokenBatchSinks.set(1, (batch) => batches.push(batch));
   const tracked = scheduler.track(1);
   await tracked.promise;
 
-  assert.deepEqual(maxDurationValues, [16000]);
+  assert.deepEqual(maxDurationValues, [0]);
+  assert.deepEqual(tokenLimits, [512]);
+  assert.equal(batches.length, 1);
+  assert.equal(batches[0].text, 'w');
 });
 
 test('QueuedRequestScheduler leaves worker loops unsliced without token emission', async () => {
   const tracker = new RequestTracker<GenerateResponse>();
   const transport = createTransportObservability('worker');
   const maxDurationValues: Array<number | undefined> = [];
+  const tokenLimits: number[] = [];
   const bridge = {
     async runInferenceLoop(
       _maxTicks: number,
       _maxCompletedResponses: number,
-      _maxGeneratedTokens: number,
+      maxGeneratedTokens: number,
       options?: { maxDurationUs?: number }
     ) {
+      tokenLimits.push(maxGeneratedTokens);
       maxDurationValues.push(options?.maxDurationUs);
       return {
         stepResult: 0,
@@ -359,4 +391,5 @@ test('QueuedRequestScheduler leaves worker loops unsliced without token emission
   await tracked.promise;
 
   assert.deepEqual(maxDurationValues, [0]);
+  assert.deepEqual(tokenLimits, [512]);
 });

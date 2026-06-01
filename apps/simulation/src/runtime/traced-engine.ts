@@ -54,7 +54,7 @@ class TracedBrainClient implements CharacterRuntimeClient, DirectorRuntimeClient
 
     const run = this.client.chat(input, {
       ...options,
-      tokenDelivery: 'batch',
+      emitTokens: true,
     });
     return this.traceRun(run, queryId);
   }
@@ -77,7 +77,7 @@ class TracedBrainClient implements CharacterRuntimeClient, DirectorRuntimeClient
 
     const run = this.client.query(input, {
       ...options,
-      tokenDelivery: 'batch',
+      emitTokens: true,
     });
     return this.traceRun(run, queryId);
   }
@@ -154,7 +154,6 @@ function isChatObjectInput(
 
 class TokenBatchQueue implements BrowserTokenBatches, AsyncIterator<TokenBatch> {
   private readonly items: TokenBatch[] = [];
-  private readonly subscribers = new Set<(batch: TokenBatch) => void>();
   private readonly waiters: Array<{
     resolve: (result: IteratorResult<TokenBatch>) => void;
     reject: (reason?: unknown) => void;
@@ -165,9 +164,6 @@ class TokenBatchQueue implements BrowserTokenBatches, AsyncIterator<TokenBatch> 
   public push(batch: TokenBatch): void {
     if (this.closed || this.failed != null) {
       return;
-    }
-    for (const subscriber of this.subscribers) {
-      subscriber(batch);
     }
     const waiter = this.waiters.shift();
     if (waiter != null) {
@@ -182,7 +178,6 @@ class TokenBatchQueue implements BrowserTokenBatches, AsyncIterator<TokenBatch> 
       return;
     }
     this.closed = true;
-    this.subscribers.clear();
     while (this.waiters.length > 0) {
       this.waiters.shift()?.resolve({ done: true, value: undefined });
     }
@@ -193,7 +188,6 @@ class TokenBatchQueue implements BrowserTokenBatches, AsyncIterator<TokenBatch> 
       return;
     }
     this.failed = error;
-    this.subscribers.clear();
     while (this.waiters.length > 0) {
       this.waiters.shift()?.reject(error);
     }
@@ -217,19 +211,6 @@ class TokenBatchQueue implements BrowserTokenBatches, AsyncIterator<TokenBatch> 
 
   public [Symbol.asyncIterator](): AsyncIterator<TokenBatch> {
     return this;
-  }
-
-  public subscribe(listener: (batch: TokenBatch) => void): () => void {
-    for (const item of this.items) {
-      listener(item);
-    }
-    if (this.closed || this.failed != null) {
-      return () => {};
-    }
-    this.subscribers.add(listener);
-    return () => {
-      this.subscribers.delete(listener);
-    };
   }
 }
 

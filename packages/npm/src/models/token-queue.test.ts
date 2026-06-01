@@ -16,6 +16,8 @@ function tokenBatch(text: string): TokenBatch {
       framesSent: 1,
       bytesSent: new TextEncoder().encode(text).byteLength,
       batchesSent: 1,
+      drainMs: 0,
+      drainCalls: 0,
     },
   };
 }
@@ -28,12 +30,16 @@ function generationResult(text: string): GenerationResult {
     stats: {
       inputTokens: 1,
       outputTokens: 1,
+      cacheMode: null,
+      cacheSource: null,
       cacheHits: 0,
+      prefillTokens: null,
       ttftMs: null,
       interTokenMs: null,
       e2eMs: null,
       decodeTokensPerSecond: null,
       e2eTokensPerSecond: null,
+      prefillTokensPerSecond: null,
       prefillMs: 0,
       decodeMs: 0,
     },
@@ -86,6 +92,8 @@ test('BrowserTokenBatches coalesces when the queue is full', async () => {
           framesSent: index + 1,
           bytesSent: index + 1,
           batchesSent: index + 1,
+          drainMs: 0,
+          drainCalls: 0,
         },
       });
     }

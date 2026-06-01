@@ -10,7 +10,7 @@ pub use request_types::{
 };
 pub use response_types::{GenerateResponse, GenerateResponseStatus, ResponseOutput};
 pub use token_ring::{
-    token_byte_ring, TokenByteRingConsumer, TokenByteRingProducer, TokenRingDrain,
-    TokenRingDrainStatus, TokenRingFrame, TOKEN_RING_DEFAULT_CAPACITY,
-    TOKEN_RING_RECORD_HEADER_BYTES,
+    token_byte_ring, TokenByteRingConsumer, TokenByteRingProducer, TokenEmissionSink,
+    TokenEmissionSinkRef, TokenRingDrain, TokenRingDrainStatus, TokenRingFrame,
+    TOKEN_RING_DEFAULT_CAPACITY, TOKEN_RING_RECORD_HEADER_BYTES,
 };
