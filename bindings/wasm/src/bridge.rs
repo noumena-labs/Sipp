@@ -27,7 +27,7 @@ pub mod ffi {
     }
 
     unsafe extern "C++" {
-        include!("bridge_shim.h");
+        include!("gguf_callbacks.h");
 
         type GgufReadAt;
         type GgufShardSink;

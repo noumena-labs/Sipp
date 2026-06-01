@@ -13,7 +13,7 @@
 
 #include "ffi_types.h"
 
-#include "../bridge_shim_c_api.h"
+#include "browser_engine_api.h"
 #include "cogent_shim.h"
 #include "ggml-backend.h"
 #include "ggml-webgpu.h"

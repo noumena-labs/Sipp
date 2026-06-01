@@ -3,8 +3,9 @@ use crate::build_support::context::BuildContext;
 pub(crate) fn compile_bridge(context: &BuildContext) {
     let mut build = cxx_build::bridge("src/bridge.rs");
     build
-        .file("src/cogent_cxx.cpp")
-        .include(context.manifest_dir.join("include"))
+        .file("native/cxx_bridge/cogent_cxx.cpp")
+        .include(context.manifest_dir.join("native/cxx_bridge"))
+        .include(context.manifest_dir.join("native/llama_shim"))
         .include(context.llama_dir.join("include"))
         .include(context.llama_dir.join("ggml/include"))
         .include(context.llama_dir.join("common"))

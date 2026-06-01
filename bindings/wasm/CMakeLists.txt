@@ -62,15 +62,16 @@ endforeach()
 
 # Wasm Exports Setup
 set(PLUGIN_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/api/wasm_exports.cpp
-    ${CE_RUST_SYS_DIR}/src/cogent_shim.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/native/js_api/wasm_exports.cpp
+    ${CE_RUST_SYS_DIR}/native/llama_shim/cogent_shim.cpp
 )
 
 add_executable(CogentLM ${PLUGIN_SOURCES})
 
 target_include_directories(CogentLM PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/native
-    ${CE_RUST_SYS_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/native/js_api
+    ${CMAKE_CURRENT_SOURCE_DIR}/native/rust_api
+    ${CE_RUST_SYS_DIR}/native/llama_shim
     ${COGENTLM_MTMD_DIR}
     ${COGENTLM_LLAMA_CPP_DIR}/common
     ${COGENTLM_LLAMA_CPP_DIR}/vendor

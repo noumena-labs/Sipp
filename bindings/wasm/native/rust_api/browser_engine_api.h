@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "api/ffi_types.h"
+#include "ffi_types.h"
 
 extern "C" {
 

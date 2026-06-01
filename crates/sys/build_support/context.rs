@@ -45,10 +45,10 @@ impl BuildContext {
         println!("cargo:rerun-if-changed=CMakeLists.txt");
         println!("cargo:rerun-if-changed=cmake/llama_mtmd_sources.cmake");
         println!("cargo:rerun-if-changed=src/bridge.rs");
-        println!("cargo:rerun-if-changed=include/cogent_shim.h");
-        println!("cargo:rerun-if-changed=include/cogent_cxx.h");
-        println!("cargo:rerun-if-changed=src/cogent_shim.cpp");
-        println!("cargo:rerun-if-changed=src/cogent_cxx.cpp");
+        println!("cargo:rerun-if-changed=native/llama_shim/cogent_shim.h");
+        println!("cargo:rerun-if-changed=native/llama_shim/cogent_shim.cpp");
+        println!("cargo:rerun-if-changed=native/cxx_bridge/cogent_cxx.h");
+        println!("cargo:rerun-if-changed=native/cxx_bridge/cogent_cxx.cpp");
         println!("cargo:rerun-if-env-changed=CUDA_PATH");
         println!("cargo:rerun-if-env-changed=CUDA_HOME");
         println!("cargo:rerun-if-env-changed=VULKAN_SDK");

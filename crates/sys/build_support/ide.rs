@@ -21,7 +21,16 @@ pub(crate) fn setup_clangd_autocomplete(context: &BuildContext, dst: &Path) {
         if let Ok(mut file) = std::fs::File::create(&compile_flags_path) {
             let _ = writeln!(file, "-xc++");
             let _ = writeln!(file, "-std=c++17");
-            let _ = writeln!(file, "-I{}", context.manifest_dir.join("include").display());
+            let _ = writeln!(
+                file,
+                "-I{}",
+                context.manifest_dir.join("native/cxx_bridge").display()
+            );
+            let _ = writeln!(
+                file,
+                "-I{}",
+                context.manifest_dir.join("native/llama_shim").display()
+            );
             let _ = writeln!(file, "-I{}", context.llama_dir.join("include").display());
             let _ = writeln!(
                 file,
