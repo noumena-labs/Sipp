@@ -268,7 +268,7 @@ fn print_examples(ctx: &BuildContext, profile: SetupProfile) {
         SetupProfile::Browser => {
             output::detail("Build browser package", "clm build wasm");
             output::detail("Run examples app", "clm run apps serve examples");
-            output::detail("Run app tests", "clm run apps test");
+            output::detail("Run app tests", "clm test whitebox --suite app-ts");
         }
         SetupProfile::Bindings => {
             let model = sample_model::sample_model_arg(ctx);
@@ -276,11 +276,15 @@ fn print_examples(ctx: &BuildContext, profile: SetupProfile) {
             output::detail("Build Python bindings", "clm build python");
             output::detail(
                 "Node smoke",
-                format!("clm run bindings node --model {model}"),
+                "clm test interface --suite node-package --backend cpu",
             );
             output::detail(
                 "Python smoke",
-                format!("clm run bindings python --model {model}"),
+                "clm test interface --suite python-package --backend cpu",
+            );
+            output::detail(
+                "Model smoke",
+                format!("clm test interface --suite model-smoke --backend cpu --model {model}"),
             );
         }
         SetupProfile::Full => {
@@ -288,8 +292,8 @@ fn print_examples(ctx: &BuildContext, profile: SetupProfile) {
             output::detail("Build everything", "clm build all");
             output::detail("Serve benchmark", "clm run apps serve benchmark");
             output::detail(
-                "Binding smokes",
-                format!("clm run bindings all --model {model}"),
+                "Full test profile",
+                format!("clm test all --profile full --backend cpu --model {model}"),
             );
         }
     }

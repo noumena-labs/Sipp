@@ -164,14 +164,6 @@ impl BuildContext {
         self.workspace_root.join("bindings").join("python")
     }
 
-    pub(crate) fn bindings_python_package_dir(&self) -> PathBuf {
-        self.bindings_python_dir().join("python").join("cogentlm")
-    }
-
-    pub(crate) fn bindings_python_binary_dir(&self) -> PathBuf {
-        self.bindings_python_package_dir().join("binaries")
-    }
-
     pub(crate) fn npm_package_dir(&self) -> PathBuf {
         self.packages_root().join("npm")
     }

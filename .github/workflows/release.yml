@@ -132,7 +132,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run full release test workflow
-        run: cargo xtask --plain test all --backend cpu
+        run: cargo xtask --plain test all --profile full --backend cpu
 
       - name: Build staged browser package
         run: cargo xtask --plain build wasm

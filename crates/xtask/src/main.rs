@@ -41,20 +41,23 @@ fn command_summary(command: &Commands) -> String {
 
 fn test_summary(command: &TestCommands) -> String {
     match command {
-        TestCommands::All(_) => "Run full test workflow".to_owned(),
-        TestCommands::Layout => "Check test layout".to_owned(),
-        TestCommands::Core => "Run Rust core tests".to_owned(),
-        TestCommands::RustApi => "Run Rust public API tests".to_owned(),
-        TestCommands::Browser(_) => "Run browser package tests".to_owned(),
-        TestCommands::Node(args) => {
-            format!("Run Node.js binding tests ({})", args.backend.as_str())
+        TestCommands::List(_) => "List test suites".to_owned(),
+        TestCommands::Whitebox(args) => format!("Run white-box tests ({})", args.suite.as_str()),
+        TestCommands::Interface(args) => {
+            format!(
+                "Run interface tests ({}, {})",
+                args.suite.as_str(),
+                args.backend.as_str()
+            )
         }
-        TestCommands::Python(args) => {
-            format!("Run Python binding tests ({})", args.backend.as_str())
+        TestCommands::Coverage(args) => {
+            format!(
+                "Run coverage ({}, {})",
+                args.scope.as_str(),
+                args.backend.as_str()
+            )
         }
-        TestCommands::ModelSmoke(args) => {
-            format!("Run model smoke tests ({})", args.backend.as_str())
-        }
+        TestCommands::All(args) => format!("Run {} test profile", args.profile.as_str()),
     }
 }
 

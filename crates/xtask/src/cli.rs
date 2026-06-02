@@ -47,45 +47,29 @@ Backend values:
   all     Host-supported backend set for the target";
 
 const RUN_HELP: &str = "\
-Build and run finite developer workflows from the workspace root.
+Run long-lived apps and non-test diagnostics from the workspace root.
 
 Examples:
   cargo xtask run apps build examples
-  cargo xtask run apps test
   cargo xtask run apps serve benchmark --port 5173
-  cargo xtask run bindings node --model ./models/model.gguf
-  cargo xtask run bindings python --model ./models/model.gguf --backend vulkan
-  cargo xtask run llama backend-ops --backend cpu
-  cargo xtask run all --model ./models/model.gguf
+  cargo xtask run llama backend-ops --backend cpu --mode support
+  cargo xtask run llama backend-ops --backend cuda --mode perf --op MUL_MAT
 
 Notes:
-  Aggregate run commands finish on their own.
+  Test execution, smoke checks, and coverage live under `cargo xtask test`.
   `run apps serve` is intentionally long-running and starts a Vite server.";
 
 const RUN_APPS_HELP: &str = "\
-Build, test, or serve individual browser apps.
+Build or serve individual browser apps.
 
 Examples:
   cargo xtask run apps build examples
   cargo xtask run apps build simulation
-  cargo xtask run apps test
   cargo xtask run apps serve examples
   cargo xtask run apps serve benchmark --mode preview --port 4173
 
 The apps group has no app-level `all` command. Build and serve commands target
-one app at a time; the top-level `run all` command owns aggregate workflows.";
-
-const RUN_BINDINGS_HELP: &str = "\
-Run binding-oriented checks and smoke examples.
-
-Examples:
-  cargo xtask run bindings browser
-  cargo xtask run bindings rust --model ./models/model.gguf
-  cargo xtask run bindings node --model ./models/model.gguf
-  cargo xtask run bindings python --model ./models/model.gguf --backend cuda
-  cargo xtask run bindings all --model ./models/model.gguf --remote-model gpt-4.1-mini --backend cpu
-
-Rust, Node, and Python smoke examples require an explicit GGUF model path.";
+one app at a time. App tests live under `cargo xtask test whitebox --suite app-ts`.";
 
 const RUN_LLAMA_HELP: &str = "\
 Build standalone llama.cpp targets and run backend operation checks.
@@ -94,22 +78,49 @@ Examples:
   cargo xtask run llama backend-ops
   cargo xtask run llama backend-ops --backend cpu
   cargo xtask run llama backend-ops --backend vulkan --mode support
-  cargo xtask run llama backend-ops --backend cuda --mode perf --op MUL_MAT";
+  cargo xtask run llama backend-ops --backend cuda --mode perf --op MUL_MAT
+
+Correctness mode lives under `cargo xtask test interface --suite llama-backend-ops`.
+The run command defaults to support probing.";
 
 const TEST_HELP: &str = "\
-Run deterministic tests and model-backed smoke checks from the workspace root.
+Run white-box tests, interface tests, coverage, and aggregate profiles.
 
 Examples:
-  cargo xtask test core
-  cargo xtask test layout
-  cargo xtask test rust-api
-  cargo xtask test browser --no-model
-  cargo xtask test model-smoke
-  cargo xtask test model-smoke --offline
-  cargo xtask test all --backend cpu
+  cargo xtask test list
+  cargo xtask test list --category whitebox --cases --format json
+  cargo xtask test whitebox --suite rust-crates --package cogentlm-core
+  cargo xtask test interface --suite node-package --backend cpu
+  cargo xtask test coverage --scope whitebox --backend cpu
+  cargo xtask test all --profile contributor
+  cargo xtask test all --profile ci
 
 Model-backed tests default to the setup sample model cache under .build/models
-when --model is omitted.";
+when --model is omitted.
+
+Run `cargo xtask test list` to see profile contents and suite requirements.";
+
+const TEST_ALL_HELP: &str = "\
+Run a named aggregate test profile.
+
+Profiles are cumulative and intentionally small-to-large:
+  contributor  layout + xtask
+               Public-safe check for fork PRs; no private submodules,
+               browser toolchains, model downloads, or GPU requirements.
+
+  quick        contributor + rust-crates
+               Fast local native confidence check for Rust/core changes.
+
+  ci           quick + package-ts + rust-public-api
+               Internal PR/master gate. Exercises package TypeScript and
+               public Rust API checks in addition to quick checks.
+
+  full         every cataloged suite
+               Nightly/release gate. Includes Rust bindings, app TypeScript,
+               CLI, Node, Python, browser runtime, model smoke, and
+               llama.cpp backend operation checks.
+
+Use `cargo xtask test list` for the exact suite table and requirements.";
 
 /// Top-level xtask command-line arguments.
 #[derive(Parser)]
@@ -164,7 +175,7 @@ preserving downloaded toolchains and dependency installs. Use `--purge` to also
 remove workspace node_modules directories.")]
     Clean(CleanArgs),
 
-    /// Build and run apps, bindings, and standalone llama.cpp checks.
+    /// Run long-lived apps and non-test diagnostics.
     #[command(long_about = RUN_HELP)]
     #[command(arg_required_else_help = true)]
     Run {
@@ -317,20 +328,7 @@ ggml backend plugins in .build/artifacts/cli.")]
 /// Developer run workflows.
 #[derive(Subcommand)]
 pub enum RunCommands {
-    /// Run the full finite app, binding, and llama.cpp workflow.
-    #[command(long_about = "\
-Build apps, run app TypeScript tests, run binding smoke examples, and run
-llama.cpp backend operation checks.
-
-Examples:
-  cargo xtask run all --model ./models/model.gguf
-  cargo xtask run all --model ./models/model.gguf --backend vulkan
-
-This command is finite. It does not start dev or preview servers.")]
-    #[command(after_long_help = BACKEND_HELP)]
-    All(RunAllArgs),
-
-    /// Build, test, or serve browser apps.
+    /// Build or serve browser apps.
     #[command(long_about = RUN_APPS_HELP)]
     #[command(arg_required_else_help = true)]
     Apps {
@@ -339,17 +337,7 @@ This command is finite. It does not start dev or preview servers.")]
         command: RunAppsCommands,
     },
 
-    /// Run binding smoke examples and browser package checks.
-    #[command(long_about = RUN_BINDINGS_HELP)]
-    #[command(after_long_help = BACKEND_HELP)]
-    #[command(arg_required_else_help = true)]
-    Bindings {
-        /// Binding workflow to run.
-        #[command(subcommand)]
-        command: RunBindingsCommands,
-    },
-
-    /// Build and run standalone llama.cpp checks.
+    /// Build and run standalone llama.cpp diagnostics.
     #[command(long_about = RUN_LLAMA_HELP)]
     #[command(arg_required_else_help = true)]
     Llama {
@@ -362,125 +350,243 @@ This command is finite. It does not start dev or preview servers.")]
 /// Workspace test workflows.
 #[derive(Subcommand)]
 pub enum TestCommands {
-    /// Run the release-oriented aggregate test workflow.
+    /// List known test suites and optionally discover test cases.
+    List(TestListArgs),
+
+    /// Run white-box implementation tests.
+    Whitebox(TestWhiteboxArgs),
+
+    /// Run black-box public interface tests.
     #[command(after_long_help = BACKEND_HELP)]
+    Interface(TestInterfaceArgs),
+
+    /// Run coverage over the cataloged test suites.
+    #[command(after_long_help = BACKEND_HELP)]
+    Coverage(TestCoverageArgs),
+
+    /// Run an aggregate test profile.
+    #[command(after_long_help = BACKEND_HELP)]
+    #[command(long_about = TEST_ALL_HELP)]
     All(TestAllArgs),
+}
 
-    /// Verify tests live under dedicated test files and folders.
-    Layout,
+/// Options for listing test suites and cases.
+#[derive(Args)]
+pub struct TestListArgs {
+    /// Category to include in the listing.
+    #[arg(long, value_enum, default_value = "all")]
+    pub category: TestListCategory,
 
-    /// Run Rust unit tests for the workspace and xtask.
-    Core,
+    /// Include individual test cases where they can be discovered cheaply.
+    #[arg(long)]
+    pub cases: bool,
 
-    /// Run public API integration tests for Rust crates.
-    RustApi,
+    /// Output format.
+    #[arg(long, value_enum, default_value = "text")]
+    pub format: TestListFormat,
+}
 
-    /// Build and test the browser package.
-    Browser(TestBrowserArgs),
+/// Options for white-box implementation tests.
+#[derive(Args)]
+pub struct TestWhiteboxArgs {
+    /// Suite id to run, or `all`.
+    #[arg(long, value_enum, default_value = "all")]
+    pub suite: TestSuiteId,
 
-    /// Build and test Node.js bindings without model-backed smokes.
-    #[command(after_long_help = BACKEND_HELP)]
-    Node(TestNativeBindingArgs),
+    /// Rust package filter for the `rust-crates` suite.
+    #[arg(long)]
+    pub package: Option<String>,
+}
 
-    /// Build and test Python bindings without model-backed smokes.
-    #[command(after_long_help = BACKEND_HELP)]
-    Python(TestNativeBindingArgs),
+/// Options for black-box public interface tests.
+#[derive(Args)]
+pub struct TestInterfaceArgs {
+    /// Suite id to run, or `all`.
+    #[arg(long, value_enum, default_value = "all")]
+    pub suite: TestSuiteId,
 
-    /// Run CLI/Rust/Node/Python local inference smokes.
-    #[command(after_long_help = BACKEND_HELP)]
-    ModelSmoke(TestModelSmokeArgs),
+    /// Backend passed to backend-aware interface suites.
+    #[arg(long, short, value_enum, default_value = "cpu")]
+    pub backend: Backend,
+
+    /// GGUF model for the `model-smoke` suite. Defaults to .build/models.
+    #[arg(long)]
+    pub model: Option<PathBuf>,
+
+    /// Do not download the default sample model when `model-smoke` has no --model.
+    #[arg(long)]
+    pub offline: bool,
+}
+
+/// Options for coverage collection.
+#[derive(Args)]
+pub struct TestCoverageArgs {
+    /// Coverage scope to collect.
+    #[arg(long, value_enum, default_value = "whitebox")]
+    pub scope: TestCoverageScope,
+
+    /// Backend used by Node/Python/model coverage when --scope all is selected.
+    #[arg(long, short, value_enum, default_value = "cpu")]
+    pub backend: Backend,
+
+    /// GGUF model used by model-backed coverage when scope is `all`.
+    #[arg(long)]
+    pub model: Option<PathBuf>,
+
+    /// Do not download the default sample model when --scope all has no --model.
+    #[arg(long)]
+    pub offline: bool,
 }
 
 /// Options for the aggregate test workflow.
 #[derive(Args)]
 pub struct TestAllArgs {
-    /// GGUF model used by model-backed smoke checks. Defaults to .build/models.
-    #[arg(long)]
-    pub model: Option<PathBuf>,
+    /// Aggregate test profile to run. See this command's help for suite contents.
+    #[arg(long, value_enum, default_value = "quick")]
+    pub profile: TestProfile,
 
-    /// Backend to build and exercise.
+    /// Backend passed only to backend-aware suites in the selected profile.
     #[arg(long, short, value_enum, default_value = "cpu")]
     pub backend: Backend,
 
-    /// Prompt passed to model-backed smoke checks.
-    #[arg(long, default_value = "Describe browser LLM inference.")]
-    pub prompt: String,
-
-    /// Number of model layers to offload.
+    /// GGUF model for model-backed suites. Defaults to .build/models.
     #[arg(long)]
-    pub gpu_layers: Option<u32>,
+    pub model: Option<PathBuf>,
 
-    /// Do not download the default sample model when --model is omitted.
+    /// Do not download the default sample model when model-backed suites have no --model.
     #[arg(long)]
     pub offline: bool,
 }
 
-/// Options for browser package tests.
-#[derive(Args)]
-pub struct TestBrowserArgs {
-    /// Skip Playwright browser runtime smoke and run only build plus unit tests.
-    #[arg(long)]
-    pub no_model: bool,
+/// Category filter for test listing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum TestListCategory {
+    /// Include white-box and interface suites.
+    All,
+    /// Include implementation-oriented white-box suites.
+    Whitebox,
+    /// Include public interface black-box suites.
+    Interface,
 }
 
-/// Options for binding tests that do not load a model.
-#[derive(Args)]
-pub struct TestNativeBindingArgs {
-    /// Backend to build and import-test.
-    #[arg(long, short, value_enum, default_value = "cpu")]
-    pub backend: Backend,
+/// Output format for `test list`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum TestListFormat {
+    /// Human-readable table.
+    Text,
+    /// JSON array.
+    Json,
 }
 
-/// Options for model-backed local smoke tests.
-#[derive(Args)]
-pub struct TestModelSmokeArgs {
-    /// GGUF model used by local smoke examples. Defaults to .build/models.
-    #[arg(long)]
-    pub model: Option<PathBuf>,
-
-    /// Backend to build and exercise.
-    #[arg(long, short, value_enum, default_value = "cpu")]
-    pub backend: Backend,
-
-    /// Prompt passed to smoke examples.
-    #[arg(long, default_value = "Describe browser LLM inference.")]
-    pub prompt: String,
-
-    /// Number of model layers to offload.
-    #[arg(long)]
-    pub gpu_layers: Option<u32>,
-
-    /// Do not download the default sample model when --model is omitted.
-    #[arg(long)]
-    pub offline: bool,
+/// Test suite selector.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, ValueEnum)]
+pub enum TestSuiteId {
+    /// Select every suite in the requested category.
+    All,
+    /// Test layout and catalog ownership checks.
+    Layout,
+    /// xtask CLI and orchestration unit tests.
+    Xtask,
+    /// Rust unit tests for core workspace crates.
+    RustCrates,
+    /// Rust unit tests for language binding crates.
+    RustBindings,
+    /// Browser package TypeScript tests.
+    PackageTs,
+    /// Browser app TypeScript tests.
+    AppTs,
+    /// Rust public API integration tests.
+    RustPublicApi,
+    /// CLI black-box integration tests.
+    Cli,
+    /// Node package interface tests.
+    NodePackage,
+    /// Python package interface tests.
+    PythonPackage,
+    /// Browser runtime smoke tests.
+    BrowserRuntime,
+    /// Model-backed smoke tests.
+    ModelSmoke,
+    /// llama.cpp backend operation tests.
+    LlamaBackendOps,
 }
 
-/// Options for the aggregate finite run workflow.
-#[derive(Args)]
-pub struct RunAllArgs {
-    /// GGUF model used by Rust, Node, and Python smoke examples.
-    #[arg(long)]
-    pub model: PathBuf,
+impl TestSuiteId {
+    /// Stable CLI and JSON suite label.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TestSuiteId::All => "all",
+            TestSuiteId::Layout => "layout",
+            TestSuiteId::Xtask => "xtask",
+            TestSuiteId::RustCrates => "rust-crates",
+            TestSuiteId::RustBindings => "rust-bindings",
+            TestSuiteId::PackageTs => "package-ts",
+            TestSuiteId::AppTs => "app-ts",
+            TestSuiteId::RustPublicApi => "rust-public-api",
+            TestSuiteId::Cli => "cli",
+            TestSuiteId::NodePackage => "node-package",
+            TestSuiteId::PythonPackage => "python-package",
+            TestSuiteId::BrowserRuntime => "browser-runtime",
+            TestSuiteId::ModelSmoke => "model-smoke",
+            TestSuiteId::LlamaBackendOps => "llama-backend-ops",
+        }
+    }
+}
 
-    /// Backend to build and exercise for native binding and llama checks.
-    #[arg(long, short, value_enum, default_value = "cpu")]
-    pub backend: Backend,
+/// Coverage scope.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum TestCoverageScope {
+    /// White-box suites only.
+    Whitebox,
+    /// White-box plus interface suites.
+    All,
+}
 
-    /// Prompt passed to Rust, Node, and Python smoke examples.
-    #[arg(long, default_value = "Describe browser LLM inference.")]
-    pub prompt: String,
+/// Aggregate test profile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum TestProfile {
+    /// Public contributor check with no private submodules or downloads.
+    Contributor,
+    /// Fast local confidence check.
+    Quick,
+    /// Internal pull-request and master CI gate.
+    Ci,
+    /// Full release/nightly gate.
+    Full,
+}
 
-    /// Number of model layers to offload for smoke examples.
-    #[arg(long)]
-    pub gpu_layers: Option<u32>,
+impl TestProfile {
+    /// Stable profile label.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TestProfile::Contributor => "contributor",
+            TestProfile::Quick => "quick",
+            TestProfile::Ci => "ci",
+            TestProfile::Full => "full",
+        }
+    }
 
-    /// OpenAI model id used by remote smoke examples.
-    #[arg(long)]
-    pub remote_model: Option<String>,
+    /// Human-readable profile summary.
+    pub fn summary(&self) -> &'static str {
+        match self {
+            TestProfile::Contributor => {
+                "layout + xtask; public-safe, no private submodules or downloads"
+            }
+            TestProfile::Quick => "contributor + rust-crates; fast local Rust/core check",
+            TestProfile::Ci => "quick + package-ts + rust-public-api; internal PR/master gate",
+            TestProfile::Full => "every cataloged suite; nightly/release validation",
+        }
+    }
+}
 
-    /// Optional OpenAI-compatible remote base URL.
-    #[arg(long)]
-    pub remote_base_url: Option<String>,
+impl TestCoverageScope {
+    /// Stable scope label.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TestCoverageScope::Whitebox => "whitebox",
+            TestCoverageScope::All => "all",
+        }
+    }
 }
 
 /// Browser app run workflows.
@@ -488,9 +594,6 @@ pub struct RunAllArgs {
 pub enum RunAppsCommands {
     /// Build one browser app.
     Build(RunAppBuildArgs),
-
-    /// Run finite browser app TypeScript tests through Bun.
-    Test,
 
     /// Start one long-running Vite dev or preview server.
     Serve(RunAppServeArgs),
@@ -554,17 +657,6 @@ impl AppName {
             AppName::Simulation => "simulation",
         }
     }
-
-    /// All browser apps in deterministic build order.
-    pub(crate) fn all() -> &'static [AppName] {
-        &[
-            AppName::Avatar,
-            AppName::Benchmark,
-            AppName::Examples,
-            AppName::ProactiveUi,
-            AppName::Simulation,
-        ]
-    }
 }
 
 /// Long-running browser app server mode.
@@ -586,61 +678,6 @@ impl AppServeMode {
     }
 }
 
-/// Binding run workflows.
-#[derive(Subcommand)]
-pub enum RunBindingsCommands {
-    /// Run browser package checks and Rust/Node/Python smoke examples.
-    All(RunBindingSmokeArgs),
-
-    /// Run browser/WASM package checks.
-    Browser(RunBrowserArgs),
-
-    /// Build and run Rust CogentClient smoke examples.
-    Rust(RunBindingSmokeArgs),
-
-    /// Build and run Node.js CogentClient smoke examples.
-    Node(RunBindingSmokeArgs),
-
-    /// Build and run Python CogentClient smoke examples.
-    Python(RunBindingSmokeArgs),
-}
-
-/// Options shared by native binding smoke examples.
-#[derive(Args)]
-pub struct RunBindingSmokeArgs {
-    /// GGUF model used by local smoke examples.
-    #[arg(long)]
-    pub model: PathBuf,
-
-    /// Backend to build and exercise.
-    #[arg(long, short, value_enum, default_value = "cpu")]
-    pub backend: Backend,
-
-    /// Prompt passed to smoke examples.
-    #[arg(long, default_value = "Describe browser LLM inference.")]
-    pub prompt: String,
-
-    /// Number of model layers to offload.
-    #[arg(long)]
-    pub gpu_layers: Option<u32>,
-
-    /// OpenAI model id used by remote smoke examples.
-    #[arg(long)]
-    pub remote_model: Option<String>,
-
-    /// Optional OpenAI-compatible remote base URL.
-    #[arg(long)]
-    pub remote_base_url: Option<String>,
-}
-
-/// Options for browser/WASM binding checks.
-#[derive(Args)]
-pub struct RunBrowserArgs {
-    /// Require the browser GGUF ingest smoke result in addition to the Rust engine smoke.
-    #[arg(long)]
-    pub ingest: bool,
-}
-
 /// Standalone llama.cpp run workflows.
 #[derive(Subcommand)]
 pub enum RunLlamaCommands {
@@ -655,8 +692,8 @@ pub struct RunLlamaBackendOpsArgs {
     #[arg(long, short, value_enum, default_value = "cpu")]
     pub backend: Backend,
 
-    /// test-backend-ops mode.
-    #[arg(long, value_enum, default_value = "test")]
+    /// Diagnostic test-backend-ops mode.
+    #[arg(long, value_enum, default_value = "support")]
     pub mode: LlamaBackendOpsMode,
 
     /// Operation filter passed as `-o`.

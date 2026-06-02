@@ -114,4 +114,4 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run full test workflow
-        run: cargo xtask --plain test all --backend cpu
+        run: cargo xtask --plain test all --profile full --backend cpu

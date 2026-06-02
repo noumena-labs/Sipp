@@ -17,8 +17,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validate:
-    name: Validate PR gate
+  public-validate:
+    name: Public contributor gate
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+        with:
+          submodules: false
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo and xtask outputs
+        uses: actions/cache@v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .build/cargo
+            .build/xtask
+          key: cargo-public-ci-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/xtask/Cargo.toml', 'crates/xtask/src/**/*.rs') }}
+          restore-keys: |
+            cargo-public-ci-${{ runner.os }}-
+
+      - name: Run public contributor test profile
+        run: cargo xtask --plain test all --profile contributor
+
+  internal-validate:
+    name: Internal CI gate
+    if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     env:
       CE_WASM_BUILD_PARALLEL_LEVEL: "2"
@@ -121,14 +150,5 @@ jobs:
       - name: Doctor core readiness
         run: cargo xtask --plain doctor --target core
 
-      - name: Check test layout
-        run: cargo xtask --plain test layout
-
-      - name: Run Rust core tests
-        run: cargo xtask --plain test core
-
-      - name: Run Rust public API tests
-        run: cargo xtask --plain test rust-api
-
-      - name: Run browser package tests
-        run: cargo xtask --plain test browser --no-model
+      - name: Run CI test profile
+        run: cargo xtask --plain test all --profile ci

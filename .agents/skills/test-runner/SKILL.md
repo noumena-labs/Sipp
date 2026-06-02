@@ -19,42 +19,64 @@ Always run the **narrowest relevant test suite** based on the files you modified
 
 Identify the files modified and run the corresponding command:
 
-### 1. Rust Native Core (`crates/`)
-- Run unit/integration tests for the affected crate:
+### 1. Public contributor-safe checks
+- Run the no-secret, no-private-submodule profile (`layout`, `xtask`):
   ```bash
-  cargo test -p <crate_name>
+  cargo xtask test all --profile contributor
   ```
-- Example: `cargo test -p cogent-engine`
-
-### 2. Node.js Bindings (`bindings/node/`)
-- Run the smoke tests:
+- Run the fast local Rust/core profile (`contributor`, `rust-crates`):
   ```bash
-  node bindings/node/examples/node_smoke.mjs
+  cargo xtask test all --profile quick
   ```
-- Run unit tests:
+- Run xtask-only checks when the change is limited to developer automation:
   ```bash
-  bun test bindings/node/tests/
+  cargo xtask test whitebox --suite xtask
   ```
 
-### 3. TypeScript NPM Packages (`packages/npm/`)
-- Run tests in the specific package:
+### 2. Rust Native Core (`crates/`)
+- Run cataloged unit tests for the affected crate:
   ```bash
-  pnpm --filter <package_name> test
-  # Or with bun:
-  bun run --cwd packages/npm/<pkg> test
+  cargo xtask test whitebox --suite rust-crates --package <crate_name>
   ```
-- Check types:
+- Example: `cargo xtask test whitebox --suite rust-crates --package cogentlm-engine`
+
+### 3. Node.js Bindings (`bindings/node/`)
+- Run the cataloged Node interface tests:
   ```bash
-  pnpm typecheck
+  cargo xtask test interface --suite node-package --backend cpu
   ```
 
-### 4. Python Bindings (`bindings/python/`)
-- Run pytest suite:
+### 4. TypeScript NPM Packages (`packages/npm/`)
+- Run the cataloged browser package TypeScript tests:
   ```bash
-  python -m pytest bindings/python/tests/
+  cargo xtask test whitebox --suite package-ts
+  ```
+- App tests are cataloged separately:
+  ```bash
+  cargo xtask test whitebox --suite app-ts
+  ```
+
+### 5. Python Bindings (`bindings/python/`)
+- Run the cataloged Python interface tests:
+  ```bash
+  cargo xtask test interface --suite python-package --backend cpu
+  ```
+
+### 6. Coverage
+- List the catalog before choosing a suite:
+  ```bash
+  cargo xtask test list --cases
+  ```
+- Run baseline coverage:
+  ```bash
+  cargo xtask test coverage --scope whitebox --backend cpu
   ```
 
 ---
 
 ## Pre-Test Check
-Ensure that you build the necessary components first using the **`build-orchestrator`** skill before running their tests (e.g. Node bindings must be built before `node_smoke.mjs` will work).
+The xtask test catalog builds required artifacts before suites that need them. Use the **`build-orchestrator`** skill first only when you are explicitly compiling or packaging a target outside the test catalog.
+
+Profiles are cumulative: `ci` adds `package-ts` and `rust-public-api` to
+`quick`; `full` runs every cataloged suite. See `docs/testing.md` for the
+human-facing summary.

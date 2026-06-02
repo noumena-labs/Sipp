@@ -97,11 +97,8 @@ jobs:
           writeFileSync(path, `${JSON.stringify(pkg, null, 2)}\n`);
           NODE
 
-      - name: Check test layout
-        run: cargo xtask --plain test layout
-
       - name: Run fast dev publish gate
-        run: cargo xtask --plain test browser --no-model
+        run: cargo xtask --plain test all --profile ci
 
       - name: Build staged browser package
         run: cargo xtask --plain build wasm
