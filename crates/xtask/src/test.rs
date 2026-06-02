@@ -8,7 +8,7 @@ use crate::sample_model::{self, SampleModelOptions};
 use crate::targets;
 use crate::toolchains::env::apply_toolchains;
 use crate::toolchains::python::{apply_uv_env, setup_uv};
-use crate::utils::BuildContext;
+use crate::utils::{ensure_playwright_chromium, BuildContext};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -156,11 +156,13 @@ fn run_browser(sh: &Shell, ctx: &BuildContext, args: &TestBrowserArgs) -> Result
     }
 
     ensure_workspace_bun_install(sh, ctx)?;
+    ensure_playwright_chromium(sh, ctx)?;
     let benchmark_dir = ctx.app_dir("benchmark");
     let _benchmark_dir = sh.push_dir(&benchmark_dir);
     output::run_command(
         "Running benchmark Playwright browser runtime smoke",
-        cmd!(sh, "bun run browser:smoke"),
+        cmd!(sh, "bun run browser:smoke")
+            .env("PLAYWRIGHT_BROWSERS_PATH", ctx.playwright_browsers_dir()),
     )
 }
 

@@ -9,7 +9,7 @@ use crate::output;
 use crate::targets;
 use crate::toolchains::env::apply_toolchains;
 use crate::toolchains::python::{apply_uv_env, setup_uv};
-use crate::utils::BuildContext;
+use crate::utils::{ensure_playwright_chromium, BuildContext};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -259,6 +259,8 @@ fn run_benchmark_browser_smoke(sh: &Shell, ctx: &BuildContext, require_ingest: b
     let benchmark_dir = ctx.app_dir("benchmark");
     output::path("Benchmark app", &benchmark_dir);
 
+    ensure_playwright_chromium(sh, ctx)?;
+
     let _dir = sh.push_dir(&benchmark_dir);
     let script = if require_ingest {
         "browser:smoke:ingest"
@@ -268,7 +270,7 @@ fn run_benchmark_browser_smoke(sh: &Shell, ctx: &BuildContext, require_ingest: b
 
     output::run_command(
         format!("Running benchmark {script}"),
-        cmd!(sh, "bun run {script}"),
+        cmd!(sh, "bun run {script}").env("PLAYWRIGHT_BROWSERS_PATH", ctx.playwright_browsers_dir()),
     )
 }
 
