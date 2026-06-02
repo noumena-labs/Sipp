@@ -1,4 +1,6 @@
-//! Unit tests for the parent module.
+//! Tests the `runtime::session::prefix_cache_policy` module in `cogentlm-engine`.
+//!
+//! Covers runtime support modules with deterministic in-memory fixtures and no native model execution.
 
 use super::*;
 

@@ -1,3 +1,7 @@
+//! Integration tests for the `cogentlm-providers` crate-level public_api surface.
+//!
+//! Covers provider request mapping, response parsing, transport, and stream behavior with deterministic local fixtures and no live network calls.
+
 use cogentlm_providers::{ProviderKind, SecretString};
 
 #[test]

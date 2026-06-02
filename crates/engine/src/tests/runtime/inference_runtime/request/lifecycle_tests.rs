@@ -1,3 +1,7 @@
+//! Tests the `runtime::inference_runtime::request::lifecycle` module in `cogentlm-engine`.
+//!
+//! Covers deterministic inference-runtime helpers, state transitions, and error paths while avoiding native model execution unless a test is explicitly ignored.
+
 use crate::runtime::config::NativeRuntimeConfig;
 use crate::runtime::inference_runtime::runtime_tests::test_runtime;
 use crate::runtime::request::GenerateRequest;

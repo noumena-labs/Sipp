@@ -1,4 +1,6 @@
-//! Unit tests for the parent module.
+//! Tests the `lifecycle::service::load_assets` module in `cogentlm-engine`.
+//!
+//! Covers lifecycle registry, storage, browser, service, and pairing behavior with temporary storage and pure fixtures instead of native runtime loading.
 
 use super::*;
 use crate::lifecycle::storage::now_unix_ms;

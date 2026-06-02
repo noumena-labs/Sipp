@@ -1,4 +1,6 @@
-//! Unit tests for cataloged test orchestration.
+//! Tests the `test` module in `xtask`.
+//!
+//! Covers developer automation helpers, catalog logic, and terminal formatting with deterministic fixtures instead of invoking external toolchains.
 
 use clap::error::ErrorKind;
 use clap::Parser;

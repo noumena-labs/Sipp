@@ -1,4 +1,6 @@
-//! Unit tests for the parent module.
+//! Tests the `crate root` module in `cogentlm-shard`.
+//!
+//! Covers shard and GGUF inspection helpers with deterministic byte fixtures and filesystem-free value checks where possible.
 
 use super::*;
 use std::io::Cursor;

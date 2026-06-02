@@ -1,4 +1,6 @@
-//! Unit tests for the parent module.
+//! Tests the `providers::proxy` module in `cogentlm-providers`.
+//!
+//! Covers provider request mapping, response parsing, transport, and stream behavior with deterministic local fixtures and no live network calls.
 
 use std::time::Duration;
 

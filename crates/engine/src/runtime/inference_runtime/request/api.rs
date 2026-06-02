@@ -7,6 +7,31 @@ use crate::runtime::request::{GenerateRequest, GenerateRequestId, MultimodalPayl
 
 use super::super::{clamp_usize_to_i32, InferenceRuntime, DEFAULT_PROMPT_CONTEXT_KEY};
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "../../../tests/runtime/inference_runtime/request/api_private_tests.rs"]
+mod api_private_tests;
+
+#[cfg(test)]
+pub(super) fn request_tokenization_flags_for_tests(tokenization: &str) -> Option<(bool, bool)> {
+    let tokenization = match tokenization {
+        "text" => RequestTokenization::Text,
+        "multimodal" => RequestTokenization::Multimodal,
+        _ => return None,
+    };
+    Some((
+        tokenization.add_bos(),
+        tokenization.requires_prompt_tokens(),
+    ))
+}
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+
 const N_TOKENS_PREDICT_POSITIVE: &str = "n_tokens_predict must be positive";
 const IMAGE_BUFFERS_REQUIRED: &str = "image_buffers must not be empty";
 const REQUEST_ID_OVERFLOW: &str = "request id overflow";
@@ -243,17 +268,4 @@ fn normalize_context_key(context_key: impl Into<String>) -> String {
 
 pub(super) fn normalize_stop_sequences(stop: Vec<String>) -> Vec<String> {
     sorted_unique_non_empty_strings(stop)
-}
-
-#[cfg(test)]
-pub(super) fn request_tokenization_flags_for_tests(tokenization: &str) -> Option<(bool, bool)> {
-    let tokenization = match tokenization {
-        "text" => RequestTokenization::Text,
-        "multimodal" => RequestTokenization::Multimodal,
-        _ => return None,
-    };
-    Some((
-        tokenization.add_bos(),
-        tokenization.requires_prompt_tokens(),
-    ))
 }

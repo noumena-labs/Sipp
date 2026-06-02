@@ -1,12 +1,20 @@
-//! Unit tests for the parent module.
+//! Tests the `engine::driver` module in `cogentlm-engine`.
+//!
+//! Covers driver futures, command handling, event emission, and request mapping with model-free channels or explicitly ignored model smoke tests.
 
 use super::*;
 use crate::engine::{
-    CacheSource, GenerateOptions, GpuLayerConfig, KvReuseMode, NativeRuntimeConfig,
+    CacheSource, EmbedOptions, GenerateOptions, GpuLayerConfig, KvReuseMode, NativeRuntimeConfig,
     RequestSampling, SamplingRuntimeConfig, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
 };
+use crate::runtime::request::GenerateResponse;
+use cogentlm_core::{TokenBatch, TokenEmissionStats};
 use futures::executor::block_on;
+use futures::future::poll_fn;
+use futures::StreamExt;
 use std::path::PathBuf;
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
 
 fn repo_fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -35,6 +43,34 @@ fn cache_query(context_key: &str, prompt: &str) -> QueryRequest {
         max_tokens: 1,
         ..QueryOptions::default()
     })
+}
+
+fn token_batch(text: &str) -> TokenBatch {
+    TokenBatch {
+        request_id: "req".to_string(),
+        stream_id: 1,
+        sequence_start: 0,
+        text: text.to_string(),
+        frame_count: 1,
+        byte_count: text.len() as u32,
+        stats: TokenEmissionStats {
+            frames_sent: 1,
+            bytes_sent: text.len() as u64,
+            batches_sent: 1,
+        },
+    }
+}
+
+fn closed_engine() -> CogentEngine {
+    let (command_tx, command_rx) = mpsc::channel();
+    drop(command_rx);
+    CogentEngine {
+        inner: Arc::new(EngineInner {
+            command_tx,
+            event_subscribers: Arc::new(Mutex::new(Vec::new())),
+            _driver: thread::spawn(|| {}),
+        }),
+    }
 }
 
 #[test]
@@ -98,6 +134,92 @@ fn query_request_defaults_options() {
 fn engine_handle_is_send() {
     fn assert_send<T: Send>() {}
     assert_send::<CogentEngine>();
+}
+
+#[test]
+fn ready_engine_response_returns_error_once_then_consumed_error() {
+    let mut response = EngineResponse::<GenerateResponse>::ready_err(runtime_command("boom"));
+
+    let first =
+        block_on(poll_fn(|cx| Pin::new(&mut response).poll(cx))).expect_err("first ready error");
+    let second = block_on(poll_fn(|cx| Pin::new(&mut response).poll(cx)))
+        .expect_err("second consumed error");
+
+    assert!(first.to_string().contains("boom"));
+    assert!(second.to_string().contains("already consumed"));
+}
+
+#[test]
+fn token_channel_is_optional_and_streams_until_sender_is_dropped() {
+    let (disabled_tx, disabled_rx) = token_channel(false);
+    assert!(disabled_tx.is_none());
+    assert!(disabled_rx.is_none());
+
+    let (enabled_tx, enabled_rx) = token_channel(true);
+    let sender = enabled_tx.expect("enabled sender");
+    let mut receiver = enabled_rx.expect("enabled receiver");
+    sender
+        .unbounded_send(token_batch("a"))
+        .expect("send token batch");
+    drop(sender);
+
+    assert_eq!(block_on(receiver.next()).expect("token batch").text, "a");
+    assert!(block_on(receiver.next()).is_none());
+}
+
+#[test]
+fn ready_receiver_resolves_preloaded_result() {
+    let receiver = ready_receiver::<i32>(Ok(42));
+
+    let value = block_on(receiver)
+        .expect("receiver should resolve")
+        .expect("result should be ok");
+
+    assert_eq!(value, 42);
+}
+
+#[test]
+fn closed_engine_query_errors_and_preserves_requested_token_stream() {
+    let engine = closed_engine();
+    let run = engine.query(QueryRequest::new("hello").emit_tokens(true));
+    let (tokens, response) = run.into_parts();
+
+    assert!(tokens.is_some());
+    let error = block_on(response).expect_err("closed query");
+    assert!(error.to_string().contains("engine thread is closed"));
+}
+
+#[test]
+fn closed_engine_embed_response_future_errors() {
+    let engine = closed_engine();
+    let request = EmbedRequest {
+        input: "hello".to_string(),
+        options: EmbedOptions::default(),
+    };
+
+    let error = block_on(engine.embed(request).into_response()).expect_err("closed embed");
+
+    assert!(error.to_string().contains("engine thread is closed"));
+}
+
+#[test]
+fn closed_engine_state_errors_close_is_idempotent_and_subscribe_registers() {
+    let engine = closed_engine();
+
+    let error = block_on(engine.state()).expect_err("closed state");
+    assert!(error.to_string().contains("engine thread is closed"));
+    block_on(engine.close()).expect("close on closed channel is ok");
+
+    let _events = engine.subscribe_events();
+    assert_eq!(
+        engine
+            .inner
+            .event_subscribers
+            .lock()
+            .expect("subscribers")
+            .len(),
+        1
+    );
 }
 
 /// Model-backed live-prefix cache smoke. Ignored by default because it loads

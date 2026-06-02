@@ -1,4 +1,6 @@
-//! Unit tests for the token emission module.
+//! Tests the `engine::driver::token_emission` module in `cogentlm-engine`.
+//!
+//! Covers driver futures, command handling, event emission, and request mapping with model-free channels or explicitly ignored model smoke tests.
 
 use super::*;
 use crate::runtime::request::TokenRingFrame;

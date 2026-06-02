@@ -27,4 +27,5 @@ thiserror.workspace = true
 tokio = { workspace = true, optional = true, features = ["rt", "net", "time", "sync"] }
 
 [dev-dependencies]
+async-trait = "0.1"
 futures.workspace = true

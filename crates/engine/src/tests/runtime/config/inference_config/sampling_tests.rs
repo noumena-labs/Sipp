@@ -1,4 +1,6 @@
-//! Unit tests for the parent module.
+//! Tests the `runtime::config::inference_config::sampling` module in `cogentlm-engine`.
+//!
+//! Covers runtime configuration normalization, serialization, and boundary choices through pure value assertions.
 
 use super::should_merge_sampling_override;
 

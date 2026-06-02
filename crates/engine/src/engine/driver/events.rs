@@ -6,6 +6,18 @@ use crate::runtime::numeric::unix_time_ms;
 use super::stats::{engine_stats_from_runtime, read_backend_info};
 use super::EngineEventSubscribers;
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "../../tests/engine/driver/events_tests.rs"]
+mod events_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+
 pub(super) fn build_engine_state_with_status(
     runtime: &InferenceRuntime,
     model_state: &ModelState,
@@ -55,7 +67,3 @@ pub(super) fn emit_event(event_subscribers: &EngineEventSubscribers, event: Engi
     };
     subscribers.retain(|subscriber| subscriber.send(event.clone()).is_ok());
 }
-
-#[cfg(test)]
-#[path = "../../tests/engine/driver/events_tests.rs"]
-mod events_tests;

@@ -1,4 +1,6 @@
-//! Unit tests for the parent module.
+//! Tests the `runtime::scheduler::batch_planner::helpers` module in `cogentlm-engine`.
+//!
+//! Covers scheduler planning, budget accounting, slot state, and flow decisions with deterministic in-memory fixtures.
 
 use super::*;
 use crate::runtime::numeric::saturating_u32_to_i32;

@@ -1,4 +1,6 @@
-//! Unit tests for the parent module.
+//! Tests the `runtime::config::inference_config` module in `cogentlm-engine`.
+//!
+//! Covers runtime configuration normalization, serialization, and boundary choices through pure value assertions.
 
 use super::*;
 use crate::defaults::BYTES_PER_MIB_U64;

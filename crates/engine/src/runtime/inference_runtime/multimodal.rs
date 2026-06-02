@@ -16,6 +16,18 @@ use super::numeric::{nonnegative_i32_to_usize, nonnegative_i32_to_usize_opt, usi
 use super::text::append_token_piece_to_slot;
 use super::LLAMA_SAMPLER_SAMPLE_FAILED;
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "../../tests/runtime/inference_runtime/multimodal_tests.rs"]
+mod multimodal_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+
 /// Runs the multimodal prefill end-to-end for `slot`:
 /// 1. Ensure the prompt has enough media markers; if not, prepend them.
 /// 2. Evaluate prompt + image buffers through the CXX mtmd bridge.

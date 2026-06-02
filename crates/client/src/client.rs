@@ -18,6 +18,18 @@ use crate::{
     CogentResult, CogentTextRun, EndpointCapabilities, EndpointRef,
 };
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "tests/client_tests.rs"]
+mod client_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+
 /// Public inference facade over registered local and remote endpoints.
 pub struct CogentClient {
     endpoints: HashMap<EndpointRef, Arc<dyn InferenceEndpoint>>,
@@ -207,7 +219,3 @@ fn normalize_id(id: impl Into<String>, name: &'static str) -> CogentResult<Strin
         Ok(id)
     }
 }
-
-#[cfg(test)]
-#[path = "tests/client_tests.rs"]
-mod client_tests;

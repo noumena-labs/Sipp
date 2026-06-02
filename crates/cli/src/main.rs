@@ -12,6 +12,18 @@ use cogentlm_engine::runtime::request::{GenerateResponseStatus, ResponseOutput};
 use cogentlm_engine::runtime::{InferenceRuntime, RequestStepResult};
 use serde_json::json;
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "tests/main_tests.rs"]
+mod main_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+
 #[derive(Debug, Parser)]
 #[command(name = "cogentlm")]
 #[command(about = "CogentLM Rust runtime proof-of-concept CLI")]
@@ -128,32 +140,10 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn run_native_runtime(args: &Args, stdout: &mut impl Write) -> anyhow::Result<()> {
-    let mut config = NativeRuntimeConfig::default();
-    config.context.n_ctx = Some(args.ctx_size.min(i32::MAX as u32) as i32);
-    config.context.n_batch = Some(args.batch_size.min(i32::MAX as u32) as i32);
-    config.context.n_ubatch = Some(args.batch_size.min(i32::MAX as u32) as i32);
-    config.context.n_parallel = Some(1);
-    config.context.n_threads = Some(args.threads);
-    config.context.n_threads_batch = Some(args.threads);
-    if let Some(gpu_layers) = args.gpu_layers {
-        config.placement.gpu_layers = GpuLayerConfig::from_layer_count(gpu_layers);
-    }
-    config.sampling = SamplingRuntimeConfig {
-        temperature: Some(args.temperature),
-        top_k: Some(args.top_k),
-        top_p: Some(args.top_p),
-        min_p: Some(args.min_p),
-        seed: (args.seed != u32::MAX).then_some(args.seed),
-        ..SamplingRuntimeConfig::default()
-    };
-    if args.temperature <= 0.0 {
-        config.sampling.top_k = Some(1);
-    }
-
     let load_options = ModelLoadOptions {
         backend: args.backend.to_preference(),
         stats: args.stats.to_lifecycle_stats(),
-        runtime: config,
+        runtime: runtime_config_from_args(args),
     };
     let backend_plan = BackendPolicy::select(&load_options)?;
     let mut runtime = InferenceRuntime::load(&args.model, backend_plan.config)?;
@@ -214,40 +204,73 @@ fn run_native_runtime(args: &Args, stdout: &mut impl Write) -> anyhow::Result<()
     bail!("scheduler did not complete request {request_id} before the tick limit")
 }
 
+fn runtime_config_from_args(args: &Args) -> NativeRuntimeConfig {
+    let mut config = NativeRuntimeConfig::default();
+    config.context.n_ctx = Some(args.ctx_size.min(i32::MAX as u32) as i32);
+    config.context.n_batch = Some(args.batch_size.min(i32::MAX as u32) as i32);
+    config.context.n_ubatch = Some(args.batch_size.min(i32::MAX as u32) as i32);
+    config.context.n_parallel = Some(1);
+    config.context.n_threads = Some(args.threads);
+    config.context.n_threads_batch = Some(args.threads);
+    if let Some(gpu_layers) = args.gpu_layers {
+        config.placement.gpu_layers = GpuLayerConfig::from_layer_count(gpu_layers);
+    }
+    config.sampling = SamplingRuntimeConfig {
+        temperature: Some(args.temperature),
+        top_k: Some(args.top_k),
+        top_p: Some(args.top_p),
+        min_p: Some(args.min_p),
+        seed: (args.seed != u32::MAX).then_some(args.seed),
+        ..SamplingRuntimeConfig::default()
+    };
+    if args.temperature <= 0.0 {
+        config.sampling.top_k = Some(1);
+    }
+    config
+}
+
 fn print_stats(mode: CliStatsMode, stats: RuntimeObservabilityMetrics) -> io::Result<()> {
+    let mut stderr = io::stderr().lock();
+    print_stats_to_writer(mode, stats, &mut stderr)
+}
+
+fn print_stats_to_writer(
+    mode: CliStatsMode,
+    stats: RuntimeObservabilityMetrics,
+    writer: &mut impl Write,
+) -> io::Result<()> {
     if mode == CliStatsMode::Off {
         return Ok(());
     }
 
-    let mut stderr = io::stderr().lock();
-    writeln!(stderr)?;
-    writeln!(stderr, "stats:")?;
-    writeln!(stderr, "  input_tokens: {}", stats.input_tokens)?;
-    writeln!(stderr, "  output_tokens: {}", stats.output_tokens)?;
-    writeln!(stderr, "  prefill_tokens: {}", stats.prefill_tokens)?;
-    writeln!(stderr, "  cache_hits: {}", stats.cache_hits)?;
-    write_optional_ms(&mut stderr, "ttft_ms", stats.ttft_ms)?;
-    write_optional_ms(&mut stderr, "inter_token_ms", stats.itl_avg_ms)?;
-    write_optional_ms(&mut stderr, "e2e_ms", stats.e2e_ms)?;
-    write_optional_ms(&mut stderr, "prefill_ms", stats.prefill_ms)?;
-    write_optional_ms(&mut stderr, "decode_ms", stats.decode_ms)?;
+    writeln!(writer)?;
+    writeln!(writer, "stats:")?;
+    writeln!(writer, "  input_tokens: {}", stats.input_tokens)?;
+    writeln!(writer, "  output_tokens: {}", stats.output_tokens)?;
+    writeln!(writer, "  prefill_tokens: {}", stats.prefill_tokens)?;
+    writeln!(writer, "  cache_hits: {}", stats.cache_hits)?;
+    write_optional_ms(writer, "ttft_ms", stats.ttft_ms)?;
+    write_optional_ms(writer, "inter_token_ms", stats.itl_avg_ms)?;
+    write_optional_ms(writer, "e2e_ms", stats.e2e_ms)?;
+    write_optional_ms(writer, "prefill_ms", stats.prefill_ms)?;
+    write_optional_ms(writer, "decode_ms", stats.decode_ms)?;
     write_token_rate(
-        &mut stderr,
+        writer,
         "e2e_tokens_per_second",
         stats.output_tokens,
         stats.e2e_ms,
     )?;
     write_token_rate(
-        &mut stderr,
+        writer,
         "decode_tokens_per_second",
         stats.output_tokens,
         stats.decode_ms,
     )?;
 
     if mode == CliStatsMode::Profile {
-        write_optional_ms(&mut stderr, "backend_ms", stats.native_gpu_ms)?;
-        write_optional_ms(&mut stderr, "sync_ms", stats.native_sync_ms)?;
-        write_optional_ms(&mut stderr, "engine_overhead_ms", stats.native_logic_ms)?;
+        write_optional_ms(writer, "backend_ms", stats.native_gpu_ms)?;
+        write_optional_ms(writer, "sync_ms", stats.native_sync_ms)?;
+        write_optional_ms(writer, "engine_overhead_ms", stats.native_logic_ms)?;
     }
 
     Ok(())
@@ -272,7 +295,3 @@ fn write_token_rate(
     }
     Ok(())
 }
-
-#[cfg(test)]
-#[path = "tests/main_tests.rs"]
-mod main_tests;

@@ -1,4 +1,6 @@
-//! Unit tests for the parent module.
+//! Tests the `map` module in `cogentlm-client`.
+//!
+//! Covers endpoint resolution, remote configuration, facade validation, and run wrappers with deterministic fakes rather than a live local engine.
 
 use cogentlm_engine::engine::SamplingRuntimeConfig;
 

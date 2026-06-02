@@ -1,4 +1,6 @@
-//! Unit tests for the parent module.
+//! Tests the `runtime::scheduler::slot_state` module in `cogentlm-engine`.
+//!
+//! Covers scheduler planning, budget accounting, slot state, and flow decisions with deterministic in-memory fixtures.
 
 use super::*;
 use crate::runtime::session::{CacheCandidate, KvCacheAdmission, SequenceMirror};

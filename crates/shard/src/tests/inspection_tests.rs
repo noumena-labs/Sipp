@@ -1,3 +1,7 @@
+//! Tests the `inspection` module in `cogentlm-shard`.
+//!
+//! Covers shard and GGUF inspection helpers with deterministic byte fixtures and filesystem-free value checks where possible.
+
 use super::*;
 
 enum TestValue<'a> {

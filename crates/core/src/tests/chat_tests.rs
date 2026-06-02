@@ -1,4 +1,6 @@
-//! Unit tests for the parent module.
+//! Tests the `chat` module in `cogentlm-core`.
+//!
+//! Covers shared public value types and chat/message helpers used by engine, providers, and bindings.
 
 use super::ChatRole;
 

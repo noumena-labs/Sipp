@@ -1,4 +1,6 @@
-//! Unit tests for the parent module.
+//! Tests the `runtime::inference_runtime::numeric` module in `cogentlm-engine`.
+//!
+//! Covers deterministic inference-runtime helpers, state transitions, and error paths while avoiding native model execution unless a test is explicitly ignored.
 
 use super::*;
 

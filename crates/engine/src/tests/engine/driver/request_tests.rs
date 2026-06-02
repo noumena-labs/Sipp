@@ -1,4 +1,6 @@
-//! Unit tests for the parent module.
+//! Tests the `engine::driver::request` module in `cogentlm-engine`.
+//!
+//! Covers driver futures, command handling, event emission, and request mapping with model-free channels or explicitly ignored model smoke tests.
 
 use std::sync::{Arc, Mutex};
 

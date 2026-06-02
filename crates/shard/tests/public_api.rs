@@ -1,3 +1,7 @@
+//! Integration tests for the `cogentlm-shard` crate-level public_api surface.
+//!
+//! Covers shard and GGUF inspection helpers with deterministic byte fixtures and filesystem-free value checks where possible.
+
 use cogentlm_shard::{BrowserCacheLayout, BrowserCachePolicy};
 
 #[test]

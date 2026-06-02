@@ -1,4 +1,6 @@
-//! Unit tests for the parent module.
+//! Tests the `runtime::request::request_queue` module in `cogentlm-engine`.
+//!
+//! Covers runtime support modules with deterministic in-memory fixtures and no native model execution.
 
 use std::sync::Arc;
 

@@ -1,3 +1,7 @@
+//! Integration tests for the `cogentlm-client` crate-level public_api surface.
+//!
+//! Covers endpoint resolution, remote configuration, facade validation, and run wrappers with deterministic fakes rather than a live local engine.
+
 use cogentlm_client::{
     CogentClient, CogentError, CogentQueryRequest, CogentTextOptions, EndpointRef, LocalTextOptions,
 };

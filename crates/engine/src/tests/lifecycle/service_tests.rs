@@ -1,7 +1,11 @@
-//! Unit tests for the parent module.
+//! Tests the `lifecycle::service` module in `cogentlm-engine`.
+//!
+//! Covers lifecycle registry, storage, browser, service, and pairing behavior with temporary storage and pure fixtures instead of native runtime loading.
 
 use super::helpers::model_id_from_plan;
 use super::*;
+use crate::engine::protocol::EngineStatus;
+use crate::engine::{ChatMessage, ChatRequest, ChatRole, EmbedOptions, EmbedRequest, QueryRequest};
 use crate::lifecycle::test_support::{some_string, strings, TempDir};
 use crate::lifecycle::{
     model_entry_from_assets, AssetInspection, AssetRecord, AssetRole, AssetSource, ModelAssetKind,
@@ -151,4 +155,44 @@ fn service_rejects_unresolved_vision_model_on_load() {
     .expect_err("not ready");
 
     assert!(matches!(error, ModelError::InvalidModelPairing(_)));
+}
+
+#[test]
+fn unloaded_service_reports_idle_and_rejects_runtime_facades() {
+    let root = TempDir::new("service", "unloaded-facades");
+    let mut service = ModelService::local(root.path.join("store")).expect("service");
+
+    let state = block_on(service.state()).expect("idle state");
+    assert_eq!(state.status, EngineStatus::Idle);
+    assert!(state.model.is_none());
+    block_on(service.unload()).expect("unload without current model is a no-op");
+
+    let query_error = service
+        .query(QueryRequest::new("hello"))
+        .err()
+        .expect("query without a loaded model");
+    let chat_error = service
+        .chat(ChatRequest::new(vec![ChatMessage::new(
+            ChatRole::User,
+            "hello",
+        )]))
+        .err()
+        .expect("chat without a loaded model");
+    let embed_error = service
+        .embed(EmbedRequest {
+            input: "hello".to_string(),
+            options: EmbedOptions::default(),
+        })
+        .err()
+        .expect("embed without a loaded model");
+    let subscribe_error = service
+        .subscribe_events()
+        .expect_err("subscribe without a loaded model");
+
+    for error in [query_error, chat_error, embed_error, subscribe_error] {
+        assert!(matches!(
+            error,
+            ModelError::ModelNotFound(message) if message == "no model is loaded"
+        ));
+    }
 }
