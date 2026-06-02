@@ -69,7 +69,7 @@ Examples:
   cargo xtask run apps serve benchmark --mode preview --port 4173
 
 The apps group has no app-level `all` command. Build and serve commands target
-one app at a time. App tests live under `cargo xtask test whitebox --suite app-ts`.";
+one app at a time. App tests live under `cargo xtask test run --suite app-ts`.";
 
 const RUN_LLAMA_HELP: &str = "\
 Build standalone llama.cpp targets and run backend operation checks.
@@ -80,47 +80,29 @@ Examples:
   cargo xtask run llama backend-ops --backend vulkan --mode support
   cargo xtask run llama backend-ops --backend cuda --mode perf --op MUL_MAT
 
-Correctness mode lives under `cargo xtask test interface --suite llama-backend-ops`.
+Correctness mode lives under `cargo xtask test run --suite llama-backend-ops`.
 The run command defaults to support probing.";
 
 const TEST_HELP: &str = "\
-Run white-box tests, interface tests, coverage, and aggregate profiles.
+List, run, and verify cataloged workspace tests.
 
 Examples:
   cargo xtask test list
-  cargo xtask test list --category whitebox --cases --format json
-  cargo xtask test whitebox --suite rust-crates --package cogentlm-core
-  cargo xtask test interface --suite node-package --backend cpu
-  cargo xtask test coverage --scope whitebox --backend cpu
-  cargo xtask test all --profile contributor
-  cargo xtask test all --profile ci
+  cargo xtask test list --category whitebox --cases --search router --format json
+  cargo xtask test run
+  cargo xtask test run --category whitebox
+  cargo xtask test run --suite rust-crates --package cogentlm-core
+  cargo xtask test run --suite node-package --backend cpu
+  cargo xtask test verify --category whitebox
+  cargo xtask test verify --changed
 
 Model-backed tests default to the setup sample model cache under .build/models
 when --model is omitted.
 
-Run `cargo xtask test list` to see profile contents and suite requirements.";
+`test run` executes suites and writes .build/test and .build/coverage artifacts.
+`test verify` analyzes existing artifacts and test structure without running tests.
 
-const TEST_ALL_HELP: &str = "\
-Run a named aggregate test profile.
-
-Profiles are cumulative and intentionally small-to-large:
-  contributor  layout + xtask
-               Public-safe check for fork PRs; no private submodules,
-               browser toolchains, model downloads, or GPU requirements.
-
-  quick        contributor + rust-crates
-               Fast local native confidence check for Rust/core changes.
-
-  ci           quick + package-ts + rust-public-api
-               Internal PR/master gate. Exercises package TypeScript and
-               public Rust API checks in addition to quick checks.
-
-  full         every cataloged suite
-               Nightly/release gate. Includes Rust bindings, app TypeScript,
-               CLI, Node, Python, browser runtime, model smoke, and
-               llama.cpp backend operation checks.
-
-Use `cargo xtask test list` for the exact suite table and requirements.";
+Run `cargo xtask test list` to see suite requirements.";
 
 /// Top-level xtask command-line arguments.
 #[derive(Parser)]
@@ -353,21 +335,12 @@ pub enum TestCommands {
     /// List known test suites and optionally discover test cases.
     List(TestListArgs),
 
-    /// Run white-box implementation tests.
-    Whitebox(TestWhiteboxArgs),
-
-    /// Run black-box public interface tests.
+    /// Run cataloged tests selected by suite or category.
     #[command(after_long_help = BACKEND_HELP)]
-    Interface(TestInterfaceArgs),
+    Run(TestRunArgs),
 
-    /// Run coverage over the cataloged test suites.
-    #[command(after_long_help = BACKEND_HELP)]
-    Coverage(TestCoverageArgs),
-
-    /// Run an aggregate test profile.
-    #[command(after_long_help = BACKEND_HELP)]
-    #[command(long_about = TEST_ALL_HELP)]
-    All(TestAllArgs),
+    /// Verify test structure and existing coverage artifacts.
+    Verify(TestVerifyArgs),
 }
 
 /// Options for listing test suites and cases.
@@ -375,77 +348,41 @@ pub enum TestCommands {
 pub struct TestListArgs {
     /// Category to include in the listing.
     #[arg(long, value_enum, default_value = "all")]
-    pub category: TestListCategory,
+    pub category: TestCategoryFilter,
+
+    /// Suite id to include. Repeat to include multiple suites.
+    #[arg(long, value_enum)]
+    pub suite: Vec<TestSuiteId>,
 
     /// Include individual test cases where they can be discovered cheaply.
     #[arg(long)]
     pub cases: bool,
+
+    /// Search suite metadata and discoverable case names or paths.
+    #[arg(long)]
+    pub search: Option<String>,
 
     /// Output format.
     #[arg(long, value_enum, default_value = "text")]
     pub format: TestListFormat,
 }
 
-/// Options for white-box implementation tests.
+/// Options for running cataloged tests.
 #[derive(Args)]
-pub struct TestWhiteboxArgs {
-    /// Suite id to run, or `all`.
+pub struct TestRunArgs {
+    /// Category to run.
     #[arg(long, value_enum, default_value = "all")]
-    pub suite: TestSuiteId,
+    pub category: TestCategoryFilter,
+
+    /// Suite id to run. Repeat to run multiple suites.
+    #[arg(long, value_enum)]
+    pub suite: Vec<TestSuiteId>,
 
     /// Rust package filter for the `rust-crates` suite.
     #[arg(long)]
     pub package: Option<String>,
-}
 
-/// Options for black-box public interface tests.
-#[derive(Args)]
-pub struct TestInterfaceArgs {
-    /// Suite id to run, or `all`.
-    #[arg(long, value_enum, default_value = "all")]
-    pub suite: TestSuiteId,
-
-    /// Backend passed to backend-aware interface suites.
-    #[arg(long, short, value_enum, default_value = "cpu")]
-    pub backend: Backend,
-
-    /// GGUF model for the `model-smoke` suite. Defaults to .build/models.
-    #[arg(long)]
-    pub model: Option<PathBuf>,
-
-    /// Do not download the default sample model when `model-smoke` has no --model.
-    #[arg(long)]
-    pub offline: bool,
-}
-
-/// Options for coverage collection.
-#[derive(Args)]
-pub struct TestCoverageArgs {
-    /// Coverage scope to collect.
-    #[arg(long, value_enum, default_value = "whitebox")]
-    pub scope: TestCoverageScope,
-
-    /// Backend used by Node/Python/model coverage when --scope all is selected.
-    #[arg(long, short, value_enum, default_value = "cpu")]
-    pub backend: Backend,
-
-    /// GGUF model used by model-backed coverage when scope is `all`.
-    #[arg(long)]
-    pub model: Option<PathBuf>,
-
-    /// Do not download the default sample model when --scope all has no --model.
-    #[arg(long)]
-    pub offline: bool,
-}
-
-/// Options for the aggregate test workflow.
-#[derive(Args)]
-pub struct TestAllArgs {
-    /// Aggregate test profile to run. See this command's help for suite contents.
-    #[arg(long, value_enum, default_value = "quick")]
-    pub profile: TestProfile,
-
-    /// Backend passed only to backend-aware suites in the selected profile.
+    /// Backend passed to backend-aware suites.
     #[arg(long, short, value_enum, default_value = "cpu")]
     pub backend: Backend,
 
@@ -458,15 +395,42 @@ pub struct TestAllArgs {
     pub offline: bool,
 }
 
-/// Category filter for test listing.
+/// Options for test and coverage verification.
+#[derive(Args)]
+pub struct TestVerifyArgs {
+    /// Category to verify.
+    #[arg(long, value_enum, default_value = "all")]
+    pub category: TestCategoryFilter,
+
+    /// Suite id to verify. Repeat to include multiple suites.
+    #[arg(long, value_enum)]
+    pub suite: Vec<TestSuiteId>,
+
+    /// Validate that changed source files have matching catalog-owned test changes.
+    #[arg(long)]
+    pub changed: bool,
+}
+
+/// Category filter for test listing, running, and verification.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub enum TestListCategory {
+pub enum TestCategoryFilter {
     /// Include white-box and interface suites.
     All,
     /// Include implementation-oriented white-box suites.
     Whitebox,
     /// Include public interface black-box suites.
     Interface,
+}
+
+impl TestCategoryFilter {
+    /// Stable category filter label.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TestCategoryFilter::All => "all",
+            TestCategoryFilter::Whitebox => "whitebox",
+            TestCategoryFilter::Interface => "interface",
+        }
+    }
 }
 
 /// Output format for `test list`.
@@ -481,10 +445,6 @@ pub enum TestListFormat {
 /// Test suite selector.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, ValueEnum)]
 pub enum TestSuiteId {
-    /// Select every suite in the requested category.
-    All,
-    /// Test layout and catalog ownership checks.
-    Layout,
     /// xtask CLI and orchestration unit tests.
     Xtask,
     /// Rust unit tests for core workspace crates.
@@ -515,8 +475,6 @@ impl TestSuiteId {
     /// Stable CLI and JSON suite label.
     pub fn as_str(&self) -> &'static str {
         match self {
-            TestSuiteId::All => "all",
-            TestSuiteId::Layout => "layout",
             TestSuiteId::Xtask => "xtask",
             TestSuiteId::RustCrates => "rust-crates",
             TestSuiteId::RustBindings => "rust-bindings",
@@ -529,62 +487,6 @@ impl TestSuiteId {
             TestSuiteId::BrowserRuntime => "browser-runtime",
             TestSuiteId::ModelSmoke => "model-smoke",
             TestSuiteId::LlamaBackendOps => "llama-backend-ops",
-        }
-    }
-}
-
-/// Coverage scope.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub enum TestCoverageScope {
-    /// White-box suites only.
-    Whitebox,
-    /// White-box plus interface suites.
-    All,
-}
-
-/// Aggregate test profile.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub enum TestProfile {
-    /// Public contributor check with no private submodules or downloads.
-    Contributor,
-    /// Fast local confidence check.
-    Quick,
-    /// Internal pull-request and master CI gate.
-    Ci,
-    /// Full release/nightly gate.
-    Full,
-}
-
-impl TestProfile {
-    /// Stable profile label.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            TestProfile::Contributor => "contributor",
-            TestProfile::Quick => "quick",
-            TestProfile::Ci => "ci",
-            TestProfile::Full => "full",
-        }
-    }
-
-    /// Human-readable profile summary.
-    pub fn summary(&self) -> &'static str {
-        match self {
-            TestProfile::Contributor => {
-                "layout + xtask; public-safe, no private submodules or downloads"
-            }
-            TestProfile::Quick => "contributor + rust-crates; fast local Rust/core check",
-            TestProfile::Ci => "quick + package-ts + rust-public-api; internal PR/master gate",
-            TestProfile::Full => "every cataloged suite; nightly/release validation",
-        }
-    }
-}
-
-impl TestCoverageScope {
-    /// Stable scope label.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            TestCoverageScope::Whitebox => "whitebox",
-            TestCoverageScope::All => "all",
         }
     }
 }

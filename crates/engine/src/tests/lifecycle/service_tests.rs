@@ -41,7 +41,7 @@ fn model_id_is_stable_for_asset_order() {
 }
 
 #[test]
-#[ignore = "requires repo-root t5-small-f16.gguf fixture; run model-backed coverage through xtask test model-smoke"]
+#[ignore = "requires repo-root t5-small-f16.gguf fixture; run model-backed checks through xtask test run --suite model-smoke"]
 fn t5_encoder_decoder_fixture_is_available() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")

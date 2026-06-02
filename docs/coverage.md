@@ -1,31 +1,52 @@
 # Coverage
 
-CogentLM coverage is driven through the same test catalog used by `cargo xtask test list`.
-General test profile guidance lives in [testing.md](testing.md).
+CogentLM coverage is driven through the same test catalog used by
+`cargo xtask test list`. General test command guidance lives in
+[testing.md](testing.md).
 
 ## Commands
 
 ```bash
 cargo xtask test list
 cargo xtask test list --category whitebox --cases --format json
-cargo xtask test all --profile contributor
-cargo xtask test coverage --scope whitebox --backend cpu
-cargo xtask test coverage --scope all --backend cpu
+cargo xtask test run --category whitebox
+cargo xtask test verify --category whitebox
+cargo xtask test verify --suite node-package
+cargo xtask test verify --changed
 ```
 
-`--scope whitebox` collects Rust/native coverage for first-party crates and Rust binding crates. `--scope all` also runs interface-oriented Node and Python wrapper coverage plus browser/model interface smokes.
+`test run` is the only command that executes test suites and creates fresh
+coverage data. Coverage-capable suites write artifacts as part of the run:
+Rust through `cargo-llvm-cov`, Node through `c8`, and Python through
+`pytest-cov`.
 
-`test list --format json` is the stable catalog surface used by CI and contributors. Each suite entry includes `id`, `category`, `description`, `profiles`, `requirements`, `backendPolicy`, `coverage`, and `caseDiscovery`. Use `--cases` when a tool needs the discoverable files and case names that map to the suite runner.
+`test verify` defaults to all coverage-capable suites. It does not execute test
+suites, build bindings, download models, or run smoke tests. Use
+`--category` or repeat `--suite` to narrow which existing coverage artifacts are
+analyzed. Explicitly selecting a suite that is not coverage-capable fails with a
+clear error.
+
+`--changed` validates that changed first-party source files owned by the
+selected suites have matching changed tests owned by the same catalog suites.
+`test verify` also checks catalog ownership and test/runtime code separation so
+tests do not live inside runtime source files.
+
+`test list --format json` is the stable catalog surface used by CI and
+contributors. Each suite entry includes `id`, `category`, `description`,
+`requirements`, `sourceRoots`, `backendPolicy`, `coverage`, and
+`caseDiscovery`. Use `--cases` when a tool needs the discoverable files and case
+names that map to the suite runner.
 
 ## Tools
 
-Coverage requires:
+Coverage reporting uses the tools required by the selected report areas:
 
-- `cargo-llvm-cov` for Rust/native reports.
-- `c8` for Node wrapper reports.
-- `pytest-cov` for Python wrapper reports.
+- `cargo-llvm-cov` for Rust/native execution and report rendering.
+- `c8` for Node wrapper coverage during `test run --suite node-package`.
+- `pytest-cov` for Python wrapper coverage during `test run --suite python-package`.
 
-The CI coverage workflow installs `cargo-llvm-cov`; Node and Python coverage tools are declared in the binding package dev dependencies.
+`test verify` only reads existing coverage artifacts and renders summaries from
+them.
 
 ## Outputs
 
@@ -37,10 +58,18 @@ Reports are written under `.build/coverage/`:
 - `baseline.json`
 - `coverage-summary.md`
 
-The baseline includes first-party `crates/` and `bindings/` code. It intentionally excludes `packages/`, `apps/`, generated outputs, caches, tests, examples, and `third_party/`.
+Test command reports are written under `.build/test/`:
+
+- `run-report.json` and `run-report.md`
+- `verify-report.json` and `verify-report.md`
+
+The baseline includes first-party `crates/` and `bindings/` code. It
+intentionally excludes generated outputs, caches, tests, examples, and
+`third_party/`.
 
 ## Policy
 
-The first implementation records the baseline and does not fail on percentage thresholds. It does fail when an enabled coverage area produces an empty first-party report: Rust/native for `--scope whitebox`, and Rust/native plus Node/Python wrappers for `--scope all`. Thresholds should be added after the baseline is stable and the largest uncovered first-party areas are addressed.
-
-Public contributor CI uses `cargo xtask test all --profile contributor`, which avoids private submodules, sample model downloads, browser toolchains, and GPU/backend requirements. Internal CI and scheduled workflows keep the broader native, WASM, interface, model, and coverage gates.
+The first implementation records the baseline and does not fail on percentage
+thresholds. It does fail when an enabled coverage area produces an empty
+first-party report. Thresholds should be added after the baseline is stable and
+the largest uncovered first-party areas are addressed.

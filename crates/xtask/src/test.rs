@@ -1,9 +1,9 @@
 //! Cataloged workspace test and coverage orchestration.
 
 use crate::cli::{
-    Backend, LlamaBackendOpsMode, LlamaBackendOpsOutput, RunLlamaBackendOpsArgs, TestAllArgs,
-    TestCommands, TestCoverageArgs, TestCoverageScope, TestInterfaceArgs, TestListArgs,
-    TestListCategory, TestListFormat, TestProfile, TestSuiteId, TestWhiteboxArgs,
+    Backend, LlamaBackendOpsMode, LlamaBackendOpsOutput, RunLlamaBackendOpsArgs,
+    TestCategoryFilter, TestCommands, TestListArgs, TestListFormat, TestRunArgs, TestSuiteId,
+    TestVerifyArgs,
 };
 use crate::output;
 use crate::sample_model::{self, SampleModelOptions};
@@ -12,22 +12,17 @@ use crate::toolchains::env::apply_toolchains;
 use crate::toolchains::python::{apply_uv_env, setup_uv};
 use crate::utils::{ensure_playwright_chromium, BuildContext};
 use anyhow::{Context, Result};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use xshell::{cmd, Shell};
 
 const DEFAULT_SMOKE_PROMPT: &str = "Describe browser LLM inference.";
-const RUST_GENERATION_SMOKE_EXAMPLES: &[&str] = &["query", "chat", "embed"];
-const NODE_GENERATION_SMOKE_SCRIPTS: &[&str] = &[
-    "examples/query.mjs",
-    "examples/chat.mjs",
-    "examples/embed.mjs",
-];
-const PYTHON_GENERATION_SMOKE_SCRIPTS: &[&str] =
-    &["examples/query.py", "examples/chat.py", "examples/embed.py"];
+const RUST_GENERATION_SMOKE_EXAMPLES: &[&str] = &["query", "chat"];
+const NODE_GENERATION_SMOKE_SCRIPTS: &[&str] = &["examples/query.mjs", "examples/chat.mjs"];
+const PYTHON_GENERATION_SMOKE_SCRIPTS: &[&str] = &["examples/query.py", "examples/chat.py"];
 const APP_TEST_SUFFIX: &str = ".test.ts";
 const BROWSER_PACKAGE_TEST_DIR: &str = "packages/npm/tests";
 const SKIPPED_APP_TEST_DIRS: &[&str] = &[
@@ -63,40 +58,52 @@ const RUST_PUBLIC_API_TEST_TARGETS: &[RustTestTarget] = &[
 const CLI_BLACK_BOX_TEST_TARGETS: &[RustTestTarget] =
     &[RustTestTarget::test("cogentlm-cli", "cli_black_box")];
 
-const CONTRIBUTOR_PROFILE: &[TestProfile] = &[
-    TestProfile::Contributor,
-    TestProfile::Quick,
-    TestProfile::Ci,
-    TestProfile::Full,
+const XTASK_SOURCE_ROOTS: &[&str] = &["crates/xtask/src"];
+const RUST_CRATE_SOURCE_ROOTS: &[&str] = &[
+    "crates/core/src",
+    "crates/shard/src",
+    "crates/sys/src",
+    "crates/engine/src",
+    "crates/providers/src",
+    "crates/client/src",
+    "crates/cli/src",
 ];
-const QUICK_PROFILE: &[TestProfile] = &[TestProfile::Quick, TestProfile::Ci, TestProfile::Full];
-const CI_PROFILE: &[TestProfile] = &[TestProfile::Ci, TestProfile::Full];
-const FULL_PROFILE: &[TestProfile] = &[TestProfile::Full];
-const TEST_PROFILES: &[TestProfile] = &[
-    TestProfile::Contributor,
-    TestProfile::Quick,
-    TestProfile::Ci,
-    TestProfile::Full,
+const RUST_BINDING_SOURCE_ROOTS: &[&str] = &[
+    "bindings/node/src",
+    "bindings/python/src",
+    "bindings/wasm/src",
+    "bindings/wasm/native",
+];
+const PACKAGE_TS_SOURCE_ROOTS: &[&str] = &["packages/npm/src"];
+const APP_TS_SOURCE_ROOTS: &[&str] = &["apps"];
+const RUST_PUBLIC_API_SOURCE_ROOTS: &[&str] = &[
+    "crates/client/src",
+    "crates/providers/src",
+    "crates/shard/src",
+];
+const CLI_SOURCE_ROOTS: &[&str] = &["crates/cli/src"];
+const NODE_PACKAGE_SOURCE_ROOTS: &[&str] = &[
+    "bindings/node/src",
+    "bindings/node/index.js",
+    "bindings/node/index.d.ts",
+    "bindings/node/router.js",
+    "bindings/node/router.d.ts",
+];
+const PYTHON_PACKAGE_SOURCE_ROOTS: &[&str] = &["bindings/python/python/cogentlm"];
+const MODEL_SMOKE_SOURCE_ROOTS: &[&str] = &[
+    "crates/client/src",
+    "crates/cli/src",
+    "bindings/node",
+    "bindings/python",
 ];
 
 const TEST_SUITES: &[TestSuite] = &[
-    TestSuite {
-        id: TestSuiteId::Layout,
-        category: TestCategory::Whitebox,
-        description: "test layout and hygiene checks",
-        requirements: "filesystem",
-        profiles: CONTRIBUTOR_PROFILE,
-        coverage: false,
-        backend_policy: BackendPolicy::None,
-        runner: SuiteRunner::Layout,
-        discoverer: CaseDiscoverer::None,
-    },
     TestSuite {
         id: TestSuiteId::Xtask,
         category: TestCategory::Whitebox,
         description: "xtask CLI and orchestration unit tests",
         requirements: "cargo",
-        profiles: CONTRIBUTOR_PROFILE,
+        source_roots: XTASK_SOURCE_ROOTS,
         coverage: true,
         backend_policy: BackendPolicy::None,
         runner: SuiteRunner::RustTargets(XTASK_TEST_TARGETS),
@@ -107,7 +114,7 @@ const TEST_SUITES: &[TestSuite] = &[
         category: TestCategory::Whitebox,
         description: "Rust unit tests for core workspace crates",
         requirements: "cargo, native toolchain",
-        profiles: QUICK_PROFILE,
+        source_roots: RUST_CRATE_SOURCE_ROOTS,
         coverage: true,
         backend_policy: BackendPolicy::None,
         runner: SuiteRunner::RustTargets(RUST_CRATE_TEST_TARGETS),
@@ -118,7 +125,7 @@ const TEST_SUITES: &[TestSuite] = &[
         category: TestCategory::Whitebox,
         description: "Rust unit tests for Node, Python, and WASM binding crates",
         requirements: "cargo, native toolchain",
-        profiles: FULL_PROFILE,
+        source_roots: RUST_BINDING_SOURCE_ROOTS,
         coverage: true,
         backend_policy: BackendPolicy::None,
         runner: SuiteRunner::RustTargets(RUST_BINDING_TEST_TARGETS),
@@ -129,7 +136,7 @@ const TEST_SUITES: &[TestSuite] = &[
         category: TestCategory::Whitebox,
         description: "browser package TypeScript tests under packages/npm/tests",
         requirements: "bun, wasm build",
-        profiles: CI_PROFILE,
+        source_roots: PACKAGE_TS_SOURCE_ROOTS,
         coverage: false,
         backend_policy: BackendPolicy::None,
         runner: SuiteRunner::PackageTs,
@@ -140,7 +147,7 @@ const TEST_SUITES: &[TestSuite] = &[
         category: TestCategory::Whitebox,
         description: "browser app TypeScript tests discovered under apps/",
         requirements: "bun, wasm build",
-        profiles: FULL_PROFILE,
+        source_roots: APP_TS_SOURCE_ROOTS,
         coverage: false,
         backend_policy: BackendPolicy::None,
         runner: SuiteRunner::AppTs,
@@ -151,7 +158,7 @@ const TEST_SUITES: &[TestSuite] = &[
         category: TestCategory::Interface,
         description: "crate-level public API integration tests",
         requirements: "cargo, native toolchain",
-        profiles: CI_PROFILE,
+        source_roots: RUST_PUBLIC_API_SOURCE_ROOTS,
         coverage: true,
         backend_policy: BackendPolicy::None,
         runner: SuiteRunner::RustTargets(RUST_PUBLIC_API_TEST_TARGETS),
@@ -162,7 +169,7 @@ const TEST_SUITES: &[TestSuite] = &[
         category: TestCategory::Interface,
         description: "CLI black-box integration test",
         requirements: "cargo, native toolchain",
-        profiles: FULL_PROFILE,
+        source_roots: CLI_SOURCE_ROOTS,
         coverage: true,
         backend_policy: BackendPolicy::None,
         runner: SuiteRunner::RustTargets(CLI_BLACK_BOX_TEST_TARGETS),
@@ -173,7 +180,7 @@ const TEST_SUITES: &[TestSuite] = &[
         category: TestCategory::Interface,
         description: "Node binding build/import/router tests",
         requirements: "cargo, node",
-        profiles: FULL_PROFILE,
+        source_roots: NODE_PACKAGE_SOURCE_ROOTS,
         coverage: true,
         backend_policy: BackendPolicy::Any,
         runner: SuiteRunner::NodePackage,
@@ -184,7 +191,7 @@ const TEST_SUITES: &[TestSuite] = &[
         category: TestCategory::Interface,
         description: "Python wheel install/import pytest suite",
         requirements: "cargo, uv, python",
-        profiles: FULL_PROFILE,
+        source_roots: PYTHON_PACKAGE_SOURCE_ROOTS,
         coverage: true,
         backend_policy: BackendPolicy::ConcreteOnly,
         runner: SuiteRunner::PythonPackage,
@@ -195,7 +202,7 @@ const TEST_SUITES: &[TestSuite] = &[
         category: TestCategory::Interface,
         description: "Playwright browser runtime smoke",
         requirements: "bun, wasm build, playwright chromium",
-        profiles: FULL_PROFILE,
+        source_roots: &["apps/benchmark/src"],
         coverage: false,
         backend_policy: BackendPolicy::None,
         runner: SuiteRunner::BrowserRuntime,
@@ -204,10 +211,10 @@ const TEST_SUITES: &[TestSuite] = &[
     TestSuite {
         id: TestSuiteId::ModelSmoke,
         category: TestCategory::Interface,
-        description: "CLI/Rust/Node/Python local model examples",
+        description: "CLI/Rust/Node/Python local generation examples",
         requirements: "sample GGUF model, cargo, node, python",
-        profiles: FULL_PROFILE,
-        coverage: true,
+        source_roots: MODEL_SMOKE_SOURCE_ROOTS,
+        coverage: false,
         backend_policy: BackendPolicy::ConcreteOnly,
         runner: SuiteRunner::ModelSmoke,
         discoverer: CaseDiscoverer::None,
@@ -217,7 +224,7 @@ const TEST_SUITES: &[TestSuite] = &[
         category: TestCategory::Interface,
         description: "llama.cpp backend correctness operations",
         requirements: "cmake, ninja, native backend",
-        profiles: FULL_PROFILE,
+        source_roots: &["crates/sys/native"],
         coverage: false,
         backend_policy: BackendPolicy::Any,
         runner: SuiteRunner::LlamaBackendOps,
@@ -229,97 +236,83 @@ const TEST_SUITES: &[TestSuite] = &[
 pub fn run(sh: &Shell, ctx: &BuildContext, command: TestCommands) -> Result<()> {
     match command {
         TestCommands::List(args) => run_list(ctx, &args),
-        TestCommands::Whitebox(args) => run_whitebox(sh, ctx, &args),
-        TestCommands::Interface(args) => run_interface(sh, ctx, &args),
-        TestCommands::Coverage(args) => run_coverage(sh, ctx, &args),
-        TestCommands::All(args) => run_all(sh, ctx, &args),
+        TestCommands::Run(args) => run_tests(sh, ctx, &args),
+        TestCommands::Verify(args) => run_verify(sh, ctx, &args),
     }
 }
 
 fn run_list(ctx: &BuildContext, args: &TestListArgs) -> Result<()> {
-    let suites = TEST_SUITES
-        .iter()
-        .filter(|suite| list_category_matches(args.category, suite.category))
-        .collect::<Vec<_>>();
+    let mut suites = selected_suites(&args.suite, args.category)?;
+    let mut cases = if args.cases || args.search.is_some() {
+        discover_cases(ctx, &suites)?
+    } else {
+        Vec::new()
+    };
+    if let Some(search) = args.search.as_deref() {
+        apply_search_filter(&mut suites, &mut cases, search);
+    }
+    if !args.cases {
+        cases.clear();
+    }
 
     match args.format {
-        TestListFormat::Text => print_text_list(ctx, &suites, args.cases),
-        TestListFormat::Json => print_json_list(ctx, &suites, args.cases),
+        TestListFormat::Text => print_text_list(&suites, &cases),
+        TestListFormat::Json => print_json_list(&suites, &cases),
     }
 }
 
-fn run_whitebox(sh: &Shell, ctx: &BuildContext, args: &TestWhiteboxArgs) -> Result<()> {
-    let suites = selected_suites(&args.suite, TestCategory::Whitebox)?;
-    if args.package.is_some()
-        && suites
-            .iter()
-            .any(|suite| suite.id != TestSuiteId::RustCrates)
-    {
-        anyhow::bail!("--package is only supported with --suite rust-crates");
-    }
-    validate_suite_backends(&suites, Backend::Cpu)?;
-
-    for suite in suites {
-        run_suite(
-            sh,
-            ctx,
-            suite,
-            &SuiteRunOptions {
-                backend: Backend::Cpu,
-                model: None,
-                offline: false,
-                package: args.package.as_deref(),
-            },
-        )?;
-    }
-    Ok(())
-}
-
-fn run_interface(sh: &Shell, ctx: &BuildContext, args: &TestInterfaceArgs) -> Result<()> {
-    let suites = selected_suites(&args.suite, TestCategory::Interface)?;
+fn run_tests(sh: &Shell, ctx: &BuildContext, args: &TestRunArgs) -> Result<()> {
+    let suites = selected_suites(&args.suite, args.category)?;
+    validate_package_filter(&suites, args.package.as_deref())?;
     validate_suite_backends(&suites, args.backend)?;
-    for suite in suites {
-        run_suite(
-            sh,
-            ctx,
-            suite,
-            &SuiteRunOptions {
-                backend: args.backend,
-                model: args.model.as_deref(),
-                offline: args.offline,
-                package: None,
-            },
-        )?;
-    }
-    Ok(())
-}
 
-fn run_all(sh: &Shell, ctx: &BuildContext, args: &TestAllArgs) -> Result<()> {
-    let started_at = Instant::now();
-    let suites = TEST_SUITES
-        .iter()
-        .filter(|suite| suite.profiles.contains(&args.profile))
-        .collect::<Vec<_>>();
-    validate_suite_backends(&suites, args.backend)?;
-    output::phase(&format!("Test profile: {}", args.profile.as_str()));
-    for suite in suites {
-        run_suite(
-            sh,
-            ctx,
-            suite,
-            &SuiteRunOptions {
-                backend: args.backend,
-                model: args.model.as_deref(),
-                offline: args.offline,
-                package: None,
-            },
-        )?;
+    let options = SuiteRunOptions {
+        backend: args.backend,
+        model: args.model.as_deref(),
+        offline: args.offline,
+        package: args.package.as_deref(),
+    };
+    let mut coverage_state = RunCoverageState::default();
+    let mut completed_coverage_suites = Vec::new();
+    let mut report = RunReport::new(args, &suites);
+
+    for (index, suite) in suites.iter().enumerate() {
+        let started_at = Instant::now();
+        let result = run_suite(sh, ctx, suite, &options, &mut coverage_state);
+        let duration_ms = started_at.elapsed().as_millis();
+        match result {
+            Ok(()) => {
+                if suite.coverage {
+                    completed_coverage_suites.push(*suite);
+                    write_coverage_summary(
+                        &ctx.build_root().join("coverage"),
+                        coverage_report_areas(&completed_coverage_suites),
+                    )?;
+                }
+                report
+                    .suites
+                    .push(SuiteReport::passed(ctx, suite, duration_ms));
+                report.finish("passed");
+                write_run_report(ctx, &report)?;
+            }
+            Err(error) => {
+                let message = format!("{error:#}");
+                report
+                    .suites
+                    .push(SuiteReport::failed(ctx, suite, duration_ms, message));
+                for remaining in suites.iter().skip(index + 1) {
+                    report.suites.push(SuiteReport::not_run(ctx, remaining));
+                }
+                report.finish("failed");
+                write_run_report(ctx, &report)?;
+                return Err(error);
+            }
+        }
     }
-    output::success(format!(
-        "Test profile {} complete in {}",
-        args.profile.as_str(),
-        output::elapsed(started_at.elapsed())
-    ));
+
+    report.finish("passed");
+    write_run_report(ctx, &report)?;
+    output::path("Test run report", &test_run_report_json(ctx));
     Ok(())
 }
 
@@ -328,16 +321,16 @@ fn run_suite(
     ctx: &BuildContext,
     suite: &TestSuite,
     options: &SuiteRunOptions<'_>,
+    coverage_state: &mut RunCoverageState,
 ) -> Result<()> {
     match suite.runner {
-        SuiteRunner::Layout => run_layout(ctx),
         SuiteRunner::RustTargets(targets) => {
             let package = if suite.id == TestSuiteId::RustCrates {
                 options.package
             } else {
                 None
             };
-            run_rust_target_tests(sh, ctx, targets, package)
+            run_rust_target_tests(sh, ctx, targets, package, coverage_state)
         }
         SuiteRunner::PackageTs => run_package_ts_tests(sh, ctx),
         SuiteRunner::AppTs => run_app_ts_tests(sh, ctx),
@@ -349,15 +342,12 @@ fn run_suite(
     }
 }
 
-fn run_layout(ctx: &BuildContext) -> Result<()> {
-    output::phase("Test layout");
-    let mut violations = Vec::new();
-    collect_package_test_layout_violations(ctx, &mut violations)?;
-    collect_rust_test_layout_violations(ctx, &mut violations)?;
-    collect_catalog_ownership_violations(ctx, &mut violations)?;
+fn verify_test_structure(ctx: &BuildContext) -> Result<()> {
+    output::phase("Test structure");
+    let violations = collect_test_structure_violations(ctx)?;
 
     if violations.is_empty() {
-        output::success("Test layout check passed");
+        output::success("Test structure check passed");
         return Ok(());
     }
 
@@ -365,9 +355,17 @@ fn run_layout(ctx: &BuildContext) -> Result<()> {
         output::warning(violation);
     }
     anyhow::bail!(
-        "test layout check failed with {} violation(s)",
+        "test structure check failed with {} violation(s)",
         violations.len()
     )
+}
+
+fn collect_test_structure_violations(ctx: &BuildContext) -> Result<Vec<String>> {
+    let mut violations = Vec::new();
+    collect_package_test_layout_violations(ctx, &mut violations)?;
+    collect_rust_test_layout_violations(ctx, &mut violations)?;
+    collect_catalog_ownership_violations(ctx, &mut violations)?;
+    Ok(violations)
 }
 
 fn run_rust_target_tests(
@@ -375,39 +373,64 @@ fn run_rust_target_tests(
     ctx: &BuildContext,
     targets: &[RustTestTarget],
     package: Option<&str>,
+    coverage_state: &mut RunCoverageState,
 ) -> Result<()> {
     output::phase("Rust tests");
     let targets = filtered_rust_targets(targets, package)?;
-    run_rust_targets(sh, ctx, &targets, None)
+    run_rust_coverage_targets(sh, ctx, &targets, coverage_state)
 }
 
-fn run_rust_targets(
+fn run_rust_coverage_targets(
     sh: &Shell,
     ctx: &BuildContext,
     targets: &[RustTestTarget],
-    backend: Option<&Backend>,
+    coverage_state: &mut RunCoverageState,
 ) -> Result<()> {
+    ensure_cargo_llvm_cov()?;
+    let coverage_root = ctx.build_root().join("coverage");
+    let rust_dir = coverage_root.join("rust");
+    sh.create_dir(&rust_dir)?;
+    let rust_lcov = rust_dir.join("lcov.info");
+    let rust_html = rust_dir.join("html");
+
     let _dir = sh.push_dir(ctx.workspace_root());
     for target in targets {
         let package = target.package;
-        let mut cargo_test = cmd!(sh, "cargo test -p {package}");
+        let mut lcov_cmd = cmd!(
+            sh,
+            "cargo llvm-cov --lcov --output-path {rust_lcov} --ignore-filename-regex third_party|\\.build|target|tests|examples|packages|apps -p {package}"
+        );
+        if coverage_state.rust_started {
+            lcov_cmd = lcov_cmd.arg("--no-clean");
+        }
         if let Some(test_kind) = target.kind {
             match test_kind {
                 RustTestKind::Lib => {
-                    cargo_test = cargo_test.arg("--lib");
+                    lcov_cmd = lcov_cmd.arg("--lib");
                 }
                 RustTestKind::Bin(binary) => {
-                    cargo_test = cargo_test.arg("--bin").arg(binary);
+                    lcov_cmd = lcov_cmd.arg("--bin").arg(binary);
                 }
                 RustTestKind::Test(test_name) => {
-                    cargo_test = cargo_test.arg("--test").arg(test_name);
+                    lcov_cmd = lcov_cmd.arg("--test").arg(test_name);
                 }
                 RustTestKind::Package => {}
             }
         }
-        let cargo_test = apply_toolchains(sh, ctx, cargo_test, backend)?;
-        output::run_command(format!("Running {} Rust tests", target.label()), cargo_test)?;
+        let lcov_cmd = apply_toolchains(sh, ctx, lcov_cmd, None)?;
+        output::run_command(
+            format!("Running {} Rust coverage tests", target.label()),
+            lcov_cmd,
+        )?;
+        coverage_state.rust_started = true;
     }
+
+    let html_cmd = cmd!(
+        sh,
+        "cargo llvm-cov --html --no-run --output-dir {rust_html} --ignore-filename-regex third_party|\\.build|target|tests|examples|packages|apps"
+    );
+    let html_cmd = apply_toolchains(sh, ctx, html_cmd, None)?;
+    output::run_command("Writing Rust HTML coverage report", html_cmd)?;
     Ok(())
 }
 
@@ -446,12 +469,18 @@ fn run_node_package_tests(sh: &Shell, ctx: &BuildContext, backend: &Backend) -> 
     output::phase("Interface Node package tests");
     targets::node::build(sh, ctx, Some(backend))?;
 
+    let coverage_dir = ctx.build_root().join("coverage").join("node");
+    sh.create_dir(&coverage_dir)?;
+
     let node_dir = ctx.bindings_node_dir();
     let _node = sh.push_dir(&node_dir);
     for backend in node_test_backends(ctx, backend)? {
         output::run_command(
             format!("Running Node.js package tests ({})", backend.as_str()),
-            cmd!(sh, "node --test tests/router.test.mjs")
+            cmd!(
+                sh,
+                "bunx c8 --reporter=lcov --reports-dir {coverage_dir} node --test tests/router.test.mjs"
+            )
                 .env("COGENTLM_NODE_BACKEND", backend.as_str())
                 .env("COGENTLM_NODE_TEST_BACKEND", backend.as_str()),
         )?;
@@ -485,15 +514,23 @@ fn run_python_package_tests(sh: &Shell, ctx: &BuildContext, backend: &Backend) -
             ctx,
             cmd!(
                 sh,
-                "{uv_exe} pip install --python {python_exe} --force-reinstall {wheel} pytest"
+                "{uv_exe} pip install --python {python_exe} --force-reinstall {wheel} pytest pytest-cov"
             ),
         ),
     )?;
 
     let python_tests = ctx.bindings_python_dir().join("tests");
+    let coverage_dir = ctx.build_root().join("coverage").join("python");
+    sh.create_dir(&coverage_dir)?;
+    let python_lcov = coverage_dir.join("lcov.info");
+    let python_cobertura = coverage_dir.join("cobertura.xml");
+    let python_html = coverage_dir.join("html");
     output::run_command(
         "Running Python package pytest suite",
-        cmd!(sh, "{python_exe} -m pytest {python_tests}"),
+        cmd!(
+            sh,
+            "{python_exe} -m pytest {python_tests} --cov=cogentlm --cov-report=lcov:{python_lcov} --cov-report=xml:{python_cobertura} --cov-report=html:{python_html}"
+        ),
     )
 }
 
@@ -701,26 +738,93 @@ fn run_python_generation_smoke(
     Ok(())
 }
 
-fn run_coverage(sh: &Shell, ctx: &BuildContext, args: &TestCoverageArgs) -> Result<()> {
-    output::phase(&format!("Coverage: {}", args.scope.as_str()));
-    validate_coverage_options(args)?;
-    ensure_cargo_llvm_cov()?;
+fn run_verify(sh: &Shell, ctx: &BuildContext, args: &TestVerifyArgs) -> Result<()> {
+    let suites = selected_verify_suites(args)?;
+    output::phase("Test verification");
+    output::detail(
+        "Suites",
+        suites
+            .iter()
+            .map(|suite| suite.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+
+    let mut report = VerifyReport::new(args, &suites);
+    let mut failures = Vec::new();
+
+    let structure_result = verify_test_structure(ctx);
+    report.checks.push(VerifyCheckReport::from_result(
+        "test-structure",
+        &structure_result,
+    ));
+    if let Err(error) = structure_result {
+        failures.push(format!("{error:#}"));
+    }
+
+    if args.changed {
+        let changed_result = validate_changed_coverage(ctx, &suites);
+        report.checks.push(VerifyCheckReport::from_result(
+            "changed-test-ownership",
+            &changed_result,
+        ));
+        if let Err(error) = changed_result {
+            failures.push(format!("{error:#}"));
+        }
+    } else {
+        report
+            .checks
+            .push(VerifyCheckReport::skipped("changed-test-ownership"));
+    }
 
     let coverage_root = ctx.build_root().join("coverage");
-    let rust_dir = coverage_root.join("rust");
-    if coverage_root.exists() {
-        sh.remove_path(&coverage_root)?;
+    sh.create_dir(&coverage_root)?;
+
+    let report_areas = coverage_report_areas(&suites);
+    let coverage_result = (|| -> Result<CoverageSummaries> {
+        if report_areas.rust {
+            write_rust_coverage_reports(sh, ctx)?;
+        }
+        write_coverage_summary(&coverage_root, report_areas)
+    })();
+    report.checks.push(VerifyCheckReport::from_result(
+        "coverage-artifacts",
+        &coverage_result,
+    ));
+    match coverage_result {
+        Ok(summaries) => report.coverage = Some(summaries),
+        Err(error) => failures.push(format!("{error:#}")),
     }
+
+    let status = if failures.is_empty() {
+        "passed"
+    } else {
+        "failed"
+    };
+    report.finish(status);
+    write_verify_report(ctx, &report)?;
+    output::path("Test verification report", &test_verify_report_json(ctx));
+
+    if failures.is_empty() {
+        output::success(format!(
+            "Coverage reports verified under {}",
+            coverage_root.display()
+        ));
+        return Ok(());
+    }
+
+    anyhow::bail!("test verification failed: {}", failures.join("; "))
+}
+
+fn write_rust_coverage_reports(sh: &Shell, ctx: &BuildContext) -> Result<()> {
+    ensure_cargo_llvm_cov()?;
+    let coverage_root = ctx.build_root().join("coverage");
+    let rust_dir = coverage_root.join("rust");
     sh.create_dir(&rust_dir)?;
     let rust_lcov = rust_dir.join("lcov.info");
     let rust_html = rust_dir.join("html");
 
     let _root = sh.push_dir(ctx.workspace_root());
-    output::run_command(
-        "Cleaning Rust coverage counters",
-        cmd!(sh, "cargo llvm-cov clean --workspace"),
-    )?;
-    run_rust_coverage_tests(sh, ctx, args.scope)?;
     output::run_command(
         "Writing Rust LCOV report",
         cmd!(
@@ -735,169 +839,23 @@ fn run_coverage(sh: &Shell, ctx: &BuildContext, args: &TestCoverageArgs) -> Resu
             "cargo llvm-cov report --html --output-dir {rust_html} --ignore-filename-regex third_party|\\.build|target|tests|examples|packages|apps"
         ),
     )?;
-    drop(_root);
-
-    if args.scope == TestCoverageScope::All {
-        run_node_coverage(sh, ctx, &args.backend)?;
-        run_python_coverage(sh, ctx, &args.backend)?;
-        run_coverage_interface_smokes(sh, ctx, args)?;
-    }
-
-    write_coverage_summary(&coverage_root, args.scope)?;
-    output::success(format!(
-        "Coverage reports written to {}",
-        coverage_root.display()
-    ));
     Ok(())
 }
 
-fn run_rust_coverage_tests(sh: &Shell, ctx: &BuildContext, scope: TestCoverageScope) -> Result<()> {
-    let _dir = sh.push_dir(ctx.workspace_root());
-    for target in RUST_CRATE_TEST_TARGETS
-        .iter()
-        .chain(XTASK_TEST_TARGETS)
-        .chain(RUST_BINDING_TEST_TARGETS)
-    {
-        run_cargo_llvm_cov_target(sh, ctx, target)?;
-    }
-    if scope == TestCoverageScope::All {
-        for target in RUST_PUBLIC_API_TEST_TARGETS
-            .iter()
-            .chain(CLI_BLACK_BOX_TEST_TARGETS)
-        {
-            run_cargo_llvm_cov_target(sh, ctx, &target)?;
-        }
-    }
-    Ok(())
-}
-
-fn run_cargo_llvm_cov_target(
-    sh: &Shell,
-    ctx: &BuildContext,
-    target: &RustTestTarget,
-) -> Result<()> {
-    let package = target.package;
-    let mut coverage_cmd = cmd!(sh, "cargo llvm-cov --no-report -p {package}");
-    if let Some(test_kind) = target.kind {
-        match test_kind {
-            RustTestKind::Lib => {
-                coverage_cmd = coverage_cmd.arg("--lib");
-            }
-            RustTestKind::Bin(binary) => {
-                coverage_cmd = coverage_cmd.arg("--bin").arg(binary);
-            }
-            RustTestKind::Test(test_name) => {
-                coverage_cmd = coverage_cmd.arg("--test").arg(test_name);
-            }
-            RustTestKind::Package => {}
-        }
-    }
-    let coverage_cmd = apply_toolchains(sh, ctx, coverage_cmd, None)?;
-    output::run_command(
-        format!("Running coverage for {}", target.label()),
-        coverage_cmd,
-    )
-}
-
-fn run_node_coverage(sh: &Shell, ctx: &BuildContext, backend: &Backend) -> Result<()> {
-    output::phase("Node wrapper coverage");
-    targets::node::build(sh, ctx, Some(backend))?;
-
-    let coverage_dir = ctx.build_root().join("coverage").join("node");
-    sh.create_dir(&coverage_dir)?;
-    let node_dir = ctx.bindings_node_dir();
-    let _dir = sh.push_dir(&node_dir);
-    output::run_command(
-        "Installing Node binding dependencies",
-        cmd!(sh, "bun install"),
-    )?;
-    for backend in node_test_backends(ctx, backend)? {
-        output::run_command(
-            format!("Running Node c8 coverage ({})", backend.as_str()),
-            cmd!(
-                sh,
-                "bun run c8 --reporter=lcov --reporter=text-summary --reports-dir {coverage_dir} node --test tests/router.test.mjs"
-            )
-            .env("COGENTLM_NODE_BACKEND", backend.as_str())
-            .env("COGENTLM_NODE_TEST_BACKEND", backend.as_str()),
-        )?;
-    }
-    Ok(())
-}
-
-fn run_python_coverage(sh: &Shell, ctx: &BuildContext, backend: &Backend) -> Result<()> {
-    if *backend == Backend::All {
-        anyhow::bail!("python coverage requires a concrete backend");
-    }
-
-    output::phase("Python wrapper coverage");
-    let wheel = build_python_test_wheel(sh, ctx, backend)?;
-    let uv_exe = setup_uv(sh, ctx)?;
-    let coverage_dir = ctx.build_root().join("coverage").join("python");
-    sh.create_dir(&coverage_dir)?;
-    let lcov = coverage_dir.join("lcov.info");
-    let xml = coverage_dir.join("cobertura.xml");
-    let html = coverage_dir.join("html");
-    let venv_dir = ctx.tmp_dir().join("python-coverage").join(backend.as_str());
-    output::run_command(
-        "Creating Python coverage virtual environment",
-        apply_uv_env(
-            ctx,
-            cmd!(sh, "{uv_exe} venv --clear --python 3.12 {venv_dir}"),
-        ),
-    )?;
-    let python_exe = python_venv_exe(&venv_dir);
-    output::run_command(
-        "Installing Python coverage wheel",
-        apply_uv_env(
-            ctx,
-            cmd!(
-                sh,
-                "{uv_exe} pip install --python {python_exe} --force-reinstall {wheel} pytest pytest-cov"
-            ),
-        ),
-    )?;
-
-    let python_tests = ctx.bindings_python_dir().join("tests");
-    let python_source = ctx.bindings_python_dir().join("python").join("cogentlm");
-    output::run_command(
-        "Running Python pytest-cov",
-        cmd!(
-            sh,
-            "{python_exe} -m pytest {python_tests} --cov {python_source} --cov-branch --cov-report lcov:{lcov} --cov-report xml:{xml} --cov-report html:{html}"
-        ),
-    )
-}
-
-fn run_coverage_interface_smokes(
-    sh: &Shell,
-    ctx: &BuildContext,
-    args: &TestCoverageArgs,
-) -> Result<()> {
-    for suite_id in [TestSuiteId::BrowserRuntime, TestSuiteId::ModelSmoke] {
-        let suite = suite_by_id(suite_id)?;
-        run_suite(
-            sh,
-            ctx,
-            suite,
-            &SuiteRunOptions {
-                backend: args.backend,
-                model: args.model.as_deref(),
-                offline: args.offline,
-                package: None,
-            },
-        )?;
-    }
-    Ok(())
-}
-
-fn write_coverage_summary(coverage_root: &Path, scope: TestCoverageScope) -> Result<()> {
+fn write_coverage_summary(
+    coverage_root: &Path,
+    areas: CoverageReportAreas,
+) -> Result<CoverageSummaries> {
     let rust = parse_lcov_summary(&coverage_root.join("rust").join("lcov.info"))?;
     let node = parse_lcov_summary(&coverage_root.join("node").join("lcov.info"))?;
     let python = parse_lcov_summary(&coverage_root.join("python").join("lcov.info"))?;
-    ensure_non_empty_coverage("Rust/native", &rust)?;
-    if scope == TestCoverageScope::All {
+    if areas.rust {
+        ensure_non_empty_coverage("Rust/native", &rust)?;
+    }
+    if areas.node {
         ensure_non_empty_coverage("Node wrapper", &node)?;
+    }
+    if areas.python {
         ensure_non_empty_coverage("Python wrapper", &python)?;
     }
     let baseline = json!({
@@ -926,7 +884,7 @@ fn write_coverage_summary(coverage_root: &Path, scope: TestCoverageScope) -> Res
         .with_context(|| format!("failed to write {}", summary_path.display()))?;
     output::path("Coverage baseline", &baseline_path);
     output::path("Coverage summary", &summary_path);
-    Ok(())
+    Ok(CoverageSummaries { rust, node, python })
 }
 
 fn ensure_non_empty_coverage(label: &str, summary: &LcovSummary) -> Result<()> {
@@ -936,25 +894,233 @@ fn ensure_non_empty_coverage(label: &str, summary: &LcovSummary) -> Result<()> {
     Ok(())
 }
 
-fn print_text_list(ctx: &BuildContext, suites: &[&TestSuite], include_cases: bool) -> Result<()> {
-    print_text_profiles();
-    println!();
+fn coverage_report_areas(suites: &[&TestSuite]) -> CoverageReportAreas {
+    let mut areas = CoverageReportAreas::default();
+    for suite in suites {
+        match suite.runner {
+            SuiteRunner::RustTargets(_) => areas.rust = true,
+            SuiteRunner::NodePackage => areas.node = true,
+            SuiteRunner::PythonPackage => areas.python = true,
+            SuiteRunner::PackageTs
+            | SuiteRunner::AppTs
+            | SuiteRunner::BrowserRuntime
+            | SuiteRunner::ModelSmoke
+            | SuiteRunner::LlamaBackendOps => {}
+        }
+    }
+    areas
+}
+
+fn validate_changed_coverage(ctx: &BuildContext, suites: &[&TestSuite]) -> Result<()> {
+    output::phase("Coverage change validation");
+    let changed_paths = changed_workspace_files(ctx)?;
+    if changed_paths.is_empty() {
+        output::success("No changed files found for coverage validation");
+        return Ok(());
+    }
+
+    let test_ownership = catalog_file_ownership(ctx)?;
+    let changed_test_suites = changed_paths
+        .iter()
+        .filter_map(|path| test_ownership.get(path))
+        .flat_map(|owners| owners.iter().copied())
+        .collect::<BTreeSet<_>>();
+    let mut checked_sources = 0;
+    let mut violations = Vec::new();
+
+    for path in &changed_paths {
+        if test_ownership.contains_key(path) || !is_first_party_source_path(path) {
+            continue;
+        }
+        let owners = source_owner_suites(path, suites);
+        if owners.is_empty() {
+            continue;
+        }
+        checked_sources += 1;
+        if owners
+            .iter()
+            .any(|suite| changed_test_suites.contains(&suite.id))
+        {
+            continue;
+        }
+
+        violations.push(format!(
+            "{} changed, but no catalog-owned tests changed for suite(s): {}",
+            path,
+            owners
+                .iter()
+                .map(|suite| suite.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
+    if violations.is_empty() {
+        output::success(format!(
+            "Coverage change validation passed for {checked_sources} source file(s)"
+        ));
+        return Ok(());
+    }
+
+    for violation in &violations {
+        output::warning(violation);
+    }
+    anyhow::bail!(
+        "coverage change validation failed with {} source file(s) lacking matching test changes",
+        violations.len()
+    )
+}
+
+fn changed_workspace_files(ctx: &BuildContext) -> Result<BTreeSet<String>> {
+    let mut paths = BTreeSet::new();
+    collect_git_paths(
+        ctx,
+        &["diff", "--name-only", "--diff-filter=ACMRT", "HEAD"],
+        &mut paths,
+    )?;
+    collect_git_paths(
+        ctx,
+        &["ls-files", "--others", "--exclude-standard"],
+        &mut paths,
+    )?;
+    Ok(paths)
+}
+
+fn collect_git_paths(
+    ctx: &BuildContext,
+    args: &[&str],
+    paths: &mut BTreeSet<String>,
+) -> Result<()> {
+    let safe_directory = ctx
+        .workspace_root()
+        .display()
+        .to_string()
+        .replace('\\', "/");
+    let output = Command::new("git")
+        .arg("-c")
+        .arg(format!("safe.directory={safe_directory}"))
+        .args(args)
+        .current_dir(ctx.workspace_root())
+        .output()
+        .with_context(|| format!("failed to run git {}", args.join(" ")))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let path = normalize_relative_path(line);
+        if !path.is_empty() {
+            paths.insert(path);
+        }
+    }
+    Ok(())
+}
+
+fn source_owner_suites<'a>(path: &str, suites: &'a [&TestSuite]) -> Vec<&'a TestSuite> {
+    suites
+        .iter()
+        .copied()
+        .filter(|suite| {
+            suite
+                .source_roots
+                .iter()
+                .any(|root| path_matches_root(path, root))
+        })
+        .collect()
+}
+
+fn is_first_party_source_path(path: &str) -> bool {
+    let Some(extension) = Path::new(path).extension().and_then(|ext| ext.to_str()) else {
+        return false;
+    };
+    matches!(
+        extension,
+        "rs" | "ts" | "tsx" | "js" | "mjs" | "py" | "c" | "cc" | "cpp" | "h" | "hpp"
+    ) && !is_probable_test_path(path)
+}
+
+fn is_probable_test_path(path: &str) -> bool {
+    path.contains("/tests/")
+        || path.contains("/src/tests/")
+        || path.ends_with(".test.ts")
+        || path.ends_with(".test.tsx")
+        || path.ends_with(".test.js")
+        || path.ends_with(".test.mjs")
+        || path.ends_with("_tests.rs")
+}
+
+fn path_matches_root(path: &str, root: &str) -> bool {
+    path == root
+        || path
+            .strip_prefix(root)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+fn apply_search_filter(
+    suites: &mut Vec<&'static TestSuite>,
+    cases: &mut Vec<TestCase>,
+    search: &str,
+) {
+    let search = search.trim().to_ascii_lowercase();
+    if search.is_empty() {
+        return;
+    }
+
+    let matching_case_suites = cases
+        .iter()
+        .filter(|case| case_matches_search(case, &search))
+        .map(|case| case.suite_id)
+        .collect::<BTreeSet<_>>();
+    suites.retain(|suite| {
+        suite_matches_search(suite, &search) || matching_case_suites.contains(&suite.id)
+    });
+    cases.retain(|case| case_matches_search(case, &search));
+}
+
+fn suite_matches_search(suite: &TestSuite, search: &str) -> bool {
+    contains_search(suite.id.as_str(), search)
+        || contains_search(suite.category.as_str(), search)
+        || contains_search(suite.description, search)
+        || contains_search(suite.requirements, search)
+        || contains_search(suite.backend_policy.as_str(), search)
+        || contains_search(suite.discoverer.as_str(), search)
+        || suite
+            .source_roots
+            .iter()
+            .any(|root| contains_search(root, search))
+}
+
+fn case_matches_search(case: &TestCase, search: &str) -> bool {
+    contains_search(case.suite_id.as_str(), search)
+        || contains_search(&case.name, search)
+        || contains_search(&case.path, search)
+}
+
+fn contains_search(value: &str, search: &str) -> bool {
+    value.to_ascii_lowercase().contains(search)
+}
+
+fn print_text_list(suites: &[&TestSuite], cases: &[TestCase]) -> Result<()> {
     println!("Test suites:");
     for suite in suites {
         println!(
-            "  {:<18} {:<9} {:<18} {}",
+            "  {:<18} {:<9} {:<9} {}",
             suite.id.as_str(),
             suite.category.as_str(),
-            suite.profile_labels().join(","),
+            if suite.coverage { "coverage" } else { "" },
             suite.description
         );
         println!("  {:<18} requirements: {}", "", suite.requirements);
     }
 
-    if include_cases {
+    if !cases.is_empty() {
         println!();
         println!("Test cases:");
-        for case in discover_cases(ctx, suites)? {
+        for case in cases {
             println!(
                 "  {:<18} {:<42} {}",
                 case.suite_id.as_str(),
@@ -966,29 +1132,15 @@ fn print_text_list(ctx: &BuildContext, suites: &[&TestSuite], include_cases: boo
     Ok(())
 }
 
-fn print_text_profiles() {
-    println!("Test profiles:");
-    for profile in TEST_PROFILES {
-        println!("  {:<12} {}", profile.as_str(), profile.summary());
-        println!(
-            "  {:<12} suites: {}",
-            "",
-            profile_suite_labels(*profile).join(", ")
-        );
-    }
+fn print_json_list(suites: &[&TestSuite], cases: &[TestCase]) -> Result<()> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&list_json_value(suites, cases))?
+    );
+    Ok(())
 }
 
-fn print_json_list(ctx: &BuildContext, suites: &[&TestSuite], include_cases: bool) -> Result<()> {
-    let profile_values = TEST_PROFILES
-        .iter()
-        .map(|profile| {
-            json!({
-                "id": profile.as_str(),
-                "description": profile.summary(),
-                "suites": profile_suite_labels(*profile),
-            })
-        })
-        .collect::<Vec<_>>();
+fn list_json_value(suites: &[&TestSuite], cases: &[TestCase]) -> Value {
     let suite_values = suites
         .iter()
         .map(|suite| {
@@ -997,44 +1149,27 @@ fn print_json_list(ctx: &BuildContext, suites: &[&TestSuite], include_cases: boo
                 "category": suite.category.as_str(),
                 "description": suite.description,
                 "requirements": suite.requirements,
-                "profiles": suite.profile_labels(),
+                "sourceRoots": suite.source_roots,
                 "backendPolicy": suite.backend_policy.as_str(),
                 "coverage": suite.coverage,
                 "caseDiscovery": suite.discoverer.as_str(),
             })
         })
         .collect::<Vec<_>>();
-    let cases = if include_cases {
-        discover_cases(ctx, suites)?
-            .into_iter()
-            .map(|case| {
-                json!({
-                    "suite": case.suite_id.as_str(),
-                    "name": case.name,
-                    "path": case.path,
-                })
-            })
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&json!({
-            "profiles": profile_values,
-            "suites": suite_values,
-            "cases": cases,
-        }))?
-    );
-    Ok(())
-}
-
-fn profile_suite_labels(profile: TestProfile) -> Vec<&'static str> {
-    TEST_SUITES
+    let case_values = cases
         .iter()
-        .filter(|suite| suite.profiles.contains(&profile))
-        .map(|suite| suite.id.as_str())
-        .collect()
+        .map(|case| {
+            json!({
+                "suite": case.suite_id.as_str(),
+                "name": case.name,
+                "path": case.path,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "suites": suite_values,
+        "cases": case_values,
+    })
 }
 
 fn discover_cases(ctx: &BuildContext, suites: &[&TestSuite]) -> Result<Vec<TestCase>> {
@@ -1191,26 +1326,60 @@ fn parse_quoted_test_name(line: &str, prefix: &str) -> Option<String> {
 }
 
 fn selected_suites(
-    selector: &TestSuiteId,
-    category: TestCategory,
+    selectors: &[TestSuiteId],
+    category: TestCategoryFilter,
 ) -> Result<Vec<&'static TestSuite>> {
-    if *selector == TestSuiteId::All {
+    if selectors.is_empty() {
         return Ok(TEST_SUITES
             .iter()
-            .filter(|suite| suite.category == category)
+            .filter(|suite| category_matches(category, suite.category))
             .collect());
     }
 
-    let suite = suite_by_id(*selector)?;
-    if suite.category != category {
-        anyhow::bail!(
-            "suite {} is {}, not {}",
-            selector.as_str(),
-            suite.category.as_str(),
-            category.as_str()
-        );
+    let mut selected = Vec::new();
+    let mut seen = BTreeSet::new();
+    for selector in selectors {
+        if !seen.insert(*selector) {
+            continue;
+        }
+        let suite = suite_by_id(*selector)?;
+        if !category_matches(category, suite.category) {
+            anyhow::bail!(
+                "suite {} is {}, not {}",
+                selector.as_str(),
+                suite.category.as_str(),
+                category.as_str()
+            );
+        }
+        selected.push(suite);
     }
-    Ok(vec![suite])
+    Ok(selected)
+}
+
+fn selected_verify_suites(args: &TestVerifyArgs) -> Result<Vec<&'static TestSuite>> {
+    let suites = selected_suites(&args.suite, args.category)?;
+    if !args.suite.is_empty() {
+        let uncovered = suites
+            .iter()
+            .filter(|suite| !suite.coverage)
+            .map(|suite| suite.id.as_str())
+            .collect::<Vec<_>>();
+        if !uncovered.is_empty() {
+            anyhow::bail!(
+                "suite(s) are not coverage-capable: {}",
+                uncovered.join(", ")
+            );
+        }
+    }
+
+    let suites = suites
+        .into_iter()
+        .filter(|suite| suite.coverage)
+        .collect::<Vec<_>>();
+    if suites.is_empty() {
+        anyhow::bail!("no coverage-capable suites matched the selected filters");
+    }
+    Ok(suites)
 }
 
 fn suite_by_id(id: TestSuiteId) -> Result<&'static TestSuite> {
@@ -1238,11 +1407,11 @@ fn filtered_rust_targets(
     Ok(filtered)
 }
 
-fn list_category_matches(filter: TestListCategory, category: TestCategory) -> bool {
+fn category_matches(filter: TestCategoryFilter, category: TestCategory) -> bool {
     match filter {
-        TestListCategory::All => true,
-        TestListCategory::Whitebox => category == TestCategory::Whitebox,
-        TestListCategory::Interface => category == TestCategory::Interface,
+        TestCategoryFilter::All => true,
+        TestCategoryFilter::Whitebox => category == TestCategory::Whitebox,
+        TestCategoryFilter::Interface => category == TestCategory::Interface,
     }
 }
 
@@ -1255,7 +1424,7 @@ fn ensure_cargo_llvm_cov() -> Result<()> {
         return Ok(());
     }
     anyhow::bail!(
-        "cargo-llvm-cov is required for `cargo xtask test coverage`; install it with `cargo install cargo-llvm-cov`"
+        "cargo-llvm-cov is required for Rust coverage; install it with `cargo install cargo-llvm-cov`"
     )
 }
 
@@ -1266,11 +1435,12 @@ fn validate_suite_backends(suites: &[&TestSuite], backend: Backend) -> Result<()
     Ok(())
 }
 
-fn validate_coverage_options(args: &TestCoverageArgs) -> Result<()> {
-    if args.scope == TestCoverageScope::All && args.backend == Backend::All {
-        anyhow::bail!(
-            "coverage --scope all requires a concrete backend because Python and model smoke coverage cannot run with --backend all"
-        );
+fn validate_package_filter(suites: &[&TestSuite], package: Option<&str>) -> Result<()> {
+    if package.is_some()
+        && (suites.len() != 1
+            || suites.first().map(|suite| suite.id) != Some(TestSuiteId::RustCrates))
+    {
+        anyhow::bail!("--package is only supported with --suite rust-crates");
     }
     Ok(())
 }
@@ -1539,7 +1709,7 @@ fn collect_files_with_suffix(root: &Path, suffix: &str) -> Result<Vec<PathBuf>> 
 fn is_ignored_layout_dir(path: &Path) -> bool {
     matches!(
         path.file_name().and_then(|name| name.to_str()),
-        Some("target" | "node_modules" | ".build" | "third_party" | ".venv")
+        Some("target" | "node_modules" | ".build" | "third_party" | ".venv" | ".pytest_cache")
     )
 }
 
@@ -1802,10 +1972,16 @@ fn collect_app_test_files(root: &Path, tests: &mut Vec<PathBuf>) -> Result<()> {
 }
 
 fn display_relative(ctx: &BuildContext, path: &Path) -> String {
-    path.strip_prefix(ctx.workspace_root())
+    let path = path
+        .strip_prefix(ctx.workspace_root())
         .unwrap_or(path)
         .display()
-        .to_string()
+        .to_string();
+    normalize_relative_path(&path)
+}
+
+fn normalize_relative_path(path: &str) -> String {
+    path.trim().trim_start_matches("./").replace('\\', "/")
 }
 
 fn python_venv_exe(venv_dir: &Path) -> PathBuf {
@@ -1822,6 +1998,101 @@ fn cli_binary_file_name() -> &'static str {
     } else {
         "cogentlm"
     }
+}
+
+fn write_run_report(ctx: &BuildContext, report: &RunReport) -> Result<()> {
+    let report_dir = test_report_dir(ctx);
+    std::fs::create_dir_all(&report_dir)
+        .with_context(|| format!("failed to create {}", report_dir.display()))?;
+    let json_path = test_run_report_json(ctx);
+    let markdown_path = test_run_report_markdown(ctx);
+    std::fs::write(
+        &json_path,
+        serde_json::to_string_pretty(&report.as_json(ctx))?,
+    )
+    .with_context(|| format!("failed to write {}", json_path.display()))?;
+    std::fs::write(&markdown_path, report.as_markdown(ctx))
+        .with_context(|| format!("failed to write {}", markdown_path.display()))?;
+    Ok(())
+}
+
+fn write_verify_report(ctx: &BuildContext, report: &VerifyReport) -> Result<()> {
+    let report_dir = test_report_dir(ctx);
+    std::fs::create_dir_all(&report_dir)
+        .with_context(|| format!("failed to create {}", report_dir.display()))?;
+    let json_path = test_verify_report_json(ctx);
+    let markdown_path = test_verify_report_markdown(ctx);
+    std::fs::write(
+        &json_path,
+        serde_json::to_string_pretty(&report.as_json(ctx))?,
+    )
+    .with_context(|| format!("failed to write {}", json_path.display()))?;
+    std::fs::write(&markdown_path, report.as_markdown(ctx))
+        .with_context(|| format!("failed to write {}", markdown_path.display()))?;
+    Ok(())
+}
+
+fn test_report_dir(ctx: &BuildContext) -> PathBuf {
+    ctx.build_root().join("test")
+}
+
+fn test_run_report_json(ctx: &BuildContext) -> PathBuf {
+    test_report_dir(ctx).join("run-report.json")
+}
+
+fn test_run_report_markdown(ctx: &BuildContext) -> PathBuf {
+    test_report_dir(ctx).join("run-report.md")
+}
+
+fn test_verify_report_json(ctx: &BuildContext) -> PathBuf {
+    test_report_dir(ctx).join("verify-report.json")
+}
+
+fn test_verify_report_markdown(ctx: &BuildContext) -> PathBuf {
+    test_report_dir(ctx).join("verify-report.md")
+}
+
+fn coverage_artifacts_for_suite(ctx: &BuildContext, suite: &TestSuite) -> Vec<String> {
+    let coverage_root = ctx.build_root().join("coverage");
+    let artifacts = match suite.runner {
+        SuiteRunner::RustTargets(_) => vec![
+            coverage_root.join("rust").join("lcov.info"),
+            coverage_root.join("rust").join("html"),
+        ],
+        SuiteRunner::NodePackage => vec![coverage_root.join("node").join("lcov.info")],
+        SuiteRunner::PythonPackage => vec![
+            coverage_root.join("python").join("lcov.info"),
+            coverage_root.join("python").join("cobertura.xml"),
+            coverage_root.join("python").join("html"),
+        ],
+        SuiteRunner::PackageTs
+        | SuiteRunner::AppTs
+        | SuiteRunner::BrowserRuntime
+        | SuiteRunner::ModelSmoke
+        | SuiteRunner::LlamaBackendOps => Vec::new(),
+    };
+    artifacts
+        .iter()
+        .map(|artifact| display_relative(ctx, artifact))
+        .collect()
+}
+
+fn now_unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn duration_millis(duration: u128) -> u64 {
+    u64::try_from(duration).unwrap_or(u64::MAX)
+}
+
+fn markdown_cell(value: &str) -> String {
+    value
+        .replace('\r', " ")
+        .replace('\n', " ")
+        .replace('|', "\\|")
 }
 
 fn parse_lcov_summary(path: &Path) -> Result<LcovSummary> {
@@ -1863,17 +2134,11 @@ struct TestSuite {
     category: TestCategory,
     description: &'static str,
     requirements: &'static str,
-    profiles: &'static [TestProfile],
+    source_roots: &'static [&'static str],
     coverage: bool,
     backend_policy: BackendPolicy,
     runner: SuiteRunner,
     discoverer: CaseDiscoverer,
-}
-
-impl TestSuite {
-    fn profile_labels(&self) -> Vec<&'static str> {
-        self.profiles.iter().map(TestProfile::as_str).collect()
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1905,7 +2170,6 @@ impl BackendPolicy {
 
 #[derive(Clone, Copy, Debug)]
 enum SuiteRunner {
-    Layout,
     RustTargets(&'static [RustTestTarget]),
     PackageTs,
     AppTs,
@@ -1939,7 +2203,7 @@ impl CaseDiscoverer {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RustTestTarget {
     package: &'static str,
     kind: Option<RustTestKind>,
@@ -1984,7 +2248,7 @@ impl RustTestTarget {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RustTestKind {
     Package,
     Lib,
@@ -1999,11 +2263,312 @@ struct SuiteRunOptions<'a> {
     package: Option<&'a str>,
 }
 
+#[derive(Default)]
+struct RunCoverageState {
+    rust_started: bool,
+}
+
+struct RunReport {
+    generated_at_unix_seconds: u64,
+    finished_at_unix_seconds: Option<u64>,
+    started_at: Instant,
+    duration_ms: Option<u64>,
+    status: String,
+    filters: Value,
+    selected_suites: Vec<String>,
+    suites: Vec<SuiteReport>,
+}
+
+impl RunReport {
+    fn new(args: &TestRunArgs, suites: &[&TestSuite]) -> Self {
+        Self {
+            generated_at_unix_seconds: now_unix_seconds(),
+            finished_at_unix_seconds: None,
+            started_at: Instant::now(),
+            duration_ms: None,
+            status: "running".to_owned(),
+            filters: json!({
+                "category": args.category.as_str(),
+                "suite": args.suite.iter().map(TestSuiteId::as_str).collect::<Vec<_>>(),
+                "package": args.package.as_deref(),
+                "backend": args.backend.as_str(),
+                "model": args.model.as_ref().map(|model| model.display().to_string()),
+                "offline": args.offline,
+            }),
+            selected_suites: suites
+                .iter()
+                .map(|suite| suite.id.as_str().to_owned())
+                .collect(),
+            suites: Vec::new(),
+        }
+    }
+
+    fn finish(&mut self, status: &str) {
+        self.status = status.to_owned();
+        self.finished_at_unix_seconds = Some(now_unix_seconds());
+        self.duration_ms = Some(duration_millis(self.started_at.elapsed().as_millis()));
+    }
+
+    fn as_json(&self, ctx: &BuildContext) -> Value {
+        json!({
+            "kind": "test-run",
+            "status": self.status.clone(),
+            "generatedAtUnixSeconds": self.generated_at_unix_seconds,
+            "finishedAtUnixSeconds": self.finished_at_unix_seconds,
+            "durationMs": self.duration_ms,
+            "filters": self.filters.clone(),
+            "selectedSuites": self.selected_suites.clone(),
+            "logDir": display_relative(ctx, &ctx.command_logs_dir()),
+            "suites": self.suites.iter().map(|suite| suite.as_json()).collect::<Vec<_>>(),
+        })
+    }
+
+    fn as_markdown(&self, ctx: &BuildContext) -> String {
+        let mut markdown = format!(
+            "# Test run report\n\nStatus: `{}`\n\nLog directory: `{}`\n\n| Suite | Status | Duration | Coverage | Error |\n| --- | --- | ---: | --- | --- |\n",
+            self.status,
+            display_relative(ctx, &ctx.command_logs_dir()),
+        );
+        for suite in &self.suites {
+            markdown.push_str(&format!(
+                "| `{}` | `{}` | {} | `{}` | {} |\n",
+                suite.id,
+                suite.status,
+                suite
+                    .duration_ms
+                    .map(|duration| duration.to_string())
+                    .unwrap_or_else(|| "-".to_owned()),
+                suite.coverage_status,
+                suite
+                    .error
+                    .as_deref()
+                    .map(markdown_cell)
+                    .unwrap_or_else(|| "-".to_owned()),
+            ));
+        }
+        markdown
+    }
+}
+
+struct SuiteReport {
+    id: String,
+    category: String,
+    status: String,
+    duration_ms: Option<u64>,
+    coverage_status: String,
+    coverage_artifacts: Vec<String>,
+    error: Option<String>,
+}
+
+impl SuiteReport {
+    fn passed(ctx: &BuildContext, suite: &TestSuite, duration_ms: u128) -> Self {
+        Self {
+            id: suite.id.as_str().to_owned(),
+            category: suite.category.as_str().to_owned(),
+            status: "passed".to_owned(),
+            duration_ms: Some(duration_millis(duration_ms)),
+            coverage_status: if suite.coverage {
+                "written".to_owned()
+            } else {
+                "not_applicable".to_owned()
+            },
+            coverage_artifacts: coverage_artifacts_for_suite(ctx, suite),
+            error: None,
+        }
+    }
+
+    fn failed(ctx: &BuildContext, suite: &TestSuite, duration_ms: u128, error: String) -> Self {
+        Self {
+            id: suite.id.as_str().to_owned(),
+            category: suite.category.as_str().to_owned(),
+            status: "failed".to_owned(),
+            duration_ms: Some(duration_millis(duration_ms)),
+            coverage_status: if suite.coverage {
+                "failed".to_owned()
+            } else {
+                "not_applicable".to_owned()
+            },
+            coverage_artifacts: coverage_artifacts_for_suite(ctx, suite),
+            error: Some(error),
+        }
+    }
+
+    fn not_run(ctx: &BuildContext, suite: &TestSuite) -> Self {
+        Self {
+            id: suite.id.as_str().to_owned(),
+            category: suite.category.as_str().to_owned(),
+            status: "not_run".to_owned(),
+            duration_ms: None,
+            coverage_status: if suite.coverage {
+                "not_run".to_owned()
+            } else {
+                "not_applicable".to_owned()
+            },
+            coverage_artifacts: coverage_artifacts_for_suite(ctx, suite),
+            error: None,
+        }
+    }
+
+    fn as_json(&self) -> Value {
+        json!({
+            "id": self.id.clone(),
+            "category": self.category.clone(),
+            "status": self.status.clone(),
+            "durationMs": self.duration_ms,
+            "coverage": {
+                "status": self.coverage_status.clone(),
+                "artifacts": self.coverage_artifacts.clone(),
+            },
+            "error": self.error.clone(),
+        })
+    }
+}
+
+struct VerifyReport {
+    generated_at_unix_seconds: u64,
+    finished_at_unix_seconds: Option<u64>,
+    started_at: Instant,
+    duration_ms: Option<u64>,
+    status: String,
+    filters: Value,
+    selected_suites: Vec<String>,
+    checks: Vec<VerifyCheckReport>,
+    coverage: Option<CoverageSummaries>,
+}
+
+impl VerifyReport {
+    fn new(args: &TestVerifyArgs, suites: &[&TestSuite]) -> Self {
+        Self {
+            generated_at_unix_seconds: now_unix_seconds(),
+            finished_at_unix_seconds: None,
+            started_at: Instant::now(),
+            duration_ms: None,
+            status: "running".to_owned(),
+            filters: json!({
+                "category": args.category.as_str(),
+                "suite": args.suite.iter().map(TestSuiteId::as_str).collect::<Vec<_>>(),
+                "changed": args.changed,
+            }),
+            selected_suites: suites
+                .iter()
+                .map(|suite| suite.id.as_str().to_owned())
+                .collect(),
+            checks: Vec::new(),
+            coverage: None,
+        }
+    }
+
+    fn finish(&mut self, status: &str) {
+        self.status = status.to_owned();
+        self.finished_at_unix_seconds = Some(now_unix_seconds());
+        self.duration_ms = Some(duration_millis(self.started_at.elapsed().as_millis()));
+    }
+
+    fn as_json(&self, ctx: &BuildContext) -> Value {
+        json!({
+            "kind": "test-verify",
+            "status": self.status.clone(),
+            "generatedAtUnixSeconds": self.generated_at_unix_seconds,
+            "finishedAtUnixSeconds": self.finished_at_unix_seconds,
+            "durationMs": self.duration_ms,
+            "filters": self.filters.clone(),
+            "selectedSuites": self.selected_suites.clone(),
+            "coverageDir": display_relative(ctx, &ctx.build_root().join("coverage")),
+            "checks": self.checks.iter().map(|check| check.as_json()).collect::<Vec<_>>(),
+            "coverage": self.coverage.as_ref().map(CoverageSummaries::as_json),
+        })
+    }
+
+    fn as_markdown(&self, ctx: &BuildContext) -> String {
+        let mut markdown = format!(
+            "# Test verification report\n\nStatus: `{}`\n\nCoverage directory: `{}`\n\n| Check | Status | Error |\n| --- | --- | --- |\n",
+            self.status,
+            display_relative(ctx, &ctx.build_root().join("coverage")),
+        );
+        for check in &self.checks {
+            markdown.push_str(&format!(
+                "| `{}` | `{}` | {} |\n",
+                check.id,
+                check.status,
+                check
+                    .error
+                    .as_deref()
+                    .map(markdown_cell)
+                    .unwrap_or_else(|| "-".to_owned()),
+            ));
+        }
+        markdown
+    }
+}
+
+struct VerifyCheckReport {
+    id: String,
+    status: String,
+    error: Option<String>,
+}
+
+impl VerifyCheckReport {
+    fn from_result<T>(id: &str, result: &Result<T>) -> Self {
+        match result {
+            Ok(_) => Self {
+                id: id.to_owned(),
+                status: "passed".to_owned(),
+                error: None,
+            },
+            Err(error) => Self {
+                id: id.to_owned(),
+                status: "failed".to_owned(),
+                error: Some(format!("{error:#}")),
+            },
+        }
+    }
+
+    fn skipped(id: &str) -> Self {
+        Self {
+            id: id.to_owned(),
+            status: "skipped".to_owned(),
+            error: None,
+        }
+    }
+
+    fn as_json(&self) -> Value {
+        json!({
+            "id": self.id.clone(),
+            "status": self.status.clone(),
+            "error": self.error.clone(),
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 struct TestCase {
     suite_id: TestSuiteId,
     name: String,
     path: String,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct CoverageReportAreas {
+    rust: bool,
+    node: bool,
+    python: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct CoverageSummaries {
+    rust: LcovSummary,
+    node: LcovSummary,
+    python: LcovSummary,
+}
+
+impl CoverageSummaries {
+    fn as_json(&self) -> Value {
+        json!({
+            "rust": self.rust.as_json(),
+            "node": self.node.as_json(),
+            "python": self.python.as_json(),
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]

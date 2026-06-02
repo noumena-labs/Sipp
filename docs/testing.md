@@ -3,32 +3,38 @@
 CogentLM tests are cataloged by `cargo xtask test list`. Use that command first
 when choosing a suite or checking what CI runs.
 
-## Profiles
+## Commands
 
-`cargo xtask test all --profile <profile>` runs a cumulative profile:
+`cargo xtask test` has four top-level actions:
 
-- `contributor`: `layout`, `xtask`
-  Public-safe check for fork PRs. No private submodules, browser toolchains,
-  sample model downloads, or GPU/backend requirements.
-- `quick`: `contributor` + `rust-crates`
-  Fast local Rust/core confidence check.
-- `ci`: `quick` + `package-ts`, `rust-public-api`
-  Internal pull-request and master gate.
-- `full`: every cataloged suite
-  Nightly/release validation, including bindings, app TypeScript, CLI, Node,
-  Python, browser runtime, model smoke, and llama.cpp backend operation checks.
+- `list`: list suites and optionally discover/search individual cases.
+- `run`: execute tests selected by suite or category and write run/coverage artifacts.
+- `verify`: analyze existing coverage artifacts and validate test structure.
+- `help`: show detailed CLI help through Clap's built-in help command.
 
 ## Common Commands
 
 ```bash
 cargo xtask test list
 cargo xtask test list --cases
-cargo xtask test all --profile contributor
-cargo xtask test whitebox --suite rust-crates --package cogentlm-engine
-cargo xtask test interface --suite node-package --backend cpu
-cargo xtask test coverage --scope whitebox --backend cpu
+cargo xtask test list --category whitebox --cases --search router --format json
+cargo xtask test run
+cargo xtask test run --category whitebox
+cargo xtask test run --suite xtask
+cargo xtask test run --suite rust-crates --package cogentlm-engine
+cargo xtask test run --suite node-package --backend cpu
+cargo xtask test verify --category whitebox
 ```
 
+`--suite` can be repeated on `list`, `run`, and `verify`. For `test run`,
 `--backend`, `--model`, and `--offline` only affect suites that build native
-bindings or run model-backed checks. They are ignored by layout, xtask, and
-plain Rust/package listing paths.
+bindings or run model-backed checks. They are ignored by xtask and plain
+Rust/package listing paths.
+
+`test run` is the only test command that executes suites. It writes
+`.build/test/run-report.json`, `.build/test/run-report.md`, and fresh coverage
+artifacts under `.build/coverage/` for coverage-capable suites.
+
+`test verify` does not execute test suites. It validates test structure,
+catalog ownership, test/runtime code separation, optional changed-file coverage,
+and existing coverage artifacts.

@@ -42,22 +42,8 @@ fn command_summary(command: &Commands) -> String {
 fn test_summary(command: &TestCommands) -> String {
     match command {
         TestCommands::List(_) => "List test suites".to_owned(),
-        TestCommands::Whitebox(args) => format!("Run white-box tests ({})", args.suite.as_str()),
-        TestCommands::Interface(args) => {
-            format!(
-                "Run interface tests ({}, {})",
-                args.suite.as_str(),
-                args.backend.as_str()
-            )
-        }
-        TestCommands::Coverage(args) => {
-            format!(
-                "Run coverage ({}, {})",
-                args.scope.as_str(),
-                args.backend.as_str()
-            )
-        }
-        TestCommands::All(args) => format!("Run {} test profile", args.profile.as_str()),
+        TestCommands::Run(args) => format!("Run tests ({})", args.backend.as_str()),
+        TestCommands::Verify(_) => "Verify tests".to_owned(),
     }
 }
 

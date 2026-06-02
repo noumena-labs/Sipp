@@ -19,57 +19,65 @@ Always run the **narrowest relevant test suite** based on the files you modified
 
 Identify the files modified and run the corresponding command:
 
-### 1. Public contributor-safe checks
-- Run the no-secret, no-private-submodule profile (`layout`, `xtask`):
+### 1. Broad and automation checks
+- Run every cataloged suite:
   ```bash
-  cargo xtask test all --profile contributor
+  cargo xtask test run
   ```
-- Run the fast local Rust/core profile (`contributor`, `rust-crates`):
+- Run all white-box suites:
   ```bash
-  cargo xtask test all --profile quick
+  cargo xtask test run --category whitebox
   ```
 - Run xtask-only checks when the change is limited to developer automation:
   ```bash
-  cargo xtask test whitebox --suite xtask
+  cargo xtask test run --suite xtask
   ```
 
 ### 2. Rust Native Core (`crates/`)
 - Run cataloged unit tests for the affected crate:
   ```bash
-  cargo xtask test whitebox --suite rust-crates --package <crate_name>
+  cargo xtask test run --suite rust-crates --package <crate_name>
   ```
-- Example: `cargo xtask test whitebox --suite rust-crates --package cogentlm-engine`
+- Example: `cargo xtask test run --suite rust-crates --package cogentlm-engine`
 
 ### 3. Node.js Bindings (`bindings/node/`)
 - Run the cataloged Node interface tests:
   ```bash
-  cargo xtask test interface --suite node-package --backend cpu
+  cargo xtask test run --suite node-package --backend cpu
   ```
 
 ### 4. TypeScript NPM Packages (`packages/npm/`)
 - Run the cataloged browser package TypeScript tests:
   ```bash
-  cargo xtask test whitebox --suite package-ts
+  cargo xtask test run --suite package-ts
   ```
 - App tests are cataloged separately:
   ```bash
-  cargo xtask test whitebox --suite app-ts
+  cargo xtask test run --suite app-ts
   ```
 
 ### 5. Python Bindings (`bindings/python/`)
 - Run the cataloged Python interface tests:
   ```bash
-  cargo xtask test interface --suite python-package --backend cpu
+  cargo xtask test run --suite python-package --backend cpu
   ```
 
-### 6. Coverage
+### 6. Coverage and verification
 - List the catalog before choosing a suite:
   ```bash
   cargo xtask test list --cases
   ```
-- Run baseline coverage:
+- Run tests and produce run/coverage artifacts:
   ```bash
-  cargo xtask test coverage --scope whitebox --backend cpu
+  cargo xtask test run --suite xtask
+  ```
+- Verify existing coverage artifacts and test structure:
+  ```bash
+  cargo xtask test verify --category whitebox
+  ```
+- Validate changed source files have matching catalog-owned tests:
+  ```bash
+  cargo xtask test verify --changed
   ```
 
 ---
@@ -77,6 +85,4 @@ Identify the files modified and run the corresponding command:
 ## Pre-Test Check
 The xtask test catalog builds required artifacts before suites that need them. Use the **`build-orchestrator`** skill first only when you are explicitly compiling or packaging a target outside the test catalog.
 
-Profiles are cumulative: `ci` adds `package-ts` and `rust-public-api` to
-`quick`; `full` runs every cataloged suite. See `docs/testing.md` for the
-human-facing summary.
+Use `cargo xtask test list --cases` to inspect available suites and discoverable cases before choosing a narrow command.
