@@ -1,4 +1,6 @@
-//! Unit tests for the parent module.
+//! Tests the `runtime::config::inference_config::context` module in `cogentlm-engine`.
+//!
+//! Covers runtime configuration normalization, serialization, and boundary choices through pure value assertions.
 
 use super::super::arg_value;
 use super::{ContextRuntimeConfig, FlashAttentionMode, KvCacheType, RopeScaling};

@@ -1,4 +1,7 @@
-//! Unit tests for request boundary validation.
+//! Tests the `validate` module in `cogentlm-client`.
+//!
+//! Covers local/remote request boundary validation and numeric option rejection
+//! with synthetic request envelopes instead of endpoint execution.
 
 #[cfg(feature = "remote")]
 use cogentlm_engine::engine::SamplingRuntimeConfig;

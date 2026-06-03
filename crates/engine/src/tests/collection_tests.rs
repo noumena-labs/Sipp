@@ -1,4 +1,6 @@
-//! Unit tests for the parent module.
+//! Tests the `collection` module in `cogentlm-engine`.
+//!
+//! Covers engine public values and helper behavior with deterministic unit fixtures; model-backed checks stay explicitly ignored.
 
 use super::*;
 

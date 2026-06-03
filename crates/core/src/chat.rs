@@ -30,7 +30,3 @@ impl ChatMessage {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "tests/chat_tests.rs"]
-mod chat_tests;

@@ -1,3 +1,7 @@
+//! Tests the `runtime::inference_runtime::prefill` module in `cogentlm-engine`.
+//!
+//! Covers deterministic inference-runtime helpers, state transitions, and error paths while avoiding native model execution unless a test is explicitly ignored.
+
 use crate::runtime::config::KvReuseMode;
 use crate::runtime::metrics::CacheSource;
 use crate::runtime::session::CacheCandidate;

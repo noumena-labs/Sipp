@@ -29,6 +29,18 @@ pub use request::{ChatMessage, ChatRequest, ChatRole, QueryOptions, QueryRequest
 use stats::{embedding_result_from_response, generation_result_from_response};
 use thread_loop::{run_engine_thread, EngineThreadCommand};
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "../../tests/engine/driver_tests.rs"]
+mod driver_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+
 pub type EngineEventReceiver = mpsc::Receiver<EngineEvent>;
 type EngineEventSubscribers = Arc<Mutex<Vec<mpsc::Sender<EngineEvent>>>>;
 
@@ -459,7 +471,3 @@ fn spawn_engine_load_reaper(join_handle: Option<JoinHandle<()>>) {
 fn runtime_command(message: impl Into<String>) -> Error {
     Error::RuntimeCommand(message.into())
 }
-
-#[cfg(test)]
-#[path = "../../tests/engine/driver_tests.rs"]
-mod driver_tests;

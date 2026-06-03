@@ -1,4 +1,6 @@
-//! Unit tests for the parent module.
+//! Tests the `lifecycle::browser` module in `cogentlm-engine`.
+//!
+//! Covers lifecycle registry, storage, browser, service, and pairing behavior with temporary storage and pure fixtures instead of native runtime loading.
 
 use super::*;
 use crate::lifecycle::AssetRole;
@@ -304,6 +306,60 @@ fn browser_error_response_preserves_unsupported_operation_code() {
         error.message,
         "unsupported operation chat: model has no chat template"
     );
+}
+
+#[test]
+fn success_response_and_response_json_preserve_envelope_shape() {
+    let response = success_response(json!({ "value": 7 }));
+
+    assert!(response.ok);
+    assert!(response.error.is_none());
+
+    let rendered = response_json(response);
+    let value: Value = serde_json::from_str(&rendered).expect("json envelope");
+    assert_eq!(value["ok"], json!(true));
+    assert_eq!(value["value"]["value"], json!(7));
+}
+
+#[test]
+fn validate_manifest_rejects_asset_key_mismatch() {
+    let record = asset(
+        "asset-a",
+        ModelAssetKind::Model,
+        inspection(AssetRole::Model, false, &[], None),
+    );
+    let mut manifest = BrowserRegistryManifest::default();
+    manifest.assets.insert("wrong-key".to_string(), record);
+
+    let error = validate_manifest(&manifest).expect_err("mismatched asset key");
+
+    assert!(matches!(
+        error,
+        ModelError::StorageCorrupt(message) if message.contains("does not match")
+    ));
+}
+
+#[test]
+fn snapshot_patch_updates_supplied_fields_and_preserves_others() {
+    let service =
+        BrowserLifecycleService::create(BrowserCreateConfig { manifest: None }).expect("service");
+    let original = service.snapshot.clone();
+
+    let patched = apply_snapshot_patch(
+        original.clone(),
+        SnapshotPatch {
+            mode: Some(BrowserObservabilityMode::Profile),
+            state: Some(BrowserLifecycleState::Ready),
+            runtime: Some(Some(json!({ "decodeMs": 1.0 }))),
+            ..SnapshotPatch::default()
+        },
+    );
+
+    assert_eq!(patched.mode, BrowserObservabilityMode::Profile);
+    assert_eq!(patched.state, BrowserLifecycleState::Ready);
+    assert_eq!(patched.runtime, Some(json!({ "decodeMs": 1.0 })));
+    assert_eq!(patched.model, original.model);
+    assert_eq!(patched.query, original.query);
 }
 
 #[test]

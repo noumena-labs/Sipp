@@ -12,3 +12,7 @@ pub use chat::{ChatMessage, ChatRole};
 pub use result::FinishReason;
 pub use token_emission::{TokenBatch, TokenEmissionStats};
 pub use token_usage::TokenUsage;
+
+#[cfg(test)]
+#[path = "tests/root_tests.rs"]
+mod root_tests;

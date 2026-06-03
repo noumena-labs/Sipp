@@ -4,9 +4,13 @@ use crate::runtime::config::{SchedulerPolicyConfig, SchedulerTickBudget};
 
 use super::SlotState;
 
-mod budget;
-mod flow;
-mod metrics;
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "../../../tests/runtime/scheduler/slot_scheduler/mod_tests.rs"]
+mod mod_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/runtime/scheduler/slot_scheduler/budget_tests.rs"]
@@ -19,6 +23,13 @@ mod flow_tests;
 #[cfg(test)]
 #[path = "../../../tests/runtime/scheduler/slot_scheduler/metrics_tests.rs"]
 mod metrics_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+mod budget;
+mod flow;
+mod metrics;
 
 #[derive(Debug, Default)]
 pub struct SlotScheduler {

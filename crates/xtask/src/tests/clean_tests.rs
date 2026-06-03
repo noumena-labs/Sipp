@@ -1,4 +1,6 @@
-//! Unit tests for the parent module.
+//! Tests the `clean` module in `xtask`.
+//!
+//! Covers developer automation helpers, catalog logic, and terminal formatting with deterministic fixtures instead of invoking external toolchains.
 
 use std::path::PathBuf;
 

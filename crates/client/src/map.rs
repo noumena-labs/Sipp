@@ -9,6 +9,18 @@ use crate::{
     CogentTextResponse, EndpointRef, LocalEmbedOptions, LocalTextOptions,
 };
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "tests/map_tests.rs"]
+mod map_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+
 pub(crate) fn local_query_request(
     request: CogentQueryRequest,
 ) -> Result<QueryRequest, CogentError> {
@@ -171,7 +183,3 @@ fn merge_sampling_field(
 fn nonnegative_i32_to_u32(value: i32) -> Option<u32> {
     u32::try_from(value).ok()
 }
-
-#[cfg(test)]
-#[path = "tests/map_tests.rs"]
-mod map_tests;

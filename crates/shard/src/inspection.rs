@@ -9,6 +9,16 @@ use serde::{Deserialize, Serialize};
 use crate::bytes::{u64_from_usize, usize_from_u64, CountingReader};
 use crate::{GgufError, GgufValueType, BYTES_PER_MIB_USIZE, GGUF_MAGIC, SUPPORTED_GGUF_VERSIONS};
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+#[cfg(test)]
+#[path = "tests/inspection_tests.rs"]
+mod inspection_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
 const DEFAULT_MAX_PREFIX_BYTES: usize = 8 * BYTES_PER_MIB_USIZE;
 const DEFAULT_MAX_PREFIX_BYTES_U64: u64 = DEFAULT_MAX_PREFIX_BYTES as u64;
 const DEFAULT_INITIAL_READ_BYTES: usize = BYTES_PER_MIB_USIZE / 16;
@@ -497,7 +507,3 @@ fn normalize_optional_string(value: &str) -> Option<String> {
     let normalized = value.trim().to_lowercase();
     (!normalized.is_empty()).then_some(normalized)
 }
-
-#[cfg(test)]
-#[path = "tests/inspection_tests.rs"]
-mod inspection_tests;

@@ -5,6 +5,18 @@ use crate::native_bridge::NativeRuntimeHandle;
 use crate::runtime::llama_token;
 use crate::runtime::scheduler::{SlotPhase, SlotState};
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "../../../tests/runtime/inference_runtime/text_tests.rs"]
+mod text_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+
 /// Decode `token` into UTF-8 and push it onto the slot's emission/output
 /// buffers. Marks the slot as `Failed` on tokenization error.
 #[inline]
@@ -192,7 +204,3 @@ pub(super) fn incomplete_utf8_tail_length(data: &[u8]) -> usize {
     }
     max_lookback
 }
-
-#[cfg(test)]
-#[path = "../../../tests/runtime/inference_runtime/text_tests.rs"]
-mod text_tests;

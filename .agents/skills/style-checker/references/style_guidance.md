@@ -125,10 +125,27 @@ pub struct ShardLayout {
 
 * Unit test bodies should live under crate-local `src/tests/` trees, not inline in runtime files or under `src/<subject>/tests/`.
 * Runtime modules may keep minimal `#[cfg(test)] #[path = "..."] mod *_tests;` declarations and test-only helper hooks when private access is required.
+* Rust test files must start with `//!` module-level rustdoc that states the source module under test, the behavior or edge cases covered, and any deterministic boundary such as fake handles, model-free paths, or intentionally skipped native/model execution.
+* Do not use C-style block comments for Rust test-file purpose headers. Prefer concise `//!` paragraphs that rustdoc can render.
+* When a source file needs private test access, put the `#[cfg(test)]` declarations directly below the `use` statements in a clearly marked `TESTS` section, followed by a `SRC` section before production code.
 * Integration tests should live under crate-level `tests/` directories.
 * Test public behavior, edge cases, and error paths.
 * Avoid tests that depend on local machine state, network access, timing, or test order.
 * Use deterministic fixtures where possible.
+
+example:
+```
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+#[cfg(test)]
+#[path = "tests/error_tests.rs"]
+mod error_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+```
 
 ---
 

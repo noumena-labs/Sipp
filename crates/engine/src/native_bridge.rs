@@ -10,6 +10,18 @@ use cogentlm_sys as ffi;
 use crate::error::{Error, Result};
 use crate::runtime::config::ResolvedRuntimeLimits;
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "tests/native_bridge_tests.rs"]
+mod native_bridge_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+
 pub(crate) const LLAMA_TOKEN_NULL: ffi::llama_token = ffi::LLAMA_TOKEN_NULL;
 
 pub(crate) fn backend_init() {
@@ -476,6 +488,13 @@ pub(crate) struct SamplerHandle {
 }
 
 impl SamplerHandle {
+    #[cfg(test)]
+    pub(crate) fn empty_for_tests() -> Self {
+        Self {
+            inner: cxx::UniquePtr::null(),
+        }
+    }
+
     fn new(inner: cxx::UniquePtr<ffi::bridge::CommonSampler>) -> Self {
         Self { inner }
     }

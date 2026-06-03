@@ -1,4 +1,8 @@
-//! Unit tests for the parent module.
+//! Tests the `providers::proxy` module in `cogentlm-providers`.
+//!
+//! Covers OpenAI-compatible proxy provider construction, request mapping,
+//! response parsing, unsupported paths, HTTP error handling, and stream behavior
+//! with deterministic `wiremock` fixtures and no live network calls.
 
 use std::time::Duration;
 

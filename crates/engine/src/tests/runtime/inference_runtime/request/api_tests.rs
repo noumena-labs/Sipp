@@ -1,3 +1,7 @@
+//! Tests the `runtime::inference_runtime::request::api` module in `cogentlm-engine`.
+//!
+//! Covers deterministic inference-runtime helpers, state transitions, and error paths while avoiding native model execution unless a test is explicitly ignored.
+
 use crate::runtime::inference_runtime::request::api::{
     normalize_stop_sequences, request_tokenization_flags_for_tests,
 };

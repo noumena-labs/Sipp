@@ -9,6 +9,16 @@ use crate::{
     ProviderKind, ProviderResult,
 };
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+#[cfg(test)]
+#[path = "tests/transport_tests.rs"]
+mod transport_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_ERROR_BODY_BYTES: usize = 1 << 20;
 
@@ -444,7 +454,3 @@ fn transport_error_for(provider: ProviderKind, err: reqwest::Error) -> ProviderE
     };
     ProviderError::new(kind, provider, err.to_string())
 }
-
-#[cfg(test)]
-#[path = "tests/transport_tests.rs"]
-mod transport_tests;

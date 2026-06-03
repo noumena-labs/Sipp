@@ -1,4 +1,6 @@
-//! Unit tests for the parent module.
+//! Tests the `terminal` module in `xtask`.
+//!
+//! Covers developer automation helpers, catalog logic, and terminal formatting with deterministic fixtures instead of invoking external toolchains.
 
 use console::measure_text_width;
 use crossterm::style::Color;

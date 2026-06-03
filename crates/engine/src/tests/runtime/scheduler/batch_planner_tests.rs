@@ -1,4 +1,6 @@
-//! Unit tests for the parent module.
+//! Tests the `runtime::scheduler::batch_planner` module in `cogentlm-engine`.
+//!
+//! Covers scheduler planning, budget accounting, slot state, and flow decisions with deterministic in-memory fixtures.
 
 use crate::runtime::config::{KvReuseMode, SchedulerTickBudget};
 use crate::runtime::request::GenerateRequest;

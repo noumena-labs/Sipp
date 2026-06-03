@@ -1,3 +1,7 @@
+//! Tests the `runtime::session::kv_cache_manager` module in `cogentlm-engine`.
+//!
+//! Covers runtime support modules with deterministic in-memory fixtures and no native model execution.
+
 use crate::runtime::config::KvReuseMode;
 
 use super::{CacheCandidate, KvCacheManager, ResidentRef, SeqState, SequenceMirror, SessionRecord};

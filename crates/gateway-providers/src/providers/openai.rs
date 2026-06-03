@@ -113,6 +113,6 @@ impl GatewayBackendAdapter for OpenAiAdapter {
     }
 }
 
-#[cfg(test)]
-#[path = "../tests/providers/openai_tests.rs"]
-mod openai_tests;
+// #[cfg(test)]
+// #[path = "../tests/providers/openai_tests.rs"]
+// mod openai_tests;

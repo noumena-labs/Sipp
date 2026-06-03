@@ -1,3 +1,7 @@
+//! Tests the `runtime::scheduler::slot_scheduler::flow` module in `cogentlm-engine`.
+//!
+//! Covers scheduler planning, budget accounting, slot state, and flow decisions with deterministic in-memory fixtures.
+
 use std::sync::Arc;
 
 use crate::runtime::config::KvReuseMode;

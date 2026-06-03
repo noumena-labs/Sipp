@@ -1,4 +1,7 @@
-//! Unit tests for the parent module.
+//! Tests the `client` module in `cogentlm-client`.
+//!
+//! Covers endpoint registration, resolution, and facade dispatch through fake
+//! endpoints and provider configs rather than loaded models or remote calls.
 
 use super::*;
 use crate::dispatch::InferenceEndpoint;
@@ -41,37 +44,82 @@ impl InferenceEndpoint for FakeEndpoint {
     }
 }
 
+fn capabilities(
+    query: CapabilitySupport,
+    chat: CapabilitySupport,
+    embed: CapabilitySupport,
+) -> EndpointCapabilities {
+    EndpointCapabilities { query, chat, embed }
+}
+
+fn insert_fake(
+    client: &mut CogentClient,
+    endpoint: EndpointRef,
+    capabilities: EndpointCapabilities,
+) {
+    client.endpoints.insert(
+        endpoint.clone(),
+        Arc::new(FakeEndpoint {
+            endpoint,
+            capabilities,
+        }),
+    );
+}
+
+fn supported_capabilities() -> EndpointCapabilities {
+    capabilities(
+        CapabilitySupport::Supported,
+        CapabilitySupport::Supported,
+        CapabilitySupport::Supported,
+    )
+}
+
+fn expect_client_error<T>(result: CogentResult<T>, context: &str) -> CogentError {
+    match result {
+        Ok(_) => panic!("{context}"),
+        Err(error) => error,
+    }
+}
+
+#[test]
+fn default_client_starts_empty() {
+    let client = CogentClient::default();
+    let error = expect_client_error(
+        client.resolve(None, "query"),
+        "default client should not resolve endpoints",
+    );
+
+    assert!(matches!(
+        error,
+        CogentError::NoSupportedEndpoint { operation: "query" }
+    ));
+}
+
 #[test]
 fn automatic_resolution_is_local_only_and_support_based() {
     let mut client = CogentClient::new();
     let selected = EndpointRef::Local {
         id: "local-a".to_string(),
     };
-    client.endpoints.insert(
+    insert_fake(
+        &mut client,
         selected.clone(),
-        Arc::new(FakeEndpoint {
-            endpoint: selected.clone(),
-            capabilities: EndpointCapabilities {
-                query: CapabilitySupport::Supported,
-                chat: CapabilitySupport::Unsupported,
-                embed: CapabilitySupport::Unsupported,
-            },
-        }),
+        capabilities(
+            CapabilitySupport::Supported,
+            CapabilitySupport::Unsupported,
+            CapabilitySupport::Unsupported,
+        ),
     );
-    client.endpoints.insert(
+    insert_fake(
+        &mut client,
         EndpointRef::Local {
             id: "local-b".to_string(),
         },
-        Arc::new(FakeEndpoint {
-            endpoint: EndpointRef::Local {
-                id: "local-b".to_string(),
-            },
-            capabilities: EndpointCapabilities {
-                query: CapabilitySupport::Unsupported,
-                chat: CapabilitySupport::Supported,
-                embed: CapabilitySupport::Unsupported,
-            },
-        }),
+        capabilities(
+            CapabilitySupport::Unsupported,
+            CapabilitySupport::Supported,
+            CapabilitySupport::Unsupported,
+        ),
     );
 
     let endpoint = client.resolve(None, "query").expect("resolved endpoint");
@@ -136,16 +184,14 @@ fn duplicate_endpoint_registration_is_invalid() {
     let endpoint = EndpointRef::Local {
         id: "local".to_string(),
     };
-    client.endpoints.insert(
+    insert_fake(
+        &mut client,
         endpoint.clone(),
-        Arc::new(FakeEndpoint {
-            endpoint: endpoint.clone(),
-            capabilities: EndpointCapabilities {
-                query: CapabilitySupport::Supported,
-                chat: CapabilitySupport::Unsupported,
-                embed: CapabilitySupport::Unsupported,
-            },
-        }),
+        capabilities(
+            CapabilitySupport::Supported,
+            CapabilitySupport::Unsupported,
+            CapabilitySupport::Unsupported,
+        ),
     );
 
     let error = client

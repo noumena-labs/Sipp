@@ -320,6 +320,7 @@ dependencies = [
 name = "cogentlm-client"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "cogentlm-core",
  "cogentlm-engine",
  "cogentlm-remote",

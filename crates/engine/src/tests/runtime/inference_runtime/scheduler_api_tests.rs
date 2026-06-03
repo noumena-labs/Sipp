@@ -1,3 +1,7 @@
+//! Tests the `runtime::inference_runtime::scheduler_api` module in `cogentlm-engine`.
+//!
+//! Covers deterministic inference-runtime helpers, state transitions, and error paths while avoiding native model execution unless a test is explicitly ignored.
+
 use std::time::Duration;
 
 use crate::runtime::config::{

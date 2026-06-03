@@ -1,3 +1,7 @@
+//! Tests the `runtime::inference_runtime::runtime` module in `cogentlm-engine`.
+//!
+//! Covers deterministic inference-runtime helpers, state transitions, and error paths while avoiding native model execution unless a test is explicitly ignored.
+
 use std::collections::HashSet;
 
 use crate::engine::protocol::{ModelClass, PoolingType};

@@ -1,6 +1,11 @@
+//! Tests the `runtime::inference_runtime::request::lifecycle` module in `cogentlm-engine`.
+//!
+//! Covers deterministic inference-runtime helpers, state transitions, and error paths while avoiding native model execution unless a test is explicitly ignored.
+
 use crate::runtime::config::NativeRuntimeConfig;
 use crate::runtime::inference_runtime::runtime_tests::test_runtime;
 use crate::runtime::request::GenerateRequest;
+use crate::runtime::request::GenerateResponse;
 use crate::runtime::scheduler::SlotPhase;
 use crate::runtime::session::KvCacheAdmission;
 
@@ -25,4 +30,25 @@ fn cancel_request_marks_active_slot_clone() {
     assert!(runtime.slot_scheduler.slots[0]
         .request()
         .is_some_and(|request| request.cancel_requested));
+}
+
+#[test]
+fn take_completed_response_removes_observability_bookkeeping() {
+    let mut runtime = test_runtime(NativeRuntimeConfig::default());
+    runtime.committed_observability_request_ids.insert(7);
+    runtime.request_queue.completed_responses.insert(
+        7,
+        GenerateResponse {
+            request_id: 7,
+            ..GenerateResponse::default()
+        },
+    );
+
+    let response = runtime
+        .take_completed_response(7)
+        .expect("completed response");
+
+    assert_eq!(response.request_id, 7);
+    assert!(!runtime.committed_observability_request_ids.contains(&7));
+    assert!(runtime.request_queue.completed_responses.is_empty());
 }

@@ -1,3 +1,7 @@
+//! Tests the `runtime::scheduler::slot_scheduler::budget` module in `cogentlm-engine`.
+//!
+//! Covers scheduler planning, budget accounting, slot state, and flow decisions with deterministic in-memory fixtures.
+
 use crate::runtime::config::{SchedulerPolicyConfig, SchedulerPolicyMode};
 
 use super::budget::build_tick_budget;

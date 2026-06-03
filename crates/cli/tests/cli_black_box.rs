@@ -1,3 +1,7 @@
+//! Integration tests for the `cogentlm-cli` crate-level cli_black_box surface.
+//!
+//! Covers CLI parsing, configuration mapping, stats rendering, and command behavior without running model-backed inference unless marked as an external smoke test.
+
 use assert_cmd::Command;
 
 #[test]
