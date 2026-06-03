@@ -2,7 +2,7 @@
 //!
 //! The crate owns endpoint resolution and shared request/result envelopes.
 //! Local runtime work stays in `cogentlm-engine`; remote transport execution
-//! stays behind the optional `providers` feature.
+//! stays behind the optional `remote` feature.
 
 mod client;
 mod dispatch;
@@ -10,11 +10,11 @@ mod endpoint;
 mod error;
 mod local_endpoint;
 mod map;
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 mod remote;
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 mod remote_endpoint;
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 mod remote_executor;
 mod request;
 mod response;
@@ -24,16 +24,13 @@ mod validate;
 pub use client::CogentClient;
 pub use endpoint::{EndpointCapabilities, EndpointRef};
 pub use error::{CogentError, CogentResult};
-#[cfg(feature = "providers")]
-pub use error::{RemoteError, RemoteErrorKind, RemoteKind};
-#[cfg(feature = "providers")]
-pub use remote::{
-    RemoteAnthropicConfig, RemoteAuth, RemoteConfig, RemoteOpenAiConfig, RemoteProtocol,
-    RemoteProxyConfig, RemoteSecret,
-};
+#[cfg(feature = "remote")]
+pub use error::{RemoteError, RemoteErrorKind};
+#[cfg(feature = "remote")]
+pub use remote::{RemoteGatewayConfig, RemoteSecret};
 pub use request::{
-    CogentChatRequest, CogentEmbedRequest, CogentQueryRequest, CogentTextOptions,
-    LocalEmbedOptions, LocalTextOptions, RemoteOptions,
+    CogentChatRequest, CogentEmbedRequest, CogentQueryRequest, CogentTextOptions, GatewayOptions,
+    LocalEmbedOptions, LocalTextOptions,
 };
 pub use response::{CogentEmbeddingResponse, CogentTextResponse};
 pub use run::{

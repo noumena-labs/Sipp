@@ -4,7 +4,9 @@ members = [
     "crates/shard",
     "crates/sys",
     "crates/engine",
-    "crates/providers",
+    "crates/remote",
+    "crates/gateway",
+    "crates/gateway-providers",
     "crates/client",
     "crates/cli",
     "crates/xtask",
@@ -30,8 +32,10 @@ cxx-build = "1"
 cogentlm-core = { path = "crates/core" }
 cogentlm-shard = { path = "crates/shard" }
 cogentlm-sys = { path = "crates/sys" }
-cogentlm-engine = { path = "crates/engine" }
-cogentlm-providers = { path = "crates/providers" }
+cogentlm-engine = { path = "crates/engine", default-features = false }
+cogentlm-remote = { path = "crates/remote" }
+cogentlm-gateway = { path = "crates/gateway" }
+cogentlm-gateway-providers = { path = "crates/gateway-providers" }
 cogentlm-client = { path = "crates/client", default-features = false }
 futures = "0.3"
 futures-channel = "0.3"

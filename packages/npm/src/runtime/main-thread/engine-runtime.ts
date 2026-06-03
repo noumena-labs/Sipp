@@ -13,6 +13,7 @@ import type {
   GenerateResponse,
   NativeRuntimeConfig,
   PromptOptions,
+  RequestSamplingPatch,
   RequestObservabilityMetrics,
   TokenBatch,
   TransportObservability,
@@ -72,6 +73,7 @@ function resolveRuntimeSiblingUrl(moduleUrl: string, extension: string): string 
 
 const BROWSER_SMOKE_DIRECT_LOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 const BROWSER_SMOKE_SHARD_MAX_BYTES = 128;
+const EXPECTED_RUST_BROWSER_ENGINE_ABI_VERSION = 6;
 const GGUF_MAGIC = 0x4655_4747;
 const GGUF_VALUE_STRING = 8;
 const GGUF_ALIGNMENT = 32;
@@ -244,10 +246,7 @@ function runBrowserGgufIngestSmoke(bridge: WasmBridge): BrowserRuntimeSmokeResul
 function runBrowserRustEngineSmoke(bridge: WasmBridge): BrowserRuntimeSmokeResult['rustEngine'] {
   let engine = 0;
   try {
-    const abiVersion = bridge.rustBrowserEngineAbiVersion();
-    if (abiVersion <= 0) {
-      throw new Error(`Rust browser engine ABI is unavailable: version ${abiVersion}.`);
-    }
+    const abiVersion = verifyRustBrowserEngineAbi(bridge);
     engine = bridge.rustBrowserEngineCreate();
     if (engine === 0) {
       throw new Error('Rust browser engine create returned a null handle.');
@@ -282,6 +281,21 @@ function runBrowserRustEngineSmoke(bridge: WasmBridge): BrowserRuntimeSmokeResul
       error: asErrorMessage(error),
     };
   }
+}
+
+function verifyRustBrowserEngineAbi(bridge: WasmBridge): number {
+  let abiVersion: number;
+  try {
+    abiVersion = bridge.rustBrowserEngineAbiVersion();
+  } catch (error) {
+    throw new Error('CogentLM browser runtime ABI check failed.', { cause: error });
+  }
+  if (abiVersion !== EXPECTED_RUST_BROWSER_ENGINE_ABI_VERSION) {
+    throw new Error(
+      `CogentLM browser runtime ABI mismatch: expected ${EXPECTED_RUST_BROWSER_ENGINE_ABI_VERSION}, got ${abiVersion}. Rebuild the WebAssembly runtime and clear cached browser runtime assets.`
+    );
+  }
+  return abiVersion;
 }
 
 export class MainThreadEngineRuntime implements EngineRuntime {
@@ -398,6 +412,27 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     return input.grammar;
   }
 
+  private resolvePromptStop(
+    input: PromptOptions | number | undefined
+  ): readonly string[] | undefined {
+    if (typeof input === 'number' || input === undefined || input.stop == null) {
+      return undefined;
+    }
+    return input.stop.length === 0 ? undefined : input.stop;
+  }
+
+  private resolvePromptSampling(
+    input: PromptOptions | number | undefined
+  ): RequestSamplingPatch | undefined {
+    if (typeof input === 'number' || input === undefined || input.sampling == null) {
+      return undefined;
+    }
+    const sampling = input.sampling;
+    return sampling.temperature == null && sampling.top_p == null
+      ? undefined
+      : sampling;
+  }
+
   private countMarkerOccurrences(promptText: string, marker: string): number {
     const escapedMarker = marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return (promptText.match(new RegExp(escapedMarker, 'g')) ?? []).length;
@@ -415,6 +450,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       promptText: normalizedPromptText,
       maxOutputTokens: this.resolvePromptTokenCount(options),
       media,
+      stop: this.resolvePromptStop(options),
+      sampling: this.resolvePromptSampling(options),
       grammar: this.resolvePromptGrammar(options),
     };
     return request;
@@ -607,8 +644,19 @@ export class MainThreadEngineRuntime implements EngineRuntime {
           new WasmBridge(module).close();
           throw createAbortError('Module initialization was cancelled.');
         }
+        const bridge = new WasmBridge(module);
+        try {
+          verifyRustBrowserEngineAbi(bridge);
+        } catch (error) {
+          try {
+            bridge.close();
+          } catch {
+            /* preserve the ABI failure as the primary error */
+          }
+          throw error;
+        }
         this.module = module;
-        this.wasmBridge = new WasmBridge(module);
+        this.wasmBridge = bridge;
       })().catch((error) => {
         if (generation === this.moduleGeneration) {
           this.initPromise = null;
@@ -866,16 +914,24 @@ export class MainThreadEngineRuntime implements EngineRuntime {
           request.promptText,
           request.maxOutputTokens,
           request.media,
-          request.grammar,
-          emitTokens
+          {
+            grammar: request.grammar,
+            stop: request.stop,
+            sampling: request.sampling,
+            emitTokens,
+          }
         );
       }
       return bridge.startTextRequest(
         request.contextKey,
         request.promptText,
         request.maxOutputTokens,
-        request.grammar,
-        emitTokens
+        {
+          grammar: request.grammar,
+          stop: request.stop,
+          sampling: request.sampling,
+          emitTokens,
+        }
       );
     });
   }
@@ -893,6 +949,8 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     }
     const maxOutputTokens = this.resolvePromptTokenCount(options);
     const grammar = this.resolvePromptGrammar(options);
+    const stop = this.resolvePromptStop(options);
+    const sampling = this.resolvePromptSampling(options);
 
     return this.enqueueNativeRequest(options, (bridge, emitTokens) =>
       bridge.startChatRequest(
@@ -900,8 +958,12 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         messages,
         maxOutputTokens,
         media,
-        grammar,
-        emitTokens
+        {
+          grammar,
+          stop,
+          sampling,
+          emitTokens,
+        }
       )
     );
   }

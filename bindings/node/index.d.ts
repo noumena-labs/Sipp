@@ -3,7 +3,8 @@
 export declare class CogentClient {
   constructor()
   addLocal(id: string, modelPath: string, config?: NativeRuntimeConfig | undefined | null): Promise<EndpointRef>
-  addRemote(id: string, config: RemoteConfig): EndpointRef
+  addRemote(id: string, config: RemoteGatewayConfig): EndpointRef
+  updateRemote(id: string, config: RemoteGatewayConfig): EndpointRef
   query(request: CogentQueryRequest): CogentTextRun
   chat(request: CogentChatRequest): CogentTextRun
   embed(request: CogentEmbedRequest): CogentEmbeddingRun
@@ -69,7 +70,7 @@ export interface CogentQueryRequest {
   prompt: string
   options?: CogentTextOptions
   local?: LocalTextOptions
-  remoteOptions?: Record<string, unknown>
+  gatewayOptions?: Record<string, unknown>
   emitTokens?: boolean
 }
 
@@ -78,7 +79,7 @@ export interface CogentChatRequest {
   messages: Array<ChatMessage>
   options?: CogentTextOptions
   local?: LocalTextOptions
-  remoteOptions?: Record<string, unknown>
+  gatewayOptions?: Record<string, unknown>
   emitTokens?: boolean
 }
 
@@ -86,7 +87,7 @@ export interface CogentEmbedRequest {
   endpoint?: EndpointRef
   input: string
   local?: LocalEmbedOptions
-  remoteOptions?: Record<string, unknown>
+  gatewayOptions?: Record<string, unknown>
 }
 
 export interface TokenUsage {
@@ -196,35 +197,11 @@ export declare const enum PoolingType {
   Rank = 'rank'
 }
 
-export interface RemoteAuthConfig {
-  bearer?: string
-  header?: RemoteAuthHeaderConfig
-}
-
-export interface RemoteAuthHeaderConfig {
-  name: string
-  value: string
-}
-
-export interface RemoteConfig {
-  kind: 'openai' | 'anthropic' | 'proxy'
-  model: string
-  apiKey?: string
-  baseUrl?: string
-  version?: string
-  auth?: RemoteAuthConfig
-  protocol?: RemoteProxyProtocol
-  staticHeaders?: Array<RemoteStaticHeaderConfig>
-  timeoutMs?: number
-}
-
-export declare const enum RemoteProxyProtocol {
-  OpenAiCompatible = 'open_ai_compatible'
-}
-
-export interface RemoteStaticHeaderConfig {
-  name: string
-  value: string
+export interface RemoteGatewayConfig {
+  readonly alias: string
+  readonly baseUrl: string
+  readonly token: string
+  readonly timeoutMs?: number
 }
 
 export interface RequestStats {

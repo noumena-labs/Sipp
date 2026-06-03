@@ -20,7 +20,12 @@ function createModule(): EngineModule {
     HEAPU8: new Uint8Array(8),
     _free: () => {},
     _malloc: () => 0,
-    ccall: () => 0,
+    ccall: (ident: string) => {
+      if (ident === 'CE_RustBrowserEngineAbiVersion') {
+        return 6;
+      }
+      return 0;
+    },
     UTF8ToString: () => '',
     addFunction: () => 0,
     removeFunction: () => {},
@@ -81,6 +86,29 @@ test('MainThreadEngineRuntime points pthread workers at the selected runtime mod
       wasmUrl
     );
   });
+});
+
+test('MainThreadEngineRuntime rejects stale browser runtime ABI artifacts', async () => {
+  const runtime = new MainThreadEngineRuntime({
+    executionMode: 'main-thread',
+    moduleUrl: 'https://example.test/runtime.js',
+    wasmUrl: 'https://example.test/runtime.wasm',
+  });
+  const staleModule = createModule();
+  staleModule.ccall = (ident: string) => {
+    if (ident === 'CE_RustBrowserEngineAbiVersion') {
+      return 5;
+    }
+    return 0;
+  };
+  (runtime as unknown as {
+    importModuleFactory: () => Promise<() => Promise<EngineModule>>;
+  }).importModuleFactory = async () => async () => staleModule;
+
+  await assert.rejects(
+    () => runtime.initModule(),
+    /CogentLM browser runtime ABI mismatch: expected 6, got 5/
+  );
 });
 
 test('MainThreadEngineRuntime fails projector-backed loads that do not expose a media marker', async () => {

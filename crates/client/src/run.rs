@@ -4,7 +4,7 @@ use std::task::{Context, Poll};
 
 use cogentlm_core::TokenBatch;
 use cogentlm_engine::engine::EngineTokenBatches;
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 use futures_channel::mpsc;
 use futures_core::Stream;
 
@@ -103,7 +103,7 @@ pub struct CogentTokenBatches {
 enum TokenBatchSource {
     Empty,
     Local(EngineTokenBatches),
-    #[cfg(feature = "providers")]
+    #[cfg(feature = "remote")]
     Receiver(mpsc::UnboundedReceiver<TokenBatch>),
 }
 
@@ -123,7 +123,7 @@ impl CogentTokenBatches {
         }
     }
 
-    #[cfg(feature = "providers")]
+    #[cfg(feature = "remote")]
     pub(crate) fn from_receiver(receiver: mpsc::UnboundedReceiver<TokenBatch>) -> Self {
         Self {
             inner: TokenBatchSource::Receiver(receiver),
@@ -138,7 +138,7 @@ impl Stream for CogentTokenBatches {
         match &mut self.inner {
             TokenBatchSource::Empty => Poll::Ready(None),
             TokenBatchSource::Local(stream) => Pin::new(stream).poll_next(cx),
-            #[cfg(feature = "providers")]
+            #[cfg(feature = "remote")]
             TokenBatchSource::Receiver(receiver) => Pin::new(receiver).poll_next(cx),
         }
     }

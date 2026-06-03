@@ -28,23 +28,22 @@ export async function loadClient(model, { embeddings = false } = {}) {
 }
 
 export function readRemoteArgs(defaultInput) {
-  const model = process.argv[2];
-  if (!model) {
-    console.error('usage: node examples/remote_<query|chat|embed>.mjs <remote-model> [input]');
+  const alias = process.argv[2];
+  if (!alias) {
+    console.error('usage: node examples/remote_<query|chat|embed>.mjs <gateway-alias> [input]');
     process.exit(2);
   }
   return {
-    model,
+    alias,
     input: process.argv.slice(3).join(' ') || defaultInput,
   };
 }
 
-export function addOpenAiRemote(client, model) {
-  return client.addRemote('openai', {
-    kind: 'openai',
-    model,
-    apiKey: requiredEnv('OPENAI_API_KEY'),
-    baseUrl: process.env.COGENTLM_OPENAI_BASE_URL,
+export function addGatewayRemote(client, alias) {
+  return client.addRemote(alias, {
+    alias,
+    baseUrl: requiredEnv('COGENTLM_GATEWAY_URL'),
+    token: requiredEnv('COGENTLM_GATEWAY_TOKEN'),
   });
 }
 

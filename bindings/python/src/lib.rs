@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
@@ -13,10 +14,8 @@ use cogentlm_client::{
     CogentTextResponse as ClientTextResponse, CogentTextResponseFuture as ClientTextResponseFuture,
     CogentTextRun as CoreClientTextRun, CogentTokenBatches as ClientTokenBatches,
     EndpointRef as CoreEndpointRef, LocalEmbedOptions as ClientLocalEmbedOptions,
-    LocalTextOptions as ClientLocalTextOptions, RemoteAnthropicConfig as CoreRemoteAnthropicConfig,
-    RemoteAuth as CoreRemoteAuth, RemoteConfig as CoreRemoteConfig, RemoteError as CoreRemoteError,
-    RemoteOpenAiConfig as CoreRemoteOpenAiConfig, RemoteProtocol as CoreRemoteProtocol,
-    RemoteProxyConfig as CoreRemoteProxyConfig, RemoteSecret as CoreRemoteSecret,
+    LocalTextOptions as ClientLocalTextOptions, RemoteError as CoreRemoteError,
+    RemoteGatewayConfig as CoreRemoteGatewayConfig, RemoteSecret as CoreRemoteSecret,
 };
 use cogentlm_core::TokenUsage;
 use cogentlm_engine::backend::{
@@ -787,110 +786,40 @@ impl PyLocalEmbedOptions {
     }
 }
 
-#[pyclass(name = "RemoteAuth")]
+#[pyclass(name = "RemoteGatewayConfig")]
 #[derive(Clone)]
-struct PyRemoteAuth {
-    core: CoreRemoteAuth,
+struct PyRemoteGatewayConfig {
+    core: CoreRemoteGatewayConfig,
 }
 
 #[pymethods]
-impl PyRemoteAuth {
-    #[staticmethod]
-    fn bearer(token: String) -> Self {
-        Self {
-            core: CoreRemoteAuth::Bearer(CoreRemoteSecret::new(token)),
-        }
-    }
-
-    #[staticmethod]
-    fn header(name: String, value: String) -> Self {
-        Self {
-            core: CoreRemoteAuth::Header {
-                name,
-                value: CoreRemoteSecret::new(value),
-            },
-        }
-    }
-}
-
-impl PyRemoteAuth {
-    fn to_core(&self) -> CoreRemoteAuth {
-        self.core.clone()
-    }
-}
-
-#[pyclass(name = "RemoteConfig")]
-#[derive(Clone)]
-struct PyRemoteConfig {
-    core: CoreRemoteConfig,
-}
-
-#[pymethods]
-impl PyRemoteConfig {
-    #[staticmethod]
-    #[pyo3(signature = (model, api_key, *, base_url = None, timeout_ms = None))]
-    fn openai(
-        model: String,
-        api_key: String,
-        base_url: Option<String>,
-        timeout_ms: Option<u64>,
-    ) -> Self {
-        Self {
-            core: CoreRemoteConfig::OpenAi(CoreRemoteOpenAiConfig {
-                model,
-                api_key: CoreRemoteSecret::new(api_key),
-                base_url,
-                timeout: timeout_ms.map(Duration::from_millis),
-            }),
-        }
-    }
-
-    #[staticmethod]
-    #[pyo3(signature = (model, api_key, *, base_url = None, version = None, timeout_ms = None))]
-    fn anthropic(
-        model: String,
-        api_key: String,
-        base_url: Option<String>,
-        version: Option<String>,
-        timeout_ms: Option<u64>,
-    ) -> Self {
-        Self {
-            core: CoreRemoteConfig::Anthropic(CoreRemoteAnthropicConfig {
-                model,
-                api_key: CoreRemoteSecret::new(api_key),
-                base_url,
-                version,
-                timeout: timeout_ms.map(Duration::from_millis),
-            }),
-        }
-    }
-
-    #[staticmethod]
-    #[pyo3(signature = (model, base_url, auth, *, protocol = "openai_compatible".to_string(), static_headers = None, timeout_ms = None))]
-    fn proxy(
-        py: Python<'_>,
-        model: String,
+impl PyRemoteGatewayConfig {
+    #[new]
+    #[pyo3(signature = (alias, base_url, token, *, timeout_ms = None))]
+    fn new(
+        alias: String,
         base_url: String,
-        auth: Py<PyRemoteAuth>,
-        protocol: String,
-        static_headers: Option<Vec<(String, String)>>,
+        token: String,
         timeout_ms: Option<u64>,
     ) -> PyResult<Self> {
+        if timeout_ms == Some(0) {
+            return Err(PyValueError::new_err(
+                "RemoteGatewayConfig.timeout_ms must be a positive integer",
+            ));
+        }
         Ok(Self {
-            core: CoreRemoteConfig::Proxy(CoreRemoteProxyConfig {
-                model,
+            core: CoreRemoteGatewayConfig {
+                alias,
                 base_url,
-                auth: auth.borrow(py).to_core(),
-                protocol: parse_remote_proxy_protocol(&protocol)?,
-                static_headers: static_headers.unwrap_or_default(),
+                token: CoreRemoteSecret::new(token),
                 timeout: timeout_ms.map(Duration::from_millis),
-            }),
+            },
         })
     }
 }
 
-impl PyRemoteConfig {
-    fn to_core(&self) -> CoreRemoteConfig {
+impl PyRemoteGatewayConfig {
+    fn to_core(&self) -> CoreRemoteGatewayConfig {
         self.core.clone()
     }
 }
@@ -934,7 +863,7 @@ impl PyCogentClient {
         &self,
         py: Python<'_>,
         id: String,
-        config: Py<PyRemoteConfig>,
+        config: Py<PyRemoteGatewayConfig>,
     ) -> PyResult<PyEndpointRef> {
         let endpoint = self
             .inner
@@ -945,7 +874,23 @@ impl PyCogentClient {
         Ok(PyEndpointRef { core: endpoint })
     }
 
-    #[pyo3(signature = (prompt, *, endpoint = None, options = None, local = None, remote_options = None, emit_tokens = false))]
+    fn update_remote(
+        &self,
+        py: Python<'_>,
+        id: String,
+        config: Py<PyRemoteGatewayConfig>,
+    ) -> PyResult<PyEndpointRef> {
+        let endpoint = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err(PY_CLIENT_MUTEX_POISONED))?
+            .update_remote(id, config.borrow(py).to_core())
+            .map_err(to_py_client_error)?;
+        Ok(PyEndpointRef { core: endpoint })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (prompt, *, endpoint = None, options = None, local = None, gateway_options = None, emit_tokens = false))]
     fn query(
         &self,
         py: Python<'_>,
@@ -953,7 +898,7 @@ impl PyCogentClient {
         endpoint: Option<Py<PyEndpointRef>>,
         options: Option<Py<PyCogentTextOptions>>,
         local: Option<Py<PyLocalTextOptions>>,
-        remote_options: Option<PyObject>,
+        gateway_options: Option<PyObject>,
         emit_tokens: bool,
     ) -> PyResult<PyCogentTextRun> {
         let request = ClientQueryRequest {
@@ -963,7 +908,7 @@ impl PyCogentClient {
             prompt,
             options: py_core_or_default(py, options, PyCogentTextOptions::to_core),
             local: py_core_or_default(py, local, PyLocalTextOptions::to_core),
-            remote_options: py_remote_options_or_empty(py, remote_options)?,
+            gateway_options: py_gateway_options_or_empty(py, gateway_options)?,
             emit_tokens,
         };
         let run = self
@@ -974,7 +919,8 @@ impl PyCogentClient {
         Ok(PyCogentTextRun::from_core(run))
     }
 
-    #[pyo3(signature = (messages, *, endpoint = None, options = None, local = None, remote_options = None, emit_tokens = false))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (messages, *, endpoint = None, options = None, local = None, gateway_options = None, emit_tokens = false))]
     fn chat(
         &self,
         py: Python<'_>,
@@ -982,7 +928,7 @@ impl PyCogentClient {
         endpoint: Option<Py<PyEndpointRef>>,
         options: Option<Py<PyCogentTextOptions>>,
         local: Option<Py<PyLocalTextOptions>>,
-        remote_options: Option<PyObject>,
+        gateway_options: Option<PyObject>,
         emit_tokens: bool,
     ) -> PyResult<PyCogentTextRun> {
         let request = ClientChatRequest {
@@ -992,7 +938,7 @@ impl PyCogentClient {
             messages: chat_messages_to_core(py, messages)?,
             options: py_core_or_default(py, options, PyCogentTextOptions::to_core),
             local: py_core_or_default(py, local, PyLocalTextOptions::to_core),
-            remote_options: py_remote_options_or_empty(py, remote_options)?,
+            gateway_options: py_gateway_options_or_empty(py, gateway_options)?,
             emit_tokens,
         };
         let run = self
@@ -1003,14 +949,14 @@ impl PyCogentClient {
         Ok(PyCogentTextRun::from_core(run))
     }
 
-    #[pyo3(signature = (input, *, endpoint = None, local = None, remote_options = None))]
+    #[pyo3(signature = (input, *, endpoint = None, local = None, gateway_options = None))]
     fn embed(
         &self,
         py: Python<'_>,
         input: String,
         endpoint: Option<Py<PyEndpointRef>>,
         local: Option<Py<PyLocalEmbedOptions>>,
-        remote_options: Option<PyObject>,
+        gateway_options: Option<PyObject>,
     ) -> PyResult<PyCogentEmbeddingRun> {
         let request = ClientEmbedRequest {
             endpoint: endpoint
@@ -1018,7 +964,7 @@ impl PyCogentClient {
                 .map(|endpoint| endpoint.borrow(py).to_core()),
             input,
             local: py_core_or_default(py, local, PyLocalEmbedOptions::to_core),
-            remote_options: py_remote_options_or_empty(py, remote_options)?,
+            gateway_options: py_gateway_options_or_empty(py, gateway_options)?,
         };
         let run = self
             .inner
@@ -1163,8 +1109,7 @@ fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyCogentTextRun>()?;
     module.add_class::<PyCogentTokenIterator>()?;
     module.add_class::<PyCogentEmbeddingRun>()?;
-    module.add_class::<PyRemoteAuth>()?;
-    module.add_class::<PyRemoteConfig>()?;
+    module.add_class::<PyRemoteGatewayConfig>()?;
     module.add("DEFAULT_CONTEXT_KEY", DEFAULT_CONTEXT_KEY)?;
     module.add("DEFAULT_MAX_TOKENS", DEFAULT_MAX_TOKENS)?;
     module.add_function(wrap_pyfunction!(backend_observability_json, module)?)?;
@@ -1172,14 +1117,16 @@ fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-fn py_remote_options_or_empty(
+fn py_gateway_options_or_empty(
     py: Python<'_>,
     value: Option<PyObject>,
 ) -> PyResult<serde_json::Map<String, serde_json::Value>> {
     match value {
         Some(value) => match py_to_json(value.bind(py))? {
             serde_json::Value::Object(options) => Ok(options),
-            _ => Err(PyTypeError::new_err("remote_options must be a JSON object")),
+            _ => Err(PyTypeError::new_err(
+                "gateway_options must be a JSON object",
+            )),
         },
         None => Ok(serde_json::Map::new()),
     }
@@ -1199,6 +1146,14 @@ fn chat_messages_to_core(
 }
 
 fn py_to_json(value: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+    let mut ancestors = HashSet::new();
+    py_to_json_inner(value, &mut ancestors)
+}
+
+fn py_to_json_inner(
+    value: &Bound<'_, PyAny>,
+    ancestors: &mut HashSet<usize>,
+) -> PyResult<serde_json::Value> {
     if value.is_none() {
         return Ok(serde_json::Value::Null);
     }
@@ -1221,33 +1176,65 @@ fn py_to_json(value: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
         return serde_json::Number::from_f64(number)
             .map(serde_json::Value::Number)
             .ok_or_else(|| {
-                PyValueError::new_err("remote_options cannot contain non-finite floats")
+                PyValueError::new_err("gateway_options cannot contain non-finite floats")
             });
     }
     if let Ok(items) = value.downcast::<PyList>() {
-        let mut output = Vec::with_capacity(items.len());
-        for item in items.iter() {
-            output.push(py_to_json(&item)?);
-        }
-        return Ok(serde_json::Value::Array(output));
+        let container = enter_json_container(value, ancestors)?;
+        let result = (|| {
+            let mut output = Vec::with_capacity(items.len());
+            for item in items.iter() {
+                output.push(py_to_json_inner(&item, ancestors)?);
+            }
+            Ok(serde_json::Value::Array(output))
+        })();
+        ancestors.remove(&container);
+        return result;
     }
     if let Ok(items) = value.downcast::<PyTuple>() {
-        let mut output = Vec::with_capacity(items.len());
-        for item in items.iter() {
-            output.push(py_to_json(&item)?);
-        }
-        return Ok(serde_json::Value::Array(output));
+        let container = enter_json_container(value, ancestors)?;
+        let result = (|| {
+            let mut output = Vec::with_capacity(items.len());
+            for item in items.iter() {
+                output.push(py_to_json_inner(&item, ancestors)?);
+            }
+            Ok(serde_json::Value::Array(output))
+        })();
+        ancestors.remove(&container);
+        return result;
     }
     if let Ok(dict) = value.downcast::<PyDict>() {
-        let mut output = serde_json::Map::new();
-        for (key, item) in dict.iter() {
-            output.insert(key.extract()?, py_to_json(&item)?);
-        }
-        return Ok(serde_json::Value::Object(output));
+        let container = enter_json_container(value, ancestors)?;
+        let result = (|| {
+            let mut output = serde_json::Map::new();
+            for (key, item) in dict.iter() {
+                let key = key.extract::<String>().map_err(|_| {
+                    PyTypeError::new_err("gateway_options object keys must be strings")
+                })?;
+                output.insert(key, py_to_json_inner(&item, ancestors)?);
+            }
+            Ok(serde_json::Value::Object(output))
+        })();
+        ancestors.remove(&container);
+        return result;
     }
     Err(PyTypeError::new_err(
-        "remote_options must contain JSON-compatible values",
+        "gateway_options must contain JSON-compatible values",
     ))
+}
+
+fn enter_json_container(
+    value: &Bound<'_, PyAny>,
+    ancestors: &mut HashSet<usize>,
+) -> PyResult<usize> {
+    let container = value.as_ptr() as usize;
+    if ancestors.insert(container) {
+        Ok(container)
+    } else {
+        Err(PyTypeError::new_err(
+            "gateway_options must contain JSON-compatible values",
+        ))
+    }
 }
 
 fn json_to_py(py: Python<'_>, value: serde_json::Value) -> PyResult<Py<PyAny>> {
@@ -1263,7 +1250,7 @@ fn json_to_py(py: Python<'_>, value: serde_json::Value) -> PyResult<Py<PyAny>> {
                 Ok(value.into_py(py))
             } else {
                 Err(PyValueError::new_err(
-                    "remote JSON number is not representable in Python",
+                    "gateway JSON number is not representable in Python",
                 ))
             }
         }
@@ -1472,15 +1459,6 @@ fn parse_chat_role(value: &str) -> PyResult<ChatRole> {
     parse_choice(value, "chat role must be one of: system, user, assistant")
 }
 
-fn parse_remote_proxy_protocol(value: &str) -> PyResult<CoreRemoteProtocol> {
-    match value {
-        "openai_compatible" => Ok(CoreRemoteProtocol::OpenAiCompatible),
-        _ => Err(PyValueError::new_err(
-            "remote proxy protocol must be: openai_compatible",
-        )),
-    }
-}
-
 fn parse_choice<T>(value: &str, error_message: &'static str) -> PyResult<T>
 where
     T: DeserializeOwned,
@@ -1508,8 +1486,7 @@ fn assign_if_some<T>(target: &mut T, value: Option<T>) {
 
 fn remote_error_message(error: &CoreRemoteError) -> String {
     format!(
-        "{} remote error ({}): {}",
-        error.remote_kind.as_str(),
+        "remote gateway error ({}): {}",
         error.kind.as_str(),
         error.message
     )
@@ -1534,7 +1511,6 @@ fn to_py_remote_error_result(py: Python<'_>, error: CoreRemoteError) -> PyResult
     };
 
     instance.setattr("kind", error.kind.as_str())?;
-    instance.setattr("remote_kind", error.remote_kind.as_str())?;
     instance.setattr("status", error.status)?;
     instance.setattr("code", error.code)?;
     instance.setattr("request_id", error.request_id)?;

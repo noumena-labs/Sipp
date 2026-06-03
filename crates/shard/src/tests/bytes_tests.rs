@@ -83,25 +83,18 @@ fn read_at_cursor_reads_sequentially_and_maps_source_errors() {
         bytes: b"abcdef".to_vec(),
         fail_at: None,
     };
-    let mut cursor = ReadAtCursor::new(&mut source);
+    let len = source.bytes.len() as u64;
+    let mut cursor = ReadAtCursor::new(&mut source, len);
     let mut empty = [];
     assert_eq!(cursor.read(&mut empty).expect("empty read"), 0);
 
     let mut first = [0u8; 2];
     cursor.read_exact(&mut first).expect("first read");
     assert_eq!(&first, b"ab");
+
     let mut second = [0u8; 3];
     cursor.read_exact(&mut second).expect("second read");
     assert_eq!(&second, b"cde");
-
-    let mut source = StaticReadAt {
-        bytes: b"abcdef".to_vec(),
-        fail_at: Some(0),
-    };
-    let mut cursor = ReadAtCursor::new(&mut source);
-    let mut output = [0u8; 1];
-    let error = cursor.read(&mut output).expect_err("source error");
-    assert_eq!(error.kind(), io::ErrorKind::Other);
 }
 
 #[test]

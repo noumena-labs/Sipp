@@ -71,10 +71,10 @@ pub(crate) fn embedding_response(
     }
 }
 
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 pub(crate) fn remote_text_response(
     endpoint: EndpointRef,
-    response: cogentlm_providers::ProviderResponse<cogentlm_providers::ProviderTextOutput>,
+    response: cogentlm_remote::GatewayTextResponse,
 ) -> CogentTextResponse {
     CogentTextResponse {
         endpoint,
@@ -85,10 +85,10 @@ pub(crate) fn remote_text_response(
     }
 }
 
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 pub(crate) fn remote_embedding_response(
     endpoint: EndpointRef,
-    response: cogentlm_providers::ProviderResponse<cogentlm_providers::ProviderEmbeddingOutput>,
+    response: cogentlm_remote::GatewayEmbeddingResponse,
 ) -> CogentEmbeddingResponse {
     CogentEmbeddingResponse {
         endpoint,

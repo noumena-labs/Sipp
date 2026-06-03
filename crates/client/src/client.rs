@@ -7,12 +7,12 @@ use cogentlm_engine::engine::{CogentEngine, NativeRuntimeConfig};
 
 use crate::dispatch::InferenceEndpoint;
 use crate::local_endpoint::LocalEndpoint;
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 use crate::remote_endpoint::RemoteEndpoint;
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 use crate::remote_executor::RemoteExecutor;
-#[cfg(feature = "providers")]
-use crate::RemoteConfig;
+#[cfg(feature = "remote")]
+use crate::RemoteGatewayConfig;
 use crate::{
     CogentChatRequest, CogentEmbedRequest, CogentEmbeddingRun, CogentError, CogentQueryRequest,
     CogentResult, CogentTextRun, EndpointCapabilities, EndpointRef,
@@ -33,7 +33,7 @@ mod client_tests;
 /// Public inference facade over registered local and remote endpoints.
 pub struct CogentClient {
     endpoints: HashMap<EndpointRef, Arc<dyn InferenceEndpoint>>,
-    #[cfg(feature = "providers")]
+    #[cfg(feature = "remote")]
     remote_executor: Option<RemoteExecutor>,
 }
 
@@ -42,7 +42,7 @@ impl CogentClient {
     pub fn new() -> Self {
         Self {
             endpoints: HashMap::new(),
-            #[cfg(feature = "providers")]
+            #[cfg(feature = "remote")]
             remote_executor: None,
         }
     }
@@ -80,17 +80,43 @@ impl CogentClient {
     }
 
     /// Register a remote model endpoint.
-    #[cfg(feature = "providers")]
+    #[cfg(feature = "remote")]
     pub fn add_remote(
         &mut self,
         id: impl Into<String>,
-        config: RemoteConfig,
+        config: RemoteGatewayConfig,
     ) -> CogentResult<EndpointRef> {
         let id = normalize_id(id, "remote id")?;
         let endpoint = EndpointRef::Remote { id };
         self.reject_duplicate(&endpoint)?;
         let (model, client) = config.build()?;
-        let model = normalize_id(model, "remote model id")?;
+        let executor = self.remote_executor()?;
+        self.endpoints.insert(
+            endpoint.clone(),
+            Arc::new(RemoteEndpoint::new(
+                endpoint.clone(),
+                model,
+                EndpointCapabilities::unknown(),
+                client,
+                executor,
+            )),
+        );
+        Ok(endpoint)
+    }
+
+    /// Replace the gateway config for an existing remote endpoint.
+    #[cfg(feature = "remote")]
+    pub fn update_remote(
+        &mut self,
+        id: impl Into<String>,
+        config: RemoteGatewayConfig,
+    ) -> CogentResult<EndpointRef> {
+        let id = normalize_id(id, "remote id")?;
+        let endpoint = EndpointRef::Remote { id };
+        if !self.endpoints.contains_key(&endpoint) {
+            return Err(CogentError::EndpointNotFound(endpoint));
+        }
+        let (model, client) = config.build()?;
         let executor = self.remote_executor()?;
         self.endpoints.insert(
             endpoint.clone(),
@@ -179,7 +205,7 @@ impl CogentClient {
         }
     }
 
-    #[cfg(feature = "providers")]
+    #[cfg(feature = "remote")]
     fn remote_executor(&mut self) -> CogentResult<RemoteExecutor> {
         if let Some(executor) = &self.remote_executor {
             return Ok(executor.clone());
@@ -210,10 +236,14 @@ fn ensure_supported(endpoint: &dyn InferenceEndpoint, operation: &'static str) -
 
 fn normalize_id(id: impl Into<String>, name: &'static str) -> CogentResult<String> {
     let id = id.into();
-    let id = id.trim().to_string();
-    if id.is_empty() {
+    let trimmed = id.trim();
+    if trimmed.is_empty() {
         Err(CogentError::InvalidRequest(format!(
             "{name} must not be empty"
+        )))
+    } else if trimmed != id.as_str() {
+        Err(CogentError::InvalidRequest(format!(
+            "{name} must not contain surrounding whitespace"
         )))
     } else {
         Ok(id)

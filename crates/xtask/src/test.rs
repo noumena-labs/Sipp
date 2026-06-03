@@ -40,7 +40,9 @@ const RUST_CRATE_TEST_TARGETS: &[RustTestTarget] = &[
     RustTestTarget::lib("cogentlm-shard"),
     RustTestTarget::lib("cogentlm-sys"),
     RustTestTarget::lib("cogentlm-engine"),
-    RustTestTarget::lib("cogentlm-providers"),
+    RustTestTarget::lib("cogentlm-remote"),
+    RustTestTarget::lib("cogentlm-gateway"),
+    RustTestTarget::lib("cogentlm-gateway-providers"),
     RustTestTarget::lib("cogentlm-client"),
     RustTestTarget::bin("cogentlm-cli", "cogentlm"),
 ];
@@ -52,7 +54,7 @@ const RUST_BINDING_TEST_TARGETS: &[RustTestTarget] = &[
 ];
 const RUST_PUBLIC_API_TEST_TARGETS: &[RustTestTarget] = &[
     RustTestTarget::test("cogentlm-client", "public_api"),
-    RustTestTarget::test("cogentlm-providers", "public_api"),
+    RustTestTarget::test("cogentlm-gateway-providers", "public_api"),
     RustTestTarget::test("cogentlm-shard", "public_api"),
 ];
 const CLI_BLACK_BOX_TEST_TARGETS: &[RustTestTarget] =
@@ -64,7 +66,9 @@ const RUST_CRATE_SOURCE_ROOTS: &[&str] = &[
     "crates/shard/src",
     "crates/sys/src",
     "crates/engine/src",
-    "crates/providers/src",
+    "crates/remote/src",
+    "crates/gateway/src",
+    "crates/gateway-providers/src",
     "crates/client/src",
     "crates/cli/src",
 ];
@@ -78,7 +82,7 @@ const PACKAGE_TS_SOURCE_ROOTS: &[&str] = &["packages/npm/src"];
 const APP_TS_SOURCE_ROOTS: &[&str] = &["apps"];
 const RUST_PUBLIC_API_SOURCE_ROOTS: &[&str] = &[
     "crates/client/src",
-    "crates/providers/src",
+    "crates/gateway-providers/src",
     "crates/shard/src",
 ];
 const CLI_SOURCE_ROOTS: &[&str] = &["crates/cli/src"];
@@ -1926,7 +1930,9 @@ fn rust_package_root(ctx: &BuildContext, package: &str) -> Result<PathBuf> {
         "cogentlm-shard" => &["crates", "shard"],
         "cogentlm-sys" => &["crates", "sys"],
         "cogentlm-engine" => &["crates", "engine"],
-        "cogentlm-providers" => &["crates", "providers"],
+        "cogentlm-remote" => &["crates", "remote"],
+        "cogentlm-gateway" => &["crates", "gateway"],
+        "cogentlm-gateway-providers" => &["crates", "gateway-providers"],
         "cogentlm-client" => &["crates", "client"],
         "cogentlm-cli" => &["crates", "cli"],
         "xtask" => &["crates", "xtask"],

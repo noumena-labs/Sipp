@@ -635,5 +635,4 @@ module.exports.CogentTextRun = nativeBinding.CogentTextRun
 module.exports.CogentEmbeddingRun = nativeBinding.CogentEmbeddingRun
 module.exports.backendObservabilityJson = nativeBinding.backendObservabilityJson
 module.exports.PoolingType = nativeBinding.PoolingType
-module.exports.RemoteProxyProtocol = nativeBinding.RemoteProxyProtocol
 module.exports.setLlamaLogQuiet = nativeBinding.setLlamaLogQuiet

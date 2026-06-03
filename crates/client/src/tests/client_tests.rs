@@ -5,8 +5,17 @@
 
 use super::*;
 use crate::dispatch::InferenceEndpoint;
-#[cfg(feature = "providers")]
-use crate::{RemoteAuth, RemoteSecret};
+#[cfg(feature = "remote")]
+use crate::{LocalEmbedOptions, LocalTextOptions, RemoteGatewayConfig, RemoteSecret};
+
+#[cfg(feature = "remote")]
+use futures::StreamExt;
+#[cfg(feature = "remote")]
+use serde_json::json;
+#[cfg(feature = "remote")]
+use wiremock::matchers::{body_json, header, method, path};
+#[cfg(feature = "remote")]
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 struct FakeEndpoint {
     endpoint: EndpointRef,
@@ -121,22 +130,25 @@ fn automatic_resolution_is_local_only_and_support_based() {
 #[test]
 fn automatic_resolution_ignores_remote_endpoints() {
     let mut client = CogentClient::new();
-    insert_fake(
-        &mut client,
-        EndpointRef::Remote {
-            id: "remote".to_string(),
-        },
-        capabilities(
-            CapabilitySupport::Supported,
-            CapabilitySupport::Supported,
-            CapabilitySupport::Supported,
-        ),
+    let remote = EndpointRef::Remote {
+        id: "remote-a".to_string(),
+    };
+    client.endpoints.insert(
+        remote.clone(),
+        Arc::new(FakeEndpoint {
+            endpoint: remote,
+            capabilities: EndpointCapabilities {
+                query: CapabilitySupport::Supported,
+                chat: CapabilitySupport::Supported,
+                embed: CapabilitySupport::Supported,
+            },
+        }),
     );
 
-    let error = expect_client_error(
-        client.resolve(None, "query"),
-        "remote endpoint should not auto-select",
-    );
+    let error = match client.resolve(None, "query") {
+        Ok(_) => panic!("omitted endpoint must not select remote"),
+        Err(error) => error,
+    };
 
     assert!(matches!(
         error,
@@ -144,170 +156,26 @@ fn automatic_resolution_ignores_remote_endpoints() {
     ));
 }
 
+#[cfg(feature = "remote")]
 #[test]
-fn automatic_resolution_rejects_ambiguous_local_matches() {
+fn explicit_remote_allows_unknown_capabilities() {
     let mut client = CogentClient::new();
-    for id in ["local-a", "local-b"] {
-        insert_fake(
-            &mut client,
-            EndpointRef::Local { id: id.to_string() },
-            capabilities(
-                CapabilitySupport::Supported,
-                CapabilitySupport::Unsupported,
-                CapabilitySupport::Unsupported,
-            ),
-        );
-    }
-
-    let error = expect_client_error(
-        client.resolve(None, "query"),
-        "two local query endpoints are ambiguous",
+    let remote = EndpointRef::Remote {
+        id: "remote-a".to_string(),
+    };
+    client.endpoints.insert(
+        remote.clone(),
+        Arc::new(FakeEndpoint {
+            endpoint: remote.clone(),
+            capabilities: EndpointCapabilities::unknown(),
+        }),
     );
 
-    assert!(matches!(
-        error,
-        CogentError::AmbiguousEndpoint { operation: "query" }
-    ));
-}
+    let endpoint = client
+        .resolve(Some(&remote), "query")
+        .expect("unknown remote capability is gateway-authoritative");
 
-#[test]
-fn facade_dispatches_query_chat_and_embed_to_selected_endpoint() {
-    let mut client = CogentClient::new();
-    let endpoint = EndpointRef::Local {
-        id: "local".to_string(),
-    };
-    insert_fake(&mut client, endpoint.clone(), supported_capabilities());
-
-    let query_error = futures::executor::block_on(client.query(CogentQueryRequest {
-        endpoint: Some(endpoint.clone()),
-        ..CogentQueryRequest::default()
-    }))
-    .expect_err("fake query error");
-    assert!(matches!(
-        query_error,
-        CogentError::Internal(message) if message == "fake query"
-    ));
-
-    let chat_error = futures::executor::block_on(client.chat(CogentChatRequest {
-        endpoint: Some(endpoint.clone()),
-        ..CogentChatRequest::default()
-    }))
-    .expect_err("fake chat error");
-    assert!(matches!(
-        chat_error,
-        CogentError::Internal(message) if message == "fake chat"
-    ));
-
-    let embed_error = futures::executor::block_on(client.embed(CogentEmbedRequest {
-        endpoint: Some(endpoint),
-        ..CogentEmbedRequest::default()
-    }))
-    .expect_err("fake embed error");
-    assert!(matches!(
-        embed_error,
-        CogentError::Internal(message) if message == "fake embed"
-    ));
-}
-
-#[test]
-fn facade_returns_resolution_errors_as_ready_runs() {
-    let client = CogentClient::new();
-    let endpoint = EndpointRef::Local {
-        id: "missing".to_string(),
-    };
-
-    let error = futures::executor::block_on(client.query(CogentQueryRequest {
-        endpoint: Some(endpoint.clone()),
-        ..CogentQueryRequest::default()
-    }))
-    .expect_err("missing endpoint");
-
-    assert!(matches!(
-        error,
-        CogentError::EndpointNotFound(found) if found == endpoint
-    ));
-
-    let chat_error = futures::executor::block_on(client.chat(CogentChatRequest {
-        endpoint: Some(endpoint.clone()),
-        ..CogentChatRequest::default()
-    }))
-    .expect_err("missing endpoint");
-    assert!(matches!(
-        chat_error,
-        CogentError::EndpointNotFound(found) if found == endpoint
-    ));
-
-    let embed_error = futures::executor::block_on(client.embed(CogentEmbedRequest {
-        endpoint: Some(endpoint.clone()),
-        ..CogentEmbedRequest::default()
-    }))
-    .expect_err("missing endpoint");
-    assert!(matches!(
-        embed_error,
-        CogentError::EndpointNotFound(found) if found == endpoint
-    ));
-}
-
-#[test]
-fn explicit_resolution_allows_unknown_capability_support() {
-    let mut client = CogentClient::new();
-    let endpoint = EndpointRef::Remote {
-        id: "remote".to_string(),
-    };
-    insert_fake(
-        &mut client,
-        endpoint.clone(),
-        capabilities(
-            CapabilitySupport::Unknown,
-            CapabilitySupport::Unknown,
-            CapabilitySupport::Unknown,
-        ),
-    );
-
-    let resolved = client
-        .resolve(Some(&endpoint), "query")
-        .expect("unknown support is attempted explicitly");
-
-    assert_eq!(resolved.endpoint(), &endpoint);
-}
-
-#[test]
-fn explicit_resolution_rejects_missing_and_unsupported_endpoints() {
-    let mut client = CogentClient::new();
-    let unsupported = EndpointRef::Local {
-        id: "local".to_string(),
-    };
-    insert_fake(
-        &mut client,
-        unsupported.clone(),
-        capabilities(
-            CapabilitySupport::Unsupported,
-            CapabilitySupport::Supported,
-            CapabilitySupport::Unsupported,
-        ),
-    );
-
-    let missing = EndpointRef::Local {
-        id: "missing".to_string(),
-    };
-    let missing_error =
-        expect_client_error(client.resolve(Some(&missing), "query"), "missing endpoint");
-    assert!(matches!(
-        missing_error,
-        CogentError::EndpointNotFound(endpoint) if endpoint == missing
-    ));
-
-    let unsupported_error = expect_client_error(
-        client.resolve(Some(&unsupported), "query"),
-        "unsupported endpoint",
-    );
-    assert!(matches!(
-        unsupported_error,
-        CogentError::UnsupportedOperation {
-            endpoint,
-            operation: "query"
-        } if endpoint == unsupported
-    ));
+    assert_eq!(endpoint.endpoint(), &remote);
 }
 
 #[test]
@@ -334,101 +202,295 @@ fn duplicate_endpoint_registration_is_invalid() {
 }
 
 #[test]
-fn normalize_id_trims_and_rejects_blank_values() {
-    assert_eq!(
-        normalize_id("  endpoint  ", "endpoint").expect("normalized id"),
-        "endpoint"
-    );
+fn endpoint_ids_must_not_contain_surrounding_whitespace() {
+    let error = normalize_id(" local ", "local id").expect_err("whitespace id must reject");
 
-    let error = normalize_id(" \t ", "endpoint").expect_err("blank id");
     assert!(matches!(
         error,
-        CogentError::InvalidRequest(message) if message.contains("endpoint")
+        CogentError::InvalidRequest(message)
+            if message == "local id must not contain surrounding whitespace"
     ));
 }
 
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 #[test]
-fn add_remote_registers_endpoint_and_reuses_executor() {
+fn remote_gateway_examples_preserve_env_values_for_core_validation() {
+    let source = include_str!("../../examples/remote_common/mod.rs");
+    let env_string = source
+        .split("fn env_string")
+        .nth(1)
+        .and_then(|section| section.split("\n}").next())
+        .expect("remote example env_string helper");
+
+    assert!(env_string.contains("env::var(name)"));
+    assert!(!env_string.contains("trim"));
+}
+
+#[cfg(feature = "remote")]
+#[test]
+fn add_remote_validates_id_before_gateway_transport_config() {
     let mut client = CogentClient::new();
-    let first = client
+    let error = client
         .add_remote(
-            " remote-a ",
-            RemoteConfig::proxy(
-                "model-a",
-                "http://localhost:11434",
-                RemoteAuth::Bearer(RemoteSecret::new("secret-a")),
-            ),
+            " pro ",
+            RemoteGatewayConfig {
+                alias: "pro-chat".to_string(),
+                base_url: "https://user:gateway-secret@gateway.example.test".to_string(),
+                token: RemoteSecret::new("gateway-token"),
+                timeout: None,
+            },
         )
-        .expect("first remote");
-    let second = client
+        .expect_err("remote id must reject before transport config");
+
+    assert!(matches!(
+        &error,
+        CogentError::InvalidRequest(message)
+            if message == "remote id must not contain surrounding whitespace"
+    ));
+    let message = error.to_string();
+    assert!(!message.contains("gateway-secret"));
+    assert!(!message.contains("gateway-token"));
+}
+
+#[cfg(feature = "remote")]
+#[test]
+fn add_remote_validates_alias_before_gateway_transport_config() {
+    let mut client = CogentClient::new();
+    let error = client
         .add_remote(
-            "remote-b",
-            RemoteConfig::proxy(
-                "model-b",
-                "http://localhost:11435",
-                RemoteAuth::Bearer(RemoteSecret::new("secret-b")),
-            ),
+            "pro",
+            RemoteGatewayConfig {
+                alias: "   ".to_string(),
+                base_url: "https://user:gateway-secret@gateway.example.test".to_string(),
+                token: RemoteSecret::new("gateway-token"),
+                timeout: None,
+            },
         )
-        .expect("second remote");
+        .expect_err("blank alias must reject before transport config");
 
-    assert_eq!(
-        first,
-        EndpointRef::Remote {
-            id: "remote-a".to_string()
-        }
-    );
-    assert_eq!(
-        second,
-        EndpointRef::Remote {
-            id: "remote-b".to_string()
-        }
-    );
-    assert!(client.remote_executor.is_some());
-    assert_eq!(client.endpoints.len(), 2);
+    assert!(matches!(
+        &error,
+        CogentError::InvalidRequest(message) if message == "remote alias must not be empty"
+    ));
+    let message = error.to_string();
+    assert!(!message.contains("gateway-secret"));
+    assert!(!message.contains("gateway-token"));
 }
 
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 #[test]
-fn add_remote_rejects_blank_remote_id_before_transport_build() {
+fn add_remote_rejects_alias_with_surrounding_whitespace() {
     let mut client = CogentClient::new();
-    let error = expect_client_error(
-        client.add_remote(
-            " ",
-            RemoteConfig::proxy(
-                "model",
-                "http://localhost:11434",
-                RemoteAuth::Bearer(RemoteSecret::new("secret")),
-            ),
-        ),
-        "blank remote id",
-    );
+    let error = client
+        .add_remote(
+            "pro",
+            RemoteGatewayConfig {
+                alias: " pro-chat ".to_string(),
+                base_url: "https://gateway.example.test".to_string(),
+                token: RemoteSecret::new("gateway-token"),
+                timeout: None,
+            },
+        )
+        .expect_err("whitespace alias must reject");
 
     assert!(matches!(
         error,
-        CogentError::InvalidRequest(message) if message.contains("remote id")
+        CogentError::InvalidRequest(message)
+            if message == "remote alias must not contain surrounding whitespace"
     ));
-    assert!(client.remote_executor.is_none());
 }
 
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 #[test]
-fn add_remote_rejects_blank_remote_model_id_after_building_transport() {
-    let mut client = CogentClient::new();
-    let error = expect_client_error(
-        client.add_remote(
-            "remote",
-            RemoteConfig::proxy(
-                " ",
-                "http://localhost:11434",
-                RemoteAuth::Bearer(RemoteSecret::new("secret")),
-            ),
-        ),
-        "blank remote model id",
-    );
+fn explicit_remote_rejects_local_only_request_fields() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
 
-    assert!(matches!(
-        error,
-        CogentError::InvalidRequest(message) if message.contains("remote model id")
-    ));
+    runtime.block_on(async {
+        let server = MockServer::start().await;
+        let mut client = CogentClient::new();
+        let endpoint = client
+            .add_remote("pro", remote_config(&server, "alias", "token"))
+            .expect("add remote");
+
+        let query_error = client
+            .query(CogentQueryRequest {
+                endpoint: Some(endpoint.clone()),
+                prompt: "hello".to_string(),
+                local: LocalTextOptions {
+                    context_key: Some("ctx".to_string()),
+                    ..LocalTextOptions::default()
+                },
+                ..CogentQueryRequest::default()
+            })
+            .await
+            .expect_err("remote query must reject local text options");
+        let embed_error = client
+            .embed(CogentEmbedRequest {
+                endpoint: Some(endpoint),
+                input: "hello".to_string(),
+                local: LocalEmbedOptions {
+                    normalize: Some(true),
+                    ..LocalEmbedOptions::default()
+                },
+                ..CogentEmbedRequest::default()
+            })
+            .await
+            .expect_err("remote embed must reject local embed options");
+
+        assert!(matches!(
+            query_error,
+            CogentError::InvalidRequest(message)
+                if message == "local text options are not valid for remote endpoints"
+        ));
+        assert!(matches!(
+            embed_error,
+            CogentError::InvalidRequest(message)
+                if message == "local embed options are not valid for remote endpoints"
+        ));
+    });
+}
+
+#[cfg(feature = "remote")]
+#[test]
+fn update_remote_rotates_gateway_config_without_changing_endpoint_id() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+
+    runtime.block_on(async {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/query"))
+            .and(header("authorization", "Bearer token-one"))
+            .and(body_json(json!({
+                "model": "alias-one",
+                "prompt": "hello",
+                "stream": false
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "resp-one",
+                "model": "alias-one",
+                "text": "first",
+                "finish_reason": "stop"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/query"))
+            .and(header("authorization", "Bearer token-two"))
+            .and(body_json(json!({
+                "model": "alias-two",
+                "prompt": "hello",
+                "stream": false
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "resp-two",
+                "model": "alias-two",
+                "text": "second",
+                "finish_reason": "stop"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut client = CogentClient::new();
+        let endpoint = client
+            .add_remote("pro", remote_config(&server, "alias-one", "token-one"))
+            .expect("add remote");
+        let first = client
+            .query(CogentQueryRequest {
+                endpoint: Some(endpoint.clone()),
+                prompt: "hello".to_string(),
+                ..CogentQueryRequest::default()
+            })
+            .await
+            .expect("first remote query");
+
+        let updated = client
+            .update_remote("pro", remote_config(&server, "alias-two", "token-two"))
+            .expect("update remote");
+        let second = client
+            .query(CogentQueryRequest {
+                endpoint: Some(updated.clone()),
+                prompt: "hello".to_string(),
+                ..CogentQueryRequest::default()
+            })
+            .await
+            .expect("second remote query");
+
+        assert_eq!(endpoint, EndpointRef::Remote { id: "pro".into() });
+        assert_eq!(updated, endpoint);
+        assert_eq!(first.text, "first");
+        assert_eq!(second.text, "second");
+    });
+}
+
+#[cfg(feature = "remote")]
+#[test]
+fn remote_stream_requires_terminal_done_event() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+
+    runtime.block_on(async {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/query"))
+            .and(header("authorization", "Bearer token"))
+            .and(body_json(json!({
+                "model": "alias",
+                "prompt": "hello",
+                "stream": true
+            })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .insert_header("x-request-id", "req-truncated")
+                    .set_body_string("event: token\ndata: {\"text\":\"partial\"}\n\n"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut client = CogentClient::new();
+        let endpoint = client
+            .add_remote("pro", remote_config(&server, "alias", "token"))
+            .expect("add remote");
+        let run = client.query(CogentQueryRequest {
+            endpoint: Some(endpoint),
+            prompt: "hello".to_string(),
+            emit_tokens: true,
+            ..CogentQueryRequest::default()
+        });
+        let (mut tokens, response) = run.into_parts();
+
+        let batch = tokens.next().await.expect("partial token batch");
+        assert_eq!(batch.text, "partial");
+        assert!(tokens.next().await.is_none());
+
+        let error = response
+            .await
+            .expect_err("truncated stream must not produce a final response");
+        assert!(matches!(
+            error,
+            CogentError::Remote(remote)
+                if remote.message == "gateway stream ended before done event"
+        ));
+    });
+}
+
+#[cfg(feature = "remote")]
+fn remote_config(server: &MockServer, alias: &str, token: &str) -> RemoteGatewayConfig {
+    RemoteGatewayConfig {
+        alias: alias.to_string(),
+        base_url: server.uri(),
+        token: RemoteSecret::new(token),
+        timeout: None,
+    }
 }

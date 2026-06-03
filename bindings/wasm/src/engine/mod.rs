@@ -16,7 +16,9 @@ use cogentlm_engine::backend::set_llama_log_quiet;
 #[cfg(target_family = "wasm")]
 use cogentlm_engine::engine::protocol::{EmbedOptions, PoolingType};
 #[cfg(target_family = "wasm")]
-use cogentlm_engine::runtime::config::NativeRuntimeConfig;
+use cogentlm_engine::runtime::config::{
+    NativeRuntimeConfig, RequestSampling, SamplingRuntimePatch,
+};
 #[cfg(target_family = "wasm")]
 use cogentlm_engine::runtime::request::{
     GenerateResponse, GenerateResponseStatus, ResponseOutput, TokenEmissionSink,
@@ -27,7 +29,7 @@ use cogentlm_engine::runtime::{InferenceRuntime, SchedulerBurstResult};
 
 use crate::{BrowserRuntimeMetrics, BrowserSchedulerLoopResult};
 
-pub(crate) const ABI_VERSION: u32 = 5;
+pub(crate) const ABI_VERSION: u32 = 6;
 
 #[cfg(target_family = "wasm")]
 const STATUS_OK: i32 = 0;
@@ -64,6 +66,30 @@ pub struct BrowserEngine {
     id: u32,
     last_error: String,
     inner: BrowserEngineInner,
+}
+
+pub(crate) struct BrowserTextRequestArgs<'a> {
+    pub(crate) emit_tokens: i32,
+    pub(crate) grammar: &'a str,
+    pub(crate) stop_json: &'a str,
+    pub(crate) sampling_json: &'a str,
+}
+
+pub(crate) struct BrowserMediaInput<'a> {
+    pub(crate) flat_buffer: &'a [u8],
+    pub(crate) sizes: &'a [i32],
+}
+
+#[cfg(target_family = "wasm")]
+struct BrowserPromptRequest {
+    context_key: String,
+    prompt: String,
+    max_tokens: i32,
+    images: Vec<Vec<u8>>,
+    grammar: String,
+    stop: Vec<String>,
+    sampling: Option<RequestSampling>,
+    emit_tokens: i32,
 }
 
 #[cfg(target_family = "wasm")]
@@ -151,18 +177,24 @@ impl BrowserEngine {
         context_key: &str,
         prompt: &str,
         max_tokens: i32,
-        emit_tokens: i32,
-        grammar: &str,
+        args: BrowserTextRequestArgs<'_>,
     ) -> u32 {
         self.clear_last_error();
-        self.enqueue_prompt_request(
-            context_key.to_string(),
-            prompt.to_string(),
+        let Some((stop, sampling)) =
+            self.parse_text_request_options(args.stop_json, args.sampling_json)
+        else {
+            return 0;
+        };
+        self.enqueue_prompt_request(BrowserPromptRequest {
+            context_key: context_key.to_string(),
+            prompt: prompt.to_string(),
             max_tokens,
-            Vec::new(),
-            grammar.to_string(),
-            emit_tokens,
-        )
+            images: Vec::new(),
+            grammar: args.grammar.to_string(),
+            stop,
+            sampling,
+            emit_tokens: args.emit_tokens,
+        })
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -171,8 +203,7 @@ impl BrowserEngine {
         _context_key: &str,
         _prompt: &str,
         _max_tokens: i32,
-        _emit_tokens: i32,
-        _grammar: &str,
+        _args: BrowserTextRequestArgs<'_>,
     ) -> u32 {
         0
     }
@@ -183,53 +214,52 @@ impl BrowserEngine {
         context_key: &str,
         prompt: &str,
         max_tokens: i32,
-        images_flat_buffer: &[u8],
-        image_sizes: &[i32],
-        emit_tokens: i32,
-        grammar: &str,
+        media: BrowserMediaInput<'_>,
+        args: BrowserTextRequestArgs<'_>,
     ) -> u32 {
         self.clear_last_error();
-        let Some(images) = copy_image_buffers(images_flat_buffer, image_sizes) else {
+        let Some(images) = copy_image_buffers(media.flat_buffer, media.sizes) else {
             self.set_last_error("media buffers are invalid");
             return 0;
         };
+        let Some((stop, sampling)) =
+            self.parse_text_request_options(args.stop_json, args.sampling_json)
+        else {
+            return 0;
+        };
 
-        self.enqueue_prompt_request(
-            context_key.to_string(),
-            prompt.to_string(),
+        self.enqueue_prompt_request(BrowserPromptRequest {
+            context_key: context_key.to_string(),
+            prompt: prompt.to_string(),
             max_tokens,
             images,
-            grammar.to_string(),
-            emit_tokens,
-        )
+            grammar: args.grammar.to_string(),
+            stop,
+            sampling,
+            emit_tokens: args.emit_tokens,
+        })
     }
 
     #[cfg(not(target_family = "wasm"))]
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn start_media_request(
         &mut self,
         _context_key: &str,
         _prompt: &str,
         _max_tokens: i32,
-        _images_flat_buffer: &[u8],
-        _image_sizes: &[i32],
-        _emit_tokens: i32,
-        _grammar: &str,
+        _media: BrowserMediaInput<'_>,
+        _args: BrowserTextRequestArgs<'_>,
     ) -> u32 {
         0
     }
 
     #[cfg(target_family = "wasm")]
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn start_chat_request(
         &mut self,
         context_key: &str,
         messages_json: &str,
         max_tokens: i32,
-        images_flat_buffer: &[u8],
-        image_sizes: &[i32],
-        emit_tokens: i32,
-        grammar: &str,
+        media: BrowserMediaInput<'_>,
+        args: BrowserTextRequestArgs<'_>,
     ) -> u32 {
         self.clear_last_error();
         let Some(runtime) = self.inner.runtime.as_ref() else {
@@ -240,36 +270,40 @@ impl BrowserEngine {
             self.set_last_error("failed to apply chat template");
             return 0;
         };
-        let images = if image_sizes.is_empty() {
+        let images = if media.sizes.is_empty() {
             Vec::new()
         } else {
-            let Some(images) = copy_image_buffers(images_flat_buffer, image_sizes) else {
+            let Some(images) = copy_image_buffers(media.flat_buffer, media.sizes) else {
                 self.set_last_error("media buffers are invalid");
                 return 0;
             };
             images
         };
-        self.enqueue_prompt_request(
-            context_key.to_string(),
+        let Some((stop, sampling)) =
+            self.parse_text_request_options(args.stop_json, args.sampling_json)
+        else {
+            return 0;
+        };
+        self.enqueue_prompt_request(BrowserPromptRequest {
+            context_key: context_key.to_string(),
             prompt,
             max_tokens,
             images,
-            grammar.to_string(),
-            emit_tokens,
-        )
+            grammar: args.grammar.to_string(),
+            stop,
+            sampling,
+            emit_tokens: args.emit_tokens,
+        })
     }
 
     #[cfg(not(target_family = "wasm"))]
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn start_chat_request(
         &mut self,
         _context_key: &str,
         _messages_json: &str,
         _max_tokens: i32,
-        _images_flat_buffer: &[u8],
-        _image_sizes: &[i32],
-        _emit_tokens: i32,
-        _grammar: &str,
+        _media: BrowserMediaInput<'_>,
+        _args: BrowserTextRequestArgs<'_>,
     ) -> u32 {
         0
     }
@@ -312,44 +346,70 @@ impl BrowserEngine {
     }
 
     #[cfg(target_family = "wasm")]
-    fn enqueue_prompt_request(
+    fn parse_text_request_options(
         &mut self,
-        context_key: String,
-        prompt: String,
-        max_tokens: i32,
-        images: Vec<Vec<u8>>,
-        grammar: String,
-        emit_tokens: i32,
-    ) -> u32 {
+        stop_json: &str,
+        sampling_json: &str,
+    ) -> Option<(Vec<String>, Option<RequestSampling>)> {
+        let stop = if stop_json.is_empty() {
+            Vec::new()
+        } else {
+            match serde_json::from_str::<Vec<String>>(stop_json) {
+                Ok(stop) => stop,
+                Err(error) => {
+                    self.set_last_error(format!("invalid stop JSON: {error}"));
+                    return None;
+                }
+            }
+        };
+        let sampling = if sampling_json.is_empty() {
+            None
+        } else {
+            match serde_json::from_str::<SamplingRuntimePatch>(sampling_json) {
+                Ok(patch) if patch.temperature.is_some() || patch.top_p.is_some() => {
+                    Some(RequestSampling::Patch(patch))
+                }
+                Ok(_) => None,
+                Err(error) => {
+                    self.set_last_error(format!("invalid sampling JSON: {error}"));
+                    return None;
+                }
+            }
+        };
+        Some((stop, sampling))
+    }
+
+    #[cfg(target_family = "wasm")]
+    fn enqueue_prompt_request(&mut self, request: BrowserPromptRequest) -> u32 {
         let Some(runtime) = self.inner.runtime.as_mut() else {
             return 0;
         };
-        if max_tokens <= 0 {
+        if request.max_tokens <= 0 {
             return 0;
         }
 
-        let emit_tokens = emit_tokens_enabled(emit_tokens);
-        let enqueue_result = if images.is_empty() {
+        let emit_tokens = emit_tokens_enabled(request.emit_tokens);
+        let enqueue_result = if request.images.is_empty() {
             runtime.enqueue_request(
-                context_key,
-                prompt,
-                max_tokens,
-                grammar,
+                request.context_key,
+                request.prompt,
+                request.max_tokens,
+                request.grammar,
                 "",
-                Vec::new(),
-                None,
+                request.stop,
+                request.sampling,
                 emit_tokens,
             )
         } else {
             runtime.enqueue_multimodal_request(
-                context_key,
-                prompt,
-                max_tokens,
-                images,
-                grammar,
+                request.context_key,
+                request.prompt,
+                request.max_tokens,
+                request.images,
+                request.grammar,
                 "",
-                Vec::new(),
-                None,
+                request.stop,
+                request.sampling,
                 emit_tokens,
             )
         };

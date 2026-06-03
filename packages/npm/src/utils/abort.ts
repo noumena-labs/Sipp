@@ -60,28 +60,47 @@ export function createTimedAbortController(
   controller: AbortController;
   signal: AbortSignal;
   timedOut: () => boolean;
+  resetTimeout: () => void;
   dispose: () => void;
 } {
   const linked = createLinkedAbortController(signal);
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   let didTimeOut = false;
 
-  if (timeoutMs != null && Number.isFinite(timeoutMs) && timeoutMs >= 0) {
+  const clearTimeoutIfSet = (): void => {
+    if (timeoutId != null) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+  };
+  const startTimeout = (): void => {
+    if (
+      linked.signal.aborted ||
+      timeoutMs == null ||
+      !Number.isFinite(timeoutMs) ||
+      timeoutMs < 0
+    ) {
+      return;
+    }
     timeoutId = setTimeout(() => {
       didTimeOut = true;
       linked.controller.abort();
     }, timeoutMs);
-  }
+  };
+  const resetTimeout = (): void => {
+    clearTimeoutIfSet();
+    startTimeout();
+  };
+
+  startTimeout();
 
   return {
     controller: linked.controller,
     signal: linked.signal,
     timedOut: () => didTimeOut,
+    resetTimeout,
     dispose: () => {
-      if (timeoutId != null) {
-        clearTimeout(timeoutId);
-        timeoutId = null;
-      }
+      clearTimeoutIfSet();
       linked.dispose();
     },
   };

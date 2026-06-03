@@ -1,4 +1,5 @@
 import { ModelService } from '../models/model-service.js';
+import { AssetStore, type BrowserCachePolicyOptions } from '../models/asset-store.js';
 import { createBrowserEmbeddingRun, createBrowserTextRun } from '../models/token-queue.js';
 import {
   QueryError,
@@ -8,6 +9,7 @@ import {
   type ChatInput,
   type ChatOptions,
   type EmbedOptions,
+  type EndpointRef,
   type EngineEvent,
   type EngineObservability,
   type EngineState,
@@ -17,10 +19,17 @@ import {
   type ModelSource,
   type QueryInput,
   type QueryOptions,
+  type RemoteGatewayConfig,
 } from '../models/types.js';
 import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.js';
 import { WorkerModelServiceClient } from '../worker/model-service-client.js';
 import type { BackendObservability } from './inference-types.js';
+import {
+  RemoteGatewayRegistry,
+  runRemoteChat,
+  runRemoteEmbedding,
+  runRemoteQuery,
+} from './remote-gateway.js';
 
 export interface EngineModuleOptions {
   locateFile?: (path: string, prefix?: string) => string;
@@ -35,6 +44,8 @@ export interface CogentClientOptions {
   wasmThreading?: 'single-thread' | 'pthread';
   moduleOptions?: EngineModuleOptions;
   maxModelBytes?: number;
+  /** Override browser OPFS split thresholds for large GGUF model files. */
+  browserCache?: BrowserCachePolicyOptions;
   trustedOrigins?: string[];
   executionMode?: 'auto' | 'worker' | 'main-thread';
   workerUrl?: string;
@@ -84,12 +95,17 @@ function shouldUseWorker(config: CogentClientOptions): boolean {
 export class CogentClient implements CogentClientShape {
   public readonly observability: EngineObservability;
   #service: ModelLifecycleService;
+  #remotes = new RemoteGatewayRegistry();
   #closed = false;
 
   public constructor(options: CogentClientOptions = {}) {
     this.#service = shouldUseWorker(options)
       ? new WorkerModelServiceClient(options)
-      : new ModelService(new MainThreadEngineRuntime(options));
+      : new ModelService(
+        new MainThreadEngineRuntime(options),
+        undefined,
+        new AssetStore(undefined, options.browserCache)
+      );
     this.observability = {
       current: () => {
         this.assertOpen();
@@ -148,24 +164,55 @@ export class CogentClient implements CogentClientShape {
     await this.#service.remove(id);
   }
 
+  public addRemote(id: string, config: RemoteGatewayConfig): EndpointRef {
+    this.assertOpen();
+    return this.#remotes.add(id, config);
+  }
+
+  public updateRemote(id: string, config: RemoteGatewayConfig): EndpointRef {
+    this.assertOpen();
+    return this.#remotes.update(id, config);
+  }
+
   public query(input: QueryInput, options: QueryOptions = {}): BrowserTextRun {
     this.assertOpen();
-    return createBrowserTextRun(options, (tokenBatchSink, signal) =>
-      this.#service.runQuery(input, { ...options, signal, tokenBatchSink })
+    const remote = this.#remotes.get(options.endpoint);
+    if (remote != null) {
+      return createBrowserTextRun(options, (tokenBatchSink, signal) =>
+        runRemoteQuery(remote, input, options, tokenBatchSink, signal)
+      );
+    }
+    const localOptions = localQueryOptions(options);
+    return createBrowserTextRun(localOptions, (tokenBatchSink, signal) =>
+      this.#service.runQuery(input, { ...localOptions, signal, tokenBatchSink })
     );
   }
 
   public chat(input: ChatInput, options: ChatOptions = {}): BrowserTextRun {
     this.assertOpen();
-    return createBrowserTextRun(options, (tokenBatchSink, signal) =>
-      this.#service.runChat(input, { ...options, signal, tokenBatchSink })
+    const remote = this.#remotes.get(options.endpoint);
+    if (remote != null) {
+      return createBrowserTextRun(options, (tokenBatchSink, signal) =>
+        runRemoteChat(remote, input, options, tokenBatchSink, signal)
+      );
+    }
+    const localOptions = localQueryOptions(options);
+    return createBrowserTextRun(localOptions, (tokenBatchSink, signal) =>
+      this.#service.runChat(input, { ...localOptions, signal, tokenBatchSink })
     );
   }
 
   public embed(input: string, options: EmbedOptions = {}): BrowserEmbeddingRun {
     this.assertOpen();
-    return createBrowserEmbeddingRun(options.signal, (signal) =>
-      this.#service.runEmbedding(input, { ...options, signal })
+    const remote = this.#remotes.get(options.endpoint);
+    if (remote != null) {
+      return createBrowserEmbeddingRun(options.signal, (signal) =>
+        runRemoteEmbedding(remote, input, options, signal)
+      );
+    }
+    const localOptions = localEmbedOptions(options);
+    return createBrowserEmbeddingRun(localOptions.signal, (signal) =>
+      this.#service.runEmbedding(input, { ...localOptions, signal })
     );
   }
 
@@ -190,4 +237,14 @@ export class CogentClient implements CogentClientShape {
       throw new QueryError('ENGINE_CLOSED', 'CogentClient is closed.');
     }
   }
+}
+
+function localQueryOptions(options: QueryOptions): QueryOptions {
+  const { endpoint: _endpoint, gatewayOptions: _gatewayOptions, ...localOptions } = options;
+  return localOptions;
+}
+
+function localEmbedOptions(options: EmbedOptions): EmbedOptions {
+  const { endpoint: _endpoint, gatewayOptions: _gatewayOptions, ...localOptions } = options;
+  return localOptions;
 }

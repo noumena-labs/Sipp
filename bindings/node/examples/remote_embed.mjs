@@ -1,13 +1,13 @@
 import {
   CogentClient,
-  addOpenAiRemote,
+  addGatewayRemote,
   printEmbedding,
   readRemoteArgs,
 } from './_common.mjs';
 
-const { model, input } = readRemoteArgs('CogentClient remote embedding smoke input.');
+const { alias, input } = readRemoteArgs('CogentClient remote embedding smoke input.');
 const client = new CogentClient();
-const endpoint = addOpenAiRemote(client, model);
+const endpoint = addGatewayRemote(client, alias);
 const result = await client.embed({
   endpoint,
   input,
