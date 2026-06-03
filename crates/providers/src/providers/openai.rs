@@ -17,6 +17,16 @@ use super::openai_compat::{
     openai_stream_chat_body, openai_stream_events,
 };
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+#[cfg(test)]
+#[path = "../tests/providers/openai_tests.rs"]
+mod openai_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const OPENAI_RESPONSES_TYPED_FIELDS: &[&str] = &[
     "model",
@@ -237,7 +247,3 @@ fn openai_responses_usage(value: &serde_json::Value) -> ProviderResult<crate::To
         total_tokens: optional_u32(value, "total_tokens", ProviderKind::OpenAi)?,
     })
 }
-
-#[cfg(test)]
-#[path = "../tests/providers/openai_tests.rs"]
-mod openai_tests;

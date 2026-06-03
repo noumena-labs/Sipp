@@ -20,6 +20,16 @@ use super::common::{
     provider_body_error, provider_response_error, require_non_empty_field, token_usage_total,
 };
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+#[cfg(test)]
+#[path = "../tests/providers/anthropic_tests.rs"]
+mod anthropic_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
 const DEFAULT_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com/v1";
 const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 const DEFAULT_ANTHROPIC_MAX_TOKENS: u32 = 1024;
@@ -604,7 +614,3 @@ fn anthropic_stream_error(raw: serde_json::Value) -> ProviderError {
         raw: Some(Box::new(raw)),
     }
 }
-
-#[cfg(test)]
-#[path = "../tests/providers/anthropic_tests.rs"]
-mod anthropic_tests;

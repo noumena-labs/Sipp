@@ -1,6 +1,8 @@
 //! Tests the `providers::proxy` module in `cogentlm-providers`.
 //!
-//! Covers provider request mapping, response parsing, transport, and stream behavior with deterministic local fixtures and no live network calls.
+//! Covers OpenAI-compatible proxy provider construction, request mapping,
+//! response parsing, unsupported paths, HTTP error handling, and stream behavior
+//! with deterministic `wiremock` fixtures and no live network calls.
 
 use std::time::Duration;
 
@@ -41,6 +43,20 @@ fn rejects_zero_timeout() {
 
     config.timeout = Some(Duration::from_millis(1));
     ProxyProvider::new(config).expect("positive timeout");
+}
+
+#[test]
+fn kind_returns_proxy() {
+    let provider = ProxyProvider::new(ProxyConfig {
+        base_url: "http://localhost".to_string(),
+        auth: ProviderAuth::Bearer(SecretString::new("token")),
+        protocol: ProxyProtocol::OpenAiCompatible,
+        static_headers: Vec::new(),
+        timeout: None,
+    })
+    .expect("proxy provider");
+
+    assert_eq!(provider.kind(), ProviderKind::Proxy);
 }
 
 #[tokio::test]
@@ -195,6 +211,25 @@ async fn maps_openai_compatible_chat_response() {
     assert_eq!(response.metadata.request_id.as_deref(), Some("req-1"));
     assert_eq!(response.metadata.response_id.as_deref(), Some("chatcmpl-1"));
     assert_eq!(response.metadata.finish_reason_raw.as_deref(), Some("stop"));
+}
+
+#[tokio::test]
+async fn generate_is_explicitly_unsupported() {
+    let server = MockServer::start().await;
+    let provider = ProxyProvider::new(config(&server)).expect("proxy provider");
+
+    let err = provider
+        .generate(ProviderGenerateRequest {
+            model: "model-a".to_string(),
+            prompt: "tell me".to_string(),
+            options: ProviderGenerationOptions::default(),
+            provider_options: Default::default(),
+        })
+        .await
+        .expect_err("proxy generate should fail");
+
+    assert_eq!(err.kind, ProviderErrorKind::UnsupportedFeature);
+    assert_eq!(err.provider, ProviderKind::Proxy);
 }
 
 #[tokio::test]

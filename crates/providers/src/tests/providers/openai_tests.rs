@@ -1,10 +1,13 @@
 //! Tests the `providers::openai` module in `cogentlm-providers`.
 //!
-//! Covers provider request mapping, response parsing, transport, and stream behavior with deterministic local fixtures and no live network calls.
+//! Covers OpenAI provider construction, request mapping, response parsing,
+//! error paths, and stream routing with deterministic `wiremock` fixtures and
+//! no live network calls.
 
 use std::time::Duration;
 
 use cogentlm_core::{ChatMessage, ChatRole, FinishReason};
+use futures_util::StreamExt;
 use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -36,6 +39,18 @@ fn rejects_zero_timeout() {
 
     config.timeout = Some(Duration::from_millis(1));
     OpenAiProvider::new(config).expect("positive timeout");
+}
+
+#[test]
+fn kind_returns_openai() {
+    let provider = OpenAiProvider::new(OpenAiConfig {
+        api_key: SecretString::new("token"),
+        base_url: Some("http://localhost".to_string()),
+        timeout: None,
+    })
+    .expect("provider");
+
+    assert_eq!(provider.kind(), ProviderKind::OpenAi);
 }
 
 #[tokio::test]
@@ -225,6 +240,59 @@ async fn maps_openai_responses_generate() {
 }
 
 #[tokio::test]
+async fn streams_openai_chat_chunks() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(header("authorization", "Bearer token"))
+        .and(body_json(json!({
+            "model": "gpt-test",
+            "messages": [{ "role": "user", "content": "hello" }],
+            "stream": true
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-request-id", "req-stream")
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(concat!(
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n",
+                    "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+                    "data: [DONE]\n\n"
+                )),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = OpenAiProvider::new(config(&server)).expect("provider");
+    let events = provider
+        .stream_chat(ProviderChatRequest {
+            model: "gpt-test".to_string(),
+            messages: vec![ChatMessage::new(ChatRole::User, "hello")],
+            options: ProviderGenerationOptions::default(),
+            provider_options: Default::default(),
+        })
+        .await
+        .expect("stream")
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<ProviderResult<Vec<_>>>()
+        .expect("events");
+
+    assert!(matches!(
+        &events[0],
+        ProviderStreamEvent::TokenBatch(batch)
+            if batch.request_id == "req-stream" && batch.text == "hi"
+    ));
+    assert_eq!(
+        events[1],
+        ProviderStreamEvent::Finished {
+            finish_reason: FinishReason::Stop
+        }
+    );
+}
+
+#[tokio::test]
 async fn maps_openai_body_error_codes() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -306,6 +374,32 @@ fn rejects_invalid_openai_responses_options() {
     assert_eq!(err.kind, ProviderErrorKind::InvalidRequest);
 }
 
+#[test]
+fn maps_openai_responses_body_with_top_p_and_provider_options() {
+    let request = ProviderGenerateRequest {
+        model: "gpt-test".to_string(),
+        prompt: "tell me".to_string(),
+        options: ProviderGenerationOptions {
+            max_tokens: Some(8),
+            temperature: Some(0.25),
+            top_p: Some(0.9),
+            ..ProviderGenerationOptions::default()
+        },
+        provider_options: [("metadata".to_string(), json!({ "source": "test" }))]
+            .into_iter()
+            .collect(),
+    };
+
+    let body = openai_responses_body(&request).expect("responses body");
+
+    assert_eq!(body["model"], "gpt-test");
+    assert_eq!(body["input"], "tell me");
+    assert_eq!(body["max_output_tokens"], 8);
+    assert_eq!(body["temperature"], json!(0.25));
+    assert_eq!(body["top_p"], json!(0.9_f32));
+    assert_eq!(body["metadata"]["source"], "test");
+}
+
 #[tokio::test]
 async fn rejects_provider_options_colliding_with_responses_fields() {
     let provider = OpenAiProvider::new(OpenAiConfig {
@@ -348,4 +442,56 @@ fn responses_tool_call_output_yields_empty_text() {
 
     assert_eq!(response.result.text, "");
     assert!(response.metadata.raw.pointer("/output/0/type").is_some());
+}
+
+#[test]
+fn responses_incomplete_reason_maps_to_length_finish() {
+    let body = json!({
+        "id": "resp-1",
+        "status": "incomplete",
+        "incomplete_details": { "reason": "max_output_tokens" },
+        "model": "gpt-test",
+        "output": [{
+            "content": [{ "type": "output_text", "text": "partial" }]
+        }],
+        "usage": {
+            "input_tokens": 1,
+            "output_tokens": 2,
+            "total_tokens": 3
+        }
+    });
+
+    let response =
+        openai_responses_response_from_body(Some("req-1".to_string()), body).expect("response");
+
+    assert_eq!(response.result.text, "partial");
+    assert_eq!(response.result.finish_reason, FinishReason::Length);
+    assert_eq!(
+        response.metadata.finish_reason_raw.as_deref(),
+        Some("max_output_tokens")
+    );
+    assert_eq!(response.usage.expect("usage").output_tokens, Some(2));
+}
+
+#[test]
+fn rejects_malformed_openai_responses_bodies() {
+    for body in [
+        json!({ "model": "gpt-test" }),
+        json!({
+            "model": "gpt-test",
+            "output": [{ "content": [{ "type": "output_text" }] }]
+        }),
+        json!({
+            "output": [{ "content": [{ "type": "output_text", "text": "done" }] }]
+        }),
+        json!({
+            "model": "gpt-test",
+            "output": [{ "content": [{ "type": "output_text", "text": "done" }] }],
+            "usage": { "input_tokens": "bad" }
+        }),
+    ] {
+        let err = openai_responses_response_from_body(None, body)
+            .expect_err("malformed responses body should fail");
+        assert_eq!(err.kind, ProviderErrorKind::Provider);
+    }
 }

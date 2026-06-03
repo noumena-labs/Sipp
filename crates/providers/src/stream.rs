@@ -6,6 +6,16 @@ use futures_util::Stream;
 use crate::{ProviderError, ProviderErrorKind};
 use crate::{ProviderKind, ProviderResult, TokenUsage};
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+#[cfg(test)]
+#[path = "tests/stream_tests.rs"]
+mod stream_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
 pub type ProviderStream<T> = Pin<Box<dyn Stream<Item = ProviderResult<T>> + Send>>;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -169,7 +179,3 @@ fn sse_data_payload(raw_event: &str) -> Option<String> {
         Some(lines.join("\n"))
     }
 }
-
-#[cfg(test)]
-#[path = "tests/stream_tests.rs"]
-mod stream_tests;

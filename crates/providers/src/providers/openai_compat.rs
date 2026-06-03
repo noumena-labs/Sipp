@@ -21,6 +21,16 @@ use super::common::{
     provider_body_error, provider_response_error, require_non_empty_field,
 };
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+#[cfg(test)]
+#[path = "../tests/providers/openai_compat_tests.rs"]
+mod openai_compat_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
 pub(super) const OPENAI_CHAT_TYPED_FIELDS: &[&str] = &[
     "model",
     "messages",
@@ -477,7 +487,3 @@ fn provider_stream_error(raw: serde_json::Value, provider: ProviderKind) -> Prov
         raw: Some(Box::new(raw)),
     }
 }
-
-#[cfg(test)]
-#[path = "../tests/providers/openai_compat_tests.rs"]
-mod openai_compat_tests;
