@@ -80,6 +80,9 @@ interface AssetClassifier {
 interface RuntimeRequestOptions {
   session?: string;
   maxTokens?: number;
+  temperature?: number;
+  topP?: number;
+  stop?: readonly string[];
   signal?: AbortSignal;
   emitTokens?: boolean;
   tokenBatchSink?: (batch: TokenBatch) => void;
@@ -394,6 +397,8 @@ export class ModelService implements ModelLifecycleService {
       emitTokens: options.emitTokens === true || options.tokenBatchSink != null,
       tokenBatchSink: options.tokenBatchSink == null ? undefined : deliverTokenBatch,
       media,
+      stop: options.stop,
+      sampling: requestSamplingPatch(options),
       grammar: options.grammar,
       onRequestStarted: options.onRequestStarted,
     };
@@ -1440,6 +1445,19 @@ export class ModelService implements ModelLifecycleService {
     }
     return this.chatBoundaryMarkersPromise;
   }
+}
+
+function requestSamplingPatch(
+  options: RuntimeRequestOptions
+): PromptOptions['sampling'] {
+  const patch: NonNullable<PromptOptions['sampling']> = {};
+  if (options.temperature != null) {
+    patch.temperature = options.temperature;
+  }
+  if (options.topP != null) {
+    patch.top_p = options.topP;
+  }
+  return patch.temperature == null && patch.top_p == null ? undefined : patch;
 }
 
 function isChatInputObject(input: ChatInput): input is Extract<ChatInput, { messages: unknown }> {

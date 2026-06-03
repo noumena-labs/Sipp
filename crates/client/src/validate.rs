@@ -14,19 +14,19 @@ pub(crate) fn common_text_options(options: &CogentTextOptions) -> Result<(), Cog
 
 pub(crate) fn local_query(request: &CogentQueryRequest) -> Result<(), CogentError> {
     common_text_options(&request.options)?;
-    reject_remote_options(&request.remote_options)
+    reject_gateway_options(&request.gateway_options)
 }
 
 pub(crate) fn local_chat(request: &CogentChatRequest) -> Result<(), CogentError> {
     common_text_options(&request.options)?;
-    reject_remote_options(&request.remote_options)
+    reject_gateway_options(&request.gateway_options)
 }
 
 pub(crate) fn local_embed(request: &CogentEmbedRequest) -> Result<(), CogentError> {
-    reject_remote_options(&request.remote_options)
+    reject_gateway_options(&request.gateway_options)
 }
 
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 pub(crate) fn remote_query(request: &CogentQueryRequest) -> Result<(), CogentError> {
     common_text_options(&request.options)?;
     if request.local.has_fields() {
@@ -34,10 +34,11 @@ pub(crate) fn remote_query(request: &CogentQueryRequest) -> Result<(), CogentErr
             "local text options are not valid for remote endpoints".to_string(),
         ));
     }
+    reject_local_only_gateway_options(&request.gateway_options)?;
     Ok(())
 }
 
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 pub(crate) fn remote_chat(request: &CogentChatRequest) -> Result<(), CogentError> {
     common_text_options(&request.options)?;
     if request.local.has_fields() {
@@ -45,29 +46,59 @@ pub(crate) fn remote_chat(request: &CogentChatRequest) -> Result<(), CogentError
             "local text options are not valid for remote endpoints".to_string(),
         ));
     }
+    reject_local_only_gateway_options(&request.gateway_options)?;
     Ok(())
 }
 
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 pub(crate) fn remote_embed(request: &CogentEmbedRequest) -> Result<(), CogentError> {
     if request.local.has_fields() {
         return Err(CogentError::InvalidRequest(
             "local embed options are not valid for remote endpoints".to_string(),
         ));
     }
+    reject_local_only_gateway_options(&request.gateway_options)?;
     Ok(())
 }
 
-fn reject_remote_options(
-    remote_options: &serde_json::Map<String, serde_json::Value>,
+fn reject_gateway_options(
+    gateway_options: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), CogentError> {
-    if remote_options.is_empty() {
+    if gateway_options.is_empty() {
         Ok(())
     } else {
         Err(CogentError::InvalidRequest(
-            "remote_options are not valid for local endpoints".to_string(),
+            "gateway_options are not valid for local endpoints".to_string(),
         ))
     }
+}
+
+#[cfg(feature = "remote")]
+const LOCAL_ONLY_GATEWAY_FIELDS: &[&str] = &[
+    "context_key",
+    "contextKey",
+    "session",
+    "grammar",
+    "json_schema",
+    "jsonSchema",
+    "sampling",
+    "media",
+    "normalize",
+    "local",
+];
+
+#[cfg(feature = "remote")]
+fn reject_local_only_gateway_options(
+    gateway_options: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), CogentError> {
+    for key in gateway_options.keys() {
+        if LOCAL_ONLY_GATEWAY_FIELDS.contains(&key.as_str()) {
+            return Err(CogentError::InvalidRequest(format!(
+                "gateway_options cannot contain local-only field: {key}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn finite_optional(name: &'static str, value: Option<f32>) -> Result<(), CogentError> {
@@ -79,3 +110,7 @@ fn finite_optional(name: &'static str, value: Option<f32>) -> Result<(), CogentE
         )))
     }
 }
+
+#[cfg(test)]
+#[path = "tests/validate_tests.rs"]
+mod validate_tests;

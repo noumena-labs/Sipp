@@ -103,6 +103,11 @@ export interface SamplingRuntimeConfig {
   backend_sampling?: boolean;
 }
 
+export interface RequestSamplingPatch {
+  temperature?: number;
+  top_p?: number;
+}
+
 export interface SchedulerPolicyConfig {
   mode?: SchedulerPolicyMode;
   decode_token_reserve?: number;
@@ -161,6 +166,8 @@ export interface PromptOptions {
   emitTokens?: boolean;
   tokenBatchSink?: (batch: TokenBatch) => void;
   media?: Uint8Array[];
+  stop?: readonly string[];
+  sampling?: RequestSamplingPatch;
   /**
    * Optional GBNF grammar source applied to the sampler for this request.
    * When provided, the native runtime constrains token sampling to strings
@@ -205,6 +212,8 @@ export interface GenerateRequest {
   promptText: string;
   maxOutputTokens: number;
   media?: Uint8Array[];
+  stop?: readonly string[];
+  sampling?: RequestSamplingPatch;
   /** Optional GBNF grammar source (see {@link PromptOptions.grammar}). */
   grammar?: string;
 }

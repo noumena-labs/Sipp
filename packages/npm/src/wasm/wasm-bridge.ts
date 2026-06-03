@@ -7,6 +7,7 @@ import type {
   KvReuseMode,
   NativeRuntimeConfig,
   PoolingType,
+  RequestSamplingPatch,
   RequestObservabilityMetrics,
 } from '../engine/inference-types.js';
 import type {
@@ -54,6 +55,23 @@ function decodeWasmUtf8(bytes: Uint8Array): string {
 
 function validateGrammarSize(grammar: string | undefined): void {
   assertGrammarByteSize(grammar);
+}
+
+interface WasmTextRequestOptions {
+  grammar?: string;
+  stop?: readonly string[];
+  sampling?: RequestSamplingPatch;
+  emitTokens?: boolean;
+}
+
+function serializeStop(stop: readonly string[] | undefined): string {
+  return stop == null || stop.length === 0 ? '' : JSON.stringify(stop);
+}
+
+function serializeSampling(sampling: RequestSamplingPatch | undefined): string {
+  return sampling == null || (sampling.temperature == null && sampling.top_p == null)
+    ? ''
+    : JSON.stringify(sampling);
 }
 
 export type WasmSchedulerProgressResult = {
@@ -406,16 +424,25 @@ export class WasmBridge {
     contextKey: string,
     promptText: string,
     maxOutputTokens: number,
-    grammar?: string,
-    emitTokens = false
+    options: WasmTextRequestOptions = {}
   ): GenerateRequestId {
-    validateGrammarSize(grammar);
-    const grammarArg = grammar ?? '';
+    validateGrammarSize(options.grammar);
+    const grammarArg = options.grammar ?? '';
+    const stopArg = serializeStop(options.stop);
+    const samplingArg = serializeSampling(options.sampling);
     const requestId = this.module.ccall(
       'CE_StartTextRequest',
       'number',
-      ['string', 'string', 'number', 'number', 'string'],
-      [contextKey, promptText, maxOutputTokens, emitTokens ? 1 : 0, grammarArg]
+      ['string', 'string', 'number', 'number', 'string', 'string', 'string'],
+      [
+        contextKey,
+        promptText,
+        maxOutputTokens,
+        options.emitTokens === true ? 1 : 0,
+        grammarArg,
+        stopArg,
+        samplingArg,
+      ]
     );
     if (requestId instanceof Promise) {
       throw new Error('Unexpected async result while enqueuing a request.');
@@ -428,11 +455,12 @@ export class WasmBridge {
     promptText: string,
     maxOutputTokens: number,
     media: Uint8Array[],
-    grammar?: string,
-    emitTokens = false
+    options: WasmTextRequestOptions = {}
   ): GenerateRequestId {
-    validateGrammarSize(grammar);
-    const grammarArg = grammar ?? '';
+    validateGrammarSize(options.grammar);
+    const grammarArg = options.grammar ?? '';
+    const stopArg = serializeStop(options.stop);
+    const samplingArg = serializeSampling(options.sampling);
     return this.withWasmMediaBuffers(media, (flatPtr, sizesPtr) =>
       this.callNumber(
         'CE_StartMediaRequest',
@@ -445,6 +473,8 @@ export class WasmBridge {
           'pointer',
           'number',
           'string',
+          'string',
+          'string',
         ],
         [
           contextKey,
@@ -453,8 +483,10 @@ export class WasmBridge {
           media.length,
           flatPtr,
           sizesPtr,
-          emitTokens ? 1 : 0,
+          options.emitTokens === true ? 1 : 0,
           grammarArg,
+          stopArg,
+          samplingArg,
         ]
       ) as GenerateRequestId
     );
@@ -465,11 +497,12 @@ export class WasmBridge {
     messages: readonly ChatMessage[],
     maxOutputTokens: number,
     media: Uint8Array[] = [],
-    grammar?: string,
-    emitTokens = false
+    options: WasmTextRequestOptions = {}
   ): GenerateRequestId {
-    validateGrammarSize(grammar);
-    const grammarArg = grammar ?? '';
+    validateGrammarSize(options.grammar);
+    const grammarArg = options.grammar ?? '';
+    const stopArg = serializeStop(options.stop);
+    const samplingArg = serializeSampling(options.sampling);
     return this.withWasmMediaBuffers(media, (flatPtr, sizesPtr) =>
       this.callNumber(
         'CE_StartChatRequest',
@@ -482,6 +515,8 @@ export class WasmBridge {
           'pointer',
           'number',
           'string',
+          'string',
+          'string',
         ],
         [
           contextKey,
@@ -490,8 +525,10 @@ export class WasmBridge {
           media.length,
           flatPtr,
           sizesPtr,
-          emitTokens ? 1 : 0,
+          options.emitTokens === true ? 1 : 0,
           grammarArg,
+          stopArg,
+          samplingArg,
         ]
       ) as GenerateRequestId
     );
@@ -834,11 +871,17 @@ export class WasmBridge {
     shardMaxBytes: number,
     callbacks: GgufReadAtCallbacks
   ): number {
+    let callbackError: unknown = null;
     const readAtPtr = this.module.addFunction(
       (_userData: number, offset: bigint | number, dstPtr: number, len: number) => {
-        const start = this.byteOffset(dstPtr);
-        const target = this.module.HEAPU8.subarray(start, start + len);
-        return callbacks.readAt(this.byteOffset(offset), target) ?? 0;
+        try {
+          const start = this.byteOffset(dstPtr);
+          const target = this.module.HEAPU8.subarray(start, start + len);
+          return callbacks.readAt(this.byteOffset(offset), target) ?? 0;
+        } catch (error) {
+          callbackError = error;
+          return -1;
+        }
       },
       'iijii'
     );
@@ -850,7 +893,10 @@ export class WasmBridge {
         [sourceBytes, shardMaxBytes, 0, readAtPtr]
       );
       if (count <= 0) {
-        throw new Error(`Rust GGUF split planning failed with status ${count}.`);
+        throw this.ggufCallbackError(
+          `Rust GGUF split planning failed with status ${count}.`,
+          callbackError
+        );
       }
       return count;
     } finally {
@@ -864,29 +910,53 @@ export class WasmBridge {
     shardMaxBytes: number,
     callbacks: GgufSplitStreamCallbacks
   ): void {
+    let callbackError: unknown = null;
     const readAtPtr = this.module.addFunction(
       (_userData: number, offset: bigint | number, dstPtr: number, len: number) => {
-        const start = this.byteOffset(dstPtr);
-        const target = this.module.HEAPU8.subarray(start, start + len);
-        return callbacks.readAt(this.byteOffset(offset), target) ?? 0;
+        try {
+          const start = this.byteOffset(dstPtr);
+          const target = this.module.HEAPU8.subarray(start, start + len);
+          return callbacks.readAt(this.byteOffset(offset), target) ?? 0;
+        } catch (error) {
+          callbackError = error;
+          return -1;
+        }
       },
       'iijii'
     );
     const openShardPtr = this.module.addFunction(
-      (_userData: number, pathPtr: number, index: number, count: number) =>
-        callbacks.openShard(this.readUtf8String(pathPtr), index, count) ?? 0,
+      (_userData: number, pathPtr: number, index: number, count: number) => {
+        try {
+          return callbacks.openShard(this.readUtf8String(pathPtr), index, count) ?? 0;
+        } catch (error) {
+          callbackError = error;
+          return -1;
+        }
+      },
       'iiiii'
     );
     const writeShardPtr = this.module.addFunction(
       (_userData: number, bytesPtr: number, len: number) => {
-        const start = this.byteOffset(bytesPtr);
-        const bytes = this.module.HEAPU8.subarray(start, start + len);
-        return callbacks.writeShard(bytes) ?? 0;
+        try {
+          const start = this.byteOffset(bytesPtr);
+          const bytes = this.module.HEAPU8.subarray(start, start + len);
+          return callbacks.writeShard(bytes) ?? 0;
+        } catch (error) {
+          callbackError = error;
+          return -1;
+        }
       },
       'iiii'
     );
     const closeShardPtr = this.module.addFunction(
-      () => callbacks.closeShard() ?? 0,
+      () => {
+        try {
+          return callbacks.closeShard() ?? 0;
+        } catch (error) {
+          callbackError = error;
+          return -1;
+        }
+      },
       'ii'
     );
 
@@ -906,7 +976,10 @@ export class WasmBridge {
         ]
       );
       if (status !== 0) {
-        throw new Error(`Rust GGUF stream split failed with status ${status}.`);
+        throw this.ggufCallbackError(
+          `Rust GGUF stream split failed with status ${status}.`,
+          callbackError
+        );
       }
     } finally {
       this.module.removeFunction(readAtPtr);
@@ -1081,6 +1154,14 @@ export class WasmBridge {
     } finally {
       this.free(ptr);
     }
+  }
+
+  private ggufCallbackError(message: string, callbackError: unknown): Error {
+    if (callbackError == null) {
+      return new Error(message);
+    }
+    const detail = callbackError instanceof Error ? callbackError.message : String(callbackError);
+    return new Error(`${message} Callback failed: ${detail}`, { cause: callbackError });
   }
 
   private withWasmMediaBuffers<T>(

@@ -1005,6 +1005,23 @@ test('ModelService loads, lists, tracks current, and queries text models', async
   assert.equal(runtime.lastPrompt, 'hello');
 });
 
+test('ModelService maps common generation options into local prompt options', async () => {
+  const { service, runtime } = createService();
+  await service.load(file('text-model.gguf'));
+
+  await service.runQuery('hello', {
+    maxTokens: 12,
+    temperature: 0.2,
+    topP: 0.8,
+    stop: ['END'],
+  });
+
+  const options = runtime.enqueuedOptions.at(-1) as PromptOptions;
+  assert.equal(options.nTokens, 12);
+  assert.deepEqual(options.sampling, { temperature: 0.2, top_p: 0.8 });
+  assert.deepEqual(options.stop, ['END']);
+});
+
 test('ModelService.embed returns embedding results without token emission', async () => {
   const { service, runtime } = createService();
   await service.load(file('embedding-model.gguf'));

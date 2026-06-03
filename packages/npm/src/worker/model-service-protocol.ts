@@ -11,6 +11,7 @@ import type {
   QueryOptions,
   TokenBatch,
 } from '../models/types.js';
+import type { BrowserCachePolicyOptions } from '../models/asset-store.js';
 import type { SharedTokenRingDescriptor } from '../runtime/shared-token-ring.js';
 
 export interface WorkerRuntimeConfig {
@@ -19,11 +20,15 @@ export interface WorkerRuntimeConfig {
   wasmThreading?: 'single-thread' | 'pthread';
   moduleOptions?: Record<string, unknown>;
   maxModelBytes?: number;
+  browserCache?: BrowserCachePolicyOptions;
   trustedOrigins?: string[];
 }
 
 export type WorkerQueryOptions =
-  Pick<QueryOptions, 'session' | 'maxTokens' | 'grammar'> & {
+  Pick<
+    QueryOptions,
+    'session' | 'maxTokens' | 'temperature' | 'topP' | 'stop' | 'grammar'
+  > & {
     emitTokens: boolean;
   };
 

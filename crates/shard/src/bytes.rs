@@ -5,6 +5,8 @@ use std::io::{self, Read, Write};
 
 use super::{GgufError, GgufReadAt, GgufValueType};
 
+const READ_AT_CURSOR_BUFFER_BYTES: usize = 64 * 1024;
+
 pub(super) fn read_raw_value<R: Read>(
     reader: &mut CountingReader<'_, R>,
     value_type: GgufValueType,
@@ -145,14 +147,22 @@ pub(super) fn u32_from_usize(value: usize, name: &str) -> Result<u32, GgufError>
 
 pub(super) struct ReadAtCursor<'a, S> {
     source: &'a mut S,
+    source_len: u64,
     position: u64,
+    buffer: Vec<u8>,
+    buffer_start: u64,
+    buffer_len: usize,
 }
 
 impl<'a, S> ReadAtCursor<'a, S> {
-    pub(super) fn new(source: &'a mut S) -> Self {
+    pub(super) fn new(source: &'a mut S, source_len: u64) -> Self {
         Self {
             source,
+            source_len,
             position: 0,
+            buffer: vec![0; READ_AT_CURSOR_BUFFER_BYTES],
+            buffer_start: 0,
+            buffer_len: 0,
         }
     }
 }
@@ -162,16 +172,64 @@ impl<S: GgufReadAt> Read for ReadAtCursor<'_, S> {
         if buf.is_empty() {
             return Ok(0);
         }
+
+        let mut written = 0usize;
+        while written < buf.len() {
+            if !self.buffer_contains(self.position) {
+                self.fill_buffer()?;
+                if self.buffer_len == 0 {
+                    break;
+                }
+            }
+
+            let buffer_offset = usize::try_from(self.position - self.buffer_start)
+                .map_err(|_| io::Error::other("read buffer offset overflow"))?;
+            let available = self.buffer_len.saturating_sub(buffer_offset);
+            if available == 0 {
+                self.fill_buffer()?;
+                continue;
+            }
+
+            let chunk = available.min(buf.len() - written);
+            buf[written..written + chunk]
+                .copy_from_slice(&self.buffer[buffer_offset..buffer_offset + chunk]);
+            written += chunk;
+            self.position = self
+                .position
+                .checked_add(
+                    u64::try_from(chunk).map_err(|_| io::Error::other("read length overflow"))?,
+                )
+                .ok_or_else(|| io::Error::other("read position overflow"))?;
+        }
+        Ok(written)
+    }
+}
+
+impl<S: GgufReadAt> ReadAtCursor<'_, S> {
+    fn buffer_contains(&self, position: u64) -> bool {
+        let Some(buffer_end) = self.buffer_start.checked_add(self.buffer_len as u64) else {
+            return false;
+        };
+        position >= self.buffer_start && position < buffer_end
+    }
+
+    fn fill_buffer(&mut self) -> io::Result<()> {
+        self.buffer_start = self.position;
+        if self.position >= self.source_len {
+            self.buffer_len = 0;
+            return Ok(());
+        }
+
+        let remaining = self.source_len - self.position;
+        let read_len = match usize::try_from(remaining) {
+            Ok(value) => value.min(self.buffer.len()),
+            Err(_) => self.buffer.len(),
+        };
         self.source
-            .read_at(self.position, buf)
+            .read_at(self.position, &mut self.buffer[..read_len])
             .map_err(|err| io::Error::other(err.to_string()))?;
-        self.position = self
-            .position
-            .checked_add(
-                u64::try_from(buf.len()).map_err(|_| io::Error::other("read length overflow"))?,
-            )
-            .ok_or_else(|| io::Error::other("read position overflow"))?;
-        Ok(buf.len())
+        self.buffer_len = read_len;
+        Ok(())
     }
 }
 

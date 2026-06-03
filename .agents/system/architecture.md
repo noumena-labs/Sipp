@@ -8,7 +8,9 @@ The native engine is broken down into modular crates.
 - **`crates/core`**: Low-level foundational Rust types and abstractions.
 - **`crates/engine`**: The primary inference engine logic, memory management, and model lifecycle.
 - **`crates/shard`**: GGUF cache planning and split-file writing utilities.
-- **`crates/providers`**: Wrappers and compatibility layers for external APIs (like OpenAI and Anthropic) to emulate local engine behavior.
+- **`crates/remote`**: Client-side transport for the CogentLM Remote Gateway Protocol (`/v1/query`, `/v1/chat`, and `/v1/embed`). App-facing remote clients depend on this crate, not on provider adapters.
+- **`crates/gateway`**: Server-side CogentLM Remote Gateway implementation. Owns bearer auth, alias routing, normalized gateway routes, CORS setup, gateway-owned backends such as mock and hosted-local CogentEngine, and the `serve --config gateway.toml` binary.
+- **`crates/gateway-providers`**: Server-side external provider adapter code for gateway use. Provider keys, upstream URLs, provider headers, and routing policy belong behind a gateway boundary, not in `CogentClient` or distributed app packages.
 - **`crates/cli`**: The command-line interface for running the engine directly.
 - **`crates/xtask`**: The central build orchestrator (replaces `make`/`cmake` shell scripts).
 

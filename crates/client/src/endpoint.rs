@@ -42,7 +42,7 @@ impl EndpointCapabilities {
         }
     }
 
-    #[cfg(feature = "providers")]
+    #[cfg(feature = "remote")]
     pub(crate) const fn unknown() -> Self {
         Self {
             query: CapabilitySupport::Unknown,

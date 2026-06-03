@@ -1,4 +1,5 @@
 import { ModelService } from '../models/model-service.js';
+import { AssetStore } from '../models/asset-store.js';
 import { QueryError, type TokenBatch } from '../models/types.js';
 import { resolveRuntimeUrls } from '../engine/runtime-assets.js';
 import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.js';
@@ -27,6 +28,7 @@ function buildServiceConfig(config: WorkerRuntimeConfig) {
     wasmThreading: runtimeUrls.threading,
     moduleOptions: config.moduleOptions,
     maxModelBytes: config.maxModelBytes,
+    browserCache: config.browserCache,
     trustedOrigins: config.trustedOrigins,
   };
 }
@@ -43,7 +45,7 @@ function ensureService(config: WorkerRuntimeConfig): ModelService {
     ...buildServiceConfig(config),
     executionMode: 'worker',
   });
-  service = new ModelService(runtime);
+  service = new ModelService(runtime, undefined, new AssetStore(undefined, config.browserCache));
   service.subscribeObservability((event) => {
     post({ kind: 'observability-event', event });
   });

@@ -94,6 +94,41 @@ test('WasmBridge forwards Rust runtime config JSON without TS-side normalization
   ]);
 });
 
+test('WasmBridge forwards text request stop and sampling JSON', () => {
+  const calls: Array<{ ident: string; argTypes: string[]; args: unknown[] }> = [];
+  const module = {
+    ccall: (ident: string, _returnType: string, argTypes: string[], args: unknown[]) => {
+      calls.push({ ident, argTypes, args });
+      return 7;
+    },
+  } as unknown as EngineModule;
+  const bridge = new WasmBridge(module);
+
+  const requestId = bridge.startTextRequest('default', 'hello', 16, {
+    grammar: 'root ::= "ok"',
+    stop: ['END'],
+    sampling: { temperature: 0.2, top_p: 0.8 },
+    emitTokens: true,
+  });
+
+  assert.equal(requestId, 7);
+  assert.deepEqual(calls, [
+    {
+      ident: 'CE_StartTextRequest',
+      argTypes: ['string', 'string', 'number', 'number', 'string', 'string', 'string'],
+      args: [
+        'default',
+        'hello',
+        16,
+        1,
+        'root ::= "ok"',
+        JSON.stringify(['END']),
+        JSON.stringify({ temperature: 0.2, top_p: 0.8 }),
+      ],
+    },
+  ]);
+});
+
 test('parseBackendObservabilityJson preserves real backend registry facts', () => {
   const parsed = parseBackendObservabilityJson(
     JSON.stringify({
@@ -161,6 +196,75 @@ test('WasmBridge hashes blob streams without releasing the reader lock', async (
   assert.equal(await bridge.sha256Blob(blob), 'a'.repeat(64));
   assert.deepEqual(updateLengths, [3]);
   assert.deepEqual(released, []);
+});
+
+test('WasmBridge converts GGUF split callback exceptions into failed statuses', () => {
+  const memory = new ArrayBuffer(4096);
+  const callbacks = new Map<number, (...args: unknown[]) => unknown>();
+  const removed: number[] = [];
+  let nextCallback = 1;
+  const module: EngineModule = {
+    FS: {
+      analyzePath: () => ({ exists: false }),
+      mkdir: () => {},
+      writeFile: () => {},
+      unlink: () => {},
+      mount: () => {},
+      unmount: () => {},
+    },
+    HEAP32: new Int32Array(memory),
+    HEAPF32: new Float32Array(memory),
+    HEAPF64: new Float64Array(memory),
+    HEAPU8: new Uint8Array(memory),
+    _malloc: () => 64,
+    _free: () => {},
+    ccall: (ident: string, _returnType: string | null, _argTypes: string[], args: unknown[]) => {
+      if (ident === 'CE_GgufPlanSplitCount') {
+        callbacks.get(args[3] as number)?.(0, 0n, 32, 4);
+        return -3;
+      }
+      if (ident === 'CE_GgufSplitStream') {
+        callbacks.get(args[6] as number)?.(0, 32, 4);
+        return -3;
+      }
+      throw new Error(`Unexpected call: ${ident}`);
+    },
+    UTF8ToString: () => '',
+    addFunction: (fn) => {
+      const id = nextCallback;
+      nextCallback += 1;
+      callbacks.set(id, fn as (...args: unknown[]) => unknown);
+      return id;
+    },
+    removeFunction: (ptr) => {
+      removed.push(ptr);
+      callbacks.delete(ptr);
+    },
+  };
+  const bridge = new WasmBridge(module);
+
+  assert.throws(
+    () =>
+      bridge.planGgufSplitCount(16, 8, {
+        readAt() {
+          throw new Error('OPFS read failed');
+        },
+      }),
+    /Callback failed: OPFS read failed/
+  );
+  assert.throws(
+    () =>
+      bridge.splitGgufStream(16, 'model', 8, {
+        readAt() {},
+        openShard() {},
+        writeShard() {
+          throw new Error('OPFS write failed');
+        },
+        closeShard() {},
+      }),
+    /Callback failed: OPFS write failed/
+  );
+  assert.deepEqual(removed, [1, 2, 3, 4, 5]);
 });
 
 test('WasmBridge copies completed embedding responses as f32 values', () => {

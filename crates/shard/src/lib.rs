@@ -31,7 +31,7 @@ const BYTES_PER_MIB_U64: u64 = 1024 * 1024;
 const BYTES_PER_GIB_U64: u64 = 1024 * BYTES_PER_MIB_U64;
 const DEFAULT_DIRECT_LOAD_MAX_BYTES: u64 = 2 * BYTES_PER_GIB_U64;
 const DEFAULT_SHARD_MAX_BYTES: u64 = 512 * BYTES_PER_MIB_U64;
-const COPY_BUFFER_BYTES: usize = BYTES_PER_MIB_USIZE;
+const COPY_BUFFER_BYTES: usize = 8 * BYTES_PER_MIB_USIZE;
 
 const SPLIT_NO_KEY: &str = "split.no";
 const SPLIT_COUNT_KEY: &str = "split.count";
@@ -353,7 +353,7 @@ fn prepare_split<S: GgufReadAt>(
     source: &mut S,
     shard_max_bytes: u64,
 ) -> Result<(GgufMetadata, Vec<ShardPlan>, u16), GgufError> {
-    let mut metadata = parse_metadata_from_source(source)?;
+    let mut metadata = parse_metadata_from_source(source_bytes, source)?;
     assign_source_spans(&mut metadata, source_bytes)?;
     ensure_monolithic(&metadata)?;
     let plans = plan_shards(&metadata.tensors, shard_max_bytes)?;
@@ -376,8 +376,11 @@ fn ensure_monolithic(metadata: &GgufMetadata) -> Result<(), GgufError> {
     Ok(())
 }
 
-fn parse_metadata_from_source<S: GgufReadAt>(source: &mut S) -> Result<GgufMetadata, GgufError> {
-    let mut cursor = ReadAtCursor::new(source);
+fn parse_metadata_from_source<S: GgufReadAt>(
+    source_bytes: u64,
+    source: &mut S,
+) -> Result<GgufMetadata, GgufError> {
+    let mut cursor = ReadAtCursor::new(source, source_bytes);
     parse_metadata(&mut cursor)
 }
 

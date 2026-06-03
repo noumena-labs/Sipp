@@ -1,0 +1,32 @@
+[server]
+bind = "127.0.0.1:8787"
+
+[auth]
+token_env = "COGENTLM_GATEWAY_TOKEN"
+
+[limits]
+max_request_bytes = 1048576
+
+[cors]
+allowed_origins = ["http://localhost:5173"]
+
+[[aliases]]
+name = "local"
+operations = ["query", "chat", "embed"]
+
+[aliases.limits]
+max_concurrent_requests = 2
+max_requests_per_minute = 60
+
+[aliases.backend]
+kind = "local_cogent_engine"
+model_path = "models/local.gguf"
+
+[aliases.backend.options]
+context_key = "gateway-local"
+embedding_context_key = "gateway-embed"
+normalize_embeddings = true
+
+[aliases.backend.runtime.context]
+embeddings = true
+

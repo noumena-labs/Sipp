@@ -1,12 +1,13 @@
 use std::cell::RefCell;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::{env, fs, ptr, slice};
 
 use cogentlm_engine::backend::backend_observability_json;
 use serde_json::{json, Value};
 
-use crate::engine::{BrowserEngine, ABI_VERSION};
+use crate::engine::{BrowserEngine, BrowserMediaInput, BrowserTextRequestArgs, ABI_VERSION};
 use crate::hash::BrowserSha256Hasher;
 use crate::ingest::{
     GgufCloseShardCallback, GgufOpenShardCallback, GgufReadAtCallback, GgufWriteShardCallback,
@@ -61,21 +62,23 @@ pub extern "C" fn CE_BrowserCacheLayout(
     direct_load_max_bytes: f64,
     shard_max_bytes: f64,
 ) -> i32 {
-    let Some(source_bytes) = read_size_arg(source_bytes) else {
-        return STATUS_INVALID_ARGUMENTS;
-    };
-    let Some(direct_load_max_bytes) = read_size_arg(direct_load_max_bytes) else {
-        return STATUS_INVALID_ARGUMENTS;
-    };
-    let Some(shard_max_bytes) = read_size_arg(shard_max_bytes) else {
-        return STATUS_INVALID_ARGUMENTS;
-    };
-    crate::ingest::browser_cache_layout(
-        source_bytes,
-        source_bytes_known != 0,
-        direct_load_max_bytes,
-        shard_max_bytes,
-    )
+    catch_status(|| {
+        let Some(source_bytes) = read_size_arg(source_bytes) else {
+            return STATUS_INVALID_ARGUMENTS;
+        };
+        let Some(direct_load_max_bytes) = read_size_arg(direct_load_max_bytes) else {
+            return STATUS_INVALID_ARGUMENTS;
+        };
+        let Some(shard_max_bytes) = read_size_arg(shard_max_bytes) else {
+            return STATUS_INVALID_ARGUMENTS;
+        };
+        crate::ingest::browser_cache_layout(
+            source_bytes,
+            source_bytes_known != 0,
+            direct_load_max_bytes,
+            shard_max_bytes,
+        )
+    })
 }
 
 #[no_mangle]
@@ -85,16 +88,18 @@ pub unsafe extern "C" fn CE_GgufPlanSplitCount(
     user_data: *mut c_void,
     read_at: Option<GgufReadAtCallback>,
 ) -> i32 {
-    let Some(source_bytes) = read_size_arg(source_bytes) else {
-        return STATUS_INVALID_ARGUMENTS;
-    };
-    let Some(shard_max_bytes) = read_size_arg(shard_max_bytes) else {
-        return STATUS_INVALID_ARGUMENTS;
-    };
-    let Some(read_at) = read_at else {
-        return STATUS_INVALID_ARGUMENTS;
-    };
-    crate::ingest::gguf_plan_split_count(source_bytes, shard_max_bytes, user_data, read_at)
+    catch_status(|| {
+        let Some(source_bytes) = read_size_arg(source_bytes) else {
+            return STATUS_INVALID_ARGUMENTS;
+        };
+        let Some(shard_max_bytes) = read_size_arg(shard_max_bytes) else {
+            return STATUS_INVALID_ARGUMENTS;
+        };
+        let Some(read_at) = read_at else {
+            return STATUS_INVALID_ARGUMENTS;
+        };
+        crate::ingest::gguf_plan_split_count(source_bytes, shard_max_bytes, user_data, read_at)
+    })
 }
 
 #[no_mangle]
@@ -108,30 +113,32 @@ pub unsafe extern "C" fn CE_GgufSplitStream(
     write_shard: Option<GgufWriteShardCallback>,
     close_shard: Option<GgufCloseShardCallback>,
 ) -> i32 {
-    let Some(source_bytes) = read_size_arg(source_bytes) else {
-        return STATUS_INVALID_ARGUMENTS;
-    };
-    let Some(shard_max_bytes) = read_size_arg(shard_max_bytes) else {
-        return STATUS_INVALID_ARGUMENTS;
-    };
-    let Some(output_prefix) = required_cstr(output_prefix) else {
-        return STATUS_INVALID_ARGUMENTS;
-    };
-    let (Some(read_at), Some(open_shard), Some(write_shard), Some(close_shard)) =
-        (read_at, open_shard, write_shard, close_shard)
-    else {
-        return STATUS_INVALID_ARGUMENTS;
-    };
-    crate::ingest::gguf_split_stream(
-        source_bytes,
-        &output_prefix,
-        shard_max_bytes,
-        user_data,
-        read_at,
-        open_shard,
-        write_shard,
-        close_shard,
-    )
+    catch_status(|| {
+        let Some(source_bytes) = read_size_arg(source_bytes) else {
+            return STATUS_INVALID_ARGUMENTS;
+        };
+        let Some(shard_max_bytes) = read_size_arg(shard_max_bytes) else {
+            return STATUS_INVALID_ARGUMENTS;
+        };
+        let Some(output_prefix) = required_cstr(output_prefix) else {
+            return STATUS_INVALID_ARGUMENTS;
+        };
+        let (Some(read_at), Some(open_shard), Some(write_shard), Some(close_shard)) =
+            (read_at, open_shard, write_shard, close_shard)
+        else {
+            return STATUS_INVALID_ARGUMENTS;
+        };
+        crate::ingest::gguf_split_stream(
+            source_bytes,
+            &output_prefix,
+            shard_max_bytes,
+            user_data,
+            read_at,
+            open_shard,
+            write_shard,
+            close_shard,
+        )
+    })
 }
 
 #[no_mangle]
@@ -140,54 +147,62 @@ pub unsafe extern "C" fn CE_DetectModelFromGgufBytes(
     bytes: *const u8,
     bytes_len: f64,
 ) -> *mut c_char {
-    let Some(name) = required_cstr(name) else {
-        return owned_json_error("INVALID_GGUF", "invalid GGUF byte length");
-    };
-    let Some(bytes_len) = read_pointer_size_arg(bytes_len) else {
-        return owned_json_error("INVALID_GGUF", "invalid GGUF byte length");
-    };
-    let Some(bytes) = bytes_from_raw(bytes, bytes_len) else {
-        return owned_json_error("INVALID_GGUF", "invalid GGUF byte length");
-    };
-    owned_string(crate::gguf::detect_model_from_gguf_bytes_json(&name, bytes))
+    catch_owned_json("INVALID_GGUF", "GGUF model detection panicked", || {
+        let Some(name) = required_cstr(name) else {
+            return json_error_string("INVALID_GGUF", "invalid GGUF byte length");
+        };
+        let Some(bytes_len) = read_pointer_size_arg(bytes_len) else {
+            return json_error_string("INVALID_GGUF", "invalid GGUF byte length");
+        };
+        let Some(bytes) = bytes_from_raw(bytes, bytes_len) else {
+            return json_error_string("INVALID_GGUF", "invalid GGUF byte length");
+        };
+        crate::gguf::detect_model_from_gguf_bytes_json(&name, bytes)
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn CE_Sha256Create() -> usize {
-    Box::into_raw(Box::new(BrowserSha256Hasher::new())) as usize
+    catch_usize(|| Box::into_raw(Box::new(BrowserSha256Hasher::new())) as usize)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn CE_Sha256Update(hasher: usize, bytes: *const u8, bytes_len: f64) -> i32 {
-    if hasher == 0 {
-        return STATUS_INVALID_ARGUMENTS;
-    }
-    let Some(bytes_len) = read_pointer_size_arg(bytes_len) else {
-        return STATUS_INVALID_ARGUMENTS;
-    };
-    let Some(bytes) = bytes_from_raw(bytes, bytes_len) else {
-        return STATUS_INVALID_ARGUMENTS;
-    };
-    (*(hasher as *mut BrowserSha256Hasher)).update(bytes);
-    STATUS_OK
+    catch_status(|| {
+        if hasher == 0 {
+            return STATUS_INVALID_ARGUMENTS;
+        }
+        let Some(bytes_len) = read_pointer_size_arg(bytes_len) else {
+            return STATUS_INVALID_ARGUMENTS;
+        };
+        let Some(bytes) = bytes_from_raw(bytes, bytes_len) else {
+            return STATUS_INVALID_ARGUMENTS;
+        };
+        (*(hasher as *mut BrowserSha256Hasher)).update(bytes);
+        STATUS_OK
+    })
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn CE_Sha256Finalize(hasher: usize) -> *mut c_char {
-    if hasher == 0 {
-        return ptr::null_mut();
-    }
-    let hasher = Box::from_raw(hasher as *mut BrowserSha256Hasher);
-    owned_string(hasher.finalize_hex())
+    catch_ptr(|| {
+        if hasher == 0 {
+            return ptr::null_mut();
+        }
+        let hasher = Box::from_raw(hasher as *mut BrowserSha256Hasher);
+        owned_string(hasher.finalize_hex())
+    })
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn CE_Sha256Close(hasher: usize) -> i32 {
-    if hasher == 0 {
-        return STATUS_INVALID_ARGUMENTS;
-    }
-    drop(Box::from_raw(hasher as *mut BrowserSha256Hasher));
-    1
+    catch_status(|| {
+        if hasher == 0 {
+            return STATUS_INVALID_ARGUMENTS;
+        }
+        drop(Box::from_raw(hasher as *mut BrowserSha256Hasher));
+        1
+    })
 }
 
 #[no_mangle]
@@ -428,6 +443,8 @@ pub unsafe extern "C" fn CE_StartTextRequest(
     n_tokens: i32,
     token_emission_mode: i32,
     grammar: *const c_char,
+    stop_json: *const c_char,
+    sampling_json: *const c_char,
 ) -> u32 {
     if prompt.is_null() || !is_valid_prediction_tokens(n_tokens) {
         return 0;
@@ -435,13 +452,19 @@ pub unsafe extern "C" fn CE_StartTextRequest(
     let context_key = optional_cstr(context_key);
     let prompt = optional_cstr(prompt);
     let grammar = optional_cstr(grammar);
+    let stop_json = optional_cstr(stop_json);
+    let sampling_json = optional_cstr(sampling_json);
     with_current_engine_mut(0, |engine| {
         let request_id = engine.start_text_request(
             &context_key,
             &prompt,
             n_tokens,
-            token_emission_mode,
-            &grammar,
+            BrowserTextRequestArgs {
+                emit_tokens: token_emission_mode,
+                grammar: &grammar,
+                stop_json: &stop_json,
+                sampling_json: &sampling_json,
+            },
         );
         sync_start_request_error(engine, request_id);
         request_id
@@ -458,6 +481,8 @@ pub unsafe extern "C" fn CE_StartMediaRequest(
     image_sizes: *const i32,
     token_emission_mode: i32,
     grammar: *const c_char,
+    stop_json: *const c_char,
+    sampling_json: *const c_char,
 ) -> u32 {
     if prompt.is_null() || !is_valid_prediction_tokens(n_tokens) {
         return 0;
@@ -469,15 +494,23 @@ pub unsafe extern "C" fn CE_StartMediaRequest(
     let context_key = optional_cstr(context_key);
     let prompt = optional_cstr(prompt);
     let grammar = optional_cstr(grammar);
+    let stop_json = optional_cstr(stop_json);
+    let sampling_json = optional_cstr(sampling_json);
     with_current_engine_mut(0, |engine| {
         let request_id = engine.start_media_request(
             &context_key,
             &prompt,
             n_tokens,
-            images,
-            sizes,
-            token_emission_mode,
-            &grammar,
+            BrowserMediaInput {
+                flat_buffer: images,
+                sizes,
+            },
+            BrowserTextRequestArgs {
+                emit_tokens: token_emission_mode,
+                grammar: &grammar,
+                stop_json: &stop_json,
+                sampling_json: &sampling_json,
+            },
         );
         sync_start_request_error(engine, request_id);
         request_id
@@ -494,6 +527,8 @@ pub unsafe extern "C" fn CE_StartChatRequest(
     image_sizes: *const i32,
     token_emission_mode: i32,
     grammar: *const c_char,
+    stop_json: *const c_char,
+    sampling_json: *const c_char,
 ) -> u32 {
     if messages_json.is_null() || !is_valid_prediction_tokens(n_tokens) {
         return 0;
@@ -505,15 +540,23 @@ pub unsafe extern "C" fn CE_StartChatRequest(
     let context_key = optional_cstr(context_key);
     let messages_json = optional_cstr(messages_json);
     let grammar = optional_cstr(grammar);
+    let stop_json = optional_cstr(stop_json);
+    let sampling_json = optional_cstr(sampling_json);
     with_current_engine_mut(0, |engine| {
         let request_id = engine.start_chat_request(
             &context_key,
             &messages_json,
             n_tokens,
-            images,
-            sizes,
-            token_emission_mode,
-            &grammar,
+            BrowserMediaInput {
+                flat_buffer: images,
+                sizes,
+            },
+            BrowserTextRequestArgs {
+                emit_tokens: token_emission_mode,
+                grammar: &grammar,
+                stop_json: &stop_json,
+                sampling_json: &sampling_json,
+            },
         );
         sync_start_request_error(engine, request_id);
         request_id
@@ -955,8 +998,34 @@ fn copy_bytes_with_nul(bytes: &[u8], buffer: &mut [u8]) -> i32 {
     byte_len_i32(bytes)
 }
 
+fn catch_status(operation: impl FnOnce() -> i32) -> i32 {
+    catch_unwind(AssertUnwindSafe(operation)).unwrap_or(STATUS_FAILURE)
+}
+
+fn catch_usize(operation: impl FnOnce() -> usize) -> usize {
+    catch_unwind(AssertUnwindSafe(operation)).unwrap_or(0)
+}
+
+fn catch_ptr(operation: impl FnOnce() -> *mut c_char) -> *mut c_char {
+    catch_unwind(AssertUnwindSafe(operation)).unwrap_or(ptr::null_mut())
+}
+
+fn catch_owned_json(
+    code: &str,
+    panic_message: &str,
+    operation: impl FnOnce() -> String,
+) -> *mut c_char {
+    let response = catch_unwind(AssertUnwindSafe(operation))
+        .unwrap_or_else(|_| json_error_string(code, panic_message));
+    owned_string(response)
+}
+
 fn owned_json_error(code: &str, message: &str) -> *mut c_char {
-    owned_string(json!({ "ok": false, "error": { "code": code, "message": message } }).to_string())
+    owned_string(json_error_string(code, message))
+}
+
+fn json_error_string(code: &str, message: &str) -> String {
+    json!({ "ok": false, "error": { "code": code, "message": message } }).to_string()
 }
 
 fn owned_string(value: String) -> *mut c_char {

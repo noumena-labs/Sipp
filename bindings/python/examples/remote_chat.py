@@ -4,7 +4,7 @@ from cogentlm import ChatMessage
 
 from _common import (
     CogentClient,
-    add_openai_remote,
+    add_gateway_remote,
     print_text,
     read_remote_args,
     text_options,
@@ -12,9 +12,9 @@ from _common import (
 
 
 def main() -> None:
-    model, prompt = read_remote_args("Explain remote inference in one sentence.")
+    alias, prompt = read_remote_args("Explain remote inference in one sentence.")
     client = CogentClient()
-    endpoint = add_openai_remote(client, model)
+    endpoint = add_gateway_remote(client, alias)
     run = client.chat(
         [
             ChatMessage("system", "Answer concisely."),

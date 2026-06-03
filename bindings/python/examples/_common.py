@@ -13,7 +13,7 @@ from cogentlm import (
     MultimodalRuntimeConfig,
     NativeRuntimeConfig,
     ObservabilityRuntimeConfig,
-    RemoteConfig,
+    RemoteGatewayConfig,
     ResidencyRuntimeConfig,
     SamplingRuntimeConfig,
     SchedulerRuntimeConfig,
@@ -37,18 +37,18 @@ def load_client(model: str, *, embeddings: bool = False) -> CogentClient:
 def read_remote_args(default_input: str) -> tuple[str, str]:
     if len(sys.argv) < 2:
         raise SystemExit(
-            "usage: python examples/remote_<query|chat|embed>.py <remote-model> [input]"
+            "usage: python examples/remote_<query|chat|embed>.py <gateway-alias> [input]"
         )
     return sys.argv[1], " ".join(sys.argv[2:]) or default_input
 
 
-def add_openai_remote(client: CogentClient, model: str) -> EndpointRef:
+def add_gateway_remote(client: CogentClient, alias: str) -> EndpointRef:
     return client.add_remote(
-        "openai",
-        RemoteConfig.openai(
-            model,
-            required_env("OPENAI_API_KEY"),
-            base_url=os.getenv("COGENTLM_OPENAI_BASE_URL"),
+        alias,
+        RemoteGatewayConfig(
+            alias,
+            required_env("COGENTLM_GATEWAY_URL"),
+            required_env("COGENTLM_GATEWAY_TOKEN"),
         ),
     )
 

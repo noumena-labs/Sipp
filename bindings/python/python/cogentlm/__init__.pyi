@@ -187,7 +187,7 @@ class TokenUsage(TypedDict):
     output_tokens: Optional[int]
     total_tokens: Optional[int]
 
-RemoteOptions = dict[str, Any]
+GatewayOptions = dict[str, Any]
 
 class EndpointRefDict(TypedDict):
     kind: Literal["local", "remote"]
@@ -212,47 +212,21 @@ class UnsupportedOperationError(Exception): ...
 
 class RemoteError(Exception):
     kind: str
-    remote_kind: str
     status: Optional[int]
     code: Optional[str]
     request_id: Optional[str]
     retry_after_ms: Optional[float]
     raw_body: Any
 
-class RemoteAuth:
-    @staticmethod
-    def bearer(token: str) -> RemoteAuth: ...
-    @staticmethod
-    def header(name: str, value: str) -> RemoteAuth: ...
-
-class RemoteConfig:
-    @staticmethod
-    def openai(
-        model: str,
-        api_key: str,
-        *,
-        base_url: Optional[str] = None,
-        timeout_ms: Optional[int] = None,
-    ) -> RemoteConfig: ...
-    @staticmethod
-    def anthropic(
-        model: str,
-        api_key: str,
-        *,
-        base_url: Optional[str] = None,
-        version: Optional[str] = None,
-        timeout_ms: Optional[int] = None,
-    ) -> RemoteConfig: ...
-    @staticmethod
-    def proxy(
-        model: str,
+class RemoteGatewayConfig:
+    def __init__(
+        self,
+        alias: str,
         base_url: str,
-        auth: RemoteAuth,
+        token: str,
         *,
-        protocol: str = "openai_compatible",
-        static_headers: Optional[Sequence[tuple[str, str]]] = None,
         timeout_ms: Optional[int] = None,
-    ) -> RemoteConfig: ...
+    ) -> None: ...
 class EndpointRef:
     @staticmethod
     def local(id: str) -> EndpointRef: ...
@@ -310,7 +284,12 @@ class CogentClient:
     def add_remote(
         self,
         id: str,
-        config: RemoteConfig,
+        config: RemoteGatewayConfig,
+    ) -> EndpointRef: ...
+    def update_remote(
+        self,
+        id: str,
+        config: RemoteGatewayConfig,
     ) -> EndpointRef: ...
     def query(
         self,
@@ -319,7 +298,7 @@ class CogentClient:
         endpoint: Optional[EndpointRef] = None,
         options: Optional[CogentTextOptions] = None,
         local: Optional[LocalTextOptions] = None,
-        remote_options: Optional[RemoteOptions] = None,
+        gateway_options: Optional[GatewayOptions] = None,
         emit_tokens: bool = False,
     ) -> CogentTextRun: ...
     def chat(
@@ -329,7 +308,7 @@ class CogentClient:
         endpoint: Optional[EndpointRef] = None,
         options: Optional[CogentTextOptions] = None,
         local: Optional[LocalTextOptions] = None,
-        remote_options: Optional[RemoteOptions] = None,
+        gateway_options: Optional[GatewayOptions] = None,
         emit_tokens: bool = False,
     ) -> CogentTextRun: ...
     def embed(
@@ -338,7 +317,7 @@ class CogentClient:
         *,
         endpoint: Optional[EndpointRef] = None,
         local: Optional[LocalEmbedOptions] = None,
-        remote_options: Optional[RemoteOptions] = None,
+        gateway_options: Optional[GatewayOptions] = None,
     ) -> CogentEmbeddingRun: ...
 
 def backend_observability_json(include_details: bool = True) -> str: ...
