@@ -3,6 +3,8 @@
 //! Covers deterministic inference-runtime helpers, state transitions, and error paths while avoiding native model execution unless a test is explicitly ignored.
 
 use super::*;
+use crate::native_bridge::{NativeRuntimeHandle, SamplerHandle};
+use crate::runtime::request::RequestQueue;
 use crate::runtime::request::{GenerateRequest, MultimodalPayload};
 use crate::runtime::scheduler::SlotState;
 
@@ -31,6 +33,59 @@ fn flatten_image_buffers_requires_multimodal_payload() {
     let slot = SlotState::new(0);
 
     assert!(flatten_image_buffers(&slot).is_none());
+}
+
+#[test]
+fn run_multimodal_prefill_rejects_missing_prerequisites_before_native_work() {
+    let mut runtime = NativeRuntimeHandle::empty_for_tests();
+    let mut queue = RequestQueue::new();
+    let mut scratch = Vec::new();
+
+    let mut missing_request = SlotState::new(0);
+    missing_request.set_sampler(SamplerHandle::empty_for_tests());
+    assert!(!run_multimodal_prefill(
+        &mut runtime,
+        4,
+        &mut queue,
+        &mut missing_request,
+        &mut scratch
+    ));
+
+    let mut missing_sampler = slot_with_images(vec![vec![1]]);
+    assert!(!run_multimodal_prefill(
+        &mut runtime,
+        4,
+        &mut queue,
+        &mut missing_sampler,
+        &mut scratch
+    ));
+    assert!(missing_sampler
+        .request()
+        .and_then(|request| request.multimodal.as_ref())
+        .is_some());
+}
+
+#[test]
+fn run_multimodal_prefill_clears_payload_when_mtmd_context_is_not_ready() {
+    let mut runtime = NativeRuntimeHandle::empty_for_tests();
+    let mut queue = RequestQueue::new();
+    let mut scratch = Vec::new();
+    let mut slot = slot_with_images(vec![vec![1, 2, 3]]);
+    slot.seq_id = 0;
+    slot.set_sampler(SamplerHandle::empty_for_tests());
+
+    assert!(!run_multimodal_prefill(
+        &mut runtime,
+        4,
+        &mut queue,
+        &mut slot,
+        &mut scratch
+    ));
+
+    assert!(slot
+        .request()
+        .and_then(|request| request.multimodal.as_ref())
+        .is_none());
 }
 
 #[test]

@@ -112,3 +112,27 @@ fn enqueue_prepared_request_saturates_total_input_token_counter() {
     assert_eq!(request_id, 8);
     assert_eq!(runtime.total_input_tokens, usize::MAX);
 }
+
+#[test]
+fn enqueue_generation_requests_reject_empty_runtime_before_tokenization() {
+    let mut runtime = test_runtime(NativeRuntimeConfig::default());
+
+    assert!(matches!(
+        runtime.enqueue_request("ctx", "prompt", 1, "", "", Vec::new(), None, false),
+        Err(Error::RuntimeNotReady)
+    ));
+    assert!(matches!(
+        runtime.enqueue_multimodal_request(
+            "ctx",
+            "prompt",
+            1,
+            vec![vec![1, 2, 3]],
+            "",
+            "",
+            Vec::new(),
+            None,
+            false
+        ),
+        Err(Error::RuntimeNotReady)
+    ));
+}

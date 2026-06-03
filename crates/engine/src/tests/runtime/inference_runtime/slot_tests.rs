@@ -4,12 +4,13 @@
 
 use super::recovery::normalize_runnable_slot_state;
 use super::run_initial_prefill;
-use crate::native_bridge::NativeRuntimeHandle;
+use super::sampler_attach::ensure_slot_sampler;
+use crate::native_bridge::{NativeRuntimeHandle, SamplerHandle};
 use crate::runtime::config::NativeRuntimeConfig;
 use crate::runtime::inference_runtime::runtime_tests::test_runtime;
 use crate::runtime::request::RequestQueue;
 use crate::runtime::request::{GenerateRequest, GenerateRequestLifecycle};
-use crate::runtime::scheduler::{SlotPhase, SlotState, TerminalAction};
+use crate::runtime::scheduler::{SamplerCacheKey, SlotPhase, SlotState, TerminalAction};
 use crate::runtime::session::KvCacheManager;
 
 fn decode_slot(prompt_tokens: Vec<i32>, max_output_tokens: i32) -> SlotState {
@@ -190,5 +191,77 @@ fn initial_text_prefill_failure_marks_slot_and_request_failed() {
     assert_eq!(
         slot.request().expect("request").lifecycle,
         GenerateRequestLifecycle::Failed
+    );
+}
+
+#[test]
+fn ensure_slot_sampler_reuses_matching_pooled_sampler_without_native_creation() {
+    let mut slot = decode_slot(vec![1, 2], 4);
+    let mut native_runtime = NativeRuntimeHandle::empty_for_tests();
+    let config = NativeRuntimeConfig::default();
+    let sampling_json = config
+        .try_sampling_json_with_override(None)
+        .expect("sampling json");
+    let key = SamplerCacheKey {
+        sampling_json,
+        grammar: String::new(),
+        json_schema: String::new(),
+    };
+    let mut sampler_pool = std::collections::HashMap::new();
+    sampler_pool.insert(key.clone(), vec![SamplerHandle::empty_for_tests()]);
+
+    assert!(ensure_slot_sampler(
+        &mut slot,
+        &mut native_runtime,
+        &config,
+        &mut sampler_pool
+    ));
+
+    assert!(slot.sampler.is_some());
+    assert_eq!(slot.sampler_key, Some(key.clone()));
+    assert!(sampler_pool.get(&key).is_some_and(Vec::is_empty));
+    assert!(!slot.backend_sampler_attached);
+}
+
+#[test]
+fn ensure_slot_sampler_reports_plain_creation_failure_without_grammar() {
+    let mut slot = decode_slot(vec![1, 2], 4);
+    let mut native_runtime = NativeRuntimeHandle::empty_for_tests();
+    let config = NativeRuntimeConfig::default();
+    let mut sampler_pool = std::collections::HashMap::new();
+
+    assert!(!ensure_slot_sampler(
+        &mut slot,
+        &mut native_runtime,
+        &config,
+        &mut sampler_pool
+    ));
+
+    assert_eq!(slot.phase, SlotPhase::Failed);
+    assert_eq!(
+        slot.terminal_error_message,
+        "Failed to create per-slot sampler."
+    );
+}
+
+#[test]
+fn ensure_slot_sampler_reports_grammar_creation_failure_with_grammar() {
+    let mut slot = decode_slot(vec![1, 2], 4);
+    slot.request_mut().expect("request").grammar = "root ::= \"a\"".to_string();
+    let mut native_runtime = NativeRuntimeHandle::empty_for_tests();
+    let config = NativeRuntimeConfig::default();
+    let mut sampler_pool = std::collections::HashMap::new();
+
+    assert!(!ensure_slot_sampler(
+        &mut slot,
+        &mut native_runtime,
+        &config,
+        &mut sampler_pool
+    ));
+
+    assert_eq!(slot.phase, SlotPhase::Failed);
+    assert_eq!(
+        slot.terminal_error_message,
+        "Failed to create per-slot grammar sampler."
     );
 }
