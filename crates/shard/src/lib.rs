@@ -23,6 +23,20 @@ pub use inspection::{
     AssetInspection, AssetRole, GgufMetadataInspection, ModelDetection, ModelDetectionMethod,
 };
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+#[cfg(test)]
+#[path = "tests/support.rs"]
+mod support;
+
+#[cfg(test)]
+#[path = "tests/root_tests.rs"]
+mod root_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
 const GGUF_MAGIC: u32 = 0x4655_4747;
 const SUPPORTED_GGUF_VERSIONS: &[u32] = &[2, 3];
 const DEFAULT_ALIGNMENT: u64 = 32;
@@ -237,10 +251,8 @@ impl GgufShardSink for FileShardSink {
         _index: u16,
         _count: u16,
     ) -> Result<Self::Writer, GgufError> {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = shard_parent_dir(path) {
+            fs::create_dir_all(parent)?;
         }
         Ok(File::create(path)?)
     }
@@ -248,6 +260,11 @@ impl GgufShardSink for FileShardSink {
     fn finish_shard(&mut self, writer: Self::Writer) -> Result<u64, GgufError> {
         Ok(writer.metadata()?.len())
     }
+}
+
+fn shard_parent_dir(path: &Path) -> Option<&Path> {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
 }
 
 pub fn split_path(prefix: impl AsRef<Path>, index: u16, count: u16) -> PathBuf {
@@ -554,14 +571,8 @@ fn write_shard<S: GgufReadAt, W: Write>(
 
     write_u32(&mut output, GGUF_MAGIC)?;
     write_u32(&mut output, metadata.version)?;
-    write_u64(
-        &mut output,
-        u64_from_usize(plan.tensors.len(), "shard tensor count")?,
-    )?;
-    write_u64(
-        &mut output,
-        u64_from_usize(shard_kvs.len(), "shard kv count")?,
-    )?;
+    write_u64(&mut output, shard_tensor_count_value(plan.tensors.len())?)?;
+    write_u64(&mut output, shard_kv_count_value(shard_kvs.len())?)?;
 
     for kv in &shard_kvs {
         write_string(&mut output, &kv.key)?;
@@ -575,10 +586,8 @@ fn write_shard<S: GgufReadAt, W: Write>(
         let tensor = &metadata.tensors[tensor_idx];
         shard_tensor_offsets.push(shard_offset);
         write_string(&mut output, &tensor.name)?;
-        write_u32(
-            &mut output,
-            u32_from_usize(tensor.dimensions.len(), "tensor dimension count")?,
-        )?;
+        let dimension_count = tensor_dimension_count_value(tensor.dimensions.len())?;
+        write_u32(&mut output, dimension_count)?;
         for &dimension in &tensor.dimensions {
             write_u64(&mut output, dimension)?;
         }
@@ -596,14 +605,8 @@ fn write_shard<S: GgufReadAt, W: Write>(
     let mut copy_buffer = vec![0u8; COPY_BUFFER_BYTES];
     for (local_idx, &tensor_idx) in plan.tensors.iter().enumerate() {
         let tensor = &metadata.tensors[tensor_idx];
-        let expected_position = data_offset
-            .checked_add(shard_tensor_offsets[local_idx])
-            .ok_or_else(|| GgufError::Invalid("shard write offset overflow".to_string()))?;
-        if output.position() != expected_position {
-            return Err(GgufError::Invalid(
-                "internal shard offset mismatch".to_string(),
-            ));
-        }
+        let expected_position = shard_write_position(data_offset, shard_tensor_offsets[local_idx])?;
+        ensure_shard_position(output.position(), expected_position)?;
 
         let source_position = metadata
             .data_offset
@@ -619,6 +622,33 @@ fn write_shard<S: GgufReadAt, W: Write>(
     }
 
     output.flush()?;
+    Ok(())
+}
+
+fn shard_tensor_count_value(len: usize) -> Result<u64, GgufError> {
+    u64_from_usize(len, "shard tensor count")
+}
+
+fn shard_kv_count_value(len: usize) -> Result<u64, GgufError> {
+    u64_from_usize(len, "shard kv count")
+}
+
+fn tensor_dimension_count_value(len: usize) -> Result<u32, GgufError> {
+    u32_from_usize(len, "tensor dimension count")
+}
+
+fn shard_write_position(data_offset: u64, shard_tensor_offset: u64) -> Result<u64, GgufError> {
+    data_offset
+        .checked_add(shard_tensor_offset)
+        .ok_or_else(|| GgufError::Invalid("shard write offset overflow".to_string()))
+}
+
+fn ensure_shard_position(actual: u64, expected: u64) -> Result<(), GgufError> {
+    if actual != expected {
+        return Err(GgufError::Invalid(
+            "internal shard offset mismatch".to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -683,7 +713,3 @@ fn read_alignment(kv: &KvEntry) -> Option<u64> {
         _ => None,
     }
 }
-
-#[cfg(test)]
-#[path = "tests/root_tests.rs"]
-mod root_tests;
