@@ -29,3 +29,18 @@ tokio = { workspace = true, optional = true, features = ["rt", "net", "time", "s
 [dev-dependencies]
 async-trait = "0.1"
 futures.workspace = true
+
+[[example]]
+name = "remote_query"
+path = "examples/remote_query.rs"
+required-features = ["providers"]
+
+[[example]]
+name = "remote_chat"
+path = "examples/remote_chat.rs"
+required-features = ["providers"]
+
+[[example]]
+name = "remote_embed"
+path = "examples/remote_embed.rs"
+required-features = ["providers"]

@@ -1,6 +1,7 @@
 //! Tests the `remote` module in `cogentlm-client`.
 //!
-//! Covers endpoint resolution, remote configuration, facade validation, and run wrappers with deterministic fakes rather than a live local engine.
+//! Covers remote configuration constructors, secret redaction, auth mapping,
+//! and transport construction without sending network requests.
 
 use std::time::Duration;
 
@@ -73,4 +74,30 @@ fn proxy_config_builds_proxy_transport() {
 
     assert_eq!(model, "proxy-model");
     assert_eq!(transport.kind(), ProviderKind::Proxy);
+}
+
+#[test]
+fn native_remote_configs_build_provider_transports() {
+    let mut openai = match RemoteConfig::openai("gpt-test", "openai-key") {
+        RemoteConfig::OpenAi(config) => config,
+        _ => panic!("openai constructor should create OpenAi config"),
+    };
+    openai.base_url = Some("https://api.openai.test/v1".to_string());
+    let (model, transport) = RemoteConfig::OpenAi(openai)
+        .build()
+        .expect("openai transport");
+    assert_eq!(model, "gpt-test");
+    assert_eq!(transport.kind(), ProviderKind::OpenAi);
+
+    let mut anthropic = match RemoteConfig::anthropic("claude-test", "anthropic-key") {
+        RemoteConfig::Anthropic(config) => config,
+        _ => panic!("anthropic constructor should create Anthropic config"),
+    };
+    anthropic.base_url = Some("https://api.anthropic.test".to_string());
+    anthropic.version = Some("2023-06-01".to_string());
+    let (model, transport) = RemoteConfig::Anthropic(anthropic)
+        .build()
+        .expect("anthropic transport");
+    assert_eq!(model, "claude-test");
+    assert_eq!(transport.kind(), ProviderKind::Anthropic);
 }

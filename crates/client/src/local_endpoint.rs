@@ -1,4 +1,9 @@
-use cogentlm_engine::engine::{ChatRequest, CogentEngine};
+use std::sync::Arc;
+
+use cogentlm_engine::engine::{
+    ChatRequest, CogentEngine, EmbedRequest, EngineEmbeddingResponseFuture,
+    EngineTextResponseFuture, EngineTokenBatches, QueryRequest,
+};
 
 use crate::dispatch::InferenceEndpoint;
 use crate::{
@@ -6,10 +11,49 @@ use crate::{
     CogentQueryRequest, CogentTextRun, CogentTokenBatches, EndpointCapabilities, EndpointRef,
 };
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "tests/local_endpoint_tests.rs"]
+mod local_endpoint_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+
 pub(crate) struct LocalEndpoint {
     endpoint: EndpointRef,
     capabilities: EndpointCapabilities,
-    engine: CogentEngine,
+    runtime: Arc<dyn LocalRuntime>,
+}
+
+struct LocalTextRun {
+    tokens: Option<EngineTokenBatches>,
+    response: EngineTextResponseFuture,
+}
+
+trait LocalRuntime: Send + Sync {
+    fn query(&self, request: QueryRequest) -> LocalTextRun;
+    fn chat(&self, request: ChatRequest) -> LocalTextRun;
+    fn embed(&self, request: EmbedRequest) -> EngineEmbeddingResponseFuture;
+}
+
+impl LocalRuntime for CogentEngine {
+    fn query(&self, request: QueryRequest) -> LocalTextRun {
+        let (tokens, response) = CogentEngine::query(self, request).into_parts();
+        LocalTextRun { tokens, response }
+    }
+
+    fn chat(&self, request: ChatRequest) -> LocalTextRun {
+        let (tokens, response) = CogentEngine::chat(self, request).into_parts();
+        LocalTextRun { tokens, response }
+    }
+
+    fn embed(&self, request: EmbedRequest) -> EngineEmbeddingResponseFuture {
+        CogentEngine::embed(self, request).into_response()
+    }
 }
 
 impl LocalEndpoint {
@@ -18,10 +62,18 @@ impl LocalEndpoint {
         capabilities: EndpointCapabilities,
         engine: CogentEngine,
     ) -> Self {
+        Self::from_runtime(endpoint, capabilities, Arc::new(engine))
+    }
+
+    fn from_runtime(
+        endpoint: EndpointRef,
+        capabilities: EndpointCapabilities,
+        runtime: Arc<dyn LocalRuntime>,
+    ) -> Self {
         Self {
             endpoint,
             capabilities,
-            engine,
+            runtime,
         }
     }
 }
@@ -41,18 +93,17 @@ impl InferenceEndpoint for LocalEndpoint {
         }
         let endpoint = self.endpoint.clone();
         let run = match map::local_query_request(request) {
-            Ok(request) => self.engine.query(request),
+            Ok(request) => self.runtime.query(request),
             Err(error) => return CogentTextRun::ready_err(error),
         };
-        let (tokens, response) = run.into_parts();
         CogentTextRun::new(
             Box::pin(async move {
-                response
+                run.response
                     .await
                     .map(|result| map::text_response(endpoint, result))
                     .map_err(CogentError::Local)
             }),
-            CogentTokenBatches::from_engine(tokens),
+            CogentTokenBatches::from_engine(run.tokens),
         )
     }
 
@@ -65,20 +116,19 @@ impl InferenceEndpoint for LocalEndpoint {
             Ok(options) => options,
             Err(error) => return CogentTextRun::ready_err(error),
         };
-        let run = self.engine.chat(
+        let run = self.runtime.chat(
             ChatRequest::new(request.messages)
                 .options(options)
                 .emit_tokens(request.emit_tokens),
         );
-        let (tokens, response) = run.into_parts();
         CogentTextRun::new(
             Box::pin(async move {
-                response
+                run.response
                     .await
                     .map(|result| map::text_response(endpoint, result))
                     .map_err(CogentError::Local)
             }),
-            CogentTokenBatches::from_engine(tokens),
+            CogentTokenBatches::from_engine(run.tokens),
         )
     }
 
@@ -88,9 +138,8 @@ impl InferenceEndpoint for LocalEndpoint {
         }
         let endpoint = self.endpoint.clone();
         let run = self
-            .engine
-            .embed(map::local_embed_request(request.input, request.local))
-            .into_response();
+            .runtime
+            .embed(map::local_embed_request(request.input, request.local));
         CogentEmbeddingRun::new(Box::pin(async move {
             run.await
                 .map(|result| map::embedding_response(endpoint, result))

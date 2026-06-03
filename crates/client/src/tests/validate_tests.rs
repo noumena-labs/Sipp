@@ -1,14 +1,26 @@
 //! Tests the `validate` module in `cogentlm-client`.
 //!
-//! Covers endpoint resolution, remote configuration, facade validation, and run wrappers with deterministic fakes rather than a live local engine.
+//! Covers local/remote request boundary validation and numeric option rejection
+//! with synthetic request envelopes instead of endpoint execution.
 
 use serde_json::json;
 
 use super::*;
-use crate::{
-    CogentChatRequest, CogentEmbedRequest, CogentQueryRequest, CogentTextOptions,
-    LocalEmbedOptions, LocalTextOptions,
-};
+use crate::{CogentChatRequest, CogentEmbedRequest, CogentQueryRequest, CogentTextOptions};
+#[cfg(feature = "providers")]
+use crate::{LocalEmbedOptions, LocalTextOptions};
+
+#[test]
+fn common_text_options_accept_valid_boundaries() {
+    let options = CogentTextOptions {
+        max_tokens: Some(1),
+        temperature: Some(0.0),
+        top_p: Some(1.0),
+        ..CogentTextOptions::default()
+    };
+
+    common_text_options(&options).expect("valid common text options");
+}
 
 #[test]
 fn common_text_options_reject_zero_and_non_finite_values() {
@@ -42,13 +54,34 @@ fn common_text_options_reject_zero_and_non_finite_values() {
 
 #[test]
 fn local_requests_reject_remote_options() {
-    let mut request = CogentQueryRequest::default();
-    request.remote_options.insert("seed".to_string(), json!(42));
+    let mut query = CogentQueryRequest::default();
+    query.remote_options.insert("seed".to_string(), json!(42));
 
     assert!(matches!(
-        local_query(&request),
+        local_query(&query),
         Err(CogentError::InvalidRequest(message)) if message.contains("remote_options")
     ));
+
+    let mut chat = CogentChatRequest::default();
+    chat.remote_options.insert("seed".to_string(), json!(42));
+    assert!(matches!(
+        local_chat(&chat),
+        Err(CogentError::InvalidRequest(message)) if message.contains("remote_options")
+    ));
+
+    let mut embed = CogentEmbedRequest::default();
+    embed.remote_options.insert("seed".to_string(), json!(42));
+    assert!(matches!(
+        local_embed(&embed),
+        Err(CogentError::InvalidRequest(message)) if message.contains("remote_options")
+    ));
+}
+
+#[test]
+fn local_requests_accept_empty_remote_options() {
+    local_query(&CogentQueryRequest::default()).expect("local query");
+    local_chat(&CogentChatRequest::default()).expect("local chat");
+    local_embed(&CogentEmbedRequest::default()).expect("local embed");
 }
 
 #[cfg(feature = "providers")]
@@ -77,6 +110,50 @@ fn remote_text_requests_reject_local_options() {
         remote_chat(&chat),
         Err(CogentError::InvalidRequest(message)) if message.contains("local text options")
     ));
+}
+
+#[cfg(feature = "providers")]
+#[test]
+fn remote_text_requests_reject_invalid_common_options() {
+    let query = CogentQueryRequest {
+        options: CogentTextOptions {
+            max_tokens: Some(0),
+            ..CogentTextOptions::default()
+        },
+        ..CogentQueryRequest::default()
+    };
+    assert!(matches!(
+        remote_query(&query),
+        Err(CogentError::InvalidRequest(message)) if message.contains("max_tokens")
+    ));
+
+    let chat = CogentChatRequest {
+        options: CogentTextOptions {
+            temperature: Some(f32::INFINITY),
+            ..CogentTextOptions::default()
+        },
+        ..CogentChatRequest::default()
+    };
+    assert!(matches!(
+        remote_chat(&chat),
+        Err(CogentError::InvalidRequest(message)) if message.contains("temperature")
+    ));
+}
+
+#[cfg(feature = "providers")]
+#[test]
+fn remote_requests_accept_remote_options_without_local_fields() {
+    let mut query = CogentQueryRequest::default();
+    query.remote_options.insert("seed".to_string(), json!(42));
+    remote_query(&query).expect("remote query");
+
+    let mut chat = CogentChatRequest::default();
+    chat.remote_options.insert("seed".to_string(), json!(42));
+    remote_chat(&chat).expect("remote chat");
+
+    let mut embed = CogentEmbedRequest::default();
+    embed.remote_options.insert("seed".to_string(), json!(42));
+    remote_embed(&embed).expect("remote embed");
 }
 
 #[cfg(feature = "providers")]

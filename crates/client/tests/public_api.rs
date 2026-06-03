@@ -1,10 +1,13 @@
 //! Integration tests for the `cogentlm-client` crate-level public_api surface.
 //!
-//! Covers endpoint resolution, remote configuration, facade validation, and run wrappers with deterministic fakes rather than a live local engine.
+//! Covers public request envelopes, facade error behavior, and provider-gated
+//! remote configuration types without loading local models or calling remotes.
 
 use cogentlm_client::{
     CogentClient, CogentError, CogentQueryRequest, CogentTextOptions, EndpointRef, LocalTextOptions,
 };
+#[cfg(feature = "providers")]
+use cogentlm_client::{RemoteAuth, RemoteConfig, RemoteError, RemoteErrorKind, RemoteKind};
 
 #[test]
 fn request_envelopes_are_publicly_constructible() {
@@ -44,4 +47,25 @@ fn empty_client_reports_no_supported_endpoint() {
         error,
         CogentError::NoSupportedEndpoint { operation: "query" }
     ));
+}
+
+#[cfg(feature = "providers")]
+#[test]
+fn remote_configuration_types_are_publicly_constructible() {
+    let config = RemoteConfig::proxy(
+        "model",
+        "http://localhost:11434",
+        RemoteAuth::Bearer(cogentlm_client::RemoteSecret::new("secret")),
+    );
+
+    let RemoteConfig::Proxy(proxy) = config else {
+        panic!("proxy constructor should create proxy config");
+    };
+    assert_eq!(proxy.model, "model");
+    assert_eq!(proxy.base_url, "http://localhost:11434");
+
+    let error = RemoteError::new(RemoteErrorKind::Timeout, RemoteKind::Proxy, "slow");
+    assert_eq!(error.kind, RemoteErrorKind::Timeout);
+    assert_eq!(error.remote_kind, RemoteKind::Proxy);
+    assert_eq!(error.message, "slow");
 }

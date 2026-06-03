@@ -1,6 +1,7 @@
 //! Tests the `client` module in `cogentlm-client`.
 //!
-//! Covers endpoint resolution, remote configuration, facade validation, and run wrappers with deterministic fakes rather than a live local engine.
+//! Covers endpoint registration, resolution, and facade dispatch through fake
+//! endpoints and provider configs rather than loaded models or remote calls.
 
 use super::*;
 use crate::dispatch::InferenceEndpoint;
@@ -56,11 +57,33 @@ fn insert_fake(
     );
 }
 
+fn supported_capabilities() -> EndpointCapabilities {
+    capabilities(
+        CapabilitySupport::Supported,
+        CapabilitySupport::Supported,
+        CapabilitySupport::Supported,
+    )
+}
+
 fn expect_client_error<T>(result: CogentResult<T>, context: &str) -> CogentError {
     match result {
         Ok(_) => panic!("{context}"),
         Err(error) => error,
     }
+}
+
+#[test]
+fn default_client_starts_empty() {
+    let client = CogentClient::default();
+    let error = expect_client_error(
+        client.resolve(None, "query"),
+        "default client should not resolve endpoints",
+    );
+
+    assert!(matches!(
+        error,
+        CogentError::NoSupportedEndpoint { operation: "query" }
+    ));
 }
 
 #[test]
@@ -148,6 +171,107 @@ fn automatic_resolution_rejects_ambiguous_local_matches() {
 }
 
 #[test]
+fn facade_dispatches_query_chat_and_embed_to_selected_endpoint() {
+    let mut client = CogentClient::new();
+    let endpoint = EndpointRef::Local {
+        id: "local".to_string(),
+    };
+    insert_fake(&mut client, endpoint.clone(), supported_capabilities());
+
+    let query_error = futures::executor::block_on(client.query(CogentQueryRequest {
+        endpoint: Some(endpoint.clone()),
+        ..CogentQueryRequest::default()
+    }))
+    .expect_err("fake query error");
+    assert!(matches!(
+        query_error,
+        CogentError::Internal(message) if message == "fake query"
+    ));
+
+    let chat_error = futures::executor::block_on(client.chat(CogentChatRequest {
+        endpoint: Some(endpoint.clone()),
+        ..CogentChatRequest::default()
+    }))
+    .expect_err("fake chat error");
+    assert!(matches!(
+        chat_error,
+        CogentError::Internal(message) if message == "fake chat"
+    ));
+
+    let embed_error = futures::executor::block_on(client.embed(CogentEmbedRequest {
+        endpoint: Some(endpoint),
+        ..CogentEmbedRequest::default()
+    }))
+    .expect_err("fake embed error");
+    assert!(matches!(
+        embed_error,
+        CogentError::Internal(message) if message == "fake embed"
+    ));
+}
+
+#[test]
+fn facade_returns_resolution_errors_as_ready_runs() {
+    let client = CogentClient::new();
+    let endpoint = EndpointRef::Local {
+        id: "missing".to_string(),
+    };
+
+    let error = futures::executor::block_on(client.query(CogentQueryRequest {
+        endpoint: Some(endpoint.clone()),
+        ..CogentQueryRequest::default()
+    }))
+    .expect_err("missing endpoint");
+
+    assert!(matches!(
+        error,
+        CogentError::EndpointNotFound(found) if found == endpoint
+    ));
+
+    let chat_error = futures::executor::block_on(client.chat(CogentChatRequest {
+        endpoint: Some(endpoint.clone()),
+        ..CogentChatRequest::default()
+    }))
+    .expect_err("missing endpoint");
+    assert!(matches!(
+        chat_error,
+        CogentError::EndpointNotFound(found) if found == endpoint
+    ));
+
+    let embed_error = futures::executor::block_on(client.embed(CogentEmbedRequest {
+        endpoint: Some(endpoint.clone()),
+        ..CogentEmbedRequest::default()
+    }))
+    .expect_err("missing endpoint");
+    assert!(matches!(
+        embed_error,
+        CogentError::EndpointNotFound(found) if found == endpoint
+    ));
+}
+
+#[test]
+fn explicit_resolution_allows_unknown_capability_support() {
+    let mut client = CogentClient::new();
+    let endpoint = EndpointRef::Remote {
+        id: "remote".to_string(),
+    };
+    insert_fake(
+        &mut client,
+        endpoint.clone(),
+        capabilities(
+            CapabilitySupport::Unknown,
+            CapabilitySupport::Unknown,
+            CapabilitySupport::Unknown,
+        ),
+    );
+
+    let resolved = client
+        .resolve(Some(&endpoint), "query")
+        .expect("unknown support is attempted explicitly");
+
+    assert_eq!(resolved.endpoint(), &endpoint);
+}
+
+#[test]
 fn explicit_resolution_rejects_missing_and_unsupported_endpoints() {
     let mut client = CogentClient::new();
     let unsupported = EndpointRef::Local {
@@ -221,6 +345,70 @@ fn normalize_id_trims_and_rejects_blank_values() {
         error,
         CogentError::InvalidRequest(message) if message.contains("endpoint")
     ));
+}
+
+#[cfg(feature = "providers")]
+#[test]
+fn add_remote_registers_endpoint_and_reuses_executor() {
+    let mut client = CogentClient::new();
+    let first = client
+        .add_remote(
+            " remote-a ",
+            RemoteConfig::proxy(
+                "model-a",
+                "http://localhost:11434",
+                RemoteAuth::Bearer(RemoteSecret::new("secret-a")),
+            ),
+        )
+        .expect("first remote");
+    let second = client
+        .add_remote(
+            "remote-b",
+            RemoteConfig::proxy(
+                "model-b",
+                "http://localhost:11435",
+                RemoteAuth::Bearer(RemoteSecret::new("secret-b")),
+            ),
+        )
+        .expect("second remote");
+
+    assert_eq!(
+        first,
+        EndpointRef::Remote {
+            id: "remote-a".to_string()
+        }
+    );
+    assert_eq!(
+        second,
+        EndpointRef::Remote {
+            id: "remote-b".to_string()
+        }
+    );
+    assert!(client.remote_executor.is_some());
+    assert_eq!(client.endpoints.len(), 2);
+}
+
+#[cfg(feature = "providers")]
+#[test]
+fn add_remote_rejects_blank_remote_id_before_transport_build() {
+    let mut client = CogentClient::new();
+    let error = expect_client_error(
+        client.add_remote(
+            " ",
+            RemoteConfig::proxy(
+                "model",
+                "http://localhost:11434",
+                RemoteAuth::Bearer(RemoteSecret::new("secret")),
+            ),
+        ),
+        "blank remote id",
+    );
+
+    assert!(matches!(
+        error,
+        CogentError::InvalidRequest(message) if message.contains("remote id")
+    ));
+    assert!(client.remote_executor.is_none());
 }
 
 #[cfg(feature = "providers")]

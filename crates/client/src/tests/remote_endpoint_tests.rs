@@ -1,6 +1,7 @@
 //! Tests the `remote_endpoint` module in `cogentlm-client`.
 //!
-//! Covers endpoint resolution, remote configuration, facade validation, and run wrappers with deterministic fakes rather than a live local engine.
+//! Covers remote request mapping, streaming, provider error propagation, and
+//! task lifecycle behavior through fake provider backends without network I/O.
 
 use std::sync::{Arc, Mutex};
 
@@ -24,6 +25,42 @@ use crate::{CogentTextOptions, LocalTextOptions};
 #[derive(Default)]
 struct FakeBackend {
     calls: Mutex<Vec<&'static str>>,
+    generate_error: Mutex<Option<ProviderErrorKind>>,
+    chat_error: Mutex<Option<ProviderErrorKind>>,
+    embed_error: Mutex<Option<ProviderErrorKind>>,
+    stream_events: Mutex<Option<Vec<cogentlm_providers::ProviderResult<ProviderStreamEvent>>>>,
+}
+
+impl FakeBackend {
+    fn with_generate_error(kind: ProviderErrorKind) -> Self {
+        Self {
+            generate_error: Mutex::new(Some(kind)),
+            ..Self::default()
+        }
+    }
+
+    fn with_chat_error(kind: ProviderErrorKind) -> Self {
+        Self {
+            chat_error: Mutex::new(Some(kind)),
+            ..Self::default()
+        }
+    }
+
+    fn with_embed_error(kind: ProviderErrorKind) -> Self {
+        Self {
+            embed_error: Mutex::new(Some(kind)),
+            ..Self::default()
+        }
+    }
+
+    fn with_stream_events(
+        events: Vec<cogentlm_providers::ProviderResult<ProviderStreamEvent>>,
+    ) -> Self {
+        Self {
+            stream_events: Mutex::new(Some(events)),
+            ..Self::default()
+        }
+    }
 }
 
 #[async_trait]
@@ -45,6 +82,9 @@ impl ProviderBackend for FakeBackend {
         req: ProviderChatRequest,
     ) -> cogentlm_providers::ProviderResult<ProviderChatResponse> {
         self.calls.lock().expect("calls").push("chat");
+        if let Some(kind) = self.chat_error.lock().expect("chat error").take() {
+            return Err(provider_error(kind, "chat failed"));
+        }
         Ok(text_response(
             &req.model,
             req.messages
@@ -59,6 +99,9 @@ impl ProviderBackend for FakeBackend {
         req: ProviderGenerateRequest,
     ) -> cogentlm_providers::ProviderResult<ProviderGenerateResponse> {
         self.calls.lock().expect("calls").push("generate");
+        if let Some(kind) = self.generate_error.lock().expect("generate error").take() {
+            return Err(provider_error(kind, "generate failed"));
+        }
         Ok(text_response(&req.model, &req.prompt))
     }
 
@@ -67,6 +110,9 @@ impl ProviderBackend for FakeBackend {
         req: ProviderEmbedRequest,
     ) -> cogentlm_providers::ProviderResult<ProviderEmbeddingResponse> {
         self.calls.lock().expect("calls").push("embed");
+        if let Some(kind) = self.embed_error.lock().expect("embed error").take() {
+            return Err(provider_error(kind, "embed failed"));
+        }
         Ok(ProviderResponse {
             result: ProviderEmbeddingOutput {
                 values: vec![1.0, 2.0, 3.0],
@@ -85,31 +131,41 @@ impl ProviderBackend for FakeBackend {
         req: ProviderChatRequest,
     ) -> cogentlm_providers::ProviderResult<ProviderStream<ProviderStreamEvent>> {
         self.calls.lock().expect("calls").push("stream_chat");
-        let events = vec![
-            Ok(ProviderStreamEvent::TokenBatch(token_batch("a"))),
-            Ok(ProviderStreamEvent::TokenBatch(token_batch("b"))),
-            Ok(ProviderStreamEvent::Usage {
-                usage: TokenUsage {
-                    input_tokens: Some(2),
-                    output_tokens: Some(2),
-                    total_tokens: Some(4),
-                },
-            }),
-            Ok(ProviderStreamEvent::Finished {
-                finish_reason: FinishReason::Length,
-            }),
-        ];
+        let events = self
+            .stream_events
+            .lock()
+            .expect("stream events")
+            .take()
+            .unwrap_or_else(|| {
+                vec![
+                    Ok(ProviderStreamEvent::TokenBatch(token_batch("a"))),
+                    Ok(ProviderStreamEvent::TokenBatch(token_batch("b"))),
+                    Ok(ProviderStreamEvent::Usage {
+                        usage: TokenUsage {
+                            input_tokens: Some(2),
+                            output_tokens: Some(2),
+                            total_tokens: Some(4),
+                        },
+                    }),
+                    Ok(ProviderStreamEvent::Finished {
+                        finish_reason: FinishReason::Length,
+                    }),
+                ]
+            });
         assert_eq!(req.model, "remote-model");
         Ok(Box::pin(stream::iter(events)))
     }
 }
 
 fn unused_call(name: &'static str) -> ProviderError {
-    ProviderError::new(
+    provider_error(
         ProviderErrorKind::UnsupportedFeature,
-        ProviderKind::Proxy,
         format!("{name} is not used by this test"),
     )
+}
+
+fn provider_error(kind: ProviderErrorKind, message: impl Into<String>) -> ProviderError {
+    ProviderError::new(kind, ProviderKind::Proxy, message)
 }
 
 fn metadata(model: &str) -> ProviderResponseMetadata {
@@ -182,6 +238,14 @@ fn remote_generation_options_preserve_common_text_fields() {
 }
 
 #[test]
+fn capabilities_returns_configured_capability_snapshot() {
+    let backend = Arc::new(FakeBackend::default());
+    let endpoint = endpoint(backend);
+
+    assert_eq!(endpoint.capabilities(), &EndpointCapabilities::unknown());
+}
+
+#[test]
 fn query_maps_provider_response_to_client_response() {
     let backend = Arc::new(FakeBackend::default());
     let endpoint = endpoint(Arc::clone(&backend));
@@ -225,6 +289,42 @@ fn query_rejects_token_emission_before_transport_call() {
 }
 
 #[test]
+fn query_rejects_local_options_before_transport_call() {
+    let backend = Arc::new(FakeBackend::default());
+    let endpoint = endpoint(Arc::clone(&backend));
+    let error = block_on(endpoint.query(CogentQueryRequest {
+        local: LocalTextOptions {
+            grammar: Some("root ::= \"ok\"".to_string()),
+            ..LocalTextOptions::default()
+        },
+        ..CogentQueryRequest::default()
+    }))
+    .expect_err("local options are invalid for remote query");
+
+    assert!(matches!(error, CogentError::InvalidRequest(_)));
+    assert!(backend.calls.lock().expect("calls").is_empty());
+}
+
+#[test]
+fn chat_without_token_emission_maps_provider_response() {
+    let backend = Arc::new(FakeBackend::default());
+    let endpoint = endpoint(Arc::clone(&backend));
+    let run = endpoint.chat(CogentChatRequest {
+        messages: vec![ChatMessage::new(ChatRole::User, "hello")],
+        ..CogentChatRequest::default()
+    });
+    let (mut tokens, response) = run.into_parts();
+    let response = block_on(response).expect("chat response");
+
+    assert_eq!(response.text, "echo:hello");
+    assert_eq!(response.finish_reason, FinishReason::Stop);
+    assert_eq!(response.endpoint, *endpoint.endpoint());
+    assert_eq!(response.usage.expect("usage").total_tokens, Some(2));
+    assert!(block_on(tokens.next()).is_none());
+    assert_eq!(backend.calls.lock().expect("calls").as_slice(), &["chat"]);
+}
+
+#[test]
 fn chat_stream_forwards_token_batches_and_final_response() {
     let backend = Arc::new(FakeBackend::default());
     let endpoint = endpoint(Arc::clone(&backend));
@@ -257,6 +357,55 @@ fn chat_stream_forwards_token_batches_and_final_response() {
 }
 
 #[test]
+fn remote_stream_defaults_to_stop_without_usage_or_finished_event() {
+    let backend = Arc::new(FakeBackend::with_stream_events(vec![Ok(
+        ProviderStreamEvent::TokenBatch(token_batch("only")),
+    )]));
+    let endpoint = endpoint(Arc::clone(&backend));
+    let response = block_on(endpoint.chat(CogentChatRequest {
+        messages: vec![ChatMessage::new(ChatRole::User, "hello")],
+        emit_tokens: true,
+        ..CogentChatRequest::default()
+    }))
+    .expect("chat response");
+
+    assert_eq!(response.text, "only");
+    assert_eq!(response.finish_reason, FinishReason::Stop);
+    assert!(response.usage.is_none());
+    assert_eq!(
+        backend.calls.lock().expect("calls").as_slice(),
+        &["stream_chat"]
+    );
+}
+
+#[test]
+fn remote_stream_event_errors_surface_as_remote_errors() {
+    let backend = Arc::new(FakeBackend::with_stream_events(vec![
+        Ok(ProviderStreamEvent::TokenBatch(token_batch("a"))),
+        Err(provider_error(ProviderErrorKind::Timeout, "stream timeout")),
+    ]));
+    let endpoint = endpoint(Arc::clone(&backend));
+    let error = block_on(endpoint.chat(CogentChatRequest {
+        messages: vec![ChatMessage::new(ChatRole::User, "hello")],
+        emit_tokens: true,
+        ..CogentChatRequest::default()
+    }))
+    .expect_err("stream error");
+
+    assert!(matches!(
+        error,
+        CogentError::Remote(crate::RemoteError {
+            kind: crate::RemoteErrorKind::Timeout,
+            ..
+        })
+    ));
+    assert_eq!(
+        backend.calls.lock().expect("calls").as_slice(),
+        &["stream_chat"]
+    );
+}
+
+#[test]
 fn chat_rejects_local_options_before_transport_call() {
     let backend = Arc::new(FakeBackend::default());
     let endpoint = endpoint(Arc::clone(&backend));
@@ -268,6 +417,64 @@ fn chat_rejects_local_options_before_transport_call() {
         ..CogentChatRequest::default()
     }))
     .expect_err("local options are invalid for remote chat");
+
+    assert!(matches!(error, CogentError::InvalidRequest(_)));
+    assert!(backend.calls.lock().expect("calls").is_empty());
+}
+
+#[test]
+fn provider_errors_are_mapped_for_query_chat_and_embed() {
+    let query_backend = Arc::new(FakeBackend::with_generate_error(
+        ProviderErrorKind::RateLimited,
+    ));
+    let query_endpoint = endpoint(Arc::clone(&query_backend));
+    let query_error = block_on(query_endpoint.query(CogentQueryRequest::default()))
+        .expect_err("query provider error");
+    assert!(matches!(
+        query_error,
+        CogentError::Remote(crate::RemoteError {
+            kind: crate::RemoteErrorKind::RateLimited,
+            ..
+        })
+    ));
+
+    let chat_backend = Arc::new(FakeBackend::with_chat_error(ProviderErrorKind::Overloaded));
+    let chat_endpoint = endpoint(Arc::clone(&chat_backend));
+    let chat_error = block_on(chat_endpoint.chat(CogentChatRequest::default()))
+        .expect_err("chat provider error");
+    assert!(matches!(
+        chat_error,
+        CogentError::Remote(crate::RemoteError {
+            kind: crate::RemoteErrorKind::Overloaded,
+            ..
+        })
+    ));
+
+    let embed_backend = Arc::new(FakeBackend::with_embed_error(ProviderErrorKind::Transport));
+    let embed_endpoint = endpoint(Arc::clone(&embed_backend));
+    let embed_error = block_on(embed_endpoint.embed(CogentEmbedRequest::default()))
+        .expect_err("embed provider error");
+    assert!(matches!(
+        embed_error,
+        CogentError::Remote(crate::RemoteError {
+            kind: crate::RemoteErrorKind::Transport,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn embed_rejects_local_options_before_transport_call() {
+    let backend = Arc::new(FakeBackend::default());
+    let endpoint = endpoint(Arc::clone(&backend));
+    let error = block_on(endpoint.embed(CogentEmbedRequest {
+        local: crate::LocalEmbedOptions {
+            normalize: Some(true),
+            ..crate::LocalEmbedOptions::default()
+        },
+        ..CogentEmbedRequest::default()
+    }))
+    .expect_err("local options are invalid for remote embed");
 
     assert!(matches!(error, CogentError::InvalidRequest(_)));
     assert!(backend.calls.lock().expect("calls").is_empty());
@@ -287,4 +494,28 @@ fn embed_maps_provider_response_to_client_response() {
     assert_eq!(response.endpoint, *endpoint.endpoint());
     assert_eq!(response.usage.expect("usage").input_tokens, Some(3));
     assert_eq!(backend.calls.lock().expect("calls").as_slice(), &["embed"]);
+}
+
+#[test]
+fn remote_response_future_reports_join_failures() {
+    let executor = RemoteExecutor::new().expect("remote executor");
+    let join = executor
+        .spawn(async { futures::future::pending::<CogentResult<CogentTextResponse>>().await });
+    join.abort();
+    let error = block_on(RemoteResponseFuture::new(join, executor)).expect_err("join error");
+
+    assert!(matches!(
+        error,
+        CogentError::Internal(message) if message.contains("remote task failed")
+    ));
+}
+
+#[test]
+fn dropping_remote_response_future_aborts_task() {
+    let executor = RemoteExecutor::new().expect("remote executor");
+    let join = executor
+        .spawn(async { futures::future::pending::<CogentResult<CogentTextResponse>>().await });
+    let future = RemoteResponseFuture::new(join, executor);
+
+    drop(future);
 }

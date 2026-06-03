@@ -1,8 +1,11 @@
 //! Tests the `run` module in `cogentlm-client`.
 //!
-//! Covers endpoint resolution, remote configuration, facade validation, and run wrappers with deterministic fakes rather than a live local engine.
+//! Covers response futures and token batch stream ownership with ready futures,
+//! closed streams, and provider-channel fakes rather than engine execution.
 
-use cogentlm_core::{FinishReason, TokenBatch, TokenEmissionStats};
+use cogentlm_core::FinishReason;
+#[cfg(feature = "providers")]
+use cogentlm_core::{TokenBatch, TokenEmissionStats};
 use futures::executor::block_on;
 use futures::StreamExt;
 
@@ -15,6 +18,7 @@ fn endpoint() -> EndpointRef {
     }
 }
 
+#[cfg(feature = "providers")]
 fn token_batch(text: &str) -> TokenBatch {
     TokenBatch {
         request_id: "req".to_string(),
@@ -29,6 +33,32 @@ fn token_batch(text: &str) -> TokenBatch {
             batches_sent: 1,
         },
     }
+}
+
+#[test]
+fn from_engine_without_stream_is_closed() {
+    let mut tokens = CogentTokenBatches::from_engine(None);
+
+    assert!(block_on(tokens.next()).is_none());
+}
+
+#[test]
+fn tokens_method_borrows_owned_stream() {
+    let mut run = CogentTextRun::new(
+        Box::pin(async {
+            Ok(CogentTextResponse {
+                endpoint: endpoint(),
+                text: "done".to_string(),
+                finish_reason: FinishReason::Stop,
+                usage: None,
+                local_stats: None,
+            })
+        }),
+        CogentTokenBatches::closed(),
+    );
+
+    assert!(block_on(run.tokens().next()).is_none());
+    assert_eq!(block_on(run).expect("text response").text, "done");
 }
 
 #[test]
