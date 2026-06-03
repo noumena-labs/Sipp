@@ -120,6 +120,8 @@ class FakeAssetStore {
   public readonly files = new Map<string, File>();
   public readonly deleted: string[] = [];
   public localSplitCount = 0;
+  public cleanupCount = 0;
+  public forceBrowserSplit = false;
   public readonly remotes = new Map<
     string,
     {
@@ -275,7 +277,13 @@ class FakeAssetStore {
     this.files.delete(record.id);
   }
 
-  public async cleanupBrowserSplitArtifacts(): Promise<void> {}
+  public requiresBrowserSplit(bytes: number): boolean {
+    return this.forceBrowserSplit || bytes > FakeAssetStore.directLoadMaxBytes;
+  }
+
+  public async cleanupBrowserSplitArtifacts(): Promise<void> {
+    this.cleanupCount += 1;
+  }
 }
 
 class FakeAssetClassifier {
@@ -1068,6 +1076,23 @@ test('ModelService routes browser lifecycle through the Rust bridge when availab
   await service.remove(info.id);
   assert.equal(rust.removeCount, 1);
   assert.deepEqual(assets.deleted, ['asset-model-rust-lifecycle.gguf-19']);
+});
+
+test('ModelService skips browser split cleanup for direct local loads', async () => {
+  const { service, assets } = createService();
+
+  await service.load(file('direct-load.gguf'));
+
+  assert.equal(assets.cleanupCount, 0);
+});
+
+test('ModelService cleans browser split artifacts before split-capable local loads', async () => {
+  const { service, assets } = createService();
+  assets.forceBrowserSplit = true;
+
+  await service.load(file('split-capable.gguf'));
+
+  assert.equal(assets.cleanupCount, 1);
 });
 
 test('ModelService defaults browser pthread runtime thread counts before Rust prepare', async () => {

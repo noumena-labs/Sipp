@@ -47,7 +47,7 @@ impl QueryRequestBody {
         }
     }
 
-    fn generation_options(&self) -> BackendGenerationOptions {
+    pub(crate) fn generation_options(&self) -> BackendGenerationOptions {
         BackendGenerationOptions {
             max_tokens: self.max_tokens,
             temperature: self.temperature,
@@ -74,19 +74,24 @@ pub(crate) struct ChatRequestBody {
 
 impl ChatRequestBody {
     pub(crate) fn into_backend(self) -> BackendChatRequest {
+        let options = self.generation_options();
         BackendChatRequest {
             messages: self
                 .messages
                 .into_iter()
                 .map(ChatMessageBody::into_core)
                 .collect(),
-            options: BackendGenerationOptions {
-                max_tokens: self.max_tokens,
-                temperature: self.temperature,
-                top_p: self.top_p,
-                stop: self.stop,
-            },
+            options,
             gateway_options: self.gateway_options,
+        }
+    }
+
+    pub(crate) fn generation_options(&self) -> BackendGenerationOptions {
+        BackendGenerationOptions {
+            max_tokens: self.max_tokens,
+            temperature: self.temperature,
+            top_p: self.top_p,
+            stop: self.stop.clone(),
         }
     }
 }
@@ -141,8 +146,11 @@ pub(crate) struct EmbeddingResponseBody {
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct UsageBody {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub input_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub total_tokens: Option<u32>,
 }
 

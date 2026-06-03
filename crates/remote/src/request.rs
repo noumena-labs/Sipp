@@ -92,6 +92,7 @@ pub(crate) fn query_body(
     stream: bool,
 ) -> GatewayResult<serde_json::Value> {
     require_non_empty_field(&req.model, "model")?;
+    require_non_empty_field(&req.prompt, "prompt")?;
 
     let mut body = serde_json::Map::new();
     body.insert(
@@ -157,8 +158,8 @@ fn insert_generation_options(
     options: &GatewayGenerationOptions,
 ) -> GatewayResult<()> {
     insert_positive_u32_option(body, "max_tokens", options.max_tokens)?;
-    insert_finite_f32_option(body, "temperature", options.temperature)?;
-    insert_finite_f32_option(body, "top_p", options.top_p)?;
+    insert_temperature_option(body, options.temperature)?;
+    insert_top_p_option(body, options.top_p)?;
     if !options.stop.is_empty() {
         body.insert("stop".to_string(), serde_json::json!(options.stop));
     }
@@ -200,13 +201,43 @@ fn insert_positive_u32_option(
     Ok(())
 }
 
-fn insert_finite_f32_option(
+fn insert_temperature_option(
     body: &mut serde_json::Map<String, serde_json::Value>,
-    key: &'static str,
     value: Option<f32>,
 ) -> GatewayResult<()> {
-    let Some(value) = value else {
+    let Some(value) = finite_f32_option("temperature", value)? else {
         return Ok(());
+    };
+    if value < 0.0 {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "temperature must be greater than or equal to zero",
+        ));
+    }
+    body.insert("temperature".to_string(), serde_json::json!(value));
+    Ok(())
+}
+
+fn insert_top_p_option(
+    body: &mut serde_json::Map<String, serde_json::Value>,
+    value: Option<f32>,
+) -> GatewayResult<()> {
+    let Some(value) = finite_f32_option("top_p", value)? else {
+        return Ok(());
+    };
+    if !(0.0..=1.0).contains(&value) {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "top_p must be between 0 and 1",
+        ));
+    }
+    body.insert("top_p".to_string(), serde_json::json!(value));
+    Ok(())
+}
+
+fn finite_f32_option(key: &'static str, value: Option<f32>) -> GatewayResult<Option<f32>> {
+    let Some(value) = value else {
+        return Ok(None);
     };
     if !value.is_finite() {
         return Err(GatewayError::new(
@@ -214,8 +245,7 @@ fn insert_finite_f32_option(
             format!("{key} must be finite"),
         ));
     }
-    body.insert(key.to_string(), serde_json::json!(value));
-    Ok(())
+    Ok(Some(value))
 }
 
 fn merge_gateway_options(

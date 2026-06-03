@@ -24,6 +24,18 @@ fn token_batch_builder_tracks_sequence_and_stats() {
 }
 
 #[test]
+fn token_batch_builder_wraps_sequence_after_u32_max() {
+    let mut builder = TokenBatchBuilder::new(Some("req-1".to_string()));
+    builder.sequence = u32::MAX;
+
+    let final_batch = builder.push_text("!");
+    let wrapped_batch = builder.push_text("next");
+
+    assert_eq!(final_batch.sequence_start, u32::MAX);
+    assert_eq!(wrapped_batch.sequence_start, 0);
+}
+
+#[test]
 fn sse_parser_handles_partial_events() {
     let mut parser = SseParser::new(ProviderKind::OpenAiCompatible);
 

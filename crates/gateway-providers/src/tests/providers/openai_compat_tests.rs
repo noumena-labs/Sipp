@@ -54,6 +54,28 @@ fn tool_call_response_yields_empty_text_with_raw_preserved() {
 }
 
 #[test]
+fn rejects_non_object_openai_compatible_usage() {
+    let body = serde_json::json!({
+        "id": "chatcmpl-1",
+        "model": "model-a",
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "hi"
+            },
+            "finish_reason": "stop"
+        }],
+        "usage": []
+    });
+
+    let err = openai_chat_response_from_body(None, body, ProviderKind::OpenAiCompatible)
+        .expect_err("array usage should fail");
+
+    assert_eq!(err.kind, ProviderErrorKind::Provider);
+    assert_eq!(err.message, "usage must be a JSON object");
+}
+
+#[test]
 fn rejects_invalid_openai_compatible_request_options() {
     let request = chat_request(
         ProviderGenerationOptions {
@@ -76,6 +98,33 @@ fn rejects_invalid_openai_compatible_request_options() {
     let err = openai_chat_body(&request, ProviderKind::OpenAiCompatible)
         .expect_err("non-finite temp fails");
     assert_eq!(err.kind, ProviderErrorKind::InvalidRequest);
+
+    let request = chat_request(
+        ProviderGenerationOptions {
+            temperature: Some(-0.1),
+            ..ProviderGenerationOptions::default()
+        },
+        vec![ChatMessage::new(ChatRole::User, "hello")],
+    );
+    let err = openai_chat_body(&request, ProviderKind::OpenAiCompatible)
+        .expect_err("negative temp fails");
+    assert_eq!(err.kind, ProviderErrorKind::InvalidRequest);
+    assert_eq!(
+        err.message,
+        "temperature must be greater than or equal to zero"
+    );
+
+    let request = chat_request(
+        ProviderGenerationOptions {
+            top_p: Some(1.1),
+            ..ProviderGenerationOptions::default()
+        },
+        vec![ChatMessage::new(ChatRole::User, "hello")],
+    );
+    let err =
+        openai_chat_body(&request, ProviderKind::OpenAiCompatible).expect_err("high top_p fails");
+    assert_eq!(err.kind, ProviderErrorKind::InvalidRequest);
+    assert_eq!(err.message, "top_p must be between 0 and 1");
 
     let request = chat_request(ProviderGenerationOptions::default(), Vec::new());
     let err = openai_chat_body(&request, ProviderKind::OpenAiCompatible)

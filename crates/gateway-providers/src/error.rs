@@ -40,7 +40,7 @@ impl ProviderErrorKind {
 }
 
 #[derive(Error)]
-#[error("{provider:?} provider error ({kind:?}): {message}")]
+#[error("{provider:?} provider error ({kind:?})")]
 pub struct ProviderError {
     pub kind: ProviderErrorKind,
     pub provider: ProviderKind,
@@ -91,15 +91,22 @@ impl ProviderError {
 
 pub(crate) fn provider_error_kind_from_code(code: Option<&str>) -> Option<ProviderErrorKind> {
     match code {
-        Some("authentication_error") => Some(ProviderErrorKind::Authentication),
-        Some("permission_error") => Some(ProviderErrorKind::Authorization),
-        Some("invalid_request_error") => Some(ProviderErrorKind::InvalidRequest),
-        Some("not_found_error") => Some(ProviderErrorKind::ModelNotFound),
-        Some("overloaded_error") => Some(ProviderErrorKind::Overloaded),
+        Some("authentication" | "authentication_error") => Some(ProviderErrorKind::Authentication),
+        Some("authorization" | "authorization_error" | "permission_error") => {
+            Some(ProviderErrorKind::Authorization)
+        }
+        Some("invalid_request" | "invalid_request_error") => {
+            Some(ProviderErrorKind::InvalidRequest)
+        }
+        Some("unsupported_feature") => Some(ProviderErrorKind::UnsupportedFeature),
+        Some("model_not_found" | "not_found_error") => Some(ProviderErrorKind::ModelNotFound),
+        Some("overloaded" | "overloaded_error") => Some(ProviderErrorKind::Overloaded),
         Some("insufficient_quota" | "quota_exceeded") => Some(ProviderErrorKind::QuotaExceeded),
         Some("rate_limit" | "rate_limited" | "rate_limit_exceeded" | "rate_limit_error") => {
             Some(ProviderErrorKind::RateLimited)
         }
+        Some("timeout") => Some(ProviderErrorKind::Timeout),
+        Some("transport") => Some(ProviderErrorKind::Transport),
         _ => None,
     }
 }

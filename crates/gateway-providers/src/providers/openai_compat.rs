@@ -238,6 +238,10 @@ pub(super) fn openai_chat_response_from_body(
     body: serde_json::Value,
     provider: ProviderKind,
 ) -> ProviderResult<ProviderChatResponse> {
+    if body.get("error").is_some_and(|value| !value.is_null()) {
+        return Err(provider_body_error(body, provider, "provider chat error"));
+    }
+
     let choice = body
         .get("choices")
         .and_then(serde_json::Value::as_array)
@@ -466,6 +470,8 @@ struct OpenAiStreamState {
     pending: VecDeque<ProviderResult<ProviderStreamEvent>>,
     batcher: TokenBatchBuilder,
     closed: bool,
+    finished: bool,
+    missing_finish_reported: bool,
     provider: ProviderKind,
     mode: OpenAiStreamMode,
 }
@@ -509,6 +515,8 @@ fn openai_stream_events_with_mode(
         pending: VecDeque::new(),
         batcher: TokenBatchBuilder::new(request_id),
         closed: false,
+        finished: false,
+        missing_finish_reported: false,
         provider,
         mode,
     };
@@ -524,6 +532,10 @@ async fn next_openai_stream_event(
             return Some((event, state));
         }
         if state.closed {
+            if !state.finished && !state.missing_finish_reported {
+                state.missing_finish_reported = true;
+                return Some((Err(state.missing_finish_error()), state));
+            }
             return None;
         }
 
@@ -531,16 +543,22 @@ async fn next_openai_stream_event(
             Some(Ok(bytes)) => {
                 if let Err(err) = state.push_bytes(&bytes) {
                     state.closed = true;
+                    state.missing_finish_reported = true;
+                    state.pending.clear();
                     return Some((Err(err), state));
                 }
             }
             Some(Err(err)) => {
                 state.closed = true;
+                state.missing_finish_reported = true;
+                state.pending.clear();
                 return Some((Err(err), state));
             }
             None => {
                 state.closed = true;
                 if let Err(err) = state.finish_parser() {
+                    state.missing_finish_reported = true;
+                    state.pending.clear();
                     return Some((Err(err), state));
                 }
             }
@@ -565,13 +583,28 @@ impl OpenAiStreamState {
 
     fn push_payload(&mut self, payload: &str) -> ProviderResult<()> {
         if payload.trim() == "[DONE]" {
+            if !self.finished {
+                self.push_finished(FinishReason::Stop);
+            }
             return Ok(());
+        }
+        if self.finished {
+            return Err(self.event_after_finish_error());
         }
 
         let value = serde_json::from_str::<serde_json::Value>(payload).map_err(|err| {
             provider_response_error(format!("invalid SSE JSON payload: {err}"), self.provider)
         })?;
-        if value.get("error").is_some() {
+        if !value.is_object() {
+            return Err(provider_response_error(
+                format!(
+                    "{} stream payload must be a JSON object",
+                    provider_stream_label(self.provider)
+                ),
+                self.provider,
+            ));
+        }
+        if value.get("error").is_some_and(|value| !value.is_null()) {
             return Err(provider_stream_error(value, self.provider));
         }
 
@@ -585,24 +618,31 @@ impl OpenAiStreamState {
             return Ok(());
         };
         for choice in choices {
-            self.push_choice(choice);
+            self.push_choice(choice)?;
         }
         Ok(())
     }
 
-    fn push_choice(&mut self, choice: &serde_json::Value) {
-        if let Some(text) = self.choice_text(choice) {
+    fn push_choice(&mut self, choice: &serde_json::Value) -> ProviderResult<()> {
+        let text = self.choice_text(choice);
+        let finish_reason = choice
+            .get("finish_reason")
+            .and_then(serde_json::Value::as_str);
+        if self.finished {
+            if text.is_some() {
+                return Err(self.event_after_finish_error());
+            }
+            return Ok(());
+        }
+
+        if let Some(text) = text {
             self.push_text(text);
         }
 
-        if let Some(raw) = choice
-            .get("finish_reason")
-            .and_then(serde_json::Value::as_str)
-        {
-            self.pending.push_back(Ok(ProviderStreamEvent::Finished {
-                finish_reason: map_finish_reason(Some(raw)),
-            }));
+        if let Some(raw) = finish_reason {
+            self.push_finished(map_finish_reason(Some(raw)));
         }
+        Ok(())
     }
 
     fn choice_text<'a>(&self, choice: &'a serde_json::Value) -> Option<&'a str> {
@@ -618,6 +658,43 @@ impl OpenAiStreamState {
         let batch = self.batcher.push_text(text);
         self.pending
             .push_back(Ok(ProviderStreamEvent::TokenBatch(batch)));
+    }
+
+    fn push_finished(&mut self, finish_reason: FinishReason) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        self.pending
+            .push_back(Ok(ProviderStreamEvent::Finished { finish_reason }));
+    }
+
+    fn missing_finish_error(&self) -> ProviderError {
+        provider_response_error(
+            format!(
+                "{} stream ended before finish_reason",
+                provider_stream_label(self.provider)
+            ),
+            self.provider,
+        )
+    }
+
+    fn event_after_finish_error(&self) -> ProviderError {
+        provider_response_error(
+            format!(
+                "{} stream event received after finish_reason",
+                provider_stream_label(self.provider)
+            ),
+            self.provider,
+        )
+    }
+}
+
+fn provider_stream_label(provider: ProviderKind) -> &'static str {
+    match provider {
+        ProviderKind::OpenAiCompatible => "OpenAI-compatible",
+        ProviderKind::OpenAi => "OpenAI",
+        ProviderKind::Anthropic => "Anthropic",
     }
 }
 

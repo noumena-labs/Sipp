@@ -36,6 +36,8 @@ pub(crate) fn gateway_stream_events(
         batcher: TokenBatchBuilder::new(request_id),
         redaction_secret,
         closed: false,
+        finished: false,
+        missing_done_reported: false,
     };
 
     Box::pin(futures_stream::unfold(state, next_gateway_stream_event))
@@ -48,6 +50,8 @@ struct GatewayStreamState {
     batcher: TokenBatchBuilder,
     redaction_secret: String,
     closed: bool,
+    finished: bool,
+    missing_done_reported: bool,
 }
 
 async fn next_gateway_stream_event(
@@ -58,6 +62,15 @@ async fn next_gateway_stream_event(
             return Some((event, state));
         }
         if state.closed {
+            if !state.finished && !state.missing_done_reported {
+                state.missing_done_reported = true;
+                return Some((
+                    Err(stream_protocol_error(
+                        "gateway stream ended before done event",
+                    )),
+                    state,
+                ));
+            }
             return None;
         }
 
@@ -65,16 +78,22 @@ async fn next_gateway_stream_event(
             Some(Ok(bytes)) => {
                 if let Err(error) = state.push_bytes(&bytes) {
                     state.closed = true;
+                    state.missing_done_reported = true;
+                    state.pending.clear();
                     return Some((Err(error), state));
                 }
             }
             Some(Err(error)) => {
                 state.closed = true;
+                state.missing_done_reported = true;
+                state.pending.clear();
                 return Some((Err(error), state));
             }
             None => {
                 state.closed = true;
                 if let Err(error) = state.finish_parser() {
+                    state.missing_done_reported = true;
+                    state.pending.clear();
                     return Some((Err(error), state));
                 }
             }
@@ -101,6 +120,11 @@ impl GatewayStreamState {
         if event.data.trim() == "[DONE]" {
             return Ok(());
         }
+        if self.finished {
+            return Err(stream_protocol_error(
+                "gateway stream event received after done event",
+            ));
+        }
 
         match event.event.as_deref().unwrap_or("message") {
             "token" => {
@@ -126,9 +150,13 @@ impl GatewayStreamState {
                 let value = parse_json_payload(&event.data)?;
                 let finish_reason = value
                     .get("finish_reason")
-                    .and_then(serde_json::Value::as_str);
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| {
+                        stream_protocol_error("gateway stream done event missing finish_reason")
+                    })?;
+                self.finished = true;
                 self.pending.push_back(Ok(GatewayStreamEvent::Finished {
-                    finish_reason: map_finish_reason(finish_reason),
+                    finish_reason: map_finish_reason(Some(finish_reason)),
                 }));
                 Ok(())
             }
@@ -139,20 +167,31 @@ impl GatewayStreamState {
                 error.redact_secret(&self.redaction_secret);
                 Err(error)
             }
-            name => Err(stream_protocol_error(format!(
-                "unsupported gateway stream event: {name}"
-            ))),
+            name => {
+                let mut error =
+                    stream_protocol_error(format!("unsupported gateway stream event: {name}"));
+                error.redact_secret(&self.redaction_secret);
+                Err(error)
+            }
         }
     }
 }
 
 fn parse_json_payload(payload: &str) -> GatewayResult<serde_json::Value> {
-    serde_json::from_str(payload).map_err(|error| {
+    let value: serde_json::Value = serde_json::from_str(payload).map_err(|error| {
         GatewayError::new(
             GatewayErrorKind::Gateway,
             format!("invalid gateway stream JSON payload: {error}"),
         )
-    })
+    })?;
+    if value.is_object() {
+        Ok(value)
+    } else {
+        Err(GatewayError::new(
+            GatewayErrorKind::Gateway,
+            "gateway stream payload must be a JSON object",
+        ))
+    }
 }
 
 fn optional_u32_field(

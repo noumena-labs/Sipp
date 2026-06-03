@@ -126,8 +126,10 @@ fn redact_json_value(value: &mut serde_json::Value, secret: &str) {
 
 pub(crate) fn gateway_error_kind_from_code(code: Option<&str>) -> Option<GatewayErrorKind> {
     match code {
-        Some("authentication_error") => Some(GatewayErrorKind::Authentication),
-        Some("authorization_error" | "permission_error") => Some(GatewayErrorKind::Authorization),
+        Some("authentication" | "authentication_error") => Some(GatewayErrorKind::Authentication),
+        Some("authorization" | "authorization_error" | "permission_error") => {
+            Some(GatewayErrorKind::Authorization)
+        }
         Some("invalid_request" | "invalid_request_error") => Some(GatewayErrorKind::InvalidRequest),
         Some("unsupported_feature") => Some(GatewayErrorKind::UnsupportedFeature),
         Some("model_not_found" | "not_found_error") => Some(GatewayErrorKind::ModelNotFound),
@@ -136,6 +138,8 @@ pub(crate) fn gateway_error_kind_from_code(code: Option<&str>) -> Option<Gateway
         Some("rate_limit" | "rate_limited" | "rate_limit_exceeded" | "rate_limit_error") => {
             Some(GatewayErrorKind::RateLimited)
         }
+        Some("timeout") => Some(GatewayErrorKind::Timeout),
+        Some("transport") => Some(GatewayErrorKind::Transport),
         _ => None,
     }
 }

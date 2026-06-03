@@ -63,16 +63,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into_iter()
         .collect::<Vec<_>>();
 
-    let mut state = GatewayState::new(token);
+    let mut state = GatewayState::new(token)?;
     state.add_alias(GatewayAlias::new(
         "custom",
         OperationSet::all(),
         Arc::new(CustomBackend),
         GatewayAliasLimits::default(),
-    ))?;
+    )?)?;
 
-    let router = GatewayService::new(state, allowed_origins, GatewayServiceLimits::default())
-        .router()?
+    let router = GatewayService::new(state, allowed_origins, GatewayServiceLimits::default())?
+        .router()
         .into_make_service();
     let listener = tokio::net::TcpListener::bind(bind).await?;
     println!("custom gateway listening on {bind}");

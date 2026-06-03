@@ -46,6 +46,27 @@ fn local_requests_reject_gateway_options() {
     ));
 }
 
+#[test]
+fn text_options_reject_out_of_range_sampling_values() {
+    let mut options = CogentTextOptions {
+        temperature: Some(-0.1),
+        ..CogentTextOptions::default()
+    };
+    assert!(matches!(
+        common_text_options(&options),
+        Err(CogentError::InvalidRequest(message))
+            if message == "temperature must be greater than or equal to zero"
+    ));
+
+    options.temperature = None;
+    options.top_p = Some(1.1);
+    assert!(matches!(
+        common_text_options(&options),
+        Err(CogentError::InvalidRequest(message))
+            if message == "top_p must be between 0 and 1"
+    ));
+}
+
 #[cfg(feature = "remote")]
 #[test]
 fn remote_text_requests_reject_local_only_fields() {

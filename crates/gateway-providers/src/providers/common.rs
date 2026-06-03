@@ -52,6 +52,20 @@ pub(super) fn insert_finite_f32_option(
             format!("{key} must be finite"),
         ));
     }
+    if key == "temperature" && value < 0.0 {
+        return Err(ProviderError::new(
+            ProviderErrorKind::InvalidRequest,
+            provider,
+            "temperature must be greater than or equal to zero",
+        ));
+    }
+    if key == "top_p" && !(0.0..=1.0).contains(&value) {
+        return Err(ProviderError::new(
+            ProviderErrorKind::InvalidRequest,
+            provider,
+            "top_p must be between 0 and 1",
+        ));
+    }
     body.insert(key.to_string(), serde_json::json!(value));
     Ok(())
 }
@@ -80,6 +94,12 @@ pub(super) fn optional_u32(
     key: &str,
     provider: ProviderKind,
 ) -> ProviderResult<Option<u32>> {
+    if !value.is_object() {
+        return Err(provider_response_error(
+            "usage must be a JSON object",
+            provider,
+        ));
+    }
     let Some(raw) = value.get(key) else {
         return Ok(None);
     };

@@ -78,7 +78,6 @@ impl CogentClient {
         let endpoint = EndpointRef::Remote { id };
         self.reject_duplicate(&endpoint)?;
         let (model, client) = config.build()?;
-        let model = normalize_id(model, "remote model alias")?;
         let executor = self.remote_executor()?;
         self.endpoints.insert(
             endpoint.clone(),
@@ -106,7 +105,6 @@ impl CogentClient {
             return Err(CogentError::EndpointNotFound(endpoint));
         }
         let (model, client) = config.build()?;
-        let model = normalize_id(model, "remote model alias")?;
         let executor = self.remote_executor()?;
         self.endpoints.insert(
             endpoint.clone(),
@@ -226,10 +224,14 @@ fn ensure_supported(endpoint: &dyn InferenceEndpoint, operation: &'static str) -
 
 fn normalize_id(id: impl Into<String>, name: &'static str) -> CogentResult<String> {
     let id = id.into();
-    let id = id.trim().to_string();
-    if id.is_empty() {
+    let trimmed = id.trim();
+    if trimmed.is_empty() {
         Err(CogentError::InvalidRequest(format!(
             "{name} must not be empty"
+        )))
+    } else if trimmed != id.as_str() {
+        Err(CogentError::InvalidRequest(format!(
+            "{name} must not contain surrounding whitespace"
         )))
     } else {
         Ok(id)

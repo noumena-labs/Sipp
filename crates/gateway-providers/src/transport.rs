@@ -10,6 +10,7 @@ use crate::{
 };
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_ERROR_BODY_BYTES: usize = 1 << 20;
 
 #[derive(Clone)]
 pub(crate) struct HttpTransport {
@@ -41,14 +42,23 @@ impl HttpTransport {
         static_headers: Vec<(String, String)>,
         timeout: Option<Duration>,
     ) -> ProviderResult<Self> {
-        let base_url = base_url.into().trim_end_matches('/').to_string();
-        if base_url.is_empty() {
+        let base_url = base_url.into();
+        let trimmed_base_url = base_url.trim();
+        if trimmed_base_url.is_empty() {
             return Err(ProviderError::new(
                 ProviderErrorKind::InvalidRequest,
                 provider,
                 "provider base_url must not be empty",
             ));
         }
+        if trimmed_base_url != base_url.as_str() {
+            return Err(ProviderError::new(
+                ProviderErrorKind::InvalidRequest,
+                provider,
+                "provider base_url must not contain surrounding whitespace",
+            ));
+        }
+        let base_url = base_url.trim_end_matches('/').to_string();
         validate_base_url(provider, &base_url)?;
         let timeout = timeout.unwrap_or(DEFAULT_TIMEOUT);
         if timeout.is_zero() {
@@ -214,11 +224,18 @@ fn build_request_headers(
     let mut headers = parse_static_headers(provider, static_headers)?;
     let (name, mut value) = match auth {
         ProviderAuth::Bearer(secret) => {
-            if secret.is_empty() {
+            if secret.is_blank() {
                 return Err(ProviderError::new(
                     ProviderErrorKind::Authentication,
                     provider,
                     "bearer token must not be empty",
+                ));
+            }
+            if secret.contains_whitespace() {
+                return Err(ProviderError::new(
+                    ProviderErrorKind::InvalidRequest,
+                    provider,
+                    "bearer token must not contain whitespace",
                 ));
             }
             let value = HeaderValue::from_str(&format!("Bearer {}", secret.expose()))
@@ -226,11 +243,18 @@ fn build_request_headers(
             (AUTHORIZATION, value)
         }
         ProviderAuth::Header { name, value } => {
-            if value.is_empty() {
+            if value.is_blank() {
                 return Err(ProviderError::new(
                     ProviderErrorKind::Authentication,
                     provider,
                     "auth header value must not be empty",
+                ));
+            }
+            if value.contains_whitespace() {
+                return Err(ProviderError::new(
+                    ProviderErrorKind::InvalidRequest,
+                    provider,
+                    "auth header value must not contain whitespace",
                 ));
             }
             let name = HeaderName::from_bytes(name.as_bytes())
@@ -257,12 +281,23 @@ fn invalid_auth_header_error(provider: ProviderKind, err: impl std::fmt::Display
 /// and CDNs frequently return HTML or plain text on 4xx/5xx; the status-based
 /// classification stays intact and the raw body is preserved either way.
 async fn error_body(response: reqwest::Response) -> serde_json::Value {
-    match response.bytes().await {
-        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|_| {
-            serde_json::Value::String(String::from_utf8_lossy(&bytes).into_owned())
-        }),
-        Err(_) => serde_json::Value::Null,
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let Ok(chunk) = chunk else {
+            return serde_json::Value::Null;
+        };
+        if body.len().saturating_add(chunk.len()) > MAX_ERROR_BODY_BYTES {
+            return serde_json::json!({
+                "error": {
+                    "message": "provider error response exceeded body limit"
+                }
+            });
+        }
+        body.extend_from_slice(&chunk);
     }
+    serde_json::from_slice(&body)
+        .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&body).into_owned()))
 }
 
 fn parse_static_headers(
@@ -301,6 +336,13 @@ fn validate_base_url(provider: ProviderKind, base_url: &str) -> ProviderResult<(
             ProviderErrorKind::InvalidRequest,
             provider,
             "provider base_url must not include userinfo",
+        ));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(ProviderError::new(
+            ProviderErrorKind::InvalidRequest,
+            provider,
+            "provider base_url must not include query or fragment",
         ));
     }
     if url.scheme() == "http" && !is_loopback_url(&url) {

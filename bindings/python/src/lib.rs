@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
@@ -795,15 +796,25 @@ struct PyRemoteGatewayConfig {
 impl PyRemoteGatewayConfig {
     #[new]
     #[pyo3(signature = (alias, base_url, token, *, timeout_ms = None))]
-    fn new(alias: String, base_url: String, token: String, timeout_ms: Option<u64>) -> Self {
-        Self {
+    fn new(
+        alias: String,
+        base_url: String,
+        token: String,
+        timeout_ms: Option<u64>,
+    ) -> PyResult<Self> {
+        if timeout_ms == Some(0) {
+            return Err(PyValueError::new_err(
+                "RemoteGatewayConfig.timeout_ms must be a positive integer",
+            ));
+        }
+        Ok(Self {
             core: CoreRemoteGatewayConfig {
                 alias,
                 base_url,
                 token: CoreRemoteSecret::new(token),
                 timeout: timeout_ms.map(Duration::from_millis),
             },
-        }
+        })
     }
 }
 
@@ -1135,6 +1146,14 @@ fn chat_messages_to_core(
 }
 
 fn py_to_json(value: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+    let mut ancestors = HashSet::new();
+    py_to_json_inner(value, &mut ancestors)
+}
+
+fn py_to_json_inner(
+    value: &Bound<'_, PyAny>,
+    ancestors: &mut HashSet<usize>,
+) -> PyResult<serde_json::Value> {
     if value.is_none() {
         return Ok(serde_json::Value::Null);
     }
@@ -1161,29 +1180,61 @@ fn py_to_json(value: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
             });
     }
     if let Ok(items) = value.downcast::<PyList>() {
-        let mut output = Vec::with_capacity(items.len());
-        for item in items.iter() {
-            output.push(py_to_json(&item)?);
-        }
-        return Ok(serde_json::Value::Array(output));
+        let container = enter_json_container(value, ancestors)?;
+        let result = (|| {
+            let mut output = Vec::with_capacity(items.len());
+            for item in items.iter() {
+                output.push(py_to_json_inner(&item, ancestors)?);
+            }
+            Ok(serde_json::Value::Array(output))
+        })();
+        ancestors.remove(&container);
+        return result;
     }
     if let Ok(items) = value.downcast::<PyTuple>() {
-        let mut output = Vec::with_capacity(items.len());
-        for item in items.iter() {
-            output.push(py_to_json(&item)?);
-        }
-        return Ok(serde_json::Value::Array(output));
+        let container = enter_json_container(value, ancestors)?;
+        let result = (|| {
+            let mut output = Vec::with_capacity(items.len());
+            for item in items.iter() {
+                output.push(py_to_json_inner(&item, ancestors)?);
+            }
+            Ok(serde_json::Value::Array(output))
+        })();
+        ancestors.remove(&container);
+        return result;
     }
     if let Ok(dict) = value.downcast::<PyDict>() {
-        let mut output = serde_json::Map::new();
-        for (key, item) in dict.iter() {
-            output.insert(key.extract()?, py_to_json(&item)?);
-        }
-        return Ok(serde_json::Value::Object(output));
+        let container = enter_json_container(value, ancestors)?;
+        let result = (|| {
+            let mut output = serde_json::Map::new();
+            for (key, item) in dict.iter() {
+                let key = key.extract::<String>().map_err(|_| {
+                    PyTypeError::new_err("gateway_options object keys must be strings")
+                })?;
+                output.insert(key, py_to_json_inner(&item, ancestors)?);
+            }
+            Ok(serde_json::Value::Object(output))
+        })();
+        ancestors.remove(&container);
+        return result;
     }
     Err(PyTypeError::new_err(
         "gateway_options must contain JSON-compatible values",
     ))
+}
+
+fn enter_json_container(
+    value: &Bound<'_, PyAny>,
+    ancestors: &mut HashSet<usize>,
+) -> PyResult<usize> {
+    let container = value.as_ptr() as usize;
+    if ancestors.insert(container) {
+        Ok(container)
+    } else {
+        Err(PyTypeError::new_err(
+            "gateway_options must contain JSON-compatible values",
+        ))
+    }
 }
 
 fn json_to_py(py: Python<'_>, value: serde_json::Value) -> PyResult<Py<PyAny>> {

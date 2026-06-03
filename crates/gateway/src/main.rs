@@ -40,7 +40,7 @@ async fn serve(config: PathBuf) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(config.bind)
         .await
         .with_context(|| format!("failed to bind gateway to {}", config.bind))?;
-    axum::serve(listener, config.service.router()?.into_make_service())
+    axum::serve(listener, config.service.router().into_make_service())
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })

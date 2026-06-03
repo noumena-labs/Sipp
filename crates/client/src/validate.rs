@@ -9,7 +9,21 @@ pub(crate) fn common_text_options(options: &CogentTextOptions) -> Result<(), Cog
         ));
     }
     finite_optional("temperature", options.temperature)?;
-    finite_optional("top_p", options.top_p)
+    if options.temperature.is_some_and(|value| value < 0.0) {
+        return Err(CogentError::InvalidRequest(
+            "temperature must be greater than or equal to zero".to_string(),
+        ));
+    }
+    finite_optional("top_p", options.top_p)?;
+    if options
+        .top_p
+        .is_some_and(|value| !(0.0..=1.0).contains(&value))
+    {
+        return Err(CogentError::InvalidRequest(
+            "top_p must be between 0 and 1".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn local_query(request: &CogentQueryRequest) -> Result<(), CogentError> {

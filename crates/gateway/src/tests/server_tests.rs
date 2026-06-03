@@ -11,8 +11,11 @@ use axum::{
         },
         Request, StatusCode,
     },
+    response::IntoResponse,
     Router,
 };
+use cogentlm_core::{FinishReason, TokenBatch, TokenEmissionStats, TokenUsage};
+use futures_util::stream;
 use serde_json::json;
 use tokio::sync::Notify;
 use tower::ServiceExt;
@@ -28,16 +31,171 @@ use crate::{
 
 fn test_service() -> GatewayService {
     GatewayService::new(test_state(), Vec::new(), GatewayServiceLimits::default())
+        .expect("gateway service")
 }
 
 #[test]
 fn gateway_token_debug_redacts_secret() {
-    let token = GatewayToken::new("secret-token", GatewayAccess::all());
+    let token = GatewayToken::new("secret-token", GatewayAccess::all()).expect("gateway token");
 
     let debug = format!("{token:?}");
 
     assert!(!debug.contains("secret-token"));
     assert!(debug.contains("[redacted]"));
+}
+
+#[test]
+fn gateway_token_config_rejects_blank_or_whitespace_secrets() {
+    let blank = GatewayToken::new(" \t ", GatewayAccess::all()).expect_err("blank token");
+    assert_eq!(blank.kind, GatewayErrorKind::InvalidRequest);
+    assert_eq!(blank.message, "gateway token must not be empty");
+
+    let whitespace =
+        GatewayToken::new("secret token", GatewayAccess::all()).expect_err("whitespace token");
+    assert_eq!(whitespace.kind, GatewayErrorKind::InvalidRequest);
+    assert_eq!(
+        whitespace.message,
+        "gateway token must not contain whitespace"
+    );
+    assert!(!format!("{whitespace:?}").contains("secret token"));
+}
+
+#[test]
+fn gateway_state_rejects_empty_token_set() {
+    let error = match GatewayState::with_tokens([]) {
+        Ok(_) => panic!("empty token set must fail"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.kind, GatewayErrorKind::InvalidRequest);
+    assert_eq!(error.message, "gateway requires at least one bearer token");
+}
+
+#[test]
+fn gateway_state_rejects_duplicate_tokens() {
+    let error = match GatewayState::with_tokens([
+        GatewayToken::new("secret-token", GatewayAccess::all()).expect("token"),
+        GatewayToken::new("secret-token", GatewayAccess::all()).expect("duplicate token"),
+    ]) {
+        Ok(_) => panic!("duplicate tokens must fail"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.kind, GatewayErrorKind::InvalidRequest);
+    assert_eq!(error.message, "gateway bearer tokens must be unique");
+    assert!(!format!("{error:?}").contains("secret-token"));
+}
+
+#[test]
+fn gateway_access_rejects_invalid_scopes() {
+    for (access, message) in [
+        (
+            GatewayAccess::new(Vec::<(String, OperationSet)>::new()),
+            "token access aliases must not be empty",
+        ),
+        (
+            GatewayAccess::new([(" mock ".to_string(), OperationSet::new([Operation::Query]))]),
+            "token access alias name must not contain surrounding whitespace",
+        ),
+        (
+            GatewayAccess::new([
+                ("mock".to_string(), OperationSet::new([Operation::Query])),
+                ("mock".to_string(), OperationSet::new([Operation::Chat])),
+            ]),
+            "token access aliases must not contain duplicates",
+        ),
+        (
+            GatewayAccess::new([("mock".to_string(), OperationSet::new([]))]),
+            "token access operations must not be empty",
+        ),
+    ] {
+        let error = access.expect_err("invalid access must fail");
+        assert_eq!(error.kind, GatewayErrorKind::InvalidRequest);
+        assert_eq!(error.message, message);
+    }
+}
+
+#[test]
+fn gateway_state_rejects_invalid_alias_definitions() {
+    let backend = Arc::new(MockBackend::new("mock: ", 4));
+    for (alias, operations, message) in [
+        (
+            " mock ",
+            OperationSet::new([Operation::Query]),
+            "alias name must not contain surrounding whitespace",
+        ),
+        (
+            "mock",
+            OperationSet::new([]),
+            "gateway alias operations must not be empty",
+        ),
+    ] {
+        let error = match GatewayAlias::new(
+            alias,
+            operations,
+            backend.clone(),
+            GatewayAliasLimits::default(),
+        ) {
+            Ok(_) => panic!("invalid alias must fail"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind, GatewayErrorKind::InvalidRequest);
+        assert_eq!(error.message, message);
+    }
+}
+
+#[test]
+fn gateway_alias_constructor_rejects_zero_limits() {
+    let error = match GatewayAlias::new(
+        "mock",
+        OperationSet::new([Operation::Query]),
+        Arc::new(MockBackend::new("mock: ", 4)),
+        GatewayAliasLimits {
+            max_concurrent_requests: Some(0),
+            ..GatewayAliasLimits::default()
+        },
+    ) {
+        Ok(_) => panic!("invalid limit must fail at alias construction"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.kind, GatewayErrorKind::InvalidRequest);
+    assert_eq!(
+        error.message,
+        "max_concurrent_requests must be greater than zero"
+    );
+}
+
+#[test]
+fn gateway_service_constructor_rejects_invalid_config() {
+    let error = match GatewayService::new(
+        test_state(),
+        Vec::new(),
+        GatewayServiceLimits {
+            max_request_bytes: 0,
+        },
+    ) {
+        Ok(_) => panic!("invalid service limit must fail at service construction"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.kind, GatewayErrorKind::InvalidRequest);
+    assert_eq!(error.message, "max_request_bytes must be greater than zero");
+
+    let error = match GatewayService::new(
+        test_state(),
+        vec![" https://app.example".to_string()],
+        GatewayServiceLimits::default(),
+    ) {
+        Ok(_) => panic!("invalid CORS origin must fail at service construction"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.kind, GatewayErrorKind::InvalidRequest);
+    assert_eq!(
+        error.message,
+        "invalid CORS origin  https://app.example: surrounding whitespace is not allowed"
+    );
 }
 
 #[test]
@@ -52,7 +210,6 @@ fn bearer_token_compare_rejects_mismatch_and_prefix() {
 async fn query_requires_bearer_token() {
     let response = test_service()
         .router()
-        .expect("router")
         .oneshot(
             Request::post("/v1/query")
                 .header("content-type", "application/json")
@@ -91,6 +248,8 @@ async fn query_routes_to_alias_backend() {
     assert_eq!(body["text"], "answer: hello");
     assert_eq!(body["finish_reason"], "stop");
     assert_eq!(body["usage"]["input_tokens"], 1);
+    let usage = body["usage"].as_object().expect("usage object");
+    assert!(!usage.contains_key("total_tokens"));
 }
 
 #[tokio::test]
@@ -120,7 +279,6 @@ async fn successful_response_includes_gateway_request_id() {
 async fn error_response_includes_gateway_request_id() {
     let response = test_service()
         .router()
-        .expect("router")
         .oneshot(
             Request::post("/v1/query")
                 .header("content-type", "application/json")
@@ -146,6 +304,16 @@ async fn error_response_includes_gateway_request_id() {
 }
 
 #[tokio::test]
+async fn gateway_error_response_uses_stable_kind_code() {
+    let error = GatewayError::new(GatewayErrorKind::RateLimited, "try later");
+
+    let body = response_json(error.into_response()).await;
+
+    assert_eq!(body["error"]["code"], "rate_limited");
+    assert_eq!(body["error"]["message"], "try later");
+}
+
+#[tokio::test]
 async fn unsupported_alias_operation_is_normalized() {
     let response = authed_post(
         "/v1/query",
@@ -166,6 +334,24 @@ async fn unsupported_alias_operation_is_normalized() {
 }
 
 #[tokio::test]
+async fn unknown_model_error_does_not_echo_request_model() {
+    let response = authed_post(
+        "/v1/query",
+        json!({
+            "model": "gateway-secret-token",
+            "prompt": "hello"
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = response_json(response).await;
+    assert_eq!(body["error"]["code"], "model_not_found");
+    assert_eq!(body["error"]["message"], "model alias not found");
+    assert!(!body.to_string().contains("gateway-secret-token"));
+}
+
+#[tokio::test]
 async fn stream_query_emits_normalized_sse() {
     let response = authed_post(
         "/v1/query",
@@ -182,8 +368,50 @@ async fn stream_query_emits_normalized_sse() {
     assert!(body.contains("event: token"));
     assert!(body.contains(r#""text":"answer: stream""#));
     assert!(body.contains(r#""sequence":0"#));
+    assert!(body.contains("event: usage"));
+    assert!(body.contains(r#"data: {"input_tokens":1,"output_tokens":1}"#));
+    assert!(!body.contains("total_tokens"));
     assert!(body.contains("event: done"));
     assert!(body.contains(r#"data: {"finish_reason":"stop"}"#));
+}
+
+#[tokio::test]
+async fn empty_usage_is_omitted_from_text_response() {
+    let response = post(
+        empty_usage_service().router(),
+        "/v1/query",
+        "test-token",
+        json!({
+            "model": "empty-usage",
+            "prompt": "hello"
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert!(body.get("usage").is_none());
+}
+
+#[tokio::test]
+async fn empty_usage_is_omitted_from_stream_response() {
+    let response = post(
+        empty_usage_service().router(),
+        "/v1/query",
+        "test-token",
+        json!({
+            "model": "empty-usage",
+            "prompt": "hello",
+            "stream": true
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_text(response).await;
+    assert!(body.contains("event: token"));
+    assert!(!body.contains("event: usage"));
+    assert!(body.contains("event: done"));
 }
 
 #[tokio::test]
@@ -193,8 +421,8 @@ async fn cors_preflight_allows_configured_browser_origin() {
         vec!["https://app.example".to_string()],
         GatewayServiceLimits::default(),
     )
+    .expect("gateway service")
     .router()
-    .expect("router")
     .oneshot(
         Request::options("/v1/query")
             .header(ORIGIN, "https://app.example")
@@ -229,8 +457,8 @@ async fn cors_preflight_allows_configured_browser_origin() {
         vec!["https://app.example".to_string()],
         GatewayServiceLimits::default(),
     )
+    .expect("gateway service")
     .router()
-    .expect("router")
     .oneshot(
         Request::post("/v1/query")
             .header("content-type", "application/json")
@@ -264,8 +492,8 @@ async fn cors_preflight_does_not_allow_unconfigured_browser_origin() {
         vec!["https://app.example".to_string()],
         GatewayServiceLimits::default(),
     )
+    .expect("gateway service")
     .router()
-    .expect("router")
     .oneshot(
         Request::options("/v1/query")
             .header(ORIGIN, "https://evil.example")
@@ -295,9 +523,7 @@ fn cors_config_accepts_https_and_loopback_http_origins() {
             test_state(),
             vec![origin.to_string()],
             GatewayServiceLimits::default(),
-        )
-        .router()
-        {
+        ) {
             Ok(_) => {}
             Err(error) => panic!("{origin} should be accepted: {error}"),
         }
@@ -322,9 +548,7 @@ fn cors_config_rejects_wildcard_path_and_non_loopback_http_origins() {
             test_state(),
             vec![origin.to_string()],
             GatewayServiceLimits::default(),
-        )
-        .router()
-        {
+        ) {
             Ok(_) => panic!("{origin} should be rejected"),
             Err(error) => error,
         };
@@ -338,20 +562,26 @@ fn cors_config_rejects_wildcard_path_and_non_loopback_http_origins() {
 async fn scoped_token_rejects_unauthorized_operation() {
     let mut state = GatewayState::with_tokens([GatewayToken::new(
         "scoped-token",
-        GatewayAccess::new([("mock".to_string(), OperationSet::new([Operation::Query]))]),
-    )]);
+        GatewayAccess::new([("mock".to_string(), OperationSet::new([Operation::Query]))])
+            .expect("scoped access"),
+    )
+    .expect("scoped token")])
+    .expect("gateway state");
     state
-        .add_alias(GatewayAlias::new(
-            "mock",
-            OperationSet::all(),
-            Arc::new(MockBackend::new("answer: ", 3)),
-            GatewayAliasLimits::default(),
-        ))
+        .add_alias(
+            GatewayAlias::new(
+                "mock",
+                OperationSet::all(),
+                Arc::new(MockBackend::new("answer: ", 3)),
+                GatewayAliasLimits::default(),
+            )
+            .expect("gateway alias"),
+        )
         .expect("add mock alias");
     let response = post(
         GatewayService::new(state, Vec::new(), GatewayServiceLimits::default())
-            .router()
-            .expect("router"),
+            .expect("gateway service")
+            .router(),
         "/v1/embed",
         "scoped-token",
         json!({
@@ -364,6 +594,102 @@ async fn scoped_token_rejects_unauthorized_operation() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     let body = response_json(response).await;
     assert_eq!(body["error"]["code"], "authorization");
+    assert_eq!(
+        body["error"]["message"],
+        "token is not allowed to use the requested model operation"
+    );
+}
+
+#[tokio::test]
+async fn scoped_token_rejects_out_of_scope_alias_before_alias_lookup() {
+    let mut state = GatewayState::with_tokens([GatewayToken::new(
+        "scoped-token",
+        GatewayAccess::new([("mock".to_string(), OperationSet::new([Operation::Query]))])
+            .expect("scoped access"),
+    )
+    .expect("scoped token")])
+    .expect("gateway state");
+    state
+        .add_alias(
+            GatewayAlias::new(
+                "mock",
+                OperationSet::all(),
+                Arc::new(MockBackend::new("answer: ", 3)),
+                GatewayAliasLimits::default(),
+            )
+            .expect("gateway alias"),
+        )
+        .expect("add mock alias");
+    let router = GatewayService::new(state, Vec::new(), GatewayServiceLimits::default())
+        .expect("gateway service")
+        .router();
+
+    for model in ["private-model", "gateway-secret-token"] {
+        let response = post(
+            router.clone(),
+            "/v1/query",
+            "scoped-token",
+            json!({
+                "model": model,
+                "prompt": "hello"
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = response_json(response).await;
+        assert_eq!(body["error"]["code"], "authorization");
+        assert_eq!(
+            body["error"]["message"],
+            "token is not allowed to use the requested model operation"
+        );
+        assert!(!body.to_string().contains(model));
+    }
+}
+
+#[tokio::test]
+async fn scoped_token_rejects_unauthorized_alias_before_request_validation() {
+    let mut state = GatewayState::with_tokens([GatewayToken::new(
+        "scoped-token",
+        GatewayAccess::new([("mock".to_string(), OperationSet::new([Operation::Query]))])
+            .expect("scoped access"),
+    )
+    .expect("scoped token")])
+    .expect("gateway state");
+    state
+        .add_alias(
+            GatewayAlias::new(
+                "mock",
+                OperationSet::all(),
+                Arc::new(MockBackend::new("answer: ", 3)),
+                GatewayAliasLimits::default(),
+            )
+            .expect("gateway alias"),
+        )
+        .expect("add mock alias");
+    let response = post(
+        GatewayService::new(state, Vec::new(), GatewayServiceLimits::default())
+            .expect("gateway service")
+            .router(),
+        "/v1/query",
+        "scoped-token",
+        json!({
+            "model": "gateway-secret-token",
+            "prompt": "hello",
+            "grammar": "root ::= \"ok\"",
+            "temperature": -0.1
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = response_json(response).await;
+    assert_eq!(body["error"]["code"], "authorization");
+    assert_eq!(
+        body["error"]["message"],
+        "token is not allowed to use the requested model operation"
+    );
+    assert!(!body.to_string().contains("gateway-secret-token"));
 }
 
 #[tokio::test]
@@ -376,8 +702,8 @@ async fn request_size_limit_returns_normalized_error() {
                 max_request_bytes: 16,
             },
         )
-        .router()
-        .expect("router"),
+        .expect("gateway service")
+        .router(),
         "/v1/query",
         "test-token",
         json!({
@@ -395,7 +721,7 @@ async fn request_size_limit_returns_normalized_error() {
 #[tokio::test]
 async fn duplicate_typed_fields_are_rejected_before_gateway_options() {
     let response = post_raw(
-        test_service().router().expect("router"),
+        test_service().router(),
         "/v1/query",
         "test-token",
         r#"{
@@ -409,6 +735,28 @@ async fn duplicate_typed_fields_are_rejected_before_gateway_options() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = response_json(response).await;
     assert_eq!(body["error"]["code"], "invalid_request");
+}
+
+#[tokio::test]
+async fn json_rejection_errors_do_not_echo_request_values() {
+    let response = post_raw(
+        test_service().router(),
+        "/v1/chat",
+        "test-token",
+        r#"{
+            "model": "mock",
+            "messages": [
+                { "role": "gateway-secret-token", "content": "hello" }
+            ]
+        }"#,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = response_json(response).await;
+    assert_eq!(body["error"]["code"], "invalid_request");
+    assert_eq!(body["error"]["message"], "invalid JSON request body");
+    assert!(!body.to_string().contains("gateway-secret-token"));
 }
 
 #[tokio::test]
@@ -499,6 +847,8 @@ async fn rate_limit_returns_retry_after() {
     assert!(response.headers().get("retry-after-ms").is_some());
     let body = response_json(response).await;
     assert_eq!(body["error"]["code"], "rate_limited");
+    assert_eq!(body["error"]["message"], "model alias rate limit exceeded");
+    assert!(!body.to_string().contains("gateway-secret-token"));
 }
 
 #[tokio::test]
@@ -512,6 +862,8 @@ async fn quota_limit_returns_payment_required() {
     assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
     let body = response_json(response).await;
     assert_eq!(body["error"]["code"], "quota_exceeded");
+    assert_eq!(body["error"]["message"], "model alias quota exhausted");
+    assert!(!body.to_string().contains("gateway-secret-token"));
 }
 
 #[tokio::test]
@@ -522,21 +874,24 @@ async fn concurrency_limit_rejects_overlapping_request() {
         started: started.clone(),
         release: release.clone(),
     });
-    let mut state = GatewayState::new("test-token");
+    let mut state = GatewayState::new("test-token").expect("gateway state");
     state
-        .add_alias(GatewayAlias::new(
-            "limited",
-            OperationSet::new([Operation::Query]),
-            backend,
-            GatewayAliasLimits {
-                max_concurrent_requests: Some(1),
-                ..GatewayAliasLimits::default()
-            },
-        ))
+        .add_alias(
+            GatewayAlias::new(
+                "gateway-secret-token",
+                OperationSet::new([Operation::Query]),
+                backend,
+                GatewayAliasLimits {
+                    max_concurrent_requests: Some(1),
+                    ..GatewayAliasLimits::default()
+                },
+            )
+            .expect("gateway alias"),
+        )
         .expect("add limited alias");
     let router = GatewayService::new(state, Vec::new(), GatewayServiceLimits::default())
-        .router()
-        .expect("router");
+        .expect("gateway service")
+        .router();
 
     let first_router = router.clone();
     let first = tokio::spawn(async move {
@@ -545,7 +900,7 @@ async fn concurrency_limit_rejects_overlapping_request() {
             "/v1/query",
             "test-token",
             json!({
-                "model": "limited",
+                "model": "gateway-secret-token",
                 "prompt": "first"
             }),
         )
@@ -558,7 +913,7 @@ async fn concurrency_limit_rejects_overlapping_request() {
         "/v1/query",
         "test-token",
         json!({
-            "model": "limited",
+            "model": "gateway-secret-token",
             "prompt": "second"
         }),
     )
@@ -566,19 +921,18 @@ async fn concurrency_limit_rejects_overlapping_request() {
     assert_eq!(second.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body = response_json(second).await;
     assert_eq!(body["error"]["code"], "overloaded");
+    assert_eq!(
+        body["error"]["message"],
+        "model alias concurrency limit exceeded"
+    );
+    assert!(!body.to_string().contains("gateway-secret-token"));
 
     release.notify_one();
     assert_eq!(first.await.expect("join").status(), StatusCode::OK);
 }
 
 async fn authed_post(path: &str, body: serde_json::Value) -> axum::response::Response {
-    post(
-        test_service().router().expect("router"),
-        path,
-        "test-token",
-        body,
-    )
-    .await
+    post(test_service().router(), path, "test-token", body).await
 }
 
 async fn post(
@@ -604,45 +958,72 @@ async fn post_raw(router: Router, path: &str, token: &str, body: &str) -> axum::
 }
 
 fn test_state() -> GatewayState {
-    let mut state = GatewayState::new("test-token");
+    let mut state = GatewayState::new("test-token").expect("gateway state");
     state
-        .add_alias(GatewayAlias::new(
-            "mock",
-            OperationSet::all(),
-            Arc::new(MockBackend::new("answer: ", 3)),
-            GatewayAliasLimits::default(),
-        ))
+        .add_alias(
+            GatewayAlias::new(
+                "mock",
+                OperationSet::all(),
+                Arc::new(MockBackend::new("answer: ", 3)),
+                GatewayAliasLimits::default(),
+            )
+            .expect("gateway alias"),
+        )
         .expect("add mock alias");
     state
-        .add_alias(GatewayAlias::new(
-            "chat-only",
-            OperationSet::new([Operation::Chat]),
-            Arc::new(MockBackend::new("chat: ", 3)),
-            GatewayAliasLimits::default(),
-        ))
+        .add_alias(
+            GatewayAlias::new(
+                "chat-only",
+                OperationSet::new([Operation::Chat]),
+                Arc::new(MockBackend::new("chat: ", 3)),
+                GatewayAliasLimits::default(),
+            )
+            .expect("gateway alias"),
+        )
         .expect("add chat alias");
     state
 }
 
-async fn limited_alias_second_response(limits: GatewayAliasLimits) -> axum::response::Response {
-    let mut state = GatewayState::new("test-token");
+fn empty_usage_service() -> GatewayService {
+    let mut state = GatewayState::new("test-token").expect("gateway state");
     state
-        .add_alias(GatewayAlias::new(
-            "limited",
-            OperationSet::new([Operation::Query]),
-            Arc::new(MockBackend::new("limited: ", 3)),
-            limits,
-        ))
+        .add_alias(
+            GatewayAlias::new(
+                "empty-usage",
+                OperationSet::new([Operation::Query]),
+                Arc::new(EmptyUsageBackend),
+                GatewayAliasLimits::default(),
+            )
+            .expect("gateway alias"),
+        )
+        .expect("add empty-usage alias");
+    GatewayService::new(state, Vec::new(), GatewayServiceLimits::default())
+        .expect("gateway service")
+}
+
+async fn limited_alias_second_response(limits: GatewayAliasLimits) -> axum::response::Response {
+    let alias = "gateway-secret-token";
+    let mut state = GatewayState::new("test-token").expect("gateway state");
+    state
+        .add_alias(
+            GatewayAlias::new(
+                alias,
+                OperationSet::new([Operation::Query]),
+                Arc::new(MockBackend::new("limited: ", 3)),
+                limits,
+            )
+            .expect("gateway alias"),
+        )
         .expect("add limited alias");
     let router = GatewayService::new(state, Vec::new(), GatewayServiceLimits::default())
-        .router()
-        .expect("router");
+        .expect("gateway service")
+        .router();
     let first = post(
         router.clone(),
         "/v1/query",
         "test-token",
         json!({
-            "model": "limited",
+            "model": alias,
             "prompt": "first"
         }),
     )
@@ -653,11 +1034,77 @@ async fn limited_alias_second_response(limits: GatewayAliasLimits) -> axum::resp
         "/v1/query",
         "test-token",
         json!({
-            "model": "limited",
+            "model": alias,
             "prompt": "second"
         }),
     )
     .await
+}
+
+struct EmptyUsageBackend;
+
+#[async_trait]
+impl GatewayBackend for EmptyUsageBackend {
+    async fn query(&self, req: BackendQueryRequest) -> GatewayResult<BackendTextOutput> {
+        Ok(BackendTextOutput {
+            text: req.prompt,
+            finish_reason: FinishReason::Stop,
+            usage: Some(TokenUsage::default()),
+            response_id: Some("empty-usage".to_string()),
+        })
+    }
+
+    async fn stream_query(
+        &self,
+        req: BackendQueryRequest,
+    ) -> GatewayResult<GatewayStream<GatewayStreamEvent>> {
+        let text = req.prompt;
+        Ok(Box::pin(stream::iter([
+            Ok(GatewayStreamEvent::TokenBatch(TokenBatch {
+                request_id: "empty-usage".to_string(),
+                stream_id: 0,
+                sequence_start: 0,
+                text,
+                frame_count: 1,
+                byte_count: 5,
+                stats: TokenEmissionStats {
+                    frames_sent: 1,
+                    bytes_sent: 5,
+                    batches_sent: 1,
+                },
+            })),
+            Ok(GatewayStreamEvent::Usage {
+                usage: TokenUsage::default(),
+            }),
+            Ok(GatewayStreamEvent::Finished {
+                finish_reason: FinishReason::Stop,
+            }),
+        ])))
+    }
+
+    async fn chat(&self, _req: BackendChatRequest) -> GatewayResult<BackendTextOutput> {
+        Err(GatewayError::new(
+            GatewayErrorKind::UnsupportedFeature,
+            "chat is not supported",
+        ))
+    }
+
+    async fn stream_chat(
+        &self,
+        _req: BackendChatRequest,
+    ) -> GatewayResult<GatewayStream<GatewayStreamEvent>> {
+        Err(GatewayError::new(
+            GatewayErrorKind::UnsupportedFeature,
+            "stream chat is not supported",
+        ))
+    }
+
+    async fn embed(&self, _req: BackendEmbedRequest) -> GatewayResult<BackendEmbeddingOutput> {
+        Err(GatewayError::new(
+            GatewayErrorKind::UnsupportedFeature,
+            "embed is not supported",
+        ))
+    }
 }
 
 struct BlockingBackend {

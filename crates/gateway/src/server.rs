@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     convert::Infallible,
     fmt,
     net::IpAddr,
@@ -24,6 +24,7 @@ use axum::{
     routing::post,
     Json, Router,
 };
+use cogentlm_core::TokenUsage;
 use futures_util::{Stream, StreamExt};
 use serde_json::json;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -89,17 +90,26 @@ impl GatewayAlias {
         operations: OperationSet,
         backend: Arc<dyn GatewayBackend>,
         limits: GatewayAliasLimits,
-    ) -> Self {
+    ) -> GatewayResult<Self> {
+        let name = name.into();
+        validate_gateway_alias_name(&name)?;
+        if operations.is_empty() {
+            return Err(GatewayError::new(
+                GatewayErrorKind::InvalidRequest,
+                "gateway alias operations must not be empty",
+            ));
+        }
+        validate_alias_limits(limits)?;
         let concurrency = limits
             .max_concurrent_requests
             .map(|limit| Arc::new(Semaphore::new(limit)));
-        Self {
-            name: name.into(),
+        Ok(Self {
+            name,
             operations,
             backend,
             limits,
             concurrency,
-        }
+        })
     }
 }
 
@@ -116,10 +126,35 @@ impl GatewayAccess {
     }
 
     /// Restrict access to the listed aliases and operations.
-    pub fn new(aliases: impl IntoIterator<Item = (String, OperationSet)>) -> Self {
-        Self {
-            aliases: Some(aliases.into_iter().collect()),
+    ///
+    /// Returns an error when aliases are blank, duplicated, or mapped to no
+    /// operations.
+    pub fn new(aliases: impl IntoIterator<Item = (String, OperationSet)>) -> GatewayResult<Self> {
+        let mut access = BTreeMap::new();
+        for (alias, operations) in aliases {
+            validate_gateway_access_alias(&alias)?;
+            if operations.is_empty() {
+                return Err(GatewayError::new(
+                    GatewayErrorKind::InvalidRequest,
+                    "token access operations must not be empty",
+                ));
+            }
+            if access.insert(alias, operations).is_some() {
+                return Err(GatewayError::new(
+                    GatewayErrorKind::InvalidRequest,
+                    "token access aliases must not contain duplicates",
+                ));
+            }
         }
+        if access.is_empty() {
+            return Err(GatewayError::new(
+                GatewayErrorKind::InvalidRequest,
+                "token access aliases must not be empty",
+            ));
+        }
+        Ok(Self {
+            aliases: Some(access),
+        })
     }
 
     fn allows(&self, alias: &str, operation: Operation) -> bool {
@@ -132,6 +167,38 @@ impl GatewayAccess {
     }
 }
 
+fn validate_gateway_alias_name(alias: &str) -> GatewayResult<()> {
+    if alias.trim().is_empty() {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "alias name must not be empty",
+        ));
+    }
+    if alias.trim() != alias {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "alias name must not contain surrounding whitespace",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_gateway_access_alias(alias: &str) -> GatewayResult<()> {
+    if alias.trim().is_empty() {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "token access alias name must not be empty",
+        ));
+    }
+    if alias.trim() != alias {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "token access alias name must not contain surrounding whitespace",
+        ));
+    }
+    Ok(())
+}
+
 /// Gateway bearer token and its access scope.
 #[derive(Clone, PartialEq, Eq)]
 pub struct GatewayToken {
@@ -141,11 +208,12 @@ pub struct GatewayToken {
 
 impl GatewayToken {
     /// Create a scoped gateway token.
-    pub fn new(secret: impl Into<String>, access: GatewayAccess) -> Self {
-        Self {
-            secret: secret.into(),
-            access,
-        }
+    ///
+    /// Returns an error when the token is blank or contains whitespace.
+    pub fn new(secret: impl Into<String>, access: GatewayAccess) -> GatewayResult<Self> {
+        let secret = secret.into();
+        validate_gateway_bearer_secret(&secret, "gateway token")?;
+        Ok(Self { secret, access })
     }
 }
 
@@ -168,23 +236,41 @@ pub struct GatewayState {
 
 impl GatewayState {
     /// Create an empty gateway state with a required bearer token.
-    pub fn new(token: impl Into<String>) -> Self {
-        Self::with_tokens([GatewayToken::new(token, GatewayAccess::all())])
+    ///
+    /// Returns an error when the token is blank or contains whitespace.
+    pub fn new(token: impl Into<String>) -> GatewayResult<Self> {
+        Self::with_tokens([GatewayToken::new(token, GatewayAccess::all())?])
     }
 
     /// Create an empty gateway state with explicit bearer-token scopes.
-    pub fn with_tokens(tokens: impl IntoIterator<Item = GatewayToken>) -> Self {
-        Self {
-            tokens: tokens.into_iter().collect(),
+    ///
+    /// Returns an error when no tokens are provided.
+    pub fn with_tokens(tokens: impl IntoIterator<Item = GatewayToken>) -> GatewayResult<Self> {
+        let tokens = tokens.into_iter().collect::<Vec<_>>();
+        if tokens.is_empty() {
+            return Err(GatewayError::new(
+                GatewayErrorKind::InvalidRequest,
+                "gateway requires at least one bearer token",
+            ));
+        }
+        let mut unique_tokens = BTreeSet::new();
+        for token in &tokens {
+            if !unique_tokens.insert(token.secret.as_str()) {
+                return Err(GatewayError::new(
+                    GatewayErrorKind::InvalidRequest,
+                    "gateway bearer tokens must be unique",
+                ));
+            }
+        }
+        Ok(Self {
+            tokens,
             aliases: BTreeMap::new(),
             policy: Arc::new(Mutex::new(GatewayPolicyState::default())),
-        }
+        })
     }
 
     /// Add an alias.
     pub fn add_alias(&mut self, alias: GatewayAlias) -> GatewayResult<()> {
-        validate_non_empty(&alias.name, "alias name")?;
-        validate_alias_limits(alias.limits)?;
         if self.aliases.contains_key(&alias.name) {
             return Err(GatewayError::new(
                 GatewayErrorKind::InvalidRequest,
@@ -211,7 +297,7 @@ impl GatewayState {
         Ok(())
     }
 
-    fn authorize(&self, headers: &HeaderMap) -> GatewayResult<GatewayAccess> {
+    fn authorize(&self, headers: &HeaderMap) -> GatewayResult<&GatewayAccess> {
         if self.tokens.is_empty() {
             return Err(GatewayError::new(
                 GatewayErrorKind::Authentication,
@@ -236,16 +322,17 @@ impl GatewayState {
                 "authorization header must use bearer auth",
             ));
         };
-        for candidate in &self.tokens {
-            validate_non_empty(&candidate.secret, "gateway token")?;
+        let mut matched_index = None;
+        for (index, candidate) in self.tokens.iter().enumerate() {
             if constant_time_eq(token.as_bytes(), candidate.secret.as_bytes()) {
-                return Ok(candidate.access.clone());
+                matched_index = Some(index);
             }
         }
-        Err(GatewayError::new(
-            GatewayErrorKind::Authentication,
-            "invalid bearer token",
-        ))
+        matched_index
+            .map(|index| &self.tokens[index].access)
+            .ok_or_else(|| {
+                GatewayError::new(GatewayErrorKind::Authentication, "invalid bearer token")
+            })
     }
 
     fn alias(
@@ -253,27 +340,34 @@ impl GatewayState {
         access: &GatewayAccess,
         model: &str,
         operation: Operation,
-    ) -> GatewayResult<GatewayAlias> {
-        validate_non_empty(model, "model")?;
+    ) -> GatewayResult<&GatewayAlias> {
+        self.authorize_alias_scope(access, model, operation)?;
         let alias = self.aliases.get(model).ok_or_else(|| {
-            GatewayError::new(
-                GatewayErrorKind::ModelNotFound,
-                format!("model alias not found: {model}"),
-            )
+            GatewayError::new(GatewayErrorKind::ModelNotFound, "model alias not found")
         })?;
-        if !access.allows(model, operation) {
-            return Err(GatewayError::new(
-                GatewayErrorKind::Authorization,
-                format!("token is not allowed to use {model} {}", operation.as_str()),
-            ));
-        }
         if !alias.operations.supports(operation) {
             return Err(GatewayError::new(
                 GatewayErrorKind::UnsupportedFeature,
                 format!("model alias does not support {}", operation.as_str()),
             ));
         }
-        Ok(alias.clone())
+        Ok(alias)
+    }
+
+    fn authorize_alias_scope(
+        &self,
+        access: &GatewayAccess,
+        model: &str,
+        operation: Operation,
+    ) -> GatewayResult<()> {
+        validate_non_empty(model, "model")?;
+        if access.allows(model, operation) {
+            return Ok(());
+        }
+        Err(GatewayError::new(
+            GatewayErrorKind::Authorization,
+            "token is not allowed to use the requested model operation",
+        ))
     }
 
     fn acquire(&self, alias: &GatewayAlias) -> GatewayResult<GatewayRequestPermit> {
@@ -281,7 +375,7 @@ impl GatewayState {
             Some(semaphore) => Some(semaphore.clone().try_acquire_owned().map_err(|_| {
                 GatewayError::new(
                     GatewayErrorKind::Overloaded,
-                    format!("model alias concurrency limit exceeded: {}", alias.name),
+                    "model alias concurrency limit exceeded",
                 )
             })?),
             None => None,
@@ -346,7 +440,7 @@ impl AliasPolicyState {
         {
             return Err(GatewayError::new(
                 GatewayErrorKind::QuotaExceeded,
-                format!("model alias quota exhausted: {}", alias.name),
+                "model alias quota exhausted",
             ));
         }
 
@@ -360,7 +454,7 @@ impl AliasPolicyState {
                 .max(Duration::from_secs(1));
             return Err(GatewayError::new(
                 GatewayErrorKind::RateLimited,
-                format!("model alias rate limit exceeded: {}", alias.name),
+                "model alias rate limit exceeded",
             )
             .with_retry_after(Some(retry_after)));
         }
@@ -388,26 +482,33 @@ impl GatewayRequestId {
 #[derive(Clone)]
 pub struct GatewayService {
     state: GatewayState,
-    allowed_origins: Vec<String>,
+    allowed_origins: Vec<HeaderValue>,
     limits: GatewayServiceLimits,
 }
 
 impl GatewayService {
     /// Create a gateway service.
+    ///
+    /// Returns an error when service limits or CORS origins are invalid.
     pub fn new(
         state: GatewayState,
         allowed_origins: Vec<String>,
         limits: GatewayServiceLimits,
-    ) -> Self {
-        Self {
-            state,
-            allowed_origins,
-            limits,
+    ) -> GatewayResult<Self> {
+        validate_service_limits(limits)?;
+        let mut origins = Vec::with_capacity(allowed_origins.len());
+        for origin in allowed_origins {
+            origins.push(cors_origin_header(&origin)?);
         }
+        Ok(Self {
+            state,
+            allowed_origins: origins,
+            limits,
+        })
     }
 
     /// Build the Axum router.
-    pub fn router(self) -> GatewayResult<Router> {
+    pub fn router(self) -> Router {
         let state = Arc::new(self.state);
         let router = Router::new()
             .route("/v1/query", post(query))
@@ -417,12 +518,7 @@ impl GatewayService {
             .layer(DefaultBodyLimit::max(self.limits.max_request_bytes));
 
         if self.allowed_origins.is_empty() {
-            return Ok(router.layer(middleware::from_fn(add_request_id)));
-        }
-
-        let mut origins = Vec::with_capacity(self.allowed_origins.len());
-        for origin in self.allowed_origins {
-            origins.push(cors_origin_header(&origin)?);
+            return router.layer(middleware::from_fn(add_request_id));
         }
 
         let router = router.layer(
@@ -430,13 +526,13 @@ impl GatewayService {
                 .allow_methods([Method::POST, Method::OPTIONS])
                 .allow_headers([AUTHORIZATION, CONTENT_TYPE])
                 .expose_headers([X_REQUEST_ID.clone(), RETRY_AFTER, RETRY_AFTER_MS.clone()])
-                .allow_origin(origins),
+                .allow_origin(self.allowed_origins),
         );
-        Ok(router.layer(middleware::from_fn(add_request_id)))
+        router.layer(middleware::from_fn(add_request_id))
     }
 }
 
-fn cors_origin_header(origin: &str) -> GatewayResult<HeaderValue> {
+pub(crate) fn cors_origin_header(origin: &str) -> GatewayResult<HeaderValue> {
     let trimmed = origin.trim();
     if trimmed.is_empty() {
         return Err(GatewayError::new(
@@ -509,7 +605,7 @@ fn cors_origin_header(origin: &str) -> GatewayResult<HeaderValue> {
     })
 }
 
-fn is_loopback_host(host: &str) -> bool {
+pub(crate) fn is_loopback_host(host: &str) -> bool {
     if host.eq_ignore_ascii_case("localhost") {
         return true;
     }
@@ -562,14 +658,16 @@ async fn query(
     let started = Instant::now();
     let access = state.authorize(&headers)?;
     let Json(body) = body.map_err(json_rejection_error)?;
+    state.authorize_alias_scope(access, &body.model, Operation::Query)?;
     validate_gateway_options(&body.gateway_options)?;
     validate_non_empty(&body.prompt, "prompt")?;
-    validate_text_options(&body.clone().into_backend().options)?;
-    let alias = state.alias(&access, &body.model, Operation::Query)?;
-    let permit = state.acquire(&alias)?;
+    validate_text_options(&body.generation_options())?;
+    let alias = state.alias(access, &body.model, Operation::Query)?;
+    let permit = state.acquire(alias)?;
+    let backend = alias.backend.clone();
     if body.stream {
         let model = body.model.clone();
-        let stream = alias.backend.stream_query(body.into_backend()).await?;
+        let stream = backend.stream_query(body.into_backend()).await?;
         return Ok(sse(observe_stream(
             hold_permit(stream, permit),
             request_id,
@@ -580,7 +678,7 @@ async fn query(
         .into_response());
     }
     let model = body.model.clone();
-    let output = alias.backend.query(body.into_backend()).await?;
+    let output = backend.query(body.into_backend()).await?;
     log_text_success(&request_id, &model, Operation::Query, &output, started);
     drop(permit);
     Ok(Json(text_response(&request_id, model, output)).into_response())
@@ -595,6 +693,7 @@ async fn chat(
     let started = Instant::now();
     let access = state.authorize(&headers)?;
     let Json(body) = body.map_err(json_rejection_error)?;
+    state.authorize_alias_scope(access, &body.model, Operation::Chat)?;
     validate_gateway_options(&body.gateway_options)?;
     if body.messages.is_empty() {
         return Err(GatewayError::new(
@@ -602,12 +701,13 @@ async fn chat(
             "messages must not be empty",
         ));
     }
-    validate_text_options(&body.clone().into_backend().options)?;
-    let alias = state.alias(&access, &body.model, Operation::Chat)?;
-    let permit = state.acquire(&alias)?;
+    validate_text_options(&body.generation_options())?;
+    let alias = state.alias(access, &body.model, Operation::Chat)?;
+    let permit = state.acquire(alias)?;
+    let backend = alias.backend.clone();
     if body.stream {
         let model = body.model.clone();
-        let stream = alias.backend.stream_chat(body.into_backend()).await?;
+        let stream = backend.stream_chat(body.into_backend()).await?;
         return Ok(sse(observe_stream(
             hold_permit(stream, permit),
             request_id,
@@ -618,7 +718,7 @@ async fn chat(
         .into_response());
     }
     let model = body.model.clone();
-    let output = alias.backend.chat(body.into_backend()).await?;
+    let output = backend.chat(body.into_backend()).await?;
     log_text_success(&request_id, &model, Operation::Chat, &output, started);
     drop(permit);
     Ok(Json(text_response(&request_id, model, output)).into_response())
@@ -633,12 +733,14 @@ async fn embed(
     let started = Instant::now();
     let access = state.authorize(&headers)?;
     let Json(body) = body.map_err(json_rejection_error)?;
+    state.authorize_alias_scope(access, &body.model, Operation::Embed)?;
     validate_gateway_options(&body.gateway_options)?;
     validate_non_empty(&body.input, "input")?;
-    let alias = state.alias(&access, &body.model, Operation::Embed)?;
-    let permit = state.acquire(&alias)?;
+    let alias = state.alias(access, &body.model, Operation::Embed)?;
+    let permit = state.acquire(alias)?;
+    let backend = alias.backend.clone();
     let model = body.model.clone();
-    let output = alias.backend.embed(body.into_backend()).await?;
+    let output = backend.embed(body.into_backend()).await?;
     log_embedding_success(&request_id, &model, &output, started);
     drop(permit);
     Ok(Json(embedding_response(&request_id, model, output)).into_response())
@@ -654,7 +756,7 @@ fn text_response(
         model,
         text: output.text,
         finish_reason: finish_reason(output.finish_reason),
-        usage: output.usage.map(UsageBody::from),
+        usage: output.usage.and_then(usage_body),
     }
 }
 
@@ -667,14 +769,24 @@ fn embedding_response(
         id: request_id.as_str().to_string(),
         model,
         embedding: output.values,
-        usage: output.usage.map(UsageBody::from),
+        usage: output.usage.and_then(usage_body),
+    }
+}
+
+fn usage_body(usage: TokenUsage) -> Option<UsageBody> {
+    if usage.input_tokens.is_none() && usage.output_tokens.is_none() && usage.total_tokens.is_none()
+    {
+        None
+    } else {
+        Some(UsageBody::from(usage))
     }
 }
 
 fn sse(
     stream: impl Stream<Item = GatewayResult<GatewayStreamEvent>> + Send + 'static,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    Sse::new(stream.map(|event| Ok(sse_event(event)))).keep_alive(KeepAlive::default())
+    Sse::new(stream.filter_map(|event| async move { sse_event(event).map(Ok) }))
+        .keep_alive(KeepAlive::default())
 }
 
 fn hold_permit(
@@ -718,7 +830,7 @@ fn observe_stream(
                     request_id = %request_id.as_str(),
                     alias = %alias,
                     operation,
-                    error_code = %error.code,
+                    error_code = %error.code(),
                     latency_ms,
                     "gateway stream failed"
                 );
@@ -792,35 +904,46 @@ fn json_rejection_error(rejection: JsonRejection) -> GatewayError {
             "request body exceeds gateway limit",
         );
     }
-    GatewayError::new(GatewayErrorKind::InvalidRequest, rejection.body_text())
+    GatewayError::new(
+        GatewayErrorKind::InvalidRequest,
+        "invalid JSON request body",
+    )
 }
 
-fn sse_event(event: GatewayResult<GatewayStreamEvent>) -> Event {
+fn sse_event(event: GatewayResult<GatewayStreamEvent>) -> Option<Event> {
     match event {
-        Ok(GatewayStreamEvent::TokenBatch(batch)) => Event::default()
-            .event("token")
-            .json_data(json!({
-                "text": batch.text,
-                "sequence": batch.sequence_start,
-            }))
-            .unwrap_or_else(internal_sse_error),
-        Ok(GatewayStreamEvent::Usage { usage }) => Event::default()
-            .event("usage")
-            .json_data(UsageBody::from(usage))
-            .unwrap_or_else(internal_sse_error),
-        Ok(GatewayStreamEvent::Finished { finish_reason }) => Event::default()
-            .event("done")
-            .json_data(json!({ "finish_reason": finish_reason.as_str() }))
-            .unwrap_or_else(internal_sse_error),
-        Err(error) => Event::default()
-            .event("error")
-            .json_data(json!({
-                "error": {
-                    "code": error.code,
-                    "message": error.message,
-                }
-            }))
-            .unwrap_or_else(internal_sse_error),
+        Ok(GatewayStreamEvent::TokenBatch(batch)) => Some(
+            Event::default()
+                .event("token")
+                .json_data(json!({
+                    "text": batch.text,
+                    "sequence": batch.sequence_start,
+                }))
+                .unwrap_or_else(internal_sse_error),
+        ),
+        Ok(GatewayStreamEvent::Usage { usage }) => usage_body(usage).map(|usage| {
+            Event::default()
+                .event("usage")
+                .json_data(usage)
+                .unwrap_or_else(internal_sse_error)
+        }),
+        Ok(GatewayStreamEvent::Finished { finish_reason }) => Some(
+            Event::default()
+                .event("done")
+                .json_data(json!({ "finish_reason": finish_reason.as_str() }))
+                .unwrap_or_else(internal_sse_error),
+        ),
+        Err(error) => Some(
+            Event::default()
+                .event("error")
+                .json_data(json!({
+                    "error": {
+                        "code": error.code(),
+                        "message": error.message,
+                    }
+                }))
+                .unwrap_or_else(internal_sse_error),
+        ),
     }
 }
 
@@ -840,6 +963,22 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     diff == 0
 }
 
+pub(crate) fn validate_gateway_bearer_secret(secret: &str, field: &str) -> GatewayResult<()> {
+    if secret.trim().is_empty() {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            format!("{field} must not be empty"),
+        ));
+    }
+    if secret.chars().any(char::is_whitespace) {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            format!("{field} must not contain whitespace"),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_alias_limits(limits: GatewayAliasLimits) -> GatewayResult<()> {
     if matches!(limits.max_concurrent_requests, Some(0)) {
         return Err(GatewayError::new(
@@ -857,6 +996,16 @@ fn validate_alias_limits(limits: GatewayAliasLimits) -> GatewayResult<()> {
         return Err(GatewayError::new(
             GatewayErrorKind::InvalidRequest,
             "max_requests_total must be greater than zero",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_service_limits(limits: GatewayServiceLimits) -> GatewayResult<()> {
+    if limits.max_request_bytes == 0 {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "max_request_bytes must be greater than zero",
         ));
     }
     Ok(())

@@ -404,6 +404,8 @@ struct AnthropicStreamState {
     usage: TokenUsage,
     closed: bool,
     finished: bool,
+    finish_reason: Option<FinishReason>,
+    missing_stop_reported: bool,
 }
 
 fn anthropic_stream_events(
@@ -423,6 +425,8 @@ fn anthropic_stream_events(
         },
         closed: false,
         finished: false,
+        finish_reason: None,
+        missing_stop_reported: false,
     };
 
     Box::pin(futures_stream::unfold(state, next_anthropic_stream_event))
@@ -436,6 +440,10 @@ async fn next_anthropic_stream_event(
             return Some((event, state));
         }
         if state.closed {
+            if !state.finished && !state.missing_stop_reported {
+                state.missing_stop_reported = true;
+                return Some((Err(state.missing_stop_error()), state));
+            }
             return None;
         }
 
@@ -443,16 +451,22 @@ async fn next_anthropic_stream_event(
             Some(Ok(bytes)) => {
                 if let Err(err) = state.push_bytes(&bytes) {
                     state.closed = true;
+                    state.missing_stop_reported = true;
+                    state.pending.clear();
                     return Some((Err(err), state));
                 }
             }
             Some(Err(err)) => {
                 state.closed = true;
+                state.missing_stop_reported = true;
+                state.pending.clear();
                 return Some((Err(err), state));
             }
             None => {
                 state.closed = true;
                 if let Err(err) = state.finish_parser() {
+                    state.missing_stop_reported = true;
+                    state.pending.clear();
                     return Some((Err(err), state));
                 }
             }
@@ -492,19 +506,33 @@ impl AnthropicStreamState {
                 ProviderKind::Anthropic,
             )
         })?;
+        if !value.is_object() {
+            return Err(provider_response_error(
+                "Anthropic stream payload must be a JSON object",
+                ProviderKind::Anthropic,
+            ));
+        }
         if value.get("type").and_then(serde_json::Value::as_str) == Some("error")
             || value.get("error").is_some_and(|value| !value.is_null())
         {
             return Err(self.with_request_id(anthropic_stream_error(value)));
         }
 
-        match value.get("type").and_then(serde_json::Value::as_str) {
+        let event_type = value.get("type").and_then(serde_json::Value::as_str);
+        if self.finished {
+            if event_type == Some("message_stop") {
+                return Ok(());
+            }
+            return Err(self.event_after_stop_error());
+        }
+
+        match event_type {
             Some("message_start") => self.push_message_start(&value),
             Some("content_block_delta") => self.push_content_block_delta(&value),
             Some("message_delta") => self.push_message_delta(&value),
             Some("message_stop") => {
                 if !self.finished {
-                    self.push_finished(FinishReason::Stop);
+                    self.push_finished(self.finish_reason.unwrap_or(FinishReason::Stop));
                 }
                 Ok(())
             }
@@ -550,7 +578,7 @@ impl AnthropicStreamState {
             .pointer("/delta/stop_reason")
             .and_then(serde_json::Value::as_str)
         {
-            self.push_finished(anthropic_finish_reason(Some(raw)));
+            self.finish_reason = Some(anthropic_finish_reason(Some(raw)));
         }
         Ok(())
     }
@@ -590,6 +618,20 @@ impl AnthropicStreamState {
             err.request_id = self.request_id.clone();
         }
         err
+    }
+
+    fn missing_stop_error(&self) -> ProviderError {
+        self.with_request_id(provider_response_error(
+            "Anthropic stream ended before message_stop",
+            ProviderKind::Anthropic,
+        ))
+    }
+
+    fn event_after_stop_error(&self) -> ProviderError {
+        self.with_request_id(provider_response_error(
+            "Anthropic stream event received after message_stop",
+            ProviderKind::Anthropic,
+        ))
     }
 }
 

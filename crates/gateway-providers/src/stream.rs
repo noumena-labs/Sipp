@@ -47,7 +47,7 @@ impl TokenBatchBuilder {
             byte_count,
             stats: self.stats,
         };
-        self.sequence += 1;
+        self.sequence = self.sequence.wrapping_add(1);
         batch
     }
 }

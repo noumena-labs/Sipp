@@ -42,9 +42,12 @@ impl SecretString {
         &self.0
     }
 
-    /// Return whether the secret is empty.
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+    pub(crate) fn is_blank(&self) -> bool {
+        self.0.trim().is_empty()
+    }
+
+    pub(crate) fn contains_whitespace(&self) -> bool {
+        self.0.chars().any(char::is_whitespace)
     }
 }
 

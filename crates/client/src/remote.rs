@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use cogentlm_remote::{GatewayConfig, GatewaySecret, GatewayTransport};
 
-use crate::CogentResult;
+use crate::{CogentError, CogentResult};
 
 /// Redacted secret value used by remote gateway configuration.
 #[derive(Clone, PartialEq, Eq)]
@@ -41,12 +41,27 @@ pub struct RemoteGatewayConfig {
 
 impl RemoteGatewayConfig {
     pub(crate) fn build(self) -> CogentResult<(String, GatewayTransport)> {
-        let alias = self.alias;
+        let alias = normalize_alias(self.alias)?;
         let transport = GatewayTransport::new(GatewayConfig {
             base_url: self.base_url,
             token: GatewaySecret::new(self.token.expose().to_string()),
             timeout: self.timeout,
         })?;
         Ok((alias, transport))
+    }
+}
+
+fn normalize_alias(alias: String) -> CogentResult<String> {
+    let trimmed = alias.trim();
+    if trimmed.is_empty() {
+        Err(CogentError::InvalidRequest(
+            "remote alias must not be empty".to_string(),
+        ))
+    } else if trimmed != alias.as_str() {
+        Err(CogentError::InvalidRequest(
+            "remote alias must not contain surrounding whitespace".to_string(),
+        ))
+    } else {
+        Ok(alias)
     }
 }

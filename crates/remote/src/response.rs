@@ -53,14 +53,18 @@ pub struct GatewayResponseMetadata {
 pub(crate) fn text_response_from_body(
     request_id: Option<String>,
     body: serde_json::Value,
+    redaction_secret: &str,
 ) -> GatewayResult<GatewayTextResponse> {
-    reject_body_error(&body, "gateway text error")?;
+    reject_body_error(
+        &body,
+        "gateway text error",
+        request_id.as_deref(),
+        redaction_secret,
+    )?;
+    ensure_object_body(&body)?;
     let model = string_field(&body, "model")?;
     let text = string_field(&body, "text")?;
-    let finish_reason_raw = body
-        .get("finish_reason")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned);
+    let finish_reason_raw = string_field(&body, "finish_reason")?;
     let usage = body
         .get("usage")
         .filter(|value| !value.is_null())
@@ -70,7 +74,7 @@ pub(crate) fn text_response_from_body(
     Ok(GatewayTextResponse {
         result: GatewayTextOutput {
             text,
-            finish_reason: map_finish_reason(finish_reason_raw.as_deref()),
+            finish_reason: map_finish_reason(Some(&finish_reason_raw)),
         },
         usage,
         metadata: GatewayResponseMetadata {
@@ -80,7 +84,7 @@ pub(crate) fn text_response_from_body(
                 .get("id")
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned),
-            finish_reason_raw,
+            finish_reason_raw: Some(finish_reason_raw),
             raw: body,
         },
     })
@@ -89,8 +93,15 @@ pub(crate) fn text_response_from_body(
 pub(crate) fn embedding_response_from_body(
     request_id: Option<String>,
     body: serde_json::Value,
+    redaction_secret: &str,
 ) -> GatewayResult<GatewayEmbeddingResponse> {
-    reject_body_error(&body, "gateway embedding error")?;
+    reject_body_error(
+        &body,
+        "gateway embedding error",
+        request_id.as_deref(),
+        redaction_secret,
+    )?;
+    ensure_object_body(&body)?;
     let model = string_field(&body, "model")?;
     let values = embedding_values(&body)?;
     let usage = body
@@ -123,6 +134,12 @@ pub(crate) fn map_finish_reason(raw: Option<&str>) -> FinishReason {
 }
 
 pub(crate) fn token_usage(value: &serde_json::Value) -> GatewayResult<TokenUsage> {
+    if !value.is_object() {
+        return Err(GatewayError::new(
+            GatewayErrorKind::Gateway,
+            "usage must be a JSON object",
+        ));
+    }
     Ok(TokenUsage {
         input_tokens: optional_u32(value, "input_tokens")?,
         output_tokens: optional_u32(value, "output_tokens")?,
@@ -157,11 +174,30 @@ pub(crate) fn gateway_body_error(
     }
 }
 
-fn reject_body_error(body: &serde_json::Value, default_message: &'static str) -> GatewayResult<()> {
+fn reject_body_error(
+    body: &serde_json::Value,
+    default_message: &'static str,
+    request_id: Option<&str>,
+    redaction_secret: &str,
+) -> GatewayResult<()> {
     if body.get("error").is_some_and(|value| !value.is_null()) {
-        return Err(gateway_body_error(body.clone(), default_message));
+        let mut error = gateway_body_error(body.clone(), default_message);
+        error.request_id = request_id.map(str::to_owned);
+        error.redact_secret(redaction_secret);
+        return Err(error);
     }
     Ok(())
+}
+
+fn ensure_object_body(body: &serde_json::Value) -> GatewayResult<()> {
+    if body.is_object() {
+        Ok(())
+    } else {
+        Err(GatewayError::new(
+            GatewayErrorKind::Gateway,
+            "gateway response must be a JSON object",
+        ))
+    }
 }
 
 fn string_field(body: &serde_json::Value, field: &'static str) -> GatewayResult<String> {

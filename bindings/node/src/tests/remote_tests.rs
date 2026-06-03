@@ -74,6 +74,72 @@ fn remote_gateway_config_from_value_requires_gateway_shape() {
 }
 
 #[test]
+fn add_remote_rejects_empty_alias_before_gateway_transport_config() {
+    let client = CogentClient::new().expect("client");
+    let error = match client.add_remote(
+        "pro".to_string(),
+        json!({
+            "alias": "   ",
+            "baseUrl": "https://user:gateway-secret@gateway.example.test",
+            "token": "gateway-token"
+        }),
+    ) {
+        Ok(_) => panic!("blank alias must reject before transport config"),
+        Err(error) => error,
+    };
+    let message = error.reason.as_str();
+
+    assert_eq!(error.status, Status::InvalidArg);
+    assert_eq!(message, "remote alias must not be empty");
+    assert!(!message.contains("gateway-secret"));
+    assert!(!message.contains("gateway-token"));
+}
+
+#[test]
+fn add_remote_rejects_id_whitespace_before_gateway_transport_config() {
+    let client = CogentClient::new().expect("client");
+    let error = match client.add_remote(
+        " pro ".to_string(),
+        json!({
+            "alias": "pro-chat",
+            "baseUrl": "https://user:gateway-secret@gateway.example.test",
+            "token": "gateway-token"
+        }),
+    ) {
+        Ok(_) => panic!("whitespace id must reject before transport config"),
+        Err(error) => error,
+    };
+    let message = error.reason.as_str();
+
+    assert_eq!(error.status, Status::InvalidArg);
+    assert_eq!(message, "remote id must not contain surrounding whitespace");
+    assert!(!message.contains("gateway-secret"));
+    assert!(!message.contains("gateway-token"));
+}
+
+#[test]
+fn add_remote_rejects_alias_surrounding_whitespace() {
+    let client = CogentClient::new().expect("client");
+    let error = match client.add_remote(
+        "pro".to_string(),
+        json!({
+            "alias": " pro-chat ",
+            "baseUrl": "https://gateway.example.test",
+            "token": "gateway-token"
+        }),
+    ) {
+        Ok(_) => panic!("whitespace alias must reject"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.status, Status::InvalidArg);
+    assert_eq!(
+        error.reason,
+        "remote alias must not contain surrounding whitespace"
+    );
+}
+
+#[test]
 fn add_remote_rejects_gateway_base_url_userinfo() {
     let client = CogentClient::new().expect("client");
     let error = match client.add_remote(

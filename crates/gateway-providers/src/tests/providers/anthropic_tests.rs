@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use bytes::Bytes;
 use cogentlm_core::{ChatMessage, ChatRole, FinishReason};
 use futures_util::StreamExt;
 use serde_json::json;
@@ -9,7 +10,7 @@ use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::*;
-use crate::{ProviderGenerationOptions, SecretString};
+use crate::{ProviderError, ProviderGenerationOptions, SecretString};
 
 fn config(server: &MockServer) -> AnthropicAdapterConfig {
     AnthropicAdapterConfig {
@@ -195,6 +196,24 @@ async fn maps_anthropic_generate_response() {
     assert_eq!(response.result.text, "done");
     assert_eq!(response.result.finish_reason, FinishReason::Length);
     assert_eq!(response.usage.expect("usage").total_tokens, Some(3));
+}
+
+#[test]
+fn rejects_non_object_anthropic_usage() {
+    let body = json!({
+        "id": "msg-test",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-test",
+        "content": [{ "type": "text", "text": "done" }],
+        "stop_reason": "end_turn",
+        "usage": []
+    });
+
+    let err = anthropic_text_response(None, body).expect_err("array usage should fail");
+
+    assert_eq!(err.kind, ProviderErrorKind::Provider);
+    assert_eq!(err.message, "usage must be a JSON object");
 }
 
 #[tokio::test]
@@ -401,6 +420,150 @@ async fn streams_anthropic_messages() {
             }
         ]
     );
+}
+
+#[tokio::test]
+async fn anthropic_stream_rejects_eof_before_message_stop() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+            .and(path("/messages"))
+            .and(header("x-api-key", "token"))
+            .and(header("anthropic-version", DEFAULT_ANTHROPIC_VERSION))
+            .and(body_json(json!({
+                "model": "claude-test",
+                "messages": [
+                    { "role": "user", "content": "hello" }
+                ],
+                "max_tokens": DEFAULT_ANTHROPIC_MAX_TOKENS,
+                "stream": true
+            })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .insert_header("request-id", "req-truncated")
+                    .set_body_string(concat!(
+                        "event: content_block_delta\n",
+                        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n"
+                    )),
+            )
+            .mount(&server)
+            .await;
+
+    let provider = AnthropicAdapter::new(config(&server)).expect("provider");
+    let mut stream = provider
+        .stream_chat(ProviderChatRequest {
+            model: "claude-test".to_string(),
+            messages: vec![ChatMessage::new(ChatRole::User, "hello")],
+            options: ProviderGenerationOptions::default(),
+            provider_options: Default::default(),
+        })
+        .await
+        .expect("stream");
+    let first = stream
+        .next()
+        .await
+        .expect("token event")
+        .expect("token event");
+    let error = stream
+        .next()
+        .await
+        .expect("missing stop error")
+        .expect_err("truncated provider stream must fail");
+
+    assert!(matches!(
+        first,
+        ProviderStreamEvent::TokenBatch(batch) if batch.text == "partial"
+    ));
+    assert_eq!(error.kind, ProviderErrorKind::Provider);
+    assert_eq!(error.message, "Anthropic stream ended before message_stop");
+    assert_eq!(error.request_id.as_deref(), Some("req-truncated"));
+    assert!(stream.next().await.is_none());
+}
+
+#[tokio::test]
+async fn anthropic_stream_rejects_non_object_payload() {
+    let chunks = futures_util::stream::iter([Ok::<_, ProviderError>(Bytes::from_static(
+        concat!(
+            "event: ping\n",
+            "data: []\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n"
+        )
+        .as_bytes(),
+    ))]);
+    let mut stream =
+        anthropic_stream_events(Some("req-array-payload".to_string()), Box::pin(chunks));
+
+    let error = stream
+        .next()
+        .await
+        .expect("array payload error")
+        .expect_err("array payload should fail");
+
+    assert_eq!(error.kind, ProviderErrorKind::Provider);
+    assert_eq!(
+        error.message,
+        "Anthropic stream payload must be a JSON object"
+    );
+    assert_eq!(error.request_id.as_deref(), Some("req-array-payload"));
+    assert!(stream.next().await.is_none());
+}
+
+#[tokio::test]
+async fn stream_rejects_payloads_after_message_stop() {
+    let chunks = futures_util::stream::iter([
+        Ok::<_, ProviderError>(Bytes::from_static(
+            concat!(
+                "event: content_block_delta\n",
+                "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n",
+                "event: message_stop\n",
+                "data: {\"type\":\"message_stop\"}\n\n",
+            )
+            .as_bytes(),
+        )),
+        Ok(Bytes::from_static(
+            concat!(
+                "event: content_block_delta\n",
+                "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"late\"}}\n\n",
+            )
+            .as_bytes(),
+        )),
+    ]);
+    let mut stream = anthropic_stream_events(Some("req-after-stop".to_string()), Box::pin(chunks));
+
+    let first = stream
+        .next()
+        .await
+        .expect("token event")
+        .expect("token event");
+    let finished = stream
+        .next()
+        .await
+        .expect("finish event")
+        .expect("finish event");
+    let error = stream
+        .next()
+        .await
+        .expect("late event error")
+        .expect_err("late payload should fail");
+
+    assert!(matches!(
+        first,
+        ProviderStreamEvent::TokenBatch(batch) if batch.text == "hi"
+    ));
+    assert!(matches!(
+        finished,
+        ProviderStreamEvent::Finished {
+            finish_reason: FinishReason::Stop
+        }
+    ));
+    assert_eq!(error.kind, ProviderErrorKind::Provider);
+    assert_eq!(
+        error.message,
+        "Anthropic stream event received after message_stop"
+    );
+    assert_eq!(error.request_id.as_deref(), Some("req-after-stop"));
+    assert!(stream.next().await.is_none());
 }
 
 #[tokio::test]

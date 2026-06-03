@@ -15,6 +15,7 @@ use crate::{
 };
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_ERROR_BODY_BYTES: usize = 1 << 20;
 
 /// HTTP transport for the CogentLM Remote Gateway Protocol.
 #[derive(Clone)]
@@ -39,18 +40,32 @@ struct HttpStreamResponse {
 impl GatewayTransport {
     /// Build a gateway transport from client-side gateway configuration.
     pub fn new(config: GatewayConfig) -> GatewayResult<Self> {
-        let base_url = config.base_url.trim_end_matches('/').to_string();
-        if base_url.is_empty() {
+        let base_url = config.base_url;
+        let trimmed_base_url = base_url.trim();
+        if trimmed_base_url.is_empty() {
             return Err(GatewayError::new(
                 GatewayErrorKind::InvalidRequest,
                 "gateway base_url must not be empty",
             ));
         }
+        if trimmed_base_url != base_url.as_str() {
+            return Err(GatewayError::new(
+                GatewayErrorKind::InvalidRequest,
+                "gateway base_url must not contain surrounding whitespace",
+            ));
+        }
+        let base_url = base_url.trim_end_matches('/').to_string();
         validate_base_url(&base_url)?;
-        if config.token.is_empty() {
+        if config.token.is_blank() {
             return Err(GatewayError::new(
                 GatewayErrorKind::Authentication,
                 "gateway bearer token must not be empty",
+            ));
+        }
+        if config.token.contains_whitespace() {
+            return Err(GatewayError::new(
+                GatewayErrorKind::InvalidRequest,
+                "gateway bearer token must not contain whitespace",
             ));
         }
         let timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT);
@@ -87,7 +102,7 @@ impl GatewayTransport {
     pub async fn query(&self, req: GatewayQueryRequest) -> GatewayResult<GatewayTextResponse> {
         let body = query_body(&req, false)?;
         let response = self.post_json("/v1/query", &body).await?;
-        text_response_from_body(response.request_id, response.body)
+        text_response_from_body(response.request_id, response.body, self.token.expose())
     }
 
     /// Run a streaming raw-prompt gateway request.
@@ -108,7 +123,7 @@ impl GatewayTransport {
     pub async fn chat(&self, req: GatewayChatRequest) -> GatewayResult<GatewayTextResponse> {
         let body = chat_body(&req, false)?;
         let response = self.post_json("/v1/chat", &body).await?;
-        text_response_from_body(response.request_id, response.body)
+        text_response_from_body(response.request_id, response.body, self.token.expose())
     }
 
     /// Run a streaming chat gateway request.
@@ -129,7 +144,7 @@ impl GatewayTransport {
     pub async fn embed(&self, req: GatewayEmbedRequest) -> GatewayResult<GatewayEmbeddingResponse> {
         let body = embed_body(&req)?;
         let response = self.post_json("/v1/embed", &body).await?;
-        embedding_response_from_body(response.request_id, response.body)
+        embedding_response_from_body(response.request_id, response.body, self.token.expose())
     }
 
     async fn post_json<T: serde::Serialize + ?Sized>(
@@ -186,9 +201,11 @@ impl GatewayTransport {
         &self,
         request: reqwest::RequestBuilder,
     ) -> GatewayResult<HttpStreamResponse> {
+        // Streaming uses the client read timeout as an idle deadline. A total
+        // request timeout would abort long generations that are still producing
+        // chunks regularly.
         let response = request
             .headers(self.headers.clone())
-            .timeout(self.timeout)
             .send()
             .await
             .map_err(transport_error)?;
@@ -250,6 +267,12 @@ fn validate_base_url(base_url: &str) -> GatewayResult<()> {
             "gateway base_url must not include userinfo",
         ));
     }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "gateway base_url must not include query or fragment",
+        ));
+    }
     if url.scheme() == "http" && !is_loopback_url(&url) {
         return Err(GatewayError::new(
             GatewayErrorKind::InvalidRequest,
@@ -276,12 +299,23 @@ fn is_loopback_url(url: &reqwest::Url) -> bool {
 }
 
 async fn error_body(response: reqwest::Response) -> serde_json::Value {
-    match response.bytes().await {
-        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|_| {
-            serde_json::Value::String(String::from_utf8_lossy(&bytes).into_owned())
-        }),
-        Err(_) => serde_json::Value::Null,
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let Ok(chunk) = chunk else {
+            return serde_json::Value::Null;
+        };
+        if body.len().saturating_add(chunk.len()) > MAX_ERROR_BODY_BYTES {
+            return serde_json::json!({
+                "error": {
+                    "message": "gateway error response exceeded body limit"
+                }
+            });
+        }
+        body.extend_from_slice(&chunk);
     }
+    serde_json::from_slice(&body)
+        .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&body).into_owned()))
 }
 
 fn gateway_error(

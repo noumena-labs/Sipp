@@ -1,10 +1,12 @@
 use std::{
+    collections::BTreeSet,
     fmt,
     net::SocketAddr,
     path::{Path, PathBuf},
     time::Duration,
 };
 
+use axum::http::{HeaderName, HeaderValue, Uri};
 use cogentlm_engine::engine::NativeRuntimeConfig;
 use cogentlm_gateway_providers::{
     AnthropicAdapterConfig, GatewayAdapterTransport, OpenAiAdapterConfig,
@@ -13,6 +15,7 @@ use cogentlm_gateway_providers::{
 use serde::Deserialize;
 
 use crate::{
+    server::{cors_origin_header, is_loopback_host, validate_gateway_bearer_secret},
     GatewayAccess, GatewayAlias, GatewayAliasLimits, GatewayError, GatewayErrorKind, GatewayResult,
     GatewayService, GatewayServiceLimits, GatewayState, GatewayToken, LocalCogentEngineBackend,
     LocalCogentEngineOptions, MockBackend, Operation, OperationSet, ProviderGatewayBackend,
@@ -73,21 +76,20 @@ impl GatewayFileConfig {
 
     /// Build the runnable gateway server configuration.
     pub async fn build(self) -> GatewayResult<GatewayServerConfig> {
+        let service_limits = self.limits.service_limits()?;
+        let alias_names = validate_alias_configs(&self.aliases)?;
+        let access = self.auth.access.gateway_access(&alias_names)?;
+        validate_alias_backend_configs(&self.aliases)?;
+        validate_cors_origins(&self.cors.allowed_origins)?;
         let token = env_secret(&self.auth.token_env)?;
-        let mut state = GatewayState::with_tokens([GatewayToken::new(
-            token.expose().to_string(),
-            self.auth.access.gateway_access(),
-        )]);
+        let mut state =
+            GatewayState::with_tokens([GatewayToken::new(token.expose().to_string(), access)?])?;
         for alias in self.aliases {
             state.add_alias(alias.build().await?)?;
         }
         Ok(GatewayServerConfig {
             bind: self.server.bind,
-            service: GatewayService::new(
-                state,
-                self.cors.allowed_origins,
-                self.limits.service_limits()?,
-            ),
+            service: GatewayService::new(state, self.cors.allowed_origins, service_limits)?,
         })
     }
 }
@@ -120,20 +122,43 @@ pub struct TokenAccessFileConfig {
 }
 
 impl TokenAccessFileConfig {
-    fn gateway_access(self) -> GatewayAccess {
+    fn gateway_access(self, configured_aliases: &BTreeSet<String>) -> GatewayResult<GatewayAccess> {
         match self.aliases {
-            None => GatewayAccess::all(),
-            Some(aliases) => GatewayAccess::new(aliases.into_iter().map(|alias| {
-                let operations = alias
-                    .operations
-                    .map(|operations| {
-                        OperationSet::new(
-                            operations.into_iter().map(OperationFileConfig::operation),
-                        )
-                    })
-                    .unwrap_or_else(OperationSet::all);
-                (alias.name, operations)
-            })),
+            None => Ok(GatewayAccess::all()),
+            Some(aliases) => {
+                if aliases.is_empty() {
+                    return Err(GatewayError::new(
+                        GatewayErrorKind::InvalidRequest,
+                        "token access aliases must not be empty",
+                    ));
+                }
+                let mut names = BTreeSet::new();
+                let mut access = Vec::with_capacity(aliases.len());
+                for alias in aliases {
+                    validate_config_name(&alias.name, "token access alias name")?;
+                    if !names.insert(alias.name.clone()) {
+                        return Err(GatewayError::new(
+                            GatewayErrorKind::InvalidRequest,
+                            "token access aliases must not contain duplicates",
+                        ));
+                    }
+                    if !configured_aliases.contains(&alias.name) {
+                        return Err(GatewayError::new(
+                            GatewayErrorKind::InvalidRequest,
+                            "token access alias is not configured",
+                        ));
+                    }
+                    let operations = alias
+                        .operations
+                        .map(|operations| {
+                            operation_set_from_config(operations, "token access operations")
+                        })
+                        .transpose()?
+                        .unwrap_or_else(OperationSet::all);
+                    access.push((alias.name, operations));
+                }
+                GatewayAccess::new(access)
+            }
         }
     }
 }
@@ -176,16 +201,12 @@ impl AliasFileConfig {
     async fn build(self) -> GatewayResult<GatewayAlias> {
         let operations = self
             .operations
-            .map(|operations| {
-                OperationSet::new(operations.into_iter().map(OperationFileConfig::operation))
-            })
+            .map(|operations| operation_set_from_config(operations, "alias operations"))
+            .transpose()?
             .unwrap_or_else(OperationSet::all);
-        Ok(GatewayAlias::new(
-            self.name,
-            operations,
-            self.backend.backend().await?,
-            self.limits.alias_limits()?,
-        ))
+        let limits = self.limits.alias_limits()?;
+        let backend = self.backend.backend().await?;
+        GatewayAlias::new(self.name, operations, backend, limits)
     }
 }
 
@@ -198,7 +219,7 @@ pub struct ServiceLimitsFileConfig {
 }
 
 impl ServiceLimitsFileConfig {
-    fn service_limits(self) -> GatewayResult<GatewayServiceLimits> {
+    fn service_limits(&self) -> GatewayResult<GatewayServiceLimits> {
         let max_request_bytes = self
             .max_request_bytes
             .unwrap_or(GatewayServiceLimits::default().max_request_bytes);
@@ -225,7 +246,7 @@ pub struct AliasLimitsFileConfig {
 }
 
 impl AliasLimitsFileConfig {
-    fn alias_limits(self) -> GatewayResult<GatewayAliasLimits> {
+    fn alias_limits(&self) -> GatewayResult<GatewayAliasLimits> {
         let limits = GatewayAliasLimits {
             max_concurrent_requests: self.max_concurrent_requests,
             max_requests_per_minute: self.max_requests_per_minute,
@@ -341,6 +362,38 @@ pub enum BackendFileConfig {
 }
 
 impl BackendFileConfig {
+    fn validate_before_secret_loading(&self) -> GatewayResult<()> {
+        match self {
+            Self::Mock { .. } => Ok(()),
+            Self::LocalCogentEngine { options, .. } => options.validate_before_secret_loading(),
+            Self::OpenAi {
+                model, base_url, ..
+            }
+            | Self::Anthropic {
+                model, base_url, ..
+            } => {
+                validate_config_name(model, "provider backend model")?;
+                if let Some(base_url) = base_url.as_deref() {
+                    validate_provider_base_url(base_url)?;
+                }
+                Ok(())
+            }
+            Self::OpenAiCompatible {
+                model,
+                base_url,
+                auth,
+                static_headers,
+                ..
+            } => {
+                validate_config_name(model, "provider backend model")?;
+                validate_provider_base_url(base_url)?;
+                auth.validate_before_secret_loading()?;
+                validate_provider_static_headers(static_headers)?;
+                Ok(())
+            }
+        }
+    }
+
     async fn backend(self) -> GatewayResult<std::sync::Arc<dyn crate::GatewayBackend>> {
         match self {
             Self::Mock {
@@ -363,51 +416,66 @@ impl BackendFileConfig {
                 api_key_env,
                 base_url,
                 timeout_ms,
-            } => Ok(std::sync::Arc::new(ProviderGatewayBackend::new(
-                model,
-                GatewayAdapterTransport::openai(OpenAiAdapterConfig {
+            } => {
+                validate_config_name(&model, "provider backend model")?;
+                if let Some(base_url) = base_url.as_deref() {
+                    validate_provider_base_url(base_url)?;
+                }
+                let transport = GatewayAdapterTransport::openai(OpenAiAdapterConfig {
                     api_key: env_secret(api_key_env)?,
                     base_url,
                     timeout: timeout_ms.map(Duration::from_millis),
                 })
-                .map_err(provider_config_error)?,
-            ))),
+                .map_err(provider_config_error)?;
+                Ok(std::sync::Arc::new(ProviderGatewayBackend::new(
+                    model, transport,
+                )?))
+            }
             Self::Anthropic {
                 model,
                 api_key_env,
                 base_url,
                 version,
                 timeout_ms,
-            } => Ok(std::sync::Arc::new(ProviderGatewayBackend::new(
-                model,
-                GatewayAdapterTransport::anthropic(AnthropicAdapterConfig {
+            } => {
+                validate_config_name(&model, "provider backend model")?;
+                if let Some(base_url) = base_url.as_deref() {
+                    validate_provider_base_url(base_url)?;
+                }
+                let transport = GatewayAdapterTransport::anthropic(AnthropicAdapterConfig {
                     api_key: env_secret(api_key_env)?,
                     base_url,
                     version,
                     timeout: timeout_ms.map(Duration::from_millis),
                 })
-                .map_err(provider_config_error)?,
-            ))),
+                .map_err(provider_config_error)?;
+                Ok(std::sync::Arc::new(ProviderGatewayBackend::new(
+                    model, transport,
+                )?))
+            }
             Self::OpenAiCompatible {
                 model,
                 base_url,
                 auth,
                 static_headers,
                 timeout_ms,
-            } => Ok(std::sync::Arc::new(ProviderGatewayBackend::new(
-                model,
-                GatewayAdapterTransport::openai_compatible(OpenAiCompatibleAdapterConfig {
-                    base_url,
-                    auth: auth.provider_auth()?,
-                    protocol: OpenAiCompatibleProtocol::OpenAiCompatible,
-                    static_headers: static_headers
-                        .into_iter()
-                        .map(|header| (header.name, header.value))
-                        .collect(),
-                    timeout: timeout_ms.map(Duration::from_millis),
-                })
-                .map_err(provider_config_error)?,
-            ))),
+            } => {
+                validate_config_name(&model, "provider backend model")?;
+                validate_provider_base_url(&base_url)?;
+                let static_headers = provider_static_headers(static_headers)?;
+                let transport =
+                    GatewayAdapterTransport::openai_compatible(OpenAiCompatibleAdapterConfig {
+                        base_url,
+                        auth: auth.provider_auth()?,
+                        protocol: OpenAiCompatibleProtocol::OpenAiCompatible,
+                        static_headers,
+                        timeout: timeout_ms.map(Duration::from_millis),
+                    })
+                    .map_err(provider_config_error)?;
+                Ok(std::sync::Arc::new(ProviderGatewayBackend::new(
+                    model, transport,
+                )?))
+            }
         }
     }
 }
@@ -429,6 +497,30 @@ pub struct LocalCogentEngineFileOptions {
 }
 
 impl LocalCogentEngineFileOptions {
+    fn validate_before_secret_loading(&self) -> GatewayResult<()> {
+        if self
+            .context_key
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(GatewayError::new(
+                GatewayErrorKind::InvalidRequest,
+                "local CogentEngine context_key must not be empty",
+            ));
+        }
+        if self
+            .embedding_context_key
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(GatewayError::new(
+                GatewayErrorKind::InvalidRequest,
+                "local CogentEngine embedding_context_key must not be empty",
+            ));
+        }
+        Ok(())
+    }
+
     fn local_options(self) -> LocalCogentEngineOptions {
         let defaults = LocalCogentEngineOptions::default();
         LocalCogentEngineOptions {
@@ -463,13 +555,25 @@ pub enum OpenAiCompatibleAuthFileConfig {
 }
 
 impl OpenAiCompatibleAuthFileConfig {
+    fn validate_before_secret_loading(&self) -> GatewayResult<()> {
+        match self {
+            Self::Bearer { .. } => Ok(()),
+            Self::Header { name, .. } => {
+                validate_provider_header_name(name, "provider auth header name")
+            }
+        }
+    }
+
     fn provider_auth(self) -> GatewayResult<ProviderAuth> {
         match self {
             Self::Bearer { token_env } => Ok(ProviderAuth::Bearer(env_secret(token_env)?)),
-            Self::Header { name, value_env } => Ok(ProviderAuth::Header {
-                name,
-                value: env_secret(value_env)?,
-            }),
+            Self::Header { name, value_env } => {
+                validate_provider_header_name(&name, "provider auth header name")?;
+                Ok(ProviderAuth::Header {
+                    name,
+                    value: env_secret(value_env)?,
+                })
+            }
         }
     }
 }
@@ -509,12 +613,13 @@ fn env_secret(name: impl AsRef<str>) -> GatewayResult<SecretString> {
             format!("failed to read secret env var {name}: {error}"),
         )
     })?;
-    if value.is_empty() {
+    if value.trim().is_empty() {
         return Err(GatewayError::new(
             GatewayErrorKind::InvalidRequest,
             format!("secret env var {name} must not be empty"),
         ));
     }
+    validate_gateway_bearer_secret(&value, &format!("secret env var {name}"))?;
     Ok(SecretString::new(value))
 }
 
@@ -523,6 +628,197 @@ fn provider_config_error(error: cogentlm_gateway_providers::ProviderError) -> Ga
         GatewayErrorKind::InvalidRequest,
         format!("invalid provider config: {}", error.message),
     )
+}
+
+fn validate_provider_base_url(base_url: &str) -> GatewayResult<()> {
+    let trimmed = base_url.trim();
+    if trimmed.is_empty() {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "provider base_url must not be empty",
+        ));
+    }
+    if trimmed != base_url {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "provider base_url must not contain surrounding whitespace",
+        ));
+    }
+    if base_url.contains('#') {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "provider base_url must not include query or fragment",
+        ));
+    }
+
+    let uri = base_url.parse::<Uri>().map_err(|_| {
+        GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "provider base_url is invalid",
+        )
+    })?;
+    let Some(scheme) = uri.scheme_str() else {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "provider base_url must be an absolute http(s) URL",
+        ));
+    };
+    let Some(authority) = uri.authority() else {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "provider base_url must be an absolute http(s) URL",
+        ));
+    };
+    if !matches!(scheme, "http" | "https") {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "provider base_url must be an absolute http(s) URL",
+        ));
+    }
+    if authority.as_str().contains('@') {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "provider base_url must not include userinfo",
+        ));
+    }
+    if uri
+        .path_and_query()
+        .and_then(axum::http::uri::PathAndQuery::query)
+        .is_some()
+    {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "provider base_url must not include query or fragment",
+        ));
+    }
+    if scheme == "http" && !uri.host().is_some_and(is_loopback_host) {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "provider base_url must use HTTPS unless it targets loopback",
+        ));
+    }
+    Ok(())
+}
+
+fn provider_static_headers(headers: Vec<HeaderFileConfig>) -> GatewayResult<Vec<(String, String)>> {
+    let mut output = Vec::with_capacity(headers.len());
+    for header in headers {
+        validate_provider_static_header(&header)?;
+        output.push((header.name, header.value));
+    }
+    Ok(output)
+}
+
+fn validate_provider_static_headers(headers: &[HeaderFileConfig]) -> GatewayResult<()> {
+    for header in headers {
+        validate_provider_static_header(header)?;
+    }
+    Ok(())
+}
+
+fn validate_provider_static_header(header: &HeaderFileConfig) -> GatewayResult<()> {
+    validate_provider_header_name(&header.name, "provider static header name")?;
+    validate_provider_header_value(&header.value, "provider static header value")
+}
+
+fn validate_provider_header_name(name: &str, field: &'static str) -> GatewayResult<()> {
+    validate_config_name(name, field)?;
+    HeaderName::from_bytes(name.as_bytes()).map_err(|_| {
+        GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            format!("{field} is not a valid HTTP header name"),
+        )
+    })?;
+    Ok(())
+}
+
+fn validate_provider_header_value(value: &str, field: &'static str) -> GatewayResult<()> {
+    HeaderValue::from_str(value).map_err(|_| {
+        GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            format!("{field} is not a valid HTTP header value"),
+        )
+    })?;
+    Ok(())
+}
+
+fn validate_alias_configs(aliases: &[AliasFileConfig]) -> GatewayResult<BTreeSet<String>> {
+    if aliases.is_empty() {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "gateway config requires at least one alias",
+        ));
+    }
+    let mut names = BTreeSet::new();
+    for alias in aliases {
+        validate_config_name(&alias.name, "alias name")?;
+        if !names.insert(alias.name.clone()) {
+            return Err(GatewayError::new(
+                GatewayErrorKind::InvalidRequest,
+                "gateway aliases must not contain duplicates",
+            ));
+        }
+        if let Some(operations) = &alias.operations {
+            operation_set_from_config(operations.iter().copied(), "alias operations")?;
+        }
+        alias.limits.alias_limits()?;
+    }
+    Ok(names)
+}
+
+fn validate_alias_backend_configs(aliases: &[AliasFileConfig]) -> GatewayResult<()> {
+    for alias in aliases {
+        alias.backend.validate_before_secret_loading()?;
+    }
+    Ok(())
+}
+
+fn validate_cors_origins(origins: &[String]) -> GatewayResult<()> {
+    for origin in origins {
+        cors_origin_header(origin)?;
+    }
+    Ok(())
+}
+
+fn validate_config_name(value: &str, field: &'static str) -> GatewayResult<()> {
+    if value.trim().is_empty() {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            format!("{field} must not be empty"),
+        ));
+    }
+    if value.trim() != value {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            format!("{field} must not contain surrounding whitespace"),
+        ));
+    }
+    Ok(())
+}
+
+fn operation_set_from_config(
+    operations: impl IntoIterator<Item = OperationFileConfig>,
+    field: &'static str,
+) -> GatewayResult<OperationSet> {
+    let mut seen = BTreeSet::new();
+    let mut values = Vec::new();
+    for operation in operations {
+        let operation = operation.operation();
+        if !seen.insert(operation) {
+            return Err(GatewayError::new(
+                GatewayErrorKind::InvalidRequest,
+                format!("{field} must not contain duplicates"),
+            ));
+        }
+        values.push(operation);
+    }
+    if values.is_empty() {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            format!("{field} must not be empty"),
+        ));
+    }
+    Ok(OperationSet::new(values))
 }
 
 fn toml_error_message(error: toml::de::Error) -> String {

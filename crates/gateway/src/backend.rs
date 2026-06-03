@@ -193,6 +193,11 @@ impl OperationSet {
             Operation::Embed => self.embed,
         }
     }
+
+    /// Return whether no operations are enabled.
+    pub const fn is_empty(&self) -> bool {
+        !self.query && !self.chat && !self.embed
+    }
 }
 
 /// Server-side backend used by a gateway alias.
@@ -401,18 +406,26 @@ pub struct ProviderGatewayBackend {
 
 impl ProviderGatewayBackend {
     /// Create a backend that maps a public alias to a private provider model.
-    pub fn new(model: impl Into<String>, transport: GatewayAdapterTransport) -> Self {
-        Self {
-            model: model.into(),
-            transport,
-        }
+    ///
+    /// Returns an error when the private provider model is blank or has
+    /// surrounding whitespace.
+    pub fn new(
+        model: impl Into<String>,
+        transport: GatewayAdapterTransport,
+    ) -> GatewayResult<Self> {
+        let model = model.into();
+        validate_provider_model(&model)?;
+        Ok(Self { model, transport })
     }
 
     /// Create a backend from a provider backend implementation.
+    ///
+    /// Returns an error when the private provider model is blank or has
+    /// surrounding whitespace.
     pub fn from_provider_backend(
         model: impl Into<String>,
         backend: Arc<dyn GatewayBackendAdapter>,
-    ) -> Self {
+    ) -> GatewayResult<Self> {
         Self::new(model, GatewayAdapterTransport::from_backend(backend))
     }
 }
@@ -666,6 +679,22 @@ fn reject_mock_gateway_options(options: &BTreeMap<String, Value>) -> GatewayResu
     ))
 }
 
+fn validate_provider_model(model: &str) -> GatewayResult<()> {
+    if model.trim().is_empty() {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "provider backend model must not be empty",
+        ));
+    }
+    if model.trim() != model {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "provider backend model must not contain surrounding whitespace",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_local_options(options: &LocalCogentEngineOptions) -> GatewayResult<()> {
     if options.context_key.trim().is_empty() {
         return Err(GatewayError::new(
@@ -728,7 +757,6 @@ fn provider_error(error: ProviderError) -> GatewayError {
         provider_error_message(error.kind),
     )
     .with_retry_after(error.retry_after)
-    .with_request_id(error.request_id)
 }
 
 fn provider_error_message(kind: ProviderErrorKind) -> &'static str {
@@ -764,7 +792,13 @@ fn provider_error_kind(kind: ProviderErrorKind) -> GatewayErrorKind {
 }
 
 fn engine_error(error: cogentlm_engine::Error) -> GatewayError {
-    let kind = match &error {
+    let kind = engine_error_kind(&error);
+    let message = engine_error_message(&error);
+    GatewayError::new(kind, message)
+}
+
+fn engine_error_kind(error: &cogentlm_engine::Error) -> GatewayErrorKind {
+    match error {
         cogentlm_engine::Error::InvalidRequest(_)
         | cogentlm_engine::Error::InvalidConfig(_)
         | cogentlm_engine::Error::PromptTooLong { .. }
@@ -780,8 +814,30 @@ fn engine_error(error: cogentlm_engine::Error) -> GatewayError {
         | cogentlm_engine::Error::TokenToPiece { .. }
         | cogentlm_engine::Error::Decode(_)
         | cogentlm_engine::Error::SamplerInit => GatewayErrorKind::Internal,
-    };
-    GatewayError::new(kind, error.to_string())
+    }
+}
+
+fn engine_error_message(error: &cogentlm_engine::Error) -> &'static str {
+    match error {
+        cogentlm_engine::Error::InvalidRequest(_)
+        | cogentlm_engine::Error::PromptTooLong { .. }
+        | cogentlm_engine::Error::BatchCapacity { .. } => "local CogentEngine request is invalid",
+        cogentlm_engine::Error::InvalidConfig(_) => "local CogentEngine configuration is invalid",
+        cogentlm_engine::Error::UnsupportedOperation { .. } => {
+            "local CogentEngine backend does not support this operation"
+        }
+        cogentlm_engine::Error::RuntimeNotReady | cogentlm_engine::Error::RuntimeCommand(_) => {
+            "local CogentEngine runtime is overloaded"
+        }
+        cogentlm_engine::Error::ModelLoad { .. } => "local CogentEngine model was not found",
+        cogentlm_engine::Error::InteriorNul(_)
+        | cogentlm_engine::Error::ContextInit
+        | cogentlm_engine::Error::NullPointer(_)
+        | cogentlm_engine::Error::Tokenize
+        | cogentlm_engine::Error::TokenToPiece { .. }
+        | cogentlm_engine::Error::Decode(_)
+        | cogentlm_engine::Error::SamplerInit => "local CogentEngine internal failure",
+    }
 }
 
 #[cfg(test)]

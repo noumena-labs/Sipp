@@ -48,8 +48,5 @@ fn required_env(name: &'static str) -> ExampleResult<String> {
 }
 
 fn env_string(name: &'static str) -> Option<String> {
-    env::var(name)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    env::var(name).ok().filter(|value| !value.is_empty())
 }

@@ -10,7 +10,8 @@ fn py_remote_gateway_config_maps_core_fields() {
         "http://localhost:8787".to_string(),
         "token".to_string(),
         Some(1500),
-    );
+    )
+    .expect("config");
 
     let core = config.to_core();
 
@@ -18,6 +19,112 @@ fn py_remote_gateway_config_maps_core_fields() {
     assert_eq!(core.base_url, "http://localhost:8787");
     assert_eq!(format!("{:?}", core.token), "RemoteSecret([redacted])");
     assert_eq!(core.timeout, Some(Duration::from_millis(1500)));
+}
+
+#[test]
+fn py_remote_gateway_config_rejects_zero_timeout() {
+    pyo3::prepare_freethreaded_python();
+
+    let error = match PyRemoteGatewayConfig::new(
+        "pro-chat".to_string(),
+        "https://gateway.example.test".to_string(),
+        "gateway-token".to_string(),
+        Some(0),
+    ) {
+        Ok(_) => panic!("zero timeout should fail"),
+        Err(error) => error,
+    };
+
+    Python::with_gil(|py| {
+        assert_eq!(
+            error.value_bound(py).to_string(),
+            "RemoteGatewayConfig.timeout_ms must be a positive integer"
+        );
+    });
+}
+
+#[test]
+fn py_add_remote_rejects_empty_alias_before_gateway_transport_config() {
+    pyo3::prepare_freethreaded_python();
+    Python::with_gil(|py| {
+        let client = PyCogentClient::new().expect("client");
+        let config = Py::new(
+            py,
+            PyRemoteGatewayConfig::new(
+                "   ".to_string(),
+                "https://user:gateway-secret@gateway.example.test".to_string(),
+                "gateway-token".to_string(),
+                None,
+            )
+            .expect("config"),
+        )
+        .expect("config");
+        let error = match client.add_remote(py, "pro".to_string(), config) {
+            Ok(_) => panic!("blank alias must reject before transport config"),
+            Err(error) => error,
+        };
+        let message = error.value_bound(py).to_string();
+
+        assert_eq!(message, "remote alias must not be empty");
+        assert!(!message.contains("gateway-secret"));
+        assert!(!message.contains("gateway-token"));
+    });
+}
+
+#[test]
+fn py_add_remote_rejects_id_whitespace_before_gateway_transport_config() {
+    pyo3::prepare_freethreaded_python();
+    Python::with_gil(|py| {
+        let client = PyCogentClient::new().expect("client");
+        let config = Py::new(
+            py,
+            PyRemoteGatewayConfig::new(
+                "pro-chat".to_string(),
+                "https://user:gateway-secret@gateway.example.test".to_string(),
+                "gateway-token".to_string(),
+                None,
+            )
+            .expect("config"),
+        )
+        .expect("config");
+        let error = match client.add_remote(py, " pro ".to_string(), config) {
+            Ok(_) => panic!("whitespace id must reject before transport config"),
+            Err(error) => error,
+        };
+        let message = error.value_bound(py).to_string();
+
+        assert_eq!(message, "remote id must not contain surrounding whitespace");
+        assert!(!message.contains("gateway-secret"));
+        assert!(!message.contains("gateway-token"));
+    });
+}
+
+#[test]
+fn py_add_remote_rejects_alias_surrounding_whitespace() {
+    pyo3::prepare_freethreaded_python();
+    Python::with_gil(|py| {
+        let client = PyCogentClient::new().expect("client");
+        let config = Py::new(
+            py,
+            PyRemoteGatewayConfig::new(
+                " pro-chat ".to_string(),
+                "https://gateway.example.test".to_string(),
+                "gateway-token".to_string(),
+                None,
+            )
+            .expect("config"),
+        )
+        .expect("config");
+        let error = match client.add_remote(py, "pro".to_string(), config) {
+            Ok(_) => panic!("whitespace alias must reject"),
+            Err(error) => error,
+        };
+
+        assert_eq!(
+            error.value_bound(py).to_string(),
+            "remote alias must not contain surrounding whitespace"
+        );
+    });
 }
 
 #[test]
@@ -32,7 +139,8 @@ fn py_add_remote_rejects_gateway_base_url_userinfo() {
                 "https://user:gateway-secret@gateway.example.test".to_string(),
                 "gateway-token".to_string(),
                 None,
-            ),
+            )
+            .expect("config"),
         )
         .expect("config");
         let error = match client.add_remote(py, "pro".to_string(), config) {
@@ -66,6 +174,42 @@ fn py_gateway_options_must_be_json_object() {
 }
 
 #[test]
+fn py_gateway_options_reject_non_string_keys_with_gateway_error() {
+    pyo3::prepare_freethreaded_python();
+    Python::with_gil(|py| {
+        let dict = PyDict::new_bound(py);
+        dict.set_item(7, "provider-secret")
+            .expect("set non-string key");
+
+        let error = py_gateway_options_or_empty(py, Some(dict.into_py(py)))
+            .expect_err("non-string keys must fail");
+        let message = error.value_bound(py).to_string();
+
+        assert_eq!(message, "gateway_options object keys must be strings");
+        assert!(!message.contains("provider-secret"));
+    });
+}
+
+#[test]
+fn py_gateway_options_reject_recursive_containers() {
+    pyo3::prepare_freethreaded_python();
+    Python::with_gil(|py| {
+        let dict = PyDict::new_bound(py);
+        dict.set_item("self", dict.clone())
+            .expect("set recursive dict");
+
+        let error = py_gateway_options_or_empty(py, Some(dict.into_py(py)))
+            .expect_err("recursive containers must fail");
+        let message = error.value_bound(py).to_string();
+
+        assert_eq!(
+            message,
+            "gateway_options must contain JSON-compatible values"
+        );
+    });
+}
+
+#[test]
 fn py_remote_request_rejects_local_only_gateway_options() {
     pyo3::prepare_freethreaded_python();
     Python::with_gil(|py| {
@@ -77,7 +221,8 @@ fn py_remote_request_rejects_local_only_gateway_options() {
                 "https://gateway.example.test".to_string(),
                 "gateway-token".to_string(),
                 None,
-            ),
+            )
+            .expect("config"),
         )
         .expect("config");
         let endpoint = client

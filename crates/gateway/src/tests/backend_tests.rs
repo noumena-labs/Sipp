@@ -6,6 +6,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use axum::response::IntoResponse;
 use cogentlm_core::{ChatMessage, ChatRole, FinishReason, TokenBatch};
 use cogentlm_gateway_providers::{
     GatewayBackendAdapter, ProviderChatRequest, ProviderChatResponse, ProviderEmbedRequest,
@@ -24,7 +25,8 @@ async fn provider_backend_stream_query_uses_generate_stream() {
     let adapter = Arc::new(RecordingAdapter {
         captured: captured.clone(),
     });
-    let backend = ProviderGatewayBackend::from_provider_backend("private-model", adapter);
+    let backend = ProviderGatewayBackend::from_provider_backend("private-model", adapter)
+        .expect("provider backend");
 
     let events = backend
         .stream_query(BackendQueryRequest {
@@ -82,7 +84,8 @@ async fn provider_backend_rejects_request_gateway_options() {
     let backend = ProviderGatewayBackend::from_provider_backend(
         "private-model",
         Arc::new(StreamErrorAdapter),
-    );
+    )
+    .expect("provider backend");
     let gateway_options = [("store".to_string(), json!(true))].into_iter().collect();
 
     let query_error = backend
@@ -122,6 +125,27 @@ async fn provider_backend_rejects_request_gateway_options() {
         .await
         .expect_err("provider embed should reject request gateway_options");
     assert_eq!(embed_error.kind, GatewayErrorKind::InvalidRequest);
+}
+
+#[test]
+fn provider_backend_rejects_invalid_private_model_names() {
+    for (model, message) in [
+        (" \t ", "provider backend model must not be empty"),
+        (
+            " private-model ",
+            "provider backend model must not contain surrounding whitespace",
+        ),
+    ] {
+        let error = match ProviderGatewayBackend::from_provider_backend(
+            model,
+            Arc::new(StreamErrorAdapter),
+        ) {
+            Ok(_) => panic!("invalid private model must fail"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind, GatewayErrorKind::InvalidRequest);
+        assert_eq!(error.message, message);
+    }
 }
 
 #[tokio::test]
@@ -200,7 +224,7 @@ fn provider_errors_are_normalized_before_gateway_boundary() {
         code: Some("provider-secret-code".to_string()),
         message: "provider rejected provider-secret-token".to_string(),
         retry_after: Some(Duration::from_millis(1500)),
-        request_id: Some("upstream-req".to_string()),
+        request_id: Some("req-provider-secret-token".to_string()),
         raw: Some(Box::new(json!({
             "error": {
                 "message": "provider-secret-token",
@@ -212,11 +236,61 @@ fn provider_errors_are_normalized_before_gateway_boundary() {
     let gateway_error = provider_error(error);
 
     assert_eq!(gateway_error.kind, GatewayErrorKind::RateLimited);
-    assert_eq!(gateway_error.code, "rate_limited");
+    assert_eq!(gateway_error.code(), "rate_limited");
     assert_eq!(gateway_error.message, "provider rate limit exceeded");
     assert_eq!(gateway_error.retry_after, Some(Duration::from_millis(1500)));
-    assert_eq!(gateway_error.request_id.as_deref(), Some("upstream-req"));
     assert!(!gateway_error.to_string().contains("provider-secret"));
+    assert!(!format!("{gateway_error:?}").contains("provider-secret"));
+
+    let response = gateway_error.into_response();
+    assert!(response.headers().get("x-request-id").is_none());
+}
+
+#[test]
+fn local_engine_errors_are_normalized_before_gateway_boundary() {
+    let cases = [
+        (
+            cogentlm_engine::Error::ModelLoad {
+                path: r"C:\gateway-secret\models\private.gguf".to_string(),
+            },
+            GatewayErrorKind::ModelNotFound,
+            "local CogentEngine model was not found",
+        ),
+        (
+            cogentlm_engine::Error::RuntimeCommand(
+                "runtime command included gateway-secret".to_string(),
+            ),
+            GatewayErrorKind::Overloaded,
+            "local CogentEngine runtime is overloaded",
+        ),
+        (
+            cogentlm_engine::Error::UnsupportedOperation {
+                operation: "embed",
+                reason: "private model class included gateway-secret".to_string(),
+            },
+            GatewayErrorKind::UnsupportedFeature,
+            "local CogentEngine backend does not support this operation",
+        ),
+        (
+            cogentlm_engine::Error::InvalidConfig("gateway-secret config"),
+            GatewayErrorKind::InvalidRequest,
+            "local CogentEngine configuration is invalid",
+        ),
+        (
+            cogentlm_engine::Error::InvalidRequest("gateway-secret request"),
+            GatewayErrorKind::InvalidRequest,
+            "local CogentEngine request is invalid",
+        ),
+    ];
+
+    for (engine, kind, message) in cases {
+        let gateway_error = engine_error(engine);
+
+        assert_eq!(gateway_error.kind, kind);
+        assert_eq!(gateway_error.message, message);
+        assert!(!gateway_error.to_string().contains("gateway-secret"));
+        assert!(!format!("{gateway_error:?}").contains("gateway-secret"));
+    }
 }
 
 #[tokio::test]
@@ -224,7 +298,8 @@ async fn provider_stream_errors_are_normalized_before_gateway_boundary() {
     let backend = ProviderGatewayBackend::from_provider_backend(
         "private-model",
         Arc::new(StreamErrorAdapter),
-    );
+    )
+    .expect("provider backend");
 
     let mut stream = backend
         .stream_query(BackendQueryRequest {
@@ -242,10 +317,9 @@ async fn provider_stream_errors_are_normalized_before_gateway_boundary() {
         .expect_err("provider stream error should fail");
 
     assert_eq!(error.kind, GatewayErrorKind::RateLimited);
-    assert_eq!(error.code, "rate_limited");
+    assert_eq!(error.code(), "rate_limited");
     assert_eq!(error.message, "provider rate limit exceeded");
     assert_eq!(error.retry_after, Some(Duration::from_millis(1500)));
-    assert_eq!(error.request_id.as_deref(), Some("upstream-req"));
     assert!(!error.to_string().contains("provider-secret"));
     assert!(!format!("{error:?}").contains("provider-secret"));
 }
@@ -385,7 +459,7 @@ fn provider_stream_error() -> ProviderError {
         code: Some("provider-secret-code".to_string()),
         message: "provider rejected provider-secret-token".to_string(),
         retry_after: Some(Duration::from_millis(1500)),
-        request_id: Some("upstream-req".to_string()),
+        request_id: Some("req-provider-secret-token".to_string()),
         raw: Some(Box::new(json!({
             "error": {
                 "message": "provider-secret-token",

@@ -294,6 +294,10 @@ export class AssetStore {
     }
   }
 
+  public requiresBrowserSplit(sourceBytes: number): boolean {
+    return sourceBytes > this.browserCachePolicy.directLoadMaxBytes;
+  }
+
   public async resolveRemoteMetadata(rawUrl: string, signal?: AbortSignal): Promise<RemoteAssetMetadata> {
     this.ensureAvailable();
     const canonicalUrl = this.parseUrl(rawUrl).toString();

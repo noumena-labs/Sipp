@@ -14,8 +14,12 @@ impl GatewaySecret {
         &self.0
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.0.is_empty()
+    pub(crate) fn is_blank(&self) -> bool {
+        self.0.trim().is_empty()
+    }
+
+    pub(crate) fn contains_whitespace(&self) -> bool {
+        self.0.chars().any(char::is_whitespace)
     }
 }
 

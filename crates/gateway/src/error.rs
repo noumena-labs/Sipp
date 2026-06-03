@@ -81,14 +81,10 @@ impl GatewayErrorKind {
 pub struct GatewayError {
     /// Error classification.
     pub kind: GatewayErrorKind,
-    /// Public gateway error code.
-    pub code: String,
     /// Human-readable message safe to return to clients.
     pub message: String,
     /// Retry delay when applicable.
     pub retry_after: Option<Duration>,
-    /// Upstream or gateway request id when available.
-    pub request_id: Option<String>,
 }
 
 impl GatewayError {
@@ -96,20 +92,18 @@ impl GatewayError {
     pub fn new(kind: GatewayErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
-            code: kind.as_str().to_string(),
             message: message.into(),
             retry_after: None,
-            request_id: None,
         }
+    }
+
+    /// Stable gateway error code derived from the classification.
+    pub const fn code(&self) -> &'static str {
+        self.kind.as_str()
     }
 
     pub(crate) fn with_retry_after(mut self, retry_after: Option<Duration>) -> Self {
         self.retry_after = retry_after;
-        self
-    }
-
-    pub(crate) fn with_request_id(mut self, request_id: Option<String>) -> Self {
-        self.request_id = request_id;
         self
     }
 }
@@ -129,18 +123,11 @@ impl IntoResponse for GatewayError {
                 retry_after.as_millis().to_string(),
             );
         }
-        if let Some(request_id) = &self.request_id {
-            insert_header_if_valid(
-                &mut headers,
-                HeaderName::from_static("x-request-id"),
-                request_id,
-            );
-        }
 
         let status = self.kind.status_code();
         let body = Json(ErrorEnvelope {
             error: ErrorBody {
-                code: self.code,
+                code: self.code().to_string(),
                 message: self.message,
             },
         });

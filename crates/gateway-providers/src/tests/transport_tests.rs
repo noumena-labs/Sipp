@@ -72,6 +72,32 @@ fn transport_rejects_plain_http_non_loopback_base_url() {
 }
 
 #[test]
+fn transport_rejects_base_url_surrounding_whitespace() {
+    for base_url in [
+        " https://example.com/v1",
+        "https://example.com/v1 ",
+        "https://example.com/v1/ ",
+    ] {
+        let err = match HttpTransport::new_with_options(
+            ProviderKind::OpenAiCompatible,
+            base_url,
+            ProviderAuth::Bearer(crate::SecretString::new("token")),
+            Vec::new(),
+            None,
+        ) {
+            Ok(_) => panic!("base URL whitespace should fail"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind, ProviderErrorKind::InvalidRequest);
+        assert_eq!(
+            err.message,
+            "provider base_url must not contain surrounding whitespace"
+        );
+    }
+}
+
+#[test]
 fn transport_rejects_base_url_userinfo() {
     let err = match HttpTransport::new_with_options(
         ProviderKind::OpenAiCompatible,
@@ -87,6 +113,32 @@ fn transport_rejects_base_url_userinfo() {
     assert_eq!(err.kind, ProviderErrorKind::InvalidRequest);
     assert_eq!(err.message, "provider base_url must not include userinfo");
     assert!(!format!("{err:?}").contains("provider-secret"));
+}
+
+#[test]
+fn transport_rejects_base_url_query_and_fragment() {
+    for base_url in [
+        "https://example.com/v1?token=provider-secret",
+        "https://example.com/v1#provider-secret",
+    ] {
+        let err = match HttpTransport::new_with_options(
+            ProviderKind::OpenAiCompatible,
+            base_url,
+            ProviderAuth::Bearer(crate::SecretString::new("token")),
+            Vec::new(),
+            None,
+        ) {
+            Ok(_) => panic!("base URL query and fragment should fail"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind, ProviderErrorKind::InvalidRequest);
+        assert_eq!(
+            err.message,
+            "provider base_url must not include query or fragment"
+        );
+        assert!(!format!("{err:?}").contains("provider-secret"));
+    }
 }
 
 #[test]
@@ -117,6 +169,47 @@ fn static_provider_headers_are_sensitive() {
         .is_sensitive());
 }
 
+#[test]
+fn provider_auth_rejects_blank_or_whitespace_secrets() {
+    let blank = build_request_headers(
+        ProviderKind::OpenAiCompatible,
+        ProviderAuth::Bearer(crate::SecretString::new(" \t ")),
+        Vec::new(),
+    )
+    .expect_err("blank bearer token must fail");
+    assert_eq!(blank.kind, ProviderErrorKind::Authentication);
+    assert_eq!(blank.message, "bearer token must not be empty");
+
+    let whitespace = build_request_headers(
+        ProviderKind::OpenAiCompatible,
+        ProviderAuth::Bearer(crate::SecretString::new("secret token")),
+        Vec::new(),
+    )
+    .expect_err("whitespace bearer token must fail");
+    assert_eq!(whitespace.kind, ProviderErrorKind::InvalidRequest);
+    assert_eq!(
+        whitespace.message,
+        "bearer token must not contain whitespace"
+    );
+    assert!(!format!("{whitespace:?}").contains("secret token"));
+
+    let header_value = build_request_headers(
+        ProviderKind::OpenAiCompatible,
+        ProviderAuth::Header {
+            name: "x-api-key".to_string(),
+            value: crate::SecretString::new("secret token"),
+        },
+        Vec::new(),
+    )
+    .expect_err("whitespace header value must fail");
+    assert_eq!(header_value.kind, ProviderErrorKind::InvalidRequest);
+    assert_eq!(
+        header_value.message,
+        "auth header value must not contain whitespace"
+    );
+    assert!(!format!("{header_value:?}").contains("secret token"));
+}
+
 #[tokio::test]
 async fn transport_does_not_follow_provider_redirects() {
     let server = MockServer::start().await;
@@ -145,4 +238,33 @@ async fn transport_does_not_follow_provider_redirects() {
 
     assert_eq!(err.status, Some(307));
     assert_eq!(err.kind, ProviderErrorKind::Provider);
+}
+
+#[tokio::test]
+async fn provider_http_error_body_is_capped() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("x".repeat((1 << 20) + 1)))
+        .mount(&server)
+        .await;
+
+    let transport = HttpTransport::new_with_options(
+        ProviderKind::OpenAiCompatible,
+        server.uri(),
+        ProviderAuth::Bearer(crate::SecretString::new("token")),
+        Vec::new(),
+        None,
+    )
+    .expect("transport");
+
+    let err = match transport.get_json("/models").await {
+        Ok(_) => panic!("huge provider error should fail"),
+        Err(err) => err,
+    };
+
+    assert_eq!(err.kind, ProviderErrorKind::Overloaded);
+    assert_eq!(err.status, Some(500));
+    assert_eq!(err.message, "provider error response exceeded body limit");
+    assert!(!format!("{err:?}").contains(&"x".repeat(1024)));
 }

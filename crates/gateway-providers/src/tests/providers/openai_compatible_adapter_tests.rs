@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use bytes::Bytes;
 use cogentlm_core::{ChatMessage, ChatRole, FinishReason, TokenBatch};
 use futures_util::StreamExt;
 use serde_json::json;
@@ -10,8 +11,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::*;
 use crate::{
-    OpenAiCompatibleProtocol, ProviderAuth, ProviderErrorKind, ProviderGenerationOptions,
-    SecretString, TokenUsage,
+    OpenAiCompatibleProtocol, ProviderAuth, ProviderError, ProviderErrorKind,
+    ProviderGenerationOptions, SecretString, TokenUsage,
 };
 
 fn config(server: &MockServer) -> OpenAiCompatibleAdapterConfig {
@@ -421,6 +422,45 @@ async fn maps_provider_http_errors() {
 }
 
 #[tokio::test]
+async fn maps_openai_compatible_chat_error_body() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(header("authorization", "Bearer token"))
+        .and(body_json(json!({
+            "model": "model-a",
+            "messages": [
+                { "role": "user", "content": "hello" }
+            ]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "error": {
+                "message": "slow down",
+                "code": "rate_limit"
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let provider =
+        OpenAiCompatibleAdapter::new(config(&server)).expect("OpenAI-compatible adapter");
+    let err = provider
+        .chat(ProviderChatRequest {
+            model: "model-a".to_string(),
+            messages: vec![ChatMessage::new(ChatRole::User, "hello")],
+            options: ProviderGenerationOptions::default(),
+            provider_options: Default::default(),
+        })
+        .await
+        .expect_err("provider error body should fail");
+
+    assert_eq!(err.kind, ProviderErrorKind::RateLimited);
+    assert_eq!(err.code.as_deref(), Some("rate_limit"));
+    assert_eq!(err.message, "slow down");
+    assert!(err.raw.is_some());
+}
+
+#[tokio::test]
 async fn classifies_non_json_error_body_by_status() {
     // Gateways/CDNs often return HTML or plain text on 5xx; the error must
     // still be classified by HTTP status, not collapsed to a transport error.
@@ -551,6 +591,208 @@ async fn streams_openai_compatible_chat_chunks() {
             finish_reason: FinishReason::Stop
         }
     ));
+}
+
+#[tokio::test]
+async fn stream_ignores_null_error_field() {
+    let chunks = futures_util::stream::iter([Ok::<_, ProviderError>(Bytes::from_static(
+        concat!(
+            "data: {\"error\":null,\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n"
+        )
+        .as_bytes(),
+    ))]);
+    let events = openai_stream_events(
+        Some("req-null-error".to_string()),
+        Box::pin(chunks),
+        ProviderKind::OpenAiCompatible,
+    )
+    .collect::<Vec<_>>()
+    .await
+    .into_iter()
+    .collect::<ProviderResult<Vec<_>>>()
+    .expect("events");
+
+    assert!(matches!(
+        &events[0],
+        ProviderStreamEvent::TokenBatch(TokenBatch { text, .. }) if text == "ok"
+    ));
+    assert!(matches!(
+        events[1],
+        ProviderStreamEvent::Finished {
+            finish_reason: FinishReason::Stop
+        }
+    ));
+}
+
+#[tokio::test]
+async fn openai_compatible_stream_rejects_eof_before_finish() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(header("authorization", "Bearer token"))
+            .and(body_json(json!({
+                "model": "model-a",
+                "messages": [
+                    { "role": "user", "content": "hello" }
+                ],
+                "stream": true
+            })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("x-request-id", "req-truncated")
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n",
+                    ),
+            )
+            .mount(&server)
+            .await;
+
+    let provider =
+        OpenAiCompatibleAdapter::new(config(&server)).expect("OpenAI-compatible adapter");
+    let mut stream = provider
+        .stream_chat(ProviderChatRequest {
+            model: "model-a".to_string(),
+            messages: vec![ChatMessage::new(ChatRole::User, "hello")],
+            options: ProviderGenerationOptions::default(),
+            provider_options: Default::default(),
+        })
+        .await
+        .expect("stream");
+
+    let first = stream
+        .next()
+        .await
+        .expect("token event")
+        .expect("token event");
+    let error = stream
+        .next()
+        .await
+        .expect("missing finish error")
+        .expect_err("truncated provider stream must fail");
+
+    assert!(matches!(
+        first,
+        ProviderStreamEvent::TokenBatch(TokenBatch { text, .. }) if text == "partial"
+    ));
+    assert_eq!(error.kind, ProviderErrorKind::Provider);
+    assert_eq!(
+        error.message,
+        "OpenAI-compatible stream ended before finish_reason"
+    );
+    assert!(stream.next().await.is_none());
+}
+
+#[tokio::test]
+async fn stream_rejects_non_object_payload() {
+    let chunks = futures_util::stream::iter([Ok::<_, ProviderError>(Bytes::from_static(
+        concat!("data: []\n\n", "data: [DONE]\n\n").as_bytes(),
+    ))]);
+    let mut stream = openai_stream_events(
+        Some("req-array-payload".to_string()),
+        Box::pin(chunks),
+        ProviderKind::OpenAiCompatible,
+    );
+
+    let error = stream
+        .next()
+        .await
+        .expect("array payload error")
+        .expect_err("array payload should fail");
+
+    assert_eq!(error.kind, ProviderErrorKind::Provider);
+    assert_eq!(
+        error.message,
+        "OpenAI-compatible stream payload must be a JSON object"
+    );
+    assert!(stream.next().await.is_none());
+}
+
+#[tokio::test]
+async fn stream_rejects_payloads_after_finish_reason() {
+    let chunks = futures_util::stream::iter([
+        Ok::<_, ProviderError>(Bytes::from_static(
+            concat!(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: [DONE]\n\n",
+            )
+            .as_bytes(),
+        )),
+        Ok(Bytes::from_static(
+            b"data: {\"choices\":[{\"delta\":{\"content\":\"late\"},\"finish_reason\":null}]}\n\n",
+        )),
+    ]);
+    let mut stream = openai_stream_events(
+        Some("req-after-finish".to_string()),
+        Box::pin(chunks),
+        ProviderKind::OpenAiCompatible,
+    );
+
+    let first = stream
+        .next()
+        .await
+        .expect("token event")
+        .expect("token event");
+    let finished = stream
+        .next()
+        .await
+        .expect("finish event")
+        .expect("finish event");
+    let error = stream
+        .next()
+        .await
+        .expect("late event error")
+        .expect_err("late payload should fail");
+
+    assert!(matches!(
+        first,
+        ProviderStreamEvent::TokenBatch(TokenBatch { text, .. }) if text == "hi"
+    ));
+    assert!(matches!(
+        finished,
+        ProviderStreamEvent::Finished {
+            finish_reason: FinishReason::Stop
+        }
+    ));
+    assert_eq!(error.kind, ProviderErrorKind::Provider);
+    assert_eq!(
+        error.message,
+        "OpenAI-compatible stream event received after finish_reason"
+    );
+    assert!(stream.next().await.is_none());
+}
+
+#[tokio::test]
+async fn stream_rejects_choice_text_after_finish_reason_in_same_payload() {
+    let chunks = futures_util::stream::iter([Ok::<_, ProviderError>(Bytes::from_static(
+        concat!(
+            "data: {\"choices\":[",
+            "{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"},",
+            "{\"delta\":{\"content\":\"late\"},\"finish_reason\":null}",
+            "]}\n\n",
+        )
+        .as_bytes(),
+    ))]);
+    let mut stream = openai_stream_events(
+        Some("req-same-payload-after-finish".to_string()),
+        Box::pin(chunks),
+        ProviderKind::OpenAiCompatible,
+    );
+
+    let error = stream
+        .next()
+        .await
+        .expect("same-payload error")
+        .expect_err("late choice text should fail");
+
+    assert_eq!(error.kind, ProviderErrorKind::Provider);
+    assert_eq!(
+        error.message,
+        "OpenAI-compatible stream event received after finish_reason"
+    );
+    assert!(stream.next().await.is_none());
 }
 
 #[tokio::test]

@@ -636,7 +636,6 @@ export class ModelService implements ModelLifecycleService {
     let prepared: RustLifecyclePrepareLoadValue | null = null;
     let rust: RustLifecycleBridge | null = null;
     try {
-      await this.cleanupBrowserSplitArtifacts(manifest);
       const rustSource = await this.buildRustLoadSource(source, manifest, loadOptions);
       const [resolvedRust, backend] = await Promise.all([rustPromise, backendPromise]);
       rust = resolvedRust;
@@ -1096,6 +1095,9 @@ export class ModelService implements ModelLifecycleService {
       return assets;
     }
 
+    if (this.assetStore.requiresBrowserSplit(metadata.bytes)) {
+      await this.cleanupBrowserSplitArtifacts(manifest);
+    }
     const records = await this.assetStore.downloadRemoteSplitGguf(
       metadata,
       this.runtime,
@@ -1122,6 +1124,9 @@ export class ModelService implements ModelLifecycleService {
       return assets;
     }
 
+    if (this.assetStore.requiresBrowserSplit(file.size)) {
+      await this.cleanupBrowserSplitArtifacts(manifest);
+    }
     const records = await this.assetStore.installLocalSplitGguf(
       file,
       this.runtime,
