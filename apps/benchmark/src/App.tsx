@@ -6,7 +6,7 @@ import {
   type ModelSource,
   type ObservabilitySnapshot,
   type TokenBatch,
-} from '@noumena-labs/cogentlm-browser';
+} from '@noumena-labs/cogentlm';
 import { MetricCard } from './components/MetricCard';
 import {
   buildBenchmarkScenarios,
@@ -96,6 +96,8 @@ interface BenchmarkReport {
   trace: BenchmarkTraceReport;
 }
 
+const AUTO_SPLIT_SMOKE_BYTES = 256 * 1024 * 1024;
+
 function getDefaultRuntimeOptions() {
   return {
     placement: {
@@ -106,6 +108,19 @@ function getDefaultRuntimeOptions() {
     },
     cache: {
       mode: 'live_slot_and_snapshot' as const,
+    },
+  };
+}
+
+function getClientOptions() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('forceAutoSplit') !== '1') {
+    return {};
+  }
+  return {
+    browserCache: {
+      directLoadMaxBytes: AUTO_SPLIT_SMOKE_BYTES,
+      shardMaxBytes: AUTO_SPLIT_SMOKE_BYTES,
     },
   };
 }
@@ -439,7 +454,7 @@ export default function App() {
 
     void (async () => {
       try {
-        const nextClient = new CogentClient();
+        const nextClient = new CogentClient(getClientOptions());
         if (disposed) {
           await nextClient.close();
           return;
@@ -554,6 +569,10 @@ export default function App() {
       onProgress: (progress) => {
         if (progress.phase === 'download') {
           setStatus(`Downloading model ${Math.floor(progress.percent ?? 0)}%`);
+        } else if (progress.phase === 'store') {
+          setStatus(`Storing model ${Math.floor(progress.percent ?? 0)}%`);
+        } else if (progress.phase === 'split') {
+          setStatus(`Preparing model shards ${Math.floor(progress.percent ?? 0)}%`);
         } else if (progress.phase === 'load') {
           setStatus('Loading into memory');
         }

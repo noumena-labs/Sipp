@@ -161,6 +161,5 @@ pub fn model_entry_from_assets(
 }
 
 #[cfg(test)]
-mod tests {
-    mod registry_tests;
-}
+#[path = "../../tests/lifecycle/registry_tests.rs"]
+mod registry_tests;

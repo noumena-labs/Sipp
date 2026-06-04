@@ -284,6 +284,5 @@ pub fn vision_model_source_from_paths(
 }
 
 #[cfg(test)]
-mod tests {
-    mod service_tests;
-}
+#[path = "../../tests/lifecycle/service_tests.rs"]
+mod service_tests;

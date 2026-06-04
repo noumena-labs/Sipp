@@ -2,7 +2,9 @@ mod api;
 mod lifecycle;
 
 #[cfg(test)]
-mod tests {
-    mod api_tests;
-    mod lifecycle_tests;
-}
+#[path = "../../../tests/runtime/inference_runtime/request/api_tests.rs"]
+mod api_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/runtime/inference_runtime/request/lifecycle_tests.rs"]
+mod lifecycle_tests;

@@ -7,21 +7,33 @@ use cogentlm_engine::engine::{CogentEngine, NativeRuntimeConfig};
 
 use crate::dispatch::InferenceEndpoint;
 use crate::local_endpoint::LocalEndpoint;
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 use crate::remote_endpoint::RemoteEndpoint;
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 use crate::remote_executor::RemoteExecutor;
-#[cfg(feature = "providers")]
-use crate::RemoteConfig;
+#[cfg(feature = "remote")]
+use crate::RemoteGatewayConfig;
 use crate::{
     CogentChatRequest, CogentEmbedRequest, CogentEmbeddingRun, CogentError, CogentQueryRequest,
     CogentResult, CogentTextRun, EndpointCapabilities, EndpointRef,
 };
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "tests/client_tests.rs"]
+mod client_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+
 /// Public inference facade over registered local and remote endpoints.
 pub struct CogentClient {
     endpoints: HashMap<EndpointRef, Arc<dyn InferenceEndpoint>>,
-    #[cfg(feature = "providers")]
+    #[cfg(feature = "remote")]
     remote_executor: Option<RemoteExecutor>,
 }
 
@@ -30,7 +42,7 @@ impl CogentClient {
     pub fn new() -> Self {
         Self {
             endpoints: HashMap::new(),
-            #[cfg(feature = "providers")]
+            #[cfg(feature = "remote")]
             remote_executor: None,
         }
     }
@@ -68,17 +80,43 @@ impl CogentClient {
     }
 
     /// Register a remote model endpoint.
-    #[cfg(feature = "providers")]
+    #[cfg(feature = "remote")]
     pub fn add_remote(
         &mut self,
         id: impl Into<String>,
-        config: RemoteConfig,
+        config: RemoteGatewayConfig,
     ) -> CogentResult<EndpointRef> {
         let id = normalize_id(id, "remote id")?;
         let endpoint = EndpointRef::Remote { id };
         self.reject_duplicate(&endpoint)?;
         let (model, client) = config.build()?;
-        let model = normalize_id(model, "remote model id")?;
+        let executor = self.remote_executor()?;
+        self.endpoints.insert(
+            endpoint.clone(),
+            Arc::new(RemoteEndpoint::new(
+                endpoint.clone(),
+                model,
+                EndpointCapabilities::unknown(),
+                client,
+                executor,
+            )),
+        );
+        Ok(endpoint)
+    }
+
+    /// Replace the gateway config for an existing remote endpoint.
+    #[cfg(feature = "remote")]
+    pub fn update_remote(
+        &mut self,
+        id: impl Into<String>,
+        config: RemoteGatewayConfig,
+    ) -> CogentResult<EndpointRef> {
+        let id = normalize_id(id, "remote id")?;
+        let endpoint = EndpointRef::Remote { id };
+        if !self.endpoints.contains_key(&endpoint) {
+            return Err(CogentError::EndpointNotFound(endpoint));
+        }
+        let (model, client) = config.build()?;
         let executor = self.remote_executor()?;
         self.endpoints.insert(
             endpoint.clone(),
@@ -167,7 +205,7 @@ impl CogentClient {
         }
     }
 
-    #[cfg(feature = "providers")]
+    #[cfg(feature = "remote")]
     fn remote_executor(&mut self) -> CogentResult<RemoteExecutor> {
         if let Some(executor) = &self.remote_executor {
             return Ok(executor.clone());
@@ -198,108 +236,16 @@ fn ensure_supported(endpoint: &dyn InferenceEndpoint, operation: &'static str) -
 
 fn normalize_id(id: impl Into<String>, name: &'static str) -> CogentResult<String> {
     let id = id.into();
-    let id = id.trim().to_string();
-    if id.is_empty() {
+    let trimmed = id.trim();
+    if trimmed.is_empty() {
         Err(CogentError::InvalidRequest(format!(
             "{name} must not be empty"
         )))
+    } else if trimmed != id.as_str() {
+        Err(CogentError::InvalidRequest(format!(
+            "{name} must not contain surrounding whitespace"
+        )))
     } else {
         Ok(id)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::dispatch::InferenceEndpoint;
-
-    struct FakeEndpoint {
-        endpoint: EndpointRef,
-        capabilities: EndpointCapabilities,
-    }
-
-    impl InferenceEndpoint for FakeEndpoint {
-        fn endpoint(&self) -> &EndpointRef {
-            &self.endpoint
-        }
-
-        fn capabilities(&self) -> &EndpointCapabilities {
-            &self.capabilities
-        }
-
-        fn query(&self, _request: CogentQueryRequest) -> CogentTextRun {
-            CogentTextRun::ready_err(CogentError::Internal("fake query".to_string()))
-        }
-
-        fn chat(&self, _request: CogentChatRequest) -> CogentTextRun {
-            CogentTextRun::ready_err(CogentError::Internal("fake chat".to_string()))
-        }
-
-        fn embed(&self, _request: CogentEmbedRequest) -> CogentEmbeddingRun {
-            CogentEmbeddingRun::ready_err(CogentError::Internal("fake embed".to_string()))
-        }
-    }
-
-    #[test]
-    fn automatic_resolution_is_local_only_and_support_based() {
-        let mut client = CogentClient::new();
-        let selected = EndpointRef::Local {
-            id: "local-a".to_string(),
-        };
-        client.endpoints.insert(
-            selected.clone(),
-            Arc::new(FakeEndpoint {
-                endpoint: selected.clone(),
-                capabilities: EndpointCapabilities {
-                    query: CapabilitySupport::Supported,
-                    chat: CapabilitySupport::Unsupported,
-                    embed: CapabilitySupport::Unsupported,
-                },
-            }),
-        );
-        client.endpoints.insert(
-            EndpointRef::Local {
-                id: "local-b".to_string(),
-            },
-            Arc::new(FakeEndpoint {
-                endpoint: EndpointRef::Local {
-                    id: "local-b".to_string(),
-                },
-                capabilities: EndpointCapabilities {
-                    query: CapabilitySupport::Unsupported,
-                    chat: CapabilitySupport::Supported,
-                    embed: CapabilitySupport::Unsupported,
-                },
-            }),
-        );
-
-        let endpoint = client.resolve(None, "query").expect("resolved endpoint");
-
-        assert_eq!(endpoint.endpoint(), &selected);
-    }
-
-    #[test]
-    fn duplicate_endpoint_registration_is_invalid() {
-        let mut client = CogentClient::new();
-        let endpoint = EndpointRef::Local {
-            id: "local".to_string(),
-        };
-        client.endpoints.insert(
-            endpoint.clone(),
-            Arc::new(FakeEndpoint {
-                endpoint: endpoint.clone(),
-                capabilities: EndpointCapabilities {
-                    query: CapabilitySupport::Supported,
-                    chat: CapabilitySupport::Unsupported,
-                    embed: CapabilitySupport::Unsupported,
-                },
-            }),
-        );
-
-        let error = client
-            .reject_duplicate(&endpoint)
-            .expect_err("duplicate must reject");
-
-        assert!(matches!(error, CogentError::InvalidRequest(_)));
     }
 }

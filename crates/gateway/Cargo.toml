@@ -1,0 +1,39 @@
+[package]
+name = "cogentlm-gateway"
+description = "Server-side CogentLM Remote Gateway implementation"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+version.workspace = true
+
+[features]
+default = ["native"]
+native = ["cogentlm-engine/native"]
+backend-dl = ["cogentlm-engine/backend-dl"]
+cuda = ["cogentlm-engine/cuda"]
+metal = ["cogentlm-engine/metal"]
+vulkan = ["cogentlm-engine/vulkan"]
+openmp = ["cogentlm-engine/openmp"]
+
+[dependencies]
+anyhow.workspace = true
+async-trait = "0.1"
+axum = "0.8"
+clap.workspace = true
+cogentlm-core.workspace = true
+cogentlm-engine = { workspace = true, default-features = false }
+cogentlm-gateway-providers.workspace = true
+futures-util = "0.3"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync"] }
+toml = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+tower = "0.5"
+wiremock = "0.6"

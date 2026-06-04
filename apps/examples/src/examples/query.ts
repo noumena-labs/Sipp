@@ -1,4 +1,4 @@
-import type { CogentClient } from '@noumena-labs/cogentlm-browser';
+import type { CogentClient } from '@noumena-labs/cogentlm';
 import { Example } from './base-example';
 
 const ENCODER_DECODER_PROMPT = 'translate English to German: The house is wonderful.';

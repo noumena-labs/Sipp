@@ -1,25 +1,25 @@
 use std::env;
 
-use cogentlm_client::{RemoteConfig, RemoteOpenAiConfig, RemoteSecret};
+use cogentlm_client::{RemoteGatewayConfig, RemoteSecret};
 
 pub type ExampleResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 pub struct ExampleArgs {
-    pub model: String,
+    pub alias: String,
     pub input: String,
 }
 
 pub fn args(default_input: &'static str) -> ExampleResult<ExampleArgs> {
     let mut args = env::args().skip(1);
-    let model = args.next().ok_or_else(|| {
+    let alias = args.next().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "usage: cargo run -p cogentlm-client --example remote_<query|chat|embed> -- <remote-model> [input]",
+                "usage: cargo run -p cogentlm-client --example remote_gateway_<query|chat|embed> -- <gateway-alias> [input]",
             )
     })?;
     let input = args.collect::<Vec<_>>().join(" ");
     Ok(ExampleArgs {
-        model,
+        alias,
         input: if input.is_empty() {
             default_input.to_string()
         } else {
@@ -28,13 +28,13 @@ pub fn args(default_input: &'static str) -> ExampleResult<ExampleArgs> {
     })
 }
 
-pub fn openai_remote(model: String) -> ExampleResult<RemoteConfig> {
-    Ok(RemoteConfig::OpenAi(RemoteOpenAiConfig {
-        model,
-        api_key: RemoteSecret::new(required_env("OPENAI_API_KEY")?),
-        base_url: env_string("COGENTLM_OPENAI_BASE_URL"),
+pub fn gateway_remote(alias: String) -> ExampleResult<RemoteGatewayConfig> {
+    Ok(RemoteGatewayConfig {
+        alias,
+        base_url: required_env("COGENTLM_GATEWAY_URL")?,
+        token: RemoteSecret::new(required_env("COGENTLM_GATEWAY_TOKEN")?),
         timeout: None,
-    }))
+    })
 }
 
 fn required_env(name: &'static str) -> ExampleResult<String> {
@@ -48,8 +48,5 @@ fn required_env(name: &'static str) -> ExampleResult<String> {
 }
 
 fn env_string(name: &'static str) -> Option<String> {
-    env::var(name)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    env::var(name).ok().filter(|value| !value.is_empty())
 }

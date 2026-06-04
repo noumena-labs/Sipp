@@ -205,6 +205,5 @@ fn parse_backend_device(value: &Value) -> BackendDevice {
 }
 
 #[cfg(test)]
-mod tests {
-    mod stats_tests;
-}
+#[path = "../../../tests/engine/driver/stats_tests.rs"]
+mod stats_tests;

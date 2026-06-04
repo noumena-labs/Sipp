@@ -18,33 +18,50 @@ export function readArgs(defaultInput) {
   };
 }
 
-export async function loadClient(model, { embeddings = false } = {}) {
+export function readVisionArgs(defaultInput) {
+  const model = process.argv[2];
+  const projector = process.argv[3];
+  const image = process.argv[4];
+  if (!model || !projector || !image) {
+    console.error(
+      'usage: node examples/vision_chat.mjs <model.gguf> <projector.gguf> <image> [input]',
+    );
+    process.exit(2);
+  }
+  return {
+    model,
+    projector,
+    image,
+    input: process.argv.slice(5).join(' ') || defaultInput,
+  };
+}
+
+export async function loadClient(model, { embeddings = false, projectorPath = undefined } = {}) {
   setLlamaLogQuiet(true);
   console.log(`backend_before_load=${backendObservabilityJson(true)}`);
   const client = new CogentClient();
-  await client.addLocal('default', model, runtimeConfig({ embeddings }));
+  await client.addLocal('default', model, runtimeConfig({ embeddings, projectorPath }));
   console.log(`backend_after_load=${backendObservabilityJson(true)}`);
   return client;
 }
 
 export function readRemoteArgs(defaultInput) {
-  const model = process.argv[2];
-  if (!model) {
-    console.error('usage: node examples/remote_<query|chat|embed>.mjs <remote-model> [input]');
+  const alias = process.argv[2];
+  if (!alias) {
+    console.error('usage: node examples/remote_<query|chat|embed>.mjs <gateway-alias> [input]');
     process.exit(2);
   }
   return {
-    model,
+    alias,
     input: process.argv.slice(3).join(' ') || defaultInput,
   };
 }
 
-export function addOpenAiRemote(client, model) {
-  return client.addRemote('openai', {
-    kind: 'openai',
-    model,
-    apiKey: requiredEnv('OPENAI_API_KEY'),
-    baseUrl: process.env.COGENTLM_OPENAI_BASE_URL,
+export function addGatewayRemote(client, alias) {
+  return client.addRemote(alias, {
+    alias,
+    baseUrl: requiredEnv('COGENTLM_GATEWAY_URL'),
+    token: requiredEnv('COGENTLM_GATEWAY_TOKEN'),
   });
 }
 
@@ -67,11 +84,11 @@ export function printText(result) {
   console.log(`text=${result.text.trim()}`);
   if (result.localStats) {
     console.log(
-      `metrics=ttft_ms:${result.localStats.ttftMs} ` +
-      `decode_ms:${result.localStats.decodeMs.toFixed(3)} ` +
+      `metrics=ttft_ms:${formatOptionalMetric(result.localStats.ttftMs)} ` +
+      `decode_ms:${formatOptionalMetric(result.localStats.decodeMs)} ` +
       `output_tokens:${result.localStats.outputTokens} ` +
-      `e2e_tps:${result.localStats.e2eTokensPerSecond} ` +
-      `decode_tps:${result.localStats.decodeTokensPerSecond}`
+      `e2e_tps:${formatOptionalMetric(result.localStats.e2eTokensPerSecond)} ` +
+      `decode_tps:${formatOptionalMetric(result.localStats.decodeTokensPerSecond)}`
     );
   }
 }
@@ -85,7 +102,8 @@ export function printEmbedding(result) {
   console.log(`preview=[${preview}]`);
 }
 
-function runtimeConfig({ embeddings }) {
+function runtimeConfig({ embeddings, projectorPath }) {
+  const multimodal = projectorPath == null ? {} : { projector_path: projectorPath };
   return {
     placement: {
       gpu_layers: gpuLayers(),
@@ -107,7 +125,7 @@ function runtimeConfig({ embeddings }) {
     cache: {
       mode: 'live_slot_prefix',
     },
-    multimodal: {},
+    multimodal,
     residency: {
       max_gpu_models_per_device: 1,
     },
@@ -115,6 +133,10 @@ function runtimeConfig({ embeddings }) {
       runtime_metrics: true,
     },
   };
+}
+
+function formatOptionalMetric(value) {
+  return typeof value === 'number' ? value.toFixed(3) : 'n/a';
 }
 
 function gpuLayers() {

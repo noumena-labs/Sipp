@@ -1,6 +1,18 @@
 use cogentlm_core::CapabilitySupport;
 use cogentlm_engine::engine::ModelCapabilities;
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "tests/endpoint_tests.rs"]
+mod endpoint_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+
 /// Addressable inference destination.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum EndpointRef {
@@ -42,7 +54,7 @@ impl EndpointCapabilities {
         }
     }
 
-    #[cfg(feature = "providers")]
+    #[cfg(feature = "remote")]
     pub(crate) const fn unknown() -> Self {
         Self {
             query: CapabilitySupport::Unknown,

@@ -19,6 +19,5 @@ pub use runtime::{
 };
 
 #[cfg(test)]
-mod tests {
-    mod types_tests;
-}
+#[path = "../../tests/lifecycle/types_tests.rs"]
+mod types_tests;

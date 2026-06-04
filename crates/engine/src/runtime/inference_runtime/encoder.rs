@@ -217,6 +217,5 @@ fn pooled_embedding_plan(
 }
 
 #[cfg(test)]
-mod tests {
-    mod encoder_tests;
-}
+#[path = "../../tests/runtime/inference_runtime/encoder_tests.rs"]
+mod encoder_tests;

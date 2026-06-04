@@ -3,7 +3,7 @@ import {
   type ModelLoadOptions,
   type ModelSource,
   type TokenBatch,
-} from '@noumena-labs/cogentlm-browser';
+} from '@noumena-labs/cogentlm';
 import type {
   BenchmarkOperation,
   BenchmarkRun,

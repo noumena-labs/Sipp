@@ -20,9 +20,7 @@ Always use the **`build-orchestrator`** skill when compiling. The repository use
 - **Build Python Bindings:** `cargo xtask build python` (optionally `--backend vulkan`)
 - **Build WebAssembly/WebGPU:** `cargo xtask build wasm`
 - **Build All Targets:** `cargo xtask build all`
-- **Run App Tests:** `cargo xtask run apps test`
 - **Serve An App:** `cargo xtask run apps serve examples`
-- **Run Binding Smokes:** `cargo xtask run bindings all --model <model.gguf>`
 - **Run llama.cpp Backend Ops:** `cargo xtask run llama backend-ops --backend cpu`
 
 ---
@@ -30,9 +28,14 @@ Always use the **`build-orchestrator`** skill when compiling. The repository use
 ## 3. Test & Lint Commands
 
 Always use the **`test-runner`** skill when verifying changes.
-- **Rust Tests:** `cargo test` (or `cargo test -p <crate_name>` for specific crates)
+- **List Tests:** `cargo xtask test list` (see [docs/testing.md](file:///docs/testing.md) for suite contents)
+- **Run All Tests:** `cargo xtask test run`
+- **xtask Tests:** `cargo xtask test run --suite xtask`
+- **White-box Tests:** `cargo xtask test run --suite rust-crates --package <crate_name>`
+- **Interface Tests:** `cargo xtask test run --suite node-package --backend cpu`
+- **Verify Coverage/Structure:** `cargo xtask test verify --category whitebox`
+- **Rust Tests:** `cargo test` (or `cargo test -p <crate_name>` for narrow Rust-only checks)
 - **Rust Linting/Formatting:** `cargo clippy` and `cargo fmt`
-- **Node.js Binding Smoke Test:** `cargo xtask run bindings node --model <model.gguf>`
 - **TypeScript Typecheck:** `pnpm typecheck` or `bun run typecheck`
 - **TypeScript Linting:** `pnpm lint` or `bun run lint`
 

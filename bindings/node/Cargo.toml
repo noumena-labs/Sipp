@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [lib]
 name = "cogentlm_node"
@@ -18,7 +19,7 @@ vulkan = ["cogentlm-engine/vulkan", "cogentlm-client/vulkan"]
 openmp = ["cogentlm-engine/openmp", "cogentlm-client/openmp"]
 
 [dependencies]
-cogentlm-client = { workspace = true, default-features = false, features = ["providers"] }
+cogentlm-client = { workspace = true, default-features = false, features = ["remote"] }
 cogentlm-core.workspace = true
 cogentlm-engine.workspace = true
 futures.workspace = true

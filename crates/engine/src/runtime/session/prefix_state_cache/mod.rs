@@ -201,6 +201,5 @@ pub(super) fn prefix_entry_approx_bytes(
 }
 
 #[cfg(test)]
-mod tests {
-    mod prefix_state_cache_tests;
-}
+#[path = "../../../tests/runtime/session/prefix_state_cache_tests.rs"]
+mod prefix_state_cache_tests;

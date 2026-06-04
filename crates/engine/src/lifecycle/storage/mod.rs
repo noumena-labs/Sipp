@@ -282,6 +282,5 @@ fn canonicalize_existing_path(path: &Path) -> Result<PathBuf, ModelError> {
 }
 
 #[cfg(test)]
-mod tests {
-    mod storage_tests;
-}
+#[path = "../../tests/lifecycle/storage_tests.rs"]
+mod storage_tests;

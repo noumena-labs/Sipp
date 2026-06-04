@@ -1,8 +1,10 @@
 [package]
 name = "cogentlm-core"
+description = "Provider-neutral value types shared by CogentLM crates"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+readme = "../../README.md"
 version.workspace = true
 
 [dependencies]

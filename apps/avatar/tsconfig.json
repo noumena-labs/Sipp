@@ -10,14 +10,14 @@
     /* Bundler mode */
     "baseUrl": ".",
     "paths": {
-      "@noumena-labs/cogentlm-browser": [
-        "../../.build/artifacts/npm/cogentlm-browser/dist/types/index.d.ts"
+      "@noumena-labs/cogentlm": [
+        "../../.build/artifacts/npm/cogentlm/dist/types/index.d.ts"
       ],
-      "@noumena-labs/cogentlm-browser/character": [
-        "../../.build/artifacts/npm/cogentlm-browser/dist/types/character/index.d.ts"
+      "@noumena-labs/cogentlm/character": [
+        "../../.build/artifacts/npm/cogentlm/dist/types/character/index.d.ts"
       ],
-      "@noumena-labs/cogentlm-browser/director": [
-        "../../.build/artifacts/npm/cogentlm-browser/dist/types/orchestrator/index.d.ts"
+      "@noumena-labs/cogentlm/director": [
+        "../../.build/artifacts/npm/cogentlm/dist/types/orchestrator/index.d.ts"
       ]
     },
     "moduleResolution": "bundler",

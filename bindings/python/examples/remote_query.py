@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from _common import (
     CogentClient,
-    add_openai_remote,
+    add_gateway_remote,
     print_text,
     read_remote_args,
     text_options,
@@ -10,9 +10,9 @@ from _common import (
 
 
 def main() -> None:
-    model, prompt = read_remote_args("Write one sentence about remote inference.")
+    alias, prompt = read_remote_args("Write one sentence about remote inference.")
     client = CogentClient()
-    endpoint = add_openai_remote(client, model)
+    endpoint = add_gateway_remote(client, alias)
     run = client.query(
         prompt,
         endpoint=endpoint,

@@ -3,13 +3,26 @@
 //! The binary entrypoint parses CLI commands and delegates to these modules so
 //! target-specific build logic and host toolchain setup stay isolated.
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "tests/support.rs"]
+pub(crate) mod test_support;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
 pub mod clean;
 pub mod cli;
 pub mod doctor;
 pub mod run;
+pub mod sample_model;
 pub mod setup;
 pub mod targets;
 pub(crate) mod terminal;
+pub mod test;
 pub mod toolchain;
 pub mod toolchains;
 pub mod utils;

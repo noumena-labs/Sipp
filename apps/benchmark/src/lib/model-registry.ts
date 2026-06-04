@@ -5,7 +5,7 @@
  * minimal `CogentClient` ModelSource.
  */
 
-import type { ModelSource } from '@noumena-labs/cogentlm-browser';
+import type { ModelSource } from '@noumena-labs/cogentlm';
 
 export type ModelCapability = 'text' | 'vision';
 

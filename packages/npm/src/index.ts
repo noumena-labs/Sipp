@@ -6,6 +6,7 @@ export {
   type CogentClientOptions,
   type EngineModuleOptions,
 } from './engine/browser-client.js';
+export type { BrowserCachePolicyOptions } from './models/asset-store.js';
 export {
   QueryError,
   type BackendInfo,
@@ -18,6 +19,7 @@ export {
   type ChatOptions,
   type EmbedOptions,
   type EmbeddingResult,
+  type EndpointRef,
   type EngineBackendName,
   type EngineEvent,
   type EngineState,
@@ -38,7 +40,10 @@ export {
   type QueryInput,
   type QueryObservation,
   type QueryOptions,
+  type RemoteGatewayConfig,
+  type RemoteTokenProvider,
   type GenerationResult,
+  type GatewayOptions,
   type RequestState,
   type RequestStats,
   type RequestStatus,

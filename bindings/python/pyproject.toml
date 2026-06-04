@@ -10,7 +10,7 @@ requires-python = ">=3.9"
 license = { text = "MIT" }
 
 [dependency-groups]
-dev = ["maturin>=1.5,<2"]
+dev = ["maturin>=1.5,<2", "pytest>=8,<9", "pytest-cov>=7,<8"]
 
 [tool.maturin]
 module-name = "cogentlm._native"

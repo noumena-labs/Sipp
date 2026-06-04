@@ -68,6 +68,5 @@ fn read_bytes_into(buffer: &[u8], offset: usize, out: &mut [u8]) {
 }
 
 #[cfg(test)]
-mod tests {
-    mod record_io_tests;
-}
+#[path = "../../../tests/runtime/request/token_ring/record_io_tests.rs"]
+mod record_io_tests;

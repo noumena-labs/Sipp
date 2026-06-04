@@ -1,11 +1,26 @@
 //! Shared build paths and formatting helpers.
 
 use crate::cli::Backend;
+use crate::output;
 use anyhow::{Context, Result};
 use std::env;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use xshell::{cmd, Shell};
 
-const BROWSER_PACKAGE_ARTIFACT_DIR: &str = "cogentlm-browser";
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "tests/utils_tests.rs"]
+mod utils_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+
+const BROWSER_PACKAGE_ARTIFACT_DIR: &str = "cogentlm";
 
 /// Shared immutable context for xtask build paths.
 #[derive(Clone, Debug)]
@@ -32,6 +47,13 @@ impl BuildContext {
             })?;
 
         Ok(Self { workspace_root })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_workspace_root_for_test(workspace_root: impl Into<PathBuf>) -> Self {
+        Self {
+            workspace_root: workspace_root.into(),
+        }
     }
 
     pub(crate) fn workspace_root(&self) -> &Path {
@@ -161,16 +183,50 @@ impl BuildContext {
         self.workspace_root.join("bindings").join("python")
     }
 
-    pub(crate) fn bindings_python_package_dir(&self) -> PathBuf {
-        self.bindings_python_dir().join("python").join("cogentlm")
-    }
-
-    pub(crate) fn bindings_python_binary_dir(&self) -> PathBuf {
-        self.bindings_python_package_dir().join("binaries")
-    }
-
     pub(crate) fn npm_package_dir(&self) -> PathBuf {
         self.packages_root().join("npm")
+    }
+
+    fn playwright_core_cli(&self) -> PathBuf {
+        self.workspace_root
+            .join("node_modules")
+            .join("playwright-core")
+            .join("cli.js")
+    }
+
+    pub(crate) fn playwright_browsers_dir(&self) -> PathBuf {
+        self.toolchain_dir().join("playwright-browsers")
+    }
+
+    fn playwright_chromium_executable(&self) -> Result<(PathBuf, bool)> {
+        let browsers_dir = self.playwright_browsers_dir();
+        let output = Command::new("node")
+            .arg("-e")
+            .arg(
+                "const fs = require('node:fs'); \
+                 const { chromium } = require('playwright-core'); \
+                 const executable = chromium.executablePath(); \
+                 console.log(executable); \
+                 console.log(fs.existsSync(executable) ? 'true' : 'false');",
+            )
+            .current_dir(&self.workspace_root)
+            .env("PLAYWRIGHT_BROWSERS_PATH", &browsers_dir)
+            .output()
+            .context("failed to query Playwright Chromium executable path")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "failed to query Playwright Chromium executable path: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+
+        let stdout = String::from_utf8(output.stdout)?;
+        let mut lines = stdout.lines();
+        let executable = lines
+            .next()
+            .context("Playwright did not print a Chromium executable path")?;
+        let installed = lines.next() == Some("true");
+        Ok((PathBuf::from(executable), installed))
     }
 
     pub(crate) fn llama_cpp_dir(&self) -> PathBuf {
@@ -234,6 +290,30 @@ impl BuildContext {
     pub(crate) fn cmake_file_path(&self, path: &Path) -> String {
         path.display().to_string().replace('\\', "/")
     }
+}
+
+pub(crate) fn ensure_playwright_chromium(sh: &Shell, ctx: &BuildContext) -> Result<()> {
+    let (chromium_exe, installed) = ctx.playwright_chromium_executable()?;
+    if installed {
+        output::detail("Playwright Chromium", chromium_exe.display());
+        return Ok(());
+    }
+
+    let playwright_cli = ctx.playwright_core_cli();
+    if !playwright_cli.is_file() {
+        anyhow::bail!(
+            "Playwright Core CLI was not found at {}; run `bun install` at the workspace root",
+            playwright_cli.display()
+        );
+    }
+
+    let _dir = sh.push_dir(ctx.workspace_root());
+    let browsers_dir = ctx.playwright_browsers_dir();
+    output::run_command(
+        "Installing Playwright Chromium",
+        cmd!(sh, "node {playwright_cli} install chromium")
+            .env("PLAYWRIGHT_BROWSERS_PATH", browsers_dir),
+    )
 }
 
 fn read_child_dirs(root: &Path) -> Result<Vec<PathBuf>> {

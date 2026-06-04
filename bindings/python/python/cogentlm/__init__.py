@@ -260,8 +260,7 @@ ModelPlacementConfig = _native.ModelPlacementConfig
 MultimodalRuntimeConfig = _native.MultimodalRuntimeConfig
 NativeRuntimeConfig = _native.NativeRuntimeConfig
 ObservabilityRuntimeConfig = _native.ObservabilityRuntimeConfig
-RemoteAuth = _native.RemoteAuth
-RemoteConfig = _native.RemoteConfig
+RemoteGatewayConfig = _native.RemoteGatewayConfig
 RemoteError = _native.RemoteError
 ResidencyRuntimeConfig = _native.ResidencyRuntimeConfig
 SamplingRuntimeConfig = _native.SamplingRuntimeConfig
@@ -289,8 +288,7 @@ __all__ = [
     "MultimodalRuntimeConfig",
     "NativeRuntimeConfig",
     "ObservabilityRuntimeConfig",
-    "RemoteAuth",
-    "RemoteConfig",
+    "RemoteGatewayConfig",
     "RemoteError",
     "ResidencyRuntimeConfig",
     "SamplingRuntimeConfig",

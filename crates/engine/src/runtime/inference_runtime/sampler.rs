@@ -10,6 +10,18 @@ use crate::runtime::scheduler::{SamplerCacheKey, SamplerHandle, SlotPhase, SlotS
 
 use super::InferenceRuntime;
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "../../tests/runtime/inference_runtime/sampler_tests.rs"]
+mod sampler_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+
 /// Hands the slot's CPU sampler to the backend so it can sample inside the
 /// decode kernel. Returns `false` if the slot is not eligible or the FFI call
 /// rejected the handoff.
@@ -101,10 +113,12 @@ fn reclaim_terminal_samplers(
         if !matches!(slot.phase, SlotPhase::Completed | SlotPhase::Failed) {
             continue;
         }
+
+        let cached_key = slot.sampler_key.take();
         let Some(sampler) = slot.take_sampler() else {
             continue;
         };
-        if let Some(key) = slot.sampler_key.take() {
+        if let Some(key) = cached_key {
             let mut sampler = sampler;
             reset_sampler(&mut sampler);
             sampler_pool.entry(key).or_default().push(sampler);

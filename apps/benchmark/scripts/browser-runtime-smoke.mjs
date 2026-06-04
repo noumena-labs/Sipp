@@ -1,217 +1,259 @@
-#!/usr/bin/env node
-
+import http from 'node:http';
+import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { createServer } from 'node:net';
-import { setTimeout as delay } from 'node:timers/promises';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { chromium } from 'playwright-core';
 
 const DEFAULT_HOST = '127.0.0.1';
-const DEFAULT_TIMEOUT_MS = 60_000;
+const DEFAULT_PORT = 5173;
+const DEFAULT_TIMEOUT_MS = 30_000;
 
-const appDir = fileURLToPath(new URL('..', import.meta.url));
-const args = parseArgs(process.argv.slice(2));
-const host = args.host ?? DEFAULT_HOST;
-const port = args.port ?? await findOpenPort(host);
-const timeoutMs = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-const url = `http://${host}:${port}`;
-
-let serverProcess = null;
-
-try {
-  serverProcess = startViteServer(host, port);
-  await waitForServerOrExit(serverProcess, url, timeoutMs);
-
-  const { chromium } = await loadPlaywright();
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage();
-    page.on('console', (message) => {
-      console.log(`[browser:${message.type()}] ${message.text()}`);
-    });
-    page.on('pageerror', (error) => {
-      console.error(`[browser:error] ${error.message}`);
-    });
-
-    await page.goto(url, { waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(
-      () => typeof window.__cogentBench?.runBrowserRuntimeSmoke === 'function',
-      undefined,
-      { timeout: timeoutMs }
-    );
-
-    const result = await page.evaluate(async () => {
-      return await window.__cogentBench.runBrowserRuntimeSmoke();
-    });
-
-    console.log(JSON.stringify(result, null, 2));
-    assertSmokeResult(result, args);
-  } finally {
-    await browser.close();
-  }
-} finally {
-  await stopServer(serverProcess);
-}
-
-function parseArgs(values) {
-  const parsed = {
-    requireRustBrowserEngine: false,
+function parseArgs(argv) {
+  const options = {
+    host: DEFAULT_HOST,
+    port: DEFAULT_PORT,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+    requireRustEngine: false,
     requireGgufIngest: false,
-    host: null,
-    port: null,
-    timeoutMs: null,
+    requireWebgpu: false,
   };
 
-  for (let index = 0; index < values.length; index += 1) {
-    const value = values[index];
-    if (value === '--require-rust-browser-engine') {
-      parsed.requireRustBrowserEngine = true;
-    } else if (value === '--require-gguf-ingest') {
-      parsed.requireGgufIngest = true;
-    } else if (value === '--host') {
-      parsed.host = readValue(values, ++index, value);
-    } else if (value === '--port') {
-      parsed.port = readNumber(values, ++index, value);
-    } else if (value === '--timeout-ms') {
-      parsed.timeoutMs = readNumber(values, ++index, value);
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--host') {
+      options.host = readValue(argv, index, arg);
+      index += 1;
+    } else if (arg === '--port') {
+      options.port = parsePort(readValue(argv, index, arg));
+      index += 1;
+    } else if (arg === '--timeout-ms') {
+      options.timeoutMs = parsePositiveInt(readValue(argv, index, arg), arg);
+      index += 1;
+    } else if (arg === '--require-rust-engine' || arg === '--require-rust-browser-engine') {
+      options.requireRustEngine = true;
+    } else if (arg === '--require-gguf-ingest') {
+      options.requireGgufIngest = true;
+    } else if (arg === '--require-webgpu') {
+      options.requireWebgpu = true;
     } else {
-      throw new Error(`Unknown argument: ${value}`);
+      throw new Error(`Unknown argument: ${arg}`);
     }
   }
 
-  return parsed;
+  return options;
 }
 
-function readValue(values, index, flag) {
-  const value = values[index];
+function readValue(argv, index, flag) {
+  const value = argv[index + 1];
   if (value == null || value.startsWith('--')) {
     throw new Error(`${flag} requires a value`);
   }
   return value;
 }
 
-function readNumber(values, index, flag) {
-  const value = Number(readValue(values, index, flag));
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new Error(`${flag} must be a positive integer`);
+function parsePort(value) {
+  const port = parsePositiveInt(value, '--port');
+  if (port > 65_535) {
+    throw new Error(`--port must be <= 65535, got ${value}`);
   }
-  return value;
+  return port;
 }
 
-function startViteServer(host, port) {
+function parsePositiveInt(value, flag) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0 || String(parsed) !== value) {
+    throw new Error(`${flag} must be a positive integer, got ${value}`);
+  }
+  return parsed;
+}
+
+function benchmarkDir() {
+  const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(scriptDir, '..');
+}
+
+function serverUrl(options) {
+  return `http://${options.host}:${options.port}`;
+}
+
+async function waitForServer(url, timeoutMs) {
+  const started = Date.now();
+  let lastError = null;
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const status = await httpStatus(url);
+      if (status >= 200 && status < 500) {
+        return true;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await sleep(250);
+  }
+  if (lastError != null) {
+    throw lastError;
+  }
+  return false;
+}
+
+function httpStatus(url) {
+  return new Promise((resolve, reject) => {
+    const request = http.get(url, (response) => {
+      response.resume();
+      response.on('end', () => resolve(response.statusCode ?? 0));
+    });
+    request.setTimeout(1_000, () => {
+      request.destroy(new Error(`Timed out connecting to ${url}`));
+    });
+    request.on('error', reject);
+  });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function withTimeout(promise, timeoutMs, label) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer != null) {
+      clearTimeout(timer);
+    }
+  });
+}
+
+function bunxCommand() {
+  if (process.platform !== 'win32') {
+    return 'bunx';
+  }
+
+  const home = process.env.USERPROFILE;
+  if (home != null) {
+    const bunx = path.join(home, '.bun', 'bin', 'bunx.exe');
+    if (existsSync(bunx)) {
+      return bunx;
+    }
+  }
+  return 'bunx.exe';
+}
+
+function startVite(options) {
+  const command = bunxCommand();
   const child = spawn(
-    'bunx',
-    ['--bun', 'vite', '--host', host, '--port', String(port), '--strictPort'],
+    command,
+    ['--bun', 'vite', '--host', options.host, '--port', String(options.port), '--strictPort'],
     {
-      cwd: appDir,
+      cwd: benchmarkDir(),
+      env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
     }
   );
 
   child.stdout.on('data', (chunk) => {
-    process.stdout.write(`[vite] ${chunk}`);
+    process.stderr.write(chunk);
   });
   child.stderr.on('data', (chunk) => {
-    process.stderr.write(`[vite] ${chunk}`);
-  });
-  child.once('exit', (code, signal) => {
-    if (code !== 0 && code != null) {
-      console.error(`[vite] exited with code ${code}`);
-    }
-    if (signal != null) {
-      console.error(`[vite] exited with signal ${signal}`);
-    }
+    process.stderr.write(chunk);
   });
 
   return child;
 }
 
-async function waitForServer(targetUrl, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(targetUrl);
-      if (response.ok) {
-        return;
-      }
-    } catch {
-      // Vite is still starting.
-    }
-    await delay(250);
-  }
-
-  throw new Error(`Timed out waiting for Vite at ${targetUrl}`);
-}
-
-function waitForServerOrExit(child, targetUrl, timeoutMs) {
-  return Promise.race([
-    waitForServer(targetUrl, timeoutMs),
-    new Promise((_, reject) => {
-      child.once('error', reject);
-      child.once('exit', (code, signal) => {
-        reject(
-          new Error(`Vite exited before ${targetUrl} was ready: code=${code} signal=${signal}`)
-        );
-      });
-    }),
-  ]);
-}
-
-async function loadPlaywright() {
-  try {
-    return await import('playwright');
-  } catch {
-    try {
-      return await import('playwright-core');
-    } catch (error) {
-      throw new Error(
-        'Playwright is required for browser runtime smoke tests. Run `bun install` at the workspace root.',
-        { cause: error }
-      );
-    }
-  }
-}
-
-function assertSmokeResult(result, options) {
-  if (options.requireRustBrowserEngine && !result?.rustEngine?.available) {
-    const error = result?.rustEngine?.error ?? 'Rust browser engine smoke was unavailable';
-    throw new Error(error);
-  }
-
-  if (options.requireGgufIngest && !result?.ggufIngest?.available) {
-    const error = result?.ggufIngest?.error ?? 'GGUF ingest smoke was unavailable';
-    throw new Error(error);
-  }
-}
-
-async function stopServer(child) {
+async function closeServer(child) {
   if (child == null || child.exitCode != null) {
     return;
   }
 
   child.kill();
-  await Promise.race([
-    new Promise((resolve) => child.once('exit', resolve)),
-    delay(2_000),
-  ]);
-  if (child.exitCode == null) {
-    child.kill('SIGKILL');
+  await new Promise((resolve) => {
+    const timer = setTimeout(resolve, 3_000);
+    child.once('exit', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+async function ensureServer(options) {
+  const url = serverUrl(options);
+  try {
+    if (await waitForServer(url, 1_000)) {
+      return { url, child: null };
+    }
+  } catch {
+    // No existing server; start a local Vite process below.
+  }
+
+  const child = startVite(options);
+  try {
+    await waitForServer(url, options.timeoutMs);
+    return { url, child };
+  } catch (error) {
+    await closeServer(child);
+    throw new Error(`Benchmark server did not start at ${url}: ${error.message}`);
   }
 }
 
-function findOpenPort(host) {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once('error', reject);
-    server.listen(0, host, () => {
-      const address = server.address();
-      server.close(() => {
-        if (address == null || typeof address === 'string') {
-          reject(new Error('Failed to reserve a local port'));
-        } else {
-          resolve(address.port);
-        }
-      });
+function validateSmoke(result, options) {
+  const failures = [];
+  if (options.requireRustEngine && !result?.rustEngine?.available) {
+    failures.push(`Rust browser engine unavailable: ${result?.rustEngine?.error ?? 'unknown error'}`);
+  }
+  if (options.requireGgufIngest && !result?.ggufIngest?.available) {
+    failures.push(`GGUF ingest unavailable: ${result?.ggufIngest?.error ?? 'unknown error'}`);
+  }
+  if (options.requireWebgpu && !result?.webgpuReady) {
+    failures.push('WebGPU backend is not ready');
+  }
+  if (failures.length > 0) {
+    throw new Error(failures.join('; '));
+  }
+}
+
+async function runBrowserSmoke(options) {
+  const { url, child } = await ensureServer(options);
+  let browser = null;
+  try {
+    browser = await withTimeout(
+      chromium.launch({ headless: true }),
+      options.timeoutMs,
+      'Chromium launch'
+    );
+    const page = await browser.newPage();
+    page.setDefaultTimeout(options.timeoutMs);
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: options.timeoutMs });
+    await page.waitForFunction(() => window.__cogentBench != null, null, {
+      timeout: options.timeoutMs,
     });
-  });
+    const result = await withTimeout(
+      page.evaluate(() => window.__cogentBench.runBrowserRuntimeSmoke()),
+      options.timeoutMs,
+      'Browser runtime smoke'
+    );
+    validateSmoke(result, options);
+    return {
+      url,
+      result,
+    };
+  } finally {
+    await browser?.close();
+    await closeServer(child);
+  }
+}
+
+try {
+  const options = parseArgs(process.argv.slice(2));
+  const report = await runBrowserSmoke(options);
+  console.log(JSON.stringify(report, null, 2));
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
 }

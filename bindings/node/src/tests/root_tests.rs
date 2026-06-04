@@ -1,6 +1,7 @@
 //! Unit tests for the parent module.
 
 use super::*;
+use serde_json::json;
 
 #[test]
 fn i64_to_u32_rejects_out_of_range_seed_values() {
@@ -77,4 +78,127 @@ fn finite_nonnegative_f64_to_u64_parses_exact_integer_boundaries() {
         finite_nonnegative_f64_to_u64(JS_MAX_SAFE_INTEGER_F64, "bytes").unwrap(),
         JS_MAX_SAFE_INTEGER_U64
     );
+}
+
+#[test]
+fn endpoint_ref_maps_valid_kinds_and_rejects_unknown_kind() {
+    let local = EndpointRef {
+        kind: "local".to_string(),
+        id: "local-a".to_string(),
+    }
+    .to_core()
+    .expect("local endpoint");
+    assert!(matches!(
+        local,
+        CoreEndpointRef::Local { id } if id == "local-a"
+    ));
+
+    let remote = EndpointRef {
+        kind: "remote".to_string(),
+        id: "remote-a".to_string(),
+    }
+    .to_core()
+    .expect("remote endpoint");
+    assert!(matches!(
+        remote,
+        CoreEndpointRef::Remote { id } if id == "remote-a"
+    ));
+
+    let invalid = EndpointRef {
+        kind: "browser".to_string(),
+        id: "bad".to_string(),
+    };
+    assert!(invalid.to_core().is_err());
+}
+
+#[test]
+fn text_options_validate_finite_float_fields() {
+    let options = CogentTextOptions {
+        max_tokens: Some(4),
+        temperature: Some(0.25),
+        top_p: Some(0.9),
+        stop: Some(vec!["stop".to_string()]),
+    }
+    .to_core()
+    .expect("text options");
+
+    assert_eq!(options.max_tokens, Some(4));
+    assert_eq!(options.temperature, Some(0.25));
+    assert_eq!(options.top_p, Some(0.9));
+    assert_eq!(options.stop, vec!["stop"]);
+
+    let bad = CogentTextOptions {
+        temperature: Some(f64::NAN),
+        ..Default::default()
+    };
+    assert!(bad.to_core().is_err());
+}
+
+#[test]
+fn chat_messages_require_non_empty_valid_roles() {
+    assert!(chat_messages_to_core(Vec::new()).is_err());
+    assert!(chat_messages_to_core(vec![ChatMessage {
+        role: "tool".to_string(),
+        content: "bad".to_string(),
+    }])
+    .is_err());
+
+    let messages = chat_messages_to_core(vec![ChatMessage {
+        role: "user".to_string(),
+        content: "hello".to_string(),
+    }])
+    .expect("messages");
+
+    assert_eq!(messages[0].role, CoreChatRole::User);
+    assert_eq!(messages[0].content, "hello");
+}
+
+#[test]
+fn query_request_maps_endpoint_options_and_remote_options() {
+    let request = CogentQueryRequest {
+        endpoint: Some(EndpointRef {
+            kind: "remote".to_string(),
+            id: "openai".to_string(),
+        }),
+        prompt: "hello".to_string(),
+        options: Some(CogentTextOptions {
+            max_tokens: Some(8),
+            temperature: Some(0.0),
+            top_p: None,
+            stop: None,
+        }),
+        local: Some(LocalTextOptions {
+            context_key: Some("ctx".to_string()),
+            grammar: Some("root ::= \"ok\"".to_string()),
+            json_schema: None,
+            sampling: None,
+            media: None,
+        }),
+        remote_options: Some(json!({ "seed": 7 })),
+        emit_tokens: Some(true),
+    }
+    .to_core()
+    .expect("query request");
+
+    assert!(matches!(
+        request.endpoint,
+        Some(CoreEndpointRef::Remote { id }) if id == "openai"
+    ));
+    assert_eq!(request.prompt, "hello");
+    assert_eq!(request.options.max_tokens, Some(8));
+    assert_eq!(request.local.context_key.as_deref(), Some("ctx"));
+    assert_eq!(request.remote_options.get("seed"), Some(&json!(7)));
+    assert!(request.emit_tokens);
+}
+
+#[test]
+fn request_remote_options_must_be_json_objects() {
+    let request = CogentEmbedRequest {
+        endpoint: None,
+        input: "hello".to_string(),
+        local: None,
+        remote_options: Some(json!(["bad"])),
+    };
+
+    assert!(request.to_core().is_err());
 }

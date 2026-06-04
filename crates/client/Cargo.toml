@@ -1,27 +1,39 @@
 [package]
 name = "cogentlm-client"
+description = "High-level CogentLM local and remote inference client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+readme = "../../README.md"
 
 [features]
-default = ["native", "providers"]
+default = ["native", "remote"]
 native = ["cogentlm-engine/native"]
 backend-dl = ["cogentlm-engine/backend-dl"]
 cuda = ["cogentlm-engine/cuda"]
 metal = ["cogentlm-engine/metal"]
 vulkan = ["cogentlm-engine/vulkan"]
 openmp = ["cogentlm-engine/openmp"]
-providers = ["dep:cogentlm-providers", "dep:tokio"]
+remote = ["dep:cogentlm-remote", "dep:tokio"]
 
 [dependencies]
 cogentlm-core.workspace = true
-cogentlm-engine = { path = "../engine", default-features = false }
-cogentlm-providers = { workspace = true, optional = true }
+cogentlm-engine = { workspace = true, default-features = false }
+cogentlm-remote = { workspace = true, optional = true }
 futures.workspace = true
 futures-channel.workspace = true
 futures-core.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, optional = true, features = ["rt", "net", "time", "sync"] }
+tokio = { workspace = true, optional = true, features = [
+    "rt",
+    "net",
+    "time",
+    "sync",
+] }
+
+[dev-dependencies]
+async-trait = "0.1"
+futures.workspace = true
+wiremock = "0.6"

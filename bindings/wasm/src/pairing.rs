@@ -80,6 +80,5 @@ fn error_response(code: &'static str, message: String) -> PairingValidateRespons
 }
 
 #[cfg(test)]
-mod tests {
-    mod pairing_tests;
-}
+#[path = "tests/pairing_tests.rs"]
+mod pairing_tests;

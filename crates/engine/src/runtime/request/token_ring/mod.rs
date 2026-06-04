@@ -340,6 +340,5 @@ fn next_sequence_for_stream(
 }
 
 #[cfg(test)]
-mod tests {
-    mod token_ring_tests;
-}
+#[path = "../../../tests/runtime/request/token_ring_tests.rs"]
+mod token_ring_tests;

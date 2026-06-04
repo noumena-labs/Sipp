@@ -215,6 +215,5 @@ impl EngineThreadState {
 }
 
 #[cfg(test)]
-mod tests {
-    mod completion_tests;
-}
+#[path = "../../../tests/engine/driver/thread_loop/completion_tests.rs"]
+mod completion_tests;

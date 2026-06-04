@@ -76,6 +76,5 @@ fn sanitize_lease_component(value: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    mod devices_tests;
-}
+#[path = "../../tests/runtime/residency/devices_tests.rs"]
+mod devices_tests;

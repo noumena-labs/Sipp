@@ -45,6 +45,5 @@ impl RuntimeModelCapabilities {
 }
 
 #[cfg(test)]
-mod tests {
-    mod capabilities_tests;
-}
+#[path = "../../tests/runtime/inference_runtime/capabilities_tests.rs"]
+mod capabilities_tests;

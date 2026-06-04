@@ -153,6 +153,5 @@ fn should_merge_sampling_override(value: &serde_json::Value) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    mod sampling_tests;
-}
+#[path = "../../../tests/runtime/config/inference_config/sampling_tests.rs"]
+mod sampling_tests;

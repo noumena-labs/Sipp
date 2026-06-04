@@ -234,6 +234,5 @@ impl Drop for SlotState {
 }
 
 #[cfg(test)]
-mod tests {
-    mod slot_state_tests;
-}
+#[path = "../../../tests/runtime/scheduler/slot_state_tests.rs"]
+mod slot_state_tests;

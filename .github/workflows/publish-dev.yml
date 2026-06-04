@@ -1,0 +1,244 @@
+name: Publish cogentlm dev packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Package endpoint to generate or publish
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - web-npm
+          - node-npm
+          - python
+          - rust
+      dry_run:
+        description: Build and dry-run publish without publishing npm packages
+        required: false
+        default: true
+        type: boolean
+  # schedule:
+  #   - cron: "0 8 * * *"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-cogentlm-dev-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-dev:
+    name: Generate and publish development packages
+    runs-on: ubuntu-latest
+    env:
+      CE_WASM_BUILD_PARALLEL_LEVEL: "2"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+        with:
+          submodules: false
+
+      - name: Check out private llama.cpp submodule
+        env:
+          LLAMA_CPP_INTERNAL_DEPLOY_KEY: ${{ secrets.LLAMA_CPP_INTERNAL_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LLAMA_CPP_INTERNAL_DEPLOY_KEY:-}" ]; then
+            echo "::error::Set LLAMA_CPP_INTERNAL_DEPLOY_KEY to a read-only deploy key for noumena-labs/llama.cpp."
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$LLAMA_CPP_INTERNAL_DEPLOY_KEY" > ~/.ssh/llama_cpp_internal
+          chmod 600 ~/.ssh/llama_cpp_internal
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/llama_cpp_internal -o IdentitiesOnly=yes" git submodule sync --recursive
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/llama_cpp_internal -o IdentitiesOnly=yes" git submodule update --init --recursive
+
+      - name: Determine dev version
+        id: dev
+        run: |
+          set -euo pipefail
+          NPM_VERSION="$(node <<'NODE'
+          const pkg = require('./packages/npm/package.json');
+          const match = pkg.version.match(/^(\d+)\.(\d+)\.(\d+)/);
+          if (!match) throw new Error(`Unsupported version format: ${pkg.version}`);
+          console.log(`${match[1]}.${match[2]}.${Number(match[3]) + 1}-dev.${process.env.GITHUB_RUN_NUMBER}.${process.env.GITHUB_RUN_ATTEMPT}`);
+          NODE
+          )"
+          PYTHON_VERSION="$(node <<'NODE'
+          const pkg = require('./packages/npm/package.json');
+          const match = pkg.version.match(/^(\d+)\.(\d+)\.(\d+)/);
+          if (!match) throw new Error(`Unsupported version format: ${pkg.version}`);
+          console.log(`${match[1]}.${match[2]}.${Number(match[3]) + 1}.dev${process.env.GITHUB_RUN_NUMBER}${process.env.GITHUB_RUN_ATTEMPT}`);
+          NODE
+          )"
+          echo "version=$NPM_VERSION" >> "$GITHUB_OUTPUT"
+          echo "python_version=$PYTHON_VERSION" >> "$GITHUB_OUTPUT"
+          echo "dist_tag=dev" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-emscripten
+          components: rust-src
+
+      - name: Set up Node
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 22
+          registry-url: https://npm.pkg.github.com
+          scope: "@noumena-labs"
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version: 1.3.11
+
+      - name: Set up CMake and Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Set up Emscripten
+        uses: emscripten-core/setup-emsdk@v16
+
+      - name: Install dependencies
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bun install --frozen-lockfile
+
+      - name: Apply dev package versions
+        env:
+          DEV_VERSION: ${{ steps.dev.outputs.version }}
+          PYTHON_DEV_VERSION: ${{ steps.dev.outputs.python_version }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const jsonFiles = ['packages/npm/package.json', 'bindings/node/package.json'];
+          for (const path of jsonFiles) {
+            const pkg = JSON.parse(readFileSync(path, 'utf8'));
+            pkg.version = process.env.DEV_VERSION;
+            writeFileSync(path, `${JSON.stringify(pkg, null, 2)}\n`);
+          }
+          const pyprojectPath = 'bindings/python/pyproject.toml';
+          const pyproject = readFileSync(pyprojectPath, 'utf8').replace(
+            /^version = ".*"$/m,
+            `version = "${process.env.PYTHON_DEV_VERSION}"`
+          );
+          writeFileSync(pyprojectPath, pyproject);
+          NODE
+
+      - name: Run fast dev publish gate
+        run: cargo xtask --plain test all --profile ci
+
+      - name: Configure GitHub Packages authentication
+        if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' || inputs.package == 'node-npm' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::Set PACKAGE_PUBLISH_TOKEN to a token with write:packages scope."
+            exit 1
+          fi
+          printf "@noumena-labs:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=%s\n" "$NODE_AUTH_TOKEN" > "$RUNNER_TEMP/npmrc"
+          echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/npmrc" >> "$GITHUB_ENV"
+
+      - name: Build staged web package
+        if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' }}
+        run: cargo xtask --plain build wasm
+
+      - name: Upload web npm artifact
+        if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' }}
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: cogentlm-web-npm-dev
+          path: .build/artifacts/npm/cogentlm
+
+      - name: Validate web GitHub Packages publish
+        if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' }}
+        env:
+          DIST_TAG: ${{ steps.dev.outputs.dist_tag }}
+        working-directory: .build/artifacts/npm/cogentlm
+        run: npm publish --dry-run --registry https://npm.pkg.github.com --tag "$DIST_TAG"
+
+      - name: Publish web package to GitHub Packages
+        if: ${{ inputs.dry_run == false && (inputs.package == 'all' || inputs.package == 'web-npm') }}
+        env:
+          DIST_TAG: ${{ steps.dev.outputs.dist_tag }}
+        working-directory: .build/artifacts/npm/cogentlm
+        run: npm publish --registry https://npm.pkg.github.com --tag "$DIST_TAG"
+
+      - name: Build Node server package
+        if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
+        run: cargo xtask --plain build node --backend all
+
+      - name: Stage Node server package
+        if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
+        working-directory: bindings/node
+        run: bun run build:stage
+
+      - name: Upload Node npm artifact
+        if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: cogentlm-server-npm-dev
+          path: .build/artifacts/npm/cogentlm-server
+
+      - name: Validate Node GitHub Packages publish
+        if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
+        env:
+          DIST_TAG: ${{ steps.dev.outputs.dist_tag }}
+        working-directory: .build/artifacts/npm/cogentlm-server
+        run: npm publish --dry-run --registry https://npm.pkg.github.com --tag "$DIST_TAG"
+
+      - name: Publish Node package to GitHub Packages
+        if: ${{ inputs.dry_run == false && (inputs.package == 'all' || inputs.package == 'node-npm') }}
+        env:
+          DIST_TAG: ${{ steps.dev.outputs.dist_tag }}
+        working-directory: .build/artifacts/npm/cogentlm-server
+        run: npm publish --registry https://npm.pkg.github.com --tag "$DIST_TAG"
+
+      - name: Build Python wheel
+        if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
+        run: cargo xtask --plain build python --backend all
+
+      - name: Validate Python wheel metadata
+        if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
+        run: .build/toolchain/uv/uv tool run twine check .build/artifacts/python/*.whl
+
+      - name: Upload Python wheel artifact
+        if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: cogentlm-python-wheels-dev
+          path: .build/artifacts/python/*.whl
+
+      - name: Package Rust facade source artifact
+        if: ${{ inputs.package == 'all' || inputs.package == 'rust' }}
+        run: |
+          mkdir -p .build/artifacts/rust
+          tar -czf .build/artifacts/rust/cogentlm-rust-source-dev-${{ github.run_number }}.${{ github.run_attempt }}.tar.gz \
+            Cargo.toml \
+            Cargo.lock \
+            README.md \
+            LICENSE \
+            crates/cogentlm \
+            crates/core \
+            crates/shard \
+            crates/sys \
+            crates/engine \
+            crates/remote \
+            crates/gateway \
+            crates/gateway-providers \
+            crates/client
+
+      - name: Upload Rust crate artifact
+        if: ${{ inputs.package == 'all' || inputs.package == 'rust' }}
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: cogentlm-rust-source-dev
+          path: .build/artifacts/rust/*.tar.gz

@@ -1,4 +1,4 @@
-import type { NativeRuntimeConfig, RuntimeObservation } from '@noumena-labs/cogentlm-browser';
+import type { NativeRuntimeConfig, RuntimeObservation } from '@noumena-labs/cogentlm';
 
 export interface EnvironmentInfo {
   browserLabel: string;

@@ -13,7 +13,7 @@ from cogentlm import (
     MultimodalRuntimeConfig,
     NativeRuntimeConfig,
     ObservabilityRuntimeConfig,
-    RemoteConfig,
+    RemoteGatewayConfig,
     ResidencyRuntimeConfig,
     SamplingRuntimeConfig,
     SchedulerRuntimeConfig,
@@ -27,28 +27,50 @@ def read_args(default_input: str) -> tuple[str, str]:
     return sys.argv[1], " ".join(sys.argv[2:]) or default_input
 
 
-def load_client(model: str, *, embeddings: bool = False) -> CogentClient:
+def read_vision_args(default_input: str) -> tuple[str, str, str, str]:
+    if len(sys.argv) < 4:
+        raise SystemExit(
+            "usage: python examples/vision_chat.py <model.gguf> <projector.gguf> <image> [input]"
+        )
+    return (
+        sys.argv[1],
+        sys.argv[2],
+        sys.argv[3],
+        " ".join(sys.argv[4:]) or default_input,
+    )
+
+
+def load_client(
+    model: str,
+    *,
+    embeddings: bool = False,
+    projector_path: str | None = None,
+) -> CogentClient:
     set_llama_log_quiet(True)
     client = CogentClient()
-    client.add_local("default", model, runtime_config(embeddings=embeddings))
+    client.add_local(
+        "default",
+        model,
+        runtime_config(embeddings=embeddings, projector_path=projector_path),
+    )
     return client
 
 
 def read_remote_args(default_input: str) -> tuple[str, str]:
     if len(sys.argv) < 2:
         raise SystemExit(
-            "usage: python examples/remote_<query|chat|embed>.py <remote-model> [input]"
+            "usage: python examples/remote_<query|chat|embed>.py <gateway-alias> [input]"
         )
     return sys.argv[1], " ".join(sys.argv[2:]) or default_input
 
 
-def add_openai_remote(client: CogentClient, model: str) -> EndpointRef:
+def add_gateway_remote(client: CogentClient, alias: str) -> EndpointRef:
     return client.add_remote(
-        "openai",
-        RemoteConfig.openai(
-            model,
-            required_env("OPENAI_API_KEY"),
-            base_url=os.getenv("COGENTLM_OPENAI_BASE_URL"),
+        alias,
+        RemoteGatewayConfig(
+            alias,
+            required_env("COGENTLM_GATEWAY_URL"),
+            required_env("COGENTLM_GATEWAY_TOKEN"),
         ),
     )
 
@@ -89,7 +111,11 @@ def print_embedding(result: dict[str, object]) -> None:
     print(f"preview=[{preview}]")
 
 
-def runtime_config(*, embeddings: bool) -> NativeRuntimeConfig:
+def runtime_config(
+    *,
+    embeddings: bool,
+    projector_path: str | None = None,
+) -> NativeRuntimeConfig:
     return NativeRuntimeConfig(
         placement=ModelPlacementConfig(gpu_layers=gpu_layers()),
         context=ContextRuntimeConfig(
@@ -109,7 +135,7 @@ def runtime_config(*, embeddings: bool) -> NativeRuntimeConfig:
         cache=CacheRuntimeConfig(
             mode="live_slot_prefix",
         ),
-        multimodal=MultimodalRuntimeConfig(),
+        multimodal=MultimodalRuntimeConfig(projector_path=projector_path),
         residency=ResidencyRuntimeConfig(max_gpu_models_per_device=1),
         observability=ObservabilityRuntimeConfig(runtime_metrics=True),
     )

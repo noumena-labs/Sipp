@@ -9,14 +9,14 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CogentClient } from '@noumena-labs/cogentlm-browser';
+import { CogentClient } from '@noumena-labs/cogentlm';
 import {
   CharacterEventBus,
   createCharacterFromConfigUrl,
   parseCharacterConfig,
   type CharacterConfig,
   type CharacterRuntime,
-} from '@noumena-labs/cogentlm-browser/character';
+} from '@noumena-labs/cogentlm/character';
 import { AvatarCanvas } from './components/AvatarCanvas';
 import { ChatComposer } from './components/ChatComposer';
 import {

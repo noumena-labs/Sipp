@@ -103,6 +103,7 @@ function toWorkerRuntimeConfig(config: CogentClientOptions): WorkerRuntimeConfig
     wasmThreading,
     moduleOptions: config.moduleOptions,
     maxModelBytes: config.maxModelBytes,
+    browserCache: config.browserCache,
     trustedOrigins: config.trustedOrigins,
   };
 }
@@ -118,6 +119,9 @@ function toWorkerQueryOptions(
   return {
     session: options.session,
     maxTokens: options.maxTokens,
+    temperature: options.temperature,
+    topP: options.topP,
+    stop: options.stop,
     grammar: options.grammar,
     emitTokens,
   };

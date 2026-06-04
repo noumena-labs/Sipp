@@ -1,4 +1,4 @@
-import type { ChatInput } from '@noumena-labs/cogentlm-browser';
+import type { ChatInput } from '@noumena-labs/cogentlm';
 import { Example } from './base-example';
 
 export const multimodalExample: Example = {

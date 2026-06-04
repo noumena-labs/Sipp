@@ -1,14 +1,14 @@
 import {
   CogentClient,
-  addOpenAiRemote,
+  addGatewayRemote,
   printText,
   readRemoteArgs,
   textOptions,
 } from './_common.mjs';
 
-const { model, input } = readRemoteArgs('Explain remote inference in one sentence.');
+const { alias, input } = readRemoteArgs('Explain remote inference in one sentence.');
 const client = new CogentClient();
-const endpoint = addOpenAiRemote(client, model);
+const endpoint = addGatewayRemote(client, alias);
 const run = client.chat({
   endpoint,
   messages: [

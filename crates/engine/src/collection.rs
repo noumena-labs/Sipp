@@ -102,6 +102,5 @@ pub(crate) fn remove_matching_values<T>(
 }
 
 #[cfg(test)]
-mod tests {
-    mod collection_tests;
-}
+#[path = "tests/collection_tests.rs"]
+mod collection_tests;

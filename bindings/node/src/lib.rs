@@ -14,11 +14,8 @@ use cogentlm_client::{
     CogentTextResponseFuture as CoreClientTextResponseFuture, CogentTextRun as CoreClientTextRun,
     CogentTokenBatches as CoreClientTokenBatches, EndpointRef as CoreEndpointRef,
     LocalEmbedOptions as CoreClientLocalEmbedOptions,
-    LocalTextOptions as CoreClientLocalTextOptions,
-    RemoteAnthropicConfig as CoreRemoteAnthropicConfig, RemoteAuth as CoreRemoteAuth,
-    RemoteConfig as CoreRemoteConfig, RemoteError as CoreRemoteError,
-    RemoteErrorKind as CoreRemoteErrorKind, RemoteOpenAiConfig as CoreRemoteOpenAiConfig,
-    RemoteProtocol as CoreRemoteProtocol, RemoteProxyConfig as CoreRemoteProxyConfig,
+    LocalTextOptions as CoreClientLocalTextOptions, RemoteError as CoreRemoteError,
+    RemoteErrorKind as CoreRemoteErrorKind, RemoteGatewayConfig as CoreRemoteGatewayConfig,
     RemoteSecret as CoreRemoteSecret,
 };
 use cogentlm_core::TokenUsage as CoreTokenUsage;
@@ -52,6 +49,9 @@ use serde::de::DeserializeOwned;
 #[cfg(test)]
 #[path = "tests/remote_tests.rs"]
 mod remote_tests;
+#[cfg(test)]
+#[path = "tests/stats_tests.rs"]
+mod stats_tests;
 
 type SharedCogentClient = Arc<Mutex<CoreClient>>;
 type SharedClientTextResponse = Arc<Mutex<Option<CoreClientTextResponseFuture>>>;
@@ -669,8 +669,8 @@ pub struct CogentQueryRequest {
     pub prompt: String,
     pub options: Option<CogentTextOptions>,
     pub local: Option<LocalTextOptions>,
-    #[napi(js_name = "remoteOptions")]
-    pub remote_options: Option<serde_json::Value>,
+    #[napi(js_name = "gatewayOptions")]
+    pub gateway_options: Option<serde_json::Value>,
     #[napi(js_name = "emitTokens")]
     pub emit_tokens: Option<bool>,
 }
@@ -682,7 +682,7 @@ impl CogentQueryRequest {
             prompt: self.prompt.clone(),
             options: optional_core_or_default(self.options.as_ref(), CogentTextOptions::to_core)?,
             local: optional_core_or_default(self.local.as_ref(), LocalTextOptions::to_core)?,
-            remote_options: remote_options_or_empty(self.remote_options.clone())?,
+            gateway_options: gateway_options_or_empty(self.gateway_options.clone())?,
             emit_tokens: self.emit_tokens.unwrap_or(false),
         })
     }
@@ -694,8 +694,8 @@ pub struct CogentChatRequest {
     pub messages: Vec<ChatMessage>,
     pub options: Option<CogentTextOptions>,
     pub local: Option<LocalTextOptions>,
-    #[napi(js_name = "remoteOptions")]
-    pub remote_options: Option<serde_json::Value>,
+    #[napi(js_name = "gatewayOptions")]
+    pub gateway_options: Option<serde_json::Value>,
     #[napi(js_name = "emitTokens")]
     pub emit_tokens: Option<bool>,
 }
@@ -707,7 +707,7 @@ impl CogentChatRequest {
             messages: chat_messages_to_core(self.messages.clone())?,
             options: optional_core_or_default(self.options.as_ref(), CogentTextOptions::to_core)?,
             local: optional_core_or_default(self.local.as_ref(), LocalTextOptions::to_core)?,
-            remote_options: remote_options_or_empty(self.remote_options.clone())?,
+            gateway_options: gateway_options_or_empty(self.gateway_options.clone())?,
             emit_tokens: self.emit_tokens.unwrap_or(false),
         })
     }
@@ -718,8 +718,8 @@ pub struct CogentEmbedRequest {
     pub endpoint: Option<EndpointRef>,
     pub input: String,
     pub local: Option<LocalEmbedOptions>,
-    #[napi(js_name = "remoteOptions")]
-    pub remote_options: Option<serde_json::Value>,
+    #[napi(js_name = "gatewayOptions")]
+    pub gateway_options: Option<serde_json::Value>,
 }
 
 impl CogentEmbedRequest {
@@ -732,7 +732,7 @@ impl CogentEmbedRequest {
                 .as_ref()
                 .map(LocalEmbedOptions::to_core)
                 .unwrap_or_default(),
-            remote_options: remote_options_or_empty(self.remote_options.clone())?,
+            gateway_options: gateway_options_or_empty(self.gateway_options.clone())?,
         })
     }
 }
@@ -744,127 +744,86 @@ pub struct ChatMessage {
     pub content: String,
 }
 
-#[napi(string_enum = "snake_case")]
-#[derive(Clone, Copy)]
-pub enum RemoteProxyProtocol {
-    OpenAiCompatible,
-}
-
-impl From<RemoteProxyProtocol> for CoreRemoteProtocol {
-    fn from(value: RemoteProxyProtocol) -> Self {
-        match value {
-            RemoteProxyProtocol::OpenAiCompatible => Self::OpenAiCompatible,
-        }
-    }
-}
-
 #[napi(object)]
-pub struct RemoteAuthHeaderConfig {
-    pub name: String,
-    pub value: String,
-}
-
-#[napi(object)]
-pub struct RemoteStaticHeaderConfig {
-    pub name: String,
-    pub value: String,
-}
-
-#[napi(object)]
-pub struct RemoteAuthConfig {
-    pub bearer: Option<String>,
-    pub header: Option<RemoteAuthHeaderConfig>,
-}
-
-impl RemoteAuthConfig {
-    fn to_core(&self) -> Result<CoreRemoteAuth> {
-        match (&self.bearer, &self.header) {
-            (Some(token), None) => Ok(CoreRemoteAuth::Bearer(CoreRemoteSecret::new(token.clone()))),
-            (None, Some(header)) => Ok(CoreRemoteAuth::Header {
-                name: header.name.clone(),
-                value: CoreRemoteSecret::new(header.value.clone()),
-            }),
-            (Some(_), Some(_)) => Err(invalid_arg("remote auth must set bearer or header")),
-            (None, None) => Err(invalid_arg("remote auth is required")),
-        }
-    }
-}
-
-#[napi(object)]
-pub struct RemoteConfig {
-    pub kind: String,
-    pub model: String,
-    #[napi(js_name = "apiKey")]
-    pub api_key: Option<String>,
+pub struct RemoteGatewayConfig {
+    pub alias: String,
     #[napi(js_name = "baseUrl")]
-    pub base_url: Option<String>,
-    pub version: Option<String>,
-    pub auth: Option<RemoteAuthConfig>,
-    pub protocol: Option<RemoteProxyProtocol>,
-    #[napi(js_name = "staticHeaders")]
-    pub static_headers: Option<Vec<RemoteStaticHeaderConfig>>,
+    pub base_url: String,
+    pub token: String,
     #[napi(js_name = "timeoutMs")]
     pub timeout_ms: Option<u32>,
 }
 
-impl RemoteConfig {
-    fn to_core(&self) -> Result<CoreRemoteConfig> {
+impl RemoteGatewayConfig {
+    fn to_core(&self) -> CoreRemoteGatewayConfig {
         let timeout = self
             .timeout_ms
             .map(|timeout_ms| Duration::from_millis(u64::from(timeout_ms)));
-        match self.kind.as_str() {
-            "openai" => Ok(CoreRemoteConfig::OpenAi(CoreRemoteOpenAiConfig {
-                model: self.model.clone(),
-                api_key: CoreRemoteSecret::new(
-                    self.api_key
-                        .clone()
-                        .ok_or_else(|| invalid_arg("openai remote requires apiKey"))?,
-                ),
-                base_url: self.base_url.clone(),
-                timeout,
-            })),
-            "anthropic" => Ok(CoreRemoteConfig::Anthropic(CoreRemoteAnthropicConfig {
-                model: self.model.clone(),
-                api_key: CoreRemoteSecret::new(
-                    self.api_key
-                        .clone()
-                        .ok_or_else(|| invalid_arg("anthropic remote requires apiKey"))?,
-                ),
-                base_url: self.base_url.clone(),
-                version: self.version.clone(),
-                timeout,
-            })),
-            "proxy" => Ok(CoreRemoteConfig::Proxy(CoreRemoteProxyConfig {
-                model: self.model.clone(),
-                base_url: self
-                    .base_url
-                    .clone()
-                    .ok_or_else(|| invalid_arg("proxy remote requires baseUrl"))?,
-                auth: self
-                    .auth
-                    .as_ref()
-                    .ok_or_else(|| invalid_arg("proxy remote requires auth"))?
-                    .to_core()?,
-                protocol: self
-                    .protocol
-                    .unwrap_or(RemoteProxyProtocol::OpenAiCompatible)
-                    .into(),
-                static_headers: self
-                    .static_headers
-                    .as_ref()
-                    .map(|headers| {
-                        headers
-                            .iter()
-                            .map(|header| (header.name.clone(), header.value.clone()))
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-                timeout,
-            })),
-            _ => Err(invalid_arg(
-                "remote kind must be openai, anthropic, or proxy",
-            )),
+        CoreRemoteGatewayConfig {
+            alias: self.alias.clone(),
+            base_url: self.base_url.clone(),
+            token: CoreRemoteSecret::new(self.token.clone()),
+            timeout,
         }
+    }
+}
+
+const REMOTE_GATEWAY_CONFIG_FIELDS: &[&str] = &["alias", "baseUrl", "token", "timeoutMs"];
+
+fn remote_gateway_config_from_value(value: serde_json::Value) -> Result<RemoteGatewayConfig> {
+    let mut config = match value {
+        serde_json::Value::Object(config) => config,
+        _ => return Err(napi_error("RemoteGatewayConfig must be a JSON object")),
+    };
+
+    for key in config.keys() {
+        if !REMOTE_GATEWAY_CONFIG_FIELDS.contains(&key.as_str()) {
+            return Err(napi_error(format!(
+                "unsupported remote gateway config field: {key}"
+            )));
+        }
+    }
+
+    let timeout_ms = match config.remove("timeoutMs") {
+        Some(serde_json::Value::Number(value)) => {
+            let timeout_ms = value.as_u64().ok_or_else(|| {
+                napi_error("RemoteGatewayConfig.timeoutMs must be a positive integer")
+            })?;
+            if timeout_ms == 0 || timeout_ms > u64::from(u32::MAX) {
+                return Err(napi_error(
+                    "RemoteGatewayConfig.timeoutMs must be a positive integer",
+                ));
+            }
+            Some(timeout_ms as u32)
+        }
+        Some(_) => {
+            return Err(napi_error(
+                "RemoteGatewayConfig.timeoutMs must be a positive integer",
+            ));
+        }
+        None => None,
+    };
+
+    Ok(RemoteGatewayConfig {
+        alias: required_remote_config_string(&mut config, "alias")?,
+        base_url: required_remote_config_string(&mut config, "baseUrl")?,
+        token: required_remote_config_string(&mut config, "token")?,
+        timeout_ms,
+    })
+}
+
+fn required_remote_config_string(
+    config: &mut serde_json::Map<String, serde_json::Value>,
+    field: &'static str,
+) -> Result<String> {
+    match config.remove(field) {
+        Some(serde_json::Value::String(value)) => Ok(value),
+        Some(_) => Err(napi_error(format!(
+            "RemoteGatewayConfig.{field} must be a string"
+        ))),
+        None => Err(napi_error(format!(
+            "RemoteGatewayConfig.{field} is required"
+        ))),
     }
 }
 
@@ -880,20 +839,33 @@ pub struct TokenUsage {
 
 #[napi(object)]
 pub struct RequestStats {
+    #[napi(js_name = "inputTokens")]
     pub input_tokens: i32,
+    #[napi(js_name = "outputTokens")]
     pub output_tokens: i32,
+    #[napi(js_name = "cacheMode")]
     pub cache_mode: String,
+    #[napi(js_name = "cacheSource")]
     pub cache_source: String,
+    #[napi(js_name = "cacheHits")]
     pub cache_hits: i32,
+    #[napi(js_name = "prefillTokens")]
     pub prefill_tokens: i32,
+    #[napi(js_name = "ttftMs")]
     pub ttft_ms: Option<f64>,
+    #[napi(js_name = "interTokenMs")]
     pub inter_token_ms: Option<f64>,
     #[napi(js_name = "e2eMs")]
     pub e2e_ms: Option<f64>,
+    #[napi(js_name = "e2eTokensPerSecond")]
     pub e2e_tokens_per_second: Option<f64>,
+    #[napi(js_name = "decodeTokensPerSecond")]
     pub decode_tokens_per_second: Option<f64>,
+    #[napi(js_name = "prefillTokensPerSecond")]
     pub prefill_tokens_per_second: Option<f64>,
+    #[napi(js_name = "prefillMs")]
     pub prefill_ms: f64,
+    #[napi(js_name = "decodeMs")]
     pub decode_ms: f64,
 }
 
@@ -1054,13 +1026,33 @@ impl CogentClient {
         }))
     }
 
-    #[napi(ts_return_type = "EndpointRef")]
-    pub fn add_remote(&self, id: String, config: RemoteConfig) -> Result<EndpointRef> {
+    #[napi(
+        ts_args_type = "id: string, config: RemoteGatewayConfig",
+        ts_return_type = "EndpointRef"
+    )]
+    pub fn add_remote(&self, id: String, config: serde_json::Value) -> Result<EndpointRef> {
+        let config = remote_gateway_config_from_value(config)?;
         let endpoint = self
             .inner
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
-            .add_remote(id, config.to_core()?)
+            .add_remote(id, config.to_core())
+            .map_err(client_error_without_env)?;
+        Ok(endpoint_ref_to_node(endpoint))
+    }
+
+    #[napi(
+        js_name = "updateRemote",
+        ts_args_type = "id: string, config: RemoteGatewayConfig",
+        ts_return_type = "EndpointRef"
+    )]
+    pub fn update_remote(&self, id: String, config: serde_json::Value) -> Result<EndpointRef> {
+        let config = remote_gateway_config_from_value(config)?;
+        let endpoint = self
+            .inner
+            .lock()
+            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
+            .update_remote(id, config.to_core())
             .map_err(client_error_without_env)?;
         Ok(endpoint_ref_to_node(endpoint))
     }
@@ -1276,12 +1268,12 @@ pub fn set_llama_log_quiet(quiet: bool) {
     core_set_llama_log_quiet(quiet);
 }
 
-fn remote_options_or_empty(
+fn gateway_options_or_empty(
     value: Option<serde_json::Value>,
 ) -> Result<serde_json::Map<String, serde_json::Value>> {
     match value {
         Some(serde_json::Value::Object(options)) => Ok(options),
-        Some(_) => Err(napi_error("remoteOptions must be a JSON object")),
+        Some(_) => Err(napi_error("gatewayOptions must be a JSON object")),
         None => Ok(serde_json::Map::new()),
     }
 }
@@ -1461,8 +1453,7 @@ fn napi_error(message: impl ToString) -> Error {
 
 fn remote_error_message(error: &CoreRemoteError) -> String {
     format!(
-        "{} remote error ({}): {}",
-        error.remote_kind.as_str(),
+        "remote gateway error ({}): {}",
         error.kind.as_str(),
         error.message
     )
@@ -1498,7 +1489,6 @@ fn remote_error_to_node_result(env: Env, error: CoreRemoteError) -> Result<Error
 
     object.set("name", "RemoteError")?;
     object.set("kind", error.kind.as_str())?;
-    object.set("remoteKind", error.remote_kind.as_str())?;
     object.set("status", error.status)?;
     object.set("code", error.code)?;
     object.set("requestId", error.request_id)?;
@@ -1511,7 +1501,10 @@ fn remote_error_to_node_result(env: Env, error: CoreRemoteError) -> Result<Error
 fn client_error_without_env(error: CoreClientError) -> Error {
     match error {
         CoreClientError::Local(error) => core_error(error),
-        CoreClientError::Remote(error) => napi_error(remote_error_message(&error)),
+        CoreClientError::Remote(error) => Error::new(
+            remote_error_status(error.kind),
+            remote_error_message(&error),
+        ),
         CoreClientError::InvalidRequest(message) => invalid_arg(message),
         CoreClientError::UnsupportedOperation {
             endpoint,

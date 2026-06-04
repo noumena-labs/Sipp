@@ -321,6 +321,5 @@ fn snapshot_reuse_enabled(mode: KvReuseMode) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    mod batch_planner_tests;
-}
+#[path = "../../../tests/runtime/scheduler/batch_planner_tests.rs"]
+mod batch_planner_tests;

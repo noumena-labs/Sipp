@@ -17,6 +17,19 @@ const PROGRESS_MIN_PERCENT_STEP = 1;
 const BROWSER_SPLIT_TEMP_PREFIXES = ['tmp-source-', 'tmp-local-source-'];
 const BROWSER_SPLIT_SHARD_PREFIXES = ['split-', 'split-local-'];
 
+/** Browser OPFS policy for deciding when GGUF assets are split into shards. */
+export interface BrowserCachePolicyOptions {
+  /** Maximum single-file GGUF size loaded directly before browser-side splitting is used. */
+  readonly directLoadMaxBytes?: number;
+  /** Maximum target size for each browser-created GGUF shard. */
+  readonly shardMaxBytes?: number;
+}
+
+interface BrowserCachePolicy {
+  readonly directLoadMaxBytes: number;
+  readonly shardMaxBytes: number;
+}
+
 export interface GgufSplitRuntime {
   browserCacheLayout(
     sourceBytes: number,
@@ -69,6 +82,7 @@ interface SplitStoredGgufInput {
   sourceName: string;
   sourceBytes: number;
   outputPrefix: string;
+  shardMaxBytes: number;
   runtime: GgufSplitRuntime;
   signal?: AbortSignal;
   onProgress?: (progress: ModelLoadProgress) => void;
@@ -147,6 +161,20 @@ function nowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
     ? performance.now()
     : Date.now();
+}
+
+function normalizeBrowserCachePolicy(
+  options: BrowserCachePolicyOptions = {}
+): BrowserCachePolicy {
+  const directLoadMaxBytes = options.directLoadMaxBytes ?? DEFAULT_BROWSER_DIRECT_LOAD_MAX_BYTES;
+  const shardMaxBytes = options.shardMaxBytes ?? DEFAULT_BROWSER_SHARD_MAX_BYTES;
+  if (!Number.isInteger(directLoadMaxBytes) || directLoadMaxBytes <= 0) {
+    throw new Error('"browserCache.directLoadMaxBytes" must be a positive integer.');
+  }
+  if (!Number.isInteger(shardMaxBytes) || shardMaxBytes <= 0) {
+    throw new Error('"browserCache.shardMaxBytes" must be a positive integer.');
+  }
+  return { directLoadMaxBytes, shardMaxBytes };
 }
 
 function bytesToHex(bytes: Uint8Array): string {
@@ -248,7 +276,14 @@ function quotaExceededError(name: string, bytes: number, cause: unknown): QueryE
 }
 
 export class AssetStore {
-  constructor(private readonly storage = new FileSystemStorage()) {}
+  private readonly browserCachePolicy: BrowserCachePolicy;
+
+  constructor(
+    private readonly storage = new FileSystemStorage(),
+    browserCachePolicy: BrowserCachePolicyOptions = {}
+  ) {
+    this.browserCachePolicy = normalizeBrowserCachePolicy(browserCachePolicy);
+  }
 
   public ensureAvailable(): void {
     if (!FileSystemStorage.isSupported()) {
@@ -257,6 +292,10 @@ export class AssetStore {
         'Managed model storage requires OPFS, but navigator.storage.getDirectory() is unavailable.'
       );
     }
+  }
+
+  public requiresBrowserSplit(sourceBytes: number): boolean {
+    return sourceBytes > this.browserCachePolicy.directLoadMaxBytes;
   }
 
   public async resolveRemoteMetadata(rawUrl: string, signal?: AbortSignal): Promise<RemoteAssetMetadata> {
@@ -390,7 +429,8 @@ export class AssetStore {
     onProgress?: (progress: ModelLoadProgress) => void
   ): Promise<AssetRecord[]> {
     this.ensureAvailable();
-    if (metadata.bytes <= DEFAULT_BROWSER_DIRECT_LOAD_MAX_BYTES) {
+    const policy = this.browserCachePolicy;
+    if (metadata.bytes <= policy.directLoadMaxBytes) {
       return [await this.downloadRemote(metadata, 'model', signal, onProgress)];
     }
 
@@ -406,8 +446,8 @@ export class AssetStore {
       layout = await runtime.browserCacheLayout(
         metadata.bytes,
         true,
-        DEFAULT_BROWSER_DIRECT_LOAD_MAX_BYTES,
-        DEFAULT_BROWSER_SHARD_MAX_BYTES
+        policy.directLoadMaxBytes,
+        policy.shardMaxBytes
       );
     } catch (error) {
       throw new QueryError(
@@ -482,6 +522,7 @@ export class AssetStore {
       sourceName: metadata.name,
       sourceBytes: metadata.bytes,
       outputPrefix,
+      shardMaxBytes: policy.shardMaxBytes,
       runtime,
       signal,
       onProgress,
@@ -505,7 +546,8 @@ export class AssetStore {
     onProgress?: (progress: ModelLoadProgress) => void
   ): Promise<AssetRecord[]> {
     this.ensureAvailable();
-    if (file.size <= DEFAULT_BROWSER_DIRECT_LOAD_MAX_BYTES) {
+    const policy = this.browserCachePolicy;
+    if (file.size <= policy.directLoadMaxBytes) {
       return [await this.installFile({ kind: 'model', file, signal, onProgress })];
     }
 
@@ -522,8 +564,8 @@ export class AssetStore {
       layout = await runtime.browserCacheLayout(
         file.size,
         true,
-        DEFAULT_BROWSER_DIRECT_LOAD_MAX_BYTES,
-        DEFAULT_BROWSER_SHARD_MAX_BYTES
+        policy.directLoadMaxBytes,
+        policy.shardMaxBytes
       );
     } catch (error) {
       throw new QueryError(
@@ -570,6 +612,7 @@ export class AssetStore {
       sourceName: name,
       sourceBytes: file.size,
       outputPrefix,
+      shardMaxBytes: policy.shardMaxBytes,
       runtime,
       signal,
       onProgress,
@@ -785,7 +828,7 @@ export class AssetStore {
 
       const shardCount = await input.runtime.planGgufSplitCount(
         input.sourceBytes,
-        DEFAULT_BROWSER_SHARD_MAX_BYTES,
+        input.shardMaxBytes,
         { readAt }
       );
       if (!Number.isInteger(shardCount) || shardCount <= 0) {
@@ -804,7 +847,7 @@ export class AssetStore {
       await input.runtime.splitGgufStream(
         input.sourceBytes,
         input.outputPrefix,
-        DEFAULT_BROWSER_SHARD_MAX_BYTES,
+        input.shardMaxBytes,
         {
           readAt,
           openShard: (path, index, count) => {

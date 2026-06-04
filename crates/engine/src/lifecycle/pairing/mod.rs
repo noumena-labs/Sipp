@@ -252,6 +252,5 @@ fn is_selected_asset(file: &ClassifiedAsset, asset_id: Option<&str>) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    mod pairing_tests;
-}
+#[path = "../../tests/lifecycle/pairing_tests.rs"]
+mod pairing_tests;

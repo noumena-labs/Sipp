@@ -53,6 +53,5 @@ impl<B: StorageBackend> ModelService<B> {
 }
 
 #[cfg(test)]
-mod tests {
-    mod load_assets_tests;
-}
+#[path = "../../tests/lifecycle/service/load_assets_tests.rs"]
+mod load_assets_tests;

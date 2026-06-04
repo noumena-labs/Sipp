@@ -45,13 +45,23 @@ cargo xtask build all
 ## Troubleshooting
 If a build fails stating missing CMake variables or SDKs, it is usually because the environment injection failed. The `xtask` orchestrator automatically downloads hermetic dependencies into `.build/toolchain/` at the root of the repo (e.g., `.build/toolchain/vulkan`, `.build/toolchain/emsdk`, `.build/toolchain/ninja`).
 
-## Run Commands
+## Run And Test Commands
 
-Use the `run` group for finite app, binding, and llama.cpp workflows:
+Use the `run` group for long-lived apps and non-test diagnostics. Use the
+`test` group for white-box tests, interface tests, smoke checks, and coverage:
 
 ```bash
-cargo xtask run apps test
 cargo xtask run apps serve examples
-cargo xtask run bindings all --model <model.gguf>
 cargo xtask run llama backend-ops --backend cpu
+cargo xtask test list
+cargo xtask test all --profile contributor
+cargo xtask test all --profile quick
+cargo xtask test whitebox --suite xtask
+cargo xtask test whitebox --suite rust-crates --package cogentlm-core
+cargo xtask test interface --suite model-smoke --backend cpu --model <model.gguf>
+cargo xtask test coverage --scope whitebox --backend cpu
 ```
+
+Profiles are cumulative: `contributor` runs `layout` and `xtask`; `quick` adds
+`rust-crates`; `ci` adds `package-ts` and `rust-public-api`; `full` runs every
+cataloged suite. See `docs/testing.md` for the human-facing summary.

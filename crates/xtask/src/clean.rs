@@ -10,6 +10,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use xshell::Shell;
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "tests/clean_tests.rs"]
+mod clean_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+
 const GENERATED_DIRS: &[&str] = &[
     "dist", ".vite", ".turbo", "coverage", "build", "out", ".next",
 ];
@@ -196,37 +208,4 @@ fn checked_delete_target(workspace: &Path, target: &Path) -> Result<PathBuf> {
     }
 
     Ok(canonical)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::first_child_under;
-    use std::path::PathBuf;
-
-    #[test]
-    fn finds_top_level_child_for_nested_path() {
-        let root = PathBuf::from("workspace").join(".build").join("cargo");
-        let path = root.join("debug").join("deps").join("xtask.exe");
-
-        assert_eq!(first_child_under(&root, &path), Some(root.join("debug")));
-    }
-
-    #[test]
-    fn finds_direct_child_path() {
-        let root = PathBuf::from("workspace").join(".build").join("cargo");
-        let path = root.join("xtask.exe");
-
-        assert_eq!(
-            first_child_under(&root, &path),
-            Some(root.join("xtask.exe"))
-        );
-    }
-
-    #[test]
-    fn ignores_path_outside_root() {
-        let root = PathBuf::from("workspace").join(".build").join("cargo");
-        let path = PathBuf::from("workspace").join(".build").join("xtask");
-
-        assert_eq!(first_child_under(&root, &path), None);
-    }
 }

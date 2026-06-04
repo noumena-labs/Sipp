@@ -4,7 +4,7 @@ import {
   type CharacterRuntimeClient,
   type CharacterConfig,
   type CharacterChooseResult,
-} from '@noumena-labs/cogentlm-browser/character';
+} from '@noumena-labs/cogentlm/character';
 import { buildDecisionContext } from './decision-context.js';
 import type { AgentGoal, AgentPerception, DecisionContext } from './types.js';
 

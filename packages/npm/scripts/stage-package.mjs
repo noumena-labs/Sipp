@@ -4,11 +4,11 @@ import { fileURLToPath } from 'node:url';
 
 const packageDir = fileURLToPath(new URL('..', import.meta.url));
 const repoRoot = path.resolve(packageDir, '..', '..');
-const stageDir = path.join(repoRoot, '.build', 'artifacts', 'npm', 'cogentlm-browser');
+const stageDir = path.join(repoRoot, '.build', 'artifacts', 'npm', 'cogentlm');
 const packageJsonPath = path.join(packageDir, 'package.json');
 
 const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8'));
-packageJson.files = ['dist', 'README.md'];
+packageJson.files = ['dist', 'LICENSE', 'README.md'];
 packageJson.repository = {
   ...packageJson.repository,
   directory: 'packages/npm',
@@ -20,10 +20,12 @@ await writeFile(
   `${JSON.stringify(packageJson, null, 2)}\n`,
 );
 
-const readmePath = path.join(packageDir, 'README.md');
+const packageReadmePath = path.join(packageDir, 'README.md');
+const rootReadmePath = path.join(repoRoot, 'README.md');
+await copyFile(path.join(repoRoot, 'LICENSE'), path.join(stageDir, 'LICENSE'));
 try {
-  await access(readmePath);
-  await copyFile(readmePath, path.join(stageDir, 'README.md'));
+  await access(packageReadmePath);
+  await copyFile(packageReadmePath, path.join(stageDir, 'README.md'));
 } catch {
-  // README is optional in this workspace package.
+  await copyFile(rootReadmePath, path.join(stageDir, 'README.md'));
 }

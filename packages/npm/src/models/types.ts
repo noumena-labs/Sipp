@@ -183,11 +183,18 @@ export type QueryInput =
   };
 
 export interface QueryOptions {
+  /** Explicit endpoint for this request. Omitted requests use the current local endpoint. */
+  endpoint?: EndpointRef;
   session?: string;
   maxTokens?: number;
+  temperature?: number;
+  topP?: number;
+  stop?: readonly string[];
   signal?: AbortSignal;
   emitTokens?: boolean;
   grammar?: string;
+  /** Gateway-specific request options passed only to remote gateway endpoints. */
+  gatewayOptions?: GatewayOptions;
 }
 
 export type ChatInput =
@@ -196,6 +203,9 @@ export type ChatInput =
       messages: readonly ChatMessage[];
       media?: Uint8Array[];
     };
+
+/** Gateway-specific options merged into remote request bodies after typed fields. */
+export type GatewayOptions = Record<string, unknown>;
 
 export type ChatOptions = QueryOptions;
 
@@ -351,10 +361,14 @@ export interface GenerationResult {
 export type { PoolingType };
 
 export interface EmbedOptions {
+  /** Explicit endpoint for this request. Omitted requests use the current local endpoint. */
+  endpoint?: EndpointRef;
   /** L2-normalize the returned vector. Ignored for `pooling = 'rank'`. Default: true. */
   normalize?: boolean;
   contextKey?: string;
   signal?: AbortSignal;
+  /** Gateway-specific request options passed only to remote gateway endpoints. */
+  gatewayOptions?: GatewayOptions;
 }
 
 export interface EmbeddingResult {
@@ -376,6 +390,34 @@ export interface BrowserTextRun {
 export interface BrowserEmbeddingRun {
   readonly response: Promise<EmbeddingResult>;
   cancel(reason?: unknown): void;
+}
+
+/** Stable reference returned by local and remote endpoint registration. */
+export type EndpointRef =
+  | {
+      readonly kind: 'local';
+      readonly id: string;
+    }
+  | {
+      readonly kind: 'remote';
+      readonly id: string;
+    };
+
+/** Supplies a short-lived gateway bearer token for browser remote calls. */
+export type RemoteTokenProvider = () => string | Promise<string>;
+
+/** Browser-safe configuration for a CogentLM remote gateway endpoint. */
+export interface RemoteGatewayConfig {
+  /** Public gateway alias. */
+  readonly alias: string;
+  /** Gateway base URL. */
+  readonly baseUrl: string;
+  /** Static bearer token for the gateway. Prefer `tokenProvider` for rotation. */
+  readonly token?: string;
+  /** Token callback used to fetch a fresh gateway bearer token per request. */
+  readonly tokenProvider?: RemoteTokenProvider;
+  /** Request timeout in milliseconds. */
+  readonly timeoutMs?: number;
 }
 
 export type EngineEvent =
@@ -440,6 +482,10 @@ export interface CogentClient {
   listLocal(): Promise<ModelInfo[]>;
   /** Remove an installed local model by id. */
   removeLocal(id: string): Promise<void>;
+  /** Register a remote gateway endpoint. */
+  addRemote(id: string, config: RemoteGatewayConfig): EndpointRef;
+  /** Replace the config for an existing remote gateway endpoint. */
+  updateRemote(id: string, config: RemoteGatewayConfig): EndpointRef;
   query(input: QueryInput, options?: QueryOptions): BrowserTextRun;
   chat(input: ChatInput, options?: ChatOptions): BrowserTextRun;
   embed(input: string, options?: EmbedOptions): BrowserEmbeddingRun;
@@ -466,12 +512,37 @@ export type QueryErrorCode =
 
 export class QueryError extends Error {
   public readonly code: QueryErrorCode;
+  /** HTTP status returned by a remote gateway, when available. */
+  public readonly status?: number;
+  /** Gateway error code returned by the normalized gateway protocol. */
+  public readonly gatewayCode?: string;
+  /** Gateway request id returned by `x-request-id` or a stream response. */
+  public readonly requestId?: string;
+  /** Retry delay in milliseconds returned by `retry-after-ms` or `retry-after`. */
+  public readonly retryAfterMs?: number;
 
-  constructor(code: QueryErrorCode, message: string, options?: { cause?: unknown }) {
+  constructor(code: QueryErrorCode, message: string, options?: QueryErrorOptions) {
     super(message, options);
     this.name = 'QueryError';
     this.code = code;
+    this.status = options?.status;
+    this.gatewayCode = options?.gatewayCode;
+    this.requestId = options?.requestId;
+    this.retryAfterMs = options?.retryAfterMs;
   }
+}
+
+/** Optional structured metadata attached to browser query failures. */
+export interface QueryErrorOptions {
+  readonly cause?: unknown;
+  /** HTTP status returned by a remote gateway, when available. */
+  readonly status?: number;
+  /** Gateway error code returned by the normalized gateway protocol. */
+  readonly gatewayCode?: string;
+  /** Gateway request id returned by `x-request-id` or a stream response. */
+  readonly requestId?: string;
+  /** Retry delay in milliseconds returned by `retry-after-ms` or `retry-after`. */
+  readonly retryAfterMs?: number;
 }
 
 export interface AssetRecord {
