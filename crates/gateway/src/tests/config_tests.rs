@@ -859,6 +859,7 @@ fn gateway_example_configs_parse() {
         "openai_compatible_gateway.toml",
         "openai_gateway.toml",
         "anthropic_gateway.toml",
+        "remote_smoke_gateway.toml",
     ] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("examples")

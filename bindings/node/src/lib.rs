@@ -49,6 +49,9 @@ use serde::de::DeserializeOwned;
 #[cfg(test)]
 #[path = "tests/remote_tests.rs"]
 mod remote_tests;
+#[cfg(test)]
+#[path = "tests/stats_tests.rs"]
+mod stats_tests;
 
 type SharedCogentClient = Arc<Mutex<CoreClient>>;
 type SharedClientTextResponse = Arc<Mutex<Option<CoreClientTextResponseFuture>>>;
@@ -836,20 +839,33 @@ pub struct TokenUsage {
 
 #[napi(object)]
 pub struct RequestStats {
+    #[napi(js_name = "inputTokens")]
     pub input_tokens: i32,
+    #[napi(js_name = "outputTokens")]
     pub output_tokens: i32,
+    #[napi(js_name = "cacheMode")]
     pub cache_mode: String,
+    #[napi(js_name = "cacheSource")]
     pub cache_source: String,
+    #[napi(js_name = "cacheHits")]
     pub cache_hits: i32,
+    #[napi(js_name = "prefillTokens")]
     pub prefill_tokens: i32,
+    #[napi(js_name = "ttftMs")]
     pub ttft_ms: Option<f64>,
+    #[napi(js_name = "interTokenMs")]
     pub inter_token_ms: Option<f64>,
     #[napi(js_name = "e2eMs")]
     pub e2e_ms: Option<f64>,
+    #[napi(js_name = "e2eTokensPerSecond")]
     pub e2e_tokens_per_second: Option<f64>,
+    #[napi(js_name = "decodeTokensPerSecond")]
     pub decode_tokens_per_second: Option<f64>,
+    #[napi(js_name = "prefillTokensPerSecond")]
     pub prefill_tokens_per_second: Option<f64>,
+    #[napi(js_name = "prefillMs")]
     pub prefill_ms: f64,
+    #[napi(js_name = "decodeMs")]
     pub decode_ms: f64,
 }
 
