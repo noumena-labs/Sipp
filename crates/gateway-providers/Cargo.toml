@@ -1,8 +1,10 @@
 [package]
 name = "cogentlm-gateway-providers"
+description = "Provider adapters for CogentLM gateway servers"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+readme = "../../README.md"
 version.workspace = true
 
 [dependencies]

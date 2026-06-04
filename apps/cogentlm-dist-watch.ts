@@ -32,13 +32,13 @@ const cogentClientArtifactDir = path.join(
   '.build',
   'artifacts',
   'npm',
-  'cogentlm-browser'
+  'cogentlm'
 );
 const cogentClientSrcDir = path.join(cogentClientPackageDir, 'src');
 const cogentClientWasmDir = path.join(cogentClientArtifactDir, 'dist', 'wasm');
 const sourceFilePattern = /\.tsx?$/;
 const wasmArtifactPattern = /cogentlm-wasm\.(?:js|wasm)$/;
-const rebuildArgs = ['run', '--filter=@noumena-labs/cogentlm-browser', 'build:ts'];
+const rebuildArgs = ['run', '--filter=@noumena-labs/cogentlm', 'build:ts'];
 
 function isCogentClientSourceFile(filePath: string): boolean {
   const resolvedPath = path.resolve(filePath);
@@ -72,13 +72,13 @@ function rebuildCogentClientDist(): Promise<boolean> {
     });
 
     childProcess.once('error', (error) => {
-      console.error(`[cogentlm-browser] failed to start TS rebuild: ${error.message}`);
+      console.error(`[cogentlm] failed to start TS rebuild: ${error.message}`);
       resolve(false);
     });
 
     childProcess.once('exit', (code, signal) => {
       if (signal) {
-        console.error(`[cogentlm-browser] TS rebuild terminated by ${signal}`);
+        console.error(`[cogentlm] TS rebuild terminated by ${signal}`);
         resolve(false);
         return;
       }
@@ -90,7 +90,7 @@ function rebuildCogentClientDist(): Promise<boolean> {
 
 export function cogentClientDistWatch(): VitePluginLike {
   return {
-    name: 'cogentlm-browser-dist-watch',
+    name: 'cogentlm-dist-watch',
     apply: 'serve',
     configureServer(server) {
       let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -108,7 +108,7 @@ export function cogentClientDistWatch(): VitePluginLike {
 
         do {
           rebuildRequested = false;
-          console.info('[cogentlm-browser] rebuilding TS dist...');
+          console.info('[cogentlm] rebuilding TS dist...');
           const rebuildSucceeded = await rebuildCogentClientDist();
 
           if (stopped) {
@@ -116,10 +116,10 @@ export function cogentClientDistWatch(): VitePluginLike {
           }
 
           if (rebuildSucceeded) {
-            console.info('[cogentlm-browser] TS dist rebuilt; reloading app.');
+            console.info('[cogentlm] TS dist rebuilt; reloading app.');
             server.ws.send({ type: 'full-reload' });
           } else {
-            console.error('[cogentlm-browser] TS dist rebuild failed; keeping current app session.');
+            console.error('[cogentlm] TS dist rebuild failed; keeping current app session.');
           }
         } while (rebuildRequested && !stopped);
 
@@ -153,7 +153,7 @@ export function cogentClientDistWatch(): VitePluginLike {
 
         wasmReloadTimer = setTimeout(() => {
           wasmReloadTimer = null;
-          console.info('[cogentlm-browser] wasm runtime rebuilt; reloading app.');
+          console.info('[cogentlm] wasm runtime rebuilt; reloading app.');
           server.ws.send({ type: 'full-reload' });
         }, 150);
       };
@@ -175,7 +175,7 @@ export function cogentClientDistWatch(): VitePluginLike {
       server.watcher.on('add', handleAdd);
       server.watcher.on('change', handleChange);
       server.watcher.on('unlink', handleUnlink);
-      console.info('[cogentlm-browser] watching packages/npm/src and .build artifact wasm.');
+      console.info('[cogentlm] watching packages/npm/src and .build artifact wasm.');
 
       server.httpServer?.once('close', () => {
         stopped = true;

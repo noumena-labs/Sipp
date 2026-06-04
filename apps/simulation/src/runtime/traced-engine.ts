@@ -9,9 +9,9 @@ import type {
   QueryInput,
   QueryOptions,
   TokenBatch,
-} from '@noumena-labs/cogentlm-browser';
-import type { CharacterRuntimeClient } from '@noumena-labs/cogentlm-browser/character';
-import type { DirectorRuntimeClient } from '@noumena-labs/cogentlm-browser/director';
+} from '@noumena-labs/cogentlm';
+import type { CharacterRuntimeClient } from '@noumena-labs/cogentlm/character';
+import type { DirectorRuntimeClient } from '@noumena-labs/cogentlm/director';
 import type { BrainDefinition, BrainQueryType, BrainQueryStatus, BrainActivityStore } from './brain-activity-store.js';
 import type { SimulationBus } from './bus.js';
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { CogentClient, type RuntimeObservation } from '@noumena-labs/cogentlm-browser';
+import { CogentClient, type RuntimeObservation } from '@noumena-labs/cogentlm';
 import {
   DEFAULT_DRAWING_DIRECTOR_CONFIG,
   DRAWING_COLORS,

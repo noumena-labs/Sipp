@@ -1,9 +1,11 @@
 [package]
 name = "cogentlm-cli"
+description = "Command-line interface for CogentLM local inference"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+readme = "../../README.md"
 
 [features]
 default = ["native"]

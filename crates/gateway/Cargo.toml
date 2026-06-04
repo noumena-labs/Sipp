@@ -1,8 +1,10 @@
 [package]
 name = "cogentlm-gateway"
+description = "Server-side CogentLM Remote Gateway implementation"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+readme = "../../README.md"
 version.workspace = true
 
 [features]

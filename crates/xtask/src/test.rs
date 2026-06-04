@@ -55,6 +55,7 @@ const SKIPPED_APP_TEST_DIRS: &[&str] = &[
 ];
 
 const RUST_CRATE_TEST_TARGETS: &[RustTestTarget] = &[
+    RustTestTarget::lib("cogentlm"),
     RustTestTarget::lib("cogentlm-core"),
     RustTestTarget::lib("cogentlm-shard"),
     RustTestTarget::lib("cogentlm-sys"),
@@ -72,6 +73,7 @@ const RUST_BINDING_TEST_TARGETS: &[RustTestTarget] = &[
     RustTestTarget::package("cogentlm-wasm"),
 ];
 const RUST_PUBLIC_API_TEST_TARGETS: &[RustTestTarget] = &[
+    RustTestTarget::test("cogentlm", "public_api"),
     RustTestTarget::test("cogentlm-client", "public_api"),
     RustTestTarget::test("cogentlm-gateway-providers", "public_api"),
     RustTestTarget::test("cogentlm-shard", "public_api"),
@@ -81,6 +83,7 @@ const CLI_BLACK_BOX_TEST_TARGETS: &[RustTestTarget] =
 
 const XTASK_SOURCE_ROOTS: &[&str] = &["crates/xtask/src"];
 const RUST_CRATE_SOURCE_ROOTS: &[&str] = &[
+    "crates/cogentlm/src",
     "crates/core/src",
     "crates/shard/src",
     "crates/sys/src",
@@ -100,6 +103,7 @@ const RUST_BINDING_SOURCE_ROOTS: &[&str] = &[
 const PACKAGE_TS_SOURCE_ROOTS: &[&str] = &["packages/npm/src"];
 const APP_TS_SOURCE_ROOTS: &[&str] = &["apps"];
 const RUST_PUBLIC_API_SOURCE_ROOTS: &[&str] = &[
+    "crates/cogentlm/src",
     "crates/client/src",
     "crates/gateway-providers/src",
     "crates/shard/src",
@@ -2457,6 +2461,7 @@ fn rust_target_case_files(ctx: &BuildContext, targets: &[RustTestTarget]) -> Res
 
 fn rust_package_root(ctx: &BuildContext, package: &str) -> Result<PathBuf> {
     let relative = match package {
+        "cogentlm" => &["crates", "cogentlm"],
         "cogentlm-core" => &["crates", "core"],
         "cogentlm-shard" => &["crates", "shard"],
         "cogentlm-sys" => &["crates", "sys"],

@@ -1,9 +1,11 @@
 [package]
 name = "cogentlm-client"
+description = "High-level CogentLM local and remote inference client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+readme = "../../README.md"
 
 [features]
 default = ["native", "remote"]
@@ -17,7 +19,7 @@ remote = ["dep:cogentlm-remote", "dep:tokio"]
 
 [dependencies]
 cogentlm-core.workspace = true
-cogentlm-engine = { path = "../engine", default-features = false }
+cogentlm-engine = { workspace = true, default-features = false }
 cogentlm-remote = { workspace = true, optional = true }
 futures.workspace = true
 futures-channel.workspace = true

@@ -306,6 +306,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cogentlm"
+version = "0.1.0"
+dependencies = [
+ "cogentlm-client",
+ "cogentlm-core",
+ "cogentlm-engine",
+ "cogentlm-shard",
+ "futures",
+]
+
+[[package]]
 name = "cogentlm-cli"
 version = "0.1.0"
 dependencies = [

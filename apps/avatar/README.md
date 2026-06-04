@@ -1,7 +1,7 @@
 # apps/avatar
 
 Small React + three.js high-fantasy avatar demo showing how to pair
-`CogentClient` with `@noumena-labs/cogentlm-browser/character` and a VRM character.
+`CogentClient` with `@noumena-labs/cogentlm/character` and a VRM character.
 
 The app keeps responsibilities split cleanly:
 
@@ -116,5 +116,5 @@ characters too.
 Use `persona.anchorExamples` for durable steering and `persona.dialogExamples`
 for conversational flow examples.
 
-See `packages/cogentlm-browser/docs/character-harness.md` for the full harness API
+See `packages/npm/docs/character-harness.md` for the full harness API
 and config shape.

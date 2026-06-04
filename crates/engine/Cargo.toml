@@ -1,9 +1,11 @@
 [package]
 name = "cogentlm-engine"
+description = "Native local inference engine for CogentLM"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+readme = "../../README.md"
 
 [features]
 default = ["native"]

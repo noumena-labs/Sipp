@@ -1,4 +1,4 @@
-import type { CogentClient } from '@noumena-labs/cogentlm-browser';
+import type { CogentClient } from '@noumena-labs/cogentlm';
 
 export interface ExampleContext {
   client: CogentClient;

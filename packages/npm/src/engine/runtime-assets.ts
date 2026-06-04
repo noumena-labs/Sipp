@@ -2,7 +2,8 @@ import type { CogentClientOptions } from './browser-client.js';
 import { currentLocationOrigin, resolveUrl } from '../utils/url.js';
 
 const VITE_OPTIMIZED_DEPS_SEGMENT = '/node_modules/.vite/deps/';
-const PACKAGE_ROOT = 'node_modules/@noumena-labs/cogentlm-browser';
+const INTERNAL_PACKAGE_ROOT = 'node_modules/@noumena-labs/cogentlm';
+const PUBLIC_PACKAGE_ROOT = 'node_modules/cogentlm';
 
 export interface RuntimeUrls {
   moduleUrl: string;
@@ -39,13 +40,31 @@ export function resolveOptimizedPackageAssetUrl(
     return null;
   }
 
+  const packageRoot = packageRootForOptimizedDependency(
+    parsed.pathname.slice(optimizedDepsIndex + VITE_OPTIMIZED_DEPS_SEGMENT.length)
+  );
+  if (packageRoot == null) {
+    return null;
+  }
+
   const basePath = parsed.pathname.slice(0, optimizedDepsIndex);
   const normalizedRelativePath = packageRelativePath.replace(/^\/+/, '');
-  parsed.pathname = `${basePath}/${PACKAGE_ROOT}/${normalizedRelativePath}`;
+  parsed.pathname = `${basePath}/${packageRoot}/${normalizedRelativePath}`;
   parsed.search = '';
   parsed.hash = '';
 
   return parsed.toString();
+}
+
+function packageRootForOptimizedDependency(optimizedPath: string): string | null {
+  const fileName = optimizedPath.split('/')[0] ?? '';
+  if (fileName.startsWith('@noumena-labs_cogentlm')) {
+    return INTERNAL_PACKAGE_ROOT;
+  }
+  if (fileName.startsWith('cogentlm')) {
+    return PUBLIC_PACKAGE_ROOT;
+  }
+  return null;
 }
 
 export function getDefaultRuntimeUrls(importerUrl: string = import.meta.url): RuntimeUrls {

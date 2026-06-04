@@ -1,8 +1,19 @@
-name: Release cogentlm
+name: Release cogentlm packages
 
 on:
   workflow_dispatch:
     inputs:
+      package:
+        description: Package endpoint to generate or publish
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - web-npm
+          - node-npm
+          - python
+          - rust
       npm_tag:
         description: npm dist-tag to publish
         required: true
@@ -25,17 +36,25 @@ concurrency:
 
 jobs:
   release:
-    name: Validate and publish release package
+    name: Generate and publish release packages
     runs-on: ubuntu-latest
     env:
       CE_WASM_BUILD_PARALLEL_LEVEL: "2"
+      SELECTED_PACKAGE: ${{ inputs.package }}
     steps:
-      - name: Require master
+      - name: Require master for publishing
         run: |
-          if [ "${GITHUB_REF}" != "refs/heads/master" ]; then
-            echo "::error::Release workflow must run from master."
+          set -euo pipefail
+          if [ "${{ inputs.dry_run }}" = "false" ] && [ "${GITHUB_REF}" != "refs/heads/master" ]; then
+            echo "::error::Publishing release packages must run from master."
             exit 1
           fi
+
+      - name: Block unsupported Rust crates.io publish
+        if: ${{ inputs.dry_run == false && (inputs.package == 'all' || inputs.package == 'rust') }}
+        run: |
+          echo "::error::Rust crates.io publishing is blocked until cogentlm-sys no longer depends on the private llama.cpp submodule path. Run a dry run to generate the Rust source artifact, or choose web-npm, node-npm, or python."
+          exit 1
 
       - name: Check out repository
         uses: actions/checkout@v6.0.2
@@ -134,20 +153,23 @@ jobs:
       - name: Run full release test workflow
         run: cargo xtask --plain test all --profile full --backend cpu
 
-      - name: Build staged browser package
+      - name: Build staged web package
+        if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' }}
         run: cargo xtask --plain build wasm
 
-      - name: Run staged package import smoke
+      - name: Run web package import smoke
+        if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' }}
         run: |
           node --input-type=module <<'NODE'
-          const pkg = await import('./.build/artifacts/npm/cogentlm-browser/dist/esm/index.js');
+          const pkg = await import('./.build/artifacts/npm/cogentlm/dist/esm/index.js');
           if (typeof pkg.CogentClient !== 'function') {
             throw new Error('CogentClient export is missing from the staged package.');
           }
           NODE
 
-      - name: Prepare public npm package metadata
-        working-directory: .build/artifacts/npm/cogentlm-browser
+      - name: Prepare public web npm metadata
+        if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' }}
+        working-directory: .build/artifacts/npm/cogentlm
         run: |
           node --input-type=module <<'NODE'
           import { readFileSync, writeFileSync } from 'node:fs';
@@ -157,17 +179,116 @@ jobs:
           writeFileSync('package.json', `${JSON.stringify(pkg, null, 2)}\n`);
           NODE
 
-      - name: Validate npm publish
+      - name: Upload web npm artifact
+        if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' }}
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: cogentlm-web-npm
+          path: .build/artifacts/npm/cogentlm
+
+      - name: Validate web npm publish
+        if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' }}
         env:
           NPM_TAG: ${{ inputs.npm_tag }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        working-directory: .build/artifacts/npm/cogentlm-browser
+        working-directory: .build/artifacts/npm/cogentlm
         run: npm publish --dry-run --registry https://registry.npmjs.org --tag "$NPM_TAG"
 
-      - name: Publish to npm
-        if: ${{ inputs.dry_run == false }}
+      - name: Publish web package to npm
+        if: ${{ inputs.dry_run == false && (inputs.package == 'all' || inputs.package == 'web-npm') }}
         env:
           NPM_TAG: ${{ inputs.npm_tag }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        working-directory: .build/artifacts/npm/cogentlm-browser
+        working-directory: .build/artifacts/npm/cogentlm
         run: npm publish --registry https://registry.npmjs.org --tag "$NPM_TAG"
+
+      - name: Build Node server package
+        if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
+        run: cargo xtask --plain build node --backend all
+
+      - name: Stage Node server package
+        if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
+        working-directory: bindings/node
+        run: bun run build:stage
+
+      - name: Prepare public Node npm metadata
+        if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
+        working-directory: .build/artifacts/npm/cogentlm-server
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          pkg.name = 'cogentlm-server';
+          pkg.publishConfig = { registry: 'https://registry.npmjs.org', access: 'public' };
+          writeFileSync('package.json', `${JSON.stringify(pkg, null, 2)}\n`);
+          NODE
+
+      - name: Upload Node npm artifact
+        if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: cogentlm-server-npm
+          path: .build/artifacts/npm/cogentlm-server
+
+      - name: Validate Node npm publish
+        if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
+        env:
+          NPM_TAG: ${{ inputs.npm_tag }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        working-directory: .build/artifacts/npm/cogentlm-server
+        run: npm publish --dry-run --registry https://registry.npmjs.org --tag "$NPM_TAG"
+
+      - name: Publish Node package to npm
+        if: ${{ inputs.dry_run == false && (inputs.package == 'all' || inputs.package == 'node-npm') }}
+        env:
+          NPM_TAG: ${{ inputs.npm_tag }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        working-directory: .build/artifacts/npm/cogentlm-server
+        run: npm publish --registry https://registry.npmjs.org --tag "$NPM_TAG"
+
+      - name: Build Python wheel
+        if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
+        run: cargo xtask --plain build python --backend all
+
+      - name: Validate Python wheel metadata
+        if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
+        run: .build/toolchain/uv/uv tool run twine check .build/artifacts/python/*.whl
+
+      - name: Upload Python wheel artifact
+        if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: cogentlm-python-wheels
+          path: .build/artifacts/python/*.whl
+
+      - name: Publish Python package to PyPI
+        if: ${{ inputs.dry_run == false && (inputs.package == 'all' || inputs.package == 'python') }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: .build/artifacts/python
+
+      - name: Package Rust facade source artifact
+        if: ${{ inputs.package == 'all' || inputs.package == 'rust' }}
+        run: |
+          mkdir -p .build/artifacts/rust
+          tar -czf .build/artifacts/rust/cogentlm-rust-source-${{ github.run_number }}.${{ github.run_attempt }}.tar.gz \
+            Cargo.toml \
+            Cargo.lock \
+            README.md \
+            LICENSE \
+            crates/cogentlm \
+            crates/core \
+            crates/shard \
+            crates/sys \
+            crates/engine \
+            crates/remote \
+            crates/gateway \
+            crates/gateway-providers \
+            crates/client
+
+      - name: Upload Rust crate artifact
+        if: ${{ inputs.package == 'all' || inputs.package == 'rust' }}
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: cogentlm-rust-source
+          path: .build/artifacts/rust/*.tar.gz

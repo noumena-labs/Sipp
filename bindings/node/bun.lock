@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@noumena-labs/cogentlm-node",
+      "name": "@noumena-labs/cogentlm-server",
       "devDependencies": {
         "@napi-rs/cli": "^3.3.0",
         "c8": "^10.1.3",

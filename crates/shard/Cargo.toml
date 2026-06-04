@@ -1,9 +1,11 @@
 [package]
 name = "cogentlm-shard"
+description = "GGUF inspection and sharding utilities for CogentLM"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+readme = "../../README.md"
 
 [dependencies]
 serde.workspace = true

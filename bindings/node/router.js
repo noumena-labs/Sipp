@@ -100,16 +100,12 @@ function requestedBackends() {
   return requested === 'auto' ? autoBackendsForHost() : [requested]
 }
 
-function backendBinaryPath(backend, triplet) {
-  return path.join(
-    __dirname,
-    '..',
-    '..',
-    '.build',
-    'artifacts',
-    'node',
-    `${BINARY_NAME}_${backend}.${triplet}.node`,
-  )
+function backendBinaryPaths(backend, triplet) {
+  const fileName = `${BINARY_NAME}_${backend}.${triplet}.node`
+  return [
+    path.join(__dirname, 'native', fileName),
+    path.join(__dirname, '..', '..', '.build', 'artifacts', 'node', fileName),
+  ]
 }
 
 function backendNameMatches(value, backend) {
@@ -147,10 +143,18 @@ function assertBackendUsable(binding, backend) {
 }
 
 function loadCandidate(backend, triplet) {
-  const binding = require(backendBinaryPath(backend, triplet))
-  assertBackendUsable(binding, backend)
-  activeBackend = backend
-  return binding
+  const errors = []
+  for (const binaryPath of backendBinaryPaths(backend, triplet)) {
+    try {
+      const binding = require(binaryPath)
+      assertBackendUsable(binding, backend)
+      activeBackend = backend
+      return binding
+    } catch (error) {
+      errors.push(error)
+    }
+  }
+  throw errors[errors.length - 1]
 }
 
 function loadNativeBinding() {

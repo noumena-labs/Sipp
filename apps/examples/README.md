@@ -1,6 +1,6 @@
 # CogentClient Examples
 
-This directory contains minimal, developer-centric examples for the `cogentlm-browser` library.
+This directory contains minimal, developer-centric examples for the `@noumena-labs/cogentlm` library.
 
 ## Getting Started
 

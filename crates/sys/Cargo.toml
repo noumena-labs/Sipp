@@ -1,9 +1,11 @@
 [package]
 name = "cogentlm-sys"
+description = "Native llama.cpp FFI layer for CogentLM"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+readme = "../../README.md"
 links = "cogentlm"
 
 [features]

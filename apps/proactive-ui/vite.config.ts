@@ -7,7 +7,7 @@ import { cogentClientDistWatch } from '../cogentlm-dist-watch';
 const proactiveUiAppDir = fileURLToPath(new URL('.', import.meta.url));
 const cogentClientDistDir = path.resolve(
   proactiveUiAppDir,
-  '../../.build/artifacts/npm/cogentlm-browser/dist/esm'
+  '../../.build/artifacts/npm/cogentlm/dist/esm'
 );
 const cogentClientEntry = path.join(cogentClientDistDir, 'index.js');
 const appOutDir = path.resolve(proactiveUiAppDir, '../../.build/artifacts/apps/proactive-ui');
@@ -20,12 +20,12 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@noumena-labs/cogentlm-browser': cogentClientEntry,
+      '@noumena-labs/cogentlm': cogentClientEntry,
     },
     preserveSymlinks: true,
   },
   optimizeDeps: {
-    exclude: ['@noumena-labs/cogentlm-browser'],
+    exclude: ['@noumena-labs/cogentlm'],
   },
   server: {
     headers: {

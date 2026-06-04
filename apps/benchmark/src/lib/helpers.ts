@@ -2,7 +2,7 @@ import type {
   CogentClient,
   ModelLoadOptions,
   ObservabilitySnapshot,
-} from '@noumena-labs/cogentlm-browser';
+} from '@noumena-labs/cogentlm';
 import type { BenchmarkOperation, MixedLoadDefinition, ScenarioDefinition } from './types';
 import { countWords } from './utils';
 

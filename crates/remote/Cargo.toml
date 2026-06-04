@@ -1,8 +1,10 @@
 [package]
 name = "cogentlm-remote"
+description = "CogentLM Remote Gateway Protocol client transport"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+readme = "../../README.md"
 version.workspace = true
 
 [dependencies]
