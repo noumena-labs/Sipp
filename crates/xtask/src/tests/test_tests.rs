@@ -131,6 +131,19 @@ fn test_smoke_accepts_node_model_options_and_cases() {
 }
 
 #[test]
+fn test_smoke_accepts_provider_gateway_target() {
+    let cli = Cli::parse_from(["xtask", "test", "smoke", "provider-gateway"]);
+
+    let Commands::Test { command } = cli.command else {
+        panic!("expected test command");
+    };
+    let TestCommands::Smoke(args) = command else {
+        panic!("expected smoke command");
+    };
+    assert!(matches!(args.target, TestSmokeTarget::ProviderGateway));
+}
+
+#[test]
 fn test_verify_accepts_target() {
     let cli = Cli::parse_from([
         "xtask",
@@ -235,6 +248,7 @@ fn smoke_model_and_all_targets_expand_to_primitive_smoke_suites() {
             TestSuiteId::RustSmoke,
             TestSuiteId::NodeSmoke,
             TestSuiteId::PythonSmoke,
+            TestSuiteId::ProviderGatewaySmoke,
             TestSuiteId::BrowserSmoke,
             TestSuiteId::LlamaBackendOps
         ]
@@ -571,6 +585,10 @@ fn cpp_and_rust_case_name_parsers_handle_supported_shapes() {
     assert_eq!(
         parse_rust_fn_name("fn parses_case() {"),
         Some("parses_case".to_owned())
+    );
+    assert_eq!(
+        parse_rust_fn_name("async fn parses_async_case() {"),
+        Some("parses_async_case".to_owned())
     );
     assert_eq!(
         parse_quoted_test_name("test(\"routes aliases\", () => {})", "test("),

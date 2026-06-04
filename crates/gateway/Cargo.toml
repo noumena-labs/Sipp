@@ -34,3 +34,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 tower = "0.5"
+wiremock = "0.6"

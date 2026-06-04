@@ -450,7 +450,7 @@ pub struct TestSmokeArgs {
 /// Holistic integration smoke test targets.
 #[derive(Subcommand)]
 pub enum TestSmokeTarget {
-    /// Run CLI, Rust, Node, Python, browser, and llama smoke tests.
+    /// Run CLI, Rust, Node, Python, provider gateway, browser, and llama smoke tests.
     #[command(after_long_help = BACKEND_HELP)]
     All(TestSmokeAllArgs),
     /// Run model-backed CLI local inference smoke.
@@ -468,6 +468,8 @@ pub enum TestSmokeTarget {
     /// Run CLI, Rust, Node, and Python model-backed smoke tests.
     #[command(after_long_help = BACKEND_HELP)]
     Model(TestSmokeModelArgs),
+    /// Run hermetic provider-backed gateway smoke tests.
+    ProviderGateway,
     /// Run browser runtime smoke tests through Playwright.
     Browser(TestSmokeBrowserArgs),
     /// Run llama.cpp backend operation smoke.
@@ -738,6 +740,8 @@ pub enum TestSuiteId {
     NodeSmoke,
     /// Python local generation smoke tests.
     PythonSmoke,
+    /// Provider-backed gateway smoke tests.
+    ProviderGatewaySmoke,
     /// Browser runtime smoke tests.
     BrowserSmoke,
     /// llama.cpp backend operation tests.
@@ -761,6 +765,7 @@ impl TestSuiteId {
             TestSuiteId::RustSmoke => "rust-smoke",
             TestSuiteId::NodeSmoke => "node-smoke",
             TestSuiteId::PythonSmoke => "python-smoke",
+            TestSuiteId::ProviderGatewaySmoke => "provider-gateway-smoke",
             TestSuiteId::BrowserSmoke => "browser-smoke",
             TestSuiteId::LlamaBackendOps => "llama-backend-ops",
         }

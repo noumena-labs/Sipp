@@ -38,6 +38,10 @@ const DEFAULT_SMOKE_TEMPERATURE: f32 = 0.0;
 const RUST_GENERATION_SMOKE_EXAMPLES: &[&str] = &["query", "chat"];
 const NODE_GENERATION_SMOKE_SCRIPTS: &[&str] = &["examples/query.mjs", "examples/chat.mjs"];
 const PYTHON_GENERATION_SMOKE_SCRIPTS: &[&str] = &["examples/query.py", "examples/chat.py"];
+const PROVIDER_GATEWAY_SMOKE_TARGETS: &[RustTestTarget] = &[RustTestTarget::test(
+    "cogentlm-gateway",
+    "provider_gateway_smoke",
+)];
 const APP_TEST_SUFFIX: &str = ".test.ts";
 const BROWSER_PACKAGE_TEST_DIR: &str = "packages/npm/tests";
 const SKIPPED_APP_TEST_DIRS: &[&str] = &[
@@ -113,6 +117,8 @@ const CLI_SMOKE_SOURCE_ROOTS: &[&str] = &["crates/cli/src"];
 const RUST_SMOKE_SOURCE_ROOTS: &[&str] = &["crates/client/src"];
 const NODE_SMOKE_SOURCE_ROOTS: &[&str] = &["bindings/node"];
 const PYTHON_SMOKE_SOURCE_ROOTS: &[&str] = &["bindings/python"];
+const PROVIDER_GATEWAY_SMOKE_SOURCE_ROOTS: &[&str] =
+    &["crates/gateway/src", "crates/gateway-providers/src"];
 
 const TEST_SUITES: &[TestSuite] = &[
     TestSuite {
@@ -270,6 +276,18 @@ const TEST_SUITES: &[TestSuite] = &[
         backend_policy: BackendPolicy::ConcreteOnly,
         runner: SuiteRunner::PythonSmoke,
         discoverer: CaseDiscoverer::None,
+    },
+    TestSuite {
+        id: TestSuiteId::ProviderGatewaySmoke,
+        group: TestGroup::Smoke,
+        layer: None,
+        description: "hermetic provider-backed gateway HTTP smoke",
+        requirements: "cargo",
+        source_roots: PROVIDER_GATEWAY_SMOKE_SOURCE_ROOTS,
+        coverage: false,
+        backend_policy: BackendPolicy::None,
+        runner: SuiteRunner::ProviderGatewaySmoke,
+        discoverer: CaseDiscoverer::RustTargets(PROVIDER_GATEWAY_SMOKE_TARGETS),
     },
     TestSuite {
         id: TestSuiteId::BrowserSmoke,
@@ -468,6 +486,7 @@ fn run_suite(
         SuiteRunner::RustSmoke => run_rust_model_smoke(sh, ctx, options),
         SuiteRunner::NodeSmoke => run_node_model_smoke(sh, ctx, options),
         SuiteRunner::PythonSmoke => run_python_model_smoke(sh, ctx, options),
+        SuiteRunner::ProviderGatewaySmoke => run_provider_gateway_smoke(sh, ctx),
         SuiteRunner::BrowserSmoke => run_browser_runtime_smoke(sh, ctx, &options.browser),
         SuiteRunner::LlamaBackendOps => {
             run_llama_backend_ops_suite(sh, ctx, &options.backend, &options.llama)
@@ -959,6 +978,21 @@ fn run_python_generation_smoke(
     Ok(())
 }
 
+fn run_provider_gateway_smoke(sh: &Shell, ctx: &BuildContext) -> Result<()> {
+    output::phase("Provider gateway smoke");
+    let _dir = sh.push_dir(ctx.workspace_root());
+    let smoke_cmd = apply_toolchains(
+        sh,
+        ctx,
+        cmd!(
+            sh,
+            "cargo test -p cogentlm-gateway --test provider_gateway_smoke"
+        ),
+        None,
+    )?;
+    output::run_command("Running provider gateway smoke tests", smoke_cmd)
+}
+
 fn selected_smoke_cases(cases: &[TestSmokeCase]) -> Vec<TestSmokeCase> {
     if cases.is_empty() {
         return vec![TestSmokeCase::Query, TestSmokeCase::Chat];
@@ -1180,6 +1214,7 @@ fn coverage_report_areas(suites: &[&TestSuite]) -> CoverageReportAreas {
             | SuiteRunner::RustSmoke
             | SuiteRunner::NodeSmoke
             | SuiteRunner::PythonSmoke
+            | SuiteRunner::ProviderGatewaySmoke
             | SuiteRunner::BrowserSmoke
             | SuiteRunner::LlamaBackendOps => {}
         }
@@ -1593,6 +1628,7 @@ fn discover_quoted_test_cases(
 }
 
 fn parse_rust_fn_name(line: &str) -> Option<String> {
+    let line = line.strip_prefix("async ").unwrap_or(line);
     let name = line.strip_prefix("fn ")?;
     let (name, _) = name.split_once('(')?;
     Some(name.to_owned())
@@ -1709,6 +1745,7 @@ fn selected_smoke_suites(args: &TestSmokeArgs) -> Result<SmokeSelection> {
                 suite_by_id(TestSuiteId::RustSmoke)?,
                 suite_by_id(TestSuiteId::NodeSmoke)?,
                 suite_by_id(TestSuiteId::PythonSmoke)?,
+                suite_by_id(TestSuiteId::ProviderGatewaySmoke)?,
                 suite_by_id(TestSuiteId::BrowserSmoke)?,
                 suite_by_id(TestSuiteId::LlamaBackendOps)?,
             ];
@@ -1752,6 +1789,13 @@ fn selected_smoke_suites(args: &TestSmokeArgs) -> Result<SmokeSelection> {
             ];
             selection.apply_model_args(args);
             selection.filters = smoke_filters("model", args, &[], json!({}));
+        }
+        TestSmokeTarget::ProviderGateway => {
+            selection.suites = vec![suite_by_id(TestSuiteId::ProviderGatewaySmoke)?];
+            selection.filters = json!({
+                "command": "smoke",
+                "target": "provider-gateway",
+            });
         }
         TestSmokeTarget::Browser(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::BrowserSmoke)?];
@@ -2564,6 +2608,7 @@ fn coverage_artifacts_for_suite(ctx: &BuildContext, suite: &TestSuite) -> Vec<St
         | SuiteRunner::RustSmoke
         | SuiteRunner::NodeSmoke
         | SuiteRunner::PythonSmoke
+        | SuiteRunner::ProviderGatewaySmoke
         | SuiteRunner::BrowserSmoke
         | SuiteRunner::LlamaBackendOps => Vec::new(),
     };
@@ -2676,6 +2721,7 @@ enum SuiteRunner {
     RustSmoke,
     NodeSmoke,
     PythonSmoke,
+    ProviderGatewaySmoke,
     BrowserSmoke,
     LlamaBackendOps,
 }

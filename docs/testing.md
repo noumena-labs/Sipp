@@ -25,6 +25,7 @@ cargo xtask test unit rust --package cogentlm-engine
 cargo xtask test unit node --backend cpu
 cargo xtask test unit python --backend cpu
 cargo xtask test smoke node --backend cpu
+cargo xtask test smoke provider-gateway
 cargo xtask test smoke model --backend cpu
 cargo xtask test smoke browser
 cargo xtask test verify --target whitebox
@@ -41,6 +42,8 @@ checks. Unit target names expose target-specific options, such as
 cache under `.build/models` when `--model` is omitted. They accept `--backend`,
 `--model`, `--offline`, `--prompt`, `--max-tokens`, and `--temperature`; Rust,
 Node, and Python also accept repeated `--case query|chat`.
+`provider-gateway` runs hermetic fake-provider gateway smoke tests without live
+network calls or provider credentials.
 
 `test unit` and `test smoke` write `.build/test/run-report.json` and
 `.build/test/run-report.md`. Coverage-capable unit suites also write fresh
