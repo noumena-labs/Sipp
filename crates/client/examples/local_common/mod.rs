@@ -16,6 +16,13 @@ pub struct ExampleArgs {
     pub input: String,
 }
 
+pub struct VisionExampleArgs {
+    pub model_path: PathBuf,
+    pub projector_path: PathBuf,
+    pub image_path: PathBuf,
+    pub input: String,
+}
+
 pub fn args(default_input: &'static str) -> ExampleResult<ExampleArgs> {
     let mut args = env::args().skip(1);
     let model_path = args.next().ok_or_else(|| {
@@ -35,16 +42,64 @@ pub fn args(default_input: &'static str) -> ExampleResult<ExampleArgs> {
     })
 }
 
+pub fn vision_args(default_input: &'static str) -> ExampleResult<VisionExampleArgs> {
+    let mut args = env::args().skip(1);
+    let model_path = args.next().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "usage: cargo run -p cogentlm-client --example vision_chat -- \
+             <model.gguf> <projector.gguf> <image> [input]",
+        )
+    })?;
+    let projector_path = args.next().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "usage: cargo run -p cogentlm-client --example vision_chat -- \
+             <model.gguf> <projector.gguf> <image> [input]",
+        )
+    })?;
+    let image_path = args.next().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "usage: cargo run -p cogentlm-client --example vision_chat -- \
+             <model.gguf> <projector.gguf> <image> [input]",
+        )
+    })?;
+    let input = args.collect::<Vec<_>>().join(" ");
+    Ok(VisionExampleArgs {
+        model_path: PathBuf::from(model_path),
+        projector_path: PathBuf::from(projector_path),
+        image_path: PathBuf::from(image_path),
+        input: if input.is_empty() {
+            default_input.to_string()
+        } else {
+            input
+        },
+    })
+}
+
 pub async fn load_client(model_path: PathBuf, embeddings: bool) -> ExampleResult<CogentClient> {
+    load_client_with_projector(model_path, None, embeddings).await
+}
+
+pub async fn load_client_with_projector(
+    model_path: PathBuf,
+    projector_path: Option<PathBuf>,
+    embeddings: bool,
+) -> ExampleResult<CogentClient> {
     set_llama_log_quiet(true);
     let mut client = CogentClient::new();
     client
-        .add_local("default", model_path, runtime_config(embeddings))
+        .add_local(
+            "default",
+            model_path,
+            runtime_config(embeddings, projector_path),
+        )
         .await?;
     Ok(client)
 }
 
-fn runtime_config(embeddings: bool) -> NativeRuntimeConfig {
+fn runtime_config(embeddings: bool, projector_path: Option<PathBuf>) -> NativeRuntimeConfig {
     NativeRuntimeConfig {
         placement: ModelPlacementConfig {
             gpu_layers: env_parse("COGENTLM_GPU_LAYERS")
@@ -73,7 +128,10 @@ fn runtime_config(embeddings: bool) -> NativeRuntimeConfig {
             mode: KvReuseMode::LiveSlotPrefix,
             ..Default::default()
         },
-        multimodal: MultimodalRuntimeConfig::default(),
+        multimodal: MultimodalRuntimeConfig {
+            projector_path: projector_path.map(|path| path.to_string_lossy().into_owned()),
+            ..Default::default()
+        },
         residency: ResidencyRuntimeConfig {
             max_gpu_models_per_device: 1,
             ..Default::default()
