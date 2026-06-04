@@ -18,11 +18,29 @@ export function readArgs(defaultInput) {
   };
 }
 
-export async function loadClient(model, { embeddings = false } = {}) {
+export function readVisionArgs(defaultInput) {
+  const model = process.argv[2];
+  const projector = process.argv[3];
+  const image = process.argv[4];
+  if (!model || !projector || !image) {
+    console.error(
+      'usage: node examples/vision_chat.mjs <model.gguf> <projector.gguf> <image> [input]',
+    );
+    process.exit(2);
+  }
+  return {
+    model,
+    projector,
+    image,
+    input: process.argv.slice(5).join(' ') || defaultInput,
+  };
+}
+
+export async function loadClient(model, { embeddings = false, projectorPath = undefined } = {}) {
   setLlamaLogQuiet(true);
   console.log(`backend_before_load=${backendObservabilityJson(true)}`);
   const client = new CogentClient();
-  await client.addLocal('default', model, runtimeConfig({ embeddings }));
+  await client.addLocal('default', model, runtimeConfig({ embeddings, projectorPath }));
   console.log(`backend_after_load=${backendObservabilityJson(true)}`);
   return client;
 }
@@ -84,7 +102,8 @@ export function printEmbedding(result) {
   console.log(`preview=[${preview}]`);
 }
 
-function runtimeConfig({ embeddings }) {
+function runtimeConfig({ embeddings, projectorPath }) {
+  const multimodal = projectorPath == null ? {} : { projector_path: projectorPath };
   return {
     placement: {
       gpu_layers: gpuLayers(),
@@ -106,7 +125,7 @@ function runtimeConfig({ embeddings }) {
     cache: {
       mode: 'live_slot_prefix',
     },
-    multimodal: {},
+    multimodal,
     residency: {
       max_gpu_models_per_device: 1,
     },
