@@ -84,11 +84,11 @@ export function printText(result) {
   console.log(`text=${result.text.trim()}`);
   if (result.localStats) {
     console.log(
-      `metrics=ttft_ms:${result.localStats.ttftMs} ` +
-      `decode_ms:${result.localStats.decodeMs.toFixed(3)} ` +
+      `metrics=ttft_ms:${formatOptionalMetric(result.localStats.ttftMs)} ` +
+      `decode_ms:${formatOptionalMetric(result.localStats.decodeMs)} ` +
       `output_tokens:${result.localStats.outputTokens} ` +
-      `e2e_tps:${result.localStats.e2eTokensPerSecond} ` +
-      `decode_tps:${result.localStats.decodeTokensPerSecond}`
+      `e2e_tps:${formatOptionalMetric(result.localStats.e2eTokensPerSecond)} ` +
+      `decode_tps:${formatOptionalMetric(result.localStats.decodeTokensPerSecond)}`
     );
   }
 }
@@ -133,6 +133,10 @@ function runtimeConfig({ embeddings, projectorPath }) {
       runtime_metrics: true,
     },
   };
+}
+
+function formatOptionalMetric(value) {
+  return typeof value === 'number' ? value.toFixed(3) : 'n/a';
 }
 
 function gpuLayers() {
