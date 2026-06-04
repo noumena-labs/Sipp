@@ -10,6 +10,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use xshell::Shell;
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "tests/clean_tests.rs"]
+mod clean_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+
 const GENERATED_DIRS: &[&str] = &[
     "dist", ".vite", ".turbo", "coverage", "build", "out", ".next",
 ];
@@ -197,7 +209,3 @@ fn checked_delete_target(workspace: &Path, target: &Path) -> Result<PathBuf> {
 
     Ok(canonical)
 }
-
-#[cfg(test)]
-#[path = "tests/clean_tests.rs"]
-mod clean_tests;

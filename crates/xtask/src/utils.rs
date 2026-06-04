@@ -8,6 +8,18 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use xshell::{cmd, Shell};
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "tests/utils_tests.rs"]
+mod utils_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+
 const BROWSER_PACKAGE_ARTIFACT_DIR: &str = "cogentlm-browser";
 
 /// Shared immutable context for xtask build paths.
@@ -35,6 +47,13 @@ impl BuildContext {
             })?;
 
         Ok(Self { workspace_root })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_workspace_root_for_test(workspace_root: impl Into<PathBuf>) -> Self {
+        Self {
+            workspace_root: workspace_root.into(),
+        }
     }
 
     pub(crate) fn workspace_root(&self) -> &Path {

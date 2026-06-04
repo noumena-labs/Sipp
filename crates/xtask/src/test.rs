@@ -19,6 +19,18 @@ use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use xshell::{cmd, Shell};
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "tests/test_tests.rs"]
+mod test_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+
 const DEFAULT_SMOKE_PROMPT: &str = "Describe browser LLM inference.";
 const RUST_GENERATION_SMOKE_EXAMPLES: &[&str] = &["query", "chat"];
 const NODE_GENERATION_SMOKE_SCRIPTS: &[&str] = &["examples/query.mjs", "examples/chat.mjs"];
@@ -2605,7 +2617,3 @@ impl LcovSummary {
 pub(crate) fn catalog_suite_ids() -> BTreeSet<&'static str> {
     TEST_SUITES.iter().map(|suite| suite.id.as_str()).collect()
 }
-
-#[cfg(test)]
-#[path = "tests/test_tests.rs"]
-mod test_tests;

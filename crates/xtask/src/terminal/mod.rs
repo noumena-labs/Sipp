@@ -26,6 +26,18 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tui_banner::{Align, Banner, Style as BannerStyle};
 use xshell::Cmd;
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "../tests/terminal_tests.rs"]
+mod terminal_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+
 const COMMAND_TAIL_LINES: usize = 20;
 const INLINE_DEFAULT_LINES: u16 = 18;
 const INLINE_MIN_LINES: u16 = 12;
@@ -2194,7 +2206,3 @@ fn truncate_text(text: &str, width: usize) -> String {
 
     truncate_str(text, width, "...").into_owned()
 }
-
-#[cfg(test)]
-#[path = "../tests/terminal_tests.rs"]
-mod terminal_tests;

@@ -1,6 +1,8 @@
 //! Tests the `test` module in `xtask`.
 //!
-//! Covers developer automation helpers, catalog logic, and terminal formatting with deterministic fixtures instead of invoking external toolchains.
+//! Covers catalog selection, reporting, layout validation, test-case discovery,
+//! and coverage-summary helpers with deterministic fixtures instead of invoking
+//! external toolchains or model-backed tests.
 
 use clap::error::ErrorKind;
 use clap::Parser;
@@ -9,13 +11,22 @@ use crate::cli::{
     Backend, Cli, Commands, LlamaBackendOpsMode, RunCommands, RunLlamaCommands, TestCategoryFilter,
     TestCommands, TestSuiteId, TestVerifyArgs,
 };
+use crate::test_support::TempDir;
 use crate::utils::BuildContext;
 
 use super::{
-    catalog_suite_ids, collect_catalog_ownership_violations, discover_cases, list_json_value,
-    selected_suites, selected_verify_suites, suite_by_id, validate_suite_backends, RunReport,
-    SuiteReport, TestCategory, NODE_GENERATION_SMOKE_SCRIPTS, PYTHON_GENERATION_SMOKE_SCRIPTS,
-    RUST_GENERATION_SMOKE_EXAMPLES, TEST_SUITES,
+    apply_search_filter, catalog_suite_ids, collect_catalog_ownership_violations,
+    collect_files_with_extension, collect_files_with_suffix, contains_test_attribute,
+    coverage_report_areas, discover_cases, display_relative, duration_millis,
+    filtered_rust_targets, is_allowed_rust_test_file, is_cpp_test_file_name,
+    is_first_party_source_path, is_inverted_rust_test_file, is_probable_test_path, list_json_value,
+    markdown_cell, normalize_relative_path, parse_lcov_summary, parse_quoted_test_name,
+    parse_rust_fn_name, path_components, path_matches_root, python_venv_exe, selected_suites,
+    selected_verify_suites, source_owner_suites, suite_by_id, test_backends,
+    validate_package_filter, validate_suite_backends, CaseDiscoverer, CoverageSummaries,
+    LcovSummary, RunReport, RustTestTarget, SuiteReport, TestCase, TestCategory, VerifyCheckReport,
+    VerifyReport, NODE_GENERATION_SMOKE_SCRIPTS, PYTHON_GENERATION_SMOKE_SCRIPTS,
+    RUST_CRATE_TEST_TARGETS, RUST_GENERATION_SMOKE_EXAMPLES, TEST_SUITES,
 };
 
 #[test]
@@ -321,4 +332,224 @@ fn run_keeps_app_and_llama_groups() {
     };
     let RunLlamaCommands::BackendOps(args) = command;
     assert_eq!(args.mode, LlamaBackendOpsMode::Support);
+}
+
+#[test]
+fn package_filter_only_applies_to_rust_crates_suite() {
+    let rust_crates = suite_by_id(TestSuiteId::RustCrates).unwrap();
+    assert!(validate_package_filter(&[rust_crates], Some("cogentlm-core")).is_ok());
+
+    let xtask = suite_by_id(TestSuiteId::Xtask).unwrap();
+    assert!(validate_package_filter(&[xtask], Some("xtask")).is_err());
+    assert!(validate_package_filter(&[rust_crates, xtask], Some("cogentlm-core")).is_err());
+}
+
+#[test]
+fn filtered_rust_targets_reject_unknown_packages() {
+    let targets = filtered_rust_targets(RUST_CRATE_TEST_TARGETS, Some("cogentlm-core")).unwrap();
+    assert_eq!(targets, vec![RustTestTarget::lib("cogentlm-core")]);
+    assert!(filtered_rust_targets(RUST_CRATE_TEST_TARGETS, Some("xtask")).is_err());
+}
+
+#[test]
+fn search_filter_matches_suite_metadata_and_cases() {
+    let mut suites = vec![
+        suite_by_id(TestSuiteId::Xtask).unwrap(),
+        suite_by_id(TestSuiteId::NodePackage).unwrap(),
+    ];
+    let mut cases = vec![
+        TestCase {
+            suite_id: TestSuiteId::NodePackage,
+            name: "router routes aliases".to_owned(),
+            path: "bindings/node/tests/router.test.mjs".to_owned(),
+        },
+        TestCase {
+            suite_id: TestSuiteId::Xtask,
+            name: "catalog ids".to_owned(),
+            path: "crates/xtask/src/tests/test_tests.rs".to_owned(),
+        },
+    ];
+
+    apply_search_filter(&mut suites, &mut cases, "router");
+
+    assert_eq!(suites.len(), 1);
+    assert_eq!(suites[0].id, TestSuiteId::NodePackage);
+    assert_eq!(cases.len(), 1);
+    assert_eq!(cases[0].suite_id, TestSuiteId::NodePackage);
+}
+
+#[test]
+fn source_path_helpers_classify_roots_and_tests() {
+    let suites = [
+        suite_by_id(TestSuiteId::Xtask).unwrap(),
+        suite_by_id(TestSuiteId::RustCrates).unwrap(),
+    ];
+
+    assert!(path_matches_root(
+        "crates/xtask/src/test.rs",
+        "crates/xtask/src"
+    ));
+    assert!(!path_matches_root(
+        "crates/xtask-extra/src/lib.rs",
+        "crates/xtask"
+    ));
+    assert_eq!(
+        source_owner_suites("crates/xtask/src/test.rs", &suites)
+            .iter()
+            .map(|suite| suite.id)
+            .collect::<Vec<_>>(),
+        vec![TestSuiteId::Xtask]
+    );
+    assert!(is_first_party_source_path("crates/xtask/src/test.rs"));
+    assert!(!is_first_party_source_path(
+        "crates/xtask/src/tests/test_tests.rs"
+    ));
+    assert!(is_probable_test_path("packages/npm/tests/router.test.ts"));
+    assert!(is_probable_test_path(
+        "crates/xtask/src/tests/test_tests.rs"
+    ));
+}
+
+#[test]
+fn rust_test_layout_helpers_detect_allowed_and_inverted_paths() {
+    let package_root = std::path::Path::new("crate");
+    assert!(is_allowed_rust_test_file(
+        package_root,
+        std::path::Path::new("crate/src/tests/foo_tests.rs")
+    ));
+    assert!(is_allowed_rust_test_file(
+        package_root,
+        std::path::Path::new("crate/tests/public_api.rs")
+    ));
+    assert!(is_inverted_rust_test_file(
+        package_root,
+        std::path::Path::new("crate/src/foo/tests/bar_tests.rs")
+    ));
+    assert_eq!(
+        path_components(std::path::Path::new("src/tests/foo_tests.rs")),
+        vec!["src", "tests", "foo_tests.rs"]
+    );
+    assert!(contains_test_attribute("    #[test]\nfn case() {}"));
+    assert!(contains_test_attribute(
+        "    #[tokio::test]\nasync fn case() {}"
+    ));
+}
+
+#[test]
+fn filesystem_collectors_are_sorted_and_skip_ignored_dirs() {
+    let temp = TempDir::new("test-collectors");
+    temp.write("root/b.rs", "");
+    temp.write("root/a.rs", "");
+    temp.write("root/target/ignored.rs", "");
+    temp.write("root/c.test.ts", "");
+    temp.write("root/nested/d.test.ts", "");
+
+    let rust_files = collect_files_with_extension(&temp.join("root"), "rs").unwrap();
+    assert_eq!(
+        rust_files,
+        vec![temp.join("root/a.rs"), temp.join("root/b.rs")]
+    );
+
+    let ts_tests = collect_files_with_suffix(&temp.join("root"), ".test.ts").unwrap();
+    assert_eq!(
+        ts_tests,
+        vec![
+            temp.join("root/c.test.ts"),
+            temp.join("root/nested/d.test.ts")
+        ]
+    );
+}
+
+#[test]
+fn cpp_and_rust_case_name_parsers_handle_supported_shapes() {
+    assert!(is_cpp_test_file_name(std::path::Path::new(
+        "test_router.cpp"
+    )));
+    assert!(is_cpp_test_file_name(std::path::Path::new(
+        "router-test.cc"
+    )));
+    assert!(!is_cpp_test_file_name(std::path::Path::new("router.cpp")));
+    assert_eq!(
+        parse_rust_fn_name("fn parses_case() {"),
+        Some("parses_case".to_owned())
+    );
+    assert_eq!(
+        parse_quoted_test_name("test(\"routes aliases\", () => {})", "test("),
+        Some("routes aliases".to_owned())
+    );
+}
+
+#[test]
+fn coverage_helpers_summarize_selected_report_areas_and_lcov() {
+    let xtask = suite_by_id(TestSuiteId::Xtask).unwrap();
+    let node = suite_by_id(TestSuiteId::NodePackage).unwrap();
+    let python = suite_by_id(TestSuiteId::PythonPackage).unwrap();
+    let areas = coverage_report_areas(&[xtask, node, python]);
+    assert!(areas.rust);
+    assert!(areas.node);
+    assert!(areas.python);
+
+    let temp = TempDir::new("test-lcov");
+    let lcov = temp.write(
+        "lcov.info",
+        "TN:\nSF:file.rs\nLF:10\nLH:7\nend_of_record\nSF:file2.rs\nLF:5\nLH:5\nend_of_record\n",
+    );
+    let summary = parse_lcov_summary(&lcov).unwrap();
+    assert_eq!(summary.found, 15);
+    assert_eq!(summary.hit, 12);
+    assert_eq!(LcovSummary::default().percent(), 0.0);
+    assert_eq!(
+        CoverageSummaries {
+            rust: summary,
+            node: LcovSummary::default(),
+            python: LcovSummary::default(),
+        }
+        .as_json()["rust"]["hit"],
+        12
+    );
+}
+
+#[test]
+fn report_markdown_and_json_escape_dynamic_values() {
+    let ctx = BuildContext::new().unwrap();
+    let args = TestVerifyArgs {
+        category: TestCategoryFilter::All,
+        suite: vec![TestSuiteId::Xtask],
+        changed: true,
+    };
+    let suite = suite_by_id(TestSuiteId::Xtask).unwrap();
+    let mut report = VerifyReport::new(&args, &[suite]);
+    let error = anyhow::anyhow!("bad | value\nnext");
+    let result: anyhow::Result<()> = Err(error);
+    report
+        .checks
+        .push(VerifyCheckReport::from_result("coverage", &result));
+    report.checks.push(VerifyCheckReport::skipped("changed"));
+    report.finish("failed");
+
+    let json = report.as_json(&ctx);
+    assert_eq!(json["kind"], "test-verify");
+    assert_eq!(json["checks"][0]["status"], "failed");
+    assert_eq!(json["checks"][1]["status"], "skipped");
+    assert!(report.as_markdown(&ctx).contains("bad \\| value next"));
+}
+
+#[test]
+fn formatting_helpers_are_platform_and_overflow_safe() {
+    let ctx = BuildContext::new().unwrap();
+    assert_eq!(normalize_relative_path(" ./a\\b "), "a/b");
+    assert!(display_relative(&ctx, &ctx.build_root()).contains(".build"));
+    assert_eq!(duration_millis(u128::from(u64::MAX) + 1), u64::MAX);
+    assert_eq!(markdown_cell("a|b\r\nc"), "a\\|b  c");
+    assert!(python_venv_exe(std::path::Path::new(".venv"))
+        .display()
+        .to_string()
+        .contains("python"));
+}
+
+#[test]
+fn backend_and_discoverer_labels_are_stable() {
+    assert_eq!(test_backends(&Backend::Cpu), vec![Backend::Cpu]);
+    assert_eq!(CaseDiscoverer::None.as_str(), "none");
+    assert_eq!(CaseDiscoverer::PackageTs.as_str(), "package-ts");
 }
