@@ -1,28 +1,20 @@
 //! Tests the `error` module in `cogentlm-client`.
 //!
-//! Covers provider-to-client remote error classification and stable diagnostic
-//! labels using synthetic provider errors without remote transport calls.
+//! Covers gateway-to-client remote error classification and stable diagnostic
+//! labels using synthetic gateway errors without remote transport calls.
 
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 use std::time::Duration;
 
-#[cfg(feature = "providers")]
-use cogentlm_providers::{ProviderError, ProviderErrorKind, ProviderKind};
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
+use cogentlm_remote::{GatewayError, GatewayErrorKind};
+#[cfg(feature = "remote")]
 use serde_json::json;
 
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 use super::*;
 
-#[cfg(feature = "providers")]
-#[test]
-fn remote_kind_labels_are_stable() {
-    assert_eq!(RemoteKind::Proxy.as_str(), "proxy");
-    assert_eq!(RemoteKind::OpenAi.as_str(), "openai");
-    assert_eq!(RemoteKind::Anthropic.as_str(), "anthropic");
-}
-
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 #[test]
 fn remote_error_kind_labels_are_stable() {
     let cases = [
@@ -44,75 +36,69 @@ fn remote_error_kind_labels_are_stable() {
     }
 }
 
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 #[test]
 fn remote_error_new_sets_required_fields_and_display() {
-    let error = RemoteError::new(RemoteErrorKind::Timeout, RemoteKind::OpenAi, "slow");
+    let error = RemoteError::new(RemoteErrorKind::Timeout, "slow");
 
     assert_eq!(error.kind, RemoteErrorKind::Timeout);
-    assert_eq!(error.remote_kind, RemoteKind::OpenAi);
     assert_eq!(error.message, "slow");
     assert!(error.status.is_none());
     assert!(error.code.is_none());
     assert!(error.retry_after.is_none());
     assert!(error.request_id.is_none());
     assert!(error.raw.is_none());
-    assert_eq!(error.to_string(), "openai remote error (timeout): slow");
+    assert_eq!(error.to_string(), "remote gateway error (timeout): slow");
 }
 
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 #[test]
-fn provider_error_kind_conversion_covers_all_variants() {
+fn gateway_error_kind_conversion_covers_all_variants() {
     let cases = [
         (
-            ProviderErrorKind::Authentication,
+            GatewayErrorKind::Authentication,
             RemoteErrorKind::Authentication,
         ),
         (
-            ProviderErrorKind::Authorization,
+            GatewayErrorKind::Authorization,
             RemoteErrorKind::Authorization,
         ),
-        (ProviderErrorKind::RateLimited, RemoteErrorKind::RateLimited),
+        (GatewayErrorKind::RateLimited, RemoteErrorKind::RateLimited),
         (
-            ProviderErrorKind::QuotaExceeded,
+            GatewayErrorKind::QuotaExceeded,
             RemoteErrorKind::QuotaExceeded,
         ),
         (
-            ProviderErrorKind::InvalidRequest,
+            GatewayErrorKind::InvalidRequest,
             RemoteErrorKind::InvalidRequest,
         ),
         (
-            ProviderErrorKind::UnsupportedFeature,
+            GatewayErrorKind::UnsupportedFeature,
             RemoteErrorKind::UnsupportedFeature,
         ),
         (
-            ProviderErrorKind::ModelNotFound,
+            GatewayErrorKind::ModelNotFound,
             RemoteErrorKind::ModelNotFound,
         ),
-        (ProviderErrorKind::Timeout, RemoteErrorKind::Timeout),
-        (ProviderErrorKind::Overloaded, RemoteErrorKind::Overloaded),
-        (ProviderErrorKind::Transport, RemoteErrorKind::Transport),
-        (ProviderErrorKind::Provider, RemoteErrorKind::Remote),
+        (GatewayErrorKind::Timeout, RemoteErrorKind::Timeout),
+        (GatewayErrorKind::Overloaded, RemoteErrorKind::Overloaded),
+        (GatewayErrorKind::Transport, RemoteErrorKind::Transport),
+        (GatewayErrorKind::Gateway, RemoteErrorKind::Remote),
     ];
 
-    for (provider_kind, remote_kind) in cases {
-        let error = ProviderError::new(provider_kind, ProviderKind::Proxy, "provider error");
+    for (gateway_kind, remote_kind) in cases {
+        let error = GatewayError::new(gateway_kind, "gateway error");
         let remote = RemoteError::from(error);
 
         assert_eq!(remote.kind, remote_kind);
-        assert_eq!(remote.remote_kind, RemoteKind::Proxy);
-        assert_eq!(remote.message, "provider error");
+        assert_eq!(remote.message, "gateway error");
     }
 }
 
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 #[test]
-fn provider_metadata_is_preserved_when_converted() {
-    let mut error = ProviderError::new(
-        ProviderErrorKind::RateLimited,
-        ProviderKind::Anthropic,
-        "limited",
-    );
+fn gateway_metadata_is_preserved_when_converted() {
+    let mut error = GatewayError::new(GatewayErrorKind::RateLimited, "limited");
     error.status = Some(429);
     error.code = Some("rate_limit_error".to_string());
     error.retry_after = Some(Duration::from_secs(2));
@@ -122,7 +108,6 @@ fn provider_metadata_is_preserved_when_converted() {
     let remote = RemoteError::from(error);
 
     assert_eq!(remote.kind, RemoteErrorKind::RateLimited);
-    assert_eq!(remote.remote_kind, RemoteKind::Anthropic);
     assert_eq!(remote.status, Some(429));
     assert_eq!(remote.code.as_deref(), Some("rate_limit_error"));
     assert_eq!(remote.retry_after, Some(Duration::from_secs(2)));
@@ -130,34 +115,16 @@ fn provider_metadata_is_preserved_when_converted() {
     assert_eq!(remote.raw.as_deref(), Some(&json!({ "error": "limited" })));
 }
 
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 #[test]
-fn provider_kind_conversion_covers_all_remote_families() {
-    let cases = [
-        (ProviderKind::Proxy, RemoteKind::Proxy),
-        (ProviderKind::OpenAi, RemoteKind::OpenAi),
-        (ProviderKind::Anthropic, RemoteKind::Anthropic),
-    ];
-
-    for (provider, remote_kind) in cases {
-        let error = ProviderError::new(ProviderErrorKind::Provider, provider, "remote");
-        let remote = RemoteError::from(error);
-
-        assert_eq!(remote.remote_kind, remote_kind);
-    }
-}
-
-#[cfg(feature = "providers")]
-#[test]
-fn provider_error_converts_into_cogent_remote_error() {
-    let error = ProviderError::new(ProviderErrorKind::Transport, ProviderKind::OpenAi, "net");
+fn gateway_error_converts_into_cogent_remote_error() {
+    let error = GatewayError::new(GatewayErrorKind::Transport, "net");
     let error = CogentError::from(error);
 
     assert!(matches!(
         error,
         CogentError::Remote(RemoteError {
             kind: RemoteErrorKind::Transport,
-            remote_kind: RemoteKind::OpenAi,
             ..
         })
     ));

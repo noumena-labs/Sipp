@@ -6,8 +6,8 @@
 use cogentlm_client::{
     CogentClient, CogentError, CogentQueryRequest, CogentTextOptions, EndpointRef, LocalTextOptions,
 };
-#[cfg(feature = "providers")]
-use cogentlm_client::{RemoteAuth, RemoteConfig, RemoteError, RemoteErrorKind, RemoteKind};
+#[cfg(feature = "remote")]
+use cogentlm_client::{RemoteError, RemoteErrorKind, RemoteGatewayConfig, RemoteSecret};
 
 #[test]
 fn request_envelopes_are_publicly_constructible() {
@@ -49,23 +49,21 @@ fn empty_client_reports_no_supported_endpoint() {
     ));
 }
 
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 #[test]
 fn remote_configuration_types_are_publicly_constructible() {
-    let config = RemoteConfig::proxy(
-        "model",
-        "http://localhost:11434",
-        RemoteAuth::Bearer(cogentlm_client::RemoteSecret::new("secret")),
-    );
-
-    let RemoteConfig::Proxy(proxy) = config else {
-        panic!("proxy constructor should create proxy config");
+    let config = RemoteGatewayConfig {
+        alias: "model".to_string(),
+        base_url: "http://localhost:11434".to_string(),
+        token: RemoteSecret::new("secret"),
+        timeout: None,
     };
-    assert_eq!(proxy.model, "model");
-    assert_eq!(proxy.base_url, "http://localhost:11434");
 
-    let error = RemoteError::new(RemoteErrorKind::Timeout, RemoteKind::Proxy, "slow");
+    assert_eq!(config.alias, "model");
+    assert_eq!(config.base_url, "http://localhost:11434");
+    assert!(format!("{:?}", config.token).contains("[redacted]"));
+
+    let error = RemoteError::new(RemoteErrorKind::Timeout, "slow");
     assert_eq!(error.kind, RemoteErrorKind::Timeout);
-    assert_eq!(error.remote_kind, RemoteKind::Proxy);
     assert_eq!(error.message, "slow");
 }

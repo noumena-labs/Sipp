@@ -8,12 +8,11 @@ use cogentlm_engine::engine::{
     EmbeddingResult, GenerationResult, PoolingType, SamplingRuntimeConfig, DEFAULT_CONTEXT_KEY,
     DEFAULT_MAX_TOKENS,
 };
-#[cfg(feature = "providers")]
-use cogentlm_providers::{
-    ProviderEmbeddingOutput, ProviderKind, ProviderResponse, ProviderResponseMetadata,
-    ProviderTextOutput, TokenUsage,
+#[cfg(feature = "remote")]
+use cogentlm_remote::{
+    GatewayEmbeddingOutput, GatewayResponse, GatewayResponseMetadata, GatewayTextOutput, TokenUsage,
 };
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 use serde_json::json;
 
 use super::*;
@@ -260,11 +259,10 @@ fn local_responses_preserve_stats_and_endpoint_metadata() {
     assert_eq!(embedding.normalized, Some(true));
 }
 
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 #[test]
-fn remote_responses_drop_local_metadata_and_preserve_provider_usage() {
-    let metadata = ProviderResponseMetadata {
-        provider: ProviderKind::Proxy,
+fn remote_responses_drop_local_metadata_and_preserve_gateway_usage() {
+    let metadata = GatewayResponseMetadata {
         model: "remote-model".to_string(),
         request_id: Some("req".to_string()),
         response_id: Some("resp".to_string()),
@@ -282,8 +280,8 @@ fn remote_responses_drop_local_metadata_and_preserve_provider_usage() {
 
     let text = remote_text_response(
         endpoint.clone(),
-        ProviderResponse {
-            result: ProviderTextOutput {
+        GatewayResponse {
+            result: GatewayTextOutput {
                 text: "done".to_string(),
                 finish_reason: FinishReason::Stop,
             },
@@ -301,8 +299,8 @@ fn remote_responses_drop_local_metadata_and_preserve_provider_usage() {
     };
     let embedding = remote_embedding_response(
         endpoint.clone(),
-        ProviderResponse {
-            result: ProviderEmbeddingOutput {
+        GatewayResponse {
+            result: GatewayEmbeddingOutput {
                 values: vec![1.0, 2.0],
             },
             usage,

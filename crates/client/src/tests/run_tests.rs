@@ -1,10 +1,10 @@
 //! Tests the `run` module in `cogentlm-client`.
 //!
 //! Covers response futures and token batch stream ownership with ready futures,
-//! closed streams, and provider-channel fakes rather than engine execution.
+//! closed streams, and receiver-channel fakes rather than engine execution.
 
 use cogentlm_core::FinishReason;
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 use cogentlm_core::{TokenBatch, TokenEmissionStats};
 use futures::executor::block_on;
 use futures::StreamExt;
@@ -18,7 +18,7 @@ fn endpoint() -> EndpointRef {
     }
 }
 
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 fn token_batch(text: &str) -> TokenBatch {
     TokenBatch {
         request_id: "req".to_string(),
@@ -105,7 +105,7 @@ fn text_run_splits_response_and_tokens() {
     assert!(block_on(tokens.next()).is_none());
 }
 
-#[cfg(feature = "providers")]
+#[cfg(feature = "remote")]
 #[test]
 fn receiver_token_stream_yields_batches_until_closed() {
     let (tx, rx) = futures_channel::mpsc::unbounded();

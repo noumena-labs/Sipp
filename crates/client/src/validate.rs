@@ -136,7 +136,3 @@ fn finite_optional(name: &'static str, value: Option<f32>) -> Result<(), CogentE
         )))
     }
 }
-
-// #[cfg(test)]
-// #[path = "tests/validate_tests.rs"]
-// mod validate_tests;

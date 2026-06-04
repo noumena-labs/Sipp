@@ -93,12 +93,12 @@ fn operation_lookup_maps_known_verbs_and_rejects_unknown() {
     );
 }
 
-// #[cfg(feature = "providers")]
-// #[test]
-// fn unknown_capabilities_are_unknown_for_remote_endpoints() {
-//     let capabilities = EndpointCapabilities::unknown();
+#[cfg(feature = "remote")]
+#[test]
+fn unknown_capabilities_are_unknown_for_remote_endpoints() {
+    let capabilities = EndpointCapabilities::unknown();
 
-//     assert_eq!(capabilities.query, CapabilitySupport::Unknown);
-//     assert_eq!(capabilities.chat, CapabilitySupport::Unknown);
-//     assert_eq!(capabilities.embed, CapabilitySupport::Unknown);
-// }
+    assert_eq!(capabilities.query, CapabilitySupport::Unknown);
+    assert_eq!(capabilities.chat, CapabilitySupport::Unknown);
+    assert_eq!(capabilities.embed, CapabilitySupport::Unknown);
+}

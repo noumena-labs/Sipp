@@ -13,6 +13,16 @@ use super::openai_compat::{
     openai_stream_chat_body, openai_stream_completion_body, openai_stream_events,
 };
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+#[cfg(test)]
+#[path = "../tests/providers/openai_tests.rs"]
+mod openai_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 
 pub struct OpenAiAdapter {
@@ -112,7 +122,3 @@ impl GatewayBackendAdapter for OpenAiAdapter {
         ))
     }
 }
-
-// #[cfg(test)]
-// #[path = "../tests/providers/openai_tests.rs"]
-// mod openai_tests;
