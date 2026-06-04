@@ -81,7 +81,7 @@ Examples:
   cargo xtask run apps serve benchmark --mode preview --port 4173
 
 The apps group has no app-level `all` command. Build and serve commands target
-one app at a time. App tests live under `cargo xtask test run --suite app-ts`.";
+one app at a time. App tests live under `cargo xtask test unit apps`.";
 
 const RUN_LLAMA_HELP: &str = "\
 Build standalone llama.cpp targets and run backend operation checks.
@@ -92,7 +92,7 @@ Examples:
   cargo xtask run llama backend-ops --backend vulkan --mode support
   cargo xtask run llama backend-ops --backend cuda --mode perf --op MUL_MAT
 
-Correctness mode lives under `cargo xtask test run --suite llama-backend-ops`.
+Correctness mode lives under `cargo xtask test smoke llama`.
 The run command defaults to support probing.";
 
 const TEST_HELP: &str = "\
@@ -100,18 +100,20 @@ List, run, and verify cataloged workspace tests.
 
 Examples:
   cargo xtask test list
-  cargo xtask test list --category whitebox --cases --search router --format json
-  cargo xtask test run
-  cargo xtask test run --category whitebox
-  cargo xtask test run --suite rust-crates --package cogentlm-core
-  cargo xtask test run --suite node-package --backend cpu
-  cargo xtask test verify --category whitebox
+  cargo xtask test list --group unit --layer interface --cases --search router --format json
+  cargo xtask test unit
+  cargo xtask test unit whitebox
+  cargo xtask test unit rust --package cogentlm-core
+  cargo xtask test unit node --backend cpu
+  cargo xtask test smoke node --backend cpu
+  cargo xtask test smoke model --backend cpu
   cargo xtask test verify --changed
 
-Model-backed tests default to the setup sample model cache under .build/models
-when --model is omitted.
+Model-backed smoke tests default to the setup sample model cache under
+.build/models when --model is omitted.
 
-`test run` executes suites and writes .build/test and .build/coverage artifacts.
+`test unit` and `test smoke` execute suites and write .build/test artifacts.
+Coverage-capable unit suites also write .build/coverage artifacts.
 `test verify` analyzes existing artifacts and test structure without running tests.
 
 Run `cargo xtask test list` to see suite requirements.";
@@ -347,9 +349,14 @@ pub enum TestCommands {
     /// List known test suites and optionally discover test cases.
     List(TestListArgs),
 
-    /// Run cataloged tests selected by suite or category.
+    /// Run deterministic code-flow and API-layer tests.
     #[command(after_long_help = BACKEND_HELP)]
-    Run(TestRunArgs),
+    Unit(TestUnitArgs),
+
+    /// Run holistic integration smoke tests.
+    #[command(arg_required_else_help = true)]
+    #[command(after_long_help = BACKEND_HELP)]
+    Smoke(TestSmokeArgs),
 
     /// Verify test structure and existing coverage artifacts.
     Verify(TestVerifyArgs),
@@ -358,13 +365,13 @@ pub enum TestCommands {
 /// Options for listing test suites and cases.
 #[derive(Args)]
 pub struct TestListArgs {
-    /// Category to include in the listing.
+    /// Suite group to include in the listing.
     #[arg(long, value_enum, default_value = "all")]
-    pub category: TestCategoryFilter,
+    pub group: TestGroupFilter,
 
-    /// Suite id to include. Repeat to include multiple suites.
+    /// Unit layer to include in the listing.
     #[arg(long, value_enum)]
-    pub suite: Vec<TestSuiteId>,
+    pub layer: Option<TestUnitLayer>,
 
     /// Include individual test cases where they can be discovered cheaply.
     #[arg(long)]
@@ -379,22 +386,111 @@ pub struct TestListArgs {
     pub format: TestListFormat,
 }
 
-/// Options for running cataloged tests.
+/// Options for deterministic unit test workflows.
 #[derive(Args)]
-pub struct TestRunArgs {
-    /// Category to run.
-    #[arg(long, value_enum, default_value = "all")]
-    pub category: TestCategoryFilter,
+pub struct TestUnitArgs {
+    /// Unit target to run. Omit to run all deterministic tests.
+    #[command(subcommand)]
+    pub target: Option<TestUnitTarget>,
+}
 
-    /// Suite id to run. Repeat to run multiple suites.
-    #[arg(long, value_enum)]
-    pub suite: Vec<TestSuiteId>,
+/// Deterministic unit test targets.
+#[derive(Subcommand)]
+pub enum TestUnitTarget {
+    /// Run all white-box unit suites.
+    Whitebox,
+    /// Run all public API/interface unit suites.
+    Interface,
+    /// Run xtask CLI and orchestration unit tests.
+    Xtask,
+    /// Run Rust unit tests for core workspace crates.
+    Rust(TestUnitRustArgs),
+    /// Run Rust unit tests for language binding crates.
+    Bindings,
+    /// Run browser package TypeScript tests.
+    BrowserPackage,
+    /// Run browser app TypeScript tests.
+    Apps,
+    /// Run crate-level public API integration tests.
+    Api,
+    /// Run CLI black-box integration tests.
+    Cli,
+    /// Run deterministic Node package API tests.
+    #[command(after_long_help = BACKEND_HELP)]
+    Node(TestUnitBackendArgs),
+    /// Run deterministic Python package API tests.
+    #[command(after_long_help = BACKEND_HELP)]
+    Python(TestUnitBackendArgs),
+}
 
+/// Options for Rust unit tests.
+#[derive(Args)]
+pub struct TestUnitRustArgs {
     /// Rust package filter for the `rust-crates` suite.
     #[arg(long)]
     pub package: Option<String>,
+}
 
+/// Backend options for deterministic binding unit tests.
+#[derive(Args)]
+pub struct TestUnitBackendArgs {
     /// Backend passed to backend-aware suites.
+    #[arg(long, short, value_enum, default_value = "cpu")]
+    pub backend: Backend,
+}
+
+/// Options for smoke test workflows.
+#[derive(Args)]
+pub struct TestSmokeArgs {
+    /// Smoke test target to run.
+    #[command(subcommand)]
+    pub target: TestSmokeTarget,
+}
+
+/// Holistic integration smoke test targets.
+#[derive(Subcommand)]
+pub enum TestSmokeTarget {
+    /// Run CLI, Rust, Node, Python, browser, and llama smoke tests.
+    #[command(after_long_help = BACKEND_HELP)]
+    All(TestSmokeAllArgs),
+    /// Run model-backed CLI local inference smoke.
+    #[command(after_long_help = BACKEND_HELP)]
+    Cli(TestSmokeModelArgs),
+    /// Run model-backed Rust example smoke.
+    #[command(after_long_help = BACKEND_HELP)]
+    Rust(TestSmokeCaseArgs),
+    /// Run model-backed Node example smoke.
+    #[command(after_long_help = BACKEND_HELP)]
+    Node(TestSmokeCaseArgs),
+    /// Run model-backed Python example smoke.
+    #[command(after_long_help = BACKEND_HELP)]
+    Python(TestSmokeCaseArgs),
+    /// Run CLI, Rust, Node, and Python model-backed smoke tests.
+    #[command(after_long_help = BACKEND_HELP)]
+    Model(TestSmokeModelArgs),
+    /// Run browser runtime smoke tests through Playwright.
+    Browser(TestSmokeBrowserArgs),
+    /// Run llama.cpp backend operation smoke.
+    #[command(after_long_help = BACKEND_HELP)]
+    Llama(TestSmokeLlamaArgs),
+}
+
+/// Options for `test smoke all`.
+#[derive(Args)]
+pub struct TestSmokeAllArgs {
+    /// Model-backed smoke options shared by CLI, Rust, Node, and Python smoke tests.
+    #[command(flatten)]
+    pub model: TestSmokeModelArgs,
+
+    /// Browser smoke timeout in milliseconds.
+    #[arg(long, default_value = "30000")]
+    pub browser_timeout_ms: u64,
+}
+
+/// Model-backed smoke options.
+#[derive(Args, Clone)]
+pub struct TestSmokeModelArgs {
+    /// Backend passed to model-backed smoke tests.
     #[arg(long, short, value_enum, default_value = "cpu")]
     pub backend: Backend,
 
@@ -405,42 +501,201 @@ pub struct TestRunArgs {
     /// Do not download the default sample model when model-backed suites have no --model.
     #[arg(long)]
     pub offline: bool,
+
+    /// Prompt passed to local generation smoke tests.
+    #[arg(long, default_value = "Describe browser LLM inference.")]
+    pub prompt: String,
+
+    /// Maximum generated tokens for local generation smoke tests.
+    #[arg(long, default_value = "64")]
+    pub max_tokens: u32,
+
+    /// Sampling temperature for local generation smoke tests.
+    #[arg(long, default_value = "0")]
+    pub temperature: f32,
+}
+
+/// Model-backed smoke options with query/chat case selection.
+#[derive(Args)]
+pub struct TestSmokeCaseArgs {
+    /// Model-backed smoke options.
+    #[command(flatten)]
+    pub model: TestSmokeModelArgs,
+
+    /// Example case to run. Repeat to include multiple cases.
+    #[arg(long = "case", value_enum)]
+    pub cases: Vec<TestSmokeCase>,
+}
+
+/// Model-backed example smoke cases.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum TestSmokeCase {
+    /// Query/text generation example.
+    Query,
+    /// Chat generation example.
+    Chat,
+}
+
+impl TestSmokeCase {
+    /// Stable smoke case label.
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            TestSmokeCase::Query => "query",
+            TestSmokeCase::Chat => "chat",
+        }
+    }
+}
+
+/// Browser smoke options.
+#[derive(Args)]
+pub struct TestSmokeBrowserArgs {
+    /// Host used for the benchmark Vite server.
+    #[arg(long)]
+    pub host: Option<String>,
+
+    /// Port used for the benchmark Vite server.
+    #[arg(long)]
+    pub port: Option<u16>,
+
+    /// Browser smoke timeout in milliseconds.
+    #[arg(long, default_value = "30000")]
+    pub timeout_ms: u64,
+
+    /// Require the Rust browser engine smoke to pass.
+    #[arg(long)]
+    pub require_rust_engine: bool,
+
+    /// Require browser GGUF ingest smoke to pass.
+    #[arg(long)]
+    pub require_gguf_ingest: bool,
+
+    /// Require WebGPU backend readiness.
+    #[arg(long)]
+    pub require_webgpu: bool,
+}
+
+/// Options for llama.cpp backend operation smoke tests.
+#[derive(Args)]
+pub struct TestSmokeLlamaArgs {
+    /// Backend to compile and exercise.
+    #[arg(long, short, value_enum, default_value = "cpu")]
+    pub backend: Backend,
+
+    /// Diagnostic test-backend-ops mode.
+    #[arg(long, value_enum, default_value = "test")]
+    pub mode: LlamaBackendOpsMode,
+
+    /// Operation filter passed as `-o`.
+    #[arg(long)]
+    pub op: Option<String>,
+
+    /// Parameter regex passed as `-p`.
+    #[arg(long)]
+    pub params: Option<String>,
+
+    /// test-backend-ops output format.
+    #[arg(long, value_enum, default_value = "console")]
+    pub output: LlamaBackendOpsOutput,
 }
 
 /// Options for test and coverage verification.
 #[derive(Args)]
 pub struct TestVerifyArgs {
-    /// Category to verify.
+    /// Unit target to verify.
     #[arg(long, value_enum, default_value = "all")]
-    pub category: TestCategoryFilter,
-
-    /// Suite id to verify. Repeat to include multiple suites.
-    #[arg(long, value_enum)]
-    pub suite: Vec<TestSuiteId>,
+    pub target: TestVerifyTarget,
 
     /// Validate that changed source files have matching catalog-owned test changes.
     #[arg(long)]
     pub changed: bool,
 }
 
-/// Category filter for test listing, running, and verification.
+/// Suite group filter for test listing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub enum TestCategoryFilter {
-    /// Include white-box and interface suites.
+pub enum TestGroupFilter {
+    /// Include unit and smoke suites.
     All,
-    /// Include implementation-oriented white-box suites.
+    /// Include deterministic unit suites.
+    Unit,
+    /// Include holistic smoke suites.
+    Smoke,
+}
+
+impl TestGroupFilter {
+    /// Stable group filter label.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TestGroupFilter::All => "all",
+            TestGroupFilter::Unit => "unit",
+            TestGroupFilter::Smoke => "smoke",
+        }
+    }
+}
+
+/// Unit test layer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum TestUnitLayer {
+    /// Implementation-oriented white-box suites.
     Whitebox,
-    /// Include public interface black-box suites.
+    /// Public API and interface suites.
     Interface,
 }
 
-impl TestCategoryFilter {
-    /// Stable category filter label.
+impl TestUnitLayer {
+    /// Stable unit layer label.
     pub fn as_str(&self) -> &'static str {
         match self {
-            TestCategoryFilter::All => "all",
-            TestCategoryFilter::Whitebox => "whitebox",
-            TestCategoryFilter::Interface => "interface",
+            TestUnitLayer::Whitebox => "whitebox",
+            TestUnitLayer::Interface => "interface",
+        }
+    }
+}
+
+/// Coverage verification target.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum TestVerifyTarget {
+    /// Verify all coverage-capable unit suites.
+    All,
+    /// Verify coverage-capable white-box unit suites.
+    Whitebox,
+    /// Verify coverage-capable interface unit suites.
+    Interface,
+    /// Verify xtask unit coverage.
+    Xtask,
+    /// Verify Rust crate unit coverage.
+    Rust,
+    /// Verify binding crate unit coverage.
+    Bindings,
+    /// Verify browser package unit coverage.
+    BrowserPackage,
+    /// Verify app TypeScript unit coverage.
+    Apps,
+    /// Verify crate-level public API coverage.
+    Api,
+    /// Verify CLI black-box coverage.
+    Cli,
+    /// Verify Node package API coverage.
+    Node,
+    /// Verify Python package API coverage.
+    Python,
+}
+
+impl TestVerifyTarget {
+    /// Stable verification target label.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TestVerifyTarget::All => "all",
+            TestVerifyTarget::Whitebox => "whitebox",
+            TestVerifyTarget::Interface => "interface",
+            TestVerifyTarget::Xtask => "xtask",
+            TestVerifyTarget::Rust => "rust",
+            TestVerifyTarget::Bindings => "bindings",
+            TestVerifyTarget::BrowserPackage => "browser-package",
+            TestVerifyTarget::Apps => "apps",
+            TestVerifyTarget::Api => "api",
+            TestVerifyTarget::Cli => "cli",
+            TestVerifyTarget::Node => "node",
+            TestVerifyTarget::Python => "python",
         }
     }
 }
@@ -475,10 +730,16 @@ pub enum TestSuiteId {
     NodePackage,
     /// Python package interface tests.
     PythonPackage,
+    /// CLI local generation smoke tests.
+    CliSmoke,
+    /// Rust local generation smoke tests.
+    RustSmoke,
+    /// Node local generation smoke tests.
+    NodeSmoke,
+    /// Python local generation smoke tests.
+    PythonSmoke,
     /// Browser runtime smoke tests.
-    BrowserRuntime,
-    /// Model-backed smoke tests.
-    ModelSmoke,
+    BrowserSmoke,
     /// llama.cpp backend operation tests.
     LlamaBackendOps,
 }
@@ -496,8 +757,11 @@ impl TestSuiteId {
             TestSuiteId::Cli => "cli",
             TestSuiteId::NodePackage => "node-package",
             TestSuiteId::PythonPackage => "python-package",
-            TestSuiteId::BrowserRuntime => "browser-runtime",
-            TestSuiteId::ModelSmoke => "model-smoke",
+            TestSuiteId::CliSmoke => "cli-smoke",
+            TestSuiteId::RustSmoke => "rust-smoke",
+            TestSuiteId::NodeSmoke => "node-smoke",
+            TestSuiteId::PythonSmoke => "python-smoke",
+            TestSuiteId::BrowserSmoke => "browser-smoke",
             TestSuiteId::LlamaBackendOps => "llama-backend-ops",
         }
     }

@@ -8,8 +8,9 @@ use clap::error::ErrorKind;
 use clap::Parser;
 
 use crate::cli::{
-    Backend, Cli, Commands, LlamaBackendOpsMode, RunCommands, RunLlamaCommands, TestCategoryFilter,
-    TestCommands, TestSuiteId, TestVerifyArgs,
+    Backend, Cli, Commands, LlamaBackendOpsMode, RunCommands, RunLlamaCommands, TestCommands,
+    TestSmokeArgs, TestSmokeCase, TestSmokeModelArgs, TestSmokeTarget, TestSuiteId, TestUnitArgs,
+    TestUnitLayer, TestUnitTarget, TestVerifyArgs, TestVerifyTarget,
 };
 use crate::test_support::TempDir;
 use crate::utils::BuildContext;
@@ -21,10 +22,10 @@ use super::{
     filtered_rust_targets, is_allowed_rust_test_file, is_cpp_test_file_name,
     is_first_party_source_path, is_inverted_rust_test_file, is_probable_test_path, list_json_value,
     markdown_cell, normalize_relative_path, parse_lcov_summary, parse_quoted_test_name,
-    parse_rust_fn_name, path_components, path_matches_root, python_venv_exe, selected_suites,
-    selected_verify_suites, source_owner_suites, suite_by_id, test_backends,
+    parse_rust_fn_name, path_components, path_matches_root, python_venv_exe, selected_smoke_suites,
+    selected_unit_suites, selected_verify_suites, source_owner_suites, suite_by_id, test_backends,
     validate_package_filter, validate_suite_backends, CaseDiscoverer, CoverageSummaries,
-    LcovSummary, RunReport, RustTestTarget, SuiteReport, TestCase, TestCategory, VerifyCheckReport,
+    LcovSummary, RunReport, RustTestTarget, SuiteReport, TestCase, TestGroup, VerifyCheckReport,
     VerifyReport, NODE_GENERATION_SMOKE_SCRIPTS, PYTHON_GENERATION_SMOKE_SCRIPTS,
     RUST_CRATE_TEST_TARGETS, RUST_GENERATION_SMOKE_EXAMPLES, TEST_SUITES,
 };
@@ -38,12 +39,15 @@ fn catalog_suite_ids_are_unique() {
 
 #[test]
 fn catalog_has_whitebox_and_interface_suites() {
+    assert!(TEST_SUITES.iter().any(
+        |suite| suite.group == TestGroup::Unit && suite.layer == Some(TestUnitLayer::Whitebox)
+    ));
+    assert!(TEST_SUITES.iter().any(
+        |suite| suite.group == TestGroup::Unit && suite.layer == Some(TestUnitLayer::Interface)
+    ));
     assert!(TEST_SUITES
         .iter()
-        .any(|suite| suite.category == TestCategory::Whitebox));
-    assert!(TEST_SUITES
-        .iter()
-        .any(|suite| suite.category == TestCategory::Interface));
+        .any(|suite| suite.group == TestGroup::Smoke));
 }
 
 #[test]
@@ -51,9 +55,8 @@ fn new_test_commands_parse() {
     let cli = Cli::parse_from([
         "xtask",
         "test",
-        "run",
-        "--suite",
-        "rust-crates",
+        "unit",
+        "rust",
         "--package",
         "cogentlm-core",
     ]);
@@ -61,55 +64,80 @@ fn new_test_commands_parse() {
     let Commands::Test { command } = cli.command else {
         panic!("expected test command");
     };
-    let TestCommands::Run(args) = command else {
-        panic!("expected run command");
+    let TestCommands::Unit(args) = command else {
+        panic!("expected unit command");
     };
-    assert_eq!(args.suite, vec![TestSuiteId::RustCrates]);
+    let Some(TestUnitTarget::Rust(args)) = args.target else {
+        panic!("expected rust target");
+    };
     assert_eq!(args.package.as_deref(), Some("cogentlm-core"));
 }
 
 #[test]
-fn test_run_accepts_category_and_repeated_suites() {
+fn test_unit_accepts_interface_binding_targets() {
+    let cli = Cli::parse_from(["xtask", "test", "unit", "node", "--backend", "cpu"]);
+
+    let Commands::Test { command } = cli.command else {
+        panic!("expected test command");
+    };
+    let TestCommands::Unit(args) = command else {
+        panic!("expected unit command");
+    };
+    let Some(TestUnitTarget::Node(args)) = args.target else {
+        panic!("expected node target");
+    };
+    assert_eq!(args.backend, Backend::Cpu);
+}
+
+#[test]
+fn test_smoke_accepts_node_model_options_and_cases() {
     let cli = Cli::parse_from([
         "xtask",
         "test",
-        "run",
-        "--category",
-        "interface",
-        "--suite",
-        "node-package",
-        "--suite",
-        "python-package",
+        "smoke",
+        "node",
         "--backend",
         "cpu",
+        "--model",
+        "sample.gguf",
+        "--prompt",
+        "hello",
+        "--max-tokens",
+        "2",
+        "--temperature",
+        "0.5",
+        "--case",
+        "query",
     ]);
 
     let Commands::Test { command } = cli.command else {
         panic!("expected test command");
     };
-    let TestCommands::Run(args) = command else {
-        panic!("expected run command");
+    let TestCommands::Smoke(args) = command else {
+        panic!("expected smoke command");
     };
-    assert_eq!(args.category, TestCategoryFilter::Interface);
+    let TestSmokeTarget::Node(args) = args.target else {
+        panic!("expected node smoke target");
+    };
+    assert_eq!(args.model.backend, Backend::Cpu);
     assert_eq!(
-        args.suite,
-        vec![TestSuiteId::NodePackage, TestSuiteId::PythonPackage]
+        args.model.model.as_deref(),
+        Some(std::path::Path::new("sample.gguf"))
     );
-    assert_eq!(args.backend, Backend::Cpu);
+    assert_eq!(args.model.prompt, "hello");
+    assert_eq!(args.model.max_tokens, 2);
+    assert_eq!(args.model.temperature, 0.5);
+    assert_eq!(args.cases, vec![TestSmokeCase::Query]);
 }
 
 #[test]
-fn test_verify_accepts_category_and_repeated_suites() {
+fn test_verify_accepts_target() {
     let cli = Cli::parse_from([
         "xtask",
         "test",
         "verify",
-        "--category",
+        "--target",
         "whitebox",
-        "--suite",
-        "xtask",
-        "--suite",
-        "rust-crates",
         "--changed",
     ]);
 
@@ -119,39 +147,104 @@ fn test_verify_accepts_category_and_repeated_suites() {
     let TestCommands::Verify(args) = command else {
         panic!("expected verify command");
     };
-    assert_eq!(args.category, TestCategoryFilter::Whitebox);
-    assert_eq!(
-        args.suite,
-        vec![TestSuiteId::Xtask, TestSuiteId::RustCrates]
-    );
+    assert_eq!(args.target, TestVerifyTarget::Whitebox);
     assert!(args.changed);
 }
 
 #[test]
-fn invalid_suite_names_are_rejected_by_clap() {
+fn old_flag_based_test_commands_are_rejected_by_clap() {
     assert!(Cli::try_parse_from(["xtask", "test", "run", "--suite", "nope"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "run", "--suite", "layout"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "list", "--category", "unit"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "list", "--suite", "xtask"]).is_err());
 }
 
 #[test]
-fn suite_category_mismatches_are_rejected() {
-    assert!(selected_suites(&[TestSuiteId::NodePackage], TestCategoryFilter::Whitebox).is_err());
-    assert!(selected_suites(&[TestSuiteId::PackageTs], TestCategoryFilter::Interface).is_err());
-}
+fn unit_target_selection_expands_expected_suites() {
+    let selection = selected_unit_suites(&TestUnitArgs {
+        target: Some(TestUnitTarget::Interface),
+    })
+    .unwrap();
 
-#[test]
-fn empty_run_selection_selects_every_suite() {
     assert_eq!(
-        selected_suites(&[], TestCategoryFilter::All).unwrap().len(),
-        TEST_SUITES.len()
+        selection
+            .suites
+            .iter()
+            .map(|suite| suite.id)
+            .collect::<Vec<_>>(),
+        vec![
+            TestSuiteId::RustPublicApi,
+            TestSuiteId::Cli,
+            TestSuiteId::NodePackage,
+            TestSuiteId::PythonPackage
+        ]
+    );
+}
+
+#[test]
+fn empty_unit_selection_selects_every_unit_suite() {
+    let selection = selected_unit_suites(&TestUnitArgs { target: None }).unwrap();
+
+    assert_eq!(
+        selection.suites.len(),
+        TEST_SUITES
+            .iter()
+            .filter(|suite| suite.group == TestGroup::Unit)
+            .count()
+    );
+}
+
+#[test]
+fn smoke_model_and_all_targets_expand_to_primitive_smoke_suites() {
+    let model_args = TestSmokeModelArgs {
+        backend: Backend::Cpu,
+        model: None,
+        offline: false,
+        prompt: "hello".to_owned(),
+        max_tokens: 1,
+        temperature: 0.0,
+    };
+    let model = selected_smoke_suites(&TestSmokeArgs {
+        target: TestSmokeTarget::Model(model_args.clone()),
+    })
+    .unwrap();
+    assert_eq!(
+        model
+            .suites
+            .iter()
+            .map(|suite| suite.id)
+            .collect::<Vec<_>>(),
+        vec![
+            TestSuiteId::CliSmoke,
+            TestSuiteId::RustSmoke,
+            TestSuiteId::NodeSmoke,
+            TestSuiteId::PythonSmoke
+        ]
+    );
+
+    let all = selected_smoke_suites(&TestSmokeArgs {
+        target: TestSmokeTarget::All(crate::cli::TestSmokeAllArgs {
+            model: model_args,
+            browser_timeout_ms: 30_000,
+        }),
+    })
+    .unwrap();
+    assert_eq!(
+        all.suites.iter().map(|suite| suite.id).collect::<Vec<_>>(),
+        vec![
+            TestSuiteId::CliSmoke,
+            TestSuiteId::RustSmoke,
+            TestSuiteId::NodeSmoke,
+            TestSuiteId::PythonSmoke,
+            TestSuiteId::BrowserSmoke,
+            TestSuiteId::LlamaBackendOps
+        ]
     );
 }
 
 #[test]
 fn coverage_rejects_explicit_non_coverage_suites() {
     let args = TestVerifyArgs {
-        category: TestCategoryFilter::All,
-        suite: vec![TestSuiteId::PackageTs],
+        target: TestVerifyTarget::BrowserPackage,
         changed: false,
     };
 
@@ -170,8 +263,7 @@ fn backend_preflight_rejects_all_for_concrete_only_suites() {
 #[test]
 fn coverage_rejects_model_smoke_because_it_runs_no_report() {
     let args = TestVerifyArgs {
-        category: TestCategoryFilter::All,
-        suite: vec![TestSuiteId::ModelSmoke],
+        target: TestVerifyTarget::Apps,
         changed: false,
     };
 
@@ -181,16 +273,14 @@ fn coverage_rejects_model_smoke_because_it_runs_no_report() {
 #[test]
 fn run_report_serializes_suite_status_and_coverage_artifacts() {
     let ctx = BuildContext::new().unwrap();
-    let args = crate::cli::TestRunArgs {
-        category: TestCategoryFilter::All,
-        suite: vec![TestSuiteId::Xtask],
-        package: None,
-        backend: Backend::Cpu,
-        model: None,
-        offline: false,
-    };
     let suite = suite_by_id(TestSuiteId::Xtask).unwrap();
-    let mut report = RunReport::new(&args, &[suite]);
+    let mut report = RunReport::new(
+        serde_json::json!({
+            "command": "unit",
+            "target": "xtask",
+        }),
+        &[suite],
+    );
 
     report.suites.push(SuiteReport::passed(&ctx, suite, 42));
     report.finish("passed");
@@ -198,6 +288,8 @@ fn run_report_serializes_suite_status_and_coverage_artifacts() {
     let value = report.as_json(&ctx);
     assert_eq!(value["status"], "passed");
     assert_eq!(value["suites"][0]["status"], "passed");
+    assert_eq!(value["suites"][0]["group"], "unit");
+    assert_eq!(value["suites"][0]["layer"], "whitebox");
     assert_eq!(value["suites"][0]["coverage"]["status"], "written");
     assert!(value["suites"][0]["coverage"]["artifacts"][0]
         .as_str()
@@ -293,7 +385,14 @@ fn test_help_uses_clap_help_subcommand() {
         ErrorKind::DisplayHelp
     );
     assert_eq!(
-        Cli::try_parse_from(["xtask", "test", "help", "run"])
+        Cli::try_parse_from(["xtask", "test", "help", "unit"])
+            .err()
+            .unwrap()
+            .kind(),
+        ErrorKind::DisplayHelp
+    );
+    assert_eq!(
+        Cli::try_parse_from(["xtask", "test", "help", "smoke"])
             .err()
             .unwrap()
             .kind(),
@@ -513,8 +612,7 @@ fn coverage_helpers_summarize_selected_report_areas_and_lcov() {
 fn report_markdown_and_json_escape_dynamic_values() {
     let ctx = BuildContext::new().unwrap();
     let args = TestVerifyArgs {
-        category: TestCategoryFilter::All,
-        suite: vec![TestSuiteId::Xtask],
+        target: TestVerifyTarget::Xtask,
         changed: true,
     };
     let suite = suite_by_id(TestSuiteId::Xtask).unwrap();

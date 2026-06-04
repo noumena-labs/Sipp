@@ -280,32 +280,27 @@ fn print_examples(ctx: &BuildContext, profile: SetupProfile) {
         SetupProfile::Browser => {
             output::detail("Build browser package", "clm build wasm");
             output::detail("Run examples app", "clm run apps serve examples");
-            output::detail("Run app tests", "clm test run --suite app-ts");
+            output::detail("Run app tests", "clm test unit apps");
         }
         SetupProfile::Bindings => {
             let model = sample_model::sample_model_arg(ctx);
             output::detail("Build Node bindings", "clm build node");
             output::detail("Build Python bindings", "clm build python");
-            output::detail(
-                "Node smoke",
-                "clm test run --suite node-package --backend cpu",
-            );
-            output::detail(
-                "Python smoke",
-                "clm test run --suite python-package --backend cpu",
-            );
+            output::detail("Node API tests", "clm test unit node --backend cpu");
+            output::detail("Python API tests", "clm test unit python --backend cpu");
             output::detail(
                 "Model smoke",
-                format!("clm test run --suite model-smoke --backend cpu --model {model}"),
+                format!("clm test smoke model --backend cpu --model {model}"),
             );
         }
         SetupProfile::Full => {
             let model = sample_model::sample_model_arg(ctx);
             output::detail("Build everything", "clm build all");
             output::detail("Serve benchmark", "clm run apps serve benchmark");
+            output::detail("Run unit tests", "clm test unit");
             output::detail(
-                "Run all tests",
-                format!("clm test run --backend cpu --model {model}"),
+                "Run smoke tests",
+                format!("clm test smoke all --backend cpu --model {model}"),
             );
         }
     }

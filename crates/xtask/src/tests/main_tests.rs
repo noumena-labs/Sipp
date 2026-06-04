@@ -4,8 +4,9 @@
 //! binary dispatcher, subprocesses, or build orchestration.
 
 use xtask::cli::{
-    Backend, BackendArgs, BuildCommands, CleanArgs, Commands, TestCategoryFilter, TestCommands,
-    TestListArgs, TestListFormat, TestRunArgs, TestVerifyArgs,
+    Backend, BackendArgs, BuildCommands, CleanArgs, Commands, TestCommands, TestGroupFilter,
+    TestListArgs, TestListFormat, TestSmokeArgs, TestSmokeBrowserArgs, TestSmokeTarget,
+    TestUnitArgs, TestVerifyArgs, TestVerifyTarget,
 };
 
 use super::{backend_summary, build_summary, command_summary, test_summary};
@@ -32,8 +33,8 @@ fn command_summary_labels_top_level_workflows() {
 fn test_summary_labels_test_subcommands() {
     assert_eq!(
         test_summary(&TestCommands::List(TestListArgs {
-            category: TestCategoryFilter::All,
-            suite: Vec::new(),
+            group: TestGroupFilter::All,
+            layer: None,
             cases: false,
             search: None,
             format: TestListFormat::Text,
@@ -41,20 +42,25 @@ fn test_summary_labels_test_subcommands() {
         "List test suites"
     );
     assert_eq!(
-        test_summary(&TestCommands::Run(TestRunArgs {
-            category: TestCategoryFilter::Whitebox,
-            suite: Vec::new(),
-            package: None,
-            backend: Backend::Vulkan,
-            model: None,
-            offline: false,
+        test_summary(&TestCommands::Unit(TestUnitArgs { target: None })),
+        "Run unit tests"
+    );
+    assert_eq!(
+        test_summary(&TestCommands::Smoke(TestSmokeArgs {
+            target: TestSmokeTarget::Browser(TestSmokeBrowserArgs {
+                host: None,
+                port: None,
+                timeout_ms: 30_000,
+                require_rust_engine: false,
+                require_gguf_ingest: false,
+                require_webgpu: false,
+            }),
         })),
-        "Run tests (vulkan)"
+        "Run smoke tests"
     );
     assert_eq!(
         test_summary(&TestCommands::Verify(TestVerifyArgs {
-            category: TestCategoryFilter::All,
-            suite: Vec::new(),
+            target: TestVerifyTarget::All,
             changed: true,
         })),
         "Verify tests"

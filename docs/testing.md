@@ -1,39 +1,50 @@
 # Testing
 
 CogentLM tests are cataloged by `cargo xtask test list`. Use that command first
-when choosing a suite or checking what CI runs.
+when choosing a target or checking what CI runs.
 
 ## Commands
 
 `cargo xtask test` has four top-level actions:
 
-- `list`: list suites and optionally discover/search individual cases.
-- `run`: execute tests selected by suite or category and write run/coverage artifacts.
+- `list`: list unit and smoke suites and optionally discover/search cheap cases.
+- `unit`: run deterministic code-flow and API-layer tests.
+- `smoke`: run holistic integration smoke tests by target.
 - `verify`: analyze existing coverage artifacts and validate test structure.
-- `help`: show detailed CLI help through Clap's built-in help command.
 
 ## Common Commands
 
 ```bash
 cargo xtask test list
-cargo xtask test list --cases
-cargo xtask test list --category whitebox --cases --search router --format json
-cargo xtask test run
-cargo xtask test run --category whitebox
-cargo xtask test run --suite xtask
-cargo xtask test run --suite rust-crates --package cogentlm-engine
-cargo xtask test run --suite node-package --backend cpu
-cargo xtask test verify --category whitebox
+cargo xtask test list --group unit --layer interface --cases --search router --format json
+cargo xtask test unit
+cargo xtask test unit whitebox
+cargo xtask test unit interface
+cargo xtask test unit xtask
+cargo xtask test unit rust --package cogentlm-engine
+cargo xtask test unit node --backend cpu
+cargo xtask test unit python --backend cpu
+cargo xtask test smoke node --backend cpu
+cargo xtask test smoke model --backend cpu
+cargo xtask test smoke browser
+cargo xtask test verify --target whitebox
+cargo xtask test verify --changed
 ```
 
-`--suite` can be repeated on `list`, `run`, and `verify`. For `test run`,
-`--backend`, `--model`, and `--offline` only affect suites that build native
-bindings or run model-backed checks. They are ignored by xtask and plain
-Rust/package listing paths.
+`test unit` owns deterministic tests. `whitebox` covers internal code-flow
+suites, while `interface` covers deterministic public API and binding package
+checks. Unit target names expose target-specific options, such as
+`test unit rust --package <crate>` and `test unit node --backend cpu`.
 
-`test run` is the only test command that executes suites. It writes
-`.build/test/run-report.json`, `.build/test/run-report.md`, and fresh coverage
-artifacts under `.build/coverage/` for coverage-capable suites.
+`test smoke` owns holistic integration checks. Model-backed smoke targets
+(`cli`, `rust`, `node`, `python`, and `model`) default to the setup sample model
+cache under `.build/models` when `--model` is omitted. They accept `--backend`,
+`--model`, `--offline`, `--prompt`, `--max-tokens`, and `--temperature`; Rust,
+Node, and Python also accept repeated `--case query|chat`.
+
+`test unit` and `test smoke` write `.build/test/run-report.json` and
+`.build/test/run-report.md`. Coverage-capable unit suites also write fresh
+coverage artifacts under `.build/coverage/`.
 
 `test verify` does not execute test suites. It validates test structure,
 catalog ownership, test/runtime code separation, optional changed-file coverage,

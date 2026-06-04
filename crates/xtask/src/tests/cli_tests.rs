@@ -8,8 +8,8 @@ use clap::Parser;
 use super::{
     AppName, AppServeMode, Backend, Cli, Commands, DoctorTarget, LlamaBackendOpsMode,
     LlamaBackendOpsOutput, RunAppsCommands, RunCommands, RunLlamaCommands, SetupProfile,
-    TestCategoryFilter, TestCommands, TestListFormat, TestSuiteId, ToolchainCommands,
-    ToolchainComponent,
+    TestCommands, TestGroupFilter, TestListFormat, TestSmokeTarget, TestSuiteId, TestUnitLayer,
+    TestUnitTarget, ToolchainCommands, ToolchainComponent,
 };
 
 #[test]
@@ -105,10 +105,10 @@ fn test_list_parses_json_cases_and_search() {
         "xtask",
         "test",
         "list",
-        "--category",
+        "--group",
+        "unit",
+        "--layer",
         "interface",
-        "--suite",
-        "node-package",
         "--cases",
         "--search",
         "router",
@@ -122,11 +122,54 @@ fn test_list_parses_json_cases_and_search() {
     let TestCommands::List(args) = command else {
         panic!("expected list command");
     };
-    assert_eq!(args.category, TestCategoryFilter::Interface);
-    assert_eq!(args.suite, vec![TestSuiteId::NodePackage]);
+    assert_eq!(args.group, TestGroupFilter::Unit);
+    assert_eq!(args.layer, Some(TestUnitLayer::Interface));
     assert!(args.cases);
     assert_eq!(args.search.as_deref(), Some("router"));
     assert_eq!(args.format, TestListFormat::Json);
+}
+
+#[test]
+fn test_unit_and_smoke_targets_parse() {
+    let cli = Cli::parse_from([
+        "xtask",
+        "test",
+        "unit",
+        "rust",
+        "--package",
+        "cogentlm-core",
+    ]);
+    let Commands::Test { command } = cli.command else {
+        panic!("expected test command");
+    };
+    let TestCommands::Unit(args) = command else {
+        panic!("expected unit command");
+    };
+    let Some(TestUnitTarget::Rust(args)) = args.target else {
+        panic!("expected rust unit target");
+    };
+    assert_eq!(args.package.as_deref(), Some("cogentlm-core"));
+
+    let cli = Cli::parse_from([
+        "xtask",
+        "test",
+        "smoke",
+        "browser",
+        "--require-webgpu",
+        "--timeout-ms",
+        "45000",
+    ]);
+    let Commands::Test { command } = cli.command else {
+        panic!("expected test command");
+    };
+    let TestCommands::Smoke(args) = command else {
+        panic!("expected smoke command");
+    };
+    let TestSmokeTarget::Browser(args) = args.target else {
+        panic!("expected browser smoke target");
+    };
+    assert!(args.require_webgpu);
+    assert_eq!(args.timeout_ms, 45_000);
 }
 
 #[test]
@@ -173,6 +216,7 @@ fn labels_match_cli_wire_values() {
     assert_eq!(Backend::Vulkan.as_str(), "vulkan");
     assert_eq!(Backend::All.as_str(), "all");
     assert_eq!(TestSuiteId::RustCrates.as_str(), "rust-crates");
+    assert_eq!(TestSuiteId::BrowserSmoke.as_str(), "browser-smoke");
     assert_eq!(AppName::ProactiveUi.slug(), "proactive-ui");
     assert_eq!(AppServeMode::Dev.as_str(), "dev");
     assert_eq!(LlamaBackendOpsMode::Support.as_str(), "support");

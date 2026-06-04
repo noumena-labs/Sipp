@@ -1,9 +1,10 @@
 //! Cataloged workspace test and coverage orchestration.
 
 use crate::cli::{
-    Backend, LlamaBackendOpsMode, LlamaBackendOpsOutput, RunLlamaBackendOpsArgs,
-    TestCategoryFilter, TestCommands, TestListArgs, TestListFormat, TestRunArgs, TestSuiteId,
-    TestVerifyArgs,
+    Backend, LlamaBackendOpsMode, LlamaBackendOpsOutput, RunLlamaBackendOpsArgs, TestCommands,
+    TestGroupFilter, TestListArgs, TestListFormat, TestSmokeArgs, TestSmokeBrowserArgs,
+    TestSmokeCase, TestSmokeCaseArgs, TestSmokeLlamaArgs, TestSmokeModelArgs, TestSmokeTarget,
+    TestSuiteId, TestUnitArgs, TestUnitLayer, TestUnitTarget, TestVerifyArgs, TestVerifyTarget,
 };
 use crate::output;
 use crate::sample_model::{self, SampleModelOptions};
@@ -32,6 +33,8 @@ mod test_tests;
 /////////////////////////////////////////////////////////////////////////////////
 
 const DEFAULT_SMOKE_PROMPT: &str = "Describe browser LLM inference.";
+const DEFAULT_SMOKE_MAX_TOKENS: u32 = 64;
+const DEFAULT_SMOKE_TEMPERATURE: f32 = 0.0;
 const RUST_GENERATION_SMOKE_EXAMPLES: &[&str] = &["query", "chat"];
 const NODE_GENERATION_SMOKE_SCRIPTS: &[&str] = &["examples/query.mjs", "examples/chat.mjs"];
 const PYTHON_GENERATION_SMOKE_SCRIPTS: &[&str] = &["examples/query.py", "examples/chat.py"];
@@ -106,17 +109,16 @@ const NODE_PACKAGE_SOURCE_ROOTS: &[&str] = &[
     "bindings/node/router.d.ts",
 ];
 const PYTHON_PACKAGE_SOURCE_ROOTS: &[&str] = &["bindings/python/python/cogentlm"];
-const MODEL_SMOKE_SOURCE_ROOTS: &[&str] = &[
-    "crates/client/src",
-    "crates/cli/src",
-    "bindings/node",
-    "bindings/python",
-];
+const CLI_SMOKE_SOURCE_ROOTS: &[&str] = &["crates/cli/src"];
+const RUST_SMOKE_SOURCE_ROOTS: &[&str] = &["crates/client/src"];
+const NODE_SMOKE_SOURCE_ROOTS: &[&str] = &["bindings/node"];
+const PYTHON_SMOKE_SOURCE_ROOTS: &[&str] = &["bindings/python"];
 
 const TEST_SUITES: &[TestSuite] = &[
     TestSuite {
         id: TestSuiteId::Xtask,
-        category: TestCategory::Whitebox,
+        group: TestGroup::Unit,
+        layer: Some(TestUnitLayer::Whitebox),
         description: "xtask CLI and orchestration unit tests",
         requirements: "cargo",
         source_roots: XTASK_SOURCE_ROOTS,
@@ -127,7 +129,8 @@ const TEST_SUITES: &[TestSuite] = &[
     },
     TestSuite {
         id: TestSuiteId::RustCrates,
-        category: TestCategory::Whitebox,
+        group: TestGroup::Unit,
+        layer: Some(TestUnitLayer::Whitebox),
         description: "Rust unit tests for core workspace crates",
         requirements: "cargo, native toolchain",
         source_roots: RUST_CRATE_SOURCE_ROOTS,
@@ -138,7 +141,8 @@ const TEST_SUITES: &[TestSuite] = &[
     },
     TestSuite {
         id: TestSuiteId::RustBindings,
-        category: TestCategory::Whitebox,
+        group: TestGroup::Unit,
+        layer: Some(TestUnitLayer::Whitebox),
         description: "Rust unit tests for Node, Python, and WASM binding crates",
         requirements: "cargo, native toolchain",
         source_roots: RUST_BINDING_SOURCE_ROOTS,
@@ -149,7 +153,8 @@ const TEST_SUITES: &[TestSuite] = &[
     },
     TestSuite {
         id: TestSuiteId::PackageTs,
-        category: TestCategory::Whitebox,
+        group: TestGroup::Unit,
+        layer: Some(TestUnitLayer::Whitebox),
         description: "browser package TypeScript tests under packages/npm/tests",
         requirements: "bun, wasm build",
         source_roots: PACKAGE_TS_SOURCE_ROOTS,
@@ -160,7 +165,8 @@ const TEST_SUITES: &[TestSuite] = &[
     },
     TestSuite {
         id: TestSuiteId::AppTs,
-        category: TestCategory::Whitebox,
+        group: TestGroup::Unit,
+        layer: Some(TestUnitLayer::Whitebox),
         description: "browser app TypeScript tests discovered under apps/",
         requirements: "bun, wasm build",
         source_roots: APP_TS_SOURCE_ROOTS,
@@ -171,7 +177,8 @@ const TEST_SUITES: &[TestSuite] = &[
     },
     TestSuite {
         id: TestSuiteId::RustPublicApi,
-        category: TestCategory::Interface,
+        group: TestGroup::Unit,
+        layer: Some(TestUnitLayer::Interface),
         description: "crate-level public API integration tests",
         requirements: "cargo, native toolchain",
         source_roots: RUST_PUBLIC_API_SOURCE_ROOTS,
@@ -182,7 +189,8 @@ const TEST_SUITES: &[TestSuite] = &[
     },
     TestSuite {
         id: TestSuiteId::Cli,
-        category: TestCategory::Interface,
+        group: TestGroup::Unit,
+        layer: Some(TestUnitLayer::Interface),
         description: "CLI black-box integration test",
         requirements: "cargo, native toolchain",
         source_roots: CLI_SOURCE_ROOTS,
@@ -193,7 +201,8 @@ const TEST_SUITES: &[TestSuite] = &[
     },
     TestSuite {
         id: TestSuiteId::NodePackage,
-        category: TestCategory::Interface,
+        group: TestGroup::Unit,
+        layer: Some(TestUnitLayer::Interface),
         description: "Node binding build/import/router tests",
         requirements: "cargo, node",
         source_roots: NODE_PACKAGE_SOURCE_ROOTS,
@@ -204,7 +213,8 @@ const TEST_SUITES: &[TestSuite] = &[
     },
     TestSuite {
         id: TestSuiteId::PythonPackage,
-        category: TestCategory::Interface,
+        group: TestGroup::Unit,
+        layer: Some(TestUnitLayer::Interface),
         description: "Python wheel install/import pytest suite",
         requirements: "cargo, uv, python",
         source_roots: PYTHON_PACKAGE_SOURCE_ROOTS,
@@ -214,30 +224,69 @@ const TEST_SUITES: &[TestSuite] = &[
         discoverer: CaseDiscoverer::PythonPackage,
     },
     TestSuite {
-        id: TestSuiteId::BrowserRuntime,
-        category: TestCategory::Interface,
+        id: TestSuiteId::CliSmoke,
+        group: TestGroup::Smoke,
+        layer: None,
+        description: "CLI local generation smoke",
+        requirements: "sample GGUF model, cargo",
+        source_roots: CLI_SMOKE_SOURCE_ROOTS,
+        coverage: false,
+        backend_policy: BackendPolicy::ConcreteOnly,
+        runner: SuiteRunner::CliSmoke,
+        discoverer: CaseDiscoverer::None,
+    },
+    TestSuite {
+        id: TestSuiteId::RustSmoke,
+        group: TestGroup::Smoke,
+        layer: None,
+        description: "Rust local generation example smoke",
+        requirements: "sample GGUF model, cargo",
+        source_roots: RUST_SMOKE_SOURCE_ROOTS,
+        coverage: false,
+        backend_policy: BackendPolicy::ConcreteOnly,
+        runner: SuiteRunner::RustSmoke,
+        discoverer: CaseDiscoverer::None,
+    },
+    TestSuite {
+        id: TestSuiteId::NodeSmoke,
+        group: TestGroup::Smoke,
+        layer: None,
+        description: "Node local generation example smoke",
+        requirements: "sample GGUF model, cargo, node",
+        source_roots: NODE_SMOKE_SOURCE_ROOTS,
+        coverage: false,
+        backend_policy: BackendPolicy::ConcreteOnly,
+        runner: SuiteRunner::NodeSmoke,
+        discoverer: CaseDiscoverer::None,
+    },
+    TestSuite {
+        id: TestSuiteId::PythonSmoke,
+        group: TestGroup::Smoke,
+        layer: None,
+        description: "Python local generation example smoke",
+        requirements: "sample GGUF model, cargo, uv, python",
+        source_roots: PYTHON_SMOKE_SOURCE_ROOTS,
+        coverage: false,
+        backend_policy: BackendPolicy::ConcreteOnly,
+        runner: SuiteRunner::PythonSmoke,
+        discoverer: CaseDiscoverer::None,
+    },
+    TestSuite {
+        id: TestSuiteId::BrowserSmoke,
+        group: TestGroup::Smoke,
+        layer: None,
         description: "Playwright browser runtime smoke",
         requirements: "bun, wasm build, playwright chromium",
         source_roots: &["apps/benchmark/src"],
         coverage: false,
         backend_policy: BackendPolicy::None,
-        runner: SuiteRunner::BrowserRuntime,
-        discoverer: CaseDiscoverer::None,
-    },
-    TestSuite {
-        id: TestSuiteId::ModelSmoke,
-        category: TestCategory::Interface,
-        description: "CLI/Rust/Node/Python local generation examples",
-        requirements: "sample GGUF model, cargo, node, python",
-        source_roots: MODEL_SMOKE_SOURCE_ROOTS,
-        coverage: false,
-        backend_policy: BackendPolicy::ConcreteOnly,
-        runner: SuiteRunner::ModelSmoke,
+        runner: SuiteRunner::BrowserSmoke,
         discoverer: CaseDiscoverer::None,
     },
     TestSuite {
         id: TestSuiteId::LlamaBackendOps,
-        category: TestCategory::Interface,
+        group: TestGroup::Smoke,
+        layer: None,
         description: "llama.cpp backend correctness operations",
         requirements: "cmake, ninja, native backend",
         source_roots: &["crates/sys/native"],
@@ -252,13 +301,14 @@ const TEST_SUITES: &[TestSuite] = &[
 pub fn run(sh: &Shell, ctx: &BuildContext, command: TestCommands) -> Result<()> {
     match command {
         TestCommands::List(args) => run_list(ctx, &args),
-        TestCommands::Run(args) => run_tests(sh, ctx, &args),
+        TestCommands::Unit(args) => run_unit(sh, ctx, &args),
+        TestCommands::Smoke(args) => run_smoke(sh, ctx, &args),
         TestCommands::Verify(args) => run_verify(sh, ctx, &args),
     }
 }
 
 fn run_list(ctx: &BuildContext, args: &TestListArgs) -> Result<()> {
-    let mut suites = selected_suites(&args.suite, args.category)?;
+    let mut suites = selected_list_suites(args)?;
     let mut cases = if args.cases || args.search.is_some() {
         discover_cases(ctx, &suites)?
     } else {
@@ -277,24 +327,86 @@ fn run_list(ctx: &BuildContext, args: &TestListArgs) -> Result<()> {
     }
 }
 
-fn run_tests(sh: &Shell, ctx: &BuildContext, args: &TestRunArgs) -> Result<()> {
-    let suites = selected_suites(&args.suite, args.category)?;
-    validate_package_filter(&suites, args.package.as_deref())?;
-    validate_suite_backends(&suites, args.backend)?;
+fn run_unit(sh: &Shell, ctx: &BuildContext, args: &TestUnitArgs) -> Result<()> {
+    let selection = selected_unit_suites(args)?;
+    validate_suite_backends(&selection.suites, selection.backend)?;
 
     let options = SuiteRunOptions {
-        backend: args.backend,
-        model: args.model.as_deref(),
-        offline: args.offline,
-        package: args.package.as_deref(),
+        backend: selection.backend,
+        model: None,
+        offline: false,
+        package: selection.package.as_deref(),
+        prompt: DEFAULT_SMOKE_PROMPT,
+        max_tokens: DEFAULT_SMOKE_MAX_TOKENS,
+        temperature: DEFAULT_SMOKE_TEMPERATURE,
+        cases: &[],
+        browser: BrowserSmokeRunOptions::default(),
+        llama: LlamaBackendOpsRunOptions::default(),
     };
+
+    run_selected_suites(
+        sh,
+        ctx,
+        &selection.suites,
+        &options,
+        selection.filters.clone(),
+    )
+}
+
+fn run_smoke(sh: &Shell, ctx: &BuildContext, args: &TestSmokeArgs) -> Result<()> {
+    let selection = selected_smoke_suites(args)?;
+    validate_suite_backends(&selection.suites, selection.backend)?;
+
+    let browser = BrowserSmokeRunOptions {
+        host: selection.browser_host.as_deref(),
+        port: selection.browser_port,
+        timeout_ms: selection.browser_timeout_ms,
+        require_rust_engine: selection.require_rust_engine,
+        require_gguf_ingest: selection.require_gguf_ingest,
+        require_webgpu: selection.require_webgpu,
+    };
+    let llama = LlamaBackendOpsRunOptions {
+        mode: selection.llama_mode,
+        op: selection.llama_op.as_deref(),
+        params: selection.llama_params.as_deref(),
+        output: selection.llama_output,
+    };
+    let options = SuiteRunOptions {
+        backend: selection.backend,
+        model: selection.model.as_deref(),
+        offline: selection.offline,
+        package: None,
+        prompt: &selection.prompt,
+        max_tokens: selection.max_tokens,
+        temperature: selection.temperature,
+        cases: &selection.cases,
+        browser,
+        llama,
+    };
+
+    run_selected_suites(
+        sh,
+        ctx,
+        &selection.suites,
+        &options,
+        selection.filters.clone(),
+    )
+}
+
+fn run_selected_suites(
+    sh: &Shell,
+    ctx: &BuildContext,
+    suites: &[&TestSuite],
+    options: &SuiteRunOptions<'_>,
+    filters: Value,
+) -> Result<()> {
     let mut coverage_state = RunCoverageState::default();
     let mut completed_coverage_suites = Vec::new();
-    let mut report = RunReport::new(args, &suites);
+    let mut report = RunReport::new(filters, suites);
 
     for (index, suite) in suites.iter().enumerate() {
         let started_at = Instant::now();
-        let result = run_suite(sh, ctx, suite, &options, &mut coverage_state);
+        let result = run_suite(sh, ctx, suite, options, &mut coverage_state);
         let duration_ms = started_at.elapsed().as_millis();
         match result {
             Ok(()) => {
@@ -352,9 +464,14 @@ fn run_suite(
         SuiteRunner::AppTs => run_app_ts_tests(sh, ctx),
         SuiteRunner::NodePackage => run_node_package_tests(sh, ctx, &options.backend),
         SuiteRunner::PythonPackage => run_python_package_tests(sh, ctx, &options.backend),
-        SuiteRunner::BrowserRuntime => run_browser_runtime_smoke(sh, ctx),
-        SuiteRunner::ModelSmoke => run_model_smoke(sh, ctx, options),
-        SuiteRunner::LlamaBackendOps => run_llama_backend_ops_suite(sh, ctx, &options.backend),
+        SuiteRunner::CliSmoke => run_cli_model_smoke(sh, ctx, options),
+        SuiteRunner::RustSmoke => run_rust_model_smoke(sh, ctx, options),
+        SuiteRunner::NodeSmoke => run_node_model_smoke(sh, ctx, options),
+        SuiteRunner::PythonSmoke => run_python_model_smoke(sh, ctx, options),
+        SuiteRunner::BrowserSmoke => run_browser_runtime_smoke(sh, ctx, &options.browser),
+        SuiteRunner::LlamaBackendOps => {
+            run_llama_backend_ops_suite(sh, ctx, &options.backend, &options.llama)
+        }
     }
 }
 
@@ -550,50 +667,100 @@ fn run_python_package_tests(sh: &Shell, ctx: &BuildContext, backend: &Backend) -
     )
 }
 
-fn run_browser_runtime_smoke(sh: &Shell, ctx: &BuildContext) -> Result<()> {
-    output::phase("Interface browser runtime smoke");
+fn run_cli_model_smoke(
+    sh: &Shell,
+    ctx: &BuildContext,
+    options: &SuiteRunOptions<'_>,
+) -> Result<()> {
+    output::phase("CLI local generation smoke");
+    let model = resolve_smoke_model(sh, ctx, options.model, options.offline)?;
+    output::path("Model", &model);
+    output::detail("Backend", options.backend.as_str());
+
+    targets::cli::build(sh, ctx, Some(&options.backend))?;
+    run_cli_smoke(sh, ctx, &model, options)
+}
+
+fn run_rust_model_smoke(
+    sh: &Shell,
+    ctx: &BuildContext,
+    options: &SuiteRunOptions<'_>,
+) -> Result<()> {
+    output::phase("Rust local generation smoke");
+    let model = resolve_smoke_model(sh, ctx, options.model, options.offline)?;
+    run_rust_generation_smoke(sh, ctx, &model, options)
+}
+
+fn run_node_model_smoke(
+    sh: &Shell,
+    ctx: &BuildContext,
+    options: &SuiteRunOptions<'_>,
+) -> Result<()> {
+    output::phase("Node local generation smoke");
+    let model = resolve_smoke_model(sh, ctx, options.model, options.offline)?;
+    run_node_generation_smoke(sh, ctx, &model, options)
+}
+
+fn run_python_model_smoke(
+    sh: &Shell,
+    ctx: &BuildContext,
+    options: &SuiteRunOptions<'_>,
+) -> Result<()> {
+    output::phase("Python local generation smoke");
+    let model = resolve_smoke_model(sh, ctx, options.model, options.offline)?;
+    run_python_generation_smoke(sh, ctx, &model, options)
+}
+
+fn run_browser_runtime_smoke(
+    sh: &Shell,
+    ctx: &BuildContext,
+    options: &BrowserSmokeRunOptions<'_>,
+) -> Result<()> {
+    output::phase("Browser runtime smoke");
     ensure_workspace_bun_install(sh, ctx)?;
     targets::wasm::build(sh, ctx)?;
     ensure_playwright_chromium(sh, ctx)?;
 
     let benchmark_dir = ctx.app_dir("benchmark");
     let _benchmark_dir = sh.push_dir(&benchmark_dir);
-    output::run_command(
-        "Running benchmark browser:smoke",
-        cmd!(sh, "bun run browser:smoke")
-            .env("PLAYWRIGHT_BROWSERS_PATH", ctx.playwright_browsers_dir()),
-    )
-}
-
-fn run_model_smoke(sh: &Shell, ctx: &BuildContext, options: &SuiteRunOptions<'_>) -> Result<()> {
-    if options.backend == Backend::All {
-        anyhow::bail!(
-            "model-smoke requires a concrete backend; choose cpu, vulkan, cuda, or metal"
-        );
+    let timeout_ms = options.timeout_ms.to_string();
+    let mut smoke_cmd = cmd!(sh, "node scripts/browser-runtime-smoke.mjs")
+        .arg("--timeout-ms")
+        .arg(timeout_ms)
+        .env("PLAYWRIGHT_BROWSERS_PATH", ctx.playwright_browsers_dir());
+    if let Some(host) = options.host {
+        smoke_cmd = smoke_cmd.arg("--host").arg(host);
     }
-
-    output::phase("Interface model-backed local smoke tests");
-    let model = resolve_smoke_model(sh, ctx, options.model, options.offline)?;
-    output::path("Model", &model);
-    output::detail("Backend", options.backend.as_str());
-
-    targets::cli::build(sh, ctx, Some(&options.backend))?;
-    run_cli_smoke(sh, ctx, &model, &options.backend)?;
-    run_rust_generation_smoke(sh, ctx, &model, &options.backend)?;
-    run_node_generation_smoke(sh, ctx, &model, &options.backend)?;
-    run_python_generation_smoke(sh, ctx, &model, &options.backend)
+    if let Some(port) = options.port {
+        smoke_cmd = smoke_cmd.arg("--port").arg(port.to_string());
+    }
+    if options.require_rust_engine {
+        smoke_cmd = smoke_cmd.arg("--require-rust-engine");
+    }
+    if options.require_gguf_ingest {
+        smoke_cmd = smoke_cmd.arg("--require-gguf-ingest");
+    }
+    if options.require_webgpu {
+        smoke_cmd = smoke_cmd.arg("--require-webgpu");
+    }
+    output::run_command("Running benchmark browser runtime smoke", smoke_cmd)
 }
 
-fn run_llama_backend_ops_suite(sh: &Shell, ctx: &BuildContext, backend: &Backend) -> Result<()> {
+fn run_llama_backend_ops_suite(
+    sh: &Shell,
+    ctx: &BuildContext,
+    backend: &Backend,
+    options: &LlamaBackendOpsRunOptions<'_>,
+) -> Result<()> {
     crate::run::run_llama_backend_ops(
         sh,
         ctx,
         &RunLlamaBackendOpsArgs {
             backend: *backend,
-            mode: LlamaBackendOpsMode::Test,
-            op: None,
-            params: None,
-            output: LlamaBackendOpsOutput::Console,
+            mode: options.mode,
+            op: options.op.map(str::to_owned),
+            params: options.params.map(str::to_owned),
+            output: options.output,
         },
     )
 }
@@ -616,7 +783,12 @@ fn resolve_smoke_model(
     }
 }
 
-fn run_cli_smoke(sh: &Shell, ctx: &BuildContext, model: &Path, backend: &Backend) -> Result<()> {
+fn run_cli_smoke(
+    sh: &Shell,
+    ctx: &BuildContext,
+    model: &Path,
+    options: &SuiteRunOptions<'_>,
+) -> Result<()> {
     output::phase("CLI smoke");
     let cli_dir = ctx.cli_artifacts_dir();
     let cli_exe = cli_dir.join(cli_binary_file_name());
@@ -625,12 +797,17 @@ fn run_cli_smoke(sh: &Shell, ctx: &BuildContext, model: &Path, backend: &Backend
     }
 
     let _dir = sh.push_dir(&cli_dir);
-    let mut smoke_cmd = cmd!(
-        sh,
-        "{cli_exe} {model} {DEFAULT_SMOKE_PROMPT} --max-tokens 1 --temperature 0"
-    );
-    if *backend != Backend::Cpu {
-        smoke_cmd = smoke_cmd.arg("--backend").arg(backend.as_str());
+    let max_tokens = options.max_tokens.to_string();
+    let temperature = format_temperature(options.temperature);
+    let mut smoke_cmd = cmd!(sh, "{cli_exe}")
+        .arg(model)
+        .arg(options.prompt)
+        .arg("--max-tokens")
+        .arg(max_tokens)
+        .arg("--temperature")
+        .arg(temperature);
+    if options.backend != Backend::Cpu {
+        smoke_cmd = smoke_cmd.arg("--backend").arg(options.backend.as_str());
     }
     output::run_command("Running CLI local inference smoke", smoke_cmd)
 }
@@ -639,32 +816,35 @@ fn run_rust_generation_smoke(
     sh: &Shell,
     ctx: &BuildContext,
     model: &Path,
-    backend: &Backend,
+    options: &SuiteRunOptions<'_>,
 ) -> Result<()> {
     output::phase("Rust CogentClient generation smoke");
     output::path("Model", model);
-    output::detail("Backend", backend.as_str());
+    output::detail("Backend", options.backend.as_str());
 
     let _dir = sh.push_dir(ctx.workspace_root());
-    for example in RUST_GENERATION_SMOKE_EXAMPLES {
+    for example in selected_rust_smoke_examples(options.cases) {
         let mut smoke_cmd = cmd!(sh, "cargo run -p cogentlm-client");
-        if *backend != Backend::Cpu {
-            smoke_cmd = smoke_cmd.arg("--features").arg(backend.as_str());
+        if options.backend != Backend::Cpu {
+            smoke_cmd = smoke_cmd.arg("--features").arg(options.backend.as_str());
         }
         smoke_cmd = smoke_cmd
             .arg("--example")
             .arg(example)
             .arg("--")
             .arg(model)
-            .arg(DEFAULT_SMOKE_PROMPT)
-            .env("COGENTLM_MAX_TOKENS", "1")
-            .env("COGENTLM_TEMPERATURE", "0");
-        smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(backend))?;
+            .arg(options.prompt)
+            .env("COGENTLM_MAX_TOKENS", options.max_tokens.to_string())
+            .env(
+                "COGENTLM_TEMPERATURE",
+                format_temperature(options.temperature),
+            );
+        smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(&options.backend))?;
         output::run_command(
-            format!("Running Rust {} smoke: {example}", backend.as_str()),
+            format!("Running Rust {} smoke: {example}", options.backend.as_str()),
             smoke_cmd,
         )
-        .with_context(|| format!("Rust {} smoke failed: {example}", backend.as_str()))?;
+        .with_context(|| format!("Rust {} smoke failed: {example}", options.backend.as_str()))?;
     }
 
     Ok(())
@@ -674,26 +854,40 @@ fn run_node_generation_smoke(
     sh: &Shell,
     ctx: &BuildContext,
     model: &Path,
-    backend: &Backend,
+    options: &SuiteRunOptions<'_>,
 ) -> Result<()> {
     output::phase("Node.js generation smoke");
     output::path("Model", model);
-    output::detail("Backend", backend.as_str());
-    targets::node::build(sh, ctx, Some(backend))?;
+    output::detail("Backend", options.backend.as_str());
+    targets::node::build(sh, ctx, Some(&options.backend))?;
 
     let node_dir = ctx.bindings_node_dir();
     let _dir = sh.push_dir(&node_dir);
-    for smoke_script in NODE_GENERATION_SMOKE_SCRIPTS {
-        let mut smoke_cmd = cmd!(sh, "node {smoke_script} {model} {DEFAULT_SMOKE_PROMPT}")
-            .env("COGENTLM_NODE_BACKEND", backend.as_str())
-            .env("COGENTLM_MAX_TOKENS", "1")
-            .env("COGENTLM_TEMPERATURE", "0");
-        smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(backend))?;
+    for smoke_script in selected_node_smoke_scripts(options.cases) {
+        let mut smoke_cmd = cmd!(sh, "node")
+            .arg(smoke_script)
+            .arg(model)
+            .arg(options.prompt)
+            .env("COGENTLM_NODE_BACKEND", options.backend.as_str())
+            .env("COGENTLM_MAX_TOKENS", options.max_tokens.to_string())
+            .env(
+                "COGENTLM_TEMPERATURE",
+                format_temperature(options.temperature),
+            );
+        smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(&options.backend))?;
         output::run_command(
-            format!("Running Node {} smoke: {smoke_script}", backend.as_str()),
+            format!(
+                "Running Node {} smoke: {smoke_script}",
+                options.backend.as_str()
+            ),
             smoke_cmd,
         )
-        .with_context(|| format!("Node {} smoke failed: {smoke_script}", backend.as_str()))?;
+        .with_context(|| {
+            format!(
+                "Node {} smoke failed: {smoke_script}",
+                options.backend.as_str()
+            )
+        })?;
     }
 
     Ok(())
@@ -703,17 +897,17 @@ fn run_python_generation_smoke(
     sh: &Shell,
     ctx: &BuildContext,
     model: &Path,
-    backend: &Backend,
+    options: &SuiteRunOptions<'_>,
 ) -> Result<()> {
     output::phase("Python generation smoke");
     output::path("Model", model);
-    output::detail("Backend", backend.as_str());
-    let wheel = build_python_test_wheel(sh, ctx, backend)?;
+    output::detail("Backend", options.backend.as_str());
+    let wheel = build_python_test_wheel(sh, ctx, &options.backend)?;
     let uv_exe = setup_uv(sh, ctx)?;
     let venv_dir = ctx
         .tmp_dir()
         .join("python-model-smoke")
-        .join(backend.as_str());
+        .join(options.backend.as_str());
     output::run_command(
         "Creating Python smoke virtual environment",
         apply_uv_env(
@@ -735,23 +929,86 @@ fn run_python_generation_smoke(
 
     let python_dir = ctx.bindings_python_dir();
     let _dir = sh.push_dir(&python_dir);
-    for smoke_script in PYTHON_GENERATION_SMOKE_SCRIPTS {
-        let mut smoke_cmd = cmd!(
-            sh,
-            "{python_exe} {smoke_script} {model} {DEFAULT_SMOKE_PROMPT}"
-        )
-        .env("COGENTLM_PYTHON_BACKEND", backend.as_str())
-        .env("COGENTLM_MAX_TOKENS", "1")
-        .env("COGENTLM_TEMPERATURE", "0");
-        smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(backend))?;
+    for smoke_script in selected_python_smoke_scripts(options.cases) {
+        let mut smoke_cmd = cmd!(sh, "{python_exe}")
+            .arg(smoke_script)
+            .arg(model)
+            .arg(options.prompt)
+            .env("COGENTLM_PYTHON_BACKEND", options.backend.as_str())
+            .env("COGENTLM_MAX_TOKENS", options.max_tokens.to_string())
+            .env(
+                "COGENTLM_TEMPERATURE",
+                format_temperature(options.temperature),
+            );
+        smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(&options.backend))?;
         output::run_command(
-            format!("Running Python {} smoke: {smoke_script}", backend.as_str()),
+            format!(
+                "Running Python {} smoke: {smoke_script}",
+                options.backend.as_str()
+            ),
             smoke_cmd,
         )
-        .with_context(|| format!("Python {} smoke failed: {smoke_script}", backend.as_str()))?;
+        .with_context(|| {
+            format!(
+                "Python {} smoke failed: {smoke_script}",
+                options.backend.as_str()
+            )
+        })?;
     }
 
     Ok(())
+}
+
+fn selected_smoke_cases(cases: &[TestSmokeCase]) -> Vec<TestSmokeCase> {
+    if cases.is_empty() {
+        return vec![TestSmokeCase::Query, TestSmokeCase::Chat];
+    }
+
+    let mut selected = Vec::new();
+    for case in cases {
+        if !selected.contains(case) {
+            selected.push(*case);
+        }
+    }
+    selected
+}
+
+fn selected_rust_smoke_examples(cases: &[TestSmokeCase]) -> Vec<&'static str> {
+    selected_smoke_cases(cases)
+        .into_iter()
+        .map(|case| match case {
+            TestSmokeCase::Query => RUST_GENERATION_SMOKE_EXAMPLES[0],
+            TestSmokeCase::Chat => RUST_GENERATION_SMOKE_EXAMPLES[1],
+        })
+        .collect()
+}
+
+fn selected_node_smoke_scripts(cases: &[TestSmokeCase]) -> Vec<&'static str> {
+    selected_smoke_cases(cases)
+        .into_iter()
+        .map(|case| match case {
+            TestSmokeCase::Query => NODE_GENERATION_SMOKE_SCRIPTS[0],
+            TestSmokeCase::Chat => NODE_GENERATION_SMOKE_SCRIPTS[1],
+        })
+        .collect()
+}
+
+fn selected_python_smoke_scripts(cases: &[TestSmokeCase]) -> Vec<&'static str> {
+    selected_smoke_cases(cases)
+        .into_iter()
+        .map(|case| match case {
+            TestSmokeCase::Query => PYTHON_GENERATION_SMOKE_SCRIPTS[0],
+            TestSmokeCase::Chat => PYTHON_GENERATION_SMOKE_SCRIPTS[1],
+        })
+        .collect()
+}
+
+fn format_temperature(temperature: f32) -> String {
+    if temperature.fract() == 0.0 {
+        format!("{temperature:.0}")
+    } else {
+        temperature.to_string()
+    }
 }
 
 fn run_verify(sh: &Shell, ctx: &BuildContext, args: &TestVerifyArgs) -> Result<()> {
@@ -919,8 +1176,11 @@ fn coverage_report_areas(suites: &[&TestSuite]) -> CoverageReportAreas {
             SuiteRunner::PythonPackage => areas.python = true,
             SuiteRunner::PackageTs
             | SuiteRunner::AppTs
-            | SuiteRunner::BrowserRuntime
-            | SuiteRunner::ModelSmoke
+            | SuiteRunner::CliSmoke
+            | SuiteRunner::RustSmoke
+            | SuiteRunner::NodeSmoke
+            | SuiteRunner::PythonSmoke
+            | SuiteRunner::BrowserSmoke
             | SuiteRunner::LlamaBackendOps => {}
         }
     }
@@ -1099,7 +1359,10 @@ fn apply_search_filter(
 
 fn suite_matches_search(suite: &TestSuite, search: &str) -> bool {
     contains_search(suite.id.as_str(), search)
-        || contains_search(suite.category.as_str(), search)
+        || contains_search(suite.group.as_str(), search)
+        || suite
+            .layer
+            .map_or(false, |layer| contains_search(layer.as_str(), search))
         || contains_search(suite.description, search)
         || contains_search(suite.requirements, search)
         || contains_search(suite.backend_policy.as_str(), search)
@@ -1124,13 +1387,17 @@ fn print_text_list(suites: &[&TestSuite], cases: &[TestCase]) -> Result<()> {
     println!("Test suites:");
     for suite in suites {
         println!(
-            "  {:<18} {:<9} {:<9} {}",
+            "  {:<18} {:<6} {:<9} {:<9} {}",
             suite.id.as_str(),
-            suite.category.as_str(),
+            suite.group.as_str(),
+            suite.layer.map(|layer| layer.as_str()).unwrap_or("-"),
             if suite.coverage { "coverage" } else { "" },
             suite.description
         );
-        println!("  {:<18} requirements: {}", "", suite.requirements);
+        println!(
+            "  {:<18} {:<6} requirements: {}",
+            "", "", suite.requirements
+        );
     }
 
     if !cases.is_empty() {
@@ -1162,7 +1429,8 @@ fn list_json_value(suites: &[&TestSuite], cases: &[TestCase]) -> Value {
         .map(|suite| {
             json!({
                 "id": suite.id.as_str(),
-                "category": suite.category.as_str(),
+                "group": suite.group.as_str(),
+                "layer": suite.layer.map(|layer| layer.as_str()),
                 "description": suite.description,
                 "requirements": suite.requirements,
                 "sourceRoots": suite.source_roots,
@@ -1341,40 +1609,188 @@ fn parse_quoted_test_name(line: &str, prefix: &str) -> Option<String> {
     Some(rest[1..end].to_owned())
 }
 
-fn selected_suites(
-    selectors: &[TestSuiteId],
-    category: TestCategoryFilter,
-) -> Result<Vec<&'static TestSuite>> {
-    if selectors.is_empty() {
-        return Ok(TEST_SUITES
-            .iter()
-            .filter(|suite| category_matches(category, suite.category))
-            .collect());
+fn selected_list_suites(args: &TestListArgs) -> Result<Vec<&'static TestSuite>> {
+    if args.layer.is_some() && args.group == TestGroupFilter::Smoke {
+        anyhow::bail!("--layer only applies to unit suites");
     }
 
-    let mut selected = Vec::new();
-    let mut seen = BTreeSet::new();
-    for selector in selectors {
-        if !seen.insert(*selector) {
-            continue;
+    Ok(TEST_SUITES
+        .iter()
+        .filter(|suite| group_filter_matches(args.group, suite.group))
+        .filter(|suite| args.layer.map_or(true, |layer| suite.layer == Some(layer)))
+        .collect())
+}
+
+fn selected_unit_suites(args: &TestUnitArgs) -> Result<UnitSelection> {
+    let mut selection = UnitSelection::default();
+    match &args.target {
+        None => {
+            selection.suites = suites_by_group(TestGroup::Unit);
+            selection.filters = json!({
+                "command": "unit",
+                "target": "all",
+            });
         }
-        let suite = suite_by_id(*selector)?;
-        if !category_matches(category, suite.category) {
-            anyhow::bail!(
-                "suite {} is {}, not {}",
-                selector.as_str(),
-                suite.category.as_str(),
-                category.as_str()
+        Some(TestUnitTarget::Whitebox) => {
+            selection.suites = unit_suites_by_layer(TestUnitLayer::Whitebox);
+            selection.filters = json!({
+                "command": "unit",
+                "target": "whitebox",
+            });
+        }
+        Some(TestUnitTarget::Interface) => {
+            selection.suites = unit_suites_by_layer(TestUnitLayer::Interface);
+            selection.filters = json!({
+                "command": "unit",
+                "target": "interface",
+            });
+        }
+        Some(TestUnitTarget::Xtask) => {
+            selection.suites = vec![suite_by_id(TestSuiteId::Xtask)?];
+            selection.filters = unit_target_filters("xtask");
+        }
+        Some(TestUnitTarget::Rust(args)) => {
+            selection.suites = vec![suite_by_id(TestSuiteId::RustCrates)?];
+            selection.package = args.package.clone();
+            selection.filters = json!({
+                "command": "unit",
+                "target": "rust",
+                "package": args.package.as_deref(),
+            });
+        }
+        Some(TestUnitTarget::Bindings) => {
+            selection.suites = vec![suite_by_id(TestSuiteId::RustBindings)?];
+            selection.filters = unit_target_filters("bindings");
+        }
+        Some(TestUnitTarget::BrowserPackage) => {
+            selection.suites = vec![suite_by_id(TestSuiteId::PackageTs)?];
+            selection.filters = unit_target_filters("browser-package");
+        }
+        Some(TestUnitTarget::Apps) => {
+            selection.suites = vec![suite_by_id(TestSuiteId::AppTs)?];
+            selection.filters = unit_target_filters("apps");
+        }
+        Some(TestUnitTarget::Api) => {
+            selection.suites = vec![suite_by_id(TestSuiteId::RustPublicApi)?];
+            selection.filters = unit_target_filters("api");
+        }
+        Some(TestUnitTarget::Cli) => {
+            selection.suites = vec![suite_by_id(TestSuiteId::Cli)?];
+            selection.filters = unit_target_filters("cli");
+        }
+        Some(TestUnitTarget::Node(args)) => {
+            selection.suites = vec![suite_by_id(TestSuiteId::NodePackage)?];
+            selection.backend = args.backend;
+            selection.filters = json!({
+                "command": "unit",
+                "target": "node",
+                "backend": args.backend.as_str(),
+            });
+        }
+        Some(TestUnitTarget::Python(args)) => {
+            selection.suites = vec![suite_by_id(TestSuiteId::PythonPackage)?];
+            selection.backend = args.backend;
+            selection.filters = json!({
+                "command": "unit",
+                "target": "python",
+                "backend": args.backend.as_str(),
+            });
+        }
+    }
+    Ok(selection)
+}
+
+fn selected_smoke_suites(args: &TestSmokeArgs) -> Result<SmokeSelection> {
+    let mut selection = SmokeSelection::default();
+    match &args.target {
+        TestSmokeTarget::All(args) => {
+            selection.suites = vec![
+                suite_by_id(TestSuiteId::CliSmoke)?,
+                suite_by_id(TestSuiteId::RustSmoke)?,
+                suite_by_id(TestSuiteId::NodeSmoke)?,
+                suite_by_id(TestSuiteId::PythonSmoke)?,
+                suite_by_id(TestSuiteId::BrowserSmoke)?,
+                suite_by_id(TestSuiteId::LlamaBackendOps)?,
+            ];
+            selection.apply_model_args(&args.model);
+            selection.browser_timeout_ms = args.browser_timeout_ms;
+            selection.filters = smoke_filters(
+                "all",
+                &args.model,
+                &[],
+                json!({
+                    "browserTimeoutMs": args.browser_timeout_ms,
+                }),
             );
         }
-        selected.push(suite);
+        TestSmokeTarget::Cli(args) => {
+            selection.suites = vec![suite_by_id(TestSuiteId::CliSmoke)?];
+            selection.apply_model_args(args);
+            selection.filters = smoke_filters("cli", args, &[], json!({}));
+        }
+        TestSmokeTarget::Rust(args) => {
+            selection.suites = vec![suite_by_id(TestSuiteId::RustSmoke)?];
+            selection.apply_case_args(args);
+            selection.filters = smoke_filters("rust", &args.model, &args.cases, json!({}));
+        }
+        TestSmokeTarget::Node(args) => {
+            selection.suites = vec![suite_by_id(TestSuiteId::NodeSmoke)?];
+            selection.apply_case_args(args);
+            selection.filters = smoke_filters("node", &args.model, &args.cases, json!({}));
+        }
+        TestSmokeTarget::Python(args) => {
+            selection.suites = vec![suite_by_id(TestSuiteId::PythonSmoke)?];
+            selection.apply_case_args(args);
+            selection.filters = smoke_filters("python", &args.model, &args.cases, json!({}));
+        }
+        TestSmokeTarget::Model(args) => {
+            selection.suites = vec![
+                suite_by_id(TestSuiteId::CliSmoke)?,
+                suite_by_id(TestSuiteId::RustSmoke)?,
+                suite_by_id(TestSuiteId::NodeSmoke)?,
+                suite_by_id(TestSuiteId::PythonSmoke)?,
+            ];
+            selection.apply_model_args(args);
+            selection.filters = smoke_filters("model", args, &[], json!({}));
+        }
+        TestSmokeTarget::Browser(args) => {
+            selection.suites = vec![suite_by_id(TestSuiteId::BrowserSmoke)?];
+            selection.apply_browser_args(args);
+            selection.filters = json!({
+                "command": "smoke",
+                "target": "browser",
+                "host": args.host.as_deref(),
+                "port": args.port,
+                "timeoutMs": args.timeout_ms,
+                "requireRustEngine": args.require_rust_engine,
+                "requireGgufIngest": args.require_gguf_ingest,
+                "requireWebgpu": args.require_webgpu,
+            });
+        }
+        TestSmokeTarget::Llama(args) => {
+            selection.suites = vec![suite_by_id(TestSuiteId::LlamaBackendOps)?];
+            selection.apply_llama_args(args);
+            selection.filters = json!({
+                "command": "smoke",
+                "target": "llama",
+                "backend": args.backend.as_str(),
+                "mode": args.mode.as_str(),
+                "op": args.op.as_deref(),
+                "params": args.params.as_deref(),
+                "output": args.output.as_str(),
+            });
+        }
     }
-    Ok(selected)
+    Ok(selection)
 }
 
 fn selected_verify_suites(args: &TestVerifyArgs) -> Result<Vec<&'static TestSuite>> {
-    let suites = selected_suites(&args.suite, args.category)?;
-    if !args.suite.is_empty() {
+    let explicit = !matches!(
+        args.target,
+        TestVerifyTarget::All | TestVerifyTarget::Whitebox | TestVerifyTarget::Interface
+    );
+    let suites = verify_target_suites(args.target)?;
+    if explicit {
         let uncovered = suites
             .iter()
             .filter(|suite| !suite.coverage)
@@ -1396,6 +1812,72 @@ fn selected_verify_suites(args: &TestVerifyArgs) -> Result<Vec<&'static TestSuit
         anyhow::bail!("no coverage-capable suites matched the selected filters");
     }
     Ok(suites)
+}
+
+fn verify_target_suites(target: TestVerifyTarget) -> Result<Vec<&'static TestSuite>> {
+    match target {
+        TestVerifyTarget::All => Ok(suites_by_group(TestGroup::Unit)),
+        TestVerifyTarget::Whitebox => Ok(unit_suites_by_layer(TestUnitLayer::Whitebox)),
+        TestVerifyTarget::Interface => Ok(unit_suites_by_layer(TestUnitLayer::Interface)),
+        TestVerifyTarget::Xtask => Ok(vec![suite_by_id(TestSuiteId::Xtask)?]),
+        TestVerifyTarget::Rust => Ok(vec![suite_by_id(TestSuiteId::RustCrates)?]),
+        TestVerifyTarget::Bindings => Ok(vec![suite_by_id(TestSuiteId::RustBindings)?]),
+        TestVerifyTarget::BrowserPackage => Ok(vec![suite_by_id(TestSuiteId::PackageTs)?]),
+        TestVerifyTarget::Apps => Ok(vec![suite_by_id(TestSuiteId::AppTs)?]),
+        TestVerifyTarget::Api => Ok(vec![suite_by_id(TestSuiteId::RustPublicApi)?]),
+        TestVerifyTarget::Cli => Ok(vec![suite_by_id(TestSuiteId::Cli)?]),
+        TestVerifyTarget::Node => Ok(vec![suite_by_id(TestSuiteId::NodePackage)?]),
+        TestVerifyTarget::Python => Ok(vec![suite_by_id(TestSuiteId::PythonPackage)?]),
+    }
+}
+
+fn suites_by_group(group: TestGroup) -> Vec<&'static TestSuite> {
+    TEST_SUITES
+        .iter()
+        .filter(|suite| suite.group == group)
+        .collect()
+}
+
+fn unit_suites_by_layer(layer: TestUnitLayer) -> Vec<&'static TestSuite> {
+    TEST_SUITES
+        .iter()
+        .filter(|suite| suite.group == TestGroup::Unit && suite.layer == Some(layer))
+        .collect()
+}
+
+fn group_filter_matches(filter: TestGroupFilter, group: TestGroup) -> bool {
+    match filter {
+        TestGroupFilter::All => true,
+        TestGroupFilter::Unit => group == TestGroup::Unit,
+        TestGroupFilter::Smoke => group == TestGroup::Smoke,
+    }
+}
+
+fn unit_target_filters(target: &str) -> Value {
+    json!({
+        "command": "unit",
+        "target": target,
+    })
+}
+
+fn smoke_filters(
+    target: &str,
+    args: &TestSmokeModelArgs,
+    cases: &[TestSmokeCase],
+    extra: Value,
+) -> Value {
+    json!({
+        "command": "smoke",
+        "target": target,
+        "backend": args.backend.as_str(),
+        "model": args.model.as_ref().map(|model| model.display().to_string()),
+        "offline": args.offline,
+        "prompt": args.prompt.as_str(),
+        "maxTokens": args.max_tokens,
+        "temperature": args.temperature,
+        "cases": cases.iter().map(TestSmokeCase::as_str).collect::<Vec<_>>(),
+        "extra": extra,
+    })
 }
 
 fn suite_by_id(id: TestSuiteId) -> Result<&'static TestSuite> {
@@ -1423,14 +1905,6 @@ fn filtered_rust_targets(
     Ok(filtered)
 }
 
-fn category_matches(filter: TestCategoryFilter, category: TestCategory) -> bool {
-    match filter {
-        TestCategoryFilter::All => true,
-        TestCategoryFilter::Whitebox => category == TestCategory::Whitebox,
-        TestCategoryFilter::Interface => category == TestCategory::Interface,
-    }
-}
-
 fn ensure_cargo_llvm_cov() -> Result<()> {
     let output = Command::new("cargo")
         .args(["llvm-cov", "--version"])
@@ -1451,12 +1925,13 @@ fn validate_suite_backends(suites: &[&TestSuite], backend: Backend) -> Result<()
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_package_filter(suites: &[&TestSuite], package: Option<&str>) -> Result<()> {
     if package.is_some()
         && (suites.len() != 1
             || suites.first().map(|suite| suite.id) != Some(TestSuiteId::RustCrates))
     {
-        anyhow::bail!("--package is only supported with --suite rust-crates");
+        anyhow::bail!("--package is only supported with `test unit rust`");
     }
     Ok(())
 }
@@ -2085,8 +2560,11 @@ fn coverage_artifacts_for_suite(ctx: &BuildContext, suite: &TestSuite) -> Vec<St
         ],
         SuiteRunner::PackageTs
         | SuiteRunner::AppTs
-        | SuiteRunner::BrowserRuntime
-        | SuiteRunner::ModelSmoke
+        | SuiteRunner::CliSmoke
+        | SuiteRunner::RustSmoke
+        | SuiteRunner::NodeSmoke
+        | SuiteRunner::PythonSmoke
+        | SuiteRunner::BrowserSmoke
         | SuiteRunner::LlamaBackendOps => Vec::new(),
     };
     artifacts
@@ -2132,16 +2610,16 @@ fn parse_lcov_summary(path: &Path) -> Result<LcovSummary> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TestCategory {
-    Whitebox,
-    Interface,
+enum TestGroup {
+    Unit,
+    Smoke,
 }
 
-impl TestCategory {
+impl TestGroup {
     fn as_str(&self) -> &'static str {
         match self {
-            TestCategory::Whitebox => "whitebox",
-            TestCategory::Interface => "interface",
+            TestGroup::Unit => "unit",
+            TestGroup::Smoke => "smoke",
         }
     }
 }
@@ -2149,7 +2627,8 @@ impl TestCategory {
 #[derive(Clone, Copy, Debug)]
 struct TestSuite {
     id: TestSuiteId,
-    category: TestCategory,
+    group: TestGroup,
+    layer: Option<TestUnitLayer>,
     description: &'static str,
     requirements: &'static str,
     source_roots: &'static [&'static str],
@@ -2193,8 +2672,11 @@ enum SuiteRunner {
     AppTs,
     NodePackage,
     PythonPackage,
-    BrowserRuntime,
-    ModelSmoke,
+    CliSmoke,
+    RustSmoke,
+    NodeSmoke,
+    PythonSmoke,
+    BrowserSmoke,
     LlamaBackendOps,
 }
 
@@ -2274,11 +2756,144 @@ enum RustTestKind {
     Test(&'static str),
 }
 
+struct UnitSelection {
+    suites: Vec<&'static TestSuite>,
+    package: Option<String>,
+    backend: Backend,
+    filters: Value,
+}
+
+impl Default for UnitSelection {
+    fn default() -> Self {
+        Self {
+            suites: Vec::new(),
+            package: None,
+            backend: Backend::Cpu,
+            filters: json!({}),
+        }
+    }
+}
+
+struct SmokeSelection {
+    suites: Vec<&'static TestSuite>,
+    backend: Backend,
+    model: Option<PathBuf>,
+    offline: bool,
+    prompt: String,
+    max_tokens: u32,
+    temperature: f32,
+    cases: Vec<TestSmokeCase>,
+    browser_host: Option<String>,
+    browser_port: Option<u16>,
+    browser_timeout_ms: u64,
+    require_rust_engine: bool,
+    require_gguf_ingest: bool,
+    require_webgpu: bool,
+    llama_mode: LlamaBackendOpsMode,
+    llama_op: Option<String>,
+    llama_params: Option<String>,
+    llama_output: LlamaBackendOpsOutput,
+    filters: Value,
+}
+
+impl Default for SmokeSelection {
+    fn default() -> Self {
+        Self {
+            suites: Vec::new(),
+            backend: Backend::Cpu,
+            model: None,
+            offline: false,
+            prompt: DEFAULT_SMOKE_PROMPT.to_owned(),
+            max_tokens: DEFAULT_SMOKE_MAX_TOKENS,
+            temperature: DEFAULT_SMOKE_TEMPERATURE,
+            cases: Vec::new(),
+            browser_host: None,
+            browser_port: None,
+            browser_timeout_ms: 30_000,
+            require_rust_engine: false,
+            require_gguf_ingest: false,
+            require_webgpu: false,
+            llama_mode: LlamaBackendOpsMode::Test,
+            llama_op: None,
+            llama_params: None,
+            llama_output: LlamaBackendOpsOutput::Console,
+            filters: json!({}),
+        }
+    }
+}
+
+impl SmokeSelection {
+    fn apply_model_args(&mut self, args: &TestSmokeModelArgs) {
+        self.backend = args.backend;
+        self.model = args.model.clone();
+        self.offline = args.offline;
+        self.prompt = args.prompt.clone();
+        self.max_tokens = args.max_tokens;
+        self.temperature = args.temperature;
+    }
+
+    fn apply_case_args(&mut self, args: &TestSmokeCaseArgs) {
+        self.apply_model_args(&args.model);
+        self.cases = args.cases.clone();
+    }
+
+    fn apply_browser_args(&mut self, args: &TestSmokeBrowserArgs) {
+        self.browser_host = args.host.clone();
+        self.browser_port = args.port;
+        self.browser_timeout_ms = args.timeout_ms;
+        self.require_rust_engine = args.require_rust_engine;
+        self.require_gguf_ingest = args.require_gguf_ingest;
+        self.require_webgpu = args.require_webgpu;
+    }
+
+    fn apply_llama_args(&mut self, args: &TestSmokeLlamaArgs) {
+        self.backend = args.backend;
+        self.llama_mode = args.mode;
+        self.llama_op = args.op.clone();
+        self.llama_params = args.params.clone();
+        self.llama_output = args.output;
+    }
+}
+
 struct SuiteRunOptions<'a> {
     backend: Backend,
     model: Option<&'a Path>,
     offline: bool,
     package: Option<&'a str>,
+    prompt: &'a str,
+    max_tokens: u32,
+    temperature: f32,
+    cases: &'a [TestSmokeCase],
+    browser: BrowserSmokeRunOptions<'a>,
+    llama: LlamaBackendOpsRunOptions<'a>,
+}
+
+#[derive(Default)]
+struct BrowserSmokeRunOptions<'a> {
+    host: Option<&'a str>,
+    port: Option<u16>,
+    timeout_ms: u64,
+    require_rust_engine: bool,
+    require_gguf_ingest: bool,
+    require_webgpu: bool,
+}
+
+struct LlamaBackendOpsRunOptions<'a> {
+    mode: LlamaBackendOpsMode,
+    op: Option<&'a str>,
+    params: Option<&'a str>,
+    output: LlamaBackendOpsOutput,
+}
+
+impl Default for LlamaBackendOpsRunOptions<'_> {
+    fn default() -> Self {
+        Self {
+            mode: LlamaBackendOpsMode::Test,
+            op: None,
+            params: None,
+            output: LlamaBackendOpsOutput::Console,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -2298,21 +2913,14 @@ struct RunReport {
 }
 
 impl RunReport {
-    fn new(args: &TestRunArgs, suites: &[&TestSuite]) -> Self {
+    fn new(filters: Value, suites: &[&TestSuite]) -> Self {
         Self {
             generated_at_unix_seconds: now_unix_seconds(),
             finished_at_unix_seconds: None,
             started_at: Instant::now(),
             duration_ms: None,
             status: "running".to_owned(),
-            filters: json!({
-                "category": args.category.as_str(),
-                "suite": args.suite.iter().map(TestSuiteId::as_str).collect::<Vec<_>>(),
-                "package": args.package.as_deref(),
-                "backend": args.backend.as_str(),
-                "model": args.model.as_ref().map(|model| model.display().to_string()),
-                "offline": args.offline,
-            }),
+            filters,
             selected_suites: suites
                 .iter()
                 .map(|suite| suite.id.as_str().to_owned())
@@ -2370,7 +2978,8 @@ impl RunReport {
 
 struct SuiteReport {
     id: String,
-    category: String,
+    group: String,
+    layer: Option<String>,
     status: String,
     duration_ms: Option<u64>,
     coverage_status: String,
@@ -2382,7 +2991,8 @@ impl SuiteReport {
     fn passed(ctx: &BuildContext, suite: &TestSuite, duration_ms: u128) -> Self {
         Self {
             id: suite.id.as_str().to_owned(),
-            category: suite.category.as_str().to_owned(),
+            group: suite.group.as_str().to_owned(),
+            layer: suite.layer.map(|layer| layer.as_str()).map(str::to_owned),
             status: "passed".to_owned(),
             duration_ms: Some(duration_millis(duration_ms)),
             coverage_status: if suite.coverage {
@@ -2398,7 +3008,8 @@ impl SuiteReport {
     fn failed(ctx: &BuildContext, suite: &TestSuite, duration_ms: u128, error: String) -> Self {
         Self {
             id: suite.id.as_str().to_owned(),
-            category: suite.category.as_str().to_owned(),
+            group: suite.group.as_str().to_owned(),
+            layer: suite.layer.map(|layer| layer.as_str()).map(str::to_owned),
             status: "failed".to_owned(),
             duration_ms: Some(duration_millis(duration_ms)),
             coverage_status: if suite.coverage {
@@ -2414,7 +3025,8 @@ impl SuiteReport {
     fn not_run(ctx: &BuildContext, suite: &TestSuite) -> Self {
         Self {
             id: suite.id.as_str().to_owned(),
-            category: suite.category.as_str().to_owned(),
+            group: suite.group.as_str().to_owned(),
+            layer: suite.layer.map(|layer| layer.as_str()).map(str::to_owned),
             status: "not_run".to_owned(),
             duration_ms: None,
             coverage_status: if suite.coverage {
@@ -2430,7 +3042,8 @@ impl SuiteReport {
     fn as_json(&self) -> Value {
         json!({
             "id": self.id.clone(),
-            "category": self.category.clone(),
+            "group": self.group.clone(),
+            "layer": self.layer.clone(),
             "status": self.status.clone(),
             "durationMs": self.duration_ms,
             "coverage": {
@@ -2463,8 +3076,7 @@ impl VerifyReport {
             duration_ms: None,
             status: "running".to_owned(),
             filters: json!({
-                "category": args.category.as_str(),
-                "suite": args.suite.iter().map(TestSuiteId::as_str).collect::<Vec<_>>(),
+                "target": args.target.as_str(),
                 "changed": args.changed,
             }),
             selected_suites: suites

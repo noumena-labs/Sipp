@@ -54,7 +54,8 @@ fn command_summary(command: &Commands) -> String {
 fn test_summary(command: &TestCommands) -> String {
     match command {
         TestCommands::List(_) => "List test suites".to_owned(),
-        TestCommands::Run(args) => format!("Run tests ({})", args.backend.as_str()),
+        TestCommands::Unit(_) => "Run unit tests".to_owned(),
+        TestCommands::Smoke(_) => "Run smoke tests".to_owned(),
         TestCommands::Verify(_) => "Verify tests".to_owned(),
     }
 }

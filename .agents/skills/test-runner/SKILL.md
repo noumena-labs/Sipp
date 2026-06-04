@@ -7,73 +7,92 @@ allowed-tools: Bash(cargo:*) Bash(bun:*) Bash(npm:*) Bash(pnpm:*) Bash(pytest:*)
 
 # Test Runner Skill
 
-You are responsible for validating changes in the repository using the appropriate testing framework.
+You are responsible for validating changes in the repository using the
+appropriate testing framework.
 
 ## Core Rule
 
-Always run the **narrowest relevant test suite** based on the files you modified. Avoid running full repository checkouts or testing suites that check unchanged packages, as this wastes resources and increases execution time.
+Always run the **narrowest relevant test target** based on the files you
+modified. Avoid full-repo checks when a target-specific command covers the
+change.
 
 ---
 
-## Test Suites by Target
-
-Identify the files modified and run the corresponding command:
+## Test Targets by Area
 
 ### 1. Broad and automation checks
-- Run every cataloged suite:
+- Run every deterministic unit suite:
   ```bash
-  cargo xtask test run
+  cargo xtask test unit
   ```
-- Run all white-box suites:
+- Run all white-box unit suites:
   ```bash
-  cargo xtask test run --category whitebox
+  cargo xtask test unit whitebox
   ```
 - Run xtask-only checks when the change is limited to developer automation:
   ```bash
-  cargo xtask test run --suite xtask
+  cargo xtask test unit xtask
   ```
 
 ### 2. Rust Native Core (`crates/`)
-- Run cataloged unit tests for the affected crate:
+- Run cataloged Rust unit tests for the affected crate:
   ```bash
-  cargo xtask test run --suite rust-crates --package <crate_name>
+  cargo xtask test unit rust --package <crate_name>
   ```
-- Example: `cargo xtask test run --suite rust-crates --package cogentlm-engine`
+- Example: `cargo xtask test unit rust --package cogentlm-engine`
 
 ### 3. Node.js Bindings (`bindings/node/`)
-- Run the cataloged Node interface tests:
+- Run deterministic Node package API tests:
   ```bash
-  cargo xtask test run --suite node-package --backend cpu
+  cargo xtask test unit node --backend cpu
+  ```
+- Run model-backed Node smoke when local inference behavior changed:
+  ```bash
+  cargo xtask test smoke node --backend cpu
   ```
 
 ### 4. TypeScript NPM Packages (`packages/npm/`)
-- Run the cataloged browser package TypeScript tests:
+- Run browser package TypeScript tests:
   ```bash
-  cargo xtask test run --suite package-ts
+  cargo xtask test unit browser-package
   ```
 - App tests are cataloged separately:
   ```bash
-  cargo xtask test run --suite app-ts
+  cargo xtask test unit apps
   ```
 
 ### 5. Python Bindings (`bindings/python/`)
-- Run the cataloged Python interface tests:
+- Run deterministic Python package API tests:
   ```bash
-  cargo xtask test run --suite python-package --backend cpu
+  cargo xtask test unit python --backend cpu
+  ```
+- Run model-backed Python smoke when local inference behavior changed:
+  ```bash
+  cargo xtask test smoke python --backend cpu
   ```
 
-### 6. Coverage and verification
-- List the catalog before choosing a suite:
+### 6. Browser and holistic smoke checks
+- Run browser runtime smoke:
+  ```bash
+  cargo xtask test smoke browser
+  ```
+- Run CLI, Rust, Node, and Python model-backed smoke:
+  ```bash
+  cargo xtask test smoke model --backend cpu
+  ```
+- Run llama.cpp backend correctness smoke:
+  ```bash
+  cargo xtask test smoke llama --backend cpu
+  ```
+
+### 7. Coverage and verification
+- List the catalog before choosing a target:
   ```bash
   cargo xtask test list --cases
   ```
-- Run tests and produce run/coverage artifacts:
-  ```bash
-  cargo xtask test run --suite xtask
-  ```
 - Verify existing coverage artifacts and test structure:
   ```bash
-  cargo xtask test verify --category whitebox
+  cargo xtask test verify --target whitebox
   ```
 - Validate changed source files have matching catalog-owned tests:
   ```bash
@@ -83,6 +102,10 @@ Identify the files modified and run the corresponding command:
 ---
 
 ## Pre-Test Check
-The xtask test catalog builds required artifacts before suites that need them. Use the **`build-orchestrator`** skill first only when you are explicitly compiling or packaging a target outside the test catalog.
 
-Use `cargo xtask test list --cases` to inspect available suites and discoverable cases before choosing a narrow command.
+The xtask test catalog builds required artifacts before suites that need them.
+Use the **`build-orchestrator`** skill first only when you are explicitly
+compiling or packaging a target outside the test catalog.
+
+Use `cargo xtask test list --cases` to inspect available suites and discoverable
+cases before choosing a narrow command.

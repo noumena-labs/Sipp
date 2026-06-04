@@ -46,7 +46,7 @@ fn run_llama(sh: &Shell, ctx: &BuildContext, command: RunLlamaCommands) -> Resul
         RunLlamaCommands::BackendOps(args) => {
             if matches!(args.mode, LlamaBackendOpsMode::Test) {
                 anyhow::bail!(
-                    "llama.cpp correctness checks moved to `cargo xtask test run --suite llama-backend-ops`"
+                    "llama.cpp correctness checks moved to `cargo xtask test smoke llama`"
                 );
             }
             run_llama_backend_ops(sh, ctx, &args)

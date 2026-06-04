@@ -50,8 +50,7 @@ class ModelPlacementConfig: pass
 class MultimodalRuntimeConfig: pass
 class NativeRuntimeConfig: pass
 class ObservabilityRuntimeConfig: pass
-class RemoteAuth: pass
-class RemoteConfig: pass
+class RemoteGatewayConfig: pass
 class RemoteError(Exception): pass
 class ResidencyRuntimeConfig: pass
 class SamplingRuntimeConfig: pass
