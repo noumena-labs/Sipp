@@ -22,3 +22,7 @@ cxx-build.workspace = true
 
 [dependencies]
 cxx.workspace = true
+
+[dev-dependencies]
+cmake.workspace = true
+cxx-build.workspace = true
