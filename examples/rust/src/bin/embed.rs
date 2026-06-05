@@ -1,6 +1,5 @@
-mod local_common;
-
-use cogentlm_client::{CogentEmbedRequest, CogentEmbeddingResponse, LocalEmbedOptions};
+use cogentlm::{CogentEmbedRequest, LocalEmbedOptions};
+use cogentlm_rust_examples::local_common;
 use futures::executor::block_on;
 
 fn main() -> local_common::ExampleResult<()> {
@@ -17,22 +16,7 @@ fn main() -> local_common::ExampleResult<()> {
                 ..Default::default()
             })
             .await?;
-        print_embedding(response);
+        local_common::print_embedding(response);
         Ok(())
     })
-}
-
-fn print_embedding(response: CogentEmbeddingResponse) {
-    let preview = response
-        .values
-        .iter()
-        .take(8)
-        .map(|value| format!("{value:.6}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    println!("endpoint={:?}", response.endpoint);
-    println!("dimensions={}", response.values.len());
-    println!("pooling={:?}", response.pooling);
-    println!("normalized={:?}", response.normalized);
-    println!("preview=[{preview}]");
 }

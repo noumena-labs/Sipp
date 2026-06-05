@@ -32,6 +32,16 @@ pub mod engine {
     pub use cogentlm_engine::engine::*;
 }
 
+/// Native model lifecycle helpers and backend selection types.
+pub mod lifecycle {
+    pub use cogentlm_engine::lifecycle::*;
+}
+
+/// Native runtime execution APIs and request/metrics types.
+pub mod runtime {
+    pub use cogentlm_engine::runtime::*;
+}
+
 /// GGUF inspection and browser cache sharding utilities.
 pub mod shard {
     pub use cogentlm_shard::*;

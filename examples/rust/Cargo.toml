@@ -5,6 +5,38 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
+autobins = false
+
+[[bin]]
+name = "query"
+path = "src/bin/query.rs"
+
+[[bin]]
+name = "chat"
+path = "src/bin/chat.rs"
+
+[[bin]]
+name = "embed"
+path = "src/bin/embed.rs"
+
+[[bin]]
+name = "vision_chat"
+path = "src/bin/vision_chat.rs"
+
+[[bin]]
+name = "remote_gateway_query"
+path = "src/bin/remote_gateway_query.rs"
+required-features = ["remote"]
+
+[[bin]]
+name = "remote_gateway_chat"
+path = "src/bin/remote_gateway_chat.rs"
+required-features = ["remote"]
+
+[[bin]]
+name = "remote_gateway_embed"
+path = "src/bin/remote_gateway_embed.rs"
+required-features = ["remote"]
 
 [features]
 default = ["native"]

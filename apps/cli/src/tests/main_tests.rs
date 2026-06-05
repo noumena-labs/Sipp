@@ -3,9 +3,9 @@
 //! Covers CLI parsing, configuration mapping, stats rendering, and command behavior without running model-backed inference unless marked as an external smoke test.
 
 use clap::Parser;
-use cogentlm_engine::engine::GpuLayerConfig;
-use cogentlm_engine::lifecycle::{BackendPreference, StatsMode};
-use cogentlm_engine::runtime::metrics::RuntimeObservabilityMetrics;
+use cogentlm::engine::GpuLayerConfig;
+use cogentlm::lifecycle::{BackendPreference, StatsMode};
+use cogentlm::runtime::metrics::RuntimeObservabilityMetrics;
 
 use super::*;
 

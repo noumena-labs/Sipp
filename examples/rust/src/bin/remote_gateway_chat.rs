@@ -1,14 +1,13 @@
-mod remote_common;
-
-use cogentlm_client::{CogentChatRequest, CogentTextOptions, CogentTextResponse};
-use cogentlm_engine::engine::{ChatMessage, ChatRole};
+use cogentlm::engine::{ChatMessage, ChatRole};
+use cogentlm::{CogentChatRequest, CogentClient};
+use cogentlm_rust_examples::remote_common;
 use futures::executor::block_on;
 use futures::StreamExt;
 
 fn main() -> remote_common::ExampleResult<()> {
     block_on(async {
         let args = remote_common::args("Explain remote inference in one sentence.")?;
-        let mut client = cogentlm_client::CogentClient::new();
+        let mut client = CogentClient::new();
         let endpoint = client.add_remote(
             args.alias.clone(),
             remote_common::gateway_remote(args.alias)?,
@@ -19,7 +18,7 @@ fn main() -> remote_common::ExampleResult<()> {
                 ChatMessage::new(ChatRole::System, "Answer concisely."),
                 ChatMessage::new(ChatRole::User, args.input),
             ],
-            options: text_options(),
+            options: remote_common::text_options(),
             emit_tokens: true,
             ..Default::default()
         });
@@ -32,31 +31,7 @@ fn main() -> remote_common::ExampleResult<()> {
         println!();
         let response = response.await?;
         assert_eq!(streamed, response.text);
-        print_text(response);
+        remote_common::print_text(response);
         Ok(())
     })
-}
-
-fn text_options() -> CogentTextOptions {
-    CogentTextOptions {
-        max_tokens: env_parse("COGENTLM_MAX_TOKENS"),
-        temperature: env_parse("COGENTLM_TEMPERATURE"),
-        top_p: env_parse("COGENTLM_TOP_P"),
-        stop: Vec::new(),
-    }
-}
-
-fn print_text(response: CogentTextResponse) {
-    println!("endpoint={:?}", response.endpoint);
-    println!("finish_reason={}", response.finish_reason.as_str());
-    println!("text={}", response.text.trim());
-}
-
-fn env_parse<T>(name: &'static str) -> Option<T>
-where
-    T: std::str::FromStr,
-{
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.parse().ok())
 }

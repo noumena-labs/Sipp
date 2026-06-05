@@ -3,7 +3,10 @@
 //! Covers root-level client re-exports and nested native config modules without
 //! loading local models or calling remote gateways.
 
-use cogentlm::{engine::ContextRuntimeConfig, CogentClient, NativeRuntimeConfig};
+use cogentlm::{
+    engine::ContextRuntimeConfig, lifecycle::BackendPreference,
+    runtime::request::GenerateResponseStatus, CogentClient, NativeRuntimeConfig,
+};
 
 #[test]
 fn facade_reexports_client_and_native_runtime_config() {
@@ -18,4 +21,10 @@ fn facade_reexports_client_and_native_runtime_config() {
 
     assert_eq!(config.context.n_ctx, Some(128));
     drop(client);
+}
+
+#[test]
+fn facade_reexports_lifecycle_and_runtime_modules() {
+    assert_eq!(BackendPreference::Cpu.as_str(), "cpu");
+    assert_eq!(GenerateResponseStatus::Completed.as_str(), "completed");
 }

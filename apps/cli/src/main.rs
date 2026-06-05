@@ -4,12 +4,12 @@ use std::time::Duration;
 
 use anyhow::{bail, Context};
 use clap::{Parser, ValueEnum};
-use cogentlm_engine::backend::set_llama_log_quiet;
-use cogentlm_engine::engine::{GpuLayerConfig, NativeRuntimeConfig, SamplingRuntimeConfig};
-use cogentlm_engine::lifecycle::{BackendPolicy, BackendPreference, ModelLoadOptions, StatsMode};
-use cogentlm_engine::runtime::metrics::RuntimeObservabilityMetrics;
-use cogentlm_engine::runtime::request::{GenerateResponseStatus, ResponseOutput};
-use cogentlm_engine::runtime::{InferenceRuntime, RequestStepResult};
+use cogentlm::backend::set_llama_log_quiet;
+use cogentlm::engine::{GpuLayerConfig, NativeRuntimeConfig, SamplingRuntimeConfig};
+use cogentlm::lifecycle::{BackendPolicy, BackendPreference, ModelLoadOptions, StatsMode};
+use cogentlm::runtime::metrics::RuntimeObservabilityMetrics;
+use cogentlm::runtime::request::{GenerateResponseStatus, ResponseOutput};
+use cogentlm::runtime::{InferenceRuntime, RequestStepResult};
 use serde_json::json;
 
 /////////////////////////////////////////////////////////////////////////////////
