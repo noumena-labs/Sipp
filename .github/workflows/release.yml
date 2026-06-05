@@ -155,7 +155,7 @@ jobs:
 
       - name: Run full release test workflow
         run: |
-          cargo xtask --plain test unit
+          cargo xtask --plain test unit group full
           cargo xtask --plain test smoke group full --backend cpu
 
       - name: Build staged web package

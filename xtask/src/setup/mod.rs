@@ -280,14 +280,20 @@ fn print_examples(ctx: &BuildContext, profile: SetupProfile) {
         SetupProfile::Browser => {
             output::detail("Build browser package", "clm build wasm");
             output::detail("Run chat demo", "clm run demos serve chat");
-            output::detail("Run demo tests", "clm test unit demos");
+            output::detail("Run demo tests", "clm test unit suite demos");
         }
         SetupProfile::Bindings => {
             let model = sample_model::sample_model_arg(ctx);
             output::detail("Build Node bindings", "clm build node");
             output::detail("Build Python bindings", "clm build python");
-            output::detail("Node API tests", "clm test unit node --backend cpu");
-            output::detail("Python API tests", "clm test unit python --backend cpu");
+            output::detail(
+                "Node API tests",
+                "clm test unit suite node-package --backend cpu",
+            );
+            output::detail(
+                "Python API tests",
+                "clm test unit suite python-package --backend cpu",
+            );
             output::detail(
                 "Model smoke",
                 format!("clm test smoke group local-model --backend cpu --model {model}"),
@@ -297,7 +303,7 @@ fn print_examples(ctx: &BuildContext, profile: SetupProfile) {
             let model = sample_model::sample_model_arg(ctx);
             output::detail("Build everything", "clm build all");
             output::detail("Serve avatar demo", "clm run demos serve avatar");
-            output::detail("Run unit tests", "clm test unit");
+            output::detail("Run unit tests", "clm test unit group full");
             output::detail(
                 "Run smoke tests",
                 format!("clm test smoke group full --backend cpu --model {model}"),

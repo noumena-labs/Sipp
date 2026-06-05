@@ -132,7 +132,7 @@ jobs:
           NODE
 
       - name: Run fast dev publish gate
-        run: cargo xtask --plain test unit
+        run: cargo xtask --plain test unit group full
 
       - name: Configure GitHub Packages authentication
         if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' || inputs.package == 'node-npm' }}

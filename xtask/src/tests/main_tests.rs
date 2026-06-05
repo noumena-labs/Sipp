@@ -6,7 +6,8 @@
 use xtask::cli::{
     Backend, BackendArgs, BuildCommands, CleanArgs, Commands, TestCommands, TestGroupFilter,
     TestListArgs, TestListFormat, TestSmokeArgs, TestSmokeBenchmarkBrowserArgs, TestSmokeCommands,
-    TestSmokeSuiteArgs, TestSmokeSuiteTarget, TestUnitArgs, TestVerifyArgs, TestVerifyTarget,
+    TestSmokeSuiteArgs, TestSmokeSuiteTarget, TestUnitArgs, TestUnitCommands, TestUnitGroupArgs,
+    TestUnitGroupTarget, TestVerifyArgs, TestVerifyTarget,
 };
 
 use super::{backend_summary, build_summary, command_summary, test_summary};
@@ -42,7 +43,11 @@ fn test_summary_labels_test_subcommands() {
         "List test suites"
     );
     assert_eq!(
-        test_summary(&TestCommands::Unit(TestUnitArgs { target: None })),
+        test_summary(&TestCommands::Unit(TestUnitArgs {
+            command: TestUnitCommands::Group(TestUnitGroupArgs {
+                target: TestUnitGroupTarget::Full,
+            }),
+        })),
         "Run unit tests"
     );
     assert_eq!(

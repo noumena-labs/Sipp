@@ -31,6 +31,7 @@ Start with:
   cargo xtask run examples serve browser
   cargo xtask run benchmarks serve browser
   cargo xtask test --help
+  cargo xtask test unit group full
   cargo xtask test smoke group examples --backend cpu
   cargo xtask build node --backend cpu
   cargo xtask build python --backend cuda
@@ -88,7 +89,7 @@ Examples:
   cargo xtask run demos serve avatar --mode preview --port 4173
 
 The demos group has no demo-level `all` command. Build and serve commands
-target one demo at a time. Demo tests live under `cargo xtask test unit demos`.";
+target one demo at a time. Demo tests live under `cargo xtask test unit suite demos`.";
 
 const RUN_LLAMA_HELP: &str = "\
 Build standalone llama.cpp targets and run backend operation checks.
@@ -159,16 +160,51 @@ Groups:
   local-model  CLI plus Rust, Node, and Python local model smoke
   full         every smoke suite, including benchmark, gateway, and llama checks";
 
+const UNIT_HELP: &str = "\
+Run deterministic tests through explicit suite and group namespaces.
+
+Examples:
+  cargo xtask test unit suite xtask
+  cargo xtask test unit suite rust-crates --package cogentlm-core
+  cargo xtask test unit suite node-package --backend cpu
+  cargo xtask test unit group whitebox
+  cargo xtask test unit group interface
+  cargo xtask test unit group full
+
+Use `suite` for one concrete unit test suite and `group` for a named bundle.";
+
+const UNIT_SUITE_HELP: &str = "\
+Run exactly one deterministic unit suite.
+
+Suites and code locations:
+  xtask             xtask CLI and orchestration tests under xtask/src/tests
+  rust-crates       core workspace crate unit tests under crates/ and lib/rust
+  rust-bindings     Rust tests for Node, Python, and WASM binding crates
+  browser-package   browser package TypeScript tests under lib/web/tests
+  demos             browser demo TypeScript tests under demos/
+  api               crate-level public API integration tests
+  cli               CLI black-box integration tests
+  node-package      deterministic Node package API tests
+  python-package    deterministic Python package API tests";
+
+const UNIT_GROUP_HELP: &str = "\
+Run a named bundle of deterministic unit suites.
+
+Groups:
+  whitebox   internal code-flow suites: xtask, rust-crates, rust-bindings, browser-package, demos
+  interface  public API and binding package suites: api, cli, node-package, python-package
+  full       every deterministic unit suite";
+
 const TEST_HELP: &str = "\
 List, run, and verify cataloged workspace tests.
 
 Examples:
   cargo xtask test list
   cargo xtask test list --group unit --layer interface --cases --search router --format json
-  cargo xtask test unit
-  cargo xtask test unit whitebox
-  cargo xtask test unit rust --package cogentlm-core
-  cargo xtask test unit node --backend cpu
+  cargo xtask test unit group full
+  cargo xtask test unit group whitebox
+  cargo xtask test unit suite rust-crates --package cogentlm-core
+  cargo xtask test unit suite node-package --backend cpu
   cargo xtask test smoke suite example-node --backend cpu
   cargo xtask test smoke suite benchmark-browser
   cargo xtask test smoke group local-model --backend cpu
@@ -177,6 +213,7 @@ Examples:
 Model-backed smoke tests default to the setup sample model cache under
 .build/models when --model is omitted.
 
+`test unit suite` runs one deterministic suite. `test unit group` runs a named bundle.
 `test smoke suite` runs one smoke suite. `test smoke group` runs a named bundle.
 `test unit` and `test smoke` execute suites and write .build/test artifacts.
 Coverage-capable unit suites also write .build/coverage artifacts.
@@ -434,7 +471,8 @@ pub enum TestCommands {
     List(TestListArgs),
 
     /// Run deterministic code-flow and API-layer tests.
-    #[command(after_long_help = BACKEND_HELP)]
+    #[command(long_about = UNIT_HELP)]
+    #[command(arg_required_else_help = true)]
     Unit(TestUnitArgs),
 
     /// Run holistic integration smoke tests.
@@ -473,25 +511,45 @@ pub struct TestListArgs {
 /// Options for deterministic unit test workflows.
 #[derive(Args)]
 pub struct TestUnitArgs {
-    /// Unit target to run. Omit to run all deterministic tests.
+    /// Unit namespace to run.
     #[command(subcommand)]
-    pub target: Option<TestUnitTarget>,
+    pub command: TestUnitCommands,
 }
 
-/// Deterministic unit test targets.
+/// Unit command namespaces.
 #[derive(Subcommand)]
-pub enum TestUnitTarget {
-    /// Run all white-box unit suites.
-    Whitebox,
-    /// Run all public API/interface unit suites.
-    Interface,
+pub enum TestUnitCommands {
+    /// Run exactly one deterministic unit suite.
+    #[command(long_about = UNIT_SUITE_HELP)]
+    #[command(arg_required_else_help = true)]
+    Suite(TestUnitSuiteArgs),
+    /// Run a named bundle of deterministic unit suites.
+    #[command(long_about = UNIT_GROUP_HELP)]
+    #[command(arg_required_else_help = true)]
+    Group(TestUnitGroupArgs),
+}
+
+/// Options for one deterministic unit suite.
+#[derive(Args)]
+pub struct TestUnitSuiteArgs {
+    /// Concrete unit suite to run.
+    #[command(subcommand)]
+    pub target: TestUnitSuiteTarget,
+}
+
+/// Concrete deterministic unit suite targets.
+#[derive(Subcommand)]
+pub enum TestUnitSuiteTarget {
     /// Run xtask CLI and orchestration unit tests.
     Xtask,
     /// Run Rust unit tests for core workspace crates.
-    Rust(TestUnitRustArgs),
+    #[command(name = "rust-crates")]
+    RustCrates(TestUnitRustArgs),
     /// Run Rust unit tests for language binding crates.
-    Bindings,
+    #[command(name = "rust-bindings")]
+    RustBindings,
     /// Run browser package TypeScript tests.
+    #[command(name = "browser-package")]
     BrowserPackage,
     /// Run browser demo TypeScript tests.
     Demos,
@@ -500,11 +558,32 @@ pub enum TestUnitTarget {
     /// Run CLI black-box integration tests.
     Cli,
     /// Run deterministic Node package API tests.
+    #[command(name = "node-package")]
     #[command(after_long_help = BACKEND_HELP)]
-    Node(TestUnitBackendArgs),
+    NodePackage(TestUnitBackendArgs),
     /// Run deterministic Python package API tests.
+    #[command(name = "python-package")]
     #[command(after_long_help = BACKEND_HELP)]
-    Python(TestUnitBackendArgs),
+    PythonPackage(TestUnitBackendArgs),
+}
+
+/// Options for one deterministic unit group.
+#[derive(Args)]
+pub struct TestUnitGroupArgs {
+    /// Unit group to run.
+    #[command(subcommand)]
+    pub target: TestUnitGroupTarget,
+}
+
+/// Named deterministic unit suite groups.
+#[derive(Subcommand)]
+pub enum TestUnitGroupTarget {
+    /// Run all white-box unit suites.
+    Whitebox,
+    /// Run all public API/interface unit suites.
+    Interface,
+    /// Run every deterministic unit suite.
+    Full,
 }
 
 /// Options for Rust unit tests.

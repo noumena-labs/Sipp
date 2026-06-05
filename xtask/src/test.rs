@@ -5,8 +5,8 @@ use crate::cli::{
     TestGroupFilter, TestListArgs, TestListFormat, TestSmokeArgs, TestSmokeBenchmarkBrowserArgs,
     TestSmokeCase, TestSmokeCaseArgs, TestSmokeCommands, TestSmokeExampleBrowserArgs,
     TestSmokeExamplesGroupArgs, TestSmokeFullGroupArgs, TestSmokeGroupTarget, TestSmokeLlamaArgs,
-    TestSmokeModelArgs, TestSmokeSuiteTarget, TestSuiteId, TestUnitArgs, TestUnitLayer,
-    TestUnitTarget, TestVerifyArgs, TestVerifyTarget,
+    TestSmokeModelArgs, TestSmokeSuiteTarget, TestSuiteId, TestUnitArgs, TestUnitCommands,
+    TestUnitGroupTarget, TestUnitLayer, TestUnitSuiteTarget, TestVerifyArgs, TestVerifyTarget,
 };
 use crate::output;
 use crate::sample_model::{self, SampleModelOptions};
@@ -1737,81 +1737,91 @@ fn selected_list_suites(args: &TestListArgs) -> Result<Vec<&'static TestSuite>> 
 
 fn selected_unit_suites(args: &TestUnitArgs) -> Result<UnitSelection> {
     let mut selection = UnitSelection::default();
-    match &args.target {
-        None => {
-            selection.suites = suites_by_group(TestGroup::Unit);
-            selection.filters = json!({
-                "command": "unit",
-                "target": "all",
-            });
-        }
-        Some(TestUnitTarget::Whitebox) => {
-            selection.suites = unit_suites_by_layer(TestUnitLayer::Whitebox);
-            selection.filters = json!({
-                "command": "unit",
-                "target": "whitebox",
-            });
-        }
-        Some(TestUnitTarget::Interface) => {
-            selection.suites = unit_suites_by_layer(TestUnitLayer::Interface);
-            selection.filters = json!({
-                "command": "unit",
-                "target": "interface",
-            });
-        }
-        Some(TestUnitTarget::Xtask) => {
+    match &args.command {
+        TestUnitCommands::Suite(args) => apply_unit_suite_selection(&mut selection, &args.target)?,
+        TestUnitCommands::Group(args) => apply_unit_group_selection(&mut selection, &args.target),
+    }
+    Ok(selection)
+}
+
+fn apply_unit_suite_selection(
+    selection: &mut UnitSelection,
+    target: &TestUnitSuiteTarget,
+) -> Result<()> {
+    match target {
+        TestUnitSuiteTarget::Xtask => {
             selection.suites = vec![suite_by_id(TestSuiteId::Xtask)?];
-            selection.filters = unit_target_filters("xtask");
+            selection.filters = unit_filters("suite", "xtask");
         }
-        Some(TestUnitTarget::Rust(args)) => {
+        TestUnitSuiteTarget::RustCrates(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::RustCrates)?];
             selection.package = args.package.clone();
             selection.filters = json!({
                 "command": "unit",
-                "target": "rust",
+                "namespace": "suite",
+                "target": "rust-crates",
                 "package": args.package.as_deref(),
             });
         }
-        Some(TestUnitTarget::Bindings) => {
+        TestUnitSuiteTarget::RustBindings => {
             selection.suites = vec![suite_by_id(TestSuiteId::RustBindings)?];
-            selection.filters = unit_target_filters("bindings");
+            selection.filters = unit_filters("suite", "rust-bindings");
         }
-        Some(TestUnitTarget::BrowserPackage) => {
+        TestUnitSuiteTarget::BrowserPackage => {
             selection.suites = vec![suite_by_id(TestSuiteId::PackageTs)?];
-            selection.filters = unit_target_filters("browser-package");
+            selection.filters = unit_filters("suite", "browser-package");
         }
-        Some(TestUnitTarget::Demos) => {
+        TestUnitSuiteTarget::Demos => {
             selection.suites = vec![suite_by_id(TestSuiteId::DemoTs)?];
-            selection.filters = unit_target_filters("demos");
+            selection.filters = unit_filters("suite", "demos");
         }
-        Some(TestUnitTarget::Api) => {
+        TestUnitSuiteTarget::Api => {
             selection.suites = vec![suite_by_id(TestSuiteId::RustPublicApi)?];
-            selection.filters = unit_target_filters("api");
+            selection.filters = unit_filters("suite", "api");
         }
-        Some(TestUnitTarget::Cli) => {
+        TestUnitSuiteTarget::Cli => {
             selection.suites = vec![suite_by_id(TestSuiteId::Cli)?];
-            selection.filters = unit_target_filters("cli");
+            selection.filters = unit_filters("suite", "cli");
         }
-        Some(TestUnitTarget::Node(args)) => {
+        TestUnitSuiteTarget::NodePackage(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::NodePackage)?];
             selection.backend = args.backend;
             selection.filters = json!({
                 "command": "unit",
-                "target": "node",
+                "namespace": "suite",
+                "target": "node-package",
                 "backend": args.backend.as_str(),
             });
         }
-        Some(TestUnitTarget::Python(args)) => {
+        TestUnitSuiteTarget::PythonPackage(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::PythonPackage)?];
             selection.backend = args.backend;
             selection.filters = json!({
                 "command": "unit",
-                "target": "python",
+                "namespace": "suite",
+                "target": "python-package",
                 "backend": args.backend.as_str(),
             });
         }
     }
-    Ok(selection)
+    Ok(())
+}
+
+fn apply_unit_group_selection(selection: &mut UnitSelection, target: &TestUnitGroupTarget) {
+    match target {
+        TestUnitGroupTarget::Whitebox => {
+            selection.suites = unit_suites_by_layer(TestUnitLayer::Whitebox);
+            selection.filters = unit_filters("group", "whitebox");
+        }
+        TestUnitGroupTarget::Interface => {
+            selection.suites = unit_suites_by_layer(TestUnitLayer::Interface);
+            selection.filters = unit_filters("group", "interface");
+        }
+        TestUnitGroupTarget::Full => {
+            selection.suites = suites_by_group(TestGroup::Unit);
+            selection.filters = unit_filters("group", "full");
+        }
+    }
 }
 
 fn selected_smoke_suites(args: &TestSmokeArgs) -> Result<SmokeSelection> {
@@ -2052,9 +2062,10 @@ fn group_filter_matches(filter: TestGroupFilter, group: TestGroup) -> bool {
     }
 }
 
-fn unit_target_filters(target: &str) -> Value {
+fn unit_filters(namespace: &str, target: &str) -> Value {
     json!({
         "command": "unit",
+        "namespace": namespace,
         "target": target,
     })
 }
@@ -2170,7 +2181,7 @@ fn validate_package_filter(suites: &[&TestSuite], package: Option<&str>) -> Resu
         && (suites.len() != 1
             || suites.first().map(|suite| suite.id) != Some(TestSuiteId::RustCrates))
     {
-        anyhow::bail!("--package is only supported with `test unit rust`");
+        anyhow::bail!("--package is only supported with `test unit suite rust-crates`");
     }
     Ok(())
 }

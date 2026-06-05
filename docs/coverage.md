@@ -9,7 +9,7 @@ CogentLM coverage is driven through the same test catalog used by
 ```bash
 cargo xtask test list
 cargo xtask test list --group unit --layer whitebox --cases --format json
-cargo xtask test unit whitebox
+cargo xtask test unit group whitebox
 cargo xtask test verify --target whitebox
 cargo xtask test verify --target node
 cargo xtask test verify --changed
@@ -41,8 +41,8 @@ names that map to the suite runner.
 Coverage reporting uses the tools required by the selected report areas:
 
 - `cargo-llvm-cov` for Rust/native execution and report rendering.
-- `c8` for Node wrapper coverage during `test unit node`.
-- `pytest-cov` for Python wrapper coverage during `test unit python`.
+- `c8` for Node wrapper coverage during `test unit suite node-package`.
+- `pytest-cov` for Python wrapper coverage during `test unit suite python-package`.
 
 `test verify` only reads existing coverage artifacts and renders summaries from
 them.

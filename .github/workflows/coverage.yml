@@ -74,7 +74,7 @@ jobs:
 
       - name: Run coverage baseline
         run: |
-          cargo xtask --plain test unit
+          cargo xtask --plain test unit group full
           cargo xtask --plain test verify --target all
 
       - name: Publish coverage summary

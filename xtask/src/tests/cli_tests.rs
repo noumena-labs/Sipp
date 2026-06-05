@@ -10,7 +10,8 @@ use super::{
     LlamaBackendOpsMode, LlamaBackendOpsOutput, RunBenchmarksCommands, RunCommands,
     RunDemosCommands, RunExamplesCommands, RunLlamaCommands, SetupProfile, TestCommands,
     TestGroupFilter, TestListFormat, TestSmokeCommands, TestSmokeGroupTarget, TestSmokeSuiteTarget,
-    TestSuiteId, TestUnitLayer, TestUnitTarget, ToolchainCommands, ToolchainComponent,
+    TestSuiteId, TestUnitCommands, TestUnitGroupTarget, TestUnitLayer, TestUnitSuiteTarget,
+    ToolchainCommands, ToolchainComponent,
 };
 
 #[test]
@@ -175,7 +176,8 @@ fn test_unit_and_smoke_targets_parse() {
         "xtask",
         "test",
         "unit",
-        "rust",
+        "suite",
+        "rust-crates",
         "--package",
         "cogentlm-core",
     ]);
@@ -185,10 +187,25 @@ fn test_unit_and_smoke_targets_parse() {
     let TestCommands::Unit(args) = command else {
         panic!("expected unit command");
     };
-    let Some(TestUnitTarget::Rust(args)) = args.target else {
+    let TestUnitCommands::Suite(args) = args.command else {
+        panic!("expected unit suite command");
+    };
+    let TestUnitSuiteTarget::RustCrates(args) = args.target else {
         panic!("expected rust unit target");
     };
     assert_eq!(args.package.as_deref(), Some("cogentlm-core"));
+
+    let cli = Cli::parse_from(["xtask", "test", "unit", "group", "interface"]);
+    let Commands::Test { command } = cli.command else {
+        panic!("expected test command");
+    };
+    let TestCommands::Unit(args) = command else {
+        panic!("expected unit command");
+    };
+    let TestUnitCommands::Group(args) = args.command else {
+        panic!("expected unit group command");
+    };
+    assert!(matches!(args.target, TestUnitGroupTarget::Interface));
 
     let cli = Cli::parse_from([
         "xtask",
@@ -301,4 +318,8 @@ fn invalid_enums_and_missing_subcommands_are_rejected() {
     assert!(Cli::try_parse_from(["xtask", "test", "smoke", "node"]).is_err());
     assert!(Cli::try_parse_from(["xtask", "test", "smoke", "all"]).is_err());
     assert!(Cli::try_parse_from(["xtask", "test", "smoke", "browser"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "unit"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "unit", "whitebox"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "unit", "rust"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "unit", "node"]).is_err());
 }

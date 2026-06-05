@@ -11,8 +11,9 @@ use crate::cli::{
     Backend, Cli, Commands, LlamaBackendOpsMode, RunCommands, RunLlamaCommands, TestCommands,
     TestSmokeArgs, TestSmokeCase, TestSmokeCaseArgs, TestSmokeCommands, TestSmokeExamplesGroupArgs,
     TestSmokeFullGroupArgs, TestSmokeGroupArgs, TestSmokeGroupTarget, TestSmokeModelArgs,
-    TestSmokeSuiteArgs, TestSmokeSuiteTarget, TestSuiteId, TestUnitArgs, TestUnitLayer,
-    TestUnitTarget, TestVerifyArgs, TestVerifyTarget,
+    TestSmokeSuiteArgs, TestSmokeSuiteTarget, TestSuiteId, TestUnitArgs, TestUnitCommands,
+    TestUnitGroupArgs, TestUnitGroupTarget, TestUnitLayer, TestUnitSuiteArgs, TestUnitSuiteTarget,
+    TestVerifyArgs, TestVerifyTarget,
 };
 use crate::test_support::TempDir;
 use crate::utils::BuildContext;
@@ -58,7 +59,8 @@ fn new_test_commands_parse() {
         "xtask",
         "test",
         "unit",
-        "rust",
+        "suite",
+        "rust-crates",
         "--package",
         "cogentlm-core",
     ]);
@@ -69,7 +71,10 @@ fn new_test_commands_parse() {
     let TestCommands::Unit(args) = command else {
         panic!("expected unit command");
     };
-    let Some(TestUnitTarget::Rust(args)) = args.target else {
+    let TestUnitCommands::Suite(args) = args.command else {
+        panic!("expected unit suite command");
+    };
+    let TestUnitSuiteTarget::RustCrates(args) = args.target else {
         panic!("expected rust target");
     };
     assert_eq!(args.package.as_deref(), Some("cogentlm-core"));
@@ -77,7 +82,15 @@ fn new_test_commands_parse() {
 
 #[test]
 fn test_unit_accepts_interface_binding_targets() {
-    let cli = Cli::parse_from(["xtask", "test", "unit", "node", "--backend", "cpu"]);
+    let cli = Cli::parse_from([
+        "xtask",
+        "test",
+        "unit",
+        "suite",
+        "node-package",
+        "--backend",
+        "cpu",
+    ]);
 
     let Commands::Test { command } = cli.command else {
         panic!("expected test command");
@@ -85,7 +98,10 @@ fn test_unit_accepts_interface_binding_targets() {
     let TestCommands::Unit(args) = command else {
         panic!("expected unit command");
     };
-    let Some(TestUnitTarget::Node(args)) = args.target else {
+    let TestUnitCommands::Suite(args) = args.command else {
+        panic!("expected unit suite command");
+    };
+    let TestUnitSuiteTarget::NodePackage(args) = args.target else {
         panic!("expected node target");
     };
     assert_eq!(args.backend, Backend::Cpu);
@@ -183,9 +199,11 @@ fn old_flag_based_test_commands_are_rejected_by_clap() {
 }
 
 #[test]
-fn unit_target_selection_expands_expected_suites() {
+fn unit_group_selection_expands_expected_suites() {
     let selection = selected_unit_suites(&TestUnitArgs {
-        target: Some(TestUnitTarget::Interface),
+        command: TestUnitCommands::Group(TestUnitGroupArgs {
+            target: TestUnitGroupTarget::Interface,
+        }),
     })
     .unwrap();
 
@@ -205,8 +223,13 @@ fn unit_target_selection_expands_expected_suites() {
 }
 
 #[test]
-fn empty_unit_selection_selects_every_unit_suite() {
-    let selection = selected_unit_suites(&TestUnitArgs { target: None }).unwrap();
+fn full_unit_group_selects_every_unit_suite() {
+    let selection = selected_unit_suites(&TestUnitArgs {
+        command: TestUnitCommands::Group(TestUnitGroupArgs {
+            target: TestUnitGroupTarget::Full,
+        }),
+    })
+    .unwrap();
 
     assert_eq!(
         selection.suites.len(),
@@ -215,6 +238,28 @@ fn empty_unit_selection_selects_every_unit_suite() {
             .filter(|suite| suite.group == TestGroup::Unit)
             .count()
     );
+}
+
+#[test]
+fn unit_suite_selection_selects_one_suite() {
+    let selection = selected_unit_suites(&TestUnitArgs {
+        command: TestUnitCommands::Suite(TestUnitSuiteArgs {
+            target: TestUnitSuiteTarget::RustCrates(crate::cli::TestUnitRustArgs {
+                package: Some("cogentlm-core".to_owned()),
+            }),
+        }),
+    })
+    .unwrap();
+
+    assert_eq!(
+        selection
+            .suites
+            .iter()
+            .map(|suite| suite.id)
+            .collect::<Vec<_>>(),
+        vec![TestSuiteId::RustCrates]
+    );
+    assert_eq!(selection.package.as_deref(), Some("cogentlm-core"));
 }
 
 #[test]
@@ -429,6 +474,18 @@ fn old_test_commands_are_rejected() {
     assert!(Cli::try_parse_from(["xtask", "test", "whitebox"]).is_err());
     assert!(Cli::try_parse_from(["xtask", "test", "interface"]).is_err());
     assert!(Cli::try_parse_from(["xtask", "test", "coverage"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "unit"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "unit", "whitebox"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "unit", "interface"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "unit", "xtask"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "unit", "rust"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "unit", "bindings"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "unit", "browser-package"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "unit", "demos"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "unit", "api"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "unit", "cli"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "unit", "node"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "unit", "python"]).is_err());
     assert!(Cli::try_parse_from(["xtask", "test", "smoke", "all"]).is_err());
     assert!(Cli::try_parse_from(["xtask", "test", "smoke", "model"]).is_err());
     assert!(Cli::try_parse_from(["xtask", "test", "smoke", "browser"]).is_err());
