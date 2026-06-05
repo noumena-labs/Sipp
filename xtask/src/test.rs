@@ -2,11 +2,12 @@
 
 use crate::cli::{
     Backend, LlamaBackendOpsMode, LlamaBackendOpsOutput, RunLlamaBackendOpsArgs, TestCommands,
-    TestGroupFilter, TestListArgs, TestListFormat, TestSmokeArgs, TestSmokeBenchmarkBrowserArgs,
-    TestSmokeCase, TestSmokeCaseArgs, TestSmokeCommands, TestSmokeExampleBrowserArgs,
-    TestSmokeExamplesGroupArgs, TestSmokeFullGroupArgs, TestSmokeGroupTarget, TestSmokeLlamaArgs,
-    TestSmokeModelArgs, TestSmokeSuiteTarget, TestSuiteId, TestUnitArgs, TestUnitCommands,
-    TestUnitGroupTarget, TestUnitLayer, TestUnitSuiteTarget, TestVerifyArgs, TestVerifyTarget,
+    TestGroupFilter, TestListArgs, TestListFormat, TestSmokeArgs, TestSmokeCase, TestSmokeCaseArgs,
+    TestSmokeCommands, TestSmokeExampleBrowserArgs, TestSmokeExamplesGroupArgs,
+    TestSmokeFullGroupArgs, TestSmokeGroupTarget, TestSmokeLlamaArgs, TestSmokeModelArgs,
+    TestSmokePlaygroundBrowserArgs, TestSmokeSuiteTarget, TestSuiteId, TestUnitArgs,
+    TestUnitCommands, TestUnitGroupTarget, TestUnitLayer, TestUnitSuiteTarget, TestVerifyArgs,
+    TestVerifyTarget,
 };
 use crate::javascript;
 use crate::output;
@@ -116,7 +117,7 @@ const RUST_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/rust/src"];
 const NODE_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/node", "lib/node"];
 const PYTHON_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/python", "lib/python"];
 const BROWSER_EXAMPLE_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/web", "lib/web/src"];
-const BROWSER_BENCHMARK_SMOKE_SOURCE_ROOTS: &[&str] = &["benchmarks/browser"];
+const BROWSER_PLAYGROUND_SMOKE_SOURCE_ROOTS: &[&str] = &["tools/playground"];
 const PROVIDER_GATEWAY_SMOKE_SOURCE_ROOTS: &[&str] =
     &["crates/gateway/src", "crates/gateway-providers/src"];
 
@@ -302,15 +303,15 @@ const TEST_SUITES: &[TestSuite] = &[
         discoverer: CaseDiscoverer::None,
     },
     TestSuite {
-        id: TestSuiteId::BenchmarkBrowserSmoke,
+        id: TestSuiteId::PlaygroundBrowserSmoke,
         group: TestGroup::Smoke,
         layer: None,
-        description: "Benchmark browser runtime smoke under benchmarks/browser",
+        description: "Playground browser runtime smoke under tools/playground",
         requirements: "bun, wasm build, playwright chromium",
-        source_roots: BROWSER_BENCHMARK_SMOKE_SOURCE_ROOTS,
+        source_roots: BROWSER_PLAYGROUND_SMOKE_SOURCE_ROOTS,
         coverage: false,
         backend_policy: BackendPolicy::None,
-        runner: SuiteRunner::BenchmarkBrowserSmoke,
+        runner: SuiteRunner::PlaygroundBrowserSmoke,
         discoverer: CaseDiscoverer::None,
     },
     TestSuite {
@@ -371,7 +372,7 @@ fn run_unit(sh: &Shell, ctx: &BuildContext, args: &TestUnitArgs) -> Result<()> {
         temperature: DEFAULT_SMOKE_TEMPERATURE,
         cases: &[],
         example_browser: BrowserSmokeRunOptions::default(),
-        benchmark_browser: BrowserSmokeRunOptions::default(),
+        playground_browser: BrowserSmokeRunOptions::default(),
         llama: LlamaBackendOpsRunOptions::default(),
     };
 
@@ -396,10 +397,10 @@ fn run_smoke(sh: &Shell, ctx: &BuildContext, args: &TestSmokeArgs) -> Result<()>
         require_gguf_ingest: false,
         require_webgpu: false,
     };
-    let benchmark_browser = BrowserSmokeRunOptions {
+    let playground_browser = BrowserSmokeRunOptions {
         host: selection.browser_host.as_deref(),
         port: selection.browser_port,
-        timeout_ms: selection.benchmark_browser_timeout_ms,
+        timeout_ms: selection.playground_browser_timeout_ms,
         require_rust_engine: selection.require_rust_engine,
         require_gguf_ingest: selection.require_gguf_ingest,
         require_webgpu: selection.require_webgpu,
@@ -420,7 +421,7 @@ fn run_smoke(sh: &Shell, ctx: &BuildContext, args: &TestSmokeArgs) -> Result<()>
         temperature: selection.temperature,
         cases: &selection.cases,
         example_browser,
-        benchmark_browser,
+        playground_browser,
         llama,
     };
 
@@ -524,8 +525,8 @@ fn run_suite(
         SuiteRunner::PythonSmoke => run_python_model_smoke(sh, ctx, options),
         SuiteRunner::ExampleBrowserSmoke => run_browser_example_smoke(sh, ctx, options),
         SuiteRunner::ProviderGatewaySmoke => run_provider_gateway_smoke(sh, ctx),
-        SuiteRunner::BenchmarkBrowserSmoke => {
-            run_benchmark_browser_runtime_smoke(sh, ctx, &options.benchmark_browser)
+        SuiteRunner::PlaygroundBrowserSmoke => {
+            run_playground_browser_runtime_smoke(sh, ctx, &options.playground_browser)
         }
         SuiteRunner::LlamaBackendOps => {
             run_llama_backend_ops_suite(sh, ctx, &options.backend, &options.llama)
@@ -647,7 +648,7 @@ fn synthetic_suite_cases(
             .into_iter()
             .map(|case| case.as_str().to_owned())
             .collect(),
-        SuiteRunner::BenchmarkBrowserSmoke => vec!["benchmark browser runtime".to_owned()],
+        SuiteRunner::PlaygroundBrowserSmoke => vec!["playground browser runtime".to_owned()],
         SuiteRunner::LlamaBackendOps => vec!["llama.cpp backend ops".to_owned()],
         _ => Vec::new(),
     };
@@ -694,7 +695,7 @@ fn known_success_counts(
         | SuiteRunner::PythonPackage
         | SuiteRunner::ProviderGatewaySmoke => discovered_suite_case_count(ctx, suite, None)?,
         SuiteRunner::CliSmoke
-        | SuiteRunner::BenchmarkBrowserSmoke
+        | SuiteRunner::PlaygroundBrowserSmoke
         | SuiteRunner::LlamaBackendOps => 1,
         SuiteRunner::RustSmoke => selected_rust_smoke_examples(options.cases).len(),
         SuiteRunner::NodeSmoke => selected_node_smoke_scripts(options.cases).len(),
@@ -861,7 +862,7 @@ fn run_rust_coverage_targets(
         let package = target.package;
         let mut lcov_cmd = cmd!(
             sh,
-            "cargo llvm-cov --lcov --output-path {rust_lcov} --ignore-filename-regex third_party|\\.build|target|tests|examples|demos|benchmarks -p {package}"
+            "cargo llvm-cov --lcov --output-path {rust_lcov} --ignore-filename-regex third_party|\\.build|target|tests|examples|demos|tools -p {package}"
         );
         if coverage_state.rust_started {
             lcov_cmd = lcov_cmd.arg("--no-clean");
@@ -890,7 +891,7 @@ fn run_rust_coverage_targets(
 
     let html_cmd = cmd!(
         sh,
-        "cargo llvm-cov --html --no-run --output-dir {rust_html} --ignore-filename-regex third_party|\\.build|target|tests|examples|demos|benchmarks"
+        "cargo llvm-cov --html --no-run --output-dir {rust_html} --ignore-filename-regex third_party|\\.build|target|tests|examples|demos|tools"
     );
     let html_cmd = apply_toolchains(sh, ctx, html_cmd, None)?;
     output::run_build_command("Writing Rust HTML coverage report", html_cmd)?;
@@ -1105,25 +1106,22 @@ fn run_browser_example_smoke(
     output::run_test_command("Running browser example smoke", smoke_cmd)
 }
 
-fn run_benchmark_browser_runtime_smoke(
+fn run_playground_browser_runtime_smoke(
     sh: &Shell,
     ctx: &BuildContext,
     options: &BrowserSmokeRunOptions<'_>,
 ) -> Result<()> {
-    output::phase("Benchmark browser runtime smoke");
-    let benchmark_dir = ctx.benchmark_browser_dir();
-    ensure_javascript_workspace_dependencies(sh, ctx, &[benchmark_dir.clone()])?;
+    output::phase("Playground browser runtime smoke");
+    let playground_dir = ctx.playground_dir();
+    ensure_javascript_workspace_dependencies(sh, ctx, &[playground_dir.clone()])?;
     targets::wasm::build(sh, ctx)?;
     ensure_playwright_chromium(sh, ctx)?;
 
-    output::path("Benchmark workspace", &benchmark_dir);
-    output::path(
-        "Artifact directory",
-        &ctx.benchmark_artifacts_dir("browser"),
-    );
-    let _benchmark_dir = sh.push_dir(&benchmark_dir);
+    output::path("Playground workspace", &playground_dir);
+    output::path("Artifact directory", &ctx.tool_artifacts_dir("playground"));
+    let _playground_dir = sh.push_dir(&playground_dir);
     let timeout_ms = options.timeout_ms.to_string();
-    let mut smoke_cmd = cmd!(sh, "node scripts/browser-runtime-smoke.mjs")
+    let mut smoke_cmd = cmd!(sh, "node scripts/playground-runtime-smoke.mjs")
         .arg("--timeout-ms")
         .arg(timeout_ms)
         .env("PLAYWRIGHT_BROWSERS_PATH", ctx.playwright_browsers_dir());
@@ -1142,7 +1140,7 @@ fn run_benchmark_browser_runtime_smoke(
     if options.require_webgpu {
         smoke_cmd = smoke_cmd.arg("--require-webgpu");
     }
-    output::run_test_command("Running benchmark browser runtime smoke", smoke_cmd)
+    output::run_test_command("Running playground browser runtime smoke", smoke_cmd)
 }
 
 fn run_llama_backend_ops_suite(
@@ -1516,14 +1514,14 @@ fn write_rust_coverage_reports(sh: &Shell, ctx: &BuildContext) -> Result<()> {
         "Writing Rust LCOV report",
         cmd!(
             sh,
-            "cargo llvm-cov report --lcov --output-path {rust_lcov} --ignore-filename-regex third_party|\\.build|target|tests|examples|demos|benchmarks"
+            "cargo llvm-cov report --lcov --output-path {rust_lcov} --ignore-filename-regex third_party|\\.build|target|tests|examples|demos|tools"
         ),
     )?;
     output::run_build_command(
         "Writing Rust HTML report",
         cmd!(
             sh,
-            "cargo llvm-cov report --html --output-dir {rust_html} --ignore-filename-regex third_party|\\.build|target|tests|examples|demos|benchmarks"
+            "cargo llvm-cov report --html --output-dir {rust_html} --ignore-filename-regex third_party|\\.build|target|tests|examples|demos|tools"
         ),
     )?;
     Ok(())
@@ -1596,7 +1594,7 @@ fn coverage_report_areas(suites: &[&TestSuite]) -> CoverageReportAreas {
             | SuiteRunner::PythonSmoke
             | SuiteRunner::ProviderGatewaySmoke
             | SuiteRunner::ExampleBrowserSmoke
-            | SuiteRunner::BenchmarkBrowserSmoke
+            | SuiteRunner::PlaygroundBrowserSmoke
             | SuiteRunner::LlamaBackendOps => {}
         }
     }
@@ -2178,10 +2176,10 @@ fn apply_smoke_suite_selection(
             selection.apply_example_browser_args(args);
             selection.filters = browser_example_filters("suite", "example-browser", args);
         }
-        TestSmokeSuiteTarget::BenchmarkBrowser(args) => {
-            selection.suites = vec![suite_by_id(TestSuiteId::BenchmarkBrowserSmoke)?];
-            selection.apply_benchmark_browser_args(args);
-            selection.filters = benchmark_browser_filters("suite", "benchmark-browser", args);
+        TestSmokeSuiteTarget::PlaygroundBrowser(args) => {
+            selection.suites = vec![suite_by_id(TestSuiteId::PlaygroundBrowserSmoke)?];
+            selection.apply_playground_browser_args(args);
+            selection.filters = playground_browser_filters("suite", "playground-browser", args);
         }
         TestSmokeSuiteTarget::ProviderGateway => {
             selection.suites = vec![suite_by_id(TestSuiteId::ProviderGatewaySmoke)?];
@@ -2258,13 +2256,13 @@ fn apply_full_group_selection(
         suite_by_id(TestSuiteId::NodeSmoke)?,
         suite_by_id(TestSuiteId::PythonSmoke)?,
         suite_by_id(TestSuiteId::ExampleBrowserSmoke)?,
-        suite_by_id(TestSuiteId::BenchmarkBrowserSmoke)?,
+        suite_by_id(TestSuiteId::PlaygroundBrowserSmoke)?,
         suite_by_id(TestSuiteId::ProviderGatewaySmoke)?,
         suite_by_id(TestSuiteId::LlamaBackendOps)?,
     ];
     selection.apply_model_args(&args.model);
     selection.example_browser_timeout_ms = args.example_browser_timeout_ms;
-    selection.benchmark_browser_timeout_ms = args.benchmark_browser_timeout_ms;
+    selection.playground_browser_timeout_ms = args.playground_browser_timeout_ms;
     selection.filters = smoke_filters(
         "group",
         "full",
@@ -2272,7 +2270,7 @@ fn apply_full_group_selection(
         &[],
         json!({
             "exampleBrowserTimeoutMs": args.example_browser_timeout_ms,
-            "benchmarkBrowserTimeoutMs": args.benchmark_browser_timeout_ms,
+            "playgroundBrowserTimeoutMs": args.playground_browser_timeout_ms,
         }),
     );
     Ok(())
@@ -2395,10 +2393,10 @@ fn smoke_filters(
     })
 }
 
-fn benchmark_browser_filters(
+fn playground_browser_filters(
     namespace: &str,
     target: &str,
-    args: &TestSmokeBenchmarkBrowserArgs,
+    args: &TestSmokePlaygroundBrowserArgs,
 ) -> Value {
     json!({
         "command": "smoke",
@@ -3373,7 +3371,7 @@ fn coverage_artifacts_for_suite(ctx: &BuildContext, suite: &TestSuite) -> Vec<St
         | SuiteRunner::PythonSmoke
         | SuiteRunner::ProviderGatewaySmoke
         | SuiteRunner::ExampleBrowserSmoke
-        | SuiteRunner::BenchmarkBrowserSmoke
+        | SuiteRunner::PlaygroundBrowserSmoke
         | SuiteRunner::LlamaBackendOps => Vec::new(),
     };
     artifacts
@@ -3487,7 +3485,7 @@ enum SuiteRunner {
     PythonSmoke,
     ExampleBrowserSmoke,
     ProviderGatewaySmoke,
-    BenchmarkBrowserSmoke,
+    PlaygroundBrowserSmoke,
     LlamaBackendOps,
 }
 
@@ -3597,7 +3595,7 @@ struct SmokeSelection {
     browser_host: Option<String>,
     browser_port: Option<u16>,
     example_browser_timeout_ms: u64,
-    benchmark_browser_timeout_ms: u64,
+    playground_browser_timeout_ms: u64,
     require_rust_engine: bool,
     require_gguf_ingest: bool,
     require_webgpu: bool,
@@ -3622,7 +3620,7 @@ impl Default for SmokeSelection {
             browser_host: None,
             browser_port: None,
             example_browser_timeout_ms: 30_000,
-            benchmark_browser_timeout_ms: 30_000,
+            playground_browser_timeout_ms: 30_000,
             require_rust_engine: false,
             require_gguf_ingest: false,
             require_webgpu: false,
@@ -3661,10 +3659,10 @@ impl SmokeSelection {
         self.example_browser_timeout_ms = args.timeout_ms;
     }
 
-    fn apply_benchmark_browser_args(&mut self, args: &TestSmokeBenchmarkBrowserArgs) {
+    fn apply_playground_browser_args(&mut self, args: &TestSmokePlaygroundBrowserArgs) {
         self.browser_host = args.host.clone();
         self.browser_port = args.port;
-        self.benchmark_browser_timeout_ms = args.timeout_ms;
+        self.playground_browser_timeout_ms = args.timeout_ms;
         self.require_rust_engine = args.require_rust_engine;
         self.require_gguf_ingest = args.require_gguf_ingest;
         self.require_webgpu = args.require_webgpu;
@@ -3689,7 +3687,7 @@ struct SuiteRunOptions<'a> {
     temperature: f32,
     cases: &'a [TestSmokeCase],
     example_browser: BrowserSmokeRunOptions<'a>,
-    benchmark_browser: BrowserSmokeRunOptions<'a>,
+    playground_browser: BrowserSmokeRunOptions<'a>,
     llama: LlamaBackendOpsRunOptions<'a>,
 }
 

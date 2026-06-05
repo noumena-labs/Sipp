@@ -1,5 +1,5 @@
 /**
- * Curated model registry for the CogentLM benchmark.
+ * Curated model registry for the CogentLM browser playground.
  *
  * Each entry is app-facing catalog data. Its client-facing portion is a
  * minimal `CogentClient` ModelSource.

@@ -109,7 +109,7 @@ fn cuda_status_uses_environment_roots_without_running_nvcc() {
 fn node_workspace_status_checks_every_workspace_node_modules_root() {
     let temp = TempDir::new("toolchain-node-workspaces");
     temp.create_dir("demos/chat/node_modules");
-    temp.create_dir("benchmarks/browser/node_modules");
+    temp.create_dir("tools/playground/node_modules");
     temp.create_dir("lib/web/node_modules");
     temp.create_dir("lib/node/node_modules");
     temp.create_dir("bindings/node/node_modules");
@@ -128,7 +128,7 @@ fn node_workspace_status_checks_every_workspace_node_modules_root() {
     assert!(roots.contains(&temp.join("node_modules")));
     assert!(roots.contains(&temp.join("bindings/node/node_modules")));
     assert!(roots.contains(&temp.join("demos/chat/node_modules")));
-    assert!(roots.contains(&temp.join("benchmarks/browser/node_modules")));
+    assert!(roots.contains(&temp.join("tools/playground/node_modules")));
     assert!(roots.contains(&temp.join("lib/web/node_modules")));
     assert!(roots.contains(&temp.join("lib/node/node_modules")));
 }

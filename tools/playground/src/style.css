@@ -321,7 +321,7 @@ button:disabled {
   box-shadow: 0 0 8px var(--accent-primary);
 }
 
-/* Benchmark Results */
+/* Diagnostics Results */
 .result-card {
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.05);

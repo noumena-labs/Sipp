@@ -419,7 +419,7 @@ The repository is organized by responsibility:
 * `bindings/`: FFI and language bindings such as Node, Python, and WASM.
 * `apps/`: First-party applications such as the Rust CLI.
 * `demos/`: Browser demos using the public browser package.
-* `benchmarks/`: Benchmark harnesses and benchmark apps.
+* `tools/`: Developer tools such as the browser playground.
 * `examples/`: Runnable onboarding examples for public package surfaces.
 * `lib/`: Public facade and language/runtime package source, including Rust, Python, Node, and browser packages.
 * `docs/`: User-facing and contributor-facing documentation.

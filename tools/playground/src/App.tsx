@@ -56,22 +56,22 @@ import type {
 
 declare global {
   interface Window {
-    __cogentBench?: {
+    __cogentPlayground?: {
       getEnvironment(): Promise<Record<string, unknown>>;
       getRuntimeObservability(): ObservabilitySnapshot | null;
       getBackendObservability(): unknown;
-      getBrowserRuntimeSmoke(): {
+      getRuntimeSmoke(): {
         result: BrowserRuntimeSmokeResult | null;
         error: string | null;
       };
-      runBrowserRuntimeSmoke(): Promise<BrowserRuntimeSmokeResult>;
+      runRuntimeSmoke(): Promise<BrowserRuntimeSmokeResult>;
       getLastReport(): BenchmarkReport | null;
     };
   }
 }
 
 interface BenchmarkReport {
-  schema: 'cogent.benchmark.browser.v11';
+  schema: 'cogent.playground.browser.v1';
   generatedAt: string;
   model: ModelInfo | null;
   source: { label: string; bytes: number | null };
@@ -244,7 +244,7 @@ function downloadJson(filename: string, value: unknown): void {
 }
 
 function logBenchmarkReport(report: BenchmarkReport): void {
-  console.groupCollapsed('[CogentLM benchmark] run complete');
+  console.groupCollapsed('[CogentLM playground] diagnostics run complete');
   console.log('backend profile', report.backend);
   console.log('runtime config', report.settings.runtime);
   console.log('summary', report.trace.analysis);
@@ -515,21 +515,21 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    window.__cogentBench = {
+    window.__cogentPlayground = {
       getEnvironment: inspectBrowserEnvironment,
       getRuntimeObservability: () => observability,
       getBackendObservability: () => browserSmoke?.backend ?? observability?.profile ?? null,
-      getBrowserRuntimeSmoke: () => ({
+      getRuntimeSmoke: () => ({
         result: browserSmoke,
         error: browserSmokeError,
       }),
-      runBrowserRuntimeSmoke,
+      runRuntimeSmoke: runBrowserRuntimeSmoke,
       getLastReport: () => benchmarkReport,
     };
 
     return () => {
-      if (window.__cogentBench?.runBrowserRuntimeSmoke === runBrowserRuntimeSmoke) {
-        delete window.__cogentBench;
+      if (window.__cogentPlayground?.runRuntimeSmoke === runBrowserRuntimeSmoke) {
+        delete window.__cogentPlayground;
       }
     };
   }, [benchmarkReport, observability, browserSmoke, browserSmokeError]);
@@ -829,7 +829,7 @@ export default function App() {
       );
 
       const report: BenchmarkReport = {
-        schema: 'cogent.benchmark.browser.v11',
+        schema: 'cogent.playground.browser.v1',
         generatedAt: new Date().toISOString(),
         model: info,
         source: {
@@ -862,7 +862,7 @@ export default function App() {
       setMemorySnapshots(snapshots);
       setBenchmarkReport(report);
       logBenchmarkReport(report);
-      setStatus('benchmark complete');
+      setStatus('diagnostics complete');
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
@@ -979,13 +979,13 @@ export default function App() {
   return (
     <div className="shell">
       <header className="hero">
-        <div className="eyebrow">Browser Benchmark</div>
-        <h1>CogentClient Minimal API</h1>
+        <div className="eyebrow">Browser Playground</div>
+        <h1>CogentLM Runtime Diagnostics</h1>
         <p>
           Load with <code>client.addLocal()</code>, inspect with{' '}
           <code>client.currentLocal()</code>, run with <code>client.chat()</code>,{' '}
           <code>client.query()</code>, or <code>client.embed()</code>, consume{' '}
-          <code>.response</code> and <code>.tokens</code>, and benchmark with
+          <code>.response</code> and <code>.tokens</code>, and inspect with
           the same minimal surface.
         </p>
       </header>
@@ -1167,7 +1167,7 @@ export default function App() {
 
           <section className="section">
             <div className="section-header">
-              <h2>Benchmark</h2>
+              <h2>Diagnostics</h2>
             </div>
             <div className="field-grid">
               <div className="field-grid field-grid-compact">
@@ -1232,7 +1232,7 @@ export default function App() {
                   onClick={runBenchmark}
                   disabled={isBusy || client == null}
                 >
-                  Run Benchmark
+                  Run Diagnostics
                 </button>
                 <button
                   className="secondary-button"
@@ -1240,7 +1240,7 @@ export default function App() {
                   onClick={() =>
                     benchmarkReport == null
                       ? undefined
-                      : downloadJson('cogent-benchmark.json', benchmarkReport)
+                      : downloadJson('cogent-playground-report.json', benchmarkReport)
                   }
                   disabled={benchmarkReport == null}
                 >
@@ -1420,11 +1420,11 @@ export default function App() {
 
           <section className="section">
             <div className="section-header">
-              <h2>Benchmark Results</h2>
+              <h2>Diagnostics Results</h2>
             </div>
             {scenarioResults.length === 0 && mixedLoadResult == null ? (
               <p className="hint">
-                Run the benchmark to capture SISO, SILO, LISO, LILO, mixed-load, and memory
+                Run diagnostics to capture SISO, SILO, LISO, LILO, mixed-load, and memory
                 snapshots with the minimal client API.
               </p>
             ) : (

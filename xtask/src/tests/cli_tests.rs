@@ -6,11 +6,11 @@
 use clap::Parser;
 
 use super::{
-    Backend, BenchmarkName, Cli, Commands, DemoName, DemoServeMode, DoctorTarget, ExampleName,
-    LlamaBackendOpsMode, LlamaBackendOpsOutput, RunBenchmarksCommands, RunCommands,
-    RunDemosCommands, RunExamplesCommands, RunLlamaCommands, SetupProfile, TestCommands,
-    TestGroupFilter, TestListFormat, TestSmokeCommands, TestSmokeGroupTarget, TestSmokeSuiteTarget,
-    TestSuiteId, TestUnitCommands, TestUnitGroupTarget, TestUnitLayer, TestUnitSuiteTarget,
+    Backend, Cli, Commands, DemoName, DemoServeMode, DoctorTarget, ExampleName,
+    LlamaBackendOpsMode, LlamaBackendOpsOutput, RunCommands, RunDemosCommands, RunExamplesCommands,
+    RunLlamaCommands, RunToolsCommands, SetupProfile, TestCommands, TestGroupFilter,
+    TestListFormat, TestSmokeCommands, TestSmokeGroupTarget, TestSmokeSuiteTarget, TestSuiteId,
+    TestUnitCommands, TestUnitGroupTarget, TestUnitLayer, TestUnitSuiteTarget, ToolName,
     ToolchainCommands, ToolchainComponent,
 };
 
@@ -69,7 +69,7 @@ fn run_demo_serve_parses_optional_host_port_and_no_build() {
 }
 
 #[test]
-fn run_examples_and_benchmarks_parse_browser_workflows() {
+fn run_examples_and_tools_parse_browser_workflows() {
     let cli = Cli::parse_from([
         "xtask",
         "run",
@@ -94,17 +94,17 @@ fn run_examples_and_benchmarks_parse_browser_workflows() {
     assert_eq!(args.port, Some(4173));
     assert!(args.no_build);
 
-    let cli = Cli::parse_from(["xtask", "run", "benchmarks", "build", "browser"]);
+    let cli = Cli::parse_from(["xtask", "run", "tools", "build", "playground"]);
     let Commands::Run { command } = cli.command else {
         panic!("expected run command");
     };
-    let RunCommands::Benchmarks { command } = command else {
-        panic!("expected benchmarks command");
+    let RunCommands::Tools { command } = command else {
+        panic!("expected tools command");
     };
-    let RunBenchmarksCommands::Build(args) = command else {
-        panic!("expected benchmark build command");
+    let RunToolsCommands::Build(args) = command else {
+        panic!("expected tool build command");
     };
-    assert_eq!(args.benchmark, BenchmarkName::Browser);
+    assert_eq!(args.tool, ToolName::Playground);
 }
 
 #[test]
@@ -212,7 +212,7 @@ fn test_unit_and_smoke_targets_parse() {
         "test",
         "smoke",
         "suite",
-        "benchmark-browser",
+        "playground-browser",
         "--require-webgpu",
         "--timeout-ms",
         "45000",
@@ -226,8 +226,8 @@ fn test_unit_and_smoke_targets_parse() {
     let TestSmokeCommands::Suite(args) = args.command else {
         panic!("expected smoke suite command");
     };
-    let TestSmokeSuiteTarget::BenchmarkBrowser(args) = args.target else {
-        panic!("expected benchmark browser smoke target");
+    let TestSmokeSuiteTarget::PlaygroundBrowser(args) = args.target else {
+        panic!("expected playground browser smoke target");
     };
     assert!(args.require_webgpu);
     assert_eq!(args.timeout_ms, 45_000);
@@ -294,8 +294,8 @@ fn labels_match_cli_wire_values() {
         "example-browser-smoke"
     );
     assert_eq!(
-        TestSuiteId::BenchmarkBrowserSmoke.as_str(),
-        "benchmark-browser-smoke"
+        TestSuiteId::PlaygroundBrowserSmoke.as_str(),
+        "playground-browser-smoke"
     );
     assert_eq!(DemoName::ProactiveUi.slug(), "proactive-ui");
     assert_eq!(DemoServeMode::Dev.as_str(), "dev");

@@ -27,7 +27,7 @@ cargo xtask test unit suite demos
 cargo xtask test unit suite node-package --backend cpu
 cargo xtask test unit suite python-package --backend cpu
 cargo xtask test smoke suite example-node --backend cpu
-cargo xtask test smoke suite benchmark-browser
+cargo xtask test smoke suite playground-browser
 cargo xtask test smoke group examples --backend cpu
 cargo xtask test smoke group local-model --backend cpu
 cargo xtask test smoke group full --backend cpu
@@ -85,7 +85,7 @@ example smoke accept repeated `--case query|chat`.
 | `cargo xtask test smoke suite example-node` | Node `query.mjs`/`chat.mjs` examples | `examples/node` |
 | `cargo xtask test smoke suite example-python` | Python `query.py`/`chat.py` examples | `examples/python` |
 | `cargo xtask test smoke suite example-browser` | Browser `query.html`/`chat.html` examples through Playwright | `examples/web` |
-| `cargo xtask test smoke suite benchmark-browser` | Browser runtime benchmark smoke through Playwright | `benchmarks/browser` |
+| `cargo xtask test smoke suite playground-browser` | Browser playground runtime smoke through Playwright | `tools/playground` |
 | `cargo xtask test smoke suite provider-gateway` | Hermetic fake-provider gateway smoke | `crates/gateway`, `crates/gateway-providers` |
 | `cargo xtask test smoke suite llama-backend-ops` | llama.cpp backend operation correctness smoke | `third_party/llama.cpp` |
 
@@ -95,11 +95,11 @@ example smoke accept repeated `--case query|chat`.
 | --- | --- |
 | `cargo xtask test smoke group examples` | `example-rust`, `example-node`, `example-python`, and `example-browser` |
 | `cargo xtask test smoke group local-model` | `cli`, `example-rust`, `example-node`, and `example-python` |
-| `cargo xtask test smoke group full` | Every smoke suite, including benchmark, gateway, and llama checks |
+| `cargo xtask test smoke group full` | Every smoke suite, including playground, gateway, and llama checks |
 
 Use `cargo xtask run examples serve browser` to manually serve browser examples,
-and `cargo xtask run benchmarks serve browser` to manually serve the benchmark
-app. Benchmark validation remains under `test smoke suite benchmark-browser`.
+and `cargo xtask run tools serve playground` to manually serve the playground.
+Playground validation remains under `test smoke suite playground-browser`.
 
 `test unit` and `test smoke` print a final suite and test/check summary, then
 write `.build/test/run-report.json` and `.build/test/run-report.md`.

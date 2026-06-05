@@ -283,7 +283,7 @@ fn root_javascript_package_dirs(ctx: &BuildContext, profile: SetupProfile) -> Re
 fn browser_javascript_package_dirs(ctx: &BuildContext) -> Result<Vec<PathBuf>> {
     let mut dirs = vec![ctx.browser_package_dir(), ctx.browser_example_dir()];
     dirs.extend(ctx.demo_dirs()?);
-    dirs.extend(ctx.benchmark_dirs()?);
+    dirs.extend(ctx.tool_dirs()?);
     Ok(dirs)
 }
 

@@ -3,24 +3,6 @@
   "configVersion": 1,
   "workspaces": {
     "": {},
-    "benchmarks/browser": {
-      "name": "cogentlm-browser-benchmark",
-      "version": "0.0.1",
-      "dependencies": {
-        "@noumena-labs/cogentlm": "workspace:*",
-        "react": "^19.2.4",
-        "react-dom": "^19.2.4",
-        "scheduler": "^0.27.0",
-      },
-      "devDependencies": {
-        "@types/react": "^19.2.14",
-        "@types/react-dom": "^19.2.3",
-        "@vitejs/plugin-react": "^4.3",
-        "playwright-core": "^1.54.2",
-        "typescript": "^6.0.2",
-        "vite": "^5.4.0",
-      },
-    },
     "demos/avatar": {
       "name": "cogentlm-avatar-demo",
       "version": "0.0.1",
@@ -115,6 +97,24 @@
         "@types/node": "^20.10.0",
         "playwright": "^1.56.1",
         "typescript": "^5.3.3",
+      },
+    },
+    "tools/playground": {
+      "name": "cogentlm-browser-playground",
+      "version": "0.0.1",
+      "dependencies": {
+        "@noumena-labs/cogentlm": "workspace:*",
+        "react": "^19.2.4",
+        "react-dom": "^19.2.4",
+        "scheduler": "^0.27.0",
+      },
+      "devDependencies": {
+        "@types/react": "^19.2.14",
+        "@types/react-dom": "^19.2.3",
+        "@vitejs/plugin-react": "^4.3",
+        "playwright-core": "^1.54.2",
+        "typescript": "^6.0.2",
+        "vite": "^5.4.0",
       },
     },
   },
@@ -533,7 +533,7 @@
 
     "cogentlm-avatar-demo": ["cogentlm-avatar-demo@workspace:demos/avatar"],
 
-    "cogentlm-browser-benchmark": ["cogentlm-browser-benchmark@workspace:benchmarks/browser"],
+    "cogentlm-browser-playground": ["cogentlm-browser-playground@workspace:tools/playground"],
 
     "cogentlm-chat-demo": ["cogentlm-chat-demo@workspace:demos/chat"],
 
@@ -745,7 +745,7 @@
 
     "cogentlm-avatar-demo/typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
 
-    "cogentlm-browser-benchmark/typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
+    "cogentlm-browser-playground/typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
 
     "cogentlm-proactive-ui-demo/typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
 

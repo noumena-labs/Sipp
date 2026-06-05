@@ -57,7 +57,7 @@ fn generated_dirs_include_every_workspace_output_name() {
 fn clean_targets_include_generated_dirs_and_optional_purge_roots() {
     let temp = TempDir::new("clean-targets");
     temp.create_dir("demos/chat");
-    temp.create_dir("benchmarks/browser");
+    temp.create_dir("tools/playground");
     temp.create_dir("lib/web");
     let ctx = BuildContext::from_workspace_root_for_test(temp.path());
 
@@ -72,7 +72,7 @@ fn clean_targets_include_generated_dirs_and_optional_purge_roots() {
     .unwrap();
     assert!(base.contains(&ctx.cargo_build_root()));
     assert!(base.contains(&ctx.demo_dir("chat").join("dist")));
-    assert!(base.contains(&ctx.benchmark_browser_dir().join(".vite")));
+    assert!(base.contains(&ctx.playground_dir().join(".vite")));
     assert!(base.contains(&ctx.browser_package_dir().join("dist")));
     assert!(!base.contains(&ctx.workspace_root().join("node_modules")));
     assert!(!base.contains(&ctx.toolchain_dir()));
@@ -89,7 +89,7 @@ fn clean_targets_include_generated_dirs_and_optional_purge_roots() {
     assert!(expanded.contains(&ctx.workspace_root().join("node_modules")));
     assert!(expanded.contains(&ctx.bindings_node_dir().join("node_modules")));
     assert!(expanded.contains(&ctx.demo_dir("chat").join("node_modules")));
-    assert!(expanded.contains(&ctx.benchmark_browser_dir().join("node_modules")));
+    assert!(expanded.contains(&ctx.playground_dir().join("node_modules")));
     assert!(expanded.contains(&ctx.toolchain_dir()));
 }
 

@@ -328,7 +328,7 @@ fn smoke_groups_expand_to_expected_suites() {
             target: TestSmokeGroupTarget::Full(TestSmokeFullGroupArgs {
                 model: model_args,
                 example_browser_timeout_ms: 30_000,
-                benchmark_browser_timeout_ms: 30_000,
+                playground_browser_timeout_ms: 30_000,
             }),
         }),
     })
@@ -341,7 +341,7 @@ fn smoke_groups_expand_to_expected_suites() {
             TestSuiteId::NodeSmoke,
             TestSuiteId::PythonSmoke,
             TestSuiteId::ExampleBrowserSmoke,
-            TestSuiteId::BenchmarkBrowserSmoke,
+            TestSuiteId::PlaygroundBrowserSmoke,
             TestSuiteId::ProviderGatewaySmoke,
             TestSuiteId::LlamaBackendOps
         ]
@@ -684,7 +684,7 @@ fn old_run_test_commands_are_rejected() {
 }
 
 #[test]
-fn run_keeps_demo_example_benchmark_and_llama_groups() {
+fn run_keeps_demo_example_tool_and_llama_groups() {
     let cli = Cli::parse_from(["xtask", "run", "demos", "build", "chat"]);
     let Commands::Run { command } = cli.command else {
         panic!("expected run command");
@@ -697,11 +697,11 @@ fn run_keeps_demo_example_benchmark_and_llama_groups() {
     };
     assert!(matches!(command, RunCommands::Examples { .. }));
 
-    let cli = Cli::parse_from(["xtask", "run", "benchmarks", "build", "browser"]);
+    let cli = Cli::parse_from(["xtask", "run", "tools", "build", "playground"]);
     let Commands::Run { command } = cli.command else {
         panic!("expected run command");
     };
-    assert!(matches!(command, RunCommands::Benchmarks { .. }));
+    assert!(matches!(command, RunCommands::Tools { .. }));
 
     let cli = Cli::parse_from(["xtask", "run", "llama", "backend-ops"]);
     let Commands::Run { command } = cli.command else {

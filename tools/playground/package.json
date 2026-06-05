@@ -1,5 +1,5 @@
 {
-  "name": "cogentlm-browser-benchmark",
+  "name": "cogentlm-browser-playground",
   "private": true,
   "version": "0.0.1",
   "type": "module",
@@ -7,8 +7,8 @@
     "dev": "bunx --bun vite",
     "build": "bunx --bun vite build",
     "preview": "bunx --bun vite preview",
-    "browser:smoke": "node ./scripts/browser-runtime-smoke.mjs",
-    "browser:smoke:ingest": "node ./scripts/browser-runtime-smoke.mjs --require-rust-browser-engine --require-gguf-ingest"
+    "browser:smoke": "node ./scripts/playground-runtime-smoke.mjs",
+    "browser:smoke:ingest": "node ./scripts/playground-runtime-smoke.mjs --require-rust-browser-engine --require-gguf-ingest"
   },
   "dependencies": {
     "@noumena-labs/cogentlm": "workspace:*",

@@ -4,13 +4,13 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import { cogentClientDistWatch } from '../../demos/cogentlm-dist-watch';
 
-const benchmarkAppDir = fileURLToPath(new URL('.', import.meta.url));
+const playgroundAppDir = fileURLToPath(new URL('.', import.meta.url));
 const cogentClientDistDir = path.resolve(
-  benchmarkAppDir,
+  playgroundAppDir,
   '../../.build/artifacts/npm/cogentlm/dist/esm'
 );
 const cogentClientEntry = path.join(cogentClientDistDir, 'index.js');
-const appOutDir = path.resolve(benchmarkAppDir, '../../.build/artifacts/benchmarks/browser');
+const appOutDir = path.resolve(playgroundAppDir, '../../.build/artifacts/tools/playground');
 
 export default defineConfig({
   plugins: [react(), cogentClientDistWatch()],

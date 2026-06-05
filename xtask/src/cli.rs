@@ -29,7 +29,7 @@ Start with:
   cargo xtask clean --dry-run
   cargo xtask run --help
   cargo xtask run examples serve browser
-  cargo xtask run benchmarks serve browser
+  cargo xtask run tools serve playground
   cargo xtask test --help
   cargo xtask test unit group full
   cargo xtask test smoke group examples --backend cpu
@@ -69,15 +69,15 @@ Examples:
   cargo xtask run demos build chat
   cargo xtask run demos serve avatar --port 5173
   cargo xtask run examples serve browser --port 5173
-  cargo xtask run benchmarks build browser
-  cargo xtask run benchmarks serve browser --mode preview --port 4173
+  cargo xtask run tools build playground
+  cargo xtask run tools serve playground --mode preview --port 4173
   cargo xtask run llama backend-ops --backend cpu --mode support
   cargo xtask run llama backend-ops --backend cuda --mode perf --op MUL_MAT
 
 Notes:
   Test execution, smoke checks, and coverage live under `cargo xtask test`.
   Serve commands are intentionally long-running and start Vite servers.
-  Benchmark validation lives under `cargo xtask test smoke suite benchmark-browser`.";
+  Playground validation lives under `cargo xtask test smoke suite playground-browser`.";
 
 const RUN_DEMOS_HELP: &str = "\
 Build or serve individual browser demos.
@@ -114,16 +114,16 @@ The browser example lives under examples/web and mirrors the public CogentClient
 query, chat, embed, and remote gateway examples. Browser example smoke lives
 under `cargo xtask test smoke suite example-browser`.";
 
-const RUN_BENCHMARKS_HELP: &str = "\
-Build or serve benchmark apps.
+const RUN_TOOLS_HELP: &str = "\
+Build or serve developer tools.
 
 Examples:
-  cargo xtask run benchmarks build browser
-  cargo xtask run benchmarks serve browser
-  cargo xtask run benchmarks serve browser --mode preview --port 4173
+  cargo xtask run tools build playground
+  cargo xtask run tools serve playground
+  cargo xtask run tools serve playground --mode preview --port 4173
 
-The browser benchmark lives under benchmarks/browser. Benchmark smoke stays in
-the test namespace: `cargo xtask test smoke suite benchmark-browser`.";
+The browser playground lives under tools/playground. Playground smoke stays in
+the test namespace: `cargo xtask test smoke suite playground-browser`.";
 
 const SMOKE_HELP: &str = "\
 Run holistic smoke checks through explicit suite and group namespaces.
@@ -131,13 +131,13 @@ Run holistic smoke checks through explicit suite and group namespaces.
 Examples:
   cargo xtask test smoke suite example-node --backend cpu --case query
   cargo xtask test smoke suite example-browser --case chat
-  cargo xtask test smoke suite benchmark-browser --require-webgpu
+  cargo xtask test smoke suite playground-browser --require-webgpu
   cargo xtask test smoke group examples --backend cpu
   cargo xtask test smoke group local-model --backend cpu
   cargo xtask test smoke group full --backend cpu
 
 Use `suite` for one concrete smoke target and `group` for a named bundle.
-Benchmark serving lives under `cargo xtask run benchmarks serve browser`.";
+Playground serving lives under `cargo xtask run tools serve playground`.";
 
 const SMOKE_SUITE_HELP: &str = "\
 Run exactly one smoke suite.
@@ -148,7 +148,7 @@ Suites and code locations:
   example-node        examples/node query.mjs/chat.mjs
   example-python      examples/python query.py/chat.py
   example-browser     examples/web query/chat pages through Playwright
-  benchmark-browser   benchmarks/browser runtime smoke through Playwright
+  playground-browser  tools/playground runtime smoke through Playwright
   provider-gateway    crates/gateway provider gateway integration test
   llama-backend-ops   third_party/llama.cpp test-backend-ops";
 
@@ -158,7 +158,7 @@ Run a named bundle of smoke suites.
 Groups:
   examples     Rust, Node, Python, and browser onboarding examples
   local-model  CLI plus Rust, Node, and Python local model smoke
-  full         every smoke suite, including benchmark, gateway, and llama checks";
+  full         every smoke suite, including playground, gateway, and llama checks";
 
 const UNIT_HELP: &str = "\
 Run deterministic tests through explicit suite and group namespaces.
@@ -206,7 +206,7 @@ Examples:
   cargo xtask test unit suite rust-crates --package cogentlm-core
   cargo xtask test unit suite node-package --backend cpu
   cargo xtask test smoke suite example-node --backend cpu
-  cargo xtask test smoke suite benchmark-browser
+  cargo xtask test smoke suite playground-browser
   cargo xtask test smoke group local-model --backend cpu
   cargo xtask test verify --changed
 
@@ -445,13 +445,13 @@ pub enum RunCommands {
         command: RunExamplesCommands,
     },
 
-    /// Build or serve benchmark apps.
-    #[command(long_about = RUN_BENCHMARKS_HELP)]
+    /// Build or serve developer tools.
+    #[command(long_about = RUN_TOOLS_HELP)]
     #[command(arg_required_else_help = true)]
-    Benchmarks {
-        /// Benchmark workflow to run.
+    Tools {
+        /// Tool workflow to run.
         #[command(subcommand)]
-        command: RunBenchmarksCommands,
+        command: RunToolsCommands,
     },
 
     /// Build and run standalone llama.cpp diagnostics.
@@ -652,9 +652,9 @@ pub enum TestSmokeSuiteTarget {
     /// Run browser query/chat examples under examples/web through Playwright.
     #[command(name = "example-browser")]
     ExampleBrowser(TestSmokeExampleBrowserArgs),
-    /// Run benchmark browser runtime smoke under benchmarks/browser.
-    #[command(name = "benchmark-browser")]
-    BenchmarkBrowser(TestSmokeBenchmarkBrowserArgs),
+    /// Run playground browser runtime smoke under tools/playground.
+    #[command(name = "playground-browser")]
+    PlaygroundBrowser(TestSmokePlaygroundBrowserArgs),
     /// Run hermetic provider-backed gateway smoke tests.
     ProviderGateway,
     /// Run llama.cpp backend operation smoke.
@@ -793,9 +793,9 @@ pub struct TestSmokeFullGroupArgs {
     #[arg(long, default_value = "30000")]
     pub example_browser_timeout_ms: u64,
 
-    /// Benchmark browser smoke timeout in milliseconds.
+    /// Playground browser smoke timeout in milliseconds.
     #[arg(long, default_value = "30000")]
-    pub benchmark_browser_timeout_ms: u64,
+    pub playground_browser_timeout_ms: u64,
 }
 
 /// Model-backed example smoke cases.
@@ -817,14 +817,14 @@ impl TestSmokeCase {
     }
 }
 
-/// Benchmark browser smoke options.
+/// Playground browser smoke options.
 #[derive(Args)]
-pub struct TestSmokeBenchmarkBrowserArgs {
-    /// Host used for the benchmark Vite server.
+pub struct TestSmokePlaygroundBrowserArgs {
+    /// Host used for the playground Vite server.
     #[arg(long)]
     pub host: Option<String>,
 
-    /// Port used for the benchmark Vite server.
+    /// Port used for the playground Vite server.
     #[arg(long)]
     pub port: Option<u16>,
 
@@ -1013,8 +1013,8 @@ pub enum TestSuiteId {
     ProviderGatewaySmoke,
     /// Browser example smoke tests.
     ExampleBrowserSmoke,
-    /// Benchmark browser runtime smoke tests.
-    BenchmarkBrowserSmoke,
+    /// Playground browser runtime smoke tests.
+    PlaygroundBrowserSmoke,
     /// llama.cpp backend operation tests.
     LlamaBackendOps,
 }
@@ -1038,7 +1038,7 @@ impl TestSuiteId {
             TestSuiteId::PythonSmoke => "python-smoke",
             TestSuiteId::ProviderGatewaySmoke => "provider-gateway-smoke",
             TestSuiteId::ExampleBrowserSmoke => "example-browser-smoke",
-            TestSuiteId::BenchmarkBrowserSmoke => "benchmark-browser-smoke",
+            TestSuiteId::PlaygroundBrowserSmoke => "playground-browser-smoke",
             TestSuiteId::LlamaBackendOps => "llama-backend-ops",
         }
     }
@@ -1165,30 +1165,30 @@ impl ExampleName {
     }
 }
 
-/// Benchmark run workflows.
+/// Developer tool run workflows.
 #[derive(Subcommand)]
-pub enum RunBenchmarksCommands {
-    /// Build one benchmark app.
-    Build(RunBenchmarkBuildArgs),
+pub enum RunToolsCommands {
+    /// Build one developer tool.
+    Build(RunToolBuildArgs),
 
     /// Start one long-running Vite dev or preview server.
-    Serve(RunBenchmarkServeArgs),
+    Serve(RunToolServeArgs),
 }
 
-/// Options for building a benchmark app.
+/// Options for building a developer tool.
 #[derive(Args)]
-pub struct RunBenchmarkBuildArgs {
-    /// Benchmark to build.
+pub struct RunToolBuildArgs {
+    /// Tool to build.
     #[arg(value_enum)]
-    pub benchmark: BenchmarkName,
+    pub tool: ToolName,
 }
 
-/// Options for serving a benchmark app.
+/// Options for serving a developer tool.
 #[derive(Args)]
-pub struct RunBenchmarkServeArgs {
-    /// Benchmark to serve.
+pub struct RunToolServeArgs {
+    /// Tool to serve.
     #[arg(value_enum)]
-    pub benchmark: BenchmarkName,
+    pub tool: ToolName,
 
     /// Vite server mode to run.
     #[arg(long, value_enum, default_value = "dev")]
@@ -1207,18 +1207,18 @@ pub struct RunBenchmarkServeArgs {
     pub no_build: bool,
 }
 
-/// Benchmarks known to xtask.
+/// Developer tools known to xtask.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub enum BenchmarkName {
-    /// Browser benchmark under benchmarks/browser.
-    Browser,
+pub enum ToolName {
+    /// Browser playground under tools/playground.
+    Playground,
 }
 
-impl BenchmarkName {
-    /// Directory name under `benchmarks`.
+impl ToolName {
+    /// Directory name under `tools`.
     pub(crate) fn slug(&self) -> &'static str {
         match self {
-            BenchmarkName::Browser => "browser",
+            ToolName::Playground => "playground",
         }
     }
 }
@@ -1323,7 +1323,7 @@ impl LlamaBackendOpsOutput {
 /// Cleanup options for generated workspace artifacts.
 #[derive(Args)]
 pub struct CleanArgs {
-    /// Also delete root/demo/benchmark/package/node binding node_modules directories.
+    /// Also delete root/demo/tool/package/node binding node_modules directories.
     #[arg(long)]
     pub purge: bool,
 

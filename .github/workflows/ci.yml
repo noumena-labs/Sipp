@@ -121,9 +121,9 @@ jobs:
             lib/node/node_modules
             bindings/node/node_modules
             demos/*/node_modules
-            benchmarks/*/node_modules
+            tools/*/node_modules
             examples/web/node_modules
-          key: bun-ci-${{ runner.os }}-${{ hashFiles('bun.lock', 'bindings/node/bun.lock', 'package.json', 'lib/node/package.json', 'lib/web/package.json', 'bindings/node/package.json', 'demos/*/package.json', 'benchmarks/*/package.json', 'examples/web/package.json') }}
+          key: bun-ci-${{ runner.os }}-${{ hashFiles('bun.lock', 'bindings/node/bun.lock', 'package.json', 'lib/node/package.json', 'lib/web/package.json', 'bindings/node/package.json', 'demos/*/package.json', 'tools/*/package.json', 'examples/web/package.json') }}
           restore-keys: |
             bun-ci-${{ runner.os }}-
 

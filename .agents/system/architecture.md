@@ -1,6 +1,6 @@
 # CogentLM Architecture Guide
 
-The CogentLM monorepo is organized around public surfaces, internal runtime code, language bindings, demos, benchmarks, and onboarding examples.
+The CogentLM monorepo is organized around public surfaces, internal runtime code, language bindings, demos, developer tools, and onboarding examples.
 
 ## 1. Rust Native Core (`crates/`)
 The native engine is broken down into modular crates.
@@ -29,7 +29,7 @@ These directories contain the bridge code between the Rust core and other langua
 - **`lib/node`**: Publishes `@noumena-labs/cogentlm-server` and the public `cogentlm-server` Node package. Runtime JS, router files, package tests, and staging scripts live here.
 - **`lib/python`**: Publishes Python `cogentlm`. The Python package files and tests live here while the PyO3 Rust crate remains in `bindings/python`.
 
-## 4. Demos, Benchmarks, And Examples
+## 4. Demos, Tools, And Examples
 - **`demos/`**: Browser demos such as `chat`, `avatar`, `proactive-ui`, and `simulation`.
-- **`benchmarks/browser`**: Browser benchmark and Playwright browser runtime smoke harness.
+- **`tools/playground`**: Browser playground and Playwright browser runtime smoke harness.
 - **`examples/node`**, **`examples/python`**, **`examples/rust`**, and **`examples/web`**: Runnable onboarding examples for public package surfaces.

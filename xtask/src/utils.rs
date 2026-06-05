@@ -150,8 +150,8 @@ impl BuildContext {
         self.artifacts_root().join("examples").join(example)
     }
 
-    pub(crate) fn benchmark_artifacts_dir(&self, benchmark: &str) -> PathBuf {
-        self.artifacts_root().join("benchmarks").join(benchmark)
+    pub(crate) fn tool_artifacts_dir(&self, tool: &str) -> PathBuf {
+        self.artifacts_root().join("tools").join(tool)
     }
 
     pub(crate) fn toolchain_dir(&self) -> PathBuf {
@@ -186,8 +186,8 @@ impl BuildContext {
         self.workspace_root.join("examples")
     }
 
-    pub(crate) fn benchmarks_root(&self) -> PathBuf {
-        self.workspace_root.join("benchmarks")
+    pub(crate) fn tools_root(&self) -> PathBuf {
+        self.workspace_root.join("tools")
     }
 
     pub(crate) fn bindings_node_dir(&self) -> PathBuf {
@@ -211,7 +211,7 @@ impl BuildContext {
     }
 
     fn playwright_core_cli(&self) -> Result<PathBuf> {
-        let benchmark_dir = self.benchmark_browser_dir();
+        let playground_dir = self.playground_dir();
         let output = Command::new("node")
             .arg("-e")
             .arg(
@@ -219,18 +219,18 @@ impl BuildContext {
                  const entry = require.resolve('playwright-core', { paths: [process.cwd()] }); \
                  console.log(path.join(path.dirname(entry), 'cli.js'));",
             )
-            .current_dir(&benchmark_dir)
+            .current_dir(&playground_dir)
             .output()
             .with_context(|| {
                 format!(
                     "failed to resolve Playwright Core CLI from {}",
-                    benchmark_dir.display()
+                    playground_dir.display()
                 )
             })?;
         if !output.status.success() {
             anyhow::bail!(
                 "failed to resolve Playwright Core CLI from {}: {}",
-                benchmark_dir.display(),
+                playground_dir.display(),
                 String::from_utf8_lossy(&output.stderr).trim()
             );
         }
@@ -249,7 +249,7 @@ impl BuildContext {
 
     fn playwright_chromium_executable(&self) -> Result<(PathBuf, bool)> {
         let browsers_dir = self.playwright_browsers_dir();
-        let benchmark_dir = self.benchmark_browser_dir();
+        let playground_dir = self.playground_dir();
         let output = Command::new("node")
             .arg("-e")
             .arg(
@@ -259,7 +259,7 @@ impl BuildContext {
                  console.log(executable); \
                  console.log(fs.existsSync(executable) ? 'true' : 'false');",
             )
-            .current_dir(&benchmark_dir)
+            .current_dir(&playground_dir)
             .env("PLAYWRIGHT_BROWSERS_PATH", &browsers_dir)
             .output()
             .context("failed to query Playwright Chromium executable path")?;
@@ -295,12 +295,12 @@ impl BuildContext {
         self.examples_root().join("web")
     }
 
-    pub(crate) fn benchmark_browser_dir(&self) -> PathBuf {
-        self.benchmarks_root().join("browser")
+    pub(crate) fn playground_dir(&self) -> PathBuf {
+        self.tools_root().join("playground")
     }
 
-    pub(crate) fn benchmark_dirs(&self) -> Result<Vec<PathBuf>> {
-        read_child_dirs(&self.benchmarks_root())
+    pub(crate) fn tool_dirs(&self) -> Result<Vec<PathBuf>> {
+        read_child_dirs(&self.tools_root())
     }
 
     pub(crate) fn js_package_dirs(&self) -> Vec<PathBuf> {
@@ -369,7 +369,7 @@ pub(crate) fn ensure_playwright_chromium(sh: &Shell, ctx: &BuildContext) -> Resu
         );
     }
 
-    let _dir = sh.push_dir(ctx.benchmark_browser_dir());
+    let _dir = sh.push_dir(ctx.playground_dir());
     let browsers_dir = ctx.playwright_browsers_dir();
     output::run_command(
         "Installing Playwright Chromium",

@@ -1,9 +1,9 @@
 //! Developer run workflows for long-lived demos and non-test diagnostics.
 
 use crate::cli::{
-    Backend, BenchmarkName, DemoName, DemoServeMode, ExampleName, LlamaBackendOpsMode,
-    RunBenchmarkServeArgs, RunBenchmarksCommands, RunCommands, RunDemoServeArgs, RunDemosCommands,
-    RunExampleServeArgs, RunExamplesCommands, RunLlamaBackendOpsArgs, RunLlamaCommands,
+    Backend, DemoName, DemoServeMode, ExampleName, LlamaBackendOpsMode, RunCommands,
+    RunDemoServeArgs, RunDemosCommands, RunExampleServeArgs, RunExamplesCommands,
+    RunLlamaBackendOpsArgs, RunLlamaCommands, RunToolServeArgs, RunToolsCommands, ToolName,
 };
 use crate::javascript;
 use crate::output;
@@ -33,7 +33,7 @@ pub fn run(sh: &Shell, ctx: &BuildContext, command: RunCommands) -> Result<()> {
     match command {
         RunCommands::Demos { command } => run_demos(sh, ctx, command),
         RunCommands::Examples { command } => run_examples(sh, ctx, command),
-        RunCommands::Benchmarks { command } => run_benchmarks(sh, ctx, command),
+        RunCommands::Tools { command } => run_tools(sh, ctx, command),
         RunCommands::Llama { command } => run_llama(sh, ctx, command),
     }
 }
@@ -51,10 +51,10 @@ fn run_examples(sh: &Shell, ctx: &BuildContext, command: RunExamplesCommands) ->
     }
 }
 
-fn run_benchmarks(sh: &Shell, ctx: &BuildContext, command: RunBenchmarksCommands) -> Result<()> {
+fn run_tools(sh: &Shell, ctx: &BuildContext, command: RunToolsCommands) -> Result<()> {
     match command {
-        RunBenchmarksCommands::Build(args) => build_one_benchmark(sh, ctx, args.benchmark),
-        RunBenchmarksCommands::Serve(args) => serve_benchmark(sh, ctx, &args),
+        RunToolsCommands::Build(args) => build_one_tool(sh, ctx, args.tool),
+        RunToolsCommands::Serve(args) => serve_tool(sh, ctx, &args),
     }
 }
 
@@ -132,40 +132,37 @@ fn serve_demo(sh: &Shell, ctx: &BuildContext, args: &RunDemoServeArgs) -> Result
     .with_context(|| format!("{} demo server failed", args.demo.slug()))
 }
 
-fn build_one_benchmark(sh: &Shell, ctx: &BuildContext, benchmark: BenchmarkName) -> Result<()> {
-    output::phase(&format!("Build benchmark: {}", benchmark.slug()));
-    ensure_javascript_workspace_dependencies(sh, ctx, &benchmark_dir(ctx, benchmark))?;
+fn build_one_tool(sh: &Shell, ctx: &BuildContext, tool: ToolName) -> Result<()> {
+    output::phase(&format!("Build tool: {}", tool.slug()));
+    ensure_javascript_workspace_dependencies(sh, ctx, &tool_dir(ctx, tool))?;
     targets::wasm::build(sh, ctx)?;
-    build_benchmark_only(sh, ctx, benchmark)
+    build_tool_only(sh, ctx, tool)
 }
 
-fn build_benchmark_only(sh: &Shell, ctx: &BuildContext, benchmark: BenchmarkName) -> Result<()> {
-    let benchmark_dir = benchmark_dir(ctx, benchmark);
-    output::phase(&format!("Benchmark build: {}", benchmark.slug()));
-    output::path("Benchmark workspace", &benchmark_dir);
-    output::path(
-        "Artifact directory",
-        &ctx.benchmark_artifacts_dir(benchmark.slug()),
-    );
+fn build_tool_only(sh: &Shell, ctx: &BuildContext, tool: ToolName) -> Result<()> {
+    let tool_dir = tool_dir(ctx, tool);
+    output::phase(&format!("Tool build: {}", tool.slug()));
+    output::path("Tool workspace", &tool_dir);
+    output::path("Artifact directory", &ctx.tool_artifacts_dir(tool.slug()));
 
-    let _dir = sh.push_dir(&benchmark_dir);
+    let _dir = sh.push_dir(&tool_dir);
     output::run_build_command(
-        format!("Building {} benchmark", benchmark.slug()),
+        format!("Building {} tool", tool.slug()),
         cmd!(sh, "bun run build"),
     )
-    .with_context(|| format!("failed to build {} benchmark", benchmark.slug()))
+    .with_context(|| format!("failed to build {} tool", tool.slug()))
 }
 
-fn serve_benchmark(sh: &Shell, ctx: &BuildContext, args: &RunBenchmarkServeArgs) -> Result<()> {
-    output::phase(&format!("Serve benchmark: {}", args.benchmark.slug()));
+fn serve_tool(sh: &Shell, ctx: &BuildContext, args: &RunToolServeArgs) -> Result<()> {
+    output::phase(&format!("Serve tool: {}", args.tool.slug()));
     output::detail("Mode", args.mode.as_str());
-    output::path("Benchmark workspace", &benchmark_dir(ctx, args.benchmark));
+    output::path("Tool workspace", &tool_dir(ctx, args.tool));
 
     if !args.no_build {
-        ensure_javascript_workspace_dependencies(sh, ctx, &benchmark_dir(ctx, args.benchmark))?;
+        ensure_javascript_workspace_dependencies(sh, ctx, &tool_dir(ctx, args.tool))?;
         targets::wasm::build(sh, ctx)?;
         if matches!(args.mode, DemoServeMode::Preview) {
-            build_benchmark_only(sh, ctx, args.benchmark)?;
+            build_tool_only(sh, ctx, args.tool)?;
         }
     } else {
         output::warning("Skipping browser package build before serving");
@@ -173,16 +170,16 @@ fn serve_benchmark(sh: &Shell, ctx: &BuildContext, args: &RunBenchmarkServeArgs)
 
     serve_vite_workspace(
         sh,
-        &benchmark_dir(ctx, args.benchmark),
+        &tool_dir(ctx, args.tool),
         args.mode,
         args.host.as_deref(),
         args.port,
         format!(
-            "Starting {} Vite server for {} benchmark",
+            "Starting {} Vite server for {} tool",
             args.mode.as_str(),
-            args.benchmark.slug()
+            args.tool.slug()
         ),
-        format!("{} benchmark server failed", args.benchmark.slug()),
+        format!("{} tool server failed", args.tool.slug()),
     )
 }
 
@@ -376,9 +373,9 @@ fn example_dir(ctx: &BuildContext, example: ExampleName) -> PathBuf {
     }
 }
 
-fn benchmark_dir(ctx: &BuildContext, benchmark: BenchmarkName) -> PathBuf {
-    match benchmark {
-        BenchmarkName::Browser => ctx.benchmark_browser_dir(),
+fn tool_dir(ctx: &BuildContext, tool: ToolName) -> PathBuf {
+    match tool {
+        ToolName::Playground => ctx.playground_dir(),
     }
 }
 

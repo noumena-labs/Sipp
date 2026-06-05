@@ -6,7 +6,7 @@
 use xtask::cli::{
     Backend, BackendArgs, BuildCommands, CleanArgs, Commands, DemoServeMode, ExampleName,
     RunCommands, RunExampleServeArgs, RunExamplesCommands, TestCommands, TestGroupFilter,
-    TestListArgs, TestListFormat, TestSmokeArgs, TestSmokeBenchmarkBrowserArgs, TestSmokeCommands,
+    TestListArgs, TestListFormat, TestSmokeArgs, TestSmokeCommands, TestSmokePlaygroundBrowserArgs,
     TestSmokeSuiteArgs, TestSmokeSuiteTarget, TestUnitArgs, TestUnitCommands, TestUnitGroupArgs,
     TestUnitGroupTarget, TestVerifyArgs, TestVerifyTarget,
 };
@@ -57,7 +57,7 @@ fn test_summary_labels_test_subcommands() {
     assert_eq!(
         test_summary(&TestCommands::Smoke(TestSmokeArgs {
             command: TestSmokeCommands::Suite(TestSmokeSuiteArgs {
-                target: TestSmokeSuiteTarget::BenchmarkBrowser(TestSmokeBenchmarkBrowserArgs {
+                target: TestSmokeSuiteTarget::PlaygroundBrowser(TestSmokePlaygroundBrowserArgs {
                     host: None,
                     port: None,
                     timeout_ms: 30_000,

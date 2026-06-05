@@ -19,7 +19,7 @@ Python, and Rust applications.
 * `lib/web`: browser package source for `@noumena-labs/cogentlm`.
 * `lib/node`: Node package source for `@noumena-labs/cogentlm-server`.
 * `demos`: browser demos, served with `cargo xtask run demos serve chat`.
-* `benchmarks/browser`: browser benchmark and runtime smoke harness, served with `cargo xtask run benchmarks serve browser`.
+* `tools/playground`: browser runtime playground and diagnostics tool, served with `cargo xtask run tools serve playground`.
 * `examples/node`, `examples/python`, `examples/rust`, `examples/web`: runnable examples; serve browser examples with `cargo xtask run examples serve browser`; see `examples/README.md`.
 
 Use `cargo xtask` commands from this repository to build native artifacts and

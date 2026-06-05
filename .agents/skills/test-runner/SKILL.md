@@ -76,9 +76,9 @@ change.
   ```bash
   cargo xtask test smoke suite example-browser
   ```
-- Run browser benchmark runtime smoke:
+- Run browser playground runtime smoke:
   ```bash
-  cargo xtask test smoke suite benchmark-browser
+  cargo xtask test smoke suite playground-browser
   ```
 - Run CLI, Rust, Node, and Python model-backed smoke:
   ```bash

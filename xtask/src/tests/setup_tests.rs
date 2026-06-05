@@ -93,7 +93,7 @@ fn javascript_package_dirs_match_profile_scope() {
     temp.create_dir("examples/web");
     temp.create_dir("demos/chat");
     temp.create_dir("demos/avatar");
-    temp.create_dir("benchmarks/browser");
+    temp.create_dir("tools/playground");
     let ctx = BuildContext::from_workspace_root_for_test(temp.path());
 
     let browser = root_javascript_package_dirs(&ctx, SetupProfile::Browser).unwrap();
@@ -101,7 +101,7 @@ fn javascript_package_dirs_match_profile_scope() {
     assert!(browser.contains(&temp.join("examples/web")));
     assert!(browser.contains(&temp.join("demos/avatar")));
     assert!(browser.contains(&temp.join("demos/chat")));
-    assert!(browser.contains(&temp.join("benchmarks/browser")));
+    assert!(browser.contains(&temp.join("tools/playground")));
     assert!(!browser.contains(&temp.join("lib/node")));
 
     let bindings = root_javascript_package_dirs(&ctx, SetupProfile::Bindings).unwrap();

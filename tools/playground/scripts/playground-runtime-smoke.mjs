@@ -68,7 +68,7 @@ function parsePositiveInt(value, flag) {
   return parsed;
 }
 
-function benchmarkDir() {
+function playgroundDir() {
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
   return path.resolve(scriptDir, '..');
 }
@@ -151,7 +151,7 @@ function startVite(options) {
     command,
     ['--bun', 'vite', '--host', options.host, '--port', String(options.port), '--strictPort'],
     {
-      cwd: benchmarkDir(),
+      cwd: playgroundDir(),
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
     }
@@ -198,7 +198,7 @@ async function ensureServer(options) {
     return { url, child };
   } catch (error) {
     await closeServer(child);
-    throw new Error(`Benchmark server did not start at ${url}: ${error.message}`);
+    throw new Error(`Playground server did not start at ${url}: ${error.message}`);
   }
 }
 
@@ -230,13 +230,13 @@ async function runBrowserSmoke(options) {
     const page = await browser.newPage();
     page.setDefaultTimeout(options.timeoutMs);
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: options.timeoutMs });
-    await page.waitForFunction(() => window.__cogentBench != null, null, {
+    await page.waitForFunction(() => window.__cogentPlayground != null, null, {
       timeout: options.timeoutMs,
     });
     const result = await withTimeout(
-      page.evaluate(() => window.__cogentBench.runBrowserRuntimeSmoke()),
+      page.evaluate(() => window.__cogentPlayground.runRuntimeSmoke()),
       options.timeoutMs,
-      'Browser runtime smoke'
+      'Playground runtime smoke'
     );
     validateSmoke(result, options);
     return {
