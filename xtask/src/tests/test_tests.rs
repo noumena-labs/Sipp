@@ -20,9 +20,10 @@ use crate::utils::BuildContext;
 
 use super::{
     apply_search_filter, case_counts, catalog_suite_ids, collect_catalog_ownership_violations,
-    collect_files_with_extension, collect_files_with_suffix, contains_test_attribute,
-    coverage_report_areas, discover_cases, display_relative, duration_millis,
-    filtered_rust_targets, is_allowed_rust_test_file, is_cpp_test_file_name,
+    collect_files_with_extension, collect_files_with_suffix, collect_python_public_doc_violations,
+    collect_rust_public_doc_violations, collect_typescript_public_doc_violations,
+    contains_test_attribute, coverage_report_areas, discover_cases, display_relative,
+    duration_millis, filtered_rust_targets, is_allowed_rust_test_file, is_cpp_test_file_name,
     is_first_party_source_path, is_inverted_rust_test_file, is_probable_test_path, list_json_value,
     markdown_cell, normalize_relative_path, parse_junit_case_reports, parse_lcov_summary,
     parse_libtest_case_reports, parse_quoted_test_name, parse_rust_fn_name, parse_tap_case_reports,
@@ -191,6 +192,84 @@ fn test_verify_accepts_target() {
     };
     assert_eq!(args.target, TestVerifyTarget::Whitebox);
     assert!(args.changed);
+}
+
+#[test]
+fn test_verify_accepts_public_docs_target() {
+    let cli = Cli::parse_from(["xtask", "test", "verify", "--target", "public-docs"]);
+
+    let Commands::Test { command } = cli.command else {
+        panic!("expected test command");
+    };
+    let TestCommands::Verify(args) = command else {
+        panic!("expected verify command");
+    };
+    assert_eq!(args.target, TestVerifyTarget::PublicDocs);
+    assert!(!args.changed);
+}
+
+#[test]
+fn public_docs_target_selects_no_coverage_suites() {
+    let args = TestVerifyArgs {
+        target: TestVerifyTarget::PublicDocs,
+        changed: false,
+    };
+
+    assert!(selected_verify_suites(&args).unwrap().is_empty());
+}
+
+#[test]
+fn public_doc_checker_accepts_documented_exports() {
+    let temp = TempDir::new("public-docs-accepts");
+    let rust = temp.write(
+        "lib.rs",
+        "//! Module docs.\n\n/// Exported type.\n#[napi(object)]\npub struct Exported {}\n",
+    );
+    let ts = temp.write(
+        "index.ts",
+        "/** Exported type. */\nexport interface Exported {}\n",
+    );
+    let python = temp.write(
+        "__init__.py",
+        "\"\"\"Module docs.\"\"\"\n\n\ndef exported():\n    \"\"\"Return an exported value.\"\"\"\n    return 1\n",
+    );
+    let mut violations = Vec::new();
+
+    collect_rust_public_doc_violations(&rust, "lib.rs", &mut violations).unwrap();
+    collect_typescript_public_doc_violations(&ts, "index.ts", &mut violations).unwrap();
+    collect_python_public_doc_violations(&python, "__init__.py", &mut violations).unwrap();
+
+    assert!(violations.is_empty(), "{violations:#?}");
+}
+
+#[test]
+fn public_doc_checker_reports_missing_exports() {
+    let temp = TempDir::new("public-docs-reports");
+    let rust = temp.write("lib.rs", "#[napi(object)]\npub struct Exported {}\n");
+    let ts = temp.write("index.ts", "export interface Exported {}\n");
+    let python = temp.write("__init__.py", "def exported():\n    return 1\n");
+    let mut violations = Vec::new();
+
+    collect_rust_public_doc_violations(&rust, "lib.rs", &mut violations).unwrap();
+    collect_typescript_public_doc_violations(&ts, "index.ts", &mut violations).unwrap();
+    collect_python_public_doc_violations(&python, "__init__.py", &mut violations).unwrap();
+
+    assert_eq!(violations.len(), 5);
+    assert!(violations
+        .iter()
+        .any(|violation| violation.contains("missing crate or module rustdoc")));
+    assert!(violations
+        .iter()
+        .any(|violation| violation.contains("missing rustdoc")));
+    assert!(violations
+        .iter()
+        .any(|violation| violation.contains("missing JSDoc/TSDoc")));
+    assert!(violations
+        .iter()
+        .any(|violation| violation.contains("missing module docstring")));
+    assert!(violations
+        .iter()
+        .any(|violation| violation.contains("missing Python docstring")));
 }
 
 #[test]

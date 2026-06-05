@@ -209,6 +209,7 @@ Examples:
   cargo xtask test smoke suite playground-browser
   cargo xtask test smoke group local-model --backend cpu
   cargo xtask test verify --changed
+  cargo xtask test verify --target public-docs
 
 Model-backed smoke tests default to the setup sample model cache under
 .build/models when --model is omitted.
@@ -949,6 +950,8 @@ pub enum TestVerifyTarget {
     Node,
     /// Verify Python package API coverage.
     Python,
+    /// Verify curated public API documentation comments.
+    PublicDocs,
 }
 
 impl TestVerifyTarget {
@@ -967,6 +970,7 @@ impl TestVerifyTarget {
             TestVerifyTarget::Cli => "cli",
             TestVerifyTarget::Node => "node",
             TestVerifyTarget::Python => "python",
+            TestVerifyTarget::PublicDocs => "public-docs",
         }
     }
 }

@@ -1,3 +1,9 @@
+//! PyO3 bindings for the public CogentLM Python package.
+//!
+//! This crate translates Python configuration objects and requests into the
+//! shared Rust client facade while preserving Python-specific validation and
+//! exception surfaces.
+
 use std::{
     collections::HashSet,
     path::PathBuf,
@@ -72,6 +78,7 @@ where
         .unwrap_or_default()
 }
 
+/// Sampling controls used by local text generation.
 #[pyclass(name = "SamplingRuntimeConfig")]
 #[derive(Debug, Clone)]
 struct PySamplingRuntimeConfig {
@@ -208,6 +215,7 @@ impl PySamplingRuntimeConfig {
     }
 }
 
+/// Device placement and memory mapping settings for local model loading.
 #[pyclass(name = "ModelPlacementConfig")]
 #[derive(Debug, Clone)]
 struct PyModelPlacementConfig {
@@ -271,6 +279,7 @@ impl PyModelPlacementConfig {
     }
 }
 
+/// Context, threading, attention, and embedding settings for local runtime use.
 #[pyclass(name = "ContextRuntimeConfig")]
 #[derive(Debug, Clone)]
 struct PyContextRuntimeConfig {
@@ -380,6 +389,7 @@ fn parse_pooling_type(value: &str) -> PyResult<cogentlm_engine::engine::PoolingT
         .ok_or_else(|| PyValueError::new_err(format!("unknown pooling type: {value}")))
 }
 
+/// Scheduler policy knobs for latency, balance, or throughput behavior.
 #[pyclass(name = "SchedulerPolicyConfig")]
 #[derive(Debug, Clone)]
 struct PySchedulerPolicyConfig {
@@ -413,6 +423,7 @@ impl PySchedulerPolicyConfig {
     }
 }
 
+/// Request scheduler and continuous batching settings.
 #[pyclass(name = "SchedulerRuntimeConfig")]
 #[derive(Debug, Clone)]
 struct PySchedulerRuntimeConfig {
@@ -450,6 +461,7 @@ impl PySchedulerRuntimeConfig {
     }
 }
 
+/// Prefix KV-cache reuse and snapshot settings.
 #[pyclass(name = "CacheRuntimeConfig")]
 #[derive(Debug, Clone)]
 struct PyCacheRuntimeConfig {
@@ -487,6 +499,7 @@ impl PyCacheRuntimeConfig {
     }
 }
 
+/// Vision projector and image-token settings for multimodal models.
 #[pyclass(name = "MultimodalRuntimeConfig")]
 #[derive(Debug, Clone)]
 struct PyMultimodalRuntimeConfig {
@@ -514,6 +527,7 @@ impl PyMultimodalRuntimeConfig {
     }
 }
 
+/// GPU residency limits for concurrently loaded local models.
 #[pyclass(name = "ResidencyRuntimeConfig")]
 #[derive(Debug, Clone)]
 struct PyResidencyRuntimeConfig {
@@ -554,6 +568,7 @@ impl PyResidencyRuntimeConfig {
     }
 }
 
+/// Runtime metrics and backend profiling options.
 #[pyclass(name = "ObservabilityRuntimeConfig")]
 #[derive(Debug, Clone)]
 struct PyObservabilityRuntimeConfig {
@@ -574,6 +589,7 @@ impl PyObservabilityRuntimeConfig {
     }
 }
 
+/// Complete native runtime configuration for local model loading.
 #[pyclass(name = "NativeRuntimeConfig")]
 #[derive(Debug, Clone)]
 struct PyNativeRuntimeConfig {
@@ -627,6 +643,7 @@ impl PyNativeRuntimeConfig {
     }
 }
 
+/// Role/content chat message accepted by local and remote chat requests.
 #[pyclass(name = "ChatMessage")]
 #[derive(Debug, Clone)]
 struct PyChatMessage {
@@ -654,6 +671,7 @@ impl PyChatMessage {
     }
 }
 
+/// Address of a local model or remote gateway endpoint registered in a client.
 #[pyclass(name = "EndpointRef")]
 #[derive(Clone)]
 struct PyEndpointRef {
@@ -691,6 +709,7 @@ impl PyEndpointRef {
     }
 }
 
+/// Shared generation options for text-producing requests.
 #[pyclass(name = "CogentTextOptions")]
 #[derive(Clone)]
 struct PyCogentTextOptions {
@@ -724,6 +743,7 @@ impl PyCogentTextOptions {
     }
 }
 
+/// Local-only prompt options such as grammar constraints and image inputs.
 #[pyclass(name = "LocalTextOptions")]
 #[derive(Clone)]
 struct PyLocalTextOptions {
@@ -760,6 +780,7 @@ impl PyLocalTextOptions {
     }
 }
 
+/// Local-only embedding options for context and vector normalization.
 #[pyclass(name = "LocalEmbedOptions")]
 #[derive(Clone)]
 struct PyLocalEmbedOptions {
@@ -786,6 +807,7 @@ impl PyLocalEmbedOptions {
     }
 }
 
+/// Remote CogentLM gateway alias, URL, token, and optional timeout.
 #[pyclass(name = "RemoteGatewayConfig")]
 #[derive(Clone)]
 struct PyRemoteGatewayConfig {
@@ -824,6 +846,7 @@ impl PyRemoteGatewayConfig {
     }
 }
 
+/// Client facade for local CogentLM models and remote gateway aliases.
 #[pyclass(name = "CogentClient")]
 struct PyCogentClient {
     inner: Arc<Mutex<CoreCogentClient>>,
@@ -975,6 +998,7 @@ impl PyCogentClient {
     }
 }
 
+/// Text generation handle with a final response and optional token stream.
 #[pyclass(name = "CogentTextRun")]
 struct PyCogentTextRun {
     response: PySharedClientTextResponse,
@@ -1013,6 +1037,7 @@ impl PyCogentTextRun {
     }
 }
 
+/// Iterator over token batches emitted by a text generation run.
 #[pyclass(name = "CogentTokenIterator")]
 struct PyCogentTokenIterator {
     tokens: PySharedClientTokenBatches,
@@ -1043,6 +1068,7 @@ impl PyCogentTokenIterator {
     }
 }
 
+/// Embedding request handle with a final embedding response.
 #[pyclass(name = "CogentEmbeddingRun")]
 struct PyCogentEmbeddingRun {
     response: PySharedClientEmbeddingResponse,
@@ -1072,17 +1098,20 @@ impl PyCogentEmbeddingRun {
     }
 }
 
+/// Return JSON backend and device observability from the native runtime.
 #[pyfunction]
 #[pyo3(signature = (include_details = true))]
 fn backend_observability_json(include_details: bool) -> PyResult<String> {
     core_backend_observability_json(include_details).map_err(to_py_error)
 }
 
+/// Enable or suppress llama.cpp native logging.
 #[pyfunction]
 fn set_llama_log_quiet(quiet: bool) {
     core_set_llama_log_quiet(quiet);
 }
 
+/// Initialize the native Python extension module.
 #[pymodule]
 fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add(

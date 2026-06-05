@@ -1,3 +1,7 @@
+/**
+ * Browser runtime client and smoke-test result types for local CogentLM
+ * inference.
+ */
 export {
   CogentClient,
   type BrowserGgufIngestSmokeResult,
@@ -6,7 +10,12 @@ export {
   type CogentClientOptions,
   type EngineModuleOptions,
 } from './engine/browser-client.js';
+/** Browser cache policy options used while staging GGUF assets. */
 export type { BrowserCachePolicyOptions } from './models/asset-store.js';
+/**
+ * Public model, request, response, observability, and error types shared by the
+ * browser package.
+ */
 export {
   QueryError,
   type BackendInfo,
@@ -51,6 +60,7 @@ export {
   type TokenEmissionStats,
   type TokenBatch,
 } from './models/types.js';
+/** Native runtime configuration and low-level request telemetry types. */
 export type {
   CacheSource,
   ChatMessage,

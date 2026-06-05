@@ -120,6 +120,19 @@ const BROWSER_EXAMPLE_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/web", "lib/web/s
 const BROWSER_PLAYGROUND_SMOKE_SOURCE_ROOTS: &[&str] = &["tools/playground"];
 const PROVIDER_GATEWAY_SMOKE_SOURCE_ROOTS: &[&str] =
     &["crates/gateway/src", "crates/gateway-providers/src"];
+const PUBLIC_DOC_RUST_FILES: &[&str] = &[
+    "lib/rust/src/lib.rs",
+    "bindings/node/src/lib.rs",
+    "bindings/python/src/lib.rs",
+];
+const PUBLIC_DOC_TYPESCRIPT_FILES: &[&str] = &[
+    "lib/web/src/index.ts",
+    "lib/web/src/character/index.ts",
+    "lib/web/src/orchestrator/index.ts",
+    "lib/node/index.d.ts",
+    "lib/node/router.d.ts",
+];
+const PUBLIC_DOC_PYTHON_FILES: &[&str] = &["lib/python/python/cogentlm/__init__.py"];
 
 const TEST_SUITES: &[TestSuite] = &[
     TestSuite {
@@ -1424,6 +1437,10 @@ fn format_temperature(temperature: f32) -> String {
 }
 
 fn run_verify(sh: &Shell, ctx: &BuildContext, args: &TestVerifyArgs) -> Result<()> {
+    if args.target == TestVerifyTarget::PublicDocs {
+        return run_public_docs_verify(ctx, args);
+    }
+
     let suites = selected_verify_suites(args)?;
     output::phase("Test verification");
     output::detail(
@@ -1499,6 +1516,267 @@ fn run_verify(sh: &Shell, ctx: &BuildContext, args: &TestVerifyArgs) -> Result<(
     }
 
     anyhow::bail!("test verification failed: {}", failures.join("; "))
+}
+
+fn run_public_docs_verify(ctx: &BuildContext, args: &TestVerifyArgs) -> Result<()> {
+    output::phase("Public API documentation verification");
+    output::detail(
+        "Files",
+        format!(
+            "{} Rust, {} TypeScript, {} Python",
+            PUBLIC_DOC_RUST_FILES.len(),
+            PUBLIC_DOC_TYPESCRIPT_FILES.len(),
+            PUBLIC_DOC_PYTHON_FILES.len()
+        ),
+    );
+
+    let suites: [&TestSuite; 0] = [];
+    let mut report = VerifyReport::new(args, &suites);
+    let docs_result = verify_public_api_docs(ctx);
+    report.checks.push(VerifyCheckReport::from_result(
+        "public-api-docs",
+        &docs_result,
+    ));
+    let status = if docs_result.is_ok() {
+        "passed"
+    } else {
+        "failed"
+    };
+    report.finish(status);
+    write_verify_report(ctx, &report)?;
+    output::path("Test verification report", &test_verify_report_json(ctx));
+
+    match docs_result {
+        Ok(()) => {
+            output::success("Public API docs verified");
+            Ok(())
+        }
+        Err(error) => anyhow::bail!("public API documentation verification failed: {error:#}"),
+    }
+}
+
+fn verify_public_api_docs(ctx: &BuildContext) -> Result<()> {
+    let mut violations = Vec::new();
+    for relative in PUBLIC_DOC_RUST_FILES {
+        let path = ctx.workspace_root().join(relative);
+        collect_rust_public_doc_violations(&path, relative, &mut violations)?;
+    }
+    for relative in PUBLIC_DOC_TYPESCRIPT_FILES {
+        let path = ctx.workspace_root().join(relative);
+        collect_typescript_public_doc_violations(&path, relative, &mut violations)?;
+    }
+    for relative in PUBLIC_DOC_PYTHON_FILES {
+        let path = ctx.workspace_root().join(relative);
+        collect_python_public_doc_violations(&path, relative, &mut violations)?;
+    }
+
+    if violations.is_empty() {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "{} public API documentation issue(s):\n{}",
+        violations.len(),
+        violations.join("\n")
+    )
+}
+
+fn collect_rust_public_doc_violations(
+    path: &Path,
+    display: &str,
+    violations: &mut Vec<String>,
+) -> Result<()> {
+    let lines = read_public_doc_lines(path)?;
+    if !first_non_blank_starts_with(&lines, "//!") {
+        violations.push(format!("{display}:1: missing crate or module rustdoc"));
+    }
+
+    let check_facade_items = display == "lib/rust/src/lib.rs";
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        let check_top_level_facade_item = check_facade_items && line.starts_with("pub ");
+        let Some(target) =
+            rust_public_doc_target(&lines, index, trimmed, check_top_level_facade_item)
+        else {
+            continue;
+        };
+        if !has_previous_rust_doc_comment(&lines, index) {
+            violations.push(format!(
+                "{}:{}: missing rustdoc before {}",
+                display,
+                index + 1,
+                target
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn rust_public_doc_target(
+    lines: &[String],
+    index: usize,
+    trimmed: &str,
+    check_top_level_facade_item: bool,
+) -> Option<&'static str> {
+    if trimmed.starts_with("#[pyclass") {
+        return Some("PyO3 class export");
+    }
+    if trimmed.starts_with("#[pyfunction") {
+        return Some("PyO3 function export");
+    }
+    if trimmed.starts_with("#[pymodule") {
+        return Some("PyO3 module export");
+    }
+    if trimmed.starts_with("#[napi(object)]") {
+        return Some("N-API object export");
+    }
+    if trimmed.starts_with("#[napi(string_enum") {
+        return Some("N-API enum export");
+    }
+    if trimmed.starts_with("#[napi(js_name")
+        && next_non_attribute_line(lines, index).is_some_and(|line| line.starts_with("pub struct "))
+    {
+        return Some("N-API class export");
+    }
+    if trimmed == "#[napi]"
+        && next_non_attribute_line(lines, index).is_some_and(|line| line.starts_with("pub fn "))
+    {
+        return Some("N-API function export");
+    }
+    if check_top_level_facade_item && is_rust_facade_public_item(trimmed) {
+        return Some("Rust facade item");
+    }
+    None
+}
+
+fn is_rust_facade_public_item(trimmed: &str) -> bool {
+    trimmed.starts_with("pub use ")
+        || trimmed.starts_with("pub mod ")
+        || trimmed.starts_with("pub fn ")
+        || trimmed.starts_with("pub struct ")
+        || trimmed.starts_with("pub enum ")
+        || trimmed.starts_with("pub trait ")
+}
+
+fn next_non_attribute_line(lines: &[String], index: usize) -> Option<&str> {
+    lines
+        .iter()
+        .skip(index + 1)
+        .map(|line| line.trim())
+        .find(|line| !line.is_empty() && !line.starts_with("#["))
+}
+
+fn has_previous_rust_doc_comment(lines: &[String], index: usize) -> bool {
+    previous_non_blank_line(lines, index).is_some_and(|line| {
+        line.starts_with("///") || line.starts_with("//!") || line.starts_with("#[doc")
+    })
+}
+
+fn collect_typescript_public_doc_violations(
+    path: &Path,
+    display: &str,
+    violations: &mut Vec<String>,
+) -> Result<()> {
+    let lines = read_public_doc_lines(path)?;
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if !is_typescript_public_export(trimmed) {
+            continue;
+        }
+        if !has_previous_typescript_doc_comment(&lines, index) {
+            violations.push(format!(
+                "{}:{}: missing JSDoc/TSDoc before export",
+                display,
+                index + 1
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn is_typescript_public_export(trimmed: &str) -> bool {
+    trimmed.starts_with("export ")
+        && !trimmed.starts_with("export *")
+        && !trimmed.starts_with("export {};")
+}
+
+fn has_previous_typescript_doc_comment(lines: &[String], index: usize) -> bool {
+    previous_non_blank_line(lines, index)
+        .is_some_and(|line| line.starts_with("/**") || line == "*/" || line.ends_with("*/"))
+}
+
+fn collect_python_public_doc_violations(
+    path: &Path,
+    display: &str,
+    violations: &mut Vec<String>,
+) -> Result<()> {
+    let lines = read_public_doc_lines(path)?;
+    if !first_non_blank_starts_with(&lines, "\"\"\"")
+        && !first_non_blank_starts_with(&lines, "r\"\"\"")
+    {
+        violations.push(format!("{display}:1: missing module docstring"));
+    }
+
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+        if indent != 0 || (!trimmed.starts_with("def ") && !trimmed.starts_with("class ")) {
+            continue;
+        }
+        let Some(name) = python_item_name(trimmed) else {
+            continue;
+        };
+        if name.starts_with('_') {
+            continue;
+        }
+        if !has_following_python_docstring(&lines, index) {
+            violations.push(format!(
+                "{}:{}: missing Python docstring for {}",
+                display,
+                index + 1,
+                name
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn python_item_name(trimmed: &str) -> Option<&str> {
+    let name_start = trimmed.find(' ')? + 1;
+    let rest = &trimmed[name_start..];
+    let name_end = rest.find(['(', ':'])?;
+    Some(&rest[..name_end])
+}
+
+fn has_following_python_docstring(lines: &[String], index: usize) -> bool {
+    lines
+        .iter()
+        .skip(index + 1)
+        .map(|line| line.trim_start())
+        .find(|line| !line.is_empty())
+        .is_some_and(|line| line.starts_with("\"\"\"") || line.starts_with("r\"\"\""))
+}
+
+fn first_non_blank_starts_with(lines: &[String], prefix: &str) -> bool {
+    lines
+        .iter()
+        .map(|line| line.trim_start())
+        .find(|line| !line.is_empty())
+        .is_some_and(|line| line.starts_with(prefix))
+}
+
+fn previous_non_blank_line(lines: &[String], index: usize) -> Option<&str> {
+    lines[..index]
+        .iter()
+        .rev()
+        .map(|line| line.trim())
+        .find(|line| !line.is_empty())
+}
+
+fn read_public_doc_lines(path: &Path) -> Result<Vec<String>> {
+    let source = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    Ok(source.lines().map(str::to_owned).collect())
 }
 
 fn write_rust_coverage_reports(sh: &Shell, ctx: &BuildContext) -> Result<()> {
@@ -2295,6 +2573,10 @@ fn example_smoke_suites() -> Result<Vec<&'static TestSuite>> {
 }
 
 fn selected_verify_suites(args: &TestVerifyArgs) -> Result<Vec<&'static TestSuite>> {
+    if args.target == TestVerifyTarget::PublicDocs {
+        return Ok(Vec::new());
+    }
+
     let explicit = !matches!(
         args.target,
         TestVerifyTarget::All | TestVerifyTarget::Whitebox | TestVerifyTarget::Interface
@@ -2338,6 +2620,7 @@ fn verify_target_suites(target: TestVerifyTarget) -> Result<Vec<&'static TestSui
         TestVerifyTarget::Cli => Ok(vec![suite_by_id(TestSuiteId::Cli)?]),
         TestVerifyTarget::Node => Ok(vec![suite_by_id(TestSuiteId::NodePackage)?]),
         TestVerifyTarget::Python => Ok(vec![suite_by_id(TestSuiteId::PythonPackage)?]),
+        TestVerifyTarget::PublicDocs => Ok(Vec::new()),
     }
 }
 

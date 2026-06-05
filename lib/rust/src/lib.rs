@@ -15,6 +15,7 @@ mod root_tests;
 /////////////////////////////////////////////////////////////////////////////////
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
+/// High-level client API for local models and remote gateway endpoints.
 pub use cogentlm_client::*;
 
 /// Native backend helpers.
@@ -47,6 +48,7 @@ pub mod shard {
     pub use cogentlm_shard::*;
 }
 
+/// Common native runtime configuration and default generation constants.
 pub use cogentlm_engine::engine::{NativeRuntimeConfig, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS};
 
 /// Returns the facade crate package version.

@@ -1,3 +1,8 @@
+//! N-API bindings for the public CogentLM Node package.
+//!
+//! This crate exposes the shared Rust client facade to JavaScript while
+//! translating Node request objects, async tasks, and native errors.
+
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -66,12 +71,14 @@ const CLIENT_TOKEN_BATCHES_MUTEX_POISONED: &str = "token batches mutex is poison
 const CLIENT_TEXT_RESPONSE_MUTEX_POISONED: &str = "text response mutex is poisoned";
 const CLIENT_EMBEDDING_RESPONSE_MUTEX_POISONED: &str = "embedding response mutex is poisoned";
 
+/// Per-token logit bias applied during sampling.
 #[napi(object)]
 pub struct LogitBiasConfig {
     pub token: i32,
     pub bias: f64,
 }
 
+/// Sampling controls used by local text generation.
 #[napi(object)]
 pub struct SamplingRuntimeConfig {
     pub samplers: Option<Vec<String>>,
@@ -200,11 +207,13 @@ impl SamplingRuntimeConfig {
     }
 }
 
+/// Numeric GPU layer count for model placement configuration.
 #[napi(object)]
 pub struct GpuLayerCountConfig {
     pub count: i32,
 }
 
+/// Device placement and memory mapping settings for local model loading.
 #[napi(object)]
 pub struct ModelPlacementConfig {
     pub devices: Option<Vec<String>>,
@@ -265,6 +274,7 @@ impl ModelPlacementConfig {
     }
 }
 
+/// Context, threading, attention, and embedding settings for local runtime use.
 #[napi(object)]
 pub struct ContextRuntimeConfig {
     #[napi(js_name = "n_ctx")]
@@ -358,6 +368,7 @@ impl ContextRuntimeConfig {
     }
 }
 
+/// Scheduler policy knobs for latency, balance, or throughput behavior.
 #[napi(object)]
 pub struct SchedulerPolicyConfig {
     pub mode: Option<String>,
@@ -381,6 +392,7 @@ impl SchedulerPolicyConfig {
     }
 }
 
+/// Request scheduler and continuous batching settings.
 #[napi(object)]
 pub struct SchedulerRuntimeConfig {
     #[napi(js_name = "continuous_batching")]
@@ -408,6 +420,7 @@ impl SchedulerRuntimeConfig {
     }
 }
 
+/// Prefix KV-cache reuse and snapshot settings.
 #[napi(object)]
 pub struct CacheRuntimeConfig {
     pub mode: Option<String>,
@@ -445,6 +458,7 @@ impl CacheRuntimeConfig {
     }
 }
 
+/// Vision projector and image-token settings for multimodal models.
 #[napi(object)]
 pub struct MultimodalRuntimeConfig {
     #[napi(js_name = "projector_path")]
@@ -468,6 +482,7 @@ impl MultimodalRuntimeConfig {
     }
 }
 
+/// GPU residency limits for concurrently loaded local models.
 #[napi(object)]
 pub struct ResidencyRuntimeConfig {
     #[napi(js_name = "max_gpu_models_per_device")]
@@ -502,6 +517,7 @@ impl ResidencyRuntimeConfig {
     }
 }
 
+/// Runtime metrics and backend profiling options.
 #[napi(object)]
 pub struct ObservabilityRuntimeConfig {
     #[napi(js_name = "runtime_metrics")]
@@ -519,6 +535,7 @@ impl ObservabilityRuntimeConfig {
     }
 }
 
+/// Complete native runtime configuration for local model loading.
 #[napi(object)]
 pub struct NativeRuntimeConfig {
     pub placement: Option<ModelPlacementConfig>,
@@ -564,6 +581,7 @@ impl NativeRuntimeConfig {
     }
 }
 
+/// Address of a local model or remote gateway endpoint registered in a client.
 #[napi(object)]
 pub struct EndpointRef {
     pub kind: String,
@@ -584,6 +602,7 @@ impl EndpointRef {
     }
 }
 
+/// Shared generation options for text-producing requests.
 #[napi(object)]
 pub struct CogentTextOptions {
     #[napi(js_name = "maxTokens")]
@@ -611,6 +630,7 @@ impl CogentTextOptions {
     }
 }
 
+/// Local-only prompt options such as grammar constraints and image inputs.
 #[napi(object)]
 pub struct LocalTextOptions {
     #[napi(js_name = "contextKey")]
@@ -647,6 +667,7 @@ impl LocalTextOptions {
     }
 }
 
+/// Local-only embedding options for context and vector normalization.
 #[napi(object)]
 pub struct LocalEmbedOptions {
     #[napi(js_name = "contextKey")]
@@ -663,6 +684,7 @@ impl LocalEmbedOptions {
     }
 }
 
+/// Prompt completion request routed to a local endpoint or remote gateway.
 #[napi(object)]
 pub struct CogentQueryRequest {
     pub endpoint: Option<EndpointRef>,
@@ -688,6 +710,7 @@ impl CogentQueryRequest {
     }
 }
 
+/// Chat completion request routed to a local endpoint or remote gateway.
 #[napi(object)]
 pub struct CogentChatRequest {
     pub endpoint: Option<EndpointRef>,
@@ -713,6 +736,7 @@ impl CogentChatRequest {
     }
 }
 
+/// Embedding request routed to a local endpoint or remote gateway.
 #[napi(object)]
 pub struct CogentEmbedRequest {
     pub endpoint: Option<EndpointRef>,
@@ -737,6 +761,7 @@ impl CogentEmbedRequest {
     }
 }
 
+/// Role/content chat message accepted by local and remote chat requests.
 #[napi(object)]
 #[derive(Clone)]
 pub struct ChatMessage {
@@ -744,6 +769,7 @@ pub struct ChatMessage {
     pub content: String,
 }
 
+/// Remote CogentLM gateway alias, URL, token, and optional timeout.
 #[napi(object)]
 pub struct RemoteGatewayConfig {
     pub alias: String,
@@ -827,6 +853,7 @@ fn required_remote_config_string(
     }
 }
 
+/// Token counts reported by local or remote inference backends.
 #[napi(object)]
 pub struct TokenUsage {
     #[napi(js_name = "inputTokens")]
@@ -837,6 +864,7 @@ pub struct TokenUsage {
     pub total_tokens: Option<u32>,
 }
 
+/// Local runtime timing and cache statistics for a completed request.
 #[napi(object)]
 pub struct RequestStats {
     #[napi(js_name = "inputTokens")]
@@ -869,6 +897,7 @@ pub struct RequestStats {
     pub decode_ms: f64,
 }
 
+/// Embedding pooling strategy used by the local runtime.
 #[napi(string_enum = "snake_case")]
 #[derive(Clone, Copy)]
 pub enum PoolingType {
@@ -906,6 +935,7 @@ impl From<CorePoolingType> for PoolingType {
     }
 }
 
+/// Final text response from a query or chat request.
 #[napi(object)]
 pub struct CogentTextResponse {
     pub endpoint: EndpointRef,
@@ -917,6 +947,7 @@ pub struct CogentTextResponse {
     pub local_stats: Option<RequestStats>,
 }
 
+/// Final vector response from an embedding request.
 #[napi(object)]
 pub struct CogentEmbeddingResponse {
     pub endpoint: EndpointRef,
@@ -972,6 +1003,7 @@ fn cogent_embedding_response_to_node(
     }
 }
 
+/// Aggregate transport statistics for emitted token batches.
 #[napi(object)]
 #[derive(Clone)]
 pub struct TokenEmissionStats {
@@ -980,6 +1012,7 @@ pub struct TokenEmissionStats {
     pub batches_sent: f64,
 }
 
+/// Streaming token payload emitted by an active text generation run.
 #[napi(object)]
 #[derive(Clone)]
 pub struct TokenBatch {
@@ -992,6 +1025,7 @@ pub struct TokenBatch {
     pub stats: TokenEmissionStats,
 }
 
+/// Client facade for local CogentLM models and remote gateway aliases.
 #[napi(js_name = "CogentClient")]
 pub struct CogentClient {
     inner: SharedCogentClient,
@@ -1091,6 +1125,7 @@ impl CogentClient {
     }
 }
 
+/// Text generation handle with a final response and optional token stream.
 #[napi(js_name = "CogentTextRun")]
 pub struct CogentTextRun {
     response: SharedClientTextResponse,
@@ -1124,6 +1159,7 @@ impl CogentTextRun {
     }
 }
 
+/// Embedding request handle with a final embedding response.
 #[napi(js_name = "CogentEmbeddingRun")]
 pub struct CogentEmbeddingRun {
     response: SharedClientEmbeddingResponse,
@@ -1258,11 +1294,13 @@ impl Task for ClientNextTokenTask {
     }
 }
 
+/// Return JSON backend and device observability from the native runtime.
 #[napi]
 pub fn backend_observability_json(include_details: Option<bool>) -> Result<String> {
     core_backend_observability_json(include_details.unwrap_or(true)).map_err(core_error)
 }
 
+/// Enable or suppress llama.cpp native logging.
 #[napi]
 pub fn set_llama_log_quiet(quiet: bool) {
     core_set_llama_log_quiet(quiet);

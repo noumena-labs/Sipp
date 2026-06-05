@@ -1,3 +1,10 @@
+"""Python package facade for CogentLM native inference bindings.
+
+The module loads the best available staged native backend, exposes the PyO3
+classes used to configure and call CogentLM, and reports which backend was
+selected for the current process.
+"""
+
 import importlib
 import importlib.machinery
 import importlib.util
@@ -237,6 +244,7 @@ def _load_native_module() -> object:
 
 
 def get_active_backend() -> str:
+    """Return the native backend selected by the package loader."""
     return _ACTIVE_BACKEND
 
 
