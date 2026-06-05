@@ -237,7 +237,7 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub no_banner: bool,
 
-    /// Disable bounded inline rendering and use traditional line output.
+    /// Disable bounded inline rendering when compact output would otherwise be active.
     #[arg(long, global = true)]
     pub plain: bool,
 

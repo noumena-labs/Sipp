@@ -28,9 +28,10 @@ use super::{
     parse_rust_fn_name, path_components, path_matches_root, python_venv_exe, selected_smoke_suites,
     selected_unit_suites, selected_verify_suites, source_owner_suites, suite_by_id, test_backends,
     validate_package_filter, validate_suite_backends, CaseDiscoverer, CoverageSummaries,
-    LcovSummary, RunReport, RustTestTarget, SuiteReport, TestCase, TestGroup, VerifyCheckReport,
-    VerifyReport, NODE_GENERATION_SMOKE_SCRIPTS, PYTHON_GENERATION_SMOKE_SCRIPTS,
-    RUST_CRATE_TEST_TARGETS, RUST_GENERATION_SMOKE_EXAMPLES, TEST_SUITES,
+    LcovSummary, RunReport, RustTestTarget, SuiteReport, TestCase, TestCounts, TestGroup,
+    VerifyCheckReport, VerifyReport, NODE_GENERATION_SMOKE_SCRIPTS,
+    PYTHON_GENERATION_SMOKE_SCRIPTS, RUST_CRATE_TEST_TARGETS, RUST_GENERATION_SMOKE_EXAMPLES,
+    TEST_SUITES,
 };
 
 #[test]
@@ -387,19 +388,75 @@ fn run_report_serializes_suite_status_and_coverage_artifacts() {
         &[suite],
     );
 
-    report.suites.push(SuiteReport::passed(&ctx, suite, 42));
+    report.suites.push(SuiteReport::passed(
+        &ctx,
+        suite,
+        42,
+        Some(TestCounts::passed(7)),
+    ));
     report.finish("passed");
 
     let value = report.as_json(&ctx);
     assert_eq!(value["status"], "passed");
+    assert_eq!(value["summary"]["suites"]["passed"], 1);
+    assert_eq!(value["summary"]["suites"]["total"], 1);
+    assert_eq!(value["summary"]["counts"]["passed"], 7);
+    assert_eq!(
+        value["summary"]["counts"]["unknownSuites"],
+        serde_json::json!([])
+    );
     assert_eq!(value["suites"][0]["status"], "passed");
     assert_eq!(value["suites"][0]["group"], "unit");
     assert_eq!(value["suites"][0]["layer"], "whitebox");
+    assert_eq!(value["suites"][0]["counts"]["status"], "known");
+    assert_eq!(value["suites"][0]["counts"]["total"], 7);
     assert_eq!(value["suites"][0]["coverage"]["status"], "written");
     assert!(value["suites"][0]["coverage"]["artifacts"][0]
         .as_str()
         .unwrap()
         .ends_with(".build/coverage/rust/lcov.info"));
+}
+
+#[test]
+fn run_report_summarizes_failed_and_unknown_suite_counts() {
+    let ctx = BuildContext::new().unwrap();
+    let passed = suite_by_id(TestSuiteId::Xtask).unwrap();
+    let failed = suite_by_id(TestSuiteId::RustCrates).unwrap();
+    let not_run = suite_by_id(TestSuiteId::NodePackage).unwrap();
+    let mut report = RunReport::new(serde_json::json!({}), &[passed, failed, not_run]);
+
+    report.suites.push(SuiteReport::passed(
+        &ctx,
+        passed,
+        10,
+        Some(TestCounts::passed(3)),
+    ));
+    report.suites.push(SuiteReport::failed(
+        &ctx,
+        failed,
+        20,
+        "bad | value\nnext".to_owned(),
+    ));
+    report.suites.push(SuiteReport::not_run(&ctx, not_run));
+    report.finish("failed");
+
+    let value = report.as_json(&ctx);
+    assert_eq!(value["summary"]["suites"]["passed"], 1);
+    assert_eq!(value["summary"]["suites"]["failed"], 1);
+    assert_eq!(value["summary"]["suites"]["notRun"], 1);
+    assert_eq!(value["summary"]["suites"]["total"], 3);
+    assert_eq!(value["summary"]["counts"]["passed"], 3);
+    assert_eq!(
+        value["summary"]["counts"]["unknownSuites"],
+        serde_json::json!(["rust-crates", "node-package"])
+    );
+    assert_eq!(value["suites"][1]["counts"]["status"], "unknown");
+
+    let markdown = report.as_markdown(&ctx);
+    assert!(markdown.contains("Suites: 1 passed, 1 failed, 1 not run, 3 total"));
+    assert!(markdown.contains("Tests/checks: 3 passed, 0 failed, 0 skipped, 3 total"));
+    assert!(markdown.contains("Unknown counts: rust-crates, node-package"));
+    assert!(markdown.contains("bad \\| value next"));
 }
 
 #[test]

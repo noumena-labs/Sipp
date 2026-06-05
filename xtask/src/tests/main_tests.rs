@@ -4,13 +4,17 @@
 //! binary dispatcher, subprocesses, or build orchestration.
 
 use xtask::cli::{
-    Backend, BackendArgs, BuildCommands, CleanArgs, Commands, TestCommands, TestGroupFilter,
+    Backend, BackendArgs, BuildCommands, CleanArgs, Commands, DemoServeMode, ExampleName,
+    RunCommands, RunExampleServeArgs, RunExamplesCommands, TestCommands, TestGroupFilter,
     TestListArgs, TestListFormat, TestSmokeArgs, TestSmokeBenchmarkBrowserArgs, TestSmokeCommands,
     TestSmokeSuiteArgs, TestSmokeSuiteTarget, TestUnitArgs, TestUnitCommands, TestUnitGroupArgs,
     TestUnitGroupTarget, TestVerifyArgs, TestVerifyTarget,
 };
 
-use super::{backend_summary, build_summary, command_summary, test_summary};
+use super::{
+    backend_summary, build_summary, command_summary, effective_output_options, test_summary,
+    OutputOptions,
+};
 
 #[test]
 fn command_summary_labels_top_level_workflows() {
@@ -102,4 +106,72 @@ fn build_summary_labels_backend_defaults_and_explicit_backends() {
 fn backend_summary_uses_cpu_for_missing_backend() {
     assert_eq!(backend_summary(None), "cpu");
     assert_eq!(backend_summary(Some(Backend::Metal)), "metal");
+}
+
+#[test]
+fn effective_output_options_keep_build_and_run_compact_by_default() {
+    let build = Commands::Build {
+        target: BuildCommands::Core,
+    };
+    let run = Commands::Run {
+        command: RunCommands::Examples {
+            command: RunExamplesCommands::Serve(RunExampleServeArgs {
+                example: ExampleName::Browser,
+                mode: DemoServeMode::Dev,
+                host: None,
+                port: None,
+                no_build: false,
+            }),
+        },
+    };
+
+    assert_eq!(
+        effective_output_options(&build, false, false),
+        OutputOptions {
+            stream_subprocess: false,
+            plain: false,
+        }
+    );
+    assert_eq!(
+        effective_output_options(&run, false, false),
+        OutputOptions {
+            stream_subprocess: false,
+            plain: false,
+        }
+    );
+    assert_eq!(
+        effective_output_options(&build, true, false),
+        OutputOptions {
+            stream_subprocess: true,
+            plain: false,
+        }
+    );
+    assert_eq!(
+        effective_output_options(&build, false, true),
+        OutputOptions {
+            stream_subprocess: false,
+            plain: true,
+        }
+    );
+}
+
+#[test]
+fn effective_output_options_default_to_detailed_for_information_commands() {
+    let test_list = Commands::Test {
+        command: TestCommands::List(TestListArgs {
+            group: TestGroupFilter::All,
+            layer: None,
+            cases: false,
+            search: None,
+            format: TestListFormat::Text,
+        }),
+    };
+
+    assert_eq!(
+        effective_output_options(&test_list, false, false),
+        OutputOptions {
+            stream_subprocess: true,
+            plain: true,
+        }
+    );
 }

@@ -448,7 +448,7 @@ fn run_selected_suites(
         let result = run_suite(sh, ctx, suite, options, &mut coverage_state);
         let duration_ms = started_at.elapsed().as_millis();
         match result {
-            Ok(()) => {
+            Ok(outcome) => {
                 if suite.coverage {
                     completed_coverage_suites.push(*suite);
                     write_coverage_summary(
@@ -458,7 +458,7 @@ fn run_selected_suites(
                 }
                 report
                     .suites
-                    .push(SuiteReport::passed(ctx, suite, duration_ms));
+                    .push(SuiteReport::passed(ctx, suite, duration_ms, outcome.counts));
                 report.finish("passed");
                 write_run_report(ctx, &report)?;
             }
@@ -472,6 +472,8 @@ fn run_selected_suites(
                 }
                 report.finish("failed");
                 write_run_report(ctx, &report)?;
+                print_run_summary(&report);
+                output::path("Test run report", &test_run_report_json(ctx));
                 return Err(error);
             }
         }
@@ -479,6 +481,7 @@ fn run_selected_suites(
 
     report.finish("passed");
     write_run_report(ctx, &report)?;
+    print_run_summary(&report);
     output::path("Test run report", &test_run_report_json(ctx));
     Ok(())
 }
@@ -489,7 +492,7 @@ fn run_suite(
     suite: &TestSuite,
     options: &SuiteRunOptions<'_>,
     coverage_state: &mut RunCoverageState,
-) -> Result<()> {
+) -> Result<SuiteOutcome> {
     match suite.runner {
         SuiteRunner::RustTargets(targets) => {
             let package = if suite.id == TestSuiteId::RustCrates {
@@ -514,6 +517,101 @@ fn run_suite(
         }
         SuiteRunner::LlamaBackendOps => {
             run_llama_backend_ops_suite(sh, ctx, &options.backend, &options.llama)
+        }
+    }?;
+
+    successful_suite_outcome(ctx, suite, options)
+}
+
+fn successful_suite_outcome(
+    ctx: &BuildContext,
+    suite: &TestSuite,
+    options: &SuiteRunOptions<'_>,
+) -> Result<SuiteOutcome> {
+    Ok(SuiteOutcome {
+        counts: known_success_counts(ctx, suite, options)?,
+    })
+}
+
+fn known_success_counts(
+    ctx: &BuildContext,
+    suite: &TestSuite,
+    options: &SuiteRunOptions<'_>,
+) -> Result<Option<TestCounts>> {
+    let total = match suite.runner {
+        SuiteRunner::RustTargets(_) => discovered_suite_case_count(ctx, suite, options.package)?,
+        SuiteRunner::PackageTs
+        | SuiteRunner::DemoTs
+        | SuiteRunner::NodePackage
+        | SuiteRunner::PythonPackage
+        | SuiteRunner::ProviderGatewaySmoke => discovered_suite_case_count(ctx, suite, None)?,
+        SuiteRunner::CliSmoke
+        | SuiteRunner::BenchmarkBrowserSmoke
+        | SuiteRunner::LlamaBackendOps => 1,
+        SuiteRunner::RustSmoke => selected_rust_smoke_examples(options.cases).len(),
+        SuiteRunner::NodeSmoke => selected_node_smoke_scripts(options.cases).len(),
+        SuiteRunner::PythonSmoke => selected_python_smoke_scripts(options.cases).len(),
+        SuiteRunner::ExampleBrowserSmoke => selected_smoke_cases(options.cases).len(),
+    };
+    Ok(Some(TestCounts::passed(total)))
+}
+
+fn discovered_suite_case_count(
+    ctx: &BuildContext,
+    suite: &TestSuite,
+    package: Option<&str>,
+) -> Result<usize> {
+    let mut cases = Vec::new();
+    match suite.discoverer {
+        CaseDiscoverer::RustTargets(targets) if suite.id == TestSuiteId::RustCrates => {
+            let targets = filtered_rust_targets(targets, package)?;
+            discover_rust_cases(
+                ctx,
+                suite.id,
+                rust_target_case_files(ctx, &targets)?,
+                &mut cases,
+            )?;
+        }
+        _ => discover_suite_cases(ctx, suite, &mut cases)?,
+    }
+    Ok(cases.len())
+}
+
+fn print_run_summary(report: &RunReport) {
+    let summary = report.summary();
+    output::phase("Test summary");
+    output::detail(
+        "Suites",
+        format!(
+            "{} passed, {} failed, {} not run, {} total",
+            summary.suites.passed,
+            summary.suites.failed,
+            summary.suites.not_run,
+            summary.suites.total()
+        ),
+    );
+    if summary.counts.known_suites > 0 {
+        output::detail(
+            "Tests/checks",
+            format!(
+                "{} passed, {} failed, {} skipped, {} total",
+                summary.counts.counts.passed,
+                summary.counts.counts.failed,
+                summary.counts.counts.skipped,
+                summary.counts.counts.total()
+            ),
+        );
+    }
+    if !summary.counts.unknown_suites.is_empty() {
+        output::detail("Unknown counts", summary.counts.unknown_suites.join(", "));
+    }
+    for suite in report
+        .suites
+        .iter()
+        .filter(|suite| suite.status == "failed")
+    {
+        if let Some(error) = suite.error.as_deref() {
+            output::warning(format!("{} failed: {error}", suite.id));
         }
     }
 }
@@ -3192,6 +3290,113 @@ struct RunCoverageState {
     rust_started: bool,
 }
 
+struct SuiteOutcome {
+    counts: Option<TestCounts>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct TestCounts {
+    passed: usize,
+    failed: usize,
+    skipped: usize,
+}
+
+impl TestCounts {
+    fn passed(passed: usize) -> Self {
+        Self {
+            passed,
+            failed: 0,
+            skipped: 0,
+        }
+    }
+
+    fn total(&self) -> usize {
+        self.passed + self.failed + self.skipped
+    }
+
+    fn add(&mut self, other: TestCounts) {
+        self.passed += other.passed;
+        self.failed += other.failed;
+        self.skipped += other.skipped;
+    }
+
+    fn as_json(&self) -> Value {
+        json!({
+            "passed": self.passed,
+            "failed": self.failed,
+            "skipped": self.skipped,
+            "total": self.total(),
+        })
+    }
+
+    fn markdown(&self) -> String {
+        format!(
+            "{} passed, {} failed, {} skipped, {} total",
+            self.passed,
+            self.failed,
+            self.skipped,
+            self.total()
+        )
+    }
+}
+
+#[derive(Debug, Default, Eq, PartialEq)]
+struct RunSummary {
+    suites: SuiteStatusSummary,
+    counts: CountSummary,
+}
+
+impl RunSummary {
+    fn as_json(&self) -> Value {
+        json!({
+            "suites": self.suites.as_json(),
+            "counts": self.counts.as_json(),
+        })
+    }
+}
+
+#[derive(Debug, Default, Eq, PartialEq)]
+struct SuiteStatusSummary {
+    passed: usize,
+    failed: usize,
+    not_run: usize,
+}
+
+impl SuiteStatusSummary {
+    fn total(&self) -> usize {
+        self.passed + self.failed + self.not_run
+    }
+
+    fn as_json(&self) -> Value {
+        json!({
+            "passed": self.passed,
+            "failed": self.failed,
+            "notRun": self.not_run,
+            "total": self.total(),
+        })
+    }
+}
+
+#[derive(Debug, Default, Eq, PartialEq)]
+struct CountSummary {
+    counts: TestCounts,
+    known_suites: usize,
+    unknown_suites: Vec<String>,
+}
+
+impl CountSummary {
+    fn as_json(&self) -> Value {
+        json!({
+            "passed": self.counts.passed,
+            "failed": self.counts.failed,
+            "skipped": self.counts.skipped,
+            "total": self.counts.total(),
+            "knownSuites": self.known_suites,
+            "unknownSuites": self.unknown_suites,
+        })
+    }
+}
+
 struct RunReport {
     generated_at_unix_seconds: u64,
     finished_at_unix_seconds: Option<u64>,
@@ -3226,6 +3431,26 @@ impl RunReport {
         self.duration_ms = Some(duration_millis(self.started_at.elapsed().as_millis()));
     }
 
+    fn summary(&self) -> RunSummary {
+        let mut summary = RunSummary::default();
+        for suite in &self.suites {
+            match suite.status.as_str() {
+                "passed" => summary.suites.passed += 1,
+                "failed" => summary.suites.failed += 1,
+                "not_run" => summary.suites.not_run += 1,
+                _ => {}
+            }
+
+            if let Some(counts) = suite.counts {
+                summary.counts.known_suites += 1;
+                summary.counts.counts.add(counts);
+            } else {
+                summary.counts.unknown_suites.push(suite.id.clone());
+            }
+        }
+        summary
+    }
+
     fn as_json(&self, ctx: &BuildContext) -> Value {
         json!({
             "kind": "test-run",
@@ -3235,26 +3460,42 @@ impl RunReport {
             "durationMs": self.duration_ms,
             "filters": self.filters.clone(),
             "selectedSuites": self.selected_suites.clone(),
+            "summary": self.summary().as_json(),
             "logDir": display_relative(ctx, &ctx.command_logs_dir()),
             "suites": self.suites.iter().map(|suite| suite.as_json()).collect::<Vec<_>>(),
         })
     }
 
     fn as_markdown(&self, ctx: &BuildContext) -> String {
+        let summary = self.summary();
         let mut markdown = format!(
-            "# Test run report\n\nStatus: `{}`\n\nLog directory: `{}`\n\n| Suite | Status | Duration | Coverage | Error |\n| --- | --- | ---: | --- | --- |\n",
+            "# Test run report\n\nStatus: `{}`\n\nSuites: {} passed, {} failed, {} not run, {} total\n\nTests/checks: {}\n\nUnknown counts: {}\n\nLog directory: `{}`\n\n| Suite | Status | Duration | Counts | Coverage | Error |\n| --- | --- | ---: | --- | --- | --- |\n",
             self.status,
+            summary.suites.passed,
+            summary.suites.failed,
+            summary.suites.not_run,
+            summary.suites.total(),
+            summary.counts.counts.markdown(),
+            if summary.counts.unknown_suites.is_empty() {
+                "-".to_owned()
+            } else {
+                summary.counts.unknown_suites.join(", ")
+            },
             display_relative(ctx, &ctx.command_logs_dir()),
         );
         for suite in &self.suites {
             markdown.push_str(&format!(
-                "| `{}` | `{}` | {} | `{}` | {} |\n",
+                "| `{}` | `{}` | {} | `{}` | `{}` | {} |\n",
                 suite.id,
                 suite.status,
                 suite
                     .duration_ms
                     .map(|duration| duration.to_string())
                     .unwrap_or_else(|| "-".to_owned()),
+                suite
+                    .counts
+                    .map(|counts| counts.markdown())
+                    .unwrap_or_else(|| "unknown".to_owned()),
                 suite.coverage_status,
                 suite
                     .error
@@ -3275,11 +3516,17 @@ struct SuiteReport {
     duration_ms: Option<u64>,
     coverage_status: String,
     coverage_artifacts: Vec<String>,
+    counts: Option<TestCounts>,
     error: Option<String>,
 }
 
 impl SuiteReport {
-    fn passed(ctx: &BuildContext, suite: &TestSuite, duration_ms: u128) -> Self {
+    fn passed(
+        ctx: &BuildContext,
+        suite: &TestSuite,
+        duration_ms: u128,
+        counts: Option<TestCounts>,
+    ) -> Self {
         Self {
             id: suite.id.as_str().to_owned(),
             group: suite.group.as_str().to_owned(),
@@ -3292,6 +3539,7 @@ impl SuiteReport {
                 "not_applicable".to_owned()
             },
             coverage_artifacts: coverage_artifacts_for_suite(ctx, suite),
+            counts,
             error: None,
         }
     }
@@ -3309,6 +3557,7 @@ impl SuiteReport {
                 "not_applicable".to_owned()
             },
             coverage_artifacts: coverage_artifacts_for_suite(ctx, suite),
+            counts: None,
             error: Some(error),
         }
     }
@@ -3326,6 +3575,7 @@ impl SuiteReport {
                 "not_applicable".to_owned()
             },
             coverage_artifacts: coverage_artifacts_for_suite(ctx, suite),
+            counts: None,
             error: None,
         }
     }
@@ -3341,6 +3591,15 @@ impl SuiteReport {
                 "status": self.coverage_status.clone(),
                 "artifacts": self.coverage_artifacts.clone(),
             },
+            "counts": self.counts.map(|counts| {
+                let mut value = counts.as_json();
+                if let Value::Object(object) = &mut value {
+                    object.insert("status".to_owned(), Value::String("known".to_owned()));
+                }
+                value
+            }).unwrap_or_else(|| json!({
+                "status": "unknown",
+            })),
             "error": self.error.clone(),
         })
     }

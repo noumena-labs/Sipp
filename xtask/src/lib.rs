@@ -30,8 +30,13 @@ pub mod utils;
 pub(crate) use terminal as output;
 
 /// Configures terminal output for the xtask binary entrypoint.
-pub fn configure_output(ctx: &utils::BuildContext, verbose: bool, no_banner: bool, plain: bool) {
-    terminal::init(ctx, verbose, no_banner, plain);
+pub fn configure_output(
+    ctx: &utils::BuildContext,
+    stream_subprocess: bool,
+    no_banner: bool,
+    plain: bool,
+) {
+    terminal::init(ctx, stream_subprocess, no_banner, plain);
 }
 
 /// Restores terminal output state before the binary exits.

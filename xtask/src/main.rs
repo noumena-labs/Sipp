@@ -22,7 +22,8 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let sh = Shell::new()?;
     let ctx = BuildContext::new()?;
-    configure_output(&ctx, cli.verbose, cli.no_banner, cli.plain);
+    let output = effective_output_options(&cli.command, cli.verbose, cli.plain);
+    configure_output(&ctx, output.stream_subprocess, cli.no_banner, output.plain);
     let summary = command_summary(&cli.command);
 
     let result = match cli.command {
@@ -37,6 +38,20 @@ fn main() -> Result<()> {
     finish_output(result.is_ok(), &summary);
 
     result
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct OutputOptions {
+    stream_subprocess: bool,
+    plain: bool,
+}
+
+fn effective_output_options(command: &Commands, verbose: bool, plain: bool) -> OutputOptions {
+    let detailed_default = !matches!(command, Commands::Build { .. } | Commands::Run { .. });
+    OutputOptions {
+        stream_subprocess: verbose || detailed_default,
+        plain: plain || detailed_default,
+    }
 }
 
 fn command_summary(command: &Commands) -> String {

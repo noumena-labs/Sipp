@@ -101,9 +101,10 @@ Use `cargo xtask run examples serve browser` to manually serve browser examples,
 and `cargo xtask run benchmarks serve browser` to manually serve the benchmark
 app. Benchmark validation remains under `test smoke suite benchmark-browser`.
 
-`test unit` and `test smoke` write `.build/test/run-report.json` and
-`.build/test/run-report.md`. Coverage-capable unit suites also write fresh
-coverage artifacts under `.build/coverage/`.
+`test unit` and `test smoke` print a final suite and test/check summary, then
+write `.build/test/run-report.json` and `.build/test/run-report.md`.
+Coverage-capable unit suites also write fresh coverage artifacts under
+`.build/coverage/`.
 
 `test verify` does not execute test suites. It validates test structure,
 catalog ownership, test/runtime code separation, optional changed-file coverage,

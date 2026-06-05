@@ -46,7 +46,7 @@ const INLINE_MIN_RENDER_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_ACTIVITY_LINES: usize = 160;
 const MAX_OUTPUT_LINES: usize = 400;
 
-static VERBOSE: AtomicBool = AtomicBool::new(false);
+static STREAM_SUBPROCESS: AtomicBool = AtomicBool::new(false);
 static NO_BANNER: AtomicBool = AtomicBool::new(false);
 static COMMAND_LOG_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static COMMAND_LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -54,13 +54,13 @@ static WORKSPACE_ROOT: OnceLock<PathBuf> = OnceLock::new();
 static INLINE_RENDERER: OnceLock<Mutex<Option<InlineRenderer>>> = OnceLock::new();
 
 /// Configures terminal output for the current xtask invocation.
-pub(crate) fn init(ctx: &BuildContext, verbose: bool, no_banner: bool, plain: bool) {
-    VERBOSE.store(verbose, Ordering::Relaxed);
+pub(crate) fn init(ctx: &BuildContext, stream_subprocess: bool, no_banner: bool, plain: bool) {
+    STREAM_SUBPROCESS.store(stream_subprocess, Ordering::Relaxed);
     NO_BANNER.store(no_banner, Ordering::Relaxed);
     let _ = COMMAND_LOG_DIR.set(ctx.command_logs_dir());
     let _ = WORKSPACE_ROOT.set(ctx.workspace_root().to_path_buf());
 
-    let renderer = if should_use_inline(plain, verbose) {
+    let renderer = if should_use_inline(plain, stream_subprocess) {
         InlineRenderer::new(command_label()).ok().flatten()
     } else {
         None
@@ -82,7 +82,7 @@ pub(crate) fn finish(success: bool, summary: &str) {
 
 /// Returns whether subprocess output should stream live.
 pub(crate) fn verbose() -> bool {
-    VERBOSE.load(Ordering::Relaxed)
+    STREAM_SUBPROCESS.load(Ordering::Relaxed)
 }
 
 /// Returns whether decorative banners are disabled.
