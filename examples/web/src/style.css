@@ -12,17 +12,18 @@ body {
 
 button,
 input,
-textarea {
+textarea,
+a {
   font: inherit;
 }
 
 .shell {
-  width: min(880px, calc(100vw - 32px));
+  width: min(960px, calc(100vw - 32px));
   margin: 0 auto;
   padding: 32px 0;
 }
 
-header {
+.page-header {
   margin-bottom: 20px;
 }
 
@@ -36,6 +37,41 @@ p {
   color: #536078;
 }
 
+.top-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.top-nav a,
+.example-link {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  border: 1px solid #c8d1df;
+  border-radius: 6px;
+  color: #176b87;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.top-nav a {
+  padding: 0 10px;
+}
+
+.example-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.example-link {
+  min-height: 56px;
+  padding: 0 14px;
+  background: #ffffff;
+}
+
 .panel {
   display: grid;
   gap: 12px;
@@ -44,6 +80,12 @@ p {
   border: 1px solid #d7deea;
   border-radius: 8px;
   background: #ffffff;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
 }
 
 label {
@@ -70,6 +112,10 @@ textarea {
 
 textarea {
   resize: vertical;
+}
+
+.short-field {
+  width: min(180px, 100%);
 }
 
 button {

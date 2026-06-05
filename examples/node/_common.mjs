@@ -48,7 +48,9 @@ export async function loadClient(model, { embeddings = false, projectorPath = un
 export function readRemoteArgs(defaultInput) {
   const alias = process.argv[2];
   if (!alias) {
-    console.error('usage: node examples/node/remote_<query|chat|embed>.mjs <gateway-alias> [input]');
+    console.error(
+      'usage: node examples/node/remote_gateway_<query|chat|embed>.mjs <gateway-alias> [input]',
+    );
     process.exit(2);
   }
   return {

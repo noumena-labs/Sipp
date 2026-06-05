@@ -59,7 +59,7 @@ def load_client(
 def read_remote_args(default_input: str) -> tuple[str, str]:
     if len(sys.argv) < 2:
         raise SystemExit(
-            "usage: python examples/python/remote_<query|chat|embed>.py <gateway-alias> [input]"
+            "usage: python examples/python/remote_gateway_<query|chat|embed>.py <gateway-alias> [input]"
         )
     return sys.argv[1], " ".join(sys.argv[2:]) or default_input
 
