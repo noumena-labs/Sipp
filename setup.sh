@@ -21,7 +21,7 @@ fi
 needs_build=0
 if [ ! -x "$TARGET" ] || [ ! -f "$STAMP" ]; then
   needs_build=1
-elif find "$ROOT/crates/xtask/src" "$ROOT/crates/xtask/Cargo.toml" "$ROOT/Cargo.toml" "$ROOT/Cargo.lock" "$ROOT/.cargo/config.toml" -newer "$STAMP" -print -quit 2>/dev/null | grep -q .; then
+elif find "$ROOT/xtask/src" "$ROOT/xtask/Cargo.toml" "$ROOT/Cargo.toml" "$ROOT/Cargo.lock" "$ROOT/.cargo/config.toml" -newer "$STAMP" -print -quit 2>/dev/null | grep -q .; then
   needs_build=1
 fi
 

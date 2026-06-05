@@ -73,7 +73,9 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run coverage baseline
-        run: cargo xtask --plain test coverage --scope all --backend cpu
+        run: |
+          cargo xtask --plain test unit
+          cargo xtask --plain test verify --target all
 
       - name: Publish coverage summary
         run: cat .build/coverage/coverage-summary.md >> "$GITHUB_STEP_SUMMARY"

@@ -13,7 +13,9 @@
                 "package.json",
                 "tsconfig.json",
                 "../../crates/**",
-                "../../bindings/wasm/**"
+                "../../lib/**",
+                "../../bindings/**",
+                "../../xtask/**"
             ]
         },
         "dev": {

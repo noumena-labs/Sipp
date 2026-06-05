@@ -5,7 +5,9 @@
   "packageManager": "bun@1.3.11",
   "workspaces": [
     "packages/*",
-    "apps/*"
+    "demos/*",
+    "benchmarks/*",
+    "examples/web"
   ],
   "scripts": {
     "build": "cargo xtask build all",

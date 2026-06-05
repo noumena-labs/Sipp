@@ -20,7 +20,7 @@ Always use the **`build-orchestrator`** skill when compiling. The repository use
 - **Build Python Bindings:** `cargo xtask build python` (optionally `--backend vulkan`)
 - **Build WebAssembly/WebGPU:** `cargo xtask build wasm`
 - **Build All Targets:** `cargo xtask build all`
-- **Serve An App:** `cargo xtask run apps serve examples`
+- **Serve A Demo:** `cargo xtask run demos serve chat`
 - **Run llama.cpp Backend Ops:** `cargo xtask run llama backend-ops --backend cpu`
 
 ---

@@ -110,7 +110,7 @@ jobs:
             .build/cargo
             .build/cmake
             .build/c
-          key: cargo-release-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'bindings/**/Cargo.toml') }}
+          key: cargo-release-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
           restore-keys: |
             cargo-release-${{ runner.os }}-
 
@@ -120,10 +120,13 @@ jobs:
           path: |
             ~/.bun/install/cache
             node_modules
-            packages/npm/node_modules
+            packages/cogentlm-web/node_modules
+            packages/cogentlm-node/node_modules
             bindings/node/node_modules
-            apps/*/node_modules
-          key: bun-release-${{ runner.os }}-${{ hashFiles('bun.lock', 'bindings/node/bun.lock', 'package.json', 'packages/npm/package.json', 'bindings/node/package.json', 'apps/*/package.json') }}
+            demos/*/node_modules
+            benchmarks/*/node_modules
+            examples/web/node_modules
+          key: bun-release-${{ runner.os }}-${{ hashFiles('bun.lock', 'bindings/node/bun.lock', 'package.json', 'packages/*/package.json', 'bindings/node/package.json', 'demos/*/package.json', 'benchmarks/*/package.json', 'examples/web/package.json') }}
           restore-keys: |
             bun-release-${{ runner.os }}-
 
@@ -133,7 +136,7 @@ jobs:
           path: |
             .build/toolchain
             .build/uv-cache
-          key: xtask-toolchain-release-${{ runner.os }}-${{ hashFiles('crates/xtask/src/toolchains/*.rs') }}
+          key: xtask-toolchain-release-${{ runner.os }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
           restore-keys: |
             xtask-toolchain-release-${{ runner.os }}-
 
@@ -141,7 +144,7 @@ jobs:
         uses: actions/cache@v5.0.5
         with:
           path: .build/models
-          key: sample-models-release-${{ runner.os }}-${{ hashFiles('crates/xtask/src/sample_model.rs') }}
+          key: sample-models-release-${{ runner.os }}-${{ hashFiles('xtask/src/sample_model.rs') }}
           restore-keys: |
             sample-models-release-${{ runner.os }}-
 
@@ -151,7 +154,9 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run full release test workflow
-        run: cargo xtask --plain test all --profile full --backend cpu
+        run: |
+          cargo xtask --plain test unit
+          cargo xtask --plain test smoke all --backend cpu
 
       - name: Build staged web package
         if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' }}
@@ -208,7 +213,7 @@ jobs:
 
       - name: Stage Node server package
         if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
-        working-directory: bindings/node
+        working-directory: packages/cogentlm-node
         run: bun run build:stage
 
       - name: Prepare public Node npm metadata
@@ -276,7 +281,7 @@ jobs:
             Cargo.lock \
             README.md \
             LICENSE \
-            crates/cogentlm \
+            lib/cogentlm \
             crates/core \
             crates/shard \
             crates/sys \

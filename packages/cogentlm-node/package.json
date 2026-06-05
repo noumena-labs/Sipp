@@ -1,0 +1,43 @@
+{
+  "name": "@noumena-labs/cogentlm-server",
+  "version": "0.1.0",
+  "description": "Native Node.js server bindings for CogentLM",
+  "main": "router.js",
+  "types": "router.d.ts",
+  "license": "Apache-2.0",
+  "files": [
+    "index.d.ts",
+    "LICENSE",
+    "native",
+    "README.md",
+    "router.d.ts",
+    "router.js"
+  ],
+  "scripts": {
+    "build": "cargo xtask build node --backend all",
+    "build:stage": "node scripts/stage-package.mjs",
+    "test": "node --test tests/router.test.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/noumena-labs/CogentLM.git",
+    "directory": "packages/cogentlm-node"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
+  "napi": {
+    "binaryName": "cogentlm_node",
+    "targets": [
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc",
+      "x86_64-unknown-linux-gnu"
+    ]
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.3.0",
+    "c8": "^10.1.3"
+  }
+}

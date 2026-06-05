@@ -63,7 +63,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #### Binaries, examples, and scripts
 
-For binaries and developer tooling such as `crates/cli`, `crates/xtask`, examples, and one-off migration scripts:
+For binaries and developer tooling such as `apps/cli`, `xtask`, examples, and one-off migration scripts:
 
 * `anyhow::Result` is allowed.
 * Prefer `anyhow::Context` for user-facing failure messages.
@@ -418,17 +418,21 @@ The repository is organized by responsibility:
 * `crates/`: Core Rust implementation.
 * `bindings/`: FFI and language bindings such as Node, Python, and WASM.
 * `packages/`: NPM packages intended for distribution, such as browser or runtime packages.
-* `apps/`: Applications, examples, demos, and benchmarks using the engine.
+* `apps/`: First-party applications such as the Rust CLI.
+* `demos/`: Browser demos using the public browser package.
+* `benchmarks/`: Benchmark harnesses and benchmark apps.
+* `examples/`: Runnable onboarding examples for public package surfaces.
+* `lib/`: Public facade and language package source.
 * `docs/`: User-facing and contributor-facing documentation.
-* `crates/xtask/`: Developer automation and repository maintenance tooling.
+* `xtask/`: Developer automation and repository maintenance tooling.
 * `.agents/skills/`: Agent skills and repository-specific agent guidance.
 
 ### Boundaries
 
-* Core engine behavior belongs in `crates/`, not duplicated in bindings or apps.
+* Core engine behavior belongs in `crates/`, not duplicated in bindings, demos, or apps.
 * Bindings should be thin layers over stable core APIs.
 * Packages should expose polished public APIs, not internal engine details.
-* Apps may compose packages and crates but should not become hidden libraries.
+* Demos and apps may compose packages and crates but should not become hidden libraries.
 * Shared test fixtures should be placed where all relevant languages can consume them without circular dependencies.
 
 ---

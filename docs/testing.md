@@ -22,6 +22,8 @@ cargo xtask test unit whitebox
 cargo xtask test unit interface
 cargo xtask test unit xtask
 cargo xtask test unit rust --package cogentlm-engine
+cargo xtask test unit browser-package
+cargo xtask test unit demos
 cargo xtask test unit node --backend cpu
 cargo xtask test unit python --backend cpu
 cargo xtask test smoke node --backend cpu
@@ -36,6 +38,8 @@ cargo xtask test verify --changed
 suites, while `interface` covers deterministic public API and binding package
 checks. Unit target names expose target-specific options, such as
 `test unit rust --package <crate>` and `test unit node --backend cpu`.
+Browser package tests live under `packages/cogentlm-web`; demo tests are
+discovered under `demos`.
 
 `test smoke` owns holistic integration checks. Model-backed smoke targets
 (`cli`, `rust`, `node`, `python`, and `model`) default to the setup sample model
@@ -52,3 +56,10 @@ coverage artifacts under `.build/coverage/`.
 `test verify` does not execute test suites. It validates test structure,
 catalog ownership, test/runtime code separation, optional changed-file coverage,
 and existing coverage artifacts.
+
+## Package Locations
+
+- `packages/cogentlm-web` publishes `@noumena-labs/cogentlm` and public `cogentlm`.
+- `packages/cogentlm-node` publishes `@noumena-labs/cogentlm-server` and public `cogentlm-server`.
+- `lib/python` publishes Python `cogentlm`.
+- `lib/cogentlm` is the Rust facade crate used by Rust applications and examples.

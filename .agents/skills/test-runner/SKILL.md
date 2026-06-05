@@ -41,7 +41,7 @@ change.
   ```
 - Example: `cargo xtask test unit rust --package cogentlm-engine`
 
-### 3. Node.js Bindings (`bindings/node/`)
+### 3. Node.js Bindings And Package (`bindings/node/`, `packages/cogentlm-node/`)
 - Run deterministic Node package API tests:
   ```bash
   cargo xtask test unit node --backend cpu
@@ -51,17 +51,17 @@ change.
   cargo xtask test smoke node --backend cpu
   ```
 
-### 4. TypeScript NPM Packages (`packages/npm/`)
+### 4. Browser Package And Demos (`packages/cogentlm-web/`, `demos/`)
 - Run browser package TypeScript tests:
   ```bash
   cargo xtask test unit browser-package
   ```
-- App tests are cataloged separately:
+- Demo tests are cataloged separately:
   ```bash
-  cargo xtask test unit apps
+  cargo xtask test unit demos
   ```
 
-### 5. Python Bindings (`bindings/python/`)
+### 5. Python Bindings And Package (`bindings/python/`, `lib/python/`)
 - Run deterministic Python package API tests:
   ```bash
   cargo xtask test unit python --backend cpu

@@ -457,6 +457,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cogentlm-rust-examples"
+version = "0.1.0"
+dependencies = [
+ "cogentlm",
+ "futures",
+]
+
+[[package]]
 name = "cogentlm-shard"
 version = "0.1.0"
 dependencies = [

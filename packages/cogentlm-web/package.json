@@ -1,0 +1,72 @@
+{
+  "name": "@noumena-labs/cogentlm",
+  "version": "0.1.0",
+  "description": "Run powerful AI models locally with high-performance text and vision inference directly in the browser",
+  "main": "dist/esm/index.js",
+  "types": "dist/types/index.d.ts",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "default": "./dist/esm/index.js"
+    },
+    "./character": {
+      "types": "./dist/types/character/index.d.ts",
+      "import": "./dist/esm/character/index.js",
+      "default": "./dist/esm/character/index.js"
+    },
+    "./director": {
+      "types": "./dist/types/orchestrator/index.d.ts",
+      "import": "./dist/esm/orchestrator/index.js",
+      "default": "./dist/esm/orchestrator/index.js"
+    },
+    "./wasm/*": "./dist/wasm/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "clean:ts": "node -e \"const fs=require('node:fs'); for (const p of ['../../.build/artifacts/npm/cogentlm/dist/esm','../../.build/artifacts/npm/cogentlm/dist/types','dist/esm','dist/types']) fs.rmSync(p,{recursive:true,force:true});\"",
+    "build:ts": "tsc -p tsconfig.json",
+    "build:stage": "node scripts/stage-package.mjs",
+    "build": "bun run clean:ts && bun run build:ts && bun run build:stage",
+    "test": "bun test tests"
+  },
+  "keywords": [
+    "ai",
+    "llm",
+    "cogentlm",
+    "inference",
+    "webgpu",
+    "wasm",
+    "front-end",
+    "vision",
+    "chat",
+    "gguf",
+    "llama.cpp"
+  ],
+  "author": "noumena-labs",
+  "homepage": "https://www.cogentlm.com/",
+  "bugs": {
+    "url": "https://github.com/noumena-labs/CogentLM/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/noumena-labs/CogentLM.git",
+    "directory": "packages/cogentlm-web"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "@types/node": "^20.10.0",
+    "playwright": "^1.56.1"
+  }
+}

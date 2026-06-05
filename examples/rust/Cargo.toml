@@ -1,0 +1,21 @@
+[package]
+name = "cogentlm-rust-examples"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+default = ["native"]
+native = ["cogentlm/native"]
+remote = ["cogentlm/remote"]
+backend-dl = ["cogentlm/backend-dl"]
+cuda = ["cogentlm/cuda"]
+metal = ["cogentlm/metal"]
+vulkan = ["cogentlm/vulkan"]
+openmp = ["cogentlm/openmp"]
+
+[dependencies]
+cogentlm.workspace = true
+futures.workspace = true
