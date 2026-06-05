@@ -1,4 +1,4 @@
-import native from '../../packages/cogentlm-node/router.js';
+import native from '../../lib/node/router.js';
 
 export const {
   CogentClient,

@@ -26,7 +26,7 @@ interface VitePluginLike {
 
 const demosDir = fileURLToPath(new URL('.', import.meta.url));
 const repoRoot = path.resolve(demosDir, '..');
-const cogentClientPackageDir = path.join(repoRoot, 'packages', 'cogentlm-web');
+const cogentClientPackageDir = path.join(repoRoot, 'lib', 'web');
 const cogentClientArtifactDir = path.join(
   repoRoot,
   '.build',
@@ -175,7 +175,7 @@ export function cogentClientDistWatch(): VitePluginLike {
       server.watcher.on('add', handleAdd);
       server.watcher.on('change', handleChange);
       server.watcher.on('unlink', handleUnlink);
-      console.info('[cogentlm] watching packages/cogentlm-web/src and .build artifact wasm.');
+      console.info('[cogentlm] watching lib/web/src and .build artifact wasm.');
 
       server.httpServer?.once('close', () => {
         stopped = true;

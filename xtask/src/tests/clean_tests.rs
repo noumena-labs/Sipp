@@ -60,7 +60,7 @@ fn clean_targets_include_generated_dirs_and_optional_purge_roots() {
     let temp = TempDir::new("clean-targets");
     temp.create_dir("demos/chat");
     temp.create_dir("benchmarks/browser");
-    temp.create_dir("packages/cogentlm-web");
+    temp.create_dir("lib/web");
     let ctx = BuildContext::from_workspace_root_for_test(temp.path());
 
     let base = clean_targets(

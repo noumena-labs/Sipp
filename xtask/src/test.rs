@@ -43,7 +43,7 @@ const PROVIDER_GATEWAY_SMOKE_TARGETS: &[RustTestTarget] = &[RustTestTarget::test
     "provider_gateway_smoke",
 )];
 const DEMO_TEST_SUFFIX: &str = ".test.ts";
-const BROWSER_PACKAGE_TEST_DIR: &str = "packages/cogentlm-web/tests";
+const BROWSER_PACKAGE_TEST_DIR: &str = "lib/web/tests";
 const SKIPPED_DEMO_TEST_DIRS: &[&str] = &[
     "node_modules",
     "dist",
@@ -83,7 +83,7 @@ const CLI_BLACK_BOX_TEST_TARGETS: &[RustTestTarget] =
 
 const XTASK_SOURCE_ROOTS: &[&str] = &["xtask/src"];
 const RUST_CRATE_SOURCE_ROOTS: &[&str] = &[
-    "lib/cogentlm/src",
+    "lib/rust/src",
     "crates/core/src",
     "crates/shard/src",
     "crates/sys/src",
@@ -100,10 +100,10 @@ const RUST_BINDING_SOURCE_ROOTS: &[&str] = &[
     "bindings/wasm/src",
     "bindings/wasm/native",
 ];
-const PACKAGE_TS_SOURCE_ROOTS: &[&str] = &["packages/cogentlm-web/src"];
+const PACKAGE_TS_SOURCE_ROOTS: &[&str] = &["lib/web/src"];
 const DEMO_TS_SOURCE_ROOTS: &[&str] = &["demos"];
 const RUST_PUBLIC_API_SOURCE_ROOTS: &[&str] = &[
-    "lib/cogentlm/src",
+    "lib/rust/src",
     "crates/client/src",
     "crates/gateway-providers/src",
     "crates/shard/src",
@@ -111,14 +111,14 @@ const RUST_PUBLIC_API_SOURCE_ROOTS: &[&str] = &[
 const CLI_SOURCE_ROOTS: &[&str] = &["apps/cli/src"];
 const NODE_PACKAGE_SOURCE_ROOTS: &[&str] = &[
     "bindings/node/src",
-    "packages/cogentlm-node/index.d.ts",
-    "packages/cogentlm-node/router.js",
-    "packages/cogentlm-node/router.d.ts",
+    "lib/node/index.d.ts",
+    "lib/node/router.js",
+    "lib/node/router.d.ts",
 ];
 const PYTHON_PACKAGE_SOURCE_ROOTS: &[&str] = &["lib/python/python/cogentlm"];
 const CLI_SMOKE_SOURCE_ROOTS: &[&str] = &["apps/cli/src"];
 const RUST_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/rust/src"];
-const NODE_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/node", "packages/cogentlm-node"];
+const NODE_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/node", "lib/node"];
 const PYTHON_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/python", "lib/python"];
 const PROVIDER_GATEWAY_SMOKE_SOURCE_ROOTS: &[&str] =
     &["crates/gateway/src", "crates/gateway-providers/src"];
@@ -164,7 +164,7 @@ const TEST_SUITES: &[TestSuite] = &[
         id: TestSuiteId::PackageTs,
         group: TestGroup::Unit,
         layer: Some(TestUnitLayer::Whitebox),
-        description: "browser package TypeScript tests under packages/cogentlm-web/tests",
+        description: "browser package TypeScript tests under lib/web/tests",
         requirements: "bun, wasm build",
         source_roots: PACKAGE_TS_SOURCE_ROOTS,
         coverage: false,
@@ -553,7 +553,7 @@ fn run_rust_coverage_targets(
         let package = target.package;
         let mut lcov_cmd = cmd!(
             sh,
-            "cargo llvm-cov --lcov --output-path {rust_lcov} --ignore-filename-regex third_party|\\.build|target|tests|examples|packages|demos|benchmarks -p {package}"
+            "cargo llvm-cov --lcov --output-path {rust_lcov} --ignore-filename-regex third_party|\\.build|target|tests|examples|demos|benchmarks -p {package}"
         );
         if coverage_state.rust_started {
             lcov_cmd = lcov_cmd.arg("--no-clean");
@@ -582,7 +582,7 @@ fn run_rust_coverage_targets(
 
     let html_cmd = cmd!(
         sh,
-        "cargo llvm-cov --html --no-run --output-dir {rust_html} --ignore-filename-regex third_party|\\.build|target|tests|examples|packages|demos|benchmarks"
+        "cargo llvm-cov --html --no-run --output-dir {rust_html} --ignore-filename-regex third_party|\\.build|target|tests|examples|demos|benchmarks"
     );
     let html_cmd = apply_toolchains(sh, ctx, html_cmd, None)?;
     output::run_command("Writing Rust HTML coverage report", html_cmd)?;
@@ -1144,14 +1144,14 @@ fn write_rust_coverage_reports(sh: &Shell, ctx: &BuildContext) -> Result<()> {
         "Writing Rust LCOV report",
         cmd!(
             sh,
-            "cargo llvm-cov report --lcov --output-path {rust_lcov} --ignore-filename-regex third_party|\\.build|target|tests|examples|packages|demos|benchmarks"
+            "cargo llvm-cov report --lcov --output-path {rust_lcov} --ignore-filename-regex third_party|\\.build|target|tests|examples|demos|benchmarks"
         ),
     )?;
     output::run_command(
         "Writing Rust HTML report",
         cmd!(
             sh,
-            "cargo llvm-cov report --html --output-dir {rust_html} --ignore-filename-regex third_party|\\.build|target|tests|examples|packages|demos|benchmarks"
+            "cargo llvm-cov report --html --output-dir {rust_html} --ignore-filename-regex third_party|\\.build|target|tests|examples|demos|benchmarks"
         ),
     )?;
     Ok(())
@@ -1999,7 +1999,7 @@ fn collect_package_test_layout_violations(
         };
         if file_name.ends_with(".test.ts") {
             violations.push(format!(
-                "TypeScript test must live under packages/cogentlm-web/tests: {}",
+                "TypeScript test must live under lib/web/tests: {}",
                 display_relative(ctx, &path)
             ));
         }
@@ -2477,7 +2477,7 @@ fn rust_target_case_files(ctx: &BuildContext, targets: &[RustTestTarget]) -> Res
 
 fn rust_package_root(ctx: &BuildContext, package: &str) -> Result<PathBuf> {
     let relative: &[&str] = match package {
-        "cogentlm" => &["lib", "cogentlm"],
+        "cogentlm" => &["lib", "rust"],
         "cogentlm-core" => &["crates", "core"],
         "cogentlm-shard" => &["crates", "shard"],
         "cogentlm-sys" => &["crates", "sys"],

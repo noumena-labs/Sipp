@@ -170,8 +170,8 @@ impl BuildContext {
         self.build_root().join("models")
     }
 
-    pub(crate) fn packages_root(&self) -> PathBuf {
-        self.workspace_root.join("packages")
+    pub(crate) fn lib_root(&self) -> PathBuf {
+        self.workspace_root.join("lib")
     }
 
     pub(crate) fn demos_root(&self) -> PathBuf {
@@ -191,15 +191,15 @@ impl BuildContext {
     }
 
     pub(crate) fn browser_package_dir(&self) -> PathBuf {
-        self.packages_root().join("cogentlm-web")
+        self.lib_root().join("web")
     }
 
     pub(crate) fn node_package_dir(&self) -> PathBuf {
-        self.packages_root().join("cogentlm-node")
+        self.lib_root().join("node")
     }
 
     pub(crate) fn python_package_project_dir(&self) -> PathBuf {
-        self.workspace_root.join("lib").join("python")
+        self.lib_root().join("python")
     }
 
     fn playwright_core_cli(&self) -> PathBuf {
@@ -264,8 +264,8 @@ impl BuildContext {
         read_child_dirs(&self.benchmarks_root())
     }
 
-    pub(crate) fn package_dirs(&self) -> Result<Vec<PathBuf>> {
-        read_child_dirs(&self.packages_root())
+    pub(crate) fn js_package_dirs(&self) -> Vec<PathBuf> {
+        vec![self.browser_package_dir(), self.node_package_dir()]
     }
 
     pub(crate) fn uv_toolchain_dir(&self) -> PathBuf {

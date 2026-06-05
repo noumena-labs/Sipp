@@ -38,7 +38,7 @@ cargo xtask test verify --changed
 suites, while `interface` covers deterministic public API and binding package
 checks. Unit target names expose target-specific options, such as
 `test unit rust --package <crate>` and `test unit node --backend cpu`.
-Browser package tests live under `packages/cogentlm-web`; demo tests are
+Browser package tests live under `lib/web`; demo tests are
 discovered under `demos`.
 
 `test smoke` owns holistic integration checks. Model-backed smoke targets
@@ -59,7 +59,7 @@ and existing coverage artifacts.
 
 ## Package Locations
 
-- `packages/cogentlm-web` publishes `@noumena-labs/cogentlm` and public `cogentlm`.
-- `packages/cogentlm-node` publishes `@noumena-labs/cogentlm-server` and public `cogentlm-server`.
+- `lib/web` publishes `@noumena-labs/cogentlm` and public `cogentlm`.
+- `lib/node` publishes `@noumena-labs/cogentlm-server` and public `cogentlm-server`.
 - `lib/python` publishes Python `cogentlm`.
-- `lib/cogentlm` is the Rust facade crate used by Rust applications and examples.
+- `lib/rust` is the Rust facade crate used by Rust applications and examples.

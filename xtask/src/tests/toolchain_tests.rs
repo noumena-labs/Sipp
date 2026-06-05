@@ -110,8 +110,8 @@ fn node_workspace_status_checks_every_workspace_node_modules_root() {
     let temp = TempDir::new("toolchain-node-workspaces");
     temp.create_dir("demos/chat/node_modules");
     temp.create_dir("benchmarks/browser/node_modules");
-    temp.create_dir("packages/cogentlm-web/node_modules");
-    temp.create_dir("packages/cogentlm-node/node_modules");
+    temp.create_dir("lib/web/node_modules");
+    temp.create_dir("lib/node/node_modules");
     temp.create_dir("bindings/node/node_modules");
     temp.create_dir("node_modules");
     let ctx = BuildContext::from_workspace_root_for_test(temp.path());
@@ -129,8 +129,8 @@ fn node_workspace_status_checks_every_workspace_node_modules_root() {
     assert!(roots.contains(&temp.join("bindings/node/node_modules")));
     assert!(roots.contains(&temp.join("demos/chat/node_modules")));
     assert!(roots.contains(&temp.join("benchmarks/browser/node_modules")));
-    assert!(roots.contains(&temp.join("packages/cogentlm-web/node_modules")));
-    assert!(roots.contains(&temp.join("packages/cogentlm-node/node_modules")));
+    assert!(roots.contains(&temp.join("lib/web/node_modules")));
+    assert!(roots.contains(&temp.join("lib/node/node_modules")));
 }
 
 #[test]

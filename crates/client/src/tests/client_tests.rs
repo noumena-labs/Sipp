@@ -215,7 +215,7 @@ fn endpoint_ids_must_not_contain_surrounding_whitespace() {
 #[cfg(feature = "remote")]
 #[test]
 fn remote_gateway_examples_preserve_env_values_for_core_validation() {
-    let source = include_str!("../../examples/remote_common/mod.rs");
+    let source = include_str!("../../../../examples/rust/src/remote_common.rs");
     let env_string = source
         .split("fn env_string")
         .nth(1)

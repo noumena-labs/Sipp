@@ -120,13 +120,13 @@ jobs:
           path: |
             ~/.bun/install/cache
             node_modules
-            packages/cogentlm-web/node_modules
-            packages/cogentlm-node/node_modules
+            lib/web/node_modules
+            lib/node/node_modules
             bindings/node/node_modules
             demos/*/node_modules
             benchmarks/*/node_modules
             examples/web/node_modules
-          key: bun-release-${{ runner.os }}-${{ hashFiles('bun.lock', 'bindings/node/bun.lock', 'package.json', 'packages/*/package.json', 'bindings/node/package.json', 'demos/*/package.json', 'benchmarks/*/package.json', 'examples/web/package.json') }}
+          key: bun-release-${{ runner.os }}-${{ hashFiles('bun.lock', 'bindings/node/bun.lock', 'package.json', 'lib/node/package.json', 'lib/web/package.json', 'bindings/node/package.json', 'demos/*/package.json', 'benchmarks/*/package.json', 'examples/web/package.json') }}
           restore-keys: |
             bun-release-${{ runner.os }}-
 
@@ -213,7 +213,7 @@ jobs:
 
       - name: Stage Node server package
         if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
-        working-directory: packages/cogentlm-node
+        working-directory: lib/node
         run: bun run build:stage
 
       - name: Prepare public Node npm metadata
@@ -281,7 +281,7 @@ jobs:
             Cargo.lock \
             README.md \
             LICENSE \
-            lib/cogentlm \
+            lib/rust \
             crates/core \
             crates/shard \
             crates/sys \

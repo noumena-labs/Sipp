@@ -41,7 +41,7 @@ change.
   ```
 - Example: `cargo xtask test unit rust --package cogentlm-engine`
 
-### 3. Node.js Bindings And Package (`bindings/node/`, `packages/cogentlm-node/`)
+### 3. Node.js Bindings And Package (`bindings/node/`, `lib/node/`)
 - Run deterministic Node package API tests:
   ```bash
   cargo xtask test unit node --backend cpu
@@ -51,7 +51,7 @@ change.
   cargo xtask test smoke node --backend cpu
   ```
 
-### 4. Browser Package And Demos (`packages/cogentlm-web/`, `demos/`)
+### 4. Browser Package And Demos (`lib/web/`, `demos/`)
 - Run browser package TypeScript tests:
   ```bash
   cargo xtask test unit browser-package

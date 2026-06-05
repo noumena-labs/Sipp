@@ -4,7 +4,8 @@
   "version": "1.0.0",
   "packageManager": "bun@1.3.11",
   "workspaces": [
-    "packages/*",
+    "lib/node",
+    "lib/web",
     "demos/*",
     "benchmarks/*",
     "examples/web"

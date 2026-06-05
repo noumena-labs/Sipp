@@ -64,14 +64,14 @@ jobs:
         run: |
           set -euo pipefail
           NPM_VERSION="$(node <<'NODE'
-          const pkg = require('./packages/cogentlm-web/package.json');
+          const pkg = require('./lib/web/package.json');
           const match = pkg.version.match(/^(\d+)\.(\d+)\.(\d+)/);
           if (!match) throw new Error(`Unsupported version format: ${pkg.version}`);
           console.log(`${match[1]}.${match[2]}.${Number(match[3]) + 1}-dev.${process.env.GITHUB_RUN_NUMBER}.${process.env.GITHUB_RUN_ATTEMPT}`);
           NODE
           )"
           PYTHON_VERSION="$(node <<'NODE'
-          const pkg = require('./packages/cogentlm-web/package.json');
+          const pkg = require('./lib/web/package.json');
           const match = pkg.version.match(/^(\d+)\.(\d+)\.(\d+)/);
           if (!match) throw new Error(`Unsupported version format: ${pkg.version}`);
           console.log(`${match[1]}.${match[2]}.${Number(match[3]) + 1}.dev${process.env.GITHUB_RUN_NUMBER}${process.env.GITHUB_RUN_ATTEMPT}`);
@@ -117,7 +117,7 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import { readFileSync, writeFileSync } from 'node:fs';
-          const jsonFiles = ['packages/cogentlm-web/package.json', 'packages/cogentlm-node/package.json'];
+          const jsonFiles = ['lib/web/package.json', 'lib/node/package.json'];
           for (const path of jsonFiles) {
             const pkg = JSON.parse(readFileSync(path, 'utf8'));
             pkg.version = process.env.DEV_VERSION;
@@ -178,7 +178,7 @@ jobs:
 
       - name: Stage Node server package
         if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
-        working-directory: packages/cogentlm-node
+        working-directory: lib/node
         run: bun run build:stage
 
       - name: Upload Node npm artifact
@@ -226,7 +226,7 @@ jobs:
             Cargo.lock \
             README.md \
             LICENSE \
-            lib/cogentlm \
+            lib/rust \
             crates/core \
             crates/shard \
             crates/sys \

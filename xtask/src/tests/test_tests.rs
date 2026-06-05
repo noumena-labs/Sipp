@@ -470,7 +470,7 @@ fn search_filter_matches_suite_metadata_and_cases() {
         TestCase {
             suite_id: TestSuiteId::NodePackage,
             name: "router routes aliases".to_owned(),
-            path: "packages/cogentlm-node/tests/router.test.mjs".to_owned(),
+            path: "lib/node/tests/router.test.mjs".to_owned(),
         },
         TestCase {
             suite_id: TestSuiteId::Xtask,
@@ -505,9 +505,7 @@ fn source_path_helpers_classify_roots_and_tests() {
     );
     assert!(is_first_party_source_path("xtask/src/test.rs"));
     assert!(!is_first_party_source_path("xtask/src/tests/test_tests.rs"));
-    assert!(is_probable_test_path(
-        "packages/cogentlm-web/tests/router.test.ts"
-    ));
+    assert!(is_probable_test_path("lib/web/tests/router.test.ts"));
     assert!(is_probable_test_path("xtask/src/tests/test_tests.rs"));
 }
 

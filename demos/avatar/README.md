@@ -116,5 +116,5 @@ characters too.
 Use `persona.anchorExamples` for durable steering and `persona.dialogExamples`
 for conversational flow examples.
 
-See `packages/cogentlm-web/src/character` for the character runtime APIs
+See `lib/web/src/character` for the character runtime APIs
 and config shape.

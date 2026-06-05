@@ -387,9 +387,11 @@ fn node_modules_roots(ctx: &BuildContext) -> Vec<PathBuf> {
     if let Ok(dirs) = ctx.benchmark_dirs() {
         roots.extend(dirs.into_iter().map(|dir| dir.join("node_modules")));
     }
-    if let Ok(dirs) = ctx.package_dirs() {
-        roots.extend(dirs.into_iter().map(|dir| dir.join("node_modules")));
-    }
+    roots.extend(
+        ctx.js_package_dirs()
+            .into_iter()
+            .map(|dir| dir.join("node_modules")),
+    );
 
     roots
 }

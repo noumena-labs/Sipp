@@ -417,12 +417,11 @@ The repository is organized by responsibility:
 
 * `crates/`: Core Rust implementation.
 * `bindings/`: FFI and language bindings such as Node, Python, and WASM.
-* `packages/`: NPM packages intended for distribution, such as browser or runtime packages.
 * `apps/`: First-party applications such as the Rust CLI.
 * `demos/`: Browser demos using the public browser package.
 * `benchmarks/`: Benchmark harnesses and benchmark apps.
 * `examples/`: Runnable onboarding examples for public package surfaces.
-* `lib/`: Public facade and language package source.
+* `lib/`: Public facade and language/runtime package source, including Rust, Python, Node, and browser packages.
 * `docs/`: User-facing and contributor-facing documentation.
 * `xtask/`: Developer automation and repository maintenance tooling.
 * `.agents/skills/`: Agent skills and repository-specific agent guidance.
@@ -431,7 +430,7 @@ The repository is organized by responsibility:
 
 * Core engine behavior belongs in `crates/`, not duplicated in bindings, demos, or apps.
 * Bindings should be thin layers over stable core APIs.
-* Packages should expose polished public APIs, not internal engine details.
+* Public library packages should expose polished public APIs, not internal engine details.
 * Demos and apps may compose packages and crates but should not become hidden libraries.
 * Shared test fixtures should be placed where all relevant languages can consume them without circular dependencies.
 

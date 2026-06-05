@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "lib/cogentlm",
+    "lib/rust",
     "crates/core",
     "crates/shard",
     "crates/sys",
@@ -31,7 +31,7 @@ clap = { version = "4.5", features = ["derive"] }
 cmake = "0.1"
 cxx = "1"
 cxx-build = "1"
-cogentlm = { path = "lib/cogentlm", version = "0.1.0", default-features = false }
+cogentlm = { path = "lib/rust", version = "0.1.0", default-features = false }
 cogentlm-core = { path = "crates/core", version = "0.1.0" }
 cogentlm-shard = { path = "crates/shard", version = "0.1.0" }
 cogentlm-sys = { path = "crates/sys", version = "0.1.0" }

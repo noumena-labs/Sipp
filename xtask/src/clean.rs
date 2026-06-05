@@ -93,7 +93,7 @@ fn clean_targets(ctx: &BuildContext, args: &CleanArgs) -> Result<Vec<PathBuf>> {
     for dir in ctx.benchmark_dirs()? {
         add_generated_dirs(&mut targets, &dir);
     }
-    for dir in ctx.package_dirs()? {
+    for dir in ctx.js_package_dirs() {
         add_generated_dirs(&mut targets, &dir);
     }
 
@@ -107,7 +107,7 @@ fn clean_targets(ctx: &BuildContext, args: &CleanArgs) -> Result<Vec<PathBuf>> {
         for dir in ctx.benchmark_dirs()? {
             targets.insert(dir.join("node_modules"));
         }
-        for dir in ctx.package_dirs()? {
+        for dir in ctx.js_package_dirs() {
             targets.insert(dir.join("node_modules"));
         }
     }

@@ -6,13 +6,13 @@ import {
   parseDirectorConfig,
   type DirectorRuntimeClient,
   type JsonValue,
-} from '../../packages/cogentlm-web/src/orchestrator/index.js';
+} from '../../lib/web/src/orchestrator/index.js';
 import type {
   BrowserTextRun,
   GenerationResult,
   RequestStats,
   TokenBatch,
-} from '../../packages/cogentlm-web/src/models/types.js';
+} from '../../lib/web/src/models/types.js';
 
 import { SimulationBus, type SimulationEvent } from './src/runtime/bus.ts';
 import {

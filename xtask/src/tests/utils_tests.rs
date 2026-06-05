@@ -57,11 +57,8 @@ fn build_context_paths_are_rooted_under_fake_workspace() {
     assert_eq!(ctx.sample_models_dir(), temp.join(".build/models"));
     assert_eq!(ctx.bindings_node_dir(), temp.join("bindings/node"));
     assert_eq!(ctx.bindings_python_dir(), temp.join("bindings/python"));
-    assert_eq!(
-        ctx.browser_package_dir(),
-        temp.join("packages/cogentlm-web")
-    );
-    assert_eq!(ctx.node_package_dir(), temp.join("packages/cogentlm-node"));
+    assert_eq!(ctx.browser_package_dir(), temp.join("lib/web"));
+    assert_eq!(ctx.node_package_dir(), temp.join("lib/node"));
     assert_eq!(ctx.python_package_project_dir(), temp.join("lib/python"));
 }
 

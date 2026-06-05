@@ -105,7 +105,7 @@
         "vite": "^5.1.0",
       },
     },
-    "packages/cogentlm-node": {
+    "lib/node": {
       "name": "@noumena-labs/cogentlm-server",
       "version": "0.1.0",
       "devDependencies": {
@@ -113,7 +113,7 @@
         "c8": "^10.1.3",
       },
     },
-    "packages/cogentlm-web": {
+    "lib/web": {
       "name": "@noumena-labs/cogentlm",
       "version": "0.1.0",
       "devDependencies": {
@@ -366,9 +366,9 @@
 
     "@napi-rs/wasm-tools-win32-x64-msvc": ["@napi-rs/wasm-tools-win32-x64-msvc@1.0.1", "", { "os": "win32", "cpu": "x64" }, "sha512-rEAf05nol3e3eei2sRButmgXP+6ATgm0/38MKhz9Isne82T4rPIMYsCIFj0kOisaGeVwoi2fnm7O9oWp5YVnYQ=="],
 
-    "@noumena-labs/cogentlm": ["@noumena-labs/cogentlm@workspace:packages/cogentlm-web"],
+    "@noumena-labs/cogentlm": ["@noumena-labs/cogentlm@workspace:lib/web"],
 
-    "@noumena-labs/cogentlm-server": ["@noumena-labs/cogentlm-server@workspace:packages/cogentlm-node"],
+    "@noumena-labs/cogentlm-server": ["@noumena-labs/cogentlm-server@workspace:lib/node"],
 
     "@octokit/auth-token": ["@octokit/auth-token@6.0.0", "", {}, "sha512-P4YJBPdPSpWTQ1NU4XYdvHvXJJDxM6YwpS0FZHRgP7YFkdVxsWcpWGy/NVqlAA7PcPCnMacXlRm1y2PFZRWL/w=="],
 

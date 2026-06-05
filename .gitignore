@@ -35,10 +35,12 @@ build/
 /apps/*/build/
 /apps/*/.next/
 /apps/*/.svelte-kit/
-/packages/*/dist/
-/packages/*/build/
-/packages/*/src/wasm/cogentlm-wasm*.js
-/packages/*/src/wasm/cogentlm-wasm*.wasm
+/lib/node/dist/
+/lib/node/build/
+/lib/web/dist/
+/lib/web/build/
+/lib/web/src/wasm/cogentlm-wasm*.js
+/lib/web/src/wasm/cogentlm-wasm*.wasm
 
 # =========================
 # Bindings & Cross-Compilation
