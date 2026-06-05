@@ -6,12 +6,12 @@
 use clap::Parser;
 
 use super::{
-    Backend, Cli, Commands, DemoName, DemoServeMode, DoctorTarget, ExampleName,
-    LlamaBackendOpsMode, LlamaBackendOpsOutput, RunCommands, RunDemosCommands, RunExamplesCommands,
-    RunLlamaCommands, RunToolsCommands, SetupProfile, TestCommands, TestGroupFilter,
-    TestListFormat, TestSmokeCommands, TestSmokeGroupTarget, TestSmokeSuiteTarget, TestSuiteId,
-    TestUnitCommands, TestUnitGroupTarget, TestUnitLayer, TestUnitSuiteTarget, ToolName,
-    ToolchainCommands, ToolchainComponent,
+    Backend, Cli, Commands, DemoName, DemoServeMode, DoctorTarget, LlamaBackendOpsMode,
+    LlamaBackendOpsOutput, RunCommands, RunDemosCommands, RunExampleServeTarget,
+    RunExamplesCommands, RunLlamaCommands, RunToolsCommands, SetupProfile, TestCommands,
+    TestGroupFilter, TestListFormat, TestSmokeCommands, TestSmokeGroupTarget, TestSmokeSuiteTarget,
+    TestSuiteId, TestUnitCommands, TestUnitGroupTarget, TestUnitLayer, TestUnitSuiteTarget,
+    ToolName, ToolchainCommands, ToolchainComponent,
 };
 
 #[test]
@@ -89,10 +89,38 @@ fn run_examples_and_tools_parse_browser_workflows() {
         panic!("expected examples command");
     };
     let RunExamplesCommands::Serve(args) = command;
-    assert_eq!(args.example, ExampleName::Browser);
+    let RunExampleServeTarget::Browser(args) = args.target else {
+        panic!("expected browser example serve target");
+    };
     assert_eq!(args.mode, DemoServeMode::Preview);
     assert_eq!(args.port, Some(4173));
     assert!(args.no_build);
+
+    let cli = Cli::parse_from([
+        "xtask",
+        "run",
+        "examples",
+        "serve",
+        "gateway-local",
+        "--model",
+        "model.gguf",
+        "--bind",
+        "127.0.0.1:8787",
+    ]);
+    let Commands::Run { command } = cli.command else {
+        panic!("expected run command");
+    };
+    let RunCommands::Examples { command } = command else {
+        panic!("expected examples command");
+    };
+    let RunExamplesCommands::Serve(args) = command;
+    let RunExampleServeTarget::GatewayLocal(args) = args.target else {
+        panic!("expected gateway-local serve target");
+    };
+    assert_eq!(args.model, std::path::PathBuf::from("model.gguf"));
+    assert_eq!(args.bind, "127.0.0.1:8787");
+    assert_eq!(args.token_env, "COGENTLM_GATEWAY_TOKEN");
+    assert_eq!(args.backend, Backend::Cpu);
 
     let cli = Cli::parse_from(["xtask", "run", "tools", "build", "playground"]);
     let Commands::Run { command } = cli.command else {
@@ -292,6 +320,10 @@ fn labels_match_cli_wire_values() {
     assert_eq!(
         TestSuiteId::ExampleBrowserSmoke.as_str(),
         "example-browser-smoke"
+    );
+    assert_eq!(
+        TestSuiteId::ExampleGatewaySmoke.as_str(),
+        "example-gateway-smoke"
     );
     assert_eq!(
         TestSuiteId::PlaygroundBrowserSmoke.as_str(),

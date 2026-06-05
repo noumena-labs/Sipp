@@ -2,21 +2,84 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cogentlm import ChatMessage, LocalTextOptions
+from cogentlm import (
+    CacheRuntimeConfig,
+    ChatMessage,
+    CogentClient,
+    CogentTextOptions,
+    ContextRuntimeConfig,
+    LocalTextOptions,
+    ModelPlacementConfig,
+    MultimodalRuntimeConfig,
+    NativeRuntimeConfig,
+    ObservabilityRuntimeConfig,
+    ResidencyRuntimeConfig,
+    SamplingRuntimeConfig,
+    SchedulerRuntimeConfig,
+    set_llama_log_quiet,
+)
 
-from _common import load_client, print_text, read_vision_args, text_options
+from _support import (
+    DEFAULT_CONTEXT,
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_SEED,
+    DEFAULT_TEMPERATURE,
+    DEFAULT_TOP_P,
+    float_env,
+    gpu_layers,
+    int_env,
+    print_text,
+    read_vision_args,
+)
+
+
+def runtime_config(projector_path: str) -> NativeRuntimeConfig:
+    return NativeRuntimeConfig(
+        placement=ModelPlacementConfig(gpu_layers=gpu_layers()),
+        context=ContextRuntimeConfig(
+            n_ctx=int_env("COGENTLM_CONTEXT", DEFAULT_CONTEXT),
+            n_threads=int_env("COGENTLM_THREADS"),
+            n_threads_batch=int_env("COGENTLM_THREADS"),
+        ),
+        sampling=SamplingRuntimeConfig(
+            temperature=float_env("COGENTLM_TEMPERATURE", DEFAULT_TEMPERATURE),
+            seed=int_env("COGENTLM_SEED", DEFAULT_SEED),
+        ),
+        scheduler=SchedulerRuntimeConfig(
+            continuous_batching=True,
+            prefill_chunk_size=0,
+        ),
+        cache=CacheRuntimeConfig(mode="live_slot_prefix"),
+        multimodal=MultimodalRuntimeConfig(projector_path=projector_path),
+        residency=ResidencyRuntimeConfig(max_gpu_models_per_device=1),
+        observability=ObservabilityRuntimeConfig(runtime_metrics=True),
+    )
+
+
+def text_options() -> CogentTextOptions:
+    return CogentTextOptions(
+        max_tokens=int_env("COGENTLM_MAX_TOKENS", DEFAULT_MAX_TOKENS),
+        temperature=float_env("COGENTLM_TEMPERATURE", DEFAULT_TEMPERATURE),
+        top_p=float_env("COGENTLM_TOP_P", DEFAULT_TOP_P),
+    )
 
 
 def main() -> None:
     model, projector, image, prompt = read_vision_args("Describe this image in one sentence.")
-    client = load_client(model, projector_path=projector)
+    set_llama_log_quiet(True)
+
+    client = CogentClient()
+    client.add_local("default", model, runtime_config(projector))
+
+    # Multimodal chat uses the same chat API. The projector is in runtime
+    # config; image bytes are passed on the request.
     run = client.chat(
         [
             ChatMessage("user", prompt),
         ],
         options=text_options(),
         local=LocalTextOptions(
-            context_key="python-vision-chat-smoke",
+            context_key="python-vision-chat-example",
             media=[Path(image).read_bytes()],
         ),
         emit_tokens=True,

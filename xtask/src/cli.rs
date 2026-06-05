@@ -29,6 +29,7 @@ Start with:
   cargo xtask clean --dry-run
   cargo xtask run --help
   cargo xtask run examples serve browser
+  cargo xtask run examples serve gateway-local --model .build/models/model.gguf
   cargo xtask run tools serve playground
   cargo xtask test --help
   cargo xtask test unit group full
@@ -69,6 +70,8 @@ Examples:
   cargo xtask run demos build chat
   cargo xtask run demos serve avatar --port 5173
   cargo xtask run examples serve browser --port 5173
+  cargo xtask run examples serve gateway-local --model .build/models/model.gguf --bind 127.0.0.1:8787
+  cargo xtask run examples serve gateway-openai --bind 127.0.0.1:8787
   cargo xtask run tools build playground
   cargo xtask run tools serve playground --mode preview --port 4173
   cargo xtask run llama backend-ops --backend cpu --mode support
@@ -109,10 +112,14 @@ Serve onboarding examples.
 Examples:
   cargo xtask run examples serve browser
   cargo xtask run examples serve browser --mode preview --port 4173
+  cargo xtask run examples serve gateway-local --model .build/models/model.gguf --bind 127.0.0.1:8787
+  cargo xtask run examples serve gateway-openai --bind 127.0.0.1:8787
 
 The browser example lives under examples/web and mirrors the public CogentClient
-query, chat, embed, and remote gateway examples. Browser example smoke lives
-under `cargo xtask test smoke suite example-browser`.";
+query, chat, embed, and gateway examples. Gateway serve commands start a real
+gateway process from examples/gateway-style configs; `gateway-openai` requires
+OPENAI_API_KEY. Browser example smoke lives under
+`cargo xtask test smoke suite example-browser`.";
 
 const RUN_TOOLS_HELP: &str = "\
 Build or serve developer tools.
@@ -130,6 +137,7 @@ Run holistic smoke checks through explicit suite and group namespaces.
 
 Examples:
   cargo xtask test smoke suite example-node --backend cpu --case query
+  cargo xtask test smoke suite example-gateway --backend cpu --case embed
   cargo xtask test smoke suite example-browser --case chat
   cargo xtask test smoke suite playground-browser --require-webgpu
   cargo xtask test smoke group examples --backend cpu
@@ -144,19 +152,19 @@ Run exactly one smoke suite.
 
 Suites and code locations:
   cli                 staged CLI built from apps/cli
-  example-rust        examples/rust query/chat binaries
-  example-node        examples/node query.mjs/chat.mjs
-  example-python      examples/python query.py/chat.py
-  example-browser     examples/web query/chat pages through Playwright
+  example-rust        examples/rust query/chat/embed binaries
+  example-node        examples/node query.mjs/chat.mjs/embed.mjs
+  example-python      examples/python query.py/chat.py/embed.py
+  example-gateway     real local gateway plus examples/rust,node,python clients
+  example-browser     examples/web query/chat/embed pages through Playwright
   playground-browser  tools/playground runtime smoke through Playwright
-  provider-gateway    crates/gateway provider gateway integration test
   llama-backend-ops   third_party/llama.cpp test-backend-ops";
 
 const SMOKE_GROUP_HELP: &str = "\
 Run a named bundle of smoke suites.
 
 Groups:
-  examples     Rust, Node, Python, and browser onboarding examples
+  examples     Rust, Node, Python, gateway, and browser onboarding examples
   local-model  CLI plus Rust, Node, and Python local model smoke
   full         every smoke suite, including playground, gateway, and llama checks";
 
@@ -638,26 +646,28 @@ pub enum TestSmokeSuiteTarget {
     /// Run model-backed CLI smoke from apps/cli.
     #[command(after_long_help = BACKEND_HELP)]
     Cli(TestSmokeModelArgs),
-    /// Run model-backed Rust query/chat examples under examples/rust.
+    /// Run model-backed Rust query/chat/embed examples under examples/rust.
     #[command(name = "example-rust")]
     #[command(after_long_help = BACKEND_HELP)]
     ExampleRust(TestSmokeCaseArgs),
-    /// Run model-backed Node query/chat examples under examples/node.
+    /// Run model-backed Node query/chat/embed examples under examples/node.
     #[command(name = "example-node")]
     #[command(after_long_help = BACKEND_HELP)]
     ExampleNode(TestSmokeCaseArgs),
-    /// Run model-backed Python query/chat examples under examples/python.
+    /// Run model-backed Python query/chat/embed examples under examples/python.
     #[command(name = "example-python")]
     #[command(after_long_help = BACKEND_HELP)]
     ExamplePython(TestSmokeCaseArgs),
-    /// Run browser query/chat examples under examples/web through Playwright.
+    /// Run real local gateway examples and Rust/Node/Python gateway clients.
+    #[command(name = "example-gateway")]
+    #[command(after_long_help = BACKEND_HELP)]
+    ExampleGateway(TestSmokeCaseArgs),
+    /// Run browser query/chat/embed examples under examples/web through Playwright.
     #[command(name = "example-browser")]
     ExampleBrowser(TestSmokeExampleBrowserArgs),
     /// Run playground browser runtime smoke under tools/playground.
     #[command(name = "playground-browser")]
     PlaygroundBrowser(TestSmokePlaygroundBrowserArgs),
-    /// Run hermetic provider-backed gateway smoke tests.
-    ProviderGateway,
     /// Run llama.cpp backend operation smoke.
     #[command(name = "llama-backend-ops")]
     #[command(after_long_help = BACKEND_HELP)]
@@ -715,7 +725,7 @@ pub struct TestSmokeModelArgs {
     pub temperature: f32,
 }
 
-/// Model-backed smoke options with query/chat case selection.
+/// Model-backed smoke options with query/chat/embed case selection.
 #[derive(Args, Clone)]
 pub struct TestSmokeCaseArgs {
     /// Model-backed smoke options.
@@ -738,7 +748,7 @@ pub struct TestSmokeExampleBrowserArgs {
     #[arg(long)]
     pub offline: bool,
 
-    /// Prompt passed to browser query/chat examples.
+    /// Prompt passed to browser query/chat/embed examples.
     #[arg(long, default_value = "Describe browser LLM inference.")]
     pub prompt: String,
 
@@ -806,6 +816,8 @@ pub enum TestSmokeCase {
     Query,
     /// Chat generation example.
     Chat,
+    /// Embedding example.
+    Embed,
 }
 
 impl TestSmokeCase {
@@ -814,6 +826,7 @@ impl TestSmokeCase {
         match self {
             TestSmokeCase::Query => "query",
             TestSmokeCase::Chat => "chat",
+            TestSmokeCase::Embed => "embed",
         }
     }
 }
@@ -1013,8 +1026,8 @@ pub enum TestSuiteId {
     NodeSmoke,
     /// Python local generation smoke tests.
     PythonSmoke,
-    /// Provider-backed gateway smoke tests.
-    ProviderGatewaySmoke,
+    /// Real local gateway example smoke tests.
+    ExampleGatewaySmoke,
     /// Browser example smoke tests.
     ExampleBrowserSmoke,
     /// Playground browser runtime smoke tests.
@@ -1040,7 +1053,7 @@ impl TestSuiteId {
             TestSuiteId::RustSmoke => "rust-smoke",
             TestSuiteId::NodeSmoke => "node-smoke",
             TestSuiteId::PythonSmoke => "python-smoke",
-            TestSuiteId::ProviderGatewaySmoke => "provider-gateway-smoke",
+            TestSuiteId::ExampleGatewaySmoke => "example-gateway-smoke",
             TestSuiteId::ExampleBrowserSmoke => "example-browser-smoke",
             TestSuiteId::PlaygroundBrowserSmoke => "playground-browser-smoke",
             TestSuiteId::LlamaBackendOps => "llama-backend-ops",
@@ -1118,17 +1131,35 @@ impl DemoName {
 /// Example run workflows.
 #[derive(Subcommand)]
 pub enum RunExamplesCommands {
-    /// Start one long-running Vite dev or preview server.
+    /// Start one long-running example server.
     Serve(RunExampleServeArgs),
 }
 
 /// Options for serving an example.
 #[derive(Args)]
 pub struct RunExampleServeArgs {
-    /// Example to serve.
-    #[arg(value_enum)]
-    pub example: ExampleName,
+    /// Example server to start.
+    #[command(subcommand)]
+    pub target: RunExampleServeTarget,
+}
 
+/// Example server targets.
+#[derive(Subcommand)]
+pub enum RunExampleServeTarget {
+    /// Start the examples/web Vite dev or preview server.
+    Browser(RunBrowserExampleServeArgs),
+    /// Start a local-GGUF gateway for examples/gateway and gateway clients.
+    #[command(name = "gateway-local")]
+    #[command(after_long_help = BACKEND_HELP)]
+    GatewayLocal(RunGatewayLocalServeArgs),
+    /// Start an OpenAI-backed gateway for examples/gateway and gateway clients.
+    #[command(name = "gateway-openai")]
+    GatewayOpenAi(RunGatewayOpenAiServeArgs),
+}
+
+/// Options for serving the browser example.
+#[derive(Args)]
+pub struct RunBrowserExampleServeArgs {
     /// Vite server mode to run.
     #[arg(long, value_enum, default_value = "dev")]
     pub mode: DemoServeMode,
@@ -1146,7 +1177,51 @@ pub struct RunExampleServeArgs {
     pub no_build: bool,
 }
 
-/// Examples known to xtask.
+/// Options for serving the local gateway example.
+#[derive(Args)]
+pub struct RunGatewayLocalServeArgs {
+    /// GGUF model loaded by the gateway process.
+    #[arg(long)]
+    pub model: PathBuf,
+
+    /// Gateway socket address.
+    #[arg(long, default_value = "127.0.0.1:8787")]
+    pub bind: String,
+
+    /// Environment variable containing the gateway bearer token.
+    #[arg(long, default_value = "COGENTLM_GATEWAY_TOKEN")]
+    pub token_env: String,
+
+    /// Native backend used by the gateway process.
+    #[arg(long, short, value_enum, default_value = "cpu")]
+    pub backend: Backend,
+}
+
+/// Options for serving the OpenAI gateway example.
+#[derive(Args)]
+pub struct RunGatewayOpenAiServeArgs {
+    /// Gateway socket address.
+    #[arg(long, default_value = "127.0.0.1:8787")]
+    pub bind: String,
+
+    /// Environment variable containing the gateway bearer token.
+    #[arg(long, default_value = "COGENTLM_GATEWAY_TOKEN")]
+    pub token_env: String,
+
+    /// Environment variable containing the OpenAI API key.
+    #[arg(long, default_value = "OPENAI_API_KEY")]
+    pub api_key_env: String,
+
+    /// OpenAI model used by the query/chat alias.
+    #[arg(long, default_value = "gpt-5-mini")]
+    pub chat_model: String,
+
+    /// OpenAI embedding model used by the embed alias.
+    #[arg(long, default_value = "text-embedding-3-small")]
+    pub embed_model: String,
+}
+
+/// Browser examples known to xtask.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum ExampleName {
     /// Browser examples under examples/web.

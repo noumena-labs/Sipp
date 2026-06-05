@@ -1,8 +1,9 @@
 //! Developer run workflows for long-lived demos and non-test diagnostics.
 
 use crate::cli::{
-    Backend, DemoName, DemoServeMode, ExampleName, LlamaBackendOpsMode, RunCommands,
-    RunDemoServeArgs, RunDemosCommands, RunExampleServeArgs, RunExamplesCommands,
+    Backend, DemoName, DemoServeMode, ExampleName, LlamaBackendOpsMode, RunBrowserExampleServeArgs,
+    RunCommands, RunDemoServeArgs, RunDemosCommands, RunExampleServeArgs, RunExampleServeTarget,
+    RunExamplesCommands, RunGatewayLocalServeArgs, RunGatewayOpenAiServeArgs,
     RunLlamaBackendOpsArgs, RunLlamaCommands, RunToolServeArgs, RunToolsCommands, ToolName,
 };
 use crate::javascript;
@@ -11,6 +12,8 @@ use crate::targets;
 use crate::toolchains::env::apply_toolchains;
 use crate::utils::BuildContext;
 use anyhow::{Context, Result};
+use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use xshell::{cmd, Shell};
 
@@ -184,15 +187,28 @@ fn serve_tool(sh: &Shell, ctx: &BuildContext, args: &RunToolServeArgs) -> Result
 }
 
 fn serve_example(sh: &Shell, ctx: &BuildContext, args: &RunExampleServeArgs) -> Result<()> {
-    output::phase(&format!("Serve example: {}", args.example.label()));
+    match &args.target {
+        RunExampleServeTarget::Browser(args) => serve_browser_example(sh, ctx, args),
+        RunExampleServeTarget::GatewayLocal(args) => serve_local_gateway_example(sh, ctx, args),
+        RunExampleServeTarget::GatewayOpenAi(args) => serve_openai_gateway_example(sh, ctx, args),
+    }
+}
+
+fn serve_browser_example(
+    sh: &Shell,
+    ctx: &BuildContext,
+    args: &RunBrowserExampleServeArgs,
+) -> Result<()> {
+    let example = ExampleName::Browser;
+    output::phase(&format!("Serve example: {}", example.label()));
     output::detail("Mode", args.mode.as_str());
-    output::path("Example workspace", &example_dir(ctx, args.example));
+    output::path("Example workspace", &example_dir(ctx, example));
 
     if !args.no_build {
-        ensure_javascript_workspace_dependencies(sh, ctx, &example_dir(ctx, args.example))?;
+        ensure_javascript_workspace_dependencies(sh, ctx, &example_dir(ctx, example))?;
         targets::wasm::build(sh, ctx)?;
         if matches!(args.mode, DemoServeMode::Preview) {
-            build_example_only(sh, ctx, args.example)?;
+            build_example_only(sh, ctx, example)?;
         }
     } else {
         output::warning("Skipping browser package build before serving");
@@ -200,16 +216,66 @@ fn serve_example(sh: &Shell, ctx: &BuildContext, args: &RunExampleServeArgs) -> 
 
     serve_vite_workspace(
         sh,
-        &example_dir(ctx, args.example),
+        &example_dir(ctx, example),
         args.mode,
         args.host.as_deref(),
         args.port,
         format!(
             "Starting {} Vite server for {} example",
             args.mode.as_str(),
-            args.example.label()
+            example.label()
         ),
-        format!("{} example server failed", args.example.label()),
+        format!("{} example server failed", example.label()),
+    )
+}
+
+fn serve_local_gateway_example(
+    sh: &Shell,
+    ctx: &BuildContext,
+    args: &RunGatewayLocalServeArgs,
+) -> Result<()> {
+    output::phase("Serve local gateway example");
+    output::path("Model", &args.model);
+    output::detail("Bind", &args.bind);
+    output::detail("Gateway token env", &args.token_env);
+    output::detail("Backend", args.backend.as_str());
+    validate_secret_env(&args.token_env)?;
+    if !args.model.is_file() {
+        anyhow::bail!(
+            "gateway model file does not exist: {}",
+            args.model.display()
+        );
+    }
+
+    let config_path = write_local_gateway_example_config(ctx, args)?;
+    run_gateway_server(
+        sh,
+        ctx,
+        &config_path,
+        &args.backend,
+        "local gateway example",
+    )
+}
+
+fn serve_openai_gateway_example(
+    sh: &Shell,
+    ctx: &BuildContext,
+    args: &RunGatewayOpenAiServeArgs,
+) -> Result<()> {
+    output::phase("Serve OpenAI gateway example");
+    output::detail("Bind", &args.bind);
+    output::detail("Gateway token env", &args.token_env);
+    output::detail("OpenAI key env", &args.api_key_env);
+    validate_secret_env(&args.token_env)?;
+    validate_secret_env(&args.api_key_env)?;
+
+    let config_path = write_openai_gateway_example_config(ctx, args)?;
+    run_gateway_server(
+        sh,
+        ctx,
+        &config_path,
+        &Backend::Cpu,
+        "OpenAI gateway example",
     )
 }
 
@@ -228,6 +294,163 @@ fn build_example_only(sh: &Shell, ctx: &BuildContext, example: ExampleName) -> R
         cmd!(sh, "bun run build"),
     )
     .with_context(|| format!("failed to build {} example", example.label()))
+}
+
+fn write_local_gateway_example_config(
+    ctx: &BuildContext,
+    args: &RunGatewayLocalServeArgs,
+) -> Result<PathBuf> {
+    let config_dir = ctx.tmp_dir().join("examples").join("gateway");
+    fs::create_dir_all(&config_dir)
+        .with_context(|| format!("failed to create {}", config_dir.display()))?;
+    let config_path = config_dir.join("local-gateway.toml");
+    let contents = format!(
+        r#"[server]
+bind = {bind}
+
+[auth]
+token_env = {token_env}
+
+[limits]
+max_request_bytes = 1048576
+
+[cors]
+allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+[[aliases]]
+name = "local"
+operations = ["query", "chat", "embed"]
+
+[aliases.limits]
+max_concurrent_requests = 4
+max_requests_per_minute = 60
+
+[aliases.backend]
+kind = "local_cogent_engine"
+model_path = {model_path}
+
+[aliases.backend.runtime.context]
+n_ctx = 2048
+embeddings = true
+
+[aliases.backend.runtime.scheduler]
+continuous_batching = true
+prefill_chunk_size = 0
+
+[aliases.backend.runtime.cache]
+mode = "live_slot_prefix"
+
+[aliases.backend.runtime.observability]
+runtime_metrics = true
+backend_profiling = false
+"#,
+        bind = toml_string(&args.bind),
+        token_env = toml_string(&args.token_env),
+        model_path = toml_string(&args.model.display().to_string()),
+    );
+    fs::write(&config_path, contents)
+        .with_context(|| format!("failed to write {}", config_path.display()))?;
+    output::path("Generated gateway config", &config_path);
+    Ok(config_path)
+}
+
+fn write_openai_gateway_example_config(
+    ctx: &BuildContext,
+    args: &RunGatewayOpenAiServeArgs,
+) -> Result<PathBuf> {
+    let config_dir = ctx.tmp_dir().join("examples").join("gateway");
+    fs::create_dir_all(&config_dir)
+        .with_context(|| format!("failed to create {}", config_dir.display()))?;
+    let config_path = config_dir.join("openai-gateway.toml");
+    let contents = format!(
+        r#"[server]
+bind = {bind}
+
+[auth]
+token_env = {token_env}
+
+[limits]
+max_request_bytes = 1048576
+
+[cors]
+allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+[[aliases]]
+name = "openai-chat"
+operations = ["query", "chat"]
+
+[aliases.limits]
+max_concurrent_requests = 8
+max_requests_per_minute = 120
+
+[aliases.backend]
+kind = "open_ai"
+model = {chat_model}
+api_key_env = {api_key_env}
+
+[[aliases]]
+name = "openai-embed"
+operations = ["embed"]
+
+[aliases.limits]
+max_concurrent_requests = 8
+max_requests_per_minute = 120
+
+[aliases.backend]
+kind = "open_ai"
+model = {embed_model}
+api_key_env = {api_key_env}
+"#,
+        bind = toml_string(&args.bind),
+        token_env = toml_string(&args.token_env),
+        chat_model = toml_string(&args.chat_model),
+        embed_model = toml_string(&args.embed_model),
+        api_key_env = toml_string(&args.api_key_env),
+    );
+    fs::write(&config_path, contents)
+        .with_context(|| format!("failed to write {}", config_path.display()))?;
+    output::path("Generated gateway config", &config_path);
+    Ok(config_path)
+}
+
+fn run_gateway_server(
+    sh: &Shell,
+    ctx: &BuildContext,
+    config_path: &Path,
+    backend: &Backend,
+    label: &'static str,
+) -> Result<()> {
+    if matches!(backend, Backend::All) {
+        anyhow::bail!(
+            "gateway examples require a concrete backend; choose cpu, vulkan, cuda, or metal"
+        );
+    }
+
+    let _dir = sh.push_dir(ctx.workspace_root());
+    let mut gateway_cmd = cmd!(sh, "cargo run -p cogentlm-gateway");
+    if *backend != Backend::Cpu {
+        gateway_cmd = gateway_cmd.arg("--features").arg(backend.as_str());
+    }
+    gateway_cmd = gateway_cmd
+        .arg("--")
+        .arg("serve")
+        .arg("--config")
+        .arg(config_path);
+    gateway_cmd = apply_toolchains(sh, ctx, gateway_cmd, Some(backend))?;
+    output::run_long_command(format!("Starting {label}"), gateway_cmd)
+        .with_context(|| format!("{label} failed"))
+}
+
+fn validate_secret_env(name: &str) -> Result<()> {
+    let value = env::var(name).with_context(|| format!("{name} is required"))?;
+    if value.trim().is_empty() {
+        anyhow::bail!("{name} must not be empty");
+    }
+    Ok(())
+}
+
+fn toml_string(value: &str) -> String {
+    serde_json::to_string(value).expect("string serialization cannot fail")
 }
 
 fn serve_vite_workspace(

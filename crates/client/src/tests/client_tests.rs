@@ -214,16 +214,16 @@ fn endpoint_ids_must_not_contain_surrounding_whitespace() {
 
 #[cfg(feature = "remote")]
 #[test]
-fn remote_gateway_examples_preserve_env_values_for_core_validation() {
-    let source = include_str!("../../../../examples/rust/src/remote_common.rs");
-    let env_string = source
-        .split("fn env_string")
+fn rust_example_env_helpers_preserve_values_for_core_validation() {
+    let source = include_str!("../../../../examples/rust/src/support.rs");
+    let required_env = source
+        .split("pub fn required_env")
         .nth(1)
         .and_then(|section| section.split("\n}").next())
-        .expect("remote example env_string helper");
+        .expect("rust example required_env helper");
 
-    assert!(env_string.contains("env::var(name)"));
-    assert!(!env_string.contains("trim"));
+    assert!(required_env.contains("env::var(name)"));
+    assert!(!required_env.contains("trim"));
 }
 
 #[cfg(feature = "remote")]

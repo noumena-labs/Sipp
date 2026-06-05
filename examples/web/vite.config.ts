@@ -13,9 +13,10 @@ const pageEntries = {
   query: path.resolve(exampleDir, 'query.html'),
   chat: path.resolve(exampleDir, 'chat.html'),
   embed: path.resolve(exampleDir, 'embed.html'),
-  remoteGatewayQuery: path.resolve(exampleDir, 'remote_gateway_query.html'),
-  remoteGatewayChat: path.resolve(exampleDir, 'remote_gateway_chat.html'),
-  remoteGatewayEmbed: path.resolve(exampleDir, 'remote_gateway_embed.html'),
+  gatewayLocal: path.resolve(exampleDir, 'gateway_local.html'),
+  gatewayQuery: path.resolve(exampleDir, 'gateway_query.html'),
+  gatewayChat: path.resolve(exampleDir, 'gateway_chat.html'),
+  gatewayEmbed: path.resolve(exampleDir, 'gateway_embed.html'),
 };
 
 export default defineConfig({

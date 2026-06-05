@@ -1,0 +1,86 @@
+import native from '../../lib/node/router.js';
+import {
+  DEFAULT_CONTEXT,
+  DEFAULT_MAX_TOKENS,
+  DEFAULT_SEED,
+  DEFAULT_TEMPERATURE,
+  DEFAULT_TOP_P,
+  gpuLayers,
+  intEnv,
+  numberEnv,
+  printText,
+  readGatewayArgs,
+  requiredEnv,
+} from './_support.mjs';
+
+const { CogentClient, setLlamaLogQuiet } = native;
+const { model, alias, input } = readGatewayArgs(
+  'gateway_query',
+  'Write one sentence about gateway inference.',
+);
+setLlamaLogQuiet(true);
+const client = new CogentClient();
+const localEndpoint = await client.addLocal(
+  'local',
+  model,
+  runtimeConfig({ embeddings: false }),
+);
+
+// The app only needs the gateway URL, gateway bearer token, and public alias.
+// Provider credentials or local model paths stay in the gateway process.
+const gateway = {
+  alias,
+  baseUrl: requiredEnv('COGENTLM_GATEWAY_URL'),
+  token: requiredEnv('COGENTLM_GATEWAY_TOKEN'),
+};
+const gatewayEndpoint = client.addRemote('gateway', gateway);
+
+const local = await client.query({
+  endpoint: localEndpoint,
+  prompt: input,
+  options: textOptions(),
+  local: {
+    contextKey: 'node-gateway-query-local',
+  },
+}).response;
+
+const remote = await client.query({
+  endpoint: gatewayEndpoint,
+  prompt: input,
+  options: textOptions(),
+}).response;
+
+console.log('local:');
+printText(local);
+console.log('gateway:');
+printText(remote);
+
+function runtimeConfig({ embeddings, projectorPath = undefined }) {
+  const multimodal = projectorPath == null ? {} : { projector_path: projectorPath };
+  return {
+    placement: { gpu_layers: gpuLayers() },
+    context: {
+      n_ctx: intEnv('COGENTLM_CONTEXT', DEFAULT_CONTEXT),
+      n_threads: intEnv('COGENTLM_THREADS'),
+      n_threads_batch: intEnv('COGENTLM_THREADS'),
+      embeddings,
+    },
+    sampling: {
+      temperature: numberEnv('COGENTLM_TEMPERATURE', DEFAULT_TEMPERATURE),
+      seed: intEnv('COGENTLM_SEED', DEFAULT_SEED),
+    },
+    scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
+    cache: { mode: 'live_slot_prefix' },
+    multimodal,
+    residency: { max_gpu_models_per_device: 1 },
+    observability: { runtime_metrics: true },
+  };
+}
+
+function textOptions() {
+  return {
+    maxTokens: intEnv('COGENTLM_MAX_TOKENS', DEFAULT_MAX_TOKENS),
+    temperature: numberEnv('COGENTLM_TEMPERATURE', DEFAULT_TEMPERATURE),
+    topP: numberEnv('COGENTLM_TOP_P', DEFAULT_TOP_P),
+  };
+}

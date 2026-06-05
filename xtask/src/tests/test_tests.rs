@@ -156,8 +156,16 @@ fn test_smoke_accepts_node_model_options_and_cases() {
 }
 
 #[test]
-fn test_smoke_accepts_provider_gateway_target() {
-    let cli = Cli::parse_from(["xtask", "test", "smoke", "suite", "provider-gateway"]);
+fn test_smoke_accepts_example_gateway_target() {
+    let cli = Cli::parse_from([
+        "xtask",
+        "test",
+        "smoke",
+        "suite",
+        "example-gateway",
+        "--case",
+        "embed",
+    ]);
 
     let Commands::Test { command } = cli.command else {
         panic!("expected test command");
@@ -168,7 +176,7 @@ fn test_smoke_accepts_provider_gateway_target() {
     assert!(matches!(
         args.command,
         TestSmokeCommands::Suite(TestSmokeSuiteArgs {
-            target: TestSmokeSuiteTarget::ProviderGateway
+            target: TestSmokeSuiteTarget::ExampleGateway(_)
         })
     ));
 }
@@ -397,6 +405,7 @@ fn smoke_groups_expand_to_expected_suites() {
             TestSuiteId::RustSmoke,
             TestSuiteId::NodeSmoke,
             TestSuiteId::PythonSmoke,
+            TestSuiteId::ExampleGatewaySmoke,
             TestSuiteId::ExampleBrowserSmoke
         ]
     );
@@ -419,9 +428,9 @@ fn smoke_groups_expand_to_expected_suites() {
             TestSuiteId::RustSmoke,
             TestSuiteId::NodeSmoke,
             TestSuiteId::PythonSmoke,
+            TestSuiteId::ExampleGatewaySmoke,
             TestSuiteId::ExampleBrowserSmoke,
             TestSuiteId::PlaygroundBrowserSmoke,
-            TestSuiteId::ProviderGatewaySmoke,
             TestSuiteId::LlamaBackendOps
         ]
     );
@@ -630,9 +639,15 @@ fn case_counts_ignore_unknown_outcomes() {
 
 #[test]
 fn model_smoke_uses_generation_only_examples() {
-    assert_eq!(RUST_GENERATION_SMOKE_EXAMPLES, ["query", "chat"]);
-    assert_eq!(NODE_GENERATION_SMOKE_SCRIPTS, ["query.mjs", "chat.mjs"]);
-    assert_eq!(PYTHON_GENERATION_SMOKE_SCRIPTS, ["query.py", "chat.py"]);
+    assert_eq!(RUST_GENERATION_SMOKE_EXAMPLES, ["query", "chat", "embed"]);
+    assert_eq!(
+        NODE_GENERATION_SMOKE_SCRIPTS,
+        ["query.mjs", "chat.mjs", "embed.mjs"]
+    );
+    assert_eq!(
+        PYTHON_GENERATION_SMOKE_SCRIPTS,
+        ["query.py", "chat.py", "embed.py"]
+    );
 }
 
 #[test]
@@ -720,6 +735,7 @@ fn old_test_commands_are_rejected() {
     assert!(Cli::try_parse_from(["xtask", "test", "smoke", "python"]).is_err());
     assert!(Cli::try_parse_from(["xtask", "test", "smoke", "cli"]).is_err());
     assert!(Cli::try_parse_from(["xtask", "test", "smoke", "provider-gateway"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "smoke", "suite", "provider-gateway"]).is_err());
     assert!(Cli::try_parse_from(["xtask", "test", "smoke", "llama"]).is_err());
 }
 

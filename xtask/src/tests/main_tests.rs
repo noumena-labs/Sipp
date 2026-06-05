@@ -4,11 +4,12 @@
 //! binary dispatcher, subprocesses, or build orchestration.
 
 use xtask::cli::{
-    Backend, BackendArgs, BuildCommands, CleanArgs, Commands, DemoServeMode, ExampleName,
-    RunCommands, RunExampleServeArgs, RunExamplesCommands, TestCommands, TestGroupFilter,
-    TestListArgs, TestListFormat, TestSmokeArgs, TestSmokeCommands, TestSmokePlaygroundBrowserArgs,
-    TestSmokeSuiteArgs, TestSmokeSuiteTarget, TestUnitArgs, TestUnitCommands, TestUnitGroupArgs,
-    TestUnitGroupTarget, TestVerifyArgs, TestVerifyTarget,
+    Backend, BackendArgs, BuildCommands, CleanArgs, Commands, DemoServeMode,
+    RunBrowserExampleServeArgs, RunCommands, RunExampleServeArgs, RunExampleServeTarget,
+    RunExamplesCommands, TestCommands, TestGroupFilter, TestListArgs, TestListFormat,
+    TestSmokeArgs, TestSmokeCaseArgs, TestSmokeCommands, TestSmokeModelArgs,
+    TestSmokePlaygroundBrowserArgs, TestSmokeSuiteArgs, TestSmokeSuiteTarget, TestUnitArgs,
+    TestUnitCommands, TestUnitGroupArgs, TestUnitGroupTarget, TestVerifyArgs, TestVerifyTarget,
 };
 
 use super::{
@@ -116,11 +117,12 @@ fn effective_output_options_keep_build_and_run_compact_by_default() {
     let run = Commands::Run {
         command: RunCommands::Examples {
             command: RunExamplesCommands::Serve(RunExampleServeArgs {
-                example: ExampleName::Browser,
-                mode: DemoServeMode::Dev,
-                host: None,
-                port: None,
-                no_build: false,
+                target: RunExampleServeTarget::Browser(RunBrowserExampleServeArgs {
+                    mode: DemoServeMode::Dev,
+                    host: None,
+                    port: None,
+                    no_build: false,
+                }),
             }),
         },
     };
@@ -171,7 +173,17 @@ fn effective_output_options_keep_test_execution_compact_by_default() {
     let smoke = Commands::Test {
         command: TestCommands::Smoke(TestSmokeArgs {
             command: TestSmokeCommands::Suite(TestSmokeSuiteArgs {
-                target: TestSmokeSuiteTarget::ProviderGateway,
+                target: TestSmokeSuiteTarget::ExampleGateway(TestSmokeCaseArgs {
+                    model: TestSmokeModelArgs {
+                        backend: Backend::Cpu,
+                        model: None,
+                        offline: false,
+                        prompt: "hello".to_owned(),
+                        max_tokens: 1,
+                        temperature: 0.0,
+                    },
+                    cases: Vec::new(),
+                }),
             }),
         }),
     };

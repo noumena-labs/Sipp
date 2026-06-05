@@ -27,6 +27,7 @@ cargo xtask test unit suite demos
 cargo xtask test unit suite node-package --backend cpu
 cargo xtask test unit suite python-package --backend cpu
 cargo xtask test smoke suite example-node --backend cpu
+cargo xtask test smoke suite example-gateway --backend cpu --case query
 cargo xtask test smoke suite playground-browser
 cargo xtask test smoke group examples --backend cpu
 cargo xtask test smoke group local-model --backend cpu
@@ -73,33 +74,36 @@ namespaces:
 - `test smoke group <name>` runs a named bundle of smoke suites.
 
 Model-backed smoke suites default to the setup sample model cache under
-`.build/models` when `--model` is omitted. Rust, Node, Python, and browser
-example smoke accept repeated `--case query|chat`.
+`.build/models` when `--model` is omitted. Rust, Node, Python, gateway, and
+browser example smoke accept repeated `--case query|chat|embed`.
 
 ## Smoke Suites
 
 | Command | What runs | Code location |
 | --- | --- | --- |
 | `cargo xtask test smoke suite cli` | Staged local CLI generation smoke | `apps/cli` |
-| `cargo xtask test smoke suite example-rust` | Rust `query`/`chat` examples | `examples/rust` |
-| `cargo xtask test smoke suite example-node` | Node `query.mjs`/`chat.mjs` examples | `examples/node` |
-| `cargo xtask test smoke suite example-python` | Python `query.py`/`chat.py` examples | `examples/python` |
-| `cargo xtask test smoke suite example-browser` | Browser `query.html`/`chat.html` examples through Playwright | `examples/web` |
+| `cargo xtask test smoke suite example-rust` | Rust `query`/`chat`/`embed` examples | `examples/rust` |
+| `cargo xtask test smoke suite example-node` | Node `query.mjs`/`chat.mjs`/`embed.mjs` examples | `examples/node` |
+| `cargo xtask test smoke suite example-python` | Python `query.py`/`chat.py`/`embed.py` examples | `examples/python` |
+| `cargo xtask test smoke suite example-gateway` | Real local gateway plus Rust/Node/Python gateway clients | `examples/gateway`, `examples/rust`, `examples/node`, `examples/python` |
+| `cargo xtask test smoke suite example-browser` | Browser `query.html`/`chat.html`/`embed.html` examples through Playwright | `examples/web` |
 | `cargo xtask test smoke suite playground-browser` | Browser playground runtime smoke through Playwright | `tools/playground` |
-| `cargo xtask test smoke suite provider-gateway` | Hermetic fake-provider gateway smoke | `crates/gateway`, `crates/gateway-providers` |
 | `cargo xtask test smoke suite llama-backend-ops` | llama.cpp backend operation correctness smoke | `third_party/llama.cpp` |
 
 ## Smoke Groups
 
 | Command | Suites |
 | --- | --- |
-| `cargo xtask test smoke group examples` | `example-rust`, `example-node`, `example-python`, and `example-browser` |
+| `cargo xtask test smoke group examples` | `example-rust`, `example-node`, `example-python`, `example-gateway`, and `example-browser` |
 | `cargo xtask test smoke group local-model` | `cli`, `example-rust`, `example-node`, and `example-python` |
 | `cargo xtask test smoke group full` | Every smoke suite, including playground, gateway, and llama checks |
 
-Use `cargo xtask run examples serve browser` to manually serve browser examples,
-and `cargo xtask run tools serve playground` to manually serve the playground.
-Playground validation remains under `test smoke suite playground-browser`.
+Use `cargo xtask run examples serve browser` to manually serve browser examples.
+Use `cargo xtask run examples serve gateway-local --model <model.gguf>` or
+`cargo xtask run examples serve gateway-openai` to manually serve gateway
+examples. The OpenAI gateway requires `OPENAI_API_KEY` and is documented/manual
+rather than smoke-tested. Playground validation remains under
+`test smoke suite playground-browser`.
 
 `test unit` and `test smoke` print a final suite and test/check summary, then
 write `.build/test/run-report.json` and `.build/test/run-report.md`.

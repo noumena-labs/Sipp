@@ -1,16 +1,9 @@
 import {
-  CogentClient,
   QueryError,
-  type BrowserEmbeddingRun,
-  type BrowserTextRun,
-  type ChatMessage,
   type EmbeddingResult,
   type EndpointRef,
   type GenerationResult,
-  type ModelInfo,
   type ModelSource,
-  type NativeRuntimeConfig,
-  type RemoteGatewayConfig,
 } from '@noumena-labs/cogentlm';
 import './style.css';
 
@@ -36,6 +29,33 @@ export interface RemoteGatewayPageElements {
   readonly tokenInput: HTMLInputElement;
   readonly promptInput: HTMLTextAreaElement;
   readonly maxTokensInput?: HTMLInputElement;
+  readonly output: HTMLPreElement;
+}
+
+export interface GatewayLocalPageElements {
+  readonly loadForm: HTMLFormElement;
+  readonly runForm: HTMLFormElement;
+  readonly modelInput: HTMLInputElement;
+  readonly modelFileInput: HTMLInputElement;
+  readonly aliasInput: HTMLInputElement;
+  readonly baseUrlInput: HTMLInputElement;
+  readonly tokenInput: HTMLInputElement;
+  readonly promptInput: HTMLTextAreaElement;
+  readonly maxTokensInput: HTMLInputElement;
+  readonly localOutput: HTMLPreElement;
+  readonly gatewayOutput: HTMLPreElement;
+}
+
+export interface GatewayInputs {
+  readonly alias: string;
+  readonly baseUrl: string;
+  readonly token: string;
+}
+
+export interface GatewayInputElements {
+  readonly aliasInput: HTMLInputElement;
+  readonly baseUrlInput: HTMLInputElement;
+  readonly tokenInput: HTMLInputElement;
   readonly output: HTMLPreElement;
 }
 
@@ -115,11 +135,11 @@ export function renderRemoteGatewayPage(
         <div class="field-row">
           <label>
             Gateway alias
-            <input id="alias" value="default" autocomplete="off" />
+            <input id="alias" value="local" autocomplete="off" />
           </label>
           <label>
             Gateway base URL
-            <input id="base-url" placeholder="http://127.0.0.1:8080" autocomplete="off" />
+            <input id="base-url" placeholder="http://127.0.0.1:8787" autocomplete="off" />
           </label>
         </div>
         <label>
@@ -147,17 +167,65 @@ export function renderRemoteGatewayPage(
   };
 }
 
-export function createClient(): CogentClient {
-  return new CogentClient();
-}
-
-export async function loadLocalModel(
-  client: CogentClient,
-  source: ModelSource
-): Promise<ModelInfo> {
-  return client.addLocal(source, {
-    runtime: runtimeConfig(),
-  });
+export function renderGatewayLocalPage(defaultPrompt: string): GatewayLocalPageElements {
+  const app = appRoot();
+  app.innerHTML = `
+    <section class="shell">
+      ${header('Local Browser And Local Gateway')}
+      <form id="model-form" class="panel">
+        <div class="field-row">
+          <label>
+            Browser GGUF model URL or path
+            <input id="model" placeholder="/models/tiny.gguf" autocomplete="off" />
+          </label>
+          <label>
+            Browser GGUF model file
+            <input id="model-file" type="file" />
+          </label>
+        </div>
+        <button type="submit">Load browser model</button>
+      </form>
+      <form id="run-form" class="panel">
+        <div class="field-row">
+          <label>
+            Gateway alias
+            <input id="alias" value="local" autocomplete="off" />
+          </label>
+          <label>
+            Gateway base URL
+            <input id="base-url" placeholder="http://127.0.0.1:8787" autocomplete="off" />
+          </label>
+        </div>
+        <label>
+          Gateway token
+          <input id="token" type="password" autocomplete="off" />
+        </label>
+        <label>
+          Input
+          <textarea id="prompt" rows="5">${defaultPrompt}</textarea>
+        </label>
+        ${maxTokensField()}
+        <button type="submit">Run both</button>
+      </form>
+      <div class="comparison-grid">
+        <pre id="local-output">No browser model loaded.</pre>
+        <pre id="gateway-output">Gateway ready.</pre>
+      </div>
+    </section>
+  `;
+  return {
+    loadForm: element('model-form'),
+    runForm: element('run-form'),
+    modelInput: element('model'),
+    modelFileInput: element('model-file'),
+    aliasInput: element('alias'),
+    baseUrlInput: element('base-url'),
+    tokenInput: element('token'),
+    promptInput: element('prompt'),
+    maxTokensInput: element('max-tokens'),
+    localOutput: element('local-output'),
+    gatewayOutput: element('gateway-output'),
+  };
 }
 
 export function readModelSource(
@@ -186,8 +254,8 @@ export function readMaxTokens(input: HTMLInputElement | undefined): number {
 }
 
 export function readRemoteGatewayConfig(
-  elements: RemoteGatewayPageElements
-): RemoteGatewayConfig | null {
+  elements: GatewayInputElements
+): GatewayInputs | null {
   const alias = elements.aliasInput.value.trim();
   const baseUrl = elements.baseUrlInput.value.trim();
   const token = elements.tokenInput.value;
@@ -196,76 +264,6 @@ export function readRemoteGatewayConfig(
     return null;
   }
   return { alias, baseUrl, token };
-}
-
-export function localTextRunOptions(
-  session: string,
-  maxTokens: number,
-  emitTokens = true
-): {
-  readonly emitTokens: boolean;
-  readonly maxTokens: number;
-  readonly session: string;
-  readonly temperature: number;
-  readonly topP: number;
-} {
-  return {
-    ...textRunOptions(maxTokens, emitTokens),
-    session,
-  };
-}
-
-export function textRunOptions(
-  maxTokens: number,
-  emitTokens = true
-): {
-  readonly emitTokens: boolean;
-  readonly maxTokens: number;
-  readonly temperature: number;
-  readonly topP: number;
-} {
-  return {
-    emitTokens,
-    maxTokens,
-    temperature: DEFAULT_TEMPERATURE,
-    topP: DEFAULT_TOP_P,
-  };
-}
-
-export async function streamTextRun(
-  output: HTMLPreElement,
-  endpoint: EndpointRef,
-  run: BrowserTextRun
-): Promise<GenerationResult> {
-  write(output, '');
-  let streamed = '';
-  for await (const batch of run.tokens) {
-    output.textContent += batch.text;
-    streamed += batch.text;
-  }
-  const result = await run.response;
-  if (streamed !== '' && streamed !== result.text) {
-    throw new Error('streamed token batches did not match final response text');
-  }
-  write(output, formatTextResult(endpoint, result));
-  return result;
-}
-
-export async function printEmbeddingRun(
-  output: HTMLPreElement,
-  endpoint: EndpointRef,
-  run: BrowserEmbeddingRun
-): Promise<EmbeddingResult> {
-  const result = await run.response;
-  write(output, formatEmbeddingResult(endpoint, result));
-  return result;
-}
-
-export function chatMessages(prompt: string): readonly ChatMessage[] {
-  return [
-    { role: 'system', content: 'Answer concisely.' },
-    { role: 'user', content: prompt },
-  ];
 }
 
 export function write(output: HTMLPreElement, message: string): void {
@@ -311,24 +309,6 @@ export function formatEmbeddingResult(endpoint: EndpointRef, result: EmbeddingRe
   ].join('\n');
 }
 
-function runtimeConfig(): NativeRuntimeConfig {
-  return {
-    context: {
-      n_ctx: 2048,
-    },
-    scheduler: {
-      continuous_batching: true,
-      prefill_chunk_size: 0,
-    },
-    cache: {
-      mode: 'live_slot_prefix',
-    },
-    observability: {
-      runtime_metrics: true,
-    },
-  };
-}
-
 function formatMetric(value: number | null | undefined): string {
   return typeof value === 'number' ? value.toFixed(3) : 'n/a';
 }
@@ -349,9 +329,10 @@ function header(title: string): string {
         <a href="/query.html">Query</a>
         <a href="/chat.html">Chat</a>
         <a href="/embed.html">Embed</a>
-        <a href="/remote_gateway_query.html">Gateway query</a>
-        <a href="/remote_gateway_chat.html">Gateway chat</a>
-        <a href="/remote_gateway_embed.html">Gateway embed</a>
+        <a href="/gateway_local.html">Gateway local</a>
+        <a href="/gateway_query.html">Gateway query</a>
+        <a href="/gateway_chat.html">Gateway chat</a>
+        <a href="/gateway_embed.html">Gateway embed</a>
       </nav>
       <h1>${title}</h1>
     </header>

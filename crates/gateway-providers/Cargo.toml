@@ -18,6 +18,5 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-clap.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util", "time"] }
 wiremock = "0.6"

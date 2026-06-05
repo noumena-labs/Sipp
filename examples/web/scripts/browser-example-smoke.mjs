@@ -10,10 +10,11 @@ const DEFAULT_PORT = 5174;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_TOKENS = 64;
 const DEFAULT_PROMPT = 'Describe browser LLM inference.';
-const DEFAULT_CASES = ['query', 'chat'];
+const DEFAULT_CASES = ['query', 'chat', 'embed'];
 const CASE_PAGES = new Map([
   ['query', 'query.html'],
   ['chat', 'chat.html'],
+  ['embed', 'embed.html'],
 ]);
 
 function parseArgs(argv) {
@@ -243,14 +244,19 @@ async function runCase(page, url, caseName, options) {
     { timeout: options.timeoutMs }
   );
   await page.fill('#prompt', options.prompt);
-  await page.fill('#max-tokens', String(options.maxTokens));
+  if (await page.locator('#max-tokens').count() > 0) {
+    await page.fill('#max-tokens', String(options.maxTokens));
+  }
   await page.locator('#run-form button[type=submit]').click();
   await page.waitForFunction(
-    () => {
+    (activeCase) => {
       const text = document.querySelector('#output')?.textContent ?? '';
+      if (activeCase === 'embed') {
+        return text.includes('dimensions=') && text.includes('preview=');
+      }
       return text.includes('finish_reason=') && text.includes('text=') && text.includes('metrics=');
     },
-    null,
+    caseName,
     { timeout: options.timeoutMs }
   );
   return {

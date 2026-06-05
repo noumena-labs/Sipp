@@ -1,8 +1,11 @@
 import {
-  createClient,
+  CogentClient,
+  type BrowserEmbeddingRun,
+  type NativeRuntimeConfig,
+} from '@noumena-labs/cogentlm';
+import {
   EXAMPLE_LOCAL_ENDPOINT,
-  loadLocalModel,
-  printEmbeddingRun,
+  formatEmbeddingResult,
   readModelSource,
   readPrompt,
   renderLocalPage,
@@ -10,8 +13,8 @@ import {
   write,
 } from './common.js';
 
-const elements = renderLocalPage('Local Embed', 'CogentClient embedding smoke input.', false);
-const client = createClient();
+const elements = renderLocalPage('Local Embed', 'CogentClient embedding example input.', false);
+const client = new CogentClient();
 let modelLoaded = false;
 
 elements.loadForm.addEventListener('submit', async (event) => {
@@ -24,7 +27,7 @@ elements.loadForm.addEventListener('submit', async (event) => {
 
   try {
     write(elements.output, 'Loading model...');
-    const info = await loadLocalModel(client, source);
+    const info = await client.addLocal(source, { runtime: runtimeConfig() });
     modelLoaded = true;
     write(elements.output, `Loaded ${info.name}.`);
   } catch (error) {
@@ -45,12 +48,27 @@ elements.runForm.addEventListener('submit', async (event) => {
   }
 
   try {
+    // Embeddings return a vector instead of generated text.
     const run = client.embed(input, {
-      contextKey: 'web-embed-smoke',
+      contextKey: 'web-embed-example',
       normalize: true,
     });
-    await printEmbeddingRun(elements.output, EXAMPLE_LOCAL_ENDPOINT, run);
+    await printEmbeddingRun(elements.output, run);
   } catch (error) {
     reportError(elements.output, error);
   }
 });
+
+function runtimeConfig(): NativeRuntimeConfig {
+  return {
+    context: { n_ctx: 2048 },
+    scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
+    cache: { mode: 'live_slot_prefix' },
+    observability: { runtime_metrics: true },
+  };
+}
+
+async function printEmbeddingRun(output: HTMLPreElement, run: BrowserEmbeddingRun): Promise<void> {
+  const result = await run.response;
+  write(output, formatEmbeddingResult(EXAMPLE_LOCAL_ENDPOINT, result));
+}

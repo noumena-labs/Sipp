@@ -72,6 +72,12 @@ p {
   background: #ffffff;
 }
 
+.comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
 .panel {
   display: grid;
   gap: 12px;

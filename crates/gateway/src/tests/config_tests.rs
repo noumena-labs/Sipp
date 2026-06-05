@@ -786,6 +786,22 @@ value = "secret-header-value"
 }
 
 #[test]
+fn gateway_example_configs_parse() {
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("workspace root");
+    for config in [
+        "examples/gateway/local-gateway.toml",
+        "examples/gateway/openai-gateway.toml",
+    ] {
+        let path = workspace.join(config);
+        GatewayFileConfig::from_path(&path)
+            .unwrap_or_else(|error| panic!("{} should parse: {error:?}", path.display()));
+    }
+}
+
+#[test]
 fn gateway_config_rejects_unknown_fields() {
     let error = GatewayFileConfig::from_toml_str(
         r#"
@@ -849,22 +865,4 @@ contextkey = "misspelled"
     )
     .expect_err("unknown nested option should fail");
     assert!(error.message.contains("unknown field `contextkey`"));
-}
-
-#[test]
-fn gateway_example_configs_parse() {
-    for name in [
-        "mock_gateway.toml",
-        "local_cogent_engine_gateway.toml",
-        "openai_compatible_gateway.toml",
-        "openai_gateway.toml",
-        "anthropic_gateway.toml",
-        "remote_smoke_gateway.toml",
-    ] {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("examples")
-            .join(name);
-        let contents = std::fs::read_to_string(&path).expect("example config");
-        let _config = GatewayFileConfig::from_toml_str(&contents).expect("parse example config");
-    }
 }

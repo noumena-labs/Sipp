@@ -1,0 +1,19 @@
+[package]
+name = "cogentlm-gateway-example"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+autobins = false
+
+[[bin]]
+name = "cogentlm-gateway-example"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+axum = "0.8"
+clap.workspace = true
+cogentlm-gateway.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal"] }

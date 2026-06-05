@@ -20,8 +20,8 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use xshell::{cmd, Shell};
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -39,13 +39,18 @@ mod test_tests;
 const DEFAULT_SMOKE_PROMPT: &str = "Describe browser LLM inference.";
 const DEFAULT_SMOKE_MAX_TOKENS: u32 = 64;
 const DEFAULT_SMOKE_TEMPERATURE: f32 = 0.0;
-const RUST_GENERATION_SMOKE_EXAMPLES: &[&str] = &["query", "chat"];
-const NODE_GENERATION_SMOKE_SCRIPTS: &[&str] = &["query.mjs", "chat.mjs"];
-const PYTHON_GENERATION_SMOKE_SCRIPTS: &[&str] = &["query.py", "chat.py"];
-const PROVIDER_GATEWAY_SMOKE_TARGETS: &[RustTestTarget] = &[RustTestTarget::test(
-    "cogentlm-gateway",
-    "provider_gateway_smoke",
-)];
+const GATEWAY_SMOKE_BIND: &str = "127.0.0.1:18787";
+const GATEWAY_SMOKE_TOKEN_ENV: &str = "COGENTLM_GATEWAY_TOKEN";
+const GATEWAY_SMOKE_TOKEN: &str = "example-gateway-smoke-token";
+const GATEWAY_SMOKE_START_TIMEOUT: Duration = Duration::from_secs(300);
+const RUST_GENERATION_SMOKE_EXAMPLES: &[&str] = &["query", "chat", "embed"];
+const RUST_GATEWAY_SMOKE_EXAMPLES: &[&str] = &["gateway_query", "gateway_chat", "gateway_embed"];
+const NODE_GENERATION_SMOKE_SCRIPTS: &[&str] = &["query.mjs", "chat.mjs", "embed.mjs"];
+const NODE_GATEWAY_SMOKE_SCRIPTS: &[&str] =
+    &["gateway_query.mjs", "gateway_chat.mjs", "gateway_embed.mjs"];
+const PYTHON_GENERATION_SMOKE_SCRIPTS: &[&str] = &["query.py", "chat.py", "embed.py"];
+const PYTHON_GATEWAY_SMOKE_SCRIPTS: &[&str] =
+    &["gateway_query.py", "gateway_chat.py", "gateway_embed.py"];
 const DEMO_TEST_SUFFIX: &str = ".test.ts";
 const SKIPPED_DEMO_TEST_DIRS: &[&str] =
     &["node_modules", "dist", "build", "out", ".vite", "coverage"];
@@ -58,6 +63,7 @@ const RUST_CRATE_TEST_TARGETS: &[RustTestTarget] = &[
     RustTestTarget::lib("cogentlm-engine"),
     RustTestTarget::lib("cogentlm-remote"),
     RustTestTarget::lib("cogentlm-gateway"),
+    RustTestTarget::test("cogentlm-gateway", "provider_gateway_smoke"),
     RustTestTarget::lib("cogentlm-gateway-providers"),
     RustTestTarget::lib("cogentlm-client"),
     RustTestTarget::bin("cogentlm-cli", "cogentlm"),
@@ -116,10 +122,16 @@ const CLI_SMOKE_SOURCE_ROOTS: &[&str] = &["apps/cli/src"];
 const RUST_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/rust/src"];
 const NODE_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/node", "lib/node"];
 const PYTHON_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/python", "lib/python"];
+const GATEWAY_EXAMPLE_SMOKE_SOURCE_ROOTS: &[&str] = &[
+    "examples/gateway",
+    "examples/rust/src",
+    "examples/node",
+    "examples/python",
+    "crates/gateway/src",
+    "crates/gateway-providers/src",
+];
 const BROWSER_EXAMPLE_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/web", "lib/web/src"];
 const BROWSER_PLAYGROUND_SMOKE_SOURCE_ROOTS: &[&str] = &["tools/playground"];
-const PROVIDER_GATEWAY_SMOKE_SOURCE_ROOTS: &[&str] =
-    &["crates/gateway/src", "crates/gateway-providers/src"];
 const PUBLIC_DOC_RUST_FILES: &[&str] = &[
     "lib/rust/src/lib.rs",
     "bindings/node/src/lib.rs",
@@ -292,22 +304,22 @@ const TEST_SUITES: &[TestSuite] = &[
         discoverer: CaseDiscoverer::None,
     },
     TestSuite {
-        id: TestSuiteId::ProviderGatewaySmoke,
+        id: TestSuiteId::ExampleGatewaySmoke,
         group: TestGroup::Smoke,
         layer: None,
-        description: "hermetic provider-backed gateway HTTP smoke",
-        requirements: "cargo",
-        source_roots: PROVIDER_GATEWAY_SMOKE_SOURCE_ROOTS,
+        description: "Real local gateway example smoke under examples/gateway",
+        requirements: "sample GGUF model, cargo, node, uv, python",
+        source_roots: GATEWAY_EXAMPLE_SMOKE_SOURCE_ROOTS,
         coverage: false,
-        backend_policy: BackendPolicy::None,
-        runner: SuiteRunner::ProviderGatewaySmoke,
-        discoverer: CaseDiscoverer::RustTargets(PROVIDER_GATEWAY_SMOKE_TARGETS),
+        backend_policy: BackendPolicy::ConcreteOnly,
+        runner: SuiteRunner::ExampleGatewaySmoke,
+        discoverer: CaseDiscoverer::None,
     },
     TestSuite {
         id: TestSuiteId::ExampleBrowserSmoke,
         group: TestGroup::Smoke,
         layer: None,
-        description: "Browser query/chat example smoke under examples/web",
+        description: "Browser query/chat/embed example smoke under examples/web",
         requirements: "sample GGUF model, bun, wasm build, playwright chromium",
         source_roots: BROWSER_EXAMPLE_SMOKE_SOURCE_ROOTS,
         coverage: false,
@@ -537,7 +549,7 @@ fn run_suite(
         SuiteRunner::NodeSmoke => run_node_model_smoke(sh, ctx, options),
         SuiteRunner::PythonSmoke => run_python_model_smoke(sh, ctx, options),
         SuiteRunner::ExampleBrowserSmoke => run_browser_example_smoke(sh, ctx, options),
-        SuiteRunner::ProviderGatewaySmoke => run_provider_gateway_smoke(sh, ctx),
+        SuiteRunner::ExampleGatewaySmoke => run_example_gateway_smoke(sh, ctx, options),
         SuiteRunner::PlaygroundBrowserSmoke => {
             run_playground_browser_runtime_smoke(sh, ctx, &options.playground_browser)
         }
@@ -661,6 +673,7 @@ fn synthetic_suite_cases(
             .into_iter()
             .map(|case| case.as_str().to_owned())
             .collect(),
+        SuiteRunner::ExampleGatewaySmoke => selected_gateway_smoke_labels(options.cases),
         SuiteRunner::PlaygroundBrowserSmoke => vec!["playground browser runtime".to_owned()],
         SuiteRunner::LlamaBackendOps => vec!["llama.cpp backend ops".to_owned()],
         _ => Vec::new(),
@@ -705,14 +718,14 @@ fn known_success_counts(
         SuiteRunner::PackageTs
         | SuiteRunner::DemoTs
         | SuiteRunner::NodePackage
-        | SuiteRunner::PythonPackage
-        | SuiteRunner::ProviderGatewaySmoke => discovered_suite_case_count(ctx, suite, None)?,
+        | SuiteRunner::PythonPackage => discovered_suite_case_count(ctx, suite, None)?,
         SuiteRunner::CliSmoke
         | SuiteRunner::PlaygroundBrowserSmoke
         | SuiteRunner::LlamaBackendOps => 1,
         SuiteRunner::RustSmoke => selected_rust_smoke_examples(options.cases).len(),
         SuiteRunner::NodeSmoke => selected_node_smoke_scripts(options.cases).len(),
         SuiteRunner::PythonSmoke => selected_python_smoke_scripts(options.cases).len(),
+        SuiteRunner::ExampleGatewaySmoke => selected_gateway_smoke_labels(options.cases).len(),
         SuiteRunner::ExampleBrowserSmoke => selected_smoke_cases(options.cases).len(),
     };
     Ok(Some(TestCounts::passed(total)))
@@ -1369,24 +1382,343 @@ fn run_python_generation_smoke(
     Ok(())
 }
 
-fn run_provider_gateway_smoke(sh: &Shell, ctx: &BuildContext) -> Result<()> {
-    output::phase("Provider gateway smoke");
+fn run_example_gateway_smoke(
+    sh: &Shell,
+    ctx: &BuildContext,
+    options: &SuiteRunOptions<'_>,
+) -> Result<()> {
+    if matches!(options.backend, Backend::All) {
+        anyhow::bail!(
+            "example-gateway requires a concrete backend; choose cpu, vulkan, cuda, or metal"
+        );
+    }
+
+    output::phase("Example local gateway smoke");
+    let model = resolve_smoke_model(sh, ctx, options.model, options.offline)?;
+    output::path("Model", &model);
+    output::detail("Backend", options.backend.as_str());
+    let config_path = write_gateway_smoke_config(ctx, &model, options.cases)?;
+    run_rust_gateway_smoke(sh, ctx, options, &config_path, &model)?;
+    run_node_gateway_smoke(sh, ctx, options, &config_path, &model)?;
+    run_python_gateway_smoke(sh, ctx, options, &config_path, &model)?;
+    Ok(())
+}
+
+fn write_gateway_smoke_config(
+    ctx: &BuildContext,
+    model: &Path,
+    cases: &[TestSmokeCase],
+) -> Result<PathBuf> {
+    let config_dir = ctx.tmp_dir().join("examples").join("gateway-smoke");
+    std::fs::create_dir_all(&config_dir)
+        .with_context(|| format!("failed to create {}", config_dir.display()))?;
+    let config_path = config_dir.join("local-gateway.toml");
+    let selected_cases = selected_smoke_cases(cases);
+    let operations = toml_array(selected_cases.iter().map(TestSmokeCase::as_str));
+    let embeddings = selected_cases.contains(&TestSmokeCase::Embed);
+    let contents = format!(
+        r#"[server]
+bind = {bind}
+
+[auth]
+token_env = {token_env}
+
+[limits]
+max_request_bytes = 1048576
+
+[cors]
+allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+[[aliases]]
+name = "local"
+operations = {operations}
+
+[aliases.limits]
+max_concurrent_requests = 4
+max_requests_per_minute = 60
+
+[aliases.backend]
+kind = "local_cogent_engine"
+model_path = {model_path}
+
+[aliases.backend.runtime.context]
+n_ctx = 2048
+embeddings = {embeddings}
+warmup = false
+
+[aliases.backend.runtime.scheduler]
+continuous_batching = true
+prefill_chunk_size = 0
+
+[aliases.backend.runtime.cache]
+mode = "disabled"
+
+[aliases.backend.runtime.observability]
+runtime_metrics = true
+backend_profiling = false
+"#,
+        bind = toml_string(GATEWAY_SMOKE_BIND),
+        token_env = toml_string(GATEWAY_SMOKE_TOKEN_ENV),
+        operations = operations,
+        embeddings = embeddings,
+        model_path = toml_string(&model.display().to_string()),
+    );
+    std::fs::write(&config_path, contents)
+        .with_context(|| format!("failed to write {}", config_path.display()))?;
+    output::path("Gateway config", &config_path);
+    Ok(config_path)
+}
+
+fn run_rust_gateway_smoke(
+    sh: &Shell,
+    ctx: &BuildContext,
+    options: &SuiteRunOptions<'_>,
+    config_path: &Path,
+    model: &Path,
+) -> Result<()> {
+    output::phase("Rust gateway client smoke");
     let _dir = sh.push_dir(ctx.workspace_root());
-    let smoke_cmd = apply_toolchains(
-        sh,
-        ctx,
-        cmd!(
-            sh,
-            "cargo test -p cogentlm-gateway --test provider_gateway_smoke"
+    for example in selected_rust_gateway_smoke_examples(options.cases) {
+        let mut gateway = GatewaySmokeProcess::start(sh, ctx, config_path, &options.backend)?;
+        wait_for_gateway_smoke(gateway.child_mut())?;
+        let mut features = vec!["remote"];
+        if options.backend != Backend::Cpu {
+            features.push(options.backend.as_str());
+        }
+        let mut smoke_cmd = cmd!(sh, "cargo run -p cogentlm-rust-examples")
+            .arg("--features")
+            .arg(features.join(","))
+            .arg("--bin")
+            .arg(example)
+            .arg("--")
+            .arg(model)
+            .arg("local")
+            .arg(options.prompt)
+            .env("COGENTLM_GATEWAY_URL", gateway_smoke_url())
+            .env("COGENTLM_GATEWAY_TOKEN", GATEWAY_SMOKE_TOKEN)
+            .env("COGENTLM_MAX_TOKENS", options.max_tokens.to_string())
+            .env(
+                "COGENTLM_TEMPERATURE",
+                format_temperature(options.temperature),
+            );
+        smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, None)?;
+        output::run_test_command(format!("Running Rust gateway smoke: {example}"), smoke_cmd)
+            .with_context(|| format!("Rust gateway smoke failed: {example}"))?;
+        drop(gateway);
+    }
+    Ok(())
+}
+
+fn run_node_gateway_smoke(
+    sh: &Shell,
+    ctx: &BuildContext,
+    options: &SuiteRunOptions<'_>,
+    config_path: &Path,
+    model: &Path,
+) -> Result<()> {
+    output::phase("Node.js gateway client smoke");
+    targets::node::build(sh, ctx, Some(&Backend::Cpu))?;
+
+    let node_dir = ctx.workspace_root().join("examples").join("node");
+    let _dir = sh.push_dir(&node_dir);
+    for script in selected_node_gateway_smoke_scripts(options.cases) {
+        let mut gateway = GatewaySmokeProcess::start(sh, ctx, config_path, &options.backend)?;
+        wait_for_gateway_smoke(gateway.child_mut())?;
+        let mut smoke_cmd = cmd!(sh, "node")
+            .arg(script)
+            .arg(model)
+            .arg("local")
+            .arg(options.prompt)
+            .env("COGENTLM_NODE_BACKEND", "cpu")
+            .env("COGENTLM_GATEWAY_URL", gateway_smoke_url())
+            .env("COGENTLM_GATEWAY_TOKEN", GATEWAY_SMOKE_TOKEN)
+            .env("COGENTLM_MAX_TOKENS", options.max_tokens.to_string())
+            .env(
+                "COGENTLM_TEMPERATURE",
+                format_temperature(options.temperature),
+            );
+        smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(&Backend::Cpu))?;
+        output::run_test_command(format!("Running Node gateway smoke: {script}"), smoke_cmd)
+            .with_context(|| format!("Node gateway smoke failed: {script}"))?;
+        drop(gateway);
+    }
+    Ok(())
+}
+
+fn run_python_gateway_smoke(
+    sh: &Shell,
+    ctx: &BuildContext,
+    options: &SuiteRunOptions<'_>,
+    config_path: &Path,
+    model: &Path,
+) -> Result<()> {
+    output::phase("Python gateway client smoke");
+    let wheel = build_python_test_wheel(sh, ctx, &Backend::Cpu)?;
+    let uv_exe = setup_uv(sh, ctx)?;
+    let venv_dir = ctx.tmp_dir().join("python-gateway-smoke");
+    output::run_build_command(
+        "Creating Python gateway smoke virtual environment",
+        apply_uv_env(
+            ctx,
+            cmd!(sh, "{uv_exe} venv --clear --python 3.12 {venv_dir}"),
         ),
-        None,
     )?;
-    output::run_test_command("Running provider gateway smoke tests", smoke_cmd)
+    let python_exe = python_venv_exe(&venv_dir);
+    output::run_build_command(
+        "Installing Python gateway smoke wheel",
+        apply_uv_env(
+            ctx,
+            cmd!(
+                sh,
+                "{uv_exe} pip install --python {python_exe} --force-reinstall {wheel}"
+            ),
+        ),
+    )?;
+
+    let python_dir = ctx.workspace_root().join("examples").join("python");
+    let _dir = sh.push_dir(&python_dir);
+    for script in selected_python_gateway_smoke_scripts(options.cases) {
+        let mut gateway = GatewaySmokeProcess::start(sh, ctx, config_path, &options.backend)?;
+        wait_for_gateway_smoke(gateway.child_mut())?;
+        let mut smoke_cmd = cmd!(sh, "{python_exe}")
+            .arg(script)
+            .arg(model)
+            .arg("local")
+            .arg(options.prompt)
+            .env("COGENTLM_PYTHON_BACKEND", "cpu")
+            .env("COGENTLM_GATEWAY_URL", gateway_smoke_url())
+            .env("COGENTLM_GATEWAY_TOKEN", GATEWAY_SMOKE_TOKEN)
+            .env("COGENTLM_MAX_TOKENS", options.max_tokens.to_string())
+            .env(
+                "COGENTLM_TEMPERATURE",
+                format_temperature(options.temperature),
+            );
+        smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(&Backend::Cpu))?;
+        output::run_test_command(format!("Running Python gateway smoke: {script}"), smoke_cmd)
+            .with_context(|| format!("Python gateway smoke failed: {script}"))?;
+        drop(gateway);
+    }
+    Ok(())
+}
+
+fn wait_for_gateway_smoke(child: &mut Child) -> Result<()> {
+    output::phase("Waiting for local gateway");
+    let started_at = Instant::now();
+    while started_at.elapsed() < GATEWAY_SMOKE_START_TIMEOUT {
+        if let Some(status) = child.try_wait().context("failed to poll gateway process")? {
+            anyhow::bail!("gateway process exited before readiness: {status}");
+        }
+        if gateway_smoke_probe() {
+            output::success(format!("Gateway is ready at {}", gateway_smoke_url()));
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    anyhow::bail!(
+        "gateway did not answer readiness probe at {} within {} seconds",
+        gateway_smoke_url(),
+        GATEWAY_SMOKE_START_TIMEOUT.as_secs()
+    )
+}
+
+fn gateway_smoke_probe() -> bool {
+    std::net::TcpStream::connect(GATEWAY_SMOKE_BIND).is_ok()
+}
+
+fn gateway_smoke_url() -> String {
+    format!("http://{GATEWAY_SMOKE_BIND}")
+}
+
+fn toml_string(value: &str) -> String {
+    serde_json::to_string(value).expect("string serialization cannot fail")
+}
+
+fn toml_array<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
+    let values = values
+        .into_iter()
+        .map(toml_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[{values}]")
+}
+
+struct GatewaySmokeProcess {
+    child: Option<Child>,
+}
+
+impl GatewaySmokeProcess {
+    fn start(
+        sh: &Shell,
+        ctx: &BuildContext,
+        config_path: &Path,
+        backend: &Backend,
+    ) -> Result<Self> {
+        let log_dir = ctx.command_logs_dir();
+        std::fs::create_dir_all(&log_dir)
+            .with_context(|| format!("failed to create {}", log_dir.display()))?;
+        let log_path = log_dir.join("example-gateway-smoke.log");
+        let log = std::fs::File::create(&log_path)
+            .with_context(|| format!("failed to create {}", log_path.display()))?;
+        output::path("Gateway log", &log_path);
+
+        let _dir = sh.push_dir(ctx.workspace_root());
+        let mut gateway_cmd = cmd!(sh, "cargo run -p cogentlm-gateway");
+        if *backend != Backend::Cpu {
+            gateway_cmd = gateway_cmd.arg("--features").arg(backend.as_str());
+        }
+        gateway_cmd = gateway_cmd
+            .arg("--")
+            .arg("serve")
+            .arg("--config")
+            .arg(config_path);
+        gateway_cmd = apply_toolchains(sh, ctx, gateway_cmd, Some(backend))?;
+
+        let mut command: Command = gateway_cmd.quiet().into();
+        command
+            .env(GATEWAY_SMOKE_TOKEN_ENV, GATEWAY_SMOKE_TOKEN)
+            .stdout(Stdio::from(
+                log.try_clone()
+                    .context("failed to clone gateway smoke log handle")?,
+            ))
+            .stderr(Stdio::from(log));
+
+        let child = command.spawn().context("failed to start gateway process")?;
+        Ok(Self { child: Some(child) })
+    }
+
+    fn child_mut(&mut self) -> &mut Child {
+        self.child
+            .as_mut()
+            .expect("gateway child is present until drop")
+    }
+}
+
+impl Drop for GatewaySmokeProcess {
+    fn drop(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        match child.try_wait() {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
 }
 
 fn selected_smoke_cases(cases: &[TestSmokeCase]) -> Vec<TestSmokeCase> {
     if cases.is_empty() {
-        return vec![TestSmokeCase::Query, TestSmokeCase::Chat];
+        return vec![
+            TestSmokeCase::Query,
+            TestSmokeCase::Chat,
+            TestSmokeCase::Embed,
+        ];
     }
 
     let mut selected = Vec::new();
@@ -1404,6 +1736,18 @@ fn selected_rust_smoke_examples(cases: &[TestSmokeCase]) -> Vec<&'static str> {
         .map(|case| match case {
             TestSmokeCase::Query => RUST_GENERATION_SMOKE_EXAMPLES[0],
             TestSmokeCase::Chat => RUST_GENERATION_SMOKE_EXAMPLES[1],
+            TestSmokeCase::Embed => RUST_GENERATION_SMOKE_EXAMPLES[2],
+        })
+        .collect()
+}
+
+fn selected_rust_gateway_smoke_examples(cases: &[TestSmokeCase]) -> Vec<&'static str> {
+    selected_smoke_cases(cases)
+        .into_iter()
+        .map(|case| match case {
+            TestSmokeCase::Query => RUST_GATEWAY_SMOKE_EXAMPLES[0],
+            TestSmokeCase::Chat => RUST_GATEWAY_SMOKE_EXAMPLES[1],
+            TestSmokeCase::Embed => RUST_GATEWAY_SMOKE_EXAMPLES[2],
         })
         .collect()
 }
@@ -1414,6 +1758,18 @@ fn selected_node_smoke_scripts(cases: &[TestSmokeCase]) -> Vec<&'static str> {
         .map(|case| match case {
             TestSmokeCase::Query => NODE_GENERATION_SMOKE_SCRIPTS[0],
             TestSmokeCase::Chat => NODE_GENERATION_SMOKE_SCRIPTS[1],
+            TestSmokeCase::Embed => NODE_GENERATION_SMOKE_SCRIPTS[2],
+        })
+        .collect()
+}
+
+fn selected_node_gateway_smoke_scripts(cases: &[TestSmokeCase]) -> Vec<&'static str> {
+    selected_smoke_cases(cases)
+        .into_iter()
+        .map(|case| match case {
+            TestSmokeCase::Query => NODE_GATEWAY_SMOKE_SCRIPTS[0],
+            TestSmokeCase::Chat => NODE_GATEWAY_SMOKE_SCRIPTS[1],
+            TestSmokeCase::Embed => NODE_GATEWAY_SMOKE_SCRIPTS[2],
         })
         .collect()
 }
@@ -1424,8 +1780,34 @@ fn selected_python_smoke_scripts(cases: &[TestSmokeCase]) -> Vec<&'static str> {
         .map(|case| match case {
             TestSmokeCase::Query => PYTHON_GENERATION_SMOKE_SCRIPTS[0],
             TestSmokeCase::Chat => PYTHON_GENERATION_SMOKE_SCRIPTS[1],
+            TestSmokeCase::Embed => PYTHON_GENERATION_SMOKE_SCRIPTS[2],
         })
         .collect()
+}
+
+fn selected_python_gateway_smoke_scripts(cases: &[TestSmokeCase]) -> Vec<&'static str> {
+    selected_smoke_cases(cases)
+        .into_iter()
+        .map(|case| match case {
+            TestSmokeCase::Query => PYTHON_GATEWAY_SMOKE_SCRIPTS[0],
+            TestSmokeCase::Chat => PYTHON_GATEWAY_SMOKE_SCRIPTS[1],
+            TestSmokeCase::Embed => PYTHON_GATEWAY_SMOKE_SCRIPTS[2],
+        })
+        .collect()
+}
+
+fn selected_gateway_smoke_labels(cases: &[TestSmokeCase]) -> Vec<String> {
+    let mut labels = Vec::new();
+    for example in selected_rust_gateway_smoke_examples(cases) {
+        labels.push(format!("rust {example}"));
+    }
+    for script in selected_node_gateway_smoke_scripts(cases) {
+        labels.push(format!("node {script}"));
+    }
+    for script in selected_python_gateway_smoke_scripts(cases) {
+        labels.push(format!("python {script}"));
+    }
+    labels
 }
 
 fn format_temperature(temperature: f32) -> String {
@@ -1870,7 +2252,7 @@ fn coverage_report_areas(suites: &[&TestSuite]) -> CoverageReportAreas {
             | SuiteRunner::RustSmoke
             | SuiteRunner::NodeSmoke
             | SuiteRunner::PythonSmoke
-            | SuiteRunner::ProviderGatewaySmoke
+            | SuiteRunner::ExampleGatewaySmoke
             | SuiteRunner::ExampleBrowserSmoke
             | SuiteRunner::PlaygroundBrowserSmoke
             | SuiteRunner::LlamaBackendOps => {}
@@ -2449,6 +2831,17 @@ fn apply_smoke_suite_selection(
                 json!({}),
             );
         }
+        TestSmokeSuiteTarget::ExampleGateway(args) => {
+            selection.suites = vec![suite_by_id(TestSuiteId::ExampleGatewaySmoke)?];
+            selection.apply_case_args(args);
+            selection.filters = smoke_filters(
+                "suite",
+                "example-gateway",
+                &args.model,
+                &args.cases,
+                json!({}),
+            );
+        }
         TestSmokeSuiteTarget::ExampleBrowser(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::ExampleBrowserSmoke)?];
             selection.apply_example_browser_args(args);
@@ -2458,14 +2851,6 @@ fn apply_smoke_suite_selection(
             selection.suites = vec![suite_by_id(TestSuiteId::PlaygroundBrowserSmoke)?];
             selection.apply_playground_browser_args(args);
             selection.filters = playground_browser_filters("suite", "playground-browser", args);
-        }
-        TestSmokeSuiteTarget::ProviderGateway => {
-            selection.suites = vec![suite_by_id(TestSuiteId::ProviderGatewaySmoke)?];
-            selection.filters = json!({
-                "command": "smoke",
-                "namespace": "suite",
-                "target": "provider-gateway",
-            });
         }
         TestSmokeSuiteTarget::LlamaBackendOps(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::LlamaBackendOps)?];
@@ -2533,9 +2918,9 @@ fn apply_full_group_selection(
         suite_by_id(TestSuiteId::RustSmoke)?,
         suite_by_id(TestSuiteId::NodeSmoke)?,
         suite_by_id(TestSuiteId::PythonSmoke)?,
+        suite_by_id(TestSuiteId::ExampleGatewaySmoke)?,
         suite_by_id(TestSuiteId::ExampleBrowserSmoke)?,
         suite_by_id(TestSuiteId::PlaygroundBrowserSmoke)?,
-        suite_by_id(TestSuiteId::ProviderGatewaySmoke)?,
         suite_by_id(TestSuiteId::LlamaBackendOps)?,
     ];
     selection.apply_model_args(&args.model);
@@ -2568,6 +2953,7 @@ fn example_smoke_suites() -> Result<Vec<&'static TestSuite>> {
         suite_by_id(TestSuiteId::RustSmoke)?,
         suite_by_id(TestSuiteId::NodeSmoke)?,
         suite_by_id(TestSuiteId::PythonSmoke)?,
+        suite_by_id(TestSuiteId::ExampleGatewaySmoke)?,
         suite_by_id(TestSuiteId::ExampleBrowserSmoke)?,
     ])
 }
@@ -3652,7 +4038,7 @@ fn coverage_artifacts_for_suite(ctx: &BuildContext, suite: &TestSuite) -> Vec<St
         | SuiteRunner::RustSmoke
         | SuiteRunner::NodeSmoke
         | SuiteRunner::PythonSmoke
-        | SuiteRunner::ProviderGatewaySmoke
+        | SuiteRunner::ExampleGatewaySmoke
         | SuiteRunner::ExampleBrowserSmoke
         | SuiteRunner::PlaygroundBrowserSmoke
         | SuiteRunner::LlamaBackendOps => Vec::new(),
@@ -3766,8 +4152,8 @@ enum SuiteRunner {
     RustSmoke,
     NodeSmoke,
     PythonSmoke,
+    ExampleGatewaySmoke,
     ExampleBrowserSmoke,
-    ProviderGatewaySmoke,
     PlaygroundBrowserSmoke,
     LlamaBackendOps,
 }

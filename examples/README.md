@@ -1,18 +1,22 @@
 # CogentLM Examples
 
-The example directories mirror the same public `CogentClient` workflows across
-Rust, Node.js, Python, and the browser:
+These examples are real integrations, not mocks. They are meant to be opened as
+tutorials: each file demonstrates one workflow clearly, with CogentLM API usage
+kept in the example file instead of hidden in shared helpers.
 
-* `query`: single prompt text generation.
-* `chat`: system and user chat messages with token streaming.
-* `embed`: embedding generation with a compact vector preview.
-* `remote_gateway_query`, `remote_gateway_chat`, and `remote_gateway_embed`:
-  the same calls routed through a CogentLM Remote Gateway.
+Recommended learning order:
 
-## Local Model Examples
+1. `rust`, `node`, or `python`: direct local GGUF inference with `query`,
+   `chat`, and `embed`.
+2. `web`: browser GGUF loading and the same local workflows in Vite.
+3. `gateway`: run a gateway process separately, then run app examples against
+   its public alias while also calling local inference from the same client.
+4. `rust/openai_provider_chat.rs`: call a provider adapter directly when you
+   need to inspect the server-side provider layer.
 
-Local Rust, Node.js, and Python examples take a GGUF model path followed by an
-optional input string.
+## Direct Local Examples
+
+Local examples take a GGUF model path followed by optional input:
 
 ```powershell
 cargo run -p cogentlm-rust-examples --bin query -- <model.gguf> [input]
@@ -20,64 +24,72 @@ node examples/node/query.mjs <model.gguf> [input]
 python examples/python/query.py <model.gguf> [input]
 ```
 
-Swap `query` for `chat` or `embed` to run the other local examples.
+Swap `query` for `chat` or `embed`. `vision_chat` also takes a projector GGUF
+and image path.
 
-## Remote Gateway Examples
+## Gateway Examples
 
-Remote examples take a gateway alias followed by an optional input string. Set
-the gateway URL and bearer token in the environment before running them.
+Gateway examples are intentionally two-process:
+
+1. Start a gateway.
+2. Start an app/client that calls the gateway alias.
+
+Local GGUF gateway:
 
 ```powershell
-$env:COGENTLM_GATEWAY_URL="http://127.0.0.1:8080"
-$env:COGENTLM_GATEWAY_TOKEN="<token>"
-
-cargo run -p cogentlm-rust-examples --features remote --bin remote_gateway_query -- <gateway-alias> [input]
-node examples/node/remote_gateway_query.mjs <gateway-alias> [input]
-python examples/python/remote_gateway_query.py <gateway-alias> [input]
+$env:COGENTLM_GATEWAY_TOKEN="dev-token"
+cargo xtask run examples serve gateway-local --model <model.gguf> --bind 127.0.0.1:8787
 ```
 
-Swap `remote_gateway_query` for `remote_gateway_chat` or
-`remote_gateway_embed` to run the other gateway examples.
+In another terminal:
+
+```powershell
+$env:COGENTLM_GATEWAY_URL="http://127.0.0.1:8787"
+$env:COGENTLM_GATEWAY_TOKEN="dev-token"
+cargo run -p cogentlm-rust-examples --features remote --bin gateway_query -- <model.gguf> local [input]
+node examples/node/gateway_query.mjs <model.gguf> local [input]
+python examples/python/gateway_query.py <model.gguf> local [input]
+```
+
+OpenAI gateway examples require a real `OPENAI_API_KEY`:
+
+```powershell
+$env:OPENAI_API_KEY="<openai-api-key>"
+$env:COGENTLM_GATEWAY_TOKEN="dev-token"
+cargo xtask run examples serve gateway-openai --bind 127.0.0.1:8787
+```
+
+Use alias `openai-chat` for `gateway_query` and `gateway_chat`; use
+`openai-embed` for `gateway_embed`.
 
 ## Browser Examples
-
-Build the browser package first when the staged package artifacts do not exist:
-
-```powershell
-cargo xtask build wasm
-```
-
-Then run the Vite example app:
 
 ```powershell
 cargo xtask run examples serve browser
 ```
 
-Open the matching page:
+Open:
 
-* `/query.html`
-* `/chat.html`
-* `/embed.html`
-* `/remote_gateway_query.html`
-* `/remote_gateway_chat.html`
-* `/remote_gateway_embed.html`
+- `/query.html`
+- `/chat.html`
+- `/embed.html`
+- `/gateway_local.html`
+- `/gateway_query.html`
+- `/gateway_chat.html`
+- `/gateway_embed.html`
 
-Browser gateway pages collect the alias, base URL, and token in the page because
-browser code cannot read process environment variables. The token is held only
-in memory and is not printed in the output.
+The browser gateway pages collect URL, token, and alias in the page because
+browser code cannot read process environment variables.
 
 ## Smoke Coverage
 
-Xtask smoke suites exercise the local onboarding examples:
-
 ```powershell
 cargo xtask test smoke suite example-rust --case query
-cargo xtask test smoke suite example-node --case query
-cargo xtask test smoke suite example-python --case query
-cargo xtask test smoke suite example-browser --case query
+cargo xtask test smoke suite example-node --case embed
+cargo xtask test smoke suite example-python --case chat
+cargo xtask test smoke suite example-gateway --case query
+cargo xtask test smoke suite example-browser --case embed
 cargo xtask test smoke group examples
 ```
 
-The browser example smoke runs the `query.html` and `chat.html` pages through
-Playwright against the same sample GGUF model resolution used by other model
-smoke suites.
+OpenAI examples are documented and manual because they require a real API key.
