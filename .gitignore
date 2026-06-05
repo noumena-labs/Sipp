@@ -91,6 +91,7 @@ third_party/emsdk/
 third_party/ninja/
 /.toolchain/
 .run_emsdk_wrapper.*
+.coverage
 
 # =========================
 # Turborepo
