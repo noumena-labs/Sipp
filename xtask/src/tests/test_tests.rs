@@ -19,19 +19,20 @@ use crate::test_support::TempDir;
 use crate::utils::BuildContext;
 
 use super::{
-    apply_search_filter, catalog_suite_ids, collect_catalog_ownership_violations,
+    apply_search_filter, case_counts, catalog_suite_ids, collect_catalog_ownership_violations,
     collect_files_with_extension, collect_files_with_suffix, contains_test_attribute,
     coverage_report_areas, discover_cases, display_relative, duration_millis,
     filtered_rust_targets, is_allowed_rust_test_file, is_cpp_test_file_name,
     is_first_party_source_path, is_inverted_rust_test_file, is_probable_test_path, list_json_value,
-    markdown_cell, normalize_relative_path, parse_lcov_summary, parse_quoted_test_name,
-    parse_rust_fn_name, path_components, path_matches_root, python_venv_exe, selected_smoke_suites,
+    markdown_cell, normalize_relative_path, parse_junit_case_reports, parse_lcov_summary,
+    parse_libtest_case_reports, parse_quoted_test_name, parse_rust_fn_name, parse_tap_case_reports,
+    path_components, path_matches_root, python_venv_exe, selected_smoke_suites,
     selected_unit_suites, selected_verify_suites, source_owner_suites, suite_by_id, test_backends,
-    validate_package_filter, validate_suite_backends, CaseDiscoverer, CoverageSummaries,
-    LcovSummary, RunReport, RustTestTarget, SuiteReport, TestCase, TestCounts, TestGroup,
-    VerifyCheckReport, VerifyReport, NODE_GENERATION_SMOKE_SCRIPTS,
-    PYTHON_GENERATION_SMOKE_SCRIPTS, RUST_CRATE_TEST_TARGETS, RUST_GENERATION_SMOKE_EXAMPLES,
-    TEST_SUITES,
+    validate_package_filter, validate_suite_backends, CaseDiscoverer, CaseStatus,
+    CoverageSummaries, LcovSummary, RunReport, RustTestTarget, SuiteReport, TestCase,
+    TestCaseReport, TestCounts, TestGroup, VerifyCheckReport, VerifyReport,
+    NODE_GENERATION_SMOKE_SCRIPTS, PYTHON_GENERATION_SMOKE_SCRIPTS, RUST_CRATE_TEST_TARGETS,
+    RUST_GENERATION_SMOKE_EXAMPLES, TEST_SUITES,
 };
 
 #[test]
@@ -393,6 +394,13 @@ fn run_report_serializes_suite_status_and_coverage_artifacts() {
         suite,
         42,
         Some(TestCounts::passed(7)),
+        vec![TestCaseReport {
+            suite_id: TestSuiteId::Xtask,
+            name: "case | one".to_owned(),
+            path: Some("xtask/src/tests/test_tests.rs".to_owned()),
+            status: CaseStatus::Passed,
+            error: None,
+        }],
     ));
     report.finish("passed");
 
@@ -410,6 +418,8 @@ fn run_report_serializes_suite_status_and_coverage_artifacts() {
     assert_eq!(value["suites"][0]["layer"], "whitebox");
     assert_eq!(value["suites"][0]["counts"]["status"], "known");
     assert_eq!(value["suites"][0]["counts"]["total"], 7);
+    assert_eq!(value["suites"][0]["cases"][0]["status"], "passed");
+    assert_eq!(value["suites"][0]["cases"][0]["name"], "case | one");
     assert_eq!(value["suites"][0]["coverage"]["status"], "written");
     assert!(value["suites"][0]["coverage"]["artifacts"][0]
         .as_str()
@@ -430,12 +440,21 @@ fn run_report_summarizes_failed_and_unknown_suite_counts() {
         passed,
         10,
         Some(TestCounts::passed(3)),
+        Vec::new(),
     ));
     report.suites.push(SuiteReport::failed(
         &ctx,
         failed,
         20,
         "bad | value\nnext".to_owned(),
+        None,
+        vec![TestCaseReport {
+            suite_id: TestSuiteId::RustCrates,
+            name: "bad | case".to_owned(),
+            path: Some("crates/core/src/tests/error_tests.rs".to_owned()),
+            status: CaseStatus::Failed,
+            error: Some("bad | value\nnext".to_owned()),
+        }],
     ));
     report.suites.push(SuiteReport::not_run(&ctx, not_run));
     report.finish("failed");
@@ -456,7 +475,78 @@ fn run_report_summarizes_failed_and_unknown_suite_counts() {
     assert!(markdown.contains("Suites: 1 passed, 1 failed, 1 not run, 3 total"));
     assert!(markdown.contains("Tests/checks: 3 passed, 0 failed, 0 skipped, 3 total"));
     assert!(markdown.contains("Unknown counts: rust-crates, node-package"));
+    assert!(markdown.contains("bad \\| case"));
     assert!(markdown.contains("bad \\| value next"));
+}
+
+#[test]
+fn case_report_parsers_handle_junit_tap_and_libtest() {
+    let junit = r#"
+        <testsuite>
+          <testcase classname="pkg.tests" name="passes" file="tests/pkg.test.ts" />
+          <testcase classname="pkg.tests" name="fails">
+            <failure message="bad &amp; broken">trace</failure>
+          </testcase>
+          <testcase classname="pkg.tests" name="skips"><skipped /></testcase>
+        </testsuite>
+    "#;
+    let junit_cases = parse_junit_case_reports(junit, TestSuiteId::PackageTs);
+    assert_eq!(junit_cases.len(), 3);
+    assert_eq!(junit_cases[0].status, CaseStatus::Passed);
+    assert_eq!(junit_cases[1].status, CaseStatus::Failed);
+    assert_eq!(junit_cases[1].error.as_deref(), Some("bad & broken"));
+    assert_eq!(junit_cases[2].status, CaseStatus::Skipped);
+
+    let tap = "ok 1 - router imports binding\nnot ok 2 - router rejects invalid backend\nok 3 - optional # SKIP unavailable\n";
+    let tap_cases = parse_tap_case_reports(tap, TestSuiteId::NodePackage);
+    assert_eq!(tap_cases[0].status, CaseStatus::Passed);
+    assert_eq!(tap_cases[1].status, CaseStatus::Failed);
+    assert_eq!(tap_cases[2].status, CaseStatus::Skipped);
+
+    let libtest = "[stdout] test tests::passes ... ok\n[stdout] test tests::fails ... FAILED\n[stdout] test tests::skips ... ignored\n";
+    let libtest_cases = parse_libtest_case_reports(libtest, TestSuiteId::Xtask);
+    assert_eq!(libtest_cases[0].name, "tests::passes");
+    assert_eq!(libtest_cases[0].status, CaseStatus::Passed);
+    assert_eq!(libtest_cases[1].status, CaseStatus::Failed);
+    assert_eq!(libtest_cases[2].status, CaseStatus::Skipped);
+}
+
+#[test]
+fn case_counts_ignore_unknown_outcomes() {
+    let cases = vec![
+        TestCaseReport {
+            suite_id: TestSuiteId::Xtask,
+            name: "passes".to_owned(),
+            path: None,
+            status: CaseStatus::Passed,
+            error: None,
+        },
+        TestCaseReport {
+            suite_id: TestSuiteId::Xtask,
+            name: "skips".to_owned(),
+            path: None,
+            status: CaseStatus::Skipped,
+            error: None,
+        },
+    ];
+    assert_eq!(
+        case_counts(&cases),
+        Some(TestCounts {
+            passed: 1,
+            failed: 0,
+            skipped: 1,
+        })
+    );
+
+    let mut unknown = cases;
+    unknown.push(TestCaseReport {
+        suite_id: TestSuiteId::Xtask,
+        name: "opaque".to_owned(),
+        path: None,
+        status: CaseStatus::Unknown,
+        error: None,
+    });
+    assert_eq!(case_counts(&unknown), None);
 }
 
 #[test]

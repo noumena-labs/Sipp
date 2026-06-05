@@ -19,7 +19,7 @@ pub fn build(sh: &Shell, ctx: &BuildContext) -> Result<()> {
         cmd!(sh, "cargo build --release --workspace --exclude xtask"),
         None,
     )?;
-    output::run_command("Building release workspace crates", cargo_cmd)?;
+    output::run_build_command("Building release workspace crates", cargo_cmd)?;
 
     Ok(())
 }

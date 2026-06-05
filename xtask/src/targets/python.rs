@@ -36,7 +36,7 @@ pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Resul
 
     let uv_exe = crate::toolchains::python::setup_uv(sh, ctx)?;
 
-    output::run_command(
+    output::run_build_command(
         "Ensuring Python 3.12 is available through uv",
         apply_uv_env(ctx, cmd!(sh, "{uv_exe} python install 3.12")),
     )?;
@@ -62,7 +62,7 @@ fn build_develop(
 
     let venv_dir = python_dir.join(".venv");
     if !venv_dir.exists() {
-        output::run_command(
+        output::run_build_command(
             "Creating local Python virtual environment",
             apply_uv_env(ctx, cmd!(sh, "{uv_exe} venv --python 3.12")),
         )?;
@@ -96,7 +96,7 @@ fn build_develop(
         }
     }
 
-    output::run_command("Running maturin develop", maturin_cmd)?;
+    output::run_build_command("Running maturin develop", maturin_cmd)?;
     output::success(format!(
         "Python develop build complete in {}",
         output::elapsed(started_at.elapsed())
@@ -160,7 +160,7 @@ fn build_fat_wheel(sh: &Shell, ctx: &BuildContext, uv_exe: &Path) -> Result<()> 
     .env("CARGO_TARGET_DIR", &target_dir);
 
     maturin_cmd = apply_toolchains(sh, ctx, maturin_cmd, None)?;
-    output::run_command("Packaging backend-fat Python wheel", maturin_cmd)
+    output::run_build_command("Packaging backend-fat Python wheel", maturin_cmd)
         .context("failed to build Python backend-fat wheel")?;
 
     output::success(format!(
@@ -220,7 +220,7 @@ fn build_backend_variant(
         maturin_cmd = maturin_cmd.arg("--features").arg(feature);
     }
 
-    output::run_command(format!("Compiling Python {feature} backend"), maturin_cmd)
+    output::run_build_command(format!("Compiling Python {feature} backend"), maturin_cmd)
         .with_context(|| format!("failed to build Python {feature} backend"))?;
 
     let wheel = find_wheel_artifact(&staging_dir)?.with_context(|| {
@@ -236,7 +236,7 @@ fn build_backend_variant(
     }
     sh.create_dir(&extracted_dir)?;
 
-    output::run_command(
+    output::run_build_command(
         format!("Extracting Python {feature} wheel"),
         apply_uv_env(
             ctx,

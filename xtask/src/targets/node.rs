@@ -35,7 +35,7 @@ pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Resul
 
     let _dir = sh.push_dir(&node_dir);
 
-    output::run_command("Installing Node dependencies", cmd!(sh, "bun install"))?;
+    output::run_build_command("Installing Node dependencies", cmd!(sh, "bun install"))?;
 
     let dist_dir = ctx.node_artifacts_dir();
     prepare_dist_dir(sh, ctx, &dist_dir)?;
@@ -153,7 +153,7 @@ fn build_backend_variant(
         napi_cmd = napi_cmd.arg("--features").arg(feature);
     }
 
-    output::run_command(format!("Compiling Node {feature} backend"), napi_cmd)
+    output::run_build_command(format!("Compiling Node {feature} backend"), napi_cmd)
         .with_context(|| format!("failed to build Node {feature} backend"))?;
 
     let artifact = find_artifact(&staging_dir)?.with_context(|| {

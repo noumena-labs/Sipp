@@ -132,7 +132,7 @@ fn build_backend_variant(
     cargo_cmd = apply_toolchains(sh, ctx, cargo_cmd, Some(backend))?;
     cargo_cmd = cargo_cmd.arg("--features").arg(cargo_features(backend));
 
-    output::run_command(format!("Compiling CLI {feature} backend"), cargo_cmd)
+    output::run_build_command(format!("Compiling CLI {feature} backend"), cargo_cmd)
         .with_context(|| format!("failed to build CLI {feature} backend"))?;
 
     if copy_executable {

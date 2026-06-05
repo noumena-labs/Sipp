@@ -14,7 +14,8 @@ use indicatif::{ProgressBar, ProgressStyle};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::collections::VecDeque;
 use std::env;
-use std::fmt::Display;
+use std::error::Error;
+use std::fmt::{Display, Formatter};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, Read, Write as _};
 use std::path::{Path, PathBuf};
@@ -38,7 +39,6 @@ mod terminal_tests;
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
 
-const COMMAND_TAIL_LINES: usize = 20;
 const INLINE_DEFAULT_LINES: u16 = 18;
 const INLINE_MIN_LINES: u16 = 12;
 const INLINE_MIN_COLUMNS: u16 = 60;
@@ -52,6 +52,73 @@ static COMMAND_LOG_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static COMMAND_LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
 static WORKSPACE_ROOT: OnceLock<PathBuf> = OnceLock::new();
 static INLINE_RENDERER: OnceLock<Mutex<Option<InlineRenderer>>> = OnceLock::new();
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CommandDisplay {
+    General,
+    Build,
+    Test,
+}
+
+impl CommandDisplay {
+    fn shows_output_line(self, label: &str, normalized: &str) -> bool {
+        match self {
+            CommandDisplay::General => true,
+            CommandDisplay::Build => {
+                matches!(label, "BUILD" | "OK" | "WARN" | "ERR")
+                    || is_build_progress_line(normalized)
+                    || normalized.starts_with("finished")
+            }
+            CommandDisplay::Test => false,
+        }
+    }
+
+    fn shows_progress_line(self, normalized: &str) -> bool {
+        match self {
+            CommandDisplay::General | CommandDisplay::Build => {
+                is_build_progress_line(normalized) || normalized.starts_with("finished")
+            }
+            CommandDisplay::Test => {
+                is_test_build_progress_line(normalized) || normalized.starts_with("finished")
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct CommandFailure {
+    label: String,
+    status: String,
+    log_path: PathBuf,
+}
+
+impl CommandFailure {
+    fn new(label: impl Into<String>, status: impl Into<String>, log_path: PathBuf) -> Self {
+        Self {
+            label: label.into(),
+            status: status.into(),
+            log_path,
+        }
+    }
+
+    pub(crate) fn log_path(&self) -> &Path {
+        &self.log_path
+    }
+}
+
+impl Display for CommandFailure {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} failed with {}; log: {}",
+            self.label,
+            self.status,
+            display_path(&self.log_path)
+        )
+    }
+}
+
+impl Error for CommandFailure {}
 
 /// Configures terminal output for the current xtask invocation.
 pub(crate) fn init(ctx: &BuildContext, stream_subprocess: bool, no_banner: bool, plain: bool) {
@@ -364,13 +431,31 @@ pub(crate) fn prompt_confirm(message: &str, default: bool) -> Result<Option<bool
 
 /// Runs an external command with spinner, clean log capture, and elapsed-time reporting.
 pub(crate) fn run_command(label: impl Into<String>, command: Cmd<'_>) -> Result<()> {
+    run_command_with_display(label, command, CommandDisplay::General)
+}
+
+/// Runs a build subprocess with compact progress rendering.
+pub(crate) fn run_build_command(label: impl Into<String>, command: Cmd<'_>) -> Result<()> {
+    run_command_with_display(label, command, CommandDisplay::Build)
+}
+
+/// Runs a test subprocess without exposing raw runner output by default.
+pub(crate) fn run_test_command(label: impl Into<String>, command: Cmd<'_>) -> Result<()> {
+    run_command_with_display(label, command, CommandDisplay::Test)
+}
+
+fn run_command_with_display(
+    label: impl Into<String>,
+    command: Cmd<'_>,
+    display: CommandDisplay,
+) -> Result<()> {
     let label = label.into();
     if verbose() {
         return run_command_verbose(label, command);
     }
 
     if inline_active() {
-        return run_command_inline(label, command);
+        return run_command_inline(label, command, display);
     }
 
     let step = TimedStep::start(label.clone(), true);
@@ -388,11 +473,7 @@ pub(crate) fn run_command(label: impl Into<String>, command: Cmd<'_>) -> Result<
     step.finish_error();
     let log_path = write_command_log(&label, &output)?;
     print_command_failure(&label, &output, &log_path);
-    Err(anyhow!(
-        "{} failed with {}",
-        label,
-        command_status_label(&output)
-    ))
+    Err(CommandFailure::new(label, command_status_label(&output), log_path).into())
 }
 
 /// Runs a long-lived subprocess while keeping logs bounded in the inline viewport.
@@ -402,7 +483,7 @@ pub(crate) fn run_long_command(label: impl Into<String>, command: Cmd<'_>) -> Re
         return run_command_verbose(label, command);
     }
 
-    run_command_inline(label, command)
+    run_command_inline(label, command, CommandDisplay::General)
 }
 
 /// Formats a list of backends for summaries.
@@ -423,7 +504,7 @@ pub(crate) fn elapsed(duration: Duration) -> String {
     humantime::format_duration(duration).to_string()
 }
 
-fn run_command_inline(label: String, command: Cmd<'_>) -> Result<()> {
+fn run_command_inline(label: String, command: Cmd<'_>, display: CommandDisplay) -> Result<()> {
     let started_at = Instant::now();
     let (log_path, log_file) = open_command_log(&label)?;
     let log_file = Arc::new(Mutex::new(log_file));
@@ -432,10 +513,10 @@ fn run_command_inline(label: String, command: Cmd<'_>) -> Result<()> {
     let mut process: std::process::Command = command.quiet().into();
     apply_rich_terminal_env(&mut process);
     if should_use_pty(&label, &process) {
-        return run_command_pty(label, started_at, process, log_path, log_file);
+        return run_command_pty(label, started_at, process, log_path, log_file, display);
     }
 
-    run_command_piped(label, started_at, process, log_path, log_file)
+    run_command_piped(label, started_at, process, log_path, log_file, display)
 }
 
 fn run_command_piped(
@@ -444,6 +525,7 @@ fn run_command_piped(
     mut process: std::process::Command,
     log_path: PathBuf,
     log_file: Arc<Mutex<File>>,
+    display: CommandDisplay,
 ) -> Result<()> {
     process
         .stdin(Stdio::null())
@@ -459,14 +541,12 @@ fn run_command_piped(
         }
     };
 
-    let stdout_thread = child
-        .stdout
-        .take()
-        .map(|stream| spawn_output_reader(OutputStream::Stdout, stream, Arc::clone(&log_file)));
-    let stderr_thread = child
-        .stderr
-        .take()
-        .map(|stream| spawn_output_reader(OutputStream::Stderr, stream, Arc::clone(&log_file)));
+    let stdout_thread = child.stdout.take().map(|stream| {
+        spawn_output_reader(OutputStream::Stdout, stream, Arc::clone(&log_file), display)
+    });
+    let stderr_thread = child.stderr.take().map(|stream| {
+        spawn_output_reader(OutputStream::Stderr, stream, Arc::clone(&log_file), display)
+    });
     let ticker = InlineTicker::start();
 
     let status = match child.wait() {
@@ -507,11 +587,7 @@ fn run_command_piped(
 
     finish_inline_step(&label, started_at, false);
     print_status_failure(&label, Some(&status), &log_path);
-    Err(anyhow!(
-        "{} failed with {}",
-        label,
-        exit_status_label(&status)
-    ))
+    Err(CommandFailure::new(label, exit_status_label(&status), log_path).into())
 }
 
 fn run_command_pty(
@@ -520,6 +596,7 @@ fn run_command_pty(
     process: std::process::Command,
     log_path: PathBuf,
     log_file: Arc<Mutex<File>>,
+    display: CommandDisplay,
 ) -> Result<()> {
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -540,6 +617,7 @@ fn run_command_pty(
         OutputStream::Pty,
         reader,
         Arc::clone(&log_file),
+        display,
     ));
     let ticker = InlineTicker::start();
     let status = match child.wait() {
@@ -581,11 +659,7 @@ fn run_command_pty(
 
     finish_inline_step(&label, started_at, false);
     print_pty_status_failure(&label, &status, &log_path);
-    Err(anyhow!(
-        "{} failed with {}",
-        label,
-        pty_status_label(&status)
-    ))
+    Err(CommandFailure::new(label, pty_status_label(&status), log_path).into())
 }
 
 fn apply_rich_terminal_env(process: &mut std::process::Command) {
@@ -789,16 +863,6 @@ fn print_command_failure(label: &str, output: &Output, log_path: &Path) {
         let status = command_status_label(output);
         error_event(format!("{label} failed with {status}"));
         path("Log", log_path);
-
-        let lines = tail_output_lines(output, COMMAND_TAIL_LINES);
-        if lines.is_empty() {
-            detail("Recent output", "No subprocess output captured.");
-            return;
-        }
-        detail("Recent output", "last subprocess lines");
-        for line in lines {
-            subprocess_event(&line, OutputStream::Stdout);
-        }
         return;
     }
 
@@ -813,17 +877,6 @@ fn print_command_failure(label: &str, output: &Output, log_path: &Path) {
         style("PATH").cyan().bold(),
         style(display_path(log_path)).cyan()
     );
-
-    let lines = tail_output_lines(output, COMMAND_TAIL_LINES);
-    if lines.is_empty() {
-        eprintln!("      {}", style("No subprocess output captured.").dim());
-        return;
-    }
-
-    eprintln!("      {}", style("Recent subprocess output:").dim());
-    for line in lines {
-        eprintln!("      {}", style(line).dim());
-    }
 }
 
 fn print_status_failure(label: &str, status: Option<&ExitStatus>, log_path: &Path) {
@@ -878,6 +931,7 @@ fn print_pty_status_failure(label: &str, status: &portable_pty::ExitStatus, log_
     );
 }
 
+#[cfg(test)]
 fn tail_output_lines(output: &Output, max_lines: usize) -> Vec<String> {
     let mut combined = String::new();
     combined.push_str(&String::from_utf8_lossy(&output.stdout));
@@ -977,10 +1031,30 @@ fn is_build_progress_line(normalized: &str) -> bool {
     .any(|prefix| normalized.starts_with(prefix))
 }
 
+fn is_test_build_progress_line(normalized: &str) -> bool {
+    [
+        "building",
+        "compiling",
+        "checking",
+        "linking",
+        "packaging",
+        "staging",
+        "copying",
+        "downloading",
+        "installing",
+        "updating",
+        "fetching",
+        "resolving",
+    ]
+    .iter()
+    .any(|prefix| normalized.starts_with(prefix))
+}
+
 fn spawn_output_reader<R>(
     output_stream: OutputStream,
     stream: R,
     log_file: Arc<Mutex<File>>,
+    display: CommandDisplay,
 ) -> JoinHandle<Result<()>>
 where
     R: Read + Send + 'static,
@@ -1009,13 +1083,13 @@ where
             for byte in &chunk[..read] {
                 if pending_cr {
                     if *byte == b'\n' {
-                        emit_subprocess_line(&pending, output_stream);
+                        emit_subprocess_line(&pending, output_stream, display);
                         pending.clear();
                         pending_cr = false;
                         continue;
                     }
 
-                    emit_subprocess_progress(&pending, output_stream);
+                    emit_subprocess_progress(&pending, output_stream, display);
                     pending.clear();
                     pending_cr = false;
                 }
@@ -1023,41 +1097,41 @@ where
                 if *byte == b'\r' {
                     pending_cr = true;
                 } else if *byte == b'\n' {
-                    emit_subprocess_line(&pending, output_stream);
+                    emit_subprocess_line(&pending, output_stream, display);
                     pending.clear();
                 } else {
                     pending.push(*byte);
                 }
 
                 if pending.len() >= 4096 {
-                    emit_subprocess_line(&pending, output_stream);
+                    emit_subprocess_line(&pending, output_stream, display);
                     pending.clear();
                 }
             }
         }
 
         if pending_cr {
-            emit_subprocess_progress(&pending, output_stream);
+            emit_subprocess_progress(&pending, output_stream, display);
         } else {
-            emit_subprocess_line(&pending, output_stream);
+            emit_subprocess_line(&pending, output_stream, display);
         }
         Ok(())
     })
 }
 
-fn emit_subprocess_line(bytes: &[u8], stream: OutputStream) {
+fn emit_subprocess_line(bytes: &[u8], stream: OutputStream, display: CommandDisplay) {
     let line = String::from_utf8_lossy(bytes);
     let line = line.trim_end();
     if !plain_stream_text(line).trim().is_empty() {
-        subprocess_event(&line, stream);
+        subprocess_event(&line, stream, display);
     }
 }
 
-fn emit_subprocess_progress(bytes: &[u8], stream: OutputStream) {
+fn emit_subprocess_progress(bytes: &[u8], stream: OutputStream, display: CommandDisplay) {
     let line = String::from_utf8_lossy(bytes);
     let line = line.trim_end();
     if !plain_stream_text(line).trim().is_empty() {
-        subprocess_progress_event(&line, stream);
+        subprocess_progress_event(&line, stream, display);
     }
 }
 
@@ -1154,22 +1228,28 @@ fn tick_inline_step() {
     });
 }
 
-fn subprocess_event(line: &str, stream: OutputStream) {
+fn subprocess_event(line: &str, stream: OutputStream, display: CommandDisplay) {
     let _ = with_inline(|renderer| {
         let plain = plain_stream_text(line);
         let (label, kind) = stream.classify(&plain);
         let normalized = plain.trim_start().to_ascii_lowercase();
-        if is_build_progress_line(&normalized) || normalized.starts_with("finished") {
+        if display.shows_progress_line(&normalized) {
             renderer.set_progress(kind, label, line);
         }
-        renderer.add_output(kind, label, line);
+        if display.shows_output_line(label, &normalized) {
+            renderer.add_output(kind, label, line);
+        }
         renderer.render_throttled();
     });
 }
 
-fn subprocess_progress_event(line: &str, stream: OutputStream) {
+fn subprocess_progress_event(line: &str, stream: OutputStream, display: CommandDisplay) {
     let _ = with_inline(|renderer| {
         let plain = plain_stream_text(line);
+        let normalized = plain.trim_start().to_ascii_lowercase();
+        if !display.shows_progress_line(&normalized) {
+            return;
+        }
         let (label, kind) = stream.classify(&plain);
         renderer.set_progress(kind, label, line);
         renderer.render_throttled();
@@ -1540,10 +1620,9 @@ impl InlineRenderer {
 
         if let Some(step) = self.active.as_ref() {
             let active = format!(
-                "{} {} ({})",
+                "{} {}",
                 spinner_frame(step.frame),
-                step.label,
-                elapsed(step.started_at.elapsed())
+                active_step_message(&step.label, step.started_at.elapsed())
             );
             self.put_labeled_line(rows, 3, "RUN", &active, LineKind::Run);
         } else if let Some(status) = self.final_status.as_ref() {
@@ -1595,33 +1674,8 @@ impl InlineRenderer {
             return;
         }
 
-        if self.output.is_empty() && self.active.is_some() {
-            let active = self
-                .active
-                .as_ref()
-                .map(|step| step.label.as_str())
-                .unwrap_or("subprocess");
-            self.put_labeled_line(
-                rows,
-                body_start,
-                "RUN",
-                &format!("{active} is running; no output emitted yet"),
-                LineKind::Run,
-            );
-            return;
-        }
-
         if self.output.is_empty() {
-            let start = self.activity.len().saturating_sub(body_lines);
-            for (offset, line) in self.activity.iter().skip(start).enumerate() {
-                self.put_labeled_line(
-                    rows,
-                    body_start + offset as u16,
-                    line.label,
-                    &line.text,
-                    line.kind,
-                );
-            }
+            self.render_activity_history(rows, body_start, body_lines);
             return;
         }
 
@@ -1634,6 +1688,40 @@ impl InlineRenderer {
                 &line.segments,
                 line.kind,
             );
+        }
+    }
+
+    fn render_activity_history(&self, rows: &mut [RenderedRow], mut row: u16, body_lines: usize) {
+        let mut remaining = body_lines;
+        let active_label = self.active.as_ref().map(|step| step.label.as_str());
+        if let Some(step) = self.active.as_ref() {
+            self.put_labeled_line(
+                rows,
+                row,
+                "RUN",
+                &active_step_message(&step.label, step.started_at.elapsed()),
+                LineKind::Run,
+            );
+            row += 1;
+            remaining = remaining.saturating_sub(1);
+        }
+        if remaining == 0 {
+            return;
+        }
+
+        let lines = self
+            .activity
+            .iter()
+            .filter(|line| {
+                !matches!(
+                    active_label,
+                    Some(active) if line.label == "RUN" && line.text == active
+                )
+            })
+            .collect::<Vec<_>>();
+        let start = lines.len().saturating_sub(remaining);
+        for (offset, line) in lines.into_iter().skip(start).enumerate() {
+            self.put_labeled_line(rows, row + offset as u16, line.label, &line.text, line.kind);
         }
     }
 
@@ -2171,6 +2259,10 @@ fn spinner_frame(frame: usize) -> &'static str {
         4 => "  .",
         _ => "   ",
     }
+}
+
+fn active_step_message(label: &str, duration: Duration) -> String {
+    format!("{label} ({})", elapsed(duration))
 }
 
 fn visual_color(frame: usize) -> Color {

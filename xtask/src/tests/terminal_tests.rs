@@ -6,7 +6,9 @@
 
 use console::measure_text_width;
 use crossterm::style::Color;
+use std::collections::VecDeque;
 use std::process::{ExitStatus, Output};
+use std::time::{Duration, Instant};
 
 use super::*;
 
@@ -119,10 +121,82 @@ fn output_stream_classification_detects_errors_warnings_success_and_progress() {
 }
 
 #[test]
+fn command_display_modes_filter_compact_output() {
+    assert!(CommandDisplay::General.shows_output_line("OUT", "plain runner output"));
+    assert!(CommandDisplay::Build.shows_output_line("BUILD", "compiling xtask"));
+    assert!(CommandDisplay::Build.shows_output_line("WARN", "warning: heads up"));
+    assert!(!CommandDisplay::Build.shows_output_line("OUT", "plain runner output"));
+    assert!(!CommandDisplay::Test.shows_output_line("ERR", "error: raw test failure"));
+    assert!(CommandDisplay::Test.shows_progress_line("compiling xtask"));
+    assert!(CommandDisplay::Test.shows_progress_line("finished test profile"));
+    assert!(!CommandDisplay::Test.shows_progress_line("running 12 tests"));
+}
+
+#[test]
+fn inline_empty_output_shows_active_status_and_recent_activity() {
+    let mut renderer = test_renderer();
+    renderer.active = Some(ActiveStep {
+        label: "Building browser package".to_owned(),
+        started_at: Instant::now() - Duration::from_secs(2),
+        frame: 0,
+    });
+    renderer.activity.push_back(ActivityLine {
+        kind: LineKind::Run,
+        label: "RUN",
+        text: "Running suite browser-package".to_owned(),
+    });
+    renderer.activity.push_back(ActivityLine {
+        kind: LineKind::Run,
+        label: "RUN",
+        text: "Building browser package".to_owned(),
+    });
+
+    let text = frame_text(&renderer.build_frame());
+
+    assert!(text.contains("Building browser package"));
+    assert!(text.contains("Running suite browser-package"));
+    assert!(!text.contains("no output emitted yet"));
+}
+
+#[test]
 fn inline_and_visual_helpers_are_deterministic() {
     assert!(!should_use_inline(true, false));
     assert!(!should_use_inline(false, true));
     assert_eq!(spinner_frame(0), ".  ");
     assert_eq!(spinner_frame(5), "   ");
     assert_eq!(visual_line_segments("plain", 0)[0].text, "plain");
+}
+
+fn test_renderer() -> InlineRenderer {
+    InlineRenderer {
+        command_label: "test unit suite browser-package".to_owned(),
+        origin_y: 0,
+        height: 12,
+        width: 100,
+        started_at: Instant::now(),
+        current_phase: Some("Running test suites".to_owned()),
+        active: None,
+        activity: VecDeque::new(),
+        output: VecDeque::new(),
+        progress: None,
+        current_log_path: None,
+        footer_message: None,
+        final_status: None,
+        visual: None,
+        prompt: None,
+        previous_rows: vec![None; 12],
+        last_rendered_at: Instant::now(),
+    }
+}
+
+fn frame_text(rows: &[RenderedRow]) -> String {
+    rows.iter()
+        .map(|row| {
+            row.segments
+                .iter()
+                .map(|segment| segment.text.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }

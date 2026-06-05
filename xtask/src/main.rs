@@ -35,7 +35,9 @@ fn main() -> Result<()> {
         Commands::Doctor(args) => doctor::run(&ctx, &args),
         Commands::Setup(args) => setup::run(&sh, &ctx, &args),
     };
-    finish_output(result.is_ok(), &summary);
+    if output.final_status {
+        finish_output(result.is_ok(), &summary);
+    }
 
     result
 }
@@ -44,13 +46,28 @@ fn main() -> Result<()> {
 struct OutputOptions {
     stream_subprocess: bool,
     plain: bool,
+    final_status: bool,
 }
 
 fn effective_output_options(command: &Commands, verbose: bool, plain: bool) -> OutputOptions {
-    let detailed_default = !matches!(command, Commands::Build { .. } | Commands::Run { .. });
+    let compact_default = matches!(
+        command,
+        Commands::Build { .. }
+            | Commands::Run { .. }
+            | Commands::Test {
+                command: TestCommands::Unit(_) | TestCommands::Smoke(_),
+            }
+    );
+    let machine_readable = matches!(
+        command,
+        Commands::Test {
+            command: TestCommands::List(args),
+        } if args.format == xtask::cli::TestListFormat::Json
+    );
     OutputOptions {
-        stream_subprocess: verbose || detailed_default,
-        plain: plain || detailed_default,
+        stream_subprocess: verbose,
+        plain: plain || !compact_default || machine_readable,
+        final_status: !machine_readable,
     }
 }
 

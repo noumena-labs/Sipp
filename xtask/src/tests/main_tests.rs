@@ -130,6 +130,7 @@ fn effective_output_options_keep_build_and_run_compact_by_default() {
         OutputOptions {
             stream_subprocess: false,
             plain: false,
+            final_status: true,
         }
     );
     assert_eq!(
@@ -137,6 +138,7 @@ fn effective_output_options_keep_build_and_run_compact_by_default() {
         OutputOptions {
             stream_subprocess: false,
             plain: false,
+            final_status: true,
         }
     );
     assert_eq!(
@@ -144,6 +146,7 @@ fn effective_output_options_keep_build_and_run_compact_by_default() {
         OutputOptions {
             stream_subprocess: true,
             plain: false,
+            final_status: true,
         }
     );
     assert_eq!(
@@ -151,12 +154,48 @@ fn effective_output_options_keep_build_and_run_compact_by_default() {
         OutputOptions {
             stream_subprocess: false,
             plain: true,
+            final_status: true,
         }
     );
 }
 
 #[test]
-fn effective_output_options_default_to_detailed_for_information_commands() {
+fn effective_output_options_keep_test_execution_compact_by_default() {
+    let unit = Commands::Test {
+        command: TestCommands::Unit(TestUnitArgs {
+            command: TestUnitCommands::Group(TestUnitGroupArgs {
+                target: TestUnitGroupTarget::Whitebox,
+            }),
+        }),
+    };
+    let smoke = Commands::Test {
+        command: TestCommands::Smoke(TestSmokeArgs {
+            command: TestSmokeCommands::Suite(TestSmokeSuiteArgs {
+                target: TestSmokeSuiteTarget::ProviderGateway,
+            }),
+        }),
+    };
+
+    assert_eq!(
+        effective_output_options(&unit, false, false),
+        OutputOptions {
+            stream_subprocess: false,
+            plain: false,
+            final_status: true,
+        }
+    );
+    assert_eq!(
+        effective_output_options(&smoke, false, true),
+        OutputOptions {
+            stream_subprocess: false,
+            plain: true,
+            final_status: true,
+        }
+    );
+}
+
+#[test]
+fn effective_output_options_keep_information_commands_plain() {
     let test_list = Commands::Test {
         command: TestCommands::List(TestListArgs {
             group: TestGroupFilter::All,
@@ -170,8 +209,31 @@ fn effective_output_options_default_to_detailed_for_information_commands() {
     assert_eq!(
         effective_output_options(&test_list, false, false),
         OutputOptions {
-            stream_subprocess: true,
+            stream_subprocess: false,
             plain: true,
+            final_status: true,
+        }
+    );
+}
+
+#[test]
+fn effective_output_options_keep_json_test_list_machine_readable() {
+    let test_list = Commands::Test {
+        command: TestCommands::List(TestListArgs {
+            group: TestGroupFilter::All,
+            layer: None,
+            cases: true,
+            search: None,
+            format: TestListFormat::Json,
+        }),
+    };
+
+    assert_eq!(
+        effective_output_options(&test_list, false, false),
+        OutputOptions {
+            stream_subprocess: false,
+            plain: true,
+            final_status: false,
         }
     );
 }

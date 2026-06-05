@@ -445,6 +445,13 @@ fn run_selected_suites(
 
     for (index, suite) in suites.iter().enumerate() {
         let started_at = Instant::now();
+        if let Err(error) = prepare_suite_case_report_dir(ctx, suite) {
+            output::warning(format!(
+                "Could not prepare structured test report directory for {}: {error:#}",
+                suite.id.as_str()
+            ));
+        }
+        print_suite_start(suite, index + 1, suites.len());
         let result = run_suite(sh, ctx, suite, options, &mut coverage_state);
         let duration_ms = started_at.elapsed().as_millis();
         match result {
@@ -456,17 +463,21 @@ fn run_selected_suites(
                         coverage_report_areas(&completed_coverage_suites),
                     )?;
                 }
-                report
-                    .suites
-                    .push(SuiteReport::passed(ctx, suite, duration_ms, outcome.counts));
+                let suite_report =
+                    SuiteReport::passed(ctx, suite, duration_ms, outcome.counts, outcome.cases);
+                print_suite_report(&suite_report);
+                report.suites.push(suite_report);
                 report.finish("passed");
                 write_run_report(ctx, &report)?;
             }
             Err(error) => {
                 let message = format!("{error:#}");
-                report
-                    .suites
-                    .push(SuiteReport::failed(ctx, suite, duration_ms, message));
+                let cases = failed_suite_cases(ctx, suite, options, &error);
+                let counts = case_counts(&cases);
+                let suite_report =
+                    SuiteReport::failed(ctx, suite, duration_ms, message, counts, cases);
+                print_suite_report(&suite_report);
+                report.suites.push(suite_report);
                 for remaining in suites.iter().skip(index + 1) {
                     report.suites.push(SuiteReport::not_run(ctx, remaining));
                 }
@@ -528,9 +539,145 @@ fn successful_suite_outcome(
     suite: &TestSuite,
     options: &SuiteRunOptions<'_>,
 ) -> Result<SuiteOutcome> {
-    Ok(SuiteOutcome {
-        counts: known_success_counts(ctx, suite, options)?,
+    let cases = successful_suite_cases(ctx, suite, options)?;
+    let counts = if cases.is_empty() {
+        known_success_counts(ctx, suite, options)?
+    } else {
+        case_counts(&cases)
+    };
+    Ok(SuiteOutcome { counts, cases })
+}
+
+fn successful_suite_cases(
+    ctx: &BuildContext,
+    suite: &TestSuite,
+    options: &SuiteRunOptions<'_>,
+) -> Result<Vec<TestCaseReport>> {
+    let mut cases = Vec::new();
+    match suite.discoverer {
+        CaseDiscoverer::None => {}
+        CaseDiscoverer::RustTargets(targets) if suite.id == TestSuiteId::RustCrates => {
+            let targets = filtered_rust_targets(targets, options.package)?;
+            discover_rust_cases(
+                ctx,
+                suite.id,
+                rust_target_case_files(ctx, &targets)?,
+                &mut cases,
+            )?;
+        }
+        _ => discover_suite_cases(ctx, suite, &mut cases)?,
+    }
+
+    if cases.is_empty() {
+        return Ok(synthetic_suite_cases(suite, options, CaseStatus::Passed));
+    }
+
+    Ok(cases
+        .into_iter()
+        .map(|case| TestCaseReport::from_case(case, CaseStatus::Passed))
+        .collect())
+}
+
+fn failed_suite_cases(
+    ctx: &BuildContext,
+    suite: &TestSuite,
+    options: &SuiteRunOptions<'_>,
+    error: &anyhow::Error,
+) -> Vec<TestCaseReport> {
+    match read_structured_case_reports(ctx, suite.id) {
+        Ok(cases) if !cases.is_empty() => return cases,
+        Ok(_) => {}
+        Err(parse_error) => {
+            output::warning(format!(
+                "Could not parse structured test reports for {}: {parse_error:#}",
+                suite.id.as_str()
+            ));
+        }
+    }
+
+    if let Some(log_path) = command_failure_log_path(error) {
+        match std::fs::read_to_string(&log_path) {
+            Ok(contents) => {
+                let cases = parse_libtest_case_reports(&contents, suite.id);
+                if !cases.is_empty() {
+                    return cases;
+                }
+            }
+            Err(read_error) => {
+                output::warning(format!(
+                    "Could not read subprocess log {}: {read_error:#}",
+                    log_path.display()
+                ));
+            }
+        }
+    }
+
+    synthetic_suite_cases(suite, options, CaseStatus::Unknown)
+}
+
+fn command_failure_log_path(error: &anyhow::Error) -> Option<PathBuf> {
+    error.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<output::CommandFailure>()
+            .map(|failure| failure.log_path().to_path_buf())
     })
+}
+
+fn synthetic_suite_cases(
+    suite: &TestSuite,
+    options: &SuiteRunOptions<'_>,
+    status: CaseStatus,
+) -> Vec<TestCaseReport> {
+    let names = match suite.runner {
+        SuiteRunner::CliSmoke => vec!["cli local generation".to_owned()],
+        SuiteRunner::RustSmoke => selected_rust_smoke_examples(options.cases)
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        SuiteRunner::NodeSmoke => selected_node_smoke_scripts(options.cases)
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        SuiteRunner::PythonSmoke => selected_python_smoke_scripts(options.cases)
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        SuiteRunner::ExampleBrowserSmoke => selected_smoke_cases(options.cases)
+            .into_iter()
+            .map(|case| case.as_str().to_owned())
+            .collect(),
+        SuiteRunner::BenchmarkBrowserSmoke => vec!["benchmark browser runtime".to_owned()],
+        SuiteRunner::LlamaBackendOps => vec!["llama.cpp backend ops".to_owned()],
+        _ => Vec::new(),
+    };
+
+    names
+        .into_iter()
+        .map(|name| TestCaseReport {
+            suite_id: suite.id,
+            name,
+            path: None,
+            status,
+            error: None,
+        })
+        .collect()
+}
+
+fn case_counts(cases: &[TestCaseReport]) -> Option<TestCounts> {
+    if cases.is_empty() || cases.iter().any(|case| case.status == CaseStatus::Unknown) {
+        return None;
+    }
+
+    let mut counts = TestCounts::default();
+    for case in cases {
+        match case.status {
+            CaseStatus::Passed => counts.passed += 1,
+            CaseStatus::Failed => counts.failed += 1,
+            CaseStatus::Skipped => counts.skipped += 1,
+            CaseStatus::Unknown => {}
+        }
+    }
+    Some(counts)
 }
 
 fn known_success_counts(
@@ -616,6 +763,47 @@ fn print_run_summary(report: &RunReport) {
     }
 }
 
+fn print_suite_start(suite: &TestSuite, index: usize, total: usize) {
+    output::step(format!(
+        "Suite {index}/{total}: {} - {}",
+        suite.id.as_str(),
+        suite.description
+    ));
+}
+
+fn print_suite_report(suite: &SuiteReport) {
+    let counts = suite
+        .counts
+        .map(|counts| counts.markdown())
+        .unwrap_or_else(|| "counts unknown".to_owned());
+    let duration = suite
+        .duration_ms
+        .map(|duration| output::elapsed(std::time::Duration::from_millis(duration)))
+        .unwrap_or_else(|| "not run".to_owned());
+    let message = format!("Suite {} {} ({duration}; {counts})", suite.id, suite.status);
+
+    match suite.status.as_str() {
+        "passed" => output::success(message),
+        "failed" => output::warning(message),
+        _ => output::detail("Suite", message),
+    }
+
+    for case in &suite.cases {
+        print_case_report(&suite.id, case);
+    }
+}
+
+fn print_case_report(suite_id: &str, case: &TestCaseReport) {
+    let path = case.path.as_deref().unwrap_or("-");
+    let message = format!("{suite_id} :: {} ({path})", case.name);
+    match case.status {
+        CaseStatus::Passed => output::success(format!("PASS {message}")),
+        CaseStatus::Failed => output::warning(format!("FAIL {message}")),
+        CaseStatus::Skipped => output::detail("SKIP", message),
+        CaseStatus::Unknown => output::detail("UNKNOWN", message),
+    }
+}
+
 fn verify_test_structure(ctx: &BuildContext) -> Result<()> {
     output::phase("Test structure");
     let violations = collect_test_structure_violations(ctx)?;
@@ -692,7 +880,7 @@ fn run_rust_coverage_targets(
             }
         }
         let lcov_cmd = apply_toolchains(sh, ctx, lcov_cmd, None)?;
-        output::run_command(
+        output::run_test_command(
             format!("Running {} Rust coverage tests", target.label()),
             lcov_cmd,
         )?;
@@ -704,7 +892,7 @@ fn run_rust_coverage_targets(
         "cargo llvm-cov --html --no-run --output-dir {rust_html} --ignore-filename-regex third_party|\\.build|target|tests|examples|demos|benchmarks"
     );
     let html_cmd = apply_toolchains(sh, ctx, html_cmd, None)?;
-    output::run_command("Writing Rust HTML coverage report", html_cmd)?;
+    output::run_build_command("Writing Rust HTML coverage report", html_cmd)?;
     Ok(())
 }
 
@@ -712,10 +900,14 @@ fn run_package_ts_tests(sh: &Shell, ctx: &BuildContext) -> Result<()> {
     output::phase("White-box browser package TypeScript tests");
     targets::wasm::build(sh, ctx)?;
     let browser_package_dir = ctx.browser_package_dir();
+    let junit_path = suite_case_report_file(ctx, TestSuiteId::PackageTs, "bun-package.xml");
     let _dir = sh.push_dir(&browser_package_dir);
-    output::run_command(
+    output::run_test_command(
         "Running browser package TypeScript tests",
-        cmd!(sh, "bun test tests"),
+        cmd!(
+            sh,
+            "bun test tests --reporter=junit --reporter-outfile {junit_path}"
+        ),
     )
 }
 
@@ -731,16 +923,21 @@ fn run_demo_ts_tests(sh: &Shell, ctx: &BuildContext) -> Result<()> {
     }
 
     output::detail("Test files", tests.len());
-    for test in tests {
+    for (index, test) in tests.into_iter().enumerate() {
         let workspace = demo_test_workspace(ctx, &test)?;
         let relative_test = test.strip_prefix(&workspace).unwrap_or(&test);
+        let junit_path =
+            suite_case_report_file(ctx, TestSuiteId::DemoTs, &format!("demo-{index}.xml"));
         let _dir = sh.push_dir(&workspace);
-        output::run_command(
+        output::run_test_command(
             format!(
                 "Running demo TypeScript test {}",
                 display_relative(ctx, &test)
             ),
-            cmd!(sh, "bun test {relative_test}"),
+            cmd!(
+                sh,
+                "bun test {relative_test} --reporter=junit --reporter-outfile {junit_path}"
+            ),
         )?;
     }
     Ok(())
@@ -756,11 +953,16 @@ fn run_node_package_tests(sh: &Shell, ctx: &BuildContext, backend: &Backend) -> 
     let node_dir = ctx.node_package_dir();
     let _node = sh.push_dir(&node_dir);
     for backend in node_test_backends(ctx, backend)? {
-        output::run_command(
+        let report_path = suite_case_report_file(
+            ctx,
+            TestSuiteId::NodePackage,
+            &format!("node-{}.tap", backend.as_str()),
+        );
+        output::run_test_command(
             format!("Running Node.js package tests ({})", backend.as_str()),
             cmd!(
                 sh,
-                "bunx c8 --reporter=lcov --reports-dir {coverage_dir} node --test tests/router.test.mjs"
+                "bunx c8 --reporter=lcov --reports-dir {coverage_dir} node --test --test-reporter=tap --test-reporter-destination {report_path} tests/router.test.mjs"
             )
                 .env("COGENTLM_NODE_BACKEND", backend.as_str())
                 .env("COGENTLM_NODE_TEST_BACKEND", backend.as_str()),
@@ -781,7 +983,7 @@ fn run_python_package_tests(sh: &Shell, ctx: &BuildContext, backend: &Backend) -
     let uv_exe = setup_uv(sh, ctx)?;
     let venv_dir = ctx.tmp_dir().join("python-tests").join(backend.as_str());
     sh.create_dir(&venv_dir)?;
-    output::run_command(
+    output::run_build_command(
         "Creating Python test virtual environment",
         apply_uv_env(
             ctx,
@@ -789,7 +991,7 @@ fn run_python_package_tests(sh: &Shell, ctx: &BuildContext, backend: &Backend) -
         ),
     )?;
     let python_exe = python_venv_exe(&venv_dir);
-    output::run_command(
+    output::run_build_command(
         "Installing Python test wheel",
         apply_uv_env(
             ctx,
@@ -806,11 +1008,12 @@ fn run_python_package_tests(sh: &Shell, ctx: &BuildContext, backend: &Backend) -
     let python_lcov = coverage_dir.join("lcov.info");
     let python_cobertura = coverage_dir.join("cobertura.xml");
     let python_html = coverage_dir.join("html");
-    output::run_command(
+    let junit_path = suite_case_report_file(ctx, TestSuiteId::PythonPackage, "pytest.xml");
+    output::run_test_command(
         "Running Python package pytest suite",
         cmd!(
             sh,
-            "{python_exe} -m pytest {python_tests} --cov=cogentlm --cov-report=lcov:{python_lcov} --cov-report=xml:{python_cobertura} --cov-report=html:{python_html}"
+            "{python_exe} -m pytest {python_tests} --junitxml={junit_path} --cov=cogentlm --cov-report=lcov:{python_lcov} --cov-report=xml:{python_cobertura} --cov-report=html:{python_html}"
         ),
     )
 }
@@ -896,7 +1099,7 @@ fn run_browser_example_smoke(
     for case in selected_smoke_cases(options.cases) {
         smoke_cmd = smoke_cmd.arg("--case").arg(case.as_str());
     }
-    output::run_command("Running browser example smoke", smoke_cmd)
+    output::run_test_command("Running browser example smoke", smoke_cmd)
 }
 
 fn run_benchmark_browser_runtime_smoke(
@@ -936,7 +1139,7 @@ fn run_benchmark_browser_runtime_smoke(
     if options.require_webgpu {
         smoke_cmd = smoke_cmd.arg("--require-webgpu");
     }
-    output::run_command("Running benchmark browser runtime smoke", smoke_cmd)
+    output::run_test_command("Running benchmark browser runtime smoke", smoke_cmd)
 }
 
 fn run_llama_backend_ops_suite(
@@ -1002,7 +1205,7 @@ fn run_cli_smoke(
     if options.backend != Backend::Cpu {
         smoke_cmd = smoke_cmd.arg("--backend").arg(options.backend.as_str());
     }
-    output::run_command("Running CLI local inference smoke", smoke_cmd)
+    output::run_test_command("Running CLI local inference smoke", smoke_cmd)
 }
 
 fn run_rust_generation_smoke(
@@ -1033,7 +1236,7 @@ fn run_rust_generation_smoke(
                 format_temperature(options.temperature),
             );
         smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(&options.backend))?;
-        output::run_command(
+        output::run_test_command(
             format!("Running Rust {} smoke: {example}", options.backend.as_str()),
             smoke_cmd,
         )
@@ -1068,7 +1271,7 @@ fn run_node_generation_smoke(
                 format_temperature(options.temperature),
             );
         smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(&options.backend))?;
-        output::run_command(
+        output::run_test_command(
             format!(
                 "Running Node {} smoke: {smoke_script}",
                 options.backend.as_str()
@@ -1101,7 +1304,7 @@ fn run_python_generation_smoke(
         .tmp_dir()
         .join("python-model-smoke")
         .join(options.backend.as_str());
-    output::run_command(
+    output::run_build_command(
         "Creating Python smoke virtual environment",
         apply_uv_env(
             ctx,
@@ -1109,7 +1312,7 @@ fn run_python_generation_smoke(
         ),
     )?;
     let python_exe = python_venv_exe(&venv_dir);
-    output::run_command(
+    output::run_build_command(
         "Installing Python smoke wheel",
         apply_uv_env(
             ctx,
@@ -1134,7 +1337,7 @@ fn run_python_generation_smoke(
                 format_temperature(options.temperature),
             );
         smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(&options.backend))?;
-        output::run_command(
+        output::run_test_command(
             format!(
                 "Running Python {} smoke: {smoke_script}",
                 options.backend.as_str()
@@ -1164,7 +1367,7 @@ fn run_provider_gateway_smoke(sh: &Shell, ctx: &BuildContext) -> Result<()> {
         ),
         None,
     )?;
-    output::run_command("Running provider gateway smoke tests", smoke_cmd)
+    output::run_test_command("Running provider gateway smoke tests", smoke_cmd)
 }
 
 fn selected_smoke_cases(cases: &[TestSmokeCase]) -> Vec<TestSmokeCase> {
@@ -1306,14 +1509,14 @@ fn write_rust_coverage_reports(sh: &Shell, ctx: &BuildContext) -> Result<()> {
     let rust_html = rust_dir.join("html");
 
     let _root = sh.push_dir(ctx.workspace_root());
-    output::run_command(
+    output::run_build_command(
         "Writing Rust LCOV report",
         cmd!(
             sh,
             "cargo llvm-cov report --lcov --output-path {rust_lcov} --ignore-filename-regex third_party|\\.build|target|tests|examples|demos|benchmarks"
         ),
     )?;
-    output::run_command(
+    output::run_build_command(
         "Writing Rust HTML report",
         cmd!(
             sh,
@@ -2642,7 +2845,7 @@ fn test_backends(backend: &Backend) -> Vec<Backend> {
 
 fn build_python_test_wheel(sh: &Shell, ctx: &BuildContext, backend: &Backend) -> Result<PathBuf> {
     let uv_exe = setup_uv(sh, ctx)?;
-    output::run_command(
+    output::run_build_command(
         "Ensuring Python 3.12 is available through uv",
         apply_uv_env(ctx, cmd!(sh, "{uv_exe} python install 3.12")),
     )?;
@@ -2668,7 +2871,7 @@ fn build_python_test_wheel(sh: &Shell, ctx: &BuildContext, backend: &Backend) ->
     if *backend != Backend::Cpu {
         maturin_cmd = maturin_cmd.arg("--features").arg(backend.as_str());
     }
-    output::run_command("Building Python test wheel", maturin_cmd)?;
+    output::run_build_command("Building Python test wheel", maturin_cmd)?;
     find_wheel_artifact(&dist_dir)?.with_context(|| {
         format!(
             "maturin did not produce a wheel artifact in {}",
@@ -2704,7 +2907,7 @@ fn find_wheel_artifact(dir: &Path) -> Result<Option<PathBuf>> {
 
 fn ensure_javascript_workspace_dependencies(sh: &Shell, ctx: &BuildContext) -> Result<()> {
     let _dir = sh.push_dir(ctx.workspace_root());
-    output::run_command(
+    output::run_build_command(
         "Installing JavaScript workspace dependencies",
         cmd!(sh, "bun install"),
     )
@@ -2914,6 +3117,220 @@ fn test_verify_report_json(ctx: &BuildContext) -> PathBuf {
 
 fn test_verify_report_markdown(ctx: &BuildContext) -> PathBuf {
     test_report_dir(ctx).join("verify-report.md")
+}
+
+fn prepare_suite_case_report_dir(ctx: &BuildContext, suite: &TestSuite) -> Result<()> {
+    let dir = suite_case_report_dir(ctx, suite.id);
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir)
+            .with_context(|| format!("failed to remove {}", dir.display()))?;
+    }
+    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))
+}
+
+fn suite_case_report_dir(ctx: &BuildContext, suite_id: TestSuiteId) -> PathBuf {
+    test_report_dir(ctx)
+        .join("case-reports")
+        .join(suite_id.as_str())
+}
+
+fn suite_case_report_file(ctx: &BuildContext, suite_id: TestSuiteId, name: &str) -> PathBuf {
+    suite_case_report_dir(ctx, suite_id).join(name)
+}
+
+fn read_structured_case_reports(
+    ctx: &BuildContext,
+    suite_id: TestSuiteId,
+) -> Result<Vec<TestCaseReport>> {
+    let dir = suite_case_report_dir(ctx, suite_id);
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut cases = Vec::new();
+    for entry in
+        std::fs::read_dir(&dir).with_context(|| format!("failed to read {}", dir.display()))?
+    {
+        let path = entry?.path();
+        if !path.is_file() {
+            continue;
+        }
+        let contents = std::fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        match path.extension().and_then(|extension| extension.to_str()) {
+            Some("xml") => cases.extend(parse_junit_case_reports(&contents, suite_id)),
+            Some("tap") => cases.extend(parse_tap_case_reports(&contents, suite_id)),
+            _ => {}
+        }
+    }
+    cases.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then(left.path.cmp(&right.path))
+            .then(left.status.as_str().cmp(right.status.as_str()))
+    });
+    Ok(cases)
+}
+
+fn parse_junit_case_reports(contents: &str, suite_id: TestSuiteId) -> Vec<TestCaseReport> {
+    let mut reports = Vec::new();
+    let mut remaining = contents;
+
+    while let Some(start) = remaining.find("<testcase") {
+        remaining = &remaining[start..];
+        let Some(tag_end) = remaining.find('>') else {
+            break;
+        };
+        let tag = &remaining[..=tag_end];
+        let self_closing = tag.trim_end().ends_with("/>");
+        let (body, next) = if self_closing {
+            ("", &remaining[tag_end + 1..])
+        } else if let Some(end) = remaining[tag_end + 1..].find("</testcase>") {
+            let body_start = tag_end + 1;
+            let body_end = body_start + end;
+            (
+                &remaining[body_start..body_end],
+                &remaining[body_end + "</testcase>".len()..],
+            )
+        } else {
+            break;
+        };
+        remaining = next;
+
+        let Some(name) = xml_attr(tag, "name") else {
+            continue;
+        };
+        let path = xml_attr(tag, "file").or_else(|| xml_attr(tag, "classname"));
+        let failure = body.contains("<failure");
+        let error = body.contains("<error");
+        let skipped = body.contains("<skipped");
+        let status = if failure || error {
+            CaseStatus::Failed
+        } else if skipped {
+            CaseStatus::Skipped
+        } else {
+            CaseStatus::Passed
+        };
+        let message = if failure {
+            xml_element_attr(body, "failure", "message")
+        } else if error {
+            xml_element_attr(body, "error", "message")
+        } else {
+            None
+        };
+        reports.push(TestCaseReport {
+            suite_id,
+            name,
+            path,
+            status,
+            error: message,
+        });
+    }
+
+    reports
+}
+
+fn parse_tap_case_reports(contents: &str, suite_id: TestSuiteId) -> Vec<TestCaseReport> {
+    let mut reports = Vec::new();
+    for line in contents.lines().map(clean_log_line) {
+        let (status, rest) = if let Some(rest) = line.strip_prefix("ok ") {
+            (CaseStatus::Passed, rest)
+        } else if let Some(rest) = line.strip_prefix("not ok ") {
+            (CaseStatus::Failed, rest)
+        } else {
+            continue;
+        };
+        let Some((_, name)) = rest.split_once(" - ") else {
+            continue;
+        };
+        let status = if name.contains("# SKIP") {
+            CaseStatus::Skipped
+        } else {
+            status
+        };
+        let name = name
+            .split_once('#')
+            .map(|(name, _)| name)
+            .unwrap_or(name)
+            .trim();
+        if name.is_empty() {
+            continue;
+        }
+        reports.push(TestCaseReport {
+            suite_id,
+            name: name.to_owned(),
+            path: None,
+            status,
+            error: None,
+        });
+    }
+    reports
+}
+
+fn parse_libtest_case_reports(contents: &str, suite_id: TestSuiteId) -> Vec<TestCaseReport> {
+    let mut reports = Vec::new();
+    for line in contents.lines().map(clean_log_line) {
+        let Some(rest) = line.strip_prefix("test ") else {
+            continue;
+        };
+        let Some((name, status_text)) = rest.rsplit_once(" ... ") else {
+            continue;
+        };
+        let status = if status_text.starts_with("ok") {
+            CaseStatus::Passed
+        } else if status_text.starts_with("FAILED") {
+            CaseStatus::Failed
+        } else if status_text.starts_with("ignored") {
+            CaseStatus::Skipped
+        } else {
+            continue;
+        };
+        reports.push(TestCaseReport {
+            suite_id,
+            name: name.trim().to_owned(),
+            path: None,
+            status,
+            error: None,
+        });
+    }
+    reports
+}
+
+fn clean_log_line(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("[stdout] ") {
+        rest.trim_start()
+    } else if let Some(rest) = trimmed.strip_prefix("[stderr] ") {
+        rest.trim_start()
+    } else if let Some(rest) = trimmed.strip_prefix("[pty] ") {
+        rest.trim_start()
+    } else {
+        trimmed
+    }
+}
+
+fn xml_element_attr(contents: &str, element: &str, attr: &str) -> Option<String> {
+    let start = contents.find(&format!("<{element}"))?;
+    let tag = &contents[start..];
+    let end = tag.find('>')?;
+    xml_attr(&tag[..=end], attr)
+}
+
+fn xml_attr(tag: &str, attr: &str) -> Option<String> {
+    let needle = format!("{attr}=\"");
+    let start = tag.find(&needle)? + needle.len();
+    let rest = &tag[start..];
+    let end = rest.find('"')?;
+    Some(xml_unescape(&rest[..end]))
+}
+
+fn xml_unescape(value: &str) -> String {
+    value
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 fn coverage_artifacts_for_suite(ctx: &BuildContext, suite: &TestSuite) -> Vec<String> {
@@ -3292,6 +3709,57 @@ struct RunCoverageState {
 
 struct SuiteOutcome {
     counts: Option<TestCounts>,
+    cases: Vec<TestCaseReport>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CaseStatus {
+    Passed,
+    Failed,
+    Skipped,
+    Unknown,
+}
+
+impl CaseStatus {
+    fn as_str(&self) -> &'static str {
+        match self {
+            CaseStatus::Passed => "passed",
+            CaseStatus::Failed => "failed",
+            CaseStatus::Skipped => "skipped",
+            CaseStatus::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TestCaseReport {
+    suite_id: TestSuiteId,
+    name: String,
+    path: Option<String>,
+    status: CaseStatus,
+    error: Option<String>,
+}
+
+impl TestCaseReport {
+    fn from_case(case: TestCase, status: CaseStatus) -> Self {
+        Self {
+            suite_id: case.suite_id,
+            name: case.name,
+            path: Some(case.path),
+            status,
+            error: None,
+        }
+    }
+
+    fn as_json(&self) -> Value {
+        json!({
+            "suite": self.suite_id.as_str(),
+            "name": self.name,
+            "path": self.path,
+            "status": self.status.as_str(),
+            "error": self.error,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -3504,6 +3972,29 @@ impl RunReport {
                     .unwrap_or_else(|| "-".to_owned()),
             ));
         }
+        if self.suites.iter().any(|suite| !suite.cases.is_empty()) {
+            markdown.push_str(
+                "\n## Cases\n\n| Suite | Case | Status | Path | Error |\n| --- | --- | --- | --- | --- |\n",
+            );
+            for suite in &self.suites {
+                for case in &suite.cases {
+                    markdown.push_str(&format!(
+                        "| `{}` | {} | `{}` | `{}` | {} |\n",
+                        suite.id,
+                        markdown_cell(&case.name),
+                        case.status.as_str(),
+                        case.path
+                            .as_deref()
+                            .map(markdown_cell)
+                            .unwrap_or_else(|| "-".to_owned()),
+                        case.error
+                            .as_deref()
+                            .map(markdown_cell)
+                            .unwrap_or_else(|| "-".to_owned()),
+                    ));
+                }
+            }
+        }
         markdown
     }
 }
@@ -3517,6 +4008,7 @@ struct SuiteReport {
     coverage_status: String,
     coverage_artifacts: Vec<String>,
     counts: Option<TestCounts>,
+    cases: Vec<TestCaseReport>,
     error: Option<String>,
 }
 
@@ -3526,6 +4018,7 @@ impl SuiteReport {
         suite: &TestSuite,
         duration_ms: u128,
         counts: Option<TestCounts>,
+        cases: Vec<TestCaseReport>,
     ) -> Self {
         Self {
             id: suite.id.as_str().to_owned(),
@@ -3540,11 +4033,19 @@ impl SuiteReport {
             },
             coverage_artifacts: coverage_artifacts_for_suite(ctx, suite),
             counts,
+            cases,
             error: None,
         }
     }
 
-    fn failed(ctx: &BuildContext, suite: &TestSuite, duration_ms: u128, error: String) -> Self {
+    fn failed(
+        ctx: &BuildContext,
+        suite: &TestSuite,
+        duration_ms: u128,
+        error: String,
+        counts: Option<TestCounts>,
+        cases: Vec<TestCaseReport>,
+    ) -> Self {
         Self {
             id: suite.id.as_str().to_owned(),
             group: suite.group.as_str().to_owned(),
@@ -3557,7 +4058,8 @@ impl SuiteReport {
                 "not_applicable".to_owned()
             },
             coverage_artifacts: coverage_artifacts_for_suite(ctx, suite),
-            counts: None,
+            counts,
+            cases,
             error: Some(error),
         }
     }
@@ -3576,6 +4078,7 @@ impl SuiteReport {
             },
             coverage_artifacts: coverage_artifacts_for_suite(ctx, suite),
             counts: None,
+            cases: Vec::new(),
             error: None,
         }
     }
@@ -3600,6 +4103,7 @@ impl SuiteReport {
             }).unwrap_or_else(|| json!({
                 "status": "unknown",
             })),
+            "cases": self.cases.iter().map(TestCaseReport::as_json).collect::<Vec<_>>(),
             "error": self.error.clone(),
         })
     }

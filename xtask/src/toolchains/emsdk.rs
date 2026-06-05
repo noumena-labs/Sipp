@@ -106,7 +106,7 @@ pub(crate) fn run_with_emsdk(
         );
 
         sh.write_file(&temp_script, &script_content)?;
-        let result = output::run_command(
+        let result = output::run_build_command(
             label,
             clean_windows_emsdk_env(cmd!(sh, "cmd.exe /c {temp_script}")),
         );
@@ -128,7 +128,7 @@ pub(crate) fn run_with_emsdk(
             emmake.display(),
             command
         );
-        output::run_command(label, cmd!(sh, "bash -c").arg(full_cmd))?;
+        output::run_build_command(label, cmd!(sh, "bash -c").arg(full_cmd))?;
     }
     Ok(())
 }

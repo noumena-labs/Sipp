@@ -84,7 +84,7 @@ fn build_demo_only(sh: &Shell, ctx: &BuildContext, demo: DemoName) -> Result<()>
     output::path("Artifact directory", &ctx.demo_artifacts_dir(demo.slug()));
 
     let _dir = sh.push_dir(&demo_dir);
-    output::run_command(
+    output::run_build_command(
         format!("Building {} demo", demo.slug()),
         cmd!(sh, "bun run build"),
     )
@@ -148,7 +148,7 @@ fn build_benchmark_only(sh: &Shell, ctx: &BuildContext, benchmark: BenchmarkName
     );
 
     let _dir = sh.push_dir(&benchmark_dir);
-    output::run_command(
+    output::run_build_command(
         format!("Building {} benchmark", benchmark.slug()),
         cmd!(sh, "bun run build"),
     )
@@ -225,7 +225,7 @@ fn build_example_only(sh: &Shell, ctx: &BuildContext, example: ExampleName) -> R
     );
 
     let _dir = sh.push_dir(&example_dir);
-    output::run_command(
+    output::run_build_command(
         format!("Building {} example", example.label()),
         cmd!(sh, "bun run build"),
     )
@@ -317,7 +317,7 @@ fn run_llama_backend_ops_for_backend(
         }
     };
     configure_cmd = apply_toolchains(sh, ctx, configure_cmd, Some(backend))?;
-    output::run_command(
+    output::run_build_command(
         format!("Configuring llama.cpp {}", backend.as_str()),
         configure_cmd,
     )?;
@@ -328,7 +328,7 @@ fn run_llama_backend_ops_for_backend(
         "cmake --build {build_dir} --target {target} --parallel --config Release"
     );
     build_cmd = apply_toolchains(sh, ctx, build_cmd, Some(backend))?;
-    output::run_command(
+    output::run_build_command(
         format!("Building llama.cpp {}", LLAMA_BACKEND_OPS_TARGET),
         build_cmd,
     )?;
@@ -350,7 +350,7 @@ fn run_llama_backend_ops_for_backend(
     test_cmd = test_cmd.arg("--output").arg(args.output.as_str());
     test_cmd = apply_toolchains(sh, ctx, test_cmd, Some(backend))?;
 
-    output::run_command(
+    output::run_test_command(
         format!("Running llama.cpp {} backend ops", backend.as_str()),
         test_cmd,
     )
@@ -358,7 +358,7 @@ fn run_llama_backend_ops_for_backend(
 
 fn ensure_javascript_workspace_dependencies(sh: &Shell, ctx: &BuildContext) -> Result<()> {
     let _dir = sh.push_dir(ctx.workspace_root());
-    output::run_command(
+    output::run_build_command(
         "Installing JavaScript workspace dependencies",
         cmd!(sh, "bun install"),
     )

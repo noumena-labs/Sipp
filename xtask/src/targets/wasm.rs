@@ -51,15 +51,15 @@ pub fn build(sh: &Shell, ctx: &BuildContext) -> Result<()> {
 
     let _npm_dir = sh.push_dir(&npm_workspace);
 
-    output::run_command(
+    output::run_build_command(
         "Installing NPM package dependencies",
         cmd!(sh, "bun install"),
     )?;
-    output::run_command(
+    output::run_build_command(
         "Compiling TypeScript wrappers",
         cmd!(sh, "bun run build:ts"),
     )?;
-    output::run_command("Staging browser package", cmd!(sh, "bun run build:stage"))?;
+    output::run_build_command("Staging browser package", cmd!(sh, "bun run build:stage"))?;
 
     output::success(format!(
         "WASM pipeline complete in {}",
@@ -90,7 +90,6 @@ fn build_target(
         .join("release")
         .join("libcogentlm_wasm.a");
 
-    output::step(format!("Compiling Rust staticlib for {js_file}"));
     let rustflags = if use_pthreads {
         "-C target-feature=+atomics,+bulk-memory,+mutable-globals"
     } else {
